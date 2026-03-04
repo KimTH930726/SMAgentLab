@@ -52,6 +52,17 @@ section[data-testid="stSidebar"] hr {
     font-size: 12px !important;
     padding: 2px 6px !important;
 }
+/* 👍👎 피드백 버튼 - 마커 기반 타겟팅 */
+[data-testid="stMarkdownContainer"]:has(.fb-anchor)
+    + [data-testid="stHorizontalBlock"] {
+    gap: 4px !important;
+}
+[data-testid="stMarkdownContainer"]:has(.fb-anchor)
+    + [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+    flex: 0 0 auto !important;
+    min-width: 44px !important;
+    max-width: 52px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -103,6 +114,7 @@ def _parse_db_messages(db_msgs: list) -> list:
                     "mapped_term": a.get("mapped_term"),
                     "results": a.get("results") or [],
                     "_id": f"hist_{a['id']}",
+                    "_from_history": True,
                 })
                 i += 2
                 continue
@@ -113,6 +125,7 @@ def _parse_db_messages(db_msgs: list) -> list:
                 "mapped_term": msg.get("mapped_term"),
                 "results": msg.get("results") or [],
                 "_id": f"hist_{msg['id']}",
+                "_from_history": True,
             })
         i += 1
     return result
@@ -339,11 +352,11 @@ def _render_kb_improve_form(msg: dict):
                 value=top.get("query_template") or "", height=80,
                 key=f"kb_sq_{mid}",
             )
-            col_ok, col_skip = st.columns([1, 1])
+            col_ok, col_skip, _ = st.columns([3, 2, 5])
             with col_ok:
-                submitted = st.form_submit_button("✅ 지식 등록", type="primary")
+                submitted = st.form_submit_button("✅ 지식 등록", type="primary", use_container_width=True)
             with col_skip:
-                skipped = st.form_submit_button("건너뛰기")
+                skipped = st.form_submit_button("건너뛰기", use_container_width=True)
 
             if submitted:
                 if not kb_content:
@@ -369,6 +382,9 @@ def _render_kb_improve_form(msg: dict):
 
 
 def _render_feedback(msg: dict):
+    if msg.get("_from_history"):
+        return  # 이력에서 불러온 메시지는 피드백 버튼 생략
+
     fb_key = f"fb_{msg['_id']}"
     done_key = f"kb_done_{msg['_id']}"
 
@@ -379,7 +395,8 @@ def _render_feedback(msg: dict):
             _render_kb_improve_form(msg)
         return
 
-    col_pos, col_neg, _ = st.columns([1, 1, 8])
+    st.markdown('<span class="fb-anchor"></span>', unsafe_allow_html=True)
+    col_pos, col_neg, _ = st.columns([1, 1, 8], gap="small")
     with col_pos:
         if st.button("👍", key=f"pos_{msg['_id']}"):
             _send_feedback(msg, True)

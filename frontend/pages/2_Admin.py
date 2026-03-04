@@ -546,11 +546,11 @@ with tab_stats:
                     )
                     uf_query = st.text_area("SQL 쿼리 템플릿 (선택)", height=80, key=f"uf_sq_{log_id}")
 
-                    col_ok, col_cancel = st.columns([1, 1])
+                    col_ok, col_cancel, _ = st.columns([4, 2, 4])
                     with col_ok:
-                        submitted = st.form_submit_button("✅ 등록 & 미해결 제거", type="primary")
+                        submitted = st.form_submit_button("✅ 등록 & 미해결 제거", type="primary", use_container_width=True)
                     with col_cancel:
-                        cancelled = st.form_submit_button("취소")
+                        cancelled = st.form_submit_button("취소", use_container_width=True)
 
                     if submitted:
                         if not uf_content:

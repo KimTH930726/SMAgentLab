@@ -1,6 +1,8 @@
 """
 /api/conversations  — 대화방 CRUD + 메시지 조회
 """
+import json
+
 from fastapi import APIRouter, HTTPException, Query
 
 from database import get_conn
@@ -57,7 +59,7 @@ async def get_messages(conv_id: int):
             role=r["role"],
             content=r["content"],
             mapped_term=r["mapped_term"],
-            results=r["results"],
+            results=json.loads(r["results"]) if isinstance(r["results"], str) else r["results"],
             created_at=r["created_at"],
         )
         for r in rows
