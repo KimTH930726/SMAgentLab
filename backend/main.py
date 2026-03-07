@@ -27,6 +27,36 @@ async def _run_migrations() -> None:
         await conn.execute("ALTER TABLE ops_conversation ADD COLUMN IF NOT EXISTS trimmed BOOLEAN NOT NULL DEFAULT FALSE")
         await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS message_id INT REFERENCES ops_message(id) ON DELETE SET NULL")
 
+        # 기존 데이터에 ops_namespace 누락 행 보충 (FK 추가 전 필수)
+        await conn.execute("""
+            INSERT INTO ops_namespace (name)
+            SELECT DISTINCT ns FROM (
+                SELECT namespace AS ns FROM ops_glossary
+                UNION SELECT namespace FROM ops_knowledge
+                UNION SELECT namespace FROM ops_query_log WHERE namespace IS NOT NULL
+                UNION SELECT namespace FROM ops_conversation
+                UNION SELECT namespace FROM ops_feedback WHERE namespace IS NOT NULL
+                UNION SELECT namespace FROM ops_fewshot
+            ) t WHERE ns IS NOT NULL
+            ON CONFLICT (name) DO NOTHING
+        """)
+
+        # namespace FK 제약 추가 (기존 DB 호환 — 멱등)
+        for tbl in ("ops_glossary", "ops_knowledge", "ops_query_log",
+                     "ops_conversation", "ops_feedback", "ops_fewshot"):
+            constraint = f"fk_{tbl}_namespace"
+            await conn.execute(f"""
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = '{constraint}'
+                    ) THEN
+                        ALTER TABLE {tbl}
+                            ADD CONSTRAINT {constraint}
+                            FOREIGN KEY (namespace) REFERENCES ops_namespace(name) ON DELETE CASCADE;
+                    END IF;
+                END $$;
+            """)
+
         # answer가 없는 query_log에 ops_message에서 답변 역매칭
         await conn.execute("""
             UPDATE ops_query_log ql

@@ -31,8 +31,8 @@
 ```
 ops_namespace
     │
-    ├─── ops_glossary          (namespace 참조)
-    ├─── ops_knowledge ◄──┐    (namespace 참조)
+    ├─── ops_glossary          (namespace FK CASCADE)
+    ├─── ops_knowledge ◄──┐    (namespace FK CASCADE)
     │        │            │
     │        └── ops_fewshot    (knowledge_id FK)
     │
@@ -44,11 +44,12 @@ ops_namespace
     │        │
     │        └── ops_conv_summary
     │
-    └─── ops_query_log         (namespace 참조)
+    ├─── ops_feedback          (namespace FK CASCADE)
+    └─── ops_query_log         (namespace FK CASCADE)
 ```
 
 **테이블 수**: 9개
-**FK 관계**: CASCADE 2건, SET NULL 3건
+**FK 관계**: CASCADE 8건 (namespace 6건 + conversation 2건), SET NULL 3건
 
 ---
 
@@ -64,6 +65,7 @@ ops_namespace
 | 4 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
 
 **인덱스**: PK(id)
+**참조됨**: 6개 테이블의 `namespace` 컬럼이 `name`을 FK 참조 (ON DELETE CASCADE)
 
 ---
 
@@ -74,7 +76,7 @@ ops_namespace
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | NO | - | - | 소속 네임스페이스 |
+| 2 | `namespace` | VARCHAR(100) | NO | - | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
 | 3 | `term` | VARCHAR(200) | NO | - | - | 표준 용어 |
 | 4 | `description` | TEXT | NO | - | - | 용어 설명 |
 | 5 | `embedding` | VECTOR(768) | YES | NULL | - | description 임베딩 벡터 |
@@ -95,7 +97,7 @@ ops_namespace
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | NO | - | - | 소속 네임스페이스 |
+| 2 | `namespace` | VARCHAR(100) | NO | - | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
 | 3 | `container_name` | VARCHAR(200) | YES | NULL | - | 관련 컨테이너/서비스명 |
 | 4 | `target_tables` | TEXT[] | YES | NULL | - | 관련 DB 테이블 목록 |
 | 5 | `content` | TEXT | NO | - | - | 지식 본문 (검색 대상) |
@@ -129,7 +131,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | YES | NULL | - | 소속 네임스페이스 |
+| 2 | `namespace` | VARCHAR(100) | YES | NULL | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
 | 3 | `question` | TEXT | YES | NULL | - | 사용자 질문 |
 | 4 | `answer` | TEXT | YES | NULL | - | LLM 답변 (마이그레이션 추가) |
 | 5 | `status` | VARCHAR(20) | NO | `'pending'` | - | 처리 상태 |
@@ -161,7 +163,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | NO | - | - | 소속 네임스페이스 |
+| 2 | `namespace` | VARCHAR(100) | NO | - | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
 | 3 | `title` | VARCHAR(200) | NO | `''` | - | 대화 제목 |
 | 4 | `trimmed` | BOOLEAN | NO | `FALSE` | - | 메모리 요약 수행 여부 (마이그레이션 추가) |
 | 5 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
@@ -215,12 +217,12 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
 | 2 | `knowledge_id` | INT | YES | NULL | FK → ops_knowledge(id) SET NULL | 관련 지식 ID |
 | 3 | `message_id` | INT | YES | NULL | FK → ops_message(id) SET NULL (마이그레이션 추가) | 관련 메시지 ID |
-| 4 | `namespace` | VARCHAR(100) | YES | NULL | - | 네임스페이스 |
+| 4 | `namespace` | VARCHAR(100) | YES | NULL | FK → ops_namespace(name) CASCADE | 네임스페이스 |
 | 5 | `question` | TEXT | YES | NULL | - | 원본 질문 |
 | 6 | `is_positive` | BOOLEAN | NO | - | - | 긍정 여부 |
 | 7 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
 
-**FK 동작**: 지식/메시지 삭제 시 해당 필드 NULL 처리 (SET NULL)
+**FK 동작**: 네임스페이스 삭제 시 CASCADE, 지식/메시지 삭제 시 해당 필드 NULL 처리 (SET NULL)
 
 ---
 
@@ -231,7 +233,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | NO | - | - | 소속 네임스페이스 |
+| 2 | `namespace` | VARCHAR(100) | NO | - | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
 | 3 | `question` | TEXT | NO | - | - | 예제 질문 (임베딩 대상) |
 | 4 | `answer` | TEXT | NO | - | - | 예제 답변 |
 | 5 | `knowledge_id` | INT | YES | NULL | FK → ops_knowledge(id) SET NULL | 연결된 지식 ID |
@@ -315,8 +317,11 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 1 | `ops_query_log` | `ADD COLUMN answer TEXT` | 답변 기록용 컬럼 추가 |
 | 2 | `ops_conversation` | `ADD COLUMN trimmed BOOLEAN NOT NULL DEFAULT FALSE` | 메모리 요약 수행 여부 플래그 |
 | 3 | `ops_feedback` | `ADD COLUMN message_id INT REFERENCES ops_message(id) ON DELETE SET NULL` | 메시지-피드백 연결 |
+| 4 | 6개 테이블 | `ADD CONSTRAINT fk_{table}_namespace FOREIGN KEY (namespace) REFERENCES ops_namespace(name) ON DELETE CASCADE` | namespace FK 제약 추가 (고아 데이터 방지) |
 
-**데이터 마이그레이션**: `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
+**데이터 마이그레이션**:
+- `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
+- namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.
 
 ---
 

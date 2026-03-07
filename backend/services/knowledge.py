@@ -209,8 +209,5 @@ async def create_namespace(name: str, description: str = "") -> dict:
 
 async def delete_namespace(name: str) -> bool:
     async with get_conn() as conn:
-        for table in ("ops_feedback", "ops_query_log", "ops_fewshot",
-                       "ops_conversation", "ops_knowledge", "ops_glossary"):
-            await conn.execute(f"DELETE FROM {table} WHERE namespace = $1", name)
         result = await conn.execute("DELETE FROM ops_namespace WHERE name = $1", name)
     return "DELETE 1" in result
