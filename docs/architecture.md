@@ -1,9 +1,11 @@
-# Ops-Navigator 시스템 아키텍처
+# Ops-Navigator 시스템 아키텍처 (v2.0.0)
 
 ## 개요
 
 Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화하는 **지능형 운영 보조 에이전트**다.
 사용자의 자연어 질문을 받아 관련 운영 가이드를 검색하고, LLM이 맥락에 맞는 답변을 생성한다.
+
+v2.0.0에서 **DDD(Domain-Driven Design) 구조 전환**, **JWT 인증/인가**, **부서(Part) 기반 권한 제어**, **사용자별 LLM API Key 암호화 관리**가 추가되었다.
 
 ---
 
@@ -45,9 +47,16 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 
 | 페이지 | 역할 |
 |--------|------|
+| **Login** (`/login`) | JWT 로그인 — Access Token + Refresh Token 발급 |
+| **Register** (`/register`) | 회원가입 — 부서 선택 + 선택적 LLM API Key 등록 |
 | **Chat** (`/`) | 운영 보조 챗 — SSE 스트리밍(2-phase: 전처리→generator), 결과 카드, 피드백(👍→few-shot 저장/base_weight 상승), 대화 메모리(요약+리콜) |
-| **Admin** (`/admin`) | 관리 화면 — **네임스페이스**, 지식 베이스, 용어집, **Few-shot**, 통계, **파이프라인 디버그**, **LLM 설정** 탭 |
+| **Admin** (`/admin`) | 관리 화면 — **네임스페이스**, 지식 베이스, 용어집, **Few-shot**, 통계, **파이프라인 디버그**, **LLM 설정**, **사용자 관리**(admin 전용) 탭 |
 
+- **ProtectedRoute**: 로그인되지 않은 사용자는 `/login`으로 리다이렉트
+- **useAuthStore** (Zustand): localStorage에 토큰 저장, 자동 Bearer 토큰 주입
+- **401 Auto-refresh**: Access Token 만료 시 Refresh Token으로 자동 갱신, 실패 시 로그아웃
+- **부서 기반 UI**: 지식/용어집/Few-shot 테이블에 부서 배지 표시, 같은 부서만 수정/삭제 버튼 노출
+- Sidebar: 사용자 정보 + 로그아웃 버튼, 네임스페이스 선택, 대화 목록, 검색 설정 슬라이더, 헬스 표시기
 - Backend REST API만 호출 (직접 DB 접근 없음)
 - 검색 비중(벡터/키워드 비율), Top-K를 사이드바 슬라이더로 실시간 조정
 - nginx 정적 빌드 서빙 + `/api/*` 요청을 Backend(`:8000`)로 프록시
@@ -56,60 +65,133 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 
 ```
 backend/
-├── main.py              # 앱 진입점, 라이프사이클 (DB풀·임베딩·LLM 초기화)
-├── config.py            # 환경변수 기반 설정 (pydantic-settings)
-├── database.py          # asyncpg 커넥션 풀 관리
-├── models/
-│   └── api_models.py    # Pydantic Request/Response 스키마
-├── services/
-│   ├── embedding.py     # Sentence-Transformers 싱글톤
-│   ├── retrieval.py     # 2단계 하이브리드 검색 파이프라인 (용어 매핑 유사도 임계치 0.5)
-│   ├── memory.py        # 대화 메모리 관리 (ConversationSummaryBuffer + Semantic Recall)
-│   ├── knowledge.py     # 지식/용어집 CRUD + 임베딩 자동 생성
-│   └── llm/
-│       ├── base.py      # LLMProvider 추상 클래스 + build_messages()
-│       ├── ollama.py    # OllamaProvider — /api/chat (multi-turn messages 배열)
-│       └── inhouse.py   # InHouseLLMProvider (OpenAI 호환 /v1/chat/completions)
-└── routers/
-    ├── chat.py          # POST /api/chat, /api/chat/stream, /api/chat/debug
-    │                    #   ↳ 대화방 생성/로드, memory 서비스로 컨텍스트 구성 → LLM messages 삽입
-    ├── conversations.py # GET/POST /api/conversations, GET /{id}/messages, DELETE /{id}
-    ├── knowledge.py     # CRUD /api/knowledge, /api/knowledge/glossary
-    ├── feedback.py      # POST /api/feedback (base_weight 조정 + few-shot 저장)
-    ├── fewshots.py      # CRUD /api/fewshots, POST /api/fewshots/search (검색 테스트)
-    ├── llm_settings.py  # GET/PUT /api/llm/config, POST /api/llm/test (런타임 LLM 전환)
-    ├── stats.py         # GET /api/stats, GET /api/stats/namespace/{name}
-    └── namespaces.py    # GET/POST/DELETE /api/namespaces, GET /api/namespaces/detail
+├── main.py              # v2.0.0 앱 진입점, 라이프사이클 (DB풀·임베딩·LLM 초기화)
+├── core/
+│   ├── config.py        # 환경변수 기반 설정 (pydantic-settings, JWT·Fernet 키 포함)
+│   ├── database.py      # asyncpg 커넥션 풀 관리
+│   ├── security.py      # JWT 발급/검증, bcrypt 해싱, Fernet 대칭 암호화 (API Key)
+│   └── dependencies.py  # FastAPI Depends (get_current_user, get_current_admin, check_namespace_ownership)
+├── shared/
+│   └── embedding.py     # Sentence-Transformers 싱글톤
+├── domain/
+│   ├── auth/            # 인증/계정
+│   │   ├── schemas.py   #   RegisterRequest, LoginRequest, TokenResponse, UserResponse 등
+│   │   ├── service.py   #   회원가입, 로그인, 토큰 갱신, 사용자 CRUD, 부서 CRUD
+│   │   └── router.py    #   /api/auth/* 엔드포인트
+│   ├── chat/            # 대화
+│   │   ├── schemas.py   #   ChatRequest, ChatResponse 등
+│   │   ├── memory.py    #   대화 메모리 (ConversationSummaryBuffer + Semantic Recall)
+│   │   └── router.py    #   /api/chat/*, /api/conversations/*
+│   ├── knowledge/       # 지식/용어집
+│   │   ├── schemas.py   #   KnowledgeItem, GlossaryItem 등
+│   │   ├── service.py   #   지식/용어집 CRUD + 임베딩 자동 생성
+│   │   ├── retrieval.py #   2단계 하이브리드 검색 파이프라인
+│   │   └── router.py    #   /api/knowledge/*, /api/knowledge/glossary/*
+│   ├── fewshot/         # Few-shot
+│   │   ├── schemas.py   #   FewshotItem 등
+│   │   └── router.py    #   /api/fewshots/*
+│   ├── feedback/        # 피드백
+│   │   ├── schemas.py   #   FeedbackRequest 등
+│   │   └── router.py    #   /api/feedback
+│   ├── admin/           # 네임스페이스/통계/LLM설정
+│   │   ├── schemas.py   #   NamespaceDetail, StatsResponse, LLMConfigRequest 등
+│   │   ├── service.py   #   네임스페이스 관리, 통계 집계
+│   │   └── router.py    #   /api/namespaces/*, /api/stats/*, /api/llm/*
+│   └── llm/             # LLM Provider
+│       ├── base.py      #   LLMProvider 추상 클래스 + build_messages()
+│       ├── ollama.py    #   OllamaProvider — /api/chat (multi-turn messages 배열)
+│       ├── inhouse.py   #   InHouseLLMProvider (OpenAI 호환 /v1/chat/completions)
+│       └── factory.py   #   get_llm_provider() 팩토리 (싱글톤), switch_provider()
 ```
 
 **주요 설계 원칙:**
+- **DDD 구조**: 도메인별 디렉토리로 schemas/service/router를 응집 — 플랫 구조 대비 코드 탐색·확장 용이
 - **비동기 전용**: asyncpg + httpx async — 블로킹 없는 I/O
 - **임베딩 싱글톤**: 앱 시작 시 모델 1회 로드, 이후 thread executor로 재사용
 - **LLM Provider 패턴**: `ollama` / `inhouse` 환경변수 하나로 교체 가능
 - **GPT 방식 Multi-turn**: `build_messages()`로 system+history+user messages 배열 생성 → Ollama `/api/chat`, InHouse `/v1/chat/completions`에 동일 형식 전달
 - **대화 맥락**: ConversationSummaryBuffer + Semantic Recall — 오래된 교환을 LLM으로 요약·벡터 저장, 현재 질문과 유사한 과거 요약 + 최근 2회 raw 교환을 history로 LLM에 전달
+- **JWT 인증/인가**: Access Token(30분) + Refresh Token(7일), FastAPI Depends로 라우터 수준 보호
+- **네임스페이스 소유 파트 기반 권한**: 네임스페이스의 `owner_part`와 동일한 부서 구성원만 해당 네임스페이스의 데이터 CRUD 가능, 타 부서는 읽기 전용. `owner_part` NULL이면 admin만 수정/삭제 가능. Admin은 모든 권한 보유
+- **수정 시 작성자 갱신**: 지식/용어/퓨샷 수정 시 `created_by_part`/`created_by_user_id`가 최종 수정자로 갱신됨
 - **Graceful Degradation**: LLM 연결 실패 시 검색 결과는 정상 반환, 안내 메시지 출력
 
-### 3. PostgreSQL + pgvector (`:5432`)
+### 3. 인증/인가 시스템 (v2.0.0 신규)
+
+```
+┌──────────┐     POST /api/auth/register     ┌──────────────┐
+│  사용자   │  ──────────────────────────────▶ │  auth/service │
+│          │     (username, password,         │              │
+│          │      part_id, api_key?)          │  bcrypt hash │
+│          │                                  │  Fernet enc  │
+│          │  ◀────────────────────────────── │              │
+│          │     201 Created                  └──────┬───────┘
+│          │                                         │
+│          │     POST /api/auth/login                │
+│          │  ──────────────────────────────▶        │
+│          │  ◀──────────────────────────────        │
+│          │     {access_token, refresh_token}       │
+│          │                                         │
+│          │     GET /api/chat/stream                │
+│          │     Authorization: Bearer <access>      │
+│          │  ──────────────────────────────▶ ┌──────┴───────┐
+│          │                                  │ dependencies │
+│          │                                  │ get_current_ │
+│          │                                  │ user()       │
+└──────────┘                                  └──────────────┘
+```
+
+**핵심 구성 요소:**
+
+| 모듈 | 역할 |
+|------|------|
+| `core/security.py` | JWT 토큰 발급/검증 (HS256), bcrypt 비밀번호 해싱, Fernet 대칭 암호화 (API Key) |
+| `core/dependencies.py` | `get_current_user` — Bearer 토큰 검증 후 사용자 반환 |
+| | `get_current_admin` — admin 역할 검증 |
+| | `check_namespace_ownership` — 네임스페이스의 `owner_part`와 요청자 부서 일치 확인 |
+| `domain/auth/service.py` | 회원가입 (중복 체크, bcrypt 해싱, Fernet API Key 암호화), 로그인, 토큰 갱신 |
+| `domain/auth/router.py` | `/api/auth/*` 엔드포인트 |
+
+**권한 모델 (네임스페이스 기반):** 상세 규칙은 `api-specification.md § 3. 인증 및 권한` 참조.
+- Admin은 모든 리소스 CRUD 가능. 일반 사용자는 `owner_part` 일치 시에만 CRUD (불일치 시 읽기 전용).
+- 대화 소유권: `ops_conversation.user_id` FK로 사용자별 대화 격리.
+
+**사용자별 LLM API Key:**
+- 회원가입 또는 마이페이지에서 사내 LLM API Key 등록 (선택사항)
+- Fernet 대칭 암호화로 DB에 저장 → 요청 시 복호화하여 InHouse LLM Provider에 전달
+- 개인 키가 없으면 시스템 기본 키(`INHOUSE_LLM_API_KEY`) 사용
+
+### 4. PostgreSQL + pgvector (`:5432`)
 
 ```sql
-ops_namespace    -- 네임스페이스 레지스트리 (이름, 설명, 생성일)
+-- v2.0.0 신규 테이블
+ops_part         -- 부서 레지스트리 (name, description, created_at)
+ops_user         -- 사용자 (username, password_hash, role[admin/user], part_id FK,
+                 --          encrypted_api_key, created_at)
+
+-- 기존 테이블 (v2.0.0 컬럼 추가)
+ops_namespace    -- 네임스페이스 레지스트리 (이름, 설명, owner_part, created_by_user_id)
 ops_glossary     -- 용어집: 모호 표현 → 표준 용어 매핑 (HNSW 벡터 인덱스)
+                 --   + created_by_part, created_by_user_id (v2.0.0)
 ops_knowledge    -- 지식 베이스: 운영 가이드 + SQL 템플릿 (HNSW + GIN FTS 인덱스)
+                 --   + created_by_part, created_by_user_id (v2.0.0)
 ops_fewshot      -- 긍정 피드백 Q&A 쌍 (LLM 프롬프트 few-shot 삽입용, HNSW 인덱스)
+                 --   + created_by_part, created_by_user_id (v2.0.0)
 ops_feedback     -- 좋아요/싫어요 피드백 로그
-ops_query_log    -- 질의 로그 (namespace, question, status[pending/resolved/unresolved], mapped_term — 업무 유형 분류)
+ops_query_log    -- 질의 로그 (namespace, question, status[pending/resolved/unresolved], mapped_term)
 ops_conversation -- 대화방 (namespace, title, created_at)
-ops_message      -- 대화 메시지 (conversation_id FK, role, content, mapped_term, results JSONB, status[generating/completed])
-ops_conv_summary -- 대화 요약 (conversation_id FK, summary, embedding, turn_start, turn_end — Semantic Recall용)
+                 --   + user_id FK → ops_user CASCADE (v2.0.0)
+ops_message      -- 대화 메시지 (conversation_id FK, role, content, mapped_term, results JSONB, status)
+ops_conv_summary -- 대화 요약 (conversation_id FK, summary, embedding, turn_start, turn_end)
 ```
 
 - **HNSW 인덱스** (`vector_cosine_ops`): 벡터 근사 최근접 이웃 검색
 - **GIN 인덱스** (`to_tsvector('simple', content)`): 전문 검색(FTS)
 - **pg_trgm**: 트리그램 유사도 지원 (활성화됨)
 - **namespace 컬럼**: 모든 테이블에서 도메인 격리 (coupon, gift, order 등)
+- **CASCADE 삭제**: `ops_conversation.user_id` → 사용자 삭제 시 대화 자동 삭제
 
-### 4. Ollama — LLM 추론 (`:11434`)
+### 5. Ollama — LLM 추론 (`:11434`)
 
 - 호스트 머신에서 직접 실행 (컨테이너 외부)
 - 모델: `exaone3.5:2.4b`
@@ -135,61 +217,102 @@ ops_conv_summary -- 대화 요약 (conversation_id FK, summary, embedding, turn_
 
 ## API 엔드포인트 목록
 
+### 인증 (`/api/auth`) — v2.0.0 신규
+
+| 메서드 | 경로 | 인증 | 설명 |
+|--------|------|------|------|
+| `POST` | `/api/auth/register` | 없음 | 회원가입 (부서 선택 + 선택적 LLM API Key) |
+| `POST` | `/api/auth/login` | 없음 | 로그인 → Access Token(30min) + Refresh Token(7days) 발급 |
+| `POST` | `/api/auth/refresh` | Refresh Token | Access Token 갱신 |
+| `GET` | `/api/auth/me` | Bearer | 내 정보 조회 |
+| `PUT` | `/api/auth/me/password` | Bearer | 비밀번호 변경 |
+| `PUT` | `/api/auth/me/api-key` | Bearer | 개인 LLM API Key 등록/변경 (Fernet 암호화 저장) |
+| `GET` | `/api/auth/users` | Admin | 전체 사용자 목록 |
+| `PUT` | `/api/auth/users/{id}` | Admin | 사용자 정보 수정 (역할 변경 등) |
+| `DELETE` | `/api/auth/users/{id}` | Admin | 사용자 삭제 |
+| `GET` | `/api/auth/parts` | Bearer | 부서 목록 조회 |
+| `POST` | `/api/auth/parts` | Admin | 부서 생성 |
+| `DELETE` | `/api/auth/parts/{id}` | Admin | 부서 삭제 |
+
+### 채팅/대화
+
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | `GET` | `/health` | 서버·LLM 상태 확인 |
 | `POST` | `/api/chat` | 하이브리드 검색 + LLM 답변 (JSON) |
 | `POST` | `/api/chat/stream` | 하이브리드 검색 + LLM 답변 (SSE 스트리밍, 단계별 status 이벤트) |
 | `POST` | `/api/chat/debug` | LLM 없이 검색 파이프라인 전 과정 반환 (v_score, k_score, 용어집 유사도, few-shot 목록, LLM 컨텍스트 미리보기 포함) |
+| `GET` | `/api/conversations` | 네임스페이스별 대화방 목록 (최근 50개, 본인 소유만) |
+| `POST` | `/api/conversations` | 대화방 신규 생성 (user_id 자동 연결) |
+| `GET` | `/api/conversations/{id}/messages` | 대화방 전체 메시지 조회 (status 필드 포함) |
+| `DELETE` | `/api/conversations/{id}` | 대화방 삭제 (메시지 cascade) |
+| `PATCH` | `/api/chat/messages/{id}/content` | 메시지 부분 저장 (프론트엔드 스트림 중단 시) |
+| `DELETE` | `/api/chat/messages/{id}` | Ghost 메시지 삭제 (빈 assistant + 짝 user + 빈 대화방) |
+
+### 지식/용어집
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/api/knowledge` | 지식 목록 조회 (namespace 필터) |
+| `POST` | `/api/knowledge` | 지식 신규 등록 (네임스페이스 소유 파트 검증, 임베딩 자동 생성) |
+| `PUT` | `/api/knowledge/{id}` | 지식 수정 (네임스페이스 소유 파트 또는 admin만) |
+| `DELETE` | `/api/knowledge/{id}` | 지식 삭제 (네임스페이스 소유 파트 또는 admin만) |
+| `GET` | `/api/knowledge/glossary` | 용어집 목록 |
+| `POST` | `/api/knowledge/glossary` | 용어 신규 등록 (임베딩 자동 생성) |
+| `PUT` | `/api/knowledge/glossary/{id}` | 용어 수정 (재임베딩 자동, 같은 부서 또는 admin만) |
+| `DELETE` | `/api/knowledge/glossary/{id}` | 용어 삭제 (같은 부서 또는 admin만) |
+
+### 피드백/Few-shot
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `POST` | `/api/feedback` | 피드백 기록 + base_weight 조정 + few-shot 저장(👍시) |
+| `GET` | `/api/fewshots` | Few-shot 목록 조회 (namespace 필터) |
+| `POST` | `/api/fewshots` | Few-shot 신규 등록 (임베딩 자동 생성) |
+| `PUT` | `/api/fewshots/{id}` | Few-shot 수정 (질문 변경 시 재임베딩, 같은 부서 또는 admin만) |
+| `DELETE` | `/api/fewshots/{id}` | Few-shot 삭제 (같은 부서 또는 admin만) |
+| `POST` | `/api/fewshots/search` | 질문으로 few-shot 검색 테스트 (실제 검색 결과 + 프롬프트 섹션 미리보기) |
+
+### 관리/설정
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
 | `GET` | `/api/namespaces` | 등록된 네임스페이스 목록 (문자열 배열) |
 | `GET` | `/api/namespaces/detail` | 네임스페이스 상세 목록 (지식 수, 용어집 수 포함) |
 | `POST` | `/api/namespaces` | 네임스페이스 신규 생성 |
 | `DELETE` | `/api/namespaces/{name}` | 네임스페이스 및 하위 데이터 전체 삭제 |
-| `GET` | `/api/knowledge` | 지식 목록 조회 (namespace 필터) |
-| `POST` | `/api/knowledge` | 지식 신규 등록 (임베딩 자동 생성) |
-| `PUT` | `/api/knowledge/{id}` | 지식 수정 |
-| `DELETE` | `/api/knowledge/{id}` | 지식 삭제 |
-| `GET` | `/api/knowledge/glossary` | 용어집 목록 |
-| `POST` | `/api/knowledge/glossary` | 용어 신규 등록 (임베딩 자동 생성) |
-| `PUT` | `/api/knowledge/glossary/{id}` | 용어 수정 (재임베딩 자동) |
-| `DELETE` | `/api/knowledge/glossary/{id}` | 용어 삭제 |
-| `POST` | `/api/feedback` | 피드백 기록 + base_weight 조정 + few-shot 저장(👍시) |
-| `GET` | `/api/fewshots` | Few-shot 목록 조회 (namespace 필터) |
-| `POST` | `/api/fewshots` | Few-shot 신규 등록 (임베딩 자동 생성) |
-| `PUT` | `/api/fewshots/{id}` | Few-shot 수정 (질문 변경 시 재임베딩) |
-| `DELETE` | `/api/fewshots/{id}` | Few-shot 삭제 |
-| `POST` | `/api/fewshots/search` | 질문으로 few-shot 검색 테스트 (실제 검색 결과 + 프롬프트 섹션 미리보기) |
 | `GET` | `/api/llm/config` | 현재 LLM 프로바이더 설정 + 연결 상태 조회 |
 | `PUT` | `/api/llm/config` | LLM 프로바이더 런타임 전환 (재시작 전까지 유지) |
 | `POST` | `/api/llm/test` | 설정값으로 연결 테스트 (실제 전환 없음) |
 | `GET` | `/api/stats` | 네임스페이스별 통계 (전체 namespace, 지식/용어집 개수 포함) |
 | `GET` | `/api/stats/namespace/{name}` | 네임스페이스 상세 통계 (업무 유형별 분포, 미해결 목록) |
 | `DELETE` | `/api/stats/query-log/{id}` | 미해결 질의 로그 삭제 (지식 등록 후 처리 완료 표시) |
-| `GET` | `/api/conversations` | 네임스페이스별 대화방 목록 (최근 50개) |
-| `POST` | `/api/conversations` | 대화방 신규 생성 |
-| `GET` | `/api/conversations/{id}/messages` | 대화방 전체 메시지 조회 (status 필드 포함) |
-| `DELETE` | `/api/conversations/{id}` | 대화방 삭제 (메시지 cascade) |
-| `PATCH` | `/api/chat/messages/{id}/content` | 메시지 부분 저장 (프론트엔드 스트림 중단 시) |
-| `DELETE` | `/api/chat/messages/{id}` | Ghost 메시지 삭제 (빈 assistant + 짝 user + 빈 대화방) |
 
 ---
 
 ## LLM Provider 확장 구조
 
 ```python
-# services/llm/base.py
+# domain/llm/base.py
 def build_messages(context, question, history=None) -> list[dict]:
     # [system: 시스템프롬프트+참고문서] + [history...] + [user: 질문]
 
 class LLMProvider(ABC):
-    async def generate(context, question, history=None) -> str: ...
-    async def generate_stream(context, question, history=None) -> AsyncIterator[str]: ...
+    async def generate(context, question, history=None, api_key=None) -> str: ...
+    async def generate_stream(context, question, history=None, api_key=None) -> AsyncIterator[str]: ...
     async def health_check() -> bool: ...
 
 # 현재 구현체
 OllamaProvider     # LLM_PROVIDER=ollama — /api/chat (messages 배열, multi-turn)
 InHouseLLMProvider # LLM_PROVIDER=inhouse — /v1/chat/completions (messages 배열, multi-turn)
+                   #   api_key 파라미터가 전달되면 시스템 기본 키 대신 사용자 개인 키로 요청
 ```
+
+**`api_key` 파라미터 (v2.0.0 신규):**
+- `generate()`, `generate_stream()`에 선택적 `api_key` 파라미터 추가
+- 사용자가 개인 LLM API Key를 등록한 경우, Fernet 복호화 후 이 파라미터로 전달
+- 개인 키가 없으면 `None` → Provider가 시스템 기본 키(`INHOUSE_LLM_API_KEY`) 사용
+- OllamaProvider는 `api_key` 무시 (로컬 모델이므로 불필요)
 
 **대화 맥락 전달 방식 (ConversationSummaryBuffer + Semantic Recall):**
 ```
@@ -213,7 +336,7 @@ messages = [
 - 컨테이너 재시작 시 `.env` 설정으로 복귀
 - `get_runtime_config()`: 런타임 override 여부(`is_runtime_override`), 연결 상태(`is_connected`) 포함 반환
 
-새 LLM 추가 시: `LLMProvider` 상속 → 3개 메서드 구현 → `llm/__init__.py` 팩토리에 등록
+새 LLM 추가 시: `LLMProvider` 상속 → 3개 메서드 구현 → `domain/llm/factory.py`에 등록
 
 ---
 
@@ -227,7 +350,7 @@ messages = [
 | `OLLAMA_MODEL` | `exaone3.5:2.4b` | 사용할 Ollama 모델명 |
 | `OLLAMA_TIMEOUT` | `900` | CPU 추론 최대 대기 시간(초), httpx read timeout에 적용 |
 | `INHOUSE_LLM_URL` | (없음) | 사내 LLM API 주소 |
-| `INHOUSE_LLM_API_KEY` | (없음) | 사내 LLM API 키 |
+| `INHOUSE_LLM_API_KEY` | (없음) | 사내 LLM 시스템 기본 API 키 |
 | `INHOUSE_LLM_MODEL` | (없음) | 사내 LLM 모델명 |
 | `EMBEDDING_MODEL` | `paraphrase-multilingual-mpnet-base-v2` | 임베딩 모델명 |
 | `VECTOR_DIM` | `768` | 벡터 차원 수 |
@@ -235,6 +358,9 @@ messages = [
 | `DEFAULT_W_VECTOR` | `0.7` | 기본 벡터 검색 비중 |
 | `DEFAULT_W_KEYWORD` | `0.3` | 기본 키워드 검색 비중 |
 | `BACKEND_URL` | `http://backend:8000` | Frontend → Backend 주소 |
+| `JWT_SECRET_KEY` | (필수) | JWT 서명 비밀 키 (HS256) |
+| `FERNET_SECRET_KEY` | (필수) | Fernet 대칭 암호화 키 (사용자 API Key 암호화용) |
+| `ADMIN_DEFAULT_PASSWORD` | (필수) | 초기 admin 계정 비밀번호 |
 
 ---
 
@@ -264,10 +390,12 @@ final_score = (w_vec × v_score + w_kw × k_score) × (1 + base_weight)
 
 | 테이블 | 역할 |
 |--------|------|
-| `ops_namespace` | 도메인 단위 레지스트리 (name, description) |
+| `ops_part` | 부서 레지스트리 (name, description) — v2.0.0 신규 |
+| `ops_user` | 사용자 (username, password_hash, role, part_id FK, encrypted_api_key) — v2.0.0 신규 |
+| `ops_namespace` | 도메인 단위 레지스트리 (name, description, owner_part) — v2.0.0 owner_part 추가 |
 | `ops_feedback` | 👍/👎 피드백 로그 |
 | `ops_query_log` | 질의 이력 — `status`(pending/resolved/unresolved) + `mapped_term`으로 업무 유형 분류 |
-| `ops_conversation` | 대화방 (namespace, title, created_at) |
+| `ops_conversation` | 대화방 (namespace, title, user_id FK, created_at) |
 | `ops_message` | 대화 메시지 (role, content, mapped_term, results JSONB, status[generating/completed]) |
 
 > `ops_conv_summary`는 벡터 컬럼 보유 — 위 벡터 테이블 목록 참조.

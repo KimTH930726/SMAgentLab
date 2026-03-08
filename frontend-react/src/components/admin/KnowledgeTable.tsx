@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Edit2, Trash2, ChevronDown, ChevronUp, X } from 'lucide-react';
 import {
@@ -7,8 +7,9 @@ import {
   updateKnowledge,
   deleteKnowledge,
 } from '../../api/knowledge';
-import { getNamespaces } from '../../api/namespaces';
+import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
@@ -33,7 +34,18 @@ const defaultForm: KnowledgeFormData = {
 export function KnowledgeTable() {
   const qc = useQueryClient();
   const { namespace: storeNamespace } = useAppStore();
+  const user = useAuthStore((s) => s.user);
   const [selectedNs, setSelectedNs] = useState(storeNamespace || '');
+
+  const { data: nsDetails = [] } = useQuery({
+    queryKey: ['namespaces-detail'],
+    queryFn: getNamespacesDetail,
+    staleTime: 30_000,
+  });
+
+  const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
+  // owner_part 없으면 admin만, 있으면 같은 파트 or admin
+  const canModifyNs = user?.role === 'admin' || (!!nsOwnerPart && nsOwnerPart === user?.part);
 
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -47,6 +59,13 @@ export function KnowledgeTable() {
     queryFn: getNamespaces,
     staleTime: 30_000,
   });
+
+  // 삭제된 네임스페이스 선택 상태 자동 리셋
+  useEffect(() => {
+    if (selectedNs && namespaces.length > 0 && !namespaces.includes(selectedNs)) {
+      setSelectedNs('');
+    }
+  }, [namespaces, selectedNs]);
 
   const { data: items = [], isLoading, error } = useQuery({
     queryKey: ['knowledge', selectedNs],
@@ -114,7 +133,7 @@ export function KnowledgeTable() {
           지식 베이스
           {selectedNs && <span className="text-sm font-normal text-slate-500 ml-2">({selectedNs})</span>}
         </h2>
-        <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} disabled={!selectedNs}>
+        <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} disabled={!selectedNs || !canModifyNs}>
           <Plus className="w-4 h-4" />
           지식 추가
         </Button>
@@ -172,7 +191,13 @@ export function KnowledgeTable() {
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5 truncate">{item.content.slice(0, 100)}...</p>
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {item.created_by_username && (
+                    <span className="text-xs text-slate-500">{item.created_by_username}</span>
+                  )}
+                  {item.created_by_part && (
+                    <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>
+                  )}
                   {expandedId === item.id ? (
                     <ChevronUp className="w-4 h-4 text-slate-400" />
                   ) : (
@@ -234,6 +259,9 @@ export function KnowledgeTable() {
                           className="w-full accent-indigo-500"
                         />
                       </div>
+                      {updateMutation.error && (
+                        <p className="text-xs text-rose-400">{String(updateMutation.error)}</p>
+                      )}
                       <div className="flex gap-2 justify-end pt-2">
                         <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>
                           <X className="w-3.5 h-3.5" />취소
@@ -245,14 +273,16 @@ export function KnowledgeTable() {
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      <div className="flex gap-2 justify-end pb-3 border-b border-slate-700">
-                        <Button variant="secondary" size="sm" onClick={() => startEdit(item)}>
-                          <Edit2 className="w-3.5 h-3.5" />수정
-                        </Button>
-                        <Button variant="danger" size="sm" onClick={() => setDeleteTarget(item.id)}>
-                          <Trash2 className="w-3.5 h-3.5" />삭제
-                        </Button>
-                      </div>
+                      {canModifyNs && (
+                        <div className="flex gap-2 justify-end pb-3 border-b border-slate-700">
+                          <Button variant="secondary" size="sm" onClick={() => startEdit(item)}>
+                            <Edit2 className="w-3.5 h-3.5" />수정
+                          </Button>
+                          <Button variant="danger" size="sm" onClick={() => setDeleteTarget(item.id)}>
+                            <Trash2 className="w-3.5 h-3.5" />삭제
+                          </Button>
+                        </div>
+                      )}
                       <div>
                         <p className="text-xs text-slate-500 mb-1">내용</p>
                         <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">{item.content}</p>
@@ -357,6 +387,9 @@ export function KnowledgeTable() {
       <Modal isOpen={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title="지식 삭제">
         <div className="space-y-4">
           <p className="text-sm text-slate-300">이 지식 항목을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.</p>
+          {deleteMutation.error && (
+            <p className="text-xs text-rose-400">{String(deleteMutation.error)}</p>
+          )}
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>취소</Button>
             <Button

@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Edit2, Trash2, ChevronDown, ChevronUp, X, Zap } from 'lucide-react';
 import { getFewshots, createFewshot, updateFewshot, deleteFewshot } from '../../api/fewshots';
-import { getNamespaces } from '../../api/namespaces';
+import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
+import { Badge } from '../ui/Badge';
 import type { FewshotItem } from '../../types';
 
 interface FewshotFormData {
@@ -19,7 +21,18 @@ const defaultForm: FewshotFormData = { question: '', answer: '', knowledge_id: '
 export function FewshotTable() {
   const qc = useQueryClient();
   const { namespace: storeNamespace } = useAppStore();
+  const user = useAuthStore((s) => s.user);
   const [selectedNs, setSelectedNs] = useState(storeNamespace || '');
+
+  const { data: nsDetails = [] } = useQuery({
+    queryKey: ['namespaces-detail'],
+    queryFn: getNamespacesDetail,
+    staleTime: 30_000,
+  });
+
+  const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
+  // owner_part 없으면 admin만, 있으면 같은 파트 or admin
+  const canModifyNs = user?.role === 'admin' || (!!nsOwnerPart && nsOwnerPart === user?.part);
 
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -33,6 +46,13 @@ export function FewshotTable() {
     queryFn: getNamespaces,
     staleTime: 30_000,
   });
+
+  // 삭제된 네임스페이스 선택 상태 자동 리셋
+  useEffect(() => {
+    if (selectedNs && namespaces.length > 0 && !namespaces.includes(selectedNs)) {
+      setSelectedNs('');
+    }
+  }, [namespaces, selectedNs]);
 
   const { data: items = [], isLoading, error } = useQuery({
     queryKey: ['fewshots', selectedNs],
@@ -98,7 +118,7 @@ export function FewshotTable() {
             👍 긍정 피드백 시 자동 등록 — 유사 질문에 LLM 컨텍스트로 삽입됩니다
           </p>
         </div>
-        <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} disabled={!selectedNs}>
+        <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} disabled={!selectedNs || !canModifyNs}>
           <Plus className="w-4 h-4" />
           추가
         </Button>
@@ -142,6 +162,12 @@ export function FewshotTable() {
                   <p className="text-xs text-slate-500 mt-0.5 truncate">{item.answer.slice(0, 100)}{item.answer.length > 100 ? '...' : ''}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  {item.created_by_username && (
+                    <span className="text-xs text-slate-500">{item.created_by_username}</span>
+                  )}
+                  {item.created_by_part && (
+                    <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>
+                  )}
                   <span className="text-xs text-slate-600">
                     {new Date(item.created_at).toLocaleDateString('ko-KR')}
                   </span>
@@ -189,17 +215,22 @@ export function FewshotTable() {
                           저장
                         </Button>
                       </div>
+                      {updateMutation.error && (
+                        <p className="text-xs text-rose-400">{String(updateMutation.error)}</p>
+                      )}
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      <div className="flex gap-2 justify-end pb-3 border-b border-slate-700">
-                        <Button variant="secondary" size="sm" onClick={() => startEdit(item)}>
-                          <Edit2 className="w-3.5 h-3.5" />수정
-                        </Button>
-                        <Button variant="danger" size="sm" onClick={() => setDeleteTarget(item.id)}>
-                          <Trash2 className="w-3.5 h-3.5" />삭제
-                        </Button>
-                      </div>
+                      {canModifyNs && (
+                        <div className="flex gap-2 justify-end pb-3 border-b border-slate-700">
+                          <Button variant="secondary" size="sm" onClick={() => startEdit(item)}>
+                            <Edit2 className="w-3.5 h-3.5" />수정
+                          </Button>
+                          <Button variant="danger" size="sm" onClick={() => setDeleteTarget(item.id)}>
+                            <Trash2 className="w-3.5 h-3.5" />삭제
+                          </Button>
+                        </div>
+                      )}
                       <div>
                         <p className="text-xs text-slate-500 mb-1">질문</p>
                         <p className="text-sm text-slate-300 whitespace-pre-wrap">{item.question}</p>
@@ -287,6 +318,9 @@ export function FewshotTable() {
       <Modal isOpen={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title="Few-shot 삭제">
         <div className="space-y-4">
           <p className="text-sm text-slate-300">이 Few-shot 항목을 삭제하시겠습니까? 이후 유사 질문에 더 이상 참조되지 않습니다.</p>
+          {deleteMutation.error && (
+            <p className="text-xs text-rose-400">{String(deleteMutation.error)}</p>
+          )}
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>취소</Button>
             <Button

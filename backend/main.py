@@ -1,33 +1,113 @@
-"""Ops-Navigator FastAPI 진입점."""
+"""Ops-Navigator FastAPI 진입점 — DDD 구조."""
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import database
-from config import settings
-from routers import chat, conversations, feedback, fewshots, knowledge, llm_settings, namespaces, stats
-from services.embedding import embedding_service
-from services.llm import get_llm_provider
+from core.config import settings
+from core.database import init_pool, close_pool, get_conn
+from core.security import hash_password
+from shared.embedding import embedding_service
+from domain.llm.factory import get_llm_provider
+
+from domain.auth.router import router as auth_router
+from domain.chat.router import router as chat_router
+from domain.knowledge.router import router as knowledge_router
+from domain.fewshot.router import router as fewshot_router
+from domain.feedback.router import router as feedback_router
+from domain.admin.router import router as admin_router
 
 logger = logging.getLogger(__name__)
 
 _ROUTERS = [
-    chat.router, conversations.router, knowledge.router,
-    feedback.router, fewshots.router, llm_settings.router,
-    stats.router, namespaces.router,
+    auth_router, chat_router, knowledge_router,
+    fewshot_router, feedback_router, admin_router,
 ]
 
 
 async def _run_migrations() -> None:
     """기존 DB 호환용 스키마 마이그레이션 (멱등)."""
-    async with database.get_conn() as conn:
+    async with get_conn() as conn:
+        # ── 기존 컬럼 추가 (하위 호환) ─────────────────────────────────
         await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS answer TEXT")
         await conn.execute("ALTER TABLE ops_conversation ADD COLUMN IF NOT EXISTS trimmed BOOLEAN NOT NULL DEFAULT FALSE")
         await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS message_id INT REFERENCES ops_message(id) ON DELETE SET NULL")
 
-        # 기존 데이터에 ops_namespace 누락 행 보충 (FK 추가 전 필수)
+        # ── ops_part 테이블 ────────────────────────────────────────────
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS ops_part (
+                id          SERIAL PRIMARY KEY,
+                name        VARCHAR(100) NOT NULL UNIQUE,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        # ── ops_user 테이블 ────────────────────────────────────────────
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS ops_user (
+                id                      SERIAL PRIMARY KEY,
+                username                VARCHAR(100) NOT NULL UNIQUE,
+                hashed_password         TEXT NOT NULL,
+                role                    VARCHAR(20) NOT NULL DEFAULT 'user',
+                part                    VARCHAR(100) REFERENCES ops_part(name),
+                is_active               BOOLEAN NOT NULL DEFAULT TRUE,
+                encrypted_llm_api_key   TEXT,
+                created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+        # ── 기본 파트 + 관리자 시드 ────────────────────────────────────
+        await conn.execute("""
+            INSERT INTO ops_part (name) VALUES ('기본') ON CONFLICT (name) DO NOTHING
+        """)
+        admin_exists = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM ops_user WHERE username = 'admin')"
+        )
+        hashed = hash_password(settings.admin_default_password)
+        if not admin_exists:
+            await conn.execute(
+                "INSERT INTO ops_user (username, hashed_password, role, part) VALUES ($1, $2, $3, $4)",
+                "admin", hashed, "admin", "기본",
+            )
+            logger.info("기본 관리자 계정 생성됨 (admin / %s)", settings.admin_default_password)
+        else:
+            # 기존 admin 비밀번호를 설정값으로 갱신
+            await conn.execute(
+                "UPDATE ops_user SET hashed_password = $1, role = 'admin' WHERE username = 'admin'",
+                hashed,
+            )
+
+        # ── ops_conversation.user_id 추가 ──────────────────────────────
+        await conn.execute("ALTER TABLE ops_conversation ADD COLUMN IF NOT EXISTS user_id INT")
+        await conn.execute("""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'fk_conversation_user'
+                ) THEN
+                    ALTER TABLE ops_conversation
+                        ADD CONSTRAINT fk_conversation_user
+                        FOREIGN KEY (user_id) REFERENCES ops_user(id) ON DELETE CASCADE;
+                END IF;
+            END $$;
+        """)
+        # 기존 대화에 user_id 없으면 admin에게 귀속
+        admin_id = await conn.fetchval("SELECT id FROM ops_user WHERE username = 'admin'")
+        if admin_id:
+            await conn.execute(
+                "UPDATE ops_conversation SET user_id = $1 WHERE user_id IS NULL", admin_id,
+            )
+
+        # ── 지식/용어/퓨샷 테이블에 created_by_part, created_by_user_id 추가 ──
+        for tbl in ("ops_knowledge", "ops_glossary", "ops_fewshot"):
+            await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_part VARCHAR(100)")
+            await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_user_id INT")
+
+        # ── ops_namespace에 owner_part, created_by_user_id 추가 ──
+        await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_part VARCHAR(100)")
+        await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS created_by_user_id INT")
+
+        # ── 기존 ops_namespace 데이터 보충 (FK 추가 전 필수) ────────────
         await conn.execute("""
             INSERT INTO ops_namespace (name)
             SELECT DISTINCT ns FROM (
@@ -41,7 +121,7 @@ async def _run_migrations() -> None:
             ON CONFLICT (name) DO NOTHING
         """)
 
-        # namespace FK 제약 추가 (기존 DB 호환 — 멱등)
+        # ── namespace FK 제약 추가 (멱등) ──────────────────────────────
         for tbl in ("ops_glossary", "ops_knowledge", "ops_query_log",
                      "ops_conversation", "ops_feedback", "ops_fewshot"):
             constraint = f"fk_{tbl}_namespace"
@@ -57,7 +137,7 @@ async def _run_migrations() -> None:
                 END $$;
             """)
 
-        # answer가 없는 query_log에 ops_message에서 답변 역매칭
+        # ── query_log answer 역매칭 ────────────────────────────────────
         await conn.execute("""
             UPDATE ops_query_log ql
             SET answer = m.content
@@ -93,7 +173,7 @@ async def _run_migrations() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await database.init_pool()
+    await init_pool()
     await _run_migrations()
     embedding_service.load()
 
@@ -102,10 +182,10 @@ async def lifespan(_app: FastAPI):
     logger.log(logging.getLevelName(level), "LLM(%s) %s", settings.llm_provider, msg)
 
     yield
-    await database.close_pool()
+    await close_pool()
 
 
-app = FastAPI(title="Ops-Navigator API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Ops-Navigator API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

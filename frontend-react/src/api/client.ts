@@ -1,4 +1,5 @@
 import type { SSEEvent } from '../types';
+import { useAuthStore } from '../store/useAuthStore';
 
 const BASE_URL = '/api';
 
@@ -12,18 +13,60 @@ export class ApiError extends Error {
   }
 }
 
+function getAuthHeaders(): Record<string, string> {
+  const token = useAuthStore.getState().accessToken;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function tryRefreshToken(): Promise<boolean> {
+  const { refreshToken, setAccessToken, logout } = useAuthStore.getState();
+  if (!refreshToken) return false;
+
+  try {
+    const resp = await fetch(`${BASE_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!resp.ok) {
+      logout();
+      return false;
+    }
+    const data = await resp.json();
+    setAccessToken(data.access_token);
+    return true;
+  } catch {
+    logout();
+    return false;
+  }
+}
+
 export async function apiFetch<T>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {
   const url = `${BASE_URL}${path}`;
-  const response = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-    ...options,
-  });
+
+  const doFetch = async (headers: Record<string, string>) => {
+    return fetch(url, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+        ...options?.headers,
+      },
+      ...options,
+    });
+  };
+
+  let response = await doFetch(getAuthHeaders());
+
+  // 401 → try refresh once
+  if (response.status === 401 && !path.startsWith('/auth/login') && !path.startsWith('/auth/register')) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      response = await doFetch(getAuthHeaders());
+    }
+  }
 
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
@@ -52,7 +95,10 @@ export async function* streamSSE(
   const url = `${BASE_URL}${path}`;
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
+    },
     body: JSON.stringify(body),
     signal,
   });

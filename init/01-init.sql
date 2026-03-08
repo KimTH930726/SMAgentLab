@@ -7,22 +7,51 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- 네임스페이스 테이블 (ops_namespace)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_namespace (
+    id                  SERIAL PRIMARY KEY,
+    name                VARCHAR(100) NOT NULL UNIQUE,
+    description         TEXT         NOT NULL DEFAULT '',
+    owner_part          VARCHAR(100),
+    created_by_user_id  INT,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- 파트 테이블 (ops_part) — 부서/팀 구분
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ops_part (
     id          SERIAL PRIMARY KEY,
     name        VARCHAR(100) NOT NULL UNIQUE,
-    description TEXT         NOT NULL DEFAULT '',
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
+
+-- ============================================================
+-- 사용자 테이블 (ops_user)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ops_user (
+    id                      SERIAL PRIMARY KEY,
+    username                VARCHAR(100) NOT NULL UNIQUE,
+    hashed_password         TEXT         NOT NULL,
+    role                    VARCHAR(20)  NOT NULL DEFAULT 'user',
+    part                    VARCHAR(100) REFERENCES ops_part(name),
+    is_active               BOOLEAN      NOT NULL DEFAULT TRUE,
+    encrypted_llm_api_key   TEXT,
+    created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_username ON ops_user (username);
 
 -- ============================================================
 -- 용어집 테이블 (ops_glossary)
 -- 사용자 모호 표현 → 사내 표준 용어 치환용
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_glossary (
-    id          SERIAL PRIMARY KEY,
-    namespace   VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
-    term        VARCHAR(200) NOT NULL,
-    description TEXT         NOT NULL,
-    embedding   VECTOR(768)
+    id                  SERIAL PRIMARY KEY,
+    namespace           VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
+    term                VARCHAR(200) NOT NULL,
+    description         TEXT         NOT NULL,
+    embedding           VECTOR(768),
+    created_by_part     VARCHAR(100),
+    created_by_user_id  INT
 );
 
 CREATE INDEX IF NOT EXISTS idx_glossary_ns ON ops_glossary (namespace);
@@ -35,16 +64,18 @@ CREATE INDEX IF NOT EXISTS idx_glossary_emb ON ops_glossary
 -- 운영 가이드 및 처리 로직 저장
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_knowledge (
-    id              SERIAL PRIMARY KEY,
-    namespace       VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
-    container_name  VARCHAR(200),
-    target_tables   TEXT[],
-    content         TEXT         NOT NULL,
-    query_template  TEXT,
-    embedding       VECTOR(768),
-    base_weight     FLOAT        NOT NULL DEFAULT 1.0,
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id                  SERIAL PRIMARY KEY,
+    namespace           VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
+    container_name      VARCHAR(200),
+    target_tables       TEXT[],
+    content             TEXT         NOT NULL,
+    query_template      TEXT,
+    embedding           VECTOR(768),
+    base_weight         FLOAT        NOT NULL DEFAULT 1.0,
+    created_by_part     VARCHAR(100),
+    created_by_user_id  INT,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_ns ON ops_knowledge (namespace);
@@ -93,10 +124,12 @@ CREATE TABLE IF NOT EXISTS ops_conversation (
     namespace   VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
     title       VARCHAR(200) NOT NULL DEFAULT '',
     trimmed     BOOLEAN      NOT NULL DEFAULT FALSE,
+    user_id     INT          REFERENCES ops_user(id) ON DELETE CASCADE,
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversation_ns ON ops_conversation (namespace);
+CREATE INDEX IF NOT EXISTS idx_conversation_user ON ops_conversation (user_id);
 
 -- ============================================================
 -- 메시지 테이블 (ops_message)
@@ -133,13 +166,15 @@ CREATE TABLE IF NOT EXISTS ops_feedback (
 -- 질의-답변 예시 쌍 저장
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_fewshot (
-    id           SERIAL PRIMARY KEY,
-    namespace    VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
-    question     TEXT         NOT NULL,
-    answer       TEXT         NOT NULL,
-    knowledge_id INT          REFERENCES ops_knowledge(id) ON DELETE SET NULL,
-    embedding    VECTOR(768),
-    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id                  SERIAL PRIMARY KEY,
+    namespace           VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
+    question            TEXT         NOT NULL,
+    answer              TEXT         NOT NULL,
+    knowledge_id        INT          REFERENCES ops_knowledge(id) ON DELETE SET NULL,
+    embedding           VECTOR(768),
+    created_by_part     VARCHAR(100),
+    created_by_user_id  INT,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_fewshot_ns ON ops_fewshot (namespace);

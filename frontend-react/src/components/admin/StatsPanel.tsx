@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, CheckCircle, XCircle, Clock, FileText, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { getNamespaceStats, deleteQueryLog, resolveQueryLog, getQueryLogs, bulkDeleteQueryLogs, markQueryLogResolved } from '../../api/stats';
 import { createKnowledge } from '../../api/knowledge';
-import { getNamespaces } from '../../api/namespaces';
+import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
@@ -90,10 +91,10 @@ interface RegisterForm {
 const emptyRegister: RegisterForm = { logId: null, containerName: '', targetTables: '', content: '', queryTemplate: '' };
 
 function QueryLogModal({
-  open, onClose, modalType, namespace, qc,
+  open, onClose, modalType, namespace, qc, canModify,
 }: {
   open: boolean; onClose: () => void; modalType: ModalType | null;
-  namespace: string; qc: ReturnType<typeof useQueryClient>;
+  namespace: string; qc: ReturnType<typeof useQueryClient>; canModify: boolean;
 }) {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [registerForm, setRegisterForm] = useState<RegisterForm>(emptyRegister);
@@ -113,12 +114,13 @@ function QueryLogModal({
     qc.invalidateQueries({ queryKey: ['stats-ns', namespace] });
   };
 
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteQueryLog(id),
-    onSuccess: () => { invalidateAll(); setExpandedId(null); },
+    onSuccess: () => { invalidateAll(); setExpandedId(null); setActionError(null); },
+    onError: (err: Error) => { setActionError(err.message); },
   });
-
-  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const resolveMutation = useMutation({
     mutationFn: (id: number) => resolveQueryLog(id),
@@ -126,11 +128,9 @@ function QueryLogModal({
       invalidateAll();
       qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
       setExpandedId(null);
-      setResolveError(null);
+      setActionError(null);
     },
-    onError: (err: Error) => {
-      setResolveError(err.message);
-    },
+    onError: (err: Error) => { setActionError(err.message); },
   });
 
   const bulkDeleteMutation = useMutation({
@@ -139,7 +139,9 @@ function QueryLogModal({
       invalidateAll();
       setSelectedIds(new Set());
       setExpandedId(null);
+      setActionError(null);
     },
+    onError: (err: Error) => { setActionError(err.message); },
   });
 
   const toggleSelect = (id: number) => {
@@ -196,7 +198,7 @@ function QueryLogModal({
         <div className="text-center py-10 text-slate-500">질의 내역이 없습니다.</div>
       )}
       {/* Bulk action bar */}
-      {selectableLogs.length > 0 && (
+      {canModify && selectableLogs.length > 0 && (
         <div className="flex items-center gap-3 mb-2">
           <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 hover:text-slate-300">
             <input
@@ -222,7 +224,7 @@ function QueryLogModal({
           <div key={log.id} className="bg-slate-900/60 border border-slate-700 rounded-xl overflow-hidden">
             {/* Row header — clickable */}
             <div className="flex items-start">
-              {log.status !== 'resolved' && (
+              {canModify && log.status !== 'resolved' && (
                 <label
                   className="flex items-center px-3 py-3.5 cursor-pointer"
                   onClick={(e) => e.stopPropagation()}
@@ -290,7 +292,7 @@ function QueryLogModal({
 
                 {/* Actions for pending/unresolved */}
                 {log.status !== 'resolved' && (
-                  registerForm.logId === log.id ? (
+                  canModify && registerForm.logId === log.id ? (
                     <div className="space-y-3 pt-1">
                       <p className="text-xs font-medium text-slate-400">지식으로 등록</p>
                       {/* 질문 (읽기 전용) */}
@@ -351,33 +353,37 @@ function QueryLogModal({
                       ) : (
                         <p className="text-xs text-slate-500 italic">답변 없음 (마이그레이션 이전 데이터)</p>
                       )}
-                      {resolveError && resolveMutation.variables === log.id && (
-                        <p className="text-xs text-rose-400">{resolveError}</p>
+                      {actionError && (
+                        <p className="text-xs text-rose-400">{actionError}</p>
                       )}
-                      <div className="flex gap-2">
-                        {log.status === 'pending' && (
-                          <Button variant="primary" size="sm"
-                            loading={resolveMutation.isPending && resolveMutation.variables === log.id}
-                            disabled={!log.answer}
-                            onClick={() => { setResolveError(null); resolveMutation.mutate(log.id); }}>
-                            <CheckCircle className="w-3.5 h-3.5" />승인 (지식 등록 + 해결)
+                      {canModify ? (
+                        <div className="flex gap-2">
+                          {log.status === 'pending' && (
+                            <Button variant="primary" size="sm"
+                              loading={resolveMutation.isPending && resolveMutation.variables === log.id}
+                              disabled={!log.answer}
+                              onClick={() => { setActionError(null); resolveMutation.mutate(log.id); }}>
+                              <CheckCircle className="w-3.5 h-3.5" />승인 (지식 등록 + 해결)
+                            </Button>
+                          )}
+                          <Button variant={log.status === 'pending' ? 'ghost' : 'primary'} size="sm"
+                            onClick={() => setRegisterForm({
+                              ...emptyRegister,
+                              logId: log.id,
+                              content: log.answer ?? '',
+                            })}>
+                            <FileText className="w-3.5 h-3.5" />
+                            {log.status === 'pending' ? '수정 후 등록' : '지식 등록'}
                           </Button>
-                        )}
-                        <Button variant={log.status === 'pending' ? 'ghost' : 'primary'} size="sm"
-                          onClick={() => setRegisterForm({
-                            ...emptyRegister,
-                            logId: log.id,
-                            content: log.answer ?? '',
-                          })}>
-                          <FileText className="w-3.5 h-3.5" />
-                          {log.status === 'pending' ? '수정 후 등록' : '지식 등록'}
-                        </Button>
-                        <Button variant="danger" size="sm"
-                          loading={deleteMutation.isPending && deleteMutation.variables === log.id}
-                          onClick={() => deleteMutation.mutate(log.id)}>
-                          삭제
-                        </Button>
-                      </div>
+                          <Button variant="danger" size="sm"
+                            loading={deleteMutation.isPending && deleteMutation.variables === log.id}
+                            onClick={() => deleteMutation.mutate(log.id)}>
+                            삭제
+                          </Button>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-500">이 네임스페이스에 대한 수정 권한이 없습니다.</p>
+                      )}
                     </div>
                   )
                 )}
@@ -394,11 +400,16 @@ function QueryLogModal({
 
 export function StatsPanel() {
   const { namespace: storeNamespace } = useAppStore();
+  const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
   const [selectedNs, setSelectedNs] = useState(storeNamespace || '');
   const [modalType, setModalType] = useState<ModalType | null>(null);
 
   const { data: namespaces = [] } = useQuery({ queryKey: ['namespaces'], queryFn: getNamespaces, staleTime: 30_000 });
+  const { data: nsDetails = [] } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, staleTime: 30_000 });
+  const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
+  // owner_part 없으면 admin만, 있으면 같은 파트 or admin
+  const canModifyNs = user?.role === 'admin' || (!!nsOwnerPart && nsOwnerPart === user?.part);
   const { data: stats, isLoading, error, refetch } = useQuery({
     queryKey: ['stats-ns', selectedNs],
     queryFn: () => getNamespaceStats(selectedNs),
@@ -534,6 +545,7 @@ export function StatsPanel() {
         modalType={modalType}
         namespace={selectedNs}
         qc={qc}
+        canModify={canModifyNs}
       />
     </div>
   );

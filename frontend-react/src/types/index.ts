@@ -1,3 +1,26 @@
+// Auth types
+export interface User {
+  id: number;
+  username: string;
+  role: 'admin' | 'user';
+  part: string;
+  is_active: boolean;
+  has_api_key: boolean;
+  created_at: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  refresh_token: string;
+  user: User;
+}
+
+export interface Part {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
 // Namespace types
 export interface Namespace {
   name: string;
@@ -6,8 +29,10 @@ export interface Namespace {
 }
 
 export interface NamespaceDetail extends Namespace {
+  owner_part?: string | null;
   knowledge_count: number;
   glossary_count: number;
+  created_by_username?: string | null;
 }
 
 // Knowledge types
@@ -19,6 +44,9 @@ export interface KnowledgeItem {
   content: string;
   query_template: string | null;
   base_weight: number;
+  created_by_part?: string | null;
+  created_by_user_id?: number | null;
+  created_by_username?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -45,8 +73,10 @@ export interface GlossaryItem {
   id: number;
   namespace: string;
   term: string;
-  
   description: string;
+  created_by_part?: string | null;
+  created_by_user_id?: number | null;
+  created_by_username?: string | null;
   created_at: string;
 }
 
@@ -160,6 +190,9 @@ export interface FewshotItem {
   question: string;
   answer: string;
   knowledge_id: number | null;
+  created_by_part?: string | null;
+  created_by_user_id?: number | null;
+  created_by_username?: string | null;
   created_at: string;
 }
 
