@@ -23,8 +23,9 @@ export default function Register() {
   useEffect(() => {
     getParts()
       .then((data) => {
-        setParts(data);
-        if (data.length > 0) setPart(data[0].name);
+        const filtered = data.filter((p) => p.name !== '기본');
+        setParts(filtered);
+        if (filtered.length > 0) setPart(filtered[0].name);
       })
       .catch(console.error);
   }, []);
