@@ -93,6 +93,7 @@ export function FewshotTable() {
     mutationFn: (id: number) => deleteFewshot(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['fewshots', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
       setDeleteTarget(null);
     },
   });

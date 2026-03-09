@@ -5,6 +5,7 @@ import { getLLMConfig, updateLLMConfig, testLLMConnection, getSearchThresholds, 
 import type { LLMConfig, LLMConfigUpdate, SearchThresholds, SearchDefaults } from '../../api/llm';
 import { Button } from '../ui/Button';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useAppStore } from '../../store/useAppStore';
 
 type Provider = 'ollama' | 'inhouse';
 
@@ -628,6 +629,12 @@ function SearchDefaultsSettings() {
       qc.setQueryData(['search-defaults'], data);
       setValues(data);
       setDirty(false);
+      // 채팅 패널의 검색 설정도 즉시 반영
+      useAppStore.getState().initSearchConfig({
+        wVector: data.default_w_vector,
+        wKeyword: data.default_w_keyword,
+        topK: data.default_top_k,
+      });
     },
   });
 

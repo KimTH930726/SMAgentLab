@@ -87,6 +87,7 @@ export function KnowledgeTable() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
       setShowCreate(false);
       setCreateForm(defaultForm);
     },
@@ -111,6 +112,7 @@ export function KnowledgeTable() {
     mutationFn: (id: number) => deleteKnowledge(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
       setDeleteTarget(null);
     },
   });

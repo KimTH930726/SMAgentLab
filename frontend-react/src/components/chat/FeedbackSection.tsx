@@ -45,9 +45,10 @@ export function FeedbackSection({
   const handlePositive = async () => {
     try {
       await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: true, message_id: messageId ?? null });
-      // 긍정 피드백 → fewshot 자동 생성 + knowledge base_weight 변경
+      // 긍정 피드백 → fewshot 자동 생성 + knowledge base_weight 변경 + 통계 갱신
       qc.invalidateQueries({ queryKey: ['fewshots'] });
       qc.invalidateQueries({ queryKey: ['knowledge'] });
+      qc.invalidateQueries({ queryKey: ['stats-ns'] });
     } catch (err) {
       console.error(err);
     }
@@ -58,8 +59,9 @@ export function FeedbackSection({
   const handleSkip = async () => {
     try {
       await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: false, message_id: messageId ?? null });
-      // 부정 피드백 → knowledge base_weight 변경
+      // 부정 피드백 → knowledge base_weight 변경 + 통계 갱신
       qc.invalidateQueries({ queryKey: ['knowledge'] });
+      qc.invalidateQueries({ queryKey: ['stats-ns'] });
     } catch (err) {
       console.error(err);
     }
@@ -79,6 +81,7 @@ export function FeedbackSection({
       });
       await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: false, message_id: messageId ?? null });
       qc.invalidateQueries({ queryKey: ['knowledge'] });
+      qc.invalidateQueries({ queryKey: ['stats-ns'] });
     } catch (err) {
       console.error(err);
     } finally {

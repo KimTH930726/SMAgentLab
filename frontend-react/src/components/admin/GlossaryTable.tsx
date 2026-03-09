@@ -59,7 +59,7 @@ export function GlossaryTable() {
 
   const createMutation = useMutation({
     mutationFn: () => createGlossaryItem({ namespace: selectedNs, term: createForm.term.trim(), description: createForm.description.trim() }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }); setShowCreate(false); setCreateForm(defaultForm); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }); qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] }); setShowCreate(false); setCreateForm(defaultForm); },
   });
 
   const updateMutation = useMutation({
@@ -69,7 +69,7 @@ export function GlossaryTable() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteGlossaryItem(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }); setDeleteTarget(null); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }); qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] }); setDeleteTarget(null); },
   });
 
   const startEdit = (item: GlossaryItem) => {

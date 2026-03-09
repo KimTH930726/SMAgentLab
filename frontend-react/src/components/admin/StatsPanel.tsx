@@ -176,6 +176,7 @@ function QueryLogModal({
       await markQueryLogResolved(registerForm.logId);
       invalidateAll();
       qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
+      qc.invalidateQueries({ queryKey: ['fewshots', namespace] });
       setRegisterForm(emptyRegister);
       setExpandedId(null);
     } catch (err) {
