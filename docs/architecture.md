@@ -49,8 +49,8 @@ v2.0.0에서 **DDD(Domain-Driven Design) 구조 전환**, **JWT 인증/인가**,
 |--------|------|
 | **Login** (`/login`) | JWT 로그인 — Access Token + Refresh Token 발급 |
 | **Register** (`/register`) | 회원가입 — 부서 선택 + 선택적 LLM API Key 등록 |
-| **Chat** (`/`) | 운영 보조 챗 — SSE 스트리밍(2-phase: 전처리→generator), 결과 카드, 피드백(👍→few-shot 저장/base_weight 상승), 대화 메모리(요약+리콜) |
-| **Admin** (`/admin`) | 관리 화면 — **네임스페이스**, 지식 베이스, 용어집, **Few-shot**, 통계, **파이프라인 디버그**, **LLM 설정**, **사용자 관리**(admin 전용) 탭 |
+| **Chat** (`/`) | 운영 보조 챗 — SSE 스트리밍(2-phase: 전처리→generator), 결과 카드, 피드백(👍→few-shot 저장/base_weight 상승), 대화 메모리(요약+리콜), **Markdown 답변 렌더링** (react-markdown + remark-gfm + rehype-raw) |
+| **Admin** (`/admin`) | 관리 화면 — **네임스페이스**, 지식 베이스, 용어집, **Few-shot**, 통계, **파이프라인 디버그**, **시스템 설정**(LLM 프로바이더 / 검색 임계값 서브탭), **사용자 관리**(파트 관리 / 사용자 목록 서브탭, admin 전용) |
 
 - **ProtectedRoute**: 로그인되지 않은 사용자는 `/login`으로 리다이렉트
 - **useAuthStore** (Zustand): localStorage에 토큰 저장, 자동 Bearer 토큰 주입
@@ -111,6 +111,8 @@ backend/
 - **LLM Provider 패턴**: `ollama` / `inhouse` 환경변수 하나로 교체 가능
 - **LLM별 프롬프트 형식**: Ollama는 `build_messages()` messages 배열, InHouse(DevX MCP API)는 `_build_query()`로 단일 query 문자열 생성
 - **대화 맥락**: ConversationSummaryBuffer + Semantic Recall — 오래된 교환을 LLM으로 요약·벡터 저장, 현재 질문과 유사한 과거 요약 + 최근 2회 raw 교환을 history로 LLM에 전달
+- **멀티턴 검색 보강**: 직전 Q+A(각 80자)를 현재 질문에 결합하여 임베딩/검색 — 짧은 후속 질문에서도 이전 대화 맥락이 반영되어 유사도 향상 (추가 LLM 호출 없음)
+- **마크다운 답변**: 시스템 프롬프트에 Markdown 형식 지시 포함, 프론트엔드에서 `react-markdown` + `remark-gfm` + `rehype-raw`로 테이블/코드/리스트/HTML 태그 렌더링
 - **JWT 인증/인가**: Access Token(30분) + Refresh Token(7일), FastAPI Depends로 라우터 수준 보호
 - **네임스페이스 소유 파트 기반 권한**: 네임스페이스의 `owner_part`와 동일한 부서 구성원만 해당 네임스페이스의 데이터 CRUD 가능, 타 부서는 읽기 전용. `owner_part` NULL이면 admin만 수정/삭제 가능. Admin은 모든 권한 보유
 - **수정 시 작성자 갱신**: 지식/용어/퓨샷 수정 시 `created_by_part`/`created_by_user_id`가 최종 수정자로 갱신됨
