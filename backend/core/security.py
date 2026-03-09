@@ -70,3 +70,14 @@ def decrypt_api_key(encrypted_key: str) -> str:
         return _get_fernet().decrypt(encrypted_key.encode()).decode()
     except InvalidToken:
         raise ValueError("API Key 복호화 실패 — 키가 변경되었거나 손상되었습니다.")
+
+
+def get_user_api_key(user: dict) -> str | None:
+    """사용자의 암호화된 API Key를 복호화. 없거나 실패하면 None."""
+    encrypted = user.get("encrypted_llm_api_key")
+    if not encrypted:
+        return None
+    try:
+        return decrypt_api_key(encrypted)
+    except (ValueError, Exception):
+        return None

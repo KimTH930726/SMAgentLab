@@ -7,7 +7,7 @@ from core.database import get_conn
 from core.security import (
     hash_password, verify_password,
     create_access_token, create_refresh_token,
-    encrypt_api_key, decrypt_api_key,
+    encrypt_api_key,
 )
 
 
@@ -39,18 +39,17 @@ async def register_user(
             raise RegisterError("서버에 암호화 키가 설정되지 않아 API Key를 등록할 수 없습니다.", 500)
 
     async with get_conn() as conn:
-        # 파트 존재 확인
-        part_exists = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM ops_part WHERE name = $1)", part
+        # 파트 존재 + 사용자 중복 확인 (단일 쿼리로 통합)
+        check = await conn.fetchrow(
+            """
+            SELECT
+                EXISTS(SELECT 1 FROM ops_part WHERE name = $1) AS part_exists,
+                EXISTS(SELECT 1 FROM ops_user WHERE username = $2) AS user_exists
+            """, part, username,
         )
-        if not part_exists:
+        if not check["part_exists"]:
             raise RegisterError("존재하지 않는 파트(부서)입니다.")
-
-        # 중복 확인
-        existing = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM ops_user WHERE username = $1)", username
-        )
-        if existing:
+        if check["user_exists"]:
             raise RegisterError("이미 사용 중인 아이디입니다.")
 
         row = await conn.fetchrow(
@@ -168,14 +167,6 @@ async def update_api_key(user_id: int, plain_key: str) -> bool:
             user_id, encrypted,
         )
     return "UPDATE 1" in result
-
-
-def get_decrypted_api_key(user: dict) -> Optional[str]:
-    """사용자의 암호화된 API Key를 복호화. 없으면 None."""
-    encrypted = user.get("encrypted_llm_api_key")
-    if not encrypted:
-        return None
-    return decrypt_api_key(encrypted)
 
 
 # ── 파트 CRUD ────────────────────────────────────────────────────────────────

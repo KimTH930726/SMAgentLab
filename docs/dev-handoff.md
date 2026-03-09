@@ -35,7 +35,7 @@ docker compose up --build -d
 > **마지막 업데이트**: 2026-03-09
 > **작업 PC**: PC-B (Windows 11)
 > **브랜치**: main
-> **최근 변경**: 검색 설정값 중앙화 (config.py 기반)
+> **최근 변경**: 백엔드 리팩토링 + 검색 설정 UI 개선 + 아이콘 교체
 
 ### 완료된 작업
 
@@ -117,6 +117,18 @@ docker compose up --build -d
   - `.env` / `docker-compose.yml`: 인프라·시크릿만 유지 (DB, LLM URL, JWT키, Fernet키, 관리자 비번)
   - `config.py`: 앱 로직 설정은 코드 기본값으로 관리 (임베딩, 모델명, 검색값, 임계값, JWT 만료 등)
   - 중복 환경변수 제거 (`EMBEDDING_MODEL`, `VECTOR_DIM`, `OLLAMA_MODEL`, `DEFAULT_TOP_K` 등)
+- [x] **mutation 후 관련 쿼리 캐시 무효화 수정** (6개 파일)
+- [x] **검색 설정 UI 개선**
+  - 검색 설정 탭을 첫 번째로, LLM 프로바이더 탭을 두 번째로 배치
+  - 검색 기본값/임계값 섹션을 CollapsibleSection 토글로 변경
+  - 의미/키워드 가중치 슬라이더 연동 (합이 항상 1)
+- [x] **백엔드 클린 코드 리팩토링**
+  - API key 복호화 함수 통합 (`core/security.py` → `get_user_api_key`)
+  - chat DB 저장 병렬화 (`_save_user_message` + `_save_assistant_message` gather)
+  - 후처리 작업 병렬화 (`_post_save_tasks` gather)
+  - cleanup 쿼리 통합 (DELETE + affected ID를 CTE 한 쿼리로)
+  - 회원가입 검증 통합 (파트 존재 + 사용자 중복을 단일 쿼리로)
+- [x] **앱 아이콘 교체** — 빨간 7잎 꽃 SVG (favicon + 사이드바 로고)
 
 ### 진행 중 / 미완료 작업
 

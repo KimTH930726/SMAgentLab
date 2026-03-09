@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from core.database import get_conn
 from core.dependencies import get_current_user
-from core.security import decrypt_api_key
+from core.security import get_user_api_key
 from domain.chat.schemas import (
     ChatRequest, ChatResponse, KnowledgeResult,
     DebugSearchResponse, GlossaryMatchInfo, DebugResult, FewshotResult,
@@ -96,20 +96,9 @@ def _results_to_payload(results: list[RetrievalResult]) -> list[dict]:
     ]
 
 
-def _get_user_api_key(user: dict) -> Optional[str]:
-    """사용자의 암호화된 API Key를 복호화. 없으면 None."""
-    encrypted = user.get("encrypted_llm_api_key")
-    if not encrypted:
-        return None
-    try:
-        return decrypt_api_key(encrypted)
-    except Exception:
-        return None
-
-
 def _require_api_key(user: dict) -> str:
     """사내 LLM 사용 시 사용자 API Key가 필수. 없으면 HTTPException."""
-    key = _get_user_api_key(user)
+    key = get_user_api_key(user)
     if not key and settings.llm_provider == "inhouse":
         raise HTTPException(
             status_code=403,
@@ -218,16 +207,14 @@ async def _create_query_log(
 
 
 async def _post_save_tasks(conv_id: int, namespace: Optional[str] = None) -> None:
-    try:
-        await memory.maybe_summarize(conv_id, get_llm_provider())
-    except Exception as e:
-        logger.warning("요약 후처리 실패: %s", e)
-    try:
-        if namespace:
-            await cleanup_old_messages(namespace)
-        await cleanup_resolved_query_logs()
-    except Exception as e:
-        logger.warning("cleanup 실패: %s", e)
+    tasks = [memory.maybe_summarize(conv_id, get_llm_provider())]
+    if namespace:
+        tasks.append(cleanup_old_messages(namespace))
+    tasks.append(cleanup_resolved_query_logs())
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, Exception):
+            logger.warning("후처리 실패: %s", r)
 
 
 # ── Cleanup 함수 ─────────────────────────────────────────────────────────────
@@ -242,27 +229,25 @@ async def cleanup_old_messages(namespace: str) -> int:
             return 0
 
         excess = total - MAX_MESSAGES_PER_NS
-        affected_conv_ids = await conn.fetch(
-            "SELECT DISTINCT m.conversation_id FROM ops_message m JOIN ops_conversation c ON m.conversation_id = c.id WHERE c.namespace = $1 ORDER BY m.conversation_id LIMIT $2",
-            namespace, excess,
-        )
-        affected_ids = [r["conversation_id"] for r in affected_conv_ids]
-
-        result = await conn.execute(
+        # DELETE + 영향받은 conversation_id 반환을 한 번에 처리
+        affected_ids = await conn.fetch(
             """
-            DELETE FROM ops_message WHERE id IN (
-                SELECT m.id FROM ops_message m
-                JOIN ops_conversation c ON m.conversation_id = c.id
-                WHERE c.namespace = $1 ORDER BY m.created_at ASC LIMIT $2
+            WITH deleted AS (
+                DELETE FROM ops_message WHERE id IN (
+                    SELECT m.id FROM ops_message m
+                    JOIN ops_conversation c ON m.conversation_id = c.id
+                    WHERE c.namespace = $1 ORDER BY m.created_at ASC LIMIT $2
+                ) RETURNING conversation_id
             )
+            SELECT DISTINCT conversation_id FROM deleted
             """,
             namespace, excess,
         )
-        deleted = int(result.split()[-1]) if result else 0
-
-        if deleted > 0 and affected_ids:
+        deleted = len(affected_ids)
+        if deleted > 0:
+            conv_ids = [r["conversation_id"] for r in affected_ids]
             await conn.execute(
-                "UPDATE ops_conversation SET trimmed = TRUE WHERE id = ANY($1::int[])", affected_ids,
+                "UPDATE ops_conversation SET trimmed = TRUE WHERE id = ANY($1::int[])", conv_ids,
             )
             logger.info("cleanup: %s 네임스페이스에서 %d개 메시지 트리밍", namespace, deleted)
         return deleted
@@ -313,8 +298,10 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 
     answer = await _safe_generate(pipe.context, req.question, history, api_key=api_key)
 
-    await _save_user_message(conv_id, req.question)
-    msg_id = await _save_assistant_message(conv_id, answer, pipe.mapped_term, pipe.results)
+    _, msg_id = await asyncio.gather(
+        _save_user_message(conv_id, req.question),
+        _save_assistant_message(conv_id, answer, pipe.mapped_term, pipe.results),
+    )
     await _create_query_log(req.namespace, req.question, answer, len(pipe.results) > 0, pipe.mapped_term, msg_id)
     asyncio.create_task(_post_save_tasks(conv_id, req.namespace))
 
