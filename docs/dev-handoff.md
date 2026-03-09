@@ -86,6 +86,11 @@ docker compose up --build -d
 - [ ] 테스트 코드 작성 (pytest)
 - [ ] CI/CD 파이프라인
 - [ ] 사용자별 검색 설정 저장 (현재 세션 단위)
+- [ ] **프롬프트 템플릿 동적 관리 (Admin UI)**
+  - 현재 프롬프트가 코드에 하드코딩되어 있어 변경 시 배포 필요
+  - 파트별로 요구하는 프롬프트가 다를 수 있으므로 네임스페이스/파트 단위로 프롬프트 템플릿을 DB 저장·편집할 수 있어야 함
+  - Admin > 시스템 설정 또는 별도 탭에서 system prompt, retrieval prompt 등을 CRUD
+  - 변수 치환 (예: `{context}`, `{question}`) 미리보기 기능 고려
 
 ---
 
