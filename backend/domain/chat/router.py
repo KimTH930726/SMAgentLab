@@ -286,10 +286,28 @@ async def cleanup_resolved_query_logs() -> int:
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     api_key = _require_api_key(user)
     conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"])
-    query_vec = await embedding_service.embed(req.question)
+
+    # ── 멀티턴 검색 보강: 직전 Q+A를 결합하여 검색 맥락 확보 ──
+    search_question = req.question
+    async with get_conn() as conn:
+        prev_pair = await conn.fetch(
+            """
+            SELECT role, content FROM (
+                SELECT role, content, created_at, id FROM ops_message
+                WHERE conversation_id = $1
+                ORDER BY created_at DESC, id DESC LIMIT 2
+            ) sub ORDER BY sub.created_at ASC, sub.id ASC
+            """,
+            conv_id,
+        )
+    if prev_pair:
+        prev_context = " ".join(r["content"][:80] for r in prev_pair if r["content"])
+        search_question = f"{prev_context} {req.question}"
+
+    query_vec = await embedding_service.embed(search_question)
 
     pipe, history = await asyncio.gather(
-        _run_pipeline(req.namespace, req.question, query_vec, req.w_vector, req.w_keyword, req.top_k),
+        _run_pipeline(req.namespace, search_question, query_vec, req.w_vector, req.w_keyword, req.top_k),
         memory.build_context_history(conv_id, query_vec),
     )
 
@@ -365,7 +383,26 @@ async def _generate_worker(
 
     try:
         await queue.put({"type": "status", "step": "embedding", "message": "질문 임베딩 생성 중..."})
-        query_vec = await embedding_service.embed(question)
+
+        # ── 멀티턴 검색 보강: 직전 Q+A를 결합하여 검색 맥락 확보 ──
+        search_question = question
+        async with get_conn() as conn:
+            prev_pair = await conn.fetch(
+                """
+                SELECT role, content FROM (
+                    SELECT role, content, created_at, id FROM ops_message
+                    WHERE conversation_id = $1 AND id < $2
+                    ORDER BY created_at DESC, id DESC LIMIT 2
+                ) sub ORDER BY sub.created_at ASC, sub.id ASC
+                """,
+                conv_id, msg_id,
+            )
+        if prev_pair:
+            prev_context = " ".join(r["content"][:80] for r in prev_pair if r["content"])
+            search_question = f"{prev_context} {question}"
+            logger.info("멀티턴 검색 보강: '%s' → '%s'", question, search_question)
+
+        query_vec = await embedding_service.embed(search_question)
 
         await queue.put({"type": "status", "step": "context", "message": "용어 매핑 및 대화 맥락 검색 중..."})
         glossary_match, history = await asyncio.gather(
@@ -373,7 +410,7 @@ async def _generate_worker(
             memory.build_context_history(conv_id, query_vec),
         )
         mapped_term = glossary_match.term if glossary_match else None
-        enriched_query = f"{question} {mapped_term}" if mapped_term else question
+        enriched_query = f"{search_question} {mapped_term}" if mapped_term else search_question
 
         await queue.put({"type": "status", "step": "search", "message": "관련 문서 검색 중..."})
         results, fewshots = await asyncio.gather(

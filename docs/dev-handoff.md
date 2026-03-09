@@ -74,6 +74,22 @@ docker compose up --build -d
 - [x] **apiFetch headers 덮어쓰기 버그 수정**
 - [x] **회원가입 시 '기본' 파트 드롭다운 제외**
 - [x] **UserManager 파트 변경 시 즉시 UI 반영** (TanStack Query invalidation)
+- [x] **UI 개선 일괄**
+  - 사이드바: 로고 SVG 교체, 현재 LLM 모델명 표시, 백엔드 상태 호버/툴팁
+  - 시스템 설정: LLM 프로바이더 / 검색 임계값 서브탭 분리
+  - 사용자 관리: 파트 관리 / 사용자 목록 서브탭 분리
+  - LLM 프로바이더 아이콘: OpenAI/Claude/Gemini 실제 로고 SVG
+  - 역할/상태 뱃지, 삭제 버튼 호버 효과 + 커서 + 툴팁
+  - 관리 탭 전체 `refetchOnMount: 'always'` (stale 캐시 방지)
+  - 피드백 후 fewshot/knowledge 쿼리 무효화
+- [x] **챗 응답 마크다운 렌더링**
+  - `react-markdown` + `remark-gfm` + `rehype-raw` 도입
+  - 다크 테마 `.prose-chat` CSS (테이블/코드/인용/리스트/링크)
+  - 시스템 프롬프트에 "Markdown 형식으로 답변" 지시 추가
+- [x] **멀티턴 검색 보강 (Contextual Search Enrichment)**
+  - 직전 user 질문 + assistant 답변(각 80자)을 현재 질문에 결합하여 임베딩/검색
+  - 후속 짧은 질문에서도 이전 대화 맥락이 검색에 반영되어 유사도 향상
+  - 추가 비용: DB SELECT 1회 (< 1ms), LLM 호출 없음
 
 ### 진행 중 / 미완료 작업
 
