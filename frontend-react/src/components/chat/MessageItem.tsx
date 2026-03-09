@@ -1,5 +1,7 @@
 import { clsx } from 'clsx';
 import { Bot, User } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Badge } from '../ui/Badge';
 import { SearchResultCard } from './SearchResultCard';
 import { FeedbackSection } from './FeedbackSection';
@@ -72,14 +74,16 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
               )}
             >
               {message.content ? (
-                <p
+                <div
                   className={clsx(
-                    'text-sm text-slate-200 whitespace-pre-wrap leading-relaxed',
+                    'prose-chat text-sm text-slate-200 leading-relaxed',
                     message.isStreaming && 'typing-cursor',
                   )}
                 >
-                  {message.content}
-                </p>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {message.content}
+                  </ReactMarkdown>
+                </div>
               ) : (
                 message.isStreaming && (
                   <p className="typing-cursor text-slate-400 text-sm">&nbsp;</p>

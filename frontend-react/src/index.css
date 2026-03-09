@@ -14,6 +14,89 @@ body {
 ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #64748B; }
 
+/* ── Markdown prose styles for chat messages ── */
+.prose-chat p { margin: 0.4em 0; }
+.prose-chat p:first-child { margin-top: 0; }
+.prose-chat p:last-child { margin-bottom: 0; }
+.prose-chat strong { color: #E2E8F0; font-weight: 600; }
+.prose-chat em { color: #CBD5E1; }
+.prose-chat ul, .prose-chat ol { margin: 0.4em 0; padding-left: 1.4em; }
+.prose-chat li { margin: 0.15em 0; }
+.prose-chat li::marker { color: #64748B; }
+.prose-chat code {
+  background: #1E293B;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.85em;
+  color: #93C5FD;
+}
+.prose-chat pre {
+  background: #0F172A;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.75em 1em;
+  margin: 0.5em 0;
+  overflow-x: auto;
+}
+.prose-chat pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #E2E8F0;
+}
+.prose-chat blockquote {
+  border-left: 3px solid #6366F1;
+  margin: 0.5em 0;
+  padding: 0.25em 0.75em;
+  color: #94A3B8;
+}
+.prose-chat h1, .prose-chat h2, .prose-chat h3 {
+  color: #F1F5F9;
+  font-weight: 600;
+  margin: 0.6em 0 0.3em;
+}
+.prose-chat h1 { font-size: 1.15em; }
+.prose-chat h2 { font-size: 1.05em; }
+.prose-chat h3 { font-size: 1em; }
+.prose-chat hr {
+  border: none;
+  border-top: 1px solid #334155;
+  margin: 0.6em 0;
+}
+/* Markdown tables */
+.prose-chat table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.85em;
+}
+.prose-chat thead th {
+  background: #1E293B;
+  color: #94A3B8;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.5em 0.75em;
+  border-bottom: 2px solid #334155;
+}
+.prose-chat tbody td {
+  padding: 0.4em 0.75em;
+  border-bottom: 1px solid #1E293B;
+  color: #CBD5E1;
+}
+.prose-chat tbody tr:hover {
+  background: #1E293B50;
+}
+/* Links */
+.prose-chat a {
+  color: #818CF8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-chat a:hover {
+  color: #A5B4FC;
+}
+
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 .typing-cursor::after {
   content: '▋';
