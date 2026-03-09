@@ -113,6 +113,10 @@ docker compose up --build -d
   - 프론트엔드: `useAppStore` 하드코딩 제거, 앱 초기화 시 API로 기본값 fetch (`SearchConfigSync`)
   - 프론트엔드: `api/chat.ts` fallback 하드코딩(`?? 0.7`, `?? 5` 등) 제거
   - 프론트엔드: Admin > 시스템 설정 > 검색 임계값 탭에 검색 기본값 관리 UI 추가
+- [x] **환경변수/설정값 역할 분리 정리**
+  - `.env` / `docker-compose.yml`: 인프라·시크릿만 유지 (DB, LLM URL, JWT키, Fernet키, 관리자 비번)
+  - `config.py`: 앱 로직 설정은 코드 기본값으로 관리 (임베딩, 모델명, 검색값, 임계값, JWT 만료 등)
+  - 중복 환경변수 제거 (`EMBEDDING_MODEL`, `VECTOR_DIM`, `OLLAMA_MODEL`, `DEFAULT_TOP_K` 등)
 
 ### 진행 중 / 미완료 작업
 
