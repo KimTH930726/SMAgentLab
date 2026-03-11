@@ -26,7 +26,7 @@ export function UserManager() {
           }`}
         >
           <Building2 className="w-3.5 h-3.5" />
-          파트 · 업무구분
+          파트 목록
         </button>
         <button
           onClick={() => setSubTab('users')}
@@ -123,7 +123,7 @@ function PartSection() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-200">파트 (부서) 관리</h2>
+        <h2 className="text-lg font-semibold text-slate-200">파트 관리</h2>
         <Button variant="primary" size="sm" onClick={() => { setShowCreate(true); setNewName(''); setCreateError(''); }}>
           <Plus className="w-4 h-4" />
           새 파트
