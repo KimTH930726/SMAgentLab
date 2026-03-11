@@ -8,6 +8,7 @@ import {
   clearStreamState,
 } from '../../store/useStreamStore';
 import { getMessages } from '../../api/conversations';
+import { suggestCategory } from '../../api/namespaces';
 import { MessageItem } from './MessageItem';
 import type { ChatMessage } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
@@ -97,6 +98,7 @@ export function ChatContainer() {
   const conversationId = useAppStore((s) => s.conversationId);
   const setConversationId = useAppStore((s) => s.setConversationId);
   const searchConfig = useAppStore((s) => s.searchConfig);
+  const category = useAppStore((s) => s.category);
   const conversations = useAppStore((s) => s.conversations);
   const chatRefreshKey = useAppStore((s) => s.chatRefreshKey);
 
@@ -316,7 +318,7 @@ export function ChatContainer() {
     stopChatStream();
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!input.trim() || streamActive || !namespace) return;
     const question = input.trim();
     setInput('');
@@ -324,6 +326,12 @@ export function ChatContainer() {
 
     // Increment epoch to invalidate any in-flight getMessages from previous stream completion
     loadEpochRef.current++;
+
+    // 자동 감지: 질문 내용 기반으로 업무구분 자동 탐지
+    let resolvedCategory: string | null = category || null;
+    if (category === '__auto__') {
+      resolvedCategory = await suggestCategory(namespace, question).catch(() => null);
+    }
 
     const startConvId = conversationId;
     startChatStream({
@@ -333,6 +341,7 @@ export function ChatContainer() {
       wKeyword: searchConfig.wKeyword,
       topK: searchConfig.topK,
       conversationId,
+      category: resolvedCategory,
       onConversationCreated: (id) => {
         // Guard: if stream was already stopped/cleared, don't navigate
         if (!useStreamStore.getState().active) return;
@@ -422,7 +431,7 @@ export function ChatContainer() {
         </div>
         {!namespace && (
           <p className="text-xs text-slate-500 mt-2">
-            왼쪽 사이드바에서 네임스페이스를 선택하세요.
+            왼쪽 사이드바에서 파트를 선택하세요.
           </p>
         )}
       </div>

@@ -10,6 +10,17 @@ class NamespaceCreate(BaseModel):
     description: str = ""
 
 
+class KnowledgeCategoryCreate(BaseModel):
+    name: str
+
+
+class KnowledgeCategoryOut(BaseModel):
+    id: int
+    namespace: str
+    name: str
+    created_at: str
+
+
 class NamespaceInfo(BaseModel):
     name: str
     description: str

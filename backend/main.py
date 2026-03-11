@@ -27,7 +27,11 @@ _ROUTERS = [
 
 
 async def _run_migrations() -> None:
-    """기존 DB 호환용 스키마 마이그레이션 (멱등)."""
+    """기존 DB 호환용 스키마 마이그레이션 (멱등).
+
+    integer FK 방식으로 전환 후 구 string 컬럼도 유지하여
+    구 버전과의 호환성을 보장한다.
+    """
     async with get_conn() as conn:
         # ── 기존 컬럼 추가 (하위 호환) ─────────────────────────────────
         await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS answer TEXT")
@@ -43,39 +47,120 @@ async def _run_migrations() -> None:
             )
         """)
 
-        # ── ops_user 테이블 ────────────────────────────────────────────
+        # ── ops_user 테이블 (구 string part 방식 유지, part_id 추가) ──
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS ops_user (
                 id                      SERIAL PRIMARY KEY,
                 username                VARCHAR(100) NOT NULL UNIQUE,
                 hashed_password         TEXT NOT NULL,
                 role                    VARCHAR(20) NOT NULL DEFAULT 'user',
-                part                    VARCHAR(100) REFERENCES ops_part(name),
+                part                    VARCHAR(100),
                 is_active               BOOLEAN NOT NULL DEFAULT TRUE,
                 encrypted_llm_api_key   TEXT,
                 created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
 
-        # ── 기본 파트 + 관리자 시드 ────────────────────────────────────
+        # ── part_id 컬럼 추가 (integer FK) ──────────────────────────
+        await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS part_id INT")
         await conn.execute("""
-            INSERT INTO ops_part (name) VALUES ('기본') ON CONFLICT (name) DO NOTHING
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'fk_user_part'
+                ) THEN
+                    ALTER TABLE ops_user
+                        ADD CONSTRAINT fk_user_part
+                        FOREIGN KEY (part_id) REFERENCES ops_part(id) ON DELETE SET NULL;
+                END IF;
+            END $$;
         """)
+
+        # ── ops_namespace.owner_part_id 추가 ───────────────────────────
+        await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_part VARCHAR(100)")
+        await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_part_id INT")
+        await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS created_by_user_id INT")
+        await conn.execute("""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'fk_namespace_owner_part'
+                ) THEN
+                    ALTER TABLE ops_namespace
+                        ADD CONSTRAINT fk_namespace_owner_part
+                        FOREIGN KEY (owner_part_id) REFERENCES ops_part(id) ON DELETE SET NULL;
+                END IF;
+            END $$;
+        """)
+
+        # ── 슈퍼어드민 파트 + 관리자 시드 ──────────────────────────────
+        await conn.execute("""
+            INSERT INTO ops_part (name) VALUES ('슈퍼어드민') ON CONFLICT (name) DO NOTHING
+        """)
+        # 슈퍼어드민 part_id 조회
+        superadmin_part_id = await conn.fetchval(
+            "SELECT id FROM ops_part WHERE name = '슈퍼어드민'"
+        )
+        # 구 '기본' 파트가 남아있으면 제거 (마이그레이션) — 컬럼이 없으면 skip
+        await conn.execute("""
+            DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name='ops_user' AND column_name='part') THEN
+                    UPDATE ops_user SET part = '슈퍼어드민' WHERE part = '기본';
+                END IF;
+            END $$;
+        """)
+        await conn.execute("""
+            DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name='ops_namespace' AND column_name='owner_part') THEN
+                    UPDATE ops_namespace SET owner_part = '슈퍼어드민' WHERE owner_part = '기본';
+                END IF;
+            END $$;
+        """)
+        await conn.execute("""
+            DELETE FROM ops_part WHERE name = '기본'
+        """)
+
+        # ── ops_user.part → part_id 동기화 (part 컬럼이 있을 때만) ──────
+        await conn.execute("""
+            DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name='ops_user' AND column_name='part') THEN
+                    UPDATE ops_user u
+                    SET part_id = p.id
+                    FROM ops_part p
+                    WHERE u.part = p.name AND u.part_id IS NULL;
+                END IF;
+            END $$;
+        """)
+
+        # ── ops_namespace.owner_part → owner_part_id 동기화 ────────────
+        await conn.execute("""
+            DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_name='ops_namespace' AND column_name='owner_part') THEN
+                    UPDATE ops_namespace n
+                    SET owner_part_id = p.id
+                    FROM ops_part p
+                    WHERE n.owner_part = p.name AND n.owner_part_id IS NULL;
+                END IF;
+            END $$;
+        """)
+
         admin_exists = await conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM ops_user WHERE username = 'admin')"
         )
         hashed = hash_password(settings.admin_default_password)
         if not admin_exists:
             await conn.execute(
-                "INSERT INTO ops_user (username, hashed_password, role, part) VALUES ($1, $2, $3, $4)",
-                "admin", hashed, "admin", "기본",
+                "INSERT INTO ops_user (username, hashed_password, role, part_id) VALUES ($1, $2, $3, $4)",
+                "admin", hashed, "admin", superadmin_part_id,
             )
             logger.info("기본 관리자 계정 생성됨 (admin / %s)", settings.admin_default_password)
         else:
-            # 기존 admin 비밀번호를 설정값으로 갱신
+            # 기존 admin 비밀번호를 설정값으로 갱신, part_id도 동기화
             await conn.execute(
-                "UPDATE ops_user SET hashed_password = $1, role = 'admin' WHERE username = 'admin'",
-                hashed,
+                "UPDATE ops_user SET hashed_password = $1, role = 'admin', part_id = $2 WHERE username = 'admin'",
+                hashed, superadmin_part_id,
             )
 
         # ── ops_conversation.user_id 추가 ──────────────────────────────
@@ -103,28 +188,59 @@ async def _run_migrations() -> None:
             await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_part VARCHAR(100)")
             await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_user_id INT")
 
-        # ── ops_namespace에 owner_part, created_by_user_id 추가 ──
-        await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_part VARCHAR(100)")
-        await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS created_by_user_id INT")
-
-        # ── 기존 ops_namespace 데이터 보충 (FK 추가 전 필수) ────────────
+        # ── 기존 ops_namespace 데이터 보충 (namespace 컬럼이 있는 경우만) ──
         await conn.execute("""
-            INSERT INTO ops_namespace (name)
-            SELECT DISTINCT ns FROM (
-                SELECT namespace AS ns FROM ops_glossary
-                UNION SELECT namespace FROM ops_knowledge
-                UNION SELECT namespace FROM ops_query_log WHERE namespace IS NOT NULL
-                UNION SELECT namespace FROM ops_conversation
-                UNION SELECT namespace FROM ops_feedback WHERE namespace IS NOT NULL
-                UNION SELECT namespace FROM ops_fewshot
-            ) t WHERE ns IS NOT NULL
-            ON CONFLICT (name) DO NOTHING
+            DO $$ DECLARE
+                ns_col_exists BOOLEAN;
+            BEGIN
+                SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name='ops_knowledge' AND column_name='namespace')
+                INTO ns_col_exists;
+                IF ns_col_exists THEN
+                    INSERT INTO ops_namespace (name)
+                    SELECT DISTINCT ns FROM (
+                        SELECT namespace AS ns FROM ops_glossary WHERE namespace IS NOT NULL
+                        UNION SELECT namespace FROM ops_knowledge WHERE namespace IS NOT NULL
+                        UNION SELECT namespace FROM ops_query_log WHERE namespace IS NOT NULL
+                        UNION SELECT namespace FROM ops_conversation WHERE namespace IS NOT NULL
+                        UNION SELECT namespace FROM ops_feedback WHERE namespace IS NOT NULL
+                        UNION SELECT namespace FROM ops_fewshot WHERE namespace IS NOT NULL
+                    ) t WHERE ns IS NOT NULL
+                    ON CONFLICT (name) DO NOTHING;
+                END IF;
+            END $$;
         """)
 
-        # ── namespace FK 제약 추가 (멱등) ──────────────────────────────
-        for tbl in ("ops_glossary", "ops_knowledge", "ops_query_log",
-                     "ops_conversation", "ops_feedback", "ops_fewshot"):
-            constraint = f"fk_{tbl}_namespace"
+        # ── namespace_id 컬럼 추가 및 데이터 채우기 ────────────────────
+        for tbl in ("ops_glossary", "ops_knowledge", "ops_knowledge_category",
+                    "ops_query_log", "ops_conversation", "ops_feedback", "ops_fewshot"):
+            await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS namespace_id INT")
+            # string namespace → namespace_id 동기화 (namespace 컬럼이 있는 경우)
+            col_exists = await conn.fetchval(f"""
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = '{tbl}' AND column_name = 'namespace'
+                )
+            """)
+            if col_exists:
+                await conn.execute(f"""
+                    UPDATE {tbl} t
+                    SET namespace_id = n.id
+                    FROM ops_namespace n
+                    WHERE t.namespace = n.name AND t.namespace_id IS NULL
+                """)
+
+        # ── namespace_id FK 제약 추가 (멱등) ───────────────────────────
+        fk_map = {
+            "ops_glossary": "fk_glossary_namespace_id",
+            "ops_knowledge": "fk_knowledge_namespace_id",
+            "ops_knowledge_category": "fk_knowledge_cat_namespace_id",
+            "ops_query_log": "fk_query_log_namespace_id",
+            "ops_conversation": "fk_conversation_namespace_id",
+            "ops_feedback": "fk_feedback_namespace_id",
+            "ops_fewshot": "fk_fewshot_namespace_id",
+        }
+        for tbl, constraint in fk_map.items():
             await conn.execute(f"""
                 DO $$ BEGIN
                     IF NOT EXISTS (
@@ -132,7 +248,7 @@ async def _run_migrations() -> None:
                     ) THEN
                         ALTER TABLE {tbl}
                             ADD CONSTRAINT {constraint}
-                            FOREIGN KEY (namespace) REFERENCES ops_namespace(name) ON DELETE CASCADE;
+                            FOREIGN KEY (namespace_id) REFERENCES ops_namespace(id) ON DELETE CASCADE;
                     END IF;
                 END $$;
             """)
@@ -145,7 +261,7 @@ async def _run_migrations() -> None:
             JOIN ops_conversation c ON m.conversation_id = c.id
             WHERE ql.answer IS NULL
               AND m.role = 'assistant'
-              AND c.namespace = ql.namespace
+              AND c.namespace_id = ql.namespace_id
               AND EXISTS (
                   SELECT 1 FROM ops_message um
                   WHERE um.conversation_id = m.conversation_id
@@ -157,7 +273,7 @@ async def _run_migrations() -> None:
                   SELECT m2.id FROM ops_message m2
                   JOIN ops_conversation c2 ON m2.conversation_id = c2.id
                   WHERE m2.role = 'assistant'
-                    AND c2.namespace = ql.namespace
+                    AND c2.namespace_id = ql.namespace_id
                     AND EXISTS (
                         SELECT 1 FROM ops_message um2
                         WHERE um2.conversation_id = m2.conversation_id

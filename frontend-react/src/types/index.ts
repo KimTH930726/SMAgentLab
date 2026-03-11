@@ -28,6 +28,13 @@ export interface Namespace {
   created_at: string;
 }
 
+export interface KnowledgeCategory {
+  id: number;
+  namespace: string;
+  name: string;
+  created_at: string;
+}
+
 export interface NamespaceDetail extends Namespace {
   owner_part?: string | null;
   knowledge_count: number;
@@ -44,6 +51,7 @@ export interface KnowledgeItem {
   content: string;
   query_template: string | null;
   base_weight: number;
+  category?: string | null;
   created_by_part?: string | null;
   created_by_user_id?: number | null;
   created_by_username?: string | null;
@@ -58,6 +66,7 @@ export interface KnowledgeCreatePayload {
   content: string;
   query_template?: string | null;
   base_weight?: number;
+  category?: string | null;
 }
 
 export interface KnowledgeUpdatePayload {
@@ -66,6 +75,7 @@ export interface KnowledgeUpdatePayload {
   content?: string;
   query_template?: string | null;
   base_weight?: number;
+  category?: string | null;
 }
 
 // Glossary types
@@ -169,6 +179,7 @@ export interface ChatRequest {
   wKeyword?: number;
   topK?: number;
   conversationId?: number | null;
+  category?: string | null;
   signal?: AbortSignal;
 }
 

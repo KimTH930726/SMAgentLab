@@ -54,7 +54,7 @@ class PipelineResult:
 async def _run_pipeline(
     namespace: str, question: str, query_vec: list[float],
     w_vector: float, w_keyword: float, top_k: int,
-    *, debug: bool = False,
+    *, debug: bool = False, category: Optional[str] = None,
 ) -> PipelineResult:
     glossary_match = await retrieval.map_glossary_term(namespace, query_vec)
     mapped_term = glossary_match.term if glossary_match else None
@@ -62,7 +62,7 @@ async def _run_pipeline(
 
     fewshot_kwargs = {"min_similarity": 0.0} if debug else {}
     results, fewshots = await asyncio.gather(
-        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k),
+        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k, category),
         retrieval.fetch_fewshots(namespace, query_vec, **fewshot_kwargs),
     )
 
@@ -112,20 +112,30 @@ def _require_api_key(user: dict) -> str:
 async def _get_or_create_conversation(
     namespace: str, question: str, conversation_id: Optional[int],
     user_id: int,
-) -> int:
+) -> tuple[int, Optional[str]]:
+    """(conv_id, inhouse_conv_id) 반환. inhouse_conv_id는 사내 LLM 측 대화 ID."""
     async with get_conn() as conn:
         if conversation_id:
-            exists = await conn.fetchval(
-                "SELECT 1 FROM ops_conversation WHERE id = $1 AND user_id = $2",
+            row = await conn.fetchrow(
+                "SELECT id, inhouse_conv_id FROM ops_conversation WHERE id = $1 AND user_id = $2",
                 conversation_id, user_id,
             )
-            if exists:
-                return conversation_id
+            if row:
+                return row["id"], row["inhouse_conv_id"]
+        ns_id = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace)
         row = await conn.fetchrow(
-            "INSERT INTO ops_conversation (namespace, title, user_id) VALUES ($1, $2, $3) RETURNING id",
-            namespace, question[:200], user_id,
+            "INSERT INTO ops_conversation (namespace_id, title, user_id) VALUES ($1, $2, $3) RETURNING id, inhouse_conv_id",
+            ns_id, question[:200], user_id,
         )
-        return row["id"]
+        return row["id"], row["inhouse_conv_id"]
+
+
+async def _update_inhouse_conv_id(conv_id: int, inhouse_conv_id: str) -> None:
+    async with get_conn() as conn:
+        await conn.execute(
+            "UPDATE ops_conversation SET inhouse_conv_id = $1 WHERE id = $2",
+            inhouse_conv_id, conv_id,
+        )
 
 
 async def _save_user_message(conversation_id: int, question: str) -> None:
@@ -180,12 +190,17 @@ async def _cleanup_ghost_messages(conversation_id: int) -> None:
         )
 
 
-async def _safe_generate(context: str, question: str, history: list[dict] | None = None, *, api_key: Optional[str] = None) -> str:
+async def _safe_generate(
+    context: str, question: str, history: list[dict] | None = None,
+    *, api_key: Optional[str] = None, ext_conversation_id: Optional[str] = None,
+) -> tuple[str, Optional[str]]:
     try:
-        return await get_llm_provider().generate(context, question, history, api_key=api_key)
+        return await get_llm_provider().generate(
+            context, question, history, api_key=api_key, ext_conversation_id=ext_conversation_id,
+        )
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
         logger.warning("LLM 호출 실패: %s", e)
-        return _LLM_UNAVAILABLE_MSG
+        return _LLM_UNAVAILABLE_MSG, None
 
 
 async def _create_query_log(
@@ -196,12 +211,13 @@ async def _create_query_log(
     is_real_answer = answer and answer != _LLM_UNAVAILABLE_MSG
     status = "unresolved" if (not has_results and not is_real_answer) else "pending"
     async with get_conn() as conn:
+        ns_id = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace)
         row = await conn.fetchrow(
             """
-            INSERT INTO ops_query_log (namespace, question, answer, status, mapped_term, message_id)
+            INSERT INTO ops_query_log (namespace_id, question, answer, status, mapped_term, message_id)
             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
             """,
-            namespace, question, answer, status, mapped_term, message_id,
+            ns_id, question, answer, status, mapped_term, message_id,
         )
     return row["id"]
 
@@ -221,9 +237,12 @@ async def _post_save_tasks(conv_id: int, namespace: Optional[str] = None) -> Non
 
 async def cleanup_old_messages(namespace: str) -> int:
     async with get_conn() as conn:
+        ns_id = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace)
+        if ns_id is None:
+            return 0
         total = await conn.fetchval(
-            "SELECT COUNT(*) FROM ops_message m JOIN ops_conversation c ON m.conversation_id = c.id WHERE c.namespace = $1",
-            namespace,
+            "SELECT COUNT(*) FROM ops_message m JOIN ops_conversation c ON m.conversation_id = c.id WHERE c.namespace_id = $1",
+            ns_id,
         )
         if total <= MAX_MESSAGES_PER_NS:
             return 0
@@ -236,12 +255,12 @@ async def cleanup_old_messages(namespace: str) -> int:
                 DELETE FROM ops_message WHERE id IN (
                     SELECT m.id FROM ops_message m
                     JOIN ops_conversation c ON m.conversation_id = c.id
-                    WHERE c.namespace = $1 ORDER BY m.created_at ASC LIMIT $2
+                    WHERE c.namespace_id = $1 ORDER BY m.created_at ASC LIMIT $2
                 ) RETURNING conversation_id
             )
             SELECT DISTINCT conversation_id FROM deleted
             """,
-            namespace, excess,
+            ns_id, excess,
         )
         deleted = len(affected_ids)
         if deleted > 0:
@@ -270,7 +289,7 @@ async def cleanup_resolved_query_logs() -> int:
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     api_key = _require_api_key(user)
-    conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"])
+    conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"])
 
     # ── 멀티턴 검색 보강: 직전 Q+A를 결합하여 검색 맥락 확보 ──
     search_question = req.question
@@ -292,11 +311,15 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     query_vec = await embedding_service.embed(search_question)
 
     pipe, history = await asyncio.gather(
-        _run_pipeline(req.namespace, search_question, query_vec, req.w_vector, req.w_keyword, req.top_k),
+        _run_pipeline(req.namespace, search_question, query_vec, req.w_vector, req.w_keyword, req.top_k, category=req.category),
         memory.build_context_history(conv_id, query_vec),
     )
 
-    answer = await _safe_generate(pipe.context, req.question, history, api_key=api_key)
+    answer, new_inhouse_conv_id = await _safe_generate(
+        pipe.context, req.question, history, api_key=api_key, ext_conversation_id=inhouse_conv_id,
+    )
+    if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
+        asyncio.create_task(_update_inhouse_conv_id(conv_id, new_inhouse_conv_id))
 
     _, msg_id = await asyncio.gather(
         _save_user_message(conv_id, req.question),
@@ -322,7 +345,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 @router.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
     api_key = _require_api_key(user)
-    conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"])
+    conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"])
     await _cleanup_ghost_messages(conv_id)
 
     await _save_user_message(conv_id, req.question)
@@ -331,7 +354,8 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
     queue: asyncio.Queue = asyncio.Queue()
     asyncio.create_task(_generate_worker(
         queue, conv_id, msg_id, req.namespace, req.question,
-        req.w_vector, req.w_keyword, req.top_k, api_key,
+        req.w_vector, req.w_keyword, req.top_k, api_key, inhouse_conv_id,
+        category=req.category,
     ))
 
     async def event_generator():
@@ -361,6 +385,8 @@ async def _generate_worker(
     namespace: str, question: str,
     w_vector: float, w_keyword: float, top_k: int,
     api_key: Optional[str] = None,
+    inhouse_conv_id: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> None:
     full_answer = ""
     token_count = 0
@@ -401,7 +427,7 @@ async def _generate_worker(
 
         await queue.put({"type": "status", "step": "search", "message": "관련 문서 검색 중..."})
         results, fewshots = await asyncio.gather(
-            retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k),
+            retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k, category),
             retrieval.fetch_fewshots(namespace, query_vec),
         )
 
@@ -423,8 +449,17 @@ async def _generate_worker(
 
         await queue.put({"type": "status", "step": "llm", "message": "AI 답변 생성 중..."})
 
+        new_inhouse_conv_id_holder: list[Optional[str]] = [None]
+
+        def _capture_inhouse_conv_id(cid: str) -> None:
+            new_inhouse_conv_id_holder[0] = cid
+
         try:
-            async for token in get_llm_provider().generate_stream(context, question, history, api_key=api_key):
+            async for token in get_llm_provider().generate_stream(
+                context, question, history, api_key=api_key,
+                ext_conversation_id=inhouse_conv_id,
+                on_ext_conversation_id=_capture_inhouse_conv_id,
+            ):
                 full_answer += token
                 token_count += 1
                 if token_count == 1 or token_count % _FLUSH_INTERVAL == 0:
@@ -437,6 +472,8 @@ async def _generate_worker(
 
         final_answer = full_answer or _LLM_UNAVAILABLE_MSG
         await _update_assistant_message(msg_id, final_answer, "completed")
+        if new_inhouse_conv_id_holder[0] and new_inhouse_conv_id_holder[0] != inhouse_conv_id:
+            await _update_inhouse_conv_id(conv_id, new_inhouse_conv_id_holder[0])
         await _create_query_log(namespace, question, final_answer, has_results, mapped_term, msg_id)
         await queue.put({"type": "done", "message_id": msg_id})
 
@@ -527,14 +564,18 @@ async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
 @router.get("/api/conversations", response_model=list[ConversationResponse])
 async def list_conversations(namespace: str = Query(...), user: dict = Depends(get_current_user)):
     async with get_conn() as conn:
+        ns_id = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace)
+        if ns_id is None:
+            return []
         rows = await conn.fetch(
             """
-            SELECT id, namespace, title, trimmed, created_at::text
-            FROM ops_conversation
-            WHERE namespace = $1 AND user_id = $2
-            ORDER BY created_at DESC LIMIT 50
+            SELECT c.id, n.name AS namespace, c.title, c.trimmed, c.created_at::text
+            FROM ops_conversation c
+            JOIN ops_namespace n ON c.namespace_id = n.id
+            WHERE c.namespace_id = $1 AND c.user_id = $2
+            ORDER BY c.created_at DESC LIMIT 50
             """,
-            namespace, user["id"],
+            ns_id, user["id"],
         )
     return [ConversationResponse(**dict(r)) for r in rows]
 
@@ -542,9 +583,13 @@ async def list_conversations(namespace: str = Query(...), user: dict = Depends(g
 @router.post("/api/conversations", response_model=ConversationResponse, status_code=201)
 async def create_conversation(body: ConversationCreate, user: dict = Depends(get_current_user)):
     async with get_conn() as conn:
+        ns_id = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", body.namespace)
         row = await conn.fetchrow(
-            "INSERT INTO ops_conversation (namespace, title, user_id) VALUES ($1, $2, $3) RETURNING id, namespace, title, trimmed, created_at::text",
-            body.namespace, body.title[:200] if body.title else "", user["id"],
+            """
+            INSERT INTO ops_conversation (namespace_id, title, user_id) VALUES ($1, $2, $3)
+            RETURNING id, $4::text AS namespace, title, trimmed, created_at::text
+            """,
+            ns_id, body.title[:200] if body.title else "", user["id"], body.namespace,
         )
     return ConversationResponse(**dict(row))
 

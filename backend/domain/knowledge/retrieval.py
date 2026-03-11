@@ -72,21 +72,29 @@ class RetrievalResult:
     k_score: float = field(default=0.0)
 
 
+async def _resolve_namespace_id(conn, namespace: str) -> Optional[int]:
+    """namespace name → id 변환. 없으면 None."""
+    return await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace)
+
+
 async def map_glossary_term(
     namespace: str, query_vec: list[float]
 ) -> Optional[GlossaryMatch]:
     async with get_conn() as conn:
+        ns_id = await _resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return None
         row = await conn.fetchrow(
             """
             SELECT term, description,
                    1 - (embedding <=> $2::vector) AS similarity
             FROM ops_glossary
-            WHERE namespace = $1
+            WHERE namespace_id = $1
               AND embedding IS NOT NULL
             ORDER BY embedding <=> $2::vector
             LIMIT 1
             """,
-            namespace, str(query_vec),
+            ns_id, str(query_vec),
         )
     if row and float(row["similarity"]) >= get_thresholds()["glossary_min_similarity"]:
         return GlossaryMatch(
@@ -99,34 +107,49 @@ async def map_glossary_term(
 async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
     w_vector: float = 0.7, w_keyword: float = 0.3, top_k: int = 5,
+    category: Optional[str] = None,
 ) -> list[RetrievalResult]:
     async with get_conn() as conn:
+        ns_id = await _resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return []
+        category_filter = "AND (k.category = $7 OR k.category IS NULL)" if category else ""
+        params = [str(query_vec), ns_id, enriched_query, w_vector, w_keyword, top_k]
+        if category:
+            params.append(category)
         rows = await conn.fetch(
-            """
+            f"""
             WITH vector_scores AS (
                 SELECT id, 1 - (embedding <=> $1::vector) AS v_score
-                FROM ops_knowledge WHERE namespace = $2 AND embedding IS NOT NULL
+                FROM ops_knowledge WHERE namespace_id = $2 AND embedding IS NOT NULL
             ),
             keyword_scores AS (
-                SELECT id, ts_rank(to_tsvector('simple', content), plainto_tsquery('simple', $3)) AS k_score
-                FROM ops_knowledge WHERE namespace = $2
-                  AND to_tsvector('simple', content) @@ plainto_tsquery('simple', $3)
+                SELECT k.id, ts_rank(to_tsvector('simple', k.content), q.tsq) AS k_score
+                FROM ops_knowledge k
+                CROSS JOIN LATERAL (
+                    SELECT to_tsquery('simple', string_agg(lexeme, ' | ')) AS tsq
+                    FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', $3))) t
+                    WHERE lexeme IS NOT NULL
+                ) q
+                WHERE k.namespace_id = $2
+                  AND to_tsvector('simple', k.content) @@ q.tsq
             )
-            SELECT k.id, k.namespace, k.container_name, k.target_tables,
+            SELECT k.id, n.name AS namespace, k.container_name, k.target_tables,
                    k.content, k.query_template, k.base_weight,
                    COALESCE(vs.v_score, 0.0) AS v_score,
                    COALESCE(ks.k_score, 0.0) AS k_score,
                    ($4 * COALESCE(vs.v_score, 0.0) + $5 * COALESCE(ks.k_score, 0.0))
                      * (1.0 + k.base_weight) AS final_score
             FROM ops_knowledge k
+            JOIN ops_namespace n ON k.namespace_id = n.id
             LEFT JOIN vector_scores vs ON k.id = vs.id
             LEFT JOIN keyword_scores ks ON k.id = ks.id
-            WHERE k.namespace = $2
+            WHERE k.namespace_id = $2
               AND (vs.v_score IS NOT NULL OR ks.k_score IS NOT NULL)
+              {category_filter}
             ORDER BY final_score DESC LIMIT $6
             """,
-            str(query_vec), namespace, enriched_query,
-            w_vector, w_keyword, top_k,
+            *params,
         )
 
     return [
@@ -149,17 +172,20 @@ async def fetch_fewshots(
 ) -> list[dict]:
     min_sim = min_similarity if min_similarity is not None else get_thresholds()["fewshot_min_similarity"]
     async with get_conn() as conn:
+        ns_id = await _resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return []
         rows = await conn.fetch(
             """
             SELECT question, answer,
                    1 - (embedding <=> $2::vector) AS similarity
             FROM ops_fewshot
-            WHERE namespace = $1
+            WHERE namespace_id = $1
               AND 1 - (embedding <=> $2::vector) >= $4
             ORDER BY embedding <=> $2::vector
             LIMIT $3
             """,
-            namespace, str(query_vec), limit, min_sim,
+            ns_id, str(query_vec), limit, min_sim,
         )
     return [
         {"question": r["question"], "answer": r["answer"], "similarity": float(r["similarity"])}

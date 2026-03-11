@@ -25,7 +25,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { stopChatStream, clearStreamState, useStreamStore } from '../../store/useStreamStore';
-import { getNamespaces } from '../../api/namespaces';
+import { getNamespaces, getNamespacesDetail, getCategories } from '../../api/namespaces';
+import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { getConversations, deleteConversation } from '../../api/conversations';
 import { healthCheck } from '../../api/client';
 import { changePassword, updateApiKey } from '../../api/auth';
@@ -40,10 +41,31 @@ export function Sidebar() {
   const isChatPage = location.pathname === '/';
 
   const { namespace, setNamespace, conversationId, setConversationId, conversations, setConversations } = useAppStore();
+  const chatRefreshKey = useAppStore((s) => s.chatRefreshKey);
   const searchConfig = useAppStore((s) => s.searchConfig);
   const setSearchConfig = useAppStore((s) => s.setSearchConfig);
+  const category = useAppStore((s) => s.category);
+  const setCategory = useAppStore((s) => s.setCategory);
 
-  const [namespaces, setNamespaces] = useState<string[]>([]);
+  const { data: categories = [] } = useQuery({
+    queryKey: ['categories', namespace],
+    queryFn: () => getCategories(namespace),
+    enabled: !!namespace,
+    staleTime: 0,
+  });
+
+  const user = useAuthStore((s) => s.user);
+  const { data: namespaces = [] } = useQuery({
+    queryKey: ['namespaces'],
+    queryFn: getNamespaces,
+    staleTime: 30_000,
+  });
+  const { data: nsDetails = [] } = useQuery({
+    queryKey: ['namespaces-detail'],
+    queryFn: getNamespacesDetail,
+    staleTime: 30_000,
+  });
+  const sortedNamespaces = sortNamespacesByUserPart(namespaces, user?.part, nsDetails);
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [showSearchConfig, setShowSearchConfig] = useState(false);
   const [loadingConvs, setLoadingConvs] = useState(false);
@@ -72,17 +94,36 @@ export function Sidebar() {
     return () => clearInterval(interval);
   }, []);
 
-  // Load namespaces
+  // 초기 또는 사용자 변경 시 내 파트 소유 namespace 자동 선택
+  // localStorage에 이전 세션의 namespace가 남아있어도 올바른 파트 namespace로 교체
+  const lastHandledUserPartRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    getNamespaces()
-      .then((data) => {
-        setNamespaces(data);
-        if (!namespace && data.length > 0) {
-          setNamespace(data[0]);
-        }
-      })
-      .catch(console.error);
-  }, [namespace, setNamespace]);
+    if (sortedNamespaces.length === 0) return;
+
+    const currentPart = user?.part ?? null;
+
+    // namespace 미설정 → 정렬된 첫 번째 선택
+    if (!namespace) {
+      setNamespace(sortedNamespaces[0]);
+      return;
+    }
+
+    // nsDetails 미로드 → 대기
+    if (nsDetails.length === 0) return;
+
+    // 이미 이 파트 처리 완료 → 사용자가 수동 선택한 거 존중
+    if (lastHandledUserPartRef.current === currentPart) return;
+    lastHandledUserPartRef.current = currentPart;
+
+    // 내 파트 소유 namespace 목록 확인
+    if (currentPart) {
+      const myNsNames = new Set(nsDetails.filter((n) => n.owner_part === currentPart).map((n) => n.name));
+      // 현재 선택된 namespace가 내 파트 소유가 아니고, 내 파트 소유 namespace가 존재하면 → 교체
+      if (myNsNames.size > 0 && !myNsNames.has(namespace)) {
+        setNamespace(sortedNamespaces[0]);
+      }
+    }
+  }, [namespace, sortedNamespaces, nsDetails, user?.part, setNamespace]);
 
   // Load conversations when namespace changes (only on chat page)
   const refreshConversations = useCallback(async () => {
@@ -115,6 +156,14 @@ export function Sidebar() {
       }
     }
   }, [conversationId, refreshConversations, streamActive]);
+
+  // Admin → Chat 전환 시 bumpChatRefresh 신호로도 대화목록 갱신
+  const prevChatRefreshKeyRef = useRef(chatRefreshKey);
+  useEffect(() => {
+    if (prevChatRefreshKeyRef.current === chatRefreshKey) return;
+    prevChatRefreshKeyRef.current = chatRefreshKey;
+    refreshConversations();
+  }, [chatRefreshKey, refreshConversations]);
 
   // Refresh conversation list when stream finishes (new conversation now has answer)
   const prevStreamActiveRef = useRef(streamActive);
@@ -213,26 +262,44 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* Namespace selector — Chat only */}
+      {/* Namespace + Category selector — Chat only */}
       {isChatPage && (
-        <div className="px-3 py-3 border-b border-slate-700">
-          <label className="text-xs font-medium text-slate-500 uppercase tracking-wider block mb-1.5">
-            네임스페이스
-          </label>
-          {namespaces.length === 0 ? (
-            <div className="text-xs text-slate-500 px-1">네임스페이스 없음</div>
-          ) : (
-            <select
-              value={namespace}
-              onChange={(e) => setNamespace(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
-            >
-              {namespaces.map((ns) => (
-                <option key={ns} value={ns}>
-                  {ns}
-                </option>
-              ))}
-            </select>
+        <div className="px-3 py-3 border-b border-slate-700 space-y-2">
+          <div>
+            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider block mb-1.5">
+              파트
+            </label>
+            {namespaces.length === 0 ? (
+              <div className="text-xs text-slate-500 px-1">파트 없음</div>
+            ) : (
+              <select
+                value={namespace}
+                onChange={(e) => setNamespace(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+              >
+                {sortedNamespaces.map((ns) => (
+                  <option key={ns} value={ns}>{ns}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          {namespace && (
+            <div>
+              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider block mb-1.5">
+                업무구분
+              </label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+              >
+                <option value="">전체</option>
+                <option value="__auto__">⚡ 자동 감지 (다소 시간 걸림)</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))}
+              </select>
+            </div>
           )}
         </div>
       )}
@@ -535,7 +602,7 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
             </div>
             <div>
               <span className="text-slate-500 text-xs">역할</span>
-              <p className="text-slate-200 font-medium">{user.role === 'admin' ? '관리자' : '일반 사용자'}</p>
+              <p className="text-slate-200 font-medium">{user.role === 'admin' ? '슈퍼어드민' : '일반 사용자'}</p>
             </div>
             <div>
               <span className="text-slate-500 text-xs">API Key</span>

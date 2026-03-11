@@ -47,6 +47,7 @@ export function startChatStream(params: {
   wKeyword: number;
   topK: number;
   conversationId: number | null;
+  category?: string | null;
   onConversationCreated: (id: number) => void;
 }) {
   // Abort any existing stream & detach controller so old _runStream can't mutate state
@@ -116,6 +117,7 @@ async function _runStream(
     wKeyword: number;
     topK: number;
     conversationId: number | null;
+    category?: string | null;
     onConversationCreated: (id: number) => void;
   },
   controller: AbortController,
@@ -141,6 +143,7 @@ async function _runStream(
       wKeyword: params.wKeyword,
       topK: params.topK,
       conversationId: params.conversationId,
+      category: params.category,
       signal: controller.signal,
     });
 

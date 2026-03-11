@@ -8,8 +8,10 @@ import {
   Layers, Database, BookOpen, Zap, MessageSquare, Brain, Target,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { debugSearch } from '../../api/chat';
-import { getNamespaces } from '../../api/namespaces';
+import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
+import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { getSearchThresholds } from '../../api/llm';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -38,7 +40,7 @@ const PIPELINE_STEPS: PipelineStep[] = [
   },
   {
     id: 'namespace',
-    label: '네임스페이스',
+    label: '파트',
     icon: <Layers className="w-7 h-7" />,
     activeIcon: <Layers className="w-7 h-7" />,
     color: 'text-violet-400',
@@ -212,12 +214,19 @@ interface DebugPanelProps {
 
 export function DebugPanel({ onNavigate }: DebugPanelProps) {
   const { searchConfig, namespace: storeNamespace } = useAppStore();
+  const user = useAuthStore((s) => s.user);
 
   const { data: namespaces = [] } = useQuery({
     queryKey: ['namespaces'],
     queryFn: getNamespaces,
     staleTime: 30_000,
   });
+  const { data: nsDetails = [] } = useQuery({
+    queryKey: ['namespaces-detail'],
+    queryFn: getNamespacesDetail,
+    staleTime: 30_000,
+  });
+  const sortedNamespaces = sortNamespacesByUserPart(namespaces, user?.part, nsDetails);
 
   const { data: th } = useQuery({
     queryKey: ['search-thresholds'],
@@ -313,7 +322,7 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                네임스페이스 <span className="text-rose-400">*</span>
+                파트 <span className="text-rose-400">*</span>
               </label>
               <select
                 value={namespace}
@@ -321,7 +330,7 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
                 className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
               >
                 <option value="">선택...</option>
-                {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+                {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
               </select>
             </div>
             <div>

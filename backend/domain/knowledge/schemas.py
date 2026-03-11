@@ -12,6 +12,7 @@ class KnowledgeCreate(BaseModel):
     content: str
     query_template: Optional[str] = None
     base_weight: float = Field(default=1.0, ge=0.0)
+    category: Optional[str] = None
 
 
 class KnowledgeUpdate(BaseModel):
@@ -20,6 +21,7 @@ class KnowledgeUpdate(BaseModel):
     content: Optional[str] = None
     query_template: Optional[str] = None
     base_weight: Optional[float] = Field(default=None, ge=0.0)
+    category: Optional[str] = None
 
 
 class KnowledgeOut(BaseModel):
@@ -30,6 +32,7 @@ class KnowledgeOut(BaseModel):
     content: str
     query_template: Optional[str]
     base_weight: float
+    category: Optional[str] = None
     created_by_part: Optional[str] = None
     created_by_user_id: Optional[int] = None
     created_by_username: Optional[str] = None

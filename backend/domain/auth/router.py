@@ -74,8 +74,14 @@ async def refresh_token(body: RefreshRequest):
 
 @router.get("/parts", response_model=list[PartOut])
 async def get_parts():
-    """파트 목록 조회 (가입 폼용, 인증 불필요)."""
-    return await service.list_parts()
+    """파트 목록 조회 (가입 폼용, 인증 불필요 — admin 전용 파트 제외)."""
+    return await service.list_parts(exclude_admin_parts=True)
+
+
+@router.get("/parts/all", response_model=list[PartOut])
+async def get_all_parts(admin: dict = Depends(get_current_admin)):
+    """파트 목록 전체 조회 (관리자 전용, admin 파트 포함)."""
+    return await service.list_parts(exclude_admin_parts=False)
 
 
 # ── 인증 필요 엔드포인트 ─────────────────────────────────────────────────────
@@ -135,6 +141,14 @@ async def create_part(body: PartCreate, admin: dict = Depends(get_current_admin)
     if not part:
         raise HTTPException(status_code=409, detail="이미 존재하는 파트입니다.")
     return part
+
+
+@router.patch("/parts/{part_id}", response_model=PartOut)
+async def rename_part_endpoint(part_id: int, body: PartCreate, admin: dict = Depends(get_current_admin)):
+    result = await service.rename_part(part_id, body.name.strip())
+    if result is None:
+        raise HTTPException(status_code=409, detail="이미 존재하는 파트 이름입니다.")
+    return result
 
 
 @router.delete("/parts/{part_id}", status_code=204)

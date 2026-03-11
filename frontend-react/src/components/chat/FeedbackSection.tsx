@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import { postFeedback } from '../../api/feedback';
 import { createKnowledge } from '../../api/knowledge';
+import { getCategories } from '../../api/namespaces';
 import { Button } from '../ui/Button';
+import type { KnowledgeCategory } from '../../types';
 
 type FeedbackState = 'idle' | 'positive_sent' | 'showing_form' | 'negative_sent';
 
@@ -14,6 +16,7 @@ interface KnowledgeFormData {
   content: string;
   query_template: string;
   base_weight: number;
+  category: string;
 }
 
 interface FeedbackSectionProps {
@@ -40,6 +43,14 @@ export function FeedbackSection({
     content: question,
     query_template: '',
     base_weight: 1.0,
+    category: '',
+  });
+
+  const { data: categories = [] } = useQuery<KnowledgeCategory[]>({
+    queryKey: ['categories', namespace],
+    queryFn: () => getCategories(namespace),
+    enabled: !!namespace,
+    staleTime: 0,
   });
 
   const handlePositive = async () => {
@@ -78,6 +89,7 @@ export function FeedbackSection({
         content: form.content,
         query_template: form.query_template || null,
         base_weight: form.base_weight,
+        category: form.category || null,
       });
       await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: false, message_id: messageId ?? null });
       qc.invalidateQueries({ queryKey: ['knowledge'] });
@@ -170,21 +182,21 @@ export function FeedbackSection({
               <div>
                 <label className="block text-xs text-slate-500 mb-1">내용 <span className="text-rose-400">*</span></label>
                 <textarea
-                  rows={3}
+                  rows={6}
                   value={form.content}
                   onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-none"
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y"
                 />
               </div>
 
               <div>
                 <label className="block text-xs text-slate-500 mb-1">쿼리 템플릿 (선택)</label>
                 <textarea
-                  rows={2}
+                  rows={3}
                   value={form.query_template}
                   onChange={(e) => setForm((f) => ({ ...f, query_template: e.target.value }))}
                   placeholder="SELECT ..."
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none"
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-y"
                 />
               </div>
 
@@ -202,6 +214,23 @@ export function FeedbackSection({
                   className="w-full accent-indigo-500"
                 />
               </div>
+
+              {categories.length > 0 && (
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">업무구분 (선택)</label>
+                  <select
+                    value={form.category}
+                    onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="">없음 (파트 공통)</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-600 mt-0.5">미설정 시 모든 업무구분 검색에 공통으로 포함됩니다</p>
+                </div>
+              )}
 
               <div className="flex gap-2 justify-end pt-1">
                 <Button variant="ghost" size="sm" onClick={handleSkip}>

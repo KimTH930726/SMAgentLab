@@ -1,7 +1,7 @@
 """사내 LLM Provider (DevX MCP API) — per-user api_key 지원."""
 import json
 import logging
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
@@ -40,6 +40,11 @@ def _extract_answer(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
+def _extract_session(data: dict) -> tuple[Optional[str], Optional[str]]:
+    """응답 JSON에서 (conversation_id, project_id)를 추출한다. 루트에 위치."""
+    return data.get("conversation_id") or None, data.get("project_id") or None
+
+
 class InHouseLLMProvider(LLMProvider):
 
     def __init__(self, runtime_cfg: dict | None = None):
@@ -51,6 +56,8 @@ class InHouseLLMProvider(LLMProvider):
             )
         self._url = url.rstrip("/")
         self._usecase_code = cfg.get("inhouse_llm_agent_code", settings.inhouse_llm_agent_code)
+        self._usecase_id = cfg.get("inhouse_llm_usecase_id", settings.inhouse_llm_usecase_id) or None
+        self._project_id = cfg.get("inhouse_llm_project_id", settings.inhouse_llm_project_id) or None
         self._model = cfg.get("inhouse_llm_model", settings.inhouse_llm_model) or None
         self._response_mode = cfg.get("inhouse_llm_response_mode", settings.inhouse_llm_response_mode)
         self._system_api_key = cfg.get("inhouse_llm_api_key", settings.inhouse_llm_api_key)
@@ -64,7 +71,10 @@ class InHouseLLMProvider(LLMProvider):
             headers["Authorization"] = f"Bearer {key}"
         return headers
 
-    def _build_payload(self, query: str, response_mode: str) -> dict:
+    def _build_payload(
+        self, query: str, response_mode: str,
+        ext_conversation_id: Optional[str] = None,
+    ) -> dict:
         payload: dict = {
             "usecase_code": self._usecase_code,
             "query": query,
@@ -72,6 +82,12 @@ class InHouseLLMProvider(LLMProvider):
         }
         if self._model:
             payload["inputs"] = {"model": self._model}
+        if self._usecase_id:
+            payload["usecase_id"] = self._usecase_id
+        if self._project_id:
+            payload["project_id"] = self._project_id
+        if ext_conversation_id:
+            payload["conversation_id"] = ext_conversation_id
         return payload
 
     async def generate(
@@ -81,17 +97,23 @@ class InHouseLLMProvider(LLMProvider):
         history: list[dict] | None = None,
         *,
         api_key: Optional[str] = None,
-    ) -> str:
+        ext_conversation_id: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
         query = _build_query(context, question, history)
-        payload = self._build_payload(query, response_mode="blocking")
+        payload = self._build_payload(query, response_mode="blocking", ext_conversation_id=ext_conversation_id)
         headers = self._build_headers(api_key)
-        logger.info("generate(blocking) → POST %s (query=%d chars)", self._url, len(query))
+        logger.info(
+            "generate(blocking) → POST %s (query=%d chars, conv_id=%s)",
+            self._url, len(query), ext_conversation_id,
+        )
         async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
             resp = await client.post(self._url, json=payload)
             logger.info("generate ← status=%d, body=%s", resp.status_code, resp.text[:200])
             resp.raise_for_status()
             data = resp.json()
-            return _extract_answer(data)
+            answer = _extract_answer(data)
+            new_conv_id, _ = _extract_session(data)
+            return answer, new_conv_id
 
     async def generate_stream(
         self,
@@ -100,10 +122,12 @@ class InHouseLLMProvider(LLMProvider):
         history: list[dict] | None = None,
         *,
         api_key: Optional[str] = None,
+        ext_conversation_id: Optional[str] = None,
+        on_ext_conversation_id: Optional[Callable[[str], None]] = None,
     ) -> AsyncIterator[str]:
         query = _build_query(context, question, history)
         use_streaming = self._response_mode == "streaming"
-        payload = self._build_payload(query, response_mode=self._response_mode)
+        payload = self._build_payload(query, response_mode=self._response_mode, ext_conversation_id=ext_conversation_id)
         headers = self._build_headers(api_key)
 
         if not use_streaming:
@@ -112,19 +136,26 @@ class InHouseLLMProvider(LLMProvider):
                 resp = await client.post(self._url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
+                new_ext_conv_id = _extract_ext_conversation_id(data)
+                if new_ext_conv_id and on_ext_conversation_id:
+                    on_ext_conversation_id(new_ext_conv_id)
                 yield _extract_answer(data)
             return
 
         # streaming 모드: SSE 파싱
         # DevX MCP API 형식: event 필드가 별도 행이 아닌 data JSON 안에 포함
-        # data: {"event":"message","answer":"토큰",...}
-        # data: {"event":"message_end",...}
-        logger.info("generate_stream(streaming) → POST %s (query=%d chars)", self._url, len(query))
+        # data: {"event":"message","answer":"토큰","conversation_id":"..."}
+        # data: {"event":"message_end","conversation_id":"..."}
+        logger.info(
+            "generate_stream(streaming) → POST %s (query=%d chars, ext_conv_id=%s)",
+            self._url, len(query), ext_conversation_id,
+        )
         async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
             async with client.stream("POST", self._url, json=payload) as resp:
                 logger.info("generate_stream ← status=%d", resp.status_code)
                 resp.raise_for_status()
                 line_count = 0
+                captured_ext_conv_id: Optional[str] = None
                 async for line in resp.aiter_lines():
                     line = line.strip()
                     if not line:
@@ -138,8 +169,15 @@ class InHouseLLMProvider(LLMProvider):
                         logger.warning("SSE parse error: %s", line[:100])
                         continue
                     event_type = chunk.get("event", "")
+                    # conversation_id를 처음 수신했을 때 포착 (message 또는 message_end)
+                    if not captured_ext_conv_id:
+                        cid = chunk.get("conversation_id") or None
+                        if cid:
+                            captured_ext_conv_id = cid
                     if event_type == "message_end":
-                        logger.info("SSE message_end (total data lines=%d)", line_count)
+                        logger.info("SSE message_end (total data lines=%d, ext_conv_id=%s)", line_count, captured_ext_conv_id)
+                        if captured_ext_conv_id and on_ext_conversation_id:
+                            on_ext_conversation_id(captured_ext_conv_id)
                         break
                     if event_type == "message":
                         token = chunk.get("answer", "")

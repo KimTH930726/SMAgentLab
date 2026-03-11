@@ -33,6 +33,7 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
         target_tables=body.target_tables,
         query_template=body.query_template,
         base_weight=body.base_weight,
+        category=body.category,
         created_by_part=user["part"],
         created_by_user_id=user["id"],
     )
@@ -53,6 +54,7 @@ async def modify_knowledge(knowledge_id: int, body: KnowledgeUpdate, user: dict 
         target_tables=body.target_tables,
         query_template=body.query_template,
         base_weight=body.base_weight,
+        category=body.category,
         updated_by_part=user["part"],
         updated_by_user_id=user["id"],
     )

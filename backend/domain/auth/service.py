@@ -39,28 +39,31 @@ async def register_user(
             raise RegisterError("서버에 암호화 키가 설정되지 않아 API Key를 등록할 수 없습니다.", 500)
 
     async with get_conn() as conn:
-        # 파트 존재 + 사용자 중복 확인 (단일 쿼리로 통합)
+        # 파트 id 조회 + 사용자 중복 확인
         check = await conn.fetchrow(
             """
             SELECT
-                EXISTS(SELECT 1 FROM ops_part WHERE name = $1) AS part_exists,
+                (SELECT id FROM ops_part WHERE name = $1) AS part_id,
                 EXISTS(SELECT 1 FROM ops_user WHERE username = $2) AS user_exists
             """, part, username,
         )
-        if not check["part_exists"]:
+        if check["part_id"] is None:
             raise RegisterError("존재하지 않는 파트(부서)입니다.")
         if check["user_exists"]:
             raise RegisterError("이미 사용 중인 아이디입니다.")
 
+        part_id = check["part_id"]
         row = await conn.fetchrow(
             """
-            INSERT INTO ops_user (username, hashed_password, encrypted_llm_api_key, part)
+            INSERT INTO ops_user (username, hashed_password, encrypted_llm_api_key, part_id)
             VALUES ($1, $2, $3, $4)
-            RETURNING id, username, role, part, is_active, encrypted_llm_api_key, created_at::text
+            RETURNING id, username, role, part_id, is_active, encrypted_llm_api_key, created_at::text
             """,
-            username, hashed, encrypted_key, part,
+            username, hashed, encrypted_key, part_id,
         )
-    return dict(row)
+        result = dict(row)
+        result["part"] = part
+    return result
 
 
 class LoginError(Exception):
@@ -74,7 +77,14 @@ async def authenticate_user(username: str, password: str) -> dict:
     """로그인 인증. 실패 시 LoginError 발생."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
-            "SELECT id, username, hashed_password, role, part, is_active, encrypted_llm_api_key, created_at::text FROM ops_user WHERE username = $1",
+            """
+            SELECT u.id, u.username, u.hashed_password, u.role, u.part_id,
+                   p.name AS part,
+                   u.is_active, u.encrypted_llm_api_key, u.created_at::text
+            FROM ops_user u
+            LEFT JOIN ops_part p ON u.part_id = p.id
+            WHERE u.username = $1
+            """,
             username,
         )
     if not row:
@@ -98,7 +108,14 @@ def create_tokens(user: dict) -> dict:
 async def get_user_by_id(user_id: int) -> Optional[dict]:
     async with get_conn() as conn:
         row = await conn.fetchrow(
-            "SELECT id, username, role, part, is_active, encrypted_llm_api_key, created_at::text FROM ops_user WHERE id = $1",
+            """
+            SELECT u.id, u.username, u.role, u.part_id,
+                   p.name AS part,
+                   u.is_active, u.encrypted_llm_api_key, u.created_at::text
+            FROM ops_user u
+            LEFT JOIN ops_part p ON u.part_id = p.id
+            WHERE u.id = $1
+            """,
             user_id,
         )
     return dict(row) if row else None
@@ -108,10 +125,14 @@ async def list_users() -> list[dict]:
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, username, role, part, is_active,
-                   (encrypted_llm_api_key IS NOT NULL) AS has_api_key,
-                   created_at::text
-            FROM ops_user ORDER BY created_at DESC
+            SELECT u.id, u.username, u.role, u.part_id,
+                   p.name AS part,
+                   u.is_active,
+                   (u.encrypted_llm_api_key IS NOT NULL) AS has_api_key,
+                   u.created_at::text
+            FROM ops_user u
+            LEFT JOIN ops_part p ON u.part_id = p.id
+            ORDER BY u.created_at DESC
             """
         )
     return [dict(r) for r in rows]
@@ -119,25 +140,45 @@ async def list_users() -> list[dict]:
 
 async def update_user(user_id: int, role: Optional[str] = None, part: Optional[str] = None, is_active: Optional[bool] = None) -> Optional[dict]:
     async with get_conn() as conn:
-        current = await conn.fetchrow("SELECT * FROM ops_user WHERE id = $1", user_id)
+        current = await conn.fetchrow(
+            """
+            SELECT u.*, p.name AS part_name
+            FROM ops_user u
+            LEFT JOIN ops_part p ON u.part_id = p.id
+            WHERE u.id = $1
+            """, user_id,
+        )
         if not current:
             return None
 
         new_role = role if role is not None else current["role"]
-        new_part = part if part is not None else current["part"]
         new_active = is_active if is_active is not None else current["is_active"]
+
+        # part 변경 시 part_id lookup
+        if part is not None:
+            new_part_id = await conn.fetchval("SELECT id FROM ops_part WHERE name = $1", part)
+        else:
+            new_part_id = current["part_id"]
 
         row = await conn.fetchrow(
             """
-            UPDATE ops_user SET role = $2, part = $3, is_active = $4
+            UPDATE ops_user SET role = $2, part_id = $3, is_active = $4
             WHERE id = $1
-            RETURNING id, username, role, part, is_active,
+            RETURNING id, username, role, part_id, is_active,
                       (encrypted_llm_api_key IS NOT NULL) AS has_api_key,
                       created_at::text
             """,
-            user_id, new_role, new_part, new_active,
+            user_id, new_role, new_part_id, new_active,
         )
-    return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        # part name 보충
+        if part is not None:
+            result["part"] = part
+        else:
+            result["part"] = current["part_name"]
+    return result
 
 
 async def delete_user(user_id: int) -> bool:
@@ -171,9 +212,21 @@ async def update_api_key(user_id: int, plain_key: str) -> bool:
 
 # ── 파트 CRUD ────────────────────────────────────────────────────────────────
 
-async def list_parts() -> list[dict]:
+async def list_parts(exclude_admin_parts: bool = False) -> list[dict]:
     async with get_conn() as conn:
-        rows = await conn.fetch("SELECT id, name, created_at::text FROM ops_part ORDER BY name")
+        if exclude_admin_parts:
+            rows = await conn.fetch(
+                """
+                SELECT id, name, created_at::text FROM ops_part
+                WHERE id NOT IN (
+                    SELECT DISTINCT part_id FROM ops_user
+                    WHERE role = 'admin' AND part_id IS NOT NULL
+                )
+                ORDER BY name
+                """
+            )
+        else:
+            rows = await conn.fetch("SELECT id, name, created_at::text FROM ops_part ORDER BY name")
     return [dict(r) for r in rows]
 
 
@@ -189,11 +242,25 @@ async def create_part(name: str) -> Optional[dict]:
     return dict(row)
 
 
+async def rename_part(part_id: int, new_name: str) -> Optional[dict]:
+    async with get_conn() as conn:
+        existing = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM ops_part WHERE name = $1 AND id != $2)", new_name, part_id,
+        )
+        if existing:
+            return None
+        row = await conn.fetchrow(
+            "UPDATE ops_part SET name = $2 WHERE id = $1 RETURNING id, name, created_at::text",
+            part_id, new_name,
+        )
+    return dict(row) if row else None
+
+
 async def delete_part(part_id: int) -> bool:
     async with get_conn() as conn:
         # 해당 파트에 사용자가 있는지 확인
         user_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM ops_user u JOIN ops_part p ON u.part = p.name WHERE p.id = $1",
+            "SELECT COUNT(*) FROM ops_user WHERE part_id = $1",
             part_id,
         )
         if user_count > 0:

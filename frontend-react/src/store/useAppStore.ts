@@ -10,6 +10,25 @@ interface SearchConfig {
 // 백엔드 fetch 전 임시 fallback (API 응답으로 즉시 덮어씀)
 const FALLBACK_SEARCH_CONFIG: SearchConfig = { wVector: 0.7, wKeyword: 0.3, topK: 3 };
 
+const LS_KEY = 'ops_search_config';
+
+function loadPersonalConfig(): Partial<SearchConfig> | null {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? (JSON.parse(raw) as Partial<SearchConfig>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePersonalConfig(cfg: SearchConfig) {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+  } catch {
+    // ignore
+  }
+}
+
 interface AppState {
   namespace: string;
   setNamespace: (ns: string) => void;
@@ -23,11 +42,13 @@ interface AppState {
   initSearchConfig: (cfg: SearchConfig) => void;
   chatRefreshKey: number;
   bumpChatRefresh: () => void;
+  category: string;
+  setCategory: (cat: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   namespace: '',
-  setNamespace: (namespace) => set({ namespace, conversationId: null, conversations: [] }),
+  setNamespace: (namespace) => set({ namespace, conversationId: null, conversations: [], category: '' }),
   conversationId: null,
   setConversationId: (conversationId) =>
     set((state) => (state.conversationId === conversationId ? state : { conversationId })),
@@ -35,9 +56,20 @@ export const useAppStore = create<AppState>((set) => ({
   setConversations: (conversations) => set({ conversations }),
   searchConfig: FALLBACK_SEARCH_CONFIG,
   setSearchConfig: (cfg: Partial<SearchConfig>) =>
-    set((state) => ({ searchConfig: { ...state.searchConfig, ...cfg } })),
+    set((state) => {
+      const next = { ...state.searchConfig, ...cfg };
+      savePersonalConfig(next);
+      return { searchConfig: next };
+    }),
   searchConfigLoaded: false,
-  initSearchConfig: (cfg) => set({ searchConfig: cfg, searchConfigLoaded: true }),
+  initSearchConfig: (cfg) => {
+    // 개인 설정이 있으면 우선 적용 (어드민 기본값보다 개인 설정 우선)
+    const personal = loadPersonalConfig();
+    const merged = personal ? { ...cfg, ...personal } : cfg;
+    set({ searchConfig: merged, searchConfigLoaded: true });
+  },
   chatRefreshKey: 0,
   bumpChatRefresh: () => set((state) => ({ chatRefreshKey: state.chatRefreshKey + 1 })),
+  category: '',
+  setCategory: (category) => set({ category }),
 }));

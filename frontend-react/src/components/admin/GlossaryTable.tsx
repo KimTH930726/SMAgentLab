@@ -5,6 +5,7 @@ import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { getGlossary, createGlossaryItem, updateGlossaryItem, deleteGlossaryItem } from '../../api/knowledge';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
@@ -20,6 +21,11 @@ export function GlossaryTable() {
   const [selectedNs, setSelectedNs] = useState(storeNamespace || '');
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  // 파트 관리에서 네비게이션 시 스토어 namespace 변경을 반영
+  useEffect(() => {
+    if (storeNamespace) setSelectedNs(storeNamespace);
+  }, [storeNamespace]);
+
   const { data: nsDetails = [] } = useQuery({
     queryKey: ['namespaces-detail'],
     queryFn: getNamespacesDetail,
@@ -27,8 +33,8 @@ export function GlossaryTable() {
   });
 
   const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
-  // owner_part 없으면 admin만, 있으면 같은 파트 or admin
-  const canModifyNs = user?.role === 'admin' || (!!nsOwnerPart && nsOwnerPart === user?.part);
+  // owner_part 없으면 공통(모두 가능), 있으면 같은 파트 or admin
+  const canModifyNs = user?.role === 'admin' || !nsOwnerPart || nsOwnerPart === user?.part;
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<GlossaryFormData>(defaultForm);
@@ -41,6 +47,7 @@ export function GlossaryTable() {
     queryFn: getNamespaces,
     staleTime: 30_000,
   });
+  const sortedNamespaces = sortNamespacesByUserPart(namespaces, user?.part, nsDetails);
 
   // 삭제된 네임스페이스 선택 상태 자동 리셋
   useEffect(() => {
@@ -92,18 +99,18 @@ export function GlossaryTable() {
 
       {/* Namespace selector */}
       <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">네임스페이스</label>
+        <label className="block text-xs font-medium text-slate-400 mb-1.5">파트</label>
         <select
           value={selectedNs}
           onChange={(e) => { setSelectedNs(e.target.value); setEditingId(null); setExpandedId(null); }}
           className="w-64 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
         >
           <option value="">선택...</option>
-          {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+          {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
         </select>
       </div>
 
-      {!selectedNs && <div className="text-center py-10 text-slate-500">네임스페이스를 선택하세요.</div>}
+      {!selectedNs && <div className="text-center py-10 text-slate-500">파트를 선택하세요.</div>}
       {selectedNs && isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
       {selectedNs && error && <div className="text-center py-10 text-rose-400">오류가 발생했습니다.</div>}
 

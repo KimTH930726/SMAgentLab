@@ -13,7 +13,10 @@ _bearer_scheme = HTTPBearer()
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
 ) -> dict:
-    """JWT Access Token → 사용자 정보 반환."""
+    """JWT Access Token → 사용자 정보 반환.
+
+    반환 dict에는 part (name string) 및 part_id (int) 모두 포함.
+    """
     payload = decode_token(credentials.credentials)
     if not payload or payload.get("type") != "access":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다.")
@@ -24,7 +27,14 @@ async def get_current_user(
 
     async with get_conn() as conn:
         row = await conn.fetchrow(
-            "SELECT id, username, role, part, is_active, encrypted_llm_api_key FROM ops_user WHERE id = $1",
+            """
+            SELECT u.id, u.username, u.role, u.part_id,
+                   p.name AS part,
+                   u.is_active, u.encrypted_llm_api_key
+            FROM ops_user u
+            LEFT JOIN ops_part p ON u.part_id = p.id
+            WHERE u.id = $1
+            """,
             int(user_id),
         )
 
@@ -58,21 +68,24 @@ def check_part_ownership(resource_part: str | None, user: dict) -> None:
 
 
 async def check_namespace_ownership(namespace: str, user: dict) -> None:
-    """네임스페이스의 owner_part와 현재 사용자의 part를 비교.
+    """네임스페이스의 owner_part_id와 현재 사용자의 part_id를 비교.
 
     Admin이면 무조건 통과, 같은 파트면 통과, 다르면 403.
-    owner_part가 없으면(NULL) admin만 수정/삭제 가능.
+    owner_part_id가 없으면(NULL) 모든 로그인 사용자 허용.
     """
     if user["role"] == "admin":
         return
 
     async with get_conn() as conn:
-        owner_part = await conn.fetchval(
-            "SELECT owner_part FROM ops_namespace WHERE name = $1", namespace,
+        owner_part_id = await conn.fetchval(
+            "SELECT owner_part_id FROM ops_namespace WHERE name = $1", namespace,
         )
 
-    # owner_part가 NULL이면 admin만 가능, 다른 파트면 403
-    if owner_part is None or owner_part != user["part"]:
+    # owner_part_id가 NULL이면 공통 파트 — 모든 로그인 사용자 허용
+    if owner_part_id is None:
+        return
+    # 다른 파트면 403
+    if owner_part_id != user["part_id"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="이 네임스페이스에 대한 권한이 없습니다.",

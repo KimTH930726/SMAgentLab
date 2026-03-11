@@ -4,24 +4,24 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ============================================================
+-- 파트 테이블 (ops_part) — 부서/팀 구분 (namespace보다 먼저 정의)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ops_part (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(100) NOT NULL UNIQUE,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
 -- 네임스페이스 테이블 (ops_namespace)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_namespace (
     id                  SERIAL PRIMARY KEY,
     name                VARCHAR(100) NOT NULL UNIQUE,
     description         TEXT         NOT NULL DEFAULT '',
-    owner_part          VARCHAR(100),
+    owner_part_id       INT          REFERENCES ops_part(id) ON DELETE SET NULL,
     created_by_user_id  INT,
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
-
--- ============================================================
--- 파트 테이블 (ops_part) — 부서/팀 구분
--- ============================================================
-CREATE TABLE IF NOT EXISTS ops_part (
-    id          SERIAL PRIMARY KEY,
-    name        VARCHAR(100) NOT NULL UNIQUE,
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS ops_user (
     username                VARCHAR(100) NOT NULL UNIQUE,
     hashed_password         TEXT         NOT NULL,
     role                    VARCHAR(20)  NOT NULL DEFAULT 'user',
-    part                    VARCHAR(100) REFERENCES ops_part(name),
+    part_id                 INT          REFERENCES ops_part(id) ON DELETE SET NULL,
     is_active               BOOLEAN      NOT NULL DEFAULT TRUE,
     encrypted_llm_api_key   TEXT,
     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
@@ -46,7 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_user_username ON ops_user (username);
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_glossary (
     id                  SERIAL PRIMARY KEY,
-    namespace           VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
+    namespace_id        INT          NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
     term                VARCHAR(200) NOT NULL,
     description         TEXT         NOT NULL,
     embedding           VECTOR(768),
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS ops_glossary (
     created_by_user_id  INT
 );
 
-CREATE INDEX IF NOT EXISTS idx_glossary_ns ON ops_glossary (namespace);
+CREATE INDEX IF NOT EXISTS idx_glossary_ns ON ops_glossary (namespace_id);
 -- 충분한 행이 쌓인 후 ivfflat이 효과적이므로 초기엔 HNSW 사용
 CREATE INDEX IF NOT EXISTS idx_glossary_emb ON ops_glossary
     USING hnsw (embedding vector_cosine_ops);
@@ -65,24 +65,39 @@ CREATE INDEX IF NOT EXISTS idx_glossary_emb ON ops_glossary
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_knowledge (
     id                  SERIAL PRIMARY KEY,
-    namespace           VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
+    namespace_id        INT          NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
     container_name      VARCHAR(200),
     target_tables       TEXT[],
     content             TEXT         NOT NULL,
     query_template      TEXT,
     embedding           VECTOR(768),
     base_weight         FLOAT        NOT NULL DEFAULT 1.0,
+    category            VARCHAR(100),
     created_by_part     VARCHAR(100),
     created_by_user_id  INT,
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_knowledge_ns ON ops_knowledge (namespace);
+CREATE INDEX IF NOT EXISTS idx_knowledge_ns ON ops_knowledge (namespace_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_emb ON ops_knowledge
     USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_knowledge_fts ON ops_knowledge
     USING GIN (to_tsvector('simple', content));
+
+-- ============================================================
+-- 업무구분 테이블 (ops_knowledge_category)
+-- 네임스페이스별 지식 분류 코드 관리
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ops_knowledge_category (
+    id           SERIAL PRIMARY KEY,
+    namespace_id INT          NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+    name         VARCHAR(100) NOT NULL,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    UNIQUE (namespace_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_cat_ns ON ops_knowledge_category (namespace_id);
 
 -- updated_at 자동 갱신 트리거
 CREATE OR REPLACE FUNCTION update_updated_at()
@@ -103,32 +118,33 @@ CREATE TRIGGER trg_knowledge_updated_at
 -- 통계 및 미해결 케이스 추적용
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_query_log (
-    id          SERIAL PRIMARY KEY,
-    namespace   VARCHAR(100) REFERENCES ops_namespace(name) ON DELETE CASCADE,
-    question    TEXT,
-    answer      TEXT,
-    status      VARCHAR(20) NOT NULL DEFAULT 'pending',
-    mapped_term VARCHAR(200),
-    message_id  INT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id           SERIAL PRIMARY KEY,
+    namespace_id INT          REFERENCES ops_namespace(id) ON DELETE CASCADE,
+    question     TEXT,
+    answer       TEXT,
+    status       VARCHAR(20) NOT NULL DEFAULT 'pending',
+    mapped_term  VARCHAR(200),
+    message_id   INT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_query_log_ns ON ops_query_log (namespace);
+CREATE INDEX IF NOT EXISTS idx_query_log_ns ON ops_query_log (namespace_id);
 CREATE INDEX IF NOT EXISTS idx_query_log_created ON ops_query_log (created_at);
 
 -- ============================================================
 -- 대화방 테이블 (ops_conversation)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_conversation (
-    id          SERIAL PRIMARY KEY,
-    namespace   VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
-    title       VARCHAR(200) NOT NULL DEFAULT '',
-    trimmed     BOOLEAN      NOT NULL DEFAULT FALSE,
-    user_id     INT          REFERENCES ops_user(id) ON DELETE CASCADE,
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id              SERIAL PRIMARY KEY,
+    namespace_id    INT          NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+    title           VARCHAR(200) NOT NULL DEFAULT '',
+    trimmed         BOOLEAN      NOT NULL DEFAULT FALSE,
+    user_id         INT          REFERENCES ops_user(id) ON DELETE CASCADE,
+    inhouse_conv_id VARCHAR(200),
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_conversation_ns ON ops_conversation (namespace);
+CREATE INDEX IF NOT EXISTS idx_conversation_ns ON ops_conversation (namespace_id);
 CREATE INDEX IF NOT EXISTS idx_conversation_user ON ops_conversation (user_id);
 
 -- ============================================================
@@ -155,7 +171,7 @@ CREATE TABLE IF NOT EXISTS ops_feedback (
     id           SERIAL PRIMARY KEY,
     knowledge_id INT          REFERENCES ops_knowledge(id) ON DELETE SET NULL,
     message_id   INT          REFERENCES ops_message(id) ON DELETE SET NULL,
-    namespace    VARCHAR(100) REFERENCES ops_namespace(name) ON DELETE CASCADE,
+    namespace_id INT          REFERENCES ops_namespace(id) ON DELETE CASCADE,
     question     TEXT,
     is_positive  BOOLEAN      NOT NULL,
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
@@ -167,7 +183,7 @@ CREATE TABLE IF NOT EXISTS ops_feedback (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ops_fewshot (
     id                  SERIAL PRIMARY KEY,
-    namespace           VARCHAR(100) NOT NULL REFERENCES ops_namespace(name) ON DELETE CASCADE,
+    namespace_id        INT          NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
     question            TEXT         NOT NULL,
     answer              TEXT         NOT NULL,
     knowledge_id        INT          REFERENCES ops_knowledge(id) ON DELETE SET NULL,
@@ -177,7 +193,7 @@ CREATE TABLE IF NOT EXISTS ops_fewshot (
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_fewshot_ns ON ops_fewshot (namespace);
+CREATE INDEX IF NOT EXISTS idx_fewshot_ns ON ops_fewshot (namespace_id);
 CREATE INDEX IF NOT EXISTS idx_fewshot_emb ON ops_fewshot
     USING hnsw (embedding vector_cosine_ops);
 

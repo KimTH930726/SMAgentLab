@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.0.0)
+# Ops-Navigator 시스템 아키텍처 (v2.2)
 
 ## 개요
 
@@ -6,6 +6,8 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자의 자연어 질문을 받아 관련 운영 가이드를 검색하고, LLM이 맥락에 맞는 답변을 생성한다.
 
 v2.0.0에서 **DDD(Domain-Driven Design) 구조 전환**, **JWT 인증/인가**, **부서(Part) 기반 권한 제어**, **사용자별 LLM API Key 암호화 관리**가 추가되었다.
+
+v2.1에서 **공통 namespace 권한(owner_part=NULL → 전체 CRUD)**, **파트/namespace 이름 변경**, **슈퍼어드민 파트 분리(회원가입 노출 차단)**, **LLM 설정 일반 사용자 개방**이 추가되었다.
 
 ---
 
@@ -58,7 +60,7 @@ v2.0.0에서 **DDD(Domain-Driven Design) 구조 전환**, **JWT 인증/인가**,
 - **부서 기반 UI**: 지식/용어집/Few-shot 테이블에 부서 배지 표시, 같은 부서만 수정/삭제 버튼 노출
 - Sidebar: 사용자 정보 + 로그아웃 버튼, 네임스페이스 선택, 대화 목록, 검색 설정 슬라이더, 헬스 표시기
 - Backend REST API만 호출 (직접 DB 접근 없음)
-- 검색 비중(벡터/키워드 비율), Top-K를 사이드바 슬라이더로 실시간 조정
+- 검색 비중(벡터/키워드 비율), Top-K를 사이드바 슬라이더로 실시간 조정 (개인 설정은 localStorage에 저장, DB 저장 없음)
 - nginx 정적 빌드 서빙 + `/api/*` 요청을 Backend(`:8000`)로 프록시
 
 ### 2. Backend — FastAPI (`:8000`)
@@ -114,7 +116,7 @@ backend/
 - **멀티턴 검색 보강**: 직전 Q+A(각 80자)를 현재 질문에 결합하여 임베딩/검색 — 짧은 후속 질문에서도 이전 대화 맥락이 반영되어 유사도 향상 (추가 LLM 호출 없음)
 - **마크다운 답변**: 시스템 프롬프트에 Markdown 형식 지시 포함, 프론트엔드에서 `react-markdown` + `remark-gfm` + `rehype-raw`로 테이블/코드/리스트/HTML 태그 렌더링
 - **JWT 인증/인가**: Access Token(30분) + Refresh Token(7일), FastAPI Depends로 라우터 수준 보호
-- **네임스페이스 소유 파트 기반 권한**: 네임스페이스의 `owner_part`와 동일한 부서 구성원만 해당 네임스페이스의 데이터 CRUD 가능, 타 부서는 읽기 전용. `owner_part` NULL이면 admin만 수정/삭제 가능. Admin은 모든 권한 보유
+- **네임스페이스 소유 파트 기반 권한**: 네임스페이스의 `owner_part`와 동일한 부서 구성원만 해당 네임스페이스의 데이터 CRUD 가능, 타 부서는 읽기 전용. `owner_part` NULL이면 **모든 사용자(파트 무관)**가 CRUD 가능 (공통 namespace). Admin이 생성한 namespace는 자동으로 `owner_part = NULL`. Admin은 모든 권한 보유
 - **수정 시 작성자 갱신**: 지식/용어/퓨샷 수정 시 `created_by_part`/`created_by_user_id`가 최종 수정자로 갱신됨
 - **Graceful Degradation**: LLM 연결 실패 시 검색 결과는 정상 반환, 안내 메시지 출력
 
@@ -155,7 +157,7 @@ backend/
 | `domain/auth/router.py` | `/api/auth/*` 엔드포인트 |
 
 **권한 모델 (네임스페이스 기반):** 상세 규칙은 `api-specification.md § 3. 인증 및 권한` 참조.
-- Admin은 모든 리소스 CRUD 가능. 일반 사용자는 `owner_part` 일치 시에만 CRUD (불일치 시 읽기 전용).
+- Admin은 모든 리소스 CRUD 가능. 일반 사용자는 `owner_part` 일치 시에만 CRUD (불일치 시 읽기 전용). `owner_part = NULL` (공통 namespace)는 모든 사용자 CRUD 가능.
 - 대화 소유권: `ops_conversation.user_id` FK로 사용자별 대화 격리.
 
 **사용자별 LLM API Key:**
@@ -167,22 +169,22 @@ backend/
 
 ```sql
 -- v2.0.0 신규 테이블
-ops_part         -- 부서 레지스트리 (name, description, created_at)
-ops_user         -- 사용자 (username, password_hash, role[admin/user], part_id FK,
+ops_part         -- 부서 레지스트리 (name, created_at)
+ops_user         -- 사용자 (username, password_hash, role[admin/user], part_id FK → ops_part.id,
                  --          encrypted_api_key, created_at)
 
--- 기존 테이블 (v2.0.0 컬럼 추가)
-ops_namespace    -- 네임스페이스 레지스트리 (이름, 설명, owner_part, created_by_user_id)
+-- 기존 테이블 (v2.0.0+ 컬럼 추가)
+ops_namespace    -- 네임스페이스 레지스트리 (이름, 설명, owner_part_id FK → ops_part.id, created_by_user_id)
 ops_glossary     -- 용어집: 모호 표현 → 표준 용어 매핑 (HNSW 벡터 인덱스)
-                 --   + created_by_part, created_by_user_id (v2.0.0)
+                 --   + namespace_id FK → ops_namespace.id CASCADE
 ops_knowledge    -- 지식 베이스: 운영 가이드 + SQL 템플릿 (HNSW + GIN FTS 인덱스)
-                 --   + created_by_part, created_by_user_id (v2.0.0)
+                 --   + namespace_id FK → ops_namespace.id CASCADE, category VARCHAR(100)
+ops_knowledge_category -- 네임스페이스별 카테고리 목록 (namespace_id FK CASCADE, UNIQUE(namespace_id, name))
 ops_fewshot      -- 긍정 피드백 Q&A 쌍 (LLM 프롬프트 few-shot 삽입용, HNSW 인덱스)
-                 --   + created_by_part, created_by_user_id (v2.0.0)
-ops_feedback     -- 좋아요/싫어요 피드백 로그
-ops_query_log    -- 질의 로그 (namespace, question, status[pending/resolved/unresolved], mapped_term)
-ops_conversation -- 대화방 (namespace, title, created_at)
-                 --   + user_id FK → ops_user CASCADE (v2.0.0)
+                 --   + namespace_id FK → ops_namespace.id CASCADE
+ops_feedback     -- 좋아요/싫어요 피드백 로그 (namespace_id FK CASCADE)
+ops_query_log    -- 질의 로그 (namespace_id FK, question, status[pending/resolved/unresolved], mapped_term)
+ops_conversation -- 대화방 (namespace_id FK CASCADE, title, user_id FK CASCADE, inhouse_conv_id)
 ops_message      -- 대화 메시지 (conversation_id FK, role, content, mapped_term, results JSONB, status)
 ops_conv_summary -- 대화 요약 (conversation_id FK, summary, embedding, turn_start, turn_end)
 ```
@@ -190,7 +192,7 @@ ops_conv_summary -- 대화 요약 (conversation_id FK, summary, embedding, turn_
 - **HNSW 인덱스** (`vector_cosine_ops`): 벡터 근사 최근접 이웃 검색
 - **GIN 인덱스** (`to_tsvector('simple', content)`): 전문 검색(FTS)
 - **pg_trgm**: 트리그램 유사도 지원 (활성화됨)
-- **namespace 컬럼**: 모든 테이블에서 도메인 격리 (coupon, gift, order 등)
+- **namespace_id integer FK**: 모든 테이블에서 도메인 격리. namespace 이름 변경 시 cascade 업데이트 불필요
 - **CASCADE 삭제**: `ops_conversation.user_id` → 사용자 삭제 시 대화 자동 삭제
 
 ### 5. Ollama — LLM 추론 (`:11434`)
@@ -232,9 +234,11 @@ ops_conv_summary -- 대화 요약 (conversation_id FK, summary, embedding, turn_
 | `GET` | `/api/auth/users` | Admin | 전체 사용자 목록 |
 | `PUT` | `/api/auth/users/{id}` | Admin | 사용자 정보 수정 (역할 변경 등) |
 | `DELETE` | `/api/auth/users/{id}` | Admin | 사용자 삭제 |
-| `GET` | `/api/auth/parts` | Bearer | 부서 목록 조회 |
+| `GET` | `/api/auth/parts` | 없음 | 부서 목록 조회 (회원가입용 — 슈퍼어드민 파트 자동 제외) |
+| `GET` | `/api/auth/parts/all` | Admin | 부서 목록 전체 조회 (관리자용 — 슈퍼어드민 파트 포함) |
 | `POST` | `/api/auth/parts` | Admin | 부서 생성 |
-| `DELETE` | `/api/auth/parts/{id}` | Admin | 부서 삭제 |
+| `PATCH` | `/api/auth/parts/{id}` | Admin | 부서 이름 변경 (name 컬럼만 업데이트 — integer FK로 cascade 불필요) |
+| `DELETE` | `/api/auth/parts/{id}` | Admin | 부서 삭제 (소속 사용자 없는 경우만) |
 
 ### 채팅/대화
 
@@ -281,10 +285,11 @@ ops_conv_summary -- 대화 요약 (conversation_id FK, summary, embedding, turn_
 |--------|------|------|
 | `GET` | `/api/namespaces` | 등록된 네임스페이스 목록 (문자열 배열) |
 | `GET` | `/api/namespaces/detail` | 네임스페이스 상세 목록 (지식 수, 용어집 수 포함) |
-| `POST` | `/api/namespaces` | 네임스페이스 신규 생성 |
+| `POST` | `/api/namespaces` | 네임스페이스 신규 생성 (admin이 생성하면 owner_part=NULL) |
+| `PATCH` | `/api/namespaces/{name}` | 네임스페이스 이름 변경 (name 컬럼만 업데이트 — integer FK로 cascade 불필요) |
 | `DELETE` | `/api/namespaces/{name}` | 네임스페이스 및 하위 데이터 전체 삭제 |
 | `GET` | `/api/llm/config` | 현재 LLM 프로바이더 설정 + 연결 상태 조회 |
-| `PUT` | `/api/llm/config` | LLM 프로바이더 런타임 전환 (재시작 전까지 유지) |
+| `PUT` | `/api/llm/config` | LLM 프로바이더 런타임 전환 — Admin은 전체 시스템 저장, 일반 사용자는 브라우저 localStorage에만 저장 |
 | `POST` | `/api/llm/test` | 설정값으로 연결 테스트 (실제 전환 없음) |
 | `GET` | `/api/stats` | 네임스페이스별 통계 (전체 namespace, 지식/용어집 개수 포함) |
 | `GET` | `/api/stats/namespace/{name}` | 네임스페이스 상세 통계 (업무 유형별 분포, 미해결 목록) |
@@ -396,12 +401,13 @@ final_score = (w_vec × v_score + w_kw × k_score) × (1 + base_weight)
 
 | 테이블 | 역할 |
 |--------|------|
-| `ops_part` | 부서 레지스트리 (name, description) — v2.0.0 신규 |
-| `ops_user` | 사용자 (username, password_hash, role, part_id FK, encrypted_api_key) — v2.0.0 신규 |
-| `ops_namespace` | 도메인 단위 레지스트리 (name, description, owner_part) — v2.0.0 owner_part 추가 |
-| `ops_feedback` | 👍/👎 피드백 로그 |
-| `ops_query_log` | 질의 이력 — `status`(pending/resolved/unresolved) + `mapped_term`으로 업무 유형 분류 |
-| `ops_conversation` | 대화방 (namespace, title, user_id FK, created_at) |
+| `ops_part` | 부서 레지스트리 (name) — v2.0.0 신규 |
+| `ops_user` | 사용자 (username, password_hash, role, part_id INT FK → ops_part.id, encrypted_api_key) — v2.0.0 신규 |
+| `ops_namespace` | 도메인 단위 레지스트리 (name, description, owner_part_id INT FK → ops_part.id) |
+| `ops_knowledge_category` | 네임스페이스별 지식 카테고리 (namespace_id FK CASCADE, UNIQUE(namespace_id, name)) |
+| `ops_feedback` | 👍/👎 피드백 로그 (namespace_id FK CASCADE) |
+| `ops_query_log` | 질의 이력 — `status`(pending/resolved/unresolved) + `mapped_term`으로 업무 유형 분류 (namespace_id FK) |
+| `ops_conversation` | 대화방 (namespace_id FK CASCADE, title, user_id FK, inhouse_conv_id) |
 | `ops_message` | 대화 메시지 (role, content, mapped_term, results JSONB, status[generating/completed]) |
 
 > `ops_conv_summary`는 벡터 컬럼 보유 — 위 벡터 테이블 목록 참조.

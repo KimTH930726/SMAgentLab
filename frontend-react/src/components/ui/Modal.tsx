@@ -62,10 +62,10 @@ export function Modal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 8 }}
             transition={{ duration: 0.2 }}
-            className={`relative bg-slate-800 rounded-xl shadow-2xl border border-slate-700 w-full ${maxWidth} z-10`}
+            className={`relative bg-slate-800 rounded-xl shadow-2xl border border-slate-700 w-full ${maxWidth} z-10 flex flex-col max-h-[90vh]`}
           >
             {title && (
-              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700 flex-shrink-0">
                 <h3 className="text-lg font-semibold text-slate-100">{title}</h3>
                 <button
                   onClick={onClose}
@@ -75,7 +75,7 @@ export function Modal({
                 </button>
               </div>
             )}
-            <div className="p-6">{children}</div>
+            <div className="p-6 overflow-y-auto flex-1">{children}</div>
           </motion.div>
         </div>
       )}

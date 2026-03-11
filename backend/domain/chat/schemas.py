@@ -12,6 +12,7 @@ class ChatRequest(BaseModel):
     w_keyword: float = Field(default_factory=lambda: settings.default_w_keyword, ge=0.0, le=1.0)
     top_k: int = Field(default_factory=lambda: settings.default_top_k, ge=1, le=20)
     conversation_id: Optional[int] = None
+    category: Optional[str] = None
 
 
 class KnowledgeResult(BaseModel):

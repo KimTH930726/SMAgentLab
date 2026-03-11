@@ -1,6 +1,6 @@
 """LLM Provider 추상 기반 클래스."""
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 
 _SYSTEM_PROMPT = """당신은 IT 운영팀의 전문 보조 에이전트입니다.
@@ -25,10 +25,31 @@ def build_messages(context: str, question: str, history: list[dict] | None = Non
 
 class LLMProvider(ABC):
     @abstractmethod
-    async def generate(self, context: str, question: str, history: list[dict] | None = None, *, api_key: Optional[str] = None) -> str: ...
+    async def generate(
+        self,
+        context: str,
+        question: str,
+        history: list[dict] | None = None,
+        *,
+        api_key: Optional[str] = None,
+        ext_conversation_id: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
+        """답변 생성. 반환값: (answer, ext_conversation_id). ext_conversation_id는 사내 LLM 측 대화 ID."""
+        ...
 
     @abstractmethod
-    async def generate_stream(self, context: str, question: str, history: list[dict] | None = None, *, api_key: Optional[str] = None) -> AsyncIterator[str]: ...
+    async def generate_stream(
+        self,
+        context: str,
+        question: str,
+        history: list[dict] | None = None,
+        *,
+        api_key: Optional[str] = None,
+        ext_conversation_id: Optional[str] = None,
+        on_ext_conversation_id: Optional[Callable[[str], None]] = None,
+    ) -> AsyncIterator[str]:
+        """스트리밍 답변 생성. on_ext_conversation_id: 사내 LLM 측 대화 ID를 수신했을 때 호출되는 콜백."""
+        ...
 
     @abstractmethod
     async def health_check(self) -> bool: ...

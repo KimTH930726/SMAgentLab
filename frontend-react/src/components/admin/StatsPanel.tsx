@@ -3,12 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, CheckCircle, XCircle, Clock, FileText, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { getNamespaceStats, deleteQueryLog, resolveQueryLog, getQueryLogs, bulkDeleteQueryLogs, markQueryLogResolved } from '../../api/stats';
 import { createKnowledge } from '../../api/knowledge';
-import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
+import { getNamespaces, getNamespacesDetail, getCategories } from '../../api/namespaces';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
+import { TagInput } from '../ui/TagInput';
 import type { QueryLog, QueryStatus } from '../../types';
 
 // ── SVG Donut Chart ──────────────────────────────────────────────────────────
@@ -77,18 +79,208 @@ function DonutChart({ segments, size = 140, strokeWidth = 22, centerTop, centerB
 
 const TERM_PALETTE = ['#6366f1', '#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#f43f5e', '#ec4899', '#14b8a6'];
 
+// ── Knowledge Register Modal (지식 등록 폼 모달) ──────────────────────────────
+
+interface KnowledgeRegisterModalProps {
+  open: boolean;
+  onClose: () => void;
+  log: QueryLog | null;
+  namespace: string;
+  onSuccess: () => void;
+}
+
+function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: KnowledgeRegisterModalProps) {
+  const [containerNames, setContainerNames] = useState<string[]>([]);
+  const [targetTables, setTargetTables] = useState<string[]>([]);
+  const [content, setContent] = useState('');
+  const [queryTemplate, setQueryTemplate] = useState('');
+  const [baseWeight, setBaseWeight] = useState(1.0);
+  const [category, setCategory] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const { data: categories = [] } = useQuery({
+    queryKey: ['categories', namespace],
+    queryFn: () => getCategories(namespace),
+    enabled: !!namespace,
+    staleTime: 0,
+  });
+
+  // log가 바뀔 때 폼 초기화 (AI 답변을 내용에 미리 채워줌)
+  useState(() => {
+    if (log) {
+      setContainerNames([]);
+      setTargetTables([]);
+      setContent(log.answer ?? '');
+      setQueryTemplate('');
+      setBaseWeight(1.0);
+      setCategory('');
+      setError(null);
+    }
+  });
+
+  // open될 때마다 초기화
+  const handleOpen = () => {
+    setContainerNames([]);
+    setTargetTables([]);
+    setContent(log?.answer ?? '');
+    setQueryTemplate('');
+    setBaseWeight(1.0);
+    setCategory('');
+    setError(null);
+  };
+
+  const weightLabel = (w: number) => w >= 2 ? '높음' : w >= 1.5 ? '보통' : '기본';
+
+  const handleSubmit = async () => {
+    if (!log || !content.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await createKnowledge({
+        namespace,
+        container_name: containerNames.join(', ') || '미분류',
+        target_tables: targetTables,
+        content,
+        query_template: queryTemplate || null,
+        base_weight: baseWeight,
+        category: category || null,
+      });
+      await markQueryLogResolved(log.id);
+      onSuccess();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '등록 실패');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={open}
+      onClose={onClose}
+      title="지식 등록"
+      maxWidth="max-w-xl"
+    >
+      <div className="space-y-3" onAnimationStart={handleOpen}>
+        {/* 원본 질문 (읽기 전용) */}
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1">원본 질문</label>
+          <div className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-400 leading-relaxed">
+            {log?.question}
+          </div>
+        </div>
+
+        {/* 컨테이너명 */}
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1">
+            컨테이너명 <span className="text-slate-500 font-normal ml-1">(Enter 또는 쉼표로 추가)</span>
+          </label>
+          <TagInput
+            tags={containerNames}
+            onChange={setContainerNames}
+            placeholder="컨테이너명 입력..."
+            color="cyan"
+          />
+        </div>
+
+        {/* 대상 테이블 */}
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1">
+            대상 테이블 <span className="text-slate-500 font-normal ml-1">(Enter 또는 쉼표로 추가)</span>
+          </label>
+          <TagInput
+            tags={targetTables}
+            onChange={setTargetTables}
+            placeholder="테이블명 입력..."
+            color="indigo"
+          />
+        </div>
+
+        {/* 내용 */}
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1">
+            내용 <span className="text-rose-400">*</span>
+          </label>
+          <textarea
+            rows={8}
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[200px] leading-relaxed"
+            placeholder="지식 베이스에 등록할 가이드 내용을 작성하세요"
+          />
+        </div>
+
+        {/* 쿼리 템플릿 */}
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1">쿼리 템플릿 (선택)</label>
+          <textarea
+            rows={3}
+            value={queryTemplate}
+            onChange={(e) => setQueryTemplate(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[80px]"
+            placeholder="SELECT ..."
+          />
+        </div>
+
+        {/* 업무구분 */}
+        {categories.length > 0 && (
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">업무구분 (선택)</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="">없음 (파트 공통)</option>
+              {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+            </select>
+            <p className="text-[10px] text-slate-600 mt-0.5">미설정 시 모든 업무구분 검색에 공통으로 포함됩니다</p>
+          </div>
+        )}
+
+        {/* 문서 우선순위 */}
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1">
+            문서 우선순위:{' '}
+            <span className={`font-medium ${
+              baseWeight >= 2 ? 'text-emerald-400' : baseWeight >= 1.5 ? 'text-indigo-400' : 'text-slate-300'
+            }`}>
+              {baseWeight.toFixed(1)} — {weightLabel(baseWeight)}
+            </span>
+          </label>
+          <input
+            type="range" min={0} max={3} step={0.1} value={baseWeight}
+            onChange={(e) => setBaseWeight(parseFloat(e.target.value))}
+            className="w-full accent-indigo-500"
+          />
+          <p className="text-[11px] text-slate-400 mt-1">
+            1.0=기본 · 1.5+=보통 · 2.0+=높음(핵심 문서, 항상 상위 노출)
+          </p>
+        </div>
+
+        {error && <p className="text-xs text-rose-400">{error}</p>}
+
+        <div className="flex gap-2 justify-end pt-1">
+          <Button variant="ghost" size="sm" onClick={onClose}>취소</Button>
+          <Button
+            variant="primary" size="sm"
+            loading={submitting}
+            disabled={!content.trim()}
+            onClick={handleSubmit}
+          >
+            지식 등록 + 해결 처리
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ── QueryLog Modal ───────────────────────────────────────────────────────────
 
 type ModalType = 'total' | 'resolved' | 'pending' | 'unresolved';
-
-interface RegisterForm {
-  logId: number | null;
-  containerName: string;
-  targetTables: string;
-  content: string;
-  queryTemplate: string;
-}
-const emptyRegister: RegisterForm = { logId: null, containerName: '', targetTables: '', content: '', queryTemplate: '' };
 
 function QueryLogModal({
   open, onClose, modalType, namespace, qc, canModify,
@@ -97,8 +289,7 @@ function QueryLogModal({
   namespace: string; qc: ReturnType<typeof useQueryClient>; canModify: boolean;
 }) {
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [registerForm, setRegisterForm] = useState<RegisterForm>(emptyRegister);
-  const [registering, setRegistering] = useState(false);
+  const [registerLog, setRegisterLog] = useState<QueryLog | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   const statusParam: QueryStatus | undefined = modalType === 'total' ? undefined : modalType as QueryStatus;
@@ -162,201 +353,116 @@ function QueryLogModal({
     }
   };
 
-  const handleRegister = async () => {
-    if (!registerForm.logId) return;
-    setRegistering(true);
-    try {
-      await createKnowledge({
-        namespace,
-        container_name: registerForm.containerName || '미분류',
-        target_tables: registerForm.targetTables.split(',').map((t) => t.trim()).filter(Boolean),
-        content: registerForm.content,
-        query_template: registerForm.queryTemplate || null,
-      });
-      await markQueryLogResolved(registerForm.logId);
-      invalidateAll();
-      qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
-      qc.invalidateQueries({ queryKey: ['fewshots', namespace] });
-      setRegisterForm(emptyRegister);
-      setExpandedId(null);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setRegistering(false);
-    }
-  };
-
   const titleMap: Record<ModalType, string> = {
     total: '전체 질의', resolved: '해결된 질의', pending: '대기 중 질의', unresolved: '미해결 질의',
   };
   const title = modalType ? `${titleMap[modalType]} (${logs.length}건)` : '';
 
   return (
-    <Modal isOpen={open} onClose={() => { onClose(); setExpandedId(null); setRegisterForm(emptyRegister); setSelectedIds(new Set()); }}
-      title={title} maxWidth="max-w-2xl">
-      {isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
-      {!isLoading && logs.length === 0 && (
-        <div className="text-center py-10 text-slate-500">질의 내역이 없습니다.</div>
-      )}
-      {/* Bulk action bar */}
-      {canModify && selectableLogs.length > 0 && (
-        <div className="flex items-center gap-3 mb-2">
-          <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 hover:text-slate-300">
-            <input
-              type="checkbox"
-              checked={selectableLogs.length > 0 && selectedIds.size === selectableLogs.length}
-              onChange={toggleSelectAll}
-              className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
-            />
-            전체 선택
-          </label>
-          {selectedIds.size > 0 && (
-            <Button variant="danger" size="sm"
-              loading={bulkDeleteMutation.isPending}
-              onClick={() => bulkDeleteMutation.mutate([...selectedIds])}>
-              <Trash2 className="w-3.5 h-3.5" />
-              선택 삭제 ({selectedIds.size}건)
-            </Button>
-          )}
-        </div>
-      )}
-      <div className="max-h-[60vh] overflow-y-auto space-y-2 pr-1">
-        {logs.map((log: QueryLog) => (
-          <div key={log.id} className="bg-slate-900/60 border border-slate-700 rounded-xl overflow-hidden">
-            {/* Row header — clickable */}
-            <div className="flex items-start">
-              {canModify && log.status !== 'resolved' && (
-                <label
-                  className="flex items-center px-3 py-3.5 cursor-pointer"
-                  onClick={(e) => e.stopPropagation()}
+    <>
+      <Modal isOpen={open} onClose={() => { onClose(); setExpandedId(null); setRegisterLog(null); setSelectedIds(new Set()); }}
+        title={title} maxWidth="max-w-2xl">
+        {isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
+        {!isLoading && logs.length === 0 && (
+          <div className="text-center py-10 text-slate-500">질의 내역이 없습니다.</div>
+        )}
+        {/* Bulk action bar */}
+        {canModify && selectableLogs.length > 0 && (
+          <div className="flex items-center gap-3 mb-2">
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 hover:text-slate-300">
+              <input
+                type="checkbox"
+                checked={selectableLogs.length > 0 && selectedIds.size === selectableLogs.length}
+                onChange={toggleSelectAll}
+                className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+              />
+              전체 선택
+            </label>
+            {selectedIds.size > 0 && (
+              <Button variant="danger" size="sm"
+                loading={bulkDeleteMutation.isPending}
+                onClick={() => bulkDeleteMutation.mutate([...selectedIds])}>
+                <Trash2 className="w-3.5 h-3.5" />
+                선택 삭제 ({selectedIds.size}건)
+              </Button>
+            )}
+          </div>
+        )}
+        <div className="max-h-[60vh] overflow-y-auto space-y-2 pr-1">
+          {logs.map((log: QueryLog) => (
+            <div key={log.id} className="bg-slate-900/60 border border-slate-700 rounded-xl overflow-hidden">
+              {/* Row header */}
+              <div className="flex items-start">
+                {canModify && log.status !== 'resolved' && (
+                  <label className="flex items-center px-3 py-3.5 cursor-pointer" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(log.id)}
+                      onChange={() => toggleSelect(log.id)}
+                      className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                    />
+                  </label>
+                )}
+                <button
+                  onClick={() => setExpandedId(expandedId === log.id ? null : log.id)}
+                  className="flex-1 text-left px-2 py-3 flex items-start gap-3 hover:bg-slate-700/40 transition-colors"
                 >
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(log.id)}
-                    onChange={() => toggleSelect(log.id)}
-                    className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
-                  />
-                </label>
-              )}
-            <button
-              onClick={() => setExpandedId(expandedId === log.id ? null : log.id)}
-              className="flex-1 text-left px-2 py-3 flex items-start gap-3 hover:bg-slate-700/40 transition-colors"
-            >
-              <span className="flex-shrink-0 mt-0.5">
-                {log.status === 'resolved' && <CheckCircle className="w-4 h-4 text-emerald-400" />}
-                {log.status === 'pending' && <Clock className="w-4 h-4 text-amber-400" />}
-                {log.status === 'unresolved' && <XCircle className="w-4 h-4 text-rose-400" />}
-              </span>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-slate-200 truncate">{log.question}</p>
-                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                  {log.mapped_term && <Badge color="indigo">{log.mapped_term}</Badge>}
-                  <span className="text-xs text-slate-500">
-                    {new Date(log.created_at).toLocaleString('ko-KR')}
+                  <span className="flex-shrink-0 mt-0.5">
+                    {log.status === 'resolved' && <CheckCircle className="w-4 h-4 text-emerald-400" />}
+                    {log.status === 'pending' && <Clock className="w-4 h-4 text-amber-400" />}
+                    {log.status === 'unresolved' && <XCircle className="w-4 h-4 text-rose-400" />}
                   </span>
-                </div>
-              </div>
-              <span className="flex-shrink-0 text-slate-500 mt-0.5">
-                {expandedId === log.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              </span>
-            </button>
-            </div>
-
-            {/* Expanded detail */}
-            {expandedId === log.id && (
-              <div className="border-t border-slate-700 px-4 py-4 bg-slate-800/50 space-y-3">
-                <div>
-                  <p className="text-xs text-slate-500 mb-1">질문 전체</p>
-                  <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{log.question}</p>
-                </div>
-                <div className="flex items-center gap-4 text-xs text-slate-500">
-                  <span>상태: <span className={
-                    log.status === 'resolved' ? 'text-emerald-400'
-                    : log.status === 'pending' ? 'text-amber-400'
-                    : 'text-rose-400'
-                  }>
-                    {log.status === 'resolved' ? '해결됨' : log.status === 'pending' ? '대기 중' : '미해결'}
-                  </span></span>
-                  {log.mapped_term && <span>용어: <span className="text-indigo-400">{log.mapped_term}</span></span>}
-                  <span>{new Date(log.created_at).toLocaleString('ko-KR')}</span>
-                </div>
-
-                {/* Resolved: 답변만 표시 */}
-                {log.status === 'resolved' && log.answer && (
-                  <div>
-                    <p className="text-xs text-slate-500 mb-1">AI 답변</p>
-                    <div className="bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
-                      {log.answer}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-slate-200 truncate">{log.question}</p>
+                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                      {log.mapped_term && <Badge color="indigo">{log.mapped_term}</Badge>}
+                      <span className="text-xs text-slate-500">{new Date(log.created_at).toLocaleString('ko-KR')}</span>
                     </div>
                   </div>
-                )}
+                  <span className="flex-shrink-0 text-slate-500 mt-0.5">
+                    {expandedId === log.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  </span>
+                </button>
+              </div>
 
-                {/* Actions for pending/unresolved */}
-                {log.status !== 'resolved' && (
-                  canModify && registerForm.logId === log.id ? (
-                    <div className="space-y-3 pt-1">
-                      <p className="text-xs font-medium text-slate-400">지식으로 등록</p>
-                      {/* 질문 (읽기 전용) */}
-                      <div>
-                        <label className="block text-xs text-slate-500 mb-1">질문</label>
-                        <input type="text" value={log.question} disabled
-                          className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-400 cursor-not-allowed" />
-                      </div>
-                      {[
-                        { label: '컨테이너명', key: 'containerName', placeholder: '예: 청구서 조회' },
-                        { label: '대상 테이블 (쉼표 구분)', key: 'targetTables', placeholder: 'table_a, table_b' },
-                      ].map(({ label, key, placeholder }) => (
-                        <div key={key}>
-                          <label className="block text-xs text-slate-500 mb-1">{label}</label>
-                          <input
-                            type="text"
-                            value={registerForm[key as keyof RegisterForm] as string}
-                            onChange={(e) => setRegisterForm((f) => ({ ...f, [key]: e.target.value }))}
-                            placeholder={placeholder}
-                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                          />
-                        </div>
-                      ))}
-                      <div>
-                        <label className="block text-xs text-slate-500 mb-1">내용 <span className="text-rose-400">*</span></label>
-                        <textarea rows={4} value={registerForm.content}
-                          onChange={(e) => setRegisterForm((f) => ({ ...f, content: e.target.value }))}
-                          placeholder="지식 베이스에 등록할 가이드 내용을 작성하세요"
-                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none" />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-slate-500 mb-1">쿼리 템플릿 (선택)</label>
-                        <textarea rows={2} value={registerForm.queryTemplate}
-                          onChange={(e) => setRegisterForm((f) => ({ ...f, queryTemplate: e.target.value }))}
-                          placeholder="SELECT ..."
-                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none" />
-                      </div>
-                      <div className="flex gap-2 justify-end">
-                        <Button variant="ghost" size="sm" onClick={() => setRegisterForm(emptyRegister)}>취소</Button>
-                        <Button variant="primary" size="sm" loading={registering}
-                          disabled={!registerForm.content.trim()} onClick={handleRegister}>
-                          지식 등록 + 해결 처리
-                        </Button>
+              {/* Expanded detail */}
+              {expandedId === log.id && (
+                <div className="border-t border-slate-700 px-4 py-4 bg-slate-800/50 space-y-3">
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1">질문 전체</p>
+                    <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">{log.question}</p>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs text-slate-500">
+                    <span>상태: <span className={
+                      log.status === 'resolved' ? 'text-emerald-400'
+                      : log.status === 'pending' ? 'text-amber-400'
+                      : 'text-rose-400'
+                    }>
+                      {log.status === 'resolved' ? '해결됨' : log.status === 'pending' ? '대기 중' : '미해결'}
+                    </span></span>
+                    {log.mapped_term && <span>용어: <span className="text-indigo-400">{log.mapped_term}</span></span>}
+                    <span>{new Date(log.created_at).toLocaleString('ko-KR')}</span>
+                  </div>
+
+                  {/* AI 답변 미리보기 */}
+                  {log.answer && (
+                    <div>
+                      <p className="text-xs text-slate-500 mb-1">
+                        {log.status === 'pending' ? 'AI 답변 (검토 대상)' : 'AI 답변'}
+                      </p>
+                      <div className="bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
+                        {log.answer}
                       </div>
                     </div>
-                  ) : (
-                    <div className="space-y-3 pt-1">
-                      {/* 답변 미리보기 */}
-                      {log.answer ? (
-                        <div>
-                          <p className="text-xs text-slate-500 mb-1">
-                            {log.status === 'pending' ? 'AI 답변 (검토 대상)' : 'AI 답변'}
-                          </p>
-                          <div className="bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
-                            {log.answer}
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="text-xs text-slate-500 italic">답변 없음 (마이그레이션 이전 데이터)</p>
-                      )}
-                      {actionError && (
-                        <p className="text-xs text-rose-400">{actionError}</p>
-                      )}
+                  )}
+                  {!log.answer && log.status !== 'resolved' && (
+                    <p className="text-xs text-slate-500 italic">답변 없음 (마이그레이션 이전 데이터)</p>
+                  )}
+
+                  {/* Actions for pending/unresolved */}
+                  {log.status !== 'resolved' && (
+                    <div className="space-y-2 pt-1">
+                      {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
                       {canModify ? (
                         <div className="flex gap-2">
                           {log.status === 'pending' && (
@@ -368,11 +474,7 @@ function QueryLogModal({
                             </Button>
                           )}
                           <Button variant={log.status === 'pending' ? 'ghost' : 'primary'} size="sm"
-                            onClick={() => setRegisterForm({
-                              ...emptyRegister,
-                              logId: log.id,
-                              content: log.answer ?? '',
-                            })}>
+                            onClick={() => setRegisterLog(log)}>
                             <FileText className="w-3.5 h-3.5" />
                             {log.status === 'pending' ? '수정 후 등록' : '지식 등록'}
                           </Button>
@@ -383,17 +485,31 @@ function QueryLogModal({
                           </Button>
                         </div>
                       ) : (
-                        <p className="text-xs text-slate-500">이 네임스페이스에 대한 수정 권한이 없습니다.</p>
+                        <p className="text-xs text-slate-500">이 파트에 대한 수정 권한이 없습니다.</p>
                       )}
                     </div>
-                  )
-                )}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </Modal>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </Modal>
+
+      {/* 지식 등록 모달 */}
+      <KnowledgeRegisterModal
+        open={registerLog !== null}
+        onClose={() => setRegisterLog(null)}
+        log={registerLog}
+        namespace={namespace}
+        onSuccess={() => {
+          invalidateAll();
+          qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
+          qc.invalidateQueries({ queryKey: ['fewshots', namespace] });
+          setExpandedId(null);
+        }}
+      />
+    </>
   );
 }
 
@@ -408,9 +524,10 @@ export function StatsPanel() {
 
   const { data: namespaces = [] } = useQuery({ queryKey: ['namespaces'], queryFn: getNamespaces, staleTime: 30_000 });
   const { data: nsDetails = [] } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, staleTime: 30_000 });
+  const sortedNamespaces = sortNamespacesByUserPart(namespaces, user?.part, nsDetails);
   const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
-  // owner_part 없으면 admin만, 있으면 같은 파트 or admin
-  const canModifyNs = user?.role === 'admin' || (!!nsOwnerPart && nsOwnerPart === user?.part);
+  // owner_part 없으면 공통(모두 가능), 있으면 같은 파트 or admin
+  const canModifyNs = user?.role === 'admin' || !nsOwnerPart || nsOwnerPart === user?.part;
   const { data: stats, isLoading, error, refetch } = useQuery({
     queryKey: ['stats-ns', selectedNs],
     queryFn: () => getNamespaceStats(selectedNs),
@@ -463,11 +580,11 @@ export function StatsPanel() {
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">네임스페이스</label>
+        <label className="block text-xs font-medium text-slate-400 mb-1.5">파트</label>
         <select value={selectedNs} onChange={(e) => setSelectedNs(e.target.value)}
           className="w-64 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
           <option value="">선택...</option>
-          {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+          {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
         </select>
       </div>
 
@@ -537,7 +654,7 @@ export function StatsPanel() {
       )}
 
       {!selectedNs && !isLoading && (
-        <div className="text-center py-10 text-slate-500">네임스페이스를 선택하세요.</div>
+        <div className="text-center py-10 text-slate-500">파트를 선택하세요.</div>
       )}
 
       {/* Query log modal */}

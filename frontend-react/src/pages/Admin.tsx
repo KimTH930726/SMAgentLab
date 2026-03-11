@@ -21,7 +21,7 @@ interface Tab {
 }
 
 const TABS: Tab[] = [
-  { id: 'namespaces', label: '네임스페이스', icon: <Layers className="w-4 h-4" /> },
+  { id: 'namespaces', label: '파트 DB 관리', icon: <Layers className="w-4 h-4" /> },
   { id: 'knowledge', label: '지식 베이스', icon: <BookOpen className="w-4 h-4" /> },
   { id: 'glossary', label: '용어집', icon: <Database className="w-4 h-4" /> },
   { id: 'fewshots', label: 'Few-shot', icon: <Zap className="w-4 h-4" /> },
@@ -63,7 +63,7 @@ export default function Admin() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto p-6">
-        {activeTab === 'namespaces' && <NamespaceManager />}
+        {activeTab === 'namespaces' && <NamespaceManager onNavigate={setActiveTab} />}
         {activeTab === 'knowledge' && <KnowledgeTable />}
         {activeTab === 'glossary' && <GlossaryTable />}
         {activeTab === 'fewshots' && <FewshotTable />}

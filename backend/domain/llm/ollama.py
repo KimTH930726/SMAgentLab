@@ -1,6 +1,6 @@
-"""Ollama LLM Provider — /api/chat 엔드포인트 (api_key 무시)."""
+"""Ollama LLM Provider — /api/chat 엔드포인트 (api_key, ext_conversation_id 무시)."""
 import json
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
@@ -24,7 +24,15 @@ class OllamaProvider(LLMProvider):
         self._base_url = cfg.get("ollama_base_url", settings.ollama_base_url)
         self._model = cfg.get("ollama_model", settings.ollama_model)
 
-    async def generate(self, context: str, question: str, history: list[dict] | None = None, *, api_key: Optional[str] = None) -> str:
+    async def generate(
+        self,
+        context: str,
+        question: str,
+        history: list[dict] | None = None,
+        *,
+        api_key: Optional[str] = None,
+        ext_conversation_id: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
         messages = build_messages(context, question, history)
         async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:
             resp = await client.post(
@@ -32,9 +40,18 @@ class OllamaProvider(LLMProvider):
                 json={"model": self._model, "messages": messages, "stream": False},
             )
             resp.raise_for_status()
-            return resp.json()["message"]["content"]
+            return resp.json()["message"]["content"], None
 
-    async def generate_stream(self, context: str, question: str, history: list[dict] | None = None, *, api_key: Optional[str] = None) -> AsyncIterator[str]:
+    async def generate_stream(
+        self,
+        context: str,
+        question: str,
+        history: list[dict] | None = None,
+        *,
+        api_key: Optional[str] = None,
+        ext_conversation_id: Optional[str] = None,
+        on_ext_conversation_id: Optional[Callable[[str], None]] = None,
+    ) -> AsyncIterator[str]:
         messages = build_messages(context, question, history)
         async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:
             async with client.stream(

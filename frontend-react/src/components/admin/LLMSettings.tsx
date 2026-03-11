@@ -514,6 +514,7 @@ const THRESHOLD_FIELDS: { key: keyof SearchThresholds; label: string; desc: stri
 
 function ThresholdSettings() {
   const qc = useQueryClient();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin') ?? false;
   const [values, setValues] = useState<SearchThresholds | null>(null);
   const [dirty, setDirty] = useState(false);
 
@@ -596,19 +597,23 @@ function ThresholdSettings() {
         </div>
       )}
 
-      <div className="flex gap-2">
-        <Button variant="secondary" size="sm" onClick={handleReset} disabled={!dirty}>
-          초기화
-        </Button>
-        <Button
-          variant="primary" size="sm"
-          onClick={handleSave}
-          loading={saveMutation.isPending}
-          disabled={!dirty}
-        >
-          <Save className="w-4 h-4" /> 저장 및 적용
-        </Button>
-      </div>
+      {isAdmin ? (
+        <div className="flex gap-2">
+          <Button variant="secondary" size="sm" onClick={handleReset} disabled={!dirty}>
+            초기화
+          </Button>
+          <Button
+            variant="primary" size="sm"
+            onClick={handleSave}
+            loading={saveMutation.isPending}
+            disabled={!dirty}
+          >
+            <Save className="w-4 h-4" /> 저장 및 적용
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">* 이 설정은 관리자만 변경할 수 있습니다.</p>
+      )}
     </div>
   );
 }
@@ -624,6 +629,7 @@ const SEARCH_DEFAULT_FIELDS: { key: keyof SearchDefaults; label: string; desc: s
 
 function SearchDefaultsSettings() {
   const qc = useQueryClient();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin') ?? false;
   const [values, setValues] = useState<SearchDefaults | null>(null);
   const [dirty, setDirty] = useState(false);
 
@@ -721,19 +727,40 @@ function SearchDefaultsSettings() {
         </div>
       )}
 
-      <div className="flex gap-2">
-        <Button variant="secondary" size="sm" onClick={handleReset} disabled={!dirty}>
-          초기화
-        </Button>
-        <Button
-          variant="primary" size="sm"
-          onClick={handleSave}
-          loading={saveMutation.isPending}
-          disabled={!dirty}
-        >
-          <Save className="w-4 h-4" /> 저장 및 적용
-        </Button>
-      </div>
+      {isAdmin ? (
+        <div className="flex gap-2">
+          <Button variant="secondary" size="sm" onClick={handleReset} disabled={!dirty}>
+            초기화
+          </Button>
+          <Button
+            variant="primary" size="sm"
+            onClick={handleSave}
+            loading={saveMutation.isPending}
+            disabled={!dirty}
+          >
+            <Save className="w-4 h-4" /> 저장 및 적용 (전체)
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3">
+          <Button
+            variant="primary" size="sm"
+            onClick={() => {
+              if (!values) return;
+              useAppStore.getState().setSearchConfig({
+                wVector: values.default_w_vector,
+                wKeyword: values.default_w_keyword,
+                topK: values.default_top_k,
+              });
+              setDirty(false);
+            }}
+            disabled={!dirty}
+          >
+            <Save className="w-4 h-4" /> 내 설정으로 저장
+          </Button>
+          <span className="text-xs text-slate-500">내 브라우저에만 저장됩니다.</span>
+        </div>
+      )}
     </div>
   );
 }

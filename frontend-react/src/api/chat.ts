@@ -9,6 +9,7 @@ export function streamChat(params: ChatRequest): AsyncGenerator<SSEEvent> {
     w_keyword: params.wKeyword,
     top_k: params.topK,
     conversation_id: params.conversationId ?? null,
+    category: params.category ?? null,
   };
   return streamSSE('/chat/stream', body, params.signal);
 }

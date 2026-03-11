@@ -49,6 +49,10 @@ export async function getParts(): Promise<Part[]> {
   return apiFetch<Part[]>('/auth/parts');
 }
 
+export async function getAllParts(): Promise<Part[]> {
+  return apiFetch<Part[]>('/auth/parts/all');
+}
+
 // Admin
 export async function getUsers(): Promise<User[]> {
   return apiFetch<User[]>('/auth/users');
@@ -71,6 +75,13 @@ export async function deleteUser(userId: number): Promise<void> {
 export async function createPart(name: string): Promise<Part> {
   return apiFetch<Part>('/auth/parts', {
     method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function renamePart(partId: number, name: string): Promise<Part> {
+  return apiFetch<Part>(`/auth/parts/${partId}`, {
+    method: 'PATCH',
     body: JSON.stringify({ name }),
   });
 }

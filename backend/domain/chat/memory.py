@@ -133,7 +133,7 @@ async def _summarize_with_llm(messages: list, llm_provider) -> Optional[str]:
         f"[대화 기록]\n{dialogue}\n\n요약:"
     )
     try:
-        summary = await llm_provider.generate(context="", question=prompt)
+        summary, _ = await llm_provider.generate(context="", question=prompt)
         return summary.strip() or None
     except Exception as e:
         logger.warning("요약 생성 실패: %s", e)

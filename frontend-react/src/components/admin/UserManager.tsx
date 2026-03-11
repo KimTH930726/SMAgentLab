@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Plus, Shield, User as UserIcon, Users, Building2 } from 'lucide-react';
+import { Trash2, Plus, Shield, User as UserIcon, Users, Building2, Pencil, Check, X } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
-import { getUsers, updateUser, deleteUser, getParts, createPart, deletePart } from '../../api/auth';
+import { getUsers, updateUser, deleteUser, getAllParts, createPart, deletePart, renamePart } from '../../api/auth';
 import { useAuthStore } from '../../store/useAuthStore';
 import type { User } from '../../types';
 
@@ -52,17 +52,24 @@ function PartSection() {
   const qc = useQueryClient();
   const [newName, setNewName] = useState('');
   const [error, setError] = useState('');
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState('');
+  const editRef = useRef<HTMLInputElement>(null);
 
   const { data: parts = [] } = useQuery({
-    queryKey: ['parts'],
-    queryFn: getParts,
+    queryKey: ['parts-all'],
+    queryFn: getAllParts,
   });
+
+  useEffect(() => {
+    if (editingId !== null) editRef.current?.focus();
+  }, [editingId]);
 
   const createMutation = useMutation({
     mutationFn: (name: string) => createPart(name),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['parts'] });
-      qc.invalidateQueries({ queryKey: ['users'] });
+      qc.invalidateQueries({ queryKey: ['parts-all'] });
+      qc.invalidateQueries({ queryKey: ['namespaces'] });
       setNewName('');
       setError('');
     },
@@ -71,10 +78,24 @@ function PartSection() {
     },
   });
 
+  const renameMutation = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) => renamePart(id, name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['parts-all'] });
+      qc.invalidateQueries({ queryKey: ['users'] });
+      qc.invalidateQueries({ queryKey: ['namespaces'] });
+      qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
+      setEditingId(null);
+    },
+    onError: (err: Error) => {
+      alert(err.message || '파트 이름 변경 실패');
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (partId: number) => deletePart(partId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['parts'] });
+      qc.invalidateQueries({ queryKey: ['parts-all'] });
       qc.invalidateQueries({ queryKey: ['users'] });
     },
     onError: (err: Error) => {
@@ -86,6 +107,12 @@ function PartSection() {
     if (!newName.trim() || createMutation.isPending) return;
     setError('');
     createMutation.mutate(newName.trim());
+  };
+
+  const commitRename = (partId: number, oldName: string) => {
+    const trimmed = editingName.trim();
+    if (!trimmed || trimmed === oldName) { setEditingId(null); return; }
+    renameMutation.mutate({ id: partId, name: trimmed });
   };
 
   const handleDelete = (partId: number) => {
@@ -116,16 +143,53 @@ function PartSection() {
           {parts.map((p) => (
             <div
               key={p.id}
-              className="flex items-center gap-2 bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5"
+              className="flex items-center gap-1.5 bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5"
             >
-              <span className="text-sm text-slate-200">{p.name}</span>
-              <button
-                onClick={() => handleDelete(p.id)}
-                className="text-slate-500 hover:text-rose-400 hover:scale-110 active:scale-95 transition-all cursor-pointer"
-                title="파트 삭제"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              {editingId === p.id ? (
+                <>
+                  <input
+                    ref={editRef}
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) commitRename(p.id, p.name);
+                      if (e.key === 'Escape') setEditingId(null);
+                    }}
+                    onBlur={() => commitRename(p.id, p.name)}
+                    className="bg-slate-800 border border-indigo-500 rounded px-1.5 py-0.5 text-xs text-slate-100 outline-none w-24"
+                  />
+                  <button onClick={() => commitRename(p.id, p.name)} className="text-emerald-400 hover:text-emerald-300">
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => setEditingId(null)} className="text-slate-500 hover:text-slate-300">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setEditingId(p.id); setEditingName(p.name); }}
+                    className="text-sm text-slate-200 hover:text-indigo-300 transition-colors"
+                    title="클릭하여 이름 수정"
+                  >
+                    {p.name}
+                  </button>
+                  <button
+                    onClick={() => { setEditingId(p.id); setEditingName(p.name); }}
+                    className="text-slate-600 hover:text-indigo-400 transition-colors"
+                    title="이름 수정"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(p.id)}
+                    className="text-slate-500 hover:text-rose-400 transition-colors"
+                    title="파트 삭제"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              )}
             </div>
           ))}
           {parts.length === 0 && <p className="text-sm text-slate-500">등록된 파트 없음</p>}
@@ -147,8 +211,8 @@ function UserSection() {
   });
 
   const { data: parts = [] } = useQuery({
-    queryKey: ['parts'],
-    queryFn: getParts,
+    queryKey: ['parts-all'],
+    queryFn: getAllParts,
   });
 
   const updateMutation = useMutation({
@@ -245,7 +309,7 @@ function UserSection() {
                       title="현재 로그인한 계정의 역할은 변경할 수 없습니다"
                       className="inline-block cursor-not-allowed opacity-80 hover:opacity-100 transition-opacity duration-150"
                     >
-                      <Badge color="indigo">admin</Badge>
+                      <Badge color="indigo">슈퍼어드민</Badge>
                     </span>
                   ) : (
                     <span
@@ -253,11 +317,11 @@ function UserSection() {
                       tabIndex={0}
                       onClick={() => handleToggleRole(u)}
                       onKeyDown={(e) => e.key === 'Enter' && handleToggleRole(u)}
-                      title={`클릭하여 ${u.role === 'admin' ? '일반 사용자' : '관리자'}로 변경`}
+                      title={`클릭하여 ${u.role === 'admin' ? '일반 사용자' : '슈퍼어드민'}로 변경`}
                       className="inline-block cursor-pointer transform hover:scale-110 active:scale-95 transition-transform duration-150"
                     >
                       <Badge color={u.role === 'admin' ? 'indigo' : 'slate'}>
-                        {u.role}
+                        {u.role === 'admin' ? '슈퍼어드민' : u.role}
                       </Badge>
                     </span>
                   )}

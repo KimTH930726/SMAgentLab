@@ -1,8 +1,20 @@
+import { useQuery } from '@tanstack/react-query';
 import { useAppStore } from '../../store/useAppStore';
+import { getCategories } from '../../api/namespaces';
 
 export function SearchConfigPanel() {
   const searchConfig = useAppStore((s) => s.searchConfig);
   const setSearchConfig = useAppStore((s) => s.setSearchConfig);
+  const namespace = useAppStore((s) => s.namespace);
+  const category = useAppStore((s) => s.category);
+  const setCategory = useAppStore((s) => s.setCategory);
+
+  const { data: categories = [] } = useQuery({
+    queryKey: ['categories', namespace],
+    queryFn: () => getCategories(namespace),
+    enabled: !!namespace,
+    staleTime: 0,
+  });
 
   return (
     <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 space-y-4">
@@ -76,6 +88,23 @@ export function SearchConfigPanel() {
           <span>10</span>
         </div>
       </div>
+
+      {/* Category filter */}
+      {categories.length > 0 && (
+        <div>
+          <label className="text-xs text-slate-400 block mb-1.5">업무구분 필터</label>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+          >
+            <option value="">전체</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.name}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
     </div>
   );
 }

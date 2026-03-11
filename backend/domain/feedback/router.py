@@ -8,23 +8,16 @@ from shared.embedding import embedding_service
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
-_UPDATE_QUERY_LOG_STATUS = """
-    UPDATE ops_query_log SET status = $3
-    WHERE namespace = $1 AND question = $2
-      AND id = (
-          SELECT id FROM ops_query_log
-          WHERE namespace = $1 AND question = $2
-          ORDER BY created_at DESC LIMIT 1
-      )
-"""
-
 
 @router.post("", status_code=201)
 async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current_user)):
     async with get_conn() as conn:
+        # namespace name → id 변환
+        ns_id = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", body.namespace)
+
         await conn.execute(
-            "INSERT INTO ops_feedback (knowledge_id, namespace, question, is_positive, message_id) VALUES ($1,$2,$3,$4,$5)",
-            body.knowledge_id, body.namespace, body.question, body.is_positive, body.message_id,
+            "INSERT INTO ops_feedback (knowledge_id, namespace_id, question, is_positive, message_id) VALUES ($1,$2,$3,$4,$5)",
+            body.knowledge_id, ns_id, body.question, body.is_positive, body.message_id,
         )
 
         if body.knowledge_id:
@@ -37,17 +30,29 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
             )
 
         new_status = "resolved" if body.is_positive else "unresolved"
-        await conn.execute(_UPDATE_QUERY_LOG_STATUS, body.namespace, body.question, new_status)
+        # namespace_id 기반으로 query_log 업데이트
+        await conn.execute(
+            """
+            UPDATE ops_query_log SET status = $3
+            WHERE namespace_id = $1 AND question = $2
+              AND id = (
+                  SELECT id FROM ops_query_log
+                  WHERE namespace_id = $1 AND question = $2
+                  ORDER BY created_at DESC LIMIT 1
+              )
+            """,
+            ns_id, body.question, new_status,
+        )
 
         if body.is_positive and body.answer:
             embedding = await embedding_service.embed(body.question)
             await conn.execute(
                 """
-                INSERT INTO ops_fewshot (namespace, question, answer, knowledge_id, embedding,
+                INSERT INTO ops_fewshot (namespace_id, question, answer, knowledge_id, embedding,
                                          created_by_part, created_by_user_id)
                 VALUES ($1, $2, $3, $4, $5::vector, $6, $7)
                 """,
-                body.namespace, body.question, body.answer, body.knowledge_id,
+                ns_id, body.question, body.answer, body.knowledge_id,
                 str(embedding), user["part"], user["id"],
             )
 

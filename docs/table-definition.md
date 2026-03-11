@@ -1,10 +1,10 @@
 # Ops-Navigator 테이블 정의서
 
-> **Version**: 2.0
+> **Version**: 3.0
 > **DBMS**: PostgreSQL 16 + pgvector
 > **Extensions**: `vector`, `pg_trgm`
 > **벡터 차원**: 768 (paraphrase-multilingual-mpnet-base-v2)
-> **작성일**: 2026-03-08
+> **작성일**: 2026-03-11
 > **DDL 위치**: `init/01-init.sql`
 
 ---
@@ -17,14 +17,15 @@
 4. [ops_namespace](#4-ops_namespace)
 5. [ops_glossary](#5-ops_glossary)
 6. [ops_knowledge](#6-ops_knowledge)
-7. [ops_query_log](#7-ops_query_log)
-8. [ops_conversation](#8-ops_conversation)
-9. [ops_message](#9-ops_message)
-10. [ops_feedback](#10-ops_feedback)
-11. [ops_fewshot](#11-ops_fewshot)
-12. [ops_conv_summary](#12-ops_conv_summary)
-13. [트리거 및 함수](#13-트리거-및-함수)
-14. [마이그레이션](#14-마이그레이션)
+7. [ops_knowledge_category](#7-ops_knowledge_category)
+8. [ops_query_log](#8-ops_query_log)
+9. [ops_conversation](#9-ops_conversation)
+10. [ops_message](#10-ops_message)
+11. [ops_feedback](#11-ops_feedback)
+12. [ops_fewshot](#12-ops_fewshot)
+13. [ops_conv_summary](#13-ops_conv_summary)
+14. [트리거 및 함수](#14-트리거-및-함수)
+15. [마이그레이션](#15-마이그레이션)
 
 ---
 
@@ -33,35 +34,35 @@
 ```
 ops_part
     │
-    └─── ops_user                 (part FK → ops_part(name))
+    ├─── ops_user                     (part_id FK → ops_part.id ON DELETE SET NULL)
+    │        │
+    │        ├─── ops_conversation    (user_id FK CASCADE)
+    │        │        │
+    │        │        ├── ops_message ◄── ops_feedback (message_id FK)
+    │        │        │                       │
+    │        │        │                       └── ops_knowledge (knowledge_id FK)
+    │        │        │
+    │        │        └── ops_conv_summary
+    │        │
+    │        ├─── ops_knowledge       (created_by_user_id)
+    │        ├─── ops_glossary        (created_by_user_id)
+    │        └─── ops_fewshot         (created_by_user_id)
+    │
+    └─── ops_namespace                (owner_part_id FK → ops_part.id ON DELETE SET NULL)
              │
-             ├─── ops_conversation  (user_id FK CASCADE)
-             │        │
-             │        ├── ops_message ◄── ops_feedback (message_id FK)
-             │        │                       │
-             │        │                       └── ops_knowledge (knowledge_id FK)
-             │        │
-             │        └── ops_conv_summary
+             ├─── ops_glossary            (namespace_id FK CASCADE)
+             ├─── ops_knowledge ◄──┐      (namespace_id FK CASCADE)
+             │        │            │
+             │        └── ops_fewshot     (knowledge_id FK)
              │
-             ├─── ops_knowledge     (created_by_user_id)
-             ├─── ops_glossary      (created_by_user_id)
-             └─── ops_fewshot       (created_by_user_id)
-
-ops_namespace
-    │
-    ├─── ops_glossary          (namespace FK CASCADE)
-    ├─── ops_knowledge ◄──┐    (namespace FK CASCADE)
-    │        │            │
-    │        └── ops_fewshot    (knowledge_id FK)
-    │
-    ├─── ops_conversation      (namespace FK CASCADE)
-    │
-    ├─── ops_feedback          (namespace FK CASCADE)
-    └─── ops_query_log         (namespace FK CASCADE)
+             ├─── ops_knowledge_category  (namespace_id FK CASCADE)
+             ├─── ops_conversation        (namespace_id FK CASCADE)
+             ├─── ops_feedback            (namespace_id FK CASCADE)
+             └─── ops_query_log           (namespace_id FK CASCADE)
 ```
 
-**테이블 수**: 11개
-**FK 관계**: CASCADE 10건 (namespace 6건 + conversation 2건 + user 1건 + part 1건), SET NULL 3건
+**테이블 수**: 12개
+**FK 관계**: CASCADE 11건 (namespace_id 7건 + conversation 2건 + user 1건 + part 1건), SET NULL 3건
 
 ---
 
@@ -76,7 +77,7 @@ ops_namespace
 | 3 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
 
 **인덱스**: PK(id), UNIQUE(name)
-**참조됨**: `ops_user.part`가 `name`을 FK 참조
+**참조됨**: `ops_user.part_id`와 `ops_namespace.owner_part_id`가 `id`를 integer FK로 참조
 
 ---
 
@@ -90,7 +91,7 @@ ops_namespace
 | 2 | `username` | VARCHAR(100) | NO | - | UNIQUE | 로그인 ID |
 | 3 | `hashed_password` | TEXT | NO | - | - | bcrypt 해시 비밀번호 |
 | 4 | `role` | VARCHAR(20) | YES | `'user'` | - | 역할 (`admin` \| `user`) |
-| 5 | `part` | VARCHAR(100) | YES | NULL | FK → ops_part(name) | 소속 파트 |
+| 5 | `part_id` | INT | YES | NULL | FK → ops_part(id) ON DELETE SET NULL | 소속 파트 ID |
 | 6 | `is_active` | BOOLEAN | YES | `TRUE` | - | 계정 활성 여부 |
 | 7 | `encrypted_llm_api_key` | TEXT | YES | NULL | - | 사용자별 LLM API 키 (암호화) |
 | 8 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
@@ -115,13 +116,13 @@ ops_namespace
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
 | 2 | `name` | VARCHAR(100) | NO | - | UNIQUE | 네임스페이스 이름 |
 | 3 | `description` | TEXT | NO | `''` | - | 설명 |
-| 4 | `owner_part` | VARCHAR(100) | YES | NULL | - | 소유 파트 (생성자의 파트, 권한 제어 기준) |
+| 4 | `owner_part_id` | INT | YES | NULL | FK → ops_part(id) ON DELETE SET NULL | 소유 파트 ID (생성자의 파트, 권한 제어 기준) |
 | 5 | `created_by_user_id` | INT | YES | NULL | - | 생성자 사용자 ID |
 | 6 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
 
 **인덱스**: PK(id)
-**참조됨**: 6개 테이블의 `namespace` 컬럼이 `name`을 FK 참조 (ON DELETE CASCADE)
-**권한 모델**: `owner_part` 기반 파트별 CRUD 제어. 상세 규칙은 `api-specification.md § 3. 인증 및 권한` 참조.
+**참조됨**: 7개 테이블의 `namespace_id` 컬럼이 `id`를 integer FK로 참조 (ON DELETE CASCADE)
+**권한 모델**: `owner_part_id` 기반 파트별 CRUD 제어. 상세 규칙은 `api-specification.md § 3. 인증 및 권한` 참조.
 
 ---
 
@@ -132,7 +133,7 @@ ops_namespace
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | NO | - | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
+| 2 | `namespace_id` | INT | NO | - | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 ID |
 | 3 | `term` | VARCHAR(200) | NO | - | - | 표준 용어 |
 | 4 | `description` | TEXT | NO | - | - | 용어 설명 |
 | 5 | `embedding` | VECTOR(768) | YES | NULL | - | description 임베딩 벡터 |
@@ -143,7 +144,7 @@ ops_namespace
 
 | 인덱스명 | 컬럼 | 타입 | 설명 |
 |---------|------|------|------|
-| `idx_glossary_ns` | namespace | B-Tree | 네임스페이스 필터 |
+| `idx_glossary_ns` | namespace_id | B-Tree | 네임스페이스 필터 |
 | `idx_glossary_emb` | embedding | HNSW (vector_cosine_ops) | 벡터 유사도 검색 |
 
 ---
@@ -155,23 +156,24 @@ ops_namespace
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | NO | - | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
+| 2 | `namespace_id` | INT | NO | - | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 ID |
 | 3 | `container_name` | VARCHAR(200) | YES | NULL | - | 관련 컨테이너/서비스명 |
 | 4 | `target_tables` | TEXT[] | YES | NULL | - | 관련 DB 테이블 목록 |
 | 5 | `content` | TEXT | NO | - | - | 지식 본문 (검색 대상) |
 | 6 | `query_template` | TEXT | YES | NULL | - | SQL 쿼리 템플릿 |
 | 7 | `embedding` | VECTOR(768) | YES | NULL | - | content 임베딩 벡터 |
 | 8 | `base_weight` | FLOAT | NO | `1.0` | - | 검색 점수 가중치 |
-| 9 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
-| 10 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 수정일시 (트리거 자동갱신) |
-| 11 | `created_by_part` | VARCHAR(100) | YES | NULL | - | 최종 수정자의 소속 파트 (수정 시 갱신) |
-| 12 | `created_by_user_id` | INT | YES | NULL | - | 최종 수정자 ID (수정 시 갱신) |
+| 9 | `category` | VARCHAR(100) | YES | NULL | - | 지식 카테고리 (ops_knowledge_category 연동) |
+| 10 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
+| 11 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 수정일시 (트리거 자동갱신) |
+| 12 | `created_by_part` | VARCHAR(100) | YES | NULL | - | 최종 수정자의 소속 파트 (수정 시 갱신) |
+| 13 | `created_by_user_id` | INT | YES | NULL | - | 최종 수정자 ID (수정 시 갱신) |
 
 **인덱스**:
 
 | 인덱스명 | 컬럼 | 타입 | 설명 |
 |---------|------|------|------|
-| `idx_knowledge_ns` | namespace | B-Tree | 네임스페이스 필터 |
+| `idx_knowledge_ns` | namespace_id | B-Tree | 네임스페이스 필터 |
 | `idx_knowledge_emb` | embedding | HNSW (vector_cosine_ops) | 벡터 유사도 검색 |
 | `idx_knowledge_fts` | to_tsvector('simple', content) | GIN | 전문 검색 (Full-Text Search) |
 
@@ -184,14 +186,35 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 ---
 
-## 7. ops_query_log
+## 7. ops_knowledge_category
+
+**목적**: 네임스페이스별 지식 카테고리를 관리한다. `ops_knowledge.category` 컬럼의 유효값 목록으로 활용된다.
+
+| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
+|---|--------|-----------|------|--------|---------|------|
+| 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
+| 2 | `namespace_id` | INT | NO | - | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 ID |
+| 3 | `name` | VARCHAR(100) | NO | - | UNIQUE(namespace_id, name) | 카테고리 이름 |
+| 4 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
+
+**인덱스**:
+
+| 인덱스명 | 컬럼 | 타입 | 설명 |
+|---------|------|------|------|
+| `idx_knowledge_cat_ns` | namespace_id | B-Tree | 네임스페이스 필터 |
+
+**제약조건**: `UNIQUE(namespace_id, name)` — 같은 네임스페이스 내 카테고리명 중복 불가
+
+---
+
+## 8. ops_query_log
 
 **목적**: 사용자 질의를 기록하고, 해결 상태를 추적한다. 통계 대시보드와 미해결 케이스 관리에 활용된다.
 
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | YES | NULL | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
+| 2 | `namespace_id` | INT | YES | NULL | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 ID |
 | 3 | `question` | TEXT | YES | NULL | - | 사용자 질문 |
 | 4 | `answer` | TEXT | YES | NULL | - | LLM 답변 (마이그레이션 추가) |
 | 5 | `status` | VARCHAR(20) | NO | `'pending'` | - | 처리 상태 |
@@ -203,7 +226,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 | 인덱스명 | 컬럼 | 타입 | 설명 |
 |---------|------|------|------|
-| `idx_query_log_ns` | namespace | B-Tree | 네임스페이스 필터 |
+| `idx_query_log_ns` | namespace_id | B-Tree | 네임스페이스 필터 |
 | `idx_query_log_created` | created_at | B-Tree | 시간순 정렬 |
 
 **status 상태값**:
@@ -216,29 +239,30 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 ---
 
-## 8. ops_conversation
+## 9. ops_conversation
 
 **목적**: 대화 스레드를 관리한다. 메시지와 요약의 상위 컨테이너 역할을 한다.
 
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | NO | - | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
+| 2 | `namespace_id` | INT | NO | - | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 ID |
 | 3 | `title` | VARCHAR(200) | NO | `''` | - | 대화 제목 |
-| 4 | `trimmed` | BOOLEAN | NO | `FALSE` | - | 메모리 요약 수행 여부 (마이그레이션 추가) |
+| 4 | `trimmed` | BOOLEAN | NO | `FALSE` | - | 메모리 요약 수행 여부 |
 | 5 | `user_id` | INT | YES | NULL | FK → ops_user(id) ON DELETE CASCADE | 대화 소유 사용자 |
-| 6 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
+| 6 | `inhouse_conv_id` | VARCHAR(200) | YES | NULL | - | 사내 LLM 대화 연결 ID |
+| 7 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
 
 **인덱스**:
 
 | 인덱스명 | 컬럼 | 타입 | 설명 |
 |---------|------|------|------|
-| `idx_conversation_ns` | namespace | B-Tree | 네임스페이스 필터 |
+| `idx_conversation_ns` | namespace_id | B-Tree | 네임스페이스 필터 |
 | `idx_conversation_user` | user_id | B-Tree | 사용자별 대화 조회 |
 
 ---
 
-## 9. ops_message
+## 10. ops_message
 
 **목적**: 대화 내 개별 메시지를 저장한다. 사용자 질문과 어시스턴트 답변을 쌍으로 관리한다.
 
@@ -270,7 +294,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 ---
 
-## 10. ops_feedback
+## 11. ops_feedback
 
 **목적**: 답변 품질에 대한 사용자 피드백(좋아요/싫어요)을 기록한다. 지식 가중치 자동 조정과 통계에 활용된다.
 
@@ -279,7 +303,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
 | 2 | `knowledge_id` | INT | YES | NULL | FK → ops_knowledge(id) SET NULL | 관련 지식 ID |
 | 3 | `message_id` | INT | YES | NULL | FK → ops_message(id) SET NULL (마이그레이션 추가) | 관련 메시지 ID |
-| 4 | `namespace` | VARCHAR(100) | YES | NULL | FK → ops_namespace(name) CASCADE | 네임스페이스 |
+| 4 | `namespace_id` | INT | YES | NULL | FK → ops_namespace(id) ON DELETE CASCADE | 네임스페이스 ID |
 | 5 | `question` | TEXT | YES | NULL | - | 원본 질문 |
 | 6 | `is_positive` | BOOLEAN | NO | - | - | 긍정 여부 |
 | 7 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
@@ -288,14 +312,14 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 ---
 
-## 11. ops_fewshot
+## 12. ops_fewshot
 
 **목적**: LLM 프롬프트에 포함할 질문-답변 예제 쌍을 저장한다. 질문 벡터로 유사한 예제를 검색하여 few-shot prompting에 활용한다.
 
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace` | VARCHAR(100) | NO | - | FK → ops_namespace(name) CASCADE | 소속 네임스페이스 |
+| 2 | `namespace_id` | INT | NO | - | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 ID |
 | 3 | `question` | TEXT | NO | - | - | 예제 질문 (임베딩 대상) |
 | 4 | `answer` | TEXT | NO | - | - | 예제 답변 |
 | 5 | `knowledge_id` | INT | YES | NULL | FK → ops_knowledge(id) SET NULL | 연결된 지식 ID |
@@ -308,14 +332,14 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 | 인덱스명 | 컬럼 | 타입 | 설명 |
 |---------|------|------|------|
-| `idx_fewshot_ns` | namespace | B-Tree | 네임스페이스 필터 |
+| `idx_fewshot_ns` | namespace_id | B-Tree | 네임스페이스 필터 |
 | `idx_fewshot_emb` | embedding | HNSW (vector_cosine_ops) | 벡터 유사도 검색 |
 
 **FK 동작**: 지식 삭제 시 `knowledge_id` NULL 처리 (SET NULL)
 
 ---
 
-## 12. ops_conv_summary
+## 13. ops_conv_summary
 
 **목적**: 대화 메모리 시스템(ConversationSummaryBuffer)의 요약을 저장한다. 새 질문에 대해 과거 대화 맥락을 시맨틱 리콜하는 데 사용된다.
 
@@ -349,7 +373,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 ---
 
-## 13. 트리거 및 함수
+## 14. 트리거 및 함수
 
 ### update_updated_at()
 
@@ -372,7 +396,7 @@ CREATE TRIGGER trg_knowledge_updated_at
 
 ---
 
-## 14. 마이그레이션
+## 15. 마이그레이션
 
 애플리케이션 시작 시 `backend/main.py`의 `_run_migrations()`에서 자동 실행된다. 모든 마이그레이션은 멱등(idempotent)하다.
 
@@ -390,6 +414,10 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 10 | `ops_glossary` | `ADD COLUMN created_by_part VARCHAR(100), ADD COLUMN created_by_user_id INT` | 용어 생성자 추적 |
 | 11 | `ops_fewshot` | `ADD COLUMN created_by_part VARCHAR(100), ADD COLUMN created_by_user_id INT` | few-shot 생성자 추적 |
 | 12 | `ops_namespace` | `ADD COLUMN owner_part VARCHAR(100), ADD COLUMN created_by_user_id INT` | 네임스페이스 소유 파트 기반 권한 제어 |
+| 13 | 전체 테이블 | integer FK 전환 (`init/02-migrate-fk.sql`) | `namespace VARCHAR` → `namespace_id INT FK`, `owner_part VARCHAR` → `owner_part_id INT FK`, `part VARCHAR` → `part_id INT FK`. 기존 데이터를 보존하며 integer FK로 전환 |
+| 14 | `ops_knowledge` | `ADD COLUMN category VARCHAR(100)` | 지식 카테고리 컬럼 추가 (nullable) |
+| 15 | - | `CREATE TABLE ops_knowledge_category` | 네임스페이스별 카테고리 목록 관리 테이블 생성 |
+| 16 | `ops_conversation` | `ADD COLUMN inhouse_conv_id VARCHAR(200)` | 사내 LLM 대화 ID 연결 컬럼 추가 |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
@@ -449,7 +477,7 @@ VALUES ('쿠폰 회수 처리...', '[0.12, -0.34, 0.87, ...]'::vector);
 SELECT id, content,
        1 - (embedding <=> $query_vec) AS similarity
 FROM ops_knowledge
-WHERE namespace = 'coupon'
+WHERE namespace_id = $namespace_id
 ORDER BY embedding <=> $query_vec
 LIMIT 5;
 ```

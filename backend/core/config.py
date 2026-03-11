@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     ollama_timeout: int = 900
     inhouse_llm_model: str = ""
     inhouse_llm_agent_code: str = "playground"
+    inhouse_llm_usecase_id: str = "b6958377-73f2-4234-a49c-2aa878350a2e"
+    inhouse_llm_project_id: str = "eb01fb40-909b-4a0a-b86e-824c6a3bea2e"
     inhouse_llm_response_mode: str = "streaming"
     inhouse_llm_timeout: int = 120
 

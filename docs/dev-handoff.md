@@ -32,10 +32,10 @@ docker compose up --build -d
 
 ## 현재 작업 상태
 
-> **마지막 업데이트**: 2026-03-09
+> **마지막 업데이트**: 2026-03-11
 > **작업 PC**: PC-B (Windows 11)
 > **브랜치**: main
-> **최근 변경**: 백엔드 리팩토링 + 검색 설정 UI 개선 + 아이콘 교체
+> **최근 변경**: 라이트/다크 dual-mode 색상 개선 / 통계 수정 후 등록 모달화 / namespace 자동선택 개선 / Admin→Chat 대화목록 즉시 갱신
 
 ### 완료된 작업
 
@@ -129,6 +129,55 @@ docker compose up --build -d
   - cleanup 쿼리 통합 (DELETE + affected ID를 CTE 한 쿼리로)
   - 회원가입 검증 통합 (파트 존재 + 사용자 중복을 단일 쿼리로)
 - [x] **앱 아이콘 교체** — 빨간 7잎 꽃 SVG (favicon + 사이드바 로고)
+- [x] **공통 namespace 권한 (v2.1)**
+  - admin이 생성한 namespace → `owner_part = NULL` → 모든 사용자 CRUD 가능
+  - `check_namespace_ownership`: `owner_part IS NULL`이면 전체 허용
+  - DB: 기존 admin 생성 namespace `owner_part` → NULL 업데이트
+- [x] **슈퍼어드민 파트 분리**
+  - `ops_part`에서 '기본' → '슈퍼어드민'으로 rename (INSERT+cascade UPDATE+DELETE)
+  - `main.py` 시드: '기본' 제거, '슈퍼어드민' 삽입 + '기본' 잔존 시 자동 마이그레이션
+  - `GET /auth/parts`: `exclude_admin_parts=True` — admin 소속 파트 제외 (회원가입 노출 차단)
+  - `GET /auth/parts/all`: admin 전용, 전체 파트 반환 (관리자 UI용)
+  - `getAllParts()` API 함수 추가, `UserManager`에서 사용
+  - `queryKey: ['parts-all']` — mutation invalidation 키 통일
+- [x] **파트 이름 변경 (인라인 편집)**
+  - `PATCH /api/auth/parts/{id}` 엔드포인트 추가
+  - `rename_part()` 서비스: ops_user.part + ops_namespace.owner_part cascade 업데이트
+  - `UserManager > PartSection`: 파트 chip 클릭 → 인라인 input 편집, Enter/✓ 저장, Esc 취소
+- [x] **Namespace 이름 변경 (인라인 편집)**
+  - `PATCH /api/namespaces/{name}` 엔드포인트 추가
+  - `rename_namespace()` 서비스: 6개 관련 테이블 cascade 업데이트
+  - `NamespaceManager`: 이름 hover 시 연필 아이콘, 클릭 → 인라인 편집
+- [x] **LLM 설정 일반 사용자 개방**
+  - `PUT /api/llm/config`: `get_current_admin` → `get_current_user`
+- [x] **TagInput UI (지식 베이스 컨테이너명·관련 테이블)**
+  - `KnowledgeTable`: 컨테이너명/관련 테이블 입력을 chip 형태 TagInput으로 개선
+  - Enter/쉼표로 태그 추가, Backspace로 마지막 삭제, X로 개별 삭제
+- [x] **내 파트 최우선 정렬**
+  - `sortNamespacesByUserPart()` 유틸 추가 (`src/utils/sortNamespaces.ts`)
+  - KnowledgeTable / GlossaryTable / FewshotTable / StatsPanel / Sidebar 전체 적용
+- [x] **파트 생성 캐시 즉시 반영**
+  - `NamespaceManager.createMutation.onSuccess`: `setQueryData(['namespaces'])` 옵티미스틱 업데이트
+- [x] **UI 레이블 통일**
+  - admin 역할 → '슈퍼어드민' 표시 (UserManager, Sidebar)
+  - 탭 이름 '파트 관리' → '파트 DB 관리'
+- [x] **문서 현행화** (architecture.md, user-manual.md, dev-handoff.md)
+- [x] **라이트모드 UI 색상 대비 개선**
+  - `tailwind.config.js`: `darkMode: ['selector', '[data-theme="dark"]']` 추가 — `dark:` prefix 클래스 실제 동작
+  - `Badge.tsx`: 모든 색상에 라이트/다크 dual-mode 색상 적용. `slate` → `zinc` 고정색으로 교체 (CSS 변수 역전 방지)
+  - `KnowledgeTable.tsx`: `weightClass` 기본값 `bg-slate-200` → `bg-zinc-100 text-zinc-600 dark:...`, 리스트 뷰 인라인 배지도 dual 색상
+  - `TagInput.tsx` (신규 `src/components/ui/TagInput.tsx`): chip 색상 라이트/다크 dual 적용, `color: 'cyan' | 'indigo'` prop
+  - 근본 원인: `index.css`에서 `[data-theme="light"]` 시 `--slate-200: 30 41 59` (다크 네이비)로 역전 → zinc로 회피
+- [x] **통계 > 수정 후 등록 모달화**
+  - `StatsPanel.tsx`: `KnowledgeRegisterModal` 컴포넌트 추가 — AI 답변 미리채움, TagInput(컨테이너명/테이블), 우선순위 슬라이더, 업무구분
+  - `QueryLogModal` 인라인 폼 전체 제거 → "수정 후 등록" 버튼이 `KnowledgeRegisterModal` 트리거
+  - KnowledgeTable의 인라인 TagInput → 공통 `TagInput` 컴포넌트로 교체
+- [x] **Namespace 자동 선택 개선**
+  - `lastHandledUserPartRef`로 파트당 1회만 자동 전환 (이후 수동 선택 보존)
+  - localStorage 이전 세션 값이 남아있어도 내 파트 소유 namespace로 올바르게 교체
+- [x] **Admin→Chat 전환 시 대화목록 즉시 갱신**
+  - `Sidebar.tsx`: `chatRefreshKey` 구독 추가 — `bumpChatRefresh()` 신호로 대화목록 강제 re-fetch
+  - 기존 `isChatPage` 변경 트리거 외에 추가 보험
 
 ### 진행 중 / 미완료 작업
 
@@ -153,7 +202,7 @@ docker compose up --build -d
 
 | # | 증상 | 원인 / 상태 | 우선도 |
 |---|------|------------|--------|
-| - | (현재 알려진 이슈 없음) | - | - |
+| 1 | 라이트모드에서 `bg-slate-N` 클래스가 다크 네이비로 렌더링 | `index.css`의 `[data-theme="light"]` 블록에서 slate 팔레트 값이 역전됨. zinc 고정색으로 우회 | 낮음 (해결됨) |
 
 ---
 
