@@ -17,19 +17,21 @@ docker compose up --build -d
 
 ## 현재 작업 상태
 
-> **마지막 업데이트**: 2026-03-11
-> **브랜치**: main
-> **최근 변경**: 백엔드 클린 코드 리팩토링 (critical 버그 수정 + NS 헬퍼 통합 + DB 인덱스) + 디버그 패널 색상 수정
+> **마지막 업데이트**: 2026-03-13
+> **브랜치**: dev_0
+> **최근 변경**: HTTP 도구 에이전트 안정화 + ToolRequestCard UX 개선
 
 ### 진행 중 / 미완료
 
-- [ ] (없음 — 현재 안정 상태)
+- [ ] **ToolRequestCard 레이아웃 확인**: 세로 레이아웃으로 수정 후 배포 완료 — Ctrl+F5 후 동작 확인 필요
+- [ ] **400 에러 원인 확인**: 유저가 400 에러 보고했으나 백엔드 로그는 모두 200 OK. 브라우저 Network 탭에서 재현 확인 필요
+- [ ] **HTTP 도구 E2E 테스트**: 도구 선택 → 파라미터 입력/승인 → HTTP 호출 → LLM 답변 전체 플로우 검증
 
 ### 백로그
 
+- [ ] **HttpToolManager 캐시 문제**: useState+fetch 패턴이라 백엔드 변경 즉시 반영 안 됨. react-query 전환 고려
 - [ ] **Step 2: 디렉토리 재편 + 프론트엔드** (두 번째 에이전트 추가 시): `domain/` → `platform/` + `agents/`, DB prefix rename, 에이전트 선택 UI → [platform-expansion-strategy.md](platform-expansion-strategy.md) Step 2 참조
 - [ ] **플랫폼 어드민 확장**: 에이전트 디렉토리 UI, 파트-에이전트 접근 제어, 통합 대시보드 agent_type 필터 → [platform-expansion-strategy.md](platform-expansion-strategy.md) §9 참조
-- [ ] **프롬프트 템플릿 동적 관리**: 코드 하드코딩 → DB 저장·편집 (Admin UI), 플랫폼 공통 + 에이전트별 분리
 - [ ] Docker 이미지 레지스트리 push
 - [ ] 사용자별 검색 설정 저장 (현재 세션 단위)
 - [ ] 테스트 코드 (pytest) — conftest에 인증 fixture 필요, 현재 TC 01~06은 인증 미포함 상태
@@ -46,6 +48,9 @@ docker compose up --build -d
 | 항목 | 내용 |
 |------|------|
 | **AgentRegistry 패턴** | `chat_stream` → `AgentRegistry.get("knowledge_rag").stream_chat()` 위임. 새 에이전트 추가 시 `agents/` 하위 모듈 + Registry 등록만으로 완결 |
+| **HTTP 도구 에이전트 플로우** | Case 1(첫 진입): tool_fetch → tool_select(LLM) → tool_params → `tool_request` SSE 이벤트 → 프론트 ToolRequestCard 표시 → 사용자 승인/거절. Case 2(승인 후): tool_load → http_call → llm_answer → done. `tool_request` 이벤트로 스트림 일시 중단, 프론트에서 재요청 시 `approved_tool` 포함 |
+| **SSE tool_request 상태 유지** | 스트림 종료 시 `toolRequest`가 대기 중이면 `clearStreamState()` 호출 안 함. DB에는 `[추가 정보 입력 대기 중]` 등 placeholder 저장 → `convertMessages`에서 필터링 |
+| **프롬프트 관리** | `ops_prompt` 테이블 (key, content, description). `domain/prompt/loader.py`의 `get_prompt(key, fallback)` → DB 우선, 없으면 fallback. Admin UI에서 편집 가능 |
 | **공유 헬퍼** | `domain/chat/helpers.py` — 에이전트·라우터 양쪽에서 사용하는 DB 헬퍼 (메시지 업데이트, 쿼리로그, 클린업 등) |
 | **resolve_namespace_id** | `core/database.py` — NS name→id 변환 공통 헬퍼. 모든 도메인에서 이 함수 사용 (인라인 쿼리 금지) |
 | **agent_type 컬럼** | `ops_conversation`, `ops_query_log`, `ops_feedback`에 `agent_type VARCHAR(50) DEFAULT 'knowledge_rag'` + `ops_feedback.meta JSONB` |
@@ -62,6 +67,8 @@ docker compose up --build -d
 
 ## 완료 이력 (최근순)
 
+- **HTTP 도구 에이전트 안정화** (2026-03-13): ToolRequestCard SSE tool_request 이벤트 정상 처리 (clearStreamState 방지), DB placeholder 메시지 필터링, no_tool_needed 폴백 UX, asyncpg JSONB 문자열 파싱, SSE 401 토큰 리프레시, router finally 안전장치, 프롬프트 관리 시스템 (`backend/domain/prompt/`), LLM system_prompt 지원
+- **HTTP 도구 시스템 MVP** (2026-03-12): `agents/http_tool/agent.py` HTTP Tool 에이전트, `ops_http_tool` 테이블, HttpToolManager 관리 UI, DebugPanel HTTP 도구 통합, ToolRequestCard 승인/거절 UI
 - **백엔드 클린 코드 리팩토링**: `inhouse.py` critical 버그 수정 (`_extract_ext_conversation_id` 미정의 → `_extract_session`), `resolve_namespace_id` 공통 헬퍼 통합 (중복 11곳 제거), 응답 형식 통일 (`ok`→`status`), 중복 except 정리, DB 인덱스 6개 추가
 - **디버그 패널 용어 매핑 색상 수정**: `bg-slate-100` → `bg-zinc-100` (라이트모드 slate 역전 이슈)
 - **AgentBase/AgentRegistry 도입**: `agents/base.py` 추상 클래스 + 레지스트리 싱글턴, `agents/knowledge_rag/agent.py` RAG 에이전트 구현, `domain/chat/helpers.py` 공유 헬퍼 추출, `chat_stream` 에이전트 위임, `agent_type` DB 컬럼 추가
