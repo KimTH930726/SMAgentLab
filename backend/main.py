@@ -18,6 +18,7 @@ from domain.fewshot.router import router as fewshot_router
 from domain.feedback.router import router as feedback_router
 from domain.admin.router import router as admin_router
 from domain.http_tool.router import router as http_tool_router
+from domain.prompt.router import router as prompt_router
 
 from agents.base import AgentRegistry
 from agents.knowledge_rag.agent import KnowledgeRagAgent
@@ -29,6 +30,7 @@ _ROUTERS = [
     auth_router, chat_router, knowledge_router,
     fewshot_router, feedback_router, admin_router,
     http_tool_router,
+    prompt_router,
 ]
 
 
@@ -327,6 +329,56 @@ async def _run_migrations() -> None:
             )
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_http_tool_ns_active ON ops_http_tool (namespace_id, is_active)")
+
+        # ── 프롬프트 관리 테이블 ──────────────────────────────────────────
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS ops_prompt (
+                id              SERIAL PRIMARY KEY,
+                func_key        VARCHAR(100) NOT NULL UNIQUE,
+                func_name       VARCHAR(200) NOT NULL,
+                content         TEXT NOT NULL DEFAULT '',
+                description     TEXT NOT NULL DEFAULT '',
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        # 기본 프롬프트 시드 데이터
+        await conn.execute("""
+            INSERT INTO ops_prompt (func_key, func_name, content, description) VALUES
+            ('chat_system', 'RAG 채팅 시스템', $1, 'RAG 기반 지식 검색 채팅의 시스템 프롬프트'),
+            ('tool_select', 'HTTP 도구 선택', $2, 'HTTP 도구를 선택하고 파라미터를 추출하는 프롬프트'),
+            ('tool_answer', 'HTTP 응답 답변', $3, 'HTTP API 응답 데이터 기반으로 답변을 생성하는 프롬프트'),
+            ('autocomplete', '도구 등록 자동완성', $4, 'HTTP 도구 등록 시 자연어→JSON 변환 프롬프트')
+            ON CONFLICT (func_key) DO NOTHING
+        """,
+            # chat_system
+            """IT 운영 보조 에이전트. 아래 규칙을 따르세요.
+
+[원칙]
+- 반드시 제공된 [참고 문서]만 근거로 답변. 문서에 없는 내용은 절대 만들어내지 마세요.
+- 관련 문서가 없으면 "관련 지식을 찾지 못했습니다"로 답변.
+- 신뢰도 높음 문서를 우선 근거로 사용. 낮음은 보조 참고만.
+
+[문맥 활용]
+- [과거 유사 사례]가 있으면 답변 형식을 참고하되 현재 문서 내용 우선.
+- 이전 대화가 있으면 맥락을 이어서 답변.
+
+[형식]
+- Markdown(표, 목록, 코드 블록, 볼드) 사용. 한국어 답변.
+- 컨테이너명, 테이블명, SQL이 있으면 반드시 포함.
+- 답변 끝에 근거 표시: 📎 문서 N, 문서 M 참고""",
+            # tool_select
+            """도구 선택 AI. 사용자 질문을 분석하여 적절한 HTTP 도구를 선택하고 파라미터를 추출한다.
+반드시 JSON만 출력. 설명이나 마크다운 없이 순수 JSON만 반환.""",
+            # tool_answer
+            """외부 API 응답 데이터를 분석하여 사용자 질문에 답변하는 AI.
+- 데이터를 근거로 정확하게 답변. 데이터에 없는 내용은 만들지 마세요.
+- 데이터가 비어있거나 오류면 그 사실을 알려주세요.
+- Markdown 형식, 한국어 답변.""",
+            # autocomplete
+            """당신은 JSON 변환 전문가입니다. 사용자가 자연어로 설명하는 HTTP API 정보를 구조화된 JSON으로 변환합니다.
+반드시 JSON만 출력하세요. 설명, 인사말, 마크다운 코드 블록 없이 순수 JSON만 반환합니다.""",
+        )
 
 
 @asynccontextmanager

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Square, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Send, Square, AlertCircle, ChevronDown, ChevronUp, Globe } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import {
   useStreamStore,
@@ -54,6 +54,13 @@ function PipelineStepsToggle({ steps }: { steps: PipelineStep[] }) {
   );
 }
 
+// 백엔드에서 도구 대기 상태로 저장한 placeholder 메시지 패턴
+const _TOOL_PENDING_PATTERNS = [
+  '[추가 정보 입력 대기 중]',
+  '[도구 선택 대기 중]',
+  '[도구 실행 승인 대기 중]',
+];
+
 function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean }[]): ChatMessage[] {
   // Fix out-of-order pairs from old data (parallel saves could put assistant before user)
   // Check pairs at step=2: (0,1), (2,3), ... and swap reversed pairs
@@ -77,6 +84,10 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
       if (!m.content || m.content.trim().length <= 1) {
         if (!isGenerating) continue;
       }
+      // 도구 대기 placeholder 메시지는 스킵 (ToolRequestCard가 대신 표시)
+      const isToolPending = _TOOL_PENDING_PATTERNS.includes(m.content?.trim());
+      if (isToolPending) continue;
+
       converted.push({
         role: 'assistant',
         content: isGenerating && (!m.content || m.content.trim().length <= 1)
@@ -107,6 +118,7 @@ export function ChatContainer() {
   const [historyMessages, setHistoryMessages] = useState<ChatMessage[]>([]);
   const historyConvIdRef = useRef<number | null>(null);
   const [input, setInput] = useState('');
+  const [useHttpTool, setUseHttpTool] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
@@ -198,6 +210,15 @@ export function ChatContainer() {
       .catch(console.error);
   }, []);
 
+  // Clear stale stream state on mount (e.g. after page refresh)
+  useEffect(() => {
+    const state = useStreamStore.getState();
+    if (state.active && state.messages.length > 0) {
+      // Stream was active before page refresh — force clear
+      clearStreamState();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load conversation history when conversationId changes
   useEffect(() => {
     loadEpochRef.current++;
@@ -275,6 +296,9 @@ export function ChatContainer() {
     // Only act on natural stream completion (active→false with convId still set).
     // If clearStreamState was called first, convId is already null → skip.
     if (wasActive && !streamActive && streamConvId !== null) {
+      // Tool request pending — keep stream state so ToolRequestCard stays visible
+      if (useStreamStore.getState().toolRequest) return;
+
       const finishedConvId = streamConvId;
       const currentConvId = useAppStore.getState().conversationId;
 
@@ -344,6 +368,7 @@ export function ChatContainer() {
       topK: searchConfig.topK,
       conversationId,
       category: resolvedCategory,
+      agentType: useHttpTool ? 'http_tool' : undefined,
       onConversationCreated: (id) => {
         // Guard: if stream was already stopped/cleared, don't navigate
         if (!useStreamStore.getState().active) return;
@@ -388,9 +413,13 @@ export function ChatContainer() {
           </div>
         )}
 
-        {displayMessages.map((msg, i) => (
-          <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace} />
-        ))}
+        {displayMessages.map((msg, i) => {
+          // Tool request 대기 중 빈 assistant 메시지 숨김
+          if (msg.role === 'assistant' && !msg.content && toolRequest && isStreamHere) return null;
+          return (
+            <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace} />
+          );
+        })}
 
         {/* Pipeline steps — inline below last message */}
         {isLoading && streamSteps.length > 0 && (
@@ -423,7 +452,27 @@ export function ChatContainer() {
               });
             }}
             onReject={() => {
-              useStreamStore.setState({ toolRequest: null, active: false });
+              clearStreamState();
+              if (conversationId) loadHistory(conversationId);
+            }}
+            onFallback={() => {
+              useStreamStore.setState({ toolRequest: null });
+              // 도구 없이 knowledge_rag로 재요청
+              loadEpochRef.current++;
+              startChatStream({
+                namespace: namespace!,
+                question: [...displayMessages].reverse().find((m) => m.role === 'user')?.content || '',
+                wVector: searchConfig.wVector,
+                wKeyword: searchConfig.wKeyword,
+                topK: searchConfig.topK,
+                conversationId,
+                category: category || null,
+                onConversationCreated: (id) => {
+                  if (!useStreamStore.getState().active) return;
+                  const currentConvId = useAppStore.getState().conversationId;
+                  if (currentConvId !== id) setConversationId(id);
+                },
+              });
             }}
           />
         )}
@@ -433,12 +482,27 @@ export function ChatContainer() {
 
       {/* Input area */}
       <div className="border-t border-slate-700 p-4 bg-slate-800">
+        {/* Options row */}
+        <div className="flex items-center gap-3 mb-2">
+          <button
+            onClick={() => setUseHttpTool((v) => !v)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+              useHttpTool
+                ? 'bg-emerald-900/50 text-emerald-400 border border-emerald-700/50'
+                : 'bg-slate-700/50 text-slate-500 border border-slate-600/50 hover:text-slate-400'
+            }`}
+            title="HTTP 도구를 사용하여 외부 API를 호출합니다"
+          >
+            <Globe className="w-3.5 h-3.5" />
+            HTTP 도구 {useHttpTool ? 'ON' : 'OFF'}
+          </button>
+        </div>
         <div className="flex gap-3 items-end">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="질문을 입력하세요... (Ctrl+Enter로 전송)"
+            placeholder={useHttpTool ? 'HTTP 도구를 활용한 질문을 입력하세요... (Ctrl+Enter로 전송)' : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
             rows={2}
             disabled={!namespace || isLoading}
             className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none disabled:opacity-50 text-sm"

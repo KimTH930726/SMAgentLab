@@ -32,8 +32,9 @@ class OllamaProvider(LLMProvider):
         *,
         api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
+        system_prompt: Optional[str] = None,
     ) -> tuple[str, Optional[str]]:
-        messages = build_messages(context, question, history)
+        messages = build_messages(context, question, history, system_prompt=system_prompt)
         async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:
             resp = await client.post(
                 f"{self._base_url}/api/chat",
@@ -51,8 +52,9 @@ class OllamaProvider(LLMProvider):
         api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
         on_ext_conversation_id: Optional[Callable[[str], None]] = None,
+        system_prompt: Optional[str] = None,
     ) -> AsyncIterator[str]:
-        messages = build_messages(context, question, history)
+        messages = build_messages(context, question, history, system_prompt=system_prompt)
         async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:
             async with client.stream(
                 "POST",

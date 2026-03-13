@@ -1,15 +1,20 @@
 """HTTP 도구 CRUD + LLM 자동완성 라우터."""
 import json
 import logging
+import time
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user, check_namespace_ownership
+from core.security import get_user_api_key
 from domain.http_tool.schemas import (
     HttpToolCreate, HttpToolUpdate, HttpToolOut, HttpToolToggle, AutoCompleteRequest,
+    HttpToolTestRequest,
 )
 from domain.llm.factory import get_llm_provider
+from domain.prompt.loader import get_prompt as load_prompt
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["http-tools"])
@@ -18,8 +23,15 @@ router = APIRouter(tags=["http-tools"])
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _row_to_out(row) -> dict:
-    """DB row → HttpToolOut 호환 dict."""
+    """DB row → HttpToolOut 호환 dict. JSONB 컬럼이 문자열로 올 수 있으므로 파싱."""
     d = dict(row)
+    for key in ("param_schema", "headers", "response_example"):
+        val = d.get(key)
+        if isinstance(val, str):
+            try:
+                d[key] = json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                pass
     d["param_schema"] = d.get("param_schema") or []
     d["headers"] = d.get("headers") or {}
     d["created_at"] = str(d["created_at"])
@@ -143,12 +155,91 @@ async def delete_http_tool(tool_id: int, user: dict = Depends(get_current_user))
         await conn.execute("DELETE FROM ops_http_tool WHERE id = $1", tool_id)
 
 
+# ── 테스트 호출 ──────────────────────────────────────────────────────────────
+
+@router.post("/api/http-tools/{tool_id}/test")
+async def test_http_tool(tool_id: int, body: HttpToolTestRequest, user: dict = Depends(get_current_user)):
+    """HTTP 도구를 실제로 호출하고 요청/응답 상세를 반환."""
+    async with get_conn() as conn:
+        row = await conn.fetchrow("SELECT * FROM ops_http_tool WHERE id = $1", tool_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="도구를 찾을 수 없습니다.")
+
+    tool = dict(row)
+    method = tool["method"].upper()
+    url = tool["url"]
+    headers = tool.get("headers") or {}
+    if isinstance(headers, str):
+        try:
+            headers = json.loads(headers)
+        except (json.JSONDecodeError, TypeError):
+            headers = {}
+    timeout = tool.get("timeout_sec", 10)
+    max_kb = tool.get("max_response_kb", 50)
+    params = body.params
+
+    # 요청 정보 기록
+    request_info = {
+        "method": method,
+        "url": url,
+        "headers": headers,
+        "params": params,
+    }
+
+    start = time.time()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            if method == "GET":
+                resp = await client.get(url, params=params, headers=headers)
+            else:
+                resp = await client.request(method, url, json=params, headers=headers)
+        elapsed_ms = round((time.time() - start) * 1000)
+
+        resp_body = resp.text
+        max_bytes = max_kb * 1024
+        truncated = False
+        if len(resp_body.encode("utf-8")) > max_bytes:
+            resp_body = resp_body.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+            truncated = True
+
+        return {
+            "status": "ok",
+            "request": request_info,
+            "response": {
+                "status_code": resp.status_code,
+                "headers": dict(resp.headers),
+                "body": resp_body,
+                "truncated": truncated,
+                "elapsed_ms": elapsed_ms,
+                "size_bytes": len(resp.content),
+            },
+        }
+    except httpx.TimeoutException:
+        elapsed_ms = round((time.time() - start) * 1000)
+        return {
+            "status": "error",
+            "request": request_info,
+            "error": f"타임아웃 ({timeout}초 초과)",
+            "elapsed_ms": elapsed_ms,
+        }
+    except Exception as e:
+        elapsed_ms = round((time.time() - start) * 1000)
+        return {
+            "status": "error",
+            "request": request_info,
+            "error": str(e),
+            "elapsed_ms": elapsed_ms,
+        }
+
+
 # ── LLM 자동완성 ─────────────────────────────────────────────────────────────
 
-_AUTOCOMPLETE_PROMPT = """\
-사용자가 HTTP API 도구를 등록하려고 합니다. 아래 자연어 설명을 읽고 구조화된 JSON으로 변환해주세요.
+_AUTOCOMPLETE_SYSTEM = """\
+당신은 JSON 변환 전문가입니다. 사용자가 자연어로 설명하는 HTTP API 정보를 구조화된 JSON으로 변환합니다.
+반드시 JSON만 출력하세요. 설명, 인사말, 마크다운 코드 블록 없이 순수 JSON만 반환합니다."""
 
-반드시 아래 JSON 형식만 출력하고, 다른 설명은 절대 하지 마세요:
+_AUTOCOMPLETE_PROMPT = """\
+아래 자연어 설명을 읽고 다음 JSON 형식으로 변환해주세요:
 {{
   "name": "도구 이름 (한글 가능, 간결하게)",
   "description": "이 도구가 하는 일 (1~2문장)",
@@ -168,16 +259,19 @@ _AUTOCOMPLETE_PROMPT = """\
 }}
 
 사용자 입력:
-{raw_text}
-
-JSON:"""
+{raw_text}"""
 
 
 @router.post("/api/http-tools/autocomplete")
 async def autocomplete_http_tool(body: AutoCompleteRequest, user: dict = Depends(get_current_user)):
     prompt = _AUTOCOMPLETE_PROMPT.format(raw_text=body.raw_text)
+    api_key = get_user_api_key(user)
+    autocomplete_sys = await load_prompt("autocomplete", _AUTOCOMPLETE_SYSTEM)
     try:
-        answer, _ = await get_llm_provider().generate(context="", question=prompt)
+        answer, _ = await get_llm_provider().generate(
+            context="", question=prompt, api_key=api_key,
+            system_prompt=autocomplete_sys,
+        )
         # JSON 블록 추출
         text = answer.strip()
         if "```" in text:

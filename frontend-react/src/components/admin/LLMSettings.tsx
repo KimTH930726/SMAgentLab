@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Cpu, CheckCircle2, XCircle, AlertTriangle, RefreshCw, Save, FlaskConical, SlidersHorizontal, KeyRound, ChevronDown } from 'lucide-react';
+import { Cpu, CheckCircle2, XCircle, AlertTriangle, RefreshCw, Save, FlaskConical, SlidersHorizontal, KeyRound, ChevronDown, MessageSquareText } from 'lucide-react';
 import { getLLMConfig, updateLLMConfig, testLLMConnection, getSearchThresholds, updateSearchThresholds, getSearchDefaults, updateSearchDefaults } from '../../api/llm';
 import type { LLMConfig, LLMConfigUpdate, SearchThresholds, SearchDefaults } from '../../api/llm';
 import { Button } from '../ui/Button';
+import { PromptManager } from './PromptManager';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
 
@@ -126,7 +127,7 @@ function CollapsibleSection({ title, defaultOpen = true, children }: { title: st
   );
 }
 
-type SubTab = 'provider' | 'thresholds';
+type SubTab = 'provider' | 'thresholds' | 'prompts';
 
 export function LLMSettings() {
   const [subTab, setSubTab] = useState<SubTab>('thresholds');
@@ -147,6 +148,17 @@ export function LLMSettings() {
           검색 설정
         </button>
         <button
+          onClick={() => setSubTab('prompts')}
+          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            subTab === 'prompts'
+              ? 'text-indigo-400 border-indigo-500'
+              : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600'
+          }`}
+        >
+          <MessageSquareText className="w-3.5 h-3.5" />
+          프롬프트 관리
+        </button>
+        <button
           onClick={() => setSubTab('provider')}
           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
             subTab === 'provider'
@@ -160,6 +172,7 @@ export function LLMSettings() {
       </div>
 
       {subTab === 'provider' && <ProviderSettings />}
+      {subTab === 'prompts' && <PromptManager />}
       {subTab === 'thresholds' && (
         <div className="space-y-4">
           <CollapsibleSection title="검색 기본값 설정" defaultOpen>

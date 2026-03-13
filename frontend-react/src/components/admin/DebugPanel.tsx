@@ -4,22 +4,24 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import {
-  Search, AlertCircle, Eye,
+  Search, AlertCircle, Eye, Globe,
   Layers, Database, BookOpen, Zap, MessageSquare, Brain, Target,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { debugSearch } from '../../api/chat';
 import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
+import { listHttpTools, testHttpTool } from '../../api/httpTools';
+import type { HttpToolTestResult } from '../../api/httpTools';
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { getSearchThresholds } from '../../api/llm';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { CodeBlock } from '../ui/CodeBlock';
 import { Badge } from '../ui/Badge';
-import type { DebugSearchResponse } from '../../types';
+import type { DebugSearchResponse, HttpTool } from '../../types';
 
-type TabId = 'namespaces' | 'knowledge' | 'glossary' | 'fewshots' | 'stats' | 'debug' | 'llm';
+type TabId = 'namespaces' | 'knowledge' | 'glossary' | 'fewshots' | 'http_tools' | 'stats' | 'debug' | 'llm';
 
 interface PipelineStep {
   id: string;
@@ -69,6 +71,14 @@ const PIPELINE_STEPS: PipelineStep[] = [
     activeIcon: <Zap className="w-7 h-7" />,
     color: 'text-amber-400',
     navigateTo: 'fewshots',
+  },
+  {
+    id: 'http_tool',
+    label: 'HTTP 도구',
+    icon: <Globe className="w-7 h-7" />,
+    activeIcon: <Globe className="w-7 h-7" />,
+    color: 'text-cyan-400',
+    navigateTo: 'http_tools',
   },
   {
     id: 'context',
@@ -261,6 +271,22 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
   const [selectedResult, setSelectedResult] = useState<DebugSearchResponse['results'][number] | null>(null);
   const [selectedFewshot, setSelectedFewshot] = useState<DebugSearchResponse['fewshots'][number] | null>(null);
 
+  // HTTP 도구
+  const [httpTools, setHttpTools] = useState<HttpTool[]>([]);
+  const [httpToolsLoading, setHttpToolsLoading] = useState(false);
+  const [useHttpToolDebug, setUseHttpToolDebug] = useState(false);
+  const [selectedHttpToolId, setSelectedHttpToolId] = useState<number | null>(null);
+
+  // HTTP 도구 실행 결과 (tool.id → result)
+  const [httpResults, setHttpResults] = useState<Record<number, HttpToolTestResult>>({});
+  const [httpRunning, setHttpRunning] = useState(false);
+
+  useEffect(() => {
+    if (!namespace) { setHttpTools([]); return; }
+    setHttpToolsLoading(true);
+    listHttpTools(namespace).then(setHttpTools).catch(() => setHttpTools([])).finally(() => setHttpToolsLoading(false));
+  }, [namespace]);
+
   // Pipeline step animation
   const [pipelineStep, setPipelineStep] = useState(-1);
   const animTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -280,11 +306,46 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
     }
   };
 
+  // param_schema 타입에 맞게 값 변환
+  const convertParams = (tool: HttpTool): Record<string, unknown> => {
+    const params: Record<string, unknown> = {};
+    for (const p of tool.param_schema) {
+      const val = p.example ?? '';
+      if (!val && val !== '0') { params[p.name] = val; continue; }
+      if (p.type === 'number') { params[p.name] = Number(val) || 0; }
+      else if (p.type === 'boolean') { params[p.name] = val === 'true'; }
+      else {
+        const trimmed = val.trim();
+        if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+          try { params[p.name] = JSON.parse(trimmed); } catch { params[p.name] = val; }
+        } else { params[p.name] = val; }
+      }
+    }
+    return params;
+  };
+
+  // HTTP 도구 응답을 LLM 컨텍스트 형식으로 변환
+  const buildHttpContext = (results: Record<number, HttpToolTestResult>): string => {
+    const sections: string[] = [];
+    for (const tool of httpTools) {
+      const res = results[tool.id];
+      if (!res || res.status !== 'ok' || !res.response || res.response.status_code < 200 || res.response.status_code >= 300) continue;
+      sections.push(
+        `\n[HTTP 도구: ${tool.name}]\n` +
+        `- URL: ${tool.method} ${tool.url}\n` +
+        `- 응답 상태: ${res.response.status_code}\n` +
+        `- 응답 데이터:\n${res.response.body}`
+      );
+    }
+    return sections.join('\n');
+  };
+
   const handleSearch = async () => {
     if (!namespace.trim() || !question.trim()) return;
     setLoading(true);
     setError(null);
     setResult(null);
+    setHttpResults({});
     setShowContext(false);
 
     // Start pipeline animation: question(0) → namespace(1)
@@ -300,12 +361,51 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
         top_k: topK,
       });
       setResult(data);
-      // Animate remaining steps: glossary(2) → knowledge(3) → fewshot(4) → context(5) → result(6)
-      const startFrom = 2;
+
+      // glossary(2) → knowledge(3) → fewshot(4)
       clearAnimTimers();
-      for (let i = startFrom; i < PIPELINE_STEPS.length; i++) {
-        const t = setTimeout(() => setPipelineStep(i), (i - startFrom) * 300);
+      for (let i = 2; i <= 4; i++) {
+        const t = setTimeout(() => setPipelineStep(i), (i - 2) * 300);
         animTimers.current.push(t);
+      }
+
+      // HTTP 도구 자동 실행 (토글 ON + 활성 도구 존재 시)
+      const activeTools = httpTools.filter((t) => t.is_active);
+      if (useHttpToolDebug && activeTools.length > 0) {
+        setHttpRunning(true);
+        const t1 = setTimeout(() => setPipelineStep(5), 3 * 300); // http_tool step
+        animTimers.current.push(t1);
+
+        const toolResults: Record<number, HttpToolTestResult> = {};
+        await Promise.all(
+          activeTools.map(async (tool) => {
+            try {
+              const params = convertParams(tool);
+              const res = await testHttpTool(tool.id, params);
+              toolResults[tool.id] = res;
+            } catch (e) {
+              toolResults[tool.id] = {
+                status: 'error',
+                request: { method: tool.method, url: tool.url, headers: tool.headers, params: {} },
+                error: String(e),
+                elapsed_ms: 0,
+              };
+            }
+          })
+        );
+        setHttpResults(toolResults);
+        setHttpRunning(false);
+
+        // context(6) → result(7)
+        const t2 = setTimeout(() => setPipelineStep(6), 4 * 300);
+        const t3 = setTimeout(() => setPipelineStep(7), 5 * 300);
+        animTimers.current.push(t2, t3);
+      } else {
+        // HTTP 도구 스킵 → context(5→6) → result(6→7)
+        const t2 = setTimeout(() => setPipelineStep(5), 3 * 300);
+        const t3 = setTimeout(() => setPipelineStep(6), 4 * 300);
+        const t4 = setTimeout(() => setPipelineStep(7), 5 * 300);
+        animTimers.current.push(t2, t3, t4);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '오류가 발생했습니다.');
@@ -394,6 +494,29 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
                 className="w-full accent-indigo-500"
               />
             </div>
+          </div>
+
+          {/* HTTP 도구 토글 */}
+          <div className="flex items-center justify-between bg-slate-900/50 rounded-lg px-3 py-2">
+            <div className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-cyan-400" />
+              <span className="text-xs text-slate-400">HTTP 도구 사용</span>
+              {httpTools.filter((t) => t.is_active).length > 0 && (
+                <span className="text-[10px] text-slate-500">
+                  ({httpTools.filter((t) => t.is_active).length}건 활성)
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setUseHttpToolDebug((v) => !v)}
+              className={`relative w-9 h-5 rounded-full transition-colors ${
+                useHttpToolDebug ? 'bg-cyan-600' : 'bg-slate-600'
+              }`}
+            >
+              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                useHttpToolDebug ? 'translate-x-4' : 'translate-x-0.5'
+              }`} />
+            </button>
           </div>
 
           <Button
@@ -550,6 +673,158 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
               })()}
             </div>
 
+            {/* HTTP 도구 실행 결과 */}
+            {useHttpToolDebug && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-cyan-400" />
+                    HTTP 도구 실행 ({Object.values(httpResults).filter((r) => r.status === 'ok' && r.response && r.response.status_code >= 200 && r.response.status_code < 300).length}/{httpTools.filter((t) => t.is_active).length}건 성공)
+                  </h3>
+                  {httpRunning && <span className="text-xs text-cyan-400 animate-pulse">실행 중...</span>}
+                </div>
+
+                {httpTools.filter((t) => t.is_active).map((tool) => {
+                  const res = httpResults[tool.id];
+                  const isSuccess = res?.status === 'ok' && res.response && res.response.status_code >= 200 && res.response.status_code < 300;
+                  const isError = res && !isSuccess;
+                  const borderColor = !res ? 'border-l-slate-600' : isSuccess ? 'border-l-emerald-500' : 'border-l-rose-500';
+
+                  return (
+                    <button
+                      key={tool.id}
+                      type="button"
+                      onClick={() => setSelectedHttpToolId(tool.id)}
+                      className={`w-full text-left bg-slate-800 border border-slate-700 border-l-4 ${borderColor} rounded-xl px-4 py-3 hover:bg-slate-700/40 transition-colors`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Globe className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+                        <span className="font-semibold text-slate-200 flex-1 truncate">{tool.name}</span>
+                        {!res && !httpRunning && <Badge color="slate">미실행</Badge>}
+                        {!res && httpRunning && <span className="text-xs text-cyan-400 animate-pulse">호출 중...</span>}
+                        {isSuccess && (
+                          <>
+                            <Badge color="emerald">{res.response!.status_code}</Badge>
+                            <span className="text-xs text-slate-500">{res.response!.elapsed_ms}ms</span>
+                            <Badge color="emerald">컨텍스트 포함</Badge>
+                          </>
+                        )}
+                        {isError && (
+                          <>
+                            <Badge color="rose">{res.response?.status_code ?? 'ERR'}</Badge>
+                            <Badge color="rose">컨텍스트 제외</Badge>
+                          </>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-500 font-mono mt-1 truncate">{tool.method} {tool.url}</p>
+                      {isError && (
+                        <p className="text-xs text-rose-400 mt-1 truncate">
+                          {res.error || `HTTP ${res.response?.status_code}`}
+                        </p>
+                      )}
+                    </button>
+                  );
+                })}
+
+                {/* HTTP 도구 상세 결과 모달 */}
+                {selectedHttpToolId && (() => {
+                  const tool = httpTools.find((t) => t.id === selectedHttpToolId);
+                  const res = httpResults[selectedHttpToolId];
+                  if (!tool) return null;
+                  return (
+                    <Modal isOpen onClose={() => setSelectedHttpToolId(null)} title={tool.name} maxWidth="max-w-3xl">
+                      <div className="space-y-4 overflow-y-auto max-h-[70vh]">
+                        {/* 기본 정보 */}
+                        <div className="flex items-center justify-between bg-slate-900/60 rounded-lg px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono text-slate-400">{tool.method}</span>
+                            <span className="text-xs text-slate-500">타임아웃: {tool.timeout_sec}초</span>
+                          </div>
+                          {res?.response && (
+                            <div className="flex items-center gap-4">
+                              <div className="text-center">
+                                <p className="text-[10px] text-slate-500">Status</p>
+                                <p className={`text-lg font-bold ${
+                                  res.response.status_code >= 200 && res.response.status_code < 300 ? 'text-emerald-400' : 'text-rose-400'
+                                }`}>{res.response.status_code}</p>
+                              </div>
+                              <div className="text-center">
+                                <p className="text-[10px] text-slate-500">응답시간</p>
+                                <p className={`text-lg font-bold ${
+                                  res.response.elapsed_ms > 3000 ? 'text-rose-400' : res.response.elapsed_ms > 1000 ? 'text-amber-400' : 'text-emerald-400'
+                                }`}>{res.response.elapsed_ms}ms</p>
+                              </div>
+                              <div className="text-center">
+                                <p className="text-[10px] text-slate-500">크기</p>
+                                <p className="text-sm font-mono text-slate-300">
+                                  {res.response.size_bytes > 1024 ? `${(res.response.size_bytes / 1024).toFixed(1)}KB` : `${res.response.size_bytes}B`}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* URL */}
+                        <div>
+                          <p className="text-xs text-slate-500 mb-1">URL</p>
+                          <p className="text-sm text-slate-300 font-mono bg-slate-900/40 rounded-lg p-3 break-all">{tool.url}</p>
+                        </div>
+
+                        {/* 요청 정보 */}
+                        {res?.request && (
+                          <div>
+                            <p className="text-xs text-slate-500 mb-1">Request</p>
+                            <CodeBlock code={JSON.stringify(res.request, null, 2)} language="json" />
+                          </div>
+                        )}
+
+                        {/* 에러 */}
+                        {res?.error && (
+                          <div className="bg-rose-500/10 border border-rose-500/30 rounded-lg px-4 py-3">
+                            <p className="text-xs text-rose-400">{res.error}</p>
+                          </div>
+                        )}
+
+                        {/* 응답 헤더 */}
+                        {res?.response && (
+                          <div>
+                            <p className="text-xs text-slate-500 mb-1">Response Headers</p>
+                            <CodeBlock
+                              code={Object.entries(res.response.headers).map(([k, v]) => `${k}: ${v}`).join('\n')}
+                              language="http"
+                            />
+                          </div>
+                        )}
+
+                        {/* 응답 본문 */}
+                        {res?.response && (
+                          <div>
+                            <p className="text-xs text-slate-500 mb-1">Response Body</p>
+                            {res.response.body.trim() ? (
+                              <CodeBlock
+                                code={(() => { try { return JSON.stringify(JSON.parse(res.response!.body), null, 2); } catch { return res.response!.body; } })()}
+                                language="json"
+                              />
+                            ) : (
+                              <div className="bg-slate-900/60 rounded-lg p-3 text-xs text-slate-500 italic">
+                                응답 본문 없음 — 응답 헤더를 확인하세요.
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {!res && (
+                          <div className="text-center py-8 text-slate-500 text-sm">
+                            아직 실행되지 않았습니다. 검색 실행 시 자동으로 호출됩니다.
+                          </div>
+                        )}
+                      </div>
+                    </Modal>
+                  );
+                })()}
+              </div>
+            )}
+
             {/* Search results */}
             <div className="space-y-3">
               <div>
@@ -689,13 +964,16 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
             >
               <Eye className="w-4 h-4 text-indigo-400" />
               LLM 컨텍스트 미리보기
+              {Object.keys(httpResults).length > 0 && (
+                <span className="text-[10px] text-cyan-400 ml-1">(HTTP 도구 응답 포함)</span>
+              )}
             </button>
 
-            {/* Context preview modal */}
+            {/* Context preview modal — 지식검색 + HTTP 도구 응답 합산 */}
             <ContextPreviewModal
               isOpen={showContext}
               onClose={() => setShowContext(false)}
-              content={result?.context_preview ?? ''}
+              content={(result?.context_preview ?? '') + buildHttpContext(httpResults)}
             />
           </div>
         )}

@@ -2,21 +2,43 @@
 from abc import ABC, abstractmethod
 from typing import AsyncIterator, Callable, Optional
 
-
-_SYSTEM_PROMPT = """당신은 IT 운영팀의 전문 보조 에이전트입니다.
-아래 [참고 문서]를 바탕으로 운영자의 질문에 명확하고 간결하게 답변하세요.
-- 각 문서에는 점수와 신뢰도(높음/보통/낮음)가 표시되어 있습니다. 신뢰도가 낮은 문서는 참고만 하고 핵심 근거로 사용하지 마세요.
-- 참고 문서가 질문과 관련이 없다면, 문서 내용을 억지로 끼워맞추지 말고 "관련 지식을 찾지 못했습니다"라고 솔직하게 답하세요.
-- 컨테이너명, 테이블명, SQL 쿼리가 있다면 반드시 언급하세요.
-- 답변은 Markdown 형식으로 작성하세요. 표, 목록, 코드 블록, 볼드 등을 적극 활용하여 가독성을 높이세요.
-- 한국어로 답변하세요."""
+from domain.prompt.loader import get_prompt as _load_prompt
 
 
-def build_messages(context: str, question: str, history: list[dict] | None = None) -> list[dict]:
-    """GPT/Ollama chat 형식의 messages 배열 생성."""
-    messages = [
-        {"role": "system", "content": f"{_SYSTEM_PROMPT}\n\n[참고 문서]\n{context}"},
-    ]
+_FALLBACK_SYSTEM_PROMPT = """IT 운영 보조 에이전트. 아래 규칙을 따르세요.
+
+[원칙]
+- 반드시 제공된 [참고 문서]만 근거로 답변. 문서에 없는 내용은 절대 만들어내지 마세요.
+- 관련 문서가 없으면 "관련 지식을 찾지 못했습니다"로 답변.
+- 신뢰도 높음 문서를 우선 근거로 사용. 낮음은 보조 참고만.
+
+[문맥 활용]
+- [과거 유사 사례]가 있으면 답변 형식을 참고하되 현재 문서 내용 우선.
+- 이전 대화가 있으면 맥락을 이어서 답변.
+
+[형식]
+- Markdown(표, 목록, 코드 블록, 볼드) 사용. 한국어 답변.
+- 컨테이너명, 테이블명, SQL이 있으면 반드시 포함.
+- 답변 끝에 근거 표시: 📎 문서 N, 문서 M 참고"""
+
+
+async def resolve_system_prompt(system_prompt: Optional[str] = None) -> str:
+    """system_prompt가 명시적으로 주어지면 그대로 사용, 아니면 DB에서 chat_system 로드."""
+    if system_prompt is not None:
+        return system_prompt
+    return await _load_prompt("chat_system", _FALLBACK_SYSTEM_PROMPT)
+
+
+def build_messages(
+    context: str, question: str, history: list[dict] | None = None,
+    *, system_prompt: Optional[str] = None,
+) -> list[dict]:
+    """GPT/Ollama chat 형식의 messages 배열 생성.
+    system_prompt를 지정하면 기본 시스템 프롬프트 대신 사용한다.
+    """
+    sp = system_prompt if system_prompt is not None else _FALLBACK_SYSTEM_PROMPT
+    sys_content = f"{sp}\n\n[참고 문서]\n{context}" if context else sp
+    messages = [{"role": "system", "content": sys_content}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": question})
@@ -33,8 +55,11 @@ class LLMProvider(ABC):
         *,
         api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
+        system_prompt: Optional[str] = None,
     ) -> tuple[str, Optional[str]]:
-        """답변 생성. 반환값: (answer, ext_conversation_id). ext_conversation_id는 사내 LLM 측 대화 ID."""
+        """답변 생성. 반환값: (answer, ext_conversation_id).
+        system_prompt: 기본 시스템 프롬프트를 대체할 커스텀 프롬프트.
+        """
         ...
 
     @abstractmethod
@@ -47,8 +72,9 @@ class LLMProvider(ABC):
         api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
         on_ext_conversation_id: Optional[Callable[[str], None]] = None,
+        system_prompt: Optional[str] = None,
     ) -> AsyncIterator[str]:
-        """스트리밍 답변 생성. on_ext_conversation_id: 사내 LLM 측 대화 ID를 수신했을 때 호출되는 콜백."""
+        """스트리밍 답변 생성."""
         ...
 
     @abstractmethod

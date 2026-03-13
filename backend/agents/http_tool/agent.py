@@ -12,15 +12,18 @@ from domain.chat.helpers import (
     update_assistant_message, create_query_log, post_save_tasks,
 )
 from domain.llm.factory import get_llm_provider
+from domain.prompt.loader import get_prompt as load_prompt
 
 logger = logging.getLogger(__name__)
 
 
 # ── LLM 프롬프트: 도구 선택 + 파라미터 추출 ─────────────────────────────────
 
-_TOOL_SELECT_PROMPT = """\
-당신은 사용자의 질문을 분석하여 적절한 HTTP 도구를 선택하고 파라미터를 추출하는 AI입니다.
+_TOOL_SELECT_SYSTEM = """\
+도구 선택 AI. 사용자 질문을 분석하여 적절한 HTTP 도구를 선택하고 파라미터를 추출한다.
+반드시 JSON만 출력. 설명이나 마크다운 없이 순수 JSON만 반환."""
 
+_TOOL_SELECT_PROMPT = """\
 ## 사용 가능한 도구 목록
 {tool_list}
 
@@ -33,12 +36,10 @@ _TOOL_SELECT_PROMPT = """\
 - 도구 선택 시: {{"tool_id": 숫자, "tool_name": "이름", "params": {{"key": "value"}}, "missing_params": ["누락된 필수 파라미터명"]}}
 - 도구 불필요 시: {{"tool_id": null, "reason": "이유"}}
 
-사용자 질문: {question}
-
-JSON:"""
+사용자 질문: {question}"""
 
 
-async def _select_tool(question: str, tools: list[dict]) -> dict:
+async def _select_tool(question: str, tools: list[dict], *, api_key: str | None = None) -> dict:
     """LLM에게 도구 선택 + 파라미터 추출을 요청."""
     tool_descriptions = []
     for t in tools:
@@ -58,7 +59,11 @@ async def _select_tool(question: str, tools: list[dict]) -> dict:
         tool_list="\n\n".join(tool_descriptions),
         question=question,
     )
-    answer, _ = await get_llm_provider().generate(context="", question=prompt)
+    tool_select_prompt = await load_prompt("tool_select", _TOOL_SELECT_SYSTEM)
+    answer, _ = await get_llm_provider().generate(
+        context="", question=prompt, api_key=api_key,
+        system_prompt=tool_select_prompt,
+    )
     text = answer.strip()
     if "```" in text:
         text = text.split("```")[1]
@@ -84,7 +89,16 @@ async def _fetch_active_tools(namespace: str) -> list[dict]:
             """,
             ns_id,
         )
-    return [dict(r) for r in rows]
+    tools = []
+    for r in rows:
+        d = dict(r)
+        # asyncpg may return JSONB as str — ensure parsed
+        if isinstance(d.get("param_schema"), str):
+            d["param_schema"] = json.loads(d["param_schema"])
+        if isinstance(d.get("headers"), str):
+            d["headers"] = json.loads(d["headers"])
+        tools.append(d)
+    return tools
 
 
 async def _execute_http_call(tool: dict, params: dict) -> str:
@@ -115,9 +129,13 @@ async def _execute_http_call(tool: dict, params: dict) -> str:
 
 # ── LLM 프롬프트: HTTP 응답 기반 최종 답변 ───────────────────────────────────
 
-_ANSWER_WITH_DATA_PROMPT = """\
-사용자의 질문에 대해 외부 API에서 가져온 데이터를 기반으로 답변해주세요.
+_ANSWER_SYSTEM = """\
+외부 API 응답 데이터를 분석하여 사용자 질문에 답변하는 AI.
+- 데이터를 근거로 정확하게 답변. 데이터에 없는 내용은 만들지 마세요.
+- 데이터가 비어있거나 오류면 그 사실을 알려주세요.
+- Markdown 형식, 한국어 답변."""
 
+_ANSWER_WITH_DATA_PROMPT = """\
 ## 사용된 도구
 - 이름: {tool_name}
 - URL: {method} {url}
@@ -127,9 +145,7 @@ _ANSWER_WITH_DATA_PROMPT = """\
 {response_data}
 
 ## 사용자 질문
-{question}
-
-위 데이터를 바탕으로 사용자에게 도움이 되는 답변을 생성해주세요. 데이터가 비어있거나 오류인 경우 그 사실을 알려주세요."""
+{question}"""
 
 
 class HttpToolAgent(AgentBase):
@@ -159,6 +175,7 @@ class HttpToolAgent(AgentBase):
     ) -> AsyncIterator[dict]:
         namespace: str = context["namespace"]
         msg_id: int = context["msg_id"]
+        api_key: str | None = context.get("api_key")
         approved_tool: Optional[dict] = context.get("approved_tool")
 
         full_answer = ""
@@ -166,7 +183,7 @@ class HttpToolAgent(AgentBase):
         try:
             # ── Case 1: 승인된 도구가 있으면 바로 HTTP 호출 실행 ──
             if approved_tool:
-                yield {"type": "status", "step": "http_call", "message": "HTTP 호출 실행 중..."}
+                yield {"type": "status", "step": "tool_load", "message": "도구 정보 로드 중..."}
 
                 tool_id = approved_tool["tool_id"]
                 params = approved_tool["params"]
@@ -179,9 +196,14 @@ class HttpToolAgent(AgentBase):
                     )
                 if not tool_row:
                     yield {"type": "tool_error", "message": "도구가 비활성화되었거나 존재하지 않습니다."}
+                    await update_assistant_message(msg_id, "[도구를 찾을 수 없습니다.]", "completed")
                     return
 
                 tool = dict(tool_row)
+                if isinstance(tool.get("param_schema"), str):
+                    tool["param_schema"] = json.loads(tool["param_schema"])
+                if isinstance(tool.get("headers"), str):
+                    tool["headers"] = json.loads(tool["headers"])
 
                 try:
                     response_data = await _execute_http_call(tool, params)
@@ -198,6 +220,7 @@ class HttpToolAgent(AgentBase):
                     await update_assistant_message(msg_id, f"[HTTP 호출 실패: {tool['name']}]", "completed")
                     return
 
+                yield {"type": "status", "step": "http_response", "message": f"HTTP 응답 수신 완료 — {tool['name']}"}
                 yield {"type": "tool_result", "data": response_data[:500]}
 
                 # LLM으로 최종 답변 생성
@@ -212,9 +235,12 @@ class HttpToolAgent(AgentBase):
                     question=query,
                 )
 
+                answer_sys = await load_prompt("tool_answer", _ANSWER_SYSTEM)
+
                 try:
                     async for token in get_llm_provider().generate_stream(
-                        llm_prompt, query, "",
+                        llm_prompt, query, api_key=api_key,
+                        system_prompt=answer_sys,
                     ):
                         full_answer += token
                         yield {"type": "token", "data": token}
@@ -230,29 +256,40 @@ class HttpToolAgent(AgentBase):
                 return
 
             # ── Case 2: 도구 선택 요청 (첫 진입) ──
-            yield {"type": "status", "step": "tool_select", "message": "사용 가능한 도구 분석 중..."}
+            yield {"type": "status", "step": "tool_fetch", "message": "활성 도구 목록 조회 중..."}
 
             tools = await _fetch_active_tools(namespace)
             if not tools:
                 yield {"type": "tool_request", "action": "no_tools", "message": "등록된 활성 도구가 없습니다."}
+                await update_assistant_message(msg_id, "[등록된 활성 도구가 없습니다.]", "completed")
                 return
+
+            yield {"type": "status", "step": "tool_select", "message": f"LLM 도구 선택 중... ({len(tools)}개 도구 분석)"}
 
             # LLM으로 도구 선택 + 파라미터 추출
             try:
-                selection = await _select_tool(query, tools)
+                selection = await _select_tool(query, tools, api_key=api_key)
             except Exception as e:
                 logger.warning("도구 선택 LLM 실패: %s", e)
                 yield {"type": "tool_error", "message": "도구 선택에 실패했습니다. 다시 시도해주세요."}
+                await update_assistant_message(msg_id, "[도구 선택 실패]", "completed")
                 return
+
+            yield {"type": "status", "step": "tool_params", "message": f"파라미터 검증 중... → {selection.get('tool_name', '도구')}"}
 
             # 도구 불필요 판단
             if selection.get("tool_id") is None:
+                reason = selection.get("reason", "이 질문에는 HTTP 도구가 필요하지 않습니다.")
                 yield {
                     "type": "tool_request",
                     "action": "no_tool_needed",
-                    "message": selection.get("reason", "이 질문에는 HTTP 도구가 필요하지 않습니다."),
-                    "tools": [{"id": t["id"], "name": t["name"], "description": t["description"]} for t in tools],
+                    "message": reason,
+                    "tools": [
+                        {"id": t["id"], "name": t["name"], "description": t["description"]}
+                        for t in tools
+                    ],
                 }
+                await update_assistant_message(msg_id, "[도구 선택 대기 중]", "completed")
                 return
 
             # 파라미터 누락 확인
@@ -262,6 +299,7 @@ class HttpToolAgent(AgentBase):
 
             if not selected_tool:
                 yield {"type": "tool_error", "message": "선택된 도구를 찾을 수 없습니다."}
+                await update_assistant_message(msg_id, "[선택된 도구를 찾을 수 없습니다.]", "completed")
                 return
 
             if missing:
@@ -277,6 +315,7 @@ class HttpToolAgent(AgentBase):
                     "param_schema": selected_tool.get("param_schema", []),
                     "tools": tool_summary,
                 }
+                await update_assistant_message(msg_id, "[추가 정보 입력 대기 중]", "completed")
             else:
                 # 파라미터 완성 → 승인 요청
                 yield {
@@ -289,6 +328,7 @@ class HttpToolAgent(AgentBase):
                     "param_schema": selected_tool.get("param_schema", []),
                     "tools": tool_summary,
                 }
+                await update_assistant_message(msg_id, "[도구 실행 승인 대기 중]", "completed")
 
         except Exception as e:
             logger.error("HttpToolAgent 에러: %s", e, exc_info=True)

@@ -13,6 +13,7 @@ from domain.chat.helpers import (
     create_query_log, post_save_tasks,
 )
 from domain.knowledge import retrieval
+from domain.llm.base import resolve_system_prompt
 from domain.llm.factory import get_llm_provider
 from shared.embedding import embedding_service
 
@@ -128,11 +129,14 @@ class KnowledgeRagAgent(AgentBase):
                 nonlocal new_inhouse_conv_id
                 new_inhouse_conv_id = cid
 
+            chat_prompt = await resolve_system_prompt()
+
             try:
                 async for token in get_llm_provider().generate_stream(
                     llm_context, query, history, api_key=api_key,
                     ext_conversation_id=inhouse_conv_id,
                     on_ext_conversation_id=_capture_inhouse_conv_id,
+                    system_prompt=chat_prompt,
                 ):
                     full_answer += token
                     token_count += 1

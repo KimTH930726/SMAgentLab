@@ -268,6 +268,27 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
                 yield _sse(event)
         except (asyncio.CancelledError, GeneratorExit):
             pass
+        except Exception as e:
+            logger.error("SSE event_generator 에러: %s", e, exc_info=True)
+        finally:
+            # 안전장치: generating 상태로 남은 메시지를 completed로 전환
+            try:
+                from domain.chat.helpers import update_assistant_message
+                async with get_conn() as conn:
+                    status = await conn.fetchval(
+                        "SELECT status FROM ops_message WHERE id = $1", msg_id,
+                    )
+                if status == "generating":
+                    async with get_conn() as conn:
+                        content = await conn.fetchval(
+                            "SELECT content FROM ops_message WHERE id = $1", msg_id,
+                        )
+                    if not content or not content.strip():
+                        await update_assistant_message(msg_id, "[연결이 끊어졌습니다.]", "completed")
+                    else:
+                        await update_assistant_message(msg_id, content, "completed")
+            except Exception:
+                logger.warning("메시지 상태 정리 실패: msg_id=%s", msg_id, exc_info=True)
 
     return StreamingResponse(
         event_generator(),

@@ -30,6 +30,28 @@ export async function deleteHttpTool(toolId: number): Promise<void> {
   await apiFetch(`/http-tools/${toolId}`, { method: 'DELETE' });
 }
 
+export interface HttpToolTestResult {
+  status: string;
+  request: { method: string; url: string; headers: Record<string, string>; params: Record<string, string> };
+  response?: {
+    status_code: number;
+    headers: Record<string, string>;
+    body: string;
+    truncated: boolean;
+    elapsed_ms: number;
+    size_bytes: number;
+  };
+  error?: string;
+  elapsed_ms?: number;
+}
+
+export async function testHttpTool(toolId: number, params: Record<string, unknown> = {}): Promise<HttpToolTestResult> {
+  return apiFetch<HttpToolTestResult>(`/http-tools/${toolId}/test`, {
+    method: 'POST',
+    body: JSON.stringify({ params }),
+  });
+}
+
 export async function autocompleteHttpTool(namespace: string, rawText: string): Promise<{
   status: string;
   tool?: Record<string, unknown>;

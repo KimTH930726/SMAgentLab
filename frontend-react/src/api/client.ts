@@ -73,7 +73,12 @@ export async function apiFetch<T>(
     let message = `HTTP ${response.status}`;
     try {
       const body = await response.json();
-      message = body.detail ?? body.message ?? message;
+      const detail = body.detail ?? body.message;
+      if (Array.isArray(detail)) {
+        message = detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d)).join('; ');
+      } else if (detail) {
+        message = String(detail);
+      }
     } catch {
       // ignore parse error
     }
@@ -94,21 +99,35 @@ export async function* streamSSE(
   signal?: AbortSignal,
 ): AsyncGenerator<SSEEvent> {
   const url = `${BASE_URL}${path}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getAuthHeaders(),
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+
+  const doFetch = (authHeaders: Record<string, string>) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+  let response = await doFetch(getAuthHeaders());
+
+  // 401 → try refresh once (apiFetch와 동일)
+  if (response.status === 401) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      response = await doFetch(getAuthHeaders());
+    }
+  }
 
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
     try {
       const errBody = await response.json();
-      message = errBody.detail ?? errBody.message ?? message;
+      const detail = errBody.detail ?? errBody.message;
+      if (Array.isArray(detail)) {
+        message = detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d)).join('; ');
+      } else if (detail) {
+        message = String(detail);
+      }
     } catch {
       // ignore
     }

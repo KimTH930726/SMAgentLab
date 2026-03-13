@@ -6,14 +6,22 @@ from typing import AsyncIterator, Callable, Optional
 import httpx
 
 from core.config import settings
-from domain.llm.base import LLMProvider, _SYSTEM_PROMPT
+from domain.llm.base import LLMProvider, _FALLBACK_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
 
-def _build_query(context: str, question: str, history: list[dict] | None = None) -> str:
-    """시스템 프롬프트 + 컨텍스트 + 대화 이력 + 질문을 단일 query 문자열로 합친다."""
-    parts = [_SYSTEM_PROMPT, f"\n[참고 문서]\n{context}"]
+def _build_query(
+    context: str, question: str, history: list[dict] | None = None,
+    *, system_prompt: str | None = None,
+) -> str:
+    """시스템 프롬프트 + 컨텍스트 + 대화 이력 + 질문을 단일 query 문자열로 합친다.
+    system_prompt를 지정하면 기본 시스템 프롬프트 대신 사용한다.
+    """
+    sp = system_prompt if system_prompt is not None else _FALLBACK_SYSTEM_PROMPT
+    parts = [sp]
+    if context:
+        parts.append(f"\n[참고 문서]\n{context}")
     if history:
         for msg in history:
             role = "사용자" if msg["role"] == "user" else "어시스턴트"
@@ -98,8 +106,9 @@ class InHouseLLMProvider(LLMProvider):
         *,
         api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
+        system_prompt: Optional[str] = None,
     ) -> tuple[str, Optional[str]]:
-        query = _build_query(context, question, history)
+        query = _build_query(context, question, history, system_prompt=system_prompt)
         payload = self._build_payload(query, response_mode="blocking", ext_conversation_id=ext_conversation_id)
         headers = self._build_headers(api_key)
         logger.info(
@@ -124,8 +133,9 @@ class InHouseLLMProvider(LLMProvider):
         api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
         on_ext_conversation_id: Optional[Callable[[str], None]] = None,
+        system_prompt: Optional[str] = None,
     ) -> AsyncIterator[str]:
-        query = _build_query(context, question, history)
+        query = _build_query(context, question, history, system_prompt=system_prompt)
         use_streaming = self._response_mode == "streaming"
         payload = self._build_payload(query, response_mode=self._response_mode, ext_conversation_id=ext_conversation_id)
         headers = self._build_headers(api_key)

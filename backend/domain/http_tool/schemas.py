@@ -1,6 +1,6 @@
 """HTTP 도구 도메인 — Pydantic 스키마."""
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class HttpToolParam(BaseModel):
@@ -10,6 +10,13 @@ class HttpToolParam(BaseModel):
     required: bool = True
     description: str = ""
     example: Optional[str] = None
+
+    @field_validator("example", mode="before")
+    @classmethod
+    def coerce_example(cls, v):
+        if v is None:
+            return None
+        return str(v)
 
 
 class HttpToolCreate(BaseModel):
@@ -60,3 +67,7 @@ class HttpToolToggle(BaseModel):
 class AutoCompleteRequest(BaseModel):
     namespace: str
     raw_text: str = Field(..., min_length=10)
+
+
+class HttpToolTestRequest(BaseModel):
+    params: dict = Field(default_factory=dict)
