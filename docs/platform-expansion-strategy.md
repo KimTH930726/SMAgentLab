@@ -16,6 +16,9 @@
 [완료]  DB prefix rename: ops_knowledge → rag_knowledge, ops_glossary → rag_glossary,
         ops_fewshot → rag_fewshot, ops_knowledge_category → rag_knowledge_category,
         ops_conv_summary → rag_conv_summary (자동 마이그레이션, 2026-03-19)
+[완료]  ops_prompt.agent_type 컬럼 추가 — 에이전트별 프롬프트 스코핑 (2026-03-19)
+        Text2SQL 파이프라인 프롬프트 ops_prompt 통합 (sql2_parse/generate/fix/summarize)
+        Admin 시스템설정 탭에서 selectedAgent 기반 자동 필터링
 ```
 
 ---

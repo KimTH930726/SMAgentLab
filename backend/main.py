@@ -702,20 +702,31 @@ async def _migrate_system_tables(conn) -> None:
             func_name       VARCHAR(200) NOT NULL,
             content         TEXT NOT NULL DEFAULT '',
             description     TEXT NOT NULL DEFAULT '',
+            agent_type      VARCHAR(50) NOT NULL DEFAULT 'all',
             created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
         )
     """)
+    # agent_type 컬럼 마이그레이션 (기존 DB 대응)
+    await conn.execute("ALTER TABLE ops_prompt ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'all'")
     # 기본 프롬프트 시드 데이터
     await conn.execute("""
-        INSERT INTO ops_prompt (func_key, func_name, content, description) VALUES
-        ('chat_system', 'RAG 채팅 시스템', $1, 'RAG 기반 지식 검색 채팅의 시스템 프롬프트'),
-        ('tool_select', 'MCP 도구 선택', $2, 'MCP 도구를 선택하고 파라미터를 추출하는 프롬프트'),
-        ('tool_answer', 'MCP 응답 답변', $3, 'MCP API 응답 데이터 기반으로 답변을 생성하는 프롬프트'),
-        ('autocomplete', '도구 등록 자동완성', $4, 'MCP 도구 등록 시 자연어→JSON 변환 프롬프트'),
-        ('category_suggest', '카테고리 자동 추천', $5, '지식 내용을 분석해 적합한 업무구분을 추천하는 프롬프트. {categories}·{content} 플레이스홀더 유지 필수'),
-        ('glossary_suggest', '용어 추천 시스템', $6, '미매핑 질문에서 업무 용어를 추출하는 시스템 프롬프트'),
-        ('conv_summarize', '대화 요약', $7, '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수')
+        INSERT INTO ops_prompt (func_key, func_name, content, description, agent_type) VALUES
+        ('chat_system',         'RAG 채팅 시스템',         $1,  'RAG 기반 지식 검색 채팅의 시스템 프롬프트',                              'knowledge_rag'),
+        ('tool_select',         'MCP 도구 선택',           $2,  'MCP 도구를 선택하고 파라미터를 추출하는 프롬프트',                        'mcp_tool'),
+        ('tool_answer',         'MCP 응답 답변',           $3,  'MCP API 응답 데이터 기반으로 답변을 생성하는 프롬프트',                   'mcp_tool'),
+        ('autocomplete',        '도구 등록 자동완성',       $4,  'MCP 도구 등록 시 자연어→JSON 변환 프롬프트',                             'mcp_tool'),
+        ('category_suggest',    '카테고리 자동 추천',       $5,  '지식 내용 분석 후 업무구분 추천. {categories}·{content} 플레이스홀더 필수', 'knowledge_rag'),
+        ('glossary_suggest',    '용어 추천 시스템',         $6,  '미매핑 질문에서 업무 용어를 추출하는 시스템 프롬프트',                    'knowledge_rag'),
+        ('conv_summarize',      '대화 요약',               $7,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all'),
+        ('sql2_parse',          'SQL 질문 분석',           $8,  'Text2SQL 파이프라인 1단계: intent/difficulty/entities 추출 프롬프트. {{question}} 플레이스홀더 필수', 'text2sql'),
+        ('sql2_parse_system',   'SQL 질문 분석 시스템',    $9,  'Text2SQL parse 단계 시스템 프롬프트',                                    'text2sql'),
+        ('sql2_generate',       'SQL 생성',                $10, 'Text2SQL 파이프라인 3단계: SQL 생성 프롬프트. {{question}}·{{schema}} 등 플레이스홀더 필수', 'text2sql'),
+        ('sql2_generate_system','SQL 생성 시스템',          $11, 'Text2SQL generate 단계 시스템 프롬프트',                                 'text2sql'),
+        ('sql2_fix',            'SQL 자동 수정',           $12, 'Text2SQL 파이프라인 5단계: 검증 실패 SQL 수정 프롬프트. {{sql}}·{{errors}}·{{schema}} 필수', 'text2sql'),
+        ('sql2_fix_system',     'SQL 자동 수정 시스템',    $13, 'Text2SQL fix 단계 시스템 프롬프트',                                      'text2sql'),
+        ('sql2_summarize',      'SQL 결과 요약',           $14, 'Text2SQL 파이프라인 7단계: 실행 결과 요약+차트 추천 프롬프트. {{question}}·{{sql}}·{{result_preview}}·{{columns}} 필수', 'text2sql'),
+        ('sql2_summarize_system','SQL 결과 요약 시스템',   $15, 'Text2SQL summarize 단계 시스템 프롬프트',                                 'text2sql')
         ON CONFLICT (func_key) DO NOTHING
     """,
         # chat_system
@@ -772,7 +783,101 @@ async def _migrate_system_tables(conn) -> None:
 {dialogue}
 
 요약:""",
+        # sql2_parse
+        """다음 사용자 질문을 분석하여 JSON으로 반환하세요.
+
+질문: {{question}}
+
+반환 형식:
+{
+  "intent": "simple_select|aggregation|join|subquery|window_function|cte",
+  "difficulty": "simple|moderate|complex",
+  "entities": ["언급된 테이블/컬럼명 후보"],
+  "conditions": [{"type": "date|filter", "column": "컬럼명", "value": "값"}],
+  "aggregation": "집계 표현식 (없으면 null)",
+  "keywords": ["핵심 키워드"]
+}""",
+        # sql2_parse_system
+        "You are a query parser for a Text-to-SQL system. Always respond with valid JSON.",
+        # sql2_generate
+        """다음 정보를 바탕으로 {{db_type}} SQL 쿼리를 작성하세요.
+
+[질문]
+{{question}}
+
+[스키마]
+{{schema}}
+
+[테이블 관계]
+{{relations}}
+
+[유사 용어]
+{{synonyms}}
+
+[SQL 예제]
+{{fewshots}}
+
+[이전 대화]
+{{history}}
+
+난이도: {{difficulty}}
+{{cot_instruction}}
+
+DB 방언 규칙:
+{{dialect_rules}}
+
+<reasoning>
+(단계별 사고 과정)
+</reasoning>
+
+```sql
+-- 최종 SQL
+```""",
+        # sql2_generate_system
+        "You are an expert SQL generator. Think step-by-step, then return the SQL.",
+        # sql2_fix
+        """다음 SQL에 오류가 있습니다. 수정하여 올바른 SQL만 반환하세요.
+
+[원본 SQL]
+{{sql}}
+
+[오류 목록]
+{{errors}}
+
+[스키마 참고]
+{{schema}}
+
+수정된 SQL만 ```sql ... ``` 형식으로 반환하세요.""",
+        # sql2_fix_system
+        "You are an expert SQL debugger. Fix the SQL based on the errors provided.",
+        # sql2_summarize
+        """다음 SQL 실행 결과를 분석하여 JSON으로 반환하세요.
+
+질문: {{question}}
+SQL: {{sql}}
+결과 (최대 20행): {{result_preview}}
+컬럼: {{columns}}
+
+{
+  "summary": "한국어 1~2문장 요약",
+  "chart": null 또는 {"type": "bar|line|pie|scatter|area", "x": "컬럼명", "y": "컬럼명", "title": "차트 제목"}
+}""",
+        # sql2_summarize_system
+        "You are a data analyst. Respond ONLY with valid JSON.",
     )
+    # 기존 rows에 agent_type 업데이트 (DEFAULT 'all'로 들어간 경우 보정)
+    await conn.execute("""
+        UPDATE ops_prompt SET agent_type = 'knowledge_rag'
+        WHERE func_key IN ('chat_system','category_suggest','glossary_suggest') AND agent_type = 'all'
+    """)
+    await conn.execute("""
+        UPDATE ops_prompt SET agent_type = 'mcp_tool'
+        WHERE func_key IN ('tool_select','tool_answer','autocomplete') AND agent_type = 'all'
+    """)
+    await conn.execute("""
+        UPDATE ops_prompt SET agent_type = 'text2sql'
+        WHERE func_key LIKE 'sql2_%' AND agent_type = 'all'
+    """)
 
 
 async def _run_migrations() -> None:

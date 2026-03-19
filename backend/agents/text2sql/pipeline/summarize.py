@@ -3,6 +3,8 @@ import json
 import logging
 import re
 
+from service.prompt.loader import get_prompt
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SYSTEM = "You are a data analyst. Respond ONLY with valid JSON."
@@ -57,8 +59,8 @@ async def run(context: dict, llm, stage_cfg: dict) -> dict:
 
     # 최대 20행만 LLM에 전달
     preview = rows[:20]
-    system = stage_cfg.get("system_prompt") or _DEFAULT_SYSTEM
-    prompt_tmpl = stage_cfg.get("prompt") or _DEFAULT_PROMPT
+    system = await get_prompt("sql2_summarize_system", _DEFAULT_SYSTEM)
+    prompt_tmpl = await get_prompt("sql2_summarize", _DEFAULT_PROMPT)
     prompt = (
         prompt_tmpl
         .replace("{{question}}", context["question"])

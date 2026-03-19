@@ -6,6 +6,7 @@ export interface Prompt {
   func_name: string;
   content: string;
   description: string;
+  agent_type: string;
   updated_at: string;
 }
 

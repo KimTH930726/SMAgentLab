@@ -19,13 +19,24 @@ docker compose up --build -d
 
 > **마지막 업데이트**: 2026-03-19
 > **브랜치**: `dev_0` (테스트 완료 후 `main` 머지 예정)
-> **최근 변경**: 플랫폼 확장 리팩터링 — `domain/` → `service/` + `agents/` 디렉터리 재구성 + DB 테이블 이름 변경 (v2.8)
+> **최근 변경**: 프롬프트 에이전트별 분리 — `ops_prompt.agent_type` + Text2SQL 파이프라인 프롬프트 통합 (v2.9)
 
 ### 진행 중 / 미완료
 
 없음 — 클린 상태
 
-### 최근 완료: 백엔드 디렉터리 리팩터링 (v2.8)
+### 최근 완료: 프롬프트 에이전트별 분리 (v2.9)
+
+- `ops_prompt` 테이블에 `agent_type VARCHAR(50) DEFAULT 'all'` 컬럼 추가 (마이그레이션 자동 적용)
+- Text2SQL 파이프라인 프롬프트 8개 `ops_prompt`로 통합 (`sql2_parse/generate/fix/summarize` × system/user)
+  - 파이프라인 단계(`parse/generate/fix/summarize`)가 `get_prompt('sql2_*')` 사용으로 전환
+  - `sql_pipeline_stage`의 `prompt`/`system_prompt` 컬럼은 유지하되 더 이상 사용하지 않음
+- Admin 파이프라인 탭에서 프롬프트 편집 UI 제거 → 시스템설정 탭 프롬프트 관리로 통합
+  - `PUT /api/text2sql/pipeline/{id}/prompts` 엔드포인트 제거
+- Admin 시스템설정 탭 프롬프트 목록: `selectedAgent`에 따라 해당 에이전트 + `all` 항목만 표시
+- `{var}` 및 `{{var}}` 플레이스홀더 모두 경고 배지 표시
+
+### 이전 완료: 백엔드 디렉터리 리팩터링 (v2.8)
 
 - `backend/domain/` → `backend/service/` (플랫폼 공통: auth, admin, chat, feedback, llm, mcp_tool, prompt)
   - ⚠️ `platform/` 명칭은 Python stdlib `platform` 모듈과 충돌 → `service/` 로 확정
@@ -61,7 +72,7 @@ docker compose up --build -d
 | **캐시 쿼리 정규화** | `normalize_query()` — 연속공백·한글자모간공백 제거, 소문자. 캐시 벡터만 적용, RAG 검색은 원본 사용 |
 | **MCP JSONB 파싱** | asyncpg JSONB → `str` 반환. `json.loads()` 필수. `isinstance(dict)` 체크만 하면 항상 `{}` 반환 버그 |
 | **SSE tool_request 유지** | 스트림 종료 시 `toolRequest` 대기 중이면 `clearStreamState()` 호출 안 함. DB placeholder → `convertMessages`에서 필터링 |
-| **프롬프트 관리** | `ops_prompt` 테이블. `get_prompt(key, fallback)` → DB 우선, 없으면 fallback |
+| **프롬프트 관리** | `ops_prompt` 테이블. `agent_type` 컬럼으로 에이전트 스코핑. `get_prompt(key, fallback)` → DB 우선, 없으면 fallback. Text2SQL 파이프라인도 `sql2_*` 키로 동일하게 관리 |
 | **Fernet 암호화 키** | `settings.fernet_secret_key` 우선, 없으면 `settings.jwt_secret_key` fallback |
 | **Ollama num_ctx** | `generate_once()`에서 `num_ctx: 8192`. 기본 2048은 스키마 포함 SQL 프롬프트에 부족 |
 | **resolve_namespace_id** | `core/database.py` — NS name→id 변환 공통 헬퍼. 인라인 쿼리 금지 |

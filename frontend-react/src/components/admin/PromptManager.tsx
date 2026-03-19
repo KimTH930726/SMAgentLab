@@ -5,7 +5,25 @@ import { listPrompts, updatePrompt } from '../../api/prompts';
 import type { Prompt, PromptUpdate } from '../../api/prompts';
 import { Button } from '../ui/Button';
 
-export function PromptManager() {
+const AGENT_TYPE_LABELS: Record<string, string> = {
+  all:           '공통',
+  knowledge_rag: 'RAG',
+  text2sql:      'Text2SQL',
+  mcp_tool:      'MCP',
+};
+
+const AGENT_TYPE_COLORS: Record<string, string> = {
+  all:           'text-slate-400 bg-slate-700',
+  knowledge_rag: 'text-violet-300 bg-violet-500/20',
+  text2sql:      'text-emerald-300 bg-emerald-500/20',
+  mcp_tool:      'text-sky-300 bg-sky-500/20',
+};
+
+interface Props {
+  agentType?: string | null;
+}
+
+export function PromptManager({ agentType }: Props) {
   const qc = useQueryClient();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<PromptUpdate>({});
@@ -26,7 +44,12 @@ export function PromptManager() {
     },
   });
 
-  const selectedPrompt = prompts?.find((p) => p.id === selectedId) ?? null;
+  // agentType이 지정된 경우 해당 agent + 'all' 표시, null/undefined면 전체
+  const filtered = prompts?.filter((p) =>
+    !agentType ? true : p.agent_type === agentType || p.agent_type === 'all'
+  ) ?? [];
+
+  const selectedPrompt = filtered.find((p) => p.id === selectedId) ?? null;
 
   const handleSelect = (p: Prompt) => {
     setSelectedId(p.id);
@@ -48,7 +71,7 @@ export function PromptManager() {
     <div className="flex gap-6">
       {/* ── 좌측 리스트 ── */}
       <div className="w-80 flex-shrink-0 flex flex-col gap-1 overflow-y-auto pr-2 max-h-[600px]">
-        {prompts?.map((p) => (
+        {filtered.map((p) => (
           <button
             key={p.id}
             onClick={() => handleSelect(p)}
@@ -59,7 +82,11 @@ export function PromptManager() {
             }`}
           >
             <div className="flex items-center gap-1.5 mb-1">
-              <span className="text-[10px] font-mono text-slate-500">#{p.id}</span>
+              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                AGENT_TYPE_COLORS[p.agent_type] ?? AGENT_TYPE_COLORS['all']
+              }`}>
+                {AGENT_TYPE_LABELS[p.agent_type] ?? p.agent_type}
+              </span>
               <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
                 selectedId === p.id ? 'text-indigo-300 bg-indigo-500/20' : 'text-slate-400 bg-slate-700'
               }`}>
@@ -81,8 +108,10 @@ export function PromptManager() {
           <div className="h-full flex flex-col gap-4">
             {/* 헤더 */}
             <div className="flex items-center gap-3 bg-slate-800 border border-slate-700 rounded-xl px-4 py-3">
-              <span className="text-xs font-mono text-slate-500 bg-slate-900 px-2 py-0.5 rounded">
-                #{selectedPrompt.id}
+              <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+                AGENT_TYPE_COLORS[selectedPrompt.agent_type] ?? AGENT_TYPE_COLORS['all']
+              }`}>
+                {AGENT_TYPE_LABELS[selectedPrompt.agent_type] ?? selectedPrompt.agent_type}
               </span>
               <span className="text-xs font-mono text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded">
                 {selectedPrompt.func_key}
@@ -92,17 +121,28 @@ export function PromptManager() {
               </span>
             </div>
 
-            {/* 플레이스홀더 경고 */}
-            {/\{[^}]+\}/.test(selectedPrompt.content) && (
-              <div className="flex items-start gap-2 px-4 py-2 rounded-lg text-xs border bg-amber-500/10 border-amber-500/30 text-amber-300">
-                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                <span>
-                  이 프롬프트에는 <code className="bg-amber-900/40 px-1 rounded font-mono">
-                    {[...selectedPrompt.content.matchAll(/\{([^}]+)\}/g)].map(m => `{${m[1]}}`).join(', ')}
-                  </code> 플레이스홀더가 포함되어 있습니다. 수정 시 반드시 유지하세요.
-                </span>
-              </div>
-            )}
+            {/* 플레이스홀더 경고 — {var} 및 {{var}} 모두 감지 */}
+            {/\{\{[^}]+\}\}|\{[^}]+\}/.test(selectedPrompt.content) && (() => {
+              const placeholders = [
+                ...selectedPrompt.content.matchAll(/\{\{([^}]+)\}\}|\{([^}]+)\}/g),
+              ].map(m => m[0]);
+              const unique = [...new Set(placeholders)];
+              return (
+                <div className="flex items-start gap-2 px-4 py-2 rounded-lg text-xs border bg-amber-500/10 border-amber-500/30 text-amber-300">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <span>
+                    이 프롬프트에는{' '}
+                    {unique.map((ph, i) => (
+                      <span key={i}>
+                        <code className="bg-amber-900/40 px-1 rounded font-mono">{ph}</code>
+                        {i < unique.length - 1 && ' '}
+                      </span>
+                    ))}{' '}
+                    플레이스홀더가 포함되어 있습니다. 수정 시 반드시 유지하세요.
+                  </span>
+                </div>
+              );
+            })()}
 
             {/* 상태 메시지 */}
             {saveMutation.isError && (

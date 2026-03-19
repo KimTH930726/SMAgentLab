@@ -3,6 +3,8 @@ import json
 import logging
 import re
 
+from service.prompt.loader import get_prompt
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SYSTEM = "You are a query parser for a Text-to-SQL system. Always respond with valid JSON."
@@ -41,8 +43,8 @@ def _extract_json(text: str) -> dict:
 async def run(context: dict, llm, stage_cfg: dict) -> dict:
     """Returns: {"parsed": dict}"""
     question = context["question"]
-    system = stage_cfg.get("system_prompt") or _DEFAULT_SYSTEM
-    prompt_tmpl = stage_cfg.get("prompt") or _DEFAULT_PROMPT
+    system = await get_prompt("sql2_parse_system", _DEFAULT_SYSTEM)
+    prompt_tmpl = await get_prompt("sql2_parse", _DEFAULT_PROMPT)
     prompt = prompt_tmpl.replace("{{question}}", question)
     try:
         raw = await llm.generate_once(prompt=prompt, system=system, max_tokens=512, api_key=context.get("api_key"))

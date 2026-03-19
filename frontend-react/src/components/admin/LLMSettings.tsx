@@ -133,6 +133,7 @@ type SubTab = 'provider' | 'thresholds' | 'prompts';
 
 export function LLMSettings() {
   const [subTab, setSubTab] = useState<SubTab>('thresholds');
+  const selectedAgent = useAppStore((s) => s.selectedAgent);
 
   return (
     <div className={subTab === 'prompts' ? 'max-w-5xl' : 'max-w-2xl'}>
@@ -174,7 +175,7 @@ export function LLMSettings() {
       </div>
 
       {subTab === 'provider' && <ProviderSettings />}
-      {subTab === 'prompts' && <PromptManager />}
+      {subTab === 'prompts' && <PromptManager agentType={selectedAgent} />}
       {subTab === 'thresholds' && (
         <div className="space-y-4">
           <CollapsibleSection title="검색 기본값 설정" defaultOpen={false}>

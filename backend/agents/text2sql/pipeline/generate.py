@@ -2,6 +2,8 @@
 import logging
 import re
 
+from service.prompt.loader import get_prompt
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SYSTEM = "You are an expert SQL generator. Think step-by-step, then return the SQL."
@@ -127,8 +129,8 @@ async def run(context: dict, llm, relations: list[dict], db_type: str, stage_cfg
     dialect = _DIALECT_RULES.get(db_type.lower(), "")
     cot = _COT_INSTRUCTIONS.get(difficulty, _COT_INSTRUCTIONS["simple"])
 
-    system = stage_cfg.get("system_prompt") or _DEFAULT_SYSTEM
-    prompt_tmpl = stage_cfg.get("prompt") or _DEFAULT_PROMPT
+    system = await get_prompt("sql2_generate_system", _DEFAULT_SYSTEM)
+    prompt_tmpl = await get_prompt("sql2_generate", _DEFAULT_PROMPT)
     prompt = (
         prompt_tmpl
         .replace("{{question}}", context["question"])

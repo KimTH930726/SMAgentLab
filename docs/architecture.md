@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.8)
+# Ops-Navigator 시스템 아키텍처 (v2.9)
 
 ## 개요
 
@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약** (자세한 내용은 `dev-handoff.md` 참조)
+- v2.9: `ops_prompt` 에이전트별 분리 — `agent_type` 컬럼 추가, text2sql 파이프라인 프롬프트 `ops_prompt`로 통합, 파이프라인 탭 프롬프트 편집 UI 제거
 - v2.8: `domain/` → `service/` + `agents/{agent}/` 재구성 + DB 테이블 prefix 변경 (`rag_*`)
 - v2.7: SQL Few-shot 피드백 워크플로우, ERD 캔버스 패닝, MCP 도구 에이전트 분리
 - v2.6: Text-to-SQL 어드민 UI 개편, ERD 고도화, AI 자동생성
@@ -180,7 +181,7 @@ ops_feedback          -- 👍/👎 피드백 로그 (agent_type, meta JSONB)
 ops_query_log         -- 질의 로그 (status: pending/resolved/unresolved, agent_type)
 ops_mcp_tool          -- MCP 도구 정의 (hub_base_url, tool_path, param_schema JSONB, agent_type)
 ops_mcp_tool_log      -- MCP 도구 감사 로그
-ops_prompt            -- 프롬프트 관리 (Admin UI에서 편집)
+ops_prompt            -- 프롬프트 관리 (agent_type별 에이전트 스코핑, Admin 시스템설정 탭에서 편집)
 ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 영속화)
 
 -- KnowledgeRAG 전용 (rag_* prefix, v2.8에서 ops_*→rag_* 변경)
@@ -197,7 +198,7 @@ sql_schema_column     -- 컬럼 메타데이터 (is_pk, fk_reference)
 sql_relation          -- FK 관계 정의
 sql_synonym           -- 자연어 → SQL 표현 매핑 (embedding VECTOR(768))
 sql_fewshot           -- Q&A Few-shot (embedding VECTOR(768), status: pending/approved/rejected)
-sql_pipeline_stage    -- 파이프라인 단계 설정 (is_enabled, prompt)
+sql_pipeline_stage    -- 파이프라인 단계 설정 (is_enabled/order_num 등 메타. 프롬프트는 ops_prompt sql2_* 키 사용)
 sql_audit_log         -- 쿼리 실행 감사 로그
 sql_cache             -- 쿼리 결과 캐시
 sql_schema_vector     -- 스키마 벡터 인덱스
@@ -339,7 +340,6 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `POST` | `/api/text2sql/namespaces/{ns}/fewshots/generate-ai` | AI 예제 자동생성 (20+ QA 쌍) — v2.6 신규 |
 | `GET` | `/api/text2sql/pipeline` | 파이프라인 단계 목록 |
 | `PUT` | `/api/text2sql/pipeline/{id}/toggle` | 단계 활성/비활성 |
-| `PUT` | `/api/text2sql/pipeline/{id}/prompts` | 단계별 프롬프트 편집 |
 | `GET` | `/api/text2sql/namespaces/{ns}/audit-logs` | 쿼리 감사 로그 (페이지네이션) |
 | `GET/DELETE` | `/api/text2sql/namespaces/{ns}/cache/{id?}` | 쿼리 결과 캐시 조회/삭제 |
 

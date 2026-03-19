@@ -149,10 +149,6 @@ export async function togglePipelineStage(id: string, isEnabled: boolean): Promi
   await apiFetch(`/text2sql/pipeline/${id}/toggle`, { method: 'PUT', body: JSON.stringify({ is_enabled: isEnabled }) });
 }
 
-export async function updatePipelinePrompts(id: string, data: { prompt?: string | null; system_prompt?: string | null }): Promise<void> {
-  await apiFetch(`/text2sql/pipeline/${id}/prompts`, { method: 'PUT', body: JSON.stringify(data) });
-}
-
 // ── Audit Log ─────────────────────────────────────────────────────────────────
 
 export async function listAuditLogs(namespace: string, page = 1, limit = 50): Promise<{ items: SqlAuditLog[]; total: number }> {

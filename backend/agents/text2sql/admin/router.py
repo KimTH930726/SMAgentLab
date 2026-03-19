@@ -744,12 +744,6 @@ class PipelineTogglePayload(BaseModel):
     is_enabled: bool
 
 
-class PipelinePromptPayload(BaseModel):
-    prompt: Optional[str] = None
-    system_prompt: Optional[str] = None
-    extra_prompts: Optional[str] = None
-
-
 @router.put("/pipeline/{stage_id}/toggle")
 async def toggle_stage(stage_id: str, body: PipelineTogglePayload, _=Depends(require_admin)):
     # required 스테이지는 비활성화 불가
@@ -760,12 +754,6 @@ async def toggle_stage(stage_id: str, body: PipelineTogglePayload, _=Depends(req
     if is_required and not body.is_enabled:
         raise HTTPException(status_code=400, detail="필수 단계는 비활성화할 수 없습니다.")
     await service.update_pipeline_stage(stage_id, {"is_enabled": body.is_enabled})
-    return {"ok": True}
-
-
-@router.put("/pipeline/{stage_id}/prompts")
-async def update_stage_prompts(stage_id: str, body: PipelinePromptPayload, _=Depends(require_admin)):
-    await service.update_pipeline_stage(stage_id, body.model_dump(exclude_none=True))
     return {"ok": True}
 
 

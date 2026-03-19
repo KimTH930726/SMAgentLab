@@ -3,6 +3,7 @@ import logging
 import re
 
 from agents.text2sql.pipeline.safety import BlockedQueryError, validate_sql_safety
+from service.prompt.loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,8 @@ async def run(context: dict, llm, stage_cfg: dict) -> dict:
     if not errors:
         return {"sql": sql, "fixed": False}
 
-    system = stage_cfg.get("system_prompt") or _DEFAULT_SYSTEM
-    prompt_tmpl = stage_cfg.get("prompt") or _DEFAULT_PROMPT
+    system = await get_prompt("sql2_fix_system", _DEFAULT_SYSTEM)
+    prompt_tmpl = await get_prompt("sql2_fix", _DEFAULT_PROMPT)
 
     fixed_sql = sql
     for attempt in range(1, MAX_RETRIES + 1):

@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import {
   Plus, Trash2, RefreshCw, Save, Eye, EyeOff, CheckCircle, XCircle,
-  Search, Edit2, X, Maximize2, Minimize2, Sparkles, Undo2, ZoomIn, ZoomOut,
+  Search, X, Maximize2, Minimize2, Sparkles, Undo2, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { getNamespaces } from '../../api/namespaces';
@@ -14,7 +14,7 @@ import {
   listRelations, createRelation, deleteRelation, suggestRelationsAI,
   listSynonyms, createSynonym, deleteSynonym, reindexSynonyms, generateSynonymsAI,
   listSqlFewshots, createSqlFewshot, updateSqlFewshotStatus, deleteSqlFewshot, reindexFewshots, generateFewshotsAI,
-  listPipelineStages, togglePipelineStage, updatePipelinePrompts,
+  listPipelineStages, togglePipelineStage,
   listAuditLogs,
   listSqlCache, deleteSqlCacheEntry, clearSqlCache,
   type SchemaTableWithCols,
@@ -1150,21 +1150,17 @@ function FewshotTab() {
 
 function PipelineTab() {
   const qc = useQueryClient();
-  const [editing, setEditing] = useState<SqlPipelineStage | null>(null);
   const { data: stages = [], isLoading } = useQuery({ queryKey: ['sql_pipeline_stages'], queryFn: listPipelineStages });
   const toggleMut = useMutation({
     mutationFn: (s: SqlPipelineStage) => togglePipelineStage(s.id, !s.is_enabled),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_pipeline_stages'] }),
-  });
-  const saveMut = useMutation({
-    mutationFn: (s: SqlPipelineStage) => updatePipelinePrompts(s.id, { prompt: s.prompt, system_prompt: s.system_prompt }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['sql_pipeline_stages'] }); setEditing(null); },
   });
 
   if (isLoading) return <p className="text-slate-400 text-sm">로딩 중...</p>;
 
   return (
     <div className="space-y-3">
+      <p className="text-xs text-slate-500">파이프라인 프롬프트는 [시스템 설정 → 프롬프트 관리]에서 편집하세요.</p>
       {stages.map((s) => (
         <div key={s.id} className="bg-slate-800 border border-slate-700 rounded-xl p-4">
           <div className="flex items-center justify-between">
@@ -1176,41 +1172,14 @@ function PipelineTab() {
               </div>
               {s.is_required && <span className="text-xs text-amber-500">필수</span>}
             </div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setEditing(s)} className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded hover:bg-slate-700 border border-indigo-700/50 hover:border-indigo-500">
-                <Edit2 className="w-3 h-3" /> 프롬프트 편집
-              </button>
-              <button onClick={() => !s.is_required && toggleMut.mutate(s)} disabled={s.is_required}
-                className={clsx('w-10 h-5 rounded-full transition-colors relative', s.is_enabled ? 'bg-emerald-600' : 'bg-slate-600', s.is_required && 'opacity-50 cursor-not-allowed')}>
-                <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', s.is_enabled ? 'translate-x-5' : 'translate-x-0.5')} />
-              </button>
-            </div>
+            <button onClick={() => !s.is_required && toggleMut.mutate(s)} disabled={s.is_required}
+              className={clsx('w-10 h-5 rounded-full transition-colors relative', s.is_enabled ? 'bg-emerald-600' : 'bg-slate-600', s.is_required && 'opacity-50 cursor-not-allowed')}>
+              <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', s.is_enabled ? 'translate-x-5' : 'translate-x-0.5')} />
+            </button>
           </div>
           <p className="text-xs text-slate-500 mt-1 ml-9">{s.description}</p>
         </div>
       ))}
-      <Modal isOpen={!!editing} onClose={() => setEditing(null)} title={`${editing?.name} 프롬프트 편집`}>
-        {editing && (
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-slate-400">시스템 프롬프트</label>
-              <textarea rows={3} value={editing.system_prompt ?? ''} onChange={(e) => setEditing({ ...editing, system_prompt: e.target.value || null })}
-                className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-300 font-mono resize-y" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-400">유저 프롬프트 템플릿</label>
-              <textarea rows={8} value={editing.prompt ?? ''} onChange={(e) => setEditing({ ...editing, prompt: e.target.value || null })}
-                className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-300 font-mono resize-y" />
-            </div>
-            <div className="flex gap-2 justify-end">
-              <Button variant="secondary" onClick={() => setEditing(null)}>취소</Button>
-              <Button onClick={() => saveMut.mutate(editing)} disabled={saveMut.isPending}>
-                <Save className="w-3.5 h-3.5 mr-1" /> 저장
-              </Button>
-            </div>
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }

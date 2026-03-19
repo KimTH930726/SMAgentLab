@@ -1,10 +1,10 @@
 # Ops-Navigator 테이블 정의서
 
-> **Version**: 3.3
+> **Version**: 3.4
 > **DBMS**: PostgreSQL 16 + pgvector
 > **Extensions**: `vector`, `pg_trgm`
 > **벡터 차원**: 768 (paraphrase-multilingual-mpnet-base-v2)
-> **작성일**: 2026-03-19 (v3.3 — RAG 테이블 이름 변경: ops_* → rag_*)
+> **작성일**: 2026-03-19 (v3.4 — ops_prompt.agent_type 추가 + text2sql 파이프라인 프롬프트 통합)
 > **DDL 위치**: `init/01-init.sql` + `main.py` lifespan 마이그레이션
 
 ---
@@ -458,7 +458,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 ## 16. ops_prompt
 
-**목적**: LLM 프롬프트 텍스트를 DB에서 관리한다. Admin UI에서 실시간 편집 가능하며, 코드 배포 없이 프롬프트 튜닝이 가능하다.
+**목적**: LLM 프롬프트 텍스트를 DB에서 관리한다. Admin 시스템설정 탭에서 에이전트별로 필터링하여 실시간 편집 가능하며, 코드 배포 없이 프롬프트 튜닝이 가능하다.
 
 | # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
 |---|--------|-----------|------|--------|---------|------|
@@ -467,18 +467,33 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | 3 | `func_name` | VARCHAR(200) | NO | - | - | 프롬프트 표시명 |
 | 4 | `content` | TEXT | NO | `''` | - | 프롬프트 내용 |
 | 5 | `description` | TEXT | NO | `''` | - | 용도 설명 |
-| 6 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
-| 7 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 마지막 수정일시 |
+| 6 | `agent_type` | VARCHAR(50) | NO | `'all'` | - | 에이전트 스코프 (`all` \| `knowledge_rag` \| `text2sql` \| `mcp_tool`) |
+| 7 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
+| 8 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 마지막 수정일시 |
 
 **조회 방식**: `get_prompt(func_key, fallback)` — DB에 있으면 DB 값, 없으면 코드 내 fallback 사용. 결과는 인메모리 캐시, 편집 시 자동 무효화.
 
+**Admin UI 동작**: `selectedAgent`에 따라 해당 에이전트 + `all` 항목만 표시. 에이전트 전환 시 목록 자동 필터.
+
 **주요 func_key**:
-| func_key | 설명 |
-|----------|------|
-| `chat_system` | RAG 채팅 시스템 프롬프트 |
-| `tool_select` | McpToolAgent 도구 선택 시스템 프롬프트 |
-| `tool_answer` | MCP 응답 기반 LLM 답변 시스템 프롬프트 |
-| `autocomplete` | 도구 등록 자동완성 (자연어→JSON 변환) |
+
+| func_key | agent_type | 설명 |
+|----------|-----------|------|
+| `chat_system` | `knowledge_rag` | RAG 채팅 시스템 프롬프트 |
+| `category_suggest` | `knowledge_rag` | 지식 카테고리 자동 추천 |
+| `glossary_suggest` | `knowledge_rag` | 미매핑 질문에서 업무 용어 추출 |
+| `tool_select` | `mcp_tool` | McpToolAgent 도구 선택 시스템 프롬프트 |
+| `tool_answer` | `mcp_tool` | MCP 응답 기반 LLM 답변 프롬프트 |
+| `autocomplete` | `mcp_tool` | 도구 등록 자동완성 (자연어→JSON 변환) |
+| `conv_summarize` | `all` | 대화 기록 요약 (에이전트 공통) |
+| `sql2_parse` | `text2sql` | Text2SQL Stage 1 질문 분석 프롬프트 (`{{question}}`) |
+| `sql2_parse_system` | `text2sql` | Text2SQL Stage 1 시스템 프롬프트 |
+| `sql2_generate` | `text2sql` | Text2SQL Stage 3 SQL 생성 프롬프트 (`{{question}}` · `{{schema}}` 등) |
+| `sql2_generate_system` | `text2sql` | Text2SQL Stage 3 시스템 프롬프트 |
+| `sql2_fix` | `text2sql` | Text2SQL Stage 5 자동 수정 프롬프트 (`{{sql}}` · `{{errors}}` · `{{schema}}`) |
+| `sql2_fix_system` | `text2sql` | Text2SQL Stage 5 시스템 프롬프트 |
+| `sql2_summarize` | `text2sql` | Text2SQL Stage 7 결과 요약 프롬프트 (`{{question}}` · `{{sql}}` · `{{result_preview}}` · `{{columns}}`) |
+| `sql2_summarize_system` | `text2sql` | Text2SQL Stage 7 시스템 프롬프트 |
 
 ---
 
@@ -556,6 +571,7 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 21 | 6개 테이블 | `CREATE INDEX IF NOT EXISTS idx_*` | 성능 인덱스 6개 추가 (message, conversation, query_log, fewshot, feedback) |
 | 22 | `ops_mcp_tool` | `ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'` | MCP 도구 에이전트 분리 — 에이전트별 독립 도구 관리 |
 | 23 | `sql_fewshot` | `ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'` | SQL Few-shot 피드백 연동 — `pending`(후보)/`approved`(승인됨)/`rejected`(반려됨) |
+| 24 | `ops_prompt` | `ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'all'` | 에이전트별 프롬프트 스코핑 — 시스템설정 탭에서 현재 에이전트 프롬프트만 표시 |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
