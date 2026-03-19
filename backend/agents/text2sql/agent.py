@@ -6,9 +6,9 @@ from typing import AsyncIterator, Optional
 
 from agents.base import AgentBase
 from core.database import get_conn
-from domain.chat.helpers import update_assistant_message
-from domain.llm.factory import get_llm_provider
-from domain.text2sql import service
+from service.chat.helpers import update_assistant_message
+from service.llm.factory import get_llm_provider
+from agents.text2sql.admin import service
 from agents.text2sql.pipeline import parse, rag, generate, validate, fix, execute, summarize
 from agents.text2sql.pipeline.safety import BlockedQueryError
 

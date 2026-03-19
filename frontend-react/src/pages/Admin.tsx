@@ -69,7 +69,6 @@ const TABS: Tab[] = [
   { id: 'knowledge',    label: '지식 베이스',        icon: <BookOpen className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
   { id: 'glossary',     label: '용어집',              icon: <Database className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
   { id: 'fewshots',     label: 'Few-shot',            icon: <Zap className="w-4 h-4" />,        agentScope: 'knowledge_rag' },
-  { id: 'mcp_tools',    label: 'MCP 도구',            icon: <Wrench className="w-4 h-4" />,     agentScope: 'all' },
   { id: 'debug',        label: '파이프라인 디버그',    icon: <Search className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
   // text2sql 전용 탭
   { id: 'sql_db',       label: '대상 DB',             icon: <Database className="w-4 h-4" />,   agentScope: 'text2sql' },
@@ -77,6 +76,7 @@ const TABS: Tab[] = [
   { id: 'sql_erd',      label: 'ERD',                  icon: <Network className="w-4 h-4" />,    agentScope: 'text2sql' },
   { id: 'sql_synonyms', label: '용어 사전',             icon: <GitMerge className="w-4 h-4" />,  agentScope: 'text2sql' },
   { id: 'sql_fewshots', label: 'SQL Few-shot',           icon: <ListOrdered className="w-4 h-4" />, agentScope: 'text2sql' },
+  { id: 'mcp_tools',    label: 'MCP 도구',            icon: <Wrench className="w-4 h-4" />,     agentScope: 'all' },
   { id: 'sql_pipeline', label: '파이프라인',             icon: <Workflow className="w-4 h-4" />,  agentScope: 'text2sql' },
   { id: 'sql_audit',    label: '감사 로그',              icon: <FileText className="w-4 h-4" />,  agentScope: 'text2sql' },
   // 공통 탭 (knowledge_rag 전용으로 이동)

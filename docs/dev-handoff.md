@@ -19,11 +19,21 @@ docker compose up --build -d
 
 > **마지막 업데이트**: 2026-03-19
 > **브랜치**: `dev_0` (테스트 완료 후 `main` 머지 예정)
-> **최근 변경**: Text-to-SQL 에이전트 + Agent-centric UI 전면 도입 (v2.6) — 커밋 완료
+> **최근 변경**: 플랫폼 확장 리팩터링 — `domain/` → `service/` + `agents/` 디렉터리 재구성 + DB 테이블 이름 변경 (v2.8)
 
 ### 진행 중 / 미완료
 
 없음 — 클린 상태
+
+### 최근 완료: 백엔드 디렉터리 리팩터링 (v2.8)
+
+- `backend/domain/` → `backend/service/` (플랫폼 공통: auth, admin, chat, feedback, llm, mcp_tool, prompt)
+  - ⚠️ `platform/` 명칭은 Python stdlib `platform` 모듈과 충돌 → `service/` 로 확정
+- `backend/domain/knowledge/` → `backend/agents/knowledge_rag/knowledge/`
+- `backend/domain/fewshot/` → `backend/agents/knowledge_rag/fewshot/`
+- `backend/domain/text2sql/` → `backend/agents/text2sql/admin/`
+- `backend/domain/http_tool/` → `backend/agents/http_tool/admin/`
+- DB 테이블 이름 변경 (마이그레이션 자동 적용): `ops_knowledge` → `rag_knowledge`, `ops_glossary` → `rag_glossary`, `ops_fewshot` → `rag_fewshot`, `ops_knowledge_category` → `rag_knowledge_category`, `ops_conv_summary` → `rag_conv_summary`
 
 ### 백로그
 
@@ -56,10 +66,14 @@ docker compose up --build -d
 | **Ollama num_ctx** | `generate_once()`에서 `num_ctx: 8192`. 기본 2048은 스키마 포함 SQL 프롬프트에 부족 |
 | **resolve_namespace_id** | `core/database.py` — NS name→id 변환 공통 헬퍼. 인라인 쿼리 금지 |
 | **네임스페이스 권한** | `owner_part = NULL` → 전체 CRUD / 같은 파트 → CRUD / 다른 파트 → 읽기 전용 |
+| **SQL Few-shot 상태** | `status: pending→approved→rejected`. 채팅 👍 → `POST /fewshots/from-feedback` (일반 사용자) → pending 등록 → 관리자 승인. text2sql 에이전트만 해당 |
+| **MCP 도구 에이전트 분리** | `ops_mcp_tool.agent_type` 컬럼. `listMcpTools(ns, agentType)` 시 필터. 도구 생성 시 `agent_type` 필수 |
 
 ---
 
 ## 완료 이력 (최근순)
+
+- **v2.7 UX 개선 + 피드백 연동** (2026-03-19): ① SQL Few-shot 피드백 연동 — 채팅에서 👍 클릭 시 질의-SQL 쌍이 `sql_fewshot`에 `status='pending'`으로 자동 등록, 관리자가 SQL Few-shot 탭에서 승인/반려. 상태 필터(전체/등록 후보/승인됨/반려됨) + 뱃지 UI. ② ERD 배경 드래그 → 캔버스 패닝 (스크롤 없이 자유 이동). ③ MCP 도구 에이전트 분리 — `ops_mcp_tool.agent_type` 컬럼 기반, 에이전트별 독립 도구 관리. Admin 탭 순서 재편 (SQL Few-shot → MCP 도구 → 파이프라인). ④ text2sql 부정 피드백 시 지식 등록 폼 미노출 (에이전트별 분기)
 
 - **v2.6 Text-to-SQL 전면 도입** (2026-03-19): ① Text-to-SQL 에이전트 7단계 파이프라인 (parse/rag/generate/validate/fix/execute/summarize) + `sql_*` 테이블 10개. ② Agent-centric UI — 로그인 후 AgentSelect 화면, 에이전트별 채팅+어드민 분리. ③ Admin 탭 재편 — text2sql 서브탭(대상DB·스키마·ERD·용어사전·SQL Few-shot·파이프라인·감사로그) 메인탭 승격, 에이전트현황 제거, 캐시·통계 → knowledge_rag 전용. ④ ERD 고도화 — 위치 DB 저장, Ctrl+Z 되돌리기(20단계), 자동 정리, 줌, 회색 점선 관계선+화살표. ⑤ AI 자동생성 3종 (`/synonyms/generate-ai`, `/fewshots/generate-ai`, `/relations/suggest-ai`). ⑥ AgentSelect 헬스체크 뱃지. ⑦ 라이트모드 SQL 블록 oneLight 테마 전환. ⑧ 백엔드 최적화 — embed 병렬화, Redis pipeline, Fernet 싱글톤, UPDATE RETURNING
 

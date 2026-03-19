@@ -9,17 +9,17 @@ from core.config import settings
 from core.database import init_pool, close_pool, get_conn
 from core.security import hash_password
 from shared.embedding import embedding_service
-from domain.llm.factory import get_llm_provider
+from service.llm.factory import get_llm_provider
 
-from domain.auth.router import router as auth_router
-from domain.chat.router import router as chat_router
-from domain.knowledge.router import router as knowledge_router
-from domain.fewshot.router import router as fewshot_router
-from domain.feedback.router import router as feedback_router
-from domain.admin.router import router as admin_router
-from domain.mcp_tool.router import router as mcp_tool_router
-from domain.prompt.router import router as prompt_router
-from domain.text2sql.router import router as text2sql_router
+from service.auth.router import router as auth_router
+from service.chat.router import router as chat_router
+from agents.knowledge_rag.knowledge.router import router as knowledge_router
+from agents.knowledge_rag.fewshot.router import router as fewshot_router
+from service.feedback.router import router as feedback_router
+from service.admin.router import router as admin_router
+from service.mcp_tool.router import router as mcp_tool_router
+from service.prompt.router import router as prompt_router
+from agents.text2sql.admin.router import router as text2sql_router
 
 from shared import cache as sem_cache
 from agents.base import AgentRegistry
@@ -41,6 +41,13 @@ _ROUTERS = [
 async def _migrate_core_tables(conn) -> None:
     """ops_part, ops_user, part_id FK, 슈퍼어드민 seed, admin user seed,
     ops_conversation.user_id, ops_conversation.agent_type 등 핵심 테이블 마이그레이션."""
+    # ── RAG-specific 테이블 이름 변경 (ops_* → rag_*) ────────────────
+    await conn.execute("ALTER TABLE IF EXISTS ops_knowledge RENAME TO rag_knowledge")
+    await conn.execute("ALTER TABLE IF EXISTS ops_glossary RENAME TO rag_glossary")
+    await conn.execute("ALTER TABLE IF EXISTS ops_fewshot RENAME TO rag_fewshot")
+    await conn.execute("ALTER TABLE IF EXISTS ops_knowledge_category RENAME TO rag_knowledge_category")
+    await conn.execute("ALTER TABLE IF EXISTS ops_conv_summary RENAME TO rag_conv_summary")
+
     # ── 기존 컬럼 추가 (하위 호환) ─────────────────────────────────
     await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS answer TEXT")
     await conn.execute("ALTER TABLE ops_conversation ADD COLUMN IF NOT EXISTS trimmed BOOLEAN NOT NULL DEFAULT FALSE")
@@ -192,12 +199,12 @@ async def _migrate_core_tables(conn) -> None:
         )
 
     # ── 지식/용어/퓨샷 테이블에 created_by_part, created_by_user_id 추가 ──
-    for tbl in ("ops_knowledge", "ops_glossary", "ops_fewshot"):
+    for tbl in ("rag_knowledge", "rag_glossary", "rag_fewshot"):
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_part VARCHAR(100)")
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_user_id INT")
 
-    # ── ops_fewshot status 컬럼 추가 ──
-    await conn.execute("ALTER TABLE ops_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'")
+    # ── rag_fewshot status 컬럼 추가 ──
+    await conn.execute("ALTER TABLE rag_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'")
 
     # ── 기존 ops_namespace 데이터 보충 (namespace 컬럼이 있는 경우만) ──
     await conn.execute("""
@@ -205,17 +212,17 @@ async def _migrate_core_tables(conn) -> None:
             ns_col_exists BOOLEAN;
         BEGIN
             SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                           WHERE table_name='ops_knowledge' AND column_name='namespace')
+                           WHERE table_name='rag_knowledge' AND column_name='namespace')
             INTO ns_col_exists;
             IF ns_col_exists THEN
                 INSERT INTO ops_namespace (name)
                 SELECT DISTINCT ns FROM (
-                    SELECT namespace AS ns FROM ops_glossary WHERE namespace IS NOT NULL
-                    UNION SELECT namespace FROM ops_knowledge WHERE namespace IS NOT NULL
+                    SELECT namespace AS ns FROM rag_glossary WHERE namespace IS NOT NULL
+                    UNION SELECT namespace FROM rag_knowledge WHERE namespace IS NOT NULL
                     UNION SELECT namespace FROM ops_query_log WHERE namespace IS NOT NULL
                     UNION SELECT namespace FROM ops_conversation WHERE namespace IS NOT NULL
                     UNION SELECT namespace FROM ops_feedback WHERE namespace IS NOT NULL
-                    UNION SELECT namespace FROM ops_fewshot WHERE namespace IS NOT NULL
+                    UNION SELECT namespace FROM rag_fewshot WHERE namespace IS NOT NULL
                 ) t WHERE ns IS NOT NULL
                 ON CONFLICT (name) DO NOTHING;
             END IF;
@@ -228,6 +235,7 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS meta JSONB")
     await conn.execute("ALTER TABLE ops_mcp_tool ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
+    await conn.execute("ALTER TABLE sql_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'")
 
     # ── query_log answer 역매칭 ────────────────────────────────────
     await conn.execute("""
@@ -267,15 +275,15 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_user_id ON ops_conversation (user_id, created_at DESC)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_ns_user ON ops_conversation (namespace_id, user_id)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_query_log_ns_status ON ops_query_log (namespace_id, status)")
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_fewshot_ns_id ON ops_fewshot (namespace_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_fewshot_ns_id ON rag_fewshot (namespace_id)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_ns_id ON ops_feedback (namespace_id)")
 
 
 async def _migrate_namespace_ids(conn) -> None:
     """namespace_id 컬럼 추가 및 FK 제약 조건 마이그레이션 (모든 관련 테이블)."""
     # ── namespace_id 컬럼 추가 및 데이터 채우기 ────────────────────
-    for tbl in ("ops_glossary", "ops_knowledge", "ops_knowledge_category",
-                "ops_query_log", "ops_conversation", "ops_feedback", "ops_fewshot"):
+    for tbl in ("rag_glossary", "rag_knowledge", "rag_knowledge_category",
+                "ops_query_log", "ops_conversation", "ops_feedback", "rag_fewshot"):
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS namespace_id INT")
         # string namespace → namespace_id 동기화 (namespace 컬럼이 있는 경우)
         col_exists = await conn.fetchval(f"""
@@ -294,13 +302,13 @@ async def _migrate_namespace_ids(conn) -> None:
 
     # ── namespace_id FK 제약 추가 (멱등) ───────────────────────────
     fk_map = {
-        "ops_glossary": "fk_glossary_namespace_id",
-        "ops_knowledge": "fk_knowledge_namespace_id",
-        "ops_knowledge_category": "fk_knowledge_cat_namespace_id",
+        "rag_glossary": "fk_glossary_namespace_id",
+        "rag_knowledge": "fk_knowledge_namespace_id",
+        "rag_knowledge_category": "fk_knowledge_cat_namespace_id",
         "ops_query_log": "fk_query_log_namespace_id",
         "ops_conversation": "fk_conversation_namespace_id",
         "ops_feedback": "fk_feedback_namespace_id",
-        "ops_fewshot": "fk_fewshot_namespace_id",
+        "rag_fewshot": "fk_fewshot_namespace_id",
     }
     for tbl, constraint in fk_map.items():
         await conn.execute(f"""

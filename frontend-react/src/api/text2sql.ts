@@ -111,12 +111,20 @@ export async function generateSynonymsAI(namespace: string): Promise<{ generated
 
 // ── Fewshots ──────────────────────────────────────────────────────────────────
 
-export async function listSqlFewshots(namespace: string): Promise<SqlFewshot[]> {
-  return apiFetch<SqlFewshot[]>(`${ns(namespace)}/fewshots`);
+export async function listSqlFewshots(namespace: string, status = 'all'): Promise<SqlFewshot[]> {
+  return apiFetch<SqlFewshot[]>(`${ns(namespace)}/fewshots?status=${status}`);
 }
 
 export async function createSqlFewshot(namespace: string, data: Omit<SqlFewshot, 'id' | 'hits'>): Promise<{ id: number }> {
   return apiFetch(`${ns(namespace)}/fewshots`, { method: 'POST', body: JSON.stringify(data) });
+}
+
+export async function createSqlFewshotFromFeedback(namespace: string, question: string, sql: string): Promise<{ id: number; skipped: boolean }> {
+  return apiFetch(`${ns(namespace)}/fewshots/from-feedback`, { method: 'POST', body: JSON.stringify({ question, sql }) });
+}
+
+export async function updateSqlFewshotStatus(namespace: string, id: number, status: 'approved' | 'pending' | 'rejected'): Promise<void> {
+  await apiFetch(`${ns(namespace)}/fewshots/${id}/status?status=${status}`, { method: 'PATCH' });
 }
 
 export async function deleteSqlFewshot(namespace: string, id: number): Promise<void> {

@@ -8,15 +8,15 @@ import httpx
 
 from agents.base import AgentBase
 from core.database import get_conn, resolve_namespace_id
-from domain.chat.helpers import (
+from service.chat.helpers import (
     LLM_UNAVAILABLE_MSG,
     results_to_json, results_to_payload,
     update_assistant_message, create_query_log, post_save_tasks,
 )
-from domain.knowledge import retrieval
-from domain.llm.base import resolve_system_prompt
-from domain.llm.factory import get_llm_provider
-from domain.prompt.loader import get_prompt as load_prompt
+from agents.knowledge_rag.knowledge import retrieval
+from service.llm.base import resolve_system_prompt
+from service.llm.factory import get_llm_provider
+from service.prompt.loader import get_prompt as load_prompt
 from shared.embedding import embedding_service
 
 logger = logging.getLogger(__name__)

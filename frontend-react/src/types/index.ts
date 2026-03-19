@@ -510,6 +510,7 @@ export interface SqlFewshot {
   sql: string;
   category: string;
   hits: number;
+  status: 'approved' | 'pending' | 'rejected';
 }
 
 export interface SqlPipelineStage {

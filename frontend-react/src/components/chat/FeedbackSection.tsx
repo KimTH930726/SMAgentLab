@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import { postFeedback } from '../../api/feedback';
 import { createKnowledge } from '../../api/knowledge';
+import { createSqlFewshotFromFeedback } from '../../api/text2sql';
 import { getCategories } from '../../api/namespaces';
 import { Button } from '../ui/Button';
 import type { KnowledgeCategory } from '../../types';
@@ -25,6 +26,8 @@ interface FeedbackSectionProps {
   answer: string;
   knowledgeId?: number | null;
   messageId?: number;
+  agentType?: string;
+  sqlResult?: { sql: string } | null;
 }
 
 export function FeedbackSection({
@@ -33,6 +36,8 @@ export function FeedbackSection({
   answer,
   knowledgeId,
   messageId,
+  agentType,
+  sqlResult,
 }: FeedbackSectionProps) {
   const qc = useQueryClient();
   const [state, setState] = useState<FeedbackState>('idle');
@@ -56,9 +61,15 @@ export function FeedbackSection({
   const handlePositive = async () => {
     try {
       await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: true, message_id: messageId ?? null });
-      // 긍정 피드백 → fewshot 자동 생성 + knowledge base_weight 변경 + 통계 갱신
-      qc.invalidateQueries({ queryKey: ['fewshots'] });
-      qc.invalidateQueries({ queryKey: ['knowledge'] });
+      if (agentType === 'text2sql' && sqlResult?.sql) {
+        // text2sql 긍정 피드백 → SQL few-shot 후보 등록
+        await createSqlFewshotFromFeedback(namespace, question, sqlResult.sql).catch(() => {});
+        qc.invalidateQueries({ queryKey: ['sql_fewshots', namespace] });
+      } else {
+        // 지식AI 긍정 피드백 → fewshot 자동 생성 + knowledge base_weight 변경
+        qc.invalidateQueries({ queryKey: ['fewshots'] });
+        qc.invalidateQueries({ queryKey: ['knowledge'] });
+      }
       qc.invalidateQueries({ queryKey: ['stats-ns'] });
     } catch (err) {
       console.error(err);
@@ -124,7 +135,7 @@ export function FeedbackSection({
               <ThumbsUp className="w-4 h-4" />
             </button>
             <button
-              onClick={() => setState('showing_form')}
+              onClick={() => agentType === 'text2sql' ? handleSkip() : setState('showing_form')}
               className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-900/20 transition-colors"
               title="개선 필요"
             >

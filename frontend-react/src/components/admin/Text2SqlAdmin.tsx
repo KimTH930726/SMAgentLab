@@ -13,7 +13,7 @@ import {
   saveSchemaPositions,
   listRelations, createRelation, deleteRelation, suggestRelationsAI,
   listSynonyms, createSynonym, deleteSynonym, reindexSynonyms, generateSynonymsAI,
-  listSqlFewshots, createSqlFewshot, deleteSqlFewshot, reindexFewshots, generateFewshotsAI,
+  listSqlFewshots, createSqlFewshot, updateSqlFewshotStatus, deleteSqlFewshot, reindexFewshots, generateFewshotsAI,
   listPipelineStages, togglePipelineStage, updatePipelinePrompts,
   listAuditLogs,
   listSqlCache, deleteSqlCacheEntry, clearSqlCache,
@@ -352,6 +352,7 @@ function ErdTab() {
   const [positions, setPositions] = useState<ErdPos>({});
   const [posHistory, setPosHistory] = useState<ErdPos[]>([]);  // undo stack
   const [dragging, setDragging] = useState<{ table: string; ox: number; oy: number } | null>(null);
+  const [panning, setPanning] = useState<{ startX: number; startY: number; startScrollLeft: number; startScrollTop: number } | null>(null);
   const [connecting, setConnecting] = useState<Connecting | null>(null);
   const [zoom, setZoom] = useState(1);
   const [selected, setSelected] = useState<number | null>(null);
@@ -432,9 +433,17 @@ function ErdTab() {
     if (connecting) {
       setConnecting((c) => c ? { ...c, cx: mx, cy: my } : null);
     }
+    if (panning) {
+      const container = containerRef.current;
+      if (container) {
+        container.scrollLeft = panning.startScrollLeft - (e.clientX - panning.startX);
+        container.scrollTop = panning.startScrollTop - (e.clientY - panning.startY);
+      }
+    }
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
+    if (panning) { setPanning(null); return; }
     if (dragging) {
       savePositions(posRef.current);
       setDragging(null);
@@ -515,7 +524,7 @@ function ErdTab() {
           <NsSelect ns={ns} setNs={setNs} namespaces={namespaces} />
           {ns && schema.length > 0 && (
             <span className="text-xs text-slate-500 hidden sm:inline">
-              테이블 드래그 → 위치 이동 &nbsp;·&nbsp; 점 드래그 → 다른 컬럼에 연결 &nbsp;·&nbsp; 관계선 클릭 → 편집/삭제
+              배경 드래그 → 화면 이동 &nbsp;·&nbsp; 테이블 드래그 → 위치 이동 &nbsp;·&nbsp; 점 드래그 → 관계 연결 &nbsp;·&nbsp; 관계선 클릭 → 편집/삭제
             </span>
           )}
         </div>
@@ -572,7 +581,13 @@ function ErdTab() {
               ref={svgRef}
               width={totalW * zoom}
               height={totalH * zoom}
-              style={{ cursor: dragging ? 'grabbing' : connecting ? 'crosshair' : 'default', userSelect: 'none' }}
+              style={{ cursor: dragging || panning ? 'grabbing' : connecting ? 'crosshair' : 'grab', userSelect: 'none' }}
+              onMouseDown={(e) => {
+                if (dragging || connecting) return;
+                const container = containerRef.current;
+                if (!container) return;
+                setPanning({ startX: e.clientX, startY: e.clientY, startScrollLeft: container.scrollLeft, startScrollTop: container.scrollTop });
+              }}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
@@ -975,17 +990,35 @@ function SynonymTab() {
 
 // ── FewshotTab ────────────────────────────────────────────────────────────────
 
+type FewshotStatusFilter = 'all' | 'pending' | 'approved' | 'rejected';
+
+const STATUS_LABELS: Record<string, { label: string; color: string }> = {
+  approved: { label: '승인됨', color: 'text-emerald-400 bg-emerald-900/30' },
+  pending:  { label: '등록 후보', color: 'text-amber-400 bg-amber-900/30' },
+  rejected: { label: '반려됨', color: 'text-rose-400 bg-rose-900/30' },
+};
+
 function FewshotTab() {
   const { ns, setNs, namespaces } = useNamespace();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState<Omit<SqlFewshot, 'id' | 'hits'>>({ question: '', sql: '', category: '' });
+  const [form, setForm] = useState<Omit<SqlFewshot, 'id' | 'hits'>>({ question: '', sql: '', category: '', status: 'approved' });
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [statusFilter, setStatusFilter] = useState<FewshotStatusFilter>('all');
 
-  const { data: fewshots = [] } = useQuery({ queryKey: ['sql_fewshots', ns], queryFn: () => listSqlFewshots(ns), enabled: !!ns });
+  const { data: fewshots = [] } = useQuery({
+    queryKey: ['sql_fewshots', ns, statusFilter],
+    queryFn: () => listSqlFewshots(ns, statusFilter),
+    enabled: !!ns,
+  });
+
   const addMut = useMutation({
     mutationFn: () => createSqlFewshot(ns, form),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['sql_fewshots', ns] }); setShowAdd(false); setForm({ question: '', sql: '', category: '' }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['sql_fewshots', ns] }); setShowAdd(false); setForm({ question: '', sql: '', category: '', status: 'approved' }); },
+  });
+  const statusMut = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: 'approved' | 'pending' | 'rejected' }) => updateSqlFewshotStatus(ns, id, status),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_fewshots', ns] }),
   });
   const delMut = useMutation({ mutationFn: (id: number) => deleteSqlFewshot(ns, id), onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_fewshots', ns] }) });
   const reindexMut = useMutation({ mutationFn: () => reindexFewshots(ns) });
@@ -997,6 +1030,8 @@ function FewshotTab() {
     },
     onError: (e: Error) => alert(`오류: ${e.message}`),
   });
+
+  const pendingCount = statusFilter === 'all' ? fewshots.filter(f => f.status === 'pending').length : (statusFilter === 'pending' ? fewshots.length : 0);
 
   return (
     <div className="space-y-4">
@@ -1017,29 +1052,71 @@ function FewshotTab() {
       </div>
 
       {ns && (
-        <div className="rounded-xl border border-slate-700 overflow-hidden divide-y divide-slate-700/60">
-          {fewshots.length === 0 && <p className="text-slate-500 text-sm text-center py-8">등록된 예제가 없습니다.</p>}
-          {fewshots.map((f) => (
-            <div key={f.id} className="hover:bg-slate-800/30">
-              <div className="flex items-center gap-3 px-4 py-3 cursor-pointer" onClick={() => setExpanded(expanded === f.id ? null : f.id)}>
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm text-slate-200">{f.question}</span>
-                  {f.category && <span className="ml-2 text-xs text-slate-500">[{f.category}]</span>}
-                  {f.hits > 0 && <span className="ml-2 text-xs text-amber-500">조회 {f.hits}회</span>}
+        <>
+          {/* Status filter tabs */}
+          <div className="flex gap-1 border-b border-slate-700">
+            {(['all', 'pending', 'approved', 'rejected'] as FewshotStatusFilter[]).map((s) => (
+              <button key={s} onClick={() => setStatusFilter(s)}
+                className={clsx(
+                  'px-3 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5',
+                  statusFilter === s
+                    ? 'text-indigo-400 border-indigo-500'
+                    : 'text-slate-500 border-transparent hover:text-slate-300',
+                )}>
+                {s === 'all' ? '전체' : STATUS_LABELS[s].label}
+                {s === 'pending' && pendingCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-400 font-bold">{pendingCount}</span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          <div className="rounded-xl border border-slate-700 overflow-hidden divide-y divide-slate-700/60">
+            {fewshots.length === 0 && <p className="text-slate-500 text-sm text-center py-8">예제가 없습니다.</p>}
+            {fewshots.map((f) => {
+              const st = STATUS_LABELS[f.status] ?? STATUS_LABELS.approved;
+              return (
+                <div key={f.id} className="hover:bg-slate-800/30">
+                  <div className="flex items-center gap-3 px-4 py-3 cursor-pointer" onClick={() => setExpanded(expanded === f.id ? null : f.id)}>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm text-slate-200">{f.question}</span>
+                      {f.category && <span className="ml-2 text-xs text-slate-500">[{f.category}]</span>}
+                      {f.hits > 0 && <span className="ml-2 text-xs text-amber-500">조회 {f.hits}회</span>}
+                    </div>
+                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                      <span className={clsx('text-[10px] px-1.5 py-0.5 rounded font-medium', st.color)}>{st.label}</span>
+                      {f.status === 'pending' && (
+                        <>
+                          <button onClick={() => statusMut.mutate({ id: f.id, status: 'approved' })}
+                            className="text-emerald-400 hover:text-emerald-300" title="승인">
+                            <CheckCircle className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => statusMut.mutate({ id: f.id, status: 'rejected' })}
+                            className="text-rose-400 hover:text-rose-300" title="반려">
+                            <XCircle className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
+                      {f.status === 'rejected' && (
+                        <button onClick={() => statusMut.mutate({ id: f.id, status: 'approved' })}
+                          className="text-emerald-400 hover:text-emerald-300 text-xs" title="승인으로 변경">
+                          <CheckCircle className="w-4 h-4" />
+                        </button>
+                      )}
+                      {expanded === f.id ? <Minimize2 className="w-3.5 h-3.5 text-slate-400" /> : <Maximize2 className="w-3.5 h-3.5 text-slate-400" />}
+                      <button onClick={() => delMut.mutate(f.id)} className="text-rose-400 hover:text-rose-300">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  {expanded === f.id && (
+                    <pre className="mx-4 mb-3 text-xs text-emerald-400 bg-slate-900/60 rounded-lg px-3 py-2 overflow-x-auto font-mono">{f.sql}</pre>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
-                  {expanded === f.id ? <Minimize2 className="w-3.5 h-3.5 text-slate-400" /> : <Maximize2 className="w-3.5 h-3.5 text-slate-400" />}
-                  <button onClick={(e) => { e.stopPropagation(); delMut.mutate(f.id); }} className="text-rose-400 hover:text-rose-300">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-              {expanded === f.id && (
-                <pre className="mx-4 mb-3 text-xs text-emerald-400 bg-slate-900/60 rounded-lg px-3 py-2 overflow-x-auto font-mono">{f.sql}</pre>
-              )}
-            </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
       <Modal isOpen={showAdd} onClose={() => setShowAdd(false)} title="SQL 예제 추가">
@@ -1248,6 +1325,7 @@ export { SynonymTab as SqlSynonymTab };
 export { FewshotTab as SqlFewshotTab };
 export { PipelineTab as SqlPipelineTab };
 export { AuditLogTab as SqlAuditLogTab };
+export { CacheTab as SqlCacheTab };
 
 // Keep Text2SqlAdmin as default fallback (unused after refactor)
 export function Text2SqlAdmin() {

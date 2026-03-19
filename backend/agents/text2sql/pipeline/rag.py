@@ -2,7 +2,7 @@
 import asyncio
 import logging
 
-from domain.text2sql import service
+from agents.text2sql.admin import service
 from shared.embedding import embedding_service
 
 logger = logging.getLogger(__name__)

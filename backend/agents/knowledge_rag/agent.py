@@ -6,16 +6,16 @@ from typing import AsyncIterator, Optional
 from agents.base import AgentBase
 from core.database import get_conn
 from core.config import settings
-from domain.chat import memory
-from domain.chat.helpers import (
+from service.chat import memory
+from service.chat.helpers import (
     LLM_UNAVAILABLE_MSG,
     results_to_json, results_to_payload,
     update_assistant_message, update_inhouse_conv_id,
     create_query_log, post_save_tasks,
 )
-from domain.knowledge import retrieval
-from domain.llm.base import resolve_system_prompt
-from domain.llm.factory import get_llm_provider
+from agents.knowledge_rag.knowledge import retrieval
+from service.llm.base import resolve_system_prompt
+from service.llm.factory import get_llm_provider
 from shared.embedding import embedding_service
 from shared import cache as sem_cache
 

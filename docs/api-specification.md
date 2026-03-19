@@ -1341,7 +1341,64 @@ LLM 프로바이더 연결을 테스트한다. 실제 전환하지 않는다.
 
 ---
 
-## 13. 공통 에러 코드
+## 13. Text-to-SQL 어드민 API (주요)
+
+> Base: `/api/text2sql/namespaces/{namespace}/`
+> 인증: JWT Bearer. 대부분 Admin 전용. `from-feedback`만 일반 사용자도 가능.
+
+### GET /api/text2sql/namespaces/{ns}/fewshots
+
+SQL Few-shot 목록 조회.
+
+**Query Parameter**: `status` — `all`(기본) | `pending` | `approved` | `rejected`
+
+**Response `200`**
+```json
+[
+  {
+    "id": 1,
+    "question": "지난달 매출 상위 10개 제품은?",
+    "sql": "SELECT product_name, SUM(amount) ...",
+    "category": "",
+    "hits": 3,
+    "status": "approved",
+    "created_at": "2026-03-19T10:00:00Z"
+  }
+]
+```
+
+### POST /api/text2sql/namespaces/{ns}/fewshots/from-feedback
+
+채팅 좋아요 피드백으로 SQL Few-shot 후보를 등록합니다. **관리자 승인 필요**.
+동일 질문이 이미 `pending`/`approved` 상태로 존재하면 중복 등록하지 않습니다.
+
+**인증**: 일반 사용자 JWT (Admin 불필요)
+
+**Request Body**
+```json
+{
+  "question": "지난달 매출 상위 10개 제품은?",
+  "sql": "SELECT product_name, SUM(amount) AS total FROM sales ..."
+}
+```
+
+**Response `200`**
+```json
+{ "id": 5, "ok": true, "skipped": false }
+```
+`skipped: true` — 중복으로 인해 등록 건너뜀
+
+### PATCH /api/text2sql/namespaces/{ns}/fewshots/{id}/status
+
+Few-shot 상태 변경 (관리자 전용).
+
+**Query Parameter**: `status` — `approved` | `pending` | `rejected`
+
+**Response `200`**: `{ "ok": true }`
+
+---
+
+## 14. 공통 에러 코드
 
 | HTTP 상태 코드 | 의미 | 설명 |
 |----------------|------|------|

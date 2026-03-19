@@ -429,7 +429,7 @@ export function ChatContainer() {
           // Tool request 대기 중 빈 assistant 메시지 숨김
           if (msg.role === 'assistant' && !msg.content && toolRequest && isStreamHere) return null;
           return (
-            <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace} />
+            <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace} agentType={selectedAgent ?? 'knowledge_rag'} />
           );
         })}
 

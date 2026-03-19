@@ -2,7 +2,7 @@
 import logging
 
 from agents.text2sql.pipeline.safety import BlockedQueryError, validate_sql_safety
-from domain.text2sql import service
+from agents.text2sql.admin import service
 
 logger = logging.getLogger(__name__)
 
