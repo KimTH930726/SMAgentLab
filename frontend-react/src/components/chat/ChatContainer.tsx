@@ -61,7 +61,7 @@ const _TOOL_PENDING_PATTERNS = [
   '[도구 실행 승인 대기 중]',
 ];
 
-function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean }[]): ChatMessage[] {
+function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null } | null }[]): ChatMessage[] {
   // Fix out-of-order pairs from old data (parallel saves could put assistant before user)
   // Check pairs at step=2: (0,1), (2,3), ... and swap reversed pairs
   const ordered = [...msgs];
@@ -100,6 +100,9 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
         messageId: m.id,
         isStreaming: isGenerating,
         status: m.status,
+        sqlResult: m.metadata?.sql_result ?? null,
+        tableResult: m.metadata?.table_result ?? null,
+        chartResult: m.metadata?.chart_result ?? null,
       });
     }
   }
@@ -118,6 +121,7 @@ export function ChatContainer() {
   // History messages loaded from API — tagged with the conversationId they belong to
   const [historyMessages, setHistoryMessages] = useState<ChatMessage[]>([]);
   const historyConvIdRef = useRef<number | null>(null);
+  const selectedAgent = useAppStore((s) => s.selectedAgent);
   const [input, setInput] = useState('');
   const [useHttpTool, setUseHttpTool] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -376,7 +380,7 @@ export function ChatContainer() {
       topK: searchConfig.topK,
       conversationId,
       category: resolvedCategory,
-      agentType: useHttpTool ? 'mcp_tool' : undefined,
+      agentType: useHttpTool ? 'mcp_tool' : (selectedAgent ?? 'knowledge_rag'),
       onConversationCreated: (id) => {
         // Guard: if stream was already stopped/cleared, don't navigate
         if (!useStreamStore.getState().active) return;
@@ -511,14 +515,14 @@ export function ChatContainer() {
 
       {/* Input area */}
       <div className="border-t border-slate-700 p-4 bg-slate-800">
-        {/* Options row */}
-        <div className="flex items-center gap-3 mb-2">
+        {/* MCP tool toggle */}
+        <div className="flex items-center gap-2 mb-2">
           <button
             onClick={() => setUseHttpTool((v) => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
               useHttpTool
-                ? 'bg-emerald-900/50 text-emerald-400 border border-emerald-700/50'
-                : 'bg-slate-700/50 text-slate-500 border border-slate-600/50 hover:text-slate-400'
+                ? 'bg-emerald-900/50 text-emerald-400 border-emerald-700/50'
+                : 'bg-slate-700/50 text-slate-500 border-slate-600/50 hover:text-slate-400'
             }`}
             title="MCP 도구를 사용하여 외부 API를 호출합니다"
           >
@@ -531,7 +535,7 @@ export function ChatContainer() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={useHttpTool ? 'MCP 도구를 활용한 질문을 입력하세요... (Ctrl+Enter로 전송)' : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
+            placeholder={selectedAgent === 'text2sql' ? 'DB에 대해 자연어로 질문하세요... (Ctrl+Enter로 전송)' : useHttpTool ? 'MCP 도구를 활용한 질문을 입력하세요... (Ctrl+Enter로 전송)' : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
             rows={2}
             disabled={!namespace || isLoading}
             className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none disabled:opacity-50 text-sm"

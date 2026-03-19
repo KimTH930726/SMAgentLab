@@ -98,6 +98,22 @@ class InHouseLLMProvider(LLMProvider):
             payload["conversation_id"] = ext_conversation_id
         return payload
 
+    async def generate_once(
+        self,
+        prompt: str,
+        system: str = "",
+        max_tokens: int = 2000,
+        api_key: Optional[str] = None,
+    ) -> str:
+        """파이프라인 스테이지용 단순 단일 응답."""
+        query = f"{system}\n\n{prompt}" if system else prompt
+        payload = self._build_payload(query, response_mode="blocking")
+        headers = self._build_headers(api_key)
+        async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
+            resp = await client.post(self._url, json=payload)
+            resp.raise_for_status()
+            return _extract_answer(resp.json())
+
     async def generate(
         self,
         context: str,

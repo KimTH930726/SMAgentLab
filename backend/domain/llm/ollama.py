@@ -24,6 +24,26 @@ class OllamaProvider(LLMProvider):
         self._base_url = cfg.get("ollama_base_url", settings.ollama_base_url)
         self._model = cfg.get("ollama_model", settings.ollama_model)
 
+    async def generate_once(
+        self,
+        prompt: str,
+        system: str = "",
+        max_tokens: int = 2000,
+        api_key: str | None = None,
+    ) -> str:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:
+            resp = await client.post(
+                f"{self._base_url}/api/chat",
+                json={"model": self._model, "messages": messages, "stream": False,
+                      "options": {"num_predict": max_tokens, "temperature": 0, "num_ctx": 8192}},
+            )
+            resp.raise_for_status()
+            return resp.json()["message"]["content"]
+
     async def generate(
         self,
         context: str,

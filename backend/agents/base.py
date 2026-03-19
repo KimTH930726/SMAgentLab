@@ -41,6 +41,10 @@ class AgentBase(ABC):
         """SSE 이벤트 dict를 yield하는 비동기 제너레이터."""
         ...
 
+    async def health_check(self) -> bool:
+        """에이전트 헬스 체크. 기본은 항상 True."""
+        return True
+
     def get_admin_router(self):
         """에이전트 전용 관리 API 라우터. 없으면 None."""
         return None
@@ -63,4 +67,4 @@ class AgentRegistry:
 
     @classmethod
     def list_all(cls) -> list[dict]:
-        return [a.metadata for a in cls._agents.values()]
+        return [{"agent_id": a.agent_id, **a.metadata} for a in cls._agents.values()]

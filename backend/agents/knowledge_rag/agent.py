@@ -92,9 +92,11 @@ class KnowledgeRagAgent(AgentBase):
                 search_question = f"{prev_context} {query}"
                 logger.info("멀티턴 검색 보강: '%s' → '%s'", query, search_question)
 
-            query_vec = await embedding_service.embed(search_question)
-            # 캐시 전용: 한글 공백 정규화 후 embed (RAG 검색은 원본 query_vec 유지)
-            cache_vec = await embedding_service.embed(sem_cache.normalize_query(search_question))
+            # 두 임베딩을 병렬로 생성 (RAG 검색용 + 캐시 정규화용)
+            query_vec, cache_vec = await asyncio.gather(
+                embedding_service.embed(search_question),
+                embedding_service.embed(sem_cache.normalize_query(search_question)),
+            )
 
             # ── Semantic Cache 조회 ──
             cached = await sem_cache.get_cached(namespace, cache_vec)

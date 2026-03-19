@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { streamChat } from '../api/chat';
-import type { ChatMessage, KnowledgeResult, SSEToolRequestEvent } from '../types';
+import type { ChatMessage, KnowledgeResult, SSEToolRequestEvent, SSESqlEvent, SSETableEvent, SSEChartEvent } from '../types';
 
 // Module-level (non-reactive, not in Zustand state)
 let _controller: AbortController | null = null;
@@ -32,6 +32,10 @@ interface StreamState {
   toolResult: string | null;
   /** Tool error message */
   toolError: string | null;
+  /** Text2SQL: generated SQL */
+  sqlResult: SSESqlEvent | null;
+  /** Text2SQL: query result table */
+  tableResult: SSETableEvent | null;
 }
 
 export const useStreamStore = create<StreamState>(() => ({
@@ -45,6 +49,8 @@ export const useStreamStore = create<StreamState>(() => ({
   toolRequest: null,
   toolResult: null,
   toolError: null,
+  sqlResult: null,
+  tableResult: null,
 }));
 
 // ── Public actions ──────────────────────────────────────────────────────────
@@ -89,6 +95,8 @@ export function startChatStream(params: {
     toolRequest: null,
     toolResult: null,
     toolError: null,
+    sqlResult: null,
+    tableResult: null,
   });
 
   // Fire-and-forget — errors handled internally
@@ -122,6 +130,8 @@ export function clearStreamState() {
     toolRequest: null,
     toolResult: null,
     toolError: null,
+    sqlResult: null,
+    tableResult: null,
   });
 }
 
@@ -216,9 +226,23 @@ async function _runStream(
         set({ toolError: msg });
         updateLastMessage((m) => ({ ...m, toolError: msg }));
         // isStreaming 유지 — HTTP 실패 후 RAG 기반 LLM 답변이 이어짐
+      } else if (event.type === 'sql') {
+        const sqlEvent = event as SSESqlEvent;
+        set({ sqlResult: sqlEvent });
+        updateLastMessage((m) => ({ ...m, sqlResult: { sql: sqlEvent.sql, reasoning: sqlEvent.reasoning, cached: sqlEvent.cached } }));
+      } else if (event.type === 'table') {
+        const tableEvent = event as SSETableEvent;
+        set({ tableResult: tableEvent });
+        updateLastMessage((m) => ({
+          ...m,
+          tableResult: { columns: tableEvent.columns, rows: tableEvent.rows, row_count: tableEvent.row_count, truncated: tableEvent.truncated },
+        }));
+      } else if (event.type === 'chart') {
+        const chartEvent = event as SSEChartEvent;
+        updateLastMessage((m) => ({ ...m, chartResult: chartEvent.chart }));
       } else if (event.type === 'done') {
-        const doneEvent = event as { type: 'done'; message_id?: number; status?: string };
-        updateLastMessage((m) => ({ ...m, isStreaming: false, messageId: doneEvent.message_id, status: doneEvent.status }));
+        const doneEvent = event as { type: 'done'; message_id?: number; status?: string; audit_id?: number };
+        updateLastMessage((m) => ({ ...m, isStreaming: false, messageId: doneEvent.message_id, status: doneEvent.status, auditId: doneEvent.audit_id ?? null }));
       }
     }
   } catch (err) {

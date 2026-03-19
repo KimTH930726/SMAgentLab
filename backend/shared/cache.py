@@ -117,8 +117,13 @@ async def get_cached(namespace: str, query_vec: list[float]) -> dict | None:
         q = np.array(query_vec, dtype=np.float32)
         best_score, best_key = 0.0, None
 
-        for key in keys:
-            raw = await r.hget(key, "emb")
+        # 파이프라인으로 모든 키의 임베딩을 한번에 배치 조회
+        async with r.pipeline() as pipe:
+            for key in keys:
+                pipe.hget(key, "emb")
+            emb_raws = await pipe.execute()
+
+        for key, raw in zip(keys, emb_raws):
             if not raw:
                 continue
             cached_vec = np.frombuffer(raw, dtype=np.float32)

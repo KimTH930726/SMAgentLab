@@ -413,6 +413,7 @@ async def get_messages(conv_id: int, user: dict = Depends(get_current_user)):
             """
             SELECT m.id, m.conversation_id, m.role, m.content,
                    m.mapped_term, m.results, m.status, m.created_at::text,
+                   m.metadata,
                    EXISTS(SELECT 1 FROM ops_feedback f WHERE f.message_id = m.id) AS has_feedback
             FROM ops_message m WHERE m.conversation_id = $1 ORDER BY m.id ASC
             """,
@@ -424,6 +425,7 @@ async def get_messages(conv_id: int, user: dict = Depends(get_current_user)):
             content=r["content"], mapped_term=r["mapped_term"],
             results=json.loads(r["results"]) if isinstance(r["results"], str) else r["results"],
             status=r["status"], has_feedback=r["has_feedback"], created_at=r["created_at"],
+            metadata=json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"],
         )
         for r in rows
     ]

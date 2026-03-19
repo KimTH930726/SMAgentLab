@@ -49,6 +49,7 @@ type McpSubTab = 'tools' | 'logs';
 
 export function McpToolManager() {
   const storeNamespace = useAppStore((s) => s.namespace);
+  const selectedAgent = useAppStore((s) => s.selectedAgent ?? 'knowledge_rag');
   const user = useAuthStore((s) => s.user);
   const [namespace, setNamespace] = useState(storeNamespace || '');
   const [subTab, setSubTab] = useState<McpSubTab>('tools');
@@ -94,7 +95,7 @@ export function McpToolManager() {
     if (!namespace) return;
     setLoading(true);
     try {
-      setTools(await listMcpTools(namespace));
+      setTools(await listMcpTools(namespace, selectedAgent));
     } finally {
       setLoading(false);
     }
@@ -158,6 +159,7 @@ export function McpToolManager() {
           method: form.method, hub_base_url: form.hub_base_url, tool_path: form.tool_path, headers: parsedHeaders,
           param_schema: form.param_schema, response_example: parsedResponse ?? null,
           timeout_sec: form.timeout_sec, max_response_kb: form.max_response_kb,
+          agent_type: selectedAgent,
         };
         await createMcpTool(payload);
       }

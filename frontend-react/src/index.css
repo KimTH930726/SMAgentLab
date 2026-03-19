@@ -171,13 +171,17 @@ body {
 [data-theme="light"] .hover\:text-indigo-300:hover { color: rgb(67 56 202) !important; }
 
 /* ── Emerald ── */
+[data-theme="light"] .bg-emerald-950\/40  { background-color: rgb(209 250 229 / 0.5) !important; }
 [data-theme="light"] .bg-emerald-900\/50  { background-color: rgb(209 250 229 / 0.6) !important; }
 [data-theme="light"] .bg-emerald-900\/40  { background-color: rgb(209 250 229 / 0.5) !important; }
+[data-theme="light"] .bg-emerald-900\/30  { background-color: rgb(209 250 229 / 0.4) !important; }
 [data-theme="light"] .bg-emerald-500\/20  { background-color: rgb(209 250 229 / 0.5) !important; }
 [data-theme="light"] .bg-emerald-500\/10  { background-color: rgb(209 250 229 / 0.4) !important; }
 [data-theme="light"] .text-emerald-300    { color: rgb(5 150 105) !important; }
 [data-theme="light"] .text-emerald-400    { color: rgb(5 150 105) !important; }
 [data-theme="light"] .text-emerald-400\/70 { color: rgb(5 150 105 / 0.85) !important; }
+[data-theme="light"] .border-emerald-800\/50 { border-color: rgb(110 231 183 / 0.6) !important; }
+[data-theme="light"] .border-emerald-900\/30 { border-color: rgb(110 231 183 / 0.3) !important; }
 [data-theme="light"] .border-emerald-700\/50 { border-color: rgb(110 231 183 / 0.5) !important; }
 [data-theme="light"] .border-emerald-500\/30 { border-color: rgb(110 231 183 / 0.3) !important; }
 [data-theme="light"] .border-emerald-500  { border-color: rgb(16 185 129) !important; }

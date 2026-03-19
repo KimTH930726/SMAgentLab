@@ -1,8 +1,8 @@
 import { apiFetch } from './client';
 import type { McpTool, McpToolCreatePayload, McpToolUpdatePayload } from '../types';
 
-export async function listMcpTools(namespace: string): Promise<McpTool[]> {
-  return apiFetch<McpTool[]>(`/mcp-tools?namespace=${encodeURIComponent(namespace)}`);
+export async function listMcpTools(namespace: string, agentType: string = 'knowledge_rag'): Promise<McpTool[]> {
+  return apiFetch<McpTool[]>(`/mcp-tools?namespace=${encodeURIComponent(namespace)}&agent_type=${encodeURIComponent(agentType)}`);
 }
 
 export async function createMcpTool(payload: McpToolCreatePayload): Promise<McpTool> {

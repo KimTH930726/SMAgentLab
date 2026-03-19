@@ -47,6 +47,25 @@ def build_messages(
 
 class LLMProvider(ABC):
     @abstractmethod
+    async def generate_once(
+        self,
+        prompt: str,
+        system: str = "",
+        max_tokens: int = 2000,
+    ) -> str:
+        """단순 단일 응답 생성 (파이프라인 스테이지용 — 스트리밍 없음).
+
+        Args:
+            prompt: 사용자 프롬프트 (템플릿 치환 완료 후)
+            system: 시스템 프롬프트
+            max_tokens: 최대 생성 토큰 수
+
+        Returns:
+            LLM이 생성한 텍스트
+        """
+        ...
+
+    @abstractmethod
     async def generate(
         self,
         context: str,

@@ -20,8 +20,27 @@ from domain.llm.inhouse import InHouseLLMProvider
 from domain.knowledge.retrieval import get_thresholds, set_thresholds, get_search_defaults, set_search_defaults
 from domain.prompt.loader import get_prompt as load_prompt
 from shared import cache as sem_cache
+from agents.base import AgentRegistry
 
 router = APIRouter(tags=["admin"])
+
+
+# ── Agent Directory ───────────────────────────────────────────────────────────
+
+@router.get("/api/agents")
+async def list_agents(_user: dict = Depends(get_current_user)):
+    """등록된 에이전트 목록 반환."""
+    return AgentRegistry.list_all()
+
+
+@router.get("/api/agents/{agent_id}/health")
+async def agent_health(agent_id: str, _user: dict = Depends(get_current_user)):
+    try:
+        agent = AgentRegistry.get(agent_id)
+        ok = await agent.health_check()
+        return {"agent_id": agent_id, "healthy": ok}
+    except ValueError:
+        raise HTTPException(status_code=404, detail="에이전트를 찾을 수 없습니다.")
 
 _CONFIG_FIELDS = (
     "ollama_base_url", "ollama_model", "ollama_timeout",

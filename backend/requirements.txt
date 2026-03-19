@@ -11,3 +11,7 @@ bcrypt==4.2.1
 cryptography==44.0.0
 redis[asyncio]==5.2.1
 numpy==1.26.4
+sqlparse==0.5.1
+sqlglot==25.34.1
+aiomysql==0.2.0
+aiosqlite==0.20.0

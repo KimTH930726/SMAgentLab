@@ -31,6 +31,7 @@ class McpToolCreate(BaseModel):
     response_example: Optional[dict] = None
     timeout_sec: int = Field(default=10, ge=1, le=60)
     max_response_kb: int = Field(default=50, ge=1, le=500)
+    agent_type: str = "knowledge_rag"
 
 
 class McpToolUpdate(BaseModel):
@@ -61,6 +62,7 @@ class McpToolOut(BaseModel):
     timeout_sec: int
     max_response_kb: int
     is_active: bool
+    agent_type: str
     created_at: str
 
 

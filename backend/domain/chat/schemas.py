@@ -64,6 +64,7 @@ class MessageResponse(BaseModel):
     status: str = "completed"
     has_feedback: bool = False
     created_at: str
+    metadata: Optional[dict] = None
 
 
 # ─── Debug ───────────────────────────────────────────────────────────────────

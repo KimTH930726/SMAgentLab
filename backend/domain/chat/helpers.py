@@ -35,11 +35,17 @@ def results_to_payload(results: list[RetrievalResult]) -> list[dict]:
     ]
 
 
-async def update_assistant_message(msg_id: int, content: str, status: str = "generating") -> None:
+async def update_assistant_message(msg_id: int, content: str, status: str = "generating", metadata: dict | None = None) -> None:
     async with get_conn() as conn:
-        await conn.execute(
-            "UPDATE ops_message SET content = $1, status = $2 WHERE id = $3", content, status, msg_id,
-        )
+        if metadata is not None:
+            await conn.execute(
+                "UPDATE ops_message SET content = $1, status = $2, metadata = $3::jsonb WHERE id = $4",
+                content, status, json.dumps(metadata, ensure_ascii=False), msg_id,
+            )
+        else:
+            await conn.execute(
+                "UPDATE ops_message SET content = $1, status = $2 WHERE id = $3", content, status, msg_id,
+            )
 
 
 async def update_inhouse_conv_id(conv_id: int, inhouse_conv_id: str) -> None:

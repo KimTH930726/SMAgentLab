@@ -55,7 +55,7 @@ def _row_to_out(row) -> dict:
 # ── CRUD ─────────────────────────────────────────────────────────────────────
 
 @router.get("/api/mcp-tools", response_model=list[McpToolOut])
-async def list_mcp_tools(namespace: str, user: dict = Depends(get_current_user)):
+async def list_mcp_tools(namespace: str, agent_type: str = "knowledge_rag", user: dict = Depends(get_current_user)):
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
@@ -65,10 +65,10 @@ async def list_mcp_tools(namespace: str, user: dict = Depends(get_current_user))
             SELECT ht.*, n.name AS namespace
             FROM ops_mcp_tool ht
             JOIN ops_namespace n ON ht.namespace_id = n.id
-            WHERE ht.namespace_id = $1
+            WHERE ht.namespace_id = $1 AND ht.agent_type = $2
             ORDER BY ht.created_at DESC
             """,
-            ns_id,
+            ns_id, agent_type,
         )
     return [_row_to_out(r) for r in rows]
 
@@ -84,14 +84,14 @@ async def create_mcp_tool(body: McpToolCreate, user: dict = Depends(get_current_
             """
             INSERT INTO ops_mcp_tool
                 (namespace_id, name, description, method, hub_base_url, tool_path, headers,
-                 param_schema, response_example, timeout_sec, max_response_kb, created_by_user_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12)
-            RETURNING *, $13::text AS namespace
+                 param_schema, response_example, timeout_sec, max_response_kb, created_by_user_id, agent_type)
+            VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12,$13)
+            RETURNING *, $14::text AS namespace
             """,
             ns_id, body.name, body.description, body.method, body.hub_base_url, body.tool_path,
             json.dumps(body.headers), json.dumps([p.model_dump() for p in body.param_schema]),
             json.dumps(body.response_example) if body.response_example else None,
-            body.timeout_sec, body.max_response_kb, user["id"], body.namespace,
+            body.timeout_sec, body.max_response_kb, user["id"], body.agent_type, body.namespace,
         )
     return _row_to_out(row)
 

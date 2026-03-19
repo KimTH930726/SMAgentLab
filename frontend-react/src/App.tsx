@@ -10,6 +10,7 @@ import Chat from './pages/Chat';
 import Admin from './pages/Admin';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import AgentSelect from './pages/AgentSelect';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -53,6 +54,7 @@ function AppContent() {
   const location = useLocation();
   const isAdmin = location.pathname.startsWith('/admin');
   const bumpChatRefresh = useAppStore((s) => s.bumpChatRefresh);
+  const selectedAgent = useAppStore((s) => s.selectedAgent);
 
   // admin → chat 전환 시 메시지 재로드 트리거
   const prevAdminRef = useRef(isAdmin);
@@ -63,6 +65,11 @@ function AppContent() {
       bumpChatRefresh();
     }
   }, [isAdmin, bumpChatRefresh]);
+
+  // 에이전트 미선택 시 에이전트 선택 화면
+  if (!selectedAgent) {
+    return <AgentSelect />;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-900">
