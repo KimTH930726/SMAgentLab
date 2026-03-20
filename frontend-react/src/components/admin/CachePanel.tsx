@@ -5,7 +5,7 @@ import { clsx } from 'clsx';
 import { getCacheStats, getCacheEntries, invalidateCache, deleteCacheEntry, getCacheConfig, setCacheConfig } from '../../api/cache';
 import { getNamespaces } from '../../api/namespaces';
 import { Button } from '../ui/Button';
-import { Pagination, useClientPaging } from '../ui/Pagination';
+import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 
 function formatTtl(seconds: number): string {
   if (seconds <= 0) return '만료됨';
@@ -209,6 +209,7 @@ export function CachePanel() {
           캐시된 질문 목록
           <span className="ml-2 text-xs font-normal text-slate-500">(히트 수 많은 순)</span>
         </h3>
+        <PaginationInfo totalItems={totalItems} pageSize={pageSize} onPageSizeChange={setPageSize} />
         {entriesLoading ? (
           <div className="text-sm text-slate-500 animate-pulse py-6 text-center">로딩 중...</div>
         ) : entries.length === 0 ? (
@@ -262,11 +263,7 @@ export function CachePanel() {
             </table>
           </div>
         )}
-        <Pagination
-          page={page} totalPages={totalPages} onPageChange={setPage}
-          pageSize={pageSize} onPageSizeChange={setPageSize}
-          totalItems={totalItems}
-        />
+        <PaginationNav page={page} totalPages={totalPages} onPageChange={setPage} />
       </div>
     </div>
   );

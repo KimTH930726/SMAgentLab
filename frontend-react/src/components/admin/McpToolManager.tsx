@@ -11,7 +11,7 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { CodeBlock } from '../ui/CodeBlock';
 import { Badge } from '../ui/Badge';
-import { Pagination } from '../ui/Pagination';
+import { PaginationNav } from '../ui/Pagination';
 import type { McpTool, McpToolParam, McpToolCreatePayload } from '../../types';
 
 const PLACEHOLDER_TEXT = `API 설명을 자유롭게 입력하세요. LLM이 자동으로 구조화합니다.
@@ -1006,6 +1006,9 @@ function McpToolLogs({ namespace }: { namespace: string }) {
         </div>
       ) : (
         <>
+          <div className="flex justify-end">
+            <PaginationNav page={statsPage} totalPages={statsTotalPages} onPageChange={setStatsPage} />
+          </div>
           <div className="border border-slate-700 rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
@@ -1041,9 +1044,6 @@ function McpToolLogs({ namespace }: { namespace: string }) {
                 })}
               </tbody>
             </table>
-          </div>
-          <div className="flex justify-end">
-            <Pagination page={statsPage} totalPages={statsTotalPages} onPageChange={setStatsPage} />
           </div>
         </>
       )}
@@ -1123,7 +1123,7 @@ function McpToolLogs({ namespace }: { namespace: string }) {
             </div>
             <div className="flex items-center justify-between">
               <p className="text-xs text-slate-500">전체 {logResp.total}건</p>
-              <Pagination page={logPage} totalPages={logTotalPages} onPageChange={handleLogPage} />
+              <PaginationNav page={logPage} totalPages={logTotalPages} onPageChange={handleLogPage} />
             </div>
           </div>
         )}

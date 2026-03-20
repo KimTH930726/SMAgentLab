@@ -6,7 +6,7 @@ import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
-import { Pagination, useClientPaging } from '../ui/Pagination';
+import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { GlossaryItem } from '../../types';
 
 interface GlossaryFormData { term: string; description: string; }
@@ -133,6 +133,7 @@ export function GlossaryTable() {
 
       {selectedNs && !isLoading && (
         <div className="space-y-2">
+          <PaginationInfo totalItems={totalItems} pageSize={pageSize} onPageSizeChange={setPageSize} />
           {pagedItems.map((item) => (
             <div key={item.id} className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
               {/* Card header */}
@@ -200,11 +201,7 @@ export function GlossaryTable() {
             </div>
           ))}
           {items.length === 0 && <div className="text-center py-10 text-slate-500">용어 항목이 없습니다.</div>}
-          <Pagination
-            page={page} totalPages={totalPages} onPageChange={setPage}
-            pageSize={pageSize} onPageSizeChange={setPageSize}
-            totalItems={totalItems}
-          />
+          <PaginationNav page={page} totalPages={totalPages} onPageChange={setPage} />
         </div>
       )}
 

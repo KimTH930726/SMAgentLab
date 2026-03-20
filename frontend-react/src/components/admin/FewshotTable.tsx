@@ -6,7 +6,7 @@ import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
-import { Pagination, useClientPaging } from '../ui/Pagination';
+import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { FewshotItem } from '../../types';
 
 interface FewshotFormData {
@@ -197,6 +197,7 @@ export function FewshotTable() {
 
       {selectedNs && !isLoading && (
         <div className="space-y-2">
+          <PaginationInfo totalItems={totalItems} pageSize={pageSize} onPageSizeChange={setPageSize} />
           {pagedItems.map((item) => (
             <div
               key={item.id}
@@ -225,11 +226,7 @@ export function FewshotTable() {
               <p className="text-xs mt-1">챗에서 긍정 피드백을 하면 후보로 자동 등록됩니다.</p>
             </div>
           )}
-          <Pagination
-            page={page} totalPages={totalPages} onPageChange={setPage}
-            pageSize={pageSize} onPageSizeChange={setPageSize}
-            totalItems={totalItems}
-          />
+          <PaginationNav page={page} totalPages={totalPages} onPageChange={setPage} />
         </div>
       )}
 

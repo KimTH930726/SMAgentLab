@@ -13,7 +13,7 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { TagInput } from '../ui/TagInput';
-import { Pagination, useClientPaging } from '../ui/Pagination';
+import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { KnowledgeItem } from '../../types';
 
 // ── KnowledgeTable ────────────────────────────────────────────────────────────
@@ -198,6 +198,7 @@ export function KnowledgeTable() {
 
       {selectedNs && !isLoading && (
         <div className="space-y-2">
+          <PaginationInfo totalItems={totalItems} pageSize={pageSize} onPageSizeChange={setPageSize} />
           {pagedItems.map((item) => (
             <div
               key={item.id}
@@ -250,11 +251,7 @@ export function KnowledgeTable() {
           {filteredItems.length === 0 && (
             <div className="text-center py-10 text-slate-500">지식 항목이 없습니다.</div>
           )}
-          <Pagination
-            page={page} totalPages={totalPages} onPageChange={setPage}
-            pageSize={pageSize} onPageSizeChange={setPageSize}
-            totalItems={totalItems}
-          />
+          <PaginationNav page={page} totalPages={totalPages} onPageChange={setPage} />
         </div>
       )}
 

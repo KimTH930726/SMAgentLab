@@ -22,7 +22,7 @@ import {
   type ScanReport,
 } from '../../api/text2sql';
 import { Button } from '../ui/Button';
-import { Pagination, useClientPaging } from '../ui/Pagination';
+import { Pagination, PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import { Modal } from '../ui/Modal';
 import type {
   SqlTargetDb, SqlRelation, SqlSynonym, SqlFewshot, SqlPipelineStage, SqlAuditLog, SqlCacheEntry,
@@ -1338,6 +1338,8 @@ function SynonymTab() {
             <span className="text-xs text-slate-500 whitespace-nowrap">{filtered.length}건</span>
           </div>
 
+          <PaginationInfo totalItems={synPaging.totalItems} pageSize={synPageSize} onPageSizeChange={setSynPageSize} />
+
           {/* List */}
           <div className="rounded-xl border border-slate-700 overflow-hidden">
             {pagedFiltered.length === 0 ? (
@@ -1358,9 +1360,7 @@ function SynonymTab() {
               </div>
             )}
           </div>
-
-          <Pagination page={synPage} totalPages={synPaging.totalPages} onPageChange={setSynPage}
-            pageSize={synPageSize} onPageSizeChange={setSynPageSize} totalItems={synPaging.totalItems} />
+          <PaginationNav page={synPage} totalPages={synPaging.totalPages} onPageChange={setSynPage} />
         </>
       )}
 
@@ -1484,6 +1484,8 @@ function FewshotTab() {
             </div>
           </div>
 
+          <PaginationInfo totalItems={fsPaging.totalItems} pageSize={fsPageSize} onPageSizeChange={setFsPageSize} />
+
           <div className="rounded-xl border border-slate-700 overflow-hidden divide-y divide-slate-700/60">
             {pagedFewshots.length === 0 && <p className="text-slate-500 text-sm text-center py-8">예제가 없습니다.</p>}
             {pagedFewshots.map((f) => {
@@ -1540,9 +1542,7 @@ function FewshotTab() {
               );
             })}
           </div>
-
-          <Pagination page={fsPage} totalPages={fsPaging.totalPages} onPageChange={setFsPage}
-            pageSize={fsPageSize} onPageSizeChange={setFsPageSize} totalItems={fsPaging.totalItems} />
+          <PaginationNav page={fsPage} totalPages={fsPaging.totalPages} onPageChange={setFsPage} />
         </>
       )}
 

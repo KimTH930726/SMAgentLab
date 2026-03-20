@@ -19,22 +19,48 @@ docker compose up --build -d
 
 > **마지막 업데이트**: 2026-03-20
 > **브랜치**: `dev_0` (테스트 완료 후 `main` 머지 예정)
-> **최근 변경**: 스키마 스캔 diff 개선 + ERD/용어 고아 정리 + 스캔 리포트 모달 + ERD 검색·양방향 싱크 (v2.10)
+> **최근 변경**: v2.10 ERD/스캔/파이프라인/페이징/최적화 대폭 개선
 
-### 진행 중 / 미완료
+### 진행 중 / 다음 작업
 
-없음 — 클린 상태
+#### Oracle 지원 + 스키마 분리 (다음 PC에서 진행)
+- **배경**: 운영 DB가 Oracle이며, DB 서버 하나에 스키마별 독립 구조 (크로스 스키마 FK 없음)
+- **방안 A 채택**: 네임스페이스 = 스키마 매핑 (예: 네임스페이스 "매출DB" → Oracle host:1521/SID, schema=SALES)
+- **작업 내용**:
+  1. `target.py` Dialect 패턴으로 리팩터링 — `PgDialect`, `MysqlDialect`, `SqliteDialect`, `OracleDialect` 분리
+  2. Oracle 드라이버(`oracledb`) 추가 — Dockerfile 의존성 + `connect()` / `get_tables()` / `execute_query()` 구현
+  3. Oracle 스키마 스캔 쿼리: `ALL_TABLES`, `ALL_TAB_COLUMNS`, `ALL_CONSTRAINTS` (owner 기준)
+  4. 대상 DB 설정에 `schema_name` 필드 추가 (PostgreSQL: schema, Oracle: owner, MySQL: DATABASE())
+  5. 프론트엔드 대상 DB 폼에 `스키마명` 입력 필드 추가
 
-### 최근 완료: 스키마 스캔 diff 개선 + ERD/용어 UX (v2.10)
+### 최근 완료: v2.10 스키마 스캔 diff + ERD + 파이프라인 + 최적화
 
-- 스키마 스캔을 diff 방식으로 개선 — 테이블/컬럼 추가·삭제·변경 감지, 변경분만 임베딩 (전체 재임베딩 불필요)
-- 스캔 시 ERD 고아 관계 자동 정리 — 삭제된 테이블/컬럼 관련 `sql_relation` 레코드 자동 삭제
-- 스캔 시 용어사전 고아 자동 삭제 — 삭제된 컬럼을 참조하는 `sql_synonym` 자동 삭제
-- 스캔 완료 리포트 모달 — 변경 상세(추가/삭제/변경 테이블·컬럼) + ERD/용어 탭 이동 유도 (human-in-the-loop)
-- AI 관계 추천(`/relations/suggest-ai`) 및 용어 자동생성(`/synonyms/generate-ai`)을 변경 테이블 대상으로만 제한 (토큰 절약)
-- ERD 검색 기능 — 테이블명 검색 → 해당 테이블 포커스 + 자동 스크롤
+**스키마 스캔 diff 개선**
+- 스키마 스캔을 diff 방식으로 개선 — 테이블/컬럼 추가·삭제·변경 감지, 변경분만 임베딩
+- 스캔 시 ERD 고아 관계 자동 정리 + 용어사전 고아 자동 삭제
+- 스캔 완료 리포트 모달 — 변경 상세 + ERD/용어 탭 이동 유도 (human-in-the-loop)
+- AI 관계 추천/용어 자동생성을 변경 테이블 대상으로만 제한 (토큰 절약)
+
+**ERD UI 대폭 개선**
+- ERD 검색 기능 — 테이블명 검색 → 포커스 + 자동 스크롤
 - ERD 관계 목록 ↔ SVG 양방향 싱크 — 클릭 시 상호 스크롤 + 하이라이트
-- `docker-compose.yml`에서 `devx-mcp-api` 서비스의 `extra_hosts` 하드코딩 제거
+- 테이블 클릭 → 관련 관계 필터 + 나머지 반투명 / 관계 클릭 → 양쪽 테이블 강조
+- 강조된 관계선/테이블 z-order 최상위 렌더링
+- 관계선 타입별 색상 (N:1 보라, 1:N 초록, 1:1 노랑, N:M 빨강)
+- 자동 정리를 FK 방향 기반 위상 정렬로 개선 (화살표 좌→우 정렬)
+
+**파이프라인**
+- 파이프라인 순서를 실제 실행 흐름에 맞게 재배치
+- 미구현 스테이지(schema_link, schema_explore, candidates) 표시 + 토글 비활성
+- execute 스테이지 필수 해제 (운영 DB 실행 권한 없을 수 있음)
+- 각 스테이지 클릭 시 상세 설명 모달 (요약/동작/비용/추천)
+
+**공통화 + 최적화**
+- 공통 Pagination 컴포넌트 (PaginationInfo 상단 + PaginationNav 하단)
+- 6개 관리 화면에 페이징 적용 (지식베이스/용어집/Few-shot/캐시/용어사전/퓨샷)
+- McpToolManager 자체 Paginator → 공통 Pagination 교체
+- 백엔드 DB 연결 최적화 (update_column_desc 3회→1회, reindex 루프 N회→1회)
+- `_parse_llm_json` 공통 헬퍼 추출, 미사용 import 제거
 
 ### 이전 완료: 프롬프트 에이전트별 분리 (v2.9)
 
