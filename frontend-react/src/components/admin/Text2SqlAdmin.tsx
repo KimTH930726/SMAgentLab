@@ -439,18 +439,83 @@ function erdNodeH(cols: number) { return ERD_HDR + cols * ERD_ROW + ERD_PAD; }
 
 type ErdPos = Record<string, { x: number; y: number }>;
 
-function autoLayout(tables: SchemaTableWithCols[]): ErdPos {
+function autoLayout(tables: SchemaTableWithCols[], relations?: Array<{ from_table: string; to_table: string }>): ErdPos {
   const pos: ErdPos = {};
-  const cols = 4;
-  tables.forEach((t, i) => {
-    pos[t.table_name] = { x: 40 + (i % cols) * (ERD_W + 60), y: 40 + Math.floor(i / cols) * 210 };
-  });
+  const names = new Set(tables.map((t) => t.table_name));
+
+  if (!relations || relations.length === 0) {
+    // Fallback: simple grid
+    const cols = 4;
+    tables.forEach((t, i) => {
+      pos[t.table_name] = { x: 40 + (i % cols) * (ERD_W + 60), y: 40 + Math.floor(i / cols) * 260 };
+    });
+    return pos;
+  }
+
+  // Build adjacency: to_table ← from_table (FK points from child to parent)
+  const inDegree: Record<string, number> = {};
+  const children: Record<string, string[]> = {};
+  for (const n of names) { inDegree[n] = 0; children[n] = []; }
+  for (const r of relations) {
+    if (!names.has(r.from_table) || !names.has(r.to_table)) continue;
+    // from_table references to_table → to_table is parent (level closer to 0)
+    children[r.to_table].push(r.from_table);
+    inDegree[r.from_table]++;
+  }
+
+  // Topological sort → assign levels (BFS from roots)
+  const level: Record<string, number> = {};
+  const queue: string[] = [];
+  for (const n of names) {
+    if (inDegree[n] === 0) { queue.push(n); level[n] = 0; }
+  }
+  let qi = 0;
+  while (qi < queue.length) {
+    const node = queue[qi++];
+    for (const child of (children[node] || [])) {
+      level[child] = Math.max(level[child] ?? 0, (level[node] ?? 0) + 1);
+      inDegree[child]--;
+      if (inDegree[child] === 0) queue.push(child);
+    }
+  }
+  // Handle cycles: assign remaining to max level + 1
+  const maxLevel = Math.max(0, ...Object.values(level));
+  for (const n of names) {
+    if (level[n] === undefined) level[n] = maxLevel + 1;
+  }
+
+  // Group by level
+  const levels: Record<number, string[]> = {};
+  for (const n of names) {
+    const lv = level[n] ?? 0;
+    if (!levels[lv]) levels[lv] = [];
+    levels[lv].push(n);
+  }
+
+  // Assign positions: highest level on left (children), level 0 on right (parents)
+  const GAP_X = ERD_W + 80;
+  const GAP_Y = 30;
+  const sortedLevels = Object.keys(levels).map(Number).sort((a, b) => b - a);
+  let colIdx = 0;
+  for (const lv of sortedLevels) {
+    const group = levels[lv];
+    // Sort by table name for consistency
+    group.sort();
+    let yOffset = 40;
+    for (const tname of group) {
+      pos[tname] = { x: 40 + colIdx * GAP_X, y: yOffset };
+      const tbl = tables.find((t) => t.table_name === tname);
+      yOffset += erdNodeH(tbl?.columns.length ?? 5) + GAP_Y;
+    }
+    colIdx++;
+  }
+
   return pos;
 }
 
-// Relation type → color (gray scale, differentiated by shade)
+// Relation type → color (dark-mode friendly)
 const REL_COLORS: Record<string, string> = {
-  'N:1': '#475569', '1:N': '#475569', '1:1': '#475569', 'N:M': '#475569',
+  'N:1': '#818cf8', '1:N': '#34d399', '1:1': '#fbbf24', 'N:M': '#f87171',
 };
 
 type Connecting = { fromTable: string; fromCol: string; colIdx: number; x1: number; y1: number; cx: number; cy: number };
@@ -470,6 +535,7 @@ function ErdTab() {
   const [connecting, setConnecting] = useState<Connecting | null>(null);
   const [zoom, setZoom] = useState(1);
   const [selected, setSelected] = useState<number | null>(null);
+  const [selectedErdTable, setSelectedErdTable] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState<Omit<SqlRelation, 'id'>>({ from_table: '', from_col: '', to_table: '', to_col: '', relation_type: 'N:1', description: '' });
   const [suggestions, setSuggestions] = useState<SuggestItem[]>([]);
@@ -536,9 +602,9 @@ function ErdTab() {
       }
     });
     if (Object.keys(dbPos).length > 0) {
-      setPositions({ ...autoLayout(schema), ...dbPos });
+      setPositions({ ...autoLayout(schema, relations), ...dbPos });
     } else {
-      setPositions(autoLayout(schema));
+      setPositions(autoLayout(schema, relations));
     }
   }, [schema]);
 
@@ -571,10 +637,13 @@ function ErdTab() {
     return { mx: (e.clientX - r.left) / zoom, my: (e.clientY - r.top) / zoom };
   };
 
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+
   const handleTableMouseDown = (e: React.MouseEvent, table: string) => {
     e.stopPropagation();
     const { mx, my } = svgCoords(e);
     const p = posRef.current[table] ?? { x: 0, y: 0 };
+    dragStartRef.current = { x: mx, y: my };
     // Push current positions to undo history
     setPosHistory((h) => [...h.slice(-19), { ...posRef.current }]);
     setDragging({ table, ox: mx - p.x, oy: my - p.y });
@@ -606,6 +675,17 @@ function ErdTab() {
   const handleMouseUp = (e: React.MouseEvent) => {
     if (panning) { setPanning(null); return; }
     if (dragging) {
+      // Check if it was a click (no drag movement)
+      const { mx, my } = svgCoords(e);
+      const ds = dragStartRef.current;
+      const wasDrag = ds && (Math.abs(mx - ds.x) > 3 || Math.abs(my - ds.y) > 3);
+      if (!wasDrag) {
+        // Click on table → select/deselect table
+        const clickedTable = dragging.table;
+        setSelectedErdTable((prev) => prev === clickedTable ? null : clickedTable);
+        setSelected(null);
+      }
+      dragStartRef.current = null;
       savePositions(posRef.current);
       setDragging(null);
     }
@@ -644,7 +724,7 @@ function ErdTab() {
 
   const handleAutoLayout = () => {
     setPosHistory((h) => [...h.slice(-19), { ...posRef.current }]);
-    const p = autoLayout(schema);
+    const p = autoLayout(schema, relations);
     setPositions(p);
     savePositions(p);
   };
@@ -790,37 +870,46 @@ function ErdTab() {
                 <pattern id="grid" width={20 * zoom} height={20 * zoom} patternUnits="userSpaceOnUse">
                   <circle cx={1} cy={1} r={0.5} fill="#334155" />
                 </pattern>
-                {/* Arrow markers */}
-                <marker id="arr-gray" markerWidth={8} markerHeight={8} refX={6} refY={3} orient="auto" markerUnits="strokeWidth">
-                  <path d="M0,0 L0,6 L8,3 z" fill="#475569" />
-                </marker>
+                {/* Arrow markers — dynamic per relation color */}
+                {Object.entries(REL_COLORS).map(([type, clr]) => (
+                  <marker key={type} id={`arr-${type.replace(':', '')}`} markerWidth={8} markerHeight={8} refX={6} refY={3} orient="auto" markerUnits="strokeWidth">
+                    <path d="M0,0 L0,6 L8,3 z" fill={clr} />
+                  </marker>
+                ))}
                 <marker id="arr-sel" markerWidth={8} markerHeight={8} refX={6} refY={3} orient="auto" markerUnits="strokeWidth">
-                  <path d="M0,0 L0,6 L8,3 z" fill="#818cf8" />
+                  <path d="M0,0 L0,6 L8,3 z" fill="#f59e0b" />
                 </marker>
               </defs>
               <rect width="100%" height="100%" fill="url(#grid)" />
 
               <g transform={`scale(${zoom})`}>
-                {/* Relation lines */}
-                {relations.map((rel) => {
+                {/* Relation lines — sorted: dimmed first, highlighted last */}
+                {[...relations].sort((a, b) => {
+                  const aH = (selected === a.id) || (selectedErdTable ? (a.from_table === selectedErdTable || a.to_table === selectedErdTable) : false);
+                  const bH = (selected === b.id) || (selectedErdTable ? (b.from_table === selectedErdTable || b.to_table === selectedErdTable) : false);
+                  return (aH ? 1 : 0) - (bH ? 1 : 0);
+                }).map((rel) => {
                   const path = getPath(rel);
                   if (!path) return null;
                   const isSelected = selected === rel.id;
+                  const isTableRelated = selectedErdTable ? (rel.from_table === selectedErdTable || rel.to_table === selectedErdTable) : false;
+                  const highlighted = isSelected || isTableRelated;
                   const color = REL_COLORS[rel.relation_type] ?? '#64748b';
-                  const markerId = isSelected ? 'arr-sel' : 'arr-gray';
+                  const lineColor = isSelected ? '#818cf8' : isTableRelated ? '#f59e0b' : color;
+                  const markerId = isSelected ? 'arr-sel' : `arr-${rel.relation_type.replace(':', '')}`;
                   return (
-                    <g key={rel.id} onClick={(e) => { e.stopPropagation(); const newId = isSelected ? null : rel.id; setSelected(newId); if (newId) scrollRelIntoView(newId); }} style={{ cursor: 'pointer' }}>
+                    <g key={rel.id} onClick={(e) => { e.stopPropagation(); const newId = isSelected ? null : rel.id; setSelected(newId); setSelectedErdTable(null); if (newId) scrollRelIntoView(newId); }} style={{ cursor: 'pointer' }}>
                       {/* Hit area */}
                       <path d={path.d} stroke="transparent" strokeWidth={14} fill="none" />
                       {/* Shadow for contrast */}
-                      <path d={path.d} stroke="white" strokeWidth={isSelected ? 5 : 4}
-                        fill="none" strokeDasharray={isSelected ? undefined : '8 5'} opacity={0.5} />
+                      <path d={path.d} stroke="white" strokeWidth={highlighted ? 5 : 4}
+                        fill="none" strokeDasharray={highlighted ? undefined : '8 5'} opacity={0.5} />
                       {/* Main line */}
-                      <path d={path.d} stroke={isSelected ? '#818cf8' : color}
-                        strokeWidth={isSelected ? 2.5 : 2}
+                      <path d={path.d} stroke={lineColor}
+                        strokeWidth={highlighted ? 2.5 : 2}
                         fill="none"
-                        strokeDasharray={isSelected ? undefined : '8 5'}
-                        opacity={1}
+                        strokeDasharray={highlighted ? undefined : '8 5'}
+                        opacity={highlighted ? 1 : ((selectedErdTable || selected) ? 0.15 : 1)}
                         markerEnd={`url(#${markerId})`} />
                       <text
                         x={(path.x1 + path.x2) / 2}
@@ -834,7 +923,7 @@ function ErdTab() {
                       <text
                         x={(path.x1 + path.x2) / 2}
                         y={(path.fy + path.ty) / 2 - 6}
-                        textAnchor="middle" fill={isSelected ? '#818cf8' : color}
+                        textAnchor="middle" fill={lineColor}
                         fontSize={9} fontWeight="800"
                         style={{ pointerEvents: 'none' }}
                       >{rel.relation_type}</text>
@@ -851,11 +940,28 @@ function ErdTab() {
                   />
                 )}
 
-                {/* Table nodes — light card style */}
-                {schema.map((t) => {
+                {/* Table nodes — sorted: dimmed first, highlighted last (SVG z-order) */}
+                {[...schema].sort((a, b) => {
+                  const selectedRel = selected ? relations.find((r) => r.id === selected) : null;
+                  const aHighlighted = (selectedErdTable === a.table_name) ||
+                    (selectedErdTable && relations.some((r) => (r.from_table === selectedErdTable || r.to_table === selectedErdTable) && (r.from_table === a.table_name || r.to_table === a.table_name))) ||
+                    (selectedRel && (selectedRel.from_table === a.table_name || selectedRel.to_table === a.table_name));
+                  const bHighlighted = (selectedErdTable === b.table_name) ||
+                    (selectedErdTable && relations.some((r) => (r.from_table === selectedErdTable || r.to_table === selectedErdTable) && (r.from_table === b.table_name || r.to_table === b.table_name))) ||
+                    (selectedRel && (selectedRel.from_table === b.table_name || selectedRel.to_table === b.table_name));
+                  return (aHighlighted ? 1 : 0) - (bHighlighted ? 1 : 0);
+                }).map((t) => {
                   const p = positions[t.table_name] ?? { x: 0, y: 0 };
                   const h = erdNodeH(t.columns.length);
                   const isFocused = focusedTable === t.table_name;
+                  const isErdSelected = selectedErdTable === t.table_name;
+                  const isRelatedToSelected = selectedErdTable ? relations.some((r) => (r.from_table === selectedErdTable || r.to_table === selectedErdTable) && (r.from_table === t.table_name || r.to_table === t.table_name)) : false;
+                  // 관계 하나 선택 시 해당 두 테이블만 강조
+                  const selectedRel = selected ? relations.find((r) => r.id === selected) : null;
+                  const isRelEndpoint = selectedRel ? (selectedRel.from_table === t.table_name || selectedRel.to_table === t.table_name) : false;
+                  const hasAnySelection = !!selectedErdTable || !!selected;
+                  const isHighlighted = isErdSelected || isRelatedToSelected || isRelEndpoint;
+                  const dimmed = hasAnySelection && !isHighlighted;
                   return (
                     <g key={t.table_name} transform={`translate(${p.x},${p.y})`}
                       onMouseDown={(e) => handleTableMouseDown(e, t.table_name)}
@@ -868,37 +974,74 @@ function ErdTab() {
                         </rect>
                       )}
                       {/* Shadow */}
-                      <rect x={3} y={3} width={ERD_W} height={h} rx={7} fill="rgba(0,0,0,0.25)" />
+                      <rect x={3} y={3} width={ERD_W} height={h} rx={7} fill="rgba(0,0,0,0.4)" />
                       {/* Card body */}
-                      <rect width={ERD_W} height={h} rx={7} fill={isFocused ? '#eef2ff' : '#f8fafc'} stroke={isFocused ? '#6366f1' : '#cbd5e1'} strokeWidth={isFocused ? 2 : 1} />
+                      <rect width={ERD_W} height={h} rx={7}
+                        fill={isFocused ? '#eef2ff' : isErdSelected ? '#fffbeb' : '#f8fafc'}
+                        stroke={isFocused ? '#6366f1' : isErdSelected ? '#f59e0b' : '#94a3b8'}
+                        strokeWidth={isFocused || isErdSelected ? 2 : 1}
+                        opacity={dimmed ? 0.25 : 1} />
                       {/* Header */}
-                      <rect width={ERD_W} height={ERD_HDR} rx={7} fill={isFocused ? '#c7d2fe' : '#fef3c7'} />
-                      <rect y={ERD_HDR - 7} width={ERD_W} height={7} fill={isFocused ? '#c7d2fe' : '#fef3c7'} />
-                      <text x={10} y={ERD_HDR / 2 + 5} fill="#c2410c" fontSize={11} fontWeight="700">{t.table_name}</text>
+                      <rect width={ERD_W} height={ERD_HDR} rx={7}
+                        fill={isFocused ? '#c7d2fe' : isErdSelected ? '#fde68a' : '#e2e8f0'}
+                        opacity={dimmed ? 0.25 : 1} />
+                      <rect y={ERD_HDR - 7} width={ERD_W} height={7}
+                        fill={isFocused ? '#c7d2fe' : isErdSelected ? '#fde68a' : '#e2e8f0'}
+                        opacity={dimmed ? 0.25 : 1} />
+                      <text x={10} y={ERD_HDR / 2 + 5} fill={isErdSelected ? '#92400e' : '#334155'} fontSize={11} fontWeight="700">{t.table_name}</text>
                       {/* Divider */}
-                      <line x1={0} y1={ERD_HDR} x2={ERD_W} y2={ERD_HDR} stroke="#e2e8f0" strokeWidth={1} />
+                      <line x1={0} y1={ERD_HDR} x2={ERD_W} y2={ERD_HDR} stroke="#cbd5e1" strokeWidth={1} />
                       {t.columns.map((col, i) => (
                         <g key={col.id} transform={`translate(0,${ERD_HDR + i * ERD_ROW})`}>
-                          <rect width={ERD_W} height={ERD_ROW} fill={i % 2 === 0 ? '#f8fafc' : '#f1f5f9'} />
+                          <rect width={ERD_W} height={ERD_ROW} fill={i % 2 === 0 ? '#f8fafc' : '#f1f5f9'} opacity={dimmed ? 0.25 : 1} />
                           <text x={10} y={ERD_ROW / 2 + 4}
-                            fill={col.is_pk ? '#d97706' : col.fk_reference ? '#2563eb' : '#1e293b'}
-                            fontSize={9} fontFamily="monospace" fontWeight={col.is_pk ? '700' : '400'}>
+                            fill={col.is_pk ? '#d97706' : col.fk_reference ? '#4f46e5' : '#1e293b'}
+                            fontSize={9} fontFamily="monospace" fontWeight={col.is_pk ? '700' : '400'}
+                            opacity={dimmed ? 0.25 : 1}>
                             {col.is_pk ? '🔑 ' : ''}{col.name.length > 16 ? col.name.slice(0, 15) + '…' : col.name}
                           </text>
-                          <text x={ERD_COL_W + 4} y={ERD_ROW / 2 + 4} fill="#64748b" fontSize={8}>
+                          <text x={ERD_COL_W + 4} y={ERD_ROW / 2 + 4} fill="#64748b" fontSize={8} opacity={dimmed ? 0.25 : 1}>
                             {col.data_type.length > 10 ? col.data_type.slice(0, 9) : col.data_type}
                           </text>
                           {/* Left-side target dot */}
-                          <circle cx={0} cy={ERD_ROW / 2} r={4} fill="#fff" stroke="#94a3b8" strokeWidth={1.5} style={{ cursor: 'crosshair' }} />
+                          <circle cx={0} cy={ERD_ROW / 2} r={4} fill="#fff" stroke="#6366f1" strokeWidth={1.5} style={{ cursor: 'crosshair' }} />
                           {/* Right-side source dot */}
-                          <circle cx={ERD_W} cy={ERD_ROW / 2} r={4} fill="#94a3b8" stroke="#64748b" strokeWidth={1}
+                          <circle cx={ERD_W} cy={ERD_ROW / 2} r={4} fill="#6366f1" stroke="#4f46e5" strokeWidth={1}
                             style={{ cursor: 'crosshair' }}
                             onMouseDown={(e) => { e.stopPropagation(); handleDotMouseDown(e, t.table_name, col.name, i); }}
                           />
                         </g>
                       ))}
                       {/* Bottom border */}
-                      <rect width={ERD_W} height={h} rx={7} fill="none" stroke="#cbd5e1" strokeWidth={1} />
+                      <rect width={ERD_W} height={h} rx={7} fill="none"
+                        stroke={isFocused ? '#6366f1' : isErdSelected ? '#f59e0b' : '#94a3b8'}
+                        strokeWidth={isFocused || isErdSelected ? 2 : 1}
+                        opacity={dimmed ? 0.25 : 1} />
+                    </g>
+                  );
+                })}
+
+                {/* Highlighted relation lines — re-rendered ON TOP of tables */}
+                {(selected || selectedErdTable) && relations.filter((rel) => {
+                  const isSelected = selected === rel.id;
+                  const isTableRelated = selectedErdTable ? (rel.from_table === selectedErdTable || rel.to_table === selectedErdTable) : false;
+                  return isSelected || isTableRelated;
+                }).map((rel) => {
+                  const path = getPath(rel);
+                  if (!path) return null;
+                  const isSelected = selected === rel.id;
+                  const color = REL_COLORS[rel.relation_type] ?? '#64748b';
+                  const lineColor = isSelected ? '#f59e0b' : color;
+                  const markerId = isSelected ? 'arr-sel' : `arr-${rel.relation_type.replace(':', '')}`;
+                  return (
+                    <g key={`top-${rel.id}`} style={{ pointerEvents: 'none' }}>
+                      <path d={path.d} stroke="white" strokeWidth={5} fill="none" opacity={0.6} />
+                      <path d={path.d} stroke={lineColor} strokeWidth={2.5} fill="none" markerEnd={`url(#${markerId})`} />
+                      <text x={(path.x1 + path.x2) / 2} y={(path.fy + path.ty) / 2 - 6}
+                        textAnchor="middle" fill="white" fontSize={9} fontWeight="800"
+                        stroke="white" strokeWidth={3} paintOrder="stroke" />
+                      <text x={(path.x1 + path.x2) / 2} y={(path.fy + path.ty) / 2 - 6}
+                        textAnchor="middle" fill={lineColor} fontSize={9} fontWeight="800">{rel.relation_type}</text>
                     </g>
                   );
                 })}
@@ -909,14 +1052,25 @@ function ErdTab() {
           {/* Right panel — relations list */}
           <div className="w-56 flex-shrink-0 border border-slate-700 rounded-xl bg-slate-900/60 flex flex-col overflow-hidden">
             <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between flex-shrink-0">
-              <span className="text-xs font-semibold text-slate-300">관계 목록 ({relations.length})</span>
+              <span className="text-xs font-semibold text-slate-300">
+                관계 목록 {selectedErdTable ? (
+                  <span className="text-amber-400 ml-1">
+                    {selectedErdTable} ({relations.filter((r) => r.from_table === selectedErdTable || r.to_table === selectedErdTable).length})
+                    <button onClick={() => setSelectedErdTable(null)} className="ml-1 text-slate-500 hover:text-slate-300">✕</button>
+                  </span>
+                ) : `(${relations.length})`}
+              </span>
               <span className="text-[10px] text-slate-600">Ctrl+Z: 되돌리기</span>
             </div>
             <div ref={relListRef} className="flex-1 overflow-y-auto p-2 space-y-1">
-              {relations.length === 0 && (
-                <p className="text-xs text-slate-600 text-center py-6">등록된 관계 없음</p>
-              )}
-              {relations.map((rel) => {
+              {(() => {
+                const filteredRels = selectedErdTable
+                  ? relations.filter((r) => r.from_table === selectedErdTable || r.to_table === selectedErdTable)
+                  : relations;
+                if (filteredRels.length === 0) return (
+                  <p className="text-xs text-slate-600 text-center py-6">{selectedErdTable ? '관련 관계 없음' : '등록된 관계 없음'}</p>
+                );
+                return filteredRels.map((rel) => {
                 const color = REL_COLORS[rel.relation_type] ?? '#64748b';
                 const isSelected = selected === rel.id;
                 return (
@@ -926,6 +1080,7 @@ function ErdTab() {
                     onClick={() => {
                       const newId = isSelected ? null : rel.id;
                       setSelected(newId);
+                      setSelectedErdTable(null);
                       if (!isSelected) {
                         // Scroll SVG to midpoint between from/to tables
                         const fp = posRef.current[rel.from_table];
@@ -939,6 +1094,8 @@ function ErdTab() {
                             behavior: 'smooth',
                           });
                         }
+                        // Scroll right panel to this relation (after filter resets)
+                        if (newId) scrollRelIntoView(newId);
                       }
                     }}
                     className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer transition-colors group ${
@@ -959,10 +1116,12 @@ function ErdTab() {
                     </button>
                   </div>
                 );
-              })}
+              });
+              })()}
             </div>
             {/* Usage guide */}
             <div className="border-t border-slate-700 p-3 flex-shrink-0 text-[10px] text-slate-500 space-y-1">
+              <p>● 테이블 클릭 → 관련 관계 필터</p>
               <p>● 테이블 드래그 → 위치 이동</p>
               <p>● 점 드래그 → 다른 컬럼에 연결</p>
               <p>● 관계선 클릭 → 타입 변경/삭제</p>
@@ -1104,9 +1263,18 @@ function SynonymTab() {
     }
   }, []);
 
+  const [synPage, setSynPage] = useState(1);
+  const [synPageSize, setSynPageSize] = useState(30);
+
   const filtered = search
     ? synonyms.filter((s) => s.term.includes(search) || s.target.includes(search) || s.description.includes(search))
     : synonyms;
+
+  const totalSynPages = Math.ceil(filtered.length / synPageSize);
+  const pagedFiltered = filtered.slice((synPage - 1) * synPageSize, synPage * synPageSize);
+
+  // Reset page when search changes
+  useEffect(() => { setSynPage(1); }, [search, synPageSize]);
 
   return (
     <div className="space-y-4">
@@ -1159,7 +1327,7 @@ function SynonymTab() {
             </Button>
           </div>
 
-          {/* Search + count */}
+          {/* Search + count + page size */}
           <div className="flex items-center gap-3">
             <div className="relative flex-1">
               <Search className="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
@@ -1167,16 +1335,20 @@ function SynonymTab() {
                 placeholder="검색..."
                 className="pl-8 pr-3 py-1.5 w-full bg-slate-800 border border-slate-600 rounded-lg text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
             </div>
+            <select value={synPageSize} onChange={(e) => setSynPageSize(Number(e.target.value))}
+              className="bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-400">
+              {[10, 30, 50].map((n) => <option key={n} value={n}>{n}건</option>)}
+            </select>
             <span className="text-xs text-slate-500 whitespace-nowrap">{filtered.length}건</span>
           </div>
 
           {/* List */}
           <div className="rounded-xl border border-slate-700 overflow-hidden">
-            {filtered.length === 0 ? (
-              <p className="text-slate-500 text-sm text-center py-8">등록된 용어가 없습니다.</p>
+            {pagedFiltered.length === 0 ? (
+              <p className="text-slate-500 text-sm text-center py-8">{search ? '검색 결과가 없습니다.' : '등록된 용어가 없습니다.'}</p>
             ) : (
               <div className="divide-y divide-slate-700/60">
-                {filtered.map((s) => (
+                {pagedFiltered.map((s) => (
                   <div key={s.id} className="flex items-center gap-4 px-4 py-3 hover:bg-slate-800/40 group">
                     <span className="text-sm text-slate-200 font-medium w-24 flex-shrink-0">{s.term}</span>
                     <code className="flex-1 text-xs text-orange-400 font-mono truncate">{s.target}</code>
@@ -1190,6 +1362,15 @@ function SynonymTab() {
               </div>
             )}
           </div>
+
+          {/* Pagination */}
+          {totalSynPages > 1 && (
+            <div className="flex gap-2 justify-center items-center">
+              <Button size="sm" variant="secondary" onClick={() => setSynPage((p) => Math.max(1, p - 1))} disabled={synPage === 1}>이전</Button>
+              <span className="text-xs text-slate-400">{synPage} / {totalSynPages}</span>
+              <Button size="sm" variant="secondary" onClick={() => setSynPage((p) => Math.min(totalSynPages, p + 1))} disabled={synPage >= totalSynPages}>다음</Button>
+            </div>
+          )}
         </>
       )}
 
@@ -1265,7 +1446,14 @@ function FewshotTab() {
     onError: (e: Error) => alert(`오류: ${e.message}`),
   });
 
+  const [fsPage, setFsPage] = useState(1);
+  const [fsPageSize, setFsPageSize] = useState(30);
   const pendingCount = statusFilter === 'all' ? fewshots.filter(f => f.status === 'pending').length : (statusFilter === 'pending' ? fewshots.length : 0);
+  const totalFsPages = Math.ceil(fewshots.length / fsPageSize);
+  const pagedFewshots = fewshots.slice((fsPage - 1) * fsPageSize, fsPage * fsPageSize);
+
+  // Reset page when filter changes
+  useEffect(() => { setFsPage(1); }, [statusFilter, fsPageSize]);
 
   return (
     <div className="space-y-4">
@@ -1287,27 +1475,33 @@ function FewshotTab() {
 
       {ns && (
         <>
-          {/* Status filter tabs */}
-          <div className="flex gap-1 border-b border-slate-700">
-            {(['all', 'pending', 'approved', 'rejected'] as FewshotStatusFilter[]).map((s) => (
-              <button key={s} onClick={() => setStatusFilter(s)}
-                className={clsx(
-                  'px-3 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5',
-                  statusFilter === s
-                    ? 'text-indigo-400 border-indigo-500'
-                    : 'text-slate-500 border-transparent hover:text-slate-300',
-                )}>
-                {s === 'all' ? '전체' : STATUS_LABELS[s].label}
-                {s === 'pending' && pendingCount > 0 && (
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-400 font-bold">{pendingCount}</span>
-                )}
-              </button>
-            ))}
+          {/* Status filter tabs + page size */}
+          <div className="flex gap-1 border-b border-slate-700 items-center justify-between">
+            <div className="flex gap-1">
+              {(['all', 'pending', 'approved', 'rejected'] as FewshotStatusFilter[]).map((s) => (
+                <button key={s} onClick={() => setStatusFilter(s)}
+                  className={clsx(
+                    'px-3 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5',
+                    statusFilter === s
+                      ? 'text-indigo-400 border-indigo-500'
+                      : 'text-slate-500 border-transparent hover:text-slate-300',
+                  )}>
+                  {s === 'all' ? '전체' : STATUS_LABELS[s].label}
+                  {s === 'pending' && pendingCount > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-400 font-bold">{pendingCount}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <select value={fsPageSize} onChange={(e) => setFsPageSize(Number(e.target.value))}
+              className="bg-slate-800 border border-slate-600 rounded-lg px-2 py-1 text-xs text-slate-400">
+              {[10, 30, 50].map((n) => <option key={n} value={n}>{n}건</option>)}
+            </select>
           </div>
 
           <div className="rounded-xl border border-slate-700 overflow-hidden divide-y divide-slate-700/60">
-            {fewshots.length === 0 && <p className="text-slate-500 text-sm text-center py-8">예제가 없습니다.</p>}
-            {fewshots.map((f) => {
+            {pagedFewshots.length === 0 && <p className="text-slate-500 text-sm text-center py-8">예제가 없습니다.</p>}
+            {pagedFewshots.map((f) => {
               const st = STATUS_LABELS[f.status] ?? STATUS_LABELS.approved;
               const isExpanded = expanded === f.id;
               return (
@@ -1361,6 +1555,15 @@ function FewshotTab() {
               );
             })}
           </div>
+
+          {/* Pagination */}
+          {totalFsPages > 1 && (
+            <div className="flex gap-2 justify-center items-center">
+              <Button size="sm" variant="secondary" onClick={() => setFsPage((p) => Math.max(1, p - 1))} disabled={fsPage === 1}>이전</Button>
+              <span className="text-xs text-slate-400">{fsPage} / {totalFsPages}</span>
+              <Button size="sm" variant="secondary" onClick={() => setFsPage((p) => Math.min(totalFsPages, p + 1))} disabled={fsPage >= totalFsPages}>다음</Button>
+            </div>
+          )}
         </>
       )}
 
