@@ -1,6 +1,6 @@
 # Ops-Navigator → AI 통합 플랫폼 확장 전략
 
-> **최종 수정**: 2026-03-19
+> **최종 수정**: 2026-03-20
 
 ---
 
@@ -19,6 +19,10 @@
 [완료]  ops_prompt.agent_type 컬럼 추가 — 에이전트별 프롬프트 스코핑 (2026-03-19)
         Text2SQL 파이프라인 프롬프트 ops_prompt 통합 (sql2_parse/generate/fix/summarize)
         Admin 시스템설정 탭에서 selectedAgent 기반 자동 필터링
+[완료]  스키마 스캔 diff 방식 개선 + ERD/용어 고아 자동 정리 + 스캔 리포트 모달 (2026-03-20)
+        AI 관계 추천·용어 자동생성 변경 테이블 한정 (토큰 절약)
+        ERD 검색 + 관계 목록 ↔ SVG 양방향 싱크
+        docker-compose.yml devx-mcp-api extra_hosts 하드코딩 제거
 ```
 
 ---

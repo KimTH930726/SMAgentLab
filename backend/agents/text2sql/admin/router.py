@@ -58,6 +58,7 @@ async def test_target_db(namespace: str, body: TargetDbPayload, _=Depends(requir
 
 @router.post("/namespaces/{namespace}/target-db/scan")
 async def scan_schema(namespace: str, _=Depends(require_admin)):
+    """스키마 스캔 (diff 방식) — 변경분만 반영 + ERD/용어 정합성 자동 처리."""
     ns_id = await _get_ns_id(namespace)
     try:
         result = await service.scan_and_save_schema(ns_id)
@@ -221,13 +222,21 @@ async def delete_relation(namespace: str, relation_id: int, _=Depends(require_ad
     return {"ok": True}
 
 
+class SuggestRelationsPayload(BaseModel):
+    target_tables: list[str] = []  # 빈 배열이면 전체 스키마 대상
+
+
 @router.post("/namespaces/{namespace}/relations/suggest-ai")
-async def suggest_relations_ai(namespace: str, admin: dict = Depends(require_admin)):
-    """LLM으로 스키마를 분석하여 관계 후보를 추천합니다."""
+async def suggest_relations_ai(namespace: str, body: SuggestRelationsPayload = None, admin: dict = Depends(require_admin)):
+    """LLM으로 스키마를 분석하여 관계 후보를 추천합니다.
+    target_tables가 주어지면 해당 테이블 관련 관계만 추천 (토큰 절약).
+    """
     ns_id = await _get_ns_id(namespace)
     llm = get_llm_provider()
     if not llm:
         raise HTTPException(status_code=400, detail="LLM이 설정되지 않았습니다.")
+
+    target_tables = set(body.target_tables) if body and body.target_tables else set()
 
     async with get_conn() as conn:
         tables = await conn.fetch(
@@ -235,18 +244,27 @@ async def suggest_relations_ai(namespace: str, admin: dict = Depends(require_adm
         )
         if not tables:
             raise HTTPException(status_code=400, detail="스키마가 없습니다.")
+
         schema_lines = []
         for t in tables:
+            is_target = not target_tables or t["table_name"] in target_tables
             cols = await conn.fetch(
                 "SELECT name, data_type, is_pk, fk_reference FROM sql_schema_column WHERE table_id = $1 ORDER BY id",
                 t["id"],
             )
-            col_strs = []
-            for c in cols:
-                tag = "PK" if c["is_pk"] else ("FK" if c["fk_reference"] else "")
-                col_strs.append(f"  - {c['name']} {c['data_type']}" + (f" [{tag}]" if tag else ""))
-            schema_lines.append(f"## {t['table_name']}")
-            schema_lines.extend(col_strs)
+            if is_target:
+                # 대상 테이블: 전체 컬럼 정보
+                col_strs = []
+                for c in cols:
+                    tag = "PK" if c["is_pk"] else ("FK" if c["fk_reference"] else "")
+                    col_strs.append(f"  - {c['name']} {c['data_type']}" + (f" [{tag}]" if tag else ""))
+                schema_lines.append(f"## {t['table_name']} [대상]")
+                schema_lines.extend(col_strs)
+            else:
+                # 기존 테이블: 컬럼명만 (타입 생략으로 토큰 절약)
+                col_names = ", ".join(c["name"] for c in cols)
+                schema_lines.append(f"## {t['table_name']}: {col_names}")
+
         existing = await conn.fetch(
             "SELECT from_table, from_col, to_table, to_col FROM sql_relation WHERE namespace_id = $1", ns_id
         )
@@ -254,9 +272,14 @@ async def suggest_relations_ai(namespace: str, admin: dict = Depends(require_adm
     existing_set = {(r["from_table"], r["from_col"], r["to_table"], r["to_col"]) for r in existing}
     schema_text = "\n".join(schema_lines)
 
+    focus_msg = ""
+    if target_tables:
+        focus_msg = f"\n\n## 주의: [대상] 표시된 테이블({', '.join(target_tables)})과 관련된 관계만 추천하세요.\n"
+
     prompt = (
         "아래 데이터베이스 스키마를 분석하여 테이블 간 관계(FK 참조)를 추천해주세요.\n\n"
-        f"{schema_text}\n\n"
+        f"{schema_text}\n"
+        f"{focus_msg}\n"
         "## 규칙\n"
         "- 실제 존재하는 테이블명과 컬럼명만 사용\n"
         "- _id, _no, _code 등 참조 패턴을 분석하여 관계 추론\n"
@@ -371,13 +394,21 @@ async def reindex_synonyms(namespace: str, _=Depends(require_admin)):
     return {"ok": True, "count": len(rows)}
 
 
+class GenerateSynonymsPayload(BaseModel):
+    target_tables: list[str] = []  # 빈 배열이면 전체 스키마 대상
+
+
 @router.post("/namespaces/{namespace}/synonyms/generate-ai")
-async def generate_synonyms_ai(namespace: str, admin: dict = Depends(require_admin)):
-    """LLM으로 스키마를 분석하여 SQL 용어 사전을 자동 생성합니다."""
+async def generate_synonyms_ai(namespace: str, body: GenerateSynonymsPayload = None, admin: dict = Depends(require_admin)):
+    """LLM으로 스키마를 분석하여 SQL 용어 사전을 자동 생성합니다.
+    target_tables가 주어지면 해당 테이블 관련 용어만 생성 (토큰 절약).
+    """
     ns_id = await _get_ns_id(namespace)
     llm = get_llm_provider()
     if not llm:
         raise HTTPException(status_code=400, detail="LLM이 설정되지 않았습니다.")
+
+    target_tables = set(body.target_tables) if body and body.target_tables else set()
 
     # 스키마 로드
     async with get_conn() as conn:
@@ -389,17 +420,24 @@ async def generate_synonyms_ai(namespace: str, admin: dict = Depends(require_adm
             raise HTTPException(status_code=400, detail="스키마가 없습니다. 먼저 DB를 연결하고 스키마를 스캔하세요.")
         schema_lines = []
         for t in tables:
+            is_target = not target_tables or t["table_name"] in target_tables
             cols = await conn.fetch(
                 "SELECT name, data_type, description, is_pk, fk_reference FROM sql_schema_column WHERE table_id = $1 ORDER BY id",
                 t["id"],
             )
-            schema_lines.append(f"## {t['table_name']}" + (f" ({t['description']})" if t["description"] else ""))
-            for c in cols:
-                parts = [c["name"], c["data_type"]]
-                if c["is_pk"]: parts.append("PK")
-                if c["fk_reference"]: parts.append(f"FK→{c['fk_reference']}")
-                if c["description"]: parts.append(f"({c['description']})")
-                schema_lines.append("  - " + " ".join(parts))
+            if is_target:
+                # 대상 테이블: 전체 컬럼 정보
+                schema_lines.append(f"## {t['table_name']} [대상]" + (f" ({t['description']})" if t["description"] else ""))
+                for c in cols:
+                    parts = [c["name"], c["data_type"]]
+                    if c["is_pk"]: parts.append("PK")
+                    if c["fk_reference"]: parts.append(f"FK→{c['fk_reference']}")
+                    if c["description"]: parts.append(f"({c['description']})")
+                    schema_lines.append("  - " + " ".join(parts))
+            else:
+                # 기존 테이블: 테이블명 + 컬럼명만 (토큰 절약)
+                col_names = ", ".join(c["name"] for c in cols)
+                schema_lines.append(f"## {t['table_name']}: {col_names}")
         # 관계
         rels = await conn.fetch(
             "SELECT from_table, from_col, to_table, to_col, relation_type FROM sql_relation WHERE namespace_id = $1",

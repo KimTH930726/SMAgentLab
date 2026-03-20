@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.9)
+# Ops-Navigator 시스템 아키텍처 (v2.10)
 
 ## 개요
 
@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약** (자세한 내용은 `dev-handoff.md` 참조)
+- v2.10: 스키마 스캔 diff 방식 개선 + ERD/용어 고아 자동 정리 + 스캔 리포트 모달 + ERD 검색·양방향 싱크
 - v2.9: `ops_prompt` 에이전트별 분리 — `agent_type` 컬럼 추가, text2sql 파이프라인 프롬프트 `ops_prompt`로 통합, 파이프라인 탭 프롬프트 편집 UI 제거
 - v2.8: `domain/` → `service/` + `agents/{agent}/` 재구성 + DB 테이블 prefix 변경 (`rag_*`)
 - v2.7: SQL Few-shot 피드백 워크플로우, ERD 캔버스 패닝, MCP 도구 에이전트 분리
@@ -323,7 +324,7 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 |--------|------|------|
 | `GET/PUT` | `/api/text2sql/namespaces/{ns}/target-db` | 대상 DB 연결 설정 조회/저장 |
 | `POST` | `/api/text2sql/namespaces/{ns}/target-db/test` | 연결 테스트 |
-| `POST` | `/api/text2sql/namespaces/{ns}/target-db/scan` | 스키마 자동 스캔 (테이블·컬럼 수집) |
+| `POST` | `/api/text2sql/namespaces/{ns}/target-db/scan` | 스키마 diff 스캔 — 테이블/컬럼 추가·삭제·변경 감지, 변경분만 임베딩. ERD 고아 관계 자동 정리(삭제 테이블/컬럼 관련 relation 삭제), 용어사전 고아 자동 삭제(삭제 컬럼 참조 용어 삭제). 변경 상세 리포트 반환 (v2.10) |
 | `GET` | `/api/text2sql/namespaces/{ns}/schema` | 전체 스키마 (테이블+컬럼) 조회 |
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/tables/{id}` | 테이블 설명 수정 |
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/tables/{id}/toggle` | 테이블 RAG 포함 여부 토글 |
@@ -331,10 +332,10 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `POST` | `/api/text2sql/namespaces/{ns}/schema/reindex` | 스키마 벡터 재인덱싱 |
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/positions` | ERD 테이블 위치 일괄 저장 (pos_x/pos_y) — v2.6 신규 |
 | `GET/POST/DELETE` | `/api/text2sql/namespaces/{ns}/relations/{id?}` | FK 관계 CRUD |
-| `POST` | `/api/text2sql/namespaces/{ns}/relations/suggest-ai` | AI 관계 추천 (LLM이 컬럼명 패턴 분석) — v2.6 신규 |
+| `POST` | `/api/text2sql/namespaces/{ns}/relations/suggest-ai` | AI 관계 추천 (LLM이 컬럼명 패턴 분석, v2.10: 변경 테이블 대상으로만 제한하여 토큰 절약) — v2.6 신규 |
 | `GET/POST/DELETE` | `/api/text2sql/namespaces/{ns}/synonyms/{id?}` | 용어사전 CRUD |
 | `POST` | `/api/text2sql/namespaces/{ns}/synonyms/reindex` | 용어사전 벡터 재인덱싱 |
-| `POST` | `/api/text2sql/namespaces/{ns}/synonyms/generate-ai` | AI 용어 자동생성 (30+ 항목, SQL 키워드 필터) — v2.6 신규 |
+| `POST` | `/api/text2sql/namespaces/{ns}/synonyms/generate-ai` | AI 용어 자동생성 (30+ 항목, SQL 키워드 필터, v2.10: 변경 테이블 대상으로만 제한하여 토큰 절약) — v2.6 신규 |
 | `GET/POST/DELETE` | `/api/text2sql/namespaces/{ns}/fewshots/{id?}` | 예제 Q&A CRUD |
 | `POST` | `/api/text2sql/namespaces/{ns}/fewshots/reindex` | 예제 벡터 재인덱싱 |
 | `POST` | `/api/text2sql/namespaces/{ns}/fewshots/generate-ai` | AI 예제 자동생성 (20+ QA 쌍) — v2.6 신규 |

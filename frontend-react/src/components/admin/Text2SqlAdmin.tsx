@@ -4,6 +4,7 @@ import { clsx } from 'clsx';
 import {
   Plus, Trash2, RefreshCw, Save, Eye, EyeOff, CheckCircle, XCircle,
   Search, X, Maximize2, Minimize2, Sparkles, Undo2, ZoomIn, ZoomOut,
+  AlertTriangle, ArrowRight, Network,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { getNamespaces } from '../../api/namespaces';
@@ -18,6 +19,7 @@ import {
   listAuditLogs,
   listSqlCache, deleteSqlCacheEntry, clearSqlCache,
   type SchemaTableWithCols,
+  type ScanReport,
 } from '../../api/text2sql';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -54,7 +56,8 @@ function TargetDbTab() {
   const qc = useQueryClient();
   const [showPwd, setShowPwd] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [scanResult, setScanResult] = useState<{ tables: number; columns: number } | null>(null);
+  const [scanReport, setScanReport] = useState<ScanReport | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [form, setForm] = useState<SqlTargetDb>(_defaultForm);
 
   const { data: targetDbData } = useQuery({
@@ -79,10 +82,23 @@ function TargetDbTab() {
   };
 
   const handleScan = async () => {
-    setScanResult(null);
+    setScanning(true);
+    setScanReport(null);
     const r = await scanSchema(ns).catch((e: unknown) => { alert(String(e)); return null; });
-    if (r) { setScanResult(r); qc.invalidateQueries({ queryKey: ['sql_schema', ns] }); }
+    setScanning(false);
+    if (r) {
+      setScanReport(r);
+      qc.invalidateQueries({ queryKey: ['sql_schema', ns] });
+      qc.invalidateQueries({ queryKey: ['sql_synonyms', ns] });
+      qc.invalidateQueries({ queryKey: ['sql_relations', ns] });
+    }
   };
+
+  const hasChanges = scanReport && (
+    scanReport.tables_added > 0 || scanReport.tables_removed > 0 ||
+    scanReport.columns_added > 0 || scanReport.columns_removed > 0 ||
+    scanReport.columns_updated > 0
+  );
 
   return (
     <div className="space-y-4 max-w-lg">
@@ -126,8 +142,9 @@ function TargetDbTab() {
               <Save className="w-3.5 h-3.5 mr-1" /> 저장
             </Button>
             <Button size="sm" variant="secondary" onClick={handleTest}>연결 테스트</Button>
-            <Button size="sm" variant="secondary" onClick={handleScan}>
-              <RefreshCw className="w-3.5 h-3.5 mr-1" /> 스키마 스캔
+            <Button size="sm" variant="secondary" onClick={handleScan} disabled={scanning}>
+              <RefreshCw className={clsx('w-3.5 h-3.5 mr-1', scanning && 'animate-spin')} />
+              {scanning ? '스캔 중...' : '스키마 스캔'}
             </Button>
           </div>
           {testResult && (
@@ -136,9 +153,106 @@ function TargetDbTab() {
               {testResult.message}
             </div>
           )}
-          {scanResult && <p className="text-sm text-emerald-400">스캔 완료: 테이블 {scanResult.tables}개, 컬럼 {scanResult.columns}개</p>}
         </div>
       )}
+
+      {/* Scan Report Modal */}
+      <Modal isOpen={!!scanReport} onClose={() => setScanReport(null)} title="스키마 스캔 완료">
+        {scanReport && (
+          <div className="space-y-4">
+            {/* Summary */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-slate-800 rounded-lg p-3 text-center">
+                <div className="text-lg font-bold text-indigo-400">
+                  <span className="text-emerald-400">+{scanReport.tables_added}</span>
+                  {scanReport.tables_removed > 0 && <span className="text-rose-400 ml-1">-{scanReport.tables_removed}</span>}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">테이블</div>
+              </div>
+              <div className="bg-slate-800 rounded-lg p-3 text-center">
+                <div className="text-lg font-bold">
+                  <span className="text-emerald-400">+{scanReport.columns_added}</span>
+                  {scanReport.columns_removed > 0 && <span className="text-rose-400 ml-1">-{scanReport.columns_removed}</span>}
+                  {scanReport.columns_updated > 0 && <span className="text-amber-400 ml-1">~{scanReport.columns_updated}</span>}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">컬럼</div>
+              </div>
+            </div>
+
+            {/* Detail stats */}
+            <div className="text-xs text-slate-400 space-y-1 bg-slate-800/60 rounded-lg px-3 py-2">
+              <p>변경 없이 스킵: <span className="text-slate-300">{scanReport.columns_skipped}건</span></p>
+              {scanReport.embeddings_created > 0 && (
+                <p>임베딩 생성: <span className="text-indigo-300">{scanReport.embeddings_created}건</span></p>
+              )}
+              {scanReport.orphan_synonyms_deleted > 0 && (
+                <p>용어 자동 삭제: <span className="text-rose-400">{scanReport.orphan_synonyms_deleted}건</span> (참조 컬럼 삭제됨)</p>
+              )}
+            </div>
+
+            {!hasChanges && (
+              <div className="flex items-center gap-2 text-sm text-slate-400 bg-slate-800/60 rounded-lg px-3 py-3">
+                <CheckCircle className="w-4 h-4 text-emerald-400" />
+                변경 사항이 없습니다. 스키마가 최신 상태입니다.
+              </div>
+            )}
+
+            {/* Action buttons */}
+            {hasChanges && (
+              <div className="space-y-2">
+                {scanReport.changed_tables.length > 0 && (
+                  <>
+                    <button
+                      onClick={() => {
+                        (window as any).__sqlSuggestTables = scanReport.changed_tables;
+                        setScanReport(null);
+                        window.dispatchEvent(new CustomEvent('sql-admin-navigate', { detail: { tab: 'erd' } }));
+                      }}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors text-sm"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Network className="w-4 h-4 text-indigo-400" />
+                        관계 추천 대상 {scanReport.changed_tables.length}개 테이블
+                      </span>
+                      <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        (window as any).__sqlSuggestSynonyms = scanReport.changed_tables;
+                        setScanReport(null);
+                        window.dispatchEvent(new CustomEvent('sql-admin-navigate', { detail: { tab: 'synonym' } }));
+                      }}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors text-sm"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-amber-400" />
+                        신규 테이블 용어 자동생성 추천
+                      </span>
+                      <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
+                    </button>
+                  </>
+                )}
+                {scanReport.orphan_synonyms_warn.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setScanReport(null);
+                      window.dispatchEvent(new CustomEvent('sql-admin-navigate', { detail: { tab: 'synonym' } }));
+                    }}
+                    className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border border-amber-600/40 bg-amber-900/20 text-amber-300 hover:bg-amber-900/40 transition-colors text-sm"
+                  >
+                    <span>수정 필요 용어 {scanReport.orphan_synonyms_warn.length}건</span>
+                    <span className="flex items-center gap-1 text-xs">용어 관리로 이동 <ArrowRight className="w-3.5 h-3.5" /></span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <Button variant="secondary" onClick={() => setScanReport(null)}>닫기</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -360,10 +474,57 @@ function ErdTab() {
   const [addForm, setAddForm] = useState<Omit<SqlRelation, 'id'>>({ from_table: '', from_col: '', to_table: '', to_col: '', relation_type: 'N:1', description: '' });
   const [suggestions, setSuggestions] = useState<SuggestItem[]>([]);
   const [showSuggest, setShowSuggest] = useState(false);
+  const [pendingSuggestTables, setPendingSuggestTables] = useState<string[] | null>(null);
+  const [erdSearch, setErdSearch] = useState('');
+  const [focusedTable, setFocusedTable] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const relListRef = useRef<HTMLDivElement>(null);
   const posRef = useRef(positions);
   posRef.current = positions;
+
+  // Check for pending suggest tables on mount (set by TargetDbTab scan report)
+  useEffect(() => {
+    const pending = (window as any).__sqlSuggestTables;
+    if (pending && pending.length > 0) {
+      setPendingSuggestTables(pending);
+      (window as any).__sqlSuggestTables = null;
+    }
+  }, []);
+
+  // Scroll right panel to selected relation
+  const scrollRelIntoView = useCallback((relId: number) => {
+    setTimeout(() => {
+      const el = relListRef.current?.querySelector(`[data-rel-id="${relId}"]`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 50);
+  }, []);
+
+  const [suggestHighlight, setSuggestHighlight] = useState(false);
+
+  // When pending tables arrive: focus first new table + highlight suggest button
+  useEffect(() => {
+    if (pendingSuggestTables && pendingSuggestTables.length > 0 && ns && schema.length > 0) {
+      // Focus on first changed table
+      const firstTable = pendingSuggestTables[0];
+      setFocusedTable(firstTable);
+      const container = containerRef.current;
+      const pos = posRef.current[firstTable];
+      if (container && pos) {
+        setTimeout(() => {
+          container.scrollTo({
+            left: pos.x * zoom - container.clientWidth / 2 + ERD_W * zoom / 2,
+            top: pos.y * zoom - container.clientHeight / 2 + 100,
+            behavior: 'smooth',
+          });
+        }, 300);
+      }
+      // Highlight suggest button
+      setSuggestHighlight(true);
+      setTimeout(() => setSuggestHighlight(false), 5000);
+      setPendingSuggestTables(null);
+    }
+  }, [pendingSuggestTables, ns, schema]);
 
   // Load positions: prefer DB pos_x/pos_y, fallback to auto layout
   useEffect(() => {
@@ -399,7 +560,7 @@ function ErdTab() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['sql_relations', ns] }); setSelected(null); },
   });
   const suggestMut = useMutation({
-    mutationFn: () => suggestRelationsAI(ns),
+    mutationFn: (targetTables?: string[]) => suggestRelationsAI(ns, targetTables),
     onSuccess: (r) => { setSuggestions(r.suggestions); setShowSuggest(true); },
     onError: (e: Error) => alert(`관계 추천 실패: ${e.message}`),
   });
@@ -523,9 +684,38 @@ function ErdTab() {
         <div className="flex items-center gap-2">
           <NsSelect ns={ns} setNs={setNs} namespaces={namespaces} />
           {ns && schema.length > 0 && (
-            <span className="text-xs text-slate-500 hidden sm:inline">
-              배경 드래그 → 화면 이동 &nbsp;·&nbsp; 테이블 드래그 → 위치 이동 &nbsp;·&nbsp; 점 드래그 → 관계 연결 &nbsp;·&nbsp; 관계선 클릭 → 편집/삭제
-            </span>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+              <input
+                value={erdSearch}
+                onChange={(e) => {
+                  setErdSearch(e.target.value);
+                  const q = e.target.value.toLowerCase();
+                  if (q) {
+                    const match = schema.find((t) => t.table_name.toLowerCase().includes(q));
+                    if (match) {
+                      setFocusedTable(match.table_name);
+                      // Scroll to the table
+                      const container = containerRef.current;
+                      const pos = posRef.current[match.table_name];
+                      if (container && pos) {
+                        container.scrollTo({
+                          left: pos.x * zoom - container.clientWidth / 2 + ERD_W * zoom / 2,
+                          top: pos.y * zoom - container.clientHeight / 2 + 100,
+                          behavior: 'smooth',
+                        });
+                      }
+                    } else {
+                      setFocusedTable(null);
+                    }
+                  } else {
+                    setFocusedTable(null);
+                  }
+                }}
+                placeholder="테이블 검색..."
+                className="pl-8 pr-3 py-1.5 bg-slate-800 border border-slate-600 rounded-lg text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:border-indigo-500 w-48"
+              />
+            </div>
           )}
         </div>
         {ns && schema.length > 0 && (
@@ -551,8 +741,11 @@ function ErdTab() {
               </button>
             </div>
             {/* AI suggest */}
-            <button onClick={() => suggestMut.mutate()} disabled={suggestMut.isPending}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg bg-violet-700 hover:bg-violet-600 text-white disabled:opacity-50 transition-colors">
+            <button onClick={() => { suggestMut.mutate(undefined); setSuggestHighlight(false); }} disabled={suggestMut.isPending}
+              className={clsx(
+                'flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg bg-violet-700 hover:bg-violet-600 text-white disabled:opacity-50 transition-colors relative',
+                suggestHighlight && 'ring-2 ring-violet-400 ring-offset-2 ring-offset-slate-900 animate-pulse',
+              )}>
               <Sparkles className="w-3.5 h-3.5" /> {suggestMut.isPending ? '분석 중...' : '관계 추천'}
             </button>
             {/* Add relation */}
@@ -616,7 +809,7 @@ function ErdTab() {
                   const color = REL_COLORS[rel.relation_type] ?? '#64748b';
                   const markerId = isSelected ? 'arr-sel' : 'arr-gray';
                   return (
-                    <g key={rel.id} onClick={(e) => { e.stopPropagation(); setSelected(isSelected ? null : rel.id); }} style={{ cursor: 'pointer' }}>
+                    <g key={rel.id} onClick={(e) => { e.stopPropagation(); const newId = isSelected ? null : rel.id; setSelected(newId); if (newId) scrollRelIntoView(newId); }} style={{ cursor: 'pointer' }}>
                       {/* Hit area */}
                       <path d={path.d} stroke="transparent" strokeWidth={14} fill="none" />
                       {/* Shadow for contrast */}
@@ -662,17 +855,25 @@ function ErdTab() {
                 {schema.map((t) => {
                   const p = positions[t.table_name] ?? { x: 0, y: 0 };
                   const h = erdNodeH(t.columns.length);
+                  const isFocused = focusedTable === t.table_name;
                   return (
                     <g key={t.table_name} transform={`translate(${p.x},${p.y})`}
                       onMouseDown={(e) => handleTableMouseDown(e, t.table_name)}
                       style={{ cursor: dragging?.table === t.table_name ? 'grabbing' : 'grab' }}>
+                      {/* Focus glow */}
+                      {isFocused && (
+                        <rect x={-4} y={-4} width={ERD_W + 8} height={h + 8} rx={10}
+                          fill="none" stroke="#6366f1" strokeWidth={3} opacity={0.8}>
+                          <animate attributeName="opacity" values="0.8;0.3;0.8" dur="1.5s" repeatCount="indefinite" />
+                        </rect>
+                      )}
                       {/* Shadow */}
                       <rect x={3} y={3} width={ERD_W} height={h} rx={7} fill="rgba(0,0,0,0.25)" />
                       {/* Card body */}
-                      <rect width={ERD_W} height={h} rx={7} fill="#f8fafc" stroke="#cbd5e1" strokeWidth={1} />
+                      <rect width={ERD_W} height={h} rx={7} fill={isFocused ? '#eef2ff' : '#f8fafc'} stroke={isFocused ? '#6366f1' : '#cbd5e1'} strokeWidth={isFocused ? 2 : 1} />
                       {/* Header */}
-                      <rect width={ERD_W} height={ERD_HDR} rx={7} fill="#fef3c7" />
-                      <rect y={ERD_HDR - 7} width={ERD_W} height={7} fill="#fef3c7" />
+                      <rect width={ERD_W} height={ERD_HDR} rx={7} fill={isFocused ? '#c7d2fe' : '#fef3c7'} />
+                      <rect y={ERD_HDR - 7} width={ERD_W} height={7} fill={isFocused ? '#c7d2fe' : '#fef3c7'} />
                       <text x={10} y={ERD_HDR / 2 + 5} fill="#c2410c" fontSize={11} fontWeight="700">{t.table_name}</text>
                       {/* Divider */}
                       <line x1={0} y1={ERD_HDR} x2={ERD_W} y2={ERD_HDR} stroke="#e2e8f0" strokeWidth={1} />
@@ -711,7 +912,7 @@ function ErdTab() {
               <span className="text-xs font-semibold text-slate-300">관계 목록 ({relations.length})</span>
               <span className="text-[10px] text-slate-600">Ctrl+Z: 되돌리기</span>
             </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            <div ref={relListRef} className="flex-1 overflow-y-auto p-2 space-y-1">
               {relations.length === 0 && (
                 <p className="text-xs text-slate-600 text-center py-6">등록된 관계 없음</p>
               )}
@@ -721,7 +922,25 @@ function ErdTab() {
                 return (
                   <div
                     key={rel.id}
-                    onClick={() => setSelected(isSelected ? null : rel.id)}
+                    data-rel-id={rel.id}
+                    onClick={() => {
+                      const newId = isSelected ? null : rel.id;
+                      setSelected(newId);
+                      if (!isSelected) {
+                        // Scroll SVG to midpoint between from/to tables
+                        const fp = posRef.current[rel.from_table];
+                        const tp = posRef.current[rel.to_table];
+                        if (fp && tp && containerRef.current) {
+                          const midX = (fp.x + tp.x) / 2;
+                          const midY = (fp.y + tp.y) / 2;
+                          containerRef.current.scrollTo({
+                            left: midX * zoom - containerRef.current.clientWidth / 2 + ERD_W * zoom / 2,
+                            top: midY * zoom - containerRef.current.clientHeight / 2,
+                            behavior: 'smooth',
+                          });
+                        }
+                      }
+                    }}
                     className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer transition-colors group ${
                       isSelected ? 'bg-indigo-900/40 border border-indigo-700/50' : 'hover:bg-slate-800/60'
                     }`}
@@ -865,13 +1084,25 @@ function SynonymTab() {
   });
   const reindexMut = useMutation({ mutationFn: () => reindexSynonyms(ns) });
   const aiGenMut = useMutation({
-    mutationFn: () => generateSynonymsAI(ns),
+    mutationFn: (targetTables?: string[]) => generateSynonymsAI(ns, targetTables),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['sql_synonyms', ns] });
       alert(`AI 자동생성 완료: ${r.created}건 추가 (${r.skipped_invalid}건 필터링)`);
     },
     onError: (e: Error) => alert(`오류: ${e.message}`),
   });
+
+  const [aiHighlight, setAiHighlight] = useState(false);
+
+  // Check for pending suggest on mount
+  useEffect(() => {
+    const pending = (window as any).__sqlSuggestSynonyms;
+    if (pending && pending.length > 0) {
+      setAiHighlight(true);
+      setTimeout(() => setAiHighlight(false), 5000);
+      (window as any).__sqlSuggestSynonyms = null;
+    }
+  }, []);
 
   const filtered = search
     ? synonyms.filter((s) => s.term.includes(search) || s.target.includes(search) || s.description.includes(search))
@@ -887,8 +1118,11 @@ function SynonymTab() {
             <Button size="sm" variant="secondary" onClick={() => reindexMut.mutate()} disabled={reindexMut.isPending}>
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> 재인덱싱
             </Button>
-            <Button size="sm" onClick={() => aiGenMut.mutate()} disabled={aiGenMut.isPending}
-              className="bg-violet-700 hover:bg-violet-600 text-white">
+            <Button size="sm" onClick={() => { aiGenMut.mutate(undefined); setAiHighlight(false); }} disabled={aiGenMut.isPending}
+              className={clsx(
+                'bg-violet-700 hover:bg-violet-600 text-white',
+                aiHighlight && 'ring-2 ring-violet-400 ring-offset-2 ring-offset-slate-900 animate-pulse',
+              )}>
               <Sparkles className="w-3.5 h-3.5 mr-1" /> {aiGenMut.isPending ? 'AI 생성 중...' : 'AI 자동생성'}
             </Button>
           </div>

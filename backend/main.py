@@ -556,7 +556,7 @@ async def _migrate_text2sql_tables(conn) -> None:
              NULL, NULL),
             ('fix',           '자동 수정',   '검증 실패 시 LLM 자동 수정',       'Wrench',        '#ef4444', FALSE, TRUE,  5,
              NULL, NULL),
-            ('execute',       '쿼리 실행',   '대상 DB에 SQL 실행',              'Play',          '#3b82f6', TRUE,  TRUE,  6,
+            ('execute',       '쿼리 실행',   '대상 DB에 SQL 실행',              'Play',          '#3b82f6', FALSE, TRUE,  6,
              NULL, NULL),
             ('summarize',     '결과 요약',   'LLM 결과 요약 + 차트 추천',        'BarChart2',     '#06b6d4', FALSE, FALSE, 7,
              'You are a data analyst. Respond ONLY with valid JSON.',
@@ -877,6 +877,12 @@ SQL: {{sql}}
     await conn.execute("""
         UPDATE ops_prompt SET agent_type = 'text2sql'
         WHERE func_key LIKE 'sql2_%' AND agent_type = 'all'
+    """)
+
+    # v2.10: execute 스테이지 필수 해제 (운영 DB 실행 권한 없을 수 있음)
+    await conn.execute("""
+        UPDATE sql_pipeline_stage SET is_required = FALSE
+        WHERE id = 'execute' AND is_required = TRUE
     """)
 
 

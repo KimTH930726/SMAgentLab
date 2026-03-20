@@ -21,7 +21,20 @@ export async function testTargetDb(namespace: string, data: SqlTargetDb): Promis
   return apiFetch(`${ns(namespace)}/target-db/test`, { method: 'POST', body: JSON.stringify(data) });
 }
 
-export async function scanSchema(namespace: string): Promise<{ tables: number; columns: number }> {
+export interface ScanReport {
+  tables_added: number;
+  tables_removed: number;
+  columns_added: number;
+  columns_removed: number;
+  columns_updated: number;
+  columns_skipped: number;
+  embeddings_created: number;
+  orphan_synonyms_deleted: number;
+  orphan_synonyms_warn: Array<{ id: number; term: string; target: string }>;
+  changed_tables: string[];
+}
+
+export async function scanSchema(namespace: string): Promise<ScanReport> {
   return apiFetch(`${ns(namespace)}/target-db/scan`, { method: 'POST' });
 }
 
@@ -83,8 +96,11 @@ export async function deleteRelation(namespace: string, id: number): Promise<voi
   await apiFetch(`${ns(namespace)}/relations/${id}`, { method: 'DELETE' });
 }
 
-export async function suggestRelationsAI(namespace: string): Promise<{ suggestions: Array<{ from_table: string; from_col: string; to_table: string; to_col: string; relation_type: string; reason: string }> }> {
-  return apiFetch(`${ns(namespace)}/relations/suggest-ai`, { method: 'POST' });
+export async function suggestRelationsAI(namespace: string, targetTables?: string[]): Promise<{ suggestions: Array<{ from_table: string; from_col: string; to_table: string; to_col: string; relation_type: string; reason: string }> }> {
+  return apiFetch(`${ns(namespace)}/relations/suggest-ai`, {
+    method: 'POST',
+    body: JSON.stringify({ target_tables: targetTables ?? [] }),
+  });
 }
 
 // ── Synonyms ──────────────────────────────────────────────────────────────────
@@ -105,8 +121,11 @@ export async function reindexSynonyms(namespace: string): Promise<{ count: numbe
   return apiFetch(`${ns(namespace)}/synonyms/reindex`, { method: 'POST' });
 }
 
-export async function generateSynonymsAI(namespace: string): Promise<{ generated: number; created: number; skipped_invalid: number }> {
-  return apiFetch(`${ns(namespace)}/synonyms/generate-ai`, { method: 'POST' });
+export async function generateSynonymsAI(namespace: string, targetTables?: string[]): Promise<{ generated: number; created: number; skipped_invalid: number }> {
+  return apiFetch(`${ns(namespace)}/synonyms/generate-ai`, {
+    method: 'POST',
+    body: JSON.stringify({ target_tables: targetTables ?? [] }),
+  });
 }
 
 // ── Fewshots ──────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useState, Component, type ReactNode } from 'react';
+import { useState, useEffect, Component, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, Wrench, GitMerge, Network, BookMarked, ListOrdered, Workflow, FileText } from 'lucide-react';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
@@ -99,6 +99,23 @@ export default function Admin() {
 
   const defaultTab = visibleTabs[0]?.id ?? 'llm';
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
+
+  // Listen for tab navigation events from child components (e.g., scan report)
+  useEffect(() => {
+    const TAB_MAP: Record<string, TabId> = {
+      erd: 'sql_erd',
+      synonym: 'sql_synonyms',
+      schema: 'sql_schema',
+      fewshot: 'sql_fewshots',
+    };
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const tabId = TAB_MAP[detail?.tab];
+      if (tabId) setActiveTab(tabId);
+    };
+    window.addEventListener('sql-admin-navigate', handler);
+    return () => window.removeEventListener('sql-admin-navigate', handler);
+  }, []);
 
   const firstVisibleId = visibleTabs[0]?.id;
   const isCurrentVisible = visibleTabs.some((t) => t.id === activeTab);

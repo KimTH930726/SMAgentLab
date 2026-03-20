@@ -17,15 +17,26 @@ docker compose up --build -d
 
 ## 현재 작업 상태
 
-> **마지막 업데이트**: 2026-03-19
+> **마지막 업데이트**: 2026-03-20
 > **브랜치**: `dev_0` (테스트 완료 후 `main` 머지 예정)
-> **최근 변경**: 프롬프트 에이전트별 분리 — `ops_prompt.agent_type` + Text2SQL 파이프라인 프롬프트 통합 (v2.9)
+> **최근 변경**: 스키마 스캔 diff 개선 + ERD/용어 고아 정리 + 스캔 리포트 모달 + ERD 검색·양방향 싱크 (v2.10)
 
 ### 진행 중 / 미완료
 
 없음 — 클린 상태
 
-### 최근 완료: 프롬프트 에이전트별 분리 (v2.9)
+### 최근 완료: 스키마 스캔 diff 개선 + ERD/용어 UX (v2.10)
+
+- 스키마 스캔을 diff 방식으로 개선 — 테이블/컬럼 추가·삭제·변경 감지, 변경분만 임베딩 (전체 재임베딩 불필요)
+- 스캔 시 ERD 고아 관계 자동 정리 — 삭제된 테이블/컬럼 관련 `sql_relation` 레코드 자동 삭제
+- 스캔 시 용어사전 고아 자동 삭제 — 삭제된 컬럼을 참조하는 `sql_synonym` 자동 삭제
+- 스캔 완료 리포트 모달 — 변경 상세(추가/삭제/변경 테이블·컬럼) + ERD/용어 탭 이동 유도 (human-in-the-loop)
+- AI 관계 추천(`/relations/suggest-ai`) 및 용어 자동생성(`/synonyms/generate-ai`)을 변경 테이블 대상으로만 제한 (토큰 절약)
+- ERD 검색 기능 — 테이블명 검색 → 해당 테이블 포커스 + 자동 스크롤
+- ERD 관계 목록 ↔ SVG 양방향 싱크 — 클릭 시 상호 스크롤 + 하이라이트
+- `docker-compose.yml`에서 `devx-mcp-api` 서비스의 `extra_hosts` 하드코딩 제거
+
+### 이전 완료: 프롬프트 에이전트별 분리 (v2.9)
 
 - `ops_prompt` 테이블에 `agent_type VARCHAR(50) DEFAULT 'all'` 컬럼 추가 (마이그레이션 자동 적용)
 - Text2SQL 파이프라인 프롬프트 8개 `ops_prompt`로 통합 (`sql2_parse/generate/fix/summarize` × system/user)
@@ -83,6 +94,8 @@ docker compose up --build -d
 ---
 
 ## 완료 이력 (최근순)
+
+- **v2.10 스키마 스캔 diff + ERD UX** (2026-03-20): ① 스키마 스캔 diff 방식 — 테이블/컬럼 추가·삭제·변경 감지, 변경분만 임베딩. ② ERD 고아 관계 자동 정리 + 용어사전 고아 자동 삭제 (삭제 테이블/컬럼 참조). ③ 스캔 완료 리포트 모달 (변경 상세 + ERD/용어 탭 이동 유도, human-in-the-loop). ④ AI 관계 추천·용어 자동생성을 변경 테이블 대상으로만 제한 (토큰 절약). ⑤ ERD 테이블명 검색 → 포커스+스크롤. ⑥ ERD 관계 목록 ↔ SVG 양방향 싱크 (클릭 시 상호 스크롤+하이라이트). ⑦ docker-compose.yml devx-mcp-api extra_hosts 하드코딩 제거
 
 - **v2.7 UX 개선 + 피드백 연동** (2026-03-19): ① SQL Few-shot 피드백 연동 — 채팅에서 👍 클릭 시 질의-SQL 쌍이 `sql_fewshot`에 `status='pending'`으로 자동 등록, 관리자가 SQL Few-shot 탭에서 승인/반려. 상태 필터(전체/등록 후보/승인됨/반려됨) + 뱃지 UI. ② ERD 배경 드래그 → 캔버스 패닝 (스크롤 없이 자유 이동). ③ MCP 도구 에이전트 분리 — `ops_mcp_tool.agent_type` 컬럼 기반, 에이전트별 독립 도구 관리. Admin 탭 순서 재편 (SQL Few-shot → MCP 도구 → 파이프라인). ④ text2sql 부정 피드백 시 지식 등록 폼 미노출 (에이전트별 분기)
 
