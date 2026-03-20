@@ -22,6 +22,7 @@ import {
   type ScanReport,
 } from '../../api/text2sql';
 import { Button } from '../ui/Button';
+import { Pagination, useClientPaging } from '../ui/Pagination';
 import { Modal } from '../ui/Modal';
 import type {
   SqlTargetDb, SqlRelation, SqlSynonym, SqlFewshot, SqlPipelineStage, SqlAuditLog, SqlCacheEntry,
@@ -1270,10 +1271,9 @@ function SynonymTab() {
     ? synonyms.filter((s) => s.term.includes(search) || s.target.includes(search) || s.description.includes(search))
     : synonyms;
 
-  const totalSynPages = Math.ceil(filtered.length / synPageSize);
-  const pagedFiltered = filtered.slice((synPage - 1) * synPageSize, synPage * synPageSize);
+  const synPaging = useClientPaging(filtered, synPageSize);
+  const pagedFiltered = synPaging.slice(synPage);
 
-  // Reset page when search changes
   useEffect(() => { setSynPage(1); }, [search, synPageSize]);
 
   return (
@@ -1335,10 +1335,6 @@ function SynonymTab() {
                 placeholder="검색..."
                 className="pl-8 pr-3 py-1.5 w-full bg-slate-800 border border-slate-600 rounded-lg text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
             </div>
-            <select value={synPageSize} onChange={(e) => setSynPageSize(Number(e.target.value))}
-              className="bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-400">
-              {[10, 30, 50].map((n) => <option key={n} value={n}>{n}건</option>)}
-            </select>
             <span className="text-xs text-slate-500 whitespace-nowrap">{filtered.length}건</span>
           </div>
 
@@ -1363,14 +1359,8 @@ function SynonymTab() {
             )}
           </div>
 
-          {/* Pagination */}
-          {totalSynPages > 1 && (
-            <div className="flex gap-2 justify-center items-center">
-              <Button size="sm" variant="secondary" onClick={() => setSynPage((p) => Math.max(1, p - 1))} disabled={synPage === 1}>이전</Button>
-              <span className="text-xs text-slate-400">{synPage} / {totalSynPages}</span>
-              <Button size="sm" variant="secondary" onClick={() => setSynPage((p) => Math.min(totalSynPages, p + 1))} disabled={synPage >= totalSynPages}>다음</Button>
-            </div>
-          )}
+          <Pagination page={synPage} totalPages={synPaging.totalPages} onPageChange={setSynPage}
+            pageSize={synPageSize} onPageSizeChange={setSynPageSize} totalItems={synPaging.totalItems} />
         </>
       )}
 
@@ -1449,10 +1439,9 @@ function FewshotTab() {
   const [fsPage, setFsPage] = useState(1);
   const [fsPageSize, setFsPageSize] = useState(30);
   const pendingCount = statusFilter === 'all' ? fewshots.filter(f => f.status === 'pending').length : (statusFilter === 'pending' ? fewshots.length : 0);
-  const totalFsPages = Math.ceil(fewshots.length / fsPageSize);
-  const pagedFewshots = fewshots.slice((fsPage - 1) * fsPageSize, fsPage * fsPageSize);
+  const fsPaging = useClientPaging(fewshots, fsPageSize);
+  const pagedFewshots = fsPaging.slice(fsPage);
 
-  // Reset page when filter changes
   useEffect(() => { setFsPage(1); }, [statusFilter, fsPageSize]);
 
   return (
@@ -1493,10 +1482,6 @@ function FewshotTab() {
                 </button>
               ))}
             </div>
-            <select value={fsPageSize} onChange={(e) => setFsPageSize(Number(e.target.value))}
-              className="bg-slate-800 border border-slate-600 rounded-lg px-2 py-1 text-xs text-slate-400">
-              {[10, 30, 50].map((n) => <option key={n} value={n}>{n}건</option>)}
-            </select>
           </div>
 
           <div className="rounded-xl border border-slate-700 overflow-hidden divide-y divide-slate-700/60">
@@ -1556,14 +1541,8 @@ function FewshotTab() {
             })}
           </div>
 
-          {/* Pagination */}
-          {totalFsPages > 1 && (
-            <div className="flex gap-2 justify-center items-center">
-              <Button size="sm" variant="secondary" onClick={() => setFsPage((p) => Math.max(1, p - 1))} disabled={fsPage === 1}>이전</Button>
-              <span className="text-xs text-slate-400">{fsPage} / {totalFsPages}</span>
-              <Button size="sm" variant="secondary" onClick={() => setFsPage((p) => Math.min(totalFsPages, p + 1))} disabled={fsPage >= totalFsPages}>다음</Button>
-            </div>
-          )}
+          <Pagination page={fsPage} totalPages={fsPaging.totalPages} onPageChange={setFsPage}
+            pageSize={fsPageSize} onPageSizeChange={setFsPageSize} totalItems={fsPaging.totalItems} />
         </>
       )}
 

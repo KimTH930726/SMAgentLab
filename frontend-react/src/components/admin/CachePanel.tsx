@@ -5,6 +5,7 @@ import { clsx } from 'clsx';
 import { getCacheStats, getCacheEntries, invalidateCache, deleteCacheEntry, getCacheConfig, setCacheConfig } from '../../api/cache';
 import { getNamespaces } from '../../api/namespaces';
 import { Button } from '../ui/Button';
+import { Pagination, useClientPaging } from '../ui/Pagination';
 
 function formatTtl(seconds: number): string {
   if (seconds <= 0) return '만료됨';
@@ -17,6 +18,8 @@ export function CachePanel() {
   const queryClient = useQueryClient();
   const [namespace, setNamespace] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(30);
 
   const { data: namespaces = [] } = useQuery<string[]>({
     queryKey: ['namespaces'],
@@ -73,6 +76,11 @@ export function CachePanel() {
       queryClient.invalidateQueries({ queryKey: ['cache-config'] });
     },
   });
+
+  const { totalPages, totalItems, slice } = useClientPaging(entries, pageSize);
+  const pagedEntries = slice(page);
+
+  useEffect(() => { setPage(1); }, [selectedNs, pageSize]);
 
   const handleRefresh = () => {
     refetchStats();
@@ -219,7 +227,7 @@ export function CachePanel() {
                 </tr>
               </thead>
               <tbody>
-                {entries.map((entry) => (
+                {pagedEntries.map((entry) => (
                   <tr key={entry.key} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-800/30">
                     <td className="px-4 py-3">
                       <p className="text-slate-200 truncate max-w-md">{entry.query || '(질문 없음)'}</p>
@@ -254,6 +262,11 @@ export function CachePanel() {
             </table>
           </div>
         )}
+        <Pagination
+          page={page} totalPages={totalPages} onPageChange={setPage}
+          pageSize={pageSize} onPageSizeChange={setPageSize}
+          totalItems={totalItems}
+        />
       </div>
     </div>
   );

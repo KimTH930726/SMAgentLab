@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, X, Zap } from 'lucide-react';
 import { getFewshots, createFewshot, updateFewshot, deleteFewshot, updateFewshotStatus } from '../../api/fewshots';
@@ -6,6 +6,7 @@ import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
+import { Pagination, useClientPaging } from '../ui/Pagination';
 import type { FewshotItem } from '../../types';
 
 interface FewshotFormData {
@@ -32,6 +33,8 @@ export function FewshotTable() {
   const qc = useQueryClient();
   const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, user } = useNamespaceAccess();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(30);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingItem, setEditingItem] = useState<FewshotItem | null>(null);
@@ -53,6 +56,11 @@ export function FewshotTable() {
   const filteredItems = statusFilter === 'all'
     ? items
     : items.filter((item) => item.status === statusFilter);
+
+  const { totalPages, totalItems, slice } = useClientPaging(filteredItems, pageSize);
+  const pagedItems = slice(page);
+
+  useEffect(() => { setPage(1); }, [statusFilter, pageSize]);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -189,7 +197,7 @@ export function FewshotTable() {
 
       {selectedNs && !isLoading && (
         <div className="space-y-2">
-          {filteredItems.map((item) => (
+          {pagedItems.map((item) => (
             <div
               key={item.id}
               className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-slate-700/50 transition-colors"
@@ -214,9 +222,14 @@ export function FewshotTable() {
             <div className="text-center py-10 text-slate-500">
               <Zap className="w-8 h-8 mx-auto mb-2 text-slate-500" />
               <p>Few-shot 항목이 없습니다.</p>
-              <p className="text-xs mt-1">챗에서 👍 긍정 피드백을 하면 후보로 자동 등록됩니다.</p>
+              <p className="text-xs mt-1">챗에서 긍정 피드백을 하면 후보로 자동 등록됩니다.</p>
             </div>
           )}
+          <Pagination
+            page={page} totalPages={totalPages} onPageChange={setPage}
+            pageSize={pageSize} onPageSizeChange={setPageSize}
+            totalItems={totalItems}
+          />
         </div>
       )}
 

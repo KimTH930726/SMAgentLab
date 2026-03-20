@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp, BookOpen, Wand2 } from 'lucide-react';
 import { getGlossary, createGlossaryItem, updateGlossaryItem, deleteGlossaryItem, suggestGlossaryTerms, applyGlossarySuggestion } from '../../api/knowledge';
@@ -6,6 +6,7 @@ import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
+import { Pagination, useClientPaging } from '../ui/Pagination';
 import type { GlossaryItem } from '../../types';
 
 interface GlossaryFormData { term: string; description: string; }
@@ -24,6 +25,9 @@ export function GlossaryTable() {
   const [suggestMessage, setSuggestMessage] = useState('');
   const [appliedTerms, setAppliedTerms] = useState<Set<string>>(new Set());
   const [suggestLimit, setSuggestLimit] = useState(50);
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(30);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<GlossaryFormData>(defaultForm);
@@ -72,6 +76,11 @@ export function GlossaryTable() {
       setAppliedTerms((prev) => new Set([...prev, variables.term]));
     },
   });
+
+  const { totalPages, totalItems, slice } = useClientPaging(items, pageSize);
+  const pagedItems = slice(page);
+
+  useEffect(() => { setPage(1); }, [pageSize, selectedNs]);
 
   const startEdit = (item: GlossaryItem) => {
     setEditingId(item.id);
@@ -124,7 +133,7 @@ export function GlossaryTable() {
 
       {selectedNs && !isLoading && (
         <div className="space-y-2">
-          {items.map((item) => (
+          {pagedItems.map((item) => (
             <div key={item.id} className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
               {/* Card header */}
               <div
@@ -191,6 +200,11 @@ export function GlossaryTable() {
             </div>
           ))}
           {items.length === 0 && <div className="text-center py-10 text-slate-500">용어 항목이 없습니다.</div>}
+          <Pagination
+            page={page} totalPages={totalPages} onPageChange={setPage}
+            pageSize={pageSize} onPageSizeChange={setPageSize}
+            totalItems={totalItems}
+          />
         </div>
       )}
 

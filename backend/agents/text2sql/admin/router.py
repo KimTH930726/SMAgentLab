@@ -2,8 +2,6 @@
 import json
 import logging
 import re
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -17,6 +15,19 @@ from shared.embedding import embedding_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/text2sql", tags=["text2sql-admin"])
+
+
+def _parse_llm_json(text: str) -> list:
+    """LLM 응답에서 JSON 배열을 파싱하는 공통 헬퍼."""
+    text = text.strip()
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+    result = json.loads(text)
+    if not isinstance(result, list):
+        raise ValueError("Expected JSON array")
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,18 +125,16 @@ async def update_column_desc(namespace: str, col_id: int, body: ColumnDescPayloa
             "UPDATE sql_schema_column SET description = $1 WHERE id = $2",
             body.description, col_id,
         )
-    # 벡터 재인덱싱 (해당 컬럼만)
-    async with get_conn() as conn:
+        # 벡터 재인덱싱 (해당 컬럼만)
         row = await conn.fetchrow("""
             SELECT sc.id, sc.name, sc.data_type, sc.description, st.table_name, st.namespace_id
             FROM sql_schema_column sc
             JOIN sql_schema_table st ON sc.table_id = st.id
             WHERE sc.id = $1
         """, col_id)
-    if row:
-        text = f"{row['table_name']}.{row['name']} - {row['description'] or ''} ({row['data_type']})"
-        emb = await embedding_service.embed(text)
-        async with get_conn() as conn:
+        if row:
+            text = f"{row['table_name']}.{row['name']} - {row['description'] or ''} ({row['data_type']})"
+            emb = await embedding_service.embed(text)
             await conn.execute("""
                 INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
                 VALUES ($1, $2, $3::vector)
@@ -296,15 +305,7 @@ async def suggest_relations_ai(namespace: str, body: SuggestRelationsPayload = N
             max_tokens=2000,
             api_key=get_user_api_key(admin),
         )
-        text = text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0].strip()
-
-        suggestions = json.loads(text)
-        if not isinstance(suggestions, list):
-            raise ValueError("Expected JSON array")
+        suggestions = _parse_llm_json(text)
 
         # 기존 관계 제외
         new_suggestions = [
@@ -384,12 +385,17 @@ async def reindex_synonyms(namespace: str, _=Depends(require_admin)):
             "SELECT id, term, target, description FROM sql_synonym WHERE namespace_id = $1",
             ns_id,
         )
+    # 임베딩을 먼저 모두 생성 (I/O 바운드이므로 conn 밖에서)
+    updates = []
     for r in rows:
         text = f"{r['term']} - {r['target']} - {r['description']}"
         emb = await embedding_service.embed(text)
-        async with get_conn() as conn:
+        updates.append((str(emb), r["id"]))
+    # 한 번의 연결로 일괄 저장
+    async with get_conn() as conn:
+        for emb_str, row_id in updates:
             await conn.execute(
-                "UPDATE sql_synonym SET embedding = $1::vector WHERE id = $2", str(emb), r["id"]
+                "UPDATE sql_synonym SET embedding = $1::vector WHERE id = $2", emb_str, row_id
             )
     return {"ok": True, "count": len(rows)}
 
@@ -492,15 +498,7 @@ async def generate_synonyms_ai(namespace: str, body: GenerateSynonymsPayload = N
             max_tokens=4000,
             api_key=get_user_api_key(admin),
         )
-        text = text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0].strip()
-
-        synonyms_data = json.loads(text)
-        if not isinstance(synonyms_data, list):
-            raise ValueError("Expected JSON array")
+        synonyms_data = _parse_llm_json(text)
 
         _BANNED_KW = re.compile(
             r"\b(SELECT|FROM|JOIN|WHERE|GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING)\b",
@@ -646,11 +644,16 @@ async def reindex_fewshots(namespace: str, _=Depends(require_admin)):
         rows = await conn.fetch(
             "SELECT id, question FROM sql_fewshot WHERE namespace_id = $1", ns_id
         )
+    # 임베딩을 먼저 모두 생성 (I/O 바운드이므로 conn 밖에서)
+    updates = []
     for r in rows:
         emb = await embedding_service.embed(r["question"])
-        async with get_conn() as conn:
+        updates.append((str(emb), r["id"]))
+    # 한 번의 연결로 일괄 저장
+    async with get_conn() as conn:
+        for emb_str, row_id in updates:
             await conn.execute(
-                "UPDATE sql_fewshot SET embedding = $1::vector WHERE id = $2", str(emb), r["id"]
+                "UPDATE sql_fewshot SET embedding = $1::vector WHERE id = $2", emb_str, row_id
             )
     return {"ok": True, "count": len(rows)}
 
@@ -727,15 +730,7 @@ async def generate_fewshots_ai(namespace: str, admin: dict = Depends(require_adm
             max_tokens=6000,
             api_key=get_user_api_key(admin),
         )
-        text = text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0].strip()
-
-        fewshots_data = json.loads(text)
-        if not isinstance(fewshots_data, list):
-            raise ValueError("Expected JSON array")
+        fewshots_data = _parse_llm_json(text)
 
         created = []
         for item in fewshots_data:

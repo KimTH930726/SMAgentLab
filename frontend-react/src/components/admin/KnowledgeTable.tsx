@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, X } from 'lucide-react';
 import {
@@ -13,6 +13,7 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { TagInput } from '../ui/TagInput';
+import { Pagination, useClientPaging } from '../ui/Pagination';
 import type { KnowledgeItem } from '../../types';
 
 // ── KnowledgeTable ────────────────────────────────────────────────────────────
@@ -57,6 +58,8 @@ export function KnowledgeTable() {
   const [createForm, setCreateForm] = useState<KnowledgeFormData>(defaultForm);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(30);
 
   const { data: categories = [] } = useQuery({
     queryKey: ['categories', selectedNs],
@@ -136,6 +139,12 @@ export function KnowledgeTable() {
     setShowEdit(true);
   };
 
+  const filteredItems = items.filter((item) => !categoryFilter || item.category === categoryFilter);
+  const { totalPages, totalItems, slice } = useClientPaging(filteredItems, pageSize);
+  const pagedItems = slice(page);
+
+  useEffect(() => { setPage(1); }, [categoryFilter, pageSize]);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -189,7 +198,7 @@ export function KnowledgeTable() {
 
       {selectedNs && !isLoading && (
         <div className="space-y-2">
-          {items.filter((item) => !categoryFilter || item.category === categoryFilter).map((item) => (
+          {pagedItems.map((item) => (
             <div
               key={item.id}
               className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-slate-700/50 transition-colors"
@@ -238,9 +247,14 @@ export function KnowledgeTable() {
               </div>
             </div>
           ))}
-          {items.length === 0 && (
+          {filteredItems.length === 0 && (
             <div className="text-center py-10 text-slate-500">지식 항목이 없습니다.</div>
           )}
+          <Pagination
+            page={page} totalPages={totalPages} onPageChange={setPage}
+            pageSize={pageSize} onPageSizeChange={setPageSize}
+            totalItems={totalItems}
+          />
         </div>
       )}
 

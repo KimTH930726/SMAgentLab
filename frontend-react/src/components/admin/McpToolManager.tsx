@@ -11,6 +11,7 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { CodeBlock } from '../ui/CodeBlock';
 import { Badge } from '../ui/Badge';
+import { Pagination } from '../ui/Pagination';
 import type { McpTool, McpToolParam, McpToolCreatePayload } from '../../types';
 
 const PLACEHOLDER_TEXT = `API 설명을 자유롭게 입력하세요. LLM이 자동으로 구조화합니다.
@@ -893,20 +894,6 @@ function DonutChart({ dist, total }: { dist: Record<string, number>; total: numb
   );
 }
 
-// ── 페이지네이터 ──────────────────────────────────────────────────────────────
-function Paginator({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (p: number) => void }) {
-  if (totalPages <= 1) return null;
-  return (
-    <div className="flex items-center gap-2 text-sm text-slate-400">
-      <button onClick={() => onChange(page - 1)} disabled={page <= 1}
-        className="px-2 py-1 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors">‹</button>
-      <span className="text-xs">{page} / {totalPages}</span>
-      <button onClick={() => onChange(page + 1)} disabled={page >= totalPages}
-        className="px-2 py-1 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors">›</button>
-    </div>
-  );
-}
-
 // ── MCP 호출 로그 메인 ────────────────────────────────────────────────────────
 function McpToolLogs({ namespace }: { namespace: string }) {
   type Preset = '1h' | '24h' | '7d' | '30d' | 'custom';
@@ -1056,7 +1043,7 @@ function McpToolLogs({ namespace }: { namespace: string }) {
             </table>
           </div>
           <div className="flex justify-end">
-            <Paginator page={statsPage} totalPages={statsTotalPages} onChange={setStatsPage} />
+            <Pagination page={statsPage} totalPages={statsTotalPages} onPageChange={setStatsPage} />
           </div>
         </>
       )}
@@ -1136,7 +1123,7 @@ function McpToolLogs({ namespace }: { namespace: string }) {
             </div>
             <div className="flex items-center justify-between">
               <p className="text-xs text-slate-500">전체 {logResp.total}건</p>
-              <Paginator page={logPage} totalPages={logTotalPages} onChange={handleLogPage} />
+              <Pagination page={logPage} totalPages={logTotalPages} onPageChange={handleLogPage} />
             </div>
           </div>
         )}
