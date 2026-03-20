@@ -1393,6 +1393,69 @@ function FewshotTab() {
 
 // ── PipelineTab ───────────────────────────────────────────────────────────────
 
+const STAGE_DETAILS: Record<string, { summary: string; detail: string; llmCost: string; recommendation: string }> = {
+  parse: {
+    summary: '사용자 질문의 의도, 난이도, 엔티티를 분석합니다.',
+    detail: '질문을 JSON으로 파싱하여 intent(simple_select, aggregation, join 등), difficulty(simple/moderate/complex), 언급된 테이블/컬럼 후보, 필터 조건을 추출합니다. 이 정보가 후속 스테이지의 정확도를 결정합니다.',
+    llmCost: 'LLM 1회 호출',
+    recommendation: '항상 ON 권장. 이 단계 없이는 SQL 생성 품질이 크게 떨어집니다.',
+  },
+  rag: {
+    summary: '벡터 검색으로 관련 스키마/용어/예제를 찾습니다.',
+    detail: '질문을 임베딩하여 pgvector에서 유사한 컬럼(스키마), 용어 사전(동의어), SQL 예제(few-shot)를 검색합니다. is_selected=TRUE인 테이블만 대상이며, 검색 결과는 SQL 생성 프롬프트에 컨텍스트로 전달됩니다.',
+    llmCost: 'LLM 호출 없음 (벡터 검색만)',
+    recommendation: '항상 ON 권장. 비용 0이면서 정확도에 핵심적입니다.',
+  },
+  schema_link: {
+    summary: 'LLM이 질문에 필요한 테이블을 사전 선별합니다.',
+    detail: 'RAG 결과와 전체 스키마를 LLM에 전달하여, 이 질문에 실제로 필요한 테이블/컬럼만 선별합니다. 테이블이 수백 개일 때 generate 스테이지에 전달되는 컨텍스트를 줄여 정확도를 높입니다.',
+    llmCost: 'LLM 1회 호출',
+    recommendation: '테이블 50개 이상일 때 ON 추천. 적은 테이블에서는 RAG만으로 충분합니다.',
+  },
+  schema_explore: {
+    summary: '실제 DB에서 샘플 데이터를 조회합니다.',
+    detail: '선별된 테이블의 주요 컬럼에 대해 SELECT DISTINCT col LIMIT 5 등을 실행하여 실제 데이터 값을 확인합니다. "VVIP 고객"이 grade_code=\'VVIP\'인지 grade=\'최우수\'인지 등 실제 값을 알아야 정확한 WHERE 조건을 생성할 수 있습니다.',
+    llmCost: 'LLM 호출 없음 (DB 조회만)',
+    recommendation: '코드값/상태값이 많은 DB에서 ON 추천. 대상 DB 읽기 권한 필요.',
+  },
+  generate: {
+    summary: 'LLM이 SQL 쿼리를 생성합니다.',
+    detail: 'parse 결과(의도/엔티티) + RAG 결과(스키마/용어/예제) + 관계 정보를 프롬프트에 조합하여 LLM이 SQL을 생성합니다. 프롬프트는 [시스템 설정 → 프롬프트 관리]에서 sql2_generate / sql2_generate_system으로 커스터마이징 가능합니다.',
+    llmCost: 'LLM 1회 호출',
+    recommendation: '항상 ON 권장. SQL 생성의 핵심 스테이지입니다.',
+  },
+  candidates: {
+    summary: '복수의 SQL 후보를 생성하고 최적을 선택합니다.',
+    detail: 'generate를 2~3회 반복하여 서로 다른 SQL 후보를 만들고, LLM이 각 후보를 평가하여 가장 정확한 것을 선택합니다. 복잡한 JOIN이나 서브쿼리에서 한 번에 정확한 SQL이 나오기 어려울 때 효과적입니다.',
+    llmCost: 'LLM 3~4회 호출 (후보 생성 + 평가)',
+    recommendation: '비용이 높아 정확도가 매우 중요한 경우에만 ON. 일반적으로는 OFF.',
+  },
+  validate: {
+    summary: 'AST 파싱으로 SQL 문법과 안전성을 검증합니다.',
+    detail: 'SQL을 AST(Abstract Syntax Tree)로 파싱하여 문법 오류, DROP/DELETE 등 위험 구문, 존재하지 않는 테이블/컬럼 참조를 검증합니다. LLM 호출 없이 코드 기반으로 동작합니다.',
+    llmCost: 'LLM 호출 없음 (코드 검증만)',
+    recommendation: 'ON 권장. 비용 0이면서 잘못된 SQL 실행을 방지합니다.',
+  },
+  fix: {
+    summary: '검증 실패 시 LLM이 SQL을 자동 수정합니다.',
+    detail: 'validate에서 오류가 발견되면 오류 메시지와 원본 SQL을 LLM에 전달하여 수정된 SQL을 받습니다. validate가 OFF이면 이 스테이지도 실행되지 않습니다.',
+    llmCost: '조건부 LLM 1회 (검증 실패 시에만)',
+    recommendation: 'validate와 함께 ON 권장. 검증 통과 시 비용 0입니다.',
+  },
+  execute: {
+    summary: '대상 DB에 SQL을 실행하고 결과를 가져옵니다.',
+    detail: '생성된 SQL을 대상 DB에 실행하여 결과를 가져옵니다. SELECT만 허용되며, 타임아웃(기본 30초)과 최대 행 수(1000행) 제한이 있습니다. OFF로 설정하면 SQL만 생성하고 실행하지 않습니다.',
+    llmCost: 'LLM 호출 없음 (DB 실행만)',
+    recommendation: '대상 DB 읽기 권한이 있을 때 ON. 권한 없으면 OFF로 SQL만 확인 가능.',
+  },
+  summarize: {
+    summary: 'LLM이 쿼리 결과를 자연어로 요약합니다.',
+    detail: '실행 결과(테이블 데이터)를 LLM에 전달하여 자연어 요약과 적합한 차트 유형(bar, line, pie 등)을 추천받습니다. execute가 OFF이면 이 스테이지도 실행되지 않습니다.',
+    llmCost: 'LLM 1회 호출',
+    recommendation: '사용자 경험 향상에 효과적. execute가 ON일 때 함께 사용 추천.',
+  },
+};
+
 function PipelineTab() {
   const qc = useQueryClient();
   const { data: stages = [], isLoading } = useQuery({ queryKey: ['sql_pipeline_stages'], queryFn: listPipelineStages });
@@ -1400,16 +1463,21 @@ function PipelineTab() {
     mutationFn: (s: SqlPipelineStage) => togglePipelineStage(s.id, !s.is_enabled),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_pipeline_stages'] }),
   });
+  const [detailStage, setDetailStage] = useState<SqlPipelineStage | null>(null);
 
   if (isLoading) return <p className="text-slate-400 text-sm">로딩 중...</p>;
 
+  const detailInfo = detailStage ? STAGE_DETAILS[detailStage.id] : null;
+
   return (
     <div className="space-y-3">
-      <p className="text-xs text-slate-500">파이프라인 프롬프트는 [시스템 설정 → 프롬프트 관리]에서 편집하세요.</p>
+      <p className="text-xs text-slate-500">파이프라인 프롬프트는 [시스템 설정 → 프롬프트 관리]에서 편집하세요. 카드를 클릭하면 상세 설명을 볼 수 있습니다.</p>
       {stages.map((s) => {
         const isUnimplemented = (s.description || '').startsWith('[미구현]');
         return (
-          <div key={s.id} className={clsx('border rounded-xl p-4', isUnimplemented ? 'bg-slate-800/50 border-dashed border-slate-700/50' : 'bg-slate-800 border-slate-700')}>
+          <div key={s.id}
+            onClick={() => setDetailStage(s)}
+            className={clsx('border rounded-xl p-4 cursor-pointer transition-colors', isUnimplemented ? 'bg-slate-800/50 border-dashed border-slate-700/50 hover:bg-slate-800/70' : 'bg-slate-800 border-slate-700 hover:bg-slate-750 hover:border-slate-600')}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="w-6 h-6 flex items-center justify-center text-xs bg-slate-700 rounded font-mono text-slate-400">{s.order_num}</span>
@@ -1420,7 +1488,7 @@ function PipelineTab() {
                 {s.is_required && <span className="text-xs text-amber-500">필수</span>}
                 {isUnimplemented && <span className="text-[10px] text-slate-500 bg-slate-700/60 px-1.5 py-0.5 rounded">미구현</span>}
               </div>
-              <button onClick={() => !s.is_required && !isUnimplemented && toggleMut.mutate(s)} disabled={s.is_required || isUnimplemented}
+              <button onClick={(e) => { e.stopPropagation(); !s.is_required && !isUnimplemented && toggleMut.mutate(s); }} disabled={s.is_required || isUnimplemented}
                 className={clsx('w-10 h-5 rounded-full transition-colors relative', s.is_enabled ? 'bg-emerald-600' : 'bg-slate-600', (s.is_required || isUnimplemented) && 'opacity-50 cursor-not-allowed')}>
                 <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', s.is_enabled ? 'translate-x-5' : 'translate-x-0.5')} />
               </button>
@@ -1429,6 +1497,50 @@ function PipelineTab() {
           </div>
         );
       })}
+
+      {/* Stage Detail Modal */}
+      <Modal isOpen={!!detailStage} onClose={() => setDetailStage(null)} title={detailStage ? `${detailStage.order_num}. ${detailStage.name}` : ''}>
+        {detailStage && detailInfo && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-mono text-slate-500 bg-slate-800 px-2 py-1 rounded">{detailStage.id}</span>
+              {detailStage.is_required && <span className="text-xs text-amber-500 bg-amber-900/20 px-2 py-1 rounded">필수</span>}
+              {(detailStage.description || '').startsWith('[미구현]') && <span className="text-xs text-slate-500 bg-slate-700 px-2 py-1 rounded">미구현</span>}
+              <span className={clsx('text-xs px-2 py-1 rounded', detailStage.is_enabled ? 'text-emerald-400 bg-emerald-900/20' : 'text-slate-500 bg-slate-700')}>
+                {detailStage.is_enabled ? 'ON' : 'OFF'}
+              </span>
+            </div>
+
+            <div>
+              <h4 className="text-xs font-semibold text-slate-400 mb-1">요약</h4>
+              <p className="text-sm text-slate-200">{detailInfo.summary}</p>
+            </div>
+
+            <div>
+              <h4 className="text-xs font-semibold text-slate-400 mb-1">상세 동작</h4>
+              <p className="text-sm text-slate-300 leading-relaxed">{detailInfo.detail}</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-slate-800 rounded-lg px-3 py-2">
+                <h4 className="text-[10px] font-semibold text-slate-500 mb-1">비용</h4>
+                <p className="text-xs text-slate-300">{detailInfo.llmCost}</p>
+              </div>
+              <div className="bg-slate-800 rounded-lg px-3 py-2">
+                <h4 className="text-[10px] font-semibold text-slate-500 mb-1">추천</h4>
+                <p className="text-xs text-slate-300">{detailInfo.recommendation}</p>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button variant="secondary" onClick={() => setDetailStage(null)}>닫기</Button>
+            </div>
+          </div>
+        )}
+        {detailStage && !detailInfo && (
+          <div className="text-sm text-slate-400 py-4 text-center">상세 설명이 준비되지 않았습니다.</div>
+        )}
+      </Modal>
     </div>
   );
 }
