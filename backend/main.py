@@ -549,24 +549,24 @@ async def _migrate_text2sql_tables(conn) -> None:
              $1),
             ('rag',           'RAG 검색',   '스키마/용어/예제 벡터 검색',        'Database',      '#8b5cf6', TRUE,  TRUE,  2,
              NULL, NULL),
-            ('generate',      'SQL 생성',   'LLM 기반 SQL 쿼리 생성',          'Code',          '#10b981', TRUE,  TRUE,  3,
+            ('schema_link',   '스키마 연결', '[미구현] LLM 관련 테이블 식별',    'Link',          '#a78bfa', FALSE, FALSE, 3,
+             NULL, NULL),
+            ('schema_explore','스키마 탐색', '[미구현] 실제 DB sample values 탐색', 'Layers',     '#34d399', FALSE, FALSE, 4,
+             NULL, NULL),
+            ('generate',      'SQL 생성',   'LLM 기반 SQL 쿼리 생성',          'Code',          '#10b981', TRUE,  TRUE,  5,
              'You are an expert SQL generator. Think step-by-step, then return the SQL.',
              $2),
-            ('validate',      'SQL 검증',   'Safety + AST 기반 SQL 검증',       'ShieldCheck',   '#f59e0b', FALSE, TRUE,  4,
+            ('candidates',    '후보 평가',   '[미구현] 복수 SQL 후보 중 최적 선택', 'GitBranch',  '#fb923c', FALSE, FALSE, 6,
              NULL, NULL),
-            ('fix',           '자동 수정',   '검증 실패 시 LLM 자동 수정',       'Wrench',        '#ef4444', FALSE, TRUE,  5,
+            ('validate',      'SQL 검증',   'Safety + AST 기반 SQL 검증',       'ShieldCheck',   '#f59e0b', FALSE, TRUE,  7,
              NULL, NULL),
-            ('execute',       '쿼리 실행',   '대상 DB에 SQL 실행',              'Play',          '#3b82f6', FALSE, TRUE,  6,
+            ('fix',           '자동 수정',   '검증 실패 시 LLM 자동 수정',       'Wrench',        '#ef4444', FALSE, TRUE,  8,
              NULL, NULL),
-            ('summarize',     '결과 요약',   'LLM 결과 요약 + 차트 추천',        'BarChart2',     '#06b6d4', FALSE, FALSE, 7,
+            ('execute',       '쿼리 실행',   '대상 DB에 SQL 실행',              'Play',          '#3b82f6', FALSE, TRUE,  9,
+             NULL, NULL),
+            ('summarize',     '결과 요약',   'LLM 결과 요약 + 차트 추천',        'BarChart2',     '#06b6d4', FALSE, FALSE, 10,
              'You are a data analyst. Respond ONLY with valid JSON.',
-             $3),
-            ('schema_link',   '스키마 연결', 'LLM 관련 테이블 식별',            'Link',          '#a78bfa', FALSE, FALSE, 8,
-             NULL, NULL),
-            ('schema_explore','스키마 탐색', '실제 DB sample values 탐색',      'Layers',        '#34d399', FALSE, FALSE, 9,
-             NULL, NULL),
-            ('candidates',    '후보 평가',   '복수 SQL 후보 중 최적 선택',       'GitBranch',     '#fb923c', FALSE, FALSE, 10,
-             NULL, NULL)
+             $3)
         ON CONFLICT (id) DO NOTHING
     """,
         # parse prompt
@@ -879,10 +879,31 @@ SQL: {{sql}}
         WHERE func_key LIKE 'sql2_%' AND agent_type = 'all'
     """)
 
-    # v2.10: execute 스테이지 필수 해제 (운영 DB 실행 권한 없을 수 있음)
+    # v2.10: execute 필수 해제 + 파이프라인 순서 정리 + 미구현 표시
     await conn.execute("""
         UPDATE sql_pipeline_stage SET is_required = FALSE
         WHERE id = 'execute' AND is_required = TRUE
+    """)
+    await conn.execute("""
+        UPDATE sql_pipeline_stage SET order_num = CASE id
+            WHEN 'parse'          THEN 1
+            WHEN 'rag'            THEN 2
+            WHEN 'schema_link'    THEN 3
+            WHEN 'schema_explore' THEN 4
+            WHEN 'generate'       THEN 5
+            WHEN 'candidates'     THEN 6
+            WHEN 'validate'       THEN 7
+            WHEN 'fix'            THEN 8
+            WHEN 'execute'        THEN 9
+            WHEN 'summarize'      THEN 10
+            ELSE order_num
+        END,
+        description = CASE id
+            WHEN 'schema_link'    THEN '[미구현] LLM 관련 테이블 식별'
+            WHEN 'schema_explore' THEN '[미구현] 실제 DB sample values 탐색'
+            WHEN 'candidates'     THEN '[미구현] 복수 SQL 후보 중 최적 선택'
+            ELSE description
+        END
     """)
 
 

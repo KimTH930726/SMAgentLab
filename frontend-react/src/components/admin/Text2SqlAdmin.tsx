@@ -1406,25 +1406,29 @@ function PipelineTab() {
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500">파이프라인 프롬프트는 [시스템 설정 → 프롬프트 관리]에서 편집하세요.</p>
-      {stages.map((s) => (
-        <div key={s.id} className="bg-slate-800 border border-slate-700 rounded-xl p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <span className="w-6 h-6 flex items-center justify-center text-xs bg-slate-700 rounded font-mono text-slate-400">{s.order_num}</span>
-              <div>
-                <span className="text-sm font-medium text-slate-200">{s.name}</span>
-                <span className="ml-2 text-xs text-slate-500 font-mono">{s.id}</span>
+      {stages.map((s) => {
+        const isUnimplemented = (s.description || '').startsWith('[미구현]');
+        return (
+          <div key={s.id} className={clsx('border rounded-xl p-4', isUnimplemented ? 'bg-slate-800/50 border-dashed border-slate-700/50' : 'bg-slate-800 border-slate-700')}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="w-6 h-6 flex items-center justify-center text-xs bg-slate-700 rounded font-mono text-slate-400">{s.order_num}</span>
+                <div>
+                  <span className={clsx('text-sm font-medium', isUnimplemented ? 'text-slate-400' : 'text-slate-200')}>{s.name}</span>
+                  <span className="ml-2 text-xs text-slate-500 font-mono">{s.id}</span>
+                </div>
+                {s.is_required && <span className="text-xs text-amber-500">필수</span>}
+                {isUnimplemented && <span className="text-[10px] text-slate-500 bg-slate-700/60 px-1.5 py-0.5 rounded">미구현</span>}
               </div>
-              {s.is_required && <span className="text-xs text-amber-500">필수</span>}
+              <button onClick={() => !s.is_required && !isUnimplemented && toggleMut.mutate(s)} disabled={s.is_required || isUnimplemented}
+                className={clsx('w-10 h-5 rounded-full transition-colors relative', s.is_enabled ? 'bg-emerald-600' : 'bg-slate-600', (s.is_required || isUnimplemented) && 'opacity-50 cursor-not-allowed')}>
+                <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', s.is_enabled ? 'translate-x-5' : 'translate-x-0.5')} />
+              </button>
             </div>
-            <button onClick={() => !s.is_required && toggleMut.mutate(s)} disabled={s.is_required}
-              className={clsx('w-10 h-5 rounded-full transition-colors relative', s.is_enabled ? 'bg-emerald-600' : 'bg-slate-600', s.is_required && 'opacity-50 cursor-not-allowed')}>
-              <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', s.is_enabled ? 'translate-x-5' : 'translate-x-0.5')} />
-            </button>
+            <p className="text-xs text-slate-500 mt-1 ml-9">{isUnimplemented ? (s.description || '').replace('[미구현] ', '') : s.description}</p>
           </div>
-          <p className="text-xs text-slate-500 mt-1 ml-9">{s.description}</p>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
