@@ -9,6 +9,7 @@ class PromptOut(BaseModel):
     func_name: str
     content: str
     description: str
+    agent_type: str
     updated_at: str
 
 

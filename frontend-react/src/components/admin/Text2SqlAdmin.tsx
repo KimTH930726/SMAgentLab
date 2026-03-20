@@ -1075,16 +1075,24 @@ function FewshotTab() {
             {fewshots.length === 0 && <p className="text-slate-500 text-sm text-center py-8">예제가 없습니다.</p>}
             {fewshots.map((f) => {
               const st = STATUS_LABELS[f.status] ?? STATUS_LABELS.approved;
+              const isExpanded = expanded === f.id;
               return (
                 <div key={f.id} className="hover:bg-slate-800/30">
-                  <div className="flex items-center gap-3 px-4 py-3 cursor-pointer" onClick={() => setExpanded(expanded === f.id ? null : f.id)}>
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm text-slate-200">{f.question}</span>
-                      {f.category && <span className="ml-2 text-xs text-slate-500">[{f.category}]</span>}
-                      {f.hits > 0 && <span className="ml-2 text-xs text-amber-500">조회 {f.hits}회</span>}
+                  <div className="flex items-start gap-3 px-4 py-3">
+                    {/* 좌: 질문 + SQL 미리보기 */}
+                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setExpanded(isExpanded ? null : f.id)}>
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <span className={clsx('text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0', st.color)}>{st.label}</span>
+                        {f.category && <span className="text-[10px] text-slate-500 bg-slate-700 px-1.5 py-0.5 rounded">{f.category}</span>}
+                        {f.hits > 0 && <span className="text-[10px] text-amber-500">조회 {f.hits}회</span>}
+                      </div>
+                      <p className="text-sm text-slate-200 truncate">{f.question}</p>
+                      {!isExpanded && (
+                        <p className="text-xs text-emerald-600 font-mono truncate mt-0.5">{f.sql}</p>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                      <span className={clsx('text-[10px] px-1.5 py-0.5 rounded font-medium', st.color)}>{st.label}</span>
+                    {/* 우: 액션 버튼 */}
+                    <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
                       {f.status === 'pending' && (
                         <>
                           <button onClick={() => statusMut.mutate({ id: f.id, status: 'approved' })}
@@ -1099,17 +1107,20 @@ function FewshotTab() {
                       )}
                       {f.status === 'rejected' && (
                         <button onClick={() => statusMut.mutate({ id: f.id, status: 'approved' })}
-                          className="text-emerald-400 hover:text-emerald-300 text-xs" title="승인으로 변경">
+                          className="text-emerald-400 hover:text-emerald-300" title="승인으로 변경">
                           <CheckCircle className="w-4 h-4" />
                         </button>
                       )}
-                      {expanded === f.id ? <Minimize2 className="w-3.5 h-3.5 text-slate-400" /> : <Maximize2 className="w-3.5 h-3.5 text-slate-400" />}
+                      <button onClick={() => setExpanded(isExpanded ? null : f.id)}
+                        className="text-slate-500 hover:text-slate-300" title={isExpanded ? '접기' : '펼쳐서 SQL 보기'}>
+                        {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                      </button>
                       <button onClick={() => delMut.mutate(f.id)} className="text-rose-400 hover:text-rose-300">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
-                  {expanded === f.id && (
+                  {isExpanded && (
                     <pre className="mx-4 mb-3 text-xs text-emerald-400 bg-slate-900/60 rounded-lg px-3 py-2 overflow-x-auto font-mono">{f.sql}</pre>
                   )}
                 </div>
