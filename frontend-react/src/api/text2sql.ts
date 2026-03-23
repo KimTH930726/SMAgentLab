@@ -21,6 +21,10 @@ export async function testTargetDb(namespace: string, data: SqlTargetDb): Promis
   return apiFetch(`${ns(namespace)}/target-db/test`, { method: 'POST', body: JSON.stringify(data) });
 }
 
+export async function listTargetSchemas(namespace: string): Promise<{ schemas: string[] }> {
+  return apiFetch(`${ns(namespace)}/target-db/schemas`, { method: 'POST' });
+}
+
 export interface ScanReport {
   tables_added: number;
   tables_removed: number;

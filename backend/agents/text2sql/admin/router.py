@@ -68,6 +68,21 @@ async def test_target_db(namespace: str, body: TargetDbPayload, _=Depends(requir
     return {"ok": ok, "message": "연결 성공" if ok else "연결 실패"}
 
 
+@router.post("/namespaces/{namespace}/target-db/schemas")
+async def list_schemas(namespace: str, _=Depends(require_admin)):
+    """대상 DB에 저장된 연결 정보로 스키마 목록을 조회합니다."""
+    ns_id = await _get_ns_id(namespace)
+    cfg = await service.get_target_db_config(ns_id)
+    if not cfg:
+        raise HTTPException(status_code=400, detail="대상 DB 연결 정보가 없습니다. 먼저 저장하세요.")
+    try:
+        db = service.build_target_db(cfg)
+        schemas = await db.get_schemas()
+        return {"ok": True, "schemas": schemas}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/namespaces/{namespace}/target-db/scan")
 async def scan_schema(namespace: str, _=Depends(require_admin)):
     """스키마 스캔 (diff 방식) — 변경분만 반영 + ERD/용어 정합성 자동 처리."""

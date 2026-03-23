@@ -36,6 +36,11 @@ class BaseDialect(ABC):
         ...
 
     @abstractmethod
+    async def get_schemas(self, conn: Any) -> list[str]:
+        """사용 가능한 스키마 목록 반환."""
+        ...
+
+    @abstractmethod
     async def get_tables(self, conn: Any, schema: str | None) -> list[dict]:
         ...
 
@@ -56,6 +61,14 @@ class PgDialect(BaseDialect):
 
     async def close(self, conn):
         await conn.close()
+
+    async def get_schemas(self, conn) -> list[str]:
+        rows = await conn.fetch("""
+            SELECT schema_name FROM information_schema.schemata
+            WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+            ORDER BY schema_name
+        """)
+        return [r["schema_name"] for r in rows]
 
     async def get_tables(self, conn, schema) -> list[dict]:
         schema = schema or "public"
@@ -130,6 +143,15 @@ class MysqlDialect(BaseDialect):
     async def close(self, conn):
         conn.close()
 
+    async def get_schemas(self, conn) -> list[str]:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT schema_name FROM information_schema.schemata "
+                "WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys') "
+                "ORDER BY schema_name"
+            )
+            return [r[0] for r in await cur.fetchall()]
+
     async def get_tables(self, conn, schema) -> list[dict]:
         # MySQL: schema = database name (DATABASE() 사용)
         async with conn.cursor() as cur:
@@ -189,6 +211,9 @@ class SqliteDialect(BaseDialect):
     async def close(self, conn):
         await conn.close()
 
+    async def get_schemas(self, conn) -> list[str]:
+        return ["main"]
+
     async def get_tables(self, conn, schema) -> list[dict]:
         async with conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
@@ -224,7 +249,6 @@ class SqliteDialect(BaseDialect):
 class OracleDialect(BaseDialect):
     async def connect(self, host, port, db_name, username, password, schema):
         import oracledb
-        # db_name = SID 또는 service_name
         dsn = oracledb.makedsn(host, port, service_name=db_name)
         conn = await asyncio.to_thread(
             oracledb.connect, user=username, password=password, dsn=dsn,
@@ -233,6 +257,19 @@ class OracleDialect(BaseDialect):
 
     async def close(self, conn):
         await asyncio.to_thread(conn.close)
+
+    async def get_schemas(self, conn) -> list[str]:
+        def _fetch():
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT username FROM all_users "
+                "WHERE username NOT IN ('SYS','SYSTEM','DBSNMP','OUTLN','XDB','WMSYS','CTXSYS','MDSYS','ORDDATA','ORDSYS') "
+                "ORDER BY username"
+            )
+            result = [r[0] for r in cur.fetchall()]
+            cur.close()
+            return result
+        return await asyncio.to_thread(_fetch)
 
     async def get_tables(self, conn, schema) -> list[dict]:
         owner = (schema or conn.username).upper()
@@ -384,6 +421,14 @@ class TargetDBManager:
         except Exception as e:
             logger.warning("DB 연결 테스트 실패: %s", e)
             return False
+
+    async def get_schemas(self) -> list[str]:
+        """사용 가능한 스키마 목록 반환."""
+        await self.connect()
+        try:
+            return await self._dialect.get_schemas(self._conn)
+        finally:
+            await self.close()
 
     async def get_tables(self) -> list[dict]:
         """테이블 목록 + 컬럼 정보 반환."""

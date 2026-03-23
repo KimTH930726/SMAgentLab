@@ -9,7 +9,7 @@ import {
 import { useAppStore } from '../../store/useAppStore';
 import { getNamespaces } from '../../api/namespaces';
 import {
-  getTargetDb, upsertTargetDb, testTargetDb, scanSchema,
+  getTargetDb, upsertTargetDb, testTargetDb, listTargetSchemas, scanSchema,
   getFullSchema, updateSchemaTableDesc, toggleSchemaTable, updateSchemaColumnDesc, reindexSchema,
   saveSchemaPositions,
   listRelations, createRelation, deleteRelation, suggestRelationsAI,
@@ -60,6 +60,8 @@ function TargetDbTab() {
   const [scanReport, setScanReport] = useState<ScanReport | null>(null);
   const [scanning, setScanning] = useState(false);
   const [form, setForm] = useState<SqlTargetDb>(_defaultForm);
+  const [schemaList, setSchemaList] = useState<string[]>([]);
+  const [loadingSchemas, setLoadingSchemas] = useState(false);
 
   const { data: targetDbData } = useQuery({
     queryKey: ['sql_target_db', ns],
@@ -131,9 +133,31 @@ function TargetDbTab() {
             <label className="text-xs text-slate-400">
               스키마명 {form.db_type === 'oracle' ? '(Owner)' : form.db_type === 'postgresql' ? '(기본: public)' : '(선택)'}
             </label>
-            <input value={form.schema_name ?? ''} onChange={(e) => setForm({ ...form, schema_name: e.target.value || null })}
-              placeholder={form.db_type === 'postgresql' ? 'public' : form.db_type === 'oracle' ? 'OWNER명 (대문자)' : ''}
-              className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-300 placeholder-slate-600" />
+            <div className="flex gap-2 mt-1">
+              {schemaList.length > 0 ? (
+                <select value={form.schema_name ?? ''} onChange={(e) => setForm({ ...form, schema_name: e.target.value || null })}
+                  className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-300">
+                  <option value="">{form.db_type === 'postgresql' ? 'public (기본)' : '선택하세요'}</option>
+                  {schemaList.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              ) : (
+                <input value={form.schema_name ?? ''} onChange={(e) => setForm({ ...form, schema_name: e.target.value || null })}
+                  placeholder={form.db_type === 'postgresql' ? 'public' : form.db_type === 'oracle' ? 'OWNER명' : ''}
+                  className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-300 placeholder-slate-600" />
+              )}
+              <Button size="sm" variant="secondary" disabled={loadingSchemas}
+                onClick={async () => {
+                  setLoadingSchemas(true);
+                  try {
+                    const r = await listTargetSchemas(ns);
+                    setSchemaList(r.schemas);
+                  } catch (e) { alert(`스키마 조회 실패: ${e}`); }
+                  setLoadingSchemas(false);
+                }}>
+                <RefreshCw className={clsx('w-3.5 h-3.5 mr-1', loadingSchemas && 'animate-spin')} />
+                {loadingSchemas ? '조회 중' : '조회'}
+              </Button>
+            </div>
           </div>
           <div>
             <label className="text-xs text-slate-400">비밀번호 (변경 시만 입력)</label>
