@@ -1367,7 +1367,6 @@ function SynonymTab() {
                 placeholder="검색..."
                 className="pl-8 pr-3 py-1.5 w-full bg-slate-800 border border-slate-600 rounded-lg text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
             </div>
-            <span className="text-xs text-slate-500 whitespace-nowrap">{filtered.length}건</span>
           </div>
 
           <PaginationInfo totalItems={synPaging.totalItems} pageSize={synPageSize} onPageSizeChange={setSynPageSize} />

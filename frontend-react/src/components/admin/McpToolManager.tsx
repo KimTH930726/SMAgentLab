@@ -11,7 +11,7 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { CodeBlock } from '../ui/CodeBlock';
 import { Badge } from '../ui/Badge';
-import { PaginationNav } from '../ui/Pagination';
+import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { McpTool, McpToolParam, McpToolCreatePayload } from '../../types';
 
 const PLACEHOLDER_TEXT = `API 설명을 자유롭게 입력하세요. LLM이 자동으로 구조화합니다.
@@ -88,6 +88,8 @@ export function McpToolManager() {
   const [autoCompleting, setAutoCompleting] = useState(false);
   const [error, setError] = useState('');
   const [selectedTool, setSelectedTool] = useState<McpTool | null>(null);
+  const [toolPage, setToolPage] = useState(1);
+  const [toolPageSize, setToolPageSize] = useState(30);
   const [testParams, setTestParams] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<McpToolTestResult | null>(null);
   const [testLoading, setTestLoading] = useState(false);
@@ -485,13 +487,18 @@ export function McpToolManager() {
           )}
 
           {/* 도구 목록 */}
-          {loading ? (
-            <p className="text-slate-400 text-center py-8">불러오는 중...</p>
-          ) : tools.length === 0 ? (
-            <p className="text-slate-500 text-center py-8">등록된 MCP 도구가 없습니다.</p>
-          ) : (
-            <div className="space-y-3">
-              {tools.map((tool) => (
+          {(() => {
+            const toolPaging = useClientPaging(tools, toolPageSize);
+            const pagedTools = toolPaging.slice(toolPage);
+            return loading ? (
+              <p className="text-slate-400 text-center py-8">불러오는 중...</p>
+            ) : tools.length === 0 ? (
+              <p className="text-slate-500 text-center py-8">등록된 MCP 도구가 없습니다.</p>
+            ) : (
+              <>
+              <PaginationInfo totalItems={toolPaging.totalItems} pageSize={toolPageSize} onPageSizeChange={setToolPageSize} />
+              <div className="space-y-3">
+              {pagedTools.map((tool) => (
                 <button
                   key={tool.id}
                   type="button"
@@ -540,7 +547,10 @@ export function McpToolManager() {
                 </button>
               ))}
             </div>
-          )}
+              <PaginationNav page={toolPage} totalPages={toolPaging.totalPages} onPageChange={setToolPage} />
+              </>
+            );
+          })()}
 
           {/* 도구 상세 모달 — 테스트 호출 + 수정/삭제 */}
           {selectedTool && (() => {
