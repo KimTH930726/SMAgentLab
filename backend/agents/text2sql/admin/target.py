@@ -1,12 +1,13 @@
-"""원격 대상 DB 연결 관리 — PostgreSQL / MySQL / SQLite 지원."""
+"""원격 대상 DB 연결 관리 — Dialect 패턴 (PostgreSQL / MySQL / SQLite / Oracle)."""
 import asyncio
 import logging
 import os
+from abc import ABC, abstractmethod
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED = {"postgresql", "mysql", "sqlite"}
+_SUPPORTED = {"postgresql", "mysql", "sqlite", "oracle"}
 
 
 def _is_docker() -> bool:
@@ -20,97 +21,53 @@ def _resolve_host(host: str) -> str:
     return host
 
 
-class TargetDBManager:
-    """네임스페이스별 원격 DB 연결 + 스키마 탐색 + 쿼리 실행."""
+# ── Dialect 추상 클래스 ────────────────────────────────────────────────────
 
-    def __init__(
-        self,
-        db_type: str,
-        host: str,
-        port: int,
-        db_name: str,
-        username: str,
-        password: str,
-    ):
-        self.db_type = db_type.lower()
-        self.host = _resolve_host(host)
-        self.port = port
-        self.db_name = db_name
-        self.username = username
-        self.password = password
-        self._conn: Any = None
+class BaseDialect(ABC):
+    """DB별 연결·스키마 탐색·쿼리 실행 인터페이스."""
 
-    # ── 연결 ────────────────────────────────────────────────────────────────
+    @abstractmethod
+    async def connect(self, host: str, port: int, db_name: str,
+                      username: str, password: str, schema: str | None) -> Any:
+        ...
 
-    async def connect(self) -> None:
-        if self.db_type == "postgresql":
-            import asyncpg
-            self._conn = await asyncpg.connect(
-                host=self.host, port=self.port, database=self.db_name,
-                user=self.username, password=self.password, timeout=10,
-            )
-        elif self.db_type == "mysql":
-            import aiomysql
-            self._conn = await aiomysql.connect(
-                host=self.host, port=self.port, db=self.db_name,
-                user=self.username, password=self.password,
-                charset="utf8mb4", connect_timeout=10,
-            )
-        elif self.db_type == "sqlite":
-            import aiosqlite
-            self._conn = await aiosqlite.connect(self.db_name)
-        else:
-            raise ValueError(f"지원하지 않는 DB 타입: {self.db_type}")
+    @abstractmethod
+    async def close(self, conn: Any) -> None:
+        ...
 
-    async def close(self) -> None:
-        if self._conn:
-            try:
-                await self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
+    @abstractmethod
+    async def get_tables(self, conn: Any, schema: str | None) -> list[dict]:
+        ...
 
-    async def test_connection(self) -> bool:
-        try:
-            await self.connect()
-            await self.close()
-            return True
-        except Exception as e:
-            logger.warning("DB 연결 테스트 실패: %s", e)
-            return False
+    @abstractmethod
+    async def execute_query(self, conn: Any, sql: str, max_rows: int) -> dict:
+        ...
 
-    # ── 스키마 탐색 ─────────────────────────────────────────────────────────
 
-    async def get_tables(self) -> list[dict]:
-        """테이블 목록 + 컬럼 정보 반환.
+# ── PostgreSQL ─────────────────────────────────────────────────────────────
 
-        Returns:
-            [{"table_name": str, "columns": [{"name", "type", "is_pk", "fk_reference"}]}]
-        """
-        await self.connect()
-        try:
-            if self.db_type == "postgresql":
-                return await self._get_tables_pg()
-            elif self.db_type == "mysql":
-                return await self._get_tables_mysql()
-            elif self.db_type == "sqlite":
-                return await self._get_tables_sqlite()
-        finally:
-            await self.close()
-        return []
+class PgDialect(BaseDialect):
+    async def connect(self, host, port, db_name, username, password, schema):
+        import asyncpg
+        return await asyncpg.connect(
+            host=host, port=port, database=db_name,
+            user=username, password=password, timeout=10,
+        )
 
-    async def _get_tables_pg(self) -> list[dict]:
-        # 테이블 목록
-        rows = await self._conn.fetch("""
+    async def close(self, conn):
+        await conn.close()
+
+    async def get_tables(self, conn, schema) -> list[dict]:
+        schema = schema or "public"
+        rows = await conn.fetch("""
             SELECT table_name FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            WHERE table_schema = $1 AND table_type = 'BASE TABLE'
             ORDER BY table_name
-        """)
+        """, schema)
         tables = []
         for row in rows:
             tname = row["table_name"]
-            # 컬럼 정보
-            cols = await self._conn.fetch("""
+            cols = await conn.fetch("""
                 SELECT c.column_name, c.data_type,
                        CASE WHEN pk.column_name IS NOT NULL THEN TRUE ELSE FALSE END AS is_pk
                 FROM information_schema.columns c
@@ -120,13 +77,12 @@ class TargetDBManager:
                     JOIN information_schema.key_column_usage ku
                         ON tc.constraint_name = ku.constraint_name
                     WHERE tc.constraint_type = 'PRIMARY KEY'
-                      AND tc.table_name = $1 AND tc.table_schema = 'public'
+                      AND tc.table_name = $1 AND tc.table_schema = $2
                 ) pk ON c.column_name = pk.column_name
-                WHERE c.table_name = $1 AND c.table_schema = 'public'
+                WHERE c.table_name = $1 AND c.table_schema = $2
                 ORDER BY c.ordinal_position
-            """, tname)
-            # FK 정보
-            fk_rows = await self._conn.fetch("""
+            """, tname, schema)
+            fk_rows = await conn.fetch("""
                 SELECT kcu.column_name, ccu.table_name AS ref_table, ccu.column_name AS ref_col
                 FROM information_schema.table_constraints tc
                 JOIN information_schema.key_column_usage kcu
@@ -134,10 +90,9 @@ class TargetDBManager:
                 JOIN information_schema.constraint_column_usage ccu
                     ON tc.constraint_name = ccu.constraint_name
                 WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = $1
-                  AND tc.table_schema = 'public'
-            """, tname)
+                  AND tc.table_schema = $2
+            """, tname, schema)
             fk_map = {r["column_name"]: f"{r['ref_table']}.{r['ref_col']}" for r in fk_rows}
-
             tables.append({
                 "table_name": tname,
                 "columns": [
@@ -152,8 +107,32 @@ class TargetDBManager:
             })
         return tables
 
-    async def _get_tables_mysql(self) -> list[dict]:
-        async with self._conn.cursor() as cur:
+    async def execute_query(self, conn, sql, max_rows):
+        rows = await conn.fetch(sql)
+        if not rows:
+            return {"columns": [], "rows": [], "row_count": 0, "truncated": False}
+        columns = list(rows[0].keys())
+        data = [dict(r) for r in rows]
+        return _format_result(columns, data, max_rows)
+
+
+# ── MySQL ──────────────────────────────────────────────────────────────────
+
+class MysqlDialect(BaseDialect):
+    async def connect(self, host, port, db_name, username, password, schema):
+        import aiomysql
+        return await aiomysql.connect(
+            host=host, port=port, db=db_name,
+            user=username, password=password,
+            charset="utf8mb4", connect_timeout=10,
+        )
+
+    async def close(self, conn):
+        conn.close()
+
+    async def get_tables(self, conn, schema) -> list[dict]:
+        # MySQL: schema = database name (DATABASE() 사용)
+        async with conn.cursor() as cur:
             await cur.execute(
                 "SELECT table_name FROM information_schema.tables "
                 "WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' ORDER BY table_name"
@@ -169,7 +148,6 @@ class TargetDBManager:
                     (tname,),
                 )
                 col_rows = await cur.fetchall()
-                # FK
                 await cur.execute(
                     "SELECT column_name, referenced_table_name, referenced_column_name "
                     "FROM information_schema.key_column_usage "
@@ -193,14 +171,32 @@ class TargetDBManager:
                 })
         return tables
 
-    async def _get_tables_sqlite(self) -> list[dict]:
-        async with self._conn.execute(
+    async def execute_query(self, conn, sql, max_rows):
+        async with conn.cursor() as cur:
+            await cur.execute(sql)
+            columns = [d[0] for d in cur.description] if cur.description else []
+            data = [dict(zip(columns, r)) for r in await cur.fetchall()]
+        return _format_result(columns, data, max_rows)
+
+
+# ── SQLite ─────────────────────────────────────────────────────────────────
+
+class SqliteDialect(BaseDialect):
+    async def connect(self, host, port, db_name, username, password, schema):
+        import aiosqlite
+        return await aiosqlite.connect(db_name)
+
+    async def close(self, conn):
+        await conn.close()
+
+    async def get_tables(self, conn, schema) -> list[dict]:
+        async with conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         ) as cur:
             table_rows = await cur.fetchall()
         tables = []
         for (tname,) in table_rows:
-            async with self._conn.execute(f"PRAGMA table_info({tname})") as cur:
+            async with conn.execute(f"PRAGMA table_info({tname})") as cur:
                 col_rows = await cur.fetchall()
             tables.append({
                 "table_name": tname,
@@ -216,7 +212,186 @@ class TargetDBManager:
             })
         return tables
 
-    # ── 쿼리 실행 ────────────────────────────────────────────────────────────
+    async def execute_query(self, conn, sql, max_rows):
+        async with conn.execute(sql) as cur:
+            columns = [d[0] for d in cur.description] if cur.description else []
+            data = [dict(zip(columns, r)) for r in await cur.fetchall()]
+        return _format_result(columns, data, max_rows)
+
+
+# ── Oracle ─────────────────────────────────────────────────────────────────
+
+class OracleDialect(BaseDialect):
+    async def connect(self, host, port, db_name, username, password, schema):
+        import oracledb
+        # db_name = SID 또는 service_name
+        dsn = oracledb.makedsn(host, port, service_name=db_name)
+        conn = await asyncio.to_thread(
+            oracledb.connect, user=username, password=password, dsn=dsn,
+        )
+        return conn
+
+    async def close(self, conn):
+        await asyncio.to_thread(conn.close)
+
+    async def get_tables(self, conn, schema) -> list[dict]:
+        owner = (schema or conn.username).upper()
+
+        def _fetch():
+            cur = conn.cursor()
+            # 테이블 목록
+            cur.execute(
+                "SELECT table_name FROM all_tables WHERE owner = :o ORDER BY table_name",
+                {"o": owner},
+            )
+            table_names = [r[0] for r in cur.fetchall()]
+
+            tables = []
+            for tname in table_names:
+                # 컬럼 + PK
+                cur.execute("""
+                    SELECT c.column_name, c.data_type,
+                           CASE WHEN pk.column_name IS NOT NULL THEN 1 ELSE 0 END AS is_pk
+                    FROM all_tab_columns c
+                    LEFT JOIN (
+                        SELECT acc.column_name
+                        FROM all_constraints ac
+                        JOIN all_cons_columns acc ON ac.constraint_name = acc.constraint_name AND ac.owner = acc.owner
+                        WHERE ac.constraint_type = 'P' AND ac.owner = :o AND ac.table_name = :t
+                    ) pk ON c.column_name = pk.column_name
+                    WHERE c.owner = :o AND c.table_name = :t
+                    ORDER BY c.column_id
+                """, {"o": owner, "t": tname})
+                col_rows = cur.fetchall()
+
+                # FK
+                cur.execute("""
+                    SELECT acc.column_name, rc.table_name AS ref_table, rcc.column_name AS ref_col
+                    FROM all_constraints ac
+                    JOIN all_cons_columns acc ON ac.constraint_name = acc.constraint_name AND ac.owner = acc.owner
+                    JOIN all_constraints rc ON ac.r_constraint_name = rc.constraint_name AND ac.r_owner = rc.owner
+                    JOIN all_cons_columns rcc ON rc.constraint_name = rcc.constraint_name AND rc.owner = rcc.owner
+                    WHERE ac.constraint_type = 'R' AND ac.owner = :o AND ac.table_name = :t
+                """, {"o": owner, "t": tname})
+                fk_rows = cur.fetchall()
+                fk_map = {r[0]: f"{r[1]}.{r[2]}" for r in fk_rows}
+
+                tables.append({
+                    "table_name": tname,
+                    "columns": [
+                        {
+                            "name": c[0],
+                            "type": c[1],
+                            "is_pk": bool(c[2]),
+                            "fk_reference": fk_map.get(c[0]),
+                        }
+                        for c in col_rows
+                    ],
+                })
+            cur.close()
+            return tables
+
+        return await asyncio.to_thread(_fetch)
+
+    async def execute_query(self, conn, sql, max_rows):
+        def _fetch():
+            cur = conn.cursor()
+            cur.execute(sql)
+            columns = [d[0] for d in cur.description] if cur.description else []
+            data = [dict(zip(columns, r)) for r in cur.fetchall()]
+            cur.close()
+            return columns, data
+
+        columns, data = await asyncio.to_thread(_fetch)
+        return _format_result(columns, data, max_rows)
+
+
+# ── 공통 헬퍼 ──────────────────────────────────────────────────────────────
+
+def _format_result(columns: list[str], data: list[dict], max_rows: int) -> dict:
+    """쿼리 결과를 직렬화 가능한 형태로 변환."""
+    truncated = len(data) > max_rows
+    rows_out = data[:max_rows]
+    for r in rows_out:
+        for k, v in r.items():
+            if hasattr(v, "isoformat"):
+                r[k] = v.isoformat()
+            elif not isinstance(v, (str, int, float, bool, type(None))):
+                r[k] = str(v)
+    return {
+        "columns": columns,
+        "rows": rows_out,
+        "row_count": len(rows_out),
+        "truncated": truncated,
+    }
+
+
+_DIALECTS: dict[str, type[BaseDialect]] = {
+    "postgresql": PgDialect,
+    "mysql": MysqlDialect,
+    "sqlite": SqliteDialect,
+    "oracle": OracleDialect,
+}
+
+
+# ── TargetDBManager ────────────────────────────────────────────────────────
+
+class TargetDBManager:
+    """네임스페이스별 원격 DB 연결 + 스키마 탐색 + 쿼리 실행."""
+
+    def __init__(
+        self,
+        db_type: str,
+        host: str,
+        port: int,
+        db_name: str,
+        username: str,
+        password: str,
+        schema_name: str | None = None,
+    ):
+        self.db_type = db_type.lower()
+        self.host = _resolve_host(host)
+        self.port = port
+        self.db_name = db_name
+        self.username = username
+        self.password = password
+        self.schema_name = schema_name
+        self._conn: Any = None
+
+        if self.db_type not in _DIALECTS:
+            raise ValueError(f"지원하지 않는 DB 타입: {self.db_type}. 지원: {', '.join(_DIALECTS)}")
+        self._dialect: BaseDialect = _DIALECTS[self.db_type]()
+
+    async def connect(self) -> None:
+        self._conn = await self._dialect.connect(
+            self.host, self.port, self.db_name,
+            self.username, self.password, self.schema_name,
+        )
+
+    async def close(self) -> None:
+        if self._conn:
+            try:
+                await self._dialect.close(self._conn)
+            except Exception:
+                pass
+            self._conn = None
+
+    async def test_connection(self) -> bool:
+        try:
+            await self.connect()
+            await self.close()
+            return True
+        except Exception as e:
+            logger.warning("DB 연결 테스트 실패: %s", e)
+            return False
+
+    async def get_tables(self) -> list[dict]:
+        """테이블 목록 + 컬럼 정보 반환."""
+        await self.connect()
+        try:
+            return await self._dialect.get_tables(self._conn, self.schema_name)
+        finally:
+            await self.close()
 
     async def execute_query(
         self,
@@ -224,51 +399,12 @@ class TargetDBManager:
         timeout_sec: int = 30,
         max_rows: int = 1000,
     ) -> dict:
-        """SELECT 쿼리 실행 후 결과 반환.
-
-        Returns:
-            {"columns": list[str], "rows": list[dict], "row_count": int, "truncated": bool}
-        """
+        """SELECT 쿼리 실행 후 결과 반환."""
         await self.connect()
         try:
             return await asyncio.wait_for(
-                self._execute_query_inner(sql, max_rows),
+                self._dialect.execute_query(self._conn, sql, max_rows),
                 timeout=timeout_sec,
             )
         finally:
             await self.close()
-
-    async def _execute_query_inner(self, sql: str, max_rows: int) -> dict:
-        if self.db_type == "postgresql":
-            rows = await self._conn.fetch(sql)
-            if not rows:
-                return {"columns": [], "rows": [], "row_count": 0, "truncated": False}
-            columns = list(rows[0].keys())
-            data = [dict(r) for r in rows]
-        elif self.db_type == "mysql":
-            async with self._conn.cursor() as cur:
-                await cur.execute(sql)
-                columns = [d[0] for d in cur.description] if cur.description else []
-                data = [dict(zip(columns, r)) for r in await cur.fetchall()]
-        elif self.db_type == "sqlite":
-            async with self._conn.execute(sql) as cur:
-                columns = [d[0] for d in cur.description] if cur.description else []
-                data = [dict(zip(columns, r)) for r in await cur.fetchall()]
-        else:
-            raise ValueError(f"지원하지 않는 DB 타입: {self.db_type}")
-
-        truncated = len(data) > max_rows
-        rows_out = data[:max_rows]
-        # 직렬화 가능하도록 변환
-        for r in rows_out:
-            for k, v in r.items():
-                if hasattr(v, "isoformat"):
-                    r[k] = v.isoformat()
-                elif not isinstance(v, (str, int, float, bool, type(None))):
-                    r[k] = str(v)
-        return {
-            "columns": columns,
-            "rows": rows_out,
-            "row_count": len(rows_out),
-            "truncated": truncated,
-        }

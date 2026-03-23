@@ -410,11 +410,16 @@ async def _migrate_text2sql_tables(conn) -> None:
             db_name             VARCHAR(255) NOT NULL DEFAULT '',
             username            VARCHAR(255) NOT NULL DEFAULT '',
             encrypted_password  TEXT NOT NULL DEFAULT '',
+            schema_name         VARCHAR(255) DEFAULT NULL,
             is_active           BOOLEAN NOT NULL DEFAULT TRUE,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (namespace_id)
         )
+    """)
+    # 마이그레이션: schema_name 컬럼 추가
+    await conn.execute("""
+        ALTER TABLE sql_target_db ADD COLUMN IF NOT EXISTS schema_name VARCHAR(255) DEFAULT NULL
     """)
 
     # ── Text2SQL: 스키마 테이블 ──────────────────────────────────────────

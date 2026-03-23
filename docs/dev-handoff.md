@@ -17,23 +17,25 @@ docker compose up --build -d
 
 ## 현재 작업 상태
 
-> **마지막 업데이트**: 2026-03-20
+> **마지막 업데이트**: 2026-03-23
 > **브랜치**: `dev_0` (테스트 완료 후 `main` 머지 예정)
-> **최근 변경**: v2.10 ERD/스캔/파이프라인/페이징/최적화 대폭 개선
+> **최근 변경**: v2.11 Oracle 지원 + Dialect 패턴 + 스키마 분리
 
 ### 진행 중 / 다음 작업
 
-#### Oracle 지원 + 스키마 분리 (다음 PC에서 진행)
-- **배경**: 운영 DB가 Oracle이며, DB 서버 하나에 스키마별 독립 구조 (크로스 스키마 FK 없음)
-- **방안 A 채택**: 네임스페이스 = 스키마 매핑 (예: 네임스페이스 "매출DB" → Oracle host:1521/SID, schema=SALES)
-- **작업 내용**:
-  1. `target.py` Dialect 패턴으로 리팩터링 — `PgDialect`, `MysqlDialect`, `SqliteDialect`, `OracleDialect` 분리
-  2. Oracle 드라이버(`oracledb`) 추가 — Dockerfile 의존성 + `connect()` / `get_tables()` / `execute_query()` 구현
-  3. Oracle 스키마 스캔 쿼리: `ALL_TABLES`, `ALL_TAB_COLUMNS`, `ALL_CONSTRAINTS` (owner 기준)
-  4. 대상 DB 설정에 `schema_name` 필드 추가 (PostgreSQL: schema, Oracle: owner, MySQL: DATABASE())
-  5. 프론트엔드 대상 DB 폼에 `스키마명` 입력 필드 추가
+없음 — 클린 상태
 
-### 최근 완료: v2.10 스키마 스캔 diff + ERD + 파이프라인 + 최적화
+### 최근 완료: v2.11 Oracle 지원 + Dialect 패턴 + 스키마 분리
+
+- `target.py` Dialect 패턴 리팩터링 — `PgDialect`, `MysqlDialect`, `SqliteDialect`, `OracleDialect` 분리
+- Oracle 드라이버(`oracledb`) 추가 — `connect()` / `get_tables()` / `execute_query()` 구현
+- Oracle 스키마 스캔: `ALL_TABLES`, `ALL_TAB_COLUMNS`, `ALL_CONSTRAINTS` (owner 기준)
+- `sql_target_db` 테이블에 `schema_name` 컬럼 추가 (PostgreSQL: schema, Oracle: owner)
+- 프론트엔드 대상 DB 폼에 스키마명 입력 필드 + Oracle 옵션 추가
+- 공통 `_format_result` 헬퍼로 쿼리 결과 직렬화 통합
+- 공통 Pagination 컴포넌트 PaginationInfo(상단) / PaginationNav(하단) 분리
+
+### 이전 완료: v2.10 스키마 스캔 diff + ERD + 파이프라인 + 최적화
 
 **스키마 스캔 diff 개선**
 - 스키마 스캔을 diff 방식으로 개선 — 테이블/컬럼 추가·삭제·변경 감지, 변경분만 임베딩

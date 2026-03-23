@@ -465,6 +465,7 @@ export interface SqlTargetDb {
   db_name: string;
   username: string;
   password?: string;
+  schema_name?: string | null;
   is_active: boolean;
 }
 

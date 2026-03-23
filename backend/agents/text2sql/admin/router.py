@@ -41,6 +41,7 @@ class TargetDbPayload(BaseModel):
     db_name: str
     username: str
     password: str = ""
+    schema_name: str | None = None
 
 
 @router.get("/namespaces/{namespace}/target-db")

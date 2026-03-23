@@ -50,7 +50,7 @@ function NsSelect({ ns, setNs, namespaces }: { ns: string; setNs: (v: string) =>
 
 // ── TargetDbTab ───────────────────────────────────────────────────────────────
 
-const _defaultForm: SqlTargetDb = { db_type: 'postgresql', host: '', port: 5432, db_name: '', username: '', password: '', is_active: true };
+const _defaultForm: SqlTargetDb = { db_type: 'postgresql', host: '', port: 5432, db_name: '', username: '', password: '', schema_name: '', is_active: true };
 
 function TargetDbTab() {
   const { ns, setNs, namespaces } = useNamespace();
@@ -111,7 +111,7 @@ function TargetDbTab() {
               <label className="text-xs text-slate-400">DB 종류</label>
               <select value={form.db_type} onChange={(e) => setForm({ ...form, db_type: e.target.value })}
                 className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-300">
-                {['postgresql', 'mysql', 'sqlite'].map((t) => <option key={t} value={t}>{t}</option>)}
+                {['postgresql', 'mysql', 'oracle', 'sqlite'].map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
             <div>
@@ -122,11 +122,19 @@ function TargetDbTab() {
           </div>
           {(['host', 'db_name', 'username'] as const).map((field) => (
             <div key={field}>
-              <label className="text-xs text-slate-400">{field === 'db_name' ? 'DB 이름' : field === 'host' ? '호스트' : '사용자'}</label>
+              <label className="text-xs text-slate-400">{field === 'db_name' ? (form.db_type === 'oracle' ? 'Service Name / SID' : 'DB 이름') : field === 'host' ? '호스트' : '사용자'}</label>
               <input value={form[field] as string} onChange={(e) => setForm({ ...form, [field]: e.target.value })}
                 className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-300" />
             </div>
           ))}
+          <div>
+            <label className="text-xs text-slate-400">
+              스키마명 {form.db_type === 'oracle' ? '(Owner)' : form.db_type === 'postgresql' ? '(기본: public)' : '(선택)'}
+            </label>
+            <input value={form.schema_name ?? ''} onChange={(e) => setForm({ ...form, schema_name: e.target.value || null })}
+              placeholder={form.db_type === 'postgresql' ? 'public' : form.db_type === 'oracle' ? 'OWNER명 (대문자)' : ''}
+              className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-300 placeholder-slate-600" />
+          </div>
           <div>
             <label className="text-xs text-slate-400">비밀번호 (변경 시만 입력)</label>
             <div className="relative mt-1">

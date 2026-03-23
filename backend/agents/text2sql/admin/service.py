@@ -56,8 +56,8 @@ async def upsert_target_db_config(namespace_id: int, payload: dict) -> None:
     async with get_conn() as conn:
         await conn.execute("""
             INSERT INTO sql_target_db
-                (namespace_id, db_type, host, port, db_name, username, encrypted_password, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                (namespace_id, db_type, host, port, db_name, username, encrypted_password, schema_name, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
             ON CONFLICT (namespace_id)
             DO UPDATE SET db_type = EXCLUDED.db_type,
                           host = EXCLUDED.host,
@@ -65,6 +65,7 @@ async def upsert_target_db_config(namespace_id: int, payload: dict) -> None:
                           db_name = EXCLUDED.db_name,
                           username = EXCLUDED.username,
                           encrypted_password = EXCLUDED.encrypted_password,
+                          schema_name = EXCLUDED.schema_name,
                           updated_at = NOW()
         """,
             namespace_id,
@@ -74,6 +75,7 @@ async def upsert_target_db_config(namespace_id: int, payload: dict) -> None:
             payload["db_name"],
             payload["username"],
             encrypted,
+            payload.get("schema_name") or None,
         )
 
 
@@ -87,6 +89,7 @@ def build_target_db(cfg: dict):
         db_name=cfg["db_name"],
         username=cfg["username"],
         password=cfg["password"],
+        schema_name=cfg.get("schema_name"),
     )
 
 
