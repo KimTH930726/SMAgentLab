@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.10)
+# Ops-Navigator 시스템 아키텍처 (v2.11)
 
 ## 개요
 
@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약** (자세한 내용은 `dev-handoff.md` 참조)
+- v2.11: Oracle 지원 + Dialect 패턴 리팩터링 (PgDialect/MysqlDialect/SqliteDialect/OracleDialect) + sql_target_db.schema_name 컬럼 추가 + Pagination 상하 분리
 - v2.10: 스키마 스캔 diff 방식 개선 + ERD/용어 고아 자동 정리 + 스캔 리포트 모달 + ERD 검색·양방향 싱크
 - v2.9: `ops_prompt` 에이전트별 분리 — `agent_type` 컬럼 추가, text2sql 파이프라인 프롬프트 `ops_prompt`로 통합, 파이프라인 탭 프롬프트 편집 UI 제거
 - v2.8: `domain/` → `service/` + `agents/{agent}/` 재구성 + DB 테이블 prefix 변경 (`rag_*`)
@@ -193,7 +194,7 @@ rag_fewshot           -- Few-shot Q&A (HNSW, status: active/candidate)
 rag_conv_summary      -- 대화 요약 (embedding VECTOR(768), Semantic Recall용)
 
 -- Text-to-SQL 전용 (sql_* prefix)
-sql_target_db         -- 대상 DB 연결 설정 (암호화 저장)
+sql_target_db         -- 대상 DB 연결 설정 (암호화 저장, schema_name: PG schema / Oracle owner)
 sql_schema_table      -- 테이블 메타데이터 (pos_x/pos_y ERD 위치)
 sql_schema_column     -- 컬럼 메타데이터 (is_pk, fk_reference)
 sql_relation          -- FK 관계 정의

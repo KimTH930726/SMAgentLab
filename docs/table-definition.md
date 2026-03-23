@@ -1,10 +1,10 @@
 # Ops-Navigator 테이블 정의서
 
-> **Version**: 3.4
+> **Version**: 3.5
 > **DBMS**: PostgreSQL 16 + pgvector
 > **Extensions**: `vector`, `pg_trgm`
 > **벡터 차원**: 768 (paraphrase-multilingual-mpnet-base-v2)
-> **작성일**: 2026-03-19 (v3.4 — ops_prompt.agent_type 추가 + text2sql 파이프라인 프롬프트 통합)
+> **작성일**: 2026-03-23 (v3.5 — sql_target_db.schema_name 컬럼 추가)
 > **DDL 위치**: `init/01-init.sql` + `main.py` lifespan 마이그레이션
 
 ---
@@ -572,6 +572,7 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 22 | `ops_mcp_tool` | `ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'` | MCP 도구 에이전트 분리 — 에이전트별 독립 도구 관리 |
 | 23 | `sql_fewshot` | `ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'` | SQL Few-shot 피드백 연동 — `pending`(후보)/`approved`(승인됨)/`rejected`(반려됨) |
 | 24 | `ops_prompt` | `ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'all'` | 에이전트별 프롬프트 스코핑 — 시스템설정 탭에서 현재 에이전트 프롬프트만 표시 |
+| 25 | `sql_target_db` | `ADD COLUMN IF NOT EXISTS schema_name VARCHAR(255) DEFAULT NULL` | 대상 DB 스키마 분리 — PostgreSQL: schema, Oracle: owner |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

@@ -1,6 +1,6 @@
 # Ops-Navigator → AI 통합 플랫폼 확장 전략
 
-> **최종 수정**: 2026-03-20
+> **최종 수정**: 2026-03-23
 
 ---
 
@@ -23,6 +23,11 @@
         AI 관계 추천·용어 자동생성 변경 테이블 한정 (토큰 절약)
         ERD 검색 + 관계 목록 ↔ SVG 양방향 싱크
         docker-compose.yml devx-mcp-api extra_hosts 하드코딩 제거
+[완료]  Oracle 지원 + Dialect 패턴 리팩터링 (2026-03-23)
+        target.py Dialect 패턴 — PgDialect/MysqlDialect/SqliteDialect/OracleDialect 분리
+        sql_target_db.schema_name 컬럼 추가 (PG: schema, Oracle: owner)
+        프론트엔드 대상 DB 폼에 스키마명 필드 + Oracle 옵션 추가
+        공통 Pagination 컴포넌트 PaginationInfo(상단)/PaginationNav(하단) 분리
 ```
 
 ---
