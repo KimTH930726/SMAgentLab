@@ -1,4 +1,4 @@
-import { BookOpen, Database, Wrench } from 'lucide-react';
+import { BookOpen, Database, Wrench, ShieldAlert, Cloud } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAppStore, type AgentType } from '../store/useAppStore';
 
@@ -13,6 +13,8 @@ interface AgentCard {
   color: string;
   border: string;
   iconBg: string;
+  disabled?: boolean;
+  badge?: string;
 }
 
 const AGENTS: AgentCard[] = [
@@ -35,6 +37,30 @@ const AGENTS: AgentCard[] = [
     color: 'text-emerald-400',
     border: 'border-emerald-500/50 hover:border-emerald-400',
     iconBg: 'bg-emerald-500/10',
+  },
+  {
+    id: 'knowledge_rag' as AgentType,
+    icon: <ShieldAlert className="w-8 h-8" />,
+    title: '시스템 이상 탐지',
+    description: '시스템 로그·메트릭을 분석하여 이상 징후를 탐지합니다.',
+    features: ['로그 패턴 분석', '이상 탐지 알림', '장애 원인 추론', '대응 방안 추천'],
+    color: 'text-orange-400',
+    border: 'border-orange-500/30',
+    iconBg: 'bg-orange-500/10',
+    disabled: true,
+    badge: '26Y 3Q 예정',
+  },
+  {
+    id: 'knowledge_rag' as AgentType,
+    icon: <Cloud className="w-8 h-8" />,
+    title: '클라우드 자원 산정',
+    description: '워크로드에 맞는 최적의 클라우드 자원을 산정합니다.',
+    features: ['워크로드 분석', '비용 최적화 추천', '스케일링 시뮬레이션', '멀티 클라우드 비교'],
+    color: 'text-sky-400',
+    border: 'border-sky-500/30',
+    iconBg: 'bg-sky-500/10',
+    disabled: true,
+    badge: '26Y 4Q 예정',
   },
 ];
 
@@ -93,34 +119,46 @@ export default function AgentSelect() {
         <HealthBadge />
       </div>
 
-      {/* Agent cards */}
-      <div className="flex flex-col sm:flex-row gap-5 w-full max-w-2xl">
-        {AGENTS.map((agent) => (
-          <button
-            key={agent.id}
-            onClick={() => setSelectedAgent(agent.id)}
-            className={`flex-1 text-left bg-slate-800 border-2 ${agent.border} rounded-2xl p-6 transition-all duration-200 hover:bg-slate-750 hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-indigo-500`}
-          >
-            <div className={`inline-flex p-3 rounded-xl ${agent.iconBg} ${agent.color} mb-4`}>
-              {agent.icon}
-            </div>
-            <h2 className={`text-lg font-semibold ${agent.color} mb-1`}>{agent.title}</h2>
-            <p className="text-sm text-slate-400 mb-4">{agent.description}</p>
-            <ul className="space-y-1.5">
-              {agent.features.map((f) => (
-                <li key={f} className="flex items-center gap-2 text-xs text-slate-500">
-                  <span className={`w-1 h-1 rounded-full ${agent.iconBg} ${agent.color} flex-shrink-0`} style={{ background: 'currentColor' }} />
-                  {f}
-                </li>
-              ))}
-            </ul>
+      {/* Agent cards — horizontal scroll if overflow */}
+      <div className="w-full max-w-5xl overflow-x-auto pb-4">
+        <div className="flex gap-5 min-w-max px-1">
+          {AGENTS.map((agent, i) => (
+            <button
+              key={`${agent.id}-${i}`}
+              onClick={() => !agent.disabled && setSelectedAgent(agent.id)}
+              disabled={agent.disabled}
+              className={`w-64 flex-shrink-0 text-left bg-slate-800 border-2 ${agent.border} rounded-2xl p-6 transition-all duration-200 ${
+                agent.disabled
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'hover:bg-slate-750 hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-indigo-500'
+              }`}
+            >
+              <div className={`inline-flex p-3 rounded-xl ${agent.iconBg} ${agent.color} mb-4`}>
+                {agent.icon}
+              </div>
+              <div className="flex items-center gap-2 mb-1">
+                <h2 className={`text-lg font-semibold ${agent.color}`}>{agent.title}</h2>
+                {agent.badge && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 whitespace-nowrap">{agent.badge}</span>
+                )}
+              </div>
+              <p className="text-sm text-slate-400 mb-4">{agent.description}</p>
+              <ul className="space-y-1.5">
+                {agent.features.map((f) => (
+                  <li key={f} className="flex items-center gap-2 text-xs text-slate-500">
+                    <span className={`w-1 h-1 rounded-full flex-shrink-0`} style={{ background: 'currentColor' }} />
+                    {f}
+                  </li>
+                ))}
+              </ul>
 
-            <div className={`mt-5 flex items-center gap-1.5 text-xs font-medium ${agent.color}`}>
-              <Wrench className="w-3.5 h-3.5" />
-              선택하기
-            </div>
-          </button>
-        ))}
+              <div className={`mt-5 flex items-center gap-1.5 text-xs font-medium ${agent.disabled ? 'text-slate-600' : agent.color}`}>
+                <Wrench className="w-3.5 h-3.5" />
+                {agent.disabled ? '준비 중' : '선택하기'}
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
