@@ -102,7 +102,8 @@ export function FeedbackSection({
         base_weight: form.base_weight,
         category: form.category || null,
       });
-      await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: false, message_id: messageId ?? null });
+      // 지식 등록 완료 → 해결됨으로 처리 (query_log status = 'resolved')
+      await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: true, message_id: messageId ?? null });
       qc.invalidateQueries({ queryKey: ['knowledge'] });
       qc.invalidateQueries({ queryKey: ['stats-ns'] });
     } catch (err) {
