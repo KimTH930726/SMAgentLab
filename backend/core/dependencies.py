@@ -30,7 +30,8 @@ async def get_current_user(
             """
             SELECT u.id, u.username, u.role, u.part_id,
                    p.name AS part,
-                   u.is_active, u.encrypted_llm_api_key
+                   u.is_active, u.encrypted_llm_api_key,
+                   u.created_at
             FROM ops_user u
             LEFT JOIN ops_part p ON u.part_id = p.id
             WHERE u.id = $1

@@ -24,7 +24,7 @@ def _to_user_out(row: dict) -> UserOut:
         part=row["part"],
         is_active=row["is_active"],
         has_api_key=bool(row.get("encrypted_llm_api_key") or row.get("has_api_key")),
-        created_at=row["created_at"],
+        created_at=str(row["created_at"]) if row.get("created_at") else "",
     )
 
 
