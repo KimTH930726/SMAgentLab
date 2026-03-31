@@ -30,6 +30,7 @@ services:
 
   # ─── FastAPI Backend ─────────────────────────────────────────
   backend:
+    image: smagentlab-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -62,6 +63,7 @@ services:
 
   # ─── React Frontend (nginx) ───────────────────────────────────
   frontend:
+    image: smagentlab-frontend:latest
     build:
       context: ./frontend-react
       dockerfile: Dockerfile
