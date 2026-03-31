@@ -35,7 +35,7 @@ docker load -i "${IMPORT_FILE}"
 # 3. 서비스 재시작
 echo ""
 echo "[3/4] 서비스 재시작 중..."
-docker compose up -d
+docker compose up -d --no-build
 
 # 4. 상태 확인
 echo ""

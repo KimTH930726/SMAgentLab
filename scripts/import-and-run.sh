@@ -45,7 +45,7 @@ fi
 # 3. 서비스 시작 (빌드 없이)
 echo ""
 echo "[2/3] 서비스 시작 중..."
-docker compose up -d
+docker compose up -d --no-build
 
 # 4. 상태 확인
 echo ""
