@@ -34,10 +34,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: ops-backend
+    container_name: ${CONTAINER_PREFIX:-ops}-backend
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     environment:
       # 인프라/시크릿 (.env에서 주입)
       DATABASE_URL: postgresql://${POSTGRES_USER:-ops}:${POSTGRES_PASSWORD:-ops1234}@postgres:5432/${POSTGRES_DB:-opsdb}
@@ -67,10 +67,10 @@ services:
     build:
       context: ./frontend-react
       dockerfile: Dockerfile
-    container_name: ops-frontend
+    container_name: ${CONTAINER_PREFIX:-ops}-frontend
     restart: unless-stopped
     ports:
-      - "8501:80"
+      - "${FRONTEND_PORT:-8501}:80"
     depends_on:
       - backend
 
