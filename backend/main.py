@@ -19,6 +19,7 @@ from service.feedback.router import router as feedback_router
 from service.admin.router import router as admin_router
 from service.mcp_tool.router import router as mcp_tool_router
 from service.prompt.router import router as prompt_router
+from service.teams.router import router as teams_router
 from agents.text2sql.admin.router import router as text2sql_router
 
 from shared import cache as sem_cache
@@ -34,6 +35,7 @@ _ROUTERS = [
     fewshot_router, feedback_router, admin_router,
     mcp_tool_router,
     prompt_router,
+    teams_router,
     text2sql_router,
 ]
 
