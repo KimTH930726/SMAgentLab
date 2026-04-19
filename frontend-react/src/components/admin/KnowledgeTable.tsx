@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp } from 'lucide-react';
+import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, MessageSquare, RefreshCw, LogOut } from 'lucide-react';
 import {
   getKnowledge,
   createKnowledge,
@@ -15,6 +15,16 @@ import {
 } from '../../api/knowledge';
 import { getCategories } from '../../api/namespaces';
 import { updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
+import {
+  getTeamsAuthStatus,
+  logoutTeams,
+  listTeamsChats,
+  fetchTeamsMessages,
+  importTeamsThreads,
+  type TeamsChat,
+  type TeamsMessage,
+  type TeamsAuthStatus,
+} from '../../api/teams';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { useAuthStore } from '../../store/useAuthStore';
 import { Button } from '../ui/Button';
@@ -55,7 +65,7 @@ function weightClass(w: number) {
     : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-600/40 dark:text-zinc-300';
 }
 
-type IngestMethod = 'file' | 'csv' | 'text' | 'manual' | 'url' | null;
+type IngestMethod = 'file' | 'csv' | 'text' | 'manual' | 'url' | 'teams' | null;
 
 // ── KnowledgeTable (메인) ─────────────────────────────────────────────────────
 
@@ -233,6 +243,7 @@ export function KnowledgeTable() {
                 <option value="file_upload">파일 업로드</option>
                 <option value="web">웹 크롤링</option>
                 <option value="confluence">Confluence</option>
+                <option value="teams">Teams</option>
               </select>
             </div>
           </div>
@@ -253,7 +264,7 @@ export function KnowledgeTable() {
                     <div className="flex items-center gap-2 flex-wrap">
                       {(item as any).source_file && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-900/40 text-sky-300 font-mono">
-                          {(item as any).source_type === 'csv_import' ? '📊' : (item as any).source_type === 'paste_split' ? '📋' : '📄'}{' '}
+                          {(item as any).source_type === 'csv_import' ? '📊' : (item as any).source_type === 'paste_split' ? '📋' : (item as any).source_type === 'teams' ? '💬' : '📄'}{' '}
                           {(item as any).source_file}{(item as any).source_chunk_idx != null && ` #${(item as any).source_chunk_idx}`}
                         </span>
                       )}
@@ -540,6 +551,7 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
     { id: 'text', icon: <FileText className="w-6 h-6" />, title: '대량 텍스트', desc: '텍스트를 붙여넣으면 헤더·단락 기준으로 자동 분할해 등록합니다.' },
     { id: 'manual', icon: <PenLine className="w-6 h-6" />, title: '직접 입력', desc: '단건 지식을 직접 작성하여 등록합니다.' },
     { id: 'url', icon: <Globe className="w-6 h-6" />, title: 'URL / Confluence', desc: '웹 페이지 또는 Confluence 페이지 URL을 입력하면 내용을 자동 수집합니다.', badge: 'Confluence 지원' },
+    { id: 'teams', icon: <MessageSquare className="w-6 h-6" />, title: 'Teams 메시지', desc: 'Teams 채팅방에 로그인하여 메시지를 선택적으로 수집합니다. 토큰은 서버 메모리에만 저장됩니다.', badge: 'Playwright 로그인' },
   ];
 
   return (
@@ -592,6 +604,10 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
         <UrlForm namespace={namespace} categoryNames={categoryNames}
           onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
       )}
+      {activeMethod === 'teams' && (
+        <TeamsForm namespace={namespace} categoryNames={categoryNames}
+          onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
+      )}
 
       {/* 인제스천 작업 이력 */}
       {jobs.length > 0 && (
@@ -609,7 +625,7 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
                   {j.status}
                 </span>
                 <span className="text-slate-400 flex-shrink-0 text-[10px] px-1.5 py-0.5 bg-slate-700/60 rounded">
-                  {j.source_type === 'csv_import' ? 'CSV' : j.source_type === 'file_upload' ? '파일' : j.source_type === 'paste_split' ? '텍스트' : j.source_type === 'web' ? '웹' : j.source_type === 'confluence' ? 'Confluence' : '수동'}
+                  {j.source_type === 'csv_import' ? 'CSV' : j.source_type === 'file_upload' ? '파일' : j.source_type === 'paste_split' ? '텍스트' : j.source_type === 'web' ? '웹' : j.source_type === 'confluence' ? 'Confluence' : j.source_type === 'teams' ? 'Teams' : '수동'}
                 </span>
                 <span className="text-slate-300 truncate flex-1">{j.source_file || '-'}</span>
                 <span className="text-slate-500 flex-shrink-0">{j.created_chunks}/{j.total_chunks}건</span>
@@ -1251,6 +1267,373 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+
+// ── Teams 인라인 폼 ───────────────────────────────────────────────────────────
+
+function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
+  namespace: string; categoryNames: string[];
+  onSuccess: () => void; onCancel: () => void;
+}) {
+  const { user } = useAuthStore();
+  const [authStatus, setAuthStatus] = useState<TeamsAuthStatus | null>(null);
+  const [chats, setChats] = useState<TeamsChat[]>([]);
+  const [selectedChat, setSelectedChat] = useState<TeamsChat | null>(null);
+  const [messages, setMessages] = useState<TeamsMessage[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState('');
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingChats, setLoadingChats] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const authenticated = authStatus?.authenticated === true && authStatus?.token_expired !== true;
+  const tokenExpired = authStatus?.token_expired === true;
+
+  // 데스크톱 헬퍼 실행 명령 — 현재 window.location.origin 을 백엔드 URL로 사용 (nginx가 /api 를 백엔드로 프록시).
+  const apiUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000';
+  const helperCommand = `python scripts/teams_desktop_login.py --api-url ${apiUrl}${user?.username ? ` --username ${user.username}` : ''}`;
+
+  const loadChats = async () => {
+    setLoadingChats(true);
+    try {
+      const result = await listTeamsChats();
+      setChats(result.chats);
+    } catch (e: any) {
+      setError(e.message || '채팅방 목록 조회 실패');
+    } finally {
+      setLoadingChats(false);
+    }
+  };
+
+  // 최초 진입 시 인증 상태 조회
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await getTeamsAuthStatus();
+        if (!cancelled) setAuthStatus(status);
+        if (status.authenticated && !status.token_expired && !cancelled) {
+          await loadChats();
+        }
+      } catch (e: any) {
+        if (!cancelled) setError(e.message || '인증 상태 조회 실패');
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 인증 안 됐을 때 2초마다 상태 폴링 — 헬퍼가 토큰을 POST하면 자동 감지
+  useEffect(() => {
+    if (authenticated) return;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      try {
+        const status = await getTeamsAuthStatus();
+        if (cancelled) return;
+        const flippedToAuthed = status.authenticated && !status.token_expired && !authenticated;
+        setAuthStatus(status);
+        if (flippedToAuthed) {
+          await loadChats();
+        }
+      } catch {
+        // 폴링 중 일시 오류는 무시
+      }
+    }, 2000);
+    return () => { cancelled = true; clearInterval(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authenticated]);
+
+  const handleLogout = async () => {
+    try {
+      await logoutTeams();
+      setAuthStatus({ authenticated: false, chat_count: 0, token_expired: null });
+      setChats([]);
+      setSelectedChat(null);
+      setMessages([]);
+      setSelectedIds(new Set());
+    } catch { /* ignore */ }
+  };
+
+  const handleCopyCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(helperCommand);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* ignore */ }
+  };
+
+  const handleSelectChat = async (chat: TeamsChat) => {
+    setSelectedChat(chat);
+    setMessages([]);
+    setSelectedIds(new Set());
+    setLoadingMessages(true);
+    setError('');
+    try {
+      const result = await fetchTeamsMessages(chat.id, { pageSize: 50 });
+      setMessages(result.messages);
+      setHasMore(result.has_more);
+    } catch (e: any) {
+      setError(e.message || '메시지 조회 실패');
+    } finally {
+      setLoadingMessages(false);
+    }
+  };
+
+  const handleLoadMore = async () => {
+    if (!selectedChat || messages.length === 0) return;
+    const oldest = messages[0];
+    if (!oldest?.time) return;
+    setLoadingMessages(true);
+    try {
+      const result = await fetchTeamsMessages(selectedChat.id, {
+        pageSize: 50,
+        before: oldest.time,
+      });
+      // 오래된 메시지를 앞쪽에 추가 (시간순 유지)
+      setMessages((prev) => [...result.messages, ...prev]);
+      setHasMore(result.has_more);
+    } catch (e: any) {
+      setError(e.message || '메시지 추가 조회 실패');
+    } finally {
+      setLoadingMessages(false);
+    }
+  };
+
+  const toggleMessage = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selectedIds.size === messages.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(messages.map((m) => m.id)));
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!selectedChat) return;
+    if (selectedIds.size === 0) {
+      setError('등록할 메시지를 1개 이상 선택하세요.');
+      return;
+    }
+    const selected = messages.filter((m) => selectedIds.has(m.id));
+    const threadTitle = title.trim() || `${selectedChat.label} — ${selected.length}건`;
+
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await importTeamsThreads(
+        namespace,
+        [{ title: threadTitle, messages: selected }],
+        {
+          chatId: selectedChat.id,
+          chatLabel: selectedChat.label,
+          category: category || undefined,
+        },
+      );
+      setDone(`"${threadTitle}" — ${result.created}건 등록 완료`);
+      setSelectedIds(new Set());
+      onSuccess();
+    } catch (e: any) {
+      setError(e.message || '등록 실패');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-4">
+      <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+        <MessageSquare className="w-4 h-4 text-indigo-400" />Teams 메시지 수집
+      </h3>
+
+      {/* 인증 섹션 */}
+      {authenticated ? (
+        <div className="flex items-center gap-3 p-3 bg-slate-900/60 rounded-lg border border-slate-700">
+          <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span className="text-xs text-slate-300 flex-1">
+            Teams 로그인됨 · 채팅방 {authStatus?.chat_count ?? 0}개 캡처됨
+          </span>
+          <button onClick={loadChats} disabled={loadingChats}
+            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+            <RefreshCw className="w-3 h-3" /> 새로고침
+          </button>
+          <button onClick={handleLogout}
+            className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1">
+            <LogOut className="w-3 h-3" /> 로그아웃
+          </button>
+        </div>
+      ) : (
+        <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-700 space-y-3">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-slate-300 flex-1 space-y-1">
+              <p>
+                {tokenExpired ? 'Teams 세션이 만료되었습니다. ' : 'Teams 토큰이 없습니다. '}
+                아래 명령을 <span className="text-slate-200 font-medium">사용자 본인의 PC 터미널</span>에서 실행하세요.
+                브라우저 창이 열리면 Teams에 로그인하세요.
+              </p>
+              <p className="text-[11px] text-slate-500">
+                사전 설치(최초 1회):{' '}
+                <code className="bg-slate-800 px-1 rounded">pip install playwright &amp;&amp; playwright install chromium</code>
+              </p>
+            </div>
+          </div>
+          <div className="relative">
+            <pre className="bg-slate-950 text-xs text-slate-300 p-2 pr-16 rounded overflow-x-auto border border-slate-700 whitespace-pre-wrap break-all">
+{helperCommand}
+            </pre>
+            <button onClick={handleCopyCommand}
+              className="absolute top-1.5 right-1.5 text-[10px] px-2 py-0.5 bg-slate-700 text-slate-200 rounded hover:bg-slate-600">
+              {copied ? '복사됨' : '복사'}
+            </button>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-slate-500">
+            <Clock className="w-3 h-3 text-amber-400 animate-pulse" />
+            <span>토큰 수신 대기 중... (2초마다 자동 확인)</span>
+          </div>
+        </div>
+      )}
+
+      {/* 채팅방 선택 */}
+      {authenticated && (
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1">채팅방</label>
+          {loadingChats ? (
+            <div className="text-xs text-slate-500 py-3 text-center">채팅방 목록 로딩 중...</div>
+          ) : chats.length === 0 ? (
+            <div className="text-xs text-slate-500 py-3 text-center">채팅방이 없습니다. 새로고침을 시도하세요.</div>
+          ) : (
+            <select
+              value={selectedChat?.id ?? ''}
+              onChange={(e) => {
+                const chat = chats.find((c) => c.id === e.target.value);
+                if (chat) handleSelectChat(chat);
+              }}
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="">채팅방을 선택하세요...</option>
+              {chats.map((c) => (
+                <option key={c.id} value={c.id}>{c.label} ({c.members}명)</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
+      {/* 메시지 선택 */}
+      {selectedChat && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-400">
+              메시지 <span className="text-slate-300 font-medium">{messages.length}</span>건
+              {selectedIds.size > 0 && <span className="text-indigo-300"> · {selectedIds.size}건 선택됨</span>}
+            </span>
+            <div className="flex items-center gap-2">
+              {hasMore && (
+                <button onClick={handleLoadMore} disabled={loadingMessages}
+                  className="text-xs text-indigo-400 hover:text-indigo-300">
+                  {loadingMessages ? '로딩...' : '이전 메시지 더보기'}
+                </button>
+              )}
+              <button onClick={toggleAll} className="text-xs text-indigo-400 hover:text-indigo-300">
+                {selectedIds.size === messages.length && messages.length > 0 ? '전체 해제' : '전체 선택'}
+              </button>
+            </div>
+          </div>
+          <div className="max-h-96 overflow-y-auto rounded-lg border border-slate-700 bg-slate-900/40 divide-y divide-slate-700/60">
+            {loadingMessages && messages.length === 0 ? (
+              <div className="p-4 text-xs text-slate-500 text-center">메시지 로딩 중...</div>
+            ) : messages.length === 0 ? (
+              <div className="p-4 text-xs text-slate-500 text-center">메시지가 없습니다.</div>
+            ) : (
+              messages.map((m) => {
+                const checked = selectedIds.has(m.id);
+                return (
+                  <label key={m.id}
+                    className={`flex items-start gap-2 p-2.5 cursor-pointer hover:bg-slate-800/60 transition-colors ${checked ? 'bg-indigo-950/30' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleMessage(m.id)}
+                      className="mt-0.5 accent-indigo-500"
+                    />
+                    <div className="flex-1 min-w-0 text-xs">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className="text-slate-300 font-medium truncate">{m.from}</span>
+                        <span className="text-slate-600 text-[10px]">{m.date}</span>
+                        {m.reply_to && (
+                          <span className="text-[10px] px-1 py-0.5 rounded bg-slate-700/60 text-slate-400">
+                            {m.reply_to.type === 'forward' ? '전달' : '회신'}
+                          </span>
+                        )}
+                      </div>
+                      {m.reply_to?.preview && (
+                        <div className="text-[10px] text-slate-500 border-l-2 border-slate-600 pl-2 mb-0.5 line-clamp-2">
+                          {m.reply_to.preview}
+                        </div>
+                      )}
+                      <div className="text-slate-400 whitespace-pre-wrap break-words line-clamp-4">{m.content}</div>
+                    </div>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 메타 입력 */}
+      {selectedChat && selectedIds.size > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1">문서 제목 (선택)</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={`${selectedChat.label} — ${selectedIds.size}건`}
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
+            />
+          </div>
+          {categoryNames.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">업무구분</label>
+              <select value={category} onChange={(e) => setCategory(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-300">
+                <option value="">없음</option>
+                {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
+
+      {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
+      {error && <p className="text-xs text-rose-400">{error}</p>}
+
+      <div className="flex gap-2 justify-end pt-1">
+        <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
+        <Button variant="primary" size="sm" onClick={handleSubmit}
+          disabled={!authenticated || selectedIds.size === 0 || submitting}>
+          {submitting ? '등록 중...' : `${selectedIds.size}건 등록`}
+        </Button>
+      </div>
     </div>
   );
 }
