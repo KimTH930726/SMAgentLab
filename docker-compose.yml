@@ -49,6 +49,8 @@ services:
       FERNET_SECRET_KEY: ${FERNET_SECRET_KEY:-}
       ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD:-1111}
       REDIS_URL: redis://ops-redis:6379/0
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
       # 나머지 설정은 backend/core/config.py 코드 기본값 사용
     extra_hosts:
       - "host.docker.internal:host-gateway"
