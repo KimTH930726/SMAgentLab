@@ -80,6 +80,7 @@ async def _migrate_core_tables(conn) -> None:
 
     # ── part_id 컬럼 추가 (integer FK) ──────────────────────────
     await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS part_id INT")
+    await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS encrypted_confluence_pat TEXT")
     await conn.execute("""
         DO $$ BEGIN
             IF NOT EXISTS (
@@ -236,8 +237,8 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS meta JSONB")
-    await conn.execute("ALTER TABLE ops_mcp_tool ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
-    await conn.execute("ALTER TABLE sql_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'")
+    await conn.execute("ALTER TABLE IF EXISTS ops_mcp_tool ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
+    await conn.execute("ALTER TABLE IF EXISTS sql_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'")
 
     # ── query_log answer 역매칭 ────────────────────────────────────
     await conn.execute("""
