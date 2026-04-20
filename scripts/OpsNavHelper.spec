@@ -12,6 +12,8 @@
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 block_cipher = None
 
 HERE = Path(SPECPATH).resolve()
@@ -21,11 +23,15 @@ SIBLING_MODULES = [
     str(HERE / "install_url_handler.py"),
 ]
 
+# Playwright 의 Node.js 드라이버(node.exe, cli.js 등)와 .js 소스를 전부 번들.
+# PyInstaller 가 playwright 패키지용 자동 훅을 제공하지 않으므로 명시 수집 필요.
+pw_datas, pw_binaries, pw_hiddenimports = collect_all("playwright")
+
 a = Analysis(
     [ENTRY],
     pathex=[str(HERE)],
-    binaries=[],
-    datas=[],
+    binaries=pw_binaries,
+    datas=pw_datas,
     hiddenimports=[
         # sibling 모듈 — Analysis 가 entry 에서 동적 import 를 추적하지 못할 수 있어 명시
         "teams_desktop_login",
@@ -33,7 +39,7 @@ a = Analysis(
         # Playwright sync API
         "playwright.sync_api",
         "playwright._impl._api_types",
-    ],
+    ] + pw_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
