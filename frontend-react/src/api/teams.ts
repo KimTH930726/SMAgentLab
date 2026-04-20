@@ -63,6 +63,33 @@ export async function logoutTeams(): Promise<{ status: string }> {
   return apiFetch('/teams-collect/auth/logout', { method: 'POST' });
 }
 
+// ─── Helper ZIP 다운로드 ───────────────────────────────────────────────────
+// apiFetch 는 JSON 응답용이므로 바이너리 다운로드는 fetch 로 직접 처리한다.
+// 인증은 현재 JWT 를 Authorization 헤더로 전달.
+
+export async function downloadHelperExe(accessToken: string | null): Promise<void> {
+  const resp = await fetch('/api/teams-collect/helper/download', {
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+  });
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      const body = await resp.json();
+      detail = body.detail || detail;
+    } catch { /* binary or no body */ }
+    throw new Error(detail);
+  }
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'OpsNavHelper.exe';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ─── Chats & Messages ───────────────────────────────────────────────────────
 
 export async function listTeamsChats(): Promise<{ chats: TeamsChat[] }> {

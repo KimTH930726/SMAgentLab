@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, MessageSquare, RefreshCw, LogOut } from 'lucide-react';
+import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, MessageSquare, RefreshCw, LogOut, Download, Check } from 'lucide-react';
 import {
   getKnowledge,
   createKnowledge,
@@ -21,6 +21,7 @@ import {
   listTeamsChats,
   fetchTeamsMessages,
   importTeamsThreads,
+  downloadHelperExe,
   type TeamsChat,
   type TeamsMessage,
   type TeamsAuthStatus,
@@ -551,7 +552,7 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
     { id: 'text', icon: <FileText className="w-6 h-6" />, title: '대량 텍스트', desc: '텍스트를 붙여넣으면 헤더·단락 기준으로 자동 분할해 등록합니다.' },
     { id: 'manual', icon: <PenLine className="w-6 h-6" />, title: '직접 입력', desc: '단건 지식을 직접 작성하여 등록합니다.' },
     { id: 'url', icon: <Globe className="w-6 h-6" />, title: 'URL / Confluence', desc: '웹 페이지 또는 Confluence 페이지 URL을 입력하면 내용을 자동 수집합니다.', badge: 'Confluence 지원' },
-    { id: 'teams', icon: <MessageSquare className="w-6 h-6" />, title: 'Teams 메시지', desc: 'Teams 채팅방에 로그인하여 메시지를 선택적으로 수집합니다. 토큰은 서버 메모리에만 저장됩니다.', badge: 'Playwright 로그인' },
+    { id: 'teams', icon: <MessageSquare className="w-6 h-6" />, title: 'Teams 메시지', desc: 'Teams 채팅방에 로그인하여 메시지를 선택적으로 수집합니다. 토큰은 서버 메모리에만 저장됩니다.' },
   ];
 
   return (
@@ -1278,7 +1279,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
   namespace: string; categoryNames: string[];
   onSuccess: () => void; onCancel: () => void;
 }) {
-  const { user } = useAuthStore();
+  const { accessToken } = useAuthStore();
   const [authStatus, setAuthStatus] = useState<TeamsAuthStatus | null>(null);
   const [chats, setChats] = useState<TeamsChat[]>([]);
   const [selectedChat, setSelectedChat] = useState<TeamsChat | null>(null);
@@ -1292,14 +1293,17 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
-  const [copied, setCopied] = useState(false);
 
   const authenticated = authStatus?.authenticated === true && authStatus?.token_expired !== true;
   const tokenExpired = authStatus?.token_expired === true;
 
-  // 데스크톱 헬퍼 실행 명령 — 현재 window.location.origin 을 백엔드 URL로 사용 (nginx가 /api 를 백엔드로 프록시).
-  const apiUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000';
-  const helperCommand = `python scripts/teams_desktop_login.py --api-url ${apiUrl}${user?.username ? ` --username ${user.username}` : ''}`;
+  // 헬퍼 실행에 쓸 URL 구성
+  // nginx가 /api/* 를 백엔드로 프록시하므로 window.location.origin 을 api_url 로 사용.
+  const apiUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8501';
+  // opsnav:// URL — 브라우저 클릭으로 헬퍼 자동 실행 (install_url_handler.py 등록 필요)
+  const opsnavUrl = accessToken
+    ? `opsnav://teams-login?api_url=${encodeURIComponent(apiUrl)}&jwt=${encodeURIComponent(accessToken)}`
+    : '';
 
   const loadChats = async () => {
     setLoadingChats(true);
@@ -1363,12 +1367,17 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
     } catch { /* ignore */ }
   };
 
-  const handleCopyCommand = async () => {
+  const [downloading, setDownloading] = useState(false);
+  const handleDownloadHelper = async () => {
+    setDownloading(true);
+    setError('');
     try {
-      await navigator.clipboard.writeText(helperCommand);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch { /* ignore */ }
+      await downloadHelperExe(accessToken);
+    } catch (e: any) {
+      setError(`헬퍼 다운로드 실패: ${e.message || '알 수 없는 오류'}`);
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const handleSelectChat = async (chat: TeamsChat) => {
@@ -1482,30 +1491,46 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
         <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-700 space-y-3">
           <div className="flex items-start gap-2">
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <div className="text-xs text-slate-300 flex-1 space-y-1">
-              <p>
-                {tokenExpired ? 'Teams 세션이 만료되었습니다. ' : 'Teams 토큰이 없습니다. '}
-                아래 명령을 <span className="text-slate-200 font-medium">사용자 본인의 PC 터미널</span>에서 실행하세요.
-                브라우저 창이 열리면 Teams에 로그인하세요.
-              </p>
-              <p className="text-[11px] text-slate-500">
-                사전 설치(최초 1회):{' '}
-                <code className="bg-slate-800 px-1 rounded">pip install playwright &amp;&amp; playwright install chromium</code>
-              </p>
+            <div className="text-xs text-slate-300 flex-1">
+              {tokenExpired ? 'Teams 세션이 만료되었습니다. ' : 'Teams 토큰이 없습니다. '}
+              아래 버튼으로 로그인하세요.
             </div>
           </div>
-          <div className="relative">
-            <pre className="bg-slate-950 text-xs text-slate-300 p-2 pr-16 rounded overflow-x-auto border border-slate-700 whitespace-pre-wrap break-all">
-{helperCommand}
-            </pre>
-            <button onClick={handleCopyCommand}
-              className="absolute top-1.5 right-1.5 text-[10px] px-2 py-0.5 bg-slate-700 text-slate-200 rounded hover:bg-slate-600">
-              {copied ? '복사됨' : '복사'}
+
+          {/* 주 액션 1: opsnav:// 링크 → 헬퍼 이미 설치된 경우 */}
+          {opsnavUrl ? (
+            <a
+              href={opsnavUrl}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors"
+            >
+              <MessageSquare className="w-4 h-4" />
+              Teams 로그인
+            </a>
+          ) : (
+            <div className="text-[11px] text-slate-500">로그인 세션이 없어 실행할 수 없습니다.</div>
+          )}
+
+          {/* 주 액션 2: 헬퍼 EXE 다운로드 — 최초 사용자용 */}
+          <div className="p-2.5 rounded-lg bg-slate-800/50 border border-slate-700 space-y-2">
+            <p className="text-[11px] text-slate-300">
+              <span className="font-medium text-slate-200">처음 사용이신가요?</span>{' '}
+              아래 버튼으로 헬퍼를 받아 실행하세요. 한 번만 설치하면 됩니다.
+            </p>
+            <button
+              onClick={handleDownloadHelper}
+              disabled={downloading}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-100 text-xs font-medium transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              {downloading ? '다운로드 중...' : '헬퍼 다운로드 (OpsNavHelper.exe)'}
             </button>
-          </div>
-          <div className="flex items-center gap-2 text-[11px] text-slate-500">
-            <Clock className="w-3 h-3 text-amber-400 animate-pulse" />
-            <span>토큰 수신 대기 중... (2초마다 자동 확인)</span>
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              다운로드한 <code className="bg-slate-900 px-1 rounded">OpsNavHelper.exe</code> 를 더블클릭하면 설치됩니다.
+              Python 설치 불필요. Chrome 이 미리 설치돼 있어야 합니다.
+            </p>
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              <code className="bg-slate-900 px-1 rounded">OpsNavHelper.exe</code> 위치를 옮기거나 이름을 바꾼 경우, 해당 파일을 한 번 더 더블클릭해 주세요.
+            </p>
           </div>
         </div>
       )}
@@ -1556,41 +1581,80 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
               </button>
             </div>
           </div>
-          <div className="max-h-96 overflow-y-auto rounded-lg border border-slate-700 bg-slate-900/40 divide-y divide-slate-700/60">
+          <div className="max-h-[28rem] overflow-y-auto rounded-lg border border-slate-700 bg-slate-900/40 px-2 py-2">
             {loadingMessages && messages.length === 0 ? (
               <div className="p-4 text-xs text-slate-500 text-center">메시지 로딩 중...</div>
             ) : messages.length === 0 ? (
               <div className="p-4 text-xs text-slate-500 text-center">메시지가 없습니다.</div>
             ) : (
-              messages.map((m) => {
-                const checked = selectedIds.has(m.id);
+              messages.map((m, idx) => {
+                const selected = selectedIds.has(m.id);
+                const curDate = m.date?.slice(0, 10) ?? '';
+                const prevDate = idx > 0 ? messages[idx - 1].date?.slice(0, 10) : '';
+                const showDateSep = curDate && curDate !== prevDate;
+                const timeOnly = m.date?.slice(11, 16) ?? '';
                 return (
-                  <label key={m.id}
-                    className={`flex items-start gap-2 p-2.5 cursor-pointer hover:bg-slate-800/60 transition-colors ${checked ? 'bg-indigo-950/30' : ''}`}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleMessage(m.id)}
-                      className="mt-0.5 accent-indigo-500"
-                    />
-                    <div className="flex-1 min-w-0 text-xs">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="text-slate-300 font-medium truncate">{m.from}</span>
-                        <span className="text-slate-600 text-[10px]">{m.date}</span>
-                        {m.reply_to && (
-                          <span className="text-[10px] px-1 py-0.5 rounded bg-slate-700/60 text-slate-400">
-                            {m.reply_to.type === 'forward' ? '전달' : '회신'}
-                          </span>
-                        )}
+                  <div key={m.id}>
+                    {showDateSep && (
+                      <div className="flex items-center gap-3 py-2">
+                        <div className="flex-1 h-px bg-slate-700/60" />
+                        <span className="text-[10px] font-medium text-slate-500">{curDate}</span>
+                        <div className="flex-1 h-px bg-slate-700/60" />
                       </div>
-                      {m.reply_to?.preview && (
-                        <div className="text-[10px] text-slate-500 border-l-2 border-slate-600 pl-2 mb-0.5 line-clamp-2">
-                          {m.reply_to.preview}
+                    )}
+                    <div
+                      onClick={() => toggleMessage(m.id)}
+                      className={`flex gap-3 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
+                        selected
+                          ? 'bg-indigo-600/10 border border-indigo-500/40'
+                          : 'border border-transparent hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <div
+                        className={`shrink-0 mt-0.5 w-5 h-5 rounded-full flex items-center justify-center transition-colors ${
+                          selected
+                            ? 'bg-indigo-500 border-0'
+                            : 'bg-slate-800 border border-slate-600'
+                        }`}
+                      >
+                        {selected && <Check className="w-3 h-3 text-white" />}
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-0.5">
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[13px] font-semibold text-slate-200 truncate">{m.from}</span>
+                          <span className="text-[11px] text-slate-500">{timeOnly}</span>
+                          {m.reply_to && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                              m.reply_to.type === 'forward'
+                                ? 'bg-indigo-500/15 text-indigo-300'
+                                : 'bg-slate-700/60 text-slate-400'
+                            }`}>
+                              {m.reply_to.type === 'forward' ? '전달' : '회신'}
+                            </span>
+                          )}
                         </div>
-                      )}
-                      <div className="text-slate-400 whitespace-pre-wrap break-words line-clamp-4">{m.content}</div>
+                        {m.reply_to?.preview && (
+                          <div
+                            className={`px-2.5 py-1.5 rounded border-l-2 bg-slate-800/60 ${
+                              m.reply_to.type === 'forward' ? 'border-indigo-400' : 'border-slate-500'
+                            }`}
+                          >
+                            {m.reply_to.from && (
+                              <div className="text-[11px] font-medium text-slate-400 mb-0.5">
+                                {m.reply_to.type === 'forward' ? '전달된 메시지' : m.reply_to.from}
+                              </div>
+                            )}
+                            <div className="text-[12px] text-slate-500 whitespace-pre-wrap break-words line-clamp-2">
+                              {m.reply_to.preview}
+                            </div>
+                          </div>
+                        )}
+                        <div className="text-[13px] leading-snug text-slate-300 whitespace-pre-wrap break-words">
+                          {m.content}
+                        </div>
+                      </div>
                     </div>
-                  </label>
+                  </div>
                 );
               })
             )}
