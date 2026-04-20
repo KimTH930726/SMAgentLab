@@ -27,3 +27,6 @@ pgdata/
 # Claude Code (로컬 설정 & 세션)
 .claude/settings.local.json
 .claude/todos/
+
+# PyInstaller 빌드 중간 산출물 (dist/ 는 결과물이라 커밋함)
+scripts/build/
