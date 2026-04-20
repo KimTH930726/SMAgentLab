@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.13)
+# Ops-Navigator 시스템 아키텍처 (v2.14)
 
 ## 개요
 
@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약**
+- v2.14: 인제스천 UX 고도화 — 청크 미리보기+선택 모달(ChunkReviewModal), LLM Analyzer 자동 청킹 전략 결정(파일/텍스트/URL 모든 경로 디폴트), Confluence PAT 개인 저장(ops_user.encrypted_confluence_pat — Fernet 암호화, URL 수집 시 자동 로드), 계정 설정 모달 PAT 관리 UI, 용어 통일(Fewshot→Q&A), Q&A 목록 정렬(활성→최신순), 레거시 Streamlit frontend/ 삭제
 - v2.13: URL / Confluence 인제스천 — 일반 웹 페이지(httpx + BeautifulSoup) + Confluence REST API(PAT 토큰) 단일 페이지 수집. 등록 전 Human-in-the-loop 최종 확인 모달. 라이트 모드 색상 개선
 - v2.12: 지식 인제스천 고도화 Tier 1~3 — CSV 임포트 + 텍스트 분할(heading/paragraph/fixed) + 파일 업로드(.txt/.md/.pdf) + LLM Analyzer Agent + LLM 자동 태깅 + 용어 자동 추출 + Q&A 자동 생성(fewshot candidate)
 - v2.11: Oracle 지원 + Dialect 패턴 리팩터링 (PgDialect/MysqlDialect/SqliteDialect/OracleDialect) + sql_target_db.schema_name 컬럼 추가 + Pagination 상하 분리
@@ -164,7 +165,7 @@ backend/
 
 | 모듈 | 역할 |
 |------|------|
-| `core/security.py` | JWT 토큰 발급/검증 (HS256), bcrypt 비밀번호 해싱, Fernet 대칭 암호화 (API Key) |
+| `core/security.py` | JWT 토큰 발급/검증 (HS256), bcrypt 비밀번호 해싱, Fernet 대칭 암호화 (LLM API Key + Confluence PAT) |
 | `core/dependencies.py` | `get_current_user` — Bearer 토큰 검증 후 사용자 반환 |
 | | `get_current_admin` — admin 역할 검증 |
 | | `check_namespace_ownership` — 네임스페이스의 `owner_part`와 요청자 부서 일치 확인 |
@@ -176,16 +177,21 @@ backend/
 - 대화 소유권: `ops_conversation.user_id` FK로 사용자별 대화 격리.
 
 **사용자별 LLM API Key:**
-- 회원가입 또는 마이페이지에서 사내 LLM API Key 등록 (선택사항)
+- 회원가입 또는 계정 설정에서 사내 LLM API Key 등록 (선택사항)
 - Fernet 대칭 암호화로 DB에 저장 → 요청 시 복호화하여 InHouse LLM Provider에 전달
 - 개인 키가 없으면 시스템 기본 키(`INHOUSE_LLM_API_KEY`) 사용
+
+**사용자별 Confluence PAT (v2.14 신규):**
+- 계정 설정 또는 URL 수집 폼에서 Confluence Personal Access Token 등록 (선택사항)
+- LLM API Key와 동일한 Fernet 암호화 방식으로 `ops_user.encrypted_confluence_pat`에 저장
+- URL 수집 시 PAT를 명시하지 않으면 DB에 저장된 개인 PAT 자동 로드 → Confluence 인증 자동 처리
 
 ### 4. PostgreSQL + pgvector (`:5432`)
 
 ```sql
 -- 플랫폼 공통 (ops_* prefix)
 ops_part              -- 부서 레지스트리
-ops_user              -- 사용자 (role, part_id FK, encrypted_api_key)
+ops_user              -- 사용자 (role, part_id FK, encrypted_llm_api_key, encrypted_confluence_pat)
 ops_namespace         -- 네임스페이스 (owner_part_id FK, created_by_user_id)
 ops_conversation      -- 대화방 (namespace_id FK, user_id FK, agent_type)
 ops_message           -- 대화 메시지 (role, content, results JSONB, metadata JSONB)
@@ -259,6 +265,9 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `GET` | `/api/auth/me` | Bearer | 내 정보 조회 |
 | `PUT` | `/api/auth/me/password` | Bearer | 비밀번호 변경 |
 | `PUT` | `/api/auth/me/api-key` | Bearer | 개인 LLM API Key 등록/변경 (Fernet 암호화 저장) |
+| `PUT` | `/api/auth/me/confluence-pat` | Bearer | 개인 Confluence PAT 등록/변경 (Fernet 암호화 저장) |
+| `DELETE` | `/api/auth/me/confluence-pat` | Bearer | 개인 Confluence PAT 삭제 |
+| `GET` | `/api/auth/me/confluence-pat/status` | Bearer | Confluence PAT 등록 여부 조회 |
 | `GET` | `/api/auth/users` | Admin | 전체 사용자 목록 |
 | `PUT` | `/api/auth/users/{id}` | Admin | 사용자 정보 수정 (역할 변경 등) |
 | `DELETE` | `/api/auth/users/{id}` | Admin | 사용자 삭제 |
@@ -297,8 +306,8 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `POST` | `/api/knowledge/import/text-split/preview` | 텍스트 분할 미리보기 (등록 없음) |
 | `POST` | `/api/knowledge/import/file` | 파일 업로드(.txt/.md/.pdf) → 파싱 → 청킹 → 벌크 등록 (Analyzer·태깅·용어추출·Q&A 선택적) |
 | `POST` | `/api/knowledge/import/file/preview` | 파일 파싱+청킹 미리보기 (등록 없음) |
-| `POST` | `/api/knowledge/import/url` | URL/Confluence 페이지 수집 → 청킹 → 벌크 등록 (PAT 토큰 선택적) |
-| `POST` | `/api/knowledge/import/url/preview` | URL 수집 미리보기 (등록 없음) |
+| `POST` | `/api/knowledge/import/url` | URL/Confluence 페이지 수집 → 청킹 → 벌크 등록 (PAT 미전달 시 DB 저장 개인 PAT 자동 로드) |
+| `POST` | `/api/knowledge/import/url/preview` | URL 수집 미리보기 — LLM Analyzer 자동 청킹 전략 결정 (등록 없음) |
 | `GET` | `/api/knowledge/ingestion-jobs` | 인제스천 작업 이력 조회 |
 | `GET` | `/api/knowledge/glossary` | 용어집 목록 |
 | `POST` | `/api/knowledge/glossary` | 용어 신규 등록 (임베딩 자동 생성) |
