@@ -365,6 +365,117 @@ async def _reindex_schema_vectors(namespace_id: int) -> tuple[int, int]:
     return len(tables), len(rows)
 
 
+# ── 증분 테이블 추가/삭제 ────────────────────────────────────────────────────
+
+async def get_table_summary(namespace_id: int) -> list[dict]:
+    """대상 DB에서 테이블 이름 + 컬럼 수만 빠르게 조회."""
+    cfg = await get_target_db_config(namespace_id)
+    if not cfg:
+        raise ValueError("대상 DB 연결 정보가 없습니다.")
+    db = build_target_db(cfg)
+    return await db.get_table_summary()
+
+
+async def add_tables(namespace_id: int, table_names: list[str]) -> dict:
+    """선택한 테이블만 증분 추가 (이미 있는 테이블 skip)."""
+    cfg = await get_target_db_config(namespace_id)
+    if not cfg:
+        raise ValueError("대상 DB 연결 정보가 없습니다.")
+
+    # 이미 등록된 테이블 확인
+    async with get_conn() as conn:
+        existing = await conn.fetch(
+            "SELECT table_name FROM sql_schema_table WHERE namespace_id = $1",
+            namespace_id,
+        )
+    existing_lower = {r["table_name"].lower() for r in existing}
+
+    # 새 테이블만 필터
+    new_tables = [t for t in table_names if t.lower() not in existing_lower]
+    if not new_tables:
+        return {"ok": True, "added": 0, "skipped": len(table_names)}
+
+    # 대상 DB에서 선택된 테이블만 inspect
+    db = build_target_db(cfg)
+    raw_tables = await db.get_tables(only=new_tables)
+
+    # 자동 레이아웃 위치 계산
+    async with get_conn() as conn:
+        max_x = await conn.fetchval(
+            "SELECT COALESCE(MAX(pos_x), 0) FROM sql_schema_table WHERE namespace_id = $1",
+            namespace_id,
+        ) or 0
+
+    embed_queue: list[int] = []
+    added = 0
+    async with get_conn() as conn:
+        for idx, tbl in enumerate(raw_tables):
+            pos_x = max_x + 300 * ((added) % 4) + 50
+            pos_y = 100 + 250 * ((added) // 4)
+            table_id = await conn.fetchval("""
+                INSERT INTO sql_schema_table (namespace_id, table_name, pos_x, pos_y, updated_at)
+                VALUES ($1, $2, $3, $4, NOW()) RETURNING id
+            """, namespace_id, tbl["table_name"], float(pos_x), float(pos_y))
+            for col in tbl["columns"]:
+                col_id = await conn.fetchval("""
+                    INSERT INTO sql_schema_column (table_id, name, data_type, is_pk, fk_reference)
+                    VALUES ($1, $2, $3, $4, $5) RETURNING id
+                """, table_id, col["name"], col["type"], col["is_pk"], col.get("fk_reference"))
+                embed_queue.append(col_id)
+            added += 1
+
+    # 임베딩 생성
+    if embed_queue:
+        async with get_conn() as conn:
+            rows = await conn.fetch("""
+                SELECT sc.id, sc.name, sc.data_type, sc.description, st.table_name, st.namespace_id
+                FROM sql_schema_column sc
+                JOIN sql_schema_table st ON sc.table_id = st.id
+                WHERE sc.id = ANY($1)
+            """, embed_queue)
+        texts = [
+            f"{r['table_name']}.{r['name']} - {r['description'] or ''} ({r['data_type']})"
+            for r in rows
+        ]
+        embeddings = await embedding_service.embed_batch(texts)
+        async with get_conn() as conn:
+            for row, emb in zip(rows, embeddings):
+                await conn.execute("""
+                    INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
+                    VALUES ($1, $2, $3::vector)
+                    ON CONFLICT (column_id) DO UPDATE SET embedding = EXCLUDED.embedding
+                """, row["id"], namespace_id, str(emb))
+
+    return {"ok": True, "added": added, "skipped": len(table_names) - added}
+
+
+async def delete_table(namespace_id: int, table_name: str) -> bool:
+    """앱 DB에서 테이블 + 컬럼 + 벡터 + 관계를 삭제."""
+    async with get_conn() as conn:
+        table_id = await conn.fetchval(
+            "SELECT id FROM sql_schema_table WHERE namespace_id = $1 AND table_name = $2",
+            namespace_id, table_name,
+        )
+        if not table_id:
+            return False
+        # 벡터 삭제
+        await conn.execute("""
+            DELETE FROM sql_schema_vector WHERE column_id IN (
+                SELECT id FROM sql_schema_column WHERE table_id = $1
+            )
+        """, table_id)
+        # 컬럼 삭제
+        await conn.execute("DELETE FROM sql_schema_column WHERE table_id = $1", table_id)
+        # 관계 삭제
+        await conn.execute("""
+            DELETE FROM sql_relation
+            WHERE namespace_id = $1 AND (from_table = $2 OR to_table = $2)
+        """, namespace_id, table_name)
+        # 테이블 삭제
+        await conn.execute("DELETE FROM sql_schema_table WHERE id = $1", table_id)
+    return True
+
+
 # ── 벡터 검색 ────────────────────────────────────────────────────────────────
 
 async def search_schema(namespace_id: int, query: str, top_k: int = 20, vec: list[float] | None = None) -> list[dict]:

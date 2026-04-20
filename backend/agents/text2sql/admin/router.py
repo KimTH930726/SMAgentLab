@@ -184,6 +184,41 @@ async def reindex_schema(namespace: str, _=Depends(require_admin)):
     return {"ok": True, "tables": tables, "columns": cols}
 
 
+@router.get("/namespaces/{namespace}/schema/tables-available")
+async def get_available_tables(namespace: str, _=Depends(require_admin)):
+    """대상 DB에서 사용 가능한 테이블 목록을 빠르게 조회합니다."""
+    ns_id = await _get_ns_id(namespace)
+    try:
+        return await service.get_table_summary(ns_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class TablesAddPayload(BaseModel):
+    tables: list[str]
+
+
+@router.post("/namespaces/{namespace}/schema/tables/add")
+async def add_tables(namespace: str, body: TablesAddPayload, _=Depends(require_admin)):
+    """선택한 테이블만 증분 추가합니다."""
+    ns_id = await _get_ns_id(namespace)
+    try:
+        result = await service.add_tables(ns_id, body.tables)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/namespaces/{namespace}/schema/tables/{table_name}")
+async def delete_table_by_name(namespace: str, table_name: str, _=Depends(require_admin)):
+    """앱 DB에서 테이블을 삭제합니다 (컬럼, 벡터, 관계 포함)."""
+    ns_id = await _get_ns_id(namespace)
+    deleted = await service.delete_table(ns_id, table_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"테이블을 찾을 수 없습니다: {table_name}")
+    return {"ok": True}
+
+
 @router.put("/namespaces/{namespace}/schema/tables/{table_id}/toggle")
 async def toggle_table(namespace: str, table_id: int, _=Depends(require_admin)):
     async with get_conn() as conn:
@@ -391,6 +426,23 @@ async def delete_synonym(namespace: str, syn_id: int, _=Depends(require_admin)):
     async with get_conn() as conn:
         await conn.execute("DELETE FROM sql_synonym WHERE id = $1", syn_id)
     return {"ok": True}
+
+
+class BulkDeletePayload(BaseModel):
+    ids: list[int]
+
+
+@router.post("/namespaces/{namespace}/synonyms/bulk-delete")
+async def bulk_delete_synonyms(namespace: str, body: BulkDeletePayload, _=Depends(require_admin)):
+    """용어 사전 일괄 삭제."""
+    if not body.ids:
+        return {"ok": True, "deleted": 0}
+    async with get_conn() as conn:
+        deleted = await conn.fetchval(
+            "WITH d AS (DELETE FROM sql_synonym WHERE id = ANY($1) RETURNING 1) SELECT COUNT(*) FROM d",
+            body.ids,
+        )
+    return {"ok": True, "deleted": deleted}
 
 
 @router.post("/namespaces/{namespace}/synonyms/reindex")
@@ -653,6 +705,19 @@ async def delete_fewshot(namespace: str, fs_id: int, _=Depends(require_admin)):
     return {"ok": True}
 
 
+@router.post("/namespaces/{namespace}/fewshots/bulk-delete")
+async def bulk_delete_fewshots(namespace: str, body: BulkDeletePayload, _=Depends(require_admin)):
+    """SQL 예제 일괄 삭제."""
+    if not body.ids:
+        return {"ok": True, "deleted": 0}
+    async with get_conn() as conn:
+        deleted = await conn.fetchval(
+            "WITH d AS (DELETE FROM sql_fewshot WHERE id = ANY($1) RETURNING 1) SELECT COUNT(*) FROM d",
+            body.ids,
+        )
+    return {"ok": True, "deleted": deleted}
+
+
 @router.post("/namespaces/{namespace}/fewshots/reindex")
 async def reindex_fewshots(namespace: str, _=Depends(require_admin)):
     ns_id = await _get_ns_id(namespace)
@@ -816,6 +881,8 @@ async def get_audit_logs(
     page: int = 1,
     limit: int = 50,
     status: str = "all",
+    date_from: str | None = None,
+    date_to: str | None = None,
     _=Depends(require_admin),
 ):
     ns_id = await _get_ns_id(namespace)
@@ -825,6 +892,23 @@ async def get_audit_logs(
     if status != "all":
         params.append(status)
         where += f" AND status = ${len(params)}"
+
+    # 날짜 범위 필터
+    from datetime import datetime
+    if date_from:
+        try:
+            dt_from = datetime.strptime(date_from, "%Y-%m-%d")
+            params.append(dt_from)
+            where += f" AND created_at >= ${len(params)}"
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            params.append(dt_to)
+            where += f" AND created_at <= ${len(params)}"
+        except ValueError:
+            pass
 
     async with get_conn() as conn:
         rows = await conn.fetch(

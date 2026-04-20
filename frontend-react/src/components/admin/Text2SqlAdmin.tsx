@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import {
   Plus, Trash2, RefreshCw, Save, Eye, EyeOff, CheckCircle, XCircle,
   Search, X, Maximize2, Minimize2, Sparkles, Undo2, ZoomIn, ZoomOut,
-  AlertTriangle, ArrowRight, Network,
+  AlertTriangle, ArrowRight, Network, Download, Calendar,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { getNamespaces } from '../../api/namespaces';
@@ -12,14 +12,16 @@ import {
   getTargetDb, upsertTargetDb, testTargetDb, listTargetSchemas, scanSchema,
   getFullSchema, updateSchemaTableDesc, toggleSchemaTable, updateSchemaColumnDesc, reindexSchema,
   saveSchemaPositions,
+  getAvailableTables, addTables, deleteTable,
   listRelations, createRelation, deleteRelation, suggestRelationsAI,
-  listSynonyms, createSynonym, deleteSynonym, reindexSynonyms, generateSynonymsAI,
-  listSqlFewshots, createSqlFewshot, updateSqlFewshotStatus, deleteSqlFewshot, reindexFewshots, generateFewshotsAI,
+  listSynonyms, createSynonym, deleteSynonym, bulkDeleteSynonyms, reindexSynonyms, generateSynonymsAI,
+  listSqlFewshots, createSqlFewshot, updateSqlFewshotStatus, deleteSqlFewshot, bulkDeleteFewshots, reindexFewshots, generateFewshotsAI,
   listPipelineStages, togglePipelineStage,
   listAuditLogs,
   listSqlCache, deleteSqlCacheEntry, clearSqlCache,
   type SchemaTableWithCols,
   type ScanReport,
+  type TableSummary,
 } from '../../api/text2sql';
 import { Button } from '../ui/Button';
 import { Pagination, PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
@@ -297,6 +299,12 @@ function SchemaTab() {
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importTables, setImportTables] = useState<TableSummary[]>([]);
+  const [importSelected, setImportSelected] = useState<Set<string>>(new Set());
+  const [importSearch, setImportSearch] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const { data: schema = [], isLoading } = useQuery({
     queryKey: ['sql_schema', ns],
@@ -322,14 +330,66 @@ function SchemaTab() {
     mutationFn: ({ id, description }: { id: number; description: string }) => updateSchemaTableDesc(ns, id, description),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_schema', ns] }),
   });
+  const deleteTableMut = useMutation({
+    mutationFn: (tableName: string) => deleteTable(ns, tableName),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sql_schema', ns] });
+      qc.invalidateQueries({ queryKey: ['sql_relations', ns] });
+      setDeleteConfirm(null);
+    },
+  });
 
+  // 스키마 검색: null 방어 + 와일드카드 부분 매칭
+  const _m = (hay: string | null | undefined, needle: string) => (hay || '').toLowerCase().includes(needle);
   const lowSearch = search.toLowerCase();
   const filteredSchema = search
-    ? schema.filter((t) =>
-        t.table_name.toLowerCase().includes(lowSearch) ||
-        t.columns.some((c) => c.name.toLowerCase().includes(lowSearch) || c.description.toLowerCase().includes(lowSearch))
-      )
+    ? (() => {
+        // 와일드카드(*) 검색
+        if (search.includes('*')) {
+          const pattern = search.replace(/\*/g, '.*');
+          try {
+            const re = new RegExp(pattern, 'i');
+            return schema.filter((t) =>
+              re.test(t.table_name) ||
+              re.test(t.description || '') ||
+              t.columns.some((c) => re.test(c.name) || re.test(c.description || ''))
+            );
+          } catch { /* invalid regex fallback to normal search */ }
+        }
+        return schema.filter((t) =>
+          _m(t.table_name, lowSearch) ||
+          _m(t.description, lowSearch) ||
+          t.columns.some((c) => _m(c.name, lowSearch) || _m(c.description, lowSearch))
+        );
+      })()
     : schema;
+
+  const openImportModal = async () => {
+    try {
+      const tables = await getAvailableTables(ns);
+      setImportTables(tables);
+      setImportSelected(new Set());
+      setImportSearch('');
+      setShowImportModal(true);
+    } catch (e: any) {
+      alert(`테이블 조회 실패: ${e.message}`);
+    }
+  };
+
+  const handleImport = async () => {
+    if (importSelected.size === 0) return;
+    setImporting(true);
+    try {
+      const result = await addTables(ns, Array.from(importSelected));
+      alert(`${result.added}개 테이블 추가 완료` + (result.skipped > 0 ? ` (${result.skipped}건 이미 등록됨)` : ''));
+      qc.invalidateQueries({ queryKey: ['sql_schema', ns] });
+      setShowImportModal(false);
+    } catch (e: any) {
+      alert(`오류: ${e.message}`);
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const currentTable = filteredSchema.find((t) => t.table_name === selectedTable) ?? filteredSchema[0] ?? null;
 
@@ -352,10 +412,13 @@ function SchemaTab() {
           )}
         </div>
         {ns && (
-          <div className="text-xs text-slate-500">
+          <div className="flex items-center gap-2 text-xs text-slate-500">
             {filteredSchema.length}건
-            <Button size="sm" variant="secondary" className="ml-3" onClick={() => reindexMut.mutate()} disabled={reindexMut.isPending}>
+            <Button size="sm" variant="secondary" onClick={() => reindexMut.mutate()} disabled={reindexMut.isPending}>
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> 재인덱싱
+            </Button>
+            <Button size="sm" onClick={openImportModal}>
+              <Download className="w-3.5 h-3.5 mr-1" /> 테이블 불러오기
             </Button>
           </div>
         )}
@@ -368,15 +431,15 @@ function SchemaTab() {
           {/* Table tabs */}
           <div className="flex gap-1 overflow-x-auto pb-1 border-b border-slate-700">
             {filteredSchema.map((t) => (
-              <button
+              <div
                 key={t.table_name}
-                onClick={() => setSelectedTable(t.table_name)}
                 className={clsx(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg text-xs whitespace-nowrap transition-colors flex-shrink-0',
+                  'schema-table-row flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg text-xs whitespace-nowrap transition-colors flex-shrink-0 cursor-pointer group/tab',
                   currentTable?.table_name === t.table_name
                     ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-600/40 border-b-transparent'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800',
                 )}
+                onClick={() => setSelectedTable(t.table_name)}
               >
                 <input
                   type="checkbox"
@@ -387,7 +450,14 @@ function SchemaTab() {
                 />
                 <span>{t.table_name}</span>
                 <span className="text-slate-500">{t.columns.length}</span>
-              </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setDeleteConfirm(t.table_name); }}
+                  className="hidden group-hover/tab:flex items-center justify-center w-4 h-4 text-rose-400 hover:text-rose-300 ml-1"
+                  title="테이블 삭제"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
             ))}
           </div>
 
@@ -450,12 +520,108 @@ function SchemaTab() {
           )}
 
           {filteredSchema.length === 0 && (
-            <p className="text-slate-500 text-sm text-center py-8">
-              {search ? '검색 결과가 없습니다.' : '스키마가 없습니다. 대상 DB 탭에서 스캔하세요.'}
-            </p>
+            <div className="text-center py-12">
+              <p className="text-slate-500 text-sm mb-3">
+                {search ? '검색 결과가 없습니다.' : '등록된 테이블이 없습니다.'}
+              </p>
+              {!search && (
+                <Button size="sm" onClick={openImportModal}>
+                  <Download className="w-3.5 h-3.5 mr-1" /> 테이블 불러오기
+                </Button>
+              )}
+            </div>
           )}
         </>
       )}
+
+      {/* Table Import Modal */}
+      <Modal isOpen={showImportModal} onClose={() => setShowImportModal(false)} title="테이블 불러오기">
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+            <input
+              value={importSearch}
+              onChange={(e) => setImportSearch(e.target.value)}
+              placeholder="테이블 검색..."
+              className="pl-8 pr-3 py-2 w-full bg-slate-800 border border-slate-600 rounded-lg text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <button
+              onClick={() => {
+                const existingNames = new Set(schema.map(t => t.table_name.toLowerCase()));
+                const newTables = importTables.filter(t => !existingNames.has(t.table.toLowerCase()));
+                const filtered = importSearch
+                  ? newTables.filter(t => t.table.toLowerCase().includes(importSearch.toLowerCase()))
+                  : newTables;
+                setImportSelected(new Set(filtered.map(t => t.table)));
+              }}
+              className="text-indigo-400 hover:text-indigo-300"
+            >
+              전체 선택
+            </button>
+            <span>/</span>
+            <button onClick={() => setImportSelected(new Set())} className="text-indigo-400 hover:text-indigo-300">전체 해제</button>
+          </div>
+          <div className="max-h-80 overflow-y-auto space-y-1">
+            {importTables
+              .filter(t => !importSearch || t.table.toLowerCase().includes(importSearch.toLowerCase()))
+              .map(t => {
+                const alreadyExists = schema.some(s => s.table_name.toLowerCase() === t.table.toLowerCase());
+                return (
+                  <label
+                    key={t.table}
+                    className={clsx(
+                      'flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer text-sm',
+                      alreadyExists ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-800',
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      disabled={alreadyExists}
+                      checked={alreadyExists || importSelected.has(t.table)}
+                      onChange={() => {
+                        if (alreadyExists) return;
+                        const next = new Set(importSelected);
+                        if (next.has(t.table)) next.delete(t.table);
+                        else next.add(t.table);
+                        setImportSelected(next);
+                      }}
+                      className="w-3.5 h-3.5 rounded accent-indigo-500"
+                    />
+                    <span className={alreadyExists ? 'text-slate-500' : 'text-slate-300'}>{t.table}</span>
+                    <span className="text-xs text-slate-500 ml-auto">{t.column_count}컬럼</span>
+                    {alreadyExists && <span className="text-[10px] text-slate-500 bg-slate-700 px-1.5 py-0.5 rounded">등록됨</span>}
+                  </label>
+                );
+              })}
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" onClick={() => setShowImportModal(false)}>취소</Button>
+            <Button onClick={handleImport} disabled={importing || importSelected.size === 0}>
+              {importing ? '가져오는 중...' : `가져오기 (${importSelected.size}개)`}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Table Delete Confirm Modal */}
+      <Modal isOpen={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="테이블 삭제">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-300">
+            <span className="font-mono text-rose-400">{deleteConfirm}</span> 테이블을 삭제하시겠습니까?
+            <br />
+            <span className="text-xs text-slate-500">컬럼, 벡터, 관련 관계가 모두 삭제됩니다.</span>
+          </p>
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" onClick={() => setDeleteConfirm(null)}>취소</Button>
+            <Button className="bg-rose-600 hover:bg-rose-500 text-white" onClick={() => deleteConfirm && deleteTableMut.mutate(deleteConfirm)}
+              disabled={deleteTableMut.isPending}>
+              {deleteTableMut.isPending ? '삭제 중...' : '삭제'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -1264,6 +1430,7 @@ function SynonymTab() {
   const [search, setSearch] = useState('');
   const [form, setForm] = useState<Omit<SqlSynonym, 'id'>>({ term: '', target: '', description: '' });
   const [editing, setEditing] = useState<SqlSynonym | null>(null);
+  const [checked, setChecked] = useState<Set<number>>(new Set());
 
   const { data: synonyms = [] } = useQuery({ queryKey: ['sql_synonyms', ns], queryFn: () => listSynonyms(ns), enabled: !!ns });
   const addMut = useMutation({
@@ -1273,6 +1440,10 @@ function SynonymTab() {
   const delMut = useMutation({
     mutationFn: (id: number) => deleteSynonym(ns, id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_synonyms', ns] }),
+  });
+  const bulkDelMut = useMutation({
+    mutationFn: (ids: number[]) => bulkDeleteSynonyms(ns, ids),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['sql_synonyms', ns] }); setChecked(new Set()); },
   });
   const reindexMut = useMutation({ mutationFn: () => reindexSynonyms(ns) });
   const aiGenMut = useMutation({
@@ -1306,7 +1477,7 @@ function SynonymTab() {
   const synPaging = useClientPaging(filtered, synPageSize);
   const pagedFiltered = synPaging.slice(synPage);
 
-  useEffect(() => { setSynPage(1); }, [search, synPageSize]);
+  useEffect(() => { setSynPage(1); setChecked(new Set()); }, [search, synPageSize]);
 
   return (
     <div className="space-y-4">
@@ -1315,6 +1486,13 @@ function SynonymTab() {
         <NsSelect ns={ns} setNs={setNs} namespaces={namespaces} />
         {ns && (
           <div className="flex gap-2">
+            {checked.size > 0 && (
+              <Button size="sm" className="bg-rose-700 hover:bg-rose-600 text-white"
+                onClick={() => { if (confirm(`${checked.size}건을 삭제하시겠습니까?`)) bulkDelMut.mutate(Array.from(checked)); }}
+                disabled={bulkDelMut.isPending}>
+                <Trash2 className="w-3.5 h-3.5 mr-1" /> 선택 삭제 ({checked.size})
+              </Button>
+            )}
             <Button size="sm" variant="secondary" onClick={() => reindexMut.mutate()} disabled={reindexMut.isPending}>
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> 재인덱싱
             </Button>
@@ -1377,8 +1555,34 @@ function SynonymTab() {
               <p className="text-slate-500 text-sm text-center py-8">{search ? '검색 결과가 없습니다.' : '등록된 용어가 없습니다.'}</p>
             ) : (
               <div className="divide-y divide-slate-700/60">
+                {/* 전체 선택 헤더 */}
+                <div className="flex items-center gap-4 px-4 py-2 bg-slate-800/60 text-xs text-slate-500">
+                  <input
+                    type="checkbox"
+                    checked={pagedFiltered.length > 0 && pagedFiltered.every(s => checked.has(s.id))}
+                    onChange={() => {
+                      const allIds = pagedFiltered.map(s => s.id);
+                      const allChecked = allIds.every(id => checked.has(id));
+                      const next = new Set(checked);
+                      allIds.forEach(id => allChecked ? next.delete(id) : next.add(id));
+                      setChecked(next);
+                    }}
+                    className="w-3 h-3 rounded accent-indigo-500"
+                  />
+                  <span>전체 선택</span>
+                </div>
                 {pagedFiltered.map((s) => (
-                  <div key={s.id} className="flex items-center gap-4 px-4 py-3 hover:bg-slate-800/40 group">
+                  <div key={s.id} className={clsx('flex items-center gap-4 px-4 py-3 hover:bg-slate-800/40 group', checked.has(s.id) && 'bg-indigo-900/10')}>
+                    <input
+                      type="checkbox"
+                      checked={checked.has(s.id)}
+                      onChange={() => {
+                        const next = new Set(checked);
+                        if (next.has(s.id)) next.delete(s.id); else next.add(s.id);
+                        setChecked(next);
+                      }}
+                      className="w-3 h-3 rounded accent-indigo-500 flex-shrink-0"
+                    />
                     <span className="text-sm text-slate-200 font-medium w-24 flex-shrink-0">{s.term}</span>
                     <code className="flex-1 text-xs text-orange-400 font-mono truncate">{s.target}</code>
                     <span className="text-xs text-slate-500 w-40 truncate">{s.description}</span>
@@ -1441,6 +1645,7 @@ function FewshotTab() {
   const [form, setForm] = useState<Omit<SqlFewshot, 'id' | 'hits'>>({ question: '', sql: '', category: '', status: 'approved' });
   const [expanded, setExpanded] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<FewshotStatusFilter>('all');
+  const [fsChecked, setFsChecked] = useState<Set<number>>(new Set());
 
   const { data: fewshots = [] } = useQuery({
     queryKey: ['sql_fewshots', ns, statusFilter],
@@ -1457,6 +1662,10 @@ function FewshotTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_fewshots', ns] }),
   });
   const delMut = useMutation({ mutationFn: (id: number) => deleteSqlFewshot(ns, id), onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_fewshots', ns] }) });
+  const bulkDelMut = useMutation({
+    mutationFn: (ids: number[]) => bulkDeleteFewshots(ns, ids),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['sql_fewshots', ns] }); setFsChecked(new Set()); },
+  });
   const reindexMut = useMutation({ mutationFn: () => reindexFewshots(ns) });
   const aiGenMut = useMutation({
     mutationFn: () => generateFewshotsAI(ns),
@@ -1473,7 +1682,7 @@ function FewshotTab() {
   const fsPaging = useClientPaging(fewshots, fsPageSize);
   const pagedFewshots = fsPaging.slice(fsPage);
 
-  useEffect(() => { setFsPage(1); }, [statusFilter, fsPageSize]);
+  useEffect(() => { setFsPage(1); setFsChecked(new Set()); }, [statusFilter, fsPageSize]);
 
   return (
     <div className="space-y-4">
@@ -1481,6 +1690,13 @@ function FewshotTab() {
         <NsSelect ns={ns} setNs={setNs} namespaces={namespaces} />
         {ns && (
           <div className="flex gap-2">
+            {fsChecked.size > 0 && (
+              <Button size="sm" className="bg-rose-700 hover:bg-rose-600 text-white"
+                onClick={() => { if (confirm(`${fsChecked.size}건을 삭제하시겠습니까?`)) bulkDelMut.mutate(Array.from(fsChecked)); }}
+                disabled={bulkDelMut.isPending}>
+                <Trash2 className="w-3.5 h-3.5 mr-1" /> 선택 삭제 ({fsChecked.size})
+              </Button>
+            )}
             <Button size="sm" variant="secondary" onClick={() => reindexMut.mutate()} disabled={reindexMut.isPending}>
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> 재인덱싱
             </Button>
@@ -1519,12 +1735,39 @@ function FewshotTab() {
 
           <div className="rounded-xl border border-slate-700 overflow-hidden divide-y divide-slate-700/60">
             {pagedFewshots.length === 0 && <p className="text-slate-500 text-sm text-center py-8">예제가 없습니다.</p>}
+            {pagedFewshots.length > 0 && (
+              <div className="flex items-center gap-3 px-4 py-2 bg-slate-800/60 text-xs text-slate-500">
+                <input
+                  type="checkbox"
+                  checked={pagedFewshots.length > 0 && pagedFewshots.every(f => fsChecked.has(f.id))}
+                  onChange={() => {
+                    const allIds = pagedFewshots.map(f => f.id);
+                    const allChecked = allIds.every(id => fsChecked.has(id));
+                    const next = new Set(fsChecked);
+                    allIds.forEach(id => allChecked ? next.delete(id) : next.add(id));
+                    setFsChecked(next);
+                  }}
+                  className="w-3 h-3 rounded accent-indigo-500"
+                />
+                <span>전체 선택</span>
+              </div>
+            )}
             {pagedFewshots.map((f) => {
               const st = STATUS_LABELS[f.status] ?? STATUS_LABELS.approved;
               const isExpanded = expanded === f.id;
               return (
-                <div key={f.id} className="hover:bg-slate-800/30">
+                <div key={f.id} className={clsx('hover:bg-slate-800/30', fsChecked.has(f.id) && 'border-l-2 border-l-indigo-500')}>
                   <div className="flex items-start gap-3 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={fsChecked.has(f.id)}
+                      onChange={() => {
+                        const next = new Set(fsChecked);
+                        if (next.has(f.id)) next.delete(f.id); else next.add(f.id);
+                        setFsChecked(next);
+                      }}
+                      className="w-3 h-3 rounded accent-indigo-500 mt-1.5 flex-shrink-0"
+                    />
                     {/* 좌: 질문 + SQL 미리보기 */}
                     <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setExpanded(isExpanded ? null : f.id)}>
                       <div className="flex items-center gap-2 flex-wrap mb-1">
@@ -1596,7 +1839,7 @@ function FewshotTab() {
           </div>
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" onClick={() => setShowAdd(false)}>취소</Button>
-            <Button onClick={() => addMut.mutate()} disabled={addMut.isPending}>저장</Button>
+            <Button onClick={() => addMut.mutate()} disabled={addMut.isPending || !form.question || !form.sql.trim()}>저장</Button>
           </div>
         </div>
       </Modal>
@@ -1764,12 +2007,54 @@ function AuditLogTab() {
   const { ns, setNs, namespaces } = useNamespace();
   const [page, setPage] = useState(1);
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const { data, isLoading } = useQuery({ queryKey: ['sql_audit_logs', ns, page], queryFn: () => listAuditLogs(ns, page, 50), enabled: !!ns });
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const { data, isLoading } = useQuery({
+    queryKey: ['sql_audit_logs', ns, page, dateFrom, dateTo],
+    queryFn: () => listAuditLogs(ns, page, 50, { dateFrom: dateFrom || undefined, dateTo: dateTo || undefined }),
+    enabled: !!ns,
+  });
   const statusColor = (s: string) => ({ success: 'text-emerald-400 bg-emerald-900/20', error: 'text-rose-400 bg-rose-900/20', blocked: 'text-amber-400 bg-amber-900/20' }[s] ?? 'text-slate-400 bg-slate-700/20');
+
+  const exportCsv = () => {
+    const items = data?.items ?? [];
+    if (items.length === 0) return;
+    const BOM = '\uFEFF';
+    const header = 'ID,일시,질문,SQL,상태,소요(ms),캐시,오류';
+    const rows = items.map((l: SqlAuditLog) =>
+      [l.id, l.created_at, `"${(l.question || '').replace(/"/g, '""')}"`, `"${(l.sql || '').replace(/"/g, '""')}"`, l.status, l.duration_ms, l.cached ? 'Y' : 'N', `"${(l.error || '').replace(/"/g, '""')}"`].join(',')
+    );
+    const blob = new Blob([BOM + header + '\n' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `audit_${ns}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="space-y-4">
-      <NsSelect ns={ns} setNs={setNs} namespaces={namespaces} />
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <NsSelect ns={ns} setNs={setNs} namespaces={namespaces} />
+        {ns && (
+          <div className="flex items-center gap-2">
+            <Calendar className="w-3.5 h-3.5 text-slate-500" />
+            <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+              className="bg-slate-800 border border-slate-600 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none focus:border-indigo-500" />
+            <span className="text-xs text-slate-500">~</span>
+            <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+              className="bg-slate-800 border border-slate-600 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none focus:border-indigo-500" />
+            {(dateFrom || dateTo) && (
+              <button onClick={() => { setDateFrom(''); setDateTo(''); setPage(1); }}
+                className="text-xs text-slate-500 hover:text-slate-300">초기화</button>
+            )}
+            <Button size="sm" variant="secondary" onClick={exportCsv} disabled={(data?.items ?? []).length === 0}>
+              <Download className="w-3.5 h-3.5 mr-1" /> CSV
+            </Button>
+          </div>
+        )}
+      </div>
       {ns && (
         <>
           {isLoading ? <p className="text-slate-400 text-sm">로딩 중...</p> : (
@@ -1816,14 +2101,32 @@ function AuditLogTab() {
 function CacheTab() {
   const { ns, setNs, namespaces } = useNamespace();
   const qc = useQueryClient();
+  const [cacheSearch, setCacheSearch] = useState('');
   const { data: entries = [], isLoading } = useQuery({ queryKey: ['sql_cache', ns], queryFn: () => listSqlCache(ns), enabled: !!ns });
   const delMut = useMutation({ mutationFn: (id: number) => deleteSqlCacheEntry(ns, id), onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_cache', ns] }) });
   const clearMut = useMutation({ mutationFn: () => clearSqlCache(ns), onSuccess: () => qc.invalidateQueries({ queryKey: ['sql_cache', ns] }) });
 
+  const filteredEntries = cacheSearch
+    ? entries.filter((e: SqlCacheEntry) => e.question.toLowerCase().includes(cacheSearch.toLowerCase()) || e.sql.toLowerCase().includes(cacheSearch.toLowerCase()))
+    : entries;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <NsSelect ns={ns} setNs={setNs} namespaces={namespaces} />
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <NsSelect ns={ns} setNs={setNs} namespaces={namespaces} />
+          {ns && (
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
+              <input
+                value={cacheSearch}
+                onChange={(e) => setCacheSearch(e.target.value)}
+                placeholder="캐시 검색..."
+                className="pl-8 pr-3 py-1.5 bg-slate-800 border border-slate-600 rounded-lg text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:border-indigo-500 w-48"
+              />
+            </div>
+          )}
+        </div>
         {ns && entries.length > 0 && (
           <Button size="sm" variant="secondary" onClick={() => { if (confirm('전체 캐시를 삭제하시겠습니까?')) clearMut.mutate(); }}>
             <X className="w-3.5 h-3.5 mr-1" /> 전체 삭제
@@ -1834,8 +2137,8 @@ function CacheTab() {
         <>
           {isLoading ? <p className="text-slate-400 text-sm">로딩 중...</p> : (
             <div className="rounded-xl border border-slate-700 overflow-hidden divide-y divide-slate-700/60">
-              {entries.length === 0 && <p className="text-slate-500 text-sm text-center py-8">캐시가 없습니다.</p>}
-              {entries.map((e: SqlCacheEntry) => (
+              {filteredEntries.length === 0 && <p className="text-slate-500 text-sm text-center py-8">{cacheSearch ? '검색 결과가 없습니다.' : '캐시가 없습니다.'}</p>}
+              {filteredEntries.map((e: SqlCacheEntry) => (
                 <div key={e.id} className="flex items-start gap-3 px-4 py-3 hover:bg-slate-800/30 group">
                   <div className="flex-1 min-w-0 space-y-1">
                     <p className="text-sm text-slate-300 truncate">{e.question}</p>

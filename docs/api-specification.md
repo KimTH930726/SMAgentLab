@@ -1548,6 +1548,60 @@ Few-shot 상태 변경 (관리자 전용).
 
 **Response `200`**: `{ "ok": true }`
 
+### GET /api/text2sql/namespaces/{ns}/schema/tables-available
+
+대상 DB에서 사용 가능한 테이블 요약 조회 (빠른 조회 — 전체 inspect 없이).
+
+**Response `200`**
+```json
+[
+  { "table": "users", "column_count": 12 },
+  { "table": "orders", "column_count": 8 }
+]
+```
+
+### POST /api/text2sql/namespaces/{ns}/schema/tables/add
+
+선택한 테이블만 증분 추가. 이미 등록된 테이블은 skip.
+
+**Request Body**
+```json
+{ "tables": ["users", "orders"] }
+```
+
+**Response `200`**
+```json
+{ "ok": true, "added": 2, "skipped": 0 }
+```
+
+### DELETE /api/text2sql/namespaces/{ns}/schema/tables/{table_name}
+
+앱 DB에서 테이블 삭제 (컬럼, 벡터, 관계 cascade).
+
+**Response `200`**: `{ "ok": true }`
+
+### POST /api/text2sql/namespaces/{ns}/synonyms/bulk-delete
+
+용어 사전 일괄 삭제.
+
+**Request Body**: `{ "ids": [1, 2, 3] }`
+
+**Response `200`**: `{ "ok": true, "deleted": 3 }`
+
+### POST /api/text2sql/namespaces/{ns}/fewshots/bulk-delete
+
+SQL 예제 일괄 삭제.
+
+**Request Body**: `{ "ids": [4, 5, 6] }`
+
+**Response `200`**: `{ "ok": true, "deleted": 3 }`
+
+### GET /api/text2sql/namespaces/{ns}/audit-logs
+
+감사 로그 조회. v2.12부터 날짜 범위 필터 지원.
+
+**Query Parameters**: `page`, `limit`, `status`, `date_from` (YYYY-MM-DD), `date_to` (YYYY-MM-DD)
+
 ---
 
 ## 14. 공통 에러 코드

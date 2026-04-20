@@ -19,6 +19,7 @@ from service.feedback.router import router as feedback_router
 from service.admin.router import router as admin_router
 from service.mcp_tool.router import router as mcp_tool_router
 from service.prompt.router import router as prompt_router
+from service.teams.router import router as teams_router
 from agents.text2sql.admin.router import router as text2sql_router
 
 from shared import cache as sem_cache
@@ -34,6 +35,7 @@ _ROUTERS = [
     fewshot_router, feedback_router, admin_router,
     mcp_tool_router,
     prompt_router,
+    teams_router,
     text2sql_router,
 ]
 
@@ -78,6 +80,7 @@ async def _migrate_core_tables(conn) -> None:
 
     # ── part_id 컬럼 추가 (integer FK) ──────────────────────────
     await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS part_id INT")
+    await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS encrypted_confluence_pat TEXT")
     await conn.execute("""
         DO $$ BEGIN
             IF NOT EXISTS (
@@ -234,8 +237,8 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS meta JSONB")
-    await conn.execute("ALTER TABLE ops_mcp_tool ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
-    await conn.execute("ALTER TABLE sql_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'")
+    await conn.execute("ALTER TABLE IF EXISTS ops_mcp_tool ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
+    await conn.execute("ALTER TABLE IF EXISTS sql_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'")
 
     # ── query_log answer 역매칭 ────────────────────────────────────
     await conn.execute("""
@@ -996,3 +999,5 @@ async def health():
         "llm_provider": settings.llm_provider,
         "llm": "connected" if llm_ok else "unavailable",
     }
+# TC test
+# main version

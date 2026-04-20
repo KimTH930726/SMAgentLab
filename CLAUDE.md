@@ -14,7 +14,7 @@
 
 ## 코드 스타일
 - Python: 타입힌트 사용, async/await 패턴
-- TypeScript: strict mode, ㅊ함수형 컴포넌트 + hooks
+- TypeScript: strict mode, 함수형 컴포넌트 + hooks
 - CSS: TailwindCSS v3 유틸리티 클래스 (커스텀 CSS 지양)
 - 색상: bg #0F172A, card #1E293B, accent #6366F1
 

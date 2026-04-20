@@ -86,6 +86,23 @@ export async function saveSchemaPositions(namespace: string, positions: Record<s
   await apiFetch(`${ns(namespace)}/schema/positions`, { method: 'PUT', body: JSON.stringify({ positions }) });
 }
 
+export interface TableSummary {
+  table: string;
+  column_count: number;
+}
+
+export async function getAvailableTables(namespace: string): Promise<TableSummary[]> {
+  return apiFetch<TableSummary[]>(`${ns(namespace)}/schema/tables-available`);
+}
+
+export async function addTables(namespace: string, tables: string[]): Promise<{ ok: boolean; added: number; skipped: number }> {
+  return apiFetch(`${ns(namespace)}/schema/tables/add`, { method: 'POST', body: JSON.stringify({ tables }) });
+}
+
+export async function deleteTable(namespace: string, tableName: string): Promise<void> {
+  await apiFetch(`${ns(namespace)}/schema/tables/${encodeURIComponent(tableName)}`, { method: 'DELETE' });
+}
+
 // ── Relations ─────────────────────────────────────────────────────────────────
 
 export async function listRelations(namespace: string): Promise<SqlRelation[]> {
@@ -121,6 +138,10 @@ export async function deleteSynonym(namespace: string, id: number): Promise<void
   await apiFetch(`${ns(namespace)}/synonyms/${id}`, { method: 'DELETE' });
 }
 
+export async function bulkDeleteSynonyms(namespace: string, ids: number[]): Promise<{ deleted: number }> {
+  return apiFetch(`${ns(namespace)}/synonyms/bulk-delete`, { method: 'POST', body: JSON.stringify({ ids }) });
+}
+
 export async function reindexSynonyms(namespace: string): Promise<{ count: number }> {
   return apiFetch(`${ns(namespace)}/synonyms/reindex`, { method: 'POST' });
 }
@@ -154,6 +175,10 @@ export async function deleteSqlFewshot(namespace: string, id: number): Promise<v
   await apiFetch(`${ns(namespace)}/fewshots/${id}`, { method: 'DELETE' });
 }
 
+export async function bulkDeleteFewshots(namespace: string, ids: number[]): Promise<{ deleted: number }> {
+  return apiFetch(`${ns(namespace)}/fewshots/bulk-delete`, { method: 'POST', body: JSON.stringify({ ids }) });
+}
+
 export async function reindexFewshots(namespace: string): Promise<{ count: number }> {
   return apiFetch(`${ns(namespace)}/fewshots/reindex`, { method: 'POST' });
 }
@@ -174,8 +199,15 @@ export async function togglePipelineStage(id: string, isEnabled: boolean): Promi
 
 // ── Audit Log ─────────────────────────────────────────────────────────────────
 
-export async function listAuditLogs(namespace: string, page = 1, limit = 50): Promise<{ items: SqlAuditLog[]; total: number }> {
-  return apiFetch(`${ns(namespace)}/audit-logs?page=${page}&limit=${limit}`);
+export async function listAuditLogs(
+  namespace: string, page = 1, limit = 50,
+  opts?: { status?: string; dateFrom?: string; dateTo?: string },
+): Promise<{ items: SqlAuditLog[]; total: number }> {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (opts?.status && opts.status !== 'all') params.set('status', opts.status);
+  if (opts?.dateFrom) params.set('date_from', opts.dateFrom);
+  if (opts?.dateTo) params.set('date_to', opts.dateTo);
+  return apiFetch(`${ns(namespace)}/audit-logs?${params}`);
 }
 
 // ── Cache ─────────────────────────────────────────────────────────────────────

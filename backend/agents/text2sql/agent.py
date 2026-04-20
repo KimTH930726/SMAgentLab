@@ -160,6 +160,11 @@ class Text2SqlAgent(AgentBase):
                 if "execute_error" in exec_result:
                     error_msg = exec_result["execute_error"]
                     status = "error"
+                    # auto-fix 재시도 후 실패한 경우, 최종 SQL을 UI에 전송하여 에러와 SQL이 일치하도록
+                    if pipeline_ctx.get("sql") and pipeline_ctx["sql"] != sql_result:
+                        yield {"type": "sql", "sql": pipeline_ctx["sql"],
+                               "reasoning": "", "cached": False}
+                        sql_result = pipeline_ctx["sql"]
                     yield {"type": "token", "data": f"쿼리 실행 실패: {error_msg}"}
                 else:
                     pipeline_ctx.update(exec_result)

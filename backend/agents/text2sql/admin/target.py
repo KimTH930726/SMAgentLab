@@ -44,6 +44,11 @@ class BaseDialect(ABC):
     async def get_tables(self, conn: Any, schema: str | None) -> list[dict]:
         ...
 
+    async def get_table_summary(self, conn: Any, schema: str | None) -> list[dict]:
+        """테이블 이름 + 컬럼 수만 빠르게 반환 (기본: get_tables fallback)."""
+        tables = await self.get_tables(conn, schema)
+        return [{"table": t["table_name"], "column_count": len(t.get("columns", []))} for t in tables]
+
     @abstractmethod
     async def execute_query(self, conn: Any, sql: str, max_rows: int) -> dict:
         ...
@@ -69,6 +74,19 @@ class PgDialect(BaseDialect):
             ORDER BY schema_name
         """)
         return [r["schema_name"] for r in rows]
+
+    async def get_table_summary(self, conn, schema) -> list[dict]:
+        schema = schema or "public"
+        rows = await conn.fetch("""
+            SELECT t.table_name AS table,
+                   COUNT(c.column_name) AS column_count
+            FROM information_schema.tables t
+            LEFT JOIN information_schema.columns c
+                ON t.table_name = c.table_name AND t.table_schema = c.table_schema
+            WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
+            GROUP BY t.table_name ORDER BY t.table_name
+        """, schema)
+        return [dict(r) for r in rows]
 
     async def get_tables(self, conn, schema) -> list[dict]:
         schema = schema or "public"
@@ -152,6 +170,18 @@ class MysqlDialect(BaseDialect):
             )
             return [r[0] for r in await cur.fetchall()]
 
+    async def get_table_summary(self, conn, schema) -> list[dict]:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT t.table_name AS `table`, COUNT(c.column_name) AS column_count "
+                "FROM information_schema.tables t "
+                "LEFT JOIN information_schema.columns c "
+                "  ON t.table_name = c.table_name AND t.table_schema = c.table_schema "
+                "WHERE t.table_schema = DATABASE() AND t.table_type = 'BASE TABLE' "
+                "GROUP BY t.table_name ORDER BY t.table_name"
+            )
+            return [{"table": r[0], "column_count": r[1]} for r in await cur.fetchall()]
+
     async def get_tables(self, conn, schema) -> list[dict]:
         # MySQL: schema = database name (DATABASE() 사용)
         async with conn.cursor() as cur:
@@ -214,6 +244,18 @@ class SqliteDialect(BaseDialect):
     async def get_schemas(self, conn) -> list[str]:
         return ["main"]
 
+    async def get_table_summary(self, conn, schema) -> list[dict]:
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ) as cur:
+            table_rows = await cur.fetchall()
+        result = []
+        for (tname,) in table_rows:
+            async with conn.execute(f"PRAGMA table_info({tname})") as cur2:
+                cols = await cur2.fetchall()
+            result.append({"table": tname, "column_count": len(cols)})
+        return result
+
     async def get_tables(self, conn, schema) -> list[dict]:
         async with conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
@@ -267,6 +309,23 @@ class OracleDialect(BaseDialect):
                 "ORDER BY username"
             )
             result = [r[0] for r in cur.fetchall()]
+            cur.close()
+            return result
+        return await asyncio.to_thread(_fetch)
+
+    async def get_table_summary(self, conn, schema) -> list[dict]:
+        owner = (schema or conn.username).upper()
+        def _fetch():
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT t.table_name, COUNT(c.column_name) "
+                "FROM all_tables t "
+                "LEFT JOIN all_tab_columns c ON t.table_name = c.table_name AND t.owner = c.owner "
+                "WHERE t.owner = :o "
+                "GROUP BY t.table_name ORDER BY t.table_name",
+                {"o": owner},
+            )
+            result = [{"table": r[0], "column_count": r[1]} for r in cur.fetchall()]
             cur.close()
             return result
         return await asyncio.to_thread(_fetch)
@@ -430,11 +489,23 @@ class TargetDBManager:
         finally:
             await self.close()
 
-    async def get_tables(self) -> list[dict]:
-        """테이블 목록 + 컬럼 정보 반환."""
+    async def get_table_summary(self) -> list[dict]:
+        """테이블 이름 + 컬럼 수만 빠르게 반환 (전체 inspect 대비 훨씬 빠름)."""
         await self.connect()
         try:
-            return await self._dialect.get_tables(self._conn, self.schema_name)
+            return await self._dialect.get_table_summary(self._conn, self.schema_name)
+        finally:
+            await self.close()
+
+    async def get_tables(self, only: list[str] | None = None) -> list[dict]:
+        """테이블 목록 + 컬럼 정보 반환. only가 지정되면 해당 테이블만 inspect."""
+        await self.connect()
+        try:
+            tables = await self._dialect.get_tables(self._conn, self.schema_name)
+            if only:
+                only_lower = {t.lower() for t in only}
+                tables = [t for t in tables if t["table_name"].lower() in only_lower]
+            return tables
         finally:
             await self.close()
 
