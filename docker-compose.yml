@@ -49,6 +49,8 @@ services:
       FERNET_SECRET_KEY: ${FERNET_SECRET_KEY:-}
       ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD:-1111}
       REDIS_URL: redis://ops-redis:6379/0
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
       # 나머지 설정은 backend/core/config.py 코드 기본값 사용
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -62,6 +64,8 @@ services:
       - model-cache:/root/.cache/huggingface
       # 폐쇄망: 소스 볼륨 마운트 (restart만으로 소스 반영)
       - ./backend:/app
+      # Teams 헬퍼 에셋 — /api/teams-collect/helper/download 엔드포인트가 dist/OpsNavHelper.exe 서빙
+      - ./scripts:/app/helper_assets:ro
 
   # ─── React Frontend (nginx) ───────────────────────────────────
   frontend:
