@@ -1,5 +1,6 @@
 """Few-shot CRUD — 네임스페이스 소유 파트 기반 권한."""
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user, check_namespace_ownership
@@ -152,6 +153,52 @@ async def delete_fewshot(fewshot_id: int, user: dict = Depends(get_current_user)
         result = await conn.execute("DELETE FROM rag_fewshot WHERE id = $1", fewshot_id)
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="Few-shot not found")
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[int]
+
+
+class AdminSearchRequest(BaseModel):
+    namespace: str
+    query: str
+    top_k: int = 30
+
+
+@router.post("/bulk-delete", status_code=200)
+async def bulk_delete_fewshots(body: BulkDeleteRequest, user: dict = Depends(get_current_user)):
+    if not body.ids:
+        return {"deleted": 0}
+    async with get_conn() as conn:
+        result = await conn.execute(
+            "DELETE FROM rag_fewshot WHERE id = ANY($1::int[])", body.ids
+        )
+    return {"deleted": int(result.split()[-1])}
+
+
+@router.post("/admin-search")
+async def admin_search_fewshots(body: AdminSearchRequest, user: dict = Depends(get_current_user)):
+    query_vec = await embedding_service.embed(body.query)
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, body.namespace)
+        if ns_id is None:
+            return []
+        rows = await conn.fetch(
+            """
+            SELECT f.id, n.name AS namespace, f.question, f.answer, f.status,
+                   f.knowledge_id, f.created_by_part, f.created_by_user_id,
+                   u.username AS created_by_username, f.created_at::text,
+                   1 - (f.embedding <=> $2::vector) AS similarity
+            FROM rag_fewshot f
+            JOIN ops_namespace n ON f.namespace_id = n.id
+            LEFT JOIN ops_user u ON f.created_by_user_id = u.id
+            WHERE f.namespace_id = $1 AND f.embedding IS NOT NULL
+            ORDER BY f.embedding <=> $2::vector
+            LIMIT $3
+            """,
+            ns_id, str(query_vec), body.top_k,
+        )
+    return [dict(r) for r in rows]
 
 
 @router.patch("/{fewshot_id}/status", status_code=200)

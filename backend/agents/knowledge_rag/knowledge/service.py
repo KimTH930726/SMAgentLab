@@ -120,6 +120,41 @@ async def delete_knowledge(knowledge_id: int) -> bool:
     return result == "DELETE 1"
 
 
+async def bulk_delete_knowledge(ids: list[int]) -> int:
+    if not ids:
+        return 0
+    async with get_conn() as conn:
+        result = await conn.execute(
+            "DELETE FROM rag_knowledge WHERE id = ANY($1::int[])", ids
+        )
+    return int(result.split()[-1])
+
+
+async def vector_search_knowledge(namespace: str, query_vec: list[float], top_k: int = 30) -> list[dict]:
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return []
+        rows = await conn.fetch(
+            """
+            SELECT k.id, n.name AS namespace, k.container_name, k.target_tables,
+                   k.content, k.query_template, k.base_weight, k.category,
+                   k.source_file, k.source_chunk_idx, k.source_type,
+                   k.created_by_part, k.created_by_user_id, u.username AS created_by_username,
+                   k.created_at::text, k.updated_at::text,
+                   1 - (k.embedding <=> $2::vector) AS similarity
+            FROM rag_knowledge k
+            JOIN ops_namespace n ON k.namespace_id = n.id
+            LEFT JOIN ops_user u ON k.created_by_user_id = u.id
+            WHERE k.namespace_id = $1 AND k.embedding IS NOT NULL
+            ORDER BY k.embedding <=> $2::vector
+            LIMIT $3
+            """,
+            ns_id, str(query_vec), top_k,
+        )
+    return [dict(r) for r in rows]
+
+
 async def list_knowledge(namespace: Optional[str] = None) -> list[dict]:
     _cols_with_user = """k.id, n.name AS namespace, k.container_name, k.target_tables,
         k.content, k.query_template, k.base_weight, k.category,
@@ -273,6 +308,39 @@ async def delete_glossary(glossary_id: int) -> bool:
             "DELETE FROM rag_glossary WHERE id = $1", glossary_id
         )
     return result == "DELETE 1"
+
+
+async def bulk_delete_glossary(ids: list[int]) -> int:
+    if not ids:
+        return 0
+    async with get_conn() as conn:
+        result = await conn.execute(
+            "DELETE FROM rag_glossary WHERE id = ANY($1::int[])", ids
+        )
+    return int(result.split()[-1])
+
+
+async def vector_search_glossary(namespace: str, query_vec: list[float], top_k: int = 30) -> list[dict]:
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return []
+        rows = await conn.fetch(
+            """
+            SELECT g.id, n.name AS namespace, g.term, g.description,
+                   g.created_by_part, g.created_by_user_id, u.username AS created_by_username,
+                   g.created_at::text,
+                   1 - (g.embedding <=> $2::vector) AS similarity
+            FROM rag_glossary g
+            JOIN ops_namespace n ON g.namespace_id = n.id
+            LEFT JOIN ops_user u ON g.created_by_user_id = u.id
+            WHERE g.namespace_id = $1 AND g.embedding IS NOT NULL
+            ORDER BY g.embedding <=> $2::vector
+            LIMIT $3
+            """,
+            ns_id, str(query_vec), top_k,
+        )
+    return [dict(r) for r in rows]
 
 
 async def get_glossary_part(glossary_id: int) -> Optional[str]:

@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.14)
+# Ops-Navigator 시스템 아키텍처 (v2.16)
 
 ## 개요
 
@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약**
+- v2.16: 어드민 테이블 검색·다건 삭제 — 지식베이스·용어집·Q&A 테이블에 텍스트 검색(클라이언트 필터), 벡터 유사도 검색(백엔드 임베딩 호출, Enter/버튼 트리거), 체크박스 다건 선택, 일괄 삭제(bulk-delete API) 기능 추가. 벡터 검색 결과에 유사도 % 배지 표시. 백엔드: `POST /knowledge/search`, `/knowledge/glossary/search`, `/fewshots/admin-search` + bulk-delete 엔드포인트 3종 신규 추가.
 - v2.15: Teams 메시지 수집 — 데스크톱 헬퍼(OpsNavHelper.exe) 기반. opsnav:// URL 스킴으로 헬퍼 자동 실행 → Playwright Teams 로그인 → IC3/CSA 토큰 캡처 → 백엔드 인메모리 저장. 채팅방 선택·메시지 다중 선택·스레드 단위 지식베이스 등록. 토큰은 프로세스 메모리에만 보관(DB 미저장).
 - v2.14: 인제스천 UX 고도화 — 청크 미리보기+선택 모달(ChunkReviewModal), LLM Analyzer 자동 청킹 전략 결정(파일/텍스트/URL 모든 경로 디폴트), Confluence PAT 개인 저장(ops_user.encrypted_confluence_pat — Fernet 암호화, URL 수집 시 자동 로드), 계정 설정 모달 PAT 관리 UI, 용어 통일(Fewshot→Q&A), Q&A 목록 정렬(활성→최신순), 레거시 Streamlit frontend/ 삭제
 - v2.13: URL / Confluence 인제스천 — 일반 웹 페이지(httpx + BeautifulSoup) + Confluence REST API(PAT 토큰) 단일 페이지 수집. 등록 전 Human-in-the-loop 최종 확인 모달. 라이트 모드 색상 개선
@@ -72,7 +73,9 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 - **ProtectedRoute**: 로그인되지 않은 사용자는 `/login`으로 리다이렉트
 - **useAuthStore** (Zustand): localStorage에 토큰 저장, 자동 Bearer 토큰 주입
 - **401 Auto-refresh**: Access Token 만료 시 Refresh Token으로 자동 갱신, 실패 시 로그아웃
-- **부서 기반 UI**: 지식/용어집/Few-shot 테이블에 부서 배지 표시, 같은 부서만 수정/삭제 버튼 노출
+- **부서 기반 UI**: 지식/용어집/Q&A 테이블에 부서 배지 표시, 같은 부서만 수정/삭제 버튼 노출
+- **어드민 테이블 검색**: 지식베이스·용어집·Q&A 세 테이블 모두 텍스트 검색(즉시 필터) + 벡터 유사도 검색([문자열|벡터] 토글) 지원. 벡터 검색은 Enter 또는 검색 버튼으로 실행하고 유사도 % 배지 표시
+- **어드민 테이블 다건 삭제**: 전체 선택 체크박스 + 행별 체크박스, N개 선택 시 액션 바 표시 → 일괄 삭제
 - Sidebar: 에이전트 배지 + 에이전트 변경 버튼, 사용자 정보 + 로그아웃, 네임스페이스 선택, 대화 목록, 검색 설정 슬라이더, 헬스 표시기
 - Backend REST API만 호출 (직접 DB 접근 없음)
 - 검색 비중(벡터/키워드 비율), Top-K를 사이드바 슬라이더로 실시간 조정 (개인 설정은 localStorage에 저장, DB 저장 없음)

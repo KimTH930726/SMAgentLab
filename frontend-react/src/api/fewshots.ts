@@ -23,6 +23,14 @@ export async function deleteFewshot(id: number): Promise<void> {
   await apiFetch<void>(`/fewshots/${id}`, { method: 'DELETE' });
 }
 
+export async function bulkDeleteFewshot(ids: number[]): Promise<{ deleted: number }> {
+  return apiFetch('/fewshots/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
+}
+
+export async function vectorSearchFewshot(namespace: string, query: string, topK = 30): Promise<(FewshotItem & { similarity: number })[]> {
+  return apiFetch('/fewshots/admin-search', { method: 'POST', body: JSON.stringify({ namespace, query, top_k: topK }) });
+}
+
 export async function searchFewshots(namespace: string, question: string): Promise<FewshotSearchResponse> {
   return await apiFetch<FewshotSearchResponse>('/fewshots/search', {
     method: 'POST',

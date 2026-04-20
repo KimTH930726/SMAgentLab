@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, MessageSquare, RefreshCw, LogOut, Download, Check } from 'lucide-react';
+import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, MessageSquare, RefreshCw, LogOut, Download, Check, Search } from 'lucide-react';
 import {
   getKnowledge,
   createKnowledge,
   updateKnowledge,
   deleteKnowledge,
+  bulkDeleteKnowledge,
+  vectorSearchKnowledge,
   bulkCreateKnowledge,
   previewTextSplit,
   previewFileUpload,
@@ -83,6 +85,12 @@ export function KnowledgeTable() {
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [categoryFilter, setCategoryFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMode, setSearchMode] = useState<'text' | 'vector'>('text');
+  const [vectorSearchInput, setVectorSearchInput] = useState('');
+  const [vectorQuery, setVectorQuery] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showBulkConfirm, setShowBulkConfirm] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);
 
@@ -136,6 +144,23 @@ export function KnowledgeTable() {
     },
   });
 
+  const vectorSearchQuery = useQuery({
+    queryKey: ['knowledge-vector-search', selectedNs, vectorQuery],
+    queryFn: () => vectorSearchKnowledge(selectedNs, vectorQuery),
+    enabled: searchMode === 'vector' && !!vectorQuery && !!selectedNs,
+    staleTime: 30_000,
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: number[]) => bulkDeleteKnowledge(ids),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
+      setSelectedIds(new Set());
+      setShowBulkConfirm(false);
+    },
+  });
+
   const startEdit = (item: KnowledgeItem) => {
     setEditingId(item.id);
     setEditForm({
@@ -151,16 +176,38 @@ export function KnowledgeTable() {
     setShowEdit(true);
   };
 
-  const filteredItems = items.filter((item) => {
+  const textFilteredItems = items.filter((item) => {
     if (categoryFilter && item.category !== categoryFilter) return false;
     if (sourceFilter) {
       const st = (item as any).source_type || 'manual';
       if (sourceFilter !== st) return false;
     }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const content = item.content.toLowerCase();
+      const src = ((item as any).source_file ?? '').toLowerCase();
+      if (!content.includes(q) && !src.includes(q)) return false;
+    }
     return true;
   });
-  const { totalPages, totalItems, slice } = useClientPaging(filteredItems, pageSize);
+  const filteredItems = textFilteredItems; // for count ref
+  const displayItems = searchMode === 'vector' && vectorQuery
+    ? (vectorSearchQuery.data ?? [])
+    : textFilteredItems;
+  const { totalPages, totalItems, slice } = useClientPaging(displayItems, pageSize);
   const pagedItems = slice(page);
+
+  const allPageSelected = pagedItems.length > 0 && pagedItems.every((i) => selectedIds.has(i.id));
+  const toggleSelectAll = () => {
+    if (allPageSelected) {
+      setSelectedIds((prev) => { const next = new Set(prev); pagedItems.forEach((i) => next.delete(i.id)); return next; });
+    } else {
+      setSelectedIds((prev) => { const next = new Set(prev); pagedItems.forEach((i) => next.add(i.id)); return next; });
+    }
+  };
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  };
 
   const onIngestSuccess = () => {
     qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
@@ -226,7 +273,7 @@ export function KnowledgeTable() {
             {categoryNames.length > 0 && (
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1.5">업무구분</label>
-                <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }}
+                <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); setSelectedIds(new Set()); }}
                   className="w-36 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
                   <option value="">전체</option>
                   {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -235,7 +282,7 @@ export function KnowledgeTable() {
             )}
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">소스</label>
-              <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setPage(1); }}
+              <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setPage(1); setSelectedIds(new Set()); }}
                 className="w-36 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
                 <option value="">전체</option>
                 <option value="manual">수동 등록</option>
@@ -247,7 +294,75 @@ export function KnowledgeTable() {
                 <option value="teams">Teams</option>
               </select>
             </div>
+            {/* Search mode toggle */}
+            <div className="flex rounded-lg border border-slate-600 overflow-hidden text-xs font-medium flex-shrink-0">
+              <button
+                onClick={() => { setSearchMode('text'); setVectorQuery(''); }}
+                className={`px-3 py-2 transition-colors ${searchMode === 'text' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+              >문자열</button>
+              <button
+                onClick={() => { setSearchMode('vector'); setSearchQuery(''); setPage(1); setSelectedIds(new Set()); }}
+                className={`px-3 py-2 transition-colors ${searchMode === 'vector' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+              >벡터</button>
+            </div>
+
+            {searchMode === 'text' ? (
+              <div className="relative flex-1 min-w-48">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="내용 검색..."
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setPage(1); setSelectedIds(new Set()); }}
+                  className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+            ) : (
+              <div className="flex flex-1 gap-2 min-w-48">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <input
+                    type="text"
+                    placeholder="유사 지식 검색 (Enter로 실행)..."
+                    value={vectorSearchInput}
+                    onChange={(e) => setVectorSearchInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { setVectorQuery(vectorSearchInput); setPage(1); setSelectedIds(new Set()); } }}
+                    className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <button
+                  onClick={() => { setVectorQuery(vectorSearchInput); setPage(1); setSelectedIds(new Set()); }}
+                  disabled={!vectorSearchInput.trim()}
+                  className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm rounded-lg transition-colors flex-shrink-0"
+                >
+                  {vectorSearchQuery.isFetching ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : '검색'}
+                </button>
+              </div>
+            )}
+
+            {canModifyNs && (
+              <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer select-none pb-0.5">
+                <input
+                  type="checkbox"
+                  checked={allPageSelected}
+                  onChange={toggleSelectAll}
+                  className="w-4 h-4 rounded accent-indigo-500"
+                />
+                전체 선택
+              </label>
+            )}
           </div>
+
+          {/* Bulk action bar */}
+          {selectedIds.size > 0 && canModifyNs && (
+            <div className="flex items-center gap-3 px-4 py-2.5 bg-indigo-900/30 border border-indigo-700/40 rounded-xl">
+              <span className="text-sm text-indigo-300 flex-1">{selectedIds.size}개 선택됨</span>
+              <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>선택 해제</Button>
+              <Button variant="danger" size="sm" onClick={() => setShowBulkConfirm(true)}>
+                <Trash2 className="w-3.5 h-3.5" />삭제
+              </Button>
+            </div>
+          )}
 
           {!selectedNs && <div className="text-center py-16 text-slate-500">파트를 선택하세요.</div>}
           {selectedNs && isLoading && <div className="text-center py-16 text-slate-500 animate-pulse">로딩 중...</div>}
@@ -258,49 +373,73 @@ export function KnowledgeTable() {
               <PaginationInfo totalItems={totalItems} pageSize={pageSize} onPageSizeChange={setPageSize} />
               {pagedItems.map((item) => (
                 <div key={item.id}
-                  className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-slate-700/50 transition-colors"
-                  onClick={() => startEdit(item)}
+                  className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 flex items-center gap-3 hover:bg-slate-700/50 transition-colors"
                 >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {(item as any).source_file && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-900/40 text-sky-300 font-mono">
-                          {(item as any).source_type === 'csv_import' ? '📊' : (item as any).source_type === 'paste_split' ? '📋' : (item as any).source_type === 'teams' ? '💬' : '📄'}{' '}
-                          {(item as any).source_file}{(item as any).source_chunk_idx != null && ` #${(item as any).source_chunk_idx}`}
+                  {canModifyNs && (
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(item.id)}
+                      onChange={() => toggleSelect(item.id)}
+                      className="w-4 h-4 rounded accent-indigo-500 flex-shrink-0"
+                    />
+                  )}
+                  <div className="flex flex-1 items-center gap-3 cursor-pointer min-w-0" onClick={() => startEdit(item)}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {(item as any).source_file && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-900/40 text-sky-300 font-mono">
+                            {(item as any).source_type === 'csv_import' ? '📊' : (item as any).source_type === 'paste_split' ? '📋' : (item as any).source_type === 'teams' ? '💬' : '📄'}{' '}
+                            {(item as any).source_file}{(item as any).source_chunk_idx != null && ` #${(item as any).source_chunk_idx}`}
+                          </span>
+                        )}
+                        {item.category && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-900/40 text-violet-300 border border-violet-700/40 font-medium">{item.category}</span>
+                        )}
+                        {item.container_name && (
+                          <>
+                            <span className="text-[10px] text-slate-500 font-medium">컨테이너</span>
+                            {item.container_name.split(',').map((c) => c.trim()).filter(Boolean).map((c) => (
+                              <Badge key={c} color="cyan">{c}</Badge>
+                            ))}
+                          </>
+                        )}
+                        {(item.target_tables ?? []).length > 0 && (
+                          <>
+                            <span className="text-[10px] text-slate-500 font-medium">테이블</span>
+                            {(item.target_tables ?? []).slice(0, 3).map((t) => <Badge key={t} color="amber">{t}</Badge>)}
+                            {(item.target_tables ?? []).length > 3 && <Badge color="slate">+{(item.target_tables ?? []).length - 3}</Badge>}
+                          </>
+                        )}
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${weightClass(item.base_weight)}`}>
+                          우선순위: {weightLabel(item.base_weight)} ({item.base_weight})
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5 truncate">{item.content.slice(0, 100)}...</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0 text-[10px] text-slate-500">
+                      {searchMode === 'vector' && (item as KnowledgeItem & { similarity?: number }).similarity != null && (
+                        <span className="px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-700/40 font-mono">
+                          {((item as KnowledgeItem & { similarity?: number }).similarity! * 100).toFixed(1)}%
                         </span>
                       )}
-                      {item.category && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-900/40 text-violet-300 border border-violet-700/40 font-medium">{item.category}</span>
-                      )}
-                      {item.container_name && (
-                        <>
-                          <span className="text-[10px] text-slate-500 font-medium">컨테이너</span>
-                          {item.container_name.split(',').map((c) => c.trim()).filter(Boolean).map((c) => (
-                            <Badge key={c} color="cyan">{c}</Badge>
-                          ))}
-                        </>
-                      )}
-                      {(item.target_tables ?? []).length > 0 && (
-                        <>
-                          <span className="text-[10px] text-slate-500 font-medium">테이블</span>
-                          {(item.target_tables ?? []).slice(0, 3).map((t) => <Badge key={t} color="amber">{t}</Badge>)}
-                          {(item.target_tables ?? []).length > 3 && <Badge color="slate">+{(item.target_tables ?? []).length - 3}</Badge>}
-                        </>
-                      )}
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${weightClass(item.base_weight)}`}>
-                        우선순위: {weightLabel(item.base_weight)} ({item.base_weight})
-                      </span>
+                      <span>{new Date(item.updated_at !== item.created_at ? item.updated_at : item.created_at).toISOString().slice(0, 10)}</span>
+                      {item.created_by_username && <span>{item.created_by_username}</span>}
+                      {item.created_by_part && <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>}
                     </div>
-                    <p className="text-xs text-slate-500 mt-0.5 truncate">{item.content.slice(0, 100)}...</p>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0 text-[10px] text-slate-500">
-                    <span>{new Date(item.updated_at !== item.created_at ? item.updated_at : item.created_at).toISOString().slice(0, 10)}</span>
-                    {item.created_by_username && <span>{item.created_by_username}</span>}
-                    {item.created_by_part && <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>}
                   </div>
                 </div>
               ))}
-              {filteredItems.length === 0 && <div className="text-center py-16 text-slate-500">지식 항목이 없습니다.</div>}
+              {displayItems.length === 0 && !vectorSearchQuery.isFetching && (
+                <div className="text-center py-16 text-slate-500">
+                  {searchQuery || categoryFilter || sourceFilter || vectorQuery ? '검색 결과가 없습니다.' : '지식 항목이 없습니다.'}
+                </div>
+              )}
+              {vectorSearchQuery.isFetching && (
+                <div className="flex items-center justify-center gap-2 py-16 text-slate-400 text-sm">
+                  <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                  벡터 유사도 검색 중...
+                </div>
+              )}
               <PaginationNav page={page} totalPages={totalPages} onPageChange={setPage} />
             </div>
           )}
@@ -393,6 +532,18 @@ export function KnowledgeTable() {
                 저장
               </Button>
             )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* Bulk Delete Confirm Modal */}
+      <Modal isOpen={showBulkConfirm} onClose={() => setShowBulkConfirm(false)} title="지식 일괄 삭제">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-300">선택한 <span className="text-rose-400 font-semibold">{selectedIds.size}개</span> 지식 항목을 삭제하시겠습니까? 되돌릴 수 없습니다.</p>
+          {bulkDeleteMutation.error && <p className="text-xs text-rose-400">{String(bulkDeleteMutation.error)}</p>}
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" size="sm" onClick={() => setShowBulkConfirm(false)}>취소</Button>
+            <Button variant="danger" size="sm" loading={bulkDeleteMutation.isPending} onClick={() => bulkDeleteMutation.mutate(Array.from(selectedIds))}>삭제</Button>
           </div>
         </div>
       </Modal>

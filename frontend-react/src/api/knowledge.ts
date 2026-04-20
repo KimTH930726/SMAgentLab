@@ -96,6 +96,22 @@ export async function deleteGlossaryItem(id: number): Promise<void> {
   }
 }
 
+export async function bulkDeleteKnowledge(ids: number[]): Promise<{ deleted: number }> {
+  return apiFetch('/knowledge/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
+}
+
+export async function bulkDeleteGlossary(ids: number[]): Promise<{ deleted: number }> {
+  return apiFetch('/knowledge/glossary/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
+}
+
+export async function vectorSearchKnowledge(namespace: string, query: string, topK = 30): Promise<(KnowledgeItem & { similarity: number })[]> {
+  return apiFetch('/knowledge/search', { method: 'POST', body: JSON.stringify({ namespace, query, top_k: topK }) });
+}
+
+export async function vectorSearchGlossary(namespace: string, query: string, topK = 30): Promise<(GlossaryItem & { similarity: number })[]> {
+  return apiFetch('/knowledge/glossary/search', { method: 'POST', body: JSON.stringify({ namespace, query, top_k: topK }) });
+}
+
 // ─── Bulk / Ingestion ───────────────────────────────────────────────────────
 
 export async function bulkCreateKnowledge(
