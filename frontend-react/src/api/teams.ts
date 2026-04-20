@@ -87,7 +87,8 @@ export async function downloadHelperExe(accessToken: string | null): Promise<voi
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // 다운로드 트리거 후 충분한 시간을 두고 해제 (즉시 해제 시 다운로드 취소 가능)
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 // ─── Chats & Messages ───────────────────────────────────────────────────────

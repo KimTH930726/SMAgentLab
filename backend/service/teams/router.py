@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/teams-collect", tags=["teams"])
 
+MAX_SYNC_RETRIES = 5
+
 
 # ── Pydantic 모델 ───────────────────────────────────────────────────────────
 
@@ -170,12 +172,15 @@ async def fetch_messages(body: MessageFetchRequest, user: dict = Depends(get_cur
                 return {"messages": [], "count": 0, "has_more": False}
 
             all_messages = cache["messages"]
-            older = [m for m in all_messages if m["time"] < body.before]
 
-            # 캐시 부족 + API 미소진 → syncState로 이전 페이지 로드 (최대 5회)
-            max_retries = 5
-            while len(older) < body.page_size + 1 and not cache["exhausted"] and max_retries > 0:
-                max_retries -= 1
+            # 캐시 부족 + API 미소진 → syncState로 이전 페이지 추가 로드 (최대 MAX_SYNC_RETRIES회)
+            retries_left = MAX_SYNC_RETRIES
+            while (
+                len([m for m in all_messages if m["time"] < body.before]) < body.page_size + 1
+                and not cache["exhausted"]
+                and retries_left > 0
+            ):
+                retries_left -= 1
                 new_msgs, sync_state, last_seg_start = await teams_crawler.fetch_page_from_teams(
                     ic3_token, body.chat_id,
                     sync_state=cache["sync_state"],
@@ -192,31 +197,23 @@ async def fetch_messages(body: MessageFetchRequest, user: dict = Depends(get_cur
                     break
 
                 all_messages = sorted(all_messages + unique_new, key=lambda m: m.get("time", ""))
-                cache["messages"] = all_messages
-                cache["sync_state"] = sync_state
-                cache["last_segment_start"] = last_seg_start
+                cache.update({
+                    "messages": all_messages,
+                    "sync_state": sync_state,
+                    "last_segment_start": last_seg_start,
+                })
                 if last_seg_start <= 1:
                     cache["exhausted"] = True
                 await teams_token_store.set_message_cache(user_id, body.chat_id, cache)
-                older = [m for m in all_messages if m["time"] < body.before]
     except PermissionError:
         raise HTTPException(401, "Teams 세션이 만료되었습니다. 재로그인이 필요합니다.")
 
-    # before 커서 적용
-    filtered = (
-        [m for m in all_messages if m["time"] < body.before]
-        if body.before else all_messages
-    )
+    # before 커서 적용 (단일 계산)
+    filtered = [m for m in all_messages if m["time"] < body.before] if body.before else all_messages
 
-    # page_size만큼 최근 것을 반환
-    has_more = len(filtered) > body.page_size
-    result_messages = filtered[-body.page_size:] if has_more else filtered
-
-    # 캐시 부족이지만 API 미소진이면 has_more 유지
-    if not has_more and filtered:
-        c = await teams_token_store.get_message_cache(user_id, body.chat_id) or {}
-        if not c.get("exhausted", True):
-            has_more = True
+    # page_size만큼 최신 것을 반환
+    has_more = len(filtered) > body.page_size or (bool(filtered) and not cache.get("exhausted", True))
+    result_messages = filtered[-body.page_size:] if len(filtered) > body.page_size else filtered
 
     return {
         "messages": result_messages,
