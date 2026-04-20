@@ -32,7 +32,7 @@ import { getNamespaces, getNamespacesDetail, getCategories } from '../../api/nam
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { getConversations, deleteConversation } from '../../api/conversations';
 import { healthCheck } from '../../api/client';
-import { changePassword, updateApiKey } from '../../api/auth';
+import { changePassword, updateApiKey, updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
 import { getLLMConfig } from '../../api/llm';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -556,8 +556,8 @@ function UserSection() {
 interface AccountSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  user: { username: string; part: string; role: string; has_api_key: boolean };
-  onUserUpdate: (u: Partial<{ has_api_key: boolean }>) => void;
+  user: { username: string; part: string; role: string; has_api_key: boolean; has_confluence_pat?: boolean };
+  onUserUpdate: (u: Partial<{ has_api_key: boolean; has_confluence_pat: boolean }>) => void;
 }
 
 function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSettingsModalProps) {
@@ -575,12 +575,19 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
   const [keyLoading, setKeyLoading] = useState(false);
   const [keyMsg, setKeyMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
+  // Confluence PAT
+  const [pat, setPat] = useState('');
+  const [showPat, setShowPat] = useState(false);
+  const [patLoading, setPatLoading] = useState(false);
+  const [patMsg, setPatMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
   // Reset on close
   useEffect(() => {
     if (!isOpen) {
       setCurrentPw(''); setNewPw(''); setConfirmPw('');
       setShowPw(false); setPwMsg(null);
       setApiKey(''); setShowKey(false); setKeyMsg(null);
+      setPat(''); setShowPat(false); setPatMsg(null);
     }
   }, [isOpen]);
 
@@ -619,6 +626,36 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
     }
   };
 
+  const handleUpdatePat = async () => {
+    setPatMsg(null);
+    if (!pat.trim()) { setPatMsg({ type: 'err', text: 'PAT를 입력해주세요.' }); return; }
+    setPatLoading(true);
+    try {
+      await updateConfluencePAT(pat.trim());
+      setPatMsg({ type: 'ok', text: 'Confluence PAT가 등록되었습니다.' });
+      setPat('');
+      onUserUpdate({ has_confluence_pat: true });
+    } catch (err) {
+      setPatMsg({ type: 'err', text: err instanceof Error ? err.message : 'PAT 등록 실패' });
+    } finally {
+      setPatLoading(false);
+    }
+  };
+
+  const handleDeletePat = async () => {
+    setPatMsg(null);
+    setPatLoading(true);
+    try {
+      await deleteConfluencePAT();
+      setPatMsg({ type: 'ok', text: 'Confluence PAT가 삭제되었습니다.' });
+      onUserUpdate({ has_confluence_pat: false });
+    } catch (err) {
+      setPatMsg({ type: 'err', text: err instanceof Error ? err.message : 'PAT 삭제 실패' });
+    } finally {
+      setPatLoading(false);
+    }
+  };
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="계정 설정">
       <div className="space-y-6">
@@ -641,6 +678,12 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
               <span className="text-slate-500 text-xs">API Key</span>
               <p className={clsx('font-medium', user.has_api_key ? 'text-emerald-400' : 'text-slate-500')}>
                 {user.has_api_key ? '등록됨' : '미등록'}
+              </p>
+            </div>
+            <div>
+              <span className="text-slate-500 text-xs">Confluence PAT</span>
+              <p className={clsx('font-medium', user.has_confluence_pat ? 'text-emerald-400' : 'text-slate-500')}>
+                {user.has_confluence_pat ? '등록됨' : '미등록'}
               </p>
             </div>
           </div>
@@ -728,6 +771,50 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
             <Button size="sm" onClick={handleUpdateApiKey} loading={keyLoading} className="w-full">
               {user.has_api_key ? 'API Key 변경' : 'API Key 등록'}
             </Button>
+          </div>
+        </div>
+
+        {/* Confluence PAT */}
+        <div>
+          <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
+            <Key className="w-4 h-4 text-slate-400" />
+            Confluence PAT
+          </h4>
+          <div className="space-y-2.5">
+            <div className="relative">
+              <input
+                type={showPat ? 'text' : 'password'}
+                value={pat}
+                onChange={(e) => setPat(e.target.value)}
+                placeholder={user.has_confluence_pat ? '새 PAT로 교체' : 'Personal Access Token 입력'}
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 pr-10 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && handleUpdatePat()}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPat((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+              >
+                {showPat ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-500">Confluence 프로필 → Personal Access Token에서 발급. 암호화되어 저장됩니다.</p>
+            {patMsg && (
+              <p className={clsx('text-xs px-2', patMsg.type === 'ok' ? 'text-emerald-400' : 'text-rose-400')}>
+                {patMsg.text}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleUpdatePat} loading={patLoading} className="flex-1">
+                {user.has_confluence_pat ? 'PAT 변경' : 'PAT 등록'}
+              </Button>
+              {user.has_confluence_pat && (
+                <Button size="sm" variant="ghost" onClick={handleDeletePat} loading={patLoading}
+                  className="text-rose-400 hover:text-rose-300 border border-rose-500/30 hover:border-rose-400/50">
+                  삭제
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </div>
