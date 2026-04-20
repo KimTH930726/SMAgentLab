@@ -8,12 +8,19 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from core.dependencies import get_current_user
 from agents.knowledge_rag.ingestion import teams_crawler, teams_token_store
+
+
+# PyInstaller 로 빌드된 헬퍼 (docker-compose 가 scripts/ 를 /app/helper_assets 로 마운트)
+HELPER_EXE_PATH = Path("/app/helper_assets/dist/OpsNavHelper.exe")
+HELPER_EXE_DOWNLOAD_NAME = "OpsNavHelper.exe"
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +98,30 @@ async def logout(user: dict = Depends(get_current_user)):
     """Teams 로그아웃 (인메모리 토큰/캐시 삭제)."""
     await teams_token_store.clear_tokens(user["id"])
     return {"status": "logged_out"}
+
+
+# ── 헬퍼 .exe 다운로드 ─────────────────────────────────────────────────────
+
+@router.get("/helper/download")
+async def download_helper(user: dict = Depends(get_current_user)):
+    """PyInstaller로 빌드된 OpsNavHelper.exe 반환.
+
+    서버에는 scripts/dist/OpsNavHelper.exe (개발자 로컬 빌드 산출물)가 볼륨 마운트를 통해
+    /app/helper_assets/dist/ 에 위치.
+    """
+    if not HELPER_EXE_PATH.exists():
+        logger.error("OpsNavHelper.exe 가 서버에 없음: %s", HELPER_EXE_PATH)
+        raise HTTPException(
+            500,
+            "OpsNavHelper.exe 가 서버에 준비되지 않았습니다. 관리자에게 문의하세요.",
+        )
+
+    return FileResponse(
+        path=HELPER_EXE_PATH,
+        media_type="application/octet-stream",
+        filename=HELPER_EXE_DOWNLOAD_NAME,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ── 채팅방 ─────────────────────────────────────────────────────────────────
