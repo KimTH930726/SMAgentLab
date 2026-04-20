@@ -26,6 +26,68 @@ except Exception:
     pass
 
 
+def _warmup_playwright_node() -> None:
+    """Playwright 의 node.exe 드라이버가 spawn 가능해질 때까지 대기한다.
+
+    PyInstaller onefile 빌드는 매 실행마다 node.exe(~80MB)를 %TEMP%\\_MEIxxx
+    에 추출하는데, Windows Defender 가 이 신규 실행파일을 스캔하는 약 1초 동안
+    `CreateProcessW` 가 ACCESS_DENIED 로 반환된다. Playwright 는 이 창에
+    걸려 PermissionError (WinError 5) 로 죽는다.
+
+    해결: node.exe 를 우리가 먼저 `--version` 으로 실행해 보고, 성공할 때까지
+    짧은 간격으로 재시도한다. 성공 시점이 곧 AV 스캔 완료 시점.
+    """
+    if sys.platform != "win32":
+        return
+    if not getattr(sys, "frozen", False):
+        return
+
+    import os
+    import subprocess
+    import time
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return
+    node_path = os.path.join(meipass, "playwright", "driver", "node.exe")
+
+    # 파일 크기 안정화 대기 (추출 완료 확인)
+    prev_size = -1
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        try:
+            size = os.path.getsize(node_path)
+        except OSError:
+            time.sleep(0.1)
+            continue
+        if size == prev_size and size > 0:
+            break
+        prev_size = size
+        time.sleep(0.1)
+
+    # AV 스캔이 끝나 spawn 가능해질 때까지 재시도 (최대 10초)
+    CREATE_NO_WINDOW = 0x08000000
+    warmup_deadline = time.time() + 10.0
+    while time.time() < warmup_deadline:
+        try:
+            r = subprocess.run(
+                [node_path, "--version"],
+                capture_output=True,
+                timeout=5,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            if r.returncode == 0:
+                return
+        except PermissionError:
+            pass
+        except Exception:
+            return
+        time.sleep(0.2)
+
+
+_warmup_playwright_node()
+
+
 def _import_siblings():
     """같은 디렉토리에 있는 teams_desktop_login / install_url_handler 모듈 import.
 
