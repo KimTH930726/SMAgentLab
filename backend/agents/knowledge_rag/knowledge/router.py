@@ -5,6 +5,8 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from pydantic import BaseModel
+from shared.embedding import embedding_service
 
 from core.dependencies import get_current_user, check_namespace_ownership
 from agents.knowledge_rag.knowledge.schemas import (
@@ -79,6 +81,29 @@ async def remove_knowledge(knowledge_id: int, user: dict = Depends(get_current_u
         raise HTTPException(status_code=404, detail="Knowledge not found")
 
 
+class BulkDeleteRequest(BaseModel):
+    ids: list[int]
+
+
+class VectorSearchRequest(BaseModel):
+    namespace: str
+    query: str
+    top_k: int = 30
+
+
+@router.post("/bulk-delete", status_code=200)
+async def bulk_remove_knowledge(body: BulkDeleteRequest, user: dict = Depends(get_current_user)):
+    deleted = await service.bulk_delete_knowledge(body.ids)
+    return {"deleted": deleted}
+
+
+@router.post("/search")
+async def vector_search_knowledge(body: VectorSearchRequest, user: dict = Depends(get_current_user)):
+    query_vec = await embedding_service.embed(body.query)
+    results = await service.vector_search_knowledge(body.namespace, query_vec, body.top_k)
+    return results
+
+
 # ─── ops_glossary ──────────────────────────────────────────────────────────────
 
 @router.get("/glossary", response_model=list[GlossaryOut])
@@ -124,6 +149,19 @@ async def remove_glossary(glossary_id: int, user: dict = Depends(get_current_use
     deleted = await service.delete_glossary(glossary_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Glossary term not found")
+
+
+@router.post("/glossary/bulk-delete", status_code=200)
+async def bulk_remove_glossary(body: BulkDeleteRequest, user: dict = Depends(get_current_user)):
+    deleted = await service.bulk_delete_glossary(body.ids)
+    return {"deleted": deleted}
+
+
+@router.post("/glossary/search")
+async def vector_search_glossary(body: VectorSearchRequest, user: dict = Depends(get_current_user)):
+    query_vec = await embedding_service.embed(body.query)
+    results = await service.vector_search_glossary(body.namespace, query_vec, body.top_k)
+    return results
 
 
 # ─── 벌크 등록 / 인제스천 ────────────────────────────────────────────────────
@@ -424,7 +462,6 @@ async def import_file(
             from service.llm.factory import get_llm_provider
             from core.security import get_user_api_key
             from core.database import get_conn, resolve_namespace_id
-            from shared.embedding import embedding_service
 
             llm = get_llm_provider()
             # 상위 5개 청크에서만 Q&A 생성 (비용 절약)
