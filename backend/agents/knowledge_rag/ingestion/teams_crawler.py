@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 
 TEAMS_REGION = os.environ.get("TEAMS_REGION", "kr")
 TEAMS_API_PAGE_SIZE = 200
+_THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
+_DATE_FMT = "%Y-%m-%d %H:%M"
+
+# 미리 컴파일한 정규식 — extract_reply_info / remove_blockquote에서 재사용
+_RE_BLOCKQUOTE = re.compile(r"<blockquote[^>]*>(.*?)</blockquote>", re.DOTALL)
+_RE_STRONG = re.compile(r"<strong[^>]*>([^<]+)</strong>")
+_RE_STRONG_FULL = re.compile(r"<strong[^>]*>.*?</strong>", re.DOTALL)
+_RE_SPAN_FULL = re.compile(r"<span[^>]*>.*?</span>", re.DOTALL)
+_RE_SPACES = re.compile(r" {4,}")
 
 
 def _base_url(region: str = TEAMS_REGION) -> str:
@@ -79,8 +88,7 @@ async def fetch_page_from_teams(
         "startTime": 1,
     }
     if sync_state and last_segment_start > 1:
-        thirty_days_ms = 30 * 24 * 60 * 60 * 1000
-        params["startTime"] = max(1, last_segment_start - thirty_days_ms)
+        params["startTime"] = max(1, last_segment_start - _THIRTY_DAYS_MS)
         params["syncState"] = sync_state
 
     try:
@@ -124,7 +132,7 @@ async def fetch_page_from_teams(
         if compose_time:
             try:
                 dt = datetime.fromisoformat(compose_time.replace("Z", "+00:00"))
-                date_str = dt.strftime("%Y-%m-%d %H:%M")
+                date_str = dt.strftime(_DATE_FMT)
             except ValueError:
                 date_str = compose_time[:16]
 
@@ -176,7 +184,7 @@ def extract_reply_info(raw_content: str, properties: dict) -> Optional[dict]:
     # 전달 메시지
     if properties.get("forwardTemplateId"):
         preview = ""
-        bq_match = re.search(r"<blockquote[^>]*>(.*?)</blockquote>", raw_content, re.DOTALL)
+        bq_match = _RE_BLOCKQUOTE.search(raw_content)
         if bq_match:
             preview = html_to_text(bq_match.group(1))[:300]
         return {"type": "forward", "from": "", "preview": preview}
@@ -193,22 +201,17 @@ def extract_reply_info(raw_content: str, properties: dict) -> Optional[dict]:
     if not isinstance(qtd, list) or not qtd:
         return None
 
+    # blockquote를 한 번만 검색해 from/preview 모두 추출
+    bq_match = _RE_BLOCKQUOTE.search(raw_content)
     reply_from = ""
-    from_match = re.search(
-        r'<blockquote[^>]*>.*?<strong[^>]*>([^<]+)</strong>',
-        raw_content, re.DOTALL,
-    )
-    if from_match:
-        reply_from = unescape(from_match.group(1)).strip()
-
     reply_preview = ""
-    bq_match = re.search(r"<blockquote[^>]*>(.*?)</blockquote>", raw_content, re.DOTALL)
     if bq_match:
-        bq_inner = bq_match.group(1)
-        bq_inner = re.sub(r"<strong[^>]*>.*?</strong>", "", bq_inner, flags=re.DOTALL)
-        bq_inner = re.sub(r"<span[^>]*>.*?</span>", "", bq_inner, flags=re.DOTALL)
-        reply_preview = html_to_text(bq_inner)
-        reply_preview = re.sub(r" {4,}", "\n", reply_preview)[:300]
+        strong_match = _RE_STRONG.search(bq_match.group(0))
+        if strong_match:
+            reply_from = unescape(strong_match.group(1)).strip()
+        bq_inner = _RE_STRONG_FULL.sub("", bq_match.group(1))
+        bq_inner = _RE_SPAN_FULL.sub("", bq_inner)
+        reply_preview = _RE_SPACES.sub("\n", html_to_text(bq_inner))[:300]
 
     if not reply_from and not reply_preview:
         return None
@@ -216,8 +219,7 @@ def extract_reply_info(raw_content: str, properties: dict) -> Optional[dict]:
 
 
 def remove_blockquote(raw_content: str) -> str:
-    cleaned = re.sub(r"<blockquote[^>]*>.*?</blockquote>", "", raw_content, flags=re.DOTALL)
-    return html_to_text(cleaned)
+    return html_to_text(_RE_BLOCKQUOTE.sub("", raw_content))
 
 
 # ── 문서 포맷 변환 ─────────────────────────────────────────────────────────

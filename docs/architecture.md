@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약**
+- v2.15: Teams 메시지 수집 — 데스크톱 헬퍼(OpsNavHelper.exe) 기반. opsnav:// URL 스킴으로 헬퍼 자동 실행 → Playwright Teams 로그인 → IC3/CSA 토큰 캡처 → 백엔드 인메모리 저장. 채팅방 선택·메시지 다중 선택·스레드 단위 지식베이스 등록. 토큰은 프로세스 메모리에만 보관(DB 미저장).
 - v2.14: 인제스천 UX 고도화 — 청크 미리보기+선택 모달(ChunkReviewModal), LLM Analyzer 자동 청킹 전략 결정(파일/텍스트/URL 모든 경로 디폴트), Confluence PAT 개인 저장(ops_user.encrypted_confluence_pat — Fernet 암호화, URL 수집 시 자동 로드), 계정 설정 모달 PAT 관리 UI, 용어 통일(Fewshot→Q&A), Q&A 목록 정렬(활성→최신순), 레거시 Streamlit frontend/ 삭제
 - v2.13: URL / Confluence 인제스천 — 일반 웹 페이지(httpx + BeautifulSoup) + Confluence REST API(PAT 토큰) 단일 페이지 수집. 등록 전 Human-in-the-loop 최종 확인 모달. 라이트 모드 색상 개선
 - v2.12: 지식 인제스천 고도화 Tier 1~3 — CSV 임포트 + 텍스트 분할(heading/paragraph/fixed) + 파일 업로드(.txt/.md/.pdf) + LLM Analyzer Agent + LLM 자동 태깅 + 용어 자동 추출 + Q&A 자동 생성(fewshot candidate)
@@ -373,6 +374,37 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `PUT` | `/api/text2sql/pipeline/{id}/toggle` | 단계 활성/비활성 |
 | `GET` | `/api/text2sql/namespaces/{ns}/audit-logs` | 쿼리 감사 로그 (페이지네이션) |
 | `GET/DELETE` | `/api/text2sql/namespaces/{ns}/cache/{id?}` | 쿼리 결과 캐시 조회/삭제 |
+
+### Teams 수집 (`/api/teams-collect`) — v2.15 신규
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/api/teams-collect/auth/status` | Teams 인증 상태 조회 (토큰 유효성 검증 포함, 60초 캐시) |
+| `POST` | `/api/teams-collect/auth/tokens` | 데스크톱 헬퍼가 캡처한 IC3/CSA 토큰 수신 → 인메모리 저장 |
+| `POST` | `/api/teams-collect/auth/logout` | 인메모리 토큰·캐시 삭제 |
+| `GET` | `/api/teams-collect/helper/download` | OpsNavHelper.exe 바이너리 다운로드 |
+| `GET` | `/api/teams-collect/chats` | 캡처된 채팅방 목록 반환 |
+| `POST` | `/api/teams-collect/messages` | syncState 페이징으로 채팅방 메시지 조회 (캐시 우선, 부족 시 Teams API 추가 로드) |
+| `POST` | `/api/knowledge/import/teams` | 선택 메시지 스레드 → ParsedDocument → 청킹 → 벌크 등록 |
+
+**Teams 인증 흐름:**
+```
+웹 UI "Teams 로그인" 버튼 (opsnav://teams-login?api_url=...&jwt=... 링크)
+  → 사용자 PC의 OpsNavHelper.exe 자동 실행 (opsnav:// URL 스킴 등록 필요)
+  → Playwright로 Teams 웹 로그인 화면 띄움
+  → 사용자가 로그인하면 네트워크 후킹으로 IC3 토큰 + 채팅방 목록 캡처
+  → POST /api/teams-collect/auth/tokens (JWT 인증)
+  → 백엔드 인메모리 스토어에 저장 (DB 미저장, 재시작 시 소멸)
+  → 프론트 2초 폴링으로 자동 감지 → 채팅방 목록 표시
+```
+
+**스크립트 구성 (`scripts/`):**
+| 파일 | 역할 |
+|------|------|
+| `teams_desktop_login.py` | Playwright Teams 로그인·IC3 토큰 캡처 핵심 로직 |
+| `install_url_handler.py` | `opsnav://` 커스텀 URL 스킴 OS 등록 (Windows 레지스트리) |
+| `opsnav_helper_entry.py` | PyInstaller exe 진입점 (install/run/uninstall 모드 분기) |
+| `dist/OpsNavHelper.exe` | PyInstaller 빌드 산출물 (docker-compose가 `/app/helper_assets`로 마운트) |
 
 ### MCP 도구
 
