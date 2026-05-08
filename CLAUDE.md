@@ -1,8 +1,12 @@
 # Ops-Navigator 프로젝트 가이드
 
 ## 빌드 & 실행
-- `docker compose up --build` — 전체 서비스 시작
-- `docker compose build backend frontend` — 특정 서비스만 빌드
+- 개발: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`
+  - dev override는 `./backend:/app` 소스 마운트 추가 (코드 수정 → `restart backend`만으로 반영)
+- 운영(폐쇄망): `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build`
+  - 사전 `docker load` 로 이미지 반입 필요. 자세한 절차는 `docs/deployment-closed-network.md`
+- 특정 서비스만 빌드: `docker compose build backend frontend`
+- 이미지 버전 태그: `.env`의 `IMAGE_TAG` (예: `v2.16`) — compose가 자동 참조
 - Backend: FastAPI (port 8000), Frontend: React+nginx (port 8501)
 - DB: PostgreSQL + pgvector (ops-postgres 컨테이너)
 - Ollama: 호스트에서 별도 실행 (`ollama serve`)

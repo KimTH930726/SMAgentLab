@@ -1,0 +1,16 @@
+# ─────────────────────────────────────────────────────────────────
+# 개발 오버라이드 — 소스 핫 리로드용
+#
+# 사용법:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# 효과:
+#   - backend 컨테이너에 호스트 ./backend 디렉토리를 /app 으로 마운트
+#   - 코드 수정 후 `docker compose restart backend` 만으로 반영
+#   - frontend는 nginx 정적 빌드라 dev에서도 별도 마운트 안 함
+#     (프론트 핫 리로드는 호스트에서 `cd frontend-react && npm run dev` 사용)
+# ─────────────────────────────────────────────────────────────────
+services:
+  backend:
+    volumes:
+      - ./backend:/app

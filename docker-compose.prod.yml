@@ -1,0 +1,25 @@
+# ─────────────────────────────────────────────────────────────────
+# 운영(폐쇄망) 오버라이드
+#
+# 사용법:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+#
+# 베이스(docker-compose.yml)와의 차이:
+#   - pull_policy: never  → 외부 레지스트리 pull 시도 안 함 (폐쇄망 안전장치)
+#   - --no-build 플래그와 함께 사용: 빌드 트리거 차단
+#
+# 베이스 compose는 이미 운영 친화적으로 구성되어 있습니다:
+#   - 소스 볼륨 마운트는 docker-compose.dev.yml 에만 존재
+#   - IMAGE_TAG 변수로 버전 태그 지정 가능 (.env에서)
+#
+# 운영 .env 예시:
+#   IMAGE_TAG=v2.16
+# ─────────────────────────────────────────────────────────────────
+services:
+  backend:
+    image: smagentlab-backend:${IMAGE_TAG:-latest}
+    pull_policy: never
+
+  frontend:
+    image: smagentlab-frontend:${IMAGE_TAG:-latest}
+    pull_policy: never
