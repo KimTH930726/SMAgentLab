@@ -30,7 +30,7 @@ services:
 
   # ─── FastAPI Backend ─────────────────────────────────────────
   backend:
-    image: smagentlab-backend:latest
+    image: smagentlab-backend:${IMAGE_TAG:-latest}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -62,14 +62,13 @@ services:
     volumes:
       # Sentence-Transformers 모델 캐시를 호스트와 공유 (재다운로드 방지)
       - model-cache:/root/.cache/huggingface
-      # 폐쇄망: 소스 볼륨 마운트 (restart만으로 소스 반영)
-      - ./backend:/app
       # Teams 헬퍼 에셋 — /api/teams-collect/helper/download 엔드포인트가 dist/OpsNavHelper.exe 서빙
       - ./scripts:/app/helper_assets:ro
+      # 개발용 소스 볼륨 마운트(./backend:/app)는 docker-compose.dev.yml 에서 추가됨
 
   # ─── React Frontend (nginx) ───────────────────────────────────
   frontend:
-    image: smagentlab-frontend:latest
+    image: smagentlab-frontend:${IMAGE_TAG:-latest}
     build:
       context: ./frontend-react
       dockerfile: Dockerfile

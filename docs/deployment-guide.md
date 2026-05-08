@@ -1,6 +1,9 @@
 # SMAgentLab 사내 배포 방안
 
-> 사내 Git + NAS 환경 기준
+> 사내 Git + NAS 환경 기준 (각 팀이 직접 `docker compose build` 가능한 환경)
+>
+> **인터넷이 차단된 폐쇄망 리눅스 서버**에 배포해야 한다면
+> [`deployment-closed-network.md`](deployment-closed-network.md) 를 참고하세요.
 
 ---
 
