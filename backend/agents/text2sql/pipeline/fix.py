@@ -88,7 +88,7 @@ async def run(context: dict, llm, stage_cfg: dict) -> dict:
             .replace("{{schema}}", schema_text)
         )
         try:
-            raw = await llm.generate_once(prompt=prompt, system=system, max_tokens=1000, api_key=context.get("api_key"))
+            raw = await llm.generate_once(prompt=prompt, system=system, max_tokens=1000, user_credentials=context.get("user_credentials"))
             candidate = _extract_sql(raw)
             # 빈 SQL이면 원본으로 재시도 (쓰레기로 연쇄 오염 방지)
             if not candidate.strip():

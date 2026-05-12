@@ -56,7 +56,7 @@ async def analyze_document(
     raw_text: str,
     llm,
     *,
-    api_key: Optional[str] = None,
+    user_credentials: Optional[dict] = None,
 ) -> dict:
     """LLM으로 문서를 분석하여 최적 청킹 전략 + 메타데이터 반환.
 
@@ -87,7 +87,7 @@ async def analyze_document(
             prompt=prompt,
             system=_ANALYZER_SYSTEM,
             max_tokens=1000,
-            api_key=api_key,
+            user_credentials=user_credentials,
         )
         result = parse_json_object(raw_response)
         result = _validate_and_normalize(result)

@@ -652,15 +652,15 @@ async def suggest_glossary_terms(
         + '[{"term": "용어명", "description": "이 용어의 업무적 의미와 설명 (2-3문장)"}]'
     )
 
-    from core.security import get_user_api_key
-    api_key = get_user_api_key(admin)
+    from core.security import get_user_llm_credentials
+    user_credentials = get_user_llm_credentials(admin)
 
     try:
         answer, _ = await get_llm_provider().generate(
             context="",
             question=question,
             system_prompt=system_prompt,
-            api_key=api_key,
+            user_credentials=user_credentials,
         )
         # 마크다운 코드 블록 제거
         cleaned = re.sub(r"```(?:json)?\s*", "", answer).replace("```", "").strip()

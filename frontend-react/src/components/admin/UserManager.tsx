@@ -390,7 +390,7 @@ function UserSection() {
               <th className="text-left px-4 py-3 font-medium">사용자</th>
               <th className="text-left px-4 py-3 font-medium">파트</th>
               <th className="text-left px-4 py-3 font-medium">역할</th>
-              <th className="text-left px-4 py-3 font-medium">API Key</th>
+              <th className="text-left px-4 py-3 font-medium">LLM 자격증명</th>
               <th className="text-left px-4 py-3 font-medium">상태</th>
               <th className="text-right px-4 py-3 font-medium">관리</th>
             </tr>
@@ -444,8 +444,8 @@ function UserSection() {
                   )}
                 </td>
                 <td className="px-4 py-3">
-                  <Badge color={u.has_api_key ? 'emerald' : 'slate'}>
-                    {u.has_api_key ? '있음' : '없음'}
+                  <Badge color={u.has_llm_credentials ? 'emerald' : 'slate'}>
+                    {u.has_llm_credentials ? '본인 키' : '팀 공통'}
                   </Badge>
                 </td>
                 <td className="px-4 py-3">

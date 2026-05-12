@@ -5,7 +5,7 @@ export interface User {
   role: 'admin' | 'user';
   part: string;
   is_active: boolean;
-  has_api_key: boolean;
+  has_llm_credentials: boolean;
   has_confluence_pat?: boolean;
   created_at: string;
 }

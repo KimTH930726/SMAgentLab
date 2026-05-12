@@ -147,7 +147,7 @@ async def run(context: dict, llm, relations: list[dict], db_type: str, stage_cfg
     )
 
     try:
-        raw = await llm.generate_once(prompt=prompt, system=system, max_tokens=1500, api_key=context.get("api_key"))
+        raw = await llm.generate_once(prompt=prompt, system=system, max_tokens=1500, user_credentials=context.get("user_credentials"))
         sql, reasoning = _extract_sql_and_reasoning(raw)
     except Exception as e:
         logger.error("generate 스테이지 실패: %s", e)

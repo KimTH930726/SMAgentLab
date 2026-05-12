@@ -49,7 +49,7 @@ _TOOL_SELECT_PROMPT = """\
 사용자 질문: {question}"""
 
 
-async def _select_tool(question: str, tools: list[dict], *, api_key: str | None = None) -> dict:
+async def _select_tool(question: str, tools: list[dict], *, user_credentials: dict | None = None) -> dict:
     """LLM에게 도구 선택 + 파라미터 추출을 요청."""
     tool_descriptions = []
     for t in tools:
@@ -71,7 +71,7 @@ async def _select_tool(question: str, tools: list[dict], *, api_key: str | None 
     )
     tool_select_prompt = await load_prompt("tool_select", _TOOL_SELECT_SYSTEM)
     answer, _ = await get_llm_provider().generate(
-        context="", question=prompt, api_key=api_key,
+        context="", question=prompt, user_credentials=user_credentials,
         system_prompt=tool_select_prompt,
     )
     text = answer.strip()
@@ -246,7 +246,7 @@ class HttpToolAgent(AgentBase):
     ) -> AsyncIterator[dict]:
         namespace: str = context["namespace"]
         msg_id: int = context["msg_id"]
-        api_key: str | None = context.get("api_key")
+        user_credentials: dict | None = context.get("user_credentials")
         approved_tool: Optional[dict] = context.get("approved_tool")
         selected_tool_id: Optional[int] = context.get("selected_tool_id")
         w_vector: float = context.get("w_vector", 0.7)
@@ -303,7 +303,7 @@ class HttpToolAgent(AgentBase):
                     answer_sys = await resolve_system_prompt()  # HTTP 실패 → RAG 전용 프롬프트
                     try:
                         async for token in get_llm_provider().generate_stream(
-                            rag_context, query, api_key=api_key,
+                            rag_context, query, user_credentials=user_credentials,
                             system_prompt=answer_sys,
                         ):
                             full_answer += token
@@ -336,7 +336,7 @@ class HttpToolAgent(AgentBase):
 
                 try:
                     async for token in get_llm_provider().generate_stream(
-                        llm_prompt, query, api_key=api_key,
+                        llm_prompt, query, user_credentials=user_credentials,
                         system_prompt=answer_sys,
                     ):
                         full_answer += token
@@ -409,7 +409,7 @@ class HttpToolAgent(AgentBase):
             yield {"type": "status", "step": "tool_select", "message": f"LLM 도구 선택 중... ({len(tools)}개 도구 분석)"}
 
             try:
-                selection = await _select_tool(query, tools, api_key=api_key)
+                selection = await _select_tool(query, tools, user_credentials=user_credentials)
             except Exception as e:
                 logger.warning("도구 선택 LLM 실패: %s", e)
                 yield {"type": "tool_error", "message": "도구 선택에 실패했습니다. 다시 시도해주세요."}

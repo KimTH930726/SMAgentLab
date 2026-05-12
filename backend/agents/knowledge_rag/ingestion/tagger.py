@@ -49,7 +49,7 @@ async def auto_tag_chunks(
     categories: list[str],
     llm,
     *,
-    api_key: Optional[str] = None,
+    user_credentials: Optional[dict] = None,
 ) -> list[dict]:
     """LLM으로 청크들의 카테고리, 컨테이너명, 중요도를 자동 태깅.
 
@@ -77,7 +77,7 @@ async def auto_tag_chunks(
             prompt=prompt,
             system=_TAGGER_SYSTEM,
             max_tokens=2000,
-            api_key=api_key,
+            user_credentials=user_credentials,
         )
         result = parse_json_array(raw)
         logger.info("자동 태깅 완료: %d개 청크", len(result))
@@ -92,7 +92,7 @@ async def extract_glossary_terms(
     existing_terms: list[str],
     llm,
     *,
-    api_key: Optional[str] = None,
+    user_credentials: Optional[dict] = None,
 ) -> list[dict]:
     """LLM으로 텍스트에서 도메인 용어 추출.
 
@@ -113,7 +113,7 @@ async def extract_glossary_terms(
             prompt=prompt,
             system=_GLOSSARY_SYSTEM,
             max_tokens=1000,
-            api_key=api_key,
+            user_credentials=user_credentials,
         )
         terms = parse_json_array(raw)
         # 기존 용어와 중복 제거

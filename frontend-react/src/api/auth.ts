@@ -8,11 +8,17 @@ export async function login(username: string, password: string): Promise<LoginRe
   });
 }
 
+export interface LLMCredentialsTriple {
+  client_id: string;
+  client_secret: string;
+  user_id: string;
+}
+
 export async function register(payload: {
   username: string;
   password: string;
   part: string;
-  llm_api_key?: string;
+  llm_credentials?: LLMCredentialsTriple;
 }): Promise<User> {
   return apiFetch<User>('/auth/register', {
     method: 'POST',
@@ -38,11 +44,15 @@ export async function changePassword(currentPassword: string, newPassword: strin
   });
 }
 
-export async function updateApiKey(llmApiKey: string): Promise<void> {
-  return apiFetch<void>('/auth/me/api-key', {
+export async function updateLLMCredentials(credentials: LLMCredentialsTriple): Promise<void> {
+  return apiFetch<void>('/auth/me/llm-credentials', {
     method: 'PUT',
-    body: JSON.stringify({ llm_api_key: llmApiKey }),
+    body: JSON.stringify({ credentials }),
   });
+}
+
+export async function deleteLLMCredentials(): Promise<void> {
+  return apiFetch<void>('/auth/me/llm-credentials', { method: 'DELETE' });
 }
 
 export async function updateConfluencePAT(pat: string): Promise<void> {

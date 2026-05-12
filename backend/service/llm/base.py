@@ -52,6 +52,7 @@ class LLMProvider(ABC):
         prompt: str,
         system: str = "",
         max_tokens: int = 2000,
+        user_credentials: Optional[dict] = None,
     ) -> str:
         """단순 단일 응답 생성 (파이프라인 스테이지용 — 스트리밍 없음).
 
@@ -59,6 +60,7 @@ class LLMProvider(ABC):
             prompt: 사용자 프롬프트 (템플릿 치환 완료 후)
             system: 시스템 프롬프트
             max_tokens: 최대 생성 토큰 수
+            user_credentials: 사용자별 LLM 자격증명 (선택)
 
         Returns:
             LLM이 생성한 텍스트
@@ -72,14 +74,15 @@ class LLMProvider(ABC):
         question: str,
         history: list[dict] | None = None,
         *,
-        api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        user_identifier: Optional[str] = None,
+        user_credentials: Optional[dict] = None,
     ) -> tuple[str, Optional[str]]:
         """답변 생성. 반환값: (answer, ext_conversation_id).
+
         system_prompt: 기본 시스템 프롬프트를 대체할 커스텀 프롬프트.
-        user_identifier: 외부 LLM 호출 시 사용자 식별용 (DevX의 user 필드 등). 구현체에 따라 무시 가능.
+        user_credentials: 사용자별 LLM 자격증명. InHouse의 경우 {client_id, client_secret, user_id} 트리플.
+                         None이면 시스템 .env 자격증명 사용. Ollama는 무시.
         """
         ...
 
@@ -90,13 +93,12 @@ class LLMProvider(ABC):
         question: str,
         history: list[dict] | None = None,
         *,
-        api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
         on_ext_conversation_id: Optional[Callable[[str], None]] = None,
         system_prompt: Optional[str] = None,
-        user_identifier: Optional[str] = None,
+        user_credentials: Optional[dict] = None,
     ) -> AsyncIterator[str]:
-        """스트리밍 답변 생성."""
+        """스트리밍 답변 생성. user_credentials 의미는 generate() 참고."""
         ...
 
     @abstractmethod

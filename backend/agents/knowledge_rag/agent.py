@@ -61,7 +61,7 @@ class KnowledgeRagAgent(AgentBase):
         w_vector: float = context.get("w_vector", 0.7)
         w_keyword: float = context.get("w_keyword", 0.3)
         top_k: int = context.get("top_k", 5)
-        api_key: Optional[str] = context.get("api_key")
+        user_credentials: Optional[dict] = context.get("user_credentials")
         inhouse_conv_id: Optional[str] = context.get("inhouse_conv_id")
         category: Optional[str] = context.get("category")
 
@@ -154,11 +154,11 @@ class KnowledgeRagAgent(AgentBase):
 
             try:
                 async for token in get_llm_provider().generate_stream(
-                    llm_context, query, history, api_key=api_key,
+                    llm_context, query, history,
+                    user_credentials=user_credentials,
                     ext_conversation_id=inhouse_conv_id,
                     on_ext_conversation_id=_capture_inhouse_conv_id,
                     system_prompt=chat_prompt,
-                    user_identifier=str(user.get("id")) if user else None,
                 ):
                     full_answer += token
                     token_count += 1

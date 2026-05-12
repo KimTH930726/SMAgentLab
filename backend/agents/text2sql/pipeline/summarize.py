@@ -70,7 +70,7 @@ async def run(context: dict, llm, stage_cfg: dict) -> dict:
     )
 
     try:
-        raw = await llm.generate_once(prompt=prompt, system=system, max_tokens=512, api_key=context.get("api_key"))
+        raw = await llm.generate_once(prompt=prompt, system=system, max_tokens=512, user_credentials=context.get("user_credentials"))
         parsed = _extract_json(raw)
         summary = parsed.get("summary", "")
         chart = _validate_chart(parsed.get("chart"), columns)

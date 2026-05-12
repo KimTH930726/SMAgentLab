@@ -295,9 +295,9 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
     try:
         from agents.knowledge_rag.ingestion.analyzer import analyze_document
         from service.llm.factory import get_llm_provider
-        from core.security import get_user_api_key
+        from core.security import get_user_llm_credentials
         llm = get_llm_provider()
-        analysis = await analyze_document(body.raw_text, llm, api_key=get_user_api_key(user))
+        analysis = await analyze_document(body.raw_text, llm, user_credentials=get_user_llm_credentials(user))
         detected_strategy = analysis.get("chunk_strategy", "auto")
         strategy = detected_strategy
     except Exception:
@@ -348,10 +348,10 @@ async def import_file(
         try:
             from agents.knowledge_rag.ingestion.analyzer import analyze_document
             from service.llm.factory import get_llm_provider
-            from core.security import get_user_api_key
+            from core.security import get_user_llm_credentials
 
             llm = get_llm_provider()
-            analyzer_result = await analyze_document(doc.raw_text, llm, api_key=get_user_api_key(user))
+            analyzer_result = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
 
             # 분석 결과로 전략 오버라이드
             chunk_strategy = analyzer_result.get("chunk_strategy", chunk_strategy)
@@ -377,7 +377,7 @@ async def import_file(
         try:
             from agents.knowledge_rag.ingestion.tagger import auto_tag_chunks
             from service.llm.factory import get_llm_provider
-            from core.security import get_user_api_key
+            from core.security import get_user_llm_credentials
 
             categories = []
             try:
@@ -394,7 +394,7 @@ async def import_file(
 
             llm = get_llm_provider()
             tag_input = [{"idx": i, "text": c.text} for i, c in enumerate(chunks)]
-            tags = await auto_tag_chunks(tag_input, categories, llm, api_key=get_user_api_key(user))
+            tags = await auto_tag_chunks(tag_input, categories, llm, user_credentials=get_user_llm_credentials(user))
 
             # 태그 적용
             tag_map = {t["idx"]: t for t in tags}
@@ -426,7 +426,7 @@ async def import_file(
         try:
             from agents.knowledge_rag.ingestion.tagger import extract_glossary_terms
             from service.llm.factory import get_llm_provider
-            from core.security import get_user_api_key
+            from core.security import get_user_llm_credentials
             from core.database import get_conn, resolve_namespace_id
 
             async with get_conn() as conn:
@@ -438,7 +438,7 @@ async def import_file(
 
             llm = get_llm_provider()
             terms = await extract_glossary_terms(
-                doc.raw_text, existing_terms, llm, api_key=get_user_api_key(user),
+                doc.raw_text, existing_terms, llm, user_credentials=get_user_llm_credentials(user),
             )
 
             for term_data in terms:
@@ -460,13 +460,13 @@ async def import_file(
         try:
             from agents.knowledge_rag.ingestion.qa_gen import bulk_generate_qa
             from service.llm.factory import get_llm_provider
-            from core.security import get_user_api_key
+            from core.security import get_user_llm_credentials
             from core.database import get_conn, resolve_namespace_id
 
             llm = get_llm_provider()
             # 상위 5개 청크에서만 Q&A 생성 (비용 절약)
             qa_input = [{"idx": i, "content": c.text} for i, c in enumerate(chunks[:5])]
-            qa_pairs = await bulk_generate_qa(qa_input, llm, api_key=get_user_api_key(user))
+            qa_pairs = await bulk_generate_qa(qa_input, llm, user_credentials=get_user_llm_credentials(user))
 
             async with get_conn() as conn:
                 ns_id = await resolve_namespace_id(conn, namespace)
@@ -526,9 +526,9 @@ async def preview_file_upload(
     try:
         from agents.knowledge_rag.ingestion.analyzer import analyze_document
         from service.llm.factory import get_llm_provider
-        from core.security import get_user_api_key
+        from core.security import get_user_llm_credentials
         llm = get_llm_provider()
-        analysis = await analyze_document(doc.raw_text, llm, api_key=get_user_api_key(user))
+        analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
         detected_strategy = analysis.get("chunk_strategy", "auto")
         strategy = detected_strategy
     except Exception:
@@ -589,11 +589,11 @@ async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current
         try:
             from agents.knowledge_rag.ingestion.tagger import auto_tag_chunks
             from service.llm.factory import get_llm_provider
-            from core.security import get_user_api_key
+            from core.security import get_user_llm_credentials
 
             llm = get_llm_provider()
             tag_input = [{"idx": i, "text": c.text} for i, c in enumerate(chunks)]
-            tags = await auto_tag_chunks(tag_input, [], llm, api_key=get_user_api_key(user))
+            tags = await auto_tag_chunks(tag_input, [], llm, user_credentials=get_user_llm_credentials(user))
             tag_map = {t["idx"]: t for t in tags}
             for i, item in enumerate(items):
                 tag = tag_map.get(i, {})
@@ -620,7 +620,7 @@ async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current
         try:
             from agents.knowledge_rag.ingestion.tagger import extract_glossary_terms
             from service.llm.factory import get_llm_provider
-            from core.security import get_user_api_key
+            from core.security import get_user_llm_credentials
             from core.database import get_conn, resolve_namespace_id
 
             async with get_conn() as conn:
@@ -630,7 +630,7 @@ async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current
 
             llm = get_llm_provider()
             terms = await extract_glossary_terms(
-                doc.raw_text, existing_terms, llm, api_key=get_user_api_key(user),
+                doc.raw_text, existing_terms, llm, user_credentials=get_user_llm_credentials(user),
             )
             for term_data in terms:
                 try:
@@ -765,9 +765,9 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
     try:
         from agents.knowledge_rag.ingestion.analyzer import analyze_document
         from service.llm.factory import get_llm_provider
-        from core.security import get_user_api_key
+        from core.security import get_user_llm_credentials
         llm = get_llm_provider()
-        analysis = await analyze_document(doc.raw_text, llm, api_key=get_user_api_key(user))
+        analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
         detected_strategy = analysis.get("chunk_strategy", "auto")
         strategy = detected_strategy
     except Exception:

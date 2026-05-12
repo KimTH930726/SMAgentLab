@@ -32,7 +32,7 @@ import { getNamespaces, getNamespacesDetail, getCategories } from '../../api/nam
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { getConversations, deleteConversation } from '../../api/conversations';
 import { healthCheck } from '../../api/client';
-import { changePassword, updateApiKey, updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
+import { changePassword, updateLLMCredentials, deleteLLMCredentials, updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
 import { getLLMConfig } from '../../api/llm';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -556,8 +556,8 @@ function UserSection() {
 interface AccountSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  user: { username: string; part: string; role: string; has_api_key: boolean; has_confluence_pat?: boolean };
-  onUserUpdate: (u: Partial<{ has_api_key: boolean; has_confluence_pat: boolean }>) => void;
+  user: { username: string; part: string; role: string; has_llm_credentials: boolean; has_confluence_pat?: boolean };
+  onUserUpdate: (u: Partial<{ has_llm_credentials: boolean; has_confluence_pat: boolean }>) => void;
 }
 
 function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSettingsModalProps) {
@@ -569,11 +569,13 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
   const [pwLoading, setPwLoading] = useState(false);
   const [pwMsg, setPwMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  // API Key
-  const [apiKey, setApiKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [keyLoading, setKeyLoading] = useState(false);
-  const [keyMsg, setKeyMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  // LLM 자격증명 트리플 (DevX OAuth2)
+  const [credClientId, setCredClientId] = useState('');
+  const [credClientSecret, setCredClientSecret] = useState('');
+  const [credUserId, setCredUserId] = useState('');
+  const [showCredSecret, setShowCredSecret] = useState(false);
+  const [credLoading, setCredLoading] = useState(false);
+  const [credMsg, setCredMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   // Confluence PAT
   const [pat, setPat] = useState('');
@@ -586,7 +588,8 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
     if (!isOpen) {
       setCurrentPw(''); setNewPw(''); setConfirmPw('');
       setShowPw(false); setPwMsg(null);
-      setApiKey(''); setShowKey(false); setKeyMsg(null);
+      setCredClientId(''); setCredClientSecret(''); setCredUserId('');
+      setShowCredSecret(false); setCredMsg(null);
       setPat(''); setShowPat(false); setPatMsg(null);
     }
   }, [isOpen]);
@@ -609,20 +612,40 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
     }
   };
 
-  const handleUpdateApiKey = async () => {
-    setKeyMsg(null);
-    if (!apiKey.trim()) { setKeyMsg({ type: 'err', text: 'API Key를 입력해주세요.' }); return; }
-
-    setKeyLoading(true);
+  const handleUpdateCredentials = async () => {
+    setCredMsg(null);
+    if (!credClientId.trim() || !credClientSecret.trim() || !credUserId.trim()) {
+      setCredMsg({ type: 'err', text: 'Client ID / Client Secret / User ID 모두 입력해주세요.' });
+      return;
+    }
+    setCredLoading(true);
     try {
-      await updateApiKey(apiKey.trim());
-      setKeyMsg({ type: 'ok', text: 'API Key가 등록되었습니다.' });
-      setApiKey('');
-      onUserUpdate({ has_api_key: true });
+      await updateLLMCredentials({
+        client_id: credClientId.trim(),
+        client_secret: credClientSecret.trim(),
+        user_id: credUserId.trim(),
+      });
+      setCredMsg({ type: 'ok', text: '자격증명이 등록되었습니다.' });
+      setCredClientId(''); setCredClientSecret(''); setCredUserId('');
+      onUserUpdate({ has_llm_credentials: true });
     } catch (err) {
-      setKeyMsg({ type: 'err', text: err instanceof Error ? err.message : 'API Key 등록 실패' });
+      setCredMsg({ type: 'err', text: err instanceof Error ? err.message : '자격증명 등록 실패' });
     } finally {
-      setKeyLoading(false);
+      setCredLoading(false);
+    }
+  };
+
+  const handleDeleteCredentials = async () => {
+    setCredMsg(null);
+    setCredLoading(true);
+    try {
+      await deleteLLMCredentials();
+      setCredMsg({ type: 'ok', text: '자격증명이 삭제되었습니다. (이후 팀 공통 자격증명 사용)' });
+      onUserUpdate({ has_llm_credentials: false });
+    } catch (err) {
+      setCredMsg({ type: 'err', text: err instanceof Error ? err.message : '자격증명 삭제 실패' });
+    } finally {
+      setCredLoading(false);
     }
   };
 
@@ -675,9 +698,9 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
               <p className="text-slate-200 font-medium">{user.role === 'admin' ? '슈퍼어드민' : '일반 사용자'}</p>
             </div>
             <div>
-              <span className="text-slate-500 text-xs">API Key</span>
-              <p className={clsx('font-medium', user.has_api_key ? 'text-emerald-400' : 'text-slate-500')}>
-                {user.has_api_key ? '등록됨' : '미등록'}
+              <span className="text-slate-500 text-xs">LLM 자격증명</span>
+              <p className={clsx('font-medium', user.has_llm_credentials ? 'text-emerald-400' : 'text-slate-500')}>
+                {user.has_llm_credentials ? '본인 키 사용' : '팀 공통 키 사용'}
               </p>
             </div>
             <div>
@@ -738,39 +761,59 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
           </div>
         </div>
 
-        {/* API Key */}
+        {/* LLM 자격증명 트리플 */}
         <div>
           <h4 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
             <Key className="w-4 h-4 text-slate-400" />
-            LLM API Key
+            사내 LLM 자격증명 <span className="text-xs text-slate-500 font-normal">(선택 — 미등록 시 팀 공통)</span>
           </h4>
           <div className="space-y-2.5">
+            <input
+              type="text"
+              value={credClientId}
+              onChange={(e) => setCredClientId(e.target.value)}
+              placeholder="Client ID (예: usr-...)"
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+            />
             <div className="relative">
               <input
-                type={showKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={user.has_api_key ? '새 API Key로 교체' : 'API Key 입력'}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 pr-10 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && handleUpdateApiKey()}
+                type={showCredSecret ? 'text' : 'password'}
+                value={credClientSecret}
+                onChange={(e) => setCredClientSecret(e.target.value)}
+                placeholder="Client Secret"
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 pr-10 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
               />
               <button
                 type="button"
-                onClick={() => setShowKey((v) => !v)}
+                onClick={() => setShowCredSecret((v) => !v)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
               >
-                {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                {showCredSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
             </div>
-            <p className="text-[10px] text-slate-500">사내 LLM 사용 시 필요한 API Key를 등록합니다. 암호화되어 저장됩니다.</p>
-            {keyMsg && (
-              <p className={clsx('text-xs px-2', keyMsg.type === 'ok' ? 'text-emerald-400' : 'text-rose-400')}>
-                {keyMsg.text}
+            <input
+              type="text"
+              value={credUserId}
+              onChange={(e) => setCredUserId(e.target.value)}
+              placeholder="User ID (예: 20251105_...)"
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+            />
+            <p className="text-[10px] text-slate-500">DevX OAuth2 Client Credentials 트리플. 등록 시 본인 키로, 미등록 시 .env 팀 공통 키로 동작합니다. (Fernet 암호화 저장)</p>
+            {credMsg && (
+              <p className={clsx('text-xs px-2', credMsg.type === 'ok' ? 'text-emerald-400' : 'text-rose-400')}>
+                {credMsg.text}
               </p>
             )}
-            <Button size="sm" onClick={handleUpdateApiKey} loading={keyLoading} className="w-full">
-              {user.has_api_key ? 'API Key 변경' : 'API Key 등록'}
-            </Button>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleUpdateCredentials} loading={credLoading} className="flex-1">
+                {user.has_llm_credentials ? '자격증명 변경' : '자격증명 등록'}
+              </Button>
+              {user.has_llm_credentials && (
+                <Button size="sm" variant="ghost" onClick={handleDeleteCredentials} loading={credLoading}>
+                  삭제
+                </Button>
+              )}
+            </div>
           </div>
         </div>
 

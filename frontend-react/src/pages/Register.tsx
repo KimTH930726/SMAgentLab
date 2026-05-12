@@ -15,7 +15,6 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
   const [part, setPart] = useState('');
-  const [llmApiKey, setLlmApiKey] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -50,7 +49,6 @@ export default function Register() {
         username: username.trim(),
         password,
         part,
-        llm_api_key: llmApiKey.trim() || undefined,
       });
       // Auto-login after registration
       const res = await login(username.trim(), password);
@@ -144,19 +142,9 @@ export default function Register() {
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-400 mb-1.5">
-                LLM API Key <span className="text-slate-500">(선택)</span>
-              </label>
-              <input
-                type="password"
-                value={llmApiKey}
-                onChange={(e) => setLlmApiKey(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
-                placeholder="사내 LLM API Key"
-              />
-              <p className="text-xs text-slate-500 mt-1">사내 LLM 사용 시에만 입력</p>
-            </div>
+            <p className="text-xs text-slate-500 -mt-2">
+              가입 후 프로필 설정에서 본인의 사내 LLM 자격증명을 등록할 수 있습니다. 미등록 시 팀 공통 자격증명으로 동작합니다.
+            </p>
 
             {error && (
               <p className="text-sm text-rose-400 bg-rose-900/20 border border-rose-800/30 rounded-lg px-3 py-2">
