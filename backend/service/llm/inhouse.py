@@ -40,17 +40,8 @@ def _build_query(
 
 
 def _extract_answer(data: dict) -> str:
-    """응답 JSON에서 answer를 추출. blocking 응답용 fallback 체인."""
-    if data.get("answer"):
-        return data["answer"]
-    if data.get("message"):
-        return data["message"]
-    ext = data.get("external_response")
-    if isinstance(ext, dict):
-        dify = ext.get("dify_response")
-        if isinstance(dify, dict) and dify.get("answer"):
-            return dify["answer"]
-    return json.dumps(data, ensure_ascii=False)
+    """응답 JSON에서 answer를 추출. 게이트웨이가 `answer` 또는 `message` 필드로 반환."""
+    return data.get("answer") or data.get("message") or json.dumps(data, ensure_ascii=False)
 
 
 class InHouseLLMProvider(LLMProvider):
@@ -73,6 +64,10 @@ class InHouseLLMProvider(LLMProvider):
         self._agent_code = cfg.get("inhouse_llm_agent_code", settings.inhouse_llm_agent_code)
         self._agent_id = cfg.get("inhouse_llm_agent_id", settings.inhouse_llm_agent_id) or None
         self._model = cfg.get("inhouse_llm_model", settings.inhouse_llm_model) or None
+        # DevX dify에 사전 등록된 시스템 공통 conversation_id. 빈 값이면 호출 시 conv_id 미포함.
+        self._fixed_conversation_id = (
+            cfg.get("inhouse_llm_conversation_id", settings.inhouse_llm_conversation_id) or ""
+        )
         self._response_mode = cfg.get("inhouse_llm_response_mode", settings.inhouse_llm_response_mode)
         self._timeout = cfg.get("inhouse_llm_timeout", settings.inhouse_llm_timeout)
         self._token_refresh_buffer = cfg.get(
@@ -143,6 +138,9 @@ class InHouseLLMProvider(LLMProvider):
         user_identifier: Optional[str],
         ext_conversation_id: Optional[str],
     ) -> dict:
+        # DevX dify는 사전 등록된 conversation_id만 허용 → 우리 시스템의 conv_id를
+        # 직접 전달하지 않고 시스템 공통 고정 ID(있다면)를 사용.
+        conv_id = ext_conversation_id or self._fixed_conversation_id
         payload: dict = {
             "user": user_identifier or "system",
             "query": query,
@@ -152,18 +150,11 @@ class InHouseLLMProvider(LLMProvider):
         }
         if self._agent_id:
             payload["agent_id"] = self._agent_id
-        if ext_conversation_id:
-            payload["conversation_id"] = ext_conversation_id
+        if conv_id:
+            payload["conversation_id"] = conv_id
         if self._model:
             payload["inputs"] = {"model": self._model}
         return payload
-
-    @staticmethod
-    def _extract_ext_conv_id(chunk: dict) -> Optional[str]:
-        cid = chunk.get("conversation_id")
-        if cid:
-            return str(cid)
-        return None
 
     # ── 공개 API ──────────────────────────────────────────────────
 
@@ -214,7 +205,7 @@ class InHouseLLMProvider(LLMProvider):
             resp.raise_for_status()
             data = resp.json()
             answer = _extract_answer(data)
-            new_conv_id = self._extract_ext_conv_id(data)
+            new_conv_id = data.get("conversation_id")
             return answer, new_conv_id
 
     async def generate_stream(
@@ -243,7 +234,7 @@ class InHouseLLMProvider(LLMProvider):
                 resp = await client.post(self._chat_url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-                new_ext_conv_id = self._extract_ext_conv_id(data)
+                new_ext_conv_id = data.get("conversation_id")
                 if new_ext_conv_id and on_ext_conversation_id:
                     on_ext_conversation_id(new_ext_conv_id)
                 yield _extract_answer(data)
@@ -277,7 +268,7 @@ class InHouseLLMProvider(LLMProvider):
                         logger.warning("SSE parse error: %s", raw[:100])
                         continue
                     if not captured_ext_conv_id:
-                        cid = self._extract_ext_conv_id(chunk)
+                        cid = chunk.get("conversation_id")
                         if cid:
                             captured_ext_conv_id = cid
                     event_type = chunk.get("event", "")

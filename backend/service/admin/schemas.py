@@ -81,6 +81,7 @@ class LLMConfigUpdate(BaseModel):
     inhouse_llm_client_secret: Optional[str] = None
     inhouse_llm_agent_id: Optional[str] = None
     inhouse_llm_agent_code: Optional[str] = None
+    inhouse_llm_conversation_id: Optional[str] = None
     inhouse_llm_model: Optional[str] = None
     inhouse_llm_response_mode: Optional[str] = None
     inhouse_llm_timeout: Optional[int] = None
@@ -96,6 +97,7 @@ class LLMTestRequest(BaseModel):
     inhouse_llm_client_secret: Optional[str] = None
     inhouse_llm_agent_id: Optional[str] = None
     inhouse_llm_agent_code: Optional[str] = None
+    inhouse_llm_conversation_id: Optional[str] = None
     inhouse_llm_model: Optional[str] = None
     inhouse_llm_response_mode: Optional[str] = None
 

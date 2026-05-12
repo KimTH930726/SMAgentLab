@@ -52,6 +52,7 @@ def get_runtime_config() -> dict:
             "base_url": cfg.get("inhouse_llm_base_url", settings.inhouse_llm_base_url),
             "agent_code": cfg.get("inhouse_llm_agent_code", settings.inhouse_llm_agent_code),
             "agent_id": cfg.get("inhouse_llm_agent_id", settings.inhouse_llm_agent_id) or "",
+            "conversation_id": cfg.get("inhouse_llm_conversation_id", settings.inhouse_llm_conversation_id) or "",
             "model": cfg.get("inhouse_llm_model", settings.inhouse_llm_model) or "",
             "has_credentials": bool(
                 cfg.get("inhouse_llm_client_id", settings.inhouse_llm_client_id)

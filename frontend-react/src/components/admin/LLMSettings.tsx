@@ -75,6 +75,7 @@ interface FormState {
   inhouse_llm_client_secret: string;
   inhouse_llm_agent_id: string;
   inhouse_llm_agent_code: string;
+  inhouse_llm_conversation_id: string;
   inhouse_llm_model: InhouseModel;
   inhouse_llm_response_mode: ResponseMode;
   inhouse_llm_timeout: number;
@@ -91,6 +92,7 @@ function configToForm(cfg: LLMConfig): FormState {
     inhouse_llm_client_secret: '',       // 시크릿이라 GET 응답에 없음 — 변경 시에만 입력
     inhouse_llm_agent_id: cfg.inhouse.agent_id,
     inhouse_llm_agent_code: cfg.inhouse.agent_code,
+    inhouse_llm_conversation_id: cfg.inhouse.conversation_id,
     inhouse_llm_model: (cfg.inhouse.model as InhouseModel) || '',
     inhouse_llm_response_mode: (cfg.inhouse.response_mode as ResponseMode) || 'streaming',
     inhouse_llm_timeout: cfg.inhouse.timeout,
@@ -250,6 +252,7 @@ function ProviderSettings() {
       payload.inhouse_llm_base_url = form.inhouse_llm_base_url;
       payload.inhouse_llm_agent_code = form.inhouse_llm_agent_code;
       payload.inhouse_llm_agent_id = form.inhouse_llm_agent_id || undefined;
+      payload.inhouse_llm_conversation_id = form.inhouse_llm_conversation_id || undefined;
       payload.inhouse_llm_model = form.inhouse_llm_model || undefined;
       payload.inhouse_llm_response_mode = form.inhouse_llm_response_mode;
       payload.inhouse_llm_timeout = form.inhouse_llm_timeout;
@@ -431,6 +434,19 @@ function ProviderSettings() {
                   className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
                 />
               </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">고정 Conversation ID</label>
+              <input
+                type="text"
+                value={form.inhouse_llm_conversation_id}
+                onChange={(e) => handleChange('inhouse_llm_conversation_id', e.target.value)}
+                placeholder="99cae258-25ee-43a4-8336-..."
+                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+              />
+              <p className="text-xs text-slate-500 mt-0.5">
+                DevX dify에 사전 등록된 conversation_id. 빈 값이면 첫 호출에서 0바이트 응답 가능성. 우리 시스템의 대화 메모리(요약+시맨틱 리콜)가 history를 직렬화해 query에 직접 포함하므로 dify 측 멀티턴 메모리는 영향 없습니다.
+              </p>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1">응답 방식</label>

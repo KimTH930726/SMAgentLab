@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     inhouse_llm_model: str = ""
     inhouse_llm_agent_code: str = "playground"
     inhouse_llm_agent_id: str = "b6958377-73f2-4234-a49c-2aa878350a2e"
+    # DevX 게이트웨이 /agent/chat은 사전 등록된 conversation_id만 허용.
+    # 임의 UUID 사용 시 0바이트 응답 → 시스템 공통 고정 ID 사용.
+    # 우리 자체 대화 메모리(요약+시맨틱 리콜)가 history를 직렬화해 query에 포함하므로
+    # dify 쪽 멀티턴 메모리는 사실상 무시함.
+    inhouse_llm_conversation_id: str = ""
     inhouse_llm_response_mode: str = "streaming"
     inhouse_llm_timeout: int = 120
     # OAuth 토큰 만료 전 갱신 여유(초). 응답의 expires_in 보다 이 값만큼 일찍 재발급.

@@ -49,6 +49,8 @@ services:
       # 빈 값 fallback은 settings 기본값을 덮어쓰지 않도록 코드 기본과 동일하게 둠
       INHOUSE_LLM_AGENT_ID: ${INHOUSE_LLM_AGENT_ID:-b6958377-73f2-4234-a49c-2aa878350a2e}
       INHOUSE_LLM_AGENT_CODE: ${INHOUSE_LLM_AGENT_CODE:-playground}
+      # 사전 등록된 dify conversation_id (없으면 첫 호출에서 0바이트 응답 가능)
+      INHOUSE_LLM_CONVERSATION_ID: ${INHOUSE_LLM_CONVERSATION_ID:-}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
       FERNET_SECRET_KEY: ${FERNET_SECRET_KEY:-}
       ADMIN_DEFAULT_PASSWORD: ${ADMIN_DEFAULT_PASSWORD:-1111}

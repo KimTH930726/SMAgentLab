@@ -91,6 +91,10 @@ INHOUSE_LLM_CLIENT_ID=DevX발급client_id
 INHOUSE_LLM_CLIENT_SECRET=DevX발급client_secret
 INHOUSE_LLM_AGENT_ID=DevX_agent_id_UUID
 INHOUSE_LLM_AGENT_CODE=playground
+# ⚠️ DevX dify에 사전 등록된 conversation_id (없으면 첫 호출이 0바이트 응답)
+# 우리 자체 메모리(요약+시맨틱 리콜)가 history를 query에 직렬화하므로
+# dify의 멀티턴 메모리는 영향 없음 — 시스템 공통 한 개만 사용
+INHOUSE_LLM_CONVERSATION_ID=DevX_등록된_conversation_id_UUID
 
 # ── 시크릿 키 (Step 1 출력값 붙여넣기) ─────────────────────
 JWT_SECRET_KEY=a1b2c3d4e5f6...           # Step 1의 첫 번째 출력

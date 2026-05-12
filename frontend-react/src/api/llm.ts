@@ -13,6 +13,7 @@ export interface LLMConfig {
     base_url: string;
     agent_code: string;
     agent_id: string;
+    conversation_id: string;
     model: string;
     has_credentials: boolean;
     response_mode: string;
@@ -31,6 +32,7 @@ export interface LLMConfigUpdate {
   inhouse_llm_client_secret?: string;
   inhouse_llm_agent_id?: string;
   inhouse_llm_agent_code?: string;
+  inhouse_llm_conversation_id?: string;
   inhouse_llm_model?: string;
   inhouse_llm_response_mode?: string;
   inhouse_llm_timeout?: number;
