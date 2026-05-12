@@ -44,8 +44,9 @@ async def agent_health(agent_id: str, _user: dict = Depends(get_current_user)):
 
 _CONFIG_FIELDS = (
     "ollama_base_url", "ollama_model", "ollama_timeout",
-    "inhouse_llm_url", "inhouse_llm_api_key", "inhouse_llm_model",
-    "inhouse_llm_agent_code", "inhouse_llm_response_mode", "inhouse_llm_timeout",
+    "inhouse_llm_base_url", "inhouse_llm_client_id", "inhouse_llm_client_secret",
+    "inhouse_llm_agent_id", "inhouse_llm_agent_code", "inhouse_llm_conversation_id",
+    "inhouse_llm_model", "inhouse_llm_response_mode", "inhouse_llm_timeout",
 )
 
 

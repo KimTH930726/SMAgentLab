@@ -75,9 +75,11 @@ class LLMProvider(ABC):
         api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        user_identifier: Optional[str] = None,
     ) -> tuple[str, Optional[str]]:
         """답변 생성. 반환값: (answer, ext_conversation_id).
         system_prompt: 기본 시스템 프롬프트를 대체할 커스텀 프롬프트.
+        user_identifier: 외부 LLM 호출 시 사용자 식별용 (DevX의 user 필드 등). 구현체에 따라 무시 가능.
         """
         ...
 
@@ -92,6 +94,7 @@ class LLMProvider(ABC):
         ext_conversation_id: Optional[str] = None,
         on_ext_conversation_id: Optional[Callable[[str], None]] = None,
         system_prompt: Optional[str] = None,
+        user_identifier: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """스트리밍 답변 생성."""
         ...

@@ -30,6 +30,7 @@ class OllamaProvider(LLMProvider):
         system: str = "",
         max_tokens: int = 2000,
         api_key: str | None = None,
+        user_identifier: Optional[str] = None,
     ) -> str:
         messages = []
         if system:
@@ -53,6 +54,7 @@ class OllamaProvider(LLMProvider):
         api_key: Optional[str] = None,
         ext_conversation_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        user_identifier: Optional[str] = None,
     ) -> tuple[str, Optional[str]]:
         messages = build_messages(context, question, history, system_prompt=system_prompt)
         async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:
@@ -73,6 +75,7 @@ class OllamaProvider(LLMProvider):
         ext_conversation_id: Optional[str] = None,
         on_ext_conversation_id: Optional[Callable[[str], None]] = None,
         system_prompt: Optional[str] = None,
+        user_identifier: Optional[str] = None,
     ) -> AsyncIterator[str]:
         messages = build_messages(context, question, history, system_prompt=system_prompt)
         async with httpx.AsyncClient(timeout=_ollama_timeout()) as client:

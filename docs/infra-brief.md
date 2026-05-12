@@ -31,8 +31,9 @@
 │         │                 │                                  │
 │         │                 ▼ (외부 호출)                        │
 │         │          ┌──────────────────────┐                  │
-│         │          │ 사내 DevX LLM API     │ ← HTTPS, 외부망  │
-│         │          │ (사내 LLM 엔드포인트) │                  │
+│         │          │ 사내 DevX 게이트웨이  │ ← HTTPS, OAuth2  │
+│         │          │ /api/v1/auth/token    │   Client Creds   │
+│         │          │ /api/v1/agent/chat    │                  │
 │         │          └──────────────────────┘                  │
 │         ▼                                                    │
 │  외부 사용자 (사내 PC, 브라우저)                              │
@@ -95,7 +96,7 @@ Redis 데이터        : 256MB   (캐시 maxmemory 제한)
 
 | 대상 | 포트 | 용도 | 비고 |
 |---|---|---|---|
-| 사내 DevX LLM API | 443 | LLM 호출 (필수) | `INHOUSE_LLM_URL` 사내 엔드포인트 |
+| 사내 DevX 게이트웨이 | 443 | OAuth 토큰 발급 + LLM 호출 (필수) | `INHOUSE_LLM_BASE_URL` 도메인 (예: `devx-gw.shinsegae-inc.com`) |
 | 사내 NTP 서버 | 123 | 시간 동기화 | JWT 검증·로그 정합성 |
 | 사내 DNS | 53 | 이름 해석 | LLM URL 도메인 → IP |
 | (인터넷) | - | **불필요** | 운영 시 인터넷 접속 안 함 |
@@ -163,7 +164,7 @@ docker save → tar.gz                      docker compose up -d
 
 | 항목 | 설명 | 인프라팀 협조 사항 |
 |---|---|---|
-| 사내 DevX LLM API | RAG 답변 생성용 | 서버 → LLM 엔드포인트 HTTPS 허용 |
+| 사내 DevX 게이트웨이 | OAuth 토큰 발급 + RAG 답변 생성 | 서버 → `devx-gw.shinsegae-inc.com` HTTPS 허용 |
 | 사내 NTP | 시간 동기화 | 서버 NTP 설정 |
 
 ### 선택
@@ -185,13 +186,13 @@ docker save → tar.gz                      docker compose up -d
 
 | 항목 | 적용 방안 |
 |---|---|
-| 시크릿 관리 | `.env` 파일에 JWT/Fernet 키 저장. 권한 `chmod 600`. 사내 시크릿 매니저 통합 검토 가능 |
+| 시크릿 관리 | `.env` 파일에 JWT/Fernet 키 + DevX `CLIENT_ID/SECRET` 저장. 권한 `chmod 600`. 사내 시크릿 매니저 통합 검토 가능 |
 | DB 비밀번호 | `.env`의 `POSTGRES_PASSWORD` 강한 값으로 설정 |
 | 어드민 계정 | 초기 비밀번호 `.env`에서 변경 필수, 첫 로그인 후 UI에서 재변경 |
 | 컨테이너 권한 | 모든 컨테이너 비루트 실행 (애플리케이션 레벨) — Docker 데몬은 root |
 | Docker 그룹 | `docker` 그룹 가입자는 사실상 root 권한 — 운영자 외 차단 |
 | SELinux/AppArmor | Rocky/RHEL는 Enforcing 유지, bind mount에 라벨 부여 (가이드 §2-1 E) |
-| 외부 API 키 | 사용자별 LLM API 키는 Fernet 암호화 후 DB 저장 |
+| DevX 인증 방식 | OAuth2 Client Credentials. `CLIENT_ID/SECRET`은 시스템 공통, 자동 토큰 갱신 (만료 60초 전 재발급) |
 | 사용자 인증 | JWT (Access Token + Refresh Token), 비밀번호 bcrypt |
 | HTTPS | 본 시스템은 HTTP. **사내 리버스 프록시(nginx/HAProxy)에서 TLS 종단 권장** |
 

@@ -75,10 +75,14 @@ class LLMConfigUpdate(BaseModel):
     ollama_base_url: Optional[str] = None
     ollama_model: Optional[str] = None
     ollama_timeout: Optional[int] = None
-    inhouse_llm_url: Optional[str] = None
-    inhouse_llm_api_key: Optional[str] = None
-    inhouse_llm_model: Optional[str] = None
+    # InHouse (OAuth2 Client Credentials)
+    inhouse_llm_base_url: Optional[str] = None
+    inhouse_llm_client_id: Optional[str] = None
+    inhouse_llm_client_secret: Optional[str] = None
+    inhouse_llm_agent_id: Optional[str] = None
     inhouse_llm_agent_code: Optional[str] = None
+    inhouse_llm_conversation_id: Optional[str] = None
+    inhouse_llm_model: Optional[str] = None
     inhouse_llm_response_mode: Optional[str] = None
     inhouse_llm_timeout: Optional[int] = None
 
@@ -87,10 +91,14 @@ class LLMTestRequest(BaseModel):
     provider: str
     ollama_base_url: Optional[str] = None
     ollama_model: Optional[str] = None
-    inhouse_llm_url: Optional[str] = None
-    inhouse_llm_api_key: Optional[str] = None
-    inhouse_llm_model: Optional[str] = None
+    # InHouse (OAuth2 Client Credentials)
+    inhouse_llm_base_url: Optional[str] = None
+    inhouse_llm_client_id: Optional[str] = None
+    inhouse_llm_client_secret: Optional[str] = None
+    inhouse_llm_agent_id: Optional[str] = None
     inhouse_llm_agent_code: Optional[str] = None
+    inhouse_llm_conversation_id: Optional[str] = None
+    inhouse_llm_model: Optional[str] = None
     inhouse_llm_response_mode: Optional[str] = None
 
 
