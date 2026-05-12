@@ -84,9 +84,13 @@ POSTGRES_PASSWORD=강력한비밀번호로변경
 DATABASE_URL=postgresql://ops:강력한비밀번호로변경@postgres:5432/opsdb
 # ↑ POSTGRES_PASSWORD와 DATABASE_URL의 비밀번호 일치시켜야 함
 
-# ── LLM (사내 환경에 맞게) ──────────────────────────────
+# ── LLM (OAuth2 Client Credentials — DevX 게이트웨이) ───
 LLM_PROVIDER=inhouse
-INHOUSE_LLM_URL=https://devx-mcp-api.shinsegae-inc.com/api/v1/mcp-command/chat
+INHOUSE_LLM_BASE_URL=https://devx-gw.shinsegae-inc.com
+INHOUSE_LLM_CLIENT_ID=DevX발급client_id
+INHOUSE_LLM_CLIENT_SECRET=DevX발급client_secret
+INHOUSE_LLM_AGENT_ID=DevX_agent_id_UUID
+INHOUSE_LLM_AGENT_CODE=playground
 
 # ── 시크릿 키 (Step 1 출력값 붙여넣기) ─────────────────────
 JWT_SECRET_KEY=a1b2c3d4e5f6...           # Step 1의 첫 번째 출력
@@ -447,7 +451,7 @@ docker compose $COMPOSE down -v       # 컨테이너 + 볼륨 삭제 (데이터 
 | `docker load` 실패 (no space left) | 디스크 부족 | `df -h`, 이전 이미지 정리: `docker image prune -a` |
 | `pgvector` 확장 오류 | 잘못된 postgres 이미지 사용 | 반드시 `pgvector/pgvector:pg16` 이미지 사용 확인 |
 | 백엔드 시작 시 "model not found" | 이미지 빌드 시 모델 다운로드 누락 | 빌드 PC에서 인터넷 확인 후 재빌드 |
-| `INHOUSE_LLM_URL` 접속 실패 | 폐쇄망에서 사내 LLM 미허용 | 방화벽/프록시 설정 확인, `LLM_PROVIDER=ollama` 로 전환 |
+| OAuth 토큰 발급 실패 (401/403) | client_id/client_secret 오류 또는 폐쇄망에서 게이트웨이 미허용 | `.env`의 `INHOUSE_LLM_CLIENT_ID/SECRET` 재확인, 방화벽에서 `INHOUSE_LLM_BASE_URL` 도메인 HTTPS 허용. 임시로 `LLM_PROVIDER=ollama` 전환 |
 | 포트 8501/8000 충돌 | 다른 서비스 사용 중 | `.env`의 `FRONTEND_PORT`, `BACKEND_PORT` 변경 |
 | 컨테이너 재시작 반복 | DB 헬스체크 대기 | 1~2분 대기 후 `docker compose ps` 재확인 |
 | 이미지 아키텍처 불일치 | 빌드 PC가 ARM64이고 서버가 x86_64 (또는 반대) | 빌드 PC와 서버를 같은 아키텍처로 통일하거나 `docker buildx build --platform linux/amd64` 사용 |

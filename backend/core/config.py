@@ -13,8 +13,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://ops:ops1234@localhost:5432/opsdb"
     llm_provider: str = "inhouse"
     ollama_base_url: str = "http://host.docker.internal:11434"
-    inhouse_llm_url: str = ""
-    inhouse_llm_api_key: str = ""
+
+    # InHouse DevX LLM — OAuth2 Client Credentials 인증
+    # base_url 이하 /api/v1/auth/token, /api/v1/agent/chat 사용
+    inhouse_llm_base_url: str = "https://devx-gw.shinsegae-inc.com"
+    inhouse_llm_client_id: str = ""        # OAuth client_id (시스템 공통)
+    inhouse_llm_client_secret: str = ""    # OAuth client_secret (시스템 공통)
+
     jwt_secret_key: str = "change-this-secret-key-in-production"
     fernet_secret_key: str = ""
     admin_default_password: str = "1111"
@@ -29,10 +34,11 @@ class Settings(BaseSettings):
     ollama_timeout: int = 900
     inhouse_llm_model: str = ""
     inhouse_llm_agent_code: str = "playground"
-    inhouse_llm_usecase_id: str = "b6958377-73f2-4234-a49c-2aa878350a2e"
-    inhouse_llm_project_id: str = "eb01fb40-909b-4a0a-b86e-824c6a3bea2e"
+    inhouse_llm_agent_id: str = "b6958377-73f2-4234-a49c-2aa878350a2e"
     inhouse_llm_response_mode: str = "streaming"
     inhouse_llm_timeout: int = 120
+    # OAuth 토큰 만료 전 갱신 여유(초). 응답의 expires_in 보다 이 값만큼 일찍 재발급.
+    inhouse_llm_token_refresh_buffer: int = 60
 
     # 검색 기본값
     default_top_k: int = 3

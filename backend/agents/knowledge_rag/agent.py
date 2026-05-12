@@ -158,6 +158,7 @@ class KnowledgeRagAgent(AgentBase):
                     ext_conversation_id=inhouse_conv_id,
                     on_ext_conversation_id=_capture_inhouse_conv_id,
                     system_prompt=chat_prompt,
+                    user_identifier=str(user.get("id")) if user else None,
                 ):
                     full_answer += token
                     token_count += 1

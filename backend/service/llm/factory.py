@@ -49,10 +49,14 @@ def get_runtime_config() -> dict:
             "timeout": cfg.get("ollama_timeout", settings.ollama_timeout),
         },
         "inhouse": {
-            "url": cfg.get("inhouse_llm_url", settings.inhouse_llm_url),
+            "base_url": cfg.get("inhouse_llm_base_url", settings.inhouse_llm_base_url),
             "agent_code": cfg.get("inhouse_llm_agent_code", settings.inhouse_llm_agent_code),
+            "agent_id": cfg.get("inhouse_llm_agent_id", settings.inhouse_llm_agent_id) or "",
             "model": cfg.get("inhouse_llm_model", settings.inhouse_llm_model) or "",
-            "has_api_key": bool(cfg.get("inhouse_llm_api_key", settings.inhouse_llm_api_key)),
+            "has_credentials": bool(
+                cfg.get("inhouse_llm_client_id", settings.inhouse_llm_client_id)
+                and cfg.get("inhouse_llm_client_secret", settings.inhouse_llm_client_secret)
+            ),
             "response_mode": cfg.get("inhouse_llm_response_mode", settings.inhouse_llm_response_mode),
             "timeout": cfg.get("inhouse_llm_timeout", settings.inhouse_llm_timeout),
         },

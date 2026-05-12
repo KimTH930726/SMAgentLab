@@ -10,10 +10,11 @@ export interface LLMConfig {
     timeout: number;
   };
   inhouse: {
-    url: string;
+    base_url: string;
     agent_code: string;
+    agent_id: string;
     model: string;
-    has_api_key: boolean;
+    has_credentials: boolean;
     response_mode: string;
     timeout: number;
   };
@@ -24,7 +25,11 @@ export interface LLMConfigUpdate {
   ollama_base_url?: string;
   ollama_model?: string;
   ollama_timeout?: number;
-  inhouse_llm_url?: string;
+  // InHouse (OAuth2 Client Credentials)
+  inhouse_llm_base_url?: string;
+  inhouse_llm_client_id?: string;
+  inhouse_llm_client_secret?: string;
+  inhouse_llm_agent_id?: string;
   inhouse_llm_agent_code?: string;
   inhouse_llm_model?: string;
   inhouse_llm_response_mode?: string;

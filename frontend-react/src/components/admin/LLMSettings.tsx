@@ -70,7 +70,10 @@ interface FormState {
   ollama_base_url: string;
   ollama_model: string;
   ollama_timeout: number;
-  inhouse_llm_url: string;
+  inhouse_llm_base_url: string;
+  inhouse_llm_client_id: string;
+  inhouse_llm_client_secret: string;
+  inhouse_llm_agent_id: string;
   inhouse_llm_agent_code: string;
   inhouse_llm_model: InhouseModel;
   inhouse_llm_response_mode: ResponseMode;
@@ -83,7 +86,10 @@ function configToForm(cfg: LLMConfig): FormState {
     ollama_base_url: cfg.ollama.base_url,
     ollama_model: cfg.ollama.model,
     ollama_timeout: cfg.ollama.timeout,
-    inhouse_llm_url: cfg.inhouse.url,
+    inhouse_llm_base_url: cfg.inhouse.base_url,
+    inhouse_llm_client_id: '',           // 시크릿이라 GET 응답에 없음 — 변경 시에만 입력
+    inhouse_llm_client_secret: '',       // 시크릿이라 GET 응답에 없음 — 변경 시에만 입력
+    inhouse_llm_agent_id: cfg.inhouse.agent_id,
     inhouse_llm_agent_code: cfg.inhouse.agent_code,
     inhouse_llm_model: (cfg.inhouse.model as InhouseModel) || '',
     inhouse_llm_response_mode: (cfg.inhouse.response_mode as ResponseMode) || 'streaming',
@@ -241,11 +247,15 @@ function ProviderSettings() {
       payload.ollama_model = form.ollama_model;
       payload.ollama_timeout = form.ollama_timeout;
     } else {
-      payload.inhouse_llm_url = form.inhouse_llm_url;
+      payload.inhouse_llm_base_url = form.inhouse_llm_base_url;
       payload.inhouse_llm_agent_code = form.inhouse_llm_agent_code;
+      payload.inhouse_llm_agent_id = form.inhouse_llm_agent_id || undefined;
       payload.inhouse_llm_model = form.inhouse_llm_model || undefined;
       payload.inhouse_llm_response_mode = form.inhouse_llm_response_mode;
       payload.inhouse_llm_timeout = form.inhouse_llm_timeout;
+      // 시크릿은 사용자가 입력했을 때만 전송 (빈 값은 기존 값 유지)
+      if (form.inhouse_llm_client_id) payload.inhouse_llm_client_id = form.inhouse_llm_client_id;
+      if (form.inhouse_llm_client_secret) payload.inhouse_llm_client_secret = form.inhouse_llm_client_secret;
     }
     return payload;
   };
@@ -352,31 +362,75 @@ function ProviderSettings() {
           </div>
         )}
 
-        {/* InHouse LLM settings */}
+        {/* InHouse LLM settings (OAuth2 Client Credentials) */}
         {form.provider === 'inhouse' && (
           <div className="space-y-3 pt-1">
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1">
-                API 엔드포인트 URL <span className="text-rose-400">*</span>
+                Base URL <span className="text-rose-400">*</span>
               </label>
               <input
                 type="text"
-                value={form.inhouse_llm_url}
-                onChange={(e) => handleChange('inhouse_llm_url', e.target.value)}
-                placeholder="https://devx-mcp-api.shinsegae-inc.com/api/v1/mcp-command/chat"
+                value={form.inhouse_llm_base_url}
+                onChange={(e) => handleChange('inhouse_llm_base_url', e.target.value)}
+                placeholder="https://devx-gw.shinsegae-inc.com"
                 className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
               />
-              <p className="text-xs text-slate-500 mt-0.5">DevX MCP API 엔드포인트 (전체 URL)</p>
+              <p className="text-xs text-slate-500 mt-0.5">DevX 게이트웨이 base URL. <code className="text-slate-400">/api/v1/auth/token</code>, <code className="text-slate-400">/api/v1/agent/chat</code> 경로가 자동 부착됩니다.</p>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Agent Code <span className="text-rose-400">*</span></label>
-              <input
-                type="text"
-                value={form.inhouse_llm_agent_code}
-                onChange={(e) => handleChange('inhouse_llm_agent_code', e.target.value)}
-                placeholder="playground"
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Client ID <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.inhouse_llm_client_id}
+                  onChange={(e) => handleChange('inhouse_llm_client_id', e.target.value)}
+                  placeholder={config?.inhouse?.has_credentials ? '(등록됨 — 변경 시에만 입력)' : 'usr-...'}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Client Secret <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={form.inhouse_llm_client_secret}
+                  onChange={(e) => handleChange('inhouse_llm_client_secret', e.target.value)}
+                  placeholder={config?.inhouse?.has_credentials ? '(등록됨 — 변경 시에만 입력)' : '••••••••'}
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <KeyRound className="w-3.5 h-3.5" />
+              {config?.inhouse?.has_credentials
+                ? <span className="text-emerald-400">시스템 OAuth 자격증명 등록됨 — 사용자별 API Key 입력 불필요</span>
+                : <span className="text-amber-400">⚠ Client ID/Secret 미등록 — .env 또는 위 입력란에 등록해주세요</span>}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Agent ID</label>
+                <input
+                  type="text"
+                  value={form.inhouse_llm_agent_id}
+                  onChange={(e) => handleChange('inhouse_llm_agent_id', e.target.value)}
+                  placeholder="b6958377-73f2-..."
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Agent Code</label>
+                <input
+                  type="text"
+                  value={form.inhouse_llm_agent_code}
+                  onChange={(e) => handleChange('inhouse_llm_agent_code', e.target.value)}
+                  placeholder="playground"
+                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1">응답 방식</label>
@@ -399,20 +453,6 @@ function ProviderSettings() {
                 {form.inhouse_llm_response_mode === 'streaming'
                   ? 'SSE 스트리밍 — 토큰 단위로 실시간 표시'
                   : 'Blocking — 전체 응답을 한번에 수신'}
-              </p>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">
-                내 API Key
-              </label>
-              <div className={`w-full bg-slate-900/50 border rounded-lg px-3 py-2 text-sm font-mono flex items-center gap-2 ${
-                user?.has_api_key ? 'border-emerald-500/30 text-emerald-400' : 'border-slate-600 text-slate-500'
-              }`}>
-                <KeyRound className="w-3.5 h-3.5 flex-shrink-0" />
-                {user?.has_api_key ? '••••••••••••••••  (등록됨)' : '미등록 — 프로필에서 API Key를 등록해주세요'}
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                API Key는 프로필 설정에서 등록/변경할 수 있습니다. 각 사용자별로 개별 관리됩니다.
               </p>
             </div>
             <div>
