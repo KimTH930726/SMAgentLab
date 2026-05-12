@@ -7,7 +7,7 @@ from core.database import get_conn
 from core.security import (
     hash_password, verify_password,
     create_access_token, create_refresh_token,
-    encrypt_api_key,
+    encrypt_api_key, encrypt_dict,
 )
 
 
@@ -25,18 +25,21 @@ async def register_user(
     username: str,
     password: str,
     part: str,
-    llm_api_key: Optional[str] = None,
+    llm_credentials: Optional[dict] = None,
 ) -> dict:
-    """사용자 등록. 실패 시 RegisterError 발생."""
+    """사용자 등록. 실패 시 RegisterError 발생.
+
+    llm_credentials: {client_id, client_secret, user_id} 트리플 (선택)
+    """
     hashed = hash_password(password)
 
-    # LLM API Key 암호화 (Fernet 키 미설정 시 무시)
-    encrypted_key = None
-    if llm_api_key:
+    # LLM 자격증명 암호화 (Fernet 키 미설정 시 무시)
+    encrypted_creds = None
+    if llm_credentials:
         try:
-            encrypted_key = encrypt_api_key(llm_api_key)
+            encrypted_creds = encrypt_dict(llm_credentials)
         except ValueError:
-            raise RegisterError("서버에 암호화 키가 설정되지 않아 API Key를 등록할 수 없습니다.", 500)
+            raise RegisterError("서버에 암호화 키가 설정되지 않아 자격증명을 등록할 수 없습니다.", 500)
 
     async with get_conn() as conn:
         # 파트 id 조회 + 사용자 중복 확인
@@ -55,11 +58,11 @@ async def register_user(
         part_id = check["part_id"]
         row = await conn.fetchrow(
             """
-            INSERT INTO ops_user (username, hashed_password, encrypted_llm_api_key, part_id)
+            INSERT INTO ops_user (username, hashed_password, encrypted_llm_credentials, part_id)
             VALUES ($1, $2, $3, $4)
-            RETURNING id, username, role, part_id, is_active, encrypted_llm_api_key, created_at::text
+            RETURNING id, username, role, part_id, is_active, encrypted_llm_credentials, created_at::text
             """,
-            username, hashed, encrypted_key, part_id,
+            username, hashed, encrypted_creds, part_id,
         )
         result = dict(row)
         result["part"] = part
@@ -80,7 +83,7 @@ async def authenticate_user(username: str, password: str) -> dict:
             """
             SELECT u.id, u.username, u.hashed_password, u.role, u.part_id,
                    p.name AS part,
-                   u.is_active, u.encrypted_llm_api_key, u.encrypted_confluence_pat,
+                   u.is_active, u.encrypted_llm_credentials, u.encrypted_confluence_pat,
                    u.created_at::text
             FROM ops_user u
             LEFT JOIN ops_part p ON u.part_id = p.id
@@ -112,7 +115,7 @@ async def get_user_by_id(user_id: int) -> Optional[dict]:
             """
             SELECT u.id, u.username, u.role, u.part_id,
                    p.name AS part,
-                   u.is_active, u.encrypted_llm_api_key, u.encrypted_confluence_pat,
+                   u.is_active, u.encrypted_llm_credentials, u.encrypted_confluence_pat,
                    u.created_at::text
             FROM ops_user u
             LEFT JOIN ops_part p ON u.part_id = p.id
@@ -130,7 +133,7 @@ async def list_users() -> list[dict]:
             SELECT u.id, u.username, u.role, u.part_id,
                    p.name AS part,
                    u.is_active,
-                   (u.encrypted_llm_api_key IS NOT NULL) AS has_api_key,
+                   (u.encrypted_llm_credentials IS NOT NULL) AS has_llm_credentials,
                    (u.encrypted_confluence_pat IS NOT NULL) AS has_confluence_pat,
                    u.created_at::text
             FROM ops_user u
@@ -168,7 +171,7 @@ async def update_user(user_id: int, role: Optional[str] = None, part: Optional[s
             UPDATE ops_user SET role = $2, part_id = $3, is_active = $4
             WHERE id = $1
             RETURNING id, username, role, part_id, is_active,
-                      (encrypted_llm_api_key IS NOT NULL) AS has_api_key,
+                      (encrypted_llm_credentials IS NOT NULL) AS has_llm_credentials,
                       created_at::text
             """,
             user_id, new_role, new_part_id, new_active,
@@ -203,12 +206,25 @@ async def change_password(user_id: int, current_password: str, new_password: str
     return True
 
 
-async def update_api_key(user_id: int, plain_key: str) -> bool:
-    encrypted = encrypt_api_key(plain_key)
+async def update_llm_credentials(user_id: int, credentials: dict) -> bool:
+    """사용자의 LLM 자격증명을 Fernet 암호화하여 저장.
+
+    credentials: {client_id, client_secret, user_id} 트리플
+    """
+    encrypted = encrypt_dict(credentials)
     async with get_conn() as conn:
         result = await conn.execute(
-            "UPDATE ops_user SET encrypted_llm_api_key = $2 WHERE id = $1",
+            "UPDATE ops_user SET encrypted_llm_credentials = $2 WHERE id = $1",
             user_id, encrypted,
+        )
+    return "UPDATE 1" in result
+
+
+async def delete_llm_credentials(user_id: int) -> bool:
+    async with get_conn() as conn:
+        result = await conn.execute(
+            "UPDATE ops_user SET encrypted_llm_credentials = NULL WHERE id = $1",
+            user_id,
         )
     return "UPDATE 1" in result
 

@@ -8,7 +8,7 @@ from service.auth.service import RegisterError, LoginError
 from service.auth.schemas import (
     RegisterRequest, LoginRequest, TokenResponse,
     RefreshRequest, AccessTokenResponse,
-    PasswordChangeRequest, ApiKeyUpdateRequest, ConfluencePATRequest,
+    PasswordChangeRequest, LLMCredentialsUpdateRequest, ConfluencePATRequest,
     UserOut, UserAdminUpdate,
     PartCreate, PartOut,
 )
@@ -23,7 +23,7 @@ def _to_user_out(row: dict) -> UserOut:
         role=row["role"],
         part=row["part"],
         is_active=row["is_active"],
-        has_api_key=bool(row.get("encrypted_llm_api_key") or row.get("has_api_key")),
+        has_llm_credentials=bool(row.get("encrypted_llm_credentials") or row.get("has_llm_credentials")),
         has_confluence_pat=bool(row.get("encrypted_confluence_pat") or row.get("has_confluence_pat")),
         created_at=str(row["created_at"]) if row.get("created_at") else "",
     )
@@ -38,7 +38,7 @@ async def register(body: RegisterRequest):
             username=body.username,
             password=body.password,
             part=body.part,
-            llm_api_key=body.llm_api_key,
+            llm_credentials=body.llm_credentials.model_dump() if body.llm_credentials else None,
         )
     except RegisterError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
@@ -100,12 +100,17 @@ async def change_my_password(body: PasswordChangeRequest, user: dict = Depends(g
     return {"status": "ok"}
 
 
-@router.put("/me/api-key")
-async def update_my_api_key(body: ApiKeyUpdateRequest, user: dict = Depends(get_current_user)):
-    success = await service.update_api_key(user["id"], body.llm_api_key)
+@router.put("/me/llm-credentials")
+async def update_my_llm_credentials(body: LLMCredentialsUpdateRequest, user: dict = Depends(get_current_user)):
+    success = await service.update_llm_credentials(user["id"], body.credentials.model_dump())
     if not success:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API Key 업데이트 실패")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="자격증명 업데이트 실패")
     return {"status": "ok"}
+
+
+@router.delete("/me/llm-credentials", status_code=204)
+async def delete_my_llm_credentials(user: dict = Depends(get_current_user)):
+    await service.delete_llm_credentials(user["id"])
 
 
 @router.put("/me/confluence-pat")

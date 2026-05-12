@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user, check_namespace_ownership
-from core.security import get_user_api_key
+from core.security import get_user_llm_credentials
 from service.mcp_tool.schemas import (
     McpToolCreate, McpToolUpdate, McpToolOut, McpToolToggle, AutoCompleteRequest,
     McpToolTestRequest,
@@ -426,11 +426,11 @@ _AUTOCOMPLETE_PROMPT = """\
 @router.post("/api/mcp-tools/autocomplete")
 async def autocomplete_mcp_tool(body: AutoCompleteRequest, user: dict = Depends(get_current_user)):
     prompt = _AUTOCOMPLETE_PROMPT.format(raw_text=body.raw_text)
-    api_key = get_user_api_key(user)
+    user_credentials = get_user_llm_credentials(user)
     autocomplete_sys = await load_prompt("autocomplete", _AUTOCOMPLETE_SYSTEM)
     try:
         answer, _ = await get_llm_provider().generate(
-            context="", question=prompt, api_key=api_key,
+            context="", question=prompt, user_credentials=user_credentials,
             system_prompt=autocomplete_sys,
         )
         # JSON 블록 추출

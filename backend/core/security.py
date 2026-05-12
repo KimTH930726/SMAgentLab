@@ -1,6 +1,7 @@
 """JWT 토큰 관리, bcrypt 해싱, Fernet 암복호화 — 공통 보안 모듈."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from jose import jwt, JWTError
@@ -72,13 +73,23 @@ def decrypt_api_key(encrypted_key: str) -> str:
         raise ValueError("API Key 복호화 실패 — 키가 변경되었거나 손상되었습니다.")
 
 
-def get_user_api_key(user: dict) -> str | None:
-    """사용자의 암호화된 LLM API Key를 복호화. 없거나 실패하면 None."""
-    encrypted = user.get("encrypted_llm_api_key")
+def encrypt_dict(data: dict) -> str:
+    """dict → JSON → Fernet 암호화 문자열."""
+    return encrypt_api_key(json.dumps(data, ensure_ascii=False))
+
+
+def decrypt_dict(encrypted: str) -> dict:
+    """Fernet 암호화 문자열 → JSON dict."""
+    return json.loads(decrypt_api_key(encrypted))
+
+
+def get_user_llm_credentials(user: dict) -> dict | None:
+    """사용자의 암호화된 LLM 자격증명(client_id, client_secret, user_id)을 복호화. 없거나 실패하면 None."""
+    encrypted = user.get("encrypted_llm_credentials")
     if not encrypted:
         return None
     try:
-        return decrypt_api_key(encrypted)
+        return decrypt_dict(encrypted)
     except Exception:
         return None
 

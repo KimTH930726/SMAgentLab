@@ -30,7 +30,7 @@ async def generate_qa_pairs(
     content: str,
     llm,
     *,
-    api_key: Optional[str] = None,
+    user_credentials: Optional[dict] = None,
     max_pairs: int = 3,
 ) -> list[dict]:
     """지식 청크에서 Q&A 쌍 생성.
@@ -50,7 +50,7 @@ async def generate_qa_pairs(
             prompt=prompt,
             system=_QA_SYSTEM,
             max_tokens=1500,
-            api_key=api_key,
+            user_credentials=user_credentials,
         )
         pairs = parse_json_array(raw)
 
@@ -75,7 +75,7 @@ async def bulk_generate_qa(
     chunks: list[dict],
     llm,
     *,
-    api_key: Optional[str] = None,
+    user_credentials: Optional[dict] = None,
     max_pairs_per_chunk: int = 2,
 ) -> list[dict]:
     """여러 청크에 대해 Q&A 일괄 생성.
@@ -89,7 +89,7 @@ async def bulk_generate_qa(
     for chunk in chunks:
         pairs = await generate_qa_pairs(
             chunk["content"], llm,
-            api_key=api_key,
+            user_credentials=user_credentials,
             max_pairs=max_pairs_per_chunk,
         )
         for p in pairs:

@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user
-from core.security import get_user_api_key
+from core.security import get_user_llm_credentials
 from core.config import settings
 from service.chat.schemas import (
     ChatRequest, ChatResponse, KnowledgeResult,
@@ -83,15 +83,12 @@ async def _run_pipeline(
     )
 
 
-def _require_api_key(user: dict) -> str:
-    """사내 LLM 사용 시 사용자 API Key가 필수. 없으면 HTTPException."""
-    key = get_user_api_key(user)
-    if not key and settings.llm_provider == "inhouse":
-        raise HTTPException(
-            status_code=403,
-            detail="사내 LLM 사용을 위해 API Key가 필요합니다. 프로필에서 API Key를 등록해주세요.",
-        )
-    return key
+def _resolve_user_credentials(user: dict) -> Optional[dict]:
+    """사용자별 LLM 자격증명이 있으면 dict 반환, 없으면 None (시스템 .env fallback).
+
+    InHouse OAuth2 트리플: {client_id, client_secret, user_id}
+    """
+    return get_user_llm_credentials(user)
 
 
 # ── DB 헬퍼 (라우터 전용) ─────────────────────────────────────────────────────
@@ -164,11 +161,13 @@ async def _cleanup_ghost_messages(conversation_id: int) -> None:
 
 async def _safe_generate(
     context: str, question: str, history: list[dict] | None = None,
-    *, api_key: Optional[str] = None, ext_conversation_id: Optional[str] = None,
+    *, user_credentials: Optional[dict] = None, ext_conversation_id: Optional[str] = None,
 ) -> tuple[str, Optional[str]]:
     try:
         return await get_llm_provider().generate(
-            context, question, history, api_key=api_key, ext_conversation_id=ext_conversation_id,
+            context, question, history,
+            user_credentials=user_credentials,
+            ext_conversation_id=ext_conversation_id,
         )
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
         logger.warning("LLM 호출 실패: %s", e)
@@ -179,7 +178,7 @@ async def _safe_generate(
 
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    api_key = _require_api_key(user)
+    user_creds = _resolve_user_credentials(user)
     conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"])
 
     # ── 멀티턴 검색 보강: 직전 Q+A를 결합하여 검색 맥락 확보 ──
@@ -207,7 +206,8 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     )
 
     answer, new_inhouse_conv_id = await _safe_generate(
-        pipe.context, req.question, history, api_key=api_key, ext_conversation_id=inhouse_conv_id,
+        pipe.context, req.question, history,
+        user_credentials=user_creds, ext_conversation_id=inhouse_conv_id,
     )
     if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
         asyncio.create_task(update_inhouse_conv_id(conv_id, new_inhouse_conv_id))
@@ -235,7 +235,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 
 @router.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
-    api_key = _require_api_key(user)
+    user_creds = _resolve_user_credentials(user)
     conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"])
     await _cleanup_ghost_messages(conv_id)
 
@@ -250,7 +250,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
         "w_vector": req.w_vector,
         "w_keyword": req.w_keyword,
         "top_k": req.top_k,
-        "api_key": api_key,
+        "user_credentials": user_creds,
         "inhouse_conv_id": inhouse_conv_id,
         "category": req.category,
     }

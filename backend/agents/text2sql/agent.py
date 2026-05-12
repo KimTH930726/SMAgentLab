@@ -69,11 +69,11 @@ class Text2SqlAgent(AgentBase):
         stages_cfg = {s["id"]: s for s in _stages_raw}
         db_type = cfg_target["db_type"] if cfg_target else "postgresql"
 
-        api_key: Optional[str] = context.get("api_key")
+        user_credentials: Optional[dict] = context.get("user_credentials")
         pipeline_ctx: dict = {
             "question": query,
             "history": context.get("history", ""),
-            "api_key": api_key,
+            "user_credentials": user_credentials,
             "_target_db_cfg": cfg_target,
         }
 

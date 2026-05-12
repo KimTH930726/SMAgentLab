@@ -47,7 +47,7 @@ async def run(context: dict, llm, stage_cfg: dict) -> dict:
     prompt_tmpl = await get_prompt("sql2_parse", _DEFAULT_PROMPT)
     prompt = prompt_tmpl.replace("{{question}}", question)
     try:
-        raw = await llm.generate_once(prompt=prompt, system=system, max_tokens=512, api_key=context.get("api_key"))
+        raw = await llm.generate_once(prompt=prompt, system=system, max_tokens=512, user_credentials=context.get("user_credentials"))
         parsed = _extract_json(raw)
     except Exception as e:
         logger.warning("parse 스테이지 실패: %s", e)

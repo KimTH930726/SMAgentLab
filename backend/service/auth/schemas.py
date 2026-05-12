@@ -3,11 +3,17 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+class LLMCredentialsPayload(BaseModel):
+    client_id: str = Field(min_length=1, max_length=200)
+    client_secret: str = Field(min_length=1, max_length=200)
+    user_id: str = Field(min_length=1, max_length=100)
+
+
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=2, max_length=50)
     password: str = Field(min_length=4, max_length=100)
     part: str
-    llm_api_key: Optional[str] = None  # Inhouse LLM용, 선택
+    llm_credentials: Optional[LLMCredentialsPayload] = None  # Inhouse LLM용, 선택
 
 
 class LoginRequest(BaseModel):
@@ -36,8 +42,8 @@ class PasswordChangeRequest(BaseModel):
     new_password: str = Field(min_length=4, max_length=100)
 
 
-class ApiKeyUpdateRequest(BaseModel):
-    llm_api_key: str
+class LLMCredentialsUpdateRequest(BaseModel):
+    credentials: LLMCredentialsPayload
 
 
 class ConfluencePATRequest(BaseModel):
@@ -50,7 +56,7 @@ class UserOut(BaseModel):
     role: str
     part: str
     is_active: bool
-    has_api_key: bool
+    has_llm_credentials: bool
     has_confluence_pat: bool = False
     created_at: str
 

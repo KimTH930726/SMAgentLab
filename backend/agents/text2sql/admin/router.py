@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from core.database import get_conn
 from core.dependencies import get_current_admin as require_admin, get_current_user
-from core.security import get_user_api_key
+from core.security import get_user_llm_credentials
 from service.llm.factory import get_llm_provider
 from agents.text2sql.admin import service
 from shared.embedding import embedding_service
@@ -354,7 +354,7 @@ async def suggest_relations_ai(namespace: str, body: SuggestRelationsPayload = N
             prompt=prompt,
             system="You are a database schema expert. Analyze column naming patterns to infer foreign key relationships. Return ONLY a valid JSON array.",
             max_tokens=2000,
-            api_key=get_user_api_key(admin),
+            user_credentials=get_user_llm_credentials(admin),
         )
         suggestions = _parse_llm_json(text)
 
@@ -564,7 +564,7 @@ async def generate_synonyms_ai(namespace: str, body: GenerateSynonymsPayload = N
                 "Return ONLY a valid JSON array."
             ),
             max_tokens=4000,
-            api_key=get_user_api_key(admin),
+            user_credentials=get_user_llm_credentials(admin),
         )
         synonyms_data = _parse_llm_json(text)
 
@@ -809,7 +809,7 @@ async def generate_fewshots_ai(namespace: str, admin: dict = Depends(require_adm
                 "Questions must be in Korean. SQL must be syntactically correct and use only existing tables/columns."
             ),
             max_tokens=6000,
-            api_key=get_user_api_key(admin),
+            user_credentials=get_user_llm_credentials(admin),
         )
         fewshots_data = _parse_llm_json(text)
 
