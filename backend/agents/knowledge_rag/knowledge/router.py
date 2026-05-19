@@ -786,6 +786,198 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
     }
 
 
+# ─── Confluence 트리 + 일괄 인제스천 ─────────────────────────────────────────
+
+
+class _UrlTreeBody(BaseModel):
+    url: str
+    confluence_token: Optional[str] = None
+    max_depth: int = 3
+    max_pages: int = 100
+
+
+@router.post("/import/url/tree")
+async def preview_confluence_tree(body: _UrlTreeBody, user: dict = Depends(get_current_user)):
+    """입력 URL을 root로 자손 페이지 트리 메타데이터 반환 (본문 fetch 안 함, 빠름)."""
+    from agents.knowledge_rag.ingestion.web_crawler import fetch_confluence_tree, _is_confluence
+    from core.security import get_user_confluence_pat
+
+    if not _is_confluence(body.url):
+        raise HTTPException(status_code=400, detail="Confluence URL이 아닙니다. 일반 웹 URL은 단건 등록만 지원합니다.")
+
+    token = body.confluence_token or get_user_confluence_pat(user)
+    if not token:
+        raise HTTPException(status_code=400, detail="Confluence PAT가 필요합니다. 프로필에서 등록하거나 요청에 포함해주세요.")
+
+    try:
+        tree = await fetch_confluence_tree(
+            body.url, token,
+            max_depth=body.max_depth, max_pages=body.max_pages,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Confluence 트리 조회 실패: {e}")
+
+    return tree
+
+
+class _ConfluencePageRef(BaseModel):
+    page_id: str
+    title: Optional[str] = None
+    url: Optional[str] = None
+
+
+class _BulkPagesBody(BaseModel):
+    namespace: str
+    base_url: str                       # Confluence base URL (예: https://confl.sinc.co.kr)
+    pages: list[_ConfluencePageRef]     # 사용자가 트리에서 체크한 페이지들
+    confluence_token: Optional[str] = None
+    chunk_strategy: str = "auto"
+    category: Optional[str] = None
+    auto_tag: bool = False
+    auto_glossary: bool = False
+
+
+@router.post("/import/url/bulk-pages", status_code=201)
+async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_current_user)):
+    """선택된 Confluence 페이지들을 일괄 인제스천. 각 페이지의 청크를 모두 합쳐 단일 ingestion_job."""
+    await check_namespace_ownership(body.namespace, user)
+    if not body.pages:
+        raise HTTPException(status_code=400, detail="선택된 페이지가 없습니다.")
+    if len(body.pages) > 200:
+        raise HTTPException(status_code=400, detail="한 번에 최대 200개 페이지까지 등록할 수 있습니다.")
+
+    from agents.knowledge_rag.ingestion.web_crawler import fetch_confluence_by_id
+    from agents.knowledge_rag.ingestion.chunker import chunk_document
+    from core.security import get_user_confluence_pat
+
+    token = body.confluence_token or get_user_confluence_pat(user)
+    if not token:
+        raise HTTPException(status_code=400, detail="Confluence PAT가 필요합니다.")
+
+    import asyncio
+
+    # 각 페이지를 병렬 fetch + 청킹 (실패는 개별 처리)
+    async def _fetch_and_chunk(page_ref: _ConfluencePageRef):
+        try:
+            doc = await fetch_confluence_by_id(body.base_url, page_ref.page_id, token)
+            chunks = chunk_document(doc, strategy=body.chunk_strategy)
+            return {
+                "page_id": page_ref.page_id,
+                "doc": doc,
+                "chunks": chunks,
+                "error": None,
+            }
+        except Exception as e:
+            logger.warning("페이지 %s fetch 실패: %s", page_ref.page_id, e)
+            return {"page_id": page_ref.page_id, "doc": None, "chunks": [], "error": str(e)}
+
+    fetched = await asyncio.gather(*(_fetch_and_chunk(p) for p in body.pages))
+
+    # 청크 → items 변환 + per-page 메타데이터 보존
+    items: list[dict] = []
+    failed_pages: list[dict] = []
+    page_summaries: list[dict] = []
+    for f in fetched:
+        if f["error"]:
+            failed_pages.append({"page_id": f["page_id"], "error": f["error"]})
+            continue
+        doc = f["doc"]
+        chunks = f["chunks"]
+        page_summaries.append({
+            "page_id": f["page_id"],
+            "title": doc.source_name,
+            "chunks": len(chunks),
+            "chars": len(doc.raw_text),
+        })
+        for c in chunks:
+            items.append({
+                "content": c.text,
+                "category": body.category,
+                "container_name": doc.source_name,
+            })
+
+    if not items:
+        raise HTTPException(
+            status_code=400,
+            detail=f"수집된 청크가 없습니다. failed_pages={failed_pages}",
+        )
+
+    # LLM 자동 태깅 (선택)
+    if body.auto_tag and items:
+        try:
+            from agents.knowledge_rag.ingestion.tagger import auto_tag_chunks
+            from service.llm.factory import get_llm_provider
+            from core.security import get_user_llm_credentials
+
+            llm = get_llm_provider()
+            tag_input = [{"idx": i, "text": it["content"]} for i, it in enumerate(items)]
+            tags = await auto_tag_chunks(tag_input, [], llm, user_credentials=get_user_llm_credentials(user))
+            tag_map = {t["idx"]: t for t in tags}
+            for i, item in enumerate(items):
+                tag = tag_map.get(i, {})
+                if tag.get("category"):
+                    item["category"] = tag["category"]
+        except Exception as e:
+            logger.warning("자동 태깅 실패: %s", e)
+
+    # 벌크 등록 — source_file은 root URL 또는 페이지 수 표기
+    source_file = f"Confluence bulk ({len(page_summaries)} pages)"
+    result = await service.bulk_create_knowledge(
+        namespace=body.namespace,
+        items=items,
+        source_file=source_file,
+        source_type="confluence_bulk",
+        created_by_part=user["part"],
+        created_by_user_id=user["id"],
+    )
+
+    # 용어 자동 추출 (선택, 전체 합쳐서)
+    glossary_count = 0
+    if body.auto_glossary:
+        try:
+            from agents.knowledge_rag.ingestion.tagger import extract_glossary_terms
+            from service.llm.factory import get_llm_provider
+            from core.security import get_user_llm_credentials
+            from core.database import get_conn, resolve_namespace_id
+
+            async with get_conn() as conn:
+                ns_id = await resolve_namespace_id(conn, body.namespace)
+                existing = await conn.fetch("SELECT term FROM rag_glossary WHERE namespace_id = $1", ns_id)
+            existing_terms = [r["term"] for r in existing]
+
+            llm = get_llm_provider()
+            combined_text = "\n\n".join(f["doc"].raw_text for f in fetched if f["doc"])
+            terms = await extract_glossary_terms(
+                combined_text[:20000], existing_terms, llm,
+                user_credentials=get_user_llm_credentials(user),
+            )
+            for term_data in terms:
+                try:
+                    await service.create_glossary(
+                        body.namespace, term_data["term"], term_data.get("description", ""),
+                        created_by_part=user["part"], created_by_user_id=user["id"],
+                    )
+                    glossary_count += 1
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("용어 추출 실패: %s", e)
+
+    return {
+        **result,
+        "pages_succeeded": len(page_summaries),
+        "pages_failed": len(failed_pages),
+        "failed_pages": failed_pages,
+        "page_summaries": page_summaries,
+        "auto_glossary": glossary_count,
+        "chunks": len(items),
+        "source_name": source_file,
+        "source_type": "confluence_bulk",
+    }
+
+
 # ─── 인제스천 작업 이력 ──────────────────────────────────────────────────────
 
 @router.get("/ingestion-jobs", response_model=list[IngestionJobOut])
