@@ -124,7 +124,19 @@ def parse_xlsx(content_bytes: bytes, filename: str) -> ParsedDocument:
     except ImportError:
         raise ImportError("XLSX 파싱을 위해 openpyxl을 설치하세요: pip install openpyxl")
 
-    wb = load_workbook(io.BytesIO(content_bytes), data_only=True, read_only=True)
+    # xlsx는 내부적으로 zip 압축 — 구버전 .xls(binary)나 손상된 파일은 거부됨
+    try:
+        wb = load_workbook(io.BytesIO(content_bytes), data_only=True, read_only=True)
+    except Exception as e:
+        msg = str(e).lower()
+        if "not a zip" in msg or "badzipfile" in msg or "file is not a zip" in msg:
+            raise ValueError(
+                "이 파일은 .xlsx 형식이 아닙니다. 다음 중 하나일 수 있습니다:\n"
+                "  ① 구버전 .xls 파일 (Excel에서 '다른 이름으로 저장' → .xlsx로 변환 필요)\n"
+                "  ② 파일이 손상됨 (다시 저장해보세요)\n"
+                "  ③ 확장자만 .xlsx로 바뀐 다른 형식 (실제 내용은 CSV/HTML 등)"
+            )
+        raise ValueError(f"XLSX 파싱 실패: {e}")
 
     sections: list[dict] = []
     tables: list[dict] = []
