@@ -703,7 +703,6 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
 
   const methods: { id: IngestMethod; icon: React.ReactNode; title: string; desc: string; badge?: string }[] = [
     { id: 'file', icon: <Upload className="w-6 h-6" />, title: '파일 업로드', desc: 'PDF · Markdown · TXT · Excel(.xlsx) · CSV 파일을 드래그하거나 클릭하여 업로드. 자동 파싱·청킹.', badge: 'AI 분석 지원' },
-    { id: 'csv', icon: <Database className="w-6 h-6" />, title: 'CSV 임포트 (컬럼 매핑)', desc: 'CSV 파일의 특정 컬럼을 콘텐츠로 지정하여 정밀 매핑 등록. 단순 등록은 "파일 업로드"로.' },
     { id: 'text', icon: <FileText className="w-6 h-6" />, title: '대량 텍스트', desc: '텍스트를 붙여넣으면 헤더·단락 기준으로 자동 분할해 등록합니다.' },
     { id: 'manual', icon: <PenLine className="w-6 h-6" />, title: '직접 입력', desc: '단건 지식을 직접 작성하여 등록합니다.' },
     { id: 'url', icon: <Globe className="w-6 h-6" />, title: 'URL / Confluence', desc: '웹 페이지 또는 Confluence 페이지 URL을 입력하면 내용을 자동 수집합니다.', badge: 'Confluence 지원' },
