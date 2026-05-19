@@ -702,8 +702,8 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
   }
 
   const methods: { id: IngestMethod; icon: React.ReactNode; title: string; desc: string; badge?: string }[] = [
-    { id: 'file', icon: <Upload className="w-6 h-6" />, title: '파일 업로드', desc: 'PDF · Markdown · TXT 파일을 업로드하면 자동으로 파싱·청킹합니다.', badge: 'AI 분석 지원' },
-    { id: 'csv', icon: <Database className="w-6 h-6" />, title: 'CSV 임포트', desc: 'CSV 파일의 컬럼을 매핑하여 여러 건을 한 번에 등록합니다.' },
+    { id: 'file', icon: <Upload className="w-6 h-6" />, title: '파일 업로드', desc: 'PDF · Markdown · TXT · Excel(.xlsx) · CSV 파일을 드래그하거나 클릭하여 업로드. 자동 파싱·청킹.', badge: 'AI 분석 지원' },
+    { id: 'csv', icon: <Database className="w-6 h-6" />, title: 'CSV 임포트 (컬럼 매핑)', desc: 'CSV 파일의 특정 컬럼을 콘텐츠로 지정하여 정밀 매핑 등록. 단순 등록은 "파일 업로드"로.' },
     { id: 'text', icon: <FileText className="w-6 h-6" />, title: '대량 텍스트', desc: '텍스트를 붙여넣으면 헤더·단락 기준으로 자동 분할해 등록합니다.' },
     { id: 'manual', icon: <PenLine className="w-6 h-6" />, title: '직접 입력', desc: '단건 지식을 직접 작성하여 등록합니다.' },
     { id: 'url', icon: <Globe className="w-6 h-6" />, title: 'URL / Confluence', desc: '웹 페이지 또는 Confluence 페이지 URL을 입력하면 내용을 자동 수집합니다.', badge: 'Confluence 지원' },
@@ -865,6 +865,8 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
         setError(`파일이 서버 한도(50MB)를 초과합니다. 파일을 분할하거나 텍스트만 추출(.txt)해서 업로드해주세요.`);
       } else if (msg.includes('암호화') || msg.toLowerCase().includes('encrypted') || msg.toLowerCase().includes('password')) {
         setError(`암호화(비밀번호 보호)된 PDF는 등록할 수 없습니다. Acrobat → 도구 → 보호 → 암호화 → '보안 제거' 후 다시 업로드해주세요.`);
+      } else if (msg.toLowerCase().includes('not a zip') || msg.includes('.xlsx 형식이 아닙니다')) {
+        setError(`이 파일은 올바른 .xlsx 형식이 아닙니다. 구버전 .xls 파일은 Excel에서 '다른 이름으로 저장' → .xlsx로 변환한 뒤 다시 업로드해주세요.`);
       } else {
         setError(msg);
       }
