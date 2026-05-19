@@ -323,7 +323,7 @@ async def import_file(
 ):
     """파일 업로드 → 파싱 → 청킹 → 벌크 등록.
 
-    지원 포맷: .txt, .md, .pdf
+    지원 포맷: .txt, .md, .pdf, .xlsx, .xlsm, .csv
     chunk_strategy: auto, section, paragraph, fixed
     auto_analyze: True이면 LLM Analyzer Agent로 전략/메타데이터 자동 결정
     auto_tag: True이면 LLM으로 카테고리/컨테이너명 자동 태깅
@@ -837,6 +837,68 @@ class _BulkPagesBody(BaseModel):
     category: Optional[str] = None
     auto_tag: bool = False
     auto_glossary: bool = False
+
+
+@router.post("/import/url/bulk-pages/preview")
+async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_current_user)):
+    """선택된 페이지들을 fetch + 청킹만 수행 (DB 등록 X). 청크 리뷰용."""
+    await check_namespace_ownership(body.namespace, user)
+    if not body.pages:
+        raise HTTPException(status_code=400, detail="선택된 페이지가 없습니다.")
+    if len(body.pages) > 200:
+        raise HTTPException(status_code=400, detail="한 번에 최대 200개 페이지까지 미리보기 가능합니다.")
+
+    from agents.knowledge_rag.ingestion.web_crawler import fetch_confluence_by_id
+    from agents.knowledge_rag.ingestion.chunker import chunk_document
+    from core.security import get_user_confluence_pat
+
+    token = body.confluence_token or get_user_confluence_pat(user)
+    if not token:
+        raise HTTPException(status_code=400, detail="Confluence PAT가 필요합니다.")
+
+    import asyncio
+
+    async def _fetch_and_chunk(p):
+        try:
+            doc = await fetch_confluence_by_id(body.base_url, p.page_id, token)
+            chunks = chunk_document(doc, strategy=body.chunk_strategy)
+            return {"page_id": p.page_id, "title": doc.source_name, "chunks": chunks, "error": None}
+        except Exception as e:
+            return {"page_id": p.page_id, "title": p.title or p.page_id, "chunks": [], "error": str(e)}
+
+    fetched = await asyncio.gather(*(_fetch_and_chunk(p) for p in body.pages))
+
+    chunks_out: list[dict] = []
+    pages_meta: list[dict] = []
+    failed: list[dict] = []
+    idx = 0
+    for f in fetched:
+        if f["error"]:
+            failed.append({"page_id": f["page_id"], "title": f["title"], "error": f["error"]})
+            continue
+        page_start = idx
+        for c in f["chunks"]:
+            chunks_out.append({
+                "idx": idx,
+                "page_id": f["page_id"],
+                "page_title": f["title"],
+                "text": c.text,
+                "title": c.section_title,
+            })
+            idx += 1
+        pages_meta.append({
+            "page_id": f["page_id"],
+            "title": f["title"],
+            "chunk_start": page_start,
+            "chunk_count": idx - page_start,
+        })
+
+    return {
+        "chunks": chunks_out,
+        "chunk_count": len(chunks_out),
+        "pages": pages_meta,
+        "failed_pages": failed,
+    }
 
 
 @router.post("/import/url/bulk-pages", status_code=201)

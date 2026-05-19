@@ -14,6 +14,7 @@ import {
   previewUrl,
   previewConfluenceTree,
   importConfluenceBulk,
+  previewConfluenceBulk,
   getIngestionJobs,
   type IngestionJob,
   type ConfluenceTreeResponse,
@@ -812,7 +813,42 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const ACCEPT_EXTS = ['.pdf', '.md', '.markdown', '.txt', '.log', '.text', '.xlsx', '.xlsm', '.csv'];
+  const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;   // 50MB (nginx client_max_body_size와 동기화)
+
+  const acceptFile = (f: File) => {
+    const name = f.name.toLowerCase();
+    if (!ACCEPT_EXTS.some(ext => name.endsWith(ext))) {
+      setError(`지원하지 않는 형식입니다. 지원: ${ACCEPT_EXTS.join(', ')}`);
+      return;
+    }
+    if (f.size > MAX_UPLOAD_BYTES) {
+      const mb = (f.size / 1024 / 1024).toFixed(1);
+      setError(`파일이 너무 큽니다 (${mb}MB > 50MB 한도). PDF는 분할하거나, 텍스트만 추출(.txt)해서 업로드해주세요.`);
+      return;
+    }
+    setFile(f); setReviewChunks([]); setDetectedStrategy(null); setDone(''); setError('');
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault(); e.stopPropagation();
+    setIsDragging(false);
+    const dropped = e.dataTransfer.files?.[0];
+    if (dropped) acceptFile(dropped);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault(); e.stopPropagation();
+    if (e.dataTransfer.types.includes('Files')) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault(); e.stopPropagation();
+    setIsDragging(false);
+  };
 
   const handleOpenReview = async () => {
     if (!file) return;
@@ -822,7 +858,17 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setDetectedStrategy((result as any).detected_strategy ?? null);
       setReviewChunks(result.chunks.map(c => ({ ...c, selected: true })));
       setShowReview(true);
-    } catch (e: any) { setError(e.message || '파일 분석 실패'); }
+    } catch (e: any) {
+      const msg = e.message || '파일 분석 실패';
+      // 사용자 친화적 메시지로 변환
+      if (msg.includes('413') || msg.toLowerCase().includes('payload too large') || msg.toLowerCase().includes('request entity too large')) {
+        setError(`파일이 서버 한도(50MB)를 초과합니다. 파일을 분할하거나 텍스트만 추출(.txt)해서 업로드해주세요.`);
+      } else if (msg.includes('암호화') || msg.toLowerCase().includes('encrypted') || msg.toLowerCase().includes('password')) {
+        setError(`암호화(비밀번호 보호)된 PDF는 등록할 수 없습니다. Acrobat → 도구 → 보호 → 암호화 → '보안 제거' 후 다시 업로드해주세요.`);
+      } else {
+        setError(msg);
+      }
+    }
     finally { setPreviewing(false); }
   };
 
@@ -842,20 +888,32 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-4">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><Upload className="w-4 h-4 text-indigo-400" />파일 업로드</h3>
 
-      <div className="border-2 border-dashed border-slate-600 rounded-xl p-6 text-center cursor-pointer hover:border-indigo-500 transition-colors"
-        onClick={() => fileRef.current?.click()}>
-        <input ref={fileRef} type="file" accept=".pdf,.md,.txt,.markdown,.log,.text" className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) { setFile(f); setReviewChunks([]); setDetectedStrategy(null); setDone(''); } }} />
+      <div
+        className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
+          isDragging
+            ? 'border-indigo-400 bg-indigo-500/10'
+            : 'border-slate-600 hover:border-indigo-500'
+        }`}
+        onClick={() => fileRef.current?.click()}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragOver}
+        onDragLeave={handleDragLeave}
+      >
+        <input ref={fileRef} type="file" accept={ACCEPT_EXTS.join(',')} className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) acceptFile(f); }} />
         {file ? (
           <div>
             <p className="text-sm text-slate-300 font-medium">{file.name}</p>
-            <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB · 클릭하여 변경</p>
+            <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB · 클릭/드롭하여 변경</p>
           </div>
         ) : (
           <div>
-            <Upload className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-            <p className="text-sm text-slate-400">PDF · Markdown · TXT 파일을 선택하세요</p>
-            <p className="text-[10px] text-slate-600 mt-1">.pdf .md .txt .markdown</p>
+            <Upload className={`w-8 h-8 mx-auto mb-2 ${isDragging ? 'text-indigo-400' : 'text-slate-500'}`} />
+            <p className={`text-sm ${isDragging ? 'text-indigo-300 font-medium' : 'text-slate-400'}`}>
+              {isDragging ? '여기에 파일을 놓아주세요' : '파일을 드래그하거나 클릭하여 선택'}
+            </p>
+            <p className="text-[10px] text-slate-600 mt-1">.pdf .md .txt .xlsx .xlsm .csv</p>
           </div>
         )}
       </div>
@@ -1307,7 +1365,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
     finally { setPreviewing(false); }
   };
 
-  const handleBulkImport = async () => {
+  // 트리 선택 → 청크 미리보기 단계
+  const handleProceedToReview = async () => {
     if (!tree || selectedPageIds.size === 0) return;
     setLoading(true); setError('');
     try {
@@ -1316,14 +1375,34 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       const pages = tree.tree
         .filter(n => selectedPageIds.has(n.page_id))
         .map(n => ({ page_id: n.page_id, title: n.title, url: n.url }));
-      const result = await importConfluenceBulk(namespace, baseUrl, pages, {
-        chunkStrategy: 'auto', category: category || undefined,
+      const result = await previewConfluenceBulk(namespace, baseUrl, pages, { chunkStrategy: 'auto' });
+
+      if (result.chunks.length === 0) {
+        const failMsg = result.failed_pages.length > 0
+          ? ` (실패: ${result.failed_pages.map(p => p.title).join(', ')})`
+          : '';
+        setError(`청크가 생성되지 않았습니다.${failMsg}`);
+        return;
+      }
+
+      // ChunkReviewModal로 전환 (페이지 제목을 청크 타이틀에 prefix)
+      setSourceMeta({
+        name: `Confluence ${pages.length}개 페이지`,
+        type: 'confluence_bulk',
       });
-      const failedMsg = result.pages_failed > 0 ? ` (실패 ${result.pages_failed}건)` : '';
-      setDone(`${result.pages_succeeded}개 페이지 · ${result.created}개 청크 등록${failedMsg}`);
+      setReviewChunks(result.chunks.map(c => ({
+        idx: c.idx,
+        text: c.text,
+        title: c.title ? `${c.page_title} — ${c.title}` : c.page_title,
+        selected: true,
+      })));
       setShowTreeModal(false);
-      onSuccess();
-    } catch (e: any) { setError(e.message || '일괄 등록 실패'); }
+      setShowReview(true);
+
+      if (result.failed_pages.length > 0) {
+        setError(`일부 페이지 fetch 실패: ${result.failed_pages.map(p => p.title).join(', ')}`);
+      }
+    } catch (e: any) { setError(e.message || '청크 미리보기 실패'); }
     finally { setLoading(false); }
   };
 
@@ -1510,10 +1589,10 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
                 <Button
                   variant="primary"
                   size="sm"
-                  onClick={handleBulkImport}
+                  onClick={handleProceedToReview}
                   disabled={selectedPageIds.size === 0 || loading}
                 >
-                  {loading ? '등록 중...' : `${selectedPageIds.size}개 페이지 일괄 등록`}
+                  {loading ? '청크 분석 중...' : `${selectedPageIds.size}개 페이지 · 청크 검토`}
                 </Button>
               </div>
             </div>

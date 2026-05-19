@@ -1,8 +1,9 @@
 """파일 포맷별 파싱 어댑터 — 다양한 입력을 통일 포맷으로 변환."""
+import csv
+import io
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ParsedDocument:
     """파싱된 문서 통일 포맷."""
-    source_type: str  # txt, md, pdf, csv
+    source_type: str  # txt, md, pdf, xlsx, csv, confluence, web
     source_name: str
     raw_text: str
     sections: list[dict] = field(default_factory=list)  # [{title, content, level}]
@@ -83,6 +84,15 @@ def parse_pdf(content_bytes: bytes, filename: str) -> ParsedDocument:
             raise ImportError("PDF 파싱을 위해 pymupdf를 설치하세요: pip install pymupdf")
 
     doc = pymupdf.open(stream=content_bytes, filetype="pdf")
+
+    # 암호화/비밀번호 보호 PDF 감지 — needs_pass 또는 is_encrypted 속성 확인
+    if getattr(doc, "needs_pass", False) or getattr(doc, "is_encrypted", False):
+        raise ValueError(
+            "암호화(비밀번호 보호)된 PDF는 등록할 수 없습니다. "
+            "원본 PDF의 비밀번호를 해제한 후 다시 업로드해주세요. "
+            "(Acrobat → 도구 → 보호 → 암호화 → 보안 제거)"
+        )
+
     pages: list[str] = []
     all_text_lines: list[str] = []
 
@@ -107,12 +117,113 @@ def parse_pdf(content_bytes: bytes, filename: str) -> ParsedDocument:
     )
 
 
+def parse_xlsx(content_bytes: bytes, filename: str) -> ParsedDocument:
+    """Excel(.xlsx) 파싱 — openpyxl 사용. 시트별로 텍스트 변환."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        raise ImportError("XLSX 파싱을 위해 openpyxl을 설치하세요: pip install openpyxl")
+
+    wb = load_workbook(io.BytesIO(content_bytes), data_only=True, read_only=True)
+
+    sections: list[dict] = []
+    tables: list[dict] = []
+    all_text_lines: list[str] = []
+    total_rows = 0
+
+    for sheet in wb.worksheets:
+        sheet_name = sheet.title
+        rows_data: list[list[str]] = []
+        for row in sheet.iter_rows(values_only=True):
+            # 빈 행은 스킵
+            if not any(c is not None and str(c).strip() for c in row):
+                continue
+            cells = [("" if c is None else str(c).strip()) for c in row]
+            rows_data.append(cells)
+
+        if not rows_data:
+            continue
+
+        # 첫 행을 헤더로 가정
+        headers = rows_data[0]
+        body_rows = rows_data[1:] if len(rows_data) > 1 else []
+        total_rows += len(body_rows)
+
+        # 테이블 메타 보관
+        tables.append({"sheet": sheet_name, "headers": headers, "rows": body_rows})
+
+        # 텍스트 직렬화: "헤더: 값" per row (RAG 검색에 유리)
+        sheet_text_lines = [f"## 시트: {sheet_name}"]
+        for row in body_rows:
+            row_parts = []
+            for h, v in zip(headers, row):
+                if v:
+                    row_parts.append(f"{h}: {v}" if h else v)
+            if row_parts:
+                sheet_text_lines.append(" | ".join(row_parts))
+
+        section_text = "\n".join(sheet_text_lines[1:])
+        all_text_lines.extend(sheet_text_lines)
+        all_text_lines.append("")
+
+        sections.append({
+            "title": f"시트: {sheet_name}",
+            "content": section_text,
+            "level": 1,
+        })
+
+    raw_text = "\n".join(all_text_lines).strip()
+
+    return ParsedDocument(
+        source_type="xlsx",
+        source_name=filename,
+        raw_text=raw_text,
+        sections=sections,
+        tables=tables,
+        metadata={"sheet_count": len(wb.worksheets), "total_rows": total_rows},
+    )
+
+
+def parse_csv(content_bytes: bytes, filename: str) -> ParsedDocument:
+    """CSV 파싱 — 첫 행 헤더로 가정, 행별 직렬화."""
+    text = content_bytes.decode("utf-8-sig")
+    reader = csv.reader(io.StringIO(text))
+    rows = [r for r in reader if any(c.strip() for c in r)]
+    if not rows:
+        return ParsedDocument(source_type="csv", source_name=filename, raw_text="")
+
+    headers = [h.strip() for h in rows[0]]
+    body_rows = rows[1:]
+
+    lines = [f"## {filename}"]
+    for row in body_rows:
+        row_parts = []
+        for h, v in zip(headers, row):
+            v = v.strip()
+            if v:
+                row_parts.append(f"{h}: {v}" if h else v)
+        if row_parts:
+            lines.append(" | ".join(row_parts))
+
+    return ParsedDocument(
+        source_type="csv",
+        source_name=filename,
+        raw_text="\n".join(lines),
+        tables=[{"headers": headers, "rows": body_rows}],
+        metadata={"row_count": len(body_rows)},
+    )
+
+
 def parse_file(content_bytes: bytes, filename: str) -> ParsedDocument:
     """파일 확장자로 적절한 어댑터 선택."""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
     if ext == "pdf":
         return parse_pdf(content_bytes, filename)
+    elif ext in ("xlsx", "xlsm"):
+        return parse_xlsx(content_bytes, filename)
+    elif ext == "csv":
+        return parse_csv(content_bytes, filename)
     elif ext in ("md", "markdown"):
         return parse_markdown(content_bytes.decode("utf-8-sig"), filename)
     elif ext in ("txt", "log", "text"):

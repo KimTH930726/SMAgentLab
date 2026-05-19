@@ -350,6 +350,39 @@ export async function importConfluenceBulk(
   });
 }
 
+export interface ConfluenceBulkChunk {
+  idx: number;
+  page_id: string;
+  page_title: string;
+  text: string;
+  title: string | null;
+}
+
+export interface ConfluenceBulkPreviewResult {
+  chunks: ConfluenceBulkChunk[];
+  chunk_count: number;
+  pages: Array<{ page_id: string; title: string; chunk_start: number; chunk_count: number }>;
+  failed_pages: Array<{ page_id: string; title: string; error: string }>;
+}
+
+export async function previewConfluenceBulk(
+  namespace: string,
+  baseUrl: string,
+  pages: Array<{ page_id: string; title?: string; url?: string }>,
+  opts?: { confluenceToken?: string; chunkStrategy?: string },
+): Promise<ConfluenceBulkPreviewResult> {
+  return apiFetch('/knowledge/import/url/bulk-pages/preview', {
+    method: 'POST',
+    body: JSON.stringify({
+      namespace,
+      base_url: baseUrl,
+      pages,
+      confluence_token: opts?.confluenceToken || null,
+      chunk_strategy: opts?.chunkStrategy ?? 'auto',
+    }),
+  });
+}
+
 // Glossary AI Suggestions
 
 export async function suggestGlossaryTerms(namespace: string, limit: number = 50): Promise<{ suggestions: Array<{ term: string; description: string }>; message: string }> {
