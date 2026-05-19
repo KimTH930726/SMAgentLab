@@ -282,6 +282,74 @@ export async function previewUrl(
   });
 }
 
+// ─── Confluence 트리 + 일괄 인제스천 ───────────────────────────────────────
+
+export interface ConfluenceTreeNode {
+  page_id: string;
+  title: string;
+  url: string;
+  depth: number;
+  parent_id: string | null;
+}
+
+export interface ConfluenceTreeResponse {
+  root: ConfluenceTreeNode;
+  tree: ConfluenceTreeNode[];
+  truncated: boolean;
+  max_depth_reached: boolean;
+  max_depth: number;
+  max_pages: number;
+}
+
+export async function previewConfluenceTree(
+  url: string,
+  opts?: { confluenceToken?: string; maxDepth?: number; maxPages?: number },
+): Promise<ConfluenceTreeResponse> {
+  return apiFetch('/knowledge/import/url/tree', {
+    method: 'POST',
+    body: JSON.stringify({
+      url,
+      confluence_token: opts?.confluenceToken || null,
+      max_depth: opts?.maxDepth ?? 3,
+      max_pages: opts?.maxPages ?? 100,
+    }),
+  });
+}
+
+export interface ConfluenceBulkResult {
+  created: number;
+  job_id: number | null;
+  chunks: number;
+  pages_succeeded: number;
+  pages_failed: number;
+  failed_pages: Array<{ page_id: string; error: string }>;
+  page_summaries: Array<{ page_id: string; title: string; chunks: number; chars: number }>;
+  auto_glossary: number;
+  source_name: string;
+  source_type: string;
+}
+
+export async function importConfluenceBulk(
+  namespace: string,
+  baseUrl: string,
+  pages: Array<{ page_id: string; title?: string; url?: string }>,
+  opts?: { confluenceToken?: string; chunkStrategy?: string; category?: string; autoTag?: boolean; autoGlossary?: boolean },
+): Promise<ConfluenceBulkResult> {
+  return apiFetch('/knowledge/import/url/bulk-pages', {
+    method: 'POST',
+    body: JSON.stringify({
+      namespace,
+      base_url: baseUrl,
+      pages,
+      confluence_token: opts?.confluenceToken || null,
+      chunk_strategy: opts?.chunkStrategy ?? 'auto',
+      category: opts?.category || null,
+      auto_tag: opts?.autoTag ?? false,
+      auto_glossary: opts?.autoGlossary ?? false,
+    }),
+  });
+}
+
 // Glossary AI Suggestions
 
 export async function suggestGlossaryTerms(namespace: string, limit: number = 50): Promise<{ suggestions: Array<{ term: string; description: string }>; message: string }> {

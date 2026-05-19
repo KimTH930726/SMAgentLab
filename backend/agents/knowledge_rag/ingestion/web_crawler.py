@@ -16,6 +16,12 @@ _CONFLUENCE_PATTERNS = re.compile(
 
 FETCH_TIMEOUT = 30.0
 
+# 트리 탐색 안전장치 (Confluence space 폭주 방지)
+TREE_DEFAULT_DEPTH = 3
+TREE_MAX_DEPTH = 10
+TREE_DEFAULT_MAX_PAGES = 100
+TREE_HARD_MAX_PAGES = 500
+
 
 # ── 공개 진입점 ───────────────────────────────────────────────────────────────
 
@@ -238,3 +244,189 @@ def _extract_heading_sections(tag) -> list[dict]:
         })
 
     return sections
+
+
+# ── Confluence 자손 페이지 트리 ───────────────────────────────────────────────
+
+async def fetch_confluence_tree(
+    url: str,
+    token: str,
+    *,
+    max_depth: int = TREE_DEFAULT_DEPTH,
+    max_pages: int = TREE_DEFAULT_MAX_PAGES,
+) -> dict:
+    """입력 URL을 root로 하여 하위 페이지 트리 메타데이터 반환 (본문 fetch 안 함).
+
+    Returns:
+        {
+            "root": {"page_id": "...", "title": "...", "url": "..."},
+            "tree": [
+                {"page_id": "...", "title": "...", "url": "...", "depth": 0, "parent_id": None},
+                {"page_id": "...", "title": "...", "url": "...", "depth": 1, "parent_id": "root_id"},
+                ...
+            ],
+            "truncated": False,         # max_pages 초과 시 True
+            "max_depth_reached": False, # 깊이 도달로 일부 자손이 잘렸을 때 True
+        }
+    """
+    max_depth = max(1, min(max_depth, TREE_MAX_DEPTH))
+    max_pages = max(1, min(max_pages, TREE_HARD_MAX_PAGES))
+
+    base_url, page_id, space_key, title_hint = _parse_confluence_url(url)
+    if not page_id and not (space_key and title_hint):
+        raise ValueError(f"지원하지 않는 Confluence URL 형식: {url}")
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
+        # 1) root page_id 확정
+        if not page_id:
+            r = await client.get(
+                f"{base_url}/rest/api/content",
+                headers=headers,
+                params={"spaceKey": space_key, "title": title_hint, "limit": 1},
+            )
+            r.raise_for_status()
+            results = r.json().get("results", [])
+            if not results:
+                raise ValueError(f"Confluence 페이지를 찾을 수 없습니다: space={space_key}, title={title_hint}")
+            root_data = results[0]
+            page_id = root_data["id"]
+        else:
+            r = await client.get(
+                f"{base_url}/rest/api/content/{page_id}",
+                headers=headers,
+                params={"expand": "title"},
+            )
+            r.raise_for_status()
+            root_data = r.json()
+
+        root_title = root_data.get("title", f"Page {page_id}")
+        root_url = _build_page_url(base_url, page_id, root_data)
+
+        # 2) BFS 자손 탐색
+        tree: list[dict] = [
+            {"page_id": page_id, "title": root_title, "url": root_url, "depth": 0, "parent_id": None},
+        ]
+        seen: set[str] = {page_id}
+        truncated = False
+        max_depth_reached = False
+
+        # (page_id, depth) 큐
+        queue: list[tuple[str, int]] = [(page_id, 0)]
+        while queue:
+            parent_id, depth = queue.pop(0)
+            if depth >= max_depth:
+                # 더 깊이 탐색 안 함 — 다만 자손이 있는지는 알 수 없으니 일단 표시
+                continue
+            children = await _fetch_confluence_children(client, base_url, headers, parent_id)
+            for child in children:
+                cid = str(child["id"])
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                if len(tree) >= max_pages:
+                    truncated = True
+                    break
+                tree.append({
+                    "page_id": cid,
+                    "title": child.get("title", f"Page {cid}"),
+                    "url": _build_page_url(base_url, cid, child),
+                    "depth": depth + 1,
+                    "parent_id": parent_id,
+                })
+                queue.append((cid, depth + 1))
+            if truncated:
+                break
+            if depth + 1 >= max_depth and children:
+                max_depth_reached = True
+
+    logger.info(
+        "Confluence 트리 수집: root=%s, total=%d, depth_limit=%d, truncated=%s",
+        page_id, len(tree), max_depth, truncated,
+    )
+    return {
+        "root": tree[0],
+        "tree": tree,
+        "truncated": truncated,
+        "max_depth_reached": max_depth_reached,
+        "max_depth": max_depth,
+        "max_pages": max_pages,
+    }
+
+
+async def _fetch_confluence_children(
+    client: httpx.AsyncClient, base_url: str, headers: dict, parent_id: str,
+) -> list[dict]:
+    """단일 페이지의 직접 자식 페이지 목록 반환 (페이지네이션 처리)."""
+    results: list[dict] = []
+    start = 0
+    limit = 100
+    while True:
+        r = await client.get(
+            f"{base_url}/rest/api/content/{parent_id}/child/page",
+            headers=headers,
+            params={"limit": limit, "start": start, "expand": "title"},
+        )
+        if r.status_code == 404:
+            return []
+        r.raise_for_status()
+        data = r.json()
+        batch = data.get("results", [])
+        results.extend(batch)
+        if len(batch) < limit:
+            break
+        start += limit
+        if start >= TREE_HARD_MAX_PAGES:
+            break
+    return results
+
+
+def _build_page_url(base_url: str, page_id: str, page_data: dict) -> str:
+    """페이지 메타데이터에서 사용자 친화적 URL 생성. tinyui/webui 우선."""
+    links = page_data.get("_links", {}) if isinstance(page_data, dict) else {}
+    webui = links.get("webui")
+    if webui:
+        return urljoin(base_url + "/", webui.lstrip("/"))
+    return f"{base_url}/pages/viewpage.action?pageId={page_id}"
+
+
+# ── Confluence 단일 페이지 (page_id 기반, bulk 인제스천용) ──────────────────
+
+async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> ParsedDocument:
+    """page_id 기반 단일 페이지 fetch — 트리 선택 후 bulk 인제스천에서 호출."""
+    from bs4 import BeautifulSoup
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    base = base_url.rstrip("/")
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
+        r = await client.get(
+            f"{base}/rest/api/content/{page_id}",
+            headers=headers,
+            params={"expand": "body.storage,title,space,_links"},
+        )
+        r.raise_for_status()
+        page = r.json()
+
+    page_title = page.get("title", f"Page {page_id}")
+    storage_html = page.get("body", {}).get("storage", {}).get("value", "")
+    space_name = page.get("space", {}).get("name", "")
+    page_url = _build_page_url(base, page_id, page)
+
+    soup = BeautifulSoup(storage_html, "lxml")
+    raw_text = _extract_text(soup)
+    sections = _extract_heading_sections(soup)
+
+    return ParsedDocument(
+        source_type="confluence",
+        source_name=page_title,
+        raw_text=raw_text,
+        sections=sections,
+        metadata={
+            "url": page_url,
+            "page_id": page_id,
+            "space": space_name,
+            "title": page_title,
+        },
+    )

@@ -12,8 +12,11 @@ import {
   previewTextSplit,
   previewFileUpload,
   previewUrl,
+  previewConfluenceTree,
+  importConfluenceBulk,
   getIngestionJobs,
   type IngestionJob,
+  type ConfluenceTreeResponse,
 } from '../../api/knowledge';
 import { getCategories } from '../../api/namespaces';
 import { updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
@@ -1260,6 +1263,13 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
 
+  // 트리 선택 (Confluence 하위 페이지)
+  const [includeChildren, setIncludeChildren] = useState(false);
+  const [showTreeModal, setShowTreeModal] = useState(false);
+  const [tree, setTree] = useState<ConfluenceTreeResponse | null>(null);
+  const [selectedPageIds, setSelectedPageIds] = useState<Set<string>>(new Set());
+  const [treeLoading, setTreeLoading] = useState(false);
+
   // PAT 등록 모달
   const [showPatModal, setShowPatModal] = useState(false);
   const [patInput, setPatInput] = useState('');
@@ -1272,6 +1282,21 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleOpenReview = async () => {
     if (!url.trim()) return;
     if (isConfluence && !hasPat) { setShowPatModal(true); return; }
+
+    // Confluence + 하위 페이지 포함 → 트리 선택 모달
+    if (isConfluence && includeChildren) {
+      setTreeLoading(true); setError('');
+      try {
+        const result = await previewConfluenceTree(url.trim(), { maxDepth: 3, maxPages: 100 });
+        setTree(result);
+        // 기본 선택: 모두 체크
+        setSelectedPageIds(new Set(result.tree.map(n => n.page_id)));
+        setShowTreeModal(true);
+      } catch (e: any) { setError(e.message || '트리 조회 실패'); }
+      finally { setTreeLoading(false); }
+      return;
+    }
+
     setPreviewing(true); setError('');
     try {
       const result = await previewUrl(namespace, url.trim());
@@ -1280,6 +1305,39 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setShowReview(true);
     } catch (e: any) { setError(e.message || '수집 실패'); }
     finally { setPreviewing(false); }
+  };
+
+  const handleBulkImport = async () => {
+    if (!tree || selectedPageIds.size === 0) return;
+    setLoading(true); setError('');
+    try {
+      const parsed = new URL(url.trim());
+      const baseUrl = `${parsed.protocol}//${parsed.host}`;
+      const pages = tree.tree
+        .filter(n => selectedPageIds.has(n.page_id))
+        .map(n => ({ page_id: n.page_id, title: n.title, url: n.url }));
+      const result = await importConfluenceBulk(namespace, baseUrl, pages, {
+        chunkStrategy: 'auto', category: category || undefined,
+      });
+      const failedMsg = result.pages_failed > 0 ? ` (실패 ${result.pages_failed}건)` : '';
+      setDone(`${result.pages_succeeded}개 페이지 · ${result.created}개 청크 등록${failedMsg}`);
+      setShowTreeModal(false);
+      onSuccess();
+    } catch (e: any) { setError(e.message || '일괄 등록 실패'); }
+    finally { setLoading(false); }
+  };
+
+  const togglePage = (pageId: string) => {
+    setSelectedPageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(pageId)) next.delete(pageId); else next.add(pageId);
+      return next;
+    });
+  };
+
+  const toggleAllSelection = (select: boolean) => {
+    if (!tree) return;
+    setSelectedPageIds(select ? new Set(tree.tree.map(n => n.page_id)) : new Set());
   };
 
   const handleConfirm = async (selected: ReviewChunk[]) => {
@@ -1356,6 +1414,21 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         </div>
       )}
 
+      {isConfluence && hasPat && (
+        <div className="flex items-center gap-2 p-2.5 bg-slate-900/60 rounded-lg border border-slate-700">
+          <input
+            type="checkbox"
+            id="includeChildren"
+            checked={includeChildren}
+            onChange={(e) => setIncludeChildren(e.target.checked)}
+            className="w-3.5 h-3.5 accent-indigo-500"
+          />
+          <label htmlFor="includeChildren" className="text-xs text-slate-300 cursor-pointer flex-1">
+            하위 페이지 포함 — 입력 URL을 최상단으로 자손 페이지 트리에서 선택 등록
+          </label>
+        </div>
+      )}
+
       {categoryNames.length > 0 && (
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">업무구분</label>
@@ -1373,8 +1446,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
         <Button variant="primary" size="sm" onClick={handleOpenReview}
-          disabled={!url.trim() || previewing}>
-          {previewing ? '수집 중...' : '수집 & 청크 검토'}
+          disabled={!url.trim() || previewing || treeLoading}>
+          {treeLoading ? '트리 조회 중...' : previewing ? '수집 중...' : (isConfluence && includeChildren ? '하위 페이지 선택' : '수집 & 청크 검토')}
         </Button>
       </div>
 
@@ -1386,6 +1459,67 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         loading={loading}
         sourceName={sourceMeta?.name ?? url}
       />
+
+      {/* Confluence 하위 페이지 트리 선택 모달 */}
+      {showTreeModal && tree && (
+        <Modal isOpen onClose={() => setShowTreeModal(false)} title="Confluence 하위 페이지 선택">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs">
+              <div className="text-slate-400">
+                총 <span className="text-slate-200 font-semibold">{tree.tree.length}개</span> 페이지 (최대 깊이 {tree.max_depth})
+                {tree.truncated && <span className="ml-2 text-amber-400">⚠ {tree.max_pages}개 한도 초과 — 일부 누락</span>}
+                {tree.max_depth_reached && !tree.truncated && <span className="ml-2 text-amber-400">⚠ 깊이 한도 도달</span>}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => toggleAllSelection(true)} className="text-indigo-400 hover:text-indigo-300">전체 선택</button>
+                <span className="text-slate-600">/</span>
+                <button onClick={() => toggleAllSelection(false)} className="text-slate-400 hover:text-slate-300">전체 해제</button>
+              </div>
+            </div>
+
+            <div className="max-h-96 overflow-y-auto bg-slate-900/60 rounded-lg border border-slate-700 divide-y divide-slate-800">
+              {tree.tree.map(node => (
+                <label
+                  key={node.page_id}
+                  className="flex items-start gap-2 px-3 py-2 hover:bg-slate-800/40 cursor-pointer"
+                  style={{ paddingLeft: `${12 + node.depth * 20}px` }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedPageIds.has(node.page_id)}
+                    onChange={() => togglePage(node.page_id)}
+                    className="mt-1 w-3.5 h-3.5 accent-indigo-500 shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-slate-200 truncate">
+                      {node.depth === 0 && <span className="text-amber-400 mr-1">📌</span>}
+                      {node.title}
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-mono truncate">{node.url}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              <div className="text-xs text-slate-400">
+                선택: <span className="text-indigo-400 font-semibold">{selectedPageIds.size}</span>개 페이지
+              </div>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setShowTreeModal(false)}>취소</Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleBulkImport}
+                  disabled={selectedPageIds.size === 0 || loading}
+                >
+                  {loading ? '등록 중...' : `${selectedPageIds.size}개 페이지 일괄 등록`}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Confluence PAT 등록 모달 */}
       {showPatModal && (
