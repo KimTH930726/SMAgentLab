@@ -72,7 +72,7 @@ function weightClass(w: number) {
     : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-600/40 dark:text-zinc-300';
 }
 
-type IngestMethod = 'file' | 'csv' | 'text' | 'manual' | 'url' | 'teams' | null;
+type IngestMethod = 'file' | 'text' | 'manual' | 'url' | 'teams' | null;
 
 // ── KnowledgeTable (메인) ─────────────────────────────────────────────────────
 
@@ -743,10 +743,6 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
         <FileUploadForm namespace={namespace} categoryNames={categoryNames}
           onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
       )}
-      {activeMethod === 'csv' && (
-        <CsvImportForm namespace={namespace} categoryNames={categoryNames}
-          onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
-      )}
       {activeMethod === 'text' && (
         <TextSplitForm namespace={namespace} categoryNames={categoryNames}
           onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
@@ -945,166 +941,6 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
         <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={!file || previewing}>
           {previewing ? '분석 중...' : '청크 검토 & 등록'}
-        </Button>
-      </div>
-
-      <ChunkReviewModal
-        isOpen={showReview}
-        onClose={() => setShowReview(false)}
-        chunks={reviewChunks}
-        onConfirm={handleConfirm}
-        loading={loading}
-        sourceName={file?.name ?? ''}
-      />
-    </div>
-  );
-}
-
-
-// ── CSV 임포트 인라인 폼 ─────────────────────────────────────────────────────
-
-function CsvImportForm({ namespace, categoryNames, onSuccess, onCancel }: {
-  namespace: string; categoryNames: string[];
-  onSuccess: () => void; onCancel: () => void;
-}) {
-  const [file, setFile] = useState<File | null>(null);
-  const [headers, setHeaders] = useState<string[]>([]);
-  const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([]);
-  const [allRows, setAllRows] = useState<Record<string, string>[]>([]);
-  const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [category, setCategory] = useState('');
-  const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
-  const [showReview, setShowReview] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [done, setDone] = useState('');
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const handleFile = (f: File | null) => {
-    if (!f) return;
-    setFile(f); setError(''); setDone(''); setAllRows([]); setHeaders([]);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const text = e.target?.result as string;
-        const lines = text.split('\n').filter(l => l.trim());
-        if (lines.length < 2) { setError('데이터가 부족합니다.'); return; }
-        const hdrs = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-        const rows = lines.slice(1).map(line => {
-          const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
-          const obj: Record<string, string> = {};
-          hdrs.forEach((h, i) => { obj[h] = vals[i] || ''; });
-          return obj;
-        });
-        setHeaders(hdrs);
-        setAllRows(rows);
-        setPreviewRows(rows.slice(0, 5));
-        const contentCol = hdrs.find(h => /content|내용|설명|description|text/i.test(h));
-        if (contentCol) setMapping(prev => ({ ...prev, content: contentCol }));
-      } catch { setError('CSV 파싱 실패'); }
-    };
-    reader.readAsText(f);
-  };
-
-  const handleOpenReview = () => {
-    if (!mapping.content) { setError('내용 컬럼을 선택해주세요.'); return; }
-    setError('');
-    const validRows = allRows.filter(row => row[mapping.content]?.trim());
-    const chunks: ReviewChunk[] = validRows.map((row, i) => ({
-      idx: i,
-      text: row[mapping.content],
-      title: mapping.category ? row[mapping.category] || null : null,
-      selected: true,
-    }));
-    setReviewChunks(chunks);
-    setShowReview(true);
-  };
-
-  const handleConfirm = async (selected: ReviewChunk[]) => {
-    setLoading(true); setError('');
-    try {
-      const validRows = allRows.filter(row => row[mapping.content]?.trim());
-      const items = selected.map(chunk => {
-        const row = validRows[chunk.idx] ?? {};
-        return {
-          content: row[mapping.content] || chunk.text,
-          category: mapping.category ? row[mapping.category] || category || undefined : category || undefined,
-          container_name: mapping.container_name ? row[mapping.container_name] || undefined : undefined,
-          query_template: mapping.query_template ? row[mapping.query_template] || undefined : undefined,
-        };
-      });
-      const result = await bulkCreateKnowledge(namespace, items, file!.name, 'csv_import');
-      setDone(`${result.created}건 등록 완료`);
-      setShowReview(false);
-      onSuccess();
-    } catch (e: any) { setError(e.message || '오류 발생'); }
-    finally { setLoading(false); }
-  };
-
-  return (
-    <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-4">
-      <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><Database className="w-4 h-4 text-indigo-400" />CSV 임포트</h3>
-
-      <div className="border-2 border-dashed border-slate-600 rounded-xl p-6 text-center cursor-pointer hover:border-indigo-500 transition-colors"
-        onClick={() => fileRef.current?.click()}>
-        <input ref={fileRef} type="file" accept=".csv,.tsv" className="hidden"
-          onChange={(e) => handleFile(e.target.files?.[0] ?? null)} />
-        {file
-          ? <p className="text-sm text-slate-300">{file.name} ({(file.size / 1024).toFixed(1)} KB) — {allRows.length}행</p>
-          : <p className="text-sm text-slate-400">CSV 파일을 선택하세요</p>}
-      </div>
-
-      {headers.length > 0 && (
-        <>
-          <div className="grid grid-cols-2 gap-3">
-            {['content', 'category', 'container_name', 'query_template'].map(field => (
-              <div key={field}>
-                <label className="text-[10px] text-slate-500 mb-1 block">
-                  {field === 'content' ? '내용 컬럼 (필수)' : field === 'category' ? '업무구분 컬럼' : field === 'container_name' ? '컨테이너명 컬럼' : '쿼리 컬럼'}
-                </label>
-                <select value={mapping[field] || ''} onChange={(e) => setMapping(p => ({ ...p, [field]: e.target.value }))}
-                  className="w-full bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-300">
-                  <option value="">매핑 안함</option>
-                  {headers.map(h => <option key={h} value={h}>{h}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
-          {categoryNames.length > 0 && !mapping.category && (
-            <div>
-              <label className="text-[10px] text-slate-500 mb-1 block">기본 업무구분 (CSV에 없을 때)</label>
-              <select value={category} onChange={(e) => setCategory(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-300">
-                <option value="">없음</option>
-                {categoryNames.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-          )}
-          <div>
-            <p className="text-xs text-slate-500 mb-1">미리보기 (처음 5행)</p>
-            <div className="overflow-x-auto rounded-lg border border-slate-700 max-h-40">
-              <table className="w-full text-xs">
-                <thead><tr className="bg-slate-800">
-                  {headers.map(h => <th key={h} className="px-2 py-1 text-left text-slate-400 font-medium">{h}</th>)}
-                </tr></thead>
-                <tbody>{previewRows.map((r, i) => (
-                  <tr key={i} className="border-t border-slate-700/60">
-                    {headers.map(h => <td key={h} className="px-2 py-1 text-slate-300 truncate max-w-[150px]">{r[h]}</td>)}
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
-      {error && <p className="text-xs text-rose-400">{error}</p>}
-
-      <div className="flex gap-2 justify-end pt-1">
-        <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
-        <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={loading || !file || !mapping.content}>
-          청크 검토 & 등록 ({allRows.filter(r => r[mapping.content]?.trim()).length}행)
         </Button>
       </div>
 
