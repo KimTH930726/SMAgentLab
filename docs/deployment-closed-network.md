@@ -401,6 +401,38 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-re
 
 > 이전 이미지를 정리했다면 백업 tar.gz을 다시 `docker load` 해야 합니다. 운영 서버에서는 직전 버전 이미지 1개는 유지 권장.
 
+### 3-4. v2.16 → v2.17 마이그레이션 시 주의
+
+**(1) DB 마이그레이션 수동 실행** — `init/`는 빈 pgdata에서만 자동 실행되므로 운영 서버에서는 수동 적용:
+
+```bash
+docker exec -i ops-postgres psql -U ops -d opsdb < init/03-llm-credentials.sql
+```
+
+이 마이그레이션은 옛 `ops_user.encrypted_llm_api_key` 컬럼을 제거하고 `encrypted_llm_credentials` 컬럼을 추가합니다.
+
+**(2) .env 환경변수 교체** — v2.16의 `INHOUSE_LLM_URL`/`INHOUSE_LLM_API_KEY`는 v2.17에서 제거:
+
+```env
+# 옛 (제거)
+# INHOUSE_LLM_URL=...
+# INHOUSE_LLM_API_KEY=...
+
+# 신규 (필수)
+INHOUSE_LLM_BASE_URL=https://devx-gw.shinsegae-inc.com
+INHOUSE_LLM_CLIENT_ID=usr-...
+INHOUSE_LLM_CLIENT_SECRET=...
+INHOUSE_LLM_AGENT_ID=...
+INHOUSE_LLM_AGENT_CODE=playground
+INHOUSE_LLM_CONVERSATION_ID=...   # dify 사전 등록 conv_id (없으면 0바이트 응답 가능)
+```
+
+**(3) 새 의존성** — 이미지 안에 동봉됨 (사용자는 별도 작업 불필요):
+- `pymupdf==1.24.13` (PDF 파싱 — v2.16에서 누락되어 있었음)
+- `openpyxl==3.1.5` (Excel `.xlsx`/`.xlsm` 파싱)
+
+**(4) 파일 업로드 한도** — nginx `client_max_body_size 50M` 설정이 이미지에 포함됨. 사내 리버스 프록시 앞단을 거치는 경우 그쪽도 50M 이상 허용 필요.
+
 ---
 
 ## 4. 운영 작업
