@@ -199,12 +199,25 @@ async def import_csv(
     """
     await check_namespace_ownership(namespace, user)
 
-    # CSV 파싱
+    # CSV 파싱 — UTF-8-BOM → UTF-8 → EUC-KR(CP949) 순으로 디코딩 시도
     try:
         raw = await file.read()
-        text = raw.decode("utf-8-sig")  # BOM 대응
+        text = None
+        for enc in ("utf-8-sig", "utf-8", "cp949"):
+            try:
+                text = raw.decode(enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        if text is None:
+            raise HTTPException(
+                status_code=400,
+                detail="CSV 인코딩을 인식할 수 없습니다. UTF-8 또는 EUC-KR(한글 Windows)로 저장된 파일만 지원합니다.",
+            )
         reader = csv.DictReader(io.StringIO(text))
         rows = list(reader)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"CSV 파싱 실패: {e}")
 
