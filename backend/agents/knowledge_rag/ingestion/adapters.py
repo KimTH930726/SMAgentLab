@@ -85,28 +85,27 @@ def parse_pdf(content_bytes: bytes, filename: str) -> ParsedDocument:
             raise ImportError("PDF 파싱을 위해 pymupdf를 설치하세요: pip install pymupdf")
 
     doc = pymupdf.open(stream=content_bytes, filetype="pdf")
+    try:
+        # 암호화/비밀번호 보호 PDF 감지 — needs_pass 또는 is_encrypted 속성 확인
+        if getattr(doc, "needs_pass", False) or getattr(doc, "is_encrypted", False):
+            raise ValueError(
+                "암호화(비밀번호 보호)된 PDF는 등록할 수 없습니다. "
+                "원본 PDF의 비밀번호를 해제한 후 다시 업로드해주세요. "
+                "(Acrobat → 도구 → 보호 → 암호화 → 보안 제거)"
+            )
 
-    # 암호화/비밀번호 보호 PDF 감지 — needs_pass 또는 is_encrypted 속성 확인
-    if getattr(doc, "needs_pass", False) or getattr(doc, "is_encrypted", False):
-        raise ValueError(
-            "암호화(비밀번호 보호)된 PDF는 등록할 수 없습니다. "
-            "원본 PDF의 비밀번호를 해제한 후 다시 업로드해주세요. "
-            "(Acrobat → 도구 → 보호 → 암호화 → 보안 제거)"
-        )
+        all_text_lines: list[str] = []
+        page_count = len(doc)
 
-    pages: list[str] = []
-    all_text_lines: list[str] = []
-
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        text = page.get_text()
-        pages.append(text)
-        all_text_lines.append(f"--- Page {page_num + 1} ---")
-        all_text_lines.append(text)
+        for page_num in range(page_count):
+            page = doc[page_num]
+            text = page.get_text()
+            all_text_lines.append(f"--- Page {page_num + 1} ---")
+            all_text_lines.append(text)
+    finally:
+        doc.close()
 
     raw_text = "\n".join(all_text_lines)
-
-    # 헤더 패턴으로 섹션 추출 시도 (PDF에서 추출된 텍스트 기반)
     sections = _extract_sections_from_text(raw_text)
 
     return ParsedDocument(
@@ -114,7 +113,7 @@ def parse_pdf(content_bytes: bytes, filename: str) -> ParsedDocument:
         source_name=filename,
         raw_text=raw_text,
         sections=sections,
-        metadata={"page_count": len(doc)},
+        metadata={"page_count": page_count},
     )
 
 
@@ -200,9 +199,21 @@ def parse_xlsx(content_bytes: bytes, filename: str) -> ParsedDocument:
     )
 
 
+def _decode_text(content_bytes: bytes) -> str:
+    """UTF-8-BOM → UTF-8 → EUC-KR(CP949) 순으로 디코딩 시도."""
+    for enc in ("utf-8-sig", "utf-8", "cp949"):
+        try:
+            return content_bytes.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    raise ValueError(
+        "파일 인코딩을 인식할 수 없습니다. UTF-8 또는 EUC-KR(한글 Windows)로 저장된 파일만 지원합니다."
+    )
+
+
 def parse_csv(content_bytes: bytes, filename: str) -> ParsedDocument:
     """CSV 파싱 — 첫 행 헤더로 가정, 행별 직렬화."""
-    text = content_bytes.decode("utf-8-sig")
+    text = _decode_text(content_bytes)
     reader = csv.reader(io.StringIO(text))
     rows = [r for r in reader if any(c.strip() for c in r)]
     if not rows:
@@ -243,9 +254,9 @@ def parse_file(content_bytes: bytes, filename: str) -> ParsedDocument:
     elif ext == "csv":
         return parse_csv(content_bytes, filename)
     elif ext in ("md", "markdown"):
-        return parse_markdown(content_bytes.decode("utf-8-sig"), filename)
+        return parse_markdown(_decode_text(content_bytes), filename)
     elif ext in ("txt", "log", "text"):
-        return parse_text(content_bytes.decode("utf-8-sig"), filename)
+        return parse_text(_decode_text(content_bytes), filename)
     else:
         # fallback: 텍스트로 시도
         try:
