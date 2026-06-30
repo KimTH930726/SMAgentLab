@@ -13,6 +13,9 @@ router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current_user)):
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, body.namespace)
+        if ns_id is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="namespace를 찾을 수 없습니다.")
 
         await conn.execute(
             "INSERT INTO ops_feedback (knowledge_id, namespace_id, question, is_positive, message_id) VALUES ($1,$2,$3,$4,$5)",

@@ -1,4 +1,6 @@
 import { useEffect } from 'react';
+
+let _openCount = 0;
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
@@ -28,15 +30,14 @@ export function Modal({
     return () => document.removeEventListener('keydown', handleKey);
   }, [isOpen, onClose]);
 
-  // Prevent body scroll when open
+  // Prevent body scroll when open — counter 방식으로 중첩 모달에서도 안전하게 처리
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
+    if (!isOpen) return;
+    _openCount++;
+    document.body.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = '';
+      _openCount = Math.max(0, _openCount - 1);
+      if (_openCount === 0) document.body.style.overflow = '';
     };
   }, [isOpen]);
 

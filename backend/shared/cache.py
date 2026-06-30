@@ -93,7 +93,7 @@ async def _get_redis():
 
 
 def _make_key(namespace: str, vec: list[float]) -> str:
-    h = hashlib.md5(str(vec[:8]).encode()).hexdigest()[:12]
+    h = hashlib.md5(str(vec[:64]).encode()).hexdigest()[:16]
     return f"semcache:{namespace}:{h}"
 
 

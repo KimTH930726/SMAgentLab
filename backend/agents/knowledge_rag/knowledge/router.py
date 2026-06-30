@@ -16,6 +16,10 @@ from agents.knowledge_rag.knowledge.schemas import (
 )
 from agents.knowledge_rag.knowledge import service
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
 
@@ -300,8 +304,8 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
         analysis = await analyze_document(body.raw_text, llm, user_credentials=get_user_llm_credentials(user))
         detected_strategy = analysis.get("chunk_strategy", "auto")
         strategy = detected_strategy
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("텍스트 분할 전략 자동 감지 실패 (auto 사용): %s", e)
 
     chunks = service.split_text_to_chunks(body.raw_text, strategy)
     return {"chunks": chunks, "count": len(chunks), "detected_strategy": detected_strategy}
@@ -543,7 +547,7 @@ async def preview_file_upload(
         "total_chars": len(doc.raw_text),
         "sections": len(doc.sections),
         "tables": len(doc.tables),
-        "chunks": [{"idx": c.idx, "text": c.text[:200], "title": c.section_title} for c in chunks],
+        "chunks": [{"idx": c.idx, "text": c.text, "title": c.section_title} for c in chunks],
         "chunk_count": len(chunks),
         "detected_strategy": detected_strategy,
     }
@@ -779,7 +783,7 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
         "source_type": doc.source_type,
         "total_chars": len(doc.raw_text),
         "sections": len(doc.sections),
-        "chunks": [{"idx": c.idx, "text": c.text[:200], "title": c.section_title} for c in chunks],
+        "chunks": [{"idx": c.idx, "text": c.text, "title": c.section_title} for c in chunks],
         "chunk_count": len(chunks),
         "detected_strategy": detected_strategy,
         "url": body.url,

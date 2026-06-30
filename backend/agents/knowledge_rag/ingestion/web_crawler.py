@@ -190,16 +190,28 @@ def _parse_confluence_url(url: str) -> tuple[str, str | None, str | None, str | 
 
 # ── 텍스트 추출 헬퍼 ───────────────────────────────────────────────────────────
 
+# _extract_text 전용: div 포함 — 중첩된 가장 바깥 블록 하나만 추출해 중복 방지
+_BLOCK_TAGS = ("p", "li", "td", "th", "div", "pre", "blockquote", "dt", "dd")
+
+# _extract_heading_sections 전용: div 제외 — div는 컨테이너이므로 검색 대상에서 뺌
+# div를 포함하면 외부 div가 모든 텍스트를 먼저 흡수해 섹션 내용이 사라지는 버그 발생
+_CONTENT_TAGS = ("p", "li", "td", "th", "pre", "blockquote")
+
+
 def _extract_text(tag) -> str:
-    """BS4 태그 → 줄바꿈 정리된 순수 텍스트."""
+    """BS4 태그 → 줄바꿈 정리된 순수 텍스트.
+
+    div>p, li>ul>li 같이 블록 요소가 중첩된 경우 가장 바깥 블록의 get_text()로
+    한 번만 추출해 내용 중복을 방지한다.
+    """
     lines = []
     for element in tag.descendants:
         if element.name in ("h1", "h2", "h3", "h4", "h5", "h6"):
             text = element.get_text(" ", strip=True)
             if text:
                 lines.append(f"\n## {text}\n")
-        elif element.name in ("p", "li", "td", "th", "div") and not any(
-            p.name in ("p", "li", "td", "th") for p in element.parents if p != tag
+        elif element.name in _BLOCK_TAGS and not any(
+            p.name in _BLOCK_TAGS for p in element.parents if p != tag
         ):
             text = element.get_text(" ", strip=True)
             if text:
@@ -208,19 +220,28 @@ def _extract_text(tag) -> str:
             lines.append("")
 
     raw = "\n".join(lines)
-    # 연속 공백줄 정리
     raw = re.sub(r"\n{3,}", "\n\n", raw)
     return raw.strip()
 
 
 def _extract_heading_sections(tag) -> list[dict]:
-    """헤딩 태그 기반 섹션 분리."""
+    """헤딩 태그 기반 섹션 분리.
+
+    td>p, li>ul>li 같이 콘텐츠 태그가 중첩된 경우 바깥 요소만 추출한다.
+    div는 컨테이너 역할이므로 검색·부모 제외 대상에서 모두 뺀다.
+    """
     sections: list[dict] = []
     current_title = ""
     current_level = 0
     current_lines: list[str] = []
 
-    for element in tag.find_all(["h1", "h2", "h3", "h4", "p", "li", "td"]):
+    for element in tag.find_all(["h1", "h2", "h3", "h4"] + list(_CONTENT_TAGS)):
+        # 같은 유형 부모 안에 중첩된 콘텐츠는 바깥 요소의 get_text()에 이미 포함됨
+        if element.name in _CONTENT_TAGS and any(
+            p.name in _CONTENT_TAGS for p in element.parents if p != tag
+        ):
+            continue
+
         if element.name in ("h1", "h2", "h3", "h4"):
             if current_lines or current_title:
                 sections.append({

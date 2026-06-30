@@ -65,7 +65,7 @@ async def auto_tag_chunks(
 
     # 청크 텍스트 요약 (토큰 절약 — 각 청크 처음 300자)
     chunks_text = "\n\n".join(
-        f"[청크 {c['idx']}]\n{c['text'][:300]}{'...' if len(c['text']) > 300 else ''}"
+        f"[청크 {c['idx']}]\n{c['text'][:600]}{'...' if len(c['text']) > 600 else ''}"
         for c in chunks
     )
     categories_text = ", ".join(categories) if categories else "(미정의 — null 반환)"
