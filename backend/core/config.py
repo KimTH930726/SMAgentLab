@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     knowledge_mid_score: float = 0.55
 
     # 리랭커 (CrossEncoder)
-    reranker_enabled: bool = False
+    reranker_enabled: bool = True
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranker_candidates: int = 20  # 1차 검색에서 가져올 후보 수 (리랭킹 후 top_k로 압축)
 
