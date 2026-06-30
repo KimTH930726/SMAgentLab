@@ -136,10 +136,12 @@ async def _summarize_with_llm(messages: list, llm_provider) -> Optional[str]:
         f"{'사용자' if r['role'] == 'user' else '어시스턴트'}: {r['content']}" for r in messages
     )
     template = await load_prompt("conv_summarize", _CONV_SUMMARIZE_FALLBACK)
-    try:
-        prompt = template.format(dialogue=dialogue)
-    except KeyError:
-        prompt = _CONV_SUMMARIZE_FALLBACK.format(dialogue=dialogue)
+    # .format() 대신 replace 사용: 대화 내용에 {변수명} 패턴이 있으면 ValueError/KeyError 발생함
+    # (IT 운영 질문에는 {table_name}, {env} 같은 패턴이 흔히 포함됨)
+    prompt = template.replace("{dialogue}", dialogue)
+    if "{dialogue}" in prompt:
+        # replace가 실패한 경우(템플릿에 플레이스홀더 없음) → fallback 사용
+        prompt = _CONV_SUMMARIZE_FALLBACK.replace("{dialogue}", dialogue)
     try:
         summary, _ = await llm_provider.generate(context="", question=prompt)
         return summary.strip() or None

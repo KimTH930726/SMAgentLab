@@ -108,6 +108,8 @@ async def _get_or_create_conversation(
             if row:
                 return row["id"], row["inhouse_conv_id"]
         ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            raise HTTPException(status_code=404, detail=f"namespace '{namespace}'를 찾을 수 없습니다.")
         row = await conn.fetchrow(
             "INSERT INTO ops_conversation (namespace_id, title, user_id) VALUES ($1, $2, $3) RETURNING id, inhouse_conv_id",
             ns_id, question[:200], user_id,
@@ -392,6 +394,8 @@ async def list_conversations(namespace: str = Query(...), user: dict = Depends(g
 async def create_conversation(body: ConversationCreate, user: dict = Depends(get_current_user)):
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, body.namespace)
+        if ns_id is None:
+            raise HTTPException(status_code=404, detail=f"namespace '{body.namespace}'를 찾을 수 없습니다.")
         row = await conn.fetchrow(
             """
             INSERT INTO ops_conversation (namespace_id, title, user_id) VALUES ($1, $2, $3)
