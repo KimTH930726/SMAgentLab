@@ -9,6 +9,7 @@ from core.config import settings
 from core.database import init_pool, close_pool, get_conn
 from core.security import hash_password
 from shared.embedding import embedding_service
+from shared import reranker as reranker_service
 from service.llm.factory import get_llm_provider
 
 from service.auth.router import router as auth_router
@@ -963,6 +964,8 @@ async def lifespan(_app: FastAPI):
     async with get_conn() as conn:
         await sem_cache.load_config_from_db(conn)
     embedding_service.load()
+    if settings.reranker_enabled:
+        reranker_service.load(settings.reranker_model)
 
     # ── 에이전트 등록 ──
     AgentRegistry.register(KnowledgeRagAgent())

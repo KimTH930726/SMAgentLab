@@ -60,9 +60,16 @@ async def create_query_log(
     namespace: str, question: str, answer: str,
     has_results: bool, mapped_term: Optional[str] = None,
     message_id: Optional[int] = None,
+    had_context: bool = True,
 ) -> int:
     is_real_answer = answer and answer != LLM_UNAVAILABLE_MSG
-    status = "unresolved" if (not has_results and not is_real_answer) else "pending"
+    if not had_context:
+        # 검색 결과가 있었지만 context가 비었거나, 아예 결과가 없어 지식 갭으로 판단
+        status = "no_knowledge"
+    elif not has_results and not is_real_answer:
+        status = "unresolved"
+    else:
+        status = "pending"
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         row = await conn.fetchrow(

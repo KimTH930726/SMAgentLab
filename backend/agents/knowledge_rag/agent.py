@@ -18,6 +18,7 @@ from service.llm.base import resolve_system_prompt
 from service.llm.factory import get_llm_provider
 from shared.embedding import embedding_service
 from shared import cache as sem_cache
+from shared import reranker as reranker_svc
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ class KnowledgeRagAgent(AgentBase):
                     "results": cached.get("results", []),
                 }
                 yield {"type": "token", "data": cached["answer"]}
-                await create_query_log(namespace, query, cached["answer"], bool(cached.get("results")), cached.get("mapped_term"), msg_id)
+                await create_query_log(namespace, query, cached["answer"], bool(cached.get("results")), cached.get("mapped_term"), msg_id, had_context=bool(cached.get("results")))
                 yield {"type": "done", "message_id": msg_id, "status": "completed"}
                 return
 
@@ -121,15 +122,22 @@ class KnowledgeRagAgent(AgentBase):
             enriched_query = f"{search_question} {mapped_term}" if mapped_term else search_question
 
             yield {"type": "status", "step": "search", "message": "관련 문서 검색 중..."}
-            results, fewshots = await asyncio.gather(
-                retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k, category),
+            # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
+            candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
+            results_raw, fewshots = await asyncio.gather(
+                retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, category),
                 retrieval.fetch_fewshots(namespace, query_vec),
             )
+            if settings.reranker_enabled and len(results_raw) > top_k:
+                results = await reranker_svc.rerank(enriched_query, results_raw, top_k)
+            else:
+                results = results_raw[:top_k]
 
             fs_section = retrieval.build_fewshot_section(fewshots)
             doc_context = retrieval.build_context(results)
             llm_context = f"{fs_section}\n\n{doc_context}" if fs_section else doc_context
             has_results = len(results) > 0
+            had_context = bool(doc_context.strip())
 
             async with get_conn() as conn:
                 await conn.execute(
@@ -176,7 +184,7 @@ class KnowledgeRagAgent(AgentBase):
             await update_assistant_message(msg_id, final_answer, msg_status)
             if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
                 await update_inhouse_conv_id(conversation_id, new_inhouse_conv_id)
-            await create_query_log(namespace, query, final_answer, has_results, mapped_term, msg_id)
+            await create_query_log(namespace, query, final_answer, has_results, mapped_term, msg_id, had_context=had_context)
 
             # ── Semantic Cache 저장 (LLM 정상 응답 시만, 결과 유무 무관) ──
             if final_answer != LLM_UNAVAILABLE_MSG:

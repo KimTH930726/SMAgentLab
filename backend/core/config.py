@@ -57,6 +57,15 @@ class Settings(BaseSettings):
     knowledge_high_score: float = 0.8
     knowledge_mid_score: float = 0.55
 
+    # 리랭커 (CrossEncoder)
+    reranker_enabled: bool = False
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_candidates: int = 20  # 1차 검색에서 가져올 후보 수 (리랭킹 후 top_k로 압축)
+
+    # 지식 신선도 decay
+    # 0이면 비활성화. 양수이면 해당 일수를 반감기로 score에 decay 적용.
+    freshness_decay_halflife_days: int = 0
+
     # Semantic Cache (Redis)
     redis_url: str = ""  # 비어있으면 캐시 비활성화. 예: redis://ops-redis:6379/0
 

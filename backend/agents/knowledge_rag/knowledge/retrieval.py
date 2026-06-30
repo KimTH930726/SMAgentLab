@@ -1,6 +1,8 @@
 """2단계 하이브리드 검색 파이프라인."""
 from __future__ import annotations
 
+import math
+import datetime
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -134,7 +136,8 @@ async def search_knowledge(
                    COALESCE(vs.v_score, 0.0) AS v_score,
                    COALESCE(ks.k_score, 0.0) AS k_score,
                    ($4 * COALESCE(vs.v_score, 0.0) + $5 * COALESCE(ks.k_score, 0.0))
-                     * (1.0 + k.base_weight) AS final_score
+                     * (1.0 + k.base_weight) AS final_score,
+                   k.updated_at
             FROM rag_knowledge k
             JOIN ops_namespace n ON k.namespace_id = n.id
             LEFT JOIN vector_scores vs ON k.id = vs.id
@@ -147,18 +150,30 @@ async def search_knowledge(
             *params,
         )
 
-    return [
-        RetrievalResult(
+    halflife = settings.freshness_decay_halflife_days
+    now = datetime.datetime.now(tz=datetime.timezone.utc)
+
+    results = []
+    for r in rows:
+        score = float(r["final_score"])
+        if halflife > 0 and r["updated_at"]:
+            updated = r["updated_at"]
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=datetime.timezone.utc)
+            age_days = (now - updated).total_seconds() / 86400.0
+            # 반감기 halflife_days 기준 지수 decay; 최소 50%
+            decay = max(0.5, math.pow(0.5, age_days / halflife))
+            score *= decay
+        results.append(RetrievalResult(
             id=r["id"], namespace=r["namespace"],
             container_name=r["container_name"],
             target_tables=list(r["target_tables"]) if r["target_tables"] else [],
             content=r["content"], query_template=r["query_template"],
             base_weight=r["base_weight"],
             v_score=float(r["v_score"]), k_score=float(r["k_score"]),
-            final_score=float(r["final_score"]),
-        )
-        for r in rows
-    ]
+            final_score=score,
+        ))
+    return results
 
 
 async def fetch_fewshots(
