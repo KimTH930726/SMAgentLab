@@ -54,16 +54,18 @@ def chunk_document(
     else:
         chunks = _chunk_by_paragraphs(doc.raw_text, max_chars, min_chars)
 
-    # 테이블이 있으면 테이블 청크도 추가
-    for tbl in doc.tables:
-        table_text = _table_to_markdown(tbl)
-        if table_text.strip():
-            chunks.append(Chunk(
-                text=table_text,
-                idx=len(chunks),
-                section_title="[표 데이터]",
-                metadata={"is_table": True},
-            ))
+    # 테이블 청크 추가 — xlsx/csv는 섹션에 이미 행 데이터가 포함되므로 제외
+    # Confluence/웹/PDF 등 본문에 삽입된 표만 별도 청크로 추가
+    if doc.source_type not in ("xlsx", "csv"):
+        for tbl in doc.tables:
+            table_text = _table_to_markdown(tbl)
+            if table_text.strip():
+                chunks.append(Chunk(
+                    text=table_text,
+                    idx=len(chunks),
+                    section_title="[표 데이터]",
+                    metadata={"is_table": True},
+                ))
 
     # 인덱스 재부여
     for i, c in enumerate(chunks):

@@ -1,6 +1,7 @@
 """파일 포맷별 파싱 어댑터 — 다양한 입력을 통일 포맷으로 변환."""
 import csv
 import io
+import itertools
 import logging
 import re
 from dataclasses import dataclass, field
@@ -165,16 +166,19 @@ def parse_xlsx(content_bytes: bytes, filename: str) -> ParsedDocument:
         tables.append({"sheet": sheet_name, "headers": headers, "rows": body_rows})
 
         # 텍스트 직렬화: "헤더: 값" per row (RAG 검색에 유리)
+        # 행마다 빈 줄을 추가해 paragraph 청킹이 행 경계에서 분리되도록 함
         sheet_text_lines = [f"## 시트: {sheet_name}"]
         for row in body_rows:
             row_parts = []
-            for h, v in zip(headers, row):
+            # zip_longest: 헤더보다 짧은 행의 끝 컬럼도 누락 없이 처리
+            for h, v in itertools.zip_longest(headers, row, fillvalue=""):
                 if v:
                     row_parts.append(f"{h}: {v}" if h else v)
             if row_parts:
                 sheet_text_lines.append(" | ".join(row_parts))
+                sheet_text_lines.append("")  # 행 구분 빈 줄 → paragraph 경계
 
-        section_text = "\n".join(sheet_text_lines[1:])
+        section_text = "\n".join(sheet_text_lines[1:]).strip()
         all_text_lines.extend(sheet_text_lines)
         all_text_lines.append("")
 
@@ -210,17 +214,19 @@ def parse_csv(content_bytes: bytes, filename: str) -> ParsedDocument:
     lines = [f"## {filename}"]
     for row in body_rows:
         row_parts = []
-        for h, v in zip(headers, row):
-            v = v.strip()
+        # zip_longest: 헤더보다 짧은 행의 끝 컬럼도 누락 없이 처리
+        for h, v in itertools.zip_longest(headers, row, fillvalue=""):
+            v = v.strip() if v else ""
             if v:
                 row_parts.append(f"{h}: {v}" if h else v)
         if row_parts:
             lines.append(" | ".join(row_parts))
+            lines.append("")  # 행 구분 빈 줄 → paragraph 경계
 
     return ParsedDocument(
         source_type="csv",
         source_name=filename,
-        raw_text="\n".join(lines),
+        raw_text="\n".join(lines).strip(),
         tables=[{"headers": headers, "rows": body_rows}],
         metadata={"row_count": len(body_rows)},
     )

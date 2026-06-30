@@ -114,26 +114,22 @@ async def update_fewshot(fewshot_id: int, body: FewshotUpdate, user: dict = Depe
             embedding = await embedding_service.embed(new_question)
             row = await conn.fetchrow(
                 """
-                UPDATE rag_fewshot SET question = $2, answer = $3, embedding = $4::vector,
-                       created_by_part = $5, created_by_user_id = $6
+                UPDATE rag_fewshot SET question = $2, answer = $3, embedding = $4::vector
                 WHERE id = $1
                 RETURNING id, namespace_id, question, answer, knowledge_id,
                           created_by_part, created_by_user_id, created_at::text
                 """,
                 fewshot_id, new_question, new_answer, str(embedding),
-                user["part"], user["id"],
             )
         else:
             row = await conn.fetchrow(
                 """
-                UPDATE rag_fewshot SET question = $2, answer = $3,
-                       created_by_part = $4, created_by_user_id = $5
+                UPDATE rag_fewshot SET question = $2, answer = $3
                 WHERE id = $1
                 RETURNING id, namespace_id, question, answer, knowledge_id,
                           created_by_part, created_by_user_id, created_at::text
                 """,
                 fewshot_id, new_question, new_answer,
-                user["part"], user["id"],
             )
         result = dict(row)
         result["namespace"] = existing["ns_name"]

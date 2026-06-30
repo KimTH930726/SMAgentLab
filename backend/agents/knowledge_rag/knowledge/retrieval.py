@@ -108,7 +108,7 @@ async def search_knowledge(
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             return []
-        category_filter = "AND (k.category = $7 OR k.category IS NULL)" if category else ""
+        category_filter = "AND k.category = $7" if category else ""
         params = [str(query_vec), ns_id, enriched_query, w_vector, w_keyword, top_k]
         if category:
             params.append(category)

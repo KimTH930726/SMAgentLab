@@ -106,9 +106,9 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
     staleTime: 0,
   });
 
-  // log가 바뀔 때 폼 초기화 (AI 답변을 내용에 미리 채워줌)
-  useState(() => {
-    if (log) {
+  // open 또는 log가 바뀔 때 폼 초기화 (AI 답변을 내용에 미리 채워줌)
+  useEffect(() => {
+    if (open && log) {
       setContainerNames([]);
       setTargetTables([]);
       setContent(log.answer ?? '');
@@ -117,18 +117,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
       setCategory('');
       setError(null);
     }
-  });
-
-  // open될 때마다 초기화
-  const handleOpen = () => {
-    setContainerNames([]);
-    setTargetTables([]);
-    setContent(log?.answer ?? '');
-    setQueryTemplate('');
-    setBaseWeight(1.0);
-    setCategory('');
-    setError(null);
-  };
+  }, [open, log]);
 
   const weightLabel = (w: number) => w >= 2 ? '높음' : w >= 1.5 ? '보통' : '기본';
 
@@ -163,7 +152,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
       title="지식 등록"
       maxWidth="max-w-xl"
     >
-      <div className="space-y-3" onAnimationStart={handleOpen}>
+      <div className="space-y-3">
         {/* 원본 질문 (읽기 전용) */}
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">원본 질문</label>

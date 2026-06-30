@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
@@ -42,6 +42,8 @@ export function FeedbackSection({
   const qc = useQueryClient();
   const [state, setState] = useState<FeedbackState>('idle');
   const [submitting, setSubmitting] = useState(false);
+  const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (transitionTimer.current) clearTimeout(transitionTimer.current); }, []);
   const [form, setForm] = useState<KnowledgeFormData>({
     container_name: '',
     target_tables: '',
@@ -75,7 +77,8 @@ export function FeedbackSection({
       console.error(err);
     }
     setState('positive_sent');
-    setTimeout(() => setState('negative_sent'), 2000);
+    if (transitionTimer.current) clearTimeout(transitionTimer.current);
+    transitionTimer.current = setTimeout(() => setState('negative_sent'), 2000);
   };
 
   const handleSkip = async () => {

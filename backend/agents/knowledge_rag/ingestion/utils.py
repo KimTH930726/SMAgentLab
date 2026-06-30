@@ -23,7 +23,9 @@ def parse_json_array(text: str) -> list:
 def _strip_code_fence(text: str) -> str:
     text = text.strip()
     if "```json" in text:
-        text = text.split("```json")[1].split("```")[0]
+        inner = text.split("```json", 1)[1]
+        text = inner.rsplit("```", 1)[0]
     elif "```" in text:
-        text = text.split("```")[1].split("```")[0]
+        inner = text.split("```", 1)[1]
+        text = inner.rsplit("```", 1)[0]
     return text.strip()

@@ -21,6 +21,7 @@ from service.chat.schemas import (
 from service.chat.helpers import (
     LLM_UNAVAILABLE_MSG, results_to_json,
     update_inhouse_conv_id, create_query_log, post_save_tasks,
+    update_assistant_message,
 )
 from service.llm.factory import get_llm_provider
 from agents.knowledge_rag.knowledge import retrieval
@@ -210,14 +211,16 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         user_credentials=user_creds, ext_conversation_id=inhouse_conv_id,
     )
     if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
-        asyncio.create_task(update_inhouse_conv_id(conv_id, new_inhouse_conv_id))
+        t = asyncio.create_task(update_inhouse_conv_id(conv_id, new_inhouse_conv_id))
+        t.add_done_callback(lambda f: logger.warning("update_inhouse_conv_id 실패: %s", f.exception()) if not f.cancelled() and f.exception() else None)
 
     _, msg_id = await asyncio.gather(
         _save_user_message(conv_id, req.question),
         _save_assistant_message(conv_id, answer, pipe.mapped_term, pipe.results),
     )
     await create_query_log(req.namespace, req.question, answer, len(pipe.results) > 0, pipe.mapped_term, msg_id)
-    asyncio.create_task(post_save_tasks(conv_id, req.namespace))
+    t2 = asyncio.create_task(post_save_tasks(conv_id, req.namespace))
+    t2.add_done_callback(lambda f: logger.warning("post_save_tasks 실패: %s", f.exception()) if not f.cancelled() and f.exception() else None)
 
     return ChatResponse(
         conversation_id=conv_id, question=req.question, mapped_term=pipe.mapped_term,

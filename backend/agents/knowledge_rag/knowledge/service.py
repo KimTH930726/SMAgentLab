@@ -90,8 +90,7 @@ async def update_knowledge(
             UPDATE rag_knowledge
             SET container_name=$1, target_tables=$2, content=$3,
                 query_template=$4, embedding=$5::vector, base_weight=$6,
-                category=$10,
-                created_by_part=$8, created_by_user_id=$9,
+                category=$8,
                 updated_at=NOW()
             WHERE id = $7
             RETURNING id, namespace_id, container_name, target_tables,
@@ -101,8 +100,6 @@ async def update_knowledge(
             """,
             new_container, new_tables, new_content,
             new_template, new_embedding, new_weight, knowledge_id,
-            updated_by_part or current["created_by_part"],
-            updated_by_user_id or current["created_by_user_id"],
             new_category,
         )
         if not row:
@@ -273,28 +270,15 @@ async def update_glossary(
             "SELECT n.name FROM rag_glossary g JOIN ops_namespace n ON g.namespace_id = n.id WHERE g.id = $1",
             glossary_id,
         )
-        if updated_by_part is not None and updated_by_user_id is not None:
-            row = await conn.fetchrow(
-                """
-                UPDATE rag_glossary
-                SET term = $1, description = $2, embedding = $3::vector,
-                    created_by_part = $5, created_by_user_id = $6
-                WHERE id = $4
-                RETURNING id, namespace_id, term, description, created_by_part, created_by_user_id
-                """,
-                term, description, str(embedding), glossary_id,
-                updated_by_part, updated_by_user_id,
-            )
-        else:
-            row = await conn.fetchrow(
-                """
-                UPDATE rag_glossary
-                SET term = $1, description = $2, embedding = $3::vector
-                WHERE id = $4
-                RETURNING id, namespace_id, term, description, created_by_part, created_by_user_id
-                """,
-                term, description, str(embedding), glossary_id,
-            )
+        row = await conn.fetchrow(
+            """
+            UPDATE rag_glossary
+            SET term = $1, description = $2, embedding = $3::vector
+            WHERE id = $4
+            RETURNING id, namespace_id, term, description, created_by_part, created_by_user_id
+            """,
+            term, description, str(embedding), glossary_id,
+        )
         if not row:
             return None
         result = dict(row)
