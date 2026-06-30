@@ -32,7 +32,7 @@
 | 검색 품질 | Glossary Mapping + Hybrid Search | 도메인 용어 정확도 |
 | 재정렬 | CrossEncoder Reranker (v2.19) | 최종 랭킹 품질 |
 | 신선도 | Freshness Decay (v2.19) | 오래된 지식 패널티 |
-| 갭 감지 | `no_knowledge` status 자동 기록 (v2.19) | 지식 공백 가시화 |
+| 갭 감지 | `no_knowledge` status DB 로깅 (v2.19) | 지식 공백 추적 가능 — 어드민 UI는 Phase 1-3 예정 |
 | 피드백 | thumbs up/down → base_weight 반영 | 암묵적 사용자 신호 |
 | 메모리 | ConversationSummaryBuffer + Semantic Recall | 멀티턴 컨텍스트 |
 

@@ -1,7 +1,6 @@
 # 폐쇄망 리눅스 서버 배포 가이드
 
 > 인터넷이 차단된 사내 리눅스 서버에 SMAgentLab(Ops-Navigator)을 배포하는 절차.
-> 일반 사내 배포는 [`deployment-guide.md`](deployment-guide.md) 참고.
 
 ---
 
@@ -359,8 +358,18 @@ bash scripts/import-and-run.sh smagentlab-images-v2.16.tar.gz
 
 ### 2-5. 초기 어드민 작업
 
-`.env`의 `ADMIN_DEFAULT_PASSWORD`로 admin 계정 로그인 → 파트/네임스페이스 생성 → 사용자 등록.
-상세 절차는 [`deployment-guide.md`](deployment-guide.md) §3 참고.
+`.env`의 `ADMIN_DEFAULT_PASSWORD`로 admin 계정 로그인 후 순서대로 진행:
+
+| 순서 | 작업 | 경로 |
+|---|---|---|
+| 1 | admin 계정 로그인 | 우측 상단 로그인 |
+| 2 | 파트 생성 | 어드민 → 사용자 관리 → 파트 관리 |
+| 3 | 네임스페이스 생성 | 어드민 → 네임스페이스 |
+| 4 | 지식베이스 등록 | 어드민 → 지식베이스 |
+| 5 | (선택) HTTP 도구 등록 | 어드민 → HTTP 도구 |
+| 6 | 일반 사용자 계정 생성 | 어드민 → 사용자 관리 |
+
+> 초기 로그인 후 반드시 admin 비밀번호를 변경하세요.
 
 ---
 
