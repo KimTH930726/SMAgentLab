@@ -64,6 +64,7 @@ class NamespaceDetailStats(BaseModel):
     resolved: int
     pending: int
     unresolved: int
+    no_knowledge: int = 0
     term_distribution: list[TermStat]
     unresolved_cases: list[dict]
 

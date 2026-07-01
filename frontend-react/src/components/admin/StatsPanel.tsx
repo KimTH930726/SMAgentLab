@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, CheckCircle, XCircle, Clock, FileText, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
+import { MessageSquare, CheckCircle, XCircle, Clock, FileText, ChevronDown, ChevronUp, Trash2, AlertTriangle } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
@@ -269,7 +269,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
 
 // ── QueryLog Modal ───────────────────────────────────────────────────────────
 
-type ModalType = 'total' | 'resolved' | 'pending' | 'unresolved';
+type ModalType = 'total' | 'resolved' | 'pending' | 'unresolved' | 'no_knowledge';
 
 function QueryLogModal({
   open, onClose, modalType, namespace, qc, canModify,
@@ -343,7 +343,8 @@ function QueryLogModal({
   };
 
   const titleMap: Record<ModalType, string> = {
-    total: '전체 질의', resolved: '해결된 질의', pending: '대기 중 질의', unresolved: '미해결 질의',
+    total: '전체 질의', resolved: '해결된 질의', pending: '대기 중 질의',
+    unresolved: '미해결 질의', no_knowledge: '지식 공백 질의',
   };
   const title = modalType ? `${titleMap[modalType]} (${logs.length}건)` : '';
 
@@ -400,6 +401,7 @@ function QueryLogModal({
                     {log.status === 'resolved' && <CheckCircle className="w-4 h-4 text-emerald-400" />}
                     {log.status === 'pending' && <Clock className="w-4 h-4 text-amber-400" />}
                     {log.status === 'unresolved' && <XCircle className="w-4 h-4 text-rose-400" />}
+                    {log.status === 'no_knowledge' && <AlertTriangle className="w-4 h-4 text-orange-400" />}
                   </span>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-slate-200 truncate">{log.question}</p>
@@ -425,9 +427,13 @@ function QueryLogModal({
                     <span>상태: <span className={
                       log.status === 'resolved' ? 'text-emerald-400'
                       : log.status === 'pending' ? 'text-amber-400'
+                      : log.status === 'no_knowledge' ? 'text-orange-400'
                       : 'text-rose-400'
                     }>
-                      {log.status === 'resolved' ? '해결됨' : log.status === 'pending' ? '대기 중' : '미해결'}
+                      {log.status === 'resolved' ? '해결됨'
+                        : log.status === 'pending' ? '대기 중'
+                        : log.status === 'no_knowledge' ? '지식 공백'
+                        : '미해결'}
                     </span></span>
                     {log.mapped_term && <span>용어: <span className="text-indigo-400">{log.mapped_term}</span></span>}
                     <span>{new Date(log.created_at).toLocaleString('ko-KR')}</span>
@@ -539,6 +545,7 @@ export function StatsPanel() {
     { value: stats?.resolved ?? 0, color: '#10b981', label: '해결됨', tooltip: '피드백 긍정 또는 관리자 승인' },
     { value: stats?.pending ?? 0, color: '#f59e0b', label: '대기 중', tooltip: '검색 결과 있음, 피드백 대기' },
     { value: stats?.unresolved ?? 0, color: '#f43f5e', label: '미해결', tooltip: '검색 결과 없음 또는 부정 피드백' },
+    { value: stats?.no_knowledge ?? 0, color: '#f97316', label: '지식 공백', tooltip: '관련 지식이 아예 없어 답변 불가 — 지식 등록 필요' },
   ];
 
   const topTerms = (stats?.term_distribution ?? []).slice(0, 8);
@@ -553,18 +560,27 @@ export function StatsPanel() {
     {
       label: '전체 질의', value: stats?.total_queries ?? 0, type: 'total' as ModalType,
       icon: <MessageSquare className="w-5 h-5 text-indigo-400" />, bg: 'bg-indigo-900/40',
+      highlight: false,
     },
     {
       label: '해결됨', value: stats?.resolved ?? 0, type: 'resolved' as ModalType,
       icon: <CheckCircle className="w-5 h-5 text-emerald-400" />, bg: 'bg-emerald-900/40',
+      highlight: false,
     },
     {
       label: '대기 중', value: stats?.pending ?? 0, type: 'pending' as ModalType,
       icon: <Clock className="w-5 h-5 text-amber-400" />, bg: 'bg-amber-900/40',
+      highlight: false,
     },
     {
       label: '미해결', value: stats?.unresolved ?? 0, type: 'unresolved' as ModalType,
       icon: <XCircle className="w-5 h-5 text-rose-400" />, bg: 'bg-rose-900/40',
+      highlight: false,
+    },
+    {
+      label: '지식 공백', value: stats?.no_knowledge ?? 0, type: 'no_knowledge' as ModalType,
+      icon: <AlertTriangle className="w-5 h-5 text-orange-400" />, bg: 'bg-orange-900/40',
+      highlight: (stats?.no_knowledge ?? 0) > 0,
     },
   ];
 
@@ -590,17 +606,22 @@ export function StatsPanel() {
       {stats && (
         <>
           {/* KPI cards — clickable */}
-          <div className="grid grid-cols-4 gap-3">
-            {kpiCards.map(({ label, value, type, icon, bg }) => (
+          <div className="grid grid-cols-5 gap-3">
+            {kpiCards.map(({ label, value, type, icon, bg, highlight }) => (
               <button
                 key={label}
                 onClick={() => setModalType(type)}
-                className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex items-center gap-3 hover:border-indigo-500/50 hover:bg-slate-700/60 transition-colors cursor-pointer text-left"
+                className={`bg-slate-800 border rounded-xl p-4 flex items-center gap-3 hover:bg-slate-700/60 transition-colors cursor-pointer text-left ${
+                  highlight
+                    ? 'border-orange-500/60 ring-1 ring-orange-500/30 hover:border-orange-400/80'
+                    : 'border-slate-700 hover:border-indigo-500/50'
+                }`}
               >
                 <div className={`w-10 h-10 ${bg} rounded-xl flex items-center justify-center flex-shrink-0`}>{icon}</div>
                 <div>
                   <p className="text-xs text-slate-500">{label}</p>
-                  <p className="text-2xl font-bold text-slate-100">{value}</p>
+                  <p className={`text-2xl font-bold ${highlight ? 'text-orange-400' : 'text-slate-100'}`}>{value}</p>
+                  {highlight && <p className="text-[10px] text-orange-500 mt-0.5">등록 필요</p>}
                 </div>
               </button>
             ))}
