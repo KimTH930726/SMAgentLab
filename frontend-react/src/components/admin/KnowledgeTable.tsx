@@ -703,14 +703,36 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
 
   const methods: { id: IngestMethod; icon: React.ReactNode; title: string; desc: string; badge?: string }[] = [
     { id: 'file', icon: <Upload className="w-6 h-6" />, title: '파일 업로드', desc: 'PDF · Markdown · TXT · Excel(.xlsx) · CSV 파일을 드래그하거나 클릭하여 업로드. 자동 파싱·청킹.', badge: 'AI 분석 지원' },
-    { id: 'text', icon: <FileText className="w-6 h-6" />, title: '대량 텍스트', desc: '텍스트를 붙여넣으면 헤더·단락 기준으로 자동 분할해 등록합니다.' },
+    { id: 'text', icon: <FileText className="w-6 h-6" />, title: '대량 텍스트', desc: '텍스트를 붙여넣으면 헤더·단락 기준으로 자동 분할해 등록합니다.', badge: 'AI 분석 지원' },
     { id: 'manual', icon: <PenLine className="w-6 h-6" />, title: '직접 입력', desc: '단건 지식을 직접 작성하여 등록합니다.' },
-    { id: 'url', icon: <Globe className="w-6 h-6" />, title: 'URL / Confluence', desc: '웹 페이지 또는 Confluence 페이지 URL을 입력하면 내용을 자동 수집합니다.', badge: 'Confluence 지원' },
+    { id: 'url', icon: <Globe className="w-6 h-6" />, title: 'URL / Confluence', desc: '웹 페이지 또는 Confluence 페이지 URL을 입력하면 내용을 자동 수집합니다.', badge: 'AI 분석 지원' },
     { id: 'teams', icon: <MessageSquare className="w-6 h-6" />, title: 'Teams 메시지', desc: 'Teams 채팅방에 로그인하여 메시지를 선택적으로 수집합니다. 토큰은 서버 메모리에만 저장됩니다.' },
   ];
 
   return (
     <div className="space-y-5">
+      {/* 지원 기능 안내 */}
+      <div className="rounded-xl border border-slate-700/60 bg-slate-800/40 px-4 py-3 space-y-2.5 text-xs text-slate-400">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-900/40 text-violet-300 border border-violet-700/40 shrink-0">AI 분석 지원</span>
+          <span className="text-slate-500">배지 기능 상세</span>
+        </div>
+        <div className="space-y-1.5 pl-1">
+          <div className="flex items-start gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0 mt-1" />
+            <span><span className="text-slate-300">AI 자동 태깅</span><span className="text-slate-600 mx-1.5">—</span>카테고리 · 시스템명 · 중요도 자동 분류<span className="ml-2 text-slate-600">파일 업로드 · URL/Confluence</span></span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0 mt-1" />
+            <span><span className="text-slate-300">AI 청크 전략</span><span className="text-slate-600 mx-1.5">—</span>텍스트 구조 분석 후 최적 분할 방식 자동 결정<span className="ml-2 text-slate-600">파일 업로드 · 대량 텍스트 · URL/Confluence</span></span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-500 shrink-0 mt-1" />
+            <span><span className="text-slate-300">청크 미리보기</span><span className="text-slate-600 mx-1.5">—</span>등록 전 청크 단위 확인 · 선택 등록<span className="ml-2 text-slate-600">공통</span></span>
+          </div>
+        </div>
+      </div>
+
       {/* 방법 선택 카드 */}
       <div className="grid grid-cols-2 gap-3">
         {methods.map((m) => (
