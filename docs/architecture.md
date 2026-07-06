@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.21)
+# Ops-Navigator 시스템 아키텍처 (v2.23)
 
 ## 개요
 
@@ -6,16 +6,18 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약**
-- v2.21: 런타임 입력 시나리오 기반 재검수 — **namespace 없음 → 500** 버그: `_get_or_create_conversation` 및 `create_conversation`에서 `ns_id=None`이 DB FK INSERT를 트리거해 `asyncpg` 에러 → 500 발생하던 문제를 `if ns_id is None: raise HTTPException(404)` 추가로 수정. **대화 요약 ValueError**: `_summarize_with_llm`에서 `template.format(dialogue=dialogue)` 사용 중 IT 운영 질문에 흔한 `{table_name}`, `{env}` 같은 중괄호 패턴이 대화에 포함되면 `ValueError` 발생(KeyError만 잡았던 것) → `str.replace("{dialogue}", dialogue)` 방식으로 교체해 대화 내용의 중괄호에 무관하게 안전 처리. **null byte로 인한 벌크 등록 실패**: PDF·XLSX에서 추출된 텍스트에 `\x00` null byte 포함 시 PostgreSQL이 INSERT 거부 → 중간 실패 시 ingestion_job이 "processing" 상태로 영구 방치 → `content.replace("\x00", "")` 전처리 추가 + loop 실패 시 job status="failed" 처리.
-- v2.20: 인제스천 파일 인코딩 버그 수정 — **CSV·MD·TXT EUC-KR 지원**: 기존 `utf-8-sig` 단독 디코딩으로 엑셀에서 한글 저장한 EUC-KR CSV 업로드 시 `UnicodeDecodeError` → 500 에러 발생 → `_decode_text()` 헬퍼(utf-8-sig → utf-8 → cp949 순 fallback)로 교체, 인코딩 실패 시 400 + 한국어 안내 반환. **PDF 리소스 누수**: `pymupdf.open(stream=...)` 후 `doc.close()` 미호출 → `try/finally` 블록으로 항상 close 보장. 미사용 `pages` 리스트 제거.
-- v2.19: RAG 파이프라인 고도화 — **CrossEncoder 리랭커**: 1차 하이브리드 검색에서 후보 N개(기본 20) 가져온 뒤 `cross-encoder/ms-marco-MiniLM-L-6-v2`로 재정렬 → 최종 top_k 반환. `RERANKER_ENABLED=true` 환경변수로 활성화. `sentence_transformers.CrossEncoder.predict()`는 CPU-bound → `run_in_executor`로 이벤트 루프 블로킹 방지. `shared/reranker.py` 모듈 레벨 싱글톤, `main.py` lifespan에서 eager load. **지식 신선도 Decay**: `freshness_decay_halflife_days` 설정 시(기본 0=비활성) 문서 `updated_at` 기준 지수 감쇠를 Python에서 점수에 곱함 — 반감기 기준, 최소 50% 보장. **지식 갭 자동 감지**: `create_query_log`에 `had_context` 플래그 추가 — doc_context가 비어 있으면 `ops_query_log.status = 'no_knowledge'`로 기록해 어드민에서 지식 공백 구간 모니터링 가능.
-- v2.18: 지식 등록 파이프라인 + 시스템 안정성 버그 수정 배치 — **인제스천 데이터 손실 버그**: URL/Confluence preview API가 `c.text[:200]`으로 잘라 반환 → confirm 시 잘린 200자만 저장되던 버그 수정. **HTML 파싱 섹션 누락**: web_crawler `_BLOCK_TAGS`/`_CONTENT_TAGS` 분리 — `div`를 섹션 추출에 포함하면 외부 div가 모든 텍스트를 흡수해 섹션 2~N이 공백이 되던 버그 수정. **xlsx/CSV 청킹 개선**: xlsx·CSV 행이 헤더보다 짧을 때 끝 컬럼 유실 → `zip_longest`로 수정; 행 사이 빈 줄 추가로 fixed-size 잘림 없이 행 단위 paragraph 청킹; xlsx/CSV 섹션+테이블 이중 저장 방지. **SSE NameError**: `update_assistant_message` import 누락으로 스트리밍 finally 블록에서 NameError 발생 → import 추가. **등록자 덮어쓰기**: 용어집/Q&A/지식 수정 시 UPDATE 쿼리에 `created_by_part` SET 포함 → 수정자 정보로 최초 등록자가 교체되던 버그 수정. **피드백 500 에러**: namespace 미존재 시 `ns_id=None`으로 DB INSERT → FK 오류 발생, 404 반환으로 수정. **카테고리 필터 오작동**: `category IS NULL` OR 조건 포함으로 카테고리 미지정 항목이 항상 검색 결과에 포함 → AND 단독 조건으로 수정. **시맨틱 캐시 키 충돌**: `vec[:8]` MD5 → 유사 임베딩 간 해시 충돌 → `vec[:64]`로 확장. **LLM JSON 파싱 오류**: `_strip_code_fence`가 첫 번째 ` ``` `에서 자름 → LLM 응답 내 코드 예시 백틱 포함 시 파싱 실패 → `rsplit` 방식으로 수정. **asyncio.create_task 예외 누락**: 참조 없는 태스크가 GC되거나 예외가 조용히 소멸 → `done_callback` 등록으로 경고 로깅 추가. **태깅 텍스트 잘림**: tagger.py 청크 전송 300자 → 600자 확장. **프론트엔드**: StatsPanel 지식 등록 폼이 쿼리로그 변경 시 미갱신(`useState` 초기화 오남용 → `useEffect` 수정); Modal 중첩 시 스크롤 언락 경쟁 조건(카운터 방식으로 개선); FeedbackSection 언마운트 후 `setState` 호출(`setTimeout` cleanup 추가).
-- v2.17: DevX LLM 인증 OAuth2 + Confluence 하위 페이지 일괄 등록 — DevX 인증 방식 변경 (정적 API Key → OAuth2 Client Credentials). 게이트웨이 `devx-gw.shinsegae-inc.com`의 `/api/v1/auth/token`으로 토큰 발급 후 `/api/v1/agent/chat` 호출. 토큰은 `expires_in - 60s` 시점에 자동 재발급, **client_id 단위 dict 캐싱**(`asyncio.Lock`으로 동시 호출 안전). payload 스키마 변경: `usecase_id` → `agent_id`, `user` 필드 추가(자격증명별 user_id), `knowledge_ids` 필드 추가. 환경변수 교체: `INHOUSE_LLM_URL/API_KEY` → `INHOUSE_LLM_BASE_URL/CLIENT_ID/CLIENT_SECRET/AGENT_ID/CONVERSATION_ID`. **DevX 제약: dify에 사전 등록된 `conversation_id`만 허용** — 임의 UUID는 0바이트 응답. 시스템 공통 `INHOUSE_LLM_CONVERSATION_ID`를 fallback으로 사용(우리 자체 ConversationSummaryBuffer + Semantic Recall이 history를 query에 직렬화하므로 dify 쪽 멀티턴 메모리는 무시). **하이브리드 자격증명**: 사용자별 `(client_id, client_secret, user_id)` 트리플을 Fernet 암호화 JSON으로 `ops_user.encrypted_llm_credentials` 컬럼에 저장. 등록 시 본인 키 사용, 미등록 시 .env 팀 공통 키 fallback. 옛 `encrypted_llm_api_key` 컬럼 제거(init/03 마이그레이션). **Confluence 하위 페이지 일괄 등록**: 단일 페이지만 가능했던 URL 인제스천이 BFS 트리 탐색으로 확장 — `POST /knowledge/import/url/tree`로 입력 URL을 root로 자손 페이지 메타데이터 조회(depth 기본 3, max_pages 기본 100), 프론트엔드 트리 모달에서 체크박스 다중 선택 → `POST /knowledge/import/url/bulk-pages/preview`로 청크 미리보기 → ChunkReviewModal에서 청크 단위 체크박스 선택 → `POST /knowledge/import/url/bulk-pages`로 일괄 등록(병렬 fetch + 단일 ingestion_job). **파일 포맷 확장**: `.pdf` + 신규 `.xlsx`/`.xlsm`/`.csv` 지원 (openpyxl 사용, 시트별 텍스트 직렬화). **드래그앤드롭** 업로드 + 50MB nginx 한도 + 클라이언트 사전 사이즈 체크. **암호화 PDF 거부**: pymupdf `needs_pass`/`is_encrypted` 감지 → 한국어 친절 메시지("Acrobat → 보안 제거 후 재업로드"). 413/암호화 에러는 프론트에서 사용자 친화 메시지로 변환. **xlsx 가짜 파일 거부**: 구버전 `.xls`나 손상된 파일이 `.xlsx` 확장자로 올라오면 openpyxl이 BadZipFile → "구버전 .xls는 Excel에서 다른 이름으로 저장하여 .xlsx로 변환" 안내. **UI 단순화**: CSV 임포트(컬럼 매핑) 카드 노출 제거 → 단순 CSV 등록은 "파일 업로드"로 통합, 컬럼 매핑 기능은 backend `/import/csv` 엔드포인트로만 잔존(향후 재노출 대비). **pymupdf 누락 발견·복구**: requirements.txt에 PDF 라이브러리가 빠져있어 PDF 파싱 자체가 동작 안 하던 상태 → `pymupdf==1.24.13` 추가.
-- v2.16: 어드민 테이블 검색·다건 삭제 — 지식베이스·용어집·Q&A 테이블에 텍스트 검색(클라이언트 필터), 벡터 유사도 검색(백엔드 임베딩 호출, Enter/버튼 트리거), 체크박스 다건 선택, 일괄 삭제(bulk-delete API) 기능 추가. 벡터 검색 결과에 유사도 % 배지 표시. 백엔드: `POST /knowledge/search`, `/knowledge/glossary/search`, `/fewshots/admin-search` + bulk-delete 엔드포인트 3종 신규 추가.
-- v2.15: Teams 메시지 수집 — 데스크톱 헬퍼(OpsNavHelper.exe) 기반. opsnav:// URL 스킴으로 헬퍼 자동 실행 → Playwright Teams 로그인 → IC3/CSA 토큰 캡처 → 백엔드 인메모리 저장. 채팅방 선택·메시지 다중 선택·스레드 단위 지식베이스 등록. 토큰은 프로세스 메모리에만 보관(DB 미저장).
-- v2.14: 인제스천 UX 고도화 — 청크 미리보기+선택 모달(ChunkReviewModal), LLM Analyzer 자동 청킹 전략 결정(파일/텍스트/URL 모든 경로 디폴트), Confluence PAT 개인 저장(ops_user.encrypted_confluence_pat — Fernet 암호화, URL 수집 시 자동 로드), 계정 설정 모달 PAT 관리 UI, 용어 통일(Fewshot→Q&A), Q&A 목록 정렬(활성→최신순), 레거시 Streamlit frontend/ 삭제
-- v2.13: URL / Confluence 인제스천 — 일반 웹 페이지(httpx + BeautifulSoup) + Confluence REST API(PAT 토큰) 단일 페이지 수집. 등록 전 Human-in-the-loop 최종 확인 모달. 라이트 모드 색상 개선
-- v2.12: 지식 인제스천 고도화 Tier 1~3 — CSV 임포트 + 텍스트 분할(heading/paragraph/fixed) + 파일 업로드(.txt/.md/.pdf) + LLM Analyzer Agent + LLM 자동 태깅 + 용어 자동 추출 + Q&A 자동 생성(fewshot candidate)
+- v2.23: Text2SQL 스키마 엑셀 임포트 — xlsx로 테이블/컬럼 메타데이터 일괄 등록. 헤더 퍼지 매핑(한글/영문), preview/confirm 2단계, 중복 skip, 임베딩 자동 생성. 어드민 "엑셀로 등록" 버튼 + 포맷 가이드 모달.
+- v2.22: 지식 공백 대시보드 가시화 — no_knowledge 상태를 KPI 5번째 카드·도넛 차트 주황 세그먼트로 시각화. 카드 클릭 → 질문 목록 → 지식 등록 폼 팝업 → 등록 후 "해결됨" 처리. AI 분석 지원 배지를 URL/Confluence·대량 텍스트까지 확장.
+- v2.21: 런타임 안정성 — namespace None→500(FK 오류), 대화 요약 중괄호 ValueError, null byte 포함 파일 ingestion 실패 3개 버그 수정.
+- v2.20: 인코딩 수정 — EUC-KR CSV/MD/TXT 지원(utf-8-sig→cp949 fallback), PDF close 누락(리소스 누수) 수정.
+- v2.19: RAG 고도화 — CrossEncoder 리랭커(`RERANKER_ENABLED` 환경변수), 지식 신선도 Decay 옵션, 지식 갭 자동 감지(no_knowledge 상태 기록).
+- v2.18: 안정성 버그 수정 배치 — URL preview 데이터 잘림, HTML 파싱 섹션 누락, xlsx/CSV 청킹 개선, 등록자 덮어쓰기, 시맨틱 캐시 키 충돌 등 다수.
+- v2.17: DevX LLM OAuth2 전환 + Confluence BFS 일괄 등록 — 사용자별 자격증명 Fernet 암호화 저장, xlsx/CSV 파일 업로드 지원 추가.
+- v2.16: 어드민 테이블 검색·다건 삭제 — 텍스트/벡터 유사도 검색, 체크박스 다건 선택, bulk-delete API.
+- v2.15: Teams 메시지 수집 — OpsNavHelper.exe 기반 Playwright 토큰 캡처, 스레드 단위 지식베이스 등록.
+- v2.14: 인제스천 UX — ChunkReviewModal, LLM Analyzer 자동 청킹, Confluence PAT 개인 저장, 레거시 Streamlit 삭제.
+- v2.13: URL/Confluence 인제스천 — httpx+BeautifulSoup, Confluence REST API, 등록 전 확인 모달.
+- v2.12: 지식 인제스천 고도화 — 텍스트 분할, 파일 업로드, LLM Analyzer, 자동 태깅, Q&A 자동 생성.
 - v2.11: Oracle 지원 + Dialect 패턴 리팩터링 (PgDialect/MysqlDialect/SqliteDialect/OracleDialect) + sql_target_db.schema_name 컬럼 추가 + Pagination 상하 분리
 - v2.10: 스키마 스캔 diff 방식 개선 + ERD/용어 고아 자동 정리 + 스캔 리포트 모달 + ERD 검색·양방향 싱크
 - v2.9: `ops_prompt` 에이전트별 분리 — `agent_type` 컬럼 추가, text2sql 파이프라인 프롬프트 `ops_prompt`로 통합, 파이프라인 탭 프롬프트 편집 UI 제거
@@ -110,6 +112,7 @@ backend/
 │   ├── text2sql/
 │   │   ├── agent.py     #   Text2SqlAgent (startup 병렬화, _cache_hit)
 │   │   ├── admin/       #   Text2SQL 어드민 API (대상DB·스키마·ERD·용어사전·Few-shot·파이프라인·감사로그)
+│   │   │   └── excel_importer.py  #   엑셀 스키마 임포터 (헤더 퍼지 매핑, parse_excel, rows_to_tables)
 │   │   └── pipeline/    #   7단계: parse→rag→generate→validate→fix→execute→summarize
 │   └── http_tool/       #   HttpToolAgent (레거시)
 ├── service/             # 플랫폼 공통 레이어 (was domain/, platform/ 명칭 stdlib 충돌로 service/ 확정)
@@ -369,6 +372,8 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/tables/{id}/toggle` | 테이블 RAG 포함 여부 토글 |
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/columns/{id}` | 컬럼 설명 수정 |
 | `POST` | `/api/text2sql/namespaces/{ns}/schema/reindex` | 스키마 벡터 재인덱싱 |
+| `POST` | `/api/text2sql/namespaces/{ns}/schema/import/excel/preview` | 엑셀 파일 업로드 → 헤더 자동 매핑 + 파싱 결과 미리보기 (등록 없음) — v2.23 신규 |
+| `POST` | `/api/text2sql/namespaces/{ns}/schema/import/excel/confirm` | 미리보기 결과 rows 전달 → DB 저장 + 임베딩 생성 (이미 등록된 테이블 skip) — v2.23 신규 |
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/positions` | ERD 테이블 위치 일괄 저장 (pos_x/pos_y) — v2.6 신규 |
 | `GET/POST/DELETE` | `/api/text2sql/namespaces/{ns}/relations/{id?}` | FK 관계 CRUD |
 | `POST` | `/api/text2sql/namespaces/{ns}/relations/suggest-ai` | AI 관계 추천 (LLM이 컬럼명 패턴 분석, v2.10: 변경 테이블 대상으로만 제한하여 토큰 절약) — v2.6 신규 |

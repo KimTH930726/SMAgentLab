@@ -399,128 +399,32 @@ LLM에 전달되는 messages:
 
 ## 6. 통계 수집 전체 사이클
 
-### 질의 → 로그 → 피드백 → 통계 흐름
-
 ```
-① 사용자 질문
-   │
-   ▼
-POST /api/chat
-   │
-   ▼
-검색 수행 (hybrid_search)
-   │  results = [문서1, 문서2, ...]
-   │
-   ▼
-ops_query_log INSERT
-   ┌──────────────────────────────────────────────────────────┐
-   │ namespace  │ question          │ status     │ created_at │
-   ├──────────────────────────────────────────────────────────┤
-   │ coupon     │ "쿠폰 뺏어오기..."  │ pending    │ 2024-01-15 │
-   │            │  (검색 결과 있음)  │            │            │
-   ├──────────────────────────────────────────────────────────┤
-   │ gift       │ "알 수 없는 오류"  │ unresolved │ 2024-01-15 │
-   │            │  (검색 결과 없음)  │            │            │
-   └──────────────────────────────────────────────────────────┘
-   pending    : LLM이 정상 답변을 생성했지만 아직 피드백 없음
-   resolved   : 👍 긍정 피드백으로 확인됨
-   unresolved : 검색 결과 0건 AND LLM 답변도 실패, 또는 👎 부정 피드백
+질문 처리 → ops_query_log INSERT
+  │
+  ├─ 👍 피드백 → base_weight +0.1 / status='resolved' / few-shot candidate 생성
+  ├─ 👎 피드백 → base_weight -0.1 / status='unresolved'
+  └─ 검색 결과 없음 → status='no_knowledge'
 
-② 사용자 피드백 (품질 자동 개선)
+status 정의
+  pending      — 답변 생성됨, 피드백 미확인
+  resolved     — 👍 피드백 확인됨
+  unresolved   — 👎 피드백 또는 검색 실패
+  no_knowledge — 관련 지식 자체 없음 (v2.19)
 
-   👍 좋아요 클릭
-   │
-   ▼  POST /api/feedback { knowledge_id, is_positive: true, answer: "AI 답변 텍스트" }
-   │
-   ├─ ops_feedback INSERT  (로그)
-   ├─ UPDATE ops_knowledge SET base_weight = LEAST(base_weight + 0.1, 5.0)
-   │   WHERE id = knowledge_id
-   │   → 이 문서가 이후 동일 주제 검색에서 더 높은 점수를 받음 (검색 랭킹 상승)
-   ├─ UPDATE ops_query_log SET status = 'resolved'
-   │   → pending → resolved 전환 (피드백으로 품질 확인됨)
-   └─ INSERT INTO ops_fewshot (namespace, question, answer, knowledge_id, embedding, status='candidate')
-       → 질문 임베딩 생성 후 저장 (status='candidate' — 어드민 검토 후 'active' 승인 필요)
-       → status='active'인 few-shot만 LLM 프롬프트에 "[과거 유사 질문 답변 사례]"로 주입
-
-   👎 싫어요 클릭
-   │
-   ▼  POST /api/feedback { knowledge_id, is_positive: false }
-   │
-   ├─ ops_feedback INSERT  (로그)
-   ├─ UPDATE ops_knowledge SET base_weight = GREATEST(base_weight - 0.1, 0.0)
-   │   → 이 문서가 이후 검색에서 낮은 점수를 받음 (검색 랭킹 하락)
-   └─ UPDATE ops_query_log SET status = 'unresolved'
-       → "결과는 나왔지만 내용이 틀렸음" → 미해결로 재분류
-       → 통계 대시보드 미해결 케이스에 표시
-
-③ Few-shot 활용 흐름
-
-   다음 사용자가 유사한 질문 입력
-   │
-   ▼  질문 임베딩 생성 → query_vec
-   │
-   ▼  ops_fewshot 벡터 검색 (유사도 ≥ 0.6, 최대 2건)
-   │   SELECT question, answer FROM ops_fewshot
-   │   WHERE namespace = ? AND 1-(embedding <=> query_vec) >= 0.6
-   │   ORDER BY embedding <=> query_vec LIMIT 2
-   │
-   ▼  LLM 프롬프트 구성
-   │   [과거 유사 질문 답변 사례]
-   │   Q: "쿠폰 뺏어오기 실패한 건 어떻게 확인해?"
-   │   A: "ops_feedback 테이블에서 is_positive=false 건을 조회하세요..."
-   │
-   │   [참고 문서]
-   │   --- 문서 1 (점수: 0.8432) ---
-   │   ...
-   │
-   ▼  LLM이 과거 좋은 답변 패턴을 참고하여 더 나은 답변 생성
-
-④ 통계 집계
-   │  Admin > 통계 탭 클릭
-   ▼
-GET /api/stats
-   │  WITH all_ns (ops_namespace UNION ops_knowledge UNION ops_glossary)
-   │  LEFT JOIN q_agg  (질의 수, 해결/대기/미해결)
-   │  LEFT JOIN fb_agg (좋아요/싫어요 수)
-   │  LEFT JOIN k_agg  (지식 문서 수)
-   │  LEFT JOIN g_agg  (용어집 항목 수)
-   ▼
-
-⑤ 대시보드 렌더링
-   │
-   ├─ KPI 카드  (총 질의 수 / 해결 / 대기 중 / 미해결 건수)
-   ├─ 지식 베이스 현황 테이블  (namespace별 지식·용어집 개수)
-   ├─ 질의 처리 현황  (해결/대기/미해결 도넛 차트)
-   ├─ 피드백 현황    (👍/👎 그룹 바차트 + 만족도 텍스트 바)
-   └─ 미해결 케이스 목록  (지식 보완 가이드 + 취약 namespace 자동 알림)
-
-⑤ 미해결 케이스 → 지식 보완 사이클
-
-   미해결 케이스 확인
-      │
-      ├─ 해당 질문 유형의 지식 없음 → 지식 베이스에 신규 등록
-      ├─ 지식 있지만 내용 부족     → 기존 지식 수정
-      └─ 용어 표현 문제            → 용어집에 유의어 추가
-      │
-      ▼
-   다음 동일 질문에서 status = 'resolved' 로 기록
+어드민 대시보드 (GET /api/stats)
+  ├─ KPI 카드: 전체 / 해결 / 대기중 / 미해결 / 지식 공백
+  ├─ 도넛 차트: 해결(초록) / 대기중(노랑) / 미해결(빨강) / 지식 공백(주황)
+  ├─ 피드백 현황 바차트
+  └─ 미해결·지식 공백 목록 → 항목 클릭 → 지식 등록 폼 팝업
 ```
 
-### 해결률이 낮을 때 체크리스트
+### 해결률이 낮을 때
 
 ```
-해결률 = resolved 건수 / total_queries × 100  (pending은 미확인 상태)
-
-낮은 경우 원인:
-  1. 해당 namespace에 지식 등록 부족
-     → Admin > 지식 베이스에서 신규 등록
-
-  2. 용어 표현 불일치
-     → Admin > 용어집에 유의어 추가
-
-  3. 질문 패턴이 기존 지식과 의미적으로 멀리 떨어짐
-     → 해당 표현을 그대로 포함한 지식 등록
-     → 또는 벡터 비중 낮추고 키워드 비중 높임 (슬라이더)
+1. 지식 등록 부족 → 지식 베이스 신규 등록
+2. 용어 불일치   → 용어집 유의어 추가
+3. 의미적 거리   → 질문 표현 그대로 포함한 지식 등록, 또는 키워드 비중 높임
 ```
 
 ---
@@ -727,12 +631,23 @@ Case 1 — 승인된 도구 실행 (approved_tool 포함)
      LLM이 결과 요약 + 차트 추천
 ```
 
-### 스키마 개별 관리 흐름 (v2.12)
+### 스키마 등록 방식 (v2.12 + v2.23)
+
+세 가지 방식 공존 — 사용자 선택:
 
 ```
-기존: DB 연결 → "스키마 스캔" → 전체 테이블 일괄 등록 (diff 방식)
-추가: DB 연결 → "테이블 불러오기" → 원하는 테이블만 선택 등록
+① 전체 스캔 (기존)
+   DB 연결 → "스키마 스캔" → 전체 테이블 diff 방식 등록
 
+② 개별 추가 (v2.12)
+   DB 연결 → "테이블 불러오기" → 원하는 테이블만 선택 등록
+
+③ 엑셀 임포트 (v2.23)
+   xlsx 파일 → "엑셀로 등록" → Preview → Confirm
+```
+
+**② 개별 추가 흐름:**
+```
 ┌─ GET tables-available ─────────────────────────────────────────┐
 │  get_table_summary() — DB별 최적화 쿼리 (테이블명+컬럼수만)     │
 │  전체 inspect 대비 수십배 빠름                                   │
@@ -745,8 +660,35 @@ Case 1 — 승인된 도구 실행 (approved_tool 포함)
 │  자동 ERD 배치 (pos_x, pos_y)                                   │
 │  컬럼 임베딩 생성 (sql_schema_vector)                            │
 └────────────────────────────────────────────────────────────────┘
+```
 
-두 방식(전체 스캔 / 개별 추가) 공존 — 사용자 선택
+**③ 엑셀 임포트 흐름 (v2.23):**
+```
+관리자가 xlsx 파일 업로드 (한글/영문 헤더 모두 지원)
+  │
+  ▼
+POST /schema/import/excel/preview
+  │  excel_importer.parse_excel(bytes)
+  │  ├─ 헤더 퍼지 매핑 (_HEADER_CANDIDATES 사전)
+  │  │    "테이블명" → table_name, "컬럼명" → column_name, ...
+  │  ├─ 필수 컬럼(table_name·column_name·data_type) 누락 시 422 + 한국어 안내
+  │  ├─ 중복 (table.col) 행 skip + 경고 메시지 생성
+  │  └─ is_pk 표현 정규화 (Y/YES/TRUE/1/PK/O/V/✓ → True)
+  │
+  │  응답: { header_mapping, warnings, total_rows, table_count, tables, rows }
+  ▼
+관리자가 미리보기(헤더 매핑 확인 + 테이블 목록)에서 "등록 확정"
+  │
+  ▼
+POST /schema/import/excel/confirm
+  │  rows_to_tables(rows) → get_tables() 규격으로 변환
+  │  ├─ 이미 등록된 테이블 skip (skipped_tables 반환)
+  │  ├─ sql_schema_table + sql_schema_column INSERT
+  │  └─ 컬럼 임베딩 생성 (sql_schema_vector)
+  │
+  │  응답: { ok, added_tables, added_columns, skipped_tables, embeddings_created }
+  ▼
+Text2SQL 파이프라인의 RAG 단계에서 즉시 검색 가능
 ```
 
 ---
