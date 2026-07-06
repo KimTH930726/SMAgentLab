@@ -103,6 +103,47 @@ export async function deleteTable(namespace: string, tableName: string): Promise
   await apiFetch(`${ns(namespace)}/schema/tables/${encodeURIComponent(tableName)}`, { method: 'DELETE' });
 }
 
+// ── Excel Schema Import ───────────────────────────────────────────────────────
+
+export interface ExcelSchemaRow {
+  table_name: string;
+  column_name: string;
+  data_type: string;
+  is_pk: boolean;
+  fk_reference: string | null;
+  description: string;
+}
+
+export interface ExcelPreviewResult {
+  header_mapping: Record<string, string | null>;
+  warnings: string[];
+  total_rows: number;
+  table_count: number;
+  tables: Array<{ table_name: string; column_count: number; pk_count: number }>;
+  rows: ExcelSchemaRow[];
+}
+
+export interface ExcelConfirmResult {
+  ok: boolean;
+  added_tables: number;
+  added_columns: number;
+  skipped_tables: string[];
+  embeddings_created: number;
+}
+
+export async function previewExcelSchema(namespace: string, file: File): Promise<ExcelPreviewResult> {
+  const form = new FormData();
+  form.append('file', file);
+  return apiFetch(`${ns(namespace)}/schema/import/excel/preview`, { method: 'POST', body: form });
+}
+
+export async function confirmExcelSchema(namespace: string, rows: ExcelSchemaRow[]): Promise<ExcelConfirmResult> {
+  return apiFetch(`${ns(namespace)}/schema/import/excel/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ rows }),
+  });
+}
+
 // ── Relations ─────────────────────────────────────────────────────────────────
 
 export async function listRelations(namespace: string): Promise<SqlRelation[]> {
