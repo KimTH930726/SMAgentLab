@@ -384,31 +384,43 @@ async def bulk_create_knowledge(
 
     # 벌크 INSERT
     created = 0
-    async with get_conn() as conn:
-        for i, (item, emb) in enumerate(zip(items, embeddings)):
-            await conn.execute("""
-                INSERT INTO rag_knowledge
-                    (namespace_id, container_name, target_tables, content,
-                     query_template, embedding, base_weight, category,
-                     source_file, source_chunk_idx, source_type,
-                     created_by_part, created_by_user_id)
-                VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13)
-            """,
-                ns_id,
-                item.get("container_name"),
-                item.get("target_tables"),
-                item["content"],
-                item.get("query_template"),
-                str(emb),
-                item.get("base_weight", 1.0),
-                item.get("category"),
-                source_file,
-                i,
-                source_type,
-                created_by_part,
-                created_by_user_id,
-            )
-            created += 1
+    try:
+        async with get_conn() as conn:
+            for i, (item, emb) in enumerate(zip(items, embeddings)):
+                # PDF/XLSX 추출 텍스트에 null byte(\x00)가 포함되면 PostgreSQL이 거부함 → 제거
+                content = item["content"].replace("\x00", "")
+                await conn.execute("""
+                    INSERT INTO rag_knowledge
+                        (namespace_id, container_name, target_tables, content,
+                         query_template, embedding, base_weight, category,
+                         source_file, source_chunk_idx, source_type,
+                         created_by_part, created_by_user_id)
+                    VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13)
+                """,
+                    ns_id,
+                    item.get("container_name"),
+                    item.get("target_tables"),
+                    content,
+                    item.get("query_template"),
+                    str(emb),
+                    item.get("base_weight", 1.0),
+                    item.get("category"),
+                    source_file,
+                    i,
+                    source_type,
+                    created_by_part,
+                    created_by_user_id,
+                )
+                created += 1
+    except Exception:
+        if job_id:
+            async with get_conn() as conn:
+                await conn.execute("""
+                    UPDATE rag_ingestion_job
+                    SET status = 'failed', created_chunks = $1, completed_at = NOW()
+                    WHERE id = $2
+                """, created, job_id)
+        raise
 
     # 작업 완료 처리
     if job_id:

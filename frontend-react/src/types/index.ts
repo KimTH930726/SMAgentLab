@@ -294,7 +294,7 @@ export interface FewshotSearchResponse {
 }
 
 // Query log item from /stats/namespace/{name}/queries
-export type QueryStatus = 'pending' | 'resolved' | 'unresolved';
+export type QueryStatus = 'pending' | 'resolved' | 'unresolved' | 'no_knowledge';
 
 export interface QueryLog {
   id: number;
@@ -312,6 +312,7 @@ export interface NamespaceStats {
   resolved: number;
   pending: number;
   unresolved: number;
+  no_knowledge: number;
   term_distribution: Array<{ term: string; total: number; pending: number; unresolved: number }>;
   unresolved_cases: Array<{ id: number; question: string; mapped_term: string | null; created_at: string }>;
 }

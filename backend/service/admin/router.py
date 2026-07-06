@@ -324,7 +324,8 @@ async def get_namespace_stats(name: str, user: dict = Depends(get_current_user))
             SELECT COUNT(*) AS total_queries,
                 COUNT(*) FILTER (WHERE status = 'resolved') AS resolved,
                 COUNT(*) FILTER (WHERE status = 'pending') AS pending,
-                COUNT(*) FILTER (WHERE status = 'unresolved') AS unresolved
+                COUNT(*) FILTER (WHERE status = 'unresolved') AS unresolved,
+                COUNT(*) FILTER (WHERE status = 'no_knowledge') AS no_knowledge
             FROM ops_query_log WHERE namespace_id = $1
             """, ns_id,
         )
@@ -352,6 +353,7 @@ async def get_namespace_stats(name: str, user: dict = Depends(get_current_user))
         resolved=summary["resolved"] or 0,
         pending=summary["pending"] or 0,
         unresolved=summary["unresolved"] or 0,
+        no_knowledge=summary["no_knowledge"] or 0,
         term_distribution=[TermStat(**dict(r)) for r in term_rows],
         unresolved_cases=[dict(r) for r in unresolved_rows],
     )
