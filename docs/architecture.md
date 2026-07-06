@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.21)
+# Ops-Navigator 시스템 아키텍처 (v2.23)
 
 ## 개요
 
@@ -6,6 +6,8 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약**
+- v2.23: Text2SQL 스키마 엑셀 임포트 — xlsx 파일로 테이블/컬럼 메타데이터 일괄 등록. `excel_importer.py` 신규: 헤더 퍼지 매핑(한글/영문 _HEADER_CANDIDATES 사전), is_pk 표현 다양성 처리(Y/YES/TRUE/1/PK/O/V/✓), 중복 행 skip, 필수 컬럼 누락 시 한국어 안내 에러. Preview → Confirm 2단계 흐름: preview 단계에서 헤더 매핑 결과·경고·테이블 요약 반환, confirm 단계에서 sql_schema_table + sql_schema_column INSERT + 임베딩 생성. 이미 등록된 테이블은 skip하고 added/skipped 카운트 반환. 프론트엔드: "엑셀로 등록" 버튼 + 포맷 가이드·드래그앤드롭·헤더 매핑 테이블·확인 단계 포함 모달.
+- v2.22: 지식 공백 대시보드 가시화 + AI 분석 지원 배지 개선 — `no_knowledge` 상태(v2.19 도입)를 어드민 대시보드 KPI 카드 5번째 항목("지식 공백")과 도넛 차트 세그먼트(주황)로 시각화. 지식 공백 카드 클릭 → 해당 질문 목록 모달 → 항목 클릭 → 지식 등록 폼 팝업(질문 자동 채움) → 등록 후 "해결됨" 처리. 지식 등록 UI: "AI 분석 지원" 배지를 URL/Confluence·대량 텍스트 카드에도 확장, AI 기능별 적용 인제스천 방식 명시하는 설명란 추가(자동 태깅: 파일·URL/Confluence, 청크 전략: 파일·대량 텍스트·URL/Confluence, 청크 미리보기: 공통).
 - v2.21: 런타임 입력 시나리오 기반 재검수 — **namespace 없음 → 500** 버그: `_get_or_create_conversation` 및 `create_conversation`에서 `ns_id=None`이 DB FK INSERT를 트리거해 `asyncpg` 에러 → 500 발생하던 문제를 `if ns_id is None: raise HTTPException(404)` 추가로 수정. **대화 요약 ValueError**: `_summarize_with_llm`에서 `template.format(dialogue=dialogue)` 사용 중 IT 운영 질문에 흔한 `{table_name}`, `{env}` 같은 중괄호 패턴이 대화에 포함되면 `ValueError` 발생(KeyError만 잡았던 것) → `str.replace("{dialogue}", dialogue)` 방식으로 교체해 대화 내용의 중괄호에 무관하게 안전 처리. **null byte로 인한 벌크 등록 실패**: PDF·XLSX에서 추출된 텍스트에 `\x00` null byte 포함 시 PostgreSQL이 INSERT 거부 → 중간 실패 시 ingestion_job이 "processing" 상태로 영구 방치 → `content.replace("\x00", "")` 전처리 추가 + loop 실패 시 job status="failed" 처리.
 - v2.20: 인제스천 파일 인코딩 버그 수정 — **CSV·MD·TXT EUC-KR 지원**: 기존 `utf-8-sig` 단독 디코딩으로 엑셀에서 한글 저장한 EUC-KR CSV 업로드 시 `UnicodeDecodeError` → 500 에러 발생 → `_decode_text()` 헬퍼(utf-8-sig → utf-8 → cp949 순 fallback)로 교체, 인코딩 실패 시 400 + 한국어 안내 반환. **PDF 리소스 누수**: `pymupdf.open(stream=...)` 후 `doc.close()` 미호출 → `try/finally` 블록으로 항상 close 보장. 미사용 `pages` 리스트 제거.
 - v2.19: RAG 파이프라인 고도화 — **CrossEncoder 리랭커**: 1차 하이브리드 검색에서 후보 N개(기본 20) 가져온 뒤 `cross-encoder/ms-marco-MiniLM-L-6-v2`로 재정렬 → 최종 top_k 반환. `RERANKER_ENABLED=true` 환경변수로 활성화. `sentence_transformers.CrossEncoder.predict()`는 CPU-bound → `run_in_executor`로 이벤트 루프 블로킹 방지. `shared/reranker.py` 모듈 레벨 싱글톤, `main.py` lifespan에서 eager load. **지식 신선도 Decay**: `freshness_decay_halflife_days` 설정 시(기본 0=비활성) 문서 `updated_at` 기준 지수 감쇠를 Python에서 점수에 곱함 — 반감기 기준, 최소 50% 보장. **지식 갭 자동 감지**: `create_query_log`에 `had_context` 플래그 추가 — doc_context가 비어 있으면 `ops_query_log.status = 'no_knowledge'`로 기록해 어드민에서 지식 공백 구간 모니터링 가능.
@@ -110,6 +112,7 @@ backend/
 │   ├── text2sql/
 │   │   ├── agent.py     #   Text2SqlAgent (startup 병렬화, _cache_hit)
 │   │   ├── admin/       #   Text2SQL 어드민 API (대상DB·스키마·ERD·용어사전·Few-shot·파이프라인·감사로그)
+│   │   │   └── excel_importer.py  #   엑셀 스키마 임포터 (헤더 퍼지 매핑, parse_excel, rows_to_tables)
 │   │   └── pipeline/    #   7단계: parse→rag→generate→validate→fix→execute→summarize
 │   └── http_tool/       #   HttpToolAgent (레거시)
 ├── service/             # 플랫폼 공통 레이어 (was domain/, platform/ 명칭 stdlib 충돌로 service/ 확정)
@@ -369,6 +372,8 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/tables/{id}/toggle` | 테이블 RAG 포함 여부 토글 |
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/columns/{id}` | 컬럼 설명 수정 |
 | `POST` | `/api/text2sql/namespaces/{ns}/schema/reindex` | 스키마 벡터 재인덱싱 |
+| `POST` | `/api/text2sql/namespaces/{ns}/schema/import/excel/preview` | 엑셀 파일 업로드 → 헤더 자동 매핑 + 파싱 결과 미리보기 (등록 없음) — v2.23 신규 |
+| `POST` | `/api/text2sql/namespaces/{ns}/schema/import/excel/confirm` | 미리보기 결과 rows 전달 → DB 저장 + 임베딩 생성 (이미 등록된 테이블 skip) — v2.23 신규 |
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/positions` | ERD 테이블 위치 일괄 저장 (pos_x/pos_y) — v2.6 신규 |
 | `GET/POST/DELETE` | `/api/text2sql/namespaces/{ns}/relations/{id?}` | FK 관계 CRUD |
 | `POST` | `/api/text2sql/namespaces/{ns}/relations/suggest-ai` | AI 관계 추천 (LLM이 컬럼명 패턴 분석, v2.10: 변경 테이블 대상으로만 제한하여 토큰 절약) — v2.6 신규 |

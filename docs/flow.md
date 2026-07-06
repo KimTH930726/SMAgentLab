@@ -727,12 +727,23 @@ Case 1 — 승인된 도구 실행 (approved_tool 포함)
      LLM이 결과 요약 + 차트 추천
 ```
 
-### 스키마 개별 관리 흐름 (v2.12)
+### 스키마 등록 방식 (v2.12 + v2.23)
+
+세 가지 방식 공존 — 사용자 선택:
 
 ```
-기존: DB 연결 → "스키마 스캔" → 전체 테이블 일괄 등록 (diff 방식)
-추가: DB 연결 → "테이블 불러오기" → 원하는 테이블만 선택 등록
+① 전체 스캔 (기존)
+   DB 연결 → "스키마 스캔" → 전체 테이블 diff 방식 등록
 
+② 개별 추가 (v2.12)
+   DB 연결 → "테이블 불러오기" → 원하는 테이블만 선택 등록
+
+③ 엑셀 임포트 (v2.23)
+   xlsx 파일 → "엑셀로 등록" → Preview → Confirm
+```
+
+**② 개별 추가 흐름:**
+```
 ┌─ GET tables-available ─────────────────────────────────────────┐
 │  get_table_summary() — DB별 최적화 쿼리 (테이블명+컬럼수만)     │
 │  전체 inspect 대비 수십배 빠름                                   │
@@ -745,8 +756,35 @@ Case 1 — 승인된 도구 실행 (approved_tool 포함)
 │  자동 ERD 배치 (pos_x, pos_y)                                   │
 │  컬럼 임베딩 생성 (sql_schema_vector)                            │
 └────────────────────────────────────────────────────────────────┘
+```
 
-두 방식(전체 스캔 / 개별 추가) 공존 — 사용자 선택
+**③ 엑셀 임포트 흐름 (v2.23):**
+```
+관리자가 xlsx 파일 업로드 (한글/영문 헤더 모두 지원)
+  │
+  ▼
+POST /schema/import/excel/preview
+  │  excel_importer.parse_excel(bytes)
+  │  ├─ 헤더 퍼지 매핑 (_HEADER_CANDIDATES 사전)
+  │  │    "테이블명" → table_name, "컬럼명" → column_name, ...
+  │  ├─ 필수 컬럼(table_name·column_name·data_type) 누락 시 422 + 한국어 안내
+  │  ├─ 중복 (table.col) 행 skip + 경고 메시지 생성
+  │  └─ is_pk 표현 정규화 (Y/YES/TRUE/1/PK/O/V/✓ → True)
+  │
+  │  응답: { header_mapping, warnings, total_rows, table_count, tables, rows }
+  ▼
+관리자가 미리보기(헤더 매핑 확인 + 테이블 목록)에서 "등록 확정"
+  │
+  ▼
+POST /schema/import/excel/confirm
+  │  rows_to_tables(rows) → get_tables() 규격으로 변환
+  │  ├─ 이미 등록된 테이블 skip (skipped_tables 반환)
+  │  ├─ sql_schema_table + sql_schema_column INSERT
+  │  └─ 컬럼 임베딩 생성 (sql_schema_vector)
+  │
+  │  응답: { ok, added_tables, added_columns, skipped_tables, embeddings_created }
+  ▼
+Text2SQL 파이프라인의 RAG 단계에서 즉시 검색 가능
 ```
 
 ---
