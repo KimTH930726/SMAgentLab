@@ -13,6 +13,8 @@ import {
   getFullSchema, updateSchemaTableDesc, toggleSchemaTable, updateSchemaColumnDesc, reindexSchema,
   saveSchemaPositions,
   getAvailableTables, addTables, deleteTable,
+  previewExcelSchema, confirmExcelSchema,
+  type ExcelPreviewResult, type ExcelSchemaRow,
   listRelations, createRelation, deleteRelation, suggestRelationsAI,
   listSynonyms, createSynonym, deleteSynonym, bulkDeleteSynonyms, reindexSynonyms, generateSynonymsAI,
   listSqlFewshots, createSqlFewshot, updateSqlFewshotStatus, deleteSqlFewshot, bulkDeleteFewshots, reindexFewshots, generateFewshotsAI,
@@ -306,6 +308,14 @@ function SchemaTab() {
   const [importing, setImporting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
+  // 엑셀 임포트
+  const [showExcelModal, setShowExcelModal] = useState(false);
+  const [excelPreview, setExcelPreview] = useState<ExcelPreviewResult | null>(null);
+  const [excelPreviewing, setExcelPreviewing] = useState(false);
+  const [excelConfirming, setExcelConfirming] = useState(false);
+  const [excelError, setExcelError] = useState('');
+  const excelFileRef = useRef<HTMLInputElement>(null);
+
   const { data: schema = [], isLoading } = useQuery({
     queryKey: ['sql_schema', ns],
     queryFn: () => getFullSchema(ns),
@@ -391,6 +401,39 @@ function SchemaTab() {
     }
   };
 
+  const handleExcelFile = async (file: File) => {
+    setExcelError('');
+    setExcelPreview(null);
+    setExcelPreviewing(true);
+    try {
+      const result = await previewExcelSchema(ns, file);
+      setExcelPreview(result);
+    } catch (e: any) {
+      setExcelError(e.message || '파싱 실패');
+    } finally {
+      setExcelPreviewing(false);
+    }
+  };
+
+  const handleExcelConfirm = async () => {
+    if (!excelPreview) return;
+    setExcelConfirming(true);
+    try {
+      const result = await confirmExcelSchema(ns, excelPreview.rows);
+      const skippedMsg = result.skipped_tables.length > 0
+        ? ` (이미 등록된 테이블 ${result.skipped_tables.length}건 스킵)`
+        : '';
+      alert(`${result.added_tables}개 테이블, ${result.added_columns}개 컬럼 등록 완료${skippedMsg}`);
+      qc.invalidateQueries({ queryKey: ['sql_schema', ns] });
+      setShowExcelModal(false);
+      setExcelPreview(null);
+    } catch (e: any) {
+      setExcelError(e.message || '저장 실패');
+    } finally {
+      setExcelConfirming(false);
+    }
+  };
+
   const currentTable = filteredSchema.find((t) => t.table_name === selectedTable) ?? filteredSchema[0] ?? null;
 
   return (
@@ -419,6 +462,9 @@ function SchemaTab() {
             </Button>
             <Button size="sm" onClick={openImportModal}>
               <Download className="w-3.5 h-3.5 mr-1" /> 테이블 불러오기
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => { setExcelPreview(null); setExcelError(''); setShowExcelModal(true); }}>
+              <Download className="w-3.5 h-3.5 mr-1" /> 엑셀로 등록
             </Button>
           </div>
         )}
@@ -601,6 +647,116 @@ function SchemaTab() {
             <Button onClick={handleImport} disabled={importing || importSelected.size === 0}>
               {importing ? '가져오는 중...' : `가져오기 (${importSelected.size}개)`}
             </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Excel Schema Import Modal */}
+      <Modal isOpen={showExcelModal} onClose={() => { setShowExcelModal(false); setExcelPreview(null); setExcelError(''); }} title="엑셀로 스키마 등록">
+        <div className="space-y-4 min-w-[540px]">
+          {/* 포맷 안내 */}
+          <div className="rounded-lg bg-slate-800/60 border border-slate-700 px-4 py-3 text-xs text-slate-400 space-y-1">
+            <p className="text-slate-300 font-medium mb-1">권장 헤더 (한글/영문 모두 인식)</p>
+            <div className="grid grid-cols-3 gap-x-4 gap-y-0.5">
+              <span><span className="text-indigo-300">table_name</span> · 테이블명 <span className="text-rose-400">*</span></span>
+              <span><span className="text-indigo-300">column_name</span> · 컬럼명 <span className="text-rose-400">*</span></span>
+              <span><span className="text-indigo-300">data_type</span> · 데이터타입 <span className="text-rose-400">*</span></span>
+              <span><span className="text-slate-400">is_pk</span> · PK · 기본키</span>
+              <span><span className="text-slate-400">fk_reference</span> · FK · 외래키</span>
+              <span><span className="text-slate-400">description</span> · 설명 · 비고</span>
+            </div>
+          </div>
+
+          {/* 파일 선택 */}
+          {!excelPreview && (
+            <div
+              className="border-2 border-dashed border-slate-600 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-500 transition-colors"
+              onClick={() => excelFileRef.current?.click()}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) handleExcelFile(f); }}
+            >
+              <input ref={excelFileRef} type="file" accept=".xlsx,.xls" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleExcelFile(f); e.target.value = ''; }} />
+              {excelPreviewing
+                ? <p className="text-sm text-slate-400">분석 중...</p>
+                : <><p className="text-sm text-slate-300">엑셀 파일을 드래그하거나 클릭해서 선택</p>
+                    <p className="text-xs text-slate-500 mt-1">.xlsx / .xls</p></>
+              }
+            </div>
+          )}
+
+          {/* 에러 */}
+          {excelError && (
+            <div className="rounded-lg bg-rose-900/30 border border-rose-700/50 px-4 py-3 text-sm text-rose-300 whitespace-pre-wrap">
+              {excelError}
+            </div>
+          )}
+
+          {/* 프리뷰 결과 */}
+          {excelPreview && (
+            <div className="space-y-3">
+              {/* 요약 */}
+              <div className="flex gap-4 text-sm">
+                <span className="text-slate-400">테이블 <span className="text-indigo-300 font-medium">{excelPreview.table_count}개</span></span>
+                <span className="text-slate-400">컬럼 <span className="text-indigo-300 font-medium">{excelPreview.total_rows}개</span></span>
+              </div>
+
+              {/* 헤더 매핑 결과 */}
+              <div className="rounded-lg bg-slate-800/60 border border-slate-700 px-3 py-2 text-xs space-y-1">
+                <p className="text-slate-400 font-medium mb-1">헤더 매핑 결과</p>
+                {Object.entries(excelPreview.header_mapping).map(([field, orig]) => (
+                  <div key={field} className="flex items-center gap-2">
+                    <span className="w-28 text-slate-500">{field}</span>
+                    {orig
+                      ? <span className="text-emerald-400">✓ "{orig}"</span>
+                      : <span className="text-slate-600">— (미매핑{['table_name','column_name','data_type'].includes(field) ? <span className="text-rose-400"> 필수</span> : ''})</span>
+                    }
+                  </div>
+                ))}
+              </div>
+
+              {/* 경고 */}
+              {excelPreview.warnings.length > 0 && (
+                <div className="rounded-lg bg-amber-900/20 border border-amber-700/40 px-3 py-2 text-xs text-amber-300 space-y-0.5">
+                  {excelPreview.warnings.map((w, i) => <p key={i}>⚠ {w}</p>)}
+                </div>
+              )}
+
+              {/* 테이블 목록 */}
+              <div className="rounded-lg border border-slate-700 overflow-hidden max-h-48 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-800 sticky top-0">
+                    <tr className="text-slate-400">
+                      <th className="text-left px-3 py-2">테이블</th>
+                      <th className="text-right px-3 py-2">컬럼</th>
+                      <th className="text-right px-3 py-2">PK</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-700/50">
+                    {excelPreview.tables.map((t) => (
+                      <tr key={t.table_name} className="text-slate-300">
+                        <td className="px-3 py-1.5 font-mono">{t.table_name}</td>
+                        <td className="px-3 py-1.5 text-right text-slate-400">{t.column_count}</td>
+                        <td className="px-3 py-1.5 text-right text-slate-400">{t.pk_count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <Button size="sm" variant="ghost" className="text-xs text-slate-500" onClick={() => { setExcelPreview(null); setExcelError(''); if (excelFileRef.current) excelFileRef.current.value = ''; }}>
+                다른 파일 선택
+              </Button>
+            </div>
+          )}
+
+          <div className="flex gap-2 justify-end pt-1">
+            <Button variant="secondary" onClick={() => { setShowExcelModal(false); setExcelPreview(null); setExcelError(''); }}>취소</Button>
+            {excelPreview && (
+              <Button onClick={handleExcelConfirm} disabled={excelConfirming}>
+                {excelConfirming ? '등록 중...' : `${excelPreview.table_count}개 테이블 등록`}
+              </Button>
+            )}
           </div>
         </div>
       </Modal>

@@ -209,6 +209,140 @@ async def add_tables(namespace: str, body: TablesAddPayload, _=Depends(require_a
         raise HTTPException(status_code=400, detail=str(e))
 
 
+from fastapi import UploadFile, File as FastAPIFile
+
+
+@router.post("/namespaces/{namespace}/schema/import/excel/preview")
+async def preview_excel_schema_upload(
+    namespace: str,
+    file: UploadFile = FastAPIFile(...),
+    _=Depends(require_admin),
+):
+    """엑셀 파일 파싱 → 헤더 매핑 결과 + 미리보기 반환 (DB 저장 없음)."""
+    from agents.text2sql.admin.excel_importer import parse_excel
+
+    content = await file.read()
+    result = parse_excel(content)
+
+    if result["error"]:
+        raise HTTPException(status_code=422, detail=result["error"])
+
+    # 테이블별 요약
+    from collections import defaultdict
+    table_summary: dict[str, dict] = defaultdict(lambda: {"columns": 0, "pk_count": 0})
+    for row in result["rows"]:
+        t = row["table_name"]
+        table_summary[t]["columns"] += 1
+        if row["is_pk"]:
+            table_summary[t]["pk_count"] += 1
+
+    return {
+        "header_mapping": result["header_mapping"],
+        "warnings": result["warnings"],
+        "total_rows": len(result["rows"]),
+        "table_count": len(table_summary),
+        "tables": [
+            {"table_name": t, "column_count": v["columns"], "pk_count": v["pk_count"]}
+            for t, v in table_summary.items()
+        ],
+        "rows": result["rows"],
+    }
+
+
+class ExcelConfirmPayload(BaseModel):
+    rows: list[dict]
+
+
+@router.post("/namespaces/{namespace}/schema/import/excel/confirm")
+async def confirm_excel_schema(
+    namespace: str,
+    body: ExcelConfirmPayload,
+    _=Depends(require_admin),
+):
+    """미리보기에서 확인된 데이터를 DB에 저장 + 임베딩 생성."""
+    from agents.text2sql.admin.excel_importer import rows_to_tables
+    from core.database import get_conn
+    from shared.embedding import embedding_service
+
+    if not body.rows:
+        raise HTTPException(status_code=400, detail="저장할 데이터가 없습니다.")
+
+    ns_id = await _get_ns_id(namespace)
+    tables = rows_to_tables(body.rows)
+
+    # 이미 등록된 테이블 확인
+    async with get_conn() as conn:
+        existing = await conn.fetch(
+            "SELECT table_name FROM sql_schema_table WHERE namespace_id = $1", ns_id
+        )
+    existing_names = {r["table_name"].upper() for r in existing}
+
+    embed_queue: list[int] = []
+    added_tables = 0
+    added_cols = 0
+    skipped_tables: list[str] = []
+
+    async with get_conn() as conn:
+        max_x = await conn.fetchval(
+            "SELECT COALESCE(MAX(pos_x), 0) FROM sql_schema_table WHERE namespace_id = $1", ns_id
+        ) or 0
+
+        for idx, tbl in enumerate(tables):
+            tname = tbl["table_name"]
+            if tname.upper() in existing_names:
+                skipped_tables.append(tname)
+                continue
+
+            pos_x = max_x + 300 * (added_tables % 4) + 50
+            pos_y = 100 + 250 * (added_tables // 4)
+            table_id = await conn.fetchval("""
+                INSERT INTO sql_schema_table (namespace_id, table_name, pos_x, pos_y, updated_at)
+                VALUES ($1, $2, $3, $4, NOW()) RETURNING id
+            """, ns_id, tname, float(pos_x), float(pos_y))
+
+            for col in tbl["columns"]:
+                col_id = await conn.fetchval("""
+                    INSERT INTO sql_schema_column
+                        (table_id, name, data_type, is_pk, fk_reference, description)
+                    VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+                """, table_id, col["name"], col["type"], col["is_pk"],
+                    col.get("fk_reference"), col.get("description", ""))
+                embed_queue.append(col_id)
+                added_cols += 1
+
+            added_tables += 1
+
+    # 임베딩 생성
+    if embed_queue:
+        async with get_conn() as conn:
+            rows = await conn.fetch("""
+                SELECT sc.id, sc.name, sc.data_type, sc.description, st.table_name, st.namespace_id
+                FROM sql_schema_column sc
+                JOIN sql_schema_table st ON sc.table_id = st.id
+                WHERE sc.id = ANY($1)
+            """, embed_queue)
+        texts = [
+            f"{r['table_name']}.{r['name']} - {r['description'] or ''} ({r['data_type']})"
+            for r in rows
+        ]
+        embeddings = await embedding_service.embed_batch(texts)
+        async with get_conn() as conn:
+            for row, emb in zip(rows, embeddings):
+                await conn.execute("""
+                    INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
+                    VALUES ($1, $2, $3::vector)
+                    ON CONFLICT (column_id) DO UPDATE SET embedding = EXCLUDED.embedding
+                """, row["id"], ns_id, str(emb))
+
+    return {
+        "ok": True,
+        "added_tables": added_tables,
+        "added_columns": added_cols,
+        "skipped_tables": skipped_tables,
+        "embeddings_created": len(embed_queue),
+    }
+
+
 @router.delete("/namespaces/{namespace}/schema/tables/{table_name}")
 async def delete_table_by_name(namespace: str, table_name: str, _=Depends(require_admin)):
     """앱 DB에서 테이블을 삭제합니다 (컬럼, 벡터, 관계 포함)."""
