@@ -79,6 +79,16 @@ function DonutChart({ segments, size = 140, strokeWidth = 22, centerTop, centerB
 
 const TERM_PALETTE = ['#6366f1', '#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#f43f5e', '#ec4899', '#14b8a6'];
 
+// 원본 용어(테이블명/코드 등 raw 값)는 관리자가 아니면 알아보기 어려우므로,
+// 용어집에 등록된 한글 설명(rag_glossary.description)의 첫 문장으로 축약해 보여준다.
+function friendlyTermLabel(term: string, description?: string | null): string {
+  if (!description) return term;
+  const dotIdx = description.indexOf('.');
+  const firstSentence = (dotIdx >= 0 ? description.slice(0, dotIdx) : description).trim();
+  if (!firstSentence) return term;
+  return firstSentence.length > 26 ? `${firstSentence.slice(0, 25)}…` : firstSentence;
+}
+
 // ── Knowledge Register Modal (지식 등록 폼 모달) ──────────────────────────────
 
 interface KnowledgeRegisterModalProps {
@@ -550,10 +560,10 @@ export function StatsPanel() {
 
   const topTerms = (stats?.term_distribution ?? []).slice(0, 8);
   const termSegments: DonutSegment[] = topTerms.map((t, i) => ({
-    value: t.total, color: TERM_PALETTE[i % TERM_PALETTE.length], label: t.term,
+    value: t.total, color: TERM_PALETTE[i % TERM_PALETTE.length], label: friendlyTermLabel(t.term, t.description),
     tooltip: t.term === '기타'
       ? '용어집에 매칭되지 않은 질의'
-      : `용어집 매핑: "${t.term}" (대기 ${t.pending}, 미해결 ${t.unresolved})`,
+      : `${t.description || t.term} — 원본 용어: "${t.term}" (대기 ${t.pending}, 미해결 ${t.unresolved})`,
   }));
 
   const kpiCards = [
@@ -655,8 +665,8 @@ export function StatsPanel() {
                 <div className="flex items-center gap-5">
                   <DonutChart segments={termSegments} centerTop={`${topTerms.length}`} centerBottom="유형" />
                   <div className="space-y-1.5 flex-1 min-w-0">
-                    {termSegments.map((seg) => (
-                      <div key={seg.label} className="flex items-center gap-2">
+                    {termSegments.map((seg, i) => (
+                      <div key={i} className="flex items-center gap-2" title={seg.tooltip}>
                         <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: seg.color }} />
                         <span className="text-xs text-slate-400 flex-1 truncate">{seg.label}</span>
                         <span className="text-xs font-semibold text-slate-200">{seg.value}</span>

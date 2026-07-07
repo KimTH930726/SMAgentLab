@@ -331,12 +331,15 @@ async def get_namespace_stats(name: str, user: dict = Depends(get_current_user))
         )
         term_rows = await conn.fetch(
             """
-            SELECT COALESCE(mapped_term, '기타') AS term,
+            SELECT COALESCE(ql.mapped_term, '기타') AS term,
                 COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE status = 'pending') AS pending,
-                COUNT(*) FILTER (WHERE status = 'unresolved') AS unresolved
-            FROM ops_query_log WHERE namespace_id = $1
-            GROUP BY mapped_term ORDER BY total DESC LIMIT 20
+                COUNT(*) FILTER (WHERE ql.status = 'pending') AS pending,
+                COUNT(*) FILTER (WHERE ql.status = 'unresolved') AS unresolved,
+                MAX(g.description) AS description
+            FROM ops_query_log ql
+            LEFT JOIN rag_glossary g ON g.namespace_id = ql.namespace_id AND g.term = ql.mapped_term
+            WHERE ql.namespace_id = $1
+            GROUP BY ql.mapped_term ORDER BY total DESC LIMIT 20
             """, ns_id,
         )
         unresolved_rows = await conn.fetch(

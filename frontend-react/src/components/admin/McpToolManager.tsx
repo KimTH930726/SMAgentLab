@@ -525,8 +525,8 @@ export function McpToolManager() {
                       <div className={`relative w-9 h-5 rounded-full transition-colors ${
                         tool.is_active ? 'bg-emerald-600' : 'bg-slate-600'
                       }`}>
-                        <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                          tool.is_active ? 'translate-x-4' : 'translate-x-0.5'
+                        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                          tool.is_active ? 'translate-x-4' : 'translate-x-0'
                         }`} />
                       </div>
                     </div>

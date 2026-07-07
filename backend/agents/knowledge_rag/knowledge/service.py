@@ -441,13 +441,15 @@ async def list_ingestion_jobs(namespace: str) -> list[dict]:
         if ns_id is None:
             return []
         rows = await conn.fetch("""
-            SELECT id, namespace_id, source_file, source_type, status,
-                   total_chunks, created_chunks, auto_glossary, auto_fewshot,
-                   chunk_strategy, error_message,
-                   created_at::text, completed_at::text
-            FROM rag_ingestion_job
-            WHERE namespace_id = $1
-            ORDER BY created_at DESC
+            SELECT j.id, j.namespace_id, j.source_file, j.source_type, j.status,
+                   j.total_chunks, j.created_chunks, j.auto_glossary, j.auto_fewshot,
+                   j.chunk_strategy, j.error_message,
+                   j.created_by_user_id, u.username AS created_by_username,
+                   j.created_at::text, j.completed_at::text
+            FROM rag_ingestion_job j
+            LEFT JOIN ops_user u ON j.created_by_user_id = u.id
+            WHERE j.namespace_id = $1
+            ORDER BY j.created_at DESC
             LIMIT 50
         """, ns_id)
     return [dict(r) for r in rows]

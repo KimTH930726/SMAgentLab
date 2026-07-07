@@ -174,6 +174,8 @@ export interface IngestionJob {
   auto_fewshot: number;
   chunk_strategy: string | null;
   error_message: string | null;
+  created_by_user_id: number | null;
+  created_by_username: string | null;
   created_at: string;
   completed_at: string | null;
 }

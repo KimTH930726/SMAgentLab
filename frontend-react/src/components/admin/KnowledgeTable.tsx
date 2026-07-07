@@ -804,6 +804,7 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
                 <span className="text-slate-500 flex-shrink-0">{j.created_chunks}/{j.total_chunks}건</span>
                 {j.auto_glossary > 0 && <span className="text-violet-400 flex-shrink-0">용어 +{j.auto_glossary}</span>}
                 {j.auto_fewshot > 0 && <span className="text-emerald-400 flex-shrink-0">Q&A +{j.auto_fewshot}</span>}
+                {j.created_by_username && <span className="text-slate-500 flex-shrink-0">{j.created_by_username}</span>}
                 <span className="text-slate-600 flex-shrink-0">{new Date(j.created_at).toLocaleDateString('ko-KR')}</span>
               </div>
             ))}
