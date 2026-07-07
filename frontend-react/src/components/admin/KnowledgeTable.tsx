@@ -841,7 +841,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   onSuccess: () => void; onCancel: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [category, setCategory] = useState('');
+  const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
   const [detectedStrategy, setDetectedStrategy] = useState<string | null>(null);
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [showReview, setShowReview] = useState(false);
@@ -997,7 +997,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   onSuccess: () => void; onCancel: () => void;
 }) {
   const [text, setText] = useState('');
-  const [category, setCategory] = useState('');
+  const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
   const [detectedStrategy, setDetectedStrategy] = useState<string | null>(null);
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [showReview, setShowReview] = useState(false);
@@ -1079,7 +1079,10 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
   onSuccess: () => void; onCancel: () => void;
 }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState<KnowledgeFormData>(defaultForm);
+  const [form, setForm] = useState<KnowledgeFormData>({
+    ...defaultForm,
+    category: categoryNames.includes('공통지식') ? '공통지식' : '',
+  });
   const [done, setDone] = useState('');
 
   const createMutation = useMutation({
@@ -1097,7 +1100,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
       qc.invalidateQueries({ queryKey: ['stats-ns', namespace] });
       setDone('등록 완료');
-      setForm(defaultForm);
+      setForm({ ...defaultForm, category: categoryNames.includes('공통지식') ? '공통지식' : '' });
       onSuccess();
     },
   });
@@ -1166,7 +1169,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
 }) {
   const { user, updateUser } = useAuthStore();
   const [url, setUrl] = useState('');
-  const [category, setCategory] = useState('');
+  const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [sourceMeta, setSourceMeta] = useState<{ name: string; type: string } | null>(null);
   const [showReview, setShowReview] = useState(false);
@@ -1495,7 +1498,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const [messages, setMessages] = useState<TeamsMessage[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [title, setTitle] = useState('');
-  const [category, setCategory] = useState('');
+  const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
   const [hasMore, setHasMore] = useState(false);
   const [loadingChats, setLoadingChats] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);

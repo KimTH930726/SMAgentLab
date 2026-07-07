@@ -610,10 +610,12 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 24 | `ops_prompt` | `ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'all'` | 에이전트별 프롬프트 스코핑 — 시스템설정 탭에서 현재 에이전트 프롬프트만 표시 |
 | 25 | `sql_target_db` | `ADD COLUMN IF NOT EXISTS schema_name VARCHAR(255) DEFAULT NULL` | 대상 DB 스키마 분리 — PostgreSQL: schema, Oracle: owner |
 | 26 | `ops_user` | `ADD COLUMN IF NOT EXISTS encrypted_confluence_pat TEXT` | 사용자별 Confluence PAT Fernet 암호화 저장 (v3.7) |
+| 27 | - | `init/04-category-required-backfill.sql` | `rag_knowledge.category` 필수화(v2.27) 백필 — 카테고리 없는 네임스페이스에 `'공통지식'` 기본 카테고리 생성, 기존 NULL 지식을 `'공통지식'`으로 일괄 갱신 |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.
+- `rag_knowledge.category`가 NULL인 레코드를 `'공통지식'`으로 일괄 갱신한다 (`init/04-category-required-backfill.sql`).
 
 ---
 
