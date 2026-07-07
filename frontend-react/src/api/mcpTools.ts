@@ -96,6 +96,7 @@ export interface McpToolLogStats {
   success_calls: number;
   avg_duration_ms: number | null;
   last_called_at: string | null;
+  last_called_by: string | null;
   status_dist: Record<string, number>;
 }
 

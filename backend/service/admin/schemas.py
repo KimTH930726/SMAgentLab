@@ -56,6 +56,7 @@ class TermStat(BaseModel):
     total: int
     pending: int
     unresolved: int
+    description: Optional[str] = None
 
 
 class NamespaceDetailStats(BaseModel):

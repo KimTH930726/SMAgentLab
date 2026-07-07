@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp, BookOpen, Wand2, Search } from 'lucide-react';
-import { getGlossary, createGlossaryItem, updateGlossaryItem, deleteGlossaryItem, bulkDeleteGlossary, vectorSearchGlossary, suggestGlossaryTerms, applyGlossarySuggestion } from '../../api/knowledge';
+import { getGlossary, createGlossaryItem, updateGlossaryItem, deleteGlossaryItem, bulkDeleteGlossary, vectorSearchGlossary, suggestGlossaryTerms, applyGlossarySuggestion, type GlossarySuggestSource } from '../../api/knowledge';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -25,6 +25,7 @@ export function GlossaryTable() {
   const [suggestMessage, setSuggestMessage] = useState('');
   const [appliedTerms, setAppliedTerms] = useState<Set<string>>(new Set());
   const [suggestLimit, setSuggestLimit] = useState(50);
+  const [suggestSource, setSuggestSource] = useState<GlossarySuggestSource>('questions');
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);
@@ -74,7 +75,7 @@ export function GlossaryTable() {
   });
 
   const suggestMutation = useMutation({
-    mutationFn: () => suggestGlossaryTerms(selectedNs, suggestLimit),
+    mutationFn: () => suggestGlossaryTerms(selectedNs, suggestLimit, suggestSource),
     onSuccess: (data) => {
       setSuggestions(data.suggestions);
       setSuggestMessage(data.message);
@@ -396,10 +397,32 @@ export function GlossaryTable() {
       {/* AI 용어 추천 Modal */}
       <Modal isOpen={showSuggest} onClose={() => setShowSuggest(false)} title="AI 용어 추천" maxWidth="max-w-2xl">
         <div className="space-y-4">
+          <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-lg p-1 w-fit">
+            {([
+              { value: 'questions', label: '미매핑 질문' },
+              { value: 'knowledge', label: '등록된 지식' },
+            ] as const).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setSuggestSource(opt.value)}
+                className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                  suggestSource === opt.value ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           <div className="flex items-center justify-between gap-4">
-            <p className="text-xs text-slate-400">미매핑 질문을 분석해 업무 용어를 자동 추출합니다.</p>
+            <p className="text-xs text-slate-400">
+              {suggestSource === 'knowledge'
+                ? '등록된 지식 내용을 분석해 업무 용어를 자동 추출합니다.'
+                : '용어집에 매칭되지 않은 질문을 분석해 업무 용어를 자동 추출합니다.'}
+              {' '}이미 등록된 용어는 제외됩니다.
+            </p>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <label className="text-xs text-slate-400 whitespace-nowrap">최대 질문 수</label>
+              <label className="text-xs text-slate-400 whitespace-nowrap">최대 {suggestSource === 'knowledge' ? '지식' : '질문'} 수</label>
               <input
                 type="number"
                 min={5}
@@ -439,16 +462,18 @@ export function GlossaryTable() {
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {suggestions.map((s) => {
                 const isApplied = appliedTerms.has(s.term);
+                const hasError = applyMutation.isError && applyMutation.variables?.term === s.term;
                 return (
                   <div
                     key={s.term}
                     className={`flex items-start gap-3 bg-slate-800 border rounded-xl px-4 py-3 transition-colors ${
-                      isApplied ? 'border-emerald-700/50 opacity-60' : 'border-slate-700'
+                      isApplied ? 'border-emerald-700/50 opacity-60' : hasError ? 'border-rose-700/50' : 'border-slate-700'
                     }`}
                   >
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-slate-200">{s.term}</p>
                       <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">{s.description}</p>
+                      {hasError && <p className="text-xs text-rose-400 mt-1">{String(applyMutation.error)}</p>}
                     </div>
                     <Button
                       variant={isApplied ? 'secondary' : 'primary'}

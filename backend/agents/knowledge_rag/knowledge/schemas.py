@@ -73,6 +73,8 @@ class IngestionJobOut(BaseModel):
     auto_fewshot: int
     chunk_strategy: Optional[str]
     error_message: Optional[str]
+    created_by_user_id: Optional[int] = None
+    created_by_username: Optional[str] = None
     created_at: str
     completed_at: Optional[str]
 

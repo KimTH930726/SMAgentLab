@@ -313,7 +313,7 @@ export interface NamespaceStats {
   pending: number;
   unresolved: number;
   no_knowledge: number;
-  term_distribution: Array<{ term: string; total: number; pending: number; unresolved: number }>;
+  term_distribution: Array<{ term: string; total: number; pending: number; unresolved: number; description: string | null }>;
   unresolved_cases: Array<{ id: number; question: string; mapped_term: string | null; created_at: string }>;
 }
 

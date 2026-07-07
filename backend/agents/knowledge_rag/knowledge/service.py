@@ -13,6 +13,13 @@ _KNOWLEDGE_COLS = """k.id, n.name AS namespace, k.container_name, k.target_table
     k.created_at::text, k.updated_at::text"""
 
 
+def _require_category(category: Optional[str]) -> str:
+    """지식 항목의 업무구분(category)은 필수값 — 비어있으면 등록 거부."""
+    if not category or not category.strip():
+        raise ValueError("업무구분(category)은 필수입니다.")
+    return category.strip()
+
+
 # ─── rag_knowledge ────────────────────────────────────────────────────────────
 
 async def create_knowledge(
@@ -27,6 +34,7 @@ async def create_knowledge(
     created_by_part: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
 ) -> dict:
+    category = _require_category(category)
     embedding = await embedding_service.embed(content)
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
@@ -78,10 +86,8 @@ async def update_knowledge(
         new_tables = target_tables if target_tables is not None else current["target_tables"]
         new_template = query_template if query_template is not None else current["query_template"]
         new_weight = base_weight if base_weight is not None else current["base_weight"]
-        # category=None은 "변경 없음", category=""는 "NULL로 초기화"로 처리
-        new_category = category if category is not None else current.get("category")
-        if new_category == "":
-            new_category = None
+        # category=None은 "변경 없음". 업무구분은 필수값이라 빈 문자열로 초기화하는 것은 허용하지 않음.
+        new_category = _require_category(category) if category is not None else current.get("category")
 
         new_embedding = str(await embedding_service.embed(new_content)) if content else str(current["embedding"])
 
@@ -210,11 +216,19 @@ async def create_glossary(
     namespace: str, term: str, description: str,
     *, created_by_part: Optional[str] = None, created_by_user_id: Optional[int] = None,
 ) -> dict:
-    embedding = await embedding_service.embed(description)
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
+        dup = await conn.fetchval(
+            "SELECT id FROM rag_glossary WHERE namespace_id = $1 AND LOWER(term) = LOWER($2)",
+            ns_id, term,
+        )
+        if dup is not None:
+            raise ValueError(f"이미 등록된 용어입니다: {term}")
+
+    embedding = await embedding_service.embed(description)
+    async with get_conn() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO rag_glossary (namespace_id, term, description, embedding, created_by_part, created_by_user_id)
@@ -361,6 +375,9 @@ async def bulk_create_knowledge(
     """
     import json as _json
 
+    for item in items:
+        item["category"] = _require_category(item.get("category"))
+
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
@@ -441,13 +458,15 @@ async def list_ingestion_jobs(namespace: str) -> list[dict]:
         if ns_id is None:
             return []
         rows = await conn.fetch("""
-            SELECT id, namespace_id, source_file, source_type, status,
-                   total_chunks, created_chunks, auto_glossary, auto_fewshot,
-                   chunk_strategy, error_message,
-                   created_at::text, completed_at::text
-            FROM rag_ingestion_job
-            WHERE namespace_id = $1
-            ORDER BY created_at DESC
+            SELECT j.id, j.namespace_id, j.source_file, j.source_type, j.status,
+                   j.total_chunks, j.created_chunks, j.auto_glossary, j.auto_fewshot,
+                   j.chunk_strategy, j.error_message,
+                   j.created_by_user_id, u.username AS created_by_username,
+                   j.created_at::text, j.completed_at::text
+            FROM rag_ingestion_job j
+            LEFT JOIN ops_user u ON j.created_by_user_id = u.id
+            WHERE j.namespace_id = $1
+            ORDER BY j.created_at DESC
             LIMIT 50
         """, ns_id)
     return [dict(r) for r in rows]

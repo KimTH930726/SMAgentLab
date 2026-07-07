@@ -2123,7 +2123,7 @@ function PipelineTab() {
               </div>
               <button onClick={(e) => { e.stopPropagation(); !s.is_required && !isUnimplemented && toggleMut.mutate(s); }} disabled={s.is_required || isUnimplemented}
                 className={clsx('w-10 h-5 rounded-full transition-colors relative', s.is_enabled ? 'bg-emerald-600' : 'bg-slate-600', (s.is_required || isUnimplemented) && 'opacity-50 cursor-not-allowed')}>
-                <span className={clsx('absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', s.is_enabled ? 'translate-x-5' : 'translate-x-0.5')} />
+                <span className={clsx('absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform', s.is_enabled ? 'translate-x-5' : 'translate-x-0')} />
               </button>
             </div>
             <p className="text-xs text-slate-500 mt-1 ml-9">{isUnimplemented ? (s.description || '').replace('[미구현] ', '') : s.description}</p>

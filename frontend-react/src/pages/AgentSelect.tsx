@@ -1,4 +1,4 @@
-import { BookOpen, Database, Wrench, ShieldAlert, Cloud } from 'lucide-react';
+import { BookOpen, Database, Wrench } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAppStore, type AgentType } from '../store/useAppStore';
 
@@ -37,30 +37,6 @@ const AGENTS: AgentCard[] = [
     color: 'text-emerald-400',
     border: 'border-emerald-500/50 hover:border-emerald-400',
     iconBg: 'bg-emerald-500/10',
-  },
-  {
-    id: 'knowledge_rag' as AgentType,
-    icon: <ShieldAlert className="w-8 h-8" />,
-    title: '시스템 이상 탐지',
-    description: '시스템 로그·메트릭을 분석하여 이상 징후를 탐지합니다.',
-    features: ['로그 패턴 분석', '이상 탐지 알림', '장애 원인 추론', '대응 방안 추천'],
-    color: 'text-orange-400',
-    border: 'border-orange-500/30',
-    iconBg: 'bg-orange-500/10',
-    disabled: true,
-    badge: '26Y 3Q 예정',
-  },
-  {
-    id: 'knowledge_rag' as AgentType,
-    icon: <Cloud className="w-8 h-8" />,
-    title: '클라우드 자원 산정',
-    description: '워크로드에 맞는 최적의 클라우드 자원을 산정합니다.',
-    features: ['워크로드 분석', '비용 최적화 추천', '스케일링 시뮬레이션', '멀티 클라우드 비교'],
-    color: 'text-sky-400',
-    border: 'border-sky-500/30',
-    iconBg: 'bg-sky-500/10',
-    disabled: true,
-    badge: '26Y 4Q 예정',
   },
 ];
 
