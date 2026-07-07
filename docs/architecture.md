@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.26)
+# Ops-Navigator 시스템 아키텍처 (v2.27)
 
 ## 개요
 
@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약**
+- v2.27: 지식 등록 시 업무구분(category) 필수화 — 통계 대시보드용 라벨을 LLM 요약 대신 이미 있는 카테고리 체계로 확보하기 위해, rag_knowledge.category를 모든 등록 경로(수동/파일/URL·Confluence/텍스트분할/CSV/Teams/수정)에서 필수값으로 강제. create_knowledge/bulk_create_knowledge/update_knowledge 서비스 레벨에서 공통 검증(_require_category)해 8개 엔드포인트를 한 곳에서 커버. main.py에 ValueError→400 글로벌 핸들러 추가(기존에 500으로 새던 검증 오류들도 함께 정리됨). 카테고리 미정의 네임스페이스는 등록 폼에 안내 메시지 표시. 기존 27건의 미분류 지식은 소급 변경하지 않음(수정 시 자연스럽게 채워지도록 유도).
 - v2.26: AI 용어추천 데이터소스 선택 + 용어집 중복 등록 방지 — "미매핑 질문"/"등록된 지식" 중 분석 대상을 선택 가능하게 확장(지식 기반 추출은 rag_knowledge.content 재사용). rag_glossary에 유일성 보장이 없던 문제를 create_glossary 레벨에서 대소문자 무시 중복 체크로 수정(수동 등록·AI 추천 적용·자동 추출 전 경로 공통 적용), 프롬프트 단계 기존 용어 제외 + 응답 후처리 필터까지 이중 방어.
 - v2.25: 어드민 UI 다수 개선 — 지식 등록 이력에 등록자 노출(ops_user JOIN), on/off 토글 knob 위치 버그 수정(파이프라인 디버그·MCP 도구관리·Text2SQL 파이프라인 3곳), 업무 유형별 분포 라벨을 용어집 설명 기반으로 개선, 에이전트 선택화면 미구현 placeholder 카드 제거.
 - v2.24: 엑셀 임포트 샘플 템플릿 다운로드 — 권장 헤더 + 예시 데이터가 채워진 xlsx를 즉시 다운로드하는 API/버튼 추가. 임포트 모달을 넓혀 가로 스크롤 제거, 다운로드 CTA를 상단에 배치해 가시성 개선.

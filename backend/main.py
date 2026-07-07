@@ -2,8 +2,9 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from core.config import settings
 from core.database import init_pool, close_pool, get_conn
@@ -992,6 +993,12 @@ app.add_middleware(
 
 for r in _ROUTERS:
     app.include_router(r)
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    """서비스 계층에서 raise한 ValueError(잘못된 요청)를 500 대신 400으로 변환."""
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.get("/health")

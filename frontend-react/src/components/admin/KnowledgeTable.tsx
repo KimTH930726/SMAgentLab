@@ -72,6 +72,29 @@ function weightClass(w: number) {
     : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-600/40 dark:text-zinc-300';
 }
 
+// 업무구분은 필수값 — 카테고리가 없는 네임스페이스는 "네임스페이스 관리"에서 먼저 추가해야 함
+function RequiredCategoryField({ categoryNames, value, onChange }: {
+  categoryNames: string[]; value: string; onChange: (v: string) => void;
+}) {
+  if (categoryNames.length === 0) {
+    return (
+      <div className="rounded-lg bg-amber-900/20 border border-amber-700/40 px-3 py-2 text-xs text-amber-300">
+        이 네임스페이스에 업무구분이 없습니다. "네임스페이스 관리"에서 먼저 업무구분을 추가해주세요.
+      </div>
+    );
+  }
+  return (
+    <div>
+      <label className="block text-xs font-medium text-slate-400 mb-1">업무구분 <span className="text-rose-400">*</span></label>
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
+        <option value="" disabled>선택하세요</option>
+        {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+    </div>
+  );
+}
+
 type IngestMethod = 'file' | 'text' | 'manual' | 'url' | 'teams' | null;
 
 // ── KnowledgeTable (메인) ─────────────────────────────────────────────────────
@@ -129,7 +152,7 @@ export function KnowledgeTable() {
         content: editForm.content,
         query_template: editForm.query_template || null,
         base_weight: editForm.base_weight,
-        category: editForm.category || '',
+        category: editForm.category,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
@@ -496,20 +519,15 @@ export function KnowledgeTable() {
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[100px] read-only:border-slate-700"
               placeholder="SELECT ..." />
           </div>
-          {categoryNames.length > 0 && (
+          {canModifyNs ? (
+            <RequiredCategoryField categoryNames={categoryNames} value={editForm.category}
+              onChange={(v) => setEditForm((f) => ({ ...f, category: v }))} />
+          ) : categoryNames.length > 0 && (
             <div>
               <label className="text-xs font-medium text-slate-400">업무구분</label>
-              {canModifyNs ? (
-                <select value={editForm.category} onChange={(e) => setEditForm((f) => ({ ...f, category: e.target.value }))}
-                  className="w-full mt-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-                  <option value="">없음 (파트 공통)</option>
-                  {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              ) : (
-                <div className="mt-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
-                  {editForm.category || <span className="text-slate-500">없음</span>}
-                </div>
-              )}
+              <div className="mt-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
+                {editForm.category || <span className="text-slate-500">미분류</span>}
+              </div>
             </div>
           )}
           {canModifyNs && (
@@ -532,7 +550,7 @@ export function KnowledgeTable() {
             {canModifyNs && (
               <Button variant="primary" size="sm" loading={updateMutation.isPending}
                 onClick={() => editingId !== null && updateMutation.mutate(editingId)}
-                disabled={!editForm.content.trim()}>
+                disabled={!editForm.content.trim() || !editForm.category || categoryNames.length === 0}>
                 저장
               </Button>
             )}
@@ -895,7 +913,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category: category || undefined }));
+      const items = selected.map(c => ({ content: c.text, category }));
       const result = await bulkCreateKnowledge(namespace, items, file!.name, 'file_upload');
       setDone(`${result.created}건 등록 완료`);
       setShowReview(false);
@@ -945,24 +963,16 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
             {detectedStrategy ? `AI 자동 감지 — ${detectedStrategy}` : 'AI가 파일 분석 후 자동 결정'}
           </span>
         </div>
-        {categoryNames.length > 0 && (
-          <div>
-            <label className="text-[10px] text-slate-500 mb-1 block">업무구분</label>
-            <select value={category} onChange={(e) => setCategory(e.target.value)}
-              className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-300">
-              <option value="">자동 / 없음</option>
-              {categoryNames.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-        )}
       </div>
+
+      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
 
       {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
       {error && <p className="text-xs text-rose-400">{error}</p>}
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
-        <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={!file || previewing}>
+        <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={!file || previewing || !category || categoryNames.length === 0}>
           {previewing ? '분석 중...' : '청크 검토 & 등록'}
         </Button>
       </div>
@@ -1011,7 +1021,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category: category || undefined }));
+      const items = selected.map(c => ({ content: c.text, category }));
       const result = await bulkCreateKnowledge(namespace, items, '텍스트 직접입력', 'paste_split');
       setDone(`${selected.length}개 청크 → ${result.created}건 등록 완료`);
       setShowReview(false);
@@ -1035,24 +1045,16 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
             {detectedStrategy ? `AI 자동 감지 — ${detectedStrategy}` : 'AI가 텍스트 분석 후 자동 결정'}
           </span>
         </div>
-        {categoryNames.length > 0 && (
-          <div>
-            <label className="text-[10px] text-slate-500 mb-1 block">업무구분</label>
-            <select value={category} onChange={(e) => setCategory(e.target.value)}
-              className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-300">
-              <option value="">없음</option>
-              {categoryNames.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-        )}
       </div>
+
+      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
 
       {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
       {error && <p className="text-xs text-rose-400">{error}</p>}
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
-        <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={!text.trim() || previewing}>
+        <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={!text.trim() || previewing || !category || categoryNames.length === 0}>
           {previewing ? '분석 중...' : '청크 검토 & 등록'}
         </Button>
       </div>
@@ -1089,7 +1091,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
         content: form.content,
         query_template: form.query_template || null,
         base_weight: form.base_weight,
-        category: form.category || null,
+        category: form.category,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
@@ -1125,16 +1127,8 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 resize-y"
           placeholder="SELECT ..." />
       </div>
-      {categoryNames.length > 0 && (
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">업무구분</label>
-          <select value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-            <option value="">없음 (파트 공통)</option>
-            {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-      )}
+      <RequiredCategoryField categoryNames={categoryNames} value={form.category}
+        onChange={(v) => setForm((f) => ({ ...f, category: v }))} />
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">
           문서 우선순위: <span className={`font-medium ${form.base_weight >= 2 ? 'text-emerald-400' : form.base_weight >= 1.5 ? 'text-indigo-400' : 'text-slate-300'}`}>
@@ -1155,7 +1149,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
         <Button variant="primary" size="sm"
           loading={createMutation.isPending}
           onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending || form.container_names.length === 0 || !form.content.trim()}>
+          disabled={createMutation.isPending || form.container_names.length === 0 || !form.content.trim() || !form.category || categoryNames.length === 0}>
           추가
         </Button>
       </div>
@@ -1282,7 +1276,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category: category || undefined }));
+      const items = selected.map(c => ({ content: c.text, category }));
       const srcName = sourceMeta?.name ?? url;
       const srcType = sourceMeta?.type ?? (isConfluence ? 'confluence' : 'web');
       const result = await bulkCreateKnowledge(namespace, items, srcName, srcType);
@@ -1368,16 +1362,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         </div>
       )}
 
-      {categoryNames.length > 0 && (
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">업무구분</label>
-          <select value={category} onChange={(e) => setCategory(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-300">
-            <option value="">없음 (파트 공통)</option>
-            {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-      )}
+      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
 
       {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
       {error && <p className="text-xs text-rose-400">{error}</p>}
@@ -1385,7 +1370,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
         <Button variant="primary" size="sm" onClick={handleOpenReview}
-          disabled={!url.trim() || previewing || treeLoading}>
+          disabled={!url.trim() || previewing || treeLoading || !category || categoryNames.length === 0}>
           {treeLoading ? '트리 조회 중...' : previewing ? '수집 중...' : (isConfluence && includeChildren ? '하위 페이지 선택' : '수집 & 청크 검토')}
         </Button>
       </div>
@@ -1450,7 +1435,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
                   variant="primary"
                   size="sm"
                   onClick={handleProceedToReview}
-                  disabled={selectedPageIds.size === 0 || loading}
+                  disabled={selectedPageIds.size === 0 || loading || !category}
                 >
                   {loading ? '청크 분석 중...' : `${selectedPageIds.size}개 페이지 · 청크 검토`}
                 </Button>
@@ -1676,7 +1661,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
         {
           chatId: selectedChat.id,
           chatLabel: selectedChat.label,
-          category: category || undefined,
+          category,
         },
       );
       setDone(`"${threadTitle}" — ${result.created}건 등록 완료`);
@@ -1899,16 +1884,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
             />
           </div>
-          {categoryNames.length > 0 && (
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">업무구분</label>
-              <select value={category} onChange={(e) => setCategory(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-slate-300">
-                <option value="">없음</option>
-                {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-          )}
+          <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
         </div>
       )}
 
@@ -1918,7 +1894,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
         <Button variant="primary" size="sm" onClick={handleSubmit}
-          disabled={!authenticated || selectedIds.size === 0 || submitting}>
+          disabled={!authenticated || selectedIds.size === 0 || submitting || !category || categoryNames.length === 0}>
           {submitting ? '등록 중...' : `${selectedIds.size}건 등록`}
         </Button>
       </div>
