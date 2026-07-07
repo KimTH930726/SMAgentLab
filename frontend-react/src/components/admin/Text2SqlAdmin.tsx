@@ -13,7 +13,7 @@ import {
   getFullSchema, updateSchemaTableDesc, toggleSchemaTable, updateSchemaColumnDesc, reindexSchema,
   saveSchemaPositions,
   getAvailableTables, addTables, deleteTable,
-  previewExcelSchema, confirmExcelSchema,
+  previewExcelSchema, confirmExcelSchema, downloadExcelTemplate,
   type ExcelPreviewResult, type ExcelSchemaRow,
   listRelations, createRelation, deleteRelation, suggestRelationsAI,
   listSynonyms, createSynonym, deleteSynonym, bulkDeleteSynonyms, reindexSynonyms, generateSynonymsAI,
@@ -415,6 +415,14 @@ function SchemaTab() {
     }
   };
 
+  const handleDownloadTemplate = async () => {
+    try {
+      await downloadExcelTemplate(ns);
+    } catch (e: any) {
+      alert(`샘플 다운로드 실패: ${e.message}`);
+    }
+  };
+
   const handleExcelConfirm = async () => {
     if (!excelPreview) return;
     setExcelConfirming(true);
@@ -652,8 +660,21 @@ function SchemaTab() {
       </Modal>
 
       {/* Excel Schema Import Modal */}
-      <Modal isOpen={showExcelModal} onClose={() => { setShowExcelModal(false); setExcelPreview(null); setExcelError(''); }} title="엑셀로 스키마 등록">
-        <div className="space-y-4 min-w-[540px]">
+      <Modal isOpen={showExcelModal} onClose={() => { setShowExcelModal(false); setExcelPreview(null); setExcelError(''); }} title="엑셀로 스키마 등록" maxWidth="max-w-2xl">
+        <div className="space-y-4">
+          {/* 샘플 다운로드 CTA */}
+          <button
+            onClick={handleDownloadTemplate}
+            className="w-full flex items-center justify-between gap-3 rounded-lg bg-indigo-600/15 border border-indigo-600/40 px-4 py-3 text-left hover:bg-indigo-600/25 transition-colors"
+          >
+            <span className="text-sm text-indigo-200">
+              <span className="font-medium">엑셀 양식이 처음이신가요?</span> 샘플 파일을 받아서 형식에 맞게 채워보세요.
+            </span>
+            <span className="flex items-center gap-1.5 text-sm font-medium text-indigo-100 bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg flex-shrink-0">
+              <Download size={14} /> 샘플 다운로드
+            </span>
+          </button>
+
           {/* 포맷 안내 */}
           <div className="rounded-lg bg-slate-800/60 border border-slate-700 px-4 py-3 text-xs text-slate-400 space-y-1">
             <p className="text-slate-300 font-medium mb-1">권장 헤더 (한글/영문 모두 인식)</p>

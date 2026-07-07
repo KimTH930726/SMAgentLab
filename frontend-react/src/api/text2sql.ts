@@ -1,4 +1,4 @@
-import { apiFetch } from './client';
+import { apiFetch, apiFetchBlob } from './client';
 import type {
   SqlTargetDb, SqlRelation, SqlSynonym, SqlFewshot, SqlPipelineStage, SqlAuditLog, SqlCacheEntry,
 } from '../types';
@@ -142,6 +142,19 @@ export async function confirmExcelSchema(namespace: string, rows: ExcelSchemaRow
     method: 'POST',
     body: JSON.stringify({ rows }),
   });
+}
+
+export async function downloadExcelTemplate(namespace: string): Promise<void> {
+  const blob = await apiFetchBlob(`${ns(namespace)}/schema/import/excel/template`);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'text2sql_schema_template.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 즉시 해제 시 일부 브라우저에서 다운로드가 취소될 수 있어 지연 해제
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 // ── Relations ─────────────────────────────────────────────────────────────────

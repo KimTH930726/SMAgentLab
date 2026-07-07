@@ -662,8 +662,18 @@ Case 1 — 승인된 도구 실행 (approved_tool 포함)
 └────────────────────────────────────────────────────────────────┘
 ```
 
-**③ 엑셀 임포트 흐름 (v2.23):**
+**③ 엑셀 임포트 흐름 (v2.23, 샘플 다운로드 v2.24):**
 ```
+(선택) 관리자가 모달 상단 "샘플 다운로드" CTA 클릭
+  │
+  ▼
+GET /schema/import/excel/template
+  │  excel_importer.build_sample_workbook()
+  │  ├─ 헤더를 _HEADER_CANDIDATES에서 파생 (파서와 항상 동기화)
+  │  └─ 정적 바이트라 최초 생성 후 모듈 캐시에서 재사용
+  │
+  │  응답: xlsx (Content-Disposition: attachment)
+  ▼
 관리자가 xlsx 파일 업로드 (한글/영문 헤더 모두 지원)
   │
   ▼

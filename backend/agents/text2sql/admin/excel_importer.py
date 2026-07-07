@@ -5,6 +5,7 @@ import io
 from typing import Optional
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 
 # ── 헤더 후보 매핑 테이블 ──────────────────────────────────────────────────────
 
@@ -195,6 +196,44 @@ def parse_excel(file_bytes: bytes) -> dict:
         "missing_required": [],
         "warnings": warnings,
     }
+
+
+_sample_workbook_cache: Optional[bytes] = None
+
+
+def build_sample_workbook() -> bytes:
+    """샘플 템플릿 엑셀(.xlsx) 바이트 생성 — 권장 헤더 + 예시 데이터 4행.
+
+    헤더는 _HEADER_CANDIDATES(파서가 인식하는 필드 목록)에서 그대로 파생시켜
+    파서와 템플릿이 어긋나지 않게 한다. 출력은 항상 동일하므로 최초 호출 시 캐싱한다.
+    """
+    global _sample_workbook_cache
+    if _sample_workbook_cache is not None:
+        return _sample_workbook_cache
+
+    headers = list(_HEADER_CANDIDATES.keys())
+    sample_rows = [
+        ["USERS", "ID", "BIGINT", "Y", "", "사용자 고유 식별자"],
+        ["USERS", "EMAIL", "VARCHAR(255)", "N", "", "사용자 이메일"],
+        ["ORDERS", "ID", "BIGINT", "Y", "", "주문 고유 식별자"],
+        ["ORDERS", "USER_ID", "BIGINT", "N", "USERS.ID", "주문한 사용자 ID"],
+    ]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "schema"
+    ws.append(headers)
+    for row in sample_rows:
+        ws.append(row)
+
+    for col_idx, header in enumerate(headers, start=1):
+        width = max(len(header) + 2, 14)
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    _sample_workbook_cache = buf.getvalue()
+    return _sample_workbook_cache
 
 
 def rows_to_tables(rows: list[dict]) -> list[dict]:

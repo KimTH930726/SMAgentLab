@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.23)
+# Ops-Navigator 시스템 아키텍처 (v2.24)
 
 ## 개요
 
@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약**
+- v2.24: 엑셀 임포트 샘플 템플릿 다운로드 — 권장 헤더 + 예시 데이터가 채워진 xlsx를 즉시 다운로드하는 API/버튼 추가. 임포트 모달을 넓혀 가로 스크롤 제거, 다운로드 CTA를 상단에 배치해 가시성 개선.
 - v2.23: Text2SQL 스키마 엑셀 임포트 — xlsx로 테이블/컬럼 메타데이터 일괄 등록. 헤더 퍼지 매핑(한글/영문), preview/confirm 2단계, 중복 skip, 임베딩 자동 생성. 어드민 "엑셀로 등록" 버튼 + 포맷 가이드 모달.
 - v2.22: 지식 공백 대시보드 가시화 — no_knowledge 상태를 KPI 5번째 카드·도넛 차트 주황 세그먼트로 시각화. 카드 클릭 → 질문 목록 → 지식 등록 폼 팝업 → 등록 후 "해결됨" 처리. AI 분석 지원 배지를 URL/Confluence·대량 텍스트까지 확장.
 - v2.21: 런타임 안정성 — namespace None→500(FK 오류), 대화 요약 중괄호 ValueError, null byte 포함 파일 ingestion 실패 3개 버그 수정.
@@ -112,7 +113,7 @@ backend/
 │   ├── text2sql/
 │   │   ├── agent.py     #   Text2SqlAgent (startup 병렬화, _cache_hit)
 │   │   ├── admin/       #   Text2SQL 어드민 API (대상DB·스키마·ERD·용어사전·Few-shot·파이프라인·감사로그)
-│   │   │   └── excel_importer.py  #   엑셀 스키마 임포터 (헤더 퍼지 매핑, parse_excel, rows_to_tables)
+│   │   │   └── excel_importer.py  #   엑셀 스키마 임포터 (헤더 퍼지 매핑, parse_excel, rows_to_tables, build_sample_workbook)
 │   │   └── pipeline/    #   7단계: parse→rag→generate→validate→fix→execute→summarize
 │   └── http_tool/       #   HttpToolAgent (레거시)
 ├── service/             # 플랫폼 공통 레이어 (was domain/, platform/ 명칭 stdlib 충돌로 service/ 확정)
@@ -374,6 +375,7 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `POST` | `/api/text2sql/namespaces/{ns}/schema/reindex` | 스키마 벡터 재인덱싱 |
 | `POST` | `/api/text2sql/namespaces/{ns}/schema/import/excel/preview` | 엑셀 파일 업로드 → 헤더 자동 매핑 + 파싱 결과 미리보기 (등록 없음) — v2.23 신규 |
 | `POST` | `/api/text2sql/namespaces/{ns}/schema/import/excel/confirm` | 미리보기 결과 rows 전달 → DB 저장 + 임베딩 생성 (이미 등록된 테이블 skip) — v2.23 신규 |
+| `GET` | `/api/text2sql/namespaces/{ns}/schema/import/excel/template` | 샘플 템플릿 xlsx 다운로드 — 권장 헤더 + 예시 데이터 4행. 헤더는 파서의 `_HEADER_CANDIDATES`에서 파생, 정적 바이트라 최초 생성 후 캐싱 — v2.24 신규 |
 | `PUT` | `/api/text2sql/namespaces/{ns}/schema/positions` | ERD 테이블 위치 일괄 저장 (pos_x/pos_y) — v2.6 신규 |
 | `GET/POST/DELETE` | `/api/text2sql/namespaces/{ns}/relations/{id?}` | FK 관계 CRUD |
 | `POST` | `/api/text2sql/namespaces/{ns}/relations/suggest-ai` | AI 관계 추천 (LLM이 컬럼명 패턴 분석, v2.10: 변경 테이블 대상으로만 제한하여 토큰 절약) — v2.6 신규 |
