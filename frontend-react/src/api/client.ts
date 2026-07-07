@@ -96,6 +96,35 @@ export async function apiFetch<T>(
   return response.json() as Promise<T>;
 }
 
+// 바이너리 응답(파일 다운로드)용 — apiFetch와 동일한 401 갱신-재시도 + 에러 상세 파싱을 공유하되 blob을 반환한다.
+export async function apiFetchBlob(path: string): Promise<Blob> {
+  const url = `${BASE_URL}${path}`;
+  const doFetch = (authHeaders: Record<string, string>) => fetch(url, { headers: authHeaders });
+
+  let response = await doFetch(getAuthHeaders());
+
+  if (response.status === 401) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      response = await doFetch(getAuthHeaders());
+    }
+  }
+
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try {
+      const body = await response.json();
+      const detail = body.detail ?? body.message;
+      if (detail) message = String(detail);
+    } catch {
+      // ignore — binary/empty error body
+    }
+    throw new ApiError(response.status, message);
+  }
+
+  return response.blob();
+}
+
 export async function* streamSSE(
   path: string,
   body: unknown,

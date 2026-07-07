@@ -249,6 +249,20 @@ async def preview_excel_schema_upload(
     }
 
 
+@router.get("/namespaces/{namespace}/schema/import/excel/template")
+async def download_excel_template(namespace: str, _=Depends(require_admin)):
+    """엑셀 임포트용 샘플 템플릿(.xlsx) 다운로드."""
+    from fastapi import Response
+    from agents.text2sql.admin.excel_importer import build_sample_workbook
+
+    content = build_sample_workbook()
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=text2sql_schema_template.xlsx"},
+    )
+
+
 class ExcelConfirmPayload(BaseModel):
     rows: list[dict]
 
