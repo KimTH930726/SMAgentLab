@@ -206,10 +206,21 @@ async def get_mcp_tool_log_stats(
             """,
             *params,
         )
+        last_caller_rows = await conn.fetch(
+            f"""
+            SELECT DISTINCT ON (l.tool_id) l.tool_id, u.username
+            FROM ops_mcp_tool_log l
+            LEFT JOIN ops_user u ON l.user_id = u.id
+            WHERE {where}
+            ORDER BY l.tool_id, l.called_at DESC
+            """,
+            *params,
+        )
 
     dist_map: dict = {}
     for r in dist_rows:
         dist_map.setdefault(r["tool_id"], {})[r["status_key"]] = r["cnt"]
+    last_caller_map = {r["tool_id"]: r["username"] for r in last_caller_rows}
 
     return [
         {
@@ -219,6 +230,7 @@ async def get_mcp_tool_log_stats(
             "success_calls": r["success_calls"],
             "avg_duration_ms": r["avg_duration_ms"],
             "last_called_at": str(r["last_called_at"]) if r["last_called_at"] else None,
+            "last_called_by": last_caller_map.get(r["tool_id"]),
             "status_dist": dist_map.get(r["tool_id"], {}),
         }
         for r in agg_rows

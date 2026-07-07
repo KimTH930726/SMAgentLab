@@ -1028,6 +1028,7 @@ function McpToolLogs({ namespace }: { namespace: string }) {
                   <th className="text-right px-4 py-2.5 text-xs font-medium text-slate-400 w-24">성공률</th>
                   <th className="text-right px-4 py-2.5 text-xs font-medium text-slate-400 w-24">평균 응답</th>
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-slate-400 w-36">마지막 호출</th>
+                  <th className="text-left px-4 py-2.5 text-xs font-medium text-slate-400 w-28">최근 호출자</th>
                 </tr>
               </thead>
               <tbody>
@@ -1049,6 +1050,7 @@ function McpToolLogs({ namespace }: { namespace: string }) {
                       <td className="px-4 py-3 text-slate-500 text-xs">
                         {stat.last_called_at ? new Date(stat.last_called_at).toLocaleString('ko-KR') : '-'}
                       </td>
+                      <td className="px-4 py-3 text-slate-400 text-xs">{stat.last_called_by ?? '-'}</td>
                     </tr>
                   );
                 })}
