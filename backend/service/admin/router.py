@@ -624,10 +624,11 @@ class GlossarySuggestApplyRequest(BaseModel):
 @router.post("/api/admin/glossary/suggest")
 async def suggest_glossary_terms(
     namespace: str = QueryParam(...),
+    source: str = QueryParam(default="questions", pattern="^(questions|knowledge)$"),
     limit: int = QueryParam(default=50, ge=5, le=200),
     admin: dict = Depends(get_current_admin),
 ):
-    """미매핑 질문을 분석해 업무 용어를 LLM으로 추천."""
+    """미매핑 질문 또는 등록된 지식을 분석해 업무 용어를 LLM으로 추천 (이미 등록된 용어는 제외)."""
     import json
     import re
 
@@ -635,24 +636,42 @@ async def suggest_glossary_terms(
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise HTTPException(status_code=404, detail="네임스페이스를 찾을 수 없습니다.")
-        rows = await conn.fetch(
-            "SELECT question FROM ops_query_log WHERE namespace_id = $1 AND mapped_term IS NULL ORDER BY created_at DESC LIMIT $2",
-            ns_id, limit,
-        )
 
-    questions = [r["question"] for r in rows]
-    if len(questions) < 3:
-        return {"suggestions": [], "message": "분석할 미매핑 질문이 부족합니다 (최소 3건 필요)"}
+        existing_terms = [
+            r["term"] for r in await conn.fetch(
+                "SELECT term FROM rag_glossary WHERE namespace_id = $1", ns_id,
+            )
+        ]
 
-    # 보안 필터 회피: 8자리+ 숫자 마스킹 + 질문당 80자 초과 자르기 (LLM 입력 크기 제한)
-    sanitized = [re.sub(r"\d{8,}", "[ID]", q)[:80] for q in questions]
+        if source == "knowledge":
+            rows = await conn.fetch(
+                "SELECT content FROM rag_knowledge WHERE namespace_id = $1 ORDER BY created_at DESC LIMIT $2",
+                ns_id, limit,
+            )
+            items = [r["content"] for r in rows]
+            item_label, per_item_chars = "지식", 300
+        else:
+            rows = await conn.fetch(
+                "SELECT question FROM ops_query_log WHERE namespace_id = $1 AND mapped_term IS NULL ORDER BY created_at DESC LIMIT $2",
+                ns_id, limit,
+            )
+            items = [r["question"] for r in rows]
+            item_label, per_item_chars = "질문", 80
+
+    if len(items) < 3:
+        return {"suggestions": [], "message": f"분석할 {item_label}이(가) 부족합니다 (최소 3건 필요)"}
+
+    # 보안 필터 회피: 8자리+ 숫자 마스킹 + 항목당 길이 제한 (LLM 입력 크기 제한)
+    sanitized = [re.sub(r"\d{8,}", "[ID]", it)[:per_item_chars] for it in items]
+    existing_text = ", ".join(existing_terms[:50]) if existing_terms else "(없음)"
 
     _GLOSSARY_SUGGEST_SYS_FALLBACK = "당신은 업무 용어를 추출하는 전문가입니다. 답변은 반드시 JSON 형식으로만 출력하세요."
     system_prompt = await load_prompt("glossary_suggest", _GLOSSARY_SUGGEST_SYS_FALLBACK)
     question = (
-        f"다음 질문 목록에서 자주 등장하거나 중요한 업무 용어를 최대 10개 추출해주세요.\n\n"
-        f"질문 목록:\n"
-        + "\n".join(f"- {q}" for q in sanitized)
+        f"다음 {item_label} 목록에서 자주 등장하거나 중요한 업무 용어를 최대 10개 추출해주세요.\n\n"
+        f"[이미 등록된 용어 (중복 제외)]\n{existing_text}\n\n"
+        f"{item_label} 목록:\n"
+        + "\n".join(f"- {s}" for s in sanitized)
         + '\n\n다음 JSON 형식으로만 답변하세요 (다른 텍스트 없이):\n'
         + '[{"term": "용어명", "description": "이 용어의 업무적 의미와 설명 (2-3문장)"}]'
     )
@@ -678,7 +697,14 @@ async def suggest_glossary_terms(
     except Exception:
         suggestions = []
 
-    return {"suggestions": suggestions, "message": f"{len(questions)}건의 질문에서 용어 추출 완료"}
+    # LLM이 프롬프트 지시를 무시하고 기존 용어를 다시 낸 경우를 대비한 후처리 필터
+    existing_lower = {t.lower() for t in existing_terms}
+    suggestions = [
+        s for s in suggestions
+        if isinstance(s, dict) and s.get("term", "").strip().lower() not in existing_lower
+    ]
+
+    return {"suggestions": suggestions, "message": f"{len(items)}건의 {item_label}에서 용어 추출 완료"}
 
 
 @router.post("/api/admin/glossary/suggest/apply")
@@ -696,5 +722,6 @@ async def apply_glossary_suggestion(
             created_by_user_id=admin.get("id"),
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        status = 409 if "이미 등록된" in str(e) else 404
+        raise HTTPException(status_code=status, detail=str(e))
     return result

@@ -121,10 +121,13 @@ async def get_glossary_list(
 @router.post("/glossary", response_model=GlossaryOut, status_code=201)
 async def add_glossary(body: GlossaryCreate, user: dict = Depends(get_current_user)):
     await check_namespace_ownership(body.namespace, user)
-    return await service.create_glossary(
-        body.namespace, body.term, body.description,
-        created_by_part=user["part"], created_by_user_id=user["id"],
-    )
+    try:
+        return await service.create_glossary(
+            body.namespace, body.term, body.description,
+            created_by_part=user["part"], created_by_user_id=user["id"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.put("/glossary/{glossary_id}", response_model=GlossaryOut)

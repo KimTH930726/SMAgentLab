@@ -387,8 +387,14 @@ export async function previewConfluenceBulk(
 
 // Glossary AI Suggestions
 
-export async function suggestGlossaryTerms(namespace: string, limit: number = 50): Promise<{ suggestions: Array<{ term: string; description: string }>; message: string }> {
-  return apiFetch(`/admin/glossary/suggest?namespace=${encodeURIComponent(namespace)}&limit=${limit}`, { method: 'POST' });
+export type GlossarySuggestSource = 'questions' | 'knowledge';
+
+export async function suggestGlossaryTerms(
+  namespace: string,
+  limit: number = 50,
+  source: GlossarySuggestSource = 'questions',
+): Promise<{ suggestions: Array<{ term: string; description: string }>; message: string }> {
+  return apiFetch(`/admin/glossary/suggest?namespace=${encodeURIComponent(namespace)}&limit=${limit}&source=${source}`, { method: 'POST' });
 }
 
 export async function applyGlossarySuggestion(namespace: string, term: string, description: string): Promise<void> {

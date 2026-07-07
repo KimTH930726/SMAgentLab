@@ -210,11 +210,19 @@ async def create_glossary(
     namespace: str, term: str, description: str,
     *, created_by_part: Optional[str] = None, created_by_user_id: Optional[int] = None,
 ) -> dict:
-    embedding = await embedding_service.embed(description)
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
+        dup = await conn.fetchval(
+            "SELECT id FROM rag_glossary WHERE namespace_id = $1 AND LOWER(term) = LOWER($2)",
+            ns_id, term,
+        )
+        if dup is not None:
+            raise ValueError(f"이미 등록된 용어입니다: {term}")
+
+    embedding = await embedding_service.embed(description)
+    async with get_conn() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO rag_glossary (namespace_id, term, description, embedding, created_by_part, created_by_user_id)
