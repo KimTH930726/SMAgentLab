@@ -1,7 +1,7 @@
 # 사내 이메일 크롤링 기반 선제적 오류 분석 채널 — 기획/설계 문서
 
-> 작성일: 2026-07-08
-> 현재 버전: v2.28 기준
+> 작성일: 2026-07-08 (Graph API 기술 조사 갱신: 2026-07-09)
+> 현재 버전: v2.29 기준
 > 상태: **기획 단계 (미착수)** — dev_0 브랜치에서 검토
 > 목적: 채팅과 별개의 새 "채널"로, 특정 기간 동안의 사내 이메일을 수집해 건별로 RAG+LLM 오류 분석을 수행하고 결과를 메일/Teams로 선제 통보하는 기능의 실현 가능성과 단계별 실행 계획을 정리한다
 
@@ -114,30 +114,53 @@
 
 ---
 
-## 7. 이메일 접근 방식 결정 — Microsoft Graph API (2026-07-08)
+## 7. 이메일 접근 방식 결정 — Microsoft Graph API (2026-07-08, 기술 조사 2026-07-09 갱신)
 
 > blossomai(사내 AI 업무비서)가 이메일+AI요약 기능을 이미 갖고 있다는 걸 우연히 확인했으나,
 > 이는 **비공식 내부 엔드포인트**(브라우저 개발자도구로 관찰, 공식 문서/계약 없음)라
 > 채택 대상에서 제외함. 대신 Microsoft가 공식 지원하는 **Microsoft Graph API**를
-> 이메일 읽기의 기본 경로로 확정한다.
+> 이메일 읽기의 기본 경로로 확정한다. (다른 경로로 "Graph API로 되더라"는 이야기를
+> 추가로 확인해 아래 조사로 세부 사항을 보강함 — 여전히 Q1/Q2/Q10 조직적 확인은 미완료.)
 
 ### 선택 이유
 
 | 요구사항 | Graph API로 해결되는가 |
 |---|---|
-| 본문 전체 필요 (요약/미리보기 아님) | ✅ `message.body` 필드로 전체 HTML/텍스트 제공 |
-| 공용 접수함(장애 VOC함) 접근 | ✅ 애플리케이션 권한(`Mail.Read`, client_credentials 인증)으로 사람 로그인 없이 접근 가능. **Application Access Policy**로 이 앱이 건드릴 수 있는 메일함을 지정한 공용함 하나로 제한 가능(최소 권한 원칙) |
+| 본문 전체 필요 (요약/미리보기 아님) | ✅ `message.body` 필드로 전체 제공. 단 **`Mail.ReadBasic`/`Mail.ReadBasic.All` 권한은 본문을 제외**하므로 반드시 `Mail.Read` 이상이 필요(공식 문서로 확인) |
+| 공용 접수함(장애 VOC함) 접근 | ✅ 애플리케이션 권한(`Mail.Read`, client_credentials 인증)으로 사람 로그인 없이 접근. 최소 권한 스코핑 방식은 아래 "권한 스코핑 방식" 참고 |
 | 완전 무인 배치 실행 (Phase 3) | ✅ 사람 세션 불필요 — 스케줄러가 임의 시각에 client_credentials로 호출 가능 |
 | 기간 필터링 | ✅ OData `$filter=receivedDateTime ge ... and receivedDateTime le ...` |
 
 **EWS(Exchange Web Services)는 사용하지 않음** — Microsoft가 Exchange Online용 EWS를 단계적으로 폐지 중이라 신규 도입 시 권장되지 않음. IMAP도 기술적으로 가능하지만 Modern Auth 강제 정책 때문에 Graph API보다 다루기 번거로워 후순위.
+
+### 7.1 기술 조사 상세
+
+**엔드포인트 / 권한**
+- 대상 메일함의 메시지 목록: `GET /users/{공용메일함 UPN 또는 id}/messages` (개인 메일함 전용인 `/me/messages`가 아니라 이 형태를 사용 — 애플리케이션 권한으로 타 메일함 접근 시 필수 형태)
+- 필요 권한(애플리케이션): 최소 권한은 `Mail.ReadBasic.All`이지만 **본문이 빠지므로 이 프로젝트 요구사항(본문 전체로 RAG 분석)에는 `Mail.Read`가 필요** — "최소 권한 원칙"은 개별 메일함으로 범위를 좁히는 쪽으로 충족(아래 참고)
+- 기간 필터: `?$filter=receivedDateTime ge 2026-07-01T00:00:00Z and receivedDateTime le 2026-07-08T00:00:00Z`
+- 본문을 HTML 대신 텍스트로 받고 싶으면 요청 헤더 `Prefer: outlook.body-content-type="text"` 추가 (기존 웹 크롤러의 BeautifulSoup HTML 파싱을 재사용하지 않아도 됨)
+- 페이지네이션: 기본 10건, `$top`으로 최대 1000건까지 조정 가능하나 `$select`로 필요한 필드만 받지 않으면 대량 조회 시 504(Gateway Timeout) 위험 — 응답의 `@odata.nextLink`를 그대로 따라가며 반복 조회
+
+**권한 스코핑 방식 — 기존 계획 문서의 "Application Access Policy" 정정**
+- 기존 §7에 적었던 `New-ApplicationAccessPolicy` 기반 Application Access Policy는 **Microsoft가 신규 생성을 권장하지 않는 legacy 방식**으로 확인됨(공식 문서: "Don't create new App Access Policies"). 후속 도입된 **RBAC for Applications**로 대체됨.
+- RBAC for Applications 방식 절차(Exchange Online PowerShell, IT팀 작업):
+  1. Entra ID 앱 등록 후 `New-ServicePrincipal -AppId <클라이언트ID> -ObjectId <서비스주체ID>`로 Exchange에 포인터 등록
+  2. `New-ManagementRoleAssignment -App <서비스주체> -Role "Application Mail.Read" -CustomResourceScope <메일함 필터>` 로 해당 앱이 **지정한 공용 메일함에서만** Mail.Read를 쓸 수 있도록 스코프 제한
+  3. `Test-ServicePrincipalAuthorization`으로 스코프가 의도대로 걸렸는지 사전 검증 가능
+  4. 주의: Entra ID(Azure AD) 쪽에서 조직 전체 범위로 `Mail.Read`를 동의(consent)해버리면 RBAC 스코프와 무관하게 전체 메일함 접근이 합집합으로 허용되므로, **Entra ID 동의는 그대로 두고 Exchange RBAC만 추가하는 방식이 아니라 최종적으로 Entra 동의 범위 자체를 이 앱 용도로만 좁혀 관리해야 함** — IT팀 승인 요청(Q10) 시 이 조합을 함께 명시해야 함
+- 결론: Q10 승인 요청 항목에 "Azure AD 앱 등록 + `Mail.Read` 권한 동의"뿐 아니라 **"Exchange Online RBAC for Applications로 특정 공용 메일함에 한정하는 설정"**까지 포함해서 IT/보안팀에 요청해야 함 (이 작업 자체는 IT팀의 Exchange 관리자 권한이 필요해 우리 쪽에서 대신 실행 불가).
+
+**구현 방식 후보 (Phase 1 착수 시)**
+- 인증: `msal` 패키지의 `ConfidentialClientApplication.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])`로 client_credentials 토큰 발급 — 이미 DevX LLM OAuth2 연동에서 유사한 client_credentials 패턴을 쓰고 있어 구조적으로 익숙함
+- 호출: 공식 `msgraph-sdk` 대신 기존 `web_crawler.py`(Confluence REST API 연동)와 동일하게 **`httpx`로 REST 엔드포인트 직접 호출**하는 방향을 권장 — 무거운 SDK 의존성 추가 없이 프로젝트 기존 스타일과 일관성 유지
 
 ### 남은 선행 조건
 
 | # | 확인/조치 사항 | 비고 |
 |---|---|---|
 | Q2 | 사내 메일 시스템이 실제로 **M365/Exchange Online**인지 확인 | Graph API는 M365 전제. 온프레미스면 재검토 필요 |
-| Q1 | 분석 대상 공용 메일함(alias) 확정 | Application Access Policy에 지정할 대상 |
-| Q10 | Azure AD(Entra ID) **앱 등록 + `Mail.Read` 애플리케이션 권한**을 위한 IT/보안팀 승인 | 정식 Microsoft 지원 경로라 blossomai 건보다 승인 수월할 것으로 예상되나, 여전히 조직적 절차 필요 — client_id/secret/tenant_id 발급까지 이 승인에 포함됨 |
+| Q1 | 분석 대상 공용 메일함(alias) 확정 | RBAC for Applications의 `CustomResourceScope`에 지정할 대상 |
+| Q10 | Azure AD(Entra ID) **앱 등록 + `Mail.Read` 애플리케이션 권한** 동의 + **Exchange Online RBAC for Applications로 해당 공용 메일함 하나로 스코프 제한**까지 포함한 IT/보안팀 승인 | 정식 Microsoft 지원 경로라 blossomai 건보다 승인 수월할 것으로 예상되나, 여전히 조직적 절차 필요 — client_id/secret/tenant_id 발급 + RBAC 스코프 설정이 이 승인에 포함됨 |
 
 Q1·Q2·Q10이 확정되면 §5 Phase 1의 "이메일 수집기" 구현에 바로 착수 가능. 나머지(Q3~Q5, 발송 채널·정책)는 여전히 Phase 2 진입 전 확인 사항으로 유지.
