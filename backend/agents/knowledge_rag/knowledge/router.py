@@ -1082,6 +1082,11 @@ async def get_ingestion_job_status(job_id: int, user: dict = Depends(get_current
 @router.post("/ingestion-jobs/{job_id}/cancel")
 async def cancel_ingestion_job_endpoint(job_id: int, user: dict = Depends(get_current_user)):
     """진행 중인 인제스천 작업 중지 요청 — 다음 배치 경계에서 중단 + 이미 등록된 데이터 롤백."""
+    ns = await service.get_ingestion_job_namespace(job_id)
+    if ns is None:
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
+    await check_namespace_ownership(ns, user)
+
     job = await service.cancel_ingestion_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="진행 중인 작업이 아니거나 존재하지 않습니다.")
