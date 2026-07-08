@@ -119,7 +119,7 @@ export async function bulkCreateKnowledge(
   items: Array<{ content: string; category?: string; container_name?: string; target_tables?: string[]; query_template?: string }>,
   sourceFile?: string,
   sourceType = 'manual',
-): Promise<{ created: number; job_id: number | null }> {
+): Promise<{ created: number; job_id: number; status: string }> {
   return apiFetch('/knowledge/bulk', {
     method: 'POST',
     body: JSON.stringify({ namespace, items, source_file: sourceFile, source_type: sourceType }),
@@ -182,6 +182,28 @@ export interface IngestionJob {
 
 export async function getIngestionJobs(namespace: string): Promise<IngestionJob[]> {
   return apiFetch<IngestionJob[]>(`/knowledge/ingestion-jobs?namespace=${encodeURIComponent(namespace)}`);
+}
+
+export interface IngestionJobStatus {
+  id: number;
+  namespace_id: number;
+  source_file: string | null;
+  source_type: string | null;
+  status: string;
+  total_chunks: number;
+  created_chunks: number;
+  cancel_requested: boolean;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export async function getIngestionJobStatus(jobId: number): Promise<IngestionJobStatus> {
+  return apiFetch<IngestionJobStatus>(`/knowledge/ingestion-jobs/${jobId}`);
+}
+
+export async function cancelIngestionJob(jobId: number): Promise<{ id: number; status: string }> {
+  return apiFetch(`/knowledge/ingestion-jobs/${jobId}/cancel`, { method: 'POST' });
 }
 
 // ─── File Upload (Tier 2) ───────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.28)
+# Ops-Navigator 시스템 아키텍처 (v2.29)
 
 ## 개요
 
@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약**
+- v2.29: 대용량 지식 등록 진행률/중지 지원 — 청크가 수천 건인 파일을 등록하면 완료까지 몇 분씩 걸리는데 진행률 표시가 전혀 없어 "멈춘 건지 알 수 없는" 문제 발생. `bulk_create_knowledge`를 백그라운드 실행(asyncio.create_task) + 배치(50개) 단위 처리로 재구성 — 요청은 job_id를 받고 즉시 반환, 배치마다 `rag_ingestion_job.created_chunks`를 갱신해 실시간 진행률 확보. 신규 엔드포인트 `GET .../ingestion-jobs/{id}`(폴링), `POST .../ingestion-jobs/{id}/cancel`(중지 — 다음 배치 경계에서 중단 + `ingestion_job_id`로 이미 등록된 데이터까지 롤백). 프론트: 등록 이력의 "processing" 항목 클릭 → 진행률 모달(진행바 + %, 닫아도 백그라운드 계속 진행, 중지 버튼). 청크 검토 모달에도 업무구분 선택 필드 추가(기존엔 등록 직전 화면에 누락돼 있었음).
 - v2.28: 업무구분 기본값 '공통지식' + 기존 데이터 일괄 백필 — v2.27에서 소급 변경하지 않기로 했던 기존 미분류 지식 27건을 '공통지식'으로 일괄 UPDATE. 카테고리가 하나도 없던 네임스페이스에도 '공통지식'을 기본 생성해 모든 네임스페이스가 최소 1개 카테고리를 갖도록 보장(`init/04-category-required-backfill.sql`). 등록 폼들의 업무구분 select 초기값을 빈 값 대신 '공통지식'으로 프리셋.
 - v2.27: 지식 등록 시 업무구분(category) 필수화 — 통계 대시보드용 라벨을 LLM 요약 대신 이미 있는 카테고리 체계로 확보하기 위해, rag_knowledge.category를 모든 등록 경로(수동/파일/URL·Confluence/텍스트분할/CSV/Teams/수정)에서 필수값으로 강제. create_knowledge/bulk_create_knowledge/update_knowledge 서비스 레벨에서 공통 검증(_require_category)해 8개 엔드포인트를 한 곳에서 커버. main.py에 ValueError→400 글로벌 핸들러 추가(기존에 500으로 새던 검증 오류들도 함께 정리됨). 카테고리 미정의 네임스페이스는 등록 폼에 안내 메시지 표시. 기존 27건의 미분류 지식은 소급 변경하지 않음(수정 시 자연스럽게 채워지도록 유도).
 - v2.26: AI 용어추천 데이터소스 선택 + 용어집 중복 등록 방지 — "미매핑 질문"/"등록된 지식" 중 분석 대상을 선택 가능하게 확장(지식 기반 추출은 rag_knowledge.content 재사용). rag_glossary에 유일성 보장이 없던 문제를 create_glossary 레벨에서 대소문자 무시 중복 체크로 수정(수동 등록·AI 추천 적용·자동 추출 전 경로 공통 적용), 프롬프트 단계 기존 용어 제외 + 응답 후처리 필터까지 이중 방어.
@@ -317,7 +318,7 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `POST` | `/api/knowledge` | 지식 신규 등록 (네임스페이스 소유 파트 검증, 임베딩 자동 생성) |
 | `PUT` | `/api/knowledge/{id}` | 지식 수정 (네임스페이스 소유 파트 또는 admin만) |
 | `DELETE` | `/api/knowledge/{id}` | 지식 삭제 (네임스페이스 소유 파트 또는 admin만) |
-| `POST` | `/api/knowledge/bulk` | JSON 배열 벌크 등록 (배치 임베딩, 인제스천 작업 이력 생성) |
+| `POST` | `/api/knowledge/bulk` | JSON 배열 벌크 등록 — job_id 즉시 반환, 실제 임베딩+등록은 백그라운드 배치 처리 (v2.29) |
 | `POST` | `/api/knowledge/import/csv` | CSV 파일 업로드 → 컬럼 매핑 → 벌크 등록 |
 | `POST` | `/api/knowledge/import/text-split` | 대량 텍스트 붙여넣기 → 자동 분할 → 벌크 등록 |
 | `POST` | `/api/knowledge/import/text-split/preview` | 텍스트 분할 미리보기 (등록 없음) |
@@ -326,6 +327,8 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `POST` | `/api/knowledge/import/url` | URL/Confluence 페이지 수집 → 청킹 → 벌크 등록 (PAT 미전달 시 DB 저장 개인 PAT 자동 로드) |
 | `POST` | `/api/knowledge/import/url/preview` | URL 수집 미리보기 — LLM Analyzer 자동 청킹 전략 결정 (등록 없음) |
 | `GET` | `/api/knowledge/ingestion-jobs` | 인제스천 작업 이력 조회 |
+| `GET` | `/api/knowledge/ingestion-jobs/{id}` | 인제스천 작업 진행률 조회 (폴링용) — v2.29 신규 |
+| `POST` | `/api/knowledge/ingestion-jobs/{id}/cancel` | 진행 중인 인제스천 작업 중지 요청 — 다음 배치 경계에서 중단 + 이미 등록된 데이터 롤백 — v2.29 신규 |
 | `GET` | `/api/knowledge/glossary` | 용어집 목록 |
 | `POST` | `/api/knowledge/glossary` | 용어 신규 등록 (임베딩 자동 생성) |
 | `PUT` | `/api/knowledge/glossary/{id}` | 용어 수정 (재임베딩 자동, 같은 부서 또는 admin만) |

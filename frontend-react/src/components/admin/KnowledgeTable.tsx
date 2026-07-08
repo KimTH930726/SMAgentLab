@@ -16,6 +16,8 @@ import {
   importConfluenceBulk,
   previewConfluenceBulk,
   getIngestionJobs,
+  getIngestionJobStatus,
+  cancelIngestionJob,
   type IngestionJob,
   type ConfluenceTreeResponse,
 } from '../../api/knowledge';
@@ -705,6 +707,108 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
 }
 
 
+// ── 인제스천 진행률 모달 (처리 중인 작업 클릭 시) ─────────────────────────────
+
+function IngestionProgressModal({ jobId, onClose, onSettled }: {
+  jobId: number | null;
+  onClose: () => void;
+  onSettled: () => void;
+}) {
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+
+  const { data: job } = useQuery({
+    queryKey: ['ingestion-job-status', jobId],
+    queryFn: () => getIngestionJobStatus(jobId!),
+    enabled: jobId !== null,
+    refetchInterval: (query) => (query.state.data?.status === 'processing' ? 1500 : false),
+  });
+
+  const prevStatus = useRef<string | null>(null);
+  useEffect(() => {
+    if (job && prevStatus.current === 'processing' && job.status !== 'processing') {
+      onSettled();
+    }
+    if (job) prevStatus.current = job.status;
+  }, [job, onSettled]);
+
+  const handleCancel = async () => {
+    if (!jobId) return;
+    setCancelling(true); setCancelError('');
+    try {
+      await cancelIngestionJob(jobId);
+    } catch (e: any) {
+      setCancelError(e.message || '중지 요청 실패');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const pct = job && job.total_chunks > 0 ? Math.round((job.created_chunks / job.total_chunks) * 100) : 0;
+  const isProcessing = job?.status === 'processing';
+
+  return (
+    <Modal isOpen={jobId !== null} onClose={onClose} title="등록 진행 상황">
+      {!job ? (
+        <div className="py-8 text-center text-sm text-slate-500">불러오는 중...</div>
+      ) : (
+        <div className="space-y-4">
+          <div className="text-sm text-slate-300 truncate">{job.source_file || '-'}</div>
+
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-400 mb-1.5">
+              <span>{job.created_chunks} / {job.total_chunks}건</span>
+              <span className="font-medium text-slate-300">{pct}%</span>
+            </div>
+            <div className="w-full h-2.5 rounded-full bg-slate-700 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${
+                  job.status === 'failed' ? 'bg-rose-500' : job.status === 'cancelled' ? 'bg-slate-500' : 'bg-indigo-500'
+                }`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs">
+            <span className={`px-1.5 py-0.5 rounded font-medium ${
+              job.status === 'completed' ? 'bg-emerald-900/30 text-emerald-400' :
+              job.status === 'failed' ? 'bg-rose-900/30 text-rose-400' :
+              job.status === 'cancelled' ? 'bg-slate-700 text-slate-400' :
+              'bg-amber-900/30 text-amber-400'
+            }`}>
+              {job.status}
+            </span>
+            {job.status === 'processing' && job.cancel_requested && (
+              <span className="text-slate-500">중지 처리 중... (다음 배치 경계에서 중단됩니다)</span>
+            )}
+          </div>
+
+          {job.error_message && (
+            <div className="rounded-lg bg-rose-900/30 border border-rose-700/50 px-3 py-2 text-xs text-rose-300 whitespace-pre-wrap">
+              {job.error_message}
+            </div>
+          )}
+
+          {job.status === 'cancelled' && (
+            <p className="text-xs text-slate-500">중지되어 이미 등록된 항목도 함께 롤백(삭제)되었습니다.</p>
+          )}
+
+          {cancelError && <p className="text-xs text-rose-400">{cancelError}</p>}
+
+          <div className="flex gap-2 justify-end pt-1">
+            <Button variant="ghost" size="sm" onClick={onClose}>닫기 (백그라운드 계속 진행)</Button>
+            {isProcessing && !job.cancel_requested && (
+              <Button variant="danger" size="sm" loading={cancelling} onClick={handleCancel}>중지</Button>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+
 // ── 서브탭 2: 지식 등록 ───────────────────────────────────────────────────────
 
 function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoToList }: {
@@ -716,6 +820,7 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
   onGoToList: () => void;
 }) {
   const [activeMethod, setActiveMethod] = useState<IngestMethod>(null);
+  const [progressJobId, setProgressJobId] = useState<number | null>(null);
 
   if (!namespace) {
     return <div className="text-center py-16 text-slate-500">파트를 선택하세요.</div>;
@@ -810,30 +915,48 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
         <div>
           <h3 className="text-sm font-medium text-slate-400 mb-2">등록 이력</h3>
           <div className="rounded-xl border border-slate-700 overflow-hidden divide-y divide-slate-700/60">
-            {jobs.slice(0, 10).map((j: IngestionJob) => (
-              <div key={j.id} className="flex items-center gap-3 px-4 py-2.5 text-xs">
-                <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
-                  j.status === 'completed' ? 'bg-emerald-900/30 text-emerald-400' :
-                  j.status === 'failed' ? 'bg-rose-900/30 text-rose-400' :
-                  'bg-amber-900/30 text-amber-400'
-                }`}>
-                  {j.status === 'completed' ? <CheckCircle className="w-3 h-3" /> : j.status === 'failed' ? <AlertCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                  {j.status}
-                </span>
-                <span className="text-slate-400 flex-shrink-0 text-[10px] px-1.5 py-0.5 bg-slate-700/60 rounded">
-                  {j.source_type === 'csv_import' ? 'CSV' : j.source_type === 'file_upload' ? '파일' : j.source_type === 'paste_split' ? '텍스트' : j.source_type === 'web' ? '웹' : j.source_type === 'confluence' ? 'Confluence' : j.source_type === 'teams' ? 'Teams' : '수동'}
-                </span>
-                <span className="text-slate-300 truncate flex-1">{j.source_file || '-'}</span>
-                <span className="text-slate-500 flex-shrink-0">{j.created_chunks}/{j.total_chunks}건</span>
-                {j.auto_glossary > 0 && <span className="text-violet-400 flex-shrink-0">용어 +{j.auto_glossary}</span>}
-                {j.auto_fewshot > 0 && <span className="text-emerald-400 flex-shrink-0">Q&A +{j.auto_fewshot}</span>}
-                {j.created_by_username && <span className="text-slate-500 flex-shrink-0">{j.created_by_username}</span>}
-                <span className="text-slate-600 flex-shrink-0">{new Date(j.created_at).toLocaleDateString('ko-KR')}</span>
-              </div>
-            ))}
+            {jobs.slice(0, 10).map((j: IngestionJob) => {
+              const isProcessing = j.status === 'processing';
+              return (
+                <div key={j.id}
+                  className={`flex items-center gap-3 px-4 py-2.5 text-xs ${isProcessing ? 'cursor-pointer hover:bg-slate-800/60' : ''}`}
+                  onClick={() => isProcessing && setProgressJobId(j.id)}
+                >
+                  <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
+                    j.status === 'completed' ? 'bg-emerald-900/30 text-emerald-400' :
+                    j.status === 'failed' ? 'bg-rose-900/30 text-rose-400' :
+                    j.status === 'cancelled' ? 'bg-slate-700 text-slate-400' :
+                    'bg-amber-900/30 text-amber-400'
+                  }`}>
+                    {j.status === 'completed' ? <CheckCircle className="w-3 h-3" /> : j.status === 'failed' ? <AlertCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                    {j.status}
+                  </span>
+                  <span className="text-slate-400 flex-shrink-0 text-[10px] px-1.5 py-0.5 bg-slate-700/60 rounded">
+                    {j.source_type === 'csv_import' ? 'CSV' : j.source_type === 'file_upload' ? '파일' : j.source_type === 'paste_split' ? '텍스트' : j.source_type === 'web' ? '웹' : j.source_type === 'confluence' ? 'Confluence' : j.source_type === 'teams' ? 'Teams' : '수동'}
+                  </span>
+                  <span className="text-slate-300 truncate flex-1">{j.source_file || '-'}</span>
+                  <span className="text-slate-500 flex-shrink-0">{j.created_chunks}/{j.total_chunks}건</span>
+                  {isProcessing && j.total_chunks > 0 && (
+                    <span className="text-indigo-400 flex-shrink-0 font-medium">
+                      {Math.round((j.created_chunks / j.total_chunks) * 100)}%
+                    </span>
+                  )}
+                  {j.auto_glossary > 0 && <span className="text-violet-400 flex-shrink-0">용어 +{j.auto_glossary}</span>}
+                  {j.auto_fewshot > 0 && <span className="text-emerald-400 flex-shrink-0">Q&A +{j.auto_fewshot}</span>}
+                  {j.created_by_username && <span className="text-slate-500 flex-shrink-0">{j.created_by_username}</span>}
+                  <span className="text-slate-600 flex-shrink-0">{new Date(j.created_at).toLocaleDateString('ko-KR')}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
+
+      <IngestionProgressModal
+        jobId={progressJobId}
+        onClose={() => setProgressJobId(null)}
+        onSettled={onSuccess}
+      />
     </div>
   );
 }
@@ -919,8 +1042,8 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setLoading(true); setError('');
     try {
       const items = selected.map(c => ({ content: c.text, category }));
-      const result = await bulkCreateKnowledge(namespace, items, file!.name, 'file_upload');
-      setDone(`${result.created}건 등록 완료`);
+      await bulkCreateKnowledge(namespace, items, file!.name, 'file_upload');
+      setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
       onSuccess();
     } catch (e: any) { setError(e.message || '오류 발생'); }
@@ -1028,8 +1151,8 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setLoading(true); setError('');
     try {
       const items = selected.map(c => ({ content: c.text, category }));
-      const result = await bulkCreateKnowledge(namespace, items, '텍스트 직접입력', 'paste_split');
-      setDone(`${selected.length}개 청크 → ${result.created}건 등록 완료`);
+      await bulkCreateKnowledge(namespace, items, '텍스트 직접입력', 'paste_split');
+      setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
       onSuccess();
     } catch (e: any) { setError(e.message || '오류 발생'); }
@@ -1289,8 +1412,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       const items = selected.map(c => ({ content: c.text, category }));
       const srcName = sourceMeta?.name ?? url;
       const srcType = sourceMeta?.type ?? (isConfluence ? 'confluence' : 'web');
-      const result = await bulkCreateKnowledge(namespace, items, srcName, srcType);
-      setDone(`"${srcName}" — ${result.created}건 등록 완료`);
+      await bulkCreateKnowledge(namespace, items, srcName, srcType);
+      setDone(`"${srcName}" — ${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
       onSuccess();
     } catch (e: any) { setError(e.message || '오류 발생'); }
@@ -1666,7 +1789,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setSubmitting(true);
     setError('');
     try {
-      const result = await importTeamsThreads(
+      await importTeamsThreads(
         namespace,
         [{ title: threadTitle, messages: selected }],
         {
@@ -1675,7 +1798,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
           category,
         },
       );
-      setDone(`"${threadTitle}" — ${result.created}건 등록 완료`);
+      setDone(`"${threadTitle}" — 등록을 시작했습니다. 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setSelectedIds(new Set());
       onSuccess();
     } catch (e: any) {
