@@ -366,6 +366,10 @@ async def get_glossary_namespace(glossary_id: int) -> Optional[str]:
 _INGEST_BATCH_SIZE = 50
 _EMBEDDING_MODEL_NAME = "paraphrase-multilingual-mpnet-base-v2"
 
+# asyncio.create_task()로 만든 태스크는 강한 참조가 없으면 GC 대상이 될 수 있음
+# (asyncio 공식 문서 권고) — 완료될 때까지 참조를 유지한다.
+_background_tasks: set[asyncio.Task] = set()
+
 
 async def bulk_create_knowledge(
     namespace: str,
@@ -410,7 +414,9 @@ async def bulk_create_knowledge(
         created_by_part=created_by_part, created_by_user_id=created_by_user_id,
     )
     if background:
-        asyncio.create_task(coro)
+        task = asyncio.create_task(coro)
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
         return {"created": 0, "job_id": job_id, "status": "processing"}
     return await coro
 
@@ -433,36 +439,38 @@ async def _run_bulk_ingestion(
             texts = [it["content"] for it in batch]
             embeddings = await embedding_service.embed_batch(texts)
 
-            async with get_conn() as conn:
-                for offset, (item, emb) in enumerate(zip(batch, embeddings)):
-                    # PDF/XLSX 추출 텍스트에 null byte(\x00)가 포함되면 PostgreSQL이 거부함 → 제거
-                    content = item["content"].replace("\x00", "")
-                    await conn.execute("""
-                        INSERT INTO rag_knowledge
-                            (namespace_id, container_name, target_tables, content,
-                             query_template, embedding, base_weight, category,
-                             source_file, source_chunk_idx, source_type,
-                             created_by_part, created_by_user_id, ingestion_job_id)
-                        VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13, $14)
-                    """,
-                        ns_id,
-                        item.get("container_name"),
-                        item.get("target_tables"),
-                        content,
-                        item.get("query_template"),
-                        str(emb),
-                        item.get("base_weight", 1.0),
-                        item.get("category"),
-                        source_file,
-                        start + offset,
-                        source_type,
-                        created_by_part,
-                        created_by_user_id,
-                        job_id,
-                    )
-                    created += 1
+            rows = []
+            for offset, (item, emb) in enumerate(zip(batch, embeddings)):
+                # PDF/XLSX 추출 텍스트에 null byte(\x00)가 포함되면 PostgreSQL이 거부함 → 제거
+                content = item["content"].replace("\x00", "")
+                rows.append((
+                    ns_id,
+                    item.get("container_name"),
+                    item.get("target_tables"),
+                    content,
+                    item.get("query_template"),
+                    str(emb),
+                    item.get("base_weight", 1.0),
+                    item.get("category"),
+                    source_file,
+                    start + offset,
+                    source_type,
+                    created_by_part,
+                    created_by_user_id,
+                    job_id,
+                ))
 
             async with get_conn() as conn:
+                await conn.executemany("""
+                    INSERT INTO rag_knowledge
+                        (namespace_id, container_name, target_tables, content,
+                         query_template, embedding, base_weight, category,
+                         source_file, source_chunk_idx, source_type,
+                         created_by_part, created_by_user_id, ingestion_job_id)
+                    VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13, $14)
+                """, rows)
+                created += len(rows)
+
                 cancel_requested = await conn.fetchval("""
                     UPDATE rag_ingestion_job SET created_chunks = $1
                     WHERE id = $2 RETURNING cancel_requested
@@ -507,6 +515,16 @@ async def get_ingestion_job(job_id: int) -> Optional[dict]:
             FROM rag_ingestion_job WHERE id = $1
         """, job_id)
     return dict(row) if row else None
+
+
+async def get_ingestion_job_namespace(job_id: int) -> Optional[str]:
+    """작업 소유 네임스페이스 이름 조회 (권한 확인용)."""
+    async with get_conn() as conn:
+        return await conn.fetchval("""
+            SELECT n.name FROM rag_ingestion_job j
+            JOIN ops_namespace n ON j.namespace_id = n.id
+            WHERE j.id = $1
+        """, job_id)
 
 
 async def cancel_ingestion_job(job_id: int) -> Optional[dict]:

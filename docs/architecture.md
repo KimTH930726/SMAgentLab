@@ -5,35 +5,28 @@
 Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화하는 **지능형 운영 보조 에이전트 플랫폼**이다.
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
-**주요 이력 요약**
-- v2.29: 대용량 지식 등록 진행률/중지 지원 — 청크가 수천 건인 파일을 등록하면 완료까지 몇 분씩 걸리는데 진행률 표시가 전혀 없어 "멈춘 건지 알 수 없는" 문제 발생. `bulk_create_knowledge`를 백그라운드 실행(asyncio.create_task) + 배치(50개) 단위 처리로 재구성 — 요청은 job_id를 받고 즉시 반환, 배치마다 `rag_ingestion_job.created_chunks`를 갱신해 실시간 진행률 확보. 신규 엔드포인트 `GET .../ingestion-jobs/{id}`(폴링), `POST .../ingestion-jobs/{id}/cancel`(중지 — 다음 배치 경계에서 중단 + `ingestion_job_id`로 이미 등록된 데이터까지 롤백). 프론트: 등록 이력의 "processing" 항목 클릭 → 진행률 모달(진행바 + %, 닫아도 백그라운드 계속 진행, 중지 버튼). 청크 검토 모달에도 업무구분 선택 필드 추가(기존엔 등록 직전 화면에 누락돼 있었음).
-- v2.28: 업무구분 기본값 '공통지식' + 기존 데이터 일괄 백필 — v2.27에서 소급 변경하지 않기로 했던 기존 미분류 지식 27건을 '공통지식'으로 일괄 UPDATE. 카테고리가 하나도 없던 네임스페이스에도 '공통지식'을 기본 생성해 모든 네임스페이스가 최소 1개 카테고리를 갖도록 보장(`init/04-category-required-backfill.sql`). 등록 폼들의 업무구분 select 초기값을 빈 값 대신 '공통지식'으로 프리셋.
-- v2.27: 지식 등록 시 업무구분(category) 필수화 — 통계 대시보드용 라벨을 LLM 요약 대신 이미 있는 카테고리 체계로 확보하기 위해, rag_knowledge.category를 모든 등록 경로(수동/파일/URL·Confluence/텍스트분할/CSV/Teams/수정)에서 필수값으로 강제. create_knowledge/bulk_create_knowledge/update_knowledge 서비스 레벨에서 공통 검증(_require_category)해 8개 엔드포인트를 한 곳에서 커버. main.py에 ValueError→400 글로벌 핸들러 추가(기존에 500으로 새던 검증 오류들도 함께 정리됨). 카테고리 미정의 네임스페이스는 등록 폼에 안내 메시지 표시. 기존 27건의 미분류 지식은 소급 변경하지 않음(수정 시 자연스럽게 채워지도록 유도).
-- v2.26: AI 용어추천 데이터소스 선택 + 용어집 중복 등록 방지 — "미매핑 질문"/"등록된 지식" 중 분석 대상을 선택 가능하게 확장(지식 기반 추출은 rag_knowledge.content 재사용). rag_glossary에 유일성 보장이 없던 문제를 create_glossary 레벨에서 대소문자 무시 중복 체크로 수정(수동 등록·AI 추천 적용·자동 추출 전 경로 공통 적용), 프롬프트 단계 기존 용어 제외 + 응답 후처리 필터까지 이중 방어.
-- v2.25: 어드민 UI 다수 개선 — 지식 등록 이력에 등록자 노출(ops_user JOIN), on/off 토글 knob 위치 버그 수정(파이프라인 디버그·MCP 도구관리·Text2SQL 파이프라인 3곳), 업무 유형별 분포 라벨을 용어집 설명 기반으로 개선, 에이전트 선택화면 미구현 placeholder 카드 제거.
-- v2.24: 엑셀 임포트 샘플 템플릿 다운로드 — 권장 헤더 + 예시 데이터가 채워진 xlsx를 즉시 다운로드하는 API/버튼 추가. 임포트 모달을 넓혀 가로 스크롤 제거, 다운로드 CTA를 상단에 배치해 가시성 개선.
-- v2.23: Text2SQL 스키마 엑셀 임포트 — xlsx로 테이블/컬럼 메타데이터 일괄 등록. 헤더 퍼지 매핑(한글/영문), preview/confirm 2단계, 중복 skip, 임베딩 자동 생성. 어드민 "엑셀로 등록" 버튼 + 포맷 가이드 모달.
-- v2.22: 지식 공백 대시보드 가시화 — no_knowledge 상태를 KPI 5번째 카드·도넛 차트 주황 세그먼트로 시각화. 카드 클릭 → 질문 목록 → 지식 등록 폼 팝업 → 등록 후 "해결됨" 처리. AI 분석 지원 배지를 URL/Confluence·대량 텍스트까지 확장.
-- v2.21: 런타임 안정성 — namespace None→500(FK 오류), 대화 요약 중괄호 ValueError, null byte 포함 파일 ingestion 실패 3개 버그 수정.
-- v2.20: 인코딩 수정 — EUC-KR CSV/MD/TXT 지원(utf-8-sig→cp949 fallback), PDF close 누락(리소스 누수) 수정.
-- v2.19: RAG 고도화 — CrossEncoder 리랭커(`RERANKER_ENABLED` 환경변수), 지식 신선도 Decay 옵션, 지식 갭 자동 감지(no_knowledge 상태 기록).
-- v2.18: 안정성 버그 수정 배치 — URL preview 데이터 잘림, HTML 파싱 섹션 누락, xlsx/CSV 청킹 개선, 등록자 덮어쓰기, 시맨틱 캐시 키 충돌 등 다수.
-- v2.17: DevX LLM OAuth2 전환 + Confluence BFS 일괄 등록 — 사용자별 자격증명 Fernet 암호화 저장, xlsx/CSV 파일 업로드 지원 추가.
-- v2.16: 어드민 테이블 검색·다건 삭제 — 텍스트/벡터 유사도 검색, 체크박스 다건 선택, bulk-delete API.
-- v2.15: Teams 메시지 수집 — OpsNavHelper.exe 기반 Playwright 토큰 캡처, 스레드 단위 지식베이스 등록.
-- v2.14: 인제스천 UX — ChunkReviewModal, LLM Analyzer 자동 청킹, Confluence PAT 개인 저장, 레거시 Streamlit 삭제.
-- v2.13: URL/Confluence 인제스천 — httpx+BeautifulSoup, Confluence REST API, 등록 전 확인 모달.
-- v2.12: 지식 인제스천 고도화 — 텍스트 분할, 파일 업로드, LLM Analyzer, 자동 태깅, Q&A 자동 생성.
-- v2.11: Oracle 지원 + Dialect 패턴 리팩터링 (PgDialect/MysqlDialect/SqliteDialect/OracleDialect) + sql_target_db.schema_name 컬럼 추가 + Pagination 상하 분리
-- v2.10: 스키마 스캔 diff 방식 개선 + ERD/용어 고아 자동 정리 + 스캔 리포트 모달 + ERD 검색·양방향 싱크
-- v2.9: `ops_prompt` 에이전트별 분리 — `agent_type` 컬럼 추가, text2sql 파이프라인 프롬프트 `ops_prompt`로 통합, 파이프라인 탭 프롬프트 편집 UI 제거
-- v2.8: `domain/` → `service/` + `agents/{agent}/` 재구성 + DB 테이블 prefix 변경 (`rag_*`)
-- v2.7: SQL Few-shot 피드백 워크플로우, ERD 캔버스 패닝, MCP 도구 에이전트 분리
-- v2.6: Text-to-SQL 어드민 UI 개편, ERD 고도화, AI 자동생성
-- v2.5: Agent-centric UI, Text-to-SQL 에이전트(7단계 파이프라인)
-- v2.4: MCP 도구 + Semantic Cache
-- v2.3: AgentRegistry 패턴 도입
-- v2.0: DDD 구조, JWT 인증, 부서 기반 권한
+**주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.29: 대용량 등록 진행률 표시 + 중지/롤백 — `bulk_create_knowledge` 백그라운드(asyncio.create_task) + 배치(50건) 처리로 재구성, job_id 즉시 반환 + 배치마다 진행률 갱신. 신규 API `ingestion-jobs/{id}`(폴링) / `.../cancel`(중지 시 등록분 롤백). 청크 검토 모달에 업무구분 필드 보완.
+- v2.28: 업무구분 기본값 `'공통지식'` 지정 + 기존 미분류 지식 일괄 백필, 카테고리 없는 네임스페이스 자동 생성.
+- v2.27: 업무구분(category) 전 등록 경로 필수화 — 서비스 레벨 공통 검증(`_require_category`), `ValueError`→400 글로벌 핸들러 추가.
+- v2.26: AI 용어추천 데이터소스 선택(미매핑 질문/등록된 지식) + 용어집 중복 등록 방지(대소문자 무시 체크, 프롬프트+응답 이중 필터).
+- v2.25: 어드민 UI 개선 — 등록자 노출, 토글 knob 위치 버그 수정, 업무유형 분포 라벨을 용어집 설명 기반으로 개선, 미구현 placeholder 카드 제거.
+- v2.24: 엑셀 임포트 샘플 템플릿(xlsx) 다운로드 API/버튼 추가.
+- v2.23: Text2SQL 스키마 엑셀 임포트 — 헤더 퍼지 매핑, preview/confirm 2단계, 중복 skip, 임베딩 자동 생성.
+- v2.22: 지식 공백(no_knowledge) 대시보드 시각화 — 카드 클릭 → 질문 목록 → 등록 폼 팝업 흐름.
+- v2.21: 런타임 안정성 버그 3건 수정(namespace FK 오류, 요약 파싱 오류, null byte ingestion 실패).
+- v2.20: EUC-KR 인코딩 지원(CSV/MD/TXT), PDF 리소스 누수 수정.
+- v2.19: CrossEncoder 리랭커, 지식 신선도 Decay 옵션, 지식 갭(no_knowledge) 자동 감지.
+- v2.18: 안정성 버그 수정 배치(URL preview, HTML 파싱, 청킹, 캐시 키 충돌 등).
+- v2.17: DevX LLM OAuth2 전환(사용자별 자격증명 Fernet 암호화) + Confluence BFS 일괄 등록.
+- v2.16: 어드민 테이블 텍스트/벡터 검색 + 체크박스 다건 삭제.
+- v2.15: Teams 메시지 수집(OpsNavHelper.exe 기반 토큰 캡처) → 지식베이스 등록.
+- v2.14: ChunkReviewModal, LLM Analyzer 자동 청킹, 레거시 Streamlit 삭제.
+- v2.13: URL/Confluence 인제스천(httpx+BeautifulSoup, 등록 전 확인 모달).
+- v2.12: 지식 인제스천 고도화 — 텍스트 분할, 파일 업로드, 자동 태깅/Q&A 생성.
+- v2.9~v2.11: Text2SQL 고도화 — Oracle 지원 + Dialect 패턴 리팩터링, 스키마 스캔 diff 개선, `ops_prompt` 에이전트별 분리.
+- v2.5~v2.8: Text2SQL 에이전트 도입(7단계 파이프라인) + ERD + MCP 도구, `domain/`→`service/` 구조 재편.
+- v2.0~v2.4: 초기 구조 — DDD, JWT 인증, AgentRegistry 패턴, Semantic Cache.
 
 ---
 
