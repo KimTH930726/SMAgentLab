@@ -293,7 +293,7 @@ async def import_text_split(body: _TextSplitBody, user: dict = Depends(get_curre
     result = await service.bulk_create_knowledge(
         namespace=body.namespace,
         items=items,
-        source_file=None,
+        source_file="텍스트 직접입력",
         source_type="paste_split",
         created_by_part=user["part"],
         created_by_user_id=user["id"],
@@ -1068,3 +1068,21 @@ async def get_ingestion_jobs(
     user: dict = Depends(get_current_user),
 ):
     return await service.list_ingestion_jobs(namespace)
+
+
+@router.get("/ingestion-jobs/{job_id}")
+async def get_ingestion_job_status(job_id: int, user: dict = Depends(get_current_user)):
+    """인제스천 작업 진행률 조회 (폴링용)."""
+    job = await service.get_ingestion_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
+    return job
+
+
+@router.post("/ingestion-jobs/{job_id}/cancel")
+async def cancel_ingestion_job_endpoint(job_id: int, user: dict = Depends(get_current_user)):
+    """진행 중인 인제스천 작업 중지 요청 — 다음 배치 경계에서 중단 + 이미 등록된 데이터 롤백."""
+    job = await service.cancel_ingestion_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="진행 중인 작업이 아니거나 존재하지 않습니다.")
+    return job

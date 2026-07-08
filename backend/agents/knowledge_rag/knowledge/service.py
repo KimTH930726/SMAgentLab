@@ -1,10 +1,14 @@
 """지식 베이스, 용어집 CRUD 서비스."""
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
+
+logger = logging.getLogger(__name__)
 
 _KNOWLEDGE_COLS = """k.id, n.name AS namespace, k.container_name, k.target_tables,
     k.content, k.query_template, k.base_weight, k.category,
@@ -359,6 +363,10 @@ async def get_glossary_namespace(glossary_id: int) -> Optional[str]:
 
 # ─── 벌크 등록 (Ingestion) ──────────────────────────────────────────────────
 
+_INGEST_BATCH_SIZE = 50
+_EMBEDDING_MODEL_NAME = "paraphrase-multilingual-mpnet-base-v2"
+
+
 async def bulk_create_knowledge(
     namespace: str,
     items: list[dict],
@@ -367,14 +375,18 @@ async def bulk_create_knowledge(
     source_type: str = "manual",
     created_by_part: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
+    background: bool = True,
 ) -> dict:
-    """여러 지식을 배치 임베딩으로 한번에 등록.
+    """여러 지식을 배치 단위로 등록 — 기본적으로 백그라운드에서 실행.
+
+    작업(rag_ingestion_job) 행을 먼저 만들고 job_id를 즉시 반환한다.
+    실제 임베딩/INSERT는 백그라운드 태스크가 _INGEST_BATCH_SIZE개씩 나눠 처리하며,
+    배치마다 created_chunks를 갱신(진행률)하고 cancel_requested 플래그를 확인한다.
 
     Returns:
-        {"created": int, "job_id": int | None}
+        {"created": 0, "job_id": int, "status": "processing"} (background=True, 기본값)
+        {"created": int, "job_id": int, "status": "completed"|"failed"|"cancelled"} (background=False)
     """
-    import json as _json
-
     for item in items:
         item["category"] = _require_category(item.get("category"))
 
@@ -383,72 +395,132 @@ async def bulk_create_knowledge(
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
 
-    # 인제스천 작업 생성
-    job_id = None
-    if source_file:
-        async with get_conn() as conn:
-            job_id = await conn.fetchval("""
-                INSERT INTO rag_ingestion_job
-                    (namespace_id, source_file, source_type, status, total_chunks,
-                     embedding_model, created_by_user_id)
-                VALUES ($1, $2, $3, 'processing', $4, $5, $6) RETURNING id
-            """, ns_id, source_file, source_type, len(items),
-                "paraphrase-multilingual-mpnet-base-v2", created_by_user_id)
+    async with get_conn() as conn:
+        job_id = await conn.fetchval("""
+            INSERT INTO rag_ingestion_job
+                (namespace_id, source_file, source_type, status, total_chunks,
+                 embedding_model, created_by_user_id)
+            VALUES ($1, $2, $3, 'processing', $4, $5, $6) RETURNING id
+        """, ns_id, source_file, source_type, len(items),
+            _EMBEDDING_MODEL_NAME, created_by_user_id)
 
-    # 배치 임베딩
-    texts = [item["content"] for item in items]
-    embeddings = await embedding_service.embed_batch(texts)
+    coro = _run_bulk_ingestion(
+        job_id, ns_id, items,
+        source_file=source_file, source_type=source_type,
+        created_by_part=created_by_part, created_by_user_id=created_by_user_id,
+    )
+    if background:
+        asyncio.create_task(coro)
+        return {"created": 0, "job_id": job_id, "status": "processing"}
+    return await coro
 
-    # 벌크 INSERT
+
+async def _run_bulk_ingestion(
+    job_id: int,
+    ns_id: int,
+    items: list[dict],
+    *,
+    source_file: Optional[str],
+    source_type: str,
+    created_by_part: Optional[str],
+    created_by_user_id: Optional[int],
+) -> dict:
+    """배치 단위 임베딩+INSERT. 배치마다 진행률 갱신 + 취소 요청 확인."""
     created = 0
     try:
-        async with get_conn() as conn:
-            for i, (item, emb) in enumerate(zip(items, embeddings)):
-                # PDF/XLSX 추출 텍스트에 null byte(\x00)가 포함되면 PostgreSQL이 거부함 → 제거
-                content = item["content"].replace("\x00", "")
-                await conn.execute("""
-                    INSERT INTO rag_knowledge
-                        (namespace_id, container_name, target_tables, content,
-                         query_template, embedding, base_weight, category,
-                         source_file, source_chunk_idx, source_type,
-                         created_by_part, created_by_user_id)
-                    VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13)
-                """,
-                    ns_id,
-                    item.get("container_name"),
-                    item.get("target_tables"),
-                    content,
-                    item.get("query_template"),
-                    str(emb),
-                    item.get("base_weight", 1.0),
-                    item.get("category"),
-                    source_file,
-                    i,
-                    source_type,
-                    created_by_part,
-                    created_by_user_id,
-                )
-                created += 1
-    except Exception:
-        if job_id:
-            async with get_conn() as conn:
-                await conn.execute("""
-                    UPDATE rag_ingestion_job
-                    SET status = 'failed', created_chunks = $1, completed_at = NOW()
-                    WHERE id = $2
-                """, created, job_id)
-        raise
+        for start in range(0, len(items), _INGEST_BATCH_SIZE):
+            batch = items[start:start + _INGEST_BATCH_SIZE]
+            texts = [it["content"] for it in batch]
+            embeddings = await embedding_service.embed_batch(texts)
 
-    # 작업 완료 처리
-    if job_id:
+            async with get_conn() as conn:
+                for offset, (item, emb) in enumerate(zip(batch, embeddings)):
+                    # PDF/XLSX 추출 텍스트에 null byte(\x00)가 포함되면 PostgreSQL이 거부함 → 제거
+                    content = item["content"].replace("\x00", "")
+                    await conn.execute("""
+                        INSERT INTO rag_knowledge
+                            (namespace_id, container_name, target_tables, content,
+                             query_template, embedding, base_weight, category,
+                             source_file, source_chunk_idx, source_type,
+                             created_by_part, created_by_user_id, ingestion_job_id)
+                        VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13, $14)
+                    """,
+                        ns_id,
+                        item.get("container_name"),
+                        item.get("target_tables"),
+                        content,
+                        item.get("query_template"),
+                        str(emb),
+                        item.get("base_weight", 1.0),
+                        item.get("category"),
+                        source_file,
+                        start + offset,
+                        source_type,
+                        created_by_part,
+                        created_by_user_id,
+                        job_id,
+                    )
+                    created += 1
+
+            async with get_conn() as conn:
+                cancel_requested = await conn.fetchval("""
+                    UPDATE rag_ingestion_job SET created_chunks = $1
+                    WHERE id = $2 RETURNING cancel_requested
+                """, created, job_id)
+
+            if cancel_requested:
+                async with get_conn() as conn:
+                    await conn.execute("DELETE FROM rag_knowledge WHERE ingestion_job_id = $1", job_id)
+                    await conn.execute("""
+                        UPDATE rag_ingestion_job
+                        SET status = 'cancelled', created_chunks = 0, completed_at = NOW()
+                        WHERE id = $1
+                    """, job_id)
+                return {"created": 0, "job_id": job_id, "status": "cancelled"}
+    except Exception as e:
+        logger.exception("인제스천 작업 실패 (job_id=%s)", job_id)
         async with get_conn() as conn:
             await conn.execute("""
                 UPDATE rag_ingestion_job
-                SET status = 'completed', created_chunks = $1, completed_at = NOW()
-                WHERE id = $2
-            """, created, job_id)
+                SET status = 'failed', created_chunks = $1, error_message = $2, completed_at = NOW()
+                WHERE id = $3
+            """, created, str(e)[:2000], job_id)
+        return {"created": created, "job_id": job_id, "status": "failed"}
 
-    return {"created": created, "job_id": job_id}
+    async with get_conn() as conn:
+        await conn.execute("""
+            UPDATE rag_ingestion_job
+            SET status = 'completed', created_chunks = $1, completed_at = NOW()
+            WHERE id = $2
+        """, created, job_id)
+
+    return {"created": created, "job_id": job_id, "status": "completed"}
+
+
+async def get_ingestion_job(job_id: int) -> Optional[dict]:
+    """인제스천 작업 단건 상태 조회 (진행률 폴링용)."""
+    async with get_conn() as conn:
+        row = await conn.fetchrow("""
+            SELECT id, namespace_id, source_file, source_type, status,
+                   total_chunks, created_chunks, cancel_requested,
+                   error_message, created_at::text, completed_at::text
+            FROM rag_ingestion_job WHERE id = $1
+        """, job_id)
+    return dict(row) if row else None
+
+
+async def cancel_ingestion_job(job_id: int) -> Optional[dict]:
+    """진행 중인 인제스천 작업에 취소 요청 플래그를 설정.
+
+    실제 중단·롤백은 백그라운드 태스크가 다음 배치 경계에서 수행한다.
+    """
+    async with get_conn() as conn:
+        row = await conn.fetchrow("""
+            UPDATE rag_ingestion_job SET cancel_requested = TRUE
+            WHERE id = $1 AND status = 'processing'
+            RETURNING id, status
+        """, job_id)
+    return dict(row) if row else None
 
 
 async def list_ingestion_jobs(namespace: str) -> list[dict]:
