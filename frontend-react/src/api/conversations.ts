@@ -1,9 +1,11 @@
 import { apiFetch } from './client';
 import type { Conversation, ConversationMessage } from '../types';
 
-export async function getConversations(namespace: string): Promise<Conversation[]> {
+export async function getConversations(namespace: string, agentType: string = 'knowledge_rag'): Promise<Conversation[]> {
   try {
-    return await apiFetch<Conversation[]>(`/conversations?namespace=${encodeURIComponent(namespace)}`);
+    return await apiFetch<Conversation[]>(
+      `/conversations?namespace=${encodeURIComponent(namespace)}&agent_type=${encodeURIComponent(agentType)}`,
+    );
   } catch (err) {
     console.error('getConversations error:', err);
     throw err;

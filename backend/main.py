@@ -242,6 +242,18 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("ALTER TABLE IF EXISTS ops_mcp_tool ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE IF EXISTS sql_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'")
 
+    # ── ops_conversation.agent_type 소급 보정 ───────────────────────
+    # 대화방 생성 코드가 이 컬럼을 실제로 세팅하지 않아 전부 DB 기본값
+    # ('knowledge_rag')으로 남아있었음. text2sql 에이전트가 만든 메시지만
+    # metadata를 채우므로(다른 에이전트는 절대 채우지 않음, service/chat/helpers.py
+    # update_assistant_message 참고) 이를 근거로 역보정한다.
+    await conn.execute("""
+        UPDATE ops_conversation SET agent_type = 'text2sql'
+        WHERE agent_type != 'text2sql' AND id IN (
+            SELECT DISTINCT conversation_id FROM ops_message WHERE metadata IS NOT NULL
+        )
+    """)
+
     # ── query_log answer 역매칭 ────────────────────────────────────
     await conn.execute("""
         UPDATE ops_query_log ql

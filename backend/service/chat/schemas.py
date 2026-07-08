@@ -44,6 +44,7 @@ class ChatResponse(BaseModel):
 class ConversationCreate(BaseModel):
     namespace: str
     title: str = ""
+    agent_type: str = "knowledge_rag"
 
 
 class ConversationResponse(BaseModel):
@@ -51,6 +52,7 @@ class ConversationResponse(BaseModel):
     namespace: str
     title: str
     trimmed: bool = False
+    agent_type: str = "knowledge_rag"
     created_at: str
 
 

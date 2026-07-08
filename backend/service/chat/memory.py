@@ -1,6 +1,7 @@
 """대화 메모리 관리 — ConversationSummaryBuffer + Semantic Recall 패턴."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -14,6 +15,62 @@ SUMMARY_TRIGGER = 4
 RECENT_EXCHANGES = 2
 MAX_RECALL = 2
 RECALL_THRESHOLD = 0.45
+MULTITURN_RELEVANCE_THRESHOLD = 0.35
+
+
+async def augment_query_for_search(
+    conversation_id: int, query: str, *, exclude_message_id: Optional[int] = None,
+) -> tuple[str, list[float]]:
+    """직전 턴이 현재 질문과 실제로 관련 있을 때만 검색 질의에 결합한다.
+
+    무조건 직전 Q+A를 붙이면 대화 도중 주제가 바뀐 질문에서도 이전 맥락이
+    임베딩을 오염시켜 엉뚱한 문서가 검색되는 문제가 있었음 — 결합 전에
+    직전 맥락과 현재 질문의 임베딩 유사도를 확인해 관련 있을 때만 결합한다.
+
+    Returns:
+        (search_question, query_vec) — query_vec은 query 단독 임베딩(재사용 가능)
+    """
+    async with get_conn() as conn:
+        if exclude_message_id is not None:
+            rows = await conn.fetch(
+                """
+                SELECT role, content FROM (
+                    SELECT role, content, created_at, id FROM ops_message
+                    WHERE conversation_id = $1 AND id < $2
+                    ORDER BY created_at DESC, id DESC LIMIT 2
+                ) sub ORDER BY sub.created_at ASC, sub.id ASC
+                """,
+                conversation_id, exclude_message_id,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT role, content FROM (
+                    SELECT role, content, created_at, id FROM ops_message
+                    WHERE conversation_id = $1
+                    ORDER BY created_at DESC, id DESC LIMIT 2
+                ) sub ORDER BY sub.created_at ASC, sub.id ASC
+                """,
+                conversation_id,
+            )
+
+    prev_context = " ".join(r["content"][:80] for r in rows if r["content"]) if rows else ""
+    if not prev_context:
+        return query, await embedding_service.embed(query)
+
+    query_vec, prev_vec = await asyncio.gather(
+        embedding_service.embed(query),
+        embedding_service.embed(prev_context),
+    )
+    similarity = sum(a * b for a, b in zip(query_vec, prev_vec))
+    if similarity < MULTITURN_RELEVANCE_THRESHOLD:
+        logger.info(
+            "멀티턴 검색 보강 스킵 (유사도 %.3f < %.2f): '%s'",
+            similarity, MULTITURN_RELEVANCE_THRESHOLD, query,
+        )
+        return query, query_vec
+
+    return f"{prev_context} {query}", query_vec
 
 
 async def load_recent_history(
