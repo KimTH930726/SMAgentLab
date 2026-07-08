@@ -598,13 +598,16 @@ interface ReviewChunk {
   selected: boolean;
 }
 
-function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName }: {
+function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, category, categoryNames, onCategoryChange }: {
   isOpen: boolean;
   onClose: () => void;
   chunks: ReviewChunk[];
   onConfirm: (selected: ReviewChunk[]) => Promise<void>;
   loading: boolean;
   sourceName: string;
+  category: string;
+  categoryNames: string[];
+  onCategoryChange: (v: string) => void;
 }) {
   const [rows, setRows] = useState<ReviewChunk[]>([]);
   const [expandedIdx, setExpandedIdx] = useState<Set<number>>(new Set());
@@ -628,6 +631,8 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`청크 검토 — ${sourceName}`} maxWidth="max-w-3xl">
       <div className="space-y-3">
+        <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={onCategoryChange} />
+
         {/* 전체 선택 / 카운터 */}
         <div className="flex items-center justify-between pb-2 border-b border-slate-700/60">
           <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none">
@@ -689,7 +694,7 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
 
         <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={loading}>취소</Button>
-          <Button variant="primary" size="sm" loading={loading} disabled={selectedCount === 0}
+          <Button variant="primary" size="sm" loading={loading} disabled={selectedCount === 0 || !category || categoryNames.length === 0}
             onClick={() => onConfirm(rows.filter(r => r.selected))}>
             <CheckCircle className="w-3.5 h-3.5" />선택 항목 등록 ({selectedCount}건)
           </Button>
@@ -984,6 +989,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
         onConfirm={handleConfirm}
         loading={loading}
         sourceName={file?.name ?? ''}
+        category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
       />
     </div>
   );
@@ -1066,6 +1072,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
         onConfirm={handleConfirm}
         loading={loading}
         sourceName="텍스트 직접입력"
+        category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
       />
     </div>
   );
@@ -1385,6 +1392,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         onConfirm={handleConfirm}
         loading={loading}
         sourceName={sourceMeta?.name ?? url}
+        category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
       />
 
       {/* Confluence 하위 페이지 트리 선택 모달 */}
