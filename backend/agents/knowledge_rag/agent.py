@@ -75,29 +75,14 @@ class KnowledgeRagAgent(AgentBase):
         try:
             yield {"type": "status", "step": "embedding", "message": "질문 임베딩 생성 중..."}
 
-            # ── 멀티턴 검색 보강: 직전 Q+A 결합 ──
-            search_question = query
-            async with get_conn() as conn:
-                prev_pair = await conn.fetch(
-                    """
-                    SELECT role, content FROM (
-                        SELECT role, content, created_at, id FROM ops_message
-                        WHERE conversation_id = $1 AND id < $2
-                        ORDER BY created_at DESC, id DESC LIMIT 2
-                    ) sub ORDER BY sub.created_at ASC, sub.id ASC
-                    """,
-                    conversation_id, msg_id,
-                )
-            if prev_pair:
-                prev_context = " ".join(r["content"][:80] for r in prev_pair if r["content"])
-                search_question = f"{prev_context} {query}"
-                logger.info("멀티턴 검색 보강: '%s' → '%s'", query, search_question)
-
-            # 두 임베딩을 병렬로 생성 (RAG 검색용 + 캐시 정규화용)
-            query_vec, cache_vec = await asyncio.gather(
-                embedding_service.embed(search_question),
-                embedding_service.embed(sem_cache.normalize_query(search_question)),
+            # ── 멀티턴 검색 보강: 직전 턴과 관련 있을 때만 결합 ──
+            # user_msg_id(현재 질문) 이전 메시지만 봐야 함 — msg_id(답변 placeholder)로
+            # 필터링하면 라우터가 미리 저장해둔 현재 질문까지 "직전 맥락"으로 잘못 포함됨
+            user_msg_id = context.get("user_msg_id", msg_id)
+            search_question, query_vec = await memory.augment_query_for_search(
+                conversation_id, query, exclude_message_id=user_msg_id,
             )
+            cache_vec = await embedding_service.embed(sem_cache.normalize_query(search_question))
 
             # ── Semantic Cache 조회 ──
             cached = await sem_cache.get_cached(namespace, cache_vec)

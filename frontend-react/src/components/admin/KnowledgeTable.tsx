@@ -136,6 +136,7 @@ export function KnowledgeTable() {
     queryFn: () => getIngestionJobs(selectedNs),
     enabled: !!selectedNs,
     staleTime: 10_000,
+    refetchInterval: (query) => (query.state.data?.some((j) => j.status === 'processing') ? 2000 : false),
   });
 
   const { data: items = [], isLoading, error } = useQuery({

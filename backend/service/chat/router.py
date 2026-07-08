@@ -96,33 +96,43 @@ def _resolve_user_credentials(user: dict) -> Optional[dict]:
 
 async def _get_or_create_conversation(
     namespace: str, question: str, conversation_id: Optional[int],
-    user_id: int,
+    user_id: int, agent_type: str,
 ) -> tuple[int, Optional[str]]:
-    """(conv_id, inhouse_conv_id) 반환. inhouse_conv_id는 사내 LLM 측 대화 ID."""
+    """(conv_id, inhouse_conv_id) 반환. inhouse_conv_id는 사내 LLM 측 대화 ID.
+
+    같은 대화방을 다른 에이전트로 이어서 쓰면 검색 맥락·결과 렌더링이 섞이므로,
+    기존 대화방의 agent_type이 요청과 다르면 거부한다.
+    """
     async with get_conn() as conn:
         if conversation_id:
             row = await conn.fetchrow(
-                "SELECT id, inhouse_conv_id FROM ops_conversation WHERE id = $1 AND user_id = $2",
+                "SELECT id, inhouse_conv_id, agent_type FROM ops_conversation WHERE id = $1 AND user_id = $2",
                 conversation_id, user_id,
             )
             if row:
+                if row["agent_type"] != agent_type:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"이 대화방은 '{row['agent_type']}' 에이전트로 시작되었습니다. 새 대화를 시작해주세요.",
+                    )
                 return row["id"], row["inhouse_conv_id"]
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise HTTPException(status_code=404, detail=f"namespace '{namespace}'를 찾을 수 없습니다.")
         row = await conn.fetchrow(
-            "INSERT INTO ops_conversation (namespace_id, title, user_id) VALUES ($1, $2, $3) RETURNING id, inhouse_conv_id",
-            ns_id, question[:200], user_id,
+            "INSERT INTO ops_conversation (namespace_id, title, user_id, agent_type) VALUES ($1, $2, $3, $4) RETURNING id, inhouse_conv_id",
+            ns_id, question[:200], user_id, agent_type,
         )
         return row["id"], row["inhouse_conv_id"]
 
 
-async def _save_user_message(conversation_id: int, question: str) -> None:
+async def _save_user_message(conversation_id: int, question: str) -> int:
     async with get_conn() as conn:
-        await conn.execute(
-            "INSERT INTO ops_message (conversation_id, role, content) VALUES ($1, $2, $3)",
+        row = await conn.fetchrow(
+            "INSERT INTO ops_message (conversation_id, role, content) VALUES ($1, $2, $3) RETURNING id",
             conversation_id, "user", question,
         )
+    return row["id"]
 
 
 async def _save_assistant_message(
@@ -182,26 +192,10 @@ async def _safe_generate(
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     user_creds = _resolve_user_credentials(user)
-    conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"])
+    conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"], req.agent_type)
 
-    # ── 멀티턴 검색 보강: 직전 Q+A를 결합하여 검색 맥락 확보 ──
-    search_question = req.question
-    async with get_conn() as conn:
-        prev_pair = await conn.fetch(
-            """
-            SELECT role, content FROM (
-                SELECT role, content, created_at, id FROM ops_message
-                WHERE conversation_id = $1
-                ORDER BY created_at DESC, id DESC LIMIT 2
-            ) sub ORDER BY sub.created_at ASC, sub.id ASC
-            """,
-            conv_id,
-        )
-    if prev_pair:
-        prev_context = " ".join(r["content"][:80] for r in prev_pair if r["content"])
-        search_question = f"{prev_context} {req.question}"
-
-    query_vec = await embedding_service.embed(search_question)
+    # ── 멀티턴 검색 보강: 직전 턴과 관련 있을 때만 결합 ──
+    search_question, query_vec = await memory.augment_query_for_search(conv_id, req.question)
 
     pipe, history = await asyncio.gather(
         _run_pipeline(req.namespace, search_question, query_vec, req.w_vector, req.w_keyword, req.top_k, category=req.category),
@@ -241,10 +235,10 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 @router.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
     user_creds = _resolve_user_credentials(user)
-    conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"])
+    conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"], req.agent_type)
     await _cleanup_ghost_messages(conv_id)
 
-    await _save_user_message(conv_id, req.question)
+    user_msg_id = await _save_user_message(conv_id, req.question)
     msg_id = await _pre_create_assistant_message(conv_id, None, [])
 
     # ── AgentRegistry를 통한 위임 ──
@@ -252,6 +246,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
     agent_context = {
         "namespace": req.namespace,
         "msg_id": msg_id,
+        "user_msg_id": user_msg_id,
         "w_vector": req.w_vector,
         "w_keyword": req.w_keyword,
         "top_k": req.top_k,
@@ -372,20 +367,23 @@ async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
 # ── Conversations CRUD ───────────────────────────────────────────────────────
 
 @router.get("/api/conversations", response_model=list[ConversationResponse])
-async def list_conversations(namespace: str = Query(...), user: dict = Depends(get_current_user)):
+async def list_conversations(
+    namespace: str = Query(...), agent_type: str = Query("knowledge_rag"),
+    user: dict = Depends(get_current_user),
+):
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             return []
         rows = await conn.fetch(
             """
-            SELECT c.id, n.name AS namespace, c.title, c.trimmed, c.created_at::text
+            SELECT c.id, n.name AS namespace, c.title, c.trimmed, c.agent_type, c.created_at::text
             FROM ops_conversation c
             JOIN ops_namespace n ON c.namespace_id = n.id
-            WHERE c.namespace_id = $1 AND c.user_id = $2
+            WHERE c.namespace_id = $1 AND c.user_id = $2 AND c.agent_type = $3
             ORDER BY c.created_at DESC LIMIT 50
             """,
-            ns_id, user["id"],
+            ns_id, user["id"], agent_type,
         )
     return [ConversationResponse(**dict(r)) for r in rows]
 
@@ -398,10 +396,10 @@ async def create_conversation(body: ConversationCreate, user: dict = Depends(get
             raise HTTPException(status_code=404, detail=f"namespace '{body.namespace}'를 찾을 수 없습니다.")
         row = await conn.fetchrow(
             """
-            INSERT INTO ops_conversation (namespace_id, title, user_id) VALUES ($1, $2, $3)
-            RETURNING id, $4::text AS namespace, title, trimmed, created_at::text
+            INSERT INTO ops_conversation (namespace_id, title, user_id, agent_type) VALUES ($1, $2, $3, $4)
+            RETURNING id, $5::text AS namespace, title, trimmed, agent_type, created_at::text
             """,
-            ns_id, body.title[:200] if body.title else "", user["id"], body.namespace,
+            ns_id, body.title[:200] if body.title else "", user["id"], body.agent_type, body.namespace,
         )
     return ConversationResponse(**dict(row))
 

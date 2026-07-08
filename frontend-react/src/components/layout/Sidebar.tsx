@@ -135,14 +135,14 @@ export function Sidebar() {
     if (!namespace || !isChatPage) return;
     setLoadingConvs(true);
     try {
-      const data = await getConversations(namespace);
+      const data = await getConversations(namespace, selectedAgent ?? 'knowledge_rag');
       setConversations(data);
     } catch (err) {
       console.error(err);
     } finally {
       setLoadingConvs(false);
     }
-  }, [namespace, isChatPage, setConversations]);
+  }, [namespace, isChatPage, selectedAgent, setConversations]);
 
   // Refresh on namespace or page change
   useEffect(() => {
