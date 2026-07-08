@@ -143,3 +143,31 @@ Authorization: Bearer {JWT}   ← blossomai 로그인 세션 토큰
 | Q9 | blossomai 담당팀이 **이 API의 배치성/반복 자동 호출을 허용**하는가 (레이트리밋, 사용 승인 등) | 우리가 소유/관리하지 않는 사내 타 서비스에 대한 의존성 — 별도 협의 필요 |
 
 **결론**: Q6~Q9가 우호적으로 확인되면, 이메일 크롤링 자체 구축 없이 "blossomai 호출 → 결과를 우리 RAG+LLM 분류 파이프라인에 입력"하는 훨씬 가벼운 아키텍처로 Phase 1을 다시 그릴 수 있음. 확인 전까지는 §2·§4의 자체 구축 경로(IMAP/Graph API)를 기본안으로 유지.
+
+### 7.1 실제 응답 샘플 분석 (2026-07-08)
+
+실제 응답 body를 확인함. 주요 구조:
+
+```
+data.emails.recent_emails[]  — 이메일 건별 배열: subject, preview, from, from_email,
+                                received_date, is_read, importance, has_attachments
+data.calendar.*_schedule[]   — 일정 건별 배열: subject, start/end_datetime, location,
+                                organizer, attendees_count, teams_link
+data.ai_summary.summary_text — blossomai 자체 LLM이 생성한 마크다운 브리핑
+                                (긴급 항목 / 오늘 일정 / 할 일 / 답장대기 / 업무부하 제안)
+consent_info: {has_consent, user_id, service_type: "work_assistant"}
+```
+
+**Q6 (건별 구조 여부) — 부분 확인됨(✅ 건별 데이터 있음, ⚠️ 단서 있음)**
+- `recent_emails[]`는 이메일 건별로 나뉘어 있어 원하는 그레인은 확보됨.
+- 다만 본문이 `preview`(짧은 미리보기 스니펫)만 있고 전체 본문 필드가 안 보임. 우리 목적(원인 분석 + 해결 방안 도출)엔 본문 전체가 필요할 가능성이 높음 — **`preview`의 실제 길이/이 API가 전체 본문도 주는 옵션이 있는지 확인 필요** (미확인 상태로 남김).
+
+**Q8 (공용 메일함 조회 가능 여부) — 부정적 신호**
+- `consent_info.has_consent`가 응답에 포함된 것으로 보아, 이 서비스는 **개인이 자기 메일함 접근에 개별 동의(consent)한 구조**로 추정됨. 원래 구상한 "장애접수용 공용 메일함(VOC함)"을 이 API로 바로 조회할 수 있을지는 불확실 — 별도 계정으로 공용함을 blossomai에 등록·동의시키는 절차가 필요할 가능성. **미해결로 남겨두고 blossomai 담당팀 확인 필요**.
+
+**부수 발견 — 기능 포지셔닝 재정의**
+`ai_summary`가 이미 WhaTap(모니터링 툴) 경고 메일을 읽고 "MySQL 에이전트 비활성 — 확인 및 복구 필요" 같은 액션 아이템을 생성하고 있음. 단, 이는 범용 LLM 요약이지 **우리 내부 지식(runbook)에 근거한 구체적 해결 방안은 아님**. 즉:
+- blossomai = "무엇을 봐야 하는지" 감지·요약 (이미 있음, 잘 함)
+- 우리 기능 = 그 원본 이메일을 받아 **우리 RAG로 "왜 그런지 + 구체적으로 어떻게 고치는지"를 붙이는 것** (아직 없는 부분, 우리가 채울 차별점)
+
+이 재정의에 따라 이메일 자체를 처음부터 크롤링하기보다, **blossomai 응답을 입력으로 받아 우리 RAG+LLM을 얹는 방향**이 유력한 대안으로 부상함. 단, 본문 전체 확보 여부(Q6 세부)와 공용함 접근 여부(Q8)가 확정되기 전까지는 §2·§4의 자체 구축 경로를 기본안으로 유지.
