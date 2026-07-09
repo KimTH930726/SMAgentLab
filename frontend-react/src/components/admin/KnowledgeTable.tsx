@@ -521,6 +521,17 @@ export function KnowledgeTable() {
               </Button>
             </div>
           )}
+          {canModifyNs ? (
+            <RequiredCategoryField categoryNames={categoryNames} value={editForm.category}
+              onChange={(v) => setEditForm((f) => ({ ...f, category: v }))} />
+          ) : categoryNames.length > 0 && (
+            <div>
+              <label className="text-xs font-medium text-slate-400">업무구분</label>
+              <div className="mt-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
+                {editForm.category || <span className="text-slate-500">미분류</span>}
+              </div>
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">컨테이너명</label>
             <TagInput tags={editForm.container_names} onChange={(tags) => setEditForm((f) => ({ ...f, container_names: tags }))}
@@ -544,17 +555,6 @@ export function KnowledgeTable() {
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[100px] read-only:border-slate-700"
               placeholder="SELECT ..." />
           </div>
-          {canModifyNs ? (
-            <RequiredCategoryField categoryNames={categoryNames} value={editForm.category}
-              onChange={(v) => setEditForm((f) => ({ ...f, category: v }))} />
-          ) : categoryNames.length > 0 && (
-            <div>
-              <label className="text-xs font-medium text-slate-400">업무구분</label>
-              <div className="mt-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
-                {editForm.category || <span className="text-slate-500">미분류</span>}
-              </div>
-            </div>
-          )}
           {canModifyNs && (
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1">
@@ -1125,6 +1125,8 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-4">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><Upload className="w-4 h-4 text-indigo-400" />파일 업로드</h3>
 
+      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
+
       <div
         className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
           isDragging
@@ -1163,8 +1165,6 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
           </span>
         </div>
       </div>
-
-      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
 
       {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
       {error && <p className="text-xs text-rose-400">{error}</p>}
@@ -1234,6 +1234,8 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
     <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-4">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><FileText className="w-4 h-4 text-indigo-400" />대량 텍스트 등록</h3>
 
+      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
+
       <textarea rows={10} value={text} onChange={(e) => { setText(e.target.value); setDetectedStrategy(null); setDone(''); }}
         placeholder={"여기에 긴 텍스트를 붙여넣으세요...\n\nAI가 내용을 분석하여 최적의 분할 방식을 자동으로 결정합니다."}
         className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[200px]" />
@@ -1246,8 +1248,6 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
           </span>
         </div>
       </div>
-
-      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
 
       {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
       {error && <p className="text-xs text-rose-400">{error}</p>}
@@ -1310,6 +1310,8 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
     <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-3">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><PenLine className="w-4 h-4 text-indigo-400" />직접 입력</h3>
 
+      <RequiredCategoryField categoryNames={categoryNames} value={form.category}
+        onChange={(v) => setForm((f) => ({ ...f, category: v }))} />
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">컨테이너명 <span className="text-slate-600">(Enter 또는 쉼표로 추가)</span></label>
         <TagInput tags={form.container_names} onChange={(tags) => setForm((f) => ({ ...f, container_names: tags }))}
@@ -1331,8 +1333,6 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 resize-y"
           placeholder="SELECT ..." />
       </div>
-      <RequiredCategoryField categoryNames={categoryNames} value={form.category}
-        onChange={(v) => setForm((f) => ({ ...f, category: v }))} />
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">
           문서 우선순위: <span className={`font-medium ${form.base_weight >= 2 ? 'text-emerald-400' : form.base_weight >= 1.5 ? 'text-indigo-400' : 'text-slate-300'}`}>
@@ -1515,6 +1515,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         <Globe className="w-4 h-4 text-indigo-400" />URL / Confluence 수집
       </h3>
 
+      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
+
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">URL <span className="text-rose-400">*</span></label>
         <input
@@ -1565,8 +1567,6 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
           </label>
         </div>
       )}
-
-      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
 
       {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
       {error && <p className="text-xs text-rose-400">{error}</p>}
@@ -2079,6 +2079,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
       {/* 메타 입력 */}
       {selectedChat && selectedIds.size > 0 && (
         <div className="grid grid-cols-2 gap-3">
+          <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">문서 제목 (선택)</label>
             <input
@@ -2089,7 +2090,6 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
             />
           </div>
-          <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
         </div>
       )}
 
