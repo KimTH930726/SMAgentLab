@@ -54,7 +54,7 @@ class PipelineResult:
 async def _run_pipeline(
     namespace: str, question: str, query_vec: list[float],
     w_vector: float, w_keyword: float, top_k: int,
-    *, debug: bool = False, category: Optional[str] = None,
+    *, debug: bool = False, categories: Optional[list[str]] = None,
 ) -> PipelineResult:
     glossary_match = await retrieval.map_glossary_term(namespace, query_vec)
     mapped_term = glossary_match.term if glossary_match else None
@@ -62,7 +62,7 @@ async def _run_pipeline(
 
     fewshot_kwargs = {"min_similarity": 0.0} if debug else {}
     results, fewshots = await asyncio.gather(
-        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k, category),
+        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k, categories),
         retrieval.fetch_fewshots(namespace, query_vec, **fewshot_kwargs),
     )
 
@@ -198,7 +198,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     search_question, query_vec = await memory.augment_query_for_search(conv_id, req.question)
 
     pipe, history = await asyncio.gather(
-        _run_pipeline(req.namespace, search_question, query_vec, req.w_vector, req.w_keyword, req.top_k, category=req.category),
+        _run_pipeline(req.namespace, search_question, query_vec, req.w_vector, req.w_keyword, req.top_k, categories=req.categories),
         memory.build_context_history(conv_id, query_vec),
     )
 
@@ -252,7 +252,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
         "top_k": req.top_k,
         "user_credentials": user_creds,
         "inhouse_conv_id": inhouse_conv_id,
-        "category": req.category,
+        "categories": req.categories,
     }
     # HTTP 도구 승인 정보가 있으면 컨텍스트에 추가
     if req.approved_tool:

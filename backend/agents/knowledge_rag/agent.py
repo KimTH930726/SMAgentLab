@@ -64,7 +64,7 @@ class KnowledgeRagAgent(AgentBase):
         top_k: int = context.get("top_k", 5)
         user_credentials: Optional[dict] = context.get("user_credentials")
         inhouse_conv_id: Optional[str] = context.get("inhouse_conv_id")
-        category: Optional[str] = context.get("category")
+        categories: Optional[list[str]] = context.get("categories")
 
         full_answer = ""
         token_count = 0
@@ -110,7 +110,7 @@ class KnowledgeRagAgent(AgentBase):
             # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
             candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
             results_raw, fewshots = await asyncio.gather(
-                retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, category),
+                retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories),
                 retrieval.fetch_fewshots(namespace, query_vec),
             )
             if settings.reranker_enabled and len(results_raw) > top_k:

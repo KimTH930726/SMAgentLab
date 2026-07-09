@@ -174,14 +174,14 @@ async def _execute_http_call(tool: dict, params: dict) -> tuple[str, str | None]
 async def _build_rag_context(
     namespace: str, query: str,
     w_vector: float, w_keyword: float, top_k: int,
-    category: str | None,
+    categories: list[str] | None,
 ) -> tuple[str, list, str | None]:
     """벡터DB 검색. 반환: (context_str, results, mapped_term). 실패 시 ("", [], None)."""
     try:
         query_vec = await embedding_service.embed(query)
         glossary_match, results = await asyncio.gather(
             retrieval.map_glossary_term(namespace, query_vec),
-            retrieval.search_knowledge(namespace, query_vec, query, w_vector, w_keyword, top_k, category),
+            retrieval.search_knowledge(namespace, query_vec, query, w_vector, w_keyword, top_k, categories),
         )
         mapped_term = glossary_match.term if glossary_match else None
         return retrieval.build_context(results), results, mapped_term
@@ -252,7 +252,7 @@ class HttpToolAgent(AgentBase):
         w_vector: float = context.get("w_vector", 0.7)
         w_keyword: float = context.get("w_keyword", 0.3)
         top_k: int = context.get("top_k", 5)
-        category: str | None = context.get("category")
+        categories: list[str] | None = context.get("categories")
 
         full_answer = ""
 
@@ -283,7 +283,7 @@ class HttpToolAgent(AgentBase):
                 # HTTP 호출 + RAG 검색 병렬 실행
                 (response_data, http_error), (rag_context, rag_results, mapped_term) = await asyncio.gather(
                     _execute_http_call(tool, params),
-                    _build_rag_context(namespace, query, w_vector, w_keyword, top_k, category),
+                    _build_rag_context(namespace, query, w_vector, w_keyword, top_k, categories),
                 )
 
                 # RAG 결과를 메시지 DB에 저장 + meta SSE 이벤트 (검색 결과 UI 표시)

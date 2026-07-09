@@ -48,8 +48,10 @@ interface AppState {
   initSearchConfig: (cfg: SearchConfig) => void;
   chatRefreshKey: number;
   bumpChatRefresh: () => void;
-  category: string;
-  setCategory: (cat: string) => void;
+  categories: string[];
+  setCategories: (cats: string[]) => void;
+  autoDetectCategory: boolean;
+  setAutoDetectCategory: (v: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -58,7 +60,7 @@ export const useAppStore = create<AppState>((set) => ({
   mcpEnabled: false,
   setMcpEnabled: (mcpEnabled) => set({ mcpEnabled }),
   namespace: '',
-  setNamespace: (namespace) => set({ namespace, conversationId: null, conversations: [], category: '' }),
+  setNamespace: (namespace) => set({ namespace, conversationId: null, conversations: [], categories: [], autoDetectCategory: false }),
   conversationId: null,
   setConversationId: (conversationId) =>
     set((state) => (state.conversationId === conversationId ? state : { conversationId })),
@@ -80,6 +82,8 @@ export const useAppStore = create<AppState>((set) => ({
   },
   chatRefreshKey: 0,
   bumpChatRefresh: () => set((state) => ({ chatRefreshKey: state.chatRefreshKey + 1 })),
-  category: '',
-  setCategory: (category) => set({ category }),
+  categories: [],
+  setCategories: (categories) => set({ categories, autoDetectCategory: false }),
+  autoDetectCategory: false,
+  setAutoDetectCategory: (autoDetectCategory) => set({ autoDetectCategory, categories: [] }),
 }));

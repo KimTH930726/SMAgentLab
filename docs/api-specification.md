@@ -408,6 +408,7 @@ Authorization: Bearer {access_token}
 | `w_keyword` | float | X | 0.3 | 키워드 검색 가중치 (0.0~1.0) |
 | `top_k` | int | X | 5 | 검색 결과 최대 개수 (1~20) |
 | `conversation_id` | int | X | null | 기존 대화 연결 시 대화 ID |
+| `categories` | string[] | X | null | 업무구분 다중 필터 — 지정 시 해당 카테고리들의 지식만 검색 (`k.category = ANY(...)`), 비우면 전체 검색 (v2.30~) |
 
 **Response** `200 OK` — `ChatResponse`
 

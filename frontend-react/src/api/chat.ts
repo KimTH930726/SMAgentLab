@@ -10,7 +10,7 @@ export function streamChat(params: ChatRequest): AsyncGenerator<SSEEvent> {
     w_keyword: params.wKeyword,
     top_k: params.topK,
     conversation_id: params.conversationId ?? null,
-    category: params.category ?? null,
+    categories: params.categories && params.categories.length > 0 ? params.categories : null,
   };
   if (params.approvedTool) {
     body.approved_tool = params.approvedTool;

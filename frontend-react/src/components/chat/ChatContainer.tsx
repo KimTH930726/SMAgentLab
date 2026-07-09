@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Square, AlertCircle, ChevronDown, ChevronUp, Wrench } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { Send, Square, AlertCircle, ChevronDown, ChevronUp, Wrench, Tag } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import {
   useStreamStore,
@@ -8,7 +9,7 @@ import {
   clearStreamState,
 } from '../../store/useStreamStore';
 import { getMessages } from '../../api/conversations';
-import { suggestCategory } from '../../api/namespaces';
+import { getCategories, suggestCategory } from '../../api/namespaces';
 import { MessageItem } from './MessageItem';
 import { ToolRequestCard } from './ToolRequestCard';
 import type { ChatMessage } from '../../types';
@@ -109,12 +110,104 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
   return converted;
 }
 
+function CategoryFilter({ namespace }: { namespace: string }) {
+  const categories = useAppStore((s) => s.categories);
+  const setCategories = useAppStore((s) => s.setCategories);
+  const autoDetectCategory = useAppStore((s) => s.autoDetectCategory);
+  const setAutoDetectCategory = useAppStore((s) => s.setAutoDetectCategory);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const { data: availableCategories = [] } = useQuery({
+    queryKey: ['categories', namespace],
+    queryFn: () => getCategories(namespace),
+    enabled: !!namespace,
+    staleTime: 0,
+  });
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  if (availableCategories.length === 0) return null;
+
+  const toggle = (name: string) => {
+    setCategories(categories.includes(name) ? categories.filter((c) => c !== name) : [...categories, name]);
+  };
+
+  const label = autoDetectCategory
+    ? '⚡ 자동 감지'
+    : categories.length === 0
+      ? '전체'
+      : categories.length === 1
+        ? categories[0]
+        : `${categories.length}개 선택`;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+          categories.length > 0 || autoDetectCategory
+            ? 'bg-indigo-900/40 text-indigo-300 border-indigo-700/50'
+            : 'bg-slate-700/50 text-slate-500 border-slate-600/50 hover:text-slate-400'
+        }`}
+        title="특정 업무구분의 지식으로만 검색합니다"
+      >
+        <Tag className="w-3.5 h-3.5" />
+        업무구분: {label}
+        <ChevronDown className="w-3 h-3" />
+      </button>
+      {open && (
+        <div className="absolute bottom-full mb-1.5 left-0 w-56 rounded-lg border border-slate-700 bg-slate-800 shadow-xl p-1.5 z-20 max-h-64 overflow-y-auto">
+          <button
+            onClick={() => { setCategories([]); setOpen(false); }}
+            className={`w-full text-left px-2 py-1.5 rounded text-xs ${
+              categories.length === 0 && !autoDetectCategory ? 'bg-indigo-600/30 text-indigo-300' : 'text-slate-300 hover:bg-slate-700/60'
+            }`}
+          >
+            전체
+          </button>
+          <button
+            onClick={() => setAutoDetectCategory(!autoDetectCategory)}
+            className={`w-full text-left px-2 py-1.5 rounded text-xs ${
+              autoDetectCategory ? 'bg-indigo-600/30 text-indigo-300' : 'text-slate-300 hover:bg-slate-700/60'
+            }`}
+          >
+            ⚡ 자동 감지 (다소 시간 걸림)
+          </button>
+          <div className="my-1 border-t border-slate-700/60" />
+          {availableCategories.map((c) => (
+            <label
+              key={c.id}
+              className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-slate-300 hover:bg-slate-700/60 cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                checked={categories.includes(c.name)}
+                onChange={() => toggle(c.name)}
+                className="rounded border-slate-600 bg-slate-900 text-indigo-500 focus:outline-none"
+              />
+              {c.name}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ChatContainer() {
   const namespace = useAppStore((s) => s.namespace);
   const conversationId = useAppStore((s) => s.conversationId);
   const setConversationId = useAppStore((s) => s.setConversationId);
   const searchConfig = useAppStore((s) => s.searchConfig);
-  const category = useAppStore((s) => s.category);
+  const categories = useAppStore((s) => s.categories);
+  const autoDetectCategory = useAppStore((s) => s.autoDetectCategory);
   const conversations = useAppStore((s) => s.conversations);
   const chatRefreshKey = useAppStore((s) => s.chatRefreshKey);
 
@@ -366,9 +459,10 @@ export function ChatContainer() {
     loadEpochRef.current++;
 
     // 자동 감지: 질문 내용 기반으로 업무구분 자동 탐지
-    let resolvedCategory: string | null = category || null;
-    if (category === '__auto__') {
-      resolvedCategory = await suggestCategory(namespace, question).catch(() => null);
+    let resolvedCategories: string[] | null = categories.length > 0 ? categories : null;
+    if (autoDetectCategory) {
+      const suggested = await suggestCategory(namespace, question).catch(() => null);
+      resolvedCategories = suggested ? [suggested] : null;
     }
 
     const startConvId = conversationId;
@@ -379,7 +473,7 @@ export function ChatContainer() {
       wKeyword: searchConfig.wKeyword,
       topK: searchConfig.topK,
       conversationId,
-      category: resolvedCategory,
+      categories: resolvedCategories,
       agentType: useHttpTool ? 'mcp_tool' : (selectedAgent ?? 'knowledge_rag'),
       onConversationCreated: (id) => {
         // Guard: if stream was already stopped/cleared, don't navigate
@@ -454,7 +548,7 @@ export function ChatContainer() {
                 wKeyword: searchConfig.wKeyword,
                 topK: searchConfig.topK,
                 conversationId,
-                category: category || null,
+                categories: categories.length > 0 ? categories : null,
                 approvedTool: { tool_id: toolId, params },
                 onConversationCreated: (id) => {
                   if (!useStreamStore.getState().active) return;
@@ -475,7 +569,7 @@ export function ChatContainer() {
                 wKeyword: searchConfig.wKeyword,
                 topK: searchConfig.topK,
                 conversationId,
-                category: category || null,
+                categories: categories.length > 0 ? categories : null,
                 selectedToolId: toolId,
                 onConversationCreated: (id) => {
                   if (!useStreamStore.getState().active) return;
@@ -499,7 +593,7 @@ export function ChatContainer() {
                 wKeyword: searchConfig.wKeyword,
                 topK: searchConfig.topK,
                 conversationId,
-                category: category || null,
+                categories: categories.length > 0 ? categories : null,
                 onConversationCreated: (id) => {
                   if (!useStreamStore.getState().active) return;
                   const currentConvId = useAppStore.getState().conversationId;
@@ -515,7 +609,7 @@ export function ChatContainer() {
 
       {/* Input area */}
       <div className="border-t border-slate-700 p-4 bg-slate-800">
-        {/* MCP tool toggle */}
+        {/* MCP tool toggle + 업무구분 필터 */}
         <div className="flex items-center gap-2 mb-2">
           <button
             onClick={() => setUseHttpTool((v) => !v)}
@@ -529,6 +623,7 @@ export function ChatContainer() {
             <Wrench className="w-3.5 h-3.5" />
             MCP 도구 {useHttpTool ? 'ON' : 'OFF'}
           </button>
+          {selectedAgent === 'knowledge_rag' && namespace && <CategoryFilter namespace={namespace} />}
         </div>
         <div className="flex gap-3 items-end">
           <textarea

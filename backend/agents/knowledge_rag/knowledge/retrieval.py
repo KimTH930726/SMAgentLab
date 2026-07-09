@@ -104,16 +104,16 @@ async def map_glossary_term(
 async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
     w_vector: float = 0.7, w_keyword: float = 0.3, top_k: int = 5,
-    category: Optional[str] = None,
+    categories: Optional[list[str]] = None,
 ) -> list[RetrievalResult]:
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             return []
-        category_filter = "AND k.category = $7" if category else ""
+        category_filter = "AND k.category = ANY($7)" if categories else ""
         params = [str(query_vec), ns_id, enriched_query, w_vector, w_keyword, top_k]
-        if category:
-            params.append(category)
+        if categories:
+            params.append(categories)
         rows = await conn.fetch(
             f"""
             WITH vector_scores AS (
