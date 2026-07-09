@@ -89,6 +89,12 @@ class BulkDeleteRequest(BaseModel):
     ids: list[int]
 
 
+class BulkUpdateRequest(BaseModel):
+    ids: list[int]
+    category: Optional[str] = None
+    source_type: Optional[str] = None
+
+
 class VectorSearchRequest(BaseModel):
     namespace: str
     query: str
@@ -99,6 +105,18 @@ class VectorSearchRequest(BaseModel):
 async def bulk_remove_knowledge(body: BulkDeleteRequest, user: dict = Depends(get_current_user)):
     deleted = await service.bulk_delete_knowledge(body.ids)
     return {"deleted": deleted}
+
+
+@router.post("/bulk-update", status_code=200)
+async def bulk_update_knowledge_endpoint(body: BulkUpdateRequest, user: dict = Depends(get_current_user)):
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="선택된 항목이 없습니다.")
+    if body.category is None and body.source_type is None:
+        raise HTTPException(status_code=400, detail="변경할 필드를 하나 이상 선택하세요.")
+    for ns in await service.get_knowledge_namespaces(body.ids):
+        await check_namespace_ownership(ns, user)
+    updated = await service.bulk_update_knowledge(body.ids, category=body.category, source_type=body.source_type)
+    return {"updated": updated}
 
 
 @router.post("/search")
