@@ -237,7 +237,7 @@ export interface ChatRequest {
   wKeyword?: number;
   topK?: number;
   conversationId?: number | null;
-  category?: string | null;
+  categories?: string[] | null;
   approvedTool?: ApprovedTool | null;
   selectedToolId?: number | null;
   signal?: AbortSignal;

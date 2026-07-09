@@ -19,7 +19,7 @@ class ChatRequest(BaseModel):
     w_keyword: float = Field(default_factory=lambda: settings.default_w_keyword, ge=0.0, le=1.0)
     top_k: int = Field(default_factory=lambda: settings.default_top_k, ge=1, le=20)
     conversation_id: Optional[int] = None
-    category: Optional[str] = None
+    categories: Optional[list[str]] = None
     approved_tool: Optional[ApprovedTool] = None
     selected_tool_id: Optional[int] = None
 

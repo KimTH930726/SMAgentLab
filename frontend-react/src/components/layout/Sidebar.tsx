@@ -28,7 +28,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { stopChatStream, clearStreamState, useStreamStore } from '../../store/useStreamStore';
-import { getNamespaces, getNamespacesDetail, getCategories } from '../../api/namespaces';
+import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { getConversations, deleteConversation } from '../../api/conversations';
 import { healthCheck } from '../../api/client';
@@ -49,16 +49,6 @@ export function Sidebar() {
   const chatRefreshKey = useAppStore((s) => s.chatRefreshKey);
   const searchConfig = useAppStore((s) => s.searchConfig);
   const setSearchConfig = useAppStore((s) => s.setSearchConfig);
-  const category = useAppStore((s) => s.category);
-  const setCategory = useAppStore((s) => s.setCategory);
-
-  const { data: categories = [] } = useQuery({
-    queryKey: ['categories', namespace],
-    queryFn: () => getCategories(namespace),
-    enabled: !!namespace,
-    staleTime: 0,
-  });
-
   const user = useAuthStore((s) => s.user);
   const { data: namespaces = [] } = useQuery({
     queryKey: ['namespaces'],
@@ -313,24 +303,6 @@ export function Sidebar() {
               </select>
             )}
           </div>
-          {namespace && selectedAgent === 'knowledge_rag' && (
-            <div>
-              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider block mb-1.5">
-                업무구분
-              </label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
-              >
-                <option value="">전체</option>
-                <option value="__auto__">⚡ 자동 감지 (다소 시간 걸림)</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.name}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
         </div>
       )}
 

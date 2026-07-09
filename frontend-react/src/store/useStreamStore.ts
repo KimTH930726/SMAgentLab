@@ -63,7 +63,7 @@ export function startChatStream(params: {
   wKeyword: number;
   topK: number;
   conversationId: number | null;
-  category?: string | null;
+  categories?: string[] | null;
   approvedTool?: { tool_id: number; params: Record<string, string> } | null;
   selectedToolId?: number | null;
   onConversationCreated: (id: number) => void;
@@ -146,7 +146,7 @@ async function _runStream(
     wKeyword: number;
     topK: number;
     conversationId: number | null;
-    category?: string | null;
+    categories?: string[] | null;
     approvedTool?: { tool_id: number; params: Record<string, string> } | null;
     selectedToolId?: number | null;
     onConversationCreated: (id: number) => void;
@@ -175,7 +175,7 @@ async function _runStream(
       wKeyword: params.wKeyword,
       topK: params.topK,
       conversationId: params.conversationId,
-      category: params.category,
+      categories: params.categories,
       approvedTool: params.approvedTool ?? null,
       selectedToolId: params.selectedToolId ?? null,
       signal: controller.signal,
