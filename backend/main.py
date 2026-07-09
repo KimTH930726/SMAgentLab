@@ -287,6 +287,20 @@ async def _migrate_core_tables(conn) -> None:
           )
     """)
 
+    # ── ops_query_log.status 소급 보정 (지식 공백 누락) ─────────────
+    # 검색된 문서가 임계값은 넘었지만 실제로는 질문과 무관해서 LLM이 스스로
+    # "관련 지식을 찾지 못했습니다"라고 답한 경우, had_context만 보는 기존
+    # 로직은 이를 'pending'으로 잘못 분류해 지식 공백 대시보드에 안 잡혔음
+    # (service/chat/helpers.py create_query_log 참고). answer 역매칭 이후에
+    # 실행해야 예전에 answer가 NULL이던 행도 함께 잡힌다. 이미 'resolved'
+    # 처리된 건은 관리자가 조치를 마친 것이므로 건드리지 않는다.
+    await conn.execute("""
+        UPDATE ops_query_log
+        SET status = 'no_knowledge'
+        WHERE status IN ('pending', 'unresolved')
+          AND answer LIKE '%관련 지식을 찾지 못했습니다%'
+    """)
+
     # ── 성능 인덱스 (멱등) ──────────────────────────────────────────
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_message_conv_id ON ops_message (conversation_id, created_at)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_user_id ON ops_conversation (user_id, created_at DESC)")

@@ -214,7 +214,10 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         _save_user_message(conv_id, req.question),
         _save_assistant_message(conv_id, answer, pipe.mapped_term, pipe.results),
     )
-    await create_query_log(req.namespace, req.question, answer, len(pipe.results) > 0, pipe.mapped_term, msg_id)
+    await create_query_log(
+        req.namespace, req.question, answer, len(pipe.results) > 0, pipe.mapped_term, msg_id,
+        had_context=bool(pipe.context.strip()),
+    )
     t2 = asyncio.create_task(post_save_tasks(conv_id, req.namespace))
     t2.add_done_callback(lambda f: logger.warning("post_save_tasks 실패: %s", f.exception()) if not f.cancelled() and f.exception() else None)
 

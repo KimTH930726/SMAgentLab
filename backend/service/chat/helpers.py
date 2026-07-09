@@ -11,6 +11,11 @@ from agents.knowledge_rag.knowledge.retrieval import RetrievalResult
 logger = logging.getLogger(__name__)
 
 LLM_UNAVAILABLE_MSG = "[LLM 서버에 연결할 수 없습니다. 검색 결과를 참고하세요.]"
+# 시스템 프롬프트가 LLM에게 "관련 문서가 없으면 이 문구로 답변" 하도록 지시하는 고정 문구
+# (main.py / service/llm/base.py 기본 프롬프트 참고). had_context만으로는 임계값을 살짝
+# 넘는 "약하게만 관련된" 문서가 섞여 들어간 경우를 지식 공백으로 못 잡아서, LLM 스스로
+# "모르겠다"고 답한 경우도 지식 공백으로 판단하는 데 사용한다.
+NO_KNOWLEDGE_MARKER = "관련 지식을 찾지 못했습니다"
 
 MAX_MESSAGES_PER_NS = 100
 QUERY_LOG_RETENTION_DAYS = 90
@@ -63,8 +68,11 @@ async def create_query_log(
     had_context: bool = True,
 ) -> int:
     is_real_answer = answer and answer != LLM_UNAVAILABLE_MSG
-    if not had_context:
-        # 검색 결과가 있었지만 context가 비었거나, 아예 결과가 없어 지식 갭으로 판단
+    llm_says_no_knowledge = bool(answer) and NO_KNOWLEDGE_MARKER in answer
+    if not had_context or llm_says_no_knowledge:
+        # had_context=False: 임계값을 넘는 문서가 아예 없었음
+        # llm_says_no_knowledge: 문서는 임계값을 넘어 컨텍스트에 포함됐지만, 실제로는
+        #   질문과 무관해서 LLM이 스스로 "모르겠다"고 답한 경우 — 둘 다 지식 갭으로 취급
         status = "no_knowledge"
     elif not has_results and not is_real_answer:
         status = "unresolved"
