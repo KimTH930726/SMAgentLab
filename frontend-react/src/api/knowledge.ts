@@ -100,6 +100,12 @@ export async function bulkDeleteKnowledge(ids: number[]): Promise<{ deleted: num
   return apiFetch('/knowledge/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
 }
 
+export async function bulkUpdateKnowledge(
+  ids: number[], fields: { category?: string; source_type?: string },
+): Promise<{ updated: number }> {
+  return apiFetch('/knowledge/bulk-update', { method: 'POST', body: JSON.stringify({ ids, ...fields }) });
+}
+
 export async function bulkDeleteGlossary(ids: number[]): Promise<{ deleted: number }> {
   return apiFetch('/knowledge/glossary/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
 }

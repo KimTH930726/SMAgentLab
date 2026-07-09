@@ -137,6 +137,46 @@ async def bulk_delete_knowledge(ids: list[int]) -> int:
     return int(result.split()[-1])
 
 
+async def get_knowledge_namespaces(ids: list[int]) -> list[str]:
+    """주어진 지식 id들이 걸쳐 있는 네임스페이스 이름 목록 (권한 확인용)."""
+    if not ids:
+        return []
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT n.name FROM rag_knowledge k
+            JOIN ops_namespace n ON k.namespace_id = n.id
+            WHERE k.id = ANY($1::int[])
+            """,
+            ids,
+        )
+    return [r["name"] for r in rows]
+
+
+async def bulk_update_knowledge(
+    ids: list[int], *, category: Optional[str] = None, source_type: Optional[str] = None,
+) -> int:
+    """선택한 지식 항목들의 업무구분/소스유형을 일괄 변경. None인 필드는 유지."""
+    if not ids:
+        return 0
+    if category is None and source_type is None:
+        raise ValueError("변경할 필드(업무구분 또는 소스유형)를 지정해야 합니다.")
+    if category is not None:
+        category = _require_category(category)
+    async with get_conn() as conn:
+        result = await conn.execute(
+            """
+            UPDATE rag_knowledge
+            SET category = COALESCE($2, category),
+                source_type = COALESCE($3, source_type),
+                updated_at = NOW()
+            WHERE id = ANY($1::int[])
+            """,
+            ids, category, source_type,
+        )
+    return int(result.split()[-1])
+
+
 async def vector_search_knowledge(namespace: str, query_vec: list[float], top_k: int = 30) -> list[dict]:
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)

@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.30)
+# Ops-Navigator 시스템 아키텍처 (v2.31)
 
 ## 개요
 
@@ -6,6 +6,7 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.31: 어드민 지식 테이블 일괄 수정 — 다건 선택 후 업무구분/소스유형을 한 번에 변경(`POST /api/knowledge/bulk-update`, 값을 지정한 필드만 변경). 기존 다건 삭제와 동일한 선택 UI 재사용.
 - v2.30: 실사용 피드백 반영 3건 — (1) 멀티턴 검색 관련성 게이트(무관한 주제로 전환된 질문이 직전 맥락에 오염되지 않도록 임베딩 유사도 확인 후 결합), (2) 에이전트별 대화방 분리(`ops_conversation.agent_type` 실제 저장 + 목록 필터링 + 다른 에이전트로 이어쓰기 시 409 거부), (3) 채팅 업무구분 필터를 단일 선택(사이드바)에서 입력창 위 다중 선택 드롭다운으로 교체 — `ChatRequest.categories: string[]`, `search_knowledge`가 `k.category = ANY(...)`로 다중 필터.
 - v2.29: 대용량 등록 진행률 표시 + 중지/롤백 — `bulk_create_knowledge` 백그라운드(asyncio.create_task) + 배치(50건) 처리로 재구성, job_id 즉시 반환 + 배치마다 진행률 갱신. 신규 API `ingestion-jobs/{id}`(폴링) / `.../cancel`(중지 시 등록분 롤백). 청크 검토 모달에 업무구분 필드 보완.
 - v2.28: 업무구분 기본값 `'공통지식'` 지정 + 기존 미분류 지식 일괄 백필, 카테고리 없는 네임스페이스 자동 생성.

@@ -7,6 +7,7 @@ import {
   updateKnowledge,
   deleteKnowledge,
   bulkDeleteKnowledge,
+  bulkUpdateKnowledge,
   vectorSearchKnowledge,
   bulkCreateKnowledge,
   previewTextSplit,
@@ -120,6 +121,9 @@ export function KnowledgeTable() {
   const [vectorQuery, setVectorQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [bulkEditCategory, setBulkEditCategory] = useState('');
+  const [bulkEditSourceType, setBulkEditSourceType] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);
 
@@ -188,6 +192,21 @@ export function KnowledgeTable() {
       qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
       setSelectedIds(new Set());
       setShowBulkConfirm(false);
+    },
+  });
+
+  const bulkUpdateMutation = useMutation({
+    mutationFn: (ids: number[]) => bulkUpdateKnowledge(ids, {
+      ...(bulkEditCategory ? { category: bulkEditCategory } : {}),
+      ...(bulkEditSourceType ? { source_type: bulkEditSourceType } : {}),
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
+      setSelectedIds(new Set());
+      setShowBulkEdit(false);
+      setBulkEditCategory('');
+      setBulkEditSourceType('');
     },
   });
 
@@ -388,6 +407,9 @@ export function KnowledgeTable() {
             <div className="flex items-center gap-3 px-4 py-2.5 bg-indigo-900/30 border border-indigo-700/40 rounded-xl">
               <span className="text-sm text-indigo-300 flex-1">{selectedIds.size}개 선택됨</span>
               <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>선택 해제</Button>
+              <Button variant="secondary" size="sm" onClick={() => setShowBulkEdit(true)}>
+                <PenLine className="w-3.5 h-3.5" />일괄 수정
+              </Button>
               <Button variant="danger" size="sm" onClick={() => setShowBulkConfirm(true)}>
                 <Trash2 className="w-3.5 h-3.5" />삭제
               </Button>
@@ -569,6 +591,54 @@ export function KnowledgeTable() {
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setShowBulkConfirm(false)}>취소</Button>
             <Button variant="danger" size="sm" loading={bulkDeleteMutation.isPending} onClick={() => bulkDeleteMutation.mutate(Array.from(selectedIds))}>삭제</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Bulk Edit Modal */}
+      <Modal isOpen={showBulkEdit} onClose={() => setShowBulkEdit(false)} title="지식 일괄 수정">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-300">선택한 <span className="text-indigo-400 font-semibold">{selectedIds.size}개</span> 지식 항목의 업무구분·소스유형을 변경합니다. 값을 지정한 필드만 바뀌고, 비워두면 그대로 유지됩니다.</p>
+          <div>
+            <label className="text-xs font-medium text-slate-400 block mb-1">업무구분</label>
+            <select
+              value={bulkEditCategory}
+              onChange={(e) => setBulkEditCategory(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="">(변경 안 함)</option>
+              {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-400 block mb-1">소스유형</label>
+            <select
+              value={bulkEditSourceType}
+              onChange={(e) => setBulkEditSourceType(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="">(변경 안 함)</option>
+              <option value="manual">수동</option>
+              <option value="csv_import">CSV</option>
+              <option value="file_upload">파일</option>
+              <option value="paste_split">텍스트</option>
+              <option value="web">웹</option>
+              <option value="confluence">Confluence</option>
+              <option value="confluence_bulk">Confluence 일괄</option>
+              <option value="teams">Teams</option>
+            </select>
+          </div>
+          {bulkUpdateMutation.error && <p className="text-xs text-rose-400">{String(bulkUpdateMutation.error)}</p>}
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" size="sm" onClick={() => setShowBulkEdit(false)}>취소</Button>
+            <Button
+              variant="primary" size="sm"
+              disabled={!bulkEditCategory && !bulkEditSourceType}
+              loading={bulkUpdateMutation.isPending}
+              onClick={() => bulkUpdateMutation.mutate(Array.from(selectedIds))}
+            >
+              적용
+            </Button>
           </div>
         </div>
       </Modal>
