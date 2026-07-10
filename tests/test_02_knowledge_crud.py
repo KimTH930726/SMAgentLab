@@ -3,6 +3,8 @@ TC-02: 지식 베이스 CRUD
 """
 import pytest
 
+from conftest import TEST_CATEGORY
+
 TEST_NS = "test_coupon"
 
 
@@ -13,6 +15,7 @@ class TestKnowledgeCreate:
             "namespace": TEST_NS,
             "content": "임시 테스트 지식",
             "base_weight": 1.0,
+            "category": TEST_CATEGORY,
         })
         assert resp.status_code == 201
         body = resp.json()
@@ -30,6 +33,7 @@ class TestKnowledgeCreate:
             "content": "전체 필드 테스트 지식입니다.",
             "query_template": "SELECT * FROM coupon_issue WHERE id = :id;",
             "base_weight": 2.5,
+            "category": TEST_CATEGORY,
         })
         assert resp.status_code == 201
         body = resp.json()
@@ -100,7 +104,7 @@ class TestKnowledgeDelete:
     def test_delete_returns_204(self, client):
         """등록 후 삭제 시 204를 반환한다."""
         create = client.post("/api/knowledge", json={
-            "namespace": TEST_NS, "content": "삭제 테스트용"
+            "namespace": TEST_NS, "content": "삭제 테스트용", "category": TEST_CATEGORY,
         })
         kid = create.json()["id"]
         resp = client.delete(f"/api/knowledge/{kid}")
@@ -114,7 +118,7 @@ class TestKnowledgeDelete:
     def test_deleted_item_not_in_list(self, client):
         """삭제된 지식은 목록 조회에서 나타나지 않는다."""
         create = client.post("/api/knowledge", json={
-            "namespace": TEST_NS, "content": "삭제 후 목록 확인용"
+            "namespace": TEST_NS, "content": "삭제 후 목록 확인용", "category": TEST_CATEGORY,
         })
         kid = create.json()["id"]
         client.delete(f"/api/knowledge/{kid}")
