@@ -189,14 +189,17 @@ async def get_stats(namespace: str) -> dict:
     if r is None:
         return {"connected": False, "total_entries": 0, "total_hits": 0, "enabled": _cache_enabled}
     try:
-        total_entries = 0
+        keys = [key async for key in r.scan_iter(f"semcache:{namespace}:*")]
         total_hits = 0
-        async for key in r.scan_iter(f"semcache:{namespace}:*"):
-            total_entries += 1
-            total_hits += _to_int(await r.hget(key, "hits"))
+        if keys:
+            async with r.pipeline() as pipe:
+                for key in keys:
+                    pipe.hget(key, "hits")
+                hits_raw = await pipe.execute()
+            total_hits = sum(_to_int(h) for h in hits_raw)
         return {
             "connected": True,
-            "total_entries": total_entries,
+            "total_entries": len(keys),
             "total_hits": total_hits,
             "enabled": _cache_enabled,
             "similarity_threshold": _similarity_threshold,
@@ -214,11 +217,21 @@ async def get_entries(namespace: str) -> list[dict]:
     if r is None:
         return []
     try:
+        keys = [key async for key in r.scan_iter(f"semcache:{namespace}:*")]
+        if not keys:
+            return []
+
+        # 키당 3개 커맨드(payload/hits/ttl)를 파이프라인 하나로 일괄 실행
+        async with r.pipeline() as pipe:
+            for key in keys:
+                pipe.hget(key, "payload")
+                pipe.hget(key, "hits")
+                pipe.ttl(key)
+            results = await pipe.execute()
+
         entries = []
-        async for key in r.scan_iter(f"semcache:{namespace}:*"):
-            payload_raw = await r.hget(key, "payload")
-            hits_raw = await r.hget(key, "hits")
-            ttl = await r.ttl(key)
+        for i, key in enumerate(keys):
+            payload_raw, hits_raw, ttl = results[i * 3], results[i * 3 + 1], results[i * 3 + 2]
             if not payload_raw:
                 continue
             payload = json.loads(payload_raw)

@@ -24,11 +24,12 @@ async def run(context: dict, namespace_id: int, stage_cfg: dict) -> dict:
     except BlockedQueryError as e:
         return {"execute_error": str(e)}
 
-    cfg = context.get("_target_db_cfg") or await service.get_target_db_config(namespace_id)
-    if not cfg:
+    # 네임스페이스별로 재사용되는 매니저 사용 — 매 채팅 턴마다 원격 DB에 새로
+    # TCP+인증 핸드셰이크를 맺지 않도록 함 (연결은 idle 타임아웃까지 유지됨)
+    db = await service.get_cached_target_db(namespace_id)
+    if db is None:
         return {"execute_error": "대상 DB 연결 정보가 없습니다."}
 
-    db = service.build_target_db(cfg)
     try:
         result = await db.execute_query(sql, timeout_sec=30, max_rows=1000)
         return result

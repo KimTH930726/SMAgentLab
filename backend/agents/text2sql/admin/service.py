@@ -77,10 +77,12 @@ async def upsert_target_db_config(namespace_id: int, payload: dict) -> None:
             encrypted,
             payload.get("schema_name") or None,
         )
+    # 연결 설정이 바뀌었으니 캐시된(옛 설정으로 맺힌) 연결이 있으면 즉시 폐기
+    await invalidate_target_db_cache(namespace_id)
 
 
 def build_target_db(cfg: dict):
-    """설정 dict → TargetDBManager 인스턴스."""
+    """설정 dict → TargetDBManager 인스턴스 (매번 새로 생성, 캐시 없음)."""
     from agents.text2sql.admin.target import TargetDBManager
     return TargetDBManager(
         db_type=cfg["db_type"],
@@ -91,6 +93,34 @@ def build_target_db(cfg: dict):
         password=cfg["password"],
         schema_name=cfg.get("schema_name"),
     )
+
+
+# ── 대상 DB 매니저 재사용 캐시 (채팅 질의 실행 경로 전용) ────────────────────
+# NL→SQL 파이프라인은 사용자가 연속으로 여러 질문을 하는 동안 매번 새 TCP+인증
+# 핸드셰이크를 맺지 않도록 네임스페이스별로 TargetDBManager를 재사용한다.
+# (관리자 화면의 스키마 스캔/테스트쿼리 등 저빈도 호출은 build_target_db()로
+# 매번 새로 만들어 쓰는 기존 방식 그대로 — 캐시 대상이 아님)
+_target_db_cache: dict[int, "object"] = {}
+
+
+async def get_cached_target_db(namespace_id: int):
+    """네임스페이스별로 재사용되는 TargetDBManager 반환 (없으면 새로 생성해 캐시)."""
+    cached = _target_db_cache.get(namespace_id)
+    if cached is not None:
+        return cached
+    cfg = await get_target_db_config(namespace_id)
+    if cfg is None:
+        return None
+    mgr = build_target_db(cfg)
+    _target_db_cache[namespace_id] = mgr
+    return mgr
+
+
+async def invalidate_target_db_cache(namespace_id: int) -> None:
+    """캐시된 연결을 닫고 제거 — 대상 DB 설정이 바뀌었을 때 호출."""
+    cached = _target_db_cache.pop(namespace_id, None)
+    if cached is not None:
+        await cached.close()
 
 
 # ── 스키마 스캔 & 저장 (diff 방식) ────────────────────────────────────────────
@@ -289,12 +319,11 @@ async def scan_and_save_schema(namespace_id: int) -> dict:
         ]
         embeddings = await embedding_service.embed_batch(texts)
         async with get_conn() as conn:
-            for row, emb in zip(rows, embeddings):
-                await conn.execute("""
-                    INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
-                    VALUES ($1, $2, $3::vector)
-                    ON CONFLICT (column_id) DO UPDATE SET embedding = EXCLUDED.embedding
-                """, row["id"], namespace_id, str(emb))
+            await conn.executemany("""
+                INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
+                VALUES ($1, $2, $3::vector)
+                ON CONFLICT (column_id) DO UPDATE SET embedding = EXCLUDED.embedding
+            """, [(row["id"], namespace_id, str(emb)) for row, emb in zip(rows, embeddings)])
         report["embeddings_created"] = len(embed_queue)
 
     # ── 용어사전 고아 처리 ──
@@ -353,13 +382,12 @@ async def _reindex_schema_vectors(namespace_id: int) -> tuple[int, int]:
     embeddings = await embedding_service.embed_batch(texts)
 
     async with get_conn() as conn:
-        for row, emb in zip(rows, embeddings):
-            await conn.execute("""
-                INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
-                VALUES ($1, $2, $3::vector)
-                ON CONFLICT (column_id)
-                DO UPDATE SET embedding = EXCLUDED.embedding
-            """, row["id"], namespace_id, str(emb))
+        await conn.executemany("""
+            INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
+            VALUES ($1, $2, $3::vector)
+            ON CONFLICT (column_id)
+            DO UPDATE SET embedding = EXCLUDED.embedding
+        """, [(row["id"], namespace_id, str(emb)) for row, emb in zip(rows, embeddings)])
 
     tables = {r["table_name"] for r in rows}
     return len(tables), len(rows)
@@ -439,12 +467,11 @@ async def add_tables(namespace_id: int, table_names: list[str]) -> dict:
         ]
         embeddings = await embedding_service.embed_batch(texts)
         async with get_conn() as conn:
-            for row, emb in zip(rows, embeddings):
-                await conn.execute("""
-                    INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
-                    VALUES ($1, $2, $3::vector)
-                    ON CONFLICT (column_id) DO UPDATE SET embedding = EXCLUDED.embedding
-                """, row["id"], namespace_id, str(emb))
+            await conn.executemany("""
+                INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
+                VALUES ($1, $2, $3::vector)
+                ON CONFLICT (column_id) DO UPDATE SET embedding = EXCLUDED.embedding
+            """, [(row["id"], namespace_id, str(emb)) for row, emb in zip(rows, embeddings)])
 
     return {"ok": True, "added": added, "skipped": len(table_names) - added}
 

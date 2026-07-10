@@ -24,11 +24,18 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
 
         if body.knowledge_id:
             weight_delta = 0.1 if body.is_positive else -0.1
-            clamp_fn = "LEAST" if body.is_positive else "GREATEST"
             bound = 5.0 if body.is_positive else 0.0
+            # 동적 SQL(f-string 함수명 삽입) 대신 CASE로 분기 — 파라미터화된 단일 쿼리
             await conn.execute(
-                f"UPDATE rag_knowledge SET base_weight = {clamp_fn}(base_weight + $1, $2) WHERE id = $3",
-                weight_delta, bound, body.knowledge_id,
+                """
+                UPDATE rag_knowledge
+                SET base_weight = CASE WHEN $1
+                    THEN LEAST(base_weight + $2, $3)
+                    ELSE GREATEST(base_weight + $2, $3)
+                END
+                WHERE id = $4
+                """,
+                body.is_positive, weight_delta, bound, body.knowledge_id,
             )
 
         new_status = "resolved" if body.is_positive else "unresolved"

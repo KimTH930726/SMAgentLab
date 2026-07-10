@@ -101,6 +101,11 @@ async def map_glossary_term(
     return None
 
 
+_VECTOR_CANDIDATE_LIMIT = 300  # top_k/reranker_candidates(기본 20)보다 넉넉한 후보 풀 —
+# 벡터 CTE를 ORDER BY + LIMIT로 유계화해 정렬 비용을 줄인다(테이블이 커지면 HNSW
+# 인덱스도 이 형태에서만 자동으로 쓰이기 시작함).
+
+
 async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
     w_vector: float = 0.7, w_keyword: float = 0.3, top_k: int = 5,
@@ -110,8 +115,8 @@ async def search_knowledge(
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             return []
-        category_filter = "AND k.category = ANY($7)" if categories else ""
-        params = [str(query_vec), ns_id, enriched_query, w_vector, w_keyword, top_k]
+        category_filter = "AND k.category = ANY($8)" if categories else ""
+        params = [str(query_vec), ns_id, enriched_query, w_vector, w_keyword, top_k, _VECTOR_CANDIDATE_LIMIT]
         if categories:
             params.append(categories)
         rows = await conn.fetch(
@@ -119,6 +124,8 @@ async def search_knowledge(
             WITH vector_scores AS (
                 SELECT id, 1 - (embedding <=> $1::vector) AS v_score
                 FROM rag_knowledge WHERE namespace_id = $2 AND embedding IS NOT NULL
+                ORDER BY embedding <=> $1::vector
+                LIMIT $7
             ),
             keyword_scores AS (
                 SELECT k.id, ts_rank(to_tsvector('simple', k.content), q.tsq) AS k_score

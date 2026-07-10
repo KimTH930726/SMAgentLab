@@ -2,12 +2,14 @@
 import asyncio
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _SUPPORTED = {"postgresql", "mysql", "sqlite", "oracle"}
+_MAX_IDLE_SECONDS = 300  # 이 시간 이상 재사용 안 된 연결은 재연결(끊긴 연결을 오래 붙들지 않기 위함)
 
 
 def _is_docker() -> bool:
@@ -89,54 +91,57 @@ class PgDialect(BaseDialect):
         return [dict(r) for r in rows]
 
     async def get_tables(self, conn, schema) -> list[dict]:
+        # 테이블별로 컬럼/PK/FK를 따로 조회하면 테이블 N개 기준 1+2N번 왕복이 됨 —
+        # 스키마 전체 컬럼/FK를 각각 단일 쿼리로 가져와 Python에서 테이블별로 묶는다.
         schema = schema or "public"
-        rows = await conn.fetch("""
+        table_rows = await conn.fetch("""
             SELECT table_name FROM information_schema.tables
             WHERE table_schema = $1 AND table_type = 'BASE TABLE'
             ORDER BY table_name
         """, schema)
-        tables = []
-        for row in rows:
-            tname = row["table_name"]
-            cols = await conn.fetch("""
-                SELECT c.column_name, c.data_type,
-                       CASE WHEN pk.column_name IS NOT NULL THEN TRUE ELSE FALSE END AS is_pk
-                FROM information_schema.columns c
-                LEFT JOIN (
-                    SELECT ku.column_name
-                    FROM information_schema.table_constraints tc
-                    JOIN information_schema.key_column_usage ku
-                        ON tc.constraint_name = ku.constraint_name
-                    WHERE tc.constraint_type = 'PRIMARY KEY'
-                      AND tc.table_name = $1 AND tc.table_schema = $2
-                ) pk ON c.column_name = pk.column_name
-                WHERE c.table_name = $1 AND c.table_schema = $2
-                ORDER BY c.ordinal_position
-            """, tname, schema)
-            fk_rows = await conn.fetch("""
-                SELECT kcu.column_name, ccu.table_name AS ref_table, ccu.column_name AS ref_col
+        table_names = [r["table_name"] for r in table_rows]
+
+        col_rows = await conn.fetch("""
+            SELECT c.table_name, c.column_name, c.data_type, c.ordinal_position,
+                   CASE WHEN pk.column_name IS NOT NULL THEN TRUE ELSE FALSE END AS is_pk
+            FROM information_schema.columns c
+            LEFT JOIN (
+                SELECT ku.table_name, ku.column_name
                 FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                    ON tc.constraint_name = kcu.constraint_name
-                JOIN information_schema.constraint_column_usage ccu
-                    ON tc.constraint_name = ccu.constraint_name
-                WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = $1
-                  AND tc.table_schema = $2
-            """, tname, schema)
-            fk_map = {r["column_name"]: f"{r['ref_table']}.{r['ref_col']}" for r in fk_rows}
-            tables.append({
-                "table_name": tname,
-                "columns": [
-                    {
-                        "name": c["column_name"],
-                        "type": c["data_type"],
-                        "is_pk": c["is_pk"],
-                        "fk_reference": fk_map.get(c["column_name"]),
-                    }
-                    for c in cols
-                ],
+                JOIN information_schema.key_column_usage ku
+                    ON tc.constraint_name = ku.constraint_name AND tc.table_schema = ku.table_schema
+                WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = $1
+            ) pk ON c.table_name = pk.table_name AND c.column_name = pk.column_name
+            WHERE c.table_schema = $1
+            ORDER BY c.table_name, c.ordinal_position
+        """, schema)
+
+        fk_rows = await conn.fetch("""
+            SELECT tc.table_name, kcu.column_name, ccu.table_name AS ref_table, ccu.column_name AS ref_col
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+            JOIN information_schema.constraint_column_usage ccu
+                ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
+            WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = $1
+        """, schema)
+
+        fk_map: dict[tuple[str, str], str] = {
+            (r["table_name"], r["column_name"]): f"{r['ref_table']}.{r['ref_col']}" for r in fk_rows
+        }
+        cols_by_table: dict[str, list[dict]] = {t: [] for t in table_names}
+        for c in col_rows:
+            tname = c["table_name"]
+            if tname not in cols_by_table:
+                continue
+            cols_by_table[tname].append({
+                "name": c["column_name"],
+                "type": c["data_type"],
+                "is_pk": c["is_pk"],
+                "fk_reference": fk_map.get((tname, c["column_name"])),
             })
-        return tables
+
+        return [{"table_name": t, "columns": cols_by_table[t]} for t in table_names]
 
     async def execute_query(self, conn, sql, max_rows):
         rows = await conn.fetch(sql)
@@ -183,45 +188,44 @@ class MysqlDialect(BaseDialect):
             return [{"table": r[0], "column_count": r[1]} for r in await cur.fetchall()]
 
     async def get_tables(self, conn, schema) -> list[dict]:
-        # MySQL: schema = database name (DATABASE() 사용)
+        # MySQL: schema = database name (DATABASE() 사용).
+        # 테이블별 컬럼/FK 조회를 각각 반복하면 테이블 N개 기준 1+2N번 왕복이 됨 —
+        # 스키마 전체 컬럼/FK를 단일 쿼리로 가져와 Python에서 테이블별로 묶는다.
         async with conn.cursor() as cur:
             await cur.execute(
                 "SELECT table_name FROM information_schema.tables "
                 "WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' ORDER BY table_name"
             )
-            table_rows = await cur.fetchall()
-            tables = []
-            for (tname,) in table_rows:
-                await cur.execute(
-                    "SELECT column_name, column_type, column_key "
-                    "FROM information_schema.columns "
-                    "WHERE table_schema = DATABASE() AND table_name = %s "
-                    "ORDER BY ordinal_position",
-                    (tname,),
-                )
-                col_rows = await cur.fetchall()
-                await cur.execute(
-                    "SELECT column_name, referenced_table_name, referenced_column_name "
-                    "FROM information_schema.key_column_usage "
-                    "WHERE table_schema = DATABASE() AND table_name = %s "
-                    "AND referenced_table_name IS NOT NULL",
-                    (tname,),
-                )
-                fk_rows = await cur.fetchall()
-                fk_map = {r[0]: f"{r[1]}.{r[2]}" for r in fk_rows}
-                tables.append({
-                    "table_name": tname,
-                    "columns": [
-                        {
-                            "name": r[0],
-                            "type": r[1],
-                            "is_pk": r[2] == "PRI",
-                            "fk_reference": fk_map.get(r[0]),
-                        }
-                        for r in col_rows
-                    ],
-                })
-        return tables
+            table_names = [r[0] for r in await cur.fetchall()]
+
+            await cur.execute(
+                "SELECT table_name, column_name, column_type, column_key "
+                "FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() "
+                "ORDER BY table_name, ordinal_position"
+            )
+            col_rows = await cur.fetchall()
+
+            await cur.execute(
+                "SELECT table_name, column_name, referenced_table_name, referenced_column_name "
+                "FROM information_schema.key_column_usage "
+                "WHERE table_schema = DATABASE() AND referenced_table_name IS NOT NULL"
+            )
+            fk_rows = await cur.fetchall()
+
+        fk_map = {(r[0], r[1]): f"{r[2]}.{r[3]}" for r in fk_rows}
+        cols_by_table: dict[str, list[dict]] = {t: [] for t in table_names}
+        for tname, col_name, col_type, col_key in col_rows:
+            if tname not in cols_by_table:
+                continue
+            cols_by_table[tname].append({
+                "name": col_name,
+                "type": col_type,
+                "is_pk": col_key == "PRI",
+                "fk_reference": fk_map.get((tname, col_name)),
+            })
+
+        return [{"table_name": t, "columns": cols_by_table[t]} for t in table_names]
 
     async def execute_query(self, conn, sql, max_rows):
         async with conn.cursor() as cur:
@@ -331,61 +335,57 @@ class OracleDialect(BaseDialect):
         return await asyncio.to_thread(_fetch)
 
     async def get_tables(self, conn, schema) -> list[dict]:
+        # 테이블별 컬럼/FK 조회를 각각 반복하면 테이블 N개 기준 1+2N번 왕복이 됨 —
+        # owner(스키마) 전체 컬럼/FK를 각각 단일 쿼리로 가져와 Python에서 테이블별로 묶는다.
         owner = (schema or conn.username).upper()
 
         def _fetch():
             cur = conn.cursor()
-            # 테이블 목록
             cur.execute(
                 "SELECT table_name FROM all_tables WHERE owner = :o ORDER BY table_name",
                 {"o": owner},
             )
             table_names = [r[0] for r in cur.fetchall()]
 
-            tables = []
-            for tname in table_names:
-                # 컬럼 + PK
-                cur.execute("""
-                    SELECT c.column_name, c.data_type,
-                           CASE WHEN pk.column_name IS NOT NULL THEN 1 ELSE 0 END AS is_pk
-                    FROM all_tab_columns c
-                    LEFT JOIN (
-                        SELECT acc.column_name
-                        FROM all_constraints ac
-                        JOIN all_cons_columns acc ON ac.constraint_name = acc.constraint_name AND ac.owner = acc.owner
-                        WHERE ac.constraint_type = 'P' AND ac.owner = :o AND ac.table_name = :t
-                    ) pk ON c.column_name = pk.column_name
-                    WHERE c.owner = :o AND c.table_name = :t
-                    ORDER BY c.column_id
-                """, {"o": owner, "t": tname})
-                col_rows = cur.fetchall()
-
-                # FK
-                cur.execute("""
-                    SELECT acc.column_name, rc.table_name AS ref_table, rcc.column_name AS ref_col
+            cur.execute("""
+                SELECT c.table_name, c.column_name, c.data_type,
+                       CASE WHEN pk.column_name IS NOT NULL THEN 1 ELSE 0 END AS is_pk
+                FROM all_tab_columns c
+                LEFT JOIN (
+                    SELECT acc.table_name, acc.column_name
                     FROM all_constraints ac
                     JOIN all_cons_columns acc ON ac.constraint_name = acc.constraint_name AND ac.owner = acc.owner
-                    JOIN all_constraints rc ON ac.r_constraint_name = rc.constraint_name AND ac.r_owner = rc.owner
-                    JOIN all_cons_columns rcc ON rc.constraint_name = rcc.constraint_name AND rc.owner = rcc.owner
-                    WHERE ac.constraint_type = 'R' AND ac.owner = :o AND ac.table_name = :t
-                """, {"o": owner, "t": tname})
-                fk_rows = cur.fetchall()
-                fk_map = {r[0]: f"{r[1]}.{r[2]}" for r in fk_rows}
+                    WHERE ac.constraint_type = 'P' AND ac.owner = :o
+                ) pk ON c.table_name = pk.table_name AND c.column_name = pk.column_name
+                WHERE c.owner = :o
+                ORDER BY c.table_name, c.column_id
+            """, {"o": owner})
+            col_rows = cur.fetchall()
 
-                tables.append({
-                    "table_name": tname,
-                    "columns": [
-                        {
-                            "name": c[0],
-                            "type": c[1],
-                            "is_pk": bool(c[2]),
-                            "fk_reference": fk_map.get(c[0]),
-                        }
-                        for c in col_rows
-                    ],
-                })
+            cur.execute("""
+                SELECT ac.table_name, acc.column_name, rc.table_name AS ref_table, rcc.column_name AS ref_col
+                FROM all_constraints ac
+                JOIN all_cons_columns acc ON ac.constraint_name = acc.constraint_name AND ac.owner = acc.owner
+                JOIN all_constraints rc ON ac.r_constraint_name = rc.constraint_name AND ac.r_owner = rc.owner
+                JOIN all_cons_columns rcc ON rc.constraint_name = rcc.constraint_name AND rc.owner = rcc.owner
+                WHERE ac.constraint_type = 'R' AND ac.owner = :o
+            """, {"o": owner})
+            fk_rows = cur.fetchall()
             cur.close()
-            return tables
+
+            fk_map = {(r[0], r[1]): f"{r[2]}.{r[3]}" for r in fk_rows}
+            cols_by_table: dict[str, list[dict]] = {t: [] for t in table_names}
+            for tname, col_name, col_type, is_pk in col_rows:
+                if tname not in cols_by_table:
+                    continue
+                cols_by_table[tname].append({
+                    "name": col_name,
+                    "type": col_type,
+                    "is_pk": bool(is_pk),
+                    "fk_reference": fk_map.get((tname, col_name)),
+                })
+
+            return [{"table_name": t, "columns": cols_by_table[t]} for t in table_names]
 
         return await asyncio.to_thread(_fetch)
 
@@ -453,6 +453,7 @@ class TargetDBManager:
         self.password = password
         self.schema_name = schema_name
         self._conn: Any = None
+        self._last_used: float = 0.0
 
         if self.db_type not in _DIALECTS:
             raise ValueError(f"지원하지 않는 DB 타입: {self.db_type}. 지원: {', '.join(_DIALECTS)}")
@@ -515,12 +516,25 @@ class TargetDBManager:
         timeout_sec: int = 30,
         max_rows: int = 1000,
     ) -> dict:
-        """SELECT 쿼리 실행 후 결과 반환."""
-        await self.connect()
+        """SELECT 쿼리 실행 후 결과 반환.
+
+        매번 새로 connect/close 하면 채팅 턴마다 원격 DB에 TCP+인증 핸드셰이크가
+        발생한다. 이 매니저가 재사용(캐시)되는 호출 경로(pipeline/execute.py)에서는
+        일정 시간(_MAX_IDLE_SECONDS) 안에는 기존 연결을 그대로 쓴다. 단발성 호출
+        (예: 어드민 쿼리 테스트)에서도 매번 새로 connect() 하므로 동작은 동일하게
+        유지된다.
+        """
+        if self._conn is None or (time.monotonic() - self._last_used) >= _MAX_IDLE_SECONDS:
+            await self.close()
+            await self.connect()
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._dialect.execute_query(self._conn, sql, max_rows),
                 timeout=timeout_sec,
             )
-        finally:
+            self._last_used = time.monotonic()
+            return result
+        except Exception:
+            # 연결이 끊어졌을 가능성이 있으니 다음 호출에서 재연결하도록 정리
             await self.close()
+            raise

@@ -27,7 +27,7 @@ from agents.text2sql.admin.router import router as text2sql_router
 from shared import cache as sem_cache
 from agents.base import AgentRegistry
 from agents.knowledge_rag.agent import KnowledgeRagAgent
-from agents.mcp_tool.agent import McpToolAgent
+from agents.mcp_tool.agent import McpToolAgent, close_http_client as close_mcp_http_client
 from agents.text2sql.agent import Text2SqlAgent
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,14 @@ _ROUTERS = [
     teams_router,
     text2sql_router,
 ]
+
+
+async def _column_exists(conn, table: str, column: str) -> bool:
+    """마이그레이션에서 반복되는 컬럼 존재 확인 — 하위 호환 UPDATE를 조건부로 실행할 때 사용."""
+    return await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name=$1 AND column_name=$2)",
+        table, column,
+    )
 
 
 async def _migrate_core_tables(conn) -> None:
@@ -120,51 +128,31 @@ async def _migrate_core_tables(conn) -> None:
         "SELECT id FROM ops_part WHERE name = '슈퍼어드민'"
     )
     # 구 '기본' 파트가 남아있으면 제거 (마이그레이션) — 컬럼이 없으면 skip
-    await conn.execute("""
-        DO $$ BEGIN
-            IF EXISTS (SELECT 1 FROM information_schema.columns
-                       WHERE table_name='ops_user' AND column_name='part') THEN
-                UPDATE ops_user SET part = '슈퍼어드민' WHERE part = '기본';
-            END IF;
-        END $$;
-    """)
-    await conn.execute("""
-        DO $$ BEGIN
-            IF EXISTS (SELECT 1 FROM information_schema.columns
-                       WHERE table_name='ops_namespace' AND column_name='owner_part') THEN
-                UPDATE ops_namespace SET owner_part = '슈퍼어드민' WHERE owner_part = '기본';
-            END IF;
-        END $$;
-    """)
+    if await _column_exists(conn, "ops_user", "part"):
+        await conn.execute("UPDATE ops_user SET part = '슈퍼어드민' WHERE part = '기본'")
+    if await _column_exists(conn, "ops_namespace", "owner_part"):
+        await conn.execute("UPDATE ops_namespace SET owner_part = '슈퍼어드민' WHERE owner_part = '기본'")
     await conn.execute("""
         DELETE FROM ops_part WHERE name = '기본'
     """)
 
     # ── ops_user.part → part_id 동기화 (part 컬럼이 있을 때만) ──────
-    await conn.execute("""
-        DO $$ BEGIN
-            IF EXISTS (SELECT 1 FROM information_schema.columns
-                       WHERE table_name='ops_user' AND column_name='part') THEN
-                UPDATE ops_user u
-                SET part_id = p.id
-                FROM ops_part p
-                WHERE u.part = p.name AND u.part_id IS NULL;
-            END IF;
-        END $$;
-    """)
+    if await _column_exists(conn, "ops_user", "part"):
+        await conn.execute("""
+            UPDATE ops_user u
+            SET part_id = p.id
+            FROM ops_part p
+            WHERE u.part = p.name AND u.part_id IS NULL
+        """)
 
     # ── ops_namespace.owner_part → owner_part_id 동기화 ────────────
-    await conn.execute("""
-        DO $$ BEGIN
-            IF EXISTS (SELECT 1 FROM information_schema.columns
-                       WHERE table_name='ops_namespace' AND column_name='owner_part') THEN
-                UPDATE ops_namespace n
-                SET owner_part_id = p.id
-                FROM ops_part p
-                WHERE n.owner_part = p.name AND n.owner_part_id IS NULL;
-            END IF;
-        END $$;
-    """)
+    if await _column_exists(conn, "ops_namespace", "owner_part"):
+        await conn.execute("""
+            UPDATE ops_namespace n
+            SET owner_part_id = p.id
+            FROM ops_part p
+            WHERE n.owner_part = p.name AND n.owner_part_id IS NULL
+        """)
 
     admin_exists = await conn.fetchval(
         "SELECT EXISTS(SELECT 1 FROM ops_user WHERE username = 'admin')"
@@ -212,27 +200,19 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("ALTER TABLE rag_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'")
 
     # ── 기존 ops_namespace 데이터 보충 (namespace 컬럼이 있는 경우만) ──
-    await conn.execute("""
-        DO $$ DECLARE
-            ns_col_exists BOOLEAN;
-        BEGIN
-            SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                           WHERE table_name='rag_knowledge' AND column_name='namespace')
-            INTO ns_col_exists;
-            IF ns_col_exists THEN
-                INSERT INTO ops_namespace (name)
-                SELECT DISTINCT ns FROM (
-                    SELECT namespace AS ns FROM rag_glossary WHERE namespace IS NOT NULL
-                    UNION SELECT namespace FROM rag_knowledge WHERE namespace IS NOT NULL
-                    UNION SELECT namespace FROM ops_query_log WHERE namespace IS NOT NULL
-                    UNION SELECT namespace FROM ops_conversation WHERE namespace IS NOT NULL
-                    UNION SELECT namespace FROM ops_feedback WHERE namespace IS NOT NULL
-                    UNION SELECT namespace FROM rag_fewshot WHERE namespace IS NOT NULL
-                ) t WHERE ns IS NOT NULL
-                ON CONFLICT (name) DO NOTHING;
-            END IF;
-        END $$;
-    """)
+    if await _column_exists(conn, "rag_knowledge", "namespace"):
+        await conn.execute("""
+            INSERT INTO ops_namespace (name)
+            SELECT DISTINCT ns FROM (
+                SELECT namespace AS ns FROM rag_glossary WHERE namespace IS NOT NULL
+                UNION SELECT namespace FROM rag_knowledge WHERE namespace IS NOT NULL
+                UNION SELECT namespace FROM ops_query_log WHERE namespace IS NOT NULL
+                UNION SELECT namespace FROM ops_conversation WHERE namespace IS NOT NULL
+                UNION SELECT namespace FROM ops_feedback WHERE namespace IS NOT NULL
+                UNION SELECT namespace FROM rag_fewshot WHERE namespace IS NOT NULL
+            ) t WHERE ns IS NOT NULL
+            ON CONFLICT (name) DO NOTHING
+        """)
 
     # ── agent_type 컬럼 추가 (멀티 에이전트 확장 준비) ───────────────
     await conn.execute("ALTER TABLE ops_conversation ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
@@ -255,36 +235,24 @@ async def _migrate_core_tables(conn) -> None:
     """)
 
     # ── query_log answer 역매칭 ────────────────────────────────────
+    # namespace 내에서 ql.question과 동일한 내용의 user 메시지가 앞서 존재하는
+    # assistant 메시지 중 가장 최근 것을 정답으로 채택 (DISTINCT ON으로 상관
+    # 조건을 한 번만 평가 — 이전에는 "최신 매칭 찾기" 로직이 이중 EXISTS로 중복됨)
     await conn.execute("""
+        WITH latest_match AS (
+            SELECT DISTINCT ON (ql.id) ql.id AS ql_id, m.content
+            FROM ops_query_log ql
+            JOIN ops_conversation c ON c.namespace_id = ql.namespace_id
+            JOIN ops_message m ON m.conversation_id = c.id AND m.role = 'assistant'
+            JOIN ops_message um ON um.conversation_id = m.conversation_id
+                AND um.role = 'user' AND um.content = ql.question AND um.created_at < m.created_at
+            WHERE ql.answer IS NULL
+            ORDER BY ql.id, m.created_at DESC
+        )
         UPDATE ops_query_log ql
-        SET answer = m.content
-        FROM ops_message m
-        JOIN ops_conversation c ON m.conversation_id = c.id
-        WHERE ql.answer IS NULL
-          AND m.role = 'assistant'
-          AND c.namespace_id = ql.namespace_id
-          AND EXISTS (
-              SELECT 1 FROM ops_message um
-              WHERE um.conversation_id = m.conversation_id
-                AND um.role = 'user'
-                AND um.content = ql.question
-                AND um.created_at < m.created_at
-          )
-          AND m.id = (
-              SELECT m2.id FROM ops_message m2
-              JOIN ops_conversation c2 ON m2.conversation_id = c2.id
-              WHERE m2.role = 'assistant'
-                AND c2.namespace_id = ql.namespace_id
-                AND EXISTS (
-                    SELECT 1 FROM ops_message um2
-                    WHERE um2.conversation_id = m2.conversation_id
-                      AND um2.role = 'user'
-                      AND um2.content = ql.question
-                      AND um2.created_at < m2.created_at
-                )
-              ORDER BY m2.created_at DESC
-              LIMIT 1
-          )
+        SET answer = lm.content
+        FROM latest_match lm
+        WHERE ql.id = lm.ql_id
     """)
 
     # ── ops_query_log.status 소급 보정 (지식 공백 누락) ─────────────
@@ -317,13 +285,7 @@ async def _migrate_namespace_ids(conn) -> None:
                 "ops_query_log", "ops_conversation", "ops_feedback", "rag_fewshot"):
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS namespace_id INT")
         # string namespace → namespace_id 동기화 (namespace 컬럼이 있는 경우)
-        col_exists = await conn.fetchval(f"""
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = '{tbl}' AND column_name = 'namespace'
-            )
-        """)
-        if col_exists:
+        if await _column_exists(conn, tbl, "namespace"):
             await conn.execute(f"""
                 UPDATE {tbl} t
                 SET namespace_id = n.id
@@ -1004,6 +966,7 @@ async def lifespan(_app: FastAPI):
     logger.log(logging.getLevelName(level), "LLM(%s) %s", settings.llm_provider, msg)
 
     yield
+    await close_mcp_http_client()
     await close_pool()
 
 

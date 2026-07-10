@@ -3,6 +3,8 @@ import logging
 import re
 
 from agents.text2sql.pipeline.safety import BlockedQueryError, validate_sql_safety
+from agents.text2sql.pipeline.schema_format import format_schema
+from agents.text2sql.pipeline.sql_extract import SQL_CODEBLOCK_RE
 from service.prompt.loader import get_prompt
 
 logger = logging.getLogger(__name__)
@@ -25,7 +27,7 @@ _DEFAULT_PROMPT = """다음 SQL에 오류가 있습니다. 수정하여 올바�
 
 
 def _extract_sql(text: str) -> str:
-    m = re.search(r"```sql\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    m = SQL_CODEBLOCK_RE.search(text)
     if m:
         inner = m.group(1).strip()
         # 주석만 있는 경우 거부
@@ -50,26 +52,12 @@ def _extract_sql(text: str) -> str:
     return ""
 
 
-def _format_schema(schema_results: list[dict]) -> str:
-    if not schema_results:
-        return ""
-    tables: dict[str, list] = {}
-    for r in schema_results:
-        tname = r["table_name"]
-        if tname not in tables:
-            tables[tname] = []
-        tables[tname].append(f"  {r['name']} ({r['data_type']})")
-    return "\n".join(
-        f"Table: {t}\n" + "\n".join(cols) for t, cols in tables.items()
-    )
-
-
 async def run(context: dict, llm, stage_cfg: dict) -> dict:
     """Returns: {"sql": str, "fixed": bool}"""
     sql = context.get("sql", "")
     errors = context.get("validation_errors", [])
     rag = context.get("rag", {})
-    schema_text = _format_schema(rag.get("schema", []))
+    schema_text = format_schema(rag.get("schema", []))
 
     if not errors:
         return {"sql": sql, "fixed": False}

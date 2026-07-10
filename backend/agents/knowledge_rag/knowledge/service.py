@@ -13,8 +13,11 @@ logger = logging.getLogger(__name__)
 _KNOWLEDGE_COLS = """k.id, n.name AS namespace, k.container_name, k.target_tables,
     k.content, k.query_template, k.base_weight, k.category,
     k.source_file, k.source_chunk_idx, k.source_type,
-    k.created_by_part, k.created_by_user_id,
+    k.created_by_part, k.created_by_user_id, u.username AS created_by_username,
     k.created_at::text, k.updated_at::text"""
+
+_GLOSSARY_COLS = """g.id, n.name AS namespace, g.term, g.description,
+    g.created_by_part, g.created_by_user_id, u.username AS created_by_username"""
 
 
 def _require_category(category: Optional[str]) -> str:
@@ -183,12 +186,8 @@ async def vector_search_knowledge(namespace: str, query_vec: list[float], top_k:
         if ns_id is None:
             return []
         rows = await conn.fetch(
-            """
-            SELECT k.id, n.name AS namespace, k.container_name, k.target_tables,
-                   k.content, k.query_template, k.base_weight, k.category,
-                   k.source_file, k.source_chunk_idx, k.source_type,
-                   k.created_by_part, k.created_by_user_id, u.username AS created_by_username,
-                   k.created_at::text, k.updated_at::text,
+            f"""
+            SELECT {_KNOWLEDGE_COLS},
                    1 - (k.embedding <=> $2::vector) AS similarity
             FROM rag_knowledge k
             JOIN ops_namespace n ON k.namespace_id = n.id
@@ -203,11 +202,6 @@ async def vector_search_knowledge(namespace: str, query_vec: list[float], top_k:
 
 
 async def list_knowledge(namespace: Optional[str] = None) -> list[dict]:
-    _cols_with_user = """k.id, n.name AS namespace, k.container_name, k.target_tables,
-        k.content, k.query_template, k.base_weight, k.category,
-        k.source_file, k.source_chunk_idx, k.source_type,
-        k.created_by_part, k.created_by_user_id, u.username AS created_by_username,
-        k.created_at::text, k.updated_at::text"""
     async with get_conn() as conn:
         if namespace:
             ns_id = await resolve_namespace_id(conn, namespace)
@@ -215,7 +209,7 @@ async def list_knowledge(namespace: Optional[str] = None) -> list[dict]:
                 return []
             rows = await conn.fetch(
                 f"""
-                SELECT {_cols_with_user}
+                SELECT {_KNOWLEDGE_COLS}
                 FROM rag_knowledge k
                 JOIN ops_namespace n ON k.namespace_id = n.id
                 LEFT JOIN ops_user u ON k.created_by_user_id = u.id
@@ -227,7 +221,7 @@ async def list_knowledge(namespace: Optional[str] = None) -> list[dict]:
         else:
             rows = await conn.fetch(
                 f"""
-                SELECT {_cols_with_user}
+                SELECT {_KNOWLEDGE_COLS}
                 FROM rag_knowledge k
                 JOIN ops_namespace n ON k.namespace_id = n.id
                 LEFT JOIN ops_user u ON k.created_by_user_id = u.id
@@ -287,7 +281,6 @@ async def create_glossary(
 
 
 async def list_glossary(namespace: Optional[str] = None) -> list[dict]:
-    _cols = "g.id, n.name AS namespace, g.term, g.description, g.created_by_part, g.created_by_user_id, u.username AS created_by_username"
     async with get_conn() as conn:
         if namespace:
             ns_id = await resolve_namespace_id(conn, namespace)
@@ -295,7 +288,7 @@ async def list_glossary(namespace: Optional[str] = None) -> list[dict]:
                 return []
             rows = await conn.fetch(
                 f"""
-                SELECT {_cols}
+                SELECT {_GLOSSARY_COLS}
                 FROM rag_glossary g
                 JOIN ops_namespace n ON g.namespace_id = n.id
                 LEFT JOIN ops_user u ON g.created_by_user_id = u.id
@@ -307,7 +300,7 @@ async def list_glossary(namespace: Optional[str] = None) -> list[dict]:
         else:
             rows = await conn.fetch(
                 f"""
-                SELECT {_cols}
+                SELECT {_GLOSSARY_COLS}
                 FROM rag_glossary g
                 JOIN ops_namespace n ON g.namespace_id = n.id
                 LEFT JOIN ops_user u ON g.created_by_user_id = u.id
@@ -368,9 +361,8 @@ async def vector_search_glossary(namespace: str, query_vec: list[float], top_k: 
         if ns_id is None:
             return []
         rows = await conn.fetch(
-            """
-            SELECT g.id, n.name AS namespace, g.term, g.description,
-                   g.created_by_part, g.created_by_user_id, u.username AS created_by_username,
+            f"""
+            SELECT {_GLOSSARY_COLS},
                    1 - (g.embedding <=> $2::vector) AS similarity
             FROM rag_glossary g
             JOIN ops_namespace n ON g.namespace_id = n.id

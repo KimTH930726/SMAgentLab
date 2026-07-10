@@ -1,8 +1,9 @@
 """자동 Q&A 생성 — 지식 청크에서 예상 질문-답변 쌍을 LLM으로 생성."""
+import asyncio
 import logging
 from typing import Optional
 
-from agents.knowledge_rag.ingestion.utils import parse_json_array
+from shared.json_utils import parse_json_array
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +86,19 @@ async def bulk_generate_qa(
     Returns:
         [{"chunk_idx": int, "question": str, "answer": str}, ...]
     """
-    all_pairs: list[dict] = []
-    for chunk in chunks:
-        pairs = await generate_qa_pairs(
+    # 청크별 LLM 호출은 서로 독립적 — 병렬 실행 (generate_qa_pairs는 내부에서 예외를
+    # 흡수하고 [] 를 반환하므로 gather에 return_exceptions는 불필요)
+    results = await asyncio.gather(*(
+        generate_qa_pairs(
             chunk["content"], llm,
             user_credentials=user_credentials,
             max_pairs=max_pairs_per_chunk,
         )
+        for chunk in chunks
+    ))
+
+    all_pairs: list[dict] = []
+    for chunk, pairs in zip(chunks, results):
         for p in pairs:
             all_pairs.append({
                 "chunk_idx": chunk["idx"],

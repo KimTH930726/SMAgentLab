@@ -127,10 +127,6 @@ async def retrieve_relevant_summaries(
 
 async def maybe_summarize(conversation_id: int, llm_provider) -> None:
     async with get_conn() as conn:
-        total_pairs = await conn.fetchval(
-            "SELECT COUNT(*) FROM ops_message WHERE conversation_id=$1 AND role='user'",
-            conversation_id,
-        )
         last_summarized_end = await conn.fetchval(
             "SELECT COALESCE(MAX(turn_end), 0) FROM rag_conv_summary WHERE conversation_id=$1",
             conversation_id,
@@ -210,8 +206,11 @@ async def _summarize_with_llm(messages: list, llm_provider) -> Optional[str]:
 async def build_context_history(
     conversation_id: int, query_vec: list[float],
 ) -> list[dict]:
-    summaries = await retrieve_relevant_summaries(conversation_id, query_vec)
-    recent = await load_recent_history(conversation_id)
+    # 서로 독립적인 조회 — 각자 별도 커넥션을 사용하므로 병렬 실행 가능
+    summaries, recent = await asyncio.gather(
+        retrieve_relevant_summaries(conversation_id, query_vec),
+        load_recent_history(conversation_id),
+    )
 
     history: list[dict] = []
     if summaries:

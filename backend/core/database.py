@@ -12,8 +12,8 @@ async def init_pool() -> None:
     global _pool
     _pool = await asyncpg.create_pool(
         dsn=settings.database_url,
-        min_size=2,
-        max_size=10,
+        min_size=settings.db_pool_min_size,
+        max_size=settings.db_pool_max_size,
         command_timeout=60,
     )
 
@@ -28,7 +28,7 @@ async def close_pool() -> None:
 @asynccontextmanager
 async def get_conn() -> AsyncIterator[asyncpg.Connection]:
     assert _pool is not None, "DB pool is not initialized"
-    async with _pool.acquire() as conn:
+    async with _pool.acquire(timeout=settings.db_pool_acquire_timeout) as conn:
         yield conn
 
 
