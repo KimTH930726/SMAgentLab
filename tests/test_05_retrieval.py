@@ -5,13 +5,15 @@ TC-05: 검색 파이프라인 (하이브리드 검색 + 용어 매핑)
 """
 import pytest
 
+from conftest import TEST_CATEGORY, UNRELATED_NS
+
 TEST_NS = "test_coupon"
 
 
 @pytest.fixture(scope="module")
 def seeded_data(client):
     """검색 테스트용 지식 + 용어 등록 (모듈 단위 공유)."""
-    k1 = client.post("/api/knowledge", json={
+    r1 = client.post("/api/knowledge", json={
         "namespace": TEST_NS,
         "container_name": "coupon-api",
         "target_tables": ["coupon_issue", "coupon_use_history"],
@@ -21,22 +23,30 @@ def seeded_data(client):
         ),
         "query_template": "SELECT * FROM coupon_issue WHERE status='FAILED';",
         "base_weight": 1.0,
-    }).json()
+        "category": TEST_CATEGORY,
+    })
+    assert r1.status_code == 201, r1.text
+    k1 = r1.json()
 
-    k2 = client.post("/api/knowledge", json={
+    r2 = client.post("/api/knowledge", json={
         "namespace": TEST_NS,
         "container_name": "order-api",
         "target_tables": ["orders", "order_items"],
         "content": "주문 취소 처리 시 orders 테이블의 status를 CANCELLED로 업데이트한다.",
         "query_template": "UPDATE orders SET status='CANCELLED' WHERE id=:id;",
         "base_weight": 1.0,
-    }).json()
+        "category": TEST_CATEGORY,
+    })
+    assert r2.status_code == 201, r2.text
+    k2 = r2.json()
 
-    g1 = client.post("/api/knowledge/glossary", json={
+    r3 = client.post("/api/knowledge/glossary", json={
         "namespace": TEST_NS,
         "term": "회수",
         "description": "쿠폰 회수, 뺏어오기, 강제 반납 등 쿠폰을 사용자로부터 되돌리는 처리",
-    }).json()
+    })
+    assert r3.status_code == 201, r3.text
+    g1 = r3.json()
 
     yield {"k1": k1, "k2": k2, "g1": g1}
 
@@ -113,9 +123,14 @@ class TestHybridSearch:
         assert isinstance(body["answer"], str)
 
     def test_unrelated_namespace_returns_no_results(self, client, seeded_data):
-        """다른 namespace 에서는 결과가 0건이다."""
+        """관련 지식이 없는(그러나 존재하는) namespace 에서는 결과가 0건이다.
+
+        namespace_id가 FK로 강제되므로 존재하지 않는 namespace를 넘기면 404가 난다
+        (예전엔 조용히 빈 결과를 반환했음) — 그래서 실제로 존재하되 지식이 비어 있는
+        UNRELATED_NS를 사용해 "관련 없음" 시나리오를 검증한다.
+        """
         resp = client.post("/api/chat", json={
-            "namespace": "completely_different_ns",
+            "namespace": UNRELATED_NS,
             "question": "쿠폰 회수 실패 건",
             "w_vector": 0.7,
             "w_keyword": 0.3,
