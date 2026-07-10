@@ -1,9 +1,8 @@
 """Stage 1: 질문 분석 — intent / difficulty / entities 추출."""
-import json
 import logging
-import re
 
 from service.prompt.loader import get_prompt
+from shared.json_utils import parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -25,19 +24,10 @@ _DEFAULT_PROMPT = """다음 사용자 질문을 분석하여 JSON으로 반환�
 
 
 def _extract_json(text: str) -> dict:
-    # 마크다운 코드블록 제거
-    text = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`").strip()
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # { ... } 구간 추출
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except Exception:
-                pass
-    return {"intent": "simple_select", "difficulty": "simple", "entities": [], "keywords": []}
+        return parse_json_object(text)
+    except Exception:
+        return {"intent": "simple_select", "difficulty": "simple", "entities": [], "keywords": []}
 
 
 async def run(context: dict, llm, stage_cfg: dict) -> dict:

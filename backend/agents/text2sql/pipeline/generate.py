@@ -3,6 +3,8 @@ import logging
 import re
 
 from service.prompt.loader import get_prompt
+from agents.text2sql.pipeline.schema_format import format_schema
+from agents.text2sql.pipeline.sql_extract import SQL_CODEBLOCK_RE
 
 logger = logging.getLogger(__name__)
 
@@ -56,23 +58,6 @@ DB 방언 규칙:
 ```"""
 
 
-def _format_schema(schema_results: list[dict]) -> str:
-    tables: dict[str, list] = {}
-    for r in schema_results:
-        tname = r["table_name"]
-        if tname not in tables:
-            tables[tname] = []
-        pk_mark = " (PK)" if r.get("is_pk") else ""
-        fk_mark = f" (FK -> {r['fk_reference']})" if r.get("fk_reference") else ""
-        desc = f": {r['description']}" if r.get("description") else ""
-        tables[tname].append(f"  - {r['name']} {r['data_type']}{pk_mark}{fk_mark}{desc}")
-    lines = []
-    for tname, cols in tables.items():
-        lines.append(f"Table: {tname}")
-        lines.extend(cols)
-    return "\n".join(lines)
-
-
 def _format_relations(relations: list[dict]) -> str:
     if not relations:
         return "(없음)"
@@ -105,7 +90,7 @@ def _extract_sql_and_reasoning(text: str) -> tuple[str, str]:
         reasoning = m.group(1).strip()
 
     sql = ""
-    m2 = re.search(r"```sql\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    m2 = SQL_CODEBLOCK_RE.search(text)
     if m2:
         sql = m2.group(1).strip()
     else:
@@ -122,7 +107,7 @@ async def run(context: dict, llm, relations: list[dict], db_type: str, stage_cfg
     parsed = context.get("parsed", {})
     difficulty = parsed.get("difficulty", "simple")
 
-    schema_text = _format_schema(rag.get("schema", []))
+    schema_text = format_schema(rag.get("schema", []))
     relations_text = _format_relations(relations)
     synonyms_text = _format_synonyms(rag.get("synonyms", []))
     fewshots_text = _format_fewshots(rag.get("fewshots", []))

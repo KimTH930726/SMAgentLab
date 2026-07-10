@@ -2,7 +2,7 @@
 import logging
 from typing import Optional
 
-from agents.knowledge_rag.ingestion.utils import parse_json_object
+from shared.json_utils import parse_json_object
 
 logger = logging.getLogger(__name__)
 

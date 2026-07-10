@@ -1,6 +1,8 @@
 """공통 의존성 — 인증, 권한 체크."""
 from __future__ import annotations
 
+import time
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -8,6 +10,17 @@ from core.database import get_conn
 from core.security import decode_token
 
 _bearer_scheme = HTTPBearer()
+
+# 매 요청마다 ops_user를 조회하지 않도록 짧은 TTL로 캐시 — 프론트에서 페이지 로드 시
+# 여러 API를 동시 호출하는 버스트 패턴을 흡수한다. TTL이 짧아(수 초) 계정 비활성화/권한
+# 변경이 반영되는 데 걸리는 지연은 access token 만료 주기(30분)에 비해 무시할 수준.
+_USER_CACHE_TTL = 5.0
+_user_cache: dict[int, tuple[float, dict]] = {}
+
+
+def invalidate_user_cache(user_id: int) -> None:
+    """사용자 정보 변경(비활성화/권한 변경 등) 시 캐시를 즉시 무효화."""
+    _user_cache.pop(user_id, None)
 
 
 async def get_current_user(
@@ -21,9 +34,13 @@ async def get_current_user(
     if not payload or payload.get("type") != "access":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다.")
 
-    user_id = payload.get("sub")
-    if not user_id:
+    uid = int(payload.get("sub") or 0)
+    if not uid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="토큰에 사용자 정보가 없습니다.")
+
+    cached = _user_cache.get(uid)
+    if cached and time.monotonic() - cached[0] < _USER_CACHE_TTL:
+        return cached[1]
 
     async with get_conn() as conn:
         row = await conn.fetchrow(
@@ -36,7 +53,7 @@ async def get_current_user(
             LEFT JOIN ops_part p ON u.part_id = p.id
             WHERE u.id = $1
             """,
-            int(user_id),
+            uid,
         )
 
     if not row:
@@ -44,7 +61,9 @@ async def get_current_user(
     if not row["is_active"]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="비활성화된 계정입니다.")
 
-    return dict(row)
+    user = dict(row)
+    _user_cache[uid] = (time.monotonic(), user)
+    return user
 
 
 async def get_current_admin(user: dict = Depends(get_current_user)) -> dict:

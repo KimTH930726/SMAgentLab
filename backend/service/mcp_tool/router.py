@@ -268,14 +268,12 @@ async def list_mcp_tool_logs(
             conditions.append(f"l.called_at <= ${len(params)}")
         where = " AND ".join(conditions)
 
-        total = await conn.fetchval(
-            f"SELECT COUNT(*) FROM ops_mcp_tool_log l WHERE {where}", *params
-        )
+        # COUNT(*) OVER()로 전체 건수와 페이지 데이터를 한 번의 왕복으로 조회
         offset = (max(page, 1) - 1) * page_size
         params_pg = params + [page_size, offset]
         rows = await conn.fetch(
             f"""
-            SELECT l.*, u.username
+            SELECT l.*, u.username, COUNT(*) OVER() AS total_count
             FROM ops_mcp_tool_log l
             LEFT JOIN ops_user u ON l.user_id = u.id
             WHERE {where}
@@ -283,6 +281,9 @@ async def list_mcp_tool_logs(
             LIMIT ${len(params_pg) - 1} OFFSET ${len(params_pg)}
             """,
             *params_pg,
+        )
+        total = rows[0]["total_count"] if rows else await conn.fetchval(
+            f"SELECT COUNT(*) FROM ops_mcp_tool_log l WHERE {where}", *params
         )
 
     return {

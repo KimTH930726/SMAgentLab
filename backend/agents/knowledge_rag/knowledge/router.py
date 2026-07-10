@@ -25,6 +25,14 @@ router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
 # ─── ops_knowledge ─────────────────────────────────────────────────────────────
 
+async def _require_resource_namespace(namespace: Optional[str], user: dict, not_found_detail: str) -> str:
+    """단건 리소스의 namespace를 찾아 소유권을 검증. namespace가 없으면(리소스 미존재) 404."""
+    if namespace is None:
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    await check_namespace_ownership(namespace, user)
+    return namespace
+
+
 @router.get("", response_model=list[KnowledgeOut])
 async def get_knowledge_list(
     namespace: Optional[str] = Query(default=None),
@@ -53,9 +61,7 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
 @router.put("/{knowledge_id}", response_model=KnowledgeOut)
 async def modify_knowledge(knowledge_id: int, body: KnowledgeUpdate, user: dict = Depends(get_current_user)):
     ns = await service.get_knowledge_namespace(knowledge_id)
-    if ns is None:
-        raise HTTPException(status_code=404, detail="Knowledge not found")
-    await check_namespace_ownership(ns, user)
+    await _require_resource_namespace(ns, user, "Knowledge not found")
 
     row = await service.update_knowledge(
         knowledge_id=knowledge_id,
@@ -76,9 +82,7 @@ async def modify_knowledge(knowledge_id: int, body: KnowledgeUpdate, user: dict 
 @router.delete("/{knowledge_id}", status_code=204)
 async def remove_knowledge(knowledge_id: int, user: dict = Depends(get_current_user)):
     ns = await service.get_knowledge_namespace(knowledge_id)
-    if ns is None:
-        raise HTTPException(status_code=404, detail="Knowledge not found")
-    await check_namespace_ownership(ns, user)
+    await _require_resource_namespace(ns, user, "Knowledge not found")
 
     deleted = await service.delete_knowledge(knowledge_id)
     if not deleted:
@@ -151,9 +155,7 @@ async def add_glossary(body: GlossaryCreate, user: dict = Depends(get_current_us
 @router.put("/glossary/{glossary_id}", response_model=GlossaryOut)
 async def modify_glossary(glossary_id: int, body: GlossaryUpdate, user: dict = Depends(get_current_user)):
     ns = await service.get_glossary_namespace(glossary_id)
-    if ns is None:
-        raise HTTPException(status_code=404, detail="Glossary term not found")
-    await check_namespace_ownership(ns, user)
+    await _require_resource_namespace(ns, user, "Glossary term not found")
 
     row = await service.update_glossary(
         glossary_id, body.term, body.description,
@@ -167,9 +169,7 @@ async def modify_glossary(glossary_id: int, body: GlossaryUpdate, user: dict = D
 @router.delete("/glossary/{glossary_id}", status_code=204)
 async def remove_glossary(glossary_id: int, user: dict = Depends(get_current_user)):
     ns = await service.get_glossary_namespace(glossary_id)
-    if ns is None:
-        raise HTTPException(status_code=404, detail="Glossary term not found")
-    await check_namespace_ownership(ns, user)
+    await _require_resource_namespace(ns, user, "Glossary term not found")
 
     deleted = await service.delete_glossary(glossary_id)
     if not deleted:
@@ -347,6 +347,76 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
 
 # ─── 파일 업로드 + 자동 청킹 (Tier 2) ────────────────────────────────────────
 
+async def _run_auto_tag(
+    items: list[dict], namespace: str, user: dict,
+    *, lookup_categories: bool = False, apply_priority_weight: bool = False, apply_container_name: bool = True,
+) -> None:
+    """items(각 dict에 "content" 키 필요)를 LLM으로 자동 태깅 — item을 in-place 갱신."""
+    try:
+        from agents.knowledge_rag.ingestion.tagger import auto_tag_chunks
+        from service.llm.factory import get_llm_provider
+        from core.security import get_user_llm_credentials
+
+        categories = []
+        if lookup_categories:
+            try:
+                from core.database import get_conn, resolve_namespace_id
+                async with get_conn() as conn:
+                    ns_id = await resolve_namespace_id(conn, namespace)
+                    cat_rows = await conn.fetch(
+                        "SELECT name FROM rag_knowledge_category WHERE namespace_id = $1", ns_id
+                    )
+                categories = [r["name"] for r in cat_rows]
+            except Exception:
+                pass
+
+        llm = get_llm_provider()
+        tag_input = [{"idx": i, "text": it["content"]} for i, it in enumerate(items)]
+        tags = await auto_tag_chunks(tag_input, categories, llm, user_credentials=get_user_llm_credentials(user))
+        tag_map = {t["idx"]: t for t in tags}
+        for i, item in enumerate(items):
+            tag = tag_map.get(i, {})
+            if tag.get("category"):
+                item["category"] = tag["category"]
+            if apply_container_name and tag.get("container_name"):
+                item["container_name"] = tag["container_name"]
+            if apply_priority_weight and tag.get("priority_score") is not None:
+                item["base_weight"] = 0.5 + float(tag["priority_score"]) * 1.5
+    except Exception as e:
+        logger.warning("자동 태깅 실패 (무시하고 계속): %s", e)
+
+
+async def _run_auto_glossary(namespace: str, raw_text: str, user: dict, *, max_chars: Optional[int] = None) -> int:
+    """raw_text에서 LLM으로 용어를 추출해 rag_glossary에 등록. 등록된 용어 수 반환."""
+    count = 0
+    try:
+        from agents.knowledge_rag.ingestion.tagger import extract_glossary_terms
+        from service.llm.factory import get_llm_provider
+        from core.security import get_user_llm_credentials
+        from core.database import get_conn, resolve_namespace_id
+
+        async with get_conn() as conn:
+            ns_id = await resolve_namespace_id(conn, namespace)
+            existing = await conn.fetch("SELECT term FROM rag_glossary WHERE namespace_id = $1", ns_id)
+        existing_terms = [r["term"] for r in existing]
+
+        llm = get_llm_provider()
+        text = raw_text[:max_chars] if max_chars else raw_text
+        terms = await extract_glossary_terms(text, existing_terms, llm, user_credentials=get_user_llm_credentials(user))
+        for term_data in terms:
+            try:
+                await service.create_glossary(
+                    namespace, term_data["term"], term_data.get("description", ""),
+                    created_by_part=user["part"], created_by_user_id=user["id"],
+                )
+                count += 1
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning("용어 추출 실패 (무시하고 계속): %s", e)
+    return count
+
+
 @router.post("/import/file", status_code=201)
 async def import_file(
     file: UploadFile = File(...),
@@ -396,8 +466,7 @@ async def import_file(
             if not category and analyzer_result.get("suggested_categories"):
                 category = analyzer_result["suggested_categories"][0]
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("Analyzer 실패 (기존 전략 사용): %s", e)
+            logger.warning("Analyzer 실패 (기존 전략 사용): %s", e)
 
     # 청킹
     chunks = chunk_document(doc, strategy=chunk_strategy)
@@ -412,41 +481,7 @@ async def import_file(
 
     # LLM 자동 태깅 (선택적)
     if auto_tag:
-        try:
-            from agents.knowledge_rag.ingestion.tagger import auto_tag_chunks
-            from service.llm.factory import get_llm_provider
-            from core.security import get_user_llm_credentials
-
-            categories = []
-            try:
-                from agents.knowledge_rag.knowledge.schemas import BulkKnowledgeItem
-                from core.database import get_conn, resolve_namespace_id
-                async with get_conn() as conn:
-                    ns_id = await resolve_namespace_id(conn, namespace)
-                    cat_rows = await conn.fetch(
-                        "SELECT name FROM rag_knowledge_category WHERE namespace_id = $1", ns_id
-                    )
-                categories = [r["name"] for r in cat_rows]
-            except Exception:
-                pass
-
-            llm = get_llm_provider()
-            tag_input = [{"idx": i, "text": c.text} for i, c in enumerate(chunks)]
-            tags = await auto_tag_chunks(tag_input, categories, llm, user_credentials=get_user_llm_credentials(user))
-
-            # 태그 적용
-            tag_map = {t["idx"]: t for t in tags}
-            for i, item in enumerate(items):
-                tag = tag_map.get(i, {})
-                if tag.get("category"):
-                    item["category"] = tag["category"]
-                if tag.get("container_name"):
-                    item["container_name"] = tag["container_name"]
-                if tag.get("priority_score") is not None:
-                    item["base_weight"] = 0.5 + float(tag["priority_score"]) * 1.5
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("자동 태깅 실패 (무시하고 계속): %s", e)
+        await _run_auto_tag(items, namespace, user, lookup_categories=True, apply_priority_weight=True)
 
     # 벌크 등록
     result = await service.bulk_create_knowledge(
@@ -461,36 +496,7 @@ async def import_file(
     # 용어 자동 추출 (선택적)
     glossary_count = 0
     if auto_glossary:
-        try:
-            from agents.knowledge_rag.ingestion.tagger import extract_glossary_terms
-            from service.llm.factory import get_llm_provider
-            from core.security import get_user_llm_credentials
-            from core.database import get_conn, resolve_namespace_id
-
-            async with get_conn() as conn:
-                ns_id = await resolve_namespace_id(conn, namespace)
-                existing = await conn.fetch(
-                    "SELECT term FROM rag_glossary WHERE namespace_id = $1", ns_id
-                )
-            existing_terms = [r["term"] for r in existing]
-
-            llm = get_llm_provider()
-            terms = await extract_glossary_terms(
-                doc.raw_text, existing_terms, llm, user_credentials=get_user_llm_credentials(user),
-            )
-
-            for term_data in terms:
-                try:
-                    await service.create_glossary(
-                        namespace, term_data["term"], term_data.get("description", ""),
-                        created_by_part=user["part"], created_by_user_id=user["id"],
-                    )
-                    glossary_count += 1
-                except Exception:
-                    pass
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("용어 추출 실패 (무시하고 계속): %s", e)
+        glossary_count = await _run_auto_glossary(namespace, doc.raw_text, user)
 
     # 자동 Q&A 생성 (선택적)
     fewshot_count = 0
@@ -506,18 +512,20 @@ async def import_file(
             qa_input = [{"idx": i, "content": c.text} for i, c in enumerate(chunks[:5])]
             qa_pairs = await bulk_generate_qa(qa_input, llm, user_credentials=get_user_llm_credentials(user))
 
-            async with get_conn() as conn:
-                ns_id = await resolve_namespace_id(conn, namespace)
-                for qa in qa_pairs:
-                    emb = await embedding_service.embed(qa["question"])
-                    await conn.execute("""
+            if qa_pairs:
+                embeddings = await embedding_service.embed_batch([qa["question"] for qa in qa_pairs])
+                async with get_conn() as conn:
+                    ns_id = await resolve_namespace_id(conn, namespace)
+                    await conn.executemany("""
                         INSERT INTO rag_fewshot (namespace_id, question, answer, status, embedding)
                         VALUES ($1, $2, $3, 'candidate', $4::vector)
-                    """, ns_id, qa["question"], qa["answer"], str(emb))
-                    fewshot_count += 1
+                    """, [
+                        (ns_id, qa["question"], qa["answer"], str(emb))
+                        for qa, emb in zip(qa_pairs, embeddings)
+                    ])
+                fewshot_count = len(qa_pairs)
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("Q&A 자동 생성 실패 (무시하고 계속): %s", e)
+            logger.warning("Q&A 자동 생성 실패 (무시하고 계속): %s", e)
 
     # job 업데이트 (용어 수 + fewshot 수)
     if result.get("job_id") and (glossary_count > 0 or fewshot_count > 0):
@@ -624,24 +632,7 @@ async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current
 
     # LLM 자동 태깅 (선택적)
     if body.auto_tag:
-        try:
-            from agents.knowledge_rag.ingestion.tagger import auto_tag_chunks
-            from service.llm.factory import get_llm_provider
-            from core.security import get_user_llm_credentials
-
-            llm = get_llm_provider()
-            tag_input = [{"idx": i, "text": c.text} for i, c in enumerate(chunks)]
-            tags = await auto_tag_chunks(tag_input, [], llm, user_credentials=get_user_llm_credentials(user))
-            tag_map = {t["idx"]: t for t in tags}
-            for i, item in enumerate(items):
-                tag = tag_map.get(i, {})
-                if tag.get("category"):
-                    item["category"] = tag["category"]
-                if tag.get("container_name"):
-                    item["container_name"] = tag["container_name"]
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("자동 태깅 실패 (무시하고 계속): %s", e)
+        await _run_auto_tag(items, body.namespace, user)
 
     result = await service.bulk_create_knowledge(
         namespace=body.namespace,
@@ -655,33 +646,7 @@ async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current
     # 용어 자동 추출 (선택적)
     glossary_count = 0
     if body.auto_glossary:
-        try:
-            from agents.knowledge_rag.ingestion.tagger import extract_glossary_terms
-            from service.llm.factory import get_llm_provider
-            from core.security import get_user_llm_credentials
-            from core.database import get_conn, resolve_namespace_id
-
-            async with get_conn() as conn:
-                ns_id = await resolve_namespace_id(conn, body.namespace)
-                existing = await conn.fetch("SELECT term FROM rag_glossary WHERE namespace_id = $1", ns_id)
-            existing_terms = [r["term"] for r in existing]
-
-            llm = get_llm_provider()
-            terms = await extract_glossary_terms(
-                doc.raw_text, existing_terms, llm, user_credentials=get_user_llm_credentials(user),
-            )
-            for term_data in terms:
-                try:
-                    await service.create_glossary(
-                        body.namespace, term_data["term"], term_data.get("description", ""),
-                        created_by_part=user["part"], created_by_user_id=user["id"],
-                    )
-                    glossary_count += 1
-                except Exception:
-                    pass
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning("용어 추출 실패 (무시하고 계속): %s", e)
+        glossary_count = await _run_auto_glossary(body.namespace, doc.raw_text, user)
 
     return {
         **result,
@@ -1004,23 +969,9 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
             detail=f"수집된 청크가 없습니다. failed_pages={failed_pages}",
         )
 
-    # LLM 자동 태깅 (선택)
+    # LLM 자동 태깅 (선택) — container_name은 페이지 제목으로 이미 채워져 있으므로 덮어쓰지 않음
     if body.auto_tag and items:
-        try:
-            from agents.knowledge_rag.ingestion.tagger import auto_tag_chunks
-            from service.llm.factory import get_llm_provider
-            from core.security import get_user_llm_credentials
-
-            llm = get_llm_provider()
-            tag_input = [{"idx": i, "text": it["content"]} for i, it in enumerate(items)]
-            tags = await auto_tag_chunks(tag_input, [], llm, user_credentials=get_user_llm_credentials(user))
-            tag_map = {t["idx"]: t for t in tags}
-            for i, item in enumerate(items):
-                tag = tag_map.get(i, {})
-                if tag.get("category"):
-                    item["category"] = tag["category"]
-        except Exception as e:
-            logger.warning("자동 태깅 실패: %s", e)
+        await _run_auto_tag(items, body.namespace, user, apply_container_name=False)
 
     # 벌크 등록 — source_file은 root URL 또는 페이지 수 표기
     source_file = f"Confluence bulk ({len(page_summaries)} pages)"
@@ -1036,34 +987,8 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
     # 용어 자동 추출 (선택, 전체 합쳐서)
     glossary_count = 0
     if body.auto_glossary:
-        try:
-            from agents.knowledge_rag.ingestion.tagger import extract_glossary_terms
-            from service.llm.factory import get_llm_provider
-            from core.security import get_user_llm_credentials
-            from core.database import get_conn, resolve_namespace_id
-
-            async with get_conn() as conn:
-                ns_id = await resolve_namespace_id(conn, body.namespace)
-                existing = await conn.fetch("SELECT term FROM rag_glossary WHERE namespace_id = $1", ns_id)
-            existing_terms = [r["term"] for r in existing]
-
-            llm = get_llm_provider()
-            combined_text = "\n\n".join(f["doc"].raw_text for f in fetched if f["doc"])
-            terms = await extract_glossary_terms(
-                combined_text[:20000], existing_terms, llm,
-                user_credentials=get_user_llm_credentials(user),
-            )
-            for term_data in terms:
-                try:
-                    await service.create_glossary(
-                        body.namespace, term_data["term"], term_data.get("description", ""),
-                        created_by_part=user["part"], created_by_user_id=user["id"],
-                    )
-                    glossary_count += 1
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning("용어 추출 실패: %s", e)
+        combined_text = "\n\n".join(f["doc"].raw_text for f in fetched if f["doc"])
+        glossary_count = await _run_auto_glossary(body.namespace, combined_text, user, max_chars=20000)
 
     return {
         **result,

@@ -1,9 +1,9 @@
 """Stage 7: 결과 요약 — LLM 결과 요약 + 차트 추천 (기본 disabled)."""
 import json
 import logging
-import re
 
 from service.prompt.loader import get_prompt
+from shared.json_utils import parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +24,10 @@ _SUPPORTED_CHART_TYPES = {"bar", "line", "pie", "scatter", "area"}
 
 
 def _extract_json(text: str) -> dict:
-    text = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`").strip()
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except Exception:
-                pass
-    return {"summary": text[:200], "chart": None}
+        return parse_json_object(text)
+    except Exception:
+        return {"summary": text[:200], "chart": None}
 
 
 def _validate_chart(chart: dict | None, columns: list[str]) -> dict | None:

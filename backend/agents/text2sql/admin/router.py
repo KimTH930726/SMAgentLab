@@ -11,23 +11,11 @@ from core.security import get_user_llm_credentials
 from service.llm.factory import get_llm_provider
 from agents.text2sql.admin import service
 from shared.embedding import embedding_service
+from shared.json_utils import parse_json_array
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/text2sql", tags=["text2sql-admin"])
-
-
-def _parse_llm_json(text: str) -> list:
-    """LLM 응답에서 JSON 배열을 파싱하는 공통 헬퍼."""
-    text = text.strip()
-    if "```json" in text:
-        text = text.split("```json")[1].split("```")[0].strip()
-    elif "```" in text:
-        text = text.split("```")[1].split("```")[0].strip()
-    result = json.loads(text)
-    if not isinstance(result, list):
-        raise ValueError("Expected JSON array")
-    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,12 +156,14 @@ async def save_schema_positions(namespace: str, body: PositionsPayload, _=Depend
     """ERD 테이블 위치를 DB에 저장합니다."""
     ns_id = await _get_ns_id(namespace)
     async with get_conn() as conn:
-        for table_name, pos in body.positions.items():
-            await conn.execute(
-                "UPDATE sql_schema_table SET pos_x = $1, pos_y = $2, updated_at = NOW() "
-                "WHERE namespace_id = $3 AND table_name = $4",
-                float(pos.get("x", 0)), float(pos.get("y", 0)), ns_id, table_name,
-            )
+        await conn.executemany(
+            "UPDATE sql_schema_table SET pos_x = $1, pos_y = $2, updated_at = NOW() "
+            "WHERE namespace_id = $3 AND table_name = $4",
+            [
+                (float(pos.get("x", 0)), float(pos.get("y", 0)), ns_id, table_name)
+                for table_name, pos in body.positions.items()
+            ],
+        )
     return {"ok": True}
 
 
@@ -341,12 +331,11 @@ async def confirm_excel_schema(
         ]
         embeddings = await embedding_service.embed_batch(texts)
         async with get_conn() as conn:
-            for row, emb in zip(rows, embeddings):
-                await conn.execute("""
-                    INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
-                    VALUES ($1, $2, $3::vector)
-                    ON CONFLICT (column_id) DO UPDATE SET embedding = EXCLUDED.embedding
-                """, row["id"], ns_id, str(emb))
+            await conn.executemany("""
+                INSERT INTO sql_schema_vector (column_id, namespace_id, embedding)
+                VALUES ($1, $2, $3::vector)
+                ON CONFLICT (column_id) DO UPDATE SET embedding = EXCLUDED.embedding
+            """, [(row["id"], ns_id, str(emb)) for row, emb in zip(rows, embeddings)])
 
     return {
         "ok": True,
@@ -504,7 +493,7 @@ async def suggest_relations_ai(namespace: str, body: SuggestRelationsPayload = N
             max_tokens=2000,
             user_credentials=get_user_llm_credentials(admin),
         )
-        suggestions = _parse_llm_json(text)
+        suggestions = parse_json_array(text)
 
         # 기존 관계 제외
         new_suggestions = [
@@ -601,18 +590,15 @@ async def reindex_synonyms(namespace: str, _=Depends(require_admin)):
             "SELECT id, term, target, description FROM sql_synonym WHERE namespace_id = $1",
             ns_id,
         )
-    # 임베딩을 먼저 모두 생성 (I/O 바운드이므로 conn 밖에서)
-    updates = []
-    for r in rows:
-        text = f"{r['term']} - {r['target']} - {r['description']}"
-        emb = await embedding_service.embed(text)
-        updates.append((str(emb), r["id"]))
+    # 임베딩을 배치로 한 번에 생성 (건별 embed() 호출 대신 embed_batch)
+    texts = [f"{r['term']} - {r['target']} - {r['description']}" for r in rows]
+    embeddings = await embedding_service.embed_batch(texts)
+    updates = [(str(emb), r["id"]) for r, emb in zip(rows, embeddings)]
     # 한 번의 연결로 일괄 저장
     async with get_conn() as conn:
-        for emb_str, row_id in updates:
-            await conn.execute(
-                "UPDATE sql_synonym SET embedding = $1::vector WHERE id = $2", emb_str, row_id
-            )
+        await conn.executemany(
+            "UPDATE sql_synonym SET embedding = $1::vector WHERE id = $2", updates
+        )
     return {"ok": True, "count": len(rows)}
 
 
@@ -714,7 +700,7 @@ async def generate_synonyms_ai(namespace: str, body: GenerateSynonymsPayload = N
             max_tokens=4000,
             user_credentials=get_user_llm_credentials(admin),
         )
-        synonyms_data = _parse_llm_json(text)
+        synonyms_data = parse_json_array(text)
 
         _BANNED_KW = re.compile(
             r"\b(SELECT|FROM|JOIN|WHERE|GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING)\b",
@@ -873,17 +859,14 @@ async def reindex_fewshots(namespace: str, _=Depends(require_admin)):
         rows = await conn.fetch(
             "SELECT id, question FROM sql_fewshot WHERE namespace_id = $1", ns_id
         )
-    # 임베딩을 먼저 모두 생성 (I/O 바운드이므로 conn 밖에서)
-    updates = []
-    for r in rows:
-        emb = await embedding_service.embed(r["question"])
-        updates.append((str(emb), r["id"]))
+    # 임베딩을 배치로 한 번에 생성 (건별 embed() 호출 대신 embed_batch)
+    embeddings = await embedding_service.embed_batch([r["question"] for r in rows])
+    updates = [(str(emb), r["id"]) for r, emb in zip(rows, embeddings)]
     # 한 번의 연결로 일괄 저장
     async with get_conn() as conn:
-        for emb_str, row_id in updates:
-            await conn.execute(
-                "UPDATE sql_fewshot SET embedding = $1::vector WHERE id = $2", emb_str, row_id
-            )
+        await conn.executemany(
+            "UPDATE sql_fewshot SET embedding = $1::vector WHERE id = $2", updates
+        )
     return {"ok": True, "count": len(rows)}
 
 
@@ -959,7 +942,7 @@ async def generate_fewshots_ai(namespace: str, admin: dict = Depends(require_adm
             max_tokens=6000,
             user_credentials=get_user_llm_credentials(admin),
         )
-        fewshots_data = _parse_llm_json(text)
+        fewshots_data = parse_json_array(text)
 
         created = []
         for item in fewshots_data:

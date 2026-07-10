@@ -2,7 +2,7 @@
 import logging
 from typing import Optional
 
-from agents.knowledge_rag.ingestion.utils import parse_json_array
+from shared.json_utils import parse_json_array
 
 _parse_json_array = parse_json_array  # 테스트 호환성 유지
 

@@ -1,9 +1,11 @@
 """인증/계정 도메인 — 서비스 로직."""
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from core.database import get_conn
+from core.dependencies import invalidate_user_cache
 from core.security import (
     hash_password, verify_password,
     create_access_token, create_refresh_token,
@@ -31,7 +33,9 @@ async def register_user(
 
     llm_credentials: {client_id, client_secret, user_id} 트리플 (선택)
     """
-    hashed = hash_password(password)
+    # bcrypt는 의도적으로 느려서(~100-300ms) 동기 호출하면 이벤트루프가 그 동안
+    # 다른 모든 요청(채팅 스트리밍 등)을 막는다 — 스레드로 오프로드
+    hashed = await asyncio.to_thread(hash_password, password)
 
     # LLM 자격증명 암호화 (Fernet 키 미설정 시 무시)
     encrypted_creds = None
@@ -93,7 +97,7 @@ async def authenticate_user(username: str, password: str) -> dict:
         )
     if not row:
         raise LoginError("존재하지 않는 아이디입니다.")
-    if not verify_password(password, row["hashed_password"]):
+    if not await asyncio.to_thread(verify_password, password, row["hashed_password"]):
         raise LoginError("비밀번호가 올바르지 않습니다.")
     if not row["is_active"]:
         raise LoginError("비활성화된 계정입니다. 관리자에게 문의하세요.")
@@ -184,12 +188,14 @@ async def update_user(user_id: int, role: Optional[str] = None, part: Optional[s
             result["part"] = part
         else:
             result["part"] = current["part_name"]
+    invalidate_user_cache(user_id)
     return result
 
 
 async def delete_user(user_id: int) -> bool:
     async with get_conn() as conn:
         result = await conn.execute("DELETE FROM ops_user WHERE id = $1", user_id)
+    invalidate_user_cache(user_id)
     return "DELETE 1" in result
 
 
@@ -199,9 +205,9 @@ async def change_password(user_id: int, current_password: str, new_password: str
         row = await conn.fetchrow("SELECT hashed_password FROM ops_user WHERE id = $1", user_id)
         if not row:
             return False
-        if not verify_password(current_password, row["hashed_password"]):
+        if not await asyncio.to_thread(verify_password, current_password, row["hashed_password"]):
             return False
-        new_hashed = hash_password(new_password)
+        new_hashed = await asyncio.to_thread(hash_password, new_password)
         await conn.execute("UPDATE ops_user SET hashed_password = $2 WHERE id = $1", user_id, new_hashed)
     return True
 
@@ -217,6 +223,7 @@ async def update_llm_credentials(user_id: int, credentials: dict) -> bool:
             "UPDATE ops_user SET encrypted_llm_credentials = $2 WHERE id = $1",
             user_id, encrypted,
         )
+    invalidate_user_cache(user_id)
     return "UPDATE 1" in result
 
 
@@ -226,6 +233,7 @@ async def delete_llm_credentials(user_id: int) -> bool:
             "UPDATE ops_user SET encrypted_llm_credentials = NULL WHERE id = $1",
             user_id,
         )
+    invalidate_user_cache(user_id)
     return "UPDATE 1" in result
 
 
@@ -236,6 +244,7 @@ async def update_confluence_pat(user_id: int, plain_pat: str) -> bool:
             "UPDATE ops_user SET encrypted_confluence_pat = $2 WHERE id = $1",
             user_id, encrypted,
         )
+    invalidate_user_cache(user_id)
     return "UPDATE 1" in result
 
 
@@ -245,6 +254,7 @@ async def delete_confluence_pat(user_id: int) -> bool:
             "UPDATE ops_user SET encrypted_confluence_pat = NULL WHERE id = $1",
             user_id,
         )
+    invalidate_user_cache(user_id)
     return "UPDATE 1" in result
 
 

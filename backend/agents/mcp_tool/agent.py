@@ -12,7 +12,7 @@ from core.database import get_conn, resolve_namespace_id
 from service.chat.helpers import (
     LLM_UNAVAILABLE_MSG,
     results_to_json, results_to_payload,
-    update_assistant_message, create_query_log, post_save_tasks,
+    update_assistant_message, create_query_log,
 )
 from agents.knowledge_rag.knowledge import retrieval
 from service.llm.base import resolve_system_prompt
@@ -22,6 +22,23 @@ from shared.embedding import embedding_service
 from shared import cache as sem_cache
 
 logger = logging.getLogger(__name__)
+
+# MCP 도구 호출마다 새 AsyncClient(TCP+TLS 핸드셰이크)를 만들지 않도록 프로세스 전역에서 재사용
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient()
+    return _http_client
+
+
+async def close_http_client() -> None:
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
 
 
 # ── LLM 프롬프트: 도구 선택 + 파라미터 추출 ─────────────────────────────────
@@ -154,14 +171,14 @@ async def _execute_http_call(tool: dict, params: dict) -> tuple[str, str | None,
 
     start = time.time()
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            if method == "GET":
-                resp = await client.get(url, params=params, headers=headers)
-            else:
-                resp = await client.request(method, url, json=params, headers=headers)
+        client = _get_http_client()
+        if method == "GET":
+            resp = await client.get(url, params=params, headers=headers, timeout=timeout)
+        else:
+            resp = await client.request(method, url, json=params, headers=headers, timeout=timeout)
         duration_ms = round((time.time() - start) * 1000)
         logger.warning("[MCP_TOOL] %s %s | params=%s | headers_keys=%s | status=%s", method, resp.url, params, list(headers.keys()), resp.status_code)
-        logger.warning("[MCP_TOOL] response body: %s", resp.text[:300])
+        logger.debug("[MCP_TOOL] response body: %s", resp.text[:300])
         resp.raise_for_status()
 
         body = resp.text

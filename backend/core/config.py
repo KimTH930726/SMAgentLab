@@ -74,5 +74,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
+    # DB 커넥션 풀
+    db_pool_min_size: int = 2
+    db_pool_max_size: int = 10
+    db_pool_acquire_timeout: float = 10.0  # 풀이 고갈됐을 때 커넥션 대기 최대 시간(초)
+
 
 settings = Settings()

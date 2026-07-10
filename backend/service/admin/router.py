@@ -242,10 +242,12 @@ async def suggest_category(name: str, body: dict, user: dict = Depends(get_curre
         "가장 적합한 업무구분 이름:"
     )
     template = await load_prompt("category_suggest", _CATEGORY_SUGGEST_FALLBACK)
-    try:
-        prompt = template.format(categories=categories_str, content=content[:600])
-    except KeyError:
-        prompt = _CATEGORY_SUGGEST_FALLBACK.format(categories=categories_str, content=content[:600])
+    # .format() 대신 replace 사용: 지식 내용에 {변수명} 패턴이 있으면 KeyError 발생함
+    # (IT 운영 지식에는 {table_name}, {env} 같은 패턴이 흔히 포함됨)
+    prompt = template.replace("{categories}", categories_str).replace("{content}", content[:600])
+    if "{categories}" in prompt or "{content}" in prompt:
+        # replace가 실패한 경우(템플릿에 플레이스홀더 없음) → fallback 사용
+        prompt = _CATEGORY_SUGGEST_FALLBACK.replace("{categories}", categories_str).replace("{content}", content[:600])
     try:
         answer, _ = await get_llm_provider().generate(context="", question=prompt)
         suggested = answer.strip().strip('"').strip("'").strip()
@@ -457,17 +459,20 @@ async def bulk_delete_query_logs(body: dict, user: dict = Depends(get_current_us
     if not ids:
         raise HTTPException(status_code=400, detail="ids is required")
     async with get_conn() as conn:
-        # 삭제 대상의 네임스페이스를 확인하여 권한 체크
+        # 삭제 대상의 네임스페이스별 소유 파트를 한 번에 조회 — 네임스페이스마다
+        # check_namespace_ownership()을 호출하면 매번 DB 왕복이 생기므로 인라인 검증
         rows = await conn.fetch(
             """
-            SELECT DISTINCT n.name AS namespace
+            SELECT DISTINCT n.name AS namespace, n.owner_part_id
             FROM ops_query_log ql
             JOIN ops_namespace n ON ql.namespace_id = n.id
             WHERE ql.id = ANY($1::int[])
             """, ids,
         )
-        for r in rows:
-            await check_namespace_ownership(r["namespace"], user)
+        if user["role"] != "admin":
+            for r in rows:
+                if r["owner_part_id"] is not None and r["owner_part_id"] != user["part_id"]:
+                    raise HTTPException(status_code=403, detail="이 네임스페이스에 대한 권한이 없습니다.")
         result = await conn.execute("DELETE FROM ops_query_log WHERE id = ANY($1::int[])", ids)
     deleted = int(result.split()[-1]) if result else 0
     return {"deleted": deleted}

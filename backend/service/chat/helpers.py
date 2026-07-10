@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import random
 from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
@@ -19,6 +20,9 @@ NO_KNOWLEDGE_MARKER = "관련 지식을 찾지 못했습니다"
 
 MAX_MESSAGES_PER_NS = 100
 QUERY_LOG_RETENTION_DAYS = 90
+# 스케줄러 인프라(cron/APScheduler 등)가 없어 채팅 턴에 얹혀 실행되는 하우스키핑 작업.
+# 매 턴마다 돌리면 DB 스캔 비용이 누적되므로 확률적으로만 샘플링 실행한다.
+CLEANUP_SAMPLE_RATE = 0.05
 
 
 def results_to_json(results: list[RetrievalResult]) -> str:
@@ -141,9 +145,10 @@ async def cleanup_resolved_query_logs() -> int:
 async def post_save_tasks(conv_id: int, namespace: Optional[str] = None) -> None:
     from service.llm.factory import get_llm_provider
     tasks = [memory.maybe_summarize(conv_id, get_llm_provider())]
-    if namespace:
-        tasks.append(cleanup_old_messages(namespace))
-    tasks.append(cleanup_resolved_query_logs())
+    if random.random() < CLEANUP_SAMPLE_RATE:
+        if namespace:
+            tasks.append(cleanup_old_messages(namespace))
+        tasks.append(cleanup_resolved_query_logs())
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for r in results:
         if isinstance(r, Exception):
