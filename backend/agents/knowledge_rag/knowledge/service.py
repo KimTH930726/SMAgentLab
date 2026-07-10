@@ -371,7 +371,6 @@ async def vector_search_glossary(namespace: str, query_vec: list[float], top_k: 
             """
             SELECT g.id, n.name AS namespace, g.term, g.description,
                    g.created_by_part, g.created_by_user_id, u.username AS created_by_username,
-                   g.created_at::text,
                    1 - (g.embedding <=> $2::vector) AS similarity
             FROM rag_glossary g
             JOIN ops_namespace n ON g.namespace_id = n.id
@@ -609,6 +608,10 @@ def split_text_to_chunks(
     """텍스트를 청크로 분할.
 
     strategy:
+      - paragraph/section/fixed: LLM Analyzer(ingestion/analyzer.py)가 반환하는 전략
+        이름 체계 — ingestion/chunker.py의 분할 로직을 그대로 재사용한다. (예전엔 이
+        값들이 아래의 heading/blank_line/separator 체계와 안 맞아 매칭되는 분기가 없어
+        전부 fallback으로 빠져 텍스트 전체가 청크 1개로 묶이는 버그가 있었음)
       - auto: ## 헤더 → 빈 줄 → --- 순서로 시도
       - heading: ## 헤더 기준
       - blank_line: 빈 줄 (\\n\\n) 기준
@@ -619,6 +622,19 @@ def split_text_to_chunks(
 
     if strategy == "none" or not text.strip():
         return [text.strip()] if text.strip() else []
+
+    if strategy in ("paragraph", "section", "fixed"):
+        from agents.knowledge_rag.ingestion.chunker import (
+            _chunk_by_paragraphs, _chunk_fixed_size,
+            MAX_CHUNK_CHARS, MIN_CHUNK_CHARS, OVERLAP_CHARS,
+        )
+        if strategy == "fixed":
+            chunks = _chunk_fixed_size(text, MAX_CHUNK_CHARS, OVERLAP_CHARS)
+        else:
+            # "section"은 구조화된 헤더 메타데이터(ParsedDocument.sections)가 있어야
+            # 하는데 붙여넣은 순수 텍스트에는 없으므로 단락 분할로 대체
+            chunks = _chunk_by_paragraphs(text, MAX_CHUNK_CHARS, MIN_CHUNK_CHARS)
+        return [c.text for c in chunks]
 
     if strategy == "heading" or strategy == "auto":
         # ## 헤더 기준 분할
