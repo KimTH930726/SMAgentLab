@@ -420,6 +420,7 @@ export interface DebugSearchRequest {
   w_vector?: number;
   w_keyword?: number;
   top_k?: number;
+  categories?: string[] | null;
 }
 
 export interface DebugSearchResult {
@@ -428,6 +429,7 @@ export interface DebugSearchResult {
   target_tables: string[];
   content: string;
   query_template: string | null;
+  category: string | null;
   v_score: number;
   k_score: number;
   final_score: number;

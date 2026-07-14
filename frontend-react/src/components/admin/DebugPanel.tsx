@@ -5,12 +5,12 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import {
   Search, AlertCircle, Eye, Globe, Wrench,
-  Layers, Database, BookOpen, Zap, MessageSquare, Brain, Target,
+  Layers, Database, BookOpen, Zap, MessageSquare, Brain, Target, Tag, ChevronDown,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { debugSearch } from '../../api/chat';
-import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
+import { getNamespaces, getNamespacesDetail, getCategories } from '../../api/namespaces';
 import { listMcpTools, testMcpTool } from '../../api/mcpTools';
 import type { McpToolTestResult } from '../../api/mcpTools';
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
@@ -263,6 +263,29 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
   const [wVector, setWVector] = useState(searchConfig.wVector);
   const [wKeyword, setWKeyword] = useState(searchConfig.wKeyword);
   const [topK, setTopK] = useState(searchConfig.topK);
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
+  const [categoryDropdownOpen, setCategoryDropdownOpen] = useState(false);
+  const categoryDropdownRef = useRef<HTMLDivElement>(null);
+
+  const { data: availableCategories = [] } = useQuery({
+    queryKey: ['debug-categories', namespace],
+    queryFn: () => getCategories(namespace),
+    enabled: !!namespace,
+    staleTime: 0,
+  });
+
+  // 파트를 바꾸면 이전 파트의 업무구분 선택은 더 이상 유효하지 않으므로 초기화
+  useEffect(() => { setCategoryFilter([]); }, [namespace]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(e.target as Node)) {
+        setCategoryDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const [result, setResult] = useState<DebugSearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -359,6 +382,7 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
         w_vector: wVector,
         w_keyword: wKeyword,
         top_k: topK,
+        categories: categoryFilter.length > 0 ? categoryFilter : null,
       });
       setResult(data);
 
@@ -456,6 +480,66 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
               />
             </div>
           </div>
+
+          {availableCategories.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">업무구분 필터</label>
+              <div ref={categoryDropdownRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setCategoryDropdownOpen((o) => !o)}
+                  className={`w-full flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                    categoryFilter.length > 0
+                      ? 'bg-indigo-900/40 text-indigo-300 border-indigo-700/50'
+                      : 'bg-slate-900 text-slate-400 border-slate-600'
+                  }`}
+                  title="특정 업무구분의 지식으로만 검색합니다"
+                >
+                  <Tag className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="flex-1 text-left truncate">
+                    {categoryFilter.length === 0
+                      ? '전체'
+                      : categoryFilter.length === 1
+                        ? categoryFilter[0]
+                        : `${categoryFilter.length}개 선택`}
+                  </span>
+                  <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
+                </button>
+                {categoryDropdownOpen && (
+                  <div className="absolute top-full mt-1.5 left-0 w-full rounded-lg border border-slate-700 bg-slate-800 shadow-xl p-1.5 z-20 max-h-56 overflow-y-auto">
+                    <button
+                      type="button"
+                      onClick={() => { setCategoryFilter([]); setCategoryDropdownOpen(false); }}
+                      className={`w-full text-left px-2 py-1.5 rounded text-xs ${
+                        categoryFilter.length === 0 ? 'bg-indigo-600/30 text-indigo-300' : 'text-slate-300 hover:bg-slate-700/60'
+                      }`}
+                    >
+                      전체
+                    </button>
+                    <div className="my-1 border-t border-slate-700/60" />
+                    {availableCategories.map((c) => (
+                      <label
+                        key={c.id}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-slate-300 hover:bg-slate-700/60 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={categoryFilter.includes(c.name)}
+                          onChange={() =>
+                            setCategoryFilter((prev) =>
+                              prev.includes(c.name) ? prev.filter((n) => n !== c.name) : [...prev, c.name]
+                            )
+                          }
+                          className="rounded border-slate-600 bg-slate-900 text-indigo-500 focus:outline-none"
+                        />
+                        {c.name}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
@@ -858,6 +942,7 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
                   >
                     <span className="text-xs text-slate-500 flex-shrink-0">#{i + 1}</span>
                     <span className="font-semibold text-slate-200 flex-1 truncate">{r.container_name}</span>
+                    {r.category && <Badge color="cyan" className="flex-shrink-0">{r.category}</Badge>}
                     {isExcluded && (
                       <span className="text-[10px] font-medium bg-rose-500/15 text-rose-400 border border-rose-500/30 px-1.5 py-0.5 rounded flex-shrink-0">컨텍스트 제외</span>
                     )}
@@ -885,6 +970,7 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
                       <div className="flex items-center justify-between bg-slate-900/60 rounded-lg px-4 py-3">
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-slate-500">ID: {r.id}</span>
+                          {r.category && <Badge color="cyan">{r.category}</Badge>}
                           {isExcluded && (
                             <span className="text-[10px] font-medium bg-rose-500/15 text-rose-400 border border-rose-500/30 px-1.5 py-0.5 rounded">컨텍스트 제외</span>
                           )}

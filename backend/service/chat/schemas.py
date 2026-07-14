@@ -83,6 +83,7 @@ class DebugResult(BaseModel):
     target_tables: Optional[list[str]]
     content: str
     query_template: Optional[str]
+    category: Optional[str]
     base_weight: float
     v_score: float
     k_score: float
