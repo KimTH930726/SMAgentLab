@@ -100,6 +100,7 @@ async def get_duplicate_matches(knowledge_id: int, user: dict = Depends(get_curr
 class ResolveDuplicateRequest(BaseModel):
     action: str  # 'approve' | 'reject' | 'merge'
     target_id: Optional[int] = None
+    content: Optional[str] = None  # merge 전용 — 리뷰어가 직접 다듬은 최종 병합 내용
 
 
 @router.post("/{knowledge_id}/resolve")
@@ -107,7 +108,7 @@ async def resolve_duplicate(knowledge_id: int, body: ResolveDuplicateRequest, us
     ns = await service.get_knowledge_namespace(knowledge_id)
     await _require_resource_namespace(ns, user, "Knowledge not found")
     try:
-        return await service.resolve_duplicate(knowledge_id, body.action, body.target_id)
+        return await service.resolve_duplicate(knowledge_id, body.action, body.target_id, body.content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

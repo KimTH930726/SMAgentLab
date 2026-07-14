@@ -1117,7 +1117,8 @@ function ReviewTab({ items, canModify, onResolved }: {
   onResolved: () => void;
 }) {
   const [selectedItem, setSelectedItem] = useState<KnowledgeItem | null>(null);
-  const [expandedMatchId, setExpandedMatchId] = useState<number | null>(null);
+  const [mergeTargetId, setMergeTargetId] = useState<number | null>(null);
+  const [mergeText, setMergeText] = useState('');
   const [actionError, setActionError] = useState('');
   const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | 'merge' | null>(null);
 
@@ -1130,13 +1131,20 @@ function ReviewTab({ items, canModify, onResolved }: {
   const sortedMatches = [...matches].sort((a, b) => b.similarity - a.similarity);
 
   useEffect(() => {
-    setExpandedMatchId(sortedMatches[0]?.id ?? null);
+    setMergeText(selectedItem?.content ?? '');
+    setMergeTargetId(null);
   }, [selectedItem?.id]);
 
+  useEffect(() => {
+    if (mergeTargetId === null && sortedMatches.length > 0) {
+      setMergeTargetId(sortedMatches[0].id);
+    }
+  }, [sortedMatches, mergeTargetId]);
+
   const resolveMutation = useMutation({
-    mutationFn: ({ action, targetId }: { action: 'approve' | 'reject' | 'merge'; targetId?: number }) => {
+    mutationFn: ({ action, targetId, content }: { action: 'approve' | 'reject' | 'merge'; targetId?: number; content?: string }) => {
       setPendingAction(action);
-      return resolveDuplicate(selectedItem!.id, action, targetId);
+      return resolveDuplicate(selectedItem!.id, action, targetId, content);
     },
     onSuccess: () => {
       setSelectedItem(null);
@@ -1183,100 +1191,86 @@ function ReviewTab({ items, canModify, onResolved }: {
         isOpen={selectedItem !== null}
         onClose={() => { setSelectedItem(null); setActionError(''); }}
         title="유사 지식 검토"
-        maxWidth="max-w-3xl"
+        maxWidth="max-w-5xl"
       >
         {selectedItem && (
-          <div className="space-y-4">
-            <div>
-              <p className="text-xs font-medium text-amber-400 mb-1.5">신규 등록 (승인 대기)</p>
-              <div className="rounded-lg bg-amber-900/10 border border-amber-700/30 px-3 py-2.5 text-sm text-slate-200 whitespace-pre-wrap max-h-40 overflow-y-auto">
-                {selectedItem.content}
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-xs font-medium text-amber-400 mb-1.5">신규 등록</p>
+                <div className="rounded-lg bg-amber-900/10 border border-amber-700/30 px-3 py-2.5 text-sm text-slate-200 whitespace-pre-wrap max-h-40 overflow-y-auto">
+                  {selectedItem.content}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-indigo-400 mb-1.5">
+                  기존 지식{sortedMatches.length > 0 ? ` (${sortedMatches.length}건, 유사도순 — 클릭해서 병합 대상 선택)` : ''}
+                </p>
+                {matchesLoading ? (
+                  <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
+                ) : (
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                    {sortedMatches.map((m: DuplicateMatch) => {
+                      const isSelected = mergeTargetId === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setMergeTargetId(m.id)}
+                          className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-colors ${
+                            isSelected
+                              ? 'border-indigo-500 bg-indigo-900/20 text-slate-200'
+                              : 'border-slate-700 bg-slate-900/40 text-slate-400 hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <span className="text-xs font-mono text-indigo-400 mr-2">
+                            {(m.similarity * 100).toFixed(1)}%
+                          </span>
+                          <span className="line-clamp-2">{m.content}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
 
             <div>
-              <p className="text-xs font-medium text-indigo-400 mb-1.5">
-                유사한 기존 지식 {sortedMatches.length > 0 ? `${sortedMatches.length}건 (유사도순)` : ''}
-              </p>
-              {matchesLoading ? (
-                <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
-              ) : (
-                <div className="space-y-1.5 max-h-72 overflow-y-auto">
-                  {sortedMatches.map((m: DuplicateMatch) => {
-                    const isExpanded = expandedMatchId === m.id;
-                    return (
-                      <div key={m.id} className="rounded-lg border border-slate-700 bg-slate-900/40 overflow-hidden">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedMatchId(isExpanded ? null : m.id)}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-800/60 transition-colors"
-                        >
-                          <span className="text-xs font-mono text-indigo-400 flex-shrink-0 w-14">
-                            {(m.similarity * 100).toFixed(1)}%
-                          </span>
-                          {!isExpanded && (
-                            <span className="text-xs text-slate-400 truncate flex-1">{m.content}</span>
-                          )}
-                          {isExpanded && <span className="flex-1" />}
-                          {isExpanded
-                            ? <ChevronUp className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                            : <ChevronDown className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />}
-                        </button>
-                        {isExpanded && (
-                          <div className="px-3 pb-3 pt-1 border-t border-slate-700/60 space-y-2.5">
-                            <p className="text-sm text-slate-300 whitespace-pre-wrap">{m.content}</p>
-                            {canModify && (
-                              <div>
-                                <Button
-                                  variant="secondary" size="sm"
-                                  loading={resolveMutation.isPending && pendingAction === 'merge'}
-                                  onClick={() => resolveMutation.mutate({ action: 'merge', targetId: m.id })}
-                                >
-                                  이 기존 지식에 신규 등록 내용 덮어쓰기
-                                </Button>
-                                <p className="text-[11px] text-slate-500 mt-1">
-                                  → 바로 위에 보이는 이 기존 지식의 내용이 "신규 등록" 내용으로 바뀝니다. 신규 등록 항목 자체는 삭제됩니다.
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <p className="text-xs font-medium text-emerald-400 mb-1.5">최종 병합 내용 (직접 수정 가능)</p>
+              <textarea
+                value={mergeText}
+                onChange={(e) => setMergeText(e.target.value)}
+                rows={6}
+                className="w-full rounded-lg bg-slate-900/60 border border-slate-700 px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-y"
+              />
             </div>
 
             {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
 
             {canModify ? (
-              <div className="pt-2 border-t border-slate-700 space-y-2">
-                <p className="text-[11px] text-slate-500">
-                  위에서 특정 기존 지식을 덮어쓰지 않을 경우, 아래 둘 중 하나를 선택하세요.
-                </p>
-                <div className="flex gap-2 justify-end">
-                  <div className="text-right">
-                    <Button
-                      variant="ghost" size="sm"
-                      loading={resolveMutation.isPending && pendingAction === 'reject'}
-                      onClick={() => resolveMutation.mutate({ action: 'reject' })}
-                    >
-                      신규 등록 내용 폐기
-                    </Button>
-                    <p className="text-[11px] text-slate-500 mt-1">→ 신규 등록 내용을 삭제. 기존 지식들은 전부 그대로 유지.</p>
-                  </div>
-                  <div className="text-right">
-                    <Button
-                      variant="primary" size="sm"
-                      loading={resolveMutation.isPending && pendingAction === 'approve'}
-                      onClick={() => resolveMutation.mutate({ action: 'approve' })}
-                    >
-                      신규 등록 내용 그대로 저장
-                    </Button>
-                    <p className="text-[11px] text-slate-500 mt-1">→ 중복 아님 — 신규 내용을 별도 지식으로 추가. 기존 지식들도 그대로 유지(둘 다 남음).</p>
-                  </div>
-                </div>
+              <div className="pt-2 border-t border-slate-700 flex gap-2 justify-end">
+                <Button
+                  variant="ghost" size="sm"
+                  loading={resolveMutation.isPending && pendingAction === 'reject'}
+                  onClick={() => resolveMutation.mutate({ action: 'reject' })}
+                >
+                  반려
+                </Button>
+                <Button
+                  variant="secondary" size="sm"
+                  loading={resolveMutation.isPending && pendingAction === 'approve'}
+                  onClick={() => resolveMutation.mutate({ action: 'approve' })}
+                >
+                  그대로 저장
+                </Button>
+                <Button
+                  variant="primary" size="sm"
+                  disabled={mergeTargetId === null || !mergeText.trim()}
+                  loading={resolveMutation.isPending && pendingAction === 'merge'}
+                  onClick={() => resolveMutation.mutate({ action: 'merge', targetId: mergeTargetId!, content: mergeText })}
+                >
+                  병합
+                </Button>
               </div>
             ) : (
               <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 파트의 승인 권한이 없습니다.</p>
