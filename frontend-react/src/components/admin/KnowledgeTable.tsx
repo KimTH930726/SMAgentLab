@@ -1205,29 +1205,43 @@ function ReviewTab({ items, canModify, onResolved }: {
               </div>
               <div>
                 <p className="text-xs font-medium text-indigo-400 mb-1.5">
-                  기존 지식{sortedMatches.length > 0 ? ` (${sortedMatches.length}건, 유사도순 — 클릭해서 병합 대상 선택)` : ''}
+                  기존 지식{sortedMatches.length > 0 ? ` (${sortedMatches.length}건, 유사도순 — 클릭해서 펼치기/병합 대상 선택)` : ''}
                 </p>
                 {matchesLoading ? (
                   <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
                 ) : (
-                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto">
                     {sortedMatches.map((m: DuplicateMatch) => {
                       const isSelected = mergeTargetId === m.id;
                       return (
                         <button
                           key={m.id}
                           type="button"
-                          onClick={() => setMergeTargetId(m.id)}
+                          onClick={() => setMergeTargetId(isSelected ? null : m.id)}
                           className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-colors ${
                             isSelected
                               ? 'border-indigo-500 bg-indigo-900/20 text-slate-200'
                               : 'border-slate-700 bg-slate-900/40 text-slate-400 hover:bg-slate-800/60'
                           }`}
                         >
-                          <span className="text-xs font-mono text-indigo-400 mr-2">
-                            {(m.similarity * 100).toFixed(1)}%
-                          </span>
-                          <span className="line-clamp-2">{m.content}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono text-indigo-400 flex-shrink-0">
+                              {(m.similarity * 100).toFixed(1)}%
+                            </span>
+                            {isSelected ? (
+                              <span className="flex-1" />
+                            ) : (
+                              <span className="line-clamp-2 flex-1">{m.content}</span>
+                            )}
+                            {isSelected
+                              ? <ChevronUp className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                              : <ChevronDown className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />}
+                          </div>
+                          {isSelected && (
+                            <p className="text-sm text-slate-300 whitespace-pre-wrap mt-2 pt-2 border-t border-slate-700/60">
+                              {m.content}
+                            </p>
+                          )}
                         </button>
                       );
                     })}
