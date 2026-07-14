@@ -1226,14 +1226,18 @@ function ReviewTab({ items, canModify, onResolved }: {
                           <div className="px-3 pb-3 pt-1 border-t border-slate-700/60 space-y-2.5">
                             <p className="text-sm text-slate-300 whitespace-pre-wrap">{m.content}</p>
                             {canModify && (
-                              <Button
-                                variant="secondary" size="sm"
-                                loading={resolveMutation.isPending && pendingAction === 'merge'}
-                                onClick={() => resolveMutation.mutate({ action: 'merge', targetId: m.id })}
-                                title="이 기존 지식의 내용을 방금 등록한 새 내용으로 바꿉니다"
-                              >
-                                이 지식을 새 내용으로 업데이트
-                              </Button>
+                              <div>
+                                <Button
+                                  variant="secondary" size="sm"
+                                  loading={resolveMutation.isPending && pendingAction === 'merge'}
+                                  onClick={() => resolveMutation.mutate({ action: 'merge', targetId: m.id })}
+                                >
+                                  이 기존 지식에 신규 등록 내용 덮어쓰기
+                                </Button>
+                                <p className="text-[11px] text-slate-500 mt-1">
+                                  → 바로 위에 보이는 이 기존 지식의 내용이 "신규 등록" 내용으로 바뀝니다. 신규 등록 항목 자체는 삭제됩니다.
+                                </p>
+                              </div>
                             )}
                           </div>
                         )}
@@ -1247,23 +1251,32 @@ function ReviewTab({ items, canModify, onResolved }: {
             {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
 
             {canModify ? (
-              <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
-                <Button
-                  variant="ghost" size="sm"
-                  loading={resolveMutation.isPending && pendingAction === 'reject'}
-                  onClick={() => resolveMutation.mutate({ action: 'reject' })}
-                  title="새로 등록한 내용을 버리고, 기존 지식은 그대로 둡니다"
-                >
-                  반려 (새 지식 삭제)
-                </Button>
-                <Button
-                  variant="primary" size="sm"
-                  loading={resolveMutation.isPending && pendingAction === 'approve'}
-                  onClick={() => resolveMutation.mutate({ action: 'approve' })}
-                  title="중복이 아니라고 판단 — 기존 지식은 그대로 두고, 새 내용을 별도 지식으로 추가합니다"
-                >
-                  새 지식으로 등록
-                </Button>
+              <div className="pt-2 border-t border-slate-700 space-y-2">
+                <p className="text-[11px] text-slate-500">
+                  위에서 특정 기존 지식을 덮어쓰지 않을 경우, 아래 둘 중 하나를 선택하세요.
+                </p>
+                <div className="flex gap-2 justify-end">
+                  <div className="text-right">
+                    <Button
+                      variant="ghost" size="sm"
+                      loading={resolveMutation.isPending && pendingAction === 'reject'}
+                      onClick={() => resolveMutation.mutate({ action: 'reject' })}
+                    >
+                      신규 등록 내용 폐기
+                    </Button>
+                    <p className="text-[11px] text-slate-500 mt-1">→ 신규 등록 내용을 삭제. 기존 지식들은 전부 그대로 유지.</p>
+                  </div>
+                  <div className="text-right">
+                    <Button
+                      variant="primary" size="sm"
+                      loading={resolveMutation.isPending && pendingAction === 'approve'}
+                      onClick={() => resolveMutation.mutate({ action: 'approve' })}
+                    >
+                      신규 등록 내용 그대로 저장
+                    </Button>
+                    <p className="text-[11px] text-slate-500 mt-1">→ 중복 아님 — 신규 내용을 별도 지식으로 추가. 기존 지식들도 그대로 유지(둘 다 남음).</p>
+                  </div>
+                </div>
               </div>
             ) : (
               <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 파트의 승인 권한이 없습니다.</p>
