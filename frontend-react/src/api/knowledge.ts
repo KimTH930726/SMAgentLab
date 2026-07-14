@@ -36,11 +36,12 @@ export async function resolveDuplicate(
   id: number,
   action: 'approve' | 'reject' | 'merge',
   targetId?: number,
+  content?: string,
 ): Promise<{ id: number; status: string; merged_into?: number }> {
   try {
     return await apiFetch(`/knowledge/${id}/resolve`, {
       method: 'POST',
-      body: JSON.stringify({ action, target_id: targetId ?? null }),
+      body: JSON.stringify({ action, target_id: targetId ?? null, content: content ?? null }),
     });
   } catch (err) {
     console.error('resolveDuplicate error:', err);

@@ -292,13 +292,15 @@ async def get_duplicate_matches(knowledge_id: int) -> list[dict]:
 
 async def resolve_duplicate(
     knowledge_id: int, action: str, target_id: Optional[int] = None,
+    content: Optional[str] = None,
 ) -> dict:
     """승인 대기 지식에 대한 리뷰어 판단 처리.
 
     - approve: 새 지식을 그대로 활성화 (중복 아님으로 판단).
     - reject: 새 지식을 반려 상태로 마감 (하드 삭제 안 함 — 감사 기록 보존).
-    - merge: 매칭된 기존 지식(target_id, 미지정 시 유사도 1위)의 내용을 새 지식의
-      내용으로 교체(재임베딩) — 지식 현행화. 새 지식 자신은 반려로 마감.
+    - merge: 매칭된 기존 지식(target_id, 미지정 시 유사도 1위)의 내용을 교체(재임베딩)
+      — 지식 현행화. content가 주어지면(리뷰어가 병합 화면에서 직접 다듬은 최종 내용)
+      그걸 쓰고, 없으면 새 지식의 원본 내용을 그대로 쓴다. 새 지식 자신은 반려로 마감.
     """
     if action not in ("approve", "reject", "merge"):
         raise ValueError(f"알 수 없는 action: {action}")
@@ -327,12 +329,13 @@ async def resolve_duplicate(
             raise ValueError("병합할 기존 지식을 찾을 수 없습니다 (매칭 기록 없음).")
         target_id = matches[0]["id"]
 
-    embedding = await embedding_service.embed(pending["content"])
+    merge_content = content.strip() if content and content.strip() else pending["content"]
+    embedding = await embedding_service.embed(merge_content)
     async with get_conn() as conn:
         target = await conn.fetchrow(
             "UPDATE rag_knowledge SET content = $1, embedding = $2::vector, updated_at = NOW() "
             "WHERE id = $3 RETURNING id, content",
-            pending["content"], str(embedding), target_id,
+            merge_content, str(embedding), target_id,
         )
         if not target:
             raise ValueError(f"병합 대상 지식을 찾을 수 없습니다 (id={target_id}).")
