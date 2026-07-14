@@ -72,6 +72,7 @@ class RetrievalResult:
     final_score: float
     v_score: float = field(default=0.0)
     k_score: float = field(default=0.0)
+    category: Optional[str] = field(default=None)
 
 
 async def map_glossary_term(
@@ -139,7 +140,7 @@ async def search_knowledge(
                   AND to_tsvector('simple', k.content) @@ q.tsq
             )
             SELECT k.id, n.name AS namespace, k.container_name, k.target_tables,
-                   k.content, k.query_template, k.base_weight,
+                   k.content, k.query_template, k.base_weight, k.category,
                    COALESCE(vs.v_score, 0.0) AS v_score,
                    COALESCE(ks.k_score, 0.0) AS k_score,
                    ($4 * COALESCE(vs.v_score, 0.0) + $5 * COALESCE(ks.k_score, 0.0))
@@ -178,7 +179,7 @@ async def search_knowledge(
             content=r["content"], query_template=r["query_template"],
             base_weight=r["base_weight"],
             v_score=float(r["v_score"]), k_score=float(r["k_score"]),
-            final_score=score,
+            final_score=score, category=r["category"],
         ))
     return results
 

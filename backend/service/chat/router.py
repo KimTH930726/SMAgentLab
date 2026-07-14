@@ -341,7 +341,8 @@ async def delete_ghost_message(msg_id: int, user: dict = Depends(get_current_use
 async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
     query_vec = await embedding_service.embed(req.question)
     pipe = await _run_pipeline(
-        req.namespace, req.question, query_vec, req.w_vector, req.w_keyword, req.top_k, debug=True,
+        req.namespace, req.question, query_vec, req.w_vector, req.w_keyword, req.top_k,
+        debug=True, categories=req.categories,
     )
     return DebugSearchResponse(
         question=req.question, namespace=req.namespace,
@@ -358,7 +359,8 @@ async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
         results=[
             DebugResult(
                 id=r.id, container_name=r.container_name, target_tables=r.target_tables,
-                content=r.content, query_template=r.query_template, base_weight=r.base_weight,
+                content=r.content, query_template=r.query_template, category=r.category,
+                base_weight=r.base_weight,
                 v_score=r.v_score, k_score=r.k_score, final_score=r.final_score,
             )
             for r in pipe.results
