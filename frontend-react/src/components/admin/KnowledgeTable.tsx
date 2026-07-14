@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, MessageSquare, RefreshCw, LogOut, Download, Check, Search } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import {
   getKnowledge,
   createKnowledge,
@@ -48,6 +51,35 @@ import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination
 import type { KnowledgeItem, DuplicateMatch } from '../../types';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
+
+// 실제 마크다운 문법(제목/목록/굵게/코드블록/표)이 있는지 대략 판별 — 없으면 원본
+// 그대로(공백/정렬 보존) 보여준다. 파이프로 열을 구분한 원본 데이터(엑셀 추출 등)를
+// 마크다운으로 잘못 파싱하면 정렬이 깨져서 오히려 더 읽기 어려워지기 때문.
+function looksLikeMarkdown(text: string): boolean {
+  return (
+    /^\s{0,3}#{1,6}\s+\S/m.test(text) ||
+    /^\s{0,3}[-*+]\s+\S/m.test(text) ||
+    /^\s{0,3}\d+\.\s+\S/m.test(text) ||
+    /\*\*[^*\n]+\*\*/.test(text) ||
+    /```/.test(text) ||
+    /^\s*\|?(\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/m.test(text)
+  );
+}
+
+function KnowledgeContentView({ content }: { content: string }) {
+  if (looksLikeMarkdown(content)) {
+    return (
+      <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-800 prose-pre:border prose-pre:border-slate-700 prose-code:text-indigo-300 prose-th:text-slate-300 prose-td:text-slate-400">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+          {content}
+        </ReactMarkdown>
+      </div>
+    );
+  }
+  return (
+    <pre className="text-xs font-mono text-slate-300 whitespace-pre overflow-x-auto">{content}</pre>
+  );
+}
 
 interface KnowledgeFormData {
   container_names: string[];
@@ -1196,58 +1228,56 @@ function ReviewTab({ items, canModify, onResolved }: {
       >
         {selectedItem && (
           <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <p className="text-xs font-medium text-amber-400 mb-1.5">신규 등록</p>
-                <div className="rounded-lg bg-amber-900/10 border border-amber-700/30 px-3 py-2.5 text-sm text-slate-200 whitespace-pre-wrap max-h-40 overflow-y-auto">
-                  {selectedItem.content}
-                </div>
+            <div>
+              <p className="text-xs font-medium text-amber-400 mb-1.5">신규 등록</p>
+              <div className="rounded-lg bg-amber-900/10 border border-amber-700/30 px-3 py-2.5 max-h-80 overflow-y-auto">
+                <KnowledgeContentView content={selectedItem.content} />
               </div>
-              <div>
-                <p className="text-xs font-medium text-indigo-400 mb-1.5">
-                  기존 지식{sortedMatches.length > 0 ? ` (${sortedMatches.length}건, 유사도순 — 클릭해서 펼치기/병합 대상 선택)` : ''}
-                </p>
-                {matchesLoading ? (
-                  <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
-                ) : (
-                  <div className="space-y-1.5 max-h-72 overflow-y-auto">
-                    {sortedMatches.map((m: DuplicateMatch) => {
-                      const isSelected = mergeTargetId === m.id;
-                      return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => setMergeTargetId(isSelected ? null : m.id)}
-                          className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-colors ${
-                            isSelected
-                              ? 'border-indigo-500 bg-indigo-900/20 text-slate-200'
-                              : 'border-slate-700 bg-slate-900/40 text-slate-400 hover:bg-slate-800/60'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-mono text-indigo-400 flex-shrink-0">
-                              {(m.similarity * 100).toFixed(1)}%
-                            </span>
-                            {isSelected ? (
-                              <span className="flex-1" />
-                            ) : (
-                              <span className="line-clamp-2 flex-1">{m.content}</span>
-                            )}
-                            {isSelected
-                              ? <ChevronUp className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                              : <ChevronDown className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />}
-                          </div>
-                          {isSelected && (
-                            <p className="text-sm text-slate-300 whitespace-pre-wrap mt-2 pt-2 border-t border-slate-700/60">
-                              {m.content}
-                            </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-indigo-400 mb-1.5">
+                기존 지식{sortedMatches.length > 0 ? ` (${sortedMatches.length}건, 유사도순 — 클릭해서 펼치기/병합 대상 선택)` : ''}
+              </p>
+              {matchesLoading ? (
+                <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
+              ) : (
+                <div className="space-y-1.5 max-h-96 overflow-y-auto">
+                  {sortedMatches.map((m: DuplicateMatch) => {
+                    const isSelected = mergeTargetId === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setMergeTargetId(isSelected ? null : m.id)}
+                        className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-colors ${
+                          isSelected
+                            ? 'border-indigo-500 bg-indigo-900/20 text-slate-200'
+                            : 'border-slate-700 bg-slate-900/40 text-slate-400 hover:bg-slate-800/60'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono text-indigo-400 flex-shrink-0">
+                            {(m.similarity * 100).toFixed(1)}%
+                          </span>
+                          {isSelected ? (
+                            <span className="flex-1" />
+                          ) : (
+                            <span className="line-clamp-2 flex-1">{m.content}</span>
                           )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+                          {isSelected
+                            ? <ChevronUp className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                            : <ChevronDown className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />}
+                        </div>
+                        {isSelected && (
+                          <div className="mt-2 pt-2 border-t border-slate-700/60">
+                            <KnowledgeContentView content={m.content} />
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
