@@ -45,6 +45,14 @@ export interface NamespaceDetail extends Namespace {
 }
 
 // Knowledge types
+export type KnowledgeStatus = 'active' | 'pending_review' | 'rejected';
+
+export interface DuplicateMatch {
+  id: number;
+  content: string;
+  similarity: number;
+}
+
 export interface KnowledgeItem {
   id: number;
   namespace: string;
@@ -54,11 +62,14 @@ export interface KnowledgeItem {
   query_template: string | null;
   base_weight: number;
   category?: string | null;
+  status?: KnowledgeStatus;
   created_by_part?: string | null;
   created_by_user_id?: number | null;
   created_by_username?: string | null;
   created_at: string;
   updated_at: string;
+  pending_review?: boolean;
+  duplicate_matches?: DuplicateMatch[];
 }
 
 export interface KnowledgeCreatePayload {
