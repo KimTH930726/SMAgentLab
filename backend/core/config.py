@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     knowledge_min_score: float = 0.35
     knowledge_high_score: float = 0.8
     knowledge_mid_score: float = 0.55
+    # 지식 등록 시 중복 의심 판정 임계값 — 이 이상이면 즉시 반영하지 않고 승인 대기로 등록
+    duplicate_min_similarity: float = 0.88
 
     # 리랭커 (CrossEncoder)
     reranker_enabled: bool = False  # 폐쇄망: 모델 번들링 후 True로 전환

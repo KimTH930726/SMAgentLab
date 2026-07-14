@@ -19,6 +19,8 @@ import {
   getIngestionJobs,
   getIngestionJobStatus,
   cancelIngestionJob,
+  getDuplicateMatches,
+  resolveDuplicate,
   type IngestionJob,
   type ConfluenceTreeResponse,
 } from '../../api/knowledge';
@@ -42,7 +44,7 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { TagInput } from '../ui/TagInput';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
-import type { KnowledgeItem } from '../../types';
+import type { KnowledgeItem, DuplicateMatch } from '../../types';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
 
@@ -106,7 +108,7 @@ export function KnowledgeTable() {
   const qc = useQueryClient();
   const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces } = useNamespaceAccess();
 
-  const [subTab, setSubTab] = useState<'list' | 'ingest'>('list');
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>('list');
 
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -148,6 +150,14 @@ export function KnowledgeTable() {
     queryFn: () => getKnowledge(selectedNs),
     enabled: !!selectedNs,
     staleTime: 15_000,
+    refetchOnMount: 'always',
+  });
+
+  const { data: pendingItems = [] } = useQuery({
+    queryKey: ['knowledge', selectedNs, 'pending_review'],
+    queryFn: () => getKnowledge(selectedNs, 'pending_review'),
+    enabled: !!selectedNs,
+    staleTime: 10_000,
     refetchOnMount: 'always',
   });
 
@@ -264,6 +274,11 @@ export function KnowledgeTable() {
     qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
   };
 
+  const onReviewResolved = () => {
+    qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
+    qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
+  };
+
   return (
     <div className="space-y-4">
       {/* 헤더 + 네임스페이스 */}
@@ -310,6 +325,21 @@ export function KnowledgeTable() {
           지식 등록
           {jobs.length > 0 && (
             <span className="ml-1 text-[10px] bg-indigo-900/60 text-indigo-400 px-1.5 py-0.5 rounded-full">{jobs.length}</span>
+          )}
+        </button>
+        <button
+          onClick={() => setSubTab('review')}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
+            subTab === 'review'
+              ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+          title="기존 지식과 유사도가 높아 자동 반영되지 않고 검토를 기다리는 항목"
+        >
+          <AlertCircle className="w-4 h-4" />
+          승인 대기
+          {pendingItems.length > 0 && (
+            <span className="ml-1 text-[10px] bg-amber-900/60 text-amber-400 px-1.5 py-0.5 rounded-full">{pendingItems.length}</span>
           )}
         </button>
       </div>
@@ -507,6 +537,16 @@ export function KnowledgeTable() {
           jobs={jobs}
           onSuccess={onIngestSuccess}
           onGoToList={() => setSubTab('list')}
+          onGoToReview={() => setSubTab('review')}
+        />
+      )}
+
+      {/* ── 서브탭 3: 승인 대기 ── */}
+      {subTab === 'review' && (
+        <ReviewTab
+          items={pendingItems}
+          canModify={canModifyNs}
+          onResolved={onReviewResolved}
         />
       )}
 
@@ -882,13 +922,14 @@ function IngestionProgressModal({ jobId, onClose, onSettled }: {
 
 // ── 서브탭 2: 지식 등록 ───────────────────────────────────────────────────────
 
-function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoToList }: {
+function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoToList, onGoToReview }: {
   namespace: string;
   categoryNames: string[];
   canModify: boolean;
   jobs: IngestionJob[];
   onSuccess: () => void;
   onGoToList: () => void;
+  onGoToReview: () => void;
 }) {
   const [activeMethod, setActiveMethod] = useState<IngestMethod>(null);
   const [progressJobId, setProgressJobId] = useState<number | null>(null);
@@ -1014,6 +1055,15 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
                   )}
                   {j.auto_glossary > 0 && <span className="text-violet-400 flex-shrink-0">용어 +{j.auto_glossary}</span>}
                   {j.auto_fewshot > 0 && <span className="text-emerald-400 flex-shrink-0">Q&A +{j.auto_fewshot}</span>}
+                  {j.pending_chunks > 0 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onGoToReview(); }}
+                      className="flex-shrink-0 text-[10px] font-medium bg-amber-900/40 text-amber-400 border border-amber-700/40 px-1.5 py-0.5 rounded hover:bg-amber-900/60"
+                      title="기존 지식과 유사해 승인 대기 상태로 등록됨"
+                    >
+                      승인 대기 {j.pending_chunks}건
+                    </button>
+                  )}
                   {j.created_by_username && <span className="text-slate-500 flex-shrink-0">{j.created_by_username}</span>}
                   <span className="text-slate-600 flex-shrink-0">{new Date(j.created_at).toLocaleDateString('ko-KR')}</span>
                 </div>
@@ -1028,6 +1078,163 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
         onClose={() => setProgressJobId(null)}
         onSettled={onSuccess}
       />
+    </div>
+  );
+}
+
+
+// ── 서브탭 3: 승인 대기 (중복 의심 리뷰) ───────────────────────────────────────
+
+function ReviewTab({ items, canModify, onResolved }: {
+  items: KnowledgeItem[];
+  canModify: boolean;
+  onResolved: () => void;
+}) {
+  const [selectedItem, setSelectedItem] = useState<KnowledgeItem | null>(null);
+  const [selectedTargetId, setSelectedTargetId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState('');
+
+  const { data: matches = [], isLoading: matchesLoading } = useQuery({
+    queryKey: ['knowledge-duplicate-matches', selectedItem?.id],
+    queryFn: () => getDuplicateMatches(selectedItem!.id),
+    enabled: selectedItem !== null,
+  });
+
+  useEffect(() => {
+    if (matches.length > 0) setSelectedTargetId(matches[0].id);
+  }, [matches]);
+
+  const resolveMutation = useMutation({
+    mutationFn: ({ action, targetId }: { action: 'approve' | 'reject' | 'merge'; targetId?: number }) =>
+      resolveDuplicate(selectedItem!.id, action, targetId),
+    onSuccess: () => {
+      setSelectedItem(null);
+      setActionError('');
+      onResolved();
+    },
+    onError: (e: any) => setActionError(e.message || '처리에 실패했습니다.'),
+  });
+
+  if (items.length === 0) {
+    return (
+      <div className="text-center py-16 text-slate-500">
+        <CheckCircle className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+        승인 대기 중인 지식이 없습니다.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-slate-500">
+        기존 지식과 유사도가 높아 자동 반영되지 않고 검토를 기다리는 항목입니다. 클릭해서 어떤
+        기존 지식과 겹치는지 확인 후 승인·반려·병합을 선택하세요.
+      </p>
+      <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => setSelectedItem(item)}
+            className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-slate-800/60 transition-colors"
+          >
+            <Badge color="amber">승인 대기</Badge>
+            {item.category && <Badge color="cyan">{item.category}</Badge>}
+            <span className="text-sm text-slate-300 truncate flex-1">{item.content}</span>
+            <span className="text-[11px] text-slate-600 flex-shrink-0">
+              {new Date(item.created_at).toLocaleDateString('ko-KR')}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <Modal
+        isOpen={selectedItem !== null}
+        onClose={() => { setSelectedItem(null); setActionError(''); }}
+        title="유사 지식 검토"
+        maxWidth="max-w-3xl"
+      >
+        {selectedItem && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-xs font-medium text-amber-400 mb-1.5">신규 등록 (승인 대기)</p>
+                <div className="rounded-lg bg-amber-900/10 border border-amber-700/30 px-3 py-2.5 text-sm text-slate-200 whitespace-pre-wrap max-h-64 overflow-y-auto">
+                  {selectedItem.content}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-indigo-400 mb-1.5">
+                  기존 지식 {matches.length > 1 ? `(${matches.length}건 중 선택)` : ''}
+                </p>
+                {matchesLoading ? (
+                  <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {matches.map((m: DuplicateMatch) => (
+                      <label
+                        key={m.id}
+                        className={`block rounded-lg border px-3 py-2.5 text-sm cursor-pointer transition-colors ${
+                          selectedTargetId === m.id
+                            ? 'border-indigo-500 bg-indigo-900/20'
+                            : 'border-slate-700 bg-slate-900/40 hover:border-slate-600'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          {matches.length > 1 && (
+                            <input
+                              type="radio"
+                              checked={selectedTargetId === m.id}
+                              onChange={() => setSelectedTargetId(m.id)}
+                              className="text-indigo-500"
+                            />
+                          )}
+                          <span className="text-[11px] font-mono text-indigo-400">
+                            유사도 {(m.similarity * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                        <p className="text-slate-300 whitespace-pre-wrap">{m.content}</p>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
+
+            {canModify ? (
+              <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
+                <Button
+                  variant="ghost" size="sm"
+                  loading={resolveMutation.isPending}
+                  onClick={() => resolveMutation.mutate({ action: 'reject' })}
+                >
+                  반려
+                </Button>
+                <Button
+                  variant="secondary" size="sm"
+                  loading={resolveMutation.isPending}
+                  disabled={!selectedTargetId}
+                  onClick={() => resolveMutation.mutate({ action: 'merge', targetId: selectedTargetId ?? undefined })}
+                  title="선택한 기존 지식의 내용을 신규 등록 내용으로 교체합니다"
+                >
+                  병합 (기존 지식 갱신)
+                </Button>
+                <Button
+                  variant="primary" size="sm"
+                  loading={resolveMutation.isPending}
+                  onClick={() => resolveMutation.mutate({ action: 'approve' })}
+                  title="중복이 아니라고 판단 — 새 지식으로 그대로 활성화합니다"
+                >
+                  승인 (새 지식으로 등록)
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 파트의 승인 권한이 없습니다.</p>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -1285,6 +1492,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
     category: categoryNames.includes('공통지식') ? '공통지식' : '',
   });
   const [done, setDone] = useState('');
+  const [donePending, setDonePending] = useState(false);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -1297,10 +1505,15 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
         base_weight: form.base_weight,
         category: form.category,
       }),
-    onSuccess: () => {
+    onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
       qc.invalidateQueries({ queryKey: ['stats-ns', namespace] });
-      setDone('등록 완료');
+      setDone(
+        created.pending_review
+          ? '유사한 기존 지식이 있어 승인 대기 상태로 등록됐습니다 — "승인 대기" 탭에서 확인하세요.'
+          : '등록 완료'
+      );
+      setDonePending(!!created.pending_review);
       setForm({ ...defaultForm, category: categoryNames.includes('공통지식') ? '공통지식' : '' });
       onSuccess();
     },
@@ -1345,7 +1558,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
         <p className="text-[11px] text-slate-500 mt-1">1.0=기본 · 1.5+=보통 · 2.0+=높음(핵심 문서)</p>
       </div>
 
-      {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
+      {done && <p className={`text-sm font-medium ${donePending ? 'text-amber-400' : 'text-emerald-400'}`}>{done}</p>}
       {createMutation.isError && <p className="text-xs text-rose-400">{String(createMutation.error)}</p>}
 
       <div className="flex gap-2 justify-end pt-1">

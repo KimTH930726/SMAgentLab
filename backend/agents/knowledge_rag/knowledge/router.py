@@ -36,9 +36,10 @@ async def _require_resource_namespace(namespace: Optional[str], user: dict, not_
 @router.get("", response_model=list[KnowledgeOut])
 async def get_knowledge_list(
     namespace: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
     user: dict = Depends(get_current_user),
 ):
-    return await service.list_knowledge(namespace)
+    return await service.list_knowledge(namespace, status)
 
 
 @router.post("", response_model=KnowledgeOut, status_code=201)
@@ -87,6 +88,28 @@ async def remove_knowledge(knowledge_id: int, user: dict = Depends(get_current_u
     deleted = await service.delete_knowledge(knowledge_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Knowledge not found")
+
+
+@router.get("/{knowledge_id}/duplicate-matches")
+async def get_duplicate_matches(knowledge_id: int, user: dict = Depends(get_current_user)):
+    ns = await service.get_knowledge_namespace(knowledge_id)
+    await _require_resource_namespace(ns, user, "Knowledge not found")
+    return await service.get_duplicate_matches(knowledge_id)
+
+
+class ResolveDuplicateRequest(BaseModel):
+    action: str  # 'approve' | 'reject' | 'merge'
+    target_id: Optional[int] = None
+
+
+@router.post("/{knowledge_id}/resolve")
+async def resolve_duplicate(knowledge_id: int, body: ResolveDuplicateRequest, user: dict = Depends(get_current_user)):
+    ns = await service.get_knowledge_namespace(knowledge_id)
+    await _require_resource_namespace(ns, user, "Knowledge not found")
+    try:
+        return await service.resolve_duplicate(knowledge_id, body.action, body.target_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 class BulkDeleteRequest(BaseModel):

@@ -24,6 +24,12 @@ class KnowledgeUpdate(BaseModel):
     category: Optional[str] = None
 
 
+class DuplicateMatchOut(BaseModel):
+    id: int
+    content: str
+    similarity: float
+
+
 class KnowledgeOut(BaseModel):
     id: int
     namespace: str
@@ -33,6 +39,7 @@ class KnowledgeOut(BaseModel):
     query_template: Optional[str]
     base_weight: float
     category: Optional[str] = None
+    status: str = "active"
     source_file: Optional[str] = None
     source_chunk_idx: Optional[int] = None
     source_type: Optional[str] = None
@@ -41,6 +48,8 @@ class KnowledgeOut(BaseModel):
     created_by_username: Optional[str] = None
     created_at: str
     updated_at: str
+    pending_review: bool = False
+    duplicate_matches: list[DuplicateMatchOut] = []
 
 
 # ─── Bulk / Ingestion ──────────────────────────────────────────────────────
@@ -69,6 +78,7 @@ class IngestionJobOut(BaseModel):
     status: str
     total_chunks: int
     created_chunks: int
+    pending_chunks: int = 0
     auto_glossary: int
     auto_fewshot: int
     chunk_strategy: Optional[str]

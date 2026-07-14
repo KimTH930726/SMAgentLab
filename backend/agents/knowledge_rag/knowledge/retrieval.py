@@ -15,19 +15,20 @@ from shared.embedding import embedding_service
 _runtime_thresholds: dict[str, float] = {}
 
 
+_THRESHOLD_KEYS = (
+    "glossary_min_similarity", "fewshot_min_similarity",
+    "knowledge_min_score", "knowledge_high_score", "knowledge_mid_score",
+    "duplicate_min_similarity",
+)
+
+
 def get_thresholds() -> dict[str, float]:
-    return {
-        "glossary_min_similarity": _runtime_thresholds.get("glossary_min_similarity", settings.glossary_min_similarity),
-        "fewshot_min_similarity": _runtime_thresholds.get("fewshot_min_similarity", settings.fewshot_min_similarity),
-        "knowledge_min_score": _runtime_thresholds.get("knowledge_min_score", settings.knowledge_min_score),
-        "knowledge_high_score": _runtime_thresholds.get("knowledge_high_score", settings.knowledge_high_score),
-        "knowledge_mid_score": _runtime_thresholds.get("knowledge_mid_score", settings.knowledge_mid_score),
-    }
+    return {k: _runtime_thresholds.get(k, getattr(settings, k)) for k in _THRESHOLD_KEYS}
 
 
 def set_thresholds(updates: dict[str, float]) -> dict[str, float]:
     for k, v in updates.items():
-        if k in ("glossary_min_similarity", "fewshot_min_similarity", "knowledge_min_score", "knowledge_high_score", "knowledge_mid_score"):
+        if k in _THRESHOLD_KEYS:
             _runtime_thresholds[k] = v
     return get_thresholds()
 
@@ -102,6 +103,28 @@ async def map_glossary_term(
     return None
 
 
+async def find_similar_active_knowledge(
+    ns_id: int, embedding: list[float], *, limit: int = 3,
+) -> list[dict]:
+    """같은 네임스페이스의 활성(active) 지식 중 embedding과 가장 유사한 상위 N건 조회.
+
+    지식 등록 시 중복 의심 판정(승인 대기)에 사용 — 이미 pending_review/rejected인
+    행은 후보에서 제외해 "대기 중인 것끼리" 비교되는 것을 막는다.
+    """
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, content, 1 - (embedding <=> $2::vector) AS similarity
+            FROM rag_knowledge
+            WHERE namespace_id = $1 AND status = 'active' AND embedding IS NOT NULL
+            ORDER BY embedding <=> $2::vector
+            LIMIT $3
+            """,
+            ns_id, str(embedding), limit,
+        )
+    return [{"id": r["id"], "content": r["content"], "similarity": float(r["similarity"])} for r in rows]
+
+
 _VECTOR_CANDIDATE_LIMIT = 300  # top_k/reranker_candidates(기본 20)보다 넉넉한 후보 풀 —
 # 벡터 CTE를 ORDER BY + LIMIT로 유계화해 정렬 비용을 줄인다(테이블이 커지면 HNSW
 # 인덱스도 이 형태에서만 자동으로 쓰이기 시작함).
@@ -124,7 +147,9 @@ async def search_knowledge(
             f"""
             WITH vector_scores AS (
                 SELECT id, 1 - (embedding <=> $1::vector) AS v_score
-                FROM rag_knowledge WHERE namespace_id = $2 AND embedding IS NOT NULL
+                FROM rag_knowledge
+                WHERE namespace_id = $2 AND embedding IS NOT NULL
+                  AND (status IS NULL OR status = 'active')
                 ORDER BY embedding <=> $1::vector
                 LIMIT $7
             ),
@@ -137,6 +162,7 @@ async def search_knowledge(
                     WHERE lexeme IS NOT NULL
                 ) q
                 WHERE k.namespace_id = $2
+                  AND (k.status IS NULL OR k.status = 'active')
                   AND to_tsvector('simple', k.content) @@ q.tsq
             )
             SELECT k.id, n.name AS namespace, k.container_name, k.target_tables,
@@ -151,6 +177,7 @@ async def search_knowledge(
             LEFT JOIN vector_scores vs ON k.id = vs.id
             LEFT JOIN keyword_scores ks ON k.id = ks.id
             WHERE k.namespace_id = $2
+              AND (k.status IS NULL OR k.status = 'active')
               AND (vs.v_score IS NOT NULL OR ks.k_score IS NOT NULL)
               {category_filter}
             ORDER BY final_score DESC LIMIT $6

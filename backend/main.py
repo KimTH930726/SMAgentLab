@@ -935,6 +935,22 @@ async def _migrate_knowledge_ingestion(conn) -> None:
     """)
 
 
+async def _migrate_duplicate_review(conn) -> None:
+    """지식 중복 등록 방지 — 청크 단위 유사도 검사 + 승인 대기(pending_review) 리뷰."""
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'")
+    await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS pending_chunks INT NOT NULL DEFAULT 0")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rag_knowledge_duplicate_match (
+            id                    SERIAL PRIMARY KEY,
+            new_knowledge_id      INT NOT NULL REFERENCES rag_knowledge(id) ON DELETE CASCADE,
+            matched_knowledge_id  INT NOT NULL REFERENCES rag_knowledge(id) ON DELETE CASCADE,
+            similarity            FLOAT NOT NULL,
+            created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_dup_match_new ON rag_knowledge_duplicate_match (new_knowledge_id)")
+
+
 async def _run_migrations() -> None:
     """기존 DB 호환용 스키마 마이그레이션 (멱등)."""
     async with get_conn() as conn:
@@ -944,6 +960,7 @@ async def _run_migrations() -> None:
         await _migrate_text2sql_tables(conn)
         await _migrate_system_tables(conn)
         await _migrate_knowledge_ingestion(conn)
+        await _migrate_duplicate_review(conn)
 
 
 @asynccontextmanager

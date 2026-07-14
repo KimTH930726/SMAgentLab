@@ -3,6 +3,8 @@ import type {
   KnowledgeItem,
   KnowledgeCreatePayload,
   KnowledgeUpdatePayload,
+  KnowledgeStatus,
+  DuplicateMatch,
   GlossaryItem,
   GlossaryCreatePayload,
   GlossaryUpdatePayload,
@@ -10,11 +12,38 @@ import type {
 
 // Knowledge CRUD
 
-export async function getKnowledge(namespace: string): Promise<KnowledgeItem[]> {
+export async function getKnowledge(namespace: string, status?: KnowledgeStatus): Promise<KnowledgeItem[]> {
   try {
-    return await apiFetch<KnowledgeItem[]>(`/knowledge?namespace=${encodeURIComponent(namespace)}`);
+    const params = new URLSearchParams({ namespace });
+    if (status) params.set('status', status);
+    return await apiFetch<KnowledgeItem[]>(`/knowledge?${params.toString()}`);
   } catch (err) {
     console.error('getKnowledge error:', err);
+    throw err;
+  }
+}
+
+export async function getDuplicateMatches(id: number): Promise<DuplicateMatch[]> {
+  try {
+    return await apiFetch<DuplicateMatch[]>(`/knowledge/${id}/duplicate-matches`);
+  } catch (err) {
+    console.error('getDuplicateMatches error:', err);
+    throw err;
+  }
+}
+
+export async function resolveDuplicate(
+  id: number,
+  action: 'approve' | 'reject' | 'merge',
+  targetId?: number,
+): Promise<{ id: number; status: string; merged_into?: number }> {
+  try {
+    return await apiFetch(`/knowledge/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ action, target_id: targetId ?? null }),
+    });
+  } catch (err) {
+    console.error('resolveDuplicate error:', err);
     throw err;
   }
 }
@@ -176,6 +205,7 @@ export interface IngestionJob {
   status: string;
   total_chunks: number;
   created_chunks: number;
+  pending_chunks: number;
   auto_glossary: number;
   auto_fewshot: number;
   chunk_strategy: string | null;
@@ -198,6 +228,7 @@ export interface IngestionJobStatus {
   status: string;
   total_chunks: number;
   created_chunks: number;
+  pending_chunks: number;
   cancel_requested: boolean;
   error_message: string | null;
   created_at: string;
