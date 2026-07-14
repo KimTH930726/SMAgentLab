@@ -22,6 +22,7 @@ import {
   getDuplicateMatches,
   resolveDuplicate,
   type IngestionJob,
+  type IngestionJobStatus,
   type ConfluenceTreeResponse,
 } from '../../api/knowledge';
 import { getCategories } from '../../api/namespaces';
@@ -823,7 +824,7 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
 function IngestionProgressModal({ jobId, onClose, onSettled }: {
   jobId: number | null;
   onClose: () => void;
-  onSettled: () => void;
+  onSettled: (job: IngestionJobStatus) => void;
 }) {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState('');
@@ -838,7 +839,7 @@ function IngestionProgressModal({ jobId, onClose, onSettled }: {
   const prevStatus = useRef<string | null>(null);
   useEffect(() => {
     if (job && prevStatus.current === 'processing' && job.status !== 'processing') {
-      onSettled();
+      onSettled(job);
     }
     if (job) prevStatus.current = job.status;
   }, [job, onSettled]);
@@ -933,6 +934,21 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
 }) {
   const [activeMethod, setActiveMethod] = useState<IngestMethod>(null);
   const [progressJobId, setProgressJobId] = useState<number | null>(null);
+  const [autoNavigate, setAutoNavigate] = useState(false);
+
+  // 폼 제출 성공 시: 비동기 배치 작업(jobId)이면 진행 모달을 띄우고 완료될 때까지
+  // 기다렸다가 결과(승인 대기 여부)에 따라 이동, 동기 단건 등록이면 즉시 이동.
+  const handleFormOutcome = (outcome?: { jobId?: number; pendingReview?: boolean }) => {
+    if (outcome?.jobId) {
+      setProgressJobId(outcome.jobId);
+      setAutoNavigate(true);
+    } else if (outcome?.pendingReview) {
+      alert('유사한 기존 지식이 있어 승인 대기 상태로 등록됐습니다. 승인 대기 탭으로 이동합니다.');
+      onGoToReview();
+    } else {
+      onGoToList();
+    }
+  };
 
   if (!namespace) {
     return <div className="text-center py-16 text-slate-500">파트를 선택하세요.</div>;
@@ -1003,23 +1019,23 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
       {/* 선택된 방법의 인라인 폼 */}
       {activeMethod === 'file' && (
         <FileUploadForm namespace={namespace} categoryNames={categoryNames}
-          onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
+          onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'text' && (
         <TextSplitForm namespace={namespace} categoryNames={categoryNames}
-          onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
+          onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'manual' && (
         <ManualForm namespace={namespace} categoryNames={categoryNames}
-          onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
+          onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'url' && (
         <UrlForm namespace={namespace} categoryNames={categoryNames}
-          onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
+          onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'teams' && (
         <TeamsForm namespace={namespace} categoryNames={categoryNames}
-          onSuccess={() => { onSuccess(); onGoToList(); }} onCancel={() => setActiveMethod(null)} />
+          onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
 
       {/* 인제스천 작업 이력 */}
@@ -1075,8 +1091,18 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
 
       <IngestionProgressModal
         jobId={progressJobId}
-        onClose={() => setProgressJobId(null)}
-        onSettled={onSuccess}
+        onClose={() => { setProgressJobId(null); setAutoNavigate(false); }}
+        onSettled={(job) => {
+          onSuccess();
+          if (!autoNavigate) return;
+          setAutoNavigate(false);
+          if (job.pending_chunks > 0) {
+            alert(`유사한 기존 지식이 있어 ${job.pending_chunks}건이 승인 대기 상태로 등록됐습니다. 승인 대기 탭으로 이동합니다.`);
+            onGoToReview();
+          } else if (job.status === 'completed') {
+            onGoToList();
+          }
+        }}
       />
     </div>
   );
@@ -1244,7 +1270,7 @@ function ReviewTab({ items, canModify, onResolved }: {
 
 function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   namespace: string; categoryNames: string[];
-  onSuccess: () => void; onCancel: () => void;
+  onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
@@ -1320,10 +1346,10 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setLoading(true); setError('');
     try {
       const items = selected.map(c => ({ content: c.text, category }));
-      await bulkCreateKnowledge(namespace, items, file!.name, 'file_upload');
+      const result = await bulkCreateKnowledge(namespace, items, file!.name, 'file_upload');
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
-      onSuccess();
+      onSuccess({ jobId: result.job_id });
     } catch (e: any) { setError(e.message || '오류 발생'); }
     finally { setLoading(false); }
   };
@@ -1401,7 +1427,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
 function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   namespace: string; categoryNames: string[];
-  onSuccess: () => void; onCancel: () => void;
+  onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
 }) {
   const [text, setText] = useState('');
   const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
@@ -1429,10 +1455,10 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setLoading(true); setError('');
     try {
       const items = selected.map(c => ({ content: c.text, category }));
-      await bulkCreateKnowledge(namespace, items, '텍스트 직접입력', 'paste_split');
+      const result = await bulkCreateKnowledge(namespace, items, '텍스트 직접입력', 'paste_split');
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
-      onSuccess();
+      onSuccess({ jobId: result.job_id });
     } catch (e: any) { setError(e.message || '오류 발생'); }
     finally { setLoading(false); }
   };
@@ -1484,7 +1510,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
 function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
   namespace: string; categoryNames: string[];
-  onSuccess: () => void; onCancel: () => void;
+  onSuccess: (outcome?: { pendingReview?: boolean }) => void; onCancel: () => void;
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<KnowledgeFormData>({
@@ -1515,7 +1541,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       );
       setDonePending(!!created.pending_review);
       setForm({ ...defaultForm, category: categoryNames.includes('공통지식') ? '공통지식' : '' });
-      onSuccess();
+      onSuccess({ pendingReview: !!created.pending_review });
     },
   });
 
@@ -1579,7 +1605,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
 function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
   namespace: string; categoryNames: string[];
-  onSuccess: () => void; onCancel: () => void;
+  onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
 }) {
   const { user, updateUser } = useAuthStore();
   const [url, setUrl] = useState('');
@@ -1696,10 +1722,10 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       const items = selected.map(c => ({ content: c.text, category }));
       const srcName = sourceMeta?.name ?? url;
       const srcType = sourceMeta?.type ?? (isConfluence ? 'confluence' : 'web');
-      await bulkCreateKnowledge(namespace, items, srcName, srcType);
+      const result = await bulkCreateKnowledge(namespace, items, srcName, srcType);
       setDone(`"${srcName}" — ${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
-      onSuccess();
+      onSuccess({ jobId: result.job_id });
     } catch (e: any) { setError(e.message || '오류 발생'); }
     finally { setLoading(false); }
   };
@@ -1904,7 +1930,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
 function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
   namespace: string; categoryNames: string[];
-  onSuccess: () => void; onCancel: () => void;
+  onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
 }) {
   const { accessToken } = useAuthStore();
   const [authStatus, setAuthStatus] = useState<TeamsAuthStatus | null>(null);
@@ -2073,7 +2099,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setSubmitting(true);
     setError('');
     try {
-      await importTeamsThreads(
+      const result = await importTeamsThreads(
         namespace,
         [{ title: threadTitle, messages: selected }],
         {
@@ -2084,7 +2110,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
       );
       setDone(`"${threadTitle}" — 등록을 시작했습니다. 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setSelectedIds(new Set());
-      onSuccess();
+      onSuccess({ jobId: result.job_id ?? undefined });
     } catch (e: any) {
       setError(e.message || '등록 실패');
     } finally {
