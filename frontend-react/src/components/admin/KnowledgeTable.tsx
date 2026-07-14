@@ -1117,28 +1117,34 @@ function ReviewTab({ items, canModify, onResolved }: {
   onResolved: () => void;
 }) {
   const [selectedItem, setSelectedItem] = useState<KnowledgeItem | null>(null);
-  const [selectedTargetId, setSelectedTargetId] = useState<number | null>(null);
+  const [expandedMatchId, setExpandedMatchId] = useState<number | null>(null);
   const [actionError, setActionError] = useState('');
+  const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | 'merge' | null>(null);
 
   const { data: matches = [], isLoading: matchesLoading } = useQuery({
     queryKey: ['knowledge-duplicate-matches', selectedItem?.id],
     queryFn: () => getDuplicateMatches(selectedItem!.id),
     enabled: selectedItem !== null,
   });
+  // 유사도 높은 순 정렬 — 백엔드가 이미 정렬해 오지만 방어적으로 한번 더 보장
+  const sortedMatches = [...matches].sort((a, b) => b.similarity - a.similarity);
 
   useEffect(() => {
-    if (matches.length > 0) setSelectedTargetId(matches[0].id);
-  }, [matches]);
+    setExpandedMatchId(sortedMatches[0]?.id ?? null);
+  }, [selectedItem?.id]);
 
   const resolveMutation = useMutation({
-    mutationFn: ({ action, targetId }: { action: 'approve' | 'reject' | 'merge'; targetId?: number }) =>
-      resolveDuplicate(selectedItem!.id, action, targetId),
+    mutationFn: ({ action, targetId }: { action: 'approve' | 'reject' | 'merge'; targetId?: number }) => {
+      setPendingAction(action);
+      return resolveDuplicate(selectedItem!.id, action, targetId);
+    },
     onSuccess: () => {
       setSelectedItem(null);
       setActionError('');
+      setPendingAction(null);
       onResolved();
     },
-    onError: (e: any) => setActionError(e.message || '처리에 실패했습니다.'),
+    onError: (e: any) => { setActionError(e.message || '처리에 실패했습니다.'); setPendingAction(null); },
   });
 
   if (items.length === 0) {
@@ -1154,7 +1160,7 @@ function ReviewTab({ items, canModify, onResolved }: {
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
         기존 지식과 유사도가 높아 자동 반영되지 않고 검토를 기다리는 항목입니다. 클릭해서 어떤
-        기존 지식과 겹치는지 확인 후 승인·반려·병합을 선택하세요.
+        기존 지식과 겹치는지 확인 후 처리하세요.
       </p>
       <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
         {items.map((item) => (
@@ -1181,49 +1187,61 @@ function ReviewTab({ items, canModify, onResolved }: {
       >
         {selectedItem && (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <p className="text-xs font-medium text-amber-400 mb-1.5">신규 등록 (승인 대기)</p>
-                <div className="rounded-lg bg-amber-900/10 border border-amber-700/30 px-3 py-2.5 text-sm text-slate-200 whitespace-pre-wrap max-h-64 overflow-y-auto">
-                  {selectedItem.content}
-                </div>
+            <div>
+              <p className="text-xs font-medium text-amber-400 mb-1.5">신규 등록 (승인 대기)</p>
+              <div className="rounded-lg bg-amber-900/10 border border-amber-700/30 px-3 py-2.5 text-sm text-slate-200 whitespace-pre-wrap max-h-40 overflow-y-auto">
+                {selectedItem.content}
               </div>
-              <div>
-                <p className="text-xs font-medium text-indigo-400 mb-1.5">
-                  기존 지식 {matches.length > 1 ? `(${matches.length}건 중 선택)` : ''}
-                </p>
-                {matchesLoading ? (
-                  <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
-                ) : (
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {matches.map((m: DuplicateMatch) => (
-                      <label
-                        key={m.id}
-                        className={`block rounded-lg border px-3 py-2.5 text-sm cursor-pointer transition-colors ${
-                          selectedTargetId === m.id
-                            ? 'border-indigo-500 bg-indigo-900/20'
-                            : 'border-slate-700 bg-slate-900/40 hover:border-slate-600'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 mb-1">
-                          {matches.length > 1 && (
-                            <input
-                              type="radio"
-                              checked={selectedTargetId === m.id}
-                              onChange={() => setSelectedTargetId(m.id)}
-                              className="text-indigo-500"
-                            />
-                          )}
-                          <span className="text-[11px] font-mono text-indigo-400">
-                            유사도 {(m.similarity * 100).toFixed(1)}%
+            </div>
+
+            <div>
+              <p className="text-xs font-medium text-indigo-400 mb-1.5">
+                유사한 기존 지식 {sortedMatches.length > 0 ? `${sortedMatches.length}건 (유사도순)` : ''}
+              </p>
+              {matchesLoading ? (
+                <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
+              ) : (
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {sortedMatches.map((m: DuplicateMatch) => {
+                    const isExpanded = expandedMatchId === m.id;
+                    return (
+                      <div key={m.id} className="rounded-lg border border-slate-700 bg-slate-900/40 overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedMatchId(isExpanded ? null : m.id)}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-800/60 transition-colors"
+                        >
+                          <span className="text-xs font-mono text-indigo-400 flex-shrink-0 w-14">
+                            {(m.similarity * 100).toFixed(1)}%
                           </span>
-                        </div>
-                        <p className="text-slate-300 whitespace-pre-wrap">{m.content}</p>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
+                          {!isExpanded && (
+                            <span className="text-xs text-slate-400 truncate flex-1">{m.content}</span>
+                          )}
+                          {isExpanded && <span className="flex-1" />}
+                          {isExpanded
+                            ? <ChevronUp className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                            : <ChevronDown className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />}
+                        </button>
+                        {isExpanded && (
+                          <div className="px-3 pb-3 pt-1 border-t border-slate-700/60 space-y-2.5">
+                            <p className="text-sm text-slate-300 whitespace-pre-wrap">{m.content}</p>
+                            {canModify && (
+                              <Button
+                                variant="secondary" size="sm"
+                                loading={resolveMutation.isPending && pendingAction === 'merge'}
+                                onClick={() => resolveMutation.mutate({ action: 'merge', targetId: m.id })}
+                                title="이 기존 지식의 내용을 방금 등록한 새 내용으로 바꿉니다"
+                              >
+                                이 지식을 새 내용으로 업데이트
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
@@ -1232,27 +1250,19 @@ function ReviewTab({ items, canModify, onResolved }: {
               <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
                 <Button
                   variant="ghost" size="sm"
-                  loading={resolveMutation.isPending}
+                  loading={resolveMutation.isPending && pendingAction === 'reject'}
                   onClick={() => resolveMutation.mutate({ action: 'reject' })}
+                  title="새로 등록한 내용을 버리고, 기존 지식은 그대로 둡니다"
                 >
-                  반려
-                </Button>
-                <Button
-                  variant="secondary" size="sm"
-                  loading={resolveMutation.isPending}
-                  disabled={!selectedTargetId}
-                  onClick={() => resolveMutation.mutate({ action: 'merge', targetId: selectedTargetId ?? undefined })}
-                  title="선택한 기존 지식의 내용을 신규 등록 내용으로 교체합니다"
-                >
-                  병합 (기존 지식 갱신)
+                  반려 (새 지식 삭제)
                 </Button>
                 <Button
                   variant="primary" size="sm"
-                  loading={resolveMutation.isPending}
+                  loading={resolveMutation.isPending && pendingAction === 'approve'}
                   onClick={() => resolveMutation.mutate({ action: 'approve' })}
-                  title="중복이 아니라고 판단 — 새 지식으로 그대로 활성화합니다"
+                  title="중복이 아니라고 판단 — 기존 지식은 그대로 두고, 새 내용을 별도 지식으로 추가합니다"
                 >
-                  승인 (새 지식으로 등록)
+                  새 지식으로 등록
                 </Button>
               </div>
             ) : (
