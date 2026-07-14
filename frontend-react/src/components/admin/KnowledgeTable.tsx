@@ -1118,7 +1118,6 @@ function ReviewTab({ items, canModify, onResolved }: {
 }) {
   const [selectedItem, setSelectedItem] = useState<KnowledgeItem | null>(null);
   const [mergeTargetId, setMergeTargetId] = useState<number | null>(null);
-  const [mergeText, setMergeText] = useState('');
   const [actionError, setActionError] = useState('');
   const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | 'merge' | null>(null);
 
@@ -1131,7 +1130,6 @@ function ReviewTab({ items, canModify, onResolved }: {
   const sortedMatches = [...matches].sort((a, b) => b.similarity - a.similarity);
 
   useEffect(() => {
-    setMergeText(selectedItem?.content ?? '');
     setMergeTargetId(null);
   }, [selectedItem?.id]);
 
@@ -1142,9 +1140,9 @@ function ReviewTab({ items, canModify, onResolved }: {
   }, [sortedMatches, mergeTargetId]);
 
   const resolveMutation = useMutation({
-    mutationFn: ({ action, targetId, content }: { action: 'approve' | 'reject' | 'merge'; targetId?: number; content?: string }) => {
+    mutationFn: ({ action, targetId }: { action: 'approve' | 'reject' | 'merge'; targetId?: number }) => {
       setPendingAction(action);
-      return resolveDuplicate(selectedItem!.id, action, targetId, content);
+      return resolveDuplicate(selectedItem!.id, action, targetId);
     },
     onSuccess: () => {
       setSelectedItem(null);
@@ -1180,6 +1178,9 @@ function ReviewTab({ items, canModify, onResolved }: {
             <Badge color="amber">승인 대기</Badge>
             {item.category && <Badge color="cyan">{item.category}</Badge>}
             <span className="text-sm text-slate-300 truncate flex-1">{item.content}</span>
+            {item.created_by_username && (
+              <span className="text-[11px] text-slate-500 flex-shrink-0">{item.created_by_username}</span>
+            )}
             <span className="text-[11px] text-slate-600 flex-shrink-0">
               {new Date(item.created_at).toLocaleDateString('ko-KR')}
             </span>
@@ -1235,16 +1236,6 @@ function ReviewTab({ items, canModify, onResolved }: {
               </div>
             </div>
 
-            <div>
-              <p className="text-xs font-medium text-emerald-400 mb-1.5">최종 병합 내용 (직접 수정 가능)</p>
-              <textarea
-                value={mergeText}
-                onChange={(e) => setMergeText(e.target.value)}
-                rows={6}
-                className="w-full rounded-lg bg-slate-900/60 border border-slate-700 px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-y"
-              />
-            </div>
-
             {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
 
             {canModify ? (
@@ -1265,11 +1256,11 @@ function ReviewTab({ items, canModify, onResolved }: {
                 </Button>
                 <Button
                   variant="primary" size="sm"
-                  disabled={mergeTargetId === null || !mergeText.trim()}
+                  disabled={mergeTargetId === null}
                   loading={resolveMutation.isPending && pendingAction === 'merge'}
-                  onClick={() => resolveMutation.mutate({ action: 'merge', targetId: mergeTargetId!, content: mergeText })}
+                  onClick={() => resolveMutation.mutate({ action: 'merge', targetId: mergeTargetId! })}
                 >
-                  병합
+                  덮어쓰기
                 </Button>
               </div>
             ) : (
