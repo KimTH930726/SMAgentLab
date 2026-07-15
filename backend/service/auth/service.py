@@ -102,10 +102,12 @@ async def authenticate_user(username: str, password: str) -> dict:
             """,
             username,
         )
+    # 아이디가 없을 때와 비밀번호가 틀렸을 때 메시지를 구분하지 않는다 — 구분하면
+    # 공격자가 응답만 보고 어떤 아이디가 실제로 존재하는지 알아낼 수 있다(계정 열거).
     if not row:
-        raise LoginError("존재하지 않는 아이디입니다.")
+        raise LoginError("아이디 또는 비밀번호가 올바르지 않습니다.")
     if not await asyncio.to_thread(verify_password, password, row["hashed_password"]):
-        raise LoginError("비밀번호가 올바르지 않습니다.")
+        raise LoginError("아이디 또는 비밀번호가 올바르지 않습니다.")
     if not row["is_active"]:
         raise LoginError("비활성화된 계정입니다. 관리자에게 문의하세요.")
     return dict(row)

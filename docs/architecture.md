@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.33)
+# Ops-Navigator 시스템 아키텍처 (v2.39)
 
 ## 개요
 
@@ -6,6 +6,12 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.39: 로그인 브루트포스 방어 — Redis 기반 rate limiting(사용자명+IP 조합, 5분 내 5회 실패 시 5분 잠금, `shared/rate_limit.py`, Redis 미연결 시 제한 없이 통과) + 아이디 존재 여부와 비밀번호 오류를 구분하지 않는 통합 에러 메시지로 계정 열거(enumeration) 오라클 제거.
+- v2.38: 백엔드 전수 감사 2차(auth/admin/teams/text2sql) — 관리자 파트로 셀프 회원가입 가능하던 구멍, 파트 삭제 시 소유 네임스페이스가 조용히 "공통 파트"(전원 허용)로 전환되던 문제, `PUT /api/llm/config` 관리자 권한 누락, 네임스페이스 rename/delete 시 시맨틱 캐시 미무효화, 캐시 Redis glob 인젝션, text2sql SQL 안전성 검사 우회(pg_read_file/dblink 등), text2sql 크로스테넌트 쓰기 등 Critical/High 다수 수정. 1차 감사 잔여 Medium/Low 10건(no_knowledge 판정 보강, 대화요약 tie-breaker, 대량등록 배치 내 상호중복검사, fewshot 상태 응답 버그, TOCTOU 완화 등)도 함께 정리. 지식조회 화면에 가중치 정렬(높은순/낮은순) 추가.
+- v2.37: 백엔드 전수 감사 1차(fewshot/chat/knowledge_rag/mcp_tool) — 나빠요 피드백 후 지식 등록 시 오답 원인 지식의 가중치가 오히려 올라가던 버그를 계기로 같은 클래스(플래그 오버로딩, stale 데이터, 소유권 검사 누락)의 버그를 다른 모듈에서도 탐색. MCP 도구 승인 카드가 미입력 필수 파라미터를 example 힌트값으로 몰래 채워 승인을 통과시키던 것, 시맨틱 캐시가 agent_type 구분 없이 knowledge_rag/mcp_tool 답변을 서로 새게 하던 것 등 Critical 2건 포함.
+- v2.36: 나빠요 피드백 → 지식등록/지식공백 해결 흐름 버그 수정 — `is_positive` 플래그를 상태 판정과 가중치 방향 두 용도로 겹쳐 쓰던 게 원인. `ops_query_log.resolved_knowledge_id` 컬럼 추가로 해결 처리된 질의를 실제 등록 지식과 연결(통계 화면이 원래 AI 오답 대신 등록 내용을 보여줌), 피드백/해결 매칭을 질문 텍스트 대신 message_id로 정밀화, 통계 페이지 "승인" 원클릭 버튼이 raw INSERT로 중복검사·업무구분 없이 등록하던 것을 `create_knowledge()` 재사용으로 교체, 등록 폼들의 하드코딩된 "없음(파트 공통)" 카테고리 옵션 제거.
+- v2.35: 파이프라인 디버그 탭 UX — 업무구분 필터와 MCP 도구 사용 토글을 같은 행(좌/우)에 배치, 업무구분 드롭다운의 "전체"를 다른 항목과 동일한 체크박스로 바꿔 상호배타 선택 명확화.
+- v2.34: 지식 중복 등록 방지 — 등록 시점에 청크 단위로 기존 활성 지식과 유사도 비교(`duplicate_min_similarity`, 기본 0.88), 임계값 이상이면 `rag_knowledge.status='pending_review'`로 저장해 검색에서 숨기고 승인 대기 큐로 전환. 관리자가 승인(그대로 인정)/반려(status='rejected', 감사 기록 보존)/덮어쓰기(기존 지식의 content를 새 내용으로 교체) 중 선택. 대량 업로드는 배치 단위 병렬(`asyncio.gather`) 유사도 검사로 대규모 등록에도 지연 없음. 매칭된 기존 지식 후보는 `rag_knowledge_duplicate_match` 테이블에 top-N 기록, 리뷰 화면에서 좌(신규)/우(기존, 아코디언으로 펼쳐 전문 확인) 비교 후 처리.
 - v2.33: 지식 등록/수정 폼 UX 개선 — 업무구분(category)을 모든 등록·수정 폼(수정 모달, 직접입력, 파일업로드, 텍스트분할, URL/Confluence, Teams)의 최상단 필드로 재배치. 가장 먼저 결정해야 하는 값인데 폼마다 위치가 달라 놓치기 쉬웠음.
 - v2.32: 지식 공백(no_knowledge) 판정 보정 — 검색 문서가 점수 임계값은 넘었지만 실제로 무관해 LLM이 "관련 지식을 찾지 못했습니다"로 답한 경우도 지식 공백으로 분류하도록 `create_query_log`에 답변 문구 기반 게이트 추가, 기존 오분류 데이터 소급 보정.
 - v2.31: 어드민 지식 테이블 일괄 수정 — 다건 선택 후 업무구분/소스유형을 한 번에 변경(`POST /api/knowledge/bulk-update`, 값을 지정한 필드만 변경). 기존 다건 삭제와 동일한 선택 UI 재사용.

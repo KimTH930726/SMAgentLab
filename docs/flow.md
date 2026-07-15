@@ -28,7 +28,9 @@
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │  Step 0-A: Semantic Cache 조회 (Redis)              │   │
 │  │                                                     │   │
-│  │  query_vec로 Redis 스캔 (semcache:{ns}:*)           │   │
+│  │  query_vec로 Redis 스캔 (semcache:{ns}:{agent_type}:*) │ │
+│  │  (agent_type으로 분리 — knowledge_rag/mcp_tool 캐시가  │ │
+│  │   서로 새는 것을 방지, v2.38)                          │ │
 │  │  코사인 유사도 ≥ 0.97 히트 → 저장된 답변 즉시 반환  │   │
 │  │  미스 → Step 0-B 이후 정상 파이프라인 실행          │   │
 │  │  Redis 미연결 시 이 단계 무시 (graceful degradation) │   │
@@ -403,14 +405,21 @@ LLM에 전달되는 messages:
 질문 처리 → ops_query_log INSERT
   │
   ├─ 👍 피드백 → base_weight +0.1 / status='resolved' / few-shot candidate 생성
-  ├─ 👎 피드백 → base_weight -0.1 / status='unresolved'
-  └─ 검색 결과 없음 → status='no_knowledge'
+  ├─ 👎 피드백 (단순 건너뛰기) → base_weight -0.1 / status='unresolved'
+  ├─ 👎 피드백 + 지식 등록으로 교정 → 근거였던(오답의 원인) 지식은 base_weight -0.1(페널티),
+  │    status='resolved' + resolved_knowledge_id = 새로 등록한 지식 id로 연결 (v2.34)
+  └─ 검색 결과 없음 또는 LLM이 "관련 지식을 찾지 못했습니다"로 시작하는 답변 → status='no_knowledge'
 
 status 정의
   pending      — 답변 생성됨, 피드백 미확인
-  resolved     — 👍 피드백 확인됨
-  unresolved   — 👎 피드백 또는 검색 실패
-  no_knowledge — 관련 지식 자체 없음 (v2.19)
+  resolved     — 👍 피드백 확인됨, 또는 지식 등록으로 해결 처리됨
+  unresolved   — 👎 피드백(건너뛰기) 또는 검색 실패
+  no_knowledge — 관련 지식 자체 없음 (v2.19), 판정 문구는 접두사 일치로 검사 (v2.36)
+
+resolved_knowledge_id가 설정된 항목은 통계 화면에서 원래의 AI 답변이 아니라 그
+지식의 최신 content를 보여준다(등록된 지식이 이후 반려/병합되면 원래 답변으로
+자동 폴백). GET .../queries가 rag_knowledge를 LEFT JOIN status='active' 조건으로
+가져와 COALESCE(k.content, q.answer)로 응답한다.
 
 어드민 대시보드 (GET /api/stats)
   ├─ KPI 카드: 전체 / 해결 / 대기중 / 미해결 / 지식 공백
