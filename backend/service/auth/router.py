@@ -1,5 +1,5 @@
 """인증/계정 도메인 — API 라우터."""
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from core.dependencies import get_current_user, get_current_admin
 from core.security import decode_token
@@ -12,6 +12,7 @@ from service.auth.schemas import (
     UserOut, UserAdminUpdate,
     PartCreate, PartOut,
 )
+from shared import rate_limit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -46,11 +47,22 @@ async def register(body: RegisterRequest):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest):
+async def login(body: LoginRequest, request: Request):
+    client_ip = request.client.host if request.client else None
+
+    if await rate_limit.is_locked(body.username, client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="로그인 시도가 너무 많습니다. 5분 후 다시 시도해주세요.",
+        )
+
     try:
         user = await service.authenticate_user(body.username, body.password)
     except LoginError as e:
+        await rate_limit.record_failure(body.username, client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=e.detail)
+
+    await rate_limit.reset(body.username, client_ip)
     tokens = service.create_tokens(user)
     return TokenResponse(
         access_token=tokens["access_token"],
