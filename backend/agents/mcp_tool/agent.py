@@ -180,6 +180,11 @@ async def _execute_http_call(tool: dict, params: dict) -> tuple[str, str | None,
         logger.warning("[MCP_TOOL] %s %s | params=%s | headers_keys=%s | status=%s", method, resp.url, params, list(headers.keys()), resp.status_code)
         logger.debug("[MCP_TOOL] response body: %s", resp.text[:300])
         resp.raise_for_status()
+        # raise_for_status()는 4xx/5xx만 걸러낸다 — AsyncClient가 follow_redirects=False라서
+        # 3xx(로그인 페이지로 리다이렉트 등)가 예외 없이 여기까지 내려와 "성공"으로 오인될 수
+        # 있음. 디버그 패널의 테스트 실행 경로(status_code 2xx만 성공)와 판정 기준을 통일.
+        if resp.status_code >= 300:
+            return "", f"성공 범위(2xx)가 아닌 응답입니다 (HTTP {resp.status_code}) — 인증 만료나 URL 변경으로 리다이렉트됐을 수 있습니다.", resp.status_code, 0.0, duration_ms
 
         body = resp.text
         max_bytes = max_kb * 1024
@@ -325,7 +330,7 @@ class McpToolAgent(AgentBase):
             # ── Semantic Cache 조회 (도구 선택 LLM 호출 전, 신규 질문에만 적용) ──
             if not approved_tool and not selected_tool_id:
                 query_vec = await embedding_service.embed(sem_cache.normalize_query(query))
-                cached = await sem_cache.get_cached(namespace, query_vec)
+                cached = await sem_cache.get_cached(namespace, "mcp_tool", query_vec)
                 if cached:
                     await update_assistant_message(msg_id, cached["answer"], "completed")
                     yield {
@@ -334,7 +339,7 @@ class McpToolAgent(AgentBase):
                         "results": cached.get("results", []),
                     }
                     yield {"type": "token", "data": cached["answer"]}
-                    await create_query_log(namespace, query, cached["answer"], bool(cached.get("results")), cached.get("mapped_term"), msg_id)
+                    await create_query_log(namespace, query, cached["answer"], bool(cached.get("results")), cached.get("mapped_term"), msg_id, had_context=bool(cached.get("results")))
                     yield {"type": "done", "message_id": msg_id}
                     return
 
@@ -422,7 +427,7 @@ class McpToolAgent(AgentBase):
                         yield {"type": "token", "data": LLM_UNAVAILABLE_MSG}
                     final_answer = full_answer or LLM_UNAVAILABLE_MSG
                     await update_assistant_message(msg_id, final_answer, "completed")
-                    await create_query_log(namespace, query, final_answer, False, mapped_term, msg_id)
+                    await create_query_log(namespace, query, final_answer, False, mapped_term, msg_id, had_context=bool(rag_context.strip()))
                     yield {"type": "done", "message_id": msg_id}
                     return
 
@@ -456,12 +461,15 @@ class McpToolAgent(AgentBase):
 
                 final_answer = full_answer or LLM_UNAVAILABLE_MSG
                 await update_assistant_message(msg_id, final_answer, "completed")
-                await create_query_log(namespace, query, final_answer, True, mapped_term, msg_id)
+                # 도구 응답 본문이 비어있으면 "성공"이어도 실제 근거 데이터가 없는 것이므로
+                # had_context를 그대로 True로 두지 않는다 — RAG 컨텍스트라도 있으면 그걸로 보강
+                had_context = bool(response_data and response_data.strip()) or bool(rag_context.strip())
+                await create_query_log(namespace, query, final_answer, True, mapped_term, msg_id, had_context=had_context)
                 # ── Semantic Cache 저장 (HTTP 성공 + LLM 정상 응답 시) ──
                 if final_answer != LLM_UNAVAILABLE_MSG:
                     if query_vec is None:
                         query_vec = await embedding_service.embed(sem_cache.normalize_query(query))
-                    await sem_cache.set_cached(namespace, query_vec, {
+                    await sem_cache.set_cached(namespace, "mcp_tool", query_vec, {
                         "answer": final_answer,
                         "mapped_term": mapped_term,
                         "results": results_to_payload(rag_results),

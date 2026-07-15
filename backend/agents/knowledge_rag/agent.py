@@ -85,7 +85,7 @@ class KnowledgeRagAgent(AgentBase):
             cache_vec = await embedding_service.embed(sem_cache.normalize_query(search_question))
 
             # ── Semantic Cache 조회 ──
-            cached = await sem_cache.get_cached(namespace, cache_vec)
+            cached = await sem_cache.get_cached(namespace, "knowledge_rag", cache_vec)
             if cached:
                 await update_assistant_message(msg_id, cached["answer"], "completed")
                 yield {
@@ -173,7 +173,7 @@ class KnowledgeRagAgent(AgentBase):
 
             # ── Semantic Cache 저장 (LLM 정상 응답 시만, 결과 유무 무관) ──
             if final_answer != LLM_UNAVAILABLE_MSG:
-                await sem_cache.set_cached(namespace, cache_vec, {
+                await sem_cache.set_cached(namespace, "knowledge_rag", cache_vec, {
                     "answer": final_answer,
                     "mapped_term": mapped_term,
                     "results": results_to_payload(results),

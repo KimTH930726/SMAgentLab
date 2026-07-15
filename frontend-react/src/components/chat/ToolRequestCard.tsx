@@ -11,13 +11,11 @@ interface ToolRequestCardProps {
 }
 
 function _buildInitialValues(event: SSEToolRequestEvent): Record<string, string> {
-  const base: Record<string, string> = { ...(event.params || {}) };
-  for (const p of (event.param_schema || [])) {
-    if (!(p.name in base) && p.example !== undefined && p.example !== null) {
-      base[p.name] = String(p.example);
-    }
-  }
-  return base;
+  // LLM이 사용자 메시지에서 실제로 추출한 값만 미리 채운다 — param_schema의
+  // example은 입력 힌트(placeholder)일 뿐, 사용자가 말하지 않은 값을 여기서
+  // 자동으로 채우면 "필수 입력 완료" 체크를 무력화해 사용자가 승인한 적 없는
+  // 값으로 도구가 실행된다.
+  return { ...(event.params || {}) };
 }
 
 export function ToolRequestCard({ event, onApprove, onSelectTool, onReject, onFallback }: ToolRequestCardProps) {
