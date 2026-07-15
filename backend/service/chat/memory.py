@@ -131,8 +131,11 @@ async def maybe_summarize(conversation_id: int, llm_provider) -> None:
             "SELECT COALESCE(MAX(turn_end), 0) FROM rag_conv_summary WHERE conversation_id=$1",
             conversation_id,
         )
+        # id DESC를 tie-breaker로 추가 — created_at만으로 정렬하면 같은 타임스탬프를
+        # 가진 메시지가 여러 개일 때(빠른 연속 저장 시 흔함) OFFSET이 가리키는 행이
+        # 호출마다 달라져, 요약 경계(recent_cutoff_id)가 실행마다 미묘하게 흔들릴 수 있다
         recent_cutoff_row = await conn.fetchrow(
-            "SELECT id FROM ops_message WHERE conversation_id = $1 ORDER BY created_at DESC OFFSET $2 LIMIT 1",
+            "SELECT id FROM ops_message WHERE conversation_id = $1 ORDER BY created_at DESC, id DESC OFFSET $2 LIMIT 1",
             conversation_id, RECENT_EXCHANGES * 2,
         )
         if not recent_cutoff_row:

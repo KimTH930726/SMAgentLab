@@ -46,11 +46,18 @@ async def register_user(
             raise RegisterError("서버에 암호화 키가 설정되지 않아 자격증명을 등록할 수 없습니다.", 500)
 
     async with get_conn() as conn:
-        # 파트 id 조회 + 사용자 중복 확인
+        # 파트 id 조회(관리자가 속한 파트는 GET /parts와 동일하게 가입 대상에서 제외 —
+        # 그렇지 않으면 API를 직접 호출해 관리자 파트로 가입, 그 파트가 소유한 모든
+        # 네임스페이스에 대한 CRUD 권한을 자가 획득할 수 있었다) + 사용자 중복 확인
         check = await conn.fetchrow(
             """
             SELECT
-                (SELECT id FROM ops_part WHERE name = $1) AS part_id,
+                (SELECT id FROM ops_part p WHERE p.name = $1
+                    AND p.id NOT IN (
+                        SELECT DISTINCT part_id FROM ops_user
+                        WHERE role = 'admin' AND part_id IS NOT NULL
+                    )
+                ) AS part_id,
                 EXISTS(SELECT 1 FROM ops_user WHERE username = $2) AS user_exists
             """, part, username,
         )
@@ -318,8 +325,10 @@ async def rename_part(part_id: int, new_name: str) -> Optional[dict]:
             part_id, new_name,
         )
         if row:
-            # 비정규화 부서명 컬럼 cascade 업데이트
-            await conn.execute("UPDATE ops_namespace SET owner_part = $2 WHERE owner_part = $1", old_name, new_name)
+            # 비정규화 부서명 컬럼 cascade 업데이트 — ops_namespace는 owner_part_id(FK)만
+            # 갖고 있어 이름 변경과 무관하게 그대로 유효하므로 별도 갱신이 필요 없다.
+            # (예전에 존재하지 않는 owner_part 컬럼에 UPDATE를 시도해 신규 설치에서
+            # 파트 이름 변경이 항상 500으로 실패하던 버그가 있었음)
             await conn.execute("UPDATE rag_knowledge SET created_by_part = $2 WHERE created_by_part = $1", old_name, new_name)
             await conn.execute("UPDATE rag_glossary SET created_by_part = $2 WHERE created_by_part = $1", old_name, new_name)
             await conn.execute("UPDATE rag_fewshot SET created_by_part = $2 WHERE created_by_part = $1", old_name, new_name)
@@ -335,5 +344,14 @@ async def delete_part(part_id: int) -> bool:
         )
         if user_count > 0:
             return False  # 사용자가 있으면 삭제 불가
+        # 이 파트가 소유한 네임스페이스가 있는지 확인 — FK가 ON DELETE SET NULL이라
+        # 체크 없이 삭제하면 owner_part_id가 NULL이 되어 check_namespace_ownership
+        # 규칙상 "공통 파트"(모든 로그인 사용자 허용)로 조용히 바뀌어버린다
+        namespace_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM ops_namespace WHERE owner_part_id = $1",
+            part_id,
+        )
+        if namespace_count > 0:
+            return False
         result = await conn.execute("DELETE FROM ops_part WHERE id = $1", part_id)
     return "DELETE 1" in result

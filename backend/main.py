@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from core.config import settings
 from core.database import init_pool, close_pool, get_conn
 from core.security import hash_password
+from service.chat.helpers import NO_KNOWLEDGE_MARKER
 from shared.embedding import embedding_service
 from shared import reranker as reranker_service
 from service.llm.factory import get_llm_provider
@@ -262,12 +263,18 @@ async def _migrate_core_tables(conn) -> None:
     # (service/chat/helpers.py create_query_log 참고). answer 역매칭 이후에
     # 실행해야 예전에 answer가 NULL이던 행도 함께 잡힌다. 이미 'resolved'
     # 처리된 건은 관리자가 조치를 마친 것이므로 건드리지 않는다.
-    await conn.execute("""
+    # 답변 시작 부분에 마커가 있는 경우만 매칭 — service/chat/helpers.py의
+    # startswith 판정과 기준을 맞춘다(문서 인용 등으로 문장 중간에 같은 문구가
+    # 우연히 들어간 정상 답변까지 지식공백으로 오분류하는 걸 방지)
+    await conn.execute(
+        """
         UPDATE ops_query_log
         SET status = 'no_knowledge'
         WHERE status IN ('pending', 'unresolved')
-          AND answer LIKE '%관련 지식을 찾지 못했습니다%'
-    """)
+          AND answer LIKE $1
+        """,
+        f"{NO_KNOWLEDGE_MARKER}%",
+    )
 
     # ── 성능 인덱스 (멱등) ──────────────────────────────────────────
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_message_conv_id ON ops_message (conversation_id, created_at)")
@@ -727,12 +734,13 @@ async def _migrate_system_tables(conn) -> None:
         ('sql2_summarize_system','SQL 결과 요약 시스템',   $15, 'Text2SQL summarize 단계 시스템 프롬프트',                                 'text2sql')
         ON CONFLICT (func_key) DO NOTHING
     """,
-        # chat_system
-        """IT 운영 보조 에이전트. 아래 규칙을 따르세요.
+        # chat_system — NO_KNOWLEDGE_MARKER를 그대로 삽입해 service/chat/helpers.py의
+        # 지식공백 감지 문자열과 프롬프트 지시문이 절대 따로 놀지 않도록 한다
+        f"""IT 운영 보조 에이전트. 아래 규칙을 따르세요.
 
 [원칙]
 - 반드시 제공된 [참고 문서]만 근거로 답변. 문서에 없는 내용은 절대 만들어내지 마세요.
-- 관련 문서가 없으면 "관련 지식을 찾지 못했습니다"로 답변.
+- 관련 문서가 없으면 "{NO_KNOWLEDGE_MARKER}"로 답변.
 - 신뢰도 높음 문서를 우선 근거로 사용. 낮음은 보조 참고만.
 
 [문맥 활용]
@@ -963,6 +971,20 @@ async def _migrate_query_log_resolution(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_query_log_resolved_knowledge ON ops_query_log (resolved_knowledge_id)")
 
 
+async def _cleanup_stale_generating_messages(conn) -> None:
+    """프로세스가 막 기동했으니, 'generating' 상태로 남은 메시지는 전부 이전
+    프로세스가 스트리밍 도중 죽으면서 남긴 고아 행이다(지금 막 시작했으므로 이
+    프로세스가 만들었을 리 없음). _cleanup_ghost_messages는 'generating' 상태를
+    일부러 삭제 대상에서 제외해왔는데, 그 예외가 오히려 이런 행을 영구히
+    "생성 중"으로 화면에 붙박이게 만들고 대화 요약 대상에서도 계속 빠지게 했다.
+    """
+    result = await conn.execute(
+        "UPDATE ops_message SET status = 'failed' WHERE status = 'generating'"
+    )
+    if result and "UPDATE 0" not in result:
+        logger.info("[Startup] 이전 프로세스에서 멈춘 'generating' 메시지 정리: %s", result)
+
+
 async def _run_migrations() -> None:
     """기존 DB 호환용 스키마 마이그레이션 (멱등)."""
     async with get_conn() as conn:
@@ -974,6 +996,7 @@ async def _run_migrations() -> None:
         await _migrate_knowledge_ingestion(conn)
         await _migrate_duplicate_review(conn)
         await _migrate_query_log_resolution(conn)
+        await _cleanup_stale_generating_messages(conn)
 
 
 @asynccontextmanager

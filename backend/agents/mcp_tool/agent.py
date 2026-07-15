@@ -368,6 +368,18 @@ class McpToolAgent(AgentBase):
                 # url 조합
                 tool["url"] = (tool.get("hub_base_url") or "") + (tool.get("tool_path") or "")
 
+                # 실행 시점 필수 파라미터 재검증 — 제안(propose) 단계에서만 검사하고
+                # 여기서는 안 했었음. 프론트 상태가 꼬이거나 API를 직접 호출하면
+                # 필수값이 빠진 채로 실제 HTTP 호출까지 가버릴 수 있었다.
+                missing_required = [
+                    p["name"] for p in (tool.get("param_schema") or [])
+                    if p.get("required") and not str(params.get(p["name"], "")).strip()
+                ]
+                if missing_required:
+                    yield {"type": "tool_error", "message": f"필수 파라미터 누락: {', '.join(missing_required)}"}
+                    await update_assistant_message(msg_id, "[필수 파라미터가 누락되어 도구를 실행할 수 없습니다.]", "completed")
+                    return
+
                 # namespace_id 조회
                 async with get_conn() as conn:
                     ns_id = await resolve_namespace_id(conn, namespace)

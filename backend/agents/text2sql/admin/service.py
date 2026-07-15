@@ -79,6 +79,8 @@ async def upsert_target_db_config(namespace_id: int, payload: dict) -> None:
         )
     # 연결 설정이 바뀌었으니 캐시된(옛 설정으로 맺힌) 연결이 있으면 즉시 폐기
     await invalidate_target_db_cache(namespace_id)
+    # 대상 DB 자체가 바뀐 것이므로, 예전 DB 기준으로 생성된 캐시 SQL도 함께 비운다
+    await clear_sql_cache(namespace_id)
 
 
 def build_target_db(cfg: dict):
@@ -117,9 +119,15 @@ async def get_cached_target_db(namespace_id: int):
 
 
 async def invalidate_target_db_cache(namespace_id: int) -> None:
-    """캐시된 연결을 닫고 제거 — 대상 DB 설정이 바뀌었을 때 호출."""
+    """캐시된 연결을 닫고 제거 — 대상 DB 설정이 바뀌었을 때 호출.
+
+    dict에서 pop만으로는 이미 이 인스턴스 참조를 들고 있는 진행 중인 요청이
+    재연결 시 옛 host/자격증명으로 조용히 다시 붙는 걸 막지 못해, retire()로
+    그 인스턴스 자체를 무효화 표시한다.
+    """
     cached = _target_db_cache.pop(namespace_id, None)
     if cached is not None:
+        cached.retire()
         await cached.close()
 
 
@@ -331,6 +339,11 @@ async def scan_and_save_schema(namespace_id: int) -> dict:
         orphan_result = await _cleanup_orphan_synonyms(namespace_id, deleted_cols_info)
         report["orphan_synonyms_deleted"] = orphan_result["deleted"]
         report["orphan_synonyms_warn"] = orphan_result["warn"]
+
+    # 테이블/컬럼이 실제로 바뀐 스캔이면, 그 이전 스키마 기준으로 만들어진 캐시 SQL이
+    # 새 스키마와 안 맞을 수 있으므로 함께 비운다
+    if report["changed_tables"] or report["tables_removed"]:
+        await clear_sql_cache(namespace_id)
 
     # changed_tables에 신규 테이블도 포함되어 있음
     return report
@@ -587,6 +600,17 @@ async def set_cached_sql(namespace_id: int, question: str, sql: str, ttl_minutes
             DO UPDATE SET sql = EXCLUDED.sql, hits = sql_cache.hits + 1,
                           expires_at = EXCLUDED.expires_at
         """, namespace_id, q_hash, question, sql, ttl_minutes)
+
+
+async def clear_sql_cache(namespace_id: int) -> None:
+    """대상 DB 설정/스키마가 바뀌면 캐시된 SQL이 새 DB 구조와 안 맞을 수 있어 전부 비운다.
+
+    이전엔 이 호출이 없어서, 스키마를 바꾼 뒤에도 캐시 TTL(기본 60분) 동안은 예전
+    스키마 기준으로 생성된 SQL이 새 DB에 그대로 실행돼 오류가 나거나(운 나쁘면 같은
+    이름의 다른 의미 테이블/컬럼에 걸려) 조용히 틀린 결과를 반환할 수 있었다.
+    """
+    async with get_conn() as conn:
+        await conn.execute("DELETE FROM sql_cache WHERE namespace_id = $1", namespace_id)
 
 
 # ── 파이프라인 스테이지 설정 ──────────────────────────────────────────────────

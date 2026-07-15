@@ -179,4 +179,4 @@ async def rename_part_endpoint(part_id: int, body: PartCreate, admin: dict = Dep
 async def delete_part(part_id: int, admin: dict = Depends(get_current_admin)):
     success = await service.delete_part(part_id)
     if not success:
-        raise HTTPException(status_code=400, detail="해당 파트에 소속된 사용자가 있어 삭제할 수 없습니다.")
+        raise HTTPException(status_code=400, detail="해당 파트에 소속된 사용자 또는 이 파트가 소유한 네임스페이스가 있어 삭제할 수 없습니다.")
