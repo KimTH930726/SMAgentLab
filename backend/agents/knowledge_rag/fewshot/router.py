@@ -166,6 +166,20 @@ async def bulk_delete_fewshots(body: BulkDeleteRequest, user: dict = Depends(get
     if not body.ids:
         return {"deleted": 0}
     async with get_conn() as conn:
+        ns_rows = await conn.fetch(
+            """
+            SELECT DISTINCT n.name AS ns_name
+            FROM rag_fewshot f JOIN ops_namespace n ON f.namespace_id = n.id
+            WHERE f.id = ANY($1::int[])
+            """,
+            body.ids,
+        )
+    # 요청에 포함된 모든 id가 걸친 네임스페이스 전부에 대해 소유권을 확인 —
+    # 다른 수정/삭제 엔드포인트와 달리 이 검사가 빠져 있어 타 파트 데이터를
+    # 대량 삭제할 수 있었다.
+    for row in ns_rows:
+        await check_namespace_ownership(row["ns_name"], user)
+    async with get_conn() as conn:
         result = await conn.execute(
             "DELETE FROM rag_fewshot WHERE id = ANY($1::int[])", body.ids
         )

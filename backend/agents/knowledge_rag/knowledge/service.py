@@ -320,6 +320,12 @@ async def resolve_duplicate(
     if action == "reject":
         async with get_conn() as conn:
             await conn.execute("UPDATE rag_knowledge SET status = 'rejected' WHERE id = $1", knowledge_id)
+            # 이 지식으로 "해결됨" 처리된 질의가 있었다면 연결을 끊는다 — 반려된 내용이
+            # 통계 화면에 계속 "해결된 답변"으로 남아있는 걸 막기 위함
+            await conn.execute(
+                "UPDATE ops_query_log SET resolved_knowledge_id = NULL WHERE resolved_knowledge_id = $1",
+                knowledge_id,
+            )
         return {"id": knowledge_id, "status": "rejected"}
 
     # merge
@@ -340,6 +346,12 @@ async def resolve_duplicate(
         if not target:
             raise ValueError(f"병합 대상 지식을 찾을 수 없습니다 (id={target_id}).")
         await conn.execute("UPDATE rag_knowledge SET status = 'rejected' WHERE id = $1", knowledge_id)
+        # 반려되는 pending 지식이 이미 어떤 질의를 "해결"한 상태였다면, 실제 내용이 옮겨간
+        # target으로 연결을 옮겨줘야 통계 화면이 계속 유효한 내용을 보여준다
+        await conn.execute(
+            "UPDATE ops_query_log SET resolved_knowledge_id = $2 WHERE resolved_knowledge_id = $1",
+            knowledge_id, target_id,
+        )
     return {"id": knowledge_id, "status": "rejected", "merged_into": target_id}
 
 

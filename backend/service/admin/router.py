@@ -371,14 +371,15 @@ async def get_namespace_queries(
     user: dict = Depends(get_current_user),
 ):
     # resolved_knowledge_id가 있으면(= 관리자가 지식을 등록해 해결한 건) 등록된 지식의
-    # 최신 내용을 answer로 반환 — 그렇지 않으면 원래의 AI 답변을 그대로 반환
+    # 최신 내용을 answer로 반환 — 그렇지 않으면(또는 그 지식이 아직 승인 대기거나 이후
+    # 반려/병합으로 status가 active가 아니게 됐다면) 원래의 AI 답변을 그대로 반환
     base_select = """
         SELECT q.id, q.question,
                COALESCE(k.content, q.answer) AS answer,
                q.mapped_term, q.status, q.created_at::text,
-               q.resolved_knowledge_id
+               k.id AS resolved_knowledge_id
         FROM ops_query_log q
-        LEFT JOIN rag_knowledge k ON k.id = q.resolved_knowledge_id
+        LEFT JOIN rag_knowledge k ON k.id = q.resolved_knowledge_id AND k.status = 'active'
     """
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, name)

@@ -92,20 +92,25 @@ async def _get_redis():
     return _redis_client
 
 
-def _make_key(namespace: str, vec: list[float]) -> str:
+def _make_key(namespace: str, agent_type: str, vec: list[float]) -> str:
     h = hashlib.md5(str(vec[:64]).encode()).hexdigest()[:16]
-    return f"semcache:{namespace}:{h}"
+    return f"semcache:{namespace}:{agent_type}:{h}"
 
 
-async def get_cached(namespace: str, query_vec: list[float]) -> dict | None:
-    """유사 질문 캐시 조회. 없거나 Redis 미연결이면 None 반환."""
+async def get_cached(namespace: str, agent_type: str, query_vec: list[float]) -> dict | None:
+    """유사 질문 캐시 조회. 없거나 Redis 미연결이면 None 반환.
+
+    agent_type으로 캐시를 분리한다 — knowledge_rag 에이전트의 정적 RAG 답변이
+    실시간 조회가 핵심인 mcp_tool 에이전트 요청에 재사용되면(또는 그 반대),
+    실제 도구 호출이 조용히 스킵된 채 무관한 캐시 답변이 나가는 문제가 있었다.
+    """
     if not _cache_enabled:
         return None
     r = await _get_redis()
     if r is None:
         return None
     try:
-        pattern = f"semcache:{namespace}:*"
+        pattern = f"semcache:{namespace}:{agent_type}:*"
         keys: list[bytes] = []
         async for key in r.scan_iter(pattern, count=100):
             keys.append(key)
@@ -144,7 +149,7 @@ async def get_cached(namespace: str, query_vec: list[float]) -> dict | None:
     return None
 
 
-async def set_cached(namespace: str, query_vec: list[float], payload: dict) -> None:
+async def set_cached(namespace: str, agent_type: str, query_vec: list[float], payload: dict) -> None:
     """캐시 저장. Redis 미연결이거나 캐시 비활성화 상태면 무시."""
     if not _cache_enabled:
         return
@@ -152,7 +157,7 @@ async def set_cached(namespace: str, query_vec: list[float], payload: dict) -> N
     if r is None:
         return
     try:
-        key = _make_key(namespace, query_vec)
+        key = _make_key(namespace, agent_type, query_vec)
         emb_bytes = np.array(query_vec, dtype=np.float32).tobytes()
         await r.hset(key, mapping={
             "emb": emb_bytes,
