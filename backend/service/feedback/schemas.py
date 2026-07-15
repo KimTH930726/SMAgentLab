@@ -10,3 +10,4 @@ class FeedbackCreate(BaseModel):
     answer: Optional[str] = None
     is_positive: bool
     message_id: Optional[int] = None
+    resolved_knowledge_id: Optional[int] = None

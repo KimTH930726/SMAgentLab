@@ -263,6 +263,7 @@ export interface FeedbackPayload {
   is_positive: boolean;
   comment?: string | null;
   message_id?: number | null;
+  resolved_knowledge_id?: number | null;
 }
 
 // Q&A types
@@ -314,6 +315,7 @@ export interface QueryLog {
   status: QueryStatus;
   created_at: string;
   answer: string | null;
+  resolved_knowledge_id: number | null;
 }
 
 // Stats types — matches backend NamespaceDetailStats

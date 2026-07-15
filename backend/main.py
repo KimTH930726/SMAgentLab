@@ -951,6 +951,18 @@ async def _migrate_duplicate_review(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_dup_match_new ON rag_knowledge_duplicate_match (new_knowledge_id)")
 
 
+async def _migrate_query_log_resolution(conn) -> None:
+    """나빠요 피드백 후 지식 등록으로 해결한 질의를, 등록된 지식 내용과 연결.
+
+    이 컬럼이 없으면 통계 '해결됨' 탭이 원래의(잘못된) AI 답변만 계속 보여주게 된다.
+    """
+    await conn.execute(
+        "ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS resolved_knowledge_id "
+        "INT REFERENCES rag_knowledge(id) ON DELETE SET NULL"
+    )
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_query_log_resolved_knowledge ON ops_query_log (resolved_knowledge_id)")
+
+
 async def _run_migrations() -> None:
     """기존 DB 호환용 스키마 마이그레이션 (멱등)."""
     async with get_conn() as conn:
@@ -961,6 +973,7 @@ async def _run_migrations() -> None:
         await _migrate_system_tables(conn)
         await _migrate_knowledge_ingestion(conn)
         await _migrate_duplicate_review(conn)
+        await _migrate_query_log_resolution(conn)
 
 
 @asynccontextmanager

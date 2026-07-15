@@ -30,9 +30,9 @@ export async function getQueryLogs(namespace: string, status?: QueryStatus): Pro
   }
 }
 
-export async function resolveQueryLog(id: number): Promise<void> {
+export async function resolveQueryLog(id: number): Promise<{ status: string; pending_review?: boolean }> {
   try {
-    await apiFetch<void>(`/stats/query-log/${id}/resolve`, { method: 'PATCH' });
+    return await apiFetch(`/stats/query-log/${id}/resolve`, { method: 'PATCH' });
   } catch (err) {
     console.error('resolveQueryLog error:', err);
     throw err;
@@ -48,8 +48,11 @@ export async function deleteQueryLog(id: number): Promise<void> {
   }
 }
 
-export async function markQueryLogResolved(id: number): Promise<void> {
-  await apiFetch<void>(`/stats/query-log/${id}/mark-resolved`, { method: 'PATCH' });
+export async function markQueryLogResolved(id: number, knowledgeId?: number | null): Promise<void> {
+  await apiFetch<void>(`/stats/query-log/${id}/mark-resolved`, {
+    method: 'PATCH',
+    body: JSON.stringify({ knowledge_id: knowledgeId ?? null }),
+  });
 }
 
 export async function bulkDeleteQueryLogs(ids: number[]): Promise<{ deleted: number }> {
