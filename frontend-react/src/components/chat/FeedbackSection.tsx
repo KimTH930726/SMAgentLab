@@ -42,12 +42,13 @@ export function FeedbackSection({
   const qc = useQueryClient();
   const [state, setState] = useState<FeedbackState>('idle');
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (transitionTimer.current) clearTimeout(transitionTimer.current); }, []);
   const [form, setForm] = useState<KnowledgeFormData>({
     container_name: '',
     target_tables: '',
-    content: question,
+    content: answer,
     query_template: '',
     base_weight: 1.0,
     category: '',
@@ -59,6 +60,16 @@ export function FeedbackSection({
     enabled: !!namespace,
     staleTime: 0,
   });
+  // 업무구분은 등록 시 필수값 — '공통지식'을 최상단 기본값으로 노출
+  const sortedCategories = [...categories].sort((a, b) =>
+    a.name === '공통지식' ? -1 : b.name === '공통지식' ? 1 : a.name.localeCompare(b.name)
+  );
+  useEffect(() => {
+    if (state === 'showing_form' && !form.category && sortedCategories.length > 0) {
+      setForm((f) => ({ ...f, category: sortedCategories[0].name }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, sortedCategories.length]);
 
   const handlePositive = async () => {
     try {
@@ -95,8 +106,9 @@ export function FeedbackSection({
 
   const handleSubmit = async () => {
     setSubmitting(true);
+    setSubmitError(null);
     try {
-      await createKnowledge({
+      const created = await createKnowledge({
         namespace,
         container_name: form.container_name || '미분류',
         target_tables: form.target_tables.split(',').map((t) => t.trim()).filter(Boolean),
@@ -105,15 +117,27 @@ export function FeedbackSection({
         base_weight: form.base_weight,
         category: form.category || null,
       });
-      // 지식 등록 완료 → 해결됨으로 처리 (query_log status = 'resolved')
-      await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: true, message_id: messageId ?? null });
+      // 이 답변을 지적하고 새 지식을 등록한 것이므로, 기존 knowledgeId(오답의 근거였던
+      // 지식)는 부정 피드백으로 가중치를 낮추고, query_log는 새로 등록한 지식과 연결해
+      // 해결됨으로 처리한다 (is_positive=true로 보내면 오답을 만든 지식의 가중치가
+      // 오히려 올라가는 문제가 있었음).
+      await postFeedback({
+        namespace, question, answer,
+        knowledge_id: knowledgeId ?? null,
+        is_positive: false,
+        message_id: messageId ?? null,
+        resolved_knowledge_id: created.id,
+      });
+      if (created.pending_review) {
+        window.alert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다. 관리자 승인 후 검색에 반영됩니다.');
+      }
       qc.invalidateQueries({ queryKey: ['knowledge'] });
       qc.invalidateQueries({ queryKey: ['stats-ns'] });
+      setState('negative_sent');
     } catch (err) {
-      console.error(err);
+      setSubmitError(err instanceof Error ? err.message : '등록에 실패했습니다.');
     } finally {
       setSubmitting(false);
-      setState('negative_sent');
     }
   };
 
@@ -230,22 +254,28 @@ export function FeedbackSection({
                 />
               </div>
 
-              {categories.length > 0 && (
+              {sortedCategories.length > 0 ? (
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1">업무구분 (선택)</label>
+                  <label className="block text-xs text-slate-500 mb-1">
+                    업무구분 <span className="text-rose-400">*</span>
+                  </label>
                   <select
                     value={form.category}
                     onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
                     className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
                   >
-                    <option value="">없음 (파트 공통)</option>
-                    {categories.map((c) => (
+                    {sortedCategories.map((c) => (
                       <option key={c.id} value={c.name}>{c.name}</option>
                     ))}
                   </select>
-                  <p className="text-[10px] text-slate-600 mt-0.5">미설정 시 모든 업무구분 검색에 공통으로 포함됩니다</p>
                 </div>
+              ) : (
+                <p className="text-xs text-amber-400">
+                  이 파트에 등록된 업무구분이 없어 지식을 등록할 수 없습니다. 기준정보관리에서 업무구분을 먼저 추가해주세요.
+                </p>
               )}
+
+              {submitError && <p className="text-xs text-rose-400">{submitError}</p>}
 
               <div className="flex gap-2 justify-end pt-1">
                 <Button variant="ghost" size="sm" onClick={handleSkip}>
@@ -255,7 +285,7 @@ export function FeedbackSection({
                   variant="primary"
                   size="sm"
                   loading={submitting}
-                  disabled={!form.content.trim()}
+                  disabled={!form.content.trim() || !form.category}
                   onClick={handleSubmit}
                 >
                   지식 등록 + 피드백 전송

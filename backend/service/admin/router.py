@@ -6,7 +6,6 @@ from pydantic import BaseModel
 
 from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
-from shared.embedding import embedding_service
 from service.admin.schemas import (
     NamespaceCreate, NamespaceInfo,
     KnowledgeCategoryCreate, KnowledgeCategoryOut,
@@ -371,18 +370,28 @@ async def get_namespace_queries(
     limit: int = QueryParam(default=100, le=500),
     user: dict = Depends(get_current_user),
 ):
+    # resolved_knowledge_id가 있으면(= 관리자가 지식을 등록해 해결한 건) 등록된 지식의
+    # 최신 내용을 answer로 반환 — 그렇지 않으면 원래의 AI 답변을 그대로 반환
+    base_select = """
+        SELECT q.id, q.question,
+               COALESCE(k.content, q.answer) AS answer,
+               q.mapped_term, q.status, q.created_at::text,
+               q.resolved_knowledge_id
+        FROM ops_query_log q
+        LEFT JOIN rag_knowledge k ON k.id = q.resolved_knowledge_id
+    """
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, name)
         if ns_id is None:
             return []
         if status:
             rows = await conn.fetch(
-                "SELECT id, question, answer, mapped_term, status, created_at::text FROM ops_query_log WHERE namespace_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3",
+                base_select + " WHERE q.namespace_id = $1 AND q.status = $2 ORDER BY q.created_at DESC LIMIT $3",
                 ns_id, status, limit,
             )
         else:
             rows = await conn.fetch(
-                "SELECT id, question, answer, mapped_term, status, created_at::text FROM ops_query_log WHERE namespace_id = $1 ORDER BY created_at DESC LIMIT $2",
+                base_select + " WHERE q.namespace_id = $1 ORDER BY q.created_at DESC LIMIT $2",
                 ns_id, limit,
             )
     return [dict(r) for r in rows]
@@ -390,6 +399,8 @@ async def get_namespace_queries(
 
 @router.patch("/api/stats/query-log/{log_id}/resolve", status_code=200)
 async def resolve_query_log(log_id: int, user: dict = Depends(get_current_user)):
+    from agents.knowledge_rag.knowledge import service as knowledge_service
+
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
@@ -405,21 +416,30 @@ async def resolve_query_log(log_id: int, user: dict = Depends(get_current_user))
         if not row["answer"]:
             raise HTTPException(status_code=400, detail="답변이 없어 지식으로 등록할 수 없습니다.")
 
-        vec = await embedding_service.embed(row["answer"])
+    # 원클릭 승인이라 별도 업무구분 입력이 없음 — 기본값 '공통지식'으로 등록.
+    # create_knowledge()를 그대로 재사용해 지식등록 탭과 동일하게 유사 지식 검사(pending_review)를 거친다.
+    created = await knowledge_service.create_knowledge(
+        row["namespace"], row["answer"],
+        container_name=row["mapped_term"] or "미분류",
+        category="공통지식",
+        created_by_part=user["part"], created_by_user_id=user["id"],
+    )
+
+    async with get_conn() as conn:
         await conn.execute(
-            """INSERT INTO rag_knowledge
-               (namespace_id, container_name, content, embedding, created_by_part, created_by_user_id)
-               VALUES ($1, $2, $3, $4::vector, $5, $6)""",
-            row["namespace_id"], row["mapped_term"] or "미분류", row["answer"], str(vec),
-            user["part"], user["id"],
+            "UPDATE ops_query_log SET status = 'resolved', resolved_knowledge_id = $2 WHERE id = $1",
+            log_id, created["id"],
         )
-        await conn.execute("UPDATE ops_query_log SET status = 'resolved' WHERE id = $1", log_id)
         await _insert_feedback_if_message_exists(conn, row["namespace_id"], row["question"], row["message_id"])
-    return {"status": "ok"}
+    return {"status": "ok", "pending_review": created.get("pending_review", False)}
+
+
+class MarkResolvedRequest(BaseModel):
+    knowledge_id: Optional[int] = None
 
 
 @router.patch("/api/stats/query-log/{log_id}/mark-resolved", status_code=200)
-async def mark_query_log_resolved(log_id: int, user: dict = Depends(get_current_user)):
+async def mark_query_log_resolved(log_id: int, body: MarkResolvedRequest = MarkResolvedRequest(), user: dict = Depends(get_current_user)):
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
@@ -431,7 +451,10 @@ async def mark_query_log_resolved(log_id: int, user: dict = Depends(get_current_
         )
         if not row:
             raise HTTPException(status_code=404, detail="Query log not found")
-        await conn.execute("UPDATE ops_query_log SET status = 'resolved' WHERE id = $1", log_id)
+        await conn.execute(
+            "UPDATE ops_query_log SET status = 'resolved', resolved_knowledge_id = COALESCE($2, resolved_knowledge_id) WHERE id = $1",
+            log_id, body.knowledge_id,
+        )
         await _insert_feedback_if_message_exists(conn, row["namespace_id"], row["question"], row["message_id"])
     return {"status": "ok"}
 

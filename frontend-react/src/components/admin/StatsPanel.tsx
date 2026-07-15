@@ -115,6 +115,10 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
     enabled: !!namespace,
     staleTime: 0,
   });
+  // 업무구분은 등록 시 필수값 — '공통지식'을 최상단 기본값으로 노출
+  const sortedCategories = [...categories].sort((a, b) =>
+    a.name === '공통지식' ? -1 : b.name === '공통지식' ? 1 : a.name.localeCompare(b.name)
+  );
 
   // open 또는 log가 바뀔 때 폼 초기화 (AI 답변을 내용에 미리 채워줌)
   useEffect(() => {
@@ -124,10 +128,11 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
       setContent(log.answer ?? '');
       setQueryTemplate('');
       setBaseWeight(1.0);
-      setCategory('');
+      setCategory(sortedCategories[0]?.name ?? '');
       setError(null);
     }
-  }, [open, log]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, log, sortedCategories.length]);
 
   const weightLabel = (w: number) => w >= 2 ? '높음' : w >= 1.5 ? '보통' : '기본';
 
@@ -136,7 +141,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
     setSubmitting(true);
     setError(null);
     try {
-      await createKnowledge({
+      const created = await createKnowledge({
         namespace,
         container_name: containerNames.join(', ') || '미분류',
         target_tables: targetTables,
@@ -145,7 +150,10 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
         base_weight: baseWeight,
         category: category || null,
       });
-      await markQueryLogResolved(log.id);
+      await markQueryLogResolved(log.id, created.id);
+      if (created.pending_review) {
+        window.alert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다. 관리자 승인 후 검색에 반영됩니다.');
+      }
       onSuccess();
       onClose();
     } catch (err) {
@@ -224,19 +232,23 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
         </div>
 
         {/* 업무구분 */}
-        {categories.length > 0 && (
+        {sortedCategories.length > 0 ? (
           <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">업무구분 (선택)</label>
+            <label className="block text-xs font-medium text-slate-400 mb-1">
+              업무구분 <span className="text-rose-400">*</span>
+            </label>
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
             >
-              <option value="">없음 (파트 공통)</option>
-              {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+              {sortedCategories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
-            <p className="text-[10px] text-slate-600 mt-0.5">미설정 시 모든 업무구분 검색에 공통으로 포함됩니다</p>
           </div>
+        ) : (
+          <p className="text-xs text-amber-400">
+            이 파트에 등록된 업무구분이 없어 지식을 등록할 수 없습니다. 기준정보관리에서 업무구분을 먼저 추가해주세요.
+          </p>
         )}
 
         {/* 문서 우선순위 */}
@@ -266,7 +278,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
           <Button
             variant="primary" size="sm"
             loading={submitting}
-            disabled={!content.trim()}
+            disabled={!content.trim() || !category}
             onClick={handleSubmit}
           >
             지식 등록 + 해결 처리
@@ -314,11 +326,14 @@ function QueryLogModal({
 
   const resolveMutation = useMutation({
     mutationFn: (id: number) => resolveQueryLog(id),
-    onSuccess: () => {
+    onSuccess: (result) => {
       invalidateAll();
       qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
       setExpandedId(null);
       setActionError(null);
+      if (result?.pending_review) {
+        window.alert('등록된 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다. 관리자 승인 후 검색에 반영됩니다.');
+      }
     },
     onError: (err: Error) => { setActionError(err.message); },
   });
@@ -449,11 +464,13 @@ function QueryLogModal({
                     <span>{new Date(log.created_at).toLocaleString('ko-KR')}</span>
                   </div>
 
-                  {/* AI 답변 미리보기 */}
+                  {/* AI 답변 또는 등록된 지식 미리보기 */}
                   {log.answer && (
                     <div>
                       <p className="text-xs text-slate-500 mb-1">
-                        {log.status === 'pending' ? 'AI 답변 (검토 대상)' : 'AI 답변'}
+                        {log.resolved_knowledge_id
+                          ? '등록된 지식 (수기)'
+                          : log.status === 'pending' ? 'AI 답변 (검토 대상)' : 'AI 답변'}
                       </p>
                       <div className="bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
                         {log.answer}
