@@ -481,66 +481,6 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
             </div>
           </div>
 
-          {availableCategories.length > 0 && (
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">업무구분 필터</label>
-              <div ref={categoryDropdownRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setCategoryDropdownOpen((o) => !o)}
-                  className={`w-full flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
-                    categoryFilter.length > 0
-                      ? 'bg-indigo-900/40 text-indigo-300 border-indigo-700/50'
-                      : 'bg-slate-900 text-slate-400 border-slate-600'
-                  }`}
-                  title="특정 업무구분의 지식으로만 검색합니다"
-                >
-                  <Tag className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="flex-1 text-left truncate">
-                    {categoryFilter.length === 0
-                      ? '전체'
-                      : categoryFilter.length === 1
-                        ? categoryFilter[0]
-                        : `${categoryFilter.length}개 선택`}
-                  </span>
-                  <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
-                </button>
-                {categoryDropdownOpen && (
-                  <div className="absolute top-full mt-1.5 left-0 w-full rounded-lg border border-slate-700 bg-slate-800 shadow-xl p-1.5 z-20 max-h-56 overflow-y-auto">
-                    <button
-                      type="button"
-                      onClick={() => { setCategoryFilter([]); setCategoryDropdownOpen(false); }}
-                      className={`w-full text-left px-2 py-1.5 rounded text-xs ${
-                        categoryFilter.length === 0 ? 'bg-indigo-600/30 text-indigo-300' : 'text-slate-300 hover:bg-slate-700/60'
-                      }`}
-                    >
-                      전체
-                    </button>
-                    <div className="my-1 border-t border-slate-700/60" />
-                    {availableCategories.map((c) => (
-                      <label
-                        key={c.id}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-slate-300 hover:bg-slate-700/60 cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={categoryFilter.includes(c.name)}
-                          onChange={() =>
-                            setCategoryFilter((prev) =>
-                              prev.includes(c.name) ? prev.filter((n) => n !== c.name) : [...prev, c.name]
-                            )
-                          }
-                          className="rounded border-slate-600 bg-slate-900 text-indigo-500 focus:outline-none"
-                        />
-                        {c.name}
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
               질문 <span className="text-rose-400">*</span>
@@ -580,27 +520,92 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
             </div>
           </div>
 
-          {/* MCP 도구 토글 */}
-          <div className="flex items-center justify-between bg-slate-900/50 rounded-lg px-3 py-2">
-            <div className="flex items-center gap-2">
-              <Wrench className="w-4 h-4 text-cyan-400" />
-              <span className="text-xs text-slate-400">MCP 도구 사용</span>
-              {httpTools.filter((t) => t.is_active).length > 0 && (
-                <span className="text-[10px] text-slate-500">
-                  ({httpTools.filter((t) => t.is_active).length}건 활성)
-                </span>
-              )}
+          {/* 업무구분 필터 + MCP 도구 사용 */}
+          <div className={`grid gap-4 ${availableCategories.length > 0 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            {availableCategories.length > 0 && (
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">업무구분 필터</label>
+                <div ref={categoryDropdownRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setCategoryDropdownOpen((o) => !o)}
+                    className={`w-full flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                      categoryFilter.length > 0
+                        ? 'bg-indigo-900/40 text-indigo-300 border-indigo-700/50'
+                        : 'bg-slate-900 text-slate-400 border-slate-600'
+                    }`}
+                    title="특정 업무구분의 지식으로만 검색합니다"
+                  >
+                    <Tag className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="flex-1 text-left truncate">
+                      {categoryFilter.length === 0
+                        ? '전체'
+                        : categoryFilter.length === 1
+                          ? categoryFilter[0]
+                          : `${categoryFilter.length}개 선택`}
+                    </span>
+                    <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
+                  </button>
+                  {categoryDropdownOpen && (
+                    <div className="absolute top-full mt-1.5 left-0 w-full rounded-lg border border-slate-700 bg-slate-800 shadow-xl p-1.5 z-20 max-h-56 overflow-y-auto">
+                      <label className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-slate-300 hover:bg-slate-700/60 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={categoryFilter.length === 0}
+                          onChange={() => setCategoryFilter([])}
+                          className="rounded border-slate-600 bg-slate-900 text-indigo-500 focus:outline-none"
+                        />
+                        전체
+                      </label>
+                      <div className="my-1 border-t border-slate-700/60" />
+                      {availableCategories.map((c) => (
+                        <label
+                          key={c.id}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-slate-300 hover:bg-slate-700/60 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={categoryFilter.includes(c.name)}
+                            onChange={() =>
+                              setCategoryFilter((prev) =>
+                                prev.includes(c.name) ? prev.filter((n) => n !== c.name) : [...prev, c.name]
+                              )
+                            }
+                            className="rounded border-slate-600 bg-slate-900 text-indigo-500 focus:outline-none"
+                          />
+                          {c.name}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">MCP 도구</label>
+              <div className="flex items-center justify-between bg-slate-900/50 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Wrench className="w-4 h-4 text-cyan-400" />
+                  <span className="text-xs text-slate-400">MCP 도구 사용</span>
+                  {httpTools.filter((t) => t.is_active).length > 0 && (
+                    <span className="text-[10px] text-slate-500">
+                      ({httpTools.filter((t) => t.is_active).length}건 활성)
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={() => setUseMcpToolDebug((v) => !v)}
+                  className={`relative w-9 h-5 rounded-full transition-colors ${
+                    useMcpToolDebug ? 'bg-cyan-600' : 'bg-slate-600'
+                  }`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                    useMcpToolDebug ? 'translate-x-4' : 'translate-x-0'
+                  }`} />
+                </button>
+              </div>
             </div>
-            <button
-              onClick={() => setUseMcpToolDebug((v) => !v)}
-              className={`relative w-9 h-5 rounded-full transition-colors ${
-                useMcpToolDebug ? 'bg-cyan-600' : 'bg-slate-600'
-              }`}
-            >
-              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                useMcpToolDebug ? 'translate-x-4' : 'translate-x-0'
-              }`} />
-            </button>
           </div>
 
           <Button
