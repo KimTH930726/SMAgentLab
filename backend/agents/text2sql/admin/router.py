@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from core.database import get_conn
-from core.dependencies import get_current_admin as require_admin, get_current_user
+from core.dependencies import get_current_admin as require_admin, get_current_user, check_namespace_ownership
 from core.security import get_user_llm_credentials
 from service.llm.factory import get_llm_provider
 from agents.text2sql.admin import service
@@ -794,8 +794,12 @@ class FeedbackFewshotPayload(BaseModel):
 
 
 @router.post("/namespaces/{namespace}/fewshots/from-feedback")
-async def create_fewshot_from_feedback(namespace: str, body: FeedbackFewshotPayload, _=Depends(get_current_user)):
+async def create_fewshot_from_feedback(namespace: str, body: FeedbackFewshotPayload, user: dict = Depends(get_current_user)):
     """사용자 피드백(좋아요)으로 SQL 예제 후보를 등록합니다. 관리자 승인 필요."""
+    # namespace가 다른 sibling 라우터(knowledge_rag 등)와 달리 소유권 검사 없이
+    # 클라이언트가 그대로 넘긴 값이었음 — 아무 로그인 사용자나 임의의(자기 소속이
+    # 아닌) 네임스페이스에 SQL 예제 후보를 써넣을 수 있었다
+    await check_namespace_ownership(namespace, user)
     ns_id = await _get_ns_id(namespace)
     emb = await embedding_service.embed(body.question)
     async with get_conn() as conn:

@@ -454,10 +454,20 @@ class TargetDBManager:
         self.schema_name = schema_name
         self._conn: Any = None
         self._last_used: float = 0.0
+        self._retired: bool = False
 
         if self.db_type not in _DIALECTS:
             raise ValueError(f"지원하지 않는 DB 타입: {self.db_type}. 지원: {', '.join(_DIALECTS)}")
         self._dialect: BaseDialect = _DIALECTS[self.db_type]()
+
+    def retire(self) -> None:
+        """대상 DB 설정이 바뀌어 이 인스턴스를 더 이상 쓰면 안 될 때 호출.
+
+        캐시 dict에서 pop하는 것만으로는, 이미 이 인스턴스에 대한 참조를 들고
+        멀티스텝 파이프라인을 실행 중이던 요청이 재접속 시 여기 고정된(옛)
+        host/username/password로 조용히 재연결해버리는 걸 막지 못한다.
+        """
+        self._retired = True
 
     async def connect(self) -> None:
         self._conn = await self._dialect.connect(
@@ -524,6 +534,10 @@ class TargetDBManager:
         (예: 어드민 쿼리 테스트)에서도 매번 새로 connect() 하므로 동작은 동일하게
         유지된다.
         """
+        if self._retired:
+            raise RuntimeError(
+                "대상 DB 설정이 변경되어 이 연결은 더 이상 유효하지 않습니다. 질문을 다시 시도해주세요."
+            )
         if self._conn is None or (time.monotonic() - self._last_used) >= _MAX_IDLE_SECONDS:
             await self.close()
             await self.connect()

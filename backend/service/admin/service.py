@@ -74,11 +74,26 @@ async def rename_namespace(old_name: str, new_name: str) -> bool:
         result = await conn.execute(
             "UPDATE ops_namespace SET name = $2 WHERE name = $1", old_name, new_name,
         )
-        return "UPDATE 1" in result
+    renamed = "UPDATE 1" in result
+    if renamed:
+        # 시맨틱 캐시는 namespace를 문자열로 키에 박아두므로, 이름이 바뀌면 이전 이름의
+        # 캐시가 아무도 무효화하지 않는 채로 남는다 — 그 옛 이름이 나중에 다른(전혀
+        # 무관한) 네임스페이스로 재사용되면 옛 캐시 답변이 새 네임스페이스에 그대로 샐 수
+        # 있어, 이름 양쪽 다 비운다
+        from shared import cache as sem_cache
+        await sem_cache.invalidate_namespace(old_name)
+        await sem_cache.invalidate_namespace(new_name)
+    return renamed
 
 
 async def delete_namespace(name: str) -> bool:
     async with get_conn() as conn:
         # ON DELETE CASCADE로 자식 테이블 자동 삭제됨
         result = await conn.execute("DELETE FROM ops_namespace WHERE name = $1", name)
-    return "DELETE 1" in result
+    deleted = "DELETE 1" in result
+    if deleted:
+        # 삭제된 이름이 나중에 새 네임스페이스로 재사용될 때, 옛 지식베이스 기반의
+        # 캐시 답변이 새 네임스페이스에 새어 들어가는 것을 방지
+        from shared import cache as sem_cache
+        await sem_cache.invalidate_namespace(name)
+    return deleted

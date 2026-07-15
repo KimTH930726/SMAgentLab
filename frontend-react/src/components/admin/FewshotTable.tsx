@@ -17,7 +17,7 @@ interface FewshotFormData {
 
 const defaultForm: FewshotFormData = { question: '', answer: '', knowledge_id: '' };
 
-type StatusFilter = 'all' | 'active' | 'candidate';
+type StatusFilter = 'all' | 'active' | 'candidate' | 'rejected';
 
 function StatusBadge({ status }: { status: string }) {
   if (status === 'active') {
@@ -25,6 +25,9 @@ function StatusBadge({ status }: { status: string }) {
   }
   if (status === 'candidate') {
     return <Badge color="amber">후보</Badge>;
+  }
+  if (status === 'rejected') {
+    return <Badge color="rose">반려</Badge>;
   }
   return null;
 }
@@ -175,6 +178,7 @@ export function FewshotTable() {
     { key: 'all', label: '전체' },
     { key: 'active', label: '활성' },
     { key: 'candidate', label: '후보' },
+    { key: 'rejected', label: '반려' },
   ];
 
   return (
@@ -461,13 +465,22 @@ export function FewshotTable() {
                 {editingItem && <StatusBadge status={editingItem.status} />}
                 {/* Status transition buttons */}
                 {editingItem?.status === 'candidate' && (
-                  <Button
-                    variant="primary" size="sm"
-                    loading={statusMutation.isPending}
-                    onClick={() => editingId !== null && statusMutation.mutate({ id: editingId, status: 'active' })}
-                  >
-                    활성화
-                  </Button>
+                  <>
+                    <Button
+                      variant="primary" size="sm"
+                      loading={statusMutation.isPending}
+                      onClick={() => editingId !== null && statusMutation.mutate({ id: editingId, status: 'active' })}
+                    >
+                      활성화
+                    </Button>
+                    <Button
+                      variant="ghost" size="sm"
+                      loading={statusMutation.isPending}
+                      onClick={() => editingId !== null && statusMutation.mutate({ id: editingId, status: 'rejected' })}
+                    >
+                      반려
+                    </Button>
+                  </>
                 )}
                 {editingItem?.status === 'active' && (
                   <Button
@@ -476,6 +489,15 @@ export function FewshotTable() {
                     onClick={() => editingId !== null && statusMutation.mutate({ id: editingId, status: 'candidate' })}
                   >
                     후보로 내리기
+                  </Button>
+                )}
+                {editingItem?.status === 'rejected' && (
+                  <Button
+                    variant="secondary" size="sm"
+                    loading={statusMutation.isPending}
+                    onClick={() => editingId !== null && statusMutation.mutate({ id: editingId, status: 'candidate' })}
+                  >
+                    후보로 되돌리기
                   </Button>
                 )}
               </div>

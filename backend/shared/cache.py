@@ -39,6 +39,16 @@ def normalize_query(text: str) -> str:
     return text.lower()
 
 
+_GLOB_SPECIAL = re.compile(r"([*?\[\]\\])")
+
+
+def _escape_glob(s: str) -> str:
+    """Redis SCAN/KEYS는 MATCH 패턴을 glob으로 해석한다 — namespace 이름에 *?[]가
+    포함되면(네임스페이스명 생성 시 별도 검증이 없음) 의도치 않게 다른 네임스페이스의
+    캐시까지 스캔/삭제 대상에 걸릴 수 있어, 패턴에 끼워넣기 전에 이스케이프한다."""
+    return _GLOB_SPECIAL.sub(r"\\\1", s)
+
+
 def _to_int(raw) -> int:
     """Redis hget 결과(bytes or None) → int 안전 변환."""
     if raw is None:
@@ -110,7 +120,7 @@ async def get_cached(namespace: str, agent_type: str, query_vec: list[float]) ->
     if r is None:
         return None
     try:
-        pattern = f"semcache:{namespace}:{agent_type}:*"
+        pattern = f"semcache:{_escape_glob(namespace)}:{_escape_glob(agent_type)}:*"
         keys: list[bytes] = []
         async for key in r.scan_iter(pattern, count=100):
             keys.append(key)
@@ -177,7 +187,7 @@ async def invalidate_namespace(namespace: str) -> int:
         return 0
     try:
         count = 0
-        async for key in r.scan_iter(f"semcache:{namespace}:*"):
+        async for key in r.scan_iter(f"semcache:{_escape_glob(namespace)}:*"):
             await r.delete(key)
             count += 1
         if count:
@@ -194,7 +204,7 @@ async def get_stats(namespace: str) -> dict:
     if r is None:
         return {"connected": False, "total_entries": 0, "total_hits": 0, "enabled": _cache_enabled}
     try:
-        keys = [key async for key in r.scan_iter(f"semcache:{namespace}:*")]
+        keys = [key async for key in r.scan_iter(f"semcache:{_escape_glob(namespace)}:*")]
         total_hits = 0
         if keys:
             async with r.pipeline() as pipe:
@@ -222,7 +232,7 @@ async def get_entries(namespace: str) -> list[dict]:
     if r is None:
         return []
     try:
-        keys = [key async for key in r.scan_iter(f"semcache:{namespace}:*")]
+        keys = [key async for key in r.scan_iter(f"semcache:{_escape_glob(namespace)}:*")]
         if not keys:
             return []
 

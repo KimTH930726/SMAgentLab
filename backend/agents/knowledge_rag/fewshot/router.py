@@ -61,6 +61,9 @@ async def search_fewshots(body: FewshotSearchRequest, user: dict = Depends(get_c
     query_vec = await embedding_service.embed(body.question)
     fewshots = await retrieval.fetch_fewshots(body.namespace, query_vec, limit=2)
     prompt_section = retrieval.build_fewshot_section(fewshots)
+    # 하드코딩된 "0.6"이 아니라 실제 런타임 설정값 참조 — 관리자가 임계값을
+    # 바꾸면 이 안내 문구도 같이 맞아야 한다
+    min_sim = retrieval.get_thresholds()["fewshot_min_similarity"]
     return FewshotSearchResponse(
         question=body.question,
         namespace=body.namespace,
@@ -68,7 +71,7 @@ async def search_fewshots(body: FewshotSearchRequest, user: dict = Depends(get_c
             FewshotResult(question=fs["question"], answer=fs["answer"], similarity=fs["similarity"])
             for fs in fewshots
         ],
-        prompt_section=prompt_section or "(검색된 few-shot 없음 — 유사도 0.6 미만)",
+        prompt_section=prompt_section or f"(검색된 few-shot 없음 — 유사도 {min_sim:.2f} 미만)",
     )
 
 
@@ -117,7 +120,8 @@ async def update_fewshot(fewshot_id: int, body: FewshotUpdate, user: dict = Depe
                 UPDATE rag_fewshot SET question = $2, answer = $3, embedding = $4::vector
                 WHERE id = $1
                 RETURNING id, namespace_id, question, answer, knowledge_id,
-                          created_by_part, created_by_user_id, created_at::text
+                          created_by_part, created_by_user_id, created_at::text,
+                          COALESCE(status, 'active') AS status
                 """,
                 fewshot_id, new_question, new_answer, str(embedding),
             )
@@ -127,7 +131,8 @@ async def update_fewshot(fewshot_id: int, body: FewshotUpdate, user: dict = Depe
                 UPDATE rag_fewshot SET question = $2, answer = $3
                 WHERE id = $1
                 RETURNING id, namespace_id, question, answer, knowledge_id,
-                          created_by_part, created_by_user_id, created_at::text
+                          created_by_part, created_by_user_id, created_at::text,
+                          COALESCE(status, 'active') AS status
                 """,
                 fewshot_id, new_question, new_answer,
             )

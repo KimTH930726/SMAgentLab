@@ -5,6 +5,8 @@ import asyncio
 import logging
 from typing import Optional
 
+import numpy as np
+
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 from agents.knowledge_rag.knowledge.retrieval import find_similar_active_knowledge, get_thresholds
@@ -50,33 +52,40 @@ async def create_knowledge(
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
 
-    matches = await find_similar_active_knowledge(ns_id, embedding)
-    is_duplicate = bool(matches) and matches[0]["similarity"] >= get_thresholds()["duplicate_min_similarity"]
-    status = "pending_review" if is_duplicate else "active"
-
     async with get_conn() as conn:
-        row = await conn.fetchrow(
-            f"""
-            INSERT INTO rag_knowledge
-                (namespace_id, container_name, target_tables, content,
-                 query_template, embedding, base_weight, category,
-                 created_by_part, created_by_user_id, status)
-            VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11)
-            RETURNING id, namespace_id, container_name, target_tables,
-                      content, query_template, base_weight, category, status,
-                      created_by_part, created_by_user_id,
-                      created_at::text, updated_at::text
-            """,
-            ns_id, container_name, target_tables, content,
-            query_template, str(embedding), base_weight, category,
-            created_by_part, created_by_user_id, status,
-        )
-        if is_duplicate:
-            await conn.executemany(
-                "INSERT INTO rag_knowledge_duplicate_match (new_knowledge_id, matched_knowledge_id, similarity) "
-                "VALUES ($1, $2, $3)",
-                [(row["id"], m["id"], m["similarity"]) for m in matches],
+        async with conn.transaction():
+            # 네임스페이스 단위 advisory lock — 거의 동일한 내용을 담은 단건 등록
+            # 2개가 동시에 들어오면, 유사도 검사 시점엔 서로가 아직 INSERT 전이라
+            # 둘 다 "중복 아님"으로 판단해 나란히 active로 들어가버리는 TOCTOU를
+            # 막는다. 트랜잭션이 끝나면(커밋/롤백) 자동 해제.
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", ns_id)
+
+            matches = await find_similar_active_knowledge(ns_id, embedding)
+            is_duplicate = bool(matches) and matches[0]["similarity"] >= get_thresholds()["duplicate_min_similarity"]
+            status = "pending_review" if is_duplicate else "active"
+
+            row = await conn.fetchrow(
+                f"""
+                INSERT INTO rag_knowledge
+                    (namespace_id, container_name, target_tables, content,
+                     query_template, embedding, base_weight, category,
+                     created_by_part, created_by_user_id, status)
+                VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11)
+                RETURNING id, namespace_id, container_name, target_tables,
+                          content, query_template, base_weight, category, status,
+                          created_by_part, created_by_user_id,
+                          created_at::text, updated_at::text
+                """,
+                ns_id, container_name, target_tables, content,
+                query_template, str(embedding), base_weight, category,
+                created_by_part, created_by_user_id, status,
             )
+            if is_duplicate:
+                await conn.executemany(
+                    "INSERT INTO rag_knowledge_duplicate_match (new_knowledge_id, matched_knowledge_id, similarity) "
+                    "VALUES ($1, $2, $3)",
+                    [(row["id"], m["id"], m["similarity"]) for m in matches],
+                )
 
     result = dict(row)
     result["namespace"] = namespace
@@ -588,16 +597,45 @@ async def _run_bulk_ingestion(
             match_results = await asyncio.gather(
                 *(find_similar_active_knowledge(ns_id, emb) for emb in embeddings)
             )
+            db_is_duplicate = [
+                bool(m) and m[0]["similarity"] >= dup_threshold for m in match_results
+            ]
+
+            # 배치 내 상호 중복 검사 — 같은 배치 안의 항목끼리는 아직 INSERT 전이라
+            # find_similar_active_knowledge(DB 조회)가 서로를 못 본다(둘 다 'active'로
+            # 조회되지 않으므로). 정규화된 임베딩이라 내적=코사인 유사도. DB 중복이
+            # 아닌(=active로 남을 예정인) 더 앞쪽 항목을 기준으로만 비교해서, 먼저
+            # 등장한 항목이 대표로 남고 이후 유사 항목들이 그걸 가리키게 한다.
+            local_match: dict[int, tuple[int, float]] = {}  # offset -> (matched offset, similarity)
+            if len(batch) > 1:
+                emb_matrix = np.array(embeddings, dtype=np.float32)
+                sims = emb_matrix @ emb_matrix.T
+                for i in range(len(batch)):
+                    if db_is_duplicate[i]:
+                        continue
+                    best_j, best_sim = None, 0.0
+                    for j in range(i):
+                        if db_is_duplicate[j] or j in local_match:
+                            continue  # j 자신도 결국 pending으로 빠질 항목이면 기준으로 안 삼음
+                        sim = float(sims[i, j])
+                        if sim > best_sim:
+                            best_j, best_sim = j, sim
+                    if best_j is not None and best_sim >= dup_threshold:
+                        local_match[i] = (best_j, best_sim)
 
             rows = []
-            pending_chunk_indices: dict[int, list[dict]] = {}  # source_chunk_idx → matches
+            pending_chunk_indices: dict[int, list[dict]] = {}  # source_chunk_idx → DB matches
+            local_pending: dict[int, tuple[int, float]] = {}   # chunk_idx → (matched chunk_idx, similarity), 같은 배치 내 매칭
             for offset, (item, emb, matches) in enumerate(zip(batch, embeddings, match_results)):
                 # PDF/XLSX 추출 텍스트에 null byte(\x00)가 포함되면 PostgreSQL이 거부함 → 제거
                 content = item["content"].replace("\x00", "")
                 chunk_idx = start + offset
-                is_duplicate = bool(matches) and matches[0]["similarity"] >= dup_threshold
-                if is_duplicate:
+                is_duplicate = db_is_duplicate[offset] or offset in local_match
+                if db_is_duplicate[offset]:
                     pending_chunk_indices[chunk_idx] = matches
+                elif offset in local_match:
+                    matched_offset, sim = local_match[offset]
+                    local_pending[chunk_idx] = (start + matched_offset, sim)
                 rows.append((
                     ns_id,
                     item.get("container_name"),
@@ -626,20 +664,29 @@ async def _run_bulk_ingestion(
                     VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 """, rows)
                 created += len(rows)
-                pending_total += len(pending_chunk_indices)
+                pending_total += len(pending_chunk_indices) + len(local_pending)
 
-                if pending_chunk_indices:
-                    # executemany는 RETURNING을 안 주므로, 방금 넣은 행을 source_chunk_idx로 역매칭
+                if pending_chunk_indices or local_pending:
+                    # executemany는 RETURNING을 안 주므로, 방금 넣은 행을 source_chunk_idx로
+                    # 역매칭 — local_pending의 매칭 대상(같은 배치 내 다른 청크)의 id도
+                    # 같은 방식으로 필요하므로 함께 조회한다
+                    needed_idxs = set(pending_chunk_indices.keys()) | set(local_pending.keys()) | {
+                        matched_idx for matched_idx, _ in local_pending.values()
+                    }
                     new_rows = await conn.fetch(
                         "SELECT id, source_chunk_idx FROM rag_knowledge "
                         "WHERE ingestion_job_id = $1 AND source_chunk_idx = ANY($2::int[])",
-                        job_id, list(pending_chunk_indices.keys()),
+                        job_id, list(needed_idxs),
                     )
+                    id_by_chunk_idx = {r["source_chunk_idx"]: r["id"] for r in new_rows}
                     match_rows = [
-                        (r["id"], m["id"], m["similarity"])
-                        for r in new_rows
-                        for m in pending_chunk_indices[r["source_chunk_idx"]]
+                        (id_by_chunk_idx[chunk_idx], m["id"], m["similarity"])
+                        for chunk_idx, matches in pending_chunk_indices.items()
+                        for m in matches
                     ]
+                    for chunk_idx, (matched_idx, sim) in local_pending.items():
+                        if chunk_idx in id_by_chunk_idx and matched_idx in id_by_chunk_idx:
+                            match_rows.append((id_by_chunk_idx[chunk_idx], id_by_chunk_idx[matched_idx], sim))
                     if match_rows:
                         await conn.executemany(
                             "INSERT INTO rag_knowledge_duplicate_match "

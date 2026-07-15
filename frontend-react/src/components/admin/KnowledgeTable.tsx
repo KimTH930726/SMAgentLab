@@ -150,6 +150,7 @@ export function KnowledgeTable() {
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [categoryFilter, setCategoryFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
+  const [sortBy, setSortBy] = useState<'default' | 'weight_desc' | 'weight_asc'>('default');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'text' | 'vector'>('text');
   const [vectorSearchInput, setVectorSearchInput] = useState('');
@@ -283,9 +284,15 @@ export function KnowledgeTable() {
     return true;
   });
   const filteredItems = textFilteredItems; // for count ref
-  const displayItems = searchMode === 'vector' && vectorQuery
+  const searchedItems = searchMode === 'vector' && vectorQuery
     ? (vectorSearchQuery.data ?? [])
     : textFilteredItems;
+  // 가중치 정렬 — 벡터 검색 모드에서는 유사도순이 더 유용하므로 정렬을 덮어쓰지 않는다
+  const displayItems = sortBy === 'default' || (searchMode === 'vector' && vectorQuery)
+    ? searchedItems
+    : [...searchedItems].sort((a, b) =>
+        sortBy === 'weight_desc' ? b.base_weight - a.base_weight : a.base_weight - b.base_weight
+      );
   const { totalPages, totalItems, slice } = useClientPaging(displayItems, pageSize);
   const pagedItems = slice(page);
 
@@ -404,6 +411,20 @@ export function KnowledgeTable() {
                 <option value="web">웹 크롤링</option>
                 <option value="confluence">Confluence</option>
                 <option value="teams">Teams</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">정렬</label>
+              <select
+                value={sortBy}
+                onChange={(e) => { setSortBy(e.target.value as typeof sortBy); setPage(1); }}
+                disabled={searchMode === 'vector' && !!vectorQuery}
+                title={searchMode === 'vector' && !!vectorQuery ? '벡터 검색 중에는 유사도순으로 고정됩니다' : undefined}
+                className="w-40 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+              >
+                <option value="default">기본순</option>
+                <option value="weight_desc">가중치 높은순</option>
+                <option value="weight_asc">가중치 낮은순</option>
               </select>
             </div>
             {/* Search mode toggle */}
@@ -525,9 +546,6 @@ export function KnowledgeTable() {
                             {(item.target_tables ?? []).length > 3 && <Badge color="slate">+{(item.target_tables ?? []).length - 3}</Badge>}
                           </>
                         )}
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${weightClass(item.base_weight)}`}>
-                          우선순위: {weightLabel(item.base_weight)} ({item.base_weight})
-                        </span>
                       </div>
                       <p className="text-xs text-slate-500 mt-0.5 truncate">{item.content.slice(0, 100)}...</p>
                     </div>
@@ -537,6 +555,11 @@ export function KnowledgeTable() {
                           {((item as KnowledgeItem & { similarity?: number }).similarity! * 100).toFixed(1)}%
                         </span>
                       )}
+                      {/* 가중치를 항상 같은 자리(우측 고정 컬럼)에 표시 — 다른 배지가
+                          몇 개 붙든 위치가 안 밀려서 목록에서 한눈에 비교하기 쉽다 */}
+                      <span className={`px-1.5 py-0.5 rounded font-semibold whitespace-nowrap ${weightClass(item.base_weight)}`}>
+                        가중치 {item.base_weight.toFixed(1)}
+                      </span>
                       <span>{new Date(item.updated_at !== item.created_at ? item.updated_at : item.created_at).toISOString().slice(0, 10)}</span>
                       {item.created_by_username && <span>{item.created_by_username}</span>}
                       {item.created_by_part && <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>}

@@ -512,7 +512,11 @@ async def get_llm_config(user: dict = Depends(get_current_user)):
 
 
 @router.put("/api/llm/config")
-async def update_llm_config(body: LLMConfigUpdate, user: dict = Depends(get_current_user)):
+async def update_llm_config(body: LLMConfigUpdate, admin: dict = Depends(get_current_admin)):
+    # switch_provider()는 프로세스 전역 싱글턴을 바꾼다 — 모든 네임스페이스/사용자에게
+    # 영향을 주는 시스템 설정이므로 thresholds/search-defaults/cache-config 등
+    # 다른 전역 설정 엔드포인트와 동일하게 관리자 전용이어야 한다(기존엔 일반 사용자도
+    # 호출 가능해, LLM 엔드포인트·자격증명을 임의로 바꿔치기할 수 있었음)
     if body.provider not in ("ollama", "inhouse"):
         raise HTTPException(status_code=400, detail="provider는 'ollama' 또는 'inhouse'여야 합니다.")
     try:
@@ -524,7 +528,7 @@ async def update_llm_config(body: LLMConfigUpdate, user: dict = Depends(get_curr
 
 
 @router.post("/api/llm/test")
-async def test_llm_connection(body: LLMTestRequest, user: dict = Depends(get_current_user)):
+async def test_llm_connection(body: LLMTestRequest, admin: dict = Depends(get_current_admin)):
     cfg = _extract_config(body)
     try:
         provider = InHouseLLMProvider(cfg) if body.provider == "inhouse" else OllamaProvider(cfg)

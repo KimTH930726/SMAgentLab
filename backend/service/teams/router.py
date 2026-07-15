@@ -155,18 +155,32 @@ async def fetch_messages(body: MessageFetchRequest, user: dict = Depends(get_cur
         cache = await teams_token_store.get_message_cache(user_id, body.chat_id)
 
         if not body.before:
-            # 초기 로드
+            # 초기 로드 — 최신 메시지를 새로 조회한다. 기존 캐시가 있으면(이미
+            # before 커서로 과거 이력을 페이징해서 쌓아둔 상태) 통째로 덮어쓰지
+            # 않고 병합한다 — 그렇지 않으면 채팅방을 나갔다 다시 들어오기만 해도
+            # 애써 불러온 과거 이력이 전부 사라지고 첫 페이지로 리셋됐었다.
             messages, sync_state, last_seg_start = await teams_crawler.fetch_page_from_teams(
                 ic3_token, body.chat_id,
             )
-            cache = {
-                "messages": messages,
-                "sync_state": sync_state,
-                "last_segment_start": last_seg_start,
-                "exhausted": len(messages) == 0,
-            }
+            if cache and cache.get("messages"):
+                existing_ids = {m["id"] for m in cache["messages"]}
+                merged = cache["messages"] + [m for m in messages if m["id"] not in existing_ids]
+                merged.sort(key=lambda m: m.get("time", ""))
+                cache = {
+                    "messages": merged,
+                    "sync_state": sync_state,
+                    "last_segment_start": last_seg_start,
+                    "exhausted": cache.get("exhausted", False),
+                }
+            else:
+                cache = {
+                    "messages": messages,
+                    "sync_state": sync_state,
+                    "last_segment_start": last_seg_start,
+                    "exhausted": len(messages) == 0,
+                }
             await teams_token_store.set_message_cache(user_id, body.chat_id, cache)
-            all_messages = messages
+            all_messages = cache["messages"]
         else:
             if not cache:
                 return {"messages": [], "count": 0, "has_more": False}
