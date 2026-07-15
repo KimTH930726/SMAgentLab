@@ -372,7 +372,7 @@ Authorization: Bearer {access_token}
 
 다음 작업은 `role: admin` 사용자만 수행할 수 있다:
 
-- **LLM 설정**: 설정 변경(PUT /api/llm/config), 임계값 변경(PUT /api/llm/thresholds)
+- **LLM 설정**: 설정 변경(PUT /api/llm/config), 연결 테스트(POST /api/llm/test, v2.38~), 임계값 변경(PUT /api/llm/thresholds)
 - **사용자 관리**: 목록 조회, 수정, 삭제 (GET/PUT/DELETE /api/auth/users)
 
 ### 네임스페이스 소유 파트 기반 권한
