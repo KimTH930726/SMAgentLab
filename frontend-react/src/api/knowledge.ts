@@ -191,7 +191,7 @@ export async function importTextSplit(
 export async function previewTextSplit(
   rawText: string,
   strategy = 'auto',
-): Promise<{ chunks: string[]; count: number }> {
+): Promise<{ chunks: string[]; count: number; detected_strategy: string }> {
   return apiFetch('/knowledge/import/text-split/preview', {
     method: 'POST',
     body: JSON.stringify({ raw_text: rawText, strategy }),
@@ -283,13 +283,16 @@ export interface FilePreviewResult {
   tables: number;
   chunks: Array<{ idx: number; text: string; title: string | null }>;
   chunk_count: number;
+  detected_strategy: string;
 }
 
 export async function previewFileUpload(
   file: File,
+  strategy?: string,
 ): Promise<FilePreviewResult> {
   const form = new FormData();
   form.append('file', file);
+  if (strategy) form.append('strategy', strategy);
   return apiFetch('/knowledge/import/file/preview', { method: 'POST', body: form });
 }
 
