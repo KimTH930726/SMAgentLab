@@ -45,6 +45,13 @@ def chunk_document(
     if strategy == "auto":
         strategy = "section" if doc.sections and len(doc.sections) > 1 else "paragraph"
 
+    # "section"은 doc.sections가 있어야 의미가 있음 — LLM Analyzer가 파일 확장자만
+    # 보고(txt 등) 내용에 헤더가 있다고 판단해 "section"을 명시적으로 반환하면
+    # doc.sections가 비어 있어도 그대로 _chunk_by_sections가 호출돼 청크 0건이
+    # 등록되는 무음 실패가 있었음 — auto 분기와 동일하게 안전망을 건다.
+    if strategy == "section" and not doc.sections:
+        strategy = "paragraph"
+
     if strategy == "section":
         chunks = _chunk_by_sections(doc, max_chars, min_chars)
     elif strategy == "paragraph":

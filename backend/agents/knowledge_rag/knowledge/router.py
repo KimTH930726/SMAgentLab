@@ -350,20 +350,25 @@ class _TextSplitPreviewBody(_BM):
 
 @router.post("/import/text-split/preview")
 async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(get_current_user)):
-    """텍스트 분할 미리보기 — LLM Analyzer로 전략 자동 결정."""
+    """텍스트 분할 미리보기 — strategy가 auto일 때만 LLM Analyzer로 전략 자동 결정.
+
+    사용자가 미리보기 화면에서 전략을 수동으로 재선택한 경우(strategy != "auto")는
+    이미 원하는 전략이 정해진 것이므로 LLM 재호출 없이 바로 그 전략으로 재청킹한다.
+    """
     strategy = body.strategy
     detected_strategy = strategy
 
-    try:
-        from agents.knowledge_rag.ingestion.analyzer import analyze_document
-        from service.llm.factory import get_llm_provider
-        from core.security import get_user_llm_credentials
-        llm = get_llm_provider()
-        analysis = await analyze_document(body.raw_text, llm, user_credentials=get_user_llm_credentials(user))
-        detected_strategy = analysis.get("chunk_strategy", "auto")
-        strategy = detected_strategy
-    except Exception as e:
-        logger.warning("텍스트 분할 전략 자동 감지 실패 (auto 사용): %s", e)
+    if strategy == "auto":
+        try:
+            from agents.knowledge_rag.ingestion.analyzer import analyze_document
+            from service.llm.factory import get_llm_provider
+            from core.security import get_user_llm_credentials
+            llm = get_llm_provider()
+            analysis = await analyze_document(body.raw_text, llm, user_credentials=get_user_llm_credentials(user))
+            detected_strategy = analysis.get("chunk_strategy", "auto")
+            strategy = detected_strategy
+        except Exception as e:
+            logger.warning("텍스트 분할 전략 자동 감지 실패 (auto 사용): %s", e)
 
     chunks = service.split_text_to_chunks(body.raw_text, strategy)
     return {"chunks": chunks, "count": len(chunks), "detected_strategy": detected_strategy}
@@ -579,9 +584,12 @@ async def import_file(
 @router.post("/import/file/preview")
 async def preview_file_upload(
     file: UploadFile = File(...),
+    strategy: Optional[str] = Form(None),
     user: dict = Depends(get_current_user),
 ):
-    """파일 업로드 미리보기 — LLM Analyzer로 전략 자동 결정 후 청킹 결과 반환."""
+    """파일 업로드 미리보기 — strategy 미지정(auto)일 때만 LLM Analyzer로 전략 자동
+    결정 후 청킹. 사용자가 미리보기에서 전략을 수동 재선택한 경우(strategy 지정)는
+    LLM 재호출 없이 바로 그 전략으로 재청킹한다."""
     from agents.knowledge_rag.ingestion.adapters import parse_file
     from agents.knowledge_rag.ingestion.chunker import chunk_document
 
@@ -591,18 +599,21 @@ async def preview_file_upload(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"파일 파싱 실패: {e}")
 
-    strategy = "auto"
-    detected_strategy = "auto"
-    try:
-        from agents.knowledge_rag.ingestion.analyzer import analyze_document
-        from service.llm.factory import get_llm_provider
-        from core.security import get_user_llm_credentials
-        llm = get_llm_provider()
-        analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
-        detected_strategy = analysis.get("chunk_strategy", "auto")
-        strategy = detected_strategy
-    except Exception:
-        pass
+    if strategy and strategy != "auto":
+        detected_strategy = strategy
+    else:
+        strategy = "auto"
+        detected_strategy = "auto"
+        try:
+            from agents.knowledge_rag.ingestion.analyzer import analyze_document
+            from service.llm.factory import get_llm_provider
+            from core.security import get_user_llm_credentials
+            llm = get_llm_provider()
+            analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
+            detected_strategy = analysis.get("chunk_strategy", "auto")
+            strategy = detected_strategy
+        except Exception:
+            pass
 
     chunks = chunk_document(doc, strategy=strategy)
 

@@ -761,7 +761,16 @@ interface ReviewChunk {
   selected: boolean;
 }
 
-function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, category, categoryNames, onCategoryChange }: {
+// analyzer.py의 chunk_strategy 어휘(section/paragraph/fixed/auto) — 파일 업로드와
+// 텍스트 붙여넣기 양쪽의 청킹 함수가 공통으로 지원하는 값만 노출한다.
+const STRATEGY_OPTIONS: { value: string; label: string; desc: string }[] = [
+  { value: 'auto', label: 'AI 자동 감지', desc: 'AI가 문서 구조를 분석해 최적 전략을 선택' },
+  { value: 'section', label: '섹션 기준', desc: '제목/헤더 구조가 뚜렷한 문서에 적합' },
+  { value: 'paragraph', label: '단락 기준', desc: '헤더 없이 문단으로만 나뉜 텍스트에 적합' },
+  { value: 'fixed', label: '고정 길이', desc: '구조가 불규칙하거나 아주 긴 텍스트를 균등 분할' },
+];
+
+function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, category, categoryNames, onCategoryChange, currentStrategy, onRestrategize }: {
   isOpen: boolean;
   onClose: () => void;
   chunks: ReviewChunk[];
@@ -771,14 +780,30 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   category: string;
   categoryNames: string[];
   onCategoryChange: (v: string) => void;
+  currentStrategy?: string | null;
+  onRestrategize?: (strategy: string) => Promise<void>;
 }) {
   const [rows, setRows] = useState<ReviewChunk[]>([]);
   const [expandedIdx, setExpandedIdx] = useState<Set<number>>(new Set());
+  const [restrategizing, setRestrategizing] = useState(false);
+  const [restrategizeError, setRestrategizeError] = useState('');
 
   useEffect(() => {
     setRows(chunks.map(c => ({ ...c, selected: true })));
     setExpandedIdx(new Set());
   }, [chunks]);
+
+  const handleStrategyChange = async (value: string) => {
+    if (!onRestrategize || value === (currentStrategy ?? 'auto')) return;
+    setRestrategizing(true); setRestrategizeError('');
+    try {
+      await onRestrategize(value);
+    } catch (e: any) {
+      setRestrategizeError(e.message || '재청킹 실패');
+    } finally {
+      setRestrategizing(false);
+    }
+  };
 
   const selectedCount = rows.filter(r => r.selected).length;
   const allSelected = rows.length > 0 && selectedCount === rows.length;
@@ -795,6 +820,30 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
     <Modal isOpen={isOpen} onClose={onClose} title={`청크 검토 — ${sourceName}`} maxWidth="max-w-3xl">
       <div className="space-y-3">
         <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={onCategoryChange} />
+
+        {/* 청킹 전략 재선택 */}
+        {onRestrategize && (
+          <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2.5 space-y-1.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="text-xs font-medium text-slate-400 flex-shrink-0">청킹 전략</label>
+              <select
+                value={currentStrategy ?? 'auto'}
+                onChange={(e) => handleStrategyChange(e.target.value)}
+                disabled={restrategizing || loading}
+                className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+              >
+                {STRATEGY_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              {restrategizing && <span className="text-[11px] text-indigo-400">재청킹 중...</span>}
+            </div>
+            <p className="text-[11px] text-slate-500">
+              {STRATEGY_OPTIONS.find(o => o.value === (currentStrategy ?? 'auto'))?.desc}
+            </p>
+            {restrategizeError && <p className="text-[11px] text-rose-400">{restrategizeError}</p>}
+          </div>
+        )}
 
         {/* 전체 선택 / 카운터 */}
         <div className="flex items-center justify-between pb-2 border-b border-slate-700/60">
@@ -1400,7 +1449,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setPreviewing(true); setError('');
     try {
       const result = await previewFileUpload(file);
-      setDetectedStrategy((result as any).detected_strategy ?? null);
+      setDetectedStrategy(result.detected_strategy ?? null);
       setReviewChunks(result.chunks.map(c => ({ ...c, selected: true })));
       setShowReview(true);
     } catch (e: any) {
@@ -1429,6 +1478,13 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
       onSuccess({ jobId: result.job_id });
     } catch (e: any) { setError(e.message || '오류 발생'); }
     finally { setLoading(false); }
+  };
+
+  const handleRestrategize = async (strategy: string) => {
+    if (!file) return;
+    const result = await previewFileUpload(file, strategy);
+    setDetectedStrategy(result.detected_strategy ?? strategy);
+    setReviewChunks(result.chunks.map(c => ({ ...c, selected: true })));
   };
 
   return (
@@ -1494,6 +1550,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
         loading={loading}
         sourceName={file?.name ?? ''}
         category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
+        currentStrategy={detectedStrategy} onRestrategize={handleRestrategize}
       />
     </div>
   );
@@ -1521,7 +1578,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setPreviewing(true); setError('');
     try {
       const result = await previewTextSplit(text);
-      setDetectedStrategy((result as any).detected_strategy ?? null);
+      setDetectedStrategy(result.detected_strategy ?? null);
       setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true })));
       setShowReview(true);
     } catch (e: any) { setError(e.message || '분할 미리보기 실패'); }
@@ -1538,6 +1595,12 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
       onSuccess({ jobId: result.job_id });
     } catch (e: any) { setError(e.message || '오류 발생'); }
     finally { setLoading(false); }
+  };
+
+  const handleRestrategize = async (strategy: string) => {
+    const result = await previewTextSplit(text, strategy);
+    setDetectedStrategy(result.detected_strategy ?? strategy);
+    setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true })));
   };
 
   return (
@@ -1577,6 +1640,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
         loading={loading}
         sourceName="텍스트 직접입력"
         category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
+        currentStrategy={detectedStrategy} onRestrategize={handleRestrategize}
       />
     </div>
   );
