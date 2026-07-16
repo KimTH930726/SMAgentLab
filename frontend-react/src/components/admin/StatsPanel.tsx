@@ -432,7 +432,11 @@ function QueryLogModal({
                     <p className="text-sm text-slate-200 truncate">{log.question}</p>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       {log.mapped_term && <Badge color="indigo">{log.mapped_term}</Badge>}
-                      <span className="text-xs text-slate-500">{new Date(log.created_at).toLocaleString('ko-KR')}</span>
+                      {log.status === 'resolved' && log.resolved_at ? (
+                        <span className="text-xs text-slate-500">해결 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
+                      ) : (
+                        <span className="text-xs text-slate-500">{new Date(log.created_at).toLocaleString('ko-KR')}</span>
+                      )}
                     </div>
                   </div>
                   <span className="flex-shrink-0 text-slate-500 mt-0.5">
@@ -461,7 +465,10 @@ function QueryLogModal({
                         : '미해결'}
                     </span></span>
                     {log.mapped_term && <span>용어: <span className="text-indigo-400">{log.mapped_term}</span></span>}
-                    <span>{new Date(log.created_at).toLocaleString('ko-KR')}</span>
+                    <span>질문 {new Date(log.created_at).toLocaleString('ko-KR')}</span>
+                    {log.status === 'resolved' && log.resolved_at && (
+                      <span>해결 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
+                    )}
                   </div>
 
                   {/* AI 답변 또는 등록된 지식 미리보기 */}

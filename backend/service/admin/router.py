@@ -376,23 +376,27 @@ async def get_namespace_queries(
     base_select = """
         SELECT q.id, q.question,
                COALESCE(k.content, q.answer) AS answer,
-               q.mapped_term, q.status, q.created_at::text,
+               q.mapped_term, q.status, q.created_at::text, q.resolved_at::text,
                k.id AS resolved_knowledge_id
         FROM ops_query_log q
         LEFT JOIN rag_knowledge k ON k.id = q.resolved_knowledge_id AND k.status = 'active'
     """
+    # 해결된 건은 "해결된 시각" 기준으로 최신순 — 질문한 시각(created_at)순으로 두면
+    # 오래전에 질문했다가 방금 해결된 건이 목록 맨 아래로 묻힌다. 해결 안 된 상태들은
+    # resolved_at이 NULL이라 created_at으로 자연히 폴백된다.
+    order_by = "ORDER BY COALESCE(q.resolved_at, q.created_at) DESC"
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, name)
         if ns_id is None:
             return []
         if status:
             rows = await conn.fetch(
-                base_select + " WHERE q.namespace_id = $1 AND q.status = $2 ORDER BY q.created_at DESC LIMIT $3",
+                base_select + f" WHERE q.namespace_id = $1 AND q.status = $2 {order_by} LIMIT $3",
                 ns_id, status, limit,
             )
         else:
             rows = await conn.fetch(
-                base_select + " WHERE q.namespace_id = $1 ORDER BY q.created_at DESC LIMIT $2",
+                base_select + f" WHERE q.namespace_id = $1 {order_by} LIMIT $2",
                 ns_id, limit,
             )
     return [dict(r) for r in rows]
@@ -428,7 +432,7 @@ async def resolve_query_log(log_id: int, user: dict = Depends(get_current_user))
 
     async with get_conn() as conn:
         await conn.execute(
-            "UPDATE ops_query_log SET status = 'resolved', resolved_knowledge_id = $2 WHERE id = $1",
+            "UPDATE ops_query_log SET status = 'resolved', resolved_knowledge_id = $2, resolved_at = NOW() WHERE id = $1",
             log_id, created["id"],
         )
         await _insert_feedback_if_message_exists(conn, row["namespace_id"], row["question"], row["message_id"])
@@ -453,7 +457,7 @@ async def mark_query_log_resolved(log_id: int, body: MarkResolvedRequest = MarkR
         if not row:
             raise HTTPException(status_code=404, detail="Query log not found")
         await conn.execute(
-            "UPDATE ops_query_log SET status = 'resolved', resolved_knowledge_id = COALESCE($2, resolved_knowledge_id) WHERE id = $1",
+            "UPDATE ops_query_log SET status = 'resolved', resolved_knowledge_id = COALESCE($2, resolved_knowledge_id), resolved_at = NOW() WHERE id = $1",
             log_id, body.knowledge_id,
         )
         await _insert_feedback_if_message_exists(conn, row["namespace_id"], row["question"], row["message_id"])

@@ -314,6 +314,7 @@ export interface QueryLog {
   mapped_term: string | null;
   status: QueryStatus;
   created_at: string;
+  resolved_at: string | null;
   answer: string | null;
   resolved_knowledge_id: number | null;
 }
