@@ -191,6 +191,7 @@ body {
 /* ── Rose ── */
 [data-theme="light"] .bg-rose-900\/50  { background-color: rgb(255 228 230 / 0.6) !important; }
 [data-theme="light"] .bg-rose-900\/40  { background-color: rgb(255 228 230 / 0.5) !important; }
+[data-theme="light"] .bg-rose-900\/30  { background-color: rgb(255 228 230 / 0.5) !important; }
 [data-theme="light"] .bg-rose-900\/20  { background-color: rgb(255 228 230 / 0.5) !important; }
 [data-theme="light"] .bg-rose-500\/10  { background-color: rgb(255 228 230 / 0.4) !important; }
 [data-theme="light"] .border-rose-500\/30 { border-color: rgb(253 164 175 / 0.3) !important; }
@@ -204,6 +205,7 @@ body {
 
 /* ── Amber ── */
 [data-theme="light"] .bg-amber-900\/40  { background-color: rgb(254 243 199 / 0.6) !important; }
+[data-theme="light"] .bg-amber-900\/30  { background-color: rgb(254 243 199 / 0.6) !important; }
 [data-theme="light"] .bg-amber-900\/60  { background-color: rgb(254 243 199 / 0.8) !important; }
 [data-theme="light"] .hover\:bg-amber-900\/60:hover { background-color: rgb(254 243 199 / 0.8) !important; }
 [data-theme="light"] .bg-amber-500\/10  { background-color: rgb(254 243 199 / 0.7) !important; }
