@@ -349,9 +349,6 @@ export function KnowledgeTable() {
         >
           <List className="w-4 h-4" />
           지식 조회
-          {items.length > 0 && (
-            <span className="ml-1 text-[10px] bg-slate-700 text-slate-400 px-1.5 py-0.5 rounded-full">{items.length}</span>
-          )}
         </button>
         <button
           onClick={() => setSubTab('ingest')}
@@ -363,9 +360,6 @@ export function KnowledgeTable() {
         >
           <Upload className="w-4 h-4" />
           지식 등록
-          {jobs.length > 0 && (
-            <span className="ml-1 text-[10px] bg-indigo-900/60 text-indigo-400 px-1.5 py-0.5 rounded-full">{jobs.length}</span>
-          )}
         </button>
         <button
           onClick={() => setSubTab('review')}
@@ -990,6 +984,10 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
   const [activeMethod, setActiveMethod] = useState<IngestMethod>(null);
   const [progressJobId, setProgressJobId] = useState<number | null>(null);
   const [autoNavigate, setAutoNavigate] = useState(false);
+  const [jobPage, setJobPage] = useState(1);
+  const [jobPageSize, setJobPageSize] = useState(30);
+  const { totalPages: jobTotalPages, totalItems: jobTotalItems, slice: sliceJobs } = useClientPaging(jobs, jobPageSize);
+  const pagedJobs = sliceJobs(jobPage);
 
   // 폼 제출 성공 시: 비동기 배치 작업(jobId)이면 진행 모달을 띄우고 완료될 때까지
   // 기다렸다가 결과(승인 대기 여부)에 따라 이동, 동기 단건 등록이면 즉시 이동.
@@ -1095,10 +1093,11 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
 
       {/* 인제스천 작업 이력 */}
       {jobs.length > 0 && (
-        <div>
-          <h3 className="text-sm font-medium text-slate-400 mb-2">등록 이력</h3>
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-slate-400">등록 이력</h3>
+          <PaginationInfo totalItems={jobTotalItems} pageSize={jobPageSize} onPageSizeChange={setJobPageSize} />
           <div className="rounded-xl border border-slate-700 overflow-hidden divide-y divide-slate-700/60">
-            {jobs.slice(0, 10).map((j: IngestionJob) => {
+            {pagedJobs.map((j: IngestionJob) => {
               const isProcessing = j.status === 'processing';
               return (
                 <div key={j.id}
@@ -1141,6 +1140,7 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
               );
             })}
           </div>
+          <PaginationNav page={jobPage} totalPages={jobTotalPages} onPageChange={setJobPage} />
         </div>
       )}
 
