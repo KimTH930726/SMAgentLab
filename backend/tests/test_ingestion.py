@@ -144,7 +144,7 @@ class TestBulkCreateKnowledge:
              patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=None)):
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
             with pytest.raises(ValueError, match="not found"):
-                await bulk_create_knowledge("nonexistent", [{"content": "test"}])
+                await bulk_create_knowledge("nonexistent", [{"content": "test", "category": "공통지식"}])
 
     @pytest.mark.asyncio
     async def test_empty_items_returns_zero(self):
@@ -164,7 +164,8 @@ class TestBulkCreateKnowledge:
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
             result = await bulk_create_knowledge("test-ns", [])
             assert result["created"] == 0
-            assert result["job_id"] is None
+            # 항목이 0건이어도 추적용 job 행은 항상 생성됨 (job_id는 None이 아님)
+            assert result["job_id"] == 1
 
     @pytest.mark.asyncio
     async def test_with_source_file_creates_job(self):
@@ -177,11 +178,13 @@ class TestBulkCreateKnowledge:
 
         async def mock_fetchval(*args, **kwargs):
             call_count["n"] += 1
-            if call_count["n"] <= 2:
-                return 1  # ns_id or job_id
-            return 42  # job_id
+            if call_count["n"] == 1:
+                return 1  # job_id (INSERT INTO rag_ingestion_job RETURNING id)
+            return False  # cancel_requested (UPDATE ... RETURNING cancel_requested)
         fake_conn.fetchval = AsyncMock(side_effect=mock_fetchval)
         fake_conn.execute = AsyncMock()
+        fake_conn.executemany = AsyncMock()
+        fake_conn.fetch = AsyncMock(return_value=[])
 
         fake_emb = MagicMock()
         fake_emb.embed_batch = AsyncMock(return_value=[[0.1] * 768, [0.2] * 768])
@@ -192,9 +195,10 @@ class TestBulkCreateKnowledge:
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
             result = await bulk_create_knowledge(
                 "test-ns",
-                [{"content": "지식1"}, {"content": "지식2"}],
+                [{"content": "지식1", "category": "공통지식"}, {"content": "지식2", "category": "공통지식"}],
                 source_file="test.csv",
                 source_type="csv_import",
+                background=False,
             )
             assert result["created"] == 2
             # embed_batch가 호출됨

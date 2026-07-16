@@ -202,6 +202,8 @@ body {
 
 /* ── Amber ── */
 [data-theme="light"] .bg-amber-900\/40  { background-color: rgb(254 243 199 / 0.6) !important; }
+[data-theme="light"] .bg-amber-900\/60  { background-color: rgb(254 243 199 / 0.8) !important; }
+[data-theme="light"] .hover\:bg-amber-900\/60:hover { background-color: rgb(254 243 199 / 0.8) !important; }
 [data-theme="light"] .bg-amber-500\/10  { background-color: rgb(254 243 199 / 0.7) !important; }
 [data-theme="light"] .text-amber-300     { color: rgb(180 83 9) !important; }
 [data-theme="light"] .text-amber-400     { color: rgb(217 119 6) !important; }
