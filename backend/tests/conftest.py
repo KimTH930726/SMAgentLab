@@ -18,6 +18,7 @@ _settings_mock.fewshot_min_similarity = 0.6
 _settings_mock.knowledge_min_score = 0.1
 _settings_mock.knowledge_high_score = 0.5
 _settings_mock.knowledge_mid_score = 0.3
+_settings_mock.duplicate_min_similarity = 0.88
 _settings_mock.default_top_k = 5
 _settings_mock.default_w_vector = 0.7
 _settings_mock.default_w_keyword = 0.3
@@ -51,6 +52,18 @@ sys.modules["shared"] = MagicMock()
 sys.modules["shared.embedding"] = _embedding_mod
 sys.modules["shared.reranker"] = MagicMock()
 sys.modules["shared.cache"] = MagicMock()
+# json_utils는 순수 함수(json/re만 사용, 외부 의존성 없음)라 목킹 대신 실제 모듈을 등록 —
+# mock으로 대체하면 shared가 MagicMock으로 통째로 대체돼 있어 shared.json_utils가 아예
+# 임포트 불가능해지고(tagger/analyzer가 여기서 콜렉션 자체가 깨짐), 파싱 로직 테스트도 불가능해짐.
+# shared가 이미 MagicMock이라 importlib.import_module()로는 parent __path__ 해석이
+# 실패하므로, 파일 경로 기반 spec으로 parent를 거치지 않고 직접 로드한다.
+import importlib.util as _ilu
+_json_utils_spec = _ilu.spec_from_file_location(
+    "shared.json_utils", str(Path(backend_dir) / "shared" / "json_utils.py")
+)
+_json_utils_mod = _ilu.module_from_spec(_json_utils_spec)
+_json_utils_spec.loader.exec_module(_json_utils_mod)
+sys.modules["shared.json_utils"] = _json_utils_mod
 
 # service
 _prompt_mod = MagicMock()

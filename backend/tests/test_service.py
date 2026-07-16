@@ -13,6 +13,7 @@ class FakeConn:
         self.fetchrow = AsyncMock(return_value=None)
         self.fetch = AsyncMock(return_value=[])
         self.execute = AsyncMock()
+        self.executemany = AsyncMock()
 
     async def __aenter__(self):
         return self
