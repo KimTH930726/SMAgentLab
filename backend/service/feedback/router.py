@@ -42,13 +42,20 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
         # 무관하게 항상 해결 처리 — 잘못된 답변을 지적하고 올바른 지식을 등록한 것이므로
         new_status = "resolved" if (body.is_positive or body.resolved_knowledge_id) else "unresolved"
 
+        # resolved로 전이될 때만 resolved_at을 지금 시각으로 찍는다 — 정렬 기준을
+        # "질문한 시각"이 아니라 "해결된 시각"으로 쓰기 위함. resolved가 아니면(예:
+        # 부정 피드백으로 unresolved 전환) NULL로 되돌려 이전에 해결됐던 흔적이
+        # 남지 않게 한다.
+        resolved_at_expr = "NOW()" if new_status == "resolved" else "NULL"
+
         if body.message_id is not None:
             # message_id로 정확히 매칭 — 질문 텍스트 매칭은 중복 질문/공백 차이에 취약해서
             # message_id가 있으면 우선 사용
             await conn.execute(
-                """
+                f"""
                 UPDATE ops_query_log
-                SET status = $3, resolved_knowledge_id = COALESCE($4, resolved_knowledge_id)
+                SET status = $3, resolved_knowledge_id = COALESCE($4, resolved_knowledge_id),
+                    resolved_at = {resolved_at_expr}
                 WHERE namespace_id = $1 AND message_id = $2
                 """,
                 ns_id, body.message_id, new_status, body.resolved_knowledge_id,
@@ -56,8 +63,9 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
         else:
             # message_id가 없는 과거 호출 호환용 — 질문 텍스트로 가장 최근 1건 매칭
             await conn.execute(
-                """
-                UPDATE ops_query_log SET status = $3, resolved_knowledge_id = COALESCE($4, resolved_knowledge_id)
+                f"""
+                UPDATE ops_query_log SET status = $3, resolved_knowledge_id = COALESCE($4, resolved_knowledge_id),
+                    resolved_at = {resolved_at_expr}
                 WHERE namespace_id = $1 AND question = $2
                   AND id = (
                       SELECT id FROM ops_query_log

@@ -969,6 +969,11 @@ async def _migrate_query_log_resolution(conn) -> None:
         "INT REFERENCES rag_knowledge(id) ON DELETE SET NULL"
     )
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_query_log_resolved_knowledge ON ops_query_log (resolved_knowledge_id)")
+    # 해결된 시각 — 없으면 "해결됨" 탭이 질문한 시각순으로만 정렬돼, 오래전 질문이
+    # 방금 해결돼도 목록 맨 아래에 묻힌다. 기존 resolved 행은 언제 해결됐는지 알 길이
+    # 없으므로 created_at으로 소급 채운다(완벽하진 않지만 NULL보다 유의미한 정렬 순서).
+    await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ")
+    await conn.execute("UPDATE ops_query_log SET resolved_at = created_at WHERE status = 'resolved' AND resolved_at IS NULL")
 
 
 async def _cleanup_stale_generating_messages(conn) -> None:
