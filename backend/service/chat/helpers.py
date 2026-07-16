@@ -72,10 +72,13 @@ async def create_query_log(
     had_context: bool = True,
 ) -> int:
     is_real_answer = answer and answer != LLM_UNAVAILABLE_MSG
-    # in이 아니라 startswith — 문서 인용 등으로 답변 중간에 우연히 같은 문구가 섞인
-    # 정상 답변까지 지식공백으로 오분류하는 걸 막는다. 프롬프트가 지시하는 대로라면
-    # LLM이 모른다고 답할 때는 이 문구로 답변을 "시작"하게 되어 있다.
-    llm_says_no_knowledge = bool(answer) and answer.strip().startswith(NO_KNOWLEDGE_MARKER)
+    # LLM이 마커 문구로 "시작"하는 답변만 준다는 가정(예전 startswith 체크)은 실제로는
+    # 안 지켜짐 — 프롬프트의 [형식] 규칙(마크다운/근거 표시 등)이 이 케이스에도 그대로
+    # 적용돼, "DS14에 대한 정의가 없습니다 ... 정리 ... 관련 지식을 찾지 못했습니다"처럼
+    # 마커가 답변 뒤쪽 문단에 섞여 나와 지식공백으로 분류되지 않는 사례가 실사용에서
+    # 확인됨. 이 마커 문구는 프롬프트상 모른다고 답할 때만 쓰도록 지정된 전용 문구라
+    # 정상 답변에 우연히 섞일 가능성이 낮으므로 in으로 완화.
+    llm_says_no_knowledge = bool(answer) and NO_KNOWLEDGE_MARKER in answer
     if not had_context or llm_says_no_knowledge:
         # had_context=False: 임계값을 넘는 문서가 아예 없었음
         # llm_says_no_knowledge: 문서는 임계값을 넘어 컨텍스트에 포함됐지만, 실제로는

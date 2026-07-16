@@ -225,8 +225,13 @@ body {
 
 /* ── Orange ── */
 [data-theme="light"] .bg-orange-500\/10  { background-color: rgb(255 237 213 / 0.5) !important; }
+[data-theme="light"] .bg-orange-900\/40  { background-color: rgb(255 237 213 / 0.6) !important; }
 [data-theme="light"] .text-orange-300     { color: rgb(234 88 12) !important; }
+[data-theme="light"] .text-orange-400     { color: rgb(234 88 12) !important; }
+[data-theme="light"] .text-orange-500     { color: rgb(194 65 12) !important; }
 [data-theme="light"] .border-orange-500  { border-color: rgb(249 115 22) !important; }
+[data-theme="light"] .border-orange-500\/60 { border-color: rgb(249 115 22 / 0.6) !important; }
+[data-theme="light"] .ring-orange-500\/30 { --tw-ring-color: rgb(249 115 22 / 0.3) !important; }
 
 /* ── Blue ── */
 [data-theme="light"] .bg-blue-500\/10   { background-color: rgb(219 234 254 / 0.5) !important; }
