@@ -1669,7 +1669,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
         <Button variant="primary" size="sm"
           loading={createMutation.isPending}
           onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending || form.container_names.length === 0 || !form.content.trim() || !form.category || categoryNames.length === 0}>
+          disabled={createMutation.isPending || !form.content.trim() || !form.category || categoryNames.length === 0}>
           추가
         </Button>
       </div>
