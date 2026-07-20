@@ -1,6 +1,7 @@
 """웹 크롤러 + Confluence REST API 어댑터 — URL → ParsedDocument 변환."""
 import logging
 import re
+import socket
 from urllib.parse import urlparse, parse_qs, urljoin
 
 import httpx
@@ -21,6 +22,48 @@ TREE_DEFAULT_DEPTH = 3
 TREE_MAX_DEPTH = 10
 TREE_DEFAULT_MAX_PAGES = 100
 TREE_HARD_MAX_PAGES = 500
+
+
+# ── 네트워크 예외 → 사용자 메시지 변환 ─────────────────────────────────────────
+
+def _translate_httpx_error(e: Exception, service: str = "Confluence") -> ValueError:
+    """httpx 예외의 실제 원인을 구분해 사용자에게 보여줄 한국어 메시지로 변환.
+
+    502로 raw exception str(예: "[Errno -3] Temporary failure in name resolution")이
+    그대로 노출되던 문제 — 인증 만료/DNS 실패/타임아웃을 구분해 원인을 명확히 알려준다.
+    """
+    if isinstance(e, httpx.HTTPStatusError):
+        status = e.response.status_code
+        content_type = e.response.headers.get("content-type", "")
+        if status in (401, 403):
+            return ValueError(
+                f"{service} 인증 실패 (HTTP {status}): Personal Access Token이 만료되었거나 "
+                "권한이 없습니다. 토큰을 새로 발급받아 다시 등록해주세요."
+            )
+        if "text/html" in content_type:
+            # Confluence는 PAT 만료/무효 시 401/403 대신 로그인 페이지(HTML)를 404 등으로 반환하는 경우가 많음
+            return ValueError(
+                f"{service} 인증 실패로 추정됩니다 (HTTP {status}): API 요청이 JSON 대신 로그인 페이지로 "
+                "리다이렉트되었습니다. Personal Access Token이 만료되었거나 무효할 수 있습니다. "
+                "토큰을 새로 발급받아 다시 등록해주세요."
+            )
+        body = (e.response.text or "").strip()[:200]
+        return ValueError(f"{service} 서버 오류 (HTTP {status})" + (f": {body}" if body else ""))
+
+    cause = e.__cause__ or e.__context__
+    if isinstance(cause, socket.gaierror):
+        return ValueError(
+            f"{service} 서버 주소를 찾을 수 없습니다 (DNS 조회 실패: {cause}). "
+            "URL이 올바른지, 사내망/VPN 연결 상태를 확인해주세요."
+        )
+    if isinstance(e, httpx.ConnectError):
+        return ValueError(f"{service} 서버에 연결할 수 없습니다: {e}")
+    if isinstance(e, httpx.TimeoutException):
+        return ValueError(
+            f"{service} 서버 응답이 시간 초과되었습니다 ({FETCH_TIMEOUT:.0f}초). "
+            "네트워크 상태를 확인 후 다시 시도해주세요."
+        )
+    return ValueError(f"{service} 요청 실패: {e}")
 
 
 # ── 공개 진입점 ───────────────────────────────────────────────────────────────
@@ -46,8 +89,11 @@ async def _fetch_web(url: str) -> ParsedDocument:
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT) as client:
         resp = client.build_request("GET", url, headers={"User-Agent": "SMAgentLab/1.0"})
-        r = await client.send(resp)
-        r.raise_for_status()
+        try:
+            r = await client.send(resp)
+            r.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            raise _translate_httpx_error(e, service="웹") from e
         html = r.text
 
     soup = BeautifulSoup(html, "lxml")
@@ -95,28 +141,31 @@ async def _fetch_confluence(url: str, token: str) -> ParsedDocument:
         "Accept": "application/json",
     }
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
-        if page_id:
-            api_url = f"{base_url}/rest/api/content/{page_id}?expand=body.storage,title,space"
-            r = await client.get(api_url, headers=headers)
-            r.raise_for_status()
-            data = r.json()
-            pages = [data]
-        elif space_key and title_hint:
-            # 공간 + 제목으로 검색
-            api_url = f"{base_url}/rest/api/content"
-            r = await client.get(api_url, headers=headers, params={
-                "spaceKey": space_key,
-                "title": title_hint,
-                "expand": "body.storage,title",
-                "limit": 1,
-            })
-            r.raise_for_status()
-            pages = r.json().get("results", [])
-            if not pages:
-                raise ValueError(f"Confluence 페이지를 찾을 수 없습니다: space={space_key}, title={title_hint}")
-        else:
-            raise ValueError(f"지원하지 않는 Confluence URL 형식: {url}")
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
+            if page_id:
+                api_url = f"{base_url}/rest/api/content/{page_id}?expand=body.storage,title,space"
+                r = await client.get(api_url, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                pages = [data]
+            elif space_key and title_hint:
+                # 공간 + 제목으로 검색
+                api_url = f"{base_url}/rest/api/content"
+                r = await client.get(api_url, headers=headers, params={
+                    "spaceKey": space_key,
+                    "title": title_hint,
+                    "expand": "body.storage,title",
+                    "limit": 1,
+                })
+                r.raise_for_status()
+                pages = r.json().get("results", [])
+                if not pages:
+                    raise ValueError(f"Confluence 페이지를 찾을 수 없습니다: space={space_key}, title={title_hint}")
+            else:
+                raise ValueError(f"지원하지 않는 Confluence URL 형식: {url}")
+    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+        raise _translate_httpx_error(e) from e
 
     page = pages[0]
     page_title = page.get("title", "Confluence Page")
@@ -299,68 +348,71 @@ async def fetch_confluence_tree(
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
-        # 1) root page_id 확정
-        if not page_id:
-            r = await client.get(
-                f"{base_url}/rest/api/content",
-                headers=headers,
-                params={"spaceKey": space_key, "title": title_hint, "limit": 1},
-            )
-            r.raise_for_status()
-            results = r.json().get("results", [])
-            if not results:
-                raise ValueError(f"Confluence 페이지를 찾을 수 없습니다: space={space_key}, title={title_hint}")
-            root_data = results[0]
-            page_id = root_data["id"]
-        else:
-            r = await client.get(
-                f"{base_url}/rest/api/content/{page_id}",
-                headers=headers,
-                params={"expand": "title"},
-            )
-            r.raise_for_status()
-            root_data = r.json()
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
+            # 1) root page_id 확정
+            if not page_id:
+                r = await client.get(
+                    f"{base_url}/rest/api/content",
+                    headers=headers,
+                    params={"spaceKey": space_key, "title": title_hint, "limit": 1},
+                )
+                r.raise_for_status()
+                results = r.json().get("results", [])
+                if not results:
+                    raise ValueError(f"Confluence 페이지를 찾을 수 없습니다: space={space_key}, title={title_hint}")
+                root_data = results[0]
+                page_id = root_data["id"]
+            else:
+                r = await client.get(
+                    f"{base_url}/rest/api/content/{page_id}",
+                    headers=headers,
+                    params={"expand": "title"},
+                )
+                r.raise_for_status()
+                root_data = r.json()
 
-        root_title = root_data.get("title", f"Page {page_id}")
-        root_url = _build_page_url(base_url, page_id, root_data)
+            root_title = root_data.get("title", f"Page {page_id}")
+            root_url = _build_page_url(base_url, page_id, root_data)
 
-        # 2) BFS 자손 탐색
-        tree: list[dict] = [
-            {"page_id": page_id, "title": root_title, "url": root_url, "depth": 0, "parent_id": None},
-        ]
-        seen: set[str] = {page_id}
-        truncated = False
-        max_depth_reached = False
+            # 2) BFS 자손 탐색
+            tree: list[dict] = [
+                {"page_id": page_id, "title": root_title, "url": root_url, "depth": 0, "parent_id": None},
+            ]
+            seen: set[str] = {page_id}
+            truncated = False
+            max_depth_reached = False
 
-        # (page_id, depth) 큐
-        queue: list[tuple[str, int]] = [(page_id, 0)]
-        while queue:
-            parent_id, depth = queue.pop(0)
-            if depth >= max_depth:
-                # 더 깊이 탐색 안 함 — 다만 자손이 있는지는 알 수 없으니 일단 표시
-                continue
-            children = await _fetch_confluence_children(client, base_url, headers, parent_id)
-            for child in children:
-                cid = str(child["id"])
-                if cid in seen:
+            # (page_id, depth) 큐
+            queue: list[tuple[str, int]] = [(page_id, 0)]
+            while queue:
+                parent_id, depth = queue.pop(0)
+                if depth >= max_depth:
+                    # 더 깊이 탐색 안 함 — 다만 자손이 있는지는 알 수 없으니 일단 표시
                     continue
-                seen.add(cid)
-                if len(tree) >= max_pages:
-                    truncated = True
+                children = await _fetch_confluence_children(client, base_url, headers, parent_id)
+                for child in children:
+                    cid = str(child["id"])
+                    if cid in seen:
+                        continue
+                    seen.add(cid)
+                    if len(tree) >= max_pages:
+                        truncated = True
+                        break
+                    tree.append({
+                        "page_id": cid,
+                        "title": child.get("title", f"Page {cid}"),
+                        "url": _build_page_url(base_url, cid, child),
+                        "depth": depth + 1,
+                        "parent_id": parent_id,
+                    })
+                    queue.append((cid, depth + 1))
+                if truncated:
                     break
-                tree.append({
-                    "page_id": cid,
-                    "title": child.get("title", f"Page {cid}"),
-                    "url": _build_page_url(base_url, cid, child),
-                    "depth": depth + 1,
-                    "parent_id": parent_id,
-                })
-                queue.append((cid, depth + 1))
-            if truncated:
-                break
-            if depth + 1 >= max_depth and children:
-                max_depth_reached = True
+                if depth + 1 >= max_depth and children:
+                    max_depth_reached = True
+    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+        raise _translate_httpx_error(e) from e
 
     logger.info(
         "Confluence 트리 수집: root=%s, total=%d, depth_limit=%d, truncated=%s",
@@ -421,14 +473,17 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     base = base_url.rstrip("/")
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
-        r = await client.get(
-            f"{base}/rest/api/content/{page_id}",
-            headers=headers,
-            params={"expand": "body.storage,title,space,_links"},
-        )
-        r.raise_for_status()
-        page = r.json()
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
+            r = await client.get(
+                f"{base}/rest/api/content/{page_id}",
+                headers=headers,
+                params={"expand": "body.storage,title,space,_links"},
+            )
+            r.raise_for_status()
+            page = r.json()
+    except (httpx.HTTPStatusError, httpx.RequestError) as e:
+        raise _translate_httpx_error(e) from e
 
     page_title = page.get("title", f"Page {page_id}")
     storage_html = page.get("body", {}).get("storage", {}).get("value", "")
