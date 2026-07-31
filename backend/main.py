@@ -24,6 +24,8 @@ from service.mcp_tool.router import router as mcp_tool_router
 from service.prompt.router import router as prompt_router
 from service.teams.router import router as teams_router
 from agents.text2sql.admin.router import router as text2sql_router
+from service.email_voc.router import router as email_voc_router
+from service.email_voc.scheduler import start_scheduler, stop_scheduler
 
 from shared import cache as sem_cache
 from agents.base import AgentRegistry
@@ -40,6 +42,7 @@ _ROUTERS = [
     prompt_router,
     teams_router,
     text2sql_router,
+    email_voc_router,
 ]
 
 
@@ -977,6 +980,143 @@ async def _migrate_query_log_resolution(conn) -> None:
     await conn.execute("UPDATE ops_query_log SET resolved_at = created_at WHERE status = 'resolved' AND resolved_at IS NULL")
 
 
+async def _migrate_email_voc_tables(conn) -> None:
+    """VOC 이메일 분석 채널 — 1단계 스키마 (docs/email-analysis-channel-plan.md §11 Track A #1).
+
+    ops_voc_routing: 파트별 담당 메일함 ↔ Teams 웹훅 ↔ 온콜 연락처 매핑(§10).
+    ops_email_analysis: 이메일 건별 분석 결과 저장. source_message_id UNIQUE로
+    폴링 재조회 윈도우(§9)가 겹쳐도 같은 메일을 중복 분석하지 않도록 방지한다.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_voc_routing (
+            id                    SERIAL PRIMARY KEY,
+            namespace_id          INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            part                  VARCHAR(100) NOT NULL,
+            mailbox_upn           VARCHAR(255) NOT NULL,
+            teams_webhook_url     TEXT,
+            oncall_contact_name   VARCHAR(100),
+            oncall_contact_phone  VARCHAR(50),
+            is_active             BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (namespace_id, mailbox_upn)
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_voc_routing_ns ON ops_voc_routing (namespace_id)")
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_email_analysis (
+            id                  SERIAL PRIMARY KEY,
+            namespace_id        INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            routing_id          INT REFERENCES ops_voc_routing(id) ON DELETE SET NULL,
+            source_message_id   VARCHAR(300) NOT NULL,
+            mailbox_upn         VARCHAR(255) NOT NULL,
+            subject             TEXT NOT NULL DEFAULT '',
+            sender              VARCHAR(255) NOT NULL DEFAULT '',
+            received_at         TIMESTAMPTZ,
+            body                TEXT NOT NULL DEFAULT '',
+            category            VARCHAR(20),
+            severity            VARCHAR(10),
+            mismatch_flagged    BOOLEAN NOT NULL DEFAULT FALSE,
+            knowledge_ref_ids   INT[],
+            resolution_draft    TEXT,
+            status              VARCHAR(20) NOT NULL DEFAULT 'analyzed',
+            teams_sent_at       TIMESTAMPTZ,
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (namespace_id, source_message_id)
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_email_analysis_status ON ops_email_analysis (status)")
+    # 30일 보관 정책(retention.py) 삭제 쿼리가 created_at 단독으로 필터링하는데,
+    # 기존 인덱스는 전부 namespace_id를 앞세운 복합/표현식 인덱스라 이 삭제문엔
+    # 못 쓰인다 — 정리 배치가 매일 풀스캔하지 않도록 별도 인덱스를 둔다.
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_email_analysis_created_at ON ops_email_analysis (created_at)")
+    # Teams 발송 실패 사유 기록 — 이력 화면(§12)에서 성공/실패와 원인을 함께 보여주기 위함
+    await conn.execute("ALTER TABLE ops_email_analysis ADD COLUMN IF NOT EXISTS notify_error TEXT")
+    # LLM 판단 근거 — 이력 화면에서 "왜 이렇게 분류했는지" 함께 보여주기 위함
+    await conn.execute("ALTER TABLE ops_email_analysis ADD COLUMN IF NOT EXISTS reasoning TEXT")
+    # 폴링 사이클(스케줄러가 도는 매 회차) 단위 성공/실패 이력 — 개별 이메일 이력과
+    # 별개로, "사이클이 언제 돌았고 몇 개 메일함이 실패했는지"를 관리자 화면에서
+    # 보여주기 위함(개별 이메일 단위 ops_email_analysis만으로는 이 그림이 안 보임).
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_email_poll_cycle (
+            id                      SERIAL PRIMARY KEY,
+            started_at              TIMESTAMPTZ NOT NULL,
+            finished_at             TIMESTAMPTZ,
+            namespaces_processed    INT NOT NULL DEFAULT 0,
+            mailboxes_ok            INT NOT NULL DEFAULT 0,
+            mailboxes_failed        INT NOT NULL DEFAULT 0,
+            total_fetched           INT NOT NULL DEFAULT 0,
+            total_analyzed          INT NOT NULL DEFAULT 0,
+            total_notified          INT NOT NULL DEFAULT 0,
+            total_notify_failed     INT NOT NULL DEFAULT 0,
+            total_skipped_duplicate INT NOT NULL DEFAULT 0,
+            error_summary           TEXT,
+            created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_email_poll_cycle_started ON ops_email_poll_cycle (started_at DESC)")
+
+    # pipeline.list_history()의 ORDER BY COALESCE(received_at, created_at) DESC와
+    # 컬럼이 정확히 일치해야 인덱스를 탄다 — (namespace_id, received_at) 단순 인덱스로는
+    # 이 표현식 정렬에 못 쓰여 전체 정렬이 발생한다. 옛 인덱스는 대체하며 제거.
+    await conn.execute("DROP INDEX IF EXISTS idx_email_analysis_ns")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_analysis_ns_sort "
+        "ON ops_email_analysis (namespace_id, (COALESCE(received_at, created_at)) DESC)"
+    )
+
+    # ── 폴링 정책 설정값 시드 (§9, ops_system_config 재사용 — 재시작에도 유지돼야 하므로 in-memory 스레숄드 패턴 대신 DB 영속 방식 채택) ──
+    await conn.execute("""
+        INSERT INTO ops_system_config (key, value) VALUES
+        ('email_collection_enabled', 'false'),
+        ('email_polling_interval_minutes', '5'),
+        ('email_lookback_days', '7')
+        ON CONFLICT (key) DO NOTHING
+    """)
+    # email_graph_credentials 키는 값이 있을 때만 존재 — 미설정 상태를 "행 없음"으로 표현
+    # (encrypt_dict로 암호화된 JSON 문자열을 그대로 저장, §7 Q10 승인 후 관리자가 직접 입력)
+
+    # ── 2단계 분석 프롬프트 — "시스템 설정 > 프롬프트 관리"에서 동적 수정 가능 ──
+    await conn.execute(
+        """
+        INSERT INTO ops_prompt (func_key, func_name, content, description, agent_type) VALUES
+        ('email_voc_analysis_system', 'VOC 이메일 분석 시스템', $1,
+         'VOC 이메일 건별 분류/심각도/오배치 판정의 시스템 프롬프트', 'knowledge_rag'),
+        ('email_voc_analysis_prompt', 'VOC 이메일 분석', $2,
+         'VOC 이메일 건별 분석 프롬프트. {subject}·{body}·{part}·{context} 플레이스홀더 필수', 'knowledge_rag')
+        ON CONFLICT (func_key) DO NOTHING
+        """,
+        """You are a VOC(Voice of Customer) triage expert for an IT operations team.
+Given an internal support email and related knowledge base excerpts, classify the issue.
+Always respond with valid JSON only.""",
+        """아래는 사내 VOC(문의) 이메일과, 이와 관련해 검색된 참고 지식입니다.
+
+[이메일 제목]
+{subject}
+
+[이메일 본문]
+{body}
+
+[수신 메일함 담당 파트]
+{part}
+
+[참고 지식]
+{context}
+
+다음을 판단해 JSON으로만 답하세요:
+1. category: "system_error"(시스템 오류) / "user_mistake"(사용자 실수) / "uncertain"(판단 보류) 중 하나
+2. severity: "low" / "medium" / "high" / "urgent" 중 하나 — 업무 영향도와 긴급성 기준
+3. mismatch_flagged: 이메일 내용이 위 "수신 메일함 담당 파트"의 업무 영역과 명백히 다르면 true, 아니면 false
+4. resolution_draft: category가 system_error일 때 참고 지식 기반 해결 방안 초안(2~3문장), 아니면 null
+5. reasoning: 판단 근거 요약 (1문장)
+
+응답 형식 (JSON 객체만 반환):
+{{"category": "...", "severity": "...", "mismatch_flagged": false, "resolution_draft": "...", "reasoning": "..."}}""",
+    )
+
+
 async def _cleanup_stale_generating_messages(conn) -> None:
     """프로세스가 막 기동했으니, 'generating' 상태로 남은 메시지는 전부 이전
     프로세스가 스트리밍 도중 죽으면서 남긴 고아 행이다(지금 막 시작했으므로 이
@@ -1002,6 +1142,7 @@ async def _run_migrations() -> None:
         await _migrate_knowledge_ingestion(conn)
         await _migrate_duplicate_review(conn)
         await _migrate_query_log_resolution(conn)
+        await _migrate_email_voc_tables(conn)
         await _cleanup_stale_generating_messages(conn)
 
 
@@ -1024,7 +1165,10 @@ async def lifespan(_app: FastAPI):
     level, msg = ("INFO", "연결 확인됨") if llm_ok else ("WARNING", "연결 불가 — LLM 기능 제한")
     logger.log(logging.getLevelName(level), "LLM(%s) %s", settings.llm_provider, msg)
 
+    start_scheduler()
+
     yield
+    await stop_scheduler()
     await close_mcp_http_client()
     await close_pool()
 

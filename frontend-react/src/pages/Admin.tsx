@@ -1,6 +1,6 @@
 import { useState, useEffect, Component, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, Wrench, GitMerge, Network, BookMarked, ListOrdered, Workflow, FileText } from 'lucide-react';
+import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, Wrench, GitMerge, Network, BookMarked, ListOrdered, Workflow, FileText, Mail } from 'lucide-react';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
@@ -11,6 +11,7 @@ import { LLMSettings } from '../components/admin/LLMSettings';
 import { UserManager } from '../components/admin/UserManager';
 import { McpToolManager } from '../components/admin/McpToolManager';
 import { CachePanel } from '../components/admin/CachePanel';
+import { VocEmailPanel } from '../components/admin/VocEmailPanel';
 import {
   SqlTargetDbTab,
   SqlSchemaTab,
@@ -53,7 +54,7 @@ type TabId =
   // text2sql
   | 'sql_db' | 'sql_schema' | 'sql_erd' | 'sql_synonyms' | 'sql_fewshots' | 'sql_pipeline' | 'sql_audit'
   // common
-  | 'cache' | 'stats' | 'llm' | 'users';
+  | 'cache' | 'stats' | 'llm' | 'users' | 'voc_email';
 
 interface Tab {
   id: TabId;
@@ -67,6 +68,7 @@ const TABS: Tab[] = [
   // knowledge_rag 전용 탭
   { id: 'namespaces',   label: '기준 정보 관리',    icon: <Layers className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
   { id: 'knowledge',    label: '지식 베이스',        icon: <BookOpen className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
+  { id: 'voc_email',    label: 'VOC 이메일',            icon: <Mail className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
   { id: 'glossary',     label: '용어집',              icon: <Database className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
   { id: 'fewshots',     label: 'Q&A',            icon: <Zap className="w-4 h-4" />,        agentScope: 'knowledge_rag' },
   { id: 'debug',        label: '파이프라인 디버그',    icon: <Search className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
@@ -161,6 +163,7 @@ export default function Admin() {
           {resolvedTab === 'sql_pipeline' && <SqlPipelineTab />}
           {resolvedTab === 'sql_audit'    && <SqlAuditLogTab />}
           {resolvedTab === 'cache'        && isAdmin && <CachePanel />}
+          {resolvedTab === 'voc_email'    && <VocEmailPanel />}
           {resolvedTab === 'stats'        && <StatsPanel />}
           {resolvedTab === 'llm'          && <LLMSettings />}
           {resolvedTab === 'users'        && isAdmin && <UserManager />}
