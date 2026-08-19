@@ -4,17 +4,19 @@
 분류/심각도/오배치 판정 프롬프트를 검증할 수 있게 한다. 같은 analyze_email()
 함수가 나중에 §5 Phase 1의 실제 이메일 수동 실행에도 그대로 재사용된다.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 
 from core.dependencies import get_current_user, check_namespace_ownership, get_current_admin
 from core.security import get_user_llm_credentials
-from service.email_voc import service, teams_notify, routing_service, pipeline, scheduler
+from service.email_voc import delegated_auth, service, teams_notify, routing_service, pipeline, scheduler
 from service.email_voc.schemas import (
     EmailAnalyzeRequest, EmailAnalysisOut, TeamsTestNotifyRequest,
     EmailCollectionSettingsOut, EmailCollectionSettingsUpdate,
     VocRoutingCreate, VocRoutingUpdate, VocRoutingOut,
     ManualCollectionRequest, ManualCollectionResult,
     GraphCredentialsStatus, GraphCredentialsUpdate,
+    DelegatedAuthConfig, DelegatedAuthStatus, DelegatedAuthStartResult,
     EmailAnalysisHistoryItem, PollCycleItem, SchedulerStatus,
 )
 
@@ -119,6 +121,44 @@ async def get_graph_credentials(admin: dict = Depends(get_current_admin)):
 @router.put("/graph-credentials", response_model=GraphCredentialsStatus)
 async def update_graph_credentials(body: GraphCredentialsUpdate, admin: dict = Depends(get_current_admin)):
     return await routing_service.set_graph_credentials(body.tenant_id, body.client_id, body.client_secret)
+
+
+# ─── Delegated 권한 로그인 (Application 권한/Track B 승인 전 임시 경로) ──────────
+
+@router.get("/delegated-auth/status", response_model=DelegatedAuthStatus)
+async def get_delegated_auth_status(admin: dict = Depends(get_current_admin)):
+    return await delegated_auth.get_status()
+
+
+@router.put("/delegated-auth/config", response_model=DelegatedAuthStatus)
+async def update_delegated_auth_config(body: DelegatedAuthConfig, admin: dict = Depends(get_current_admin)):
+    return await delegated_auth.save_config(body.tenant_id, body.client_id, body.redirect_uri, body.client_secret)
+
+
+@router.post("/delegated-auth/start", response_model=DelegatedAuthStartResult)
+async def start_delegated_auth(admin: dict = Depends(get_current_admin)):
+    try:
+        return await delegated_auth.start_login()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/delegated-auth/callback", response_class=HTMLResponse)
+async def delegated_auth_callback(request: Request):
+    """Microsoft가 로그인 완료 후 브라우저를 리다이렉트시키는 지점.
+
+    브라우저가 직접 접속하는 URL이라 JWT 인증이 없다 — Microsoft가 우리 Bearer
+    토큰을 알 리 없으므로 여기엔 애초에 못 건다. CSRF/재생공격 방어는 MSAL이
+    state 파라미터와 PKCE code_verifier를 내부적으로 검증하는 것으로 충분하다
+    (delegated_auth._auth_flow에 저장된 값과 대조 — 공격자는 이 값을 알 수 없다).
+    """
+    await delegated_auth.complete_login(dict(request.query_params))
+    return (
+        "<html><body style='font-family:sans-serif;padding:2rem'>"
+        "<h3>로그인 처리 완료</h3>"
+        "<p>이 창은 닫으셔도 됩니다. 관리자 화면으로 돌아가면 상태가 자동으로 갱신됩니다.</p>"
+        "</body></html>"
+    )
 
 
 # ─── 1단계 수동 1회성 실행 (§9, §5 Phase 1) ──────────────────────────────────

@@ -1052,11 +1052,14 @@ async def _migrate_email_voc_tables(conn) -> None:
             total_notified          INT NOT NULL DEFAULT 0,
             total_notify_failed     INT NOT NULL DEFAULT 0,
             total_skipped_duplicate INT NOT NULL DEFAULT 0,
+            total_skipped_low_relevance INT NOT NULL DEFAULT 0,
             error_summary           TEXT,
             created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_email_poll_cycle_started ON ops_email_poll_cycle (started_at DESC)")
+    # 관련지식 유사도 임계치 미달 스킵 건수 — 기존 설치본 대응 (v3.9)
+    await conn.execute("ALTER TABLE ops_email_poll_cycle ADD COLUMN IF NOT EXISTS total_skipped_low_relevance INT NOT NULL DEFAULT 0")
 
     # pipeline.list_history()의 ORDER BY COALESCE(received_at, created_at) DESC와
     # 컬럼이 정확히 일치해야 인덱스를 탄다 — (namespace_id, received_at) 단순 인덱스로는
@@ -1072,7 +1075,8 @@ async def _migrate_email_voc_tables(conn) -> None:
         INSERT INTO ops_system_config (key, value) VALUES
         ('email_collection_enabled', 'false'),
         ('email_polling_interval_minutes', '5'),
-        ('email_lookback_days', '7')
+        ('email_lookback_days', '7'),
+        ('email_relevance_min_score', '0.35')
         ON CONFLICT (key) DO NOTHING
     """)
     # email_graph_credentials 키는 값이 있을 때만 존재 — 미설정 상태를 "행 없음"으로 표현

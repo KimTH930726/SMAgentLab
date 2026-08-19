@@ -102,6 +102,13 @@ Redis 데이터        : 256MB   (캐시 maxmemory 제한)
 
 > **운영 중 인터넷 접속 0건.** 임베딩 모델은 이미지에 동봉, 외부 의존성 전부 사내 자원만 사용.
 
+> ⚠️ **(예정) VOC 이메일 분석 채널 Track B 승인 시 추가될 아웃바운드** — 현재는 Graph API 자격증명이 미설정 상태라 해당 없음. M365 보안성 검토·API 제공이 승인되어 실 연동을 시작하면 아래 2개 목적지로의 HTTPS(443) 아웃바운드가 신규로 필요해진다(더 이상 "인터넷 접속 0건"이 아니게 됨 — 보안팀 검토 시 사전 공유 필요):
+> | 대상 | 용도 |
+> |---|---|
+> | `login.microsoftonline.com`, `graph.microsoft.com` | Microsoft Graph API (msal client_credentials 토큰 발급 + 메일 조회) |
+> | Teams Workflows 웹훅 URL (`*.logic.azure.com` 등, 파트별 채널마다 다름) | 분석 결과 Teams 알림 발송 |
+> 상세 배경은 `docs/email-analysis-channel-plan.md`, 조직 승인 진행 상황은 별도 WBS 참조.
+
 ---
 
 ## 5. 스토리지 — Docker Volume

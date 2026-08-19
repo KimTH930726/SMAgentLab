@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.39)
+# Ops-Navigator 시스템 아키텍처 (v2.43)
 
 ## 개요
 
@@ -6,6 +6,10 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.43: VOC 이메일 Delegated 로그인 실사용 성공 + 실사용 중 발견한 버그 2건 수정. ① **Confidential Client 지원**: 등록된 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록된 경우 PKCE만으로 토큰 교환이 거부되는(AADSTS7000218) 사례가 실측 확인돼, `delegated_auth.py`의 `_build_app()`이 `client_secret` 설정 여부에 따라 `PublicClientApplication`/`ConfidentialClientApplication`을 분기하도록 변경(시크릿 값은 Fernet 암호화로 DB 저장, API 응답엔 `client_secret_configured` bool만 노출). ② **키워드 검색 tsquery 크래시 수정(공용 검색 엔진 영향)**: `agents/knowledge_rag/knowledge/retrieval.py`의 `search_knowledge()`가 lexeme을 `string_agg`로 이어붙여 `to_tsquery`에 그대로 넘기던 것을, URL 등에서 추출된 lexeme에 짝 안 맞는 괄호 등 tsquery 특수문자가 섞이면 `syntax error in tsquery`로 죽던 버그(VOC 실메일 fetch 중 실측 재현) — `quote_literal()`로 각 lexeme을 감싸 해결. 채팅 KnowledgeRAG 검색도 동일 함수를 쓰므로 함께 수정됨. ③ **폴링 성능 최적화**: `pipeline.run_manual_collection()`이 재조회 윈도우(lookback_days) 안의 메일을 매 사이클 다시 fetch하면서, 이미 처리된 메일까지 관련지식 검색+LLM 분석을 먼저 돌리고서야 DB `ON CONFLICT`로 중복임을 알던 구조를 — fetch 직후 `(namespace_id, source_message_id)` 배치 조회로 먼저 걸러내도록 변경. 실측: 144건 재조회 시 190초(전량 재분석) → 1.3초(전량 사전 스킵)로 개선. 상세 경과는 `docs/tech/voc-email-handoff.md` 참조(git 비추적 — 시크릿 값 포함).
+- v2.42: VOC 이메일 Delegated 로그인 방식 교체 — Device Code Flow(코드를 사람이 손으로 옮겨 입력) 대신 **Authorization Code Flow(PKCE, Public Client)**로 변경. 사유: Device Code Flow는 "Device Code Phishing"(공격자가 자기 코드를 발급받아 피해자에게 입력시켜 토큰을 가로채는 공격) 리스크가 있어, 필요 설정("Allow public client flows")을 보안팀이 비권장 사유로 거부. Authorization Code Flow는 사람이 코드를 옮겨 입력하는 과정 자체가 없어 이 리스크가 없고, Azure AD 쪽엔 정식 지원 필드인 리다이렉트 URL만 등록하면 된다. `service/email_voc/delegated_auth.py`의 `start_login()`을 재작성하고 `complete_login()`을 신규 추가, `router.py`에 콜백 엔드포인트(`GET /delegated-auth/callback`, 인증 불필요 — MSAL의 PKCE/state 검증으로 CSRF 방어) 추가. `ops_system_config.email_graph_delegated`에 `redirect_uri` 필드 추가(프론트가 `window.location.origin` 기준으로 자동 계산). 로컬 CLI 스크립트(`email_voc_local_test.py`)는 터미널 환경 특성상 Device Code Flow를 그대로 유지(관리자 화면과는 별개 경로).
+- v2.41: VOC 이메일 채널 2건 추가 — ① **관련지식 사전 필터**: `service/email_voc/service.py`의 `analyze_email()`을 `check_relevance()`(임베딩+검색)와 LLM 분석 단계로 분리, 등록된 지식과의 최고 유사도가 관리자 설정 임계치(`email_relevance_min_score`, 기본 0.35) 미만이면 LLM 호출·Teams 발송 없이 `status='skipped_relevance'`로만 기록해 무관한 메일(스팸·사내공지 등)의 비용·알림 노이즈를 억제. ② **Delegated Permission 로그인**(`service/email_voc/delegated_auth.py`, Device Code Flow): Application 권한(Track B) 승인 전에도 관리자가 본인 계정으로 1회 로그인하면 이후 기존 폴링 토글/수동실행이 그 세션으로 자동 대체 동작 — `pipeline.run_manual_collection()`에 `access_token`/`skip_credential_resolution` 파라미터 추가로 연결(운영 경로인 Application 권한 흐름은 변경 없음). 로컬 검증용 `backend/scripts/email_voc_local_test.py` 추가.
+- v2.40: VOC 이메일 분석 채널(Track A) 신규 구현 — `service/email_voc/` 모듈(수집·RAG 분석·라우팅·Teams 알림·백그라운드 폴링 스케줄러·30일 보관정책). 파트별 공용 메일함을 Microsoft Graph API(msal client_credentials)로 수집해 기존 하이브리드 검색·LLM 파이프라인으로 분석 후 담당 파트 Teams 채널에 자동 알림. Graph API 실 연동(Track B)은 M365 보안성 검토·API 제공 등 조직 승인 대기 중 — 승인 전까지는 텍스트 직접 입력 테스트/수동 자격증명 미설정 상태로 동작. 상세 설계는 `docs/email-analysis-channel-plan.md` 참조.
 - v2.39: 로그인 브루트포스 방어 — Redis 기반 rate limiting(사용자명+IP 조합, 5분 내 5회 실패 시 5분 잠금, `shared/rate_limit.py`, Redis 미연결 시 제한 없이 통과) + 아이디 존재 여부와 비밀번호 오류를 구분하지 않는 통합 에러 메시지로 계정 열거(enumeration) 오라클 제거.
 - v2.38: 백엔드 전수 감사 2차(auth/admin/teams/text2sql) — 관리자 파트로 셀프 회원가입 가능하던 구멍, 파트 삭제 시 소유 네임스페이스가 조용히 "공통 파트"(전원 허용)로 전환되던 문제, `PUT /api/llm/config` 관리자 권한 누락, 네임스페이스 rename/delete 시 시맨틱 캐시 미무효화, 캐시 Redis glob 인젝션, text2sql SQL 안전성 검사 우회(pg_read_file/dblink 등), text2sql 크로스테넌트 쓰기 등 Critical/High 다수 수정. 1차 감사 잔여 Medium/Low 10건(no_knowledge 판정 보강, 대화요약 tie-breaker, 대량등록 배치 내 상호중복검사, fewshot 상태 응답 버그, TOCTOU 완화 등)도 함께 정리. 지식조회 화면에 가중치 정렬(높은순/낮은순) 추가.
 - v2.37: 백엔드 전수 감사 1차(fewshot/chat/knowledge_rag/mcp_tool) — 나빠요 피드백 후 지식 등록 시 오답 원인 지식의 가중치가 오히려 올라가던 버그를 계기로 같은 클래스(플래그 오버로딩, stale 데이터, 소유권 검사 누락)의 버그를 다른 모듈에서도 탐색. MCP 도구 승인 카드가 미입력 필수 파라미터를 example 힌트값으로 몰래 채워 승인을 통과시키던 것, 시맨틱 캐시가 agent_type 구분 없이 knowledge_rag/mcp_tool 답변을 서로 새게 하던 것 등 Critical 2건 포함.
@@ -131,7 +135,18 @@ backend/
 │   ├── admin/           #   네임스페이스·통계·LLM 설정
 │   ├── mcp_tool/        #   MCP 도구 CRUD + 감사 로그
 │   ├── prompt/          #   프롬프트 관리 (get_prompt: DB 우선, fallback)
-│   └── llm/             #   LLM Provider 추상화 (ollama / inhouse)
+│   ├── llm/             #   LLM Provider 추상화 (ollama / inhouse)
+│   └── email_voc/       #   VOC 이메일 분석 채널 (v2.40 신규)
+│       ├── graph_client.py    #   Microsoft Graph API 클라이언트 (msal 토큰 발급, 메일 조회, 페이지네이션/재시도)
+│       ├── service.py         #   check_relevance()(관련지식 사전 필터, v2.41) + analyze_email() — 기존 RAG 파이프라인 재사용 분류/심각도/오배치 판정
+│       ├── pipeline.py        #   수집→관련지식필터→분석→중복제거→알림 오케스트레이션, 이력 조회
+│       ├── routing_service.py #   파트별 메일함 라우팅 CRUD, 폴링 설정(관련지식 임계치 포함), Graph 자격증명(Fernet 암호화) CRUD
+│       ├── delegated_auth.py  #   Delegated Permission 로그인 상태 관리 (Authorization Code Flow/PKCE, v2.41 신규·v2.42 인증방식 교체)
+│       ├── teams_notify.py    #   Teams Workflows 웹훅 발송
+│       ├── scheduler.py       #   백그라운드 폴링 루프 (asyncio.create_task, lifespan 등록)
+│       ├── retention.py       #   30일 고정 보관정책 자동 정리
+│       ├── schemas.py         #   Pydantic 스키마
+│       └── router.py          #   /api/email-voc/* 엔드포인트
 ├── core/
 │   ├── config.py        # pydantic-settings, JWT·Fernet 키
 │   ├── database.py      # asyncpg 풀 + resolve_namespace_id() 헬퍼
@@ -221,7 +236,12 @@ ops_query_log         -- 질의 로그 (status: pending/resolved/unresolved, age
 ops_mcp_tool          -- MCP 도구 정의 (hub_base_url, tool_path, param_schema JSONB, agent_type)
 ops_mcp_tool_log      -- MCP 도구 감사 로그
 ops_prompt            -- 프롬프트 관리 (agent_type별 에이전트 스코핑, Admin 시스템설정 탭에서 편집)
-ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 영속화)
+ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 영속화, VOC 폴링 정책/Graph 자격증명도 여기 저장)
+
+-- VOC 이메일 분석 채널 전용 (v2.40 신규)
+ops_voc_routing       -- 파트별 담당 메일함 ↔ Teams 웹훅 ↔ 온콜 연락처 매핑
+ops_email_analysis    -- 이메일 건별 분석 결과 (source_message_id UNIQUE로 중복 수집 방지, 30일 보관)
+ops_email_poll_cycle  -- 폴링 사이클(스케줄러 실행 회차)별 성공/실패 이력 (30일 보관)
 
 -- KnowledgeRAG 전용 (rag_* prefix, v2.8에서 ops_*→rag_* 변경)
 rag_knowledge         -- 지식 베이스 (HNSW + GIN FTS, base_weight, source_file/chunk_idx 추적)
@@ -430,6 +450,28 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `install_url_handler.py` | `opsnav://` 커스텀 URL 스킴 OS 등록 (Windows 레지스트리) |
 | `opsnav_helper_entry.py` | PyInstaller exe 진입점 (install/run/uninstall 모드 분기) |
 | `dist/OpsNavHelper.exe` | PyInstaller 빌드 산출물 (docker-compose가 `/app/helper_assets`로 마운트) |
+
+### VOC 이메일 수집 (`/api/email-voc`) — v2.40 신규
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `POST` | `/api/email-voc/test-analyze` | 텍스트 직접 입력으로 분류/심각도/오배치 판정 프롬프트 테스트 (Graph API 연동 전에도 검증 가능) |
+| `POST` | `/api/email-voc/test-notify` | 임의 Teams 웹훅 URL로 실제 알림 발송 테스트 (Admin) |
+| `GET/PUT` | `/api/email-voc/settings` | 폴링 정책(활성화 여부/주기/조회기간) 조회·변경 (PUT은 Admin) |
+| `GET/POST/PUT/DELETE` | `/api/email-voc/routing[/{id}]` | 파트별 메일함 라우팅 CRUD — PUT/DELETE는 `namespace` 쿼리로 소유 네임스페이스까지 검증(크로스 네임스페이스 변조 방지) |
+| `GET/PUT` | `/api/email-voc/graph-credentials` | Microsoft Graph API 자격증명(Application 권한) 상태 조회·등록 (Admin, Fernet 암호화 저장, client_secret은 응답에 미포함) |
+| `GET/PUT/POST` | `/api/email-voc/delegated-auth/{status,config,start}` | Delegated Permission(Authorization Code Flow, PKCE) 로그인 상태 조회·앱정보 저장·로그인 시작 (Admin, v2.41 신규·v2.42 인증방식 교체) — Application 권한 승인 전 임시 대체 경로 |
+| `GET` | `/api/email-voc/delegated-auth/callback` | Microsoft 로그인 완료 후 리다이렉트 콜백 (인증 불필요 — 브라우저가 직접 호출, MSAL의 PKCE/state 검증으로 CSRF 방어, v2.42 신규) |
+| `POST` | `/api/email-voc/collect/run` | 관리자가 기간(from~to, 최대 90일) 지정해 즉시 수집+분석+Teams 발송 1회 실행 (Admin) |
+| `GET` | `/api/email-voc/history` | 이메일 분석+알림 이력 조회 (원본 메일 정보 + 분류결과 + 발송 성공/실패) |
+| `GET` | `/api/email-voc/scheduler-status` | 백그라운드 폴링 스케줄러 실시간 상태 (동작 중 여부, 마지막 사이클 결과, 다음 예상 실행시각) |
+| `GET` | `/api/email-voc/poll-cycles` | 폴링 사이클(스케줄러 실행 회차) 이력 조회 |
+
+**수집 흐름 요약**: 백그라운드 스케줄러(`asyncio.create_task`, lifespan 등록)가 `email_polling_interval_minutes` 주기로 활성 라우팅 메일함을 Graph API로 조회 → `check_relevance()`로 등록된 지식과의 최고 유사도 계산 → `email_relevance_min_score`(기본 0.35) 미만이면 LLM 호출 없이 `skipped_relevance`로 기록 후 다음 메일로(v2.41) → 이상이면 기존 하이브리드 검색+LLM 파이프라인 재사용해 분류(system_error/user_mistake/uncertain)·심각도·오배치 판정 → `source_message_id` UNIQUE 제약으로 중복 스킵 → 담당 파트 Teams 채널에 Workflows 웹훅으로 알림(자동 전화는 없음 — 온콜 담당자명만 멘션, 실제 전화는 담당자가 수동). `ops_email_analysis`/`ops_email_poll_cycle`은 30일 고정 보관정책으로 자동 정리됨.
+
+**Graph API 토큰 조달 우선순위(v2.41)**: `pipeline.run_manual_collection()`이 ① 호출부가 넘긴 `access_token` → ② Application 권한 자격증명(`graph-credentials`) → ③ Delegated 로그인 세션(`delegated_auth`, 본인 메일함 한정) 순으로 시도. 셋 다 없으면 메일함별로 "자격증명 없음" 에러만 기록하고 다른 메일함은 계속 처리(전체 실패 처리 안 함). 스케줄러는 namespace 순회 전 credentials/access_token을 한 번만 해석해 `skip_credential_resolution=True`로 넘겨 매 namespace마다 재시도하지 않음. 로컬 검증은 `backend/scripts/email_voc_local_test.py`(Device Code Flow로 본인 메일함 대상 전체 파이프라인 실행) 참고.
+
+상세 설계·의사결정 배경은 `docs/email-analysis-channel-plan.md` 참조.
 
 ### MCP 도구
 

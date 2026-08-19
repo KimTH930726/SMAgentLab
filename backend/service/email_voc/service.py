@@ -3,17 +3,34 @@
 기존 채팅 파이프라인(agents/knowledge_rag/agent.py)과 동일하게 용어 매핑 + 하이브리드
 검색 + LLM 판단을 재사용하되, 대화 이력·SSE 스트리밍·시맨틱 캐시는 건별 배치 분석에
 불필요해 제외한 단발성(single-shot) 버전이다.
+
+관련성 사전 필터(v3.9): 모든 메일을 무조건 LLM에 태우면 VOC와 무관한 메일(스팸,
+CC 참조, 사내 공지 등)까지 비용을 쓰고 Teams 알림 노이즈를 만든다. 그래서 검색·분석
+단계를 check_relevance()/analyze_email() 두 함수로 분리했다 — 파이프라인이 먼저
+check_relevance()로 임베딩+검색만 수행해 관련 지식과의 최고 유사도(top_score)를
+구하고, 관리자가 설정한 임계치(email_relevance_min_score, §9) 이상일 때만
+analyze_email()을 호출(이때 precomputed로 검색 결과를 넘겨 임베딩·검색 중복 방지)한다.
 """
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 from agents.knowledge_rag.knowledge import retrieval
+from agents.knowledge_rag.knowledge.retrieval import RetrievalResult
 from service.llm.factory import get_llm_provider
 from service.prompt.loader import get_prompt
 from shared.embedding import embedding_service
 from shared.json_utils import parse_json_object
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RelevanceCheck:
+    mapped_term: Optional[str]
+    results: list[RetrievalResult]
+    context: str
+    top_score: float
 
 # ops_prompt(func_key='email_voc_analysis_system'/'email_voc_analysis_prompt')로
 # 관리자가 "시스템 설정 > 프롬프트 관리"에서 동적으로 수정 가능 — 아래는 DB에 값이
@@ -50,19 +67,12 @@ _VALID_CATEGORIES = {"system_error", "user_mistake", "uncertain"}
 _VALID_SEVERITIES = {"low", "medium", "high", "urgent"}
 
 
-async def analyze_email(
-    namespace: str,
-    subject: str,
-    body: str,
-    *,
-    part: str = "",
-    user_credentials: Optional[dict] = None,
-) -> dict:
-    """이메일 본문을 RAG로 분석해 분류/심각도/오배치 여부/해결방안 초안을 산출한다.
+async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceCheck:
+    """이메일과 등록된 지식 간 최고 유사도를 구한다 — LLM 호출 전 저비용 사전 필터용.
 
-    Returns:
-        {"category", "severity", "mismatch_flagged", "knowledge_ref_ids",
-         "resolution_draft", "reasoning", "mapped_term"}
+    analyze_email()의 앞부분(임베딩+용어매핑+하이브리드검색)과 동일한 로직이다.
+    파이프라인이 관련성 게이트를 먼저 통과시킨 뒤 결과를 그대로 재사용할 수 있도록
+    분리했다 — 그러지 않으면 임베딩·벡터검색이 이메일 1건당 두 번씩 돈다.
     """
     query_text = f"{subject}\n{body}".strip()
     query_vec = await embedding_service.embed(query_text)
@@ -78,6 +88,34 @@ async def analyze_email(
         int(defaults["default_top_k"]),
     )
     context = retrieval.build_context(results)
+    top_score = max((r.final_score for r in results), default=0.0)
+    return RelevanceCheck(mapped_term=mapped_term, results=results, context=context, top_score=top_score)
+
+
+async def analyze_email(
+    namespace: str,
+    subject: str,
+    body: str,
+    *,
+    part: str = "",
+    user_credentials: Optional[dict] = None,
+    precomputed: Optional[RelevanceCheck] = None,
+) -> dict:
+    """이메일 본문을 RAG로 분석해 분류/심각도/오배치 여부/해결방안 초안을 산출한다.
+
+    precomputed: check_relevance() 결과를 이미 갖고 있으면 그대로 재사용해 임베딩·
+    검색을 중복 수행하지 않는다(파이프라인의 정상 경로). 넘기지 않으면(관리자 화면의
+    "분석 테스트" 등 단독 호출) 여기서 새로 계산한다.
+
+    Returns:
+        {"category", "severity", "mismatch_flagged", "knowledge_ref_ids",
+         "resolution_draft", "reasoning", "mapped_term"}
+    """
+    check = precomputed if precomputed is not None else await check_relevance(namespace, subject, body)
+    mapped_term = check.mapped_term
+    results = check.results
+    context = check.context
+
     min_score = retrieval.get_thresholds()["knowledge_min_score"]
     knowledge_ref_ids = [r.id for r in results if r.final_score >= min_score]
 

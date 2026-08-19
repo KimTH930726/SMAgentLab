@@ -1,10 +1,10 @@
 # Ops-Navigator 테이블 정의서
 
-> **Version**: 3.7
+> **Version**: 3.11
 > **DBMS**: PostgreSQL 16 + pgvector
 > **Extensions**: `vector`, `pg_trgm`
 > **벡터 차원**: 768 (paraphrase-multilingual-mpnet-base-v2)
-> **작성일**: 2026-04-20 (v3.7 — ops_user.encrypted_confluence_pat 컬럼 추가)
+> **작성일**: 2026-08-19 (v3.11 — `email_graph_delegated` JSON에 `client_secret` 선택 필드 추가(DDL 변경 없음, 기존 암호화 JSON 블롭 내부 키만 추가) — Confidential Client 지원. v3.10 — `email_graph_delegated`의 인증 방식을 Device Code Flow에서 Authorization Code Flow(PKCE)로 교체, `redirect_uri` 필드 추가. v3.9 — VOC 이메일 관련지식 사전 필터(`email_relevance_min_score`, `ops_email_analysis.status='skipped_relevance'`, `ops_email_poll_cycle.total_skipped_low_relevance`) 추가)
 > **DDL 위치**: `init/01-init.sql` + `main.py` lifespan 마이그레이션
 
 ---
@@ -29,6 +29,9 @@
 16. [ops_mcp_tool_log](#16-ops_mcp_tool_log)
 17. [ops_prompt](#17-ops_prompt)
 18. [ops_system_config](#18-ops_system_config)
+18-1. [ops_voc_routing](#18-1-ops_voc_routing)
+18-2. [ops_email_analysis](#18-2-ops_email_analysis)
+18-3. [ops_email_poll_cycle](#18-3-ops_email_poll_cycle)
 19. [트리거 및 함수](#19-트리거-및-함수)
 20. [마이그레이션](#20-마이그레이션)
 
@@ -580,9 +583,101 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | `cache_enabled` | Semantic Cache 활성화 여부 | `true` |
 | `cache_similarity_threshold` | 캐시 히트 cosine 유사도 임계값 | `0.92` |
 | `cache_ttl` | 캐시 TTL(초) | `1800` |
+| `email_collection_enabled` | VOC 이메일 폴링 스케줄러 활성화 여부 (v3.8) | `false` |
+| `email_polling_interval_minutes` | 폴링 주기(분) (v3.8) | `5` |
+| `email_lookback_days` | 폴링 시 조회할 과거 기간(일) (v3.8) | `7` |
+| `email_graph_credentials` | Microsoft Graph API 자격증명(tenant_id/client_id/client_secret) — Fernet 암호화된 JSON 문자열. 값이 없으면 "행 없음"으로 미설정 상태 표현 (v3.8) | (없음, 관리자가 입력 시에만 생성) |
+| `email_relevance_min_score` | VOC 이메일 관련지식 사전 필터 임계치 — 등록된 지식과의 최고 유사도(`final_score`)가 이 값 미만이면 LLM 분석·Teams 발송 없이 건너뜀(무관한 메일의 비용·알림 노이즈 억제) (v3.9) | `0.35` |
+| `email_graph_delegated` | Delegated Permission(사용자 위임 권한) 로그인 세션 — `{tenant_id, client_id, redirect_uri, client_secret, cache}` Fernet 암호화 JSON. `client_secret`은 선택 필드(v3.11) — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록돼 PKCE만으론 토큰 교환이 거부되는(AADSTS7000218) 실사용 사례가 확인돼 추가, 값이 있으면 Confidential Client·없으면 기존과 동일하게 Public Client로 동작. `cache`는 msal `SerializableTokenCache.serialize()` 결과(refresh token 포함, 자격증명급 취급). 인증 방식은 Authorization Code Flow(PKCE) — Device Code Flow는 피싱 리스크로 보안팀이 비권장해 채택하지 않음(v3.10). Application 권한(Track B) 승인 전 임시 경로 — 있으면 무인 폴링/수동실행이 이 세션으로 대체 동작 | (없음, 로그인 완료 시에만 생성) |
 
 **로드 흐름**: 앱 시작 → `main.py` lifespan → `sem_cache.load_config_from_db(conn)` → 런타임 전역변수 갱신
 **저장 흐름**: `PUT /api/admin/cache/config` → 런타임 전역변수 즉시 반영 + DB upsert
+
+---
+
+## 18-1. ops_voc_routing
+
+**목적**: VOC 이메일 분석 채널(`docs/email-analysis-channel-plan.md`)의 파트별 담당 메일함 ↔ Teams 웹훅 ↔ 온콜 연락처 라우팅 매핑. 메일함 단위 분리 방식(파트별 메일주소 자체를 분리) 채택 — §10 참조.
+
+| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
+|---|--------|-----------|------|--------|---------|------|
+| 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
+| 2 | `namespace_id` | INT | NO | - | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 ID |
+| 3 | `part` | VARCHAR(100) | NO | - | - | 담당 파트명 |
+| 4 | `mailbox_upn` | VARCHAR(255) | NO | - | UNIQUE(namespace_id, mailbox_upn) | 대상 공용 메일함 UPN (예: `voc-payment@company.com`) |
+| 5 | `teams_webhook_url` | TEXT | YES | NULL | - | 해당 파트 Teams 채널의 Workflows 웹훅 URL |
+| 6 | `oncall_contact_name` | VARCHAR(100) | YES | NULL | - | 온콜 담당자명 (Teams 멘션 표시용) |
+| 7 | `oncall_contact_phone` | VARCHAR(50) | YES | NULL | - | 온콜 담당자 연락처 (수동 전화용 — 자동 발신 없음) |
+| 8 | `is_active` | BOOLEAN | NO | `TRUE` | - | 활성 여부 (비활성 시 폴링/수동실행 대상에서 제외) |
+| 9 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
+| 10 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 수정일시 |
+
+**FK 동작**: 네임스페이스 삭제 시 CASCADE. `ops_email_analysis.routing_id`는 라우팅 삭제 시 SET NULL(분석 이력은 보존).
+**권한**: CRUD 시 `namespace_id`까지 함께 검증(크로스 네임스페이스 변조 방지 — v3.8에서 발견·수정된 보안 이슈).
+
+---
+
+## 18-2. ops_email_analysis
+
+**목적**: 수집된 이메일 건별 RAG 분석 결과 + Teams 알림 발송 결과를 저장. `source_message_id` UNIQUE로 폴링 재조회 윈도우가 겹쳐도 같은 메일을 중복 분석하지 않는다.
+
+| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
+|---|--------|-----------|------|--------|---------|------|
+| 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
+| 2 | `namespace_id` | INT | NO | - | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 ID |
+| 3 | `routing_id` | INT | YES | NULL | FK → ops_voc_routing(id) ON DELETE SET NULL | 매칭된 라우팅 매핑 |
+| 4 | `source_message_id` | VARCHAR(300) | NO | - | UNIQUE(namespace_id, source_message_id) | Graph API 메시지 ID (중복 수집 방지 키) |
+| 5 | `mailbox_upn` | VARCHAR(255) | NO | - | - | 수집 대상 메일함 |
+| 6 | `subject` | TEXT | NO | `''` | - | 메일 제목 |
+| 7 | `sender` | VARCHAR(255) | NO | `''` | - | 발신자 |
+| 8 | `received_at` | TIMESTAMPTZ | YES | NULL | - | 메일 수신 시각 |
+| 9 | `body` | TEXT | NO | `''` | - | 메일 본문 |
+| 10 | `category` | VARCHAR(20) | YES | NULL | - | LLM 분류 결과 (`system_error`/`user_mistake`/`uncertain`) |
+| 11 | `severity` | VARCHAR(10) | YES | NULL | - | 심각도 (`low`/`medium`/`high`/`urgent`) |
+| 12 | `mismatch_flagged` | BOOLEAN | NO | `FALSE` | - | 담당 파트 오배치 의심 플래그 |
+| 13 | `knowledge_ref_ids` | INT[] | YES | NULL | - | 답변 생성에 참고한 지식 ID 배열 |
+| 14 | `resolution_draft` | TEXT | YES | NULL | - | LLM이 생성한 대응 답변 초안 |
+| 15 | `status` | VARCHAR(20) | NO | `'analyzed'` | - | 처리 상태 (`analyzed`/`notified`/`notify_failed`/`skipped_relevance`(관련지식 임계치 미달로 LLM 미호출, v3.9) 등) |
+| 16 | `teams_sent_at` | TIMESTAMPTZ | YES | NULL | - | Teams 알림 발송 성공 시각 |
+| 17 | `notify_error` | TEXT | YES | NULL | - | Teams 알림 발송 실패 사유 (이력 화면에서 성공/실패+원인 함께 표시) |
+| 18 | `reasoning` | TEXT | YES | NULL | - | LLM 분류 판단 근거 (LLM 호출 실패 시 재시도 후에도 실패하면 강제 `severity='medium'` + 실패 사유 기록) |
+| 19 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
+| 20 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 수정일시 |
+
+**인덱스**:
+- `idx_email_analysis_status (status)`
+- `idx_email_analysis_created_at (created_at)` — 30일 보관정책(`retention.py`) 정리 배치 전용, namespace 선행 복합 인덱스로는 못 타서 별도 추가
+- `idx_email_analysis_ns_sort (namespace_id, (COALESCE(received_at, created_at)) DESC)` — 이력 화면 정렬(`ORDER BY COALESCE(received_at, created_at) DESC`)과 표현식이 정확히 일치해야 인덱스를 탐
+
+**보관 정책**: 30일 고정 — 스케줄러가 매일 1회(`_maybe_run_cleanup`) `created_at` 기준으로 자동 삭제.
+
+**관련지식 사전 필터 (v3.9)**: `status='skipped_relevance'`인 행은 등록된 지식과의 최고 유사도가 `email_relevance_min_score` 미만이라 LLM을 호출하지 않고 저장된 것 — `category`/`severity`/`knowledge_ref_ids`/`resolution_draft`는 모두 NULL(또는 빈 배열)이고 `reasoning`에만 스킵 사유(유사도 수치 포함)가 기록된다.
+
+---
+
+## 18-3. ops_email_poll_cycle
+
+**목적**: 백그라운드 폴링 스케줄러가 한 번 돌 때마다의 결과(성공/실패 메일함 수, 처리 건수)를 기록. 개별 이메일 단위인 `ops_email_analysis`만으로는 "사이클이 언제 돌았고 몇 개 메일함이 실패했는지"가 보이지 않아 별도로 둔다.
+
+| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
+|---|--------|-----------|------|--------|---------|------|
+| 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
+| 2 | `started_at` | TIMESTAMPTZ | NO | - | - | 사이클 시작 시각 |
+| 3 | `finished_at` | TIMESTAMPTZ | YES | NULL | - | 사이클 종료 시각 |
+| 4 | `namespaces_processed` | INT | NO | `0` | - | 처리한 네임스페이스 수 |
+| 5 | `mailboxes_ok` | INT | NO | `0` | - | 성공한 메일함 수 |
+| 6 | `mailboxes_failed` | INT | NO | `0` | - | 실패한 메일함 수 |
+| 7 | `total_fetched` | INT | NO | `0` | - | 조회된 총 메일 건수 |
+| 8 | `total_analyzed` | INT | NO | `0` | - | 분석 완료 건수 |
+| 9 | `total_notified` | INT | NO | `0` | - | Teams 알림 발송 성공 건수 |
+| 10 | `total_notify_failed` | INT | NO | `0` | - | Teams 알림 발송 실패 건수 |
+| 11 | `total_skipped_duplicate` | INT | NO | `0` | - | 중복(재조회 윈도우 겹침)으로 건너뛴 건수 |
+| 12 | `total_skipped_low_relevance` | INT | NO | `0` | - | 관련지식 임계치 미달로 건너뛴 건수 (v3.9) |
+| 13 | `error_summary` | TEXT | YES | NULL | - | 사이클 단위 오류 요약 |
+| 14 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
+
+**인덱스**: `idx_email_poll_cycle_started (started_at DESC)`
+**보관 정책**: 30일 고정 — `ops_email_analysis`와 동일 정리 배치에서 `started_at` 기준 자동 삭제.
 
 ---
 
@@ -645,6 +740,10 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 28 | `rag_ingestion_job`, `rag_knowledge` | `init/05-ingestion-job-progress.sql` — `ADD COLUMN cancel_requested BOOLEAN`, `ADD COLUMN ingestion_job_id INT FK` | 대용량 지식 등록 진행률/중지 지원(v2.29) — 백그라운드 처리 + 배치별 진행률 갱신 + 중지 시 롤백 |
 | 29 | `rag_knowledge`, `rag_ingestion_job` | `ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'active'`, `ADD COLUMN pending_chunks INT NOT NULL DEFAULT 0`, `CREATE TABLE rag_knowledge_duplicate_match` | 지식 중복 등록 방지 — 청크 단위 유사도 검사 + 승인 대기(pending_review) 리뷰 (v2.34) |
 | 30 | `ops_query_log` | `ADD COLUMN resolved_knowledge_id INT REFERENCES rag_knowledge(id) ON DELETE SET NULL` | 나빠요 피드백 후 지식 등록으로 해결한 질의를 등록된 지식과 연결 (v2.36) |
+| 31 | - | `CREATE TABLE ops_voc_routing`, `CREATE TABLE ops_email_analysis`, `CREATE TABLE ops_email_poll_cycle` | VOC 이메일 분석 채널 Track A 스키마 — 파트별 메일함 라우팅, 건별 분석 결과, 폴링 사이클 이력 (v3.8) |
+| 32 | `ops_system_config` | `INSERT email_collection_enabled/email_polling_interval_minutes/email_lookback_days` | VOC 이메일 폴링 정책 시드 (재시작에도 유지되도록 DB 영속 방식 채택) (v3.8) |
+| 33 | `ops_email_poll_cycle` | `ADD COLUMN IF NOT EXISTS total_skipped_low_relevance INT NOT NULL DEFAULT 0` | 관련지식 사전 필터 스킵 건수 집계 (v3.9) |
+| 34 | `ops_system_config` | `INSERT email_relevance_min_score` | VOC 이메일 관련지식 임계치 시드 — 미달 시 LLM 호출·Teams 발송 없이 이력만 기록(비용·알림 노이즈 억제) (v3.9) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

@@ -8,7 +8,10 @@ from core.security import encrypt_dict, decrypt_dict
 
 _GRAPH_CREDENTIALS_KEY = "email_graph_credentials"
 
-_SETTINGS_KEYS = ("email_collection_enabled", "email_polling_interval_minutes", "email_lookback_days")
+_SETTINGS_KEYS = (
+    "email_collection_enabled", "email_polling_interval_minutes", "email_lookback_days",
+    "email_relevance_min_score",
+)
 _MIN_POLLING_INTERVAL_MINUTES = 1  # §9 — Graph API 호출 한도 보호용 하한
 
 
@@ -25,6 +28,7 @@ async def get_settings() -> dict:
         "email_collection_enabled": values.get("email_collection_enabled", "false").lower() == "true",
         "email_polling_interval_minutes": int(values.get("email_polling_interval_minutes", 5)),
         "email_lookback_days": int(values.get("email_lookback_days", 7)),
+        "email_relevance_min_score": float(values.get("email_relevance_min_score", 0.35)),
     }
 
 
@@ -36,6 +40,9 @@ async def update_settings(updates: dict) -> dict:
     lookback = updates.get("email_lookback_days")
     if lookback is not None and lookback < 1:
         raise ValueError("재조회 기간은 최소 1일 이상이어야 합니다.")
+    relevance = updates.get("email_relevance_min_score")
+    if relevance is not None and not (0.0 <= relevance <= 1.0):
+        raise ValueError("관련지식 임계치는 0.0 ~ 1.0 사이여야 합니다.")
 
     async with get_conn() as conn:
         for key in _SETTINGS_KEYS:
@@ -71,6 +78,9 @@ async def get_graph_credentials_status() -> dict:
 
 
 async def set_graph_credentials(tenant_id: str, client_id: str, client_secret: str) -> dict:
+    # IT 회신 등에서 복사할 때 앞뒤 공백이 같이 끌려오는 사고가 실제로 있었다
+    # (delegated_auth.save_config()에서 동일 문제 실측 확인) — 항상 strip해서 저장.
+    tenant_id, client_id, client_secret = tenant_id.strip(), client_id.strip(), client_secret.strip()
     encrypted = encrypt_dict({"tenant_id": tenant_id, "client_id": client_id, "client_secret": client_secret})
     async with get_conn() as conn:
         await conn.execute(

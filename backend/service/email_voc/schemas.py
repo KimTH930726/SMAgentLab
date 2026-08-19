@@ -29,12 +29,14 @@ class EmailCollectionSettingsOut(BaseModel):
     email_collection_enabled: bool
     email_polling_interval_minutes: int
     email_lookback_days: int
+    email_relevance_min_score: float
 
 
 class EmailCollectionSettingsUpdate(BaseModel):
     email_collection_enabled: Optional[bool] = None
     email_polling_interval_minutes: Optional[int] = None
     email_lookback_days: Optional[int] = None
+    email_relevance_min_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 class VocRoutingCreate(BaseModel):
@@ -100,6 +102,7 @@ class MailboxCollectionResult(BaseModel):
     fetched: int = 0
     analyzed: int = 0
     skipped_duplicate: int = 0
+    skipped_low_relevance: int = 0
     notified: int = 0
     notify_failed: int = 0
 
@@ -155,6 +158,7 @@ class PollCycleItem(BaseModel):
     total_notified: int
     total_notify_failed: int
     total_skipped_duplicate: int
+    total_skipped_low_relevance: int
     error_summary: Optional[str] = None
 
 
@@ -165,6 +169,37 @@ class SchedulerStatus(BaseModel):
     polling_interval_minutes: int
     last_cycle: Optional[PollCycleItem] = None
     next_estimated_at: Optional[datetime] = None
+
+
+class DelegatedAuthConfig(BaseModel):
+    """Delegated 권한(Authorization Code Flow) 로그인용 앱 정보. redirect_uri는
+    Azure AD 앱 등록에 정확히 동일한 값으로 등록돼 있어야 한다(프론트가
+    window.location.origin 기준으로 자동 계산).
+
+    client_secret은 선택 입력이다 — 원래 설계(Public Client, PKCE만으로 토큰 교환)는
+    시크릿이 필요 없지만, 리다이렉트 URI가 Azure AD에 "Web" 플랫폼으로 등록된 경우
+    PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) 시크릿이 필요해진 사례가 실제로
+    있었다(docs/tech/voc-email-handoff.md §3 10~11단계). 값을 채우면 Confidential
+    Client로, 비우면 기존과 동일하게 Public Client로 동작한다 — 나중에 리다이렉트 URI
+    플랫폼 유형이 정정되면 시크릿 없이도 다시 전환 가능하도록 하기 위함."""
+    tenant_id: str = Field(min_length=1)
+    client_id: str = Field(min_length=1)
+    redirect_uri: str = Field(min_length=1)
+    client_secret: Optional[str] = None
+
+
+class DelegatedAuthStatus(BaseModel):
+    configured: bool
+    logged_in: bool
+    account: Optional[str] = None
+    pending: bool
+    login_error: Optional[str] = None
+    redirect_uri: Optional[str] = None
+    client_secret_configured: bool = False
+
+
+class DelegatedAuthStartResult(BaseModel):
+    auth_url: str
 
 
 class TeamsTestNotifyRequest(BaseModel):

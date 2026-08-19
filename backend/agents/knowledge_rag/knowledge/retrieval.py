@@ -157,7 +157,12 @@ async def search_knowledge(
                 SELECT k.id, ts_rank(to_tsvector('simple', k.content), q.tsq) AS k_score
                 FROM rag_knowledge k
                 CROSS JOIN LATERAL (
-                    SELECT to_tsquery('simple', string_agg(lexeme, ' | ')) AS tsq
+                    -- quote_literal로 각 lexeme를 감싸야 한다 — 감싸지 않으면 lexeme
+                    -- 안에 tsquery 문법 특수문자(예: URL 토큰에 딸려온 짝 안 맞는
+                    -- ")")가 섞였을 때 to_tsquery가 그 문자를 연산자로 해석해
+                    -- "syntax error in tsquery"로 죽는다 — 실제 VOC 메일(광고성
+                    -- 웨비나 메일의 URL) fetch 테스트에서 재현·확인된 버그.
+                    SELECT to_tsquery('simple', string_agg(quote_literal(lexeme), ' | ')) AS tsq
                     FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', $3))) t
                     WHERE lexeme IS NOT NULL
                 ) q

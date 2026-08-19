@@ -1,10 +1,10 @@
 # Ops-Navigator API 명세서
 
-> **Version**: 2.13
+> **Version**: 2.17
 > **Base URL**: `http://localhost:8000`
 > **Protocol**: REST + SSE (Server-Sent Events)
 > **Content-Type**: `application/json` (기본), `text/event-stream` (SSE)
-> **최종 갱신**: 2026-04-17
+> **최종 갱신**: 2026-08-19 (v2.17 — `PUT /delegated-auth/config` 요청에 선택 필드 `client_secret` 추가, `GET /delegated-auth/status` 응답에 `client_secret_configured` 필드 추가 — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록된 경우 PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) Confidential Client 지원이 필요해진 실사용 사례 반영)
 
 ---
 
@@ -23,7 +23,9 @@
 10. [통계 및 질의 로그 (Stats)](#10-통계-및-질의-로그-stats)
 11. [네임스페이스 (Namespaces)](#11-네임스페이스-namespaces)
 12. [LLM 설정 (LLM Settings)](#12-llm-설정-llm-settings)
-13. [공통 에러 코드](#13-공통-에러-코드)
+13. [Text-to-SQL 어드민 API (주요)](#13-text-to-sql-어드민-api-주요)
+13-1. [VOC 이메일 분석 채널 (Email VOC)](#13-1-voc-이메일-분석-채널-email-voc)
+14. [공통 에러 코드](#14-공통-에러-코드)
 
 ---
 
@@ -1850,6 +1852,196 @@ SQL 예제 일괄 삭제.
 감사 로그 조회. v2.12부터 날짜 범위 필터 지원.
 
 **Query Parameters**: `page`, `limit`, `status`, `date_from` (YYYY-MM-DD), `date_to` (YYYY-MM-DD)
+
+---
+
+## 13-1. VOC 이메일 분석 채널 (Email VOC)
+
+> Base: `/api/email-voc/`
+> 인증: JWT Bearer. 일부는 Admin 전용(수집 실행, 라우팅/설정 변경, Graph 자격증명). 상세 설계는 `docs/email-analysis-channel-plan.md` 참조.
+> 현재 상태: Track A(수집·분석·라우팅·알림·스케줄러) 구현 완료. Graph API 연동(Track B)은 조직 승인(M365 보안성 검토·API 제공) 대기 중 — 자격증명 미설정 시 수동 실행은 메일함별 "자격증명 미설정" 에러를 결과에 담아 반환한다(전체 실패 처리하지 않음).
+
+### POST /api/email-voc/test-analyze
+
+실제 이메일 없이 텍스트를 직접 입력해 분류/심각도/오배치 판정 프롬프트를 검증한다. 인증된 사용자면 누구나 호출 가능(네임스페이스 소유 검증).
+
+**Request Body**
+```json
+{ "namespace": "coupon", "subject": "쿠폰 결제 오류", "body": "쿠폰 적용 시 결제가 실패합니다.", "part": "결제팀" }
+```
+
+**Response `200`**
+```json
+{
+  "category": "system_error",
+  "severity": "high",
+  "mismatch_flagged": false,
+  "knowledge_ref_ids": [12, 45],
+  "resolution_draft": "쿠폰 적용 후 결제 모듈에서...",
+  "reasoning": "결제 실패 로그 패턴과 일치...",
+  "mapped_term": "결제 오류"
+}
+```
+
+### POST /api/email-voc/test-notify — Admin 전용
+
+임의 Teams 웹훅 URL로 실제 알림 발송을 테스트한다(공식 파트별 채널 확정 전에도 검증 가능).
+
+**Request Body**: `webhook_url`, `subject`, `sender`, `part`, `category`, `severity`, `mismatch_flagged`, `resolution_draft`, `oncall_contact_name`
+**Response `200`**: `{ "sent": true }` / 실패 시 `502` + 에러 상세
+
+### GET / PUT /api/email-voc/settings
+
+폴링 정책 조회(전체 인증 사용자)/변경(Admin 전용). `ops_system_config`에 영속 저장.
+
+**Response(GET) `200`**
+```json
+{ "email_collection_enabled": false, "email_polling_interval_minutes": 5, "email_lookback_days": 7, "email_relevance_min_score": 0.35 }
+```
+**Request Body(PUT)**: 위 4개 필드 중 변경할 것만 포함(부분 업데이트)
+**`email_relevance_min_score`** (v3.9, 0.0~1.0): 등록된 지식과의 최고 유사도가 이 값 미만인 메일은 LLM 분석·Teams 발송 없이 이력에 `status='skipped_relevance'`로만 기록된다 — 무관한 메일(스팸·사내공지·CC참조 등)에 대한 LLM 비용·알림 노이즈 억제 목적. 범위를 벗어나면 `422`.
+
+### GET /api/email-voc/routing?namespace={ns}
+
+파트별 메일함 라우팅 목록 조회(네임스페이스 소유 검증).
+
+### POST /api/email-voc/routing
+
+라우팅 매핑 신규 등록.
+
+**Request Body** — `VocRoutingCreate`
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `namespace` | string | O | 대상 네임스페이스 |
+| `part` | string | O | 담당 파트명 |
+| `mailbox_upn` | string | O | 대상 공용 메일함 UPN |
+| `teams_webhook_url` | string | X | Teams Workflows 웹훅 URL |
+| `oncall_contact_name` | string | X | 온콜 담당자명 |
+| `oncall_contact_phone` | string | X | 온콜 담당자 연락처(수동 전화용) |
+
+**Response `201`**: 등록된 `VocRoutingOut`
+**Error `400`**: 동일 네임스페이스에 같은 `mailbox_upn` 중복 등록 시
+
+### PUT /api/email-voc/routing/{routing_id}?namespace={ns}
+
+라우팅 매핑 수정. **`namespace` 쿼리 파라미터로 소유 네임스페이스를 반드시 함께 검증** — 이 검증 없이 `routing_id`만으로 처리하면 다른 네임스페이스의 라우팅을 변조할 수 있어(크로스 네임스페이스 취약점, v3.8에서 발견·수정) 서버가 `namespace_id`까지 WHERE 절에 포함해 조회한다.
+
+**Response `200`**: 수정된 `VocRoutingOut` / **Error `404`**: 해당 네임스페이스에 없는 `routing_id`
+
+### DELETE /api/email-voc/routing/{routing_id}?namespace={ns}
+
+라우팅 매핑 삭제. PUT과 동일하게 `namespace`로 소유 검증.
+
+### GET /api/email-voc/graph-credentials — Admin 전용
+
+Microsoft Graph API 자격증명 설정 여부 조회. **`client_secret` 값은 응답에 절대 포함되지 않는다.**
+
+**Response `200`**: `{ "configured": true, "tenant_id": "...", "client_id": "..." }`
+
+### PUT /api/email-voc/graph-credentials — Admin 전용
+
+Graph API 자격증명 등록/변경. `tenant_id`/`client_id`/`client_secret`을 Fernet 대칭 암호화해 `ops_system_config`에 저장.
+
+**Request Body**: `{ "tenant_id": "...", "client_id": "...", "client_secret": "..." }`
+
+### GET /api/email-voc/delegated-auth/status — Admin 전용 (v3.9, v3.10, v2.17에서 응답 필드 추가)
+
+Delegated Permission(사용자 위임 권한) 로그인 세션 상태 조회. Application 권한(위 자격증명) 승인 전에도 본인 메일함 기준으로 전체 플로우(수집→분석→라우팅→Teams발송)를 시연할 수 있는 임시 경로 — `pipeline.run_manual_collection`이 Application 권한 자격증명이 없을 때 이 세션으로 자동 대체한다.
+
+**Response `200`**
+```json
+{ "configured": true, "logged_in": false, "account": null, "pending": false, "login_error": null, "redirect_uri": "http://localhost:8000/api/email-voc/delegated-auth/callback", "client_secret_configured": false }
+```
+| 필드 | 설명 |
+|------|------|
+| `configured` | tenant_id/client_id/redirect_uri 저장 여부 |
+| `logged_in` | 로그인 완료(캐시된 계정 존재) 여부 |
+| `account` | 로그인된 계정 UPN (완료 전엔 `null`) |
+| `pending` | 로그인 진행 중(콜백 대기) 여부 — 프론트가 이 값이 `true`인 동안 3초 간격으로 재폴링. 10분 지나도 콜백이 안 오면(방치된 시도) 자동으로 `false` 취급되어 재로그인 가능해짐 |
+| `login_error` | 직전 로그인 시도 실패 사유(성공/미시도 시 `null`) |
+| `redirect_uri` | 저장된 리다이렉트 URL (v3.10) — Azure AD 앱 등록에 정확히 동일한 값이 등록돼 있어야 함 |
+| `client_secret_configured` | (v2.17) client_secret 설정 여부 — 값 자체는 절대 응답에 포함되지 않음(Application 권한 자격증명과 동일 원칙) |
+
+authority(tenant) 조회 자체가 실패해도(잘못된 tenant_id, 네트워크 오류) 500이 아니라 `configured: true, logged_in: false`로 완화해 응답한다.
+
+### PUT /api/email-voc/delegated-auth/config — Admin 전용 (v3.9, v3.10, v2.17에서 요청 필드 변경)
+
+Delegated 로그인용 앱 정보 저장. 원래 설계는 Public Client + PKCE로 `client_secret`이 불필요했으나, 리다이렉트 URI가 Azure AD에 "Web" 플랫폼으로 등록된 경우 PKCE만으로 토큰 교환이 거부되는(`AADSTS7000218`) 실사용 사례가 확인돼 (v2.17) `client_secret`을 선택 필드로 추가 — 값을 채우면 Confidential Client, 비우면 기존과 동일하게 Public Client로 동작한다. tenant_id/client_id/redirect_uri 중 하나라도 이전과 달라지면 기존 로그인 캐시는 폐기된다(다른 앱/경로 것이므로) — client_secret만 바뀌는 경우(시크릿 재발급)는 같은 앱이라 캐시를 유지한다.
+
+**Request Body**: `{ "tenant_id": "...", "client_id": "...", "redirect_uri": "...", "client_secret": "..." }` (`client_secret`은 선택)
+`redirect_uri`는 프론트가 `${window.location.origin}/api/email-voc/delegated-auth/callback`로 자동 계산해서 보낸다(관리자가 직접 입력하지 않음 — 오타로 인한 Azure AD 리다이렉트 불일치 방지).
+**Response `200`**: 갱신된 상태(위 GET과 동일 형식)
+
+### POST /api/email-voc/delegated-auth/start — Admin 전용 (v3.9, v3.10에서 응답 형식 변경)
+
+Authorization Code Flow(PKCE) 시작. 로그인 URL을 반환하며, 프론트는 이 URL을 새 탭으로 자동으로 연다. 사람이 그 탭에서 로그인을 완료하면 Microsoft가 아래 콜백 엔드포인트로 리다이렉트시켜 로그인이 마무리된다 — 완료되면 `GET .../status`의 `pending`이 꺼지고 `logged_in`이 `true`가 된다.
+
+> v3.9까지는 Device Code Flow(코드를 사람이 손으로 옮겨 입력)를 썼으나, 이 방식은 "Device Code Phishing"(공격자가 코드를 발급받아 피해자에게 입력시켜 토큰을 가로채는 공격)의 대상이 될 수 있어 보안팀이 필요 설정("Allow public client flows")을 비권장 사유로 거부 — v3.10에서 Authorization Code Flow로 교체했다. 이 방식은 사람이 코드를 옮겨 입력하는 과정 자체가 없어 해당 리스크가 없다.
+
+**Response `200`**
+```json
+{ "auth_url": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?client_id=...&code_challenge=...&state=..." }
+```
+**Error `400`**: tenant_id/client_id/redirect_uri 미설정, authority(tenant) 조회 실패, 이미 로그인이 진행 중인 경우(동시 요청 방지) 등 — 메시지에 원인 포함
+
+### GET /api/email-voc/delegated-auth/callback — 인증 불필요 (v3.10 신규)
+
+Microsoft가 로그인 완료 후 브라우저를 리다이렉트시키는 지점. 브라우저가 직접 접속하는 URL이라 JWT 인증이 없다(Microsoft가 우리 Bearer 토큰을 알 수 없어 애초에 못 건다) — 대신 MSAL이 내부적으로 PKCE `code_verifier`와 `state` 파라미터를 검증해 CSRF/재생공격을 막는다(서버가 미리 발급한 값과 대조, 공격자는 이 값을 알 수 없음).
+
+**Query Parameters**: Microsoft가 붙이는 `code`, `state`, `session_state` 등을 그대로 받음
+**Response `200`**: 사람이 보는 안내 HTML("로그인 처리 완료, 이 창은 닫으셔도 됩니다") — 실제 로그인 성공/실패 여부는 이 응답이 아니라 관리자 화면이 `GET .../status`를 폴링해 확인한다
+
+### POST /api/email-voc/collect/run — Admin 전용
+
+관리자가 기간(`date_from`~`date_to`)을 지정해 즉시 수집+분석+Teams 발송을 1회 실행한다.
+
+**Request Body** — `ManualCollectionRequest`
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `namespace` | string | O | 대상 네임스페이스 |
+| `date_from` | date | X | 기본값: 오늘-7일 |
+| `date_to` | date | X | 기본값: 오늘 |
+
+**유효성 검사**: `date_from ≤ date_to`, `date_to ≤ 오늘`, 조회 기간 최대 90일. 위반 시 `400`.
+
+**Response `200`**
+```json
+{
+  "date_from": "2026-07-28", "date_to": "2026-08-04",
+  "mailboxes": [
+    { "mailbox_upn": "voc-payment@company.com", "part": "결제팀", "ok": true, "error": null,
+      "fetched": 12, "analyzed": 12, "skipped_duplicate": 3, "skipped_low_relevance": 4, "notified": 2, "notify_failed": 0 }
+  ]
+}
+```
+`skipped_low_relevance`(v3.9): 관련지식 임계치(`email_relevance_min_score`) 미달로 LLM 분석·Teams 발송 없이 건너뛴 건수. Application 권한 자격증명도 Delegated 로그인도 없으면 이 필드는 항상 0이고 `error`에 "Graph API 자격증명이 설정되지 않았습니다" 메시지가 담긴다.
+
+### GET /api/email-voc/history?namespace={ns}&limit=50&offset=0
+
+이메일 분석+알림 이력 조회(네임스페이스 소유 검증). `limit` 최대 200으로 clamp.
+
+**Response `200`**: `EmailAnalysisHistoryItem` 배열 — 원본 메일 정보(제목/발신자/수신시각), 분석 결과(분류/심각도/판단근거), 알림 결과(`status`, `teams_sent_at`, `notify_error`) 포함
+
+### GET /api/email-voc/scheduler-status
+
+백그라운드 폴링 스케줄러 실시간 상태 조회(전체 인증 사용자).
+
+**Response `200`**
+```json
+{
+  "enabled": true, "is_running_now": false, "polling_interval_minutes": 5,
+  "last_cycle": { "id": 42, "started_at": "...", "finished_at": "...", "mailboxes_ok": 3, "mailboxes_failed": 0, "total_fetched": 8, "total_analyzed": 8, "total_notified": 5, "total_notify_failed": 0, "total_skipped_duplicate": 2, "total_skipped_low_relevance": 1, "error_summary": null },
+  "next_estimated_at": "2026-08-04T16:35:00Z"
+}
+```
+
+### GET /api/email-voc/poll-cycles?limit=20&offset=0
+
+폴링 사이클(스케줄러 실행 회차) 이력 조회. `limit` 최대 100으로 clamp.
+
+**Response `200`**: `PollCycleItem` 배열
 
 ---
 

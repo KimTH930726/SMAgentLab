@@ -6,6 +6,7 @@ export interface EmailCollectionSettings {
   email_collection_enabled: boolean;
   email_polling_interval_minutes: number;
   email_lookback_days: number;
+  email_relevance_min_score: number;
 }
 
 export async function getEmailCollectionSettings(): Promise<EmailCollectionSettings> {
@@ -132,6 +133,44 @@ export async function updateGraphCredentials(payload: {
   });
 }
 
+// ─── Delegated 권한 로그인 (Application 권한/Track B 승인 전 임시 경로) ───────
+
+export interface DelegatedAuthStatus {
+  configured: boolean;
+  logged_in: boolean;
+  account: string | null;
+  pending: boolean;
+  login_error: string | null;
+  redirect_uri: string | null;
+  client_secret_configured: boolean;
+}
+
+export interface DelegatedAuthStartResult {
+  auth_url: string;
+}
+
+export async function getDelegatedAuthStatus(): Promise<DelegatedAuthStatus> {
+  return apiFetch<DelegatedAuthStatus>('/email-voc/delegated-auth/status');
+}
+
+// client_secret은 선택 입력 — 비우면 Public Client(PKCE만), 채우면 Confidential
+// Client로 동작(백엔드 delegated_auth.py 참고). 값은 저장 후 절대 다시 조회되지
+// 않으므로(GraphCredentials와 동일 원칙) 폼에도 매번 빈 값으로만 표시해야 한다.
+export async function updateDelegatedAuthConfig(payload: {
+  tenant_id: string; client_id: string; redirect_uri: string; client_secret?: string;
+}): Promise<DelegatedAuthStatus> {
+  return apiFetch<DelegatedAuthStatus>('/email-voc/delegated-auth/config', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function startDelegatedAuth(): Promise<DelegatedAuthStartResult> {
+  return apiFetch<DelegatedAuthStartResult>('/email-voc/delegated-auth/start', {
+    method: 'POST',
+  });
+}
+
 // ─── 1단계 수동 1회성 실행 (§9, §5 Phase 1) ────────────────────────────────
 
 export interface MailboxCollectionResult {
@@ -142,6 +181,7 @@ export interface MailboxCollectionResult {
   fetched: number;
   analyzed: number;
   skipped_duplicate: number;
+  skipped_low_relevance: number;
   notified: number;
   notify_failed: number;
 }
@@ -204,6 +244,7 @@ export interface PollCycleItem {
   total_notified: number;
   total_notify_failed: number;
   total_skipped_duplicate: number;
+  total_skipped_low_relevance: number;
   error_summary: string | null;
 }
 

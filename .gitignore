@@ -1,6 +1,17 @@
 # 환경 변수 (비밀키 포함)
 .env
 
+# VOC 이메일 로컬 테스트 — refresh token이 그대로 저장되는 파일 (자격증명급 취급)
+backend/scripts/.email_voc_token_cache.json
+
+# 로컬 curl 테스트용으로 발급해둔 admin JWT — 자격증명급 취급
+.voc_test_token.txt
+
+# VOC 이메일 인수인계 문서 — 실제 client secret 값을 로컬 참조용으로 기록해두므로
+# git에는 절대 올리지 않는다(§7 원칙). 팀 공유가 필요해지면 시크릿 값만 빼고
+# 새 파일로 커밋할 것.
+docs/tech/voc-email-handoff.md
+
 # Python
 __pycache__/
 *.py[cod]

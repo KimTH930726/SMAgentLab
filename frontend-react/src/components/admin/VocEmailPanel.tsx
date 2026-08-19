@@ -7,10 +7,11 @@ import {
   listVocRouting, createVocRouting, updateVocRouting, deleteVocRouting,
   testAnalyzeEmail, testNotifyTeams,
   getGraphCredentials, updateGraphCredentials,
+  getDelegatedAuthStatus, updateDelegatedAuthConfig, startDelegatedAuth,
   runManualCollection, getEmailHistory,
   getSchedulerStatus, getPollCycles,
   type VocRouting, type VocRoutingPayload, type EmailAnalysisResult,
-  type ManualCollectionResult,
+  type ManualCollectionResult, type DelegatedAuthStartResult,
 } from '../../api/emailVoc';
 import { getNamespaces } from '../../api/namespaces';
 import { Button } from '../ui/Button';
@@ -48,6 +49,7 @@ function defaultDateTo(): string {
 }
 const STATUS_LABEL: Record<string, string> = {
   analyzed: '분석됨(미발송)', notified: '발송 성공', notify_failed: '발송 실패',
+  skipped_relevance: '관련지식 부족(스킵)',
 };
 
 function formatRelative(iso: string | null): string {
@@ -185,6 +187,45 @@ export function VocEmailPanel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['graph-credentials'] });
       setCredClientSecret('');
+      setError('');
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+  });
+
+  // ── Delegated 권한 로그인 (Application 권한/Track B 승인 전 임시 경로) ─────
+  // Authorization Code Flow(PKCE) — 로그인 링크를 열면 Microsoft가 이 서버의
+  // 콜백으로 리다이렉트시키고, 그 콜백이 로그인을 완료시킨다. 관리자 화면은
+  // 진행 중(pending)일 때만 짧은 주기로 상태를 폴링해 완료 여부를 감지한다.
+  const delegatedRedirectUri = `${window.location.origin}/api/email-voc/delegated-auth/callback`;
+  const { data: delegatedStatus } = useQuery({
+    queryKey: ['delegated-auth-status'],
+    queryFn: getDelegatedAuthStatus,
+    refetchInterval: (query) => (query.state.data?.pending ? 3_000 : false),
+  });
+  const [delegatedTenantId, setDelegatedTenantId] = useState('');
+  const [delegatedClientId, setDelegatedClientId] = useState('');
+  const [delegatedClientSecret, setDelegatedClientSecret] = useState('');
+  const [delegatedAuthUrl, setDelegatedAuthUrl] = useState<string | null>(null);
+
+  const delegatedConfigMutation = useMutation({
+    mutationFn: () => updateDelegatedAuthConfig({
+      tenant_id: delegatedTenantId, client_id: delegatedClientId, redirect_uri: delegatedRedirectUri,
+      client_secret: delegatedClientSecret || undefined,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['delegated-auth-status'] });
+      setDelegatedClientSecret(''); // 저장 후 화면에 값이 남아있지 않게 즉시 비움
+      setError('');
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+  });
+  const delegatedStartMutation = useMutation({
+    mutationFn: startDelegatedAuth,
+    onSuccess: (result: DelegatedAuthStartResult) => {
+      setDelegatedAuthUrl(result.auth_url);
+      // 새 탭으로 바로 열어준다 — 팝업이 차단되면 아래 폴백 링크를 눌러야 함
+      window.open(result.auth_url, '_blank', 'noopener,noreferrer');
+      queryClient.invalidateQueries({ queryKey: ['delegated-auth-status'] });
       setError('');
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
@@ -415,7 +456,24 @@ export function VocEmailPanel() {
                 className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
               />
             </label>
+
+            <label className="flex items-center gap-2 text-sm text-slate-300" title="등록된 지식과의 최고 유사도가 이 값 미만이면 LLM 분석·Teams발송 없이 건너뜁니다">
+              관련지식 임계치(0~1)
+              <input
+                type="number" min={0} max={1} step={0.05}
+                defaultValue={settings?.email_relevance_min_score ?? 0.35}
+                key={`relevance-${settings?.email_relevance_min_score}`}
+                onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (v >= 0 && v <= 1) settingsMutation.mutate({ email_relevance_min_score: v });
+                }}
+                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+              />
+            </label>
           </div>
+          <p className="text-xs text-slate-500">
+            관련지식 임계치 미만인 메일은 LLM 호출·Teams 발송 없이 이력에 "관련지식 부족(스킵)"으로만 기록됩니다 — 무관한 메일(스팸·사내공지·CC참조 등)에 대한 비용·알림 노이즈를 줄이기 위함입니다.
+          </p>
           <p className="text-xs text-slate-500">
             실제 메일함 연결(Graph API)은 Track B(대상 메일함 확정·M365 여부·IT 승인) 대기 중이라, 이 설정은 저장은 되지만 아직 실제 폴링은 동작하지 않습니다.
           </p>
@@ -438,9 +496,18 @@ export function VocEmailPanel() {
                 </p>
               )}
               <div className="grid grid-cols-3 gap-3">
-                <input placeholder="Tenant ID" value={credTenantId} onChange={(e) => setCredTenantId(e.target.value)} className={inputClass} />
-                <input placeholder="Client ID" value={credClientId} onChange={(e) => setCredClientId(e.target.value)} className={inputClass} />
-                <input placeholder="Client Secret" type="password" value={credClientSecret} onChange={(e) => setCredClientSecret(e.target.value)} className={inputClass} />
+                <label className="block text-xs text-slate-400">
+                  Tenant ID (Directory ID)
+                  <input placeholder="예: d4ffc887-..." value={credTenantId} onChange={(e) => setCredTenantId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Client ID (Application ID)
+                  <input placeholder="예: bfdb9f4f-..." value={credClientId} onChange={(e) => setCredClientId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Client Secret
+                  <input placeholder="IT에서 발급받은 값" type="password" value={credClientSecret} onChange={(e) => setCredClientSecret(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
               </div>
               <Button
                 size="sm" variant="secondary"
@@ -450,6 +517,96 @@ export function VocEmailPanel() {
               >
                 <Save className="w-3.5 h-3.5" /> 자격증명 저장
               </Button>
+            </div>
+          </div>
+
+          {/* 개인 계정 로그인 (Delegated) — Application 권한 승인 전 임시 경로 */}
+          <div className="pt-2">
+            <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2 mb-2">
+              <KeyRound className="w-4 h-4" /> 개인 계정 로그인 (Delegated, 임시)
+              <Badge color={delegatedStatus?.logged_in ? 'emerald' : 'slate'}>
+                {delegatedStatus?.logged_in ? `로그인됨 · ${delegatedStatus.account}` : '로그인 필요'}
+              </Badge>
+              {delegatedStatus?.client_secret_configured && (
+                <Badge color="indigo">Confidential Client (secret 설정됨)</Badge>
+              )}
+            </h3>
+            <p className="text-xs text-slate-500 mb-2">
+              Application 권한(위 자격증명) 승인 전에도, 본인 메일함 기준으로 전체 플로우(수집→분석→라우팅→Teams발송)를
+              그대로 시연할 수 있는 임시 경로입니다. Application 권한이 설정돼 있으면 그쪽이 우선 사용됩니다.
+              라우팅 탭의 mailbox_upn을 아래 로그인할 본인 메일 주소와 동일하게 등록해야 합니다.
+            </p>
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs text-slate-400">
+                  Tenant ID (Directory ID)
+                  <input placeholder="예: d4ffc887-..." value={delegatedTenantId} onChange={(e) => setDelegatedTenantId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Client ID (Application ID — Object ID 아님)
+                  <input placeholder="예: bfdb9f4f-..." value={delegatedClientId} onChange={(e) => setDelegatedClientId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
+              </div>
+              <label className="block text-xs text-slate-400">
+                리다이렉트 URL (Azure AD 앱 등록 시 이 값 그대로 등록 필요 — 자동 계산됨)
+                <input readOnly value={delegatedRedirectUri} className={clsx('w-full mt-1 font-mono text-xs', inputClass)} onFocus={(e) => e.target.select()} />
+              </label>
+              <label className="block text-xs text-slate-400">
+                Client Secret (선택 — 리다이렉트 URI가 Azure AD에 "Web" 플랫폼으로 등록돼 PKCE만으로
+                토큰 교환이 거부될 때만 입력. 비워두면 기존과 동일하게 시크릿 없이 동작)
+                <input
+                  placeholder={delegatedStatus?.client_secret_configured ? '설정됨 — 변경하려면 새 값 입력' : 'Client Secret'}
+                  type="password" value={delegatedClientSecret}
+                  onChange={(e) => setDelegatedClientSecret(e.target.value)}
+                  className={clsx('w-full mt-1', inputClass)}
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  size="sm" variant="secondary"
+                  onClick={() => delegatedConfigMutation.mutate()}
+                  loading={delegatedConfigMutation.isPending}
+                  disabled={!delegatedTenantId.trim() || !delegatedClientId.trim()}
+                >
+                  <Save className="w-3.5 h-3.5" /> 앱 정보 저장
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => delegatedStartMutation.mutate()}
+                  loading={delegatedStartMutation.isPending || !!delegatedStatus?.pending}
+                  disabled={!delegatedStatus?.configured}
+                >
+                  {delegatedStatus?.logged_in ? '다시 로그인' : '로그인 시작'}
+                </Button>
+              </div>
+
+              {(delegatedStatus?.pending || delegatedStatus?.login_error || (delegatedStatus?.logged_in && delegatedAuthUrl)) && (
+                <div className={clsx(
+                  'border rounded-lg p-3 text-sm',
+                  delegatedStatus?.pending ? 'border-indigo-500/30 bg-indigo-500/10'
+                    : delegatedStatus?.login_error ? 'border-rose-500/30 bg-rose-500/10'
+                    : 'border-emerald-500/30 bg-emerald-500/10',
+                )}>
+                  {delegatedStatus?.pending ? (
+                    <>
+                      <p className="text-slate-200">새 탭에서 로그인 창이 열렸습니다. 안 열렸다면 아래 링크를 직접 클릭하세요(팝업 차단 가능성).</p>
+                      {delegatedAuthUrl && (
+                        <a
+                          href={delegatedAuthUrl} target="_blank" rel="noopener noreferrer"
+                          className="text-indigo-400 underline text-xs break-all"
+                        >
+                          로그인 페이지 열기
+                        </a>
+                      )}
+                      <p className="text-xs text-slate-500 mt-1">로그인 완료되면 이 화면이 자동으로 갱신됩니다 (3초마다 확인 중).</p>
+                    </>
+                  ) : delegatedStatus?.login_error ? (
+                    <p className="text-rose-400">로그인 실패 — {delegatedStatus.login_error} (다시 로그인을 눌러 재시도하세요)</p>
+                  ) : delegatedStatus?.logged_in ? (
+                    <p className="text-emerald-400">로그인 완료 — 이제 아래 "지금 실행" 또는 위 "폴링 자동화 ON"이 본인 메일함을 대상으로 동작합니다.</p>
+                  ) : null}
+                </div>
+              )}
             </div>
           </div>
 
@@ -503,7 +660,7 @@ export function VocEmailPanel() {
                           <tr className="border-b border-slate-700 bg-slate-800/50">
                             <th className="text-left px-3 py-2 text-slate-400">메일함</th>
                             <th className="text-left px-3 py-2 text-slate-400">결과</th>
-                            <th className="text-left px-3 py-2 text-slate-400">수집/분석/중복/발송/발송실패</th>
+                            <th className="text-left px-3 py-2 text-slate-400">수집/분석/중복/관련지식부족/발송/발송실패</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -516,7 +673,7 @@ export function VocEmailPanel() {
                                   : <span className="text-rose-400">{m.error}</span>}
                               </td>
                               <td className="px-3 py-2 text-slate-400">
-                                {m.fetched} / {m.analyzed} / {m.skipped_duplicate} / {m.notified} / {m.notify_failed}
+                                {m.fetched} / {m.analyzed} / {m.skipped_duplicate} / {m.skipped_low_relevance} / {m.notified} / {m.notify_failed}
                               </td>
                             </tr>
                           ))}
@@ -544,7 +701,7 @@ export function VocEmailPanel() {
                       <th className="text-left px-3 py-2 text-slate-400">실행 시각</th>
                       <th className="text-left px-3 py-2 text-slate-400">namespace 수</th>
                       <th className="text-left px-3 py-2 text-slate-400">성공/실패 메일함</th>
-                      <th className="text-left px-3 py-2 text-slate-400">분석/발송</th>
+                      <th className="text-left px-3 py-2 text-slate-400">분석/발송/관련지식부족</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -557,7 +714,7 @@ export function VocEmailPanel() {
                             성공 {c.mailboxes_ok} / 실패 {c.mailboxes_failed}
                           </Badge>
                         </td>
-                        <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건</td>
+                        <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건 / {c.total_skipped_low_relevance}건</td>
                       </tr>
                     ))}
                   </tbody>
@@ -573,19 +730,28 @@ export function VocEmailPanel() {
         <section className="space-y-3">
           <p className="text-xs text-slate-500">실제 메일 연동 없이, 텍스트를 직접 입력해 분류/심각도/오배치 판정 로직을 검증합니다.</p>
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
-            <input
-              placeholder="제목" value={testSubject} onChange={(e) => setTestSubject(e.target.value)}
-              className={clsx('w-full', inputClass)}
-            />
-            <textarea
-              placeholder="본문" value={testBody} onChange={(e) => setTestBody(e.target.value)}
-              rows={3}
-              className={clsx('w-full', inputClass)}
-            />
-            <input
-              placeholder="수신 메일함 담당 파트 (선택 — 오배치 판정용)" value={testPart} onChange={(e) => setTestPart(e.target.value)}
-              className={clsx('w-full', inputClass)}
-            />
+            <label className="block text-xs text-slate-400">
+              메일 제목
+              <input
+                placeholder="예: 결제 오류 문의" value={testSubject} onChange={(e) => setTestSubject(e.target.value)}
+                className={clsx('w-full mt-1', inputClass)}
+              />
+            </label>
+            <label className="block text-xs text-slate-400">
+              메일 본문
+              <textarea
+                placeholder="분석할 메일 본문 텍스트" value={testBody} onChange={(e) => setTestBody(e.target.value)}
+                rows={3}
+                className={clsx('w-full mt-1', inputClass)}
+              />
+            </label>
+            <label className="block text-xs text-slate-400">
+              수신 메일함 담당 파트 (선택 — 오배치 판정용, 예: 결제팀이 받았는데 배송 관련 문의면 "오배치 의심"으로 판정)
+              <input
+                placeholder="예: 결제팀" value={testPart} onChange={(e) => setTestPart(e.target.value)}
+                className={clsx('w-full mt-1', inputClass)}
+              />
+            </label>
             <Button size="sm" onClick={() => analyzeMutation.mutate()} loading={analyzeMutation.isPending} disabled={!selectedNs || !testBody.trim()}>
               분석 실행
             </Button>
@@ -626,39 +792,58 @@ export function VocEmailPanel() {
                   {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
                 </select>
                 <Button size="sm" onClick={startCreate}>
-                  <Plus className="w-3.5 h-3.5" /> 파트 추가
+                  <Plus className="w-3.5 h-3.5" /> 라우팅 추가
                 </Button>
               </div>
             </div>
+            <p className="text-xs text-slate-500">
+              선택한 네임스페이스 기준으로 "메일함 1개 ↔ 담당 파트 ↔ Teams 웹훅" 라우팅 행을 관리합니다.
+              여기 입력하는 "담당 파트"는 표시용 자유 입력 텍스트로, 사용자관리의 정식 파트 등록과는 별개입니다.
+            </p>
 
             {showForm && (
               <div className="bg-slate-800 border border-indigo-500/30 rounded-lg p-4 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <input
-                    placeholder="담당 파트 (예: 결제팀)" value={form.part}
-                    onChange={(e) => setForm({ ...form, part: e.target.value })}
-                    className={inputClass}
-                  />
-                  <input
-                    placeholder="메일함 UPN (예: voc-billing@example.com)" value={form.mailbox_upn}
-                    onChange={(e) => setForm({ ...form, mailbox_upn: e.target.value })}
-                    className={inputClass}
-                  />
-                  <input
-                    placeholder="Teams Workflows 웹훅 URL" value={form.teams_webhook_url ?? ''}
-                    onChange={(e) => setForm({ ...form, teams_webhook_url: e.target.value })}
-                    className={clsx('col-span-2', inputClass)}
-                  />
-                  <input
-                    placeholder="온콜 담당자명 (표시 전용, 자동발신 아님)" value={form.oncall_contact_name ?? ''}
-                    onChange={(e) => setForm({ ...form, oncall_contact_name: e.target.value })}
-                    className={inputClass}
-                  />
-                  <input
-                    placeholder="온콜 연락처" value={form.oncall_contact_phone ?? ''}
-                    onChange={(e) => setForm({ ...form, oncall_contact_phone: e.target.value })}
-                    className={inputClass}
-                  />
+                  <label className="block text-xs text-slate-400">
+                    담당 파트
+                    <input
+                      placeholder="예: 결제팀" value={form.part}
+                      onChange={(e) => setForm({ ...form, part: e.target.value })}
+                      className={clsx('w-full mt-1', inputClass)}
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-400">
+                    메일함 UPN
+                    <input
+                      placeholder="예: voc-billing@example.com" value={form.mailbox_upn}
+                      onChange={(e) => setForm({ ...form, mailbox_upn: e.target.value })}
+                      className={clsx('w-full mt-1', inputClass)}
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-400 col-span-2">
+                    Teams Workflows 웹훅 URL (선택 — 없으면 분석·이력 저장까지만 진행)
+                    <input
+                      placeholder="https://..." value={form.teams_webhook_url ?? ''}
+                      onChange={(e) => setForm({ ...form, teams_webhook_url: e.target.value })}
+                      className={clsx('w-full mt-1', inputClass)}
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-400">
+                    온콜 담당자명 (선택 — 표시 전용, 자동발신 아님)
+                    <input
+                      placeholder="예: 홍길동" value={form.oncall_contact_name ?? ''}
+                      onChange={(e) => setForm({ ...form, oncall_contact_name: e.target.value })}
+                      className={clsx('w-full mt-1', inputClass)}
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-400">
+                    온콜 연락처 (선택)
+                    <input
+                      placeholder="예: 010-1234-5678" value={form.oncall_contact_phone ?? ''}
+                      onChange={(e) => setForm({ ...form, oncall_contact_phone: e.target.value })}
+                      className={clsx('w-full mt-1', inputClass)}
+                    />
+                  </label>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button size="sm" onClick={handleSubmit} loading={createMutation.isPending || updateMutation.isPending}>
@@ -675,7 +860,7 @@ export function VocEmailPanel() {
               <div className="text-sm text-slate-500 animate-pulse py-6 text-center">로딩 중...</div>
             ) : routing.length === 0 ? (
               <div className="text-sm text-slate-500 py-8 text-center border border-dashed border-slate-700 rounded-lg">
-                등록된 라우팅 매핑이 없습니다. "파트 추가"로 메일함↔파트↔웹훅을 등록하세요.
+                등록된 라우팅 매핑이 없습니다. "라우팅 추가"로 메일함↔파트↔웹훅을 등록하세요.
               </div>
             ) : (
               <div className="border border-slate-700 rounded-lg overflow-hidden">
@@ -826,7 +1011,12 @@ export function VocEmailPanel() {
                       심각도: {SEVERITY_LABEL[h.severity ?? ''] ?? h.severity ?? '-'}
                     </Badge>
                     {h.mismatch_flagged && <Badge color="amber">오배치 의심</Badge>}
-                    <Badge color={h.status === 'notified' ? 'emerald' : h.status === 'notify_failed' ? 'rose' : 'slate'}>
+                    <Badge color={
+                      h.status === 'notified' ? 'emerald'
+                        : h.status === 'notify_failed' ? 'rose'
+                        : h.status === 'skipped_relevance' ? 'amber'
+                        : 'slate'
+                    }>
                       {STATUS_LABEL[h.status] ?? h.status}
                     </Badge>
                   </div>

@@ -21,7 +21,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from core.database import get_conn
-from service.email_voc import pipeline, retention, routing_service
+from service.email_voc import delegated_auth, pipeline, retention, routing_service
 
 logger = logging.getLogger(__name__)
 # 이 프로젝트 전체에 logging.basicConfig()가 없어 루트 로거가 기본 WARNING 레벨이라
@@ -80,12 +80,12 @@ async def _record_cycle(started_at: datetime, finished_at: datetime, agg: dict, 
             INSERT INTO ops_email_poll_cycle
                 (started_at, finished_at, namespaces_processed, mailboxes_ok, mailboxes_failed,
                  total_fetched, total_analyzed, total_notified, total_notify_failed,
-                 total_skipped_duplicate, error_summary)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                 total_skipped_duplicate, total_skipped_low_relevance, error_summary)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             """,
             started_at, finished_at, agg["namespaces_processed"], agg["mailboxes_ok"], agg["mailboxes_failed"],
             agg["total_fetched"], agg["total_analyzed"], agg["total_notified"], agg["total_notify_failed"],
-            agg["total_skipped_duplicate"], ("\n".join(errors) if errors else None),
+            agg["total_skipped_duplicate"], agg["total_skipped_low_relevance"], ("\n".join(errors) if errors else None),
         )
 
 
@@ -108,7 +108,7 @@ async def run_cycle_now(settings: Optional[dict] = None) -> None:
     agg = {
         "namespaces_processed": 0, "mailboxes_ok": 0, "mailboxes_failed": 0,
         "total_fetched": 0, "total_analyzed": 0, "total_notified": 0,
-        "total_notify_failed": 0, "total_skipped_duplicate": 0,
+        "total_notify_failed": 0, "total_skipped_duplicate": 0, "total_skipped_low_relevance": 0,
     }
     errors: list[str] = []
     try:
@@ -125,12 +125,17 @@ async def run_cycle_now(settings: Optional[dict] = None) -> None:
         # 자격증명은 namespace와 무관하게 하나뿐이라 루프 밖에서 한 번만 복호화한다
         # (namespace마다 다시 복호화하면 Fernet 연산+DB 조회가 namespace 수만큼 중복됨).
         credentials = await routing_service.get_graph_credentials_decrypted()
+        # Application 권한이 아직 없으면(Track B 승인 대기) Delegated 로그인 세션으로
+        # 대체 — 이것도 같은 이유로 namespace 루프 밖에서 한 번만 조회한다(매
+        # namespace마다 MSAL silent 토큰 갱신을 반복 호출하지 않도록).
+        access_token = None if credentials else await delegated_auth.get_access_token_silent()
 
         for namespace in namespaces:
             agg["namespaces_processed"] += 1
             try:
                 result = await pipeline.run_manual_collection(
-                    namespace, date_from, date_to, credentials=credentials,
+                    namespace, date_from, date_to, credentials=credentials, access_token=access_token,
+                    skip_credential_resolution=True,
                 )
                 summary_parts = []
                 for m in result["mailboxes"]:
@@ -139,6 +144,7 @@ async def run_cycle_now(settings: Optional[dict] = None) -> None:
                     agg["total_notified"] += m["notified"]
                     agg["total_notify_failed"] += m["notify_failed"]
                     agg["total_skipped_duplicate"] += m["skipped_duplicate"]
+                    agg["total_skipped_low_relevance"] += m["skipped_low_relevance"]
                     if m["ok"]:
                         agg["mailboxes_ok"] += 1
                         summary_parts.append(f"{m['mailbox_upn']}(fetched={m['fetched']},analyzed={m['analyzed']},notified={m['notified']})")
