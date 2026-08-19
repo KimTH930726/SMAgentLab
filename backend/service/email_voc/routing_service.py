@@ -28,7 +28,7 @@ async def get_settings() -> dict:
         "email_collection_enabled": values.get("email_collection_enabled", "false").lower() == "true",
         "email_polling_interval_minutes": int(values.get("email_polling_interval_minutes", 5)),
         "email_lookback_days": int(values.get("email_lookback_days", 7)),
-        "email_relevance_min_score": float(values.get("email_relevance_min_score", 0.35)),
+        "email_relevance_min_score": float(values.get("email_relevance_min_score", 0.38)),
     }
 
 

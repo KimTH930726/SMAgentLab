@@ -89,13 +89,20 @@ async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceC
     enriched_query = f"{query_text} {mapped_term}" if mapped_term else query_text
 
     defaults = retrieval.get_search_defaults()
-    results = await retrieval.search_knowledge(
-        namespace, query_vec, enriched_query,
-        defaults["default_w_vector"], defaults["default_w_keyword"],
-        int(defaults["default_top_k"]),
-    )
+    w_vector, w_keyword = defaults["default_w_vector"], defaults["default_w_keyword"]
+    results = await retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, int(defaults["default_top_k"]))
     context = retrieval.build_context(results)
-    top_score = max((r.final_score for r in results), default=0.0)
+
+    # r.final_score는 검색 순위용으로 (1 + base_weight)가 곱해져 있다(retrieval.py) —
+    # base_weight 기본값이 1.0이라 사실상 거의 모든 지식의 점수가 2배로 부풀려짐.
+    # 이 관련성 게이트는 "무관한 메일을 걸러내는 것"이 목적인데, final_score를 그대로
+    # 쓰면 실제로는 완전 무관한 메일(순수 유사도 0.34~0.36 수준)도 임계치(0.35)를 가볍게
+    # 넘어버려 필터가 사실상 작동하지 않는 게 실사용 중 발견됐다(예: "패스워드 만료
+    # 안내" 메일이 "배달 중지 테이블" 문서와 0.7이 넘는 점수로 매칭). base_weight를 뺀
+    # 가중합 원점수로 게이트를 걸어야 실제 의미적 유사도를 반영한다 — analyze_email()이
+    # 인용할 지식을 고르는 랭킹(knowledge_min_score 비교)에는 base_weight 부스팅이 계속
+    # 유효하므로 그쪽은 final_score를 그대로 둔다.
+    top_score = max((w_vector * r.v_score + w_keyword * r.k_score for r in results), default=0.0)
     return RelevanceCheck(mapped_term=mapped_term, results=results, context=context, top_score=top_score)
 
 

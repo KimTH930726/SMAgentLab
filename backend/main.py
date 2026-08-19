@@ -1076,12 +1076,16 @@ async def _migrate_email_voc_tables(conn) -> None:
     )
 
     # ── 폴링 정책 설정값 시드 (§9, ops_system_config 재사용 — 재시작에도 유지돼야 하므로 in-memory 스레숄드 패턴 대신 DB 영속 방식 채택) ──
+    # email_relevance_min_score=0.38: 실 메일 데이터로 실측 보정한 값(원래 0.35).
+    # service.check_relevance()가 base_weight 부스팅 없는 원점수를 쓰도록 고친 뒤
+    # 재측정 — 완전 무관한 메일은 원점수 0.34~0.36, 실제로 관련 있는 메일은 0.42~0.49
+    # 대역에 분포해 그 사이인 0.38로 게이트를 잡았다(docs/tech/voc-email-handoff.md 참고).
     await conn.execute("""
         INSERT INTO ops_system_config (key, value) VALUES
         ('email_collection_enabled', 'false'),
         ('email_polling_interval_minutes', '5'),
         ('email_lookback_days', '7'),
-        ('email_relevance_min_score', '0.35')
+        ('email_relevance_min_score', '0.38')
         ON CONFLICT (key) DO NOTHING
     """)
     # email_graph_credentials 키는 값이 있을 때만 존재 — 미설정 상태를 "행 없음"으로 표현
