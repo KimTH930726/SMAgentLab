@@ -32,6 +32,8 @@ export interface VocRouting {
   teams_webhook_url: string | null;
   oncall_contact_name: string | null;
   oncall_contact_phone: string | null;
+  mail_folder_id: string | null;
+  mail_folder_name: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -43,7 +45,22 @@ export interface VocRoutingPayload {
   teams_webhook_url?: string | null;
   oncall_contact_name?: string | null;
   oncall_contact_phone?: string | null;
+  mail_folder_id?: string | null;
+  mail_folder_name?: string | null;
   is_active?: boolean;
+}
+
+export interface MailFolder {
+  id: string;
+  display_name: string;
+  unread_count: number;
+  total_count: number;
+}
+
+// mailbox_upn의 실제 Outlook 폴더 목록 조회 — 라우팅 폼의 "메일 폴더" 드롭다운용.
+// 비워두면(mail_folder_id 없음) 기존과 동일하게 메일함 전체를 조회한다.
+export async function getMailFolders(mailboxUpn: string): Promise<MailFolder[]> {
+  return apiFetch<MailFolder[]>(`/email-voc/mail-folders?mailbox_upn=${encodeURIComponent(mailboxUpn)}`);
 }
 
 export async function listVocRouting(namespace: string): Promise<VocRouting[]> {
@@ -222,12 +239,22 @@ export interface EmailAnalysisHistoryItem {
   created_at: string;
 }
 
+export interface EmailHistoryFilters {
+  severity?: string;
+  status?: string;
+  mismatchOnly?: boolean;
+  keyword?: string;
+}
+
 export async function getEmailHistory(
-  namespace: string, limit = 50, offset = 0,
+  namespace: string, limit = 50, offset = 0, filters: EmailHistoryFilters = {},
 ): Promise<EmailAnalysisHistoryItem[]> {
-  return apiFetch<EmailAnalysisHistoryItem[]>(
-    `/email-voc/history?namespace=${encodeURIComponent(namespace)}&limit=${limit}&offset=${offset}`,
-  );
+  const params = new URLSearchParams({ namespace, limit: String(limit), offset: String(offset) });
+  if (filters.severity) params.set('severity', filters.severity);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.mismatchOnly) params.set('mismatch_only', 'true');
+  if (filters.keyword) params.set('keyword', filters.keyword);
+  return apiFetch<EmailAnalysisHistoryItem[]>(`/email-voc/history?${params.toString()}`);
 }
 
 // ─── 폴링 실시간 상태 + 사이클 이력 ─────────────────────────────────────────

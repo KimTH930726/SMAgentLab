@@ -173,6 +173,7 @@ async def run_manual_collection(
             )
             messages = await graph_client.fetch_messages(
                 routing["mailbox_upn"], token, received_after, received_before,
+                folder_id=routing.get("mail_folder_id"),
             )
         except (graph_client.GraphAuthError, graph_client.GraphApiError) as e:
             result["error"] = str(e)
@@ -264,23 +265,47 @@ async def run_manual_collection(
     return {"date_from": date_from, "date_to": date_to, "mailboxes": results}
 
 
-async def list_history(namespace: str, limit: int = 50, offset: int = 0) -> list[dict]:
+async def list_history(
+    namespace: str, limit: int = 50, offset: int = 0, *,
+    severity: Optional[str] = None, status: Optional[str] = None,
+    mismatch_only: bool = False, keyword: Optional[str] = None,
+) -> list[dict]:
+    """이력 조회 — 관리자 화면 "이력" 탭. 필터는 전부 선택이며 AND로 결합된다.
+
+    keyword는 제목/발신자/본문에 대한 부분일치(ILIKE) 검색이다 — 대소문자 무시,
+    별도 인덱스는 없음(이력 테이블은 조회 빈도가 낮고 30일 보관 정책으로 크기가
+    제한돼 있어 순차 스캔으로 충분하다고 판단, 필요해지면 pg_trgm GIN 인덱스 추가 고려).
+    """
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             return []
+        conditions = ["a.namespace_id = $1"]
+        params: list = [ns_id]
+        if severity:
+            params.append(severity)
+            conditions.append(f"a.severity = ${len(params)}")
+        if status:
+            params.append(status)
+            conditions.append(f"a.status = ${len(params)}")
+        if mismatch_only:
+            conditions.append("a.mismatch_flagged = true")
+        if keyword:
+            params.append(f"%{keyword}%")
+            conditions.append(f"(a.subject ILIKE ${len(params)} OR a.sender ILIKE ${len(params)} OR a.body ILIKE ${len(params)})")
+        params.extend([limit, offset])
         rows = await conn.fetch(
-            """
+            f"""
             SELECT a.id, a.mailbox_upn, r.part, a.subject, a.sender,
                    a.received_at::text, a.category, a.severity, a.mismatch_flagged,
                    a.knowledge_ref_ids, a.resolution_draft, a.reasoning, a.status,
                    a.teams_sent_at::text, a.notify_error, a.created_at::text
             FROM ops_email_analysis a
             LEFT JOIN ops_voc_routing r ON a.routing_id = r.id
-            WHERE a.namespace_id = $1
+            WHERE {" AND ".join(conditions)}
             ORDER BY COALESCE(a.received_at, a.created_at) DESC
-            LIMIT $2 OFFSET $3
+            LIMIT ${len(params) - 1} OFFSET ${len(params)}
             """,
-            ns_id, limit, offset,
+            *params,
         )
     return [dict(r) for r in rows]

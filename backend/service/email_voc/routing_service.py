@@ -109,7 +109,8 @@ async def get_graph_credentials_decrypted() -> Optional[dict]:
 # ─── §10 담당자 라우팅 매핑 (ops_voc_routing) ─────────────────────────────────
 
 _ROUTING_COLUMNS = """id, part, mailbox_upn, teams_webhook_url, oncall_contact_name,
-                      oncall_contact_phone, is_active, created_at::text, updated_at::text"""
+                      oncall_contact_phone, mail_folder_id, mail_folder_name,
+                      is_active, created_at::text, updated_at::text"""
 
 
 async def list_routing(namespace: str) -> list[dict]:
@@ -138,11 +139,13 @@ async def create_routing(namespace: str, data: dict) -> dict:
         try:
             row = await conn.fetchrow(
                 f"""INSERT INTO ops_voc_routing
-                        (namespace_id, part, mailbox_upn, teams_webhook_url, oncall_contact_name, oncall_contact_phone)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                        (namespace_id, part, mailbox_upn, teams_webhook_url, oncall_contact_name,
+                         oncall_contact_phone, mail_folder_id, mail_folder_name)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     RETURNING {_ROUTING_COLUMNS}""",
                 ns_id, data["part"], data["mailbox_upn"], data.get("teams_webhook_url"),
                 data.get("oncall_contact_name"), data.get("oncall_contact_phone"),
+                data.get("mail_folder_id"), data.get("mail_folder_name"),
             )
         except asyncpg.exceptions.UniqueViolationError:
             # 위 사전 체크와 실제 INSERT 사이의 경합(TOCTOU) — 동시에 같은 메일함을
@@ -176,11 +179,13 @@ async def update_routing(routing_id: int, namespace: str, updates: dict) -> Opti
                 f"""UPDATE ops_voc_routing
                     SET part=$1, mailbox_upn=$2, teams_webhook_url=$3,
                         oncall_contact_name=$4, oncall_contact_phone=$5, is_active=$6,
+                        mail_folder_id=$7, mail_folder_name=$8,
                         updated_at=NOW()
-                    WHERE id=$7 AND namespace_id=$8
+                    WHERE id=$9 AND namespace_id=$10
                     RETURNING {_ROUTING_COLUMNS}""",
                 _pick("part"), _pick("mailbox_upn"), _pick("teams_webhook_url"),
                 _pick("oncall_contact_name"), _pick("oncall_contact_phone"), _pick("is_active"),
+                _pick("mail_folder_id"), _pick("mail_folder_name"),
                 routing_id, ns_id,
             )
         except asyncpg.exceptions.UniqueViolationError:

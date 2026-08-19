@@ -47,6 +47,8 @@ class VocRoutingCreate(BaseModel):
     teams_webhook_url: Optional[str] = None
     oncall_contact_name: Optional[str] = None
     oncall_contact_phone: Optional[str] = None
+    mail_folder_id: Optional[str] = None
+    mail_folder_name: Optional[str] = None
 
 
 class VocRoutingUpdate(BaseModel):
@@ -58,6 +60,10 @@ class VocRoutingUpdate(BaseModel):
     oncall_contact_name: Optional[str] = None
     oncall_contact_phone: Optional[str] = None
     is_active: Optional[bool] = None
+    # mail_folder_*는 다른 필드와 달리 빈 문자열로 "지우는"(전체 메일함으로 되돌리는)
+    # 것도 허용해야 하므로 min_length 제약을 두지 않는다.
+    mail_folder_id: Optional[str] = None
+    mail_folder_name: Optional[str] = None
 
 
 class VocRoutingOut(BaseModel):
@@ -68,9 +74,18 @@ class VocRoutingOut(BaseModel):
     teams_webhook_url: Optional[str] = None
     oncall_contact_name: Optional[str] = None
     oncall_contact_phone: Optional[str] = None
+    mail_folder_id: Optional[str] = None
+    mail_folder_name: Optional[str] = None
     is_active: bool
     created_at: str
     updated_at: str
+
+
+class MailFolderOut(BaseModel):
+    id: str
+    display_name: str
+    unread_count: int
+    total_count: int
 
 
 class ManualCollectionRequest(BaseModel):

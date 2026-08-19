@@ -102,12 +102,13 @@ Redis 데이터        : 256MB   (캐시 maxmemory 제한)
 
 > **운영 중 인터넷 접속 0건.** 임베딩 모델은 이미지에 동봉, 외부 의존성 전부 사내 자원만 사용.
 
-> ⚠️ **(예정) VOC 이메일 분석 채널 Track B 승인 시 추가될 아웃바운드** — 현재는 Graph API 자격증명이 미설정 상태라 해당 없음. M365 보안성 검토·API 제공이 승인되어 실 연동을 시작하면 아래 2개 목적지로의 HTTPS(443) 아웃바운드가 신규로 필요해진다(더 이상 "인터넷 접속 0건"이 아니게 됨 — 보안팀 검토 시 사전 공유 필요):
+> ⚠️ **VOC 이메일 분석 채널에 필요한 추가 아웃바운드 — Track A(Delegated, 개인 계정)로 이미 실측 확인됨, Track B(Application) 승인 여부와 무관하게 동일하게 필요**. 두 트랙 모두 결국 같은 Microsoft Graph API/Entra ID를 호출하므로, 아래 목적지로의 HTTPS(443) 아웃바운드가 있어야 한다(더 이상 "인터넷 접속 0건"이 아니게 됨 — 보안팀 검토 시 사전 공유 필요). 2026-08-19 기준 실제로 이 아웃바운드를 열어서 로그인·메일 수집·Teams 알림까지 전 구간 실사용 검증 완료:
 > | 대상 | 용도 |
 > |---|---|
-> | `login.microsoftonline.com`, `graph.microsoft.com` | Microsoft Graph API (msal client_credentials 토큰 발급 + 메일 조회) |
-> | Teams Workflows 웹훅 URL (`*.logic.azure.com` 등, 파트별 채널마다 다름) | 분석 결과 Teams 알림 발송 |
-> 상세 배경은 `docs/email-analysis-channel-plan.md`, 조직 승인 진행 상황은 별도 WBS 참조.
+> | `login.microsoftonline.com` | OAuth2 토큰 발급(Authorization Code Flow + PKCE, Confidential Client) |
+> | `graph.microsoft.com` | Microsoft Graph API — 메일 조회(`GET /users/{mailbox}/messages`, `/mailFolders`) |
+> | Power Automate "Workflows" 웹훅 (`*.powerplatform.com`, 실측 확인된 실제 도메인 — 기존에 `*.logic.azure.com`으로 추정 기재됐던 것을 정정. 파트별 채널마다 세부 경로는 다름) | 분석 결과 Teams 알림 발송 |
+> 실사용 검증 상세(요청/응답, 발견된 버그 등)는 `docs/tech/voc-email-handoff.md`(git 비추적), 조직 승인 배경은 `docs/email-analysis-channel-plan.md` 참조.
 
 ---
 

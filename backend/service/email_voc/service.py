@@ -65,6 +65,13 @@ _DEFAULT_ANALYSIS_PROMPT = """아래는 사내 VOC(문의) 이메일과, 이와 
 
 _VALID_CATEGORIES = {"system_error", "user_mistake", "uncertain"}
 _VALID_SEVERITIES = {"low", "medium", "high", "urgent"}
+_KNOWLEDGE_SNIPPET_LEN = 60
+_MAX_KNOWLEDGE_REFS_SHOWN = 3  # Teams 카드에 다 보여주면 너무 길어져서 상위 N개만
+
+
+def _snippet(content: str, length: int = _KNOWLEDGE_SNIPPET_LEN) -> str:
+    flat = " ".join(content.split())  # 줄바꿈/연속 공백 정리 — 카드에서 한 줄로 보이게
+    return flat if len(flat) <= length else flat[:length] + "..."
 
 
 async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceCheck:
@@ -109,7 +116,13 @@ async def analyze_email(
 
     Returns:
         {"category", "severity", "mismatch_flagged", "knowledge_ref_ids",
-         "resolution_draft", "reasoning", "mapped_term"}
+         "knowledge_refs", "resolution_draft", "reasoning", "mapped_term"}
+
+    knowledge_refs: LLM 판단의 실제 근거(어떤 지식이 어느 정도 유사도로 매칭됐는지)를
+    사람이 바로 확인할 수 있도록 상위 N개만 요약해 담는다 — 관련지식 필터를 통과했더라도
+    실제로는 무관한 지식이 우연히 매칭돼(예: 완전히 다른 도메인인데 "실패/오류" 같은
+    일반 단어만 겹침) LLM이 엉뚱한 컨텍스트로 답을 만드는 경우가 실사용 중 실제로
+    발견됐다 — Teams 알림에 근거를 노출하면 이런 오탐을 사람이 바로 알아챌 수 있다.
     """
     check = precomputed if precomputed is not None else await check_relevance(namespace, subject, body)
     mapped_term = check.mapped_term
@@ -117,7 +130,12 @@ async def analyze_email(
     context = check.context
 
     min_score = retrieval.get_thresholds()["knowledge_min_score"]
-    knowledge_ref_ids = [r.id for r in results if r.final_score >= min_score]
+    matched = sorted((r for r in results if r.final_score >= min_score), key=lambda r: r.final_score, reverse=True)
+    knowledge_ref_ids = [r.id for r in matched]
+    knowledge_refs = [
+        {"id": r.id, "snippet": _snippet(r.content), "score": round(r.final_score, 2)}
+        for r in matched[:_MAX_KNOWLEDGE_REFS_SHOWN]
+    ]
 
     system_prompt = await get_prompt("email_voc_analysis_system", _DEFAULT_ANALYSIS_SYSTEM)
     prompt_template = await get_prompt("email_voc_analysis_prompt", _DEFAULT_ANALYSIS_PROMPT)
@@ -166,6 +184,7 @@ async def analyze_email(
         "severity": severity,
         "mismatch_flagged": bool(parsed.get("mismatch_flagged", False)),
         "knowledge_ref_ids": knowledge_ref_ids,
+        "knowledge_refs": knowledge_refs,
         "resolution_draft": parsed.get("resolution_draft"),
         "reasoning": reasoning,
         "mapped_term": mapped_term,

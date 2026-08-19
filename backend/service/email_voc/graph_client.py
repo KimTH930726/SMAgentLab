@@ -62,11 +62,19 @@ async def fetch_messages(
     access_token: str,
     received_after: datetime,
     received_before: Optional[datetime] = None,
+    *,
+    folder_id: Optional[str] = None,
 ) -> list[dict]:
     """지정 기간 동안 대상 메일함의 메시지를 조회한다 (§7.1 — $filter + nextLink 페이지네이션).
 
     개인 메일함 전용 /me/messages가 아니라 /users/{mailbox}/messages 형태를 쓴다 —
     애플리케이션 권한으로 타 메일함(공용 접수함)에 접근할 때 필수인 형태다.
+
+    folder_id: 지정하면 메일함 전체가 아니라 해당 폴더(예: 관리자가 만든 "VOC" 폴더)만
+    조회한다(`/mailFolders/{folder_id}/messages`) — 실사용 중 메일함 전체를 훑으면
+    스팸/사내공지 등 무관한 메일까지 관련지식 필터를 태우게 되는 게 확인돼, 관리자가
+    특정 폴더로 범위를 좁힐 수 있도록 추가(list_mail_folders()로 폴더 목록 조회 후
+    선택). None이면 기존과 동일하게 메일함 전체 조회.
 
     Returns:
         [{"id", "subject", "sender", "received_at", "body"}, ...]
@@ -86,7 +94,8 @@ async def fetch_messages(
     }
 
     messages: list[dict] = []
-    url: Optional[str] = f"{_GRAPH_BASE}/users/{mailbox_upn}/messages"
+    base = f"{_GRAPH_BASE}/users/{mailbox_upn}"
+    url: Optional[str] = f"{base}/mailFolders/{folder_id}/messages" if folder_id else f"{base}/messages"
 
     async with httpx.AsyncClient(timeout=FETCH_TIMEOUT) as client:
         for page_num in range(_MAX_PAGES):
@@ -111,6 +120,34 @@ async def fetch_messages(
 
     logger.info("Graph API 메일 수집 완료: %s, %d건", mailbox_upn, len(messages))
     return messages
+
+
+async def list_mail_folders(mailbox_upn: str, access_token: str) -> list[dict]:
+    """관리자 화면에서 라우팅을 설정할 때 "이 메일함의 어느 폴더로 좁힐지" 선택할 수
+    있도록 실제 폴더 목록을 조회한다. 하위 폴더(inbox 안의 하위 폴더 등)까지는 따로
+    쿼리하지 않고 최상위 폴더 목록만 반환한다 — 관리자가 만드는 VOC 전용 폴더는 보통
+    최상위에 만들기 때문에 이 정도로 충분하고, 재귀 조회는 불필요한 복잡도.
+
+    Returns:
+        [{"id", "display_name", "unread_count", "total_count"}, ...]
+    """
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {"$select": "id,displayName,unreadItemCount,totalItemCount", "$top": 100}
+    url = f"{_GRAPH_BASE}/users/{mailbox_upn}/mailFolders"
+
+    async with httpx.AsyncClient(timeout=FETCH_TIMEOUT) as client:
+        resp = await _get_with_retry(client, url, params, headers)
+        if resp.status_code != 200:
+            raise GraphApiError(f"폴더 목록 조회 실패 (HTTP {resp.status_code}): {resp.text[:300]}")
+        data = resp.json()
+
+    return [
+        {
+            "id": f["id"], "display_name": f.get("displayName", ""),
+            "unread_count": f.get("unreadItemCount", 0), "total_count": f.get("totalItemCount", 0),
+        }
+        for f in data.get("value", [])
+    ]
 
 
 async def _get_with_retry(

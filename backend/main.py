@@ -1003,6 +1003,11 @@ async def _migrate_email_voc_tables(conn) -> None:
         )
     """)
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_voc_routing_ns ON ops_voc_routing (namespace_id)")
+    # 특정 폴더만 조회 — 기본은 메일함 전체 조회(NULL)이지만, 관리자가 관리자 화면에서
+    # 실제 폴더 목록을 불러와 지정하면 그 폴더만 조회하도록 제한 가능(§ 메일함 전체 조회 시
+    # 무관한 메일/스팸까지 섞여 들어오는 문제를 원천 차단하기 위함, 실사용 중 발견).
+    await conn.execute("ALTER TABLE ops_voc_routing ADD COLUMN IF NOT EXISTS mail_folder_id VARCHAR(300)")
+    await conn.execute("ALTER TABLE ops_voc_routing ADD COLUMN IF NOT EXISTS mail_folder_name VARCHAR(200)")
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS ops_email_analysis (

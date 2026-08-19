@@ -4,16 +4,18 @@
 분류/심각도/오배치 판정 프롬프트를 검증할 수 있게 한다. 같은 analyze_email()
 함수가 나중에 §5 Phase 1의 실제 이메일 수동 실행에도 그대로 재사용된다.
 """
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from core.dependencies import get_current_user, check_namespace_ownership, get_current_admin
 from core.security import get_user_llm_credentials
-from service.email_voc import delegated_auth, service, teams_notify, routing_service, pipeline, scheduler
+from service.email_voc import delegated_auth, service, teams_notify, routing_service, pipeline, scheduler, graph_client
 from service.email_voc.schemas import (
     EmailAnalyzeRequest, EmailAnalysisOut, TeamsTestNotifyRequest,
     EmailCollectionSettingsOut, EmailCollectionSettingsUpdate,
-    VocRoutingCreate, VocRoutingUpdate, VocRoutingOut,
+    VocRoutingCreate, VocRoutingUpdate, VocRoutingOut, MailFolderOut,
     ManualCollectionRequest, ManualCollectionResult,
     GraphCredentialsStatus, GraphCredentialsUpdate,
     DelegatedAuthConfig, DelegatedAuthStatus, DelegatedAuthStartResult,
@@ -111,6 +113,32 @@ async def delete_voc_routing(routing_id: int, namespace: str, user: dict = Depen
     await routing_service.delete_routing(routing_id, namespace)
 
 
+@router.get("/mail-folders", response_model=list[MailFolderOut])
+async def list_mail_folders(mailbox_upn: str, admin: dict = Depends(get_current_admin)):
+    """라우팅 폼에서 "메일 폴더" 드롭다운을 채우기 위해 실제 폴더 목록을 조회한다.
+
+    pipeline.run_manual_collection()과 동일한 자격증명 우선순위(Application 권한 →
+    Delegated 세션)를 그대로 따른다 — 조회 시점에 실제로 메일을 가져올 수 있는
+    자격증명과 다른 걸 쓰면 "폴더는 보이는데 정작 폴링은 안 되는" 혼란이 생긴다.
+    """
+    credentials = await routing_service.get_graph_credentials_decrypted()
+    if credentials:
+        token = await graph_client.get_access_token(
+            credentials["tenant_id"], credentials["client_id"], credentials["client_secret"],
+        )
+    else:
+        token = await delegated_auth.get_access_token_silent()
+    if token is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Graph API 자격증명이 설정되지 않았습니다 — 폴더 목록을 조회하려면 먼저 로그인/자격증명 설정이 필요합니다.",
+        )
+    try:
+        return await graph_client.list_mail_folders(mailbox_upn, token)
+    except (graph_client.GraphAuthError, graph_client.GraphApiError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ─── Graph API 자격증명 (§7 Q10 승인 후 관리자가 수기 입력) ──────────────────
 
 @router.get("/graph-credentials", response_model=GraphCredentialsStatus)
@@ -181,12 +209,18 @@ async def run_manual_collection(body: ManualCollectionRequest, admin: dict = Dep
 @router.get("/history", response_model=list[EmailAnalysisHistoryItem])
 async def get_history(
     namespace: str, limit: int = 50, offset: int = 0,
+    severity: Optional[str] = None, status: Optional[str] = None,
+    mismatch_only: bool = False, keyword: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
     await check_namespace_ownership(namespace, user)
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
-    return await pipeline.list_history(namespace, limit=limit, offset=offset)
+    return await pipeline.list_history(
+        namespace, limit=limit, offset=offset,
+        severity=severity or None, status=status or None,
+        mismatch_only=mismatch_only, keyword=keyword or None,
+    )
 
 
 # ─── 폴링 실시간 상태 + 사이클 이력 ────────────────────────────────────────

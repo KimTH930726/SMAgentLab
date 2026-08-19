@@ -5,13 +5,13 @@ import { clsx } from 'clsx';
 import {
   getEmailCollectionSettings, updateEmailCollectionSettings,
   listVocRouting, createVocRouting, updateVocRouting, deleteVocRouting,
-  testAnalyzeEmail, testNotifyTeams,
+  testAnalyzeEmail, testNotifyTeams, getMailFolders,
   getGraphCredentials, updateGraphCredentials,
   getDelegatedAuthStatus, updateDelegatedAuthConfig, startDelegatedAuth,
   runManualCollection, getEmailHistory,
   getSchedulerStatus, getPollCycles,
   type VocRouting, type VocRoutingPayload, type EmailAnalysisResult,
-  type ManualCollectionResult, type DelegatedAuthStartResult,
+  type ManualCollectionResult, type DelegatedAuthStartResult, type MailFolder,
 } from '../../api/emailVoc';
 import { getNamespaces } from '../../api/namespaces';
 import { Button } from '../ui/Button';
@@ -20,9 +20,16 @@ import { ApiError } from '../../api/client';
 
 const EMPTY_ROUTING_FORM: VocRoutingPayload = {
   part: '', mailbox_upn: '', teams_webhook_url: '', oncall_contact_name: '', oncall_contact_phone: '',
+  mail_folder_id: '', mail_folder_name: '',
 };
 
 const SEVERITY_LABEL: Record<string, string> = { low: '낮음', medium: '보통', high: '높음', urgent: '긴급' };
+// 4단계가 전부 구분되도록 — 기존엔 낮음/보통이 둘 다 slate, 높음/긴급이 둘 다 rose라
+// 사실상 2단계로만 보였음. Teams 카드(teams_notify.py의 _SEVERITY_COLOR)와 동일한
+// 단계(회색→청록→호박→빨강)로 맞춰서 어디서 봐도 같은 심각도가 같은 색으로 읽히게 한다.
+const SEVERITY_COLOR: Record<string, 'slate' | 'cyan' | 'amber' | 'rose'> = {
+  low: 'slate', medium: 'cyan', high: 'amber', urgent: 'rose',
+};
 const CATEGORY_LABEL: Record<string, string> = { system_error: '시스템 오류', user_mistake: '사용자 실수', uncertain: '판단 보류' };
 
 type VocSubTab = 'collect' | 'analyze' | 'routing' | 'history';
@@ -147,6 +154,13 @@ export function VocEmailPanel() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['voc-routing', selectedNs] }),
   });
 
+  const [folderOptions, setFolderOptions] = useState<MailFolder[] | null>(null);
+  const loadFoldersMutation = useMutation({
+    mutationFn: () => getMailFolders(form.mailbox_upn),
+    onSuccess: (folders) => { setFolderOptions(folders); setError(''); },
+    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+  });
+
   const startEdit = (r: VocRouting) => {
     setEditingId(r.id);
     setForm({
@@ -154,13 +168,17 @@ export function VocEmailPanel() {
       teams_webhook_url: r.teams_webhook_url ?? '',
       oncall_contact_name: r.oncall_contact_name ?? '',
       oncall_contact_phone: r.oncall_contact_phone ?? '',
+      mail_folder_id: r.mail_folder_id ?? '',
+      mail_folder_name: r.mail_folder_name ?? '',
     });
+    setFolderOptions(null);
     setShowForm(true);
   };
 
   const startCreate = () => {
     setEditingId(null);
     setForm(EMPTY_ROUTING_FORM);
+    setFolderOptions(null);
     setShowForm(true);
   };
 
@@ -258,17 +276,29 @@ export function VocEmailPanel() {
   // ── 이력 ──────────────────────────────────────────────────────────────
   const [historyOffset, setHistoryOffset] = useState(0);
   const HISTORY_PAGE_SIZE = 30;
-  // namespace는 "3단계" 탭 선택기와 공유되므로, 거기서 바뀌어도 이력 페이지는
-  // 항상 1페이지로 리셋되어야 한다 — 이전 namespace의 offset이 남아있으면
-  // 다른 namespace를 엉뚱한 offset으로 조회해 빈 페이지가 나오는 버그가 생긴다.
+  const [historySeverity, setHistorySeverity] = useState('');
+  const [historyStatus, setHistoryStatus] = useState('');
+  const [historyMismatchOnly, setHistoryMismatchOnly] = useState(false);
+  const [historyKeywordDraft, setHistoryKeywordDraft] = useState(''); // 입력 중(미확정)
+  const [historyKeyword, setHistoryKeyword] = useState(''); // 검색 버튼/Enter로 확정된 값 — 이 값만 쿼리에 씀(타이핑마다 요청 안 나가게)
+  // namespace/필터가 바뀌면 이력 페이지는 항상 1페이지로 리셋되어야 한다 —
+  // 이전 offset이 남아있으면 필터링된 결과가 적을 때 빈 페이지가 나오는 버그가 생긴다.
   useEffect(() => {
     setHistoryOffset(0);
-  }, [selectedNs]);
+  }, [selectedNs, historySeverity, historyStatus, historyMismatchOnly, historyKeyword]);
   const { data: history = [], isLoading: historyLoading } = useQuery({
-    queryKey: ['email-history', selectedNs, historyOffset],
-    queryFn: () => getEmailHistory(selectedNs, HISTORY_PAGE_SIZE, historyOffset),
+    queryKey: ['email-history', selectedNs, historyOffset, historySeverity, historyStatus, historyMismatchOnly, historyKeyword],
+    queryFn: () => getEmailHistory(selectedNs, HISTORY_PAGE_SIZE, historyOffset, {
+      severity: historySeverity || undefined, status: historyStatus || undefined,
+      mismatchOnly: historyMismatchOnly, keyword: historyKeyword || undefined,
+    }),
     enabled: !!selectedNs && subTab === 'history',
   });
+  const historyFiltersActive = !!(historySeverity || historyStatus || historyMismatchOnly || historyKeyword);
+  const clearHistoryFilters = () => {
+    setHistorySeverity(''); setHistoryStatus(''); setHistoryMismatchOnly(false);
+    setHistoryKeywordDraft(''); setHistoryKeyword('');
+  };
 
   // ── 2단계: 분석 테스트 (§11 Track A #2) ─────────────────────────────────
   const [testSubject, setTestSubject] = useState('결제 오류 문의');
@@ -760,7 +790,7 @@ export function VocEmailPanel() {
               <div className="mt-3 bg-slate-900/50 border border-slate-700 rounded-lg p-4 space-y-2 text-sm">
                 <div className="flex flex-wrap gap-2">
                   <Badge color="slate">{CATEGORY_LABEL[testResult.category] ?? testResult.category}</Badge>
-                  <Badge color={testResult.severity === 'urgent' || testResult.severity === 'high' ? 'rose' : 'slate'}>
+                  <Badge color={SEVERITY_COLOR[testResult.severity] ?? 'slate'}>
                     심각도: {SEVERITY_LABEL[testResult.severity] ?? testResult.severity}
                   </Badge>
                   {testResult.mismatch_flagged && <Badge color="amber">오배치 의심</Badge>}
@@ -828,6 +858,40 @@ export function VocEmailPanel() {
                       className={clsx('w-full mt-1', inputClass)}
                     />
                   </label>
+                  <div className="col-span-2">
+                    <label className="block text-xs text-slate-400 mb-1">
+                      메일 폴더 (선택 — 비우면 메일함 전체 조회. 특정 폴더로 좁히면 무관한 메일 유입을 원천 차단)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={form.mail_folder_id ?? ''}
+                        onChange={(e) => {
+                          const picked = folderOptions?.find((f) => f.id === e.target.value);
+                          setForm({
+                            ...form,
+                            mail_folder_id: e.target.value,
+                            mail_folder_name: picked?.display_name ?? '',
+                          });
+                        }}
+                        className={clsx('flex-1', inputClass)}
+                      >
+                        <option value="">전체 메일함{form.mail_folder_name ? ` (현재: ${form.mail_folder_name})` : ''}</option>
+                        {folderOptions?.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.display_name} (안읽음 {f.unread_count} / 전체 {f.total_count})
+                          </option>
+                        ))}
+                      </select>
+                      <Button
+                        size="sm" variant="secondary" type="button"
+                        onClick={() => loadFoldersMutation.mutate()}
+                        loading={loadFoldersMutation.isPending}
+                        disabled={!form.mailbox_upn.trim()}
+                      >
+                        폴더 불러오기
+                      </Button>
+                    </div>
+                  </div>
                   <label className="block text-xs text-slate-400">
                     온콜 담당자명 (선택 — 표시 전용, 자동발신 아님)
                     <input
@@ -988,11 +1052,61 @@ export function VocEmailPanel() {
             </select>
           </div>
 
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-3 flex flex-wrap items-end gap-3">
+            <label className="text-xs text-slate-400">
+              심각도
+              <select
+                value={historySeverity} onChange={(e) => setHistorySeverity(e.target.value)}
+                className={clsx('block mt-1', inputClass)}
+              >
+                <option value="">전체</option>
+                {Object.entries(SEVERITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </label>
+            <label className="text-xs text-slate-400">
+              상태
+              <select
+                value={historyStatus} onChange={(e) => setHistoryStatus(e.target.value)}
+                className={clsx('block mt-1', inputClass)}
+              >
+                <option value="">전체</option>
+                {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-slate-300 pb-2">
+              <input
+                type="checkbox" checked={historyMismatchOnly}
+                onChange={(e) => setHistoryMismatchOnly(e.target.checked)}
+              />
+              오배치 의심만
+            </label>
+            <label className="text-xs text-slate-400 flex-1 min-w-[200px]">
+              키워드 검색 (제목·발신자·본문)
+              <input
+                value={historyKeywordDraft}
+                onChange={(e) => setHistoryKeywordDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') setHistoryKeyword(historyKeywordDraft); }}
+                placeholder="예: 결제 오류"
+                className={clsx('w-full mt-1', inputClass)}
+              />
+            </label>
+            <Button size="sm" variant="secondary" onClick={() => setHistoryKeyword(historyKeywordDraft)}>
+              검색
+            </Button>
+            {historyFiltersActive && (
+              <Button size="sm" variant="ghost" onClick={clearHistoryFilters}>
+                <X className="w-3.5 h-3.5" /> 필터 초기화
+              </Button>
+            )}
+          </div>
+
           {historyLoading ? (
             <div className="text-sm text-slate-500 animate-pulse py-6 text-center">로딩 중...</div>
           ) : history.length === 0 ? (
             <div className="text-sm text-slate-500 py-8 text-center border border-dashed border-slate-700 rounded-lg">
-              이력이 없습니다. "1단계 · 메일 수집"에서 수동 실행을 해보거나, 폴링 자동화가 켜지면 여기 쌓입니다.
+              {historyFiltersActive
+                ? '조건에 맞는 이력이 없습니다. 필터를 조정해보세요.'
+                : '이력이 없습니다. "1단계 · 메일 수집"에서 수동 실행을 해보거나, 폴링 자동화가 켜지면 여기 쌓입니다.'}
             </div>
           ) : (
             <div className="space-y-2">
@@ -1007,7 +1121,7 @@ export function VocEmailPanel() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Badge color="slate">{CATEGORY_LABEL[h.category ?? ''] ?? h.category ?? '-'}</Badge>
-                    <Badge color={h.severity === 'urgent' || h.severity === 'high' ? 'rose' : 'slate'}>
+                    <Badge color={SEVERITY_COLOR[h.severity ?? ''] ?? 'slate'}>
                       심각도: {SEVERITY_LABEL[h.severity ?? ''] ?? h.severity ?? '-'}
                     </Badge>
                     {h.mismatch_flagged && <Badge color="amber">오배치 의심</Badge>}

@@ -8,11 +8,19 @@ MCP 도구 실행기(agents/mcp_tool/agent.py의 _execute_http_call)를 그대�
 프로젝트(playwrite/modules/teams_notifier.py)의 Power Automate "Workflows" 플로우가
 단순 {"text": "..."} 페이로드(<br> 줄바꿈)로 동작하는 걸 확인해 동일 포맷으로 맞췄다 —
 같은 웹훅 URL을 재사용하려면 그 플로우가 실제로 파싱하는 스키마를 따라야 한다.
+(2026-08-19 재확인: Adaptive Card를 이 웹훅에 다시 보내봤더니 HTTP 202는 받지만
+Teams에 아예 도착하지 않음 — 이 플로우는 트리거 body의 `text` 필드만 메시지로
+전달하고 `attachments`(카드)는 무시/드롭하는 것으로 결론. 이 웹훅을 쓰는 한 진짜
+카드형 레이아웃(컬럼/배경색/큰 폰트 등)은 불가능하고, HTML 서식이 들어간 텍스트가
+현실적 최대치다. 진짜 Adaptive Card가 필요하면 이 웹훅과 별개로 "Post adaptive
+card in a chat or channel" 액션을 쓰는 새 Power Automate 플로우 + 새 웹훅을
+발급받아야 한다 — Power Automate 포털 작업이라 코드로는 할 수 없음.)
 
 §3 Q6 결정: 온콜 자동 전화는 하지 않는다 — 심각도 "높음/긴급"은 멘션+강조 표시까지만
 자동화하고, 실제 전화는 이 알림을 본 담당자가 수동으로 건다. oncall_contact_name은
 표시 전용이며 자동 발신에는 쓰이지 않는다.
 """
+import html
 import logging
 from typing import Optional
 
@@ -23,39 +31,83 @@ logger = logging.getLogger(__name__)
 _URGENT_SEVERITIES = {"high", "urgent"}
 _SEVERITY_LABEL = {"low": "낮음", "medium": "보통", "high": "높음", "urgent": "긴급"}
 _CATEGORY_LABEL = {"system_error": "시스템 오류", "user_mistake": "사용자 실수", "uncertain": "판단 보류"}
+# Power Automate "Workflows" 웹훅이 {"text": "..."}를 HTML로 렌더링한다(<br>가 실제로
+# 줄바꿈되는 걸 실측 확인) — Teams 리치 텍스트가 지원하는 표준 태그(b/span style=color)로
+# 제목/심각도를 강조한다. 4단계가 전부 구분되도록 — 예전엔 high/urgent가 같은 빨강이라
+# 사실상 2단계로만 보였음(관리자 화면도 동일 문제 있어 VocEmailPanel.tsx의
+# SEVERITY_COLOR도 같은 단계로 맞춰서 함께 수정함 — 어디서 봐도 같은 색=같은 심각도).
+_SEVERITY_COLOR = {"low": "#6B7280", "medium": "#0891B2", "high": "#D97706", "urgent": "#DC2626"}
+
+
+def _esc(value: Optional[str]) -> str:
+    """이메일 원문에서 온 값(subject/sender/본문 유래 텍스트)을 그대로 HTML 문자열에
+    끼워넣으면 <, >, & 같은 문자가 섞였을 때 렌더링이 깨지거나 의도치 않은 태그로
+    해석될 수 있다 — 항상 이스케이프 후 삽입한다."""
+    return html.escape(value or "", quote=False)
 
 
 def build_teams_message(
     *, subject: str, sender: str, part: str, analysis: dict,
     oncall_contact_name: Optional[str] = None,
 ) -> dict:
-    """§10 심각도 기반 포맷 — 높음/긴급은 강조 표시, 낮음/보통은 일반 알림.
-
-    teams_notifier.py와 동일하게 {"text": "..."} 단순 페이로드로 만든다(<br> 줄바꿈).
+    """§10 심각도 기반 포맷 — "제목/내용/방안" 3섹션을 블록 태그(h2/h3/ul/blockquote)로
+    구분한다. teams_notifier.py와 동일하게 {"text": "..."} 단순 페이로드를 쓰되
+    (Adaptive Card는 이 웹훅에서 무시되는 것으로 실측 확인 — 모듈 docstring 참고),
+    Teams 커넥터 카드가 지원하는 표준 서식 태그(h1~h3/b/ul·li/blockquote/span
+    style=color)로 최대한 시각적 구분을 준다.
     """
     severity = analysis.get("severity", "low")
     category = analysis.get("category", "uncertain")
     urgent = severity in _URGENT_SEVERITIES
+    color = _SEVERITY_COLOR.get(severity, _SEVERITY_COLOR["low"])
+    header = "🚨 긴급 VOC 알림" if urgent else "VOC 분석 알림"
 
-    lines = [
-        f"[{'🚨 긴급 VOC 알림' if urgent else 'VOC 분석 알림'}]",
-        "",
-        subject or "(제목 없음)",
-        "",
-        f"• 담당 파트: {part or '-'}",
-        f"• 분류: {_CATEGORY_LABEL.get(category, category)}",
-        f"• 심각도: {_SEVERITY_LABEL.get(severity, severity)}",
-        f"• 발신자: {sender or '-'}",
+    detail_items = [
+        f"담당 파트: {_esc(part) or '-'}",
+        f"분류: {_esc(_CATEGORY_LABEL.get(category, category))}",
+        f'심각도: <span style="color:{color}"><b>{_esc(_SEVERITY_LABEL.get(severity, severity))}</b></span>',
+        f"발신자: {_esc(sender) or '-'}",
     ]
     if analysis.get("mismatch_flagged"):
-        lines.append("• ⚠️ 오배치 의심 — 이 메일함 담당 업무와 내용이 다를 수 있습니다")
+        detail_items.append(
+            '<span style="color:#DC2626"><b>⚠️ 오배치 의심</b></span> — 이 메일함 담당 업무와 내용이 다를 수 있습니다'
+        )
     if urgent and oncall_contact_name:
-        lines.append(f"• 온콜 담당자: {oncall_contact_name} — 필요 시 직접 전화 부탁드립니다")
-    if analysis.get("resolution_draft"):
-        lines.append("")
-        lines.append(f"해결 방안 초안: {analysis['resolution_draft']}")
+        detail_items.append(f"온콜 담당자: {_esc(oncall_contact_name)} — 필요 시 직접 전화 부탁드립니다")
+    detail_list = "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
 
-    return {"text": "<br>".join(lines)}
+    # h2/h3 태그만으로는 Teams 렌더링 기본 폰트 크기가 기대보다 작고 섹션 간 여백도
+    # 좁게 나오는 게 실측으로 확인돼, font-size를 명시적으로 지정하고 섹션 사이에
+    # <br>을 추가로 넣어 시각적 여백을 강제한다.
+    header_color_style = f"color:{color};" if urgent else ""
+    header_html = f'<h2 style="{header_color_style}font-size:22px">{header}</h2>'
+
+    def _section_title(text: str) -> str:
+        return f'<h3 style="font-size:17px">{text}</h3>'
+
+    sections = [
+        header_html,
+        f"{_section_title('제목')}{_esc(subject) or '(제목 없음)'}",
+        f"{_section_title('내용')}{detail_list}",
+    ]
+
+    if analysis.get("resolution_draft"):
+        sections.append(f"{_section_title('해결 방안')}<blockquote>{_esc(analysis['resolution_draft'])}</blockquote>")
+
+    # 참고 지식(근거) — 맨 아래 배치: 판단 결과(내용/해결방안)를 먼저 보여주고,
+    # 그 근거는 필요할 때 스크롤해서 확인하는 부가 정보로 취급한다. 관련지식 필터를
+    # 통과했어도 실제로는 무관한 지식이 우연히 매칭되는 오탐이 실사용 중 발견돼(예:
+    # 완전히 다른 도메인인데 "실패/오류" 같은 일반 단어만 겹침), 근거를 노출해두면
+    # 그런 오탐을 사람이 바로 알아챌 수 있다.
+    knowledge_refs = analysis.get("knowledge_refs") or []
+    if knowledge_refs:
+        ref_items = "".join(
+            f'<li><span style="color:#6B7280">(유사도 {r["score"]:.2f})</span> {_esc(r["snippet"])}</li>'
+            for r in knowledge_refs
+        )
+        sections.append(f"{_section_title('참고 지식(근거)')}<ul>{ref_items}</ul>")
+
+    return {"text": "<br>".join(sections)}
 
 
 async def send_teams_notification(webhook_url: str, message: dict) -> tuple[bool, Optional[str]]:

@@ -1,0 +1,126 @@
+"""Tests for service/email_voc/teams_notify.py — build_teams_message() 포맷 검증.
+
+conftest.py가 격리 목적으로 sys.modules["service"] 전체를 MagicMock으로 치환해두므로
+(graph_client 테스트와 동일한 문제), 파일 경로 기반으로 직접 로드해 실제 코드를 검증한다.
+"""
+import importlib.util as _ilu
+import sys
+from pathlib import Path
+
+_backend_dir = Path(__file__).resolve().parent.parent
+_spec = _ilu.spec_from_file_location(
+    "email_voc_teams_notify_under_test", str(_backend_dir / "service" / "email_voc" / "teams_notify.py"),
+)
+teams_notify = _ilu.module_from_spec(_spec)
+sys.modules[_spec.name] = teams_notify
+_spec.loader.exec_module(teams_notify)
+
+
+def _base_analysis(**overrides) -> dict:
+    base = {
+        "category": "system_error", "severity": "low",
+        "mismatch_flagged": False, "resolution_draft": None,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestBuildTeamsMessage:
+    def test_sections_present(self):
+        msg = teams_notify.build_teams_message(
+            subject="결제 오류 문의", sender="user@example.com", part="결제팀",
+            analysis=_base_analysis(resolution_draft="재시도 안내"),
+        )
+        text = msg["text"]
+        assert ">제목</h3>" in text
+        assert "결제 오류 문의" in text
+        assert ">내용</h3>" in text
+        assert ">해결 방안</h3>" in text
+        assert "<blockquote>재시도 안내</blockquote>" in text
+
+    def test_no_resolution_draft_omits_section(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p", analysis=_base_analysis(resolution_draft=None),
+        )
+        assert ">해결 방안</h3>" not in msg["text"]
+
+    def test_urgent_severity_uses_red_and_urgent_header(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p", analysis=_base_analysis(severity="urgent"),
+        )
+        assert "🚨 긴급 VOC 알림" in msg["text"]
+        assert "#DC2626" in msg["text"]
+
+    def test_low_severity_uses_default_color_and_plain_header(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p", analysis=_base_analysis(severity="low"),
+        )
+        assert "VOC 분석 알림" in msg["text"]
+        assert "#DC2626" not in msg["text"]
+
+    def test_all_four_severities_use_distinct_colors(self):
+        """예전엔 high/urgent가 같은 빨강이라 사실상 2단계로만 보였음 — 4단계 전부 달라야 한다."""
+        colors = {
+            severity: [
+                c for c in ("#6B7280", "#0891B2", "#D97706", "#DC2626")
+                if c in teams_notify.build_teams_message(
+                    subject="s", sender="s@example.com", part="p", analysis=_base_analysis(severity=severity),
+                )["text"]
+            ]
+            for severity in ("low", "medium", "high", "urgent")
+        }
+        used = [colors[s][0] for s in ("low", "medium", "high", "urgent")]
+        assert len(set(used)) == 4, f"심각도별 색상이 겹침: {colors}"
+
+    def test_mismatch_flagged_shown_in_red(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p", analysis=_base_analysis(mismatch_flagged=True),
+        )
+        assert "오배치 의심" in msg["text"]
+
+    def test_oncall_only_shown_when_urgent(self):
+        not_urgent = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(severity="low"), oncall_contact_name="홍길동",
+        )
+        assert "홍길동" not in not_urgent["text"]
+
+        urgent = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(severity="urgent"), oncall_contact_name="홍길동",
+        )
+        assert "홍길동" in urgent["text"]
+
+    def test_html_special_chars_in_subject_are_escaped(self):
+        """이메일 원문(subject)에 HTML 특수문자가 섞여도 카드 렌더링이 깨지지 않아야 한다."""
+        msg = teams_notify.build_teams_message(
+            subject="<script>alert(1)</script> & 가격<100원", sender="s@example.com", part="p",
+            analysis=_base_analysis(),
+        )
+        assert "<script>" not in msg["text"]
+        assert "&lt;script&gt;" in msg["text"]
+        assert "&amp;" in msg["text"]
+
+    def test_knowledge_refs_shown_with_score(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(knowledge_refs=[
+                {"id": 1, "snippet": "배달 중단 해제 처리 절차", "score": 0.42},
+            ]),
+        )
+        text = msg["text"]
+        assert "참고 지식(근거)" in text
+        assert "유사도 0.42" in text
+        assert "배달 중단 해제 처리 절차" in text
+
+    def test_no_knowledge_refs_omits_section(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p", analysis=_base_analysis(),
+        )
+        assert "참고 지식(근거)" not in msg["text"]
+
+    def test_empty_subject_shows_placeholder(self):
+        msg = teams_notify.build_teams_message(
+            subject="", sender="s@example.com", part="p", analysis=_base_analysis(),
+        )
+        assert "(제목 없음)" in msg["text"]
