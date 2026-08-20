@@ -88,6 +88,13 @@ class MailFolderOut(BaseModel):
     total_count: int
 
 
+class KnowledgeRefOut(BaseModel):
+    id: int
+    content: str
+    category: Optional[str] = None
+    container_name: Optional[str] = None
+
+
 class ManualCollectionRequest(BaseModel):
     """§9 수동 1회성 실행 — 관리자가 임의 기간(from~to)을 지정해 즉시 수집+분석을 트리거.
 

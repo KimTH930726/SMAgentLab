@@ -8,7 +8,7 @@ import {
   testAnalyzeEmail, testNotifyTeams, getMailFolders,
   getGraphCredentials, updateGraphCredentials,
   getDelegatedAuthStatus, updateDelegatedAuthConfig, startDelegatedAuth,
-  runManualCollection, getEmailHistory,
+  runManualCollection, getEmailHistory, getKnowledgeRefs,
   getSchedulerStatus, getPollCycles,
   type VocRouting, type VocRoutingPayload, type EmailAnalysisResult,
   type ManualCollectionResult, type DelegatedAuthStartResult, type MailFolder,
@@ -343,6 +343,14 @@ export function VocEmailPanel() {
 
   // ── 이력 ──────────────────────────────────────────────────────────────
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<EmailAnalysisHistoryItem | null>(null);
+  // 이력 상세 모달에서 "참조 지식 ID"가 실제로 뭘 가리키는지 바로 보여주기 위해
+  // 모달이 열릴 때 그 ID들의 실제 내용을 가져온다 — ID만 나열하면 관리자가 매번
+  // 지식 관리 탭에서 따로 검색해야 해서 실사용 중 불편하다는 피드백으로 추가.
+  const { data: selectedKnowledgeRefs = [], isLoading: knowledgeRefsLoading } = useQuery({
+    queryKey: ['voc-knowledge-refs', selectedHistoryItem?.id, selectedNs],
+    queryFn: () => getKnowledgeRefs(selectedNs, selectedHistoryItem!.knowledge_ref_ids),
+    enabled: !!selectedHistoryItem && selectedHistoryItem.knowledge_ref_ids.length > 0,
+  });
   const [historyOffset, setHistoryOffset] = useState(0);
   const HISTORY_PAGE_SIZE = 30;
   const [historySeverity, setHistorySeverity] = useState('');
@@ -1305,21 +1313,40 @@ export function VocEmailPanel() {
                 {selectedHistoryItem.reasoning && (
                   <div>
                     <p className="text-xs font-medium text-slate-400 mb-1">판단 근거</p>
-                    <p className="text-slate-300">{selectedHistoryItem.reasoning}</p>
+                    <p className="text-slate-300 bg-slate-900/50 border border-slate-700 rounded-lg p-3">{selectedHistoryItem.reasoning}</p>
                   </div>
                 )}
 
                 {selectedHistoryItem.notify_error && (
                   <div>
                     <p className="text-xs font-medium text-slate-400 mb-1">발송 실패 사유</p>
-                    <p className="text-rose-400">{selectedHistoryItem.notify_error}</p>
+                    <p className="text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-lg p-3">{selectedHistoryItem.notify_error}</p>
                   </div>
                 )}
 
                 {selectedHistoryItem.knowledge_ref_ids.length > 0 && (
                   <div>
-                    <p className="text-xs font-medium text-slate-400 mb-1">참조 지식 ID</p>
-                    <p className="text-slate-400 text-xs font-mono">{selectedHistoryItem.knowledge_ref_ids.join(', ')}</p>
+                    <p className="text-xs font-medium text-slate-400 mb-1">참조 지식 ({selectedHistoryItem.knowledge_ref_ids.length}건)</p>
+                    {knowledgeRefsLoading ? (
+                      <p className="text-xs text-slate-500 animate-pulse">불러오는 중...</p>
+                    ) : selectedKnowledgeRefs.length === 0 ? (
+                      <p className="text-xs text-slate-500 italic">
+                        내용을 찾을 수 없습니다 — 이후 삭제됐거나 수정됐을 수 있습니다 (ID: {selectedHistoryItem.knowledge_ref_ids.join(', ')})
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {selectedKnowledgeRefs.map((k) => (
+                          <div key={k.id} className="bg-slate-900/50 border border-slate-700 rounded-lg p-3">
+                            <div className="flex items-center gap-2 mb-1 text-[11px] text-slate-500">
+                              <span className="font-mono">#{k.id}</span>
+                              {k.category && <Badge color="slate">{k.category}</Badge>}
+                              {k.container_name && <span>{k.container_name}</span>}
+                            </div>
+                            <p className="text-slate-300 text-xs whitespace-pre-wrap">{k.content}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 

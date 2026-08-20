@@ -19,7 +19,7 @@ from service.email_voc.schemas import (
     ManualCollectionRequest, ManualCollectionResult,
     GraphCredentialsStatus, GraphCredentialsUpdate,
     DelegatedAuthConfig, DelegatedAuthStatus, DelegatedAuthStartResult,
-    EmailAnalysisHistoryItem, PollCycleItem, SchedulerStatus,
+    EmailAnalysisHistoryItem, PollCycleItem, SchedulerStatus, KnowledgeRefOut,
 )
 
 router = APIRouter(prefix="/api/email-voc", tags=["email-voc"])
@@ -221,6 +221,23 @@ async def get_history(
         severity=severity or None, status=status or None,
         mismatch_only=mismatch_only, keyword=keyword or None,
     )
+
+
+@router.get("/knowledge-refs", response_model=list[KnowledgeRefOut])
+async def get_knowledge_refs(
+    namespace: str, ids: str, user: dict = Depends(get_current_user),
+):
+    """이력 상세 모달에서 "참조 지식 ID"를 눌렀을 때 실제 내용을 보여주기 위한 조회.
+
+    ids는 콤마 구분 문자열(예: "4570,251,1001")로 받는다 — 쿼리 파라미터로
+    숫자 배열을 넘기는 표준 방식이 없어 프론트에서 join(',')해 보낸다.
+    """
+    await check_namespace_ownership(namespace, user)
+    try:
+        knowledge_ids = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ids는 콤마로 구분된 숫자여야 합니다.")
+    return await pipeline.get_knowledge_refs(namespace, knowledge_ids)
 
 
 # ─── 폴링 실시간 상태 + 사이클 이력 ────────────────────────────────────────

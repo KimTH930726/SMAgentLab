@@ -309,3 +309,30 @@ async def list_history(
             *params,
         )
     return [dict(r) for r in rows]
+
+
+async def get_knowledge_refs(namespace: str, knowledge_ids: list[int]) -> list[dict]:
+    """이력 탭에서 "참조 지식 ID"를 클릭했을 때 실제 내용을 보여주기 위한 조회.
+
+    ops_email_analysis.knowledge_ref_ids는 숫자 ID만 저장하고 있어(Teams 카드용
+    snippet/score는 DB에 안 남김 — §7-8 참고), 관리자가 이력에서 "뭘 참조한
+    건지" 확인하려면 매번 지식 관리 탭에서 ID로 검색해야 했다 — 실사용 중
+    불편하다는 피드백으로 추가. namespace_id까지 조건에 넣어 다른 네임스페이스의
+    지식이 섞여 나오지 않도록 한다(id는 분석 당시 값이라 신뢰할 수 있지만,
+    조회 시점엔 삭제/네임스페이스 이전됐을 가능성을 배제하기 위한 방어적 필터).
+    """
+    if not knowledge_ids:
+        return []
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return []
+        rows = await conn.fetch(
+            """
+            SELECT id, content, category, container_name
+            FROM rag_knowledge
+            WHERE namespace_id = $1 AND id = ANY($2::int[])
+            """,
+            ns_id, knowledge_ids,
+        )
+    return [dict(r) for r in rows]

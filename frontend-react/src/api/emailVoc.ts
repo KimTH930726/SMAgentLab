@@ -257,6 +257,19 @@ export async function getEmailHistory(
   return apiFetch<EmailAnalysisHistoryItem[]>(`/email-voc/history?${params.toString()}`);
 }
 
+export interface KnowledgeRef {
+  id: number;
+  content: string;
+  category: string | null;
+  container_name: string | null;
+}
+
+export async function getKnowledgeRefs(namespace: string, ids: number[]): Promise<KnowledgeRef[]> {
+  if (ids.length === 0) return [];
+  const params = new URLSearchParams({ namespace, ids: ids.join(',') });
+  return apiFetch<KnowledgeRef[]>(`/email-voc/knowledge-refs?${params.toString()}`);
+}
+
 // ─── 폴링 실시간 상태 + 사이클 이력 ─────────────────────────────────────────
 
 export interface PollCycleItem {
