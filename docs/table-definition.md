@@ -1,10 +1,10 @@
 # Ops-Navigator 테이블 정의서
 
-> **Version**: 3.11
+> **Version**: 3.13
 > **DBMS**: PostgreSQL 16 + pgvector
 > **Extensions**: `vector`, `pg_trgm`
 > **벡터 차원**: 768 (paraphrase-multilingual-mpnet-base-v2)
-> **작성일**: 2026-08-19 (v3.11 — `email_graph_delegated` JSON에 `client_secret` 선택 필드 추가(DDL 변경 없음, 기존 암호화 JSON 블롭 내부 키만 추가) — Confidential Client 지원. v3.10 — `email_graph_delegated`의 인증 방식을 Device Code Flow에서 Authorization Code Flow(PKCE)로 교체, `redirect_uri` 필드 추가. v3.9 — VOC 이메일 관련지식 사전 필터(`email_relevance_min_score`, `ops_email_analysis.status='skipped_relevance'`, `ops_email_poll_cycle.total_skipped_low_relevance`) 추가)
+> **작성일**: 2026-08-20 (v3.13 — `email_relevance_min_score` 계산식 수정(base_weight 랭킹 부스팅 없는 원점수 기준) + 기본값 0.35→0.38 재조정. v3.12 — `ops_voc_routing`에 `mail_folder_id`/`mail_folder_name` 추가(특정 Outlook 폴더로 조회 범위 제한). v3.11 — `email_graph_delegated` JSON에 `client_secret` 선택 필드 추가(DDL 변경 없음, 기존 암호화 JSON 블롭 내부 키만 추가) — Confidential Client 지원. v3.10 — `email_graph_delegated`의 인증 방식을 Device Code Flow에서 Authorization Code Flow(PKCE)로 교체, `redirect_uri` 필드 추가. v3.9 — VOC 이메일 관련지식 사전 필터(`email_relevance_min_score`, `ops_email_analysis.status='skipped_relevance'`, `ops_email_poll_cycle.total_skipped_low_relevance`) 추가)
 > **DDL 위치**: `init/01-init.sql` + `main.py` lifespan 마이그레이션
 
 ---
@@ -587,7 +587,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | `email_polling_interval_minutes` | 폴링 주기(분) (v3.8) | `5` |
 | `email_lookback_days` | 폴링 시 조회할 과거 기간(일) (v3.8) | `7` |
 | `email_graph_credentials` | Microsoft Graph API 자격증명(tenant_id/client_id/client_secret) — Fernet 암호화된 JSON 문자열. 값이 없으면 "행 없음"으로 미설정 상태 표현 (v3.8) | (없음, 관리자가 입력 시에만 생성) |
-| `email_relevance_min_score` | VOC 이메일 관련지식 사전 필터 임계치 — 등록된 지식과의 최고 유사도(`final_score`)가 이 값 미만이면 LLM 분석·Teams 발송 없이 건너뜀(무관한 메일의 비용·알림 노이즈 억제) (v3.9) | `0.35` |
+| `email_relevance_min_score` | VOC 이메일 관련지식 사전 필터 임계치 — 등록된 지식과의 최고 유사도(base_weight 랭킹 부스팅이 섞이지 않은 원점수, `w_vector*v_score + w_keyword*k_score`)가 이 값 미만이면 LLM 분석·Teams 발송 없이 건너뜀(무관한 메일의 비용·알림 노이즈 억제) (v3.9, 계산식·기본값은 v3.13에 실측 재조정) | `0.38` |
 | `email_graph_delegated` | Delegated Permission(사용자 위임 권한) 로그인 세션 — `{tenant_id, client_id, redirect_uri, client_secret, cache}` Fernet 암호화 JSON. `client_secret`은 선택 필드(v3.11) — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록돼 PKCE만으론 토큰 교환이 거부되는(AADSTS7000218) 실사용 사례가 확인돼 추가, 값이 있으면 Confidential Client·없으면 기존과 동일하게 Public Client로 동작. `cache`는 msal `SerializableTokenCache.serialize()` 결과(refresh token 포함, 자격증명급 취급). 인증 방식은 Authorization Code Flow(PKCE) — Device Code Flow는 피싱 리스크로 보안팀이 비권장해 채택하지 않음(v3.10). Application 권한(Track B) 승인 전 임시 경로 — 있으면 무인 폴링/수동실행이 이 세션으로 대체 동작 | (없음, 로그인 완료 시에만 생성) |
 
 **로드 흐름**: 앱 시작 → `main.py` lifespan → `sem_cache.load_config_from_db(conn)` → 런타임 전역변수 갱신
@@ -609,8 +609,10 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | 6 | `oncall_contact_name` | VARCHAR(100) | YES | NULL | - | 온콜 담당자명 (Teams 멘션 표시용) |
 | 7 | `oncall_contact_phone` | VARCHAR(50) | YES | NULL | - | 온콜 담당자 연락처 (수동 전화용 — 자동 발신 없음) |
 | 8 | `is_active` | BOOLEAN | NO | `TRUE` | - | 활성 여부 (비활성 시 폴링/수동실행 대상에서 제외) |
-| 9 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
-| 10 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 수정일시 |
+| 9 | `mail_folder_id` | VARCHAR(300) | YES | NULL | - | 조회 범위를 특정 Outlook 폴더로 제한(Graph API 폴더 ID). NULL이면 메일함 전체 조회 (v3.12) |
+| 10 | `mail_folder_name` | VARCHAR(200) | YES | NULL | - | `mail_folder_id`의 표시용 폴더명(관리자 화면 표시 전용) (v3.12) |
+| 11 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
+| 12 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 수정일시 |
 
 **FK 동작**: 네임스페이스 삭제 시 CASCADE. `ops_email_analysis.routing_id`는 라우팅 삭제 시 SET NULL(분석 이력은 보존).
 **권한**: CRUD 시 `namespace_id`까지 함께 검증(크로스 네임스페이스 변조 방지 — v3.8에서 발견·수정된 보안 이슈).
@@ -744,6 +746,8 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 32 | `ops_system_config` | `INSERT email_collection_enabled/email_polling_interval_minutes/email_lookback_days` | VOC 이메일 폴링 정책 시드 (재시작에도 유지되도록 DB 영속 방식 채택) (v3.8) |
 | 33 | `ops_email_poll_cycle` | `ADD COLUMN IF NOT EXISTS total_skipped_low_relevance INT NOT NULL DEFAULT 0` | 관련지식 사전 필터 스킵 건수 집계 (v3.9) |
 | 34 | `ops_system_config` | `INSERT email_relevance_min_score` | VOC 이메일 관련지식 임계치 시드 — 미달 시 LLM 호출·Teams 발송 없이 이력만 기록(비용·알림 노이즈 억제) (v3.9) |
+| 35 | `ops_voc_routing` | `ADD COLUMN IF NOT EXISTS mail_folder_id VARCHAR(300)`, `ADD COLUMN IF NOT EXISTS mail_folder_name VARCHAR(200)` | 폴링 조회 범위를 특정 Outlook 폴더로 제한 — 관리자가 Graph API로 실조회한 폴더 목록에서 선택 (v3.12) |
+| 36 | `ops_system_config` | `UPDATE email_relevance_min_score` | 관련지식 임계치 계산식이 base_weight 부스팅 섞인 `final_score`를 쓰고 있어 게이트가 사실상 무력화됐던 버그 수정 후, 원점수 기준 실측 재조정: `0.35` → `0.38` (v3.13) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

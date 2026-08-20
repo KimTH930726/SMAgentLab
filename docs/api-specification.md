@@ -1,10 +1,10 @@
 # Ops-Navigator API 명세서
 
-> **Version**: 2.17
+> **Version**: 2.18
 > **Base URL**: `http://localhost:8000`
 > **Protocol**: REST + SSE (Server-Sent Events)
 > **Content-Type**: `application/json` (기본), `text/event-stream` (SSE)
-> **최종 갱신**: 2026-08-19 (v2.17 — `PUT /delegated-auth/config` 요청에 선택 필드 `client_secret` 추가, `GET /delegated-auth/status` 응답에 `client_secret_configured` 필드 추가 — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록된 경우 PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) Confidential Client 지원이 필요해진 실사용 사례 반영)
+> **최종 갱신**: 2026-08-20 (v2.18 — VOC 이메일: `GET /mail-folders` 신규, `routing` 요청에 `mail_folder_id`/`mail_folder_name` 추가, `history`에 필터 쿼리 파라미터 추가, `email_relevance_min_score` 기본값 0.35→0.38 및 계산식 설명 갱신(v3.13). v2.17 — `PUT /delegated-auth/config` 요청에 선택 필드 `client_secret` 추가, `GET /delegated-auth/status` 응답에 `client_secret_configured` 필드 추가 — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록된 경우 PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) Confidential Client 지원이 필요해진 실사용 사례 반영)
 
 ---
 
@@ -1896,14 +1896,20 @@ SQL 예제 일괄 삭제.
 
 **Response(GET) `200`**
 ```json
-{ "email_collection_enabled": false, "email_polling_interval_minutes": 5, "email_lookback_days": 7, "email_relevance_min_score": 0.35 }
+{ "email_collection_enabled": false, "email_polling_interval_minutes": 5, "email_lookback_days": 7, "email_relevance_min_score": 0.38 }
 ```
 **Request Body(PUT)**: 위 4개 필드 중 변경할 것만 포함(부분 업데이트)
-**`email_relevance_min_score`** (v3.9, 0.0~1.0): 등록된 지식과의 최고 유사도가 이 값 미만인 메일은 LLM 분석·Teams 발송 없이 이력에 `status='skipped_relevance'`로만 기록된다 — 무관한 메일(스팸·사내공지·CC참조 등)에 대한 LLM 비용·알림 노이즈 억제 목적. 범위를 벗어나면 `422`.
+**`email_relevance_min_score`** (v3.9, 0.0~1.0, 기본값 v3.13에 0.35→0.38 재조정): 등록된 지식과의 최고 유사도(base_weight 랭킹 부스팅 없는 원점수 기준, v3.13)가 이 값 미만인 메일은 LLM 분석·Teams 발송 없이 이력에 `status='skipped_relevance'`로만 기록된다 — 무관한 메일(스팸·사내공지·CC참조 등)에 대한 LLM 비용·알림 노이즈 억제 목적. 범위를 벗어나면 `422`.
 
 ### GET /api/email-voc/routing?namespace={ns}
 
 파트별 메일함 라우팅 목록 조회(네임스페이스 소유 검증).
+
+### GET /api/email-voc/mail-folders?mailbox_upn={upn} — Admin 전용 (v3.12 신규)
+
+지정 메일함의 Outlook 폴더 목록을 Graph API로 실조회 — 라우팅 등록/수정 화면에서 "메일 폴더" 드롭다운을 채우는 용도. 자격증명 해석 순서는 `collect/run`과 동일(Application 권한 → Delegated 로그인).
+
+**Response `200`**: `MailFolderOut[]` — `[{ "id": "...", "display_name": "받은 편지함", "unread_count": 3, "total_count": 42 }]`
 
 ### POST /api/email-voc/routing
 
@@ -1919,6 +1925,8 @@ SQL 예제 일괄 삭제.
 | `teams_webhook_url` | string | X | Teams Workflows 웹훅 URL |
 | `oncall_contact_name` | string | X | 온콜 담당자명 |
 | `oncall_contact_phone` | string | X | 온콜 담당자 연락처(수동 전화용) |
+| `mail_folder_id` | string | X | 조회 범위를 제한할 Outlook 폴더 ID(위 `/mail-folders`로 조회). 미지정 시 메일함 전체 (v3.12) |
+| `mail_folder_name` | string | X | `mail_folder_id`의 표시용 폴더명 (v3.12) |
 
 **Response `201`**: 등록된 `VocRoutingOut`
 **Error `400`**: 동일 네임스페이스에 같은 `mailbox_upn` 중복 등록 시
@@ -2021,6 +2029,8 @@ Microsoft가 로그인 완료 후 브라우저를 리다이렉트시키는 지�
 ### GET /api/email-voc/history?namespace={ns}&limit=50&offset=0
 
 이메일 분석+알림 이력 조회(네임스페이스 소유 검증). `limit` 최대 200으로 clamp.
+
+**Query Params (선택, v3.12 신규)**: `severity`(low/medium/high/urgent), `status`, `mismatch_only`(bool — 오배치 의심만), `keyword`(제목/발신자/본문 `ILIKE` 검색)
 
 **Response `200`**: `EmailAnalysisHistoryItem` 배열 — 원본 메일 정보(제목/발신자/수신시각), 분석 결과(분류/심각도/판단근거), 알림 결과(`status`, `teams_sent_at`, `notify_error`) 포함
 
