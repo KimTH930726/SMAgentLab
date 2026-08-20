@@ -21,6 +21,10 @@ _model = None
 _loaded = False
 
 
+def is_available() -> bool:
+    return _model is not None
+
+
 def load(model_name: str) -> None:
     """앱 시작 시 1회 호출. 이미 로드됐거나 모델명이 비어있으면 no-op."""
     global _model, _loaded
@@ -49,19 +53,37 @@ async def rerank(query: str, results: list, top_k: int) -> list:
     if _model is None or len(results) <= top_k:
         return results[:top_k]
 
+    scored = await score(query, results)
+    top = [r for r, _ in scored[:top_k]]
+    logger.info(
+        "[Reranker] %d → %d | top scores: %s",
+        len(results), top_k,
+        [f"{s:.3f}" for _, s in scored[:3]],
+    )
+    return top
+
+
+async def score(query: str, results: list) -> list[tuple]:
+    """CrossEncoder 원점수를 (result, score) 쌍으로 반환 (내림차순 정렬).
+
+    rerank()와 달리 목적이 "재정렬"이 아니라 "이 결과가 실제로 얼마나 관련
+    있는지"를 알아야 하는 호출자(예: VOC 관련성 게이트)를 위한 함수 — 결과
+    개수가 top_k 이하여도 스킵하지 않고 항상 채점한다. 모델 미로드/실패 시
+    모든 결과에 score=0.0을 부여해 호출자가 게이트를 "무조건 통과 안 시킴"
+    쪽으로 안전하게 처리하도록 한다(graceful degradation).
+    """
+    if _model is None or not results:
+        return [(r, 0.0) for r in results]
+
     pairs = [(query, r.content[:512]) for r in results]
     try:
-        scores = await asyncio.get_running_loop().run_in_executor(
+        raw_scores = await asyncio.get_running_loop().run_in_executor(
             None, partial(_model.predict, pairs)
         )
-        ranked = sorted(zip(scores, results), key=lambda x: float(x[0]), reverse=True)
-        top = [r for _, r in ranked[:top_k]]
-        logger.info(
-            "[Reranker] %d → %d | top scores: %s",
-            len(results), top_k,
-            [f"{float(s):.3f}" for s, _ in ranked[:3]],
+        return sorted(
+            ((r, float(s)) for r, s in zip(results, raw_scores)),
+            key=lambda x: x[1], reverse=True,
         )
-        return top
     except Exception as e:
-        logger.warning("[Reranker] 재정렬 실패 (원본 반환): %s", e)
-        return results[:top_k]
+        logger.warning("[Reranker] 채점 실패 (0점 반환): %s", e)
+        return [(r, 0.0) for r in results]

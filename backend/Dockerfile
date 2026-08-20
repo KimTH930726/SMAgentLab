@@ -26,6 +26,12 @@ ENV HF_HOME=/root/.cache/huggingface
 ARG EMBEDDING_MODEL=paraphrase-multilingual-mpnet-base-v2
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')"
 
+# 리랭커(CrossEncoder) 모델도 같은 이유로 빌드 시점에 번들링 — 폐쇄망에서
+# reranker_enabled=True로 전환하려면 이 레이어가 이미지에 들어있어야 한다
+# (core/config.py의 reranker_model 기본값과 동일 모델).
+ARG RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL}')"
+
 # 나머지 Python 의존성 설치 — 이 레이어가 바뀌어도 위 임베딩 모델 캐시는 그대로 재사용됨
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

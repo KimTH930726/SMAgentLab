@@ -12,6 +12,7 @@ check_relevance()로 임베딩+검색만 수행해 관련 지식과의 최고 �
 analyze_email()을 호출(이때 precomputed로 검색 결과를 넘겨 임베딩·검색 중복 방지)한다.
 """
 import logging
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -68,10 +69,27 @@ _VALID_SEVERITIES = {"low", "medium", "high", "urgent"}
 _KNOWLEDGE_SNIPPET_LEN = 60
 _MAX_KNOWLEDGE_REFS_SHOWN = 3  # Teams 카드에 다 보여주면 너무 길어져서 상위 N개만
 
+_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+
 
 def _snippet(content: str, length: int = _KNOWLEDGE_SNIPPET_LEN) -> str:
     flat = " ".join(content.split())  # 줄바꿈/연속 공백 정리 — 카드에서 한 줄로 보이게
     return flat if len(flat) <= length else flat[:length] + "..."
+
+
+def _mask_pii(text: str) -> str:
+    """LLM에 넘기기 직전에만 IP/이메일 주소를 마스킹한다.
+
+    실사용 중 발견: 인하우스 LLM 게이트웨이가 프롬프트에 IP나 이메일 주소가 섞이면
+    "민감 정보 포함" 사유로 분석 없이 거부 응답을 반환한다(예: 호스트 IP 하나만
+    있어도 전체 거부). VOC 메일은 호스트 IP·수신자 CC 목록이 거의 항상 섞여 있어
+    사실상 대부분의 실제 메일이 분석되지 못하고 있었다(§7 참고). DB 저장·Teams
+    알림에는 원본 그대로 쓰고, LLM 프롬프트에 넣는 텍스트에만 이 함수를 적용한다.
+    """
+    text = _EMAIL_RE.sub("[REDACTED_EMAIL]", text)
+    text = _IP_RE.sub("[REDACTED_IP]", text)
+    return text
 
 
 async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceCheck:
@@ -147,10 +165,10 @@ async def analyze_email(
     system_prompt = await get_prompt("email_voc_analysis_system", _DEFAULT_ANALYSIS_SYSTEM)
     prompt_template = await get_prompt("email_voc_analysis_prompt", _DEFAULT_ANALYSIS_PROMPT)
     prompt = prompt_template.format(
-        subject=subject or "(제목 없음)",
-        body=body,
+        subject=_mask_pii(subject or "(제목 없음)"),
+        body=_mask_pii(body),
         part=part or "(미지정)",
-        context=context or "(관련 지식 없음)",
+        context=_mask_pii(context) if context else "(관련 지식 없음)",
     )
 
     # 동시 실행 시 LLM 프로바이더가 일시적으로 실패하는 경우가 실제로 관측됨(부하 시
