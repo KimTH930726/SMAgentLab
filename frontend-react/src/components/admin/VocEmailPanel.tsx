@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Mail, Plus, Trash2, Pencil, X, Save, Send, FlaskConical, AlertCircle, Inbox, Route, PlayCircle, KeyRound, History as HistoryIcon, Clock } from 'lucide-react';
+import { Mail, Plus, Trash2, Pencil, X, Save, Send, FlaskConical, AlertCircle, Inbox, Route, PlayCircle, KeyRound, History as HistoryIcon } from 'lucide-react';
 import { clsx } from 'clsx';
 import {
   getEmailCollectionSettings, updateEmailCollectionSettings,
@@ -14,6 +14,7 @@ import {
   type ManualCollectionResult, type DelegatedAuthStartResult, type MailFolder,
 } from '../../api/emailVoc';
 import { getNamespaces } from '../../api/namespaces';
+import { getAllParts } from '../../api/auth';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { ApiError } from '../../api/client';
@@ -32,18 +33,28 @@ const SEVERITY_COLOR: Record<string, 'slate' | 'cyan' | 'amber' | 'rose'> = {
 };
 const CATEGORY_LABEL: Record<string, string> = { system_error: '시스템 오류', user_mistake: '사용자 실수', uncertain: '판단 보류' };
 
-type VocSubTab = 'auth' | 'routing' | 'collect' | 'pollHistory' | 'history' | 'analyze';
+type VocSubTab = 'auth' | 'routing' | 'collect' | 'history' | 'analyze';
 
 const SUB_TABS: { id: VocSubTab; label: string; icon: React.ReactNode }[] = [
   { id: 'auth', label: '1단계 · 로그인', icon: <KeyRound className="w-4 h-4" /> },
   { id: 'routing', label: '2단계 · 라우팅', icon: <Route className="w-4 h-4" /> },
   { id: 'collect', label: '3단계 · 폴링', icon: <Inbox className="w-4 h-4" /> },
-  { id: 'pollHistory', label: '폴링 이력', icon: <Clock className="w-4 h-4" /> },
   { id: 'history', label: '분석 이력', icon: <HistoryIcon className="w-4 h-4" /> },
-  { id: 'analyze', label: '번외 · 분석·알림 테스트', icon: <FlaskConical className="w-4 h-4" /> },
+  { id: 'analyze', label: '분석·알림 테스트', icon: <FlaskConical className="w-4 h-4" /> },
 ];
 
 const inputClass = 'bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function toDateInputValue(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -101,9 +112,8 @@ export function VocEmailPanel() {
 
   // ── 실시간 상태 + 폴링 이력 ─────────────────────────────────────────────
   // 10초마다 다시 조회 — "지금 잘 돌고 있는지"를 화면 새로고침 없이 확인할 수 있게.
-  // 각자 해당 탭("폴링" / "폴링 이력")에서만 화면에 보이므로, 다른 탭을 보는 동안은
-  // 폴링을 멈춰 불필요한 API 호출을 없앤다(다른 탭에서도 계속 10초마다 쏘고
-  // 있었던 걸 발견해 수정).
+  // "3단계 · 폴링" 탭에서만 화면에 보이므로, 다른 탭을 보는 동안은 폴링을 멈춰
+  // 불필요한 API 호출을 없앤다(다른 탭에서도 계속 10초마다 쏘고 있었던 걸 발견해 수정).
   const { data: schedulerStatus } = useQuery({
     queryKey: ['email-voc-scheduler-status'],
     queryFn: getSchedulerStatus,
@@ -114,7 +124,7 @@ export function VocEmailPanel() {
     queryKey: ['email-voc-poll-cycles'],
     queryFn: () => getPollCycles(10),
     refetchInterval: 10_000,
-    enabled: subTab === 'pollHistory',
+    enabled: subTab === 'collect',
   });
 
   // ── §10 라우팅 매핑 ───────────────────────────────────────────────────────
@@ -123,6 +133,9 @@ export function VocEmailPanel() {
     queryFn: () => listVocRouting(selectedNs),
     enabled: !!selectedNs,
   });
+  // 담당 파트를 자유 입력 대신 사용자관리에 등록된 실제 파트 중에서 고르도록 —
+  // 오타로 존재하지 않는 파트명이 들어가는 걸 막는다.
+  const { data: parts = [] } = useQuery({ queryKey: ['all-parts'], queryFn: getAllParts });
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -188,6 +201,14 @@ export function VocEmailPanel() {
   const handleSubmit = () => {
     if (!form.part.trim() || !form.mailbox_upn.trim()) {
       setError('담당 파트와 메일함 주소는 필수입니다.');
+      return;
+    }
+    if (!EMAIL_RE.test(form.mailbox_upn.trim())) {
+      setError('메일함 UPN 형식이 올바르지 않습니다 (예: name@company.com).');
+      return;
+    }
+    if (form.teams_webhook_url?.trim() && !isValidHttpUrl(form.teams_webhook_url.trim())) {
+      setError('Teams 웹훅 URL 형식이 올바르지 않습니다 (https://로 시작하는 전체 URL).');
       return;
     }
     if (editingId != null) {
@@ -648,138 +669,6 @@ export function VocEmailPanel() {
             실제 메일함 연결(Graph API)은 Track B(대상 메일함 확정·M365 여부·IT 승인) 대기 중이라, 이 설정은 저장은 되지만 아직 실제 폴링은 동작하지 않습니다.
           </p>
 
-          {/* Graph API 자격증명 */}
-          <div className="pt-2">
-            <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2 mb-2">
-              <KeyRound className="w-4 h-4" /> Graph API 자격증명
-              <Badge color={graphCreds?.configured ? 'emerald' : 'slate'}>
-                {graphCreds?.configured ? '설정됨' : '미설정'}
-              </Badge>
-            </h3>
-            <p className="text-xs text-slate-500 mb-2">
-              §7 Q10 IT 승인 후 발급받는 값입니다. 승인 전이라면 비워두면 됩니다 — 수동 실행 시 메일함별로 "자격증명 미설정" 에러만 표시됩니다.
-            </p>
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
-              {graphCreds?.configured && (
-                <p className="text-xs text-slate-400">
-                  현재: tenant_id=<span className="font-mono">{graphCreds.tenant_id}</span>, client_id=<span className="font-mono">{graphCreds.client_id}</span> (client_secret은 다시 표시되지 않습니다)
-                </p>
-              )}
-              <div className="grid grid-cols-3 gap-3">
-                <label className="block text-xs text-slate-400">
-                  Tenant ID (Directory ID)
-                  <input placeholder="예: d4ffc887-..." value={credTenantId} onChange={(e) => setCredTenantId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
-                </label>
-                <label className="block text-xs text-slate-400">
-                  Client ID (Application ID)
-                  <input placeholder="예: bfdb9f4f-..." value={credClientId} onChange={(e) => setCredClientId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
-                </label>
-                <label className="block text-xs text-slate-400">
-                  Client Secret
-                  <input placeholder="IT에서 발급받은 값" type="password" value={credClientSecret} onChange={(e) => setCredClientSecret(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
-                </label>
-              </div>
-              <Button
-                size="sm" variant="secondary"
-                onClick={() => credsMutation.mutate()}
-                loading={credsMutation.isPending}
-                disabled={!credTenantId.trim() || !credClientId.trim() || !credClientSecret.trim()}
-              >
-                <Save className="w-3.5 h-3.5" /> 자격증명 저장
-              </Button>
-            </div>
-          </div>
-
-          {/* 개인 계정 로그인 (Delegated) — Application 권한 승인 전 임시 경로 */}
-          <div className="pt-2">
-            <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2 mb-2">
-              <KeyRound className="w-4 h-4" /> 개인 계정 로그인 (Delegated, 임시)
-              <Badge color={delegatedStatus?.logged_in ? 'emerald' : 'slate'}>
-                {delegatedStatus?.logged_in ? `로그인됨 · ${delegatedStatus.account}` : '로그인 필요'}
-              </Badge>
-              {delegatedStatus?.client_secret_configured && (
-                <Badge color="indigo">Confidential Client (secret 설정됨)</Badge>
-              )}
-            </h3>
-            <p className="text-xs text-slate-500 mb-2">
-              Application 권한(위 자격증명) 승인 전에도, 본인 메일함 기준으로 전체 플로우(수집→분석→라우팅→Teams발송)를
-              그대로 시연할 수 있는 임시 경로입니다. Application 권한이 설정돼 있으면 그쪽이 우선 사용됩니다.
-              라우팅 탭의 mailbox_upn을 아래 로그인할 본인 메일 주소와 동일하게 등록해야 합니다.
-            </p>
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block text-xs text-slate-400">
-                  Tenant ID (Directory ID)
-                  <input placeholder="예: d4ffc887-..." value={delegatedTenantId} onChange={(e) => setDelegatedTenantId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
-                </label>
-                <label className="block text-xs text-slate-400">
-                  Client ID (Application ID — Object ID 아님)
-                  <input placeholder="예: bfdb9f4f-..." value={delegatedClientId} onChange={(e) => setDelegatedClientId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
-                </label>
-              </div>
-              <label className="block text-xs text-slate-400">
-                리다이렉트 URL (Azure AD 앱 등록 시 이 값 그대로 등록 필요 — 자동 계산됨)
-                <input readOnly value={delegatedRedirectUri} className={clsx('w-full mt-1 font-mono text-xs', inputClass)} onFocus={(e) => e.target.select()} />
-              </label>
-              <label className="block text-xs text-slate-400">
-                Client Secret (선택 — 리다이렉트 URI가 Azure AD에 "Web" 플랫폼으로 등록돼 PKCE만으로
-                토큰 교환이 거부될 때만 입력. 비워두면 기존과 동일하게 시크릿 없이 동작)
-                <input
-                  placeholder={delegatedStatus?.client_secret_configured ? '설정됨 — 변경하려면 새 값 입력' : 'Client Secret'}
-                  type="password" value={delegatedClientSecret}
-                  onChange={(e) => setDelegatedClientSecret(e.target.value)}
-                  className={clsx('w-full mt-1', inputClass)}
-                />
-              </label>
-              <div className="flex flex-wrap items-center gap-3">
-                <Button
-                  size="sm" variant="secondary"
-                  onClick={() => delegatedConfigMutation.mutate()}
-                  loading={delegatedConfigMutation.isPending}
-                  disabled={!delegatedTenantId.trim() || !delegatedClientId.trim()}
-                >
-                  <Save className="w-3.5 h-3.5" /> 앱 정보 저장
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => delegatedStartMutation.mutate()}
-                  loading={delegatedStartMutation.isPending || !!delegatedStatus?.pending}
-                  disabled={!delegatedStatus?.configured}
-                >
-                  {delegatedStatus?.logged_in ? '다시 로그인' : '로그인 시작'}
-                </Button>
-              </div>
-
-              {(delegatedStatus?.pending || delegatedStatus?.login_error || (delegatedStatus?.logged_in && delegatedAuthUrl)) && (
-                <div className={clsx(
-                  'border rounded-lg p-3 text-sm',
-                  delegatedStatus?.pending ? 'border-indigo-500/30 bg-indigo-500/10'
-                    : delegatedStatus?.login_error ? 'border-rose-500/30 bg-rose-500/10'
-                    : 'border-emerald-500/30 bg-emerald-500/10',
-                )}>
-                  {delegatedStatus?.pending ? (
-                    <>
-                      <p className="text-slate-200">새 탭에서 로그인 창이 열렸습니다. 안 열렸다면 아래 링크를 직접 클릭하세요(팝업 차단 가능성).</p>
-                      {delegatedAuthUrl && (
-                        <a
-                          href={delegatedAuthUrl} target="_blank" rel="noopener noreferrer"
-                          className="text-indigo-400 underline text-xs break-all"
-                        >
-                          로그인 페이지 열기
-                        </a>
-                      )}
-                      <p className="text-xs text-slate-500 mt-1">로그인 완료되면 이 화면이 자동으로 갱신됩니다 (3초마다 확인 중).</p>
-                    </>
-                  ) : delegatedStatus?.login_error ? (
-                    <p className="text-rose-400">로그인 실패 — {delegatedStatus.login_error} (다시 로그인을 눌러 재시도하세요)</p>
-                  ) : delegatedStatus?.logged_in ? (
-                    <p className="text-emerald-400">로그인 완료 — 이제 아래 "지금 실행" 또는 위 "폴링 자동화 ON"이 본인 메일함을 대상으로 동작합니다.</p>
-                  ) : null}
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* 수동 1회성 실행 */}
           <div className="pt-2">
             <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2 mb-2">
@@ -856,45 +745,43 @@ export function VocEmailPanel() {
             </div>
           </div>
 
-        </section>
-      )}
-
-      {/* ── 폴링 이력 (사이클 단위 성공/실패) ── */}
-      {subTab === 'pollHistory' && (
-        <section className="space-y-3">
-          <p className="text-xs text-slate-500">백그라운드 스케줄러가 실행될 때마다(폴링 주기마다) 남긴 사이클 단위 실행 결과입니다.</p>
-          {pollCycles.length === 0 ? (
-            <div className="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-700 rounded-lg">
-              아직 실행된 사이클이 없습니다.
-            </div>
-          ) : (
-            <div className="border border-slate-700 rounded-lg overflow-hidden">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-slate-700 bg-slate-800/50">
-                    <th className="text-left px-3 py-2 text-slate-400">실행 시각</th>
-                    <th className="text-left px-3 py-2 text-slate-400">namespace 수</th>
-                    <th className="text-left px-3 py-2 text-slate-400">성공/실패 메일함</th>
-                    <th className="text-left px-3 py-2 text-slate-400">분석/발송/관련지식부족</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pollCycles.map((c) => (
-                    <tr key={c.id} className="border-b border-slate-700/50 last:border-0">
-                      <td className="px-3 py-2 text-slate-300">{formatRelative(c.started_at)}</td>
-                      <td className="px-3 py-2 text-slate-400">{c.namespaces_processed}</td>
-                      <td className="px-3 py-2">
-                        <Badge color={c.mailboxes_failed > 0 ? 'rose' : 'emerald'}>
-                          성공 {c.mailboxes_ok} / 실패 {c.mailboxes_failed}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건 / {c.total_skipped_low_relevance}건</td>
+          {/* 폴링 이력 — 사이클 단위 성공/실패 */}
+          <div className="pt-2">
+            <h3 className="text-sm font-semibold text-slate-300 mb-2">폴링 이력</h3>
+            <p className="text-xs text-slate-500 mb-2">백그라운드 스케줄러가 실행될 때마다(폴링 주기마다) 남긴 사이클 단위 실행 결과입니다.</p>
+            {pollCycles.length === 0 ? (
+              <div className="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-700 rounded-lg">
+                아직 실행된 사이클이 없습니다.
+              </div>
+            ) : (
+              <div className="border border-slate-700 rounded-lg overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-700 bg-slate-800/50">
+                      <th className="text-left px-3 py-2 text-slate-400">실행 시각</th>
+                      <th className="text-left px-3 py-2 text-slate-400">namespace 수</th>
+                      <th className="text-left px-3 py-2 text-slate-400">성공/실패 메일함</th>
+                      <th className="text-left px-3 py-2 text-slate-400">분석/발송/관련지식부족</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody>
+                    {pollCycles.map((c) => (
+                      <tr key={c.id} className="border-b border-slate-700/50 last:border-0">
+                        <td className="px-3 py-2 text-slate-300">{formatRelative(c.started_at)}</td>
+                        <td className="px-3 py-2 text-slate-400">{c.namespaces_processed}</td>
+                        <td className="px-3 py-2">
+                          <Badge color={c.mailboxes_failed > 0 ? 'rose' : 'emerald'}>
+                            성공 {c.mailboxes_ok} / 실패 {c.mailboxes_failed}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건 / {c.total_skipped_low_relevance}건</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </section>
       )}
 
@@ -1045,7 +932,7 @@ export function VocEmailPanel() {
           </div>
           <p className="text-xs text-slate-500">
             선택한 네임스페이스 기준으로 "메일함 1개 ↔ 담당 파트 ↔ Teams 웹훅" 라우팅 행을 관리합니다.
-            여기 입력하는 "담당 파트"는 표시용 자유 입력 텍스트로, 사용자관리의 정식 파트 등록과는 별개입니다.
+            담당 파트는 사용자관리에 등록된 파트 중에서 선택합니다.
           </p>
 
           {showForm && (
@@ -1053,15 +940,19 @@ export function VocEmailPanel() {
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-xs text-slate-400">
                   담당 파트
-                  <input
-                    placeholder="예: 결제팀" value={form.part}
+                  <select
+                    value={form.part}
                     onChange={(e) => setForm({ ...form, part: e.target.value })}
                     className={clsx('w-full mt-1', inputClass)}
-                  />
+                  >
+                    <option value="">선택하세요</option>
+                    {parts.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+                  </select>
                 </label>
                 <label className="block text-xs text-slate-400">
                   메일함 UPN
                   <input
+                    type="email"
                     placeholder="예: voc-billing@example.com" value={form.mailbox_upn}
                     onChange={(e) => setForm({ ...form, mailbox_upn: e.target.value })}
                     className={clsx('w-full mt-1', inputClass)}
@@ -1070,6 +961,7 @@ export function VocEmailPanel() {
                 <label className="block text-xs text-slate-400 col-span-2">
                   Teams Workflows 웹훅 URL (선택 — 없으면 분석·이력 저장까지만 진행)
                   <input
+                    type="url"
                     placeholder="https://..." value={form.teams_webhook_url ?? ''}
                     onChange={(e) => setForm({ ...form, teams_webhook_url: e.target.value })}
                     className={clsx('w-full mt-1', inputClass)}
