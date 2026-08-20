@@ -38,11 +38,25 @@ class TestBuildTeamsMessage:
         assert ">해결 방안</h3>" in text
         assert "<blockquote>재시도 안내</blockquote>" in text
 
-    def test_no_resolution_draft_omits_section(self):
+    def test_no_resolution_draft_shows_reason_for_non_system_error(self):
+        # 해결방안이 왜 없는지 사람이 알 수 있어야 한다(실사용 중 헷갈린다는 피드백) —
+        # 섹션 자체를 생략하지 않고 이유를 명시한다.
         msg = teams_notify.build_teams_message(
-            subject="s", sender="s@example.com", part="p", analysis=_base_analysis(resolution_draft=None),
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(category="uncertain", resolution_draft=None),
         )
-        assert ">해결 방안</h3>" not in msg["text"]
+        assert ">해결 방안</h3>" in msg["text"]
+        assert "판단 보류" in msg["text"]
+        assert "해당 없음" in msg["text"]
+
+    def test_no_resolution_draft_shows_warning_for_system_error(self):
+        # category=system_error인데 resolution_draft가 없으면(LLM 실패 등) 다른 경고 문구
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(category="system_error", resolution_draft=None),
+        )
+        assert ">해결 방안</h3>" in msg["text"]
+        assert "분석이 불완전했을 수 있습니다" in msg["text"]
 
     def test_urgent_severity_uses_red_and_urgent_header(self):
         msg = teams_notify.build_teams_message(

@@ -91,8 +91,26 @@ def build_teams_message(
         f"{_section_title('내용')}{detail_list}",
     ]
 
-    if analysis.get("resolution_draft"):
-        sections.append(f"{_section_title('해결 방안')}<blockquote>{_esc(analysis['resolution_draft'])}</blockquote>")
+    # resolution_draft는 category가 system_error일 때만 LLM에게 생성을 지시한다
+    # (사용자 실수/판단 보류는 "고칠 버그"가 없으니 해결 방안 자체가 성립하지 않음).
+    # 이 이유를 안 적으면 알림 받은 사람이 "왜 해결방안이 없지?"를 매번 헷갈려해서
+    # (실사용 중 실제로 질문 받음) 없는 이유를 한 줄로 명시한다.
+    resolution_draft = analysis.get("resolution_draft")
+    if resolution_draft:
+        sections.append(f"{_section_title('해결 방안')}<blockquote>{_esc(resolution_draft)}</blockquote>")
+    elif category != "system_error":
+        # 심각도 팔레트(low/medium/high/urgent) 색상과 겹치지 않도록 별도 색상
+        # 없이 순수 텍스트로만 표시 — 색상을 넣으면 무관한 심각도 신호로 오인될 수 있다.
+        category_label = _esc(_CATEGORY_LABEL.get(category, category))
+        sections.append(
+            f'{_section_title("해결 방안")}<blockquote>해당 없음 — "{category_label}"(으)로 판단되어 해결 방안을 생성하지 않았습니다.</blockquote>'
+        )
+    else:
+        # category=system_error인데도 resolution_draft가 없는 경우 — LLM 호출
+        # 실패 등으로 분석 자체가 불완전했을 가능성이 높으므로 수동 확인을 유도한다.
+        sections.append(
+            f'{_section_title("해결 방안")}<blockquote>⚠️ 생성되지 않음 — 분석이 불완전했을 수 있습니다. 이력 탭에서 판단 근거를 확인해 주세요.</blockquote>'
+        )
 
     # 참고 지식(근거) — 맨 아래 배치: 판단 결과(내용/해결방안)를 먼저 보여주고,
     # 그 근거는 필요할 때 스크롤해서 확인하는 부가 정보로 취급한다. 관련지식 필터를

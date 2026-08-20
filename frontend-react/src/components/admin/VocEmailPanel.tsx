@@ -12,11 +12,13 @@ import {
   getSchedulerStatus, getPollCycles,
   type VocRouting, type VocRoutingPayload, type EmailAnalysisResult,
   type ManualCollectionResult, type DelegatedAuthStartResult, type MailFolder,
+  type EmailAnalysisHistoryItem,
 } from '../../api/emailVoc';
 import { getNamespaces } from '../../api/namespaces';
 import { getAllParts } from '../../api/auth';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
+import { Modal } from '../ui/Modal';
 import { ApiError } from '../../api/client';
 
 const EMPTY_ROUTING_FORM: VocRoutingPayload = {
@@ -340,6 +342,7 @@ export function VocEmailPanel() {
   });
 
   // ── 이력 ──────────────────────────────────────────────────────────────
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState<EmailAnalysisHistoryItem | null>(null);
   const [historyOffset, setHistoryOffset] = useState(0);
   const HISTORY_PAGE_SIZE = 30;
   const [historySeverity, setHistorySeverity] = useState('');
@@ -877,7 +880,15 @@ export function VocEmailPanel() {
                   </Badge>
                   {testResult.mismatch_flagged && <Badge color="amber">오배치 의심</Badge>}
                 </div>
-                {testResult.resolution_draft && <p className="text-slate-300">해결 방안: {testResult.resolution_draft}</p>}
+                {testResult.resolution_draft ? (
+                  <p className="text-slate-300">해결 방안: {testResult.resolution_draft}</p>
+                ) : (
+                  <p className="text-slate-500 text-xs italic">
+                    해결 방안 없음 — {testResult.category === 'system_error'
+                      ? '분석이 불완전했을 수 있습니다'
+                      : `"${CATEGORY_LABEL[testResult.category] ?? testResult.category}"(으)로 판단되어 생성하지 않음`}
+                  </p>
+                )}
                 {testResult.reasoning && <p className="text-slate-500 text-xs">판단 근거: {testResult.reasoning}</p>}
                 <p className="text-slate-500 text-xs">참조 지식 ID: {testResult.knowledge_ref_ids.join(', ') || '없음'}</p>
                 <p className="text-xs text-indigo-400 pt-1">
@@ -1195,7 +1206,11 @@ export function VocEmailPanel() {
           ) : (
             <div className="space-y-2">
               {history.map((h) => (
-                <div key={h.id} className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-2 text-sm">
+                <div
+                  key={h.id}
+                  onClick={() => setSelectedHistoryItem(h)}
+                  className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-2 text-sm cursor-pointer hover:border-indigo-500/50 hover:bg-slate-800/70 transition-colors"
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <span className="text-slate-200 font-medium">{h.subject || '(제목 없음)'}</span>
@@ -1218,7 +1233,15 @@ export function VocEmailPanel() {
                       {STATUS_LABEL[h.status] ?? h.status}
                     </Badge>
                   </div>
-                  {h.resolution_draft && <p className="text-slate-300 text-xs">해결 방안: {h.resolution_draft}</p>}
+                  {h.resolution_draft ? (
+                    <p className="text-slate-300 text-xs">해결 방안: {h.resolution_draft}</p>
+                  ) : h.status !== 'skipped_relevance' && (
+                    <p className="text-slate-500 text-xs italic">
+                      해결 방안 없음 — {h.category === 'system_error'
+                        ? '분석이 불완전했을 수 있습니다'
+                        : `"${CATEGORY_LABEL[h.category ?? ''] ?? h.category}"(으)로 판단되어 생성하지 않음`}
+                    </p>
+                  )}
                   {h.reasoning && <p className="text-slate-500 text-xs">판단 근거: {h.reasoning}</p>}
                   {h.notify_error && <p className="text-rose-400 text-xs">발송 실패 사유: {h.notify_error}</p>}
                 </div>
@@ -1239,6 +1262,76 @@ export function VocEmailPanel() {
               다음
             </Button>
           </div>
+
+          <Modal isOpen={!!selectedHistoryItem} onClose={() => setSelectedHistoryItem(null)} title="분석 상세" maxWidth="max-w-2xl">
+            {selectedHistoryItem && (
+              <div className="space-y-4 text-sm">
+                <div>
+                  <p className="text-slate-100 font-medium">{selectedHistoryItem.subject || '(제목 없음)'}</p>
+                  <p className="text-slate-500 text-xs mt-1">
+                    {selectedHistoryItem.sender} → {selectedHistoryItem.mailbox_upn} ({selectedHistoryItem.part ?? '파트 미상'})
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Badge color="slate">{CATEGORY_LABEL[selectedHistoryItem.category ?? ''] ?? selectedHistoryItem.category ?? '-'}</Badge>
+                  <Badge color={SEVERITY_COLOR[selectedHistoryItem.severity ?? ''] ?? 'slate'}>
+                    심각도: {SEVERITY_LABEL[selectedHistoryItem.severity ?? ''] ?? selectedHistoryItem.severity ?? '-'}
+                  </Badge>
+                  {selectedHistoryItem.mismatch_flagged && <Badge color="amber">오배치 의심</Badge>}
+                  <Badge color={
+                    selectedHistoryItem.status === 'notified' ? 'emerald'
+                      : selectedHistoryItem.status === 'notify_failed' ? 'rose'
+                      : selectedHistoryItem.status === 'skipped_relevance' ? 'amber'
+                      : 'slate'
+                  }>
+                    {STATUS_LABEL[selectedHistoryItem.status] ?? selectedHistoryItem.status}
+                  </Badge>
+                </div>
+
+                <div>
+                  <p className="text-xs font-medium text-slate-400 mb-1">해결 방안</p>
+                  {selectedHistoryItem.resolution_draft ? (
+                    <p className="text-slate-300 bg-slate-900/50 border border-slate-700 rounded-lg p-3">{selectedHistoryItem.resolution_draft}</p>
+                  ) : (
+                    <p className="text-slate-500 italic">
+                      해당 없음 — {selectedHistoryItem.category === 'system_error'
+                        ? '분석이 불완전했을 수 있습니다'
+                        : `"${CATEGORY_LABEL[selectedHistoryItem.category ?? ''] ?? selectedHistoryItem.category}"(으)로 판단되어 생성하지 않음`}
+                    </p>
+                  )}
+                </div>
+
+                {selectedHistoryItem.reasoning && (
+                  <div>
+                    <p className="text-xs font-medium text-slate-400 mb-1">판단 근거</p>
+                    <p className="text-slate-300">{selectedHistoryItem.reasoning}</p>
+                  </div>
+                )}
+
+                {selectedHistoryItem.notify_error && (
+                  <div>
+                    <p className="text-xs font-medium text-slate-400 mb-1">발송 실패 사유</p>
+                    <p className="text-rose-400">{selectedHistoryItem.notify_error}</p>
+                  </div>
+                )}
+
+                {selectedHistoryItem.knowledge_ref_ids.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-slate-400 mb-1">참조 지식 ID</p>
+                    <p className="text-slate-400 text-xs font-mono">{selectedHistoryItem.knowledge_ref_ids.join(', ')}</p>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-3 text-xs text-slate-500 pt-2 border-t border-slate-700">
+                  <div>수신 시각: {selectedHistoryItem.received_at ?? '-'}</div>
+                  <div>분석 시각: {selectedHistoryItem.created_at}</div>
+                  <div>Teams 발송 시각: {selectedHistoryItem.teams_sent_at ?? '-'}</div>
+                  <div>레코드 ID: {selectedHistoryItem.id}</div>
+                </div>
+              </div>
+            )}
+          </Modal>
         </section>
       )}
     </div>
