@@ -60,11 +60,33 @@ class TestMaskPii:
         assert "02-1234-5678" not in text
         assert text.count("[REDACTED_PHONE]") == 2
 
+    def test_masks_space_separated_phone(self):
+        # 실제 거부 사례: "+82 10 5000 3985" (공백 구분 국제 표기)
+        text = service._mask_pii("+82 10 5000 3985")
+        assert "5000 3985" not in text
+        assert "[REDACTED_PHONE]" in text
+
     def test_does_not_mangle_iso_dates(self):
         # 만료일 같은 날짜는 심각도 판단에 중요한 정보라 마스킹되면 안 된다
         # (YYYY-MM-DD는 첫 그룹이 4자리라 전화번호 정규식과 구분됨).
         text = service._mask_pii("만료일 2024-08-06, 2026-04-07")
         assert text == "만료일 2024-08-06, 2026-04-07"
+
+    def test_masks_ticket_id(self):
+        # 실제 거부 사례: VOC 티켓 ID "C202608150816" — 구분자 없는 12자리 숫자
+        text = service._mask_pii("문의번호 C202608150816 관련입니다")
+        assert "202608150816" not in text
+        assert "[REDACTED_ID]" in text
+
+    def test_masks_sku_code(self):
+        # 실제 거부 사례: SKU 코드 "9900000000339" — 구분자 없는 13자리 숫자
+        text = service._mask_pii("콜드 폼(레시피용): 9900000000339")
+        assert "9900000000339" not in text
+        assert "[REDACTED_ID]" in text
+
+    def test_does_not_mask_short_amounts(self):
+        text = service._mask_pii("결제금액 15000원, 재고 500개")
+        assert text == "결제금액 15000원, 재고 500개"
 
 
 class TestSnippet:
