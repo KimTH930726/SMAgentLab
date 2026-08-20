@@ -48,6 +48,24 @@ class TestMaskPii:
         text = service._mask_pii("응답시간 1.5초 소요")
         assert text == "응답시간 1.5초 소요"
 
+    def test_masks_international_signature_phone(self):
+        # 실제 거부 사례: 이메일 서명란의 "M 82.10.2547.7280" 형태
+        text = service._mask_pii("M 82.10.2547.7280")
+        assert "82.10.2547.7280" not in text
+        assert "[REDACTED_PHONE]" in text
+
+    def test_masks_dashed_phone_numbers(self):
+        text = service._mask_pii("연락처: 010-1234-5678, 02-1234-5678")
+        assert "010-1234-5678" not in text
+        assert "02-1234-5678" not in text
+        assert text.count("[REDACTED_PHONE]") == 2
+
+    def test_does_not_mangle_iso_dates(self):
+        # 만료일 같은 날짜는 심각도 판단에 중요한 정보라 마스킹되면 안 된다
+        # (YYYY-MM-DD는 첫 그룹이 4자리라 전화번호 정규식과 구분됨).
+        text = service._mask_pii("만료일 2024-08-06, 2026-04-07")
+        assert text == "만료일 2024-08-06, 2026-04-07"
+
 
 class TestSnippet:
     def test_short_content_unchanged(self):

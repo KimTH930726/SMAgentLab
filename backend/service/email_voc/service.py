@@ -71,6 +71,11 @@ _MAX_KNOWLEDGE_REFS_SHOWN = 3  # Teams 카드에 다 보여주면 너무 길어�
 
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+# 전화번호: 010-1234-5678, 02-1234-5678, +82-10-1234-5678, 82.10.2547.7280(국제
+# 표기 서명란) 등. 첫 그룹을 1~3자리로 제한해 "2026-08-20" 같은 날짜(YYYY-MM-DD,
+# 첫 그룹 4자리)를 오탐하지 않는다 — 만료일 등 날짜는 심각도 판단에 중요한 정보라
+# 실수로 마스킹되면 안 된다.
+_PHONE_RE = re.compile(r"(?<!\d)\+?\d{1,3}[.\-]\d{2,4}[.\-]\d{2,4}(?:[.\-]\d{4})?(?!\d)")
 
 
 def _snippet(content: str, length: int = _KNOWLEDGE_SNIPPET_LEN) -> str:
@@ -79,16 +84,18 @@ def _snippet(content: str, length: int = _KNOWLEDGE_SNIPPET_LEN) -> str:
 
 
 def _mask_pii(text: str) -> str:
-    """LLM에 넘기기 직전에만 IP/이메일 주소를 마스킹한다.
+    """LLM에 넘기기 직전에만 IP/이메일/전화번호를 마스킹한다.
 
-    실사용 중 발견: 인하우스 LLM 게이트웨이가 프롬프트에 IP나 이메일 주소가 섞이면
-    "민감 정보 포함" 사유로 분석 없이 거부 응답을 반환한다(예: 호스트 IP 하나만
-    있어도 전체 거부). VOC 메일은 호스트 IP·수신자 CC 목록이 거의 항상 섞여 있어
-    사실상 대부분의 실제 메일이 분석되지 못하고 있었다(§7 참고). DB 저장·Teams
-    알림에는 원본 그대로 쓰고, LLM 프롬프트에 넣는 텍스트에만 이 함수를 적용한다.
+    실사용 중 발견: 인하우스 LLM 게이트웨이가 프롬프트에 IP·이메일·전화번호가
+    섞이면 "민감 정보 포함" 사유로 분석 없이 거부 응답을 반환한다(예: 서명란의
+    휴대폰 번호 하나만 있어도 전체 거부). VOC 메일은 호스트 IP·CC 목록·서명란
+    연락처가 거의 항상 섞여 있어 사실상 대부분의 실제 메일이 분석되지 못하고
+    있었다(§7 참고). DB 저장·Teams 알림에는 원본 그대로 쓰고, LLM 프롬프트에
+    넣는 텍스트에만 이 함수를 적용한다.
     """
     text = _EMAIL_RE.sub("[REDACTED_EMAIL]", text)
     text = _IP_RE.sub("[REDACTED_IP]", text)
+    text = _PHONE_RE.sub("[REDACTED_PHONE]", text)
     return text
 
 
