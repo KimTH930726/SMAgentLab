@@ -111,19 +111,20 @@ export function VocEmailPanel() {
   });
 
   // ── 실시간 상태 + 폴링 이력 ─────────────────────────────────────────────
-  // 10초마다 다시 조회 — "지금 잘 돌고 있는지"를 화면 새로고침 없이 확인할 수 있게.
-  // "3단계 · 폴링" 탭에서만 화면에 보이므로, 다른 탭을 보는 동안은 폴링을 멈춰
-  // 불필요한 API 호출을 없앤다(다른 탭에서도 계속 10초마다 쏘고 있었던 걸 발견해 수정).
+  // 30초마다 다시 조회 — "지금 잘 돌고 있는지"를 화면 새로고침 없이 확인할 수 있게.
+  // 폴링 주기가 보통 분 단위라 너무 짧게 잡으면 API만 자주 호출하고 실제로 바뀌는
+  // 내용은 거의 없다. "3단계 · 폴링" 탭에서만 화면에 보이므로, 다른 탭을 보는
+  // 동안은 멈춰 불필요한 호출을 없앤다.
   const { data: schedulerStatus } = useQuery({
     queryKey: ['email-voc-scheduler-status'],
     queryFn: getSchedulerStatus,
-    refetchInterval: 10_000,
+    refetchInterval: 30_000,
     enabled: subTab === 'collect',
   });
   const { data: pollCycles = [] } = useQuery({
     queryKey: ['email-voc-poll-cycles'],
     queryFn: () => getPollCycles(10),
-    refetchInterval: 10_000,
+    refetchInterval: 30_000,
     enabled: subTab === 'collect',
   });
 
@@ -381,9 +382,7 @@ export function VocEmailPanel() {
           <Mail className="w-5 h-5 text-indigo-400" />
           VOC 이메일 분석 채널
         </h2>
-        <p className="text-sm text-slate-400 mt-0.5">
-          §9(수집 정책) · §10(담당자 라우팅) — Track A 구현. 실제 Graph API 연동은 Track B(조직 승인) 대기 중.
-        </p>
+        <p className="text-sm text-slate-400 mt-0.5">메일 수신 → 분석 → Teams 알림 자동화</p>
       </div>
 
       {error && (
@@ -425,8 +424,8 @@ export function VocEmailPanel() {
                 {graphCreds?.configured ? '설정됨' : '미설정'}
               </Badge>
             </h3>
-            <p className="text-xs text-slate-500 mb-2">
-              §7 Q10 IT 승인 후 발급받는 값입니다. 승인 전이라면 비워두면 됩니다 — 수동 실행 시 메일함별로 "자격증명 미설정" 에러만 표시됩니다.
+            <p className="text-xs text-slate-500 mb-2" title="승인 전이면 비워두세요 — 아래 개인 계정 로그인으로 대체 가능합니다">
+              IT 승인 후 발급받는 값 (선택)
             </p>
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
               {graphCreds?.configured && (
@@ -470,10 +469,11 @@ export function VocEmailPanel() {
                 <Badge color="indigo">Confidential Client (secret 설정됨)</Badge>
               )}
             </h3>
-            <p className="text-xs text-slate-500 mb-2">
-              Application 권한(위 자격증명) 승인 전에도, 본인 메일함 기준으로 전체 플로우(수집→분석→라우팅→Teams발송)를
-              그대로 시연할 수 있는 임시 경로입니다. Application 권한이 설정돼 있으면 그쪽이 우선 사용됩니다.
-              라우팅 탭의 mailbox_upn을 아래 로그인할 본인 메일 주소와 동일하게 등록해야 합니다.
+            <p
+              className="text-xs text-slate-500 mb-2"
+              title="Application 권한이 설정돼 있으면 그쪽이 우선 사용됩니다. 라우팅 탭의 메일함 UPN을 아래 로그인 계정과 동일하게 등록하세요."
+            >
+              Application 권한 승인 전 임시 로그인 — 본인 메일함 기준으로 전체 플로우 테스트 가능
             </p>
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
               <div className="grid grid-cols-2 gap-3">
@@ -486,13 +486,15 @@ export function VocEmailPanel() {
                   <input placeholder="예: bfdb9f4f-..." value={delegatedClientId} onChange={(e) => setDelegatedClientId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
                 </label>
               </div>
-              <label className="block text-xs text-slate-400">
-                리다이렉트 URL (Azure AD 앱 등록 시 이 값 그대로 등록 필요 — 자동 계산됨)
+              <label className="block text-xs text-slate-400" title="자동 계산됨 — Azure AD 앱 등록 시 이 값 그대로 등록하세요">
+                리다이렉트 URL
                 <input readOnly value={delegatedRedirectUri} className={clsx('w-full mt-1 font-mono text-xs', inputClass)} onFocus={(e) => e.target.select()} />
               </label>
-              <label className="block text-xs text-slate-400">
-                Client Secret (선택 — 리다이렉트 URI가 Azure AD에 "Web" 플랫폼으로 등록돼 PKCE만으로
-                토큰 교환이 거부될 때만 입력. 비워두면 기존과 동일하게 시크릿 없이 동작)
+              <label
+                className="block text-xs text-slate-400"
+                title="리다이렉트 URI가 Azure AD에 'Web' 플랫폼으로 등록돼 PKCE만으로 토큰 교환이 거부될 때만 입력하세요"
+              >
+                Client Secret (선택)
                 <input
                   placeholder={delegatedStatus?.client_secret_configured ? '설정됨 — 변경하려면 새 값 입력' : 'Client Secret'}
                   type="password" value={delegatedClientSecret}
@@ -554,54 +556,64 @@ export function VocEmailPanel() {
       {/* ── 폴링 설정 ── */}
       {subTab === 'collect' && (
         <section className="space-y-3">
-          {/* 실시간 상태 — 10초마다 자동 새로고침 */}
+          {/* 실시간 상태 */}
           <div className={clsx(
-            'border rounded-lg p-4',
+            'border rounded-xl p-4',
             schedulerStatus?.enabled
               ? (schedulerStatus?.is_running_now ? 'bg-indigo-500/10 border-indigo-500/30' : 'bg-emerald-500/5 border-emerald-500/20')
               : 'bg-slate-800 border-slate-700',
           )}>
-            <div className="flex items-center gap-2 mb-2">
-              <span className={clsx(
-                'w-2 h-2 rounded-full',
-                !schedulerStatus?.enabled ? 'bg-slate-500'
-                  : schedulerStatus?.is_running_now ? 'bg-indigo-400 animate-pulse' : 'bg-emerald-400',
-              )} />
-              <span className="text-sm font-medium text-slate-200">
-                {!schedulerStatus?.enabled ? '폴링 꺼짐'
-                  : schedulerStatus?.is_running_now ? '지금 수집 중...'
-                  : '대기 중 — 정상 동작'}
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="flex items-center gap-2">
+                <span className={clsx(
+                  'w-2.5 h-2.5 rounded-full',
+                  !schedulerStatus?.enabled ? 'bg-slate-500'
+                    : schedulerStatus?.is_running_now ? 'bg-indigo-400 animate-pulse shadow-[0_0_8px_rgba(129,140,248,0.7)]' : 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.5)]',
+                )} />
+                <span className="text-sm font-semibold text-slate-100">
+                  {!schedulerStatus?.enabled ? '폴링 꺼짐'
+                    : schedulerStatus?.is_running_now ? '지금 수집 중'
+                    : '정상 동작 중'}
+                </span>
+              </div>
+              <span className="text-[11px] text-slate-500" title="아래 메일함 확인 주기와는 무관 — 이 화면이 최신 상태를 보여주는 주기입니다">
+                30초마다 자동 새로고침
               </span>
-              <span className="text-xs text-slate-500 ml-auto">10초마다 자동 갱신</span>
             </div>
             {schedulerStatus?.enabled && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs text-slate-400">
-                <div>
-                  <div className="text-slate-500">마지막 실행</div>
-                  <div className="text-slate-200">{formatRelative(schedulerStatus.last_cycle?.started_at ?? null)}</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-slate-700/60 rounded-lg overflow-hidden border border-slate-700/50 bg-slate-900/30">
+                <div className="px-3 py-2.5">
+                  <div className="text-[11px] text-slate-500">마지막 실행</div>
+                  <div className="text-sm text-slate-200 font-medium mt-0.5">{formatRelative(schedulerStatus.last_cycle?.started_at ?? null)}</div>
                 </div>
-                <div>
-                  <div className="text-slate-500">다음 예상 실행</div>
-                  <div className="text-slate-200">{formatRelative(schedulerStatus.next_estimated_at)}</div>
+                <div className="px-3 py-2.5">
+                  <div className="text-[11px] text-slate-500">다음 확인</div>
+                  <div className="text-sm text-slate-200 font-medium mt-0.5">{formatRelative(schedulerStatus.next_estimated_at)}</div>
                 </div>
-                <div>
-                  <div className="text-slate-500">마지막 결과</div>
-                  <div className={schedulerStatus.last_cycle && schedulerStatus.last_cycle.mailboxes_failed > 0 ? 'text-rose-400' : 'text-emerald-400'}>
-                    {schedulerStatus.last_cycle
-                      ? `성공 ${schedulerStatus.last_cycle.mailboxes_ok} / 실패 ${schedulerStatus.last_cycle.mailboxes_failed}`
-                      : '아직 실행 이력 없음'}
+                <div className="px-3 py-2.5">
+                  <div className="text-[11px] text-slate-500">마지막 결과</div>
+                  <div className="mt-0.5">
+                    {schedulerStatus.last_cycle ? (
+                      <Badge color={schedulerStatus.last_cycle.mailboxes_failed > 0 ? 'rose' : 'emerald'}>
+                        성공 {schedulerStatus.last_cycle.mailboxes_ok} / 실패 {schedulerStatus.last_cycle.mailboxes_failed}
+                      </Badge>
+                    ) : (
+                      <span className="text-sm text-slate-500">이력 없음</span>
+                    )}
                   </div>
                 </div>
-                <div>
-                  <div className="text-slate-500">분석/발송</div>
-                  <div className="text-slate-200">
+                <div className="px-3 py-2.5">
+                  <div className="text-[11px] text-slate-500">분석/발송</div>
+                  <div className="text-sm text-slate-200 font-medium mt-0.5">
                     {schedulerStatus.last_cycle ? `${schedulerStatus.last_cycle.total_analyzed}건 / ${schedulerStatus.last_cycle.total_notified}건` : '-'}
                   </div>
                 </div>
               </div>
             )}
             {schedulerStatus?.last_cycle?.error_summary && (
-              <p className="text-xs text-amber-400 mt-2">⚠ {schedulerStatus.last_cycle.error_summary}</p>
+              <p className="flex items-center gap-1.5 text-xs text-amber-400 mt-3 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> {schedulerStatus.last_cycle.error_summary}
+              </p>
             )}
           </div>
 
@@ -620,8 +632,8 @@ export function VocEmailPanel() {
               폴링 자동화 {settings?.email_collection_enabled ? 'ON' : 'OFF'}
             </button>
 
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              폴링 주기(분, 최소 1)
+            <label className="flex items-center gap-2 text-sm text-slate-300" title="실제로 몇 분마다 메일함에 접속해 새 메일을 확인하는지 — 위 '화면 자동 새로고침'과는 별개입니다">
+              메일함 확인 주기(분, 최소 1)
               <input
                 type="number" min={1}
                 defaultValue={settings?.email_polling_interval_minutes ?? 5}
@@ -662,21 +674,13 @@ export function VocEmailPanel() {
               />
             </label>
           </div>
-          <p className="text-xs text-slate-500">
-            관련지식 임계치 미만인 메일은 LLM 호출·Teams 발송 없이 이력에 "관련지식 부족(스킵)"으로만 기록됩니다 — 무관한 메일(스팸·사내공지·CC참조 등)에 대한 비용·알림 노이즈를 줄이기 위함입니다.
-          </p>
-          <p className="text-xs text-slate-500">
-            실제 메일함 연결(Graph API)은 Track B(대상 메일함 확정·M365 여부·IT 승인) 대기 중이라, 이 설정은 저장은 되지만 아직 실제 폴링은 동작하지 않습니다.
-          </p>
 
           {/* 수동 1회성 실행 */}
           <div className="pt-2">
             <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2 mb-2">
               <PlayCircle className="w-4 h-4" /> 수동 1회성 실행
             </h3>
-            <p className="text-xs text-slate-500 mb-2">
-              기간을 지정해 지금 바로 1회 수집+분석+발송을 실행합니다. 기본값은 오늘로부터 7일 전 ~ 오늘입니다.
-            </p>
+            <p className="text-xs text-slate-500 mb-2">지정 기간을 즉시 1회 수집+분석+발송</p>
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
               <div className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-sm text-slate-300">
@@ -748,7 +752,6 @@ export function VocEmailPanel() {
           {/* 폴링 이력 — 사이클 단위 성공/실패 */}
           <div className="pt-2">
             <h3 className="text-sm font-semibold text-slate-300 mb-2">폴링 이력</h3>
-            <p className="text-xs text-slate-500 mb-2">백그라운드 스케줄러가 실행될 때마다(폴링 주기마다) 남긴 사이클 단위 실행 결과입니다.</p>
             {pollCycles.length === 0 ? (
               <div className="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-700 rounded-lg">
                 아직 실행된 사이클이 없습니다.
@@ -788,7 +791,7 @@ export function VocEmailPanel() {
       {/* ── 번외: 분석 테스트 ── */}
       {subTab === 'analyze' && (
         <section className="space-y-3">
-          <p className="text-xs text-slate-500">실제 메일 연동 없이, 텍스트를 직접 입력해 분류/심각도/오배치 판정 로직을 검증합니다.</p>
+          <p className="text-xs text-slate-500">텍스트 직접 입력으로 분류/심각도/오배치 판정 테스트</p>
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
             <label className="block text-xs text-slate-400">
               메일 제목
@@ -805,8 +808,8 @@ export function VocEmailPanel() {
                 className={clsx('w-full mt-1', inputClass)}
               />
             </label>
-            <label className="block text-xs text-slate-400">
-              수신 메일함 담당 파트 (선택 — 오배치 판정용, 예: 결제팀이 받았는데 배송 관련 문의면 "오배치 의심"으로 판정)
+            <label className="block text-xs text-slate-400" title="예: 결제팀이 받았는데 배송 문의면 '오배치 의심'으로 판정">
+              수신 담당 파트 (선택 — 오배치 판정용)
               <input
                 placeholder="예: 결제팀" value={testPart} onChange={(e) => setTestPart(e.target.value)}
                 className={clsx('w-full mt-1', inputClass)}
@@ -850,12 +853,12 @@ export function VocEmailPanel() {
               </button>
             )}
           </div>
-          <p className="text-xs text-slate-500">
-            아무 Teams 채널에서 "Workflows" 앱으로 웹훅 URL을 발급받아(채널 소유자면 누구나 가능, IT 승인 불필요) 여기 입력하면 실제 카드가 어떻게 오는지 바로 확인할 수 있습니다.
+          <p className="text-xs text-slate-500" title="채널 소유자면 누구나 발급 가능, IT 승인 불필요">
+            Teams "Workflows" 웹훅 URL로 실제 카드 미리보기
           </p>
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Teams Workflows 웹훅 URL (필수)</label>
+              <label className="block text-xs font-medium text-slate-400 mb-1">Teams 웹훅 URL (필수)</label>
               <input
                 value={notifyWebhookUrl} onChange={(e) => setNotifyWebhookUrl(e.target.value)}
                 placeholder="https://..."
@@ -864,29 +867,29 @@ export function VocEmailPanel() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">제목 — 카드 본문에 굵게 표시</label>
+                <label className="block text-xs font-medium text-slate-400 mb-1">제목</label>
                 <input value={notifySubject} onChange={(e) => setNotifySubject(e.target.value)} className={clsx('w-full', inputClass)} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">발신자 — "발신자" 항목에 표시</label>
+                <label className="block text-xs font-medium text-slate-400 mb-1">발신자</label>
                 <input value={notifySender} onChange={(e) => setNotifySender(e.target.value)} className={clsx('w-full', inputClass)} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">담당 파트 — "담당 파트" 항목에 표시</label>
+                <label className="block text-xs font-medium text-slate-400 mb-1">담당 파트</label>
                 <input value={notifyPart} onChange={(e) => setNotifyPart(e.target.value)} className={clsx('w-full', inputClass)} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">온콜 담당자 — 심각도 높음/긴급일 때만 표시(자동발신 아님)</label>
+                <label className="block text-xs font-medium text-slate-400 mb-1" title="심각도 높음/긴급일 때만 표시 — 자동발신 아님">온콜 담당자</label>
                 <input value={notifyOncallName} onChange={(e) => setNotifyOncallName(e.target.value)} className={clsx('w-full', inputClass)} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">분류 — "분류" 항목에 표시</label>
+                <label className="block text-xs font-medium text-slate-400 mb-1">분류</label>
                 <select value={notifyCategory} onChange={(e) => setNotifyCategory(e.target.value as typeof notifyCategory)} className={clsx('w-full', inputClass)}>
                   {Object.entries(CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">심각도 — 높음/긴급이면 카드가 빨간색 강조로 바뀜</label>
+                <label className="block text-xs font-medium text-slate-400 mb-1" title="높음/긴급이면 카드가 빨간색 강조로 바뀜">심각도</label>
                 <select value={notifySeverity} onChange={(e) => setNotifySeverity(e.target.value as typeof notifySeverity)} className={clsx('w-full', inputClass)}>
                   {Object.entries(SEVERITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
@@ -894,10 +897,10 @@ export function VocEmailPanel() {
             </div>
             <label className="flex items-center gap-2 text-sm text-slate-300">
               <input type="checkbox" checked={notifyMismatch} onChange={(e) => setNotifyMismatch(e.target.checked)} />
-              오배치 의심으로 표시 — 카드에 "오배치 의심" 경고 항목 추가
+              오배치 의심으로 표시
             </label>
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">해결 방안 초안 (선택) — 카드 하단에 표시</label>
+              <label className="block text-xs font-medium text-slate-400 mb-1">해결 방안 초안 (선택)</label>
               <textarea
                 value={notifyResolutionDraft} onChange={(e) => setNotifyResolutionDraft(e.target.value)}
                 rows={2}
@@ -930,10 +933,7 @@ export function VocEmailPanel() {
               </Button>
             </div>
           </div>
-          <p className="text-xs text-slate-500">
-            선택한 네임스페이스 기준으로 "메일함 1개 ↔ 담당 파트 ↔ Teams 웹훅" 라우팅 행을 관리합니다.
-            담당 파트는 사용자관리에 등록된 파트 중에서 선택합니다.
-          </p>
+          <p className="text-xs text-slate-500">메일함 ↔ 담당 파트 ↔ Teams 웹훅 매핑</p>
 
           {showForm && (
             <div className="bg-slate-800 border border-indigo-500/30 rounded-lg p-4 space-y-3">
@@ -958,8 +958,8 @@ export function VocEmailPanel() {
                     className={clsx('w-full mt-1', inputClass)}
                   />
                 </label>
-                <label className="block text-xs text-slate-400 col-span-2">
-                  Teams Workflows 웹훅 URL (선택 — 없으면 분석·이력 저장까지만 진행)
+                <label className="block text-xs text-slate-400 col-span-2" title="없으면 분석·이력 저장까지만 진행">
+                  Teams 웹훅 URL (선택)
                   <input
                     type="url"
                     placeholder="https://..." value={form.teams_webhook_url ?? ''}
@@ -968,8 +968,8 @@ export function VocEmailPanel() {
                   />
                 </label>
                 <div className="col-span-2">
-                  <label className="block text-xs text-slate-400 mb-1">
-                    메일 폴더 (선택 — 비우면 메일함 전체 조회. 특정 폴더로 좁히면 무관한 메일 유입을 원천 차단)
+                  <label className="block text-xs text-slate-400 mb-1" title="비우면 메일함 전체 조회 — 특정 폴더로 좁히면 무관한 메일 유입 차단">
+                    메일 폴더 (선택)
                   </label>
                   <div className="flex items-center gap-2">
                     <select
@@ -1001,8 +1001,8 @@ export function VocEmailPanel() {
                     </Button>
                   </div>
                 </div>
-                <label className="block text-xs text-slate-400">
-                  온콜 담당자명 (선택 — 표시 전용, 자동발신 아님)
+                <label className="block text-xs text-slate-400" title="표시 전용 — 자동발신 아님">
+                  온콜 담당자명 (선택)
                   <input
                     placeholder="예: 홍길동" value={form.oncall_contact_name ?? ''}
                     onChange={(e) => setForm({ ...form, oncall_contact_name: e.target.value })}
@@ -1075,9 +1075,7 @@ export function VocEmailPanel() {
       {subTab === 'history' && (
         <section className="space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-xs text-slate-500">
-              폴링/수동 실행으로 저장된 분석 결과 — 원본 메일, AI 판단, Teams 발송 성공/실패 여부를 확인합니다.
-            </p>
+            <p className="text-xs text-slate-500">원본 메일 · AI 판단 · 발송 결과</p>
             <select
               value={selectedNs}
               onChange={(e) => setNamespace(e.target.value)}
