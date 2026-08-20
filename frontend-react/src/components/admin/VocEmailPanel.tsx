@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Mail, Plus, Trash2, Pencil, X, Save, Send, FlaskConical, AlertCircle, Inbox, Route, PlayCircle, KeyRound, History as HistoryIcon } from 'lucide-react';
+import { Mail, Plus, Trash2, Pencil, X, Save, Send, FlaskConical, AlertCircle, Inbox, Route, PlayCircle, KeyRound, History as HistoryIcon, Clock } from 'lucide-react';
 import { clsx } from 'clsx';
 import {
   getEmailCollectionSettings, updateEmailCollectionSettings,
@@ -32,13 +32,15 @@ const SEVERITY_COLOR: Record<string, 'slate' | 'cyan' | 'amber' | 'rose'> = {
 };
 const CATEGORY_LABEL: Record<string, string> = { system_error: '시스템 오류', user_mistake: '사용자 실수', uncertain: '판단 보류' };
 
-type VocSubTab = 'collect' | 'analyze' | 'routing' | 'history';
+type VocSubTab = 'auth' | 'routing' | 'collect' | 'pollHistory' | 'history' | 'analyze';
 
 const SUB_TABS: { id: VocSubTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'collect', label: '1단계 · 메일 수집', icon: <Inbox className="w-4 h-4" /> },
-  { id: 'analyze', label: '2단계 · 분석 테스트', icon: <FlaskConical className="w-4 h-4" /> },
-  { id: 'routing', label: '3단계 · 라우팅 · 알림 테스트', icon: <Route className="w-4 h-4" /> },
-  { id: 'history', label: '이력', icon: <HistoryIcon className="w-4 h-4" /> },
+  { id: 'auth', label: '1단계 · 로그인', icon: <KeyRound className="w-4 h-4" /> },
+  { id: 'routing', label: '2단계 · 라우팅', icon: <Route className="w-4 h-4" /> },
+  { id: 'collect', label: '3단계 · 폴링', icon: <Inbox className="w-4 h-4" /> },
+  { id: 'pollHistory', label: '폴링 이력', icon: <Clock className="w-4 h-4" /> },
+  { id: 'history', label: '분석 이력', icon: <HistoryIcon className="w-4 h-4" /> },
+  { id: 'analyze', label: '번외 · 분석·알림 테스트', icon: <FlaskConical className="w-4 h-4" /> },
 ];
 
 const inputClass = 'bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500';
@@ -99,8 +101,9 @@ export function VocEmailPanel() {
 
   // ── 실시간 상태 + 폴링 이력 ─────────────────────────────────────────────
   // 10초마다 다시 조회 — "지금 잘 돌고 있는지"를 화면 새로고침 없이 확인할 수 있게.
-  // "1단계" 탭에서만 화면에 보이므로, 다른 탭을 보는 동안은 폴링을 멈춰 불필요한
-  // API 호출을 없앤다(다른 탭에서도 계속 10초마다 쏘고 있었던 걸 발견해 수정).
+  // 각자 해당 탭("폴링" / "폴링 이력")에서만 화면에 보이므로, 다른 탭을 보는 동안은
+  // 폴링을 멈춰 불필요한 API 호출을 없앤다(다른 탭에서도 계속 10초마다 쏘고
+  // 있었던 걸 발견해 수정).
   const { data: schedulerStatus } = useQuery({
     queryKey: ['email-voc-scheduler-status'],
     queryFn: getSchedulerStatus,
@@ -111,7 +114,7 @@ export function VocEmailPanel() {
     queryKey: ['email-voc-poll-cycles'],
     queryFn: () => getPollCycles(10),
     refetchInterval: 10_000,
-    enabled: subTab === 'collect',
+    enabled: subTab === 'pollHistory',
   });
 
   // ── §10 라우팅 매핑 ───────────────────────────────────────────────────────
@@ -249,7 +252,7 @@ export function VocEmailPanel() {
     onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
   });
 
-  // ── 1단계: 수동 1회성 실행 (§9, §5 Phase 1) ─────────────────────────────
+  // ── 폴링: 수동 1회성 실행 (§9, §5 Phase 1) ─────────────────────────────
   const [collectDateFrom, setCollectDateFrom] = useState(defaultDateFrom());
   const [collectDateTo, setCollectDateTo] = useState(defaultDateTo());
   const [collectResult, setCollectResult] = useState<ManualCollectionResult | null>(null);
@@ -300,7 +303,7 @@ export function VocEmailPanel() {
     setHistoryKeywordDraft(''); setHistoryKeyword('');
   };
 
-  // ── 2단계: 분석 테스트 (§11 Track A #2) ─────────────────────────────────
+  // ── 번외: 분석 테스트 (§11 Track A #2) ─────────────────────────────────
   const [testSubject, setTestSubject] = useState('결제 오류 문의');
   const [testBody, setTestBody] = useState('고객이 결제 시도 시 500 에러가 계속 발생한다고 합니다.');
   const [testPart, setTestPart] = useState('');
@@ -312,7 +315,7 @@ export function VocEmailPanel() {
     onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
   });
 
-  // ── 3단계: Teams 알림 테스트 (§11 Track A #3) — 분석 없이도 독립적으로 사용 가능 ──
+  // ── 번외: Teams 알림 테스트 (§11 Track A #3) — 분석 없이도 독립적으로 사용 가능 ──
   const [notifyWebhookUrl, setNotifyWebhookUrl] = useState('');
   const [notifySubject, setNotifySubject] = useState('(테스트) VOC 알림');
   const [notifySender, setNotifySender] = useState('user@example.com');
@@ -390,7 +393,144 @@ export function VocEmailPanel() {
         </div>
       </div>
 
-      {/* ── 1단계: 메일 수집 정책 ── */}
+      {/* ── 인증 · 자격증명 ── */}
+      {subTab === 'auth' && (
+        <section className="space-y-3">
+          {/* Graph API 자격증명 */}
+          <div>
+            <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2 mb-2">
+              <KeyRound className="w-4 h-4" /> Graph API 자격증명
+              <Badge color={graphCreds?.configured ? 'emerald' : 'slate'}>
+                {graphCreds?.configured ? '설정됨' : '미설정'}
+              </Badge>
+            </h3>
+            <p className="text-xs text-slate-500 mb-2">
+              §7 Q10 IT 승인 후 발급받는 값입니다. 승인 전이라면 비워두면 됩니다 — 수동 실행 시 메일함별로 "자격증명 미설정" 에러만 표시됩니다.
+            </p>
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
+              {graphCreds?.configured && (
+                <p className="text-xs text-slate-400">
+                  현재: tenant_id=<span className="font-mono">{graphCreds.tenant_id}</span>, client_id=<span className="font-mono">{graphCreds.client_id}</span> (client_secret은 다시 표시되지 않습니다)
+                </p>
+              )}
+              <div className="grid grid-cols-3 gap-3">
+                <label className="block text-xs text-slate-400">
+                  Tenant ID (Directory ID)
+                  <input placeholder="예: d4ffc887-..." value={credTenantId} onChange={(e) => setCredTenantId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Client ID (Application ID)
+                  <input placeholder="예: bfdb9f4f-..." value={credClientId} onChange={(e) => setCredClientId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Client Secret
+                  <input placeholder="IT에서 발급받은 값" type="password" value={credClientSecret} onChange={(e) => setCredClientSecret(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
+              </div>
+              <Button
+                size="sm" variant="secondary"
+                onClick={() => credsMutation.mutate()}
+                loading={credsMutation.isPending}
+                disabled={!credTenantId.trim() || !credClientId.trim() || !credClientSecret.trim()}
+              >
+                <Save className="w-3.5 h-3.5" /> 자격증명 저장
+              </Button>
+            </div>
+          </div>
+
+          {/* 개인 계정 로그인 (Delegated) — Application 권한 승인 전 임시 경로 */}
+          <div className="pt-2">
+            <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2 mb-2">
+              <KeyRound className="w-4 h-4" /> 개인 계정 로그인 (Delegated, 임시)
+              <Badge color={delegatedStatus?.logged_in ? 'emerald' : 'slate'}>
+                {delegatedStatus?.logged_in ? `로그인됨 · ${delegatedStatus.account}` : '로그인 필요'}
+              </Badge>
+              {delegatedStatus?.client_secret_configured && (
+                <Badge color="indigo">Confidential Client (secret 설정됨)</Badge>
+              )}
+            </h3>
+            <p className="text-xs text-slate-500 mb-2">
+              Application 권한(위 자격증명) 승인 전에도, 본인 메일함 기준으로 전체 플로우(수집→분석→라우팅→Teams발송)를
+              그대로 시연할 수 있는 임시 경로입니다. Application 권한이 설정돼 있으면 그쪽이 우선 사용됩니다.
+              라우팅 탭의 mailbox_upn을 아래 로그인할 본인 메일 주소와 동일하게 등록해야 합니다.
+            </p>
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs text-slate-400">
+                  Tenant ID (Directory ID)
+                  <input placeholder="예: d4ffc887-..." value={delegatedTenantId} onChange={(e) => setDelegatedTenantId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Client ID (Application ID — Object ID 아님)
+                  <input placeholder="예: bfdb9f4f-..." value={delegatedClientId} onChange={(e) => setDelegatedClientId(e.target.value)} className={clsx('w-full mt-1', inputClass)} />
+                </label>
+              </div>
+              <label className="block text-xs text-slate-400">
+                리다이렉트 URL (Azure AD 앱 등록 시 이 값 그대로 등록 필요 — 자동 계산됨)
+                <input readOnly value={delegatedRedirectUri} className={clsx('w-full mt-1 font-mono text-xs', inputClass)} onFocus={(e) => e.target.select()} />
+              </label>
+              <label className="block text-xs text-slate-400">
+                Client Secret (선택 — 리다이렉트 URI가 Azure AD에 "Web" 플랫폼으로 등록돼 PKCE만으로
+                토큰 교환이 거부될 때만 입력. 비워두면 기존과 동일하게 시크릿 없이 동작)
+                <input
+                  placeholder={delegatedStatus?.client_secret_configured ? '설정됨 — 변경하려면 새 값 입력' : 'Client Secret'}
+                  type="password" value={delegatedClientSecret}
+                  onChange={(e) => setDelegatedClientSecret(e.target.value)}
+                  className={clsx('w-full mt-1', inputClass)}
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  size="sm" variant="secondary"
+                  onClick={() => delegatedConfigMutation.mutate()}
+                  loading={delegatedConfigMutation.isPending}
+                  disabled={!delegatedTenantId.trim() || !delegatedClientId.trim()}
+                >
+                  <Save className="w-3.5 h-3.5" /> 앱 정보 저장
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => delegatedStartMutation.mutate()}
+                  loading={delegatedStartMutation.isPending || !!delegatedStatus?.pending}
+                  disabled={!delegatedStatus?.configured}
+                >
+                  {delegatedStatus?.logged_in ? '다시 로그인' : '로그인 시작'}
+                </Button>
+              </div>
+
+              {(delegatedStatus?.pending || delegatedStatus?.login_error || (delegatedStatus?.logged_in && delegatedAuthUrl)) && (
+                <div className={clsx(
+                  'border rounded-lg p-3 text-sm',
+                  delegatedStatus?.pending ? 'border-indigo-500/30 bg-indigo-500/10'
+                    : delegatedStatus?.login_error ? 'border-rose-500/30 bg-rose-500/10'
+                    : 'border-emerald-500/30 bg-emerald-500/10',
+                )}>
+                  {delegatedStatus?.pending ? (
+                    <>
+                      <p className="text-slate-200">새 탭에서 로그인 창이 열렸습니다. 안 열렸다면 아래 링크를 직접 클릭하세요(팝업 차단 가능성).</p>
+                      {delegatedAuthUrl && (
+                        <a
+                          href={delegatedAuthUrl} target="_blank" rel="noopener noreferrer"
+                          className="text-indigo-400 underline text-xs break-all"
+                        >
+                          로그인 페이지 열기
+                        </a>
+                      )}
+                      <p className="text-xs text-slate-500 mt-1">로그인 완료되면 이 화면이 자동으로 갱신됩니다 (3초마다 확인 중).</p>
+                    </>
+                  ) : delegatedStatus?.login_error ? (
+                    <p className="text-rose-400">로그인 실패 — {delegatedStatus.login_error} (다시 로그인을 눌러 재시도하세요)</p>
+                  ) : delegatedStatus?.logged_in ? (
+                    <p className="text-emerald-400">로그인 완료 — 이제 아래 "지금 실행" 또는 위 "폴링 자동화 ON"이 본인 메일함을 대상으로 동작합니다.</p>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ── 폴링 설정 ── */}
       {subTab === 'collect' && (
         <section className="space-y-3">
           {/* 실시간 상태 — 10초마다 자동 새로고침 */}
@@ -682,7 +822,7 @@ export function VocEmailPanel() {
                     {collectResult.date_from} ~ {collectResult.date_to} 실행 결과 ({collectResult.mailboxes.length}개 메일함)
                   </p>
                   {collectResult.mailboxes.length === 0 ? (
-                    <p className="text-xs text-slate-500">등록된 라우팅 매핑이 없습니다 — "3단계" 탭에서 먼저 파트/메일함을 등록하세요.</p>
+                    <p className="text-xs text-slate-500">등록된 라우팅 매핑이 없습니다 — "2단계 · 라우팅" 탭에서 먼저 파트/메일함을 등록하세요.</p>
                   ) : (
                     <div className="border border-slate-700 rounded-lg overflow-hidden">
                       <table className="w-full text-xs">
@@ -716,46 +856,49 @@ export function VocEmailPanel() {
             </div>
           </div>
 
-          {/* 최근 폴링 이력 — 사이클 단위 성공/실패 */}
-          <div className="pt-2">
-            <h3 className="text-sm font-semibold text-slate-300 mb-2">최근 폴링 이력</h3>
-            {pollCycles.length === 0 ? (
-              <div className="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-700 rounded-lg">
-                아직 실행된 사이클이 없습니다.
-              </div>
-            ) : (
-              <div className="border border-slate-700 rounded-lg overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-700 bg-slate-800/50">
-                      <th className="text-left px-3 py-2 text-slate-400">실행 시각</th>
-                      <th className="text-left px-3 py-2 text-slate-400">namespace 수</th>
-                      <th className="text-left px-3 py-2 text-slate-400">성공/실패 메일함</th>
-                      <th className="text-left px-3 py-2 text-slate-400">분석/발송/관련지식부족</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pollCycles.map((c) => (
-                      <tr key={c.id} className="border-b border-slate-700/50 last:border-0">
-                        <td className="px-3 py-2 text-slate-300">{formatRelative(c.started_at)}</td>
-                        <td className="px-3 py-2 text-slate-400">{c.namespaces_processed}</td>
-                        <td className="px-3 py-2">
-                          <Badge color={c.mailboxes_failed > 0 ? 'rose' : 'emerald'}>
-                            성공 {c.mailboxes_ok} / 실패 {c.mailboxes_failed}
-                          </Badge>
-                        </td>
-                        <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건 / {c.total_skipped_low_relevance}건</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
         </section>
       )}
 
-      {/* ── 2단계: 분석 테스트 ── */}
+      {/* ── 폴링 이력 (사이클 단위 성공/실패) ── */}
+      {subTab === 'pollHistory' && (
+        <section className="space-y-3">
+          <p className="text-xs text-slate-500">백그라운드 스케줄러가 실행될 때마다(폴링 주기마다) 남긴 사이클 단위 실행 결과입니다.</p>
+          {pollCycles.length === 0 ? (
+            <div className="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-700 rounded-lg">
+              아직 실행된 사이클이 없습니다.
+            </div>
+          ) : (
+            <div className="border border-slate-700 rounded-lg overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-700 bg-slate-800/50">
+                    <th className="text-left px-3 py-2 text-slate-400">실행 시각</th>
+                    <th className="text-left px-3 py-2 text-slate-400">namespace 수</th>
+                    <th className="text-left px-3 py-2 text-slate-400">성공/실패 메일함</th>
+                    <th className="text-left px-3 py-2 text-slate-400">분석/발송/관련지식부족</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pollCycles.map((c) => (
+                    <tr key={c.id} className="border-b border-slate-700/50 last:border-0">
+                      <td className="px-3 py-2 text-slate-300">{formatRelative(c.started_at)}</td>
+                      <td className="px-3 py-2 text-slate-400">{c.namespaces_processed}</td>
+                      <td className="px-3 py-2">
+                        <Badge color={c.mailboxes_failed > 0 ? 'rose' : 'emerald'}>
+                          성공 {c.mailboxes_ok} / 실패 {c.mailboxes_failed}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건 / {c.total_skipped_low_relevance}건</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ── 번외: 분석 테스트 ── */}
       {subTab === 'analyze' && (
         <section className="space-y-3">
           <p className="text-xs text-slate-500">실제 메일 연동 없이, 텍스트를 직접 입력해 분류/심각도/오배치 판정 로직을 검증합니다.</p>
@@ -799,7 +942,7 @@ export function VocEmailPanel() {
                 {testResult.reasoning && <p className="text-slate-500 text-xs">판단 근거: {testResult.reasoning}</p>}
                 <p className="text-slate-500 text-xs">참조 지식 ID: {testResult.knowledge_ref_ids.join(', ') || '없음'}</p>
                 <p className="text-xs text-indigo-400 pt-1">
-                  → "3단계 · 라우팅·알림 테스트" 탭에서 "마지막 분석 결과 불러오기"로 이어서 Teams 발송까지 테스트할 수 있습니다.
+                  → 아래 "Teams 알림 발송 테스트"에서 "마지막 분석 결과 불러오기"로 이어서 발송까지 테스트할 수 있습니다.
                 </p>
               </div>
             )}
@@ -807,233 +950,233 @@ export function VocEmailPanel() {
         </section>
       )}
 
-      {/* ── 3단계: 라우팅 매핑 + Teams 알림 테스트 ── */}
-      {subTab === 'routing' && (
-        <div className="space-y-8">
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-300">담당자 라우팅 매핑</h3>
-              <div className="flex items-center gap-2">
-                <select
-                  value={selectedNs}
-                  onChange={(e) => setNamespace(e.target.value)}
-                  className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-                >
-                  {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+      {/* ── 번외: Teams 알림 발송 테스트 (분석 테스트와 같은 탭) ── */}
+      {subTab === 'analyze' && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+              <Send className="w-4 h-4" /> Teams 알림 발송 테스트
+            </h3>
+            {testResult && (
+              <button onClick={loadFromLastAnalysis} className="text-xs text-indigo-400 hover:text-indigo-300">
+                마지막 분석 결과 불러오기
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-slate-500">
+            아무 Teams 채널에서 "Workflows" 앱으로 웹훅 URL을 발급받아(채널 소유자면 누구나 가능, IT 승인 불필요) 여기 입력하면 실제 카드가 어떻게 오는지 바로 확인할 수 있습니다.
+          </p>
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">Teams Workflows 웹훅 URL (필수)</label>
+              <input
+                value={notifyWebhookUrl} onChange={(e) => setNotifyWebhookUrl(e.target.value)}
+                placeholder="https://..."
+                className={clsx('w-full', inputClass)}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">제목 — 카드 본문에 굵게 표시</label>
+                <input value={notifySubject} onChange={(e) => setNotifySubject(e.target.value)} className={clsx('w-full', inputClass)} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">발신자 — "발신자" 항목에 표시</label>
+                <input value={notifySender} onChange={(e) => setNotifySender(e.target.value)} className={clsx('w-full', inputClass)} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">담당 파트 — "담당 파트" 항목에 표시</label>
+                <input value={notifyPart} onChange={(e) => setNotifyPart(e.target.value)} className={clsx('w-full', inputClass)} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">온콜 담당자 — 심각도 높음/긴급일 때만 표시(자동발신 아님)</label>
+                <input value={notifyOncallName} onChange={(e) => setNotifyOncallName(e.target.value)} className={clsx('w-full', inputClass)} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">분류 — "분류" 항목에 표시</label>
+                <select value={notifyCategory} onChange={(e) => setNotifyCategory(e.target.value as typeof notifyCategory)} className={clsx('w-full', inputClass)}>
+                  {Object.entries(CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
-                <Button size="sm" onClick={startCreate}>
-                  <Plus className="w-3.5 h-3.5" /> 라우팅 추가
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">심각도 — 높음/긴급이면 카드가 빨간색 강조로 바뀜</label>
+                <select value={notifySeverity} onChange={(e) => setNotifySeverity(e.target.value as typeof notifySeverity)} className={clsx('w-full', inputClass)}>
+                  {Object.entries(SEVERITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input type="checkbox" checked={notifyMismatch} onChange={(e) => setNotifyMismatch(e.target.checked)} />
+              오배치 의심으로 표시 — 카드에 "오배치 의심" 경고 항목 추가
+            </label>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">해결 방안 초안 (선택) — 카드 하단에 표시</label>
+              <textarea
+                value={notifyResolutionDraft} onChange={(e) => setNotifyResolutionDraft(e.target.value)}
+                rows={2}
+                className={clsx('w-full', inputClass)}
+              />
+            </div>
+            <Button size="sm" onClick={() => notifyMutation.mutate()} loading={notifyMutation.isPending} disabled={!notifyWebhookUrl.trim()}>
+              <Send className="w-3.5 h-3.5" /> Teams로 발송
+            </Button>
+            {notifySent && <p className="text-emerald-400 text-xs">{notifySent}</p>}
+          </div>
+        </section>
+      )}
+
+      {/* ── 2단계: 라우팅 매핑 ── */}
+      {subTab === 'routing' && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-300">담당자 라우팅 매핑</h3>
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedNs}
+                onChange={(e) => setNamespace(e.target.value)}
+                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+              >
+                {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+              </select>
+              <Button size="sm" onClick={startCreate}>
+                <Plus className="w-3.5 h-3.5" /> 라우팅 추가
+              </Button>
+            </div>
+          </div>
+          <p className="text-xs text-slate-500">
+            선택한 네임스페이스 기준으로 "메일함 1개 ↔ 담당 파트 ↔ Teams 웹훅" 라우팅 행을 관리합니다.
+            여기 입력하는 "담당 파트"는 표시용 자유 입력 텍스트로, 사용자관리의 정식 파트 등록과는 별개입니다.
+          </p>
+
+          {showForm && (
+            <div className="bg-slate-800 border border-indigo-500/30 rounded-lg p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs text-slate-400">
+                  담당 파트
+                  <input
+                    placeholder="예: 결제팀" value={form.part}
+                    onChange={(e) => setForm({ ...form, part: e.target.value })}
+                    className={clsx('w-full mt-1', inputClass)}
+                  />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  메일함 UPN
+                  <input
+                    placeholder="예: voc-billing@example.com" value={form.mailbox_upn}
+                    onChange={(e) => setForm({ ...form, mailbox_upn: e.target.value })}
+                    className={clsx('w-full mt-1', inputClass)}
+                  />
+                </label>
+                <label className="block text-xs text-slate-400 col-span-2">
+                  Teams Workflows 웹훅 URL (선택 — 없으면 분석·이력 저장까지만 진행)
+                  <input
+                    placeholder="https://..." value={form.teams_webhook_url ?? ''}
+                    onChange={(e) => setForm({ ...form, teams_webhook_url: e.target.value })}
+                    className={clsx('w-full mt-1', inputClass)}
+                  />
+                </label>
+                <div className="col-span-2">
+                  <label className="block text-xs text-slate-400 mb-1">
+                    메일 폴더 (선택 — 비우면 메일함 전체 조회. 특정 폴더로 좁히면 무관한 메일 유입을 원천 차단)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={form.mail_folder_id ?? ''}
+                      onChange={(e) => {
+                        const picked = folderOptions?.find((f) => f.id === e.target.value);
+                        setForm({
+                          ...form,
+                          mail_folder_id: e.target.value,
+                          mail_folder_name: picked?.display_name ?? '',
+                        });
+                      }}
+                      className={clsx('flex-1', inputClass)}
+                    >
+                      <option value="">전체 메일함{form.mail_folder_name ? ` (현재: ${form.mail_folder_name})` : ''}</option>
+                      {folderOptions?.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.display_name} (안읽음 {f.unread_count} / 전체 {f.total_count})
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      size="sm" variant="secondary" type="button"
+                      onClick={() => loadFoldersMutation.mutate()}
+                      loading={loadFoldersMutation.isPending}
+                      disabled={!form.mailbox_upn.trim()}
+                    >
+                      폴더 불러오기
+                    </Button>
+                  </div>
+                </div>
+                <label className="block text-xs text-slate-400">
+                  온콜 담당자명 (선택 — 표시 전용, 자동발신 아님)
+                  <input
+                    placeholder="예: 홍길동" value={form.oncall_contact_name ?? ''}
+                    onChange={(e) => setForm({ ...form, oncall_contact_name: e.target.value })}
+                    className={clsx('w-full mt-1', inputClass)}
+                  />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  온콜 연락처 (선택)
+                  <input
+                    placeholder="예: 010-1234-5678" value={form.oncall_contact_phone ?? ''}
+                    onChange={(e) => setForm({ ...form, oncall_contact_phone: e.target.value })}
+                    className={clsx('w-full mt-1', inputClass)}
+                  />
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={handleSubmit} loading={createMutation.isPending || updateMutation.isPending}>
+                  <Save className="w-3.5 h-3.5" /> 저장
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setShowForm(false); setEditingId(null); }}>
+                  <X className="w-3.5 h-3.5" /> 취소
                 </Button>
               </div>
             </div>
-            <p className="text-xs text-slate-500">
-              선택한 네임스페이스 기준으로 "메일함 1개 ↔ 담당 파트 ↔ Teams 웹훅" 라우팅 행을 관리합니다.
-              여기 입력하는 "담당 파트"는 표시용 자유 입력 텍스트로, 사용자관리의 정식 파트 등록과는 별개입니다.
-            </p>
+          )}
 
-            {showForm && (
-              <div className="bg-slate-800 border border-indigo-500/30 rounded-lg p-4 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="block text-xs text-slate-400">
-                    담당 파트
-                    <input
-                      placeholder="예: 결제팀" value={form.part}
-                      onChange={(e) => setForm({ ...form, part: e.target.value })}
-                      className={clsx('w-full mt-1', inputClass)}
-                    />
-                  </label>
-                  <label className="block text-xs text-slate-400">
-                    메일함 UPN
-                    <input
-                      placeholder="예: voc-billing@example.com" value={form.mailbox_upn}
-                      onChange={(e) => setForm({ ...form, mailbox_upn: e.target.value })}
-                      className={clsx('w-full mt-1', inputClass)}
-                    />
-                  </label>
-                  <label className="block text-xs text-slate-400 col-span-2">
-                    Teams Workflows 웹훅 URL (선택 — 없으면 분석·이력 저장까지만 진행)
-                    <input
-                      placeholder="https://..." value={form.teams_webhook_url ?? ''}
-                      onChange={(e) => setForm({ ...form, teams_webhook_url: e.target.value })}
-                      className={clsx('w-full mt-1', inputClass)}
-                    />
-                  </label>
-                  <div className="col-span-2">
-                    <label className="block text-xs text-slate-400 mb-1">
-                      메일 폴더 (선택 — 비우면 메일함 전체 조회. 특정 폴더로 좁히면 무관한 메일 유입을 원천 차단)
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={form.mail_folder_id ?? ''}
-                        onChange={(e) => {
-                          const picked = folderOptions?.find((f) => f.id === e.target.value);
-                          setForm({
-                            ...form,
-                            mail_folder_id: e.target.value,
-                            mail_folder_name: picked?.display_name ?? '',
-                          });
-                        }}
-                        className={clsx('flex-1', inputClass)}
-                      >
-                        <option value="">전체 메일함{form.mail_folder_name ? ` (현재: ${form.mail_folder_name})` : ''}</option>
-                        {folderOptions?.map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.display_name} (안읽음 {f.unread_count} / 전체 {f.total_count})
-                          </option>
-                        ))}
-                      </select>
-                      <Button
-                        size="sm" variant="secondary" type="button"
-                        onClick={() => loadFoldersMutation.mutate()}
-                        loading={loadFoldersMutation.isPending}
-                        disabled={!form.mailbox_upn.trim()}
-                      >
-                        폴더 불러오기
-                      </Button>
-                    </div>
-                  </div>
-                  <label className="block text-xs text-slate-400">
-                    온콜 담당자명 (선택 — 표시 전용, 자동발신 아님)
-                    <input
-                      placeholder="예: 홍길동" value={form.oncall_contact_name ?? ''}
-                      onChange={(e) => setForm({ ...form, oncall_contact_name: e.target.value })}
-                      className={clsx('w-full mt-1', inputClass)}
-                    />
-                  </label>
-                  <label className="block text-xs text-slate-400">
-                    온콜 연락처 (선택)
-                    <input
-                      placeholder="예: 010-1234-5678" value={form.oncall_contact_phone ?? ''}
-                      onChange={(e) => setForm({ ...form, oncall_contact_phone: e.target.value })}
-                      className={clsx('w-full mt-1', inputClass)}
-                    />
-                  </label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={handleSubmit} loading={createMutation.isPending || updateMutation.isPending}>
-                    <Save className="w-3.5 h-3.5" /> 저장
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => { setShowForm(false); setEditingId(null); }}>
-                    <X className="w-3.5 h-3.5" /> 취소
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {routingLoading ? (
-              <div className="text-sm text-slate-500 animate-pulse py-6 text-center">로딩 중...</div>
-            ) : routing.length === 0 ? (
-              <div className="text-sm text-slate-500 py-8 text-center border border-dashed border-slate-700 rounded-lg">
-                등록된 라우팅 매핑이 없습니다. "라우팅 추가"로 메일함↔파트↔웹훅을 등록하세요.
-              </div>
-            ) : (
-              <div className="border border-slate-700 rounded-lg overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-700 bg-slate-800/50">
-                      <th className="text-left px-4 py-2.5 text-xs font-medium text-slate-400">담당 파트</th>
-                      <th className="text-left px-4 py-2.5 text-xs font-medium text-slate-400">메일함</th>
-                      <th className="text-left px-4 py-2.5 text-xs font-medium text-slate-400">온콜 담당자</th>
-                      <th className="w-20 px-4 py-2.5" />
+          {routingLoading ? (
+            <div className="text-sm text-slate-500 animate-pulse py-6 text-center">로딩 중...</div>
+          ) : routing.length === 0 ? (
+            <div className="text-sm text-slate-500 py-8 text-center border border-dashed border-slate-700 rounded-lg">
+              등록된 라우팅 매핑이 없습니다. "라우팅 추가"로 메일함↔파트↔웹훅을 등록하세요.
+            </div>
+          ) : (
+            <div className="border border-slate-700 rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700 bg-slate-800/50">
+                    <th className="text-left px-4 py-2.5 text-xs font-medium text-slate-400">담당 파트</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-medium text-slate-400">메일함</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-medium text-slate-400">온콜 담당자</th>
+                    <th className="w-20 px-4 py-2.5" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {routing.map((r) => (
+                    <tr key={r.id} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-800/30">
+                      <td className="px-4 py-3 text-slate-200">{r.part}</td>
+                      <td className="px-4 py-3 text-slate-300 font-mono text-xs">{r.mailbox_upn}</td>
+                      <td className="px-4 py-3 text-slate-400">{r.oncall_contact_name || '-'}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1 justify-end">
+                          <button onClick={() => startEdit(r)} className="p-1.5 rounded text-slate-500 hover:text-indigo-400 hover:bg-indigo-400/10">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => deleteMutation.mutate(r.id)} className="p-1.5 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-400/10">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {routing.map((r) => (
-                      <tr key={r.id} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-800/30">
-                        <td className="px-4 py-3 text-slate-200">{r.part}</td>
-                        <td className="px-4 py-3 text-slate-300 font-mono text-xs">{r.mailbox_upn}</td>
-                        <td className="px-4 py-3 text-slate-400">{r.oncall_contact_name || '-'}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1 justify-end">
-                            <button onClick={() => startEdit(r)} className="p-1.5 rounded text-slate-500 hover:text-indigo-400 hover:bg-indigo-400/10">
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            <button onClick={() => deleteMutation.mutate(r.id)} className="p-1.5 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-400/10">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-
-          {/* Teams 알림 테스트 — 분석 결과 없이도 독립적으로 사용 가능 */}
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-                <Send className="w-4 h-4" /> Teams 알림 발송 테스트
-              </h3>
-              {testResult && (
-                <button onClick={loadFromLastAnalysis} className="text-xs text-indigo-400 hover:text-indigo-300">
-                  마지막 분석 결과 불러오기
-                </button>
-              )}
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <p className="text-xs text-slate-500">
-              아무 Teams 채널에서 "Workflows" 앱으로 웹훅 URL을 발급받아(채널 소유자면 누구나 가능, IT 승인 불필요) 여기 입력하면 실제 카드가 어떻게 오는지 바로 확인할 수 있습니다.
-            </p>
-            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Teams Workflows 웹훅 URL (필수)</label>
-                <input
-                  value={notifyWebhookUrl} onChange={(e) => setNotifyWebhookUrl(e.target.value)}
-                  placeholder="https://..."
-                  className={clsx('w-full', inputClass)}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">제목 — 카드 본문에 굵게 표시</label>
-                  <input value={notifySubject} onChange={(e) => setNotifySubject(e.target.value)} className={clsx('w-full', inputClass)} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">발신자 — "발신자" 항목에 표시</label>
-                  <input value={notifySender} onChange={(e) => setNotifySender(e.target.value)} className={clsx('w-full', inputClass)} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">담당 파트 — "담당 파트" 항목에 표시</label>
-                  <input value={notifyPart} onChange={(e) => setNotifyPart(e.target.value)} className={clsx('w-full', inputClass)} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">온콜 담당자 — 심각도 높음/긴급일 때만 표시(자동발신 아님)</label>
-                  <input value={notifyOncallName} onChange={(e) => setNotifyOncallName(e.target.value)} className={clsx('w-full', inputClass)} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">분류 — "분류" 항목에 표시</label>
-                  <select value={notifyCategory} onChange={(e) => setNotifyCategory(e.target.value as typeof notifyCategory)} className={clsx('w-full', inputClass)}>
-                    {Object.entries(CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">심각도 — 높음/긴급이면 카드가 빨간색 강조로 바뀜</label>
-                  <select value={notifySeverity} onChange={(e) => setNotifySeverity(e.target.value as typeof notifySeverity)} className={clsx('w-full', inputClass)}>
-                    {Object.entries(SEVERITY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                </div>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-slate-300">
-                <input type="checkbox" checked={notifyMismatch} onChange={(e) => setNotifyMismatch(e.target.checked)} />
-                오배치 의심으로 표시 — 카드에 "오배치 의심" 경고 항목 추가
-              </label>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">해결 방안 초안 (선택) — 카드 하단에 표시</label>
-                <textarea
-                  value={notifyResolutionDraft} onChange={(e) => setNotifyResolutionDraft(e.target.value)}
-                  rows={2}
-                  className={clsx('w-full', inputClass)}
-                />
-              </div>
-              <Button size="sm" onClick={() => notifyMutation.mutate()} loading={notifyMutation.isPending} disabled={!notifyWebhookUrl.trim()}>
-                <Send className="w-3.5 h-3.5" /> Teams로 발송
-              </Button>
-              {notifySent && <p className="text-emerald-400 text-xs">{notifySent}</p>}
-            </div>
-          </section>
-        </div>
+          )}
+        </section>
       )}
 
       {/* ── 이력 ── */}
@@ -1106,7 +1249,7 @@ export function VocEmailPanel() {
             <div className="text-sm text-slate-500 py-8 text-center border border-dashed border-slate-700 rounded-lg">
               {historyFiltersActive
                 ? '조건에 맞는 이력이 없습니다. 필터를 조정해보세요.'
-                : '이력이 없습니다. "1단계 · 메일 수집"에서 수동 실행을 해보거나, 폴링 자동화가 켜지면 여기 쌓입니다.'}
+                : '이력이 없습니다. "3단계 · 폴링"에서 수동 실행을 해보거나, 폴링 자동화가 켜지면 여기 쌓입니다.'}
             </div>
           ) : (
             <div className="space-y-2">
