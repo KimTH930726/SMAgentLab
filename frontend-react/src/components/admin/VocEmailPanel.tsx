@@ -56,6 +56,20 @@ function isValidHttpUrl(value: string): boolean {
   }
 }
 
+// 백엔드 메시지는 대부분 이미 사람이 읽을 수 있는 한국어 문장이라 그대로 노출하되,
+// 원인을 알 수 없는 경우(라우트 자체가 없는 404, 네트워크 단절 등)에는 다음에
+// 뭘 해야 하는지 안내를 붙인다 — 원본 메시지만 던지면 사용자가 뭘 어떻게 해야
+// 할지 알 수 없다(예: "Not Found"만 보고는 재시도해야 할지조차 판단 불가).
+function toErrorMessage(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 404) return `${e.message} — 서버에 연결할 수 없거나 대상이 삭제됐을 수 있습니다. 새로고침 후 다시 시도해 주세요.`;
+    if (e.status === 401) return '로그인이 만료됐습니다 — 다시 로그인해 주세요.';
+    if (e.status >= 500) return `서버 오류(${e.status}) — 잠시 후 다시 시도해 주세요. 반복되면 관리자에게 문의하세요.`;
+    return e.message;
+  }
+  return '네트워크 오류 — 연결 상태를 확인하고 다시 시도해 주세요.';
+}
+
 function toDateInputValue(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -86,6 +100,23 @@ function formatRelative(iso: string | null): string {
   return `${Math.round(diffSec / 3600)}시간 전`;
 }
 
+// 조회 실패 시 빈 상태("데이터 없음")처럼 보이지 않도록, 해당 섹션 안에 원인과
+// "다시 시도" 버튼을 바로 붙여서 보여준다 — 데이터가 정말 없는 것과 불러오기에
+// 실패한 것을 사용자가 구분할 수 있어야 한다.
+function QueryErrorNotice({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-3 bg-rose-500/10 border border-rose-500/30 rounded-lg">
+      <div className="flex items-center gap-2 min-w-0">
+        <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+        <p className="text-sm text-rose-300 truncate">{toErrorMessage(error)}</p>
+      </div>
+      <button onClick={onRetry} className="text-xs text-rose-300 underline flex-shrink-0 hover:text-rose-200">
+        다시 시도
+      </button>
+    </div>
+  );
+}
+
 export function VocEmailPanel() {
   const queryClient = useQueryClient();
   const [namespace, setNamespace] = useState('');
@@ -99,15 +130,18 @@ export function VocEmailPanel() {
   const selectedNs = namespace || namespaces[0] || '';
 
   // ── §9 폴링 설정 ──────────────────────────────────────────────────────────
-  const { data: settings } = useQuery({
+  const { data: settings, isError: settingsError, error: settingsErrorObj, refetch: refetchSettings } = useQuery({
     queryKey: ['email-voc-settings'],
     queryFn: getEmailCollectionSettings,
   });
 
   const settingsMutation = useMutation({
     mutationFn: updateEmailCollectionSettings,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['email-voc-settings'] }),
-    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['email-voc-settings'] });
+      setError('');
+    },
+    onError: (e) => setError(toErrorMessage(e)),
   });
 
   // ── 실시간 상태 + 폴링 이력 ─────────────────────────────────────────────
@@ -115,7 +149,7 @@ export function VocEmailPanel() {
   // 폴링 주기가 보통 분 단위라 너무 짧게 잡으면 API만 자주 호출하고 실제로 바뀌는
   // 내용은 거의 없다. "3단계 · 폴링" 탭에서만 화면에 보이므로, 다른 탭을 보는
   // 동안은 멈춰 불필요한 호출을 없앤다.
-  const { data: schedulerStatus } = useQuery({
+  const { data: schedulerStatus, isError: schedulerError, error: schedulerErrorObj, refetch: refetchScheduler } = useQuery({
     queryKey: ['email-voc-scheduler-status'],
     queryFn: getSchedulerStatus,
     refetchInterval: 30_000,
@@ -129,7 +163,10 @@ export function VocEmailPanel() {
   });
 
   // ── §10 라우팅 매핑 ───────────────────────────────────────────────────────
-  const { data: routing = [], isLoading: routingLoading } = useQuery({
+  const {
+    data: routing = [], isLoading: routingLoading,
+    isError: routingError, error: routingErrorObj, refetch: refetchRouting,
+  } = useQuery({
     queryKey: ['voc-routing', selectedNs],
     queryFn: () => listVocRouting(selectedNs),
     enabled: !!selectedNs,
@@ -150,7 +187,7 @@ export function VocEmailPanel() {
       setForm(EMPTY_ROUTING_FORM);
       setError('');
     },
-    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+    onError: (e) => setError(toErrorMessage(e)),
   });
 
   const updateMutation = useMutation({
@@ -163,19 +200,23 @@ export function VocEmailPanel() {
       setForm(EMPTY_ROUTING_FORM);
       setError('');
     },
-    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+    onError: (e) => setError(toErrorMessage(e)),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteVocRouting(id, selectedNs),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['voc-routing', selectedNs] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['voc-routing', selectedNs] });
+      setError('');
+    },
+    onError: (e) => setError(toErrorMessage(e)),
   });
 
   const [folderOptions, setFolderOptions] = useState<MailFolder[] | null>(null);
   const loadFoldersMutation = useMutation({
     mutationFn: () => getMailFolders(form.mailbox_upn),
     onSuccess: (folders) => { setFolderOptions(folders); setError(''); },
-    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+    onError: (e) => setError(toErrorMessage(e)),
   });
 
   const startEdit = (r: VocRouting) => {
@@ -232,7 +273,7 @@ export function VocEmailPanel() {
       setCredClientSecret('');
       setError('');
     },
-    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+    onError: (e) => setError(toErrorMessage(e)),
   });
 
   // ── Delegated 권한 로그인 (Application 권한/Track B 승인 전 임시 경로) ─────
@@ -260,7 +301,7 @@ export function VocEmailPanel() {
       setDelegatedClientSecret(''); // 저장 후 화면에 값이 남아있지 않게 즉시 비움
       setError('');
     },
-    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+    onError: (e) => setError(toErrorMessage(e)),
   });
   const delegatedStartMutation = useMutation({
     mutationFn: startDelegatedAuth,
@@ -271,7 +312,7 @@ export function VocEmailPanel() {
       queryClient.invalidateQueries({ queryKey: ['delegated-auth-status'] });
       setError('');
     },
-    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+    onError: (e) => setError(toErrorMessage(e)),
   });
 
   // ── 폴링: 수동 1회성 실행 (§9, §5 Phase 1) ─────────────────────────────
@@ -295,7 +336,7 @@ export function VocEmailPanel() {
       setError('');
       queryClient.invalidateQueries({ queryKey: ['email-history', selectedNs] });
     },
-    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+    onError: (e) => setError(toErrorMessage(e)),
   });
 
   // ── 이력 ──────────────────────────────────────────────────────────────
@@ -311,7 +352,10 @@ export function VocEmailPanel() {
   useEffect(() => {
     setHistoryOffset(0);
   }, [selectedNs, historySeverity, historyStatus, historyMismatchOnly, historyKeyword]);
-  const { data: history = [], isLoading: historyLoading } = useQuery({
+  const {
+    data: history = [], isLoading: historyLoading,
+    isError: historyError, error: historyErrorObj, refetch: refetchHistory,
+  } = useQuery({
     queryKey: ['email-history', selectedNs, historyOffset, historySeverity, historyStatus, historyMismatchOnly, historyKeyword],
     queryFn: () => getEmailHistory(selectedNs, HISTORY_PAGE_SIZE, historyOffset, {
       severity: historySeverity || undefined, status: historyStatus || undefined,
@@ -334,7 +378,7 @@ export function VocEmailPanel() {
   const analyzeMutation = useMutation({
     mutationFn: () => testAnalyzeEmail(selectedNs, testSubject, testBody, testPart || undefined),
     onSuccess: (result) => { setTestResult(result); setError(''); },
-    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+    onError: (e) => setError(toErrorMessage(e)),
   });
 
   // ── 번외: Teams 알림 테스트 (§11 Track A #3) — 분석 없이도 독립적으로 사용 가능 ──
@@ -372,7 +416,7 @@ export function VocEmailPanel() {
       oncall_contact_name: notifyOncallName || null,
     }),
     onSuccess: () => { setNotifySent('발송 완료 — 등록한 Teams 채널에서 카드를 확인하세요.'); setError(''); },
-    onError: (e) => { setNotifySent(null); setError(e instanceof ApiError ? e.message : String(e)); },
+    onError: (e) => { setNotifySent(null); setError(toErrorMessage(e)); },
   });
 
   return (
@@ -388,7 +432,10 @@ export function VocEmailPanel() {
       {error && (
         <div className="flex items-center gap-3 px-4 py-3 bg-rose-500/10 border border-rose-500/30 rounded-lg">
           <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
-          <p className="text-sm text-rose-300">{error}</p>
+          <p className="text-sm text-rose-300 flex-1">{error}</p>
+          <button onClick={() => setError('')} className="text-rose-400 hover:text-rose-200 flex-shrink-0">
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
@@ -556,6 +603,8 @@ export function VocEmailPanel() {
       {/* ── 폴링 설정 ── */}
       {subTab === 'collect' && (
         <section className="space-y-3">
+          {schedulerError && <QueryErrorNotice error={schedulerErrorObj} onRetry={() => refetchScheduler()} />}
+          {settingsError && <QueryErrorNotice error={settingsErrorObj} onRetry={() => refetchSettings()} />}
           {/* 실시간 상태 */}
           <div className={clsx(
             'border rounded-xl p-4',
@@ -918,6 +967,7 @@ export function VocEmailPanel() {
       {/* ── 2단계: 라우팅 매핑 ── */}
       {subTab === 'routing' && (
         <section className="space-y-3">
+          {routingError && <QueryErrorNotice error={routingErrorObj} onRetry={() => refetchRouting()} />}
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-300">담당자 라우팅 매핑</h3>
             <div className="flex items-center gap-2">
@@ -1029,7 +1079,7 @@ export function VocEmailPanel() {
             </div>
           )}
 
-          {routingLoading ? (
+          {routingError ? null : routingLoading ? (
             <div className="text-sm text-slate-500 animate-pulse py-6 text-center">로딩 중...</div>
           ) : routing.length === 0 ? (
             <div className="text-sm text-slate-500 py-8 text-center border border-dashed border-slate-700 rounded-lg">
@@ -1074,6 +1124,7 @@ export function VocEmailPanel() {
       {/* ── 이력 ── */}
       {subTab === 'history' && (
         <section className="space-y-3">
+          {historyError && <QueryErrorNotice error={historyErrorObj} onRetry={() => refetchHistory()} />}
           <div className="flex items-center justify-between">
             <p className="text-xs text-slate-500">원본 메일 · AI 판단 · 발송 결과</p>
             <select
@@ -1133,7 +1184,7 @@ export function VocEmailPanel() {
             )}
           </div>
 
-          {historyLoading ? (
+          {historyError ? null : historyLoading ? (
             <div className="text-sm text-slate-500 animate-pulse py-6 text-center">로딩 중...</div>
           ) : history.length === 0 ? (
             <div className="text-sm text-slate-500 py-8 text-center border border-dashed border-slate-700 rounded-lg">
