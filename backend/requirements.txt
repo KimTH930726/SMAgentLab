@@ -22,3 +22,8 @@ lxml==5.3.0
 openpyxl==3.1.5
 pymupdf==1.24.13
 msal==1.31.1
+
+# 테스트(backend/tests/) — 프로덕션 이미지에도 포함해 컨테이너 안에서 바로
+# `python3 -m pytest` 실행 가능하게 유지 (별도 dev-requirements 없음)
+pytest==8.3.4
+pytest-asyncio==0.25.2
