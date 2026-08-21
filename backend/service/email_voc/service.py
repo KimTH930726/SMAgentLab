@@ -115,7 +115,11 @@ async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceC
     분리했다 — 그러지 않으면 임베딩·벡터검색이 이메일 1건당 두 번씩 돈다.
     """
     query_text = f"{subject}\n{body}".strip()
-    query_vec = await embedding_service.embed(query_text)
+    # embed()는 모델의 max_seq_length(128토큰)만 반영해 긴 이메일일수록 실제 내용을
+    # 놓친다(§7-13, 2026-08-21 실측) — embed_long()은 여러 청크로 나눠 평균 풀링해
+    # 훨씬 넓은 범위를 반영한다. 이메일 본문 특성상 여기서만 필요(채팅 질의는 보통
+    # 짧아 embed()로 충분).
+    query_vec = await embedding_service.embed_long(query_text)
 
     glossary_match = await retrieval.map_glossary_term(namespace, query_vec)
     mapped_term = glossary_match.term if glossary_match else None
