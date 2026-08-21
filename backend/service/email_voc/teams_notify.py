@@ -62,6 +62,14 @@ def build_teams_message(
     color = _SEVERITY_COLOR.get(severity, _SEVERITY_COLOR["low"])
     header = "🚨 긴급 VOC 알림" if urgent else "VOC 분석 알림"
 
+    # "내용" 섹션이 담당파트/분류/심각도 같은 메타데이터만 나열해서, 특히 category가
+    # system_error가 아니라 resolution_draft가 없는 경우 알림만 보고는 "무슨 일인지"를
+    # 전혀 알 수 없다는 실사용 피드백(§7) — reasoning(LLM 판단 근거, 이미 계산돼 있음)에
+    # 이메일이 뭘 요청/문의하는지가 대체로 같이 서술돼 있어, 메타데이터 목록 위에
+    # 굵게 먼저 보여준다. 심각도가 높을수록 "왜 급한지"를 먼저 보여주는 게 중요하다.
+    summary = analysis.get("reasoning")
+    summary_html = f"<p><b>{_esc(summary)}</b></p>" if summary else ""
+
     detail_items = [
         f"담당 파트: {_esc(part) or '-'}",
         f"분류: {_esc(_CATEGORY_LABEL.get(category, category))}",
@@ -74,7 +82,7 @@ def build_teams_message(
         )
     if urgent and oncall_contact_name:
         detail_items.append(f"온콜 담당자: {_esc(oncall_contact_name)} — 필요 시 직접 전화 부탁드립니다")
-    detail_list = "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
+    detail_list = summary_html + "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
 
     # h2/h3 태그만으로는 Teams 렌더링 기본 폰트 크기가 기대보다 작고 섹션 간 여백도
     # 좁게 나오는 게 실측으로 확인돼, font-size를 명시적으로 지정하고 섹션 사이에

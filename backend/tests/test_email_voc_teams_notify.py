@@ -56,6 +56,25 @@ class TestBuildTeamsMessage:
             analysis=_base_analysis(category="system_error", resolution_draft=None),
         )
         assert ">해결 방안</h3>" in msg["text"]
+
+    def test_reasoning_shown_as_bold_summary_before_metadata(self):
+        # 심각도만 있고 해결방안이 없으면(판단 보류 등) 뭔 내용인지 전혀 알 수 없다는
+        # 실사용 피드백 — LLM 판단 근거(이미 계산돼 있음)를 내용 섹션 맨 위에 굵게 보여준다.
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(category="uncertain", reasoning="SSGPAY DB 전환 오픈 협조 요청 메일입니다."),
+        )
+        text = msg["text"]
+        assert "<p><b>SSGPAY DB 전환 오픈 협조 요청 메일입니다.</b></p>" in text
+        # 요약이 메타데이터 목록(담당 파트 등)보다 먼저 나와야 함
+        assert text.index("SSGPAY DB 전환 오픈") < text.index("담당 파트")
+
+    def test_no_reasoning_omits_summary_paragraph(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(reasoning=None),
+        )
+        assert "<p><b>" not in msg["text"]
         assert "분석이 불완전했을 수 있습니다" in msg["text"]
 
     def test_urgent_severity_uses_red_and_urgent_header(self):
