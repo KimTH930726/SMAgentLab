@@ -89,6 +89,41 @@ class TestMaskPii:
         assert text == "결제금액 15000원, 재고 500개"
 
 
+class TestStripForwardedChain:
+    def test_strips_at_korean_forward_header(self):
+        text = (
+            "안녕하세요 담당님\n스타벅스 이영훈입니다.\n\n"
+            "콜드폼 정렬 순서 운영환경에서도 변경 완료하였고\n익일 마스터로 내려갈 예정입니다.\n\n"
+            "감사합니다.\n피칸드림.\n\n"
+            "보낸 사람: 신형섭(온라인서비스 딜리버스/외부서비스) - 스타벅스CSP팀 <shinhs@shinsegae.com>\n"
+            "날짜: 목요일, 2026년 8월 20일 오후 3:56"
+        )
+        result = service._strip_forwarded_chain(text)
+        assert "보낸 사람" not in result
+        assert "shinhs@shinsegae.com" not in result
+        assert "피칸드림." in result  # 새로 쓴 부분은 그대로 남아야 함
+
+    def test_strips_at_english_from_header(self):
+        text = (
+            "안녕하세요.\nSSG 페이먼츠 결제플랫폼팀 나성민입니다.\n협조 요청 사항입니다.\n\n감사합니다.\n\n\n"
+            "From: 나성민(파트장) - 인프라\nSent: Tuesday, August 11, 2026 4:15 PM\n"
+            "To: 신세계I&C 이마트팀 <IC0M23A570@shinsegae.com>; ..."
+        )
+        result = service._strip_forwarded_chain(text)
+        assert "From:" not in result
+        assert "IC0M23A570" not in result
+        assert "협조 요청 사항입니다." in result
+
+    def test_no_marker_returns_original(self):
+        text = "고객이 결제 시도 시 500 에러가 계속 발생한다고 합니다."
+        assert service._strip_forwarded_chain(text) == text
+
+    def test_strips_at_original_message_separator(self):
+        text = "새로 쓴 내용입니다.\n\n-----Original Message-----\n예전 내용입니다."
+        result = service._strip_forwarded_chain(text)
+        assert result == "새로 쓴 내용입니다."
+
+
 class TestSnippet:
     def test_short_content_unchanged(self):
         assert service._snippet("짧은 내용") == "짧은 내용"

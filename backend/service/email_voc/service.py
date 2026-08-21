@@ -83,6 +83,28 @@ _PHONE_RE = re.compile(r"(?<!\d)\+?\d{1,3}[.\-\s]\d{2,4}[.\-\s]\d{2,4}(?:[.\-\s]
 # 연속이 안 되므로 오탐하지 않는다.
 _LONG_ID_RE = re.compile(r"(?<!\d)\d{10,}(?!\d)")
 
+# 이메일 전달/회신 체인의 시작을 표시하는 헤더 줄 — Outlook 기준 "보낸 사람:"/
+# "발신:"/"From:", 또는 "-----Original Message-----" 구분선. 이게 나오는 지점부터는
+# 새로 쓴 내용이 아니라 예전에 주고받은 메일을 그대로 인용한 것이므로, 관련성
+# 검색·LLM 분석에는 그 앞부분("알짜 내용")만 있으면 충분하다 — 실측 확인(§7-13,
+# 2026-08-21): 4만자짜리 이메일도 실제 새로 쓴 내용은 이 마커 이전 1~2천자 안에
+# 다 들어있고, 그 뒤는 예전 메일이 반복·중첩되며 길어지는 구조였다.
+_FORWARD_MARKER_RE = re.compile(
+    r"^\s*(?:보낸\s*사람|발신|From)\s*[:：].*$|^-{5,}\s*(?:Original Message|원본 메일)\s*-{5,}",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _strip_forwarded_chain(text: str) -> str:
+    """전달/회신 체인 마커 이전(새로 쓴 부분)만 남긴다. 마커가 없으면 원문 그대로.
+
+    마커를 못 찾아도 안전하게 원문을 반환하므로, 마커가 없는 일반 메일(대부분의
+    VOC 문의)에는 아무 영향이 없다 — 이 함수는 "전달된 긴 스레드"에만 실질적으로
+    작용한다.
+    """
+    match = _FORWARD_MARKER_RE.search(text)
+    return (text[:match.start()] if match else text).strip()
+
 
 def _snippet(content: str, length: int = _KNOWLEDGE_SNIPPET_LEN) -> str:
     flat = " ".join(content.split())  # 줄바꿈/연속 공백 정리 — 카드에서 한 줄로 보이게
@@ -114,7 +136,7 @@ async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceC
     파이프라인이 관련성 게이트를 먼저 통과시킨 뒤 결과를 그대로 재사용할 수 있도록
     분리했다 — 그러지 않으면 임베딩·벡터검색이 이메일 1건당 두 번씩 돈다.
     """
-    query_text = f"{subject}\n{body}".strip()
+    query_text = f"{subject}\n{_strip_forwarded_chain(body)}".strip()
     # embed()는 모델의 max_seq_length(128토큰)만 반영해 긴 이메일일수록 실제 내용을
     # 놓친다(§7-13, 2026-08-21 실측) — embed_long()은 여러 청크로 나눠 평균 풀링해
     # 훨씬 넓은 범위를 반영한다. 이메일 본문 특성상 여기서만 필요(채팅 질의는 보통
@@ -183,9 +205,11 @@ async def analyze_email(
 
     system_prompt = await get_prompt("email_voc_analysis_system", _DEFAULT_ANALYSIS_SYSTEM)
     prompt_template = await get_prompt("email_voc_analysis_prompt", _DEFAULT_ANALYSIS_PROMPT)
+    # 전달 체인을 잘라낸 뒤 마스킹 — 검색용 query_text와 동일한 전처리를 LLM
+    # 프롬프트에도 적용해 토큰 비용과 무관한 CC 목록 노출을 줄인다(§7-13).
     prompt = prompt_template.format(
         subject=_mask_pii(subject or "(제목 없음)"),
-        body=_mask_pii(body),
+        body=_mask_pii(_strip_forwarded_chain(body)),
         part=part or "(미지정)",
         context=_mask_pii(context) if context else "(관련 지식 없음)",
     )

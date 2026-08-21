@@ -14,7 +14,11 @@ from core.config import settings
 # 2026-08-21) — 그마저 128토큰 안에 남는 건 본문 서두의 상투 문구뿐이고 실제
 # 내용은 뒤에 있는 경우가 많아, 표 형식 지식 문서 오탐의 원인 중 하나로 추정됨.
 _CHUNK_TOKENS = 100  # max_seq_length(128)보다 약간 작게 잡아 특수토큰 여유를 둠
-_MAX_CHUNKS = 5  # 청크당 임베딩 1회(로컬 CPU 추론)이므로 이메일당 최대 5회로 제한
+# 청크당 임베딩 1회(로컬 CPU 추론, 짧은 텍스트라 청크 추가 비용은 미미 — 실측
+# 청크당 +0.03~0.04초)이므로 이메일당 최대 8회(800토큰)까지 허용. VOC 서비스가
+# 전달 체인을 미리 잘라내는 _strip_forwarded_chain()과 같이 쓰이므로, 실사용
+# 사례(§7-13)에서 "전처리 후 알짜 내용"이 690토큰까지 나온 것을 감안해 여유를 둠.
+_MAX_CHUNKS = 8
 
 
 def _chunk_token_ids(token_ids: list[int], chunk_size: int, max_chunks: int) -> list[list[int]]:
