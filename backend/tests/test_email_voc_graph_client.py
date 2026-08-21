@@ -116,3 +116,58 @@ class TestFetchMessages:
         with patch("httpx.AsyncClient", return_value=mock_client):
             with pytest.raises(graph_client.GraphApiError, match="401"):
                 await graph_client.fetch_messages("voc@example.com", "tok", datetime(2026, 7, 22))
+
+
+class TestListMailFolders:
+    """받은 편지함(Inbox) 하위에 만든 폴더가 조회에 안 잡히던 실사용 버그 회귀 테스트.
+
+    "VOC 전용 폴더는 보통 최상위에 만든다"는 원래 가정이 틀렸다는 게 실사용 중
+    확인됐음(§7 참고) — Outlook에서 새 폴더의 기본 생성 위치가 받은 편지함 하위라
+    오히려 이쪽이 더 흔했다.
+    """
+
+    @pytest.mark.asyncio
+    async def test_merges_top_level_and_inbox_children(self):
+        top_level = {"value": [{"id": "f1", "displayName": "보관함", "unreadItemCount": 0, "totalItemCount": 5}]}
+        inbox_children = {"value": [{"id": "f2", "displayName": "VOC", "unreadItemCount": 2, "totalItemCount": 10}]}
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = [_fake_response(200, top_level), _fake_response(200, inbox_children)]
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            folders = await graph_client.list_mail_folders("voc@example.com", "tok")
+
+        assert folders == [
+            {"id": "f1", "display_name": "보관함", "unread_count": 0, "total_count": 5},
+            {"id": "f2", "display_name": "받은 편지함 / VOC", "unread_count": 2, "total_count": 10},
+        ]
+        assert mock_client.get.call_count == 2
+        first_call, second_call = mock_client.get.call_args_list
+        assert first_call.args[0].endswith("/mailFolders")
+        assert second_call.args[0].endswith("/mailFolders/inbox/childFolders")
+
+    @pytest.mark.asyncio
+    async def test_inbox_children_failure_still_returns_top_level(self):
+        # Inbox 하위 폴더가 아예 없는 계정 등 — 이 호출이 실패해도 전체를 막지 않는다
+        top_level = {"value": [{"id": "f1", "displayName": "보관함", "unreadItemCount": 0, "totalItemCount": 5}]}
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = [_fake_response(200, top_level), _fake_response(404, {}, text="Not Found")]
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            folders = await graph_client.list_mail_folders("voc@example.com", "tok")
+
+        assert folders == [{"id": "f1", "display_name": "보관함", "unread_count": 0, "total_count": 5}]
+
+    @pytest.mark.asyncio
+    async def test_top_level_failure_raises(self):
+        mock_client = AsyncMock()
+        mock_client.get.return_value = _fake_response(401, {}, text="Unauthorized")
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            with pytest.raises(graph_client.GraphApiError, match="401"):
+                await graph_client.list_mail_folders("voc@example.com", "tok")

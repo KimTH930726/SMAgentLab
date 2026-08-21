@@ -124,30 +124,51 @@ async def fetch_messages(
 
 async def list_mail_folders(mailbox_upn: str, access_token: str) -> list[dict]:
     """관리자 화면에서 라우팅을 설정할 때 "이 메일함의 어느 폴더로 좁힐지" 선택할 수
-    있도록 실제 폴더 목록을 조회한다. 하위 폴더(inbox 안의 하위 폴더 등)까지는 따로
-    쿼리하지 않고 최상위 폴더 목록만 반환한다 — 관리자가 만드는 VOC 전용 폴더는 보통
-    최상위에 만들기 때문에 이 정도로 충분하고, 재귀 조회는 불필요한 복잡도.
+    있도록 실제 폴더 목록을 조회한다.
+
+    최상위 폴더 + 받은 편지함(Inbox) 바로 아래 하위 폴더까지 조회한다 — 애초에
+    "VOC 전용 폴더는 보통 최상위에 만든다"고 가정해 최상위만 조회했었는데, 실사용
+    중 "받은 메일함 하위에 VOC 폴더를 만들었는데 안 보인다"는 실제 사례로 이 가정이
+    틀렸다는 게 확인됐다 — Outlook에서 새 폴더를 만들 때 기본 위치가 받은 편지함
+    하위라 오히려 이쪽이 더 흔한 사용 패턴이었다. 더 깊은 하위 폴더(Inbox 하위의
+    하위 등)까지 전부 재귀 조회하지는 않는다 — 그 정도로 깊이 중첩하는 경우는
+    드물고, 필요해지면 그때 재귀 조회로 확장.
 
     Returns:
-        [{"id", "display_name", "unread_count", "total_count"}, ...]
+        [{"id", "display_name", "unread_count", "total_count"}, ...] — Inbox 하위
+        폴더는 display_name을 "받은 편지함 / 폴더명"으로 표시해 최상위 폴더와 구분.
     """
     headers = {"Authorization": f"Bearer {access_token}"}
     params = {"$select": "id,displayName,unreadItemCount,totalItemCount", "$top": 100}
-    url = f"{_GRAPH_BASE}/users/{mailbox_upn}/mailFolders"
+    top_level_url = f"{_GRAPH_BASE}/users/{mailbox_upn}/mailFolders"
+    inbox_children_url = f"{_GRAPH_BASE}/users/{mailbox_upn}/mailFolders/inbox/childFolders"
 
     async with httpx.AsyncClient(timeout=FETCH_TIMEOUT) as client:
-        resp = await _get_with_retry(client, url, params, headers)
+        resp = await _get_with_retry(client, top_level_url, params, headers)
         if resp.status_code != 200:
             raise GraphApiError(f"폴더 목록 조회 실패 (HTTP {resp.status_code}): {resp.text[:300]}")
-        data = resp.json()
+        top_level = resp.json().get("value", [])
 
-    return [
+        child_resp = await _get_with_retry(client, inbox_children_url, params, headers)
+        # Inbox 하위 폴더가 하나도 없는 계정도 많다 — 실패해도 전체를 막지 않고
+        # 최상위 폴더만이라도 반환한다(조회 자체가 실패해도 UX 저하는 최소화).
+        inbox_children = child_resp.json().get("value", []) if child_resp.status_code == 200 else []
+
+    folders = [
         {
             "id": f["id"], "display_name": f.get("displayName", ""),
             "unread_count": f.get("unreadItemCount", 0), "total_count": f.get("totalItemCount", 0),
         }
-        for f in data.get("value", [])
+        for f in top_level
     ]
+    folders += [
+        {
+            "id": f["id"], "display_name": f"받은 편지함 / {f.get('displayName', '')}",
+            "unread_count": f.get("unreadItemCount", 0), "total_count": f.get("totalItemCount", 0),
+        }
+        for f in inbox_children
+    ]
+    return folders
 
 
 async def _get_with_retry(
