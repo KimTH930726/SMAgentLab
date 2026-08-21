@@ -57,17 +57,32 @@ class TestBuildTeamsMessage:
         )
         assert ">해결 방안</h3>" in msg["text"]
 
-    def test_reasoning_shown_as_bold_summary_before_metadata(self):
+    def test_reasoning_shown_as_bold_summary_in_content_section(self):
         # 심각도만 있고 해결방안이 없으면(판단 보류 등) 뭔 내용인지 전혀 알 수 없다는
-        # 실사용 피드백 — LLM 판단 근거(이미 계산돼 있음)를 내용 섹션 맨 위에 굵게 보여준다.
+        # 실사용 피드백 — LLM 판단 근거(이미 계산돼 있음)를 내용 섹션에 굵게 보여준다.
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="p",
             analysis=_base_analysis(category="uncertain", reasoning="SSGPAY DB 전환 오픈 협조 요청 메일입니다."),
         )
+        assert "<p><b>SSGPAY DB 전환 오픈 협조 요청 메일입니다.</b></p>" in msg["text"]
+
+    def test_metadata_shown_at_top_before_subject_and_content(self):
+        # 담당파트/분류/심각도/발신자를 다 읽어야 알 수 있으면 스캔하기 불편하다는
+        # 실사용 피드백 — 헤더 바로 아래, 제목·내용보다 먼저 보여준다.
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(reasoning="판단 근거 요약"),
+        )
         text = msg["text"]
-        assert "<p><b>SSGPAY DB 전환 오픈 협조 요청 메일입니다.</b></p>" in text
-        # 요약이 메타데이터 목록(담당 파트 등)보다 먼저 나와야 함
-        assert text.index("SSGPAY DB 전환 오픈") < text.index("담당 파트")
+        assert text.index("담당 파트") < text.index(">제목</h3>")
+        assert text.index("담당 파트") < text.index("판단 근거 요약")
+
+    def test_divider_separates_top_level_sections(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(resolution_draft="방안"),
+        )
+        assert msg["text"].count(teams_notify._DIVIDER) >= 2
 
     def test_body_excerpt_shown_before_reasoning_summary(self):
         # reasoning은 LLM이 만든 "판단 근거"지 원문이 아니다 — 실사용 피드백

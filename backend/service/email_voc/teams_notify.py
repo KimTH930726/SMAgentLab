@@ -40,6 +40,10 @@ _SEVERITY_COLOR = {"low": "#6B7280", "medium": "#0891B2", "high": "#D97706", "ur
 # 카드가 너무 길어지지 않도록 원문 발췌는 앞부분만 — reasoning(판단 요약)이 이미
 # 핵심을 짚어주므로 발췌는 "실제로 뭐라고 썼는지"를 확인하는 보조 용도로 충분하다.
 _MAX_BODY_EXCERPT = 300
+# 섹션 사이 구분선 — <hr> 등 미검증 태그 대신, 이미 렌더링 확인된 span
+# style=color(모듈 상단 §8 실측 기록 참고)만으로 만든 순수 텍스트 구분선이라
+# 이 웹훅에서 깨질 위험이 없다.
+_DIVIDER = '<span style="color:#D1D5DB">─────────────────────</span>'
 
 
 def _esc(value: Optional[str]) -> str:
@@ -65,22 +69,21 @@ def build_teams_message(
     color = _SEVERITY_COLOR.get(severity, _SEVERITY_COLOR["low"])
     header = "🚨 긴급 VOC 알림" if urgent else "VOC 분석 알림"
 
-    # "내용" 섹션이 담당파트/분류/심각도 같은 메타데이터만 나열해서, 특히 category가
-    # system_error가 아니라 resolution_draft가 없는 경우 알림만 보고는 "무슨 일인지"를
-    # 전혀 알 수 없다는 실사용 피드백(§7) — reasoning(LLM 판단 근거, 이미 계산돼 있음)에
-    # 이메일이 뭘 요청/문의하는지가 대체로 같이 서술돼 있어, 메타데이터 목록 위에
-    # 굵게 먼저 보여준다. 심각도가 높을수록 "왜 급한지"를 먼저 보여주는 게 중요하다.
     # reasoning은 LLM이 "판단 근거"로 생성한 문장이라 원문 그 자체가 아니다 — 원문이
-    # 아니라는 실사용 피드백(§7)에 따라, 이미 전처리(전달체인 제거)된 본문 앞부분을
+    # 아니라는 실사용 피드백에 따라, 이미 전처리(전달체인 제거)된 본문 앞부분을
     # 그대로 발췌해 보여준다. LLM을 추가로 호출하지 않으므로 비용 증가 없음.
     body_excerpt = body.strip()[:_MAX_BODY_EXCERPT]
     if len(body.strip()) > _MAX_BODY_EXCERPT:
         body_excerpt += "…"
     body_html = f"<blockquote>{_esc(body_excerpt)}</blockquote>" if body_excerpt else ""
 
+    # reasoning(LLM 판단 근거, 이미 계산돼 있음)에 이메일이 뭘 요청/문의하는지가
+    # 대체로 같이 서술돼 있어, 원문 발췌 아래에 굵게 보여준다.
     summary = analysis.get("reasoning")
     summary_html = f"<p><b>{_esc(summary)}</b></p>" if summary else ""
 
+    # 담당파트/분류/심각도/발신자 같은 핵심 정보는 내용을 다 읽어야 알 수 있으면
+    # 스캔하기 불편하다는 실사용 피드백 — 헤더 바로 아래, 제목보다도 먼저 보여준다.
     detail_items = [
         f"담당 파트: {_esc(part) or '-'}",
         f"분류: {_esc(_CATEGORY_LABEL.get(category, category))}",
@@ -93,13 +96,13 @@ def build_teams_message(
         )
     if urgent and oncall_contact_name:
         detail_items.append(f"온콜 담당자: {_esc(oncall_contact_name)} — 필요 시 직접 전화 부탁드립니다")
-    detail_list = body_html + summary_html + "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
+    detail_list = "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
 
     # h2/h3 태그만으로는 Teams 렌더링 기본 폰트 크기가 기대보다 작고 섹션 간 여백도
     # 좁게 나오는 게 실측으로 확인돼, font-size를 명시적으로 지정하고 섹션 사이에
-    # <br>을 추가로 넣어 시각적 여백을 강제한다.
+    # 구분선(_DIVIDER)을 넣어 시각적으로도 섹션이 뚜렷이 나뉘게 한다.
     header_color_style = f"color:{color};" if urgent else ""
-    header_html = f'<h2 style="{header_color_style}font-size:22px">{header}</h2>'
+    header_html = f'<h2 style="{header_color_style}font-size:22px">{header}</h2>{detail_list}'
 
     def _section_title(text: str) -> str:
         return f'<h3 style="font-size:17px">{text}</h3>'
@@ -107,7 +110,7 @@ def build_teams_message(
     sections = [
         header_html,
         f"{_section_title('제목')}{_esc(subject) or '(제목 없음)'}",
-        f"{_section_title('내용')}{detail_list}",
+        f"{_section_title('내용')}{body_html}{summary_html}",
     ]
 
     # resolution_draft는 category가 system_error일 때만 LLM에게 생성을 지시한다
@@ -144,7 +147,7 @@ def build_teams_message(
         )
         sections.append(f"{_section_title('참고 지식(근거)')}<ul>{ref_items}</ul>")
 
-    return {"text": "<br>".join(sections)}
+    return {"text": f"<br>{_DIVIDER}<br>".join(sections)}
 
 
 async def send_teams_notification(webhook_url: str, message: dict) -> tuple[bool, Optional[str]]:
