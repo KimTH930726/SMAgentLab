@@ -69,6 +69,34 @@ class TestBuildTeamsMessage:
         # 요약이 메타데이터 목록(담당 파트 등)보다 먼저 나와야 함
         assert text.index("SSGPAY DB 전환 오픈") < text.index("담당 파트")
 
+    def test_body_excerpt_shown_before_reasoning_summary(self):
+        # reasoning은 LLM이 만든 "판단 근거"지 원문이 아니다 — 실사용 피드백
+        # ("메일 내용 원문이 아니네?")에 따라 전처리된 원문 발췌를 맨 위에 추가로 보여준다.
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p", body="결제가 계속 실패해서 문의드립니다.",
+            analysis=_base_analysis(reasoning="결제 실패 관련 문의입니다."),
+        )
+        text = msg["text"]
+        assert "<blockquote>결제가 계속 실패해서 문의드립니다.</blockquote>" in text
+        assert text.index("결제가 계속 실패") < text.index("결제 실패 관련 문의")
+
+    def test_long_body_truncated_with_ellipsis(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p", body="가" * 400,
+            analysis=_base_analysis(),
+        )
+        assert f"<blockquote>{'가' * 300}…</blockquote>" in msg["text"]
+
+    def test_empty_body_omits_excerpt_block(self):
+        # 해결 방안 섹션도 blockquote를 쓰므로, "내용" 섹션 구간만 잘라서 확인한다.
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p", body="",
+            analysis=_base_analysis(),
+        )
+        text = msg["text"]
+        content_section = text[text.index(">내용</h3>"):text.index(">해결 방안</h3>")]
+        assert "<blockquote>" not in content_section
+
     def test_no_reasoning_omits_summary_paragraph(self):
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="p",

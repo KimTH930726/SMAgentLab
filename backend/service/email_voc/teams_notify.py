@@ -37,6 +37,9 @@ _CATEGORY_LABEL = {"system_error": "시스템 오류", "user_mistake": "사용�
 # 사실상 2단계로만 보였음(관리자 화면도 동일 문제 있어 VocEmailPanel.tsx의
 # SEVERITY_COLOR도 같은 단계로 맞춰서 함께 수정함 — 어디서 봐도 같은 색=같은 심각도).
 _SEVERITY_COLOR = {"low": "#6B7280", "medium": "#0891B2", "high": "#D97706", "urgent": "#DC2626"}
+# 카드가 너무 길어지지 않도록 원문 발췌는 앞부분만 — reasoning(판단 요약)이 이미
+# 핵심을 짚어주므로 발췌는 "실제로 뭐라고 썼는지"를 확인하는 보조 용도로 충분하다.
+_MAX_BODY_EXCERPT = 300
 
 
 def _esc(value: Optional[str]) -> str:
@@ -48,7 +51,7 @@ def _esc(value: Optional[str]) -> str:
 
 def build_teams_message(
     *, subject: str, sender: str, part: str, analysis: dict,
-    oncall_contact_name: Optional[str] = None,
+    body: str = "", oncall_contact_name: Optional[str] = None,
 ) -> dict:
     """§10 심각도 기반 포맷 — "제목/내용/방안" 3섹션을 블록 태그(h2/h3/ul/blockquote)로
     구분한다. teams_notifier.py와 동일하게 {"text": "..."} 단순 페이로드를 쓰되
@@ -67,6 +70,14 @@ def build_teams_message(
     # 전혀 알 수 없다는 실사용 피드백(§7) — reasoning(LLM 판단 근거, 이미 계산돼 있음)에
     # 이메일이 뭘 요청/문의하는지가 대체로 같이 서술돼 있어, 메타데이터 목록 위에
     # 굵게 먼저 보여준다. 심각도가 높을수록 "왜 급한지"를 먼저 보여주는 게 중요하다.
+    # reasoning은 LLM이 "판단 근거"로 생성한 문장이라 원문 그 자체가 아니다 — 원문이
+    # 아니라는 실사용 피드백(§7)에 따라, 이미 전처리(전달체인 제거)된 본문 앞부분을
+    # 그대로 발췌해 보여준다. LLM을 추가로 호출하지 않으므로 비용 증가 없음.
+    body_excerpt = body.strip()[:_MAX_BODY_EXCERPT]
+    if len(body.strip()) > _MAX_BODY_EXCERPT:
+        body_excerpt += "…"
+    body_html = f"<blockquote>{_esc(body_excerpt)}</blockquote>" if body_excerpt else ""
+
     summary = analysis.get("reasoning")
     summary_html = f"<p><b>{_esc(summary)}</b></p>" if summary else ""
 
@@ -82,7 +93,7 @@ def build_teams_message(
         )
     if urgent and oncall_contact_name:
         detail_items.append(f"온콜 담당자: {_esc(oncall_contact_name)} — 필요 시 직접 전화 부탁드립니다")
-    detail_list = summary_html + "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
+    detail_list = body_html + summary_html + "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
 
     # h2/h3 태그만으로는 Teams 렌더링 기본 폰트 크기가 기대보다 작고 섹션 간 여백도
     # 좁게 나오는 게 실측으로 확인돼, font-size를 명시적으로 지정하고 섹션 사이에

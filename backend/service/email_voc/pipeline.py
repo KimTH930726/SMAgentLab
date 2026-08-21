@@ -13,7 +13,7 @@ from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
 from service.email_voc import delegated_auth, graph_client, routing_service, teams_notify
-from service.email_voc.service import analyze_email, check_relevance
+from service.email_voc.service import _strip_forwarded_chain, analyze_email, check_relevance
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +234,7 @@ async def run_manual_collection(
                 if routing.get("teams_webhook_url"):
                     message = teams_notify.build_teams_message(
                         subject=msg["subject"], sender=msg["sender"], part=routing["part"],
+                        body=_strip_forwarded_chain(msg["body"]),
                         analysis=analysis, oncall_contact_name=routing.get("oncall_contact_name"),
                     )
                     ok, error = await teams_notify.send_teams_notification(routing["teams_webhook_url"], message)
