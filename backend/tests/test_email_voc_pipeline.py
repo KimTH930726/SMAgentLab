@@ -11,7 +11,9 @@ core.database는 conftest.py가 이미 모듈 단위로 mock해뒀지만, 그 mo
 """
 import importlib.util as _ilu
 import sys
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -114,6 +116,93 @@ class TestGetKnowledgeRefs:
         args = conn.fetch.call_args.args
         assert args[1] == 42  # namespace_id로 스코핑됐는지
         assert args[2] == [1, 2, 999]
+
+
+def _stub_routing_row(**overrides) -> dict:
+    row = {
+        "id": 10, "mailbox_upn": "voc@example.com", "part": "테스트", "is_active": True,
+        "teams_webhook_url": "https://webhook.example.com", "mail_folder_id": None,
+        "oncall_contact_name": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def _stub_message(**overrides) -> dict:
+    msg = {
+        "id": "msg1", "subject": "배달이 너무 늦어요", "sender": "a@example.com",
+        "received_at": None, "body": "배달이 너무 늦게 와서 불만입니다",
+    }
+    msg.update(overrides)
+    return msg
+
+
+class TestRunManualCollectionCategoryGate:
+    """IT와 무관한 단순 CS 불만까지 너무 많이 Teams로 온다는 실사용 피드백 —
+    category=not_it_related이면 이력에는 남기되 Teams 발송은 생략하는 게이트 검증.
+    """
+
+    def _patch_common(self, monkeypatch, *, category: str, relevance_score: float = 0.9):
+        monkeypatch.setattr(pipeline.routing_service, "list_routing", AsyncMock(return_value=[_stub_routing_row()]))
+        monkeypatch.setattr(
+            pipeline.routing_service, "get_settings",
+            AsyncMock(return_value={"email_relevance_min_score": 0.3}),
+        )
+        monkeypatch.setattr(pipeline.graph_client, "fetch_messages", AsyncMock(return_value=[_stub_message()]))
+        monkeypatch.setattr(pipeline, "_existing_message_ids", AsyncMock(return_value=set()))
+        monkeypatch.setattr(pipeline, "_strip_forwarded_chain", lambda b: b)
+        monkeypatch.setattr(
+            pipeline, "check_relevance",
+            AsyncMock(return_value=SimpleNamespace(top_score=relevance_score, mapped_term=None, results=[], context="")),
+        )
+        monkeypatch.setattr(
+            pipeline, "analyze_email",
+            AsyncMock(return_value={
+                "category": category, "severity": "high", "mismatch_flagged": False,
+                "knowledge_ref_ids": [], "knowledge_refs": [], "resolution_draft": None,
+                "reasoning": "배송 자체에 대한 불만으로 IT 시스템 문제 아님", "mapped_term": None,
+            }),
+        )
+        # teams_notify는 파일 상단에서 MagicMock으로 스텁된 서브모듈 — 발송 함수를
+        # AsyncMock으로 교체해 실제로 호출됐는지/안 됐는지 검증 가능하게 한다.
+        monkeypatch.setattr(pipeline.teams_notify, "build_teams_message", MagicMock(return_value={"text": "x"}))
+        monkeypatch.setattr(
+            pipeline.teams_notify, "send_teams_notification", AsyncMock(return_value=(True, None)),
+        )
+
+    @pytest.mark.asyncio
+    async def test_not_it_related_skips_teams_but_records_history(self, patch_db, monkeypatch):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        self._patch_common(monkeypatch, category="not_it_related")
+
+        result = await pipeline.run_manual_collection(
+            "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
+        )
+
+        mailbox_result = result["mailboxes"][0]
+        assert mailbox_result["skipped_not_it"] == 1
+        assert mailbox_result["analyzed"] == 1
+        assert mailbox_result["notified"] == 0
+        pipeline.teams_notify.send_teams_notification.assert_not_called()
+        # record_analysis()가 실제로 INSERT를 실행했는지 — 이력에는 남아야 함
+        conn.fetchrow.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_system_error_still_notifies(self, patch_db, monkeypatch):
+        """게이트가 not_it_related만 걸러내고 다른 카테고리는 그대로 통과하는지 회귀 확인."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        self._patch_common(monkeypatch, category="system_error")
+
+        result = await pipeline.run_manual_collection(
+            "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
+        )
+
+        mailbox_result = result["mailboxes"][0]
+        assert mailbox_result["skipped_not_it"] == 0
+        assert mailbox_result["notified"] == 1
+        pipeline.teams_notify.send_teams_notification.assert_awaited_once()
 
 
 class TestListHistory:

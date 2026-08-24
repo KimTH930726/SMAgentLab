@@ -199,6 +199,7 @@ export interface MailboxCollectionResult {
   analyzed: number;
   skipped_duplicate: number;
   skipped_low_relevance: number;
+  skipped_not_it: number;
   notified: number;
   notify_failed: number;
 }
@@ -285,6 +286,7 @@ export interface PollCycleItem {
   total_notify_failed: number;
   total_skipped_duplicate: number;
   total_skipped_low_relevance: number;
+  total_skipped_not_it: number;
   error_summary: string | null;
 }
 

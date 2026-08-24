@@ -156,7 +156,8 @@ async def run_manual_collection(
         result = {
             "mailbox_upn": routing["mailbox_upn"], "part": routing["part"],
             "ok": False, "error": None, "fetched": 0, "analyzed": 0,
-            "skipped_duplicate": 0, "skipped_low_relevance": 0, "notified": 0, "notify_failed": 0,
+            "skipped_duplicate": 0, "skipped_low_relevance": 0, "skipped_not_it": 0,
+            "notified": 0, "notify_failed": 0,
         }
 
         if access_token is None and not credentials:
@@ -230,6 +231,13 @@ async def run_manual_collection(
                 if saved is None:
                     return "skipped_duplicate"
 
+                # 관련지식 임계치를 넘긴 메일이라도, LLM이 "system 문제가 아니라 그냥
+                # 상품/배송 자체에 대한 CS성 불만"이라고 판단하면(not_it_related) IT
+                # 담당 채널에 알림을 보낼 이유가 없다 — 실사용 중 "IT와 상관없는 불만이
+                # 너무 많이 온다"는 피드백. 이력에는 남기되(위 record_analysis) 알림만 생략.
+                if analysis["category"] == "not_it_related":
+                    return "skipped_not_it"
+
                 # §10 — 심각도와 무관하게 항상 발송하되, 카드 포맷(강조 여부)만 심각도에 따라 달라진다
                 if routing.get("teams_webhook_url"):
                     message = teams_notify.build_teams_message(
@@ -251,6 +259,9 @@ async def run_manual_collection(
                 result["skipped_duplicate"] += 1
             elif outcome == "skipped_low_relevance":
                 result["skipped_low_relevance"] += 1
+            elif outcome == "skipped_not_it":
+                result["analyzed"] += 1
+                result["skipped_not_it"] += 1
             elif outcome == "notified":
                 result["analyzed"] += 1
                 result["notified"] += 1

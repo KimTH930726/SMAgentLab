@@ -80,12 +80,13 @@ async def _record_cycle(started_at: datetime, finished_at: datetime, agg: dict, 
             INSERT INTO ops_email_poll_cycle
                 (started_at, finished_at, namespaces_processed, mailboxes_ok, mailboxes_failed,
                  total_fetched, total_analyzed, total_notified, total_notify_failed,
-                 total_skipped_duplicate, total_skipped_low_relevance, error_summary)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                 total_skipped_duplicate, total_skipped_low_relevance, total_skipped_not_it, error_summary)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
             """,
             started_at, finished_at, agg["namespaces_processed"], agg["mailboxes_ok"], agg["mailboxes_failed"],
             agg["total_fetched"], agg["total_analyzed"], agg["total_notified"], agg["total_notify_failed"],
-            agg["total_skipped_duplicate"], agg["total_skipped_low_relevance"], ("\n".join(errors) if errors else None),
+            agg["total_skipped_duplicate"], agg["total_skipped_low_relevance"], agg["total_skipped_not_it"],
+            ("\n".join(errors) if errors else None),
         )
 
 
@@ -109,6 +110,7 @@ async def run_cycle_now(settings: Optional[dict] = None) -> None:
         "namespaces_processed": 0, "mailboxes_ok": 0, "mailboxes_failed": 0,
         "total_fetched": 0, "total_analyzed": 0, "total_notified": 0,
         "total_notify_failed": 0, "total_skipped_duplicate": 0, "total_skipped_low_relevance": 0,
+        "total_skipped_not_it": 0,
     }
     errors: list[str] = []
     try:
@@ -145,6 +147,7 @@ async def run_cycle_now(settings: Optional[dict] = None) -> None:
                     agg["total_notify_failed"] += m["notify_failed"]
                     agg["total_skipped_duplicate"] += m["skipped_duplicate"]
                     agg["total_skipped_low_relevance"] += m["skipped_low_relevance"]
+                    agg["total_skipped_not_it"] += m["skipped_not_it"]
                     if m["ok"]:
                         agg["mailboxes_ok"] += 1
                         summary_parts.append(f"{m['mailbox_upn']}(fetched={m['fetched']},analyzed={m['analyzed']},notified={m['notified']})")

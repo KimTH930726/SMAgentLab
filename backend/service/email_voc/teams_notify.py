@@ -30,7 +30,10 @@ logger = logging.getLogger(__name__)
 
 _URGENT_SEVERITIES = {"high", "urgent"}
 _SEVERITY_LABEL = {"low": "낮음", "medium": "보통", "high": "높음", "urgent": "긴급"}
-_CATEGORY_LABEL = {"system_error": "시스템 오류", "user_mistake": "사용자 실수", "uncertain": "판단 보류"}
+_CATEGORY_LABEL = {
+    "system_error": "시스템 오류", "user_mistake": "사용자 실수",
+    "uncertain": "판단 보류", "not_it_related": "IT 무관",
+}
 # Power Automate "Workflows" 웹훅이 {"text": "..."}를 HTML로 렌더링한다(<br>가 실제로
 # 줄바꿈되는 걸 실측 확인) — Teams 리치 텍스트가 지원하는 표준 태그(b/span style=color)로
 # 제목/심각도를 강조한다. 4단계가 전부 구분되도록 — 예전엔 high/urgent가 같은 빨강이라

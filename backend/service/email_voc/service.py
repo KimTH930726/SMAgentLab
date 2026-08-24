@@ -55,7 +55,11 @@ _DEFAULT_ANALYSIS_PROMPT = """아래는 사내 VOC(문의) 이메일과, 이와 
 {context}
 
 다음을 판단해 JSON으로만 답하세요:
-1. category: "system_error"(시스템 오류) / "user_mistake"(사용자 실수) / "uncertain"(판단 보류) 중 하나
+1. category: 다음 중 하나
+   - "system_error": 시스템이 실제로 오작동했다는 구체적 근거가 있는 경우(예: 처리 이력이 누락됨, 정상 흐름이라면 안 나와야 할 오류가 발생함)
+   - "user_mistake": 사용자가 절차를 잘못 따르거나 직접 조작을 잘못한 경우
+   - "not_it_related": IT 시스템/기술적 오류에 대한 언급이나 정황이 전혀 없는 경우 — 상품 품질(맛, 신선도 등), 배송/배달 자체(지연, 파손), 가격·취소정책에 대한 불만처럼 순수 CS성 문의. 시스템은 설계/정책대로 정상 동작했는데 그 결과(예: 취소 가능 시간이 지나 취소가 거절됨)에 대한 불만인 경우도 여기로 분류하세요. "시스템이 오작동했다"는 구체적 근거 없이 그냥 화가 났다는 이유만으로 system_error로 분류하지 마세요. 이메일에 시스템/기술 이슈 언급이 아예 없다면 uncertain이 아니라 이 항목을 우선 고려하세요
+   - "uncertain": system_error일 가능성이 있어 보이는데(오류·오작동 정황은 있지만) 정보가 부족해 확신할 수 없는 경우만 — "IT 업무와 무관해 보인다"는 이유로는 uncertain이 아니라 not_it_related를 쓰세요
 2. severity: "low" / "medium" / "high" / "urgent" 중 하나 — 업무 영향도와 긴급성 기준
 3. mismatch_flagged: 이메일 내용이 위 "수신 메일함 담당 파트"의 업무 영역과 명백히 다르면 true, 아니면 false
 4. resolution_draft: category가 system_error일 때 참고 지식 기반 해결 방안 초안(2~3문장), 아니면 null
@@ -64,7 +68,7 @@ _DEFAULT_ANALYSIS_PROMPT = """아래는 사내 VOC(문의) 이메일과, 이와 
 응답 형식 (JSON 객체만 반환):
 {{"category": "...", "severity": "...", "mismatch_flagged": false, "resolution_draft": "...", "reasoning": "..."}}"""
 
-_VALID_CATEGORIES = {"system_error", "user_mistake", "uncertain"}
+_VALID_CATEGORIES = {"system_error", "user_mistake", "uncertain", "not_it_related"}
 _VALID_SEVERITIES = {"low", "medium", "high", "urgent"}
 _KNOWLEDGE_SNIPPET_LEN = 60
 _MAX_KNOWLEDGE_REFS_SHOWN = 3  # Teams 카드에 다 보여주면 너무 길어져서 상위 N개만

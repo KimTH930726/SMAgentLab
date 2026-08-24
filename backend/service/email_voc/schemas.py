@@ -125,6 +125,7 @@ class MailboxCollectionResult(BaseModel):
     analyzed: int = 0
     skipped_duplicate: int = 0
     skipped_low_relevance: int = 0
+    skipped_not_it: int = 0
     notified: int = 0
     notify_failed: int = 0
 
@@ -181,6 +182,7 @@ class PollCycleItem(BaseModel):
     total_notify_failed: int
     total_skipped_duplicate: int
     total_skipped_low_relevance: int
+    total_skipped_not_it: int
     error_summary: Optional[str] = None
 
 

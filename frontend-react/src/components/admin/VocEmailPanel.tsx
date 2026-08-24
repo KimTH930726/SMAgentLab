@@ -33,7 +33,9 @@ const SEVERITY_LABEL: Record<string, string> = { low: '낮음', medium: '보통'
 const SEVERITY_COLOR: Record<string, 'slate' | 'cyan' | 'amber' | 'rose'> = {
   low: 'slate', medium: 'cyan', high: 'amber', urgent: 'rose',
 };
-const CATEGORY_LABEL: Record<string, string> = { system_error: '시스템 오류', user_mistake: '사용자 실수', uncertain: '판단 보류' };
+const CATEGORY_LABEL: Record<string, string> = {
+  system_error: '시스템 오류', user_mistake: '사용자 실수', uncertain: '판단 보류', not_it_related: 'IT 무관',
+};
 
 type VocSubTab = 'auth' | 'routing' | 'collect' | 'history' | 'analyze';
 
@@ -399,7 +401,7 @@ export function VocEmailPanel() {
   const [notifySubject, setNotifySubject] = useState('(테스트) VOC 알림');
   const [notifySender, setNotifySender] = useState('user@example.com');
   const [notifyPart, setNotifyPart] = useState('');
-  const [notifyCategory, setNotifyCategory] = useState<'system_error' | 'user_mistake' | 'uncertain'>('system_error');
+  const [notifyCategory, setNotifyCategory] = useState<'system_error' | 'user_mistake' | 'uncertain' | 'not_it_related'>('system_error');
   const [notifySeverity, setNotifySeverity] = useState<'low' | 'medium' | 'high' | 'urgent'>('high');
   const [notifyMismatch, setNotifyMismatch] = useState(false);
   const [notifyResolutionDraft, setNotifyResolutionDraft] = useState('');
@@ -785,7 +787,7 @@ export function VocEmailPanel() {
                           <tr className="border-b border-slate-700 bg-slate-800/50">
                             <th className="text-left px-3 py-2 text-slate-400">메일함</th>
                             <th className="text-left px-3 py-2 text-slate-400">결과</th>
-                            <th className="text-left px-3 py-2 text-slate-400">수집/분석/중복/관련지식부족/발송/발송실패</th>
+                            <th className="text-left px-3 py-2 text-slate-400">수집/분석/중복/관련지식부족/IT무관/발송/발송실패</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -798,7 +800,7 @@ export function VocEmailPanel() {
                                   : <span className="text-rose-400">{m.error}</span>}
                               </td>
                               <td className="px-3 py-2 text-slate-400">
-                                {m.fetched} / {m.analyzed} / {m.skipped_duplicate} / {m.skipped_low_relevance} / {m.notified} / {m.notify_failed}
+                                {m.fetched} / {m.analyzed} / {m.skipped_duplicate} / {m.skipped_low_relevance} / {m.skipped_not_it} / {m.notified} / {m.notify_failed}
                               </td>
                             </tr>
                           ))}
@@ -826,7 +828,7 @@ export function VocEmailPanel() {
                       <th className="text-left px-3 py-2 text-slate-400">실행 시각</th>
                       <th className="text-left px-3 py-2 text-slate-400">namespace 수</th>
                       <th className="text-left px-3 py-2 text-slate-400">성공/실패 메일함</th>
-                      <th className="text-left px-3 py-2 text-slate-400">분석/발송/관련지식부족</th>
+                      <th className="text-left px-3 py-2 text-slate-400">분석/발송/관련지식부족/IT무관</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -839,7 +841,7 @@ export function VocEmailPanel() {
                             성공 {c.mailboxes_ok} / 실패 {c.mailboxes_failed}
                           </Badge>
                         </td>
-                        <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건 / {c.total_skipped_low_relevance}건</td>
+                        <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건 / {c.total_skipped_low_relevance}건 / {c.total_skipped_not_it}건</td>
                       </tr>
                     ))}
                   </tbody>
