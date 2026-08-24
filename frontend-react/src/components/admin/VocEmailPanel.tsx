@@ -12,7 +12,7 @@ import {
   getSchedulerStatus, getPollCycles,
   type VocRouting, type VocRoutingPayload, type EmailAnalysisResult,
   type ManualCollectionResult, type DelegatedAuthStartResult, type MailFolder,
-  type EmailAnalysisHistoryItem,
+  type EmailAnalysisHistoryItem, type PollCycleItem,
 } from '../../api/emailVoc';
 import { getNamespaces } from '../../api/namespaces';
 import { getAllParts } from '../../api/auth';
@@ -165,6 +165,9 @@ export function VocEmailPanel() {
     refetchInterval: 30_000,
     enabled: subTab === 'collect',
   });
+  // "실패 N" 배지만 봐서는 왜 실패했는지 알 수 없다는 피드백 — 클릭하면 사유(메일함별
+  // 에러 메시지, error_summary에 이미 저장돼 있음)를 모달로 보여준다.
+  const [selectedFailedCycle, setSelectedFailedCycle] = useState<PollCycleItem | null>(null);
 
   // ── §10 라우팅 매핑 ───────────────────────────────────────────────────────
   const {
@@ -837,9 +840,18 @@ export function VocEmailPanel() {
                         <td className="px-3 py-2 text-slate-300">{formatRelative(c.started_at)}</td>
                         <td className="px-3 py-2 text-slate-400">{c.namespaces_processed}</td>
                         <td className="px-3 py-2">
-                          <Badge color={c.mailboxes_failed > 0 ? 'rose' : 'emerald'}>
-                            성공 {c.mailboxes_ok} / 실패 {c.mailboxes_failed}
-                          </Badge>
+                          {c.mailboxes_failed > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFailedCycle(c)}
+                              className="cursor-pointer hover:opacity-80 transition-opacity"
+                              title="클릭하면 실패 사유를 볼 수 있습니다"
+                            >
+                              <Badge color="rose">성공 {c.mailboxes_ok} / 실패 {c.mailboxes_failed}</Badge>
+                            </button>
+                          ) : (
+                            <Badge color="emerald">성공 {c.mailboxes_ok} / 실패 {c.mailboxes_failed}</Badge>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건 / {c.total_skipped_low_relevance}건 / {c.total_skipped_not_it}건</td>
                       </tr>
@@ -1368,6 +1380,32 @@ export function VocEmailPanel() {
                   <div>Teams 발송 시각: {selectedHistoryItem.teams_sent_at ?? '-'}</div>
                   <div>레코드 ID: {selectedHistoryItem.id}</div>
                 </div>
+              </div>
+            )}
+          </Modal>
+
+          <Modal
+            isOpen={!!selectedFailedCycle}
+            onClose={() => setSelectedFailedCycle(null)}
+            title="폴링 실패 사유"
+            maxWidth="max-w-lg"
+          >
+            {selectedFailedCycle && (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-500">
+                  {formatRelative(selectedFailedCycle.started_at)} 사이클 — 메일함 {selectedFailedCycle.mailboxes_failed}개 실패
+                </p>
+                {selectedFailedCycle.error_summary ? (
+                  <div className="space-y-2">
+                    {selectedFailedCycle.error_summary.split('\n').map((line, i) => (
+                      <p key={i} className="text-rose-400 text-xs bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 whitespace-pre-wrap">
+                        {line}
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500">기록된 실패 사유가 없습니다.</p>
+                )}
               </div>
             )}
           </Modal>

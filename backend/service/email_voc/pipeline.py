@@ -238,7 +238,8 @@ async def run_manual_collection(
                 if analysis["category"] == "not_it_related":
                     return "skipped_not_it"
 
-                # §10 — 심각도와 무관하게 항상 발송하되, 카드 포맷(강조 여부)만 심각도에 따라 달라진다
+                # §10 — not_it_related(위에서 이미 return)를 제외하면 심각도와 무관하게
+                # 항상 발송하되, 카드 포맷(강조 여부)만 심각도에 따라 달라진다
                 if routing.get("teams_webhook_url"):
                     message = teams_notify.build_teams_message(
                         subject=msg["subject"], sender=msg["sender"], part=routing["part"],
