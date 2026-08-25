@@ -1173,6 +1173,27 @@ Always respond with valid JSON only.""",
 4. resolution_draft: category가 system_error일 때 참고 지식 기반 해결 방안 초안(2~3문장), 아니면 null
 5. reasoning: 판단 근거 요약 (1문장)
 
+[판단 예시 — 실제로 헷갈렸던 경계 사례]
+예시 1:
+제목: 배달이요
+본문: 주문한 음료가 30분 넘게 늦게 배달됐습니다. 왜 이렇게 오래 걸리나요?
+판단: 시스템이 오작동했다는 구체적 근거 없이 배송 자체가 늦은 것에 대한 불만 → category: not_it_related (system_error 아님)
+
+예시 2:
+제목: 주문 취소가 시스템에 반영이 안돼요
+본문: 취소 버튼을 눌렀고 취소 완료 문자도 받았는데, 주문 내역에는 아직도 "배달 중"으로 뜨고 결제도 그대로 잡혀 있습니다.
+판단: 정상 흐름이면 안 나와야 할 처리 누락이 구체적으로 확인됨 → category: system_error
+
+예시 3:
+제목: 로그인이 안돼요
+본문: 비밀번호를 5번 연속 잘못 입력해서 계정이 잠겼습니다. 어떻게 풀 수 있나요?
+판단: 시스템 오류가 아니라 사용자 본인의 조작(비밀번호 오입력)이 원인 → category: user_mistake
+
+예시 4:
+제목: 주문이 이상해요
+본문: 결제는 됐는데 배송 정보가 계속 안 뜹니다. 시스템 오류인지 그냥 늦는 건지 모르겠어요.
+판단: system_error일 가능성이 있어 보이지만 오작동 여부를 판단할 정보가 부족함 → category: uncertain
+
 응답 형식 (JSON 객체만 반환):
 {{"category": "...", "severity": "...", "mismatch_flagged": false, "resolution_draft": "...", "reasoning": "..."}}""",
     )
