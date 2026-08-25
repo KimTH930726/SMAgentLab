@@ -342,6 +342,9 @@ export interface VocCluster {
   matched_knowledge_id: number | null;
   matched_knowledge_snippet: string | null;
   matched_knowledge_similarity: number;
+  primary_category: string | null;
+  primary_severity: string | null;
+  category_breakdown: CategoryCount[];
 }
 
 export async function getVocClusters(namespace: string): Promise<VocCluster[]> {

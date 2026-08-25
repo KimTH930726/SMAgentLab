@@ -281,6 +281,9 @@ class VocClusterOut(BaseModel):
     matched_knowledge_id: Optional[int] = None
     matched_knowledge_snippet: Optional[str] = None
     matched_knowledge_similarity: float = 0.0
+    primary_category: Optional[str] = None
+    primary_severity: Optional[str] = None
+    category_breakdown: list[CategoryCountOut] = []
 
 
 class VocClusterMemberOut(BaseModel):

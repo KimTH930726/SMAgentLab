@@ -25,6 +25,7 @@ deduplication)를 조사한 결과, 이미 관련성 게이트(service.check_rel
 멤버가 계속 늘어도 재알림하지 않는다(이력에는 계속 기록됨). "멤버 하나당
 알림 1번"이 되면 결국 매 건 알림으로 되돌아가 노이즈가 커지기 때문.
 """
+import json
 import logging
 import re
 from datetime import datetime, timedelta
@@ -152,7 +153,9 @@ async def list_clusters(namespace: str) -> list[dict]:
             """
             SELECT c.id, c.representative_subject, c.member_count,
                    c.first_seen_at, c.last_seen_at, c.notified_at,
-                   best.knowledge_id, best.similarity, best.snippet
+                   best.knowledge_id, best.similarity, best.snippet,
+                   cat.primary_category, cat.breakdown AS category_breakdown,
+                   sev.primary_severity
             FROM ops_voc_cluster c
             LEFT JOIN LATERAL (
                 SELECT k.id AS knowledge_id,
@@ -164,6 +167,26 @@ async def list_clusters(namespace: str) -> list[dict]:
                 ORDER BY k.embedding <=> c.representative_embedding
                 LIMIT 1
             ) best ON true
+            -- 같은 반복 유형인데도 LLM이 건마다 다른 category로 분류하면 분류
+            -- 일관성 문제를 의심할 신호다 — 다수결(primary)은 필터링용, 전체
+            -- 분포(breakdown)는 관리자가 그 불일치를 직접 확인할 근거로 노출한다.
+            LEFT JOIN LATERAL (
+                SELECT (array_agg(category ORDER BY cnt DESC))[1] AS primary_category,
+                       json_agg(json_build_object('category', category, 'count', cnt) ORDER BY cnt DESC) AS breakdown
+                FROM (
+                    SELECT category, COUNT(*) AS cnt FROM ops_email_analysis
+                    WHERE voc_cluster_id = c.id AND category IS NOT NULL
+                    GROUP BY category
+                ) t
+            ) cat ON true
+            LEFT JOIN LATERAL (
+                SELECT (array_agg(severity ORDER BY cnt DESC))[1] AS primary_severity
+                FROM (
+                    SELECT severity, COUNT(*) AS cnt FROM ops_email_analysis
+                    WHERE voc_cluster_id = c.id AND severity IS NOT NULL
+                    GROUP BY severity
+                ) t
+            ) sev ON true
             WHERE c.namespace_id = $1
             ORDER BY c.last_seen_at DESC
             """,
@@ -181,6 +204,9 @@ async def list_clusters(namespace: str) -> list[dict]:
             "matched_knowledge_id": r["knowledge_id"] if covered else None,
             "matched_knowledge_snippet": r["snippet"] if covered else None,
             "matched_knowledge_similarity": round(r["similarity"], 2) if r["similarity"] is not None else 0.0,
+            "primary_category": r["primary_category"],
+            "primary_severity": r["primary_severity"],
+            "category_breakdown": json.loads(r["category_breakdown"]) if r["category_breakdown"] else [],
         })
     return clusters
 

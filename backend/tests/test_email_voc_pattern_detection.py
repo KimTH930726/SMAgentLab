@@ -174,18 +174,25 @@ class TestListClusters:
                 "id": 1, "representative_subject": "배달 오배송 불만", "member_count": 5,
                 "first_seen_at": _NOW, "last_seen_at": _NOW, "notified_at": _NOW,
                 "knowledge_id": 42, "similarity": 0.81, "snippet": "오배송 처리 절차...",
+                "primary_category": "system_error", "primary_severity": "high",
+                "category_breakdown": '[{"category": "system_error", "count": 5}]',
             },
             {
                 "id": 2, "representative_subject": "음료 쏟아짐", "member_count": 3,
                 "first_seen_at": _NOW, "last_seen_at": _NOW, "notified_at": None,
                 "knowledge_id": None, "similarity": None, "snippet": None,
+                "primary_category": "not_it_related", "primary_severity": "medium",
+                "category_breakdown": None,
             },
         ]
         result = await pattern_detection.list_clusters("ns")
         assert result[0]["has_knowledge_coverage"] is True
         assert result[0]["matched_knowledge_id"] == 42
+        assert result[0]["primary_category"] == "system_error"
+        assert result[0]["category_breakdown"] == [{"category": "system_error", "count": 5}]
         assert result[1]["has_knowledge_coverage"] is False
         assert result[1]["matched_knowledge_id"] is None
+        assert result[1]["category_breakdown"] == []
 
 
 class TestGetClusterMembers:

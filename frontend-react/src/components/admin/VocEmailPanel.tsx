@@ -92,6 +92,29 @@ const STATUS_LABEL: Record<string, string> = {
   skipped_relevance: '관련지식 부족(스킵)',
 };
 
+// 폴링 탭 설정 카드들이 전부 "숫자 하나 입력받아 blur 시 저장"이라 반복되던
+// 인라인 <label><input> 6벌을 하나로 통일 — 라벨을 입력창 위에 둬서 값이 뭘
+// 의미하는지 스캔하기 쉽게 하고, 부연 설명은 title 툴팁으로만 노출한다.
+function NumberSetting({
+  label, hint, value, min, max, step, onCommit,
+}: { label: string; hint?: string; value: number; min?: number; max?: number; step?: number; onCommit: (v: number) => void }) {
+  return (
+    <label className="block" title={hint}>
+      <span className="block text-xs text-slate-400 mb-1">{label}</span>
+      <input
+        type="number" min={min} max={max} step={step}
+        defaultValue={value}
+        key={`${label}-${value}`}
+        onBlur={(e) => {
+          const v = Number(e.target.value);
+          if ((min === undefined || v >= min) && (max === undefined || v <= max)) onCommit(v);
+        }}
+        className="w-24 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+      />
+    </label>
+  );
+}
+
 export function formatRelative(iso: string | null): string {
   if (!iso) return '-';
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -163,7 +186,7 @@ export function VocEmailPanel() {
   });
   const { data: pollCycles = [] } = useQuery({
     queryKey: ['email-voc-poll-cycles'],
-    queryFn: () => getPollCycles(10),
+    queryFn: () => getPollCycles(3),
     refetchInterval: 30_000,
     enabled: subTab === 'collect',
   });
@@ -686,104 +709,70 @@ export function VocEmailPanel() {
             )}
           </div>
 
-          <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 flex flex-wrap items-center gap-6">
-            <button
-              onClick={() => settingsMutation.mutate({ email_collection_enabled: !(settings?.email_collection_enabled ?? false) })}
-              disabled={settingsMutation.isPending}
-              className={clsx(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
-                settings?.email_collection_enabled
-                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
-                  : 'bg-slate-700 border-slate-600 text-slate-400 hover:bg-slate-600',
-              )}
-            >
-              <span className={clsx('w-2 h-2 rounded-full', settings?.email_collection_enabled ? 'bg-emerald-400' : 'bg-slate-500')} />
-              폴링 자동화 {settings?.email_collection_enabled ? 'ON' : 'OFF'}
-            </button>
-
-            <label className="flex items-center gap-2 text-sm text-slate-300" title="실제로 몇 분마다 메일함에 접속해 새 메일을 확인하는지 — 위 '화면 자동 새로고침'과는 별개입니다">
-              메일함 확인 주기(분, 최소 1)
-              <input
-                type="number" min={1}
-                defaultValue={settings?.email_polling_interval_minutes ?? 5}
-                key={`interval-${settings?.email_polling_interval_minutes}`}
-                onBlur={(e) => {
-                  const v = Number(e.target.value);
-                  if (v >= 1) settingsMutation.mutate({ email_polling_interval_minutes: v });
-                }}
-                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
+              <div>
+                <h4 className="text-xs font-semibold text-slate-300">폴링 동작</h4>
+                <p className="text-[11px] text-slate-500 mt-0.5">언제, 얼마나 자주 메일함을 확인할지</p>
+              </div>
+              <button
+                onClick={() => settingsMutation.mutate({ email_collection_enabled: !(settings?.email_collection_enabled ?? false) })}
+                disabled={settingsMutation.isPending}
+                className={clsx(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors w-fit',
+                  settings?.email_collection_enabled
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                    : 'bg-slate-700 border-slate-600 text-slate-400 hover:bg-slate-600',
+                )}
+              >
+                <span className={clsx('w-2 h-2 rounded-full', settings?.email_collection_enabled ? 'bg-emerald-400' : 'bg-slate-500')} />
+                폴링 자동화 {settings?.email_collection_enabled ? 'ON' : 'OFF'}
+              </button>
+              <NumberSetting
+                label="확인 주기(분)" hint="실제로 몇 분마다 메일함에 접속해 새 메일을 확인하는지 — 위 '화면 자동 새로고침'과는 별개입니다"
+                value={settings?.email_polling_interval_minutes ?? 5} min={1}
+                onCommit={(v) => settingsMutation.mutate({ email_polling_interval_minutes: v })}
               />
-            </label>
-
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              재조회 기간(일)
-              <input
-                type="number" min={1}
-                defaultValue={settings?.email_lookback_days ?? 7}
-                key={`lookback-${settings?.email_lookback_days}`}
-                onBlur={(e) => {
-                  const v = Number(e.target.value);
-                  if (v >= 1) settingsMutation.mutate({ email_lookback_days: v });
-                }}
-                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+              <NumberSetting
+                label="재조회 기간(일)" hint="며칠 전 메일까지 다시 훑어 새 메일인지 확인할지"
+                value={settings?.email_lookback_days ?? 7} min={1}
+                onCommit={(v) => settingsMutation.mutate({ email_lookback_days: v })}
               />
-            </label>
+            </div>
 
-            <label className="flex items-center gap-2 text-sm text-slate-300" title="등록된 지식과의 최고 유사도가 이 값 미만이면 LLM 분석·Teams발송 없이 건너뜁니다">
-              관련지식 임계치(0~1)
-              <input
-                type="number" min={0} max={1} step={0.05}
-                defaultValue={settings?.email_relevance_min_score ?? 0.35}
-                key={`relevance-${settings?.email_relevance_min_score}`}
-                onBlur={(e) => {
-                  const v = Number(e.target.value);
-                  if (v >= 0 && v <= 1) settingsMutation.mutate({ email_relevance_min_score: v });
-                }}
-                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
+              <div>
+                <h4 className="text-xs font-semibold text-slate-300">관련성 필터</h4>
+                <p className="text-[11px] text-slate-500 mt-0.5">우리 지식과 무관한 메일을 LLM 호출 전에 걸러냄</p>
+              </div>
+              <NumberSetting
+                label="관련지식 임계치(0~1)" hint="등록된 지식과의 최고 유사도가 이 값 미만이면 LLM 분석·Teams 발송 없이 건너뜁니다 — 높이면 노이즈↓ 놓치는 것↑"
+                value={settings?.email_relevance_min_score ?? 0.35} min={0} max={1} step={0.05}
+                onCommit={(v) => settingsMutation.mutate({ email_relevance_min_score: v })}
               />
-            </label>
+            </div>
 
-            <label className="flex items-center gap-2 text-sm text-slate-300" title="과거 VOC와 이 유사도 이상이면 같은 반복 유형으로 묶습니다 — 실 데이터로 검증한 기본값 0.85">
-              반복 패턴 유사도(0~1)
-              <input
-                type="number" min={0} max={1} step={0.05}
-                defaultValue={settings?.email_pattern_similarity_threshold ?? 0.85}
-                key={`pattern-threshold-${settings?.email_pattern_similarity_threshold}`}
-                onBlur={(e) => {
-                  const v = Number(e.target.value);
-                  if (v >= 0 && v <= 1) settingsMutation.mutate({ email_pattern_similarity_threshold: v });
-                }}
-                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
+              <div>
+                <h4 className="text-xs font-semibold text-slate-300">반복 패턴 탐지</h4>
+                <p className="text-[11px] text-slate-500 mt-0.5">같은 유형 VOC가 몰리면 담당자에게 별도 알림</p>
+              </div>
+              <NumberSetting
+                label="유사도(0~1)" hint="과거 VOC와 이 유사도 이상이면 같은 반복 유형으로 묶습니다 — 실 데이터로 검증한 기본값 0.85"
+                value={settings?.email_pattern_similarity_threshold ?? 0.85} min={0} max={1} step={0.05}
+                onCommit={(v) => settingsMutation.mutate({ email_pattern_similarity_threshold: v })}
               />
-            </label>
-
-            <label className="flex items-center gap-2 text-sm text-slate-300" title="이 기간 안에 발생한 VOC끼리만 반복 여부를 비교합니다">
-              반복 판정 기간(일)
-              <input
-                type="number" min={1}
-                defaultValue={settings?.email_pattern_window_days ?? 7}
-                key={`pattern-window-${settings?.email_pattern_window_days}`}
-                onBlur={(e) => {
-                  const v = Number(e.target.value);
-                  if (v >= 1) settingsMutation.mutate({ email_pattern_window_days: v });
-                }}
-                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+              <NumberSetting
+                label="판정 기간(일)" hint="이 기간 안에 발생한 VOC끼리만 반복 여부를 비교합니다"
+                value={settings?.email_pattern_window_days ?? 7} min={1}
+                onCommit={(v) => settingsMutation.mutate({ email_pattern_window_days: v })}
               />
-            </label>
-
-            <label className="flex items-center gap-2 text-sm text-slate-300" title="이 건수 이상 반복돼야 '반복 패턴 감지' Teams 알림을 발송합니다(이후 늘어나도 재알림 없음)">
-              반복 최소 건수
-              <input
-                type="number" min={2}
-                defaultValue={settings?.email_pattern_min_count ?? 3}
-                key={`pattern-mincount-${settings?.email_pattern_min_count}`}
-                onBlur={(e) => {
-                  const v = Number(e.target.value);
-                  if (v >= 2) settingsMutation.mutate({ email_pattern_min_count: v });
-                }}
-                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+              <NumberSetting
+                label="최소 건수" hint="이 건수 이상 반복돼야 '반복 패턴 감지' Teams 알림을 발송합니다(이후 늘어나도 재알림 없음)"
+                value={settings?.email_pattern_min_count ?? 3} min={2}
+                onCommit={(v) => settingsMutation.mutate({ email_pattern_min_count: v })}
               />
-            </label>
+            </div>
           </div>
 
           {/* 수동 1회성 실행 */}
@@ -862,7 +851,7 @@ export function VocEmailPanel() {
 
           {/* 폴링 이력 — 사이클 단위 성공/실패 */}
           <div className="pt-2">
-            <h3 className="text-sm font-semibold text-slate-300 mb-2">폴링 이력</h3>
+            <h3 className="text-sm font-semibold text-slate-300 mb-2">폴링 이력 (최근 3건)</h3>
             {pollCycles.length === 0 ? (
               <div className="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-700 rounded-lg">
                 아직 실행된 사이클이 없습니다.

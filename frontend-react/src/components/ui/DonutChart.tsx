@@ -1,10 +1,15 @@
 import { useState } from 'react';
+import { clsx } from 'clsx';
 
 export interface DonutSegment { value: number; color: string; label: string; tooltip?: string; }
 
-export function DonutChart({ segments, size = 140, strokeWidth = 22, centerTop, centerBottom }: {
+export function DonutChart({
+  segments, size = 140, strokeWidth = 22, centerTop, centerBottom, onSegmentClick, selectedIndex = null,
+}: {
   segments: DonutSegment[]; size?: number; strokeWidth?: number;
   centerTop?: string; centerBottom?: string;
+  onSegmentClick?: (index: number) => void;
+  selectedIndex?: number | null;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const r = (size - strokeWidth) / 2;
@@ -26,15 +31,18 @@ export function DonutChart({ segments, size = 140, strokeWidth = 22, centerTop, 
             const startAngle = cumAngle;
             cumAngle += fraction * 360;
             const isHover = hoverIdx === i;
+            const isSelected = selectedIndex === i;
+            const isDimmed = (hoverIdx !== null && !isHover) || (selectedIndex !== null && !isSelected && hoverIdx === null);
             return (
               <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={seg.color}
-                strokeWidth={isHover ? strokeWidth + 6 : strokeWidth} strokeLinecap="butt"
+                strokeWidth={isHover || isSelected ? strokeWidth + 6 : strokeWidth} strokeLinecap="butt"
                 strokeDasharray={`${dash} ${circumference - dash}`}
                 transform={`rotate(${startAngle}, ${cx}, ${cy})`}
-                className="transition-all duration-150 cursor-pointer"
-                style={{ opacity: hoverIdx !== null && !isHover ? 0.4 : 1 }}
+                className={clsx('transition-all duration-150', onSegmentClick && 'cursor-pointer')}
+                style={{ opacity: isDimmed ? 0.4 : 1 }}
                 onMouseEnter={() => setHoverIdx(i)}
-                onMouseLeave={() => setHoverIdx(null)} />
+                onMouseLeave={() => setHoverIdx(null)}
+                onClick={() => onSegmentClick?.(i)} />
             );
           })
         )}
