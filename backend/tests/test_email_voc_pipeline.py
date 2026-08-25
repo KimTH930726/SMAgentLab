@@ -226,7 +226,7 @@ class TestRunManualCollectionCategoryGate:
             pipeline.pattern_detection, "detect_and_update_cluster",
             AsyncMock(return_value={
                 "cluster_id": 55, "member_count": 3,
-                "trigger": {"member_count": 3, "representative_subject": "배달 오배송 불만", "sample_subjects": []},
+                "pattern_info": {"member_count": 3, "representative_subject": "배달 오배송 불만", "sample_subjects": []},
             }),
         )
         monkeypatch.setattr(
@@ -254,7 +254,7 @@ class TestRunManualCollectionCategoryGate:
             pipeline.pattern_detection, "detect_and_update_cluster",
             AsyncMock(return_value={
                 "cluster_id": 55, "member_count": 3,
-                "trigger": {"member_count": 3, "representative_subject": "[파손] 음료 쏟아짐 불만", "sample_subjects": []},
+                "pattern_info": {"member_count": 3, "representative_subject": "[파손] 음료 쏟아짐 불만", "sample_subjects": []},
             }),
         )
         monkeypatch.setattr(pipeline.pattern_detection, "get_cluster_coverage", AsyncMock())

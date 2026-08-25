@@ -259,16 +259,19 @@ async def run_manual_collection(
                 if analysis["category"] == "not_it_related":
                     return "skipped_not_it"
 
-                # 반복 패턴이 이번에 처음 임계치를 넘었으면, 별도 메시지를 새로 만들지
-                # 않고 이 개별 VOC 카드 안에 "🔁 반복 패턴" 한 줄 + 해결방안(있으면)을
-                # 얹는다 — 원래는 완전히 다른 카드를 하나 더 보냈으나, "두 개로 찢지
-                # 말고 원래 하던 개별 발송 파이프라인에 유사도 패턴 체크를 결합하라"는
-                # 실사용 피드백으로 되돌림.
+                # 이 VOC가 속한 클러스터가 반복 임계치(min_count)를 넘겼으면, 별도
+                # 메시지를 새로 만들지 않고 이 개별 VOC 카드 안에 "🔁 반복 패턴" 한 줄
+                # + 해결방안(있으면)을 얹는다 — 원래는 완전히 다른 카드를 하나 더
+                # 보냈으나, "두 개로 찢지 말고 원래 하던 개별 발송 파이프라인에 유사도
+                # 패턴 체크를 결합하라"는 실사용 피드백으로 되돌림. 처음엔 "클러스터가
+                # 처음 임계치를 넘는 순간"에만 표시했는데, 그러면 4번째·5번째 발생부터는
+                # 반복 중이라는 맥락이 안 보인다는 피드백으로 min_count 이상인 동안은
+                # 매번 표시하도록 변경(pattern_detection.py 모듈 docstring 참고).
                 pattern_info = None
-                if pattern and pattern["trigger"]:
+                if pattern and pattern["pattern_info"]:
                     coverage = await pattern_detection.get_cluster_coverage(ns_id, pattern["cluster_id"])
                     pattern_info = {
-                        "member_count": pattern["trigger"]["member_count"],
+                        "member_count": pattern["pattern_info"]["member_count"],
                         "window_days": settings["email_pattern_window_days"],
                         "coverage": coverage,
                     }

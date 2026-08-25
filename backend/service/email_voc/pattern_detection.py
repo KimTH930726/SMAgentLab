@@ -20,10 +20,17 @@ deduplication)를 조사한 결과, 이미 관련성 게이트(service.check_rel
 다르다) — 제목에서 답장 접두어를 벗겨 같은 제목이면 후보에서 제외한다.
 이 보정만으로 시뮬레이션에서 트리거 건수가 42% 줄었다.
 
-알림 정책: 클러스터가 처음 임계치(min_count)를 넘는 순간에만 Teams 알림을
-1회 발송한다(ops_voc_cluster.notified_at으로 가드) — 그 뒤로 같은 클러스터에
-멤버가 계속 늘어도 재알림하지 않는다(이력에는 계속 기록됨). "멤버 하나당
-알림 1번"이 되면 결국 매 건 알림으로 되돌아가 노이즈가 커지기 때문.
+알림 정책(2026-08-25 수정): 처음엔 "클러스터가 처음 min_count를 넘는 순간에만
+표시"였다 — 반복 패턴이 완전히 별도의 Teams 메시지였을 때는 "멤버 하나당
+알림 1번"이 되면 매 건 알림으로 되돌아가 노이즈가 커지는 문제였기 때문.
+그런데 이후 별도 메시지를 만들지 않고 이미 발송 중인 개별 VOC 카드에 한 줄
+얹는 방식으로 바뀌면서(teams_notify.py 참고) 이 제약의 전제가 사라졌다 —
+메시지 자체는 어차피 매번 나가므로, 반복 표시를 매번 넣어도 "추가 알림"이
+생기는 게 아니다. 오히려 "처음 한 번만" 표시하면 4번째·5번째 발생 때는
+반복 중이라는 맥락이 안 보이는 문제가 실사용 중 발견돼(20건짜리 클러스터의
+멤버 대부분이 표시 없이 나감) — 이제는 min_count를 넘긴 "이후 모든 건"에
+매번 표시한다. notified_at은 이제 표시 여부 가드가 아니라 "이 클러스터가
+언제 처음 패턴으로 인지됐는지" 기록용으로만 남는다.
 
 체이닝 방지(2026-08-25): 처음엔 "클러스터 안 아무 멤버와 유사하면 합류"였는데,
 A~B, B~C, C~D처럼 사슬로 이어지면 A와 D가 실제로는 안 닮았는데도 같은
@@ -116,8 +123,13 @@ async def detect_and_update_cluster(
 
     Returns:
         None — 반복 신호 없음(유사한 클러스터/과거 VOC가 없거나 같은 스레드 답장뿐).
-        {"cluster_id", "member_count", "trigger": dict | None} — trigger는 이번에
-        처음 min_count를 넘겨 Teams 알림을 발송해야 하는 경우에만 채워진다.
+        {"cluster_id", "member_count", "pattern_info": dict | None} — pattern_info는
+        이 클러스터가 min_count를 넘긴 "이후"라면 매번 채워진다(처음 넘긴 순간만이
+        아님, 2026-08-25 변경). 반복 패턴 표시는 이제 별도 Teams 메시지가 아니라
+        이미 발송 중인 개별 VOC 카드에 한 줄 얹는 것뿐이라(teams_notify.py의
+        pattern_info 파라미터), "1번만 보여주면" 오히려 4번째·5번째 발생부터는
+        "이거 반복되는 유형인데?"라는 맥락이 안 보이는 문제가 실사용 중 발견됨
+        — 매 메시지에 표시해도 메시지 자체가 늘어나는 게 아니므로 노이즈가 안 커진다.
     """
     threshold = settings["email_pattern_similarity_threshold"]
     window_days = settings["email_pattern_window_days"]
@@ -196,9 +208,13 @@ async def detect_and_update_cluster(
                 "UPDATE ops_email_analysis SET voc_cluster_id = $1 WHERE id = $2", cluster["id"], analysis_id,
             )
 
-        trigger = None
-        if cluster["member_count"] >= min_count and cluster["notified_at"] is None:
-            await conn.execute("UPDATE ops_voc_cluster SET notified_at = NOW() WHERE id = $1", cluster["id"])
+        pattern_info = None
+        if cluster["member_count"] >= min_count:
+            # notified_at은 더 이상 "표시 여부"를 가리지 않는다 — 이 클러스터가
+            # 처음 패턴으로 인지된 시각을 기록해두는 용도로만 남긴다(대시보드 등에서
+            # "언제 처음 반복 패턴으로 잡혔는지" 참고 가능).
+            if cluster["notified_at"] is None:
+                await conn.execute("UPDATE ops_voc_cluster SET notified_at = NOW() WHERE id = $1", cluster["id"])
             # 흔한 문구("[파손] 음료 쏟아짐 불만" 등)는 서로 다른 고객이 똑같은 제목을
             # 쓰는 경우가 실제로 많다 — 중복 제목을 그대로 나열하면 "똑같은 내용이
             # 두 번 반복 표시"된 것처럼 보여 혼란만 준다(실사용 피드백). 대표 제목과
@@ -209,13 +225,13 @@ async def detect_and_update_cluster(
             unique_samples = list(dict.fromkeys(
                 r["subject"] for r in sample_rows if r["subject"] != cluster["representative_subject"]
             ))
-            trigger = {
+            pattern_info = {
                 "member_count": cluster["member_count"],
                 "representative_subject": cluster["representative_subject"],
                 "sample_subjects": unique_samples[:3],
             }
 
-    return {"cluster_id": cluster["id"], "member_count": cluster["member_count"], "trigger": trigger}
+    return {"cluster_id": cluster["id"], "member_count": cluster["member_count"], "pattern_info": pattern_info}
 
 
 async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:

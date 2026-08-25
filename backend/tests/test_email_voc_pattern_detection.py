@@ -144,7 +144,7 @@ class TestDetectAndUpdateCluster:
         )
         assert result["cluster_id"] == 55
         assert result["member_count"] == 2
-        assert result["trigger"] is None  # min_count=3인데 아직 2건
+        assert result["pattern_info"] is None  # min_count=3인데 아직 2건
         insert_sql = conn.fetchrow.call_args_list[1].args[0]
         assert "INSERT INTO ops_voc_cluster" in insert_sql
         # 새 클러스터의 대표 건(가장 유사한 이전 건)에도 voc_cluster_id가 채워져야 함
@@ -187,25 +187,38 @@ class TestDetectAndUpdateCluster:
         result = await pattern_detection.detect_and_update_cluster(
             1, 100, "배달이 또또 잘못 왔어요", [0.0, 1.0], _NOW, _SETTINGS,
         )
-        assert result["trigger"] is not None
-        assert result["trigger"]["member_count"] == 3
-        assert result["trigger"]["sample_subjects"] == ["배달 오배송 불만 A", "배달 오배송 불만 B"]
+        assert result["pattern_info"] is not None
+        assert result["pattern_info"]["member_count"] == 3
+        assert result["pattern_info"]["sample_subjects"] == ["배달 오배송 불만 A", "배달 오배송 불만 B"]
         notify_calls = [c.args[0] for c in conn.execute.call_args_list]
         assert any("notified_at = NOW()" in sql for sql in notify_calls)
 
     @pytest.mark.asyncio
-    async def test_no_retrigger_once_already_notified(self, patch_db):
+    async def test_pattern_info_shown_even_after_already_notified(self, patch_db):
+        """반복 패턴 표시는 이제 별도 메시지가 아니라 이미 나가는 개별 VOC 카드에
+        한 줄 얹는 것뿐이다 — 처음 한 번만 보여주면 4번째·5번째 발생부터는 반복
+        중이라는 맥락이 안 보이는 문제가 실사용 중 발견됨(20건짜리 클러스터의
+        멤버 대부분이 표시 없이 나감). min_count를 넘긴 이후론 notified_at과
+        무관하게 매번 pattern_info가 채워져야 한다."""
         conn, _ = patch_db
         conn.fetchrow.side_effect = [
             {"id": 55, "member_count": 4, "representative_embedding": "[1.0,0.0]"},
             {"id": 55, "member_count": 5, "notified_at": _NOW, "representative_subject": "배달 오배송 불만"},
         ]
-        conn.fetch.return_value = [{"subject": "배달 오배송 불만 X"}]
+        conn.fetch.side_effect = [
+            [{"subject": "배달 오배송 불만 X"}],  # 스레드 체크
+            [{"subject": "배달 오배송 불만"}, {"subject": "배달 오배송 불만 A"}],  # 샘플 조회
+        ]
         result = await pattern_detection.detect_and_update_cluster(
             1, 100, "배달이 다섯번째로 잘못 왔어요", [0.0, 1.0], _NOW, _SETTINGS,
         )
-        assert result["trigger"] is None
-        conn.fetch.assert_awaited_once()  # 이미 notified라 sample_rows 조회(2번째 fetch)까지 안 감
+        assert result["pattern_info"] is not None
+        assert result["pattern_info"]["member_count"] == 5
+        # 이미 notified_at이 있으므로 재차 UPDATE notified_at을 실행하면 안 됨
+        notify_calls = [c.args[0] for c in conn.execute.call_args_list]
+        assert not any("notified_at = NOW()" in sql for sql in notify_calls)
+        # 스레드 체크 + sample_rows 조회, 총 2번 fetch돼야 함(더 이상 notified_at으로 건너뛰지 않음)
+        assert conn.fetch.await_count == 2
 
     @pytest.mark.asyncio
     async def test_sample_subjects_dedupes_and_excludes_representative(self, patch_db):
@@ -227,7 +240,7 @@ class TestDetectAndUpdateCluster:
         result = await pattern_detection.detect_and_update_cluster(
             1, 100, "음료가 또 쏟아졌어요", [0.0, 1.0], _NOW, _SETTINGS,
         )
-        assert result["trigger"]["sample_subjects"] == ["뚜껑 열림"]
+        assert result["pattern_info"]["sample_subjects"] == ["뚜껑 열림"]
 
 
 class TestGetClusterCoverage:
