@@ -139,13 +139,54 @@ async def detect_and_update_cluster(
         trigger = None
         if cluster["member_count"] >= min_count and cluster["notified_at"] is None:
             await conn.execute("UPDATE ops_voc_cluster SET notified_at = NOW() WHERE id = $1", cluster["id"])
+            # 흔한 문구("[파손] 음료 쏟아짐 불만" 등)는 서로 다른 고객이 똑같은 제목을
+            # 쓰는 경우가 실제로 많다 — 중복 제목을 그대로 나열하면 "똑같은 내용이
+            # 두 번 반복 표시"된 것처럼 보여 혼란만 준다(실사용 피드백). 대표 제목과
+            # 겹치는 것도 제외 — 이미 위에서 별도로 보여주므로.
+            unique_samples = list(dict.fromkeys(
+                c["subject"] for c in candidates if c["subject"] != cluster["representative_subject"]
+            ))
             trigger = {
                 "member_count": cluster["member_count"],
                 "representative_subject": cluster["representative_subject"],
-                "sample_subjects": [c["subject"] for c in candidates[:3]],
+                "sample_subjects": unique_samples[:3],
             }
 
     return {"cluster_id": cluster["id"], "member_count": cluster["member_count"], "trigger": trigger}
+
+
+async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
+    """반복 패턴 Teams 알림 발송 시점에 그 클러스터의 해결방안 등록 여부를 확인.
+
+    list_clusters()의 LATERAL JOIN 커버리지 판정과 동일한 로직을 단일 클러스터에
+    대해서만 수행 — 트리거는 클러스터당 1번만 발생하므로 비용 문제 없음. "반복
+    발생했다"는 사실만 알리고 끝내면 받는 사람이 "그래서 뭘 어떻게 해야 하냐"를
+    또 물어보게 된다는 게 실사용 피드백이라, 이미 등록된 해결방안이 있으면 카드에
+    바로 보여주고 없으면 명시적으로 "없다"고 알린다.
+    """
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT best.knowledge_id, best.similarity, best.snippet
+            FROM ops_voc_cluster c
+            LEFT JOIN LATERAL (
+                SELECT k.id AS knowledge_id,
+                       1 - (k.embedding <=> c.representative_embedding) AS similarity,
+                       LEFT(k.content, 200) AS snippet
+                FROM rag_knowledge k
+                WHERE k.namespace_id = c.namespace_id
+                  AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
+                ORDER BY k.embedding <=> c.representative_embedding
+                LIMIT 1
+            ) best ON true
+            WHERE c.id = $1 AND c.namespace_id = $2
+            """,
+            cluster_id, ns_id,
+        )
+    if row is None:
+        return {"covered": False, "snippet": None}
+    covered = row["similarity"] is not None and row["similarity"] >= _COVERAGE_MIN_SIMILARITY
+    return {"covered": covered, "snippet": row["snippet"] if covered else None}
 
 
 async def list_clusters(namespace: str) -> list[dict]:

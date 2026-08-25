@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, CheckCircle2, AlertTriangle, X } from 'lucide-react';
+import { RefreshCw, CheckCircle2, AlertTriangle, X, FilePlus2 } from 'lucide-react';
 import {
   getVocStats, getVocClusters, getVocClusterMembers,
   type VocCluster, type VocClusterMember,
@@ -437,7 +437,9 @@ export function VocStatsPanel({ namespace }: { namespace: string }) {
                       </td>
                       <td className="px-3 py-2">
                         {!c.has_knowledge_coverage && (
-                          <Button variant="ghost" size="sm" onClick={() => setRegisterCluster(c)}>지식 등록</Button>
+                          <Button variant="secondary" size="sm" onClick={() => setRegisterCluster(c)}>
+                            <FilePlus2 className="w-3.5 h-3.5" />지식 등록
+                          </Button>
                         )}
                       </td>
                     </tr>

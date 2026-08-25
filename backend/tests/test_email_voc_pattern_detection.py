@@ -157,6 +157,47 @@ class TestDetectAndUpdateCluster:
         )
         assert result["trigger"] is None
 
+    @pytest.mark.asyncio
+    async def test_sample_subjects_dedupes_and_excludes_representative(self, patch_db):
+        """흔한 제목("[파손] 음료 쏟아짐 불만" 등)은 서로 다른 고객이 똑같이 쓰는 경우가
+        많다 — 대표 제목과 겹치는 게 "다른 사례"로 다시 나열되면 헷갈린다는 실사용 피드백."""
+        conn, _ = patch_db
+        conn.fetch.return_value = [
+            {"id": 1, "subject": "[파손] 음료 쏟아짐 불만", "voc_cluster_id": 55},  # 대표와 동일
+            {"id": 2, "subject": "[파손] 음료 쏟아짐 불만", "voc_cluster_id": 55},  # 위와 중복
+            {"id": 3, "subject": "뚜껑 열림", "voc_cluster_id": 55},
+        ]
+        conn.fetchrow.return_value = {
+            "id": 55, "member_count": 4, "notified_at": None, "representative_subject": "[파손] 음료 쏟아짐 불만",
+        }
+        result = await pattern_detection.detect_and_update_cluster(
+            1, 100, "음료가 또 쏟아졌어요", [0.1, 0.2], _NOW, _SETTINGS,
+        )
+        assert result["trigger"]["sample_subjects"] == ["뚜껑 열림"]
+
+
+class TestGetClusterCoverage:
+    @pytest.mark.asyncio
+    async def test_covered_when_similarity_above_threshold(self, patch_db):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차..."}
+        result = await pattern_detection.get_cluster_coverage(1, 55)
+        assert result == {"covered": True, "snippet": "재배송 처리 절차..."}
+
+    @pytest.mark.asyncio
+    async def test_not_covered_when_similarity_below_threshold(self, patch_db):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"knowledge_id": 9, "similarity": 0.4, "snippet": "무관한 문서"}
+        result = await pattern_detection.get_cluster_coverage(1, 55)
+        assert result == {"covered": False, "snippet": None}
+
+    @pytest.mark.asyncio
+    async def test_no_matching_knowledge_at_all(self, patch_db):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = None
+        result = await pattern_detection.get_cluster_coverage(1, 55)
+        assert result == {"covered": False, "snippet": None}
+
 
 class TestListClusters:
     @pytest.mark.asyncio

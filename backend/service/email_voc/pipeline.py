@@ -240,37 +240,46 @@ async def run_manual_collection(
                 if saved is None:
                     return "skipped_duplicate"
 
-                # 반복 패턴 탐지 — category와 무관하게(오히려 not_it_related류 CS성
-                # 불만이 반복될 때가 더 유의미한 신호였음, 실 데이터 검증 결과) 항상
-                # 수행한다. LLM 호출 없이 pgvector 코사인 비교만 하므로 비용 없음.
+                # 반복 패턴 "탐지·집계"는 category와 무관하게 항상 수행한다 —
+                # not_it_related류도 클러스터 멤버로는 계속 쌓여야 VOC 통계 화면에서
+                # 전체 그림(유형 분포·클러스터 크기)이 정확하다. LLM 호출 없이 pgvector
+                # 코사인 비교만 하므로 비용 없음.
                 occurred_at = datetime.fromisoformat(msg["received_at"].replace("Z", "+00:00")) \
                     if msg.get("received_at") else datetime.now(timezone.utc)
                 pattern = await pattern_detection.detect_and_update_cluster(
                     ns_id, saved["id"], msg["subject"], relevance.query_vec, occurred_at, settings,
                 )
-                if pattern and pattern["trigger"] and routing.get("teams_webhook_url"):
-                    pattern_message = teams_notify.build_pattern_alert_message(
-                        part=routing["part"], representative_subject=pattern["trigger"]["representative_subject"],
-                        member_count=pattern["trigger"]["member_count"],
-                        sample_subjects=pattern["trigger"]["sample_subjects"],
-                        window_days=settings["email_pattern_window_days"],
-                    )
-                    await teams_notify.send_teams_notification(routing["teams_webhook_url"], pattern_message)
 
                 # 관련지식 임계치를 넘긴 메일이라도, LLM이 "system 문제가 아니라 그냥
                 # 상품/배송 자체에 대한 CS성 불만"이라고 판단하면(not_it_related) IT
                 # 담당 채널에 알림을 보낼 이유가 없다 — 실사용 중 "IT와 상관없는 불만이
                 # 너무 많이 온다"는 피드백. 이력에는 남기되(위 record_analysis) 알림만 생략.
+                # 반복 패턴 여부와 무관하게 이 게이트 하나로 전부 걸러진다 — "찢지 말고
+                # 하나의 흐름으로" 피드백에 따라 발송 여부 판단 지점을 하나로 합쳤다.
                 if analysis["category"] == "not_it_related":
                     return "skipped_not_it"
 
-                # §10 — not_it_related(위에서 이미 return)를 제외하면 심각도와 무관하게
-                # 항상 발송하되, 카드 포맷(강조 여부)만 심각도에 따라 달라진다
+                # 반복 패턴이 이번에 처음 임계치를 넘었으면, 별도 메시지를 새로 만들지
+                # 않고 이 개별 VOC 카드 안에 "🔁 반복 패턴" 한 줄 + 해결방안(있으면)을
+                # 얹는다 — 원래는 완전히 다른 카드를 하나 더 보냈으나, "두 개로 찢지
+                # 말고 원래 하던 개별 발송 파이프라인에 유사도 패턴 체크를 결합하라"는
+                # 실사용 피드백으로 되돌림.
+                pattern_info = None
+                if pattern and pattern["trigger"]:
+                    coverage = await pattern_detection.get_cluster_coverage(ns_id, pattern["cluster_id"])
+                    pattern_info = {
+                        "member_count": pattern["trigger"]["member_count"],
+                        "window_days": settings["email_pattern_window_days"],
+                        "coverage": coverage,
+                    }
+
+                # §10 — 심각도와 무관하게 항상 발송하되, 카드 포맷(강조 여부)만 심각도에 따라 달라진다
                 if routing.get("teams_webhook_url"):
                     message = teams_notify.build_teams_message(
                         subject=msg["subject"], sender=msg["sender"], part=routing["part"],
                         body=_strip_forwarded_chain(msg["body"]),
                         analysis=analysis, oncall_contact_name=routing.get("oncall_contact_name"),
+                        pattern_info=pattern_info,
                     )
                     ok, error = await teams_notify.send_teams_notification(routing["teams_webhook_url"], message)
                     await mark_notify_result(saved["id"], ok, error)

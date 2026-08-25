@@ -63,12 +63,20 @@ def _section_title(text: str) -> str:
 def build_teams_message(
     *, subject: str, sender: str, part: str, analysis: dict,
     body: str = "", oncall_contact_name: Optional[str] = None,
+    pattern_info: Optional[dict] = None,
 ) -> dict:
     """§10 심각도 기반 포맷 — "제목/내용/방안" 3섹션을 블록 태그(h2/h3/ul/blockquote)로
     구분한다. teams_notifier.py와 동일하게 {"text": "..."} 단순 페이로드를 쓰되
     (Adaptive Card는 이 웹훅에서 무시되는 것으로 실측 확인 — 모듈 docstring 참고),
     Teams 커넥터 카드가 지원하는 표준 서식 태그(h1~h3/b/ul·li/blockquote/span
     style=color)로 최대한 시각적 구분을 준다.
+
+    pattern_info: 이 VOC가 반복 패턴 임계치를 방금 넘긴 경우에만 채워짐
+    ({"member_count", "window_days", "coverage"}, pattern_detection.py 참고).
+    처음엔 "🔁 반복 패턴 감지"를 완전히 별도의 Teams 메시지로 만들었으나, 실사용
+    피드백("두 개로 찢지 말고 하나의 흐름으로 녹여라 — 원래 하던 개별 VOC 발송에
+    유사도 패턴 체크를 결합한 파이프라인이어야 한다")에 따라 되돌림 — 개별 VOC
+    카드 하나에 반복 여부를 한 줄 얹고, 해결방안도 그 안에서 같이 보여준다.
     """
     severity = analysis.get("severity", "low")
     category = analysis.get("category", "uncertain")
@@ -101,6 +109,14 @@ def build_teams_message(
         detail_items.append(
             '<span style="color:#DC2626"><b>⚠️ 오배치 의심</b></span> — 이 메일함 담당 업무와 내용이 다를 수 있습니다'
         )
+    if pattern_info:
+        # #D97706(high 심각도)이나 #DC2626(urgent/오배치)과 겹치면 "심각도 신호"로
+        # 오인될 수 있어 — 반복 여부는 심각도와 무관한 별개 정보라 앱 강조색(indigo,
+        # CLAUDE.md 팔레트)을 대신 쓴다.
+        detail_items.append(
+            f'<span style="color:#6366F1"><b>🔁 반복 패턴</b></span> — 최근 {pattern_info["window_days"]}일간 '
+            f'유사한 VOC {pattern_info["member_count"]}건째 발생'
+        )
     if urgent and oncall_contact_name:
         detail_items.append(f"온콜 담당자: {_esc(oncall_contact_name)} — 필요 시 직접 전화 부탁드립니다")
     detail_list = "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
@@ -121,9 +137,19 @@ def build_teams_message(
     # (사용자 실수/판단 보류는 "고칠 버그"가 없으니 해결 방안 자체가 성립하지 않음).
     # 이 이유를 안 적으면 알림 받은 사람이 "왜 해결방안이 없지?"를 매번 헷갈려해서
     # (실사용 중 실제로 질문 받음) 없는 이유를 한 줄로 명시한다.
+    # pattern_info로 이미 등록된 지식이 있으면(get_cluster_coverage) LLM이 이번 건
+    # 자체에 대해 resolution_draft를 못 만든 경우(uncertain/user_mistake 등)에도
+    # "이 반복 유형에 대한 답은 이미 있다"를 보여줄 수 있다 — resolution_draft보다는
+    # 후순위(개별 LLM 판단이 이 VOC에 더 특화된 답이므로 우선), 없을 때만 대체한다.
+    pattern_snippet = (
+        pattern_info["coverage"]["snippet"]
+        if pattern_info and pattern_info.get("coverage", {}).get("covered") else None
+    )
     resolution_draft = analysis.get("resolution_draft")
     if resolution_draft:
         sections.append(f"{_section_title('해결 방안')}<blockquote>{_esc(resolution_draft)}</blockquote>")
+    elif pattern_snippet:
+        sections.append(f"{_section_title('해결 방안(반복 유형 기등록 지식)')}<blockquote>{_esc(pattern_snippet)}</blockquote>")
     elif category != "system_error":
         # 심각도 팔레트(low/medium/high/urgent) 색상과 겹치지 않도록 별도 색상
         # 없이 순수 텍스트로만 표시 — 색상을 넣으면 무관한 심각도 신호로 오인될 수 있다.
@@ -152,28 +178,6 @@ def build_teams_message(
         sections.append(f"{_section_title('참고 지식(근거)')}<ul>{ref_items}</ul>")
 
     return {"text": f"<br>{_DIVIDER}<br>".join(sections)}
-
-
-def build_pattern_alert_message(
-    *, part: str, representative_subject: str, member_count: int,
-    sample_subjects: list[str], window_days: int,
-) -> dict:
-    """반복 VOC 패턴이 처음 임계치를 넘는 순간에만 발송하는 별도 알림(개별 VOC
-    알림과 다른 종류) — pattern_detection.py의 클러스터링 결과를 카드로 만든다.
-    같은 클러스터가 이후 더 늘어도 이 함수는 다시 호출되지 않는다(pipeline.py가
-    ops_voc_cluster.notified_at으로 1회만 트리거) — "멤버 하나당 알림 1번"이 되면
-    결국 매 건 알림으로 되돌아가 노이즈가 커지기 때문.
-    """
-    header_html = '<h2 style="color:#D97706;font-size:22px">🔁 반복 패턴 감지</h2>'
-    sample_items = "".join(f"<li>{_esc(s)}</li>" for s in sample_subjects)
-    body_html = (
-        f"{_section_title('요약')}"
-        f"최근 {window_days}일간 <b>{_esc(part)}</b> 담당 메일함에 유사한 VOC가 "
-        f"<b>{member_count}건</b> 반복 발생했습니다."
-        f"{_section_title('대표 제목')}{_esc(representative_subject)}"
-        f"{_section_title('최근 유사 사례')}<ul>{sample_items}</ul>"
-    )
-    return {"text": f"{header_html}<br>{_DIVIDER}<br>{body_html}"}
 
 
 async def send_teams_notification(webhook_url: str, message: dict) -> tuple[bool, Optional[str]]:

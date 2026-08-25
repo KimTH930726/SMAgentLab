@@ -214,6 +214,59 @@ class TestRunManualCollectionCategoryGate:
         assert mailbox_result["notified"] == 1
         pipeline.teams_notify.send_teams_notification.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_pattern_trigger_folds_into_single_teams_send(self, patch_db, monkeypatch):
+        """반복 패턴이 감지돼도 별도 메시지를 추가로 보내지 않고, 개별 VOC 카드
+        하나에 pattern_info를 실어 1번만 발송한다 — "두 개로 찢지 말고 하나의
+        흐름으로" 피드백 검증."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        self._patch_common(monkeypatch, category="system_error")
+        monkeypatch.setattr(
+            pipeline.pattern_detection, "detect_and_update_cluster",
+            AsyncMock(return_value={
+                "cluster_id": 55, "member_count": 3,
+                "trigger": {"member_count": 3, "representative_subject": "배달 오배송 불만", "sample_subjects": []},
+            }),
+        )
+        monkeypatch.setattr(
+            pipeline.pattern_detection, "get_cluster_coverage",
+            AsyncMock(return_value={"covered": False, "snippet": None}),
+        )
+
+        result = await pipeline.run_manual_collection(
+            "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
+        )
+
+        assert result["mailboxes"][0]["notified"] == 1
+        pipeline.teams_notify.send_teams_notification.assert_awaited_once()
+        build_kwargs = pipeline.teams_notify.build_teams_message.call_args.kwargs
+        assert build_kwargs["pattern_info"]["member_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_not_it_related_with_pattern_trigger_sends_nothing(self, patch_db, monkeypatch):
+        """반복 패턴이 감지돼도 카테고리가 IT 무관이면 발송 자체를 안 한다 —
+        "IT 유관한거로만 보내라"는 피드백 검증."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        self._patch_common(monkeypatch, category="not_it_related")
+        monkeypatch.setattr(
+            pipeline.pattern_detection, "detect_and_update_cluster",
+            AsyncMock(return_value={
+                "cluster_id": 55, "member_count": 3,
+                "trigger": {"member_count": 3, "representative_subject": "[파손] 음료 쏟아짐 불만", "sample_subjects": []},
+            }),
+        )
+        monkeypatch.setattr(pipeline.pattern_detection, "get_cluster_coverage", AsyncMock())
+
+        result = await pipeline.run_manual_collection(
+            "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
+        )
+
+        assert result["mailboxes"][0]["skipped_not_it"] == 1
+        pipeline.teams_notify.send_teams_notification.assert_not_called()
+        pipeline.pattern_detection.get_cluster_coverage.assert_not_awaited()
+
 
 class TestListHistory:
     @pytest.mark.asyncio

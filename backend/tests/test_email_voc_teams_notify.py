@@ -202,26 +202,58 @@ class TestBuildTeamsMessage:
         assert "(제목 없음)" in msg["text"]
 
 
-class TestBuildPatternAlertMessage:
-    """반복 VOC 패턴이 처음 임계치를 넘을 때 발송하는 별도 알림 — pattern_detection.py 참고."""
+class TestPatternInfoInTeamsMessage:
+    """반복 패턴 감지를 별도 메시지가 아니라 개별 VOC 카드에 결합하는 방식으로
+    되돌린 부분 — 실사용 피드백("두 개로 찢지 말고 하나의 흐름으로 녹여라")."""
 
-    def test_includes_member_count_and_window(self):
-        msg = teams_notify.build_pattern_alert_message(
-            part="테스트", representative_subject="배달 오배송 불만", member_count=3,
-            sample_subjects=["배달 오배송 불만 A", "배달 오배송 불만 B"], window_days=7,
+    def test_pattern_bullet_shown_in_metadata_when_triggered(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="테스트",
+            analysis=_base_analysis(category="uncertain", resolution_draft=None),
+            pattern_info={"member_count": 3, "window_days": 7, "coverage": {"covered": False, "snippet": None}},
         )
         text = msg["text"]
-        assert "🔁 반복 패턴 감지" in text
+        assert "🔁 반복 패턴" in text
         assert "7일간" in text
-        assert "<b>3건</b>" in text
-        assert "테스트" in text
-        assert "배달 오배송 불만" in text
-        assert "배달 오배송 불만 A" in text
+        assert "3건째" in text
 
-    def test_html_special_chars_are_escaped(self):
-        msg = teams_notify.build_pattern_alert_message(
-            part="p", representative_subject="<script>alert(1)</script>", member_count=3,
-            sample_subjects=[], window_days=7,
+    def test_no_pattern_bullet_when_not_triggered(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p", analysis=_base_analysis(),
         )
-        assert "<script>alert(1)</script>" not in msg["text"]
-        assert "&lt;script&gt;" in msg["text"]
+        assert "🔁 반복 패턴" not in msg["text"]
+
+    def test_registered_resolution_used_when_llm_has_no_draft(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(category="uncertain", resolution_draft=None),
+            pattern_info={
+                "member_count": 3, "window_days": 7,
+                "coverage": {"covered": True, "snippet": "재배송 또는 환불 처리를 진행합니다."},
+            },
+        )
+        text = msg["text"]
+        assert "해결 방안(반복 유형 기등록 지식)" in text
+        assert "재배송 또는 환불 처리를 진행합니다." in text
+        assert "해당 없음" not in text
+
+    def test_llm_resolution_draft_takes_priority_over_pattern_coverage(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(category="system_error", resolution_draft="LLM이 만든 해결방안"),
+            pattern_info={
+                "member_count": 3, "window_days": 7,
+                "coverage": {"covered": True, "snippet": "반복 유형용 등록 지식"},
+            },
+        )
+        text = msg["text"]
+        assert "LLM이 만든 해결방안" in text
+        assert "반복 유형용 등록 지식" not in text
+
+    def test_no_coverage_falls_back_to_existing_no_resolution_message(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(category="uncertain", resolution_draft=None),
+            pattern_info={"member_count": 3, "window_days": 7, "coverage": {"covered": False, "snippet": None}},
+        )
+        assert "해당 없음" in msg["text"]
