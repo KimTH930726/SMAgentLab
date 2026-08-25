@@ -12,7 +12,7 @@ from datetime import date, datetime, time, timezone
 from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
-from service.email_voc import delegated_auth, graph_client, routing_service, teams_notify
+from service.email_voc import delegated_auth, graph_client, pattern_detection, routing_service, teams_notify
 from service.email_voc.service import _strip_forwarded_chain, analyze_email, check_relevance
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ async def record_analysis(
     analysis: dict,
     *,
     status: str = "analyzed",
+    embedding: Optional[list[float]] = None,
 ) -> Optional[dict]:
     """분석 결과를 저장한다. 같은 (namespace, source_message_id)가 이미 있으면
     저장하지 않고 None을 반환한다 — §9의 재조회 윈도우 겹침에 대한 중복 방지.
@@ -43,6 +44,11 @@ async def record_analysis(
     관련지식 임계치 미달로 LLM을 태우지 않고 건너뛴 경우 'skipped_relevance'로 직접
     저장한다(컬럼이 VARCHAR(20)이라 'skipped_low_relevance'는 21자로 안 들어감 —
     실제로 겪고 줄임) — 이 경우 category/severity 등은 None으로 들어온다.
+
+    embedding: check_relevance()가 이미 계산해둔 벡터를 그대로 저장 — 반복 VOC
+    패턴 탐지(pattern_detection.py)가 재임베딩 없이 과거 VOC와 비교할 때 재사용한다.
+    관련성 임계치 미달로 건너뛴 경우(status='skipped_relevance')는 굳이 저장하지
+    않는다 — 애초에 우리 지식과 무관하다고 판단된 메일이라 반복 패턴 탐지 대상도 아니다.
     """
     # asyncpg는 timestamptz 파라미터에 datetime 객체를 요구한다 — SQL 쪽 ::timestamptz
     # 캐스트는 서버 파싱 단계라 클라이언트 바이너리 인코딩(문자열→datetime) 문제를 못 고친다.
@@ -58,8 +64,8 @@ async def record_analysis(
             INSERT INTO ops_email_analysis
                 (namespace_id, routing_id, source_message_id, mailbox_upn, subject, sender,
                  received_at, body, category, severity, mismatch_flagged, knowledge_ref_ids,
-                 resolution_draft, reasoning, status)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                 resolution_draft, reasoning, status, embedding)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::vector)
             ON CONFLICT (namespace_id, source_message_id) DO NOTHING
             RETURNING id
             """,
@@ -67,6 +73,7 @@ async def record_analysis(
             received_at_dt, body, analysis["category"], analysis["severity"],
             analysis["mismatch_flagged"], analysis["knowledge_ref_ids"],
             analysis["resolution_draft"], analysis["reasoning"], status,
+            str(embedding) if embedding else None,
         )
     if row is None:
         return None
@@ -144,9 +151,10 @@ async def run_manual_collection(
         if access_token is None and not credentials:
             access_token = await delegated_auth.get_access_token_silent()
     routing_rows = [r for r in await routing_service.list_routing(namespace) if r["is_active"]]
-    # §9 관련지식 임계치 — namespace와 무관하게 하나뿐이라 메일 단위로 반복 조회하지
-    # 않도록 여기서 한 번만 읽는다.
-    relevance_min_score = (await routing_service.get_settings())["email_relevance_min_score"]
+    # §9 관련지식 임계치 + 반복 패턴 탐지 설정 — namespace와 무관하게 하나뿐이라
+    # 메일 단위로 반복 조회하지 않도록 여기서 한 번만 읽는다.
+    settings = await routing_service.get_settings()
+    relevance_min_score = settings["email_relevance_min_score"]
 
     received_after = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
     received_before = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
@@ -227,9 +235,27 @@ async def run_manual_collection(
                 saved = await record_analysis(
                     ns_id, routing["id"], msg["id"], routing["mailbox_upn"],
                     msg["subject"], msg["sender"], msg["received_at"], msg["body"], analysis,
+                    embedding=relevance.query_vec,
                 )
                 if saved is None:
                     return "skipped_duplicate"
+
+                # 반복 패턴 탐지 — category와 무관하게(오히려 not_it_related류 CS성
+                # 불만이 반복될 때가 더 유의미한 신호였음, 실 데이터 검증 결과) 항상
+                # 수행한다. LLM 호출 없이 pgvector 코사인 비교만 하므로 비용 없음.
+                occurred_at = datetime.fromisoformat(msg["received_at"].replace("Z", "+00:00")) \
+                    if msg.get("received_at") else datetime.now(timezone.utc)
+                pattern = await pattern_detection.detect_and_update_cluster(
+                    ns_id, saved["id"], msg["subject"], relevance.query_vec, occurred_at, settings,
+                )
+                if pattern and pattern["trigger"] and routing.get("teams_webhook_url"):
+                    pattern_message = teams_notify.build_pattern_alert_message(
+                        part=routing["part"], representative_subject=pattern["trigger"]["representative_subject"],
+                        member_count=pattern["trigger"]["member_count"],
+                        sample_subjects=pattern["trigger"]["sample_subjects"],
+                        window_days=settings["email_pattern_window_days"],
+                    )
+                    await teams_notify.send_teams_notification(routing["teams_webhook_url"], pattern_message)
 
                 # 관련지식 임계치를 넘긴 메일이라도, LLM이 "system 문제가 아니라 그냥
                 # 상품/배송 자체에 대한 CS성 불만"이라고 판단하면(not_it_related) IT
@@ -322,6 +348,44 @@ async def list_history(
             *params,
         )
     return [dict(r) for r in rows]
+
+
+async def get_voc_stats(namespace: str) -> dict:
+    """관리자 화면 "VOC 통계" 탭 — 유형(category)·심각도(severity) 분포.
+
+    "이런 VOC들이 많았고 어떻게 유형 분류됐는지 투명하게 보고 싶다"는 요구로 추가.
+    관련성 임계치 미달로 건너뛴 건(status='skipped_relevance')은 category/severity가
+    NULL이라 분포에서 제외 — 애초에 분석되지 않은 건이라 "유형"이 없다.
+    """
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return {"total": 0, "category_distribution": [], "severity_distribution": []}
+        total = await conn.fetchval(
+            "SELECT COUNT(*) FROM ops_email_analysis WHERE namespace_id = $1 AND status != 'skipped_relevance'",
+            ns_id,
+        )
+        category_rows = await conn.fetch(
+            """
+            SELECT category, COUNT(*) AS count FROM ops_email_analysis
+            WHERE namespace_id = $1 AND status != 'skipped_relevance'
+            GROUP BY category ORDER BY count DESC
+            """,
+            ns_id,
+        )
+        severity_rows = await conn.fetch(
+            """
+            SELECT severity, COUNT(*) AS count FROM ops_email_analysis
+            WHERE namespace_id = $1 AND status != 'skipped_relevance'
+            GROUP BY severity ORDER BY count DESC
+            """,
+            ns_id,
+        )
+    return {
+        "total": total or 0,
+        "category_distribution": [dict(r) for r in category_rows],
+        "severity_distribution": [dict(r) for r in severity_rows],
+    }
 
 
 async def get_knowledge_refs(namespace: str, knowledge_ids: list[int]) -> list[dict]:

@@ -11,6 +11,7 @@ _GRAPH_CREDENTIALS_KEY = "email_graph_credentials"
 _SETTINGS_KEYS = (
     "email_collection_enabled", "email_polling_interval_minutes", "email_lookback_days",
     "email_relevance_min_score",
+    "email_pattern_similarity_threshold", "email_pattern_window_days", "email_pattern_min_count",
 )
 _MIN_POLLING_INTERVAL_MINUTES = 1  # §9 — Graph API 호출 한도 보호용 하한
 
@@ -29,6 +30,9 @@ async def get_settings() -> dict:
         "email_polling_interval_minutes": int(values.get("email_polling_interval_minutes", 5)),
         "email_lookback_days": int(values.get("email_lookback_days", 7)),
         "email_relevance_min_score": float(values.get("email_relevance_min_score", 0.38)),
+        "email_pattern_similarity_threshold": float(values.get("email_pattern_similarity_threshold", 0.85)),
+        "email_pattern_window_days": int(values.get("email_pattern_window_days", 7)),
+        "email_pattern_min_count": int(values.get("email_pattern_min_count", 3)),
     }
 
 
@@ -43,6 +47,15 @@ async def update_settings(updates: dict) -> dict:
     relevance = updates.get("email_relevance_min_score")
     if relevance is not None and not (0.0 <= relevance <= 1.0):
         raise ValueError("관련지식 임계치는 0.0 ~ 1.0 사이여야 합니다.")
+    pattern_threshold = updates.get("email_pattern_similarity_threshold")
+    if pattern_threshold is not None and not (0.0 <= pattern_threshold <= 1.0):
+        raise ValueError("반복 패턴 유사도 임계치는 0.0 ~ 1.0 사이여야 합니다.")
+    pattern_window = updates.get("email_pattern_window_days")
+    if pattern_window is not None and pattern_window < 1:
+        raise ValueError("반복 패턴 탐지 기간은 최소 1일 이상이어야 합니다.")
+    pattern_min_count = updates.get("email_pattern_min_count")
+    if pattern_min_count is not None and pattern_min_count < 2:
+        raise ValueError("반복 패턴 최소 건수는 2건 이상이어야 합니다.")
 
     async with get_conn() as conn:
         for key in _SETTINGS_KEYS:

@@ -1070,6 +1070,36 @@ async def _migrate_email_voc_tables(conn) -> None:
     # 게이팅을 추가하며 신설. 기존 설치본 대응.
     await conn.execute("ALTER TABLE ops_email_poll_cycle ADD COLUMN IF NOT EXISTS total_skipped_not_it INT NOT NULL DEFAULT 0")
 
+    # ── 반복 VOC 패턴 탐지(§ "IT와 무관한 불만도 너무 많이 온다" 피드백 이후,
+    # "반복되는 유형인지 감지해서 알려달라" 요구) ──────────────────────────────
+    # 관련성 게이트(check_relevance)가 이미 계산하는 임베딩을 그대로 저장해 재사용 —
+    # 지식 베이스 비교(기존)와 별개로 "과거 VOC와의 비교"에 재활용한다. LLM 호출
+    # 없이 pgvector 코사인 연산만으로 반복 여부를 판정하기 위한 컬럼/테이블이다.
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_voc_cluster (
+            id                      SERIAL PRIMARY KEY,
+            namespace_id            INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            representative_subject  TEXT NOT NULL DEFAULT '',
+            representative_embedding VECTOR(768),
+            member_count            INT NOT NULL DEFAULT 1,
+            first_seen_at           TIMESTAMPTZ NOT NULL,
+            last_seen_at            TIMESTAMPTZ NOT NULL,
+            notified_at             TIMESTAMPTZ,
+            created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_voc_cluster_ns ON ops_voc_cluster (namespace_id)")
+    await conn.execute("ALTER TABLE ops_email_analysis ADD COLUMN IF NOT EXISTS embedding VECTOR(768)")
+    await conn.execute(
+        "ALTER TABLE ops_email_analysis ADD COLUMN IF NOT EXISTS voc_cluster_id "
+        "INT REFERENCES ops_voc_cluster(id) ON DELETE SET NULL"
+    )
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_email_analysis_embedding_hnsw
+        ON ops_email_analysis USING hnsw (embedding vector_cosine_ops)
+        WITH (m = 16, ef_construction = 64)
+    """)
+
     # pipeline.list_history()의 ORDER BY COALESCE(received_at, created_at) DESC와
     # 컬럼이 정확히 일치해야 인덱스를 탄다 — (namespace_id, received_at) 단순 인덱스로는
     # 이 표현식 정렬에 못 쓰여 전체 정렬이 발생한다. 옛 인덱스는 대체하며 제거.
@@ -1090,6 +1120,16 @@ async def _migrate_email_voc_tables(conn) -> None:
         ('email_polling_interval_minutes', '5'),
         ('email_lookback_days', '7'),
         ('email_relevance_min_score', '0.38')
+        ON CONFLICT (key) DO NOTHING
+    """)
+    # 반복 패턴 탐지 임계치 — 실 VOC 데이터 시뮬레이션으로 검증한 값(§ 반복 VOC
+    # 패턴 탐지 설계 문서 참고). 0.90은 너무 엄격(거의 안 잡힘), 0.80은 너무 느슨
+    # (무관한 것끼리도 묶임) — 0.85/7일/3건이 노이즈 없이 진짜 반복 신호만 잡음.
+    await conn.execute("""
+        INSERT INTO ops_system_config (key, value) VALUES
+        ('email_pattern_similarity_threshold', '0.85'),
+        ('email_pattern_window_days', '7'),
+        ('email_pattern_min_count', '3')
         ON CONFLICT (key) DO NOTHING
     """)
     # email_graph_credentials 키는 값이 있을 때만 존재 — 미설정 상태를 "행 없음"으로 표현

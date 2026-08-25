@@ -30,6 +30,9 @@ class EmailCollectionSettingsOut(BaseModel):
     email_polling_interval_minutes: int
     email_lookback_days: int
     email_relevance_min_score: float
+    email_pattern_similarity_threshold: float
+    email_pattern_window_days: int
+    email_pattern_min_count: int
 
 
 class EmailCollectionSettingsUpdate(BaseModel):
@@ -37,6 +40,9 @@ class EmailCollectionSettingsUpdate(BaseModel):
     email_polling_interval_minutes: Optional[int] = None
     email_lookback_days: Optional[int] = None
     email_relevance_min_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    email_pattern_similarity_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    email_pattern_window_days: Optional[int] = Field(default=None, ge=1)
+    email_pattern_min_count: Optional[int] = Field(default=None, ge=2)
 
 
 class VocRoutingCreate(BaseModel):
@@ -238,3 +244,50 @@ class TeamsTestNotifyRequest(BaseModel):
     mismatch_flagged: bool = False
     resolution_draft: Optional[str] = None
     oncall_contact_name: Optional[str] = None
+
+
+# ─── 반복 VOC 패턴 탐지 + 유형 관리 대시보드 ─────────────────────────────────
+
+class CategoryCountOut(BaseModel):
+    category: Optional[str]
+    count: int
+
+
+class SeverityCountOut(BaseModel):
+    severity: Optional[str]
+    count: int
+
+
+class VocStatsOut(BaseModel):
+    """관리자 화면 "VOC 통계" 탭 — 유형(category)·심각도(severity) 분포."""
+    total: int
+    category_distribution: list[CategoryCountOut]
+    severity_distribution: list[SeverityCountOut]
+
+
+class VocClusterOut(BaseModel):
+    """반복 VOC 패턴 — pattern_detection.detect_and_update_cluster()가 누적한 클러스터.
+
+    has_knowledge_coverage: 이 반복 유형에 대한 해결방안(rag_knowledge)이 이미
+    등록돼 있는지 — 관리자가 "등록 필요"를 한눈에 파악하기 위함.
+    """
+    id: int
+    representative_subject: str
+    member_count: int
+    first_seen_at: datetime
+    last_seen_at: datetime
+    notified_at: Optional[datetime] = None
+    has_knowledge_coverage: bool
+    matched_knowledge_id: Optional[int] = None
+    matched_knowledge_snippet: Optional[str] = None
+    matched_knowledge_similarity: float = 0.0
+
+
+class VocClusterMemberOut(BaseModel):
+    id: int
+    subject: str
+    sender: str
+    category: Optional[str] = None
+    severity: Optional[str] = None
+    reasoning: Optional[str] = None
+    created_at: datetime

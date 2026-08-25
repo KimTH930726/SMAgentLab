@@ -11,7 +11,9 @@ from fastapi.responses import HTMLResponse
 
 from core.dependencies import get_current_user, check_namespace_ownership, get_current_admin
 from core.security import get_user_llm_credentials
-from service.email_voc import delegated_auth, service, teams_notify, routing_service, pipeline, scheduler, graph_client
+from service.email_voc import (
+    delegated_auth, service, teams_notify, routing_service, pipeline, scheduler, graph_client, pattern_detection,
+)
 from service.email_voc.schemas import (
     EmailAnalyzeRequest, EmailAnalysisOut, TeamsTestNotifyRequest,
     EmailCollectionSettingsOut, EmailCollectionSettingsUpdate,
@@ -20,6 +22,7 @@ from service.email_voc.schemas import (
     GraphCredentialsStatus, GraphCredentialsUpdate,
     DelegatedAuthConfig, DelegatedAuthStatus, DelegatedAuthStartResult,
     EmailAnalysisHistoryItem, PollCycleItem, SchedulerStatus, KnowledgeRefOut,
+    VocStatsOut, VocClusterOut, VocClusterMemberOut,
 )
 
 router = APIRouter(prefix="/api/email-voc", tags=["email-voc"])
@@ -238,6 +241,26 @@ async def get_knowledge_refs(
     except ValueError:
         raise HTTPException(status_code=400, detail="ids는 콤마로 구분된 숫자여야 합니다.")
     return await pipeline.get_knowledge_refs(namespace, knowledge_ids)
+
+
+# ─── VOC 유형 통계 + 반복 패턴 대시보드 ────────────────────────────────────
+
+@router.get("/stats", response_model=VocStatsOut)
+async def get_voc_stats(namespace: str, user: dict = Depends(get_current_user)):
+    await check_namespace_ownership(namespace, user)
+    return await pipeline.get_voc_stats(namespace)
+
+
+@router.get("/clusters", response_model=list[VocClusterOut])
+async def get_voc_clusters(namespace: str, user: dict = Depends(get_current_user)):
+    await check_namespace_ownership(namespace, user)
+    return await pattern_detection.list_clusters(namespace)
+
+
+@router.get("/clusters/{cluster_id}/members", response_model=list[VocClusterMemberOut])
+async def get_voc_cluster_members(cluster_id: int, namespace: str, user: dict = Depends(get_current_user)):
+    await check_namespace_ownership(namespace, user)
+    return await pattern_detection.get_cluster_members(namespace, cluster_id)
 
 
 # ─── 폴링 실시간 상태 + 사이클 이력 ────────────────────────────────────────

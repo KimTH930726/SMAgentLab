@@ -7,6 +7,9 @@ export interface EmailCollectionSettings {
   email_polling_interval_minutes: number;
   email_lookback_days: number;
   email_relevance_min_score: number;
+  email_pattern_similarity_threshold: number;
+  email_pattern_window_days: number;
+  email_pattern_min_count: number;
 }
 
 export async function getEmailCollectionSettings(): Promise<EmailCollectionSettings> {
@@ -304,4 +307,59 @@ export async function getSchedulerStatus(): Promise<SchedulerStatus> {
 
 export async function getPollCycles(limit = 20, offset = 0): Promise<PollCycleItem[]> {
   return apiFetch<PollCycleItem[]>(`/email-voc/poll-cycles?limit=${limit}&offset=${offset}`);
+}
+
+// ─── VOC 유형 통계 + 반복 패턴 대시보드 ─────────────────────────────────────
+
+export interface CategoryCount {
+  category: string | null;
+  count: number;
+}
+
+export interface SeverityCount {
+  severity: string | null;
+  count: number;
+}
+
+export interface VocStats {
+  total: number;
+  category_distribution: CategoryCount[];
+  severity_distribution: SeverityCount[];
+}
+
+export async function getVocStats(namespace: string): Promise<VocStats> {
+  return apiFetch<VocStats>(`/email-voc/stats?namespace=${encodeURIComponent(namespace)}`);
+}
+
+export interface VocCluster {
+  id: number;
+  representative_subject: string;
+  member_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  notified_at: string | null;
+  has_knowledge_coverage: boolean;
+  matched_knowledge_id: number | null;
+  matched_knowledge_snippet: string | null;
+  matched_knowledge_similarity: number;
+}
+
+export async function getVocClusters(namespace: string): Promise<VocCluster[]> {
+  return apiFetch<VocCluster[]>(`/email-voc/clusters?namespace=${encodeURIComponent(namespace)}`);
+}
+
+export interface VocClusterMember {
+  id: number;
+  subject: string;
+  sender: string;
+  category: string | null;
+  severity: string | null;
+  reasoning: string | null;
+  created_at: string;
+}
+
+export async function getVocClusterMembers(namespace: string, clusterId: number): Promise<VocClusterMember[]> {
+  return apiFetch<VocClusterMember[]>(
+    `/email-voc/clusters/${clusterId}/members?namespace=${encodeURIComponent(namespace)}`,
+  );
 }

@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Mail, Plus, Trash2, Pencil, X, Save, Send, FlaskConical, AlertCircle, Inbox, Route, PlayCircle, KeyRound, History as HistoryIcon, ChevronDown, ChevronRight } from 'lucide-react';
+import { Mail, Plus, Trash2, Pencil, X, Save, Send, FlaskConical, AlertCircle, Inbox, Route, PlayCircle, KeyRound, History as HistoryIcon, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react';
 import { clsx } from 'clsx';
 import {
   getEmailCollectionSettings, updateEmailCollectionSettings,
@@ -15,6 +15,7 @@ import {
   type EmailAnalysisHistoryItem, type PollCycleItem,
 } from '../../api/emailVoc';
 import { getNamespaces } from '../../api/namespaces';
+import { VocStatsPanel } from './VocStatsPanel';
 import { getAllParts } from '../../api/auth';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -26,24 +27,25 @@ const EMPTY_ROUTING_FORM: VocRoutingPayload = {
   mail_folder_id: '', mail_folder_name: '',
 };
 
-const SEVERITY_LABEL: Record<string, string> = { low: '낮음', medium: '보통', high: '높음', urgent: '긴급' };
+export const SEVERITY_LABEL: Record<string, string> = { low: '낮음', medium: '보통', high: '높음', urgent: '긴급' };
 // 4단계가 전부 구분되도록 — 기존엔 낮음/보통이 둘 다 slate, 높음/긴급이 둘 다 rose라
 // 사실상 2단계로만 보였음. Teams 카드(teams_notify.py의 _SEVERITY_COLOR)와 동일한
 // 단계(회색→청록→호박→빨강)로 맞춰서 어디서 봐도 같은 심각도가 같은 색으로 읽히게 한다.
 const SEVERITY_COLOR: Record<string, 'slate' | 'cyan' | 'amber' | 'rose'> = {
   low: 'slate', medium: 'cyan', high: 'amber', urgent: 'rose',
 };
-const CATEGORY_LABEL: Record<string, string> = {
+export const CATEGORY_LABEL: Record<string, string> = {
   system_error: '시스템 오류', user_mistake: '사용자 실수', uncertain: '판단 보류', not_it_related: 'IT 무관',
 };
 
-type VocSubTab = 'auth' | 'routing' | 'collect' | 'history' | 'analyze';
+type VocSubTab = 'auth' | 'routing' | 'collect' | 'history' | 'stats' | 'analyze';
 
 const SUB_TABS: { id: VocSubTab; label: string; icon: React.ReactNode }[] = [
   { id: 'auth', label: '1단계 · 로그인', icon: <KeyRound className="w-4 h-4" /> },
   { id: 'routing', label: '2단계 · 라우팅', icon: <Route className="w-4 h-4" /> },
   { id: 'collect', label: '3단계 · 폴링', icon: <Inbox className="w-4 h-4" /> },
   { id: 'history', label: '분석 이력', icon: <HistoryIcon className="w-4 h-4" /> },
+  { id: 'stats', label: 'VOC 통계', icon: <BarChart3 className="w-4 h-4" /> },
   { id: 'analyze', label: '분석·알림 테스트', icon: <FlaskConical className="w-4 h-4" /> },
 ];
 
@@ -90,7 +92,7 @@ const STATUS_LABEL: Record<string, string> = {
   skipped_relevance: '관련지식 부족(스킵)',
 };
 
-function formatRelative(iso: string | null): string {
+export function formatRelative(iso: string | null): string {
   if (!iso) return '-';
   const diffMs = Date.now() - new Date(iso).getTime();
   const diffSec = Math.round(diffMs / 1000);
@@ -736,6 +738,48 @@ export function VocEmailPanel() {
                 onBlur={(e) => {
                   const v = Number(e.target.value);
                   if (v >= 0 && v <= 1) settingsMutation.mutate({ email_relevance_min_score: v });
+                }}
+                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+              />
+            </label>
+
+            <label className="flex items-center gap-2 text-sm text-slate-300" title="과거 VOC와 이 유사도 이상이면 같은 반복 유형으로 묶습니다 — 실 데이터로 검증한 기본값 0.85">
+              반복 패턴 유사도(0~1)
+              <input
+                type="number" min={0} max={1} step={0.05}
+                defaultValue={settings?.email_pattern_similarity_threshold ?? 0.85}
+                key={`pattern-threshold-${settings?.email_pattern_similarity_threshold}`}
+                onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (v >= 0 && v <= 1) settingsMutation.mutate({ email_pattern_similarity_threshold: v });
+                }}
+                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+              />
+            </label>
+
+            <label className="flex items-center gap-2 text-sm text-slate-300" title="이 기간 안에 발생한 VOC끼리만 반복 여부를 비교합니다">
+              반복 판정 기간(일)
+              <input
+                type="number" min={1}
+                defaultValue={settings?.email_pattern_window_days ?? 7}
+                key={`pattern-window-${settings?.email_pattern_window_days}`}
+                onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (v >= 1) settingsMutation.mutate({ email_pattern_window_days: v });
+                }}
+                className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
+              />
+            </label>
+
+            <label className="flex items-center gap-2 text-sm text-slate-300" title="이 건수 이상 반복돼야 '반복 패턴 감지' Teams 알림을 발송합니다(이후 늘어나도 재알림 없음)">
+              반복 최소 건수
+              <input
+                type="number" min={2}
+                defaultValue={settings?.email_pattern_min_count ?? 3}
+                key={`pattern-mincount-${settings?.email_pattern_min_count}`}
+                onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (v >= 2) settingsMutation.mutate({ email_pattern_min_count: v });
                 }}
                 className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500"
               />
@@ -1411,6 +1455,8 @@ export function VocEmailPanel() {
           </Modal>
         </section>
       )}
+
+      {subTab === 'stats' && <VocStatsPanel namespace={selectedNs} />}
     </div>
   );
 }

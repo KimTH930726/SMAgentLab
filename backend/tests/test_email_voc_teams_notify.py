@@ -200,3 +200,28 @@ class TestBuildTeamsMessage:
             subject="", sender="s@example.com", part="p", analysis=_base_analysis(),
         )
         assert "(제목 없음)" in msg["text"]
+
+
+class TestBuildPatternAlertMessage:
+    """반복 VOC 패턴이 처음 임계치를 넘을 때 발송하는 별도 알림 — pattern_detection.py 참고."""
+
+    def test_includes_member_count_and_window(self):
+        msg = teams_notify.build_pattern_alert_message(
+            part="테스트", representative_subject="배달 오배송 불만", member_count=3,
+            sample_subjects=["배달 오배송 불만 A", "배달 오배송 불만 B"], window_days=7,
+        )
+        text = msg["text"]
+        assert "🔁 반복 패턴 감지" in text
+        assert "7일간" in text
+        assert "<b>3건</b>" in text
+        assert "테스트" in text
+        assert "배달 오배송 불만" in text
+        assert "배달 오배송 불만 A" in text
+
+    def test_html_special_chars_are_escaped(self):
+        msg = teams_notify.build_pattern_alert_message(
+            part="p", representative_subject="<script>alert(1)</script>", member_count=3,
+            sample_subjects=[], window_days=7,
+        )
+        assert "<script>alert(1)</script>" not in msg["text"]
+        assert "&lt;script&gt;" in msg["text"]

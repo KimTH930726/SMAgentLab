@@ -90,6 +90,9 @@ class TestGetSettings:
             "email_polling_interval_minutes": 5,
             "email_lookback_days": 7,
             "email_relevance_min_score": 0.38,
+            "email_pattern_similarity_threshold": 0.85,
+            "email_pattern_window_days": 7,
+            "email_pattern_min_count": 3,
         }
 
     @pytest.mark.asyncio

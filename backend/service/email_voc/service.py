@@ -32,6 +32,9 @@ class RelevanceCheck:
     results: list[RetrievalResult]
     context: str
     top_score: float
+    # 반복 VOC 패턴 탐지(pattern_detection.py)가 지식 베이스 비교와 별개로 과거
+    # VOC와도 비교할 때 재사용 — 이미 계산된 값을 그대로 넘겨 재임베딩하지 않는다.
+    query_vec: list[float]
 
 # ops_prompt(func_key='email_voc_analysis_system'/'email_voc_analysis_prompt')로
 # 관리자가 "시스템 설정 > 프롬프트 관리"에서 동적으로 수정 가능 — 아래는 DB에 값이
@@ -166,7 +169,9 @@ async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceC
     # 인용할 지식을 고르는 랭킹(knowledge_min_score 비교)에는 base_weight 부스팅이 계속
     # 유효하므로 그쪽은 final_score를 그대로 둔다.
     top_score = max((w_vector * r.v_score + w_keyword * r.k_score for r in results), default=0.0)
-    return RelevanceCheck(mapped_term=mapped_term, results=results, context=context, top_score=top_score)
+    return RelevanceCheck(
+        mapped_term=mapped_term, results=results, context=context, top_score=top_score, query_vec=query_vec,
+    )
 
 
 async def analyze_email(

@@ -56,6 +56,10 @@ def _esc(value: Optional[str]) -> str:
     return html.escape(value or "", quote=False)
 
 
+def _section_title(text: str) -> str:
+    return f'<h3 style="font-size:17px">{text}</h3>'
+
+
 def build_teams_message(
     *, subject: str, sender: str, part: str, analysis: dict,
     body: str = "", oncall_contact_name: Optional[str] = None,
@@ -107,9 +111,6 @@ def build_teams_message(
     header_color_style = f"color:{color};" if urgent else ""
     header_html = f'<h2 style="{header_color_style}font-size:22px">{header}</h2>{detail_list}'
 
-    def _section_title(text: str) -> str:
-        return f'<h3 style="font-size:17px">{text}</h3>'
-
     sections = [
         header_html,
         f"{_section_title('제목')}{_esc(subject) or '(제목 없음)'}",
@@ -151,6 +152,28 @@ def build_teams_message(
         sections.append(f"{_section_title('참고 지식(근거)')}<ul>{ref_items}</ul>")
 
     return {"text": f"<br>{_DIVIDER}<br>".join(sections)}
+
+
+def build_pattern_alert_message(
+    *, part: str, representative_subject: str, member_count: int,
+    sample_subjects: list[str], window_days: int,
+) -> dict:
+    """반복 VOC 패턴이 처음 임계치를 넘는 순간에만 발송하는 별도 알림(개별 VOC
+    알림과 다른 종류) — pattern_detection.py의 클러스터링 결과를 카드로 만든다.
+    같은 클러스터가 이후 더 늘어도 이 함수는 다시 호출되지 않는다(pipeline.py가
+    ops_voc_cluster.notified_at으로 1회만 트리거) — "멤버 하나당 알림 1번"이 되면
+    결국 매 건 알림으로 되돌아가 노이즈가 커지기 때문.
+    """
+    header_html = '<h2 style="color:#D97706;font-size:22px">🔁 반복 패턴 감지</h2>'
+    sample_items = "".join(f"<li>{_esc(s)}</li>" for s in sample_subjects)
+    body_html = (
+        f"{_section_title('요약')}"
+        f"최근 {window_days}일간 <b>{_esc(part)}</b> 담당 메일함에 유사한 VOC가 "
+        f"<b>{member_count}건</b> 반복 발생했습니다."
+        f"{_section_title('대표 제목')}{_esc(representative_subject)}"
+        f"{_section_title('최근 유사 사례')}<ul>{sample_items}</ul>"
+    )
+    return {"text": f"{header_html}<br>{_DIVIDER}<br>{body_html}"}
 
 
 async def send_teams_notification(webhook_url: str, message: dict) -> tuple[bool, Optional[str]]:

@@ -28,7 +28,7 @@ _backend_dir = Path(__file__).resolve().parent.parent
 # import하지 않기 때문. 여기서만 필요한 스텁을 미리 등록해준다.
 _email_voc_pkg = MagicMock()
 sys.modules["service.email_voc"] = _email_voc_pkg
-for _submod in ("delegated_auth", "graph_client", "routing_service", "teams_notify", "service"):
+for _submod in ("delegated_auth", "graph_client", "routing_service", "teams_notify", "service", "pattern_detection"):
     sys.modules[f"service.email_voc.{_submod}"] = MagicMock()
 
 _spec = _ilu.spec_from_file_location(
@@ -146,15 +146,25 @@ class TestRunManualCollectionCategoryGate:
         monkeypatch.setattr(pipeline.routing_service, "list_routing", AsyncMock(return_value=[_stub_routing_row()]))
         monkeypatch.setattr(
             pipeline.routing_service, "get_settings",
-            AsyncMock(return_value={"email_relevance_min_score": 0.3}),
+            AsyncMock(return_value={
+                "email_relevance_min_score": 0.3,
+                "email_pattern_similarity_threshold": 0.85,
+                "email_pattern_window_days": 7, "email_pattern_min_count": 3,
+            }),
         )
         monkeypatch.setattr(pipeline.graph_client, "fetch_messages", AsyncMock(return_value=[_stub_message()]))
         monkeypatch.setattr(pipeline, "_existing_message_ids", AsyncMock(return_value=set()))
         monkeypatch.setattr(pipeline, "_strip_forwarded_chain", lambda b: b)
         monkeypatch.setattr(
             pipeline, "check_relevance",
-            AsyncMock(return_value=SimpleNamespace(top_score=relevance_score, mapped_term=None, results=[], context="")),
+            AsyncMock(return_value=SimpleNamespace(
+                top_score=relevance_score, mapped_term=None, results=[], context="", query_vec=[0.1, 0.2],
+            )),
         )
+        # 반복 패턴 탐지는 별도 모듈(pattern_detection.py)이 자체 get_conn을 쓰므로
+        # patch_db의 fake conn과 무관 — 이 테스트 스위트의 관심사가 아니라 항상
+        # "신호 없음"으로 고정해 카테고리 게이팅 로직만 순수하게 검증한다.
+        monkeypatch.setattr(pipeline.pattern_detection, "detect_and_update_cluster", AsyncMock(return_value=None))
         monkeypatch.setattr(
             pipeline, "analyze_email",
             AsyncMock(return_value={
