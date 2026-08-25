@@ -62,11 +62,38 @@ class TestNormalizeSubject:
         assert pattern_detection._normalize_subject(None) == ""
 
 
+class TestWeightedAverageNormalize:
+    """centroid 점증 갱신 — 체이닝 방지 핵심 로직의 순수 함수 부분."""
+
+    def test_averages_and_renormalizes(self):
+        import numpy as np
+        existing = np.array([1.0, 0.0], dtype=np.float32)
+        result = pattern_detection._weighted_average_normalize(existing, 1, [0.0, 1.0])
+        assert result[0] == pytest.approx(0.7071, abs=1e-3)
+        assert result[1] == pytest.approx(0.7071, abs=1e-3)
+
+    def test_result_is_unit_length(self):
+        import numpy as np
+        existing = np.array([0.3, 0.4], dtype=np.float32)  # 이미 단위벡터(0.3²+0.4²=1)
+        result = pattern_detection._weighted_average_normalize(existing, 3, [0.6, 0.8])
+        norm = (result[0] ** 2 + result[1] ** 2) ** 0.5
+        assert norm == pytest.approx(1.0, abs=1e-4)
+
+    def test_heavier_existing_weight_pulls_result_toward_existing(self):
+        """멤버가 많은(가중치 큰) 클러스터일수록 새 벡터 하나가 centroid를 덜 흔들어야 한다."""
+        import numpy as np
+        existing = np.array([1.0, 0.0], dtype=np.float32)
+        light = pattern_detection._weighted_average_normalize(existing, 1, [0.0, 1.0])
+        heavy = pattern_detection._weighted_average_normalize(existing, 20, [0.0, 1.0])
+        assert heavy[0] > light[0]  # weight=20일 때 기존 방향(x축)에 더 가까움
+
+
 class TestDetectAndUpdateCluster:
     @pytest.mark.asyncio
     async def test_no_similar_candidates_returns_none(self, patch_db):
         conn, _ = patch_db
-        conn.fetch.return_value = []
+        conn.fetchrow.return_value = None  # 매칭되는 클러스터 없음
+        conn.fetch.return_value = []  # 매칭되는 단독 VOC도 없음
         result = await pattern_detection.detect_and_update_cluster(
             1, 100, "배달 지연 문의", [0.1, 0.2], _NOW, _SETTINGS,
         )
@@ -76,32 +103,49 @@ class TestDetectAndUpdateCluster:
     async def test_candidates_all_same_thread_returns_none(self, patch_db):
         """같은 스레드 답장뿐이면(정규화 제목 동일) 반복 발생으로 세지 않는다."""
         conn, _ = patch_db
+        conn.fetchrow.return_value = None  # 매칭되는 클러스터 없음
         conn.fetch.return_value = [
-            {"id": 1, "subject": "RE: 배달 지연 문의", "voc_cluster_id": None},
-            {"id": 2, "subject": "Re: RE: 배달 지연 문의", "voc_cluster_id": None},
+            {"id": 1, "subject": "RE: 배달 지연 문의", "embedding": "[0.1,0.2]"},
+            {"id": 2, "subject": "Re: RE: 배달 지연 문의", "embedding": "[0.1,0.2]"},
         ]
         result = await pattern_detection.detect_and_update_cluster(
             1, 100, "배달 지연 문의", [0.1, 0.2], _NOW, _SETTINGS,
         )
         assert result is None
-        conn.fetchrow.assert_not_awaited()
+        # 클러스터 매칭 실패 후 INSERT까지는 안 갔어야 함(후보가 전부 걸러졌으므로)
+        assert conn.fetchrow.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_creates_new_cluster_when_no_existing_cluster_id(self, patch_db):
+    async def test_thread_reply_within_matched_cluster_returns_none(self, patch_db):
+        """클러스터 centroid와는 유사해도, 그 클러스터 안에 같은 스레드 답장이
+        이미 있으면 새 발생으로 세지 않는다."""
         conn, _ = patch_db
-        conn.fetch.return_value = [
-            {"id": 1, "subject": "배달 오배송 불만", "voc_cluster_id": None},
-        ]
-        conn.fetchrow.return_value = {
-            "id": 55, "member_count": 2, "notified_at": None, "representative_subject": "배달 오배송 불만",
-        }
+        conn.fetchrow.return_value = {"id": 55, "member_count": 2, "representative_embedding": "[0.1,0.2]"}
+        conn.fetch.return_value = [{"subject": "RE: 배달 오배송 불만"}]
         result = await pattern_detection.detect_and_update_cluster(
-            1, 100, "배달이 잘못 왔어요", [0.1, 0.2], _NOW, _SETTINGS,
+            1, 100, "배달 오배송 불만", [0.1, 0.2], _NOW, _SETTINGS,
+        )
+        assert result is None
+        # UPDATE(합류)까지는 안 갔어야 함 — fetchrow가 클러스터 조회 1번만 호출됨
+        assert conn.fetchrow.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_creates_new_cluster_with_averaged_centroid(self, patch_db):
+        conn, _ = patch_db
+        conn.fetchrow.side_effect = [
+            None,  # 매칭되는 클러스터 없음
+            {"id": 55, "member_count": 2, "notified_at": None, "representative_subject": "배달 오배송 불만"},  # INSERT RETURNING
+        ]
+        conn.fetch.return_value = [
+            {"id": 1, "subject": "배달 오배송 불만", "embedding": "[1.0,0.0]"},
+        ]
+        result = await pattern_detection.detect_and_update_cluster(
+            1, 100, "배달이 잘못 왔어요", [0.0, 1.0], _NOW, _SETTINGS,
         )
         assert result["cluster_id"] == 55
         assert result["member_count"] == 2
         assert result["trigger"] is None  # min_count=3인데 아직 2건
-        insert_sql = conn.fetchrow.call_args_list[0].args[0]
+        insert_sql = conn.fetchrow.call_args_list[1].args[0]
         assert "INSERT INTO ops_voc_cluster" in insert_sql
         # 새 클러스터의 대표 건(가장 유사한 이전 건)에도 voc_cluster_id가 채워져야 함
         update_calls = [c.args for c in conn.execute.call_args_list]
@@ -109,33 +153,39 @@ class TestDetectAndUpdateCluster:
         assert any(args[1:] == (55, 100) for args in update_calls)
 
     @pytest.mark.asyncio
-    async def test_joins_existing_cluster(self, patch_db):
+    async def test_joins_existing_cluster_and_updates_centroid(self, patch_db):
         conn, _ = patch_db
-        conn.fetch.return_value = [
-            {"id": 1, "subject": "배달 오배송 불만", "voc_cluster_id": 55},
+        conn.fetchrow.side_effect = [
+            {"id": 55, "member_count": 2, "representative_embedding": "[1.0,0.0]"},  # 클러스터 조회
+            {"id": 55, "member_count": 3, "notified_at": None, "representative_subject": "배달 오배송 불만"},  # UPDATE RETURNING
         ]
-        conn.fetchrow.return_value = {
-            "id": 55, "member_count": 3, "notified_at": None, "representative_subject": "배달 오배송 불만",
-        }
+        conn.fetch.return_value = [{"subject": "배달 오배송 불만"}]  # 스레드 아님(제목 다름 취급 위해 아래 다른 제목 전달)
         result = await pattern_detection.detect_and_update_cluster(
-            1, 100, "배달이 또 잘못 왔어요", [0.1, 0.2], _NOW, _SETTINGS,
+            1, 100, "배달이 또 잘못 왔어요", [0.0, 1.0], _NOW, _SETTINGS,
         )
         assert result["cluster_id"] == 55
-        update_sql = conn.fetchrow.call_args_list[0].args[0]
-        assert "UPDATE ops_voc_cluster SET member_count = member_count + 1" in update_sql
+        update_sql = conn.fetchrow.call_args_list[1].args[0]
+        assert "UPDATE ops_voc_cluster" in update_sql
+        assert "member_count = member_count + 1" in update_sql
+        assert "representative_embedding = $3::vector" in update_sql
 
     @pytest.mark.asyncio
     async def test_trigger_fires_when_min_count_first_crossed(self, patch_db):
         conn, _ = patch_db
-        conn.fetch.return_value = [
-            {"id": 1, "subject": "배달 오배송 불만 A", "voc_cluster_id": 55},
-            {"id": 2, "subject": "배달 오배송 불만 B", "voc_cluster_id": 55},
+        conn.fetchrow.side_effect = [
+            {"id": 55, "member_count": 2, "representative_embedding": "[1.0,0.0]"},
+            {"id": 55, "member_count": 3, "notified_at": None, "representative_subject": "배달 오배송 불만"},
         ]
-        conn.fetchrow.return_value = {
-            "id": 55, "member_count": 3, "notified_at": None, "representative_subject": "배달 오배송 불만",
-        }
+        conn.fetch.side_effect = [
+            [{"subject": "배달 오배송 불만 X"}],  # 스레드 체크 — 다른 제목이라 안 걸림
+            [  # 트리거 시 샘플 조회
+                {"subject": "배달 오배송 불만"},
+                {"subject": "배달 오배송 불만 A"},
+                {"subject": "배달 오배송 불만 B"},
+            ],
+        ]
         result = await pattern_detection.detect_and_update_cluster(
-            1, 100, "배달이 또또 잘못 왔어요", [0.1, 0.2], _NOW, _SETTINGS,
+            1, 100, "배달이 또또 잘못 왔어요", [0.0, 1.0], _NOW, _SETTINGS,
         )
         assert result["trigger"] is not None
         assert result["trigger"]["member_count"] == 3
@@ -146,32 +196,36 @@ class TestDetectAndUpdateCluster:
     @pytest.mark.asyncio
     async def test_no_retrigger_once_already_notified(self, patch_db):
         conn, _ = patch_db
-        conn.fetch.return_value = [
-            {"id": 1, "subject": "배달 오배송 불만 A", "voc_cluster_id": 55},
+        conn.fetchrow.side_effect = [
+            {"id": 55, "member_count": 4, "representative_embedding": "[1.0,0.0]"},
+            {"id": 55, "member_count": 5, "notified_at": _NOW, "representative_subject": "배달 오배송 불만"},
         ]
-        conn.fetchrow.return_value = {
-            "id": 55, "member_count": 5, "notified_at": _NOW, "representative_subject": "배달 오배송 불만",
-        }
+        conn.fetch.return_value = [{"subject": "배달 오배송 불만 X"}]
         result = await pattern_detection.detect_and_update_cluster(
-            1, 100, "배달이 다섯번째로 잘못 왔어요", [0.1, 0.2], _NOW, _SETTINGS,
+            1, 100, "배달이 다섯번째로 잘못 왔어요", [0.0, 1.0], _NOW, _SETTINGS,
         )
         assert result["trigger"] is None
+        conn.fetch.assert_awaited_once()  # 이미 notified라 sample_rows 조회(2번째 fetch)까지 안 감
 
     @pytest.mark.asyncio
     async def test_sample_subjects_dedupes_and_excludes_representative(self, patch_db):
         """흔한 제목("[파손] 음료 쏟아짐 불만" 등)은 서로 다른 고객이 똑같이 쓰는 경우가
         많다 — 대표 제목과 겹치는 게 "다른 사례"로 다시 나열되면 헷갈린다는 실사용 피드백."""
         conn, _ = patch_db
-        conn.fetch.return_value = [
-            {"id": 1, "subject": "[파손] 음료 쏟아짐 불만", "voc_cluster_id": 55},  # 대표와 동일
-            {"id": 2, "subject": "[파손] 음료 쏟아짐 불만", "voc_cluster_id": 55},  # 위와 중복
-            {"id": 3, "subject": "뚜껑 열림", "voc_cluster_id": 55},
+        conn.fetchrow.side_effect = [
+            {"id": 55, "member_count": 3, "representative_embedding": "[1.0,0.0]"},
+            {"id": 55, "member_count": 4, "notified_at": None, "representative_subject": "[파손] 음료 쏟아짐 불만"},
         ]
-        conn.fetchrow.return_value = {
-            "id": 55, "member_count": 4, "notified_at": None, "representative_subject": "[파손] 음료 쏟아짐 불만",
-        }
+        conn.fetch.side_effect = [
+            [{"subject": "[파손] 음료 쏟아짐 불만 X"}],  # 스레드 체크
+            [
+                {"subject": "[파손] 음료 쏟아짐 불만"},  # 대표와 동일 — 제외돼야 함
+                {"subject": "[파손] 음료 쏟아짐 불만"},  # 중복 — 제외돼야 함
+                {"subject": "뚜껑 열림"},
+            ],
+        ]
         result = await pattern_detection.detect_and_update_cluster(
-            1, 100, "음료가 또 쏟아졌어요", [0.1, 0.2], _NOW, _SETTINGS,
+            1, 100, "음료가 또 쏟아졌어요", [0.0, 1.0], _NOW, _SETTINGS,
         )
         assert result["trigger"]["sample_subjects"] == ["뚜껑 열림"]
 

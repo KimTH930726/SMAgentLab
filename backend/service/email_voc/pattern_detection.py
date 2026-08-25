@@ -24,12 +24,22 @@ deduplication)를 조사한 결과, 이미 관련성 게이트(service.check_rel
 1회 발송한다(ops_voc_cluster.notified_at으로 가드) — 그 뒤로 같은 클러스터에
 멤버가 계속 늘어도 재알림하지 않는다(이력에는 계속 기록됨). "멤버 하나당
 알림 1번"이 되면 결국 매 건 알림으로 되돌아가 노이즈가 커지기 때문.
+
+체이닝 방지(2026-08-25): 처음엔 "클러스터 안 아무 멤버와 유사하면 합류"였는데,
+A~B, B~C, C~D처럼 사슬로 이어지면 A와 D가 실제로는 안 닮았는데도 같은
+클러스터에 묶이는 문제가 실 데이터에서 확인됐다(단일 링크 클러스터링의 전형적
+결함 — "배달 오배송 불만" 클러스터가 37건까지 불어나며 category가 뒤섞임).
+이제는 새 VOC를 "클러스터 전체의 대표(centroid)"와 비교해서 합류 여부를
+판단하고, 합류할 때마다 centroid를 점증 갱신(가중 평균 후 재정규화)한다 —
+클러스터가 커질수록 그 유형의 "평균적 의미"에서 벗어난 건 자연히 안 붙는다.
 """
 import json
 import logging
 import re
 from datetime import datetime, timedelta
 from typing import Optional
+
+import numpy as np
 
 from core.database import get_conn, resolve_namespace_id
 
@@ -70,14 +80,42 @@ def _normalize_subject(subject: str) -> str:
     return s.strip().lower()
 
 
+def _parse_vec(pgvector_text: str) -> np.ndarray:
+    """asyncpg가 pgvector 컬럼을 파이썬 list가 아니라 텍스트('[0.1,0.2,...]')로
+    반환하므로(코덱 미등록, 실측 확인) centroid 갱신처럼 파이썬에서 직접 벡터
+    연산을 해야 할 때 파싱이 필요하다."""
+    return np.array([float(x) for x in pgvector_text.strip("[]").split(",")], dtype=np.float32)
+
+
+def _weighted_average_normalize(existing: np.ndarray, existing_weight: int, new_vec: list[float]) -> list[float]:
+    """클러스터 대표 임베딩(centroid)을 멤버가 늘 때마다 점증적으로 갱신한다.
+
+    existing은 이미 정규화(단위벡터)된 이전 centroid — 원래 합(sum)을 따로
+    저장해두지 않으므로, "정규화 전 평균 크기가 대략 1"이라고 근사해
+    existing_weight를 곱해 합을 복원한 뒤 새 벡터를 더해 다시 평균·정규화한다
+    (온라인 k-means류 스트리밍 centroid 갱신에서 흔히 쓰는 근사). 여기서는
+    임계치 기반 유사도 비교에만 쓰이므로 이 정도 근사 오차는 문제되지 않는다.
+    """
+    approx_sum = existing * existing_weight + np.array(new_vec, dtype=np.float32)
+    mean = approx_sum / (existing_weight + 1)
+    norm = np.linalg.norm(mean)
+    if norm > 0:
+        mean = mean / norm
+    return mean.tolist()
+
+
 async def detect_and_update_cluster(
     ns_id: int, analysis_id: int, subject: str, embedding: list[float],
     occurred_at: datetime, settings: dict,
 ) -> Optional[dict]:
     """이 VOC를 기존 반복 클러스터에 합류시키거나, 조건이 맞으면 새 클러스터를 만든다.
 
+    합류 여부는 클러스터의 centroid(representative_embedding)와 비교해서
+    판단한다(모듈 docstring의 "체이닝 방지" 참고) — 개별 멤버가 아니라 클러스터
+    전체의 평균 의미와 비교해야 사슬처럼 안 닮은 것까지 묶이는 걸 막을 수 있다.
+
     Returns:
-        None — 반복 신호 없음(유사한 과거 VOC가 없거나 전부 같은 스레드 답장뿐).
+        None — 반복 신호 없음(유사한 클러스터/과거 VOC가 없거나 같은 스레드 답장뿐).
         {"cluster_id", "member_count", "trigger": dict | None} — trigger는 이번에
         처음 min_count를 넘겨 Teams 알림을 발송해야 하는 경우에만 채워진다.
     """
@@ -88,53 +126,75 @@ async def detect_and_update_cluster(
     window_start = occurred_at - timedelta(days=window_days)
 
     async with get_conn() as conn:
-        candidates = await conn.fetch(
+        best_cluster = await conn.fetchrow(
             """
-            SELECT id, subject, voc_cluster_id
-            FROM ops_email_analysis
-            WHERE namespace_id = $1 AND id != $2 AND embedding IS NOT NULL
-              AND created_at >= $3
-              AND 1 - (embedding <=> $4::vector) >= $5
-            ORDER BY embedding <=> $4::vector
+            SELECT id, member_count, representative_embedding
+            FROM ops_voc_cluster
+            WHERE namespace_id = $1 AND last_seen_at >= $2
+              AND 1 - (representative_embedding <=> $3::vector) >= $4
+            ORDER BY representative_embedding <=> $3::vector
+            LIMIT 1
             """,
-            ns_id, analysis_id, window_start, str(embedding), threshold,
+            ns_id, window_start, str(embedding), threshold,
         )
-        candidates = [c for c in candidates if _normalize_subject(c["subject"]) != norm_subject]
-        if not candidates:
-            return None
 
-        existing_cluster_id = next((c["voc_cluster_id"] for c in candidates if c["voc_cluster_id"]), None)
-        if existing_cluster_id is not None:
+        if best_cluster is not None:
+            member_rows = await conn.fetch(
+                "SELECT subject FROM ops_email_analysis WHERE voc_cluster_id = $1", best_cluster["id"],
+            )
+            if any(_normalize_subject(r["subject"]) == norm_subject for r in member_rows):
+                return None  # 같은 스레드 답장 — 반복 발생으로 세지 않음
+
+            new_centroid = _weighted_average_normalize(
+                _parse_vec(best_cluster["representative_embedding"]), best_cluster["member_count"], embedding,
+            )
             cluster = await conn.fetchrow(
                 """
-                UPDATE ops_voc_cluster SET member_count = member_count + 1, last_seen_at = $2
+                UPDATE ops_voc_cluster
+                SET member_count = member_count + 1, last_seen_at = $2, representative_embedding = $3::vector
                 WHERE id = $1
                 RETURNING id, member_count, notified_at, representative_subject
                 """,
-                existing_cluster_id, occurred_at,
+                best_cluster["id"], occurred_at, str(new_centroid),
+            )
+            await conn.execute(
+                "UPDATE ops_email_analysis SET voc_cluster_id = $1 WHERE id = $2", cluster["id"], analysis_id,
             )
         else:
-            # 신규 클러스터 — 가장 유사한 이전 건(candidates[0])과 함께 2건으로 시작
+            # 아직 클러스터가 없는 단독 VOC들과 비교해 새 클러스터를 만들지 판단
+            candidates = await conn.fetch(
+                """
+                SELECT id, subject, embedding
+                FROM ops_email_analysis
+                WHERE namespace_id = $1 AND id != $2 AND voc_cluster_id IS NULL AND embedding IS NOT NULL
+                  AND created_at >= $3
+                  AND 1 - (embedding <=> $4::vector) >= $5
+                ORDER BY embedding <=> $4::vector
+                """,
+                ns_id, analysis_id, window_start, str(embedding), threshold,
+            )
+            candidates = [c for c in candidates if _normalize_subject(c["subject"]) != norm_subject]
+            if not candidates:
+                return None
+
             best = candidates[0]
+            new_centroid = _weighted_average_normalize(_parse_vec(best["embedding"]), 1, embedding)
             cluster = await conn.fetchrow(
                 """
                 INSERT INTO ops_voc_cluster
                     (namespace_id, representative_subject, representative_embedding,
                      member_count, first_seen_at, last_seen_at)
-                VALUES ($1, $2, $3::vector, 2, $4, $5)
+                VALUES ($1, $2, $3::vector, 2, $4, $4)
                 RETURNING id, member_count, notified_at, representative_subject
                 """,
-                ns_id, best["subject"], str(embedding), occurred_at, occurred_at,
+                ns_id, best["subject"], str(new_centroid), occurred_at,
             )
             await conn.execute(
-                "UPDATE ops_email_analysis SET voc_cluster_id = $1 WHERE id = $2",
-                cluster["id"], best["id"],
+                "UPDATE ops_email_analysis SET voc_cluster_id = $1 WHERE id = $2", cluster["id"], best["id"],
             )
-
-        await conn.execute(
-            "UPDATE ops_email_analysis SET voc_cluster_id = $1 WHERE id = $2",
-            cluster["id"], analysis_id,
-        )
+            await conn.execute(
+                "UPDATE ops_email_analysis SET voc_cluster_id = $1 WHERE id = $2", cluster["id"], analysis_id,
+            )
 
         trigger = None
         if cluster["member_count"] >= min_count and cluster["notified_at"] is None:
@@ -143,8 +203,11 @@ async def detect_and_update_cluster(
             # 쓰는 경우가 실제로 많다 — 중복 제목을 그대로 나열하면 "똑같은 내용이
             # 두 번 반복 표시"된 것처럼 보여 혼란만 준다(실사용 피드백). 대표 제목과
             # 겹치는 것도 제외 — 이미 위에서 별도로 보여주므로.
+            sample_rows = await conn.fetch(
+                "SELECT subject FROM ops_email_analysis WHERE voc_cluster_id = $1 LIMIT 6", cluster["id"],
+            )
             unique_samples = list(dict.fromkeys(
-                c["subject"] for c in candidates if c["subject"] != cluster["representative_subject"]
+                r["subject"] for r in sample_rows if r["subject"] != cluster["representative_subject"]
             ))
             trigger = {
                 "member_count": cluster["member_count"],
