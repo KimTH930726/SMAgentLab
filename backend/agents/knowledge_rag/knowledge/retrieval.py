@@ -252,6 +252,23 @@ def build_fewshot_section(fewshots: list[dict]) -> str:
 
 
 def build_context(results: list[RetrievalResult]) -> str:
+    """관련지식 게이트(2026-08-25 실측 감사): 실 질의로그 103건을 재현해보니
+    resolved(실제 답변 성공)와 no_knowledge(지식 공백 판정) 두 그룹의 top score
+    분포가 거의 겹쳤다(중앙값 0.603 vs 0.610, 표본 39건). 순수 코사인 점수만으론
+    "진짜 관련 있는지"를 못 가른다는 게 VOC 커버리지 검증(pattern_detection.py
+    _verify_coverage_with_llm 참고)과 같은 근본 원인으로 재확인된 셈이다.
+
+    다만 VOC 커버리지와 달리 여기선 위험도가 다르다 — knowledge_min_score는
+    "컨텍스트에 포함할지"만 결정하고, 그 컨텍스트가 실제로 질문에 답이 되는지는
+    LLM이 답변을 생성하며 스스로 판단한다(no_knowledge 상태 자체도 LLM이 "관련
+    지식을 찾지 못했습니다"라고 답한 문구를 사후에 감지해 매긴다, v2.32) — 즉 이미
+    암묵적인 LLM 재확인 단계가 있어 VOC처럼 "검증이 아예 없는" 상태는 아니다.
+    실제 리스크는 무관한 문서가 컨텍스트에 섞여 LLM이 가끔 그럴듯하게 오답을 지어낼
+    가능성 쪽이라, VOC와 같은 명시적 LLM 재검증 게이트를 매 채팅 메시지마다 추가하는
+    것보다는(비용·지연 커짐) 이미 준비된 CrossEncoder 리랭커(reranker_enabled,
+    현재 huggingface.co 네트워크 제한으로 비활성) 도입을 기다리기로 결정함
+    (2026-08-25). 표본도 39건뿐이라 값 자체를 지금 조정하지 않음.
+    """
     th = get_thresholds()
     relevant = [r for r in results if r.final_score >= th["knowledge_min_score"]]
     if not relevant:

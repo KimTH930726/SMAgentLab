@@ -243,27 +243,129 @@ class TestDetectAndUpdateCluster:
         assert result["pattern_info"]["sample_subjects"] == ["뚜껑 열림"]
 
 
-class TestGetClusterCoverage:
+class TestVerifyCoverageWithLlm:
+    """get_cluster_coverage()/list_clusters()가 공유하는 LLM 검증 함수 자체의 단위 테스트."""
+
     @pytest.mark.asyncio
-    async def test_covered_when_similarity_above_threshold(self, patch_db):
+    async def test_true_when_llm_confirms_relevant(self, monkeypatch):
+        provider = MagicMock()
+        provider.generate_once = AsyncMock(return_value='{"is_relevant": true}')
+        monkeypatch.setattr(pattern_detection, "get_llm_provider", MagicMock(return_value=provider))
+        result = await pattern_detection._verify_coverage_with_llm("배달완료 제품 못받음", "재배송 처리 절차...")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_false_when_llm_rejects_relevant(self, monkeypatch):
+        provider = MagicMock()
+        provider.generate_once = AsyncMock(return_value='{"is_relevant": false}')
+        monkeypatch.setattr(pattern_detection, "get_llm_provider", MagicMock(return_value=provider))
+        result = await pattern_detection._verify_coverage_with_llm("배달완료 제품 못받음", "사이렌오더 결제 취소...")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_falls_back_to_not_covered(self, monkeypatch):
+        """오탐(허위로 커버됐다고 표시)이 미탐보다 위험하다는 기존 원칙 — 판단 불가 시 안전한 쪽(False)으로 접는다."""
+        provider = MagicMock()
+        provider.generate_once = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+        monkeypatch.setattr(pattern_detection, "get_llm_provider", MagicMock(return_value=provider))
+        result = await pattern_detection._verify_coverage_with_llm("배달완료 제품 못받음", "재배송 처리 절차...")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_falls_back_to_not_covered(self, monkeypatch):
+        provider = MagicMock()
+        provider.generate_once = AsyncMock(return_value="이건 JSON이 아님")
+        monkeypatch.setattr(pattern_detection, "get_llm_provider", MagicMock(return_value=provider))
+        result = await pattern_detection._verify_coverage_with_llm("배달완료 제품 못받음", "재배송 처리 절차...")
+        assert result is False
+
+
+class TestGetClusterCoverage:
+    """실측(2026-08-25): 순수 코사인 유사도만으론 무관한 지식(같은 CS 보일러플레이트
+    문구를 쓰는 다른 주제 문서)을 못 걸러내는 게 확인돼, 임계치를 넘긴 후보에 한해
+    LLM 검증(_verify_coverage_with_llm)을 한 번 더 거친다. 검증 결과는 (클러스터,
+    매칭된 지식 ID) 단위로 캐싱해 같은 매칭이 반복될 때 LLM을 다시 태우지 않는다."""
+
+    @pytest.mark.asyncio
+    async def test_covered_when_llm_confirms_relevance(self, patch_db, monkeypatch):
         conn, _ = patch_db
-        conn.fetchrow.return_value = {"knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차..."}
+        conn.fetchrow.return_value = {
+            "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": None, "coverage_verified": None,
+            "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차...", "content": "재배송 처리 절차 전문...",
+        }
+        llm_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
         result = await pattern_detection.get_cluster_coverage(1, 55)
         assert result == {"covered": True, "snippet": "재배송 처리 절차..."}
+        llm_mock.assert_awaited_once_with("배달완료 제품 못받음", "재배송 처리 절차 전문...")
+        # 검증 결과를 캐시에 써야 다음 호출에서 LLM을 재호출하지 않는다
+        cache_write = [c.args for c in conn.execute.call_args_list if "coverage_knowledge_id" in c.args[0]]
+        assert cache_write and cache_write[0][1:] == (55, 42, True)
 
     @pytest.mark.asyncio
-    async def test_not_covered_when_similarity_below_threshold(self, patch_db):
+    async def test_not_covered_when_llm_rejects_relevance(self, patch_db, monkeypatch):
+        """실사용 사례 재현 — 코사인 유사도(0.73)는 임계치를 넘었지만 실제로는 완전히
+        다른 주제(무관한 CS 보일러플레이트 문구만 겹침)라 LLM이 false로 판단하는 경우."""
         conn, _ = patch_db
-        conn.fetchrow.return_value = {"knowledge_id": 9, "similarity": 0.4, "snippet": "무관한 문서"}
+        conn.fetchrow.return_value = {
+            "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": None, "coverage_verified": None,
+            "knowledge_id": 19, "similarity": 0.73, "snippet": "사이렌오더 결제 취소...", "content": "사이렌오더 결제 취소 전문...",
+        }
+        monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", AsyncMock(return_value=False))
         result = await pattern_detection.get_cluster_coverage(1, 55)
         assert result == {"covered": False, "snippet": None}
 
     @pytest.mark.asyncio
-    async def test_no_matching_knowledge_at_all(self, patch_db):
+    async def test_not_covered_when_similarity_below_threshold_skips_llm(self, patch_db, monkeypatch):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {
+            "representative_subject": "배달 지연", "coverage_knowledge_id": None, "coverage_verified": None,
+            "knowledge_id": 9, "similarity": 0.4, "snippet": "무관한 문서", "content": "무관한 문서 전문",
+        }
+        llm_mock = AsyncMock()
+        monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
+        result = await pattern_detection.get_cluster_coverage(1, 55)
+        assert result == {"covered": False, "snippet": None}
+        llm_mock.assert_not_called()  # 1차 필터를 못 넘겼으니 LLM 비용을 쓸 이유가 없음
+
+    @pytest.mark.asyncio
+    async def test_no_matching_knowledge_at_all(self, patch_db, monkeypatch):
         conn, _ = patch_db
         conn.fetchrow.return_value = None
+        llm_mock = AsyncMock()
+        monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
         result = await pattern_detection.get_cluster_coverage(1, 55)
         assert result == {"covered": False, "snippet": None}
+        llm_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_skips_llm_when_same_knowledge_id_already_verified(self, patch_db, monkeypatch):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {
+            "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": 42, "coverage_verified": True,
+            "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차...", "content": "재배송 처리 절차 전문...",
+        }
+        llm_mock = AsyncMock()
+        monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
+        result = await pattern_detection.get_cluster_coverage(1, 55)
+        assert result == {"covered": True, "snippet": "재배송 처리 절차..."}
+        llm_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_when_matched_knowledge_id_changed(self, patch_db, monkeypatch):
+        """centroid가 갱신되며 최고 매칭이 바뀌면, 지난 캐시는 지금 매칭에 대한 답이
+        아니므로 재검증해야 한다 — notified_at 같은 시간 기반 1회성 가드가 아니라
+        '이 답이 아직도 지금 매칭에 대한 답인가'를 실제로 되묻는 조건이라는 게 다르다."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {
+            "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": 19, "coverage_verified": False,
+            "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차...", "content": "재배송 처리 절차 전문...",
+        }
+        llm_mock = AsyncMock(return_value=True)
+        monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
+        result = await pattern_detection.get_cluster_coverage(1, 55)
+        assert result == {"covered": True, "snippet": "재배송 처리 절차..."}
+        llm_mock.assert_awaited_once()
 
 
 class TestListClusters:
@@ -275,24 +377,28 @@ class TestListClusters:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_covered_and_uncovered_clusters(self, patch_db):
+    async def test_covered_and_uncovered_clusters(self, patch_db, monkeypatch):
         conn, _ = patch_db
         conn.fetch.return_value = [
             {
                 "id": 1, "representative_subject": "배달 오배송 불만", "member_count": 5,
                 "first_seen_at": _NOW, "last_seen_at": _NOW, "notified_at": _NOW,
-                "knowledge_id": 42, "similarity": 0.81, "snippet": "오배송 처리 절차...",
+                "coverage_knowledge_id": 42, "coverage_verified": True,  # 캐시 히트 — LLM 재호출 없음
+                "knowledge_id": 42, "similarity": 0.81, "snippet": "오배송 처리 절차...", "content": "오배송 처리 절차 전문...",
                 "primary_category": "system_error", "primary_severity": "high",
                 "category_breakdown": '[{"category": "system_error", "count": 5}]',
             },
             {
                 "id": 2, "representative_subject": "음료 쏟아짐", "member_count": 3,
                 "first_seen_at": _NOW, "last_seen_at": _NOW, "notified_at": None,
-                "knowledge_id": None, "similarity": None, "snippet": None,
+                "coverage_knowledge_id": None, "coverage_verified": None,
+                "knowledge_id": None, "similarity": None, "snippet": None, "content": None,
                 "primary_category": "not_it_related", "primary_severity": "medium",
                 "category_breakdown": None,
             },
         ]
+        llm_mock = AsyncMock()
+        monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
         result = await pattern_detection.list_clusters("ns")
         assert result[0]["has_knowledge_coverage"] is True
         assert result[0]["matched_knowledge_id"] == 42
@@ -301,6 +407,27 @@ class TestListClusters:
         assert result[1]["has_knowledge_coverage"] is False
         assert result[1]["matched_knowledge_id"] is None
         assert result[1]["category_breakdown"] == []
+        llm_mock.assert_not_called()  # 첫 행은 캐시 히트, 둘째 행은 similarity가 없어 1차 필터에서 걸러짐
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_triggers_llm_verification_once_per_cluster(self, patch_db, monkeypatch):
+        conn, _ = patch_db
+        conn.fetch.return_value = [
+            {
+                "id": 3, "representative_subject": "배달완료 제품 못받음", "member_count": 21,
+                "first_seen_at": _NOW, "last_seen_at": _NOW, "notified_at": _NOW,
+                "coverage_knowledge_id": None, "coverage_verified": None,
+                "knowledge_id": 19, "similarity": 0.73, "snippet": "사이렌오더...", "content": "사이렌오더 결제 취소 전문...",
+                "primary_category": "system_error", "primary_severity": "low",
+                "category_breakdown": '[{"category": "system_error", "count": 21}]',
+            },
+        ]
+        llm_mock = AsyncMock(return_value=False)  # 유사도는 넘었지만 실제론 무관한 매칭
+        monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
+        result = await pattern_detection.list_clusters("ns")
+        assert result[0]["has_knowledge_coverage"] is False
+        assert result[0]["matched_knowledge_id"] is None
+        llm_mock.assert_awaited_once()
 
 
 class TestGetClusterMembers:

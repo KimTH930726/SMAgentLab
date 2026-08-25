@@ -49,12 +49,18 @@ from typing import Optional
 import numpy as np
 
 from core.database import get_conn, resolve_namespace_id
+from service.llm.factory import get_llm_provider
+from shared.json_utils import parse_json_object
 
 logger = logging.getLogger(__name__)
 
 _REPLY_PREFIX_RE = re.compile(r"^\s*(re|fwd?|회신|답장|전달)\s*[:：]\s*", re.IGNORECASE)
-# rag_knowledge와 코사인 유사도가 이 이상이면 "이 반복 유형에 대한 해결방안이
-# 이미 등록돼 있다"로 판단한다.
+# rag_knowledge와 코사인 유사도가 이 이상인 후보만 "해결방안일 가능성이 있다"로 보고
+# LLM 검증(_verify_coverage_with_llm)까지 통과해야 최종적으로 "등록돼 있다"로 판단한다.
+# 즉 이 값은 최종 판정이 아니라 LLM 검증을 태울지 말지를 가르는 1차 필터다(2026-08-25
+# 추가 — 이 임계치 근처에서도 여전히 오탐이 실측으로 확인돼, 순수 코사인만으로는
+# 안전한 단일 컷오프가 존재하지 않는다는 게 재확인됐다. 아래 히스토리는 그 재확인
+# 이전, 코사인 단독 판정이던 시절의 캘리브레이션 기록이다).
 #
 # 실측 보정 히스토리(2026-08-25) — 두 번 틀렸다가 세 번째로 정착:
 # ① 처음 0.75: 실측 없이 "다른 임계치보다 엄격해야 한다"는 추측만으로 정함 —
@@ -234,24 +240,97 @@ async def detect_and_update_cluster(
     return {"cluster_id": cluster["id"], "member_count": cluster["member_count"], "pattern_info": pattern_info}
 
 
+async def _verify_coverage_with_llm(voc_subject: str, knowledge_content: str) -> bool:
+    """유사도 임계치를 넘긴 후보가 실제로 이 VOC 유형의 해결책이 맞는지 LLM으로 재확인.
+
+    실측(2026-08-25): 순수 코사인 유사도는 "같은 어휘를 쓴다"는 것만 감지하지 실제
+    의미적 관련성을 못 가른다 — 서로 다른 배송/파손/오배송 클러스터 7개가 전혀 무관한
+    "사이렌오더 결제 취소" 지식 문서와 정형화된 CS 보일러플레이트 문구("VOC를 접수하여
+    업무요청 드립니다" 등) 때문에 0.70~0.78 유사도로 매칭됨. 크로스인코더 리랭커가
+    정석 해법이지만 이 개발 환경은 huggingface.co 접근이 막혀 검증 못 한 상태(모듈
+    docstring상 별도 이슈)라, 이미 붙어 있는 LLM 프로바이더로 같은 역할(질의+후보를
+    함께 보고 "진짜 관련 있나"를 판단)을 대신하는 저비용 대체재로 채택했다.
+
+    호출 빈도: 클러스터·매칭된 지식 조합이 바뀔 때만 호출된다(get_cluster_coverage/
+    list_clusters의 캐싱 참고) — 이 함수 자체는 캐시를 모르므로 호출부가 책임진다.
+
+    실패/애매하면 False(미커버)로 접는다 — "오탐(허위로 커버됐다고 표시)이 미탐보다
+    위험하다"는 이 기능의 기존 원칙(모듈 상단 _COVERAGE_MIN_SIMILARITY 주석 참고)과
+    동일하게, 판단이 안 서면 안전한 쪽을 택한다.
+    """
+    prompt = (
+        "아래 VOC(사내 문의) 유형과 지식 문서 후보가 실제로 같은 문제를 다루는지 판단하세요.\n\n"
+        f"[VOC 유형]\n{voc_subject or '(제목 없음)'}\n\n"
+        f"[지식 문서 후보]\n{(knowledge_content or '')[:800]}\n\n"
+        '이 문서가 위 VOC 유형에 대한 실제 해결책/답변이 맞으면 true, 단순히 비슷한 단어를 '
+        '쓸 뿐 다른 주제(다른 문제·다른 처리 절차)면 false로, {"is_relevant": true 또는 false} '
+        "형식의 JSON으로만 답하세요."
+    )
+    try:
+        llm = get_llm_provider()
+        raw = await llm.generate_once(
+            prompt=prompt,
+            system="You judge whether a knowledge document actually answers a given VOC issue type. Respond with JSON only.",
+            max_tokens=50,
+        )
+        return parse_json_object(raw).get("is_relevant") is True
+    except Exception as e:
+        logger.warning("커버리지 LLM 검증 실패, 안전하게 미커버 처리: %s", e)
+        return False
+
+
+async def _resolve_coverage(conn, cluster_id: int, row) -> dict:
+    """코사인 유사도 사전필터 + LLM 검증 캐시를 함께 적용해 최종 커버리지를 판정한다.
+
+    row: representative_subject/coverage_knowledge_id/coverage_verified/knowledge_id/
+    similarity/snippet/content 컬럼을 담은 조회 결과 — get_cluster_coverage()와
+    list_clusters()가 동일한 컬럼 이름으로 셀렉트하므로 그대로 재사용한다(개별 필드를
+    8개씩 풀어서 넘기면 호출부가 순서를 헷갈리기 쉬워, 원본 Record를 그대로 넘기는 쪽을 택함).
+
+    캐시 무효화 조건은 "이번에 뽑힌 최고 매칭 지식 ID가 지난번 검증 때와 다른가"다 —
+    notified_at처럼 시간이 지나면 저절로 stale해지는 1회성 플래그가 아니라, 그 답이
+    아직도 최신 상황(대표 임베딩이 갱신되며 매칭이 바뀌었을 수 있음)에 대한 유효한
+    답인지를 실제로 되묻는 조건이라는 점이 다르다.
+    """
+    similarity = row["similarity"]
+    if similarity is None or similarity < _COVERAGE_MIN_SIMILARITY:
+        return {"covered": False, "snippet": None, "matched_knowledge_id": None, "similarity": similarity}
+
+    knowledge_id = row["knowledge_id"]
+    if row["coverage_knowledge_id"] == knowledge_id and row["coverage_verified"] is not None:
+        verified = row["coverage_verified"]
+    else:
+        verified = await _verify_coverage_with_llm(row["representative_subject"], row["content"])
+        await conn.execute(
+            "UPDATE ops_voc_cluster SET coverage_knowledge_id = $2, coverage_verified = $3 WHERE id = $1",
+            cluster_id, knowledge_id, verified,
+        )
+
+    return {
+        "covered": bool(verified),
+        "snippet": row["snippet"] if verified else None,
+        "matched_knowledge_id": knowledge_id if verified else None,
+        "similarity": similarity,
+    }
+
+
 async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
     """반복 패턴 Teams 알림 발송 시점에 그 클러스터의 해결방안 등록 여부를 확인.
 
-    list_clusters()의 LATERAL JOIN 커버리지 판정과 동일한 로직을 단일 클러스터에
-    대해서만 수행 — 트리거는 클러스터당 1번만 발생하므로 비용 문제 없음. "반복
-    발생했다"는 사실만 알리고 끝내면 받는 사람이 "그래서 뭘 어떻게 해야 하냐"를
+    "반복 발생했다"는 사실만 알리고 끝내면 받는 사람이 "그래서 뭘 어떻게 해야 하냐"를
     또 물어보게 된다는 게 실사용 피드백이라, 이미 등록된 해결방안이 있으면 카드에
     바로 보여주고 없으면 명시적으로 "없다"고 알린다.
     """
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
-            SELECT best.knowledge_id, best.similarity, best.snippet
+            SELECT c.representative_subject, c.coverage_knowledge_id, c.coverage_verified,
+                   best.knowledge_id, best.similarity, best.snippet, best.content
             FROM ops_voc_cluster c
             LEFT JOIN LATERAL (
                 SELECT k.id AS knowledge_id,
                        1 - (k.embedding <=> c.representative_embedding) AS similarity,
-                       LEFT(k.content, 200) AS snippet
+                       LEFT(k.content, 200) AS snippet, k.content
                 FROM rag_knowledge k
                 WHERE k.namespace_id = c.namespace_id
                   AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
@@ -262,10 +341,10 @@ async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
             """,
             cluster_id, ns_id,
         )
-    if row is None:
-        return {"covered": False, "snippet": None}
-    covered = row["similarity"] is not None and row["similarity"] >= _COVERAGE_MIN_SIMILARITY
-    return {"covered": covered, "snippet": row["snippet"] if covered else None}
+        if row is None:
+            return {"covered": False, "snippet": None}
+        result = await _resolve_coverage(conn, cluster_id, row)
+    return {"covered": result["covered"], "snippet": result["snippet"]}
 
 
 async def list_clusters(namespace: str) -> list[dict]:
@@ -275,11 +354,14 @@ async def list_clusters(namespace: str) -> list[dict]:
     (detect_and_update_cluster는 유사한 과거 건이 있을 때만 클러스터를 생성함)
     여기 나오는 건 전부 실제로 2건 이상 반복된 것들이다.
 
-    커버리지 판정을 LATERAL 서브쿼리로 DB 안에서 끝낸다 — asyncpg가 pgvector
-    컬럼을 파이썬 list가 아니라 텍스트 문자열('[0.1,0.2,...]')로 반환하므로
+    코사인 후보 선별(최고 매칭 1건)은 LATERAL 서브쿼리로 DB 안에서 끝낸다 — asyncpg가
+    pgvector 컬럼을 파이썬 list가 아니라 텍스트 문자열('[0.1,0.2,...]')로 반환하므로
     (이 코드베이스에 벡터 컬럼 codec이 등록돼 있지 않음, 실측 확인), 클러스터별로
-    벡터를 파이썬으로 꺼냈다가 다시 문자열로 넣는 왕복을 피하고 find_similar_
-    active_knowledge()와 동일한 비교를 SQL 레벨에서 그대로 수행한다.
+    벡터를 파이썬으로 꺼냈다가 다시 문자열로 넣는 왕복을 피한다. 다만 임계치를 넘긴
+    후보는 순수 코사인만으론 진짜 관련성을 못 가른다는 게 실측으로 확인돼(모듈 상단
+    _verify_coverage_with_llm 참고), 여기서도 get_cluster_coverage()와 동일한 LLM
+    검증 캐시를 거친다 — 캐시가 없는(처음 보는 매칭) 클러스터만 LLM을 새로 호출하므로
+    반복 조회에서는 대부분 캐시 히트로 끝난다.
     """
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
@@ -289,14 +371,15 @@ async def list_clusters(namespace: str) -> list[dict]:
             """
             SELECT c.id, c.representative_subject, c.member_count,
                    c.first_seen_at, c.last_seen_at, c.notified_at,
-                   best.knowledge_id, best.similarity, best.snippet,
+                   c.coverage_knowledge_id, c.coverage_verified,
+                   best.knowledge_id, best.similarity, best.snippet, best.content,
                    cat.primary_category, cat.breakdown AS category_breakdown,
                    sev.primary_severity
             FROM ops_voc_cluster c
             LEFT JOIN LATERAL (
                 SELECT k.id AS knowledge_id,
                        1 - (k.embedding <=> c.representative_embedding) AS similarity,
-                       LEFT(k.content, 100) AS snippet
+                       LEFT(k.content, 100) AS snippet, k.content
                 FROM rag_knowledge k
                 WHERE k.namespace_id = c.namespace_id
                   AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
@@ -329,21 +412,25 @@ async def list_clusters(namespace: str) -> list[dict]:
             ns_id,
         )
 
-    clusters = []
-    for r in rows:
-        covered = r["similarity"] is not None and r["similarity"] >= _COVERAGE_MIN_SIMILARITY
-        clusters.append({
-            "id": r["id"], "representative_subject": r["representative_subject"],
-            "member_count": r["member_count"], "first_seen_at": r["first_seen_at"],
-            "last_seen_at": r["last_seen_at"], "notified_at": r["notified_at"],
-            "has_knowledge_coverage": covered,
-            "matched_knowledge_id": r["knowledge_id"] if covered else None,
-            "matched_knowledge_snippet": r["snippet"] if covered else None,
-            "matched_knowledge_similarity": round(r["similarity"], 2) if r["similarity"] is not None else 0.0,
-            "primary_category": r["primary_category"],
-            "primary_severity": r["primary_severity"],
-            "category_breakdown": json.loads(r["category_breakdown"]) if r["category_breakdown"] else [],
-        })
+        # LLM 호출(캐시 미스 시)이 끼어들 수 있어 커버리지 판정은 배치 쿼리와 분리해
+        # 클러스터 하나씩 순차 처리한다 — 같은 커넥션으로 동시 쿼리를 던질 수 없어서다.
+        # 최초 1회(캐시가 비어 있을 때)만 클러스터 수만큼 LLM을 호출하고, 이후 조회는
+        # 대부분 캐시 히트라 빠르다.
+        clusters = []
+        for r in rows:
+            coverage = await _resolve_coverage(conn, r["id"], r)
+            clusters.append({
+                "id": r["id"], "representative_subject": r["representative_subject"],
+                "member_count": r["member_count"], "first_seen_at": r["first_seen_at"],
+                "last_seen_at": r["last_seen_at"], "notified_at": r["notified_at"],
+                "has_knowledge_coverage": coverage["covered"],
+                "matched_knowledge_id": coverage["matched_knowledge_id"],
+                "matched_knowledge_snippet": coverage["snippet"],
+                "matched_knowledge_similarity": round(r["similarity"], 2) if r["similarity"] is not None else 0.0,
+                "primary_category": r["primary_category"],
+                "primary_severity": r["primary_severity"],
+                "category_breakdown": json.loads(r["category_breakdown"]) if r["category_breakdown"] else [],
+            })
     return clusters
 
 

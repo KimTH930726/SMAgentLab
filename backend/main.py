@@ -1089,6 +1089,18 @@ async def _migrate_email_voc_tables(conn) -> None:
         )
     """)
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_voc_cluster_ns ON ops_voc_cluster (namespace_id)")
+    # 커버리지(해결방안 등록 여부) LLM 검증 캐시 — pattern_detection.get_cluster_coverage()
+    # 참고. 순수 코사인 유사도만으론 "같은 어휘를 쓰는 무관한 문서"(예: 서로 다른 배송
+    # 불만 클러스터 여러 개가 전혀 다른 주제인 "사이렌오더 결제 취소" 지식과 0.70~0.78
+    # 유사도로 매칭)를 못 가른다는 게 실측으로 확인돼(2026-08-25), 임계치를 넘긴 후보에
+    # 한해 LLM에게 "이게 진짜 이 VOC의 해결책이 맞는지" 1회 확인시킨다. 이 검증 결과를
+    # (클러스터, 매칭된 지식 ID) 단위로 캐싱해둬야 한다 — 캐싱이 없으면 min_count를 넘긴
+    # 이후 매 VOC 알림마다(2026-08-25 pattern_info 상시 표시 변경 이후) LLM을 다시 태우게
+    # 된다. coverage_knowledge_id가 매칭된 후보와 다를 때만(즉 대표 임베딩이 갱신되며
+    # 최고 매칭이 바뀌었을 때만) 재검증한다 — notified_at처럼 "1회성" 가드가 아니라
+    # "이 답이 아직도 최신 매칭에 대한 답인가"를 실제로 재확인하는 가드라는 점이 다르다.
+    await conn.execute("ALTER TABLE ops_voc_cluster ADD COLUMN IF NOT EXISTS coverage_knowledge_id INT")
+    await conn.execute("ALTER TABLE ops_voc_cluster ADD COLUMN IF NOT EXISTS coverage_verified BOOLEAN")
     await conn.execute("ALTER TABLE ops_email_analysis ADD COLUMN IF NOT EXISTS embedding VECTOR(768)")
     await conn.execute(
         "ALTER TABLE ops_email_analysis ADD COLUMN IF NOT EXISTS voc_cluster_id "
