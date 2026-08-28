@@ -48,10 +48,12 @@ def _mean_pool_normalize(vectors: list[list[float]]) -> list[float]:
 class EmbeddingService:
     _instance: "EmbeddingService | None" = None
     _model: SentenceTransformer | None = None
+    _lock: asyncio.Lock | None = None
 
     def __new__(cls) -> "EmbeddingService":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._lock = asyncio.Lock()
         return cls._instance
 
     def load(self) -> None:
@@ -62,16 +64,18 @@ class EmbeddingService:
 
     async def embed(self, text: str) -> list[float]:
         assert self._model is not None, "EmbeddingService.load() must be called first"
-        vec = await asyncio.get_running_loop().run_in_executor(
-            None, partial(self._model.encode, text, normalize_embeddings=True)
-        )
+        async with self._lock:
+            vec = await asyncio.get_running_loop().run_in_executor(
+                None, partial(self._model.encode, text, normalize_embeddings=True)
+            )
         return vec.tolist()
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         assert self._model is not None
-        vecs = await asyncio.get_running_loop().run_in_executor(
-            None, partial(self._model.encode, texts, normalize_embeddings=True)
-        )
+        async with self._lock:
+            vecs = await asyncio.get_running_loop().run_in_executor(
+                None, partial(self._model.encode, texts, normalize_embeddings=True)
+            )
         return [v.tolist() for v in vecs]
 
     async def embed_long(self, text: str) -> list[float]:
@@ -84,16 +88,31 @@ class EmbeddingService:
         하나만 받는 기존 인터페이스를 그대로 쓰므로 DB 조회 횟수는 늘지 않는다
         (임베딩 자체는 청크 수만큼 늘지만 짧은 텍스트라 로컬 CPU에서도 빠름).
         토큰 128개 이내인 짧은 텍스트는 청크가 1개뿐이라 embed()와 결과가 같다.
+
+        전체를 self._lock 하나로 감싼다(tokenizer.encode/decode 포함) — HuggingFace
+        fast tokenizer(Rust)는 GIL을 놓고 동작해, 이 메서드가 메인 이벤트루프
+        스레드에서 tokenizer.encode()를 부르는 동안 다른 임베딩 호출이 executor
+        스레드에서 같은 tokenizer 객체의 model.encode()를 동시에 건드리면
+        "RuntimeError: Already borrowed"로 죽는 게 실사용 중 확인됨(2026-08-27,
+        VOC 전체 재분석 중 234건 중 4건이 이 경합으로 이력에도 안 남고 조용히
+        유실됨). embed()/embed_batch()를 내부에서 또 부르면 락 재획득으로 교착
+        상태가 되므로, 여기서는 run_in_executor를 직접 호출한다.
         """
         assert self._model is not None, "EmbeddingService.load() must be called first"
-        tokenizer = self._model.tokenizer
-        token_ids = tokenizer.encode(text, add_special_tokens=False)
-        chunks = _chunk_token_ids(token_ids, _CHUNK_TOKENS, _MAX_CHUNKS)
-        if len(chunks) <= 1:
-            return await self.embed(text)
-        chunk_texts = [tokenizer.decode(c, skip_special_tokens=True) for c in chunks]
-        vectors = await self.embed_batch(chunk_texts)
-        return _mean_pool_normalize(vectors)
+        async with self._lock:
+            tokenizer = self._model.tokenizer
+            token_ids = tokenizer.encode(text, add_special_tokens=False)
+            chunks = _chunk_token_ids(token_ids, _CHUNK_TOKENS, _MAX_CHUNKS)
+            if len(chunks) <= 1:
+                vec = await asyncio.get_running_loop().run_in_executor(
+                    None, partial(self._model.encode, text, normalize_embeddings=True)
+                )
+                return vec.tolist()
+            chunk_texts = [tokenizer.decode(c, skip_special_tokens=True) for c in chunks]
+            vecs = await asyncio.get_running_loop().run_in_executor(
+                None, partial(self._model.encode, chunk_texts, normalize_embeddings=True)
+            )
+        return _mean_pool_normalize([v.tolist() for v in vecs])
 
 
 embedding_service = EmbeddingService()

@@ -71,12 +71,16 @@ def build_teams_message(
     Teams 커넥터 카드가 지원하는 표준 서식 태그(h1~h3/b/ul·li/blockquote/span
     style=color)로 최대한 시각적 구분을 준다.
 
-    pattern_info: 이 VOC가 반복 패턴 임계치를 방금 넘긴 경우에만 채워짐
-    ({"member_count", "window_days", "coverage"}, pattern_detection.py 참고).
-    처음엔 "🔁 반복 패턴 감지"를 완전히 별도의 Teams 메시지로 만들었으나, 실사용
-    피드백("두 개로 찢지 말고 하나의 흐름으로 녹여라 — 원래 하던 개별 VOC 발송에
-    유사도 패턴 체크를 결합한 파이프라인이어야 한다")에 따라 되돌림 — 개별 VOC
-    카드 하나에 반복 여부를 한 줄 얹고, 해결방안도 그 안에서 같이 보여준다.
+    pattern_info: 호출부(pipeline.py)가 "이번 건에서 실제로 반복 패턴 알림을 실을지"
+    이미 판단을 끝낸 뒤에만 채워서 넘긴다({"member_count", "window_days", "min_count",
+    "nth_detection", "coverage"}). min_count 미만(확정 전)이거나 min_count의 배수가
+    아닌 건은 pipeline.py가 애초에
+    Teams 발송 자체를 하지 않으므로(2026-08-27 — 매 건 알림이 노이즈였다는 실사용
+    피드백) 이 함수는 "표시할지 말지"가 아니라 "이미 표시하기로 정해진 걸 어떻게
+    그릴지"만 담당한다. 처음엔 "🔁 반복 패턴 감지"를 완전히 별도의 Teams 메시지로
+    만들었으나, 실사용 피드백("두 개로 찢지 말고 하나의 흐름으로 녹여라")에 따라
+    개별 VOC 카드 하나에 반복 여부를 한 줄 얹고, 해결방안도 그 안에서 같이 보여주는
+    지금 방식으로 되돌렸다.
     """
     severity = analysis.get("severity", "low")
     category = analysis.get("category", "uncertain")
@@ -112,10 +116,14 @@ def build_teams_message(
     if pattern_info:
         # #D97706(high 심각도)이나 #DC2626(urgent/오배치)과 겹치면 "심각도 신호"로
         # 오인될 수 있어 — 반복 여부는 심각도와 무관한 별개 정보라 앱 강조색(indigo,
-        # CLAUDE.md 팔레트)을 대신 쓴다.
+        # CLAUDE.md 팔레트)을 대신 쓴다. min_count의 배수마다만 이 알림이 뜨므로
+        # (pipeline.py 참고), "몇 건마다 몇 번째로 감지된 알림인지"를 같이 보여줘야
+        # 관리자가 설정한 배수 조건이 실제로 몇 번 발동했는지 카드만 보고 알 수 있다
+        # (2026-08-27, 실사용 피드백 — 원본 건수만으론 "3건마다"라는 기준이 안 보임).
         detail_items.append(
             f'<span style="color:#6366F1"><b>🔁 반복 패턴</b></span> — 최근 {pattern_info["window_days"]}일간 '
-            f'유사한 VOC {pattern_info["member_count"]}건째 발생'
+            f'유사한 VOC {pattern_info["member_count"]}건째 발생 '
+            f'({pattern_info["min_count"]}건마다 감지 · {pattern_info["nth_detection"]}번째 감지)'
         )
     if urgent and oncall_contact_name:
         detail_items.append(f"온콜 담당자: {_esc(oncall_contact_name)} — 필요 시 직접 전화 부탁드립니다")

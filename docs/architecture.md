@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.47)
+# Ops-Navigator 시스템 아키텍처 (v2.49)
 
 ## 개요
 
@@ -6,6 +6,8 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.49: 3건 개선 — ① **VOC 반복 클러스터링용 정규화 임베딩(`issue_signature`)**: 실측 중 "앱 로그인이 안 돼요"/"로그인 오류 문의드립니다"/"로그인 시 500에러 발생"처럼 같은 이슈의 다른 표현이 원문 임베딩으로는 0.85 임계값을 못 넘어 클러스터링에 실패하는 사례가 확인됨. `analyze_email()`의 LLM 응답에 정규화된 짧은 이슈 요약(`issue_signature`, 예: "로그인 500 에러")을 추가로 출력시키고, `pipeline.py`가 반복 패턴 비교(`detect_and_update_cluster`)에는 이 정규화 임베딩을 쓰고 지식 검색(RAG)에는 기존 원문 임베딩(`relevance.query_vec`)을 그대로 쓰도록 분리 — "정밀 매칭(장애 원인 분석)엔 문맥을 보존한 원문이, 표현 차이를 넘어선 그룹핑(반복 유형 탐지)엔 정규화가 유리하다"는 판단 기준에 따른 용도별 임베딩 이원화(`issue_signature`가 없으면 원문 임베딩으로 폴백). 실 데이터로 3개 패러프레이즈가 모두 동일 클러스터로 묶이는 것을 확인. ② **임베딩 서비스 동시성 버그 수정**: 5-way 동시 실행 전체 재분석 중 234건 중 4건이 이력 없이 조용히 유실되는 문제가 발견됨 — `RuntimeError: Already borrowed`(HuggingFace fast tokenizer가 GIL을 놓는 Rust 구현이라, `embed_long()`의 메인 이벤트루프 `tokenizer.encode()` 호출과 `embed()`/`embed_batch()`의 executor 스레드 `model.encode()` 호출이 동시에 같은 토크나이저/모델 인스턴스를 건드리며 발생)가 원인. `EmbeddingService`에 `asyncio.Lock` 1개를 추가해 세 메서드의 실제 모델/토크나이저 접근을 전부 그 락으로 감싸 해결(`embed_long()`은 락 재획득으로 인한 교착을 피하려 `embed()`/`embed_batch()`를 내부 호출하지 않고 `run_in_executor`를 직접 호출). 50콜 동시성 스트레스 테스트로 검증. ③ **`rag_knowledge` 카테고리 기반 검색 라우팅**: `category IN ('DB','공통코드')`가 전체 지식의 88%를 차지하는데, 이 카테고리는 코드표를 그대로 덤프한 구조화 데이터라 코사인 유사도로 비교하면 어휘만 겹쳐도 오탐이 나는 것이 실측 확인됨(VOC 커버리지 판정에서 무관한 배송 클러스터가 "사이렌오더 결제 취소" 공통코드 문서와 매칭). 질의 의도를 분류하는 게 아니라 **이미 등록된 지식 행의 category 값**으로 판단 — `retrieval.py`에 `_KEYWORD_ONLY_CATEGORIES=("DB","공통코드")` 상수 추가, `search_knowledge()`의 `final_score` 산식을 해당 카테고리는 벡터 점수를 0으로 만들고 키워드(RDB 텍스트) 점수만으로 랭킹하도록 CASE 분기(admin 설정으로 노출하지 않고 모듈 상수로 하드코딩 — 등록 시점 고정값이라 런타임 조정 필요성이 낮고, 기존 few-shot 승인 큐처럼 안 쓰이는 admin 설정 표면을 늘리지 않으려는 판단). `pattern_detection.py`의 `get_cluster_coverage()`/`list_clusters()`도 동일 카테고리를 후보에서 제외(NULL 카테고리는 실수로 함께 제외되지 않도록 `category IS NULL OR category != ALL(...)`로 처리). 실 데이터로 검증: DB/공통코드 카테고리 행은 벡터 유사도가 높아도(`v_score` 0.65+) `final_score`가 키워드 점수만 반영해 낮게(0.10대) 나오는 것을 확인. 상세 설계 논의: `docs/tech/knowledge-lifecycle-design.md`.
+- v2.48: VOC Teams 발송 게이트 통합 — 명시적 피드백("게이트가 나뉘어져있으면 안 된다, 반복 게이트일 때만 팀즈를 보내고 형식은 기존 개별 VOC 카드에 반복 정보를 얹어라")에 따라 발송 여부 판단 지점을 "반복 패턴 확정" 하나로 완전히 합쳤다. v2.40부터 유지되던 "관련지식 임계치+not_it_related만 넘으면 카테고리·심각도 무관하게 항상 발송"(§10) 원칙이 폐기됨 — 이제 클러스터가 없는(반복이 아닌) 단독 VOC는 발송하지 않고, 클러스터가 있어도 `email_pattern_min_count` 채우기 전엔 발송 안 함, 채운 뒤로는 그 배수(3/6/9건째 등)에서만 발송한다(건마다 계속 보내던 v2.47 방식은 노이즈가 컸음). `pattern_info`에 `min_count`/`nth_detection`(몇 번째 배수 감지인지)을 추가해 "🔁 반복 패턴 — N건째 발생 (M건마다 감지 · K번째 감지)" 형태로 카드에 표시. 카드 포맷 자체는 새로 안 만들고 기존 `build_teams_message()`를 그대로 재사용(반복 정보는 그 안의 한 줄일 뿐). 부수적으로 `pattern_detection.detect_and_update_cluster()`가 이제 아무도 안 읽는 `pattern_info`(대표/샘플 제목) 계산을 위해 매 건마다 불필요한 DB 쿼리를 날리고 있던 게 자체 점검 중 발견돼 제거(성능 개선). 실 프로덕션 메일함으로 재현 검증 완료(최근 90건 분석기록을 초기화 후 재수집 → 클러스터 48건이 원래 17개 클러스터로 정확히 복원, 카테고리 게이트로 걸러지지 않은 단독 VOC 1건만 옛 로직으로 발송된 것을 확인 후 이번 변경으로 그 케이스도 막힘 확인).
 - v2.47: VOC 반복 패턴 탐지 + 통계 대시보드 신규 — `service/email_voc/pattern_detection.py` 추가. `service.check_relevance()`가 이미 계산하는 임베딩(`RelevanceCheck.query_vec`)을 그대로 저장·재사용해(`ops_email_analysis.embedding`), 지식 베이스 비교(기존)와 별개로 **과거 VOC와의 비교**를 pgvector 코사인 연산만으로 수행 — 추가 LLM 호출 없이 반복 유형을 감지한다. 새 VOC는 클러스터의 개별 멤버가 아니라 **centroid(대표 임베딩, 점증 가중평균 갱신)**와 비교해 합류 여부를 판단(단일 링크 클러스터링의 사슬형 오분류 방지). 유사 건이 `email_pattern_window_days`(7일) 내 `email_pattern_min_count`(3건) 이상 쌓이면, 별도 Teams 메시지를 만들지 않고 이미 발송 중인 개별 VOC 카드에 "🔁 반복 패턴" 한 줄 + 해결방안(있으면)을 얹는다(min_count를 넘긴 이후 모든 건에 매번 표시 — 최초 1건만 표시하면 후속 발생에서 반복 맥락이 안 보이는 문제가 실사용 중 발견돼 변경). 해결방안 존재 여부(`get_cluster_coverage`)는 `rag_knowledge`와의 코사인 유사도 1차 필터(`_COVERAGE_MIN_SIMILARITY=0.70`) 통과 후 **LLM 재검증**까지 거친다 — 순수 코사인 유사도는 무관한 문서가 CS 보일러플레이트 문구만으로 임계치를 넘는 오탐을 못 막는다는 게 실측으로 확인돼(같은 유사도 대역에 몰려 있어 임계치 조정만으로는 해결 불가), 크로스인코더 리랭커(huggingface.co 접근 제한으로 보류 중) 대신 기존 LLM 프로바이더로 "이 문서가 실제로 이 VOC 유형의 해결책이 맞는지" 1회 확인한다. 검증 결과는 `ops_voc_cluster.coverage_knowledge_id`/`coverage_verified`에 캐싱해 매칭된 지식이 바뀔 때만 재호출. 관리자 화면에 "VOC 통계" 탭 신규 — 유형/심각도 분포 도넛차트(클릭 시 클러스터 목록 필터링), 반복 클러스터 목록(페이징, 클러스터 내 category 불일치 경고), 클러스터에서 바로 지식 등록. 상세: `docs/tech/voc-email-handoff.md`.
 - v2.46: VOC 이메일 — 인하우스 LLM 게이트웨이가 프롬프트에 IP·이메일·전화번호가 섞이면 "민감 정보 포함"으로 응답을 통째로 거부하는 정책이 실사용 중 확인됨(호스트 IP·CC 목록·서명란 연락처가 거의 모든 실 메일에 있어, 사실상 대부분의 메일이 분석되지 못하던 상태). `service.py`에 `_mask_pii()` 추가 — LLM 프롬프트에 넣기 직전에만 IP/이메일/전화번호를 마스킹(DB 저장·Teams 알림은 원본 유지). 아울러 관련성 게이트 개선안으로 `shared/reranker.py`(기존 chat 전용 CrossEncoder 리랭커)에 점수 노출용 `score()`/`is_available()`을 추가해뒀으나, 이 개발 환경은 huggingface.co 접속이 막혀 모델을 못 받아 게이트 연동·실측은 보류(상세: `docs/tech/voc-email-handoff.md` §7-11, §7-12, git 비추적).
 - v2.45: VOC 이메일 관련지식 필터 무력화 버그 수정 — `retrieval.search_knowledge()`가 반환하는 `final_score`는 검색 랭킹용으로 `(가중합)*(1+base_weight)`가 곱해져 있는데(base_weight 기본값 1.0), `service.check_relevance()`가 이 부풀려진 값을 그대로 관련성 게이트(`email_relevance_min_score`)와 비교해와 무관한 메일도 임계치를 가볍게 넘어 Teams 알림 노이즈를 유발하던 것이 실사용 중 확인됨. 게이트 판단은 base_weight 부스팅 없는 원점수(`w_vector*v_score + w_keyword*k_score`)로 계산하도록 수정(지식 인용 랭킹은 기존 `final_score` 유지 — 목적이 다른 두 계산을 분리). 실측 재조정으로 임계치 0.35 → 0.38.
@@ -114,7 +116,7 @@ backend/
 │   ├── base.py          #   AgentBase 추상 클래스 + AgentRegistry 싱글톤
 │   ├── knowledge_rag/
 │   │   ├── agent.py     #   KnowledgeRagAgent — 하이브리드 검색 + LLM 스트리밍
-│   │   ├── knowledge/   #   지식/용어집 CRUD + 하이브리드 검색 (retrieval.py)
+│   │   ├── knowledge/   #   지식/용어집 CRUD + 하이브리드 검색 (retrieval.py, DB/공통코드 카테고리는 벡터 점수 0 처리 v2.49)
 │   │   ├── ingestion/   #   지식 인제스천 파이프라인 (Tier 1~3)
 │   │   │   ├── adapters.py      #   파일 파싱 (.txt/.md/.pdf → ParsedDocument)
 │   │   │   ├── chunker.py       #   청킹 엔진 (section/paragraph/fixed/auto)
@@ -142,8 +144,8 @@ backend/
 │   ├── llm/             #   LLM Provider 추상화 (ollama / inhouse)
 │   └── email_voc/       #   VOC 이메일 분석 채널 (v2.40 신규)
 │       ├── graph_client.py    #   Microsoft Graph API 클라이언트 (msal 토큰 발급, 메일 조회, 페이지네이션/재시도)
-│       ├── service.py         #   check_relevance()(관련지식 사전 필터, v2.41) + analyze_email() — 기존 RAG 파이프라인 재사용 분류/심각도/오배치 판정
-│       ├── pattern_detection.py #   반복 VOC 클러스터링(centroid 기반, LLM 호출 없음) + 커버리지 LLM 검증 게이트 (v2.47 신규)
+│       ├── service.py         #   check_relevance()(관련지식 사전 필터, v2.41) + analyze_email() — 기존 RAG 파이프라인 재사용 분류/심각도/오배치 판정 + issue_signature(정규화 이슈요약) 출력 (v2.49)
+│       ├── pattern_detection.py #   반복 VOC 클러스터링(centroid 기반, issue_signature 임베딩 비교, LLM 호출 없음) + 커버리지 LLM 검증 게이트(DB/공통코드 카테고리 제외, v2.49) (v2.47 신규)
 │       ├── pipeline.py        #   수집→관련지식필터→분석→반복패턴탐지→중복제거→알림 오케스트레이션, 이력 조회
 │       ├── routing_service.py #   파트별 메일함 라우팅 CRUD, 폴링 설정(관련지식 임계치 포함), Graph 자격증명(Fernet 암호화) CRUD
 │       ├── delegated_auth.py  #   Delegated Permission 로그인 상태 관리 (Authorization Code Flow/PKCE, v2.41 신규·v2.42 인증방식 교체)
@@ -297,6 +299,8 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 
 - Docker 빌드 시 이미지에 모델 사전 다운로드 (컨테이너 시작 지연 없음)
 - `normalize_embeddings=True` 적용 → 코사인 유사도 = 내적
+- `EmbeddingService`는 `asyncio.Lock` 1개로 `embed()`/`embed_batch()`/`embed_long()`의 모델·토크나이저 접근을 직렬화(v2.49) — HuggingFace fast tokenizer(Rust, GIL 해제)가 동시 요청 시 내부 상태가 깨지는 `RuntimeError: Already borrowed`를 동시성 부하 실측 중 확인해 추가
+- 같은 텍스트라도 **용도에 따라 다른 임베딩을 쓰는 경우가 있다**(v2.49) — VOC는 지식 검색(RAG)엔 원문 임베딩을, 반복 유형 클러스터링엔 LLM이 뽑은 정규화 요약(`issue_signature`)의 임베딩을 쓴다: 정밀 매칭은 문맥 보존이 유리하고, 표현 차이를 넘어선 그룹핑은 정규화가 유리하다는 기준
 
 ---
 
@@ -479,7 +483,7 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 
 `GET /api/email-voc/history`는 `severity`/`status`/`mismatch_only`/`keyword` 쿼리 파라미터로 필터링 가능(v2.44, keyword는 제목/발신자/본문 `ILIKE` 검색).
 
-**수집 흐름 요약**: 백그라운드 스케줄러(`asyncio.create_task`, lifespan 등록)가 `email_polling_interval_minutes` 주기로 활성 라우팅 메일함을 Graph API로 조회(`mail_folder_id` 지정 시 그 폴더만, v2.44) → `check_relevance()`로 등록된 지식과의 최고 유사도 계산(base_weight 랭킹 부스팅이 섞이지 않은 원점수 기준, v2.45) → `email_relevance_min_score`(기본 0.38, v2.45에 0.35에서 재조정) 미만이면 LLM 호출 없이 `skipped_relevance`로 기록 후 다음 메일로(v2.41) → 이상이면 기존 하이브리드 검색+LLM 파이프라인 재사용해 분류(system_error/user_mistake/uncertain)·심각도·오배치 판정(LLM 프롬프트에 넣기 직전 IP/이메일/전화번호는 마스킹 — 인하우스 LLM 게이트웨이가 이런 패턴 포함 시 응답을 통째로 거부하는 정책이 있어 대응, v2.46) → `pattern_detection.detect_and_update_cluster()`로 반복 유형 클러스터링(category 무관하게 항상 수행 — 통계 화면 정확도용, v2.47) → `source_message_id` UNIQUE 제약으로 중복 스킵(fetch 직후 배치 사전 체크로 이미 처리된 메일은 관련지식 검색·LLM 분석 자체를 건너뜀, v2.43) → 담당 파트 Teams 채널에 Workflows 웹훅으로 알림(제목/내용/해결방안/참고지식 근거 섹션 구조화, 심각도별 4단계 색상, v2.44 — 반복 패턴 임계치를 넘긴 경우 "🔁 반복 패턴" 한 줄 + 해결방안 추가, v2.47 — 자동 전화는 없음, 온콜 담당자명만 멘션). `ops_email_analysis`/`ops_email_poll_cycle`은 30일 고정 보관정책으로 자동 정리됨.
+**수집 흐름 요약**: 백그라운드 스케줄러(`asyncio.create_task`, lifespan 등록)가 `email_polling_interval_minutes` 주기로 활성 라우팅 메일함을 Graph API로 조회(`mail_folder_id` 지정 시 그 폴더만, v2.44) → `check_relevance()`로 등록된 지식과의 최고 유사도 계산(base_weight 랭킹 부스팅이 섞이지 않은 원점수 기준, v2.45) → `email_relevance_min_score`(기본 0.38, v2.45에 0.35에서 재조정) 미만이면 LLM 호출 없이 `skipped_relevance`로 기록 후 다음 메일로(v2.41) → 이상이면 기존 하이브리드 검색+LLM 파이프라인 재사용해 분류(system_error/user_mistake/uncertain)·심각도·오배치 판정(LLM 프롬프트에 넣기 직전 IP/이메일/전화번호는 마스킹 — 인하우스 LLM 게이트웨이가 이런 패턴 포함 시 응답을 통째로 거부하는 정책이 있어 대응, v2.46) → `pattern_detection.detect_and_update_cluster()`로 반복 유형 클러스터링(category 무관하게 항상 수행 — 통계 화면 정확도용, v2.47; 비교 임베딩은 원문이 아니라 LLM이 뽑은 정규화 이슈요약 `issue_signature`의 임베딩 — 표현이 달라도 같은 이슈면 묶이도록, v2.49) → `source_message_id` UNIQUE 제약으로 중복 스킵(fetch 직후 배치 사전 체크로 이미 처리된 메일은 관련지식 검색·LLM 분석 자체를 건너뜀, v2.43) → **발송 게이트(v2.48)**: not_it_related면 미발송, 클러스터가 없으면(반복 아닌 단독 VOC) 미발송, 클러스터가 있어도 `email_pattern_min_count` 미만이면 미발송, 채운 뒤로는 그 배수(3/6/9건째)에서만 담당 파트 Teams 채널에 Workflows 웹훅으로 알림(제목/내용/해결방안/참고지식 근거 섹션 구조화, 심각도별 4단계 색상, v2.44 — "🔁 반복 패턴 — N건째 발생 (M건마다 감지·K번째 감지)" 한 줄 + 해결방안 추가, v2.47~v2.48 — 자동 전화는 없음, 온콜 담당자명만 멘션). `ops_email_analysis`/`ops_email_poll_cycle`은 30일 고정 보관정책으로 자동 정리됨.
 
 **Graph API 토큰 조달 우선순위(v2.41)**: `pipeline.run_manual_collection()`이 ① 호출부가 넘긴 `access_token` → ② Application 권한 자격증명(`graph-credentials`) → ③ Delegated 로그인 세션(`delegated_auth`, 본인 메일함 한정) 순으로 시도. 셋 다 없으면 메일함별로 "자격증명 없음" 에러만 기록하고 다른 메일함은 계속 처리(전체 실패 처리 안 함). 스케줄러는 namespace 순회 전 credentials/access_token을 한 번만 해석해 `skip_credential_resolution=True`로 넘겨 매 namespace마다 재시도하지 않음. 로컬 검증은 `backend/scripts/email_voc_local_test.py`(Device Code Flow로 본인 메일함 대상 전체 파이프라인 실행) 참고.
 

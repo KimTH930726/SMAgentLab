@@ -755,7 +755,7 @@ export function VocEmailPanel() {
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
               <div>
                 <h4 className="text-xs font-semibold text-slate-300">반복 패턴 탐지</h4>
-                <p className="text-[11px] text-slate-500 mt-0.5">같은 유형 VOC가 몰리면 그 VOC의 알림에 반복 여부를 함께 표시</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Teams 발송 여부 자체가 이 조건으로 결정됩니다 — 아래 최소 건수를 채우기 전엔 알림이 나가지 않고, 채운 뒤로는 그 배수(3/6/9건째 등)에서만 발송됩니다</p>
               </div>
               <NumberSetting
                 label="유사도(0~1)" hint="과거 VOC와 이 유사도 이상이면 같은 반복 유형으로 묶습니다 — 실 데이터로 검증한 기본값 0.85"
@@ -768,7 +768,7 @@ export function VocEmailPanel() {
                 onCommit={(v) => settingsMutation.mutate({ email_pattern_window_days: v })}
               />
               <NumberSetting
-                label="최소 건수" hint="이 건수 이상 반복돼야 그 VOC의 Teams 알림에 '🔁 반복 패턴' 표시가 처음 붙습니다(이후 늘어나도 다시 표시 안 함)"
+                label="최소 건수" hint="이 건수를 채우기 전엔 Teams로 발송하지 않습니다. 채운 뒤로는 이 건수의 배수(예: 3건이면 3/6/9건째)에서만 '🔁 반복 패턴' 알림이 나갑니다 — 그 사이 건수는 이력에만 기록되고 알림은 생략됩니다"
                 value={settings?.email_pattern_min_count ?? 3} min={2}
                 onCommit={(v) => settingsMutation.mutate({ email_pattern_min_count: v })}
               />

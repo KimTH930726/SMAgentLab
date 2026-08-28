@@ -88,6 +88,39 @@ class TestMaskPii:
         text = service._mask_pii("결제금액 15000원, 재고 500개")
         assert text == "결제금액 15000원, 재고 500개"
 
+    def test_masks_8digit_order_number(self):
+        # 실제 거부 사례(2026-08-27): 쿠팡이츠 주문번호 "16009827" — 8자리라
+        # 기존 10자리 이상 기준을 못 넘어 그대로 LLM에 전달돼 거부당함.
+        text = service._mask_pii("ㄴ쿠팡이츠 16009827")
+        assert "16009827" not in text
+        assert "[REDACTED_ID]" in text
+
+    def test_does_not_mask_7digit_number(self):
+        # 8자리로 낮췄지만 7자리 이하(결제금액 등)까지 건드리면 VOC 판단에 필요한
+        # 정보가 사라질 위험이 커, 실제로 실패가 관측된 8자리까지만 낮췄다.
+        text = service._mask_pii("결제금액 1500000원")
+        assert text == "결제금액 1500000원"
+
+    def test_masks_toll_free_number(self):
+        # 실제 거부 사례(2026-08-27): 대표번호 "1670-3036" — 그룹이 2개뿐이라
+        # _PHONE_RE(그룹 3~4개)에 안 걸려 별도 패턴(_TOLL_NUMBER_RE)으로 분리.
+        text = service._mask_pii("고객센터 1670-3036 으로 문의")
+        assert "1670-3036" not in text
+        assert "[REDACTED_PHONE]" in text
+
+    def test_masks_url_with_embedded_token(self):
+        # 실제 거부 사례(2026-08-27): 뉴스레터/알림 메일의 구독취소 링크에 JWT가
+        # 쿼리스트링으로 박혀 있어 게이트웨이가 토큰류 민감정보로 오판, 거부함.
+        text = service._mask_pii(
+            "구독취소 <https://jira.sinc.co.kr/unsubscribe?jwt=eyJ0eXAiOiJKV1Qi.abc.def>"
+        )
+        assert "jwt=" not in text
+        assert "[REDACTED_URL]" in text
+
+    def test_masks_multiple_urls(self):
+        text = service._mask_pii("링크1 https://a.com/x 링크2 https://b.com/y")
+        assert text.count("[REDACTED_URL]") == 2
+
 
 class TestStripForwardedChain:
     def test_strips_at_korean_forward_header(self):

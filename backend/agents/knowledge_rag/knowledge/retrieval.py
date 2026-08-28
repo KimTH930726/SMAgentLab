@@ -129,6 +129,16 @@ _VECTOR_CANDIDATE_LIMIT = 300  # top_k/reranker_candidates(기본 20)보다 넉�
 # 벡터 CTE를 ORDER BY + LIMIT로 유계화해 정렬 비용을 줄인다(테이블이 커지면 HNSW
 # 인덱스도 이 형태에서만 자동으로 쓰이기 시작함).
 
+# "정확히 일치해야 의미 있는" 구조화 데이터(DB 스키마/코드표 덤프) — 코사인 유사도로
+# 비교하면 다른 카테고리 지식과 어휘만 겹쳐도 오탐이 난다는 게 실측으로 확인됨
+# (2026-08-28, VOC 반복 유형 커버리지 판정에서 완전히 무관한 코드표 항목이 매칭됨).
+# 이 카테고리는 벡터 점수를 랭킹에서 배제하고 키워드(RDB 텍스트) 매칭만으로 순위를
+# 매긴다 — 질문 자체를 분류하는 게 아니라, 이미 등록된 지식 행의 category 값으로
+# 판단한다(등록 시점에 정해지는 값이라 별도 분류 로직 불필요). 관리자 설정으로
+# 노출하지 않고 코드 상수로 고정 — 카테고리가 딱 2개뿐이라 지금은 설정 화면을
+# 만들 정도의 규모가 아니라고 판단(few-shot 관리 UI를 일부러 안 만든 것과 같은 이유).
+_KEYWORD_ONLY_CATEGORIES = ("DB", "공통코드")
+
 
 async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
@@ -139,8 +149,11 @@ async def search_knowledge(
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             return []
-        category_filter = "AND k.category = ANY($8)" if categories else ""
-        params = [str(query_vec), ns_id, enriched_query, w_vector, w_keyword, top_k, _VECTOR_CANDIDATE_LIMIT]
+        category_filter = "AND k.category = ANY($9)" if categories else ""
+        params = [
+            str(query_vec), ns_id, enriched_query, w_vector, w_keyword, top_k, _VECTOR_CANDIDATE_LIMIT,
+            list(_KEYWORD_ONLY_CATEGORIES),
+        ]
         if categories:
             params.append(categories)
         rows = await conn.fetch(
@@ -174,8 +187,13 @@ async def search_knowledge(
                    k.content, k.query_template, k.base_weight, k.category,
                    COALESCE(vs.v_score, 0.0) AS v_score,
                    COALESCE(ks.k_score, 0.0) AS k_score,
-                   ($4 * COALESCE(vs.v_score, 0.0) + $5 * COALESCE(ks.k_score, 0.0))
-                     * (1.0 + k.base_weight) AS final_score,
+                   -- 카테고리별로 RDB(키워드) 검색을 쓸지 벡터 검색을 쓸지 여기서 갈린다
+                   -- ($8 = _KEYWORD_ONLY_CATEGORIES) — 구조화 코드/스키마 데이터는 벡터
+                   -- 점수를 0으로 만들어 랭킹에서 배제하고 키워드 점수만으로 순위를 매김.
+                   (CASE WHEN k.category = ANY($8::text[])
+                         THEN COALESCE(ks.k_score, 0.0)
+                         ELSE $4 * COALESCE(vs.v_score, 0.0) + $5 * COALESCE(ks.k_score, 0.0)
+                    END) * (1.0 + k.base_weight) AS final_score,
                    k.updated_at
             FROM rag_knowledge k
             JOIN ops_namespace n ON k.namespace_id = n.id

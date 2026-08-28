@@ -132,6 +132,9 @@ class MailboxCollectionResult(BaseModel):
     skipped_duplicate: int = 0
     skipped_low_relevance: int = 0
     skipped_not_it: int = 0
+    skipped_no_pattern: int = 0
+    skipped_pattern_building: int = 0
+    skipped_pattern_repeat: int = 0
     notified: int = 0
     notify_failed: int = 0
 

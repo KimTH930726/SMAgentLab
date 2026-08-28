@@ -15,6 +15,19 @@ deduplication)를 조사한 결과, 이미 관련성 게이트(service.check_rel
 3건 이상**이 노이즈 없이 진짜 반복 신호(예: 오배송·미도착 계열 VOC 7건이
 하나의 클러스터로 정확히 묶임)를 잡아내는 지점으로 확인됐다.
 
+임베딩 소스 전환(2026-08-27): 처음엔 "이미 계산되는 원문 임베딩을 그대로 재사용"
+이었는데, 정확히 위 문단에서 예견한 문제("같은 유형이어도 표현이 다르면 못 넘음")가
+실사용 중 그대로 재현됐다 — "로그인이 안돼요"와 "앱 접속이 안됩니다"는 같은 이슈인데
+원문끼리 코사인 유사도가 0.85를 못 넘어 안 묶임. 임계치를 낮추면 §7-12 코드 근처에서
+이미 겪은 것과 같은 부작용(무관한 것끼리 묶임)이 재발하므로, 임계치 대신 **비교
+대상 텍스트를 정규화**하는 쪽으로 바꿨다 — analyze_email()이 이미 만드는 LLM
+분류 결과에 issue_signature(정규화된 짧은 요약, 예: "로그인 500 에러") 필드를
+추가하고, 클러스터링은 원문이 아니라 그 요약을 새로 임베딩한 벡터로 비교한다.
+LLM 호출 자체는 늘지 않는다(이미 하던 분류 호출에 필드 하나 추가) — 다만 그
+요약을 새로 임베딩하는 과정이 1회 추가된다(로컬 무료 연산, 이 문서 상단 "LLM
+호출 없음" 원칙과는 별개 축). issue_signature가 비어있으면(LLM 실패 등) 원문
+임베딩으로 폴백한다(호출부 pipeline.py 참고).
+
 스레드 답장 중복제거: 같은 대화의 RE:/Re: 답장을 "새로운 반복 발생"으로
 세면 안 된다(한 사람이 계속 얘기하는 것과 여러 건이 반복 발생하는 것은
 다르다) — 제목에서 답장 접두어를 벗겨 같은 제목이면 후보에서 제외한다.
@@ -48,6 +61,7 @@ from typing import Optional
 
 import numpy as np
 
+from agents.knowledge_rag.knowledge.retrieval import _KEYWORD_ONLY_CATEGORIES
 from core.database import get_conn, resolve_namespace_id
 from service.llm.factory import get_llm_provider
 from shared.json_utils import parse_json_object
@@ -129,13 +143,15 @@ async def detect_and_update_cluster(
 
     Returns:
         None — 반복 신호 없음(유사한 클러스터/과거 VOC가 없거나 같은 스레드 답장뿐).
-        {"cluster_id", "member_count", "pattern_info": dict | None} — pattern_info는
-        이 클러스터가 min_count를 넘긴 "이후"라면 매번 채워진다(처음 넘긴 순간만이
-        아님, 2026-08-25 변경). 반복 패턴 표시는 이제 별도 Teams 메시지가 아니라
-        이미 발송 중인 개별 VOC 카드에 한 줄 얹는 것뿐이라(teams_notify.py의
-        pattern_info 파라미터), "1번만 보여주면" 오히려 4번째·5번째 발생부터는
-        "이거 반복되는 유형인데?"라는 맥락이 안 보이는 문제가 실사용 중 발견됨
-        — 매 메시지에 표시해도 메시지 자체가 늘어나는 게 아니므로 노이즈가 안 커진다.
+        {"cluster_id", "member_count"} — 호출부(pipeline.py)가 이 member_count를
+        min_count와 직접 비교해 "발송할지, 몇 번째 배수 감지인지"를 스스로 판단한다
+        (2026-08-27 — 매 건 알림이 노이즈였다는 실사용 피드백으로 "min_count 채우기
+        전엔 미발송 + 이후엔 배수 지점에서만 발송"으로 바뀌면서, 그 판단 지점이
+        pipeline.py 쪽으로 옮겨감). 예전엔 이 함수가 대표 제목·샘플 제목까지 모아
+        "pattern_info" 딕셔너리로 반환했으나, 호출부가 더 이상 그 값을 쓰지 않는데도
+        member_count>=min_count일 때마다(즉 3건째 이후 매 건) 샘플 조회 쿼리를
+        계속 날리고 있던 게 발견돼(2026-08-27) 제거함 — 아무도 안 읽는 값을 위해
+        매번 DB 왕복을 하고 있던 순수 낭비였다.
     """
     threshold = settings["email_pattern_similarity_threshold"]
     window_days = settings["email_pattern_window_days"]
@@ -214,30 +230,13 @@ async def detect_and_update_cluster(
                 "UPDATE ops_email_analysis SET voc_cluster_id = $1 WHERE id = $2", cluster["id"], analysis_id,
             )
 
-        pattern_info = None
-        if cluster["member_count"] >= min_count:
-            # notified_at은 더 이상 "표시 여부"를 가리지 않는다 — 이 클러스터가
-            # 처음 패턴으로 인지된 시각을 기록해두는 용도로만 남긴다(대시보드 등에서
-            # "언제 처음 반복 패턴으로 잡혔는지" 참고 가능).
-            if cluster["notified_at"] is None:
-                await conn.execute("UPDATE ops_voc_cluster SET notified_at = NOW() WHERE id = $1", cluster["id"])
-            # 흔한 문구("[파손] 음료 쏟아짐 불만" 등)는 서로 다른 고객이 똑같은 제목을
-            # 쓰는 경우가 실제로 많다 — 중복 제목을 그대로 나열하면 "똑같은 내용이
-            # 두 번 반복 표시"된 것처럼 보여 혼란만 준다(실사용 피드백). 대표 제목과
-            # 겹치는 것도 제외 — 이미 위에서 별도로 보여주므로.
-            sample_rows = await conn.fetch(
-                "SELECT subject FROM ops_email_analysis WHERE voc_cluster_id = $1 LIMIT 6", cluster["id"],
-            )
-            unique_samples = list(dict.fromkeys(
-                r["subject"] for r in sample_rows if r["subject"] != cluster["representative_subject"]
-            ))
-            pattern_info = {
-                "member_count": cluster["member_count"],
-                "representative_subject": cluster["representative_subject"],
-                "sample_subjects": unique_samples[:3],
-            }
+        # notified_at은 "표시 여부"를 가리지 않는다(그 판단은 pipeline.py가 배수
+        # 조건으로 직접 함) — 이 클러스터가 처음 패턴으로 인지된 시각만 1회 기록해
+        # 대시보드 등에서 "언제 처음 반복 패턴으로 잡혔는지" 참고할 수 있게 한다.
+        if cluster["member_count"] >= min_count and cluster["notified_at"] is None:
+            await conn.execute("UPDATE ops_voc_cluster SET notified_at = NOW() WHERE id = $1", cluster["id"])
 
-    return {"cluster_id": cluster["id"], "member_count": cluster["member_count"], "pattern_info": pattern_info}
+    return {"cluster_id": cluster["id"], "member_count": cluster["member_count"]}
 
 
 async def _verify_coverage_with_llm(voc_subject: str, knowledge_content: str) -> bool:
@@ -334,12 +333,18 @@ async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
                 FROM rag_knowledge k
                 WHERE k.namespace_id = c.namespace_id
                   AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
+                  -- 구조화 코드/스키마 덤프(DB/공통코드)는 "해결방안"으로 성립할 수 없는
+                  -- 데이터인데도 코사인 유사도만으론 걸러지지 않아 후보에서 아예 제외한다
+                  -- (2026-08-28, retrieval.py의 _KEYWORD_ONLY_CATEGORIES와 동일 기준 재사용).
+                  -- category가 NULL인 행은 "= ANY(...)"가 NULL로 평가돼 WHERE에서 그
+                  -- 행 자체가 통째로 빠지므로(오탐 아님) "IS NULL OR" 로 먼저 구제한다.
+                  AND (k.category IS NULL OR k.category != ALL($3::text[]))
                 ORDER BY k.embedding <=> c.representative_embedding
                 LIMIT 1
             ) best ON true
             WHERE c.id = $1 AND c.namespace_id = $2
             """,
-            cluster_id, ns_id,
+            cluster_id, ns_id, list(_KEYWORD_ONLY_CATEGORIES),
         )
         if row is None:
             return {"covered": False, "snippet": None}
@@ -383,6 +388,8 @@ async def list_clusters(namespace: str) -> list[dict]:
                 FROM rag_knowledge k
                 WHERE k.namespace_id = c.namespace_id
                   AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
+                  -- get_cluster_coverage()와 동일 기준 — 구조화 코드/스키마 덤프 제외
+                  AND (k.category IS NULL OR k.category != ALL($2::text[]))
                 ORDER BY k.embedding <=> c.representative_embedding
                 LIMIT 1
             ) best ON true
@@ -409,7 +416,7 @@ async def list_clusters(namespace: str) -> list[dict]:
             WHERE c.namespace_id = $1
             ORDER BY c.last_seen_at DESC
             """,
-            ns_id,
+            ns_id, list(_KEYWORD_ONLY_CATEGORIES),
         )
 
         # LLM 호출(캐시 미스 시)이 끼어들 수 있어 커버리지 판정은 배치 쿼리와 분리해

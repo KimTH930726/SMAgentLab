@@ -67,6 +67,7 @@ _DEFAULT_ANALYSIS_PROMPT = """아래는 사내 VOC(문의) 이메일과, 이와 
 3. mismatch_flagged: 이메일 내용이 위 "수신 메일함 담당 파트"의 업무 영역과 명백히 다르면 true, 아니면 false
 4. resolution_draft: category가 system_error일 때 참고 지식 기반 해결 방안 초안(2~3문장), 아니면 null
 5. reasoning: 판단 근거 요약 (1문장)
+6. issue_signature: 이 VOC의 핵심 이슈를 짧고 정규화된 문구로 요약(3~8단어, 예: "로그인 500 에러", "결제 후 주문내역 미반영", "배달 상태 준비중 고착"). 발신자마다 표현이 달라도 같은 유형의 문제라면 최대한 같은 문구로 통일하세요 — 이 요약은 서로 다른 사람이 다르게 쓴 같은 유형의 반복 이슈를 찾아내는 데 쓰입니다. category와 무관하게 항상 채우세요
 
 [판단 예시 — 실제로 헷갈렸던 경계 사례]
 예시 1:
@@ -90,7 +91,7 @@ _DEFAULT_ANALYSIS_PROMPT = """아래는 사내 VOC(문의) 이메일과, 이와 
 판단: system_error일 가능성이 있어 보이지만 오작동 여부를 판단할 정보가 부족함 → category: uncertain
 
 응답 형식 (JSON 객체만 반환):
-{{"category": "...", "severity": "...", "mismatch_flagged": false, "resolution_draft": "...", "reasoning": "..."}}"""
+{{"category": "...", "severity": "...", "mismatch_flagged": false, "resolution_draft": "...", "reasoning": "...", "issue_signature": "..."}}"""
 
 _VALID_CATEGORIES = {"system_error", "user_mistake", "uncertain", "not_it_related"}
 _VALID_SEVERITIES = {"low", "medium", "high", "urgent"}
@@ -104,12 +105,30 @@ _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 # "2026-08-20" 같은 날짜(YYYY-MM-DD, 첫 그룹 4자리)를 오탐하지 않는다 — 만료일
 # 등 날짜는 심각도 판단에 중요한 정보라 실수로 마스킹되면 안 된다.
 _PHONE_RE = re.compile(r"(?<!\d)\+?\d{1,3}[.\-\s]\d{2,4}[.\-\s]\d{2,4}(?:[.\-\s]\d{4})?(?!\d)")
-# 구분자 없는 긴 숫자(10자리 이상) — VOC 티켓 ID(예: "C202608150816"), SKU 코드
-# (예: "9900000000339") 등. 형식이 명확한 IP/전화번호와 달리 "그냥 긴 숫자"를
-# 게이트웨이가 민감정보로 오판하는 것으로 실사용 중 확인됨(거부 응답이 해당
-# 숫자값 자체를 그대로 나열함). 날짜(YYYY-MM-DD)는 구분자로 끊겨 있어 10자리
-# 연속이 안 되므로 오탐하지 않는다.
-_LONG_ID_RE = re.compile(r"(?<!\d)\d{10,}(?!\d)")
+# 대표번호류(1670/1588/1544/1899 등 4자리 접두 + "-" + 4자리, 예: "1670-3036") —
+# 그룹이 2개뿐이라 위 _PHONE_RE(그룹 3~4개, 첫 그룹 1~3자리)에 안 걸린다. 실사용 중
+# 이 형식도 게이트웨이가 거부하는 게 확인돼(2026-08-27) 별도 패턴으로 분리 — 날짜
+# (YYYY-MM-DD)는 구분자가 2개(그룹 3개)라 이 패턴(구분자 1개, 그룹 2개)과 안 겹친다.
+_TOLL_NUMBER_RE = re.compile(r"(?<!\d)\d{4}-\d{4}(?!\d)")
+# 구분자 없는 긴 숫자(8자리 이상) — VOC 티켓 ID(예: "C202608150816"), SKU 코드
+# (예: "9900000000339"), 배달앱 주문번호(예: "16009827") 등. 형식이 명확한
+# IP/전화번호와 달리 "그냥 긴 숫자"를 게이트웨이가 민감정보로 오판하는 것으로
+# 실사용 중 확인됨(거부 응답이 해당 숫자값 자체를 그대로 나열함). 날짜(YYYY-MM-DD)는
+# 구분자로 끊겨 있어 연속 숫자가 안 되므로 오탐하지 않는다.
+#
+# 원래 10자리 이상으로 잡았었는데(§7 최초 도입), 실사용 중 8자리 배달앱 주문번호
+# ("16009827")가 이 임계치를 못 넘어 그대로 LLM에 전달되면서 거부당한 사례가
+# 실측 확인돼(2026-08-27, 전체 분석 516건 중 16건=약 3% 실패) 8자리로 낮춤 — 더
+# 낮추면(6~7자리) 결제 금액("150000원" 등 VOC 판단에 중요한 정보)까지 마스킹될
+# 위험이 커져, 실제로 실패가 관측된 지점(8자리)까지만 보수적으로 낮췄다.
+_LONG_ID_RE = re.compile(r"(?<!\d)\d{8,}(?!\d)")
+
+# URL — 특히 알림/뉴스레터 메일의 구독취소·트래킹 링크에 JWT나 긴 base64 토큰이
+# 쿼리스트링으로 박혀 있는 경우가 많아(예: "...unsubscribe?jwt=eyJ0eXAi...",
+# stibee 트래킹 링크) 게이트웨이가 이를 API 키/토큰류 민감정보로 오판해 거부하는
+# 사례가 실측 확인됨(2026-08-27). URL 자체는 VOC 분류 판단에 거의 쓰이지 않으므로
+# 통째로 마스킹한다.
+_URL_RE = re.compile(r"https?://\S+")
 
 # 이메일 전달/회신 체인의 시작을 표시하는 헤더 줄 — Outlook 기준 "보낸 사람:"/
 # "발신:"/"From:", 또는 "-----Original Message-----" 구분선. 이게 나오는 지점부터는
@@ -150,9 +169,11 @@ def _mask_pii(text: str) -> str:
     DB 저장·Teams 알림에는 원본 그대로 쓰고, LLM 프롬프트에 넣는 텍스트에만
     이 함수를 적용한다.
     """
+    text = _URL_RE.sub("[REDACTED_URL]", text)
     text = _EMAIL_RE.sub("[REDACTED_EMAIL]", text)
     text = _IP_RE.sub("[REDACTED_IP]", text)
     text = _PHONE_RE.sub("[REDACTED_PHONE]", text)
+    text = _TOLL_NUMBER_RE.sub("[REDACTED_PHONE]", text)
     text = _LONG_ID_RE.sub("[REDACTED_ID]", text)
     return text
 
@@ -286,4 +307,12 @@ async def analyze_email(
         "resolution_draft": parsed.get("resolution_draft"),
         "reasoning": reasoning,
         "mapped_term": mapped_term,
+        # 반복 패턴 클러스터링용 정규화 요약 — pipeline.py가 이 문구를 새로 임베딩해
+        # 원문 대신 클러스터 비교에 쓴다(2026-08-27). 원문 그대로 비교하면 표현이
+        # 다른 같은 유형의 이슈가 코사인 임계치(0.85)를 못 넘어 안 묶이는 게 실측
+        # 확인됐는데("로그인이 안 돼요" vs "앱에 접속이 안 됩니다" 같은 패러프레이즈),
+        # LLM이 정규화한 짧은 요약끼리는 훨씬 가깝게 임베딩돼 같은 유형으로 묶인다.
+        # LLM 호출 자체가 실패했거나(last_error) 필드가 비어있으면 None — 호출부가
+        # 원문 임베딩(query_vec)으로 안전하게 폴백한다.
+        "issue_signature": (parsed.get("issue_signature") or "").strip() or None,
     }

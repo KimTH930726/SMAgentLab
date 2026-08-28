@@ -210,12 +210,32 @@ class TestPatternInfoInTeamsMessage:
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="테스트",
             analysis=_base_analysis(category="uncertain", resolution_draft=None),
-            pattern_info={"member_count": 3, "window_days": 7, "coverage": {"covered": False, "snippet": None}},
+            pattern_info={
+                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
+                "coverage": {"covered": False, "snippet": None},
+            },
         )
         text = msg["text"]
         assert "🔁 반복 패턴" in text
         assert "7일간" in text
         assert "3건째" in text
+        assert "3건마다 감지" in text
+        assert "1번째 감지" in text
+
+    def test_nth_detection_reflects_multiple(self):
+        # 6건째(min_count=3의 배수) — "3건마다 감지 · 2번째 감지"로 몇 번째 배수
+        # 지점인지 명확히 보여야 한다(2026-08-27, 원본 건수만으론 기준이 안 보임).
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="테스트",
+            analysis=_base_analysis(category="uncertain", resolution_draft=None),
+            pattern_info={
+                "member_count": 6, "window_days": 7, "min_count": 3, "nth_detection": 2,
+                "coverage": {"covered": False, "snippet": None},
+            },
+        )
+        text = msg["text"]
+        assert "6건째" in text
+        assert "3건마다 감지 · 2번째 감지" in text
 
     def test_no_pattern_bullet_when_not_triggered(self):
         msg = teams_notify.build_teams_message(
@@ -228,7 +248,7 @@ class TestPatternInfoInTeamsMessage:
             subject="s", sender="s@example.com", part="p",
             analysis=_base_analysis(category="uncertain", resolution_draft=None),
             pattern_info={
-                "member_count": 3, "window_days": 7,
+                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
                 "coverage": {"covered": True, "snippet": "재배송 또는 환불 처리를 진행합니다."},
             },
         )
@@ -242,7 +262,7 @@ class TestPatternInfoInTeamsMessage:
             subject="s", sender="s@example.com", part="p",
             analysis=_base_analysis(category="system_error", resolution_draft="LLM이 만든 해결방안"),
             pattern_info={
-                "member_count": 3, "window_days": 7,
+                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
                 "coverage": {"covered": True, "snippet": "반복 유형용 등록 지식"},
             },
         )
@@ -254,6 +274,9 @@ class TestPatternInfoInTeamsMessage:
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="p",
             analysis=_base_analysis(category="uncertain", resolution_draft=None),
-            pattern_info={"member_count": 3, "window_days": 7, "coverage": {"covered": False, "snippet": None}},
+            pattern_info={
+                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
+                "coverage": {"covered": False, "snippet": None},
+            },
         )
         assert "해당 없음" in msg["text"]

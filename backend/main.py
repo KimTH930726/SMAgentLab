@@ -1184,6 +1184,7 @@ Always respond with valid JSON only.""",
 3. mismatch_flagged: 이메일 내용이 위 "수신 메일함 담당 파트"의 업무 영역과 명백히 다르면 true, 아니면 false
 4. resolution_draft: category가 system_error일 때 참고 지식 기반 해결 방안 초안(2~3문장), 아니면 null
 5. reasoning: 판단 근거 요약 (1문장)
+6. issue_signature: 이 VOC의 핵심 이슈를 짧고 정규화된 문구로 요약(3~8단어, 예: "로그인 500 에러", "결제 후 주문내역 미반영", "배달 상태 준비중 고착"). 발신자마다 표현이 달라도 같은 유형의 문제라면 최대한 같은 문구로 통일하세요 — 이 요약은 서로 다른 사람이 다르게 쓴 같은 유형의 반복 이슈를 찾아내는 데 쓰입니다. category와 무관하게 항상 채우세요
 
 [판단 예시 — 실제로 헷갈렸던 경계 사례]
 예시 1:
@@ -1207,7 +1208,7 @@ Always respond with valid JSON only.""",
 판단: system_error일 가능성이 있어 보이지만 오작동 여부를 판단할 정보가 부족함 → category: uncertain
 
 응답 형식 (JSON 객체만 반환):
-{{"category": "...", "severity": "...", "mismatch_flagged": false, "resolution_draft": "...", "reasoning": "..."}}""",
+{{"category": "...", "severity": "...", "mismatch_flagged": false, "resolution_draft": "...", "reasoning": "...", "issue_signature": "..."}}""",
     )
 
 
