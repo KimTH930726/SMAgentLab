@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.51)
+# Ops-Navigator 시스템 아키텍처 (v2.52)
 
 ## 개요
 
@@ -9,6 +9,27 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.52: **정책서 데이터화 파이프라인 v1** — `service/policy/` 신규(`docs/policy-doc-pipeline-plan.md`).
+  엑셀 정책서 한 row를 `policy_item`(원문+메타)/`policy_param`(파라미터 팩트)/`policy_chunk`(서술
+  청크) 3층으로 분해해 적재. 팀마다 대분류/중분류/소분류 깊이가 달라(실측: 3단 vs 2단) 고정 컬럼
+  대신 `category_path TEXT[]` 채택, 헤더는 정확 매칭이 아니라 퍼지매핑 + "정책명 앞 컬럼 전부"
+  동적 감지로 흡수. 용어집 시트는 새 테이블 없이 기존 `rag_glossary` 재사용. 버전 관리는
+  `rag_knowledge` 병합이 content를 덮어써 이력 소실됐던 문제(`knowledge-lifecycle-design.md`
+  우선순위 1위)를 반복하지 않도록 UPDATE 대신 새 row INSERT(logical_id 유지, version+1,
+  supersedes_id, 이전 row는 deprecated로 보존)로 설계. LLM 분해는 서술/파라미터/미해결(unresolved+
+  사유) 3분류 — 완전 자동화 대신 "자동 처리 비율 최대화 + 실패 사유 캡처"를 목표로 함(팀별 표준화가
+  안 돼 있다는 게 실측 확인됨). `POST /api/policy/import`(엑셀→파싱→LLM분해→적재, 재업로드 시
+  content_hash로 불변 row는 LLM 재호출 없이 스킵)와 `GET /api/policy/search`(파라미터 RDB tsquery
+  + 서술 벡터 검색, 항상 둘 다 실행) 둘 다 실 HTTP E2E 검증 완료. 검색은 전용 엔드포인트로 분리—
+  저장 전략 실험(rag_knowledge 단일 저장 vs 이 하이브리드 스키마, 골든셋 기반 정답률 비교)이 아직
+  실행 전이라 검증 안 된 방식을 모든 네임스페이스가 공유하는 채팅 검색 경로(`retrieval.py`/
+  `agent.py`)에 먼저 섞지 않기 위함. 자체검증 중 실 버그 2건 발견·수정: ①병합셀이 있으면
+  category_path가 빈 문자열로 들어감(openpyxl이 병합영역 첫 셀에만 값을 줌, forward-fill로 해결)
+  ②검색이 ILIKE 부분문자열 매칭이라 "장바구니 개수"가 "장바구니 최대 메뉴 개수"를 못 찾음
+  (`retrieval.py`와 동일한 to_tsquery lexeme 매칭으로 교체). row별 순차 LLM 호출은 100~200행
+  규모에서 수 분이 걸릴 것으로 예상돼 버전체크(순차)→LLM분해(동시,세마포어5)→DB쓰기(순차,
+  커넥션 안전성) 3단계로 재구성, 실측 10행 동시처리 27.5초·매핑 무결성 확인. 검토/승인 UI는 v1
+  범위 밖 — 전부 `status='pending_review'`로 쌓이고 검색 대상엔 포함시킴(안 그러면 아무것도 안 나옴).
 - v2.51: **Text-to-SQL 에이전트 제거** — 현재 과업이 아니라는 판단에 따라 `dev_0`/`main`에서
   분리, 형상관리 브랜치(`archive/with-text2sql`)로 보존. 제거 전 실측 점검: 백엔드는
   `agents/text2sql/` 디렉토리 하나에 격리돼 있었고 역방향 참조(다른 에이전트가 text2sql을
@@ -174,18 +195,25 @@ backend/
 │   ├── mcp_tool/        #   MCP 도구 CRUD + 감사 로그
 │   ├── prompt/          #   프롬프트 관리 (get_prompt: DB 우선, fallback)
 │   ├── llm/             #   LLM Provider 추상화 (ollama / inhouse)
-│   └── email_voc/       #   VOC 이메일 분석 채널 (v2.40 신규)
-│       ├── graph_client.py    #   Microsoft Graph API 클라이언트 (msal 토큰 발급, 메일 조회, 페이지네이션/재시도)
-│       ├── service.py         #   check_relevance()(관련지식 사전 필터, v2.41) + analyze_email() — 기존 RAG 파이프라인 재사용 분류/심각도/오배치 판정 + issue_signature(정규화 이슈요약) 출력 (v2.49)
-│       ├── pattern_detection.py #   반복 VOC 클러스터링(centroid 기반, issue_signature 임베딩 비교, LLM 호출 없음) + 커버리지 LLM 검증 게이트(DB/공통코드 카테고리 제외, v2.49) (v2.47 신규)
-│       ├── pipeline.py        #   수집→관련지식필터→분석→반복패턴탐지→중복제거→알림 오케스트레이션, 이력 조회
-│       ├── routing_service.py #   파트별 메일함 라우팅 CRUD, 폴링 설정(관련지식 임계치 포함), Graph 자격증명(Fernet 암호화) CRUD
-│       ├── delegated_auth.py  #   Delegated Permission 로그인 상태 관리 (Authorization Code Flow/PKCE, v2.41 신규·v2.42 인증방식 교체)
-│       ├── teams_notify.py    #   Teams Workflows 웹훅 발송
-│       ├── scheduler.py       #   백그라운드 폴링 루프 (asyncio.create_task, lifespan 등록)
-│       ├── retention.py       #   30일 고정 보관정책 자동 정리
+│   ├── email_voc/       #   VOC 이메일 분석 채널 (v2.40 신규)
+│   │   ├── graph_client.py    #   Microsoft Graph API 클라이언트 (msal 토큰 발급, 메일 조회, 페이지네이션/재시도)
+│   │   ├── service.py         #   check_relevance()(관련지식 사전 필터, v2.41) + analyze_email() — 기존 RAG 파이프라인 재사용 분류/심각도/오배치 판정 + issue_signature(정규화 이슈요약) 출력 (v2.49)
+│   │   ├── pattern_detection.py #   반복 VOC 클러스터링(centroid 기반, issue_signature 임베딩 비교, LLM 호출 없음) + 커버리지 LLM 검증 게이트(DB/공통코드 카테고리 제외, v2.49) (v2.47 신규)
+│   │   ├── pipeline.py        #   수집→관련지식필터→분석→반복패턴탐지→중복제거→알림 오케스트레이션, 이력 조회
+│   │   ├── routing_service.py #   파트별 메일함 라우팅 CRUD, 폴링 설정(관련지식 임계치 포함), Graph 자격증명(Fernet 암호화) CRUD
+│   │   ├── delegated_auth.py  #   Delegated Permission 로그인 상태 관리 (Authorization Code Flow/PKCE, v2.41 신규·v2.42 인증방식 교체)
+│   │   ├── teams_notify.py    #   Teams Workflows 웹훅 발송
+│   │   ├── scheduler.py       #   백그라운드 폴링 루프 (asyncio.create_task, lifespan 등록)
+│   │   ├── retention.py       #   30일 고정 보관정책 자동 정리
+│   │   ├── schemas.py         #   Pydantic 스키마
+│   │   └── router.py          #   /api/email-voc/* 엔드포인트
+│   └── policy/           #   정책서 데이터화 파이프라인 v1 (v2.52 신규, docs/policy-doc-pipeline-plan.md)
+│       ├── excel_parser.py    #   시트 판별(용어집/정책) + 헤더 퍼지매핑 + 동적 깊이 감지(category_path)
+│       ├── decompose.py       #   LLM segment 분해 — narrative/param/unresolved 3분류
+│       ├── service.py         #   버전 관리(logical_id/version/supersedes_id, INSERT-only) + LLM 분해 동시성(세마포어5) + policy_item/param/chunk 적재
+│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색 — 전용 엔드포인트, retrieval.py 미편입(Track 2 대기)
 │       ├── schemas.py         #   Pydantic 스키마
-│       └── router.py          #   /api/email-voc/* 엔드포인트
+│       └── router.py          #   POST /api/policy/import, GET /api/policy/search
 ├── core/
 │   ├── config.py        # pydantic-settings, JWT·Fernet 키
 │   ├── database.py      # asyncpg 풀 + resolve_namespace_id() 헬퍼

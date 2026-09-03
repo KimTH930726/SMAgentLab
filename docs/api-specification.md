@@ -1,10 +1,11 @@
 # Ops-Navigator API 명세서
 
-> **Version**: 2.18
+> **Version**: 2.19
 > **Base URL**: `http://localhost:8000`
 > **Protocol**: REST + SSE (Server-Sent Events)
 > **Content-Type**: `application/json` (기본), `text/event-stream` (SSE)
-> **최종 갱신**: 2026-08-20 (v2.18 — VOC 이메일: `GET /mail-folders` 신규, `routing` 요청에 `mail_folder_id`/`mail_folder_name` 추가, `history`에 필터 쿼리 파라미터 추가, `email_relevance_min_score` 기본값 0.35→0.38 및 계산식 설명 갱신(v3.13). v2.17 — `PUT /delegated-auth/config` 요청에 선택 필드 `client_secret` 추가, `GET /delegated-auth/status` 응답에 `client_secret_configured` 필드 추가 — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록된 경우 PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) Confidential Client 지원이 필요해진 실사용 사례 반영)
+> **최종 갱신**: 2026-09-03 (v2.19 — §13-2 정책서(Policy) API 신규: `POST /api/policy/import`,
+> `GET /api/policy/search`. v2.18 — VOC 이메일: `GET /mail-folders` 신규, `routing` 요청에 `mail_folder_id`/`mail_folder_name` 추가, `history`에 필터 쿼리 파라미터 추가, `email_relevance_min_score` 기본값 0.35→0.38 및 계산식 설명 갱신(v3.13). v2.17 — `PUT /delegated-auth/config` 요청에 선택 필드 `client_secret` 추가, `GET /delegated-auth/status` 응답에 `client_secret_configured` 필드 추가 — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록된 경우 PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) Confidential Client 지원이 필요해진 실사용 사례 반영)
 
 ---
 
@@ -24,6 +25,7 @@
 11. [네임스페이스 (Namespaces)](#11-네임스페이스-namespaces)
 12. [LLM 설정 (LLM Settings)](#12-llm-설정-llm-settings)
 13-1. [VOC 이메일 분석 채널 (Email VOC)](#13-1-voc-이메일-분석-채널-email-voc) — 13번(Text-to-SQL 어드민 API)은 v2.51에서 dev_0/main 제거, archive/with-text2sql 브랜치 참고
+13-2. [정책서 (Policy)](#13-2-정책서-policy)
 14. [공통 에러 코드](#14-공통-에러-코드)
 
 ---
@@ -1940,6 +1942,59 @@ Microsoft가 로그인 완료 후 브라우저를 리다이렉트시키는 지�
 폴링 사이클(스케줄러 실행 회차) 이력 조회. `limit` 최대 100으로 clamp.
 
 **Response `200`**: `PollCycleItem` 배열
+
+---
+
+## 13-2. 정책서 (Policy)
+
+> Base: `/api/policy/`
+> 인증: JWT Bearer, 네임스페이스 소유 검증(`check_namespace_ownership`).
+> 현재 상태: v1(임포트+검색 API까지 구현). 승인 UI 없음 — 데이터는 전부 `status='pending_review'`로
+> 쌓이고 검색 대상엔 포함됨. 채팅 메인 검색(`retrieval.py`)엔 아직 편입 안 됨(Track 2 결과 대기).
+> 상세 설계: `docs/policy-doc-pipeline-plan.md`.
+
+### POST /api/policy/import
+
+정책서 엑셀 업로드 → 파싱 → LLM 분해 → RDB 적재(`multipart/form-data`).
+
+**Request**: `file`(엑셀), `namespace`(Form), `system_key`(Form, 선택)
+**Response `200`**
+```json
+{
+  "source_file": "딜리버스_주문결제.xlsx",
+  "sheets": [
+    { "sheet_name": "용어집", "kind": "glossary", "glossary_added": 4, "glossary_duplicate_skipped": 0 },
+    { "sheet_name": "주문결제", "kind": "policy", "created_items": 2, "new_versions": 0,
+      "unchanged_skipped": 0, "params_extracted": 2, "narratives_extracted": 3, "unresolved_segments": 0 }
+  ]
+}
+```
+**Error**: `400` 네임스페이스 없음 / 엑셀 파싱 실패(비-xlsx 파일 등)
+
+재업로드 시 `content_hash`가 안 바뀐 row는 `unchanged_skipped`로만 집계되고 LLM 재호출 없이
+스킵된다. 바뀐 row는 `new_versions`로 집계 — 이전 버전은 삭제되지 않고 `deprecated`로 보존된다.
+
+### GET /api/policy/search?namespace=&q=&category=&top_k=
+
+파라미터(RDB `to_tsquery` 매칭)와 서술(`policy_chunk` 벡터 검색) 두 갈래를 항상 함께 실행해
+반환한다(질의 유형 분기 없음). `category`는 `category_path` 배열에 포함되는지로 필터.
+
+**Response `200`**
+```json
+{
+  "params": [
+    { "item_id": 3, "logical_id": 3, "policy_name": "장바구니 메뉴 담기",
+      "category_path": ["1.주문/결제", "1-1.장바구니"], "status": "pending_review",
+      "param_name": "장바구니 최대 메뉴 개수", "condition": "일반 배달", "value": "20", "unit": "개" }
+  ],
+  "narratives": [
+    { "item_id": 4, "logical_id": 4, "policy_name": "장바구니 조회",
+      "category_path": ["1.주문/결제", "1-1.장바구니"], "status": "pending_review",
+      "chunk_text": "매장에 재고가 없는 경우 SOLD OUT 표기", "score": 0.36 }
+  ]
+}
+```
+**Error**: `400` 네임스페이스 없음, `422` `q` 빈 문자열
 
 ---
 

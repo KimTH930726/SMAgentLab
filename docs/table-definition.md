@@ -1,10 +1,13 @@
 # Ops-Navigator 테이블 정의서
 
-> **Version**: 3.13
+> **Version**: 3.14
 > **DBMS**: PostgreSQL 16 + pgvector
 > **Extensions**: `vector`, `pg_trgm`
 > **벡터 차원**: 768 (paraphrase-multilingual-mpnet-base-v2)
-> **작성일**: 2026-08-20 (v3.13 — `email_relevance_min_score` 계산식 수정(base_weight 랭킹 부스팅 없는 원점수 기준) + 기본값 0.35→0.38 재조정. v3.12 — `ops_voc_routing`에 `mail_folder_id`/`mail_folder_name` 추가(특정 Outlook 폴더로 조회 범위 제한). v3.11 — `email_graph_delegated` JSON에 `client_secret` 선택 필드 추가(DDL 변경 없음, 기존 암호화 JSON 블롭 내부 키만 추가) — Confidential Client 지원. v3.10 — `email_graph_delegated`의 인증 방식을 Device Code Flow에서 Authorization Code Flow(PKCE)로 교체, `redirect_uri` 필드 추가. v3.9 — VOC 이메일 관련지식 사전 필터(`email_relevance_min_score`, `ops_email_analysis.status='skipped_relevance'`, `ops_email_poll_cycle.total_skipped_low_relevance`) 추가)
+> **작성일**: 2026-09-03 (v3.14 — `policy_item`/`policy_param`/`policy_chunk` 추가(§18-4, 정책서
+> 데이터화 파이프라인 v1). `ops_user`에 SSO 연동 기반 컬럼(`auth_provider`/`external_id`/`email`)
+> 추가(마이그레이션 #37). Text-to-SQL `sql_*` 테이블 마이그레이션 중단(#38, 기존 설치엔 남아있으나
+> 더 이상 갱신 안 됨). v3.13 — `email_relevance_min_score` 계산식 수정(base_weight 랭킹 부스팅 없는 원점수 기준) + 기본값 0.35→0.38 재조정. v3.12 — `ops_voc_routing`에 `mail_folder_id`/`mail_folder_name` 추가(특정 Outlook 폴더로 조회 범위 제한). v3.11 — `email_graph_delegated` JSON에 `client_secret` 선택 필드 추가(DDL 변경 없음, 기존 암호화 JSON 블롭 내부 키만 추가) — Confidential Client 지원. v3.10 — `email_graph_delegated`의 인증 방식을 Device Code Flow에서 Authorization Code Flow(PKCE)로 교체, `redirect_uri` 필드 추가. v3.9 — VOC 이메일 관련지식 사전 필터(`email_relevance_min_score`, `ops_email_analysis.status='skipped_relevance'`, `ops_email_poll_cycle.total_skipped_low_relevance`) 추가)
 > **DDL 위치**: `init/01-init.sql` + `main.py` lifespan 마이그레이션
 
 ---
@@ -32,6 +35,7 @@
 18-1. [ops_voc_routing](#18-1-ops_voc_routing)
 18-2. [ops_email_analysis](#18-2-ops_email_analysis)
 18-3. [ops_email_poll_cycle](#18-3-ops_email_poll_cycle)
+18-4. [policy_item / policy_param / policy_chunk](#18-4-policy_item--policy_param--policy_chunk)
 19. [트리거 및 함수](#19-트리거-및-함수)
 20. [마이그레이션](#20-마이그레이션)
 
@@ -688,6 +692,77 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 ---
 
+## 18-4. policy_item / policy_param / policy_chunk
+
+**목적**: 정책서 데이터화 파이프라인(v1, `docs/policy-doc-pipeline-plan.md`). 엑셀 한 row를
+3층으로 분해 — 원문+메타(`policy_item`), 추출된 파라미터 팩트(`policy_param`), 서술 규칙
+청크(`policy_chunk`). `service/policy/`(excel_parser/decompose/service/search/router)가 이 3개
+테이블을 씀.
+
+### policy_item
+
+| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
+|---|--------|-----------|------|--------|---------|------|
+| 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
+| 2 | `namespace_id` | INT | NO | - | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 |
+| 3 | `system_key` | VARCHAR(200) | NO | `''` | - | 네임스페이스 내 하위 시스템 분류(예: "딜리버스") |
+| 4 | `category_path` | TEXT[] | NO | `'{}'` | - | 대/중/소분류 등 가변 깊이 카테고리 경로(팀마다 깊이가 달라 고정 컬럼 대신 배열 채택) |
+| 5 | `policy_name` | TEXT | NO | `''` | - | 정책명 |
+| 6 | `raw_body` | TEXT | NO | `''` | - | 정책 본문 원문 |
+| 7 | `remark` | TEXT | YES | NULL | - | 비고(외부 SoR 포인터 등, 컬럼 자체가 없는 팀도 있어 nullable) |
+| 8 | `source_file`/`source_sheet`/`source_row` | VARCHAR/VARCHAR/INT | YES | NULL | - | 원본 엑셀 위치 — 재업로드 시 버전 비교 키 |
+| 9 | `content_hash` | VARCHAR(64) | NO | - | - | 원문 내용 해시(sha256) — 재업로드 diff 판정용 |
+| 10 | `status` | VARCHAR(20) | NO | `'pending_review'` | - | `pending_review`/`active`/`deprecated` 등 |
+| 11 | `logical_id` | INT | YES | (트리거로 자기 id 자동 채움) | - | 같은 정책의 버전들을 묶는 식별자 — 버전이 바뀌어도 불변 |
+| 12 | `version` | INT | NO | `1` | - | 버전 번호 |
+| 13 | `supersedes_id` | INT | YES | NULL | FK → policy_item(id) ON DELETE SET NULL | 이전 버전 row 참조 |
+| 14 | `parse_status` | VARCHAR(20) | NO | `'unresolved'` | - | `parsed`/`partial`/`unresolved` — LLM 분해 성공도 |
+| 15 | `unresolved_segments` | JSONB | YES | NULL | - | 자동분류 실패한 원문 조각+사유 배열 |
+| 16 | `created_at`/`updated_at`/`reviewed_at` | TIMESTAMPTZ | NO/NO/YES | `NOW()`/`NOW()`/NULL | - | — |
+| 17 | `reviewed_by` | INT | YES | NULL | FK → ops_user(id) ON DELETE SET NULL | 승인자(승인 UI 미구현이라 현재 미사용) |
+
+**버전 관리**: 재업로드 시 `content_hash`가 바뀌면 UPDATE 대신 새 row를 INSERT한다(logical_id
+유지, version+1, supersedes_id=이전 row) — 이전 row는 `deprecated`로 전환하되 삭제하지 않는다.
+`trg_policy_item_logical_id` 트리거가 INSERT 시 `logical_id`가 NULL이면 자기 `id`로 채운다.
+
+**인덱스**: `idx_policy_item_ns (namespace_id)`, `idx_policy_item_logical_id (logical_id)`,
+`idx_policy_item_status (status)`, `idx_policy_item_source (namespace_id, source_file, source_sheet, source_row)`
+
+### policy_param
+
+| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
+|---|--------|-----------|------|--------|---------|------|
+| 1 | `id` | SERIAL | NO | auto | PK | — |
+| 2 | `policy_item_id` | INT | NO | - | FK → policy_item(id) ON DELETE CASCADE | 버전마다 새 policy_item row가 생기므로 FK로 자동 버전 격리(별도 버전 컬럼 없음) |
+| 3 | `name` | TEXT | NO | - | - | 파라미터명(예: "장바구니 최대 개수") |
+| 4 | `condition` | TEXT | YES | NULL | - | 조건/코드(예: "일반 배달", "HCB01") |
+| 5 | `value` | TEXT | YES | NULL | - | 값 |
+| 6 | `unit` | VARCHAR(50) | YES | NULL | - | 단위 |
+| 7 | `external_source` | VARCHAR(200) | YES | NULL | - | 비고에서 도출된 외부 SoR 이름(신뢰 주의 플래그) |
+| 8 | `approved` | BOOLEAN | NO | `FALSE` | - | 승인 여부(승인 UI 미구현이라 항상 FALSE) |
+| 9 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | — |
+
+**인덱스**: `idx_policy_param_item (policy_item_id)`
+
+### policy_chunk
+
+| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
+|---|--------|-----------|------|--------|---------|------|
+| 1 | `id` | SERIAL | NO | auto | PK | — |
+| 2 | `policy_item_id` | INT | NO | - | FK → policy_item(id) ON DELETE CASCADE | — |
+| 3 | `chunk_text` | TEXT | NO | - | - | 서술 규칙 segment 원문 |
+| 4 | `embedding` | VECTOR(768) | YES | NULL | - | mpnet 임베딩 |
+| 5 | `chunk_idx` | INT | NO | `0` | - | policy_item 내 순번 |
+| 6 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | — |
+
+**인덱스**: `idx_policy_chunk_item (policy_item_id)`, `idx_policy_chunk_hnsw (embedding vector_cosine_ops, HNSW)`
+
+**검색**: `GET /api/policy/search` — `policy_param`은 `to_tsvector`/`to_tsquery` lexeme 매칭,
+`policy_chunk`는 코사인 유사도. 둘 다 항상 같이 실행되고(질의 유형 분기 없음) 결과를 합쳐 반환.
+아직 채팅 메인 검색(`retrieval.py`)엔 편입 안 됨 — Track 2(저장 전략 실험실) 결과를 보고 결정.
+
+---
+
 ## 19. 트리거 및 함수
 
 ### update_updated_at()
@@ -755,6 +830,7 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 36 | `ops_system_config` | `UPDATE email_relevance_min_score` | 관련지식 임계치 계산식이 base_weight 부스팅 섞인 `final_score`를 쓰고 있어 게이트가 사실상 무력화됐던 버그 수정 후, 원점수 기준 실측 재조정: `0.35` → `0.38` (v3.13) |
 | 37 | `ops_user` | `ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'local'`, `ADD COLUMN IF NOT EXISTS external_id VARCHAR(255)`, `ADD COLUMN IF NOT EXISTS email VARCHAR(255)`, `ALTER COLUMN hashed_password DROP NOT NULL`, `CREATE UNIQUE INDEX ux_user_provider_external_id ON ops_user(auth_provider, external_id) WHERE external_id IS NOT NULL` | SSO(Azure AD) 연동 기반 스키마 선추가 — 로컬 계정은 `auth_provider='local'`로 그대로 유지, SSO 전용 계정은 로컬 비밀번호가 없을 수 있어 nullable로 완화(로그인 흐름 자체는 아직 미구현) (v2.50) |
 | 38 | `sql_*` 10개 테이블 | `_migrate_text2sql_tables()` 호출 제거(함수 자체도 삭제) | Text-to-SQL 에이전트 제거(현재 과업 아님) — 기존 설치의 테이블은 삭제하지 않고 그대로 두되, 더 이상 마이그레이션되지 않음. 코드는 `archive/with-text2sql` 브랜치 보존 (v2.51) |
+| 39 | - | `CREATE TABLE policy_item`, `policy_param`, `policy_chunk` + `trg_policy_item_logical_id` 트리거 | 정책서 데이터화 파이프라인 v1(`_migrate_policy_tables()`, `docs/policy-doc-pipeline-plan.md` §2) — 엑셀 row를 3층(원문+메타/파라미터/서술청크)으로 분해 저장. 버전 관리는 UPDATE 대신 새 row INSERT(logical_id 유지, version+1, supersedes_id) 방식(§2-1) (v2.52) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

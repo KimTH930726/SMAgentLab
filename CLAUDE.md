@@ -23,11 +23,12 @@
 - 색상: bg #0F172A, card #1E293B, accent #6366F1
 
 ## 핵심 디렉토리
-- `backend/services/llm/` — LLM 프로바이더 (ollama/inhouse)
-- `backend/services/retrieval.py` — 2단계 하이브리드 검색
-- `backend/services/memory.py` — 대화 요약 + 시맨틱 리콜
+- `backend/service/llm/` — LLM 프로바이더 (ollama/inhouse)
+- `backend/agents/knowledge_rag/knowledge/retrieval.py` — 하이브리드 검색(Glossary Mapping + Vector/Keyword)
+- `backend/service/chat/memory.py` — 대화 요약 + 시맨틱 리콜
+- `backend/service/policy/` — 정책서 임포트/검색 파이프라인 (v1, docs/policy-doc-pipeline-plan.md)
 - `frontend-react/src/components/` — React UI 컴포넌트
-- `docs/` — architecture.md, flow.md, user-manual.md (변경 시 동기화)
+- `docs/` — architecture.md, flow.md, table-definition.md, api-specification.md (변경 시 동기화)
 
 ## 아키텍처 핵심
 - 검색: Glossary Term Mapping(0.5+) → Weighted Hybrid Search (vector+keyword)
@@ -38,7 +39,7 @@
 ## 배포 전 체크리스트
 - `npx tsc --noEmit` 통과 확인
 - `docker compose build` 성공 확인
-- 아키텍처 변경 시 docs/ 3개 파일 동기화
+- 아키텍처 변경 시 docs/ 4개 파일(architecture.md/flow.md/table-definition.md/api-specification.md) 동기화
 
 ## Allowed tools
 - Bash(docker compose*)
