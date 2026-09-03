@@ -56,12 +56,13 @@
 "전에 가져온 적 있는지" 매칭할 안정적 외부 ID 자체가 없다 — Confluence 페이지를 다시 긁어도
 페이지 ID로 매칭 안 되고 코사인 유사도로만 중복 판정됨.
 
-**중요한 반례 — 같은 코드베이스 안에 이미 정답에 가까운 패턴이 있다**: Text2SQL의 스키마 스캔
+**중요한 반례 — 같은 코드베이스 안에 이미 정답에 가까운 패턴이 있(었)다**: Text2SQL의 스키마 스캔
 (`agents/text2sql/admin/service.py:134` 이하)은 원격 DB에 실제로 접속해 테이블/컬럼을 diff 비교하고
-변경분만 재임베딩하며 고아 관계까지 정리한다 — CDC+Reconciliation을 이미 구현하고 있다. 즉 "이
+변경분만 재임베딩하며 고아 관계까지 정리했다 — CDC+Reconciliation을 이미 구현하고 있었다. 즉 "이
 패턴을 몰라서 rag_knowledge에 안 한 게" 아니라 **rag_knowledge엔 diff 비교할 원본 시스템 자체가
-없어서** 안 한 것. 나중에 실제 외부 시스템과 동기화하게 되면 이 패턴을 그대로 가져다 쓰면 된다
-(새로 설계할 필요 없음).
+없어서** 안 한 것. 나중에 실제 외부 시스템과 동기화하게 되면 이 패턴을 참고하면 된다(새로 설계할
+필요 없음) — **단, 2026-09-03 Text2SQL 에이전트가 `dev_0`/`main`에서 제거돼 이 파일은 더 이상
+여기 없다. 참고하려면 `archive/with-text2sql` 브랜치에서 찾을 것.**
 
 ### 2.6 품질/신선도 — 랭킹용일 뿐, 생명주기와 무관
 `freshness_decay_halflife_days`(`core/config.py:69`, 기본 0=비활성)는 검색 시 `final_score`에 감쇠를
@@ -119,7 +120,7 @@ Phase 1 (지금 착수 권장 — 실제 위험 완화) ────────
 - 삭제를 soft-delete로 전환(status='deleted') (§2.4 하드 삭제 위험 대응)
 
 Phase 2 (트리거: 외부 시스템과 실제로 동기화를 시작할 때) ──
-- Text2SQL 스키마 diff 패턴(§2.5)을 rag_knowledge에 이식
+- Text2SQL 스키마 diff 패턴(§2.5, archive/with-text2sql 브랜치)을 rag_knowledge에 이식
 - source_id 매칭 → 자동 UPDATE 경로, Reconciliation 배치
 
 Phase 3 (트리거: 중복/오래된 지식이 실제 운영 부담이 될 때) ─
@@ -183,5 +184,6 @@ count=7, 기간: 2026-07-14 ~ 2026-07-16 (사흘)
       랭킹에서 벡터 점수를 0으로 만들고 키워드 매칭만 쓰도록 라우팅(`retrieval.py`
       `_KEYWORD_ONLY_CATEGORIES`, `pattern_detection.py` 커버리지 후보에서도 동일 제외).
       상세: `docs/architecture.md` v2.49. **단, 데이터 자체(88% 표형식 오염) 정리·재구조화는
-      스코프 밖** — 다른 기능(Text2SQL 등)이 이 원본 데이터를 실제로 쓰는지 확인 후 별도 논의 필요
+      스코프 밖** — 다른 기능이 이 원본 데이터를 실제로 쓰는지 확인 후 별도 논의 필요
+      (Text2SQL은 v2.51에서 dev_0/main 제거돼 더 이상 후보 아님)
 - [ ] §5.2 재검토 트리거 발생 시 이 문서를 갱신하고 LLM Comparator 우선순위 재논의

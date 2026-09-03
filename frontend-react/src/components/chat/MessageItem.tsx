@@ -15,7 +15,6 @@ import type { ChatMessage } from '../../types';
 interface MessageItemProps {
   message: ChatMessage;
   namespace: string;
-  agentType?: string;
 }
 
 // ── SQL Block ────────────────────────────────────────────────────────────────
@@ -246,7 +245,7 @@ function SimpleBarChart({ chartResult, rows, columns }: {
 
 // ── MessageItem ───────────────────────────────────────────────────────────────
 
-export function MessageItem({ message, namespace, agentType }: MessageItemProps) {
+export function MessageItem({ message, namespace }: MessageItemProps) {
   const isUser = message.role === 'user';
 
   if (isUser) {
@@ -370,8 +369,6 @@ export function MessageItem({ message, namespace, agentType }: MessageItemProps)
               answer={message.content}
               knowledgeId={message.results?.[0]?.id ?? null}
               messageId={message.messageId}
-              agentType={agentType}
-              sqlResult={message.sqlResult}
             />
           )}
         </div>

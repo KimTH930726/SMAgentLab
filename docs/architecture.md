@@ -1,11 +1,25 @@
-# Ops-Navigator 시스템 아키텍처 (v2.50)
+# Ops-Navigator 시스템 아키텍처 (v2.51)
 
 ## 개요
 
 Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화하는 **지능형 운영 보조 에이전트 플랫폼**이다.
-사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
+사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG), HTTP API 연동(MCP 도구).
+
+> Text-to-SQL 에이전트는 v2.51에서 `dev_0`/`main`에서 분리·제거됐다(현재 과업 범위 아님) — 코드는
+> `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.51: **Text-to-SQL 에이전트 제거** — 현재 과업이 아니라는 판단에 따라 `dev_0`/`main`에서
+  분리, 형상관리 브랜치(`archive/with-text2sql`)로 보존. 제거 전 실측 점검: 백엔드는
+  `agents/text2sql/` 디렉토리 하나에 격리돼 있었고 역방향 참조(다른 에이전트가 text2sql을
+  import하는 경우)가 전혀 없었음 — `AgentRegistry` 패턴으로 처음부터 멀티 에이전트 구조를
+  의도한 설계 덕분에 영향 범위가 명확했음. 제거 내용: 라우터/에이전트 등록, `sql_*` 테이블
+  10개 생성 마이그레이션(`_migrate_text2sql_tables`), text2sql 프롬프트 시드(`sql2_*` 8개),
+  프론트엔드 전용 파일 2개(`Text2SqlAdmin.tsx`/`api/text2sql.ts`) + 공용 컴포넌트 6곳의 얕은
+  분기(에이전트 탭 라우팅, 라벨/색상 매핑), 전용 테스트 4개. **기존 DB의 `sql_*` 테이블은
+  삭제하지 않고 그대로 둠**(마이그레이션 호출만 제거돼 더 이상 갱신되지 않을 뿐 — 데이터
+  삭제는 이번 범위 밖). 제거 후 전체 테스트(257개, 기존 303개에서 text2sql 전용 46개 제외)
+  통과, 실 HTTP로 `/api/text2sql/*` 404 확인, 프론트 `tsc --noEmit` 및 프로덕션 빌드 통과.
 - v2.50: 팀 규모 SSO 인프라 초석 — 소스 점검 중 발견한 실제 취약점 2건 수정 + `ops_user` 스키마 선확장.
   ① **admin 계정 비밀번호 강제 리셋 버그 수정**: `main.py`의 마이그레이션 루틴이 서버 재시작마다
   `admin` 계정의 `hashed_password`를 `ADMIN_DEFAULT_PASSWORD`(기본값 `1111`) 값으로 무조건
@@ -113,11 +127,11 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 |--------|------|
 | **Login** (`/login`) | JWT 로그인 — Access Token + Refresh Token 발급 |
 | **Register** (`/register`) | 회원가입 — 부서 선택 + 선택적 LLM API Key 등록 |
-| **AgentSelect** (로그인 직후) | 에이전트 선택 화면 — 지식베이스 AI / Text-to-SQL 카드 선택. `selectedAgent=null`이면 이 화면 표시 (사이드바 없음) |
-| **Chat** (`/`) | 에이전트별 채팅 — SSE 스트리밍, 결과 카드, 피드백(👍→few-shot/base_weight), 대화 메모리(요약+리콜), Markdown 답변, SQL블록+결과테이블+SVG차트 (text2sql), MCP 도구 토글 |
-| **Admin** (`/admin`) | 에이전트별 관리 화면 — `agentScope` 필드로 탭 필터링. knowledge_rag: 네임스페이스·지식·용어집·Few-shot·MCP도구·캐시현황·통계·디버그. text2sql: 대상DB·스키마·ERD·용어사전·SQL Few-shot·파이프라인·감사로그. 공통: 시스템설정·사용자관리. (에이전트현황 탭 제거 — AgentSelect 화면에 헬스배지로 대체) |
+| **AgentSelect** (로그인 직후) | 에이전트 선택 화면 — 지식베이스 AI 카드 선택. `selectedAgent=null`이면 이 화면 표시 (사이드바 없음) |
+| **Chat** (`/`) | 에이전트별 채팅 — SSE 스트리밍, 결과 카드, 피드백(👍→few-shot/base_weight), 대화 메모리(요약+리콜), Markdown 답변, MCP 도구 토글 |
+| **Admin** (`/admin`) | 에이전트별 관리 화면 — `agentScope` 필드로 탭 필터링. knowledge_rag: 네임스페이스·지식·용어집·Few-shot·MCP도구·캐시현황·통계·디버그. 공통: 시스템설정·사용자관리. (에이전트현황 탭 제거 — AgentSelect 화면에 헬스배지로 대체) |
 
-- **Agent-centric 라우팅**: `useAppStore.selectedAgent: 'knowledge_rag' | 'text2sql' | null`. null이면 AgentSelect 표시, 설정 시 에이전트별 UI로 전환. 로그아웃 시 null로 리셋
+- **Agent-centric 라우팅**: `useAppStore.selectedAgent: 'knowledge_rag' | null`. null이면 AgentSelect 표시, 설정 시 에이전트별 UI로 전환. 로그아웃 시 null로 리셋
 - **MCP 도구 토글**: ChatContainer 내 `useHttpTool` boolean — ON 시 `agentType='mcp_tool'`, OFF 시 `selectedAgent` 값 사용. 에이전트가 아닌 도구
 - **ProtectedRoute**: 로그인되지 않은 사용자는 `/login`으로 리다이렉트
 - **useAuthStore** (Zustand): localStorage에 토큰 저장, 자동 Bearer 토큰 주입
@@ -151,11 +165,6 @@ backend/
 │   │   └── fewshot/     #   Few-shot CRUD (status: active/candidate)
 │   ├── mcp_tool/
 │   │   └── agent.py     #   McpToolAgent — 3-case 플로우 + RAG + 감사 로그
-│   ├── text2sql/
-│   │   ├── agent.py     #   Text2SqlAgent (startup 병렬화, _cache_hit)
-│   │   ├── admin/       #   Text2SQL 어드민 API (대상DB·스키마·ERD·용어사전·Few-shot·파이프라인·감사로그)
-│   │   │   └── excel_importer.py  #   엑셀 스키마 임포터 (헤더 퍼지 매핑, parse_excel, rows_to_tables, build_sample_workbook)
-│   │   └── pipeline/    #   7단계: parse→rag→generate→validate→fix→execute→summarize
 │   └── http_tool/       #   HttpToolAgent (레거시)
 ├── service/             # 플랫폼 공통 레이어 (was domain/, platform/ 명칭 stdlib 충돌로 service/ 확정)
 │   ├── auth/            #   인증/계정 (JWT, bcrypt, Fernet API Key 암호화)
@@ -282,17 +291,8 @@ rag_fewshot           -- Few-shot Q&A (HNSW, status: active/candidate)
 rag_conv_summary      -- 대화 요약 (embedding VECTOR(768), Semantic Recall용)
 rag_ingestion_job     -- 인제스천 작업 이력 (source_type, status, auto_glossary/fewshot 수, analyzer_result JSONB)
 
--- Text-to-SQL 전용 (sql_* prefix)
-sql_target_db         -- 대상 DB 연결 설정 (암호화 저장, schema_name: PG schema / Oracle owner)
-sql_schema_table      -- 테이블 메타데이터 (pos_x/pos_y ERD 위치)
-sql_schema_column     -- 컬럼 메타데이터 (is_pk, fk_reference)
-sql_relation          -- FK 관계 정의
-sql_synonym           -- 자연어 → SQL 표현 매핑 (embedding VECTOR(768))
-sql_fewshot           -- Q&A Few-shot (embedding VECTOR(768), status: pending/approved/rejected)
-sql_pipeline_stage    -- 파이프라인 단계 설정 (is_enabled/order_num 등 메타. 프롬프트는 ops_prompt sql2_* 키 사용)
-sql_audit_log         -- 쿼리 실행 감사 로그
-sql_cache             -- 쿼리 결과 캐시
-sql_schema_vector     -- 스키마 벡터 인덱스
+-- Text-to-SQL 전용 (sql_* prefix) — v2.51에서 에이전트 제거, 마이그레이션 호출도 제거됨
+-- (기존 설치엔 테이블이 남아있지만 더 이상 갱신되지 않음. 스키마 상세는 archive/with-text2sql 브랜치 참고)
 ```
 
 - **HNSW 인덱스** (`vector_cosine_ops`): 벡터 근사 최근접 이웃 검색
@@ -423,35 +423,6 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 | `DELETE` | `/api/admin/cache/entry` | 단일 캐시 엔트리 삭제 |
 | `POST` | `/api/admin/glossary/suggest` | 미매핑 질문 LLM 분석 → 용어 후보 반환 (`limit` 파라미터로 조회 건수 설정, 기본 50, 최대 200) |
 | `POST` | `/api/admin/glossary/suggest/apply` | 추천 용어 1-click 등록 (임베딩 자동 생성) |
-
-### Text-to-SQL (`/api/text2sql`) — v2.5 신규, v2.6 확장
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `GET/PUT` | `/api/text2sql/namespaces/{ns}/target-db` | 대상 DB 연결 설정 조회/저장 |
-| `POST` | `/api/text2sql/namespaces/{ns}/target-db/test` | 연결 테스트 |
-| `POST` | `/api/text2sql/namespaces/{ns}/target-db/scan` | 스키마 diff 스캔 — 테이블/컬럼 추가·삭제·변경 감지, 변경분만 임베딩. ERD 고아 관계 자동 정리(삭제 테이블/컬럼 관련 relation 삭제), 용어사전 고아 자동 삭제(삭제 컬럼 참조 용어 삭제). 변경 상세 리포트 반환 (v2.10) |
-| `GET` | `/api/text2sql/namespaces/{ns}/schema` | 전체 스키마 (테이블+컬럼) 조회 |
-| `PUT` | `/api/text2sql/namespaces/{ns}/schema/tables/{id}` | 테이블 설명 수정 |
-| `PUT` | `/api/text2sql/namespaces/{ns}/schema/tables/{id}/toggle` | 테이블 RAG 포함 여부 토글 |
-| `PUT` | `/api/text2sql/namespaces/{ns}/schema/columns/{id}` | 컬럼 설명 수정 |
-| `POST` | `/api/text2sql/namespaces/{ns}/schema/reindex` | 스키마 벡터 재인덱싱 |
-| `POST` | `/api/text2sql/namespaces/{ns}/schema/import/excel/preview` | 엑셀 파일 업로드 → 헤더 자동 매핑 + 파싱 결과 미리보기 (등록 없음) — v2.23 신규 |
-| `POST` | `/api/text2sql/namespaces/{ns}/schema/import/excel/confirm` | 미리보기 결과 rows 전달 → DB 저장 + 임베딩 생성 (이미 등록된 테이블 skip) — v2.23 신규 |
-| `GET` | `/api/text2sql/namespaces/{ns}/schema/import/excel/template` | 샘플 템플릿 xlsx 다운로드 — 권장 헤더 + 예시 데이터 4행. 헤더는 파서의 `_HEADER_CANDIDATES`에서 파생, 정적 바이트라 최초 생성 후 캐싱 — v2.24 신규 |
-| `PUT` | `/api/text2sql/namespaces/{ns}/schema/positions` | ERD 테이블 위치 일괄 저장 (pos_x/pos_y) — v2.6 신규 |
-| `GET/POST/DELETE` | `/api/text2sql/namespaces/{ns}/relations/{id?}` | FK 관계 CRUD |
-| `POST` | `/api/text2sql/namespaces/{ns}/relations/suggest-ai` | AI 관계 추천 (LLM이 컬럼명 패턴 분석, v2.10: 변경 테이블 대상으로만 제한하여 토큰 절약) — v2.6 신규 |
-| `GET/POST/DELETE` | `/api/text2sql/namespaces/{ns}/synonyms/{id?}` | 용어사전 CRUD |
-| `POST` | `/api/text2sql/namespaces/{ns}/synonyms/reindex` | 용어사전 벡터 재인덱싱 |
-| `POST` | `/api/text2sql/namespaces/{ns}/synonyms/generate-ai` | AI 용어 자동생성 (30+ 항목, SQL 키워드 필터, v2.10: 변경 테이블 대상으로만 제한하여 토큰 절약) — v2.6 신규 |
-| `GET/POST/DELETE` | `/api/text2sql/namespaces/{ns}/fewshots/{id?}` | 예제 Q&A CRUD |
-| `POST` | `/api/text2sql/namespaces/{ns}/fewshots/reindex` | 예제 벡터 재인덱싱 |
-| `POST` | `/api/text2sql/namespaces/{ns}/fewshots/generate-ai` | AI 예제 자동생성 (20+ QA 쌍) — v2.6 신규 |
-| `GET` | `/api/text2sql/pipeline` | 파이프라인 단계 목록 |
-| `PUT` | `/api/text2sql/pipeline/{id}/toggle` | 단계 활성/비활성 |
-| `GET` | `/api/text2sql/namespaces/{ns}/audit-logs` | 쿼리 감사 로그 (페이지네이션) |
-| `GET/DELETE` | `/api/text2sql/namespaces/{ns}/cache/{id?}` | 쿼리 결과 캐시 조회/삭제 |
 
 ### Teams 수집 (`/api/teams-collect`) — v2.15 신규
 

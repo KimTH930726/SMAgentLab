@@ -8,14 +8,12 @@ import { Button } from '../ui/Button';
 const AGENT_TYPE_LABELS: Record<string, string> = {
   all:           '공통',
   knowledge_rag: 'RAG',
-  text2sql:      'Text2SQL',
   mcp_tool:      'MCP',
 };
 
 const AGENT_TYPE_COLORS: Record<string, string> = {
   all:           'text-slate-400 bg-slate-700',
   knowledge_rag: 'text-violet-300 bg-violet-500/20',
-  text2sql:      'text-emerald-300 bg-emerald-500/20',
   mcp_tool:      'text-sky-300 bg-sky-500/20',
 };
 

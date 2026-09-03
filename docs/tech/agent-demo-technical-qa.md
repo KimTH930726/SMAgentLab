@@ -63,15 +63,11 @@
 
 **발표 멘트**: "등록에서 검색 반영까지 재시작이나 재색인 같은 배치 작업이 없습니다. 등록하는 순간 바로 검색 가능합니다."
 
-### 1.5 시나리오 4 (선택, 시간 여유 시) — Text-to-SQL
+### 1.5 (제외됨, 2026-09-03) Text-to-SQL 시나리오
 
-**입력 질문 예시**: "이번 주 결제 실패 건수 top 5 알려줘" (대상 DB·스키마가 사전 등록된 네임스페이스에서)
-
-**보여줄 포인트**:
-- 자연어 질문 → 생성된 SQL이 화면에 표시됨 (블랙박스로 실행하지 않고 SQL을 보여줌 — 신뢰 포인트)
-- 결과 테이블 + 간단한 차트
-
-**발표 멘트**: "지식 Q&A뿐 아니라 실제 운영 DB에 자연어로 질의하는 에이전트도 같은 플랫폼 위에서 동작합니다."
+> Text-to-SQL 에이전트는 v2.51에서 `dev_0`/`main`에서 분리·제거됐다(현재 과업 범위 아님,
+> `archive/with-text2sql` 브랜치에 보존) — **이 시나리오는 지금 시연 불가**. 재도입되면 이 절을
+> 복원할 것.
 
 ### 1.6 시연 실패 시 대안
 
@@ -138,9 +134,9 @@ Frontend(React+nginx :8501) ─REST/SSE─▶ Backend(FastAPI :8000) ─▶ Post
 
 ### 2.5 에이전트 확장 구조 — AgentRegistry 패턴
 
-- `AgentBase`를 상속한 에이전트(KnowledgeRAG / Text2SQL / MCP Tool / …)를 `AgentRegistry`에 등록해두고, 채팅 라우터는 `agent_type`만 보고 위임
+- `AgentBase`를 상속한 에이전트(KnowledgeRAG / MCP Tool / …)를 `AgentRegistry`에 등록해두고, 채팅 라우터는 `agent_type`만 보고 위임
 - 인증/세션/피드백 같은 **플랫폼 공통 기능**과 **에이전트별 파이프라인**을 분리한 구조라, 새 에이전트를 추가할 때 기존 코드를 건드리지 않고 `agents/` 아래에 모듈만 추가하면 됨
-- 발표 포인트: "지금 KnowledgeRAG를 보여드렸지만, 같은 플랫폼 위에 Text2SQL·MCP 도구 연동 에이전트가 이미 같은 구조로 얹혀 있고, VOC 메일링 같은 다음 확장도 이 구조를 그대로 재사용합니다."
+- 발표 포인트: "지금 KnowledgeRAG를 보여드렸지만, 같은 플랫폼 위에 MCP 도구 연동 에이전트가 이미 같은 구조로 얹혀 있고, VOC 메일링 같은 다음 확장도 이 구조를 그대로 재사용합니다." (Text-to-SQL 에이전트는 현재 과업 범위가 아니라 dev_0/main에서 제외돼 있음 — 필요 시 archive/with-text2sql 브랜치에서 같은 구조로 존재했음을 언급 가능)
 
 ### 2.6 데이터 격리 및 권한 (보안 질의 대비)
 
@@ -148,7 +144,7 @@ Frontend(React+nginx :8501) ─REST/SSE─▶ Backend(FastAPI :8000) ─▶ Post
 - **부서(owner_part) 기반 권한**: 네임스페이스 소유 부서만 해당 데이터 CRUD 가능, 타 부서는 읽기 전용. `owner_part`가 없는 공통 네임스페이스는 전원 CRUD 가능
 - **암호화**: 사용자별 LLM API Key, Confluence PAT은 Fernet 대칭 암호화로 저장, 비밀번호는 bcrypt 해시
 - **인증**: JWT Access Token(30분) + Refresh Token(7일), 라우터 단위 `Depends` 보호
-- **감사 로그**: MCP 도구 호출, Text2SQL 쿼리 실행에 대해 별도 감사 로그 테이블 존재
+- **감사 로그**: MCP 도구 호출에 대해 별도 감사 로그 테이블 존재
 
 ### 2.7 인프라·운영 관점
 
@@ -193,7 +189,7 @@ Frontend(React+nginx :8501) ─REST/SSE─▶ Backend(FastAPI :8000) ─▶ Post
 특정 공용 VOC 메일함만 대상으로, 최소 권한(RBAC 스코프 제한 — Mail.Read를 전체 테넌트가 아닌 지정 메일함으로 제한)으로 앱 등록하는 방식을 사전 설계했다. 자격증명은 발급 즉시 Admin 화면에 입력만 하면 되고 코드/로그에 하드코딩되지 않는다. 상세는 `email-analysis-channel-plan.md`, 진행 일정은 별도 WBS 참조.
 
 **Q. 감사(audit)는 어떻게 남기나?**
-MCP 도구 호출, Text2SQL 실행 SQL, VOC 메일 분석/알림 발송 결과 모두 별도 로그 테이블에 남는다. 어드민 화면에서 조회 가능하다.
+MCP 도구 호출, VOC 메일 분석/알림 발송 결과 모두 별도 로그 테이블에 남는다. 어드민 화면에서 조회 가능하다.
 
 **Q. 장애/오류가 나면 서비스 전체가 죽나?**
 LLM 연결이 끊겨도 검색 결과 자체는 정상 반환되고 안내 메시지만 나오는 Graceful Degradation 구조다(LLM 없이도 근거 문서는 확인 가능). Redis(캐시)가 죽어도 캐시 단계만 건너뛰고 정상 동작한다.

@@ -23,7 +23,6 @@ from service.admin.router import router as admin_router
 from service.mcp_tool.router import router as mcp_tool_router
 from service.prompt.router import router as prompt_router
 from service.teams.router import router as teams_router
-from agents.text2sql.admin.router import router as text2sql_router
 from service.email_voc.router import router as email_voc_router
 from service.email_voc.scheduler import start_scheduler, stop_scheduler
 
@@ -31,7 +30,6 @@ from shared import cache as sem_cache
 from agents.base import AgentRegistry
 from agents.knowledge_rag.agent import KnowledgeRagAgent
 from agents.mcp_tool.agent import McpToolAgent, close_http_client as close_mcp_http_client
-from agents.text2sql.agent import Text2SqlAgent
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +39,6 @@ _ROUTERS = [
     mcp_tool_router,
     prompt_router,
     teams_router,
-    text2sql_router,
     email_voc_router,
 ]
 
@@ -246,19 +243,6 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS meta JSONB")
     await conn.execute("ALTER TABLE IF EXISTS ops_mcp_tool ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
-    await conn.execute("ALTER TABLE IF EXISTS sql_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'approved'")
-
-    # ── ops_conversation.agent_type 소급 보정 ───────────────────────
-    # 대화방 생성 코드가 이 컬럼을 실제로 세팅하지 않아 전부 DB 기본값
-    # ('knowledge_rag')으로 남아있었음. text2sql 에이전트가 만든 메시지만
-    # metadata를 채우므로(다른 에이전트는 절대 채우지 않음, service/chat/helpers.py
-    # update_assistant_message 참고) 이를 근거로 역보정한다.
-    await conn.execute("""
-        UPDATE ops_conversation SET agent_type = 'text2sql'
-        WHERE agent_type != 'text2sql' AND id IN (
-            SELECT DISTINCT conversation_id FROM ops_message WHERE metadata IS NOT NULL
-        )
-    """)
 
     # ── query_log answer 역매칭 ────────────────────────────────────
     # namespace 내에서 ql.question과 동일한 내용의 user 메시지가 앞서 존재하는
@@ -422,287 +406,6 @@ async def _migrate_mcp_tables(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_part_agent_access ON ops_part_agent_access (part_id)")
 
 
-async def _migrate_text2sql_tables(conn) -> None:
-    """모든 sql_* 테이블, HNSW 인덱스 및 시드 데이터 마이그레이션."""
-    # ── Text2SQL: 대상 DB 연결 정보 ─────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_target_db (
-            id                  SERIAL PRIMARY KEY,
-            namespace_id        INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            db_type             VARCHAR(20) NOT NULL DEFAULT 'postgresql',
-            host                VARCHAR(255) NOT NULL DEFAULT '',
-            port                INT NOT NULL DEFAULT 5432,
-            db_name             VARCHAR(255) NOT NULL DEFAULT '',
-            username            VARCHAR(255) NOT NULL DEFAULT '',
-            encrypted_password  TEXT NOT NULL DEFAULT '',
-            schema_name         VARCHAR(255) DEFAULT NULL,
-            is_active           BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (namespace_id)
-        )
-    """)
-    # 마이그레이션: schema_name 컬럼 추가
-    await conn.execute("""
-        ALTER TABLE sql_target_db ADD COLUMN IF NOT EXISTS schema_name VARCHAR(255) DEFAULT NULL
-    """)
-
-    # ── Text2SQL: 스키마 테이블 ──────────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_schema_table (
-            id              SERIAL PRIMARY KEY,
-            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            table_name      VARCHAR(255) NOT NULL,
-            description     TEXT NOT NULL DEFAULT '',
-            pos_x           FLOAT NOT NULL DEFAULT 0,
-            pos_y           FLOAT NOT NULL DEFAULT 0,
-            is_selected     BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (namespace_id, table_name)
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sql_schema_table_ns ON sql_schema_table (namespace_id)")
-
-    # ── Text2SQL: 스키마 컬럼 ────────────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_schema_column (
-            id              SERIAL PRIMARY KEY,
-            table_id        INT NOT NULL REFERENCES sql_schema_table(id) ON DELETE CASCADE,
-            name            VARCHAR(255) NOT NULL,
-            data_type       VARCHAR(100) NOT NULL DEFAULT '',
-            description     TEXT NOT NULL DEFAULT '',
-            is_pk           BOOLEAN NOT NULL DEFAULT FALSE,
-            fk_reference    VARCHAR(500),
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sql_schema_column_table ON sql_schema_column (table_id)")
-
-    # ── Text2SQL: 스키마 벡터 (pgvector 768차원) ─────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_schema_vector (
-            id          SERIAL PRIMARY KEY,
-            column_id   INT NOT NULL REFERENCES sql_schema_column(id) ON DELETE CASCADE UNIQUE,
-            namespace_id INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            embedding   VECTOR(768)
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sql_schema_vector_ns ON sql_schema_vector (namespace_id)")
-    await conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_sql_schema_vector_hnsw
-        ON sql_schema_vector USING hnsw (embedding vector_cosine_ops)
-        WITH (m = 16, ef_construction = 64)
-    """)
-
-    # ── Text2SQL: 테이블 관계 ────────────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_relation (
-            id              SERIAL PRIMARY KEY,
-            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            from_table      VARCHAR(255) NOT NULL,
-            from_col        VARCHAR(255) NOT NULL,
-            to_table        VARCHAR(255) NOT NULL,
-            to_col          VARCHAR(255) NOT NULL,
-            relation_type   VARCHAR(20) NOT NULL DEFAULT 'N:1',
-            description     TEXT NOT NULL DEFAULT '',
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sql_relation_ns ON sql_relation (namespace_id)")
-
-    # ── Text2SQL: SQL 용어 사전 ──────────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_synonym (
-            id              SERIAL PRIMARY KEY,
-            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            term            VARCHAR(255) NOT NULL,
-            target          TEXT NOT NULL,
-            description     TEXT NOT NULL DEFAULT '',
-            embedding       VECTOR(768),
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sql_synonym_ns ON sql_synonym (namespace_id)")
-    await conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_sql_synonym_hnsw
-        ON sql_synonym USING hnsw (embedding vector_cosine_ops)
-        WITH (m = 16, ef_construction = 64)
-    """)
-
-    # ── Text2SQL: SQL 예제 (Fewshot) ─────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_fewshot (
-            id              SERIAL PRIMARY KEY,
-            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            question        TEXT NOT NULL,
-            sql             TEXT NOT NULL,
-            category        VARCHAR(100) NOT NULL DEFAULT '',
-            hits            INT NOT NULL DEFAULT 0,
-            last_hit        TIMESTAMPTZ,
-            embedding       VECTOR(768),
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sql_fewshot_ns ON sql_fewshot (namespace_id)")
-    await conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_sql_fewshot_hnsw
-        ON sql_fewshot USING hnsw (embedding vector_cosine_ops)
-        WITH (m = 16, ef_construction = 64)
-    """)
-
-    # ── Text2SQL: 파이프라인 스테이지 설정 (전역) ───────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_pipeline_stage (
-            id              VARCHAR(30) PRIMARY KEY,
-            name            VARCHAR(100) NOT NULL,
-            description     TEXT NOT NULL DEFAULT '',
-            icon            VARCHAR(50) NOT NULL DEFAULT '',
-            color           VARCHAR(20) NOT NULL DEFAULT '#888',
-            is_required     BOOLEAN NOT NULL DEFAULT FALSE,
-            is_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-            prompt          TEXT,
-            system_prompt   TEXT,
-            extra_prompts   TEXT,
-            order_num       INT NOT NULL DEFAULT 0,
-            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    """)
-    # 기본 파이프라인 스테이지 시드
-    await conn.execute("""
-        INSERT INTO sql_pipeline_stage
-            (id, name, description, icon, color, is_required, is_enabled, order_num, system_prompt, prompt)
-        VALUES
-            ('parse',         '질문 분석',   'Intent/difficulty/entities 추출', 'Search',        '#6366f1', TRUE,  TRUE,  1,
-             'You are a query parser for a Text-to-SQL system. Always respond with valid JSON.',
-             $1),
-            ('rag',           'RAG 검색',   '스키마/용어/예제 벡터 검색',        'Database',      '#8b5cf6', TRUE,  TRUE,  2,
-             NULL, NULL),
-            ('schema_link',   '스키마 연결', '[미구현] LLM 관련 테이블 식별',    'Link',          '#a78bfa', FALSE, FALSE, 3,
-             NULL, NULL),
-            ('schema_explore','스키마 탐색', '[미구현] 실제 DB sample values 탐색', 'Layers',     '#34d399', FALSE, FALSE, 4,
-             NULL, NULL),
-            ('generate',      'SQL 생성',   'LLM 기반 SQL 쿼리 생성',          'Code',          '#10b981', TRUE,  TRUE,  5,
-             'You are an expert SQL generator. Think step-by-step, then return the SQL.',
-             $2),
-            ('candidates',    '후보 평가',   '[미구현] 복수 SQL 후보 중 최적 선택', 'GitBranch',  '#fb923c', FALSE, FALSE, 6,
-             NULL, NULL),
-            ('validate',      'SQL 검증',   'Safety + AST 기반 SQL 검증',       'ShieldCheck',   '#f59e0b', FALSE, TRUE,  7,
-             NULL, NULL),
-            ('fix',           '자동 수정',   '검증 실패 시 LLM 자동 수정',       'Wrench',        '#ef4444', FALSE, TRUE,  8,
-             NULL, NULL),
-            ('execute',       '쿼리 실행',   '대상 DB에 SQL 실행',              'Play',          '#3b82f6', FALSE, TRUE,  9,
-             NULL, NULL),
-            ('summarize',     '결과 요약',   'LLM 결과 요약 + 차트 추천',        'BarChart2',     '#06b6d4', FALSE, FALSE, 10,
-             'You are a data analyst. Respond ONLY with valid JSON.',
-             $3)
-        ON CONFLICT (id) DO NOTHING
-    """,
-        # parse prompt
-        """다음 사용자 질문을 분석하여 JSON으로 반환하세요.
-
-질문: {{question}}
-
-반환 형식:
-{
-  "intent": "simple_select|aggregation|join|subquery|window_function|cte",
-  "difficulty": "simple|moderate|complex",
-  "entities": ["언급된 테이블/컬럼명 후보"],
-  "conditions": [{"type": "date|filter", "column": "컬럼명", "value": "값"}],
-  "aggregation": "집계 표현식 (없으면 null)",
-  "keywords": ["핵심 키워드"]
-}""",
-        # generate prompt
-        """다음 정보를 바탕으로 {{db_type}} SQL 쿼리를 작성하세요.
-
-[질문]
-{{question}}
-
-[스키마]
-{{schema}}
-
-[테이블 관계]
-{{relations}}
-
-[유사 용어]
-{{synonyms}}
-
-[SQL 예제]
-{{fewshots}}
-
-[이전 대화]
-{{history}}
-
-[난이도]
-{{difficulty}}
-
-{{cot_instruction}}
-
-{{enriched_schema}}
-
-DB 방언 규칙:
-{{dialect_rules}}
-
-<reasoning>
-(단계별 사고 과정)
-</reasoning>
-
-```sql
--- 최종 SQL
-```""",
-        # summarize prompt
-        """다음 SQL 실행 결과를 분석하여 JSON으로 반환하세요.
-
-질문: {{question}}
-SQL: {{sql}}
-결과 (최대 20행): {{result_preview}}
-컬럼: {{columns}}
-
-{
-  "summary": "한국어 1~2문장 요약",
-  "chart": null 또는 {"type": "bar|line|pie|scatter|area", "x": "컬럼명", "y": "컬럼명", "title": "차트 제목"}
-}""",
-    )
-
-    # ── Text2SQL: 감사 로그 ──────────────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_audit_log (
-            id              SERIAL PRIMARY KEY,
-            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            question        TEXT NOT NULL,
-            sql             TEXT,
-            status          VARCHAR(20) NOT NULL DEFAULT 'success',
-            duration_ms     INT NOT NULL DEFAULT 0,
-            cached          BOOLEAN NOT NULL DEFAULT FALSE,
-            tokens          INT NOT NULL DEFAULT 0,
-            error           TEXT,
-            result_preview  TEXT,
-            stages_json     TEXT,
-            feedback_type   VARCHAR(10),
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sql_audit_ns ON sql_audit_log (namespace_id, created_at DESC)")
-
-    # ── Text2SQL: SQL 캐시 ───────────────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS sql_cache (
-            id              SERIAL PRIMARY KEY,
-            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            question_hash   VARCHAR(64) NOT NULL,
-            question        TEXT NOT NULL,
-            sql             TEXT NOT NULL,
-            hits            INT NOT NULL DEFAULT 0,
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            expires_at      TIMESTAMPTZ,
-            UNIQUE (namespace_id, question_hash)
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sql_cache_ns ON sql_cache (namespace_id)")
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sql_cache_expires ON sql_cache (expires_at)")
-
-
 async def _migrate_system_tables(conn) -> None:
     """ops_system_config, ops_prompt 테이블 및 시드 데이터 마이그레이션."""
     # ── ops_message.metadata 컬럼 추가 (text2sql 결과 영속화) ──────────
@@ -748,15 +451,7 @@ async def _migrate_system_tables(conn) -> None:
         ('autocomplete',        '도구 등록 자동완성',       $4,  'MCP 도구 등록 시 자연어→JSON 변환 프롬프트',                             'mcp_tool'),
         ('category_suggest',    '카테고리 자동 추천',       $5,  '지식 내용 분석 후 업무구분 추천. {categories}·{content} 플레이스홀더 필수', 'knowledge_rag'),
         ('glossary_suggest',    '용어 추천 시스템',         $6,  '미매핑 질문에서 업무 용어를 추출하는 시스템 프롬프트',                    'knowledge_rag'),
-        ('conv_summarize',      '대화 요약',               $7,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all'),
-        ('sql2_parse',          'SQL 질문 분석',           $8,  'Text2SQL 파이프라인 1단계: intent/difficulty/entities 추출 프롬프트. {{question}} 플레이스홀더 필수', 'text2sql'),
-        ('sql2_parse_system',   'SQL 질문 분석 시스템',    $9,  'Text2SQL parse 단계 시스템 프롬프트',                                    'text2sql'),
-        ('sql2_generate',       'SQL 생성',                $10, 'Text2SQL 파이프라인 3단계: SQL 생성 프롬프트. {{question}}·{{schema}} 등 플레이스홀더 필수', 'text2sql'),
-        ('sql2_generate_system','SQL 생성 시스템',          $11, 'Text2SQL generate 단계 시스템 프롬프트',                                 'text2sql'),
-        ('sql2_fix',            'SQL 자동 수정',           $12, 'Text2SQL 파이프라인 5단계: 검증 실패 SQL 수정 프롬프트. {{sql}}·{{errors}}·{{schema}} 필수', 'text2sql'),
-        ('sql2_fix_system',     'SQL 자동 수정 시스템',    $13, 'Text2SQL fix 단계 시스템 프롬프트',                                      'text2sql'),
-        ('sql2_summarize',      'SQL 결과 요약',           $14, 'Text2SQL 파이프라인 7단계: 실행 결과 요약+차트 추천 프롬프트. {{question}}·{{sql}}·{{result_preview}}·{{columns}} 필수', 'text2sql'),
-        ('sql2_summarize_system','SQL 결과 요약 시스템',   $15, 'Text2SQL summarize 단계 시스템 프롬프트',                                 'text2sql')
+        ('conv_summarize',      '대화 요약',               $7,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all')
         ON CONFLICT (func_key) DO NOTHING
     """,
         # chat_system — NO_KNOWLEDGE_MARKER를 그대로 삽입해 service/chat/helpers.py의
@@ -815,87 +510,6 @@ async def _migrate_system_tables(conn) -> None:
 {dialogue}
 
 요약:""",
-        # sql2_parse
-        """다음 사용자 질문을 분석하여 JSON으로 반환하세요.
-
-질문: {{question}}
-
-반환 형식:
-{
-  "intent": "simple_select|aggregation|join|subquery|window_function|cte",
-  "difficulty": "simple|moderate|complex",
-  "entities": ["언급된 테이블/컬럼명 후보"],
-  "conditions": [{"type": "date|filter", "column": "컬럼명", "value": "값"}],
-  "aggregation": "집계 표현식 (없으면 null)",
-  "keywords": ["핵심 키워드"]
-}""",
-        # sql2_parse_system
-        "You are a query parser for a Text-to-SQL system. Always respond with valid JSON.",
-        # sql2_generate
-        """다음 정보를 바탕으로 {{db_type}} SQL 쿼리를 작성하세요.
-
-[질문]
-{{question}}
-
-[스키마]
-{{schema}}
-
-[테이블 관계]
-{{relations}}
-
-[유사 용어]
-{{synonyms}}
-
-[SQL 예제]
-{{fewshots}}
-
-[이전 대화]
-{{history}}
-
-난이도: {{difficulty}}
-{{cot_instruction}}
-
-DB 방언 규칙:
-{{dialect_rules}}
-
-<reasoning>
-(단계별 사고 과정)
-</reasoning>
-
-```sql
--- 최종 SQL
-```""",
-        # sql2_generate_system
-        "You are an expert SQL generator. Think step-by-step, then return the SQL.",
-        # sql2_fix
-        """다음 SQL에 오류가 있습니다. 수정하여 올바른 SQL만 반환하세요.
-
-[원본 SQL]
-{{sql}}
-
-[오류 목록]
-{{errors}}
-
-[스키마 참고]
-{{schema}}
-
-수정된 SQL만 ```sql ... ``` 형식으로 반환하세요.""",
-        # sql2_fix_system
-        "You are an expert SQL debugger. Fix the SQL based on the errors provided.",
-        # sql2_summarize
-        """다음 SQL 실행 결과를 분석하여 JSON으로 반환하세요.
-
-질문: {{question}}
-SQL: {{sql}}
-결과 (최대 20행): {{result_preview}}
-컬럼: {{columns}}
-
-{
-  "summary": "한국어 1~2문장 요약",
-  "chart": null 또는 {"type": "bar|line|pie|scatter|area", "x": "컬럼명", "y": "컬럼명", "title": "차트 제목"}
-}""",
-        # sql2_summarize_system
-        "You are a data analyst. Respond ONLY with valid JSON.",
     )
     # 기존 rows에 agent_type 업데이트 (DEFAULT 'all'로 들어간 경우 보정)
     await conn.execute("""
@@ -905,37 +519,6 @@ SQL: {{sql}}
     await conn.execute("""
         UPDATE ops_prompt SET agent_type = 'mcp_tool'
         WHERE func_key IN ('tool_select','tool_answer','autocomplete') AND agent_type = 'all'
-    """)
-    await conn.execute("""
-        UPDATE ops_prompt SET agent_type = 'text2sql'
-        WHERE func_key LIKE 'sql2_%' AND agent_type = 'all'
-    """)
-
-    # v2.10: execute 필수 해제 + 파이프라인 순서 정리 + 미구현 표시
-    await conn.execute("""
-        UPDATE sql_pipeline_stage SET is_required = FALSE
-        WHERE id = 'execute' AND is_required = TRUE
-    """)
-    await conn.execute("""
-        UPDATE sql_pipeline_stage SET order_num = CASE id
-            WHEN 'parse'          THEN 1
-            WHEN 'rag'            THEN 2
-            WHEN 'schema_link'    THEN 3
-            WHEN 'schema_explore' THEN 4
-            WHEN 'generate'       THEN 5
-            WHEN 'candidates'     THEN 6
-            WHEN 'validate'       THEN 7
-            WHEN 'fix'            THEN 8
-            WHEN 'execute'        THEN 9
-            WHEN 'summarize'      THEN 10
-            ELSE order_num
-        END,
-        description = CASE id
-            WHEN 'schema_link'    THEN '[미구현] LLM 관련 테이블 식별'
-            WHEN 'schema_explore' THEN '[미구현] 실제 DB sample values 탐색'
-            WHEN 'candidates'     THEN '[미구현] 복수 SQL 후보 중 최적 선택'
-            ELSE description
-        END
     """)
 
 
@@ -1254,7 +837,6 @@ async def _run_migrations() -> None:
         await _migrate_core_tables(conn)
         await _migrate_namespace_ids(conn)
         await _migrate_mcp_tables(conn)
-        await _migrate_text2sql_tables(conn)
         await _migrate_system_tables(conn)
         await _migrate_knowledge_ingestion(conn)
         await _migrate_duplicate_review(conn)
@@ -1295,7 +877,6 @@ async def lifespan(_app: FastAPI):
     # ── 에이전트 등록 ──
     AgentRegistry.register(KnowledgeRagAgent())
     AgentRegistry.register(McpToolAgent())
-    AgentRegistry.register(Text2SqlAgent())
 
     llm_ok = await get_llm_provider().health_check()
     level, msg = ("INFO", "연결 확인됨") if llm_ok else ("WARNING", "연결 불가 — LLM 기능 제한")

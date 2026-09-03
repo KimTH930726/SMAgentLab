@@ -1,6 +1,6 @@
-import { useState, useEffect, Component, type ReactNode } from 'react';
+import { useState, Component, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, Wrench, GitMerge, Network, BookMarked, ListOrdered, Workflow, FileText, Mail } from 'lucide-react';
+import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, Wrench, Mail } from 'lucide-react';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
@@ -12,15 +12,6 @@ import { UserManager } from '../components/admin/UserManager';
 import { McpToolManager } from '../components/admin/McpToolManager';
 import { CachePanel } from '../components/admin/CachePanel';
 import { VocEmailPanel } from '../components/admin/VocEmailPanel';
-import {
-  SqlTargetDbTab,
-  SqlSchemaTab,
-  SqlErdTab,
-  SqlSynonymTab,
-  SqlFewshotTab,
-  SqlPipelineTab,
-  SqlAuditLogTab,
-} from '../components/admin/Text2SqlAdmin';
 import { useAuthStore } from '../store/useAuthStore';
 import { useAppStore } from '../store/useAppStore';
 
@@ -51,8 +42,6 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 type TabId =
   // knowledge_rag
   | 'namespaces' | 'knowledge' | 'glossary' | 'fewshots' | 'mcp_tools' | 'debug'
-  // text2sql
-  | 'sql_db' | 'sql_schema' | 'sql_erd' | 'sql_synonyms' | 'sql_fewshots' | 'sql_pipeline' | 'sql_audit'
   // common
   | 'cache' | 'stats' | 'llm' | 'users' | 'voc_email';
 
@@ -61,7 +50,7 @@ interface Tab {
   label: string;
   icon: React.ReactNode;
   adminOnly?: boolean;
-  agentScope?: 'knowledge_rag' | 'text2sql' | 'all';
+  agentScope?: 'knowledge_rag' | 'all';
 }
 
 const TABS: Tab[] = [
@@ -72,16 +61,8 @@ const TABS: Tab[] = [
   { id: 'glossary',     label: '용어집',              icon: <Database className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
   { id: 'fewshots',     label: 'Q&A',            icon: <Zap className="w-4 h-4" />,        agentScope: 'knowledge_rag' },
   { id: 'debug',        label: '파이프라인 디버그',    icon: <Search className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
-  // text2sql 전용 탭
-  { id: 'sql_db',       label: '대상 DB',             icon: <Database className="w-4 h-4" />,   agentScope: 'text2sql' },
-  { id: 'sql_schema',   label: '스키마',               icon: <BookMarked className="w-4 h-4" />, agentScope: 'text2sql' },
-  { id: 'sql_erd',      label: 'ERD',                  icon: <Network className="w-4 h-4" />,    agentScope: 'text2sql' },
-  { id: 'sql_synonyms', label: '용어 사전',             icon: <GitMerge className="w-4 h-4" />,  agentScope: 'text2sql' },
-  { id: 'sql_fewshots', label: 'SQL Q&A',           icon: <ListOrdered className="w-4 h-4" />, agentScope: 'text2sql' },
   { id: 'mcp_tools',    label: 'MCP 도구',            icon: <Wrench className="w-4 h-4" />,     agentScope: 'all' },
-  { id: 'sql_pipeline', label: '파이프라인',             icon: <Workflow className="w-4 h-4" />,  agentScope: 'text2sql' },
-  { id: 'sql_audit',    label: '감사 로그',              icon: <FileText className="w-4 h-4" />,  agentScope: 'text2sql' },
-  // 공통 탭 (knowledge_rag 전용으로 이동)
+  // 공통 탭
   { id: 'cache',        label: '캐시 현황',             icon: <BarChart2 className="w-4 h-4" />, adminOnly: true, agentScope: 'knowledge_rag' },
   { id: 'stats',        label: '통계',                  icon: <BarChart2 className="w-4 h-4" />, agentScope: 'knowledge_rag' },
   { id: 'llm',          label: '시스템 설정',            icon: <Settings className="w-4 h-4" />, agentScope: 'all' },
@@ -101,23 +82,6 @@ export default function Admin() {
 
   const defaultTab = visibleTabs[0]?.id ?? 'llm';
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
-
-  // Listen for tab navigation events from child components (e.g., scan report)
-  useEffect(() => {
-    const TAB_MAP: Record<string, TabId> = {
-      erd: 'sql_erd',
-      synonym: 'sql_synonyms',
-      schema: 'sql_schema',
-      fewshot: 'sql_fewshots',
-    };
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      const tabId = TAB_MAP[detail?.tab];
-      if (tabId) setActiveTab(tabId);
-    };
-    window.addEventListener('sql-admin-navigate', handler);
-    return () => window.removeEventListener('sql-admin-navigate', handler);
-  }, []);
 
   const firstVisibleId = visibleTabs[0]?.id;
   const isCurrentVisible = visibleTabs.some((t) => t.id === activeTab);
@@ -155,13 +119,6 @@ export default function Admin() {
           {resolvedTab === 'fewshots'     && <FewshotTable />}
           {resolvedTab === 'mcp_tools'    && <McpToolManager />}
           {resolvedTab === 'debug'        && <DebugPanel onNavigate={(id) => setActiveTab(id as TabId)} />}
-          {resolvedTab === 'sql_db'       && <SqlTargetDbTab />}
-          {resolvedTab === 'sql_schema'   && <SqlSchemaTab />}
-          {resolvedTab === 'sql_erd'      && <SqlErdTab />}
-          {resolvedTab === 'sql_synonyms' && <SqlSynonymTab />}
-          {resolvedTab === 'sql_fewshots' && <SqlFewshotTab />}
-          {resolvedTab === 'sql_pipeline' && <SqlPipelineTab />}
-          {resolvedTab === 'sql_audit'    && <SqlAuditLogTab />}
           {resolvedTab === 'cache'        && isAdmin && <CachePanel />}
           {resolvedTab === 'voc_email'    && <VocEmailPanel />}
           {resolvedTab === 'stats'        && <StatsPanel />}

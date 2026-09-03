@@ -1,4 +1,4 @@
-import { BookOpen, Database, Wrench } from 'lucide-react';
+import { BookOpen, Wrench } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAppStore, type AgentType } from '../store/useAppStore';
 
@@ -27,16 +27,6 @@ const AGENTS: AgentCard[] = [
     color: 'text-indigo-400',
     border: 'border-indigo-500/50 hover:border-indigo-400',
     iconBg: 'bg-indigo-500/10',
-  },
-  {
-    id: 'text2sql',
-    icon: <Database className="w-8 h-8" />,
-    title: '자연어 쿼리 생성 에이전트',
-    description: '자연어로 데이터베이스에 질문하고 결과를 확인합니다.',
-    features: ['자연어 → SQL 변환', 'CoT 단계별 추론', 'SQL 자동 검증 & 수정', '결과 시각화 (차트/테이블)'],
-    color: 'text-emerald-400',
-    border: 'border-emerald-500/50 hover:border-emerald-400',
-    iconBg: 'bg-emerald-500/10',
   },
 ];
 

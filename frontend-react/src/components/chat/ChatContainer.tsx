@@ -523,7 +523,7 @@ export function ChatContainer() {
           // Tool request 대기 중 빈 assistant 메시지 숨김
           if (msg.role === 'assistant' && !msg.content && toolRequest && isStreamHere) return null;
           return (
-            <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace} agentType={selectedAgent ?? 'knowledge_rag'} />
+            <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace} />
           );
         })}
 
@@ -630,7 +630,7 @@ export function ChatContainer() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={selectedAgent === 'text2sql' ? 'DB에 대해 자연어로 질문하세요... (Ctrl+Enter로 전송)' : useHttpTool ? 'MCP 도구를 활용한 질문을 입력하세요... (Ctrl+Enter로 전송)' : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
+            placeholder={useHttpTool ? 'MCP 도구를 활용한 질문을 입력하세요... (Ctrl+Enter로 전송)' : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
             rows={2}
             disabled={!namespace || isLoading}
             className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none disabled:opacity-50 text-sm"

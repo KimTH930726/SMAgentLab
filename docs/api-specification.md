@@ -23,8 +23,7 @@
 10. [통계 및 질의 로그 (Stats)](#10-통계-및-질의-로그-stats)
 11. [네임스페이스 (Namespaces)](#11-네임스페이스-namespaces)
 12. [LLM 설정 (LLM Settings)](#12-llm-설정-llm-settings)
-13. [Text-to-SQL 어드민 API (주요)](#13-text-to-sql-어드민-api-주요)
-13-1. [VOC 이메일 분석 채널 (Email VOC)](#13-1-voc-이메일-분석-채널-email-voc)
+13-1. [VOC 이메일 분석 채널 (Email VOC)](#13-1-voc-이메일-분석-채널-email-voc) — 13번(Text-to-SQL 어드민 API)은 v2.51에서 dev_0/main 제거, archive/with-text2sql 브랜치 참고
 14. [공통 에러 코드](#14-공통-에러-코드)
 
 ---
@@ -1741,117 +1740,6 @@ LLM 프로바이더 연결을 테스트한다. 실제 전환하지 않는다.
 **Response** `200 OK` — 갱신된 임계값
 
 **Error** `400 Bad Request` (범위 초과)
-
----
-
-## 13. Text-to-SQL 어드민 API (주요)
-
-> Base: `/api/text2sql/namespaces/{namespace}/`
-> 인증: JWT Bearer. 대부분 Admin 전용. `from-feedback`만 일반 사용자도 가능.
-
-### GET /api/text2sql/namespaces/{ns}/fewshots
-
-SQL Few-shot 목록 조회.
-
-**Query Parameter**: `status` — `all`(기본) | `pending` | `approved` | `rejected`
-
-**Response `200`**
-```json
-[
-  {
-    "id": 1,
-    "question": "지난달 매출 상위 10개 제품은?",
-    "sql": "SELECT product_name, SUM(amount) ...",
-    "category": "",
-    "hits": 3,
-    "status": "approved",
-    "created_at": "2026-03-19T10:00:00Z"
-  }
-]
-```
-
-### POST /api/text2sql/namespaces/{ns}/fewshots/from-feedback
-
-채팅 좋아요 피드백으로 SQL Few-shot 후보를 등록합니다. **관리자 승인 필요**.
-동일 질문이 이미 `pending`/`approved` 상태로 존재하면 중복 등록하지 않습니다.
-
-**인증**: 일반 사용자 JWT (Admin 불필요)
-
-**Request Body**
-```json
-{
-  "question": "지난달 매출 상위 10개 제품은?",
-  "sql": "SELECT product_name, SUM(amount) AS total FROM sales ..."
-}
-```
-
-**Response `200`**
-```json
-{ "id": 5, "ok": true, "skipped": false }
-```
-`skipped: true` — 중복으로 인해 등록 건너뜀
-
-### PATCH /api/text2sql/namespaces/{ns}/fewshots/{id}/status
-
-Few-shot 상태 변경 (관리자 전용).
-
-**Query Parameter**: `status` — `approved` | `pending` | `rejected`
-
-**Response `200`**: `{ "ok": true }`
-
-### GET /api/text2sql/namespaces/{ns}/schema/tables-available
-
-대상 DB에서 사용 가능한 테이블 요약 조회 (빠른 조회 — 전체 inspect 없이).
-
-**Response `200`**
-```json
-[
-  { "table": "users", "column_count": 12 },
-  { "table": "orders", "column_count": 8 }
-]
-```
-
-### POST /api/text2sql/namespaces/{ns}/schema/tables/add
-
-선택한 테이블만 증분 추가. 이미 등록된 테이블은 skip.
-
-**Request Body**
-```json
-{ "tables": ["users", "orders"] }
-```
-
-**Response `200`**
-```json
-{ "ok": true, "added": 2, "skipped": 0 }
-```
-
-### DELETE /api/text2sql/namespaces/{ns}/schema/tables/{table_name}
-
-앱 DB에서 테이블 삭제 (컬럼, 벡터, 관계 cascade).
-
-**Response `200`**: `{ "ok": true }`
-
-### POST /api/text2sql/namespaces/{ns}/synonyms/bulk-delete
-
-용어 사전 일괄 삭제.
-
-**Request Body**: `{ "ids": [1, 2, 3] }`
-
-**Response `200`**: `{ "ok": true, "deleted": 3 }`
-
-### POST /api/text2sql/namespaces/{ns}/fewshots/bulk-delete
-
-SQL 예제 일괄 삭제.
-
-**Request Body**: `{ "ids": [4, 5, 6] }`
-
-**Response `200`**: `{ "ok": true, "deleted": 3 }`
-
-### GET /api/text2sql/namespaces/{ns}/audit-logs
-
-감사 로그 조회. v2.12부터 날짜 범위 필터 지원.
-
-**Query Parameters**: `page`, `limit`, `status`, `date_from` (YYYY-MM-DD), `date_to` (YYYY-MM-DD)
 
 ---
 

@@ -547,7 +547,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | 3 | `func_name` | VARCHAR(200) | NO | - | - | 프롬프트 표시명 |
 | 4 | `content` | TEXT | NO | `''` | - | 프롬프트 내용 |
 | 5 | `description` | TEXT | NO | `''` | - | 용도 설명 |
-| 6 | `agent_type` | VARCHAR(50) | NO | `'all'` | - | 에이전트 스코프 (`all` \| `knowledge_rag` \| `text2sql` \| `mcp_tool`) |
+| 6 | `agent_type` | VARCHAR(50) | NO | `'all'` | - | 에이전트 스코프 (`all` \| `knowledge_rag` \| `mcp_tool`, `text2sql`은 v2.51에서 제거) |
 | 7 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
 | 8 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 마지막 수정일시 |
 
@@ -566,14 +566,9 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | `tool_answer` | `mcp_tool` | MCP 응답 기반 LLM 답변 프롬프트 |
 | `autocomplete` | `mcp_tool` | 도구 등록 자동완성 (자연어→JSON 변환) |
 | `conv_summarize` | `all` | 대화 기록 요약 (에이전트 공통) |
-| `sql2_parse` | `text2sql` | Text2SQL Stage 1 질문 분석 프롬프트 (`{{question}}`) |
-| `sql2_parse_system` | `text2sql` | Text2SQL Stage 1 시스템 프롬프트 |
-| `sql2_generate` | `text2sql` | Text2SQL Stage 3 SQL 생성 프롬프트 (`{{question}}` · `{{schema}}` 등) |
-| `sql2_generate_system` | `text2sql` | Text2SQL Stage 3 시스템 프롬프트 |
-| `sql2_fix` | `text2sql` | Text2SQL Stage 5 자동 수정 프롬프트 (`{{sql}}` · `{{errors}}` · `{{schema}}`) |
-| `sql2_fix_system` | `text2sql` | Text2SQL Stage 5 시스템 프롬프트 |
-| `sql2_summarize` | `text2sql` | Text2SQL Stage 7 결과 요약 프롬프트 (`{{question}}` · `{{sql}}` · `{{result_preview}}` · `{{columns}}`) |
-| `sql2_summarize_system` | `text2sql` | Text2SQL Stage 7 시스템 프롬프트 |
+
+> `sql2_*` 8개(Text2SQL 파이프라인 프롬프트)는 v2.51에서 시드 INSERT가 제거됨 — 기존 설치엔
+> 행이 남아있을 수 있으나 더 이상 갱신되지 않는다. 상세는 `archive/with-text2sql` 브랜치 참고.
 
 ---
 
@@ -759,6 +754,7 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 35 | `ops_voc_routing` | `ADD COLUMN IF NOT EXISTS mail_folder_id VARCHAR(300)`, `ADD COLUMN IF NOT EXISTS mail_folder_name VARCHAR(200)` | 폴링 조회 범위를 특정 Outlook 폴더로 제한 — 관리자가 Graph API로 실조회한 폴더 목록에서 선택 (v3.12) |
 | 36 | `ops_system_config` | `UPDATE email_relevance_min_score` | 관련지식 임계치 계산식이 base_weight 부스팅 섞인 `final_score`를 쓰고 있어 게이트가 사실상 무력화됐던 버그 수정 후, 원점수 기준 실측 재조정: `0.35` → `0.38` (v3.13) |
 | 37 | `ops_user` | `ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'local'`, `ADD COLUMN IF NOT EXISTS external_id VARCHAR(255)`, `ADD COLUMN IF NOT EXISTS email VARCHAR(255)`, `ALTER COLUMN hashed_password DROP NOT NULL`, `CREATE UNIQUE INDEX ux_user_provider_external_id ON ops_user(auth_provider, external_id) WHERE external_id IS NOT NULL` | SSO(Azure AD) 연동 기반 스키마 선추가 — 로컬 계정은 `auth_provider='local'`로 그대로 유지, SSO 전용 계정은 로컬 비밀번호가 없을 수 있어 nullable로 완화(로그인 흐름 자체는 아직 미구현) (v2.50) |
+| 38 | `sql_*` 10개 테이블 | `_migrate_text2sql_tables()` 호출 제거(함수 자체도 삭제) | Text-to-SQL 에이전트 제거(현재 과업 아님) — 기존 설치의 테이블은 삭제하지 않고 그대로 두되, 더 이상 마이그레이션되지 않음. 코드는 `archive/with-text2sql` 브랜치 보존 (v2.51) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

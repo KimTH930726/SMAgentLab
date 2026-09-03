@@ -29,7 +29,7 @@ function savePersonalConfig(cfg: SearchConfig) {
   }
 }
 
-export type AgentType = 'knowledge_rag' | 'text2sql';
+export type AgentType = 'knowledge_rag';
 
 interface AppState {
   selectedAgent: AgentType | null;
