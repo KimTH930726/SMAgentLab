@@ -2,12 +2,14 @@
 
 > 작성일: 2026-09-03 (같은 날 SMAgentLab 구현 세션에서 §3 자산 실측 감사, §2-1 버전 관리,
 > §2-2 용어집 재사용, §2-3 동적 처리+팀별 피드백 반영 — 실 샘플 2개 팀 데이터 기반)
-> 상태: **v1 구현 착수** — §2의 통합 스키마(`policy_item`/`policy_param`/`policy_chunk`, 실 DB
-> 마이그레이션 적용 완료·버전체인 검증 완료)로 진행 확정. "시스템별 완전 별도 테이블"안도
-> 검토했으나(팀마다 구조가 크게 다름 — §1), "빨리 열고 나중에 모아서 재설계"라는 목표엔
-> 오히려 통합 스키마가 더 맞다고 판단해 기각: 새 시스템 추가 시 코드 변경 없이 `category_path`
-> (가변배열)로 흡수되고, 나중에 재설계할 때도 이미 한 곳에 모여있어 데이터 이관이 필요 없음.
-> LLM 분해(segment 단위 4유형 분류)도 실 샘플 5건으로 프로토타입 검증 완료 — 결과 양호.
+> 상태: **v1 파이프라인 구현 완료(API까지)** — §2의 통합 스키마로 확정 후 `POST /api/policy/import`
+> 엔드포인트까지 구현·실 HTTP E2E 검증 완료(`service/policy/` — excel_parser/decompose/service/
+> router, 테스트 20개). 업로드→시트판별(용어집/정책)→동적 헤더매핑→LLM 분해→RDB 적재(pending_review)
+> →재업로드 시 버전체인(§2-1, UPDATE 없이 새 row INSERT+이전 row deprecated)까지 전 구간 동작 확인.
+> "시스템별 완전 별도 테이블"안도 검토했으나(팀마다 구조가 크게 다름 — §1), "빨리 열고 나중에
+> 모아서 재설계"라는 목표엔 오히려 통합 스키마가 더 맞다고 판단해 기각: 새 시스템 추가 시 코드
+> 변경 없이 `category_path`(가변배열)로 흡수되고, 나중에 재설계할 때도 이미 한 곳에 모여있어
+> 데이터 이관이 필요 없음. 남은 건 검토 UI(승인 화면)와 실제 xlsx 파일로 파서 재검증(§6).
 > §7 미확정 항목(외부 SoR API 스펙, 정책서 원문 완료 시점, condition 표현 방식, effective_from/to
 > 필요 여부, 상태전이 전용 구조 필요 여부)은 v1 범위 밖(Phase 2+) 또는 데이터가 더 쌓인 뒤 재검토.
 > 목적: 엑셀로 된 비즈니스 정책서를 운영에서 활용 가능한 데이터로 전환하는 **파이프라인(Track 1)** 과, 그 결과를 어떤 저장소 전략으로 관리할지 **수치로 판정하는 실험실(Track 2)** 을 설계한다.
@@ -211,13 +213,22 @@ row로 재생성되고, 이전 버전의 파라미터는 이전 `policy_item_id`
 - [x] §3 "현재 자산" 표 확정 — `rag_knowledge` 스키마, `chunker`, `retrieval` 라우팅, pending_review UI 재사용 범위 (2026-09-03 1차 실측 완료, 위 표 참고)
 - [x] `policy_item`(`category_path` 가변배열, `parse_status`/`unresolved_segments`) / `policy_param` / `policy_chunk` 스키마 마이그레이션 — §2-1 버전 관리(logical_id/version/supersedes_id, INSERT-only) 반영. **실 DB 적용 완료**(`backend/main.py` `_migrate_policy_tables`), logical_id 트리거·버전체인 INSERT 실측 검증 통과. "시스템별 완전 별도 테이블"안 검토 후 이 통합 스키마로 확정(위 상태 참고)
 - [x] LLM 분해 프로토타입 — segment 단위 (a)/(b)/(c)/(d) + unresolved 4+1 분류 (§2-3), 실 샘플(딜리버스 3건/카드 2건)로 **검증 완료** — 혼재 row 분리, 코드열거형→param 흡수, 상태전이→unresolved+사유 전부 정상 동작 확인
-- [ ] 엑셀 파서 프로토타입 — 헤더 퍼지매핑 + 동적 깊이 감지(§1: 팀 A 3단/팀 B 2단 실측 샘플로 검증) — 실제 xlsx 파일 필요(지금까진 텍스트로 붙여넣은 row만 받음)
-- [ ] 용어집 시트 파서 + `rag_glossary` 적재 경로 (§2-2)
-- [ ] 위 검증된 파싱+분해 로직을 실제 API(`POST /api/policy/import` 등)로 감싸기
+- [x] 엑셀 파서 구현 — 헤더 퍼지매핑 + 동적 깊이 감지 (`service/policy/excel_parser.py`). 실제
+      xlsx가 없어 실 샘플 텍스트로 openpyxl 워크북을 재구성해 검증(용어집 시트 자동 판별,
+      3단/2단 category_path 모두 정확 추출) — 완전한 검증은 진짜 xlsx 파일이 오면 재확인 필요
+- [x] 용어집 시트 파서 + `rag_glossary` 적재 경로 (§2-2) — `_ingest_glossary_row()`, 기존
+      `create_glossary()` 재사용, 중복 term은 스킵 카운트로 집계
+- [x] 파싱+분해+적재를 실제 API로 감싸기 — `POST /api/policy/import`(`service/policy/router.py`),
+      **실 HTTP E2E 검증 완료**: 3시트(용어집+정책 2개) 업로드 → 파싱→LLM분해→DB적재 전체
+      경로 정상 동작. 재업로드 시나리오도 실측: 내용 불변 row는 LLM 재호출 없이 스킵, 내용
+      변경 row는 새 버전 INSERT + 이전 버전 deprecated 전환까지 실 DB에서 확인
+- [x] 재업로드 content_hash diff (§2-1: 새 버전 INSERT로 구현, UPDATE 금지) — 위 E2E 테스트에
+      포함돼 실측 검증 완료
 - [ ] 검토 UI: 파라미터 값·조건 승인 화면 + unresolved 별도 탭 + 재검토 큐의 이전 버전 대비 diff 표시
-- [ ] 재업로드 content_hash diff (§2-1: 새 버전 INSERT로 구현, UPDATE 금지)
-- [ ] unresolved 팀별 집계 리포트 — 표준화 요청 근거 자료 (§2-3)
+      (v1은 API까지만 — pending_review로 쌓인 데이터를 승인하는 화면은 아직 없음)
+- [ ] unresolved 팀별 집계 리포트 — 표준화 요청 근거 자료 (§2-3, DB에 데이터는 쌓이지만 집계 API/화면 미구현)
 - [ ] (골든셋 도착 후) Track 2 비교군 A/B 실행 → 유형별 정답률 표
+- [ ] 실제 xlsx 파일로 파서 재검증 — 지금까진 텍스트로 붙여넣은 샘플을 재구성한 워크북으로만 검증
 
 ## 7. 미확정
 

@@ -25,6 +25,7 @@ from service.prompt.router import router as prompt_router
 from service.teams.router import router as teams_router
 from service.email_voc.router import router as email_voc_router
 from service.email_voc.scheduler import start_scheduler, stop_scheduler
+from service.policy.router import router as policy_router
 
 from shared import cache as sem_cache
 from agents.base import AgentRegistry
@@ -40,6 +41,7 @@ _ROUTERS = [
     prompt_router,
     teams_router,
     email_voc_router,
+    policy_router,
 ]
 
 
