@@ -113,12 +113,25 @@ def _parse_policy_sheet(headers: list[str], data_rows: list[tuple], header_row_i
     exclude = {c for c in (no_col, name_col, body_col, remark_col) if c is not None}
     category_cols = [i for i in range(name_col) if i not in exclude]
 
+    # 병합셀 대응(forward-fill): openpyxl은 세로 병합 영역의 첫 셀에만 값을 주고 나머지는
+    # None을 반환한다(read_only 모드 실측 확인, 2026-09-03). 대분류/중분류처럼 같은 값이
+    # 여러 row에 걸쳐 병합되는 게 실제 정책서에서 흔한 패턴(실측 샘플의 "딜리버스_배민정산"
+    # 시트 등)이라, 컬럼별로 마지막 non-empty 값을 기억해뒀다가 빈 칸을 채운다.
+    last_seen: dict[int, str] = {}
+
     results = []
     for offset, row in enumerate(data_rows):
         policy_name = _cell_to_text(row[name_col]) if name_col < len(row) else ""
         if not policy_name:
             continue  # 빈 행 스킵(병합셀로 인한 공백 행 포함)
-        category_path = [_cell_to_text(row[i]) for i in category_cols if i < len(row)]
+        category_path = []
+        for i in category_cols:
+            val = _cell_to_text(row[i]) if i < len(row) else ""
+            if val:
+                last_seen[i] = val
+            else:
+                val = last_seen.get(i, "")
+            category_path.append(val)
         raw_body = _cell_to_text(row[body_col]) if body_col is not None and body_col < len(row) else ""
         remark = _cell_to_text(row[remark_col]) if remark_col is not None and remark_col < len(row) else None
         results.append(ParsedPolicyRow(

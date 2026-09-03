@@ -11,6 +11,7 @@ status='deprecated'로 전환하되 삭제하지 않는다 — rag_knowledge 병
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -19,6 +20,12 @@ from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 from service.policy import excel_parser, decompose
 from agents.knowledge_rag.knowledge.service import create_glossary
+
+# 한 시트(100~200 row 규모, docs/policy-doc-pipeline-plan.md §1)를 row마다 순차로 LLM
+# 분해하면 row당 1~3초씩 걸려 파일 하나 임포트에 수 분이 걸린다 — LLM 호출은 I/O 바운드라
+# 동시에 여러 개를 태워도 무방하다. 다만 무제한 동시 호출은 LLM 게이트웨이/DB 커넥션 풀에
+# 부담이 되므로 상한을 둔다(db_pool_max_size=10 대비 여유 있게).
+_DECOMPOSE_CONCURRENCY = 5
 
 
 def _content_hash(category_path: list[str], policy_name: str, raw_body: str, remark: str | None) -> str:
@@ -64,22 +71,33 @@ async def _find_current_version(conn, ns_id: int, source_file: str, sheet_name: 
     )
 
 
-async def _ingest_policy_row(
-    conn, ns_id: int, system_key: str, source_file: str, sheet: excel_parser.ParsedSheet,
-    row: excel_parser.ParsedPolicyRow, summary: SheetSummary,
-) -> None:
+async def _check_version(
+    conn, ns_id: int, source_file: str, sheet_name: str, row: excel_parser.ParsedPolicyRow,
+):
+    """버전 체크(§2-1) — DB만 건드리는 저렴한 단계. LLM 호출과 분리해둬야 여러 row를
+    동시(concurrent)에 처리할 때 "내용 안 바뀐 row"는 LLM 비용을 아예 안 태울 수 있다.
+
+    Returns: (skip: bool, current: Optional[Record], new_hash: str)
+    """
     new_hash = _content_hash(row.category_path, row.policy_name, row.raw_body, row.remark)
-    current = await _find_current_version(conn, ns_id, source_file, sheet.sheet_name, row.source_row)
+    current = await _find_current_version(conn, ns_id, source_file, sheet_name, row.source_row)
+    skip = current is not None and current["content_hash"] == new_hash
+    return skip, current, new_hash
 
-    if current is not None and current["content_hash"] == new_hash:
-        summary.unchanged_skipped += 1
-        return  # 내용 변경 없음 — 재처리(LLM 재호출 포함) 안 함
 
+async def _write_policy_result(
+    conn, ns_id: int, system_key: str, source_file: str, sheet_name: str,
+    row: excel_parser.ParsedPolicyRow, current, new_hash: str,
+    segments: list[decompose.Segment], summary: SheetSummary,
+) -> None:
+    """LLM 분해 결과(segments)를 실제 policy_item/param/chunk로 적재. DB 쓰기만 하는
+    단계라 여러 row를 처리할 때도 이 부분은 커넥션 하나로 순차 실행해야 안전하다
+    (asyncpg 커넥션은 동시 쿼리를 지원하지 않음) — LLM 분해(느림, 동시 처리 가능)와
+    분리해둔 이유."""
     logical_id = current["logical_id"] if current is not None else None
     version = (current["version"] + 1) if current is not None else 1
     supersedes_id = current["id"] if current is not None else None
 
-    segments = await decompose.decompose_policy_body(row.policy_name, row.raw_body)
     has_unresolved = any(s.type == "unresolved" for s in segments)
     has_resolved = any(s.type in ("narrative", "param") for s in segments)
     parse_status = "unresolved" if not has_resolved else ("partial" if has_unresolved else "parsed")
@@ -97,7 +115,7 @@ async def _ingest_policy_row(
         RETURNING id, logical_id
         """,
         ns_id, system_key, row.category_path, row.policy_name, row.raw_body, row.remark,
-        source_file, sheet.sheet_name, row.source_row, new_hash,
+        source_file, sheet_name, row.source_row, new_hash,
         logical_id, version, supersedes_id, parse_status,
         json.dumps(unresolved_payload, ensure_ascii=False) if unresolved_payload else None,
     )
@@ -134,6 +152,23 @@ async def _ingest_policy_row(
             summary.unresolved_segments += 1
 
 
+async def _ingest_policy_row(
+    conn, ns_id: int, system_key: str, source_file: str, sheet: excel_parser.ParsedSheet,
+    row: excel_parser.ParsedPolicyRow, summary: SheetSummary,
+) -> None:
+    """단일 row를 버전체크→LLM 분해→적재까지 순차로 처리. `import_excel()`의 정책 시트
+    처리는 여러 row를 동시 처리하기 위해 이 세 단계를 직접 조합해 쓰지만(성능, 아래
+    `import_excel` 참고), 이 함수는 "한 row"를 독립적으로 다뤄야 하는 경우(단건 재처리 등)를
+    위해 그대로 남겨둔다 — `_check_version`/`_write_policy_result`의 얇은 조합일 뿐, 로직
+    중복 아님."""
+    skip, current, new_hash = await _check_version(conn, ns_id, source_file, sheet.sheet_name, row)
+    if skip:
+        summary.unchanged_skipped += 1
+        return
+    segments = await decompose.decompose_policy_body(row.policy_name, row.raw_body)
+    await _write_policy_result(conn, ns_id, system_key, source_file, sheet.sheet_name, row, current, new_hash, segments, summary)
+
+
 async def _ingest_glossary_row(
     namespace: str, row: excel_parser.ParsedGlossaryRow, ns_id: int, conn, summary: SheetSummary,
 ) -> None:
@@ -164,9 +199,34 @@ async def import_excel(namespace: str, system_key: str, filename: str, file_byte
                 for row in sheet.glossary_rows:
                     await _ingest_glossary_row(namespace, row, ns_id, conn, summary)
         elif sheet.kind == "policy":
+            # 3단계로 나눠 처리(성능): ① 버전 체크는 DB 조회만이라 저렴 — 순차로 먼저 돌려
+            # "내용 안 바뀐 row"를 걸러낸다(스킵되는 row는 LLM을 아예 안 태움). ② 남은 row의
+            # LLM 분해만 동시(concurrent)로 실행 — 여기가 진짜 병목이라 가장 이득이 큼.
+            # ③ DB 쓰기는 커넥션 하나로 다시 순차 실행(asyncpg 커넥션은 동시 쿼리를 지원하지
+            # 않음 — 그래서 쓰기 단계는 병렬화 대상에서 뺐다).
+            to_process: list[tuple] = []
             async with get_conn() as conn:
                 for row in sheet.policy_rows:
-                    await _ingest_policy_row(conn, ns_id, system_key, filename, sheet, row, summary)
+                    skip, current, new_hash = await _check_version(conn, ns_id, filename, sheet.sheet_name, row)
+                    if skip:
+                        summary.unchanged_skipped += 1
+                    else:
+                        to_process.append((row, current, new_hash))
+
+            semaphore = asyncio.Semaphore(_DECOMPOSE_CONCURRENCY)
+
+            async def _bounded_decompose(row: excel_parser.ParsedPolicyRow):
+                async with semaphore:
+                    return await decompose.decompose_policy_body(row.policy_name, row.raw_body)
+
+            segments_list = await asyncio.gather(*[_bounded_decompose(item[0]) for item in to_process])
+
+            async with get_conn() as conn:
+                for (row, current, new_hash), segments in zip(to_process, segments_list):
+                    await _write_policy_result(
+                        conn, ns_id, system_key, filename, sheet.sheet_name,
+                        row, current, new_hash, segments, summary,
+                    )
         result.sheets.append(summary)
 
     return result

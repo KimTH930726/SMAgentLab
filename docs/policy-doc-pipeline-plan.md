@@ -210,6 +210,17 @@ row로 재생성되고, 이전 버전의 파라미터는 이전 `policy_item_id`
 
 ## 6. 다음 액션 (구현 세션)
 
+- [x] **자체 검증 라운드(2026-09-03, 사용자 요청)** — API 구현 직후 "자체검증/시나리오/클린코드/
+      성능까지 다 했냐"는 지적을 받고 재점검, 실제로 빠진 것 2건 발견·수정:
+      - **버그**: 병합셀이 있으면 카테고리 컬럼이 빈 문자열로 들어감(openpyxl이 병합 영역의
+        첫 셀에만 값을 주고 나머지는 None 반환 — 실측 확인). "마지막 non-empty 값으로
+        forward-fill" 로직 추가 + 회귀 테스트 2건 추가(22개로 증가)
+      - **성능**: row마다 순차로 LLM 분해 호출 — 100~200 row 규모(§1)면 파일 하나 임포트에
+        수 분 소요 예상. 버전체크(저렴)→LLM 분해(동시, 세마포어 5)→DB 쓰기(순차, 커넥션
+        안전성 때문에 병렬화 제외) 3단계로 재구성. 실측: 10 row 동시 처리 27.5초, row-segment
+        매핑 무결성(동시 실행이 순서를 안 섞는지)도 실 DB로 확인
+      - 클린코드: import 순서 정리(상수 사이에 끼어있던 import 문 수정), 에러 핸들링은 기존
+        지식 임포트 라우터(`agents/knowledge_rag/knowledge/router.py`)와 동일 패턴 확인
 - [x] §3 "현재 자산" 표 확정 — `rag_knowledge` 스키마, `chunker`, `retrieval` 라우팅, pending_review UI 재사용 범위 (2026-09-03 1차 실측 완료, 위 표 참고)
 - [x] `policy_item`(`category_path` 가변배열, `parse_status`/`unresolved_segments`) / `policy_param` / `policy_chunk` 스키마 마이그레이션 — §2-1 버전 관리(logical_id/version/supersedes_id, INSERT-only) 반영. **실 DB 적용 완료**(`backend/main.py` `_migrate_policy_tables`), logical_id 트리거·버전체인 INSERT 실측 검증 통과. "시스템별 완전 별도 테이블"안 검토 후 이 통합 스키마로 확정(위 상태 참고)
 - [x] LLM 분해 프로토타입 — segment 단위 (a)/(b)/(c)/(d) + unresolved 4+1 분류 (§2-3), 실 샘플(딜리버스 3건/카드 2건)로 **검증 완료** — 혼재 row 분리, 코드열거형→param 흡수, 상태전이→unresolved+사유 전부 정상 동작 확인

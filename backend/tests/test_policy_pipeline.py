@@ -83,6 +83,29 @@ class TestDynamicDepthCategoryPath:
         assert len(rows) == 1
         assert rows[0].policy_name == "실제정책"
 
+    def test_merged_category_cells_forward_filled(self):
+        """실측 확인(2026-09-03): openpyxl은 세로 병합 영역의 첫 셀에만 값을 주고 나머지는
+        None을 반환한다 — 대분류/중분류가 여러 row에 걸쳐 병합된 실제 정책서 패턴에서
+        빈 category_path가 나오던 버그. 마지막 non-empty 값으로 채워야 한다."""
+        headers = ["No.", "대분류", "중분류", "정책명", "조건/상세"]
+        data_rows = [
+            (1, "1.주문/결제", "1-1.장바구니", "담기", "본문1"),
+            (2, None, None, "조회", "본문2"),   # 병합셀 — openpyxl이 None 반환
+            (3, None, None, "수량조회", "본문3"),
+        ]
+        rows = excel_parser._parse_policy_sheet(headers, data_rows, header_row_idx=0)
+        assert len(rows) == 3
+        assert rows[1].category_path == ["1.주문/결제", "1-1.장바구니"]
+        assert rows[2].category_path == ["1.주문/결제", "1-1.장바구니"]
+
+    def test_merge_only_affects_category_columns_not_policy_name(self):
+        """정책명 자체가 병합으로 비어있으면(포워드필 대상 아님) 빈 행으로 스킵돼야 한다 —
+        카테고리 forward-fill이 정책명까지 오염시키면 안 됨."""
+        headers = ["No.", "대분류", "정책명", "조건/상세"]
+        data_rows = [(1, "카테고리", "정책1", "본문"), (2, None, "", "본문2")]
+        rows = excel_parser._parse_policy_sheet(headers, data_rows, header_row_idx=0)
+        assert len(rows) == 1  # 2번째 행은 정책명이 비어 스킵
+
 
 class TestGlossaryParsing:
     def test_parses_term_and_description(self):
