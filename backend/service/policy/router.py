@@ -1,9 +1,11 @@
-"""정책서 임포트 API — POST /api/policy/import."""
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+"""정책서 임포트/검색 API."""
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from core.dependencies import get_current_user, check_namespace_ownership
-from service.policy import service
-from service.policy.schemas import ImportSummaryOut
+from service.policy import service, search as search_service
+from service.policy.schemas import ImportSummaryOut, PolicySearchOut
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
 
@@ -32,4 +34,28 @@ async def import_policy_excel(
     return ImportSummaryOut(
         source_file=result.source_file,
         sheets=[s.__dict__ for s in result.sheets],
+    )
+
+
+@router.get("/search", response_model=PolicySearchOut)
+async def search_policy(
+    namespace: str = Query(...),
+    q: str = Query(..., min_length=1),
+    category: Optional[str] = Query(default=None),
+    top_k: int = Query(default=10, ge=1, le=50),
+    user: dict = Depends(get_current_user),
+):
+    """정책 데이터 검색 — 파라미터(RDB 정확 조회)와 서술(벡터 검색) 두 갈래를 함께 반환한다.
+
+    v1엔 검토/승인 화면이 없어(§2-4) status='pending_review'인 데이터도 검색 대상에
+    포함한다 — 응답의 `status` 필드로 미검토 여부를 구분할 수 있다.
+    """
+    await check_namespace_ownership(namespace, user)
+    try:
+        result = await search_service.search_policy(namespace, q, category, top_k)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return PolicySearchOut(
+        params=[p.__dict__ for p in result.params],
+        narratives=[n.__dict__ for n in result.narratives],
     )

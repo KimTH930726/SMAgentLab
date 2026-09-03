@@ -23,3 +23,30 @@ class SheetSummaryOut(BaseModel):
 class ImportSummaryOut(BaseModel):
     source_file: str
     sheets: list[SheetSummaryOut]
+
+
+class ParamHitOut(BaseModel):
+    item_id: int
+    logical_id: int
+    policy_name: str
+    category_path: list[str]
+    status: str
+    param_name: str
+    condition: Optional[str] = None
+    value: Optional[str] = None
+    unit: Optional[str] = None
+
+
+class NarrativeHitOut(BaseModel):
+    item_id: int
+    logical_id: int
+    policy_name: str
+    category_path: list[str]
+    status: str
+    chunk_text: str
+    score: float
+
+
+class PolicySearchOut(BaseModel):
+    params: list[ParamHitOut]
+    narratives: list[NarrativeHitOut]
