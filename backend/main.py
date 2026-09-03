@@ -817,6 +817,115 @@ Always respond with valid JSON only.""",
     )
 
 
+async def _migrate_policy_tables(conn) -> None:
+    """정책서 데이터화 파이프라인 스키마 (docs/policy-doc-pipeline-plan.md §2, 2026-09-03).
+
+    한 엑셀 row를 3층으로 분해한다: policy_item(원문+메타) → policy_param(추출된 파라미터
+    팩트, 정확 조회용) / policy_chunk(서술 규칙, 벡터 검색용). 용어집 시트는 별도 테이블을
+    만들지 않고 기존 rag_glossary를 그대로 재사용한다(§2-2) — 여기서는 policy_item/param/
+    chunk만 마이그레이션한다.
+
+    버전 관리(§2-1): 재업로드로 content_hash가 바뀌면 UPDATE가 아니라 새 row를 INSERT한다
+    (logical_id 유지, version+1, supersedes_id=이전 row). 이전 row는 status='deprecated'로
+    바뀌되 삭제되지 않아 과거 정책 조회가 가능하다 — rag_knowledge 병합이 content를 그
+    자리에서 덮어써 이력이 소실되던 문제(knowledge-lifecycle-design.md 우선순위 1위)를
+    처음부터 피하기 위한 설계다.
+
+    category_path를 대분류/중분류/소분류 같은 고정 컬럼이 아니라 TEXT[]로 두는 이유: 실
+    샘플 2개 팀만 봐도 분류 깊이가 다르다(3단 vs 2단, §1) — 팀별 표준화가 안 돼 있어서
+    고정 컬럼 수를 전제할 수 없다.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS policy_item (
+            id                  SERIAL PRIMARY KEY,
+            namespace_id        INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            system_key          VARCHAR(200) NOT NULL DEFAULT '',
+            category_path       TEXT[] NOT NULL DEFAULT '{}',
+            policy_name         TEXT NOT NULL DEFAULT '',
+            raw_body            TEXT NOT NULL DEFAULT '',
+            remark              TEXT,
+            source_file         VARCHAR(500),
+            source_sheet        VARCHAR(200),
+            source_row          INT,
+            content_hash        VARCHAR(64) NOT NULL,
+            status              VARCHAR(20) NOT NULL DEFAULT 'pending_review',
+            logical_id          INT,
+            version             INT NOT NULL DEFAULT 1,
+            supersedes_id       INT REFERENCES policy_item(id) ON DELETE SET NULL,
+            parse_status        VARCHAR(20) NOT NULL DEFAULT 'unresolved',
+            unresolved_segments JSONB,
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            reviewed_at         TIMESTAMPTZ,
+            reviewed_by         INT REFERENCES ops_user(id) ON DELETE SET NULL
+        )
+    """)
+    # logical_id 기본값은 자기 자신의 id — INSERT 시점엔 id를 몰라 컬럼 DEFAULT로 못 넣으므로
+    # 트리거로 채운다(최초 INSERT에서만, logical_id가 NULL일 때만 — 새 버전 INSERT 시 호출부가
+    # 이전 row의 logical_id를 명시적으로 넘기면 트리거가 덮어쓰지 않아야 함).
+    await conn.execute("""
+        CREATE OR REPLACE FUNCTION policy_item_default_logical_id() RETURNS TRIGGER AS $$
+        BEGIN
+            IF NEW.logical_id IS NULL THEN
+                NEW.logical_id := NEW.id;
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
+    await conn.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_trigger WHERE tgname = 'trg_policy_item_logical_id'
+            ) THEN
+                CREATE TRIGGER trg_policy_item_logical_id
+                    BEFORE INSERT ON policy_item
+                    FOR EACH ROW EXECUTE FUNCTION policy_item_default_logical_id();
+            END IF;
+        END $$;
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_item_ns ON policy_item (namespace_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_item_logical_id ON policy_item (logical_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_item_status ON policy_item (status)")
+    # 재업로드 diff — 같은 namespace/source_file/source_sheet/source_row의 "현재 active/pending
+    # 버전" content_hash를 빠르게 찾기 위함(§2-1)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_policy_item_source "
+        "ON policy_item (namespace_id, source_file, source_sheet, source_row)"
+    )
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS policy_param (
+            id              SERIAL PRIMARY KEY,
+            policy_item_id  INT NOT NULL REFERENCES policy_item(id) ON DELETE CASCADE,
+            name            TEXT NOT NULL,
+            condition       TEXT,
+            value           TEXT,
+            unit            VARCHAR(50),
+            external_source VARCHAR(200),
+            approved        BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_param_item ON policy_param (policy_item_id)")
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS policy_chunk (
+            id              SERIAL PRIMARY KEY,
+            policy_item_id  INT NOT NULL REFERENCES policy_item(id) ON DELETE CASCADE,
+            chunk_text      TEXT NOT NULL,
+            embedding       VECTOR(768),
+            chunk_idx       INT NOT NULL DEFAULT 0,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_chunk_item ON policy_chunk (policy_item_id)")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_policy_chunk_hnsw ON policy_chunk "
+        "USING hnsw (embedding vector_cosine_ops)"
+    )
+
+
 async def _cleanup_stale_generating_messages(conn) -> None:
     """프로세스가 막 기동했으니, 'generating' 상태로 남은 메시지는 전부 이전
     프로세스가 스트리밍 도중 죽으면서 남긴 고아 행이다(지금 막 시작했으므로 이
@@ -842,6 +951,7 @@ async def _run_migrations() -> None:
         await _migrate_duplicate_review(conn)
         await _migrate_query_log_resolution(conn)
         await _migrate_email_voc_tables(conn)
+        await _migrate_policy_tables(conn)
         await _cleanup_stale_generating_messages(conn)
 
 
