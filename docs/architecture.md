@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.49)
+# Ops-Navigator 시스템 아키텍처 (v2.50)
 
 ## 개요
 
@@ -6,6 +6,29 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.50: 팀 규모 SSO 인프라 초석 — 소스 점검 중 발견한 실제 취약점 2건 수정 + `ops_user` 스키마 선확장.
+  ① **admin 계정 비밀번호 강제 리셋 버그 수정**: `main.py`의 마이그레이션 루틴이 서버 재시작마다
+  `admin` 계정의 `hashed_password`를 `ADMIN_DEFAULT_PASSWORD`(기본값 `1111`) 값으로 무조건
+  덮어쓰고 있었다 — 관리자가 UI로 비밀번호를 바꿔도 다음 배포/재시작 때 조용히 원복되는 실제
+  취약점이었음(role/part_id 동기화 로직에 실수로 얹혀 있던 부작용). 이제 최초 계정 생성 시에만
+  비밀번호를 세팅하고, 이후 재시작에서는 role/part_id만 동기화한다. 실측: `PUT /me/password`로
+  변경 → 백엔드 재시작 → 변경된 비밀번호로 로그인 성공 확인(수정 전엔 실패했을 케이스).
+  ② **보안 설정 플레이스홀더 경고**: `JWT_SECRET_KEY`/`ADMIN_DEFAULT_PASSWORD`가 코드 기본값
+  그대로면(현재 이 배포도 그 상태임을 실측 확인) 서버 시작 시 로그에 눈에 띄게 경고하도록
+  `_warn_if_insecure_defaults()` 추가 — 하드 실패(startup 중단)로는 안 만들었다, 지금 이 값
+  그대로 운영 중인 배포가 실제로 있어 강제 종료하면 그 배포부터 멈추기 때문. 실제 시크릿
+  교체는 활성 로그인 세션 전부 무효화 + 관리자 비밀번호 변경이라는 파급이 있어 별도로
+  조율해서 진행하기로 함(이번 커밋에 포함 안 함).
+  ③ **`ops_user` SSO 연동 기반 스키마 선추가**: `auth_provider`(기본값 `local`)/`external_id`
+  (SSO 프로바이더가 발급하는 불변 식별자, 예: Azure AD `oid`)/`email` 컬럼 추가,
+  `(auth_provider, external_id)` 부분 유니크 인덱스(`external_id IS NOT NULL`), SSO 전용
+  계정은 로컬 비밀번호가 없을 수 있어 `hashed_password`를 nullable로 완화(단, `authenticate_user()`는
+  아직 NULL을 다루지 않음 — 실제 SSO 로그인 흐름 구현 시 함께 수정 필요, 지금은 스키마만
+  선반영). 지금(로컬 계정 소수) 하면 싸고 팀 규모로 커진 뒤 하면 비싸다는 논리
+  (`knowledge-lifecycle-design.md`의 "Phase 0 스키마 선추가"와 동일 패턴).
+  실제 로그인 흐름(OIDC Authorization Code Flow, ID 토큰 검증, JIT 프로비저닝)은 Azure AD
+  앱 등록 승인 이후 구현 — 요청 준비 문서: `docs/tech/sso-login-request.md`(이미 검증된
+  mail-agent 앱 등록 사례의 함정들을 반영해 작성).
 - v2.49: 3건 개선 — ① **VOC 반복 클러스터링용 정규화 임베딩(`issue_signature`)**: 실측 중 "앱 로그인이 안 돼요"/"로그인 오류 문의드립니다"/"로그인 시 500에러 발생"처럼 같은 이슈의 다른 표현이 원문 임베딩으로는 0.85 임계값을 못 넘어 클러스터링에 실패하는 사례가 확인됨. `analyze_email()`의 LLM 응답에 정규화된 짧은 이슈 요약(`issue_signature`, 예: "로그인 500 에러")을 추가로 출력시키고, `pipeline.py`가 반복 패턴 비교(`detect_and_update_cluster`)에는 이 정규화 임베딩을 쓰고 지식 검색(RAG)에는 기존 원문 임베딩(`relevance.query_vec`)을 그대로 쓰도록 분리 — "정밀 매칭(장애 원인 분석)엔 문맥을 보존한 원문이, 표현 차이를 넘어선 그룹핑(반복 유형 탐지)엔 정규화가 유리하다"는 판단 기준에 따른 용도별 임베딩 이원화(`issue_signature`가 없으면 원문 임베딩으로 폴백). 실 데이터로 3개 패러프레이즈가 모두 동일 클러스터로 묶이는 것을 확인. ② **임베딩 서비스 동시성 버그 수정**: 5-way 동시 실행 전체 재분석 중 234건 중 4건이 이력 없이 조용히 유실되는 문제가 발견됨 — `RuntimeError: Already borrowed`(HuggingFace fast tokenizer가 GIL을 놓는 Rust 구현이라, `embed_long()`의 메인 이벤트루프 `tokenizer.encode()` 호출과 `embed()`/`embed_batch()`의 executor 스레드 `model.encode()` 호출이 동시에 같은 토크나이저/모델 인스턴스를 건드리며 발생)가 원인. `EmbeddingService`에 `asyncio.Lock` 1개를 추가해 세 메서드의 실제 모델/토크나이저 접근을 전부 그 락으로 감싸 해결(`embed_long()`은 락 재획득으로 인한 교착을 피하려 `embed()`/`embed_batch()`를 내부 호출하지 않고 `run_in_executor`를 직접 호출). 50콜 동시성 스트레스 테스트로 검증. ③ **`rag_knowledge` 카테고리 기반 검색 라우팅**: `category IN ('DB','공통코드')`가 전체 지식의 88%를 차지하는데, 이 카테고리는 코드표를 그대로 덤프한 구조화 데이터라 코사인 유사도로 비교하면 어휘만 겹쳐도 오탐이 나는 것이 실측 확인됨(VOC 커버리지 판정에서 무관한 배송 클러스터가 "사이렌오더 결제 취소" 공통코드 문서와 매칭). 질의 의도를 분류하는 게 아니라 **이미 등록된 지식 행의 category 값**으로 판단 — `retrieval.py`에 `_KEYWORD_ONLY_CATEGORIES=("DB","공통코드")` 상수 추가, `search_knowledge()`의 `final_score` 산식을 해당 카테고리는 벡터 점수를 0으로 만들고 키워드(RDB 텍스트) 점수만으로 랭킹하도록 CASE 분기(admin 설정으로 노출하지 않고 모듈 상수로 하드코딩 — 등록 시점 고정값이라 런타임 조정 필요성이 낮고, 기존 few-shot 승인 큐처럼 안 쓰이는 admin 설정 표면을 늘리지 않으려는 판단). `pattern_detection.py`의 `get_cluster_coverage()`/`list_clusters()`도 동일 카테고리를 후보에서 제외(NULL 카테고리는 실수로 함께 제외되지 않도록 `category IS NULL OR category != ALL(...)`로 처리). 실 데이터로 검증: DB/공통코드 카테고리 행은 벡터 유사도가 높아도(`v_score` 0.65+) `final_score`가 키워드 점수만 반영해 낮게(0.10대) 나오는 것을 확인. 상세 설계 논의: `docs/tech/knowledge-lifecycle-design.md`.
 - v2.48: VOC Teams 발송 게이트 통합 — 명시적 피드백("게이트가 나뉘어져있으면 안 된다, 반복 게이트일 때만 팀즈를 보내고 형식은 기존 개별 VOC 카드에 반복 정보를 얹어라")에 따라 발송 여부 판단 지점을 "반복 패턴 확정" 하나로 완전히 합쳤다. v2.40부터 유지되던 "관련지식 임계치+not_it_related만 넘으면 카테고리·심각도 무관하게 항상 발송"(§10) 원칙이 폐기됨 — 이제 클러스터가 없는(반복이 아닌) 단독 VOC는 발송하지 않고, 클러스터가 있어도 `email_pattern_min_count` 채우기 전엔 발송 안 함, 채운 뒤로는 그 배수(3/6/9건째 등)에서만 발송한다(건마다 계속 보내던 v2.47 방식은 노이즈가 컸음). `pattern_info`에 `min_count`/`nth_detection`(몇 번째 배수 감지인지)을 추가해 "🔁 반복 패턴 — N건째 발생 (M건마다 감지 · K번째 감지)" 형태로 카드에 표시. 카드 포맷 자체는 새로 안 만들고 기존 `build_teams_message()`를 그대로 재사용(반복 정보는 그 안의 한 줄일 뿐). 부수적으로 `pattern_detection.detect_and_update_cluster()`가 이제 아무도 안 읽는 `pattern_info`(대표/샘플 제목) 계산을 위해 매 건마다 불필요한 DB 쿼리를 날리고 있던 게 자체 점검 중 발견돼 제거(성능 개선). 실 프로덕션 메일함으로 재현 검증 완료(최근 90건 분석기록을 초기화 후 재수집 → 클러스터 48건이 원래 17개 클러스터로 정확히 복원, 카테고리 게이트로 걸러지지 않은 단독 VOC 1건만 옛 로직으로 발송된 것을 확인 후 이번 변경으로 그 케이스도 막힘 확인).
 - v2.47: VOC 반복 패턴 탐지 + 통계 대시보드 신규 — `service/email_voc/pattern_detection.py` 추가. `service.check_relevance()`가 이미 계산하는 임베딩(`RelevanceCheck.query_vec`)을 그대로 저장·재사용해(`ops_email_analysis.embedding`), 지식 베이스 비교(기존)와 별개로 **과거 VOC와의 비교**를 pgvector 코사인 연산만으로 수행 — 추가 LLM 호출 없이 반복 유형을 감지한다. 새 VOC는 클러스터의 개별 멤버가 아니라 **centroid(대표 임베딩, 점증 가중평균 갱신)**와 비교해 합류 여부를 판단(단일 링크 클러스터링의 사슬형 오분류 방지). 유사 건이 `email_pattern_window_days`(7일) 내 `email_pattern_min_count`(3건) 이상 쌓이면, 별도 Teams 메시지를 만들지 않고 이미 발송 중인 개별 VOC 카드에 "🔁 반복 패턴" 한 줄 + 해결방안(있으면)을 얹는다(min_count를 넘긴 이후 모든 건에 매번 표시 — 최초 1건만 표시하면 후속 발생에서 반복 맥락이 안 보이는 문제가 실사용 중 발견돼 변경). 해결방안 존재 여부(`get_cluster_coverage`)는 `rag_knowledge`와의 코사인 유사도 1차 필터(`_COVERAGE_MIN_SIMILARITY=0.70`) 통과 후 **LLM 재검증**까지 거친다 — 순수 코사인 유사도는 무관한 문서가 CS 보일러플레이트 문구만으로 임계치를 넘는 오탐을 못 막는다는 게 실측으로 확인돼(같은 유사도 대역에 몰려 있어 임계치 조정만으로는 해결 불가), 크로스인코더 리랭커(huggingface.co 접근 제한으로 보류 중) 대신 기존 LLM 프로바이더로 "이 문서가 실제로 이 VOC 유형의 해결책이 맞는지" 1회 확인한다. 검증 결과는 `ops_voc_cluster.coverage_knowledge_id`/`coverage_verified`에 캐싱해 매칭된 지식이 바뀔 때만 재호출. 관리자 화면에 "VOC 통계" 탭 신규 — 유형/심각도 분포 도넛차트(클릭 시 클러스터 목록 필터링), 반복 클러스터 목록(페이징, 클러스터 내 category 불일치 경고), 클러스터에서 바로 지식 등록. 상세: `docs/tech/voc-email-handoff.md`.

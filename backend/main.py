@@ -107,6 +107,25 @@ async def _migrate_core_tables(conn) -> None:
         END $$;
     """)
 
+    # ── SSO 연동 기반 컬럼 선추가 (2026-09-03, 스키마만 — 로그인 흐름은 별도 구현) ──
+    # 지금(로컬 계정 소수) 추가하는 게 싸고, 팀 규모로 계정이 늘어난 뒤 추가하면
+    # 비싸다 — knowledge-lifecycle-design.md의 "Phase 0 스키마 선추가"와 같은 논리.
+    # auth_provider 기본값 'local'로 기존 계정은 전부 그대로 로컬 인증 유지.
+    # external_id는 SSO 프로바이더(Azure AD 등)가 발급하는 불변 식별자(예: oid 클레임) —
+    # username처럼 사람이 바꿀 수 있는 값이 아니라 이걸로 계정을 식별해야 한다.
+    await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'local'")
+    await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS external_id VARCHAR(255)")
+    await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS email VARCHAR(255)")
+    # SSO 전용 계정은 로컬 비밀번호가 없을 수 있다 — hashed_password를 nullable로 완화.
+    # (주의: authenticate_user()는 아직 NULL을 다루지 않는다 — 실제 SSO 로그인 흐름을
+    # 구현할 때 같이 고쳐야 한다. 지금은 스키마만 미리 열어둔다.)
+    await conn.execute("ALTER TABLE ops_user ALTER COLUMN hashed_password DROP NOT NULL")
+    # 같은 프로바이더 안에서 external_id 중복 방지 (NULL은 여러 개 허용 — 로컬 계정은 전부 NULL)
+    await conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_user_provider_external_id "
+        "ON ops_user(auth_provider, external_id) WHERE external_id IS NOT NULL"
+    )
+
     # ── ops_namespace.owner_part_id 추가 ───────────────────────────
     await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_part VARCHAR(100)")
     await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_part_id INT")
@@ -161,18 +180,21 @@ async def _migrate_core_tables(conn) -> None:
     admin_exists = await conn.fetchval(
         "SELECT EXISTS(SELECT 1 FROM ops_user WHERE username = 'admin')"
     )
-    hashed = hash_password(settings.admin_default_password)
     if not admin_exists:
+        hashed = hash_password(settings.admin_default_password)
         await conn.execute(
             "INSERT INTO ops_user (username, hashed_password, role, part_id) VALUES ($1, $2, $3, $4)",
             "admin", hashed, "admin", superadmin_part_id,
         )
         logger.info("기본 관리자 계정 생성됨 (admin / %s)", settings.admin_default_password)
     else:
-        # 기존 admin 비밀번호를 설정값으로 갱신, part_id도 동기화
+        # role/part_id만 동기화 — 비밀번호는 건드리지 않는다(2026-09-03 수정).
+        # 예전엔 재시작마다 hashed_password를 admin_default_password로 무조건 덮어써서,
+        # 관리자가 UI로 비밀번호를 바꿔도 다음 배포/재시작 때 조용히 원복되는 실제
+        # 취약점이었다 — 팀 규모 SSO 인프라 점검 중 발견.
         await conn.execute(
-            "UPDATE ops_user SET hashed_password = $1, role = 'admin', part_id = $2 WHERE username = 'admin'",
-            hashed, superadmin_part_id,
+            "UPDATE ops_user SET role = 'admin', part_id = $1 WHERE username = 'admin'",
+            superadmin_part_id,
         )
 
     # ── ops_conversation.user_id 추가 ──────────────────────────────
@@ -1241,8 +1263,27 @@ async def _run_migrations() -> None:
         await _cleanup_stale_generating_messages(conn)
 
 
+def _warn_if_insecure_defaults() -> None:
+    """JWT 시크릿/관리자 기본 비밀번호가 플레이스홀더 그대로면 배포마다 매번 눈에 띄게
+    경고한다. 하드 실패(startup 중단)로는 안 만든다 — 지금 이 값 그대로 운영 중인
+    배포가 실제로 있어(2026-09-03 확인), 강제 종료하면 그 배포부터 멈춰버린다.
+    팀 규모 SSO 인프라 점검 중 발견 — 실제로 시크릿을 교체하는 건 활성 로그인 세션이
+    전부 무효화되고 관리자 비밀번호가 바뀌는 파급이 있어 별도로 조율해서 진행한다."""
+    if settings.jwt_secret_key == "change-this-secret-key-in-production":
+        logger.warning(
+            "[보안] JWT_SECRET_KEY가 기본 플레이스홀더입니다 — 이 값을 아는 사람은 "
+            "누구든 임의 사용자로 위조된 토큰을 만들 수 있습니다. .env에서 반드시 교체하세요."
+        )
+    if settings.admin_default_password == "1111":
+        logger.warning(
+            "[보안] ADMIN_DEFAULT_PASSWORD가 기본값(1111)입니다 — 최초 admin 계정이 "
+            "이 비밀번호로 생성됩니다. .env에서 반드시 교체하세요."
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _warn_if_insecure_defaults()
     await init_pool()
     await _run_migrations()
     async with get_conn() as conn:

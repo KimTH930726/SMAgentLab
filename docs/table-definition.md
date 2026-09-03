@@ -104,15 +104,18 @@ ops_system_config (시스템 전역 설정 — key-value, 재시작 후에도 �
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
 | 2 | `username` | VARCHAR(100) | NO | - | UNIQUE | 로그인 ID |
-| 3 | `hashed_password` | TEXT | NO | - | - | bcrypt 해시 비밀번호 |
+| 3 | `hashed_password` | TEXT | YES | NULL | - | bcrypt 해시 비밀번호. SSO 전용 계정(`auth_provider != 'local'`)은 로컬 비밀번호가 없을 수 있어 v2.50부터 nullable(로그인 흐름 자체는 아직 미구현 — 스키마만 선반영) |
 | 4 | `role` | VARCHAR(20) | YES | `'user'` | - | 역할 (`admin` \| `user`) |
 | 5 | `part_id` | INT | YES | NULL | FK → ops_part(id) ON DELETE SET NULL | 소속 파트 ID |
 | 6 | `is_active` | BOOLEAN | YES | `TRUE` | - | 계정 활성 여부 |
 | 7 | `encrypted_llm_credentials` | TEXT | YES | NULL | - | 사용자별 LLM OAuth2 자격증명 트리플 (Fernet 암호화 JSON: `{client_id, client_secret, user_id}`). v2.17부터. 미등록 시 .env 팀 공통 자격증명 fallback |
 | 8 | `encrypted_confluence_pat` | TEXT | YES | NULL | - | 사용자별 Confluence PAT (Fernet 암호화, v3.7 신규) |
 | 9 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
+| 10 | `auth_provider` | VARCHAR(20) | NO | `'local'` | - | 인증 방식 (`local` \| `azure_ad` 등, v2.50 신규) — SSO 연동 기반 |
+| 11 | `external_id` | VARCHAR(255) | YES | NULL | - | SSO 프로바이더가 발급하는 불변 식별자(예: Azure AD `oid` 클레임), v2.50 신규 — username과 달리 사람이 바꿀 수 없는 값으로 계정 식별 |
+| 12 | `email` | VARCHAR(255) | YES | NULL | - | 이메일 주소, v2.50 신규 |
 
-**인덱스**: PK(id), UNIQUE(username)
+**인덱스**: PK(id), UNIQUE(username), UNIQUE(auth_provider, external_id) WHERE external_id IS NOT NULL
 
 **role 상태값**:
 
@@ -120,6 +123,13 @@ ops_system_config (시스템 전역 설정 — key-value, 재시작 후에도 �
 |----|------|
 | `admin` | 관리자 — 전체 기능 접근, 사용자 관리 가능 |
 | `user` | 일반 사용자 — 채팅, 피드백 등 기본 기능만 |
+
+**auth_provider 상태값**:
+
+| 값 | 의미 |
+|----|------|
+| `local` | 로컬 계정 — username/password 인증 (기본값, 기존 계정 전부 이 값) |
+| `azure_ad` | (예정) 회사 SSO(Azure AD/Entra ID) 계정 — 로그인 흐름은 아직 미구현, 앱 등록 요청은 `docs/tech/sso-login-request.md` 참고 |
 
 ---
 
@@ -748,6 +758,7 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 34 | `ops_system_config` | `INSERT email_relevance_min_score` | VOC 이메일 관련지식 임계치 시드 — 미달 시 LLM 호출·Teams 발송 없이 이력만 기록(비용·알림 노이즈 억제) (v3.9) |
 | 35 | `ops_voc_routing` | `ADD COLUMN IF NOT EXISTS mail_folder_id VARCHAR(300)`, `ADD COLUMN IF NOT EXISTS mail_folder_name VARCHAR(200)` | 폴링 조회 범위를 특정 Outlook 폴더로 제한 — 관리자가 Graph API로 실조회한 폴더 목록에서 선택 (v3.12) |
 | 36 | `ops_system_config` | `UPDATE email_relevance_min_score` | 관련지식 임계치 계산식이 base_weight 부스팅 섞인 `final_score`를 쓰고 있어 게이트가 사실상 무력화됐던 버그 수정 후, 원점수 기준 실측 재조정: `0.35` → `0.38` (v3.13) |
+| 37 | `ops_user` | `ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'local'`, `ADD COLUMN IF NOT EXISTS external_id VARCHAR(255)`, `ADD COLUMN IF NOT EXISTS email VARCHAR(255)`, `ALTER COLUMN hashed_password DROP NOT NULL`, `CREATE UNIQUE INDEX ux_user_provider_external_id ON ops_user(auth_provider, external_id) WHERE external_id IS NOT NULL` | SSO(Azure AD) 연동 기반 스키마 선추가 — 로컬 계정은 `auth_provider='local'`로 그대로 유지, SSO 전용 계정은 로컬 비밀번호가 없을 수 있어 nullable로 완화(로그인 흐름 자체는 아직 미구현) (v2.50) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
