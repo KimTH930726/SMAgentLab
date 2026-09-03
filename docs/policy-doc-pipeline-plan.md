@@ -93,7 +93,7 @@ policy_chunk  -- rag_knowledge 재사용 시: policy_item_id를 source_ref로 �
   id, policy_item_id(FK), chunk_text, embedding, chunk_idx
 ```
 
-**왜 3층인가**: 파라미터 팩트를 벡터화하면 어휘만 겹쳐도 오탐이 난다 — `docs/knowledge-lifecycle-design.md`의 "rag_knowledge 88% 표형식 오염" 및 v2.49의 `_KEYWORD_ONLY_CATEGORIES`(코드표는 벡터 점수 0, 키워드 매칭만)와 정확히 같은 문제. 파라미터는 구조화해서 정확 조회, 서술은 벡터로 의미 검색, 카테고리는 RDB로 네비게이션.
+**왜 3층인가**: 파라미터 팩트를 벡터화하면 어휘만 겹쳐도 오탐이 난다 — `docs/tech/knowledge-lifecycle-design.md`의 "rag_knowledge 88% 표형식 오염" 및 v2.49의 `_KEYWORD_ONLY_CATEGORIES`(코드표는 벡터 점수 0, 키워드 매칭만)와 정확히 같은 문제. 파라미터는 구조화해서 정확 조회, 서술은 벡터로 의미 검색, 카테고리는 RDB로 네비게이션. 이 원칙 자체는 `docs/tech/retrieval-routing-pattern.md`에 재사용 가능한 패턴으로 별도 정리했다(2026-09-04) — 다음 데이터 축을 편입할 때 이 문서보다 그쪽을 먼저 참고할 것.
 
 **§1의 4가지 콘텐츠 유형이 저장소 3층에 매핑되는 방식**: (a)서술→`policy_chunk`, (b)파라미터→`policy_param`(그대로), (c)코드 열거형→`policy_param`(name=코드체계명, condition=코드, value=설명 — 구조적으로 (b)와 동일하게 수용 가능). **(d)상태 전이 규칙은 `policy_param`의 name/condition/value/unit에 억지로 안 맞는다** — Phase 1에서는 자동 분류하지 않고 `unresolved`로 캡처만 한다(§2-3). 실제로 상태 전이 조회 질문이 얼마나 나오는지 확인되면 Phase 2 이후 전용 구조(예: `policy_transition` 테이블)를 검토한다 — 한 번 본 사례로 스키마를 미리 늘리지 않는다.
 
