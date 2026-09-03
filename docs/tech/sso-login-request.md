@@ -1,5 +1,10 @@
 # Ops-Navigator SSO 로그인 — Azure AD 앱 등록 요청 준비 (2026-09-03 기준)
 
+> ⚠️ **2026-09-03 정정**: 로그인 SSO는 이 문서가 가정한 Azure AD 직접 연동이 아니라
+> **사내 자체 IdP(SSO 게이트웨이, Azure AD와 별개, 프로토콜 OIDC)**를 통해 연동하기로
+> 확인됨. 이 문서는 **M365 메일함(VOC 이메일 채널) 전용 Azure AD 앱 등록 트랙에만
+> 유효**하다 — 로그인 SSO는 `docs/tech/internal-sso-request.md`를 참고할 것.
+
 ## 1. 목적
 
 로그인 인프라를 로컬 계정(username/password)에서 회사 SSO(Azure AD/Entra ID)로 전환하기 위한
