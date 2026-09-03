@@ -13,7 +13,12 @@
 > §7 미확정 항목(외부 SoR API 스펙, 정책서 원문 완료 시점, condition 표현 방식, effective_from/to
 > 필요 여부, 상태전이 전용 구조 필요 여부)은 v1 범위 밖(Phase 2+) 또는 데이터가 더 쌓인 뒤 재검토.
 > 목적: 엑셀로 된 비즈니스 정책서를 운영에서 활용 가능한 데이터로 전환하는 **파이프라인(Track 1)** 과, 그 결과를 어떤 저장소 전략으로 관리할지 **수치로 판정하는 실험실(Track 2)** 을 설계한다.
-> 관련: `D:\MD자료\work-os\WBS\smagent.md`, `docs/knowledge-lifecycle-design.md`, `docs/rag-improvement-strategy.md`, `docs/knowledge-refresh-automation-plan.md`
+> 관련: `D:\MD자료\work-os\WBS\smagent.md`, `docs/tech/knowledge-lifecycle-design.md`(경로 정정),
+> `docs/knowledge-refresh-automation-plan.md`, `docs/tech/policy-platform-feasibility.md`(더 큰
+> 규모의 "정책 플랫폼" 통합 가능성 사전 검토 — `service/policy/` 구조를 오늘과 동일하게 권고했었음)
+> (`docs/rag-improvement-strategy.md`는 2026-09-03 삭제 — 2026-06-30 시점 로드맵으로 실 코드
+> 참조 없었고, 그 안의 "골든셋+Recall@K 평가 프레임워크" 제안은 이후 실측 검토 결과 지금 시스템
+> 규모(전체 질의 104건)엔 안 맞는다는 게 확인됨, 메모리 `project_retrieval_routing` 참고)
 
 ---
 
@@ -136,6 +141,48 @@ row로 재생성되고, 이전 버전의 파라미터는 이전 `policy_item_id`
 - 이건 임시방편이 아니라 장기적으로도 유효하다 — 표준화 요청 자체가 한 번에 끝나지 않고
   반복될 것이므로, 실패 사유를 구조화해서 쌓아두는 게 매번 사람이 손으로 다시 파악하는 것보다
   싸다.
+
+### 2-4. v1 현재 상태 — 실제로 되는 것 vs 설계만 된 것 (2026-09-03)
+
+**지금 UI 화면은 없다.** 업로드는 `POST /api/policy/import`를 직접(스크립트/curl) 호출해야
+한다 — 그래서 "사용자 셀프 등록"보다 "초기 데이터를 관리자가 직접 밀어넣기(v0)"가 지금
+구조와 자연스럽게 맞는다(엑셀이든 복붙 텍스트를 엑셀로 변환한 것이든 API 입장에선 동일).
+
+```
+[관리자/AIOps팀]                    [service/policy/]                    [DB]
+     │                                    │                                │
+     │  정책서 엑셀(또는 복붙→엑셀 변환)      │                                │
+     ├──POST /api/policy/import─────────►│                                │
+     │                                    │  ① 시트 판별(용어집/정책, 헤더 기반) │
+     │                                    │  ② 헤더 퍼지매핑+동적 깊이 감지     │
+     │                                    │     (대/중/소분류 vs 정책항목/     │
+     │                                    │      세부항목 등 팀마다 달라도 흡수) │
+     │                                    │  ③ 버전 체크(content_hash)        │
+     │                                    │     — 안 바뀐 row는 여기서 스킵    │
+     │                                    ├──④ LLM 분해(동시,세마포어5)──────►│ (LLM 게이트웨이)
+     │                                    │     서술/파라미터/미해결 분류      │
+     │                                    ├──⑤ policy_item/param/chunk INSERT►│ policy_item
+     │                                    │     (전부 status=pending_review)  │ policy_param
+     │                                    ├──⑥ 용어집은 create_glossary()───►│ policy_chunk
+     │                                    │     (기존 함수 재사용, 즉시 반영)  │ rag_glossary
+     │◄──ImportSummary(건수 요약)─────────┤                                │
+```
+
+**실제로 완성된 것**: 위 ①~⑥ 전 구간 — 실 HTTP E2E로 검증됨(§6). 용어집(⑥)만 예외적으로
+"즉시 검색 반영"이다 — `rag_glossary`는 채팅의 기존 Glossary Term Mapping이 그대로 읽으므로,
+업로드하는 순간부터 채팅에서 그 용어가 바로 매핑된다.
+
+**아직 안 된 것(설계만 되고 미구현, 브리프 §5 참고)**:
+- **조회/검색 API 자체가 없다** — `GET /api/policy/items` 등은 §5에 설계만 있고 구현 안 됨.
+  지금은 데이터가 DB에 쌓이기만 하고, 그걸 꺼내 보는 API조차 없는 상태.
+- **승인 화면이 없다** — 전부 `status='pending_review'`로 쌓여서, `active`로 바꿀 방법이
+  수동 SQL 말고는 없다.
+- **채팅 검색에 아직 안 얹혔다** — `retrieval.py`에 policy 소스 라우팅을 추가해야 실제
+  채팅 질문("장바구니 최대 몇 개?")이 이 데이터를 찾아 답할 수 있는데, 이 연결이 없다.
+
+**그래서 지금 기대 효과는 "정책서가 구조화된 형태로 DB에 안전하게 쌓인다"까지다** — 사람이
+채팅으로 물어보면 나오는 단계까지는 조회 API + 검색 라우팅 + (선택)승인 화면이 더 필요하다.
+용어집만 유일하게 지금 당장 실사용 효과가 있다(업로드 즉시 채팅 용어 매핑에 반영).
 
 ## 3. Track 1 — 정책서 데이터화 파이프라인
 
