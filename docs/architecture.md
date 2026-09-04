@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.56)
+# Ops-Navigator 시스템 아키텍처 (v2.57)
 
 ## 개요
 
@@ -9,6 +9,12 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.57: **딜리버스 용어집 비고(remark) 유실 버그 수정** — 딜리버스 파일 용어정의 시트 실제
+  화면 확인 중, 비고 컬럼에 "상태코드 : 10" 같은 정보가 있는 행을 발견. 파서는 정확히
+  파싱했지만(`ParsedGlossaryRow.remark`) `service.py`가 `create_glossary(namespace, term,
+  description)`만 호출해 remark를 버리고 있었음(`rag_glossary`에 remark 컬럼 없음). remark가
+  있으면 description에 `"{description} (비고: {remark})"`로 이어붙이도록 수정(스키마 변경
+  없음). 실 HTTP E2E로 확인. 테스트 2개 추가(총 301개).
 - v2.56: **온라인스토어 정책서 실 데이터 최초 적재** — 새 네임스페이스 "온라인스토어 DB" 생성,
   대화로 받은 8개 시트(용어정의 91건 + 정책 307건, 398건)를 실제 화면/셀 구조로 재구성해
   `POST /api/policy/import`로 실제 DB 적재(약 12분). param 305건/narrative 364건/unresolved

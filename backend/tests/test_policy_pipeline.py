@@ -360,3 +360,33 @@ class TestIngestGlossaryRow:
 
         assert summary.glossary_duplicate_skipped == 1
         assert summary.glossary_added == 0
+
+    @pytest.mark.asyncio
+    async def test_remark_appended_to_description_not_dropped(self, patch_db, monkeypatch):
+        """실측(2026-09-04, 딜리버스 파일): 비고 컬럼에 "상태코드 : 10" 같은 정보가 들어있는데
+        create_glossary가 description만 받아서 비고가 그냥 버려지던 버그."""
+        create_mock = AsyncMock(return_value={"id": 1})
+        monkeypatch.setattr(service, "create_glossary", create_mock)
+        row = excel_parser.ParsedGlossaryRow(
+            term="결제 요청", description="사용자가 주문을 수행하여 최초로 만들어지는 상태",
+            remark="상태코드 : 10", source_row=22,
+        )
+        summary = service.SheetSummary(sheet_name="용어집", kind="glossary")
+
+        await service._ingest_glossary_row("ns", row, 1, patch_db, summary)
+
+        create_mock.assert_awaited_once_with(
+            "ns", "결제 요청",
+            "사용자가 주문을 수행하여 최초로 만들어지는 상태 (비고: 상태코드 : 10)",
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_remark_leaves_description_unchanged(self, patch_db, monkeypatch):
+        create_mock = AsyncMock(return_value={"id": 1})
+        monkeypatch.setattr(service, "create_glossary", create_mock)
+        row = excel_parser.ParsedGlossaryRow(term="딜리버스", description="배달 서비스", remark=None, source_row=2)
+        summary = service.SheetSummary(sheet_name="용어집", kind="glossary")
+
+        await service._ingest_glossary_row("ns", row, 1, patch_db, summary)
+
+        create_mock.assert_awaited_once_with("ns", "딜리버스", "배달 서비스")

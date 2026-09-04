@@ -190,9 +190,14 @@ async def _ingest_glossary_row(
     # §2-2 예외(일부 용어집 항목이 정의문 아닌 파라미터 팩트에 가까움, 예: "결제완료=상태코드11")는
     # v1에서 별도 분류 없이 전부 rag_glossary로 보낸다 — policy_param은 policy_item FK가 필수라
     # 용어집 단독으로는 넣을 자리가 없고, 이 소수 사례를 위해 v1 스코프를 늘리지 않는다(과설계 방지,
-    # 필요하면 검토 UI 도입 시 재분류).
+    # 필요하면 검토 UI 도입 시 재분류). rag_glossary는 remark 컬럼이 없어(스키마 변경 없이 가려고)
+    # 비고는 description에 이어붙여 보존한다 — 실측(2026-09-04, 딜리버스 파일)으로 "상태코드: 11"
+    # 같은 비고가 그냥 버려지는 실데이터 손실이 확인돼 추가.
+    description = row.description
+    if row.remark:
+        description = f"{description} (비고: {row.remark})"
     try:
-        await create_glossary(namespace, row.term, row.description)
+        await create_glossary(namespace, row.term, description)
         summary.glossary_added += 1
     except ValueError:
         summary.glossary_duplicate_skipped += 1
