@@ -120,8 +120,6 @@
   .run-meta { font-size: 12px; color: var(--text-faint); margin-top: 12px; font-family: var(--font-mono); }
 
   /* ── Headline stat ─────────────────────────────────────── */
-  .headline { display: grid; grid-template-columns: 1.1fr 1fr; gap: 20px; }
-  @media (max-width: 720px) { .headline { grid-template-columns: 1fr; } }
   .stat-row { display: flex; align-items: baseline; gap: 18px; }
   .stat-block { display: flex; flex-direction: column; gap: 4px; }
   .stat-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 40px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
@@ -129,8 +127,6 @@
   .stat-num.muted { color: var(--text-muted); font-size: 26px; }
   .stat-cap { font-size: 12px; color: var(--text-muted); }
   .stat-arrow { font-family: var(--font-mono); color: var(--good); font-size: 20px; font-weight: 600; }
-  .headline-verdict { font-size: 14px; line-height: 1.65; color: var(--text-muted); margin-top: 10px; }
-  .headline-verdict b { color: var(--text); font-weight: 600; }
 
   /* ── Timeline ──────────────────────────────────────────── */
   .timeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; }
@@ -205,6 +201,43 @@
   .chunk-sample-body { font-family: var(--font-mono); color: var(--text-muted); word-break: break-word; }
   .chunk-sample + .chunk-sample { margin-top: 10px; }
 
+  /* ── Conclusion (lead) ─────────────────────────────────── */
+  .conclusion {
+    background: linear-gradient(180deg, var(--accent-soft), var(--surface) 70%);
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  }
+  .conclusion-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 10px;
+  }
+  .conclusion-headline {
+    font-size: 22px; font-weight: 700; line-height: 1.4; letter-spacing: -0.01em;
+    text-wrap: balance; margin: 0 0 16px;
+  }
+  .conclusion-headline b { color: var(--accent); }
+
+  /* ── Next steps ────────────────────────────────────────── */
+  .step-list { display: flex; flex-direction: column; }
+  .step-item {
+    display: grid; grid-template-columns: 140px 1fr; gap: 18px; align-items: baseline;
+    padding: 16px 0; border-top: 1px solid var(--border);
+  }
+  .step-item:first-child { border-top: none; padding-top: 4px; }
+  @media (max-width: 640px) { .step-item { grid-template-columns: 1fr; gap: 6px; } }
+  .step-chip {
+    display: inline-flex; align-self: start; font-size: 11px; font-weight: 600;
+    padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  }
+  .step-chip.ready { background: var(--good-soft); color: var(--good); }
+  .step-chip.pending { background: var(--warn-soft); color: var(--warn); }
+  .step-chip.idle { background: var(--surface-2); color: var(--text-faint); }
+  .step-body h4 { margin: 0 0 4px; font-size: 13.5px; font-weight: 600; }
+  .step-body p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--text-muted); }
+
+  /* ── Appendix (run config, de-emphasized) ─────────────── */
+  .appendix { opacity: 0.88; }
+  .appendix .panel-label { margin-bottom: 12px; }
+
   /* ── Footer ────────────────────────────────────────────── */
   .foot {
     display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
@@ -222,89 +255,28 @@
     <span class="badge-status">최근 실행 완료</span>
   </div>
 
-  <div class="panel">
-    <p class="panel-label">실행 설정</p>
-    <div class="run-config">
-      <div class="field">
-        <label>골든셋</label>
-        <div class="field-value">online_delivus_v1.jsonl · 89문항</div>
+  <div class="panel conclusion">
+    <p class="conclusion-label">결론</p>
+    <p class="conclusion-headline">
+      정책서는 <b>하이브리드 스키마(RDB 파라미터 + 벡터 서술)</b>로 저장해야 한다 —
+      4개 질의 유형 전부에서 지식 전용 저장 대비 정답률이 높다.
+    </p>
+    <div class="stat-row">
+      <div class="stat-block">
+        <span class="stat-num muted">55.1%</span>
+        <span class="stat-cap">A · 지식-only</span>
       </div>
-      <div class="field">
-        <label>비교군 A</label>
-        <div class="field-value">rag_knowledge 지식-only (전체 378 item 청킹)</div>
-      </div>
-      <div class="field">
-        <label>비교군 B</label>
-        <div class="field-value">하이브리드 스키마 (policy_param + policy_chunk)</div>
-      </div>
-      <button class="run-btn" type="button">비교 실행</button>
-    </div>
-    <div class="run-meta">마지막 실행 2026-09-04 · 소요 4분 12초 · 격리 테스트 네임스페이스 사용, 종료 후 자동 정리</div>
-  </div>
-
-  <div class="panel headline">
-    <div>
-      <p class="panel-label">전체 정답률</p>
-      <div class="stat-row">
-        <div class="stat-block">
-          <span class="stat-num muted">55.1%</span>
-          <span class="stat-cap">A · 지식-only</span>
-        </div>
-        <span class="stat-arrow">→</span>
-        <div class="stat-block">
-          <span class="stat-num good">75.3%</span>
-          <span class="stat-cap">B · 하이브리드 (폴백 적용 후)</span>
-        </div>
-      </div>
-      <p class="headline-verdict">
-        <b>"하이브리드가 무조건 낫다"는 가설은 1차 실행에서 기각됐다</b> — param 유형에서 B가
-        A에 크게 뒤졌음(34.8% vs 73.9%). 원인 수정 후 재측정한 결과가 지금 이 화면이다:
-        <b>4개 질의 유형 전부에서 B가 우세</b>하다.
-      </p>
-    </div>
-    <svg viewBox="0 0 220 160" style="width:100%; max-width:260px; justify-self:end;" role="img" aria-label="전체 정답률 A 55.1%에서 B 75.3%로 상승">
-      <line x1="30" y1="130" x2="200" y2="130" stroke="var(--border)" stroke-width="1"/>
-      <text x="30" y="145" font-family="var(--font-mono)" font-size="10" fill="var(--text-faint)">1차(A)</text>
-      <text x="120" y="145" font-family="var(--font-mono)" font-size="10" fill="var(--text-faint)">1차(B)</text>
-      <text x="185" y="145" font-family="var(--font-mono)" font-size="10" fill="var(--text-faint)">재측정(B)</text>
-      <rect x="30" y="58" width="26" height="72" rx="3" fill="var(--text-faint)" opacity="0.5"/>
-      <text x="43" y="50" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--text-muted)">55.1</text>
-      <rect x="110" y="65" width="26" height="65" rx="3" fill="var(--bad)" opacity="0.75"/>
-      <text x="123" y="57" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--bad)">57.3</text>
-      <rect x="170" y="25" width="26" height="105" rx="3" fill="var(--good)"/>
-      <text x="183" y="17" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--good)">75.3</text>
-    </svg>
-  </div>
-
-  <div class="panel">
-    <p class="panel-label">진행 흐름</p>
-    <div class="timeline">
-      <div class="tl-step">
-        <div class="tl-num">1</div>
-        <div class="tl-title">골든셋 89문항 확보</div>
-        <div class="tl-desc">실 DB 500건(온라인스토어+딜리버스)에서 §4-1 스펙대로 자동 생성, 품질 검토로 7건 제거.</div>
-      </div>
-      <div class="tl-step is-fail">
-        <div class="tl-num">2</div>
-        <div class="tl-title">1차 실행 — param 참패</div>
-        <div class="tl-desc">B가 param 유형에서 34.8%에 그침(A는 73.9%). 하이브리드 우위 가설이 뒤집힘.</div>
-      </div>
-      <div class="tl-step is-fix">
-        <div class="tl-num">3</div>
-        <div class="tl-title">원인 특정 — 벡터 사각지대</div>
-        <div class="tl-desc">item의 36%가 narrative 없이 param만 있어 policy_chunk가 전무. 어휘 안 겹치면 못 찾음.</div>
-      </div>
-      <div class="tl-step is-win">
-        <div class="tl-num">4</div>
-        <div class="tl-title">폴백 적용 후 재측정</div>
-        <div class="tl-desc">item마다 원문 전체를 최소 1개 청크로 보장. 163건 백필 후 재실행 → 4개 유형 전부 역전.</div>
+      <span class="stat-arrow">→</span>
+      <div class="stat-block">
+        <span class="stat-num good">75.3%</span>
+        <span class="stat-cap">B · 하이브리드 (최종)</span>
       </div>
     </div>
   </div>
 
   <div class="panel">
     <div class="compare-head">
-      <p class="panel-label" style="margin:0;">유형별 정답률 (hit@10)</p>
+      <p class="panel-label" style="margin:0;">세부 설명 — 유형별 정답률 (hit@10)</p>
       <div class="legend">
         <span><i class="swatch" style="background:var(--text-faint); opacity:.55;"></i>A · 지식-only</span>
         <span><i class="swatch" style="background:var(--accent);"></i>B · 하이브리드(재측정)</span>
@@ -354,9 +326,35 @@
     </div>
   </div>
 
+  <div class="panel">
+    <p class="panel-label">원인분석 — 왜 처음엔 하이브리드가 졌나</p>
+    <div class="timeline">
+      <div class="tl-step is-fail">
+        <div class="tl-num">1</div>
+        <div class="tl-title">1차 실행 — param 참패</div>
+        <div class="tl-desc">B가 param 유형에서 34.8%에 그침(A는 73.9%). 하이브리드 우위 가설이 뒤집힘.</div>
+      </div>
+      <div class="tl-step is-fix">
+        <div class="tl-num">2</div>
+        <div class="tl-title">원인 특정 — 벡터 사각지대</div>
+        <div class="tl-desc">item의 36%가 narrative 없이 param만 있어 policy_chunk가 전무. 어휘 안 겹치면 못 찾음.</div>
+      </div>
+      <div class="tl-step is-fix">
+        <div class="tl-num">3</div>
+        <div class="tl-title">폴백 청크 도입</div>
+        <div class="tl-desc">item마다 원문 전체를 최소 1개 청크로 보장하도록 수정, 기존 163건 백필.</div>
+      </div>
+      <div class="tl-step is-win">
+        <div class="tl-num">4</div>
+        <div class="tl-title">재측정 — 4개 유형 전부 역전</div>
+        <div class="tl-desc">param 82.6%, condition_filter 73.7%로 상승. 하이브리드 우위 확정.</div>
+      </div>
+    </div>
+  </div>
+
   <div class="panel insight">
     <div class="insight-text">
-      <p class="panel-label" style="margin-bottom:16px;">발견한 문제 — 벡터 사각지대</p>
+      <p class="panel-label" style="margin-bottom:16px;">벡터 사각지대, 숫자로 보면</p>
       <div class="insight-num-row">
         <div class="insight-num-block">
           <span class="insight-num">136</span>
@@ -387,6 +385,64 @@
         <div class="chunk-sample-body">"지급 제외 (6.리워드 / 6-1.리워드 / 1.별(Star) 지급 정책): 1. 취소 주문 2. 교환/반품으로 재결제된 금액 3. 방문별이 지급되지 않은 주문" → 폴백 청크로 색인, 자연어 질의로도 검색됨</div>
       </div>
     </div>
+  </div>
+
+  <div class="panel">
+    <p class="panel-label">향후 계획 및 시사점</p>
+    <div class="step-list">
+      <div class="step-item">
+        <span class="step-chip ready">진행 가능</span>
+        <div class="step-body">
+          <h4>agent.py / retrieval.py 편입 검토 재개</h4>
+          <p>벡터 사각지대가 편입을 막던 실질적 이유였다. 해소됐으니 정책 검색을 메인 채팅
+             검색 경로에 합칠지 다음 단계로 검토할 수 있다.</p>
+        </div>
+      </div>
+      <div class="step-item">
+        <span class="step-chip pending">근거 확보, 우선순위 미정</span>
+        <div class="step-body">
+          <h4>v2 구조 후보 4종 — 상태전이 / 계산식 / 우선순위 체인 / 조건 비교분기</h4>
+          <p>실측 중 반복 발견된 패턴. 지금은 unresolved로 안전하게 보존만 하는 중 — 어떤 걸
+             먼저 구조화할지는 unresolved 집계 건수를 더 쌓은 뒤 결정.</p>
+        </div>
+      </div>
+      <div class="step-item">
+        <span class="step-chip idle">미착수</span>
+        <div class="step-body">
+          <h4>검토/승인 UI</h4>
+          <p>파라미터 값 승인, unresolved 재분류, 버전 diff 화면. 지금은 API까지만 있고
+             pending_review 상태로 쌓인 데이터를 승인하는 화면은 없다.</p>
+        </div>
+      </div>
+      <div class="step-item">
+        <span class="step-chip idle">다음 확장 대상</span>
+        <div class="step-body">
+          <h4>다른 시스템 정책서로 확대</h4>
+          <p>온라인스토어·딜리버스 2개 파일(500건) 완료. 통합 스키마라 새 시스템 추가에
+             코드 변경이 필요 없다 — 다음은 데이터 확보 문제.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel appendix">
+    <p class="panel-label">부록 — 실행 방법</p>
+    <div class="run-config">
+      <div class="field">
+        <label>골든셋</label>
+        <div class="field-value">online_delivus_v1.jsonl · 89문항</div>
+      </div>
+      <div class="field">
+        <label>비교군 A</label>
+        <div class="field-value">rag_knowledge 지식-only (전체 378 item 청킹)</div>
+      </div>
+      <div class="field">
+        <label>비교군 B</label>
+        <div class="field-value">하이브리드 스키마 (policy_param + policy_chunk)</div>
+      </div>
+      <button class="run-btn" type="button">비교 실행</button>
+    </div>
+    <div class="run-meta">마지막 실행 2026-09-04 · 격리 테스트 네임스페이스 사용, 종료 후 자동 정리</div>
   </div>
 
   <div class="foot">
