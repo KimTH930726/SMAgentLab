@@ -1,10 +1,12 @@
 # Ops-Navigator 테이블 정의서
 
-> **Version**: 3.14
+> **Version**: 3.15
 > **DBMS**: PostgreSQL 16 + pgvector
 > **Extensions**: `vector`, `pg_trgm`
 > **벡터 차원**: 768 (paraphrase-multilingual-mpnet-base-v2)
-> **작성일**: 2026-09-03 (v3.14 — `policy_item`/`policy_param`/`policy_chunk` 추가(§18-4, 정책서
+> **작성일**: 2026-09-04 (v3.15 — `policy_chunk` 벡터 폴백 동작 문서화: narrative segment 없는
+> item은 정책명+본문 전체를 폴백 청크로 저장, Track 2 A/B 비교로 발견된 갭 수정. 스키마(DDL)
+> 변경은 없음, 적재 로직만 변경. v3.14 — `policy_item`/`policy_param`/`policy_chunk` 추가(§18-4, 정책서
 > 데이터화 파이프라인 v1). `ops_user`에 SSO 연동 기반 컬럼(`auth_provider`/`external_id`/`email`)
 > 추가(마이그레이션 #37). Text-to-SQL `sql_*` 테이블 마이그레이션 중단(#38, 기존 설치엔 남아있으나
 > 더 이상 갱신 안 됨). v3.13 — `email_relevance_min_score` 계산식 수정(base_weight 랭킹 부스팅 없는 원점수 기준) + 기본값 0.35→0.38 재조정. v3.12 — `ops_voc_routing`에 `mail_folder_id`/`mail_folder_name` 추가(특정 Outlook 폴더로 조회 범위 제한). v3.11 — `email_graph_delegated` JSON에 `client_secret` 선택 필드 추가(DDL 변경 없음, 기존 암호화 JSON 블롭 내부 키만 추가) — Confidential Client 지원. v3.10 — `email_graph_delegated`의 인증 방식을 Device Code Flow에서 Authorization Code Flow(PKCE)로 교체, `redirect_uri` 필드 추가. v3.9 — VOC 이메일 관련지식 사전 필터(`email_relevance_min_score`, `ops_email_analysis.status='skipped_relevance'`, `ops_email_poll_cycle.total_skipped_low_relevance`) 추가)
@@ -750,7 +752,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 |---|--------|-----------|------|--------|---------|------|
 | 1 | `id` | SERIAL | NO | auto | PK | — |
 | 2 | `policy_item_id` | INT | NO | - | FK → policy_item(id) ON DELETE CASCADE | — |
-| 3 | `chunk_text` | TEXT | NO | - | - | 서술 규칙 segment 원문 |
+| 3 | `chunk_text` | TEXT | NO | - | - | 서술 규칙 segment 원문, 또는 폴백 청크(아래 참고) |
 | 4 | `embedding` | VECTOR(768) | YES | NULL | - | mpnet 임베딩 |
 | 5 | `chunk_idx` | INT | NO | `0` | - | policy_item 내 순번 |
 | 6 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | — |
@@ -759,6 +761,12 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 **검색**: `GET /api/policy/search` — `policy_param`은 `to_tsvector`/`to_tsquery` lexeme 매칭,
 `policy_chunk`는 코사인 유사도. 둘 다 항상 같이 실행되고(질의 유형 분기 없음) 결과를 합쳐 반환.
+
+**벡터 폴백(2026-09-04)**: narrative segment가 하나도 안 남은 item(param만 있거나 전부
+unresolved인 경우, 실측 480건 중 163건=34%)은 정책명+category_path+raw_body 전체를 chunk_idx=0
+폴백 청크로 저장 — 그렇지 않으면 그 item은 벡터 검색으로 아예 못 찾는다(Track 2 A/B 비교로
+발견, `policy-doc-pipeline-plan.md` §4-3/§4-4). 실제 LLM 추출 narrative와는 별도 카운터
+(`SheetSummary.fallback_chunks_added`)로 구분한다.
 아직 채팅 메인 검색(`retrieval.py`)엔 편입 안 됨 — Track 2(저장 전략 실험실) 결과를 보고 결정.
 
 ---

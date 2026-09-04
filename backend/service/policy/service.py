@@ -63,6 +63,7 @@ class SheetSummary:
     unresolved_segments: int = 0
     glossary_added: int = 0
     glossary_duplicate_skipped: int = 0
+    fallback_chunks_added: int = 0
     skip_reason: str | None = None
 
 
@@ -142,6 +143,7 @@ async def _write_policy_result(
     else:
         summary.created_items += 1
 
+    narrative_written = False
     for seg in segments:
         if seg.type == "param" and seg.extracted:
             await conn.execute(
@@ -163,8 +165,25 @@ async def _write_policy_result(
                 item_id, seg.text, str(embedding), summary.narratives_extracted,
             )
             summary.narratives_extracted += 1
+            narrative_written = True
         elif seg.type == "unresolved":
             summary.unresolved_segments += 1
+
+    # 벡터 폴백(2026-09-04, Track 2 실측) — narrative segment가 하나도 안 남은 item(param만
+    # 있거나 전부 unresolved인 경우, 실측 378건 중 136건=36%가 여기 해당)은 policy_chunk가
+    # 아예 없어서 벡터 검색으로 못 찾는다. 자연어 질문이 짧은 param 필드(name/condition)와
+    # 어휘가 안 겹치면 to_tsquery 정확매칭도 실패해 이런 item은 아예 검색 불가능해진다 —
+    # Track 2 A/B 비교에서 param 유형만 하이브리드(B)가 지식-only(A)에 오히려 크게 진 원인.
+    # 원문 전체(정책명+본문)를 벡터 색인해두면 어휘가 안 겹쳐도 의미 유사도로는 찾을 수 있다.
+    if not narrative_written:
+        fallback_text = f"{row.policy_name} ({' / '.join(row.category_path)}): {row.raw_body}"
+        embedding = await embedding_service.embed(fallback_text)
+        await conn.execute(
+            "INSERT INTO policy_chunk (policy_item_id, chunk_text, embedding, chunk_idx) VALUES ($1, $2, $3::vector, $4)",
+            item_id, fallback_text, str(embedding), summary.narratives_extracted,
+        )
+        summary.narratives_extracted += 1
+        summary.fallback_chunks_added += 1
 
 
 async def _ingest_policy_row(

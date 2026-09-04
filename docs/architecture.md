@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.61)
+# Ops-Navigator 시스템 아키텍처 (v2.62)
 
 ## 개요
 
@@ -9,6 +9,15 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.62: **정책 벡터 폴백 구현 — Track 2 재측정으로 하이브리드 우세 확인** — v2.61에서 발견한
+  갭(item의 36%가 벡터 색인 없음)을 바로 수정: `service.py`가 narrative segment 없는 item에
+  정책명+category_path+raw_body 전체를 폴백 `policy_chunk`로 색인(`SheetSummary.
+  fallback_chunks_added`로 실제 LLM narrative와 구분 집계). 기존 480건 중 163건은 재임포트
+  없이 직접 백필(`content_hash` 불변이라 재임포트해도 재생성 안 되므로 별도 스크립트 필요).
+  Track 2 골든셋 89건 재측정: param 34.8%→**82.6%**(A 역전), condition_filter
+  47.4%→**73.7%**, 전체 57.3%→**75.3%**. 4개 유형 전부 하이브리드 우세로 확정 —
+  `agent.py`/`retrieval.py` 편입을 막던 이유 해소. 테스트 3개 추가(총 312개).
+  `policy-doc-pipeline-plan.md` §4-4.
 - v2.61: **Track 2 저장소 전략 A/B 실행 완료 — "하이브리드가 무조건 낫다" 가설 기각** — 골든셋
   89건으로 A(`rag_knowledge` 지식-only, 전체 378 item을 격리 테스트 네임스페이스에 얹음) vs
   B(지금 하이브리드 스키마) 실측 비교(item-id 기반 hit@10). narrative는 B 압승(91.3% vs

@@ -314,8 +314,8 @@ class TestIngestPolicyRowVersioning:
         assert summary.new_versions == 1
         assert summary.created_items == 0
         # 이전 row(id=5)가 deprecated로 전환됐는지 확인 — UPDATE이지 절대 content 덮어쓰기가 아님
-        deprecate_call = conn.execute.call_args_list[-1]
-        assert "deprecated" in deprecate_call.args[0]
+        # (segments=[]라 벡터 폴백 청크 INSERT도 뒤이어 실행되므로 마지막 호출이 아니라 검색해서 찾음)
+        deprecate_call = next(c for c in conn.execute.call_args_list if "deprecated" in c.args[0])
         assert deprecate_call.args[1] == 5
 
     @pytest.mark.asyncio
@@ -335,6 +335,68 @@ class TestIngestPolicyRowVersioning:
         assert summary.unresolved_segments == 1
         insert_call = conn.fetchrow.call_args_list[-1]
         assert "'unresolved'" in insert_call.args[0] or "parse_status" in insert_call.args[0]
+
+
+class TestVectorFallback:
+    """2026-09-04 Track 2 실측 발견 — narrative segment가 하나도 없는 item(param만 있거나
+    전부 unresolved)은 policy_chunk가 아예 없어 벡터 검색이 불가능했다(전체 378건 중 136건=
+    36%). 원문 전체를 폴백 청크로 넣어 벡터 사각지대를 없애는 로직."""
+
+    @pytest.mark.asyncio
+    async def test_param_only_segments_get_fallback_chunk(self, patch_db, monkeypatch):
+        conn = patch_db
+        conn.fetchrow = AsyncMock(side_effect=[None, {"id": 30, "logical_id": 30}])
+        monkeypatch.setattr(decompose, "decompose_policy_body", AsyncMock(return_value=[
+            decompose.Segment(type="param", text="20개", extracted={"name": "최대개수", "condition": None, "value": "20", "unit": "개"}),
+        ]))
+
+        row = excel_parser.ParsedPolicyRow(category_path=["1.주문"], policy_name="장바구니 정책", raw_body="일반 배달: 20개", remark=None, source_row=2)
+        sheet = excel_parser.ParsedSheet(sheet_name="시트1", kind="policy")
+        summary = service.SheetSummary(sheet_name="시트1", kind="policy")
+
+        await service._ingest_policy_row(conn, 1, "sys", "file.xlsx", sheet, row, summary)
+
+        assert summary.fallback_chunks_added == 1
+        assert summary.narratives_extracted == 1  # 폴백도 policy_chunk에 실제로 들어가니 카운트됨
+        chunk_call = next(c for c in conn.execute.call_args_list if "policy_chunk" in c.args[0])
+        assert "장바구니 정책" in chunk_call.args[2]
+        assert "일반 배달: 20개" in chunk_call.args[2]
+
+    @pytest.mark.asyncio
+    async def test_real_narrative_segment_skips_fallback(self, patch_db, monkeypatch):
+        conn = patch_db
+        conn.fetchrow = AsyncMock(side_effect=[None, {"id": 31, "logical_id": 31}])
+        monkeypatch.setattr(decompose, "decompose_policy_body", AsyncMock(return_value=[
+            decompose.Segment(type="narrative", text="재고 없으면 SOLD OUT 표기"),
+        ]))
+
+        row = excel_parser.ParsedPolicyRow(category_path=["a"], policy_name="정책1", raw_body="본문", remark=None, source_row=2)
+        sheet = excel_parser.ParsedSheet(sheet_name="시트1", kind="policy")
+        summary = service.SheetSummary(sheet_name="시트1", kind="policy")
+
+        await service._ingest_policy_row(conn, 1, "sys", "file.xlsx", sheet, row, summary)
+
+        assert summary.fallback_chunks_added == 0
+        assert summary.narratives_extracted == 1  # 실제 narrative만 카운트
+
+    @pytest.mark.asyncio
+    async def test_all_unresolved_still_gets_fallback_chunk(self, patch_db, monkeypatch):
+        """전부 unresolved라 param도 narrative도 없는 item도 벡터로는 찾을 수 있어야 한다 —
+        오히려 이런 item이 구조화가 가장 안 된 케이스라 벡터 폴백이 더 중요하다."""
+        conn = patch_db
+        conn.fetchrow = AsyncMock(side_effect=[None, {"id": 32, "logical_id": 32}])
+        monkeypatch.setattr(decompose, "decompose_policy_body", AsyncMock(return_value=[
+            decompose.Segment(type="unresolved", text="등록 : 미등록 → 등록", reason="상태 전이 규칙"),
+        ]))
+
+        row = excel_parser.ParsedPolicyRow(category_path=["a"], policy_name="상태 정책", raw_body="등록 : 미등록 → 등록", remark=None, source_row=2)
+        sheet = excel_parser.ParsedSheet(sheet_name="시트1", kind="policy")
+        summary = service.SheetSummary(sheet_name="시트1", kind="policy")
+
+        await service._ingest_policy_row(conn, 1, "sys", "file.xlsx", sheet, row, summary)
+
+        assert summary.fallback_chunks_added == 1
+        assert summary.unresolved_segments == 1
 
 
 class TestIngestGlossaryRow:
