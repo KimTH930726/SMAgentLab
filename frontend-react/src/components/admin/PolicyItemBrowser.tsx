@@ -31,10 +31,19 @@ export function PolicyItemBrowser() {
     refetchOnMount: 'always',
   });
 
+  // 대분류 드롭다운 선택지는 필터링된 items가 아니라 네임스페이스 전체 목록에서 뽑아야 한다 —
+  // 안 그러면 카테고리를 고르는 순간 그 필터링된 결과에서 선택지를 다시 뽑아서 방금 고른
+  // 카테고리 하나만 남고 나머지가 사라지는 자기잠식 버그가 생긴다(실사용 중 발견, 2026-09-04).
+  const { data: allItems = [] } = useQuery({
+    queryKey: ['policy-items-all', selectedNs],
+    queryFn: () => getPolicyItems(selectedNs),
+    enabled: !!selectedNs,
+    staleTime: 30_000,
+  });
+
   useEffect(() => { setPage(1); }, [selectedNs, categoryFilter, q, pageSize]);
 
-  // 카테고리 대분류(category_path[0]) 후보 — 필터 드롭다운용
-  const categoryOptions = Array.from(new Set(items.map((i) => i.category_path[0]).filter(Boolean))).sort();
+  const categoryOptions = Array.from(new Set(allItems.map((i) => i.category_path[0]).filter(Boolean))).sort();
 
   const { totalPages, totalItems, slice } = useClientPaging(items, pageSize);
   const pagedItems = slice(page);
