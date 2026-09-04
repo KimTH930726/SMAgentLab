@@ -1,10 +1,11 @@
 # Ops-Navigator API 명세서
 
-> **Version**: 2.19
+> **Version**: 2.20
 > **Base URL**: `http://localhost:8000`
 > **Protocol**: REST + SSE (Server-Sent Events)
 > **Content-Type**: `application/json` (기본), `text/event-stream` (SSE)
-> **최종 갱신**: 2026-09-03 (v2.19 — §13-2 정책서(Policy) API 신규: `POST /api/policy/import`,
+> **최종 갱신**: 2026-09-04 (v2.20 — §13-2 `GET /api/policy/unresolved-summary` 신규: unresolved
+> 팀별 집계 리포트. v2.19 — §13-2 정책서(Policy) API 신규: `POST /api/policy/import`,
 > `GET /api/policy/search`. v2.18 — VOC 이메일: `GET /mail-folders` 신규, `routing` 요청에 `mail_folder_id`/`mail_folder_name` 추가, `history`에 필터 쿼리 파라미터 추가, `email_relevance_min_score` 기본값 0.35→0.38 및 계산식 설명 갱신(v3.13). v2.17 — `PUT /delegated-auth/config` 요청에 선택 필드 `client_secret` 추가, `GET /delegated-auth/status` 응답에 `client_secret_configured` 필드 추가 — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록된 경우 PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) Confidential Client 지원이 필요해진 실사용 사례 반영)
 
 ---
@@ -1949,9 +1950,9 @@ Microsoft가 로그인 완료 후 브라우저를 리다이렉트시키는 지�
 
 > Base: `/api/policy/`
 > 인증: JWT Bearer, 네임스페이스 소유 검증(`check_namespace_ownership`).
-> 현재 상태: v1(임포트+검색 API까지 구현). 승인 UI 없음 — 데이터는 전부 `status='pending_review'`로
-> 쌓이고 검색 대상엔 포함됨. 채팅 메인 검색(`retrieval.py`)엔 아직 편입 안 됨(Track 2 결과 대기).
-> 상세 설계: `docs/policy-doc-pipeline-plan.md`.
+> 현재 상태: v1(임포트+검색+unresolved 집계 API까지 구현). 승인 UI 없음 — 데이터는 전부
+> `status='pending_review'`로 쌓이고 검색 대상엔 포함됨. 채팅 메인 검색(`retrieval.py`)엔
+> 아직 편입 안 됨(Track 2 결과 대기). 상세 설계: `docs/policy-doc-pipeline-plan.md`.
 
 ### POST /api/policy/import
 
@@ -1995,6 +1996,33 @@ Microsoft가 로그인 완료 후 브라우저를 리다이렉트시키는 지�
 }
 ```
 **Error**: `400` 네임스페이스 없음, `422` `q` 빈 문자열
+
+### GET /api/policy/unresolved-summary?namespace=&system_key=
+
+LLM 분해가 서술/파라미터 어디에도 못 넣은 항목(`parse_status IN ('unresolved','partial')`)을
+`system_key`(팀)별로 묶어 반환. `system_key` 쿼리는 선택 — 생략하면 전체 팀. 표준화 요청의
+근거 자료이자, 분해 프롬프트가 놓친 패턴을 사람이 발견하는 경로(§2-3, unresolved_report.py).
+reason 자동 클러스터링은 하지 않음(자유 텍스트라 정확 매칭 그룹핑이 무의미 — YAGNI).
+집계 결과를 브라우저에서 훑어보는 화면은 아직 없음(검토 UI 항목, §6 미착수).
+
+**Response `200`**
+```json
+{
+  "total_items": 1,
+  "total_segments": 1,
+  "by_system": [
+    { "system_key": "카드", "item_count": 1, "segment_count": 1,
+      "items": [
+        { "item_id": 25, "logical_id": 25, "policy_name": "상태 정책",
+          "category_path": ["회원상태"],
+          "segments": [
+            { "text": "등록 : 미등록 → 등록", "reason": "상태 전이 규칙(A→B), 구조화 방법 미정" }
+          ] }
+      ] }
+  ]
+}
+```
+**Error**: `400` 네임스페이스 없음
 
 ---
 

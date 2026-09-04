@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.52)
+# Ops-Navigator 시스템 아키텍처 (v2.53)
 
 ## 개요
 
@@ -9,6 +9,16 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.53: **정책서 unresolved 팀별 집계 리포트 + 읽기 전용 화면** — v2.52 파이프라인이 unresolved로
+  캡처만 하고 아무도 정기적으로 보지 않던 갭을 메움(2026-09-04 발표 데모 준비 중 헤더/데이터유실
+  버그를 "시스템이 알려줘서"가 아니라 "우연히" 발견한 것이 이 갭을 드러냄). `GET
+  /api/policy/unresolved-summary`(`service/policy/unresolved_report.py`, namespace+선택
+  system_key)가 `parse_status IN ('unresolved','partial')` 항목을 팀별로 묶어 반환, reason
+  자동 클러스터링은 하지 않음(자유 텍스트라 정확 매칭이 무의미 — YAGNI). 관리자 화면
+  "정책서 미분류" 탭(`PolicyUnresolvedReport.tsx`) 신규 — 팀별 건수/segment 목록을 사람이
+  훑어볼 수 있는 읽기 전용 화면만 우선 추가(사용자 피드백: 집계 API만으론 결국 사람이 봐야
+  하므로 GUI 없인 루프가 안 닫힘). 승인·재분류 등 쓰기 동작이 있는 "검토 UI"는 여전히 별도
+  범위(§6 미착수) — 이 화면은 근거 자료를 보여주기만 함.
 - v2.52: **정책서 데이터화 파이프라인 v1** — `service/policy/` 신규(`docs/policy-doc-pipeline-plan.md`).
   엑셀 정책서 한 row를 `policy_item`(원문+메타)/`policy_param`(파라미터 팩트)/`policy_chunk`(서술
   청크) 3층으로 분해해 적재. 팀마다 대분류/중분류/소분류 깊이가 달라(실측: 3단 vs 2단) 고정 컬럼
@@ -212,8 +222,9 @@ backend/
 │       ├── decompose.py       #   LLM segment 분해 — narrative/param/unresolved 3분류
 │       ├── service.py         #   버전 관리(logical_id/version/supersedes_id, INSERT-only) + LLM 분해 동시성(세마포어5) + policy_item/param/chunk 적재
 │       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색 — 전용 엔드포인트, retrieval.py 미편입(Track 2 대기)
+│       ├── unresolved_report.py #   unresolved/partial 항목 system_key별 집계 (v2.53 신규)
 │       ├── schemas.py         #   Pydantic 스키마
-│       └── router.py          #   POST /api/policy/import, GET /api/policy/search
+│       └── router.py          #   POST /api/policy/import, GET /api/policy/search, GET /api/policy/unresolved-summary
 ├── core/
 │   ├── config.py        # pydantic-settings, JWT·Fernet 키
 │   ├── database.py      # asyncpg 풀 + resolve_namespace_id() 헬퍼

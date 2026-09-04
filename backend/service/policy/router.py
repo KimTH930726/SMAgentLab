@@ -1,11 +1,12 @@
 """정책서 임포트/검색 API."""
+from dataclasses import asdict
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from core.dependencies import get_current_user, check_namespace_ownership
-from service.policy import service, search as search_service
-from service.policy.schemas import ImportSummaryOut, PolicySearchOut
+from service.policy import service, search as search_service, unresolved_report
+from service.policy.schemas import ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
 
@@ -59,3 +60,23 @@ async def search_policy(
         params=[p.__dict__ for p in result.params],
         narratives=[n.__dict__ for n in result.narratives],
     )
+
+
+@router.get("/unresolved-summary", response_model=UnresolvedSummaryOut)
+async def get_unresolved_summary(
+    namespace: str = Query(...),
+    system_key: Optional[str] = Query(default=None),
+    user: dict = Depends(get_current_user),
+):
+    """unresolved/partial로 분류된 정책 항목을 system_key별로 집계.
+
+    LLM 분해가 서술/파라미터 어디에도 못 넣은 내용이 팀별로 몇 건, 어떤 사유로 쌓였는지
+    보여준다 — 팀 표준화 요청의 근거 자료(§2-3), 그리고 분해 프롬프트 개선 여지를 사람이
+    발견하는 유일한 경로(2026-09-04 데모 중 발견된 헤더/데이터유실 버그가 이 갭을 드러냈다).
+    """
+    await check_namespace_ownership(namespace, user)
+    try:
+        summary = await unresolved_report.get_unresolved_summary(namespace, system_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return UnresolvedSummaryOut(**asdict(summary))

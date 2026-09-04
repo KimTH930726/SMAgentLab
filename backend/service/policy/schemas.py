@@ -50,3 +50,29 @@ class NarrativeHitOut(BaseModel):
 class PolicySearchOut(BaseModel):
     params: list[ParamHitOut]
     narratives: list[NarrativeHitOut]
+
+
+class UnresolvedSegmentOut(BaseModel):
+    text: str
+    reason: Optional[str] = None
+
+
+class UnresolvedItemOut(BaseModel):
+    item_id: int
+    logical_id: int
+    policy_name: str
+    category_path: list[str]
+    segments: list[UnresolvedSegmentOut]
+
+
+class SystemUnresolvedGroupOut(BaseModel):
+    system_key: str
+    item_count: int
+    segment_count: int
+    items: list[UnresolvedItemOut]
+
+
+class UnresolvedSummaryOut(BaseModel):
+    total_items: int
+    total_segments: int
+    by_system: list[SystemUnresolvedGroupOut]
