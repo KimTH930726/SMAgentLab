@@ -1,11 +1,12 @@
 # Ops-Navigator API 명세서
 
-> **Version**: 2.20
+> **Version**: 2.21
 > **Base URL**: `http://localhost:8000`
 > **Protocol**: REST + SSE (Server-Sent Events)
 > **Content-Type**: `application/json` (기본), `text/event-stream` (SSE)
-> **최종 갱신**: 2026-09-04 (v2.20 — §13-2 `GET /api/policy/unresolved-summary` 신규: unresolved
-> 팀별 집계 리포트. v2.19 — §13-2 정책서(Policy) API 신규: `POST /api/policy/import`,
+> **최종 갱신**: 2026-09-04 (v2.21 — §13-2 `GET /api/policy/items` 신규: item 단위 브라우저
+> (param/narrative 자식 포함, 쿼리 없이 전체 조회 가능). v2.20 — §13-2 `GET
+> /api/policy/unresolved-summary` 신규: unresolved 팀별 집계 리포트. v2.19 — §13-2 정책서(Policy) API 신규: `POST /api/policy/import`,
 > `GET /api/policy/search`. v2.18 — VOC 이메일: `GET /mail-folders` 신규, `routing` 요청에 `mail_folder_id`/`mail_folder_name` 추가, `history`에 필터 쿼리 파라미터 추가, `email_relevance_min_score` 기본값 0.35→0.38 및 계산식 설명 갱신(v3.13). v2.17 — `PUT /delegated-auth/config` 요청에 선택 필드 `client_secret` 추가, `GET /delegated-auth/status` 응답에 `client_secret_configured` 필드 추가 — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록된 경우 PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) Confidential Client 지원이 필요해진 실사용 사례 반영)
 
 ---
@@ -1950,7 +1951,7 @@ Microsoft가 로그인 완료 후 브라우저를 리다이렉트시키는 지�
 
 > Base: `/api/policy/`
 > 인증: JWT Bearer, 네임스페이스 소유 검증(`check_namespace_ownership`).
-> 현재 상태: v1(임포트+검색+unresolved 집계 API까지 구현). 승인 UI 없음 — 데이터는 전부
+> 현재 상태: v1(임포트+검색+unresolved 집계+item 브라우저 API까지 구현). 승인 UI 없음 — 데이터는 전부
 > `status='pending_review'`로 쌓이고 검색 대상엔 포함됨. 채팅 메인 검색(`retrieval.py`)엔
 > 아직 편입 안 됨(Track 2 결과 대기). 상세 설계: `docs/policy-doc-pipeline-plan.md`.
 
@@ -2002,8 +2003,8 @@ Microsoft가 로그인 완료 후 브라우저를 리다이렉트시키는 지�
 LLM 분해가 서술/파라미터 어디에도 못 넣은 항목(`parse_status IN ('unresolved','partial')`)을
 `system_key`(팀)별로 묶어 반환. `system_key` 쿼리는 선택 — 생략하면 전체 팀. 표준화 요청의
 근거 자료이자, 분해 프롬프트가 놓친 패턴을 사람이 발견하는 경로(§2-3, unresolved_report.py).
-reason 자동 클러스터링은 하지 않음(자유 텍스트라 정확 매칭 그룹핑이 무의미 — YAGNI).
-집계 결과를 브라우저에서 훑어보는 화면은 아직 없음(검토 UI 항목, §6 미착수).
+reason 자동 클러스터링은 하지 않음(자유 텍스트라 정확 매칭 그룹핑이 무의미 — YAGNI). 관리자
+화면 "정책서 미분류" 탭(읽기 전용)에서 이 결과를 그대로 보여준다.
 
 **Response `200`**
 ```json
@@ -2021,6 +2022,31 @@ reason 자동 클러스터링은 하지 않음(자유 텍스트라 정확 매칭
       ] }
   ]
 }
+```
+**Error**: `400` 네임스페이스 없음
+
+### GET /api/policy/items?namespace=&category=&q=
+
+정책 항목을 item 단위로 목록 조회 — `/search`(질의 기반)와 달리 쿼리 없이도 전체를 볼 수 있고,
+결과가 검색 히트가 아니라 item→param/chunk 3층 구조 그대로 나온다. "지금 뭐가 어떻게 저장돼
+있는지" 사람이 훑어보는 용도(browse.py). `category`는 `category_path` 배열 포함 여부로 필터,
+`q`는 `policy_name` ILIKE 부분매칭. 서버 페이징 없음(네임스페이스당 최대 1000건, 클라이언트
+페이징) — 관리자 화면 "정책 항목 브라우저" 탭이 이 API를 그대로 쓴다.
+
+**Response `200`**
+```json
+[
+  { "item_id": 330, "logical_id": 330, "version": 1, "policy_name": "조건/동작/해제",
+    "category_path": ["7.재고", "7-4.B2C 재고배분", "5.재고몰아주기"],
+    "status": "pending_review", "parse_status": "parsed", "system_key": "온라인스토어",
+    "params": [
+      { "id": 328, "name": "가용재고 임계 조건", "condition": null, "value": "설정값 N 이하", "unit": null },
+      { "id": 329, "name": "자사몰 배분율", "condition": null, "value": "100", "unit": "%" }
+    ],
+    "narratives": [
+      { "id": 389, "chunk_text": "배분율 초기화", "chunk_idx": 52 }
+    ] }
+]
 ```
 **Error**: `400` 네임스페이스 없음
 

@@ -76,3 +76,30 @@ class UnresolvedSummaryOut(BaseModel):
     total_items: int
     total_segments: int
     by_system: list[SystemUnresolvedGroupOut]
+
+
+class ParamOut(BaseModel):
+    id: int
+    name: str
+    condition: Optional[str] = None
+    value: Optional[str] = None
+    unit: Optional[str] = None
+
+
+class ChunkOut(BaseModel):
+    id: int
+    chunk_text: str
+    chunk_idx: int
+
+
+class PolicyItemOut(BaseModel):
+    item_id: int
+    logical_id: int
+    version: int
+    policy_name: str
+    category_path: list[str]
+    status: str
+    parse_status: str
+    system_key: Optional[str] = None
+    params: list[ParamOut]
+    narratives: list[ChunkOut]

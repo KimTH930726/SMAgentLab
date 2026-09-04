@@ -33,3 +33,39 @@ export async function getUnresolvedSummary(namespace: string, systemKey?: string
   if (systemKey) params.set('system_key', systemKey);
   return apiFetch<UnresolvedSummary>(`/policy/unresolved-summary?${params.toString()}`);
 }
+
+// ─── 정책 항목 브라우저 (item 단위, param/narrative 자식 포함) ─────────────────
+
+export interface PolicyParam {
+  id: number;
+  name: string;
+  condition: string | null;
+  value: string | null;
+  unit: string | null;
+}
+
+export interface PolicyChunk {
+  id: number;
+  chunk_text: string;
+  chunk_idx: number;
+}
+
+export interface PolicyItem {
+  item_id: number;
+  logical_id: number;
+  version: number;
+  policy_name: string;
+  category_path: string[];
+  status: string;
+  parse_status: string;
+  system_key: string | null;
+  params: PolicyParam[];
+  narratives: PolicyChunk[];
+}
+
+export async function getPolicyItems(namespace: string, category?: string, q?: string): Promise<PolicyItem[]> {
+  const params = new URLSearchParams({ namespace });
+  if (category) params.set('category', category);
+  if (q) params.set('q', q);
+  return apiFetch<PolicyItem[]>(`/policy/items?${params.toString()}`);
+}

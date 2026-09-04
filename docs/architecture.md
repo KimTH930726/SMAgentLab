@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.58)
+# Ops-Navigator 시스템 아키텍처 (v2.59)
 
 ## 개요
 
@@ -9,6 +9,14 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.59: **정책 항목 브라우저** — `GET /api/policy/items`(`service/policy/browse.py`) 신규:
+  item 단위 목록 조회, 각 item에 실제로 달린 param(RDB)/narrative(벡터) 자식까지 함께 반환.
+  `/search`(질의 기반 히트 리스트)와 달리 쿼리 없이도 전체를 훑어볼 수 있고 item→param/chunk
+  3층 구조 그대로 나온다 — "지금 뭐가 어떻게 저장돼 있는지" 확인하는 용도. 사용자 피드백(정책이
+  잘 저장됐는지 조회할 화면이 없다, RDB/벡터 연결 흐름을 가시적으로 보고 싶다)으로 착수. 관리자
+  화면 "정책 항목 브라우저" 탭 신규 — 항목을 펼치면 param(RDB 아이콘)/narrative(벡터 아이콘)를
+  구분해 보여줌. 테스트 8개 추가(총 309개), 실 HTTP E2E로 실제 480건(온라인스토어+딜리버스)
+  데이터 조회 검증.
 - v2.58: **딜리버스 정책서 실 데이터 적재 + "정책서 미분류" 화면 가독성/설명 개선** — 딜리버스
   DB 네임스페이스에 용어정의 31건 + 정책 71건(총 102건) 적재 완료(온라인스토어와 합쳐 스타벅스
   CSP팀 2개 파일 전체가 실 DB에 있음, `policy-doc-pipeline-plan.md` §9). 사용자 피드백 반영:
@@ -265,8 +273,9 @@ backend/
 │       ├── service.py         #   버전 관리(logical_id/version/supersedes_id, INSERT-only) + LLM 분해 동시성(세마포어5) + policy_item/param/chunk 적재
 │       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색 — 전용 엔드포인트, retrieval.py 미편입(Track 2 대기)
 │       ├── unresolved_report.py #   unresolved/partial 항목 system_key별 집계 (v2.53 신규)
+│       ├── browse.py          #   item 단위 브라우저 — param/chunk 자식 포함, 쿼리 없이 전체 조회 (v2.59 신규)
 │       ├── schemas.py         #   Pydantic 스키마
-│       └── router.py          #   POST /api/policy/import, GET /api/policy/search, GET /api/policy/unresolved-summary
+│       └── router.py          #   POST /api/policy/import, GET /api/policy/search, GET /api/policy/unresolved-summary, GET /api/policy/items
 ├── core/
 │   ├── config.py        # pydantic-settings, JWT·Fernet 키
 │   ├── database.py      # asyncpg 풀 + resolve_namespace_id() 헬퍼
