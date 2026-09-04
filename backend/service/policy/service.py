@@ -28,6 +28,21 @@ from agents.knowledge_rag.knowledge.service import create_glossary
 _DECOMPOSE_CONCURRENCY = 5
 
 
+def _coerce_param_field(v, max_len: int | None = None) -> str | None:
+    """LLM이 param 필드(특히 value)를 배열/딕셔너리로 반환하는 경우가 실측으로 확인됨(예:
+    "판매상태가 판매대기/판매중/판매종료" 같은 열거형 팩트 — 2026-09-04). 프롬프트에 단일
+    문자열 규칙을 추가했지만, LLM이 100% 지키리라는 보장은 없어 코드 쪽에도 안전망을 둔다.
+    str()로 그냥 감싸면 "['판매대기', '판매중', '판매종료']" 같은 파이썬 repr이 그대로 DB에
+    저장돼버리는 실데이터 오염이 생기므로, 리스트/튜플은 쉼표로 join해 깔끔한 문자열로 만든다."""
+    if v is None:
+        return None
+    if isinstance(v, (list, tuple)):
+        v = ", ".join(str(x) for x in v)
+    else:
+        v = str(v)
+    return v[:max_len] if max_len else v
+
+
 def _content_hash(category_path: list[str], policy_name: str, raw_body: str, remark: str | None) -> str:
     payload = json.dumps(
         {"category_path": category_path, "policy_name": policy_name, "raw_body": raw_body, "remark": remark},
@@ -135,10 +150,10 @@ async def _write_policy_result(
                 VALUES ($1, $2, $3, $4, $5)
                 """,
                 item_id,
-                str(seg.extracted.get("name") or "")[:500],
-                str(seg.extracted.get("condition")) if seg.extracted.get("condition") is not None else None,
-                str(seg.extracted.get("value")) if seg.extracted.get("value") is not None else None,
-                str(seg.extracted.get("unit")) if seg.extracted.get("unit") is not None else None,
+                _coerce_param_field(seg.extracted.get("name"), max_len=500) or "",
+                _coerce_param_field(seg.extracted.get("condition")),
+                _coerce_param_field(seg.extracted.get("value")),
+                _coerce_param_field(seg.extracted.get("unit")),
             )
             summary.params_extracted += 1
         elif seg.type == "narrative" and seg.text.strip():

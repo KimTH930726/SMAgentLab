@@ -222,6 +222,36 @@ class TestContentHash:
         assert h1 != h2
 
 
+class TestCoerceParamField:
+    """실측(2026-09-04, 온라인스토어 실 정책서): LLM이 열거형 value를 배열로 반환하는 경우가
+    실제로 나옴 — str()로 그냥 감싸면 파이썬 repr("['a', 'b']")이 그대로 DB에 저장되는
+    데이터 오염 버그였다."""
+
+    def test_none_stays_none(self):
+        assert service._coerce_param_field(None) is None
+
+    def test_plain_string_passthrough(self):
+        assert service._coerce_param_field("20개") == "20개"
+
+    def test_list_joined_with_comma_not_python_repr(self):
+        result = service._coerce_param_field(["판매대기", "판매중", "판매종료"])
+        assert result == "판매대기, 판매중, 판매종료"
+        assert "[" not in result and "'" not in result
+
+    def test_tuple_joined_same_as_list(self):
+        assert service._coerce_param_field(("a", "b")) == "a, b"
+
+    def test_number_stringified(self):
+        assert service._coerce_param_field(20) == "20"
+
+    def test_max_len_truncates(self):
+        assert service._coerce_param_field("123456789", max_len=5) == "12345"
+
+    def test_max_len_applies_after_list_join(self):
+        result = service._coerce_param_field(["가나다", "라마바"], max_len=5)
+        assert result == "가나다, "
+
+
 class TestIngestPolicyRowVersioning:
     """§2-1 핵심 — 재업로드 시 UPDATE가 아니라 새 row INSERT + 이전 row deprecated 전환."""
 
