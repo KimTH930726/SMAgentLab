@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.59)
+# Ops-Navigator 시스템 아키텍처 (v2.60)
 
 ## 개요
 
@@ -9,6 +9,12 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.60: **골든셋 v1 자동 생성** — Track 2용 §4-1 스펙 골든셋을 태훈에게 수작업 요청하는 대신
+  실 DB(온라인스토어+딜리버스, 480건)에서 89건 자동 생성(param/narrative/navigation/
+  condition_filter 4종). query는 LLM으로 원문과 다른 자연어로 재구성, expected_answer는 실제
+  DB 값 그대로. 1차 96건 중 파라미터 추출 품질이 낮았던/조건이 너무 일반적인 7건은 사람이
+  검토해 제거. `backend/tests/fixtures/golden_set/online_delivus_v1.jsonl`(git 커밋 금지).
+  `docs/policy-doc-pipeline-plan.md` §6 참고. 다음 액션은 Track 2 비교군 A/B 실행.
 - v2.59: **정책 항목 브라우저** — `GET /api/policy/items`(`service/policy/browse.py`) 신규:
   item 단위 목록 조회, 각 item에 실제로 달린 param(RDB)/narrative(벡터) 자식까지 함께 반환.
   `/search`(질의 기반 히트 리스트)와 달리 쿼리 없이도 전체를 훑어볼 수 있고 item→param/chunk
