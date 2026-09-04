@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.60)
+# Ops-Navigator 시스템 아키텍처 (v2.61)
 
 ## 개요
 
@@ -9,6 +9,16 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.61: **Track 2 저장소 전략 A/B 실행 완료 — "하이브리드가 무조건 낫다" 가설 기각** — 골든셋
+  89건으로 A(`rag_knowledge` 지식-only, 전체 378 item을 격리 테스트 네임스페이스에 얹음) vs
+  B(지금 하이브리드 스키마) 실측 비교(item-id 기반 hit@10). narrative는 B 압승(91.3% vs
+  60.9%), navigation도 B 우세(54.2% vs 37.5%)로 가설대로였지만, **param 유형은 A가 크게
+  앞섬(73.9% vs 34.8%)** — 원인 실측: 전체 item의 36%(136/378)가 파라미터로만 분해돼
+  `policy_chunk`(벡터)가 하나도 없어서, 자연어 질문이 짧은 param 필드와 어휘가 안 겹치면
+  B는 못 찾지만 A는 전체를 벡터로 색인해서 찾아낸다. v2 후보: item마다 최소 1개 벡터 청크를
+  보장(지금은 narrative segment가 있을 때만 생성) — `policy-doc-pipeline-plan.md` §4-3.
+  `agent.py`/`retrieval.py` 편입은 이 폴백 보완 전엔 보류 권장. 테스트 전용 자원은 평가 후
+  삭제(프로덕션 데이터 영향 없음).
 - v2.60: **골든셋 v1 자동 생성** — Track 2용 §4-1 스펙 골든셋을 태훈에게 수작업 요청하는 대신
   실 DB(온라인스토어+딜리버스, 480건)에서 89건 자동 생성(param/narrative/navigation/
   condition_filter 4종). query는 LLM으로 원문과 다른 자연어로 재구성, expected_answer는 실제
