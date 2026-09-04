@@ -44,3 +44,6 @@ scripts/build/
 
 # 실제 회사 정책서 원본 (파서 검증용, 절대 커밋 금지)
 backend/tests/fixtures/real_policy_samples/
+
+# 실 정책 데이터 기반 골든셋 (실제 회사 정책 내용 포함, 커밋 금지)
+backend/tests/fixtures/golden_set/
