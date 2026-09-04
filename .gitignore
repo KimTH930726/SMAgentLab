@@ -41,3 +41,6 @@ pgdata/
 
 # PyInstaller 빌드 중간 산출물 (dist/ 는 결과물이라 커밋함)
 scripts/build/
+
+# 실제 회사 정책서 원본 (파서 검증용, 절대 커밋 금지)
+backend/tests/fixtures/real_policy_samples/
