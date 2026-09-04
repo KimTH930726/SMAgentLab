@@ -1,11 +1,14 @@
 # Ops-Navigator API 명세서
 
-> **Version**: 2.21
+> **Version**: 2.22
 > **Base URL**: `http://localhost:8000`
 > **Protocol**: REST + SSE (Server-Sent Events)
 > **Content-Type**: `application/json` (기본), `text/event-stream` (SSE)
-> **최종 갱신**: 2026-09-04 (v2.21 — §13-2 `GET /api/policy/items` 신규: item 단위 브라우저
-> (param/narrative 자식 포함, 쿼리 없이 전체 조회 가능). v2.20 — §13-2 `GET
+> **최종 갱신**: 2026-09-04 (v2.22 — §13-2 `POST /api/policy/track2/run` 신규: Track 2 A/B
+> 저장소 전략 비교를 API로 실행(admin 전용). `GET /api/policy/items`에 `raw_body`/`matched_via`
+> 필드 추가, `q`가 ILIKE 대신 실제 검색(RDB+벡터, 최소 유사도 0.4)을 쓰도록 개선. v2.21 —
+> §13-2 `GET /api/policy/items` 신규: item 단위 브라우저(param/narrative 자식 포함, 쿼리
+> 없이 전체 조회 가능). v2.20 — §13-2 `GET
 > /api/policy/unresolved-summary` 신규: unresolved 팀별 집계 리포트. v2.19 — §13-2 정책서(Policy) API 신규: `POST /api/policy/import`,
 > `GET /api/policy/search`. v2.18 — VOC 이메일: `GET /mail-folders` 신규, `routing` 요청에 `mail_folder_id`/`mail_folder_name` 추가, `history`에 필터 쿼리 파라미터 추가, `email_relevance_min_score` 기본값 0.35→0.38 및 계산식 설명 갱신(v3.13). v2.17 — `PUT /delegated-auth/config` 요청에 선택 필드 `client_secret` 추가, `GET /delegated-auth/status` 응답에 `client_secret_configured` 필드 추가 — 리다이렉트 URI가 Azure AD "Web" 플랫폼으로 등록된 경우 PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) Confidential Client 지원이 필요해진 실사용 사례 반영)
 
@@ -2027,17 +2030,26 @@ reason 자동 클러스터링은 하지 않음(자유 텍스트라 정확 매칭
 
 ### GET /api/policy/items?namespace=&category=&q=
 
-정책 항목을 item 단위로 목록 조회 — `/search`(질의 기반)와 달리 쿼리 없이도 전체를 볼 수 있고,
-결과가 검색 히트가 아니라 item→param/chunk 3층 구조 그대로 나온다. "지금 뭐가 어떻게 저장돼
-있는지" 사람이 훑어보는 용도(browse.py). `category`는 `category_path` 배열 포함 여부로 필터,
-`q`는 `policy_name` ILIKE 부분매칭. 서버 페이징 없음(네임스페이스당 최대 1000건, 클라이언트
-페이징) — 관리자 화면 "정책 항목 브라우저" 탭이 이 API를 그대로 쓴다.
+정책 항목을 item 단위로 목록 조회 — `/search`(질의 기반 평평한 히트 리스트)와 달리 쿼리 없이도
+전체를 볼 수 있고, 결과가 item→param/chunk 3층 구조 그대로 나온다. "지금 뭐가 어떻게 저장돼
+있는지" 사람이 훑어보는 용도(browse.py). `category`는 `category_path` 배열 포함 여부로 필터.
+
+`q`는(2026-09-04 개선) 더 이상 `policy_name` ILIKE가 아니라 실제 `search_policy()`(param RDB
+tsquery + narrative 벡터)를 재사용한다 — 이전엔 정책명 부분일치만 됐지만 이제 본문/파라미터
+내용까지 검색된다. narrative(벡터) 매칭은 코사인 유사도라 임계치 없이 top-K를 쓰면 사실상
+네임스페이스 대부분이 걸려버려서(실측: 71개 중 67개=94%) 여기서만 최소 유사도(0.4)를 적용해
+거른다(search.py 자체는 안 건드림 — 채팅 검색 경로라 후보를 넉넉히 주는 게 맞음). 각 item에
+`matched_via`(`"param"`/`"narrative"`, q 없으면 빈 배열)로 어느 경로로 걸렸는지 알려준다.
+
+서버 페이징 없음(네임스페이스당 최대 1000건, 클라이언트 페이징) — 관리자 화면 "정책" 탭 ›
+"항목 브라우저" 서브탭이 이 API를 그대로 쓴다.
 
 **Response `200`**
 ```json
 [
   { "item_id": 330, "logical_id": 330, "version": 1, "policy_name": "조건/동작/해제",
     "category_path": ["7.재고", "7-4.B2C 재고배분", "5.재고몰아주기"],
+    "raw_body": "조건 : 가용재고 ≤ 설정값 N\n동작 : 자사몰 100%, 제휴몰 0%\n해제 : 배분율 초기화",
     "status": "pending_review", "parse_status": "parsed", "system_key": "온라인스토어",
     "params": [
       { "id": 328, "name": "가용재고 임계 조건", "condition": null, "value": "설정값 N 이하", "unit": null },
@@ -2045,10 +2057,36 @@ reason 자동 클러스터링은 하지 않음(자유 텍스트라 정확 매칭
     ],
     "narratives": [
       { "id": 389, "chunk_text": "배분율 초기화", "chunk_idx": 52 }
-    ] }
+    ],
+    "matched_via": ["narrative"] }
 ]
 ```
 **Error**: `400` 네임스페이스 없음
+
+### POST /api/policy/track2/run?top_k=
+
+Track 2 저장소 전략 비교(§4)를 즉시 실행 — A(`rag_knowledge` 지식-only, 임시 격리
+네임스페이스에 전체 policy_item을 원문 그대로 얹음) vs B(지금 하이브리드 스키마)를 골든셋
+(`backend/tests/fixtures/golden_set/online_delivus_v1.jsonl`)으로 비교해 유형별 hit@K를
+반환한다. **admin 전용**(무거운 실험 실행). 전체 policy_item 규모만큼 임베딩을 다시 계산해야
+해서 실행에 1~2분 걸린다 — 실시간 기능이 아니라 가끔 재측정하는 용도라 동기 호출(별도 잡
+큐 없음). 실행 중 만든 임시 데이터(A그룹 네임스페이스)는 끝나면 자동 삭제돼 프로덕션에
+흔적을 남기지 않는다. 관리자 화면 "정책" 탭 › "저장소 실험실" 서브탭이 이 API를 그대로 쓴다.
+
+**Response `200`**
+```json
+{
+  "total_n": 89, "a_hit_rate": 0.5506, "b_hit_rate": 0.7528,
+  "by_type": [
+    { "type": "param", "n": 23, "a_hit_rate": 0.7391, "b_hit_rate": 0.8261 },
+    { "type": "narrative", "n": 23, "a_hit_rate": 0.6087, "b_hit_rate": 0.9130 },
+    { "type": "navigation", "n": 24, "a_hit_rate": 0.3750, "b_hit_rate": 0.5417 },
+    { "type": "condition_filter", "n": 19, "a_hit_rate": 0.4737, "b_hit_rate": 0.7368 }
+  ],
+  "golden_set_file": "online_delivus_v1.jsonl", "top_k": 10, "duration_seconds": 85.7
+}
+```
+**Error**: `400` 골든셋 파일 없음, `403` admin 아님
 
 ---
 

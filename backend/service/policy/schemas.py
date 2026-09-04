@@ -99,8 +99,27 @@ class PolicyItemOut(BaseModel):
     version: int
     policy_name: str
     category_path: list[str]
+    raw_body: str
     status: str
     parse_status: str
     system_key: Optional[str] = None
     params: list[ParamOut]
     narratives: list[ChunkOut]
+    matched_via: list[str] = []
+
+
+class Track2TypeResultOut(BaseModel):
+    type: str
+    n: int
+    a_hit_rate: float
+    b_hit_rate: float
+
+
+class Track2ResultOut(BaseModel):
+    total_n: int
+    a_hit_rate: float
+    b_hit_rate: float
+    by_type: list[Track2TypeResultOut]
+    golden_set_file: str
+    top_k: int
+    duration_seconds: float

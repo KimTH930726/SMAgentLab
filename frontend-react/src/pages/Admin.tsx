@@ -1,6 +1,6 @@
 import { useState, Component, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, Wrench, Mail, FileWarning, List } from 'lucide-react';
+import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, Wrench, Mail, FileStack } from 'lucide-react';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
@@ -12,8 +12,7 @@ import { UserManager } from '../components/admin/UserManager';
 import { McpToolManager } from '../components/admin/McpToolManager';
 import { CachePanel } from '../components/admin/CachePanel';
 import { VocEmailPanel } from '../components/admin/VocEmailPanel';
-import { PolicyUnresolvedReport } from '../components/admin/PolicyUnresolvedReport';
-import { PolicyItemBrowser } from '../components/admin/PolicyItemBrowser';
+import { PolicyPanel } from '../components/admin/PolicyPanel';
 import { useAuthStore } from '../store/useAuthStore';
 import { useAppStore } from '../store/useAppStore';
 
@@ -45,7 +44,7 @@ type TabId =
   // knowledge_rag
   | 'namespaces' | 'knowledge' | 'glossary' | 'fewshots' | 'mcp_tools' | 'debug'
   // common
-  | 'cache' | 'stats' | 'llm' | 'users' | 'voc_email' | 'policy_unresolved' | 'policy_items';
+  | 'cache' | 'stats' | 'llm' | 'users' | 'voc_email' | 'policy';
 
 interface Tab {
   id: TabId;
@@ -63,8 +62,7 @@ const TABS: Tab[] = [
   { id: 'glossary',     label: '용어집',              icon: <Database className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
   { id: 'fewshots',     label: 'Q&A',            icon: <Zap className="w-4 h-4" />,        agentScope: 'knowledge_rag' },
   { id: 'debug',        label: '파이프라인 디버그',    icon: <Search className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
-  { id: 'policy_items',      label: '정책 항목 브라우저', icon: <List className="w-4 h-4" />,      agentScope: 'knowledge_rag' },
-  { id: 'policy_unresolved', label: '정책서 미분류',   icon: <FileWarning className="w-4 h-4" />, agentScope: 'knowledge_rag' },
+  { id: 'policy',            label: '정책',                icon: <FileStack className="w-4 h-4" />,  agentScope: 'knowledge_rag' },
   { id: 'mcp_tools',    label: 'MCP 도구',            icon: <Wrench className="w-4 h-4" />,     agentScope: 'all' },
   // 공통 탭
   { id: 'cache',        label: '캐시 현황',             icon: <BarChart2 className="w-4 h-4" />, adminOnly: true, agentScope: 'knowledge_rag' },
@@ -123,8 +121,7 @@ export default function Admin() {
           {resolvedTab === 'fewshots'     && <FewshotTable />}
           {resolvedTab === 'mcp_tools'    && <McpToolManager />}
           {resolvedTab === 'debug'        && <DebugPanel onNavigate={(id) => setActiveTab(id as TabId)} />}
-          {resolvedTab === 'policy_items'      && <PolicyItemBrowser />}
-          {resolvedTab === 'policy_unresolved' && <PolicyUnresolvedReport />}
+          {resolvedTab === 'policy'       && <PolicyPanel />}
           {resolvedTab === 'cache'        && isAdmin && <CachePanel />}
           {resolvedTab === 'voc_email'    && <VocEmailPanel />}
           {resolvedTab === 'stats'        && <StatsPanel />}

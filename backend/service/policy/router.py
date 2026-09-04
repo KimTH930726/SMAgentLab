@@ -4,9 +4,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
-from core.dependencies import get_current_user, check_namespace_ownership
-from service.policy import service, search as search_service, unresolved_report, browse
-from service.policy.schemas import ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut
+from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
+from service.policy import service, search as search_service, unresolved_report, browse, track2
+from service.policy.schemas import (
+    ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
+)
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
 
@@ -100,3 +102,22 @@ async def list_policy_items(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return [PolicyItemOut(**asdict(i)) for i in items]
+
+
+@router.post("/track2/run", response_model=Track2ResultOut)
+async def run_track2(
+    top_k: int = Query(default=10, ge=1, le=50),
+    user: dict = Depends(get_current_admin),
+):
+    """Track 2 저장소 전략 비교(§4)를 즉시 실행 — A(rag_knowledge 지식-only, 임시 격리
+    네임스페이스) vs B(지금 하이브리드 스키마) 를 골든셋으로 비교해 유형별 hit@K를 반환한다.
+
+    전체 policy_item 규모만큼 임베딩을 다시 계산해야 해서 몇 분 걸린다 — admin 전용(무거운
+    실험 실행이라 일반 사용자가 실수로 반복 실행하지 않도록). 실행 중 만드는 임시 데이터는
+    끝나면 자동 삭제되어 프로덕션에 흔적을 남기지 않는다.
+    """
+    try:
+        result = await track2.run_comparison(top_k=top_k)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return Track2ResultOut(**asdict(result))

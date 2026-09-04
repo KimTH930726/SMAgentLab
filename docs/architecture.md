@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.62)
+# Ops-Navigator 시스템 아키텍처 (v2.63)
 
 ## 개요
 
@@ -9,6 +9,18 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.63: **저장소 실험실 API화 + 정책 항목 브라우저 개선 + 관리자 화면 통합** — 사용자 피드백
+  3건 반영. ①`POST /api/policy/track2/run`(`service/policy/track2.py`) 신규 — Track 2를 매번
+  일회성 스크립트로 짜지 않고 admin이 버튼으로 재실행 가능(1~2분 소요, 실행 후 임시 데이터
+  자동 정리). 실행 결과가 수동 스크립트와 정확히 동일함을 실측 확인(전체 75.3%). ②`GET
+  /api/policy/items`의 `q`가 `policy_name` ILIKE에서 실제 `search_policy()`(RDB+벡터) 재사용
+  으로 개선, `raw_body`/`matched_via` 필드 추가 — 단 벡터 매칭에 임계치가 없으면 사실상
+  전체가 "매칭"돼버리는 걸 실측으로 발견(딜리버스 71개 중 67개=94%)해 최소 유사도(0.4) 필터
+  추가(41%로 개선). ③관리자 화면에서 "정책서 미분류"/"정책 항목 브라우저"로 흩어져 있던 탭을
+  "정책" 대분류 탭 하나로 묶고 그 아래 서브탭(항목 브라우저/미분류/저장소 실험실) 3개로 재구성
+  (`PolicyPanel.tsx`, `VocEmailPanel.tsx`와 동일한 서브탭 패턴). 실사용 중 대분류 드롭다운이
+  필터링된 목록에서 선택지를 다시 뽑아 카테고리를 고르는 순간 다른 선택지가 사라지는 자기잠식
+  버그도 발견·수정. 테스트 21개 추가(총 325개).
 - v2.62: **정책 벡터 폴백 구현 — Track 2 재측정으로 하이브리드 우세 확인** — v2.61에서 발견한
   갭(item의 36%가 벡터 색인 없음)을 바로 수정: `service.py`가 narrative segment 없는 item에
   정책명+category_path+raw_body 전체를 폴백 `policy_chunk`로 색인(`SheetSummary.
@@ -296,11 +308,12 @@ backend/
 │       ├── excel_parser.py    #   시트 판별(용어집/정책) + 헤더 퍼지매핑 + 동적 깊이 감지(category_path)
 │       ├── decompose.py       #   LLM segment 분해 — narrative/param/unresolved 3분류
 │       ├── service.py         #   버전 관리(logical_id/version/supersedes_id, INSERT-only) + LLM 분해 동시성(세마포어5) + policy_item/param/chunk 적재
-│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색 — 전용 엔드포인트, retrieval.py 미편입(Track 2 대기)
+│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색 — 전용 엔드포인트, retrieval.py 미편입(Track 2 결과로는 편입 가능, 아직 미착수)
 │       ├── unresolved_report.py #   unresolved/partial 항목 system_key별 집계 (v2.53 신규)
-│       ├── browse.py          #   item 단위 브라우저 — param/chunk 자식 포함, 쿼리 없이 전체 조회 (v2.59 신규)
+│       ├── browse.py          #   item 단위 브라우저 — param/chunk 자식 포함, q는 실제 검색 재사용(matched_via) (v2.59 신규, v2.63 q 개선)
+│       ├── track2.py          #   Track 2 A(지식-only)/B(하이브리드) 비교를 API로 실행 (v2.63 신규)
 │       ├── schemas.py         #   Pydantic 스키마
-│       └── router.py          #   POST /api/policy/import, GET /api/policy/search, GET /api/policy/unresolved-summary, GET /api/policy/items
+│       └── router.py          #   POST /api/policy/import, GET /api/policy/search, GET /api/policy/unresolved-summary, GET /api/policy/items, POST /api/policy/track2/run
 ├── core/
 │   ├── config.py        # pydantic-settings, JWT·Fernet 키
 │   ├── database.py      # asyncpg 풀 + resolve_namespace_id() 헬퍼

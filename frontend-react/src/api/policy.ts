@@ -56,11 +56,13 @@ export interface PolicyItem {
   version: number;
   policy_name: string;
   category_path: string[];
+  raw_body: string;
   status: string;
   parse_status: string;
   system_key: string | null;
   params: PolicyParam[];
   narratives: PolicyChunk[];
+  matched_via: string[];
 }
 
 export async function getPolicyItems(namespace: string, category?: string, q?: string): Promise<PolicyItem[]> {
@@ -68,4 +70,27 @@ export async function getPolicyItems(namespace: string, category?: string, q?: s
   if (category) params.set('category', category);
   if (q) params.set('q', q);
   return apiFetch<PolicyItem[]>(`/policy/items?${params.toString()}`);
+}
+
+// ─── Track 2 저장소 전략 실험실 ─────────────────────────────────────────────
+
+export interface Track2TypeResult {
+  type: string;
+  n: number;
+  a_hit_rate: number;
+  b_hit_rate: number;
+}
+
+export interface Track2Result {
+  total_n: number;
+  a_hit_rate: number;
+  b_hit_rate: number;
+  by_type: Track2TypeResult[];
+  golden_set_file: string;
+  top_k: number;
+  duration_seconds: number;
+}
+
+export async function runTrack2(topK = 10): Promise<Track2Result> {
+  return apiFetch<Track2Result>(`/policy/track2/run?top_k=${topK}`, { method: 'POST' });
 }

@@ -132,6 +132,12 @@ export function PolicyItemBrowser() {
                     <span className="text-xs text-slate-500 ml-2">{item.category_path.join(' / ')}</span>
                   )}
                 </div>
+                {item.matched_via.includes('param') && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-900/40 text-cyan-300 border border-cyan-700/40" title="키워드(RDB) 매칭">키워드</span>
+                )}
+                {item.matched_via.includes('narrative') && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-700/40" title="벡터(의미) 매칭">벡터</span>
+                )}
                 {item.params.length > 0 && (
                   <span className="flex items-center gap-1 text-[11px] text-cyan-700 dark:text-cyan-400" title="RDB 정확조회 파라미터">
                     <Database className="w-3.5 h-3.5" />{item.params.length}
@@ -155,6 +161,12 @@ export function PolicyItemBrowser() {
 
               {expandedId === item.item_id && (
                 <div className="border-t border-slate-700 px-4 py-4 space-y-4">
+                  <div>
+                    <p className="text-xs font-medium text-slate-400 mb-2">원문</p>
+                    <div className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
+                      {item.raw_body}
+                    </div>
+                  </div>
                   {item.params.length > 0 && (
                     <div>
                       <p className="flex items-center gap-1.5 text-xs font-medium text-cyan-700 dark:text-cyan-400 mb-2">
