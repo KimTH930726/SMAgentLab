@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.63)
+# Ops-Navigator 시스템 아키텍처 (v2.64)
 
 ## 개요
 
@@ -9,6 +9,19 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.64: **정책 검색을 메인 채팅에 편입(1단계)** — Track 2로 하이브리드 스키마 우세가
+  확정된 뒤(v2.62), `agents/knowledge_rag/agent.py:stream_chat()`이 `rag_knowledge` 검색과
+  함께 `service.policy.search.search_policy()`도 호출해 정책 데이터를 `doc_context`에 텍스트로
+  더한다. `has_policy_data(namespace)`로 정책 데이터 없는 네임스페이스에서는 매 턴 불필요한
+  쿼리를 스킵. `search_policy()`에 `query_vec` 선택 인자 추가 — `agent.py`가 이미 계산해둔
+  임베딩을 재사용해 채팅 메인 경로에서 매 턴 중복 임베딩이 생기는 걸 방지. **1단계 범위**:
+  텍스트 컨텍스트만 합치고 인용 카드 UI(`results_to_payload`)는 아직 `rag_knowledge` 모양
+  그대로라 정책 출처가 채팅 화면 카드로는 안 뜨고 LLM 답변 본문에만 반영됨(실사용 피드백 보고
+  2단계=카드 UI 확장 여부 결정). 비스트리밍 `/api/chat`(debug 전용, `_run_pipeline()`)은 이번
+  범위에서 제외 — 실사용자가 쓰는 `/api/chat/stream`(SSE, `AgentRegistry` 경유)만 대상.
+  실 E2E로 확인: 온라인스토어 DB에서 "장바구니에 최대 몇 개까지 담을 수 있어?" 질문에 실제
+  정책 데이터("일반 탭 20개, 예약 탭 20개, 추가구매상품 제외")로 정확히 답변, 정책 데이터
+  없는 네임스페이스에서도 에러 없이 정상 동작 확인. 테스트 10개 추가(총 335개).
 - v2.63: **저장소 실험실 API화 + 정책 항목 브라우저 개선 + 관리자 화면 통합** — 사용자 피드백
   3건 반영. ①`POST /api/policy/track2/run`(`service/policy/track2.py`) 신규 — Track 2를 매번
   일회성 스크립트로 짜지 않고 admin이 버튼으로 재실행 가능(1~2분 소요, 실행 후 임시 데이터
@@ -308,7 +321,7 @@ backend/
 │       ├── excel_parser.py    #   시트 판별(용어집/정책) + 헤더 퍼지매핑 + 동적 깊이 감지(category_path)
 │       ├── decompose.py       #   LLM segment 분해 — narrative/param/unresolved 3분류
 │       ├── service.py         #   버전 관리(logical_id/version/supersedes_id, INSERT-only) + LLM 분해 동시성(세마포어5) + policy_item/param/chunk 적재
-│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색 — 전용 엔드포인트, retrieval.py 미편입(Track 2 결과로는 편입 가능, 아직 미착수)
+│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색. 전용 엔드포인트(/api/policy/search)로도, agent.py 채팅 흐름에 has_policy_data()/build_policy_context()로도 사용 (v2.64 편입 1단계)
 │       ├── unresolved_report.py #   unresolved/partial 항목 system_key별 집계 (v2.53 신규)
 │       ├── browse.py          #   item 단위 브라우저 — param/chunk 자식 포함, q는 실제 검색 재사용(matched_via) (v2.59 신규, v2.63 q 개선)
 │       ├── track2.py          #   Track 2 A(지식-only)/B(하이브리드) 비교를 API로 실행 (v2.63 신규)

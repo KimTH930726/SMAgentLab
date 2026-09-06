@@ -92,3 +92,93 @@ class TestSearchPolicy:
         param_call = conn.fetch.call_args_list[0]
         assert "category_path" not in param_call.args[0] or "= ANY" not in param_call.args[0]
         assert len(param_call.args) == 4  # sql + ns_id + like + top_k (category 없음)
+
+
+class TestSearchPolicyPrecomputedVector:
+    """2026-09-04 편입 1단계 — agent.py가 이미 계산해둔 query_vec을 넘기면 재계산하지 않는다."""
+
+    @pytest.mark.asyncio
+    async def test_query_vec_provided_skips_embedding(self, patch_db):
+        patch_db()
+        embed_mock = search.embedding_service.embed
+
+        await search.search_policy("ns", "질문", query_vec=[0.5] * 768)
+
+        embed_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_query_vec_falls_back_to_embedding(self, patch_db):
+        patch_db()
+        embed_mock = search.embedding_service.embed
+
+        await search.search_policy("ns", "질문")
+
+        embed_mock.assert_awaited_once_with("질문")
+
+    @pytest.mark.asyncio
+    async def test_provided_vector_used_in_chunk_query(self, patch_db):
+        conn = patch_db()
+        await search.search_policy("ns", "질문", query_vec=[0.5] * 768)
+
+        chunk_call = conn.fetch.call_args_list[1]
+        assert chunk_call.args[2] == str([0.5] * 768)
+
+
+class TestHasPolicyData:
+    @pytest.mark.asyncio
+    async def test_namespace_not_found_returns_false(self, monkeypatch):
+        monkeypatch.setattr(search, "resolve_namespace_id", AsyncMock(return_value=None))
+        assert await search.has_policy_data("없는곳") is False
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_items_exist(self, monkeypatch):
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.fetchval = AsyncMock(return_value=True)
+        monkeypatch.setattr(search, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(search, "resolve_namespace_id", AsyncMock(return_value=1))
+
+        assert await search.has_policy_data("ns") is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_no_items(self, monkeypatch):
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.fetchval = AsyncMock(return_value=False)
+        monkeypatch.setattr(search, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(search, "resolve_namespace_id", AsyncMock(return_value=1))
+
+        assert await search.has_policy_data("ns") is False
+
+
+class TestBuildPolicyContext:
+    def test_empty_result_returns_empty_string(self):
+        assert search.build_policy_context(search.PolicySearchResult()) == ""
+
+    def test_param_hit_formatted_without_score(self):
+        result = search.PolicySearchResult(params=[
+            search.ParamHit(item_id=1, logical_id=1, policy_name="배달비", category_path=[], status="active",
+                             param_name="최대개수", condition="일반 배달", value="20", unit="개"),
+        ])
+        text = search.build_policy_context(result)
+        assert "배달비" in text
+        assert "20개" in text
+        assert "정확 일치" in text
+
+    def test_narrative_hit_includes_confidence_label(self):
+        result = search.PolicySearchResult(narratives=[
+            search.NarrativeHit(item_id=1, logical_id=1, policy_name="재고정책", category_path=[], status="active",
+                                 chunk_text="재고 없으면 SOLD OUT 표기", score=0.75),
+        ])
+        text = search.build_policy_context(result)
+        assert "재고 없으면 SOLD OUT 표기" in text
+        assert "신뢰도: 높음" in text
+
+    def test_low_score_narrative_labeled_low_confidence(self):
+        result = search.PolicySearchResult(narratives=[
+            search.NarrativeHit(item_id=1, logical_id=1, policy_name="p", category_path=[], status="active",
+                                 chunk_text="text", score=0.2),
+        ])
+        assert "신뢰도: 낮음" in search.build_policy_context(result)

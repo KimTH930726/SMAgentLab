@@ -92,13 +92,32 @@
 │  └─────────────────────────────────────────────────┘   │   │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐   │
+│  │  Step 2-1: 정책 데이터 병행 검색 (2026-09-04 추가)   │   │
+│  │                                                     │   │
+│  │  policy_search.has_policy_data(namespace)            │   │
+│  │  → 이 네임스페이스에 policy_item이 있는지 EXISTS     │   │
+│  │    한 번(없으면 이하 전부 스킵 — 매 턴 낭비 방지)     │   │
+│  │                                                     │   │
+│  │  있으면: search_policy(ns, enriched_query,           │   │
+│  │          query_vec=query_vec)  ← 이미 계산한 벡터    │   │
+│  │          재사용, 재임베딩 안 함                       │   │
+│  │  → policy_param(RDB tsquery) + policy_chunk(벡터)   │   │
+│  │    동시 조회, build_policy_context()로 텍스트화       │   │
+│  │  (Track 2 실측으로 하이브리드 스키마 우세 확정 후     │   │
+│  │   편입 1단계 — 인용 카드 UI는 아직 rag_knowledge     │   │
+│  │   모양 그대로라 정책 출처는 카드로는 안 뜨고 LLM      │   │
+│  │   답변 본문에만 반영됨, policy-doc-pipeline-plan §6) │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
 │  │  Step 3: LLM 답변 생성                              │   │
 │  │                                                     │   │
 │  │  build_fewshot_section(fewshots)                    │   │
 │  │  → 유사 Q&A 사례를 프롬프트 앞부분에 포맷            │   │
 │  │                                                     │   │
-│  │  build_context(results)                             │   │
-│  │  → 검색된 문서들을 프롬프트 형식으로 포맷             │   │
+│  │  build_context(results) + policy_context 이어붙임    │   │
+│  │  → 검색된 문서들 + 정책 데이터를 프롬프트 형식으로   │   │
+│  │    포맷(정책 데이터 없으면 그냥 기존과 동일)          │   │
 │  │                                                     │   │
 │  │  build_messages(context, question, history)          │   │
 │  │  → [system + 과거요약] + [최근2회 교환] + [현재 질문] │   │

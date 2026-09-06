@@ -14,6 +14,7 @@ from service.chat.helpers import (
     create_query_log, post_save_tasks,
 )
 from agents.knowledge_rag.knowledge import retrieval
+from service.policy import search as policy_search
 from service.llm.base import resolve_system_prompt
 from service.llm.factory import get_llm_provider
 from shared.embedding import embedding_service
@@ -109,19 +110,38 @@ class KnowledgeRagAgent(AgentBase):
             yield {"type": "status", "step": "search", "message": "관련 문서 검색 중..."}
             # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
             candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
-            results_raw, fewshots = await asyncio.gather(
+            results_raw, fewshots, policy_available = await asyncio.gather(
                 retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories),
                 retrieval.fetch_fewshots(namespace, query_vec),
+                policy_search.has_policy_data(namespace),
             )
             if settings.reranker_enabled and len(results_raw) > top_k:
                 results = await reranker_svc.rerank(enriched_query, results_raw, top_k)
             else:
                 results = results_raw[:top_k]
 
+            # 정책서 데이터 편입 1단계(2026-09-04, Track 2로 하이브리드 스키마 우세 확정 후) —
+            # rag_knowledge 검색과 별개로 정책 데이터도 doc_context에 텍스트로 얹는다. 인용
+            # 카드 UI(results_to_payload)는 아직 rag_knowledge 모양 그대로라 정책 출처는 채팅
+            # 화면에 카드로는 안 뜨고 LLM 답변 본문에만 반영된다 — 실사용 피드백 보고 2단계
+            # (카드 UI 확장) 여부 결정(§4-2/§6). policy_available=False인 네임스페이스(정책
+            # 데이터 없음)는 이 블록 자체를 건너뛰어 매 턴 불필요한 쿼리를 피한다.
+            policy_context = ""
+            if policy_available:
+                try:
+                    policy_result = await policy_search.search_policy(
+                        namespace, enriched_query, top_k=5, query_vec=query_vec,
+                    )
+                    policy_context = policy_search.build_policy_context(policy_result)
+                except Exception as e:
+                    logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
+
             fs_section = retrieval.build_fewshot_section(fewshots)
             doc_context = retrieval.build_context(results)
+            if policy_context:
+                doc_context = f"{doc_context}\n\n{policy_context}" if doc_context else policy_context
             llm_context = f"{fs_section}\n\n{doc_context}" if fs_section else doc_context
-            has_results = len(results) > 0
+            has_results = len(results) > 0 or bool(policy_context)
             had_context = bool(doc_context.strip())
 
             async with get_conn() as conn:
