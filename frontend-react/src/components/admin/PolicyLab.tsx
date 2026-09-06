@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { FlaskConical, ArrowRight } from 'lucide-react';
+import { FlaskConical, ArrowRight, Info } from 'lucide-react';
 import { runTrack2, type Track2Result } from '../../api/policy';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 
-const TYPE_LABEL: Record<string, string> = {
-  param: '파라미터 조회',
-  narrative: '서술 Q&A',
-  navigation: '카테고리 네비',
-  condition_filter: '조건 필터',
+const TYPE_INFO: Record<string, { label: string; example: string }> = {
+  param: { label: '숫자·조건 질문', example: '예: "배달비 얼마야?", "장바구니 몇 개까지?"' },
+  narrative: { label: '설명 질문', example: '예: "재고 없으면 화면에 어떻게 표시돼?"' },
+  navigation: { label: '분류 전체 보기', example: '예: "배송 관련 정책 다 보여줘"' },
+  condition_filter: { label: '조건으로 걸러보기', example: '예: "특정 매장에서만 적용되는 규칙 알려줘"' },
 };
 
 /**
@@ -20,6 +20,9 @@ const TYPE_LABEL: Record<string, string> = {
  *
  * 실행에 몇 분 걸린다(전체 policy_item 규모만큼 임베딩 재계산) — 실시간 기능이 아니라 가끔
  * 재측정하는 용도라 동기 호출 + 로딩 상태로 충분하다고 판단(별도 잡 큐 없음, YAGNI).
+ *
+ * 2026-09-06 사용자 피드백: "A/B, 정답률 %" 같은 숫자만 있고 무슨 뜻인지 안 와닿는다 — 일반인이
+ * 봐도 "그래서 뭐가 더 나은지" 바로 이해되게 각 용어를 풀어 설명하고 질문 유형마다 예시를 붙임.
  */
 export function PolicyLab() {
   const [lastResult, setLastResult] = useState<Track2Result | null>(null);
@@ -38,8 +41,7 @@ export function PolicyLab() {
             저장소 전략 실험실
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            정책서를 지식-only(A)로 저장할지 지금의 하이브리드 스키마(B, RDB 파라미터+벡터 서술)로
-            저장할지, 골든셋으로 실측 비교합니다.
+            정책서를 저장하는 두 가지 방식 중 어느 쪽이 질문에 더 정확히 답하는지 비교합니다.
           </p>
         </div>
         <Button variant="primary" size="sm" loading={runMutation.isPending} onClick={() => runMutation.mutate()}>
@@ -47,10 +49,20 @@ export function PolicyLab() {
         </Button>
       </div>
 
+      {/* 비교 대상 설명 — 결과가 없어도 항상 보여서 "A/B가 뭔지"부터 이해되게 */}
+      <div className="flex gap-3 px-4 py-3 bg-indigo-50 border border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-700/30 rounded-xl text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+        <Info className="w-4 h-4 text-indigo-500 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
+        <div className="space-y-1.5">
+          <p><b>A안(지식 그대로 저장)</b>: 정책서 내용을 통째로 문장으로 저장 — 다른 일반 지식 문서와 똑같이 취급</p>
+          <p><b>B안(지금 우리가 쓰는 방식)</b>: 숫자·조건은 표(정확 조회)로, 설명글은 의미 검색(벡터)으로 나눠서 저장</p>
+          <p className="text-slate-500 dark:text-slate-400">89개의 실제 질문을 두 방식에 똑같이 던져서, 각 방식이 정답을 찾아내는 비율을 비교합니다.</p>
+        </div>
+      </div>
+
       {runMutation.isPending && (
         <div className="flex items-center gap-2 py-10 text-slate-400 text-sm justify-center">
           <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          전체 정책 항목을 임시 네임스페이스에 색인하고 골든셋으로 비교 중입니다 — 몇 분 걸립니다.
+          전체 정책 항목을 임시 저장소에 옮겨 담고 89개 질문으로 비교 중입니다 — 몇 분 걸립니다.
         </div>
       )}
 
@@ -66,46 +78,58 @@ export function PolicyLab() {
             <p className="text-[11px] font-semibold tracking-wide uppercase text-indigo-400 mb-2">결론</p>
             <p className="text-sm text-slate-300 leading-relaxed mb-4">
               {lastResult.b_hit_rate >= lastResult.a_hit_rate
-                ? <>지금 <b className="text-slate-100">하이브리드 스키마(B)</b>가 지식-only(A) 대비 정답률이 높습니다.</>
-                : <>지금은 <b className="text-slate-100">지식-only(A)</b>가 하이브리드(B)보다 정답률이 높습니다 — 하이브리드 쪽 보완이 필요합니다.</>}
+                ? <>89개 질문 중 <b className="text-slate-100">B안(지금 방식)</b>이 더 많이 정답을 찾아냈습니다 — 지금처럼 저장하는 게 낫다는 뜻입니다.</>
+                : <><b className="text-slate-100">A안(지식 그대로 저장)</b>이 지금 방식보다 정답을 더 많이 찾아냈습니다 — 지금 방식 보완이 필요합니다.</>}
             </p>
             <div className="flex items-center gap-4">
               <div>
                 <div className="text-3xl font-bold text-slate-400 font-mono tabular-nums">{(lastResult.a_hit_rate * 100).toFixed(1)}%</div>
-                <div className="text-xs text-slate-500 mt-1">A · 지식-only</div>
+                <div className="text-xs text-slate-500 mt-1">A안 · 지식 그대로 저장</div>
               </div>
               <ArrowRight className="w-5 h-5 text-slate-600" />
               <div>
                 <div className={`text-3xl font-bold font-mono tabular-nums ${lastResult.b_hit_rate >= lastResult.a_hit_rate ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {(lastResult.b_hit_rate * 100).toFixed(1)}%
                 </div>
-                <div className="text-xs text-slate-500 mt-1">B · 하이브리드</div>
+                <div className="text-xs text-slate-500 mt-1">B안 · 지금 우리 방식</div>
               </div>
             </div>
+            <p className="text-[11px] text-slate-500 mt-3">
+              % = 89개 질문 중 정답이 검색 결과 상위 {lastResult.top_k}개 안에 들어온 비율
+            </p>
           </div>
 
           <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-5">
-            <p className="text-xs font-medium text-slate-400 mb-4">유형별 정답률 (hit@{lastResult.top_k})</p>
-            <div className="space-y-4">
-              {lastResult.by_type.map((t) => (
-                <div key={t.type} className="grid grid-cols-[120px_1fr_110px] gap-3 items-center">
-                  <div>
-                    <div className="text-sm font-medium text-slate-200">{TYPE_LABEL[t.type] ?? t.type}</div>
-                    <div className="text-[11px] text-slate-500 font-mono">n={t.n}</div>
+            <p className="text-xs font-medium text-slate-400 mb-1">질문 유형별로 뜯어보면</p>
+            <p className="text-[11px] text-slate-500 mb-4">질문 성격에 따라 어느 저장 방식이 유리한지가 다를 수 있어 유형을 나눠서 봅니다.</p>
+            <div className="space-y-5">
+              {lastResult.by_type.map((t) => {
+                const info = TYPE_INFO[t.type] ?? { label: t.type, example: '' };
+                return (
+                  <div key={t.type}>
+                    <div className="flex items-baseline justify-between mb-1.5">
+                      <div>
+                        <span className="text-sm font-medium text-slate-200">{info.label}</span>
+                        <span className="text-[11px] text-slate-500 ml-2">{info.example}</span>
+                      </div>
+                      <span className="text-[11px] text-slate-500 font-mono">질문 {t.n}개</span>
+                    </div>
+                    <div className="grid grid-cols-[1fr_110px] gap-3 items-center">
+                      <div className="relative h-5 bg-slate-900 rounded overflow-hidden">
+                        <div className="absolute inset-y-0 left-0 bg-slate-600" style={{ width: `${t.a_hit_rate * 100}%` }} />
+                        <div className="absolute inset-y-0 left-0 bg-indigo-500 opacity-90" style={{ width: `${t.b_hit_rate * 100}%` }} />
+                      </div>
+                      <div className="text-xs font-mono tabular-nums text-right text-slate-400">
+                        A {(t.a_hit_rate * 100).toFixed(0)} → B <span className={t.b_hit_rate >= t.a_hit_rate ? 'text-emerald-400' : 'text-rose-400'}>{(t.b_hit_rate * 100).toFixed(0)}</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="relative h-5 bg-slate-900 rounded overflow-hidden">
-                    <div className="absolute inset-y-0 left-0 bg-slate-600" style={{ width: `${t.a_hit_rate * 100}%` }} />
-                    <div className="absolute inset-y-0 left-0 bg-indigo-500 opacity-90" style={{ width: `${t.b_hit_rate * 100}%` }} />
-                  </div>
-                  <div className="text-xs font-mono tabular-nums text-right text-slate-400">
-                    {(t.a_hit_rate * 100).toFixed(1)} → <span className={t.b_hit_rate >= t.a_hit_rate ? 'text-emerald-400' : 'text-rose-400'}>{(t.b_hit_rate * 100).toFixed(1)}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
-            <div className="flex items-center gap-3 mt-4 text-[11px] text-slate-500">
-              <span className="flex items-center gap-1.5"><i className="inline-block w-2.5 h-2.5 rounded-sm bg-slate-600" />A · 지식-only</span>
-              <span className="flex items-center gap-1.5"><i className="inline-block w-2.5 h-2.5 rounded-sm bg-indigo-500" />B · 하이브리드</span>
+            <div className="flex items-center gap-3 mt-5 pt-4 border-t border-slate-700 text-[11px] text-slate-500">
+              <span className="flex items-center gap-1.5"><i className="inline-block w-2.5 h-2.5 rounded-sm bg-slate-600" />A안 · 지식 그대로 저장</span>
+              <span className="flex items-center gap-1.5"><i className="inline-block w-2.5 h-2.5 rounded-sm bg-indigo-500" />B안 · 지금 우리 방식</span>
             </div>
           </div>
 
