@@ -46,12 +46,12 @@ class TestSearchPolicy:
     async def test_param_and_narrative_hits_mapped_correctly(self, patch_db):
         param_rows = [{
             "item_id": 1, "logical_id": 1, "policy_name": "장바구니 담기",
-            "category_path": ["1.주문", "1-1.장바구니"], "status": "pending_review",
+            "category_path": ["1.주문", "1-1.장바구니"], "status": "pending_review", "raw_body": "일반 배달: 20개",
             "param_name": "최대개수", "condition": "일반 배달", "value": "20", "unit": "개",
         }]
         chunk_rows = [{
             "item_id": 2, "logical_id": 2, "policy_name": "장바구니 조회",
-            "category_path": ["1.주문"], "status": "pending_review",
+            "category_path": ["1.주문"], "status": "pending_review", "raw_body": "재고 없으면 SOLD OUT 표기",
             "chunk_text": "재고 없으면 SOLD OUT 표기", "score": 0.83,
         }]
         patch_db(param_rows=param_rows, chunk_rows=chunk_rows)
@@ -182,3 +182,50 @@ class TestBuildPolicyContext:
                                  chunk_text="text", score=0.2),
         ])
         assert "신뢰도: 낮음" in search.build_policy_context(result)
+
+
+class TestBuildPolicyCitations:
+    """2026-09-06 편입 2단계 — 채팅 화면의 "정책 근거" 카드용 데이터. 원문(raw_body)까지
+    포함해야 사용자가 "이 답이 어디서 왔는지" 직접 확인할 수 있다(사용자 피드백)."""
+
+    def test_empty_result_returns_empty_list(self):
+        assert search.build_policy_citations(search.PolicySearchResult()) == []
+
+    def test_param_citation_includes_raw_body_and_detail(self):
+        result = search.PolicySearchResult(params=[
+            search.ParamHit(item_id=1, logical_id=1, policy_name="배달비", category_path=["1.주문"], status="active",
+                             param_name="최대개수", condition="일반 배달", value="20", unit="개",
+                             raw_body="일반 배달: 20개\n도보 배달: 4개"),
+        ])
+        citations = search.build_policy_citations(result)
+
+        assert len(citations) == 1
+        c = citations[0]
+        assert c["kind"] == "param"
+        assert c["policy_name"] == "배달비"
+        assert c["category_path"] == ["1.주문"]
+        assert "최대개수" in c["detail"] and "20개" in c["detail"]
+        assert c["raw_body"] == "일반 배달: 20개\n도보 배달: 4개"
+
+    def test_narrative_citation_uses_chunk_text_as_detail(self):
+        result = search.PolicySearchResult(narratives=[
+            search.NarrativeHit(item_id=1, logical_id=1, policy_name="재고정책", category_path=[], status="active",
+                                 chunk_text="재고 없으면 SOLD OUT 표기", score=0.8,
+                                 raw_body="재고 없으면 SOLD OUT 표기. 재입고 시 자동 노출."),
+        ])
+        citations = search.build_policy_citations(result)
+
+        assert citations[0]["kind"] == "narrative"
+        assert citations[0]["detail"] == "재고 없으면 SOLD OUT 표기"
+        assert citations[0]["raw_body"] == "재고 없으면 SOLD OUT 표기. 재입고 시 자동 노출."
+
+    def test_params_and_narratives_both_included(self):
+        result = search.PolicySearchResult(
+            params=[search.ParamHit(item_id=1, logical_id=1, policy_name="p1", category_path=[], status="active",
+                                     param_name="n", condition=None, value="1", unit=None)],
+            narratives=[search.NarrativeHit(item_id=2, logical_id=2, policy_name="p2", category_path=[], status="active",
+                                             chunk_text="t", score=0.9)],
+        )
+        citations = search.build_policy_citations(result)
+        kinds = {c["kind"] for c in citations}
+        assert kinds == {"param", "narrative"}

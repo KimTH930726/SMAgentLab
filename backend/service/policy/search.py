@@ -31,6 +31,7 @@ class ParamHit:
     condition: Optional[str]
     value: Optional[str]
     unit: Optional[str]
+    raw_body: str = ""  # 원문 전체 — 채팅 인용 카드의 "근거" 표시용(2026-09-06)
 
 
 @dataclass
@@ -42,6 +43,7 @@ class NarrativeHit:
     status: str
     chunk_text: str
     score: float
+    raw_body: str = ""  # 원문 전체 — 채팅 인용 카드의 "근거" 표시용(2026-09-06)
 
 
 @dataclass
@@ -76,7 +78,7 @@ async def search_policy(
         param_args = [ns_id, query, top_k] + ([category] if category else [])
         param_rows = await conn.fetch(
             f"""
-            SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status,
+            SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
                    p.name AS param_name, p.condition, p.value, p.unit
             FROM policy_param p
             JOIN policy_item i ON i.id = p.policy_item_id
@@ -99,7 +101,7 @@ async def search_policy(
         category_clause2 = "AND $4 = ANY(i.category_path)" if category else ""
         chunk_rows = await conn.fetch(
             f"""
-            SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status,
+            SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
                    c.chunk_text, 1 - (c.embedding <=> $2::vector) AS score
             FROM policy_chunk c
             JOIN policy_item i ON i.id = c.policy_item_id
@@ -116,11 +118,12 @@ async def search_policy(
             item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
             category_path=list(r["category_path"] or []), status=r["status"],
             param_name=r["param_name"], condition=r["condition"], value=r["value"], unit=r["unit"],
+            raw_body=r["raw_body"],
         ) for r in param_rows],
         narratives=[NarrativeHit(
             item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
             category_path=list(r["category_path"] or []), status=r["status"],
-            chunk_text=r["chunk_text"], score=float(r["score"]),
+            chunk_text=r["chunk_text"], score=float(r["score"]), raw_body=r["raw_body"],
         ) for r in chunk_rows],
     )
 
@@ -142,8 +145,7 @@ async def has_policy_data(namespace: str) -> bool:
 
 def build_policy_context(result: PolicySearchResult) -> str:
     """search_policy() 결과를 채팅 LLM 컨텍스트용 텍스트로 변환 — `agent.py`의 `doc_context`에
-    추가 섹션으로 이어붙인다(편입 1단계, 2026-09-04: 텍스트 컨텍스트만 합치고 인용 카드 UI는
-    아직 안 건드림 — §4-2/§6, 실사용 피드백 보고 2단계 여부 결정).
+    추가 섹션으로 이어붙인다(편입 1단계, 2026-09-04).
 
     retrieval.py의 build_context()와 다른 점: param은 RDB 정확 매칭이라 점수가 없어(있다/없다
     뿐) "정확 일치"로만 표시하고, narrative만 벡터 점수 기반 신뢰도 라벨을 붙인다."""
@@ -160,3 +162,29 @@ def build_policy_context(result: PolicySearchResult) -> str:
         parts.append(f"[정책 서술: {n.policy_name}] (신뢰도: {confidence})\n{n.chunk_text}")
 
     return "--- 정책 데이터 ---\n" + "\n\n".join(parts)
+
+
+def build_policy_citations(result: PolicySearchResult) -> list[dict]:
+    """search_policy() 결과를 채팅 화면의 "정책 근거" 카드용 데이터로 변환 — 편입 2단계
+    (2026-09-06, 사용자 피드백: "정책에서 온 답인지 기준정보에서 온 답인지 알기 어렵다,
+    원문도 근거로 보여달라"). `build_policy_context()`(LLM 프롬프트용 텍스트)와 별개로,
+    화면에 그대로 렌더링할 수 있는 구조화 데이터를 만든다.
+
+    기존 `results`(rag_knowledge 인용 카드) 배열엔 안 섞는다 — `FeedbackSection`이
+    `results[0].id`를 "이 답변이 참조한 rag_knowledge 항목"으로 써서(피드백→지식수정 연결),
+    policy_param/policy_chunk의 id를 그 배열에 섞으면 다른 테이블의 id가 rag_knowledge id로
+    오인될 위험이 있다. 그래서 SSE meta 이벤트에 `policy_citations`라는 별도 필드로 얹는다."""
+    citations = []
+    for p in result.params:
+        value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
+        detail = f"{p.param_name}" + (f" ({p.condition})" if p.condition else "") + f" = {value_str}"
+        citations.append({
+            "kind": "param", "policy_name": p.policy_name, "category_path": p.category_path,
+            "detail": detail, "raw_body": p.raw_body,
+        })
+    for n in result.narratives:
+        citations.append({
+            "kind": "narrative", "policy_name": n.policy_name, "category_path": n.category_path,
+            "detail": n.chunk_text, "raw_body": n.raw_body,
+        })
+    return citations

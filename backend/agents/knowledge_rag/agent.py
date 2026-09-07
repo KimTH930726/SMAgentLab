@@ -1,5 +1,6 @@
 """지식베이스 RAG 에이전트 — AgentBase 구현."""
 import asyncio
+import json
 import logging
 from typing import AsyncIterator, Optional
 
@@ -88,11 +89,16 @@ class KnowledgeRagAgent(AgentBase):
             # ── Semantic Cache 조회 ──
             cached = await sem_cache.get_cached(namespace, "knowledge_rag", cache_vec)
             if cached:
-                await update_assistant_message(msg_id, cached["answer"], "completed")
+                cached_citations = cached.get("policy_citations", [])
+                await update_assistant_message(
+                    msg_id, cached["answer"], "completed",
+                    metadata={"policy_citations": cached_citations} if cached_citations else None,
+                )
                 yield {
                     "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
                     "mapped_term": cached.get("mapped_term"),
                     "results": cached.get("results", []),
+                    "policy_citations": cached_citations,
                 }
                 yield {"type": "token", "data": cached["answer"]}
                 await create_query_log(namespace, query, cached["answer"], bool(cached.get("results")), cached.get("mapped_term"), msg_id, had_context=bool(cached.get("results")))
@@ -120,19 +126,23 @@ class KnowledgeRagAgent(AgentBase):
             else:
                 results = results_raw[:top_k]
 
-            # 정책서 데이터 편입 1단계(2026-09-04, Track 2로 하이브리드 스키마 우세 확정 후) —
-            # rag_knowledge 검색과 별개로 정책 데이터도 doc_context에 텍스트로 얹는다. 인용
-            # 카드 UI(results_to_payload)는 아직 rag_knowledge 모양 그대로라 정책 출처는 채팅
-            # 화면에 카드로는 안 뜨고 LLM 답변 본문에만 반영된다 — 실사용 피드백 보고 2단계
-            # (카드 UI 확장) 여부 결정(§4-2/§6). policy_available=False인 네임스페이스(정책
-            # 데이터 없음)는 이 블록 자체를 건너뛰어 매 턴 불필요한 쿼리를 피한다.
+            # 정책서 데이터 편입(2026-09-04 1단계, 2026-09-06 2단계) — Track 2로 하이브리드
+            # 스키마 우세 확정 후 rag_knowledge 검색과 별개로 정책 데이터도 doc_context에
+            # 텍스트로 얹는다(1단계). policy_available=False인 네임스페이스(정책 데이터 없음)는
+            # 이 블록 자체를 건너뛰어 매 턴 불필요한 쿼리를 피한다. 2단계: "정책에서 온 답인지
+            # 기준정보에서 온 답인지 구분이 안 되고 원문도 안 보인다"는 사용자 피드백으로
+            # policy_citations를 별도로 만들어 화면에 "정책 근거" 카드로 노출(§4-2/§6) —
+            # 기존 results(rag_knowledge 인용) 배열엔 안 섞는다(FeedbackSection이 results[0].id를
+            # rag_knowledge id로 쓰는 것과 충돌 방지).
             policy_context = ""
+            policy_citations: list[dict] = []
             if policy_available:
                 try:
                     policy_result = await policy_search.search_policy(
                         namespace, enriched_query, top_k=5, query_vec=query_vec,
                     )
                     policy_context = policy_search.build_policy_context(policy_result)
+                    policy_citations = policy_search.build_policy_citations(policy_result)
                 except Exception as e:
                     logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
 
@@ -146,13 +156,15 @@ class KnowledgeRagAgent(AgentBase):
 
             async with get_conn() as conn:
                 await conn.execute(
-                    "UPDATE ops_message SET mapped_term = $1, results = $2::jsonb WHERE id = $3",
+                    "UPDATE ops_message SET mapped_term = $1, results = $2::jsonb, metadata = $4::jsonb WHERE id = $3",
                     mapped_term, results_to_json(results), msg_id,
+                    json.dumps({"policy_citations": policy_citations}, ensure_ascii=False) if policy_citations else None,
                 )
 
             yield {
                 "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
                 "mapped_term": mapped_term, "results": results_to_payload(results),
+                "policy_citations": policy_citations,
             }
 
             yield {"type": "status", "step": "llm", "message": "AI 답변 생성 중..."}
@@ -197,6 +209,7 @@ class KnowledgeRagAgent(AgentBase):
                     "answer": final_answer,
                     "mapped_term": mapped_term,
                     "results": results_to_payload(results),
+                    "policy_citations": policy_citations,
                     "query": query,
                 })
 

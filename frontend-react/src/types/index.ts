@@ -138,6 +138,7 @@ export interface ConversationMessage {
     sql_result?: { sql: string; reasoning: string; cached: boolean } | null;
     table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null;
     chart_result?: { type: string; x: string; y: string; title: string } | null;
+    policy_citations?: PolicyCitation[] | null;
   } | null;
 }
 
@@ -152,11 +153,24 @@ export interface KnowledgeResult {
   k_score?: number;
 }
 
+// 정책 검색 편입 2단계(2026-09-06) — "정책에서 온 답인지 기준정보에서 온 답인지 구분이 안
+// 되고 원문도 안 보인다"는 피드백으로 rag_knowledge 인용(KnowledgeResult)과 별개로 둔다.
+// FeedbackSection이 results[0].id를 rag_knowledge id로 참조하는 것과 섞이면 안 되기 때문
+// (backend service/policy/search.py build_policy_citations() 참고).
+export interface PolicyCitation {
+  kind: 'param' | 'narrative';
+  policy_name: string;
+  category_path: string[];
+  detail: string;
+  raw_body: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   mapped_term?: string | null;
   results?: KnowledgeResult[];
+  policyCitations?: PolicyCitation[];
   isStreaming?: boolean;
   question?: string;
   has_feedback?: boolean;
@@ -194,6 +208,7 @@ export interface SSEMetaEvent {
   conversation_id: number | null;
   mapped_term: string | null;
   results: KnowledgeResult[];
+  policy_citations?: PolicyCitation[];
 }
 
 export interface SSETokenEvent {

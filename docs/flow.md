@@ -102,11 +102,17 @@
 │  │          query_vec=query_vec)  ← 이미 계산한 벡터    │   │
 │  │          재사용, 재임베딩 안 함                       │   │
 │  │  → policy_param(RDB tsquery) + policy_chunk(벡터)   │   │
-│  │    동시 조회, build_policy_context()로 텍스트화       │   │
+│  │    동시 조회(raw_body도 함께 SELECT), 두 갈래로 가공: │   │
+│  │    · build_policy_context()  → LLM 프롬프트용 텍스트  │   │
+│  │    · build_policy_citations()→ 화면 "정책 근거" 카드용│   │
+│  │      구조화 데이터(policy_name/category_path/raw_body)│   │
 │  │  (Track 2 실측으로 하이브리드 스키마 우세 확정 후     │   │
-│  │   편입 1단계 — 인용 카드 UI는 아직 rag_knowledge     │   │
-│  │   모양 그대로라 정책 출처는 카드로는 안 뜨고 LLM      │   │
-│  │   답변 본문에만 반영됨, policy-doc-pipeline-plan §6) │   │
+│  │   편입 1단계(2026-09-04); "정책에서 온 답인지 구분이  │   │
+│  │   안 되고 원문도 안 보인다"는 피드백으로 2단계        │   │
+│  │   (2026-09-06) 진행 — policy_citations를 SSE meta    │   │
+│  │   이벤트 + ops_message.metadata에 별도 필드로 얹음.   │   │
+│  │   기존 results(rag_knowledge) 배열엔 안 섞음          │   │
+│  │   (FeedbackSection의 results[0].id 참조와 충돌 방지)) │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐   │
@@ -139,6 +145,10 @@
 │  - 용어 매핑 표시    │
 │  - 결과 카드 렌더링  │
 │    (컨테이너, 테이블, SQL) │
+│  - 정책 근거 카드    │
+│    렌더링(파라미터/  │
+│    서술 + 원문 표시, │
+│    results와 별도)  │
 │  - AI 답변 Markdown │
 │    렌더링 (테이블,  │
 │    코드블록, 리스트) │

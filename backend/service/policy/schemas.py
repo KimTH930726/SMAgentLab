@@ -36,6 +36,7 @@ class ParamHitOut(BaseModel):
     condition: Optional[str] = None
     value: Optional[str] = None
     unit: Optional[str] = None
+    raw_body: str = ""
 
 
 class NarrativeHitOut(BaseModel):
@@ -46,6 +47,7 @@ class NarrativeHitOut(BaseModel):
     status: str
     chunk_text: str
     score: float
+    raw_body: str = ""
 
 
 class PolicySearchOut(BaseModel):

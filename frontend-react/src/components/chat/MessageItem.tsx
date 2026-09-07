@@ -8,6 +8,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Badge } from '../ui/Badge';
 import { SearchResultCard } from './SearchResultCard';
+import { PolicyCitationCard } from './PolicyCitationCard';
 import { FeedbackSection } from './FeedbackSection';
 import { useThemeStore } from '../../store/useThemeStore';
 import type { ChatMessage } from '../../types';
@@ -291,6 +292,23 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
                 <SearchResultCard
                   key={result.id}
                   result={result}
+                  defaultOpen={false}
+                  index={idx}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Policy citations — rag_knowledge 검색결과(results)와 별개 출처이므로 분리된 섹션으로 표시 */}
+          {message.policyCitations && message.policyCitations.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs text-violet-400 font-medium">
+                📋 정책 근거 {message.policyCitations.length}건
+              </p>
+              {message.policyCitations.map((citation, idx) => (
+                <PolicyCitationCard
+                  key={idx}
+                  citation={citation}
                   defaultOpen={false}
                   index={idx}
                 />

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { streamChat } from '../api/chat';
-import type { ChatMessage, KnowledgeResult, SSEToolRequestEvent, SSESqlEvent, SSETableEvent, SSEChartEvent } from '../types';
+import type { ChatMessage, KnowledgeResult, PolicyCitation, SSEToolRequestEvent, SSESqlEvent, SSETableEvent, SSEChartEvent } from '../types';
 
 // Module-level (non-reactive, not in Zustand state)
 let _controller: AbortController | null = null;
@@ -197,6 +197,7 @@ async function _runStream(
           conversation_id: number | null;
           mapped_term: string | null;
           results: KnowledgeResult[];
+          policy_citations?: PolicyCitation[];
         };
         if (meta.conversation_id) {
           set({ convId: meta.conversation_id });
@@ -210,6 +211,7 @@ async function _runStream(
           ...m,
           mapped_term: meta.mapped_term,
           results: meta.results ?? [],
+          policyCitations: meta.policy_citations ?? [],
         }));
       } else if (event.type === 'token') {
         const token = (event as { type: 'token'; data: string }).data;

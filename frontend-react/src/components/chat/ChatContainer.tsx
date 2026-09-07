@@ -12,7 +12,7 @@ import { getMessages } from '../../api/conversations';
 import { getCategories, suggestCategory } from '../../api/namespaces';
 import { MessageItem } from './MessageItem';
 import { ToolRequestCard } from './ToolRequestCard';
-import type { ChatMessage } from '../../types';
+import type { ChatMessage, PolicyCitation } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
 
 function PipelineStepsToggle({ steps }: { steps: PipelineStep[] }) {
@@ -62,7 +62,7 @@ const _TOOL_PENDING_PATTERNS = [
   '[도구 실행 승인 대기 중]',
 ];
 
-function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null } | null }[]): ChatMessage[] {
+function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null } | null }[]): ChatMessage[] {
   // Fix out-of-order pairs from old data (parallel saves could put assistant before user)
   // Check pairs at step=2: (0,1), (2,3), ... and swap reversed pairs
   const ordered = [...msgs];
@@ -96,6 +96,7 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
           : m.content,
         mapped_term: m.mapped_term,
         results: (m.results ?? []) as ChatMessage['results'],
+        policyCitations: m.metadata?.policy_citations ?? [],
         question: lastQuestion,
         has_feedback: m.has_feedback ?? false,
         messageId: m.id,

@@ -3,8 +3,8 @@
 > 작성일: 2026-09-03 (같은 날 SMAgentLab 구현 세션에서 §3 자산 실측 감사, §2-1 버전 관리,
 > §2-2 용어집 재사용, §2-3 동적 처리+팀별 피드백 반영 — 실 샘플 2개 팀 데이터 기반)
 > 상태(2026-09-06 최종 갱신): **v1 파이프라인+API 전부 구현·실 HTTP E2E 검증 완료, Track 2
-> 실행 완료, 메인 채팅에 편입(1단계)까지 완료**(`service/policy/` — excel_parser/decompose/
-> service/search/unresolved_report/browse/track2/router, 테스트 335개). 실 데이터: 스타벅스
+> 실행 완료, 메인 채팅에 편입(1·2단계)까지 완료**(`service/policy/` — excel_parser/decompose/
+> service/search/unresolved_report/browse/track2/router, 테스트 339개). 실 데이터: 스타벅스
 > CSP팀 2개 파일(온라인스토어 398건+딜리버스 102건=500건) 전부 실 DB 적재 완료(§9). 이 과정에서
 > 실버그 6건 발견·수정(병합셀, 검색 tsquery, 헤더/데이터유실, param value 배열, 계산식 파괴/
 > 할루시네이션, 용어집 비고 유실). Track 2(§4-3/§4-4): 골든셋 89건으로 A(지식-only)/B(하이브리드)
@@ -13,12 +13,14 @@
 > /api/policy/track2/run`으로 API 승격, 관리자 화면에서 버튼으로 재실행 가능. **이어서
 > `agents/knowledge_rag/agent.py:stream_chat()`에 정책 검색을 실제로 편입(1단계, §6)** —
 > `rag_knowledge` 검색과 병행해 정책 데이터를 채팅 컨텍스트에 텍스트로 추가, 정책 없는
-> 네임스페이스는 스킵. 인용 카드 UI는 아직 2단계로 미룸. 실 E2E로 실제 채팅에서 정책값
-> 정답 확인. 관리자 화면은 "정책" 대분류 탭 하나에 서브탭 3개(항목 브라우저/미분류/저장소
+> 네임스페이스는 스킵. 실 E2E로 실제 채팅에서 정책값 정답 확인. 이어서 **"정책에서 온 답인지
+> 기준정보에서 온 답인지 구분이 안 되고 원문도 안 보인다"는 사용자 피드백으로 2단계(인용
+> 카드 UI, §6)도 완료** — `raw_body`(원문)까지 포함한 `policy_citations`를 `results`와
+> 별개 필드로 SSE meta/`ops_message.metadata`에 얹고, 채팅 화면에 "정책 근거" 카드로 노출.
+> 관리자 화면은 "정책" 대분류 탭 하나에 서브탭 3개(항목 브라우저/미분류/저장소
 > 실험실)로 통합 — 항목 브라우저는 원문(`raw_body`) 표시 추가 + `q` 검색을 실제 RDB+벡터
 > 검색으로 개선(이전엔 정책명 ILIKE뿐). "시스템별 완전 별도 테이블"안도 검토했으나(팀마다
-> 구조가 크게 다름 — §1) 통합 스키마로 확정. 남은 건 검토 UI(승인 화면), 인용 카드 UI(2단계),
-> §8 v2 후보 구조 4종.
+> 구조가 크게 다름 — §1) 통합 스키마로 확정. 남은 건 검토 UI(승인 화면), §8 v2 후보 구조 4종.
 > §7 미확정 항목(외부 SoR API 스펙, 정책서 원문 완료 시점, condition 표현 방식, effective_from/to
 > 필요 여부, 상태전이 전용 구조 필요 여부)은 v1 범위 밖(Phase 2+) 또는 데이터가 더 쌓인 뒤 재검토.
 > 목적: 엑셀로 된 비즈니스 정책서를 운영에서 활용 가능한 데이터로 전환하는 **파이프라인(Track 1)** 과, 그 결과를 어떤 저장소 전략으로 관리할지 **수치로 판정하는 실험실(Track 2)** 을 설계한다.
@@ -211,9 +213,14 @@ B(하이브리드)의 우위를 확인해주면 그때 `agent.py`에 편입하�
 **후속(2026-09-06)**: Track 2가 4개 유형 전부에서 B 우세를 확인해줘서(§4-4), 위에서 말한
 조건이 충족됐다. `agent.py:stream_chat()`에 `search_policy()`를 병행 호출하는 편입 1단계를
 실행 — 단 `/api/policy/search` 전용 엔드포인트는 그대로 남겨뒀다(디버깅/직접 조회용으로
-여전히 유용, `search.py`가 이제 두 경로 모두에서 재사용됨). 인용 카드 UI(채팅 화면에 출처를
-보여주는 부분)는 아직 `rag_knowledge` 모양 그대로라 정책 출처는 카드로는 안 보이고 LLM 답변
-본문에만 반영된다 — 이건 의도적으로 2단계로 미뤘다(§6).
+여전히 유용, `search.py`가 이제 두 경로 모두에서 재사용됨). 1단계 직후 사용자가 "지식이
+정책에서 온 답인지 기준정보에서 온 답인지 구분이 안 되고 원문도 안 보인다"고 지적 — 인용 카드
+UI(채팅 화면에 출처를 보여주는 부분)를 2단계로 바로 이어서 구현. `results`(rag_knowledge
+카드) 배열 모양을 그대로 재사용하지 않고 `policy_citations`라는 완전히 별도 필드로 뒀다 —
+`FeedbackSection`이 `results[0].id`를 "이 답변이 참조한 rag_knowledge id"로 쓰기 때문에,
+다른 테이블(policy_param/policy_chunk)의 id를 그 배열에 섞으면 오인식 위험이 있어서다.
+`raw_body`(LLM 분해 전 원문)까지 `ParamHit`/`NarrativeHit`에 얹어 카드를 펼치면 원문 그대로
+보이게 했다(§6).
 
 ## 3. Track 1 — 정책서 데이터화 파이프라인
 
@@ -455,6 +462,21 @@ item이 param+condition 양쪽에 걸쳐있는 경우가 많아 같이 좋아짐
       전용 로직은 search.py에 둠). 비스트리밍 `/api/chat`(debug용)은 범위 밖. 실 E2E로 확인:
       "장바구니 최대 몇 개?" 질문에 실제 정책값으로 정확히 답변, 정책 없는 네임스페이스도
       정상 동작. 테스트 10개 추가(총 335개)
+- [x] **agent.py 편입 2단계 — 정책 근거 인용 카드 UI(2026-09-06, 같은 날)** — 1단계 직후
+      사용자 피드백("정책에서 온 답인지 기준정보에서 온 답인지 구분 안 됨, 원문도 보여달라")
+      으로 바로 착수. `ParamHit`/`NarrativeHit`에 `raw_body` 필드 추가(두 SQL 쿼리 모두
+      `i.raw_body` SELECT), 신규 `build_policy_citations()`가 `kind`/`policy_name`/
+      `category_path`/`detail`/`raw_body`로 구조화. `agent.py`가 이걸 SSE `meta` 이벤트와
+      `ops_message.metadata`(JSONB)에 `policy_citations`라는 **완전히 별도 필드**로 얹음 —
+      기존 `results`(rag_knowledge 인용) 배열엔 안 섞음(`FeedbackSection`이 `results[0].id`를
+      rag_knowledge id로 참조하는 것과 충돌 방지). Semantic Cache 히트 경로도 `policy_citations`
+      를 캐시 payload에 포함해 재계산 없이 재생. 프론트: `PolicyCitationCard.tsx` 신규(보라/
+      자홍 배지로 rag_knowledge 카드와 시각적 구분, 펼치면 "원문 정책" 섹션에 `raw_body` 노출),
+      `MessageItem.tsx`에 "📋 정책 근거 N건" 섹션 추가, 라이브 스트림(`useStreamStore.ts`)과
+      과거 대화 재조회(`ChatContainer.tsx`의 `convertMessages()`) 양쪽 경로 모두 처리. 실 E2E로
+      확인: "장바구니 최대 개수가 몇 개야?" 질문에 `policy_citations` 10건(raw_body 포함)이
+      SSE meta로 내려오고 `ops_message.metadata`에도 정확히 영속화됨, 정책 없는 네임스페이스는
+      `policy_citations: []`로 무회귀. 테스트 4개 추가(총 339개)
 - [x] **골든셋 v1 자동 생성(2026-09-04)** — 태훈에게 수작업 요청 대신, 실 DB(온라인스토어+
       딜리버스, 480건)에서 §4-1 스펙 그대로 89건 자동 생성. 유형별: param 23/narrative 23/
       navigation 24/condition_filter 19(각 min 10~15 충족, 전체 40~60 권장보다 큼 — 시스템

@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.64)
+# Ops-Navigator 시스템 아키텍처 (v2.65)
 
 ## 개요
 
@@ -9,6 +9,26 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.65: **정책 검색 메인 채팅 편입 2단계 — "정책 근거" 인용 카드 UI** — v2.64에서 남겨둔
+  숙제("지식이 정책에서 온 답인지 기준정보에서 온 답인지 알기 어렵다, 원문도 근거로 보여달라"
+  는 사용자 피드백) 해결. `search_policy()`의 `ParamHit`/`NarrativeHit`에 `raw_body`(LLM
+  분해 전 원문 그대로) 필드 추가, 신규 `build_policy_citations()`가 검색 결과를 화면 렌더링용
+  구조화 데이터(`kind`/`policy_name`/`category_path`/`detail`/`raw_body`)로 변환. 기존
+  `results`(rag_knowledge 인용) 배열엔 절대 안 섞음 — `FeedbackSection`이 `results[0].id`를
+  "이 답변이 참조한 rag_knowledge id"로 써서 피드백→지식수정 흐름에 연결하는데, 다른 테이블
+  (policy_param/policy_chunk)의 id가 섞이면 오인식 위험이 있기 때문. 대신 SSE `meta` 이벤트와
+  `ops_message.metadata`(JSONB, text2sql 시절부터 있던 범용 컬럼 재사용)에 `policy_citations`
+  라는 완전히 별도 필드로 얹는다. Semantic Cache 히트 경로도 `policy_citations`를 캐시 payload
+  에 함께 저장해 재계산 없이도 동일한 인용을 재생. 프론트엔드: `ChatMessage.policyCitations`
+  (SSE 라이브 스트림 경로 `useStreamStore.ts`, 과거 대화 재조회 경로 `ChatContainer.tsx`의
+  `convertMessages()` 양쪽 모두에서 채움), 신규 `PolicyCitationCard.tsx`(`SearchResultCard.tsx`
+  와 같은 아코디언 패턴이되 보라/자홍 계열 배지로 시각적으로 구분, 펼치면 "원문 정책" 섹션에
+  `raw_body` 그대로 노출)를 `MessageItem.tsx`에 "📋 정책 근거 N건" 섹션으로 추가(기존 "검색된
+  문서" 섹션과 별개, `results` 배열 변경 없음). 실 E2E로 확인: 온라인스토어 DB에서 "장바구니
+  최대 개수가 몇 개야?" 질문에 `policy_citations` 10건(파라미터 5 + 서술 5, 각각 `raw_body`
+  포함)이 SSE meta 이벤트로 내려오고 `ops_message.metadata`에도 정확히 영속화됨, 정책 데이터
+  없는 네임스페이스(팀 공통 DB)에서는 `policy_citations: []`로 기존 동작 그대로 무회귀 확인.
+  테스트 4개 추가(총 339개).
 - v2.64: **정책 검색을 메인 채팅에 편입(1단계)** — Track 2로 하이브리드 스키마 우세가
   확정된 뒤(v2.62), `agents/knowledge_rag/agent.py:stream_chat()`이 `rag_knowledge` 검색과
   함께 `service.policy.search.search_policy()`도 호출해 정책 데이터를 `doc_context`에 텍스트로
@@ -321,7 +341,7 @@ backend/
 │       ├── excel_parser.py    #   시트 판별(용어집/정책) + 헤더 퍼지매핑 + 동적 깊이 감지(category_path)
 │       ├── decompose.py       #   LLM segment 분해 — narrative/param/unresolved 3분류
 │       ├── service.py         #   버전 관리(logical_id/version/supersedes_id, INSERT-only) + LLM 분해 동시성(세마포어5) + policy_item/param/chunk 적재
-│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색. 전용 엔드포인트(/api/policy/search)로도, agent.py 채팅 흐름에 has_policy_data()/build_policy_context()로도 사용 (v2.64 편입 1단계)
+│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색. 전용 엔드포인트(/api/policy/search)로도, agent.py 채팅 흐름에 has_policy_data()/build_policy_context()/build_policy_citations()로도 사용 (v2.64 편입 1단계, v2.65 인용 카드 2단계)
 │       ├── unresolved_report.py #   unresolved/partial 항목 system_key별 집계 (v2.53 신규)
 │       ├── browse.py          #   item 단위 브라우저 — param/chunk 자식 포함, q는 실제 검색 재사용(matched_via) (v2.59 신규, v2.63 q 개선)
 │       ├── track2.py          #   Track 2 A(지식-only)/B(하이브리드) 비교를 API로 실행 (v2.63 신규)
