@@ -7,12 +7,26 @@ Track 2(저장 전략 실험실, §4) 실행 결과(2026-09-04) — 벡터 폴�
 컨텍스트만 합치고 인용 카드 UI는 아직 안 건드림)가 시작됐다 — `/api/policy/search` 전용
 엔드포인트는 그대로 유지(디버깅/직접 조회용).
 
+편입 2단계(2026-09-06)로 인용 카드 UI(`build_policy_citations()`)가 추가됐는데, `search_policy()`
+가 param/narrative 각각 top_k(기본 5)씩 총 최대 10건을 반환해 채팅 화면에 근거가 너무 많이
+보인다는 후속 피드백이 나왔다("원문 정책 1건만 보여달라" + "10개를 참조해서 답변 만든 거냐" —
+실제로 그랬다). 처음엔 검색 직후 벡터 점수 1위 하나만 골라 LLM 컨텍스트/화면 카드 양쪽에
+쓰려 했으나(`select_top_policy_hit`, 바로 폐기) 실측에서 문제가 드러남 — "장바구니 최대
+개수" 질문에서 벡터 점수 1위 narrative는 실제로 무관한 "배송지"였고, LLM 컨텍스트를 그거
+하나로 줄이자 정답이었던 "장바구니 최대 보관 수량" 항목이 통째로 빠져 "관련 지식을 찾지
+못했습니다"로 답변 자체가 실패했다. 그래서 **LLM 컨텍스트는 원래대로 여러 후보를 유지해
+재현율을 지키고(`build_policy_context()`는 안 바뀜), 화면에 보여줄 근거 1건은 답변이 생성된
+"뒤에" `select_cited_hit()`으로 역추적**한다 — 실제 답변 텍스트와 원문(raw_body)의 토큰
+겹침이 가장 큰 후보를 고른다(2026-09-07). `agent.py`는 이 때문에 정책 인용을 LLM 스트리밍이
+끝난 뒤 두 번째 `meta` SSE 이벤트로 늦게 내려보낸다.
+
 v1엔 검토/승인 UI가 없어(브리프 §2-4) 데이터가 전부 status='pending_review'로 쌓인다 —
 검색은 '검토 대기' 상태도 포함한다(안 그러면 아무것도 안 나옴), 대신 결과에 status를 노출해
 호출측이 "미검토" 표시를 할 수 있게 한다.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -32,6 +46,8 @@ class ParamHit:
     value: Optional[str]
     unit: Optional[str]
     raw_body: str = ""  # 원문 전체 — 채팅 인용 카드의 "근거" 표시용(2026-09-06)
+    score: float = 0.0  # ts_rank 관련도 — 예전엔 i.id DESC(최신순)로만 정렬해 무의미했음,
+    # select_top_policy_hit()에서 narrative가 없을 때 최선의 param 1건을 고르는 데 씀(2026-09-07)
 
 
 @dataclass
@@ -79,7 +95,8 @@ async def search_policy(
         param_rows = await conn.fetch(
             f"""
             SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
-                   p.name AS param_name, p.condition, p.value, p.unit
+                   p.name AS param_name, p.condition, p.value, p.unit,
+                   ts_rank(to_tsvector('simple', p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name), q.tsq) AS rank
             FROM policy_param p
             JOIN policy_item i ON i.id = p.policy_item_id
             CROSS JOIN LATERAL (
@@ -90,7 +107,7 @@ async def search_policy(
             WHERE i.namespace_id = $1 AND i.status != 'deprecated'
               AND to_tsvector('simple', p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name) @@ q.tsq
               {category_clause}
-            ORDER BY i.id DESC
+            ORDER BY rank DESC
             LIMIT $3
             """,
             *param_args,
@@ -118,7 +135,7 @@ async def search_policy(
             item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
             category_path=list(r["category_path"] or []), status=r["status"],
             param_name=r["param_name"], condition=r["condition"], value=r["value"], unit=r["unit"],
-            raw_body=r["raw_body"],
+            raw_body=r["raw_body"], score=float(r["rank"]),
         ) for r in param_rows],
         narratives=[NarrativeHit(
             item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
@@ -141,6 +158,46 @@ async def has_policy_data(namespace: str) -> bool:
             ns_id,
         )
         return bool(exists)
+
+
+_CITATION_TOKEN_RE = re.compile(r"[가-힣A-Za-z0-9]{2,}")
+
+
+def _token_overlap_score(candidate_text: str, answer_text: str) -> int:
+    """candidate_text에서 뽑은 토큰(2글자 이상 한글/영문/숫자 덩어리) 중 answer_text에
+    그대로 등장하는 개수. 정교한 유사도 대신 단순 포함 카운트를 쓰는 이유: 정책 답변은
+    보통 원문의 숫자·항목명을 거의 그대로 옮겨 적어서(예: "20개", "장바구니 최대 보관
+    수량") 이 정도로도 실제 근거를 충분히 변별할 수 있었다(실측)."""
+    if not candidate_text or not answer_text:
+        return 0
+    tokens = set(_CITATION_TOKEN_RE.findall(candidate_text))
+    return sum(1 for t in tokens if t in answer_text)
+
+
+def select_cited_hit(result: PolicySearchResult, answer_text: str) -> PolicySearchResult:
+    """검색 직후가 아니라 LLM이 실제로 생성한 답변(answer_text)이 나온 뒤에, 그 안에 등장하는
+    내용과 원문(raw_body)이 가장 많이 겹치는 후보 1건을 역추적해서 "정책 근거" 카드로 쓴다
+    (2026-09-07, 사용자 피드백: "근거가 너무 많이 보인다, 원문 정책 1건만 보여달라" + "10개를
+    참조해서 답변 만든 거냐").
+
+    검색 직후 벡터 점수만으로 미리 1건을 골라 LLM 컨텍스트까지 그걸로 줄여봤더니(구버전
+    `select_top_policy_hit`) 실제로 무관한 후보가 뽑히고, 심지어 그 때문에 정답이 컨텍스트에서
+    아예 빠져 "관련 지식을 찾지 못했습니다"로 답변이 실패하는 것까지 실측으로 확인됐다. 그래서
+    LLM 컨텍스트(`build_policy_context()`)는 원래대로 여러 후보를 유지해 재현율을 지키고,
+    화면에 보여줄 근거만 답변 생성 후 이 함수로 골라낸다 — 답변과 겹치는 게 하나도 없으면
+    (LLM이 정책 데이터를 실제로 안 썼거나 "모른다"류 답변) 억지로 아무거나 보여주지 않고
+    빈 결과를 반환한다."""
+    candidates: list[tuple[int, str, object]] = []
+    for p in result.params:
+        candidates.append((_token_overlap_score(p.raw_body, answer_text), "param", p))
+    for n in result.narratives:
+        candidates.append((_token_overlap_score(n.raw_body or n.chunk_text, answer_text), "narrative", n))
+    if not candidates:
+        return PolicySearchResult()
+    best_score, kind, hit = max(candidates, key=lambda c: c[0])
+    if best_score <= 0:
+        return PolicySearchResult()
+    return PolicySearchResult(params=[hit]) if kind == "param" else PolicySearchResult(narratives=[hit])
 
 
 def build_policy_context(result: PolicySearchResult) -> str:

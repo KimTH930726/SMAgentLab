@@ -37,6 +37,7 @@ class ParamHitOut(BaseModel):
     value: Optional[str] = None
     unit: Optional[str] = None
     raw_body: str = ""
+    score: float = 0.0
 
 
 class NarrativeHitOut(BaseModel):

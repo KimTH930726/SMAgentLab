@@ -47,7 +47,7 @@ class TestSearchPolicy:
         param_rows = [{
             "item_id": 1, "logical_id": 1, "policy_name": "장바구니 담기",
             "category_path": ["1.주문", "1-1.장바구니"], "status": "pending_review", "raw_body": "일반 배달: 20개",
-            "param_name": "최대개수", "condition": "일반 배달", "value": "20", "unit": "개",
+            "param_name": "최대개수", "condition": "일반 배달", "value": "20", "unit": "개", "rank": 0.06,
         }]
         chunk_rows = [{
             "item_id": 2, "logical_id": 2, "policy_name": "장바구니 조회",
@@ -182,6 +182,51 @@ class TestBuildPolicyContext:
                                  chunk_text="text", score=0.2),
         ])
         assert "신뢰도: 낮음" in search.build_policy_context(result)
+
+
+class TestSelectCitedHit:
+    """2026-09-07 — "근거가 너무 많이 보인다, 원문 정책 1건만 보여달라" + "10개를 참조해서
+    답변 만든 거냐"는 피드백. 검색 직후 벡터 점수로 미리 고르면(구버전 select_top_policy_hit)
+    실제로 무관한 후보가 뽑히고 LLM 컨텍스트까지 줄면 답변 자체가 실패하는 게 실측으로
+    확인돼 폐기 — 이제는 답변 텍스트와 겹치는 후보를 답변 생성 "후"에 역추적한다."""
+
+    def test_empty_result_returns_empty(self):
+        picked = search.select_cited_hit(search.PolicySearchResult(), "아무 답변")
+        assert picked.params == [] and picked.narratives == []
+
+    def test_no_overlap_with_answer_returns_empty(self):
+        result = search.PolicySearchResult(narratives=[
+            search.NarrativeHit(item_id=1, logical_id=1, policy_name="배송지", category_path=[], status="active",
+                                 chunk_text="배송지 관련", score=0.9, raw_body="기본 배송지 자동 노출, 최대 30개"),
+        ])
+        picked = search.select_cited_hit(result, "관련 지식을 찾지 못했습니다")
+        assert picked.params == [] and picked.narratives == []
+
+    def test_picks_narrative_with_highest_text_overlap_over_higher_vector_score(self):
+        # 실측 재현: 벡터 점수는 "배송지"가 더 높아도, 실제 답변엔 "장바구니" 항목 내용이 쓰였다.
+        result = search.PolicySearchResult(narratives=[
+            search.NarrativeHit(item_id=1, logical_id=1, policy_name="배송지", category_path=[], status="active",
+                                 chunk_text="배송지 관련", score=0.9, raw_body="기본 배송지 자동 노출, 최대 30개"),
+            search.NarrativeHit(item_id=2, logical_id=2, policy_name="장바구니 최대 보관 수량", category_path=[], status="active",
+                                 chunk_text="장바구니 관련", score=0.5,
+                                 raw_body="기본 : 20개\n일반 탭 : 최대 20개\n예약 탭 : 최대 20개\n제외대상 : 추가구매상품"),
+        ])
+        answer = "장바구니 최대 보관 수량은 기본 20개이며, 일반 탭과 예약 탭 모두 최대 20개까지 보관 가능합니다. 제외대상은 추가구매상품입니다."
+        picked = search.select_cited_hit(result, answer)
+        assert len(picked.narratives) == 1
+        assert picked.narratives[0].policy_name == "장바구니 최대 보관 수량"
+
+    def test_picks_param_when_param_overlap_is_higher(self):
+        result = search.PolicySearchResult(
+            params=[search.ParamHit(item_id=1, logical_id=1, policy_name="장바구니", category_path=[], status="active",
+                                     param_name="최대개수", condition=None, value="20", unit="개",
+                                     raw_body="장바구니 최대개수 20개")],
+            narratives=[search.NarrativeHit(item_id=2, logical_id=2, policy_name="무관", category_path=[], status="active",
+                                             chunk_text="무관 내용", score=0.9, raw_body="전혀 다른 내용")],
+        )
+        picked = search.select_cited_hit(result, "장바구니 최대개수는 20개입니다.")
+        assert picked.params[0].policy_name == "장바구니"
+        assert picked.narratives == []
 
 
 class TestBuildPolicyCitations:

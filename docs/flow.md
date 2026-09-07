@@ -98,21 +98,38 @@
 │  │  → 이 네임스페이스에 policy_item이 있는지 EXISTS     │   │
 │  │    한 번(없으면 이하 전부 스킵 — 매 턴 낭비 방지)     │   │
 │  │                                                     │   │
-│  │  있으면: search_policy(ns, enriched_query,           │   │
+│  │  있으면: search_policy(ns, enriched_query, top_k=5,  │   │
 │  │          query_vec=query_vec)  ← 이미 계산한 벡터    │   │
 │  │          재사용, 재임베딩 안 함                       │   │
 │  │  → policy_param(RDB tsquery) + policy_chunk(벡터)   │   │
-│  │    동시 조회(raw_body도 함께 SELECT), 두 갈래로 가공: │   │
-│  │    · build_policy_context()  → LLM 프롬프트용 텍스트  │   │
-│  │    · build_policy_citations()→ 화면 "정책 근거" 카드용│   │
-│  │      구조화 데이터(policy_name/category_path/raw_body)│   │
+│  │    동시 조회(raw_body도 함께 SELECT), 최대 5+5=10건  │   │
+│  │  → build_policy_context(전체 후보)로 LLM 프롬프트용   │   │
+│  │    텍스트 생성 — 재현율 유지 위해 여기선 안 줄임      │   │
 │  │  (Track 2 실측으로 하이브리드 스키마 우세 확정 후     │   │
 │  │   편입 1단계(2026-09-04); "정책에서 온 답인지 구분이  │   │
 │  │   안 되고 원문도 안 보인다"는 피드백으로 2단계        │   │
-│  │   (2026-09-06) 진행 — policy_citations를 SSE meta    │   │
-│  │   이벤트 + ops_message.metadata에 별도 필드로 얹음.   │   │
-│  │   기존 results(rag_knowledge) 배열엔 안 섞음          │   │
+│  │   (2026-09-06) 진행 — 기존 results(rag_knowledge)    │   │
+│  │   배열엔 안 섞고 policy_citations 별도 필드로 얹음    │   │
 │  │   (FeedbackSection의 results[0].id 참조와 충돌 방지)) │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Step 2-2: 정책 근거 1건 역추적 (2026-09-07 추가)    │   │
+│  │  ※ LLM 답변 생성(Step 3) "이후"에 실행됨              │   │
+│  │                                                     │   │
+│  │  select_cited_hit(policy_result, final_answer)       │   │
+│  │  → 검색 후보 최대 10건 중 최종 답변 텍스트와 원문     │   │
+│  │    (raw_body) 토큰이 가장 많이 겹치는 1건만 역추적    │   │
+│  │  (구버전: 검색 직후 벡터 점수 1위를 미리 골라 LLM     │   │
+│  │   컨텍스트까지 줄였다가, 그 1위가 실제로 무관해서     │   │
+│  │   정답이 컨텍스트에서 빠져 "관련 지식을 찾지          │   │
+│  │   못했습니다"로 답변이 실패하는 걸 실측으로 발견,     │   │
+│  │   즉시 되돌림 — "근거가 너무 많이 보인다" 피드백은    │   │
+│  │   화면 카드 개수만 줄이고 LLM 재현율은 안 건드려야    │   │
+│  │   함을 확인)                                        │   │
+│  │  → build_policy_citations(1건)으로 카드 데이터화 후   │   │
+│  │    두 번째 meta SSE 이벤트로 늦게 전송(1차 meta는     │   │
+│  │    policy_citations 빈 배열)                         │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐   │

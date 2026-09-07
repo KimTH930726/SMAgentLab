@@ -1,6 +1,5 @@
 """지식베이스 RAG 에이전트 — AgentBase 구현."""
 import asyncio
-import json
 import logging
 from typing import AsyncIterator, Optional
 
@@ -126,15 +125,23 @@ class KnowledgeRagAgent(AgentBase):
             else:
                 results = results_raw[:top_k]
 
-            # 정책서 데이터 편입(2026-09-04 1단계, 2026-09-06 2단계) — Track 2로 하이브리드
-            # 스키마 우세 확정 후 rag_knowledge 검색과 별개로 정책 데이터도 doc_context에
-            # 텍스트로 얹는다(1단계). policy_available=False인 네임스페이스(정책 데이터 없음)는
-            # 이 블록 자체를 건너뛰어 매 턴 불필요한 쿼리를 피한다. 2단계: "정책에서 온 답인지
-            # 기준정보에서 온 답인지 구분이 안 되고 원문도 안 보인다"는 사용자 피드백으로
-            # policy_citations를 별도로 만들어 화면에 "정책 근거" 카드로 노출(§4-2/§6) —
-            # 기존 results(rag_knowledge 인용) 배열엔 안 섞는다(FeedbackSection이 results[0].id를
-            # rag_knowledge id로 쓰는 것과 충돌 방지).
+            # 정책서 데이터 편입(2026-09-04 1단계, 2026-09-06 2단계, 2026-09-07 근거 1건 선별)
+            # — Track 2로 하이브리드 스키마 우세 확정 후 rag_knowledge 검색과 별개로 정책
+            # 데이터도 doc_context에 텍스트로 얹는다(1단계). policy_available=False인
+            # 네임스페이스(정책 데이터 없음)는 이 블록 자체를 건너뛰어 매 턴 불필요한 쿼리를
+            # 피한다. 2단계: "정책에서 온 답인지 기준정보에서 온 답인지 구분이 안 되고 원문도
+            # 안 보인다"는 사용자 피드백으로 policy_citations를 별도로 만들어 화면에 "정책 근거"
+            # 카드로 노출(§4-2/§6) — 기존 results(rag_knowledge 인용) 배열엔 안 섞는다
+            # (FeedbackSection이 results[0].id를 rag_knowledge id로 쓰는 것과 충돌 방지).
+            # 근거 1건 선별(2026-09-07): "근거가 너무 많이 보인다, 원문 1건만" 피드백에 검색
+            # 직후 벡터 점수 1위 하나로 LLM 컨텍스트까지 줄여봤다가, 그 1위가 실제로 무관한
+            # 후보라 정답이 컨텍스트에서 빠져 "관련 지식을 찾지 못했습니다"로 답변이 실패하는
+            # 걸 실측으로 발견 — 즉시 되돌림. 그래서 LLM 컨텍스트(policy_context)는 원래대로
+            # top_k=5 다중 후보를 그대로 유지해 재현율을 지키고, 화면에 보여줄 근거 1건은
+            # 답변이 다 나온 "뒤에" select_cited_hit()으로 역추적한다(아래, final_answer 계산
+            # 직후). 그 전까지 policy_citations는 비워두고, 두 번째 meta 이벤트로 늦게 채운다.
             policy_context = ""
+            policy_result = policy_search.PolicySearchResult()
             policy_citations: list[dict] = []
             if policy_available:
                 try:
@@ -142,7 +149,6 @@ class KnowledgeRagAgent(AgentBase):
                         namespace, enriched_query, top_k=5, query_vec=query_vec,
                     )
                     policy_context = policy_search.build_policy_context(policy_result)
-                    policy_citations = policy_search.build_policy_citations(policy_result)
                 except Exception as e:
                     logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
 
@@ -156,9 +162,8 @@ class KnowledgeRagAgent(AgentBase):
 
             async with get_conn() as conn:
                 await conn.execute(
-                    "UPDATE ops_message SET mapped_term = $1, results = $2::jsonb, metadata = $4::jsonb WHERE id = $3",
+                    "UPDATE ops_message SET mapped_term = $1, results = $2::jsonb WHERE id = $3",
                     mapped_term, results_to_json(results), msg_id,
-                    json.dumps({"policy_citations": policy_citations}, ensure_ascii=False) if policy_citations else None,
                 )
 
             yield {
@@ -198,7 +203,26 @@ class KnowledgeRagAgent(AgentBase):
 
             final_answer = full_answer or LLM_UNAVAILABLE_MSG
             msg_status = "failed" if llm_failed else "completed"
-            await update_assistant_message(msg_id, final_answer, msg_status)
+
+            # 정책 근거 1건 역추적(2026-09-07) — 답변이 실제로 나온 뒤에야 어떤 후보를
+            # 참고했는지 알 수 있다(위 policy_result 정의부 주석 참고).
+            if policy_result.params or policy_result.narratives:
+                try:
+                    cited = policy_search.select_cited_hit(policy_result, final_answer)
+                    policy_citations = policy_search.build_policy_citations(cited)
+                except Exception as e:
+                    logger.warning("정책 근거 선택 실패(답변엔 영향 없음): %s", e)
+
+            await update_assistant_message(
+                msg_id, final_answer, msg_status,
+                metadata={"policy_citations": policy_citations} if policy_citations else None,
+            )
+            if policy_citations:
+                yield {
+                    "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
+                    "mapped_term": mapped_term, "results": results_to_payload(results),
+                    "policy_citations": policy_citations,
+                }
             if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
                 await update_inhouse_conv_id(conversation_id, new_inhouse_conv_id)
             await create_query_log(namespace, query, final_answer, has_results, mapped_term, msg_id, had_context=had_context)
