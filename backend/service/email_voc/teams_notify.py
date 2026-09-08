@@ -1,8 +1,10 @@
 """VOC 분석 결과 Teams 알림 발송 (docs/email-analysis-channel-plan.md §8, §10, §11 Track A #3).
 
-발송 채널은 §8에서 Teams "Workflows" 웹훅으로 확정됐고, 호출 로직은 §2에서 확인한 기존
-MCP 도구 실행기(agents/mcp_tool/agent.py의 _execute_http_call)를 그대로 재사용한다.
-신규 발송 모듈을 처음부터 만들 필요가 없다는 게 설계의 핵심 전제였다.
+발송 채널은 §8에서 Teams "Workflows" 웹훅으로 확정됐고, 호출 로직은 공용 아웃바운드 HTTP
+레이어(shared/http_client.py)를 쓴다. 원래는 MCP 도구 에이전트의 실행기를 그대로 재사용했으나
+(2026-09-08 이전), MCP 도구 기능 자체를 걷어내면서 그 실행기 중 "그냥 HTTP 호출" 부분만
+shared로 이관했다 — 도구 레지스트리·LLM 파라미터 추출 같은 MCP 전용 개념과는 무관한, 순수
+HTTP 클라이언트 재사용이라는 원래 설계 전제는 그대로 유지된다.
 
 페이로드 포맷: 처음엔 Adaptive Card(attachments)로 만들었으나, 이미 검증된 사내 다른
 프로젝트(playwrite/modules/teams_notifier.py)의 Power Automate "Workflows" 플로우가
@@ -24,7 +26,7 @@ import html
 import logging
 from typing import Optional
 
-from agents.mcp_tool.agent import _execute_http_call
+from shared.http_client import call_http
 
 logger = logging.getLogger(__name__)
 
@@ -189,13 +191,14 @@ def build_teams_message(
 
 
 async def send_teams_notification(webhook_url: str, message: dict) -> tuple[bool, Optional[str]]:
-    """Workflows 웹훅으로 POST — 기존 MCP 도구 실행기(_execute_http_call) 재사용.
+    """Workflows 웹훅으로 POST — 공용 아웃바운드 HTTP 레이어(shared/http_client.py) 사용.
 
     Returns:
         (성공 여부, 실패 시 에러 메시지)
     """
-    tool = {"method": "POST", "url": webhook_url, "headers": {"Content-Type": "application/json"}}
-    _body, error, status, _kb, _ms = await _execute_http_call(tool, message)
+    _body, error, status, _kb, _ms = await call_http(
+        "POST", webhook_url, json_body=message, headers={"Content-Type": "application/json"},
+    )
     if error:
         logger.warning("VOC Teams 알림 발송 실패 (status=%s): %s", status, error)
         return False, error

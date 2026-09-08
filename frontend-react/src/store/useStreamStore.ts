@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { streamChat } from '../api/chat';
-import type { ChatMessage, KnowledgeResult, PolicyCitation, SSEToolRequestEvent, SSESqlEvent, SSETableEvent, SSEChartEvent } from '../types';
+import type { ChatMessage, KnowledgeResult, PolicyCitation, SSESqlEvent, SSETableEvent, SSEChartEvent } from '../types';
 
 // Module-level (non-reactive, not in Zustand state)
 let _controller: AbortController | null = null;
@@ -26,12 +26,6 @@ interface StreamState {
   active: boolean;
   /** Backend message ID for the assistant message (set from meta event) */
   assistantMessageId: number | null;
-  /** Tool request awaiting user approval */
-  toolRequest: SSEToolRequestEvent | null;
-  /** Tool execution result preview */
-  toolResult: string | null;
-  /** Tool error message */
-  toolError: string | null;
   /** Text2SQL: generated SQL */
   sqlResult: SSESqlEvent | null;
   /** Text2SQL: query result table */
@@ -46,9 +40,6 @@ export const useStreamStore = create<StreamState>(() => ({
   steps: [],
   active: false,
   assistantMessageId: null,
-  toolRequest: null,
-  toolResult: null,
-  toolError: null,
   sqlResult: null,
   tableResult: null,
 }));
@@ -64,8 +55,6 @@ export function startChatStream(params: {
   topK: number;
   conversationId: number | null;
   categories?: string[] | null;
-  approvedTool?: { tool_id: number; params: Record<string, string> } | null;
-  selectedToolId?: number | null;
   onConversationCreated: (id: number) => void;
 }) {
   // Abort any existing stream & detach controller so old _runStream can't mutate state
@@ -92,9 +81,6 @@ export function startChatStream(params: {
     steps: [],
     active: true,
     assistantMessageId: null,
-    toolRequest: null,
-    toolResult: null,
-    toolError: null,
     sqlResult: null,
     tableResult: null,
   });
@@ -127,9 +113,6 @@ export function clearStreamState() {
     steps: [],
     active: false,
     assistantMessageId: null,
-    toolRequest: null,
-    toolResult: null,
-    toolError: null,
     sqlResult: null,
     tableResult: null,
   });
@@ -147,8 +130,6 @@ async function _runStream(
     topK: number;
     conversationId: number | null;
     categories?: string[] | null;
-    approvedTool?: { tool_id: number; params: Record<string, string> } | null;
-    selectedToolId?: number | null;
     onConversationCreated: (id: number) => void;
   },
   controller: AbortController,
@@ -176,8 +157,6 @@ async function _runStream(
       topK: params.topK,
       conversationId: params.conversationId,
       categories: params.categories,
-      approvedTool: params.approvedTool ?? null,
-      selectedToolId: params.selectedToolId ?? null,
       signal: controller.signal,
     });
 
@@ -216,18 +195,6 @@ async function _runStream(
       } else if (event.type === 'token') {
         const token = (event as { type: 'token'; data: string }).data;
         updateLastMessage((m) => ({ ...m, content: m.content + token }));
-      } else if (event.type === 'tool_request') {
-        set({ toolRequest: event as SSEToolRequestEvent });
-        // 도구 요청 시 스트리밍 중단 상태로 전환 (사용자 입력 대기)
-        updateLastMessage((m) => ({ ...m, isStreaming: false }));
-      } else if (event.type === 'tool_result') {
-        const data = (event as { data: string }).data;
-        set({ toolResult: data });
-      } else if (event.type === 'tool_error') {
-        const msg = (event as { message: string }).message;
-        set({ toolError: msg });
-        updateLastMessage((m) => ({ ...m, toolError: msg }));
-        // isStreaming 유지 — HTTP 실패 후 RAG 기반 LLM 답변이 이어짐
       } else if (event.type === 'sql') {
         const sqlEvent = event as SSESqlEvent;
         set({ sqlResult: sqlEvent });

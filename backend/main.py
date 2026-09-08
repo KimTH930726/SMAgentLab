@@ -20,7 +20,6 @@ from agents.knowledge_rag.knowledge.router import router as knowledge_router
 from agents.knowledge_rag.fewshot.router import router as fewshot_router
 from service.feedback.router import router as feedback_router
 from service.admin.router import router as admin_router
-from service.mcp_tool.router import router as mcp_tool_router
 from service.prompt.router import router as prompt_router
 from service.teams.router import router as teams_router
 from service.email_voc.router import router as email_voc_router
@@ -28,16 +27,15 @@ from service.email_voc.scheduler import start_scheduler, stop_scheduler
 from service.policy.router import router as policy_router
 
 from shared import cache as sem_cache
+from shared.http_client import close_http_client
 from agents.base import AgentRegistry
 from agents.knowledge_rag.agent import KnowledgeRagAgent
-from agents.mcp_tool.agent import McpToolAgent, close_http_client as close_mcp_http_client
 
 logger = logging.getLogger(__name__)
 
 _ROUTERS = [
     auth_router, chat_router, knowledge_router,
     fewshot_router, feedback_router, admin_router,
-    mcp_tool_router,
     prompt_router,
     teams_router,
     email_voc_router,
@@ -244,7 +242,6 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS meta JSONB")
-    await conn.execute("ALTER TABLE IF EXISTS ops_mcp_tool ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
 
     # ── query_log answer 역매칭 ────────────────────────────────────
     # namespace 내에서 ql.question과 동일한 내용의 user 메시지가 앞서 존재하는
@@ -335,66 +332,12 @@ async def _migrate_namespace_ids(conn) -> None:
         """)
 
 
-async def _migrate_mcp_tables(conn) -> None:
-    """ops_mcp_tool, ops_mcp_tool_log, ops_part_agent_access 테이블 마이그레이션."""
-    # ── MCP 도구 테이블 (ops_http_tool 하위 호환 마이그레이션) ──────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS ops_mcp_tool (
-            id              SERIAL PRIMARY KEY,
-            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            name            VARCHAR(100) NOT NULL,
-            description     TEXT NOT NULL DEFAULT '',
-            method          VARCHAR(10) NOT NULL DEFAULT 'GET',
-            hub_base_url    TEXT NOT NULL DEFAULT '',
-            tool_path       TEXT NOT NULL DEFAULT '',
-            headers         JSONB NOT NULL DEFAULT '{}',
-            param_schema    JSONB NOT NULL DEFAULT '[]',
-            response_example JSONB,
-            timeout_sec     INT NOT NULL DEFAULT 10,
-            max_response_kb INT NOT NULL DEFAULT 50,
-            is_active       BOOLEAN NOT NULL DEFAULT TRUE,
-            created_by_user_id INT,
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_tool_ns_active ON ops_mcp_tool (namespace_id, is_active)")
-    # ops_http_tool이 존재하면 데이터 이전 후 삭제
-    try:
-        await conn.execute("""
-            INSERT INTO ops_mcp_tool (namespace_id, name, description, method, hub_base_url, tool_path, headers,
-                param_schema, response_example, timeout_sec, max_response_kb, is_active, created_by_user_id, created_at, updated_at)
-            SELECT namespace_id, name, description, method, '', url, headers,
-                param_schema, response_example, timeout_sec, max_response_kb, is_active, created_by_user_id, created_at, updated_at
-            FROM ops_http_tool
-            WHERE NOT EXISTS (SELECT 1 FROM ops_mcp_tool WHERE ops_mcp_tool.namespace_id = ops_http_tool.namespace_id AND ops_mcp_tool.name = ops_http_tool.name)
-        """)
-    except Exception:
-        pass  # ops_http_tool이 없는 경우 (신규 설치)
+async def _migrate_part_agent_access_table(conn) -> None:
+    """ops_part_agent_access 테이블 마이그레이션.
 
-    # ── MCP 도구 감사 로그 테이블 ──────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS ops_mcp_tool_log (
-            id              SERIAL PRIMARY KEY,
-            tool_id         INT REFERENCES ops_mcp_tool(id) ON DELETE SET NULL,
-            tool_name       VARCHAR(100),
-            user_id         INT REFERENCES ops_user(id) ON DELETE SET NULL,
-            namespace_id    INT REFERENCES ops_namespace(id),
-            conversation_id INT,
-            params          JSONB,
-            response_status INT,
-            response_kb     FLOAT,
-            duration_ms     INT,
-            error           TEXT,
-            called_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_tool_log_ns ON ops_mcp_tool_log (namespace_id, called_at DESC)")
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_tool_log_tool ON ops_mcp_tool_log (tool_id, called_at DESC)")
-    # 기존 테이블에 컬럼 추가 (없으면 추가)
-    await conn.execute("ALTER TABLE ops_mcp_tool_log ADD COLUMN IF NOT EXISTS request_url TEXT")
-    await conn.execute("ALTER TABLE ops_mcp_tool_log ADD COLUMN IF NOT EXISTS http_method VARCHAR(10)")
-
+    (2026-09-08 이전엔 ops_mcp_tool/ops_mcp_tool_log도 이 함수에서 같이 만들었다 — MCP 도구
+    기능 제거와 함께 그 부분은 삭제됐다. 이 테이블은 MCP 전용이 아닌 범용 파트-에이전트
+    접근권한 테이블이라 그대로 남긴다.)"""
     # ── 파트-에이전트 접근 제어 ──────────────────────────────────────────
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS ops_part_agent_access (
@@ -448,12 +391,9 @@ async def _migrate_system_tables(conn) -> None:
     await conn.execute("""
         INSERT INTO ops_prompt (func_key, func_name, content, description, agent_type) VALUES
         ('chat_system',         'RAG 채팅 시스템',         $1,  'RAG 기반 지식 검색 채팅의 시스템 프롬프트',                              'knowledge_rag'),
-        ('tool_select',         'MCP 도구 선택',           $2,  'MCP 도구를 선택하고 파라미터를 추출하는 프롬프트',                        'mcp_tool'),
-        ('tool_answer',         'MCP 응답 답변',           $3,  'MCP API 응답 데이터 기반으로 답변을 생성하는 프롬프트',                   'mcp_tool'),
-        ('autocomplete',        '도구 등록 자동완성',       $4,  'MCP 도구 등록 시 자연어→JSON 변환 프롬프트',                             'mcp_tool'),
-        ('category_suggest',    '카테고리 자동 추천',       $5,  '지식 내용 분석 후 업무구분 추천. {categories}·{content} 플레이스홀더 필수', 'knowledge_rag'),
-        ('glossary_suggest',    '용어 추천 시스템',         $6,  '미매핑 질문에서 업무 용어를 추출하는 시스템 프롬프트',                    'knowledge_rag'),
-        ('conv_summarize',      '대화 요약',               $7,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all')
+        ('category_suggest',    '카테고리 자동 추천',       $2,  '지식 내용 분석 후 업무구분 추천. {categories}·{content} 플레이스홀더 필수', 'knowledge_rag'),
+        ('glossary_suggest',    '용어 추천 시스템',         $3,  '미매핑 질문에서 업무 용어를 추출하는 시스템 프롬프트',                    'knowledge_rag'),
+        ('conv_summarize',      '대화 요약',               $4,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all')
         ON CONFLICT (func_key) DO NOTHING
     """,
         # chat_system — NO_KNOWLEDGE_MARKER를 그대로 삽입해 service/chat/helpers.py의
@@ -474,26 +414,6 @@ async def _migrate_system_tables(conn) -> None:
 - Markdown(표, 목록, 코드 블록, 볼드) 사용. 한국어 답변.
 - 컨테이너명, 테이블명, SQL이 있으면 반드시 포함.
 - 답변 끝에 근거 표시: 📎 문서 N, 문서 M 참고""",
-        # tool_select
-        """HTTP API 도구 선택 AI. 사용자 질문을 분석해 도구를 선택하고 파라미터를 추출한다.
-
-규칙:
-1. 파라미터 값은 사용자 메시지에서 명시된 값만 추출. 언급 없으면 missing_params에 등록.
-2. example 값은 입력 힌트일 뿐 — 사용자가 말하지 않은 경우 절대 기본값으로 채우지 말 것.
-3. 도구 설명이 질문 의도와 명확히 맞을 때만 선택. 불확실하면 no_tool 반환.
-4. 반드시 순수 JSON만 출력. 마크다운·설명 없이.""",
-        # tool_answer
-        """실시간 API 데이터와 내부 지식베이스를 통합하여 사용자 질문에 답변하는 AI.
-
-답변 원칙:
-- API 데이터: 현재 상태·실시간 값의 1차 근거. 빈 배열·null은 "조회 결과 없음"으로 해석.
-- 내부 지식베이스: 코드 정의·업무 규칙·배경 지식. API 응답에 코드값(예: "W", "40", "01")이 있으면 지식베이스에서 해당 정의를 찾아 함께 설명.
-- 두 소스를 통합해 완성도 높게 답변. API가 비어있어도 지식베이스로 답변 가능하면 답변.
-- 어느 소스에도 없는 내용은 생성하지 마세요.
-- Markdown 형식, 한국어 답변.""",
-        # autocomplete
-        """당신은 JSON 변환 전문가입니다. 사용자가 자연어로 설명하는 HTTP API 정보를 구조화된 JSON으로 변환합니다.
-반드시 JSON만 출력하세요. 설명, 인사말, 마크다운 코드 블록 없이 순수 JSON만 반환합니다.""",
         # category_suggest
         """다음 지식 내용을 읽고, 제시된 업무구분 중 가장 적합한 하나를 골라주세요. 반드시 제시된 업무구분 중 하나의 이름만 답하고, 다른 설명은 절대 하지 마세요.
 
@@ -517,10 +437,6 @@ async def _migrate_system_tables(conn) -> None:
     await conn.execute("""
         UPDATE ops_prompt SET agent_type = 'knowledge_rag'
         WHERE func_key IN ('chat_system','category_suggest','glossary_suggest') AND agent_type = 'all'
-    """)
-    await conn.execute("""
-        UPDATE ops_prompt SET agent_type = 'mcp_tool'
-        WHERE func_key IN ('tool_select','tool_answer','autocomplete') AND agent_type = 'all'
     """)
 
 
@@ -947,7 +863,7 @@ async def _run_migrations() -> None:
     async with get_conn() as conn:
         await _migrate_core_tables(conn)
         await _migrate_namespace_ids(conn)
-        await _migrate_mcp_tables(conn)
+        await _migrate_part_agent_access_table(conn)
         await _migrate_system_tables(conn)
         await _migrate_knowledge_ingestion(conn)
         await _migrate_duplicate_review(conn)
@@ -988,7 +904,6 @@ async def lifespan(_app: FastAPI):
 
     # ── 에이전트 등록 ──
     AgentRegistry.register(KnowledgeRagAgent())
-    AgentRegistry.register(McpToolAgent())
 
     llm_ok = await get_llm_provider().health_check()
     level, msg = ("INFO", "연결 확인됨") if llm_ok else ("WARNING", "연결 불가 — LLM 기능 제한")
@@ -998,7 +913,7 @@ async def lifespan(_app: FastAPI):
 
     yield
     await stop_scheduler()
-    await close_mcp_http_client()
+    await close_http_client()
     await close_pool()
 
 

@@ -110,9 +110,9 @@ def _make_key(namespace: str, agent_type: str, vec: list[float]) -> str:
 async def get_cached(namespace: str, agent_type: str, query_vec: list[float]) -> dict | None:
     """유사 질문 캐시 조회. 없거나 Redis 미연결이면 None 반환.
 
-    agent_type으로 캐시를 분리한다 — knowledge_rag 에이전트의 정적 RAG 답변이
-    실시간 조회가 핵심인 mcp_tool 에이전트 요청에 재사용되면(또는 그 반대),
-    실제 도구 호출이 조용히 스킵된 채 무관한 캐시 답변이 나가는 문제가 있었다.
+    agent_type으로 캐시를 분리한다 — 성격이 다른 에이전트(예: 정적 지식 검색 vs 실시간
+    데이터 조회) 사이에서 답변이 잘못 재사용되면, 실제로 다시 조회했어야 할 요청이
+    조용히 스킵된 채 무관한 캐시 답변이 나가는 문제가 있을 수 있다.
     """
     if not _cache_enabled:
         return None

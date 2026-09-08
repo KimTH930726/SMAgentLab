@@ -1,14 +1,27 @@
-# Ops-Navigator 시스템 아키텍처 (v2.66)
+# Ops-Navigator 시스템 아키텍처 (v2.67)
 
 ## 개요
 
 Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화하는 **지능형 운영 보조 에이전트 플랫폼**이다.
-사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG), HTTP API 연동(MCP 도구).
+사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG).
 
 > Text-to-SQL 에이전트는 v2.51에서 `dev_0`/`main`에서 분리·제거됐다(현재 과업 범위 아님) — 코드는
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
+> MCP 도구 에이전트는 v2.67에서 완전 제거됐다(Text2SQL과 달리 브랜치 보존 없음 — 배경은
+> `docs/tech/mcp-tool-removal-plan.md` 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.67: **MCP 도구 에이전트 완전 제거** — 관리자 화면·채팅 UI에 걸쳐 안 쓰는 기능이 계속
+  노출되는 게 잡다하다는 판단으로 시작, 이후 `McpToolAgent`가 RAG 검색 로직(`retrieval.py`)을
+  내부에서 직접 재구현해 안고 있는 구조적 결합까지 확인되어 제거 근거가 명확해짐. VOC Teams
+  발송이 MCP 에이전트의 `_execute_http_call`을 재사용 중이던 의존성은 먼저 `shared/http_client.py`
+  (`call_http()`)로 이관해 끊음 — 도구 레지스트리 전용 개념(파라미터 타입 변환 등)은 가져오지
+  않고 순수 HTTP 호출 기능만 옮김. 백엔드(`agents/mcp_tool/`, `service/mcp_tool/`)·프론트(관리자
+  MCP 도구 탭, 채팅 MCP 토글, 디버그 패널의 MCP 실행 섹션, 관련 SSE 이벤트·타입) 전부 제거.
+  `ops_mcp_tool`/`ops_mcp_tool_log` 테이블과 `ops_prompt`의 mcp_tool 프롬프트 3행은 Text2SQL
+  전례와 동일하게 삭제 마이그레이션 없이 방치(기존 설치엔 남지만 무해). 상세 근거·실행 기록은
+  `docs/tech/mcp-tool-removal-plan.md` 참고. 검증: 백엔드 테스트 343개 통과, `npx tsc --noEmit`
+  + `npm run build` 통과.
 - v2.66: **정책 근거 카드를 1건으로 압축 — 답변 생성 후 역추적 방식** — v2.65 배포 직후
   사용자가 "근거가 너무 많이 보인다(지식 3개 + 정책 10개), 원문 정책 1건만 보여달라"고
   지적, 이어서 "10개를 참조해서 답변 만든 거냐"는 확인 질문(답은 "그동안은 그랬다" —
@@ -300,11 +313,10 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 | **Login** (`/login`) | JWT 로그인 — Access Token + Refresh Token 발급 |
 | **Register** (`/register`) | 회원가입 — 부서 선택 + 선택적 LLM API Key 등록 |
 | **AgentSelect** (로그인 직후) | 에이전트 선택 화면 — 지식베이스 AI 카드 선택. `selectedAgent=null`이면 이 화면 표시 (사이드바 없음) |
-| **Chat** (`/`) | 에이전트별 채팅 — SSE 스트리밍, 결과 카드, 피드백(👍→few-shot/base_weight), 대화 메모리(요약+리콜), Markdown 답변, MCP 도구 토글 |
-| **Admin** (`/admin`) | 에이전트별 관리 화면 — `agentScope` 필드로 탭 필터링. knowledge_rag: 네임스페이스·지식·용어집·Few-shot·MCP도구·캐시현황·통계·디버그. 공통: 시스템설정·사용자관리. (에이전트현황 탭 제거 — AgentSelect 화면에 헬스배지로 대체) |
+| **Chat** (`/`) | 에이전트별 채팅 — SSE 스트리밍, 결과 카드, 피드백(👍→few-shot/base_weight), 대화 메모리(요약+리콜), Markdown 답변 |
+| **Admin** (`/admin`) | 에이전트별 관리 화면 — `agentScope` 필드로 탭 필터링. knowledge_rag: 네임스페이스·지식·용어집·Few-shot·캐시현황·통계·디버그. 공통: 시스템설정·사용자관리. (에이전트현황 탭 제거 — AgentSelect 화면에 헬스배지로 대체) |
 
 - **Agent-centric 라우팅**: `useAppStore.selectedAgent: 'knowledge_rag' | null`. null이면 AgentSelect 표시, 설정 시 에이전트별 UI로 전환. 로그아웃 시 null로 리셋
-- **MCP 도구 토글**: ChatContainer 내 `useHttpTool` boolean — ON 시 `agentType='mcp_tool'`, OFF 시 `selectedAgent` 값 사용. 에이전트가 아닌 도구
 - **ProtectedRoute**: 로그인되지 않은 사용자는 `/login`으로 리다이렉트
 - **useAuthStore** (Zustand): localStorage에 토큰 저장, 자동 Bearer 토큰 주입
 - **401 Auto-refresh**: Access Token 만료 시 Refresh Token으로 자동 갱신, 실패 시 로그아웃
@@ -335,15 +347,11 @@ backend/
 │   │   │   ├── web_crawler.py   #   URL/Confluence 수집 (httpx + BeautifulSoup + Confluence REST API)
 │   │   │   └── utils.py         #   공통 JSON 파싱 헬퍼
 │   │   └── fewshot/     #   Few-shot CRUD (status: active/candidate)
-│   ├── mcp_tool/
-│   │   └── agent.py     #   McpToolAgent — 3-case 플로우 + RAG + 감사 로그
-│   └── http_tool/       #   HttpToolAgent (레거시)
 ├── service/             # 플랫폼 공통 레이어 (was domain/, platform/ 명칭 stdlib 충돌로 service/ 확정)
 │   ├── auth/            #   인증/계정 (JWT, bcrypt, Fernet API Key 암호화)
 │   ├── chat/            #   채팅 라우터·헬퍼·메모리 (AgentRegistry 위임)
 │   ├── feedback/        #   피드백 기록 + base_weight 조정
 │   ├── admin/           #   네임스페이스·통계·LLM 설정
-│   ├── mcp_tool/        #   MCP 도구 CRUD + 감사 로그
 │   ├── prompt/          #   프롬프트 관리 (get_prompt: DB 우선, fallback)
 │   ├── llm/             #   LLM Provider 추상화 (ollama / inhouse)
 │   ├── email_voc/       #   VOC 이메일 분석 채널 (v2.40 신규)
@@ -375,7 +383,8 @@ backend/
 │   └── dependencies.py  # get_current_user, get_current_admin, check_namespace_ownership
 └── shared/
     ├── embedding.py     # Sentence-Transformers 싱글톤
-    └── cache.py         # Semantic Cache (Redis, 유사도 0.88, TTL 30분, graceful degradation)
+    ├── cache.py         # Semantic Cache (Redis, 유사도 0.88, TTL 30분, graceful degradation)
+    └── http_client.py   # 아웃바운드 HTTP 호출 공용 레이어 (call_http, v2.67 — VOC Teams 발송이 사용)
 ```
 
 **주요 설계 원칙:**
@@ -454,8 +463,6 @@ ops_conversation      -- 대화방 (namespace_id FK, user_id FK, agent_type)
 ops_message           -- 대화 메시지 (role, content, results JSONB, metadata JSONB)
 ops_feedback          -- 👍/👎 피드백 로그 (agent_type, meta JSONB)
 ops_query_log         -- 질의 로그 (status: pending/resolved/unresolved, agent_type)
-ops_mcp_tool          -- MCP 도구 정의 (hub_base_url, tool_path, param_schema JSONB, agent_type)
-ops_mcp_tool_log      -- MCP 도구 감사 로그
 ops_prompt            -- 프롬프트 관리 (agent_type별 에이전트 스코핑, Admin 시스템설정 탭에서 편집)
 ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 영속화, VOC 폴링 정책/Graph 자격증명도 여기 저장)
 
@@ -665,19 +672,6 @@ rag_ingestion_job     -- 인제스천 작업 이력 (source_type, status, auto_g
 
 상세 설계·의사결정 배경은 `docs/email-analysis-channel-plan.md` 참조.
 
-### MCP 도구
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `GET` | `/api/mcp-tools` | 네임스페이스 MCP 도구 목록 |
-| `POST` | `/api/mcp-tools` | 도구 등록 |
-| `PATCH` | `/api/mcp-tools/{id}` | 도구 수정 |
-| `PATCH` | `/api/mcp-tools/{id}/toggle` | 도구 활성/비활성 토글 |
-| `DELETE` | `/api/mcp-tools/{id}` | 도구 삭제 |
-| `POST` | `/api/mcp-tools/{id}/test` | 도구 테스트 실행 |
-| `POST` | `/api/mcp-tools/autocomplete` | 자연어 입력 → 도구 JSON 자동완성 |
-| `GET` | `/api/mcp-tools/logs` | 도구 호출 감사 로그 조회 |
-
 ---
 
 ## LLM Provider 확장 구조
@@ -782,6 +776,6 @@ final_score = (w_vec × v_score + w_kw × k_score) × (1 + base_weight)
 
 ### 비벡터 주요 테이블
 
-`ops_part`, `ops_user`, `ops_namespace`, `rag_knowledge_category`, `ops_feedback`, `ops_query_log`, `ops_conversation`, `ops_message`, `ops_mcp_tool`, `ops_mcp_tool_log`, `ops_prompt`, `ops_system_config`
+`ops_part`, `ops_user`, `ops_namespace`, `rag_knowledge_category`, `ops_feedback`, `ops_query_log`, `ops_conversation`, `ops_message`, `ops_prompt`, `ops_system_config`
 
 전체 스키마 정의는 `docs/table-definition.md` 참조.

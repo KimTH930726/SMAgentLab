@@ -175,7 +175,6 @@ export interface ChatMessage {
   question?: string;
   has_feedback?: boolean;
   messageId?: number;
-  toolError?: string | null;
   status?: string;
   sqlResult?: { sql: string; reasoning: string; cached: boolean } | null;
   tableResult?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null;
@@ -247,14 +246,9 @@ export interface SSEChartEvent {
   };
 }
 
-export type SSEEvent = SSEStatusEvent | SSEMetaEvent | SSETokenEvent | SSEDoneEvent | SSEToolRequestEvent | SSEToolResultEvent | SSEToolErrorEvent | SSESqlEvent | SSETableEvent | SSEChartEvent;
+export type SSEEvent = SSEStatusEvent | SSEMetaEvent | SSETokenEvent | SSEDoneEvent | SSESqlEvent | SSETableEvent | SSEChartEvent;
 
 // Chat request
-export interface ApprovedTool {
-  tool_id: number;
-  params: Record<string, string>;
-}
-
 export interface ChatRequest {
   namespace: string;
   question: string;
@@ -264,8 +258,6 @@ export interface ChatRequest {
   topK?: number;
   conversationId?: number | null;
   categories?: string[] | null;
-  approvedTool?: ApprovedTool | null;
-  selectedToolId?: number | null;
   signal?: AbortSignal;
 }
 
@@ -360,86 +352,6 @@ export interface GlobalStats {
     glossary_count: number;
   }>;
   unresolved_cases: Array<{ namespace: string; question: string; created_at: string }>;
-}
-
-// MCP Tool types
-export interface McpToolParam {
-  name: string;
-  type: string;
-  required: boolean;
-  description: string;
-  example?: string | null;
-}
-
-export interface McpTool {
-  id: number;
-  namespace: string;
-  name: string;
-  description: string;
-  method: string;
-  hub_base_url: string;
-  tool_path: string;
-  url: string; // hub_base_url + tool_path (서버에서 조합)
-  headers: Record<string, string>;
-  param_schema: McpToolParam[];
-  response_example: Record<string, unknown> | null;
-  timeout_sec: number;
-  max_response_kb: number;
-  is_active: boolean;
-  agent_type: string;
-  created_at: string;
-}
-
-export interface McpToolCreatePayload {
-  namespace: string;
-  name: string;
-  description: string;
-  method: string;
-  hub_base_url: string;
-  tool_path: string;
-  headers: Record<string, string>;
-  param_schema: McpToolParam[];
-  response_example?: Record<string, unknown> | null;
-  timeout_sec?: number;
-  max_response_kb?: number;
-  agent_type: string;
-}
-
-export interface McpToolUpdatePayload {
-  name?: string;
-  description?: string;
-  method?: string;
-  hub_base_url?: string;
-  tool_path?: string;
-  headers?: Record<string, string>;
-  param_schema?: McpToolParam[];
-  response_example?: Record<string, unknown> | null;
-  timeout_sec?: number;
-  max_response_kb?: number;
-}
-
-// SSE Tool events
-export interface SSEToolRequestEvent {
-  type: 'tool_request';
-  action: 'confirm' | 'missing_params' | 'no_tool_needed' | 'no_tools';
-  tool_id?: number;
-  tool_name?: string;
-  tool_url?: string;
-  params?: Record<string, string>;
-  missing_params?: string[];
-  param_schema?: McpToolParam[];
-  tools?: Array<{ id: number; name: string; description: string }>;
-  message?: string;
-}
-
-export interface SSEToolResultEvent {
-  type: 'tool_result';
-  data: string;
-}
-
-export interface SSEToolErrorEvent {
-  type: 'tool_error';
-  message: string;
 }
 
 // Debug search types

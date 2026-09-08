@@ -23,7 +23,7 @@ const AGENTS: AgentCard[] = [
     icon: <BookOpen className="w-8 h-8" />,
     title: '운영 자동화 보조 에이전트',
     description: '사내 문서·지식을 기반으로 질문에 답변합니다.',
-    features: ['문서 RAG 검색', '하이브리드 벡터/키워드 검색', 'MCP 도구 연동 (선택)', '멀티턴 대화 메모리'],
+    features: ['문서 RAG 검색', '하이브리드 벡터/키워드 검색', '멀티턴 대화 메모리'],
     color: 'text-indigo-400',
     border: 'border-indigo-500/50 hover:border-indigo-400',
     iconBg: 'bg-indigo-500/10',
