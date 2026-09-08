@@ -113,6 +113,25 @@ async def resolve_duplicate(knowledge_id: int, body: ResolveDuplicateRequest, us
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/review-flags")
+async def get_review_flags(
+    namespace: str = Query(...),
+    user: dict = Depends(get_current_user),
+):
+    await check_namespace_ownership(namespace, user)
+    return await service.get_review_flags(namespace)
+
+
+@router.post("/review-flags/{flag_id}/resolve", status_code=200)
+async def resolve_review_flag(flag_id: int, user: dict = Depends(get_current_user)):
+    ns = await service.get_review_flag_namespace(flag_id)
+    await _require_resource_namespace(ns, user, "Review flag not found")
+    resolved = await service.resolve_review_flag(flag_id)
+    if not resolved:
+        raise HTTPException(status_code=404, detail="Review flag not found")
+    return {"status": "resolved"}
+
+
 class BulkDeleteRequest(BaseModel):
     ids: list[int]
 

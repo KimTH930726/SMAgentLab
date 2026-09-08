@@ -69,8 +69,8 @@ async def create_knowledge(
                 INSERT INTO rag_knowledge
                     (namespace_id, container_name, target_tables, content,
                      query_template, embedding, base_weight, category,
-                     created_by_part, created_by_user_id, status)
-                VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11)
+                     created_by_part, created_by_user_id, status, embedding_model)
+                VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12)
                 RETURNING id, namespace_id, container_name, target_tables,
                           content, query_template, base_weight, category, status,
                           created_by_part, created_by_user_id,
@@ -78,7 +78,7 @@ async def create_knowledge(
                 """,
                 ns_id, container_name, target_tables, content,
                 query_template, str(embedding), base_weight, category,
-                created_by_part, created_by_user_id, status,
+                created_by_part, created_by_user_id, status, _EMBEDDING_MODEL_NAME,
             )
             if is_duplicate:
                 await conn.executemany(
@@ -149,19 +149,27 @@ async def update_knowledge(
 
 
 async def delete_knowledge(knowledge_id: int) -> bool:
+    """소프트 삭제 — status='deleted'로만 바꾼다(하드 DELETE 아님).
+
+    검색/목록(search_knowledge, list_knowledge 기본값)은 이미 status='active'만 보므로
+    삭제된 행은 즉시 안 보이게 되지만, 실수 삭제 시 복구 가능하다(knowledge-lifecycle-design.md
+    §4 Phase 1 — 하드 삭제 위험 대응)."""
     async with get_conn() as conn:
         result = await conn.execute(
-            "DELETE FROM rag_knowledge WHERE id = $1", knowledge_id
+            "UPDATE rag_knowledge SET status = 'deleted', updated_at = NOW() WHERE id = $1 AND status != 'deleted'",
+            knowledge_id,
         )
-    return result == "DELETE 1"
+    return result == "UPDATE 1"
 
 
 async def bulk_delete_knowledge(ids: list[int]) -> int:
+    """소프트 삭제(일괄) — delete_knowledge와 동일하게 status만 변경."""
     if not ids:
         return 0
     async with get_conn() as conn:
         result = await conn.execute(
-            "DELETE FROM rag_knowledge WHERE id = ANY($1::int[])", ids
+            "UPDATE rag_knowledge SET status = 'deleted', updated_at = NOW() WHERE id = ANY($1::int[]) AND status != 'deleted'",
+            ids,
         )
     return int(result.split()[-1])
 
@@ -347,14 +355,26 @@ async def resolve_duplicate(
     merge_content = content.strip() if content and content.strip() else pending["content"]
     embedding = await embedding_service.embed(merge_content)
     async with get_conn() as conn:
-        target = await conn.fetchrow(
-            "UPDATE rag_knowledge SET content = $1, embedding = $2::vector, updated_at = NOW() "
-            "WHERE id = $3 RETURNING id, content",
-            merge_content, str(embedding), target_id,
-        )
-        if not target:
-            raise ValueError(f"병합 대상 지식을 찾을 수 없습니다 (id={target_id}).")
-        await conn.execute("UPDATE rag_knowledge SET status = 'rejected' WHERE id = $1", knowledge_id)
+        async with conn.transaction():
+            # 덮어쓰기 전에 기존 content/embedding을 이력 테이블에 먼저 보존한다 —
+            # 이전엔 병합이 대상 행을 그 자리에서 덮어써 원문이 어디에도 안 남았다
+            # (knowledge-lifecycle-design.md §2.2 "실질적 데이터 소실 위험", 우선순위 1위).
+            before = await conn.fetchrow(
+                "SELECT content, embedding FROM rag_knowledge WHERE id = $1", target_id
+            )
+            if not before:
+                raise ValueError(f"병합 대상 지식을 찾을 수 없습니다 (id={target_id}).")
+            await conn.execute(
+                "INSERT INTO rag_knowledge_history (knowledge_id, content, embedding, replaced_by_knowledge_id) "
+                "VALUES ($1, $2, $3::vector, $4)",
+                target_id, before["content"], before["embedding"], knowledge_id,
+            )
+            target = await conn.fetchrow(
+                "UPDATE rag_knowledge SET content = $1, embedding = $2::vector, updated_at = NOW() "
+                "WHERE id = $3 RETURNING id, content",
+                merge_content, str(embedding), target_id,
+            )
+            await conn.execute("UPDATE rag_knowledge SET status = 'rejected' WHERE id = $1", knowledge_id)
         # 반려되는 pending 지식이 이미 어떤 질의를 "해결"한 상태였다면, 실제 내용이 옮겨간
         # target으로 연결을 옮겨줘야 통계 화면이 계속 유효한 내용을 보여준다
         await conn.execute(
@@ -362,6 +382,50 @@ async def resolve_duplicate(
             knowledge_id, target_id,
         )
     return {"id": knowledge_id, "status": "rejected", "merged_into": target_id}
+
+
+# ─── 피드백 → 지식 리뷰 신호 ─────────────────────────────────────────────────
+
+async def get_review_flags(namespace: str) -> list[dict]:
+    """나빠요 피드백으로 리뷰 후보에 오른 지식 목록(미해결만, 최근 순).
+
+    자동 페널티가 아니라 "사람이 볼 후보"라 knowledge_rag/feedback 스코프가 아닌
+    이 모듈(지식 CRUD)에 둔다 — 결국 지식을 고치거나 반려하는 건 여기 일이라서."""
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return []
+        rows = await conn.fetch(
+            """
+            SELECT f.id AS flag_id, f.knowledge_id, f.reason, f.message_id, f.flagged_at::text,
+                   k.content, k.category, k.status
+            FROM rag_knowledge_review_flag f
+            JOIN rag_knowledge k ON f.knowledge_id = k.id
+            WHERE f.namespace_id = $1 AND f.resolved = FALSE
+            ORDER BY f.flagged_at DESC
+            """,
+            ns_id,
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_review_flag_namespace(flag_id: int) -> Optional[str]:
+    async with get_conn() as conn:
+        return await conn.fetchval(
+            "SELECT n.name FROM rag_knowledge_review_flag f "
+            "JOIN ops_namespace n ON f.namespace_id = n.id WHERE f.id = $1",
+            flag_id,
+        )
+
+
+async def resolve_review_flag(flag_id: int) -> bool:
+    """리뷰 완료 처리 — 지식을 고쳤든, 봤는데 문제 없다고 판단했든 큐에서 뺀다."""
+    async with get_conn() as conn:
+        result = await conn.execute(
+            "UPDATE rag_knowledge_review_flag SET resolved = TRUE WHERE id = $1 AND resolved = FALSE",
+            flag_id,
+        )
+    return result == "UPDATE 1"
 
 
 # ─── rag_glossary ─────────────────────────────────────────────────────────────
@@ -652,6 +716,7 @@ async def _run_bulk_ingestion(
                     created_by_user_id,
                     job_id,
                     "pending_review" if is_duplicate else "active",
+                    _EMBEDDING_MODEL_NAME,
                 ))
 
             async with get_conn() as conn:
@@ -660,8 +725,9 @@ async def _run_bulk_ingestion(
                         (namespace_id, container_name, target_tables, content,
                          query_template, embedding, base_weight, category,
                          source_file, source_chunk_idx, source_type,
-                         created_by_part, created_by_user_id, ingestion_job_id, status)
-                    VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                         created_by_part, created_by_user_id, ingestion_job_id, status,
+                         embedding_model)
+                    VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 """, rows)
                 created += len(rows)
                 pending_total += len(pending_chunk_indices) + len(local_pending)

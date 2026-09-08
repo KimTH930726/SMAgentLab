@@ -5,6 +5,7 @@ import type {
   KnowledgeUpdatePayload,
   KnowledgeStatus,
   DuplicateMatch,
+  ReviewFlag,
   GlossaryItem,
   GlossaryCreatePayload,
   GlossaryUpdatePayload,
@@ -45,6 +46,27 @@ export async function resolveDuplicate(
     });
   } catch (err) {
     console.error('resolveDuplicate error:', err);
+    throw err;
+  }
+}
+
+// 나빠요 피드백 → 지식 리뷰 신호 (feedback→역추적 레버)
+
+export async function getReviewFlags(namespace: string): Promise<ReviewFlag[]> {
+  try {
+    const params = new URLSearchParams({ namespace });
+    return await apiFetch<ReviewFlag[]>(`/knowledge/review-flags?${params.toString()}`);
+  } catch (err) {
+    console.error('getReviewFlags error:', err);
+    throw err;
+  }
+}
+
+export async function resolveReviewFlag(flagId: number): Promise<{ status: string }> {
+  try {
+    return await apiFetch(`/knowledge/review-flags/${flagId}/resolve`, { method: 'POST' });
+  } catch (err) {
+    console.error('resolveReviewFlag error:', err);
     throw err;
   }
 }

@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.67)
+# Ops-Navigator 시스템 아키텍처 (v2.68)
 
 ## 개요
 
@@ -11,6 +11,26 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.68: **지식 생명주기 관리 — "할 수 있는 것" 실행분** (`docs/tech/knowledge-lifecycle-design.md`
+  §6, 2026-08-28 분석 문서의 실측 기반 우선순위 1~3위 + 대화 중 새로 나온 4번째 항목).
+  ① **병합 이력 보존**: `resolve_duplicate()`의 merge 처리가 대상 지식을 그 자리에서 덮어써
+  이전 내용이 어디에도 안 남던 문제 — 덮어쓰기 전 신규 테이블 `rag_knowledge_history`에
+  content/embedding을 같은 트랜잭션에서 먼저 적재하도록 수정.
+  ② **삭제 하드→소프트**: `delete_knowledge`/`bulk_delete_knowledge`가 `DELETE FROM` 대신
+  `status='deleted'` UPDATE로 바뀜 — 검색/목록 쿼리가 이미 `status='active'`만 보므로 별도
+  필터링 추가 없이 즉시 숨겨지고, 실수 삭제 시 복구 가능.
+  ③ **스키마 선추가(Phase 0)**: `rag_knowledge`에 `logical_document_id`/`version`/
+  `supersedes_id`/`embedding_model`/`quality_score`/`reviewed_at`/`owner` nullable 컬럼 추가.
+  로직은 최소화(embedding_model만 신규 등록분부터 기록) — 데이터 3천여 건인 지금이 컬럼 추가
+  제일 싼 시점이라는 원칙(문서 §4)대로 컬럼만 미리 준비.
+  ④ **피드백→지식 리뷰 신호(신규)**: 나빠요 피드백에 message_id가 있으면, 그 답변이 실제
+  근거로 삼았던 지식 전체(`ops_message.results`)를 신규 테이블 `rag_knowledge_review_flag`에
+  적재 — 지금까지는 프론트가 넘긴 지식 하나만 감점되고 나머지 근거는 아무 신호도 안 남았다.
+  자동 감점이 아니라 사람이 볼 리뷰 큐. Admin > 지식 베이스에 "리뷰 신호" 서브탭 신설(카운트
+  배지 포함). few-shot 승인 큐가 활성1/대기12로 11일째 방치됐던 사례(§ 대화 논의)가 이 레버를
+  안 써서 생긴 패턴이라는 진단에서 착수 — 신설한 큐도 실제로 쓰이는지는 계속 지켜볼 것.
+  실 시나리오로 검증(중복 등록→병합→history 보존 확인, 삭제→status+목록제외 확인, 나빠요
+  피드백→리뷰 플래그 생성+중복방지 확인). 백엔드 테스트 343개, tsc, build 전부 통과.
 - v2.67: **MCP 도구 에이전트 완전 제거** — 관리자 화면·채팅 UI에 걸쳐 안 쓰는 기능이 계속
   노출되는 게 잡다하다는 판단으로 시작, 이후 `McpToolAgent`가 RAG 검색 로직(`retrieval.py`)을
   내부에서 직접 재구현해 안고 있는 구조적 결합까지 확인되어 제거 근거가 명확해짐. VOC Teams
@@ -472,7 +492,13 @@ ops_email_poll_cycle  -- 폴링 사이클(스케줄러 실행 회차)별 성공/
 ops_voc_cluster       -- 반복 VOC 클러스터 (representative_embedding=centroid, member_count, coverage_knowledge_id/coverage_verified — 해결방안 LLM 검증 캐시) (v2.47 신규)
 
 -- KnowledgeRAG 전용 (rag_* prefix, v2.8에서 ops_*→rag_* 변경)
-rag_knowledge         -- 지식 베이스 (HNSW + GIN FTS, base_weight, source_file/chunk_idx 추적)
+rag_knowledge         -- 지식 베이스 (HNSW + GIN FTS, base_weight, source_file/chunk_idx 추적,
+                      --   status: active/pending_review/rejected/deleted(v2.68 소프트삭제),
+                      --   logical_document_id/version/supersedes_id/embedding_model 등 스키마
+                      --   선추가만 됨(v2.68 Phase 0, 로직 아직 없음))
+rag_knowledge_duplicate_match -- 중복탐지 매칭 후보 (v2.34)
+rag_knowledge_history -- 병합(merge) 시 덮어써지기 전 content/embedding 보존 (v2.68)
+rag_knowledge_review_flag -- 나빠요 피드백이 근거로 삼은 지식 리뷰 큐 (v2.68)
 rag_knowledge_category -- 카테고리 목록
 rag_glossary          -- 용어집 (HNSW, 유사도 0.5+ 매핑)
 rag_fewshot           -- Few-shot Q&A (HNSW, status: active/candidate)

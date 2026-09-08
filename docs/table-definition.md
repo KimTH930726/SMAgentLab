@@ -1,10 +1,15 @@
 # Ops-Navigator 테이블 정의서
 
-> **Version**: 3.16
+> **Version**: 3.17
 > **DBMS**: PostgreSQL 16 + pgvector
 > **Extensions**: `vector`, `pg_trgm`
 > **벡터 차원**: 768 (paraphrase-multilingual-mpnet-base-v2)
-> **작성일**: 2026-09-08 (v3.16 — MCP 도구 에이전트 제거(v2.67)에 따라 `ops_mcp_tool`/
+> **작성일**: 2026-09-08 (v3.17 — 지식 생명주기 관리(v2.68, `docs/tech/knowledge-lifecycle-design.md`
+> §6 실행분): `rag_knowledge`에 `logical_document_id`/`version`/`supersedes_id`/`embedding_model`/
+> `quality_score`/`reviewed_at`/`owner` 컬럼 추가, `status`에 `deleted` 추가(하드 삭제→소프트 삭제
+> 전환). 신규 테이블 `rag_knowledge_history`(§6-2, 병합 시 이전 content 보존)/
+> `rag_knowledge_review_flag`(§6-3, 나빠요 피드백→근거 지식 리뷰 큐). v3.16 — MCP 도구 에이전트
+> 제거(v2.67)에 따라 `ops_mcp_tool`/
 > `ops_mcp_tool_log` 신규 생성 중단, §15/§16을 제거 스텁으로 교체(DROP은 안 함, 기존 설치엔
 > 무해하게 방치 — Text2SQL `sql_*` 전례와 동일). `ops_prompt` 시드에서 mcp_tool 관련 3행 제거.
 > v3.15 — `policy_chunk` 벡터 폴백 동작 문서화: narrative segment 없는
@@ -25,6 +30,9 @@
 4. [ops_namespace](#4-ops_namespace)
 5. [rag_glossary](#5-rag_glossary)
 6. [rag_knowledge](#6-rag_knowledge)
+6-1. [rag_knowledge_duplicate_match](#6-1-rag_knowledge_duplicate_match-v234)
+6-2. [rag_knowledge_history](#6-2-rag_knowledge_history-v268)
+6-3. [rag_knowledge_review_flag](#6-3-rag_knowledge_review_flag-v268)
 7. [rag_knowledge_category](#7-rag_knowledge_category)
 8. [rag_ingestion_job](#8-rag_ingestion_job)
 9. [ops_query_log](#9-ops_query_log)
@@ -205,7 +213,14 @@ ops_system_config (시스템 전역 설정 — key-value, 재시작 후에도 �
 | 15 | `source_file` | VARCHAR(500) | YES | NULL | - | 대량 등록 시 원본 파일명 (단건 수동 등록은 NULL) |
 | 16 | `source_chunk_idx` | INT | YES | NULL | - | 같은 인제스천 작업 내 청크 순번 — executemany INSERT 후 RETURNING 없이 방금 넣은 행을 역매칭하는 상관키로 사용 |
 | 17 | `source_type` | VARCHAR(50) | NO | `'manual'` | - | 등록 경로 (`manual`, `csv_import`, `paste_split`, `file_upload`, `web`, `confluence`, `teams`) |
-| 18 | `status` | VARCHAR(20) | NO | `'active'` | - | `active`(검색 노출) / `pending_review`(유사 지식과 중복 의심, 승인 대기 — 검색에서 숨김) / `rejected`(반려, 감사 기록으로 보존) — v2.34 |
+| 18 | `status` | VARCHAR(20) | NO | `'active'` | - | `active`(검색 노출) / `pending_review`(유사 지식과 중복 의심, 승인 대기 — 검색에서 숨김) / `rejected`(반려, 감사 기록으로 보존) / `deleted`(소프트 삭제, v2.68 — 하드 DELETE 대신 이 값으로만 바뀜, 검색·목록 쿼리가 이미 `status='active'`만 보므로 즉시 숨겨지되 DB엔 남아 복구 가능) — v2.34 |
+| 19 | `logical_document_id` | INT | YES | NULL | - | 논리 문서 식별자(v2.68, Phase 0 스키마 선추가). 기본값=자기 id(마이그레이션이 멱등하게 백필), 아직 어떤 코드도 안 읽음 — 나중에 버전 계열을 묶을 때 쓸 자리만 미리 마련 |
+| 20 | `version` | INT | NO | `1` | - | 버전 번호(v2.68). 로직 없음, 컬럼만 |
+| 21 | `supersedes_id` | INT | YES | NULL | FK → rag_knowledge(id) ON DELETE SET NULL | 이 행이 대체한 이전 버전 행(v2.68). 로직 없음, 컬럼만 |
+| 22 | `embedding_model` | VARCHAR(200) | YES | NULL | - | 이 행의 embedding을 만든 모델명(v2.68). `create_knowledge`/`bulk_create_knowledge`가 신규 등록분부터 기록, 과거 행은 NULL="모델 불명"으로 그대로 둠(임베딩 모델 교체 시 재인덱싱 대상 판별용) |
+| 23 | `quality_score` | FLOAT | YES | NULL | - | 품질 점수(v2.68). 로직 없음, 컬럼만 |
+| 24 | `reviewed_at` | TIMESTAMPTZ | YES | NULL | - | 마지막 검토 시각(v2.68). 로직 없음, 컬럼만 |
+| 25 | `owner` | VARCHAR(100) | YES | NULL | - | 담당자(v2.68). 로직 없음, 컬럼만 |
 
 **인덱스**:
 
@@ -242,6 +257,53 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 **인덱스**: `idx_dup_match_new` (new_knowledge_id, B-Tree) — 리뷰 화면에서 특정 신규 지식의 매칭 후보 목록 조회용
 
 **관련 API**: `GET /api/knowledge/{id}/duplicate-matches`, `POST /api/knowledge/{id}/resolve` (action: approve/reject/merge)
+
+---
+
+## 6-2. rag_knowledge_history (v2.68)
+
+**목적**: `resolve_duplicate()`의 병합(merge) 처리가 대상 지식의 content/embedding을 그 자리에서
+덮어쓰기 전에, 덮어써질 이전 내용을 여기 먼저 보존한다 — 병합 이전엔 이 내용이 어디에도 안 남고
+소실됐다(`docs/tech/knowledge-lifecycle-design.md` §2.2/§6 참고).
+
+| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
+|---|--------|-----------|------|--------|---------|------|
+| 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
+| 2 | `knowledge_id` | INT | NO | - | FK → rag_knowledge(id) ON DELETE CASCADE | 덮어써진 대상 지식(병합 타겟) |
+| 3 | `content` | TEXT | NO | - | - | 덮어써지기 전 원래 content |
+| 4 | `embedding` | VECTOR(768) | YES | NULL | - | 덮어써지기 전 원래 embedding |
+| 5 | `replaced_by_knowledge_id` | INT | YES | NULL | - | 이 병합을 유발한 신규(승인대기) 지식의 id — 그 지식 자신은 병합 후 `rejected`로 마감됨 |
+| 6 | `replaced_at` | TIMESTAMPTZ | NO | `NOW()` | - | 병합(교체) 시각 |
+
+**인덱스**: `idx_knowledge_history_knowledge_id` (knowledge_id, B-Tree)
+
+**주의**: 하드 삭제 이력은 안 남는다 — 이 테이블은 "병합으로 덮어써질 때"만 적재되고, 지금은
+소프트 삭제(§6 `status='deleted'`)라 삭제 자체는 `rag_knowledge`에 그대로 남아 별도 이력 불필요.
+
+---
+
+## 6-3. rag_knowledge_review_flag (v2.68)
+
+**목적**: 나빠요(👎) 피드백이 달린 답변이 실제로 근거로 삼았던 지식 전체를 리뷰 후보로 남긴다.
+자동 감점이 아니라 "사람이 볼 큐"다 — `POST /api/feedback`이 `is_positive=false`이고
+`message_id`가 있으면, 그 메시지의 `ops_message.results`에서 지식 id를 전부 꺼내 여기 적재한다
+(같은 message_id로 이미 미해결 플래그가 있으면 중복 적재 안 함).
+
+| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
+|---|--------|-----------|------|--------|---------|------|
+| 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
+| 2 | `knowledge_id` | INT | NO | - | FK → rag_knowledge(id) ON DELETE CASCADE | 리뷰 후보로 오른 지식 |
+| 3 | `namespace_id` | INT | YES | NULL | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 |
+| 4 | `reason` | VARCHAR(50) | NO | `'negative_feedback'` | - | 플래그 사유 (지금은 이 값 하나뿐) |
+| 5 | `message_id` | INT | YES | NULL | - | 원인이 된 assistant 메시지 id |
+| 6 | `resolved` | BOOLEAN | NO | `FALSE` | - | 관리자가 확인 완료 처리했는지 |
+| 7 | `flagged_at` | TIMESTAMPTZ | NO | `NOW()` | - | 플래그 생성 시각 |
+
+**인덱스**: `idx_review_flag_unresolved` (namespace_id, resolved, B-Tree) — 네임스페이스별 미해결 큐 조회용
+
+**관련 API**: `GET /api/knowledge/review-flags?namespace=`, `POST /api/knowledge/review-flags/{id}/resolve`
+
+**관리자 UI**: Admin > 지식 베이스 > "리뷰 신호" 서브탭(카운트 배지 포함)
 
 ---
 
@@ -793,6 +855,7 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 37 | `ops_user` | `ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'local'`, `ADD COLUMN IF NOT EXISTS external_id VARCHAR(255)`, `ADD COLUMN IF NOT EXISTS email VARCHAR(255)`, `ALTER COLUMN hashed_password DROP NOT NULL`, `CREATE UNIQUE INDEX ux_user_provider_external_id ON ops_user(auth_provider, external_id) WHERE external_id IS NOT NULL` | SSO(Azure AD) 연동 기반 스키마 선추가 — 로컬 계정은 `auth_provider='local'`로 그대로 유지, SSO 전용 계정은 로컬 비밀번호가 없을 수 있어 nullable로 완화(로그인 흐름 자체는 아직 미구현) (v2.50) |
 | 38 | `sql_*` 10개 테이블 | `_migrate_text2sql_tables()` 호출 제거(함수 자체도 삭제) | Text-to-SQL 에이전트 제거(현재 과업 아님) — 기존 설치의 테이블은 삭제하지 않고 그대로 두되, 더 이상 마이그레이션되지 않음. 코드는 `archive/with-text2sql` 브랜치 보존 (v2.51) |
 | 39 | - | `CREATE TABLE policy_item`, `policy_param`, `policy_chunk` + `trg_policy_item_logical_id` 트리거 | 정책서 데이터화 파이프라인 v1(`_migrate_policy_tables()`, `docs/policy-doc-pipeline-plan.md` §2) — 엑셀 row를 3층(원문+메타/파라미터/서술청크)으로 분해 저장. 버전 관리는 UPDATE 대신 새 row INSERT(logical_id 유지, version+1, supersedes_id) 방식(§2-1) (v2.52) |
+| 40 | `rag_knowledge` + 신규 2개 테이블 | `ADD COLUMN logical_document_id/version/supersedes_id/embedding_model/quality_score/reviewed_at/owner`, `CREATE TABLE rag_knowledge_history`, `CREATE TABLE rag_knowledge_review_flag` | 지식 생명주기 관리(`_migrate_knowledge_lifecycle()`, `docs/tech/knowledge-lifecycle-design.md` §6) — Phase 0 스키마 선추가 + 병합 이력 보존(§6-2) + 피드백→리뷰 신호(§6-3). `logical_document_id`는 멱등 UPDATE로 매 기동마다 미설정 행만 자기 id로 백필 (v2.68) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

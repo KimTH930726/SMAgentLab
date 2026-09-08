@@ -1,4 +1,6 @@
 """POST /api/feedback — 좋아요/싫어요 피드백 처리."""
+import json
+
 from fastapi import APIRouter, Depends
 
 from core.database import get_conn, resolve_namespace_id
@@ -7,6 +9,45 @@ from service.feedback.schemas import FeedbackCreate
 from shared.embedding import embedding_service
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
+
+
+async def _flag_answer_sources_for_review(conn, ns_id: int, message_id: int) -> None:
+    """나빠요 피드백이 달린 메시지가 실제로 근거로 삼은 지식 전체를 리뷰 후보로 남긴다.
+
+    지금까지는 프론트가 넘긴 knowledge_id 하나만 base_weight 페널티를 받았다 — 사용자가
+    "이 문서 때문에 틀렸다"고 콕 집지 않으면(대부분 그냥 👎만 누름) 그 답변에 실제로 쓰인
+    나머지 근거 문서들은 아무 신호도 안 남았다. ops_message.results(검색 시점에 이미
+    저장돼 있음)에서 근거 문서 id를 전부 꺼내 리뷰 큐에 올린다 — 자동 페널티는 아니고
+    "리뷰 후보"로만 남겨 사람이 실제로 원인인지 판단하게 한다(전부 자동 감점하면 답변엔
+    안 쓰였지만 컨텍스트에 끼어있던 무관한 문서까지 억울하게 맞을 수 있어서).
+    이미 같은 메시지로 미해결 상태 플래그가 있으면 중복 생성하지 않는다.
+    """
+    row = await conn.fetchrow("SELECT results FROM ops_message WHERE id = $1", message_id)
+    if not row or not row["results"]:
+        return
+    try:
+        results = json.loads(row["results"]) if isinstance(row["results"], str) else row["results"]
+    except (TypeError, ValueError):
+        return
+    knowledge_ids = {r["id"] for r in results if isinstance(r, dict) and r.get("id") is not None}
+    if not knowledge_ids:
+        return
+
+    existing = await conn.fetch(
+        "SELECT DISTINCT knowledge_id FROM rag_knowledge_review_flag "
+        "WHERE message_id = $1 AND resolved = FALSE",
+        message_id,
+    )
+    already_flagged = {r["knowledge_id"] for r in existing}
+    to_flag = knowledge_ids - already_flagged
+    if not to_flag:
+        return
+
+    await conn.executemany(
+        "INSERT INTO rag_knowledge_review_flag (knowledge_id, namespace_id, reason, message_id) "
+        "VALUES ($1, $2, 'negative_feedback', $3)",
+        [(kid, ns_id, message_id) for kid in to_flag],
+    )
 
 
 @router.post("", status_code=201)
@@ -21,6 +62,9 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
             "INSERT INTO ops_feedback (knowledge_id, namespace_id, question, is_positive, message_id) VALUES ($1,$2,$3,$4,$5)",
             body.knowledge_id, ns_id, body.question, body.is_positive, body.message_id,
         )
+
+        if not body.is_positive and body.message_id is not None:
+            await _flag_answer_sources_for_review(conn, ns_id, body.message_id)
 
         if body.knowledge_id:
             weight_delta = 0.1 if body.is_positive else -0.1

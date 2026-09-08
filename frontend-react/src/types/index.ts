@@ -45,12 +45,23 @@ export interface NamespaceDetail extends Namespace {
 }
 
 // Knowledge types
-export type KnowledgeStatus = 'active' | 'pending_review' | 'rejected';
+export type KnowledgeStatus = 'active' | 'pending_review' | 'rejected' | 'deleted';
 
 export interface DuplicateMatch {
   id: number;
   content: string;
   similarity: number;
+}
+
+export interface ReviewFlag {
+  flag_id: number;
+  knowledge_id: number;
+  reason: string;
+  message_id: number | null;
+  flagged_at: string;
+  content: string;
+  category: string | null;
+  status: KnowledgeStatus;
 }
 
 export interface KnowledgeItem {

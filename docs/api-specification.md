@@ -765,6 +765,8 @@ SSE 스트리밍 채팅. 실시간 상태 업데이트와 토큰 단위 LLM 출�
 
 `merged_into`는 `merge` action에서만 포함된다. `reject`/`merge` 시 반려되는 지식이 이전에 어떤 질의를 "해결"시켰었다면(`ops_query_log.resolved_knowledge_id`), `reject`는 그 연결을 끊고 `merge`는 병합 대상으로 재연결한다(v2.38).
 
+`merge`는 대상 지식의 content/embedding을 덮어쓰기 전에 이전 값을 `rag_knowledge_history`에 먼저 보존한다(v2.68) — 이전엔 덮어써진 원문이 어디에도 안 남았다.
+
 **Error** `400 Bad Request` (알 수 없는 action, 매칭 기록 없음, 병합 대상 없음)
 
 ---
@@ -793,11 +795,47 @@ SSE 스트리밍 채팅. 실시간 상태 업데이트와 토큰 단위 LLM 출�
 
 ### DELETE /api/knowledge/{knowledge_id}
 
-지식 항목을 삭제한다.
+지식 항목을 삭제한다. **v2.68부터 소프트 삭제** — 실제로는 `status='deleted'`로만 바뀌고
+하드 `DELETE`는 안 한다. 검색/목록 조회가 이미 `status='active'`만 보므로 즉시 안 보이게
+되지만, DB엔 남아있어 실수 삭제 시 복구 가능(현재 복구 UI는 없음, DB에서 직접).
 
 **Path Parameter**: `knowledge_id` (int)
 
 **Response** `204 No Content`
+
+---
+
+### GET /api/knowledge/review-flags
+
+나빠요 피드백이 달린 답변이 실제로 근거로 삼았던 지식 중, 아직 확인 안 된(미해결) 항목을 조회한다.
+자동 감점 대상이 아니라 사람이 볼 리뷰 후보 목록이다. (v2.68)
+
+**Query Parameter**: `namespace` (string, 필수)
+
+**Response** `200 OK`
+
+```json
+[
+  {
+    "flag_id": 1, "knowledge_id": 42, "reason": "negative_feedback",
+    "message_id": 1001, "flagged_at": "2026-09-08T04:54:49Z",
+    "content": "...", "category": "결제", "status": "active"
+  }
+]
+```
+
+---
+
+### POST /api/knowledge/review-flags/{flag_id}/resolve
+
+리뷰 신호를 확인 완료 처리(`resolved=true`)한다 — 지식을 고쳤든, 봤는데 문제 없다고 판단했든
+큐에서 뺀다. (v2.68)
+
+**Path Parameter**: `flag_id` (int)
+
+**Response** `200 OK` — `{ "status": "resolved" }`
+
+**Error** `404 Not Found`
 
 **Error** `404 Not Found`
 

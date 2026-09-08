@@ -486,6 +486,55 @@ async def _migrate_duplicate_review(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_dup_match_new ON rag_knowledge_duplicate_match (new_knowledge_id)")
 
 
+async def _migrate_knowledge_lifecycle(conn) -> None:
+    """지식 생명주기 관리 — docs/tech/knowledge-lifecycle-design.md의 "지금 할 수 있는 것" 실행분.
+
+    - Phase 0: 미래 대비 스키마 선추가(로직은 최소화 — 지금 3천여 건일 때가 제일 싸고,
+      10만+건 쌓인 뒤 도입하면 전체 백필이 필요해 훨씬 비싸짐).
+    - Phase 1: 병합(merge) 시 기존 content가 그 자리에서 덮어써져 이력 없이 소실되던 위험 대응.
+    - 피드백→지식 리뷰 신호: 나빠요 피드백이 왔을 때, 그 답변에 실제로 쓰인 근거 문서 전체를
+      리뷰 후보로 남겨 "사용자가 일하면서 청소 신호를 공짜로 생성"하는 구조(§ 대화 논의 참고).
+    """
+    # ── Phase 0: 스키마 선추가 ──
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS logical_document_id INT")
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1")
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS supersedes_id INT REFERENCES rag_knowledge(id) ON DELETE SET NULL")
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(200)")
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS quality_score FLOAT")
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ")
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS owner VARCHAR(100)")
+    # logical_document_id 기본값 = 자기 id. DEFAULT절에서 자기참조가 안 되므로 백필로 대신한다 —
+    # 멱등이라 매 기동마다 돌아도 안전(새로 생긴 미설정 행만 채움).
+    await conn.execute("UPDATE rag_knowledge SET logical_document_id = id WHERE logical_document_id IS NULL")
+
+    # ── Phase 1: 병합 이력 보존 — resolve_duplicate()의 merge 분기가 덮어쓰기 전에 여기 적재 ──
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rag_knowledge_history (
+            id                       SERIAL PRIMARY KEY,
+            knowledge_id             INT NOT NULL REFERENCES rag_knowledge(id) ON DELETE CASCADE,
+            content                  TEXT NOT NULL,
+            embedding                VECTOR(768),
+            replaced_by_knowledge_id INT,
+            replaced_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_history_knowledge_id ON rag_knowledge_history (knowledge_id)")
+
+    # ── 피드백 → 지식 리뷰 신호 ──
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rag_knowledge_review_flag (
+            id           SERIAL PRIMARY KEY,
+            knowledge_id INT NOT NULL REFERENCES rag_knowledge(id) ON DELETE CASCADE,
+            namespace_id INT REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            reason       VARCHAR(50) NOT NULL DEFAULT 'negative_feedback',
+            message_id   INT,
+            resolved     BOOLEAN NOT NULL DEFAULT FALSE,
+            flagged_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_review_flag_unresolved ON rag_knowledge_review_flag (namespace_id, resolved)")
+
+
 async def _migrate_query_log_resolution(conn) -> None:
     """나빠요 피드백 후 지식 등록으로 해결한 질의를, 등록된 지식 내용과 연결.
 
@@ -867,6 +916,7 @@ async def _run_migrations() -> None:
         await _migrate_system_tables(conn)
         await _migrate_knowledge_ingestion(conn)
         await _migrate_duplicate_review(conn)
+        await _migrate_knowledge_lifecycle(conn)
         await _migrate_query_log_resolution(conn)
         await _migrate_email_voc_tables(conn)
         await _migrate_policy_tables(conn)

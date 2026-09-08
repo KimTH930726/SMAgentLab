@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, MessageSquare, RefreshCw, LogOut, Download, Check, Search } from 'lucide-react';
+import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, MessageSquare, RefreshCw, LogOut, Download, Check, Search, Flag } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -24,6 +24,8 @@ import {
   cancelIngestionJob,
   getDuplicateMatches,
   resolveDuplicate,
+  getReviewFlags,
+  resolveReviewFlag,
   type IngestionJob,
   type IngestionJobStatus,
   type ConfluenceTreeResponse,
@@ -48,7 +50,7 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { TagInput } from '../ui/TagInput';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
-import type { KnowledgeItem, DuplicateMatch } from '../../types';
+import type { KnowledgeItem, DuplicateMatch, ReviewFlag } from '../../types';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
 
@@ -141,7 +143,7 @@ export function KnowledgeTable() {
   const qc = useQueryClient();
   const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces } = useNamespaceAccess();
 
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>('list');
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'flags'>('list');
 
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -190,6 +192,15 @@ export function KnowledgeTable() {
   const { data: pendingItems = [] } = useQuery({
     queryKey: ['knowledge', selectedNs, 'pending_review'],
     queryFn: () => getKnowledge(selectedNs, 'pending_review'),
+    enabled: !!selectedNs,
+    staleTime: 10_000,
+    refetchOnMount: 'always',
+  });
+
+  // 나빠요 피드백으로 리뷰 후보에 오른 지식 — feedback→역추적 레버
+  const { data: reviewFlags = [] } = useQuery({
+    queryKey: ['knowledge', selectedNs, 'review-flags'],
+    queryFn: () => getReviewFlags(selectedNs),
     enabled: !!selectedNs,
     staleTime: 10_000,
     refetchOnMount: 'always',
@@ -374,6 +385,21 @@ export function KnowledgeTable() {
           승인 대기
           {pendingItems.length > 0 && (
             <span className="ml-1 text-[10px] bg-amber-900/60 text-amber-400 px-1.5 py-0.5 rounded-full">{pendingItems.length}</span>
+          )}
+        </button>
+        <button
+          onClick={() => setSubTab('flags')}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
+            subTab === 'flags'
+              ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+          title="나빠요 피드백이 달린 답변이 실제로 근거로 삼았던 지식 — 원인일 수 있어 검토 후보로 남은 항목"
+        >
+          <Flag className="w-4 h-4" />
+          리뷰 신호
+          {reviewFlags.length > 0 && (
+            <span className="ml-1 text-[10px] bg-rose-900/60 text-rose-400 px-1.5 py-0.5 rounded-full">{reviewFlags.length}</span>
           )}
         </button>
       </div>
@@ -596,6 +622,13 @@ export function KnowledgeTable() {
         <ReviewTab
           items={pendingItems}
           canModify={canModifyNs}
+          onResolved={onReviewResolved}
+        />
+      )}
+
+      {subTab === 'flags' && (
+        <ReviewFlagsTab
+          flags={reviewFlags}
           onResolved={onReviewResolved}
         />
       )}
@@ -1387,6 +1420,66 @@ function ReviewTab({ items, canModify, onResolved }: {
           </div>
         )}
       </Modal>
+    </div>
+  );
+}
+
+
+// ── 리뷰 신호 (나빠요 피드백 → 근거 지식 역추적) ─────────────────────────────
+
+function ReviewFlagsTab({ flags, onResolved }: {
+  flags: ReviewFlag[];
+  onResolved: () => void;
+}) {
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [error, setError] = useState('');
+
+  const resolveMutation = useMutation({
+    mutationFn: (flagId: number) => {
+      setResolvingId(flagId);
+      return resolveReviewFlag(flagId);
+    },
+    onSuccess: () => { setError(''); setResolvingId(null); onResolved(); },
+    onError: (e: any) => { setError(e.message || '처리에 실패했습니다.'); setResolvingId(null); },
+  });
+
+  if (flags.length === 0) {
+    return (
+      <div className="text-center py-16 text-slate-500">
+        <CheckCircle className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+        리뷰 신호가 없습니다.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-slate-500">
+        나빠요 피드백이 달린 답변이 실제로 근거로 삼았던 지식입니다. 자동 감점 대상이 아니라
+        "이 문서가 원인일 수 있다"는 후보일 뿐이니, 내용을 확인해 고칠 필요가 있으면 지식
+        조회 탭에서 수정하고, 문제 없다고 판단되면 "확인 완료"로 큐에서 빼세요.
+      </p>
+      {error && <p className="text-xs text-rose-400">{error}</p>}
+      <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
+        {flags.map((flag) => (
+          <div key={flag.flag_id} className="px-4 py-3 flex items-center gap-3">
+            <Badge color="rose">나빠요 근거</Badge>
+            {flag.status !== 'active' && <Badge color="slate">{flag.status}</Badge>}
+            {flag.category && <Badge color="cyan">{flag.category}</Badge>}
+            <span className="text-sm text-slate-300 truncate flex-1">{flag.content}</span>
+            <span className="text-[11px] text-slate-600 flex-shrink-0">
+              {new Date(flag.flagged_at).toLocaleDateString('ko-KR')}
+            </span>
+            <Button
+              variant="ghost" size="sm"
+              loading={resolveMutation.isPending && resolvingId === flag.flag_id}
+              onClick={() => resolveMutation.mutate(flag.flag_id)}
+            >
+              확인 완료
+            </Button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
