@@ -38,14 +38,14 @@ export function PolicyUnresolvedReport() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-200">
+        <h2 className="text-lg font-semibold text-slate-200">
           정책서 미분류(unresolved) 리포트
           {selectedNs && <span className="text-sm font-normal text-slate-500 ml-2">({selectedNs})</span>}
         </h2>
       </div>
 
       {/* 사용법 안내 — "왜 여기 있고 뭘 해야 하는지"를 명시적으로 */}
-      <div className="flex gap-3 px-4 py-3 bg-indigo-50 border border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-700/30 rounded-xl text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+      <div className="flex gap-3 px-4 py-3 bg-indigo-900/20 border border-indigo-700/30 rounded-xl text-xs text-slate-300 leading-relaxed">
         <Info className="w-4 h-4 text-indigo-500 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
         <div className="space-y-1">
           <p>
