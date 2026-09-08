@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ops-Navigator 기술 소개 — v1 (상세판)</title>
+<style>
+  :root{
+    --bg:#0F172A; --card:#1E293B; --card2:#243146; --accent:#6366F1; --accent2:#818CF8;
+    --text:#E2E8F0; --text-dim:#94A3B8; --border:#334155; --green:#10B981; --amber:#F59E0B;
+    --red:#EF4444; --violet:#A78BFA;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Pretendard,"Malgun Gothic",sans-serif;
+    line-height:1.65; font-size:15px;
+  }
+  .layout{display:flex; max-width:1400px; margin:0 auto;}
+  nav.toc{
+    position:sticky; top:0; align-self:flex-start; width:250px; height:100vh; overflow-y:auto;
+    padding:28px 16px; border-right:1px solid var(--border); flex-shrink:0;
+  }
+  nav.toc .brand{font-size:13px; color:var(--accent2); font-weight:700; letter-spacing:.04em; margin-bottom:4px;}
+  nav.toc .ver{font-size:11px; color:var(--text-dim); margin-bottom:20px;}
+  nav.toc a{
+    display:block; padding:6px 10px; margin:1px 0; border-radius:6px; color:var(--text-dim);
+    text-decoration:none; font-size:13px; transition:background .15s,color .15s;
+  }
+  nav.toc a:hover{background:var(--card); color:var(--text);}
+  nav.toc a.sub{padding-left:22px; font-size:12px;}
+  main{flex:1; min-width:0; padding:40px 56px 120px;}
+  header.cover{padding:24px 0 48px; border-bottom:1px solid var(--border); margin-bottom:48px;}
+  header.cover h1{font-size:34px; margin:0 0 10px; letter-spacing:-.01em;}
+  header.cover p.sub{color:var(--text-dim); font-size:16px; margin:0 0 20px;}
+  header.cover .meta{display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:var(--text-dim);}
+  header.cover .meta span{background:var(--card); padding:5px 12px; border-radius:999px; border:1px solid var(--border);}
+  section{margin-bottom:64px; scroll-margin-top:20px;}
+  section h2{
+    font-size:24px; margin:0 0 6px; padding-bottom:12px; border-bottom:2px solid var(--accent);
+    display:inline-block;
+  }
+  section h2 .num{color:var(--accent2); margin-right:10px; font-weight:800;}
+  section > .lead{color:var(--text-dim); font-size:15px; margin:14px 0 26px; max-width:820px;}
+  h3{font-size:18px; margin:32px 0 12px; color:var(--text);}
+  h3 .tag{font-size:11px; background:var(--card2); color:var(--accent2); padding:2px 8px; border-radius:5px; margin-left:8px; vertical-align:2px; font-weight:600;}
+  p{max-width:820px;}
+  .card{background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px 24px; margin:16px 0;}
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:14px;}
+  @media (max-width:1000px){.grid2,.grid3{grid-template-columns:1fr;} nav.toc{display:none;} main{padding:28px 22px;}}
+  pre{
+    background:#0B1220; border:1px solid var(--border); border-radius:10px; padding:18px 20px;
+    overflow-x:auto; font-size:12.5px; line-height:1.55; color:#CBD5E1;
+    font-family:"SF Mono",Consolas,Menlo,monospace;
+  }
+  code{font-family:"SF Mono",Consolas,Menlo,monospace; background:#0B1220; padding:1px 6px; border-radius:4px; font-size:.9em; color:#93C5FD;}
+  pre code{background:none; padding:0; color:inherit;}
+  table{border-collapse:collapse; width:100%; margin:16px 0; font-size:13.5px;}
+  th,td{border:1px solid var(--border); padding:8px 12px; text-align:left; vertical-align:top;}
+  th{background:var(--card2); color:var(--accent2); font-weight:600;}
+  tr:nth-child(even) td{background:#182234;}
+  ul,ol{max-width:800px; padding-left:22px;}
+  li{margin:5px 0;}
+  .badge{display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:700; letter-spacing:.02em;}
+  .b-why{background:rgba(99,102,241,.18); color:var(--accent2);}
+  .b-what{background:rgba(16,185,129,.18); color:var(--green);}
+  .b-guard{background:rgba(239,68,68,.15); color:#FCA5A5;}
+  .b-next{background:rgba(245,158,11,.15); color:var(--amber);}
+  .callout{border-left:3px solid var(--accent); background:rgba(99,102,241,.08); padding:12px 18px; border-radius:0 8px 8px 0; margin:16px 0; max-width:800px;}
+  .callout.guard{border-color:var(--red); background:rgba(239,68,68,.07);}
+  .callout.win{border-color:var(--green); background:rgba(16,185,129,.07);}
+  .stat-row{display:flex; gap:14px; flex-wrap:wrap; margin:18px 0;}
+  .stat{background:var(--card2); border:1px solid var(--border); border-radius:10px; padding:14px 18px; min-width:140px;}
+  .stat .num{font-size:24px; font-weight:800; color:var(--accent2); font-variant-numeric:tabular-nums;}
+  .stat .lbl{font-size:12px; color:var(--text-dim); margin-top:2px;}
+  .arrow{color:var(--text-dim); margin:0 8px;}
+  hr.sep{border:none; border-top:1px dashed var(--border); margin:36px 0;}
+  footer{margin-top:80px; padding-top:24px; border-top:1px solid var(--border); color:var(--text-dim); font-size:12.5px;}
+  ::selection{background:rgba(99,102,241,.35);}
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <div class="brand">OPS-NAVIGATOR</div>
+  <div class="ver">기술 소개 v1 · 2026-09-07</div>
+  <a href="#overview">0. 개요</a>
+  <a href="#arch">1. 전체 아키텍처</a>
+  <a href="#stack">2. 기술 스택 선택 이유</a>
+  <a href="#chat">3. 채팅 파이프라인 상세</a>
+  <a href="#chat-flow" class="sub">3-1. 전체 흐름</a>
+  <a href="#chat-cache" class="sub">3-2. 시맨틱 캐시</a>
+  <a href="#chat-multiturn" class="sub">3-3. 멀티턴 보강</a>
+  <a href="#chat-memory" class="sub">3-4. 대화 메모리</a>
+  <a href="#chat-hybrid" class="sub">3-5. 하이브리드 검색</a>
+  <a href="#chat-sse" class="sub">3-6. SSE 스트리밍</a>
+  <a href="#chat-debug" class="sub">3-7. 디버그 파이프라인</a>
+  <a href="#knowledge">4. 지식 관리 · 선순환</a>
+  <a href="#policy">5. 정책서 데이터화 파이프라인</a>
+  <a href="#lab">6. 저장소 전략 실험실</a>
+  <a href="#routing">7. 검색 전략 라우팅 원칙</a>
+  <a href="#integration">8. 정책 검색 채팅 편입</a>
+  <a href="#voc">9. VOC 이메일 분석 채널</a>
+  <a href="#auth">10. 인증 · 권한</a>
+  <a href="#internal-llm">11. 사내 LLM 라우팅</a>
+  <a href="#philosophy">12. 설계 철학 — 경계한 것</a>
+  <a href="#next">13. 다음 단계</a>
+</nav>
+
+<main>
+
+<header class="cover" id="overview">
+  <h1>Ops-Navigator — 프로젝트 전체 기술 소개</h1>
+  <p class="sub">IT 운영팀의 반복 조회·확인 업무를 자동화하는 지능형 운영 보조 에이전트 플랫폼 — 무엇을 왜 이렇게 설계했는가</p>
+  <div class="meta">
+    <span>v1 · 상세판</span>
+    <span>대상: AIOps 팀</span>
+    <span>기준일: 2026-09-07</span>
+    <span>근거: docs/architecture.md v2.66 · docs/flow.md · docs/policy-doc-pipeline-plan.md</span>
+  </div>
+</header>
+
+<section>
+  <p class="lead">
+    이 문서는 <strong>"뭘 만들었나"가 아니라 "왜 이렇게 설계했고, 뭘 지향했고, 뭘 경계했는가"</strong>를
+    기술 단위로 풀어쓴 상세판이다. 슬라이드 문구가 아니라 발표에서 그대로 말할 수 있는 근거 중심
+    내러티브를 목표로 한다. 모든 수치·구조는 실제 코드와 <code>docs/</code> 설계 문서, 실측 결과에서
+    가져왔다 — 추정이나 계획 단계 내용은 명시적으로 구분해 표기한다.
+  </p>
+  <div class="stat-row">
+    <div class="stat"><div class="num">2</div><div class="lbl">에이전트 (KnowledgeRAG / MCP 도구)</div></div>
+    <div class="stat"><div class="num">500건</div><div class="lbl">정책서 실데이터 적재</div></div>
+    <div class="stat"><div class="num">57.3→75.3%</div><div class="lbl">저장소 전략 A/B 정답률</div></div>
+    <div class="stat"><div class="num">343개</div><div class="lbl">백엔드 자동 테스트</div></div>
+    <div class="stat"><div class="num">768차원</div><div class="lbl">임베딩 벡터 (다국어)</div></div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch">
+  <h2><span class="num">1</span>전체 아키텍처</h2>
+  <p class="lead">Docker Compose로 묶인 4개 구성 요소 — Frontend / Backend / PostgreSQL+pgvector / Redis, LLM 추론만 호스트에서 별도 실행한다.</p>
+
+<pre>┌─────────────────────────────────────────────────────────────┐
+│                        Host Machine                         │
+│   ┌──────────────────────────────────────────────────────┐  │
+│   │              Docker Compose Network                  │  │
+│   │  ┌─────────────┐    ┌─────────────┐   ┌────────────┐ │  │
+│   │  │  Frontend   │───▶│   Backend   │──▶│   Redis    │ │  │
+│   │  │  React+nginx│    │   FastAPI   │   │  (Semantic │ │  │
+│   │  │  :8501      │    │   :8000     │   │   Cache)   │ │  │
+│   │  └─────────────┘    └──────┬──────┘   └────────────┘ │  │
+│   │                            │                          │  │
+│   │                    ┌───────┴────────┐                 │  │
+│   │                    │   PostgreSQL   │                 │  │
+│   │                    │  + pgvector    │                 │  │
+│   │                    │   (pg16)       │                 │  │
+│   │                    └───────────────┘                  │  │
+│   └──────────────────────────────────────────────────────┘  │
+│   ┌──────────────────────┐                                  │
+│   │  Ollama (호스트 직접)  │ ◀── or 사내 DevX Gateway         │
+│   │  :11434               │      (LLM_PROVIDER 환경변수 전환) │
+│   └──────────────────────┘                                  │
+└─────────────────────────────────────────────────────────────┘</pre>
+
+  <h3>백엔드 레이어 구조 — Agent / Service / Core</h3>
+  <div class="grid3">
+    <div class="card">
+      <span class="badge b-what">agents/</span>
+      <p style="margin:10px 0 0">파이프라인 레이어. <code>AgentBase</code> 추상 클래스 + <code>AgentRegistry</code> 싱글톤. 새 에이전트 = 모듈 추가 + 레지스트리 등록만으로 완결.</p>
+    </div>
+    <div class="card">
+      <span class="badge b-what">service/</span>
+      <p style="margin:10px 0 0">플랫폼 공통 레이어(인증/채팅/피드백/정책/VOC 등). DDD식으로 도메인별 <code>schemas/service/router</code> 응집.</p>
+    </div>
+    <div class="card">
+      <span class="badge b-what">core/ · shared/</span>
+      <p style="margin:10px 0 0">DB 풀, JWT/Fernet 보안, 임베딩 싱글톤, 시맨틱 캐시 — 전 에이전트가 공유하는 인프라.</p>
+    </div>
+  </div>
+  <p><strong>설계 원칙</strong>: 플랫폼(인증·세션·피드백)과 에이전트(실제 파이프라인)를 분리한다 — 채팅 라우터는 <code>AgentRegistry.get(agent_type).stream_chat()</code>으로 위임만 하고, 검색/생성 로직은 전혀 모른다. Text-to-SQL 에이전트를 <code>v2.51</code>에서 통째로 걷어냈을 때 이 경계 덕분에 플랫폼 코드는 한 줄도 안 건드렸다(코드는 <code>archive/with-text2sql</code> 브랜치에 보존).</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="stack">
+  <h2><span class="num">2</span>기술 스택 — 왜 이걸 골랐나</h2>
+
+  <h3>왜 PostgreSQL + pgvector인가 <span class="tag">핵심 결정</span></h3>
+  <div class="callout">
+    별도 벡터 DB(Pinecone/Milvus/Weaviate 등)를 두지 않고, <strong>정형 데이터와 벡터를 한 DB에</strong> 둔다.
+    pgvector 확장 하나로 <code>VECTOR(768)</code> 컬럼 + HNSW 인덱스를 기존 테이블에 그대로 추가할 수 있다.
+  </div>
+  <ul>
+    <li><strong>구조화 데이터와 벡터가 같은 트랜잭션 안에 있다</strong> — 지식 등록 시 <code>content</code>와 <code>embedding</code>이 같은 INSERT로 원자적으로 들어간다. 별도 벡터 DB였으면 이중 쓰기·정합성 문제가 생긴다.
+    <li><strong>정형 조회(SQL)와 의미 검색(코사인 유사도)을 한 쿼리에 섞을 수 있다</strong> — <code>WHERE namespace_id=$1 AND status!='deprecated' ORDER BY embedding &lt;=&gt; $2</code>처럼 필터+벡터 정렬이 그냥 SQL이다.
+    <li><strong>벡터는 파생물, pg는 source of truth</strong> — 임베딩 모델을 바꾸면 재인덱싱은 당연한 일이다. 비싸고 비가역인 작업(엑셀 파싱+LLM 분해+사람 검수)은 pg에 원문(raw_body)으로 남아 <code>pg_dump</code>로 그대로 이관되고, 벡터는 언제든 원문에서 재생성 가능하다는 전제로 설계했다.
+    <li><strong>운영 비용</strong> — 전용 벡터 DB 클러스터를 별도로 운영할 필요가 없다. 폐쇄망 배포(<code>docs/deployment-closed-network.md</code>)에서도 이미 쓰던 Postgres 인프라를 그대로 확장하면 된다.
+  </ul>
+  <p><strong>인덱스 두 종류를 같이 쓴다</strong>: HNSW(<code>vector_cosine_ops</code>, 근사 최근접 이웃)로 벡터 검색을, GIN(<code>to_tsvector</code>)으로 전문 검색(FTS)을 각각 최적화한다 — 하이브리드 검색(§3-5)의 기반.</p>
+
+  <h3>왜 Redis 시맨틱 캐시인가</h3>
+  <p>완전히 같은 질문이 반복되는 게 아니라 <strong>의미가 비슷한 질문</strong>이 반복된다(오탈자, 존댓말 차이, 어순 차이). 그래서 캐시 키를 문자열 해시가 아니라 <strong>질문 임베딩의 코사인 유사도</strong>로 잡았다 — 임계값 이상이면 검색+LLM 생성을 전부 건너뛰고 즉시 응답한다. Redis가 죽어도 캐시만 비활성화되고 서비스는 정상 동작한다(graceful degradation).</p>
+
+  <h3>왜 로컬 임베딩(sentence-transformers)인가</h3>
+  <p><code>paraphrase-multilingual-mpnet-base-v2</code>(768차원, 다국어)를 백엔드 컨테이너 안에서 직접 구동한다. 외부 임베딩 API를 안 쓰는 이유: ①사내 문서/질문이 외부로 나가지 않음(데이터 경계) ②API 비용·레이턴시 없음 ③오프라인(폐쇄망) 배포 가능. Docker 빌드 시 이미지에 모델을 미리 받아둬서 컨테이너 기동 지연도 없다.</p>
+
+  <h3>왜 LLM Provider를 추상화했나</h3>
+  <p><code>LLMProvider</code> 추상 클래스 뒤에 <code>OllamaProvider</code>(로컬, <code>exaone3.5</code>)와 <code>InHouseLLMProvider</code>(사내 DevX 게이트웨이, GPT/Claude/Gemini 선택 가능)를 둔다. 환경변수 하나로 전환되고, 관리자 화면에서 재시작 없이 런타임 전환도 가능하다 — 온프레미스 vs 클라우드 LLM 어느 쪽이든 같은 파이프라인 코드로 돈다.</p>
+
+  <h3>왜 React + Zustand + TanStack Query인가</h3>
+  <p>Redux 같은 무거운 상태관리 대신 <strong>Zustand</strong>(전역 스트림/인증 상태)와 <strong>TanStack Query</strong>(서버 상태 캐싱)를 분리했다 — SSE 스트리밍처럼 자주 바뀌는 상태(토큰 누적)와 REST로 가져오는 상태(대화 목록, 지식 목록)의 갱신 주기가 다르기 때문. TailwindCSS로 커스텀 CSS 없이 일관된 디자인 토큰(<code>bg #0F172A / accent #6366F1</code>)을 유지한다.</p>
+
+  <table>
+    <tr><th>레이어</th><th>기술</th><th>비고</th></tr>
+    <tr><td>Backend</td><td>FastAPI 0.115 · asyncpg · Pydantic v2</td><td>비동기 전용 — 블로킹 I/O 없음</td></tr>
+    <tr><td>DB</td><td>PostgreSQL 16 + pgvector</td><td>정형+벡터 단일 저장소</td></tr>
+    <tr><td>Cache</td><td>Redis 7 (LRU 256MB)</td><td>시맨틱 캐시, TTL 30분</td></tr>
+    <tr><td>임베딩</td><td>sentence-transformers (mpnet, 768d)</td><td>로컬 실행, 다국어</td></tr>
+    <tr><td>LLM</td><td>Ollama(로컬) / DevX Gateway(사내)</td><td>Provider 패턴, 런타임 전환</td></tr>
+    <tr><td>Frontend</td><td>React 18 · Zustand 5 · TS 5.6 · Vite 5 · Tailwind 3</td><td>SSE fetch 기반 스트리밍</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="chat">
+  <h2><span class="num">3</span>채팅 파이프라인 상세</h2>
+  <p class="lead">한 번의 질문이 답변으로 나오기까지 실제로 거치는 7단계. 각 단계가 "왜 필요한가"를 중심으로 본다.</p>
+
+  <h3 id="chat-flow">3-1. 전체 흐름</h3>
+<pre>사용자 질문
+  │  POST /api/chat/stream (SSE)
+  ▼
+Step 0-A  시맨틱 캐시 조회(Redis) ──── 히트 시 이하 전부 스킵, 즉시 응답
+  │ 미스
+  ▼
+Step 0-B  멀티턴 검색 보강 ──── 직전 Q+A를 현재 질문에 결합(추가 LLM 호출 없음)
+  │
+  ▼
+Step 1    용어집 매핑(Glossary) ──── "회수" 같은 사내 표준 용어를 질문에 보강
+  │
+  ▼
+Step 2    Weighted Hybrid Search ──── 벡터(v_score) + 키워드(k_score) 가중합
+  │        (+ 정책 데이터 있으면 policy_search 병행 실행, §8)
+  ▼
+Step 3    대화 메모리 결합 ──── 과거 요약(Semantic Recall) + 최근 2회 raw 교환
+  │
+  ▼
+Step 4    LLM 스트리밍 생성 ──── SSE token 이벤트로 실시간 전송
+  │
+  ▼
+Step 5    저장 + 후처리 ──── DB 저장, 4회마다 대화 요약, 캐시 적재, 질의 로그</pre>
+
+  <h3 id="chat-cache">3-2. 시맨틱 캐시 레이어 <span class="tag">semantic layer</span></h3>
+  <p>완전 일치가 아니라 <strong>의미 유사도</strong>로 캐시 히트를 판정한다. 질문을 정규화(공백·자모 간격·대소문자 정리)한 뒤 임베딩하고, Redis에 저장된 최근 캐시 엔트리(최대 200개 후보)와 코사인 유사도를 비교한다.</p>
+  <div class="grid2">
+    <div class="card">
+      <strong>키 설계</strong>
+      <p style="margin:8px 0 0"><code>semcache:{namespace}:{agent_type}:*</code> — 에이전트 타입으로 분리해 KnowledgeRAG와 MCP 도구 캐시가 서로 새지 않게 한다.</p>
+    </div>
+    <div class="card">
+      <strong>파라미터 (관리자 조정 가능)</strong>
+      <p style="margin:8px 0 0">유사도 임계값 기본 0.88(한국어 단문 최적값으로 튜닝), 현재 운영값 0.92 · TTL 1800초(30분) · Redis 미연결 시 캐시 없이 정상 동작(graceful degradation)</p>
+    </div>
+  </div>
+  <p>캐시 payload에는 답변뿐 아니라 <code>mapped_term</code>, <code>results</code>, <code>policy_citations</code>까지 통째로 저장한다 — 캐시 히트 시에도 화면에 똑같은 근거·인용이 재생되도록.</p>
+
+  <h3 id="chat-multiturn">3-3. 멀티턴 검색 보강 <span class="tag">multi-turn</span></h3>
+  <p>"그 쿼리 알려줘" 같은 후속 질문은 그 자체로는 검색이 안 된다. 그래서 <strong>DB에서 직전 Q+A를 조회</strong>해(각 80자로 자름) 현재 질문 앞에 붙여 <em>검색용</em> 문장을 만든다 — LLM을 한 번 더 부르지 않고 DB 조회 1회(1ms 미만)로 끝낸다. 단, 이 결합 문장은 검색에만 쓰고 LLM에 전달하는 실제 질문(<code>query</code>)은 원본 그대로 유지한다.</p>
+<pre>search_question = f"{prev_Q[:80]} {prev_A[:80]} {현재_질문}"
+→ 이 문장으로 임베딩·용어매핑·하이브리드검색 수행
+→ query_vec은 이후 정책 검색(§8)에서도 재사용해 중복 임베딩 방지</pre>
+
+  <h3 id="chat-memory">3-4. 대화 메모리 — ConversationSummaryBuffer + Semantic Recall <span class="tag">context maintenance</span></h3>
+  <p>대화가 길어져도 LLM 컨텍스트 윈도우를 넘기지 않으면서 관련 맥락을 유지하는 전략. 핵심은 <strong>"최근 것은 그대로, 오래된 것은 요약해서 필요할 때만"</strong>이다.</p>
+<pre>교환 1~4가 쌓이면(4회 = SUMMARY_INTERVAL) → 오래된 교환(1~2)을 LLM으로 요약
+  → 요약을 임베딩해 rag_conv_summary에 저장 (백그라운드, 응답 지연 없음)
+
+새 질문이 들어오면:
+  ├─ 최근 2회 raw 교환(working memory) → 항상 그대로 포함
+  └─ 현재 질문 벡터로 과거 요약 검색(유사도 ≥ 0.45, 최대 2개) → Semantic Recall
+        관련 없는 과거 주제는 자동으로 컨텍스트에서 빠짐</pre>
+  <p>예: 10번째 교환에서 "아까 쿠폰 관련 쿼리 다시 알려줘"라고 물으면, 1~2번째 교환 요약이 유사도 0.72로 리콜되어 몇 턴 전 얘기도 정확히 이어받는다.</p>
+
+  <h3 id="chat-hybrid">3-5. Weighted Hybrid Search <span class="tag">top_k / w_vector / w_keyword</span></h3>
+  <div class="callout win">
+<pre>final_score = (w_vector × v_score + w_keyword × k_score) × (1 + base_weight)</pre>
+  </div>
+  <table>
+    <tr><th>기호</th><th>의미</th><th>기본값</th><th>비고</th></tr>
+    <tr><td><code>v_score</code></td><td>코사인 유사도 (HNSW 인덱스)</td><td>0~1</td><td>의미가 유사할수록 ↑</td></tr>
+    <tr><td><code>k_score</code></td><td><code>ts_rank</code> (GIN 인덱스, BM25 계열)</td><td>0~0.1대</td><td>정확한 단어 일치일수록 ↑</td></tr>
+    <tr><td><code>w_vector / w_keyword</code></td><td>가중치 비율</td><td>0.7 / 0.3</td><td>사이드바 슬라이더로 개인화(로컬 저장, DB 미저장)</td></tr>
+    <tr><td><code>base_weight</code></td><td>문서 자체 가중치</td><td>1.0</td><td>👍 시 +0.1 / 👎 시 −0.1 자동 조정(§4)</td></tr>
+    <tr><td><code>top_k</code></td><td>반환 개수</td><td>5</td><td>슬라이더로 조정, 리랭커 활성 시 후보를 더 넓게 가져와 CrossEncoder로 재정렬</td></tr>
+  </table>
+  <p><strong>왜 벡터+키워드를 섞나</strong>: 벡터만 쓰면 표형식 데이터(공통코드, 파라미터표)에서 어휘만 겹쳐도 오탐이 난다는 걸 실측으로 확인했다(§7 라우팅 원칙). 그래서 특정 카테고리(DB/공통코드)는 벡터 점수를 0으로 만들고 키워드만 쓰도록 랭킹 공식 자체를 분기한다(<code>_KEYWORD_ONLY_CATEGORIES</code>).</p>
+
+  <h3 id="chat-sse">3-6. SSE 스트리밍 — asyncio.Task + Queue 디커플링</h3>
+  <p>LLM 생성이 <strong>HTTP 연결 수명과 완전히 분리</strong>된다. 사용자가 탭을 닫아도 백엔드 워커는 끝까지 실행해 DB에 저장한다 — 재접속 시 <code>status='generating'</code>을 감지해 폴링으로 자동 이어받는다.</p>
+<pre>type: status  → 단계별 진행 표시 (embedding/context/search/llm)
+type: meta    → ①0.02초 내 conversation_id/message_id ②검색 완료 후 결과 카드
+type: token   → LLM 토큰마다, 20토큰 단위로 DB 부분 저장
+type: done    → 완료, 피드백 버튼 활성화</pre>
+
+  <h3 id="chat-debug">3-7. 파이프라인 디버그 단계 <span class="tag">debug</span></h3>
+  <p><code>POST /api/chat/debug</code>는 <strong>LLM을 호출하지 않고</strong> 검색 파이프라인 전 구간의 중간값을 그대로 반환한다 — 관리자 화면 "디버그 패널"에서 왜 이 문서가 검색됐는지 단계별로 확인 가능하다.</p>
+  <div class="card">
+    <code>enriched_query</code>(용어 보강 후 질의) · <code>glossary_match</code>(매핑된 용어+유사도) ·
+    문서별 <code>v_score</code>/<code>k_score</code>/<code>final_score</code> · <code>fewshots</code>(유사 Q&A 전체, 임계값 미달분도 포함해 어디서 필터링되는지 확인 가능) ·
+    <code>context_preview</code>(실제 LLM에 들어갈 프롬프트 텍스트 미리보기)
+  </div>
+  <p>이건 "검색이 왜 이렇게 나왔는지"를 블랙박스로 안 남기겠다는 설계 원칙의 실현이다 — 결과(답변)뿐 아니라 과정(점수)까지 투명하게 보여준다.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="knowledge">
+  <h2><span class="num">4</span>지식 관리 · 선순환 구조</h2>
+  <div class="grid2">
+    <div class="card">
+      <strong>등록 경로 4종</strong>
+      <ul style="margin:8px 0 0">
+        <li>파일 업로드 (PDF/Excel/CSV/MD/TXT)</li>
+        <li>URL / Confluence 수집 (PAT 인증, BFS 트리 탐색)</li>
+        <li>직접 입력 (단건)</li>
+        <li>대량 텍스트 붙여넣기 (자동 분할)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <strong>등록만으론 안 끝난다</strong>
+      <ul style="margin:8px 0 0">
+        <li><strong>용어집</strong> — "DS"→"Discount Service" 같은 사내 약어를 정식 용어로 매핑, 검색 전 질문에 보강</li>
+        <li><strong>Few-shot</strong> — 정답 예시를 등록해 답변 톤·형식까지 제어</li>
+      </ul>
+    </div>
+  </div>
+  <h3>피드백 선순환</h3>
+<pre>👍 → base_weight +0.1, status='resolved', few-shot 후보 자동 생성
+👎 (단순 스킵) → base_weight -0.1, status='unresolved'
+👎 + 지식 등록 교정 → 오답 원인 지식 페널티(-0.1) + resolved_knowledge_id 연결
+검색 결과 없음 / "관련 지식을 찾지 못했습니다" → status='no_knowledge' (지식 공백 신호)</pre>
+  <p>사용자는 평소처럼 질문하고 피드백 버튼만 누르면 된다 — 그 행동 하나하나가 검색 가중치를 조정하는 신호가 되고, "몰라서 답 못 한 질문"은 <code>no_knowledge</code>로 자동 기록돼 관리자 대시보드에서 "지식 공백" 카드로 드러난다. 클릭 한 번으로 등록 폼까지 이어진다 — 발견→등록→즉시 반영의 관리 사이클.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="policy">
+  <h2><span class="num">5</span>정책서 데이터화 파이프라인</h2>
+  <p class="lead">엑셀로 관리되던 비즈니스 정책서를 LLM이 파싱해 구조화 DB로 만드는, 이번 분기 메인 트랙.</p>
+
+  <div class="stat-row">
+    <div class="stat"><div class="num">500건</div><div class="lbl">실 데이터 적재(2개 팀)</div></div>
+    <div class="stat"><div class="num">389 / 434 / 58</div><div class="lbl">param / narrative / unresolved</div></div>
+    <div class="stat"><div class="num">6건</div><div class="lbl">실데이터로만 발견된 버그</div></div>
+  </div>
+
+  <h3>데이터 모델 — 한 row를 3층으로 분해</h3>
+<pre>policy_item (RDB)   — 카테고리 경로(TEXT[] 가변배열) + 원문(raw_body) + 버전 메타
+   │ 1:N
+   ├── policy_param (RDB, to_tsquery)  — 파라미터 팩트 (조건부 key-value)
+   └── policy_chunk (Vector)           — 서술 규칙만 청킹·임베딩</pre>
+
+  <h3>핵심 설계 결정</h3>
+  <table>
+    <tr><th>결정</th><th>대안(기각)</th><th>왜</th></tr>
+    <tr><td>3층 분해(param=RDB / narrative=벡터)</td><td>전부 벡터화</td><td>파라미터를 벡터화하면 어휘만 겹쳐도 오탐(rag_knowledge 표형식 오염 사례 재발 방지)</td></tr>
+    <tr><td>통합 스키마 + <code>category_path TEXT[]</code></td><td>시스템별 별도 테이블</td><td>별도 테이블은 팀마다 새 마이그레이션 필요, 나중에 합칠 때 이관비용 재발생. 가변배열로 팀별 분류 깊이(3단/2단) 흡수</td></tr>
+    <tr><td>버전 = 새 row INSERT(logical_id/version/supersedes_id)</td><td>제자리 UPDATE</td><td>rag_knowledge의 merge가 content를 덮어써 이력 소실되던 실패를 반면교사</td></tr>
+    <tr><td>"자동 처리 비율 최대화 + 실패 사유 캡처"</td><td>완전 자동 파싱</td><td>팀별 정책서 표준화가 안 돼 있음이 실측 확인(3단/2단 분류, 비고 컬럼 유무도 다름)</td></tr>
+    <tr><td>검색 전용 엔드포인트로 분리</td><td>바로 메인 채팅에 편입</td><td>검증 안 된 스키마를 공유 검색 경로에 먼저 섞으면 나중에 되돌리기 비쌈 — 실험실(§6) 결과를 보고 편입(§8)</td></tr>
+  </table>
+
+  <div class="callout guard">
+    <span class="badge b-guard">경계</span> 실 정책서 원본이 IRM/RMS 암호화라 openpyxl로 못 열렸을 때 <strong>DRM 우회 시도를 하지 않고</strong>, 화면 캡처+실제 셀 내용을 사람이 불러주는 방식으로 재구성·검증했다.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="lab">
+  <h2><span class="num">6</span>저장소 전략 실험실 — Track 2</h2>
+  <p class="lead">"이 데이터는 벡터가 나은가, RDB가 나은가, 하이브리드가 나은가"를 감으로 정하지 않고 <strong>골든셋으로 수치화</strong>하는 재사용 프레임워크.</p>
+
+  <div class="stat-row">
+    <div class="stat"><div class="num">89건</div><div class="lbl">골든셋(4개 질의유형)</div></div>
+    <div class="stat"><div class="num">34.8→82.6%</div><div class="lbl">param 유형 정답률(반전)</div></div>
+    <div class="stat"><div class="num">57.3→75.3%</div><div class="lbl">전체 정답률</div></div>
+  </div>
+
+  <h3>가설이 실측으로 뒤집힌 과정</h3>
+  <p>1차 측정: "하이브리드가 무조건 낫다"는 가설이 <strong>기각</strong>됐다 — param 유형에서 A(지식-only)가 크게 앞섬(73.9% vs 34.8%). 원인: item의 36%가 파라미터로만 분해돼 벡터 청크가 하나도 없어서, 자연어 질문이 짧은 필드와 어휘가 안 겹치면 못 찾았다. <strong>같은 날 수정</strong>: 모든 item에 최소 1개 벡터 폴백 청크를 보장 → 재측정하니 4개 유형 전부 하이브리드 우세로 반전.</p>
+  <div class="callout">
+    <strong>교훈</strong>: 검색 전략을 배타적으로 나누지 말고 "정확 조회 + 벡터 폴백"을 겹쳐야 한다 — 이 교훈은 <code>retrieval-routing-pattern.md</code>에 반영됐다.
+  </div>
+  <p><code>POST /api/policy/track2/run</code>로 API화되어 관리자가 버튼 하나로 재실행 가능(1~2분), 결과가 수동 스크립트와 정확히 동일함을 실측 확인했다. 두 가지 모드로 쓰인다: <strong>탐색</strong>(새 데이터 유형 편입 전 저장 전략 결정) / <strong>게이트</strong>(스키마·프롬프트·골든셋 변경 시 회귀 판정).</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="routing">
+  <h2><span class="num">7</span>검색 전략 라우팅 — 재사용 원칙</h2>
+  <div class="callout win">
+    <strong>벡터 검색은 "의미가 비슷한 것"을, 키워드/RDB 조회는 "정확히 일치하는 것"을 찾는다.</strong>
+    데이터가 구조화된 값(코드표·파라미터·수치)이면 후자, 서술형 문장이면 전자가 정답.
+  </div>
+  <p>이 원칙이 프로젝트에서 <strong>두 번 독립적으로 재발견</strong>됐다 — 구현 방식은 매번 달랐다:</p>
+  <table>
+    <tr><th>#</th><th>사례</th><th>문제</th><th>구현</th></tr>
+    <tr><td>1</td><td><code>rag_knowledge</code>(v2.49)</td><td>공통코드 카테고리(전체 88%)가 코사인 유사도로 무관한 문서와 오탐</td><td>같은 테이블 안에서 랭킹 공식 분기(<code>_KEYWORD_ONLY_CATEGORIES</code>)</td></tr>
+    <tr><td>2</td><td>정책서 파이프라인</td><td>파라미터를 서술과 같이 벡터화하면 같은 문제 예상(설계 단계 사전 적용)</td><td>아예 다른 테이블로 분리(<code>policy_param</code> vs <code>policy_chunk</code>)</td></tr>
+  </table>
+  <div class="callout guard">
+    <span class="badge b-guard">경계</span> 사례가 2개뿐이라 <strong>범용 자동 라우팅 모듈은 만들지 않는다</strong> — 제3의 변형이 뭘지 아직 모른다(과설계 금지, YAGNI). 다음 축이 실제로 생기면 이 문서의 체크리스트로 판단하고 사례를 추가하는 방식으로 키운다.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="integration">
+  <h2><span class="num">8</span>정책 검색의 메인 채팅 편입 — "게이트가 편입을 판정한다"</h2>
+  <p class="lead">실험실(§6)이 하이브리드 우세를 수치로 확정해준 <strong>뒤에야</strong> 실제 채팅에 편입했다 — 판단 순서 자체가 핵심.</p>
+  <h3>1단계 (텍스트 컨텍스트 병합)</h3>
+  <p><code>agent.py:stream_chat()</code>이 <code>rag_knowledge</code> 검색과 병행해 정책 검색을 호출, 결과를 LLM 프롬프트에 텍스트로 더한다. <code>has_policy_data(namespace)</code>로 정책 없는 네임스페이스는 매 턴 쿼리를 스킵하고, 이미 계산된 질문 임베딩을 재사용해 중복 임베딩을 방지한다.</p>
+  <h3>2단계 (정책 근거 인용 카드) → 1건 압축</h3>
+  <p>"정책에서 온 답인지 기준정보에서 온 답인지 구분이 안 된다, 원문도 보여달라"는 피드백으로 근거 카드 UI를 추가했는데, 처음엔 최대 10건(param 5 + narrative 5)이 그대로 노출돼 "근거가 너무 많다"는 재피드백을 받았다.</p>
+  <div class="callout guard">
+    <span class="badge b-guard">1차 시도 폐기</span> 검색 직후 벡터 점수 1위 후보 하나로 LLM 컨텍스트까지 줄였더니, 그 1위가 실제로 무관한 후보였고 정답이 컨텍스트에서 통째로 빠져 <strong>LLM이 "관련 지식을 찾지 못했습니다"로 답변 자체에 실패</strong>하는 걸 실 E2E로 확인 — 즉시 되돌림.
+  </div>
+  <div class="callout win">
+    <strong>최종 설계</strong>: LLM 컨텍스트는 원래대로 다중 후보(top_k 5×2)를 유지해 재현율을 지키고, 화면에 보여줄 근거 카드만 <strong>답변이 다 나온 뒤에</strong> 최종 답변 텍스트와 원문의 토큰 겹침을 계산해 가장 많이 겹치는 1건을 역추적한다. "화면 표시 개수"와 "검색 재현율"은 서로 다른 축이라는 게 이번에 실측으로 확인된 교훈.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="voc">
+  <h2><span class="num">9</span>VOC 이메일 분석 채널</h2>
+  <p class="lead">같은 지식베이스·같은 검색 로직·같은 피드백 구조를 메일 채널에 그대로 이식한 사례 — "관련 없는 메일은 애초에 LLM까지 안 보낸다"는 새 통제 지점이 추가됐다.</p>
+  <h3>수집 → 필터 → 분석 → 클러스터링 → 발송</h3>
+<pre>Graph API 폴링 → check_relevance() 사전 필터(임계값 미만이면 LLM 호출 없이 스킵)
+  → 기존 하이브리드 파이프라인 재사용해 분류(system_error/user_mistake/uncertain)·심각도 판정
+  → 반복 유형 클러스터링(issue_signature 임베딩 비교, LLM 호출 없음)
+  → 발송 게이트: 클러스터 최소 건수 넘을 때만, 그 이후는 배수(3/6/9건째)에서만 알림</pre>
+  <p>IP/이메일/전화번호는 LLM에 넣기 직전 마스킹(사내 LLM 게이트웨이가 이런 패턴 포함 시 응답을 거부하는 정책 대응). 30일 고정 보관정책으로 <code>ops_email_analysis</code>/<code>ops_email_poll_cycle</code>이 자동 정리된다.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="auth">
+  <h2><span class="num">10</span>인증 · 권한 모델</h2>
+  <p>JWT(Access 30분 + Refresh 7일) + <strong>네임스페이스 소유 부서(<code>owner_part</code>) 기반 권한</strong>. 소유 부서 구성원만 CRUD, 타 부서는 읽기 전용. <code>owner_part=NULL</code>(공통 네임스페이스)은 모든 사용자가 CRUD 가능. 사용자별 LLM API Key·Confluence PAT는 Fernet 대칭 암호화로 저장한다.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="internal-llm">
+  <h2><span class="num">11</span>사내 LLM 라우팅 브리지</h2>
+  <p class="lead">SMAgentLab이 아니라 <code>~/.claude/</code> 공통 레이어 — 모든 세션에서 재사용하는 인터랙티브 모델 라우팅 도구.</p>
+  <table>
+    <tr><th>분기</th><th>대상</th><th>용도</th></tr>
+    <tr><td>기본(아무 말 없음)</td><td>프론티어 Claude</td><td>이 세션이 직접 처리</td></tr>
+    <tr><td>"데브엑스로"</td><td>사내 DevX Gateway</td><td>사내 게이트웨이 LLM(플레이그라운드)</td></tr>
+    <tr><td>"로컬로"</td><td>폐쇄망 로컬 Qwen3-Coder-30B</td><td>완전 온프레미스 — 가장 민감한 데이터도 가능, 코드·구조 분석에 강함</td></tr>
+  </table>
+  <p>민감 원문은 <code>--context-file</code>로만 전달하고 명령어·출력에 리터럴로 안 넣는다 — Claude(오케스트레이터)는 판단만 하고, 민감 데이터 접촉은 사내 LLM이 전담한다는 역할 분리가 목적이다.</p>
+  <div class="callout">
+    <strong>실측</strong>: 라우팅의 목적은 토큰 절약이 아니다 — 로컬 출력을 다시 Claude 컨텍스트로 끌어와 검증·반복하면 토큰은 오히려 늘어난다. 절약은 "안 읽고 파일로만 받거나(<code>--out</code>) 대용량 입력이 로컬에서만 소화될 때"뿐 — 진짜 목적은 <strong>데이터 경계 + 비용·역할 분리</strong>다.
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="philosophy">
+  <h2><span class="num">12</span>설계 철학 — 경계한 것들</h2>
+  <div class="grid2">
+    <div class="card"><span class="badge b-guard">과설계 금지</span><p style="margin:8px 0 0">사례 2개뿐인데 범용 라우팅 모듈을 만들지 않음(§7). 한 번 본 사례로 스키마를 미리 늘리지 않음(상태전이 규칙 → 전용 테이블 대신 unresolved 캡처만).</p></div>
+    <div class="card"><span class="badge b-guard">완전 자동화를 목표로 안 잡음</span><p style="margin:8px 0 0">팀별 정책서 비표준화를 실측 확인 후, "자동 처리 비율 최대화 + 실패 사유 구조화 캡처"로 목표 재정의(§5).</p></div>
+    <div class="card"><span class="badge b-guard">DRM 우회 안 함</span><p style="margin:8px 0 0">실 정책서가 IRM 암호화라 못 열렸을 때 화면 캡처+수동 재구성으로 우회 없이 검증.</p></div>
+    <div class="card"><span class="badge b-guard">"만들었지만 방치되는 기능" 경계</span><p style="margin:8px 0 0">unresolved 데이터를 그냥 쌓아만 두지 않고 집계 리포트+읽기전용 UI로 "사람이 보게" 만듦 — API만으론 루프가 안 닫힌다는 판단.</p></div>
+    <div class="card"><span class="badge b-guard">전면 평가 프레임워크 조기 도입 안 함</span><p style="margin:8px 0 0">Recall@K/nDCG류는 지금 규모(정책서 골든셋 89건)엔 과함 — 대상에 맞는 소형 골든셋으로 충분.</p></div>
+    <div class="card"><span class="badge b-guard">검증 안 된 것을 공유 경로에 먼저 안 섞음</span><p style="margin:8px 0 0">정책 검색을 전용 엔드포인트로 분리해두고, 실험실 수치가 확정된 뒤에야 메인 채팅에 편입(§8).</p></div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="next">
+  <h2><span class="num">13</span>다음 단계</h2>
+  <ul>
+    <li>검토/승인 UI — 정책 파라미터 값 승인, 재분류, 버전 diff</li>
+    <li>narrative 벡터 임계치 튜닝 — 현재 0.4는 임시(딜리버스 71개 중 67개=94%가 매칭되던 문제를 41%까지 낮춘 값), 골든셋으로 최적치 탐색</li>
+    <li>다음 데이터 축 편입 — 온톨로지 관계, 시스템 인터페이스 등에 §7 라우팅 원칙 재적용</li>
+    <li>데이터 허브를 팀 공통 포털의 백엔드 모듈로 이관 — SMAgentLab은 프로토타이핑 베이스, 처음부터 포털에 얹을 수 있는 API 경계로 설계해둠</li>
+    <li>실험실(Track 2)의 상시 게이트화 — 지금은 사람이 결과를 보고 편입을 판단, 다음은 스키마/프롬프트 변경 시 자동 회귀 판정</li>
+  </ul>
+</section>
+
+<footer>
+  Ops-Navigator 기술 소개 v1 · 근거: <code>docs/architecture.md</code>(v2.66) · <code>docs/flow.md</code> · <code>docs/policy-doc-pipeline-plan.md</code> · <code>docs/tech/retrieval-routing-pattern.md</code> · 실 코드베이스(2026-09-07 기준)<br>
+  다음 버전은 <code>docs/presentation/2.html</code>로 추가 — 이 파일은 그대로 보존한다.
+</footer>
+
+</main>
+</div>
+</body>
+</html>

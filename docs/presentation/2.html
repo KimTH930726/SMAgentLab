@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ops-Navigator 기술 소개 — v2 (비주얼판)</title>
+<style>
+  :root{
+    --bg:#0F172A; --card:#1E293B; --card2:#243146; --accent:#6366F1; --accent2:#818CF8;
+    --text:#E2E8F0; --text-dim:#94A3B8; --border:#334155; --green:#10B981; --amber:#F59E0B;
+    --red:#EF4444; --violet:#A78BFA; --cyan:#22D3EE;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Pretendard,"Malgun Gothic",sans-serif;
+    line-height:1.5; font-size:15px;
+  }
+  .layout{display:flex; max-width:1500px; margin:0 auto;}
+  nav.toc{
+    position:sticky; top:0; align-self:flex-start; width:220px; height:100vh; overflow-y:auto;
+    padding:24px 14px; border-right:1px solid var(--border); flex-shrink:0;
+  }
+  nav.toc .brand{font-size:12px; color:var(--accent2); font-weight:800; letter-spacing:.05em;}
+  nav.toc .ver{font-size:10.5px; color:var(--text-dim); margin-bottom:16px;}
+  nav.toc a{
+    display:flex; align-items:center; gap:8px; padding:6px 9px; margin:1px 0; border-radius:7px; color:var(--text-dim);
+    text-decoration:none; font-size:12.5px; transition:background .15s,color .15s;
+  }
+  nav.toc a .n{width:18px; height:18px; border-radius:5px; background:var(--card2); color:var(--accent2); font-size:10px; font-weight:800; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  nav.toc a:hover{background:var(--card); color:var(--text);}
+  main{flex:1; min-width:0; scroll-snap-type:y proximity;}
+  .slide{
+    min-height:94vh; padding:56px 64px; border-bottom:1px solid var(--border);
+    display:flex; flex-direction:column; justify-content:center; scroll-snap-align:start; scroll-margin-top:10px;
+  }
+  .slide.cover{justify-content:center; align-items:flex-start;}
+  .eyebrow{display:flex; align-items:center; gap:10px; font-size:12px; color:var(--accent2); font-weight:800; letter-spacing:.08em; text-transform:uppercase; margin-bottom:10px;}
+  .eyebrow .chip{background:var(--card2); padding:2px 9px; border-radius:6px; font-size:11px;}
+  h1{font-size:38px; margin:0 0 8px; letter-spacing:-.01em;}
+  h2{font-size:30px; margin:0 0 6px; letter-spacing:-.01em;}
+  .lead{color:var(--text-dim); font-size:15px; margin:0 0 26px; max-width:760px;}
+  h3{font-size:14px; color:var(--accent2); margin:0 0 10px; font-weight:800; text-transform:uppercase; letter-spacing:.03em;}
+  .cols{display:grid; grid-template-columns:1fr 1fr; gap:36px; align-items:center; flex:1;}
+  .cols.stack3{grid-template-columns:repeat(3,1fr);}
+  @media (max-width:1050px){.cols,.cols.stack3{grid-template-columns:1fr;} nav.toc{display:none;} .slide{padding:40px 24px;}}
+
+  /* ── stat cards ── */
+  .stat-row{display:flex; gap:12px; flex-wrap:wrap; margin:6px 0;}
+  .stat{background:var(--card2); border:1px solid var(--border); border-radius:12px; padding:16px 20px; min-width:130px;}
+  .stat .num{font-size:26px; font-weight:800; color:var(--accent2); font-variant-numeric:tabular-nums;}
+  .stat .lbl{font-size:11.5px; color:var(--text-dim); margin-top:3px;}
+
+  /* ── icon chip cards ── */
+  .chips{display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px;}
+  .chip-card{background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px 18px;}
+  .chip-card .ico{font-size:26px;}
+  .chip-card .t{font-weight:800; font-size:14px; margin:8px 0 3px;}
+  .chip-card .d{font-size:12px; color:var(--text-dim);}
+
+  /* ── flow row (horizontal steps) ── */
+  .flow-row{display:flex; align-items:stretch; flex-wrap:wrap; gap:0;}
+  .flow-step{background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px 16px; min-width:130px; text-align:center; flex:1;}
+  .flow-step .ico{font-size:22px;}
+  .flow-step .t{font-weight:800; font-size:12.5px; margin-top:5px;}
+  .flow-step .d{font-size:10.5px; color:var(--text-dim); margin-top:2px;}
+  .flow-arrow{display:flex; align-items:center; justify-content:center; color:var(--accent2); font-size:20px; padding:0 6px; flex:0 0 auto;}
+
+  /* ── vertical timeline ── */
+  .timeline{position:relative; padding-left:38px;}
+  .timeline::before{content:'';position:absolute; left:13px; top:4px; bottom:4px; width:2px; background:var(--border);}
+  .t-item{position:relative; margin-bottom:18px;}
+  .t-item .dot{position:absolute; left:-38px; top:0; width:28px; height:28px; border-radius:50%; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px;}
+  .t-item .tt{font-weight:800; font-size:14.5px;}
+  .t-item .td{font-size:12px; color:var(--text-dim); margin-top:1px;}
+
+  /* ── compare (before/after) ── */
+  .compare{display:grid; grid-template-columns:1fr 56px 1fr; gap:0; align-items:center;}
+  .compare .box{border-radius:14px; padding:18px 20px; border:1.5px solid var(--border);}
+  .compare .box.bad{border-color:var(--red); background:rgba(239,68,68,.08);}
+  .compare .box.good{border-color:var(--green); background:rgba(16,185,129,.08);}
+  .compare .box .tag{font-size:11px; font-weight:800; letter-spacing:.03em;}
+  .compare .box.bad .tag{color:#FCA5A5;}
+  .compare .box.good .tag{color:var(--green);}
+  .compare .box .h{font-size:15px; font-weight:800; margin:6px 0 8px;}
+  .compare .box ul{margin:0; padding-left:18px; font-size:12.5px;}
+  .compare .box li{margin:4px 0;}
+  .compare .vs{text-align:center; font-weight:800; color:var(--text-dim); font-size:13px;}
+
+  /* ── short bullet list (label style) ── */
+  ul.tight{list-style:none; margin:0; padding:0;}
+  ul.tight li{display:flex; gap:9px; align-items:flex-start; font-size:13.5px; margin:9px 0;}
+  ul.tight li::before{content:'▸'; color:var(--accent2); font-weight:800; flex-shrink:0;}
+  ul.tight li b{color:var(--text); font-weight:700;}
+  ul.tight li span{color:var(--text-dim);}
+
+  /* ── formula / score bar ── */
+  .formula{background:#0B1220; border:1px solid var(--border); border-radius:12px; padding:18px 22px; font-family:"SF Mono",Consolas,monospace; font-size:14px; color:#93C5FD; text-align:center;}
+  .score-bar{display:flex; height:26px; border-radius:8px; overflow:hidden; margin-top:14px; font-size:11px; font-weight:800;}
+  .score-bar .v{background:var(--accent); display:flex; align-items:center; justify-content:center; color:#fff;}
+  .score-bar .k{background:var(--cyan); display:flex; align-items:center; justify-content:center; color:#052;}
+
+  /* ── mini table ── */
+  table{border-collapse:collapse; width:100%; font-size:12.5px;}
+  th,td{border:1px solid var(--border); padding:7px 10px; text-align:left;}
+  th{background:var(--card2); color:var(--accent2); font-weight:700; font-size:11px; text-transform:uppercase;}
+  tr:nth-child(even) td{background:#182234;}
+
+  /* ── architecture diagram (boxes) ── */
+  .arch{display:flex; flex-direction:column; gap:10px; align-items:center;}
+  .arch-row{display:flex; gap:14px; align-items:center; justify-content:center; flex-wrap:wrap;}
+  .arch-box{background:var(--card); border:1.5px solid var(--border); border-radius:12px; padding:14px 20px; text-align:center; min-width:120px;}
+  .arch-box .ico{font-size:22px;}
+  .arch-box .t{font-weight:800; font-size:13px; margin-top:4px;}
+  .arch-box .d{font-size:10.5px; color:var(--text-dim);}
+  .arch-box.accent{border-color:var(--accent);}
+  .arch-down{color:var(--text-dim); font-size:18px;}
+
+  .badge{display:inline-block; padding:2px 9px; border-radius:999px; font-size:10.5px; font-weight:800;}
+  .b-green{background:rgba(16,185,129,.18); color:var(--green);}
+  .b-red{background:rgba(239,68,68,.15); color:#FCA5A5;}
+  .b-amber{background:rgba(245,158,11,.15); color:var(--amber);}
+  .b-violet{background:rgba(167,139,250,.18); color:var(--violet);}
+
+  .callout{border-left:3px solid var(--accent); background:rgba(99,102,241,.08); padding:12px 18px; border-radius:0 8px 8px 0; font-size:13px;}
+  footer.end{padding:40px 64px 80px; color:var(--text-dim); font-size:12px;}
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <div class="brand">OPS-NAVIGATOR</div>
+  <div class="ver">v2 · 비주얼판 · 2026-09-07</div>
+  <a href="#s0"><span class="n">0</span>개요</a>
+  <a href="#s1"><span class="n">1</span>아키텍처</a>
+  <a href="#s2"><span class="n">2</span>기술 스택</a>
+  <a href="#s3-1"><span class="n">3</span>채팅 흐름</a>
+  <a href="#s3-2"><span class="n">·</span>시맨틱 캐시</a>
+  <a href="#s3-3"><span class="n">·</span>멀티턴 보강</a>
+  <a href="#s3-4"><span class="n">·</span>대화 메모리</a>
+  <a href="#s3-5"><span class="n">·</span>하이브리드 검색</a>
+  <a href="#s3-6"><span class="n">·</span>SSE 스트리밍</a>
+  <a href="#s3-7"><span class="n">·</span>디버그</a>
+  <a href="#s4"><span class="n">4</span>지식 선순환</a>
+  <a href="#s5"><span class="n">5</span>정책서 파이프라인</a>
+  <a href="#s6"><span class="n">6</span>저장소 실험실</a>
+  <a href="#s7"><span class="n">7</span>라우팅 원칙</a>
+  <a href="#s8"><span class="n">8</span>채팅 편입</a>
+  <a href="#s9"><span class="n">9</span>VOC 채널</a>
+  <a href="#s10"><span class="n">10</span>인증·권한</a>
+  <a href="#s11"><span class="n">11</span>사내 LLM 라우팅</a>
+  <a href="#s12"><span class="n">12</span>경계한 것</a>
+  <a href="#s13"><span class="n">13</span>다음 단계</a>
+</nav>
+
+<main>
+
+<!-- 0 COVER -->
+<section class="slide cover" id="s0">
+  <div class="eyebrow"><span class="chip">OPS-NAVIGATOR</span>기술 소개 · v2</div>
+  <h1>운영 지식을, 스스로 좋아지는 AI로</h1>
+  <p class="lead">IT 운영팀 반복 조회 업무 자동화 에이전트 플랫폼 — 왜 이렇게 설계했는가</p>
+  <div class="stat-row">
+    <div class="stat"><div class="num">2</div><div class="lbl">에이전트</div></div>
+    <div class="stat"><div class="num">500건</div><div class="lbl">정책서 적재</div></div>
+    <div class="stat"><div class="num">57→75%</div><div class="lbl">검색전략 A/B</div></div>
+    <div class="stat"><div class="num">343개</div><div class="lbl">자동 테스트</div></div>
+    <div class="stat"><div class="num">768d</div><div class="lbl">임베딩 벡터</div></div>
+  </div>
+</section>
+
+<!-- 1 아키텍처 -->
+<section class="slide" id="s1">
+  <div class="eyebrow"><span class="chip">01</span>SYSTEM ARCHITECTURE</div>
+  <h2>전체 구성도</h2>
+  <p class="lead">Docker Compose 4개 컴포넌트 + 호스트 LLM</p>
+  <div class="cols">
+    <div class="arch">
+      <div class="arch-box accent"><div class="ico">⚛️</div><div class="t">Frontend</div><div class="d">React · nginx :8501</div></div>
+      <div class="arch-down">▼</div>
+      <div class="arch-box accent"><div class="ico">🚀</div><div class="t">Backend</div><div class="d">FastAPI :8000</div></div>
+      <div class="arch-down">▼</div>
+      <div class="arch-row">
+        <div class="arch-box"><div class="ico">🐘</div><div class="t">Postgres+pgvector</div><div class="d">:5432</div></div>
+        <div class="arch-box"><div class="ico">⚡</div><div class="t">Redis</div><div class="d">시맨틱 캐시</div></div>
+      </div>
+      <div class="arch-down">┈┈</div>
+      <div class="arch-box"><div class="ico">🤖</div><div class="t">Ollama / DevX</div><div class="d">호스트 직접 실행</div></div>
+    </div>
+    <div>
+      <ul class="tight">
+        <li><b>agents/</b> <span>— 에이전트별 파이프라인. 모듈+등록만으로 확장</span></li>
+        <li><b>service/</b> <span>— 인증·채팅·피드백·정책 등 플랫폼 공통</span></li>
+        <li><b>core / shared</b> <span>— DB풀·보안·임베딩·캐시 (전 에이전트 공유)</span></li>
+      </ul>
+      <div class="callout" style="margin-top:18px">
+        플랫폼 ↔ 에이전트 완전 분리 → Text2SQL 에이전트 통째로 제거해도 <b>플랫폼 코드 0줄 수정</b>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 2 기술 스택 -->
+<section class="slide" id="s2">
+  <div class="eyebrow"><span class="chip">02</span>TECH STACK</div>
+  <h2>왜 이걸 골랐나</h2>
+  <div class="chips">
+    <div class="chip-card"><div class="ico">🐘</div><div class="t">PostgreSQL + pgvector</div><div class="d">정형+벡터, 한 DB·한 트랜잭션. 벡터=파생물, pg=원본</div></div>
+    <div class="chip-card"><div class="ico">⚡</div><div class="t">Redis 시맨틱 캐시</div><div class="d">문자열 일치 아닌 의미 유사도로 캐시 히트</div></div>
+    <div class="chip-card"><div class="ico">🧬</div><div class="t">로컬 임베딩</div><div class="d">다국어 768d · 데이터 외부 유출 없음</div></div>
+    <div class="chip-card"><div class="ico">🔀</div><div class="t">LLM Provider 추상화</div><div class="d">로컬 Ollama ↔ 사내 DevX 게이트웨이 런타임 전환</div></div>
+    <div class="chip-card"><div class="ico">⚛️</div><div class="t">React + Zustand</div><div class="d">스트림 상태 vs 서버 상태 분리</div></div>
+    <div class="chip-card"><div class="ico">🚀</div><div class="t">FastAPI + asyncpg</div><div class="d">전 구간 비동기, 블로킹 I/O 없음</div></div>
+  </div>
+  <table style="margin-top:20px">
+    <tr><th>DB</th><td>PostgreSQL 16 + pgvector</td><th>Cache</th><td>Redis 7 (LRU 256MB)</td></tr>
+    <tr><th>Frontend</th><td>React 18 · Zustand 5 · Vite 5 · Tailwind 3</td><th>임베딩</th><td>mpnet 768d, 다국어</td></tr>
+  </table>
+</section>
+
+<!-- 3-1 전체 흐름 -->
+<section class="slide" id="s3-1">
+  <div class="eyebrow"><span class="chip">03-1</span>CHAT PIPELINE</div>
+  <h2>질문 → 답변, 7단계</h2>
+  <div class="cols" style="grid-template-columns:1fr;">
+    <div class="timeline">
+      <div class="t-item"><div class="dot">0A</div><div class="tt">🗄️ 시맨틱 캐시 조회</div><div class="td">히트 → 즉시 응답, 이하 전부 스킵</div></div>
+      <div class="t-item"><div class="dot">0B</div><div class="tt">🔗 멀티턴 검색 보강</div><div class="td">직전 Q+A 결합, LLM 호출 없음</div></div>
+      <div class="t-item"><div class="dot">1</div><div class="tt">📖 용어집 매핑</div><div class="td">사내 표준 용어 보강</div></div>
+      <div class="t-item"><div class="dot">2</div><div class="tt">🔍 하이브리드 검색</div><div class="td">벡터+키워드 가중합 (+정책 병행검색)</div></div>
+      <div class="t-item"><div class="dot">3</div><div class="tt">🧠 대화 메모리 결합</div><div class="td">과거 요약 리콜 + 최근 2회 교환</div></div>
+      <div class="t-item"><div class="dot">4</div><div class="tt">✨ LLM 스트리밍 생성</div><div class="td">SSE 토큰 실시간 전송</div></div>
+      <div class="t-item"><div class="dot">5</div><div class="tt">💾 저장·후처리</div><div class="td">DB 저장, 요약, 캐시 적재, 로그</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 3-2 시맨틱 캐시 -->
+<section class="slide" id="s3-2">
+  <div class="eyebrow"><span class="chip">03-2</span>SEMANTIC LAYER</div>
+  <h2>시맨틱 캐시</h2>
+  <p class="lead">문자열 일치 아닌 <b>의미 유사도</b>로 캐시 히트 판정</p>
+  <div class="cols">
+    <ul class="tight">
+      <li><b>키</b> <span>namespace + agent_type 로 격리(캐시 안 섞임)</span></li>
+      <li><b>임계값</b> <span>기본 0.88(한국어 최적화) · 운영값 0.92</span></li>
+      <li><b>TTL</b> <span>1800초(30분)</span></li>
+      <li><b>장애 대응</b> <span>Redis 다운 → 캐시만 꺼지고 서비스는 정상</span></li>
+      <li><b>페이로드</b> <span>답변 + 근거(results/policy_citations) 통째로 재생</span></li>
+    </ul>
+    <div class="chip-card" style="text-align:center; padding:30px 20px;">
+      <div style="font-size:40px;">⚡</div>
+      <div style="margin-top:10px; font-size:13px; color:var(--text-dim);">코사인 유사도</div>
+      <div style="font-size:30px; font-weight:800; color:var(--accent2); margin:6px 0;">≥ 0.92</div>
+      <div style="font-size:12px; color:var(--text-dim);">→ 검색+LLM 생성 스킵, 즉시 응답</div>
+    </div>
+  </div>
+</section>
+
+<!-- 3-3 멀티턴 보강 -->
+<section class="slide" id="s3-3">
+  <div class="eyebrow"><span class="chip">03-3</span>MULTI-TURN</div>
+  <h2>멀티턴 검색 보강</h2>
+  <p class="lead">"그 쿼리 알려줘" 같은 후속 질문도 검색되게</p>
+  <div class="flow-row">
+    <div class="flow-step"><div class="ico">💬</div><div class="t">직전 Q (80자)</div></div>
+    <div class="flow-arrow">+</div>
+    <div class="flow-step"><div class="ico">💬</div><div class="t">직전 A (80자)</div></div>
+    <div class="flow-arrow">+</div>
+    <div class="flow-step"><div class="ico">❓</div><div class="t">현재 질문</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step" style="background:var(--accent); border-color:var(--accent);"><div class="ico">🔍</div><div class="t" style="color:#fff;">검색용 문장</div></div>
+  </div>
+  <div class="callout" style="margin-top:20px; max-width:600px;">추가 LLM 호출 없음 · DB 조회 1회, 1ms 미만</div>
+</section>
+
+<!-- 3-4 대화 메모리 -->
+<section class="slide" id="s3-4">
+  <div class="eyebrow"><span class="chip">03-4</span>CONTEXT MAINTENANCE</div>
+  <h2>대화 메모리</h2>
+  <p class="lead">ConversationSummaryBuffer + Semantic Recall</p>
+  <div class="cols">
+    <ul class="tight">
+      <li><b>요약 트리거</b> <span>4회 교환마다 오래된 대화 LLM 요약</span></li>
+      <li><b>Working Memory</b> <span>최근 2회 교환은 항상 raw로 유지</span></li>
+      <li><b>Semantic Recall</b> <span>유사도 ≥ 0.45 과거 요약만 리콜, 최대 2개</span></li>
+      <li><b>백그라운드</b> <span>요약 생성이 응답 지연을 만들지 않음</span></li>
+    </ul>
+    <div class="chip-card">
+      <div style="font-size:12px; color:var(--text-dim); margin-bottom:8px;">예시</div>
+      <div style="font-size:13px;">"아까 쿠폰 관련 쿼리 다시 알려줘"</div>
+      <div style="text-align:center; margin:8px 0; color:var(--accent2);">↓ 유사도 0.72</div>
+      <div style="font-size:13px; color:var(--green);">1~2번째 교환 요약 리콜 성공</div>
+    </div>
+  </div>
+</section>
+
+<!-- 3-5 하이브리드 검색 -->
+<section class="slide" id="s3-5">
+  <div class="eyebrow"><span class="chip">03-5</span>HYBRID SEARCH</div>
+  <h2>top_k · w_vector · w_keyword</h2>
+  <div class="formula">final_score = (w_vector × v_score + w_keyword × k_score) × (1 + base_weight)</div>
+  <div class="score-bar"><div class="v" style="width:70%;">벡터 0.7</div><div class="k" style="width:30%;">키워드 0.3</div></div>
+  <table style="margin-top:20px">
+    <tr><th>기호</th><th>의미</th><th>기본값</th></tr>
+    <tr><td>v_score</td><td>코사인 유사도 (HNSW)</td><td>0~1</td></tr>
+    <tr><td>k_score</td><td>ts_rank (GIN, BM25계열)</td><td>0~0.1대</td></tr>
+    <tr><td>base_weight</td><td>👍+0.1 / 👎−0.1 자동조정</td><td>1.0</td></tr>
+    <tr><td>top_k</td><td>반환 개수 (슬라이더 조정)</td><td>5</td></tr>
+  </table>
+</section>
+
+<!-- 3-6 SSE -->
+<section class="slide" id="s3-6">
+  <div class="eyebrow"><span class="chip">03-6</span>STREAMING</div>
+  <h2>SSE — asyncio.Task + Queue</h2>
+  <p class="lead">탭을 닫아도 백엔드 워커는 끝까지 실행</p>
+  <div class="flow-row">
+    <div class="flow-step"><div class="ico">📶</div><div class="t">status</div><div class="d">단계 진행 표시</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="ico">📋</div><div class="t">meta</div><div class="d">결과 카드</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="ico">✏️</div><div class="t">token</div><div class="d">답변 스트리밍</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step" style="background:var(--green); border-color:var(--green);"><div class="ico">✅</div><div class="t" style="color:#052;">done</div><div class="d" style="color:#052;">피드백 활성화</div></div>
+  </div>
+</section>
+
+<!-- 3-7 디버그 -->
+<section class="slide" id="s3-7">
+  <div class="eyebrow"><span class="chip">03-7</span>DEBUG</div>
+  <h2>파이프라인 디버그</h2>
+  <p class="lead">/api/chat/debug — LLM 호출 없이 전 단계 수치 노출</p>
+  <div class="chips">
+    <div class="chip-card"><div class="ico">📖</div><div class="t">용어 매핑</div><div class="d">glossary_match + 유사도</div></div>
+    <div class="chip-card"><div class="ico">📊</div><div class="t">검색 점수</div><div class="d">문서별 v_score / k_score / final_score</div></div>
+    <div class="chip-card"><div class="ico">🗂️</div><div class="t">Few-shot 전체</div><div class="d">임계값 미달분까지 노출</div></div>
+    <div class="chip-card"><div class="ico">📄</div><div class="t">컨텍스트 프리뷰</div><div class="d">실제 LLM 프롬프트 텍스트</div></div>
+  </div>
+  <div class="callout" style="margin-top:20px; max-width:640px;">결과(답변)뿐 아니라 과정(점수)까지 투명하게</div>
+</section>
+
+<!-- 4 지식 선순환 -->
+<section class="slide" id="s4">
+  <div class="eyebrow"><span class="chip">04</span>KNOWLEDGE LOOP</div>
+  <h2>지식 선순환</h2>
+  <div class="cols">
+    <div>
+      <h3>등록 경로 4종</h3>
+      <div class="chips">
+        <div class="chip-card"><div class="ico">📁</div><div class="d">파일(PDF/Excel/CSV/MD)</div></div>
+        <div class="chip-card"><div class="ico">🔗</div><div class="d">URL / Confluence</div></div>
+        <div class="chip-card"><div class="ico">✍️</div><div class="d">직접 입력</div></div>
+        <div class="chip-card"><div class="ico">📋</div><div class="d">대량 텍스트</div></div>
+      </div>
+    </div>
+    <ul class="tight">
+      <li><b>👍</b> <span>base_weight +0.1, few-shot 후보 자동 생성</span></li>
+      <li><b>👎</b> <span>base_weight −0.1, unresolved</span></li>
+      <li><b>👎 + 교정</b> <span>원인 지식 페널티 + 새 지식 연결</span></li>
+      <li><b>검색 실패</b> <span>no_knowledge → 대시보드 "지식 공백" 카드</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- 5 정책서 파이프라인 -->
+<section class="slide" id="s5">
+  <div class="eyebrow"><span class="chip">05</span>POLICY PIPELINE</div>
+  <h2>정책서 데이터화</h2>
+  <div class="stat-row">
+    <div class="stat"><div class="num">500건</div><div class="lbl">실 데이터 적재</div></div>
+    <div class="stat"><div class="num">389/434/58</div><div class="lbl">param/narrative/unresolved</div></div>
+    <div class="stat"><div class="num">6건</div><div class="lbl">실데이터 전용 버그</div></div>
+  </div>
+  <div class="arch" style="margin-top:10px;">
+    <div class="arch-box accent"><div class="ico">📄</div><div class="t">policy_item</div><div class="d">RDB · 원문+메타</div></div>
+    <div class="arch-down">▼</div>
+    <div class="arch-row">
+      <div class="arch-box"><div class="ico">🔢</div><div class="t">policy_param</div><div class="d">RDB 정확조회</div></div>
+      <div class="arch-box"><div class="ico">🧬</div><div class="t">policy_chunk</div><div class="d">벡터 의미검색</div></div>
+    </div>
+  </div>
+  <table style="margin-top:18px">
+    <tr><th>결정</th><th>기각안</th><th>왜</th></tr>
+    <tr><td>3층 분해</td><td>전부 벡터화</td><td>구조화 데이터 오탐 방지</td></tr>
+    <tr><td>통합 스키마</td><td>시스템별 별도 테이블</td><td>마이그레이션 비용 0</td></tr>
+    <tr><td>버전=INSERT</td><td>제자리 UPDATE</td><td>이력 소실 방지</td></tr>
+  </table>
+</section>
+
+<!-- 6 실험실 -->
+<section class="slide" id="s6">
+  <div class="eyebrow"><span class="chip">06</span>STORAGE LAB — TRACK 2</div>
+  <h2>골든셋으로 수치화</h2>
+  <div class="compare">
+    <div class="box bad">
+      <div class="tag">BEFORE</div>
+      <div class="h">param 유형 34.8%</div>
+      <ul><li>벡터 청크 없는 item 36%</li><li>하이브리드가 지식-only에 크게 패배</li></ul>
+    </div>
+    <div class="vs">→</div>
+    <div class="box good">
+      <div class="tag">AFTER · 벡터 폴백 추가</div>
+      <div class="h">param 유형 82.6%</div>
+      <ul><li>모든 item에 최소 1개 벡터 보장</li><li>4개 유형 전부 하이브리드 우세</li></ul>
+    </div>
+  </div>
+  <div class="callout" style="margin-top:20px; max-width:700px;">교훈: 검색전략은 배타적으로 나누지 말고 "정확조회 + 벡터 폴백"을 겹쳐야 함</div>
+  <p class="lead" style="margin-top:12px;">전체 정답률 <b style="color:var(--accent2)">57.3% → 75.3%</b> · <code>POST /api/policy/track2/run</code>으로 버튼 재실행</p>
+</section>
+
+<!-- 7 라우팅 원칙 -->
+<section class="slide" id="s7">
+  <div class="eyebrow"><span class="chip">07</span>REUSABLE PATTERN</div>
+  <h2>검색 전략 라우팅 원칙</h2>
+  <div class="callout" style="font-size:15px; max-width:760px;">
+    벡터 = 의미 유사 검색 · 키워드/RDB = 정확 일치 조회<br>구조화 값이면 후자, 서술형이면 전자
+  </div>
+  <div class="chips" style="margin-top:22px;">
+    <div class="chip-card"><div class="ico">1️⃣</div><div class="t">rag_knowledge (v2.49)</div><div class="d">공통코드 88% 오탐 → 랭킹 공식 분기</div></div>
+    <div class="chip-card"><div class="ico">2️⃣</div><div class="t">정책서 파이프라인</div><div class="d">같은 문제 예상 → 테이블 자체 분리</div></div>
+  </div>
+  <div class="callout" style="margin-top:18px; border-left-color:var(--red); background:rgba(239,68,68,.07); max-width:700px;">
+    <span class="badge b-red">경계</span> 사례 2개뿐 — 범용 라우팅 모듈 안 만듦 (과설계 금지)
+  </div>
+</section>
+
+<!-- 8 채팅 편입 -->
+<section class="slide" id="s8">
+  <div class="eyebrow"><span class="chip">08</span>INTEGRATION GATE</div>
+  <h2>"게이트가 편입을 판정한다"</h2>
+  <p class="lead">근거 카드 1건 압축 — 실패했던 1차 시도까지</p>
+  <div class="compare">
+    <div class="box bad">
+      <div class="tag">✗ 1차 시도 (폐기)</div>
+      <div class="h">검색직후 벡터1위로 컨텍스트 축소</div>
+      <ul><li>무관한 후보가 뽑힘</li><li>정답 컨텍스트 통째로 누락</li><li>"찾지 못했습니다" 답변 실패</li></ul>
+    </div>
+    <div class="vs">→</div>
+    <div class="box good">
+      <div class="tag">✓ 최종 설계</div>
+      <div class="h">답변 생성 "후" 역추적</div>
+      <ul><li>LLM 컨텍스트는 다중후보 유지</li><li>화면 근거만 답변-원문 겹침으로 1건 선택</li></ul>
+    </div>
+  </div>
+  <div class="callout" style="margin-top:20px; max-width:700px;">교훈: "화면 표시 개수"와 "검색 재현율"은 서로 다른 축</div>
+</section>
+
+<!-- 9 VOC -->
+<section class="slide" id="s9">
+  <div class="eyebrow"><span class="chip">09</span>VOC CHANNEL</div>
+  <h2>VOC 이메일 분석</h2>
+  <p class="lead">같은 지식베이스·같은 피드백 구조를 메일 채널에 이식</p>
+  <div class="flow-row">
+    <div class="flow-step"><div class="ico">📥</div><div class="t">수집</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="ico">🚦</div><div class="t">관련성 필터</div><div class="d">LLM 호출 전 차단</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="ico">🏷️</div><div class="t">분류·심각도</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="ico">🔁</div><div class="t">반복 클러스터링</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step" style="background:var(--violet); border-color:var(--violet);"><div class="ico">📢</div><div class="t" style="color:#1a0f2e;">Teams 발송</div><div class="d" style="color:#1a0f2e;">임계건수 배수만</div></div>
+  </div>
+</section>
+
+<!-- 10 인증 -->
+<section class="slide" id="s10">
+  <div class="eyebrow"><span class="chip">10</span>AUTH · RBAC</div>
+  <h2>인증 · 권한</h2>
+  <ul class="tight">
+    <li><b>🔐 JWT</b> <span>Access 30분 + Refresh 7일</span></li>
+    <li><b>🏢 네임스페이스 소유 부서</b> <span>owner_part 일치 시만 CRUD, 불일치는 읽기전용</span></li>
+    <li><b>🌐 공통 네임스페이스</b> <span>owner_part=NULL → 전체 사용자 CRUD</span></li>
+    <li><b>🔑 개인 키 암호화</b> <span>LLM API Key · Confluence PAT → Fernet 대칭 암호화</span></li>
+  </ul>
+</section>
+
+<!-- 11 사내 LLM 라우팅 -->
+<section class="slide" id="s11">
+  <div class="eyebrow"><span class="chip">11</span>INTERNAL LLM ROUTING</div>
+  <h2>사내 LLM 라우팅 브리지</h2>
+  <div class="chips">
+    <div class="chip-card"><div class="ico">🌍</div><div class="t">기본</div><div class="d">프론티어 Claude — 이 세션 직접 처리</div></div>
+    <div class="chip-card"><div class="ico">🏢</div><div class="t">"데브엑스로"</div><div class="d">사내 DevX Gateway</div></div>
+    <div class="chip-card"><div class="ico">🔒</div><div class="t">"로컬로"</div><div class="d">폐쇄망 Qwen3-Coder-30B, 완전 온프레미스</div></div>
+  </div>
+  <div class="callout" style="margin-top:20px; max-width:700px;">목적은 토큰 절약이 아니라 <b>데이터 경계 + 역할 분리</b></div>
+</section>
+
+<!-- 12 경계한 것 -->
+<section class="slide" id="s12">
+  <div class="eyebrow"><span class="chip">12</span>DESIGN PHILOSOPHY</div>
+  <h2>경계한 것</h2>
+  <div class="chips">
+    <div class="chip-card"><span class="badge b-red">과설계 금지</span><div class="d" style="margin-top:8px;">사례 2개로 범용모듈 안 만듦</div></div>
+    <div class="chip-card"><span class="badge b-red">완전자동화 비목표</span><div class="d" style="margin-top:8px;">실패 사유 구조화 캡처로 재정의</div></div>
+    <div class="chip-card"><span class="badge b-red">DRM 우회 안 함</span><div class="d" style="margin-top:8px;">화면 캡처로 수동 재구성</div></div>
+    <div class="chip-card"><span class="badge b-red">방치기능 경계</span><div class="d" style="margin-top:8px;">집계+읽기전용 UI로 사람이 보게</div></div>
+    <div class="chip-card"><span class="badge b-red">평가프레임워크 조기도입 안함</span><div class="d" style="margin-top:8px;">규모에 맞는 소형 골든셋</div></div>
+    <div class="chip-card"><span class="badge b-red">검증전 공유경로 안 섞음</span><div class="d" style="margin-top:8px;">전용 엔드포인트 → 게이트 통과 후 편입</div></div>
+  </div>
+</section>
+
+<!-- 13 다음 -->
+<section class="slide" id="s13">
+  <div class="eyebrow"><span class="chip">13</span>ROADMAP</div>
+  <h2>다음 단계</h2>
+  <ul class="tight">
+    <li><b>검토/승인 UI</b> <span>파라미터 승인·재분류·버전 diff</span></li>
+    <li><b>임계치 튜닝</b> <span>narrative 벡터 매칭 정밀도</span></li>
+    <li><b>다음 데이터 축</b> <span>온톨로지 관계·시스템 인터페이스</span></li>
+    <li><b>포털 이관</b> <span>팀 공통 포털 백엔드 모듈로</span></li>
+    <li><b>상시 게이트화</b> <span>사람 판단 → 자동 회귀 판정</span></li>
+  </ul>
+</section>
+
+<footer class="end">
+  Ops-Navigator 기술 소개 v2(비주얼판) · 근거: architecture.md(v2.66) · flow.md · policy-doc-pipeline-plan.md · retrieval-routing-pattern.md · 실 코드베이스<br>
+  상세 서술판은 <code>docs/presentation/1.html</code> 참고 · 다음 개정은 <code>3.html</code>
+</footer>
+
+</main>
+</div>
+</body>
+</html>
