@@ -6,6 +6,10 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 사용자는 에이전트를 선택해 목적에 맞는 AI를 사용한다: 지식 기반 Q&A(KnowledgeRAG) 또는 자연어 → SQL 쿼리 실행(Text-to-SQL).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- (archive/with-text2sql 브랜치 전용) MCP 도구 에이전트를 main 쪽 v2.67 제거 작업과 동일하게 이
+  브랜치에도 적용(cherry-pick) — Text2SQL은 그대로 유지. main의 v2.51~v2.66 변경사항(Text2SQL
+  자체 제거, 정책서 파이프라인 등)은 이 브랜치엔 반영하지 않음 — 이 브랜치는 Text2SQL 보존용
+  스냅샷이라 v2.50 이후 이력은 의도적으로 다르게 간다.
 - v2.50: 팀 규모 SSO 인프라 초석 — 소스 점검 중 발견한 실제 취약점 2건 수정 + `ops_user` 스키마 선확장.
   ① **admin 계정 비밀번호 강제 리셋 버그 수정**: `main.py`의 마이그레이션 루틴이 서버 재시작마다
   `admin` 계정의 `hashed_password`를 `ADMIN_DEFAULT_PASSWORD`(기본값 `1111`) 값으로 무조건
@@ -114,11 +118,10 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 | **Login** (`/login`) | JWT 로그인 — Access Token + Refresh Token 발급 |
 | **Register** (`/register`) | 회원가입 — 부서 선택 + 선택적 LLM API Key 등록 |
 | **AgentSelect** (로그인 직후) | 에이전트 선택 화면 — 지식베이스 AI / Text-to-SQL 카드 선택. `selectedAgent=null`이면 이 화면 표시 (사이드바 없음) |
-| **Chat** (`/`) | 에이전트별 채팅 — SSE 스트리밍, 결과 카드, 피드백(👍→few-shot/base_weight), 대화 메모리(요약+리콜), Markdown 답변, SQL블록+결과테이블+SVG차트 (text2sql), MCP 도구 토글 |
-| **Admin** (`/admin`) | 에이전트별 관리 화면 — `agentScope` 필드로 탭 필터링. knowledge_rag: 네임스페이스·지식·용어집·Few-shot·MCP도구·캐시현황·통계·디버그. text2sql: 대상DB·스키마·ERD·용어사전·SQL Few-shot·파이프라인·감사로그. 공통: 시스템설정·사용자관리. (에이전트현황 탭 제거 — AgentSelect 화면에 헬스배지로 대체) |
+| **Chat** (`/`) | 에이전트별 채팅 — SSE 스트리밍, 결과 카드, 피드백(👍→few-shot/base_weight), 대화 메모리(요약+리콜), Markdown 답변, SQL블록+결과테이블+SVG차트 (text2sql) |
+| **Admin** (`/admin`) | 에이전트별 관리 화면 — `agentScope` 필드로 탭 필터링. knowledge_rag: 네임스페이스·지식·용어집·Few-shot·캐시현황·통계·디버그. text2sql: 대상DB·스키마·ERD·용어사전·SQL Few-shot·파이프라인·감사로그. 공통: 시스템설정·사용자관리. (에이전트현황 탭 제거 — AgentSelect 화면에 헬스배지로 대체) |
 
 - **Agent-centric 라우팅**: `useAppStore.selectedAgent: 'knowledge_rag' | 'text2sql' | null`. null이면 AgentSelect 표시, 설정 시 에이전트별 UI로 전환. 로그아웃 시 null로 리셋
-- **MCP 도구 토글**: ChatContainer 내 `useHttpTool` boolean — ON 시 `agentType='mcp_tool'`, OFF 시 `selectedAgent` 값 사용. 에이전트가 아닌 도구
 - **ProtectedRoute**: 로그인되지 않은 사용자는 `/login`으로 리다이렉트
 - **useAuthStore** (Zustand): localStorage에 토큰 저장, 자동 Bearer 토큰 주입
 - **401 Auto-refresh**: Access Token 만료 시 Refresh Token으로 자동 갱신, 실패 시 로그아웃
@@ -149,20 +152,16 @@ backend/
 │   │   │   ├── web_crawler.py   #   URL/Confluence 수집 (httpx + BeautifulSoup + Confluence REST API)
 │   │   │   └── utils.py         #   공통 JSON 파싱 헬퍼
 │   │   └── fewshot/     #   Few-shot CRUD (status: active/candidate)
-│   ├── mcp_tool/
-│   │   └── agent.py     #   McpToolAgent — 3-case 플로우 + RAG + 감사 로그
-│   ├── text2sql/
-│   │   ├── agent.py     #   Text2SqlAgent (startup 병렬화, _cache_hit)
-│   │   ├── admin/       #   Text2SQL 어드민 API (대상DB·스키마·ERD·용어사전·Few-shot·파이프라인·감사로그)
-│   │   │   └── excel_importer.py  #   엑셀 스키마 임포터 (헤더 퍼지 매핑, parse_excel, rows_to_tables, build_sample_workbook)
-│   │   └── pipeline/    #   7단계: parse→rag→generate→validate→fix→execute→summarize
-│   └── http_tool/       #   HttpToolAgent (레거시)
+│   └── text2sql/
+│       ├── agent.py     #   Text2SqlAgent (startup 병렬화, _cache_hit)
+│       ├── admin/       #   Text2SQL 어드민 API (대상DB·스키마·ERD·용어사전·Few-shot·파이프라인·감사로그)
+│       │   └── excel_importer.py  #   엑셀 스키마 임포터 (헤더 퍼지 매핑, parse_excel, rows_to_tables, build_sample_workbook)
+│       └── pipeline/    #   7단계: parse→rag→generate→validate→fix→execute→summarize
 ├── service/             # 플랫폼 공통 레이어 (was domain/, platform/ 명칭 stdlib 충돌로 service/ 확정)
 │   ├── auth/            #   인증/계정 (JWT, bcrypt, Fernet API Key 암호화)
 │   ├── chat/            #   채팅 라우터·헬퍼·메모리 (AgentRegistry 위임)
 │   ├── feedback/        #   피드백 기록 + base_weight 조정
 │   ├── admin/           #   네임스페이스·통계·LLM 설정
-│   ├── mcp_tool/        #   MCP 도구 CRUD + 감사 로그
 │   ├── prompt/          #   프롬프트 관리 (get_prompt: DB 우선, fallback)
 │   ├── llm/             #   LLM Provider 추상화 (ollama / inhouse)
 │   └── email_voc/       #   VOC 이메일 분석 채널 (v2.40 신규)
@@ -184,7 +183,8 @@ backend/
 │   └── dependencies.py  # get_current_user, get_current_admin, check_namespace_ownership
 └── shared/
     ├── embedding.py     # Sentence-Transformers 싱글톤
-    └── cache.py         # Semantic Cache (Redis, 유사도 0.88, TTL 30분, graceful degradation)
+    ├── cache.py         # Semantic Cache (Redis, 유사도 0.88, TTL 30분, graceful degradation)
+    └── http_client.py   # 아웃바운드 HTTP 호출 공용 레이어 (call_http) — MCP 도구 제거 후 이관
 ```
 
 **주요 설계 원칙:**
@@ -263,8 +263,6 @@ ops_conversation      -- 대화방 (namespace_id FK, user_id FK, agent_type)
 ops_message           -- 대화 메시지 (role, content, results JSONB, metadata JSONB)
 ops_feedback          -- 👍/👎 피드백 로그 (agent_type, meta JSONB)
 ops_query_log         -- 질의 로그 (status: pending/resolved/unresolved, agent_type)
-ops_mcp_tool          -- MCP 도구 정의 (hub_base_url, tool_path, param_schema JSONB, agent_type)
-ops_mcp_tool_log      -- MCP 도구 감사 로그
 ops_prompt            -- 프롬프트 관리 (agent_type별 에이전트 스코핑, Admin 시스템설정 탭에서 편집)
 ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 영속화, VOC 폴링 정책/Graph 자격증명도 여기 저장)
 
@@ -512,19 +510,6 @@ sql_schema_vector     -- 스키마 벡터 인덱스
 
 상세 설계·의사결정 배경은 `docs/email-analysis-channel-plan.md` 참조.
 
-### MCP 도구
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `GET` | `/api/mcp-tools` | 네임스페이스 MCP 도구 목록 |
-| `POST` | `/api/mcp-tools` | 도구 등록 |
-| `PATCH` | `/api/mcp-tools/{id}` | 도구 수정 |
-| `PATCH` | `/api/mcp-tools/{id}/toggle` | 도구 활성/비활성 토글 |
-| `DELETE` | `/api/mcp-tools/{id}` | 도구 삭제 |
-| `POST` | `/api/mcp-tools/{id}/test` | 도구 테스트 실행 |
-| `POST` | `/api/mcp-tools/autocomplete` | 자연어 입력 → 도구 JSON 자동완성 |
-| `GET` | `/api/mcp-tools/logs` | 도구 호출 감사 로그 조회 |
-
 ---
 
 ## LLM Provider 확장 구조
@@ -629,6 +614,6 @@ final_score = (w_vec × v_score + w_kw × k_score) × (1 + base_weight)
 
 ### 비벡터 주요 테이블
 
-`ops_part`, `ops_user`, `ops_namespace`, `rag_knowledge_category`, `ops_feedback`, `ops_query_log`, `ops_conversation`, `ops_message`, `ops_mcp_tool`, `ops_mcp_tool_log`, `ops_prompt`, `ops_system_config`
+`ops_part`, `ops_user`, `ops_namespace`, `rag_knowledge_category`, `ops_feedback`, `ops_query_log`, `ops_conversation`, `ops_message`, `ops_prompt`, `ops_system_config`
 
 전체 스키마 정의는 `docs/table-definition.md` 참조.

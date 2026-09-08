@@ -1,6 +1,6 @@
 import { useState, useEffect, Component, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, Wrench, GitMerge, Network, BookMarked, ListOrdered, Workflow, FileText, Mail } from 'lucide-react';
+import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, GitMerge, Network, BookMarked, ListOrdered, Workflow, FileText, Mail } from 'lucide-react';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
@@ -9,7 +9,6 @@ import { DebugPanel } from '../components/admin/DebugPanel';
 import { FewshotTable } from '../components/admin/FewshotTable';
 import { LLMSettings } from '../components/admin/LLMSettings';
 import { UserManager } from '../components/admin/UserManager';
-import { McpToolManager } from '../components/admin/McpToolManager';
 import { CachePanel } from '../components/admin/CachePanel';
 import { VocEmailPanel } from '../components/admin/VocEmailPanel';
 import {
@@ -50,7 +49,7 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 
 type TabId =
   // knowledge_rag
-  | 'namespaces' | 'knowledge' | 'glossary' | 'fewshots' | 'mcp_tools' | 'debug'
+  | 'namespaces' | 'knowledge' | 'glossary' | 'fewshots' | 'debug'
   // text2sql
   | 'sql_db' | 'sql_schema' | 'sql_erd' | 'sql_synonyms' | 'sql_fewshots' | 'sql_pipeline' | 'sql_audit'
   // common
@@ -78,7 +77,6 @@ const TABS: Tab[] = [
   { id: 'sql_erd',      label: 'ERD',                  icon: <Network className="w-4 h-4" />,    agentScope: 'text2sql' },
   { id: 'sql_synonyms', label: '용어 사전',             icon: <GitMerge className="w-4 h-4" />,  agentScope: 'text2sql' },
   { id: 'sql_fewshots', label: 'SQL Q&A',           icon: <ListOrdered className="w-4 h-4" />, agentScope: 'text2sql' },
-  { id: 'mcp_tools',    label: 'MCP 도구',            icon: <Wrench className="w-4 h-4" />,     agentScope: 'all' },
   { id: 'sql_pipeline', label: '파이프라인',             icon: <Workflow className="w-4 h-4" />,  agentScope: 'text2sql' },
   { id: 'sql_audit',    label: '감사 로그',              icon: <FileText className="w-4 h-4" />,  agentScope: 'text2sql' },
   // 공통 탭 (knowledge_rag 전용으로 이동)
@@ -153,7 +151,6 @@ export default function Admin() {
           {resolvedTab === 'knowledge'    && <KnowledgeTable />}
           {resolvedTab === 'glossary'     && <GlossaryTable />}
           {resolvedTab === 'fewshots'     && <FewshotTable />}
-          {resolvedTab === 'mcp_tools'    && <McpToolManager />}
           {resolvedTab === 'debug'        && <DebugPanel onNavigate={(id) => setActiveTab(id as TabId)} />}
           {resolvedTab === 'sql_db'       && <SqlTargetDbTab />}
           {resolvedTab === 'sql_schema'   && <SqlSchemaTab />}

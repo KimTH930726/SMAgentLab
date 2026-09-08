@@ -34,8 +34,6 @@ export type AgentType = 'knowledge_rag' | 'text2sql';
 interface AppState {
   selectedAgent: AgentType | null;
   setSelectedAgent: (agent: AgentType | null) => void;
-  mcpEnabled: boolean;
-  setMcpEnabled: (v: boolean) => void;
   namespace: string;
   setNamespace: (ns: string) => void;
   conversationId: number | null;
@@ -57,8 +55,6 @@ interface AppState {
 export const useAppStore = create<AppState>((set) => ({
   selectedAgent: null,
   setSelectedAgent: (selectedAgent) => set({ selectedAgent, conversationId: null, conversations: [] }),
-  mcpEnabled: false,
-  setMcpEnabled: (mcpEnabled) => set({ mcpEnabled }),
   namespace: '',
   setNamespace: (namespace) => set({ namespace, conversationId: null, conversations: [], categories: [], autoDetectCategory: false }),
   conversationId: null,

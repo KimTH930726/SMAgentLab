@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Send, Square, AlertCircle, ChevronDown, ChevronUp, Wrench, Tag } from 'lucide-react';
+import { Send, Square, AlertCircle, ChevronDown, ChevronUp, Tag } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import {
   useStreamStore,
@@ -11,7 +11,6 @@ import {
 import { getMessages } from '../../api/conversations';
 import { getCategories, suggestCategory } from '../../api/namespaces';
 import { MessageItem } from './MessageItem';
-import { ToolRequestCard } from './ToolRequestCard';
 import type { ChatMessage } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
 
@@ -55,13 +54,6 @@ function PipelineStepsToggle({ steps }: { steps: PipelineStep[] }) {
   );
 }
 
-// 백엔드에서 도구 대기 상태로 저장한 placeholder 메시지 패턴
-const _TOOL_PENDING_PATTERNS = [
-  '[추가 정보 입력 대기 중]',
-  '[도구 선택 대기 중]',
-  '[도구 실행 승인 대기 중]',
-];
-
 function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null } | null }[]): ChatMessage[] {
   // Fix out-of-order pairs from old data (parallel saves could put assistant before user)
   // Check pairs at step=2: (0,1), (2,3), ... and swap reversed pairs
@@ -85,9 +77,6 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
       if (!m.content || m.content.trim().length <= 1) {
         if (!isGenerating) continue;
       }
-      // 도구 대기 placeholder 메시지는 스킵 (ToolRequestCard가 대신 표시)
-      const isToolPending = _TOOL_PENDING_PATTERNS.includes(m.content?.trim());
-      if (isToolPending) continue;
 
       converted.push({
         role: 'assistant',
@@ -216,7 +205,6 @@ export function ChatContainer() {
   const historyConvIdRef = useRef<number | null>(null);
   const selectedAgent = useAppStore((s) => s.selectedAgent);
   const [input, setInput] = useState('');
-  const [useHttpTool, setUseHttpTool] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
@@ -232,7 +220,6 @@ export function ChatContainer() {
   const streamMessages = useStreamStore((s) => s.messages);
   const streamStatus = useStreamStore((s) => s.status);
   const streamSteps = useStreamStore((s) => s.steps);
-  const toolRequest = useStreamStore((s) => s.toolRequest);
 
   // Is this conversation the one being streamed (or just completed)?
   const isStreamHere =
@@ -394,9 +381,6 @@ export function ChatContainer() {
     // Only act on natural stream completion (active→false with convId still set).
     // If clearStreamState was called first, convId is already null → skip.
     if (wasActive && !streamActive && streamConvId !== null) {
-      // Tool request pending — keep stream state so ToolRequestCard stays visible
-      if (useStreamStore.getState().toolRequest) return;
-
       const finishedConvId = streamConvId;
       const currentConvId = useAppStore.getState().conversationId;
 
@@ -408,14 +392,7 @@ export function ChatContainer() {
             if (epoch === loadEpochRef.current &&
                 useAppStore.getState().conversationId === finishedConvId) {
               historyConvIdRef.current = finishedConvId;
-              const converted = convertMessages(msgs);
-              // toolError는 DB에 저장 안 됨 — 스트림 메시지에서 마지막 assistant 기준으로 복원
-              const streamMsgs = useStreamStore.getState().messages;
-              const lastStreamErr = [...streamMsgs].reverse().find(m => m.role === 'assistant' && m.toolError);
-              if (lastStreamErr?.toolError && converted.length > 0 && converted[converted.length - 1].role === 'assistant') {
-                converted[converted.length - 1] = { ...converted[converted.length - 1], toolError: lastStreamErr.toolError };
-              }
-              setHistoryMessages(converted);
+              setHistoryMessages(convertMessages(msgs));
             }
           })
           .catch(console.error)
@@ -474,7 +451,7 @@ export function ChatContainer() {
       topK: searchConfig.topK,
       conversationId,
       categories: resolvedCategories,
-      agentType: useHttpTool ? 'mcp_tool' : (selectedAgent ?? 'knowledge_rag'),
+      agentType: selectedAgent ?? 'knowledge_rag',
       onConversationCreated: (id) => {
         // Guard: if stream was already stopped/cleared, don't navigate
         if (!useStreamStore.getState().active) return;
@@ -519,89 +496,13 @@ export function ChatContainer() {
           </div>
         )}
 
-        {displayMessages.map((msg, i) => {
-          // Tool request 대기 중 빈 assistant 메시지 숨김
-          if (msg.role === 'assistant' && !msg.content && toolRequest && isStreamHere) return null;
-          return (
-            <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace} agentType={selectedAgent ?? 'knowledge_rag'} />
-          );
-        })}
+        {displayMessages.map((msg, i) => (
+          <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace} agentType={selectedAgent ?? 'knowledge_rag'} />
+        ))}
 
         {/* Pipeline steps — inline below last message */}
         {isLoading && streamSteps.length > 0 && (
           <PipelineStepsToggle steps={streamSteps} />
-        )}
-
-        {/* Tool request card — awaiting user approval */}
-        {toolRequest && isStreamHere && (
-          <ToolRequestCard
-            event={toolRequest}
-            onApprove={(toolId, params) => {
-              useStreamStore.setState({ toolRequest: null });
-              // 승인된 도구로 재요청
-              loadEpochRef.current++;
-              startChatStream({
-                namespace: namespace!,
-                question: [...displayMessages].reverse().find((m) => m.role === 'user')?.content || '',
-                agentType: 'mcp_tool',
-                wVector: searchConfig.wVector,
-                wKeyword: searchConfig.wKeyword,
-                topK: searchConfig.topK,
-                conversationId,
-                categories: categories.length > 0 ? categories : null,
-                approvedTool: { tool_id: toolId, params },
-                onConversationCreated: (id) => {
-                  if (!useStreamStore.getState().active) return;
-                  const currentConvId = useAppStore.getState().conversationId;
-                  if (currentConvId !== id) setConversationId(id);
-                },
-              });
-            }}
-            onSelectTool={(toolId) => {
-              useStreamStore.setState({ toolRequest: null });
-              // 사용자가 직접 선택한 도구로 파라미터 추출 재요청
-              loadEpochRef.current++;
-              startChatStream({
-                namespace: namespace!,
-                question: [...displayMessages].reverse().find((m) => m.role === 'user')?.content || '',
-                agentType: 'mcp_tool',
-                wVector: searchConfig.wVector,
-                wKeyword: searchConfig.wKeyword,
-                topK: searchConfig.topK,
-                conversationId,
-                categories: categories.length > 0 ? categories : null,
-                selectedToolId: toolId,
-                onConversationCreated: (id) => {
-                  if (!useStreamStore.getState().active) return;
-                  const currentConvId = useAppStore.getState().conversationId;
-                  if (currentConvId !== id) setConversationId(id);
-                },
-              });
-            }}
-            onReject={() => {
-              clearStreamState();
-              if (conversationId) loadHistory(conversationId);
-            }}
-            onFallback={() => {
-              useStreamStore.setState({ toolRequest: null });
-              // 도구 없이 knowledge_rag로 재요청
-              loadEpochRef.current++;
-              startChatStream({
-                namespace: namespace!,
-                question: [...displayMessages].reverse().find((m) => m.role === 'user')?.content || '',
-                wVector: searchConfig.wVector,
-                wKeyword: searchConfig.wKeyword,
-                topK: searchConfig.topK,
-                conversationId,
-                categories: categories.length > 0 ? categories : null,
-                onConversationCreated: (id) => {
-                  if (!useStreamStore.getState().active) return;
-                  const currentConvId = useAppStore.getState().conversationId;
-                  if (currentConvId !== id) setConversationId(id);
-                },
-              });
-            }}
-          />
         )}
 
         <div ref={messagesEndRef} />
@@ -609,20 +510,8 @@ export function ChatContainer() {
 
       {/* Input area */}
       <div className="border-t border-slate-700 p-4 bg-slate-800">
-        {/* MCP tool toggle + 업무구분 필터 */}
+        {/* 업무구분 필터 */}
         <div className="flex items-center gap-2 mb-2">
-          <button
-            onClick={() => setUseHttpTool((v) => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
-              useHttpTool
-                ? 'bg-emerald-900/50 text-emerald-400 border-emerald-700/50'
-                : 'bg-slate-700/50 text-slate-500 border-slate-600/50 hover:text-slate-400'
-            }`}
-            title="MCP 도구를 사용하여 외부 API를 호출합니다"
-          >
-            <Wrench className="w-3.5 h-3.5" />
-            MCP 도구 {useHttpTool ? 'ON' : 'OFF'}
-          </button>
           {selectedAgent === 'knowledge_rag' && namespace && <CategoryFilter namespace={namespace} />}
         </div>
         <div className="flex gap-3 items-end">
@@ -630,7 +519,7 @@ export function ChatContainer() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={selectedAgent === 'text2sql' ? 'DB에 대해 자연어로 질문하세요... (Ctrl+Enter로 전송)' : useHttpTool ? 'MCP 도구를 활용한 질문을 입력하세요... (Ctrl+Enter로 전송)' : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
+            placeholder={selectedAgent === 'text2sql' ? 'DB에 대해 자연어로 질문하세요... (Ctrl+Enter로 전송)' : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
             rows={2}
             disabled={!namespace || isLoading}
             className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none disabled:opacity-50 text-sm"

@@ -52,6 +52,9 @@ sys.modules["shared"] = MagicMock()
 sys.modules["shared.embedding"] = _embedding_mod
 sys.modules["shared.reranker"] = MagicMock()
 sys.modules["shared.cache"] = MagicMock()
+_http_client_mod = MagicMock()
+_http_client_mod.call_http = AsyncMock(return_value=("", None, 200, 0.0, 1))
+sys.modules["shared.http_client"] = _http_client_mod
 # json_utils는 순수 함수(json/re만 사용, 외부 의존성 없음)라 목킹 대신 실제 모듈을 등록 —
 # mock으로 대체하면 shared가 MagicMock으로 통째로 대체돼 있어 shared.json_utils가 아예
 # 임포트 불가능해지고(tagger/analyzer가 여기서 콜렉션 자체가 깨짐), 파싱 로직 테스트도 불가능해짐.

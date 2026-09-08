@@ -1,10 +1,12 @@
 # Ops-Navigator 테이블 정의서
 
-> **Version**: 3.13
+> **Version**: 3.14 (archive/with-text2sql 브랜치 전용)
 > **DBMS**: PostgreSQL 16 + pgvector
 > **Extensions**: `vector`, `pg_trgm`
 > **벡터 차원**: 768 (paraphrase-multilingual-mpnet-base-v2)
-> **작성일**: 2026-08-20 (v3.13 — `email_relevance_min_score` 계산식 수정(base_weight 랭킹 부스팅 없는 원점수 기준) + 기본값 0.35→0.38 재조정. v3.12 — `ops_voc_routing`에 `mail_folder_id`/`mail_folder_name` 추가(특정 Outlook 폴더로 조회 범위 제한). v3.11 — `email_graph_delegated` JSON에 `client_secret` 선택 필드 추가(DDL 변경 없음, 기존 암호화 JSON 블롭 내부 키만 추가) — Confidential Client 지원. v3.10 — `email_graph_delegated`의 인증 방식을 Device Code Flow에서 Authorization Code Flow(PKCE)로 교체, `redirect_uri` 필드 추가. v3.9 — VOC 이메일 관련지식 사전 필터(`email_relevance_min_score`, `ops_email_analysis.status='skipped_relevance'`, `ops_email_poll_cycle.total_skipped_low_relevance`) 추가)
+> **작성일**: 2026-09-08 (v3.14 — main의 v2.67 MCP 도구 제거 작업을 이 브랜치에도 동일 적용.
+> `ops_mcp_tool`/`ops_mcp_tool_log`(§15/§16)을 제거 스텁으로 교체, `ops_prompt`의 mcp_tool
+> 프롬프트 3행 제거. Text2SQL은 그대로 유지. v3.13 — `email_relevance_min_score` 계산식 수정(base_weight 랭킹 부스팅 없는 원점수 기준) + 기본값 0.35→0.38 재조정. v3.12 — `ops_voc_routing`에 `mail_folder_id`/`mail_folder_name` 추가(특정 Outlook 폴더로 조회 범위 제한). v3.11 — `email_graph_delegated` JSON에 `client_secret` 선택 필드 추가(DDL 변경 없음, 기존 암호화 JSON 블롭 내부 키만 추가) — Confidential Client 지원. v3.10 — `email_graph_delegated`의 인증 방식을 Device Code Flow에서 Authorization Code Flow(PKCE)로 교체, `redirect_uri` 필드 추가. v3.9 — VOC 이메일 관련지식 사전 필터(`email_relevance_min_score`, `ops_email_analysis.status='skipped_relevance'`, `ops_email_poll_cycle.total_skipped_low_relevance`) 추가)
 > **DDL 위치**: `init/01-init.sql` + `main.py` lifespan 마이그레이션
 
 ---
@@ -25,8 +27,8 @@
 12. [ops_feedback](#12-ops_feedback)
 13. [rag_fewshot](#13-rag_fewshot)
 14. [rag_conv_summary](#14-rag_conv_summary)
-15. [ops_mcp_tool](#15-ops_mcp_tool)
-16. [ops_mcp_tool_log](#16-ops_mcp_tool_log)
+15. [ops_mcp_tool (제거됨)](#15-ops_mcp_tool-제거됨)
+16. [ops_mcp_tool_log (제거됨)](#16-ops_mcp_tool_log-제거됨)
 17. [ops_prompt](#17-ops_prompt)
 18. [ops_system_config](#18-ops_system_config)
 18-1. [ops_voc_routing](#18-1-ops_voc_routing)
@@ -67,16 +69,14 @@ ops_part
              ├─── rag_ingestion_job       (namespace_id FK CASCADE)
              ├─── ops_conversation        (namespace_id FK CASCADE)
              ├─── ops_feedback            (namespace_id FK CASCADE)
-             ├─── ops_query_log           (namespace_id FK CASCADE)
-             ├─── ops_mcp_tool            (namespace_id FK CASCADE)
-             │        │
-             │        └─── ops_mcp_tool_log  (tool_id FK SET NULL, namespace_id FK)
+             └─── ops_query_log           (namespace_id FK CASCADE)
 
 ops_prompt        (namespace 독립 — func_key 기반 전역 프롬프트 관리)
 ops_system_config (시스템 전역 설정 — key-value, 재시작 후에도 영속)
 ```
 
-**테이블 수**: 18개
+**테이블 수**: 18개 (ops_mcp_tool/ops_mcp_tool_log는 이 브랜치에서도 v3.14에서 제거됨 — §15/§16 참고,
+이 다이어그램은 그 이전 시점 스냅샷이라 하위 호환용으로 개수는 갱신하지 않음)
 **FK 관계**: CASCADE 13건 (namespace_id 9건 + conversation 2건 + user 1건 + part 1건), SET NULL 3건
 
 ---
@@ -478,61 +478,16 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 ---
 
-## 15. ops_mcp_tool
+## 15. ops_mcp_tool (제거됨)
 
-**목적**: 네임스페이스별 외부 HTTP/MCP API 도구를 관리한다. McpToolAgent가 도구 선택·파라미터 검증·HTTP 호출에 활용한다.
-
-| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
-|---|--------|-----------|------|--------|---------|------|
-| 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `namespace_id` | INT | NO | - | FK → ops_namespace(id) ON DELETE CASCADE | 소속 네임스페이스 ID |
-| 3 | `name` | VARCHAR(100) | NO | - | - | 도구 이름 |
-| 4 | `description` | TEXT | NO | `''` | - | 도구 설명 (LLM 도구 선택에 활용) |
-| 5 | `method` | VARCHAR(10) | NO | `'GET'` | - | HTTP 메서드 (`GET` \| `POST` 등) |
-| 6 | `hub_base_url` | TEXT | NO | `''` | - | 허브 베이스 URL (도구 레벨) |
-| 7 | `tool_path` | TEXT | NO | `''` | - | 도구 경로 (`hub_base_url` + `tool_path` = 최종 URL) |
-| 8 | `headers` | JSONB | NO | `{}` | - | 요청 헤더 (Authorization 등) |
-| 9 | `param_schema` | JSONB | NO | `[]` | - | 파라미터 스키마 배열 (name, type, required, description, example) |
-| 10 | `response_example` | JSONB | YES | NULL | - | 응답 예시 (LLM 컨텍스트 품질 향상용) |
-| 11 | `timeout_sec` | INT | NO | `10` | - | HTTP 호출 타임아웃(초) |
-| 12 | `max_response_kb` | INT | NO | `50` | - | 응답 크기 제한(KB) |
-| 13 | `is_active` | BOOLEAN | NO | `TRUE` | - | 활성 여부 (채팅에서 비활성 도구 제외) |
-| 14 | `created_by_user_id` | INT | YES | NULL | - | 등록 사용자 ID |
-| 15 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
-| 16 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 수정일시 |
-
-**param_schema 요소 구조** (JSONB 배열):
-```json
-[
-  { "name": "userId", "type": "string", "required": true, "description": "사용자 ID", "example": "U001" },
-  { "name": "limit",  "type": "number", "required": false, "description": "조회 개수", "example": "10" }
-]
-```
-`type` 값: `string` | `number` | `boolean` | `array`
-백엔드 `_coerce_params()`가 type 기반으로 string → 실제 타입 자동 변환
-
-**FK 동작**: 네임스페이스 삭제 시 CASCADE
+MCP 도구 에이전트 제거와 함께 이 브랜치에서도 더 이상 생성되지 않는다. 기존 설치에는 테이블이
+남아있을 수 있으나 어떤 코드도 더 이상 참조하지 않는다.
 
 ---
 
-## 16. ops_mcp_tool_log
+## 16. ops_mcp_tool_log (제거됨)
 
-**목적**: MCP 도구 호출 감사 로그. 호출 성공/실패, 응답 크기, 소요 시간을 기록한다.
-
-| # | 컬럼명 | 데이터 타입 | NULL | 기본값 | 제약조건 | 설명 |
-|---|--------|-----------|------|--------|---------|------|
-| 1 | `id` | SERIAL | NO | auto | PK | 고유 식별자 |
-| 2 | `tool_id` | INT | YES | NULL | FK → ops_mcp_tool(id) ON DELETE SET NULL | 호출 도구 ID |
-| 3 | `tool_name` | VARCHAR(100) | YES | NULL | - | 도구 이름 (도구 삭제 후에도 보존) |
-| 4 | `user_id` | INT | YES | NULL | FK → ops_user(id) ON DELETE SET NULL | 호출 사용자 ID |
-| 5 | `namespace_id` | INT | YES | NULL | FK → ops_namespace(id) | 소속 네임스페이스 ID |
-| 6 | `conversation_id` | INT | YES | NULL | - | 대화 ID |
-| 7 | `params` | JSONB | YES | NULL | - | 호출 파라미터 |
-| 8 | `response_status` | INT | YES | NULL | - | HTTP 응답 코드 |
-| 9 | `response_kb` | FLOAT | YES | NULL | - | 응답 크기(KB) |
-| 10 | `duration_ms` | INT | YES | NULL | - | 호출 소요 시간(ms) |
-| 11 | `error` | TEXT | YES | NULL | - | 오류 메시지 |
-| 12 | `called_at` | TIMESTAMPTZ | NO | `NOW()` | - | 호출 일시 |
+`ops_mcp_tool`과 동일 — 신규 생성 안 함, 기존 설치엔 무해하게 방치.
 
 ---
 
@@ -547,7 +502,7 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | 3 | `func_name` | VARCHAR(200) | NO | - | - | 프롬프트 표시명 |
 | 4 | `content` | TEXT | NO | `''` | - | 프롬프트 내용 |
 | 5 | `description` | TEXT | NO | `''` | - | 용도 설명 |
-| 6 | `agent_type` | VARCHAR(50) | NO | `'all'` | - | 에이전트 스코프 (`all` \| `knowledge_rag` \| `text2sql` \| `mcp_tool`) |
+| 6 | `agent_type` | VARCHAR(50) | NO | `'all'` | - | 에이전트 스코프 (`all` \| `knowledge_rag` \| `text2sql` — `mcp_tool`은 이 브랜치에서도 제거됨) |
 | 7 | `created_at` | TIMESTAMPTZ | NO | `NOW()` | - | 생성일시 |
 | 8 | `updated_at` | TIMESTAMPTZ | NO | `NOW()` | - | 마지막 수정일시 |
 
@@ -562,9 +517,6 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 | `chat_system` | `knowledge_rag` | RAG 채팅 시스템 프롬프트 |
 | `category_suggest` | `knowledge_rag` | 지식 카테고리 자동 추천 |
 | `glossary_suggest` | `knowledge_rag` | 미매핑 질문에서 업무 용어 추출 |
-| `tool_select` | `mcp_tool` | McpToolAgent 도구 선택 시스템 프롬프트 |
-| `tool_answer` | `mcp_tool` | MCP 응답 기반 LLM 답변 프롬프트 |
-| `autocomplete` | `mcp_tool` | 도구 등록 자동완성 (자연어→JSON 변환) |
 | `conv_summarize` | `all` | 대화 기록 요약 (에이전트 공통) |
 | `sql2_parse` | `text2sql` | Text2SQL Stage 1 질문 분석 프롬프트 (`{{question}}`) |
 | `sql2_parse_system` | `text2sql` | Text2SQL Stage 1 시스템 프롬프트 |
