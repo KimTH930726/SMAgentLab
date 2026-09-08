@@ -95,8 +95,14 @@ class TestRunComparison:
         assert by_type["param"].n == 2
         assert by_type["param"].a_hit_rate == 0.0   # A는 id_map이 비어있어 못 찾음
         assert by_type["param"].b_hit_rate == 1.0   # B는 둘 다 정답
+        assert by_type["param"].a_precision == 0.0  # A는 후보 자체가 없어 precision도 0
+        assert by_type["param"].b_precision == 1.0  # B는 후보 1개가 전부 정답이라 precision 만점
         assert by_type["narrative"].n == 1
         assert by_type["narrative"].b_hit_rate == 0.0
+        assert by_type["narrative"].a_precision == 0.0  # A 후보(999)가 id_map에 없어 무관 처리
+        assert by_type["narrative"].b_precision == 0.0  # B는 후보 자체가 없음(빈 결과)
+        assert result.a_precision == 0.0
+        assert result.b_precision == pytest.approx(2 / 3)  # (1.0 + 1.0 + 0.0) / 3
 
         # 테스트 네임스페이스 정리(삭제) 호출 확인
         delete_calls = [c for c in conn.execute.call_args_list if "DELETE" in c.args[0]]

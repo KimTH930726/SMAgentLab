@@ -2111,19 +2111,32 @@ Track 2 저장소 전략 비교(§4)를 즉시 실행 — A(`rag_knowledge` 지�
 큐 없음). 실행 중 만든 임시 데이터(A그룹 네임스페이스)는 끝나면 자동 삭제돼 프로덕션에
 흔적을 남기지 않는다. 관리자 화면 "정책" 탭 › "저장소 실험실" 서브탭이 이 API를 그대로 쓴다.
 
+`a_precision`/`b_precision`(2026-09-08 추가) — hit@K는 "정답이 top-K 안에 있는가"만 이진
+판정하고 후보군에 잡음이 얼마나 섞였는지는 반영하지 않는다. precision은 검색된 고유 item
+중 실제 골든셋 정답과 겹치는 비율로, 같은 hit@K라도 어느 전략이 더 깨끗한(잡음이 적은)
+후보를 LLM 컨텍스트에 넘기는지를 보완해서 보여준다. A/B가 반환하는 후보 개수 자체가
+다를 수 있어(B는 param+narrative 두 소스를 합산) 분모는 고정 K가 아니라 실제 반환된 고유
+item 개수를 쓴다.
+
 **Response `200`**
 ```json
 {
-  "total_n": 89, "a_hit_rate": 0.5506, "b_hit_rate": 0.7528,
+  "total_n": 89, "a_hit_rate": 0.5506, "b_hit_rate": 0.7753,
+  "a_precision": 0.0607, "b_precision": 0.0903,
   "by_type": [
-    { "type": "param", "n": 23, "a_hit_rate": 0.7391, "b_hit_rate": 0.8261 },
-    { "type": "narrative", "n": 23, "a_hit_rate": 0.6087, "b_hit_rate": 0.9130 },
-    { "type": "navigation", "n": 24, "a_hit_rate": 0.3750, "b_hit_rate": 0.5417 },
-    { "type": "condition_filter", "n": 19, "a_hit_rate": 0.4737, "b_hit_rate": 0.7368 }
+    { "type": "param", "n": 23, "a_hit_rate": 0.7391, "b_hit_rate": 0.8696, "a_precision": 0.0739, "b_precision": 0.0824 },
+    { "type": "narrative", "n": 23, "a_hit_rate": 0.6087, "b_hit_rate": 0.9130, "a_precision": 0.0609, "b_precision": 0.0912 },
+    { "type": "navigation", "n": 24, "a_hit_rate": 0.3750, "b_hit_rate": 0.5833, "a_precision": 0.0542, "b_precision": 0.1108 },
+    { "type": "condition_filter", "n": 19, "a_hit_rate": 0.4737, "b_hit_rate": 0.7368, "a_precision": 0.0526, "b_precision": 0.0729 }
   ],
-  "golden_set_file": "online_delivus_v1.jsonl", "top_k": 10, "duration_seconds": 85.7
+  "golden_set_file": "online_delivus_v1.jsonl", "top_k": 10, "duration_seconds": 50.0
 }
 ```
+(위 수치는 2026-09-08 실측 재실행 값 — 이전 문서화 값(hit 57.3%→75.3%)과 소폭 차이는 그
+사이 데이터 변경분 반영. B가 hit@K뿐 아니라 precision도 4개 유형 전부에서 A보다 높음 —
+navigation에서 격차가 가장 큼(11.1% vs 5.4%), 카테고리 필터가 순수 벡터 브라우징보다
+잡음이 훨씬 적다는 뜻)
+
 **Error**: `400` 골든셋 파일 없음, `403` admin 아님
 
 ---

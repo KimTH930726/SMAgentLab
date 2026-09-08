@@ -79,12 +79,16 @@ export interface Track2TypeResult {
   n: number;
   a_hit_rate: number;
   b_hit_rate: number;
+  a_precision: number;
+  b_precision: number;
 }
 
 export interface Track2Result {
   total_n: number;
   a_hit_rate: number;
   b_hit_rate: number;
+  a_precision: number;
+  b_precision: number;
   by_type: Track2TypeResult[];
   golden_set_file: string;
   top_k: number;

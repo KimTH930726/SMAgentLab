@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.68)
+# Ops-Navigator 시스템 아키텍처 (v2.69)
 
 ## 개요
 
@@ -11,6 +11,18 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.69: **Track 2 저장소 실험실에 precision@K 추가** — 대화 중 "hit@K는 정답 유무만 보고
+  후보군의 잡음 비율은 안 잰다"는 지적에서 착수. `track2.run_comparison()`이 기존 hit@K
+  (top-K 안에 정답 포함 여부)에 더해 precision(검색된 고유 item 중 실제 정답 비율)을
+  A/B·유형별로 함께 계산·반환하도록 확장(`a_precision`/`b_precision` 필드 추가, DB 스키마
+  변경 없음 — 순수 계산값). A/B가 반환하는 후보 개수가 다를 수 있어(B는 param+narrative
+  합산) 분모는 고정 K가 아니라 실제 반환된 고유 item 수를 사용. 관리자 화면 "저장소
+  실험실"에 "정답 집중도(precision)" 표시 추가(전체 요약 + 유형별 세부). 실제 재실행
+  결과: hit@K는 기존 측정(A 57.3%→75.3%)과 유사한 수준(A 55.1%, B 77.5%) 재확인, precision은
+  4개 유형 전부에서 B가 A보다 높음(전체 6.1%→9.0%) — B가 정답을 더 많이 찾을 뿐 아니라
+  후보군 잡음도 A보다 적다는 게 새로 확인됨(특히 navigation 유형에서 격차 큼, 5.4%→11.1%).
+  기존 `test_policy_track2.py` 테스트에 precision 검증 assertion 추가(신규 테스트 함수는
+  아님 — 전체 343개 그대로 통과).
 - v2.68: **지식 생명주기 관리 — "할 수 있는 것" 실행분** (`docs/tech/knowledge-lifecycle-design.md`
   §6, 2026-08-28 분석 문서의 실측 기반 우선순위 1~3위 + 대화 중 새로 나온 4번째 항목).
   ① **병합 이력 보존**: `resolve_duplicate()`의 merge 처리가 대상 지식을 그 자리에서 덮어써

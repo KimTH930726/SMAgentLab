@@ -38,6 +38,8 @@ class Track2TypeResult:
     n: int
     a_hit_rate: float
     b_hit_rate: float
+    a_precision: float
+    b_precision: float
 
 
 @dataclass
@@ -45,6 +47,8 @@ class Track2Result:
     total_n: int
     a_hit_rate: float
     b_hit_rate: float
+    a_precision: float
+    b_precision: float
     by_type: list[Track2TypeResult] = field(default_factory=list)
     golden_set_file: str = ""
     top_k: int = 10
@@ -130,7 +134,15 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
                 real_ns_ids[ns] = resolved
 
     try:
-        per_type: dict[str, list[tuple[bool, bool]]] = {}
+        # 각 항목: (a_hit, b_hit, a_precision, b_precision).
+        # precision은 "top-K(A는 top_k, B는 param+narrative 합쳐 최대 2*top_k) 중 실제
+        # 골든셋 정답 item과 겹치는 고유 item 비율" — hit@K는 "정답이 있냐 없냐"만 보고
+        # 후보군에 잡음이 얼마나 섞였는지는 안 보므로, 같은 hit@K를 내는 두 전략이라도
+        # 컨텍스트 품질(잡음 비율)이 다를 수 있다는 걸 보완하기 위해 추가(2026-09-08).
+        # A/B가 후보 개수 자체가 다를 수 있어(B는 param+narrative 합산) 분모는 고정 K가
+        # 아니라 실제 반환된 고유 item 개수를 쓴다 — 두 전략의 "후보 풀 크기"가 다르다는
+        # 것 자체도 실측해서 같이 보고한다(순수 정답 비율만으로 비교하면 이 차이가 가려짐).
+        per_type: dict[str, list[tuple[bool, bool, float, float]]] = {}
         for entry in golden:
             qtype, query, src = entry["type"], entry["query"], entry["source"]
             namespace_name = _namespace_for_file(src.get("file", ""))
@@ -153,12 +165,14 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
             a_hits = await search_knowledge(_TRACK_A_NAMESPACE, query_vec, query, top_k=top_k)
             a_item_ids = {id_map.get(h.id) for h in a_hits}
             a_hit = bool(gold_ids & a_item_ids)
+            a_precision = (len(gold_ids & a_item_ids) / len(a_item_ids)) if a_item_ids else 0.0
 
             b_result = await search_service.search_policy(namespace_name, query, top_k=top_k)
             b_item_ids = {p.item_id for p in b_result.params} | {n.item_id for n in b_result.narratives}
             b_hit = bool(gold_ids & b_item_ids)
+            b_precision = (len(gold_ids & b_item_ids) / len(b_item_ids)) if b_item_ids else 0.0
 
-            per_type.setdefault(qtype, []).append((a_hit, b_hit))
+            per_type.setdefault(qtype, []).append((a_hit, b_hit, a_precision, b_precision))
     finally:
         async with get_conn() as conn:
             await conn.execute("DELETE FROM rag_knowledge WHERE namespace_id = $1", ns_id_a)
@@ -166,18 +180,22 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
 
     by_type = [
         Track2TypeResult(
-            type=t, n=len(hits),
-            a_hit_rate=sum(a for a, _ in hits) / len(hits),
-            b_hit_rate=sum(b for _, b in hits) / len(hits),
+            type=t, n=len(rows),
+            a_hit_rate=sum(a for a, _, _, _ in rows) / len(rows),
+            b_hit_rate=sum(b for _, b, _, _ in rows) / len(rows),
+            a_precision=sum(ap for _, _, ap, _ in rows) / len(rows),
+            b_precision=sum(bp for _, _, _, bp in rows) / len(rows),
         )
-        for t, hits in per_type.items()
+        for t, rows in per_type.items()
     ]
-    all_hits = [h for hits in per_type.values() for h in hits]
-    total_n = len(all_hits)
+    all_rows = [r for rows in per_type.values() for r in rows]
+    total_n = len(all_rows)
     return Track2Result(
         total_n=total_n,
-        a_hit_rate=(sum(a for a, _ in all_hits) / total_n) if total_n else 0.0,
-        b_hit_rate=(sum(b for _, b in all_hits) / total_n) if total_n else 0.0,
+        a_hit_rate=(sum(a for a, _, _, _ in all_rows) / total_n) if total_n else 0.0,
+        b_hit_rate=(sum(b for _, b, _, _ in all_rows) / total_n) if total_n else 0.0,
+        a_precision=(sum(ap for _, _, ap, _ in all_rows) / total_n) if total_n else 0.0,
+        b_precision=(sum(bp for _, _, _, bp in all_rows) / total_n) if total_n else 0.0,
         by_type=by_type,
         golden_set_file=_GOLDEN_SET_PATH.name,
         top_k=top_k,

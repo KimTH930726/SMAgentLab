@@ -116,12 +116,16 @@ class Track2TypeResultOut(BaseModel):
     n: int
     a_hit_rate: float
     b_hit_rate: float
+    a_precision: float
+    b_precision: float
 
 
 class Track2ResultOut(BaseModel):
     total_n: int
     a_hit_rate: float
     b_hit_rate: float
+    a_precision: float
+    b_precision: float
     by_type: list[Track2TypeResultOut]
     golden_set_file: str
     top_k: int

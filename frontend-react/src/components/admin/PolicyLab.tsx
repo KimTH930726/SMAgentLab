@@ -36,7 +36,7 @@ export function PolicyLab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+          <h2 className="text-lg font-semibold text-slate-200 flex items-center gap-2">
             <FlaskConical className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
             저장소 전략 실험실
           </h2>
@@ -50,12 +50,12 @@ export function PolicyLab() {
       </div>
 
       {/* 비교 대상 설명 — 결과가 없어도 항상 보여서 "A/B가 뭔지"부터 이해되게 */}
-      <div className="flex gap-3 px-4 py-3 bg-indigo-50 border border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-700/30 rounded-xl text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+      <div className="flex gap-3 px-4 py-3 bg-indigo-900/20 border border-indigo-700/30 rounded-xl text-xs text-slate-300 leading-relaxed">
         <Info className="w-4 h-4 text-indigo-500 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
         <div className="space-y-1.5">
           <p><b>A안(지식 그대로 저장)</b>: 정책서 내용을 통째로 문장으로 저장 — 다른 일반 지식 문서와 똑같이 취급</p>
           <p><b>B안(지금 우리가 쓰는 방식)</b>: 숫자·조건은 표(정확 조회)로, 설명글은 의미 검색(벡터)으로 나눠서 저장</p>
-          <p className="text-slate-500 dark:text-slate-400">89개의 실제 질문을 두 방식에 똑같이 던져서, 각 방식이 정답을 찾아내는 비율을 비교합니다.</p>
+          <p className="text-slate-500">89개의 실제 질문을 두 방식에 똑같이 던져서, 각 방식이 정답을 찾아내는 비율을 비교합니다.</p>
         </div>
       </div>
 
@@ -97,6 +97,14 @@ export function PolicyLab() {
             <p className="text-[11px] text-slate-500 mt-3">
               % = 89개 질문 중 정답이 검색 결과 상위 {lastResult.top_k}개 안에 들어온 비율
             </p>
+            <div
+              className="flex items-center gap-4 mt-4 pt-3 border-t border-slate-700/60 text-[11px] text-slate-500"
+              title="검색 결과로 나온 후보들 중 실제로 정답인 항목의 비율입니다. 정답을 찾아낸 비율(위)이 같아도, 후보에 잡음(무관한 항목)이 많이 섞이면 이 값이 낮아집니다 — 낮을수록 AI가 답을 만들 때 참고하는 자료에 잡음이 많다는 뜻입니다."
+            >
+              <span>정답 집중도(precision)</span>
+              <span className="font-mono tabular-nums text-slate-400">A {(lastResult.a_precision * 100).toFixed(0)}%</span>
+              <span className="font-mono tabular-nums text-slate-400">B {(lastResult.b_precision * 100).toFixed(0)}%</span>
+            </div>
           </div>
 
           <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-5">
@@ -122,6 +130,12 @@ export function PolicyLab() {
                       <div className="text-xs font-mono tabular-nums text-right text-slate-400">
                         A {(t.a_hit_rate * 100).toFixed(0)} → B <span className={t.b_hit_rate >= t.a_hit_rate ? 'text-emerald-400' : 'text-rose-400'}>{(t.b_hit_rate * 100).toFixed(0)}</span>
                       </div>
+                    </div>
+                    <div
+                      className="text-right text-[11px] font-mono tabular-nums text-slate-600 mt-0.5"
+                      title="정답 집중도(precision) — 검색 후보 중 실제 정답 비율"
+                    >
+                      집중도 A {(t.a_precision * 100).toFixed(0)} · B {(t.b_precision * 100).toFixed(0)}
                     </div>
                   </div>
                 );
