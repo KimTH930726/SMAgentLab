@@ -7,8 +7,8 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 
 > Text-to-SQL 에이전트는 v2.51에서 `dev_0`/`main`에서 분리·제거됐다(현재 과업 범위 아님) — 코드는
 > `archive/with-text2sql` 브랜치(2026-09-03 시점 스냅샷)에 형상관리용으로 보존돼 있다.
-> MCP 도구 에이전트는 v2.67에서 완전 제거됐다(Text2SQL과 달리 브랜치 보존 없음 — 배경은
-> `docs/tech/mcp-tool-removal-plan.md` 참고).
+> MCP 도구 에이전트는 v2.67에서 완전 제거됐다(Text2SQL과 달리 브랜치 보존 없음 — 배경은 아래
+> v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
 - v2.67: **MCP 도구 에이전트 완전 제거** — 관리자 화면·채팅 UI에 걸쳐 안 쓰는 기능이 계속
@@ -19,9 +19,8 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
   않고 순수 HTTP 호출 기능만 옮김. 백엔드(`agents/mcp_tool/`, `service/mcp_tool/`)·프론트(관리자
   MCP 도구 탭, 채팅 MCP 토글, 디버그 패널의 MCP 실행 섹션, 관련 SSE 이벤트·타입) 전부 제거.
   `ops_mcp_tool`/`ops_mcp_tool_log` 테이블과 `ops_prompt`의 mcp_tool 프롬프트 3행은 Text2SQL
-  전례와 동일하게 삭제 마이그레이션 없이 방치(기존 설치엔 남지만 무해). 상세 근거·실행 기록은
-  `docs/tech/mcp-tool-removal-plan.md` 참고. 검증: 백엔드 테스트 343개 통과, `npx tsc --noEmit`
-  + `npm run build` 통과.
+  전례와 동일하게 삭제 마이그레이션 없이 방치(기존 설치엔 남지만 무해). 검증: 백엔드 테스트
+  343개 통과, `npx tsc --noEmit` + `npm run build` 통과.
 - v2.66: **정책 근거 카드를 1건으로 압축 — 답변 생성 후 역추적 방식** — v2.65 배포 직후
   사용자가 "근거가 너무 많이 보인다(지식 3개 + 정책 10개), 원문 정책 1건만 보여달라"고
   지적, 이어서 "10개를 참조해서 답변 만든 거냐"는 확인 질문(답은 "그동안은 그랬다" —

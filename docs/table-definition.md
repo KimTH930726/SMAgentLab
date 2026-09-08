@@ -487,9 +487,9 @@ final_score = (w_vector * v_score + w_keyword * k_score) * (1 + base_weight)
 
 ## 15. ops_mcp_tool (제거됨 — v2.67)
 
-MCP 도구 에이전트 제거(v2.67, `docs/tech/mcp-tool-removal-plan.md`)와 함께 신규 설치에서는
-더 이상 생성되지 않는다. 기존 설치에는 테이블이 남아있을 수 있으나 어떤 코드도 더 이상 참조하지
-않는다(Text2SQL의 `sql_*` 테이블과 동일하게 삭제 마이그레이션 없이 방치).
+MCP 도구 에이전트 제거(v2.67)와 함께 신규 설치에서는 더 이상 생성되지 않는다. 기존 설치에는
+테이블이 남아있을 수 있으나 어떤 코드도 더 이상 참조하지 않는다(Text2SQL의 `sql_*` 테이블과
+동일하게 삭제 마이그레이션 없이 방치).
 
 ---
 
