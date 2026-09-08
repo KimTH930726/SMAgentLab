@@ -9,6 +9,11 @@
 > 구조 재정리 (2026-07-29): 이 기능을 **1단계(메일 수집) → 2단계(RAG 지식 파이프라인) → 3단계(담당자 알림/에스컬레이션)**의 3단계 파이프라인으로 재정리한다. 이는 §5의 Phase 1~3(구현 롤아웃 순서)과는 다른 축이다 — Phase는 "얼마나 자동화할지"의 시간순 로드맵이고, 1~3단계는 "데이터가 어떤 순서로 처리되는지"의 파이프라인 구조다. 이번 갱신에서 **1단계와 3단계의 설계가 상대적으로 미흡해 보강**했다(§9, §10 신규 추가). 2단계는 §2에서 이미 확인한 대로 기존 RAG 파이프라인 재사용만으로 충분해 추가 설계가 필요 없다.
 > Q6·Q7 결정 (2026-07-29): **온콜 자동 전화는 1차 범위에서 제외** — 심각도 "높음/긴급"은 Teams 긴급 멘션+강조 표시까지만 자동화하고, 실제 전화는 이를 본 담당자가 수동으로 건다(향후 고도화 대상, §10 참고). **담당자 메일함을 파트별로 물리적으로 분리**하는 방향으로 라우팅을 단순화 — LLM은 담당자 판단이 아니라 "메일함이 잘못됐는지" 오탐지용 보조 역할로 축소(§10 참고).
 > 착수 전략 (2026-07-29): 조직 승인(Q1/Q2/Q10)이 병목이므로, **승인 없이 지금 구현 가능한 것과 승인을 기다려야 하는 것을 분리한 투트랙 전략**으로 진행한다 (§11 참고). 조직적 블로커는 지금 바로 요청부터 넣어 승인 대기 시간을 개발과 병렬로 흘려보낸다.
+> 용어 정정 (2026-09-08): 이 문서 작성 당시 재사용 대상이던 "MCP 도구 실행기"(`agents/mcp_tool/agent.py`의
+> `_execute_http_call`)는 이후 MCP 도구 에이전트 자체가 제거(v2.67)되며 `shared/http_client.py`의
+> `call_http()`로 이관됐다. 아래 본문의 "MCP 도구/MCP 실행기" 언급은 이 문서가 쓰인 시점의 실제 근거였고,
+> 지금 코드에서 실제로 재사용되는 함수는 `call_http()`다 — "도구로 등록"하는 관리자 UI(MCP 도구 관리 화면)는
+> 더 이상 없고, `teams_notify.py`가 `call_http()`을 직접 호출하는 구조로 단순화됐다.
 
 ---
 
@@ -39,7 +44,7 @@
 | Teams 발송 | 없음. 기존 "Teams 연동"(`backend/service/teams/`, `backend/agents/knowledge_rag/ingestion/teams_crawler.py`)은 OpsNavHelper.exe가 사용자의 실제 로그인 브라우저 세션에서 단명 토큰(IC3)을 캡처해 **읽기 전용으로 대화 이력을 크롤링**하는 구조. 서버 자체 서비스 계정이 없고(`teams/router.py`: "서버사이드 Playwright/subprocess는 사용하지 않는다"), 무인 자동 발송에 재사용 불가. **구체적 발송 방식은 §8에서 확정** — Workflows 웹훅 URL만 발급받으면 기존 `_execute_http_call`(MCP 도구 실행기)에 그대로 등록해 호출 가능 | ❌ 발송 채널 자체는 신규 구축(Teams "Workflows" 앱에서 채널 소유자가 웹훅 URL 발급) 필요하나, 발급 후 **호출 로직은 기존 MCP 실행기 재사용** 가능 |
 | 배치/스케줄링 | cron·APScheduler·Celery 등 주기 실행 인프라 **전무**. `main.py`의 `lifespan`은 서버 기동 시 1회성 초기화(DB pool, 임베딩/리랭커 모델 로드, LLM health check)만 수행 | ❌ 신규 구축 필요 (단, "관리자가 기간 입력 후 수동으로 분석 시작 버튼 클릭" 방식이면 스케줄러 없이 v1 구현 가능) |
 | 이메일 건별 RAG 분석 | `backend/agents/knowledge_rag/knowledge/retrieval.py`의 `search_knowledge()` + `backend/service/llm/base.py`의 `LLMProvider.generate(context, question, ...)` — 채팅 SSE/DB 스키마와 분리된 순수 비동기 함수라 "텍스트 입력 → 근거 기반 답변" 용도로 그대로 재사용 가능 | ✅ 거의 그대로 재사용 |
-| 외부 API 호출 실행기 | `backend/agents/mcp_tool/agent.py`의 `_execute_http_call` — 관리자가 등록한 외부 HTTP API(메서드/URL/헤더/파라미터)를 호출하는 범용 실행기, 타임아웃/응답 크기 제한/감사 로그 포함. 현재는 LLM 도구 선택 흐름에서만 호출되지만 함수 자체는 독립 호출 가능 | ✅ 사내에 메일 발송 API나 Teams Webhook URL이 이미 존재한다면 이를 MCP 도구처럼 등록해 배치 잡에서 직접 호출하는 방식으로 재사용 가능 |
+| 외부 API 호출 실행기 | (당시) `backend/agents/mcp_tool/agent.py`의 `_execute_http_call` — 관리자가 등록한 외부 HTTP API(메서드/URL/헤더/파라미터)를 호출하는 범용 실행기, 타임아웃/응답 크기 제한/감사 로그 포함. 현재는 LLM 도구 선택 흐름에서만 호출되지만 함수 자체는 독립 호출 가능. **(2026-09-08 현재: `shared/http_client.py`의 `call_http()`로 이관됨, MCP 도구 자체는 제거)** | ✅ 사내에 메일 발송 API나 Teams Webhook URL이 이미 존재한다면 이를 등록해 배치 잡에서 직접 호출하는 방식으로 재사용 가능 |
 
 **결론**: "이메일을 분석하는" 핵심 로직은 기존 RAG 파이프라인을 그대로 타면 되므로 기술적으로 제일 쉬운 부분이다. 반면 "이메일을 읽는 것"과 "결과를 내보내는 것"은 완전히 새로운 외부 연동이며, 이 두 가지는 **사내 인프라/보안 정책에 의존**하므로 코드 작업보다 조직적 확인이 선행되어야 한다.
 
@@ -200,7 +205,7 @@ Q1·Q2·Q10이 확정되면 §5 Phase 1의 "이메일 수집기" 구현에 바�
 
 ### 선택 — Phase 1~2: Workflows 웹훅
 
-- 이유: 승인 절차 없이(§7의 Q10처럼 IT/보안팀 승인이 필요한 이메일 읽기 경로와 대비됨) 대상 채널 소유자가 몇 분 안에 웹훅 URL을 발급할 수 있고, 발급된 URL은 순수 HTTP 엔드포인트라 **§2에서 이미 확인한 기존 MCP 도구 실행기(`backend/agents/mcp_tool/agent.py`의 `_execute_http_call`)에 그대로 등록해 재사용** 가능하다. 신규 발송 모듈을 처음부터 만들 필요가 없다.
+- 이유: 승인 절차 없이(§7의 Q10처럼 IT/보안팀 승인이 필요한 이메일 읽기 경로와 대비됨) 대상 채널 소유자가 몇 분 안에 웹훅 URL을 발급할 수 있고, 발급된 URL은 순수 HTTP 엔드포인트라 **§2에서 이미 확인한 기존 범용 HTTP 실행기(당시 MCP 도구 실행기, 지금은 `shared/http_client.py`의 `call_http()`)를 그대로 재사용** 가능하다. 신규 발송 모듈을 처음부터 만들 필요가 없다.
 - 발급 절차(Phase 2 착수 시, 코드 작업 아님 — 대상 채널 소유자가 수행):
   1. 대상 Teams 채널에서 "More options" → "Workflows" 선택
   2. "Post to a channel when a webhook request is received" 템플릿 선택 (조직 유형에 따라 이 템플릿이 안 보일 수 있음 — 이 경우 IT 문의 필요)
@@ -328,7 +333,7 @@ Q10이 승인되는 즉시, Track A에서 미리 완성해둔 Graph API 클라�
 |---|---|---|---|
 | 1 | DB 스키마 | `main.py`의 `_migrate_email_voc_tables()` — `ops_email_analysis`, `ops_voc_routing`, `ops_system_config` 폴링 설정 시드 | 실제 컨테이너에 마이그레이션 적용 후 `psql \d`로 컬럼·FK·인덱스 확인. 기존 통합테스트 33개 회귀 없음 |
 | 2 | 2단계 분석 로직 | `service/email_voc/service.py`의 `analyze_email()` — `search_knowledge`+`generate_once` 재사용, `POST /api/email-voc/test-analyze` | 실제 텍스트로 호출해 분류/심각도/오배치 판정 정상 응답 확인 |
-| 3 | 3단계 Teams 발송 | `service/email_voc/teams_notify.py`의 `build_teams_card()`/`send_teams_notification()` — `agents/mcp_tool/agent.py`의 `_execute_http_call` 재사용, `POST /api/email-voc/test-notify` | 공개 echo 엔드포인트로 실제 POST 발송 → HTTP 200 확인 |
+| 3 | 3단계 Teams 발송 | `service/email_voc/teams_notify.py`의 `build_teams_card()`/`send_teams_notification()` — `shared/http_client.py`의 `call_http()` 재사용(당시엔 `agents/mcp_tool/agent.py`의 `_execute_http_call`), `POST /api/email-voc/test-notify` | 공개 echo 엔드포인트로 실제 POST 발송 → HTTP 200 확인 |
 | 4 | 관리자 API | `service/email_voc/routing_service.py` + `router.py`의 `/settings`, `/routing` CRUD | GET/PUT/POST/PUT/DELETE 전체 흐름 + 검증 실패 케이스(중복 메일함, 폴링 주기 하한 위반) 확인 |
 | 5 | Graph API 클라이언트 | `service/email_voc/graph_client.py`의 `get_access_token()`/`fetch_messages()` (msal + httpx) | `tests/test_email_voc_graph_client.py` — mock 기반 단위테스트 5개(인증 성공/실패, 단일/페이지네이션 조회, HTTP 오류) 전부 통과 |
 
