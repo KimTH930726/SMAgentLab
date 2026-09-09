@@ -1156,24 +1156,29 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
   </div>
 
   <div class="codebox" style="margin-top:12px;">
-    <div class="cb-head"><span>docs/development-conventions.md 발췌</span><span>실제 커밋된 스펙</span></div>
-    <pre><span class="cm"># §10. AI 페어 개발(Claude Code) — 실행 승인 게이트 (SDLC 관점)</span>
-
-- <span class="kw">Query(조회)</span> 응답과 <span class="kw">Command(상태변경) 실행</span>의
-  승인 절차를 분리한다 — Query 턴 뒤의 짧은 긍정을 Command의 Approve로 오판하지 않는다.
-  직전 턴이 명시적 <span class="fn">Change Proposal</span>(변경 제안)이었을 때만 Approve.
-
-  <span class="cm">&gt; 사후 리뷰(2026-09-09): Query("RDB/벡터 기여도는 어떻게 나뉘나?")에 대한</span>
-  <span class="cm">&gt; 응답에 Change Proposal이 병기됐고, 후속 짧은 긍정을 Approve로 오인해 즉시</span>
-  <span class="cm">&gt; Command 실행. RCA: "조회 요청이 승인 없이 실행으로 전이" — 게이트 조항 추가</span>
-
-- <span class="kw">서브에이전트/정적분석 산출물</span>도 병합 전 2차 Verification을 거친다.
-  <span class="cm">&gt; 병렬 감사 3건 중 2건이 2차 검증에서 False Positive로 판정 — 반영 보류</span></pre>
+    <div class="cb-head"><span>$ grep "^## " docs/development-conventions.md</span><span>11개 대분류 · 실제 커밋된 스펙</span></div>
+    <pre><span class="fn">§0</span>  완료 기준 <span class="cm">(Definition of Done)</span>
+<span class="fn">§1</span>  검증 원칙 <span class="cm">(실측 기반 — 200 OK·재import는 검증 아님)</span>
+<span class="fn">§2</span>  커밋 · 브랜치 워크플로우
+<span class="fn">§3</span>  클린코드 · 리팩토링 판단 기준 <span class="cm">(YAGNI)</span>
+<span class="fn">§4</span>  문서 동기화
+<span class="fn">§5</span>  관리자 화면(UI/UX)
+<span class="fn">§6</span>  인프라 관련
+<span class="fn">§7</span>  보안 기본 원칙
+<span class="fn">§8</span>  로깅 · 관측성
+<span class="fn">§9</span>  성능 기준선
+<span class="kw">§10 AI 페어 개발(Claude Code) 특유의 원칙</span>  <span class="cm">← 아래 예시</span></pre>
   </div>
 
-  <div class="why alt" style="margin-top:12px; max-width:900px; font-size:13px;">
+  <div class="example" style="margin-top:10px;">
+    <span class="ex-tag">§10 예시 — 실행 승인 게이트(SDLC 관점: Query/Command 분리)</span>
+    <span class="ex-step">Query(조회) 응답과 Command(상태변경) 실행의 승인을 분리 — 직전 턴이 명시적 Change Proposal이었을 때만 Approve로 간주</span>
+    <span class="ex-step" style="color:var(--green);"><span class="arrow-ex">▸</span> 사후 리뷰(2026-09-09): Query 응답에 병기된 Change Proposal을 후속 긍정이 Approve로 오인돼 실행됨 — RCA 후 이 게이트 조항 추가</span>
+  </div>
+
+  <div class="why alt" style="margin-top:10px; max-width:900px; font-size:13px;">
     <ul>
-      <li>이 스펙은 <b>실측 사고 없이는 조항을 안 늘림</b> — §1~§9(검증/커밋/보안/로깅/성능)도 전부 같은 방식으로 축적됨, 전체는 <code>docs/development-conventions.md</code></li>
+      <li>11개 항목 전부 <b>실측 사고 없이는 조항을 안 늘림</b> — 각 §마다 이런 실사고 근거가 딸려 있음, 전체는 <code>docs/development-conventions.md</code></li>
       <li>이 문서 자체가 다음 §14 <b>평가 체계</b>의 축소판 — "AI 출력을 어디까지 믿고 넘어갈지"를 조항 단위로 계속 갱신하는 것</li>
     </ul>
   </div>
