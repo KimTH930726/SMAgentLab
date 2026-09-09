@@ -1143,49 +1143,37 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
 
 <!-- 13 AI 개발협업 노하우 -->
 <section class="slide tall" id="s11">
-  <div class="eyebrow"><span class="chip">13</span>HOW WE BUILT THIS — 프롬프트에서 코드가 나오기까지</div>
-  <h2>AI와의 개발 협업 — 이 시스템 코드 대부분은 이렇게 태어났다</h2>
-  <p class="lead">거창한 도구가 아니라 "요청/질문 ↔ AI 응답" 을 계속 주고받는 루프 하나 — 그 반복에서 실제로 걸렸던 것들</p>
+  <div class="eyebrow"><span class="chip">13</span>HOW WE BUILT THIS — 실제로 커밋된 하네스 스펙</div>
+  <h2>그냥 프롬프팅이 아니라, 정책·검증·게이트가 레포에 커밋된 상태로 개발</h2>
+  <p class="lead">AI로 코드 짜는 것 자체는 다들 하고 있음 — 다른 건 그 위에 <b>강제되는 governance layer</b>가 파일로 존재한다는 것</p>
 
-  <h3>실제 예시 3건 — 이런 프롬프트가 이런 코드가 됐다</h3>
-  <div class="cols stack3" style="margin:6px 0 14px;">
-    <div class="chip-card">
-      <blockquote style="margin:0 0 8px; padding:8px 11px; background:var(--card2); border-left:3px solid var(--accent2); border-radius:0 6px 6px 0; color:var(--text-dim); font-size:11.5px; font-style:normal;">"RDB랑 벡터 중 실제로 어느 쪽이 정답을 찾아낸 거야?"</blockquote>
-      <div style="text-align:center; color:var(--text-dim); font-size:13px;">↓</div>
-      <div style="font-family:'SF Mono',Consolas,monospace; font-size:10.5px; background:#0B1220; border-radius:6px; padding:8px 10px; color:#93C5FD;">track2.py — <span style="color:#86EFAC;">b_hit_rdb_only / vector_only / both</span> 3분해 로직 + 관리자 화면 표시</div>
-    </div>
-    <div class="chip-card">
-      <blockquote style="margin:0 0 8px; padding:8px 11px; background:var(--card2); border-left:3px solid var(--accent2); border-radius:0 6px 6px 0; color:var(--text-dim); font-size:11.5px; font-style:normal;">(라이트모드 스크린샷) "그래도 안 보이는데"</blockquote>
-      <div style="text-align:center; color:var(--text-dim); font-size:13px;">↓</div>
-      <div style="font-family:'SF Mono',Consolas,monospace; font-size:10.5px; background:#0B1220; border-radius:6px; padding:8px 10px; color:#93C5FD;">정책 화면 3곳 — <span style="color:#86EFAC;">dark: 접두사 제거</span> 근본원인 재진단 후 수정</div>
-    </div>
-    <div class="chip-card">
-      <blockquote style="margin:0 0 8px; padding:8px 11px; background:var(--card2); border-left:3px solid var(--accent2); border-radius:0 6px 6px 0; color:var(--text-dim); font-size:11.5px; font-style:normal;">"순서대로 가자" (클린코드 감사 결과 중 우선순위 1번)</blockquote>
-      <div style="text-align:center; color:var(--text-dim); font-size:13px;">↓</div>
-      <div style="font-family:'SF Mono',Consolas,monospace; font-size:10.5px; background:#0B1220; border-radius:6px; padding:8px 10px; color:#93C5FD;">관리자 화면 5개 파일 — <span style="color:#86EFAC;">useMutation onError</span> 19곳 추가</div>
-    </div>
+  <div class="arch-row" style="margin:8px 0 4px;">
+    <div class="arch-box"><div class="ico">📜</div><div class="t" style="font-size:12px;">~/.claude/CLAUDE.md</div><div class="d">전역 Policy · 모든 프로젝트 자동 로드</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box"><div class="ico">📁</div><div class="t" style="font-size:12px;">이 레포 CLAUDE.md</div><div class="d">프로젝트 특화 규율 · 자동 로드</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box accent"><div class="ico">📖</div><div class="t" style="font-size:12px;">docs/development-conventions.md</div><div class="d">§0~§10 전체 스펙 + 실사고 근거</div></div>
   </div>
 
-  <div class="arch-row" style="margin:4px 0 6px;">
-    <div class="arch-box" style="min-width:90px;"><div class="ico">🗣️</div><div class="t" style="font-size:11px;">요청·피드백</div></div>
-    <div class="arch-down">→</div>
-    <div class="arch-box accent" style="min-width:90px;"><div class="ico">🤖</div><div class="t" style="font-size:11px;">코드+검증</div></div>
-    <div class="arch-down">→</div>
-    <div class="arch-box" style="min-width:90px;"><div class="ico">🔍</div><div class="t" style="font-size:11px;">확인·승인</div></div>
-    <div class="arch-down">→</div>
-    <div class="arch-box" style="min-width:90px;"><div class="ico">💾</div><div class="t" style="font-size:11px;">커밋</div></div>
-    <div class="arch-down">↺</div>
+  <div class="codebox" style="margin-top:12px;">
+    <div class="cb-head"><span>docs/development-conventions.md 발췌</span><span>실제 커밋된 스펙</span></div>
+    <pre><span class="cm"># §10. AI 페어 개발(Claude Code) 특유의 원칙</span>
+
+- <span class="kw">애매한 긍정</span>("웅", "좋다")을 실행 승인으로 확대해석하지 않는다.
+  직전 메시지가 명확한 액션 제안이었을 때만 그 실행으로 간주한다.
+
+  <span class="cm">&gt; 실사고(2026-09-09): "RDB랑 벡터 중 뭐가 찾아내는거야?"라는 상태 질문에</span>
+  <span class="cm">&gt; "이거 마저 나눠서 볼까요?" 제안까지 곁들였고, 뒤이은 "웅"을 그 제안(구현)의</span>
+  <span class="cm">&gt; 승인으로 받아 코드를 짬. 사용자: "현황을 물었는데 수정을 해버렸다"</span>
+
+- <span class="kw">서브에이전트/자동화 도구</span>의 결과도 반영 전에 재검증한다.
+  <span class="cm">&gt; 클린코드 감사(병렬 서브에이전트 3개) 상위 3건 중 2건이 재검증에서 오탐</span></pre>
   </div>
 
-  <div class="example" style="margin-top:6px;">
-    <span class="ex-tag">이 루프에서 실제로 이탈했던 사례 — "확인·승인" 단계가 생략된 경우</span>
-    <span class="ex-step">질문: "RDB랑 벡터 중 뭐가 찾아내는거야?"(순수 질문) — AI가 답하며 "이것도 나눠볼까요?" 제안까지 곁들임 → "응" → AI가 확인 없이 곧바로 코드를 짬</span>
-    <span class="ex-step" style="color:var(--green);"><span class="arrow-ex">▸</span> "현황을 물었는데 수정을 해버렸다" 지적 이후: 직전 메시지가 명확한 실행 제안이었을 때만 승인으로 간주하도록 규칙 명문화</span>
-  </div>
-
-  <div class="why alt" style="margin-top:10px; max-width:900px; font-size:13px;">
+  <div class="why alt" style="margin-top:12px; max-width:900px; font-size:13px;">
     <ul>
-      <li>이 루프가 믿을 만하려면 결국 "AI가 낸 결과를 어떻게 검증하나"가 핵심 — 그게 다음 §14의 <b>평가 체계</b> 얘기로 이어짐</li>
+      <li>이 스펙은 <b>실측 사고 없이는 조항을 안 늘림</b> — §1~§9(검증/커밋/보안/로깅/성능)도 전부 같은 방식으로 축적됨, 전체는 <code>docs/development-conventions.md</code></li>
+      <li>이 문서 자체가 다음 §14 <b>평가 체계</b>의 축소판 — "AI 출력을 어디까지 믿고 넘어갈지"를 조항 단위로 계속 갱신하는 것</li>
     </ul>
   </div>
 </section>
