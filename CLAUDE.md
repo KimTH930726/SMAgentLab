@@ -41,6 +41,22 @@
 - `docker compose build` 성공 확인
 - 아키텍처 변경 시 docs/ 4개 파일(architecture.md/flow.md/table-definition.md/api-specification.md) 동기화
 
+## 개발 규율 (이 프로젝트 특화)
+공통 개발 규율(검증 원칙, 커밋 워크플로우, YAGNI 등)은 `~/.claude/CLAUDE.md`에 있음. 여기는
+이 저장소에만 해당하는 것만. 실 사고 사례를 포함한 전체 상세는 `docs/development-conventions.md`.
+
+- **`docker compose` 명령은 항상 `-f docker-compose.yml -f docker-compose.dev.yml`와 함께
+  실행** (조회성 `ps`/`logs`는 예외). 안 붙이면 backend의 dev 소스 마운트가 조용히 사라짐
+  (frontend만 지정해도 의존 서비스인 backend가 재생성되며 발생 가능 — 실사고 있었음).
+- **규모 있는 신규 기능은 dev_0에서 완전 검증 후에만 main 병합.** main → dev_0 방향 동기화는
+  수시로, 반대 방향은 검증 완료 후에만.
+- **라이트/다크 모드**: `slate` 팔레트만 CSS 변수로 테마 자동 반전됨 — slate는 `dark:` 접두사
+  **없이** 단일 클래스로(붙이면 이중 반전으로 깨짐). slate가 아닌 accent 색상(indigo/amber/
+  emerald 등)은 반대로 `dark:` 쌍을 직접 명시해야 함(자동 반전 대상이 아님).
+- **`useMutation`은 항상 `onError`를 갖는다** — 폼 컨텍스트가 있으면 기존 에러 상태 슬롯
+  재사용, 없으면 `alert(err.message)` 최소 패턴.
+- 관리자 화면 문구는 짧고 직관적으로 — 배경 설명은 `title` 툴팁으로.
+
 ## Allowed tools
 - Bash(docker compose*)
 - Bash(npx tsc*)
