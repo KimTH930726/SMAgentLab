@@ -81,6 +81,9 @@ export interface Track2TypeResult {
   b_hit_rate: number;
   a_precision: number;
   b_precision: number;
+  b_hit_rdb_only: number;
+  b_hit_vector_only: number;
+  b_hit_both: number;
 }
 
 export interface Track2Result {
@@ -89,6 +92,9 @@ export interface Track2Result {
   b_hit_rate: number;
   a_precision: number;
   b_precision: number;
+  b_hit_rdb_only: number;
+  b_hit_vector_only: number;
+  b_hit_both: number;
   by_type: Track2TypeResult[];
   golden_set_file: string;
   top_k: number;

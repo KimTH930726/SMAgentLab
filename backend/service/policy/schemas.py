@@ -118,6 +118,9 @@ class Track2TypeResultOut(BaseModel):
     b_hit_rate: float
     a_precision: float
     b_precision: float
+    b_hit_rdb_only: float
+    b_hit_vector_only: float
+    b_hit_both: float
 
 
 class Track2ResultOut(BaseModel):
@@ -126,6 +129,9 @@ class Track2ResultOut(BaseModel):
     b_hit_rate: float
     a_precision: float
     b_precision: float
+    b_hit_rdb_only: float
+    b_hit_vector_only: float
+    b_hit_both: float
     by_type: list[Track2TypeResultOut]
     golden_set_file: str
     top_k: int

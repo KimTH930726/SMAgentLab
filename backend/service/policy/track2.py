@@ -40,6 +40,9 @@ class Track2TypeResult:
     b_hit_rate: float
     a_precision: float
     b_precision: float
+    b_hit_rdb_only: float
+    b_hit_vector_only: float
+    b_hit_both: float
 
 
 @dataclass
@@ -49,10 +52,27 @@ class Track2Result:
     b_hit_rate: float
     a_precision: float
     b_precision: float
+    b_hit_rdb_only: float
+    b_hit_vector_only: float
+    b_hit_both: float
     by_type: list[Track2TypeResult] = field(default_factory=list)
     golden_set_file: str = ""
     top_k: int = 10
     duration_seconds: float = 0.0
+
+
+@dataclass
+class _QueryScore:
+    """골든셋 한 문항의 채점 결과. B그룹은 RDB(policy_param)/벡터(policy_chunk) 중 어느
+    경로로 정답을 찾았는지까지 남긴다 — b_hit(둘 중 하나라도 맞으면 성공)만 보면 "하이브리드가
+    이겼다"는 알아도 "RDB랑 벡터 중 실제로 뭐가 일하고 있는지"는 안 보여서(2026-09-09 대화
+    중 지적) 추가."""
+    a_hit: bool
+    b_hit: bool
+    a_precision: float
+    b_precision: float
+    b_via_rdb: bool
+    b_via_vector: bool
 
 
 def _namespace_for_file(file_: str) -> Optional[str]:
@@ -134,7 +154,6 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
                 real_ns_ids[ns] = resolved
 
     try:
-        # 각 항목: (a_hit, b_hit, a_precision, b_precision).
         # precision은 "top-K(A는 top_k, B는 param+narrative 합쳐 최대 2*top_k) 중 실제
         # 골든셋 정답 item과 겹치는 고유 item 비율" — hit@K는 "정답이 있냐 없냐"만 보고
         # 후보군에 잡음이 얼마나 섞였는지는 안 보므로, 같은 hit@K를 내는 두 전략이라도
@@ -142,7 +161,7 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
         # A/B가 후보 개수 자체가 다를 수 있어(B는 param+narrative 합산) 분모는 고정 K가
         # 아니라 실제 반환된 고유 item 개수를 쓴다 — 두 전략의 "후보 풀 크기"가 다르다는
         # 것 자체도 실측해서 같이 보고한다(순수 정답 비율만으로 비교하면 이 차이가 가려짐).
-        per_type: dict[str, list[tuple[bool, bool, float, float]]] = {}
+        per_type: dict[str, list[_QueryScore]] = {}
         for entry in golden:
             qtype, query, src = entry["type"], entry["query"], entry["source"]
             namespace_name = _namespace_for_file(src.get("file", ""))
@@ -168,23 +187,41 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
             a_precision = (len(gold_ids & a_item_ids) / len(a_item_ids)) if a_item_ids else 0.0
 
             b_result = await search_service.search_policy(namespace_name, query, top_k=top_k)
-            b_item_ids = {p.item_id for p in b_result.params} | {n.item_id for n in b_result.narratives}
+            b_param_ids = {p.item_id for p in b_result.params}
+            b_narrative_ids = {n.item_id for n in b_result.narratives}
+            b_item_ids = b_param_ids | b_narrative_ids
             b_hit = bool(gold_ids & b_item_ids)
             b_precision = (len(gold_ids & b_item_ids) / len(b_item_ids)) if b_item_ids else 0.0
+            b_via_rdb = bool(gold_ids & b_param_ids)
+            b_via_vector = bool(gold_ids & b_narrative_ids)
 
-            per_type.setdefault(qtype, []).append((a_hit, b_hit, a_precision, b_precision))
+            per_type.setdefault(qtype, []).append(
+                _QueryScore(a_hit, b_hit, a_precision, b_precision, b_via_rdb, b_via_vector)
+            )
     finally:
         async with get_conn() as conn:
             await conn.execute("DELETE FROM rag_knowledge WHERE namespace_id = $1", ns_id_a)
             await conn.execute("DELETE FROM ops_namespace WHERE id = $1", ns_id_a)
 
+    def _rate(rows: list[_QueryScore], pick) -> float:
+        return sum(1 for r in rows if pick(r)) / len(rows) if rows else 0.0
+
+    def _avg(rows: list[_QueryScore], pick) -> float:
+        return sum(pick(r) for r in rows) / len(rows) if rows else 0.0
+
+    # b_hit_rdb_only + b_hit_vector_only + b_hit_both == b_hit_rate — RDB만/벡터만/둘 다에서
+    # 정답을 찾은 비율로 쪼개서, "하이브리드가 이겼다"가 아니라 "그중 RDB와 벡터가 각각
+    # 얼마나 기여했는지"를 보여준다(2026-09-09).
     by_type = [
         Track2TypeResult(
             type=t, n=len(rows),
-            a_hit_rate=sum(a for a, _, _, _ in rows) / len(rows),
-            b_hit_rate=sum(b for _, b, _, _ in rows) / len(rows),
-            a_precision=sum(ap for _, _, ap, _ in rows) / len(rows),
-            b_precision=sum(bp for _, _, _, bp in rows) / len(rows),
+            a_hit_rate=_rate(rows, lambda r: r.a_hit),
+            b_hit_rate=_rate(rows, lambda r: r.b_hit),
+            a_precision=_avg(rows, lambda r: r.a_precision),
+            b_precision=_avg(rows, lambda r: r.b_precision),
+            b_hit_rdb_only=_rate(rows, lambda r: r.b_via_rdb and not r.b_via_vector),
+            b_hit_vector_only=_rate(rows, lambda r: r.b_via_vector and not r.b_via_rdb),
+            b_hit_both=_rate(rows, lambda r: r.b_via_rdb and r.b_via_vector),
         )
         for t, rows in per_type.items()
     ]
@@ -192,10 +229,13 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
     total_n = len(all_rows)
     return Track2Result(
         total_n=total_n,
-        a_hit_rate=(sum(a for a, _, _, _ in all_rows) / total_n) if total_n else 0.0,
-        b_hit_rate=(sum(b for _, b, _, _ in all_rows) / total_n) if total_n else 0.0,
-        a_precision=(sum(ap for _, _, ap, _ in all_rows) / total_n) if total_n else 0.0,
-        b_precision=(sum(bp for _, _, _, bp in all_rows) / total_n) if total_n else 0.0,
+        a_hit_rate=_rate(all_rows, lambda r: r.a_hit),
+        b_hit_rate=_rate(all_rows, lambda r: r.b_hit),
+        a_precision=_avg(all_rows, lambda r: r.a_precision),
+        b_precision=_avg(all_rows, lambda r: r.b_precision),
+        b_hit_rdb_only=_rate(all_rows, lambda r: r.b_via_rdb and not r.b_via_vector),
+        b_hit_vector_only=_rate(all_rows, lambda r: r.b_via_vector and not r.b_via_rdb),
+        b_hit_both=_rate(all_rows, lambda r: r.b_via_rdb and r.b_via_vector),
         by_type=by_type,
         golden_set_file=_GOLDEN_SET_PATH.name,
         top_k=top_k,

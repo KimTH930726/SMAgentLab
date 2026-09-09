@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.69)
+# Ops-Navigator 시스템 아키텍처 (v2.70)
 
 ## 개요
 
@@ -11,6 +11,18 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.70: **Track 2에 RDB/벡터 기여도 분해(source attribution) 추가** — "B안(하이브리드)이
+  hit@K에서 이겼다"까지는 알아도 그 안에서 RDB(policy_param)와 벡터(policy_chunk) 중 실제로
+  뭐가 정답을 찾아내고 있는지는 안 보인다는 지적에서 착수. `run_comparison()`이 B그룹의 hit을
+  "RDB만/벡터만/둘 다"세 갈래로 쪼개 반환(`b_hit_rdb_only`/`b_hit_vector_only`/`b_hit_both`,
+  세 값의 합은 항상 `b_hit_rate`와 일치). 내부적으로 `_QueryScore` 데이터클래스로 리팩토링
+  (기존 raw tuple 누적 방식은 필드가 늘면서 가독성이 떨어져 교체). 관리자 화면에 "B 근거:
+  표만/의미검색만/둘 다" 표시 추가. 실 재실행 결과(전체): RDB만 13.5% / 벡터만 50.6% / 둘 다
+  13.5%(합 77.5%=b_hit_rate) — **param 타입(RDB가 전문이어야 할 영역)에서조차 벡터 단독
+  기여(47.8%)가 RDB 단독 기여(26.1%)보다 큼**이 새로 확인됨. 원인으로 PostgreSQL
+  `to_tsvector('simple', ...)`가 한국어 형태소 분석(조사/어미 활용 정규화)을 하지 않아
+  "담을"/"담기" 같은 활용형이 안 겹치는 문제를 대화 중 진단 — 형태소 분석기 추가는 실행
+  안 하고 진단만 문서화(YAGNI, 다음에 착수할 때 참고할 근거). 테스트 1개 추가(총 344개).
 - v2.69: **Track 2 저장소 실험실에 precision@K 추가** — 대화 중 "hit@K는 정답 유무만 보고
   후보군의 잡음 비율은 안 잰다"는 지적에서 착수. `track2.run_comparison()`이 기존 hit@K
   (top-K 안에 정답 포함 여부)에 더해 precision(검색된 고유 item 중 실제 정답 비율)을

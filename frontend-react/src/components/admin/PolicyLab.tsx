@@ -105,6 +105,15 @@ export function PolicyLab() {
               <span className="font-mono tabular-nums text-slate-400">A {(lastResult.a_precision * 100).toFixed(0)}%</span>
               <span className="font-mono tabular-nums text-slate-400">B {(lastResult.b_precision * 100).toFixed(0)}%</span>
             </div>
+            <div
+              className="flex items-center gap-4 mt-2 text-[11px] text-slate-500"
+              title="B안이 찾은 정답 중, 표(RDB) 조회로 찾았는지·의미검색(벡터)으로 찾았는지·둘 다에서 찾았는지를 나눈 비율입니다. 어느 한쪽이 0에 가까우면 그 방식은 굳이 안 써도 된다는 뜻이고, 둘 다 유의미하면 두 방식을 같이 쓰는 게 근거가 있다는 뜻입니다."
+            >
+              <span>B 근거</span>
+              <span className="font-mono tabular-nums text-slate-400">표만 {(lastResult.b_hit_rdb_only * 100).toFixed(0)}%</span>
+              <span className="font-mono tabular-nums text-slate-400">의미검색만 {(lastResult.b_hit_vector_only * 100).toFixed(0)}%</span>
+              <span className="font-mono tabular-nums text-slate-400">둘 다 {(lastResult.b_hit_both * 100).toFixed(0)}%</span>
+            </div>
           </div>
 
           <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-5">
@@ -136,6 +145,12 @@ export function PolicyLab() {
                       title="정답 집중도(precision) — 검색 후보 중 실제 정답 비율"
                     >
                       집중도 A {(t.a_precision * 100).toFixed(0)} · B {(t.b_precision * 100).toFixed(0)}
+                    </div>
+                    <div
+                      className="text-right text-[11px] font-mono tabular-nums text-slate-600"
+                      title="B안이 이 유형에서 정답을 찾은 경로 — 표(RDB)만/의미검색(벡터)만/둘 다"
+                    >
+                      B 근거 표 {(t.b_hit_rdb_only * 100).toFixed(0)} · 의미검색 {(t.b_hit_vector_only * 100).toFixed(0)} · 둘다 {(t.b_hit_both * 100).toFixed(0)}
                     </div>
                   </div>
                 );

@@ -2118,24 +2118,39 @@ Track 2 저장소 전략 비교(§4)를 즉시 실행 — A(`rag_knowledge` 지�
 다를 수 있어(B는 param+narrative 두 소스를 합산) 분모는 고정 K가 아니라 실제 반환된 고유
 item 개수를 쓴다.
 
+`b_hit_rdb_only`/`b_hit_vector_only`/`b_hit_both`(2026-09-09 추가) — B그룹은 RDB(policy_param,
+정확조회)와 벡터(policy_chunk, 의미검색) 두 채널을 항상 같이 돌려서 합친 결과다(`search_policy()`
+독스트링: "어느 쪽이 정답인지는 질문 유형에 달려있어 미리 하나로 안 좁히고 둘 다 보여준다").
+`b_hit_rate`만 보면 "합쳐서 잘 찾는다"까지만 알 수 있고 두 채널 중 실제로 뭐가 기여하는지는
+안 보여서, 골든셋 정답이 RDB의 top-K 후보에 있었는지/벡터의 top-K 후보에 있었는지/둘 다에
+있었는지를 세 갈래로 나눠 추가했다. 세 값의 합은 항상 `b_hit_rate`와 같다(rdb_only+vector_only+
+both = "적어도 하나에서 찾음" = b_hit).
+
 **Response `200`**
 ```json
 {
   "total_n": 89, "a_hit_rate": 0.5506, "b_hit_rate": 0.7753,
   "a_precision": 0.0607, "b_precision": 0.0903,
+  "b_hit_rdb_only": 0.1348, "b_hit_vector_only": 0.5056, "b_hit_both": 0.1348,
   "by_type": [
-    { "type": "param", "n": 23, "a_hit_rate": 0.7391, "b_hit_rate": 0.8696, "a_precision": 0.0739, "b_precision": 0.0824 },
-    { "type": "narrative", "n": 23, "a_hit_rate": 0.6087, "b_hit_rate": 0.9130, "a_precision": 0.0609, "b_precision": 0.0912 },
-    { "type": "navigation", "n": 24, "a_hit_rate": 0.3750, "b_hit_rate": 0.5833, "a_precision": 0.0542, "b_precision": 0.1108 },
-    { "type": "condition_filter", "n": 19, "a_hit_rate": 0.4737, "b_hit_rate": 0.7368, "a_precision": 0.0526, "b_precision": 0.0729 }
+    { "type": "param", "n": 23, "a_hit_rate": 0.7391, "b_hit_rate": 0.8696, "a_precision": 0.0739, "b_precision": 0.0824,
+      "b_hit_rdb_only": 0.2609, "b_hit_vector_only": 0.4783, "b_hit_both": 0.1304 },
+    { "type": "narrative", "n": 23, "a_hit_rate": 0.6087, "b_hit_rate": 0.9130, "a_precision": 0.0609, "b_precision": 0.0912,
+      "b_hit_rdb_only": 0.0, "b_hit_vector_only": 0.9130, "b_hit_both": 0.0 },
+    { "type": "navigation", "n": 24, "a_hit_rate": 0.3750, "b_hit_rate": 0.5833, "a_precision": 0.0542, "b_precision": 0.1108,
+      "b_hit_rdb_only": 0.1250, "b_hit_vector_only": 0.2917, "b_hit_both": 0.1667 },
+    { "type": "condition_filter", "n": 19, "a_hit_rate": 0.4737, "b_hit_rate": 0.7368, "a_precision": 0.0526, "b_precision": 0.0729,
+      "b_hit_rdb_only": 0.1579, "b_hit_vector_only": 0.3158, "b_hit_both": 0.2632 }
   ],
-  "golden_set_file": "online_delivus_v1.jsonl", "top_k": 10, "duration_seconds": 50.0
+  "golden_set_file": "online_delivus_v1.jsonl", "top_k": 10, "duration_seconds": 68.7
 }
 ```
-(위 수치는 2026-09-08 실측 재실행 값 — 이전 문서화 값(hit 57.3%→75.3%)과 소폭 차이는 그
-사이 데이터 변경분 반영. B가 hit@K뿐 아니라 precision도 4개 유형 전부에서 A보다 높음 —
-navigation에서 격차가 가장 큼(11.1% vs 5.4%), 카테고리 필터가 순수 벡터 브라우징보다
-잡음이 훨씬 적다는 뜻)
+(위 수치는 2026-09-09 실측 재실행 값. **param 타입조차 벡터 단독 기여(47.8%)가 RDB 단독
+기여(26.1%)보다 큼** — RDB가 자기 전문 분야에서도 밀리고 있다는 신호. 원인 진단(대화 중):
+PostgreSQL `to_tsvector('simple', ...)`가 한국어 형태소 분석을 안 해서 "담을"/"담기" 같은
+활용형이 안 겹침 — 형태소 분석기 추가는 아직 미착수, 진단만 기록. narrative 타입은
+`b_hit_rdb_only`가 0.0인 게 정상 — narrative 질문의 정답은 서술형 청크에만 있고
+`policy_param`엔 애초에 값이 없어서 RDB가 기여할 여지 자체가 없음)
 
 **Error**: `400` 골든셋 파일 없음, `403` admin 아님
 

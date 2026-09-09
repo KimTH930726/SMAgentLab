@@ -103,6 +103,67 @@ class TestRunComparison:
         assert by_type["narrative"].b_precision == 0.0  # B는 후보 자체가 없음(빈 결과)
         assert result.a_precision == 0.0
         assert result.b_precision == pytest.approx(2 / 3)  # (1.0 + 1.0 + 0.0) / 3
+        # param 두 건 다 params(RDB)에서만 정답을 찾음(narrative_ids는 항상 빈 목록)
+        assert by_type["param"].b_hit_rdb_only == 1.0
+        assert by_type["param"].b_hit_vector_only == 0.0
+        assert by_type["param"].b_hit_both == 0.0
+        # narrative는 B가 아예 못 찾음(miss) — 세 갈래 다 0
+        assert by_type["narrative"].b_hit_rdb_only == 0.0
+        assert by_type["narrative"].b_hit_vector_only == 0.0
+        assert by_type["narrative"].b_hit_both == 0.0
+
+    @pytest.mark.asyncio
+    async def test_source_attribution_rdb_vs_vector(self, monkeypatch, tmp_path):
+        """B그룹 hit을 RDB(param)/벡터(narrative)/둘 다로 쪼개는 로직 검증 — q1은 RDB만,
+        q2는 벡터만, q3는 둘 다에서 정답을 찾는 상황을 구성해 세 갈래가 각각 1건씩 잡히는지 확인."""
+        golden_path = tmp_path / "golden.jsonl"
+        entries = [
+            {"qid": "q1", "query": "rdb만", "type": "param",
+             "source": {"file": "비즈니스정책서_온라인스토어_재구성.xlsx", "sheet": "s", "row": 1}, "expected_answer": "x"},
+            {"qid": "q2", "query": "벡터만", "type": "param",
+             "source": {"file": "비즈니스정책서_온라인스토어_재구성.xlsx", "sheet": "s", "row": 2}, "expected_answer": "x"},
+            {"qid": "q3", "query": "둘다", "type": "param",
+             "source": {"file": "비즈니스정책서_온라인스토어_재구성.xlsx", "sheet": "s", "row": 3}, "expected_answer": "x"},
+        ]
+        golden_path.write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in entries), encoding="utf-8")
+        monkeypatch.setattr(track2, "_GOLDEN_SET_PATH", golden_path)
+
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.execute = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=999)
+        conn.fetch = AsyncMock(return_value=[])
+        conn.fetchrow = AsyncMock(side_effect=[
+            {"id": 201, "namespace_id": 1}, {"id": 202, "namespace_id": 1}, {"id": 203, "namespace_id": 1},
+        ])
+        monkeypatch.setattr(track2, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(track2, "resolve_namespace_id", AsyncMock(return_value=1))
+        monkeypatch.setattr(track2.embedding_service, "embed", AsyncMock(return_value=[0.1] * 768))
+        monkeypatch.setattr(track2, "search_knowledge", AsyncMock(return_value=[]))  # A그룹은 이 테스트 관심사 아님
+
+        def _make_result(param_ids=(), narrative_ids=()):
+            r = MagicMock()
+            r.params = [MagicMock(item_id=i) for i in param_ids]
+            r.narratives = [MagicMock(item_id=i) for i in narrative_ids]
+            return r
+        search_policy_mock = AsyncMock(side_effect=[
+            _make_result(param_ids=[201]),                    # q1: RDB만
+            _make_result(narrative_ids=[202]),                 # q2: 벡터만
+            _make_result(param_ids=[203], narrative_ids=[203]), # q3: 둘 다
+        ])
+        monkeypatch.setattr(search, "search_policy", search_policy_mock)
+
+        result = await track2.run_comparison(top_k=5)
+
+        by_type = {t.type: t for t in result.by_type}
+        assert by_type["param"].n == 3
+        assert by_type["param"].b_hit_rdb_only == pytest.approx(1 / 3)
+        assert by_type["param"].b_hit_vector_only == pytest.approx(1 / 3)
+        assert by_type["param"].b_hit_both == pytest.approx(1 / 3)
+        # 세 갈래 합은 항상 b_hit_rate와 같아야 한다
+        assert (by_type["param"].b_hit_rdb_only + by_type["param"].b_hit_vector_only
+                + by_type["param"].b_hit_both) == pytest.approx(by_type["param"].b_hit_rate)
 
         # 테스트 네임스페이스 정리(삭제) 호출 확인
         delete_calls = [c for c in conn.execute.call_args_list if "DELETE" in c.args[0]]
