@@ -1143,34 +1143,32 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
 
 <!-- 13 AI 개발협업 노하우 -->
 <section class="slide tall" id="s11">
-  <div class="eyebrow"><span class="chip">13</span>HOW WE BUILT THIS — 이미 작동 중인 미니 하네스</div>
-  <h2>AI와의 개발 협업 — 우리는 이미 "하네스"로 개발하고 있었다</h2>
-  <p class="lead">§14의 Agent Harness는 미래 얘기가 아니다 — 지금 이 프로젝트의 개발 루틴 자체가 이미 같은 구조(Policy→Plan→Execute↔Eval→Gate→Observability)로 돌아가고 있다</p>
+  <div class="eyebrow"><span class="chip">13</span>HOW WE BUILT THIS — 프롬프트에서 코드가 나오기까지</div>
+  <h2>AI와의 개발 협업 — 이 시스템 코드 대부분은 이렇게 태어났다</h2>
+  <p class="lead">거창한 도구가 아니라 "요청/질문 ↔ AI 응답" 을 계속 주고받는 루프 하나 — 그 반복에서 실제로 걸렸던 것들</p>
 
-  <div class="arch" style="margin:6px 0 16px;">
-    <div class="arch-box"><div class="ico">📜</div><div class="t">CLAUDE.md · development-conventions.md</div><div class="d">= Policy</div></div>
-    <div class="arch-down">▼</div>
-    <div class="arch-box accent"><div class="ico">🧭</div><div class="t">사람 요청 → AI Plan → AI Execute(코드)</div><div class="d">= Context/Execution</div></div>
-    <div class="arch-down">▼</div>
-    <div class="arch-box accent"><div class="ico">🧪</div><div class="t">Eval — 실 시나리오·회귀 테스트 통과해야 통과</div><div class="d">= Evaluation · 실패하면 ↺ Plan으로 되돌아감</div></div>
-    <div class="arch-down">▼</div>
-    <div class="arch-box accent"><div class="ico">🖐️</div><div class="t">HITL Gate — 명확한 실행 제안에 대한 승인만 실행으로 간주</div><div class="d">= Control/Safety · 애매한 긍정("응")은 승인 아님</div></div>
-    <div class="arch-down">▼</div>
-    <div class="arch-box"><div class="ico">📡</div><div class="t">커밋 메시지 + 문서화</div><div class="d">= Observability · 결정 근거 영속화</div></div>
+  <div class="arch-row" style="margin:10px 0 6px;">
+    <div class="arch-box"><div class="ico">🗣️</div><div class="t">사람: 요청·질문·피드백</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box accent"><div class="ico">🤖</div><div class="t">AI: 코드 작성 + 실측 검증</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box"><div class="ico">🔍</div><div class="t">사람: 확인·승인</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box"><div class="ico">💾</div><div class="t">코드 · 커밋</div></div>
   </div>
+  <div style="text-align:center; color:var(--text-dim); font-size:12px; margin-bottom:14px;">↺ 다음 요청으로 루프 반복 — 이게 전부다, 이 시스템의 대부분이 이렇게 만들어짐</div>
 
-  <table style="font-size:11.5px;">
-    <tr><th>레이어</th><th>실제로 이 프로젝트에서 있었던 일</th></tr>
-    <tr><td>Control/Safety</td><td>"현황을 물었는데 AI가 수정을 해버렸다" — 상태 질문에 대한 "응"을 실행 승인으로 확대해석한 사고. 이후 "직전 메시지가 명확한 액션 제안일 때만 승인으로 간주"로 게이트 명문화</td></tr>
-    <tr><td>Evaluation</td><td>클린코드 감사(서브에이전트 3개 병렬) 상위 3개 항목 중 2개가 재검증에서 오탐 — 자동화 결과도 Eval을 한 번 더 통과시켜야 함</td></tr>
-    <tr><td>Evaluation</td><td>"200 응답"은 Eval 통과가 아님 — 가중치 버그가 200을 계속 반환해 스모크 테스트로 못 잡던 전례. 부작용 로직은 전/후 값까지 비교</td></tr>
-    <tr><td>Observability</td><td>세션 메모리는 다음 세션의 AI에게만 보임 — 팀이 볼 근거는 반드시 저장소 문서로(이 발표자료 §9·§14도 그 결과물)</td></tr>
-  </table>
+  <div class="example">
+    <span class="ex-tag">실제로 이 루프에서 이탈했던 사례</span>
+    <span class="ex-step">질문: "RDB랑 벡터 중 뭐가 찾아내는거야?" (순수 상태 질문) — AI가 답하면서 "이것도 나눠볼까요?" 제안까지 곁들임</span>
+    <span class="ex-step" style="color:#FCA5A5;"><span class="arrow-ex">▸</span> "응" — 사람은 질문에 대한 답으로 한 말인데, AI는 그 제안(구현)의 승인으로 받아들여 곧바로 코드를 짬 → "확인·승인" 단계를 건너뜀</span>
+    <span class="ex-step"><span class="arrow-ex">▸</span> 사람: "현황을 물었는데 수정을 해버렸다"</span>
+    <span class="ex-step" style="color:var(--green);"><span class="arrow-ex">▸</span> 이후 규칙 명문화: 직전 메시지가 명확한 실행 제안이었을 때만 승인으로 간주(<code>development-conventions.md</code>)</span>
+  </div>
 
   <div class="why alt" style="margin-top:12px; max-width:900px; font-size:13px;">
     <ul>
-      <li>이 원칙들 전부 <b>실제 사고/지적을 근거로만</b> 정리됨 — 지어낸 규칙 없음, 전체 상세는 <code>docs/development-conventions.md</code></li>
-      <li>즉 §14의 Harness를 "새로 배워서" 도입하는 게 아니라, <b>이미 몸으로 하던 걸 정식 구조로 확장</b>하는 것 — 그래서 다음 §14가 이어짐</li>
+      <li>이 루프가 잘 굴러가려면 결국 "AI 검증을 얼마나 믿을 수 있나"가 핵심 — 그게 바로 다음 §14의 <b>평가 체계</b> 얘기로 이어짐</li>
     </ul>
   </div>
 </section>
@@ -1179,72 +1177,65 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
 <section class="slide tall" id="s12">
   <div class="eyebrow"><span class="chip">14</span>LONG-TERM VISION · 청사진</div>
   <h2>장기 청사진 — 운영 Agent Harness로 가는 길</h2>
-  <p class="lead">로그 수집 → 분석 → RCA → 조치 → Self-Healing까지 AI화하면, Harness가 사실상 중앙 제어계층이 된다. 핵심은 처음부터 완전자동이 아니라 <b>Observe → Recommend → Approve → Act → Autonomous</b> 순으로 자율성을 단계적으로 올리는 것.</p>
+  <p class="lead">로그 수집 → 분석 → RCA → 조치 → Self-Healing까지 AI화하면, Harness가 중앙 제어계층이 된다. 왼쪽에서 오른쪽으로 흐르는 이 한 줄 안에 전체 그림이 있고, 지금 우리는 그중 딱 한 축(Evaluation)을 연구·고민하는 단계에 있다.</p>
 
-  <div class="arch" style="margin:6px 0 18px;">
-    <div class="arch-box"><div class="ico">📊</div><div class="t">Logs / Metrics / Traces / CMDB / 기준정보</div></div>
-    <div class="arch-down">▼</div>
-    <div class="arch-box accent"><div class="ico">🧠</div><div class="t">Knowledge / Context Layer</div><div class="d">Vector + Graph + Ontology</div></div>
-    <div class="arch-down">▼</div>
-    <div class="arch-box accent"><div class="ico">⚙️</div><div class="t">Agent Harness</div><div class="d">Context→Plan→Tool→Execute ↔ Eval←Observe · Policy/Retry/Stop/HITL</div></div>
-    <div class="arch-down">▼</div>
-    <div class="arch-box"><div class="ico">🩺</div><div class="t">Operations Agent</div><div class="d">Detect → RCA → Recommend → Execute</div></div>
-    <div class="arch-down">▼</div>
-    <div class="arch-box accent"><div class="ico">🩹</div><div class="t">Self-Healing</div></div>
+  <div class="arch-row" style="margin:8px 0 4px;">
+    <div class="arch-box"><div class="ico">📊</div><div class="t">Logs/Metrics<br>CMDB·기준정보</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box"><div class="ico">🧠</div><div class="t">Knowledge Layer</div><div class="d">Vector+Graph+Ontology</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box accent"><div class="ico">⚙️</div><div class="t">Agent Harness</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box"><div class="ico">🩺</div><div class="t">Operations Agent</div><div class="d">Detect→RCA→Recommend→Execute</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box"><div class="ico">🩹</div><div class="t">Self-Healing</div></div>
   </div>
 
-  <h3>자율성은 한 번에 올리지 않는다</h3>
-  <div class="cols stack3" style="margin-bottom:14px;">
-    <div class="chip-card"><div class="ico">🤖</div><div class="t">AI Assistant (L0~3)</div>
-      <ul class="mini"><li>로그 요약 → 이상 탐지 → RCA 분석 → 조치 추천까지, 실행은 안 함</li></ul>
-    </div>
-    <div class="chip-card"><div class="ico">🖐️</div><div class="t">Agent (L4)</div>
-      <ul class="mini"><li>사람이 승인해야 Tool 실행 — Controlled Automation</li></ul>
-    </div>
-    <div class="chip-card"><div class="ico">🩹</div><div class="t">Self-Healing (L5~6)</div>
-      <ul class="mini"><li>저위험 케이스만 자동 복구 + 결과 재검증, 실패 시 Rollback</li></ul>
-    </div>
-  </div>
+  <div style="text-align:center; color:var(--text-dim); font-size:16px; margin:2px 0;">⌄</div>
 
-  <h3>Harness 내부 6개 레이어 — 팀 공통 플랫폼 후보</h3>
-  <div class="chips">
-    <div class="chip-card"><div class="ico">📥</div><div class="t">① Context</div><ul class="mini"><li>Log/Metric/Trace, Vector·Graph 조회, Context Budget</li></ul></div>
-    <div class="chip-card"><div class="ico">🛠️</div><div class="t">② Execution</div><ul class="mini"><li>Planner, Tool Registry, Tool Calling, Workflow</li></ul></div>
-    <div class="chip-card"><div class="ico">✅</div><div class="t">③ Evaluation</div><ul class="mini"><li>Rule Eval, Golden Set, Retrieval Eval, LLM Judge, Task Success</li></ul></div>
-    <div class="chip-card"><div class="ico">🎛️</div><div class="t">④ Control</div><ul class="mini"><li>Retry, Replan, Stop, Fallback, HITL</li></ul></div>
-    <div class="chip-card"><div class="ico">🔒</div><div class="t">⑤ Safety</div><ul class="mini"><li>Permission, Action Risk, Approval, Sandbox, Rollback</li></ul></div>
-    <div class="chip-card"><div class="ico">📡</div><div class="t">⑥ Observability</div><ul class="mini"><li>Trace, Token/Cost, Latency, Success Rate, Audit Log</li></ul></div>
+  <div class="arch-row" style="margin-bottom:4px;">
+    <div class="arch-box" style="min-width:80px;"><div class="t">① Context</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box" style="min-width:80px;"><div class="t">② Execution</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box accent" style="min-width:80px; border-width:2px;"><div class="t">③ Evaluation</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box" style="min-width:80px;"><div class="t">④ Control</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box" style="min-width:80px;"><div class="t">⑤ Safety</div></div>
+    <div class="arch-down">→</div>
+    <div class="arch-box" style="min-width:80px;"><div class="t">⑥ Observability</div></div>
   </div>
+  <div style="text-align:center; color:var(--text-dim); font-size:16px; margin:2px 0;">↓</div>
 
-  <h3>두 트랙 동시에 — 조각 수집과 PoC 아이디어는 순서 관계가 아니다</h3>
-  <div class="cols" style="align-items:start; margin:6px 0 4px;">
-    <div>
-      <div class="badge b-indigo" style="margin-bottom:8px;">TRACK A · 인프라 조각 수집</div>
-      <div class="arch">
-        <div class="arch-box accent"><div class="ico">🧩</div><div class="t">조각 1 — Retrieval Eval</div><div class="d">Track2: hit@K·precision·RDB/벡터 분해(§9), 하네스를 노리고 만든 게 아니라 필요해서 생긴 것</div></div>
-        <div class="arch-down">▼ 조각 2, 3···쌓이면</div>
-        <div class="arch-box"><div class="ico">🔗</div><div class="t">공통 패턴 수렴</div><div class="d">사례 2~3개 쌓여야 구조가 보임(YAGNI, development-conventions.md)</div></div>
-        <div class="arch-down">▼</div>
-        <div class="arch-box"><div class="ico">⚙️</div><div class="t">Harness(①~⑥) 정식 추출</div></div>
-      </div>
-    </div>
-    <div>
-      <div class="badge b-amber" style="margin-bottom:8px;">TRACK B · PoC 아이디어는 자유롭게</div>
-      <div class="why" style="font-size:12.5px;">
-        <ul>
-          <li>하네스 완성을 기다리지 않고 후보를 계속 던지고 실험 — DB Connection Pool Exhaustion RCA, 로그 이상탐지, 배포 자동화 등</li>
-          <li>실패해도 좋음 — 각 PoC의 시행착오 자체가 "이건 어느 레이어(Context/Eval/Control...) 문제였나"로 태깅되어 Track A의 조각 재료가 됨</li>
-          <li>즉 두 트랙은 <b>병행 + 서로 재료를 주고받는 관계</b>, "A 끝나야 B 시작"이 아님</li>
-        </ul>
-      </div>
+  <div class="compare" style="margin-bottom:14px;">
+    <div class="box good" style="flex:1;">
+      <div class="tag">지금 여기 — ③ Evaluation, 연구·고민 단계</div>
+      <div class="h" style="font-size:13px;">"어떻게 평가할지"부터 실측으로 풀고 있음, 아직 완성된 축 아님</div>
+      <ul>
+        <li>Retrieval Eval의 실사례: Track2 — hit@K(정답 포함 여부) · precision@K(잡음 비율) · RDB/벡터 기여도 분해(§9)</li>
+        <li>다음 질문(미결): Golden Set을 데이터 축마다 어떻게 자동 생성할지, LLM Judge(생성 결과 평가)는 언제 필요한지</li>
+      </ul>
     </div>
   </div>
 
-  <div class="why alt" style="margin-top:10px; max-width:900px; font-size:13px;">
+  <div class="cols stack3" style="margin-bottom:10px;">
+    <div class="chip-card" style="padding:10px 14px;"><div class="t" style="font-size:12px;">AI Assistant (L0~3)</div>
+      <ul class="mini"><li>로그요약→이상탐지→RCA→조치추천, 실행은 안 함</li></ul>
+    </div>
+    <div class="chip-card" style="padding:10px 14px;"><div class="t" style="font-size:12px;">Agent (L4)</div>
+      <ul class="mini"><li>사람 승인 후 실행 — Controlled Automation</li></ul>
+    </div>
+    <div class="chip-card" style="padding:10px 14px;"><div class="t" style="font-size:12px;">Self-Healing (L5~6)</div>
+      <ul class="mini"><li>저위험 자동복구 + 재검증, 실패 시 Rollback</li></ul>
+    </div>
+  </div>
+
+  <div class="why alt" style="max-width:900px; font-size:12.5px;">
     <ul>
-      <li>지금 하네스부터 통째로 설계하면 실측 근거 없이 만드는 과잉설계 — 이 프로젝트가 반복 확인해온 원칙 그대로(§13)</li>
-      <li><b>장기적으로 중요한 자산은 개별 RCA Agent가 아니라 Harness/Runtime 자체</b>라는 방향만 미리 공유 — 조각·PoC를 만들 때 "이게 나중에 어느 레이어로 수렴할지" 염두에 두기 위함</li>
-      <li>상태: <b>청사진 — 조각 수집 + PoC 실험 병행 단계, 하네스 자체는 아직 미착수.</b> 팀 공유·논의용으로 먼저 던져두는 것</li>
+      <li>지금 Harness를 통째로 먼저 설계하지 않는다 — ③에서 실측으로 배운 걸 근거로 나머지 축(①②④⑤⑥)도 하나씩 채워감(§13, YAGNI)</li>
+      <li>동시에 PoC 후보(예: DB Connection Pool Exhaustion RCA)는 자유롭게 계속 던지고 실험 — 그 시행착오가 다시 "이건 어느 축 문제였나"로 이 그림에 흡수됨</li>
+      <li>상태: <b>청사진 — ③Evaluation 축을 연구하며 조각을 모으는 단계.</b> 팀 공유·논의용으로 먼저 던져두는 것</li>
     </ul>
   </div>
 </section>
