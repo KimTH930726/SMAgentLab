@@ -941,6 +941,20 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
   <div class="why" style="margin-top:10px; max-width:800px;">
     <ul><li><b>교훈</b>: 검색전략을 배타적으로 나누지 말고 "정확조회 + 벡터 폴백"을 겹쳐야 함</li></ul>
   </div>
+
+  <p class="lead" style="margin-top:18px; margin-bottom:6px;">여기서 끝이 아니었다 — "찾았다/못 찾았다"만으론 안 보이던 것 두 가지를 더 팠다</p>
+  <div class="stat-row">
+    <div class="stat"><div class="num">A 6.1% · B 9.0%</div><div class="lbl">정답 집중도(precision) — 후보군 중 실제 정답 비율</div></div>
+    <div class="stat"><div class="num">13.5 / 50.6 / 13.5%</div><div class="lbl">B의 정답 발견 경로 — RDB만 / 벡터만 / 둘 다</div></div>
+  </div>
+  <div class="example" style="margin-top:10px;">
+    <span class="ex-tag">B(구조분리) 안에서 — RDB와 벡터, 실제로 뭐가 찾아내나</span>
+    <span class="ex-step" style="color:#FCA5A5;"><span class="arrow-ex">▸</span> 뜻밖의 결과: 숫자·값 질문(RDB가 전문이어야 할 영역)조차 벡터 단독 기여(47.8%)가 RDB 단독(26.1%)보다 큼</span>
+    <span class="ex-step"><span class="arrow-ex">▸</span> 원인: PostgreSQL 키워드 검색이 한국어 형태소 분석을 안 함 — "담을"/"담기"처럼 활용형이 다르면 글자가 안 겹쳐 못 찾음(벡터는 의미로 찾아서 이 문제가 없음)</span>
+  </div>
+  <div class="why" style="margin-top:10px; max-width:800px;">
+    <ul><li><b>다음 과제</b>: RDB 쪽에 한국어 형태소 분석기(예: mecab)를 붙이면 이 갭을 줄일 여지가 있음 — 아직 미착수, 진단만 완료</li></ul>
+  </div>
 </section>
 
 <!-- 8 정책서 파이프라인 -->
