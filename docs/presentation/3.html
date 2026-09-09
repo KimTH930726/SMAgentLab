@@ -897,6 +897,9 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
   <div class="eyebrow"><span class="chip">09</span>STORAGE LAB — TRACK 2</div>
   <h2>그 원칙, 실제로 검증하다</h2>
   <p class="lead">같은 골든셋 89건으로 두 저장 방식을 정면 비교</p>
+  <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 16px; max-width:820px;">
+    <b style="color:var(--accent2);">측정 지표: hit@K</b> — 질문마다 검색 결과 상위 K개(top-K) 안에 정답 문서가 있는지만 본다(몇 번째로 들어왔는지는 안 봄). LLM 프롬프트는 K개 후보를 통째로 읽기 때문에, 답변 품질을 좌우하는 건 "순위"가 아니라 "애초에 후보 안에 있었는가"라서 이 지표를 골랐다.
+  </p>
   <div class="compare" style="margin-bottom:4px;">
     <div class="box bad">
       <div class="tag">A · 통합저장(기존 방식)</div>
@@ -942,7 +945,10 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     <ul><li><b>교훈</b>: 검색전략을 배타적으로 나누지 말고 "정확조회 + 벡터 폴백"을 겹쳐야 함</li></ul>
   </div>
 
-  <p class="lead" style="margin-top:18px; margin-bottom:6px;">여기서 끝이 아니었다 — "찾았다/못 찾았다"만으론 안 보이던 것 두 가지를 더 팠다</p>
+  <p class="lead" style="margin-top:18px; margin-bottom:6px;">여기서 끝이 아니었다 — hit@K는 "찾았다/못 찾았다"만 보고 두 가지를 놓친다</p>
+  <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 12px; max-width:820px;">
+    <b style="color:var(--accent2);">측정 지표 추가: precision@K</b> — hit@K는 정답 유무만 이진 판정하고 후보군에 잡음(무관한 문서)이 얼마나 섞였는지는 안 본다. 같은 hit@K라도 후보 10~20개 중 진짜 정답 비율이 다르면 LLM이 헷갈릴 위험도 다르다는 뜻이라 추가했다. 그리고 B(구조분리)는 RDB+벡터를 매 질문마다 항상 같이 돌리는 구조라, "합쳐서 잘 찾는다"까진 알아도 <b style="color:var(--accent2);">그 안에서 실제로 뭐가 찾아내는지</b>는 안 보여서 그 경로도 나눠 쟀다.
+  </p>
   <div class="stat-row">
     <div class="stat"><div class="num">A 6.1% · B 9.0%</div><div class="lbl">정답 집중도(precision) — 후보군 중 실제 정답 비율</div></div>
     <div class="stat"><div class="num">13.5 / 50.6 / 13.5%</div><div class="lbl">B의 정답 발견 경로 — RDB만 / 벡터만 / 둘 다</div></div>
