@@ -199,6 +199,7 @@
 
   <div class="grp">부록</div>
   <a href="#s11">13 AI 개발협업 노하우</a>
+  <a href="#s12">14 장기 청사진: Agent Harness</a>
 </nav>
 
 <main>
@@ -1176,6 +1177,57 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     <ul>
       <li>이 원칙들 전부 <b>실제 사고/지적을 근거로만</b> 정리됨 — 지어낸 규칙 없음</li>
       <li>전체 상세(실사례 포함)는 <code>docs/development-conventions.md</code>, 프로젝트 공통 요약은 <code>CLAUDE.md</code>, 프로젝트 무관 공통 규율은 사용자 레벨 설정에 분리 보관</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 14 장기 청사진: Agent Harness -->
+<section class="slide tall" id="s12">
+  <div class="eyebrow"><span class="chip">14</span>LONG-TERM VISION · 청사진</div>
+  <h2>장기 청사진 — 운영 Agent Harness로 가는 길</h2>
+  <p class="lead">로그 수집 → 분석 → RCA → 조치 → Self-Healing까지 AI화하면, Harness가 사실상 중앙 제어계층이 된다. 핵심은 처음부터 완전자동이 아니라 <b>Observe → Recommend → Approve → Act → Autonomous</b> 순으로 자율성을 단계적으로 올리는 것.</p>
+
+  <div class="arch" style="margin:6px 0 18px;">
+    <div class="arch-box"><div class="ico">📊</div><div class="t">Logs / Metrics / Traces / CMDB / 기준정보</div></div>
+    <div class="arch-down">▼</div>
+    <div class="arch-box accent"><div class="ico">🧠</div><div class="t">Knowledge / Context Layer</div><div class="d">Vector + Graph + Ontology</div></div>
+    <div class="arch-down">▼</div>
+    <div class="arch-box accent"><div class="ico">⚙️</div><div class="t">Agent Harness</div><div class="d">Context→Plan→Tool→Execute ↔ Eval←Observe · Policy/Retry/Stop/HITL</div></div>
+    <div class="arch-down">▼</div>
+    <div class="arch-box"><div class="ico">🩺</div><div class="t">Operations Agent</div><div class="d">Detect → RCA → Recommend → Execute</div></div>
+    <div class="arch-down">▼</div>
+    <div class="arch-box accent"><div class="ico">🩹</div><div class="t">Self-Healing</div></div>
+  </div>
+
+  <h3>자율성은 한 번에 올리지 않는다</h3>
+  <div class="cols stack3" style="margin-bottom:14px;">
+    <div class="chip-card"><div class="ico">🤖</div><div class="t">AI Assistant (L0~3)</div>
+      <ul class="mini"><li>로그 요약 → 이상 탐지 → RCA 분석 → 조치 추천까지, 실행은 안 함</li></ul>
+    </div>
+    <div class="chip-card"><div class="ico">🖐️</div><div class="t">Agent (L4)</div>
+      <ul class="mini"><li>사람이 승인해야 Tool 실행 — Controlled Automation</li></ul>
+    </div>
+    <div class="chip-card"><div class="ico">🩹</div><div class="t">Self-Healing (L5~6)</div>
+      <ul class="mini"><li>저위험 케이스만 자동 복구 + 결과 재검증, 실패 시 Rollback</li></ul>
+    </div>
+  </div>
+
+  <h3>Harness 내부 6개 레이어 — 팀 공통 플랫폼 후보</h3>
+  <div class="chips">
+    <div class="chip-card"><div class="ico">📥</div><div class="t">① Context</div><ul class="mini"><li>Log/Metric/Trace, Vector·Graph 조회, Context Budget</li></ul></div>
+    <div class="chip-card"><div class="ico">🛠️</div><div class="t">② Execution</div><ul class="mini"><li>Planner, Tool Registry, Tool Calling, Workflow</li></ul></div>
+    <div class="chip-card"><div class="ico">✅</div><div class="t">③ Evaluation</div><ul class="mini"><li>Rule Eval, Golden Set, Retrieval Eval, LLM Judge, Task Success</li></ul></div>
+    <div class="chip-card"><div class="ico">🎛️</div><div class="t">④ Control</div><ul class="mini"><li>Retry, Replan, Stop, Fallback, HITL</li></ul></div>
+    <div class="chip-card"><div class="ico">🔒</div><div class="t">⑤ Safety</div><ul class="mini"><li>Permission, Action Risk, Approval, Sandbox, Rollback</li></ul></div>
+    <div class="chip-card"><div class="ico">📡</div><div class="t">⑥ Observability</div><ul class="mini"><li>Trace, Token/Cost, Latency, Success Rate, Audit Log</li></ul></div>
+  </div>
+
+  <div class="why alt" style="margin-top:14px; max-width:900px; font-size:13px;">
+    <ul>
+      <li><b>이미 씨앗은 있음</b> — 오늘 만든 hit@K/precision@K/RDB·벡터 기여도 분해(§9)가 바로 ③Evaluation 레이어의 "Retrieval Eval" 실제 사례</li>
+      <li><b>PoC는 아주 좁게</b>: 장애 1종(예: DB Connection Pool Exhaustion)으로 Log/Metric → RCA Agent → Vector+Graph 조회 → Harness Eval → Runbook 선택 → 사람 승인 → 조치 실행 → 재측정 → 성공/실패 판정, 이 한 사이클만 완성</li>
+      <li>이 하나가 완성되면 Harness는 그대로 두고 장애 유형·Tool만 계속 추가 — <b>장기적으로 중요한 자산은 개별 RCA Agent가 아니라 Harness/Runtime 자체</b>(로그요약·RCA·배포·장애조치 Agent 전부 같은 Runtime 위에서)</li>
+      <li>상태: <b>청사진 — 아직 미착수.</b> 팀 공유·논의용으로 먼저 던져두는 것</li>
     </ul>
   </div>
 </section>
