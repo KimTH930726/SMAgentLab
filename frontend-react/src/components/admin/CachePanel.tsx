@@ -55,6 +55,7 @@ export function CachePanel() {
       setConfirmClear(false);
       alert(`캐시 ${data.deleted}건 삭제 완료`);
     },
+    onError: (err: Error) => alert(err.message || '캐시 초기화 실패'),
   });
 
   const deleteEntryMutation = useMutation({
@@ -63,6 +64,7 @@ export function CachePanel() {
       queryClient.invalidateQueries({ queryKey: ['cache-stats', selectedNs] });
       queryClient.invalidateQueries({ queryKey: ['cache-entries', selectedNs] });
     },
+    onError: (err: Error) => alert(err.message || '캐시 삭제 실패'),
   });
 
   const { data: cacheConfig } = useQuery({
@@ -75,6 +77,7 @@ export function CachePanel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cache-config'] });
     },
+    onError: (err: Error) => alert(err.message || '캐시 설정 변경 실패'),
   });
 
   const { totalPages, totalItems, slice } = useClientPaging(entries, pageSize);

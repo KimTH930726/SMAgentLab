@@ -118,6 +118,7 @@ export function FewshotTable() {
       setShowCreate(false);
       setCreateForm(defaultForm);
     },
+    onError: (err: Error) => alert(err.message || '등록 실패'),
   });
 
   const updateMutation = useMutation({
@@ -131,6 +132,7 @@ export function FewshotTable() {
       setEditingId(null);
       setShowEdit(false);
     },
+    onError: (err: Error) => alert(err.message || '수정 실패'),
   });
 
   const deleteMutation = useMutation({
@@ -141,6 +143,7 @@ export function FewshotTable() {
       setDeleteTarget(null);
       setShowEdit(false);
     },
+    onError: (err: Error) => alert(err.message || '삭제 실패'),
   });
 
   const bulkDeleteMutation = useMutation({
@@ -151,6 +154,7 @@ export function FewshotTable() {
       setSelectedIds(new Set());
       setShowBulkConfirm(false);
     },
+    onError: (err: Error) => alert(err.message || '일괄 삭제 실패'),
   });
 
   const statusMutation = useMutation({
@@ -161,6 +165,7 @@ export function FewshotTable() {
       setEditingId(null);
       setEditingItem(null);
     },
+    onError: (err: Error) => alert(err.message || '상태 변경 실패'),
   });
 
   const startEdit = (item: FewshotItem) => {

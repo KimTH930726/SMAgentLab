@@ -38,6 +38,7 @@ export function PromptManager({ agentType }: Props) {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     },
+    onError: (err: Error) => alert(err.message || '프롬프트 저장 실패'),
   });
 
   // agentType이 지정된 경우 해당 agent + 'all' 표시, null/undefined면 전체

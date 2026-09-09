@@ -233,6 +233,7 @@ function ProviderSettings() {
       setTestResult({ ok: data.is_connected });
       setDirty(false);
     },
+    onError: (err: Error) => setTestResult({ ok: false, error: err.message || '저장 실패' }),
   });
 
   const handleChange = <K extends keyof FormState>(key: K, value: FormState[K]) => {
@@ -612,6 +613,7 @@ function ThresholdSettings() {
       setValues(data);
       setDirty(false);
     },
+    onError: (err: Error) => alert(err.message || '임계값 저장 실패'),
   });
 
   const handleChange = (key: keyof SearchThresholds, val: number) => {
@@ -733,6 +735,7 @@ function SearchDefaultsSettings() {
         topK: data.default_top_k,
       });
     },
+    onError: (err: Error) => alert(err.message || '기본값 저장 실패'),
   });
 
   const handleChange = (key: keyof SearchDefaults, val: number) => {
@@ -866,6 +869,7 @@ function CacheSettings() {
       setValues(data);
       setDirty(false);
     },
+    onError: (err: Error) => alert(err.message || '캐시 설정 저장 실패'),
   });
 
   const handleChange = (key: keyof CacheConfig, val: number | boolean) => {
