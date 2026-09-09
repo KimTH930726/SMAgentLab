@@ -1157,17 +1157,18 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
 
   <div class="codebox" style="margin-top:12px;">
     <div class="cb-head"><span>docs/development-conventions.md 발췌</span><span>실제 커밋된 스펙</span></div>
-    <pre><span class="cm"># §10. AI 페어 개발(Claude Code) 특유의 원칙</span>
+    <pre><span class="cm"># §10. AI 페어 개발(Claude Code) — 실행 승인 게이트 (SDLC 관점)</span>
 
-- <span class="kw">애매한 긍정</span>("웅", "좋다")을 실행 승인으로 확대해석하지 않는다.
-  직전 메시지가 명확한 액션 제안이었을 때만 그 실행으로 간주한다.
+- <span class="kw">Query(조회)</span> 응답과 <span class="kw">Command(상태변경) 실행</span>의
+  승인 절차를 분리한다 — Query 턴 뒤의 짧은 긍정을 Command의 Approve로 오판하지 않는다.
+  직전 턴이 명시적 <span class="fn">Change Proposal</span>(변경 제안)이었을 때만 Approve.
 
-  <span class="cm">&gt; 실사고(2026-09-09): "RDB랑 벡터 중 뭐가 찾아내는거야?"라는 상태 질문에</span>
-  <span class="cm">&gt; "이거 마저 나눠서 볼까요?" 제안까지 곁들였고, 뒤이은 "웅"을 그 제안(구현)의</span>
-  <span class="cm">&gt; 승인으로 받아 코드를 짬. 사용자: "현황을 물었는데 수정을 해버렸다"</span>
+  <span class="cm">&gt; 사후 리뷰(2026-09-09): Query("RDB/벡터 기여도는 어떻게 나뉘나?")에 대한</span>
+  <span class="cm">&gt; 응답에 Change Proposal이 병기됐고, 후속 짧은 긍정을 Approve로 오인해 즉시</span>
+  <span class="cm">&gt; Command 실행. RCA: "조회 요청이 승인 없이 실행으로 전이" — 게이트 조항 추가</span>
 
-- <span class="kw">서브에이전트/자동화 도구</span>의 결과도 반영 전에 재검증한다.
-  <span class="cm">&gt; 클린코드 감사(병렬 서브에이전트 3개) 상위 3건 중 2건이 재검증에서 오탐</span></pre>
+- <span class="kw">서브에이전트/정적분석 산출물</span>도 병합 전 2차 Verification을 거친다.
+  <span class="cm">&gt; 병렬 감사 3건 중 2건이 2차 검증에서 False Positive로 판정 — 반영 보류</span></pre>
   </div>
 
   <div class="why alt" style="margin-top:12px; max-width:900px; font-size:13px;">
@@ -1212,6 +1213,7 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     <div class="arch-down">→</div>
     <div class="arch-box" style="min-width:86px;"><div class="t">⑥ 관측</div><div class="d">Observability</div></div>
   </div>
+  <div style="text-align:center; color:var(--accent2); font-size:12px; margin:2px 0; font-weight:700;">↺ ⑥의 관측·평가 결과가 다시 ①로 피드백 — 일회성 파이프라인이 아니라 도는 루프(원래 Eval←Observe 구조)</div>
   <div style="text-align:center; color:var(--text-dim); font-size:16px; margin:2px 0;">↓</div>
 
   <div class="compare" style="margin-bottom:14px;">
@@ -1223,6 +1225,7 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
         <li><b>2단계(지금 여기)</b> 정밀도·기여도 분해 — precision@K(잡음 비율), RDB/벡터 중 뭐가 찾아내는지(§9)</li>
         <li><b>3단계(미착수)</b> 생성 결과 평가 — 검색은 맞았는데 답변 자체가 맞았는지(LLM Judge)</li>
       </ul>
+      <div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border); font-size:11.5px; color:var(--text-dim); line-height:1.5;"><b style="color:var(--text);">이 축이 루프에서 하는 역할</b>: ②의 산출물(정밀도·기여도 점수)이 그 자체로 끝이 아니라 — ①지식 품질을 어디부터 고칠지(예: 한국어 형태소 분석 도입) 되먹이고, 나중엔 ④제어의 재시도/롤백 판단 기준으로도 쓰임. 즉 6개 축 중 <b style="color:var(--text);">루프를 닫는 꼭지 하나</b>를 맡고 있음</div>
     </div>
   </div>
 
