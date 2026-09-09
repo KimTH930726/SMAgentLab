@@ -897,8 +897,21 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
   <div class="eyebrow"><span class="chip">09</span>STORAGE LAB — TRACK 2</div>
   <h2>그 원칙, 실제로 검증하다</h2>
   <p class="lead">같은 골든셋 89건으로 두 저장 방식을 정면 비교</p>
-  <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 16px; max-width:820px;">
-    <b style="color:var(--accent2);">측정 지표: hit@K</b> — 질문마다 검색 결과 상위 K개(top-K) 안에 정답 문서가 있는지만 본다(몇 번째로 들어왔는지는 안 봄). LLM 프롬프트는 K개 후보를 통째로 읽기 때문에, 답변 품질을 좌우하는 건 "순위"가 아니라 "애초에 후보 안에 있었는가"라서 이 지표를 골랐다.
+
+  <div class="stat-row" style="margin-bottom:16px;">
+    <div class="stat" style="border-color:var(--accent2);">
+      <div class="num" style="font-size:32px;">75.3%</div>
+      <div class="lbl">지금 구조(RDB+벡터 하이브리드)의 최종 정답률 — 89문항, top-10 기준</div>
+    </div>
+    <div class="stat">
+      <div class="num" style="font-size:32px; color:var(--text-dim);">55.1%</div>
+      <div class="lbl">참고: RDB 없이 통합저장(벡터+키워드)만 했다면</div>
+    </div>
+  </div>
+
+  <h3>측정 ① — hit@K</h3>
+  <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 14px; max-width:820px;">
+    질문마다 검색 결과 상위 K개(top-K) 안에 정답 문서가 있는지만 본다(몇 번째로 들어왔는지는 안 봄). LLM 프롬프트는 K개 후보를 통째로 읽기 때문에, 답변 품질을 좌우하는 건 "순위"가 아니라 "애초에 후보 안에 있었는가"라서 이 지표를 골랐다.
   </p>
   <div class="compare" style="margin-bottom:4px;">
     <div class="box bad">
@@ -941,13 +954,10 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     <span class="ex-step" style="color:#FCA5A5;"><span class="arrow-ex">▸</span> 1차: 이 항목이 파라미터로만 분해돼 벡터 청크가 0개 — 자연어 질문과 어휘가 안 겹쳐 못 찾음(miss)</span>
     <span class="ex-step" style="color:var(--green);"><span class="arrow-ex">▸</span> 재측정: 정책명+본문 전체를 폴백 청크로 색인 — 벡터로도 매칭돼 정답 도달(hit)</span>
   </div>
-  <div class="why" style="margin-top:10px; max-width:800px;">
-    <ul><li><b>교훈</b>: 검색전략을 배타적으로 나누지 말고 "정확조회 + 벡터 폴백"을 겹쳐야 함</li></ul>
-  </div>
 
-  <p class="lead" style="margin-top:18px; margin-bottom:6px;">여기서 끝이 아니었다 — hit@K는 "찾았다/못 찾았다"만 보고 두 가지를 놓친다</p>
-  <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 12px; max-width:820px;">
-    <b style="color:var(--accent2);">측정 지표 추가: precision@K</b> — hit@K는 정답 유무만 이진 판정하고 후보군에 잡음(무관한 문서)이 얼마나 섞였는지는 안 본다. 같은 hit@K라도 후보 10~20개 중 진짜 정답 비율이 다르면 LLM이 헷갈릴 위험도 다르다는 뜻이라 추가했다. 그리고 B(구조분리)는 RDB+벡터를 매 질문마다 항상 같이 돌리는 구조라, "합쳐서 잘 찾는다"까진 알아도 <b style="color:var(--accent2);">그 안에서 실제로 뭐가 찾아내는지</b>는 안 보여서 그 경로도 나눠 쟀다.
+  <h3 style="margin-top:22px;">측정 ② — precision@K</h3>
+  <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 14px; max-width:820px;">
+    hit@K는 정답 유무만 이진 판정하고 후보군에 잡음(무관한 문서)이 얼마나 섞였는지는 안 본다. 같은 hit@K라도 후보 10~20개 중 진짜 정답 비율이 다르면 LLM이 헷갈릴 위험도 다르다는 뜻이라 추가했다. 그리고 B(구조분리)는 RDB+벡터를 매 질문마다 항상 같이 돌리는 구조라, "합쳐서 잘 찾는다"까진 알아도 <b style="color:var(--accent2);">그 안에서 실제로 뭐가 찾아내는지</b>는 안 보여서 그 경로도 나눠 쟀다.
   </p>
   <div class="stat-row">
     <div class="stat"><div class="num">A 6.1% · B 9.0%</div><div class="lbl">정답 집중도(precision) — 후보군 중 실제 정답 비율</div></div>
@@ -958,8 +968,12 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     <span class="ex-step" style="color:#FCA5A5;"><span class="arrow-ex">▸</span> 뜻밖의 결과: 숫자·값 질문(RDB가 전문이어야 할 영역)조차 벡터 단독 기여(47.8%)가 RDB 단독(26.1%)보다 큼</span>
     <span class="ex-step"><span class="arrow-ex">▸</span> 원인: PostgreSQL 키워드 검색이 한국어 형태소 분석을 안 함 — "담을"/"담기"처럼 활용형이 다르면 글자가 안 겹쳐 못 찾음(벡터는 의미로 찾아서 이 문제가 없음)</span>
   </div>
-  <div class="why" style="margin-top:10px; max-width:800px;">
-    <ul><li><b>다음 과제</b>: RDB 쪽에 한국어 형태소 분석기(예: mecab)를 붙이면 이 갭을 줄일 여지가 있음 — 아직 미착수, 진단만 완료</li></ul>
+
+  <div class="why" style="margin-top:18px; max-width:820px;">
+    <ul>
+      <li><b>교훈 1</b>: 검색전략을 배타적으로 나누지 말고 "정확조회 + 벡터 폴백"을 겹쳐야 함</li>
+      <li><b>교훈 2 · 다음 과제</b>: RDB 쪽에 한국어 형태소 분석기(예: mecab)를 붙이면 남은 갭을 줄일 여지가 있음 — 아직 미착수, 진단만 완료</li>
+    </ul>
   </div>
 </section>
 
