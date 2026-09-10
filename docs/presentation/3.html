@@ -77,6 +77,12 @@
   .step.future .step-title{color:var(--text-dim);}
   .step-desc{font-size:11.5px; color:var(--text-dim); line-height:1.5;}
   .step-line{width:26px; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:var(--border); font-size:15px;}
+  .step-req{margin-top:10px; padding-top:9px; border-top:1px solid var(--border); font-size:10.5px; line-height:1.5;}
+  .step-req b{display:block; font-size:9.5px; text-transform:uppercase; letter-spacing:.04em; margin-bottom:3px;}
+  .step.now .step-req b{color:var(--accent2);}
+  .step.future .step-req b{color:var(--text-dim);}
+  .step.now .step-req{color:var(--text-dim);}
+  .step.future .step-req{color:var(--text-dim);}
 
   .flow-row{display:flex; align-items:stretch; flex-wrap:wrap; gap:0;}
   .flow-step{background:var(--card); border:1px solid var(--border); border-radius:12px; padding:13px 15px; min-width:118px; text-align:center; flex:1;}
@@ -1254,18 +1260,21 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
       <div class="step-badge"><span class="step-dot"></span>지금 여기</div>
       <div class="step-title">AI 어시스턴트</div>
       <div class="step-desc">로그 요약 → 이상 탐지 → RCA 분석 → 조치 추천까지만. <b style="color:var(--text);">실행은 사람이</b></div>
+      <div class="step-req"><b>지금 연구 중</b>②평가·검증 — Track2 정밀도·기여도 분해(§9), "AI 출력을 얼마나 믿을 수 있나"의 실측 근거 쌓는 중</div>
     </div>
     <div class="step-line">→</div>
     <div class="step future">
       <div class="step-badge">다음 단계</div>
       <div class="step-title">에이전트</div>
       <div class="step-desc">사람이 <b>승인해야</b> Tool 실행 — Controlled Automation</div>
+      <div class="step-req"><b>준비할 것</b>③생성결과평가(LLM Judge) 완성으로 신뢰도 확보 + ④제어·⑤안전장치 축(Retry/Stop/Approval/Rollback) 구축</div>
     </div>
     <div class="step-line">→</div>
     <div class="step future">
       <div class="step-badge">장기 목표</div>
       <div class="step-title">Self-Healing</div>
       <div class="step-desc">저위험 케이스만 <b>자동 복구</b> + 재검증, 실패 시 Rollback</div>
+      <div class="step-req"><b>준비할 것</b>에이전트 단계 실사용 이력 축적 + 좁은 PoC(예: DB Connection Pool Exhaustion RCA) 성공사례로 자동실행 범위 검증</div>
     </div>
   </div>
 
