@@ -996,23 +996,36 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
 
   <h3 style="margin-top:22px;">측정 ③ — 형태소 공백 개선(v2.71, 2026-09-10)</h3>
   <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 14px; max-width:820px;">
-    mecab-ko 같은 진짜 형태소 분석기는 별도 프로세스·사전 유지보수 부담이 커 정책 파라미터 389건
-    규모엔 과하다고 판단 — 저비용 규칙 기반 조사/어미 제거(정규식, 외부 의존성 없음)를 먼저
-    89문항 골든셋으로 실측 검증한 뒤 프로덕션(<code>search.py</code>)에 그대로 적용했다.
+    <b style="color:var(--text);">한 줄 요약: "을/는/이/가" 같은 조사를 떼고 비교하게 했더니, 표현만 조금 다르고 뜻이 같은
+    질문도 더 많이 찾아냈다.</b> mecab-ko 같은 진짜 형태소 분석기는 별도 프로세스·사전 유지보수
+    부담이 커 정책 파라미터 389건 규모엔 과하다고 판단 — 저비용 규칙 기반 제거(정규식, 외부
+    의존성 없음)를 먼저 89문항 골든셋으로 실측 검증한 뒤 프로덕션에 그대로 적용했다.
   </p>
+
+  <div class="example" style="margin-top:10px;">
+    <span class="ex-tag">실제 예시로 보면</span>
+    <span class="ex-step">질문: "도보 배달할 때 장바구니에 몇 개까지 담을 수 있어?"</span>
+    <span class="ex-step" style="color:#FCA5A5;"><span class="arrow-ex">▸</span> 적용 전: 정책서엔 "장바구니 담기 최대개수"로 저장돼 있음 — "담을"과 "담기"는 글자가 안 겹쳐 표 검색이 못 찾음(miss)</span>
+    <span class="ex-step" style="color:var(--green);"><span class="arrow-ex">▸</span> 적용 후: "담을"→"담", "담기"→"담"으로 조사·어미를 떼고 비교 — 같은 항목으로 찾아냄(hit)</span>
+  </div>
+
   <div class="compare" style="margin-top:14px;">
     <div class="box bad">
       <div class="tag">적용 전</div>
-      <div class="h">전체 hit@10 77.5%</div>
-      <ul><li>RDB만 13.5% · 벡터만 50.6% · 둘 다 13.5%</li><li>숫자·값 질문(RDB 전문 분야) 87.0%</li></ul>
+      <div class="h">89문항 중 정답을 찾은 비율 77.5%</div>
+      <ul><li>숫자·조건 질문(표 검색이 전문이어야 할 영역)에서조차 87.0%에 그침</li></ul>
     </div>
     <div class="vs">→</div>
     <div class="box good">
-      <div class="tag">조사/어미 제거 적용 후 — 실 API 재측정</div>
-      <div class="h">전체 hit@10 82.0%(+4.5%p)</div>
-      <ul><li>RDB만 18.0% · 벡터만 38.2% · 둘 다 25.8%</li><li>숫자·값 질문 95.7% · precision은 8.9%→8.9% 그대로(잡음 안 늘어남)</li></ul>
+      <div class="tag">적용 후 — 실 서비스로 재측정</div>
+      <div class="h">정답을 찾은 비율 82.0%(+4.5%p)</div>
+      <ul><li>숫자·조건 질문 95.7%로 상승 · 후보군에 잡음은 안 늘어남(정답 집중도 그대로)</li></ul>
     </div>
   </div>
+  <p style="font-size:11px; color:var(--text-dim); margin:8px 0 0; max-width:820px;">
+    (세부: B안이 정답을 찾은 경로 중 표(RDB) 단독 기여 13.5%→18.0%, 표+벡터 둘 다 기여 13.5%→25.8%
+    — 표 검색이 예전엔 놓치던 걸 더 많이 맞히게 됐다는 뜻)
+  </p>
 
   <div class="why" style="margin-top:18px; max-width:820px;">
     <ul>
