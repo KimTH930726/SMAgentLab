@@ -64,6 +64,20 @@
   .chip-card ul.mini li::before{content:'▸'; position:absolute; left:0; color:var(--accent2); font-weight:800;}
   .chip-card ul.mini li b{color:var(--text); font-weight:700;}
 
+  .stepper{display:flex; align-items:stretch; gap:0;}
+  .step{flex:1; border-radius:14px; padding:14px 16px; min-width:0;}
+  .step.now{background:linear-gradient(180deg, rgba(129,140,248,.12), var(--card)); border:2px solid var(--accent2);}
+  .step.future{background:var(--card2); border:1px dashed var(--border); opacity:.75;}
+  .step-badge{display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.03em; padding:3px 9px; border-radius:999px; margin-bottom:9px;}
+  .step.now .step-badge{background:rgba(129,140,248,.22); color:var(--accent2);}
+  .step.future .step-badge{background:var(--card); color:var(--text-dim);}
+  .step-dot{width:6px; height:6px; border-radius:50%; background:currentColor;}
+  .step-title{font-weight:800; font-size:14.5px; margin-bottom:5px;}
+  .step.now .step-title{color:var(--text);}
+  .step.future .step-title{color:var(--text-dim);}
+  .step-desc{font-size:11.5px; color:var(--text-dim); line-height:1.5;}
+  .step-line{width:26px; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:var(--border); font-size:15px;}
+
   .flow-row{display:flex; align-items:stretch; flex-wrap:wrap; gap:0;}
   .flow-step{background:var(--card); border:1px solid var(--border); border-radius:12px; padding:13px 15px; min-width:118px; text-align:center; flex:1;}
   .flow-step .ico{font-size:20px;}
@@ -1234,15 +1248,24 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     </div>
   </div>
 
-  <div class="cols stack3" style="margin-bottom:10px;">
-    <div class="chip-card" style="padding:10px 14px;"><div class="t" style="font-size:12px;">AI Assistant (L0~3)</div>
-      <ul class="mini"><li>로그요약→이상탐지→RCA→조치추천, 실행은 안 함</li></ul>
+  <h3 style="margin-bottom:8px;">자율성 로드맵 — 한 번에 안 올라간다</h3>
+  <div class="stepper" style="margin-bottom:14px;">
+    <div class="step now">
+      <div class="step-badge"><span class="step-dot"></span>지금 여기</div>
+      <div class="step-title">AI 어시스턴트</div>
+      <div class="step-desc">로그 요약 → 이상 탐지 → RCA 분석 → 조치 추천까지만. <b style="color:var(--text);">실행은 사람이</b></div>
     </div>
-    <div class="chip-card" style="padding:10px 14px;"><div class="t" style="font-size:12px;">Agent (L4)</div>
-      <ul class="mini"><li>사람 승인 후 실행 — Controlled Automation</li></ul>
+    <div class="step-line">→</div>
+    <div class="step future">
+      <div class="step-badge">다음 단계</div>
+      <div class="step-title">에이전트</div>
+      <div class="step-desc">사람이 <b>승인해야</b> Tool 실행 — Controlled Automation</div>
     </div>
-    <div class="chip-card" style="padding:10px 14px;"><div class="t" style="font-size:12px;">Self-Healing (L5~6)</div>
-      <ul class="mini"><li>저위험 자동복구 + 재검증, 실패 시 Rollback</li></ul>
+    <div class="step-line">→</div>
+    <div class="step future">
+      <div class="step-badge">장기 목표</div>
+      <div class="step-title">Self-Healing</div>
+      <div class="step-desc">저위험 케이스만 <b>자동 복구</b> + 재검증, 실패 시 Rollback</div>
     </div>
   </div>
 
