@@ -856,6 +856,7 @@ CREATE TRIGGER trg_knowledge_updated_at
 | 38 | `sql_*` 10개 테이블 | `_migrate_text2sql_tables()` 호출 제거(함수 자체도 삭제) | Text-to-SQL 에이전트 제거(현재 과업 아님) — 기존 설치의 테이블은 삭제하지 않고 그대로 두되, 더 이상 마이그레이션되지 않음. 코드는 `archive/with-text2sql` 브랜치 보존 (v2.51) |
 | 39 | - | `CREATE TABLE policy_item`, `policy_param`, `policy_chunk` + `trg_policy_item_logical_id` 트리거 | 정책서 데이터화 파이프라인 v1(`_migrate_policy_tables()`, `docs/policy-doc-pipeline-plan.md` §2) — 엑셀 row를 3층(원문+메타/파라미터/서술청크)으로 분해 저장. 버전 관리는 UPDATE 대신 새 row INSERT(logical_id 유지, version+1, supersedes_id) 방식(§2-1) (v2.52) |
 | 40 | `rag_knowledge` + 신규 2개 테이블 | `ADD COLUMN logical_document_id/version/supersedes_id/embedding_model/quality_score/reviewed_at/owner`, `CREATE TABLE rag_knowledge_history`, `CREATE TABLE rag_knowledge_review_flag` | 지식 생명주기 관리(`_migrate_knowledge_lifecycle()`, `docs/tech/knowledge-lifecycle-design.md` §6) — Phase 0 스키마 선추가 + 병합 이력 보존(§6-2) + 피드백→리뷰 신호(§6-3). `logical_document_id`는 멱등 UPDATE로 매 기동마다 미설정 행만 자기 id로 백필 (v2.68) |
+| 41 | - | `init/06-policy-strip-ko.sql` — `CREATE OR REPLACE FUNCTION policy_strip_ko_word()`, `policy_strip_ko()` | 정책 RDB(policy_param) 검색에 한국어 조사/어미 규칙 기반 제거 적용 — 테이블 변경 없이 조회 시점 변환 함수만 추가, `search.py`의 `search_policy()`가 콘텐츠/쿼리 양쪽에 적용. 89문항 실측: hit@10 77.5%→82.0% (v2.71) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

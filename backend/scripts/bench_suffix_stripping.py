@@ -23,35 +23,12 @@ from pathlib import Path
 import asyncpg
 
 from shared.embedding import embedding_service
+from service.policy.korean_text import strip_text  # v2.71로 프로덕션(search.py)에 적용된 것과
+# 동일한 규칙 — 이 스크립트가 따로 갖고 있던 사본은 제거하고 단일 출처를 재사용한다.
 
 _GOLDEN_SET_PATH = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "golden_set" / "online_delivus_v1.jsonl"
 _FILE_TO_NAMESPACE = [("온라인스토어", "온라인스토어 DB"), ("딜리버스", "딜리버스 DB")]
 _TOP_K = 10
-
-# 조사·어미(생산적/규칙적인 것 위주) — 길이 긴 것부터 그리디 매칭. 불규칙 활용(듣다→들어류)은
-# 못 잡음, 이 실험의 한계로 결과 해석 시 감안. 최소 잔여 어간 2글자 보장(과도한 절단 방지).
-_SUFFIXES = sorted([
-    "까지는", "에서는", "으로는", "한테는", "에게서", "으로써",
-    "이라도", "에서", "으로", "부터", "한테", "에게", "까지", "처럼", "보다",
-    "이랑", "랑", "하고", "이며",
-    "습니다", "입니다", "겠습니다", "습니까",
-    "으며", "면서", "니까", "아서", "어서", "인데", "은데",
-    "어요", "아요", "네요", "군요",
-    "았고", "었고",
-    "은", "는", "이", "가", "을", "를", "의", "도", "만", "에", "로", "와", "과",
-    "고", "게", "지", "며", "니", "자", "다", "죠", "기", "아", "어",
-], key=len, reverse=True)
-
-
-def strip_suffix(word: str) -> str:
-    for suf in _SUFFIXES:
-        if word.endswith(suf) and len(word) - len(suf) >= 2:
-            return word[: -len(suf)]
-    return word
-
-
-def strip_text(text: str) -> str:
-    return " ".join(strip_suffix(w) for w in text.split())
 
 
 def _namespace_for_file(file_: str):

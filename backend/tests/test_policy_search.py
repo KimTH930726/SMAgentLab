@@ -93,6 +93,18 @@ class TestSearchPolicy:
         assert "category_path" not in param_call.args[0] or "= ANY" not in param_call.args[0]
         assert len(param_call.args) == 4  # sql + ns_id + like + top_k (category 없음)
 
+    @pytest.mark.asyncio
+    async def test_param_query_applies_korean_suffix_stripping(self, patch_db):
+        """2026-09-10(v2.71) — 콘텐츠/쿼리 양쪽에 policy_strip_ko()를 적용해야 조사/어미가
+        달라도 매칭된다(init/06-policy-strip-ko.sql). 원문 쿼리 텍스트 자체는 그대로 $2로
+        넘기고(파이썬에서 미리 자르지 않음), SQL 함수가 콘텐츠·쿼리 양쪽을 동일하게 변환한다."""
+        conn = patch_db()
+        await search.search_policy("ns", "질문")
+
+        param_sql = conn.fetch.call_args_list[0].args[0]
+        assert "policy_strip_ko(p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name)" in param_sql
+        assert "policy_strip_ko($2)" in param_sql
+
 
 class TestSearchPolicyPrecomputedVector:
     """2026-09-04 편입 1단계 — agent.py가 이미 계산해둔 query_vec을 넘기면 재계산하지 않는다."""

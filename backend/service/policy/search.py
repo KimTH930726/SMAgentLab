@@ -90,22 +90,30 @@ async def search_policy(
         # to_tsvector/to_tsquery 패턴(lexeme 단위 매칭, quote_literal로 특수문자 안전 처리)으로
         # 교체한다. LATERAL 서브쿼리라 lexeme이 하나도 안 남는 질의(공백뿐 등)에도 안전하게
         # tsq=NULL → 매칭 0건으로 처리됨(에러 없음).
+        #
+        # 조사/어미 제거(2026-09-10, v2.71): to_tsvector('simple', ...)엔 한국어 형태소 분석이
+        # 없어 "담을"/"담기"처럼 같은 어간도 조사·어미가 다르면 lexeme이 갈려 매칭이 실패한다
+        # (89문항 골든셋 실측 — RDB 자기 전문 분야인 param 질의에서조차 벡터가 RDB를 앞섬).
+        # 규칙 기반 조사/어미 제거를 검증한 결과(backend/scripts/bench_suffix_stripping.py)
+        # 하이브리드 전체 hit@10 75.3%→79.8%로 확인돼, 쿼리/콘텐츠 양쪽에 `policy_strip_ko()`
+        # (init/06-policy-strip-ko.sql)를 적용한다 — 저장 컬럼 추가 없이 조회 시점 변환이라
+        # policy_param/policy_item 데이터는 그대로 둔다(건수가 작아 성능 영향 없음).
         category_clause = "AND $4 = ANY(i.category_path)" if category else ""
         param_args = [ns_id, query, top_k] + ([category] if category else [])
         param_rows = await conn.fetch(
             f"""
             SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
                    p.name AS param_name, p.condition, p.value, p.unit,
-                   ts_rank(to_tsvector('simple', p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name), q.tsq) AS rank
+                   ts_rank(to_tsvector('simple', policy_strip_ko(p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name)), q.tsq) AS rank
             FROM policy_param p
             JOIN policy_item i ON i.id = p.policy_item_id
             CROSS JOIN LATERAL (
                 SELECT to_tsquery('simple', string_agg(quote_literal(lexeme), ' | ')) AS tsq
-                FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', $2))) t
+                FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($2)))) t
                 WHERE lexeme IS NOT NULL
             ) q
             WHERE i.namespace_id = $1 AND i.status != 'deprecated'
-              AND to_tsvector('simple', p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name) @@ q.tsq
+              AND to_tsvector('simple', policy_strip_ko(p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name)) @@ q.tsq
               {category_clause}
             ORDER BY rank DESC
             LIMIT $3

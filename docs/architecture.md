@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.70)
+# Ops-Navigator 시스템 아키텍처 (v2.71)
 
 ## 개요
 
@@ -11,6 +11,23 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.71: **정책 RDB(policy_param) 검색에 한국어 조사/어미 규칙 기반 제거 적용** — v2.70에서
+  진단만 하고 미뤄뒀던 "`to_tsvector('simple', ...)`가 한국어 형태소 분석을 안 해서 RDB가
+  자기 전문 분야(param 질의)에서도 벡터에 밀린다"는 문제를 실제로 개선. mecab-ko/Kiwi 같은
+  진짜 형태소 분석기는 별도 프로세스·사전 유지보수 부담이 커(정책 파라미터 389건 규모엔
+  과함), 먼저 저비용 규칙 기반 조사/어미 제거를 실측 검증(`backend/scripts/
+  bench_suffix_stripping.py`, 89문항 골든셋)한 뒤 적용. 접미사 목록·최소 잔여 어간 2글자
+  보장 로직은 `backend/service/policy/korean_text.py`(오프라인 재사용용)와 `init/
+  06-policy-strip-ko.sql`의 `policy_strip_ko()` 함수(실제 쿼리 경로, `search.py`의
+  `search_policy()`가 콘텐츠·쿼리 양쪽에 적용) 두 곳에 있고, 동작이 같아야 한다 — SQL
+  쪽은 "일치하는 접미사 중 가장 긴 것" 방식이라 배열 순서와 무관하게 동일 집합이면 항상
+  같은 결과를 낸다. 저장 컬럼 추가 없이 조회 시점 변환(건수가 작아 인덱스 없이도 문제
+  없음). 실제 프로덕션 API(`POST /api/policy/track2/run`)로 재검증한 결과(89문항, 적용
+  전/후): 전체 hit@10 77.5%→**82.0%**(+4.5%p), param(RDB 전문 분야) 87.0%→**95.7%**,
+  navigation 58.3%→66.7%. precision@10은 8.9%→8.9%로 사실상 변화 없음(잡음이 늘지 않음).
+  기여도 분해(v2.70)로 보면 RDB만 13.5%→17.98%, 둘 다 13.5%→25.8%로 늘고 벡터만
+  50.6%→38.2%로 줄어 — RDB가 예전엔 놓치던 걸 벡터와 함께/단독으로 더 많이 맞히게 된
+  것으로 확인. 테스트 1개 파일 추가(`test_policy_korean_text.py`, 총 354개).
 - v2.70: **Track 2에 RDB/벡터 기여도 분해(source attribution) 추가** — "B안(하이브리드)이
   hit@K에서 이겼다"까지는 알아도 그 안에서 RDB(policy_param)와 벡터(policy_chunk) 중 실제로
   뭐가 정답을 찾아내고 있는지는 안 보인다는 지적에서 착수. `run_comparison()`이 B그룹의 hit을
