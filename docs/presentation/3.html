@@ -994,10 +994,32 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     <span class="ex-step"><span class="arrow-ex">▸</span> 원인: PostgreSQL 키워드 검색이 한국어 형태소 분석을 안 함 — "담을"/"담기"처럼 활용형이 다르면 글자가 안 겹쳐 못 찾음(벡터는 의미로 찾아서 이 문제가 없음)</span>
   </div>
 
+  <h3 style="margin-top:22px;">측정 ③ — 형태소 공백 개선(v2.71, 2026-09-10)</h3>
+  <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 14px; max-width:820px;">
+    mecab-ko 같은 진짜 형태소 분석기는 별도 프로세스·사전 유지보수 부담이 커 정책 파라미터 389건
+    규모엔 과하다고 판단 — 저비용 규칙 기반 조사/어미 제거(정규식, 외부 의존성 없음)를 먼저
+    89문항 골든셋으로 실측 검증한 뒤 프로덕션(<code>search.py</code>)에 그대로 적용했다.
+  </p>
+  <div class="compare" style="margin-top:14px;">
+    <div class="box bad">
+      <div class="tag">적용 전</div>
+      <div class="h">전체 hit@10 77.5%</div>
+      <ul><li>RDB만 13.5% · 벡터만 50.6% · 둘 다 13.5%</li><li>숫자·값 질문(RDB 전문 분야) 87.0%</li></ul>
+    </div>
+    <div class="vs">→</div>
+    <div class="box good">
+      <div class="tag">조사/어미 제거 적용 후 — 실 API 재측정</div>
+      <div class="h">전체 hit@10 82.0%(+4.5%p)</div>
+      <ul><li>RDB만 18.0% · 벡터만 38.2% · 둘 다 25.8%</li><li>숫자·값 질문 95.7% · precision은 8.9%→8.9% 그대로(잡음 안 늘어남)</li></ul>
+    </div>
+  </div>
+
   <div class="why" style="margin-top:18px; max-width:820px;">
     <ul>
       <li><b>교훈 1</b>: 검색전략을 배타적으로 나누지 말고 "정확조회 + 벡터 폴백"을 겹쳐야 함</li>
-      <li><b>교훈 2 · 다음 과제</b>: RDB 쪽에 한국어 형태소 분석기(예: mecab)를 붙이면 남은 갭을 줄일 여지가 있음 — 아직 미착수, 진단만 완료</li>
+      <li><b>교훈 2</b>: 형태소 공백을 메우는 데 꼭 진짜 형태소 분석기가 필요한 건 아님 — 이 규모에선
+        규칙 기반 제거만으로도 잡음 증가 없이 실측 개선(+4.5%p)이 확인돼 그대로 적용, mecab/Kiwi는
+        규칙 기반이 한계를 보일 때의 다음 단계로 보류</li>
     </ul>
   </div>
 </section>
