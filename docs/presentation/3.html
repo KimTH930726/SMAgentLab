@@ -931,11 +931,15 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
   <div class="stat-row" style="margin-bottom:16px;">
     <div class="stat" style="border-color:var(--accent2);">
       <div class="num" style="font-size:32px;">75.3%</div>
-      <div class="lbl">지금 구조(RDB+벡터 하이브리드)의 최종 정답률 — 89문항, top-10 기준</div>
+      <div class="lbl">최초 실험 시점 정답률(구조 확정 근거) — 89문항, top-10 기준</div>
     </div>
     <div class="stat">
       <div class="num" style="font-size:32px; color:var(--text-dim);">55.1%</div>
       <div class="lbl">참고: RDB 없이 통합저장(벡터+키워드)만 했다면</div>
+    </div>
+    <div class="stat" style="border-color:var(--green);">
+      <div class="num" style="font-size:32px; color:var(--green);">88.8%</div>
+      <div class="lbl">이후 측정③·④(조사제거+임베딩교체) 반영한 <b>현재</b> 정답률 — 아래에서 그 과정을 다룸</div>
     </div>
   </div>
 

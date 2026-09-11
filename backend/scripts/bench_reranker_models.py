@@ -131,7 +131,7 @@ async def main():
         with open(_GOLDEN_SET_PATH, encoding="utf-8") as f:
             golden = [json.loads(line) for line in f if line.strip()]
 
-        scored = []  # (query, gold_ids, order[item_ids], candidates{id:text})
+        scored = []  # (type, query, gold_ids, order[item_ids], candidates{id:text})
         for entry in golden:
             ns_name = _namespace_for_file(entry["source"].get("file", ""))
             if ns_name is None or ns_name not in ns_ids:
@@ -144,15 +144,27 @@ async def main():
             query_vec = await embedding_service.embed(query)
             order, candidates = await _fetch_candidates(conn, ns_id, query, query_vec, _TOP_K)
             if gold_ids & set(order):  # 후보 안에 정답이 있는 문항만 채점 대상
-                scored.append((query, gold_ids, order, candidates))
+                scored.append((entry["type"], query, gold_ids, order, candidates))
     finally:
         await conn.close()
 
     n = len(scored)
     print(f"채점 대상(후보 top-{_TOP_K} 안에 정답 포함) = {n} / {len(golden)}문항\n")
 
-    baseline_hit1 = sum(1 for _, gold, order, _ in scored if order[0] in gold) / n
+    baseline_correct = {i: (order[0] in gold) for i, (_, _, gold, order, _) in enumerate(scored)}
+    baseline_hit1 = sum(baseline_correct.values()) / n
     print(f"baseline(재정렬 없음) hit@1 = {baseline_hit1:.1%}\n")
+
+    def _by_type(correct_map: dict[int, bool]) -> dict[str, float]:
+        per_type: dict[str, list[bool]] = {}
+        for i, (t, *_rest) in enumerate(scored):
+            per_type.setdefault(t, []).append(correct_map[i])
+        return {t: sum(vs) / len(vs) for t, vs in per_type.items()}
+
+    print("baseline 유형별:")
+    for t, rate in sorted(_by_type(baseline_correct).items()):
+        print(f"  {t:<18}{rate:.1%}")
+    print()
 
     from sentence_transformers import CrossEncoder
 
@@ -164,16 +176,32 @@ async def main():
         except Exception as e:
             print(f"  로드 실패: {e}\n")
             continue
-        hits = 0
-        for query, gold, order, candidates in scored:
-            pairs = [(query, candidates[i][:512]) for i in order]
+        correct_map: dict[int, bool] = {}
+        regressions: list[tuple[str, str]] = []   # baseline 맞았는데 재정렬 후 틀림 (나쁜 케이스)
+        improvements: list[tuple[str, str]] = []  # baseline 틀렸는데 재정렬 후 맞음 (좋은 케이스)
+        for i, (qtype, query, gold, order, candidates) in enumerate(scored):
+            pairs = [(query, candidates[j][:512]) for j in order]
             raw_scores = model.predict(pairs)
-            reranked = [i for i, _ in sorted(zip(order, raw_scores), key=lambda x: x[1], reverse=True)]
-            if reranked[0] in gold:
-                hits += 1
-        rate = hits / n
+            reranked = [j for j, _ in sorted(zip(order, raw_scores), key=lambda x: x[1], reverse=True)]
+            now_correct = reranked[0] in gold
+            correct_map[i] = now_correct
+            was_correct = baseline_correct[i]
+            if was_correct and not now_correct:
+                regressions.append((qtype, query))
+            elif not was_correct and now_correct:
+                improvements.append((qtype, query))
+        rate = sum(correct_map.values()) / n
         results[label] = rate
-        print(f"  hit@1 = {rate:.1%} (baseline 대비 {(rate - baseline_hit1) * 100:+.1f}%p)\n")
+        print(f"  hit@1 = {rate:.1%} (baseline 대비 {(rate - baseline_hit1) * 100:+.1f}%p)")
+        print("  유형별:")
+        for t, r in sorted(_by_type(correct_map).items()):
+            print(f"    {t:<18}{r:.1%}")
+        print(f"  개선(틀렸다가 맞음): {len(improvements)}건 / 회귀(맞았다가 틀림): {len(regressions)}건")
+        if regressions:
+            print("  회귀 상세(맞던 걸 오히려 틀리게 만든 케이스):")
+            for t, q in regressions:
+                print(f"    [{t}] {q}")
+        print()
         del model
 
     print("=== 최종 비교 ===")
