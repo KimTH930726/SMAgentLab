@@ -221,6 +221,9 @@
   <div class="grp">부록</div>
   <a href="#s11">13 AI 개발협업 노하우</a>
   <a href="#s12">14 장기 청사진: Agent Harness</a>
+
+  <div class="grp">마무리</div>
+  <a href="#s13">15 오늘 기억할 3가지</a>
 </nav>
 
 <main>
@@ -1317,8 +1320,48 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     <ul>
       <li>지금 Harness를 통째로 먼저 설계하지 않는다 — ②평가·검증에서 실측으로 배운 걸 근거로 나머지 축(①③④⑤⑥)도 하나씩 채워감(§13, YAGNI)</li>
       <li>동시에 PoC 후보(예: DB Connection Pool Exhaustion RCA)는 자유롭게 계속 던지고 실험 — 그 시행착오가 다시 "이건 어느 축 문제였나"로 이 그림에 흡수됨</li>
-      <li>상태: <b>청사진 — ②평가·검증 축을 연구하며 조각을 모으는 단계.</b> 팀 공유·논의용으로 먼저 던져두는 것</li>
     </ul>
+  </div>
+</section>
+
+<!-- 15 오늘 기억할 3가지 -->
+<section class="slide" id="s13">
+  <div class="eyebrow"><span class="chip">15</span>KEY TAKEAWAYS</div>
+  <h2>오늘 다 몰라도 — 딱 3가지</h2>
+  <p class="lead">세부는 흘려도 됩니다. 이 셋만 남으면 오늘 공유는 성공입니다.</p>
+
+  <div class="chips" style="grid-template-columns:repeat(3,1fr); gap:16px; margin-top:8px;">
+    <div class="chip-card">
+      <div class="ico">🧩</div>
+      <div class="t">① 데이터를 "어떻게 표현할지"가 먼저다</div>
+      <div class="d">RAG에서 검색 알고리즘보다, <b style="color:var(--text)">질의 유형에 맞는 저장 구조</b>를 잡는 게 정확도를 갈랐다. 정확값·코드는 RDB로, 서술은 벡터로 — 안 나누면 어휘만 겹쳐도 오탐.</div>
+      <ul class="mini">
+        <li>근거: 라우팅 원칙(§8) → 실험실 검증(§9) → 정책서 적용(§10)</li>
+        <li>실측: DB/공통코드 3천여 건이 표를 산문으로 뭉갠 오염이었음</li>
+      </ul>
+    </div>
+    <div class="chip-card">
+      <div class="ico">🔬</div>
+      <div class="t">② 실험 게이트 + 골든셋이 있어야 한다</div>
+      <div class="d">"나아졌다"를 <b style="color:var(--text)">주장하려면 재현 가능한 측정 자리</b>가 먼저 있어야 한다. 골든셋 89문항 A/B(§9)가 없었으면 조사·어미 제거(hit@10 77.5→82.0%)도 근거 없이 지나갔을 것.</div>
+      <ul class="mini">
+        <li>hit@K·precision@K, RDB/벡터 기여도 분해 — 다 이 게이트 위에서 나옴</li>
+        <li>다음 축 편입(CMDB 등)에도 착수 전 골든셋부터</li>
+      </ul>
+    </div>
+    <div class="chip-card">
+      <div class="ico">⚙️</div>
+      <div class="t">③ 하네스는 팀이 같이 만들어야 한다</div>
+      <div class="d">운영 자동화(Detect→RCA→조치→Self-Healing)로 가려면 평가·게이트·안전장치를 얹을 <b style="color:var(--text)">중앙 제어계층(Harness)</b>이 필요하고, 이건 한 사람이 아니라 <b style="color:var(--text)">팀이 방향을 함께 연구·공부</b>해야 한다.</div>
+      <ul class="mini">
+        <li>지금은 그중 ②평가·검증 축을 파는 단계(§13·§14)</li>
+        <li>PoC는 계속 던지되, 배운 건 이 그림의 어느 축인지로 흡수</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout" style="margin-top:20px;">
+    한 줄로: <b>RAG는 데이터 표현이 절반, 그걸 검증할 실험 게이트가 나머지 절반, 그리고 그 방향은 팀이 같이 잡아야 운영 자동화까지 간다.</b>
   </div>
 </section>
 
