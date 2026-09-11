@@ -294,9 +294,9 @@
     </div>
     <div class="chip-card"><div class="ico">🧬</div><div class="t">로컬 임베딩</div>
       <ul class="mini">
-        <li><b>로컬 개발환경(CPU) 제약</b>이 출발점 — 가볍게 도는 다국어 모델 필요</li>
-        <li>결과적으로 질문·문서 외부 유출 없음, API 비용 없음도 확보</li>
-        <li>서버 인프라 갖춰지면 더 정확한 모델로 교체 예정(§12)</li>
+        <li><b>로컬 CPU에서 실행</b>이 출발점 — 질문·문서 외부 유출 없음, API 비용 없음 확보</li>
+        <li>처음엔 로컬 개발환경 제약으로 가볍게 도는 모델을 골랐으나, 골든셋 A/B 실측(§9 방식)으로
+          한국어 검색 특화 모델(KURE-v1)로 교체 완료(v2.72) — CPU 로컬 실행 그대로 유지</li>
       </ul>
     </div>
     <div class="chip-card"><div class="ico">🔀</div><div class="t">LLM Provider 추상화</div>
@@ -365,7 +365,7 @@
         <div class="arch-down">▼ chunk_document()</div>
         <div class="arch-box"><div class="ico">✂️</div><div class="t">Chunk[]</div><div class="d">text + section_title + metadata</div></div>
         <div class="arch-down">▼ embed_batch()</div>
-        <div class="arch-box accent"><div class="ico">🧬</div><div class="t">rag_knowledge</div><div class="d">content + VECTOR(768)</div></div>
+        <div class="arch-box accent"><div class="ico">🧬</div><div class="t">rag_knowledge</div><div class="d">content + VECTOR(1024)</div></div>
       </div>
       <div class="example" style="margin-top:14px;">
         <span class="ex-tag">예시로 보면 — 필드가 그대로 안 옮겨감</span>
@@ -378,7 +378,7 @@
         <div style="overflow-x:auto;">
         <table style="font-size:10.5px; margin:0;">
           <tr><th>id</th><th>content</th><th>embedding</th><th>source_chunk_idx</th><th>base_weight</th><th>category</th></tr>
-          <tr><td>1204</td><td>## 회수 절차\n쿠폰 강제 회수 절차\n1. 관리자 페이지...</td><td>[0.1183, -0.3421, … 768개]</td><td>0</td><td>1.0</td><td>쿠폰</td></tr>
+          <tr><td>1204</td><td>## 회수 절차\n쿠폰 강제 회수 절차\n1. 관리자 페이지...</td><td>[0.1183, -0.3421, … 1024개]</td><td>0</td><td>1.0</td><td>쿠폰</td></tr>
         </table>
         </div>
       </div>
@@ -622,7 +622,7 @@ sims = emb_matrix @ emb_matrix.T  # (N,N) 유사도 행렬, 한 번에 계산</p
     <tr><td>Keyword</td><td>낱말 겹침 매칭(OR, ts_rank)</td><td>특정 단어가 꼭 들어가야 할 때</td><td>rag_knowledge 병행</td></tr>
     <tr><td>RDB 정확조회</td><td>낱말 겹침 매칭을 <b>짧은 구조화 필드</b>에</td><td>구조화 값(코드·파라미터)</td><td>policy_param, 공통코드 카테고리</td></tr>
     <tr><td>Hybrid</td><td>벡터+키워드 가중합</td><td>기본 전략 — 대부분의 질문</td><td>rag_knowledge 기본값</td></tr>
-    <tr><td>Reranker</td><td>CrossEncoder 재정렬</td><td>넓게 뽑고 정밀 재정렬</td><td>구현됨, <b>현재 비활성</b></td></tr>
+    <tr><td>Reranker</td><td>CrossEncoder 재정렬</td><td>넓게 뽑고 정밀 재정렬</td><td>모델 확정(dragonkue), <b>현재 비활성</b></td></tr>
   </table>
   <div class="formula" style="margin-top:14px; font-size:12.5px;">final_score = (w_vector × v_score + w_keyword × k_score) × (1 + base_weight)</div>
   <div class="cols" style="margin-top:12px;">
@@ -634,8 +634,10 @@ sims = emb_matrix @ emb_matrix.T  # (N,N) 유사도 행렬, 한 번에 계산</p
     <div class="why warn">
       <ul>
         <li>Reranker는 코드로 이미 구현돼 있음(설정값 하나로 켜고 끔)</li>
-        <li>현재는 <b>비활성</b> — 폐쇄망 환경에 CrossEncoder 모델 번들링 전이라 꺼둠</li>
-        <li>번들링 완료되면 플래그만 켜면 바로 사용 가능</li>
+        <li>모델은 확정·번들링 완료(dragonkue/bge-reranker-v2-m3-ko, 골든셋 실측 hit@1 +11.1%p) —
+          그런데도 현재는 <b>비활성</b></li>
+        <li>이유: 이 스위치는 정책 검색만이 아니라 VOC 관련성 게이트 등 다른 경로에도 같이 영향을
+          주는 앱 전체 동작 변경이라, 활성화는 그쪽 검증까지 마친 뒤 별도 결정</li>
       </ul>
     </div>
   </div>
@@ -1191,10 +1193,11 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     </ul>
   </div>
   <div class="chips" style="margin-top:12px;">
-    <div class="chip-card"><div class="ico">🧬</div><div class="t">임베딩 모델 고도화</div>
+    <div class="chip-card"><div class="ico">🧬</div><div class="t">임베딩 모델 고도화 — 실현됨(v2.72)</div>
       <ul class="mini">
-        <li>현재 모델은 로컬 개발환경(CPU) 제약으로 고른 초기값 — 이후 비교 검증 없이 그대로 유지 중</li>
-        <li>서버 인프라 확보되면 더 나은 후보를 <b>§9와 같은 골든셋 A/B 방식</b>으로 검증 후 교체</li>
+        <li>"가능한 것"이 아니라 이미 함 — <b>§9와 같은 골든셋 A/B 방식</b>으로 후보 검증 후 KURE-v1로
+          교체, 하이브리드 hit@10 82.0%→88.8%</li>
+        <li>다음 후보: 리랭커(dragonkue/bge-reranker-v2-m3-ko, hit@1 +11.1%p 확인) 실제 활성화 여부 결정</li>
       </ul>
     </div>
     <div class="chip-card"><div class="ico">🕸️</div><div class="t">여러 데이터 축 통합 검색</div>
