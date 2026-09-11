@@ -513,7 +513,7 @@ async def _migrate_knowledge_lifecycle(conn) -> None:
             id                       SERIAL PRIMARY KEY,
             knowledge_id             INT NOT NULL REFERENCES rag_knowledge(id) ON DELETE CASCADE,
             content                  TEXT NOT NULL,
-            embedding                VECTOR(768),
+            embedding                VECTOR(1024),
             replaced_by_knowledge_id INT,
             replaced_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
@@ -652,7 +652,7 @@ async def _migrate_email_voc_tables(conn) -> None:
             id                      SERIAL PRIMARY KEY,
             namespace_id            INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
             representative_subject  TEXT NOT NULL DEFAULT '',
-            representative_embedding VECTOR(768),
+            representative_embedding VECTOR(1024),
             member_count            INT NOT NULL DEFAULT 1,
             first_seen_at           TIMESTAMPTZ NOT NULL,
             last_seen_at            TIMESTAMPTZ NOT NULL,
@@ -673,7 +673,7 @@ async def _migrate_email_voc_tables(conn) -> None:
     # "이 답이 아직도 최신 매칭에 대한 답인가"를 실제로 재확인하는 가드라는 점이 다르다.
     await conn.execute("ALTER TABLE ops_voc_cluster ADD COLUMN IF NOT EXISTS coverage_knowledge_id INT")
     await conn.execute("ALTER TABLE ops_voc_cluster ADD COLUMN IF NOT EXISTS coverage_verified BOOLEAN")
-    await conn.execute("ALTER TABLE ops_email_analysis ADD COLUMN IF NOT EXISTS embedding VECTOR(768)")
+    await conn.execute("ALTER TABLE ops_email_analysis ADD COLUMN IF NOT EXISTS embedding VECTOR(1024)")
     await conn.execute(
         "ALTER TABLE ops_email_analysis ADD COLUMN IF NOT EXISTS voc_cluster_id "
         "INT REFERENCES ops_voc_cluster(id) ON DELETE SET NULL"
@@ -881,7 +881,7 @@ async def _migrate_policy_tables(conn) -> None:
             id              SERIAL PRIMARY KEY,
             policy_item_id  INT NOT NULL REFERENCES policy_item(id) ON DELETE CASCADE,
             chunk_text      TEXT NOT NULL,
-            embedding       VECTOR(768),
+            embedding       VECTOR(1024),
             chunk_idx       INT NOT NULL DEFAULT 0,
             created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )

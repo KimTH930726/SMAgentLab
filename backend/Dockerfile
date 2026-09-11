@@ -29,7 +29,7 @@ ENV HF_HOME=/root/.cache/huggingface
 # 비어있는 새 환경(진짜 폐쇄망 최초 배포 등)에서는 이 레이어가 실제로 모델을
 # 받아둬야 런타임에도 실패하지 않으므로, huggingface.co 접속이 되는 빌드 환경에서
 # 최소 한 번은 이 단계가 성공해야 한다.
-ARG EMBEDDING_MODEL=paraphrase-multilingual-mpnet-base-v2
+ARG EMBEDDING_MODEL=nlpai-lab/KURE-v1
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')" \
     || echo "[build] 임베딩 모델 사전 다운로드 실패(네트워크?) — 런타임 캐시 볼륨에 의존"
 
@@ -37,7 +37,7 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
 # reranker_enabled=True로 전환하려면 이 레이어가 이미지에 들어있어야 한다
 # (core/config.py의 reranker_model 기본값과 동일 모델). 실패해도 빌드를 막지 않는
 # 이유는 위 임베딩 모델과 동일.
-ARG RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+ARG RERANKER_MODEL=dragonkue/bge-reranker-v2-m3-ko
 RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL}')" \
     || echo "[build] 리랭커 모델 사전 다운로드 실패(네트워크?) — 런타임 캐시 볼륨에 의존"
 

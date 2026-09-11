@@ -145,7 +145,7 @@ powershell -ExecutionPolicy Bypass -File scripts\export-images.ps1 -Tag v2.16
 
 **처리 내용:**
 1. `docker compose build --no-cache` (백엔드/프론트엔드 빌드, 약 10~15분)
-   - 백엔드 빌드 시 임베딩 모델(`paraphrase-multilingual-mpnet-base-v2`, ~420MB) **이미지 안에 사전 다운로드**
+   - 백엔드 빌드 시 임베딩 모델(`nlpai-lab/KURE-v1`, v2.72부터 — 이전 `paraphrase-multilingual-mpnet-base-v2`, ~420MB — 대비 훨씬 큰 ~2.2GB) **이미지 안에 사전 다운로드**
 2. `pgvector/pgvector:pg16`, `redis:7-alpine` pull
 3. 4개 이미지를 단일 tar.gz로 패키징 → `smagentlab-images-v2.16.tar.gz` (약 1.5~2GB)
 

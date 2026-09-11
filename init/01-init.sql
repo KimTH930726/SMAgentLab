@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS ops_glossary (
     namespace_id        INT          NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
     term                VARCHAR(200) NOT NULL,
     description         TEXT         NOT NULL,
-    embedding           VECTOR(768),
+    embedding           VECTOR(1024),
     created_by_part     VARCHAR(100),
     created_by_user_id  INT
 );
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS ops_knowledge (
     target_tables       TEXT[],
     content             TEXT         NOT NULL,
     query_template      TEXT,
-    embedding           VECTOR(768),
+    embedding           VECTOR(1024),
     base_weight         FLOAT        NOT NULL DEFAULT 1.0,
     category            VARCHAR(100),
     created_by_part     VARCHAR(100),
@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS ops_fewshot (
     question            TEXT         NOT NULL,
     answer              TEXT         NOT NULL,
     knowledge_id        INT          REFERENCES ops_knowledge(id) ON DELETE SET NULL,
-    embedding           VECTOR(768),
+    embedding           VECTOR(1024),
     created_by_part     VARCHAR(100),
     created_by_user_id  INT,
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
@@ -205,7 +205,7 @@ CREATE TABLE IF NOT EXISTS ops_conv_summary (
     id              SERIAL PRIMARY KEY,
     conversation_id INT          REFERENCES ops_conversation(id) ON DELETE CASCADE,
     summary         TEXT         NOT NULL,
-    embedding       VECTOR(768),
+    embedding       VECTOR(1024),
     turn_start      INT          NOT NULL,  -- 요약 범위의 첫 번째 message.id
     turn_end        INT          NOT NULL,  -- 요약 범위의 마지막 message.id
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()

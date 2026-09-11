@@ -26,8 +26,8 @@ class Settings(BaseSettings):
 
     # ── 코드 기본값 (Admin UI에서 런타임 변경 가능) ───────────────
     # 임베딩
-    embedding_model: str = "paraphrase-multilingual-mpnet-base-v2"
-    vector_dim: int = 768
+    embedding_model: str = "nlpai-lab/KURE-v1"
+    vector_dim: int = 1024  # 코드에서 실제로 참조되진 않음(DB 컬럼 타입이 SoT) — 정보성 값만 동기화
 
     # LLM 프로바이더 상세
     ollama_model: str = "exaone3.5:7.8b"
@@ -61,7 +61,7 @@ class Settings(BaseSettings):
 
     # 리랭커 (CrossEncoder)
     reranker_enabled: bool = False  # 폐쇄망: 모델 번들링 후 True로 전환
-    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_model: str = "dragonkue/bge-reranker-v2-m3-ko"
     reranker_candidates: int = 20  # 1차 검색에서 가져올 후보 수 (리랭킹 후 top_k로 압축)
 
     # 지식 신선도 decay

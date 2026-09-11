@@ -62,7 +62,7 @@
 │  │      ▼                                              │   │
 │  │  EmbeddingService.embed()                           │   │
 │  │  "쿠폰 뺏어오기 실패한 건 어떻게 확인해?"            │   │
-│  │      │  → vector [0.12, -0.34, ...] (768차원)       │   │
+│  │      │  → vector [0.12, -0.34, ...] (1024차원)       │   │
 │  │      ▼                                              │   │
 │  │  ops_glossary 벡터 유사도 검색                       │   │
 │  │  SELECT term ORDER BY embedding <=> $query_vec      │   │
@@ -236,11 +236,11 @@ normalize_embeddings=True 적용 시:
   │  content = "쿠폰 강제 회수 처리 방법은..."
   ▼
 EmbeddingService.embed(content)
-  │  SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
-  │  → 모델이 텍스트를 768차원 공간에 매핑
+  │  SentenceTransformer("nlpai-lab/KURE-v1")
+  │  → 모델이 텍스트를 1024차원 공간에 매핑
   │  → normalize_embeddings=True 적용
   ▼
-[0.12, -0.34, 0.87, 0.45, -0.22, ...] (768개 float)
+[0.12, -0.34, 0.87, 0.45, -0.22, ...] (1024개 float)
   │
   ▼
 INSERT INTO ops_knowledge (content, embedding, ...)
@@ -427,7 +427,7 @@ LLM에 전달되는 messages:
 │  knowledge.py (서비스 레이어)            │
 │                                         │
 │  1. EmbeddingService.embed(content)     │
-│     → 768차원 벡터 생성                  │
+│     → 1024차원 벡터 생성                  │
 │                                         │
 │  2. INSERT INTO ops_knowledge           │
 │     (content, embedding, base_weight, …)│

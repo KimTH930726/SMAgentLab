@@ -1030,12 +1030,48 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     — 표 검색이 예전엔 놓치던 걸 더 많이 맞히게 됐다는 뜻)
   </p>
 
+  <h3 style="margin-top:22px;">측정 ④ — 임베딩 모델 교체(v2.72, 2026-09-11)</h3>
+  <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 14px; max-width:820px;">
+    <b style="color:var(--text);">한 줄 요약: 벡터 검색이 쓰던 모델 자체가 2026년 초부터 한 번도
+    바뀐 적 없는 구형이었다 — 한국어 검색 전용으로 파인튜닝된 최신 모델로 바꿨더니 벡터 채널만으로도
+    거의 모든 유형에서 크게 좋아졌다.</b> 사내망에서 huggingface.co가 막혀 있어 실측을 못 하고
+    있었는데(2026-09-07 조사), 이번에 접근이 열려 후보 3종을 실제로 내려받아 비교했다.
+  </p>
+  <div class="compare" style="margin-top:14px;">
+    <div class="box bad">
+      <div class="tag">적용 전 — 구형 모델(mpnet, 768차원)</div>
+      <div class="h">벡터 단독 hit@10 55.1%</div>
+      <ul><li>2026년 3월 최초 커밋 이후 한 번도 재검토 안 된 값 — 로컬 Mac 개발환경 제약으로 고른 것</li></ul>
+    </div>
+    <div class="vs">→</div>
+    <div class="box good">
+      <div class="tag">KURE-v1(1024차원)로 교체 — 공개 벤치마크 1위</div>
+      <div class="h">벡터 단독 hit@10 82.0%(+26.9%p)</div>
+      <ul><li>후보 3종(BGE-M3 77.5% · dragonkue-ko 80.9% · KURE-v1 82.0%) 중 1위, MTEB-ko-retrieval 순위와 실측 순위 일치</li></ul>
+    </div>
+  </div>
+  <p style="font-size:11px; color:var(--text-dim); margin:8px 0 0; max-width:820px;">
+    조사/어미 제거(측정③, RDB 채널)와 임베딩 교체(벡터 채널)는 서로 다른 채널이라 그대로 겹쳐짐 —
+    재색인 후 실 서비스 재측정 결과 <b style="color:var(--green);">하이브리드 전체 hit@10 82.0%→88.8%</b>
+    (narrative 유형은 100%), precision@10도 8.9%→10.8%로 잡음 없이 같이 상승. 세션 시작 시점 대비로는
+    <b style="color:var(--green);">77.5%→88.8%(+11.3%p)</b>.
+  </p>
+  <p style="font-size:11px; color:var(--text-dim); margin:8px 0 0; max-width:820px;">
+    <b style="color:var(--text);">같이 확인한 리랭커</b>: 현재 기본값(ms-marco, 영어전용)은 재정렬 없음(hit@1 53.1%) 대비
+    <b style="color:#FCA5A5;">-33.3%p로 오히려 악화</b> — 꺼둔(`reranker_enabled=False`) 게 옳았음이 실측 확인됨.
+    임베딩과 같은 계열인 <b style="color:var(--text);">dragonkue/bge-reranker-v2-m3-ko가 +11.1%p(64.2%)</b>로 1위 —
+    기본 모델만 교체, 활성화는 검증 후 별도 결정.
+  </p>
+
   <div class="why" style="margin-top:18px; max-width:820px;">
     <ul>
       <li><b>교훈 1</b>: 검색전략을 배타적으로 나누지 말고 "정확조회 + 벡터 폴백"을 겹쳐야 함</li>
       <li><b>교훈 2</b>: 형태소 공백을 메우는 데 꼭 진짜 형태소 분석기가 필요한 건 아님 — 이 규모에선
         규칙 기반 제거만으로도 잡음 증가 없이 실측 개선(+4.5%p)이 확인돼 그대로 적용, mecab/Kiwi는
         규칙 기반이 한계를 보일 때의 다음 단계로 보류</li>
+      <li><b>교훈 3</b>: RDB 채널과 벡터 채널을 각각 따로 개선해도 효과가 상쇄되지 않고 그대로
+        누적됨(+4.5%p, +6.8%p → 합쳐서 +11.3%p) — 두 채널이 서로 다른 실패를 메꾸는 구조였다는
+        측정 ①·②의 결론이 여기서도 재확인됨</li>
     </ul>
   </div>
 </section>

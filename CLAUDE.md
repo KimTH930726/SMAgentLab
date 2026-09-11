@@ -33,7 +33,7 @@
 ## 아키텍처 핵심
 - 검색: Glossary Term Mapping(0.5+) → Weighted Hybrid Search (vector+keyword)
 - 메모리: 4회 교환마다 LLM 요약 → pgvector 저장, 새 질문과 유사 요약 리콜
-- 임베딩: paraphrase-multilingual-mpnet-base-v2 (768차원)
+- 임베딩: nlpai-lab/KURE-v1 (1024차원)
 - SSE 스트리밍: fetch 기반, AbortController로 중단 지원
 
 ## 배포 전 체크리스트

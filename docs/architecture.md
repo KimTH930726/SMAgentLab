@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.71)
+# Ops-Navigator 시스템 아키텍처 (v2.72)
 
 ## 개요
 
@@ -11,6 +11,32 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.72: **임베딩 모델 교체 — mpnet(768차원) → KURE-v1(1024차원), 벡터 컬럼 전량 재색인** —
+  `docs/tech/embedding-reranker-upgrade-plan.md`(2026-09-07 작성, huggingface.co 사내망
+  접근 제한으로 실측 보류돼 있던 조사)를 2026-09-11 사내망 접근이 열려 실행. 89문항 골든셋
+  실측: 현재 모델 hit@10 55.1% vs 후보 3종(BGE-M3 77.5% / dragonkue-BGE-m3-ko 80.9% /
+  **KURE-v1 82.0%**, 전 유형 개선) — MTEB-ko-retrieval 공개 벤치마크 1위 순위와 실측 순위가
+  일치해 KURE-v1로 확정. `vector(768)` 보유 8개 테이블(`rag_knowledge`/`policy_chunk`/
+  `rag_glossary`/`rag_fewshot`/`rag_conv_summary`/`ops_email_analysis`/`ops_voc_cluster`/
+  `rag_knowledge_history`, Text2SQL 제거로 미등록 상태인 `sql_*` 3개 테이블은 제외)를
+  `vector(1024)`로 스키마 변경 후 전량 재임베딩(`backend/scripts/migrate_embedding_model.py`).
+  원문 텍스트를 각 테이블의 실제 저장 코드와 동일한 소스로 재구성(예: `ops_email_analysis`는
+  LLM 생성 `issue_signature`가 DB에 영속화된 적이 없어, 코드에 이미 있던 "원문 임베딩으로
+  안전하게 폴백" 경로를 그대로 재사용). 실측 중 매번 `rag_knowledge` 인코딩 단계에서
+  프로세스가 죽는 문제(exit 137)를 겪었는데, 원인은 asyncio가 아니라 2026-09-10 soft-delete
+  판단 보류 상태였던 id=17(22KB 마크다운 표 블롭)의 토큰 수가 12,061개로 KURE-v1의
+  max_seq_length(8192)를 넘은 것 — 모든 테이블 공통으로 임베딩 입력 텍스트를 안전하게
+  자르는 안전장치를 추가해 해결. 재색인 후 실 프로덕션 API(`POST /api/policy/track2/run`,
+  v2.71 조사/어미 제거와 함께 작동한 결과)로 재검증: 하이브리드 hit@10 82.0%→**88.8%**
+  (narrative 유형은 100%), precision@10도 8.9%→10.8%로 함께 상승(잡음 증가 없음). 사용하지
+  않게 된 모델 캐시는 정리(임베딩 후보 3종 + 리랭커 후보 3종, 총 9.5GB 삭제해 최종 4.3GB만
+  유지). 이어서 리랭커(CrossEncoder) 후보도 같은 골든셋으로 비교(`backend/scripts/
+  bench_reranker_models.py`, 실 하이브리드 검색 top-20 후보 재정렬 hit@1 기준) — 현재
+  기본값(`ms-marco-MiniLM`, 영어전용)은 재정렬 없음(53.1%) 대비 오히려 **-33.3%p 악화**
+  (`reranker_enabled=False`로 꺼둔 게 옳았음이 실측으로 확인됨). 임베딩과 같은 BGE-M3 계열인
+  `dragonkue/bge-reranker-v2-m3-ko`가 **+11.1%p(64.2%)**로 1위 — `reranker_model` 기본값만
+  이걸로 교체(`core/config.py`, `Dockerfile`), `reranker_enabled`는 VOC 관련성 게이트 등
+  다른 경로에도 영향을 주는 앱 전체 동작 변경이라 아직 `False` 유지(활성화는 별도 검증 후 결정).
 - v2.71: **정책 RDB(policy_param) 검색에 한국어 조사/어미 규칙 기반 제거 적용** — v2.70에서
   진단만 하고 미뤄뒀던 "`to_tsvector('simple', ...)`가 한국어 형태소 분석을 안 해서 RDB가
   자기 전문 분야(param 질의)에서도 벡터에 밀린다"는 문제를 실제로 개선. mecab-ko/Kiwi 같은
@@ -569,8 +595,8 @@ rag_ingestion_job     -- 인제스천 작업 이력 (source_type, status, auto_g
 
 | 항목 | 값 |
 |------|-----|
-| 모델명 | `paraphrase-multilingual-mpnet-base-v2` |
-| 벡터 차원 | 768 |
+| 모델명 | `nlpai-lab/KURE-v1` (v2.72부터, 이전 `paraphrase-multilingual-mpnet-base-v2`) |
+| 벡터 차원 | 1024 |
 | 한국어 지원 | O |
 | 실행 위치 | Backend 컨테이너 내 (CPU) |
 | 캐시 볼륨 | `model-cache:/root/.cache/huggingface` |
@@ -806,8 +832,8 @@ messages = [
 | `INHOUSE_LLM_MODEL` | (없음) | inputs.model 파라미터 (gpt-5.2, claude-sonnet-4.5, gemini-3.0-pro) |
 | `INHOUSE_LLM_AGENT_CODE` | `playground` | DevX usecase_code |
 | `INHOUSE_LLM_RESPONSE_MODE` | `streaming` | 응답 방식 (`streaming` \| `blocking`) |
-| `EMBEDDING_MODEL` | `paraphrase-multilingual-mpnet-base-v2` | 임베딩 모델명 |
-| `VECTOR_DIM` | `768` | 벡터 차원 수 |
+| `EMBEDDING_MODEL` | `nlpai-lab/KURE-v1` (v2.72부터) | 임베딩 모델명 |
+| `VECTOR_DIM` | `1024` | 벡터 차원 수 |
 | `DEFAULT_TOP_K` | `5` | 기본 검색 결과 수 |
 | `DEFAULT_W_VECTOR` | `0.7` | 기본 벡터 검색 비중 |
 | `DEFAULT_W_KEYWORD` | `0.3` | 기본 키워드 검색 비중 |

@@ -1,0 +1,50 @@
+{
+  "현재(baseline)": {
+    "overall": 0.550561797752809,
+    "by_type": {
+      "param": 0.7391304347826086,
+      "narrative": 0.6086956521739131,
+      "navigation": 0.375,
+      "condition_filter": 0.47368421052631576
+    },
+    "dim": 768,
+    "load_s": 3.7,
+    "encode_corpus_s": 13.3
+  },
+  "BGE-M3": {
+    "overall": 0.7752808988764045,
+    "by_type": {
+      "param": 0.9130434782608695,
+      "narrative": 0.8695652173913043,
+      "navigation": 0.7083333333333334,
+      "condition_filter": 0.5789473684210527
+    },
+    "dim": 1024,
+    "load_s": 55.4,
+    "encode_corpus_s": 52.2
+  },
+  "dragonkue/BGE-m3-ko": {
+    "overall": 0.8089887640449438,
+    "by_type": {
+      "param": 0.9130434782608695,
+      "narrative": 0.9130434782608695,
+      "navigation": 0.6666666666666666,
+      "condition_filter": 0.7368421052631579
+    },
+    "dim": 1024,
+    "load_s": 54.2,
+    "encode_corpus_s": 44.8
+  },
+  "KURE-v1": {
+    "overall": 0.8202247191011236,
+    "by_type": {
+      "param": 0.9130434782608695,
+      "narrative": 0.9130434782608695,
+      "navigation": 0.7083333333333334,
+      "condition_filter": 0.7368421052631579
+    },
+    "dim": 1024,
+    "load_s": 56.0,
+    "encode_corpus_s": 45.4
+  }
+}
