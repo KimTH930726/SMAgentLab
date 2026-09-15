@@ -84,6 +84,12 @@ export interface Track2TypeResult {
   b_hit_rdb_only: number;
   b_hit_vector_only: number;
   b_hit_both: number;
+  // Top-1 Accuracy(v2.74) — B는 RDB/벡터 두 채널로 나뉘어 "진짜 하나의 순위"가 원래
+  // 없어서(아키텍처 자체의 특징) 채널별로 따로 잰다. reranker_enabled=True면 채널별
+  // 재정렬 결과의 1위가 자연히 반영된다.
+  a_top1_accuracy: number;
+  b_top1_param_accuracy: number;
+  b_top1_narrative_accuracy: number;
 }
 
 export interface Track2Result {
@@ -99,8 +105,23 @@ export interface Track2Result {
   golden_set_file: string;
   top_k: number;
   duration_seconds: number;
+  a_top1_accuracy: number;
+  b_top1_param_accuracy: number;
+  b_top1_narrative_accuracy: number;
+}
+
+// 실행 이력 스냅샷(v2.74) — POST /track2/run 호출마다 자동 저장됨. 모니터링 뷰(실험실
+// 게이트 작업3)의 추이 차트 재료.
+export interface Track2RunHistory extends Track2Result {
+  id: number;
+  run_at: string;
+  triggered_by: number | null;
 }
 
 export async function runTrack2(topK = 10): Promise<Track2Result> {
   return apiFetch<Track2Result>(`/policy/track2/run?top_k=${topK}`, { method: 'POST' });
+}
+
+export async function getTrack2History(limit = 50): Promise<Track2RunHistory[]> {
+  return apiFetch<Track2RunHistory[]>(`/policy/track2/history?limit=${limit}`);
 }

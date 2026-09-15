@@ -1,6 +1,7 @@
 """정책서 임포트 API — 요청/응답 스키마."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel
@@ -121,6 +122,9 @@ class Track2TypeResultOut(BaseModel):
     b_hit_rdb_only: float
     b_hit_vector_only: float
     b_hit_both: float
+    a_top1_accuracy: float = 0.0
+    b_top1_param_accuracy: float = 0.0
+    b_top1_narrative_accuracy: float = 0.0
 
 
 class Track2ResultOut(BaseModel):
@@ -135,4 +139,28 @@ class Track2ResultOut(BaseModel):
     by_type: list[Track2TypeResultOut]
     golden_set_file: str
     top_k: int
+    a_top1_accuracy: float = 0.0
+    b_top1_param_accuracy: float = 0.0
+    b_top1_narrative_accuracy: float = 0.0
+
+
+class Track2RunHistoryOut(BaseModel):
+    id: int
+    run_at: datetime
+    top_k: int
+    total_n: int
+    a_hit_rate: float
+    b_hit_rate: float
+    a_precision: float
+    b_precision: float
+    b_hit_rdb_only: float
+    b_hit_vector_only: float
+    b_hit_both: float
+    a_top1_accuracy: float
+    b_top1_param_accuracy: float
+    b_top1_narrative_accuracy: float
+    by_type: list[Track2TypeResultOut]
+    golden_set_file: str
+    duration_seconds: float
+    triggered_by: Optional[int] = None
     duration_seconds: float

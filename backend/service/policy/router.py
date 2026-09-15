@@ -1,4 +1,5 @@
 """정책서 임포트/검색 API."""
+import logging
 from dataclasses import asdict
 from typing import Optional
 
@@ -8,7 +9,10 @@ from core.dependencies import get_current_user, get_current_admin, check_namespa
 from service.policy import service, search as search_service, unresolved_report, browse, track2
 from service.policy.schemas import (
     ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
+    Track2RunHistoryOut,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
 
@@ -120,4 +124,21 @@ async def run_track2(
         result = await track2.run_comparison(top_k=top_k)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # 실행마다 자동 저장(2026-09-15, 실험실 게이트 작업3) — "이력이 쌓이는 것 자체가
+    # 산출물"이라 별도 저장 버튼 없이 매 실행이 곧 스냅샷이 되게 한다. 저장 실패로 조회
+    # 결과 자체를 못 돌려주는 건 과하므로 best-effort(로그만 남기고 응답은 그대로 반환).
+    try:
+        await track2.save_run(result, triggered_by=user.get("id"))
+    except Exception as e:
+        logger.warning("[Track2] 실행 이력 저장 실패(응답은 정상 반환): %s", e)
     return Track2ResultOut(**asdict(result))
+
+
+@router.get("/track2/history", response_model=list[Track2RunHistoryOut])
+async def get_track2_history(
+    limit: int = Query(default=50, ge=1, le=200),
+    user: dict = Depends(get_current_user),
+):
+    """Track2 실행 이력 — 모니터링 뷰의 추이 차트용(실험실 게이트 작업3)."""
+    rows = await track2.list_run_history(limit=limit)
+    return [Track2RunHistoryOut(**r) for r in rows]

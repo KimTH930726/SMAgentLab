@@ -2126,33 +2126,48 @@ item 개수를 쓴다.
 있었는지를 세 갈래로 나눠 추가했다. 세 값의 합은 항상 `b_hit_rate`와 같다(rdb_only+vector_only+
 both = "적어도 하나에서 찾음" = b_hit).
 
+`a_top1_accuracy`/`b_top1_param_accuracy`/`b_top1_narrative_accuracy`(2026-09-15 추가,
+v2.74) — hit@K는 "top-K 안에 있는가"만 보고 "몇 번째로 있는가"는 안 본다. "근거카드 1건
+노출"(select_cited_hit 등) 소비 패턴에 대응하려면 "0번째가 정답인가"가 필요해서 추가.
+A는 `search_knowledge()`가 단일 랭킹 리스트라 0번째로 그대로 정의된다. B는 RDB/벡터 두
+채널로 나뉘어 있어 "진짜 하나의 순위"가 원래 없다는 게 이 아키텍처 자체의 특징이라 억지로
+합치지 않고 **채널별로 따로** 측정한다(`b_top1_param_accuracy`=policy_param 채널 자체
+정렬의 0번째, `b_top1_narrative_accuracy`=policy_chunk 채널 자체 정렬의 0번째).
+
 **Response `200`**
 ```json
 {
-  "total_n": 89, "a_hit_rate": 0.5506, "b_hit_rate": 0.7753,
-  "a_precision": 0.0607, "b_precision": 0.0903,
-  "b_hit_rdb_only": 0.1348, "b_hit_vector_only": 0.5056, "b_hit_both": 0.1348,
+  "total_n": 89, "a_hit_rate": 0.8090, "b_hit_rate": 0.8764,
+  "a_precision": 0.1124, "b_precision": 0.1054,
+  "b_hit_rdb_only": 0.0337, "b_hit_vector_only": 0.4494, "b_hit_both": 0.3933,
+  "a_top1_accuracy": 0.4719, "b_top1_param_accuracy": 0.1798, "b_top1_narrative_accuracy": 0.4831,
   "by_type": [
-    { "type": "param", "n": 23, "a_hit_rate": 0.7391, "b_hit_rate": 0.8696, "a_precision": 0.0739, "b_precision": 0.0824,
-      "b_hit_rdb_only": 0.2609, "b_hit_vector_only": 0.4783, "b_hit_both": 0.1304 },
-    { "type": "narrative", "n": 23, "a_hit_rate": 0.6087, "b_hit_rate": 0.9130, "a_precision": 0.0609, "b_precision": 0.0912,
-      "b_hit_rdb_only": 0.0, "b_hit_vector_only": 0.9130, "b_hit_both": 0.0 },
-    { "type": "navigation", "n": 24, "a_hit_rate": 0.3750, "b_hit_rate": 0.5833, "a_precision": 0.0542, "b_precision": 0.1108,
-      "b_hit_rdb_only": 0.1250, "b_hit_vector_only": 0.2917, "b_hit_both": 0.1667 },
-    { "type": "condition_filter", "n": 19, "a_hit_rate": 0.4737, "b_hit_rate": 0.7368, "a_precision": 0.0526, "b_precision": 0.0729,
-      "b_hit_rdb_only": 0.1579, "b_hit_vector_only": 0.3158, "b_hit_both": 0.2632 }
+    { "type": "param", "n": 23, "a_hit_rate": 0.9130, "b_hit_rate": 0.9565, "a_precision": 0.0913, "b_precision": 0.0834,
+      "b_hit_rdb_only": 0.1304, "b_hit_vector_only": 0.1304, "b_hit_both": 0.6957,
+      "a_top1_accuracy": 0.6087, "b_top1_param_accuracy": 0.3913, "b_top1_narrative_accuracy": 0.3913 }
   ],
-  "golden_set_file": "online_delivus_v1.jsonl", "top_k": 10, "duration_seconds": 68.7
+  "golden_set_file": "online_delivus_v1.jsonl", "top_k": 10, "duration_seconds": 79.4
 }
 ```
-(위 수치는 2026-09-09 실측 재실행 값. **param 타입조차 벡터 단독 기여(47.8%)가 RDB 단독
-기여(26.1%)보다 큼** — RDB가 자기 전문 분야에서도 밀리고 있다는 신호. 원인 진단(대화 중):
-PostgreSQL `to_tsvector('simple', ...)`가 한국어 형태소 분석을 안 해서 "담을"/"담기" 같은
-활용형이 안 겹침 — 형태소 분석기 추가는 아직 미착수, 진단만 기록. narrative 타입은
-`b_hit_rdb_only`가 0.0인 게 정상 — narrative 질문의 정답은 서술형 청크에만 있고
-`policy_param`엔 애초에 값이 없어서 RDB가 기여할 여지 자체가 없음)
+(전체 수치는 2026-09-15 실측 재실행 값, `by_type`은 지면상 param 타입만 예시. **RDB
+채널이 hit@K에서는 강해 보여도(param 타입 95.7%) top-1 정확도는 낮음(18.0%)** — 정답을
+후보에 넣긴 하지만 `ts_rank` 정렬로 1등에 올리는 건 잘 못한다는 새 발견, 원인 분석은
+다음 과제)
 
 **Error**: `400` 골든셋 파일 없음, `403` admin 아님
+
+---
+
+### GET /api/policy/track2/history?limit=
+
+Track2 실행 이력 조회(2026-09-15 신규, v2.74) — `POST /track2/run`을 호출할 때마다 자동
+저장되는 스냅샷을 최신순으로 반환한다(모니터링 뷰의 추이 차트 재료). 로그인만 되면 조회
+가능(admin 전용 아님 — 실행은 무겁지만 조회는 읽기 전용이라 제한 없음).
+
+**Query**: `limit` (기본 50, 최대 200)
+
+**Response `200`** — `Track2ResultOut`의 모든 필드 + `id`, `run_at`(ISO 8601), `triggered_by`
+(실행한 사용자 id, 없으면 null)를 배열로. 예시는 위 `POST /track2/run` 응답과 필드 동일.
 
 ---
 

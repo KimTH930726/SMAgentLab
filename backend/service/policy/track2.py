@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +43,9 @@ class Track2TypeResult:
     b_hit_rdb_only: float
     b_hit_vector_only: float
     b_hit_both: float
+    a_top1_accuracy: float = 0.0
+    b_top1_param_accuracy: float = 0.0
+    b_top1_narrative_accuracy: float = 0.0
 
 
 @dataclass
@@ -59,6 +62,9 @@ class Track2Result:
     golden_set_file: str = ""
     top_k: int = 10
     duration_seconds: float = 0.0
+    a_top1_accuracy: float = 0.0
+    b_top1_param_accuracy: float = 0.0
+    b_top1_narrative_accuracy: float = 0.0
 
 
 @dataclass
@@ -66,13 +72,23 @@ class _QueryScore:
     """골든셋 한 문항의 채점 결과. B그룹은 RDB(policy_param)/벡터(policy_chunk) 중 어느
     경로로 정답을 찾았는지까지 남긴다 — b_hit(둘 중 하나라도 맞으면 성공)만 보면 "하이브리드가
     이겼다"는 알아도 "RDB랑 벡터 중 실제로 뭐가 일하고 있는지"는 안 보여서(2026-09-09 대화
-    중 지적) 추가."""
+    중 지적) 추가.
+
+    top1_*(2026-09-15, 실험실 게이트 작업2): "근거카드 1건 노출" 소비 패턴에 대응하는 지표.
+    A는 search_knowledge()가 단일 랭킹 리스트라 0번째가 정답인지로 그대로 정의된다. B는
+    RDB/벡터 두 채널로 나뉘어 있어 "진짜 하나의 순위"가 원래 없다(아키텍처 자체의 특징,
+    v2.71부터 계속 확인돼온 것) — 억지로 하나로 합치지 않고 **채널별로 따로** 1위 정확도를
+    본다. reranker_enabled=True일 때는 채널별 재정렬 결과의 1위를 그대로 쓰므로 자연히
+    반영된다(search.py 참고)."""
     a_hit: bool
     b_hit: bool
     a_precision: float
     b_precision: float
     b_via_rdb: bool
     b_via_vector: bool
+    a_top1: bool = False
+    b_top1_param: bool = False
+    b_top1_narrative: bool = False
 
 
 def _namespace_for_file(file_: str) -> Optional[str]:
@@ -185,6 +201,7 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
             a_item_ids = {id_map.get(h.id) for h in a_hits}
             a_hit = bool(gold_ids & a_item_ids)
             a_precision = (len(gold_ids & a_item_ids) / len(a_item_ids)) if a_item_ids else 0.0
+            a_top1 = bool(a_hits and id_map.get(a_hits[0].id) in gold_ids)
 
             b_result = await search_service.search_policy(namespace_name, query, top_k=top_k)
             b_param_ids = {p.item_id for p in b_result.params}
@@ -194,9 +211,14 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
             b_precision = (len(gold_ids & b_item_ids) / len(b_item_ids)) if b_item_ids else 0.0
             b_via_rdb = bool(gold_ids & b_param_ids)
             b_via_vector = bool(gold_ids & b_narrative_ids)
+            b_top1_param = bool(b_result.params and b_result.params[0].item_id in gold_ids)
+            b_top1_narrative = bool(b_result.narratives and b_result.narratives[0].item_id in gold_ids)
 
             per_type.setdefault(qtype, []).append(
-                _QueryScore(a_hit, b_hit, a_precision, b_precision, b_via_rdb, b_via_vector)
+                _QueryScore(
+                    a_hit, b_hit, a_precision, b_precision, b_via_rdb, b_via_vector,
+                    a_top1, b_top1_param, b_top1_narrative,
+                )
             )
     finally:
         async with get_conn() as conn:
@@ -222,6 +244,9 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
             b_hit_rdb_only=_rate(rows, lambda r: r.b_via_rdb and not r.b_via_vector),
             b_hit_vector_only=_rate(rows, lambda r: r.b_via_vector and not r.b_via_rdb),
             b_hit_both=_rate(rows, lambda r: r.b_via_rdb and r.b_via_vector),
+            a_top1_accuracy=_rate(rows, lambda r: r.a_top1),
+            b_top1_param_accuracy=_rate(rows, lambda r: r.b_top1_param),
+            b_top1_narrative_accuracy=_rate(rows, lambda r: r.b_top1_narrative),
         )
         for t, rows in per_type.items()
     ]
@@ -240,4 +265,55 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
         golden_set_file=_GOLDEN_SET_PATH.name,
         top_k=top_k,
         duration_seconds=round(time.monotonic() - t0, 1),
+        a_top1_accuracy=_rate(all_rows, lambda r: r.a_top1),
+        b_top1_param_accuracy=_rate(all_rows, lambda r: r.b_top1_param),
+        b_top1_narrative_accuracy=_rate(all_rows, lambda r: r.b_top1_narrative),
     )
+
+
+async def save_run(result: Track2Result, triggered_by: Optional[int] = None) -> int:
+    """Track2 실행 결과를 policy_track2_run에 스냅샷으로 저장 — 실험실 게이트 작업3
+    (모니터링 뷰)의 재료. by_type은 요약 없이 JSONB 통째로 넣어 나중에 지표가 늘어나도
+    (MRR·nDCG 등) 컬럼을 매번 안 늘려도 되게 한다."""
+    async with get_conn() as conn:
+        run_id = await conn.fetchval(
+            """
+            INSERT INTO policy_track2_run
+                (top_k, total_n, a_hit_rate, b_hit_rate, a_precision, b_precision,
+                 b_hit_rdb_only, b_hit_vector_only, b_hit_both,
+                 a_top1_accuracy, b_top1_param_accuracy, b_top1_narrative_accuracy,
+                 by_type, golden_set_file, duration_seconds, triggered_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            RETURNING id
+            """,
+            result.top_k, result.total_n, result.a_hit_rate, result.b_hit_rate,
+            result.a_precision, result.b_precision,
+            result.b_hit_rdb_only, result.b_hit_vector_only, result.b_hit_both,
+            result.a_top1_accuracy, result.b_top1_param_accuracy, result.b_top1_narrative_accuracy,
+            json.dumps([asdict(t) for t in result.by_type], ensure_ascii=False),
+            result.golden_set_file, result.duration_seconds, triggered_by,
+        )
+    return run_id
+
+
+async def list_run_history(limit: int = 50) -> list[dict]:
+    """최근 Track2 실행 이력 — 모니터링 뷰의 추이 차트용. run_at 내림차순(최신 먼저)."""
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, run_at, top_k, total_n, a_hit_rate, b_hit_rate, a_precision, b_precision,
+                   b_hit_rdb_only, b_hit_vector_only, b_hit_both,
+                   a_top1_accuracy, b_top1_param_accuracy, b_top1_narrative_accuracy,
+                   by_type, golden_set_file, duration_seconds, triggered_by
+            FROM policy_track2_run
+            ORDER BY run_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["by_type"] = json.loads(d["by_type"]) if isinstance(d["by_type"], str) else d["by_type"]
+        results.append(d)
+    return results

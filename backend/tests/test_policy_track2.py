@@ -172,6 +172,57 @@ class TestRunComparison:
         assert any("ops_namespace" in c.args[0] for c in delete_calls)
 
     @pytest.mark.asyncio
+    async def test_top1_accuracy_distinguishes_from_hit_at_k(self, monkeypatch, tmp_path):
+        """hit@K는 "top-K 안에 있냐"만 보고, top1은 "0번째가 정답이냐"를 본다 — B의 param
+        채널은 정답(101)이 후보에 있지만 1등은 아니게(201이 먼저) 구성해서 b_hit_rdb_only는
+        True인데 b_top1_param은 False가 되는 걸 확인. A/narrative는 1등이 바로 정답이 되게
+        구성해 True가 되는 것도 같이 확인."""
+        golden_path = tmp_path / "golden.jsonl"
+        golden_path.write_text(json.dumps({
+            "qid": "q1", "query": "질문", "type": "param",
+            "source": {"file": "비즈니스정책서_온라인스토어_재구성.xlsx", "sheet": "s", "row": 1},
+            "expected_answer": "x",
+        }, ensure_ascii=False), encoding="utf-8")
+        monkeypatch.setattr(track2, "_GOLDEN_SET_PATH", golden_path)
+
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.execute = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=999)  # _setup_track_a의 INSERT...RETURNING id
+        # _setup_track_a의 SELECT — policy_item 1건(id=101)만 있는 것으로 구성 → id_map={999:101}
+        conn.fetch = AsyncMock(return_value=[{"id": 101, "policy_name": "N", "category_path": [], "raw_body": "R"}])
+        conn.fetchrow = AsyncMock(return_value={"id": 101, "namespace_id": 1})  # gold_id=101
+
+        monkeypatch.setattr(track2, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(track2, "resolve_namespace_id", AsyncMock(return_value=1))
+        monkeypatch.setattr(track2.embedding_service, "embed", AsyncMock(return_value=[0.1] * 768))
+
+        # A: 1등 후보(id=999 → item 101)가 바로 정답
+        monkeypatch.setattr(track2, "search_knowledge", AsyncMock(return_value=[MagicMock(id=999)]))
+
+        def _make_result(param_ids=(), narrative_ids=()):
+            r = MagicMock()
+            r.params = [MagicMock(item_id=i) for i in param_ids]
+            r.narratives = [MagicMock(item_id=i) for i in narrative_ids]
+            return r
+        # B param: 정답(101)은 있지만 1등은 오답(201) — hit@K는 True, top1은 False가 돼야 함
+        # B narrative: 1등이 바로 정답
+        search_policy_mock = AsyncMock(return_value=_make_result(param_ids=[201, 101], narrative_ids=[101]))
+        monkeypatch.setattr(search, "search_policy", search_policy_mock)
+
+        result = await track2.run_comparison(top_k=5)
+
+        assert result.a_top1_accuracy == 1.0
+        assert result.b_top1_param_accuracy == 0.0  # hit@K는 됐지만 1등은 아님
+        assert result.b_top1_narrative_accuracy == 1.0
+        by_type = {t.type: t for t in result.by_type}
+        # 101이 param/narrative 후보 양쪽에 다 있어 b_hit_both — hit@K 관점에선 정상적으로 찾되,
+        # top1은 채널별로 따로 보므로(param 1등=201 오답, narrative 1등=101 정답) 위 assert들과
+        # 별개로 구분됨을 보여줌
+        assert by_type["param"].b_hit_both == 1.0
+
+    @pytest.mark.asyncio
     async def test_unresolvable_namespace_file_skipped(self, monkeypatch, tmp_path):
         """golden set의 source.file이 알려진 팀 파일명을 안 담고 있으면 그 문항은 건너뛴다."""
         golden_path = tmp_path / "golden.jsonl"
@@ -195,3 +246,67 @@ class TestRunComparison:
 
         assert result.total_n == 0
         assert result.by_type == []
+
+
+class TestSaveRun:
+    """v2.74(2026-09-15) — 실험실 게이트 작업3: Track2 실행 이력 저장."""
+
+    @pytest.mark.asyncio
+    async def test_inserts_snapshot_row_and_returns_id(self, monkeypatch):
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.fetchval = AsyncMock(return_value=42)
+        monkeypatch.setattr(track2, "get_conn", MagicMock(return_value=conn))
+
+        result = track2.Track2Result(
+            total_n=89, a_hit_rate=0.8, b_hit_rate=0.9, a_precision=0.1, b_precision=0.1,
+            b_hit_rdb_only=0.1, b_hit_vector_only=0.5, b_hit_both=0.3,
+            by_type=[track2.Track2TypeResult(
+                type="param", n=23, a_hit_rate=0.9, b_hit_rate=0.95, a_precision=0.1, b_precision=0.1,
+                b_hit_rdb_only=0.3, b_hit_vector_only=0.3, b_hit_both=0.35,
+                a_top1_accuracy=0.8, b_top1_param_accuracy=0.7, b_top1_narrative_accuracy=0.6,
+            )],
+            golden_set_file="online_delivus_v1.jsonl", top_k=10, duration_seconds=78.6,
+            a_top1_accuracy=0.7, b_top1_param_accuracy=0.6, b_top1_narrative_accuracy=0.9,
+        )
+
+        run_id = await track2.save_run(result, triggered_by=1)
+
+        assert run_id == 42
+        conn.fetchval.assert_awaited_once()
+        call_args = conn.fetchval.call_args.args
+        assert "INSERT INTO policy_track2_run" in call_args[0]
+        assert call_args[-1] == 1  # triggered_by
+        # by_type이 JSON 문자열로 직렬화돼 넘어가는지(파라미터 순서상 golden_set_file 앞)
+        by_type_json = call_args[13]
+        parsed = json.loads(by_type_json)
+        assert parsed[0]["type"] == "param"
+        assert parsed[0]["a_top1_accuracy"] == 0.8
+
+
+class TestListRunHistory:
+    @pytest.mark.asyncio
+    async def test_parses_by_type_json_and_orders_by_run_at_desc(self, monkeypatch):
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.fetch = AsyncMock(return_value=[
+            {"id": 2, "run_at": "2026-09-15T10:00:00", "by_type": json.dumps([{"type": "param", "n": 23}]),
+             "top_k": 10, "total_n": 89, "a_hit_rate": 0.8, "b_hit_rate": 0.9, "a_precision": 0.1, "b_precision": 0.1,
+             "b_hit_rdb_only": 0.1, "b_hit_vector_only": 0.5, "b_hit_both": 0.3,
+             "a_top1_accuracy": 0.7, "b_top1_param_accuracy": 0.6, "b_top1_narrative_accuracy": 0.9,
+             "golden_set_file": "online_delivus_v1.jsonl", "duration_seconds": 78.6, "triggered_by": 1},
+        ])
+        monkeypatch.setattr(track2, "get_conn", MagicMock(return_value=conn))
+
+        rows = await track2.list_run_history(limit=10)
+
+        assert len(rows) == 1
+        assert rows[0]["id"] == 2
+        assert isinstance(rows[0]["by_type"], list)  # JSON 문자열이 파싱돼 리스트로
+        assert rows[0]["by_type"][0]["type"] == "param"
+
+        select_sql = conn.fetch.call_args.args[0]
+        assert "ORDER BY run_at DESC" in select_sql
+        assert conn.fetch.call_args.args[1] == 10
