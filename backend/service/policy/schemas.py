@@ -163,4 +163,3 @@ class Track2RunHistoryOut(BaseModel):
     golden_set_file: str
     duration_seconds: float
     triggered_by: Optional[int] = None
-    duration_seconds: float
