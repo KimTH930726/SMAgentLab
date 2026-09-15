@@ -163,3 +163,17 @@ class Track2RunHistoryOut(BaseModel):
     golden_set_file: str
     duration_seconds: float
     triggered_by: Optional[int] = None
+
+
+class PipelineStatsTrendPointOut(BaseModel):
+    day: str
+    count: int
+
+
+class PipelineStatsOut(BaseModel):
+    policy_item: int
+    policy_param: int
+    policy_chunk: int
+    ref_db_column: int
+    ref_common_code: int
+    trend: list[PipelineStatsTrendPointOut]

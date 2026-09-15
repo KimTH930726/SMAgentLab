@@ -2171,6 +2171,32 @@ Track2 실행 이력 조회(2026-09-15 신규, v2.74) — `POST /track2/run`을 
 
 ---
 
+### GET /api/policy/pipeline-stats?namespace=
+
+정책 지식 파이프라인의 "기준정보 축적" 현황(2026-09-15 신규, v2.77, 실험실 게이트 작업3
+"파이프라인 모니터"의 재료). `policy_item`/`policy_param`/`policy_chunk`/`ref_db_column`/
+`ref_common_code`의 namespace 내 건수 + `policy_item` 생성일 기준 최근 30일 일별 적재 건수.
+
+**Query**: `namespace`(필수)
+
+**Response `200`**:
+```json
+{
+  "policy_item": 378,
+  "policy_param": 389,
+  "policy_chunk": 597,
+  "ref_db_column": 0,
+  "ref_common_code": 0,
+  "trend": [{ "day": "2026-09-04", "count": 378 }]
+}
+```
+정책서는 지금까지 일괄 임포트 방식이라 `trend`가 특정일에 몰려 찍히는 게 정상이다 — "매일
+조금씩 늘어나는 그래프"가 아니라 "언제 뭘 얼마나 넣었는지" 이력을 보는 용도.
+`ref_db_column`/`ref_common_code`는 v2.73에 테이블·파서만 만들고 실제 재적재는 아직 안 해서
+현재 0건이 정상(문서 근거: `docs/tech/data-storage-philosophy.md` §9 갭 이슈 3번 "부분 완료").
+
+---
+
 ## 14. 공통 에러 코드
 
 | HTTP 상태 코드 | 의미 | 설명 |

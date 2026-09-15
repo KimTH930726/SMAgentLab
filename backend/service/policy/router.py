@@ -6,10 +6,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
-from service.policy import service, search as search_service, unresolved_report, browse, track2
+from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats
 from service.policy.schemas import (
     ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
-    Track2RunHistoryOut,
+    Track2RunHistoryOut, PipelineStatsOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,3 +142,14 @@ async def get_track2_history(
     """Track2 실행 이력 — 모니터링 뷰의 추이 차트용(실험실 게이트 작업3)."""
     rows = await track2.list_run_history(limit=limit)
     return [Track2RunHistoryOut(**r) for r in rows]
+
+
+@router.get("/pipeline-stats", response_model=PipelineStatsOut)
+async def get_pipeline_stats(
+    namespace: str = Query(...),
+    user: dict = Depends(get_current_user),
+):
+    """기준정보 축적 현황 — 모니터링 뷰(실험실 게이트 작업3)의 "①기준정보 축적" 섹션."""
+    await check_namespace_ownership(namespace, user)
+    stats = await pipeline_stats.get_pipeline_stats(namespace)
+    return PipelineStatsOut(**stats)

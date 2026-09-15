@@ -1,20 +1,23 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import { List, FileWarning, FlaskConical } from 'lucide-react';
+import { List, FileWarning, FlaskConical, Gauge } from 'lucide-react';
 import { PolicyItemBrowser } from './PolicyItemBrowser';
 import { PolicyUnresolvedReport } from './PolicyUnresolvedReport';
 import { PolicyLab } from './PolicyLab';
+import { PolicyPipelineMonitor } from './PolicyPipelineMonitor';
 
 /**
- * 정책서 관련 화면 3개를 하나의 "정책" 대분류 탭 아래 서브탭으로 묶는다(2026-09-04) —
+ * 정책서 관련 화면들을 하나의 "정책" 대분류 탭 아래 서브탭으로 묶는다(2026-09-04) —
  * VocEmailPanel.tsx의 서브탭 패턴과 동일. 이전엔 Admin.tsx에 3개가 평평하게 나열돼 있었다.
+ * 2026-09-15: 실험실 게이트 작업3 "모니터" 서브탭 추가.
  */
-type PolicySubTab = 'items' | 'unresolved' | 'lab';
+type PolicySubTab = 'items' | 'unresolved' | 'lab' | 'monitor';
 
 const SUB_TABS: { id: PolicySubTab; label: string; icon: React.ReactNode }[] = [
   { id: 'items', label: '항목 브라우저', icon: <List className="w-4 h-4" /> },
   { id: 'unresolved', label: '미분류', icon: <FileWarning className="w-4 h-4" /> },
   { id: 'lab', label: '저장소 실험실', icon: <FlaskConical className="w-4 h-4" /> },
+  { id: 'monitor', label: '파이프라인 모니터', icon: <Gauge className="w-4 h-4" /> },
 ];
 
 export function PolicyPanel() {
@@ -45,6 +48,7 @@ export function PolicyPanel() {
       {subTab === 'items' && <PolicyItemBrowser />}
       {subTab === 'unresolved' && <PolicyUnresolvedReport />}
       {subTab === 'lab' && <PolicyLab />}
+      {subTab === 'monitor' && <PolicyPipelineMonitor />}
     </div>
   );
 }

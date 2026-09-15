@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.76)
+# Ops-Navigator 시스템 아키텍처 (v2.77)
 
 ## 개요
 
@@ -11,6 +11,26 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.77: **정책 지식 파이프라인 모니터** (work-os 전달 프롬프트 작업3, "핵심 산출물")
+  — `PolicyPipelineMonitor.tsx` 신규(정책 탭 서브탭, `PolicyLab.tsx` 확장이 아니라 별도
+  컴포넌트로 분리 — 실험 도구 하나가 아니라 파이프라인 전체 조망이라 성격이 다름).
+  4개 섹션: ①기준정보 축적(`policy_item`/`param`/`chunk`/`ref_db_column`/`ref_common_code`
+  건수, 신규 `GET /policy/pipeline-stats`), ②지식화 레이어 갭 이슈 6개 체크리스트
+  (`data-storage-philosophy.md` §9 기준, 스키마 재조회로 실제 상태 확인 — content_hash
+  재현성/raw_structure/결정론 아웃라인 파서/embed_text render/embedding_model+GIN
+  전부 미착수, DB스키마사전·공통코드는 테이블+파서만 완료고 재적재는 0건이라 "부분
+  완료"), ③평가체계 축적(Track2 실행 이력 건수·최근 실행일, 기존 `/track2/history`
+  재사용), ④retrieval 평가 현황(최신 hit@K/Top-1 + 추이 막대그래프). 새 테이블 없음
+  (순수 집계 API). `pipeline-stats`는 `policy_item`/`ref_db_column`/`ref_common_code`가
+  전부 namespace_id로 격리되는 테이블이라 다른 정책 엔드포인트와 동일하게 namespace로
+  스코프(`check_namespace_ownership`).
+  **재설계(같은 날)**: 첫 버전은 숫자 카드 4개를 그냥 나열해서 "왜 있는지/뭘 보여주는지
+  모호하다"는 실사용 피드백을 받음 — 4단계가 원본→구조화→평가 실행→평가 결과로 이어지는
+  하나의 파이프라인이라는 걸 전달하도록, 맨 위에 단계 커넥터(색으로 단계별 상태 표시)와
+  동적 요약 문장(실제 수치로 조립되는 한 문단 — "기준정보는 N건 쌓였지만 갭 이슈 M건이
+  미착수라...")을 추가하고, 각 섹션 첫 줄에 "그래서 뭘 알 수 있는지"를 숫자보다 먼저
+  쓰게 바꿈. 추이 막대그래프는 실행 1회뿐일 때 막대 1개가 전체 폭을 채워 단색 블록처럼
+  보이는 문제가 있어(실사용 스크린샷으로 발견) 2회 미만이면 안내 문구로 대체.
 - v2.76: **실험실 지표 선택 UI + 저장 전략 현황 배지** (work-os 전달 프롬프트 작업2,
   `PolicyLab.tsx`) — 소비 패턴→추천 지표 결정론 규칙표(`METRIC_INFO`, LLM 불필요)를
   코드화: 풀컨텍스트 주입(채팅 답변 생성, top_k 전체를 LLM에 넣음)=hit@K, 근거카드

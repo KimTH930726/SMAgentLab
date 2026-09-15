@@ -125,3 +125,24 @@ export async function runTrack2(topK = 10): Promise<Track2Result> {
 export async function getTrack2History(limit = 50): Promise<Track2RunHistory[]> {
   return apiFetch<Track2RunHistory[]>(`/policy/track2/history?limit=${limit}`);
 }
+
+// ─── 파이프라인 모니터(실험실 게이트 작업3) ────────────────────────────────────
+
+export interface PipelineStatsTrendPoint {
+  day: string;
+  count: number;
+}
+
+export interface PipelineStats {
+  policy_item: number;
+  policy_param: number;
+  policy_chunk: number;
+  ref_db_column: number;
+  ref_common_code: number;
+  trend: PipelineStatsTrendPoint[];
+}
+
+export async function getPipelineStats(namespace: string): Promise<PipelineStats> {
+  const params = new URLSearchParams({ namespace });
+  return apiFetch<PipelineStats>(`/policy/pipeline-stats?${params.toString()}`);
+}
