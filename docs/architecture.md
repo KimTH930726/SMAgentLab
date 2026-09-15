@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.72)
+# Ops-Navigator 시스템 아키텍처 (v2.73)
 
 ## 개요
 
@@ -11,6 +11,27 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.73: **DB 스키마 사전/공통코드 RDB화 + 리랭커 조건부 적용**
+  1. **`ref_db_column`/`ref_common_code` 신규 테이블** — 2026-09-10 정리한 `rag_knowledge`
+     DB/공통코드 오염 데이터(3,040건 soft-delete 후 영구 삭제, 원본 파일 자체가 업로드 시
+     디스크 저장 없이 복구 불가)를 "예전 데이터 복구"가 아니라 **앞으로 같은 종류의 데이터가
+     들어올 때 쓸 구조**로 재설계. 정확 조회 전용이라 embedding 컬럼 자체가 없음(§2 결정
+     규칙). `service/refdata/parser.py` — 마크다운 파이프 표 결정론 파서(LLM 미사용,
+     forward-fill로 병합셀 스타일 빈 칸 처리), `service.py` — 적재/키워드검색. 원본 파일이
+     없어 실물 재검증은 못 했고, 컬럼 순서는 삭제 전 관찰 기준(unit test는 합성 데이터).
+     업로드 UI/엔드포인트는 아직 없음(실제 재업로드 파일이 생기기 전까진 YAGNI로 보류).
+  2. **정책 검색 리랭커 조건부 적용** — 리랭커 후보 비교(v2.72) 때 dragonkue/BAAI/Dongjin-kr
+     3종 전부 **navigation형(카테고리 전체조회) 질문에서만 예외 없이 악화**(-10.0/-5.0/
+     -25.0%p)되는 게 확인됨 — 정답이 여러 개인 유형에 "가장 딱 맞는 문서 1개"를 고르는
+     CrossEncoder 방식이 구조적으로 안 맞기 때문으로 추정. `service/policy/query_type.py`의
+     규칙 기반 판별(89문항 실측 precision 96.0%/recall 100.0%)로 navigation형만 걸러내고,
+     `search.py:search_policy()`가 그 외 질문에서만 채널별(param/narrative 각각 독립)로
+     넓게 가져온 후보(`reranker_candidates`)를 재정렬해 top_k를 뽑는다 — **채널을 합쳐서
+     전체 top_k로 줄이지 않는다**: LLM 컨텍스트 재현율을 지키려고 param/narrative를 각각
+     top_k씩 유지하는 기존 설계(2026-09-07, "근거 1건만 남겼다가 정답이 통째로 빠진"
+     실사고로 확정된 원칙)를 그대로 지킨 것. `reranker_enabled` 기본값은 여전히 `False` —
+     이 분기 자체가 관리자가 켜기 전까진 항상 비활성(실측: Track2 재검증 결과 82.0%→88.8%→
+     **88.8%로 동일**, 회귀 없음 확인). 활성화 여부는 추후 별도 판단.
 - v2.72: **임베딩 모델 교체 — mpnet(768차원) → KURE-v1(1024차원), 벡터 컬럼 전량 재색인** —
   `docs/tech/embedding-reranker-upgrade-plan.md`(2026-09-07 작성, huggingface.co 사내망
   접근 제한으로 실측 보류돼 있던 조사)를 2026-09-11 사내망 접근이 열려 실행. 89문항 골든셋

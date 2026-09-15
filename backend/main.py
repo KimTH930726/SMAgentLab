@@ -893,6 +893,64 @@ async def _migrate_policy_tables(conn) -> None:
     )
 
 
+async def _migrate_ref_data_tables(conn) -> None:
+    """DB 스키마 사전 / 공통코드 구조화 저장 (init/07-ref-data-tables.sql, v2.73).
+
+    rag_knowledge의 DB/공통코드 카테고리(3,040건, 지식베이스의 99%)가 마크다운 표를
+    일반 문서 청커로 잘라 넣은 오염 데이터였다는 게 밝혀져(docs/tech/
+    data-storage-philosophy.md §8-E) 전량 영구 삭제됐다 — 원본 파일이 업로드 시점에
+    디스크 저장 없이 메모리에서 청킹만 되고 버려지는 구조라 복구 불가했다. 이 마이그레이션은
+    "예전 데이터 복구"가 아니라 **앞으로 이런 종류의 데이터가 다시 들어올 때 쓸 구조**다
+    (정확·고정값 = 컬럼, 유동·희소 필드는 JSONB — §2 결정 규칙). 정확 조회용이라 벡터
+    임베딩 자체가 필요 없어 embedding 컬럼을 아예 안 둔다.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ref_db_column (
+            id             SERIAL PRIMARY KEY,
+            namespace_id   INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            table_name     VARCHAR(200) NOT NULL,
+            table_comment  TEXT,
+            column_name    VARCHAR(200) NOT NULL,
+            column_comment TEXT,
+            data_type      VARCHAR(100),
+            nullable       VARCHAR(10),
+            source_file    VARCHAR(500),
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ref_db_column_table ON ref_db_column(namespace_id, table_name)")
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ref_db_column_fts ON ref_db_column
+        USING gin (to_tsvector('simple',
+            table_name || ' ' || COALESCE(table_comment, '') || ' ' ||
+            column_name || ' ' || COALESCE(column_comment, '')))
+    """)
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ref_common_code (
+            id              SERIAL PRIMARY KEY,
+            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            work_code       VARCHAR(50),
+            group_code      VARCHAR(50) NOT NULL,
+            group_code_name VARCHAR(200),
+            code_id         VARCHAR(50) NOT NULL,
+            code_name       VARCHAR(200),
+            mgmt_values     JSONB,
+            source_file     VARCHAR(500),
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ref_common_code_group ON ref_common_code(namespace_id, group_code, code_id)"
+    )
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_ref_common_code_fts ON ref_common_code
+        USING gin (to_tsvector('simple', COALESCE(group_code_name, '') || ' ' || COALESCE(code_name, '')))
+    """)
+
+
 async def _cleanup_stale_generating_messages(conn) -> None:
     """프로세스가 막 기동했으니, 'generating' 상태로 남은 메시지는 전부 이전
     프로세스가 스트리밍 도중 죽으면서 남긴 고아 행이다(지금 막 시작했으므로 이
@@ -920,6 +978,7 @@ async def _run_migrations() -> None:
         await _migrate_query_log_resolution(conn)
         await _migrate_email_voc_tables(conn)
         await _migrate_policy_tables(conn)
+        await _migrate_ref_data_tables(conn)
         await _cleanup_stale_generating_messages(conn)
 
 

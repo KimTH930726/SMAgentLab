@@ -9,6 +9,12 @@ import pytest
 _backend_dir = Path(__file__).resolve().parent.parent
 
 sys.modules["service.policy"] = MagicMock()
+
+_qt_spec = _ilu.spec_from_file_location("service.policy.query_type", str(_backend_dir / "service" / "policy" / "query_type.py"))
+_query_type = _ilu.module_from_spec(_qt_spec)
+sys.modules["service.policy.query_type"] = _query_type
+_qt_spec.loader.exec_module(_query_type)
+
 _spec = _ilu.spec_from_file_location("service.policy.search", str(_backend_dir / "service" / "policy" / "search.py"))
 search = _ilu.module_from_spec(_spec)
 sys.modules["service.policy.search"] = search
@@ -239,6 +245,82 @@ class TestSelectCitedHit:
         picked = search.select_cited_hit(result, "장바구니 최대개수는 20개입니다.")
         assert picked.params[0].policy_name == "장바구니"
         assert picked.narratives == []
+
+
+class TestSearchPolicyReranker:
+    """v2.73 — reranker_enabled=True + navigation형이 아닌 질문일 때만 조건부로
+    fetch_k를 넓히고(reranker_candidates) 채널별로 재정렬한다. 기본값(reranker_enabled=
+    False)일 때 기존 동작이 안 바뀌는 것부터 확인한다."""
+
+    @pytest.mark.asyncio
+    async def test_reranker_disabled_by_default_uses_top_k_as_fetch_k(self, patch_db):
+        conn = patch_db()
+        await search.search_policy("ns", "장바구니 개수", top_k=5)
+        param_call = conn.fetch.call_args_list[0]
+        assert param_call.args[-1] == 5  # top_k 그대로, reranker_candidates 아님
+
+    @pytest.mark.asyncio
+    async def test_reranker_enabled_but_navigation_query_skips_reranking(self, patch_db, monkeypatch):
+        conn = patch_db()
+        monkeypatch.setattr(search.settings, "reranker_enabled", True)
+        monkeypatch.setattr(search.settings, "reranker_candidates", 20)
+        monkeypatch.setattr(search.reranker, "is_available", MagicMock(return_value=True))
+        rerank_mock = AsyncMock()
+        monkeypatch.setattr(search.reranker, "rerank", rerank_mock)
+
+        await search.search_policy("ns", "장바구니 관련 정책 다 보여줘", top_k=5)
+
+        param_call = conn.fetch.call_args_list[0]
+        assert param_call.args[-1] == 5  # navigation형이라 fetch_k 확장 안 됨
+        rerank_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reranker_enabled_and_non_navigation_query_widens_and_reranks(self, patch_db, monkeypatch):
+        param_rows = [{
+            "item_id": 1, "logical_id": 1, "policy_name": "장바구니 담기",
+            "category_path": [], "status": "active", "raw_body": "본문",
+            "param_name": "최대개수", "condition": None, "value": "20", "unit": "개", "rank": 0.5,
+        }]
+        chunk_rows = [{
+            "item_id": 2, "logical_id": 2, "policy_name": "재고정책",
+            "category_path": [], "status": "active", "raw_body": "본문2",
+            "chunk_text": "재고 없으면 SOLD OUT", "score": 0.8,
+        }]
+        conn = patch_db(param_rows=param_rows, chunk_rows=chunk_rows)
+        monkeypatch.setattr(search.settings, "reranker_enabled", True)
+        monkeypatch.setattr(search.settings, "reranker_candidates", 20)
+        monkeypatch.setattr(search.reranker, "is_available", MagicMock(return_value=True))
+
+        async def _fake_rerank(query, wrapped, top_k):
+            return wrapped[:top_k]  # 원래 순서 그대로 top_k만 자르는 스텁
+        monkeypatch.setattr(search.reranker, "rerank", AsyncMock(side_effect=_fake_rerank))
+
+        result = await search.search_policy("ns", "장바구니 최대 개수 알려줘", top_k=5)
+
+        param_call = conn.fetch.call_args_list[0]
+        assert param_call.args[-1] == 20  # fetch_k가 reranker_candidates로 확장됨
+        assert len(result.params) == 1
+        assert result.params[0].policy_name == "장바구니 담기"
+        assert len(result.narratives) == 1
+        assert result.narratives[0].chunk_text == "재고 없으면 SOLD OUT"
+
+    @pytest.mark.asyncio
+    async def test_rerank_skipped_when_candidates_already_within_top_k(self, patch_db, monkeypatch):
+        """_rerank_hits는 후보 수가 이미 top_k 이하면 reranker.rerank()를 아예 안 부른다
+        (불필요한 모델 호출 방지)."""
+        param_rows = [{
+            "item_id": 1, "logical_id": 1, "policy_name": "P", "category_path": [], "status": "active",
+            "raw_body": "", "param_name": "N", "condition": None, "value": "1", "unit": None, "rank": 0.1,
+        }]
+        conn = patch_db(param_rows=param_rows, chunk_rows=[])
+        monkeypatch.setattr(search.settings, "reranker_enabled", True)
+        monkeypatch.setattr(search.settings, "reranker_candidates", 20)
+        monkeypatch.setattr(search.reranker, "is_available", MagicMock(return_value=True))
+        rerank_mock = AsyncMock()
+        monkeypatch.setattr(search.reranker, "rerank", rerank_mock)
+
+        await search.search_policy("ns", "질문", top_k=5)
+        rerank_mock.assert_not_awaited()
 
 
 class TestBuildPolicyCitations:

@@ -22,6 +22,12 @@ _settings_mock.duplicate_min_similarity = 0.88
 _settings_mock.default_top_k = 5
 _settings_mock.default_w_vector = 0.7
 _settings_mock.default_w_keyword = 0.3
+# reranker_enabled을 명시적으로 세팅 안 하면 MagicMock 자동생성 속성이라 항상 truthy가
+# 돼서(shared.reranker도 아래서 통째로 MagicMock — is_available()도 truthy 반환),
+# search.py의 use_reranker 분기가 테스트에서 실제 프로덕션 기본값(False)과 다르게
+# 조용히 True로 평가되는 문제가 있었다(2026-09-11, v2.73 리랭커 조건부 적용 추가 때 발견).
+_settings_mock.reranker_enabled = False
+_settings_mock.reranker_candidates = 20
 
 sys.modules["core"] = MagicMock()
 sys.modules["core.config"] = MagicMock(settings=_settings_mock)

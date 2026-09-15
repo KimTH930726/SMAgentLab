@@ -20,6 +20,7 @@ def _load(name: str, rel_path: str):
 
 _policy_pkg = MagicMock()
 sys.modules["service.policy"] = _policy_pkg
+_policy_pkg.query_type = _load("service.policy.query_type", "service/policy/query_type.py")
 search = _load("service.policy.search", "service/policy/search.py")
 _policy_pkg.search = search
 track2 = _load("service.policy.track2", "service/policy/track2.py")

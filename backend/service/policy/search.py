@@ -30,8 +30,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from core.config import settings
 from core.database import get_conn, resolve_namespace_id
+from shared import reranker
 from shared.embedding import embedding_service
+from service.policy.query_type import looks_like_navigation_query
 
 
 @dataclass
@@ -79,6 +82,17 @@ async def search_policy(
     임베딩해뒀는데 여기서 또 계산하면 채팅 메인 경로에서 매 턴 중복 임베딩이 생긴다
     (2026-09-04, 편입 1단계에서 발견해 방어). `/api/policy/search` 전용 엔드포인트처럼
     호출측에 미리 계산된 벡터가 없으면 생략해도 되고, 그러면 기존처럼 내부에서 계산한다."""
+    # 리랭커 조건부 적용(v2.73, 2026-09-11): navigation형(카테고리 전체조회) 질문에서
+    # CrossEncoder 재정렬이 구조적으로 손해를 낸다는 게 실측 확인됨(query_type.py 문서
+    # 참고, 한국어 리랭커 3종 전부 이 유형에서만 예외 없이 악화). 그 유형만 걸러내고
+    # 나머지(특히 param — dragonkue 적용 시 +36.4%p로 가장 크게 이득)는 재정렬한다.
+    # reranker_enabled 기본값은 여전히 False라 이 분기는 관리자가 켜기 전까진 항상
+    # 꺼진 채로 동작(fetch_k=top_k, use_reranker=False) — 기존 동작 그대로 안전.
+    use_reranker = (
+        settings.reranker_enabled and reranker.is_available() and not looks_like_navigation_query(query)
+    )
+    fetch_k = settings.reranker_candidates if use_reranker else top_k
+
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
@@ -99,7 +113,7 @@ async def search_policy(
         # (init/06-policy-strip-ko.sql)를 적용한다 — 저장 컬럼 추가 없이 조회 시점 변환이라
         # policy_param/policy_item 데이터는 그대로 둔다(건수가 작아 성능 영향 없음).
         category_clause = "AND $4 = ANY(i.category_path)" if category else ""
-        param_args = [ns_id, query, top_k] + ([category] if category else [])
+        param_args = [ns_id, query, fetch_k] + ([category] if category else [])
         param_rows = await conn.fetch(
             f"""
             SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
@@ -122,7 +136,7 @@ async def search_policy(
         )
 
         vec = query_vec if query_vec is not None else await embedding_service.embed(query)
-        chunk_args = [ns_id, str(vec), top_k] + ([category] if category else [])
+        chunk_args = [ns_id, str(vec), fetch_k] + ([category] if category else [])
         category_clause2 = "AND $4 = ANY(i.category_path)" if category else ""
         chunk_rows = await conn.fetch(
             f"""
@@ -138,19 +152,47 @@ async def search_policy(
             *chunk_args,
         )
 
-    return PolicySearchResult(
-        params=[ParamHit(
-            item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
-            category_path=list(r["category_path"] or []), status=r["status"],
-            param_name=r["param_name"], condition=r["condition"], value=r["value"], unit=r["unit"],
-            raw_body=r["raw_body"], score=float(r["rank"]),
-        ) for r in param_rows],
-        narratives=[NarrativeHit(
-            item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
-            category_path=list(r["category_path"] or []), status=r["status"],
-            chunk_text=r["chunk_text"], score=float(r["score"]), raw_body=r["raw_body"],
-        ) for r in chunk_rows],
-    )
+    params = [ParamHit(
+        item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
+        category_path=list(r["category_path"] or []), status=r["status"],
+        param_name=r["param_name"], condition=r["condition"], value=r["value"], unit=r["unit"],
+        raw_body=r["raw_body"], score=float(r["rank"]),
+    ) for r in param_rows]
+    narratives = [NarrativeHit(
+        item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
+        category_path=list(r["category_path"] or []), status=r["status"],
+        chunk_text=r["chunk_text"], score=float(r["score"]), raw_body=r["raw_body"],
+    ) for r in chunk_rows]
+
+    if use_reranker:
+        # 채널별로 따로 재정렬한다(합쳐서 전체 top_k로 줄이지 않음) — LLM 컨텍스트 재현율을
+        # 지키려고 param/narrative를 각각 top_k씩 유지하는 기존 설계(2026-09-07, "1건만
+        # 남겼다가 정답이 통째로 빠진" 실사고 이후 확정된 원칙)를 그대로 지키면서, 더 넓게
+        # 가져온 fetch_k 후보 안에서 "어느 top_k가 진짜 상위인지"만 리랭커로 다시 판단한다.
+        params = await _rerank_hits(query, params, top_k, lambda p: f"{p.policy_name} {p.param_name} {p.condition or ''}".strip())
+        narratives = await _rerank_hits(query, narratives, top_k, lambda n: n.chunk_text)
+    else:
+        params = params[:top_k]
+        narratives = narratives[:top_k]
+
+    return PolicySearchResult(params=params, narratives=narratives)
+
+
+async def _rerank_hits(query: str, hits: list, top_k: int, text_fn) -> list:
+    """hits를 reranker로 재정렬해 상위 top_k만 반환. reranker.rerank()는 `.content`
+    속성이 있는 객체를 기대하므로(shared/reranker.py, VOC 관련성 게이트와 공유하는
+    범용 인터페이스), ParamHit/NarrativeHit을 건드리지 않고 얇은 래퍼로 감쌌다 풀어낸다."""
+    if len(hits) <= top_k:
+        return hits
+    wrapped = [_RerankWrapper(content=text_fn(h), hit=h) for h in hits]
+    reranked = await reranker.rerank(query, wrapped, top_k)
+    return [w.hit for w in reranked]
+
+
+@dataclass
+class _RerankWrapper:
+    content: str
+    hit: object
 
 
 async def has_policy_data(namespace: str) -> bool:
