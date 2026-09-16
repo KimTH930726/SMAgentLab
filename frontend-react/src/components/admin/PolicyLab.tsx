@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { FlaskConical, ArrowRight, Info, Check } from 'lucide-react';
-import { runTrack2, getTrack2Axes, type Track2Result } from '../../api/policy';
+import { FlaskConical, Info, Check, ChevronDown, ChevronUp, TrendingUp, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { runTrack2, getTrack2Axes, getTrack2History, type Track2Result } from '../../api/policy';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 
@@ -21,23 +21,33 @@ const TYPE_INFO: Record<string, { label: string; example: string }> = {
 // 내부에서 뭐가 일하는지" 진단용이라 규칙표엔 안 넣고 별도 지표로 둠.
 type MetricKey = 'hitK' | 'top1' | 'precision' | 'channel';
 
-const METRIC_INFO: Record<MetricKey, { label: string; recommendedFor: string }> = {
-  hitK: { label: 'hit@K', recommendedFor: '풀컨텍스트 주입 — 답변 생성 시 LLM이 상위 K개를 전부 참고' },
-  top1: { label: 'Top-1 Accuracy', recommendedFor: '근거카드 1건 노출 — 화면엔 1위 결과만 보여줄 때(지금 채팅 UI 방식)' },
-  precision: { label: 'Precision@K', recommendedFor: '후보 정제 필요 — 검색 후보 자체의 잡음을 줄이는 작업 중일 때' },
-  channel: { label: '채널기여도', recommendedFor: 'B안 내부에서 표(RDB)·의미검색(벡터) 중 뭐가 일하는지 진단할 때' },
+const METRIC_INFO: Record<MetricKey, { label: string; meaning: string; recommendedFor: string }> = {
+  hitK: {
+    label: 'hit@K',
+    meaning: '정답이 검색 결과 상위 K개 안에 들어왔는지(있다/없다)',
+    recommendedFor: '풀컨텍스트 주입 상황 — 채팅 답변 생성 시 LLM이 상위 K개를 전부 참고하기 때문',
+  },
+  top1: {
+    label: 'Top-1',
+    meaning: '검색 결과 1위가 곧바로 정답인지',
+    recommendedFor: '근거카드 1건 노출 상황 — 화면엔 1위 결과만 보여주는 지금 채팅 UI 방식이기 때문',
+  },
+  precision: {
+    label: 'Precision@K',
+    meaning: '검색 후보들 중 실제로 정답인 비율(후보에 잡음이 얼마나 섞였나)',
+    recommendedFor: '후보 정제 작업 상황 — 검색 후보 자체의 잡음을 줄이려는 작업 중일 때 기준으로 삼기 좋음',
+  },
+  channel: {
+    label: '채널기여도',
+    meaning: 'B안(하이브리드)이 표(RDB)·의미검색(벡터) 중 어느 쪽으로 정답을 찾았는지',
+    recommendedFor: 'B안 내부 진단 상황 — 표/의미검색 중 뭐가 실제로 일하는지 확인할 때',
+  },
 };
 const ALL_METRICS: MetricKey[] = ['hitK', 'top1', 'precision', 'channel'];
 
-// 저장 전략 현황판(2026-09-15, 사용자 요청) — "지금 뭘 쓰고 있는지"를 문단이 아니라 체크
-// 배지로 한눈에. active:false 항목(그래프 등)은 아직 안 쓰지만 향후 확장 후보를 미리
-// 자리만 잡아둔 것 — 실제로 도입되면 active만 true로 바꾸면 된다(목록 구조 변경 불필요).
-type StorageStrategy = {
-  key: string;
-  label: string;
-  active: boolean;
-  detail: string;
-};
+// 저장 전략 현황판(2026-09-15) — "지금 뭘 쓰고 있는지"를 문단이 아니라 체크 배지로.
+// active:false 항목(그래프 등)은 아직 안 쓰지만 향후 확장 후보를 미리 자리만 잡아둔 것.
+type StorageStrategy = { key: string; label: string; active: boolean; detail: string };
 const STORAGE_STRATEGIES: StorageStrategy[] = [
   {
     key: 'rdb', label: 'RDB (정확 조회)', active: true,
@@ -54,35 +64,41 @@ const STORAGE_STRATEGIES: StorageStrategy[] = [
 ];
 
 /**
- * 저장소 전략 실험실(Track 2) — 버튼 하나로 A(rag_knowledge 지식-only) vs B(하이브리드 스키마)
- * 비교를 재실행하고 결과를 바로 본다. docs/policy-doc-pipeline-plan.md §4 실험을 매번 스크립트로
- * 짜는 대신 여기서 재실행 가능하게 만들었다(2026-09-04) — 처음 만든 HTML 목업에서 "이런 화면이면
- * 팀에 소개하기 좋겠다"는 반응을 받아 실제로 동작하는 최소 버전으로 승격.
+ * 저장소 전략 실험실(Track 2) — **반복 실행 도구**. 버튼 하나로 A(rag_knowledge 지식-only)
+ * vs B(하이브리드 스키마) 비교를 재실행하고, 매번 새로 쌓이는 실행 이력(policy_track2_run)
+ * 위에서 추이까지 본다. docs/policy-doc-pipeline-plan.md §4.
  *
- * 실행에 몇 분 걸린다(전체 policy_item 규모만큼 임베딩 재계산) — 실시간 기능이 아니라 가끔
- * 재측정하는 용도라 동기 호출 + 로딩 상태로 충분하다고 판단(별도 잡 큐 없음, YAGNI).
- *
- * 2026-09-06 사용자 피드백: "A/B, 정답률 %" 같은 숫자만 있고 무슨 뜻인지 안 와닿는다 — 일반인이
- * 봐도 "그래서 뭐가 더 나은지" 바로 이해되게 각 용어를 풀어 설명하고 질문 유형마다 예시를 붙임.
+ * 2026-09-17 재설계(2번째) — "매번 실행할 때마다 A안/B안 설명, 지표 설명 같은 긴 문단이
+ * 그대로 다시 렌더링돼서 도구가 아니라 매번 새로 읽는 보고서처럼 느껴진다"는 실사용
+ * 지적. 설명은 기본적으로 접어두고(ⓘ 토글), 화면은 (1)실행 버튼 (2)이번 결과 숫자
+ * (3)실행 이력 추이 3가지를 중심으로 — "본다"가 아니라 "쓴다"에 맞춘 레이아웃으로 교체.
+ * 지표 카드형 설명(2026-09-17 1차 재설계, MetricCard)은 접힌 패널 안으로 이동해 유지.
  */
 export function PolicyLab() {
   const [lastResult, setLastResult] = useState<Track2Result | null>(null);
   const [visibleMetrics, setVisibleMetrics] = useState<Set<MetricKey>>(new Set(ALL_METRICS));
   const [axis, setAxis] = useState('policy');
+  const [showInfo, setShowInfo] = useState(false);
 
-  // 비교 가능한 데이터 축 목록(엔진 파라미터화, 2026-09-16) — 지금은 "정책서" 하나뿐이라
-  // 드롭다운도 사실상 고정값이지만, 새 축(CMDB 등)이 백엔드에 등록되면 이 목록이 그대로
-  // 늘어나서 선택지가 생긴다 — 미리 화면에 자리를 잡아두는 것.
   const { data: axes = [{ key: 'policy', label: '정책서 (A/B)' }] } = useQuery({
     queryKey: ['track2-axes'],
     queryFn: getTrack2Axes,
     staleTime: 5 * 60_000,
   });
 
+  const { data: history = [] } = useQuery({
+    queryKey: ['track2-history-lab'],
+    queryFn: () => getTrack2History(10),
+    staleTime: 30_000,
+  });
+  const trendAsc = [...history].reverse(); // 오래된 순으로
+
   const runMutation = useMutation({
     mutationFn: () => runTrack2(10, axis),
     onSuccess: (data) => setLastResult(data),
   });
+
+  const displayResult = lastResult ?? history[0] ?? null; // 아직 이번 세션에 실행 안 했어도 최근 이력을 바로 보여줌
 
   const toggleMetric = (key: MetricKey) => {
     setVisibleMetrics((prev) => {
@@ -95,17 +111,24 @@ export function PolicyLab() {
 
   return (
     <div className="space-y-4">
+      {/* 툴바 — 실행 도구라는 정체성을 첫 줄부터: 축 선택 + 지표 선택 + 실행 버튼이 전부 한 줄에 */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-lg font-semibold text-slate-200 flex items-center gap-2">
             <FlaskConical className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
             저장소 전략 실험실
           </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            정책서를 저장하는 두 가지 방식 중 어느 쪽이 질문에 더 정확히 답하는지 비교합니다.
-          </p>
+          <button
+            type="button"
+            onClick={() => setShowInfo((v) => !v)}
+            className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 mt-0.5"
+          >
+            <Info className="w-3.5 h-3.5" />
+            A안·B안·지표가 뭔지 설명 보기
+            {showInfo ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-end gap-2">
           <div>
             <label className="block text-[10px] text-slate-500 mb-1">데이터 축</label>
             <select
@@ -119,49 +142,13 @@ export function PolicyLab() {
             </select>
           </div>
           <Button variant="primary" size="sm" loading={runMutation.isPending} onClick={() => runMutation.mutate()}>
-            {runMutation.isPending ? '실행 중... (몇 분 소요)' : '비교 실행'}
+            {runMutation.isPending ? '실행 중... (몇 분 소요)' : '▶ 비교 실행'}
           </Button>
         </div>
       </div>
 
-      {/* 저장 전략 현황판 — B안이 지금 실제로 쓰는 저장 방식을 체크 배지로. 그래프처럼 아직
-          안 쓰는 확장 후보도 자리만 비활성 배지로 잡아둬서, 나중에 도입되면 active만
-          뒤집으면 되게(목록 구조를 다시 안 짜도 됨). */}
-      <div className="px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl">
-        <p className="text-[11px] text-slate-500 mb-2">B안(지금 방식)이 쓰는 저장 전략</p>
-        <div className="flex flex-wrap gap-2">
-          {STORAGE_STRATEGIES.map((s) => (
-            <span
-              key={s.key}
-              title={s.detail}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
-                s.active
-                  ? 'bg-emerald-500/10 border-emerald-600/40 text-emerald-300'
-                  : 'bg-transparent border-slate-700 text-slate-600 border-dashed'
-              }`}
-            >
-              {s.active
-                ? <Check className="w-3 h-3" />
-                : <span className="w-3 h-3 rounded-full border border-slate-600 flex-shrink-0" />}
-              {s.label}
-              {!s.active && <span className="text-slate-700">· 미도입</span>}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      {/* 비교 대상 설명 — 결과가 없어도 항상 보여서 "A/B가 뭔지"부터 이해되게 */}
-      <div className="flex gap-3 px-4 py-3 bg-indigo-900/20 border border-indigo-700/30 rounded-xl text-xs text-slate-300 leading-relaxed">
-        <Info className="w-4 h-4 text-indigo-500 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
-        <div className="space-y-1.5">
-          <p><b>A안(지식 그대로 저장)</b>: 정책서 내용을 통째로 문장으로 저장 — 다른 일반 지식 문서와 똑같이 취급</p>
-          <p><b>B안(지금 우리가 쓰는 방식)</b>: 숫자·조건은 표(정확 조회)로, 설명글은 의미 검색(벡터)으로 나눠서 저장 — 위 배지의 상세는 마우스를 올려 확인</p>
-          <p className="text-slate-500">89개의 실제 질문을 두 방식에 똑같이 던져서, 각 방식이 정답을 찾아내는 비율을 비교합니다.</p>
-        </div>
-      </div>
-
-      {/* 지표 선택 — 실험실 게이트 작업2. 결과가 없어도 항상 보여서 미리 고를 수 있게 */}
-      <div className="flex flex-wrap items-center gap-2 px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl">
+      {/* 지표 선택 칩 — 상시 노출(자주 쓰는 컨트롤이라 접지 않음) */}
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-[11px] text-slate-500 mr-1">표시할 지표</span>
         {ALL_METRICS.map((key) => {
           const on = visibleMetrics.has(key);
@@ -170,7 +157,7 @@ export function PolicyLab() {
               key={key}
               type="button"
               onClick={() => toggleMetric(key)}
-              title={`추천: ${METRIC_INFO[key].recommendedFor}`}
+              title={`${METRIC_INFO[key].meaning} — 추천: ${METRIC_INFO[key].recommendedFor}`}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
                 on
                   ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
@@ -183,6 +170,48 @@ export function PolicyLab() {
           );
         })}
       </div>
+
+      {/* 설명 패널 — 기본 접힘. A안/B안/저장전략/지표 정의가 전부 여기 하나로 모임 */}
+      {showInfo && (
+        <div className="px-4 py-3 bg-indigo-900/20 border border-indigo-700/30 rounded-xl text-xs text-slate-300 leading-relaxed space-y-3">
+          <div className="space-y-1.5">
+            <p><b>A안(지식 그대로 저장)</b>: 정책서 내용을 통째로 문장으로 저장 — 다른 일반 지식 문서와 똑같이 취급</p>
+            <p><b>B안(지금 우리가 쓰는 방식)</b>: 숫자·조건은 표(정확 조회)로, 설명글은 의미 검색(벡터)으로 나눠서 저장</p>
+            <p className="text-slate-500">89개의 실제 질문을 두 방식에 똑같이 던져서, 각 방식이 정답을 찾아내는 비율을 비교합니다.</p>
+          </div>
+          <div>
+            <p className="text-slate-500 mb-1.5">B안이 지금 쓰는 저장 전략</p>
+            <div className="flex flex-wrap gap-2">
+              {STORAGE_STRATEGIES.map((s) => (
+                <span
+                  key={s.key}
+                  title={s.detail}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
+                    s.active
+                      ? 'bg-emerald-500/10 border-emerald-600/40 text-emerald-300'
+                      : 'bg-transparent border-slate-700 text-slate-600 border-dashed'
+                  }`}
+                >
+                  {s.active ? <Check className="w-3 h-3" /> : <span className="w-3 h-3 rounded-full border border-slate-600 flex-shrink-0" />}
+                  {s.label}
+                  {!s.active && <span className="text-slate-700">· 미도입</span>}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="text-slate-500 mb-1.5">지표 정의 · 추천 상황</p>
+            <div className="space-y-1.5">
+              {ALL_METRICS.map((key) => (
+                <p key={key}>
+                  <b className="text-slate-200">{METRIC_INFO[key].label}</b> — {METRIC_INFO[key].meaning}.{' '}
+                  <span className="text-indigo-300">추천: {METRIC_INFO[key].recommendedFor}</span>
+                </p>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {runMutation.isPending && (
         <div className="flex items-center gap-2 py-10 text-slate-400 text-sm justify-center">
@@ -197,144 +226,198 @@ export function PolicyLab() {
         </div>
       )}
 
-      {!runMutation.isPending && lastResult && (
+      {!runMutation.isPending && displayResult && (
         <>
-          <div className="bg-gradient-to-b from-indigo-900/20 to-slate-800 border border-indigo-700/30 rounded-xl px-5 py-5">
-            {visibleMetrics.has('hitK') && (
-              <>
-                <p className="text-[11px] font-semibold tracking-wide uppercase text-indigo-400 mb-2">
-                  결론 <span className="normal-case font-normal text-slate-500">— hit@K, 추천: {METRIC_INFO.hitK.recommendedFor}</span>
-                </p>
-                <p className="text-sm text-slate-300 leading-relaxed mb-4">
-                  {lastResult.b_hit_rate >= lastResult.a_hit_rate
-                    ? <>89개 질문 중 <b className="text-slate-100">B안(지금 방식)</b>이 더 많이 정답을 찾아냈습니다 — 지금처럼 저장하는 게 낫다는 뜻입니다.</>
-                    : <><b className="text-slate-100">A안(지식 그대로 저장)</b>이 지금 방식보다 정답을 더 많이 찾아냈습니다 — 지금 방식 보완이 필요합니다.</>}
-                </p>
-                <div className="flex items-center gap-4">
-                  <div>
-                    <div className="text-3xl font-bold text-slate-400 font-mono tabular-nums">{(lastResult.a_hit_rate * 100).toFixed(1)}%</div>
-                    <div className="text-xs text-slate-500 mt-1">A안 · 지식 그대로 저장</div>
-                  </div>
-                  <ArrowRight className="w-5 h-5 text-slate-600" />
-                  <div>
-                    <div className={`text-3xl font-bold font-mono tabular-nums ${lastResult.b_hit_rate >= lastResult.a_hit_rate ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {(lastResult.b_hit_rate * 100).toFixed(1)}%
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">B안 · 지금 우리 방식</div>
-                  </div>
-                </div>
-                <p className="text-[11px] text-slate-500 mt-3">
-                  % = 89개 질문 중 정답이 검색 결과 상위 {lastResult.top_k}개 안에 들어온 비율
-                </p>
-              </>
-            )}
-            {visibleMetrics.has('top1') && (
-              <div
-                className={`flex items-center gap-4 text-[11px] text-slate-500 ${visibleMetrics.has('hitK') ? 'mt-4 pt-3 border-t border-slate-700/60' : ''}`}
-                title="검색 결과 1위가 실제 정답인 비율입니다. B안은 표(RDB)/의미검색(벡터)이 분리된 채널이라 '진짜 하나의 1위'가 없어 채널별로 따로 잽니다."
-              >
-                <span>Top-1 Accuracy <span className="text-slate-600">— {METRIC_INFO.top1.recommendedFor}</span></span>
-                <span className="font-mono tabular-nums text-slate-400">A {(lastResult.a_top1_accuracy * 100).toFixed(0)}%</span>
-                <span className="font-mono tabular-nums text-slate-400">B(표) {(lastResult.b_top1_param_accuracy * 100).toFixed(0)}%</span>
-                <span className="font-mono tabular-nums text-slate-400">B(의미검색) {(lastResult.b_top1_narrative_accuracy * 100).toFixed(0)}%</span>
+          {/* 결과 표 — 지표별 "뭔지"를 표 안에 같이 넣어서 숫자만 보고 헷갈리지 않게.
+              hit@K/집중도(A vs B, 깔끔한 쌍)와 Top-1/채널기여도(B 내부 채널별 세부)는
+              모양이 달라서 한 표에 억지로 안 합치고 표 2개로 분리. */}
+          {!lastResult && (
+            <p className="text-[11px] text-amber-400">⚠ 이번 세션엔 아직 재실행 안 함 — 가장 최근 저장된 결과(추이 그래프의 마지막 점)를 보여주는 중</p>
+          )}
+
+          {(visibleMetrics.has('hitK') || visibleMetrics.has('precision')) && (
+            <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-4">
+              <p className="text-xs font-medium text-slate-400 mb-3">A안 vs B안 — 전체 비교</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-500">
+                      <th className="text-left font-medium py-2 pr-3">지표</th>
+                      <th className="text-left font-medium py-2 px-3">뜻</th>
+                      <th className="text-right font-medium py-2 px-3">A안</th>
+                      <th className="text-right font-medium py-2 pl-3">B안(지금 방식)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleMetrics.has('hitK') && (
+                      <tr className="border-b border-slate-700/50">
+                        <td className="py-2.5 pr-3 text-slate-200 font-medium">hit@K</td>
+                        <td className="py-2.5 px-3 text-slate-500">정답이 검색 상위 K개 안에 있었는지</td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">{(displayResult.a_hit_rate * 100).toFixed(1)}%</td>
+                        <td className="py-2.5 pl-3 text-right font-mono tabular-nums">
+                          <span className={`inline-flex items-center gap-0.5 font-semibold ${displayResult.b_hit_rate >= displayResult.a_hit_rate ? 'text-emerald-500 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400'}`}>
+                            {(displayResult.b_hit_rate * 100).toFixed(1)}%
+                            {displayResult.b_hit_rate >= displayResult.a_hit_rate ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
+                          </span>
+                        </td>
+                      </tr>
+                    )}
+                    {visibleMetrics.has('precision') && (
+                      <tr className="last:border-0">
+                        <td className="py-2.5 pr-3 text-slate-200 font-medium">Precision@K (집중도)</td>
+                        <td className="py-2.5 px-3 text-slate-500">검색 후보 중 실제 정답 비율(낮을수록 잡음 많음)</td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">{(displayResult.a_precision * 100).toFixed(0)}%</td>
+                        <td className="py-2.5 pl-3 text-right font-mono tabular-nums text-slate-300">{(displayResult.b_precision * 100).toFixed(0)}%</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
-            )}
-            {visibleMetrics.has('precision') && (
-              <div
-                className={`flex items-center gap-4 text-[11px] text-slate-500 ${visibleMetrics.has('hitK') || visibleMetrics.has('top1') ? 'mt-2' : ''}`}
-                title="검색 결과로 나온 후보들 중 실제로 정답인 항목의 비율입니다. 정답을 찾아낸 비율(hit@K)이 같아도, 후보에 잡음(무관한 항목)이 많이 섞이면 이 값이 낮아집니다 — 낮을수록 AI가 답을 만들 때 참고하는 자료에 잡음이 많다는 뜻입니다."
-              >
-                <span>정답 집중도(precision) <span className="text-slate-600">— {METRIC_INFO.precision.recommendedFor}</span></span>
-                <span className="font-mono tabular-nums text-slate-400">A {(lastResult.a_precision * 100).toFixed(0)}%</span>
-                <span className="font-mono tabular-nums text-slate-400">B {(lastResult.b_precision * 100).toFixed(0)}%</span>
+              <p className="text-[11px] text-slate-500 mt-3">
+                {displayResult.b_hit_rate >= displayResult.a_hit_rate
+                  ? <>89개 질문 중 <b className="text-slate-300">B안(지금 방식)</b>이 더 많이 정답을 찾아냈습니다 — 지금처럼 저장하는 게 낫다는 뜻입니다.</>
+                  : <><b className="text-slate-300">A안</b>이 지금 방식보다 정답을 더 많이 찾아냈습니다 — 보완이 필요합니다.</>}
+              </p>
+            </div>
+          )}
+
+          {(visibleMetrics.has('top1') || visibleMetrics.has('channel')) && (
+            <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-4">
+              <p className="text-xs font-medium text-slate-400 mb-3">B안 세부 — 표(RDB) vs 의미검색(벡터) 채널별</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-700 text-slate-500">
+                      <th className="text-left font-medium py-2 pr-3">지표</th>
+                      <th className="text-left font-medium py-2 px-3">뜻</th>
+                      <th className="text-right font-medium py-2 px-3">표(RDB)</th>
+                      <th className="text-right font-medium py-2 pl-3">의미검색(벡터)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleMetrics.has('top1') && (
+                      <tr className="border-b border-slate-700/50">
+                        <td className="py-2.5 pr-3 text-slate-200 font-medium">Top-1</td>
+                        <td className="py-2.5 px-3 text-slate-500">
+                          검색 결과 1위가 곧바로 정답인지 <span className="text-slate-600">(A안 참고값 {(displayResult.a_top1_accuracy * 100).toFixed(0)}%)</span>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">{(displayResult.b_top1_param_accuracy * 100).toFixed(0)}%</td>
+                        <td className="py-2.5 pl-3 text-right font-mono tabular-nums text-slate-300">{(displayResult.b_top1_narrative_accuracy * 100).toFixed(0)}%</td>
+                      </tr>
+                    )}
+                    {visibleMetrics.has('channel') && (
+                      <tr className="last:border-0">
+                        <td className="py-2.5 pr-3 text-slate-200 font-medium">채널기여도(B근거)</td>
+                        <td className="py-2.5 px-3 text-slate-500">
+                          정답을 그 채널 "단독"으로 찾은 비율 <span className="text-slate-600">(둘 다에서 찾음 {(displayResult.b_hit_both * 100).toFixed(0)}%)</span>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">{(displayResult.b_hit_rdb_only * 100).toFixed(0)}%</td>
+                        <td className="py-2.5 pl-3 text-right font-mono tabular-nums text-slate-300">{(displayResult.b_hit_vector_only * 100).toFixed(0)}%</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
-            )}
-            {visibleMetrics.has('channel') && (
-              <div
-                className="flex items-center gap-4 mt-2 text-[11px] text-slate-500"
-                title="B안이 찾은 정답 중, 표(RDB) 조회로 찾았는지·의미검색(벡터)으로 찾았는지·둘 다에서 찾았는지를 나눈 비율입니다. 어느 한쪽이 0에 가까우면 그 방식은 굳이 안 써도 된다는 뜻이고, 둘 다 유의미하면 두 방식을 같이 쓰는 게 근거가 있다는 뜻입니다."
-              >
-                <span>B 근거 <span className="text-slate-600">— {METRIC_INFO.channel.recommendedFor}</span></span>
-                <span className="font-mono tabular-nums text-slate-400">표만 {(lastResult.b_hit_rdb_only * 100).toFixed(0)}%</span>
-                <span className="font-mono tabular-nums text-slate-400">의미검색만 {(lastResult.b_hit_vector_only * 100).toFixed(0)}%</span>
-                <span className="font-mono tabular-nums text-slate-400">둘 다 {(lastResult.b_hit_both * 100).toFixed(0)}%</span>
+              <p className="text-[11px] text-slate-500 mt-3">B안은 표(RDB)/의미검색(벡터) 두 채널이 독립적으로 동작해서 "진짜 하나의 순위"가 없습니다 — 그래서 A안처럼 단일 값이 아니라 채널별로 따로 봅니다.</p>
+            </div>
+          )}
+
+          {visibleMetrics.size === 0 && (
+            <p className="text-xs text-slate-500 text-center py-4 bg-slate-800 border border-slate-700 rounded-xl">위에서 지표를 하나 이상 선택하세요.</p>
+          )}
+
+          {/* 실행 이력 추이 — "도구"라는 정체성의 핵심: 한 번 보고 끝나는 게 아니라 반복 실행 결과가 쌓인다는 걸 바로 보여줌 */}
+          <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-4">
+            <div className="flex items-center gap-1.5 mb-2">
+              <TrendingUp className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="text-xs font-medium text-slate-300">실행 이력 추이 (B안 hit@K, 최근 {trendAsc.length}회)</span>
+            </div>
+            {trendAsc.length >= 2 ? (
+              <div className="flex items-end gap-1.5 h-16">
+                {trendAsc.map((h) => (
+                  <div
+                    key={h.id}
+                    title={`${new Date(h.run_at).toLocaleString('ko-KR')} — hit@K ${(h.b_hit_rate * 100).toFixed(1)}%`}
+                    className="flex-1 bg-indigo-500/70 hover:bg-indigo-400 rounded-t min-w-[6px] transition-colors"
+                    style={{ height: `${Math.max(h.b_hit_rate * 100, 3)}%` }}
+                  />
+                ))}
               </div>
-            )}
-            {visibleMetrics.size === 0 && (
-              <p className="text-xs text-slate-500 text-center py-4">위에서 지표를 하나 이상 선택하세요.</p>
+            ) : (
+              <p className="text-[11px] text-slate-600">실행이 {trendAsc.length}회뿐이라 추이를 그릴 수 없습니다 — 2회 이상부터 막대그래프가 나타납니다.</p>
             )}
           </div>
 
+          {/* 유형별 breakdown — 표로. A→B가 나아졌는지는 화살표 아이콘으로 즉시 구분되게 */}
           <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-5">
-            <p className="text-xs font-medium text-slate-400 mb-1">질문 유형별로 뜯어보면</p>
-            <p className="text-[11px] text-slate-500 mb-4">질문 성격에 따라 어느 저장 방식이 유리한지가 다를 수 있어 유형을 나눠서 봅니다.</p>
-            <div className="space-y-5">
-              {lastResult.by_type.map((t) => {
-                const info = TYPE_INFO[t.type] ?? { label: t.type, example: '' };
-                return (
-                  <div key={t.type}>
-                    <div className="flex items-baseline justify-between mb-1.5">
-                      <div>
-                        <span className="text-sm font-medium text-slate-200">{info.label}</span>
-                        <span className="text-[11px] text-slate-500 ml-2">{info.example}</span>
-                      </div>
-                      <span className="text-[11px] text-slate-500 font-mono">질문 {t.n}개</span>
-                    </div>
-                    {visibleMetrics.has('hitK') && (
-                      <div className="grid grid-cols-[1fr_110px] gap-3 items-center">
-                        <div className="relative h-5 bg-slate-900 rounded overflow-hidden">
-                          <div className="absolute inset-y-0 left-0 bg-slate-600" style={{ width: `${t.a_hit_rate * 100}%` }} />
-                          <div className="absolute inset-y-0 left-0 bg-indigo-500 opacity-90" style={{ width: `${t.b_hit_rate * 100}%` }} />
-                        </div>
-                        <div className="text-xs font-mono tabular-nums text-right text-slate-400">
-                          A {(t.a_hit_rate * 100).toFixed(0)} → B <span className={t.b_hit_rate >= t.a_hit_rate ? 'text-emerald-400' : 'text-rose-400'}>{(t.b_hit_rate * 100).toFixed(0)}</span>
-                        </div>
-                      </div>
-                    )}
-                    {visibleMetrics.has('top1') && (
-                      <div
-                        className="text-right text-[11px] font-mono tabular-nums text-slate-600 mt-0.5"
-                        title="검색 결과 1위가 실제 정답인 비율 — 화면 근거카드는 1건만 노출될 때 이 지표가 맞습니다."
-                      >
-                        Top-1 A {(t.a_top1_accuracy * 100).toFixed(0)} · B(표) {(t.b_top1_param_accuracy * 100).toFixed(0)} · B(의미검색) {(t.b_top1_narrative_accuracy * 100).toFixed(0)}
-                      </div>
-                    )}
-                    {visibleMetrics.has('precision') && (
-                      <div
-                        className="text-right text-[11px] font-mono tabular-nums text-slate-600 mt-0.5"
-                        title="정답 집중도(precision) — 검색 후보 중 실제 정답 비율"
-                      >
-                        집중도 A {(t.a_precision * 100).toFixed(0)} · B {(t.b_precision * 100).toFixed(0)}
-                      </div>
-                    )}
-                    {visibleMetrics.has('channel') && (
-                      <div
-                        className="text-right text-[11px] font-mono tabular-nums text-slate-600"
-                        title="B안이 이 유형에서 정답을 찾은 경로 — 표(RDB)만/의미검색(벡터)만/둘 다"
-                      >
-                        B 근거 표 {(t.b_hit_rdb_only * 100).toFixed(0)} · 의미검색 {(t.b_hit_vector_only * 100).toFixed(0)} · 둘다 {(t.b_hit_both * 100).toFixed(0)}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+            <p className="text-xs font-medium text-slate-400 mb-3">질문 유형별로 뜯어보면</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-700 text-slate-500">
+                    <th className="text-left font-medium py-2 pr-3">유형</th>
+                    <th className="text-right font-medium py-2 px-3">질문수</th>
+                    {visibleMetrics.has('hitK') && <th className="text-right font-medium py-2 px-3">hit@K (A→B)</th>}
+                    {visibleMetrics.has('top1') && <th className="text-right font-medium py-2 px-3">Top-1 (A/B표/B의미)</th>}
+                    {visibleMetrics.has('precision') && <th className="text-right font-medium py-2 px-3">집중도 (A/B)</th>}
+                    {visibleMetrics.has('channel') && <th className="text-right font-medium py-2 pl-3">B근거 (표/의미/둘다)</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayResult.by_type.map((t) => {
+                    const info = TYPE_INFO[t.type] ?? { label: t.type, example: '' };
+                    const improved = t.b_hit_rate >= t.a_hit_rate;
+                    return (
+                      <tr key={t.type} className="border-b border-slate-700/50 last:border-0">
+                        <td className="py-2.5 pr-3 text-slate-200 font-medium" title={info.example}>{info.label}</td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-500">{t.n}</td>
+                        {visibleMetrics.has('hitK') && (
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+                            <span className="text-slate-400">{(t.a_hit_rate * 100).toFixed(0)}%</span>
+                            {' → '}
+                            <span className={`inline-flex items-center gap-0.5 font-semibold ${improved ? 'text-emerald-500 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400'}`}>
+                              {(t.b_hit_rate * 100).toFixed(0)}%
+                              {improved ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
+                            </span>
+                          </td>
+                        )}
+                        {visibleMetrics.has('top1') && (
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">
+                            {(t.a_top1_accuracy * 100).toFixed(0)}% / {(t.b_top1_param_accuracy * 100).toFixed(0)}% / {(t.b_top1_narrative_accuracy * 100).toFixed(0)}%
+                          </td>
+                        )}
+                        {visibleMetrics.has('precision') && (
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-300">
+                            {(t.a_precision * 100).toFixed(0)}% / {(t.b_precision * 100).toFixed(0)}%
+                          </td>
+                        )}
+                        {visibleMetrics.has('channel') && (
+                          <td className="py-2.5 pl-3 text-right font-mono tabular-nums text-slate-300">
+                            {(t.b_hit_rdb_only * 100).toFixed(0)}% / {(t.b_hit_vector_only * 100).toFixed(0)}% / {(t.b_hit_both * 100).toFixed(0)}%
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-            <div className="flex items-center gap-3 mt-5 pt-4 border-t border-slate-700 text-[11px] text-slate-500">
-              <span className="flex items-center gap-1.5"><i className="inline-block w-2.5 h-2.5 rounded-sm bg-slate-600" />A안 · 지식 그대로 저장</span>
-              <span className="flex items-center gap-1.5"><i className="inline-block w-2.5 h-2.5 rounded-sm bg-indigo-500" />B안 · 지금 우리 방식</span>
+            <div className="flex items-center gap-4 mt-4 pt-3 border-t border-slate-700 text-[11px] text-slate-500">
+              <span className="flex items-center gap-1.5"><ArrowUpRight className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" /> B안이 A안보다 나음</span>
+              <span className="flex items-center gap-1.5"><ArrowDownRight className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" /> B안이 A안보다 못함</span>
             </div>
           </div>
 
           <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono">
-            <Badge color="slate">{lastResult.golden_set_file}</Badge>
-            <span>전체 {lastResult.total_n}문항 · 소요 {lastResult.duration_seconds}초</span>
+            <Badge color="slate">{displayResult.golden_set_file}</Badge>
+            <span>전체 {displayResult.total_n}문항 · 소요 {displayResult.duration_seconds}초</span>
           </div>
         </>
       )}
 
-      {!runMutation.isPending && !lastResult && !runMutation.isError && (
+      {!runMutation.isPending && !displayResult && !runMutation.isError && (
         <div className="text-center py-14 text-slate-500 text-sm">
-          아직 이번 세션에서 실행한 결과가 없습니다. "비교 실행"을 눌러 시작하세요.
+          아직 실행 이력이 없습니다. "비교 실행"을 눌러 시작하세요.
         </div>
       )}
     </div>
