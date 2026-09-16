@@ -1,7 +1,7 @@
 """VOC 이메일 로컬 시연 — Delegated Permission(사용자 위임 권한)으로 본인 메일함을
 대상으로 운영 파이프라인을 그대로 실행한다.
 
-배경 (docs/email-analysis-channel-plan.md §7):
+배경:
 운영은 Application 권한(client_credentials)으로 무인 폴링하도록 설계돼 있는데,
 지금 조직에서 승인받은 건 Delegated 권한뿐이라 그 방식으로는 로그인 자체가 안 된다
 — Delegated는 반드시 사람이 로그인한 세션이 있어야 한다.

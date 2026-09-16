@@ -1,4 +1,4 @@
-"""VOC 이메일 건별 분석 — 2단계 RAG 지식 파이프라인 (docs/email-analysis-channel-plan.md §2, §10).
+"""VOC 이메일 건별 분석 — 2단계 RAG 지식 파이프라인.
 
 기존 채팅 파이프라인(agents/knowledge_rag/agent.py)과 동일하게 용어 매핑 + 하이브리드
 검색 + LLM 판단을 재사용하되, 대화 이력·SSE 스트리밍·시맨틱 캐시는 건별 배치 분석에

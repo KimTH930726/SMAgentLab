@@ -1,6 +1,6 @@
-"""Microsoft Graph API 클라이언트 — VOC 메일 수집 (docs/email-analysis-channel-plan.md §7, §11 Track A #5).
+"""Microsoft Graph API 클라이언트 — VOC 메일 수집.
 
-§7 Q10(Azure AD 앱 등록 + Mail.Read 권한 + RBAC 스코프) IT 승인 전이라 실제 자격증명으로
+Azure AD 앱 등록 + Mail.Read 권한 + RBAC 스코프 IT 승인 전이라 실제 자격증명으로
 연결 테스트는 불가능하다. 코드만 완성해두고 단위 테스트는 mock으로 검증한다 — §11
 "두 트랙이 만나는 지점": 승인 후 client_id/secret/tenant_id만 꽂으면 바로 동작한다.
 

@@ -553,7 +553,7 @@ async def _migrate_query_log_resolution(conn) -> None:
 
 
 async def _migrate_email_voc_tables(conn) -> None:
-    """VOC 이메일 분석 채널 — 1단계 스키마 (docs/email-analysis-channel-plan.md §11 Track A #1).
+    """VOC 이메일 분석 채널 — 1단계 스키마.
 
     ops_voc_routing: 파트별 담당 메일함 ↔ Teams 웹훅 ↔ 온콜 연락처 매핑(§10).
     ops_email_analysis: 이메일 건별 분석 결과 저장. source_message_id UNIQUE로
@@ -697,7 +697,7 @@ async def _migrate_email_voc_tables(conn) -> None:
     # email_relevance_min_score=0.38: 실 메일 데이터로 실측 보정한 값(원래 0.35).
     # service.check_relevance()가 base_weight 부스팅 없는 원점수를 쓰도록 고친 뒤
     # 재측정 — 완전 무관한 메일은 원점수 0.34~0.36, 실제로 관련 있는 메일은 0.42~0.49
-    # 대역에 분포해 그 사이인 0.38로 게이트를 잡았다(docs/tech/voc-email-handoff.md 참고).
+    # 대역에 분포해 그 사이인 0.38로 게이트를 잡았다.
     await conn.execute("""
         INSERT INTO ops_system_config (key, value) VALUES
         ('email_collection_enabled', 'false'),

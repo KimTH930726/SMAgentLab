@@ -23,7 +23,7 @@ client flows" 설정 자체를 비권장 사유로 거부했다. Authorization C
 Public Client(시크릿 없이 PKCE만으로 토큰 교환) vs Confidential Client(시크릿 사용):
 원래 설계는 Public Client였으나, 리다이렉트 URI가 Azure AD에 "Web" 플랫폼으로
 등록된 경우 PKCE만으론 토큰 교환이 거부되는 사례가 실측으로 확인됐다
-(AADSTS7000218 — docs/tech/voc-email-handoff.md §3 10~11단계). client_secret이
+(AADSTS7000218). client_secret이
 설정돼 있으면 Confidential Client로, 없으면 기존과 동일하게 Public Client로
 동작하도록 `_build_app()`에서 분기한다 — 리다이렉트 URI 플랫폼 유형이 나중에
 정정되면 시크릿 없이도 원래 방식으로 돌아갈 수 있게 하기 위함. client_secret은

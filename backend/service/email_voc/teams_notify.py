@@ -1,6 +1,6 @@
-"""VOC 분석 결과 Teams 알림 발송 (docs/email-analysis-channel-plan.md §8, §10, §11 Track A #3).
+"""VOC 분석 결과 Teams 알림 발송.
 
-발송 채널은 §8에서 Teams "Workflows" 웹훅으로 확정됐고, 호출 로직은 공용 아웃바운드 HTTP
+발송 채널은 Teams "Workflows" 웹훅으로 확정됐고, 호출 로직은 공용 아웃바운드 HTTP
 레이어(shared/http_client.py)를 쓴다. 원래는 MCP 도구 에이전트의 실행기를 그대로 재사용했으나
 (2026-09-08 이전), MCP 도구 기능 자체를 걷어내면서 그 실행기 중 "그냥 HTTP 호출" 부분만
 shared로 이관했다 — 도구 레지스트리·LLM 파라미터 추출 같은 MCP 전용 개념과는 무관한, 순수

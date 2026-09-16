@@ -1,4 +1,4 @@
-"""VOC 이메일 분석 채널 — 스키마 (docs/email-analysis-channel-plan.md)."""
+"""VOC 이메일 분석 채널 — 스키마."""
 from datetime import date, datetime, timedelta
 from typing import Optional
 from pydantic import BaseModel, Field, model_validator
@@ -212,7 +212,7 @@ class DelegatedAuthConfig(BaseModel):
     client_secret은 선택 입력이다 — 원래 설계(Public Client, PKCE만으로 토큰 교환)는
     시크릿이 필요 없지만, 리다이렉트 URI가 Azure AD에 "Web" 플랫폼으로 등록된 경우
     PKCE만으론 토큰 교환이 거부돼(AADSTS7000218) 시크릿이 필요해진 사례가 실제로
-    있었다(docs/tech/voc-email-handoff.md §3 10~11단계). 값을 채우면 Confidential
+    있었다. 값을 채우면 Confidential
     Client로, 비우면 기존과 동일하게 Public Client로 동작한다 — 나중에 리다이렉트 URI
     플랫폼 유형이 정정되면 시크릿 없이도 다시 전환 가능하도록 하기 위함."""
     tenant_id: str = Field(min_length=1)
