@@ -927,6 +927,7 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
   <div class="eyebrow"><span class="chip">09</span>STORAGE LAB — TRACK 2</div>
   <h2>그 원칙, 실제로 검증하다</h2>
   <p class="lead">같은 골든셋 89건으로 두 저장 방식을 정면 비교</p>
+  <p style="font-size:11.5px; color:var(--text-dim); margin:-8px 0 14px; max-width:820px;">⚠ 89문항은 우리 DB(policy_item)에서 파생된 질문이다 — "시스템이 자기가 색인한 내용을 잘 찾는가"를 재는 것이지, 실제 운영 담당자가 던지는 애매한 자연어 질문과 얼마나 닮았는지는 아직 별도 검증이 없다.</p>
 
   <div class="stat-row" style="margin-bottom:16px;">
     <div class="stat" style="border-color:var(--accent2);">
@@ -1385,11 +1386,12 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
     </div>
     <div class="chip-card">
       <div class="ico">🔬</div>
-      <div class="t">② 실험 게이트 + 골든셋이 있어야 한다</div>
-      <div class="d">"나아졌다"를 <b style="color:var(--text)">주장하려면 재현 가능한 측정 자리</b>가 먼저 있어야 한다. 골든셋 89문항 A/B(§9)가 없었으면 조사·어미 제거(hit@10 77.5→82.0%)도 근거 없이 지나갔을 것.</div>
+      <div class="t">② 실험 체계 + 골든셋이 있어야 한다</div>
+      <div class="d">"나아졌다"를 <b style="color:var(--text)">주장하려면 재현 가능한 측정 자리</b>가 먼저 있어야 한다. 골든셋 89문항 A/B(§9)가 없었으면 조사·어미 제거(hit@10 77.5→82.0%)도 근거 없이 지나갔을 것. (89문항은 DB에서 파생된 질문 — 실사용자의 애매한 자연어 질문 패턴까지 검증된 건 아님)</div>
       <ul class="mini">
-        <li>hit@K·precision@K, RDB/벡터 기여도 분해 — 다 이 게이트 위에서 나옴</li>
+        <li>hit@K·precision@K, RDB/벡터 기여도 분해 — 다 이 측정 체계 위에서 나옴</li>
         <li>다음 축 편입(CMDB 등)에도 착수 전 골든셋부터</li>
+        <li>지금은 측정 도구일 뿐 — CI/배포를 막는 강제 게이트(L4)는 아직 없음</li>
       </ul>
     </div>
     <div class="chip-card">
@@ -1404,7 +1406,7 @@ SELECT * FROM ops_coupon WHERE status = 'issued'...
   </div>
 
   <div class="callout" style="margin-top:20px;">
-    한 줄로: <b>RAG는 데이터 표현이 절반, 그걸 검증할 실험 게이트가 나머지 절반, 그리고 그 방향은 팀이 같이 잡아야 운영 자동화까지 간다.</b>
+    한 줄로: <b>RAG는 데이터 표현이 절반, 그걸 검증할 실험 체계가 나머지 절반, 그리고 그 방향은 팀이 같이 잡아야 운영 자동화까지 간다.</b>
   </div>
 </section>
 
