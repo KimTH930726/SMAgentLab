@@ -28,7 +28,9 @@
 - `backend/service/chat/memory.py` — 대화 요약 + 시맨틱 리콜
 - `backend/service/policy/` — 정책서 임포트/검색 파이프라인 (v1, docs/policy-doc-pipeline-plan.md)
 - `frontend-react/src/components/` — React UI 컴포넌트
-- `docs/` — architecture.md, flow.md, table-definition.md, api-specification.md (변경 시 동기화)
+- `docs/` — architecture.md(버전별 변경이력), flow.md(처리 흐름), table-definition.md(마이그레이션
+  이력만 — 전체 컬럼 스펙은 실 DB가 항상 정확, 2026-09-16 경량화) — 변경 시 동기화. API
+  스펙은 FastAPI 자동 문서(`/docs`)로 대체(손 유지보수 안 함)
 
 ## 아키텍처 핵심
 - 검색: Glossary Term Mapping(0.5+) → Weighted Hybrid Search (vector+keyword)
@@ -39,7 +41,7 @@
 ## 배포 전 체크리스트
 - `npx tsc --noEmit` 통과 확인
 - `docker compose build` 성공 확인
-- 아키텍처 변경 시 docs/ 4개 파일(architecture.md/flow.md/table-definition.md/api-specification.md) 동기화
+- 아키텍처 변경 시 docs/ 3개 파일(architecture.md/flow.md/table-definition.md 마이그레이션 이력) 동기화 — API 스펙은 `/docs` 자동 생성이라 손 동기화 불필요
 
 ## 개발 규율 (이 프로젝트 특화)
 공통 개발 규율(검증 원칙, 커밋 워크플로우, YAGNI 등)은 `~/.claude/CLAUDE.md`에 있음. 여기는

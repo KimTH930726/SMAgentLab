@@ -3,7 +3,7 @@
 > 작성일: 2026-07-29 (범위 확정: 2026-07-29)
 > 현재 버전: v2.39 기준
 > 상태: **기획 단계 (개발 미착수)** — dev_0 브랜치에서 검토
-> 목적: Confluence 등 외부 소스에서 등록한 지식이 원본 수정 후에도 방치되는 문제(현행화 지연)를 해소하기 위해, 원본 변경을 감지해 자동/반자동으로 재수집·재청킹하는 구조의 실현 가능성과 단계별 실행 계획을 정리한다. [email-analysis-channel-plan.md](./email-analysis-channel-plan.md)와 함께 "가까운 다음 단계"의 두 축 중 하나
+> 목적: Confluence 등 외부 소스에서 등록한 지식이 원본 수정 후에도 방치되는 문제(현행화 지연)를 해소하기 위해, 원본 변경을 감지해 자동/반자동으로 재수집·재청킹하는 구조의 실현 가능성과 단계별 실행 계획을 정리한다. VOC 이메일 채널(당시엔 함께 검토하던 "다음 단계" 축, 지금은 이미 구현 완료 — `docs/architecture.md` 참고)과 별개로 이쪽은 아직 미착수
 > 범위 확정 (2026-07-29): 사내 Confluence는 **온프레미스(Data Center/Server)**. PAT는 자동 발급 대신 **관리자가 수기로 등록/갱신**. 재수집 대상은 **자동 전수 추적이 아닌, 등록 시 사용자가 명시적으로 지정한 페이지만** 추적. 대량 변경 임계값은 하드코딩하지 않고 **관리자 설정 화면에서 조정 가능**하게 한다. (§7 결정사항 참고)
 
 ---
@@ -29,10 +29,10 @@
 | Confluence 단건 페이지 fetch | [`web_crawler.py`](../backend/agents/knowledge_rag/ingestion/web_crawler.py)의 `fetch_confluence_by_id()` — page_id로 본문 재조회 가능, `verify=False`로 사내 자체 서명 인증서 대응 중 | ✅ 재수집 시 그대로 재사용 |
 | 청킹 | `chunker.py`의 `chunk_document(doc, strategy=...)` | ✅ 재청킹 시 그대로 재사용 |
 | **페이지 단위 추적(lineage)** | **없음.** 단건 URL 등록(`/import/url`)만 `rag_knowledge.source_file`에 URL이 남아 역추적 가능([router.py:675](../backend/agents/knowledge_rag/knowledge/router.py#L675)). 트리 일괄 등록(`/import/url/bulk-pages`)은 여러 페이지의 청크를 **단일 `ingestion_job`**으로 합치고 `source_file`엔 `"Confluence bulk (N pages)"` 같은 고정 문자열만 기록([router.py:1012](../backend/agents/knowledge_rag/knowledge/router.py#L1012)) — 페이지 제목(`container_name`)만 남아 유일 식별자가 아님 | ❌ 신규 구축 필요 — 자동화의 최우선 선행 조건 |
-| 변경 감지(해시/버전) | `rag_knowledge` 테이블에 `content_hash`, `source_url`, `page_id` 컬럼 없음([table-definition.md §6](./table-definition.md)) | ❌ 신규 컬럼/테이블 필요 |
+| 변경 감지(해시/버전) | `rag_knowledge` 테이블에 `content_hash`, `source_url`, `page_id` 컬럼 없음(실 DB `\d rag_knowledge`로 확인) | ❌ 신규 컬럼/테이블 필요 |
 | Confluence 인증 | `get_user_confluence_pat()`([core/security.py:97](../backend/core/security.py#L97))로 **개인 사용자 계정(`ops_user.encrypted_confluence_pat`)**에 저장된 PAT를 사용 — 요청 컨텍스트의 로그인 사용자 전제 | ⚠️ 배치 전용 서비스 PAT 저장 슬롯은 신규 구축하되, 발급/갱신은 **자동화하지 않고 관리자가 수기로 입력**(§7 Q2 결정) — 기존 PAT 암호화 저장 로직(`encrypt_api_key`)만 재사용, OAuth/서비스 계정 자동 발급 절차는 불필요 |
-| 배치/스케줄링 | cron·APScheduler 등 주기 실행 인프라 전무(main.py `lifespan`은 서버 기동 1회성 초기화만 수행) — [email-analysis-channel-plan.md §2](./email-analysis-channel-plan.md)에서도 동일하게 확인된 공통 공백 | ❌ 신규 구축이나, **이메일 분석 채널과 공유 가능**(아래 §5 참고) |
-| 이상 변경 시 검토 상태 | `rag_knowledge.status`에 이미 `pending_review`(승인 대기, 검색에서 숨김)가 존재([table-definition.md:188](./table-definition.md#L188)), 리뷰 UI(`rag_knowledge_duplicate_match` 기반)도 이미 구축됨 | ✅ 신규 상태값/UI 없이 기존 승인 플로우 재사용 가능 |
+| 배치/스케줄링 | 기획 당시(2026-07)엔 cron·APScheduler 등 주기 실행 인프라가 전무했으나, 이후 VOC 이메일 채널(`service/email_voc/scheduler.py`)이 실제로 구축돼 이미 운영 중 — 이 자동화도 착수하면 그 스케줄러 인프라를 재사용/공유할 수 있음 | ✅ 신규 구축 불필요해짐(VOC가 이미 만들어둠) |
+| 이상 변경 시 검토 상태 | `rag_knowledge.status`에 이미 `pending_review`(승인 대기, 검색에서 숨김)가 존재, 리뷰 UI(`rag_knowledge_duplicate_match` 기반)도 이미 구축됨 | ✅ 신규 상태값/UI 없이 기존 승인 플로우 재사용 가능 |
 | 청크 리뷰 UI | 최근 커밋(`6d017fc`)으로 "청크 검토 화면에서 청킹 전략 수동 재선택" 지원 추가됨 | ✅ 재수집 시 신규 청크 미리보기 화면으로 그대로 재사용 가능 |
 
 **결론**: "재수집·재청킹" 로직 자체는 기존 함수 재사용만으로 충분하지만, **그 앞단의 "이 지식이 어느 원본 페이지에서 왔는가"를 추적하는 데이터 모델이 아예 없다** — 이게 이번 조사에서 발견한 가장 중요한 선행 과제다. 이 없이는 웹훅이든 폴링이든 트리거를 뭘 붙여도 "무엇을 갱신할지" 특정할 수 없다.
@@ -119,7 +119,9 @@
 
 ## 6. 참고 — 이메일 분석 채널과의 인프라 공유 지점
 
-[email-analysis-channel-plan.md](./email-analysis-channel-plan.md)도 동일하게 "배치/스케줄링 인프라 전무"를 지적했다. 두 기획 모두 무인 주기 실행이 필요하므로, Phase 3(이메일 채널) / Phase 2(현행화 자동화) 시점에 **동일한 스케줄러(APScheduler 등)를 공유**해 인프라를 이중 구축하지 않는 것을 권장한다.
+VOC 이메일 채널 기획 당시에도 동일하게 "배치/스케줄링 인프라 전무"였는데, 그 채널이 실제로
+`service/email_voc/scheduler.py`를 만들면서 이미 해결됐다 — 이 자동화를 착수하면 **그
+스케줄러를 그대로 재사용**해 인프라를 이중 구축하지 않는 것을 권장한다.
 
 ---
 

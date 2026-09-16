@@ -91,10 +91,12 @@
 
 ## 4. 문서 동기화
 
-아키텍처가 바뀌면 `docs/architecture.md` / `docs/flow.md` / `docs/table-definition.md` /
-`docs/api-specification.md` 4종을 함께 갱신한다. `architecture.md`는 버전 번호를 올리고
-변경 이력을 한 항목으로 남긴다(무엇을·왜·실측 결과까지). "결정 근거가 대화에만 남으면
-인수인계 시/시간이 지나면 소실된다"는 게 이 프로젝트가 반복 확인한 원칙.
+아키텍처가 바뀌면 `docs/architecture.md` / `docs/flow.md` / `docs/table-definition.md`(마이그레이션
+이력만 — 2026-09-16부터 전체 컬럼 스펙은 안 둔다, 실 DB가 항상 정확) 3종을 함께 갱신한다.
+API 스펙은 FastAPI 자동 문서(`/docs`)로 대체했으므로 손으로 동기화하지 않는다.
+`architecture.md`는 버전 번호를 올리고 변경 이력을 한 항목으로 남긴다(무엇을·왜·실측
+결과까지). "결정 근거가 대화에만 남으면 인수인계 시/시간이 지나면 소실된다"는 게 이
+프로젝트가 반복 확인한 원칙.
 
 ## 5. 관리자 화면(UI/UX)
 

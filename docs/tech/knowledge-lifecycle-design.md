@@ -29,7 +29,8 @@
 ### 2.1 `rag_knowledge` 스키마
 `init/01-init.sql`의 `ops_knowledge`를 `main.py:61`에서 `rag_knowledge`로 rename. 이후 마이그레이션으로
 `source_file`/`source_chunk_idx`/`source_type`(`main.py:923-925`), `status VARCHAR(20) DEFAULT 'active'`
-(`main.py:952`) 추가. 전체 18컬럼은 `docs/table-definition.md:172-191` 참조 — 문서와 코드 불일치 없음.
+(`main.py:952`) 추가. 전체 컬럼은 실 DB(`\d rag_knowledge`)가 항상 정확 — 2026-09-16부터
+`table-definition.md`는 마이그레이션 이력만 남기고 전체 컬럼 스펙은 안 둠.
 
 ### 2.2 중복 등록 방지 (v2.34) — 사실상 "Knowledge Resolver"의 절반
 - 트리거: `create_knowledge`(단건, `service.py:35-94`)와 `bulk_create_knowledge`(배치, `service.py:571-728`).

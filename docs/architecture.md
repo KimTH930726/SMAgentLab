@@ -629,7 +629,7 @@ backend/
 | `service/auth/service.py` | 회원가입 (중복 체크, bcrypt 해싱, Fernet API Key 암호화), 로그인, 토큰 갱신 |
 | `service/auth/router.py` | `/api/auth/*` 엔드포인트 |
 
-**권한 모델 (네임스페이스 기반):** 상세 규칙은 `api-specification.md § 3. 인증 및 권한` 참조.
+**권한 모델 (네임스페이스 기반):**
 - Admin은 모든 리소스 CRUD 가능. 일반 사용자는 `owner_part` 일치 시에만 CRUD (불일치 시 읽기 전용). `owner_part = NULL` (공통 namespace)는 모든 사용자 CRUD 가능.
 - 대화 소유권: `ops_conversation.user_id` FK로 사용자별 대화 격리.
 
