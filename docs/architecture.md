@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.78)
+# Ops-Navigator 시스템 아키텍처 (v2.80)
 
 ## 개요
 
@@ -11,6 +11,40 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.80: **정책서 미분류(unresolved) 리포트에 첫 쓰기 액션 추가** — "조회만 있고 승인/
+  수정/재분류 할 방법이 없다"는 실사용 지적(2026-09-16)으로 착수. 완전한 검토 UI
+  (`docs/policy-doc-pipeline-plan.md` §6, 여전히 미착수)의 대체가 아니라 "완전 방치"를
+  벗어나는 최소 액션 하나만 추가 — **"서술로 편입"**: unresolved segment 원문을 그대로
+  `policy_chunk`에 넣어 최소한 벡터 검색은 되게 만든다(정밀한 param 필드 추출은 아님).
+  신규 `unresolved_report.promote_segment_to_narrative()`, `POST /api/policy/unresolved/
+  {item_id}/promote`. 편입 후 `policy_item.unresolved_segments`에서 해당 segment 제거,
+  남은 게 없으면 `parse_status`를 `partial`→`parsed`로 전환(전부 없어졌으면 `parsed`,
+  일부만 남으면 `partial` 유지). segment 식별은 배열 인덱스 기반이라, 프론트는 편입 성공
+  때마다 목록을 다시 받아와 인덱스가 밀리는 문제를 피한다(로컬에서 배열을 직접 안 자름).
+  테스트 5건 추가(경계값 포함).
+- v2.79: **Track2 엔진 파라미터화** (work-os lab.md L2, 실험실 게이트 다음 순번) —
+  `track2.py`의 `run_comparison()`이 golden_set_path/전략(A/B 검색함수)/정답id추출을
+  전부 하드코딩하고 있던 걸 풀었다. `Strategy(name, search)` dataclass 신규(`search:
+  (namespace, query, top_k) -> 결과`), `POLICY_STRATEGIES = [Strategy("A_unified",
+  _search_a), Strategy("B_hybrid", _search_b)]`로 정책 A/B 등록. 골든셋 로드+정답id
+  리졸브는 `_load_golden_set()`로 분리(정책 전용 포맷은 그대로 유지 — L6 경계: 포맷
+  일반화·전략 자동추천은 범위 밖, 사례 1개로 프레임워크 먼저 안 만든다는 원칙 유지).
+  배경: "축 #2 증명"을 억지 PoC로 만들지 않고, 팀 데이터전환(CMDB 등, 10월 착수 예정)이
+  실제로 올 때 Strategy 등록+골든셋 파일 추가만으로 흡수하기 위한 선제 준비 — 채점
+  로직(hit@K/precision@K/Top-1/채널기여도)은 무변경. **리팩토링 중 실제 버그 발견**:
+  `run_comparison(golden_set_path=_GOLDEN_SET_PATH, ...)`처럼 모듈 상수를 기본 인자값
+  으로 바로 쓰면 def 시점에 값이 고정돼, 테스트가 `monkeypatch.setattr(track2,
+  "_GOLDEN_SET_PATH", ...)`로 바꿔치기해도 반영이 안 되는 문제로 테스트 4건이 깨짐 —
+  None 센티널 + 함수 본문에서 모듈 전역 조회하는 패턴으로 수정. 검증: 실제 운영 DB로
+  라이브 재실행해 리팩토링 전과 정확히 동일한 값 확인(`b_hit_rate=0.8764...`,
+  `a_top1_accuracy=0.4719...` 등, 회귀 없음). 신규 테스트 4건(주입한 golden_set_path/
+  strategies가 모듈 기본값이 아니라 실제로 쓰이는지, AXIS_REGISTRY 형태 검증) 추가.
+  **가시성 후속**(사용자 요청 — 엔진만 바뀌고 화면은 그대로면 눈에 안 보임): `track2.py`에
+  `AXIS_REGISTRY`/`AXIS_LABELS` 신규(지금은 `"policy"` 한 항목뿐), `GET /track2/axes`
+  신규, `POST /track2/run`에 `axis` 쿼리파라미터 추가(모르는 axis는 400). `PolicyLab.tsx`에
+  "데이터 축" 드롭다운 추가 — 지금은 선택지가 1개뿐이라 사실상 비활성(disabled, 툴팁으로
+  안내)이지만, 두 번째 축이 `AXIS_REGISTRY`에 등록되는 순간 자동으로 선택 가능해진다(화면
+  코드 변경 불필요).
 - v2.78: **VOC 반복패턴 임계치 긴급 재상향** (`email_pattern_similarity_threshold`
   0.58 → **0.80**, `ops_system_config` 런타임 값, 코드 변경 없음) — v2.75에서 0.85→
   0.58로 낮춘 지 하루 만에 실제 오염 확인. 클러스터 175("쿠폰사용문의")에 "지갑을

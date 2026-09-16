@@ -148,3 +148,81 @@ class TestGetUnresolvedSummary:
         call = conn.fetch.call_args
         assert "system_key = $2" not in call.args[0]
         assert len(call.args) == 2  # sql + ns_id만
+
+
+class TestPromoteSegmentToNarrative:
+    """2026-09-16 신규 — "조회만 있고 액션이 없다"는 지적으로 추가된 유일한 쓰기 액션."""
+
+    def _make_conn(self, unresolved_segments, next_chunk_idx=0):
+        # fetchval은 실제로 "SELECT COALESCE(MAX(chunk_idx)+1, 0)"을 모킹하는 자리라
+        # +1까지 이미 계산된 "다음 인덱스" 값을 바로 준다(실제 쿼리가 그렇게 짜여있음).
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.fetchrow = AsyncMock(return_value={"unresolved_segments": json.dumps(unresolved_segments)})
+        conn.fetchval = AsyncMock(return_value=next_chunk_idx)
+        conn.execute = AsyncMock()
+        return conn
+
+    @pytest.mark.asyncio
+    async def test_namespace_not_found_raises(self, monkeypatch):
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=self._make_conn([])))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=None))
+        with pytest.raises(ValueError, match="네임스페이스"):
+            await unresolved_report.promote_segment_to_narrative("없는곳", 1, 0)
+
+    @pytest.mark.asyncio
+    async def test_item_not_found_raises(self, monkeypatch):
+        conn = self._make_conn([])
+        conn.fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+        with pytest.raises(ValueError, match="정책 항목"):
+            await unresolved_report.promote_segment_to_narrative("ns", 999, 0)
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_index_raises(self, monkeypatch):
+        conn = self._make_conn([{"text": "내용", "reason": "사유"}])
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+        with pytest.raises(ValueError, match="segment_index"):
+            await unresolved_report.promote_segment_to_narrative("ns", 1, 5)
+
+    @pytest.mark.asyncio
+    async def test_inserts_chunk_and_removes_segment(self, monkeypatch):
+        conn = self._make_conn(
+            [{"text": "첫 세그먼트", "reason": "사유1"}, {"text": "둘째 세그먼트", "reason": "사유2"}],
+            next_chunk_idx=3,
+        )
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+        monkeypatch.setattr(unresolved_report.embedding_service, "embed", AsyncMock(return_value=[0.1] * 4))
+
+        remaining = await unresolved_report.promote_segment_to_narrative("ns", 1, 0)
+
+        assert remaining == 1  # 2개 중 0번 인덱스를 편입했으니 1개 남음
+
+        insert_call = conn.execute.call_args_list[0]
+        assert "INSERT INTO policy_chunk" in insert_call.args[0]
+        assert insert_call.args[2] == "첫 세그먼트"  # chunk_text
+        assert insert_call.args[4] == 3  # chunk_idx = MAX(2)+1
+
+        update_call = conn.execute.call_args_list[1]
+        assert "UPDATE policy_item" in update_call.args[0]
+        updated_segments = json.loads(update_call.args[1])
+        assert updated_segments == [{"text": "둘째 세그먼트", "reason": "사유2"}]  # 0번만 제거됨
+        assert update_call.args[2] == "partial"  # 아직 1개 남아있으니 partial
+
+    @pytest.mark.asyncio
+    async def test_last_segment_promoted_sets_parse_status_parsed(self, monkeypatch):
+        conn = self._make_conn([{"text": "유일한 세그먼트", "reason": "사유"}])
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+        monkeypatch.setattr(unresolved_report.embedding_service, "embed", AsyncMock(return_value=[0.1] * 4))
+
+        remaining = await unresolved_report.promote_segment_to_narrative("ns", 1, 0)
+
+        assert remaining == 0
+        update_call = conn.execute.call_args_list[1]
+        assert json.loads(update_call.args[1]) == []
+        assert update_call.args[2] == "parsed"  # 마지막 unresolved까지 없어졌으니 완전히 parsed

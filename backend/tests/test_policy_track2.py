@@ -285,6 +285,107 @@ class TestSaveRun:
         assert parsed[0]["a_top1_accuracy"] == 0.8
 
 
+class TestAxisRegistry:
+    """축 선택 UI(PolicyLab.tsx 데이터 축 드롭다운, GET /track2/axes)가 읽는 레지스트리 —
+    지금은 "policy" 하나지만, 이 레지스트리에 새 항목이 늘어나는 것만으로 화면 선택지도
+    같이 늘어나야 한다."""
+
+    def test_policy_axis_registered_with_default_golden_set_and_strategies(self):
+        assert "policy" in track2.AXIS_REGISTRY
+        golden_set_path, strategies = track2.AXIS_REGISTRY["policy"]
+        assert golden_set_path is None  # run_comparison()이 _GOLDEN_SET_PATH로 폴백
+        assert strategies is track2.POLICY_STRATEGIES
+
+    def test_every_registered_axis_has_a_label(self):
+        for key in track2.AXIS_REGISTRY:
+            assert key in track2.AXIS_LABELS
+
+
+class TestEngineParameterization:
+    """2026-09-16 엔진 파라미터화(lab.md L2) — golden_set_path/strategies를 명시적으로
+    주입했을 때 모듈 기본값(_GOLDEN_SET_PATH/POLICY_STRATEGIES/search_knowledge/
+    search_policy)이 아니라 **주입한 값이 실제로 쓰이는지** 검증한다. 이게 이번 리팩토링
+    자체가 제대로 됐는지의 핵심 증거 — 기존 테스트(TestRunComparison)는 기본값 경로만
+    돈다."""
+
+    @pytest.mark.asyncio
+    async def test_uses_injected_golden_set_path_not_module_default(self, monkeypatch, tmp_path):
+        # 모듈 기본 golden set은 일부러 존재하지 않는 경로로 바꿔서, 이게 쓰이면 바로
+        # "골든셋 파일이 없습니다" 에러로 드러나게 한다 — 주입한 경로가 실제로 쓰였다면
+        # 이 에러 없이 정상 진행돼야 함.
+        monkeypatch.setattr(track2, "_GOLDEN_SET_PATH", tmp_path / "존재안함.jsonl")
+
+        injected_path = tmp_path / "주입된골든셋.jsonl"
+        injected_path.write_text(json.dumps({
+            "qid": "q1", "query": "질문", "type": "param",
+            "source": {"file": "비즈니스정책서_온라인스토어_재구성.xlsx", "sheet": "s", "row": 1},
+            "expected_answer": "x",
+        }, ensure_ascii=False), encoding="utf-8")
+
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.execute = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=999)
+        conn.fetch = AsyncMock(return_value=[])
+        conn.fetchrow = AsyncMock(return_value={"id": 101, "namespace_id": 1})
+        monkeypatch.setattr(track2, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(track2, "resolve_namespace_id", AsyncMock(return_value=1))
+        monkeypatch.setattr(track2.embedding_service, "embed", AsyncMock(return_value=[0.1] * 768))
+        monkeypatch.setattr(track2, "search_knowledge", AsyncMock(return_value=[]))
+        monkeypatch.setattr(search, "search_policy", AsyncMock(
+            return_value=MagicMock(params=[], narratives=[])
+        ))
+
+        result = await track2.run_comparison(golden_set_path=injected_path)
+
+        assert result.golden_set_file == "주입된골든셋.jsonl"
+        assert result.total_n == 1
+
+    @pytest.mark.asyncio
+    async def test_uses_injected_strategies_not_module_default_search_functions(self, monkeypatch, tmp_path):
+        golden_path = tmp_path / "golden.jsonl"
+        golden_path.write_text(json.dumps({
+            "qid": "q1", "query": "질문", "type": "param",
+            "source": {"file": "비즈니스정책서_온라인스토어_재구성.xlsx", "sheet": "s", "row": 1},
+            "expected_answer": "x",
+        }, ensure_ascii=False), encoding="utf-8")
+
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.execute = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=999)
+        conn.fetch = AsyncMock(return_value=[{"id": 101, "policy_name": "N", "category_path": [], "raw_body": "R"}])
+        conn.fetchrow = AsyncMock(return_value={"id": 101, "namespace_id": 1})
+        monkeypatch.setattr(track2, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(track2, "resolve_namespace_id", AsyncMock(return_value=1))
+        monkeypatch.setattr(track2.embedding_service, "embed", AsyncMock(return_value=[0.1] * 768))
+
+        # 모듈 기본 검색 함수는 호출되면 바로 실패하게 만들어서, 주입한 전략만 실제로
+        # 쓰였는지를 "호출 안 됐다"로 증명한다.
+        default_a = AsyncMock(side_effect=AssertionError("기본 A 전략이 호출됨 — 주입이 안 먹힘"))
+        monkeypatch.setattr(track2, "search_knowledge", default_a)
+        monkeypatch.setattr(search, "search_policy", AsyncMock(
+            side_effect=AssertionError("기본 B 전략이 호출됨 — 주입이 안 먹힘")
+        ))
+
+        custom_a = AsyncMock(return_value=[MagicMock(id=999)])  # id_map[999] = 101 → 정답 히트
+        custom_b_result = MagicMock(params=[MagicMock(item_id=101)], narratives=[])
+        custom_b = AsyncMock(return_value=custom_b_result)
+        custom_strategies = [
+            track2.Strategy("A_unified", custom_a),
+            track2.Strategy("B_hybrid", custom_b),
+        ]
+
+        result = await track2.run_comparison(golden_set_path=golden_path, strategies=custom_strategies)
+
+        assert custom_a.await_count == 1
+        assert custom_b.await_count == 1
+        assert result.a_hit_rate == 1.0
+        assert result.b_hit_rate == 1.0
+
+
 class TestListRunHistory:
     @pytest.mark.asyncio
     async def test_parses_by_type_json_and_orders_by_run_at_desc(self, monkeypatch):

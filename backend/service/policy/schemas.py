@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SheetSummaryOut(BaseModel):
@@ -81,6 +81,15 @@ class UnresolvedSummaryOut(BaseModel):
     total_items: int
     total_segments: int
     by_system: list[SystemUnresolvedGroupOut]
+
+
+class PromoteSegmentRequest(BaseModel):
+    namespace: str
+    segment_index: int = Field(ge=0)
+
+
+class PromoteSegmentOut(BaseModel):
+    remaining_segments: int
 
 
 class ParamOut(BaseModel):

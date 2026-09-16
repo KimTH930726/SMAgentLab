@@ -34,6 +34,22 @@ export async function getUnresolvedSummary(namespace: string, systemKey?: string
   return apiFetch<UnresolvedSummary>(`/policy/unresolved-summary?${params.toString()}`);
 }
 
+// unresolved segment를 서술(policy_chunk)로 수동 편입(2026-09-16) — "조회만 있고 액션이
+// 없다"는 지적으로 추가된 유일한 쓰기 액션. 정밀 재분류가 아니라 최소한 검색은 되게
+// 만드는 원클릭 액션이다.
+export interface PromoteSegmentResult {
+  remaining_segments: number;
+}
+
+export async function promoteUnresolvedSegment(
+  itemId: number, segmentIndex: number, namespace: string,
+): Promise<PromoteSegmentResult> {
+  return apiFetch<PromoteSegmentResult>(`/policy/unresolved/${itemId}/promote`, {
+    method: 'POST',
+    body: JSON.stringify({ namespace, segment_index: segmentIndex }),
+  });
+}
+
 // ─── 정책 항목 브라우저 (item 단위, param/narrative 자식 포함) ─────────────────
 
 export interface PolicyParam {
@@ -118,12 +134,23 @@ export interface Track2RunHistory extends Track2Result {
   triggered_by: number | null;
 }
 
-export async function runTrack2(topK = 10): Promise<Track2Result> {
-  return apiFetch<Track2Result>(`/policy/track2/run?top_k=${topK}`, { method: 'POST' });
+export async function runTrack2(topK = 10, axis = 'policy'): Promise<Track2Result> {
+  return apiFetch<Track2Result>(`/policy/track2/run?top_k=${topK}&axis=${encodeURIComponent(axis)}`, { method: 'POST' });
 }
 
 export async function getTrack2History(limit = 50): Promise<Track2RunHistory[]> {
   return apiFetch<Track2RunHistory[]>(`/policy/track2/history?limit=${limit}`);
+}
+
+// 비교 가능한 데이터 축 목록(2026-09-16, 엔진 파라미터화) — 지금은 "정책서" 하나뿐이지만
+// 새 축(CMDB 등)이 백엔드 track2.AXIS_REGISTRY에 등록되면 이 목록도 자동으로 늘어난다.
+export interface Track2Axis {
+  key: string;
+  label: string;
+}
+
+export async function getTrack2Axes(): Promise<Track2Axis[]> {
+  return apiFetch<Track2Axis[]>('/policy/track2/axes');
 }
 
 // ─── 파이프라인 모니터(실험실 게이트 작업3) ────────────────────────────────────

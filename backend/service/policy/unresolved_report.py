@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
+from shared.embedding import embedding_service
 
 
 @dataclass
@@ -101,3 +102,53 @@ async def get_unresolved_summary(namespace: str, system_key: Optional[str] = Non
         total_items=total_items, total_segments=total_segments,
         by_system=sorted(groups.values(), key=lambda g: -g.segment_count),
     )
+
+
+async def promote_segment_to_narrative(namespace: str, item_id: int, segment_index: int) -> int:
+    """unresolved segment 1건을 서술(policy_chunk)로 수동 편입 — §6 "검토 UI" 중 실제로
+    쌓인 문제(조회만 있고 액션이 없음, 2026-09-16 사용자 지적)를 해소하는 첫 액션. 원문을
+    그대로 벡터 색인해 최소한 검색은 되게 만든다(service.py의 narrative 처리·벡터 폴백과
+    동일 패턴) — param처럼 구조화된 필드 추출은 하지 않는다(폼 없이 원클릭으로 되는 선에서
+    "완전히 방치"를 벗어나는 게 목적, 정밀 재분류는 여전히 사람이 원문을 보고 값을 추출해야
+    하는 별개 작업).
+
+    반환값: 편입 후 남은 unresolved segment 개수.
+    """
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
+
+        row = await conn.fetchrow(
+            "SELECT unresolved_segments FROM policy_item WHERE id = $1 AND namespace_id = $2",
+            item_id, ns_id,
+        )
+        if row is None:
+            raise ValueError(f"정책 항목을 찾을 수 없습니다: item_id={item_id}")
+
+        segs_raw = row["unresolved_segments"]
+        segments = (json.loads(segs_raw) if isinstance(segs_raw, str) else segs_raw) or []
+        if not (0 <= segment_index < len(segments)):
+            raise ValueError(f"segment_index 범위를 벗어났습니다: {segment_index} (전체 {len(segments)}개)")
+
+        segment_text = (segments[segment_index] or {}).get("text", "").strip()
+        if not segment_text:
+            raise ValueError("빈 segment는 편입할 수 없습니다.")
+
+        next_chunk_idx = await conn.fetchval(
+            "SELECT COALESCE(MAX(chunk_idx) + 1, 0) FROM policy_chunk WHERE policy_item_id = $1", item_id,
+        )
+        embedding = await embedding_service.embed(segment_text)
+        await conn.execute(
+            "INSERT INTO policy_chunk (policy_item_id, chunk_text, embedding, chunk_idx) VALUES ($1, $2, $3::vector, $4)",
+            item_id, segment_text, str(embedding), next_chunk_idx,
+        )
+
+        remaining = segments[:segment_index] + segments[segment_index + 1:]
+        new_parse_status = "parsed" if not remaining else "partial"
+        await conn.execute(
+            """UPDATE policy_item SET unresolved_segments = $1::jsonb, parse_status = $2, updated_at = NOW()
+               WHERE id = $3""",
+            json.dumps(remaining, ensure_ascii=False), new_parse_status, item_id,
+        )
+    return len(remaining)

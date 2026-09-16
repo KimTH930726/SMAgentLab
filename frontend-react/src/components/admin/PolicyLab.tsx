@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { FlaskConical, ArrowRight, Info, Check } from 'lucide-react';
-import { runTrack2, type Track2Result } from '../../api/policy';
+import { runTrack2, getTrack2Axes, type Track2Result } from '../../api/policy';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 
@@ -68,9 +68,19 @@ const STORAGE_STRATEGIES: StorageStrategy[] = [
 export function PolicyLab() {
   const [lastResult, setLastResult] = useState<Track2Result | null>(null);
   const [visibleMetrics, setVisibleMetrics] = useState<Set<MetricKey>>(new Set(ALL_METRICS));
+  const [axis, setAxis] = useState('policy');
+
+  // 비교 가능한 데이터 축 목록(엔진 파라미터화, 2026-09-16) — 지금은 "정책서" 하나뿐이라
+  // 드롭다운도 사실상 고정값이지만, 새 축(CMDB 등)이 백엔드에 등록되면 이 목록이 그대로
+  // 늘어나서 선택지가 생긴다 — 미리 화면에 자리를 잡아두는 것.
+  const { data: axes = [{ key: 'policy', label: '정책서 (A/B)' }] } = useQuery({
+    queryKey: ['track2-axes'],
+    queryFn: getTrack2Axes,
+    staleTime: 5 * 60_000,
+  });
 
   const runMutation = useMutation({
-    mutationFn: () => runTrack2(),
+    mutationFn: () => runTrack2(10, axis),
     onSuccess: (data) => setLastResult(data),
   });
 
@@ -95,9 +105,23 @@ export function PolicyLab() {
             정책서를 저장하는 두 가지 방식 중 어느 쪽이 질문에 더 정확히 답하는지 비교합니다.
           </p>
         </div>
-        <Button variant="primary" size="sm" loading={runMutation.isPending} onClick={() => runMutation.mutate()}>
-          {runMutation.isPending ? '실행 중... (몇 분 소요)' : '비교 실행'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <div>
+            <label className="block text-[10px] text-slate-500 mb-1">데이터 축</label>
+            <select
+              value={axis}
+              onChange={(e) => setAxis(e.target.value)}
+              disabled={axes.length <= 1}
+              title={axes.length <= 1 ? '아직 정책서 축 하나뿐 — 새 축이 추가되면 여기서 고를 수 있습니다' : undefined}
+              className="w-40 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {axes.map((a) => <option key={a.key} value={a.key}>{a.label}</option>)}
+            </select>
+          </div>
+          <Button variant="primary" size="sm" loading={runMutation.isPending} onClick={() => runMutation.mutate()}>
+            {runMutation.isPending ? '실행 중... (몇 분 소요)' : '비교 실행'}
+          </Button>
+        </div>
       </div>
 
       {/* 저장 전략 현황판 — B안이 지금 실제로 쓰는 저장 방식을 체크 배지로. 그래프처럼 아직

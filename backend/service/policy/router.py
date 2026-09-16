@@ -9,7 +9,7 @@ from core.dependencies import get_current_user, get_current_admin, check_namespa
 from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats
 from service.policy.schemas import (
     ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
-    Track2RunHistoryOut, PipelineStatsOut,
+    Track2RunHistoryOut, PipelineStatsOut, PromoteSegmentRequest, PromoteSegmentOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,6 +88,25 @@ async def get_unresolved_summary(
     return UnresolvedSummaryOut(**asdict(summary))
 
 
+@router.post("/unresolved/{item_id}/promote", response_model=PromoteSegmentOut)
+async def promote_unresolved_segment(
+    item_id: int,
+    body: PromoteSegmentRequest,
+    user: dict = Depends(get_current_user),
+):
+    """unresolved segment 1건을 서술(policy_chunk)로 수동 편입 — "조회만 있고 액션이 없다"는
+    지적(2026-09-16)으로 신규. 정밀 재분류(param 필드 추출)가 아니라 최소한 검색은 되게
+    만드는 원클릭 액션이다(unresolved_report.promote_segment_to_narrative 참고)."""
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        remaining = await unresolved_report.promote_segment_to_narrative(
+            body.namespace, item_id, body.segment_index,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return PromoteSegmentOut(remaining_segments=remaining)
+
+
 @router.get("/items", response_model=list[PolicyItemOut])
 async def list_policy_items(
     namespace: str = Query(...),
@@ -108,9 +127,18 @@ async def list_policy_items(
     return [PolicyItemOut(**asdict(i)) for i in items]
 
 
+@router.get("/track2/axes")
+async def get_track2_axes(user: dict = Depends(get_current_user)):
+    """비교 가능한 데이터 축 목록(2026-09-16, 엔진 파라미터화) — 지금은 정책서 하나뿐이지만
+    새 축(CMDB 등)이 track2.AXIS_REGISTRY에 등록되면 여기 자동으로 같이 늘어난다. 화면의
+    축 선택 드롭다운이 이 목록을 그대로 쓴다."""
+    return [{"key": k, "label": track2.AXIS_LABELS.get(k, k)} for k in track2.AXIS_REGISTRY]
+
+
 @router.post("/track2/run", response_model=Track2ResultOut)
 async def run_track2(
     top_k: int = Query(default=10, ge=1, le=50),
+    axis: str = Query(default="policy"),
     user: dict = Depends(get_current_admin),
 ):
     """Track 2 저장소 전략 비교(§4)를 즉시 실행 — A(rag_knowledge 지식-only, 임시 격리
@@ -119,9 +147,15 @@ async def run_track2(
     전체 policy_item 규모만큼 임베딩을 다시 계산해야 해서 몇 분 걸린다 — admin 전용(무거운
     실험 실행이라 일반 사용자가 실수로 반복 실행하지 않도록). 실행 중 만드는 임시 데이터는
     끝나면 자동 삭제되어 프로덕션에 흔적을 남기지 않는다.
+
+    `axis`는 track2.AXIS_REGISTRY에서 골든셋 경로+전략 조합을 찾는다(2026-09-16 엔진
+    파라미터화) — 지금은 "policy" 하나뿐, 새 축이 등록되면 값만 늘어난다.
     """
+    if axis not in track2.AXIS_REGISTRY:
+        raise HTTPException(status_code=400, detail=f"알 수 없는 축: {axis} (가능: {list(track2.AXIS_REGISTRY)})")
+    golden_set_path, strategies = track2.AXIS_REGISTRY[axis]
     try:
-        result = await track2.run_comparison(top_k=top_k)
+        result = await track2.run_comparison(golden_set_path=golden_set_path, strategies=strategies, top_k=top_k)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # 실행마다 자동 저장(2026-09-15, 실험실 게이트 작업3) — "이력이 쌓이는 것 자체가

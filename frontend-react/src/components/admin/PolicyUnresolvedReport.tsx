@@ -1,16 +1,19 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp, FileWarning, Info } from 'lucide-react';
-import { getUnresolvedSummary } from '../../api/policy';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ChevronDown, ChevronUp, FileWarning, Info, ArrowRightCircle } from 'lucide-react';
+import { getUnresolvedSummary, promoteUnresolvedSegment } from '../../api/policy';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
 
 /**
- * 정책서 unresolved 팀별 집계 리포트 — 읽기 전용.
+ * 정책서 unresolved 팀별 집계 리포트.
  *
- * LLM 분해가 서술/파라미터 어디에도 못 넣은 내용을 팀(system_key)별로 보여준다. 승인/재분류
- * 등 쓰기 동작은 없다 — 그건 별도 "검토 UI"(docs/policy-doc-pipeline-plan.md §6, 미착수) 몫이고,
- * 이 화면의 목적은 표준화 요청 근거 자료를 사람이 눈으로 훑어볼 수 있게 하는 것뿐이다.
+ * LLM 분해가 서술/파라미터 어디에도 못 넣은 내용을 팀(system_key)별로 보여준다. 정밀
+ * 재분류(param 필드 추출) 같은 승인 화면은 여전히 없다 — 그건 별도 "검토 UI"
+ * (docs/policy-doc-pipeline-plan.md §6, 미착수) 몫이다. 다만 2026-09-16, "조회만 있고
+ * 아무 액션도 없다"는 지적을 받고 **딱 하나의 액션(서술로 편입)만 추가** — 원문을 그대로
+ * policy_chunk에 넣어 최소한 검색은 되게 만드는 원클릭 액션. 완전한 검토 화면의 대체가
+ * 아니라 "완전 방치"를 벗어나는 최소선.
  *
  * 2026-09-04 사용자 피드백 반영: (1) 라이트모드에서 amber 텍스트 대비가 낮아 안 읽힘 —
  * slate 팔레트는 CSS 변수로 테마에 따라 자동 전환되지만 amber 등 강조색은 그렇지 않아 dark:
@@ -22,6 +25,7 @@ export function PolicyUnresolvedReport() {
   const { selectedNs, setSelectedNs, sortedNamespaces } = useNamespaceAccess();
   const [systemFilter, setSystemFilter] = useState('');
   const [expandedItemId, setExpandedItemId] = useState<number | null>(null);
+  const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['policy-unresolved-summary', selectedNs],
@@ -29,6 +33,15 @@ export function PolicyUnresolvedReport() {
     enabled: !!selectedNs,
     staleTime: 15_000,
     refetchOnMount: 'always',
+  });
+
+  // segment_index는 서버의 unresolved_segments 배열 순서에 의존한다 — 편입 성공 후 배열이
+  // 한 칸씩 당겨지므로, 같은 item에서 연달아 편입할 때 인덱스가 어긋나지 않도록 매번
+  // summary를 다시 받아온다(로컬에서 배열을 직접 잘라내지 않음).
+  const promoteMutation = useMutation({
+    mutationFn: ({ itemId, segmentIndex }: { itemId: number; segmentIndex: number }) =>
+      promoteUnresolvedSegment(itemId, segmentIndex, selectedNs),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['policy-unresolved-summary', selectedNs] }),
   });
 
   const groups = systemFilter
@@ -50,13 +63,13 @@ export function PolicyUnresolvedReport() {
         <div className="space-y-1">
           <p>
             AI가 정책 원문을 "서술 설명"이나 "값 하나짜리 파라미터" 어느 쪽으로도 자동 분류하지
-            못한 부분입니다. <b>데이터가 사라진 건 아니고</b> 원문 그대로 보존만 된 상태이며,
-            이 화면에서 직접 승인·수정·재분류는 할 수 없습니다(아직 그런 기능 없음).
+            못한 부분입니다. <b>데이터가 사라진 건 아니고</b> 원문 그대로 보존된 상태입니다.
           </p>
           <p>
-            지금 할 수 있는 액션은 두 가지입니다 — ① 아래에서 같은 유형의 사유가 반복되면
-            개발팀에 공유해 전용 처리 구조를 만들지 검토 요청, ② 특정 팀의 원문 표현이 애매해서
-            생긴 경우면 그 팀에 "이 부분을 이렇게 다시 써달라"고 요청할 때의 근거 자료로 사용.
+            펼쳐서 <b>"서술로 편입"</b>을 누르면 원문을 그대로 검색 가능한 서술 지식으로 바로
+            등록합니다(값·조건을 정밀하게 구조화하는 건 아니고, 최소한 검색은 되게 만드는
+            원클릭 액션입니다). 정밀 재분류가 필요하거나 팀에 원문 수정을 요청할 근거로 쓰고
+            싶으면 편입하지 않고 그대로 둬도 됩니다.
           </p>
         </div>
       </div>
@@ -136,20 +149,40 @@ export function PolicyUnresolvedReport() {
                       </div>
                       {expandedItemId === item.item_id && (
                         <div className="px-4 pb-3 space-y-2">
-                          {item.segments.map((seg, idx) => (
-                            <div key={idx} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 space-y-1.5">
-                              <div>
-                                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">원문</p>
-                                <p className="text-sm text-slate-300 leading-relaxed">{seg.text}</p>
-                              </div>
-                              {seg.reason && (
+                          {item.segments.map((seg, idx) => {
+                            const isThisPending = promoteMutation.isPending
+                              && promoteMutation.variables?.itemId === item.item_id
+                              && promoteMutation.variables?.segmentIndex === idx;
+                            return (
+                              <div key={idx} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 space-y-1.5">
                                 <div>
-                                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">왜 자동 분류가 안 됐나요</p>
-                                  <p className="text-xs text-amber-700 dark:text-amber-400/90">{seg.reason}</p>
+                                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">원문</p>
+                                  <p className="text-sm text-slate-300 leading-relaxed">{seg.text}</p>
                                 </div>
-                              )}
-                            </div>
-                          ))}
+                                {seg.reason && (
+                                  <div>
+                                    <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">왜 자동 분류가 안 됐나요</p>
+                                    <p className="text-xs text-amber-700 dark:text-amber-400/90">{seg.reason}</p>
+                                  </div>
+                                )}
+                                <div className="flex justify-end pt-1">
+                                  <button
+                                    type="button"
+                                    disabled={promoteMutation.isPending}
+                                    onClick={() => promoteMutation.mutate({ itemId: item.item_id, segmentIndex: idx })}
+                                    title="원문을 그대로 검색 가능한 서술 지식으로 등록합니다(정밀 재분류는 아님)"
+                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-indigo-600/40 text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    {isThisPending ? (
+                                      <>편입 중...</>
+                                    ) : (
+                                      <><ArrowRightCircle className="w-3.5 h-3.5" /> 서술로 편입</>
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

@@ -9,6 +9,15 @@ docs/policy-doc-pipeline-plan.md §4 실험을 매번 일회성 스크립트로 
 
 실행에 몇 분 걸린다(전체 policy_item 수만큼 임베딩 1회씩) — 실시간 기능이 아니라 "가끔 재측정"
 용도라 동기 호출로 충분하다고 판단(YAGNI, 별도 잡 큐 없음).
+
+**엔진 파라미터화(2026-09-16, lab.md L2)**: 골든셋 경로와 A/B 검색 전략을 `run_comparison()`
+인자로 뺐다 — "축 #2 증명"을 억지 PoC로 만드는 대신, 실제 팀 데이터전환(CMDB 등, 10월 착수
+예정)이 올 때 `Strategy` 등록 + 골든셋 파일만 추가하면 채점 로직(hit@K/precision@K/Top-1/
+채널기여도, 전부 축 무관한 순수 함수)은 그대로 재사용할 수 있게 하기 위함. **L6 경계**: 전략
+자동추천·골든셋 자동생성은 범위 밖. 골든셋 포맷(`source: {file,sheet,row/category/condition}`)
+자체는 지금 정책서 하나 기준으로 정책 전용으로 남겨둔다 — 실제 두 번째 축이 왔을 때 필요하면
+그때 넓힌다(사례 1개로 프레임워크부터 만들지 않는다는 이 프로젝트 반복 원칙). A/B 필드명
+(`b_hit_rdb_only` 등)도 지금 일반화하지 않는다.
 """
 from __future__ import annotations
 
@@ -16,7 +25,7 @@ import json
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
@@ -30,6 +39,49 @@ _TRACK_A_CATEGORY = "정책서-TrackA-테스트"
 # (§4-1 스펙상 source.file은 재구성 워크북 이름). 새 시스템 정책서가 골든셋에 추가되면
 # 여기 목록도 같이 늘려야 매칭된다 — 하드코딩이지만 지금 골든셋 소스가 이 2개뿐이라 YAGNI.
 _FILE_TO_NAMESPACE = [("온라인스토어", "온라인스토어 DB"), ("딜리버스", "딜리버스 DB")]
+
+
+@dataclass
+class Strategy:
+    """비교 대상 검색 전략 하나. `search(namespace, query, top_k)`만 맞으면 뭐든 등록 가능
+    — A/B가 반환하는 결과 모양(A: 단일 랭킹 리스트, B: params/narratives 두 채널)은 서로
+    다른데, 이건 억지로 통일하지 않는다(위 모듈 docstring 참고, L6 경계). 아래
+    `run_comparison()`의 채점부가 이름으로 A/B를 구분해 각자 맞는 방식으로 채점한다."""
+    name: str
+    search: Callable[[str, str, int], Awaitable[Any]]  # (namespace, query, top_k) -> 전략별 결과
+
+
+async def _search_a(namespace: str, query: str, top_k: int) -> list:
+    """A(지식-only) 전략. namespace 인자는 무시한다 — A는 항상 격리된 고정 테스트
+    네임스페이스(`_TRACK_A_NAMESPACE`)만 본다(정책 namespace가 여러 개여도 A그룹 색인은
+    실행마다 하나뿐이므로)."""
+    query_vec = await embedding_service.embed(query)
+    return await search_knowledge(_TRACK_A_NAMESPACE, query_vec, query, top_k=top_k)
+
+
+async def _search_b(namespace: str, query: str, top_k: int):
+    """B(하이브리드) 전략 — 지금 운영 중인 search_policy() 그대로."""
+    return await search_service.search_policy(namespace, query, top_k=top_k)
+
+
+# 정책서 A/B 등록 — 새 데이터 축(예: CMDB)이 오면 별도 리스트로 추가하고 golden_set_path만
+# 바꿔서 run_comparison()을 그대로 재호출하면 된다(엔진 자체는 무변경).
+POLICY_STRATEGIES: list[Strategy] = [
+    Strategy("A_unified", _search_a),
+    Strategy("B_hybrid", _search_b),
+]
+
+# 축(axis) 레지스트리 — "어느 데이터 축으로 비교할지"를 화면에서 고를 수 있게 API/UI에
+# 노출하는 지점(2026-09-16). 지금은 정책서 하나뿐이라 실질적으로 고를 게 없지만, 그
+# "하나뿐"인 상태 자체를 화면에 보이게 해두면 두 번째 축(CMDB 등)이 실제로 등록될 때
+# 여기 딕셔너리에 한 줄 추가하는 것만으로 선택지가 늘어난다 — 그 전까지는 골든셋 자동
+# 생성/전략 자동 추천 없이 이 고정 레지스트리 하나로 충분(L6 경계, 전달 프롬프트 참고).
+AXIS_REGISTRY: dict[str, tuple[Optional[Path], list[Strategy]]] = {
+    "policy": (None, POLICY_STRATEGIES),  # None = run_comparison()이 _GOLDEN_SET_PATH로 폴백
+}
+AXIS_LABELS: dict[str, str] = {
+    "policy": "정책서 (A/B)",
+}
 
 
 @dataclass
@@ -143,14 +195,54 @@ async def _setup_track_a(conn, ns_id_a: int) -> dict[int, int]:
     return id_map
 
 
-async def run_comparison(top_k: int = 10) -> Track2Result:
-    if not _GOLDEN_SET_PATH.exists():
+async def _load_golden_set(golden_set_path: Path, real_ns_ids: dict[str, int]) -> list[dict]:
+    """골든셋 파일 → 정답 id까지 리졸브된 공통 포맷 `{query, type, gold_ids, namespace_name}`
+    리스트. `source`(file/sheet/row 또는 category 또는 condition) 파싱은 지금 정책서 골든셋
+    전용 포맷이다 — 다른 축이 오면 이 함수를 축별로 새로 짜고, run_comparison() 이하는
+    그대로 둔다(포맷을 미리 일반화하지 않는다, 위 모듈 docstring L6 경계 참고)."""
+    if not golden_set_path.exists():
         raise ValueError(
-            f"골든셋 파일이 없습니다: {_GOLDEN_SET_PATH}. "
+            f"골든셋 파일이 없습니다: {golden_set_path}. "
             "backend/tests/fixtures/golden_set/online_delivus_v1.jsonl 준비 후 재시도하세요."
         )
-    with open(_GOLDEN_SET_PATH, encoding="utf-8") as f:
-        golden = [json.loads(line) for line in f if line.strip()]
+    with open(golden_set_path, encoding="utf-8") as f:
+        raw = [json.loads(line) for line in f if line.strip()]
+
+    entries: list[dict] = []
+    for e in raw:
+        qtype, query, src = e["type"], e["query"], e["source"]
+        namespace_name = _namespace_for_file(src.get("file", ""))
+        if namespace_name is None or namespace_name not in real_ns_ids:
+            continue
+        real_ns_id = real_ns_ids[namespace_name]
+
+        async with get_conn() as conn:
+            if qtype in ("param", "narrative"):
+                item = await _resolve_item_by_source(conn, src["file"], src["sheet"], src["row"])
+                gold_ids = {item["id"]} if item else set()
+            elif qtype == "navigation":
+                gold_ids = await _resolve_items_by_category(conn, real_ns_id, src["category"])
+            else:
+                gold_ids = await _resolve_items_by_condition(conn, real_ns_id, src["condition"])
+        if not gold_ids:
+            continue
+
+        entries.append({"query": query, "type": qtype, "gold_ids": gold_ids, "namespace_name": namespace_name})
+    return entries
+
+
+async def run_comparison(
+    golden_set_path: Optional[Path] = None,
+    strategies: Optional[list[Strategy]] = None,
+    top_k: int = 10,
+) -> Track2Result:
+    # None 센티널 + 모듈 전역을 함수 본문에서 조회 — 기본 인자값으로 바로 _GOLDEN_SET_PATH/
+    # POLICY_STRATEGIES를 쓰면 def 시점에 값이 고정돼버려서, 테스트가
+    # monkeypatch.setattr(track2, "_GOLDEN_SET_PATH", ...)로 바꿔치기해도 이미 바인딩된
+    # 기본값엔 반영이 안 되는 문제가 있었다(리팩토링 중 실제로 테스트 4건이 이걸로 깨짐).
+    golden_set_path = golden_set_path if golden_set_path is not None else _GOLDEN_SET_PATH
+    strategies = strategies if strategies is not None else POLICY_STRATEGIES
+    strategy_by_name = {s.name: s for s in strategies}
 
     t0 = time.monotonic()
 
@@ -170,6 +262,8 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
                 real_ns_ids[ns] = resolved
 
     try:
+        golden = await _load_golden_set(golden_set_path, real_ns_ids)
+
         # precision은 "top-K(A는 top_k, B는 param+narrative 합쳐 최대 2*top_k) 중 실제
         # 골든셋 정답 item과 겹치는 고유 item 비율" — hit@K는 "정답이 있냐 없냐"만 보고
         # 후보군에 잡음이 얼마나 섞였는지는 안 보므로, 같은 hit@K를 내는 두 전략이라도
@@ -179,31 +273,17 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
         # 것 자체도 실측해서 같이 보고한다(순수 정답 비율만으로 비교하면 이 차이가 가려짐).
         per_type: dict[str, list[_QueryScore]] = {}
         for entry in golden:
-            qtype, query, src = entry["type"], entry["query"], entry["source"]
-            namespace_name = _namespace_for_file(src.get("file", ""))
-            if namespace_name is None or namespace_name not in real_ns_ids:
-                continue
-            real_ns_id = real_ns_ids[namespace_name]
+            query, qtype, gold_ids, namespace_name = (
+                entry["query"], entry["type"], entry["gold_ids"], entry["namespace_name"]
+            )
 
-            async with get_conn() as conn:
-                if qtype in ("param", "narrative"):
-                    item = await _resolve_item_by_source(conn, src["file"], src["sheet"], src["row"])
-                    gold_ids = {item["id"]} if item else set()
-                elif qtype == "navigation":
-                    gold_ids = await _resolve_items_by_category(conn, real_ns_id, src["category"])
-                else:
-                    gold_ids = await _resolve_items_by_condition(conn, real_ns_id, src["condition"])
-            if not gold_ids:
-                continue
-
-            query_vec = await embedding_service.embed(query)
-            a_hits = await search_knowledge(_TRACK_A_NAMESPACE, query_vec, query, top_k=top_k)
+            a_hits = await strategy_by_name["A_unified"].search(_TRACK_A_NAMESPACE, query, top_k)
             a_item_ids = {id_map.get(h.id) for h in a_hits}
             a_hit = bool(gold_ids & a_item_ids)
             a_precision = (len(gold_ids & a_item_ids) / len(a_item_ids)) if a_item_ids else 0.0
             a_top1 = bool(a_hits and id_map.get(a_hits[0].id) in gold_ids)
 
-            b_result = await search_service.search_policy(namespace_name, query, top_k=top_k)
+            b_result = await strategy_by_name["B_hybrid"].search(namespace_name, query, top_k)
             b_param_ids = {p.item_id for p in b_result.params}
             b_narrative_ids = {n.item_id for n in b_result.narratives}
             b_item_ids = b_param_ids | b_narrative_ids
@@ -262,7 +342,7 @@ async def run_comparison(top_k: int = 10) -> Track2Result:
         b_hit_vector_only=_rate(all_rows, lambda r: r.b_via_vector and not r.b_via_rdb),
         b_hit_both=_rate(all_rows, lambda r: r.b_via_rdb and r.b_via_vector),
         by_type=by_type,
-        golden_set_file=_GOLDEN_SET_PATH.name,
+        golden_set_file=golden_set_path.name,
         top_k=top_k,
         duration_seconds=round(time.monotonic() - t0, 1),
         a_top1_accuracy=_rate(all_rows, lambda r: r.a_top1),
