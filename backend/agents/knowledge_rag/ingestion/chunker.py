@@ -13,6 +13,27 @@ MIN_CHUNK_CHARS = 50
 MAX_CHUNK_CHARS = 2000
 OVERLAP_CHARS = 100
 
+# 짧은 상위 섹션 도입부(예: "## 1.3.2 신규 주문\n...성공 이후에 신규 주문을 전송한다.")가
+# 그 직전 섹션(1.3.1, 이미 max_chars에 가까움)에 붙어버리면, 정작 그 도입부가 설명하려던
+# 하위 섹션(1.3.2.1)은 부모 제목 없이 통째로 새 청크로 분리돼 맥락을 잃는다(2026-09-17,
+# 신규 Confluence 일괄 임포트 파일럿에서 실측 — "## 1.3.2.1. 시점"만 있고 이게 "신규 주문"
+# 얘기라는 걸 알 길이 없는 청크가 2건 나옴). 짧은 섹션은 뒤따르는 하위 섹션 쪽으로 넘겨준다.
+SHORT_INTRO_CHARS = 150
+
+# Confluence 다이어그램/흐름도 macro가 텍스트 추출 과정에서 그대로 깨져 들어오는 잔재 —
+# 같은 파일럿에서 4건 실측, 전부 "흐름도" 절 아래 이 정확한 서명("false auto top")을
+# 포함한 한 줄짜리 파라미터 덤프였다(예: "true 3.11. 장바구니 선계산 false auto top
+# DlvsDeletePrivacy true 771 7", "true DlvsAllocationStatus false auto top true 1533 2").
+# true/false를 세는 일반 휴리스틱은 정상 문장(예: "true/false 값을 가진다")을 오탐할 수
+# 있어, 실측된 정확한 서명 문자열만 좁게 매치한다 — 다른 macro 잔재 패턴이 새로 발견되면
+# 그때 추가.
+_MACRO_ARTIFACT_SIGNATURE = "false auto top"
+
+
+def _strip_macro_artifacts(text: str) -> str:
+    lines = [ln for ln in text.split("\n") if _MACRO_ARTIFACT_SIGNATURE not in ln]
+    return "\n".join(lines)
+
 
 @dataclass
 class Chunk:
@@ -90,32 +111,44 @@ def _chunk_by_sections(doc: ParsedDocument, max_chars: int, min_chars: int) -> l
     chunks: list[Chunk] = []
     buffer_title = ""
     buffer_text = ""
+    # 직전 섹션이 짧은 도입부였다면 그 "## 제목\n내용" 문자열을 들고 있다가, 그게 방금
+    # flush된 버퍼에 딸려가고 그 다음 섹션(원래 이 도입부가 설명하려던 하위 섹션)이 새
+    # 버퍼로 고립될 때 다시 앞에 붙여준다.
+    prev_short_intro: Optional[str] = None
 
     for sec in doc.sections:
-        section_text = sec["content"]
+        raw_content = _strip_macro_artifacts(sec["content"])
+        section_text = raw_content
         if sec["title"]:
-            section_text = f"## {sec['title']}\n{section_text}"
+            section_text = f"## {sec['title']}\n{raw_content}"
+        is_short = len(raw_content.strip()) < SHORT_INTRO_CHARS
 
         # 버퍼와 합쳤을 때 max 이하면 병합
         if buffer_text and len(buffer_text) + len(section_text) <= max_chars:
             buffer_text += "\n\n" + section_text
+            prev_short_intro = section_text if is_short else None
             continue
 
         # 버퍼가 차있으면 flush
         if buffer_text.strip():
             chunks.append(Chunk(text=buffer_text.strip(), idx=len(chunks), section_title=buffer_title))
 
+        prefix = (prev_short_intro + "\n\n") if prev_short_intro else ""
+        prev_short_intro = None
+
         # 현재 섹션이 max 초과면 paragraph로 재분할
         if len(section_text) > max_chars:
-            sub_chunks = _chunk_by_paragraphs(section_text, max_chars, min_chars)
+            sub_chunks = _chunk_by_paragraphs(prefix + section_text, max_chars, min_chars)
             for sc in sub_chunks:
                 sc.section_title = sec.get("title", "")
             chunks.extend(sub_chunks)
             buffer_text = ""
             buffer_title = ""
         else:
-            buffer_text = section_text
+            buffer_text = prefix + section_text
             buffer_title = sec.get("title", "")
+            if is_short:
+                prev_short_intro = section_text
 
     # 마지막 버퍼 flush
     if buffer_text.strip():
