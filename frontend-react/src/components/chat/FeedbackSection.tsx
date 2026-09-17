@@ -11,10 +11,7 @@ import type { KnowledgeCategory } from '../../types';
 type FeedbackState = 'idle' | 'positive_sent' | 'showing_form' | 'negative_sent';
 
 interface KnowledgeFormData {
-  container_name: string;
-  target_tables: string;
   content: string;
-  query_template: string;
   base_weight: number;
   category: string;
 }
@@ -41,10 +38,7 @@ export function FeedbackSection({
   const transitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (transitionTimer.current) clearTimeout(transitionTimer.current); }, []);
   const [form, setForm] = useState<KnowledgeFormData>({
-    container_name: '',
-    target_tables: '',
     content: answer,
-    query_template: '',
     base_weight: 1.0,
     category: '',
   });
@@ -99,10 +93,7 @@ export function FeedbackSection({
     try {
       const created = await createKnowledge({
         namespace,
-        container_name: form.container_name || '미분류',
-        target_tables: form.target_tables.split(',').map((t) => t.trim()).filter(Boolean),
         content: form.content,
-        query_template: form.query_template || null,
         base_weight: form.base_weight,
         category: form.category || null,
       });
@@ -186,45 +177,12 @@ export function FeedbackSection({
               <p className="text-xs font-medium text-slate-400">지식으로 등록 (선택사항)</p>
 
               <div>
-                <label className="block text-xs text-slate-500 mb-1">컨테이너명</label>
-                <input
-                  type="text"
-                  value={form.container_name}
-                  onChange={(e) => setForm((f) => ({ ...f, container_name: e.target.value }))}
-                  placeholder="예: 청구서 조회"
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">대상 테이블 (쉼표 구분)</label>
-                <input
-                  type="text"
-                  value={form.target_tables}
-                  onChange={(e) => setForm((f) => ({ ...f, target_tables: e.target.value }))}
-                  placeholder="table_a, table_b"
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
                 <label className="block text-xs text-slate-500 mb-1">내용 <span className="text-rose-400">*</span></label>
                 <textarea
                   rows={6}
                   value={form.content}
                   onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
                   className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">쿼리 템플릿 (선택)</label>
-                <textarea
-                  rows={3}
-                  value={form.query_template}
-                  onChange={(e) => setForm((f) => ({ ...f, query_template: e.target.value }))}
-                  placeholder="SELECT ..."
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-y"
                 />
               </div>
 

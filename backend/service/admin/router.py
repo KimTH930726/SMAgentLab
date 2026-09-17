@@ -425,7 +425,6 @@ async def resolve_query_log(log_id: int, user: dict = Depends(get_current_user))
     # create_knowledge()를 그대로 재사용해 지식등록 탭과 동일하게 유사 지식 검사(pending_review)를 거친다.
     created = await knowledge_service.create_knowledge(
         row["namespace"], row["answer"],
-        container_name=row["mapped_term"] or "미분류",
         category="공통지식",
         created_by_part=user["part"], created_by_user_id=user["id"],
     )

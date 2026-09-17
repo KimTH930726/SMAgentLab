@@ -22,11 +22,10 @@ _TAGGER_PROMPT = """아래 텍스트 청크들의 메타데이터를 추출해�
 
 각 청크에 대해 다음을 추출하세요:
 1. category: 위 카테고리 중 하나 (해당 없으면 null)
-2. container_name: 시스템명/컨테이너명 (텍스트에 언급된 경우만, 없으면 null)
-3. priority_score: 0.0~1.0 (업무 중요도 — 장애 대응/핵심 프로세스는 높게)
+2. priority_score: 0.0~1.0 (업무 중요도 — 장애 대응/핵심 프로세스는 높게)
 
 응답 형식 (JSON 배열만 반환):
-[{{"idx": 0, "category": "카테고리", "container_name": "시스템명", "priority_score": 0.7}}, ...]"""
+[{{"idx": 0, "category": "카테고리", "priority_score": 0.7}}, ...]"""
 
 _GLOSSARY_SYSTEM = """You are a domain terminology expert for IT operations.
 Extract key business terms from the text. Return valid JSON only."""
@@ -58,7 +57,7 @@ async def auto_tag_chunks(
         categories: 사용 가능한 카테고리 목록
         llm: LLM provider instance
     Returns:
-        [{"idx": 0, "category": str|None, "container_name": str|None, "priority_score": float}, ...]
+        [{"idx": 0, "category": str|None, "priority_score": float}, ...]
     """
     if not chunks:
         return []
@@ -84,7 +83,7 @@ async def auto_tag_chunks(
         return result
     except Exception as e:
         logger.warning("자동 태깅 실패 (폴백: 빈 태그): %s", e)
-        return [{"idx": c["idx"], "category": None, "container_name": None, "priority_score": 0.5} for c in chunks]
+        return [{"idx": c["idx"], "category": None, "priority_score": 0.5} for c in chunks]
 
 
 async def extract_glossary_terms(

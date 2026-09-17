@@ -65,10 +65,7 @@ class GlossaryMatch:
 class RetrievalResult:
     id: int
     namespace: str
-    container_name: Optional[str]
-    target_tables: Optional[list[str]]
     content: str
-    query_template: Optional[str]
     base_weight: float
     final_score: float
     v_score: float = field(default=0.0)
@@ -183,8 +180,8 @@ async def search_knowledge(
                   AND (k.status IS NULL OR k.status = 'active')
                   AND to_tsvector('simple', k.content) @@ q.tsq
             )
-            SELECT k.id, n.name AS namespace, k.container_name, k.target_tables,
-                   k.content, k.query_template, k.base_weight, k.category,
+            SELECT k.id, n.name AS namespace,
+                   k.content, k.base_weight, k.category,
                    COALESCE(vs.v_score, 0.0) AS v_score,
                    COALESCE(ks.k_score, 0.0) AS k_score,
                    -- 카테고리별로 RDB(키워드) 검색을 쓸지 벡터 검색을 쓸지 여기서 갈린다
@@ -224,9 +221,7 @@ async def search_knowledge(
             score *= decay
         results.append(RetrievalResult(
             id=r["id"], namespace=r["namespace"],
-            container_name=r["container_name"],
-            target_tables=list(r["target_tables"]) if r["target_tables"] else [],
-            content=r["content"], query_template=r["query_template"],
+            content=r["content"],
             base_weight=r["base_weight"],
             v_score=float(r["v_score"]), k_score=float(r["k_score"]),
             final_score=score, category=r["category"],
@@ -296,13 +291,7 @@ def build_context(results: list[RetrievalResult]) -> str:
     for i, r in enumerate(relevant, 1):
         confidence = "높음" if r.final_score >= th["knowledge_high_score"] else "보통" if r.final_score >= th["knowledge_mid_score"] else "낮음"
         part = [f"--- 문서 {i} (점수: {r.final_score:.4f}, 신뢰도: {confidence}) ---"]
-        if r.container_name:
-            part.append(f"컨테이너: {r.container_name}")
-        if r.target_tables:
-            part.append(f"관련 테이블: {', '.join(r.target_tables)}")
         part.append(f"내용:\n{r.content}")
-        if r.query_template:
-            part.append(f"SQL:\n{r.query_template}")
         parts.append("\n".join(part))
 
     return "\n\n".join(parts)

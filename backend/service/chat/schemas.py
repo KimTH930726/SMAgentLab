@@ -26,10 +26,7 @@ class ChatRequest(BaseModel):
 
 class KnowledgeResult(BaseModel):
     id: int
-    container_name: Optional[str]
-    target_tables: Optional[list[str]]
     content: str
-    query_template: Optional[str]
     final_score: float
 
 
@@ -79,10 +76,7 @@ class GlossaryMatchInfo(BaseModel):
 
 class DebugResult(BaseModel):
     id: int
-    container_name: Optional[str]
-    target_tables: Optional[list[str]]
     content: str
-    query_template: Optional[str]
     category: Optional[str]
     base_weight: float
     v_score: float

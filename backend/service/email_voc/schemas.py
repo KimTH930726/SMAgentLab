@@ -98,7 +98,6 @@ class KnowledgeRefOut(BaseModel):
     id: int
     content: str
     category: Optional[str] = None
-    container_name: Optional[str] = None
 
 
 class ManualCollectionRequest(BaseModel):

@@ -48,7 +48,6 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
-import { TagInput } from '../ui/TagInput';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { KnowledgeItem, DuplicateMatch, ReviewFlag } from '../../types';
 
@@ -84,19 +83,13 @@ function KnowledgeContentView({ content }: { content: string }) {
 }
 
 interface KnowledgeFormData {
-  container_names: string[];
-  target_tables: string[];
   content: string;
-  query_template: string;
   base_weight: number;
   category: string;
 }
 
 const defaultForm: KnowledgeFormData = {
-  container_names: [],
-  target_tables: [],
   content: '',
-  query_template: '',
   base_weight: 1.0,
   category: '',
 };
@@ -209,10 +202,7 @@ export function KnowledgeTable() {
   const updateMutation = useMutation({
     mutationFn: (id: number) =>
       updateKnowledge(id, {
-        container_name: editForm.container_names.join(', '),
-        target_tables: editForm.target_tables,
         content: editForm.content,
-        query_template: editForm.query_template || null,
         base_weight: editForm.base_weight,
         category: editForm.category,
       }),
@@ -268,12 +258,7 @@ export function KnowledgeTable() {
   const startEdit = (item: KnowledgeItem) => {
     setEditingId(item.id);
     setEditForm({
-      container_names: item.container_name
-        ? item.container_name.split(',').map((t) => t.trim()).filter(Boolean)
-        : [],
-      target_tables: item.target_tables ?? [],
       content: item.content,
-      query_template: item.query_template ?? '',
       base_weight: item.base_weight,
       category: item.category ?? '',
     });
@@ -551,21 +536,6 @@ export function KnowledgeTable() {
                         {item.category && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-900/40 text-violet-300 border border-violet-700/40 font-medium">{item.category}</span>
                         )}
-                        {item.container_name && (
-                          <>
-                            <span className="text-[10px] text-slate-500 font-medium">컨테이너</span>
-                            {item.container_name.split(',').map((c) => c.trim()).filter(Boolean).map((c) => (
-                              <Badge key={c} color="cyan">{c}</Badge>
-                            ))}
-                          </>
-                        )}
-                        {(item.target_tables ?? []).length > 0 && (
-                          <>
-                            <span className="text-[10px] text-slate-500 font-medium">테이블</span>
-                            {(item.target_tables ?? []).slice(0, 3).map((t) => <Badge key={t} color="amber">{t}</Badge>)}
-                            {(item.target_tables ?? []).length > 3 && <Badge color="slate">+{(item.target_tables ?? []).length - 3}</Badge>}
-                          </>
-                        )}
                       </div>
                       <p className="text-xs text-slate-500 mt-0.5 truncate">{item.content.slice(0, 100)}...</p>
                     </div>
@@ -656,27 +626,10 @@ export function KnowledgeTable() {
             </div>
           )}
           <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">컨테이너명</label>
-            <TagInput tags={editForm.container_names} onChange={(tags) => setEditForm((f) => ({ ...f, container_names: tags }))}
-              placeholder="컨테이너명 입력..." readOnly={!canModifyNs} color="cyan" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">대상 테이블</label>
-            <TagInput tags={editForm.target_tables} onChange={(tags) => setEditForm((f) => ({ ...f, target_tables: tags }))}
-              placeholder="테이블명 입력..." readOnly={!canModifyNs} color="indigo" />
-          </div>
-          <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">내용</label>
             <textarea rows={10} value={editForm.content} readOnly={!canModifyNs}
               onChange={(e) => setEditForm((f) => ({ ...f, content: e.target.value }))}
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[260px] read-only:border-slate-700 leading-relaxed" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">쿼리 템플릿 (선택)</label>
-            <textarea rows={4} value={editForm.query_template} readOnly={!canModifyNs}
-              onChange={(e) => setEditForm((f) => ({ ...f, query_template: e.target.value }))}
-              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[100px] read-only:border-slate-700"
-              placeholder="SELECT ..." />
           </div>
           {canModifyNs && (
             <div>
@@ -1758,10 +1711,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
     mutationFn: () =>
       createKnowledge({
         namespace,
-        container_name: form.container_names.join(', '),
-        target_tables: form.target_tables,
         content: form.content,
-        query_template: form.query_template || null,
         base_weight: form.base_weight,
         category: form.category,
       }),
@@ -1786,25 +1736,9 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <RequiredCategoryField categoryNames={categoryNames} value={form.category}
         onChange={(v) => setForm((f) => ({ ...f, category: v }))} />
       <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1">컨테이너명 <span className="text-slate-600">(Enter 또는 쉼표로 추가)</span></label>
-        <TagInput tags={form.container_names} onChange={(tags) => setForm((f) => ({ ...f, container_names: tags }))}
-          placeholder="컨테이너명 입력..." color="cyan" />
-      </div>
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1">대상 테이블 <span className="text-slate-600">(Enter 또는 쉼표로 추가)</span></label>
-        <TagInput tags={form.target_tables} onChange={(tags) => setForm((f) => ({ ...f, target_tables: tags }))}
-          placeholder="테이블명 입력..." color="indigo" />
-      </div>
-      <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">내용 <span className="text-rose-400">*</span></label>
         <textarea rows={8} value={form.content} onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[160px]" />
-      </div>
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1">쿼리 템플릿 (선택)</label>
-        <textarea rows={3} value={form.query_template} onChange={(e) => setForm((f) => ({ ...f, query_template: e.target.value }))}
-          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 resize-y"
-          placeholder="SELECT ..." />
       </div>
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">

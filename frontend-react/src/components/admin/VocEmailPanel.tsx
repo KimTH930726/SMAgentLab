@@ -1396,7 +1396,6 @@ export function VocEmailPanel() {
                               <div className="flex items-center gap-2 mb-1 text-[11px] text-slate-500">
                                 <span className="font-mono">#{k.id}</span>
                                 {k.category && <Badge color="slate">{k.category}</Badge>}
-                                {k.container_name && <span>{k.container_name}</span>}
                               </div>
                               <p className="text-slate-300 text-xs whitespace-pre-wrap">{k.content}</p>
                             </div>

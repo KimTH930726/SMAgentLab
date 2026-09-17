@@ -459,7 +459,7 @@ async def get_knowledge_refs(namespace: str, knowledge_ids: list[int]) -> list[d
             return []
         rows = await conn.fetch(
             """
-            SELECT id, content, category, container_name
+            SELECT id, content, category
             FROM rag_knowledge
             WHERE namespace_id = $1 AND id = ANY($2::int[])
             """,

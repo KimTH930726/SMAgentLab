@@ -15,7 +15,6 @@ import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { getSearchThresholds } from '../../api/llm';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
-import { CodeBlock } from '../ui/CodeBlock';
 import { Badge } from '../ui/Badge';
 import type { DebugSearchResponse } from '../../types';
 
@@ -667,15 +666,10 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
                     className={`w-full bg-slate-800 border border-slate-700 border-l-4 ${borderAccent} rounded-xl px-4 py-3 flex items-center gap-3 hover:bg-slate-700/40 transition-colors text-left ${isExcluded ? 'opacity-60' : ''}`}
                   >
                     <span className="text-xs text-slate-500 flex-shrink-0">#{i + 1}</span>
-                    <span className="font-semibold text-slate-200 flex-1 truncate">{r.container_name}</span>
+                    <span className="font-semibold text-slate-200 flex-1 truncate">문서 #{r.id}</span>
                     {r.category && <Badge color="cyan" className="flex-shrink-0">{r.category}</Badge>}
                     {isExcluded && (
                       <span className="text-[10px] font-medium bg-rose-500/15 text-rose-400 border border-rose-500/30 px-1.5 py-0.5 rounded flex-shrink-0">컨텍스트 제외</span>
-                    )}
-                    {r.target_tables.length > 0 && (
-                      <span className="text-xs font-mono text-slate-400 flex-shrink-0 truncate max-w-[160px]">
-                        {r.target_tables.join(', ')}
-                      </span>
                     )}
                     <span className={`text-base font-bold flex-shrink-0 ${scoreColor}`}>
                       {r.final_score.toFixed(4)}
@@ -690,7 +684,7 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
                 const isExcluded = r.final_score < kMin;
                 const scoreColor = r.final_score >= kHigh ? 'text-emerald-400' : r.final_score >= kMid ? 'text-indigo-400' : r.final_score >= kMin ? 'text-amber-400' : 'text-rose-400';
                 return (
-                  <Modal isOpen onClose={() => setSelectedResult(null)} title={r.container_name} maxWidth="max-w-2xl">
+                  <Modal isOpen onClose={() => setSelectedResult(null)} title={`문서 #${r.id}`} maxWidth="max-w-2xl">
                     <div className="space-y-5 overflow-y-auto max-h-[70vh]">
                       {/* 점수 헤더 */}
                       <div className="flex items-center justify-between bg-slate-900/60 rounded-lg px-4 py-3">
@@ -706,18 +700,6 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
                           <p className={`text-2xl font-bold ${scoreColor}`}>{r.final_score.toFixed(4)}</p>
                         </div>
                       </div>
-
-                      {/* 관련 테이블 */}
-                      {r.target_tables.length > 0 && (
-                        <div>
-                          <p className="text-xs text-slate-500 mb-1.5">관련 테이블</p>
-                          <div className="flex flex-wrap gap-1">
-                            {r.target_tables.map((t) => (
-                              <span key={t} className="text-xs font-mono bg-slate-700 text-slate-300 px-2 py-0.5 rounded">{t}</span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
 
                       {/* 점수 바 */}
                       <div className="space-y-2">
@@ -756,13 +738,6 @@ export function DebugPanel({ onNavigate }: DebugPanelProps) {
                         <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap bg-slate-900/40 rounded-lg p-3">{r.content}</p>
                       </div>
 
-                      {/* 쿼리 템플릿 */}
-                      {r.query_template && (
-                        <div>
-                          <p className="text-xs text-slate-500 mb-1.5">쿼리 템플릿</p>
-                          <CodeBlock code={r.query_template} language="sql" />
-                        </div>
-                      )}
                     </div>
                   </Modal>
                 );

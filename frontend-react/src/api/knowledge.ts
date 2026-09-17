@@ -174,7 +174,7 @@ export async function vectorSearchGlossary(namespace: string, query: string, top
 
 export async function bulkCreateKnowledge(
   namespace: string,
-  items: Array<{ content: string; category?: string; container_name?: string; target_tables?: string[]; query_template?: string }>,
+  items: Array<{ content: string; category?: string }>,
   sourceFile?: string,
   sourceType = 'manual',
 ): Promise<{ created: number; job_id: number; status: string }> {
@@ -411,6 +411,7 @@ export interface ConfluenceBulkResult {
   pages_failed: number;
   failed_pages: Array<{ page_id: string; error: string }>;
   page_summaries: Array<{ page_id: string; title: string; chunks: number; chars: number }>;
+  unchanged_pages: Array<{ page_id: string; title: string; version: number | null }>;
   auto_glossary: number;
   source_name: string;
   source_type: string;

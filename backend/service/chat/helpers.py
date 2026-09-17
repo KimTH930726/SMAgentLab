@@ -27,9 +27,7 @@ CLEANUP_SAMPLE_RATE = 0.05
 
 def results_to_json(results: list[RetrievalResult]) -> str:
     return json.dumps(
-        [{"id": r.id, "content": r.content, "final_score": r.final_score,
-          "container_name": r.container_name, "target_tables": r.target_tables,
-          "query_template": r.query_template}
+        [{"id": r.id, "content": r.content, "final_score": r.final_score}
          for r in results],
         ensure_ascii=False,
     )
@@ -37,9 +35,7 @@ def results_to_json(results: list[RetrievalResult]) -> str:
 
 def results_to_payload(results: list[RetrievalResult]) -> list[dict]:
     return [
-        {"id": r.id, "container_name": r.container_name,
-         "target_tables": r.target_tables, "content": r.content,
-         "query_template": r.query_template, "final_score": r.final_score}
+        {"id": r.id, "content": r.content, "final_score": r.final_score}
         for r in results
     ]
 

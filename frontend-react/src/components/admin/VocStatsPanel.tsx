@@ -10,7 +10,6 @@ import { getCategories } from '../../api/namespaces';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
-import { TagInput } from '../ui/TagInput';
 import { DonutChart, type DonutSegment } from '../ui/DonutChart';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import { CATEGORY_LABEL, SEVERITY_LABEL, formatRelative } from './VocEmailPanel';
@@ -33,10 +32,7 @@ function ClusterKnowledgeRegisterModal({
 }: {
   open: boolean; onClose: () => void; cluster: VocCluster | null; namespace: string; onSuccess: () => void;
 }) {
-  const [containerNames, setContainerNames] = useState<string[]>([]);
-  const [targetTables, setTargetTables] = useState<string[]>([]);
   const [content, setContent] = useState('');
-  const [queryTemplate, setQueryTemplate] = useState('');
   const [baseWeight, setBaseWeight] = useState(1.0);
   const [category, setCategory] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -54,10 +50,7 @@ function ClusterKnowledgeRegisterModal({
 
   useEffect(() => {
     if (open && cluster) {
-      setContainerNames(['VOC 반복 유형']);
-      setTargetTables([]);
       setContent(`[반복 유형] ${cluster.representative_subject}\n\n해결 방안: `);
-      setQueryTemplate('');
       setBaseWeight(1.0);
       setCategory(sortedCategories[0]?.name ?? '');
       setError(null);
@@ -73,8 +66,7 @@ function ClusterKnowledgeRegisterModal({
     setError(null);
     try {
       const created = await createKnowledge({
-        namespace, container_name: containerNames.join(', ') || 'VOC 반복 유형',
-        target_tables: targetTables, content, query_template: queryTemplate || null,
+        namespace, content,
         base_weight: baseWeight, category,
       });
       if (created.pending_review) {
@@ -94,20 +86,6 @@ function ClusterKnowledgeRegisterModal({
       <div className="space-y-3">
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">
-            컨테이너명 <span className="text-slate-500 font-normal ml-1">(Enter 또는 쉼표로 추가)</span>
-          </label>
-          <TagInput tags={containerNames} onChange={setContainerNames} placeholder="컨테이너명 입력..." color="cyan" />
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            대상 테이블 <span className="text-slate-500 font-normal ml-1">(Enter 또는 쉼표로 추가)</span>
-          </label>
-          <TagInput tags={targetTables} onChange={setTargetTables} placeholder="테이블명 입력..." color="indigo" />
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
             내용 <span className="text-rose-400">*</span>
           </label>
           <textarea
@@ -116,17 +94,6 @@ function ClusterKnowledgeRegisterModal({
             onChange={(e) => setContent(e.target.value)}
             className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[180px] leading-relaxed"
             placeholder="이 반복 유형에 대한 해결 방안을 작성하세요"
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">쿼리 템플릿 (선택)</label>
-          <textarea
-            rows={3}
-            value={queryTemplate}
-            onChange={(e) => setQueryTemplate(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[80px]"
-            placeholder="SELECT ..."
           />
         </div>
 

@@ -984,6 +984,43 @@ async def _migrate_policy_track2_history(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_track2_run_at ON policy_track2_run (run_at DESC)")
 
 
+async def _migrate_confluence_sync(conn) -> None:
+    """Confluence 페이지 버전 추적 (v2.81) — 재임포트 시 안 바뀐 페이지 스킵.
+
+    지금까지 `POST /import/url/bulk-pages`는 재실행할 때마다 무조건 새 행을 만들었다
+    (같은 URL 두 번 돌리면 중복 생성). rag_knowledge에 이미 있던 version/logical_
+    document_id/supersedes_id는 이 목적으로 쓰기엔 "우리 쪽 재등록 횟수"일 뿐 Confluence
+    원본이 실제로 바뀌었는지는 모른다 — Confluence REST API가 주는 page.version.number를
+    별도로 저장해 비교해야 한다. namespace 안에서 같은 page_id는 유일해야 최신 버전만
+    "그 페이지의 현재 지식"으로 취급할 수 있다.
+    """
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS confluence_page_id VARCHAR(50)")
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS confluence_version INT")
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_knowledge_confluence_page
+        ON rag_knowledge (namespace_id, confluence_page_id)
+        WHERE confluence_page_id IS NOT NULL AND status = 'active'
+    """)
+
+
+async def _migrate_drop_unused_knowledge_fields(conn) -> None:
+    """`rag_knowledge`의 container_name/target_tables/query_template 제거 (v2.82).
+
+    2026-09-17 실사용 데이터 감사: 전체 50건 중 container_name 25건(그나마 절반은
+    수동 테스트 데이터), target_tables 13건, query_template 2건만 채워짐. 게다가
+    이 필드들은 retrieval.py의 벡터/키워드 랭킹 어디에도 안 쓰이고 build_context()가
+    LLM 컨텍스트에 장식으로 덧붙이는 용도뿐이었다(검색 정확도에 기여한다는 원래
+    전제가 틀림) — 본문 안에 이미 같은 정보(테이블명 등)가 텍스트로 들어있어 FTS/
+    벡터 검색이 어차피 커버한다. 컨플루언스처럼 지금 주력 채널인 곳은 UI에 입력칸도
+    없어 0%였음. 값 손실(25/13/2건)을 감수하고 제거 — 운영하다 실제로 필요해지면
+    그때 다시 컬럼을 추가하는 쪽이 지금 값도 없는 필드를 여러 화면에 억지로 유지하는
+    것보다 낫다는 판단(YAGNI). 원본 값은 git 이력의 이전 마이그레이션에 남아있음.
+    """
+    await conn.execute("ALTER TABLE rag_knowledge DROP COLUMN IF EXISTS container_name")
+    await conn.execute("ALTER TABLE rag_knowledge DROP COLUMN IF EXISTS target_tables")
+    await conn.execute("ALTER TABLE rag_knowledge DROP COLUMN IF EXISTS query_template")
+
+
 async def _cleanup_stale_generating_messages(conn) -> None:
     """프로세스가 막 기동했으니, 'generating' 상태로 남은 메시지는 전부 이전
     프로세스가 스트리밍 도중 죽으면서 남긴 고아 행이다(지금 막 시작했으므로 이
@@ -1013,6 +1050,8 @@ async def _run_migrations() -> None:
         await _migrate_policy_tables(conn)
         await _migrate_ref_data_tables(conn)
         await _migrate_policy_track2_history(conn)
+        await _migrate_confluence_sync(conn)
+        await _migrate_drop_unused_knowledge_fields(conn)
         await _cleanup_stale_generating_messages(conn)
 
 

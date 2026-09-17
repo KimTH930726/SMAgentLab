@@ -1,5 +1,4 @@
 import { Accordion } from '../ui/Accordion';
-import { CodeBlock } from '../ui/CodeBlock';
 import type { KnowledgeResult } from '../../types';
 import { clsx } from 'clsx';
 
@@ -17,15 +16,12 @@ function getScoreInfo(score: number) {
 
 export function SearchResultCard({ result, defaultOpen = false, index }: SearchResultCardProps) {
   const scoreInfo = getScoreInfo(result.final_score);
-  const displayName = result.container_name || `문서 #${result.id}`;
+  const displayName = `문서 #${result.id}`;
   const pct = Math.min(Math.round(result.final_score * 100), 100);
 
   const header = (
     <div className="flex items-center gap-3 min-w-0 w-full">
       <span className="text-xs text-slate-500 flex-shrink-0">#{index + 1}</span>
-      {result.container_name && (
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-900/40 text-cyan-400 border border-cyan-800/40 flex-shrink-0">컨테이너</span>
-      )}
       <span className="text-sm text-slate-200 truncate font-medium flex-1">{displayName}</span>
       {/* 유사도 프로그레스 바 + 라벨 */}
       <div className="flex items-center gap-2 flex-shrink-0">
@@ -53,32 +49,6 @@ export function SearchResultCard({ result, defaultOpen = false, index }: SearchR
         <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
           {result.content}
         </p>
-
-        {/* Target tables */}
-        {result.target_tables && result.target_tables.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800/40">테이블</span>
-            {result.target_tables.map((table) => (
-              <span
-                key={table}
-                className={clsx(
-                  'px-2 py-0.5 rounded text-xs font-mono',
-                  'bg-indigo-900/40 text-indigo-300 border border-indigo-700/40',
-                )}
-              >
-                {table}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {/* SQL query template */}
-        {result.query_template && (
-          <div>
-            <p className="text-xs text-slate-500 mb-1.5">쿼리 템플릿</p>
-            <CodeBlock code={result.query_template} language="sql" />
-          </div>
-        )}
       </div>
     </Accordion>
   );

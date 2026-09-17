@@ -13,8 +13,8 @@ from agents.knowledge_rag.knowledge.retrieval import find_similar_active_knowled
 
 logger = logging.getLogger(__name__)
 
-_KNOWLEDGE_COLS = """k.id, n.name AS namespace, k.container_name, k.target_tables,
-    k.content, k.query_template, k.base_weight, k.category, k.status,
+_KNOWLEDGE_COLS = """k.id, n.name AS namespace,
+    k.content, k.base_weight, k.category, k.status,
     k.source_file, k.source_chunk_idx, k.source_type,
     k.created_by_part, k.created_by_user_id, u.username AS created_by_username,
     k.created_at::text, k.updated_at::text"""
@@ -35,9 +35,6 @@ def _require_category(category: Optional[str]) -> str:
 async def create_knowledge(
     namespace: str,
     content: str,
-    container_name: Optional[str] = None,
-    target_tables: Optional[list[str]] = None,
-    query_template: Optional[str] = None,
     base_weight: float = 1.0,
     category: Optional[str] = None,
     *,
@@ -67,17 +64,14 @@ async def create_knowledge(
             row = await conn.fetchrow(
                 f"""
                 INSERT INTO rag_knowledge
-                    (namespace_id, container_name, target_tables, content,
-                     query_template, embedding, base_weight, category,
+                    (namespace_id, content, embedding, base_weight, category,
                      created_by_part, created_by_user_id, status, embedding_model)
-                VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12)
-                RETURNING id, namespace_id, container_name, target_tables,
-                          content, query_template, base_weight, category, status,
+                VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9)
+                RETURNING id, namespace_id, content, base_weight, category, status,
                           created_by_part, created_by_user_id,
                           created_at::text, updated_at::text
                 """,
-                ns_id, container_name, target_tables, content,
-                query_template, str(embedding), base_weight, category,
+                ns_id, content, str(embedding), base_weight, category,
                 created_by_part, created_by_user_id, status, _EMBEDDING_MODEL_NAME,
             )
             if is_duplicate:
@@ -97,9 +91,6 @@ async def create_knowledge(
 async def update_knowledge(
     knowledge_id: int,
     content: Optional[str] = None,
-    container_name: Optional[str] = None,
-    target_tables: Optional[list[str]] = None,
-    query_template: Optional[str] = None,
     base_weight: Optional[float] = None,
     category: Optional[str] = None,
     *,
@@ -115,9 +106,6 @@ async def update_knowledge(
             return None
 
         new_content = content if content is not None else current["content"]
-        new_container = container_name if container_name is not None else current["container_name"]
-        new_tables = target_tables if target_tables is not None else current["target_tables"]
-        new_template = query_template if query_template is not None else current["query_template"]
         new_weight = base_weight if base_weight is not None else current["base_weight"]
         # category=None은 "변경 없음". 업무구분은 필수값이라 빈 문자열로 초기화하는 것은 허용하지 않음.
         new_category = _require_category(category) if category is not None else current.get("category")
@@ -127,18 +115,17 @@ async def update_knowledge(
         row = await conn.fetchrow(
             """
             UPDATE rag_knowledge
-            SET container_name=$1, target_tables=$2, content=$3,
-                query_template=$4, embedding=$5::vector, base_weight=$6,
-                category=$8,
+            SET content=$1, embedding=$2::vector, base_weight=$3,
+                category=$5,
                 updated_at=NOW()
-            WHERE id = $7
-            RETURNING id, namespace_id, container_name, target_tables,
-                      content, query_template, base_weight, category,
+            WHERE id = $4
+            RETURNING id, namespace_id,
+                      content, base_weight, category,
                       created_by_part, created_by_user_id,
                       created_at::text, updated_at::text
             """,
-            new_container, new_tables, new_content,
-            new_template, new_embedding, new_weight, knowledge_id,
+            new_content,
+            new_embedding, new_weight, knowledge_id,
             new_category,
         )
         if not row:
@@ -702,10 +689,7 @@ async def _run_bulk_ingestion(
                     local_pending[chunk_idx] = (start + matched_offset, sim)
                 rows.append((
                     ns_id,
-                    item.get("container_name"),
-                    item.get("target_tables"),
                     content,
-                    item.get("query_template"),
                     str(emb),
                     item.get("base_weight", 1.0),
                     item.get("category"),
@@ -717,17 +701,19 @@ async def _run_bulk_ingestion(
                     job_id,
                     "pending_review" if is_duplicate else "active",
                     _EMBEDDING_MODEL_NAME,
+                    item.get("confluence_page_id"),
+                    item.get("confluence_version"),
                 ))
 
             async with get_conn() as conn:
                 await conn.executemany("""
                     INSERT INTO rag_knowledge
-                        (namespace_id, container_name, target_tables, content,
-                         query_template, embedding, base_weight, category,
+                        (namespace_id, content,
+                         embedding, base_weight, category,
                          source_file, source_chunk_idx, source_type,
                          created_by_part, created_by_user_id, ingestion_job_id, status,
-                         embedding_model)
-                    VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                         embedding_model, confluence_page_id, confluence_version)
+                    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 """, rows)
                 created += len(rows)
                 pending_total += len(pending_chunk_indices) + len(local_pending)

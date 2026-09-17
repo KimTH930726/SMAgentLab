@@ -265,7 +265,6 @@ export interface KnowledgeRef {
   id: number;
   content: string;
   category: string | null;
-  container_name: string | null;
 }
 
 export async function getKnowledgeRefs(namespace: string, ids: number[]): Promise<KnowledgeRef[]> {

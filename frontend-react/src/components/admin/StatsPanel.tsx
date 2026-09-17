@@ -10,7 +10,6 @@ import { getNamespaces, getNamespacesDetail, getCategories } from '../../api/nam
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
-import { TagInput } from '../ui/TagInput';
 import { DonutChart, type DonutSegment } from '../ui/DonutChart';
 import type { QueryLog, QueryStatus } from '../../types';
 
@@ -37,10 +36,7 @@ interface KnowledgeRegisterModalProps {
 }
 
 function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: KnowledgeRegisterModalProps) {
-  const [containerNames, setContainerNames] = useState<string[]>([]);
-  const [targetTables, setTargetTables] = useState<string[]>([]);
   const [content, setContent] = useState('');
-  const [queryTemplate, setQueryTemplate] = useState('');
   const [baseWeight, setBaseWeight] = useState(1.0);
   const [category, setCategory] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -60,10 +56,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
   // open 또는 log가 바뀔 때 폼 초기화 (AI 답변을 내용에 미리 채워줌)
   useEffect(() => {
     if (open && log) {
-      setContainerNames([]);
-      setTargetTables([]);
       setContent(log.answer ?? '');
-      setQueryTemplate('');
       setBaseWeight(1.0);
       setCategory(sortedCategories[0]?.name ?? '');
       setError(null);
@@ -80,10 +73,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
     try {
       const created = await createKnowledge({
         namespace,
-        container_name: containerNames.join(', ') || '미분류',
-        target_tables: targetTables,
         content,
-        query_template: queryTemplate || null,
         base_weight: baseWeight,
         category: category || null,
       });
@@ -116,32 +106,6 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
           </div>
         </div>
 
-        {/* 컨테이너명 */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            컨테이너명 <span className="text-slate-500 font-normal ml-1">(Enter 또는 쉼표로 추가)</span>
-          </label>
-          <TagInput
-            tags={containerNames}
-            onChange={setContainerNames}
-            placeholder="컨테이너명 입력..."
-            color="cyan"
-          />
-        </div>
-
-        {/* 대상 테이블 */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            대상 테이블 <span className="text-slate-500 font-normal ml-1">(Enter 또는 쉼표로 추가)</span>
-          </label>
-          <TagInput
-            tags={targetTables}
-            onChange={setTargetTables}
-            placeholder="테이블명 입력..."
-            color="indigo"
-          />
-        </div>
-
         {/* 내용 */}
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">
@@ -153,18 +117,6 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
             onChange={(e) => setContent(e.target.value)}
             className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[200px] leading-relaxed"
             placeholder="지식 베이스에 등록할 가이드 내용을 작성하세요"
-          />
-        </div>
-
-        {/* 쿼리 템플릿 */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">쿼리 템플릿 (선택)</label>
-          <textarea
-            rows={3}
-            value={queryTemplate}
-            onChange={(e) => setQueryTemplate(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[80px]"
-            placeholder="SELECT ..."
           />
         </div>
 

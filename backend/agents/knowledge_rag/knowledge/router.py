@@ -48,9 +48,6 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
     row = await service.create_knowledge(
         namespace=body.namespace,
         content=body.content,
-        container_name=body.container_name,
-        target_tables=body.target_tables,
-        query_template=body.query_template,
         base_weight=body.base_weight,
         category=body.category,
         created_by_part=user["part"],
@@ -67,9 +64,6 @@ async def modify_knowledge(knowledge_id: int, body: KnowledgeUpdate, user: dict 
     row = await service.update_knowledge(
         knowledge_id=knowledge_id,
         content=body.content,
-        container_name=body.container_name,
-        target_tables=body.target_tables,
-        query_template=body.query_template,
         base_weight=body.base_weight,
         category=body.category,
         updated_by_part=user["part"],
@@ -309,12 +303,6 @@ async def import_csv(
             item["category"] = row[mapping["category"]].strip()
         elif category:
             item["category"] = category
-        if mapping.get("container_name") and row.get(mapping["container_name"]):
-            item["container_name"] = row[mapping["container_name"]].strip()
-        if mapping.get("target_tables") and row.get(mapping["target_tables"]):
-            item["target_tables"] = [t.strip() for t in row[mapping["target_tables"]].split(",") if t.strip()]
-        if mapping.get("query_template") and row.get(mapping["query_template"]):
-            item["query_template"] = row[mapping["query_template"]].strip()
         items.append(item)
 
     if not items:
@@ -397,7 +385,7 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
 
 async def _run_auto_tag(
     items: list[dict], namespace: str, user: dict,
-    *, lookup_categories: bool = False, apply_priority_weight: bool = False, apply_container_name: bool = True,
+    *, lookup_categories: bool = False, apply_priority_weight: bool = False,
 ) -> None:
     """items(각 dict에 "content" 키 필요)를 LLM으로 자동 태깅 — item을 in-place 갱신."""
     try:
@@ -426,8 +414,6 @@ async def _run_auto_tag(
             tag = tag_map.get(i, {})
             if tag.get("category"):
                 item["category"] = tag["category"]
-            if apply_container_name and tag.get("container_name"):
-                item["container_name"] = tag["container_name"]
             if apply_priority_weight and tag.get("priority_score") is not None:
                 item["base_weight"] = 0.5 + float(tag["priority_score"]) * 1.5
     except Exception as e:
@@ -846,6 +832,17 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
 # ─── Confluence 트리 + 일괄 인제스천 ─────────────────────────────────────────
 
 
+def _confluence_page_is_unchanged(
+    page_id: str, fetched_version: Optional[int], existing_versions: dict[str, Optional[int]],
+) -> bool:
+    """재임포트 시 스킵 여부(v2.81) — Confluence가 버전을 안 주면(REST 응답에 version
+    필드가 없는 구버전 서버 등) 안전한 쪽으로(항상 재등록) 판단한다 — "바뀐 걸 놓치는
+    것"보다 "안 바뀐 걸 한 번 더 등록하는 것"이 훨씬 싸고 안전하다."""
+    if fetched_version is None:
+        return False
+    return existing_versions.get(page_id) == fetched_version
+
+
 class _UrlTreeBody(BaseModel):
     url: str
     confluence_token: Optional[str] = None
@@ -994,18 +991,47 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
 
     fetched = await asyncio.gather(*(_fetch_and_chunk(p) for p in body.pages))
 
+    # 페이지 버전 추적(v2.81) — 같은 페이지를 재임포트할 때 Confluence 쪽 버전이 안
+    # 바뀌었으면 스킵한다. 기존 rag_knowledge.version/logical_document_id는 "우리 쪽
+    # 재등록 횟수"일 뿐 Confluence 원본이 바뀌었는지와 무관해 이 목적엔 못 쓴다(그래서
+    # confluence_page_id/confluence_version을 별도로 씀, main.py 마이그레이션 참고).
+    from core.database import get_conn, resolve_namespace_id
+
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, body.namespace)
+        existing_versions = {
+            r["confluence_page_id"]: r["confluence_version"]
+            for r in await conn.fetch(
+                "SELECT DISTINCT confluence_page_id, confluence_version FROM rag_knowledge "
+                "WHERE namespace_id = $1 AND confluence_page_id IS NOT NULL AND status = 'active'",
+                ns_id,
+            )
+        }
+
     # 청크 → items 변환 + per-page 메타데이터 보존
     items: list[dict] = []
     failed_pages: list[dict] = []
     page_summaries: list[dict] = []
+    unchanged_pages: list[dict] = []
+    pages_to_deprecate: list[str] = []
     for f in fetched:
         if f["error"]:
             failed_pages.append({"page_id": f["page_id"], "error": f["error"]})
             continue
         doc = f["doc"]
         chunks = f["chunks"]
+        page_id = f["page_id"]
+        fetched_version = doc.metadata.get("version")
+
+        if _confluence_page_is_unchanged(page_id, fetched_version, existing_versions):
+            unchanged_pages.append({"page_id": page_id, "title": doc.source_name, "version": fetched_version})
+            continue
+
+        if page_id in existing_versions:
+            pages_to_deprecate.append(page_id)
+
         page_summaries.append({
-            "page_id": f["page_id"],
+            "page_id": page_id,
             "title": doc.source_name,
             "chunks": len(chunks),
             "chars": len(doc.raw_text),
@@ -1014,18 +1040,35 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
             items.append({
                 "content": c.text,
                 "category": body.category,
-                "container_name": doc.source_name,
+                "confluence_page_id": page_id,
+                "confluence_version": fetched_version,
             })
 
+    if pages_to_deprecate:
+        async with get_conn() as conn:
+            await conn.execute(
+                "UPDATE rag_knowledge SET status = 'deprecated' "
+                "WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[]) AND status = 'active'",
+                ns_id, pages_to_deprecate,
+            )
+
     if not items:
+        if unchanged_pages:
+            return {
+                "created": 0, "job_id": None, "status": "skipped",
+                "pages_succeeded": 0, "pages_failed": len(failed_pages),
+                "failed_pages": failed_pages, "page_summaries": [],
+                "unchanged_pages": unchanged_pages,
+                "chunks": 0, "source_name": "", "source_type": "confluence_bulk",
+            }
         raise HTTPException(
             status_code=400,
             detail=f"수집된 청크가 없습니다. failed_pages={failed_pages}",
         )
 
-    # LLM 자동 태깅 (선택) — container_name은 페이지 제목으로 이미 채워져 있으므로 덮어쓰지 않음
+    # LLM 자동 태깅 (선택)
     if body.auto_tag and items:
-        await _run_auto_tag(items, body.namespace, user, apply_container_name=False)
+        await _run_auto_tag(items, body.namespace, user)
 
     # 벌크 등록 — source_file은 root URL 또는 페이지 수 표기
     source_file = f"Confluence bulk ({len(page_summaries)} pages)"
@@ -1050,6 +1093,7 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
         "pages_failed": len(failed_pages),
         "failed_pages": failed_pages,
         "page_summaries": page_summaries,
+        "unchanged_pages": unchanged_pages,
         "auto_glossary": glossary_count,
         "chunks": len(items),
         "source_name": source_file,

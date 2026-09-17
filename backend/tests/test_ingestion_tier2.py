@@ -207,7 +207,7 @@ class TestAutoTagChunks:
     @pytest.mark.asyncio
     async def test_success(self):
         llm = MagicMock()
-        llm.generate_once = AsyncMock(return_value='[{"idx": 0, "category": "쿠폰", "container_name": "ops-coupon", "priority_score": 0.8}]')
+        llm.generate_once = AsyncMock(return_value='[{"idx": 0, "category": "쿠폰", "priority_score": 0.8}]')
 
         chunks = [{"idx": 0, "text": "쿠폰 발급 절차입니다."}]
         result = await auto_tag_chunks(chunks, ["쿠폰", "배치"], llm)

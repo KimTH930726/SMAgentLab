@@ -224,11 +224,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     return ChatResponse(
         conversation_id=conv_id, question=req.question, mapped_term=pipe.mapped_term,
         results=[
-            KnowledgeResult(
-                id=r.id, container_name=r.container_name,
-                target_tables=r.target_tables, content=r.content,
-                query_template=r.query_template, final_score=r.final_score,
-            )
+            KnowledgeResult(id=r.id, content=r.content, final_score=r.final_score)
             for r in pipe.results
         ],
         answer=answer,
@@ -377,8 +373,7 @@ async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
         ],
         results=[
             DebugResult(
-                id=r.id, container_name=r.container_name, target_tables=r.target_tables,
-                content=r.content, query_template=r.query_template, category=r.category,
+                id=r.id, content=r.content, category=r.category,
                 base_weight=r.base_weight,
                 v_score=r.v_score, k_score=r.k_score, final_score=r.final_score,
             )

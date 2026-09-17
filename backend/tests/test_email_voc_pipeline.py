@@ -105,13 +105,13 @@ class TestGetKnowledgeRefs:
         conn, resolve_mock = patch_db
         resolve_mock.return_value = 42
         conn.fetch.return_value = [
-            {"id": 1, "content": "내용1", "category": "DB", "container_name": None},
-            {"id": 2, "content": "내용2", "category": None, "container_name": "container"},
+            {"id": 1, "content": "내용1", "category": "DB"},
+            {"id": 2, "content": "내용2", "category": None},
         ]
         result = await pipeline.get_knowledge_refs("딜리버스 DB", [1, 2, 999])
         assert result == [
-            {"id": 1, "content": "내용1", "category": "DB", "container_name": None},
-            {"id": 2, "content": "내용2", "category": None, "container_name": "container"},
+            {"id": 1, "content": "내용1", "category": "DB"},
+            {"id": 2, "content": "내용2", "category": None},
         ]
         args = conn.fetch.call_args.args
         assert args[1] == 42  # namespace_id로 스코핑됐는지

@@ -228,8 +228,8 @@ class TestCsvParsing:
         import io
         import json
 
-        mapping = {"content": "설명", "category": "분류", "container_name": "시스템"}
-        text = "설명,분류,시스템\n테스트 내용,장애,ops-test\n"
+        mapping = {"content": "설명", "category": "분류"}
+        text = "설명,분류\n테스트 내용,장애\n"
         reader = csv.DictReader(io.StringIO(text))
         rows = list(reader)
 
@@ -241,14 +241,11 @@ class TestCsvParsing:
             item = {"content": content}
             if mapping.get("category") and row.get(mapping["category"]):
                 item["category"] = row[mapping["category"]].strip()
-            if mapping.get("container_name") and row.get(mapping["container_name"]):
-                item["container_name"] = row[mapping["container_name"]].strip()
             items.append(item)
 
         assert len(items) == 1
         assert items[0]["content"] == "테스트 내용"
         assert items[0]["category"] == "장애"
-        assert items[0]["container_name"] == "ops-test"
 
     def test_csv_empty_content_skipped(self):
         """content가 비어있는 행은 skip."""
@@ -284,12 +281,6 @@ class TestCsvParsing:
         assert "내용" in rows[0]
         assert rows[0]["내용"] == "테스트"
 
-    def test_csv_target_tables_comma_split(self):
-        """target_tables는 쉼표로 분리."""
-        raw = "coupon, coupon_log, orders"
-        tables = [t.strip() for t in raw.split(",") if t.strip()]
-        assert tables == ["coupon", "coupon_log", "orders"]
-
 
 # ─── Pydantic 스키마 검증 ────────────────────────────────────────────────────
 
@@ -321,8 +312,8 @@ class TestSchemas:
     def test_knowledge_out_has_source_fields(self):
         from agents.knowledge_rag.knowledge.schemas import KnowledgeOut
         out = KnowledgeOut(
-            id=1, namespace="ns", container_name=None, target_tables=None,
-            content="test", query_template=None, base_weight=1.0,
+            id=1, namespace="ns",
+            content="test", base_weight=1.0,
             source_file="data.csv", source_chunk_idx=3, source_type="csv_import",
             created_at="2026-01-01", updated_at="2026-01-01",
         )
@@ -333,8 +324,8 @@ class TestSchemas:
     def test_knowledge_out_source_fields_optional(self):
         from agents.knowledge_rag.knowledge.schemas import KnowledgeOut
         out = KnowledgeOut(
-            id=1, namespace="ns", container_name=None, target_tables=None,
-            content="test", query_template=None, base_weight=1.0,
+            id=1, namespace="ns",
+            content="test", base_weight=1.0,
             created_at="2026-01-01", updated_at="2026-01-01",
         )
         assert out.source_file is None

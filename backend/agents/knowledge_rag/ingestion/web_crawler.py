@@ -478,7 +478,7 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
             r = await client.get(
                 f"{base}/rest/api/content/{page_id}",
                 headers=headers,
-                params={"expand": "body.storage,title,space,_links"},
+                params={"expand": "body.storage,title,space,version,_links"},
             )
             r.raise_for_status()
             page = r.json()
@@ -489,6 +489,7 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
     storage_html = page.get("body", {}).get("storage", {}).get("value", "")
     space_name = page.get("space", {}).get("name", "")
     page_url = _build_page_url(base, page_id, page)
+    page_version = page.get("version", {}).get("number")
 
     soup = BeautifulSoup(storage_html, "lxml")
     raw_text = _extract_text(soup)
@@ -504,5 +505,6 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
             "page_id": page_id,
             "space": space_name,
             "title": page_title,
+            "version": page_version,
         },
     )

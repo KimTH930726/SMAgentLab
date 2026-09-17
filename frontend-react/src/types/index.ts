@@ -67,10 +67,7 @@ export interface ReviewFlag {
 export interface KnowledgeItem {
   id: number;
   namespace: string;
-  container_name: string;
-  target_tables: string[] | null;
   content: string;
-  query_template: string | null;
   base_weight: number;
   category?: string | null;
   status?: KnowledgeStatus;
@@ -85,19 +82,13 @@ export interface KnowledgeItem {
 
 export interface KnowledgeCreatePayload {
   namespace: string;
-  container_name: string;
-  target_tables: string[];
   content: string;
-  query_template?: string | null;
   base_weight?: number;
   category?: string | null;
 }
 
 export interface KnowledgeUpdatePayload {
-  container_name?: string;
-  target_tables?: string[];
   content?: string;
-  query_template?: string | null;
   base_weight?: number;
   category?: string | null;
 }
@@ -155,10 +146,7 @@ export interface ConversationMessage {
 
 export interface KnowledgeResult {
   id: number;
-  container_name: string;
-  target_tables: string[];
   content: string;
-  query_template: string | null;
   final_score: number;
   v_score?: number;
   k_score?: number;
@@ -377,10 +365,7 @@ export interface DebugSearchRequest {
 
 export interface DebugSearchResult {
   id: number;
-  container_name: string;
-  target_tables: string[];
   content: string;
-  query_template: string | null;
   category: string | null;
   v_score: number;
   k_score: number;
