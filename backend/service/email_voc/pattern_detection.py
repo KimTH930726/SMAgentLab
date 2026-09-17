@@ -102,7 +102,17 @@ _REPLY_PREFIX_RE = re.compile(r"^\s*(re|fwd?|회신|답장|전달)\s*[:：]\s*",
 #    표본이 작아 VOC 임계치만큼 정밀하지 않지만, 0.70은 진짜 관련 쌍조차 거의
 #    못 넘겨 사실상 상시 미탐 상태였던 건 명확해서 0.55로 잠정 하향. 크레딧
 #    복구 후 LLM 대량 검증으로 다시 정밀 재보정할 것.
-_COVERAGE_MIN_SIMILARITY = 0.55
+# ⑤ 2026-09-17 — 크레딧 복구 확인 후 LLM 대량 검증 실시(scripts/recalibrate_coverage_
+#    threshold.py, ops_voc_cluster×rag_knowledge 유사도 0.30~0.90 구간 층화추출 46쌍,
+#    VOC 반복패턴 임계치 재보정과 동일 방법론). 현재값 0.55는 TPR 88.9%지만 FPR
+#    35.1%로 "오탐이 미탐보다 위험"이라는 이 함수의 원칙에 안 맞게 높았음. Youden's
+#    J 최적치는 0.606(TPR 77.8%/FPR 21.6%) — 다만 0.60~0.73 구간에서도 참/거짓이
+#    계속 섞여(같은 클러스터도 후보 문서에 따라 관련/무관이 갈림) 여전히 완벽한
+#    단일 컷오프는 없음이 재확인됨(③에서 이미 예견한 대로). J-최적치를 보수적으로
+#    반올림해 0.60으로 상향. 표본이 작음(n=46, true=9)은 VOC 임계치 재보정 때와
+#    같은 한계 — 이 값은 여전히 "LLM 검증을 태울지 가르는 1차 필터"일 뿐이고 최종
+#    판단은 LLM(_verify_coverage_with_llm)이 한다는 구조 자체는 변화 없음.
+_COVERAGE_MIN_SIMILARITY = 0.60
 
 
 def _normalize_subject(subject: str) -> str:
