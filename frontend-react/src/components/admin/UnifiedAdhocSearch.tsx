@@ -4,6 +4,7 @@ import { clsx } from 'clsx';
 import { Search, Flag, FlagOff, Check, X, PenLine } from 'lucide-react';
 import { debugSearch } from '../../api/chat';
 import { searchPolicy, type ParamHit, type NarrativeHit } from '../../api/policy';
+import { searchRefdata, type CommonCodeHit, type DbColumnHit } from '../../api/refdata';
 import { flagKnowledgeForReview, updateKnowledge } from '../../api/knowledge';
 import { getSearchThresholds } from '../../api/llm';
 import { getCategories } from '../../api/namespaces';
@@ -54,8 +55,16 @@ import type { DebugSearchResult } from '../../types';
  * 테이블이라 이 경로로 수정 불가 — 수정 버튼은 일반지식 카드에만 노출. 저장 후에는
  * 점수·채택 여부가 바뀔 수 있어(내용이 달라지면 재임베딩되고 유사도도 달라짐) 그냥
  * 로컬 텍스트만 바꾸지 않고 같은 질문으로 검색을 다시 돌려 최신 상태를 보여준다.
+ *
+ * 참조데이터 축 추가(2026-09-18): chat(agent.py)에 공통코드/DB스키마(ref_common_code/
+ * ref_db_column) 축을 네 번째 RRF 축으로 새로 연결하면서("DS14가 뭐야?"가 rag_knowledge
+ * 안의 벡터축과 스케일 경쟁하다 top_k 후보에도 못 들던 문제를 별도 테이블로 분리해 해결,
+ * §table-definition.md #51) 이 화면도 "chat과 게이트가 똑같이 실행되고 투명하게 보여야
+ * 한다"는 원칙에 따라 동일한 네 번째 축을 붙였다(`GET /api/refdata/search`, 신규). 이
+ * 축도 정책과 마찬가지로 점수 임계치가 없어 top_k 이내면 항상 채택 — knowledgeId가 없어
+ * 수정/플래그 버튼은 노출되지 않는다(그 데이터의 소유 테이블이 다름).
  */
-type SourceType = 'general' | 'policy-param' | 'policy-narrative';
+type SourceType = 'general' | 'policy-param' | 'policy-narrative' | 'refdata-code' | 'refdata-column';
 
 interface MetaRow {
   key: string;
@@ -88,6 +97,8 @@ const SOURCE_META: Record<SourceType, { badge: string; badgeClass: string; dotCl
   'general': { badge: '일반지식', badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300 dark:border-indigo-700/40', dotClass: 'bg-indigo-500' },
   'policy-param': { badge: '정책 · RDB 파라미터', badgeClass: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-700/40', dotClass: 'bg-amber-500' },
   'policy-narrative': { badge: '정책 · 벡터 서술', badgeClass: 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40', dotClass: 'bg-violet-500' },
+  'refdata-code': { badge: '참조데이터 · 공통코드', badgeClass: 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:border-teal-700/40', dotClass: 'bg-teal-500' },
+  'refdata-column': { badge: '참조데이터 · DB스키마', badgeClass: 'bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-900/40 dark:text-cyan-300 dark:border-cyan-700/40', dotClass: 'bg-cyan-500' },
 };
 
 function strengthBand(pct: number): { barClass: string; label: string } {
@@ -140,14 +151,25 @@ export function UnifiedAdhocSearch() {
     setLoading(true);
     setError(null);
     try {
-      const [general, policy] = await Promise.all([
+      const [general, policy, refdata] = await Promise.all([
         debugSearch({ namespace: selectedNs, question: question.trim(), top_k: topK }),
         searchPolicy(selectedNs, question.trim(), { topK }),
+        searchRefdata(selectedNs, question.trim(), { topK }),
       ]);
       const minScore = thresholds?.knowledge_min_score ?? 0;
 
+      // "DB"/"공통코드"는 벡터 대신 ts_rank로만 순위가 매겨져(retrieval.py
+      // _KEYWORD_ONLY_CATEGORIES) 코사인 스케일용 임계치를 그대로 대면 항상 걸러진다
+      // (ts_rank는 보통 0.01~0.1대) — 백엔드 is_adopted()와 동일하게 이 카테고리는
+      // "키워드 매칭이 됐는지"(final_score>0)만으로 채택 여부를 가른다.
+      const KEYWORD_ONLY_CATEGORIES = ['DB', '공통코드'];
       const generalHits: UnifiedHit[] = general.results.map((r: DebugSearchResult, i) => {
-        const adopted = r.final_score >= minScore;
+        // base_weight를 걷어낸 원점수로 게이트 판단(2026-09-18) — final_score를 그대로
+        // 쓰면 base_weight(기본 1.0, 최대 5.0)가 곱해져 있어 "관련성"이 아니라 "피드백을
+        // 얼마나 받았는지"를 재게 됨(백엔드 retrieval.relevance_score()와 동일 공식).
+        const rawScore = r.final_score / (1 + r.base_weight);
+        const isKeywordOnly = r.category != null && KEYWORD_ONLY_CATEGORIES.includes(r.category);
+        const adopted = isKeywordOnly ? r.final_score > 0 : rawScore >= minScore;
         return {
           source: 'general',
           label: `문서 #${r.id}${r.category ? ` · ${r.category}` : ''}`,
@@ -160,13 +182,18 @@ export function UnifiedAdhocSearch() {
           rawCategory: r.category ?? '',
           rawBaseWeight: r.base_weight,
           adopted,
-          adoptedReason: adopted
-            ? `최종 점수 ${r.final_score.toFixed(4)} ≥ 채택 임계치 ${minScore.toFixed(2)} — 실제 chat 프롬프트에 포함됩니다.`
-            : `최종 점수 ${r.final_score.toFixed(4)} < 채택 임계치 ${minScore.toFixed(2)} — 순위와 무관하게 실제 chat 프롬프트엔 포함되지 않습니다.`,
+          adoptedReason: isKeywordOnly
+            ? (adopted
+                ? '키워드 전용 카테고리(DB/공통코드) — 키워드 매칭이 돼 채택됩니다(ts_rank 크기는 무관).'
+                : '키워드 전용 카테고리(DB/공통코드) — 키워드 매칭이 안 돼 제외됩니다.')
+            : adopted
+              ? `관련성 점수 ${rawScore.toFixed(4)}(base_weight 제외) ≥ 채택 임계치 ${minScore.toFixed(2)} — 실제 chat 프롬프트에 포함됩니다.`
+              : `관련성 점수 ${rawScore.toFixed(4)}(base_weight 제외) < 채택 임계치 ${minScore.toFixed(2)} — 순위와 무관하게 실제 chat 프롬프트엔 포함되지 않습니다.`,
           meta: [
             { key: '분류', value: r.category ?? '-' },
             { key: '벡터 유사도', value: r.v_score.toFixed(4) },
             { key: '키워드 점수', value: r.k_score.toFixed(4) },
+            { key: '관련성 점수(base_weight 제외)', value: rawScore.toFixed(4) },
             { key: '최종 점수(가중치 반영)', value: r.final_score.toFixed(4) },
             { key: 'base_weight', value: r.base_weight.toFixed(2) },
           ],
@@ -206,8 +233,44 @@ export function UnifiedAdhocSearch() {
           { key: '상태', value: n.status },
         ],
       }));
+      // 참조데이터(공통코드/DB스키마) 축(2026-09-18) — agent.py의 네 번째 RRF 축과 동일한
+      // 데이터. ts_rank 기반이라 정책 파라미터와 마찬가지로 점수 임계치 없이 top_k
+      // 이내면 항상 채택(코드 확인: _build_rrf_context가 이 축엔 is_adopted를 안 씀).
+      const commonCodeHits: UnifiedHit[] = refdata.common_codes.map((c: CommonCodeHit, i) => ({
+        source: 'refdata-code',
+        label: `${c.group_code_name ?? '분류없음'} · ${c.code_id}`,
+        snippet: c.code_name ?? '',
+        fullContent: `${c.code_id} = ${c.code_name ?? ''}`,
+        scoreLabel: `ts_rank ${c.rank.toFixed(3)}`,
+        rrf: rrf(i),
+        strengthPct: 0,
+        adopted: true,
+        adoptedReason: '참조데이터(공통코드)는 점수 임계치가 없어 top_k 이내면 항상 chat 프롬프트에 포함됩니다.',
+        meta: [
+          { key: '그룹', value: c.group_code_name ?? '-' },
+          { key: '코드값', value: c.code_id },
+          { key: '설명', value: c.code_name ?? '-' },
+        ],
+      }));
+      const dbColumnHits: UnifiedHit[] = refdata.db_columns.map((d: DbColumnHit, i) => ({
+        source: 'refdata-column',
+        label: `${d.table_name}.${d.column_name}`,
+        snippet: d.column_comment ?? '',
+        fullContent: `${d.table_name}.${d.column_name} (${d.data_type ?? '-'}) — ${d.column_comment ?? ''}`,
+        scoreLabel: `ts_rank ${d.rank.toFixed(3)}`,
+        rrf: rrf(i),
+        strengthPct: 0,
+        adopted: true,
+        adoptedReason: '참조데이터(DB스키마)는 점수 임계치가 없어 top_k 이내면 항상 chat 프롬프트에 포함됩니다.',
+        meta: [
+          { key: '테이블', value: d.table_name },
+          { key: '컬럼', value: d.column_name },
+          { key: '타입', value: d.data_type ?? '-' },
+          { key: '설명', value: d.column_comment ?? '-' },
+        ],
+      }));
 
-      const merged = [...generalHits, ...paramHits, ...narrativeHits].sort((a, b) => b.rrf - a.rrf);
+      const merged = [...generalHits, ...paramHits, ...narrativeHits, ...commonCodeHits, ...dbColumnHits].sort((a, b) => b.rrf - a.rrf);
       // 정책 축(ts_rank/cosine 혼재)은 원점수를 막대 길이로 못 쓰므로, 이번 검색 1위의
       // RRF를 기준으로 한 상대값을 강도로 사용 — 일반지식은 이미 자체 cosine을 씀
       const topRrf = merged[0]?.rrf ?? 1;
@@ -261,6 +324,8 @@ export function UnifiedAdhocSearch() {
         general: hits.filter((h) => h.source === 'general').length,
         param: hits.filter((h) => h.source === 'policy-param').length,
         narrative: hits.filter((h) => h.source === 'policy-narrative').length,
+        code: hits.filter((h) => h.source === 'refdata-code').length,
+        column: hits.filter((h) => h.source === 'refdata-column').length,
       }
     : null;
 
@@ -313,15 +378,15 @@ export function UnifiedAdhocSearch() {
       {hits && counts && (
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500 bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2">
-            <p><b className="text-slate-300">검색</b> — 일반지식·정책(RDB/벡터)을 각각 검색 후 <b className="text-indigo-400">RRF</b>(k={RRF_K})로 순위 통합. 점수 스케일이 달라(코사인 0~1 vs ts_rank) 원점수 대신 순위만 씀.</p>
+            <p><b className="text-slate-300">검색</b> — 일반지식·정책(RDB/벡터)·참조데이터(공통코드/DB스키마)를 각각 검색 후 <b className="text-indigo-400">RRF</b>(k={RRF_K})로 순위 통합. 점수 스케일이 달라(코사인 0~1 vs ts_rank) 원점수 대신 순위만 씀.</p>
             <p><b className="text-slate-300">top_k</b> — 축별 후보 수 = 합친 뒤 최종 표시 개수.</p>
             <p><b className="text-slate-300">상단 막대</b> — 원점수 아님, 이번 검색 1위 대비 상대 강도.</p>
             <p>
               <b className="text-emerald-400">채택</b>/<b className="text-rose-400">제외</b> — 실제 chat 프롬프트 포함 여부.
-              일반지식은 점수 ≥ {thresholds ? thresholds.knowledge_min_score.toFixed(2) : '…'} 필요, 정책은 항상 채택.
+              일반지식은 점수 ≥ {thresholds ? thresholds.knowledge_min_score.toFixed(2) : '…'} 필요(단, DB/공통코드 카테고리는 매칭 여부로만 판정), 정책·참조데이터는 항상 채택.
             </p>
           </div>
-          <div className="flex items-center gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3 text-xs">
             <span className="flex items-center gap-1.5 text-slate-400">
               <span className={clsx('w-2 h-2 rounded-full', SOURCE_META.general.dotClass)} />
               일반지식 {counts.general}건
@@ -333,6 +398,14 @@ export function UnifiedAdhocSearch() {
             <span className="flex items-center gap-1.5 text-slate-400">
               <span className={clsx('w-2 h-2 rounded-full', SOURCE_META['policy-narrative'].dotClass)} />
               정책·서술 {counts.narrative}건
+            </span>
+            <span className="flex items-center gap-1.5 text-slate-400">
+              <span className={clsx('w-2 h-2 rounded-full', SOURCE_META['refdata-code'].dotClass)} />
+              참조데이터·공통코드 {counts.code}건
+            </span>
+            <span className="flex items-center gap-1.5 text-slate-400">
+              <span className={clsx('w-2 h-2 rounded-full', SOURCE_META['refdata-column'].dotClass)} />
+              참조데이터·DB스키마 {counts.column}건
             </span>
           </div>
 

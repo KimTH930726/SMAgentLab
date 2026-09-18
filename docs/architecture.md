@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.86)
+# Ops-Navigator 시스템 아키텍처 (v2.89)
 
 ## 개요
 
@@ -11,6 +11,41 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.87~v2.89: **채택 게이트 정합성 수정 + 참조데이터 축 신설** — 평가 게이트에 "실제
+  chat 프롬프트 포함 여부(채택/제외)" 배지를 달면서(v2.85) 발견한 실사고 3단 체인.
+  ① (v2.87) `knowledge_min_score`(0.35)가 사실상 무력화돼 있었음 — 실측: "오늘 날씨
+  어때?"처럼 완전 무관한 질문도 후보 20/20건이 채택 통과. 원인은 `final_score =
+  결합점수 × (1+base_weight)`인데 신규 지식 base_weight 기본값이 1.0이라 결합점수가
+  항상 2배가 됨. `retrieval.relevance_score()`(base_weight를 나눠 걷어낸 원점수)를
+  게이트/신뢰도 라벨에 사용하도록 전환. ② 이 수정 직후 "DS14가 뭐야?"(공통코드
+  카테고리 id=20의 자기 매칭 대상 질문)가 여전히 0건 채택으로 확인 — `to_tsvector
+  ('simple', ...)`엔 한국어 형태소 분석이 없어 질의의 "DS14가"(조사 융합, 'ds14가')와
+  본문의 깔끔한 "DS14"('ds14')가 매칭 안 됨. 이미 정책 검색에 있던 `policy_strip_ko()`
+  (v2.71)를 `retrieval.py` 일반지식 키워드 검색에도 처음 적용 — 동시에 이 함수가
+  `init/06-policy-strip-ko.sql`(빈 pgdata에서만 자동실행)에만 있어 기존 배포엔 없을
+  수 있던 걸 재시작마다 실행되는 멱등 마이그레이션(`_migrate_ensure_ko_text_search_
+  helpers`)으로 보장. **이 함수 수정판을 배포하며 plpgsql 예약어(`trailing`)를 변수명
+  으로 써 실제로 백엔드가 몇 차례 크래시 루프에 빠짐 — 즉시 `tail_punct`로 변경해
+  복구(실사고, 재발 방지 위해 기록)**. ③ (v2.88) 조사 제거 후에도 "DS14가 뭐야?"가
+  여전히 답 안 됨 — id=20의 final_score(ts_rank 기반, 0.03~0.09대)가 벡터 스코어 문서
+  (0.4~0.6대)와 같은 `ORDER BY final_score DESC LIMIT top_k`로 경쟁하다 보니, 프로덕션
+  기본 top_k=5 후보 풀에 애초에 못 들어감(27건 중 27등 실측). RRF가 풀었던 것과 정확히
+  같은 스케일 불일치가 단일 축 SQL 안에서 재현된 것. `is_adopted()` 신설(키워드 전용
+  카테고리는 매칭 여부로만 이진 판정)로도 이 문제(후보 풀 진입 자체가 안 됨)는 못 풀어,
+  ④ (v2.89) `rag_knowledge` 안에서 SQL을 더 복잡하게 만드는 대신 원래 이 목적으로
+  스키마만 만들어져 있던(v2.73) `ref_common_code`/`ref_db_column`으로 id=20을 완전히
+  이전(`scripts/migrate_id20_to_refdata.py`, 252건)하고 `agent.py`의 `_build_rrf_
+  context()`에 네 번째 RRF 축으로 신규 연결(`service/refdata/service.py`의 검색
+  함수는 v2.73에 구현만 되고 chat에서 호출 안 되고 있었음 — 순수 배선 문제였음이 드러남).
+  CMDB 데이터가 앞으로 같은 성격(정확 조회용 RDB)이라 이 문제가 반복될 것으로 예상돼
+  처음부터 독립 축으로 분리(장기적으로 벡터축/키워드축을 나누는 방향 자체는 Track2
+  실측(하이브리드가 4개 유형 전부 우세)으로 이미 검증돼 있음 — 문제는 "나누는 것"이
+  아니라 "원점수로 합치는 것"이었다는 게 이 체인 전체의 결론). 평가 게이트
+  (UnifiedAdhocSearch)에도 신규 `GET /api/refdata/search`로 동일한 네 번째 축을
+  연결(테일/카테고리 배지 추가) — "chat과 게이트가 똑같이 실행되고 투명하게 보여야
+  한다"는 원칙을 이번 축까지 계속 맞춤. `service/refdata/service.py`의 검색 함수
+  (v2.73 구현, 지금까지 어디서도 호출 안 됨)를 이번에 처음으로 HTTP 엔드포인트로
+  노출한 것도 이 라우터가 유일.
 - v2.86: **chat 프로덕션 파이프라인에 RRF 컨텍스트 병합 적용** — v2.85에서 즉석 질의
   화면에만 적용했던 Reciprocal Rank Fusion(RRF, k=60)을 실제 `agent.py`의 답변 생성
   경로에도 적용. 기존엔 `retrieval.build_context(results)` + `policy_search.

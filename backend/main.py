@@ -24,6 +24,7 @@ from service.teams.router import router as teams_router
 from service.email_voc.router import router as email_voc_router
 from service.email_voc.scheduler import start_scheduler, stop_scheduler
 from service.policy.router import router as policy_router
+from service.refdata.router import router as refdata_router
 
 from shared import cache as sem_cache
 from shared.http_client import close_http_client
@@ -39,6 +40,7 @@ _ROUTERS = [
     teams_router,
     email_voc_router,
     policy_router,
+    refdata_router,
 ]
 
 
@@ -1053,6 +1055,84 @@ async def _migrate_remove_fewshot(conn) -> None:
     await conn.execute("ALTER TABLE rag_ingestion_job DROP COLUMN IF EXISTS auto_fewshot")
 
 
+async def _migrate_ensure_ko_text_search_helpers(conn) -> None:
+    """`policy_strip_ko()` 함수를 기존 DB에도 보장 (v2.87).
+
+    이 함수는 원래 `init/06-policy-strip-ko.sql`로만 생성됐는데, 그 파일은 완전히
+    빈 pgdata에서만 자동 실행되고 기존 볼륨이 있는 배포(운영/폐쇄망 포함)에는 수동
+    적용이 필요했다(파일 자체의 안내 문구). `_run_migrations()`는 재시작마다 실행되는
+    멱등 경로라 여기서도 `CREATE OR REPLACE`로 한 번 더 보장해둔다 — 안 그러면 이 함수
+    호출부가 하나라도 새로 생길 때마다 "이 DB에 함수가 있는지" 운에 맡기게 된다.
+
+    직접 계기(2026-09-18): `retrieval.py`의 일반지식 키워드 검색에도 이 함수를 적용
+    하면서(같은 조사·어미 융합 문제 재현 — "DS14가 뭐야?"의 'ds14가' 토큰이 문서의
+    깔끔한 'ds14'와 매칭 안 되던 실측 버그) 이 함수가 채팅의 모든 메시지가 타는 핫
+    패스에 들어가게 됐다 — 정책 검색보다 훨씬 자주 호출되므로 존재 보장이 더 중요해짐.
+    """
+    await conn.execute("""
+        CREATE OR REPLACE FUNCTION policy_strip_ko_word(word text) RETURNS text AS $BODY$
+        DECLARE
+            suf text;
+            best_len int := 0;
+            core text;
+            tail_punct text;
+            suffixes text[] := ARRAY[
+                '까지는','에서는','으로는','한테는','에게서','으로써',
+                '이라도','에서','으로','부터','한테','에게','까지','처럼','보다',
+                '이랑','랑','하고','이며',
+                '습니다','입니다','겠습니다','습니까',
+                '으며','면서','니까','아서','어서','인데','은데',
+                '어요','아요','네요','군요',
+                '았고','었고',
+                '은','는','이','가','을','를','의','도','만','에','로','와','과',
+                '고','게','지','며','니','자','다','죠','기','아','어'
+            ];
+        BEGIN
+            IF word IS NULL OR word = '' THEN
+                RETURN word;
+            END IF;
+            -- 조사 뒤에 물음표/마침표 등이 공백 없이 바로 붙은 경우("ds14는?")도 처리
+            -- (2026-09-18, 실측: "ds14는?"이 문장부호 때문에 "는" 접미사 매칭에 실패해
+            -- 그대로 남아있던 버그) — 끝의 문장부호를 떼어 core만으로 접미사를 판정하고
+            -- 결과에 다시 붙인다. to_tsvector가 문장부호는 어차피 버려서 안 붙여도 검색
+            -- 결과엔 영향 없지만, 이 함수 자체는 검색 전용이 아니라 범용이라 원형을 보존.
+            core := regexp_replace(word, '[?!.,、。！？]+$', '');
+            tail_punct := substring(word FROM char_length(core) + 1);
+            IF core = '' THEN
+                RETURN word;
+            END IF;
+            FOREACH suf IN ARRAY suffixes LOOP
+                IF core LIKE '%' || suf AND char_length(core) - char_length(suf) >= 2 THEN
+                    IF char_length(suf) > best_len THEN
+                        best_len := char_length(suf);
+                    END IF;
+                END IF;
+            END LOOP;
+            IF best_len > 0 THEN
+                RETURN left(core, char_length(core) - best_len) || tail_punct;
+            END IF;
+            RETURN word;
+        END;
+        $BODY$ LANGUAGE plpgsql IMMUTABLE
+    """)
+    await conn.execute("""
+        CREATE OR REPLACE FUNCTION policy_strip_ko(input text) RETURNS text AS $BODY$
+        DECLARE
+            w text;
+            result text[] := ARRAY[]::text[];
+        BEGIN
+            IF input IS NULL THEN
+                RETURN input;
+            END IF;
+            FOREACH w IN ARRAY regexp_split_to_array(btrim(input), '\\s+') LOOP
+                result := array_append(result, policy_strip_ko_word(w));
+            END LOOP;
+            RETURN array_to_string(result, ' ');
+        END;
+        $BODY$ LANGUAGE plpgsql IMMUTABLE
+    """)
+
+
 async def _cleanup_stale_generating_messages(conn) -> None:
     """프로세스가 막 기동했으니, 'generating' 상태로 남은 메시지는 전부 이전
     프로세스가 스트리밍 도중 죽으면서 남긴 고아 행이다(지금 막 시작했으므로 이
@@ -1086,6 +1166,7 @@ async def _run_migrations() -> None:
         await _migrate_drop_unused_knowledge_fields(conn)
         await _migrate_prompt_category_guides(conn)
         await _migrate_remove_fewshot(conn)
+        await _migrate_ensure_ko_text_search_helpers(conn)
         await _cleanup_stale_generating_messages(conn)
 
 

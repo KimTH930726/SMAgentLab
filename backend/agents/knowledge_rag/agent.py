@@ -15,6 +15,7 @@ from service.chat.helpers import (
 )
 from agents.knowledge_rag.knowledge import retrieval
 from service.policy import search as policy_search
+from service.refdata import service as refdata_search
 from service.llm.base import resolve_system_prompt
 from service.llm.factory import get_llm_provider
 from shared.embedding import embedding_service
@@ -36,9 +37,11 @@ async def _safe_post_save(conv_id: int, namespace: str) -> None:
 
 def _build_rrf_context(
     results: list[retrieval.RetrievalResult], policy_result: policy_search.PolicySearchResult,
+    common_codes: Optional[list[dict]] = None, db_columns: Optional[list[dict]] = None,
 ) -> str:
-    """일반지식(코사인)·정책 파라미터(RDB ts_rank)·정책 서술(코사인)을 RRF로 합쳐 하나의
-    LLM 컨텍스트로 만든다(2026-09-18). 기존엔 retrieval.build_context() + policy_search.
+    """일반지식(코사인)·정책 파라미터(RDB ts_rank)·정책 서술(코사인)·구조화 참조데이터
+    (공통코드/DB스키마, ts_rank)를 RRF로 합쳐 하나의 LLM 컨텍스트로 만든다(2026-09-18,
+    참조데이터 축은 09-18 추가). 기존엔 retrieval.build_context() + policy_search.
     build_policy_context()를 그냥 이어붙였는데(항상 "일반지식 먼저, 정책 나중"), 축마다
     점수 스케일이 달라(코사인 0~1 vs ts_rank 0~5+) 실제로 더 관련성 높은 쪽이 항상 뒤에
     깔리는 구조적 문제가 있었음. 평가 게이트 즉석 질의(UnifiedAdhocSearch, 프론트에서
@@ -46,22 +49,34 @@ def _build_rrf_context(
     3건씩 두 라운드 비교한 결과 사실관계 왜곡은 없었고, 이 방식이 실제 순위 구조를 더
     정확히 반영해 채팅에도 동일하게 적용.
 
+    참조데이터 축 추가 배경: rag_knowledge의 "DB"/"공통코드" 카테고리(_KEYWORD_ONLY_
+    CATEGORIES)는 벡터 채널과 같은 테이블 안에서 final_score로 경쟁하다 보니, ts_rank
+    스케일이 코사인보다 항상 작아 ORDER BY ... LIMIT top_k 단계에서부터 후보 풀에도 못
+    들어가는 문제가 실측 확인됐다("DS14가 뭐야?"가 자기 매칭 대상인 id=20을 top_k=5
+    후보에서 완전히 배제 — 27건 중 27등). CMDB 데이터도 앞으로 같은 성격(정확 조회용
+    RDB 데이터)이라 이 문제가 반복될 것으로 예상돼, rag_knowledge 안에서 SQL을 더
+    복잡하게 만드는 대신 원래 이 목적으로 만들어졌던(§table-definition.md #43) 별도
+    구조화 테이블(ref_common_code/ref_db_column, 이미 구현돼 있었지만 chat에서 호출을
+    안 하고 있었음)로 완전히 분리 — 처음부터 독립된 RRF 축으로 둬서 스케일 경쟁 자체를
+    피한다. id=20은 이 축으로 이전(마이그레이션 스크립트, rag_knowledge 쪽은 deprecated).
+
     retrieval.build_context()/policy_search.build_policy_context()는 각각 디버그
     검색(service/chat/router.py)·이메일 VOC 파이프라인·기존 정책 편입 로직 등 다른
     화면에서 그대로 쓰이고 있어(테스트도 그 출력 형식에 매여 있음) 건드리지 않고,
     여기서만 항목 단위로 다시 포맷한다 — 포맷 문자열이 일부 중복되지만 공유 함수를
     바꿔 여러 화면에 영향이 번지는 것보다 안전하다."""
     th = retrieval.get_thresholds()
-    relevant = [r for r in results if r.final_score >= th["knowledge_min_score"]]
+    relevant = [r for r in results if retrieval.is_adopted(r, th)]
 
     items: list[tuple[float, str]] = []
     for i, r in enumerate(relevant):
-        confidence = (
-            "높음" if r.final_score >= th["knowledge_high_score"]
-            else "보통" if r.final_score >= th["knowledge_mid_score"]
+        rel = retrieval.relevance_score(r)
+        confidence = "정확 매칭" if retrieval.is_keyword_only_category(r.category) else (
+            "높음" if rel >= th["knowledge_high_score"]
+            else "보통" if rel >= th["knowledge_mid_score"]
             else "낮음"
         )
-        items.append((rrf_score(i), f"--- 문서 (점수: {r.final_score:.4f}, 신뢰도: {confidence}) ---\n내용:\n{r.content}"))
+        items.append((rrf_score(i), f"--- 문서 (점수: {rel:.4f}, 신뢰도: {confidence}) ---\n내용:\n{r.content}"))
     for i, p in enumerate(policy_result.params):
         value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
         condition_str = f" ({p.condition})" if p.condition else ""
@@ -69,6 +84,10 @@ def _build_rrf_context(
     for i, n in enumerate(policy_result.narratives):
         confidence = "높음" if n.score >= 0.6 else "보통" if n.score >= 0.4 else "낮음"
         items.append((rrf_score(i), f"[정책 서술: {n.policy_name}] (신뢰도: {confidence})\n{n.chunk_text}"))
+    for i, c in enumerate(common_codes or []):
+        items.append((rrf_score(i), f"[공통코드 · 정확 매칭: {c['group_code_name']}] {c['code_id']} = {c['code_name']}"))
+    for i, d in enumerate(db_columns or []):
+        items.append((rrf_score(i), f"[DB 스키마 · 정확 매칭: {d['table_name']}.{d['column_name']}] {d.get('column_comment') or ''} ({d.get('data_type') or ''})"))
 
     items.sort(key=lambda x: x[0], reverse=True)
     return "\n\n".join(text for _, text in items)
@@ -156,9 +175,10 @@ class KnowledgeRagAgent(AgentBase):
             yield {"type": "status", "step": "search", "message": "관련 문서 검색 중..."}
             # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
             candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
-            results_raw, policy_available = await asyncio.gather(
+            results_raw, policy_available, refdata_available = await asyncio.gather(
                 retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories),
                 policy_search.has_policy_data(namespace),
+                refdata_search.has_refdata(namespace),
             )
             if settings.reranker_enabled and len(results_raw) > top_k:
                 results = await reranker_svc.rerank(enriched_query, results_raw, top_k)
@@ -190,8 +210,23 @@ class KnowledgeRagAgent(AgentBase):
                 except Exception as e:
                     logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
 
-            llm_context = _build_rrf_context(results, policy_result)
-            has_results = len(results) > 0 or bool(policy_result.params or policy_result.narratives)
+            # 구조화 참조데이터(공통코드/DB스키마) 병행 검색(2026-09-18) — 정책과 같은
+            # 이유로 게이트(refdata_available)를 먼저 확인해 데이터 없는 네임스페이스의
+            # 낭비를 피한다. ref_common_code/ref_db_column은 정확 조회 전용이라 임베딩이
+            # 없어 벡터 검색 자체가 불가능 — 항상 키워드(ts_rank)로만 찾는다.
+            common_codes: list[dict] = []
+            db_columns: list[dict] = []
+            if refdata_available:
+                try:
+                    common_codes, db_columns = await asyncio.gather(
+                        refdata_search.search_common_codes(namespace, enriched_query, top_k=5),
+                        refdata_search.search_db_columns(namespace, enriched_query, top_k=5),
+                    )
+                except Exception as e:
+                    logger.warning("참조데이터 검색 실패(채팅 흐름은 계속 진행): %s", e)
+
+            llm_context = _build_rrf_context(results, policy_result, common_codes, db_columns)
+            has_results = len(results) > 0 or bool(policy_result.params or policy_result.narratives) or bool(common_codes or db_columns)
             had_context = bool(llm_context.strip())
 
             async with get_conn() as conn:

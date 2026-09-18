@@ -73,6 +73,39 @@ class RetrievalResult:
     category: Optional[str] = field(default=None)
 
 
+def relevance_score(r: RetrievalResult) -> float:
+    """base_weight(가중치 부스트)를 걷어낸 "진짜 관련성" 점수 (2026-09-18).
+
+    실측(딜리버스 DB, 질문 6개): "오늘 날씨 어때?"처럼 지식베이스와 완전 무관한
+    질문도 knowledge_min_score(0.35) 컷오프를 후보 20/20건 다 통과했다. 원인:
+    final_score = (벡터+키워드 결합점수) × (1 + base_weight)인데 신규 지식의
+    base_weight 기본값이 0이 아니라 1.0이라, 등록 시점부터 결합점수가 무조건 2배가
+    돼(원점수 0.18만 넘어도 0.35 통과) 사실상 게이트가 거의 항상 열려 있었다.
+    final_score를 그대로 게이트에 쓰면 "얼마나 관련 있는지"가 아니라 "피드백을
+    얼마나 많이 받았는지"를 재는 꼴이라, (1+base_weight)로 나눠 원래의 결합점수로
+    되돌린 뒤 그 값을 게이트/신뢰도 라벨에 쓴다. base_weight는 항상 0.0~5.0이라
+    (1+base_weight)가 0이 될 일은 없다."""
+    return r.final_score / (1 + r.base_weight)
+
+
+def is_adopted(r: RetrievalResult, thresholds: dict[str, float]) -> bool:
+    """이 결과를 실제 LLM 컨텍스트에 넣을지 최종 판단 (2026-09-18).
+
+    `_KEYWORD_ONLY_CATEGORIES`(DB/공통코드) 문서는 벡터 점수 대신 ts_rank로만
+    순위가 매겨지는데, ts_rank는 코사인 유사도(대략 0.2~0.9대)와 스케일 자체가 달라
+    보통 0.01~0.1대다("DS14가 뭐야?" 실측: policy_strip_ko 조사 제거 버그를 고친 뒤에도
+    k_score=0.0304). 코사인 스케일로 보정된 knowledge_min_score(0.35)를 그대로 대면
+    "매칭은 됐지만 ts_rank가 작다"는 이유로 항상 걸러진다 — RRF가 풀었던 것과 똑같은
+    스케일 불일치 문제가 단일 축 안에서 재현된 것. 이 카테고리의 원래 설계 의도
+    (`_KEYWORD_ONLY_CATEGORIES` 주석 참고)는 "정확히 일치해야 의미 있다"는 이진 판단
+    이라, ts_rank 크기가 아니라 "키워드 매칭이 됐는지"(final_score > 0 — 매칭 안 되면
+    SQL의 keyword_scores CTE에 아예 없어 final_score가 0으로 떨어짐)만으로 채택 여부를
+    가른다."""
+    if r.category in _KEYWORD_ONLY_CATEGORIES:
+        return r.final_score > 0
+    return relevance_score(r) >= thresholds["knowledge_min_score"]
+
+
 async def map_glossary_term(
     namespace: str, query_vec: list[float]
 ) -> Optional[GlossaryMatch]:
@@ -137,6 +170,12 @@ _VECTOR_CANDIDATE_LIMIT = 300  # top_k/reranker_candidates(기본 20)보다 넉�
 _KEYWORD_ONLY_CATEGORIES = ("DB", "공통코드")
 
 
+def is_keyword_only_category(category: Optional[str]) -> bool:
+    """다른 모듈(agent.py 등)이 private 상수(_KEYWORD_ONLY_CATEGORIES)를 직접 참조하지
+    않고도 같은 판단을 할 수 있게 하는 공개 헬퍼."""
+    return category in _KEYWORD_ONLY_CATEGORIES
+
+
 async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
     w_vector: float = 0.7, w_keyword: float = 0.3, top_k: int = 5,
@@ -164,7 +203,15 @@ async def search_knowledge(
                 LIMIT $7
             ),
             keyword_scores AS (
-                SELECT k.id, ts_rank(to_tsvector('simple', k.content), q.tsq) AS k_score
+                -- policy_strip_ko()로 한국어 조사/어미를 걷어내고 매칭한다(2026-09-18) —
+                -- to_tsvector('simple', ...)엔 형태소 분석이 없어 "DS14가"(조사 융합)와
+                -- 문서 안의 깔끔한 "DS14"가 서로 다른 lexeme('ds14가' vs 'ds14')로 갈려
+                -- 전혀 매칭이 안 되는 게 실측 확인됨("DS14가 뭐야?" 질문이 정확히 이 문제로
+                -- 키워드 전용 카테고리 문서를 못 찾음). policy/search.py의 정책 파라미터
+                -- 검색에 이미 같은 함수로 적용해 검증된 패턴(89문항 실측 hit@10 75.3%→79.8%,
+                -- init/06-policy-strip-ko.sql) 재사용 — 함수 자체는 정책 전용이 아닌 범용
+                -- 조사 제거기라 그대로 쓸 수 있다.
+                SELECT k.id, ts_rank(to_tsvector('simple', policy_strip_ko(k.content)), q.tsq) AS k_score
                 FROM rag_knowledge k
                 CROSS JOIN LATERAL (
                     -- quote_literal로 각 lexeme를 감싸야 한다 — 감싸지 않으면 lexeme
@@ -173,12 +220,12 @@ async def search_knowledge(
                     -- "syntax error in tsquery"로 죽는다 — 실제 VOC 메일(광고성
                     -- 웨비나 메일의 URL) fetch 테스트에서 재현·확인된 버그.
                     SELECT to_tsquery('simple', string_agg(quote_literal(lexeme), ' | ')) AS tsq
-                    FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', $3))) t
+                    FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($3)))) t
                     WHERE lexeme IS NOT NULL
                 ) q
                 WHERE k.namespace_id = $2
                   AND (k.status IS NULL OR k.status = 'active')
-                  AND to_tsvector('simple', k.content) @@ q.tsq
+                  AND to_tsvector('simple', policy_strip_ko(k.content)) @@ q.tsq
             )
             SELECT k.id, n.name AS namespace,
                    k.content, k.base_weight, k.category,
@@ -248,14 +295,19 @@ def build_context(results: list[RetrievalResult]) -> str:
     (2026-08-25). 표본도 39건뿐이라 값 자체를 지금 조정하지 않음.
     """
     th = get_thresholds()
-    relevant = [r for r in results if r.final_score >= th["knowledge_min_score"]]
+    relevant = [r for r in results if is_adopted(r, th)]
     if not relevant:
         return ""
 
     parts = []
     for i, r in enumerate(relevant, 1):
-        confidence = "높음" if r.final_score >= th["knowledge_high_score"] else "보통" if r.final_score >= th["knowledge_mid_score"] else "낮음"
-        part = [f"--- 문서 {i} (점수: {r.final_score:.4f}, 신뢰도: {confidence}) ---"]
+        rel = relevance_score(r)
+        # 키워드 전용 카테고리는 ts_rank가 코사인 스케일보다 항상 작아 mid/high 라벨이
+        # 무의미(is_adopted에서 이미 매칭 여부로만 채택 판단) — "정확 매칭"으로 고정 표시
+        confidence = "정확 매칭" if r.category in _KEYWORD_ONLY_CATEGORIES else (
+            "높음" if rel >= th["knowledge_high_score"] else "보통" if rel >= th["knowledge_mid_score"] else "낮음"
+        )
+        part = [f"--- 문서 {i} (점수: {rel:.4f}, 신뢰도: {confidence}) ---"]
         part.append(f"내용:\n{r.content}")
         parts.append("\n".join(part))
 

@@ -24,6 +24,8 @@ CREATE OR REPLACE FUNCTION policy_strip_ko_word(word text) RETURNS text AS $$
 DECLARE
     suf text;
     best_len int := 0;
+    core text;
+    tail_punct text;
     suffixes text[] := ARRAY[
         '까지는','에서는','으로는','한테는','에게서','으로써',
         '이라도','에서','으로','부터','한테','에게','까지','처럼','보다',
@@ -39,15 +41,23 @@ BEGIN
     IF word IS NULL OR word = '' THEN
         RETURN word;
     END IF;
+    -- 조사 뒤에 물음표/마침표 등이 공백 없이 바로 붙은 경우("ds14는?")도 처리
+    -- (2026-09-18, backend/main.py의 _migrate_ensure_ko_text_search_helpers()와
+    -- 동일 수정 — 이 함수의 정본은 사실상 그쪽이고 여기는 신규 설치 시 초기값).
+    core := regexp_replace(word, '[?!.,、。！？]+$', '');
+    tail_punct := substring(word FROM char_length(core) + 1);
+    IF core = '' THEN
+        RETURN word;
+    END IF;
     FOREACH suf IN ARRAY suffixes LOOP
-        IF word LIKE '%' || suf AND char_length(word) - char_length(suf) >= 2 THEN
+        IF core LIKE '%' || suf AND char_length(core) - char_length(suf) >= 2 THEN
             IF char_length(suf) > best_len THEN
                 best_len := char_length(suf);
             END IF;
         END IF;
     END LOOP;
     IF best_len > 0 THEN
-        RETURN left(word, char_length(word) - best_len);
+        RETURN left(core, char_length(core) - best_len) || tail_punct;
     END IF;
     RETURN word;
 END;

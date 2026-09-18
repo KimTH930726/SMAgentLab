@@ -42,6 +42,58 @@ class TestKeywordOnlyCategories:
         # 실수로 바뀌면 두 군데 동작이 동시에 달라진다 — 회귀 방지용 명시적 확인.
         assert set(retrieval._KEYWORD_ONLY_CATEGORIES) == {"DB", "공통코드"}
 
+    def test_public_helper_matches_private_constant(self):
+        assert retrieval.is_keyword_only_category("DB") is True
+        assert retrieval.is_keyword_only_category("공통코드") is True
+        assert retrieval.is_keyword_only_category("공통지식") is False
+        assert retrieval.is_keyword_only_category(None) is False
+
+
+def _make_result(category=None, final_score=0.0, base_weight=0.0, k_score=0.0, v_score=0.0):
+    return retrieval.RetrievalResult(
+        id=1, namespace="ns", content="c", base_weight=base_weight,
+        final_score=final_score, v_score=v_score, k_score=k_score, category=category,
+    )
+
+
+class TestRelevanceScore:
+    """final_score에서 base_weight 배율을 걷어낸 "진짜 관련성" 점수(2026-09-18) —
+    실측: base_weight 기본값이 1.0이라 final_score=raw*2가 되고, 이 상태로
+    knowledge_min_score(0.35)를 대면 완전 무관한 질문("오늘 날씨 어때?")조차 후보
+    20/20건이 전부 통과했다. final_score를 그대로 게이트에 쓰면 안 되는 이유."""
+
+    def test_divides_out_base_weight(self):
+        r = _make_result(final_score=0.6, base_weight=1.0)
+        assert retrieval.relevance_score(r) == pytest.approx(0.3)
+
+    def test_zero_base_weight_is_unchanged(self):
+        r = _make_result(final_score=0.42, base_weight=0.0)
+        assert retrieval.relevance_score(r) == pytest.approx(0.42)
+
+
+class TestIsAdopted:
+    """실제 chat 프롬프트에 포함할지 최종 판단 — 일반 카테고리는 관련성 점수 임계치,
+    키워드 전용 카테고리(DB/공통코드)는 매칭 여부(이진)로 갈린다(ts_rank는 코사인과
+    스케일이 달라 같은 임계치를 못 씀 — "DS14가 뭐야?" 실측: 조사 제거 버그를 고친
+    뒤에도 k_score=0.0304로 코사인 스케일 임계치 0.35를 못 넘음)."""
+
+    def test_general_category_gated_by_relevance_threshold(self):
+        th = {"knowledge_min_score": 0.35}
+        above = _make_result(category="공통지식", final_score=0.72, base_weight=1.0)  # raw=0.36
+        below = _make_result(category="공통지식", final_score=0.60, base_weight=1.0)  # raw=0.30
+        assert retrieval.is_adopted(above, th) is True
+        assert retrieval.is_adopted(below, th) is False
+
+    def test_keyword_only_category_adopted_on_any_positive_match_regardless_of_magnitude(self):
+        th = {"knowledge_min_score": 0.35}
+        tiny_match = _make_result(category="DB", final_score=0.0304, base_weight=1.0)
+        assert retrieval.is_adopted(tiny_match, th) is True
+
+    def test_keyword_only_category_rejected_when_no_keyword_match(self):
+        th = {"knowledge_min_score": 0.35}
+        no_match = _make_result(category="공통코드", final_score=0.0, base_weight=1.0)
+        assert retrieval.is_adopted(no_match, th) is False
+
 
 class TestSearchKnowledgeCategoryRouting:
     @pytest.mark.asyncio

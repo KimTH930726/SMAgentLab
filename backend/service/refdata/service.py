@@ -68,10 +68,29 @@ async def ingest_common_codes(namespace: str, rows: list[ParsedCommonCode], sour
     return summary
 
 
+async def has_refdata(namespace: str) -> bool:
+    """policy_search.has_policy_data()와 동일한 이유의 게이트(2026-09-18) — 이 데이터가
+    없는 네임스페이스(대부분)에서 매 채팅 턴마다 두 테이블을 괜히 조회하는 낭비를 막는다."""
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return False
+        exists = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM ref_common_code WHERE namespace_id = $1) "
+            "OR EXISTS(SELECT 1 FROM ref_db_column WHERE namespace_id = $1)",
+            ns_id,
+        )
+        return bool(exists)
+
+
 async def search_db_columns(namespace: str, query: str, top_k: int = 10) -> list[dict]:
     """테이블/컬럼명·설명에 대한 키워드 검색 — `search.py`의 policy_param 패턴과 동일하게
     `to_tsvector`/`to_tsquery`(lexeme 단위 매칭)를 쓴다. 정확 조회 데이터라 벡터 채널이
-    아예 없음(embedding 컬럼 없음 — §2 결정 규칙)."""
+    아예 없음(embedding 컬럼 없음 — §2 결정 규칙).
+
+    policy_strip_ko()로 한국어 조사/어미를 걷어내고 매칭(2026-09-18, retrieval.py의
+    일반지식 키워드 검색과 동일한 이유·동일한 함수 재사용) — 안 그러면 "DS14가"처럼
+    조사가 붙은 자연어 질의가 본문의 깔끔한 "DS14"와 매칭이 안 된다."""
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
@@ -79,17 +98,17 @@ async def search_db_columns(namespace: str, query: str, top_k: int = 10) -> list
         rows = await conn.fetch(
             """
             SELECT table_name, table_comment, column_name, column_comment, data_type, nullable,
-                   ts_rank(to_tsvector('simple', table_name || ' ' || COALESCE(table_comment,'') || ' ' ||
-                           column_name || ' ' || COALESCE(column_comment,'')), q.tsq) AS rank
+                   ts_rank(to_tsvector('simple', policy_strip_ko(table_name || ' ' || COALESCE(table_comment,'') || ' ' ||
+                           column_name || ' ' || COALESCE(column_comment,''))), q.tsq) AS rank
             FROM ref_db_column
             CROSS JOIN LATERAL (
                 SELECT to_tsquery('simple', string_agg(quote_literal(lexeme), ' | ')) AS tsq
-                FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', $2))) t
+                FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($2)))) t
                 WHERE lexeme IS NOT NULL
             ) q
             WHERE namespace_id = $1
-              AND to_tsvector('simple', table_name || ' ' || COALESCE(table_comment,'') || ' ' ||
-                  column_name || ' ' || COALESCE(column_comment,'')) @@ q.tsq
+              AND to_tsvector('simple', policy_strip_ko(table_name || ' ' || COALESCE(table_comment,'') || ' ' ||
+                  column_name || ' ' || COALESCE(column_comment,''))) @@ q.tsq
             ORDER BY rank DESC LIMIT $3
             """,
             ns_id, query, top_k,
@@ -98,6 +117,11 @@ async def search_db_columns(namespace: str, query: str, top_k: int = 10) -> list
 
 
 async def search_common_codes(namespace: str, query: str, top_k: int = 10) -> list[dict]:
+    """policy_strip_ko() 적용 이유는 search_db_columns() 문서화 참고 — 동일.
+
+    code_id도 검색 대상 텍스트에 포함(2026-09-18) — "DS14가 뭐야?"처럼 사용자가
+    코드값 자체를 묻는 질문이 가장 흔한 패턴인데, code_id를 안 넣으면 group_code_name/
+    code_name(설명 텍스트)에만 매칭돼 정작 코드값으로는 못 찾는 문제가 있었다."""
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
@@ -105,15 +129,15 @@ async def search_common_codes(namespace: str, query: str, top_k: int = 10) -> li
         rows = await conn.fetch(
             """
             SELECT work_code, group_code, group_code_name, code_id, code_name, mgmt_values,
-                   ts_rank(to_tsvector('simple', COALESCE(group_code_name,'') || ' ' || COALESCE(code_name,'')), q.tsq) AS rank
+                   ts_rank(to_tsvector('simple', policy_strip_ko(COALESCE(group_code_name,'') || ' ' || code_id || ' ' || COALESCE(code_name,''))), q.tsq) AS rank
             FROM ref_common_code
             CROSS JOIN LATERAL (
                 SELECT to_tsquery('simple', string_agg(quote_literal(lexeme), ' | ')) AS tsq
-                FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', $2))) t
+                FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($2)))) t
                 WHERE lexeme IS NOT NULL
             ) q
             WHERE namespace_id = $1
-              AND to_tsvector('simple', COALESCE(group_code_name,'') || ' ' || COALESCE(code_name,'')) @@ q.tsq
+              AND to_tsvector('simple', policy_strip_ko(COALESCE(group_code_name,'') || ' ' || code_id || ' ' || COALESCE(code_name,''))) @@ q.tsq
             ORDER BY rank DESC LIMIT $3
             """,
             ns_id, query, top_k,

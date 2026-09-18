@@ -135,15 +135,25 @@
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │  Step 3: LLM 답변 생성                              │   │
 │  │                                                     │   │
-│  │  _build_rrf_context(results, policy_result) (v2.86) │   │
+│  │  _build_rrf_context(results, policy_result,          │   │
+│  │                      common_codes, db_columns)       │   │
+│  │  (v2.86, 참조데이터 축은 v2.89)                       │   │
 │  │  → 일반지식(cosine)·정책 파라미터(ts_rank)·정책      │   │
-│  │    서술(cosine)을 항목 단위로 RRF(k=60)에 태워 하나의 │   │
-│  │    순위로 합침 — 기존엔 "일반지식 먼저, 정책 나중"   │   │
-│  │    순서로 그냥 이어붙여(build_context+build_policy_  │   │
-│  │    context) 점수 스케일이 다른데도 항상 같은 순서로   │   │
-│  │    깔렸음. build_context()/build_policy_context() 는 │   │
-│  │    디버그검색·VOC 등 다른 화면에서 그대로 쓰여 안 건  │   │
-│  │    드림 — agent.py 안에서만 항목 단위로 다시 포맷     │   │
+│  │    서술(cosine)·공통코드/DB스키마(ts_rank, 정확 매칭) │   │
+│  │    를 항목 단위로 RRF(k=60)에 태워 하나의 순위로 합침 │   │
+│  │    — 기존엔 "일반지식 먼저, 정책 나중" 순서로 그냥    │   │
+│  │    이어붙여(build_context+build_policy_context) 점수 │   │
+│  │    스케일이 다른데도 항상 같은 순서로 깔렸음.          │   │
+│  │    build_context()/build_policy_context()는 디버그   │   │
+│  │    검색·VOC 등 다른 화면에서 그대로 쓰여 안 건드림 —  │   │
+│  │    agent.py 안에서만 항목 단위로 다시 포맷            │   │
+│  │  참조데이터 축(v2.89): rag_knowledge의 "DB"/"공통코드"│   │
+│  │    카테고리가 벡터축과 같은 테이블에서 final_score로  │   │
+│  │    경쟁하다 top_k LIMIT에서부터 밀려나는 문제 실측     │   │
+│  │    확인("DS14가 뭐야?"가 자기 매칭 대상을 27건 중     │   │
+│  │    27등으로 후보 풀에도 못 넣음) — ref_common_code/   │   │
+│  │    ref_db_column(v2.73에 스키마만 있던 구조화 테이블) │   │
+│  │    으로 완전히 분리해 처음부터 독립 축으로 둠          │   │
 │  │  (fewshot 섹션은 v2.84에서 완전 제거 — 후보→활성      │   │
 │  │   승격을 담당할 사람이 없어 방치되던 걸 정적 안내문   │   │
 │  │   ops_prompt_category_guide로 대체, §table-definition │   │

@@ -30,6 +30,9 @@ _load_real("shared.rrf", "shared/rrf.py")
 sys.modules.setdefault("service.policy", MagicMock())
 _load_real("service.policy.query_type", "service/policy/query_type.py")
 _load_real("service.policy.search", "service/policy/search.py")
+sys.modules.setdefault("service.refdata", MagicMock())
+_load_real("service.refdata.parser", "service/refdata/parser.py")
+_load_real("service.refdata.service", "service/refdata/service.py")
 
 from agents.knowledge_rag import agent  # noqa: E402
 from agents.knowledge_rag.knowledge.retrieval import RetrievalResult  # noqa: E402
@@ -42,8 +45,8 @@ _THRESHOLDS = {
 }
 
 
-def _make_result(id_, final_score, content="내용"):
-    return RetrievalResult(id=id_, namespace="ns", content=content, base_weight=0.0, final_score=final_score)
+def _make_result(id_, final_score, content="내용", category=None):
+    return RetrievalResult(id=id_, namespace="ns", content=content, base_weight=0.0, final_score=final_score, category=category)
 
 
 class TestBuildRrfContext:
@@ -62,6 +65,20 @@ class TestBuildRrfContext:
         results = [_make_result(1, 0.9, "첫 번째"), _make_result(2, 0.7, "두 번째")]
         text = agent._build_rrf_context(results, PolicySearchResult())
         assert text.index("첫 번째") < text.index("두 번째")
+
+    def test_keyword_only_category_included_despite_low_score(self, monkeypatch):
+        """DB/공통코드는 final_score가 knowledge_min_score보다 낮아도(ts_rank 스케일이
+        코사인보다 항상 작음) 매칭이 됐으면 채택돼야 한다 — "DS14가 뭐야?" 실측 버그."""
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        results = [_make_result(1, 0.03, "DS14 : 배차 취소(POS)", category="공통코드")]
+        text = agent._build_rrf_context(results, PolicySearchResult())
+        assert "DS14" in text
+        assert "정확 매칭" in text
+
+    def test_keyword_only_category_excluded_when_no_match(self, monkeypatch):
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        results = [_make_result(1, 0.0, "무관한 코드표", category="DB")]
+        assert agent._build_rrf_context(results, PolicySearchResult()) == ""
 
     def test_cross_axis_interleaves_by_rank_not_by_axis(self, monkeypatch):
         """정책 1위가 일반지식 1위보다 먼저 나올 수 있어야 함 — 예전엔 일반지식이 항상 먼저."""
@@ -103,3 +120,25 @@ class TestBuildRrfContext:
         text = agent._build_rrf_context([], policy_result)
         assert "배차 지연 시 안내 문구" in text
         assert "신뢰도: 높음" in text
+
+    def test_common_code_hit_included_as_rrf_axis(self, monkeypatch):
+        """참조데이터 축(2026-09-18) — id=20을 ref_common_code로 옮긴 뒤 chat에서도
+        정책/일반지식과 동일하게 RRF로 합쳐져야 한다."""
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        common_codes = [{"group_code_name": "배달 상태 코드", "code_id": "DS14", "code_name": "배차 취소(POS)"}]
+        text = agent._build_rrf_context([], PolicySearchResult(), common_codes=common_codes)
+        assert "DS14" in text
+        assert "배차 취소(POS)" in text
+
+    def test_db_column_hit_formatted(self, monkeypatch):
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        db_columns = [{"table_name": "XO_ORDER", "column_name": "status", "column_comment": "주문 상태", "data_type": "VARCHAR(2)"}]
+        text = agent._build_rrf_context([], PolicySearchResult(), db_columns=db_columns)
+        assert "XO_ORDER.status" in text
+        assert "주문 상태" in text
+
+    def test_no_refdata_hits_does_not_break_context(self, monkeypatch):
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        results = [_make_result(1, 0.9, "일반지식만")]
+        text = agent._build_rrf_context(results, PolicySearchResult())
+        assert "일반지식만" in text
