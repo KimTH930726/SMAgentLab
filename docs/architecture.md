@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.89)
+# Ops-Navigator 시스템 아키텍처 (v2.90)
 
 ## 개요
 
@@ -11,6 +11,17 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.90: **`_KEYWORD_ONLY_CATEGORIES` 재발 방지 가드 + 하드코딩 중복 제거** — v2.87~
+  v2.89 사고 체인의 근본 메커니즘(`_KEYWORD_ONLY_CATEGORIES`) 자체는 그대로 남아있어,
+  누군가 새 지식을 "DB"/"공통코드"로 다시 태깅하면 같은 top_k 배제 문제가 조용히
+  재현될 수 있음(완전 제거는 이 카테고리를 만든 원래 이유 — 구조화 덤프의 벡터 오탐 —
+  를 다시 열게 돼 하지 않음, 지금은 실 인스턴스 0건으로 확인됨). ① `service.py`의
+  `_require_category()`에 경고 로그 추가 — 등록 자체는 막지 않되(기존 저장 경로
+  보존) 재발 시 로그로 알 수 있게. 관리자 화면(`RequiredCategoryField`, 8개 폼에서
+  공용)에도 이 카테고리 선택 시 "참조데이터 등록을 권장" 안내 문구 추가. ②
+  하드코딩 중복 제거 — `retrieval._KEYWORD_ONLY_CATEGORIES`(백엔드)와
+  `UnifiedAdhocSearch.tsx`의 별도 배열(프론트)이 같은 값을 각자 유지하던 걸 신규
+  `GET /api/knowledge/keyword-only-categories`로 단일 소스화. 테스트 4건 추가.
 - v2.87~v2.89: **채택 게이트 정합성 수정 + 참조데이터 축 신설** — 평가 게이트에 "실제
   chat 프롬프트 포함 여부(채택/제외)" 배지를 달면서(v2.85) 발견한 실사고 3단 체인.
   ① (v2.87) `knowledge_min_score`(0.35)가 사실상 무력화돼 있었음 — 실측: "오늘 날씨

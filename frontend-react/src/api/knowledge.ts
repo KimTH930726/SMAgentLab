@@ -13,6 +13,13 @@ import type {
 
 // Knowledge CRUD
 
+// retrieval._KEYWORD_ONLY_CATEGORIES와 동일한 값을 단일 소스(백엔드)에서 가져옴(2026-09-18)
+// — 예전엔 UnifiedAdhocSearch.tsx에 별도로 하드코딩돼 있어 드리프트 위험이 있었음.
+export async function getKeywordOnlyCategories(): Promise<string[]> {
+  const res = await apiFetch<{ categories: string[] }>('/knowledge/keyword-only-categories');
+  return res.categories;
+}
+
 export async function getKnowledge(namespace: string, status?: KnowledgeStatus): Promise<KnowledgeItem[]> {
   try {
     const params = new URLSearchParams({ namespace });

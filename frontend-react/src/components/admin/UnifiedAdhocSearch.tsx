@@ -5,7 +5,7 @@ import { Search, Flag, FlagOff, Check, X, PenLine } from 'lucide-react';
 import { debugSearch } from '../../api/chat';
 import { searchPolicy, type ParamHit, type NarrativeHit } from '../../api/policy';
 import { searchRefdata, type CommonCodeHit, type DbColumnHit } from '../../api/refdata';
-import { flagKnowledgeForReview, updateKnowledge } from '../../api/knowledge';
+import { flagKnowledgeForReview, updateKnowledge, getKeywordOnlyCategories } from '../../api/knowledge';
 import { getSearchThresholds } from '../../api/llm';
 import { getCategories } from '../../api/namespaces';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
@@ -146,6 +146,14 @@ export function UnifiedAdhocSearch() {
     staleTime: 60_000,
   });
 
+  // retrieval._KEYWORD_ONLY_CATEGORIES 단일 소스(2026-09-18) — 예전엔 이 배열을 여기
+  // 직접 하드코딩해서 백엔드 상수와 따로 관리됐음(드리프트 위험, 사용자 지적으로 수정).
+  const { data: keywordOnlyCategories = [] } = useQuery({
+    queryKey: ['keyword-only-categories'],
+    queryFn: getKeywordOnlyCategories,
+    staleTime: 5 * 60_000,
+  });
+
   const handleSearch = async () => {
     if (!selectedNs || !question.trim()) return;
     setLoading(true);
@@ -159,16 +167,16 @@ export function UnifiedAdhocSearch() {
       const minScore = thresholds?.knowledge_min_score ?? 0;
 
       // "DB"/"공통코드"는 벡터 대신 ts_rank로만 순위가 매겨져(retrieval.py
-      // _KEYWORD_ONLY_CATEGORIES) 코사인 스케일용 임계치를 그대로 대면 항상 걸러진다
-      // (ts_rank는 보통 0.01~0.1대) — 백엔드 is_adopted()와 동일하게 이 카테고리는
-      // "키워드 매칭이 됐는지"(final_score>0)만으로 채택 여부를 가른다.
-      const KEYWORD_ONLY_CATEGORIES = ['DB', '공통코드'];
+      // _KEYWORD_ONLY_CATEGORIES, 위 keywordOnlyCategories 쿼리로 백엔드에서 받아옴)
+      // 코사인 스케일용 임계치를 그대로 대면 항상 걸러진다(ts_rank는 보통 0.01~0.1대)
+      // — 백엔드 is_adopted()와 동일하게 이 카테고리는 "키워드 매칭이 됐는지"
+      // (final_score>0)만으로 채택 여부를 가른다.
       const generalHits: UnifiedHit[] = general.results.map((r: DebugSearchResult, i) => {
         // base_weight를 걷어낸 원점수로 게이트 판단(2026-09-18) — final_score를 그대로
         // 쓰면 base_weight(기본 1.0, 최대 5.0)가 곱해져 있어 "관련성"이 아니라 "피드백을
         // 얼마나 받았는지"를 재게 됨(백엔드 retrieval.relevance_score()와 동일 공식).
         const rawScore = r.final_score / (1 + r.base_weight);
-        const isKeywordOnly = r.category != null && KEYWORD_ONLY_CATEGORIES.includes(r.category);
+        const isKeywordOnly = r.category != null && keywordOnlyCategories.includes(r.category);
         const adopted = isKeywordOnly ? r.final_score > 0 : rawScore >= minScore;
         return {
           source: 'general',

@@ -15,6 +15,7 @@ from agents.knowledge_rag.knowledge.schemas import (
     BulkCreateRequest, IngestionJobOut,
 )
 from agents.knowledge_rag.knowledge import service
+from agents.knowledge_rag.knowledge.retrieval import _KEYWORD_ONLY_CATEGORIES
 
 import logging
 
@@ -31,6 +32,13 @@ async def _require_resource_namespace(namespace: Optional[str], user: dict, not_
         raise HTTPException(status_code=404, detail=not_found_detail)
     await check_namespace_ownership(namespace, user)
     return namespace
+
+
+@router.get("/keyword-only-categories")
+async def get_keyword_only_categories(user: dict = Depends(get_current_user)):
+    """`retrieval._KEYWORD_ONLY_CATEGORIES`를 프론트에 노출 — 관리자 화면(카테고리 선택)의
+    경고 문구가 백엔드 상수와 별도로 하드코딩돼 있던 걸 단일 소스로 통일(2026-09-18)."""
+    return {"categories": list(_KEYWORD_ONLY_CATEGORIES)}
 
 
 @router.get("", response_model=list[KnowledgeOut])

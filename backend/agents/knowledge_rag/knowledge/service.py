@@ -9,7 +9,7 @@ import numpy as np
 
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
-from agents.knowledge_rag.knowledge.retrieval import find_similar_active_knowledge, get_thresholds
+from agents.knowledge_rag.knowledge.retrieval import find_similar_active_knowledge, get_thresholds, is_keyword_only_category
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,21 @@ def _require_category(category: Optional[str]) -> str:
     """지식 항목의 업무구분(category)은 필수값 — 비어있으면 등록 거부."""
     if not category or not category.strip():
         raise ValueError("업무구분(category)은 필수입니다.")
-    return category.strip()
+    category = category.strip()
+    if is_keyword_only_category(category):
+        # 재발 방지 로그(2026-09-18) — 이 카테고리는 rag_knowledge 안에서 벡터축과
+        # final_score로 경쟁하다 top_k LIMIT 단계에서부터 후보 풀에 못 들어가는 구조적
+        # 문제가 실측 확인됨("DS14가 뭐야?" 사고, id=20을 ref_common_code로 이전해
+        # 해결). 이 카테고리로 신규 등록되는 지식은 같은 문제를 조용히 재현할 수 있어
+        # 등록 자체를 막지는 않되(기존 저장 경로를 깨뜨리지 않음), 운영 중 재발을
+        # 알아챌 수 있게 로그만 남긴다.
+        logger.warning(
+            "지식이 키워드 전용 카테고리(%s)로 등록됨 — rag_knowledge 안에서는 "
+            "top_k 후보 선별 단계에서 밀려날 수 있음. 구조화 코드/스키마 데이터는 "
+            "ref_common_code/ref_db_column(service/refdata) 등록을 권장.",
+            category,
+        )
+    return category
 
 
 # ─── rag_knowledge ────────────────────────────────────────────────────────────

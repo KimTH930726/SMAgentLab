@@ -26,6 +26,7 @@ import {
   resolveDuplicate,
   getReviewFlags,
   resolveReviewFlag,
+  getKeywordOnlyCategories,
   type IngestionJob,
   type IngestionJobStatus,
   type ConfluenceTreeResponse,
@@ -109,6 +110,16 @@ function weightClass(w: number) {
 function RequiredCategoryField({ categoryNames, value, onChange }: {
   categoryNames: string[]; value: string; onChange: (v: string) => void;
 }) {
+  // retrieval._KEYWORD_ONLY_CATEGORIES(2026-09-18) — 이 카테고리로 태깅되면 rag_knowledge
+  // 안에서 벡터축과 final_score로 경쟁하다 top_k 후보 선별 단계에서 밀려날 수 있음
+  // ("DS14가 뭐야?" 실사고, id=20을 ref_common_code로 이전해 해결) — 재발 방지 경고.
+  // 8군데(생성/수정/일괄수정 등)에서 이 필드를 재사용해서 여기 한 곳에만 넣으면 전부 적용됨.
+  const { data: keywordOnlyCategories = [] } = useQuery({
+    queryKey: ['keyword-only-categories'],
+    queryFn: getKeywordOnlyCategories,
+    staleTime: 5 * 60_000,
+  });
+
   if (categoryNames.length === 0) {
     return (
       <div className="rounded-lg bg-amber-900/20 border border-amber-700/40 px-3 py-2 text-xs text-amber-300">
@@ -124,6 +135,12 @@ function RequiredCategoryField({ categoryNames, value, onChange }: {
         <option value="" disabled>선택하세요</option>
         {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
+      {keywordOnlyCategories.includes(value) && (
+        <p className="mt-1.5 text-xs text-amber-400">
+          이 업무구분은 검색 우선순위 문제가 있는 유형(코드표/DB스키마)입니다 — 짧은 코드 항목이면
+          지식베이스보다 참조데이터(공통코드/DB스키마) 등록을 권장합니다.
+        </p>
+      )}
     </div>
   );
 }
