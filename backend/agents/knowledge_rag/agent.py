@@ -143,7 +143,15 @@ class KnowledgeRagAgent(AgentBase):
             search_question, query_vec = await memory.augment_query_for_search(
                 conversation_id, query, exclude_message_id=user_msg_id,
             )
-            cache_vec = await embedding_service.embed(sem_cache.normalize_query(search_question))
+            # 캐시 키는 반드시 "이번에 실제로 물은 질문"만으로 계산한다(2026-09-18 실사고
+            # 수정) — search_question은 멀티턴 보강이 직전 턴을 붙인 결과라 검색 재현율엔
+            # 도움이 되지만, 캐시 키로 쓰면 완전히 다른 두 질문이 "직전 턴이 같다"는 이유로
+            # 캐시 벡터가 서로 가까워져 오답이 재사용될 수 있다(실측: "쿠폰 회수 정책
+            # 알려줘" 다음에 전혀 무관한 "정책적으로 최대 재고 갯수가 몇개?"를 물었는데
+            # MULTITURN_RELEVANCE_THRESHOLD(0.35)를 "정책"이라는 단어 하나로 넘겨 직전
+            # 턴이 붙었고, 그 오염된 병합 텍스트로 계산한 캐시 벡터가 1턴째와 코사인
+            # 0.9309로 나와 캐시 임계치를 넘어서 완전히 무관한 답이 그대로 재사용됨).
+            cache_vec = await embedding_service.embed(sem_cache.normalize_query(query))
 
             # ── Semantic Cache 조회 ──
             cached = await sem_cache.get_cached(namespace, "knowledge_rag", cache_vec)
