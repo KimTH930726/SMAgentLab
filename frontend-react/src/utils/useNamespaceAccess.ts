@@ -6,7 +6,7 @@ import { useAuthStore } from '../store/useAuthStore';
 import { sortNamespacesByUserPart } from './sortNamespaces';
 
 /**
- * KnowledgeTable / GlossaryTable / FewshotTable 공통 네임스페이스 선택 + 권한 훅
+ * KnowledgeTable / GlossaryTable 공통 네임스페이스 선택 + 권한 훅
  */
 export function useNamespaceAccess() {
   const { namespace: storeNamespace } = useAppStore();

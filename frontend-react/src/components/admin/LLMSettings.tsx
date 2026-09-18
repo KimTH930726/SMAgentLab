@@ -582,7 +582,6 @@ function ProviderSettings() {
 
 const THRESHOLD_FIELDS: { key: keyof SearchThresholds; label: string; desc: string; min: number; max: number; step: number; color: string }[] = [
   { key: 'glossary_min_similarity', label: '용어 매핑 최소 유사도', desc: '이 값 이상이어야 용어 매핑이 활성화됩니다', min: 0, max: 1, step: 0.05, color: 'text-indigo-400' },
-  { key: 'fewshot_min_similarity', label: 'Q&A 최소 유사도', desc: '이 값 이상이어야 Few-shot 예시에 포함됩니다', min: 0, max: 1, step: 0.05, color: 'text-amber-400' },
   { key: 'knowledge_min_score', label: '검색결과 최소 점수', desc: '이 점수 미만의 결과는 LLM 컨텍스트에서 제외됩니다', min: 0, max: 1, step: 0.05, color: 'text-rose-400' },
   { key: 'knowledge_high_score', label: '검색결과 높은 신뢰 기준', desc: '이 점수 이상이면 "높음" 신뢰도로 분류됩니다', min: 0, max: 1, step: 0.05, color: 'text-emerald-400' },
   { key: 'knowledge_mid_score', label: '검색결과 보통 신뢰 기준', desc: '이 점수 이상이면 "보통", 미만이면 "낮음" 신뢰도', min: 0, max: 1, step: 0.05, color: 'text-sky-400' },

@@ -84,12 +84,6 @@ class DebugResult(BaseModel):
     final_score: float
 
 
-class FewshotResult(BaseModel):
-    question: str
-    answer: str
-    similarity: float
-
-
 class DebugSearchResponse(BaseModel):
     question: str
     namespace: str
@@ -97,6 +91,5 @@ class DebugSearchResponse(BaseModel):
     glossary_match: Optional[GlossaryMatchInfo]
     w_vector: float
     w_keyword: float
-    fewshots: list[FewshotResult]
     results: list[DebugResult]
     context_preview: str

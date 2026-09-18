@@ -126,6 +126,19 @@ async def resolve_review_flag(flag_id: int, user: dict = Depends(get_current_use
     return {"status": "resolved"}
 
 
+class FlagForReviewRequest(BaseModel):
+    namespace: str
+    reason: str = "search_noise"
+
+
+@router.post("/{knowledge_id}/flag-for-review", status_code=201)
+async def flag_knowledge_for_review(knowledge_id: int, body: FlagForReviewRequest, user: dict = Depends(get_current_user)):
+    ns = await service.get_knowledge_namespace(knowledge_id)
+    await _require_resource_namespace(ns, user, "Knowledge not found")
+    await service.flag_knowledge_for_review(knowledge_id, body.namespace, body.reason)
+    return {"status": "flagged"}
+
+
 class BulkDeleteRequest(BaseModel):
     ids: list[int]
 
@@ -460,7 +473,6 @@ async def import_file(
     auto_analyze: bool = Form(default=False),
     auto_tag: bool = Form(default=False),
     auto_glossary: bool = Form(default=False),
-    auto_fewshot: bool = Form(default=False),
     user: dict = Depends(get_current_user),
 ):
     """파일 업로드 → 파싱 → 청킹 → 벌크 등록.
@@ -470,7 +482,6 @@ async def import_file(
     auto_analyze: True이면 LLM Analyzer Agent로 전략/메타데이터 자동 결정
     auto_tag: True이면 LLM으로 카테고리/컨테이너명 자동 태깅
     auto_glossary: True이면 LLM으로 용어 자동 추출
-    auto_fewshot: True이면 LLM으로 Q&A 자동 생성 → fewshot candidate
     """
     await check_namespace_ownership(namespace, user)
 
@@ -532,43 +543,14 @@ async def import_file(
     if auto_glossary:
         glossary_count = await _run_auto_glossary(namespace, doc.raw_text, user)
 
-    # 자동 Q&A 생성 (선택적)
-    fewshot_count = 0
-    if auto_fewshot:
-        try:
-            from agents.knowledge_rag.ingestion.qa_gen import bulk_generate_qa
-            from service.llm.factory import get_llm_provider
-            from core.security import get_user_llm_credentials
-            from core.database import get_conn, resolve_namespace_id
-
-            llm = get_llm_provider()
-            # 상위 5개 청크에서만 Q&A 생성 (비용 절약)
-            qa_input = [{"idx": i, "content": c.text} for i, c in enumerate(chunks[:5])]
-            qa_pairs = await bulk_generate_qa(qa_input, llm, user_credentials=get_user_llm_credentials(user))
-
-            if qa_pairs:
-                embeddings = await embedding_service.embed_batch([qa["question"] for qa in qa_pairs])
-                async with get_conn() as conn:
-                    ns_id = await resolve_namespace_id(conn, namespace)
-                    await conn.executemany("""
-                        INSERT INTO rag_fewshot (namespace_id, question, answer, status, embedding)
-                        VALUES ($1, $2, $3, 'candidate', $4::vector)
-                    """, [
-                        (ns_id, qa["question"], qa["answer"], str(emb))
-                        for qa, emb in zip(qa_pairs, embeddings)
-                    ])
-                fewshot_count = len(qa_pairs)
-        except Exception as e:
-            logger.warning("Q&A 자동 생성 실패 (무시하고 계속): %s", e)
-
-    # job 업데이트 (용어 수 + fewshot 수)
-    if result.get("job_id") and (glossary_count > 0 or fewshot_count > 0):
+    # job 업데이트 (용어 수)
+    if result.get("job_id") and glossary_count > 0:
         try:
             from core.database import get_conn
             async with get_conn() as conn:
                 await conn.execute(
-                    "UPDATE rag_ingestion_job SET auto_glossary = $1, auto_fewshot = $2, analyzer_result = $3 WHERE id = $4",
-                    glossary_count, fewshot_count,
+                    "UPDATE rag_ingestion_job SET auto_glossary = $1, analyzer_result = $2 WHERE id = $3",
+                    glossary_count,
                     json.dumps(analyzer_result, ensure_ascii=False) if analyzer_result else None,
                     result["job_id"],
                 )
@@ -579,7 +561,6 @@ async def import_file(
         **result,
         "chunks": len(chunks),
         "auto_glossary": glossary_count,
-        "auto_fewshot": fewshot_count,
         "analyzer": analyzer_result,
         "source_name": doc.source_name,
         "page_count": doc.metadata.get("page_count"),

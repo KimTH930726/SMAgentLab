@@ -1,12 +1,11 @@
 import { useState, Component, type ReactNode } from 'react';
 import { clsx } from 'clsx';
-import { Database, BookOpen, BarChart2, Search, Layers, Zap, Settings, Users, Mail, FileStack } from 'lucide-react';
+import { Database, BookOpen, BarChart2, Layers, Settings, Users, Mail, FileStack, FlaskConical } from 'lucide-react';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
 import { StatsPanel } from '../components/admin/StatsPanel';
-import { DebugPanel } from '../components/admin/DebugPanel';
-import { FewshotTable } from '../components/admin/FewshotTable';
+import { EvaluationGate } from '../components/admin/EvaluationGate';
 import { LLMSettings } from '../components/admin/LLMSettings';
 import { UserManager } from '../components/admin/UserManager';
 import { CachePanel } from '../components/admin/CachePanel';
@@ -41,7 +40,7 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 
 type TabId =
   // knowledge_rag
-  | 'namespaces' | 'knowledge' | 'glossary' | 'fewshots' | 'debug'
+  | 'namespaces' | 'knowledge' | 'glossary' | 'lab'
   // common
   | 'cache' | 'stats' | 'llm' | 'users' | 'voc_email' | 'policy';
 
@@ -59,8 +58,7 @@ const TABS: Tab[] = [
   { id: 'knowledge',    label: '지식 베이스',        icon: <BookOpen className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
   { id: 'voc_email',    label: 'VOC 이메일',            icon: <Mail className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
   { id: 'glossary',     label: '용어집',              icon: <Database className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
-  { id: 'fewshots',     label: 'Q&A',            icon: <Zap className="w-4 h-4" />,        agentScope: 'knowledge_rag' },
-  { id: 'debug',        label: '파이프라인 디버그',    icon: <Search className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
+  { id: 'lab',          label: '평가 게이트',          icon: <FlaskConical className="w-4 h-4" />, agentScope: 'knowledge_rag' },
   { id: 'policy',            label: '정책',                icon: <FileStack className="w-4 h-4" />,  agentScope: 'knowledge_rag' },
   // 공통 탭
   { id: 'cache',        label: '캐시 현황',             icon: <BarChart2 className="w-4 h-4" />, adminOnly: true, agentScope: 'knowledge_rag' },
@@ -116,8 +114,7 @@ export default function Admin() {
           {resolvedTab === 'namespaces'   && <NamespaceManager onNavigate={(id) => setActiveTab(id as TabId)} />}
           {resolvedTab === 'knowledge'    && <KnowledgeTable />}
           {resolvedTab === 'glossary'     && <GlossaryTable />}
-          {resolvedTab === 'fewshots'     && <FewshotTable />}
-          {resolvedTab === 'debug'        && <DebugPanel onNavigate={(id) => setActiveTab(id as TabId)} />}
+          {resolvedTab === 'lab'          && <EvaluationGate />}
           {resolvedTab === 'policy'       && <PolicyPanel />}
           {resolvedTab === 'cache'        && isAdmin && <CachePanel />}
           {resolvedTab === 'voc_email'    && <VocEmailPanel />}

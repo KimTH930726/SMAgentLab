@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.80)
+# Ops-Navigator 시스템 아키텍처 (v2.86)
 
 ## 개요
 
@@ -11,6 +11,72 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.86: **chat 프로덕션 파이프라인에 RRF 컨텍스트 병합 적용** — v2.85에서 즉석 질의
+  화면에만 적용했던 Reciprocal Rank Fusion(RRF, k=60)을 실제 `agent.py`의 답변 생성
+  경로에도 적용. 기존엔 `retrieval.build_context(results)` + `policy_search.
+  build_policy_context(policy_result)`를 그냥 텍스트로 이어붙여(항상 "일반지식 먼저,
+  정책 나중") 축마다 점수 스케일이 달라도(코사인 0~1 vs RDB ts_rank 0~5+) 순서에
+  전혀 반영이 안 됐다. `agent.py`에 `_build_rrf_context()` 신규 — 일반지식/정책
+  파라미터/정책 서술을 항목 단위로 RRF 순위 매겨 하나의 컨텍스트로 재구성. 공유
+  함수(`build_context`/`build_policy_context`)는 디버그검색·이메일VOC 등 다른 화면이
+  그대로 쓰고 있어 안 건드리고, agent.py 안에서만 새로 포맷(신규 `shared/rrf.py`).
+  **정확도 재검증(2회)**: 실제 채팅 답변에 반영해도 손해가 없는지, 실 질의 로그
+  기반 질문(`ops_query_log` resolved 10건 + 교차축 질문 3건)으로 OLD/NEW 컨텍스트 각각
+  LLM에 태워 비교. 1차는 "답변이 같아 보인다"는 정성 판단이었고, 재검증(사용자 요청)은
+  RRF 1위 항목 본문에서 숫자·코드성 "핵심 사실"을 자동 추출해 OLD/NEW 답변에 남아있는지
+  정량 비교 — 10문항 중 7건 동일, 2건 NEW가 더 나음, 1건만 OLD가 근소 우위(사용자
+  체감 정보 아닌 테이블명 토큰 1개 차이). 순손해 없음 확인 후 적용(`scripts/
+  verify_rrf_chat_accuracy.py`, `scripts/compare_rrf_context.py`, 유닛테스트 6건).
+- v2.85: **평가 게이트 "즉석 질의" 통합 재설계 + 지식 오염 관리** — "파이프라인
+  디버그"(일반지식 단건 조회)와 "정책 저장소 실험실"(정책 골든셋 집계)을 하나의
+  최상위 탭 "평가 게이트"로 통합(향후 측정지표 기반 루프 엔지니어링 게이팅을
+  염두에 둔 선제적 명명, 지금은 여전히 수동 측정 도구일 뿐 — 실제 차단 로직 없음).
+  즉석 질의는 "일반지식/정책 중 택1 토글" → "두 패널 동시 표시" → **하나의 RRF
+  통합 리스트(`UnifiedAdhocSearch.tsx`)** 순으로 세 번 재설계됨(정책을 별도 패널로
+  보여주면 "뭔가 대단한 별도 축"처럼 보인다는 지적). 이후 UI 피드백으로 카드+모달
+  형태로 재구성 — 카드 상단에 상대 강도 막대(원점수 아닌 "이번 검색 1위 대비 RRF
+  상대값"), 클릭 시 전체 내용/메타 모달, top_k는 "축별 후보 수"이자 "최종 표시
+  개수"로 의미 통일(과거엔 축별 후보 수로만 써서 top_k=10이어도 최대 30개가 그대로
+  나열됐음), 카드형 5열 그리드로 좌상단부터 순위대로 배치. **채택 여부 표시**:
+  RRF 순위와 별개로 실제 chat 프롬프트 포함 여부를 배지로 노출 — 일반지식은
+  `final_score < knowledge_min_score`면 순위와 무관하게 제외, 정책은 임계치 자체가
+  없어 top_k 이내면 항상 채택(코드 확인 완료). **검색 오염 지식 리뷰 신호**: 딜리버스
+  DB에서 무관한 질문에 공통코드 표(id=20)가 코사인 0.93~0.95로 1위 노출되는 실제
+  사례 발견(카테고리를 `_KEYWORD_ONLY_CATEGORIES`에 속하는 "공통코드"로 재태깅해
+  해결) — 같은 클래스 문제가 반복될 수 있어, 카드에서 바로 기존
+  `rag_knowledge_review_flag` 큐(나빠요 피드백과 동일)에 `reason='search_noise'`로
+  플래그하는 기능 추가(`POST /api/knowledge/{id}/flag-for-review`). 리뷰 신호 큐에는
+  "확인 완료"만 있고 수정/삭제가 없다는 지적으로 인라인 "수정" 버튼도 추가(기존 편집
+  모달 재사용). **인라인 수정**: 즉석 질의에서 검색된 일반지식을 그 자리에서
+  수정할 수 있게(품질 관리 워크플로우) — 저장 후 점수·채택 여부가 바뀔 수 있어 같은
+  질문으로 재검색해 최신 상태를 반영.
+- v2.84: **fewshot 기능 전체 제거** — 후보 12건/활성 1건, 2개월째 방치 실측(2026-09-17).
+  "유사도 기반 동적 예시 선택은 업계 표준 패턴"이라는 일반론으로 존치(승격 게이트
+  수정, 카테고리 가산점 추가)를 검토했으나, "그 표준 패턴이 실제로 이 시스템에서
+  효과가 있었다는 증거는 없다"로 정정 — 판단 기준은 업계 일반론이 아니라 "우리
+  조직 구성상 실제 효과가 있었나"(`feedback_effectiveness_bar_for_org_specific_
+  features` 메모리). `rag_fewshot` 테이블·`rag_ingestion_job.auto_fewshot` 컬럼·
+  `agents/knowledge_rag/fewshot/` 라우터·`FewshotTable.tsx`·`qa_gen.py`·피드백→
+  INSERT 로직까지 전부 삭제(비활성화가 아니라 완전 제거). 대체 수단은 v2.83의
+  `ops_prompt_category_guide`.
+- v2.83: **카테고리별 정적 답변 안내문 스키마 선추가** — fewshot의 "카테고리별 답변
+  가이드" 역할을 승인 절차 없는 정적 텍스트로 대체할 `ops_prompt_category_guide`
+  테이블(namespace_id, category, guide_text, `UNIQUE(namespace_id, category)`) 추가.
+  **스키마만 — CRUD/UI는 미착수**(다음 단계).
+- v2.82: **미사용 지식 필드(container_name/target_tables/query_template) 완전 제거** —
+  2026-09-17 실사용 데이터 감사: 전체 50건 중 각각 25/13/2건만 채워짐, 게다가
+  `retrieval.py`의 벡터/키워드 랭킹 어디에도 안 쓰이고 `build_context()`가 LLM
+  컨텍스트에 장식으로 덧붙이는 용도뿐이었음("검색 정확도에 기여한다"는 원래 전제가
+  틀림) — 본문 텍스트에 이미 같은 정보가 있어 FTS/벡터 검색이 어차피 커버. 컨플루언스
+  등 지금 주력 채널엔 입력 UI 자체가 없어 0%였음. DB 컬럼·Python 스키마/라우터/서비스
+  (~15개 백엔드 파일)·프론트 폼/배지/CSV매핑/자동태그 프롬프트(~15개 프론트 파일)에서
+  전부 제거(YAGNI, 필요해지면 재추가).
+- v2.81: **Confluence 페이지 버전 추적 도입** — 재임포트(`POST /import/url/bulk-pages`)가
+  같은 URL을 돌릴 때마다 무조건 새 행을 만들던 문제 수정. Confluence REST API의
+  `page.version.number`를 `rag_knowledge.confluence_version`에 저장해 재임포트 시
+  비교 — 안 바뀐 페이지는 스킵(`unchanged_pages` 응답 필드), 바뀐 페이지는 기존 행을
+  `deprecated` 처리 후 재삽입. 같은 커밋에서 Confluence 청킹 버그 2건도 별도 수정
+  (매크로 잔재 텍스트 유출, 짧은 상위 섹션 소개글이 자식 서브섹션과 분리되며 유실).
 - v2.80: **정책서 미분류(unresolved) 리포트에 첫 쓰기 액션 추가** — "조회만 있고 승인/
   수정/재분류 할 방법이 없다"는 실사용 지적(2026-09-16)으로 착수. 완전한 검토 UI
   (`docs/policy-doc-pipeline-plan.md` §6, 여전히 미착수)의 대체가 아니라 "완전 방치"를

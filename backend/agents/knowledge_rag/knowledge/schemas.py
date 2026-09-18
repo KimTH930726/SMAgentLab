@@ -68,7 +68,6 @@ class IngestionJobOut(BaseModel):
     created_chunks: int
     pending_chunks: int = 0
     auto_glossary: int
-    auto_fewshot: int
     chunk_strategy: Optional[str]
     error_message: Optional[str]
     created_by_user_id: Optional[int] = None

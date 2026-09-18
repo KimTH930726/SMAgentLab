@@ -14,7 +14,6 @@ _settings_mock = MagicMock()
 _settings_mock.fernet_secret_key = "test-secret-key"
 _settings_mock.jwt_secret_key = "test-jwt-secret"
 _settings_mock.glossary_min_similarity = 0.6
-_settings_mock.fewshot_min_similarity = 0.6
 _settings_mock.knowledge_min_score = 0.1
 _settings_mock.knowledge_high_score = 0.5
 _settings_mock.knowledge_mid_score = 0.3

@@ -17,7 +17,6 @@ from service.llm.factory import get_llm_provider
 from service.auth.router import router as auth_router
 from service.chat.router import router as chat_router
 from agents.knowledge_rag.knowledge.router import router as knowledge_router
-from agents.knowledge_rag.fewshot.router import router as fewshot_router
 from service.feedback.router import router as feedback_router
 from service.admin.router import router as admin_router
 from service.prompt.router import router as prompt_router
@@ -35,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 _ROUTERS = [
     auth_router, chat_router, knowledge_router,
-    fewshot_router, feedback_router, admin_router,
+    feedback_router, admin_router,
     prompt_router,
     teams_router,
     email_voc_router,
@@ -214,13 +213,10 @@ async def _migrate_core_tables(conn) -> None:
             "UPDATE ops_conversation SET user_id = $1 WHERE user_id IS NULL", admin_id,
         )
 
-    # ── 지식/용어/퓨샷 테이블에 created_by_part, created_by_user_id 추가 ──
-    for tbl in ("rag_knowledge", "rag_glossary", "rag_fewshot"):
+    # ── 지식/용어 테이블에 created_by_part, created_by_user_id 추가 ──
+    for tbl in ("rag_knowledge", "rag_glossary"):
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_part VARCHAR(100)")
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_user_id INT")
-
-    # ── rag_fewshot status 컬럼 추가 ──
-    await conn.execute("ALTER TABLE rag_fewshot ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'")
 
     # ── 기존 ops_namespace 데이터 보충 (namespace 컬럼이 있는 경우만) ──
     if await _column_exists(conn, "rag_knowledge", "namespace"):
@@ -232,7 +228,6 @@ async def _migrate_core_tables(conn) -> None:
                 UNION SELECT namespace FROM ops_query_log WHERE namespace IS NOT NULL
                 UNION SELECT namespace FROM ops_conversation WHERE namespace IS NOT NULL
                 UNION SELECT namespace FROM ops_feedback WHERE namespace IS NOT NULL
-                UNION SELECT namespace FROM rag_fewshot WHERE namespace IS NOT NULL
             ) t WHERE ns IS NOT NULL
             ON CONFLICT (name) DO NOTHING
         """)
@@ -289,7 +284,6 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_user_id ON ops_conversation (user_id, created_at DESC)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_ns_user ON ops_conversation (namespace_id, user_id)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_query_log_ns_status ON ops_query_log (namespace_id, status)")
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_fewshot_ns_id ON rag_fewshot (namespace_id)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_ns_id ON ops_feedback (namespace_id)")
 
 
@@ -297,7 +291,7 @@ async def _migrate_namespace_ids(conn) -> None:
     """namespace_id 컬럼 추가 및 FK 제약 조건 마이그레이션 (모든 관련 테이블)."""
     # ── namespace_id 컬럼 추가 및 데이터 채우기 ────────────────────
     for tbl in ("rag_glossary", "rag_knowledge", "rag_knowledge_category",
-                "ops_query_log", "ops_conversation", "ops_feedback", "rag_fewshot"):
+                "ops_query_log", "ops_conversation", "ops_feedback"):
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS namespace_id INT")
         # string namespace → namespace_id 동기화 (namespace 컬럼이 있는 경우)
         if await _column_exists(conn, tbl, "namespace"):
@@ -316,7 +310,6 @@ async def _migrate_namespace_ids(conn) -> None:
         "ops_query_log": "fk_query_log_namespace_id",
         "ops_conversation": "fk_conversation_namespace_id",
         "ops_feedback": "fk_feedback_namespace_id",
-        "rag_fewshot": "fk_fewshot_namespace_id",
     }
     for tbl, constraint in fk_map.items():
         await conn.execute(f"""
@@ -458,7 +451,6 @@ async def _migrate_knowledge_ingestion(conn) -> None:
             total_chunks    INT DEFAULT 0,
             created_chunks  INT DEFAULT 0,
             auto_glossary   INT DEFAULT 0,
-            auto_fewshot    INT DEFAULT 0,
             chunk_strategy  VARCHAR(50),
             embedding_model VARCHAR(200),
             analyzer_result JSONB,
@@ -1021,6 +1013,46 @@ async def _migrate_drop_unused_knowledge_fields(conn) -> None:
     await conn.execute("ALTER TABLE rag_knowledge DROP COLUMN IF EXISTS query_template")
 
 
+async def _migrate_prompt_category_guides(conn) -> None:
+    """카테고리별 답변 안내문 (v2.83) — fewshot(승인 대기 12건/활성 1건, 2개월 방치, 2026-09-17
+    실측) 대체.
+
+    fewshot은 "과거 성공 답변을 예시로 보여주는" 방식이라 원리상 타당하지만, 후보→활성
+    승격에 담당자의 지속적 검토가 필요한데 그 역할을 맡을 사람이 없어(파트별 전담 관리자
+    부재) 사실상 죽어있었다. rag_knowledge_category와 동일하게 (namespace, category) 단위로
+    스코핑하되, 동적 큐 대신 관리자가 직접 쓰는 정적 안내문으로 — 승인 절차 자체가 없어야
+    유지보수 부담이 0에 수렴한다는 게 이 프로젝트에서 반복 확인된 교훈(container_name 등).
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_prompt_category_guide (
+            id            SERIAL PRIMARY KEY,
+            namespace_id  INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            category      VARCHAR(100) NOT NULL,
+            guide_text    TEXT NOT NULL,
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (namespace_id, category)
+        )
+    """)
+
+
+async def _migrate_remove_fewshot(conn) -> None:
+    """fewshot 기능 전체 제거 (v2.84).
+
+    2026-09-17 실측: candidate 12건/active 1건, 2개월째 방치 — 후보→활성 승격에
+    사람의 지속적 검토가 필요한데 그 역할을 맡을 담당자가 없어 죽어있었다. "유사도
+    기반 동적 예시 선택은 업계 표준 패턴"이라는 일반론만으로 존치를 정당화하려다
+    (승격 게이트 제거, knowledge_id 경유 카테고리 가산점 등 추가 공사 검토), "그 표준
+    패턴이 실제로 이 시스템에서 효과가 있었다는 증거는 없다"는 반박에 정정 — 판단
+    기준은 일반론이 아니라 "우리 조직 구성상 실제 효과가 있었나"여야 한다
+    (feedback_effectiveness_bar_for_org_specific_features 메모리 참고). container_name
+    등과 동일하게 값 손실을 감수하고 완전 제거. 일반 지식 유형별 답변 가이드는
+    별도의 정적 ops_prompt_category_guide로 대체.
+    """
+    await conn.execute("DROP TABLE IF EXISTS rag_fewshot")
+    await conn.execute("ALTER TABLE rag_ingestion_job DROP COLUMN IF EXISTS auto_fewshot")
+
+
 async def _cleanup_stale_generating_messages(conn) -> None:
     """프로세스가 막 기동했으니, 'generating' 상태로 남은 메시지는 전부 이전
     프로세스가 스트리밍 도중 죽으면서 남긴 고아 행이다(지금 막 시작했으므로 이
@@ -1052,6 +1084,8 @@ async def _run_migrations() -> None:
         await _migrate_policy_track2_history(conn)
         await _migrate_confluence_sync(conn)
         await _migrate_drop_unused_knowledge_fields(conn)
+        await _migrate_prompt_category_guides(conn)
+        await _migrate_remove_fewshot(conn)
         await _cleanup_stale_generating_messages(conn)
 
 

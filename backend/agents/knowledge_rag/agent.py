@@ -20,6 +20,7 @@ from service.llm.factory import get_llm_provider
 from shared.embedding import embedding_service
 from shared import cache as sem_cache
 from shared import reranker as reranker_svc
+from shared.rrf import rrf_score
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,46 @@ async def _safe_post_save(conv_id: int, namespace: str) -> None:
         await post_save_tasks(conv_id, namespace)
     except Exception as e:
         logger.warning("post_save_tasks 실패: %s", e)
+
+
+def _build_rrf_context(
+    results: list[retrieval.RetrievalResult], policy_result: policy_search.PolicySearchResult,
+) -> str:
+    """일반지식(코사인)·정책 파라미터(RDB ts_rank)·정책 서술(코사인)을 RRF로 합쳐 하나의
+    LLM 컨텍스트로 만든다(2026-09-18). 기존엔 retrieval.build_context() + policy_search.
+    build_policy_context()를 그냥 이어붙였는데(항상 "일반지식 먼저, 정책 나중"), 축마다
+    점수 스케일이 달라(코사인 0~1 vs ts_rank 0~5+) 실제로 더 관련성 높은 쪽이 항상 뒤에
+    깔리는 구조적 문제가 있었음. 평가 게이트 즉석 질의(UnifiedAdhocSearch, 프론트에서
+    RRF 적용)와 별개 백엔드 검증 스크립트(scripts/compare_rrf_context.py)로 실제 질문
+    3건씩 두 라운드 비교한 결과 사실관계 왜곡은 없었고, 이 방식이 실제 순위 구조를 더
+    정확히 반영해 채팅에도 동일하게 적용.
+
+    retrieval.build_context()/policy_search.build_policy_context()는 각각 디버그
+    검색(service/chat/router.py)·이메일 VOC 파이프라인·기존 정책 편입 로직 등 다른
+    화면에서 그대로 쓰이고 있어(테스트도 그 출력 형식에 매여 있음) 건드리지 않고,
+    여기서만 항목 단위로 다시 포맷한다 — 포맷 문자열이 일부 중복되지만 공유 함수를
+    바꿔 여러 화면에 영향이 번지는 것보다 안전하다."""
+    th = retrieval.get_thresholds()
+    relevant = [r for r in results if r.final_score >= th["knowledge_min_score"]]
+
+    items: list[tuple[float, str]] = []
+    for i, r in enumerate(relevant):
+        confidence = (
+            "높음" if r.final_score >= th["knowledge_high_score"]
+            else "보통" if r.final_score >= th["knowledge_mid_score"]
+            else "낮음"
+        )
+        items.append((rrf_score(i), f"--- 문서 (점수: {r.final_score:.4f}, 신뢰도: {confidence}) ---\n내용:\n{r.content}"))
+    for i, p in enumerate(policy_result.params):
+        value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
+        condition_str = f" ({p.condition})" if p.condition else ""
+        items.append((rrf_score(i), f"[정책 파라미터 · 정확 일치: {p.policy_name}{condition_str}] {p.param_name} = {value_str}"))
+    for i, n in enumerate(policy_result.narratives):
+        confidence = "높음" if n.score >= 0.6 else "보통" if n.score >= 0.4 else "낮음"
+        items.append((rrf_score(i), f"[정책 서술: {n.policy_name}] (신뢰도: {confidence})\n{n.chunk_text}"))
+
+    items.sort(key=lambda x: x[0], reverse=True)
+    return "\n\n".join(text for _, text in items)
 
 
 class KnowledgeRagAgent(AgentBase):
@@ -115,9 +156,8 @@ class KnowledgeRagAgent(AgentBase):
             yield {"type": "status", "step": "search", "message": "관련 문서 검색 중..."}
             # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
             candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
-            results_raw, fewshots, policy_available = await asyncio.gather(
+            results_raw, policy_available = await asyncio.gather(
                 retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories),
-                retrieval.fetch_fewshots(namespace, query_vec),
                 policy_search.has_policy_data(namespace),
             )
             if settings.reranker_enabled and len(results_raw) > top_k:
@@ -140,7 +180,6 @@ class KnowledgeRagAgent(AgentBase):
             # top_k=5 다중 후보를 그대로 유지해 재현율을 지키고, 화면에 보여줄 근거 1건은
             # 답변이 다 나온 "뒤에" select_cited_hit()으로 역추적한다(아래, final_answer 계산
             # 직후). 그 전까지 policy_citations는 비워두고, 두 번째 meta 이벤트로 늦게 채운다.
-            policy_context = ""
             policy_result = policy_search.PolicySearchResult()
             policy_citations: list[dict] = []
             if policy_available:
@@ -148,17 +187,12 @@ class KnowledgeRagAgent(AgentBase):
                     policy_result = await policy_search.search_policy(
                         namespace, enriched_query, top_k=5, query_vec=query_vec,
                     )
-                    policy_context = policy_search.build_policy_context(policy_result)
                 except Exception as e:
                     logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
 
-            fs_section = retrieval.build_fewshot_section(fewshots)
-            doc_context = retrieval.build_context(results)
-            if policy_context:
-                doc_context = f"{doc_context}\n\n{policy_context}" if doc_context else policy_context
-            llm_context = f"{fs_section}\n\n{doc_context}" if fs_section else doc_context
-            has_results = len(results) > 0 or bool(policy_context)
-            had_context = bool(doc_context.strip())
+            llm_context = _build_rrf_context(results, policy_result)
+            has_results = len(results) > 0 or bool(policy_result.params or policy_result.narratives)
+            had_context = bool(llm_context.strip())
 
             async with get_conn() as conn:
                 await conn.execute(

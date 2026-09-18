@@ -63,8 +63,7 @@ export function FeedbackSection({
   const handlePositive = async () => {
     try {
       await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: true, message_id: messageId ?? null });
-      // 긍정 피드백 → fewshot 자동 생성 + knowledge base_weight 변경
-      qc.invalidateQueries({ queryKey: ['fewshots'] });
+      // 긍정 피드백 → knowledge base_weight 변경
       qc.invalidateQueries({ queryKey: ['knowledge'] });
       qc.invalidateQueries({ queryKey: ['stats-ns'] });
     } catch (err) {

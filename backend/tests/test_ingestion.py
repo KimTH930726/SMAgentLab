@@ -337,7 +337,7 @@ class TestSchemas:
         job = IngestionJobOut(
             id=1, namespace_id=1, source_file="test.csv", source_type="csv_import",
             status="completed", total_chunks=10, created_chunks=10,
-            auto_glossary=0, auto_fewshot=0, chunk_strategy=None,
+            auto_glossary=0, chunk_strategy=None,
             error_message=None, created_at="2026-01-01", completed_at="2026-01-01",
         )
         assert job.status == "completed"

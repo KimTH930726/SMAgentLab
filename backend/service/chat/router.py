@@ -12,10 +12,9 @@ from fastapi.responses import StreamingResponse
 from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user
 from core.security import get_user_llm_credentials
-from core.config import settings
 from service.chat.schemas import (
     ChatRequest, ChatResponse, KnowledgeResult,
-    DebugSearchResponse, GlossaryMatchInfo, DebugResult, FewshotResult,
+    DebugSearchResponse, GlossaryMatchInfo, DebugResult,
     ConversationCreate, ConversationResponse, MessageResponse,
 )
 from service.chat.helpers import (
@@ -47,40 +46,25 @@ class PipelineResult:
     mapped_term: Optional[str]
     enriched_query: str
     results: list[RetrievalResult]
-    fewshots: list[dict]
     context: str
 
 
 async def _run_pipeline(
     namespace: str, question: str, query_vec: list[float],
     w_vector: float, w_keyword: float, top_k: int,
-    *, debug: bool = False, categories: Optional[list[str]] = None,
+    *, categories: Optional[list[str]] = None,
 ) -> PipelineResult:
     glossary_match = await retrieval.map_glossary_term(namespace, query_vec)
     mapped_term = glossary_match.term if glossary_match else None
     enriched_query = f"{question} {mapped_term}" if mapped_term else question
 
-    fewshot_kwargs = {"min_similarity": 0.0} if debug else {}
-    results, fewshots = await asyncio.gather(
-        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k, categories),
-        retrieval.fetch_fewshots(namespace, query_vec, **fewshot_kwargs),
-    )
-
-    # debug 모드에서는 모든 퓨샷을 반환하지만, context 빌드는 실제 임계값 기준으로 필터링
-    if debug:
-        th = retrieval.get_thresholds()
-        fewshots_for_context = [fs for fs in fewshots if fs["similarity"] >= th["fewshot_min_similarity"]]
-    else:
-        fewshots_for_context = fewshots
-
-    fs_section = retrieval.build_fewshot_section(fewshots_for_context)
-    doc_context = retrieval.build_context(results)
-    context = f"{fs_section}\n\n{doc_context}" if fs_section else doc_context
+    results = await retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k, categories)
+    context = retrieval.build_context(results)
 
     return PipelineResult(
         query_vec=query_vec, glossary_match=glossary_match,
         mapped_term=mapped_term, enriched_query=enriched_query,
-        results=results, fewshots=fewshots, context=context,
+        results=results, context=context,
     )
 
 
@@ -357,7 +341,7 @@ async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
     query_vec = await embedding_service.embed(req.question)
     pipe = await _run_pipeline(
         req.namespace, req.question, query_vec, req.w_vector, req.w_keyword, req.top_k,
-        debug=True, categories=req.categories,
+        categories=req.categories,
     )
     return DebugSearchResponse(
         question=req.question, namespace=req.namespace,
@@ -367,10 +351,6 @@ async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
             similarity=pipe.glossary_match.similarity,
         ) if pipe.glossary_match else None,
         w_vector=req.w_vector, w_keyword=req.w_keyword,
-        fewshots=[
-            FewshotResult(question=fs["question"], answer=fs["answer"], similarity=fs.get("similarity", 0.0))
-            for fs in pipe.fewshots
-        ],
         results=[
             DebugResult(
                 id=r.id, content=r.content, category=r.category,

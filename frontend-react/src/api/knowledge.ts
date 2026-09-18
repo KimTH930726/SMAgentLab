@@ -71,6 +71,21 @@ export async function resolveReviewFlag(flagId: number): Promise<{ status: strin
   }
 }
 
+// 즉석 질의(평가 게이트)에서 "이 결과 이상하다" 수동 표시 → 같은 리뷰 신호 큐로
+export async function flagKnowledgeForReview(
+  knowledgeId: number, namespace: string, reason = 'search_noise',
+): Promise<{ status: string }> {
+  try {
+    return await apiFetch(`/knowledge/${knowledgeId}/flag-for-review`, {
+      method: 'POST',
+      body: JSON.stringify({ namespace, reason }),
+    });
+  } catch (err) {
+    console.error('flagKnowledgeForReview error:', err);
+    throw err;
+  }
+}
+
 export async function createKnowledge(payload: KnowledgeCreatePayload): Promise<KnowledgeItem> {
   try {
     return await apiFetch<KnowledgeItem>('/knowledge', {
@@ -230,7 +245,6 @@ export interface IngestionJob {
   created_chunks: number;
   pending_chunks: number;
   auto_glossary: number;
-  auto_fewshot: number;
   chunk_strategy: string | null;
   error_message: string | null;
   created_by_user_id: number | null;
@@ -273,7 +287,6 @@ export interface FileUploadResult {
   job_id: number | null;
   chunks: number;
   auto_glossary: number;
-  auto_fewshot: number;
   analyzer: Record<string, unknown> | null;
   source_name: string;
   page_count: number | null;
@@ -282,7 +295,7 @@ export interface FileUploadResult {
 export async function importFile(
   file: File,
   namespace: string,
-  opts?: { chunkStrategy?: string; category?: string; autoAnalyze?: boolean; autoTag?: boolean; autoGlossary?: boolean; autoFewshot?: boolean },
+  opts?: { chunkStrategy?: string; category?: string; autoAnalyze?: boolean; autoTag?: boolean; autoGlossary?: boolean },
 ): Promise<FileUploadResult> {
   const form = new FormData();
   form.append('file', file);
@@ -292,7 +305,6 @@ export async function importFile(
   if (opts?.autoAnalyze) form.append('auto_analyze', 'true');
   if (opts?.autoTag) form.append('auto_tag', 'true');
   if (opts?.autoGlossary) form.append('auto_glossary', 'true');
-  if (opts?.autoFewshot) form.append('auto_fewshot', 'true');
   return apiFetch('/knowledge/import/file', { method: 'POST', body: form });
 }
 

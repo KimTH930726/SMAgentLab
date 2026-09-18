@@ -106,7 +106,6 @@ class LLMTestRequest(BaseModel):
 
 class ThresholdUpdate(BaseModel):
     glossary_min_similarity: Optional[float] = None
-    fewshot_min_similarity: Optional[float] = None
     knowledge_min_score: Optional[float] = None
     knowledge_high_score: Optional[float] = None
     knowledge_mid_score: Optional[float] = None

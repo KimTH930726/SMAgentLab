@@ -1,5 +1,46 @@
 import { apiFetch } from './client';
 
+// ─── 정책 단건 검색 (즉석 질의 — 실험실, 2026-09-18) ───────────────────────────
+
+export interface ParamHit {
+  item_id: number;
+  logical_id: number;
+  policy_name: string;
+  category_path: string[];
+  status: string;
+  param_name: string;
+  condition: string | null;
+  value: string | null;
+  unit: string | null;
+  raw_body: string;
+  score: number;
+}
+
+export interface NarrativeHit {
+  item_id: number;
+  logical_id: number;
+  policy_name: string;
+  category_path: string[];
+  status: string;
+  chunk_text: string;
+  score: number;
+  raw_body: string;
+}
+
+export interface PolicySearchResult {
+  params: ParamHit[];
+  narratives: NarrativeHit[];
+}
+
+export async function searchPolicy(
+  namespace: string, q: string, opts?: { category?: string; topK?: number },
+): Promise<PolicySearchResult> {
+  const params = new URLSearchParams({ namespace, q });
+  if (opts?.category) params.set('category', opts.category);
+  if (opts?.topK) params.set('top_k', String(opts.topK));
+  return apiFetch<PolicySearchResult>(`/policy/search?${params.toString()}`);
+}
+
 // ─── unresolved 팀별 집계 리포트 (docs/policy-doc-pipeline-plan.md §2-3) ────────
 
 export interface UnresolvedSegment {

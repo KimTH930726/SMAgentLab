@@ -423,7 +423,6 @@ function QueryLogModal({
         onSuccess={() => {
           invalidateAll();
           qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
-          qc.invalidateQueries({ queryKey: ['fewshots', namespace] });
           setExpandedId(null);
         }}
       />

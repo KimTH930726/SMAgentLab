@@ -272,45 +272,6 @@ export interface FeedbackPayload {
   resolved_knowledge_id?: number | null;
 }
 
-// Q&A types
-export interface FewshotItem {
-  id: number;
-  namespace: string;
-  question: string;
-  answer: string;
-  knowledge_id: number | null;
-  created_by_part?: string | null;
-  created_by_user_id?: number | null;
-  created_by_username?: string | null;
-  created_at: string;
-  status: string;
-}
-
-export interface FewshotCreatePayload {
-  namespace: string;
-  question: string;
-  answer: string;
-  knowledge_id?: number | null;
-}
-
-export interface FewshotUpdatePayload {
-  question?: string;
-  answer?: string;
-}
-
-export interface FewshotSearchResult {
-  question: string;
-  answer: string;
-  similarity: number;
-}
-
-export interface FewshotSearchResponse {
-  question: string;
-  namespace: string;
-  fewshots: FewshotSearchResult[];
-  prompt_section: string;
-}
-
 // Query log item from /stats/namespace/{name}/queries
 export type QueryStatus = 'pending' | 'resolved' | 'unresolved' | 'no_knowledge';
 
@@ -379,12 +340,6 @@ export interface DebugGlossaryMatch {
   similarity: number;
 }
 
-export interface DebugFewshot {
-  question: string;
-  answer: string;
-  similarity: number;
-}
-
 export interface DebugSearchResponse {
   question: string;
   namespace: string;
@@ -392,7 +347,6 @@ export interface DebugSearchResponse {
   glossary_match: DebugGlossaryMatch | null;
   w_vector: number;
   w_keyword: number;
-  fewshots: DebugFewshot[];
   results: DebugSearchResult[];
   context_preview: string;
 }

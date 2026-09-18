@@ -237,7 +237,6 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       // 삭제된 NS 관련 하위 데이터 캐시도 제거
       qc.removeQueries({ queryKey: ['knowledge', deletedName] });
       qc.removeQueries({ queryKey: ['glossary', deletedName] });
-      qc.removeQueries({ queryKey: ['fewshots', deletedName] });
       qc.removeQueries({ queryKey: ['stats-ns', deletedName] });
       qc.removeQueries({ queryKey: ['categories', deletedName] });
       // 전체 목록 리프레시

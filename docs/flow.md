@@ -103,8 +103,8 @@
 │  │          재사용, 재임베딩 안 함                       │   │
 │  │  → policy_param(RDB tsquery) + policy_chunk(벡터)   │   │
 │  │    동시 조회(raw_body도 함께 SELECT), 최대 5+5=10건  │   │
-│  │  → build_policy_context(전체 후보)로 LLM 프롬프트용   │   │
-│  │    텍스트 생성 — 재현율 유지 위해 여기선 안 줄임      │   │
+│  │  → 후보 전체를 Step 3의 _build_rrf_context()로 넘김   │   │
+│  │    (agent.py) — 재현율 유지 위해 여기선 안 줄임       │   │
 │  │  (Track 2 실측으로 하이브리드 스키마 우세 확정 후     │   │
 │  │   편입 1단계(2026-09-04); "정책에서 온 답인지 구분이  │   │
 │  │   안 되고 원문도 안 보인다"는 피드백으로 2단계        │   │
@@ -135,12 +135,19 @@
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │  Step 3: LLM 답변 생성                              │   │
 │  │                                                     │   │
-│  │  build_fewshot_section(fewshots)                    │   │
-│  │  → 유사 Q&A 사례를 프롬프트 앞부분에 포맷            │   │
-│  │                                                     │   │
-│  │  build_context(results) + policy_context 이어붙임    │   │
-│  │  → 검색된 문서들 + 정책 데이터를 프롬프트 형식으로   │   │
-│  │    포맷(정책 데이터 없으면 그냥 기존과 동일)          │   │
+│  │  _build_rrf_context(results, policy_result) (v2.86) │   │
+│  │  → 일반지식(cosine)·정책 파라미터(ts_rank)·정책      │   │
+│  │    서술(cosine)을 항목 단위로 RRF(k=60)에 태워 하나의 │   │
+│  │    순위로 합침 — 기존엔 "일반지식 먼저, 정책 나중"   │   │
+│  │    순서로 그냥 이어붙여(build_context+build_policy_  │   │
+│  │    context) 점수 스케일이 다른데도 항상 같은 순서로   │   │
+│  │    깔렸음. build_context()/build_policy_context() 는 │   │
+│  │    디버그검색·VOC 등 다른 화면에서 그대로 쓰여 안 건  │   │
+│  │    드림 — agent.py 안에서만 항목 단위로 다시 포맷     │   │
+│  │  (fewshot 섹션은 v2.84에서 완전 제거 — 후보→활성      │   │
+│  │   승격을 담당할 사람이 없어 방치되던 걸 정적 안내문   │   │
+│  │   ops_prompt_category_guide로 대체, §table-definition │   │
+│  │   #48)                                              │   │
 │  │                                                     │   │
 │  │  build_messages(context, question, history)          │   │
 │  │  → [system + 과거요약] + [최근2회 교환] + [현재 질문] │   │

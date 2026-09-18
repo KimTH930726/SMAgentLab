@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends
 from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user
 from service.feedback.schemas import FeedbackCreate
-from shared.embedding import embedding_service
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
@@ -118,18 +117,6 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
                   )
                 """,
                 ns_id, body.question, new_status, body.resolved_knowledge_id,
-            )
-
-        if body.is_positive and body.answer:
-            embedding = await embedding_service.embed(body.question)
-            await conn.execute(
-                """
-                INSERT INTO rag_fewshot (namespace_id, question, answer, knowledge_id, embedding,
-                                         created_by_part, created_by_user_id, status)
-                VALUES ($1, $2, $3, $4, $5::vector, $6, $7, 'candidate')
-                """,
-                ns_id, body.question, body.answer, body.knowledge_id,
-                str(embedding), user["part"], user["id"],
             )
 
     return {"status": "ok"}

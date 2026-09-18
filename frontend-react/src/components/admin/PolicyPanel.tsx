@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import { List, FileWarning, FlaskConical } from 'lucide-react';
+import { List, FileWarning } from 'lucide-react';
 import { PolicyItemBrowser } from './PolicyItemBrowser';
 import { PolicyUnresolvedReport } from './PolicyUnresolvedReport';
-import { PolicyLab } from './PolicyLab';
 
 /**
  * 정책서 관련 화면들을 하나의 "정책" 대분류 탭 아래 서브탭으로 묶는다(2026-09-04) —
@@ -13,13 +12,15 @@ import { PolicyLab } from './PolicyLab';
  * 이슈 체크리스트)는 살아있는 모니터링이 아니라 정적 문서(data-storage-philosophy.md
  * §9)에 가까웠음. 유일하게 고유했던 ①(기준정보 규모)은 PolicyLab 안으로 흡수(사용자
  * 지적: "사용자 기능 관점에서 별도 화면일 이유가 약하다").
+ * 2026-09-18: "저장소 실험실"(PolicyLab)을 여기서 떼어내 "파이프라인 디버그"와 함께
+ * 최상위 "실험실" 탭(ExperimentLab)으로 통합 — 둘 다 "질의→검색결과→유사도" 축이라는
+ * 지적.
  */
-type PolicySubTab = 'items' | 'unresolved' | 'lab';
+type PolicySubTab = 'items' | 'unresolved';
 
 const SUB_TABS: { id: PolicySubTab; label: string; icon: React.ReactNode }[] = [
   { id: 'items', label: '항목 브라우저', icon: <List className="w-4 h-4" /> },
   { id: 'unresolved', label: '미분류', icon: <FileWarning className="w-4 h-4" /> },
-  { id: 'lab', label: '저장소 실험실', icon: <FlaskConical className="w-4 h-4" /> },
 ];
 
 export function PolicyPanel() {
@@ -49,7 +50,6 @@ export function PolicyPanel() {
 
       {subTab === 'items' && <PolicyItemBrowser />}
       {subTab === 'unresolved' && <PolicyUnresolvedReport />}
-      {subTab === 'lab' && <PolicyLab />}
     </div>
   );
 }

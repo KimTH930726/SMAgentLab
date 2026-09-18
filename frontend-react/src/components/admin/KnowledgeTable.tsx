@@ -599,6 +599,9 @@ export function KnowledgeTable() {
       {subTab === 'flags' && (
         <ReviewFlagsTab
           flags={reviewFlags}
+          items={items}
+          canModify={canModifyNs}
+          onEdit={startEdit}
           onResolved={onReviewResolved}
         />
       )}
@@ -1159,7 +1162,6 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
                     </span>
                   )}
                   {j.auto_glossary > 0 && <span className="text-violet-400 flex-shrink-0">용어 +{j.auto_glossary}</span>}
-                  {j.auto_fewshot > 0 && <span className="text-emerald-400 flex-shrink-0">Q&A +{j.auto_fewshot}</span>}
                   {j.pending_chunks > 0 && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onGoToReview(); }}
@@ -1380,8 +1382,11 @@ function ReviewTab({ items, canModify, onResolved }: {
 
 // ── 리뷰 신호 (나빠요 피드백 → 근거 지식 역추적) ─────────────────────────────
 
-function ReviewFlagsTab({ flags, onResolved }: {
+function ReviewFlagsTab({ flags, items, canModify, onEdit, onResolved }: {
   flags: ReviewFlag[];
+  items: KnowledgeItem[];
+  canModify: boolean;
+  onEdit: (item: KnowledgeItem) => void;
   onResolved: () => void;
 }) {
   const [resolvingId, setResolvingId] = useState<number | null>(null);
@@ -1408,30 +1413,44 @@ function ReviewFlagsTab({ flags, onResolved }: {
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
-        나빠요 피드백이 달린 답변이 실제로 근거로 삼았던 지식입니다. 자동 감점 대상이 아니라
-        "이 문서가 원인일 수 있다"는 후보일 뿐이니, 내용을 확인해 고칠 필요가 있으면 지식
-        조회 탭에서 수정하고, 문제 없다고 판단되면 "확인 완료"로 큐에서 빼세요.
+        나빠요 피드백이 달린 답변의 근거 지식, 또는 평가 게이트 즉석 질의에서 "이상해요"로
+        직접 표시된 지식입니다. 자동 감점 대상이 아니라 "문제가 있을 수 있다"는 후보일
+        뿐이니, 내용을 확인해 고칠 필요가 있으면 바로 "수정"으로 고치고, 문제 없다고
+        판단되면 "확인 완료"로 큐에서 빼세요.
       </p>
       {error && <p className="text-xs text-rose-400">{error}</p>}
       <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
-        {flags.map((flag) => (
-          <div key={flag.flag_id} className="px-4 py-3 flex items-center gap-3">
-            <Badge color="rose">나빠요 근거</Badge>
-            {flag.status !== 'active' && <Badge color="slate">{flag.status}</Badge>}
-            {flag.category && <Badge color="cyan">{flag.category}</Badge>}
-            <span className="text-sm text-slate-300 truncate flex-1">{flag.content}</span>
-            <span className="text-[11px] text-slate-600 flex-shrink-0">
-              {new Date(flag.flagged_at).toLocaleDateString('ko-KR')}
-            </span>
-            <Button
-              variant="ghost" size="sm"
-              loading={resolveMutation.isPending && resolvingId === flag.flag_id}
-              onClick={() => resolveMutation.mutate(flag.flag_id)}
-            >
-              확인 완료
-            </Button>
-          </div>
-        ))}
+        {flags.map((flag) => {
+          const item = items.find((i) => i.id === flag.knowledge_id);
+          return (
+            <div key={flag.flag_id} className="px-4 py-3 flex items-center gap-3">
+              <Badge color="rose">{flag.reason === 'search_noise' ? '검색 노이즈' : '나빠요 근거'}</Badge>
+              {flag.status !== 'active' && <Badge color="slate">{flag.status}</Badge>}
+              {flag.category && <Badge color="cyan">{flag.category}</Badge>}
+              <span className="text-sm text-slate-300 truncate flex-1">{flag.content}</span>
+              <span className="text-[11px] text-slate-600 flex-shrink-0">
+                {new Date(flag.flagged_at).toLocaleDateString('ko-KR')}
+              </span>
+              {canModify && (
+                <Button
+                  variant="ghost" size="sm"
+                  disabled={!item}
+                  title={item ? undefined : '원본 지식을 찾을 수 없습니다(삭제됨).'}
+                  onClick={() => item && onEdit(item)}
+                >
+                  <PenLine className="w-3.5 h-3.5" />수정
+                </Button>
+              )}
+              <Button
+                variant="ghost" size="sm"
+                loading={resolveMutation.isPending && resolvingId === flag.flag_id}
+                onClick={() => resolveMutation.mutate(flag.flag_id)}
+              >
+                확인 완료
+              </Button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

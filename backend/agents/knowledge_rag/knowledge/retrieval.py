@@ -16,7 +16,7 @@ _runtime_thresholds: dict[str, float] = {}
 
 
 _THRESHOLD_KEYS = (
-    "glossary_min_similarity", "fewshot_min_similarity",
+    "glossary_min_similarity",
     "knowledge_min_score", "knowledge_high_score", "knowledge_mid_score",
     "duplicate_min_similarity",
 )
@@ -227,41 +227,6 @@ async def search_knowledge(
             final_score=score, category=r["category"],
         ))
     return results
-
-
-async def fetch_fewshots(
-    namespace: str, query_vec: list[float], limit: int = 2,
-    *, min_similarity: float | None = None,
-) -> list[dict]:
-    min_sim = min_similarity if min_similarity is not None else get_thresholds()["fewshot_min_similarity"]
-    async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-        if ns_id is None:
-            return []
-        rows = await conn.fetch(
-            """
-            SELECT question, answer,
-                   1 - (embedding <=> $2::vector) AS similarity
-            FROM rag_fewshot
-            WHERE namespace_id = $1
-              AND (status IS NULL OR status = 'active')
-              AND 1 - (embedding <=> $2::vector) >= $4
-            ORDER BY embedding <=> $2::vector
-            LIMIT $3
-            """,
-            ns_id, str(query_vec), limit, min_sim,
-        )
-    return [
-        {"question": r["question"], "answer": r["answer"], "similarity": float(r["similarity"])}
-        for r in rows
-    ]
-
-
-def build_fewshot_section(fewshots: list[dict]) -> str:
-    if not fewshots:
-        return ""
-    examples = "\n\n".join(f"Q: {fs['question']}\nA: {fs['answer']}" for fs in fewshots)
-    return f"[과거 유사 질문 답변 사례 — 참고용]\n{examples}"
 
 
 def build_context(results: list[RetrievalResult]) -> str:

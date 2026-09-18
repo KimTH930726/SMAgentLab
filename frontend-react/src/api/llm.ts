@@ -66,7 +66,6 @@ export async function testLLMConnection(payload: Omit<LLMConfigUpdate, 'ollama_t
 
 export interface SearchThresholds {
   glossary_min_similarity: number;
-  fewshot_min_similarity: number;
   knowledge_min_score: number;
   knowledge_high_score: number;
   knowledge_mid_score: number;

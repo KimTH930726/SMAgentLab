@@ -333,7 +333,6 @@ async def rename_part(part_id: int, new_name: str) -> Optional[dict]:
             # 파트 이름 변경이 항상 500으로 실패하던 버그가 있었음)
             await conn.execute("UPDATE rag_knowledge SET created_by_part = $2 WHERE created_by_part = $1", old_name, new_name)
             await conn.execute("UPDATE rag_glossary SET created_by_part = $2 WHERE created_by_part = $1", old_name, new_name)
-            await conn.execute("UPDATE rag_fewshot SET created_by_part = $2 WHERE created_by_part = $1", old_name, new_name)
     return dict(row) if row else None
 
 

@@ -415,6 +415,27 @@ async def resolve_review_flag(flag_id: int) -> bool:
     return result == "UPDATE 1"
 
 
+async def flag_knowledge_for_review(knowledge_id: int, namespace: str, reason: str = "search_noise") -> None:
+    """즉석 질의(평가 게이트)에서 "이 결과 이상하다"고 수동으로 표시한 지식을 같은 리뷰
+    큐에 올린다 — 나빠요 피드백과 별개 경로지만 처리(확인/수정)는 동일한 화면에서 한다.
+    같은 지식이 같은 사유로 이미 미해결 큐에 있으면 중복 생성하지 않는다."""
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return
+        existing = await conn.fetchval(
+            "SELECT id FROM rag_knowledge_review_flag "
+            "WHERE knowledge_id = $1 AND reason = $2 AND resolved = FALSE",
+            knowledge_id, reason,
+        )
+        if existing:
+            return
+        await conn.execute(
+            "INSERT INTO rag_knowledge_review_flag (knowledge_id, namespace_id, reason) VALUES ($1, $2, $3)",
+            knowledge_id, ns_id, reason,
+        )
+
+
 # ─── rag_glossary ─────────────────────────────────────────────────────────────
 
 async def create_glossary(
@@ -824,7 +845,7 @@ async def list_ingestion_jobs(namespace: str) -> list[dict]:
             return []
         rows = await conn.fetch("""
             SELECT j.id, j.namespace_id, j.source_file, j.source_type, j.status,
-                   j.total_chunks, j.created_chunks, j.pending_chunks, j.auto_glossary, j.auto_fewshot,
+                   j.total_chunks, j.created_chunks, j.pending_chunks, j.auto_glossary,
                    j.chunk_strategy, j.error_message,
                    j.created_by_user_id, u.username AS created_by_username,
                    j.created_at::text, j.completed_at::text

@@ -52,7 +52,6 @@ class Settings(BaseSettings):
 
     # 검색 임계값
     glossary_min_similarity: float = 0.5
-    fewshot_min_similarity: float = 0.6
     knowledge_min_score: float = 0.35
     knowledge_high_score: float = 0.8
     knowledge_mid_score: float = 0.55
