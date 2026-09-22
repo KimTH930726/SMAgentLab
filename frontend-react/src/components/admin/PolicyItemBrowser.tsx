@@ -112,7 +112,7 @@ export function PolicyItemBrowser() {
 
       {!selectedNs && <div className="text-center py-10 text-slate-500">파트를 선택하세요.</div>}
       {selectedNs && isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
-      {selectedNs && error && <div className="text-center py-10 text-rose-400">오류가 발생했습니다.</div>}
+      {selectedNs && error && <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>}
 
       {selectedNs && !isLoading && (
         <div className="space-y-2">
@@ -133,10 +133,10 @@ export function PolicyItemBrowser() {
                   )}
                 </div>
                 {item.matched_via.includes('param') && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-900/40 text-cyan-300 border border-cyan-700/40" title="키워드(RDB) 매칭">키워드</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-50 text-cyan-700 border border-cyan-200 dark:bg-cyan-900/40 dark:text-cyan-300 dark:border-cyan-700/40" title="키워드(RDB) 매칭">키워드</span>
                 )}
                 {item.matched_via.includes('narrative') && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-700/40" title="벡터(의미) 매칭">벡터</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40" title="벡터(의미) 매칭">벡터</span>
                 )}
                 {item.params.length > 0 && (
                   <span className="flex items-center gap-1 text-[11px] text-cyan-700 dark:text-cyan-400" title="RDB 정확조회 파라미터">

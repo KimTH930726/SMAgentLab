@@ -12,7 +12,7 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
 
 const AGENT_TYPE_COLORS: Record<string, string> = {
   all:           'text-slate-400 bg-slate-700',
-  knowledge_rag: 'text-violet-300 bg-violet-500/20',
+  knowledge_rag: 'text-violet-700 bg-violet-100 dark:text-violet-300 dark:bg-violet-500/20',
 };
 
 interface Props {
@@ -74,7 +74,7 @@ export function PromptManager({ agentType }: Props) {
             onClick={() => handleSelect(p)}
             className={`w-full text-left rounded-lg px-3 py-2.5 transition-colors border ${
               selectedId === p.id
-                ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-300'
+                ? 'bg-indigo-50 border-indigo-300 text-indigo-700 dark:bg-indigo-500/15 dark:border-indigo-500/50 dark:text-indigo-300'
                 : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-slate-200'
             }`}
           >
@@ -85,7 +85,7 @@ export function PromptManager({ agentType }: Props) {
                 {AGENT_TYPE_LABELS[p.agent_type] ?? p.agent_type}
               </span>
               <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                selectedId === p.id ? 'text-indigo-300 bg-indigo-500/20' : 'text-slate-400 bg-slate-700'
+                selectedId === p.id ? 'text-indigo-700 bg-indigo-100 dark:text-indigo-300 dark:bg-indigo-500/20' : 'text-slate-400 bg-slate-700'
               }`}>
                 {p.func_key}
               </span>
@@ -110,7 +110,7 @@ export function PromptManager({ agentType }: Props) {
               }`}>
                 {AGENT_TYPE_LABELS[selectedPrompt.agent_type] ?? selectedPrompt.agent_type}
               </span>
-              <span className="text-xs font-mono text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded">
+              <span className="text-xs font-mono text-indigo-700 bg-indigo-100 dark:text-indigo-400 dark:bg-indigo-500/10 px-2 py-0.5 rounded">
                 {selectedPrompt.func_key}
               </span>
               <span className="text-xs text-slate-500 ml-auto">
@@ -125,13 +125,13 @@ export function PromptManager({ agentType }: Props) {
               ].map(m => m[0]);
               const unique = [...new Set(placeholders)];
               return (
-                <div className="flex items-start gap-2 px-4 py-2 rounded-lg text-xs border bg-amber-500/10 border-amber-500/30 text-amber-300">
+                <div className="flex items-start gap-2 px-4 py-2 rounded-lg text-xs border bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-500/10 dark:border-amber-500/30 dark:text-amber-300">
                   <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
                   <span>
                     이 프롬프트에는{' '}
                     {unique.map((ph, i) => (
                       <span key={i}>
-                        <code className="bg-amber-900/40 px-1 rounded font-mono">{ph}</code>
+                        <code className="bg-amber-100 dark:bg-amber-900/40 px-1 rounded font-mono">{ph}</code>
                         {i < unique.length - 1 && ' '}
                       </span>
                     ))}{' '}
@@ -143,12 +143,12 @@ export function PromptManager({ agentType }: Props) {
 
             {/* 상태 메시지 */}
             {saveMutation.isError && (
-              <div className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs border bg-rose-500/10 border-rose-500/30 text-rose-300">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs border bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300">
                 <XCircle className="w-3.5 h-3.5 flex-shrink-0" /> 저장 실패: {String(saveMutation.error)}
               </div>
             )}
             {saved && (
-              <div className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs border bg-emerald-500/10 border-emerald-500/30 text-emerald-300">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs border bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-300">
                 <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" /> 저장되었습니다
               </div>
             )}

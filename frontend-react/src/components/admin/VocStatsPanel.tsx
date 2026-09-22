@@ -86,7 +86,7 @@ function ClusterKnowledgeRegisterModal({
       <div className="space-y-3">
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">
-            내용 <span className="text-rose-400">*</span>
+            내용 <span className="text-rose-600 dark:text-rose-400">*</span>
           </label>
           <textarea
             rows={8}
@@ -100,7 +100,7 @@ function ClusterKnowledgeRegisterModal({
         {sortedCategories.length > 0 ? (
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">
-              업무구분 <span className="text-rose-400">*</span>
+              업무구분 <span className="text-rose-600 dark:text-rose-400">*</span>
             </label>
             <select
               value={category}
@@ -111,7 +111,7 @@ function ClusterKnowledgeRegisterModal({
             </select>
           </div>
         ) : (
-          <p className="text-xs text-amber-400">
+          <p className="text-xs text-amber-600 dark:text-amber-400">
             이 파트에 등록된 업무구분이 없어 지식을 등록할 수 없습니다. 기준정보관리에서 업무구분을 먼저 추가해주세요.
           </p>
         )}
@@ -120,7 +120,7 @@ function ClusterKnowledgeRegisterModal({
           <label className="block text-xs font-medium text-slate-400 mb-1">
             문서 우선순위:{' '}
             <span className={`font-medium ${
-              baseWeight >= 2 ? 'text-emerald-400' : baseWeight >= 1.5 ? 'text-indigo-400' : 'text-slate-300'
+              baseWeight >= 2 ? 'text-emerald-600 dark:text-emerald-400' : baseWeight >= 1.5 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-300'
             }`}>
               {baseWeight.toFixed(1)} — {weightLabel(baseWeight)}
             </span>
@@ -133,7 +133,7 @@ function ClusterKnowledgeRegisterModal({
           <p className="text-[11px] text-slate-400 mt-1">1.0=기본 · 1.5+=보통 · 2.0+=높음(핵심 문서, 항상 상위 노출)</p>
         </div>
 
-        {error && <p className="text-xs text-rose-400">{error}</p>}
+        {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
         <div className="flex gap-2 justify-end pt-1">
           <Button variant="ghost" size="sm" onClick={onClose}>취소</Button>
@@ -166,8 +166,8 @@ function ClusterMembersModal({
   return (
     <Modal isOpen={open} onClose={onClose} title={cluster ? `반복 유형 상세 (${cluster.member_count}건)` : ''} maxWidth="max-w-2xl">
       {cluster && cluster.category_breakdown.length > 1 && (
-        <div className="mb-3 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
-          <p className="text-xs text-amber-400">
+        <div className="mb-3 bg-amber-50 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/30 rounded-lg px-3 py-2">
+          <p className="text-xs text-amber-700 dark:text-amber-400">
             ⚠️ 같은 반복 유형인데 LLM이 서로 다른 분류를 내렸습니다 —{' '}
             {cluster.category_breakdown.map((c) => `${CATEGORY_LABEL[c.category ?? ''] ?? c.category} ${c.count}건`).join(', ')}
           </p>
@@ -267,7 +267,7 @@ export function VocStatsPanel({ namespace }: { namespace: string }) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">VOC 통계</h2>
-        <button onClick={refetchAll} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+        <button onClick={refetchAll} className="text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300 flex items-center gap-1">
           <RefreshCw className="w-3.5 h-3.5" />새로고침
         </button>
       </div>
@@ -375,7 +375,7 @@ export function VocStatsPanel({ namespace }: { namespace: string }) {
                   {pagedClusters.map((c) => (
                     <tr key={c.id} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-700/30">
                       <td className="px-3 py-2">
-                        <button className="text-slate-200 hover:text-indigo-400 text-left" onClick={() => setSelectedCluster(c)}>
+                        <button className="text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400 text-left" onClick={() => setSelectedCluster(c)}>
                           {c.representative_subject || '(제목 없음)'}
                         </button>
                       </td>
@@ -385,7 +385,7 @@ export function VocStatsPanel({ namespace }: { namespace: string }) {
                           {c.primary_category && <Badge color="slate">{CATEGORY_LABEL[c.primary_category] ?? c.primary_category}</Badge>}
                           {c.category_breakdown.length > 1 && (
                             <span title="이 반복 유형에서 LLM이 서로 다른 분류를 내린 적이 있습니다">
-                              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
                             </span>
                           )}
                         </div>

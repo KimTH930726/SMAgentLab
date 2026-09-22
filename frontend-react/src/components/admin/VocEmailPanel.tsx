@@ -134,12 +134,12 @@ export function formatRelative(iso: string | null): string {
 // 실패한 것을 사용자가 구분할 수 있어야 한다.
 function QueryErrorNotice({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3 bg-rose-500/10 border border-rose-500/30 rounded-lg">
+    <div className="flex items-center justify-between gap-3 px-4 py-3 bg-rose-50 border border-rose-200 dark:bg-rose-500/10 dark:border-rose-500/30 rounded-lg">
       <div className="flex items-center gap-2 min-w-0">
-        <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
-        <p className="text-sm text-rose-300 truncate">{toErrorMessage(error)}</p>
+        <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 flex-shrink-0" />
+        <p className="text-sm text-rose-700 dark:text-rose-300 truncate">{toErrorMessage(error)}</p>
       </div>
-      <button onClick={onRetry} className="text-xs text-rose-300 underline flex-shrink-0 hover:text-rose-200">
+      <button onClick={onRetry} className="text-xs text-rose-700 dark:text-rose-300 underline flex-shrink-0 hover:text-rose-600 dark:hover:text-rose-200">
         다시 시도
       </button>
     </div>
@@ -466,17 +466,17 @@ export function VocEmailPanel() {
     <div className="space-y-6">
       <div>
         <h2 className="text-lg font-semibold text-slate-100 flex items-center gap-2">
-          <Mail className="w-5 h-5 text-indigo-400" />
+          <Mail className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
           VOC 이메일 분석 채널
         </h2>
         <p className="text-sm text-slate-400 mt-0.5">메일 수신 → 분석 → Teams 알림 자동화</p>
       </div>
 
       {error && (
-        <div className="flex items-center gap-3 px-4 py-3 bg-rose-500/10 border border-rose-500/30 rounded-lg">
-          <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
-          <p className="text-sm text-rose-300 flex-1">{error}</p>
-          <button onClick={() => setError('')} className="text-rose-400 hover:text-rose-200 flex-shrink-0">
+        <div className="flex items-center gap-3 px-4 py-3 bg-rose-50 border border-rose-200 dark:bg-rose-500/10 dark:border-rose-500/30 rounded-lg">
+          <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 flex-shrink-0" />
+          <p className="text-sm text-rose-700 dark:text-rose-300 flex-1">{error}</p>
+          <button onClick={() => setError('')} className="text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-200 flex-shrink-0">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -614,9 +614,9 @@ export function VocEmailPanel() {
               {(delegatedStatus?.pending || delegatedStatus?.login_error || (delegatedStatus?.logged_in && delegatedAuthUrl)) && (
                 <div className={clsx(
                   'border rounded-lg p-3 text-sm',
-                  delegatedStatus?.pending ? 'border-indigo-500/30 bg-indigo-500/10'
-                    : delegatedStatus?.login_error ? 'border-rose-500/30 bg-rose-500/10'
-                    : 'border-emerald-500/30 bg-emerald-500/10',
+                  delegatedStatus?.pending ? 'border-indigo-200 bg-indigo-50 dark:border-indigo-500/30 dark:bg-indigo-500/10'
+                    : delegatedStatus?.login_error ? 'border-rose-200 bg-rose-50 dark:border-rose-500/30 dark:bg-rose-500/10'
+                    : 'border-emerald-200 bg-emerald-50 dark:border-emerald-500/30 dark:bg-emerald-500/10',
                 )}>
                   {delegatedStatus?.pending ? (
                     <>
@@ -624,7 +624,7 @@ export function VocEmailPanel() {
                       {delegatedAuthUrl && (
                         <a
                           href={delegatedAuthUrl} target="_blank" rel="noopener noreferrer"
-                          className="text-indigo-400 underline text-xs break-all"
+                          className="text-indigo-600 dark:text-indigo-400 underline text-xs break-all"
                         >
                           로그인 페이지 열기
                         </a>
@@ -632,9 +632,9 @@ export function VocEmailPanel() {
                       <p className="text-xs text-slate-500 mt-1">로그인 완료되면 이 화면이 자동으로 갱신됩니다 (3초마다 확인 중).</p>
                     </>
                   ) : delegatedStatus?.login_error ? (
-                    <p className="text-rose-400">로그인 실패 — {delegatedStatus.login_error} (다시 로그인을 눌러 재시도하세요)</p>
+                    <p className="text-rose-600 dark:text-rose-400">로그인 실패 — {delegatedStatus.login_error} (다시 로그인을 눌러 재시도하세요)</p>
                   ) : delegatedStatus?.logged_in ? (
-                    <p className="text-emerald-400">로그인 완료 — 이제 아래 "지금 실행" 또는 위 "폴링 자동화 ON"이 본인 메일함을 대상으로 동작합니다.</p>
+                    <p className="text-emerald-600 dark:text-emerald-400">로그인 완료 — 이제 아래 "지금 실행" 또는 위 "폴링 자동화 ON"이 본인 메일함을 대상으로 동작합니다.</p>
                   ) : null}
                 </div>
               )}
@@ -652,7 +652,7 @@ export function VocEmailPanel() {
           <div className={clsx(
             'border rounded-xl p-4',
             schedulerStatus?.enabled
-              ? (schedulerStatus?.is_running_now ? 'bg-indigo-500/10 border-indigo-500/30' : 'bg-emerald-500/5 border-emerald-500/20')
+              ? (schedulerStatus?.is_running_now ? 'bg-indigo-50 border-indigo-200 dark:bg-indigo-500/10 dark:border-indigo-500/30' : 'bg-emerald-50 border-emerald-200 dark:bg-emerald-500/5 dark:border-emerald-500/20')
               : 'bg-slate-800 border-slate-700',
           )}>
             <div className="flex items-center justify-between gap-2 mb-3">
@@ -703,7 +703,7 @@ export function VocEmailPanel() {
               </div>
             )}
             {schedulerStatus?.last_cycle?.error_summary && (
-              <p className="flex items-center gap-1.5 text-xs text-amber-400 mt-3 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+              <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/20 mt-3 px-3 py-2 rounded-lg">
                 <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> {schedulerStatus.last_cycle.error_summary}
               </p>
             )}
@@ -721,7 +721,7 @@ export function VocEmailPanel() {
                 className={clsx(
                   'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors w-fit',
                   settings?.email_collection_enabled
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-400 dark:hover:bg-emerald-500/20'
                     : 'bg-slate-700 border-slate-600 text-slate-400 hover:bg-slate-600',
                 )}
               >
@@ -807,7 +807,7 @@ export function VocEmailPanel() {
                   지금 실행
                 </Button>
               </div>
-              {dateRangeError && <p className="text-xs text-rose-400">{dateRangeError}</p>}
+              {dateRangeError && <p className="text-xs text-rose-600 dark:text-rose-400">{dateRangeError}</p>}
 
               {collectResult && (
                 <div className="mt-2 space-y-2">
@@ -833,7 +833,7 @@ export function VocEmailPanel() {
                               <td className="px-3 py-2">
                                 {m.ok
                                   ? <Badge color="emerald">정상</Badge>
-                                  : <span className="text-rose-400">{m.error}</span>}
+                                  : <span className="text-rose-600 dark:text-rose-400">{m.error}</span>}
                               </td>
                               <td className="px-3 py-2 text-slate-400">
                                 {m.fetched} / {m.analyzed} / {m.skipped_duplicate} / {m.skipped_low_relevance} / {m.skipped_not_it} / {m.notified} / {m.notify_failed}
@@ -948,7 +948,7 @@ export function VocEmailPanel() {
                 )}
                 {testResult.reasoning && <p className="text-slate-500 text-xs">판단 근거: {testResult.reasoning}</p>}
                 <p className="text-slate-500 text-xs">참조 지식 ID: {testResult.knowledge_ref_ids.join(', ') || '없음'}</p>
-                <p className="text-xs text-indigo-400 pt-1">
+                <p className="text-xs text-indigo-600 dark:text-indigo-400 pt-1">
                   → 아래 "Teams 알림 발송 테스트"에서 "마지막 분석 결과 불러오기"로 이어서 발송까지 테스트할 수 있습니다.
                 </p>
               </div>
@@ -965,7 +965,7 @@ export function VocEmailPanel() {
               <Send className="w-4 h-4" /> Teams 알림 발송 테스트
             </h3>
             {testResult && (
-              <button onClick={loadFromLastAnalysis} className="text-xs text-indigo-400 hover:text-indigo-300">
+              <button onClick={loadFromLastAnalysis} className="text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">
                 마지막 분석 결과 불러오기
               </button>
             )}
@@ -1027,7 +1027,7 @@ export function VocEmailPanel() {
             <Button size="sm" onClick={() => notifyMutation.mutate()} loading={notifyMutation.isPending} disabled={!notifyWebhookUrl.trim()}>
               <Send className="w-3.5 h-3.5" /> Teams로 발송
             </Button>
-            {notifySent && <p className="text-emerald-400 text-xs">{notifySent}</p>}
+            {notifySent && <p className="text-emerald-600 dark:text-emerald-400 text-xs">{notifySent}</p>}
           </div>
         </section>
       )}
@@ -1054,7 +1054,7 @@ export function VocEmailPanel() {
           <p className="text-xs text-slate-500">메일함 ↔ 담당 파트 ↔ Teams 웹훅 매핑</p>
 
           {showForm && (
-            <div className="bg-slate-800 border border-indigo-500/30 rounded-lg p-4 space-y-3">
+            <div className="bg-slate-800 border border-indigo-200 dark:border-indigo-500/30 rounded-lg p-4 space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-xs text-slate-400">
                   담당 파트
@@ -1172,10 +1172,10 @@ export function VocEmailPanel() {
                       <td className="px-4 py-3 text-slate-400">{r.oncall_contact_name || '-'}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1 justify-end">
-                          <button onClick={() => startEdit(r)} className="p-1.5 rounded text-slate-500 hover:text-indigo-400 hover:bg-indigo-400/10">
+                          <button onClick={() => startEdit(r)} className="p-1.5 rounded text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:text-indigo-400 dark:hover:bg-indigo-400/10">
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => deleteMutation.mutate(r.id)} className="p-1.5 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-400/10">
+                          <button onClick={() => deleteMutation.mutate(r.id)} className="p-1.5 rounded text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:text-rose-400 dark:hover:bg-rose-400/10">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
@@ -1300,7 +1300,7 @@ export function VocEmailPanel() {
                     </p>
                   )}
                   {h.reasoning && <p className="text-slate-500 text-xs">판단 근거: {h.reasoning}</p>}
-                  {h.notify_error && <p className="text-rose-400 text-xs">발송 실패 사유: {h.notify_error}</p>}
+                  {h.notify_error && <p className="text-rose-600 dark:text-rose-400 text-xs">발송 실패 사유: {h.notify_error}</p>}
                 </div>
               ))}
             </div>
@@ -1369,7 +1369,7 @@ export function VocEmailPanel() {
                 {selectedHistoryItem.notify_error && (
                   <div>
                     <p className="text-xs font-medium text-slate-400 mb-1">발송 실패 사유</p>
-                    <p className="text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-lg p-3">{selectedHistoryItem.notify_error}</p>
+                    <p className="text-rose-700 bg-rose-50 border border-rose-200 dark:text-rose-400 dark:bg-rose-500/10 dark:border-rose-500/30 rounded-lg p-3">{selectedHistoryItem.notify_error}</p>
                   </div>
                 )}
 
@@ -1430,7 +1430,7 @@ export function VocEmailPanel() {
                 {selectedFailedCycle.error_summary ? (
                   <div className="space-y-2">
                     {selectedFailedCycle.error_summary.split('\n').map((line, i) => (
-                      <p key={i} className="text-rose-400 text-xs bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 whitespace-pre-wrap">
+                      <p key={i} className="text-rose-700 bg-rose-50 border border-rose-200 dark:text-rose-400 dark:bg-rose-500/10 dark:border-rose-500/30 text-xs rounded-lg p-3 whitespace-pre-wrap">
                         {line}
                       </p>
                     ))}

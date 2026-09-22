@@ -22,8 +22,8 @@ export function PolicyCitationCard({ citation, defaultOpen = false, index }: Pol
         className={clsx(
           'text-[10px] px-1.5 py-0.5 rounded border flex-shrink-0',
           isParam
-            ? 'bg-violet-900/40 text-violet-300 border-violet-700/40'
-            : 'bg-fuchsia-900/40 text-fuchsia-300 border-fuchsia-700/40',
+            ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40'
+            : 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 dark:bg-fuchsia-900/40 dark:text-fuchsia-300 dark:border-fuchsia-700/40',
         )}
       >
         {kindLabel}
@@ -41,8 +41,8 @@ export function PolicyCitationCard({ citation, defaultOpen = false, index }: Pol
     <Accordion
       title={header}
       defaultOpen={defaultOpen}
-      className="bg-violet-950/20 border border-violet-800/30"
-      headerClassName="hover:bg-violet-900/20"
+      className="bg-violet-50 border border-violet-200 dark:bg-violet-950/20 dark:border-violet-800/30"
+      headerClassName="hover:bg-violet-100 dark:hover:bg-violet-900/20"
     >
       <div className="px-4 pb-4 space-y-3">
         <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">

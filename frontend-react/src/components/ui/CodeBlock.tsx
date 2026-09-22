@@ -25,7 +25,7 @@ export function CodeBlock({ code, language = 'sql' }: CodeBlockProps) {
         title="코드 복사"
       >
         {copied ? (
-          <Check className="w-4 h-4 text-emerald-400" />
+          <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
         ) : (
           <Clipboard className="w-4 h-4" />
         )}

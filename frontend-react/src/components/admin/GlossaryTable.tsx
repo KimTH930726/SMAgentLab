@@ -180,7 +180,7 @@ export function GlossaryTable() {
 
       {!selectedNs && <div className="text-center py-10 text-slate-500">파트를 선택하세요.</div>}
       {selectedNs && isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
-      {selectedNs && error && <div className="text-center py-10 text-rose-400">오류가 발생했습니다.</div>}
+      {selectedNs && error && <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>}
 
       {selectedNs && !isLoading && (
         <div className="space-y-2">
@@ -247,8 +247,8 @@ export function GlossaryTable() {
 
           {/* Bulk action bar */}
           {selectedIds.size > 0 && canModifyNs && (
-            <div className="flex items-center gap-3 px-4 py-2.5 bg-indigo-900/30 border border-indigo-700/40 rounded-xl">
-              <span className="text-sm text-indigo-300 flex-1">{selectedIds.size}개 선택됨</span>
+            <div className="flex items-center gap-3 px-4 py-2.5 bg-indigo-50 border border-indigo-200 dark:bg-indigo-900/30 dark:border-indigo-700/40 rounded-xl">
+              <span className="text-sm text-indigo-700 dark:text-indigo-300 flex-1">{selectedIds.size}개 선택됨</span>
               <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>선택 해제</Button>
               <Button variant="danger" size="sm" onClick={() => setShowBulkConfirm(true)}>
                 <Trash2 className="w-3.5 h-3.5" />삭제
@@ -273,7 +273,7 @@ export function GlossaryTable() {
                     className="w-4 h-4 rounded accent-indigo-500 flex-shrink-0"
                   />
                 )}
-                <BookOpen className="w-4 h-4 text-indigo-400 flex-shrink-0" />
+                <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <span className="text-sm font-medium text-slate-200">{item.term}</span>
                   <p className="text-xs text-slate-500 mt-0.5 truncate">{item.description}</p>
@@ -285,7 +285,7 @@ export function GlossaryTable() {
                   <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>
                 )}
                 {searchMode === 'vector' && (item as GlossaryItem & { similarity?: number }).similarity != null && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-700/40 font-mono">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 font-mono">
                     {((item as GlossaryItem & { similarity?: number }).similarity! * 100).toFixed(1)}%
                   </span>
                 )}
@@ -312,7 +312,7 @@ export function GlossaryTable() {
                           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-none" />
                       </div>
                       {updateMutation.error && (
-                        <p className="text-xs text-rose-400">{String(updateMutation.error)}</p>
+                        <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>
                       )}
                       <div className="flex gap-2 justify-end">
                         <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}><X className="w-3.5 h-3.5" />취소</Button>
@@ -355,17 +355,17 @@ export function GlossaryTable() {
       <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="용어 추가">
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">용어 <span className="text-rose-400">*</span></label>
+            <label className="block text-xs font-medium text-slate-400 mb-1">용어 <span className="text-rose-600 dark:text-rose-400">*</span></label>
             <input type="text" value={createForm.term} onChange={(e) => setCreateForm((f) => ({ ...f, term: e.target.value }))}
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">설명 <span className="text-rose-400">*</span></label>
+            <label className="block text-xs font-medium text-slate-400 mb-1">설명 <span className="text-rose-600 dark:text-rose-400">*</span></label>
             <textarea rows={3} value={createForm.description} onChange={(e) => setCreateForm((f) => ({ ...f, description: e.target.value }))}
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-none" />
           </div>
           {createMutation.error && (
-            <p className="text-xs text-rose-400">{String(createMutation.error)}</p>
+            <p className="text-xs text-rose-600 dark:text-rose-400">{String(createMutation.error)}</p>
           )}
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="secondary" size="sm" onClick={() => setShowCreate(false)}>취소</Button>
@@ -378,7 +378,7 @@ export function GlossaryTable() {
         <div className="space-y-4">
           <p className="text-sm text-slate-300">이 용어를 삭제하시겠습니까?</p>
           {deleteMutation.error && (
-            <p className="text-xs text-rose-400">{String(deleteMutation.error)}</p>
+            <p className="text-xs text-rose-600 dark:text-rose-400">{String(deleteMutation.error)}</p>
           )}
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>취소</Button>
@@ -389,9 +389,9 @@ export function GlossaryTable() {
 
       <Modal isOpen={showBulkConfirm} onClose={() => setShowBulkConfirm(false)} title="용어 일괄 삭제">
         <div className="space-y-4">
-          <p className="text-sm text-slate-300">선택한 <span className="text-rose-400 font-semibold">{selectedIds.size}개</span> 용어를 삭제하시겠습니까?</p>
+          <p className="text-sm text-slate-300">선택한 <span className="text-rose-600 dark:text-rose-400 font-semibold">{selectedIds.size}개</span> 용어를 삭제하시겠습니까?</p>
           {bulkDeleteMutation.error && (
-            <p className="text-xs text-rose-400">{String(bulkDeleteMutation.error)}</p>
+            <p className="text-xs text-rose-600 dark:text-rose-400">{String(bulkDeleteMutation.error)}</p>
           )}
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setShowBulkConfirm(false)}>취소</Button>
@@ -455,13 +455,13 @@ export function GlossaryTable() {
           )}
 
           {suggestMessage && !suggestMutation.isPending && (
-            <p className="text-xs text-indigo-400 bg-indigo-900/20 border border-indigo-700/30 rounded-lg px-3 py-2">
+            <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 dark:text-indigo-400 dark:bg-indigo-900/20 dark:border-indigo-700/30 rounded-lg px-3 py-2">
               {suggestMessage}
             </p>
           )}
 
           {suggestMutation.isError && (
-            <p className="text-xs text-rose-400">{String(suggestMutation.error)}</p>
+            <p className="text-xs text-rose-600 dark:text-rose-400">{String(suggestMutation.error)}</p>
           )}
 
           {suggestions.length > 0 && (
@@ -473,13 +473,13 @@ export function GlossaryTable() {
                   <div
                     key={s.term}
                     className={`flex items-start gap-3 bg-slate-800 border rounded-xl px-4 py-3 transition-colors ${
-                      isApplied ? 'border-emerald-700/50 opacity-60' : hasError ? 'border-rose-700/50' : 'border-slate-700'
+                      isApplied ? 'border-emerald-300 dark:border-emerald-700/50 opacity-60' : hasError ? 'border-rose-300 dark:border-rose-700/50' : 'border-slate-700'
                     }`}
                   >
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-slate-200">{s.term}</p>
                       <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">{s.description}</p>
-                      {hasError && <p className="text-xs text-rose-400 mt-1">{String(applyMutation.error)}</p>}
+                      {hasError && <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">{String(applyMutation.error)}</p>}
                     </div>
                     <Button
                       variant={isApplied ? 'secondary' : 'primary'}

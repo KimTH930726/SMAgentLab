@@ -53,7 +53,7 @@ export function TagInput({ tags, onChange, placeholder, readOnly = false, color 
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); removeTag(i); }}
-            className="hover:text-rose-400 transition-colors leading-none"
+            className="hover:text-rose-600 dark:hover:text-rose-400 transition-colors leading-none"
           >
             <X className="w-3 h-3" />
           </button>

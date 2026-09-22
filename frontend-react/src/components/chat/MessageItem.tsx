@@ -34,16 +34,16 @@ function SqlBlock({ sql, reasoning, cached }: { sql: string; reasoning: string; 
   };
 
   return (
-    <div className="rounded-xl border border-emerald-800/50 overflow-hidden text-xs">
+    <div className="rounded-xl border border-emerald-200 dark:border-emerald-800/50 overflow-hidden text-xs">
       <div
-        className="flex items-center justify-between px-3 py-2 bg-emerald-950/40 cursor-pointer select-none"
+        className="flex items-center justify-between px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 cursor-pointer select-none"
         onClick={() => setExpanded((v) => !v)}
       >
-        <div className="flex items-center gap-2 text-emerald-300 font-medium">
+        <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-medium">
           <Database className="w-3.5 h-3.5" />
           <span>생성된 SQL</span>
           {cached && (
-            <span className="flex items-center gap-1 text-amber-400 text-[10px]">
+            <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 text-[10px]">
               <CheckCircle className="w-3 h-3" /> 캐시
             </span>
           )}
@@ -52,10 +52,10 @@ function SqlBlock({ sql, reasoning, cached }: { sql: string; reasoning: string; 
           {expanded && (
             <button
               onClick={handleCopy}
-              className="flex items-center gap-1 text-slate-400 hover:text-emerald-300 transition-colors"
+              className="flex items-center gap-1 text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-300 transition-colors"
               title="SQL 복사"
             >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
           )}
           {expanded ? <ChevronUp className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
@@ -64,7 +64,7 @@ function SqlBlock({ sql, reasoning, cached }: { sql: string; reasoning: string; 
       {expanded && (
         <div>
           {reasoning && (
-            <div className="px-3 py-2 bg-slate-900/60 border-t border-emerald-900/30 text-slate-400 italic text-[11px] leading-relaxed">
+            <div className="px-3 py-2 bg-slate-900/60 border-t border-emerald-200 dark:border-emerald-900/30 text-slate-400 italic text-[11px] leading-relaxed">
               💭 {reasoning}
             </div>
           )}
@@ -119,7 +119,7 @@ function TableResult({ columns, rows, row_count, truncated }: {
     <div className="rounded-xl border border-slate-700 overflow-hidden text-xs">
       <div className="flex items-center justify-between px-3 py-2 bg-slate-800/80">
         <div className="flex items-center gap-2 text-slate-300 font-medium">
-          <BarChart2 className="w-3.5 h-3.5 text-blue-400" />
+          <BarChart2 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
           <span className="text-slate-400">
             {row_count}행 × {columns.length}열
           </span>
@@ -127,7 +127,7 @@ function TableResult({ columns, rows, row_count, truncated }: {
         </div>
         <div className="flex items-center gap-2">
           <button onClick={copyCsv} className="flex items-center gap-1 px-2 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors" title="탭 구분 복사">
-            {copiedCsv ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+            {copiedCsv ? <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" /> : <Copy className="w-3 h-3" />}
             <span>복사</span>
           </button>
           <button onClick={exportCsv} className="flex items-center gap-1 px-2 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors" title="CSV 다운로드">
@@ -198,7 +198,7 @@ function SimpleBarChart({ chartResult, rows, columns }: {
   return (
     <div className="rounded-xl border border-slate-700 overflow-hidden bg-slate-900/50">
       <div className="px-3 py-2 bg-slate-800/80 text-xs font-medium text-slate-300 flex items-center gap-2">
-        <BarChart2 className="w-3.5 h-3.5 text-cyan-400" />
+        <BarChart2 className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
         {chartResult.title}
       </div>
       <div className="overflow-x-auto px-2 pb-2">
@@ -302,7 +302,7 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
           {/* Policy citations — rag_knowledge 검색결과(results)와 별개 출처이므로 분리된 섹션으로 표시 */}
           {message.policyCitations && message.policyCitations.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-xs text-violet-400 font-medium">
+              <p className="text-xs text-violet-600 dark:text-violet-400 font-medium">
                 📋 정책 근거 {message.policyCitations.length}건
               </p>
               {message.policyCitations.map((citation, idx) => (

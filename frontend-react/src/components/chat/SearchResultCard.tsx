@@ -9,8 +9,8 @@ interface SearchResultCardProps {
 }
 
 function getScoreInfo(score: number) {
-  if (score >= 0.7) return { label: '높음', barColor: 'bg-emerald-500', textColor: 'text-emerald-400' };
-  if (score >= 0.4) return { label: '보통', barColor: 'bg-amber-500', textColor: 'text-amber-400' };
+  if (score >= 0.7) return { label: '높음', barColor: 'bg-emerald-500', textColor: 'text-emerald-600 dark:text-emerald-400' };
+  if (score >= 0.4) return { label: '보통', barColor: 'bg-amber-500', textColor: 'text-amber-600 dark:text-amber-400' };
   return { label: '낮음', barColor: 'bg-slate-500', textColor: 'text-slate-400' };
 }
 

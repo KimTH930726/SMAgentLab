@@ -108,7 +108,7 @@ export function CachePanel() {
             className={clsx(
               'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
               cacheConfig?.enabled !== false
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-400 dark:hover:bg-emerald-500/20'
                 : 'bg-slate-700 border-slate-600 text-slate-400 hover:bg-slate-600',
             )}
             title={cacheConfig?.enabled !== false ? '캐시 비활성화' : '캐시 활성화'}
@@ -150,9 +150,9 @@ export function CachePanel() {
 
       {/* Redis 미연결 경고 */}
       {stats && !stats.connected && (
-        <div className="flex items-center gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
-          <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-          <p className="text-sm text-amber-300">
+        <div className="flex items-center gap-3 px-4 py-3 bg-amber-50 border border-amber-200 dark:bg-amber-500/10 dark:border-amber-500/30 rounded-lg">
+          <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+          <p className="text-sm text-amber-700 dark:text-amber-300">
             Redis 미연결 상태입니다. .env의 REDIS_URL을 확인하거나 ops-redis 컨테이너 상태를 점검하세요.
           </p>
         </div>
@@ -161,13 +161,13 @@ export function CachePanel() {
       {/* 통계 카드 */}
       <div className="grid grid-cols-2 gap-4">
         <StatCard
-          icon={<Database className="w-5 h-5 text-indigo-400" />}
+          icon={<Database className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
           label="저장된 캐시"
           value={statsLoading ? '...' : `${stats?.total_entries ?? 0}건`}
           color="indigo"
         />
         <StatCard
-          icon={<BarChart2 className="w-5 h-5 text-emerald-400" />}
+          icon={<BarChart2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />}
           label="누적 히트 수"
           value={statsLoading ? '...' : `${stats?.total_hits ?? 0}회`}
           color="emerald"
@@ -180,7 +180,7 @@ export function CachePanel() {
           <button
             onClick={() => setConfirmClear(true)}
             disabled={!stats?.connected || (stats?.total_entries ?? 0) === 0}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-rose-400 border border-rose-400/30 hover:bg-rose-400/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-rose-600 border border-rose-300 hover:bg-rose-50 dark:text-rose-400 dark:border-rose-400/30 dark:hover:bg-rose-400/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Trash2 className="w-4 h-4" />
             전체 캐시 초기화
@@ -236,13 +236,13 @@ export function CachePanel() {
                     <td className="px-4 py-3">
                       <p className="text-slate-200 truncate max-w-md">{entry.query || '(질문 없음)'}</p>
                       {entry.mapped_term && (
-                        <span className="text-xs text-indigo-400 mt-0.5 block">용어: {entry.mapped_term}</span>
+                        <span className="text-xs text-indigo-600 dark:text-indigo-400 mt-0.5 block">용어: {entry.mapped_term}</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
                       <span className={clsx(
                         'text-sm font-medium',
-                        entry.hits > 10 ? 'text-emerald-400' : entry.hits > 0 ? 'text-slate-300' : 'text-slate-500',
+                        entry.hits > 10 ? 'text-emerald-600 dark:text-emerald-400' : entry.hits > 0 ? 'text-slate-300' : 'text-slate-500',
                       )}>
                         {entry.hits}회
                       </span>
@@ -254,7 +254,7 @@ export function CachePanel() {
                       <button
                         onClick={() => deleteEntryMutation.mutate(entry.key)}
                         disabled={deleteEntryMutation.isPending}
-                        className="p-1.5 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-400/10 transition-colors"
+                        className="p-1.5 rounded text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:text-rose-400 dark:hover:bg-rose-400/10 transition-colors"
                         title="이 캐시 삭제"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -282,9 +282,9 @@ interface StatCardProps {
 
 function StatCard({ icon, label, value, color, hint }: StatCardProps) {
   const borderColor = {
-    indigo: 'border-indigo-500/30',
-    emerald: 'border-emerald-500/30',
-    amber: 'border-amber-500/30',
+    indigo: 'border-indigo-200 dark:border-indigo-500/30',
+    emerald: 'border-emerald-200 dark:border-emerald-500/30',
+    amber: 'border-amber-200 dark:border-amber-500/30',
     slate: 'border-slate-600',
   }[color];
 

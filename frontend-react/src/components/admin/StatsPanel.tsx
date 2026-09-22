@@ -109,7 +109,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
         {/* 내용 */}
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-1">
-            내용 <span className="text-rose-400">*</span>
+            내용 <span className="text-rose-600 dark:text-rose-400">*</span>
           </label>
           <textarea
             rows={8}
@@ -124,7 +124,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
         {sortedCategories.length > 0 ? (
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">
-              업무구분 <span className="text-rose-400">*</span>
+              업무구분 <span className="text-rose-600 dark:text-rose-400">*</span>
             </label>
             <select
               value={category}
@@ -135,7 +135,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
             </select>
           </div>
         ) : (
-          <p className="text-xs text-amber-400">
+          <p className="text-xs text-amber-600 dark:text-amber-400">
             이 파트에 등록된 업무구분이 없어 지식을 등록할 수 없습니다. 기준정보관리에서 업무구분을 먼저 추가해주세요.
           </p>
         )}
@@ -145,7 +145,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
           <label className="block text-xs font-medium text-slate-400 mb-1">
             문서 우선순위:{' '}
             <span className={`font-medium ${
-              baseWeight >= 2 ? 'text-emerald-400' : baseWeight >= 1.5 ? 'text-indigo-400' : 'text-slate-300'
+              baseWeight >= 2 ? 'text-emerald-600 dark:text-emerald-400' : baseWeight >= 1.5 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-300'
             }`}>
               {baseWeight.toFixed(1)} — {weightLabel(baseWeight)}
             </span>
@@ -160,7 +160,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
           </p>
         </div>
 
-        {error && <p className="text-xs text-rose-400">{error}</p>}
+        {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
         <div className="flex gap-2 justify-end pt-1">
           <Button variant="ghost" size="sm" onClick={onClose}>취소</Button>
@@ -312,10 +312,10 @@ function QueryLogModal({
                   className="flex-1 text-left px-2 py-3 flex items-start gap-3 hover:bg-slate-700/40 transition-colors"
                 >
                   <span className="flex-shrink-0 mt-0.5">
-                    {log.status === 'resolved' && <CheckCircle className="w-4 h-4 text-emerald-400" />}
-                    {log.status === 'pending' && <Clock className="w-4 h-4 text-amber-400" />}
-                    {log.status === 'unresolved' && <XCircle className="w-4 h-4 text-rose-400" />}
-                    {log.status === 'no_knowledge' && <AlertTriangle className="w-4 h-4 text-orange-400" />}
+                    {log.status === 'resolved' && <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />}
+                    {log.status === 'pending' && <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />}
+                    {log.status === 'unresolved' && <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />}
+                    {log.status === 'no_knowledge' && <AlertTriangle className="w-4 h-4 text-orange-600 dark:text-orange-400" />}
                   </span>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-slate-200 truncate">{log.question}</p>
@@ -343,17 +343,17 @@ function QueryLogModal({
                   </div>
                   <div className="flex items-center gap-4 text-xs text-slate-500">
                     <span>상태: <span className={
-                      log.status === 'resolved' ? 'text-emerald-400'
-                      : log.status === 'pending' ? 'text-amber-400'
-                      : log.status === 'no_knowledge' ? 'text-orange-400'
-                      : 'text-rose-400'
+                      log.status === 'resolved' ? 'text-emerald-600 dark:text-emerald-400'
+                      : log.status === 'pending' ? 'text-amber-600 dark:text-amber-400'
+                      : log.status === 'no_knowledge' ? 'text-orange-600 dark:text-orange-400'
+                      : 'text-rose-600 dark:text-rose-400'
                     }>
                       {log.status === 'resolved' ? '해결됨'
                         : log.status === 'pending' ? '대기 중'
                         : log.status === 'no_knowledge' ? '지식 공백'
                         : '미해결'}
                     </span></span>
-                    {log.mapped_term && <span>용어: <span className="text-indigo-400">{log.mapped_term}</span></span>}
+                    {log.mapped_term && <span>용어: <span className="text-indigo-600 dark:text-indigo-400">{log.mapped_term}</span></span>}
                     <span>질문 {new Date(log.created_at).toLocaleString('ko-KR')}</span>
                     {log.status === 'resolved' && log.resolved_at && (
                       <span>해결 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
@@ -380,7 +380,7 @@ function QueryLogModal({
                   {/* Actions for pending/unresolved */}
                   {log.status !== 'resolved' && (
                     <div className="space-y-2 pt-1">
-                      {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
+                      {actionError && <p className="text-xs text-rose-600 dark:text-rose-400">{actionError}</p>}
                       {canModify ? (
                         <div className="flex gap-2">
                           {log.status === 'pending' && (
@@ -481,27 +481,27 @@ export function StatsPanel() {
   const kpiCards = [
     {
       label: '전체 질의', value: stats?.total_queries ?? 0, type: 'total' as ModalType,
-      icon: <MessageSquare className="w-5 h-5 text-indigo-400" />, bg: 'bg-indigo-900/40',
+      icon: <MessageSquare className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />, bg: 'bg-indigo-100 dark:bg-indigo-900/40',
       highlight: false,
     },
     {
       label: '해결됨', value: stats?.resolved ?? 0, type: 'resolved' as ModalType,
-      icon: <CheckCircle className="w-5 h-5 text-emerald-400" />, bg: 'bg-emerald-900/40',
+      icon: <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />, bg: 'bg-emerald-100 dark:bg-emerald-900/40',
       highlight: false,
     },
     {
       label: '대기 중', value: stats?.pending ?? 0, type: 'pending' as ModalType,
-      icon: <Clock className="w-5 h-5 text-amber-400" />, bg: 'bg-amber-900/40',
+      icon: <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400" />, bg: 'bg-amber-100 dark:bg-amber-900/40',
       highlight: false,
     },
     {
       label: '미해결', value: stats?.unresolved ?? 0, type: 'unresolved' as ModalType,
-      icon: <XCircle className="w-5 h-5 text-rose-400" />, bg: 'bg-rose-900/40',
+      icon: <XCircle className="w-5 h-5 text-rose-600 dark:text-rose-400" />, bg: 'bg-rose-100 dark:bg-rose-900/40',
       highlight: false,
     },
     {
       label: '지식 공백', value: stats?.no_knowledge ?? 0, type: 'no_knowledge' as ModalType,
-      icon: <AlertTriangle className="w-5 h-5 text-orange-400" />, bg: 'bg-orange-900/40',
+      icon: <AlertTriangle className="w-5 h-5 text-orange-600 dark:text-orange-400" />, bg: 'bg-orange-100 dark:bg-orange-900/40',
       highlight: (stats?.no_knowledge ?? 0) > 0,
     },
   ];
@@ -510,7 +510,7 @@ export function StatsPanel() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">통계 대시보드</h2>
-        <button onClick={() => refetch()} className="text-xs text-indigo-400 hover:text-indigo-300">새로고침</button>
+        <button onClick={() => refetch()} className="text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">새로고침</button>
       </div>
 
       <div>
@@ -523,7 +523,7 @@ export function StatsPanel() {
       </div>
 
       {isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
-      {error && <div className="text-center py-10 text-rose-400">오류가 발생했습니다.</div>}
+      {error && <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>}
 
       {stats && (
         <>
@@ -535,15 +535,15 @@ export function StatsPanel() {
                 onClick={() => setModalType(type)}
                 className={`bg-slate-800 border rounded-xl p-4 flex items-center gap-3 hover:bg-slate-700/60 transition-colors cursor-pointer text-left ${
                   highlight
-                    ? 'border-orange-500/60 ring-1 ring-orange-500/30 hover:border-orange-400/80'
+                    ? 'border-orange-400 ring-1 ring-orange-300 hover:border-orange-500 dark:border-orange-500/60 dark:ring-orange-500/30 dark:hover:border-orange-400/80'
                     : 'border-slate-700 hover:border-indigo-500/50'
                 }`}
               >
                 <div className={`w-10 h-10 ${bg} rounded-xl flex items-center justify-center flex-shrink-0`}>{icon}</div>
                 <div>
                   <p className="text-xs text-slate-500">{label}</p>
-                  <p className={`text-2xl font-bold ${highlight ? 'text-orange-400' : 'text-slate-100'}`}>{value}</p>
-                  {highlight && <p className="text-[10px] text-orange-500 mt-0.5">등록 필요</p>}
+                  <p className={`text-2xl font-bold ${highlight ? 'text-orange-600 dark:text-orange-400' : 'text-slate-100'}`}>{value}</p>
+                  {highlight && <p className="text-[10px] text-orange-600 dark:text-orange-500 mt-0.5">등록 필요</p>}
                 </div>
               </button>
             ))}

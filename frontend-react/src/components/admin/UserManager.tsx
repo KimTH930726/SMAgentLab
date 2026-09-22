@@ -140,8 +140,8 @@ function PartSection() {
           >
             <div className="flex items-center gap-4 p-4">
               {/* 아이콘 */}
-              <div className="w-10 h-10 rounded-xl bg-indigo-900/40 border border-indigo-700/40 flex items-center justify-center flex-shrink-0">
-                <Building2 className="w-5 h-5 text-indigo-400" />
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 border border-indigo-200 dark:bg-indigo-900/40 dark:border-indigo-700/40 flex items-center justify-center flex-shrink-0">
+                <Building2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               </div>
 
               {/* 파트 이름 + 편집 */}
@@ -159,20 +159,20 @@ function PartSection() {
                       onBlur={() => commitRename(p.id, p.name)}
                       className="bg-slate-900 border border-indigo-500 rounded px-2 py-0.5 text-sm text-slate-100 font-semibold outline-none w-40"
                     />
-                    <button onClick={() => commitRename(p.id, p.name)} className="text-emerald-400 hover:text-emerald-300">
+                    <button onClick={() => commitRename(p.id, p.name)} className="text-emerald-600 hover:text-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300">
                       <Check className="w-3.5 h-3.5" />
                     </button>
                     <button onClick={() => { setEditingId(null); setRenameError(''); }} className="text-slate-500 hover:text-slate-300">
                       <X className="w-3.5 h-3.5" />
                     </button>
-                    {renameError && <span className="text-xs text-rose-400">{renameError}</span>}
+                    {renameError && <span className="text-xs text-rose-600 dark:text-rose-400">{renameError}</span>}
                   </span>
                 ) : (
                   <span className="flex items-center gap-1.5 group">
                     <span className="font-semibold text-slate-200">{p.name}</span>
                     <button
                       onClick={() => { setEditingId(p.id); setEditingName(p.name); }}
-                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-indigo-400 transition-all"
+                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
                       title="이름 수정"
                     >
                       <Pencil className="w-3 h-3" />
@@ -214,7 +214,7 @@ function PartSection() {
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              파트 이름 <span className="text-rose-400">*</span>
+              파트 이름 <span className="text-rose-600 dark:text-rose-400">*</span>
             </label>
             <input
               type="text"
@@ -226,7 +226,7 @@ function PartSection() {
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
             />
           </div>
-          {createError && <p className="text-xs text-rose-400">{createError}</p>}
+          {createError && <p className="text-xs text-rose-600 dark:text-rose-400">{createError}</p>}
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setShowCreate(false)}>취소</Button>
             <Button
@@ -250,9 +250,9 @@ function PartSection() {
             const count = part?.user_count ?? 0;
             return count > 0 ? (
               <div className="space-y-3">
-                <div className="flex items-start gap-3 bg-amber-900/20 border border-amber-700/40 rounded-lg p-3">
-                  <Users className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-amber-300">
+                <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 dark:bg-amber-900/20 dark:border-amber-700/40 rounded-lg p-3">
+                  <Users className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-amber-700 dark:text-amber-300">
                     <span className="font-semibold">{deleteTarget.name}</span> 파트에 소속된 사용자가{' '}
                     <span className="font-semibold">{count}명</span> 있습니다.
                     <br />사용자 목록 탭에서 다른 파트로 이동한 후 삭제하세요.
@@ -265,10 +265,10 @@ function PartSection() {
             ) : (
               <div className="space-y-3">
                 <p className="text-sm text-slate-300">
-                  <span className="font-semibold text-rose-400">{deleteTarget.name}</span> 파트를 삭제하시겠습니까?
+                  <span className="font-semibold text-rose-600 dark:text-rose-400">{deleteTarget.name}</span> 파트를 삭제하시겠습니까?
                   <br />소속 사용자가 없으며, 이 작업은 되돌릴 수 없습니다.
                 </p>
-                {deleteError && <p className="text-xs text-rose-400">{deleteError}</p>}
+                {deleteError && <p className="text-xs text-rose-600 dark:text-rose-400">{deleteError}</p>}
                 <div className="flex gap-2 justify-end">
                   <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>취소</Button>
                   <Button
@@ -401,7 +401,7 @@ function UserSection() {
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     {u.role === 'admin' ? (
-                      <Shield className="w-4 h-4 text-indigo-400" />
+                      <Shield className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     ) : (
                       <UserIcon className="w-4 h-4 text-slate-500" />
                     )}
@@ -475,7 +475,7 @@ function UserSection() {
                   {u.id !== currentUser?.id && (
                     <button
                       onClick={() => handleDelete(u)}
-                      className="text-slate-500 hover:text-rose-400 hover:scale-110 active:scale-95 transition-all p-1 cursor-pointer"
+                      className="text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 hover:scale-110 active:scale-95 transition-all p-1 cursor-pointer"
                       title="사용자 삭제"
                     >
                       <Trash2 className="w-4 h-4" />

@@ -26,9 +26,9 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
     if (this.state.error) {
       return (
         <div className="flex flex-col items-center justify-center h-48 gap-3 text-center">
-          <p className="text-rose-400 font-medium text-sm">탭 렌더링 오류</p>
+          <p className="text-rose-600 dark:text-rose-400 font-medium text-sm">탭 렌더링 오류</p>
           <pre className="text-xs text-slate-500 max-w-lg whitespace-pre-wrap">{this.state.error.message}</pre>
-          <button className="text-xs text-indigo-400 hover:text-indigo-300" onClick={() => this.setState({ error: null })}>
+          <button className="text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300" onClick={() => this.setState({ error: null })}>
             다시 시도
           </button>
         </div>

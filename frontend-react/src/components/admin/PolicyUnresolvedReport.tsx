@@ -58,7 +58,7 @@ export function PolicyUnresolvedReport() {
       </div>
 
       {/* 사용법 안내 — "왜 여기 있고 뭘 해야 하는지"를 명시적으로 */}
-      <div className="flex gap-3 px-4 py-3 bg-indigo-900/20 border border-indigo-700/30 rounded-xl text-xs text-slate-300 leading-relaxed">
+      <div className="flex gap-3 px-4 py-3 bg-indigo-50 border border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-700/30 rounded-xl text-xs text-slate-300 leading-relaxed">
         <Info className="w-4 h-4 text-indigo-500 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
         <div className="space-y-1">
           <p>
@@ -106,7 +106,7 @@ export function PolicyUnresolvedReport() {
 
       {!selectedNs && <div className="text-center py-10 text-slate-500">파트를 선택하세요.</div>}
       {selectedNs && isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
-      {selectedNs && error && <div className="text-center py-10 text-rose-400">오류가 발생했습니다.</div>}
+      {selectedNs && error && <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>}
 
       {selectedNs && data && (
         <>
@@ -171,7 +171,7 @@ export function PolicyUnresolvedReport() {
                                     disabled={promoteMutation.isPending}
                                     onClick={() => promoteMutation.mutate({ itemId: item.item_id, segmentIndex: idx })}
                                     title="원문을 그대로 검색 가능한 서술 지식으로 등록합니다(정밀 재분류는 아님)"
-                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-indigo-600/40 text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 dark:border-indigo-600/40 dark:text-indigo-300 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                   >
                                     {isThisPending ? (
                                       <>편입 중...</>

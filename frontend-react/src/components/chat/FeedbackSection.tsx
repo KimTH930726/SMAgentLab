@@ -136,14 +136,14 @@ export function FeedbackSection({
             <span className="text-xs text-slate-500">이 답변이 도움이 되었나요?</span>
             <button
               onClick={handlePositive}
-              className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-emerald-900/20 transition-colors"
+              className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:text-emerald-400 dark:hover:bg-emerald-900/20 transition-colors"
               title="도움됨"
             >
               <ThumbsUp className="w-4 h-4" />
             </button>
             <button
               onClick={() => setState('showing_form')}
-              className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-900/20 transition-colors"
+              className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:text-rose-400 dark:hover:bg-rose-900/20 transition-colors"
               title="개선 필요"
             >
               <ThumbsDown className="w-4 h-4" />
@@ -157,7 +157,7 @@ export function FeedbackSection({
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="text-xs text-emerald-400"
+            className="text-xs text-emerald-600 dark:text-emerald-400"
           >
             감사합니다! 피드백이 전송되었습니다.
           </motion.div>
@@ -176,7 +176,7 @@ export function FeedbackSection({
               <p className="text-xs font-medium text-slate-400">지식으로 등록 (선택사항)</p>
 
               <div>
-                <label className="block text-xs text-slate-500 mb-1">내용 <span className="text-rose-400">*</span></label>
+                <label className="block text-xs text-slate-500 mb-1">내용 <span className="text-rose-600 dark:text-rose-400">*</span></label>
                 <textarea
                   rows={6}
                   value={form.content}
@@ -187,7 +187,7 @@ export function FeedbackSection({
 
               <div>
                 <label className="block text-xs text-slate-500 mb-1">
-                  기본 가중치: <span className="text-indigo-400">{form.base_weight.toFixed(1)}</span>
+                  기본 가중치: <span className="text-indigo-600 dark:text-indigo-400">{form.base_weight.toFixed(1)}</span>
                 </label>
                 <input
                   type="range"
@@ -203,7 +203,7 @@ export function FeedbackSection({
               {sortedCategories.length > 0 ? (
                 <div>
                   <label className="block text-xs text-slate-500 mb-1">
-                    업무구분 <span className="text-rose-400">*</span>
+                    업무구분 <span className="text-rose-600 dark:text-rose-400">*</span>
                   </label>
                   <select
                     value={form.category}
@@ -216,12 +216,12 @@ export function FeedbackSection({
                   </select>
                 </div>
               ) : (
-                <p className="text-xs text-amber-400">
+                <p className="text-xs text-amber-600 dark:text-amber-400">
                   이 파트에 등록된 업무구분이 없어 지식을 등록할 수 없습니다. 기준정보관리에서 업무구분을 먼저 추가해주세요.
                 </p>
               )}
 
-              {submitError && <p className="text-xs text-rose-400">{submitError}</p>}
+              {submitError && <p className="text-xs text-rose-600 dark:text-rose-400">{submitError}</p>}
 
               <div className="flex gap-2 justify-end pt-1">
                 <Button variant="ghost" size="sm" onClick={handleSkip}>

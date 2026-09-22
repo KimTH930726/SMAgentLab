@@ -207,24 +207,35 @@ export function UnifiedAdhocSearch() {
           ],
         };
       });
-      const paramHits: UnifiedHit[] = policy.params.map((p: ParamHit, i) => ({
-        source: 'policy-param',
-        label: `${p.policy_name} · ${p.param_name}`,
-        snippet: p.value ? `${p.value}${p.unit ?? ''}${p.condition ? ` (${p.condition})` : ''}` : p.raw_body,
-        fullContent: p.raw_body,
-        scoreLabel: `ts_rank ${p.score.toFixed(3)}`,
-        rrf: rrf(i),
-        strengthPct: 0, // rrf 상대값으로 아래에서 재계산
-        adopted: true,
-        adoptedReason: '정책 파라미터는 점수 임계치가 없어 top_k 이내면 항상 chat 프롬프트에 포함됩니다.',
-        meta: [
-          { key: '정책명', value: p.policy_name },
-          { key: '분류', value: p.category_path.join(' > ') || '-' },
-          { key: '상태', value: p.status },
-          { key: '조건', value: p.condition ?? '조건없음' },
-          { key: '값', value: p.value ? `${p.value}${p.unit ?? ''}` : '-' },
-        ],
-      }));
+      const paramHits: UnifiedHit[] = policy.params.map((p: ParamHit, i) => {
+        // policy_name과 param_name이 같은 문자열인 경우가 실제로 많음(하나의 정책 항목
+        // 안에 조건별로 여러 값이 있는 구조, 예: "장바구니 최대 보관 수량" 정책의 기본/
+        // 일반탭/예약탭/제외대상 4행 — 실 데이터 중복이 아니라 조건이 다른 별개 행인데,
+        // "X · X" 라벨은 이 차이를 안 보여줘서 카드 그리드에서 똑같은 게 반복되는
+        // 것처럼 보임. param_name이 policy_name과 같으면 조건(condition)을 대신
+        // 라벨에 노출해 카드끼리 한눈에 구분되게 함(2026-09-18, 실사용 피드백).
+        const label = p.param_name === p.policy_name
+          ? `${p.policy_name}${p.condition ? ` · ${p.condition}` : ''}`
+          : `${p.policy_name} · ${p.param_name}`;
+        return {
+          source: 'policy-param',
+          label,
+          snippet: p.value ? `${p.value}${p.unit ?? ''}${p.condition ? ` (${p.condition})` : ''}` : p.raw_body,
+          fullContent: p.raw_body,
+          scoreLabel: `ts_rank ${p.score.toFixed(3)}`,
+          rrf: rrf(i),
+          strengthPct: 0, // rrf 상대값으로 아래에서 재계산
+          adopted: true,
+          adoptedReason: '정책 파라미터는 점수 임계치가 없어 top_k 이내면 항상 chat 프롬프트에 포함됩니다.',
+          meta: [
+            { key: '정책명', value: p.policy_name },
+            { key: '분류', value: p.category_path.join(' > ') || '-' },
+            { key: '상태', value: p.status },
+            { key: '조건', value: p.condition ?? '조건없음' },
+            { key: '값', value: p.value ? `${p.value}${p.unit ?? ''}` : '-' },
+          ],
+        };
+      });
       const narrativeHits: UnifiedHit[] = policy.narratives.map((n: NarrativeHit, i) => ({
         source: 'policy-narrative',
         label: n.policy_name,
@@ -381,16 +392,16 @@ export function UnifiedAdhocSearch() {
       </div>
 
       {!selectedNs && <p className="text-xs text-slate-500">파트를 선택하세요.</p>}
-      {error && <p className="text-xs text-rose-400">검색 실패: {error}</p>}
+      {error && <p className="text-xs text-rose-600 dark:text-rose-400">검색 실패: {error}</p>}
 
       {hits && counts && (
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500 bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2">
-            <p><b className="text-slate-300">검색</b> — 일반지식·정책(RDB/벡터)·참조데이터(공통코드/DB스키마)를 각각 검색 후 <b className="text-indigo-400">RRF</b>(k={RRF_K})로 순위 통합. 점수 스케일이 달라(코사인 0~1 vs ts_rank) 원점수 대신 순위만 씀.</p>
+            <p><b className="text-slate-300">검색</b> — 일반지식·정책(RDB/벡터)·참조데이터(공통코드/DB스키마)를 각각 검색 후 <b className="text-indigo-600 dark:text-indigo-400">RRF</b>(k={RRF_K})로 순위 통합. 점수 스케일이 달라(코사인 0~1 vs ts_rank) 원점수 대신 순위만 씀.</p>
             <p><b className="text-slate-300">top_k</b> — 축별 후보 수 = 합친 뒤 최종 표시 개수.</p>
             <p><b className="text-slate-300">상단 막대</b> — 원점수 아님, 이번 검색 1위 대비 상대 강도.</p>
             <p>
-              <b className="text-emerald-400">채택</b>/<b className="text-rose-400">제외</b> — 실제 chat 프롬프트 포함 여부.
+              <b className="text-emerald-600 dark:text-emerald-400">채택</b>/<b className="text-rose-600 dark:text-rose-400">제외</b> — 실제 chat 프롬프트 포함 여부.
               일반지식은 점수 ≥ {thresholds ? thresholds.knowledge_min_score.toFixed(2) : '…'} 필요(단, DB/공통코드 카테고리는 매칭 여부로만 판정), 정책·참조데이터는 항상 채택.
             </p>
           </div>
@@ -434,7 +445,7 @@ export function UnifiedAdhocSearch() {
                     'group relative flex flex-col bg-slate-800 border rounded-lg overflow-hidden cursor-pointer transition-colors',
                     h.adopted
                       ? 'border-slate-700 hover:border-slate-600 hover:bg-slate-800/80'
-                      : 'border-rose-900/50 opacity-60 hover:opacity-80',
+                      : 'border-rose-300 dark:border-rose-900/50 opacity-60 hover:opacity-80',
                   )}
                 >
                   {/* 상태바: 카드 맨 위, 이번 검색에서의 상대 강도 */}
@@ -449,15 +460,17 @@ export function UnifiedAdhocSearch() {
                         <span
                           className={clsx(
                             'flex items-center gap-0.5 text-[9px] font-medium px-1 py-0.5 rounded',
-                            h.adopted ? 'text-emerald-400 bg-emerald-950/40' : 'text-rose-400 bg-rose-950/40',
+                            h.adopted
+                              ? 'text-emerald-600 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-950/40'
+                              : 'text-rose-600 bg-rose-50 dark:text-rose-400 dark:bg-rose-950/40',
                           )}
                         >
                           {h.adopted ? <Check className="w-2.5 h-2.5" /> : <X className="w-2.5 h-2.5" />}
                           {h.adopted ? '채택' : '제외'}
                         </span>
                         <span className={clsx('text-[10px] font-medium', {
-                          'text-emerald-400': band.label === '강함',
-                          'text-sky-400': band.label === '보통',
+                          'text-emerald-600 dark:text-emerald-400': band.label === '강함',
+                          'text-sky-600 dark:text-sky-400': band.label === '보통',
                           'text-slate-500': band.label === '약함',
                         })}>
                           {band.label}
@@ -470,8 +483,8 @@ export function UnifiedAdhocSearch() {
                             className={clsx(
                               'p-0.5 rounded transition-colors',
                               isFlagged
-                                ? 'text-rose-400 cursor-default'
-                                : 'text-slate-500 hover:text-rose-400 hover:bg-rose-950/40',
+                                ? 'text-rose-600 dark:text-rose-400 cursor-default'
+                                : 'text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:text-rose-400 dark:hover:bg-rose-950/40',
                             )}
                           >
                             {isFlagged ? <FlagOff className="w-3 h-3" /> : <Flag className="w-3 h-3" />}
@@ -510,7 +523,9 @@ export function UnifiedAdhocSearch() {
               <span
                 className={clsx(
                   'flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded',
-                  activeHit.adopted ? 'text-emerald-400 bg-emerald-950/40' : 'text-rose-400 bg-rose-950/40',
+                  activeHit.adopted
+                    ? 'text-emerald-600 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-950/40'
+                    : 'text-rose-600 bg-rose-50 dark:text-rose-400 dark:bg-rose-950/40',
                 )}
               >
                 {activeHit.adopted ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
@@ -538,7 +553,7 @@ export function UnifiedAdhocSearch() {
                   {activeHit.source === 'general' && activeHit.knowledgeId != null && canModifyNs && (
                     <button
                       onClick={() => startEdit(activeHit)}
-                      className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-indigo-400 hover:border-indigo-800/60 transition-colors"
+                      className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 dark:hover:border-indigo-800/60 transition-colors"
                     >
                       <PenLine className="w-3.5 h-3.5" />수정
                     </button>
@@ -550,8 +565,8 @@ export function UnifiedAdhocSearch() {
                       className={clsx(
                         'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors',
                         flaggedIds.has(activeHit.knowledgeId)
-                          ? 'text-rose-400 border-rose-800/60 bg-rose-950/30 cursor-default'
-                          : 'text-slate-400 border-slate-700 hover:text-rose-400 hover:border-rose-800/60',
+                          ? 'text-rose-600 border-rose-300 bg-rose-50 dark:text-rose-400 dark:border-rose-800/60 dark:bg-rose-950/30 cursor-default'
+                          : 'text-slate-400 border-slate-700 hover:text-rose-600 hover:border-rose-300 dark:hover:text-rose-400 dark:hover:border-rose-800/60',
                       )}
                     >
                       {flaggedIds.has(activeHit.knowledgeId) ? <FlagOff className="w-3.5 h-3.5" /> : <Flag className="w-3.5 h-3.5" />}
@@ -593,7 +608,7 @@ export function UnifiedAdhocSearch() {
                   />
                 </div>
                 {updateMutation.error && (
-                  <p className="text-xs text-rose-400">{String(updateMutation.error)}</p>
+                  <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>
                 )}
                 <p className="text-[11px] text-slate-500">저장하면 내용이 재임베딩되어 점수·채택 여부가 바뀔 수 있어, 같은 질문으로 검색을 다시 실행합니다.</p>
                 <div className="flex gap-2 justify-end pt-1">

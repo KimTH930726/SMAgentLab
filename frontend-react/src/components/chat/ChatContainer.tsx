@@ -25,9 +25,9 @@ function PipelineStepsToggle({ steps }: { steps: PipelineStep[] }) {
         className="flex items-center gap-2 text-xs text-slate-400 hover:text-slate-300 transition-colors py-1"
       >
         {currentStep && !currentStep.done ? (
-          <span className="text-indigo-400 animate-pulse">●</span>
+          <span className="text-indigo-600 dark:text-indigo-400 animate-pulse">●</span>
         ) : (
-          <span className="text-emerald-400">✓</span>
+          <span className="text-emerald-600 dark:text-emerald-400">✓</span>
         )}
         <span>{currentStep?.message}</span>
         {expanded ? (
@@ -41,9 +41,9 @@ function PipelineStepsToggle({ steps }: { steps: PipelineStep[] }) {
           {steps.map((s, i) => (
             <div key={i} className="flex items-center gap-2 text-xs pl-2">
               {s.done ? (
-                <span className="text-emerald-400 text-[10px]">✓</span>
+                <span className="text-emerald-600 dark:text-emerald-400 text-[10px]">✓</span>
               ) : (
-                <span className="text-indigo-400 animate-pulse text-[10px]">●</span>
+                <span className="text-indigo-600 dark:text-indigo-400 animate-pulse text-[10px]">●</span>
               )}
               <span className={s.done ? 'text-slate-500' : 'text-slate-300'}>{s.message}</span>
             </div>
@@ -143,7 +143,7 @@ function CategoryFilter({ namespace }: { namespace: string }) {
         onClick={() => setOpen((o) => !o)}
         className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
           categories.length > 0 || autoDetectCategory
-            ? 'bg-indigo-900/40 text-indigo-300 border-indigo-700/50'
+            ? 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300 dark:border-indigo-700/50'
             : 'bg-slate-700/50 text-slate-500 border-slate-600/50 hover:text-slate-400'
         }`}
         title="특정 업무구분의 지식으로만 검색합니다"
@@ -157,7 +157,7 @@ function CategoryFilter({ namespace }: { namespace: string }) {
           <button
             onClick={() => { setCategories([]); setOpen(false); }}
             className={`w-full text-left px-2 py-1.5 rounded text-xs ${
-              categories.length === 0 && !autoDetectCategory ? 'bg-indigo-600/30 text-indigo-300' : 'text-slate-300 hover:bg-slate-700/60'
+              categories.length === 0 && !autoDetectCategory ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-600/30 dark:text-indigo-300' : 'text-slate-300 hover:bg-slate-700/60'
             }`}
           >
             전체
@@ -165,7 +165,7 @@ function CategoryFilter({ namespace }: { namespace: string }) {
           <button
             onClick={() => setAutoDetectCategory(!autoDetectCategory)}
             className={`w-full text-left px-2 py-1.5 rounded text-xs ${
-              autoDetectCategory ? 'bg-indigo-600/30 text-indigo-300' : 'text-slate-300 hover:bg-slate-700/60'
+              autoDetectCategory ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-600/30 dark:text-indigo-300' : 'text-slate-300 hover:bg-slate-700/60'
             }`}
           >
             ⚡ 자동 감지 (다소 시간 걸림)

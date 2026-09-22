@@ -24,9 +24,9 @@ const AGENTS: AgentCard[] = [
     title: '운영 자동화 보조 에이전트',
     description: '사내 문서·지식을 기반으로 질문에 답변합니다.',
     features: ['문서 RAG 검색', '하이브리드 벡터/키워드 검색', '멀티턴 대화 메모리'],
-    color: 'text-indigo-400',
-    border: 'border-indigo-500/50 hover:border-indigo-400',
-    iconBg: 'bg-indigo-500/10',
+    color: 'text-indigo-600 dark:text-indigo-400',
+    border: 'border-indigo-300 hover:border-indigo-400 dark:border-indigo-500/50 dark:hover:border-indigo-400',
+    iconBg: 'bg-indigo-100 dark:bg-indigo-500/10',
   },
 ];
 
@@ -54,11 +54,11 @@ function HealthBadge() {
     <div className="flex items-center gap-4 text-xs">
       <div className="flex items-center gap-1.5">
         <span className={`w-2 h-2 rounded-full ${ok ? 'bg-emerald-400' : 'bg-rose-500'}`} />
-        <span className={ok ? 'text-emerald-400' : 'text-rose-400'}>서버 {ok ? '정상' : '오류'}</span>
+        <span className={ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>서버 {ok ? '정상' : '오류'}</span>
       </div>
       <div className="flex items-center gap-1.5">
         <span className={`w-2 h-2 rounded-full ${llmOk ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-        <span className={llmOk ? 'text-emerald-400' : 'text-amber-400'}>
+        <span className={llmOk ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
           LLM {llmOk ? '연결됨' : '연결 안됨'}{data?.llm_provider ? ` (${data.llm_provider})` : ''}
         </span>
       </div>

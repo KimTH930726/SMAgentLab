@@ -67,11 +67,11 @@ function AgentCard({ agent }: { agent: AgentInfo }) {
         </button>
         {health !== null && (
           health ? (
-            <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+            <span className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
               <CheckCircle className="w-3.5 h-3.5" /> 정상
             </span>
           ) : (
-            <span className="flex items-center gap-1.5 text-xs text-rose-400">
+            <span className="flex items-center gap-1.5 text-xs text-rose-600 dark:text-rose-400">
               <XCircle className="w-3.5 h-3.5" /> 비정상
             </span>
           )
@@ -94,7 +94,7 @@ export function AgentDirectoryTab() {
     return <div className="text-slate-400 text-sm">에이전트 목록 로딩 중...</div>;
   }
   if (error) {
-    return <div className="text-rose-400 text-sm">에이전트 목록을 불러올 수 없습니다.</div>;
+    return <div className="text-rose-600 dark:text-rose-400 text-sm">에이전트 목록을 불러올 수 없습니다.</div>;
   }
 
   return (

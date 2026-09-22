@@ -76,7 +76,7 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
   return (
     <div className="pt-3 border-t border-slate-700">
       <div className="flex items-center gap-1.5 mb-2">
-        <Tag className="w-3.5 h-3.5 text-indigo-400" />
+        <Tag className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
         <span className="text-xs font-medium text-slate-400">업무구분</span>
         {canModify && <span className="text-xs text-slate-600">(이름 클릭하면 수정)</span>}
       </div>
@@ -86,7 +86,7 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
             key={cat.id}
             className="bg-slate-900/60 border border-slate-700/50 rounded-lg px-3 py-2 flex items-center"
           >
-            <Tag className="w-3 h-3 text-indigo-400 flex-shrink-0 mr-2" />
+            <Tag className="w-3 h-3 text-indigo-600 dark:text-indigo-400 flex-shrink-0 mr-2" />
             <div className="flex-1 min-w-0">
               {editingId === cat.id ? (
                 <input
@@ -103,7 +103,7 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
               ) : (
                 <button
                   onClick={() => startEdit(cat)}
-                  className={`text-sm text-slate-200 ${canModify ? 'hover:text-indigo-300 transition-colors' : ''}`}
+                  className={`text-sm text-slate-200 ${canModify ? 'hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors' : ''}`}
                   title={canModify ? '클릭하여 이름 수정' : undefined}
                 >
                   {cat.name}
@@ -113,7 +113,7 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
             {canModify && editingId !== cat.id && (
               <button
                 onClick={() => deleteMutation.mutate(cat.name)}
-                className="ml-2 p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-900/20 transition-colors flex-shrink-0"
+                className="ml-2 p-1 rounded text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:text-rose-400 dark:hover:bg-rose-900/20 transition-colors flex-shrink-0"
                 title="삭제"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -147,10 +147,10 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
         </div>
       )}
       {addMutation.isError && (
-        <p className="text-xs text-rose-400 mt-1">{String(addMutation.error)}</p>
+        <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">{String(addMutation.error)}</p>
       )}
       {renameMutation.isError && (
-        <p className="text-xs text-rose-400 mt-1">{String(renameMutation.error)}</p>
+        <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">{String(renameMutation.error)}</p>
       )}
     </div>
   );
@@ -269,7 +269,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
         <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>
       )}
       {error && (
-        <div className="text-center py-10 text-rose-400">오류가 발생했습니다.</div>
+        <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>
       )}
 
       <div className="grid gap-3">
@@ -280,8 +280,8 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
             onClick={() => setExpandedCat(expandedCat === ns.name ? null : ns.name)}
           >
             <div className="flex items-center gap-4 p-4">
-              <div className="w-10 h-10 rounded-xl bg-indigo-900/40 border border-indigo-700/40 flex items-center justify-center flex-shrink-0">
-                <Database className="w-5 h-5 text-indigo-400" />
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 border border-indigo-200 dark:bg-indigo-900/40 dark:border-indigo-700/40 flex items-center justify-center flex-shrink-0">
+                <Database className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
@@ -298,7 +298,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                         onBlur={() => commitNsRename(ns.name)}
                         className="bg-slate-900 border border-indigo-500 rounded px-2 py-0.5 text-sm text-slate-100 font-semibold outline-none w-36"
                       />
-                      <button onClick={() => commitNsRename(ns.name)} className="text-emerald-400 hover:text-emerald-300"><Check className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => commitNsRename(ns.name)} className="text-emerald-600 hover:text-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300"><Check className="w-3.5 h-3.5" /></button>
                       <button onClick={() => setEditingNs(null)} className="text-slate-500 hover:text-slate-300"><X className="w-3.5 h-3.5" /></button>
                     </span>
                   ) : (
@@ -307,7 +307,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                       {canModifyNs(ns.owner_part) && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setEditingNs(ns.name); setEditingNsName(ns.name); }}
-                          className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-indigo-400 transition-all"
+                          className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
                           title="이름 수정"
                         >
                           <Pencil className="w-3 h-3" />
@@ -317,13 +317,13 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                   )}
                   <button
                     onClick={(e) => { e.stopPropagation(); setNamespace(ns.name); onNavigate?.('knowledge'); }}
-                    className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded-full hover:bg-indigo-900/40 hover:text-indigo-300 transition-colors"
+                    className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded-full hover:bg-indigo-100 hover:text-indigo-700 dark:hover:bg-indigo-900/40 dark:hover:text-indigo-300 transition-colors"
                   >
                     지식 {ns.knowledge_count}건
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); setNamespace(ns.name); onNavigate?.('glossary'); }}
-                    className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded-full hover:bg-indigo-900/40 hover:text-indigo-300 transition-colors"
+                    className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded-full hover:bg-indigo-100 hover:text-indigo-700 dark:hover:bg-indigo-900/40 dark:hover:text-indigo-300 transition-colors"
                   >
                     용어 {ns.glossary_count}건
                   </button>
@@ -383,7 +383,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              이름 <span className="text-rose-400">*</span>
+              이름 <span className="text-rose-600 dark:text-rose-400">*</span>
             </label>
             <input
               type="text"
@@ -419,7 +419,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
             </Button>
           </div>
           {createMutation.isError && (
-            <p className="text-xs text-rose-400">{String(createMutation.error)}</p>
+            <p className="text-xs text-rose-600 dark:text-rose-400">{String(createMutation.error)}</p>
           )}
         </div>
       </Modal>
@@ -432,7 +432,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       >
         <div className="space-y-4">
           <p className="text-sm text-slate-300">
-            <span className="font-semibold text-rose-400">{deleteTarget}</span> 파트를
+            <span className="font-semibold text-rose-600 dark:text-rose-400">{deleteTarget}</span> 파트를
             삭제하면 모든 지식과 용어도 함께 삭제됩니다. 계속하시겠습니까?
           </p>
           <div className="flex gap-2 justify-end">
@@ -449,7 +449,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
             </Button>
           </div>
           {deleteMutation.isError && (
-            <p className="text-xs text-rose-400">{String(deleteMutation.error)}</p>
+            <p className="text-xs text-rose-600 dark:text-rose-400">{String(deleteMutation.error)}</p>
           )}
         </div>
       </Modal>

@@ -252,8 +252,8 @@ export function Sidebar() {
         <div className="px-3 py-2 border-b border-slate-700 flex items-center gap-2">
           <div className={`flex items-center gap-1.5 flex-1 min-w-0 px-2 py-1 rounded-lg text-xs font-medium ${
             selectedAgent === 'knowledge_rag'
-              ? 'bg-indigo-500/10 text-indigo-400'
-              : 'bg-emerald-500/10 text-emerald-400'
+              ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400'
+              : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
           }`}>
             {selectedAgent === 'knowledge_rag'
               ? <BookOpen className="w-3 h-3 flex-shrink-0" />
@@ -340,7 +340,7 @@ export function Sidebar() {
                   className={clsx(
                     'group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors mb-0.5',
                     conversationId === conv.id
-                      ? 'bg-indigo-600/20 border border-indigo-600/40'
+                      ? 'bg-indigo-50 border border-indigo-200 dark:bg-indigo-600/20 dark:border-indigo-600/40'
                       : 'hover:bg-slate-700',
                   )}
                 >
@@ -348,7 +348,7 @@ export function Sidebar() {
                   <span className="flex-1 text-xs text-slate-300 truncate">{conv.title}</span>
                   <button
                     onClick={(e) => handleDeleteConversation(e, conv.id)}
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded text-slate-500 hover:text-rose-400 transition-all"
+                    className="opacity-0 group-hover:opacity-100 p-1 rounded text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 transition-all"
                     title="대화 삭제"
                   >
                     <Trash2 className="w-3 h-3" />
@@ -378,7 +378,7 @@ export function Sidebar() {
                 <div>
                   <div className="flex justify-between text-xs text-slate-400 mb-1">
                     <span>의미 중심</span>
-                    <span className="text-indigo-400 font-mono">{searchConfig.wVector.toFixed(1)}</span>
+                    <span className="text-indigo-600 dark:text-indigo-400 font-mono">{searchConfig.wVector.toFixed(1)}</span>
                   </div>
                   <input
                     type="range"
@@ -396,7 +396,7 @@ export function Sidebar() {
                 <div>
                   <div className="flex justify-between text-xs text-slate-400 mb-1">
                     <span>키워드 중심</span>
-                    <span className="text-indigo-400 font-mono">{searchConfig.wKeyword.toFixed(1)}</span>
+                    <span className="text-indigo-600 dark:text-indigo-400 font-mono">{searchConfig.wKeyword.toFixed(1)}</span>
                   </div>
                   <input
                     type="range"
@@ -414,7 +414,7 @@ export function Sidebar() {
                 <div>
                   <div className="flex justify-between text-xs text-slate-400 mb-1">
                     <span>검색 결과 수 (Top-K)</span>
-                    <span className="text-indigo-400 font-mono">{searchConfig.topK}</span>
+                    <span className="text-indigo-600 dark:text-indigo-400 font-mono">{searchConfig.topK}</span>
                   </div>
                   <input
                     type="range"
@@ -487,7 +487,7 @@ function UserSection() {
         <div className="flex items-center gap-2 px-2">
           <div className="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center flex-shrink-0">
             {user.role === 'admin' ? (
-              <Shield className="w-3.5 h-3.5 text-indigo-400" />
+              <Shield className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
             ) : (
               <User className="w-3.5 h-3.5 text-slate-400" />
             )}
@@ -498,14 +498,14 @@ function UserSection() {
           </div>
           <button
             onClick={() => setShowSettings(true)}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-400 hover:bg-slate-700 transition-colors"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-700 transition-colors"
             title="계정 설정"
           >
             <Cog className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={handleLogout}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-700 transition-colors"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-700 transition-colors"
             title="로그아웃"
           >
             <LogOut className="w-3.5 h-3.5" />
@@ -671,13 +671,13 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
             </div>
             <div>
               <span className="text-slate-500 text-xs">LLM 자격증명</span>
-              <p className={clsx('font-medium', user.has_llm_credentials ? 'text-emerald-400' : 'text-slate-500')}>
+              <p className={clsx('font-medium', user.has_llm_credentials ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500')}>
                 {user.has_llm_credentials ? '본인 키 사용' : '팀 공통 키 사용'}
               </p>
             </div>
             <div>
               <span className="text-slate-500 text-xs">Confluence PAT</span>
-              <p className={clsx('font-medium', user.has_confluence_pat ? 'text-emerald-400' : 'text-slate-500')}>
+              <p className={clsx('font-medium', user.has_confluence_pat ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500')}>
                 {user.has_confluence_pat ? '등록됨' : '미등록'}
               </p>
             </div>
@@ -723,7 +723,7 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
               onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && handleChangePassword()}
             />
             {pwMsg && (
-              <p className={clsx('text-xs px-2', pwMsg.type === 'ok' ? 'text-emerald-400' : 'text-rose-400')}>
+              <p className={clsx('text-xs px-2', pwMsg.type === 'ok' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400')}>
                 {pwMsg.text}
               </p>
             )}
@@ -772,7 +772,7 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
             />
             <p className="text-[10px] text-slate-500">DevX OAuth2 Client Credentials 트리플. 등록 시 본인 키로, 미등록 시 .env 팀 공통 키로 동작합니다. (Fernet 암호화 저장)</p>
             {credMsg && (
-              <p className={clsx('text-xs px-2', credMsg.type === 'ok' ? 'text-emerald-400' : 'text-rose-400')}>
+              <p className={clsx('text-xs px-2', credMsg.type === 'ok' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400')}>
                 {credMsg.text}
               </p>
             )}
@@ -815,7 +815,7 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
             </div>
             <p className="text-[10px] text-slate-500">Confluence 프로필 → Personal Access Token에서 발급. 암호화되어 저장됩니다.</p>
             {patMsg && (
-              <p className={clsx('text-xs px-2', patMsg.type === 'ok' ? 'text-emerald-400' : 'text-rose-400')}>
+              <p className={clsx('text-xs px-2', patMsg.type === 'ok' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400')}>
                 {patMsg.text}
               </p>
             )}
@@ -825,7 +825,7 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
               </Button>
               {user.has_confluence_pat && (
                 <Button size="sm" variant="ghost" onClick={handleDeletePat} loading={patLoading}
-                  className="text-rose-400 hover:text-rose-300 border border-rose-500/30 hover:border-rose-400/50">
+                  className="text-rose-600 hover:text-rose-500 border border-rose-300 hover:border-rose-400 dark:text-rose-400 dark:hover:text-rose-300 dark:border-rose-500/30 dark:hover:border-rose-400/50">
                   삭제
                 </Button>
               )}

@@ -60,9 +60,9 @@ const GeminiLogo = ({ className }: { className?: string }) => (
 );
 
 const INHOUSE_MODELS: InhouseModelOption[] = [
-  { id: 'gpt-5.2', label: 'GPT 5.2', desc: 'OpenAI', icon: <OpenAILogo className="w-6 h-6" />, color: 'border-emerald-500 bg-emerald-500/10 text-emerald-300' },
-  { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5', desc: 'Anthropic', icon: <AnthropicLogo className="w-6 h-6" />, color: 'border-orange-500 bg-orange-500/10 text-orange-300' },
-  { id: 'gemini-3.0-pro', label: 'Gemini 3.0 Pro', desc: 'Google', icon: <GeminiLogo className="w-6 h-6" />, color: 'border-blue-500 bg-blue-500/10 text-blue-300' },
+  { id: 'gpt-5.2', label: 'GPT 5.2', desc: 'OpenAI', icon: <OpenAILogo className="w-6 h-6" />, color: 'border-emerald-400 bg-emerald-50 text-emerald-700 dark:border-emerald-500 dark:bg-emerald-500/10 dark:text-emerald-300' },
+  { id: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5', desc: 'Anthropic', icon: <AnthropicLogo className="w-6 h-6" />, color: 'border-orange-400 bg-orange-50 text-orange-700 dark:border-orange-500 dark:bg-orange-500/10 dark:text-orange-300' },
+  { id: 'gemini-3.0-pro', label: 'Gemini 3.0 Pro', desc: 'Google', icon: <GeminiLogo className="w-6 h-6" />, color: 'border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-500 dark:bg-blue-500/10 dark:text-blue-300' },
 ];
 
 interface FormState {
@@ -107,12 +107,12 @@ function ConnectionBadge({ ok, checking }: { ok: boolean | null; checking?: bool
   );
   if (ok === null) return null;
   if (ok) return (
-    <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+    <span className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
       <CheckCircle2 className="w-3.5 h-3.5" /> 연결됨
     </span>
   );
   return (
-    <span className="flex items-center gap-1.5 text-xs text-rose-400">
+    <span className="flex items-center gap-1.5 text-xs text-rose-600 dark:text-rose-400">
       <XCircle className="w-3.5 h-3.5" /> 연결 실패
     </span>
   );
@@ -127,7 +127,7 @@ function CollapsibleSection({ title, defaultOpen = true, children }: { title: st
         className="w-full flex items-center justify-between px-5 py-3 bg-slate-800/60 hover:bg-slate-800 transition-colors"
       >
         <span className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-          <SlidersHorizontal className="w-4 h-4 text-indigo-400" />
+          <SlidersHorizontal className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
           {title}
         </span>
         <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -306,7 +306,7 @@ function ProviderSettings() {
         <div className="flex flex-col items-end gap-1">
           <ConnectionBadge ok={isConnected ?? null} />
           {config?.is_runtime_override && (
-            <span className="text-xs text-amber-400 flex items-center gap-1">
+            <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
               <AlertTriangle className="w-3 h-3" /> 런타임 오버라이드 중
             </span>
           )}
@@ -324,7 +324,7 @@ function ProviderSettings() {
                 onClick={() => handleChange('provider', p)}
                 className={`flex-1 py-3 px-4 rounded-lg border text-sm font-medium transition-all ${
                   form.provider === p
-                    ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
+                    ? 'border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-500/10 dark:text-indigo-300'
                     : 'border-slate-600 bg-slate-900 text-slate-400 hover:border-slate-500'
                 }`}
               >
@@ -334,7 +334,7 @@ function ProviderSettings() {
                   {p === 'ollama' ? '로컬 / 내부망' : 'DevX MCP API'}
                 </div>
                 {currentProvider === p && (
-                  <div className="text-xs text-emerald-400 mt-1">현재 사용 중</div>
+                  <div className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">현재 사용 중</div>
                 )}
               </button>
             ))}
@@ -371,7 +371,7 @@ function ProviderSettings() {
           <div className="space-y-3 pt-1">
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1">
-                Base URL <span className="text-rose-400">*</span>
+                Base URL <span className="text-rose-600 dark:text-rose-400">*</span>
               </label>
               <input
                 type="text"
@@ -385,7 +385,7 @@ function ProviderSettings() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Client ID <span className="text-rose-400">*</span>
+                  Client ID <span className="text-rose-600 dark:text-rose-400">*</span>
                 </label>
                 <input
                   type="text"
@@ -397,7 +397,7 @@ function ProviderSettings() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Client Secret <span className="text-rose-400">*</span>
+                  Client Secret <span className="text-rose-600 dark:text-rose-400">*</span>
                 </label>
                 <input
                   type="password"
@@ -411,8 +411,8 @@ function ProviderSettings() {
             <div className="flex items-center gap-2 text-xs text-slate-500">
               <KeyRound className="w-3.5 h-3.5" />
               {config?.inhouse?.has_credentials
-                ? <span className="text-emerald-400">시스템 OAuth 자격증명 등록됨 — 사용자별 API Key 입력 불필요</span>
-                : <span className="text-amber-400">⚠ Client ID/Secret 미등록 — .env 또는 위 입력란에 등록해주세요</span>}
+                ? <span className="text-emerald-600 dark:text-emerald-400">시스템 OAuth 자격증명 등록됨 — 사용자별 API Key 입력 불필요</span>
+                : <span className="text-amber-600 dark:text-amber-400">⚠ Client ID/Secret 미등록 — .env 또는 위 입력란에 등록해주세요</span>}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -458,7 +458,7 @@ function ProviderSettings() {
                     onClick={() => handleChange('inhouse_llm_response_mode', mode)}
                     className={`flex-1 py-2 px-3 rounded-lg border text-xs font-medium transition-all ${
                       form.inhouse_llm_response_mode === mode
-                        ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
+                        ? 'border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-500/10 dark:text-indigo-300'
                         : 'border-slate-600 bg-slate-900 text-slate-400 hover:border-slate-500'
                     }`}
                   >
@@ -474,7 +474,7 @@ function ProviderSettings() {
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1">
-                타임아웃 (초): <span className="text-indigo-400">{form.inhouse_llm_timeout}s</span>
+                타임아웃 (초): <span className="text-indigo-600 dark:text-indigo-400">{form.inhouse_llm_timeout}s</span>
               </label>
               <input
                 type="range" min={10} max={600} step={10}
@@ -514,7 +514,7 @@ function ProviderSettings() {
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1">
-                타임아웃 (초): <span className="text-indigo-400">{form.ollama_timeout}s</span>
+                타임아웃 (초): <span className="text-indigo-600 dark:text-indigo-400">{form.ollama_timeout}s</span>
               </label>
               <input
                 type="range" min={30} max={1800} step={30}
@@ -534,8 +534,8 @@ function ProviderSettings() {
       {testResult && (
         <div className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm border ${
           testResult.ok
-            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-            : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-300'
+            : 'bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300'
         }`}>
           {testResult.ok
             ? <><CheckCircle2 className="w-4 h-4" /> 연결 성공 — LLM 서버가 응답합니다</>
@@ -545,7 +545,7 @@ function ProviderSettings() {
       )}
 
       {saveMutation.isError && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-rose-500/10 border-rose-500/30 text-rose-300">
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300">
           <XCircle className="w-4 h-4" /> 저장 실패: {String(saveMutation.error)}
         </div>
       )}
@@ -581,10 +581,10 @@ function ProviderSettings() {
 // ── 검색 임계값 설정 컴포넌트 ──
 
 const THRESHOLD_FIELDS: { key: keyof SearchThresholds; label: string; desc: string; min: number; max: number; step: number; color: string }[] = [
-  { key: 'glossary_min_similarity', label: '용어 매핑 최소 유사도', desc: '이 값 이상이어야 용어 매핑이 활성화됩니다', min: 0, max: 1, step: 0.05, color: 'text-indigo-400' },
-  { key: 'knowledge_min_score', label: '검색결과 최소 점수', desc: '이 점수 미만의 결과는 LLM 컨텍스트에서 제외됩니다', min: 0, max: 1, step: 0.05, color: 'text-rose-400' },
-  { key: 'knowledge_high_score', label: '검색결과 높은 신뢰 기준', desc: '이 점수 이상이면 "높음" 신뢰도로 분류됩니다', min: 0, max: 1, step: 0.05, color: 'text-emerald-400' },
-  { key: 'knowledge_mid_score', label: '검색결과 보통 신뢰 기준', desc: '이 점수 이상이면 "보통", 미만이면 "낮음" 신뢰도', min: 0, max: 1, step: 0.05, color: 'text-sky-400' },
+  { key: 'glossary_min_similarity', label: '용어 매핑 최소 유사도', desc: '이 값 이상이어야 용어 매핑이 활성화됩니다', min: 0, max: 1, step: 0.05, color: 'text-indigo-600 dark:text-indigo-400' },
+  { key: 'knowledge_min_score', label: '검색결과 최소 점수', desc: '이 점수 미만의 결과는 LLM 컨텍스트에서 제외됩니다', min: 0, max: 1, step: 0.05, color: 'text-rose-600 dark:text-rose-400' },
+  { key: 'knowledge_high_score', label: '검색결과 높은 신뢰 기준', desc: '이 점수 이상이면 "높음" 신뢰도로 분류됩니다', min: 0, max: 1, step: 0.05, color: 'text-emerald-600 dark:text-emerald-400' },
+  { key: 'knowledge_mid_score', label: '검색결과 보통 신뢰 기준', desc: '이 점수 이상이면 "보통", 미만이면 "낮음" 신뢰도', min: 0, max: 1, step: 0.05, color: 'text-sky-600 dark:text-sky-400' },
 ];
 
 function ThresholdSettings() {
@@ -662,13 +662,13 @@ function ThresholdSettings() {
       </div>
 
       {saveMutation.isError && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-rose-500/10 border-rose-500/30 text-rose-300">
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300">
           <XCircle className="w-4 h-4" /> 저장 실패: {String(saveMutation.error)}
         </div>
       )}
 
       {saveMutation.isSuccess && !dirty && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-emerald-500/10 border-emerald-500/30 text-emerald-300">
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-300">
           <CheckCircle2 className="w-4 h-4" /> 임계값이 적용되었습니다
         </div>
       )}
@@ -698,9 +698,9 @@ function ThresholdSettings() {
 // ── 검색 기본값 설정 컴포넌트 ──
 
 const SEARCH_DEFAULT_FIELDS: { key: keyof SearchDefaults; label: string; desc: string; min: number; max: number; step: number; color: string; format: (v: number) => string }[] = [
-  { key: 'default_w_vector', label: '의미 중심 (문맥 유사도) 가중치', desc: '벡터 검색의 가중치입니다. 키워드 가중치와 자동으로 합이 1이 됩니다.', min: 0, max: 1, step: 0.05, color: 'text-indigo-400', format: (v) => v.toFixed(2) },
-  { key: 'default_w_keyword', label: '키워드 중심 (단어 일치) 가중치', desc: 'BM25 키워드 검색의 가중치입니다. 의미 가중치와 자동으로 합이 1이 됩니다.', min: 0, max: 1, step: 0.05, color: 'text-amber-400', format: (v) => v.toFixed(2) },
-  { key: 'default_top_k', label: '검색 결과 수 (Top-K)', desc: 'LLM에 전달할 최대 검색 결과 수입니다. (1~20)', min: 1, max: 20, step: 1, color: 'text-emerald-400', format: (v) => String(v) },
+  { key: 'default_w_vector', label: '의미 중심 (문맥 유사도) 가중치', desc: '벡터 검색의 가중치입니다. 키워드 가중치와 자동으로 합이 1이 됩니다.', min: 0, max: 1, step: 0.05, color: 'text-indigo-600 dark:text-indigo-400', format: (v) => v.toFixed(2) },
+  { key: 'default_w_keyword', label: '키워드 중심 (단어 일치) 가중치', desc: 'BM25 키워드 검색의 가중치입니다. 의미 가중치와 자동으로 합이 1이 됩니다.', min: 0, max: 1, step: 0.05, color: 'text-amber-600 dark:text-amber-400', format: (v) => v.toFixed(2) },
+  { key: 'default_top_k', label: '검색 결과 수 (Top-K)', desc: 'LLM에 전달할 최대 검색 결과 수입니다. (1~20)', min: 1, max: 20, step: 1, color: 'text-emerald-600 dark:text-emerald-400', format: (v) => String(v) },
 ];
 
 function SearchDefaultsSettings() {
@@ -793,13 +793,13 @@ function SearchDefaultsSettings() {
       </div>
 
       {saveMutation.isError && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-rose-500/10 border-rose-500/30 text-rose-300">
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300">
           <XCircle className="w-4 h-4" /> 저장 실패: {String(saveMutation.error)}
         </div>
       )}
 
       {saveMutation.isSuccess && !dirty && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-emerald-500/10 border-emerald-500/30 text-emerald-300">
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-300">
           <CheckCircle2 className="w-4 h-4" /> 검색 기본값이 적용되었습니다
         </div>
       )}
@@ -893,7 +893,7 @@ function CacheSettings() {
         <div>
           <div className="flex justify-between text-xs mb-1">
             <span className="font-medium text-slate-400">캐시 히트 유사도 임계값</span>
-            <span className="font-mono text-indigo-400">{values.similarity_threshold.toFixed(2)}</span>
+            <span className="font-mono text-indigo-600 dark:text-indigo-400">{values.similarity_threshold.toFixed(2)}</span>
           </div>
           <input
             type="range" min={0.5} max={0.99} step={0.01}
@@ -915,7 +915,7 @@ function CacheSettings() {
         <div>
           <div className="flex justify-between text-xs mb-1">
             <span className="font-medium text-slate-400">캐시 유효 시간 (TTL)</span>
-            <span className="font-mono text-emerald-400">
+            <span className="font-mono text-emerald-600 dark:text-emerald-400">
               {ttlMinutes >= 60 ? `${Math.floor(ttlMinutes / 60)}시간 ${ttlMinutes % 60}분` : `${ttlMinutes}분`}
             </span>
           </div>
@@ -936,13 +936,13 @@ function CacheSettings() {
       </div>
 
       {saveMutation.isError && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-rose-500/10 border-rose-500/30 text-rose-300">
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300">
           <XCircle className="w-4 h-4" /> 저장 실패: {String(saveMutation.error)}
         </div>
       )}
 
       {saveMutation.isSuccess && !dirty && (
-        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-emerald-500/10 border-emerald-500/30 text-emerald-300">
+        <div className="flex items-center gap-2 px-4 py-3 rounded-lg text-sm border bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-300">
           <CheckCircle2 className="w-4 h-4" /> 캐시 설정이 적용되었습니다
         </div>
       )}

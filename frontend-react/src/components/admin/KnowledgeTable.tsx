@@ -136,7 +136,7 @@ function RequiredCategoryField({ categoryNames, value, onChange }: {
         {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       {keywordOnlyCategories.includes(value) && (
-        <p className="mt-1.5 text-xs text-amber-400">
+        <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
           이 업무구분은 검색 우선순위 문제가 있는 유형(코드표/DB스키마)입니다 — 짧은 코드 항목이면
           지식베이스보다 참조데이터(공통코드/DB스키마) 등록을 권장합니다.
         </p>
@@ -386,7 +386,7 @@ export function KnowledgeTable() {
           <AlertCircle className="w-4 h-4" />
           승인 대기
           {pendingItems.length > 0 && (
-            <span className="ml-1 text-[10px] bg-amber-900/60 text-amber-400 px-1.5 py-0.5 rounded-full">{pendingItems.length}</span>
+            <span className="ml-1 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-400 px-1.5 py-0.5 rounded-full">{pendingItems.length}</span>
           )}
         </button>
         <button
@@ -401,7 +401,7 @@ export function KnowledgeTable() {
           <Flag className="w-4 h-4" />
           리뷰 신호
           {reviewFlags.length > 0 && (
-            <span className="ml-1 text-[10px] bg-rose-900/60 text-rose-400 px-1.5 py-0.5 rounded-full">{reviewFlags.length}</span>
+            <span className="ml-1 text-[10px] bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-400 px-1.5 py-0.5 rounded-full">{reviewFlags.length}</span>
           )}
         </button>
       </div>
@@ -551,14 +551,14 @@ export function KnowledgeTable() {
                           </span>
                         )}
                         {item.category && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-900/40 text-violet-300 border border-violet-700/40 font-medium">{item.category}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 font-medium">{item.category}</span>
                         )}
                       </div>
                       <p className="text-xs text-slate-500 mt-0.5 truncate">{item.content.slice(0, 100)}...</p>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0 text-[10px] text-slate-500">
                       {searchMode === 'vector' && (item as KnowledgeItem & { similarity?: number }).similarity != null && (
-                        <span className="px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-700/40 font-mono">
+                        <span className="px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 font-mono">
                           {((item as KnowledgeItem & { similarity?: number }).similarity! * 100).toFixed(1)}%
                         </span>
                       )}
@@ -654,7 +654,7 @@ export function KnowledgeTable() {
           {canModifyNs && (
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1">
-                문서 우선순위: <span className={`font-medium ${editForm.base_weight >= 2 ? 'text-emerald-400' : editForm.base_weight >= 1.5 ? 'text-indigo-400' : 'text-slate-300'}`}>
+                문서 우선순위: <span className={`font-medium ${editForm.base_weight >= 2 ? 'text-emerald-600 dark:text-emerald-400' : editForm.base_weight >= 1.5 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-300'}`}>
                   {editForm.base_weight.toFixed(1)} — {weightLabel(editForm.base_weight)}
                 </span>
               </label>
@@ -663,7 +663,7 @@ export function KnowledgeTable() {
                 className="w-full accent-indigo-500" />
             </div>
           )}
-          {updateMutation.error && <p className="text-xs text-rose-400">{String(updateMutation.error)}</p>}
+          {updateMutation.error && <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>}
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="ghost" size="sm" onClick={() => { setShowEdit(false); setEditingId(null); }}>
               <X className="w-3.5 h-3.5" />{canModifyNs ? '취소' : '닫기'}
@@ -683,7 +683,7 @@ export function KnowledgeTable() {
       <Modal isOpen={showBulkConfirm} onClose={() => setShowBulkConfirm(false)} title="지식 일괄 삭제">
         <div className="space-y-4">
           <p className="text-sm text-slate-300">선택한 <span className="text-rose-400 font-semibold">{selectedIds.size}개</span> 지식 항목을 삭제하시겠습니까? 되돌릴 수 없습니다.</p>
-          {bulkDeleteMutation.error && <p className="text-xs text-rose-400">{String(bulkDeleteMutation.error)}</p>}
+          {bulkDeleteMutation.error && <p className="text-xs text-rose-600 dark:text-rose-400">{String(bulkDeleteMutation.error)}</p>}
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setShowBulkConfirm(false)}>취소</Button>
             <Button variant="danger" size="sm" loading={bulkDeleteMutation.isPending} onClick={() => bulkDeleteMutation.mutate(Array.from(selectedIds))}>삭제</Button>
@@ -724,7 +724,7 @@ export function KnowledgeTable() {
               <option value="teams">Teams</option>
             </select>
           </div>
-          {bulkUpdateMutation.error && <p className="text-xs text-rose-400">{String(bulkUpdateMutation.error)}</p>}
+          {bulkUpdateMutation.error && <p className="text-xs text-rose-600 dark:text-rose-400">{String(bulkUpdateMutation.error)}</p>}
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setShowBulkEdit(false)}>취소</Button>
             <Button
@@ -743,7 +743,7 @@ export function KnowledgeTable() {
       <Modal isOpen={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title="지식 삭제">
         <div className="space-y-4">
           <p className="text-sm text-slate-300">이 지식 항목을 삭제하시겠습니까? 되돌릴 수 없습니다.</p>
-          {deleteMutation.error && <p className="text-xs text-rose-400">{String(deleteMutation.error)}</p>}
+          {deleteMutation.error && <p className="text-xs text-rose-600 dark:text-rose-400">{String(deleteMutation.error)}</p>}
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>취소</Button>
             <Button variant="danger" size="sm" loading={deleteMutation.isPending}
@@ -871,7 +871,7 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
               <div key={chunk.idx}
                 className={`rounded-lg border px-3 py-2 transition-colors ${
                   chunk.selected
-                    ? 'border-indigo-600/60 bg-indigo-950/30'
+                    ? 'border-indigo-300 bg-indigo-50 dark:border-indigo-600/60 dark:bg-indigo-950/30'
                     : 'border-slate-700/60 bg-slate-900/30 opacity-50'
                 }`}
               >
@@ -988,10 +988,10 @@ function IngestionProgressModal({ jobId, onClose, onSettled }: {
 
           <div className="flex items-center gap-2 text-xs">
             <span className={`px-1.5 py-0.5 rounded font-medium ${
-              job.status === 'completed' ? 'bg-emerald-900/30 text-emerald-400' :
-              job.status === 'failed' ? 'bg-rose-900/30 text-rose-400' :
+              job.status === 'completed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
+              job.status === 'failed' ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' :
               job.status === 'cancelled' ? 'bg-slate-700 text-slate-400' :
-              'bg-amber-900/30 text-amber-400'
+              'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
             }`}>
               {job.status}
             </span>
@@ -1010,7 +1010,7 @@ function IngestionProgressModal({ jobId, onClose, onSettled }: {
             <p className="text-xs text-slate-500">중지되어 이미 등록된 항목도 함께 롤백(삭제)되었습니다.</p>
           )}
 
-          {cancelError && <p className="text-xs text-rose-400">{cancelError}</p>}
+          {cancelError && <p className="text-xs text-rose-600 dark:text-rose-400">{cancelError}</p>}
 
           <div className="flex gap-2 justify-end pt-1">
             <Button variant="ghost" size="sm" onClick={onClose}>닫기 (백그라운드 계속 진행)</Button>
@@ -1078,7 +1078,7 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
       {/* 지원 기능 안내 */}
       <div className="rounded-xl border border-slate-700/60 bg-slate-800/40 px-4 py-3 space-y-2.5 text-xs text-slate-400">
         <div className="flex items-center gap-2">
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-900/40 text-violet-300 border border-violet-700/40 shrink-0">AI 분석 지원</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 shrink-0">AI 분석 지원</span>
           <span className="text-slate-500">배지 기능 상세</span>
         </div>
         <div className="space-y-1.5 pl-1">
@@ -1104,17 +1104,17 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
             onClick={() => setActiveMethod(activeMethod === m.id ? null : m.id)}
             className={`text-left p-4 rounded-xl border transition-all ${
               activeMethod === m.id
-                ? 'border-indigo-500 bg-indigo-950/40 text-indigo-300'
+                ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
                 : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-slate-500 hover:bg-slate-800'
             }`}
           >
             <div className="flex items-start gap-3">
-              <div className={`mt-0.5 ${activeMethod === m.id ? 'text-indigo-400' : 'text-slate-400'}`}>{m.icon}</div>
+              <div className={`mt-0.5 ${activeMethod === m.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}`}>{m.icon}</div>
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-sm">{m.title}</span>
                   {m.badge && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-900/40 text-violet-300 border border-violet-700/40">{m.badge}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40">{m.badge}</span>
                   )}
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{m.desc}</p>
@@ -1160,10 +1160,10 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
                   onClick={() => isProcessing && setProgressJobId(j.id)}
                 >
                   <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
-                    j.status === 'completed' ? 'bg-emerald-900/30 text-emerald-400' :
-                    j.status === 'failed' ? 'bg-rose-900/30 text-rose-400' :
+                    j.status === 'completed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
+                    j.status === 'failed' ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' :
                     j.status === 'cancelled' ? 'bg-slate-700 text-slate-400' :
-                    'bg-amber-900/30 text-amber-400'
+                    'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
                   }`}>
                     {j.status === 'completed' ? <CheckCircle className="w-3 h-3" /> : j.status === 'failed' ? <AlertCircle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
                     {j.status}
@@ -1182,7 +1182,7 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
                   {j.pending_chunks > 0 && (
                     <button
                       onClick={(e) => { e.stopPropagation(); onGoToReview(); }}
-                      className="flex-shrink-0 text-[10px] font-medium bg-amber-900/40 text-amber-400 border border-amber-700/40 px-1.5 py-0.5 rounded hover:bg-amber-900/60"
+                      className="flex-shrink-0 text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-900/40 dark:text-amber-400 dark:border-amber-700/40 px-1.5 py-0.5 rounded hover:bg-amber-900/60"
                       title="기존 지식과 유사해 승인 대기 상태로 등록됨"
                     >
                       승인 대기 {j.pending_chunks}건
@@ -1329,12 +1329,12 @@ function ReviewTab({ items, canModify, onResolved }: {
                           onClick={() => setMergeTargetId(isSelected ? null : m.id)}
                           className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-colors ${
                             isSelected
-                              ? 'border-indigo-500 bg-indigo-900/20 text-slate-200'
+                              ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-slate-200'
                               : 'border-slate-700 bg-slate-900/40 text-slate-400 hover:bg-slate-800/60'
                           }`}
                         >
                           <div className="flex items-center gap-2">
-                            <span className="text-xs font-mono text-indigo-400 flex-shrink-0">
+                            <span className="text-xs font-mono text-indigo-600 dark:text-indigo-400 flex-shrink-0">
                               {(m.similarity * 100).toFixed(1)}%
                             </span>
                             {isSelected ? (
@@ -1359,7 +1359,7 @@ function ReviewTab({ items, canModify, onResolved }: {
               </div>
             </div>
 
-            {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
+            {actionError && <p className="text-xs text-rose-600 dark:text-rose-400">{actionError}</p>}
 
             {canModify ? (
               <div className="pt-2 border-t border-slate-700 flex gap-2 justify-end">
@@ -1435,7 +1435,7 @@ function ReviewFlagsTab({ flags, items, canModify, onEdit, onResolved }: {
         뿐이니, 내용을 확인해 고칠 필요가 있으면 바로 "수정"으로 고치고, 문제 없다고
         판단되면 "확인 완료"로 큐에서 빼세요.
       </p>
-      {error && <p className="text-xs text-rose-400">{error}</p>}
+      {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
       <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
         {flags.map((flag) => {
           const item = items.find((i) => i.id === flag.knowledge_id);
@@ -1570,15 +1570,15 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   };
 
   return (
-    <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-4">
-      <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><Upload className="w-4 h-4 text-indigo-400" />파일 업로드</h3>
+    <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-4">
+      <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><Upload className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />파일 업로드</h3>
 
       <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
 
       <div
         className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
           isDragging
-            ? 'border-indigo-400 bg-indigo-500/10'
+            ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-500/10'
             : 'border-slate-600 hover:border-indigo-500'
         }`}
         onClick={() => fileRef.current?.click()}
@@ -1596,8 +1596,8 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
           </div>
         ) : (
           <div>
-            <Upload className={`w-8 h-8 mx-auto mb-2 ${isDragging ? 'text-indigo-400' : 'text-slate-500'}`} />
-            <p className={`text-sm ${isDragging ? 'text-indigo-300 font-medium' : 'text-slate-400'}`}>
+            <Upload className={`w-8 h-8 mx-auto mb-2 ${isDragging ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500'}`} />
+            <p className={`text-sm ${isDragging ? 'text-indigo-700 dark:text-indigo-300 font-medium' : 'text-slate-400'}`}>
               {isDragging ? '여기에 파일을 놓아주세요' : '파일을 드래그하거나 클릭하여 선택'}
             </p>
             <p className="text-[10px] text-slate-600 mt-1">.pdf .md .txt .xlsx .xlsm .csv</p>
@@ -1614,8 +1614,8 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
         </div>
       </div>
 
-      {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
-      {error && <p className="text-xs text-rose-400">{error}</p>}
+      {done && <p className="text-sm text-emerald-600 dark:text-emerald-400 font-medium">{done}</p>}
+      {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
@@ -1686,8 +1686,8 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   };
 
   return (
-    <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-4">
-      <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><FileText className="w-4 h-4 text-indigo-400" />대량 텍스트 등록</h3>
+    <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-4">
+      <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />대량 텍스트 등록</h3>
 
       <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
 
@@ -1704,8 +1704,8 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
         </div>
       </div>
 
-      {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
-      {error && <p className="text-xs text-rose-400">{error}</p>}
+      {done && <p className="text-sm text-emerald-600 dark:text-emerald-400 font-medium">{done}</p>}
+      {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
@@ -1766,8 +1766,8 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
   });
 
   return (
-    <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-3">
-      <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><PenLine className="w-4 h-4 text-indigo-400" />직접 입력</h3>
+    <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-3">
+      <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><PenLine className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />직접 입력</h3>
 
       <RequiredCategoryField categoryNames={categoryNames} value={form.category}
         onChange={(v) => setForm((f) => ({ ...f, category: v }))} />
@@ -1778,7 +1778,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       </div>
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">
-          문서 우선순위: <span className={`font-medium ${form.base_weight >= 2 ? 'text-emerald-400' : form.base_weight >= 1.5 ? 'text-indigo-400' : 'text-slate-300'}`}>
+          문서 우선순위: <span className={`font-medium ${form.base_weight >= 2 ? 'text-emerald-600 dark:text-emerald-400' : form.base_weight >= 1.5 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-300'}`}>
             {form.base_weight.toFixed(1)} — {weightLabel(form.base_weight)}
           </span>
         </label>
@@ -1788,8 +1788,8 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
         <p className="text-[11px] text-slate-500 mt-1">1.0=기본 · 1.5+=보통 · 2.0+=높음(핵심 문서)</p>
       </div>
 
-      {done && <p className={`text-sm font-medium ${donePending ? 'text-amber-400' : 'text-emerald-400'}`}>{done}</p>}
-      {createMutation.isError && <p className="text-xs text-rose-400">{String(createMutation.error)}</p>}
+      {done && <p className={`text-sm font-medium ${donePending ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>{done}</p>}
+      {createMutation.isError && <p className="text-xs text-rose-600 dark:text-rose-400">{String(createMutation.error)}</p>}
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
@@ -1953,9 +1953,9 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
   };
 
   return (
-    <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-4">
+    <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-4">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-        <Globe className="w-4 h-4 text-indigo-400" />URL / Confluence 수집
+        <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />URL / Confluence 수집
       </h3>
 
       <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
@@ -1983,7 +1983,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
               <button onClick={() => { setPatInput(''); setShowPatModal(true); }}
                 className="text-xs text-indigo-400 hover:text-indigo-300">변경</button>
               <button onClick={handleDeletePat}
-                className="text-xs text-rose-400 hover:text-rose-300">삭제</button>
+                className="text-xs text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-300">삭제</button>
             </>
           ) : (
             <>
@@ -2011,8 +2011,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         </div>
       )}
 
-      {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
-      {error && <p className="text-xs text-rose-400">{error}</p>}
+      {done && <p className="text-sm text-emerald-600 dark:text-emerald-400 font-medium">{done}</p>}
+      {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
@@ -2114,7 +2114,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
                 autoFocus
               />
             </div>
-            {patError && <p className="text-xs text-rose-400">{patError}</p>}
+            {patError && <p className="text-xs text-rose-600 dark:text-rose-400">{patError}</p>}
             <div className="flex gap-2 justify-end">
               <Button variant="ghost" size="sm" onClick={() => setShowPatModal(false)}>취소</Button>
               <Button variant="primary" size="sm" onClick={handleSavePat}
@@ -2323,9 +2323,9 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
   };
 
   return (
-    <div className="bg-slate-800/60 rounded-xl border border-indigo-800/40 p-5 space-y-4">
+    <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-4">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-        <MessageSquare className="w-4 h-4 text-indigo-400" />Teams 메시지 수집
+        <MessageSquare className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />Teams 메시지 수집
       </h3>
 
       {/* 인증 섹션 */}
@@ -2340,7 +2340,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
             <RefreshCw className="w-3 h-3" /> 새로고침
           </button>
           <button onClick={handleLogout}
-            className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1">
+            className="text-xs text-rose-600 hover:text-rose-500 dark:text-rose-400 dark:hover:text-rose-300 flex items-center gap-1">
             <LogOut className="w-3 h-3" /> 로그아웃
           </button>
         </div>
@@ -2463,7 +2463,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
                       onClick={() => toggleMessage(m.id)}
                       className={`flex gap-3 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
                         selected
-                          ? 'bg-indigo-600/10 border border-indigo-500/40'
+                          ? 'bg-indigo-50 border border-indigo-300 dark:bg-indigo-600/10 dark:border-indigo-500/40'
                           : 'border border-transparent hover:bg-slate-800/60'
                       }`}
                     >
@@ -2483,7 +2483,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
                           {m.reply_to && (
                             <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                               m.reply_to.type === 'forward'
-                                ? 'bg-indigo-500/15 text-indigo-300'
+                                ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'
                                 : 'bg-slate-700/60 text-slate-400'
                             }`}>
                               {m.reply_to.type === 'forward' ? '전달' : '회신'}
@@ -2493,7 +2493,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
                         {m.reply_to?.preview && (
                           <div
                             className={`px-2.5 py-1.5 rounded border-l-2 bg-slate-800/60 ${
-                              m.reply_to.type === 'forward' ? 'border-indigo-400' : 'border-slate-500'
+                              m.reply_to.type === 'forward' ? 'border-indigo-500 dark:border-indigo-400' : 'border-slate-500'
                             }`}
                           >
                             {m.reply_to.from && (
@@ -2536,8 +2536,8 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
         </div>
       )}
 
-      {done && <p className="text-sm text-emerald-400 font-medium">{done}</p>}
-      {error && <p className="text-xs text-rose-400">{error}</p>}
+      {done && <p className="text-sm text-emerald-600 dark:text-emerald-400 font-medium">{done}</p>}
+      {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>

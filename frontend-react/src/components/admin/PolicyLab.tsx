@@ -160,7 +160,7 @@ export function PolicyLab() {
               title={`${METRIC_INFO[key].meaning} — 추천: ${METRIC_INFO[key].recommendedFor}`}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
                 on
-                  ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                  ? 'bg-indigo-50 border-indigo-300 text-indigo-700 dark:bg-indigo-500/20 dark:border-indigo-500/50 dark:text-indigo-300'
                   : 'bg-transparent border-slate-700 text-slate-500 hover:text-slate-400'
               }`}
             >
@@ -173,7 +173,7 @@ export function PolicyLab() {
 
       {/* 설명 패널 — 기본 접힘. A안/B안/저장전략/지표 정의가 전부 여기 하나로 모임 */}
       {showInfo && (
-        <div className="px-4 py-3 bg-indigo-900/20 border border-indigo-700/30 rounded-xl text-xs text-slate-300 leading-relaxed space-y-3">
+        <div className="px-4 py-3 bg-indigo-50 border border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-700/30 rounded-xl text-xs text-slate-300 leading-relaxed space-y-3">
           <div className="space-y-1.5">
             <p><b>A안(지식 그대로 저장)</b>: 정책서 내용을 통째로 문장으로 저장 — 다른 일반 지식 문서와 똑같이 취급</p>
             <p><b>B안(지금 우리가 쓰는 방식)</b>: 숫자·조건은 표(정확 조회)로, 설명글은 의미 검색(벡터)으로 나눠서 저장</p>
@@ -188,7 +188,7 @@ export function PolicyLab() {
                   title={s.detail}
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
                     s.active
-                      ? 'bg-emerald-500/10 border-emerald-600/40 text-emerald-300'
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-600/40 dark:text-emerald-300'
                       : 'bg-transparent border-slate-700 text-slate-600 border-dashed'
                   }`}
                 >
@@ -205,7 +205,7 @@ export function PolicyLab() {
               {ALL_METRICS.map((key) => (
                 <p key={key}>
                   <b className="text-slate-200">{METRIC_INFO[key].label}</b> — {METRIC_INFO[key].meaning}.{' '}
-                  <span className="text-indigo-300">추천: {METRIC_INFO[key].recommendedFor}</span>
+                  <span className="text-indigo-700 dark:text-indigo-300">추천: {METRIC_INFO[key].recommendedFor}</span>
                 </p>
               ))}
             </div>
@@ -221,7 +221,7 @@ export function PolicyLab() {
       )}
 
       {runMutation.isError && (
-        <div className="bg-rose-900/20 border border-rose-700/40 rounded-xl px-4 py-3 text-sm text-rose-300">
+        <div className="bg-rose-50 border border-rose-200 dark:bg-rose-900/20 dark:border-rose-700/40 rounded-xl px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
           {String(runMutation.error)}
         </div>
       )}
@@ -232,7 +232,7 @@ export function PolicyLab() {
               hit@K/집중도(A vs B, 깔끔한 쌍)와 Top-1/채널기여도(B 내부 채널별 세부)는
               모양이 달라서 한 표에 억지로 안 합치고 표 2개로 분리. */}
           {!lastResult && (
-            <p className="text-[11px] text-amber-400">⚠ 이번 세션엔 아직 재실행 안 함 — 가장 최근 저장된 결과(추이 그래프의 마지막 점)를 보여주는 중</p>
+            <p className="text-[11px] text-amber-600 dark:text-amber-400">⚠ 이번 세션엔 아직 재실행 안 함 — 가장 최근 저장된 결과(추이 그래프의 마지막 점)를 보여주는 중</p>
           )}
 
           {(visibleMetrics.has('hitK') || visibleMetrics.has('precision')) && (
@@ -329,7 +329,7 @@ export function PolicyLab() {
           {/* 실행 이력 추이 — "도구"라는 정체성의 핵심: 한 번 보고 끝나는 게 아니라 반복 실행 결과가 쌓인다는 걸 바로 보여줌 */}
           <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-4">
             <div className="flex items-center gap-1.5 mb-2">
-              <TrendingUp className="w-3.5 h-3.5 text-indigo-400" />
+              <TrendingUp className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
               <span className="text-xs font-medium text-slate-300">실행 이력 추이 (B안 hit@K, 최근 {trendAsc.length}회)</span>
             </div>
             {trendAsc.length >= 2 ? (

@@ -88,7 +88,7 @@ export default function Login() {
             </div>
 
             {error && (
-              <p className="text-sm text-rose-400 bg-rose-900/20 border border-rose-800/30 rounded-lg px-3 py-2">
+              <p className="text-sm text-rose-700 bg-rose-50 border border-rose-200 dark:text-rose-400 dark:bg-rose-900/20 dark:border-rose-800/30 rounded-lg px-3 py-2">
                 {error}
               </p>
             )}
@@ -100,7 +100,7 @@ export default function Login() {
 
           <p className="mt-6 text-center text-sm text-slate-500">
             계정이 없으신가요?{' '}
-            <Link to="/register" className="text-indigo-400 hover:text-indigo-300 font-medium">
+            <Link to="/register" className="text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300 font-medium">
               회원가입
             </Link>
           </p>
