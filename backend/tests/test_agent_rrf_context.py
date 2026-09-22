@@ -119,6 +119,21 @@ class TestBuildRrfContext:
         )
         text = agent._build_rrf_context([], policy_result)
         assert "배차 지연 시 안내 문구" in text
+
+    def test_prefers_raw_body_over_chunk_text_when_both_present(self, monkeypatch):
+        """test_policy_search.py의 동일 회귀 테스트와 짝 — 실 운영 경로(agent.py)도
+        같은 실수를 반복하지 않는지 별도로 확인(2026-09-22 B2C 실사고)."""
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        policy_result = PolicySearchResult(narratives=[
+            NarrativeHit(
+                item_id=1, logical_id=1, policy_name="B2C", category_path=[], status="active",
+                chunk_text="각인 옵션이 제공된다.",
+                raw_body="1. 자사몰만 적용\n2. SKU 기준 등록\n3. 주문선택옵션\n4. 각인옵션\n5. 선물포장옵션 등록 가능",
+                score=0.75,
+            ),
+        ])
+        text = agent._build_rrf_context([], policy_result)
+        assert "자사몰만 적용" in text, "raw_body가 아니라 chunk_text만 쓰고 있음 — 2026-09-22 수정 회귀"
         assert "신뢰도: 높음" in text
 
     def test_common_code_hit_included_as_rrf_axis(self, monkeypatch):

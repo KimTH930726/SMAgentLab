@@ -1157,6 +1157,21 @@ async def _migrate_ensure_ko_text_search_helpers(conn) -> None:
     """)
 
 
+async def _migrate_knowledge_heading_path(conn) -> None:
+    """`rag_knowledge.heading_path` 추가 — Parent-Child 문맥 유실 수정(2026-09-22).
+
+    산문형(주로 Confluence) 소스는 섹션 헤딩 계층이 있는데, 청킹 시 h1~h4 레벨이
+    `web_crawler.py`의 `_extract_heading_sections()`에서 이미 추출되고 있었지만
+    청크 단계에서 버려지고 있었다 — 실사고: `외부서비스DB`의 배달의민족/쿠팡이츠
+    섹션이 완전히 동일한 텍스트인데 어느 채널 얘기인지 구분할 정보가 청크 자체엔
+    없어서(부모 헤딩에만 있었음) 검색이 하나만 매칭시키면 구분 불가. 정책서
+    (policy_item.category_path)와 같은 패턴을 rag_knowledge에도 적용 — 단, 정책은
+    항목당 원문이 짧아 항상 완전한데 컨플루언스는 대량 문서를 쪼갠 것이라 "조상
+    헤딩 제목 목록"만 저장(원문 전체를 다시 저장하진 않음).
+    """
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS heading_path TEXT[]")
+
+
 async def _cleanup_stale_generating_messages(conn) -> None:
     """프로세스가 막 기동했으니, 'generating' 상태로 남은 메시지는 전부 이전
     프로세스가 스트리밍 도중 죽으면서 남긴 고아 행이다(지금 막 시작했으므로 이
@@ -1210,6 +1225,7 @@ async def _run_migrations() -> None:
         await _migrate_prompt_category_guides(conn)
         await _migrate_remove_fewshot(conn)
         await _migrate_ensure_ko_text_search_helpers(conn)
+        await _migrate_knowledge_heading_path(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

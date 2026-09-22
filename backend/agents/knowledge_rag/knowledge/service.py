@@ -759,6 +759,7 @@ async def _run_bulk_ingestion(
                     _EMBEDDING_MODEL_NAME,
                     item.get("confluence_page_id"),
                     item.get("confluence_version"),
+                    item.get("heading_path") or None,
                 ))
 
             async with get_conn() as conn:
@@ -768,8 +769,8 @@ async def _run_bulk_ingestion(
                          embedding, base_weight, category,
                          source_file, source_chunk_idx, source_type,
                          created_by_part, created_by_user_id, ingestion_job_id, status,
-                         embedding_model, confluence_page_id, confluence_version)
-                    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                         embedding_model, confluence_page_id, confluence_version, heading_path)
+                    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 """, rows)
                 created += len(rows)
                 pending_total += len(pending_chunk_indices) + len(local_pending)

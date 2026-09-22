@@ -1034,6 +1034,7 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
                 "category": body.category,
                 "confluence_page_id": page_id,
                 "confluence_version": fetched_version,
+                "heading_path": c.heading_path,
             })
 
     if pages_to_deprecate:

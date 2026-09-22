@@ -60,6 +60,12 @@ class NarrativeHit:
     policy_name: str
     category_path: list[str]
     status: str
+    # LLM이 분해한 조각 하나뿐 — 한 항목이 여러 조각으로 쪼개졌으면 앞뒤 조각(예: 적용
+    # 범위 조건)이 빠질 수 있다. **LLM 컨텍스트 조립에 새로 쓸 거면 이 필드 말고
+    # raw_body를 써라** — 2026-09-22 B2C 실사고(이 필드만 써서 "자사몰만 적용" 조건이
+    # 유실됨) 이후 두 소비처(search.py/agent.py) 다 raw_body로 전환·테스트 고정. 이
+    # 필드는 표시용(예: 인용카드의 "매칭된 부분 강조")처럼 일부러 좁은 조각이 필요할
+    # 때만 남겨둔 것.
     chunk_text: str
     score: float
     raw_body: str = ""  # 원문 전체 — 채팅 인용 카드의 "근거" 표시용(2026-09-06)
@@ -268,7 +274,14 @@ def build_policy_context(result: PolicySearchResult) -> str:
     for n in result.narratives:
         confidence = "높음" if n.score >= 0.6 else "보통" if n.score >= 0.4 else "낮음"
         category_str = f" [분류: {' > '.join(n.category_path)}]" if n.category_path else ""
-        parts.append(f"[정책 서술: {n.policy_name}]{category_str} (신뢰도: {confidence})\n{n.chunk_text}")
+        # chunk_text는 LLM이 분해한 조각 하나뿐이라, 한 항목이 여러 조각으로 쪼개졌을 때
+        # (예: "1. 자사몰만 적용" 같은 적용범위 조건이 뒤 조각들과 분리되는 경우) 그 조각만
+        # 보면 적용범위/전제조건이 빠진 채 LLM에 전달된다(2026-09-22 실측 확인 — 정책 378건
+        # 중 125건이 이렇게 여러 조각으로 쪼개져 있음). raw_body(원문 전체)는 이미 검색
+        # 시점에 같이 가져와뒀는데 인용카드 표시에만 쓰이고 여기선 안 쓰이고 있었다 —
+        # 새 조회 없이 원문 전체를 쓰도록 전환.
+        body = n.raw_body or n.chunk_text
+        parts.append(f"[정책 서술: {n.policy_name}]{category_str} (신뢰도: {confidence})\n{body}")
 
     return "--- 정책 데이터 ---\n" + "\n\n".join(parts)
 

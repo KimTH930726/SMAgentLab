@@ -201,6 +201,25 @@ class TestBuildPolicyContext:
         ])
         assert "신뢰도: 낮음" in search.build_policy_context(result)
 
+    def test_prefers_raw_body_over_chunk_text_when_both_present(self):
+        """회귀 방지(2026-09-22, B2C 실사고) — chunk_text는 LLM이 분해한 조각 하나뿐이라
+        한 항목이 여러 조각으로 쪼개졌을 때 적용범위 조건이 별도 조각으로 분리되면 그
+        조건 없이 LLM에 전달된다. raw_body(원문 전체)는 이미 검색 시점에 같이 fetch되고
+        있었는데도 이 함수가 chunk_text만 써서 실제로 정보 유실이 있었다 — chunk_text와
+        raw_body를 의도적으로 다르게 줘서, raw_body 쪽 내용이 실제로 쓰이는지 확인한다.
+        `raw_body` 필드가 dataclass 기본값(빈 문자열)으로 되돌아가는 것만으로는 이
+        테스트가 통과하지 않는다(폴백이 아니라 실제 선호를 검증)."""
+        result = search.PolicySearchResult(narratives=[
+            search.NarrativeHit(
+                item_id=1, logical_id=1, policy_name="B2C", category_path=[], status="active",
+                chunk_text="각인 옵션이 제공된다.",
+                raw_body="1. 자사몰만 적용\n2. SKU 기준 등록\n3. 주문선택옵션\n4. 각인옵션\n5. 선물포장옵션 등록 가능",
+                score=0.75,
+            ),
+        ])
+        text = search.build_policy_context(result)
+        assert "자사몰만 적용" in text, "raw_body(원문 전체)가 아니라 chunk_text만 쓰고 있음 — 2026-09-22 수정 회귀"
+
 
 class TestSelectCitedHit:
     """2026-09-07 — "근거가 너무 많이 보인다, 원문 정책 1건만 보여달라" + "10개를 참조해서

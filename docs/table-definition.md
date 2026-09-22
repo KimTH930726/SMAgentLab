@@ -67,6 +67,8 @@
 
 | 53 | `ops_system_config` | `INSERT (key, value) VALUES ('chat_retention_days', '0')` | 채팅 보존정책 스캐폴딩(거버넌스 선제 설계 검토 §3-3) — 기본값 비활성(0), 거버넌스팀이 실 보존일수를 정하면 값만 갱신하면 됨. 정리 로직은 `service/chat/helpers.py`의 `cleanup_old_conversations()` (v2.94) |
 
+| 54 | `rag_knowledge` | `ADD COLUMN IF NOT EXISTS heading_path TEXT[]` | Parent-Child 문맥 유실 방지(컨플루언스 전용) — 조상 헤딩 제목 목록, 결정론적 파서로 채움(LLM 미사용). 기존 25건은 `scripts/backfill_heading_path.py`로 소급 적용 (v2.98) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.

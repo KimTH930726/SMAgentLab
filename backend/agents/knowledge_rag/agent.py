@@ -76,7 +76,8 @@ def _build_rrf_context(
             else "보통" if rel >= th["knowledge_mid_score"]
             else "낮음"
         )
-        items.append((rrf_score(i), f"--- 문서 (점수: {rel:.4f}, 신뢰도: {confidence}) ---\n내용:\n{r.content}"))
+        heading_str = f"\n상위 맥락: {' > '.join(r.heading_path)}" if r.heading_path else ""
+        items.append((rrf_score(i), f"--- 문서 (점수: {rel:.4f}, 신뢰도: {confidence}) ---{heading_str}\n내용:\n{r.content}"))
     for i, p in enumerate(policy_result.params):
         value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
         condition_str = f" ({p.condition})" if p.condition else ""
@@ -85,7 +86,10 @@ def _build_rrf_context(
     for i, n in enumerate(policy_result.narratives):
         confidence = "높음" if n.score >= 0.6 else "보통" if n.score >= 0.4 else "낮음"
         category_str = f" [분류: {' > '.join(n.category_path)}]" if n.category_path else ""
-        items.append((rrf_score(i), f"[정책 서술: {n.policy_name}]{category_str} (신뢰도: {confidence})\n{n.chunk_text}"))
+        # chunk_text 대신 raw_body(원문 전체) 사용 이유는 service/policy/search.py의
+        # build_policy_context()와 동일 — 여러 조각으로 쪼개진 항목의 적용범위 조건 유실 방지.
+        body = n.raw_body or n.chunk_text
+        items.append((rrf_score(i), f"[정책 서술: {n.policy_name}]{category_str} (신뢰도: {confidence})\n{body}"))
     for i, c in enumerate(common_codes or []):
         items.append((rrf_score(i), f"[공통코드 · 정확 매칭: {c['group_code_name']}] {c['code_id']} = {c['code_name']}"))
     for i, d in enumerate(db_columns or []):

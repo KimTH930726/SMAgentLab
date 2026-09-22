@@ -71,6 +71,7 @@ class RetrievalResult:
     v_score: float = field(default=0.0)
     k_score: float = field(default=0.0)
     category: Optional[str] = field(default=None)
+    heading_path: list[str] = field(default_factory=list)
 
 
 def relevance_score(r: RetrievalResult) -> float:
@@ -228,7 +229,7 @@ async def search_knowledge(
                   AND to_tsvector('simple', policy_strip_ko(k.content)) @@ q.tsq
             )
             SELECT k.id, n.name AS namespace,
-                   k.content, k.base_weight, k.category,
+                   k.content, k.base_weight, k.category, k.heading_path,
                    COALESCE(vs.v_score, 0.0) AS v_score,
                    COALESCE(ks.k_score, 0.0) AS k_score,
                    -- 카테고리별로 RDB(키워드) 검색을 쓸지 벡터 검색을 쓸지 여기서 갈린다
@@ -272,6 +273,7 @@ async def search_knowledge(
             base_weight=r["base_weight"],
             v_score=float(r["v_score"]), k_score=float(r["k_score"]),
             final_score=score, category=r["category"],
+            heading_path=list(r["heading_path"] or []),
         ))
     return results
 
@@ -308,6 +310,8 @@ def build_context(results: list[RetrievalResult]) -> str:
             "높음" if rel >= th["knowledge_high_score"] else "보통" if rel >= th["knowledge_mid_score"] else "낮음"
         )
         part = [f"--- 문서 {i} (점수: {rel:.4f}, 신뢰도: {confidence}) ---"]
+        if r.heading_path:
+            part.append(f"상위 맥락: {' > '.join(r.heading_path)}")
         part.append(f"내용:\n{r.content}")
         parts.append("\n".join(part))
 
