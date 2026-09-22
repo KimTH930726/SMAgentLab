@@ -66,6 +66,7 @@ async def create_query_log(
     has_results: bool, mapped_term: Optional[str] = None,
     message_id: Optional[int] = None,
     had_context: bool = True,
+    user_id: Optional[int] = None,
 ) -> int:
     is_real_answer = answer and answer != LLM_UNAVAILABLE_MSG
     # LLM이 마커 문구로 "시작"하는 답변만 준다는 가정(예전 startswith 체크)은 실제로는
@@ -88,10 +89,10 @@ async def create_query_log(
         ns_id = await resolve_namespace_id(conn, namespace)
         row = await conn.fetchrow(
             """
-            INSERT INTO ops_query_log (namespace_id, question, answer, status, mapped_term, message_id)
-            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+            INSERT INTO ops_query_log (namespace_id, question, answer, status, mapped_term, message_id, user_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id
             """,
-            ns_id, question, answer, status, mapped_term, message_id,
+            ns_id, question, answer, status, mapped_term, message_id, user_id,
         )
     return row["id"]
 
@@ -144,6 +145,39 @@ async def cleanup_resolved_query_logs() -> int:
     return deleted
 
 
+async def cleanup_old_conversations() -> int:
+    """`chat_retention_days`(ops_system_config)보다 오래 활동이 없는 대화를 삭제.
+
+    거버넌스 선제 설계 검토(docs/tech/governance-design-review.md §3-3) — 지금까지
+    ops_message/ops_conversation은 시간 기준 보존정책이 전혀 없었고(§2-3), 오직
+    cleanup_old_messages()의 네임스페이스당 100건 캡만 있었다. 실제 보존일수는
+    거버넌스팀이 아직 확정하지 않아, 기본값 '0'(비활성)일 땐 아무것도 지우지 않는다 —
+    임의로 숫자를 정해 실 사용자 대화를 지우지 않기 위함. "마지막 메시지 기준"으로
+    판단(conversation.created_at만 보면 오래전에 시작했지만 계속 쓰는 대화가 삭제될
+    수 있음). ops_message는 ops_conversation의 ON DELETE CASCADE로 함께 삭제된다.
+    """
+    async with get_conn() as conn:
+        retention_days_raw = await conn.fetchval(
+            "SELECT value FROM ops_system_config WHERE key = 'chat_retention_days'",
+        )
+        retention_days = int(retention_days_raw) if retention_days_raw else 0
+        if retention_days <= 0:
+            return 0
+        result = await conn.execute(
+            """
+            DELETE FROM ops_conversation c WHERE NOT EXISTS (
+                SELECT 1 FROM ops_message m
+                WHERE m.conversation_id = c.id AND m.created_at > NOW() - INTERVAL '1 day' * $1
+            ) AND c.created_at < NOW() - INTERVAL '1 day' * $1
+            """,
+            retention_days,
+        )
+    deleted = int(result.split()[-1]) if result else 0
+    if deleted > 0:
+        logger.info("cleanup: 대화 %d건 삭제 (%d일간 활동 없음)", deleted, retention_days)
+    return deleted
+
+
 async def post_save_tasks(conv_id: int, namespace: Optional[str] = None) -> None:
     from service.llm.factory import get_llm_provider
     tasks = [memory.maybe_summarize(conv_id, get_llm_provider())]
@@ -151,6 +185,7 @@ async def post_save_tasks(conv_id: int, namespace: Optional[str] = None) -> None
         if namespace:
             tasks.append(cleanup_old_messages(namespace))
         tasks.append(cleanup_resolved_query_logs())
+        tasks.append(cleanup_old_conversations())
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for r in results:
         if isinstance(r, Exception):

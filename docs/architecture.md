@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.91)
+# Ops-Navigator 시스템 아키텍처 (v2.96)
 
 ## 개요
 
@@ -11,6 +11,106 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.96: **RAG 거버넌스 감사 v2 후속 — 레드팀 검토 통과분만 적용.** "수집 원자적
+  활성화"는 감사 직후 Quick Win으로 분류했다가 레드팀 재검토 결과 제외 — 대량 job을
+  단일 트랜잭션으로 묶으면 임베딩에 걸리는 몇 분 동안 락 경합/타임아웃 위험이 있어,
+  2단계(스테이징 삽입 후 일괄 전환) 설계가 필요한 별도 과제로 재분류.
+  ① **수집 작업 고아 정리** — `main.py`에 `_cleanup_orphaned_ingestion_jobs()` 신설,
+  `_cleanup_stale_generating_messages()`와 동일 논리(프로세스 막 기동 = 이 프로세스가
+  만들었을 리 없는 'processing' job은 전부 이전 프로세스가 죽으며 남긴 고아)로 시작
+  시 `failed` 처리. 전제: 백엔드 단일 인스턴스(수평 확장 시 재검토 필요, 주석에 명시).
+  실제 고아 job을 만들어 재시작 후 `failed` + 에러 메시지로 정정됨을 DB로 직접 확인.
+  ② **지식 중복 검토 시 `reviewed_at`/`owner` 실제 기록** — `resolve_duplicate()`에
+  `reviewer_username` 인자 추가, approve/reject/merge 3개 분기 모두 스탬프. 이전엔
+  두 컬럼이 스키마에만 있고 어디서도 안 쓰여 "누가 언제 승인/반려/병합했는지" 감사
+  추적이 불가능했음(권한 분리 자체를 새로 만든 건 아님 — 같은 네임스페이스 쓰기
+  권한자면 여전히 누구나 처리 가능, 기록만 남김). 실 E2E로 확인 — pending_review
+  테스트 행을 실제 `/api/knowledge/{id}/resolve` API로 승인 처리 후 `reviewed_at`/
+  `owner='admin'`이 정확히 기록됨을 DB로 확인.
+  ③ **부분 색인 노출 현상 회귀 테스트화** — `tests/test_ingestion.py`에
+  `test_batches_commit_independently_before_job_completes` 추가. 배치 크기를 1로
+  강제해 `rag_knowledge` INSERT가 배치마다 독립적으로 커밋되고 각 행이 즉시
+  `status='active'`가 됨을 캡처 — 동작을 고치는 게 아니라 지금 동작을 기준선으로
+  남겨서, 나중에 원자적 활성화를 구현할 때 회귀 여부를 이 테스트로 확인할 수 있게 함.
+  상세 진단: `docs/tech/rag-governance-audit.md`.
+- v2.95: **RAG 거버넌스 감사 후속 — "무조건 이득" 4개 항목 적용** (레드팀 검토 후 우선순위
+  재조정, `docs/tech/rag-governance-audit.md` 참고).
+  ① **정책 컨텍스트에 `category_path` 포함**(`service/policy/search.py`의
+  `build_policy_context()`, `agent.py`의 `_build_rrf_context()`) — DB엔 있었지만 LLM이
+  실제로 보는 텍스트에서는 빠져있던 분류 정보를 추가. 실측 확인: "최소 주문금액"이
+  배달의민족(7,000원)/온라인주문결제(15,000원)/땡겨요(12,000원)로 실제로 갈리는
+  정책인데, 수정 전엔 이 셋이 구분 없이 뒤섞여 LLM에 전달됐음 — `[분류: 1.배달의민족 >
+  주문 > 주문 수량/금액 제한]` 식으로 태깅되도록 수정.
+  ② **임베딩 모델 메타데이터 하드코딩 버그 발견·수정** — `knowledge/service.py`의
+  `_EMBEDDING_MODEL_NAME`이 v2.72 임베딩 모델 교체(mpnet→KURE-v1) 이후에도 옛 모델명
+  문자열로 하드코딩된 채 남아있어, 그 이후 등록된 활성 지식 18건이 실제로는 KURE-v1
+  (1024차원)로 임베딩됐으면서도 metadata엔 옛 모델명이 찍히는 조용한 오염이 있었음
+  (`vector_dims(embedding)`으로 실제 차원 대조해 확인, 검색 동작 자체엔 영향 없었음 —
+  메타데이터만 어긋남). 하드코딩 대신 `core/config.py`의 `settings.embedding_model`을
+  그대로 참조하도록 수정 + 기존 18건 일괄 정정(1회성). 재발 방지로 `lifespan()` 시작
+  시 활성 지식 중 설정과 다른 `embedding_model`이 있으면 경고 로그(`_warn_if_embedding_
+  model_stale`) — 실제로 불일치 1건을 주입해 경고가 정확히 뜨는 것까지 확인 후 원복.
+  ③ **읽기 시점 네임스페이스 접근 로그(강제 아님)** — 감사에서 발견된 P0(채팅/검색
+  경로에 파트 기반 접근 통제가 전혀 없음, 쓰기 경로에만 있었음)에 대해, 곧바로 차단부터
+  하지 않고 `core/dependencies.py`에 `log_cross_part_namespace_read()` 신설 —
+  `/api/chat`, `/api/chat/stream`, `/api/chat/debug` 3곳에서 호출, 파트가 다른 네임스페이스
+  조회 시 차단 없이 경고 로그만 남김(`_KEYWORD_ONLY_CATEGORIES` 때와 동일하게, 강제
+  전환 전에 실제 사용 패턴부터 실측). 실 E2E로 확인: 임시로 네임스페이스 소유 파트를
+  지정하고 다른 파트 사용자로 조회 → 200 정상 응답 + 정확한 경고 로그 확인, 이후 원복.
+  ④ **ABSTAIN 판정 임계값 오프라인 파일럿**(`backend/scripts/abstain_pilot.py`, 프로덕션
+  미반영) — 골든셋 89문항(전부 실제 정답 존재) 대상으로 후보 임계값별 false-abstain
+  비율을 실측: 0.4(기존 "보통" 신뢰도 라벨과 동일 기준) = **0% false abstain**, 0.6
+  ("높음" 기준) = 3.4%(3건, 전부 "~에만 따로 적용되는 규정" 유형 질문) false abstain.
+  향후 ABSTAIN 계층을 실제로 만들 때 0.4를 1차 후보로 쓸 근거 확보 — 단, 이 골든셋엔
+  "진짜 답이 없는" 사례가 없어 true-abstain 정확도는 이 파일럿으로 측정 불가(별도 과제).
+  **하지 않기로 한 것**: `rag_knowledge.supersedes_id` 연결은 착수 전 재검토 결과 제외 —
+  컨플루언스 재수집이 페이지 단위로 구버전 N개를 배치 deprecate하고 신버전 M개를 별도
+  삽입하는 구조라(N≠M 가능) 단일값 FK로 1:1 계보를 만들 자연스러운 방법이 없고, 억지로
+  매칭 규칙을 만들면 오히려 잘못된 계보 정보가 남을 위험 — 검색 정확성은 이미
+  `status='deprecated'`로 문제없이 보장되고 있어 이건 조사 설계가 더 필요한 항목으로
+  재분류(B축, 무조건 이득 아님).
+- v2.94: **보존정책 — `ops_conversation`/`ops_message` 나이 기반 삭제 스캐폴딩(기본 비활성)**
+  — 거버넌스 선제 설계 검토(`docs/tech/governance-design-review.md` §3-3). 기존엔 이 두
+  테이블에 시간 기준 보존정책이 전혀 없었고(§2-3), `cleanup_old_messages()`의
+  네임스페이스당 100건 캡만 있었음. `ops_system_config`에 `chat_retention_days` 키
+  추가(기본값 `'0'` = 비활성 — 보존일수는 거버넌스팀이 아직 확정 안 해서 임의로 실
+  대화를 지우지 않도록 안전한 기본값 선택). `cleanup_old_conversations()`
+  (`service/chat/helpers.py`)가 이 값이 0보다 클 때만, "마지막 메시지 기준으로 N일간
+  활동 없는 대화"를 삭제(대화 생성일이 아니라 최근 활동 기준 — 오래전 시작했지만 계속
+  쓰는 대화가 삭제되는 걸 방지). `ops_message`는 `ON DELETE CASCADE`로 함께 삭제.
+  기존 `post_save_tasks()`의 확률적 하우스키핑 트리거(`CLEANUP_SAMPLE_RATE`)에 그대로
+  얹음(전용 스케줄러 신규 도입 없음 — VOC 스케줄러는 외부 API 폴링용이라 이 문제와
+  성격이 다름, 기존 같은 도메인의 `cleanup_resolved_query_logs()`와 동일 패턴 재사용).
+  실 E2E로 검증 — 비활성(0) 상태에서 10일 지난 대화가 그대로 남는 것 확인, 이후
+  7일로 활성화하고 재실행해 "10일간 활동 없는 대화"는 메시지까지 cascade 삭제,
+  "생성은 오래됐지만 1시간 전 메시지가 있는 대화"는 보존되는 것 확인 후 다시
+  비활성(0)으로 복구. **실제 보존일수는 거버넌스팀 확정 전까지 `'0'`으로 유지** —
+  숫자가 정해지면 `UPDATE ops_system_config SET value = '<일수>' WHERE key =
+  'chat_retention_days'`로 활성화(전용 관리 UI는 아직 없음, 최소 스캐폴딩 범위).
+- v2.93: **접근권한 세분화 — `viewer` 역할 최소 스캐폴딩** — 거버넌스 선제 설계 검토
+  (`docs/tech/governance-design-review.md` §3-2 A안). 기존엔 역할이 `admin`/`user`
+  2단계뿐이고 쓰기 권한은 오직 파트 일치 여부로만 갈렸음(같은 파트면 전원 쓰기 가능,
+  `owner_part_id`가 NULL인 공통 네임스페이스는 로그인만 하면 전원 쓰기 가능) — 파트
+  내부에서 "이 사람은 조회만" 같은 세분화가 불가능했음. `core/dependencies.py`의
+  `check_part_ownership()`/`check_namespace_ownership()`에 `role == 'viewer'`면 파트
+  일치 여부와 무관하게 항상 403을 반환하는 분기를 admin 체크 다음으로 추가(스키마 변경
+  없음 — `ops_user.role`은 원래 제약 없는 VARCHAR). 프론트 `useNamespaceAccess`도 동일
+  규칙 반영. `UserManager.tsx`는 아직 viewer를 지정하는 전용 UI가 없어(의도적 — 최소
+  스캐폴딩 범위, 실 수요 생기면 추가) 기존 admin/user 토글 버튼이 실수로 viewer를
+  관리자로 승격시키지 않도록 viewer 행만 비활성 배지로 별도 표시. 실 E2E로 검증 —
+  임시 사용자를 `owner_part_id IS NULL`인 공통 네임스페이스 소속으로 만들고
+  `role='viewer'`로 설정한 뒤 실제 로그인 토큰으로 PATCH(네임스페이스 rename) 시도 →
+  403 확인, 같은 토큰으로 GET(네임스페이스 목록) → 200 확인.
+- v2.92: **질의응답 감사로그 — `ops_query_log.user_id` 추가** — 거버넌스 선제 설계 검토
+  (`docs/tech/governance-design-review.md` §3-1 A안)의 첫 단계. 기존엔 `ops_query_log`에
+  `user_id`가 없어 "누가 언제 뭘 물었고 뭘 근거로 답했는지"를 재구성할 조인 경로 자체가
+  끊겨 있었음. `create_query_log()`에 `user_id` 인자 추가, 호출부 3곳(`agent.py`의
+  시맨틱 캐시 히트/일반 스트리밍 경로, `router.py`의 비스트리밍 `/api/chat`) 모두 이미
+  스코프에 있던 인증 사용자(`user["id"]`)를 그대로 전달하도록 연결. 기존 행은 당시
+  누가 물었는지 알 길이 없어 `ops_conversation.user_id`처럼 admin으로 소급 귀속하지
+  않고 NULL로 남김(감사로그를 사실과 다르게 채우지 않음). 실 E2E로 비스트리밍/스트리밍
+  두 경로 모두 검증 — 실제 로그인 사용자(admin, id=1)로 질문 전송 후 해당
+  `ops_query_log` 행의 `user_id`가 정확히 1로 기록됨을 확인.
 - v2.91: **시맨틱 캐시 키 오염 버그 수정 (실사고)** — 사용자가 실제 대화에서 발견:
   같은 대화에서 "쿠폰 회수 정책 알려줘" 다음에 전혀 무관한 "정책적으로 최대 재고
   갯수가 몇개?"를 물었는데, 완전히 무관한 이전 답(쿠폰 회수 정책)이 그대로 재사용됨.

@@ -110,7 +110,10 @@ async def resolve_duplicate(knowledge_id: int, body: ResolveDuplicateRequest, us
     ns = await service.get_knowledge_namespace(knowledge_id)
     await _require_resource_namespace(ns, user, "Knowledge not found")
     try:
-        return await service.resolve_duplicate(knowledge_id, body.action, body.target_id, body.content)
+        return await service.resolve_duplicate(
+            knowledge_id, body.action, body.target_id, body.content,
+            reviewer_username=user["username"],
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

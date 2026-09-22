@@ -263,10 +263,12 @@ def build_policy_context(result: PolicySearchResult) -> str:
     for p in result.params:
         value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
         condition_str = f" ({p.condition})" if p.condition else ""
-        parts.append(f"[정책 파라미터 · 정확 일치: {p.policy_name}{condition_str}] {p.param_name} = {value_str}")
+        category_str = f" [분류: {' > '.join(p.category_path)}]" if p.category_path else ""
+        parts.append(f"[정책 파라미터 · 정확 일치: {p.policy_name}{condition_str}]{category_str} {p.param_name} = {value_str}")
     for n in result.narratives:
         confidence = "높음" if n.score >= 0.6 else "보통" if n.score >= 0.4 else "낮음"
-        parts.append(f"[정책 서술: {n.policy_name}] (신뢰도: {confidence})\n{n.chunk_text}")
+        category_str = f" [분류: {' > '.join(n.category_path)}]" if n.category_path else ""
+        parts.append(f"[정책 서술: {n.policy_name}]{category_str} (신뢰도: {confidence})\n{n.chunk_text}")
 
     return "--- 정책 데이터 ---\n" + "\n\n".join(parts)
 

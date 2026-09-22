@@ -428,6 +428,14 @@ function UserSection() {
                     >
                       <Badge color="indigo">슈퍼어드민</Badge>
                     </span>
+                  ) : u.role === 'viewer' ? (
+                    // 조회 전용 계정 — 아직 관리자 화면에서 직접 지정하는 UI는 없음(DB 직접
+                    // 설정, 실 수요 생기면 전용 선택 UI 추가). 클릭 토글은 admin/user 2단계만
+                    // 전제하고 있어 viewer에 그대로 적용하면 클릭 한 번에 관리자로 승격되는
+                    // 사고가 날 수 있어 여기서는 비활성 배지로만 표시.
+                    <span title="조회 전용 계정 — 역할 변경은 DB에서 직접" className="inline-block opacity-80">
+                      <Badge color="slate">뷰어</Badge>
+                    </span>
                   ) : (
                     <span
                       role="button"

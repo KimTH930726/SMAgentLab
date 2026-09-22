@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from core.database import get_conn, resolve_namespace_id
-from core.dependencies import get_current_user
+from core.dependencies import get_current_user, log_cross_part_namespace_read
 from core.security import get_user_llm_credentials
 from service.chat.schemas import (
     ChatRequest, ChatResponse, KnowledgeResult,
@@ -175,6 +175,7 @@ async def _safe_generate(
 
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
+    await log_cross_part_namespace_read(req.namespace, user)
     user_creds = _resolve_user_credentials(user)
     conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"], req.agent_type)
 
@@ -200,7 +201,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     )
     await create_query_log(
         req.namespace, req.question, answer, len(pipe.results) > 0, pipe.mapped_term, msg_id,
-        had_context=bool(pipe.context.strip()),
+        had_context=bool(pipe.context.strip()), user_id=user["id"],
     )
     t2 = asyncio.create_task(post_save_tasks(conv_id, req.namespace))
     t2.add_done_callback(lambda f: logger.warning("post_save_tasks 실패: %s", f.exception()) if not f.cancelled() and f.exception() else None)
@@ -217,6 +218,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 
 @router.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
+    await log_cross_part_namespace_read(req.namespace, user)
     user_creds = _resolve_user_credentials(user)
     conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"], req.agent_type)
     await _cleanup_ghost_messages(conv_id)
@@ -338,6 +340,7 @@ async def delete_ghost_message(msg_id: int, user: dict = Depends(get_current_use
 
 @router.post("/api/chat/debug", response_model=DebugSearchResponse)
 async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
+    await log_cross_part_namespace_read(req.namespace, user)
     query_vec = await embedding_service.embed(req.question)
     pipe = await _run_pipeline(
         req.namespace, req.question, query_vec, req.w_vector, req.w_keyword, req.top_k,

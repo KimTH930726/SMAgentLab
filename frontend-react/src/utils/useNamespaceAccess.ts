@@ -40,7 +40,8 @@ export function useNamespaceAccess() {
   }, [namespaces, selectedNs]);
 
   const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
-  const canModifyNs = user?.role === 'admin' || !nsOwnerPart || nsOwnerPart === user?.part;
+  const canModifyNs = user?.role === 'admin'
+    || (user?.role !== 'viewer' && (!nsOwnerPart || nsOwnerPart === user?.part));
 
   return { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, namespaces, nsDetails, user };
 }

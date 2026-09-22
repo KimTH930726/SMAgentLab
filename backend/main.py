@@ -366,6 +366,15 @@ async def _migrate_system_tables(conn) -> None:
         ('cache_ttl', '1800')
         ON CONFLICT (key) DO NOTHING
     """)
+    # 채팅 보존정책(거버넌스 선제 설계 검토 §3-3) — 보존일수는 거버넌스팀 확정 전이라
+    # '0'(비활성) 기본값으로 시드. 실제 숫자가 정해지면
+    # `UPDATE ops_system_config SET value = '<일수>' WHERE key = 'chat_retention_days'`로
+    # 활성화(전용 관리 UI는 아직 없음 — 최소 스캐폴딩 범위, 실 요청 시 추가).
+    await conn.execute("""
+        INSERT INTO ops_system_config (key, value) VALUES
+        ('chat_retention_days', '0')
+        ON CONFLICT (key) DO NOTHING
+    """)
 
     # ── 프롬프트 관리 테이블 ──────────────────────────────────────────
     await conn.execute("""
@@ -544,6 +553,21 @@ async def _migrate_query_log_resolution(conn) -> None:
     # 없으므로 created_at으로 소급 채운다(완벽하진 않지만 NULL보다 유의미한 정렬 순서).
     await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ")
     await conn.execute("UPDATE ops_query_log SET resolved_at = created_at WHERE status = 'resolved' AND resolved_at IS NULL")
+
+
+async def _migrate_query_log_user(conn) -> None:
+    """질의응답 감사로그 — 누가 물었는지 연결.
+
+    이 컬럼이 없으면 "누가 언제 뭘 물었고 뭘 근거로 답했는지"를 재구성할 방법이 없다
+    (거버넌스 선제 설계 검토, docs/tech/governance-design-review.md §2-1). 기존 행은
+    당시 누가 물었는지 알 길이 없어 NULL로 남긴다(ops_conversation.user_id처럼 admin으로
+    소급 귀속하지 않음 — 감사로그를 사실과 다르게 채우면 안 됨).
+    """
+    await conn.execute(
+        "ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS user_id "
+        "INT REFERENCES ops_user(id) ON DELETE SET NULL"
+    )
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_query_log_user ON ops_query_log (user_id)")
 
 
 async def _migrate_email_voc_tables(conn) -> None:
@@ -1147,6 +1171,24 @@ async def _cleanup_stale_generating_messages(conn) -> None:
         logger.info("[Startup] 이전 프로세스에서 멈춘 'generating' 메시지 정리: %s", result)
 
 
+async def _cleanup_orphaned_ingestion_jobs(conn) -> None:
+    """`_cleanup_stale_generating_messages()`와 같은 논리 — 프로세스가 막 기동했으니
+    'processing' 상태로 남은 수집 작업(rag_ingestion_job)은 전부 이전 프로세스가 죽으면서
+    남긴 고아 행이다. 이 프로젝트엔 별도 워커/큐가 없고 `asyncio.create_task()`로 같은
+    프로세스 안에서만 수집이 돌아가므로(RAG 거버넌스 감사 v2, 2026-09-22), 프로세스가
+    죽으면 재개할 방법 자체가 없다 — 최소한 화면에 "진행 중"으로 영원히 멈춰있지 않도록
+    정리한다. 전제: 백엔드가 단일 인스턴스로 실행됨(수평 확장 시 다른 인스턴스가 실제로
+    처리 중인 job까지 잘못 정리할 위험 — 그땐 이 전제부터 재검토할 것).
+    """
+    result = await conn.execute(
+        "UPDATE rag_ingestion_job SET status = 'failed', "
+        "error_message = COALESCE(error_message, '') || '이전 프로세스 재시작으로 중단됨', "
+        "completed_at = NOW() WHERE status = 'processing'"
+    )
+    if result and "UPDATE 0" not in result:
+        logger.info("[Startup] 이전 프로세스에서 멈춘 수집 작업(processing) 정리: %s", result)
+
+
 async def _run_migrations() -> None:
     """기존 DB 호환용 스키마 마이그레이션 (멱등)."""
     async with get_conn() as conn:
@@ -1158,6 +1200,7 @@ async def _run_migrations() -> None:
         await _migrate_duplicate_review(conn)
         await _migrate_knowledge_lifecycle(conn)
         await _migrate_query_log_resolution(conn)
+        await _migrate_query_log_user(conn)
         await _migrate_email_voc_tables(conn)
         await _migrate_policy_tables(conn)
         await _migrate_ref_data_tables(conn)
@@ -1168,6 +1211,7 @@ async def _run_migrations() -> None:
         await _migrate_remove_fewshot(conn)
         await _migrate_ensure_ko_text_search_helpers(conn)
         await _cleanup_stale_generating_messages(conn)
+        await _cleanup_orphaned_ingestion_jobs(conn)
 
 
 def _warn_if_insecure_defaults() -> None:
@@ -1188,6 +1232,24 @@ def _warn_if_insecure_defaults() -> None:
         )
 
 
+async def _warn_if_embedding_model_stale(conn) -> None:
+    """settings.embedding_model이 바뀐 뒤에도 재임베딩(scripts/migrate_embedding_model.py)을
+    깜빡하면, 검색은 예전 임베딩으로 계속 실행되면서 아무 경고 없이 조용히 낮은 품질로
+    돌아간다 — 실제로 2026-09-22, `_EMBEDDING_MODEL_NAME` 하드코딩이 실제 설정과
+    어긋나 있던 걸 발견하고서야 18건이 잘못 라벨링된 걸 알았다(벡터 자체는 정상,
+    metadata만 어긋남 — 재발 방지용 가시성 체크)."""
+    count = await conn.fetchval(
+        "SELECT COUNT(*) FROM rag_knowledge WHERE status = 'active' AND embedding_model != $1",
+        settings.embedding_model,
+    )
+    if count:
+        logger.warning(
+            "[임베딩] 활성 지식 %d건의 embedding_model이 현재 설정(%s)과 다릅니다 — "
+            "재임베딩(scripts/migrate_embedding_model.py) 필요 여부를 확인하세요.",
+            count, settings.embedding_model,
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _warn_if_insecure_defaults()
@@ -1195,6 +1257,7 @@ async def lifespan(_app: FastAPI):
     await _run_migrations()
     async with get_conn() as conn:
         await sem_cache.load_config_from_db(conn)
+        await _warn_if_embedding_model_stale(conn)
     embedding_service.load()
     if settings.reranker_enabled:
         reranker_service.load(settings.reranker_model)

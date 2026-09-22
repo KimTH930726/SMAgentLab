@@ -2,7 +2,7 @@
 export interface User {
   id: number;
   username: string;
-  role: 'admin' | 'user';
+  role: 'admin' | 'user' | 'viewer';
   part: string;
   is_active: boolean;
   has_llm_credentials: boolean;

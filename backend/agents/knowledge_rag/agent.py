@@ -80,10 +80,12 @@ def _build_rrf_context(
     for i, p in enumerate(policy_result.params):
         value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
         condition_str = f" ({p.condition})" if p.condition else ""
-        items.append((rrf_score(i), f"[정책 파라미터 · 정확 일치: {p.policy_name}{condition_str}] {p.param_name} = {value_str}"))
+        category_str = f" [분류: {' > '.join(p.category_path)}]" if p.category_path else ""
+        items.append((rrf_score(i), f"[정책 파라미터 · 정확 일치: {p.policy_name}{condition_str}]{category_str} {p.param_name} = {value_str}"))
     for i, n in enumerate(policy_result.narratives):
         confidence = "높음" if n.score >= 0.6 else "보통" if n.score >= 0.4 else "낮음"
-        items.append((rrf_score(i), f"[정책 서술: {n.policy_name}] (신뢰도: {confidence})\n{n.chunk_text}"))
+        category_str = f" [분류: {' > '.join(n.category_path)}]" if n.category_path else ""
+        items.append((rrf_score(i), f"[정책 서술: {n.policy_name}]{category_str} (신뢰도: {confidence})\n{n.chunk_text}"))
     for i, c in enumerate(common_codes or []):
         items.append((rrf_score(i), f"[공통코드 · 정확 매칭: {c['group_code_name']}] {c['code_id']} = {c['code_name']}"))
     for i, d in enumerate(db_columns or []):
@@ -168,7 +170,7 @@ class KnowledgeRagAgent(AgentBase):
                     "policy_citations": cached_citations,
                 }
                 yield {"type": "token", "data": cached["answer"]}
-                await create_query_log(namespace, query, cached["answer"], bool(cached.get("results")), cached.get("mapped_term"), msg_id, had_context=bool(cached.get("results")))
+                await create_query_log(namespace, query, cached["answer"], bool(cached.get("results")), cached.get("mapped_term"), msg_id, had_context=bool(cached.get("results")), user_id=user.get("id"))
                 yield {"type": "done", "message_id": msg_id, "status": "completed"}
                 return
 
@@ -302,7 +304,7 @@ class KnowledgeRagAgent(AgentBase):
                 }
             if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
                 await update_inhouse_conv_id(conversation_id, new_inhouse_conv_id)
-            await create_query_log(namespace, query, final_answer, has_results, mapped_term, msg_id, had_context=had_context)
+            await create_query_log(namespace, query, final_answer, has_results, mapped_term, msg_id, had_context=had_context, user_id=user.get("id"))
 
             # ── Semantic Cache 저장 (LLM 정상 응답 시만, 결과 유무 무관) ──
             if final_answer != LLM_UNAVAILABLE_MSG:

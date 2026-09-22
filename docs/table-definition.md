@@ -63,6 +63,10 @@
 | 50 | - | (스키마 변경 없음 — `retrieval.py`/`agent.py` 로직만) | 지식 채택 게이트를 `final_score`(가중치 반영값) 대신 `relevance_score()`(base_weight를 나눠 걷어낸 원점수)로 전환 — 신규 지식 base_weight 기본값이 1.0이라 결합점수가 항상 2배가 돼 완전 무관한 질문도 채택 임계치를 통과하던 버그 실측 확인("오늘 날씨 어때?"가 후보 20/20건 통과). `_KEYWORD_ONLY_CATEGORIES`(DB/공통코드)는 ts_rank가 코사인과 스케일이 달라 같은 임계치를 못 써서 `is_adopted()`에서 매칭 여부(이진)로 별도 판정 (v2.88) |
 | 51 | `rag_knowledge` | `UPDATE status='deprecated' WHERE id=20` (1회성 데이터 이전, `backend/scripts/migrate_id20_to_refdata.py`) | "공통코드" 카테고리 지식 1건(id=20, 딜리버스 DB)을 `ref_common_code`(252건, #43에서 스키마만 선추가돼 있었으나 0건이던 테이블)로 이전 — `_KEYWORD_ONLY_CATEGORIES`가 벡터축과 같은 테이블 안에서 final_score로 경쟁하다 보니 ts_rank 스케일이 작아 `ORDER BY ... LIMIT top_k` 단계에서부터 후보 풀에 못 들어가는 구조적 문제가 실측 확인됨(자기 매칭 대상 질문 "DS14가 뭐야?"에서 27건 중 27등, top_k=5 후보에 전혀 없음). CMDB 데이터도 같은 성격(정확 조회용 RDB)이라 이 문제가 반복될 것으로 예상 — `rag_knowledge` SQL을 더 복잡하게 만드는 대신 원래 이 용도로 만들어졌던 별도 테이블로 완전히 분리해 처음부터 독립 RRF 축으로 둠. `service/refdata/service.py`의 `search_common_codes()`/`search_db_columns()`(#43에서 구현은 됐지만 chat에서 호출을 안 하고 있었음)에도 같은 조사 제거 함수 적용 + `code_id`를 검색 대상 텍스트에 추가(기존엔 설명 텍스트만 검색돼 코드값 자체로는 못 찾았음), `has_refdata()` 게이트 신규, `agent.py`의 `_build_rrf_context()`에 네 번째 RRF 축으로 연결 (v2.89) |
 
+| 52 | `ops_query_log` | `ADD COLUMN IF NOT EXISTS user_id INT REFERENCES ops_user(id) ON DELETE SET NULL`, `CREATE INDEX idx_query_log_user` | 질의응답 감사로그 — 누가 물었는지 연결(거버넌스 선제 설계 검토 §3-1 A안). 기존 행은 admin으로 소급 귀속하지 않고 NULL 유지(감사로그 사실 왜곡 방지) (v2.92) |
+
+| 53 | `ops_system_config` | `INSERT (key, value) VALUES ('chat_retention_days', '0')` | 채팅 보존정책 스캐폴딩(거버넌스 선제 설계 검토 §3-3) — 기본값 비활성(0), 거버넌스팀이 실 보존일수를 정하면 값만 갱신하면 됨. 정리 로직은 `service/chat/helpers.py`의 `cleanup_old_conversations()` (v2.94) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.

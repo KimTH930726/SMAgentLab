@@ -204,6 +204,50 @@ class TestBulkCreateKnowledge:
             # embed_batch가 호출됨
             fake_emb.embed_batch.assert_called_once_with(["지식1", "지식2"])
 
+    @pytest.mark.asyncio
+    async def test_batches_commit_independently_before_job_completes(self):
+        """현재 동작 문서화(2026-09-22, RAG 거버넌스 감사 v2) — 배치별로 독립 커밋되고,
+        각 행은 삽입 즉시 status='active'가 되어 검색에 노출된다. job 전체가
+        'completed'로 바뀌는 건 모든 배치가 끝난 뒤 딱 한 번뿐이라, 배치가 여러 개면
+        "일부만 처리된 job"의 앞쪽 배치 내용이 뒤쪽 배치가 아직 진행 중인 동안에도
+        이미 검색 가능한 상태가 된다(원자적 활성화 아님 — 알려진 개선 대상, 지금은
+        고치지 않고 이 테스트로 현재 동작만 캡처해둔다. 고칠 때 이 테스트가 기준선).
+        """
+        executemany_calls = []
+
+        fake_conn = MagicMock()
+        fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
+        fake_conn.__aexit__ = AsyncMock(return_value=False)
+        fake_conn.fetchval = AsyncMock(side_effect=[1, False, False])  # job_id, cancel_requested x2
+        fake_conn.fetch = AsyncMock(return_value=[])
+
+        async def record_executemany(query, rows):
+            executemany_calls.append((query, rows))
+        fake_conn.executemany = AsyncMock(side_effect=record_executemany)
+        fake_conn.execute = AsyncMock()
+
+        fake_emb = MagicMock()
+        fake_emb.embed_batch = AsyncMock(side_effect=lambda texts: [[0.1] * 768 for _ in texts])
+
+        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
+             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
+             patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1):
+            from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
+            await bulk_create_knowledge(
+                "test-ns",
+                [{"content": "지식1", "category": "공통지식"}, {"content": "지식2", "category": "공통지식"}],
+                background=False,
+            )
+
+        # 배치 크기 1로 강제했으니 rag_knowledge INSERT executemany가 배치마다(=2번)
+        # 독립적으로 호출됨 — 한 번의 트랜잭션으로 묶이지 않는다는 뜻
+        knowledge_inserts = [c for c in executemany_calls if "INSERT INTO rag_knowledge" in c[0]]
+        assert len(knowledge_inserts) == 2
+        # 각 배치의 행이 곧바로 status='active'로 삽입됨(뒤 배치의 완료를 기다리지 않음)
+        for _, rows in knowledge_inserts:
+            assert rows[0][11] == "active"  # rows 튜플의 12번째 값이 status 컬럼
+
 
 # ─── CSV 파싱 로직 테스트 (router 레벨) ──────────────────────────────────────
 

@@ -1,6 +1,7 @@
 """공통 의존성 — 인증, 권한 체크."""
 from __future__ import annotations
 
+import logging
 import time
 
 from fastapi import Depends, HTTPException, status
@@ -8,6 +9,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from core.database import get_conn
 from core.security import decode_token
+
+logger = logging.getLogger(__name__)
 
 _bearer_scheme = HTTPBearer()
 
@@ -76,10 +79,16 @@ async def get_current_admin(user: dict = Depends(get_current_user)) -> dict:
 def check_part_ownership(resource_part: str | None, user: dict) -> None:
     """리소스의 created_by_part와 현재 사용자의 part를 비교.
 
-    Admin이면 무조건 통과, 같은 파트면 통과, 다르면 403.
+    Admin이면 무조건 통과, viewer면 파트 무관 항상 조회만(403), 같은 파트면 통과,
+    다르면 403.
     """
     if user["role"] == "admin":
         return
+    if user["role"] == "viewer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="조회 전용 계정은 데이터를 수정/삭제할 수 없습니다.",
+        )
     if resource_part is None or resource_part != user["part"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -90,11 +99,16 @@ def check_part_ownership(resource_part: str | None, user: dict) -> None:
 async def check_namespace_ownership(namespace: str, user: dict) -> None:
     """네임스페이스의 owner_part_id와 현재 사용자의 part_id를 비교.
 
-    Admin이면 무조건 통과, 같은 파트면 통과, 다르면 403.
-    owner_part_id가 없으면(NULL) 모든 로그인 사용자 허용.
+    Admin이면 무조건 통과, viewer면 파트 무관 항상 조회만(403), 같은 파트면 통과,
+    다르면 403. owner_part_id가 없으면(NULL) admin 외엔 viewer 여부만 관건.
     """
     if user["role"] == "admin":
         return
+    if user["role"] == "viewer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="조회 전용 계정은 이 네임스페이스를 수정할 수 없습니다.",
+        )
 
     async with get_conn() as conn:
         owner_part_id = await conn.fetchval(
@@ -109,4 +123,25 @@ async def check_namespace_ownership(namespace: str, user: dict) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="이 네임스페이스에 대한 권한이 없습니다.",
+        )
+
+
+async def log_cross_part_namespace_read(namespace: str, user: dict) -> None:
+    """채팅/검색(읽기) 경로 전용 — 파트가 다른 네임스페이스를 조회해도 막지는 않고
+    기록만 한다(거버넌스 선제 설계 검토 §4 P0 발견: 쓰기 경로엔 `check_namespace_ownership`
+    이 있지만 읽기·채팅 경로엔 아무 권한 검사가 없어 로그인만 하면 누구나 아무 네임스페이스나
+    조회 가능했음). 강제 차단부터 배포하면 지금까지 있었을지 모르는 정당한 cross-part
+    조회 사용 패턴을 갑자기 막아버릴 위험이 있어(`_KEYWORD_ONLY_CATEGORIES` 때와 동일한
+    이유로) 먼저 로그 온리로 실측한 뒤에 강제 전환 여부를 판단한다."""
+    if user["role"] == "admin":
+        return
+    async with get_conn() as conn:
+        owner_part_id = await conn.fetchval(
+            "SELECT owner_part_id FROM ops_namespace WHERE name = $1", namespace,
+        )
+    if owner_part_id is not None and owner_part_id != user["part_id"]:
+        logger.warning(
+            "[읽기ACL 미강제] user_id=%s(role=%s, part_id=%s)가 다른 파트 소유 네임스페이스 "
+            "'%s'(owner_part_id=%s)를 조회함 — 지금은 차단 안 함, 실측용 기록",
+            user["id"], user["role"], user["part_id"], namespace, owner_part_id,
         )

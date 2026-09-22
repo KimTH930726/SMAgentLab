@@ -7,6 +7,7 @@ from typing import Optional
 
 import numpy as np
 
+from core.config import settings
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 from agents.knowledge_rag.knowledge.retrieval import find_similar_active_knowledge, get_thresholds, is_keyword_only_category
@@ -310,7 +311,7 @@ async def get_duplicate_matches(knowledge_id: int) -> list[dict]:
 
 async def resolve_duplicate(
     knowledge_id: int, action: str, target_id: Optional[int] = None,
-    content: Optional[str] = None,
+    content: Optional[str] = None, *, reviewer_username: Optional[str] = None,
 ) -> dict:
     """승인 대기 지식에 대한 리뷰어 판단 처리.
 
@@ -319,6 +320,11 @@ async def resolve_duplicate(
     - merge: 매칭된 기존 지식(target_id, 미지정 시 유사도 1위)의 내용을 교체(재임베딩)
       — 지식 현행화. content가 주어지면(리뷰어가 병합 화면에서 직접 다듬은 최종 내용)
       그걸 쓰고, 없으면 새 지식의 원본 내용을 그대로 쓴다. 새 지식 자신은 반려로 마감.
+
+    `reviewer_username`을 `owner`/`reviewed_at`에 기록한다(2026-09-22 추가) — 이전엔 이
+    두 컬럼이 스키마에만 있고 어디서도 안 쓰여 "누가 언제 이 판단을 내렸는지" 감사 추적이
+    불가능했다(RAG 거버넌스 감사에서 발견). 승인/반려 권한 자체를 분리하는 건 아니고
+    (같은 네임스페이스 쓰기 권한자면 누구나 여전히 처리 가능), 기록만 남긴다.
     """
     if action not in ("approve", "reject", "merge"):
         raise ValueError(f"알 수 없는 action: {action}")
@@ -332,12 +338,18 @@ async def resolve_duplicate(
 
     if action == "approve":
         async with get_conn() as conn:
-            await conn.execute("UPDATE rag_knowledge SET status = 'active' WHERE id = $1", knowledge_id)
+            await conn.execute(
+                "UPDATE rag_knowledge SET status = 'active', reviewed_at = NOW(), owner = $2 WHERE id = $1",
+                knowledge_id, reviewer_username,
+            )
         return {"id": knowledge_id, "status": "active"}
 
     if action == "reject":
         async with get_conn() as conn:
-            await conn.execute("UPDATE rag_knowledge SET status = 'rejected' WHERE id = $1", knowledge_id)
+            await conn.execute(
+                "UPDATE rag_knowledge SET status = 'rejected', reviewed_at = NOW(), owner = $2 WHERE id = $1",
+                knowledge_id, reviewer_username,
+            )
             # 이 지식으로 "해결됨" 처리된 질의가 있었다면 연결을 끊는다 — 반려된 내용이
             # 통계 화면에 계속 "해결된 답변"으로 남아있는 걸 막기 위함
             await conn.execute(
@@ -375,7 +387,10 @@ async def resolve_duplicate(
                 "WHERE id = $3 RETURNING id, content",
                 merge_content, str(embedding), target_id,
             )
-            await conn.execute("UPDATE rag_knowledge SET status = 'rejected' WHERE id = $1", knowledge_id)
+            await conn.execute(
+                "UPDATE rag_knowledge SET status = 'rejected', reviewed_at = NOW(), owner = $2 WHERE id = $1",
+                knowledge_id, reviewer_username,
+            )
         # 반려되는 pending 지식이 이미 어떤 질의를 "해결"한 상태였다면, 실제 내용이 옮겨간
         # target으로 연결을 옮겨줘야 통계 화면이 계속 유효한 내용을 보여준다
         await conn.execute(
@@ -597,7 +612,13 @@ async def get_glossary_namespace(glossary_id: int) -> Optional[str]:
 # ─── 벌크 등록 (Ingestion) ──────────────────────────────────────────────────
 
 _INGEST_BATCH_SIZE = 50
-_EMBEDDING_MODEL_NAME = "paraphrase-multilingual-mpnet-base-v2"
+# 실제 임베딩 계산에 쓰이는 모델(core/config.py)과 반드시 같은 값이어야 한다 — v2.72에서
+# mpnet→KURE-v1로 실제 임베딩 모델을 교체했을 때 이 상수는 하드코딩된 옛 이름 그대로
+# 남아있어서, 그 이후 등록된 지식 18건이 실제로는 KURE-v1(1024차원)로 임베딩됐으면서도
+# metadata엔 옛 모델명으로 잘못 기록되는 조용한 데이터 오염이 있었다(2026-09-22 발견,
+# `vector_dims(embedding)`으로 실제 차원 대조해 확인). 하드코딩 대신 설정값을 그대로
+# 참조해 앞으로는 이 둘이 어긋날 수 없게 한다.
+_EMBEDDING_MODEL_NAME = settings.embedding_model
 
 # asyncio.create_task()로 만든 태스크는 강한 참조가 없으면 GC 대상이 될 수 있음
 # (asyncio 공식 문서 권고) — 완료될 때까지 참조를 유지한다.
