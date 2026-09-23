@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp, Database, Sparkles, Search, X, Check } from 'lucide-react';
-import { getPolicyItems, approvePolicyItem, rejectPolicyItem } from '../../api/policy';
+import { ChevronDown, ChevronUp, Database, Sparkles, Search, X, Check, Pencil } from 'lucide-react';
+import { getPolicyItems, approvePolicyItem, rejectPolicyItem, updatePolicyParam, updatePolicyNarrative } from '../../api/policy';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
@@ -73,6 +73,30 @@ export function PolicyItemBrowser() {
   const rejectMutation = useMutation({
     mutationFn: (itemId: number) => rejectPolicyItem(itemId, selectedNs),
     onSuccess: invalidateItems,
+    onError: (err: Error) => alert(err.message),
+  });
+
+  // 반려된 항목의 파라미터/서술 수정(2026-09-23) — "반려하면 그냥 데이터를 버리는데?"라는
+  // 지적으로 추가. 저장하면 서버가 자동으로 검토대기로 되돌린다(edit.py 참고) — 그래서
+  // 성공 시 목록만 invalidate하면 배지가 알아서 갱신된다.
+  const [editingParamId, setEditingParamId] = useState<number | null>(null);
+  const [paramEditForm, setParamEditForm] = useState({ name: '', condition: '', value: '', unit: '' });
+  const [editingChunkId, setEditingChunkId] = useState<number | null>(null);
+  const [chunkEditForm, setChunkEditForm] = useState('');
+
+  const updateParamMutation = useMutation({
+    mutationFn: (paramId: number) => updatePolicyParam(paramId, selectedNs, {
+      name: paramEditForm.name.trim(),
+      condition: paramEditForm.condition.trim() || null,
+      value: paramEditForm.value.trim() || null,
+      unit: paramEditForm.unit.trim() || null,
+    }),
+    onSuccess: () => { invalidateItems(); setEditingParamId(null); },
+    onError: (err: Error) => alert(err.message),
+  });
+  const updateNarrativeMutation = useMutation({
+    mutationFn: (chunkId: number) => updatePolicyNarrative(chunkId, selectedNs, chunkEditForm.trim()),
+    onSuccess: () => { invalidateItems(); setEditingChunkId(null); },
     onError: (err: Error) => alert(err.message),
   });
 
@@ -244,19 +268,69 @@ export function PolicyItemBrowser() {
                       {item.raw_body}
                     </div>
                   </div>
+                  {item.status === 'rejected' && canModifyNs && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400/90 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-lg px-3 py-2">
+                      반려된 항목입니다 — 아래 파라미터/서술을 고쳐 저장하면 다시 검토대기 상태로
+                      전환되어 재승인을 받을 수 있습니다.
+                    </p>
+                  )}
                   {item.params.length > 0 && (
                     <div>
                       <p className="flex items-center gap-1.5 text-xs font-medium text-cyan-700 dark:text-cyan-400 mb-2">
                         <Database className="w-3.5 h-3.5" />파라미터 (RDB 정확조회) — policy_param {item.params.length}건
                       </p>
                       <div className="space-y-1.5">
-                        {item.params.map((p) => (
-                          <div key={p.id} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
-                            <span className="font-medium text-slate-200">{p.name}</span>
-                            {p.condition && <span className="text-slate-500"> ({p.condition})</span>}
-                            <span className="text-cyan-600 dark:text-cyan-300"> = {p.value}{p.unit ? ` ${p.unit}` : ''}</span>
-                          </div>
-                        ))}
+                        {item.params.map((p) => {
+                          const canEdit = item.status === 'rejected' && canModifyNs;
+                          if (editingParamId === p.id) {
+                            return (
+                              <div key={p.id} className="bg-slate-900 border border-cyan-500/50 rounded-lg px-3 py-2 space-y-1.5">
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  <input type="text" placeholder="항목명 *" value={paramEditForm.name}
+                                    onChange={(e) => setParamEditForm((f) => ({ ...f, name: e.target.value }))}
+                                    className="col-span-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
+                                  <input type="text" placeholder="조건" value={paramEditForm.condition}
+                                    onChange={(e) => setParamEditForm((f) => ({ ...f, condition: e.target.value }))}
+                                    className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
+                                  <input type="text" placeholder="값" value={paramEditForm.value}
+                                    onChange={(e) => setParamEditForm((f) => ({ ...f, value: e.target.value }))}
+                                    className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
+                                  <input type="text" placeholder="단위" value={paramEditForm.unit}
+                                    onChange={(e) => setParamEditForm((f) => ({ ...f, unit: e.target.value }))}
+                                    className="col-span-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
+                                </div>
+                                <div className="flex justify-end gap-2">
+                                  <button type="button" onClick={() => setEditingParamId(null)}
+                                    className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+                                    <X className="w-3 h-3" />취소
+                                  </button>
+                                  <button type="button"
+                                    disabled={!paramEditForm.name.trim() || updateParamMutation.isPending}
+                                    onClick={() => updateParamMutation.mutate(p.id)}
+                                    className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-cyan-300 text-cyan-700 bg-cyan-50 hover:bg-cyan-100 dark:border-cyan-600/40 dark:text-cyan-300 dark:bg-cyan-500/10 disabled:opacity-50">
+                                    <Check className="w-3 h-3" />{updateParamMutation.isPending ? '저장 중...' : '저장'}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div key={p.id} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 flex items-center justify-between gap-2">
+                              <span>
+                                <span className="font-medium text-slate-200">{p.name}</span>
+                                {p.condition && <span className="text-slate-500"> ({p.condition})</span>}
+                                <span className="text-cyan-600 dark:text-cyan-300"> = {p.value}{p.unit ? ` ${p.unit}` : ''}</span>
+                              </span>
+                              {canEdit && (
+                                <button type="button"
+                                  onClick={() => { setEditingParamId(p.id); setParamEditForm({ name: p.name, condition: p.condition ?? '', value: p.value ?? '', unit: p.unit ?? '' }); }}
+                                  className="p-1 rounded text-slate-500 hover:text-cyan-600 hover:bg-cyan-50 dark:hover:text-cyan-400 dark:hover:bg-cyan-950/40 flex-shrink-0">
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -266,11 +340,42 @@ export function PolicyItemBrowser() {
                         <Sparkles className="w-3.5 h-3.5" />서술 (벡터 검색) — policy_chunk {item.narratives.length}건
                       </p>
                       <div className="space-y-1.5">
-                        {item.narratives.map((c) => (
-                          <div key={c.id} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed">
-                            {c.chunk_text}
-                          </div>
-                        ))}
+                        {item.narratives.map((c) => {
+                          const canEdit = item.status === 'rejected' && canModifyNs;
+                          if (editingChunkId === c.id) {
+                            return (
+                              <div key={c.id} className="bg-slate-900 border border-violet-500/50 rounded-lg px-3 py-2 space-y-1.5">
+                                <textarea rows={3} value={chunkEditForm}
+                                  onChange={(e) => setChunkEditForm(e.target.value)}
+                                  className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-violet-500 resize-y" />
+                                <div className="flex justify-end gap-2">
+                                  <button type="button" onClick={() => setEditingChunkId(null)}
+                                    className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+                                    <X className="w-3 h-3" />취소
+                                  </button>
+                                  <button type="button"
+                                    disabled={!chunkEditForm.trim() || updateNarrativeMutation.isPending}
+                                    onClick={() => updateNarrativeMutation.mutate(c.id)}
+                                    className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-violet-300 text-violet-700 bg-violet-50 hover:bg-violet-100 dark:border-violet-600/40 dark:text-violet-300 dark:bg-violet-500/10 disabled:opacity-50">
+                                    <Check className="w-3 h-3" />{updateNarrativeMutation.isPending ? '저장 중...' : '저장'}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div key={c.id} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed flex items-start justify-between gap-2">
+                              <span>{c.chunk_text}</span>
+                              {canEdit && (
+                                <button type="button"
+                                  onClick={() => { setEditingChunkId(c.id); setChunkEditForm(c.chunk_text); }}
+                                  className="p-1 rounded text-slate-500 hover:text-violet-600 hover:bg-violet-50 dark:hover:text-violet-400 dark:hover:bg-violet-950/40 flex-shrink-0">
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

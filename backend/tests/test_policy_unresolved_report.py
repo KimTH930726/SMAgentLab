@@ -150,6 +150,63 @@ class TestGetUnresolvedSummary:
         assert len(call.args) == 2  # sql + ns_id만
 
 
+class TestGetUnresolvedSegment:
+    """2026-09-23 신규 — suggest-param API가 편입 없이 segment 내용만 먼저 봐야 해서 분리."""
+
+    def _make_conn(self, unresolved_segments):
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.fetchrow = AsyncMock(return_value={"unresolved_segments": json.dumps(unresolved_segments)})
+        return conn
+
+    @pytest.mark.asyncio
+    async def test_namespace_not_found_raises(self, monkeypatch):
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=self._make_conn([])))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=None))
+        with pytest.raises(ValueError, match="네임스페이스"):
+            await unresolved_report.get_unresolved_segment("없는곳", 1, 0)
+
+    @pytest.mark.asyncio
+    async def test_item_not_found_raises(self, monkeypatch):
+        conn = self._make_conn([])
+        conn.fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+        with pytest.raises(ValueError, match="정책 항목"):
+            await unresolved_report.get_unresolved_segment("ns", 999, 0)
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_index_raises(self, monkeypatch):
+        conn = self._make_conn([{"text": "내용", "reason": "사유"}])
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+        with pytest.raises(ValueError, match="segment_index"):
+            await unresolved_report.get_unresolved_segment("ns", 1, 5)
+
+    @pytest.mark.asyncio
+    async def test_returns_text_and_reason(self, monkeypatch):
+        conn = self._make_conn([{"text": "주문취소", "reason": "문맥 없는 단일 용어"}])
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+
+        text, reason = await unresolved_report.get_unresolved_segment("ns", 1, 0)
+
+        assert text == "주문취소"
+        assert reason == "문맥 없는 단일 용어"
+
+    @pytest.mark.asyncio
+    async def test_missing_reason_returns_none(self, monkeypatch):
+        conn = self._make_conn([{"text": "내용"}])
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+
+        text, reason = await unresolved_report.get_unresolved_segment("ns", 1, 0)
+
+        assert text == "내용"
+        assert reason is None
+
+
 class TestPromoteSegmentToNarrative:
     """2026-09-16 신규 — "조회만 있고 액션이 없다"는 지적으로 추가된 유일한 쓰기 액션."""
 

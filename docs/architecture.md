@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.105)
+# Ops-Navigator 시스템 아키텍처 (v2.106)
 
 ## 개요
 
@@ -11,6 +11,23 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.106: **정책 검토 UI 후속 — 반려 항목 수정→재검토 + RDB 편입 LLM 프리필.** v2.105
+  실사용 피드백 두 가지: (1) "반려하면 그냥 데이터를 버리는데?" — 리서치로 확인해보니
+  `policy_param`/`policy_chunk`는 프로젝트 전체에서 한 번도 UPDATE/DELETE된 적 없는
+  append-only 데이터였음(임포트·미분류편입 시점 INSERT뿐). 신규 `service/policy/edit.py`:
+  `update_param()`/`update_narrative()` — **반려(rejected) 상태 항목에만** 허용(API
+  레벨에서도 강제, 프론트 게이팅 우회 방지), 저장하면 자동으로 `pending_review`로 되돌려
+  재승인 기회를 준다. narrative 수정은 텍스트가 검색 대상이라 반드시 재임베딩. 신규
+  엔드포인트 `PATCH /api/policy/params/{id}`, `PATCH /api/policy/narratives/{id}`.
+  프론트: `PolicyItemBrowser.tsx`가 반려 항목의 param/narrative를 인라인 편집 가능하게
+  개편(`GlossaryTable.tsx`의 인라인 토글 패턴), 반려 안내 배너 추가.
+  (2) "파라미터로 편입 폼에 값 넣을 사람이 없겠다" — `decompose.py`에 `suggest_param_fields()`
+  추가(임포트 시점 분해 프롬프트의 param 추출 규칙을 세그먼트 1건짜리로 축소 재사용,
+  `generate_once`+코드펜스 제거+JSON 파싱, 실패 시 예외 없이 `None`). 신규 엔드포인트
+  `POST /api/policy/unresolved/{id}/suggest-param`. 프론트: "파라미터로 편입" 폼을 열면
+  자동으로 호출해 프리필(사람은 확인 후 저장만 누르거나 틀린 부분만 수정). 실 데이터로
+  반려→편집→재검토대기→재승인 전 과정과 LLM 프리필을 curl+실제 화면 클릭으로 검증. 백엔드
+  테스트 23건 신규(459→482), `npx tsc --noEmit` 통과.
 - v2.105: **정책 검토 UI — 승인/반려 + 미분류 RDB 편입 (docs/policy-doc-pipeline-plan.md
   §6 "검토 UI" 미착수 항목 착수).** 사용자 지적 두 가지: (1) "pending 필터링이 없다" —
   실제 원인은 필터 부재가 아니라 정책 임포트 이후 `status='pending_review'`를 바꾸는

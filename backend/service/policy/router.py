@@ -6,11 +6,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
-from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review
+from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review, edit, decompose
 from service.policy.schemas import (
     ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
     Track2RunHistoryOut, PipelineStatsOut, PromoteSegmentRequest, PromoteSegmentOut,
-    PromoteParamRequest, ItemActionRequest,
+    PromoteParamRequest, ItemActionRequest, UpdateParamRequest, UpdateNarrativeRequest,
+    ItemStatusOut, SuggestParamRequest, SuggestParamOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,61 @@ async def promote_unresolved_segment_to_param(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return PromoteSegmentOut(remaining_segments=remaining)
+
+
+@router.post("/unresolved/{item_id}/suggest-param", response_model=SuggestParamOut)
+async def suggest_unresolved_segment_param(
+    item_id: int,
+    body: SuggestParamRequest,
+    user: dict = Depends(get_current_user),
+):
+    """미분류 segment의 파라미터 필드를 LLM이 1차 추측 — "값 넣을 사람이 없겠다"는
+    지적(2026-09-23)으로 신규. 폼을 열자마자 프론트가 자동 호출해 프리필하는 용도라,
+    추측이 안 되거나 실패해도 에러를 내지 않고 빈 필드로 200을 반환한다(decompose.
+    suggest_param_fields 참고 — 사람이 그냥 수동으로 채우면 되는 보조 기능일 뿐)."""
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        text, reason = await unresolved_report.get_unresolved_segment(
+            body.namespace, item_id, body.segment_index,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    suggestion = await decompose.suggest_param_fields(text, reason)
+    return SuggestParamOut(**(suggestion or {}))
+
+
+@router.patch("/params/{param_id}", response_model=ItemStatusOut)
+async def update_policy_param(
+    param_id: int,
+    body: UpdateParamRequest,
+    user: dict = Depends(get_current_user),
+):
+    """반려된 항목의 파라미터 수정 — "반려하면 그냥 데이터를 버리는데?"라는 지적(2026-09-23)
+    으로 신규. 저장하면 검토대기로 되돌아가 재승인 기회를 얻는다(edit.py 참고)."""
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        new_status = await edit.update_param(
+            body.namespace, param_id, body.name, body.condition, body.value, body.unit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ItemStatusOut(status=new_status)
+
+
+@router.patch("/narratives/{chunk_id}", response_model=ItemStatusOut)
+async def update_policy_narrative(
+    chunk_id: int,
+    body: UpdateNarrativeRequest,
+    user: dict = Depends(get_current_user),
+):
+    """반려된 항목의 서술 수정 — 위 update_policy_param과 동일 취지. 텍스트가 바뀌므로
+    재임베딩 후 검토대기로 되돌린다(edit.py 참고)."""
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        new_status = await edit.update_narrative(body.namespace, chunk_id, body.chunk_text)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ItemStatusOut(status=new_status)
 
 
 @router.post("/items/{item_id}/approve")

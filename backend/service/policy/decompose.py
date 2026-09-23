@@ -92,6 +92,49 @@ def _strip_code_fence(s: str) -> str:
     return s.strip()
 
 
+_PARAM_SUGGEST_SYSTEM_PROMPT = """당신은 정책 문서에서 자동 분류에 실패해 "미분류"로 남은
+조각(segment) 하나를 보고, 사람이 파라미터(policy_param: name/condition/value/unit)로
+등록하려는 걸 돕는 도우미입니다. 이 조각은 이미 자동 분해 단계에서 구조화에 실패한
+내용이라 확신이 낮을 수 있습니다 — 무리해서 지어내지 말고, 최선의 추측을 제공하세요.
+
+반드시 다음 JSON 형식으로만 답하세요(다른 텍스트 없이):
+{"name": "...", "condition": "..." 또는 null, "value": "..." 또는 null, "unit": "..." 또는 null}
+
+- name(무엇에 대한 값인지)/condition(조건이나 코드)/value(값)/unit(단위)로 추출하세요.
+- value는 항상 단일 문자열이어야 합니다. 배열로 넣지 마세요 — 여러 값이면 쉼표로 이어붙인
+  문자열 하나로 만드세요(예: "판매대기, 판매중, 판매종료").
+- 이 조각이 파라미터로 구조화하기에 너무 애매하면, name만이라도 내용을 요약해 채우고
+  condition/value/unit은 null로 두세요. 절대 내용을 지어내지 마세요."""
+
+
+async def suggest_param_fields(segment_text: str, reason: Optional[str] = None) -> Optional[dict]:
+    """미분류 segment 하나를 파라미터 필드(name/condition/value/unit)로 1차 추측 — "폼에
+    값 넣을 사람이 없겠다"는 지적(2026-09-23)으로 추가. 어디까지나 사람이 확인/수정 후
+    저장하는 폼의 프리필용 보조 기능이라, 실패해도 예외를 던지지 않고 None을 반환해
+    프론트가 빈 폼으로 폴백하게 한다(decompose_policy_body와 동일한 방어 스타일)."""
+    if not segment_text.strip():
+        return None
+    prompt = f"[분류 안 된 내용]\n{segment_text}"
+    if reason:
+        prompt += f"\n\n[왜 자동 분류가 안 됐는지]\n{reason}"
+    try:
+        provider = get_llm_provider()
+        result = await provider.generate_once(
+            prompt=prompt, system=_PARAM_SUGGEST_SYSTEM_PROMPT, max_tokens=300,
+        )
+        parsed = json.loads(_strip_code_fence(result))
+        if not isinstance(parsed, dict):
+            return None
+        return {
+            "name": parsed.get("name") or None,
+            "condition": parsed.get("condition") or None,
+            "value": parsed.get("value") or None,
+            "unit": parsed.get("unit") or None,
+        }
+    except Exception:
+        return None
+
+
 async def decompose_policy_body(policy_name: str, raw_body: str) -> list[Segment]:
     """정책 본문을 segment 목록으로 분해. LLM 호출/파싱 실패 시 전체를 unresolved 1개로 반환
     (파이프라인이 죽지 않고 사람이 검토할 수 있게)."""

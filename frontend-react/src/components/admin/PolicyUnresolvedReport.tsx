@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp, FileWarning, Info, ArrowRightCircle, Database, Check, X } from 'lucide-react';
-import { getUnresolvedSummary, promoteUnresolvedSegment, promoteUnresolvedSegmentToParam } from '../../api/policy';
+import { getUnresolvedSummary, promoteUnresolvedSegment, promoteUnresolvedSegmentToParam, suggestParamFields } from '../../api/policy';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
 
@@ -31,7 +31,34 @@ export function PolicyUnresolvedReport() {
   const [expandedItemId, setExpandedItemId] = useState<number | null>(null);
   const [paramFormKey, setParamFormKey] = useState<string | null>(null);
   const [paramForm, setParamForm] = useState(EMPTY_PARAM_FORM);
+  const [suggestLoading, setSuggestLoading] = useState(false);
   const queryClient = useQueryClient();
+
+  // "값 넣을 사람이 없겠다"는 지적(2026-09-23)으로 폼을 열자마자 LLM 1차 추측을 자동
+  // 호출해 프리필한다(버튼 없이 자동) — 실패/빈 값이면 그냥 빈 폼(현재 동작)과 동일.
+  const openParamForm = async (itemId: number, segmentIndex: number, key: string) => {
+    setParamFormKey(key);
+    setParamForm(EMPTY_PARAM_FORM);
+    setSuggestLoading(true);
+    try {
+      const suggestion = await suggestParamFields(itemId, segmentIndex, selectedNs);
+      // 응답이 늦게 와서 그 사이 다른 segment로 폼을 옮겼으면 무시(경쟁 방지)
+      setParamFormKey((current) => {
+        if (current !== key) return current;
+        setParamForm({
+          name: suggestion.name ?? '',
+          condition: suggestion.condition ?? '',
+          value: suggestion.value ?? '',
+          unit: suggestion.unit ?? '',
+        });
+        return current;
+      });
+    } catch {
+      // best-effort 제안일 뿐 — 실패해도 조용히 빈 폼 유지
+    } finally {
+      setSuggestLoading(false);
+    }
+  };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['policy-unresolved-summary', selectedNs],
@@ -194,26 +221,33 @@ export function PolicyUnresolvedReport() {
                                 )}
                                 {isFormOpen && (
                                   <div className="border border-cyan-200 dark:border-cyan-700/40 bg-cyan-50/60 dark:bg-cyan-950/20 rounded-lg px-3 py-2.5 space-y-2">
+                                    {suggestLoading && (
+                                      <p className="text-[11px] text-cyan-700 dark:text-cyan-400">AI 제안 확인 중...</p>
+                                    )}
                                     <div className="grid grid-cols-2 gap-2">
                                       <input
-                                        type="text" placeholder="항목명 *" value={paramForm.name}
+                                        type="text" placeholder={suggestLoading ? 'AI 제안 확인 중...' : '항목명 *'} value={paramForm.name}
+                                        disabled={suggestLoading}
                                         onChange={(e) => setParamForm((f) => ({ ...f, name: e.target.value }))}
-                                        className="col-span-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500"
+                                        className="col-span-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
                                       />
                                       <input
                                         type="text" placeholder="조건(선택)" value={paramForm.condition}
+                                        disabled={suggestLoading}
                                         onChange={(e) => setParamForm((f) => ({ ...f, condition: e.target.value }))}
-                                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500"
+                                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
                                       />
                                       <input
                                         type="text" placeholder="값(선택)" value={paramForm.value}
+                                        disabled={suggestLoading}
                                         onChange={(e) => setParamForm((f) => ({ ...f, value: e.target.value }))}
-                                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500"
+                                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
                                       />
                                       <input
                                         type="text" placeholder="단위(선택)" value={paramForm.unit}
+                                        disabled={suggestLoading}
                                         onChange={(e) => setParamForm((f) => ({ ...f, unit: e.target.value }))}
-                                        className="col-span-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500"
+                                        className="col-span-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
                                       />
                                     </div>
                                     <div className="flex justify-end gap-2">
@@ -226,7 +260,7 @@ export function PolicyUnresolvedReport() {
                                       </button>
                                       <button
                                         type="button"
-                                        disabled={!paramForm.name.trim() || isParamPending}
+                                        disabled={!paramForm.name.trim() || isParamPending || suggestLoading}
                                         onClick={() => promoteParamMutation.mutate({ itemId: item.item_id, segmentIndex: idx })}
                                         className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border border-cyan-300 text-cyan-700 bg-cyan-50 hover:bg-cyan-100 dark:border-cyan-600/40 dark:text-cyan-300 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                       >
@@ -252,7 +286,7 @@ export function PolicyUnresolvedReport() {
                                   {!isFormOpen && (
                                     <button
                                       type="button"
-                                      onClick={() => { setParamFormKey(thisKey); setParamForm(EMPTY_PARAM_FORM); }}
+                                      onClick={() => openParamForm(item.item_id, idx, thisKey)}
                                       title="항목명/조건/값/단위를 직접 입력해 파라미터(RDB 정확조회)로 등록합니다"
                                       className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-cyan-300 text-cyan-700 bg-cyan-50 hover:bg-cyan-100 dark:border-cyan-600/40 dark:text-cyan-300 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 transition-colors"
                                     >

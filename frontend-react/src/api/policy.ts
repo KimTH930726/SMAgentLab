@@ -168,6 +168,46 @@ export async function rejectPolicyItem(itemId: number, namespace: string): Promi
   });
 }
 
+// 반려된 항목의 파라미터/서술 수정(2026-09-23) — "반려하면 그냥 데이터를 버리는데?"라는
+// 지적으로 추가. 저장하면 서버가 자동으로 다시 검토대기(pending_review)로 되돌린다 —
+// 반환되는 status를 그대로 쓰면 화면을 즉시 갱신할 수 있다.
+export async function updatePolicyParam(
+  paramId: number, namespace: string, fields: PromoteParamFields,
+): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`/policy/params/${paramId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ namespace, ...fields }),
+  });
+}
+
+export async function updatePolicyNarrative(
+  chunkId: number, namespace: string, chunkText: string,
+): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`/policy/narratives/${chunkId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ namespace, chunk_text: chunkText }),
+  });
+}
+
+// 미분류 segment의 파라미터 필드 LLM 1차 추측(2026-09-23) — "파라미터로 편입" 폼을 열 때
+// 자동 호출해 프리필하는 용도. 실패해도 에러 없이 전부 null로 옴(사람이 그냥 수동 입력).
+// name까지 null일 수 있어(백엔드 SuggestParamOut) PromoteParamFields(name 필수)와는 별도 타입.
+export interface ParamSuggestion {
+  name: string | null;
+  condition: string | null;
+  value: string | null;
+  unit: string | null;
+}
+
+export async function suggestParamFields(
+  itemId: number, segmentIndex: number, namespace: string,
+): Promise<ParamSuggestion> {
+  return apiFetch<ParamSuggestion>(`/policy/unresolved/${itemId}/suggest-param`, {
+    method: 'POST',
+    body: JSON.stringify({ namespace, segment_index: segmentIndex }),
+  });
+}
+
 // ─── Track 2 저장소 전략 실험실 ─────────────────────────────────────────────
 
 export interface Track2TypeResult {

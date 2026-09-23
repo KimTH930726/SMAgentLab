@@ -104,6 +104,32 @@ async def get_unresolved_summary(namespace: str, system_key: Optional[str] = Non
     )
 
 
+async def get_unresolved_segment(namespace: str, item_id: int, segment_index: int) -> tuple[str, Optional[str]]:
+    """unresolved segment 1건의 (원문, 사유)를 조회 — LLM 프리필 제안(suggest-param API)이
+    편입 없이 내용만 먼저 봐야 해서 분리(2026-09-23). 조회/범위 검증 로직은 아래
+    promote_segment_to_narrative/promote_segment_to_param과 동일 — 그 두 함수는 이미
+    테스트된 상태라 리팩토링으로 합치지 않고 조회 전용으로 새로 둔다."""
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
+
+        row = await conn.fetchrow(
+            "SELECT unresolved_segments FROM policy_item WHERE id = $1 AND namespace_id = $2",
+            item_id, ns_id,
+        )
+        if row is None:
+            raise ValueError(f"정책 항목을 찾을 수 없습니다: item_id={item_id}")
+
+        segs_raw = row["unresolved_segments"]
+        segments = (json.loads(segs_raw) if isinstance(segs_raw, str) else segs_raw) or []
+        if not (0 <= segment_index < len(segments)):
+            raise ValueError(f"segment_index 범위를 벗어났습니다: {segment_index} (전체 {len(segments)}개)")
+
+        seg = segments[segment_index] or {}
+        return seg.get("text", ""), seg.get("reason")
+
+
 async def promote_segment_to_narrative(namespace: str, item_id: int, segment_index: int) -> int:
     """unresolved segment 1건을 서술(policy_chunk)로 수동 편입 — §6 "검토 UI" 중 실제로
     쌓인 문제(조회만 있고 액션이 없음, 2026-09-16 사용자 지적)를 해소하는 첫 액션. 원문을

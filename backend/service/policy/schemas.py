@@ -105,6 +105,35 @@ class ItemActionRequest(BaseModel):
     namespace: str
 
 
+class UpdateParamRequest(BaseModel):
+    namespace: str
+    name: str
+    condition: Optional[str] = None
+    value: Optional[str] = None
+    unit: Optional[str] = None
+
+
+class UpdateNarrativeRequest(BaseModel):
+    namespace: str
+    chunk_text: str
+
+
+class ItemStatusOut(BaseModel):
+    status: str
+
+
+class SuggestParamRequest(BaseModel):
+    namespace: str
+    segment_index: int = Field(ge=0)
+
+
+class SuggestParamOut(BaseModel):
+    name: Optional[str] = None
+    condition: Optional[str] = None
+    value: Optional[str] = None
+    unit: Optional[str] = None
+
+
 class ParamOut(BaseModel):
     id: int
     name: str
