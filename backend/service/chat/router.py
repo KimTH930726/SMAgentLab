@@ -280,64 +280,6 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
     )
 
 
-async def _check_message_ownership(conn, msg_id: int, user: dict) -> None:
-    """메시지가 존재하면 대화 소유자인지 확인 — 다른 sibling 엔드포인트(get_messages,
-    delete_conversation)와 동일한 규칙인데 이 두 message_id 기반 엔드포인트만 빠져
-    있어, 로그인만 하면 정수 id를 순차 대입해 남의 메시지를 고치거나 지울 수 있었다.
-    두 엔드포인트 모두 원래 "없는/이미 지워진 메시지에도 조용히 성공"하는 멱등한
-    설계라, 존재하지 않는 id는 그대로 통과시키고 실제 존재하는데 남의 것일 때만 막는다.
-    """
-    owner_id = await conn.fetchval(
-        "SELECT c.user_id FROM ops_message m JOIN ops_conversation c ON m.conversation_id = c.id WHERE m.id = $1",
-        msg_id,
-    )
-    if owner_id is None:
-        return
-    if owner_id != user["id"] and user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="다른 사용자의 메시지에 접근할 수 없습니다.")
-
-
-@router.patch("/api/chat/messages/{msg_id}/content")
-async def save_partial_content(msg_id: int, body: dict, user: dict = Depends(get_current_user)):
-    content = (body.get("content") or "").strip()
-    if not content:
-        return {"status": "ok"}
-    async with get_conn() as conn:
-        await _check_message_ownership(conn, msg_id, user)
-        current = await conn.fetchval(
-            "SELECT LENGTH(content) FROM ops_message WHERE id = $1 AND role = 'assistant'", msg_id,
-        )
-        if current is not None and len(content) > current:
-            await conn.execute("UPDATE ops_message SET content = $1 WHERE id = $2", content, msg_id)
-    return {"status": "ok"}
-
-
-@router.delete("/api/chat/messages/{msg_id}")
-async def delete_ghost_message(msg_id: int, user: dict = Depends(get_current_user)):
-    async with get_conn() as conn:
-        await _check_message_ownership(conn, msg_id, user)
-        row = await conn.fetchrow(
-            """
-            SELECT m.conversation_id,
-                   (SELECT id FROM ops_message WHERE conversation_id = m.conversation_id AND id < m.id AND role = 'user'
-                    ORDER BY id DESC LIMIT 1) AS prev_user_id
-            FROM ops_message m
-            WHERE m.id = $1 AND m.role = 'assistant' AND (m.content IS NULL OR m.content = '')
-            """,
-            msg_id,
-        )
-        if not row:
-            return {"status": "ok"}
-        conv_id = row["conversation_id"]
-        await conn.execute("DELETE FROM ops_message WHERE id = $1", msg_id)
-        if row["prev_user_id"]:
-            await conn.execute("DELETE FROM ops_message WHERE id = $1", row["prev_user_id"])
-        remaining = await conn.fetchval("SELECT COUNT(*) FROM ops_message WHERE conversation_id = $1", conv_id)
-        if remaining == 0:
-            await conn.execute("DELETE FROM ops_conversation WHERE id = $1", conv_id)
-    return {"status": "ok"}
-
-
 @router.post("/api/chat/debug", response_model=DebugSearchResponse)
 async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
     await log_cross_part_namespace_read(req.namespace, user)

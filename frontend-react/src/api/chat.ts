@@ -15,19 +15,6 @@ export function streamChat(params: ChatRequest): AsyncGenerator<SSEEvent> {
   return streamSSE('/chat/stream', body, params.signal);
 }
 
-export async function savePartialContent(messageId: number, content: string): Promise<void> {
-  await apiFetch('/chat/messages/' + messageId + '/content', {
-    method: 'PATCH',
-    body: JSON.stringify({ content }),
-  });
-}
-
-export async function deleteGhostMessage(messageId: number): Promise<void> {
-  await apiFetch('/chat/messages/' + messageId, {
-    method: 'DELETE',
-  });
-}
-
 export async function debugSearch(params: DebugSearchRequest): Promise<DebugSearchResponse> {
   try {
     return await apiFetch<DebugSearchResponse>('/chat/debug', {
