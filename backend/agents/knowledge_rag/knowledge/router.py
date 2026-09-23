@@ -61,6 +61,11 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
         created_by_part=user["part"],
         created_by_user_id=user["id"],
     )
+    # 용어 자동 추출 복원(2026-09-24) — 미리보기+검토 2단계 흐름으로 전환되며 끊겼던
+    # _run_auto_glossary()를 모든 등록 경로 공통으로 되살림. 사람이 체크박스를 켜야
+    # 했던 예전 opt-in 방식 대신, 이 세션 내내 적용한 "사람 개입 최소화" 원칙대로
+    # 항상 실행(실패해도 등록 자체는 막지 않음 — 함수 내부에 이미 try/except 있음).
+    await _run_auto_glossary(body.namespace, body.content, user, max_chars=20000)
     return row
 
 
@@ -264,7 +269,12 @@ async def bulk_create(body: BulkCreateRequest, user: dict = Depends(get_current_
         created_by_part=user["part"],
         created_by_user_id=user["id"],
     )
-    return result
+    # 용어 자동 추출 복원(2026-09-24) — 파일/URL 단발성 등록에만 있던 _run_auto_glossary()가
+    # 미리보기+검토 2단계 흐름(파일/텍스트/Teams/컨플루언스 전부 이 엔드포인트로 확정)으로
+    # 넘어오며 끊겨있던 것을 모든 벌크 등록 경로 공통으로 되살림 — 체크박스 없이 항상 실행.
+    combined_text = "\n".join(item.content for item in body.items)
+    glossary_count = await _run_auto_glossary(body.namespace, combined_text, user, max_chars=20000)
+    return {**result, "auto_glossary": glossary_count}
 
 
 @router.post("/import/csv", status_code=201)
