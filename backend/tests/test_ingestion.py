@@ -205,6 +205,39 @@ class TestBulkCreateKnowledge:
             fake_emb.embed_batch.assert_called_once_with(["지식1", "지식2"])
 
     @pytest.mark.asyncio
+    async def test_missing_category_auto_resolved_not_rejected(self):
+        """카테고리 자동 관리(2026-09-24) — 예전엔 category가 비어있으면 _require_category가
+        ValueError로 등록 자체를 거부했다. 지금은 resolve_or_create_category()가 대신 값을
+        채워 넣어 등록이 그대로 성공해야 한다(수동/파일/텍스트/Teams 등록 전부 해당)."""
+        fake_conn = MagicMock()
+        fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
+        fake_conn.__aexit__ = AsyncMock(return_value=False)
+        fake_conn.fetchval = AsyncMock(side_effect=[1, False])
+        fake_conn.execute = AsyncMock()
+        fake_conn.executemany = AsyncMock()
+        fake_conn.fetch = AsyncMock(return_value=[])
+
+        fake_emb = MagicMock()
+        fake_emb.embed_batch = AsyncMock(return_value=[[0.1] * 768])
+
+        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
+             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
+             patch("service.admin.service.resolve_or_create_category", AsyncMock(return_value="자동배정됨")):
+            from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
+            result = await bulk_create_knowledge(
+                "test-ns", [{"content": "카테고리 없는 지식"}], background=False,
+            )
+            assert result["created"] == 1
+            # 실제 INSERT는 executemany(rows)로 나가고, category는 각 row 튜플의
+            # 5번째 값(namespace_id, content, embedding, base_weight, category, ...)
+            insert_call = next(
+                c for c in fake_conn.executemany.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]
+            )
+            rows = insert_call.args[1]
+            assert rows[0][4] == "자동배정됨"
+
+    @pytest.mark.asyncio
     async def test_batches_commit_independently_before_job_completes(self):
         """현재 동작 문서화(2026-09-22, RAG 거버넌스 감사 v2) — 배치별로 독립 커밋되고,
         각 행은 삽입 즉시 status='active'가 되어 검색에 노출된다. job 전체가
@@ -250,6 +283,44 @@ class TestBulkCreateKnowledge:
 
 
 # ─── CSV 파싱 로직 테스트 (router 레벨) ──────────────────────────────────────
+
+class TestCreateKnowledgeCategoryAutoResolve:
+    """create_knowledge()(단건 등록) 카테고리 자동 관리(2026-09-24) — bulk 경로와 동일한
+    resolve_or_create_category() 안전망이 단건 등록(ManualForm)에도 걸려있는지 확인."""
+
+    @pytest.mark.asyncio
+    async def test_missing_category_auto_resolved_not_rejected(self):
+        fake_conn = MagicMock()
+        fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
+        fake_conn.__aexit__ = AsyncMock(return_value=False)
+        fake_conn.execute = AsyncMock()
+        fake_conn.transaction = MagicMock()
+        fake_conn.transaction.return_value.__aenter__ = AsyncMock(return_value=None)
+        fake_conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
+        fake_conn.fetchrow = AsyncMock(return_value={
+            "id": 1, "namespace_id": 1, "content": "카테고리 없는 지식", "base_weight": 1.0,
+            "category": "자동배정됨", "status": "active",
+            "created_by_part": None, "created_by_user_id": None,
+            "created_at": "2026-09-24", "updated_at": "2026-09-24",
+        })
+
+        fake_emb = MagicMock()
+        fake_emb.embed = AsyncMock(return_value=[0.1] * 1024)
+
+        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
+             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
+             patch("agents.knowledge_rag.knowledge.service.find_similar_active_knowledge", AsyncMock(return_value=[])), \
+             patch("agents.knowledge_rag.knowledge.service.get_thresholds", return_value={"duplicate_min_similarity": 0.95}), \
+             patch("service.admin.service.resolve_or_create_category", AsyncMock(return_value="자동배정됨")):
+            from agents.knowledge_rag.knowledge.service import create_knowledge
+            result = await create_knowledge("test-ns", "카테고리 없는 지식")
+            assert result["category"] == "자동배정됨"
+            insert_call = next(
+                c for c in fake_conn.fetchrow.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]
+            )
+            assert "자동배정됨" in insert_call.args
+
 
 class TestCsvParsing:
     """CSV 파싱 + 컬럼 매핑 로직 검증."""

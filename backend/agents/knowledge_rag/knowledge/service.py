@@ -56,13 +56,23 @@ async def create_knowledge(
     created_by_part: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
 ) -> dict:
-    category = _require_category(category)
-    embedding = await embedding_service.embed(content)
-
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
+
+    # 카테고리 자동 관리(2026-09-24) — 사람이 안 골라도 LLM 추천 → 실패 시 "미분류"로
+    # 항상 유효한 값을 갖는다(service/admin/service.py 참고). ns_id 해석을 위로 옮긴 이유.
+    from service.admin.service import resolve_or_create_category
+    category = await resolve_or_create_category(ns_id, category, content)
+    if is_keyword_only_category(category):
+        logger.warning(
+            "지식이 키워드 전용 카테고리(%s)로 등록됨 — rag_knowledge 안에서는 "
+            "top_k 후보 선별 단계에서 밀려날 수 있음. 구조화 코드/스키마 데이터는 "
+            "ref_common_code/ref_db_column(service/refdata) 등록을 권장.",
+            category,
+        )
+    embedding = await embedding_service.embed(content)
 
     async with get_conn() as conn:
         async with conn.transaction():
@@ -645,13 +655,25 @@ async def bulk_create_knowledge(
         {"created": 0, "job_id": int, "status": "processing"} (background=True, 기본값)
         {"created": int, "job_id": int, "status": "completed"|"failed"|"cancelled"} (background=False)
     """
-    for item in items:
-        item["category"] = _require_category(item.get("category"))
-
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
+
+    # 카테고리 자동 관리(2026-09-24) — 컨플루언스 벌크는 이 시점에 이미 페이지별로
+    # 카테고리가 정해진 채로 들어오지만(빈 값 없음, resolve_or_create_category가 그대로
+    # 반환), 파일 업로드/텍스트 분할/Teams처럼 프론트가 못 채웠거나 안 채운 경우도
+    # 여기서 항상 유효한 값을 갖도록 안전망을 건다.
+    from service.admin.service import resolve_or_create_category
+    for item in items:
+        item["category"] = await resolve_or_create_category(ns_id, item.get("category"), item["content"])
+        if is_keyword_only_category(item["category"]):
+            logger.warning(
+                "지식이 키워드 전용 카테고리(%s)로 등록됨 — rag_knowledge 안에서는 "
+                "top_k 후보 선별 단계에서 밀려날 수 있음. 구조화 코드/스키마 데이터는 "
+                "ref_common_code/ref_db_column(service/refdata) 등록을 권장.",
+                item["category"],
+            )
 
     async with get_conn() as conn:
         job_id = await conn.fetchval("""

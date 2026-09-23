@@ -951,7 +951,7 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
         <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={loading}>취소</Button>
           <Button variant="primary" size="sm" loading={loading}
-            disabled={selectedCount === 0 || (!perChunkCategory && (!category || categoryNames.length === 0))}
+            disabled={selectedCount === 0}
             onClick={() => onConfirm(rows.filter(r => r.selected))}>
             <CheckCircle className="w-3.5 h-3.5" />선택 항목 등록 ({selectedCount}건)
           </Button>
@@ -1660,7 +1660,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
-        <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={!file || previewing || !category || categoryNames.length === 0}>
+        <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={!file || previewing}>
           {previewing ? '분석 중...' : '청크 검토 & 등록'}
         </Button>
       </div>
@@ -1751,7 +1751,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
-        <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={!text.trim() || previewing || !category || categoryNames.length === 0}>
+        <Button variant="primary" size="sm" onClick={handleOpenReview} disabled={!text.trim() || previewing}>
           {previewing ? '분석 중...' : '청크 검토 & 등록'}
         </Button>
       </div>
@@ -1840,7 +1840,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
         <Button variant="primary" size="sm"
           loading={createMutation.isPending}
           onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending || !form.content.trim() || !form.category || categoryNames.length === 0}>
+          disabled={createMutation.isPending || !form.content.trim()}>
           추가
         </Button>
       </div>
@@ -2073,8 +2073,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
         <Button variant="primary" size="sm" onClick={handleOpenReview}
-          disabled={!url.trim() || previewing || treeLoading
-            || (!(isConfluence && includeChildren) && !category) || categoryNames.length === 0}>
+          disabled={!url.trim() || previewing || treeLoading}>
           {treeLoading ? '트리 조회 중...' : previewing ? '수집 중...' : (isConfluence && includeChildren ? '하위 페이지 선택' : '수집 & 청크 검토')}
         </Button>
       </div>
@@ -2609,7 +2608,7 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
         <Button variant="primary" size="sm" onClick={handleSubmit}
-          disabled={!authenticated || selectedIds.size === 0 || submitting || !category || categoryNames.length === 0}>
+          disabled={!authenticated || selectedIds.size === 0 || submitting}>
           {submitting ? '등록 중...' : `${selectedIds.size}건 등록`}
         </Button>
       </div>

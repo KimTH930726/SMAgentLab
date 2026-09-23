@@ -445,38 +445,129 @@ LLM에 전달되는 messages:
 
 ---
 
-## 5. 지식 등록 흐름
+## 5. 지식 등록 흐름 (단건, 수동 입력)
 
 ```
 관리자
   │
   │  지식 등록 폼 입력
-  │  { namespace, container_name, target_tables, content, query_template, base_weight }
+  │  { namespace, content, category(선택), base_weight }
   ▼
 ┌─────────────────────┐
 │   Admin (React)     │
+│   ManualForm        │
 └────────┬────────────┘
          │  POST /api/knowledge
          ▼
 ┌─────────────────────────────────────────┐
-│  knowledge.py (서비스 레이어)            │
+│  knowledge/service.py                   │
 │                                         │
-│  1. EmbeddingService.embed(content)     │
-│     → 1024차원 벡터 생성                  │
-│                                         │
-│  2. INSERT INTO ops_knowledge           │
-│     (content, embedding, base_weight, …)│
-│                                         │
-│  3. Return KnowledgeOut                 │
+│  1. resolve_or_create_category()        │
+│     사람이 지정 → 그대로                  │
+│     안 지정 → LLM이 기존 목록 중 추천      │
+│     그마저 실패 → "미분류" 자동생성        │
+│  2. EmbeddingService.embed(content)     │
+│     → 1024차원 벡터 생성(KURE-v1)         │
+│  3. 유사도 중복 검사 → 너무 비슷하면       │
+│     pending_review, 아니면 active        │
+│  4. INSERT INTO rag_knowledge           │
+│     (content, embedding, category, …)   │
 └─────────────────────────────────────────┘
          │
-         │  { id, namespace, content, embedding, ... }
+         │  { id, namespace, content, pending_review, ... }
          ▼
 ┌─────────────────────┐
 │   Admin (React)     │
 │   목록에 즉시 반영   │
 └─────────────────────┘
 ```
+
+카테고리 필드는 원래 `RequiredCategoryField`로 항상 필수 선택이었는데, 2026-09-24부로
+**등록 경로 전체(단건/파일 업로드/텍스트 분할/Teams)에서 필수가 아니게 됐다** — 비워
+두면 백엔드(`resolve_or_create_category()`, `service/admin/service.py`)가 항상
+유효한 값을 채운다. 프론트는 그 전에 먼저 시도해볼 뿐이다: 파일 업로드/텍스트 분할/
+Teams 등록 폼은 내용이 확정되는 시점(파일 미리보기 성공·텍스트란 blur·Teams 메시지
+선택)에 `autoSuggestCategoryIfUntouched()`가 `POST /categories/suggest`로 값을 먼저
+채워준다(2026-09-22) — 사람이 직접 다른 값을 이미 골라뒀으면 건드리지 않는다. 결국
+사람이 아무것도 안 골라도 등록은 항상 성공하고, 최소한 "미분류"로라도 남아 나중에
+검토할 수 있다(예전엔 여기서 등록 자체가 거부됐음).
+
+---
+
+## 5-1. 컨플루언스 벌크 등록 + 카테고리 자동화 흐름 (2026-09-22~24)
+
+여러 페이지를 한 번에 끌어올 때는 위 단건 흐름과 다르다 — 페이지마다 카테고리/문맥이
+달라질 수 있어 배치 전체에 값 하나를 강제하면 안 되기 때문(실측: 카테고리가 5개
+정의돼 있어도 실제로는 1개에만 몰리는 문제가 있었음).
+
+```
+관리자
+  │  URL 입력 + "하위 페이지 포함" 체크
+  ▼
+┌──────────────────────┐
+│  UrlForm (React)     │
+└────────┬─────────────┘
+         │  POST /import/url/tree
+         ▼
+┌─────────────────────────────────────────┐
+│  preview_confluence_tree()              │
+│  → fetch_confluence_tree()              │
+│    본문 없이 메타데이터만(빠름):           │
+│    page_id, title, parent_id, depth     │
+└─────────────────────────────────────────┘
+         │  트리 반환 → 관리자가 페이지 체크
+         ▼
+┌──────────────────────┐
+│  트리 선택 모달       │
+└────────┬─────────────┘
+         │  POST /knowledge/import/url/bulk-pages/preview
+         ▼
+┌───────────────────────────────────────────────────────────┐
+│  preview_confluence_bulk()  (knowledge/router.py)          │
+│                                                             │
+│  체크된 페이지마다 병렬로:                                    │
+│  ┌───────────────────────────────────────────────────┐    │
+│  │ 1. fetch_confluence_by_id()                        │    │
+│  │    REST expand에 ancestors 포함                     │    │
+│  │    → doc.metadata["parent_title"] = 직계 상위 페이지  │    │
+│  │ 2. chunk_document() — 청킹                          │    │
+│  │ 3. _resolve_confluence_page_category()             │    │
+│  │    ① 사람이 폼에서 직접 지정했으면 그대로(오버라이드)   │    │
+│  │    ② parent_title이 기존 카테고리에 있으면 재사용     │    │
+│  │      없으면 → _ensure_category_exists()로 그 자리   │    │
+│  │      에서 즉시 새 카테고리 생성(v2.102)              │    │
+│  │    ③ parent_title 자체가 없을 때만(트리 루트) —      │    │
+│  │      category_suggest LLM이 기존 목록 중에서만 추천   │    │
+│  │    ④ 그래도 실패 시 "미분류" 자동생성                 │    │
+│  │ 4. _enrich_heading_path()                          │    │
+│  │    페이지 내 소제목 앞에 parent_title을 붙임          │    │
+│  └───────────────────────────────────────────────────┘    │
+└───────────────────────────────────────────────────────────┘
+         │  청크마다 {content, category, heading_path, page_title}
+         ▼
+┌──────────────────────────────────────┐
+│  ChunkReviewModal (perChunkCategory)  │
+│  청크별 카테고리 배지 표시 — 사람은     │
+│  포함/제외만 선택(카테고리는 이미 배정됨) │
+└────────┬───────────────────────────────┘
+         │  POST /knowledge/bulk  (선택 청크의 content+category+heading_path 그대로)
+         ▼
+┌─────────────────────────────────────────┐
+│  bulk_create_knowledge()                │
+│  → _run_bulk_ingestion()                │
+│    임베딩 + INSERT INTO rag_knowledge    │
+│    (category, heading_path 포함)         │
+│    중복 유사도 높으면 pending_review     │
+└─────────────────────────────────────────┘
+```
+
+**핵심 지점은 `_resolve_confluence_page_category()`다** — 예전엔 이 자리에 로직이 없어
+폼 상단에서 고른 값 하나가 배치 전체(최대 200페이지)에 그대로 복사됐다. `parent_title`
+(직계 상위 페이지 제목)은 LLM 추측이 아니라 사람이 이미 컨플루언스에 만들어둔 실제
+정보 구조라서, 기존 카테고리 목록에 없어도 그 자리에서 바로 새 카테고리로 만들어도
+안전하다는 게 v2.102의 핵심 정정이다 — 그래야 "누가 먼저 카테고리를 만들어주나"라는
+부트스트랩 문제 없이 첫 등록 순간부터 실제 조직 구조 그대로 분화된다. 반대로 LLM
+추천(③)은 신뢰할 구조 정보가 없는 추측이라 여전히 새 카테고리를 못 만들게 막아둔다.
 
 ---
 

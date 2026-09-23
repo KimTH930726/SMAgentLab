@@ -145,3 +145,35 @@ async def suggest_category_for_content(ns_id: int, content: str) -> Optional[str
     except Exception:
         suggested = None
     return suggested
+
+
+UNSORTED_CATEGORY = "미분류"
+
+
+async def ensure_category_exists(ns_id: int, name: str) -> None:
+    """카테고리가 없으면 만든다(`ON CONFLICT DO NOTHING`이라 이미 있어도 안전하게 재호출
+    가능). 컨플루언스 전용이던 `_ensure_category_exists`(knowledge/router.py)와 동일 SQL —
+    2026-09-24부로 모든 등록 경로가 카테고리를 자동 관리하게 되면서 공용 위치로 옮김."""
+    async with get_conn() as conn:
+        await conn.execute(
+            "INSERT INTO rag_knowledge_category (namespace_id, name) VALUES ($1, $2) "
+            "ON CONFLICT (namespace_id, name) DO NOTHING",
+            ns_id, name,
+        )
+
+
+async def resolve_or_create_category(ns_id: int, category: Optional[str], content: str) -> str:
+    """모든 지식 등록 경로 공용 카테고리 자동 관리(2026-09-24) — 사람이 값을 명시하면
+    그대로 쓰고, 없으면 LLM이 기존 목록 중에서 추천, 그마저 실패하면 "미분류"를 자동
+    생성해서 쓴다. 어떤 경로로 등록하든(수동 입력/파일 업로드/텍스트 분할/Teams) 사람이
+    카테고리를 반드시 골라야 등록이 되던 것을, 아무것도 안 골라도 항상 유효한 값을
+    갖도록 뒤집는다 — 컨플루언스 벌크의 `_resolve_confluence_page_category()`와 같은
+    철학이지만, 여기엔 페이지 트리 같은 구조 신호가 없어 그 1순위(구조 기반 자동 카테고리
+    생성)는 적용 안 하고 LLM 추천 이후 폴백만 공유한다."""
+    if category and category.strip():
+        return category.strip()
+    suggested = await suggest_category_for_content(ns_id, content)
+    if suggested:
+        return suggested
+    await ensure_category_exists(ns_id, UNSORTED_CATEGORY)
+    return UNSORTED_CATEGORY

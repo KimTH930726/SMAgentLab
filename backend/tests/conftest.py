@@ -86,6 +86,22 @@ sys.modules["service.chat"] = MagicMock()
 sys.modules["service.chat.helpers"] = MagicMock()
 sys.modules["service.chat.memory"] = MagicMock()
 
+# service.admin.service — 여러 모듈(knowledge/service.py의 create_knowledge/
+# bulk_create_knowledge, knowledge/router.py의 컨플루언스 카테고리 자동화, 2026-09-24)이
+# 함수 안에서 `from service.admin.service import ...`를 지역 import하므로, 이 파일이
+# sys.modules에 실제로 등록돼 있어야 한다 — 안 그러면 `service`가 MagicMock이라 진짜
+# 패키지처럼 서브모듈을 못 찾아 ModuleNotFoundError가 난다(테스트 실행 순서에 따라
+# 우연히 다른 파일이 먼저 등록해줘야만 통과하던 실사고, 2026-09-24). 여기 한 곳에서
+# 등록해 모든 테스트 파일이 순서와 무관하게 안전하게 import할 수 있게 한다.
+sys.modules.setdefault("service.admin", MagicMock())
+if "service.admin.service" not in sys.modules:
+    _admin_service_spec = _ilu.spec_from_file_location(
+        "service.admin.service", str(Path(backend_dir) / "service" / "admin" / "service.py")
+    )
+    _admin_service_mod = _ilu.module_from_spec(_admin_service_spec)
+    sys.modules["service.admin.service"] = _admin_service_mod
+    _admin_service_spec.loader.exec_module(_admin_service_mod)
+
 # agents.base
 sys.modules["agents.base"] = MagicMock()
 
