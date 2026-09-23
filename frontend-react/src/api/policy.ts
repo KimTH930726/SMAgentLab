@@ -194,23 +194,8 @@ export async function getTrack2Axes(): Promise<Track2Axis[]> {
   return apiFetch<Track2Axis[]>('/policy/track2/axes');
 }
 
-// ─── 파이프라인 모니터(실험실 게이트 작업3) ────────────────────────────────────
-
-export interface PipelineStatsTrendPoint {
-  day: string;
-  count: number;
-}
-
-export interface PipelineStats {
-  policy_item: number;
-  policy_param: number;
-  policy_chunk: number;
-  ref_db_column: number;
-  ref_common_code: number;
-  trend: PipelineStatsTrendPoint[];
-}
-
-export async function getPipelineStats(namespace: string): Promise<PipelineStats> {
-  const params = new URLSearchParams({ namespace });
-  return apiFetch<PipelineStats>(`/policy/pipeline-stats?${params.toString()}`);
-}
+// 파이프라인 모니터(실험실 게이트 작업3)의 프론트 소비부(PolicyPipelineMonitor.tsx)는
+// 2026-09-16 화면 재설계로 제거됨(커밋 001aa4c) — 백엔드 GET /policy/pipeline-stats는
+// "재사용 가능하니 유지"로 의도적으로 남겼지만, 그 화면만 쓰던 이 프론트 래퍼는 정리
+// 대상에서 빠진 채 고아로 남아있었다(2026-09-24 정리). 다시 필요해지면
+// docs/architecture.md v2.77 항목과 git 이력(001aa4c) 참고해 복원.

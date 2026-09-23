@@ -1,14 +1,5 @@
 import { apiFetch } from './client';
-import type { GlobalStats, NamespaceStats, QueryLog, QueryStatus } from '../types';
-
-export async function getStats(): Promise<GlobalStats> {
-  try {
-    return await apiFetch<GlobalStats>('/stats');
-  } catch (err) {
-    console.error('getStats error:', err);
-    throw err;
-  }
-}
+import type { NamespaceStats, QueryLog, QueryStatus } from '../types';
 
 export async function getNamespaceStats(namespace: string): Promise<NamespaceStats> {
   try {

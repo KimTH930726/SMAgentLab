@@ -298,21 +298,6 @@ export interface NamespaceStats {
   unresolved_cases: Array<{ id: number; question: string; mapped_term: string | null; created_at: string }>;
 }
 
-// matches backend StatsResponse
-export interface GlobalStats {
-  namespaces: Array<{
-    namespace: string;
-    total_queries: number;
-    resolved: number;
-    pending: number;
-    unresolved: number;
-    positive_feedback: number;
-    negative_feedback: number;
-    knowledge_count: number;
-    glossary_count: number;
-  }>;
-  unresolved_cases: Array<{ namespace: string; question: string; created_at: string }>;
-}
 
 // Debug search types
 export interface DebugSearchRequest {

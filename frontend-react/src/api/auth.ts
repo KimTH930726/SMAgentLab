@@ -26,17 +26,6 @@ export async function register(payload: {
   });
 }
 
-export async function refreshAccessToken(refreshToken: string): Promise<{ access_token: string }> {
-  return apiFetch<{ access_token: string }>('/auth/refresh', {
-    method: 'POST',
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  });
-}
-
-export async function getMe(): Promise<User> {
-  return apiFetch<User>('/auth/me');
-}
-
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   return apiFetch<void>('/auth/me/password', {
     method: 'PUT',
@@ -64,10 +53,6 @@ export async function updateConfluencePAT(pat: string): Promise<void> {
 
 export async function deleteConfluencePAT(): Promise<void> {
   return apiFetch<void>('/auth/me/confluence-pat', { method: 'DELETE' });
-}
-
-export async function getConfluencePATStatus(): Promise<{ has_confluence_pat: boolean }> {
-  return apiFetch<{ has_confluence_pat: boolean }>('/auth/me/confluence-pat/status');
 }
 
 export async function getParts(): Promise<Part[]> {
