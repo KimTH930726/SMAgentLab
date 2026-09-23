@@ -888,46 +888,60 @@ class _BulkPagesBody(BaseModel):
 _UNSORTED_CATEGORY = "미분류"
 
 
+async def _ensure_category_exists(ns_id: int, name: str, existing_categories: set[str]) -> None:
+    """카테고리가 없으면 만들고 캐시 집합에 반영 — 같은 배치 안에서 반복 호출돼도 중복
+    INSERT 없이(ON CONFLICT DO NOTHING) 안전하게 재사용."""
+    if name in existing_categories:
+        return
+    from core.database import get_conn
+
+    async with get_conn() as conn:
+        await conn.execute(
+            "INSERT INTO rag_knowledge_category (namespace_id, name) VALUES ($1, $2) "
+            "ON CONFLICT (namespace_id, name) DO NOTHING",
+            ns_id, name,
+        )
+    existing_categories.add(name)
+
+
 async def _resolve_confluence_page_category(
     ns_id: int, doc, override: Optional[str], existing_categories: set[str],
 ) -> str:
-    """페이지 1건의 업무구분 3단 폴백(2026-09-22, `docs/tech/knowledge-category-automation.md`).
+    """페이지 1건의 업무구분 폴백(2026-09-22 설계, 2026-09-24 정정 — 새 카테고리 자동 생성
+    허용, `docs/tech/knowledge-category-automation.md` 참고).
 
     `preview_confluence_bulk`(실제 UI 확정 흐름 이전의 리뷰 단계)와 `import_confluence_bulk`
     양쪽에서 공유 — 미리보기에서 계산한 값이 리뷰 화면에 그대로 보이고, 사용자가 선택 항목을
     거르기만 해도 그 값이 최종 등록까지 살아남아야 하므로 같은 로직을 한 곳에 둔다.
 
     1순위 `override`(폼에서 사람이 직접 지정) — 있으면 그대로 우선.
-    2순위 직계 상위 페이지 제목(`doc.metadata["parent_title"]`)이 기존 업무구분과 정확히
-    일치 → LLM 호출 없음(결정론). 실 데이터로 "외부서비스" 아래 "배달의민족"/"쿠팡이츠"처럼
-    이 신호가 실제 업무구분과 거의 일치하는 걸 확인함(space명은 팀 전체가 하나뿐이라 너무
-    굵어서 기각).
-    3순위 `category_suggest` LLM이 기존 목록 중에서만 고름(새 카테고리는 절대 안 만듦).
-    4순위(전부 실패) "미분류" — namespace별 최초 1회만 자동 생성. `bulk_create_knowledge()`가
-    모든 등록 경로 공통으로 category를 필수값 취급해서(`_require_category`) 진짜 NULL은 못
-    넣는다; 기존 값 하나를 쓰는 쪽이 이 불변식을 안 건드리면서 "사람 검토가 더 필요한 것만
-    걸러낸다"는 의도를 살린다.
+    2순위 직계 상위 페이지 제목(`doc.metadata["parent_title"]`) — 기존 목록에 있으면 그대로
+    쓰고, **없으면 그 이름으로 새 카테고리를 자동 생성**한다. 최초 설계는 "새 카테고리는 절대
+    자동 생성 안 함"이었는데, 다시 짚어보니 이 신호는 LLM의 추측이 아니라 **사람이 이미
+    컨플루언스에 만들어둔 실제 정보 구조**다("외부서비스" 아래 배달의민족/쿠팡이츠/땡겨요로
+    나뉜 것처럼) — 이걸 신뢰 안 하고 매번 "미분류"로만 떨어뜨리면, 세분화된 업무구분을 누가
+    먼저 나서서 만들어줄 유인이 없어 결국 "미분류"가 새 이름의 "공통지식" 통짜 바구니가
+    될 뿐이라는 지적으로 정정(사람 개입 없이 첫 등록 순간부터 조직의 실제 구조를 그대로
+    반영). 페이지 자체가 트리 루트라 상위 페이지가 없는 경우만 3순위로 내려간다.
+    3순위(직계 상위 페이지 정보가 아예 없을 때만) `category_suggest` LLM이 기존 목록 중에서만
+    고름 — 이 경로는 신뢰할 구조 정보가 없는 추측이라 여전히 새 카테고리를 못 만들게 막아둠.
+    4순위(그래도 실패) "미분류" — namespace별 최초 1회만 자동 생성. `bulk_create_knowledge()`
+    가 모든 등록 경로 공통으로 category를 필수값 취급해서(`_require_category`) 진짜 NULL은
+    못 넣는다.
     """
-    from core.database import get_conn
     from service.admin.service import suggest_category_for_content
 
     if override:
         return override
     parent_title = doc.metadata.get("parent_title")
-    if parent_title and parent_title in existing_categories:
+    if parent_title:
+        await _ensure_category_exists(ns_id, parent_title, existing_categories)
         return parent_title
-    hint = f"{parent_title + ' > ' if parent_title else ''}{doc.source_name}\n{doc.raw_text[:600]}"
+    hint = f"{doc.source_name}\n{doc.raw_text[:600]}"
     suggested = await suggest_category_for_content(ns_id, hint)
     if suggested:
         return suggested
-    if _UNSORTED_CATEGORY not in existing_categories:
-        async with get_conn() as conn:
-            await conn.execute(
-                "INSERT INTO rag_knowledge_category (namespace_id, name) VALUES ($1, $2) "
-                "ON CONFLICT (namespace_id, name) DO NOTHING",
-                ns_id, _UNSORTED_CATEGORY,
-            )
-        existing_categories.add(_UNSORTED_CATEGORY)
+    await _ensure_category_exists(ns_id, _UNSORTED_CATEGORY, existing_categories)
     return _UNSORTED_CATEGORY
 
 
