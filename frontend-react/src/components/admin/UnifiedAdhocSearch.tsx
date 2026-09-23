@@ -609,7 +609,7 @@ export function UnifiedAdhocSearch() {
                     {activeHit.storage.rows.map((m) => (
                       <div key={m.key} className="flex flex-col">
                         <span className="text-indigo-600/70 dark:text-indigo-400/70">{m.key}</span>
-                        <span className="text-slate-700 dark:text-slate-200 truncate">{m.value}</span>
+                        <span className="text-slate-300 truncate">{m.value}</span>
                       </div>
                     ))}
                   </div>
