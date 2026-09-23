@@ -84,8 +84,13 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
       .get(`/api/knowledge/glossary?namespace=${encodeURIComponent(NAMESPACE)}`, { headers: authHeader })
       .catch(() => null);
     if (glossaryResp?.ok()) {
-      const glossaryItems: Array<{ id: number; term: string }> = await glossaryResp.json();
-      const junkTerms = glossaryItems.filter((g) => g.term.includes(fictionalTerm) || g.term.includes(uniqueMarker));
+      const glossaryItems: Array<{ id: number; term: string; description: string }> = await glossaryResp.json();
+      // LLM이 fictionalTerm 그대로가 아니라 문장 속 다른 표현("Playwright 회귀 테스트"
+      // 같은 구문)을 용어로 뽑아낼 수도 있어(2026-09-24 실측), "Playwright"까지 넓게 잡는다.
+      const junkTerms = glossaryItems.filter((g) =>
+        g.term.includes(fictionalTerm) || g.term.includes(uniqueMarker) ||
+        g.term.includes('Playwright') || g.description.includes('Playwright')
+      );
       for (const g of junkTerms) {
         await page.request.delete(`/api/knowledge/glossary/${g.id}`, { headers: authHeader }).catch(() => {});
       }
