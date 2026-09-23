@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.106)
+# Ops-Navigator 시스템 아키텍처 (v2.107)
 
 ## 개요
 
@@ -11,6 +11,23 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.107: **Teams 메시지 지식등록 기능 완전 제거** (v2.67 MCP 도구 에이전트 제거와 동일
+  방식). 배경: 데스크톱 헬퍼(OpsNavHelper.exe)+Playwright Teams 로그인+실제 chatsvc API
+  크롤링까지 갖춘 정식 통합이었지만(가짜/미완성 아님), `rag_knowledge.source_type='teams'`
+  실사용이 0건으로 확인됨(전체는 confluence_bulk 64건/manual 31건뿐) — exe 다운로드+URL
+  프로토콜 등록+Playwright 로그인까지 거쳐야 하는 진입장벽이 원인으로 판단, 완전 삭제
+  결정(별도 보존 브랜치 없음 — git 이력에 남아있어 필요시 복구 가능). **VOC 이메일
+  파이프라인의 Teams 웹훅 알림 발송(`teams_notify.py`)은 이름만 겹치는 완전히 다른
+  기능이라 영향 없음.**
+  백엔드: `service/teams/`, `agents/knowledge_rag/ingestion/teams_crawler.py`,
+  `teams_token_store.py` 삭제, `knowledge/router.py`의 `POST /import/teams` 제거,
+  `main.py` 라우터 등록 정리(DB 마이그레이션 불필요 — 토큰이 인메모리 전용이라 영속
+  테이블 자체가 없었음). 프론트: `api/teams.ts` 삭제, `KnowledgeTable.tsx`의 `TeamsForm`/
+  `IngestMethod 'teams'`/소스유형 옵션/등록이력 배지 제거, `UnifiedAdhocSearch.tsx`의
+  `SOURCE_TYPE_LABEL` 정리. 데스크톱 헬퍼: `scripts/teams_desktop_login.py`,
+  `OpsNavHelper.spec`, `opsnav_helper_entry.py`, `install_url_handler.py`,
+  `dist/OpsNavHelper.exe`, `build_exe.cmd` 삭제, `docker-compose.yml`의 `helper_assets`
+  볼륨 마운트 제거. `docs/deployment-closed-network.md`/`scripts/README.md` 동기화.
 - v2.106: **정책 검토 UI 후속 — 반려 항목 수정→재검토 + RDB 편입 LLM 프리필.** v2.105
   실사용 피드백 두 가지: (1) "반려하면 그냥 데이터를 버리는데?" — 리서치로 확인해보니
   `policy_param`/`policy_chunk`는 프로젝트 전체에서 한 번도 UPDATE/DELETE된 적 없는
@@ -1267,37 +1284,6 @@ rag_ingestion_job     -- 인제스천 작업 이력 (source_type, status, auto_g
 | `DELETE` | `/api/admin/cache/entry` | 단일 캐시 엔트리 삭제 |
 | `POST` | `/api/admin/glossary/suggest` | 미매핑 질문 LLM 분석 → 용어 후보 반환 (`limit` 파라미터로 조회 건수 설정, 기본 50, 최대 200) |
 | `POST` | `/api/admin/glossary/suggest/apply` | 추천 용어 1-click 등록 (임베딩 자동 생성) |
-
-### Teams 수집 (`/api/teams-collect`) — v2.15 신규
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `GET` | `/api/teams-collect/auth/status` | Teams 인증 상태 조회 (토큰 유효성 검증 포함, 60초 캐시) |
-| `POST` | `/api/teams-collect/auth/tokens` | 데스크톱 헬퍼가 캡처한 IC3/CSA 토큰 수신 → 인메모리 저장 |
-| `POST` | `/api/teams-collect/auth/logout` | 인메모리 토큰·캐시 삭제 |
-| `GET` | `/api/teams-collect/helper/download` | OpsNavHelper.exe 바이너리 다운로드 |
-| `GET` | `/api/teams-collect/chats` | 캡처된 채팅방 목록 반환 |
-| `POST` | `/api/teams-collect/messages` | syncState 페이징으로 채팅방 메시지 조회 (캐시 우선, 부족 시 Teams API 추가 로드) |
-| `POST` | `/api/knowledge/import/teams` | 선택 메시지 스레드 → ParsedDocument → 청킹 → 벌크 등록 |
-
-**Teams 인증 흐름:**
-```
-웹 UI "Teams 로그인" 버튼 (opsnav://teams-login?api_url=...&jwt=... 링크)
-  → 사용자 PC의 OpsNavHelper.exe 자동 실행 (opsnav:// URL 스킴 등록 필요)
-  → Playwright로 Teams 웹 로그인 화면 띄움
-  → 사용자가 로그인하면 네트워크 후킹으로 IC3 토큰 + 채팅방 목록 캡처
-  → POST /api/teams-collect/auth/tokens (JWT 인증)
-  → 백엔드 인메모리 스토어에 저장 (DB 미저장, 재시작 시 소멸)
-  → 프론트 2초 폴링으로 자동 감지 → 채팅방 목록 표시
-```
-
-**스크립트 구성 (`scripts/`):**
-| 파일 | 역할 |
-|------|------|
-| `teams_desktop_login.py` | Playwright Teams 로그인·IC3 토큰 캡처 핵심 로직 |
-| `install_url_handler.py` | `opsnav://` 커스텀 URL 스킴 OS 등록 (Windows 레지스트리) |
-| `opsnav_helper_entry.py` | PyInstaller exe 진입점 (install/run/uninstall 모드 분기) |
-| `dist/OpsNavHelper.exe` | PyInstaller 빌드 산출물 (docker-compose가 `/app/helper_assets`로 마운트) |
 
 ### VOC 이메일 수집 (`/api/email-voc`) — v2.40 신규, v2.44~v2.46 개선
 

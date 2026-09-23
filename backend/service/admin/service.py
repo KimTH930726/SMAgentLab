@@ -165,7 +165,7 @@ async def ensure_category_exists(ns_id: int, name: str) -> None:
 async def resolve_or_create_category(ns_id: int, category: Optional[str], content: str) -> str:
     """모든 지식 등록 경로 공용 카테고리 자동 관리(2026-09-24) — 사람이 값을 명시하면
     그대로 쓰고, 없으면 LLM이 기존 목록 중에서 추천, 그마저 실패하면 "미분류"를 자동
-    생성해서 쓴다. 어떤 경로로 등록하든(수동 입력/파일 업로드/텍스트 분할/Teams) 사람이
+    생성해서 쓴다. 어떤 경로로 등록하든(수동 입력/파일 업로드/텍스트 분할) 사람이
     카테고리를 반드시 골라야 등록이 되던 것을, 아무것도 안 골라도 항상 유효한 값을
     갖도록 뒤집는다 — 컨플루언스 벌크의 `_resolve_confluence_page_category()`와 같은
     철학이지만, 여기엔 페이지 트리 같은 구조 신호가 없어 그 1순위(구조 기반 자동 카테고리

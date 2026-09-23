@@ -10,7 +10,7 @@
 #       docker-compose.prod.yml
 #       init/                       (DB 초기화 SQL)
 #       .env                        (시크릿/환경변수)
-#       scripts/                    (Teams 헬퍼 등 정적 자산)
+#       scripts/                    (배포/백업 스크립트)
 #
 # 사용법:
 #   cd /opt/smagentlab            # 또는 배포 디렉토리

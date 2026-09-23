@@ -208,7 +208,7 @@ class TestBulkCreateKnowledge:
     async def test_missing_category_auto_resolved_not_rejected(self):
         """카테고리 자동 관리(2026-09-24) — 예전엔 category가 비어있으면 _require_category가
         ValueError로 등록 자체를 거부했다. 지금은 resolve_or_create_category()가 대신 값을
-        채워 넣어 등록이 그대로 성공해야 한다(수동/파일/텍스트/Teams 등록 전부 해당)."""
+        채워 넣어 등록이 그대로 성공해야 한다(수동/파일/텍스트 등록 전부 해당)."""
         fake_conn = MagicMock()
         fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
         fake_conn.__aexit__ = AsyncMock(return_value=False)

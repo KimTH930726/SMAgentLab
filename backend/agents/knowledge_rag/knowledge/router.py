@@ -270,7 +270,7 @@ async def bulk_create(body: BulkCreateRequest, user: dict = Depends(get_current_
         created_by_user_id=user["id"],
     )
     # 용어 자동 추출 복원(2026-09-24) — 파일/URL 단발성 등록에만 있던 _run_auto_glossary()가
-    # 미리보기+검토 2단계 흐름(파일/텍스트/Teams/컨플루언스 전부 이 엔드포인트로 확정)으로
+    # 미리보기+검토 2단계 흐름(파일/텍스트/컨플루언스 전부 이 엔드포인트로 확정)으로
     # 넘어오며 끊겨있던 것을 모든 벌크 등록 경로 공통으로 되살림 — 체크박스 없이 항상 실행.
     combined_text = "\n".join(item.content for item in body.items)
     glossary_count = await _run_auto_glossary(body.namespace, combined_text, user, max_chars=20000)
@@ -697,96 +697,6 @@ async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current
         "source_name": doc.source_name,
         "source_type": doc.source_type,
         "url": body.url,
-    }
-
-
-# ─── Teams 인제스천 ──────────────────────────────────────────────────────────
-
-# 메시지는 raw dict로 받음 — "from" 키가 파이썬 예약어라 Pydantic 모델로 감싸지 않음
-class _TeamsThread(_BM):
-    title: str = ""
-    messages: list[dict]
-
-
-class _TeamsImportBody(_BM):
-    namespace: str
-    chat_id: Optional[str] = None
-    chat_label: Optional[str] = None
-    docs: list[_TeamsThread]
-    chunk_strategy: str = "auto"
-    category: Optional[str] = None
-
-
-@router.post("/import/teams", status_code=201)
-async def import_from_teams(body: _TeamsImportBody, user: dict = Depends(get_current_user)):
-    """Teams 대화 스레드 → 청킹 → 벌크 등록.
-
-    프론트에서 선택한 메시지들을 스레드 단위로 받아, 각 스레드를 하나의
-    ParsedDocument로 변환 후 기존 청킹/인제스천 파이프라인에 태운다.
-    """
-    await check_namespace_ownership(body.namespace, user)
-
-    from agents.knowledge_rag.ingestion.adapters import ParsedDocument
-    from agents.knowledge_rag.ingestion.chunker import chunk_document
-    from agents.knowledge_rag.ingestion.teams_crawler import thread_to_content
-
-    if not body.docs:
-        raise HTTPException(status_code=400, detail="저장할 대화가 없습니다.")
-
-    all_items: list[dict] = []
-    thread_titles: list[str] = []
-
-    for i, thread in enumerate(body.docs):
-        messages = thread.messages or []
-        if not messages:
-            continue
-
-        content = thread_to_content(messages)
-        if not content.strip():
-            continue
-
-        title = (thread.title or "").strip() or f"Teams 대화 #{i + 1} ({len(messages)}건)"
-        thread_titles.append(title)
-
-        # 스레드 텍스트를 ParsedDocument로 감싸 청킹 파이프라인 공유
-        doc = ParsedDocument(
-            source_type="teams",
-            source_name=title,
-            raw_text=content,
-            metadata={
-                "chat_id": body.chat_id,
-                "chat_label": body.chat_label,
-                "message_count": len(messages),
-                "participants": sorted({m.get("from", "") for m in messages if m.get("from")}),
-            },
-        )
-        chunks = chunk_document(doc, strategy=body.chunk_strategy)
-        if not chunks:
-            continue
-        for c in chunks:
-            all_items.append({
-                "content": c.text,
-                "category": body.category,
-            })
-
-    if not all_items:
-        raise HTTPException(status_code=400, detail="분할된 청크가 없습니다.")
-
-    source_file = body.chat_label or body.chat_id or "teams"
-    result = await service.bulk_create_knowledge(
-        namespace=body.namespace,
-        items=all_items,
-        source_file=source_file,
-        source_type="teams",
-        created_by_part=user["part"],
-        created_by_user_id=user["id"],
-    )
-    return {
-        **result,
-        "threads": len(thread_titles),
-        "chunks": len(all_items),
-        "source_name": source_file,
-        "source_type": "teams",
     }
 
 

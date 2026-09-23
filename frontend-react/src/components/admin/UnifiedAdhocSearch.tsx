@@ -95,7 +95,6 @@ const SOURCE_TYPE_LABEL: Record<string, string> = {
   file_upload: '파일 업로드',
   web: '웹 크롤링',
   confluence: 'Confluence',
-  teams: 'Teams',
 };
 
 const RRF_K = 60;

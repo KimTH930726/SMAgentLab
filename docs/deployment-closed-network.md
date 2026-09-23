@@ -29,8 +29,7 @@ SMAgentLab/
 │   ├── import-and-run.sh           # 폐쇄망 배포 스크립트
 │   ├── update-images.sh            # 버전 업데이트 스크립트
 │   ├── backup-db.sh                # DB 백업
-│   ├── restore-db.sh               # DB 복원
-│   └── dist/OpsNavHelper.exe       # Teams 헬퍼 (선택)
+│   └── restore-db.sh               # DB 복원
 └── smagentlab-images-v2.16.tar.gz  # 이미지 묶음 (별도 전송)
 ```
 
@@ -185,7 +184,6 @@ scripts/import-and-run.sh
 scripts/update-images.sh
 scripts/backup-db.sh
 scripts/restore-db.sh
-scripts/dist/OpsNavHelper.exe         # (Teams 헬퍼 사용 시)
 ```
 
 > **시크릿 전송 주의:** `.env`는 별도 보안 채널(암호화 USB, KMS, 사내 시크릿 매니저)로 전송하고, 같은 메일/채팅에 첨부하지 마세요.
@@ -315,8 +313,7 @@ ls -la
 #     ├── import-and-run.sh
 #     ├── update-images.sh
 #     ├── backup-db.sh
-#     ├── restore-db.sh
-#     └── dist/OpsNavHelper.exe   (선택)
+#     └── restore-db.sh
 ```
 
 #### 무결성 검증

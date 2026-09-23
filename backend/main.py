@@ -20,7 +20,6 @@ from agents.knowledge_rag.knowledge.router import router as knowledge_router
 from service.feedback.router import router as feedback_router
 from service.admin.router import router as admin_router
 from service.prompt.router import router as prompt_router
-from service.teams.router import router as teams_router
 from service.email_voc.router import router as email_voc_router
 from service.email_voc.scheduler import start_scheduler, stop_scheduler
 from service.policy.router import router as policy_router
@@ -37,7 +36,6 @@ _ROUTERS = [
     auth_router, chat_router, knowledge_router,
     feedback_router, admin_router,
     prompt_router,
-    teams_router,
     email_voc_router,
     policy_router,
     refdata_router,

@@ -662,7 +662,7 @@ async def bulk_create_knowledge(
 
     # 카테고리 자동 관리(2026-09-24) — 컨플루언스 벌크는 이 시점에 이미 페이지별로
     # 카테고리가 정해진 채로 들어오지만(빈 값 없음, resolve_or_create_category가 그대로
-    # 반환), 파일 업로드/텍스트 분할/Teams처럼 프론트가 못 채웠거나 안 채운 경우도
+    # 반환), 파일 업로드/텍스트 분할처럼 프론트가 못 채웠거나 안 채운 경우도
     # 여기서 항상 유효한 값을 갖도록 안전망을 건다.
     from service.admin.service import resolve_or_create_category
     for item in items:
