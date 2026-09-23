@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { FlaskConical, Info, Check, ChevronDown, ChevronUp, TrendingUp, ArrowUpRight, ArrowDownRight } from 'lucide-react';
-import { runTrack2, getTrack2Axes, getTrack2History, type Track2Result } from '../../api/policy';
+import { getTrack2Axes, getTrack2History } from '../../api/policy';
+import { useTrack2Store, runTrack2Comparison } from '../../store/useTrack2Store';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 
@@ -75,10 +76,15 @@ const STORAGE_STRATEGIES: StorageStrategy[] = [
  * 지표 카드형 설명(2026-09-17 1차 재설계, MetricCard)은 접힌 패널 안으로 이동해 유지.
  */
 export function PolicyLab() {
-  const [lastResult, setLastResult] = useState<Track2Result | null>(null);
   const [visibleMetrics, setVisibleMetrics] = useState<Set<MetricKey>>(new Set(ALL_METRICS));
   const [axis, setAxis] = useState('policy');
   const [showInfo, setShowInfo] = useState(false);
+  // 비교 실행 상태는 컴포넌트 밖(zustand)에 있다 — 이 화면을 나갔다 들어와도 실행 중
+  // 표시/결과가 안 끊기게(useTrack2Store.ts 참고, "실행했다가 다른 화면 갔다오면
+  // 초기화된다"는 지적으로 2026-09-23 수정).
+  const running = useTrack2Store((s) => s.running);
+  const runError = useTrack2Store((s) => s.error);
+  const lastResult = useTrack2Store((s) => s.lastResult);
 
   const { data: axes = [{ key: 'policy', label: '정책서 (A/B)' }] } = useQuery({
     queryKey: ['track2-axes'],
@@ -92,11 +98,6 @@ export function PolicyLab() {
     staleTime: 30_000,
   });
   const trendAsc = [...history].reverse(); // 오래된 순으로
-
-  const runMutation = useMutation({
-    mutationFn: () => runTrack2(10, axis),
-    onSuccess: (data) => setLastResult(data),
-  });
 
   const displayResult = lastResult ?? history[0] ?? null; // 아직 이번 세션에 실행 안 했어도 최근 이력을 바로 보여줌
 
@@ -141,8 +142,8 @@ export function PolicyLab() {
               {axes.map((a) => <option key={a.key} value={a.key}>{a.label}</option>)}
             </select>
           </div>
-          <Button variant="primary" size="sm" loading={runMutation.isPending} onClick={() => runMutation.mutate()}>
-            {runMutation.isPending ? '실행 중... (몇 분 소요)' : '▶ 비교 실행'}
+          <Button variant="primary" size="sm" loading={running} onClick={() => runTrack2Comparison(10, axis)}>
+            {running ? '실행 중... (몇 분 소요)' : '▶ 비교 실행'}
           </Button>
         </div>
       </div>
@@ -213,20 +214,21 @@ export function PolicyLab() {
         </div>
       )}
 
-      {runMutation.isPending && (
+      {running && (
         <div className="flex items-center gap-2 py-10 text-slate-400 text-sm justify-center">
           <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
           전체 정책 항목을 임시 저장소에 옮겨 담고 89개 질문으로 비교 중입니다 — 몇 분 걸립니다.
+          다른 화면으로 이동해도 계속 진행되고, 돌아오면 결과가 반영돼 있습니다.
         </div>
       )}
 
-      {runMutation.isError && (
+      {runError && (
         <div className="bg-rose-50 border border-rose-200 dark:bg-rose-900/20 dark:border-rose-700/40 rounded-xl px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
-          {String(runMutation.error)}
+          {runError}
         </div>
       )}
 
-      {!runMutation.isPending && displayResult && (
+      {!running && displayResult && (
         <>
           {/* 결과 표 — 지표별 "뭔지"를 표 안에 같이 넣어서 숫자만 보고 헷갈리지 않게.
               hit@K/집중도(A vs B, 깔끔한 쌍)와 Top-1/채널기여도(B 내부 채널별 세부)는
@@ -415,7 +417,7 @@ export function PolicyLab() {
         </>
       )}
 
-      {!runMutation.isPending && !displayResult && !runMutation.isError && (
+      {!running && !displayResult && !runError && (
         <div className="text-center py-14 text-slate-500 text-sm">
           아직 실행 이력이 없습니다. "비교 실행"을 눌러 시작하세요.
         </div>
