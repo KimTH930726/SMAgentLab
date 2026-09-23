@@ -885,6 +885,76 @@ class _BulkPagesBody(BaseModel):
     auto_glossary: bool = False
 
 
+_UNSORTED_CATEGORY = "미분류"
+
+
+async def _resolve_confluence_page_category(
+    ns_id: int, doc, override: Optional[str], existing_categories: set[str],
+) -> str:
+    """페이지 1건의 업무구분 3단 폴백(2026-09-22, `docs/tech/knowledge-category-automation.md`).
+
+    `preview_confluence_bulk`(실제 UI 확정 흐름 이전의 리뷰 단계)와 `import_confluence_bulk`
+    양쪽에서 공유 — 미리보기에서 계산한 값이 리뷰 화면에 그대로 보이고, 사용자가 선택 항목을
+    거르기만 해도 그 값이 최종 등록까지 살아남아야 하므로 같은 로직을 한 곳에 둔다.
+
+    1순위 `override`(폼에서 사람이 직접 지정) — 있으면 그대로 우선.
+    2순위 직계 상위 페이지 제목(`doc.metadata["parent_title"]`)이 기존 업무구분과 정확히
+    일치 → LLM 호출 없음(결정론). 실 데이터로 "외부서비스" 아래 "배달의민족"/"쿠팡이츠"처럼
+    이 신호가 실제 업무구분과 거의 일치하는 걸 확인함(space명은 팀 전체가 하나뿐이라 너무
+    굵어서 기각).
+    3순위 `category_suggest` LLM이 기존 목록 중에서만 고름(새 카테고리는 절대 안 만듦).
+    4순위(전부 실패) "미분류" — namespace별 최초 1회만 자동 생성. `bulk_create_knowledge()`가
+    모든 등록 경로 공통으로 category를 필수값 취급해서(`_require_category`) 진짜 NULL은 못
+    넣는다; 기존 값 하나를 쓰는 쪽이 이 불변식을 안 건드리면서 "사람 검토가 더 필요한 것만
+    걸러낸다"는 의도를 살린다.
+    """
+    from core.database import get_conn
+    from service.admin.service import suggest_category_for_content
+
+    if override:
+        return override
+    parent_title = doc.metadata.get("parent_title")
+    if parent_title and parent_title in existing_categories:
+        return parent_title
+    hint = f"{parent_title + ' > ' if parent_title else ''}{doc.source_name}\n{doc.raw_text[:600]}"
+    suggested = await suggest_category_for_content(ns_id, hint)
+    if suggested:
+        return suggested
+    if _UNSORTED_CATEGORY not in existing_categories:
+        async with get_conn() as conn:
+            await conn.execute(
+                "INSERT INTO rag_knowledge_category (namespace_id, name) VALUES ($1, $2) "
+                "ON CONFLICT (namespace_id, name) DO NOTHING",
+                ns_id, _UNSORTED_CATEGORY,
+            )
+        existing_categories.add(_UNSORTED_CATEGORY)
+    return _UNSORTED_CATEGORY
+
+
+def _enrich_heading_path(doc, in_page_heading_path: Optional[list[str]]) -> list[str]:
+    """페이지 조상(직계 상위 페이지 제목)을 청크의 페이지 내 헤딩 조상 앞에 붙인다
+    (2026-09-22, `docs/tech/knowledge-category-automation.md` §8). `heading_path`(v2.98)는
+    지금까지 페이지 **안**의 h1~h4 조상만 담았는데, 페이지 자체에 구분되는 제목이 없는
+    문서(표만 있는 페이지 등)는 여전히 빈 값이었다. 직계 상위 페이지 제목은 이미 카테고리
+    자동화에서 실측된 신호("외부서비스" 아래 배달의민족/쿠팡이츠처럼 실제로 구분됨)라 그대로
+    재사용 — 새 API 호출이나 저장 없이 기존 heading_path 배열 맨 앞에 얹기만 한다."""
+    parent_title = doc.metadata.get("parent_title")
+    base = list(in_page_heading_path or [])
+    if parent_title and (not base or base[0] != parent_title):
+        return [parent_title] + base
+    return base
+
+
+async def _load_existing_categories(ns_id: int) -> set[str]:
+    from core.database import get_conn
+
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            "SELECT name FROM rag_knowledge_category WHERE namespace_id = $1", ns_id,
+        )
+    return {r["name"] for r in rows}
+
+
 @router.post("/import/url/bulk-pages/preview")
 async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_current_user)):
     """선택된 페이지들을 fetch + 청킹만 수행 (DB 등록 X). 청크 리뷰용."""
@@ -896,6 +966,7 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
 
     from agents.knowledge_rag.ingestion.web_crawler import fetch_confluence_by_id
     from agents.knowledge_rag.ingestion.chunker import chunk_document
+    from core.database import resolve_namespace_id
     from core.security import get_user_confluence_pat
 
     token = body.confluence_token or get_user_confluence_pat(user)
@@ -908,11 +979,16 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
         try:
             doc = await fetch_confluence_by_id(body.base_url, p.page_id, token)
             chunks = chunk_document(doc, strategy=body.chunk_strategy)
-            return {"page_id": p.page_id, "title": doc.source_name, "chunks": chunks, "error": None}
+            return {"page_id": p.page_id, "title": doc.source_name, "doc": doc, "chunks": chunks, "error": None}
         except Exception as e:
-            return {"page_id": p.page_id, "title": p.title or p.page_id, "chunks": [], "error": str(e)}
+            return {"page_id": p.page_id, "title": p.title or p.page_id, "doc": None, "chunks": [], "error": str(e)}
 
     fetched = await asyncio.gather(*(_fetch_and_chunk(p) for p in body.pages))
+
+    from core.database import get_conn
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, body.namespace)
+    existing_categories = await _load_existing_categories(ns_id) if ns_id is not None else set()
 
     chunks_out: list[dict] = []
     pages_meta: list[dict] = []
@@ -922,6 +998,14 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
         if f["error"]:
             failed.append({"page_id": f["page_id"], "title": f["title"], "error": f["error"]})
             continue
+        # 페이지 단위로 카테고리를 한 번만 계산해 그 페이지의 모든 청크에 공유(2026-09-22,
+        # 지식 카테고리 자동화) — 미리보기 단계에서 계산해야 리뷰 화면에서 사용자가 보고,
+        # 선택/제외만 하더라도 확정 시점까지 페이지별 값이 그대로 살아남는다(확정은
+        # `bulk_create_knowledge`로 가는데 거기엔 페이지 구조가 없어 여기서 미리 붙여야 함).
+        page_category = (
+            await _resolve_confluence_page_category(ns_id, f["doc"], body.category, existing_categories)
+            if ns_id is not None else (body.category or _UNSORTED_CATEGORY)
+        )
         page_start = idx
         for c in f["chunks"]:
             chunks_out.append({
@@ -930,6 +1014,8 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
                 "page_title": f["title"],
                 "text": c.text,
                 "title": c.section_title,
+                "category": page_category,
+                "heading_path": _enrich_heading_path(f["doc"], c.heading_path),
             })
             idx += 1
         pages_meta.append({
@@ -937,6 +1023,7 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
             "title": f["title"],
             "chunk_start": page_start,
             "chunk_count": idx - page_start,
+            "category": page_category,
         })
 
     return {
@@ -999,6 +1086,10 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
                 ns_id,
             )
         }
+    existing_categories = await _load_existing_categories(ns_id)
+
+    async def _resolve_category(doc) -> str:
+        return await _resolve_confluence_page_category(ns_id, doc, body.category, existing_categories)
 
     # 청크 → items 변환 + per-page 메타데이터 보존
     items: list[dict] = []
@@ -1022,19 +1113,21 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
         if page_id in existing_versions:
             pages_to_deprecate.append(page_id)
 
+        page_category = await _resolve_category(doc)
         page_summaries.append({
             "page_id": page_id,
             "title": doc.source_name,
             "chunks": len(chunks),
             "chars": len(doc.raw_text),
+            "category": page_category,
         })
         for c in chunks:
             items.append({
                 "content": c.text,
-                "category": body.category,
+                "category": page_category,
                 "confluence_page_id": page_id,
                 "confluence_version": fetched_version,
-                "heading_path": c.heading_path,
+                "heading_path": _enrich_heading_path(doc, c.heading_path),
             })
 
     if pages_to_deprecate:

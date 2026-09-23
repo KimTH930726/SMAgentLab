@@ -97,3 +97,51 @@ async def delete_namespace(name: str) -> bool:
         from shared import cache as sem_cache
         await sem_cache.invalidate_namespace(name)
     return deleted
+
+
+async def suggest_category_for_content(ns_id: int, content: str) -> Optional[str]:
+    """지식 내용을 읽고 기존 업무구분 목록 중 하나를 LLM으로 추천 (새 카테고리는 절대 만들지
+    않음 — 제시된 목록 안에서만 고르도록 프롬프트가 강제, 매칭 실패 시 None).
+
+    `service/admin/router.py`의 `POST /categories/suggest` 엔드포인트와 같은 로직을
+    공유하려고 분리(2026-09-22, 지식 카테고리 자동화 — `docs/tech/knowledge-category-
+    automation.md`). 컨플루언스 벌크 등록처럼 HTTP 컨텍스트 밖(요청 처리 도중)에서도
+    호출해야 해서 라우트 핸들러 안에 있던 로직을 재사용 가능한 함수로 뽑았다.
+    """
+    from service.llm.factory import get_llm_provider
+    from service.prompt.loader import get_prompt as load_prompt
+
+    content = (content or "").strip()
+    if not content:
+        return None
+
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            "SELECT name FROM rag_knowledge_category WHERE namespace_id = $1 ORDER BY name", ns_id
+        )
+    categories = [r["name"] for r in rows]
+    if not categories:
+        return None
+
+    categories_str = ", ".join(f'"{c}"' for c in categories)
+    fallback = (
+        "다음 지식 내용을 읽고, 제시된 업무구분 중 가장 적합한 하나를 골라주세요. "
+        "반드시 제시된 업무구분 중 하나의 이름만 답하고, 다른 설명은 절대 하지 마세요.\n\n"
+        "업무구분 목록: {categories}\n\n"
+        "지식 내용:\n{content}\n\n"
+        "가장 적합한 업무구분 이름:"
+    )
+    template = await load_prompt("category_suggest", fallback)
+    # .format() 대신 replace: 지식 내용에 {테이블명} 같은 패턴이 흔해 KeyError 위험이 있음
+    prompt = template.replace("{categories}", categories_str).replace("{content}", content[:600])
+    if "{categories}" in prompt or "{content}" in prompt:
+        prompt = fallback.replace("{categories}", categories_str).replace("{content}", content[:600])
+    try:
+        answer, _ = await get_llm_provider().generate(context="", question=prompt)
+        suggested = answer.strip().strip('"').strip("'").strip()
+        if suggested not in categories:
+            matched = next((c for c in categories if c in suggested or suggested in c), None)
+            suggested = matched
+    except Exception:
+        suggested = None
+    return suggested

@@ -125,7 +125,10 @@ async def _migrate_core_tables(conn) -> None:
     )
 
     # ── ops_namespace.owner_part_id 추가 ───────────────────────────
-    await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_part VARCHAR(100)")
+    # owner_part(VARCHAR, FK 전환 전 임시 컬럼)는 2026-09-22 죽은 컬럼 정리(v2.100)로
+    # 완전히 제거됨 — 여기서 다시 만들지 않는다. 아래 두 UPDATE 블록(구 '기본' 파트 정리,
+    # owner_part→owner_part_id 동기화)도 같이 제거됨: 이 컬럼은 owner_part_id로의 1회성
+    # 전환을 돕는 브릿지였고 전환은 이미 완료됐다(_migrate_drop_dead_schema_2026_09_22 참고).
     await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_part_id INT")
     await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS created_by_user_id INT")
     await conn.execute("""
@@ -151,8 +154,6 @@ async def _migrate_core_tables(conn) -> None:
     # 구 '기본' 파트가 남아있으면 제거 (마이그레이션) — 컬럼이 없으면 skip
     if await _column_exists(conn, "ops_user", "part"):
         await conn.execute("UPDATE ops_user SET part = '슈퍼어드민' WHERE part = '기본'")
-    if await _column_exists(conn, "ops_namespace", "owner_part"):
-        await conn.execute("UPDATE ops_namespace SET owner_part = '슈퍼어드민' WHERE owner_part = '기본'")
     await conn.execute("""
         DELETE FROM ops_part WHERE name = '기본'
     """)
@@ -164,15 +165,6 @@ async def _migrate_core_tables(conn) -> None:
             SET part_id = p.id
             FROM ops_part p
             WHERE u.part = p.name AND u.part_id IS NULL
-        """)
-
-    # ── ops_namespace.owner_part → owner_part_id 동기화 ────────────
-    if await _column_exists(conn, "ops_namespace", "owner_part"):
-        await conn.execute("""
-            UPDATE ops_namespace n
-            SET owner_part_id = p.id
-            FROM ops_part p
-            WHERE n.owner_part = p.name AND n.owner_part_id IS NULL
         """)
 
     admin_exists = await conn.fetchval(
@@ -1172,6 +1164,46 @@ async def _migrate_knowledge_heading_path(conn) -> None:
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS heading_path TEXT[]")
 
 
+async def _migrate_drop_dead_schema_2026_09_22(conn) -> None:
+    """죽은 컬럼/테이블 정리 (v2.100, 2026-09-22).
+
+    전체 스키마 감사(테이블별 실 컬럼 대조 + 코드 grep + 실 데이터 population 실측) 결과
+    확인된, 코드 어디서도 안 쓰이고 실사용 데이터도 없는 것들만 제거. "스키마 선추가"
+    패턴(예: policy_item.reviewed_at/reviewed_by, ops_user.auth_provider/external_id 등)과는
+    구분 — 저것들은 architecture.md/WBS 문서에 착수 예정이 명시돼 있어 대상에서 제외했다.
+
+    - ops_namespace.owner_part (VARCHAR): owner_part_id(FK)로의 전환용 1회성 브릿지 컬럼.
+      전환이 이미 끝나 0/4건만 남았고, 이 함수 앞부분(_migrate_core_tables)에서 더 이상
+      재생성하지 않도록 ADD COLUMN 구문도 같이 제거함(안 하면 매 기동마다 되살아남).
+    - policy_param.approved (BOOLEAN): INSERT 경로에 이 컬럼이 아예 빠져 있어 전부 기본값
+      false(389/389)로만 존재 — 어디서도 읽거나 true로 세팅하는 코드 없음.
+    - ops_http_tool / ops_mcp_tool / ops_mcp_tool_log: MCP 도구 에이전트 완전 제거(v2.67)
+      후 삭제 마이그레이션 없이 방치된 테이블 — architecture.md v2.67에 스스로 명시.
+    - sql_*(10개, Text2SQL 에이전트 제거 v2.51 이후 완전히 죽음, 코드는 archive/with-text2sql
+      브랜치에 보존): audit_log/cache/fewshot/pipeline_stage/relation/schema_column/
+      schema_table/schema_vector/synonym/target_db.
+
+    `rag_knowledge.supersedes_id`/`version`/`logical_document_id`는 이번엔 제외 — 원래
+    의도(문서 계보 추적, #40)와 다른 방향(heading_path/confluence_version)으로 기능이
+    진화한 정황이라 완전히 죽었다고 단정하기 전에 별도로 재검토가 필요함(감사 결과 참고).
+    """
+    await conn.execute("ALTER TABLE ops_namespace DROP COLUMN IF EXISTS owner_part")
+    await conn.execute("ALTER TABLE policy_param DROP COLUMN IF EXISTS approved")
+    await conn.execute("DROP TABLE IF EXISTS ops_mcp_tool_log")
+    await conn.execute("DROP TABLE IF EXISTS ops_mcp_tool")
+    await conn.execute("DROP TABLE IF EXISTS ops_http_tool")
+    await conn.execute("DROP TABLE IF EXISTS sql_schema_vector")
+    await conn.execute("DROP TABLE IF EXISTS sql_schema_column")
+    await conn.execute("DROP TABLE IF EXISTS sql_schema_table")
+    await conn.execute("DROP TABLE IF EXISTS sql_audit_log")
+    await conn.execute("DROP TABLE IF EXISTS sql_cache")
+    await conn.execute("DROP TABLE IF EXISTS sql_fewshot")
+    await conn.execute("DROP TABLE IF EXISTS sql_pipeline_stage")
+    await conn.execute("DROP TABLE IF EXISTS sql_relation")
+    await conn.execute("DROP TABLE IF EXISTS sql_synonym")
+    await conn.execute("DROP TABLE IF EXISTS sql_target_db")
+
+
 async def _cleanup_stale_generating_messages(conn) -> None:
     """프로세스가 막 기동했으니, 'generating' 상태로 남은 메시지는 전부 이전
     프로세스가 스트리밍 도중 죽으면서 남긴 고아 행이다(지금 막 시작했으므로 이
@@ -1226,6 +1258,7 @@ async def _run_migrations() -> None:
         await _migrate_remove_fewshot(conn)
         await _migrate_ensure_ko_text_search_helpers(conn)
         await _migrate_knowledge_heading_path(conn)
+        await _migrate_drop_dead_schema_2026_09_22(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

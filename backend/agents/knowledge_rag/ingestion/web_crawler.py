@@ -478,7 +478,7 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
             r = await client.get(
                 f"{base}/rest/api/content/{page_id}",
                 headers=headers,
-                params={"expand": "body.storage,title,space,version,_links"},
+                params={"expand": "body.storage,title,space,version,_links,ancestors"},
             )
             r.raise_for_status()
             page = r.json()
@@ -490,6 +490,12 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
     space_name = page.get("space", {}).get("name", "")
     page_url = _build_page_url(base, page_id, page)
     page_version = page.get("version", {}).get("number")
+    # ancestors: REST API가 루트→직계상위 순으로 반환 — 마지막 원소가 직계 상위 페이지.
+    # 카테고리 자동화(2026-09-22, docs/tech/knowledge-category-automation.md)의 1순위
+    # 신호 — space명은 팀 전체가 스페이스 하나에 몰려있어 너무 굵다는 게 실측 확인됨,
+    # 직계 상위 페이지 제목이 실제 업무구분과 훨씬 가깝다(예: "외부서비스" > "배달의민족").
+    ancestors = page.get("ancestors") or []
+    parent_title = ancestors[-1].get("title") if ancestors else None
 
     soup = BeautifulSoup(storage_html, "lxml")
     raw_text = _extract_text(soup)
@@ -506,5 +512,6 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
             "space": space_name,
             "title": page_title,
             "version": page_version,
+            "parent_title": parent_title,
         },
     )

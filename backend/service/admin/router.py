@@ -223,39 +223,10 @@ async def suggest_category(name: str, body: dict, user: dict = Depends(get_curre
 
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, name)
-        if ns_id is None:
-            return {"suggested_category": None}
-        rows = await conn.fetch(
-            "SELECT name FROM rag_knowledge_category WHERE namespace_id = $1 ORDER BY name", ns_id
-        )
-    categories = [r["name"] for r in rows]
-    if not categories:
+    if ns_id is None:
         return {"suggested_category": None}
 
-    categories_str = ", ".join(f'"{c}"' for c in categories)
-    _CATEGORY_SUGGEST_FALLBACK = (
-        "다음 지식 내용을 읽고, 제시된 업무구분 중 가장 적합한 하나를 골라주세요. "
-        "반드시 제시된 업무구분 중 하나의 이름만 답하고, 다른 설명은 절대 하지 마세요.\n\n"
-        "업무구분 목록: {categories}\n\n"
-        "지식 내용:\n{content}\n\n"
-        "가장 적합한 업무구분 이름:"
-    )
-    template = await load_prompt("category_suggest", _CATEGORY_SUGGEST_FALLBACK)
-    # .format() 대신 replace 사용: 지식 내용에 {변수명} 패턴이 있으면 KeyError 발생함
-    # (IT 운영 지식에는 {table_name}, {env} 같은 패턴이 흔히 포함됨)
-    prompt = template.replace("{categories}", categories_str).replace("{content}", content[:600])
-    if "{categories}" in prompt or "{content}" in prompt:
-        # replace가 실패한 경우(템플릿에 플레이스홀더 없음) → fallback 사용
-        prompt = _CATEGORY_SUGGEST_FALLBACK.replace("{categories}", categories_str).replace("{content}", content[:600])
-    try:
-        answer, _ = await get_llm_provider().generate(context="", question=prompt)
-        suggested = answer.strip().strip('"').strip("'").strip()
-        if suggested not in categories:
-            # 부분 일치 시도
-            matched = next((c for c in categories if c in suggested or suggested in c), None)
-            suggested = matched
-    except Exception:
-        suggested = None
+    suggested = await service.suggest_category_for_content(ns_id, content)
     return {"suggested_category": suggested}
 
 

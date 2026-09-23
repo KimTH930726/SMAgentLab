@@ -77,7 +77,12 @@ def _build_rrf_context(
             else "낮음"
         )
         heading_str = f"\n상위 맥락: {' > '.join(r.heading_path)}" if r.heading_path else ""
-        items.append((rrf_score(i), f"--- 문서 (점수: {rel:.4f}, 신뢰도: {confidence}) ---{heading_str}\n내용:\n{r.content}"))
+        # 문서 식별자를 반드시 포함 — 없으면 시스템 프롬프트의 "📎 문서 N 참고" 지시를
+        # 따를 근거가 컨텍스트에 없어, LLM이 옆에 보이는 점수(float)를 N으로 오인해
+        # "문서 0.3925 참고"처럼 잘못 인용하는 실사고가 있었다(2026-09-22). #{id} 포맷은
+        # 프론트 SearchResultCard.tsx의 `문서 #${result.id}` 표기와 동일해 사용자가
+        # 위쪽 검색 결과 패널과 답변 하단 인용을 바로 대조할 수 있다.
+        items.append((rrf_score(i), f"--- 문서 #{r.id} (점수: {rel:.4f}, 신뢰도: {confidence}) ---{heading_str}\n내용:\n{r.content}"))
     for i, p in enumerate(policy_result.params):
         value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
         condition_str = f" ({p.condition})" if p.condition else ""

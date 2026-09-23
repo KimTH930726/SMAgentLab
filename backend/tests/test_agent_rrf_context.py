@@ -157,3 +157,13 @@ class TestBuildRrfContext:
         results = [_make_result(1, 0.9, "일반지식만")]
         text = agent._build_rrf_context(results, PolicySearchResult())
         assert "일반지식만" in text
+
+    def test_general_knowledge_item_includes_real_id_not_just_score(self, monkeypatch):
+        """실사고(2026-09-22): 문서 블록에 식별자가 없어서 LLM이 시스템 프롬프트의
+        "📎 문서 N 참고" 지시를 따를 근거가 없었고, 대신 옆의 점수(float)를 N으로
+        오인해 "문서 0.3925 참고"처럼 잘못 인용했다. #{id}가 프론트 SearchResultCard의
+        `문서 #${id}` 표기와 동일한 값으로 포함돼야 LLM이 실제 문서를 인용할 수 있다."""
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        results = [_make_result(12852, 0.9, "본문")]
+        text = agent._build_rrf_context(results, PolicySearchResult())
+        assert "문서 #12852" in text

@@ -31,7 +31,7 @@ import {
   type IngestionJobStatus,
   type ConfluenceTreeResponse,
 } from '../../api/knowledge';
-import { getCategories } from '../../api/namespaces';
+import { getCategories, suggestCategory } from '../../api/namespaces';
 import { updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
 import {
   getTeamsAuthStatus,
@@ -104,6 +104,23 @@ function weightClass(w: number) {
     : w >= 1.5
     ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300'
     : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-600/40 dark:text-zinc-300';
+}
+
+// 수동/파일/텍스트/Teams 등록 폼 공용(2026-09-22, 지식 카테고리 자동화 §3-3 일반화) — 컨텐츠를
+// 실제로 확인할 수 있게 된 시점(미리보기 성공 직후)에 한 번 호출해 "공통지식" 기본값을 실제
+// 추천값으로 바꿔치기한다. 사용자가 미리보기 전에 이미 다른 값을 직접 골라뒀으면(기본값과
+// 다르면) 건드리지 않는다 — 실패해도 폼은 그냥 기본값 그대로 두고 조용히 넘어간다(치명적
+// 아님, 어차피 RequiredCategoryField에서 사람이 최종 확인/수정 가능).
+async function autoSuggestCategoryIfUntouched(
+  namespace: string, categoryNames: string[], category: string,
+  setCategory: (v: string) => void, hintContent: string,
+) {
+  const defaultValue = categoryNames.includes('공통지식') ? '공통지식' : '';
+  if (category !== defaultValue || !hintContent.trim() || categoryNames.length === 0) return;
+  try {
+    const suggested = await suggestCategory(namespace, hintContent);
+    if (suggested) setCategory(suggested);
+  } catch { /* 추천 실패는 무시 — 기본값 유지 */ }
 }
 
 // 업무구분은 필수값 — 카테고리가 없는 네임스페이스는 "네임스페이스 관리"에서 먼저 추가해야 함
@@ -765,6 +782,12 @@ interface ReviewChunk {
   text: string;
   title: string | null;
   selected: boolean;
+  /** 컨플루언스 벌크 등록에서만 쓰임 — 페이지 단위로 자동 배정된 업무구분(2026-09-22,
+   * 지식 카테고리 자동화). 다른 경로는 항상 undefined이고 공통 category state를 그대로 쓴다. */
+  category?: string | null;
+  /** 컨플루언스 벌크 등록에서만 쓰임 — 직계 상위 페이지 제목 + 페이지 내 헤딩 조상
+   * (2026-09-22). 확정(bulkCreateKnowledge)까지 실려가야 검색 컨텍스트에 반영된다. */
+  headingPath?: string[] | null;
 }
 
 // analyzer.py의 chunk_strategy 어휘(section/paragraph/fixed/auto) — 파일 업로드와
@@ -776,7 +799,7 @@ const STRATEGY_OPTIONS: { value: string; label: string; desc: string }[] = [
   { value: 'fixed', label: '고정 길이', desc: '구조가 불규칙하거나 아주 긴 텍스트를 균등 분할' },
 ];
 
-function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, category, categoryNames, onCategoryChange, currentStrategy, onRestrategize }: {
+function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, category, categoryNames, onCategoryChange, currentStrategy, onRestrategize, perChunkCategory }: {
   isOpen: boolean;
   onClose: () => void;
   chunks: ReviewChunk[];
@@ -788,6 +811,9 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   onCategoryChange: (v: string) => void;
   currentStrategy?: string | null;
   onRestrategize?: (strategy: string) => Promise<void>;
+  /** 컨플루언스 벌크 등록 전용(2026-09-22) — 페이지별로 이미 자동 배정된 업무구분이 있어
+   * 공통 드롭다운 하나를 강제하지 않는다. 각 청크에 배정된 값을 뱃지로 보여주기만 한다. */
+  perChunkCategory?: boolean;
 }) {
   const [rows, setRows] = useState<ReviewChunk[]>([]);
   const [expandedIdx, setExpandedIdx] = useState<Set<number>>(new Set());
@@ -825,7 +851,14 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`청크 검토 — ${sourceName}`} maxWidth="max-w-3xl">
       <div className="space-y-3">
-        <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={onCategoryChange} />
+        {perChunkCategory ? (
+          <div className="rounded-lg bg-slate-900/60 border border-slate-700 px-3 py-2 text-xs text-slate-400">
+            업무구분은 페이지별로 자동 배정됩니다(각 청크 옆 뱃지 참고) — 상위 페이지 제목이나
+            내용으로 판단하며, 필요하면 등록 후 지식 목록에서 직접 수정할 수 있습니다.
+          </div>
+        ) : (
+          <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={onCategoryChange} />
+        )}
 
         {/* 청킹 전략 재선택 */}
         {onRestrategize && (
@@ -886,6 +919,11 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
                           {chunk.title}
                         </span>
                       )}
+                      {perChunkCategory && chunk.category && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-700/30">
+                          {chunk.category}
+                        </span>
+                      )}
                       <span className="text-[10px] text-slate-600">{chunk.text.length}자</span>
                     </div>
                     <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words">
@@ -912,7 +950,8 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
 
         <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={loading}>취소</Button>
-          <Button variant="primary" size="sm" loading={loading} disabled={selectedCount === 0 || !category || categoryNames.length === 0}
+          <Button variant="primary" size="sm" loading={loading}
+            disabled={selectedCount === 0 || (!perChunkCategory && (!category || categoryNames.length === 0))}
             onClick={() => onConfirm(rows.filter(r => r.selected))}>
             <CheckCircle className="w-3.5 h-3.5" />선택 항목 등록 ({selectedCount}건)
           </Button>
@@ -1534,6 +1573,8 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setDetectedStrategy(result.detected_strategy ?? null);
       setReviewChunks(result.chunks.map(c => ({ ...c, selected: true })));
       setShowReview(true);
+      const hint = result.chunks.slice(0, 3).map(c => c.text).join('\n');
+      autoSuggestCategoryIfUntouched(namespace, categoryNames, category, setCategory, hint);
     } catch (e: any) {
       const msg = e.message || '파일 분석 실패';
       // 사용자 친화적 메시지로 변환
@@ -1663,6 +1704,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setDetectedStrategy(result.detected_strategy ?? null);
       setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true })));
       setShowReview(true);
+      autoSuggestCategoryIfUntouched(namespace, categoryNames, category, setCategory, text);
     } catch (e: any) { setError(e.message || '분할 미리보기 실패'); }
     finally { setPreviewing(false); }
   };
@@ -1774,6 +1816,8 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">내용 <span className="text-rose-400">*</span></label>
         <textarea rows={8} value={form.content} onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
+          onBlur={() => autoSuggestCategoryIfUntouched(namespace, categoryNames, form.category,
+            (v) => setForm((f) => ({ ...f, category: v })), form.content)}
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[160px]" />
       </div>
       <div>
@@ -1850,6 +1894,10 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         setTree(result);
         // 기본 선택: 모두 체크
         setSelectedPageIds(new Set(result.tree.map(n => n.page_id)));
+        // 페이지별 자동 배정을 쓰도록 기본값 초기화 — 채워둔 채로 두면 배치 전체가 그
+        // 값 하나로 다시 뭉친다(2026-09-22, 지식 카테고리 자동화). 비워두면 자동 배정,
+        // 사람이 직접 고르면 그 값이 모든 페이지에 적용되는 오버라이드로 남는다.
+        setCategory('');
         setShowTreeModal(true);
       } catch (e: any) { setError(e.message || '트리 조회 실패'); }
       finally { setTreeLoading(false); }
@@ -1896,6 +1944,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         text: c.text,
         title: c.title ? `${c.page_title} — ${c.title}` : c.page_title,
         selected: true,
+        category: c.category,
+        headingPath: c.heading_path,
       })));
       setShowTreeModal(false);
       setShowReview(true);
@@ -1923,7 +1973,13 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category }));
+      // confluence_bulk는 페이지별 자동 배정 카테고리(c.category)와 조상 헤딩(c.headingPath)을
+      // 그대로 쓴다 — 리뷰에서 안 보이는 공통 category state로 덮어쓰면 배치 전체가 하나로
+      // 도로 뭉친다(2026-09-22). heading_path는 이전엔 이 확정 경로 자체에 필드가 없어서
+      // v2.98 이후로도 계속 NULL로 저장되고 있던 것까지 이번에 같이 고침.
+      const items = sourceMeta?.type === 'confluence_bulk'
+        ? selected.map(c => ({ content: c.text, category: c.category || category, heading_path: c.headingPath }))
+        : selected.map(c => ({ content: c.text, category }));
       const srcName = sourceMeta?.name ?? url;
       const srcType = sourceMeta?.type ?? (isConfluence ? 'confluence' : 'web');
       const result = await bulkCreateKnowledge(namespace, items, srcName, srcType);
@@ -2017,7 +2073,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
         <Button variant="primary" size="sm" onClick={handleOpenReview}
-          disabled={!url.trim() || previewing || treeLoading || !category || categoryNames.length === 0}>
+          disabled={!url.trim() || previewing || treeLoading
+            || (!(isConfluence && includeChildren) && !category) || categoryNames.length === 0}>
           {treeLoading ? '트리 조회 중...' : previewing ? '수집 중...' : (isConfluence && includeChildren ? '하위 페이지 선택' : '수집 & 청크 검토')}
         </Button>
       </div>
@@ -2030,6 +2087,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         loading={loading}
         sourceName={sourceMeta?.name ?? url}
         category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
+        perChunkCategory={sourceMeta?.type === 'confluence_bulk'}
       />
 
       {/* Confluence 하위 페이지 트리 선택 모달 */}
@@ -2083,7 +2141,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
                   variant="primary"
                   size="sm"
                   onClick={handleProceedToReview}
-                  disabled={selectedPageIds.size === 0 || loading || !category}
+                  disabled={selectedPageIds.size === 0 || loading}
                 >
                   {loading ? '청크 분석 중...' : `${selectedPageIds.size}개 페이지 · 청크 검토`}
                 </Button>
@@ -2290,6 +2348,15 @@ function TeamsForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setSelectedIds(new Set(messages.map((m) => m.id)));
     }
   };
+
+  // 선택된 메시지 내용으로 업무구분 추천(2026-09-22) — 다른 등록 폼과 동일하게, 실제
+  // 내용이 확정되는 시점(메시지 선택 변경)에 "공통지식" 기본값을 자동으로 대체 시도.
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const hint = messages.filter((m) => selectedIds.has(m.id)).map((m) => m.content).join('\n').slice(0, 2000);
+    autoSuggestCategoryIfUntouched(namespace, categoryNames, category, setCategory, hint);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIds]);
 
   const handleSubmit = async () => {
     if (!selectedChat) return;

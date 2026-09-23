@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.99)
+# Ops-Navigator 시스템 아키텍처 (v2.101)
 
 ## 개요
 
@@ -11,6 +11,54 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.101: **컨플루언스 벌크 등록 카테고리 자동화** (`docs/tech/knowledge-category-automation.md`
+  설계 구현). 실측 배경: 등록 폼이 필수 드롭다운이었는데도 페이지가 최대 200개씩 배치로
+  묶여 폼에서 고른 값 하나가 전체에 도장 찍히는 구조라, namespace 1의 카테고리 5개 중
+  4개가 0건으로 수렴해 있었음(강제해도 소용없는 사례 — UX 문제가 아니라 배치 구조 문제).
+  실제 컨플루언스 트리(`fetch_confluence_by_id`에 `ancestors` expand 추가)를 조회해보니
+  스페이스명은 팀 전체가 하나뿐이라 너무 굵고, **직계 상위 페이지 제목**이 실제 업무구분과
+  거의 일치함을 확인("외부서비스" 아래 배달의민족/쿠팡이츠/땡겨요처럼 갈라짐) — 이 신호를
+  1순위로 채택. 3단 폴백(`_resolve_confluence_page_category`, `knowledge/router.py`):
+  ①직계 상위 페이지 제목이 기존 업무구분과 일치 → LLM 없이 결정론 ②`category_suggest`
+  LLM이 기존 목록 중에서만 고름(새 카테고리 생성 안 함) ③둘 다 실패 시 "미분류" 자동
+  생성(namespace당 1회) — `bulk_create_knowledge()`가 category를 공통 필수값으로 강제해서
+  (`_require_category`) 진짜 NULL은 못 넣기 때문. 중간에 실제 UI 확정 흐름이 애초에 고친
+  엔드포인트(`import_confluence_bulk`)를 안 타고 별도 범용 엔드포인트(`bulk_create_
+  knowledge`)로 간다는 걸 발견 — 미리보기 단계(`preview_confluence_bulk`)에서 페이지별로
+  계산해 청크에 실어 보내고, 프론트 `ChunkReviewModal`이 공통 카테고리 하나 강제 대신
+  청크별 배지로 보여주도록 확장(`perChunkCategory` 모드, 다른 등록 폼엔 영향 없음).
+  `service/admin/service.py`에 `suggest_category_for_content()`로 로직 추출해 기존
+  수동 추천 API(`POST /categories/suggest`)와 공유. 실 DB 시나리오 스크립트로 4가지 케이스
+  (결정론 매칭/오버라이드 우선/미분류 자동생성/중복 없는 재사용) 확인 + 유닛테스트 6건 +
+  전체 회귀 429건 + `tsc --noEmit` 통과.
+
+  **후속 발견·확장(같은 날 이어서)**: (1) 위 작업 중 `heading_path`(v2.98)가 컨플루언스
+  벌크의 실제 확정 경로(`POST /knowledge/bulk`)에선 애초에 스키마 필드 자체가 없어 계속
+  NULL로 저장되고 있었던 것도 함께 발견 — `BulkKnowledgeItem`에 `heading_path` 필드 추가,
+  미리보기→리뷰→확정 전 구간에 실어 나르도록 프론트(`ReviewChunk.headingPath`) 연결.
+  (2) §8 부가 효과 구현: `_enrich_heading_path()` — 직계 상위 페이지 제목을 heading_path
+  맨 앞에 얹어, 페이지 자체에 구분 제목이 없는 문서도 최소한의 상위 맥락을 갖게 함(회귀
+  테스트 4건, `test_confluence_sync.py`). (3) 설계 문서 §3-3에서 일반화만 해뒀던 부분도
+  구현 — 수동/파일/텍스트/Teams 등록 폼에 `autoSuggestCategoryIfUntouched()` 연결: 내용을
+  실제로 확인할 수 있게 된 시점(파일 미리보기 성공/텍스트 blur/Teams 메시지 선택)에
+  "공통지식" 기본값을 `suggestCategory` 추천값으로 자동 대체 시도, 사용자가 미리 다른 값을
+  직접 골라뒀으면 건드리지 않음. `ancestors` REST 파라미터가 실제로 `parent_title`을
+  채워주는지도 실 컨플루언스 API로 재확인(3건 전부 일치). 전체 회귀 433건 통과.
+
+  범위 밖(그대로 남음): 레거시 데이터(`confluence_page_id` 없는 기존 행) 소급 불가 —
+  재수집 없이는 방법이 없음. `source_type`은 별도로 검토했으나 실제 문제가 아닌 것으로
+  결론(9개 값이 있지만 청킹 시점엔 3버킷만 구분해서 씀, 검색 단계에선 아예 미참조 —
+  category처럼 강제된 기본값에 수렴하는 실패 패턴이 아니라 정상 상태라 손대지 않음).
+- v2.100: **죽은 컬럼/테이블 정리.** 전체 스키마 감사(42개 테이블, 컬럼별 코드 grep + 실 population
+  실측 + 문서 대조)로 확인된, 코드 어디서도 안 쓰이고 실사용 데이터도 없는 것만 제거 —
+  `ops_namespace.owner_part`(owner_part_id FK 전환용 1회성 브릿지, 전환 완료), `policy_param.
+  approved`(INSERT 경로에 빠져있어 전부 기본값), `ops_http_tool`/`ops_mcp_tool`/`ops_mcp_tool_log`
+  (MCP 에이전트 제거 v2.67 후 방치), `sql_*` 10개(Text2SQL 제거 v2.51 후 완전히 죽음). "스키마
+  선추가" 패턴(예: `policy_item.reviewed_at`/`reviewed_by`, `ops_user.auth_provider` 등 —
+  WBS/architecture.md에 착수 예정이 명시된 것들)은 감사에서 확인만 하고 제외 — 죽은 것과 아직
+  안 쓰는 것을 혼동하지 않음. `rag_knowledge.supersedes_id`/`version`/`logical_document_id`는
+  원래 의도(#40)와 다른 방향(heading_path/confluence_version)으로 기능이 진화한 정황이 있어
+  이번엔 제외, 별도 재검토 과제로 남김. 전체 테스트(423건)·`tsc --noEmit` 통과 확인.
 - v2.99: **청킹 규칙 확정분 반영 + 조건/예외 연결 표현 규칙(둘 다 결정론적, LLM 미사용).**
   `confluence-chunking-spec.md` §3이 실측(89문항 유사도 비교)으로 확정해뒀지만 코드
   반영이 안 돼 있던 규칙("섹션 ≥2개면 무조건 섹션당 1청크로 분리, 합쳐도 max_chars

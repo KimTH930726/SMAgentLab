@@ -69,6 +69,8 @@
 
 | 54 | `rag_knowledge` | `ADD COLUMN IF NOT EXISTS heading_path TEXT[]` | Parent-Child 문맥 유실 방지(컨플루언스 전용) — 조상 헤딩 제목 목록, 결정론적 파서로 채움(LLM 미사용). 기존 25건은 `scripts/backfill_heading_path.py`로 소급 적용 (v2.98) |
 
+| 55 | `ops_namespace`, `policy_param`, `ops_http_tool`, `ops_mcp_tool`, `ops_mcp_tool_log`, `sql_*`(10개) | `DROP COLUMN`/`DROP TABLE IF EXISTS` | 전체 스키마 죽은 컬럼/테이블 감사(코드 grep + 실 population 실측 + 문서 대조) 후 정리. `ops_namespace.owner_part`(VARCHAR, `owner_part_id` FK 전환용 1회성 브릿지, 전환 완료돼 0/4건) — `_migrate_core_tables`의 `ADD COLUMN IF NOT EXISTS owner_part`와 그 하위 동기화 UPDATE 2곳도 같이 제거(안 하면 재생성됨). `policy_param.approved`(INSERT 경로에 컬럼이 빠져있어 전부 기본값, 389/389 false, 아무도 안 읽음). `ops_http_tool`/`ops_mcp_tool`/`ops_mcp_tool_log`(MCP 도구 에이전트 제거 v2.67 후 방치). `sql_*` 10개(Text2SQL 제거 v2.51 후 완전히 죽음, 코드는 `archive/with-text2sql` 브랜치 보존). `rag_knowledge.supersedes_id`/`version`/`logical_document_id`는 원래 의도(#40)와 다른 방향으로 기능이 진화한 정황이 있어 이번엔 보류(별도 재검토 필요) (v2.100) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.
