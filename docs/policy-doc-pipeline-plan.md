@@ -26,11 +26,15 @@
 > 필요 여부, 상태전이 전용 구조 필요 여부)은 v1 범위 밖(Phase 2+) 또는 데이터가 더 쌓인 뒤 재검토.
 > 목적: 엑셀로 된 비즈니스 정책서를 운영에서 활용 가능한 데이터로 전환하는 **파이프라인(Track 1)** 과, 그 결과를 어떤 저장소 전략으로 관리할지 **수치로 판정하는 실험실(Track 2)** 을 설계한다.
 > 관련: `D:\MD자료\work-os\WBS\smagent.md`, `docs/tech/knowledge-lifecycle-design.md`(경로 정정),
-> `docs/knowledge-refresh-automation-plan.md`, `docs/tech/policy-platform-feasibility.md`(더 큰
-> 규모의 "정책 플랫폼" 통합 가능성 사전 검토 — `service/policy/` 구조를 오늘과 동일하게 권고했었음)
+> `docs/knowledge-refresh-automation-plan.md`
 > (`docs/rag-improvement-strategy.md`는 2026-09-03 삭제 — 2026-06-30 시점 로드맵으로 실 코드
 > 참조 없었고, 그 안의 "골든셋+Recall@K 평가 프레임워크" 제안은 이후 실측 검토 결과 지금 시스템
 > 규모(전체 질의 104건)엔 안 맞는다는 게 확인됨, 메모리 `project_retrieval_routing` 참고)
+> (`docs/tech/policy-platform-feasibility.md`는 2026-09-23 삭제 — 2026-08-25에 "더 큰 규모의
+> 정책 플랫폼(별도 Excel diff/OpenSearch/거버넌스 서브시스템) 통합 가능성"을 검토한 결과 결론만
+> 남기면: **"녹이기"는 부적합, "별도 서브시스템으로 얹기"는 가능하나 별도 프로젝트급 공수 —
+> `service/policy/` 구조를 지금과 동일하게 권고, 지금은 착수하지 않음(YAGNI)**. 정책 플랫폼
+> 착수가 실제로 결정되면 그때 다시 검토할 것)
 
 ---
 
