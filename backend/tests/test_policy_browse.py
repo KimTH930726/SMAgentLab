@@ -136,6 +136,26 @@ class TestListPolicyItems:
         assert "id = ANY" not in call.args[0]
         assert len(call.args) == 2  # sql + ns_id만
 
+    @pytest.mark.asyncio
+    async def test_deprecated_always_excluded_but_rejected_not(self, patch_db):
+        """이 화면은 관리용 훑어보기라 반려(rejected) 이력도 기본으로 보여야 한다 —
+        deprecated(재업로드로 대체된 옛 버전)만 항상 숨김(2026-09-23, 검토 UI)."""
+        conn = patch_db(item_rows=[])
+        await browse.list_policy_items("ns")
+
+        call = conn.fetch.call_args_list[0]
+        assert "status != 'deprecated'" in call.args[0]
+        assert "rejected" not in call.args[0]
+
+    @pytest.mark.asyncio
+    async def test_status_filter_passed_to_query(self, patch_db):
+        conn = patch_db(item_rows=[])
+        await browse.list_policy_items("ns", status="rejected")
+
+        call = conn.fetch.call_args_list[0]
+        assert "status = $" in call.args[0]
+        assert call.args[-1] == "rejected"
+
 
 class TestListPolicyItemsWithQuery:
     """2026-09-04 개선 — q는 더 이상 policy_name ILIKE가 아니라 실제 search_policy()(RDB

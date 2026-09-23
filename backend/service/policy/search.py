@@ -132,7 +132,7 @@ async def search_policy(
                 FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($2)))) t
                 WHERE lexeme IS NOT NULL
             ) q
-            WHERE i.namespace_id = $1 AND i.status != 'deprecated'
+            WHERE i.namespace_id = $1 AND i.status NOT IN ('deprecated', 'rejected')
               AND to_tsvector('simple', policy_strip_ko(p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name)) @@ q.tsq
               {category_clause}
             ORDER BY rank DESC
@@ -150,7 +150,7 @@ async def search_policy(
                    c.chunk_text, 1 - (c.embedding <=> $2::vector) AS score
             FROM policy_chunk c
             JOIN policy_item i ON i.id = c.policy_item_id
-            WHERE i.namespace_id = $1 AND i.status != 'deprecated'
+            WHERE i.namespace_id = $1 AND i.status NOT IN ('deprecated', 'rejected')
               {category_clause2}
             ORDER BY c.embedding <=> $2::vector
             LIMIT $3
@@ -210,7 +210,7 @@ async def has_policy_data(namespace: str) -> bool:
         if ns_id is None:
             return False
         exists = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM policy_item WHERE namespace_id = $1 AND status != 'deprecated')",
+            "SELECT EXISTS(SELECT 1 FROM policy_item WHERE namespace_id = $1 AND status NOT IN ('deprecated', 'rejected'))",
             ns_id,
         )
         return bool(exists)

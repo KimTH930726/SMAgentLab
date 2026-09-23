@@ -1,19 +1,21 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp, FileWarning, Info, ArrowRightCircle } from 'lucide-react';
-import { getUnresolvedSummary, promoteUnresolvedSegment } from '../../api/policy';
+import { ChevronDown, ChevronUp, FileWarning, Info, ArrowRightCircle, Database, Check, X } from 'lucide-react';
+import { getUnresolvedSummary, promoteUnresolvedSegment, promoteUnresolvedSegmentToParam } from '../../api/policy';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
 
 /**
  * 정책서 unresolved 팀별 집계 리포트.
  *
- * LLM 분해가 서술/파라미터 어디에도 못 넣은 내용을 팀(system_key)별로 보여준다. 정밀
- * 재분류(param 필드 추출) 같은 승인 화면은 여전히 없다 — 그건 별도 "검토 UI"
- * (docs/policy-doc-pipeline-plan.md §6, 미착수) 몫이다. 다만 2026-09-16, "조회만 있고
- * 아무 액션도 없다"는 지적을 받고 **딱 하나의 액션(서술로 편입)만 추가** — 원문을 그대로
- * policy_chunk에 넣어 최소한 검색은 되게 만드는 원클릭 액션. 완전한 검토 화면의 대체가
- * 아니라 "완전 방치"를 벗어나는 최소선.
+ * LLM 분해가 서술/파라미터 어디에도 못 넣은 내용을 팀(system_key)별로 보여준다. 2026-09-16,
+ * "조회만 있고 아무 액션도 없다"는 지적을 받고 서술로 편입하는 원클릭 액션을 추가했었다.
+ *
+ * 파라미터로 편입(2026-09-23) — "서술로 편입밖에 없으면 반쪽짜리 아니냐, RDB로도 세분화
+ * 해야 하는거 아니냐"는 지적으로 두 번째 액션 추가. 서술 편입과 달리 원문을 그대로 못 쓴다
+ * (name/condition/value/unit 구조화 필드가 필요 — LLM이 애초에 여기서 자동 추출을 실패했기
+ * 때문에 unresolved로 남은 것) — 그래서 사람이 최소한의 폼을 채워야 한다(v1은 LLM 프리필
+ * 없이 수동 입력만).
  *
  * 2026-09-04 사용자 피드백 반영: (1) 라이트모드에서 amber 텍스트 대비가 낮아 안 읽힘 —
  * slate 팔레트는 CSS 변수로 테마에 따라 자동 전환되지만 amber 등 강조색은 그렇지 않아 dark:
@@ -21,10 +23,14 @@ import { Badge } from '../ui/Badge';
  * 쓰라"는 설명이 추상적이라 사용자가 뭘 해야 할지 안 와닿음 — 원문/사유/다음 액션을 명시적으로
  * 분리해 보여주도록 재구성.
  */
+const EMPTY_PARAM_FORM = { name: '', condition: '', value: '', unit: '' };
+
 export function PolicyUnresolvedReport() {
   const { selectedNs, setSelectedNs, sortedNamespaces } = useNamespaceAccess();
   const [systemFilter, setSystemFilter] = useState('');
   const [expandedItemId, setExpandedItemId] = useState<number | null>(null);
+  const [paramFormKey, setParamFormKey] = useState<string | null>(null);
+  const [paramForm, setParamForm] = useState(EMPTY_PARAM_FORM);
   const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
@@ -42,6 +48,22 @@ export function PolicyUnresolvedReport() {
     mutationFn: ({ itemId, segmentIndex }: { itemId: number; segmentIndex: number }) =>
       promoteUnresolvedSegment(itemId, segmentIndex, selectedNs),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['policy-unresolved-summary', selectedNs] }),
+  });
+
+  const promoteParamMutation = useMutation({
+    mutationFn: ({ itemId, segmentIndex }: { itemId: number; segmentIndex: number }) =>
+      promoteUnresolvedSegmentToParam(itemId, segmentIndex, selectedNs, {
+        name: paramForm.name.trim(),
+        condition: paramForm.condition.trim() || null,
+        value: paramForm.value.trim() || null,
+        unit: paramForm.unit.trim() || null,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['policy-unresolved-summary', selectedNs] });
+      setParamFormKey(null);
+      setParamForm(EMPTY_PARAM_FORM);
+    },
+    onError: (err: Error) => alert(err.message),
   });
 
   const groups = systemFilter
@@ -153,6 +175,11 @@ export function PolicyUnresolvedReport() {
                             const isThisPending = promoteMutation.isPending
                               && promoteMutation.variables?.itemId === item.item_id
                               && promoteMutation.variables?.segmentIndex === idx;
+                            const thisKey = `${item.item_id}-${idx}`;
+                            const isFormOpen = paramFormKey === thisKey;
+                            const isParamPending = promoteParamMutation.isPending
+                              && promoteParamMutation.variables?.itemId === item.item_id
+                              && promoteParamMutation.variables?.segmentIndex === idx;
                             return (
                               <div key={idx} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 space-y-1.5">
                                 <div>
@@ -165,7 +192,50 @@ export function PolicyUnresolvedReport() {
                                     <p className="text-xs text-amber-700 dark:text-amber-400/90">{seg.reason}</p>
                                   </div>
                                 )}
-                                <div className="flex justify-end pt-1">
+                                {isFormOpen && (
+                                  <div className="border border-cyan-200 dark:border-cyan-700/40 bg-cyan-50/60 dark:bg-cyan-950/20 rounded-lg px-3 py-2.5 space-y-2">
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <input
+                                        type="text" placeholder="항목명 *" value={paramForm.name}
+                                        onChange={(e) => setParamForm((f) => ({ ...f, name: e.target.value }))}
+                                        className="col-span-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500"
+                                      />
+                                      <input
+                                        type="text" placeholder="조건(선택)" value={paramForm.condition}
+                                        onChange={(e) => setParamForm((f) => ({ ...f, condition: e.target.value }))}
+                                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500"
+                                      />
+                                      <input
+                                        type="text" placeholder="값(선택)" value={paramForm.value}
+                                        onChange={(e) => setParamForm((f) => ({ ...f, value: e.target.value }))}
+                                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500"
+                                      />
+                                      <input
+                                        type="text" placeholder="단위(선택)" value={paramForm.unit}
+                                        onChange={(e) => setParamForm((f) => ({ ...f, unit: e.target.value }))}
+                                        className="col-span-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500"
+                                      />
+                                    </div>
+                                    <div className="flex justify-end gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => { setParamFormKey(null); setParamForm(EMPTY_PARAM_FORM); }}
+                                        className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                                      >
+                                        <X className="w-3.5 h-3.5" />취소
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={!paramForm.name.trim() || isParamPending}
+                                        onClick={() => promoteParamMutation.mutate({ itemId: item.item_id, segmentIndex: idx })}
+                                        className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border border-cyan-300 text-cyan-700 bg-cyan-50 hover:bg-cyan-100 dark:border-cyan-600/40 dark:text-cyan-300 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                      >
+                                        <Check className="w-3.5 h-3.5" />{isParamPending ? '저장 중...' : '저장'}
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="flex justify-end gap-2 pt-1">
                                   <button
                                     type="button"
                                     disabled={promoteMutation.isPending}
@@ -179,6 +249,16 @@ export function PolicyUnresolvedReport() {
                                       <><ArrowRightCircle className="w-3.5 h-3.5" /> 서술로 편입</>
                                     )}
                                   </button>
+                                  {!isFormOpen && (
+                                    <button
+                                      type="button"
+                                      onClick={() => { setParamFormKey(thisKey); setParamForm(EMPTY_PARAM_FORM); }}
+                                      title="항목명/조건/값/단위를 직접 입력해 파라미터(RDB 정확조회)로 등록합니다"
+                                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-cyan-300 text-cyan-700 bg-cyan-50 hover:bg-cyan-100 dark:border-cyan-600/40 dark:text-cyan-300 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 transition-colors"
+                                    >
+                                      <Database className="w-3.5 h-3.5" /> 파라미터로 편입
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             );

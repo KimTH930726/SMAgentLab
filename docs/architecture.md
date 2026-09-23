@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.104)
+# Ops-Navigator 시스템 아키텍처 (v2.105)
 
 ## 개요
 
@@ -11,6 +11,28 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.105: **정책 검토 UI — 승인/반려 + 미분류 RDB 편입 (docs/policy-doc-pipeline-plan.md
+  §6 "검토 UI" 미착수 항목 착수).** 사용자 지적 두 가지: (1) "pending 필터링이 없다" —
+  실제 원인은 필터 부재가 아니라 정책 임포트 이후 `status='pending_review'`를 바꾸는
+  코드가 프로젝트 전체에 없었던 것(재업로드로 대체된 옛 버전을 `deprecated`로 바꾸는
+  것뿐). (2) "미분류 화면이 서술로 편입밖에 없으면 반쪽짜리 아니냐" — RDB(파라미터)
+  세분화 요청.
+  신규 `service/policy/review.py`: `approve_item()`/`reject_item()` — `pending_review`
+  항목만 각각 `active`/`rejected`로 전이, 테이블 생성 시점부터 있었지만 한 번도 채워진
+  적 없던 `policy_item.reviewed_at`/`reviewed_by` 컬럼을 처음으로 채움. 반려는 재업로드로
+  대체된 것과 다른 원인이라 `deprecated` 재사용 대신 별도 `rejected` 상태 신설 —
+  `search.py`/`browse.py`의 실제 채팅 노출 경로(`has_policy_data` 포함)에서 `deprecated`와
+  함께 항상 제외. 단, `browse.py`(관리자 훑어보기 화면)는 기본 목록에서 `rejected`를
+  빼지 않음 — 반려 이력도 볼 수 있어야 검토 UI가 의미 있음, 신규 `status` 쿼리 파라미터로
+  좁혀볼 수 있게 함. `unresolved_report.py`에 `promote_segment_to_param()` 추가 — 기존
+  `promote_segment_to_narrative()`와 병렬, 서술과 달리 구조화 필드(name/condition/value/
+  unit)가 필요해 사람이 폼으로 직접 입력(v1은 LLM 프리필 없음). 프론트: `PolicyItemBrowser.tsx`에
+  검토 상태 필터 + 승인/반려 아이콘 버튼(승인은 결과에 영향 없어 확인 없이 즉시 실행,
+  반려는 검색에서 실제로 빠지고 되돌리는 화면이 없어 `confirm()` 확인 추가 — 자체 검토 중
+  발견해 수정), `PolicyUnresolvedReport.tsx`에 "파라미터로 편입" 인라인 미니 폼 추가.
+  실 데이터로 승인/반려/RDB편입 전 과정을 curl+실제 화면 클릭으로 검증(검토대기→승인/반려
+  전이, 반려 시 검색 제외되지만 브라우저에선 여전히 조회 가능, 실 unresolved segment를
+  실제로 policy_param에 편입). 백엔드 테스트 15건 신규(444→459), `npx tsc --noEmit` 통과.
 - v2.104: **지식 조회 화면의 "소스" 필터/배지 제거 + 즉석질의 "데이터 저장 위치" 패널
   추가.** 사용자 지적: "소스로 아무도 안 찾아본다 — 업무구분(category) 필터가 낫다,
   내용 자체가 중요하다." `KnowledgeTable.tsx` 지식 조회 탭에서 소스 필터 select와 목록

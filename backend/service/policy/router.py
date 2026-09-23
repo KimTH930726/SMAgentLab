@@ -6,10 +6,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
-from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats
+from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review
 from service.policy.schemas import (
     ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
     Track2RunHistoryOut, PipelineStatsOut, PromoteSegmentRequest, PromoteSegmentOut,
+    PromoteParamRequest, ItemActionRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,11 +108,63 @@ async def promote_unresolved_segment(
     return PromoteSegmentOut(remaining_segments=remaining)
 
 
+@router.post("/unresolved/{item_id}/promote-param", response_model=PromoteSegmentOut)
+async def promote_unresolved_segment_to_param(
+    item_id: int,
+    body: PromoteParamRequest,
+    user: dict = Depends(get_current_user),
+):
+    """unresolved segment 1건을 파라미터(policy_param)로 수동 편입 — "서술로 편입밖에
+    없으면 반쪽짜리 아니냐"는 지적(2026-09-23)으로 신규. name/condition/value/unit은
+    사람이 폼으로 직접 입력한 값 그대로 저장한다(unresolved_report.promote_segment_to_param
+    참고, v1은 LLM 프리필 없음)."""
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        remaining = await unresolved_report.promote_segment_to_param(
+            body.namespace, item_id, body.segment_index,
+            body.name, body.condition, body.value, body.unit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return PromoteSegmentOut(remaining_segments=remaining)
+
+
+@router.post("/items/{item_id}/approve")
+async def approve_policy_item(
+    item_id: int,
+    body: ItemActionRequest,
+    user: dict = Depends(get_current_user),
+):
+    """검토 대기 정책 항목을 승인 — status: pending_review → active(review.py 참고)."""
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        await review.approve_item(body.namespace, item_id, user["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "active"}
+
+
+@router.post("/items/{item_id}/reject")
+async def reject_policy_item(
+    item_id: int,
+    body: ItemActionRequest,
+    user: dict = Depends(get_current_user),
+):
+    """검토 대기 정책 항목을 반려 — status: pending_review → rejected(review.py 참고)."""
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        await review.reject_item(body.namespace, item_id, user["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "rejected"}
+
+
 @router.get("/items", response_model=list[PolicyItemOut])
 async def list_policy_items(
     namespace: str = Query(...),
     category: Optional[str] = Query(default=None),
     q: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
     user: dict = Depends(get_current_user),
 ):
     """정책 항목을 item 단위로 목록 조회 — 각 item에 실제로 달린 param(RDB)/narrative(벡터)
@@ -121,7 +174,7 @@ async def list_policy_items(
     """
     await check_namespace_ownership(namespace, user)
     try:
-        items = await browse.list_policy_items(namespace, category, q)
+        items = await browse.list_policy_items(namespace, category, q, status)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return [PolicyItemOut(**asdict(i)) for i in items]

@@ -91,6 +91,25 @@ export async function promoteUnresolvedSegment(
   });
 }
 
+// unresolved segment를 파라미터(policy_param)로 수동 편입(2026-09-23) — "서술로 편입밖에
+// 없으면 반쪽짜리 아니냐"는 지적으로 추가. 서술과 달리 원문 그대로 못 쓰고(구조화된 필드가
+// 필요 — LLM이 애초에 못 뽑아낸 부분) 사람이 폼으로 입력한 값을 그대로 저장한다.
+export interface PromoteParamFields {
+  name: string;
+  condition?: string | null;
+  value?: string | null;
+  unit?: string | null;
+}
+
+export async function promoteUnresolvedSegmentToParam(
+  itemId: number, segmentIndex: number, namespace: string, fields: PromoteParamFields,
+): Promise<PromoteSegmentResult> {
+  return apiFetch<PromoteSegmentResult>(`/policy/unresolved/${itemId}/promote-param`, {
+    method: 'POST',
+    body: JSON.stringify({ namespace, segment_index: segmentIndex, ...fields }),
+  });
+}
+
 // ─── 정책 항목 브라우저 (item 단위, param/narrative 자식 포함) ─────────────────
 
 export interface PolicyParam {
@@ -122,11 +141,31 @@ export interface PolicyItem {
   matched_via: string[];
 }
 
-export async function getPolicyItems(namespace: string, category?: string, q?: string): Promise<PolicyItem[]> {
+export async function getPolicyItems(
+  namespace: string, category?: string, q?: string, status?: string,
+): Promise<PolicyItem[]> {
   const params = new URLSearchParams({ namespace });
   if (category) params.set('category', category);
   if (q) params.set('q', q);
+  if (status) params.set('status', status);
   return apiFetch<PolicyItem[]>(`/policy/items?${params.toString()}`);
+}
+
+// 검토 대기(pending_review) 정책 항목 승인/반려(2026-09-23) — "pending 필터링이 없다"는
+// 지적의 근본 원인은 필터 부재가 아니라 상태를 바꾸는 액션 자체가 없었던 것이라, 필터보다
+// 이 액션을 먼저 추가한다.
+export async function approvePolicyItem(itemId: number, namespace: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`/policy/items/${itemId}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ namespace }),
+  });
+}
+
+export async function rejectPolicyItem(itemId: number, namespace: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`/policy/items/${itemId}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ namespace }),
+  });
 }
 
 // ─── Track 2 저장소 전략 실험실 ─────────────────────────────────────────────

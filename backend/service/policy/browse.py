@@ -65,6 +65,7 @@ class PolicyItemOut:
 
 async def list_policy_items(
     namespace: str, category: Optional[str] = None, q: Optional[str] = None,
+    status: Optional[str] = None,
 ) -> list[PolicyItemOut]:
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
@@ -85,6 +86,10 @@ async def list_policy_items(
             return []
 
     async with get_conn() as conn:
+        # rejected는 여기선 일부러 안 뺀다 — 이 화면은 "지금 뭐가 어떻게 저장돼 있는지"
+        # 사람이 훑어보는 관리 화면이라 반려 이력도 보여야 한다(검토 UI의 상태 필터로
+        # 좁혀 볼 수 있음). deprecated(재업로드로 대체된 옛 버전)만 기본적으로 숨김 —
+        # 채팅에 실제로 노출되는 search.py는 별도로 rejected까지 항상 제외한다.
         clauses = ["namespace_id = $1", "status != 'deprecated'"]
         args: list = [ns_id]
         if category:
@@ -93,6 +98,9 @@ async def list_policy_items(
         if q:
             args.append(list(matched_via.keys()))
             clauses.append(f"id = ANY(${len(args)})")
+        if status:
+            args.append(status)
+            clauses.append(f"status = ${len(args)}")
 
         item_rows = await conn.fetch(
             f"""

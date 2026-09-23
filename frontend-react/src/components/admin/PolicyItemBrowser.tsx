@@ -1,31 +1,50 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp, Database, Sparkles, Search, X } from 'lucide-react';
-import { getPolicyItems } from '../../api/policy';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ChevronDown, ChevronUp, Database, Sparkles, Search, X, Check } from 'lucide-react';
+import { getPolicyItems, approvePolicyItem, rejectPolicyItem } from '../../api/policy';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 
+const STATUS_LABEL: Record<string, string> = {
+  pending_review: '검토대기',
+  active: '승인됨',
+  rejected: '반려됨',
+};
+
+const STATUS_BADGE_COLOR: Record<string, 'yellow' | 'emerald' | 'rose' | 'slate'> = {
+  pending_review: 'yellow',
+  active: 'emerald',
+  rejected: 'rose',
+};
+
 /**
- * 정책 항목(policy_item) 브라우저 — 읽기 전용.
+ * 정책 항목(policy_item) 브라우저.
  *
  * `/api/policy/search`(질의 기반 검색)와는 목적이 다르다 — 이 화면은 쿼리 없이도 "지금 뭐가
  * 어떻게 저장돼 있는지" item 단위로 전체를 훑어보는 용도다. 각 항목을 펼치면 그 밑에 실제로
  * 어떤 param(RDB 정확조회)과 narrative(벡터 검색 청크)가 달려있는지 아이콘으로 구분해 보여준다
  * — docs/policy-doc-pipeline-plan.md §2 "왜 3층인가"를 화면에서 직접 확인할 수 있게.
+ *
+ * 승인/반려(2026-09-23) — "pending 필터링이 없다"는 지적의 근본 원인은 필터 부재가 아니라
+ * 모든 항목이 임포트 시점부터 영원히 `pending_review`로 남고 그걸 바꾸는 액션 자체가
+ * 없었던 것이었다(검토 UI, docs/policy-doc-pipeline-plan.md 미착수 항목). 상태 필터보다
+ * 승인/반려 액션을 먼저 추가하고, 상태 필터는 그 결과를 보기 위한 보조 수단으로 같이 둔다.
  */
 export function PolicyItemBrowser() {
-  const { selectedNs, setSelectedNs, sortedNamespaces } = useNamespaceAccess();
+  const { selectedNs, setSelectedNs, sortedNamespaces, canModifyNs } = useNamespaceAccess();
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: items = [], isLoading, error } = useQuery({
-    queryKey: ['policy-items', selectedNs, categoryFilter, q],
-    queryFn: () => getPolicyItems(selectedNs, categoryFilter || undefined, q || undefined),
+    queryKey: ['policy-items', selectedNs, categoryFilter, q, statusFilter],
+    queryFn: () => getPolicyItems(selectedNs, categoryFilter || undefined, q || undefined, statusFilter || undefined),
     enabled: !!selectedNs,
     staleTime: 15_000,
     refetchOnMount: 'always',
@@ -41,7 +60,23 @@ export function PolicyItemBrowser() {
     staleTime: 30_000,
   });
 
-  useEffect(() => { setPage(1); }, [selectedNs, categoryFilter, q, pageSize]);
+  const invalidateItems = () => {
+    queryClient.invalidateQueries({ queryKey: ['policy-items', selectedNs] });
+    queryClient.invalidateQueries({ queryKey: ['policy-items-all', selectedNs] });
+  };
+
+  const approveMutation = useMutation({
+    mutationFn: (itemId: number) => approvePolicyItem(itemId, selectedNs),
+    onSuccess: invalidateItems,
+    onError: (err: Error) => alert(err.message),
+  });
+  const rejectMutation = useMutation({
+    mutationFn: (itemId: number) => rejectPolicyItem(itemId, selectedNs),
+    onSuccess: invalidateItems,
+    onError: (err: Error) => alert(err.message),
+  });
+
+  useEffect(() => { setPage(1); }, [selectedNs, categoryFilter, q, statusFilter, pageSize]);
 
   const categoryOptions = Array.from(new Set(allItems.map((i) => i.category_path[0]).filter(Boolean))).sort();
 
@@ -86,6 +121,19 @@ export function PolicyItemBrowser() {
             </select>
           </div>
         )}
+        <div>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">검토 상태</label>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="w-36 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+          >
+            <option value="">전체</option>
+            <option value="pending_review">검토대기</option>
+            <option value="active">승인됨</option>
+            <option value="rejected">반려됨</option>
+          </select>
+        </div>
         <div className="flex-1 min-w-[200px]">
           <label className="block text-xs font-medium text-slate-400 mb-1.5">정책명 검색</label>
           <div className="relative">
@@ -151,7 +199,36 @@ export function PolicyItemBrowser() {
                 {item.parse_status !== 'parsed' && (
                   <Badge color="amber">{item.parse_status}</Badge>
                 )}
-                <Badge color={item.status === 'pending_review' ? 'yellow' : 'slate'}>{item.status}</Badge>
+                <Badge color={STATUS_BADGE_COLOR[item.status] ?? 'slate'}>{STATUS_LABEL[item.status] ?? item.status}</Badge>
+                {canModifyNs && item.status === 'pending_review' && (
+                  <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      disabled={approveMutation.isPending && approveMutation.variables === item.item_id}
+                      onClick={() => approveMutation.mutate(item.item_id)}
+                      title="승인 — 검토 완료로 표시합니다(검토대기 상태에서도 이미 검색에 포함되고 있었습니다)"
+                      className="p-1 rounded text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/40 disabled:opacity-50"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={rejectMutation.isPending && rejectMutation.variables === item.item_id}
+                      onClick={() => {
+                        // 승인과 달리 반려는 검색/채팅에서 실제로 빠지고, 지금은 되돌리는
+                        // UI가 없어 확인 없이 바로 누르면 위험하다(아이콘이 붙어 있어
+                        // 오클릭 가능성도 있음) — confirm으로 한 번 막는다.
+                        if (window.confirm(`"${item.policy_name}" 항목을 반려할까요?\n검색/채팅에서 제외되며, 되돌리는 화면은 아직 없습니다.`)) {
+                          rejectMutation.mutate(item.item_id);
+                        }
+                      }}
+                      title="반려 — 검색/채팅에서 제외됩니다(되돌리는 화면 없음)"
+                      className="p-1 rounded text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40 disabled:opacity-50"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
                 {expandedId === item.item_id ? (
                   <ChevronUp className="w-4 h-4 text-slate-400 flex-shrink-0" />
                 ) : (

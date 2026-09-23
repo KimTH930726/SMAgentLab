@@ -152,3 +152,55 @@ async def promote_segment_to_narrative(namespace: str, item_id: int, segment_ind
             json.dumps(remaining, ensure_ascii=False), new_parse_status, item_id,
         )
     return len(remaining)
+
+
+async def promote_segment_to_param(
+    namespace: str, item_id: int, segment_index: int,
+    name: str, condition: Optional[str], value: Optional[str], unit: Optional[str],
+) -> int:
+    """unresolved segment 1건을 파라미터(policy_param)로 수동 편입 — "서술로 편입밖에
+    없으면 반쪽짜리 아니냐"는 지적(2026-09-23)으로 추가. 서술 편입과 달리 원문 그대로
+    쓸 수 없고(구조화된 name/condition/value/unit이 필요 — LLM이 애초에 자동 추출을
+    실패한 부분) 사람이 폼으로 직접 입력한 값을 그대로 저장한다(v1은 LLM 프리필 없음).
+    임베딩도 안 한다 — RDB 파라미터는 애초에 벡터 검색 대상이 아니다(service.py의
+    param INSERT와 동일).
+
+    반환값: 편입 후 남은 unresolved segment 개수.
+    """
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
+
+        row = await conn.fetchrow(
+            "SELECT unresolved_segments FROM policy_item WHERE id = $1 AND namespace_id = $2",
+            item_id, ns_id,
+        )
+        if row is None:
+            raise ValueError(f"정책 항목을 찾을 수 없습니다: item_id={item_id}")
+
+        segs_raw = row["unresolved_segments"]
+        segments = (json.loads(segs_raw) if isinstance(segs_raw, str) else segs_raw) or []
+        if not (0 <= segment_index < len(segments)):
+            raise ValueError(f"segment_index 범위를 벗어났습니다: {segment_index} (전체 {len(segments)}개)")
+
+        if not name.strip():
+            raise ValueError("파라미터 항목명은 비워둘 수 없습니다.")
+
+        # unit 컬럼만 VARCHAR(50) 제약이 있다(main.py 테이블 정의) — 사람이 폼에 직접
+        # 입력하는 경로라 실수로 긴 문장을 넣으면 원시 DB 에러(500)로 새는 대신 자르는
+        # 쪽을 택한다(name/condition/value는 TEXT라 제약 없음).
+        unit_value = unit.strip()[:50] if unit and unit.strip() else None
+        await conn.execute(
+            "INSERT INTO policy_param (policy_item_id, name, condition, value, unit) VALUES ($1, $2, $3, $4, $5)",
+            item_id, name.strip(), (condition or None), (value or None), unit_value,
+        )
+
+        remaining = segments[:segment_index] + segments[segment_index + 1:]
+        new_parse_status = "parsed" if not remaining else "partial"
+        await conn.execute(
+            """UPDATE policy_item SET unresolved_segments = $1::jsonb, parse_status = $2, updated_at = NOW()
+               WHERE id = $3""",
+            json.dumps(remaining, ensure_ascii=False), new_parse_status, item_id,
+        )
+    return len(remaining)

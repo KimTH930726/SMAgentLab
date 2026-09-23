@@ -97,6 +97,18 @@ class TestSearchPolicy:
 
         param_call = conn.fetch.call_args_list[0]
         assert "category_path" not in param_call.args[0] or "= ANY" not in param_call.args[0]
+
+    @pytest.mark.asyncio
+    async def test_rejected_and_deprecated_excluded_from_both_queries(self, patch_db):
+        """반려(rejected)된 항목은 재업로드로 대체된 옛 버전(deprecated)과 마찬가지로 실제
+        채팅 프롬프트/검색 결과에 새지 않아야 한다(2026-09-23, 검토 UI)."""
+        conn = patch_db()
+        await search.search_policy("ns", "질문")
+
+        param_call = conn.fetch.call_args_list[0]
+        chunk_call = conn.fetch.call_args_list[1]
+        assert "status NOT IN ('deprecated', 'rejected')" in param_call.args[0]
+        assert "status NOT IN ('deprecated', 'rejected')" in chunk_call.args[0]
         assert len(param_call.args) == 4  # sql + ns_id + like + top_k (category 없음)
 
     @pytest.mark.asyncio

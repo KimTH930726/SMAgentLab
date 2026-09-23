@@ -226,3 +226,92 @@ class TestPromoteSegmentToNarrative:
         update_call = conn.execute.call_args_list[1]
         assert json.loads(update_call.args[1]) == []
         assert update_call.args[2] == "parsed"  # 마지막 unresolved까지 없어졌으니 완전히 parsed
+
+
+class TestPromoteSegmentToParam:
+    """2026-09-23 신규 — "서술로 편입밖에 없으면 반쪽짜리 아니냐"는 지적으로 추가."""
+
+    def _make_conn(self, unresolved_segments):
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.fetchrow = AsyncMock(return_value={"unresolved_segments": json.dumps(unresolved_segments)})
+        conn.execute = AsyncMock()
+        return conn
+
+    @pytest.mark.asyncio
+    async def test_namespace_not_found_raises(self, monkeypatch):
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=self._make_conn([])))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=None))
+        with pytest.raises(ValueError, match="네임스페이스"):
+            await unresolved_report.promote_segment_to_param("없는곳", 1, 0, "이름", None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_item_not_found_raises(self, monkeypatch):
+        conn = self._make_conn([])
+        conn.fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+        with pytest.raises(ValueError, match="정책 항목"):
+            await unresolved_report.promote_segment_to_param("ns", 999, 0, "이름", None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_index_raises(self, monkeypatch):
+        conn = self._make_conn([{"text": "내용", "reason": "사유"}])
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+        with pytest.raises(ValueError, match="segment_index"):
+            await unresolved_report.promote_segment_to_param("ns", 1, 5, "이름", None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_blank_name_raises(self, monkeypatch):
+        conn = self._make_conn([{"text": "내용", "reason": "사유"}])
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+        with pytest.raises(ValueError, match="항목명"):
+            await unresolved_report.promote_segment_to_param("ns", 1, 0, "   ", None, None, None)
+
+    @pytest.mark.asyncio
+    async def test_inserts_param_and_removes_segment(self, monkeypatch):
+        conn = self._make_conn([
+            {"text": "최대 20개까지", "reason": "구조화 방법 미정"},
+            {"text": "둘째 세그먼트", "reason": "사유2"},
+        ])
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+
+        remaining = await unresolved_report.promote_segment_to_param(
+            "ns", 1, 0, "최대개수", "일반 배달", "20", "개",
+        )
+
+        assert remaining == 1
+
+        insert_call = conn.execute.call_args_list[0]
+        assert "INSERT INTO policy_param" in insert_call.args[0]
+        assert insert_call.args[1] == 1  # policy_item_id
+        assert insert_call.args[2] == "최대개수"
+        assert insert_call.args[3] == "일반 배달"
+        assert insert_call.args[4] == "20"
+        assert insert_call.args[5] == "개"
+
+        update_call = conn.execute.call_args_list[1]
+        assert "UPDATE policy_item" in update_call.args[0]
+        updated_segments = json.loads(update_call.args[1])
+        assert updated_segments == [{"text": "둘째 세그먼트", "reason": "사유2"}]
+        assert update_call.args[2] == "partial"
+
+    @pytest.mark.asyncio
+    async def test_optional_fields_default_to_none(self, monkeypatch):
+        conn = self._make_conn([{"text": "유일한 세그먼트", "reason": "사유"}])
+        monkeypatch.setattr(unresolved_report, "get_conn", MagicMock(return_value=conn))
+        monkeypatch.setattr(unresolved_report, "resolve_namespace_id", AsyncMock(return_value=1))
+
+        remaining = await unresolved_report.promote_segment_to_param("ns", 1, 0, "항목명", None, None, None)
+
+        assert remaining == 0
+        insert_call = conn.execute.call_args_list[0]
+        assert insert_call.args[3] is None
+        assert insert_call.args[4] is None
+        assert insert_call.args[5] is None
+        update_call = conn.execute.call_args_list[1]
+        assert update_call.args[2] == "parsed"

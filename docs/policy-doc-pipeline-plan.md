@@ -452,8 +452,14 @@ item이 param+condition 양쪽에 걸쳐있는 경우가 많아 같이 좋아짐
       그룹핑이 무의미 — 건수가 쌓여 실제로 필요해지면 재검토, YAGNI). 실 HTTP E2E로 검증:
       상태전이 예시를 실제 임포트 → 카드팀 아래 1건/1segment로 정확히 집계, system_key 필터
       정상 동작 확인
-- [ ] 검토 UI: 파라미터 값·조건 승인 화면 + unresolved 별도 탭 + 재검토 큐의 이전 버전 대비 diff 표시
-      (v1은 API까지만 — pending_review로 쌓인 데이터를 승인하는 화면은 아직 없음)
+- [x] **검토 UI — 승인/반려 + unresolved RDB 편입(2026-09-23)** — `service/policy/review.py`
+      신규(`approve_item()`/`reject_item()`, `pending_review`→`active`/`rejected` 전이,
+      `policy_item.reviewed_at`/`reviewed_by` 최초 사용). `unresolved_report.py`에
+      `promote_segment_to_param()` 추가(서술 편입과 병렬, 사람이 폼으로 name/condition/
+      value/unit 입력). 프론트: `PolicyItemBrowser.tsx` 상태 필터+승인/반려 버튼,
+      `PolicyUnresolvedReport.tsx` "파라미터로 편입" 폼. 상세는 `docs/architecture.md` v2.105.
+- [ ] 재검토 큐의 이전 버전 대비 diff 표시 — 재업로드로 내용이 바뀐 항목을 신/구 버전
+      비교해서 보여주는 것(위 승인/반려와는 별개 기능, 아직 미착수)
 - [x] **정책 항목 브라우저(2026-09-04)** — `GET /api/policy/items`(`service/policy/browse.py`),
       item→param/chunk 3층 구조를 쿼리 없이 전체 조회. 사용자 피드백(정책이 잘 저장됐는지 볼
       화면이 없다, RDB/벡터 연결 흐름을 가시적으로 보고 싶다)으로 착수. 관리자 화면 "정책 항목

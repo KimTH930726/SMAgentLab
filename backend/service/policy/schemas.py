@@ -92,6 +92,19 @@ class PromoteSegmentOut(BaseModel):
     remaining_segments: int
 
 
+class PromoteParamRequest(BaseModel):
+    namespace: str
+    segment_index: int = Field(ge=0)
+    name: str
+    condition: Optional[str] = None
+    value: Optional[str] = None
+    unit: Optional[str] = None
+
+
+class ItemActionRequest(BaseModel):
+    namespace: str
+
+
 class ParamOut(BaseModel):
     id: int
     name: str
