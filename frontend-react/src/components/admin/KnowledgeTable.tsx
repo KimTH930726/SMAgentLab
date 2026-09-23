@@ -178,7 +178,6 @@ export function KnowledgeTable() {
   const [showEdit, setShowEdit] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [categoryFilter, setCategoryFilter] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('');
   const [sortBy, setSortBy] = useState<'default' | 'weight_desc' | 'weight_asc'>('default');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'text' | 'vector'>('text');
@@ -301,10 +300,6 @@ export function KnowledgeTable() {
 
   const textFilteredItems = items.filter((item) => {
     if (categoryFilter && item.category !== categoryFilter) return false;
-    if (sourceFilter) {
-      const st = (item as any).source_type || 'manual';
-      if (sourceFilter !== st) return false;
-    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const content = item.content.toLowerCase();
@@ -439,20 +434,6 @@ export function KnowledgeTable() {
               </div>
             )}
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">소스</label>
-              <select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setPage(1); setSelectedIds(new Set()); }}
-                className="w-36 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-                <option value="">전체</option>
-                <option value="manual">수동 등록</option>
-                <option value="csv_import">CSV 임포트</option>
-                <option value="paste_split">텍스트 분할</option>
-                <option value="file_upload">파일 업로드</option>
-                <option value="web">웹 크롤링</option>
-                <option value="confluence">Confluence</option>
-                <option value="teams">Teams</option>
-              </select>
-            </div>
-            <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">정렬</label>
               <select
                 value={sortBy}
@@ -561,12 +542,6 @@ export function KnowledgeTable() {
                   <div className="flex flex-1 items-center gap-3 cursor-pointer min-w-0" onClick={() => startEdit(item)}>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        {(item as any).source_file && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-900/40 text-sky-300 font-mono">
-                            {(item as any).source_type === 'csv_import' ? '📊' : (item as any).source_type === 'paste_split' ? '📋' : (item as any).source_type === 'teams' ? '💬' : '📄'}{' '}
-                            {(item as any).source_file}{(item as any).source_chunk_idx != null && ` #${(item as any).source_chunk_idx}`}
-                          </span>
-                        )}
                         {item.category && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 font-medium">{item.category}</span>
                         )}
@@ -593,7 +568,7 @@ export function KnowledgeTable() {
               ))}
               {displayItems.length === 0 && !vectorSearchQuery.isFetching && (
                 <div className="text-center py-16 text-slate-500">
-                  {searchQuery || categoryFilter || sourceFilter || vectorQuery ? '검색 결과가 없습니다.' : '지식 항목이 없습니다.'}
+                  {searchQuery || categoryFilter || vectorQuery ? '검색 결과가 없습니다.' : '지식 항목이 없습니다.'}
                 </div>
               )}
               {vectorSearchQuery.isFetching && (

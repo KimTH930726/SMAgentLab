@@ -1,4 +1,5 @@
 """대화 도메인 — Pydantic 스키마."""
+from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -82,6 +83,9 @@ class DebugResult(BaseModel):
     v_score: float
     k_score: float
     final_score: float
+    source_type: Optional[str] = None
+    source_file: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 
 class DebugSearchResponse(BaseModel):

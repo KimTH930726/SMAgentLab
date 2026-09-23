@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.103)
+# Ops-Navigator 시스템 아키텍처 (v2.104)
 
 ## 개요
 
@@ -11,6 +11,22 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.104: **지식 조회 화면의 "소스" 필터/배지 제거 + 즉석질의 "데이터 저장 위치" 패널
+  추가.** 사용자 지적: "소스로 아무도 안 찾아본다 — 업무구분(category) 필터가 낫다,
+  내용 자체가 중요하다." `KnowledgeTable.tsx` 지식 조회 탭에서 소스 필터 select와 목록
+  행의 source_file 배지(📊/📋/💬/📄 아이콘)를 제거 — 소스 관련 상태(`sourceFilter`)와
+  필터링 로직도 함께 삭제. 대신 "즉석 질의"(`UnifiedAdhocSearch.tsx`) 결과 카드를 클릭하면
+  뜨는 상세 모달에 "이 지식이 실제로 DB에 어떻게 저장돼 있나"를 한눈에 보여주는 별도
+  강조 박스(테이블명·레코드 id·namespace·category·등록방식·원본파일·등록일·임베딩 차원)를
+  새로 추가 — "소스는 찾아보는 용도가 아니라 궁금할 때 들여다보는 용도"라는 취지로 필터에서
+  상세보기로 위치를 옮김. 일반지식(`rag_knowledge`)뿐 아니라 정책 파라미터(`policy_param`)/
+  서술(`policy_chunk`)/참조데이터(`ref_common_code`/`ref_db_column`) 4개 축 전부에 동일한
+  패널을 붙임(정책·참조데이터는 이미 있던 필드로 채움, 일반지식만 백엔드 확장 필요).
+  백엔드: `retrieval.RetrievalResult`에 `source_type`/`source_file`/`created_at` 필드 추가,
+  `search_knowledge()` SQL에 `k.source_type, k.source_file, k.created_at` 셀렉트 추가,
+  `DebugResult`/`chat_debug` 핸들러도 동일 필드 통과. 실 dev 스택 재빌드 후 로그인해
+  즉석질의 검색→카드 클릭→저장 위치 패널 렌더링과 지식 조회 화면에서 소스 필터가
+  사라진 것을 스크린샷으로 직접 확인.
 - v2.103: **카테고리 자동 관리를 모든 등록 경로로 확장.** v2.101-102는 컨플루언스 벌크
   전용이었는데, 사용자 지적으로 재검토: "업무구분을 누가 먼저 만들어주나"와 "만들어져도
   사람이 등록할 때 잘 챙겨 넣을까"라는 두 우려가 사실상 같은 문제("카테고리 목록이

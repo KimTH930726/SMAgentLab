@@ -317,6 +317,9 @@ export interface DebugSearchResult {
   k_score: number;
   final_score: number;
   base_weight: number;
+  source_type: string | null;
+  source_file: string | null;
+  created_at: string | null;
 }
 
 export interface DebugGlossaryMatch {

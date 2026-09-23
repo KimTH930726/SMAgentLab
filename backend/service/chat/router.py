@@ -301,6 +301,7 @@ async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
                 id=r.id, content=r.content, category=r.category,
                 base_weight=r.base_weight,
                 v_score=r.v_score, k_score=r.k_score, final_score=r.final_score,
+                source_type=r.source_type, source_file=r.source_file, created_at=r.created_at,
             )
             for r in pipe.results
         ],

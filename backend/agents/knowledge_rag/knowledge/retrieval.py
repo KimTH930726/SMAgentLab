@@ -72,6 +72,9 @@ class RetrievalResult:
     k_score: float = field(default=0.0)
     category: Optional[str] = field(default=None)
     heading_path: list[str] = field(default_factory=list)
+    source_type: Optional[str] = field(default=None)
+    source_file: Optional[str] = field(default=None)
+    created_at: Optional[datetime.datetime] = field(default=None)
 
 
 def relevance_score(r: RetrievalResult) -> float:
@@ -230,6 +233,7 @@ async def search_knowledge(
             )
             SELECT k.id, n.name AS namespace,
                    k.content, k.base_weight, k.category, k.heading_path,
+                   k.source_type, k.source_file, k.created_at,
                    COALESCE(vs.v_score, 0.0) AS v_score,
                    COALESCE(ks.k_score, 0.0) AS k_score,
                    -- 카테고리별로 RDB(키워드) 검색을 쓸지 벡터 검색을 쓸지 여기서 갈린다
@@ -274,6 +278,8 @@ async def search_knowledge(
             v_score=float(r["v_score"]), k_score=float(r["k_score"]),
             final_score=score, category=r["category"],
             heading_path=list(r["heading_path"] or []),
+            source_type=r["source_type"], source_file=r["source_file"],
+            created_at=r["created_at"],
         ))
     return results
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { Search, Flag, FlagOff, Check, X, PenLine } from 'lucide-react';
+import { Search, Flag, FlagOff, Check, X, PenLine, Database } from 'lucide-react';
 import { debugSearch } from '../../api/chat';
 import { searchPolicy, type ParamHit, type NarrativeHit } from '../../api/policy';
 import { searchRefdata, type CommonCodeHit, type DbColumnHit } from '../../api/refdata';
@@ -85,7 +85,18 @@ interface UnifiedHit {
   adoptedReason: string;
   rawCategory?: string;
   rawBaseWeight?: number;
+  storage: { table: string; recordId: string | number; rows: MetaRow[] };
 }
+
+const SOURCE_TYPE_LABEL: Record<string, string> = {
+  manual: '수동 등록',
+  csv_import: 'CSV 임포트',
+  paste_split: '텍스트 분할',
+  file_upload: '파일 업로드',
+  web: '웹 크롤링',
+  confluence: 'Confluence',
+  teams: 'Teams',
+};
 
 const RRF_K = 60;
 
@@ -205,6 +216,18 @@ export function UnifiedAdhocSearch() {
             { key: '최종 점수(가중치 반영)', value: r.final_score.toFixed(4) },
             { key: 'base_weight', value: r.base_weight.toFixed(2) },
           ],
+          storage: {
+            table: 'rag_knowledge',
+            recordId: r.id,
+            rows: [
+              { key: '파트(namespace)', value: selectedNs },
+              { key: '업무구분(category)', value: r.category ?? '미분류' },
+              { key: '등록 방식', value: r.source_type ? (SOURCE_TYPE_LABEL[r.source_type] ?? r.source_type) : '-' },
+              ...(r.source_file ? [{ key: '원본 파일/문서', value: r.source_file }] : []),
+              { key: '등록일', value: r.created_at ? new Date(r.created_at).toISOString().slice(0, 10) : '-' },
+              { key: '임베딩', value: 'KURE-v1 · 1024차원 벡터 컬럼에 저장' },
+            ],
+          },
         };
       });
       const paramHits: UnifiedHit[] = policy.params.map((p: ParamHit, i) => {
@@ -234,6 +257,15 @@ export function UnifiedAdhocSearch() {
             { key: '조건', value: p.condition ?? '조건없음' },
             { key: '값', value: p.value ? `${p.value}${p.unit ?? ''}` : '-' },
           ],
+          storage: {
+            table: 'policy_param',
+            recordId: p.item_id,
+            rows: [
+              { key: '상위 정책 항목(policy_item) id', value: String(p.item_id) },
+              { key: 'logical_id(버전 계열)', value: String(p.logical_id) },
+              { key: '항목명', value: p.param_name },
+            ],
+          },
         };
       });
       const narrativeHits: UnifiedHit[] = policy.narratives.map((n: NarrativeHit, i) => ({
@@ -251,6 +283,15 @@ export function UnifiedAdhocSearch() {
           { key: '분류', value: n.category_path.join(' > ') || '-' },
           { key: '상태', value: n.status },
         ],
+        storage: {
+          table: 'policy_chunk',
+          recordId: n.item_id,
+          rows: [
+            { key: '상위 정책 항목(policy_item) id', value: String(n.item_id) },
+            { key: 'logical_id(버전 계열)', value: String(n.logical_id) },
+            { key: '임베딩', value: 'KURE-v1 · 1024차원 벡터 컬럼에 저장(chunk 단위)' },
+          ],
+        },
       }));
       // 참조데이터(공통코드/DB스키마) 축(2026-09-18) — agent.py의 네 번째 RRF 축과 동일한
       // 데이터. ts_rank 기반이라 정책 파라미터와 마찬가지로 점수 임계치 없이 top_k
@@ -270,6 +311,14 @@ export function UnifiedAdhocSearch() {
           { key: '코드값', value: c.code_id },
           { key: '설명', value: c.code_name ?? '-' },
         ],
+        storage: {
+          table: 'ref_common_code',
+          recordId: c.code_id,
+          rows: [
+            { key: '그룹코드명', value: c.group_code_name ?? '-' },
+            { key: '코드값(PK)', value: c.code_id },
+          ],
+        },
       }));
       const dbColumnHits: UnifiedHit[] = refdata.db_columns.map((d: DbColumnHit, i) => ({
         source: 'refdata-column',
@@ -287,6 +336,14 @@ export function UnifiedAdhocSearch() {
           { key: '타입', value: d.data_type ?? '-' },
           { key: '설명', value: d.column_comment ?? '-' },
         ],
+        storage: {
+          table: 'ref_db_column',
+          recordId: `${d.table_name}.${d.column_name}`,
+          rows: [
+            { key: '대상 테이블', value: d.table_name },
+            { key: '대상 컬럼', value: d.column_name },
+          ],
+        },
       }));
 
       const merged = [...generalHits, ...paramHits, ...narrativeHits, ...commonCodeHits, ...dbColumnHits].sort((a, b) => b.rrf - a.rrf);
@@ -536,6 +593,28 @@ export function UnifiedAdhocSearch() {
 
             {!isEditing ? (
               <>
+                {/* 저장 구조 — "이 결과가 실제 DB에 어떻게 저장돼 있나"를 검색 메타(점수 등)와
+                    분리해 한눈에 보여준다(2026-09-23 요청). 테이블명/레코드 id를 배지로
+                    강조하고 나머지는 같은 톤의 별도 박스에 둔다. */}
+                <div className="rounded-lg border border-indigo-200 dark:border-indigo-800/50 bg-indigo-50/60 dark:bg-indigo-950/20 px-3 py-2.5 space-y-2">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                    <Database className="w-3.5 h-3.5" />
+                    데이터 저장 위치
+                    <span className="ml-auto font-mono text-[11px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300">
+                      {activeHit.storage.table}
+                    </span>
+                    <span className="font-mono text-[11px] text-indigo-500 dark:text-indigo-400">#{activeHit.storage.recordId}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    {activeHit.storage.rows.map((m) => (
+                      <div key={m.key} className="flex flex-col">
+                        <span className="text-indigo-600/70 dark:text-indigo-400/70">{m.key}</span>
+                        <span className="text-slate-700 dark:text-slate-200 truncate">{m.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2.5">
                   {activeHit.meta.map((m) => (
                     <div key={m.key} className="flex flex-col">
