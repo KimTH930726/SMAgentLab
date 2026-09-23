@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp, BookOpen, Wand2, Search } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, BookOpen, Wand2, Search, Check } from 'lucide-react';
 import { getGlossary, createGlossaryItem, updateGlossaryItem, deleteGlossaryItem, bulkDeleteGlossary, vectorSearchGlossary, suggestGlossaryTerms, applyGlossarySuggestion, type GlossarySuggestSource } from '../../api/knowledge';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Button } from '../ui/Button';
@@ -17,7 +17,6 @@ interface GlossarySuggestion { term: string; description: string; }
 export function GlossaryTable() {
   const qc = useQueryClient();
   const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, user } = useNamespaceAccess();
-  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   // AI 추천 관련 상태
   const [showSuggest, setShowSuggest] = useState(false);
@@ -136,7 +135,6 @@ export function GlossaryTable() {
   const startEdit = (item: GlossaryItem) => {
     setEditingId(item.id);
     setEditForm({ term: item.term, description: item.description });
-    setExpandedId(item.id);
   };
 
   const handleOpenSuggest = () => {
@@ -170,7 +168,7 @@ export function GlossaryTable() {
         <label className="block text-xs font-medium text-slate-400 mb-1.5">파트</label>
         <select
           value={selectedNs}
-          onChange={(e) => { setSelectedNs(e.target.value); setEditingId(null); setExpandedId(null); }}
+          onChange={(e) => { setSelectedNs(e.target.value); setEditingId(null); }}
           className="w-64 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
         >
           <option value="">선택...</option>
@@ -257,50 +255,15 @@ export function GlossaryTable() {
           )}
 
           <PaginationInfo totalItems={totalItems} pageSize={pageSize} onPageSizeChange={setPageSize} />
-          {pagedItems.map((item) => (
-            <div key={item.id} className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
-              {/* Card header */}
-              <div
-                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-700/50 transition-colors"
-                onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}
-              >
-                {canModifyNs && (
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(item.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={() => toggleSelect(item.id)}
-                    className="w-4 h-4 rounded accent-indigo-500 flex-shrink-0"
-                  />
-                )}
-                <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm font-medium text-slate-200">{item.term}</span>
-                  <p className="text-xs text-slate-500 mt-0.5 truncate">{item.description}</p>
-                </div>
-                {item.created_by_username && (
-                  <span className="text-xs text-slate-500">{item.created_by_username}</span>
-                )}
-                {item.created_by_part && (
-                  <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>
-                )}
-                {searchMode === 'vector' && (item as GlossaryItem & { similarity?: number }).similarity != null && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 font-mono">
-                    {((item as GlossaryItem & { similarity?: number }).similarity! * 100).toFixed(1)}%
-                  </span>
-                )}
-                {expandedId === item.id ? (
-                  <ChevronUp className="w-4 h-4 text-slate-400" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-slate-400" />
-                )}
-              </div>
-
-              {/* Expanded content */}
-              {expandedId === item.id && (
-                <div className="border-t border-slate-700 px-4 py-4">
-                  {editingId === item.id ? (
-                    <div className="space-y-3">
+          {pagedItems.map((item) => {
+            const isEditing = editingId === item.id;
+            const similarity = (item as GlossaryItem & { similarity?: number }).similarity;
+            return (
+              <div key={item.id}
+                className={`bg-slate-800 border rounded-xl px-4 py-3 transition-colors ${isEditing ? 'border-indigo-500' : 'border-slate-700'}`}>
+                {isEditing ? (
+                  <div className="space-y-3">
+                    <div className="grid sm:grid-cols-[10rem_1fr] gap-3">
                       <div>
                         <label className="block text-xs font-medium text-slate-400 mb-1">용어</label>
                         <input type="text" value={editForm.term} onChange={(e) => setEditForm((f) => ({ ...f, term: e.target.value }))}
@@ -311,32 +274,62 @@ export function GlossaryTable() {
                         <textarea rows={3} value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
                           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-none" />
                       </div>
-                      {updateMutation.error && (
-                        <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>
-                      )}
-                      <div className="flex gap-2 justify-end">
-                        <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}><X className="w-3.5 h-3.5" />취소</Button>
-                        <Button variant="primary" size="sm" loading={updateMutation.isPending} onClick={() => updateMutation.mutate(item.id)}>저장</Button>
+                    </div>
+                    {updateMutation.error && (
+                      <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>
+                    )}
+                    <div className="flex gap-2 justify-end">
+                      <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}><X className="w-3.5 h-3.5" />취소</Button>
+                      <Button variant="primary" size="sm" loading={updateMutation.isPending} onClick={() => updateMutation.mutate(item.id)}>
+                        <Check className="w-3.5 h-3.5" />저장
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-3">
+                    {canModifyNs && (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(item.id)}
+                        onChange={() => toggleSelect(item.id)}
+                        className="w-4 h-4 rounded accent-indigo-500 flex-shrink-0 mt-1"
+                      />
+                    )}
+                    <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
+                    <div className="w-full sm:w-36 flex-shrink-0">
+                      <span className="text-sm font-semibold text-slate-100 break-words">{item.term}</span>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {item.created_by_part && <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>}
+                        {similarity != null && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 font-mono">
+                            {(similarity * 100).toFixed(1)}%
+                          </span>
+                        )}
                       </div>
                     </div>
-                  ) : (
-                    <div className="space-y-3">
+                    <p className="flex-1 min-w-0 text-sm text-slate-300 leading-relaxed">{item.description}</p>
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
                       {canModifyNs && (
-                        <div className="flex gap-2 justify-end pb-3 border-b border-slate-700">
-                          <Button variant="secondary" size="sm" onClick={() => startEdit(item)}><Edit2 className="w-3.5 h-3.5" />수정</Button>
-                          <Button variant="danger" size="sm" onClick={() => setDeleteTarget(item.id)}><Trash2 className="w-3.5 h-3.5" />삭제</Button>
+                        <div className="flex gap-1">
+                          <button onClick={() => startEdit(item)} title="수정"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-slate-700/60 transition-colors">
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => setDeleteTarget(item.id)} title="삭제"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-700/60 transition-colors">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       )}
-                      <div>
-                        <p className="text-xs text-slate-500 mb-1">설명</p>
-                        <p className="text-sm text-slate-300 leading-relaxed">{item.description}</p>
-                      </div>
+                      {item.created_by_username && (
+                        <span className="text-[11px] text-slate-500">{item.created_by_username}</span>
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
           {displayItems.length === 0 && !vectorSearchQuery.isFetching && (
             <div className="text-center py-10 text-slate-500">
               {searchQuery || vectorQuery ? '검색 결과가 없습니다.' : '용어 항목이 없습니다.'}
