@@ -239,14 +239,16 @@ export function PolicyItemBrowser() {
                       type="button"
                       disabled={rejectMutation.isPending && rejectMutation.variables === item.item_id}
                       onClick={() => {
-                        // 승인과 달리 반려는 검색/채팅에서 실제로 빠지고, 지금은 되돌리는
-                        // UI가 없어 확인 없이 바로 누르면 위험하다(아이콘이 붙어 있어
-                        // 오클릭 가능성도 있음) — confirm으로 한 번 막는다.
-                        if (window.confirm(`"${item.policy_name}" 항목을 반려할까요?\n검색/채팅에서 제외되며, 되돌리는 화면은 아직 없습니다.`)) {
+                        // 승인과 달리 반려는 검색/채팅에서 실제로 빠져서, 확인 없이 바로
+                        // 누르면 위험하다(아이콘이 붙어 있어 오클릭 가능성도 있음) —
+                        // confirm으로 한 번 막는다. 반려 후에는 이 화면에서 항목을 펼쳐
+                        // 파라미터/서술을 고치면 다시 검토대기로 되돌릴 수 있다(2026-09-23
+                        // 추가 — 예전엔 되돌릴 방법이 없었지만 지금은 있음, 문구도 갱신).
+                        if (window.confirm(`"${item.policy_name}" 항목을 반려할까요?\n검색/채팅에서 제외됩니다. 반려 후 이 화면에서 항목을 펼쳐 파라미터/서술을 고치면 다시 검토대기로 되돌릴 수 있습니다.`)) {
                           rejectMutation.mutate(item.item_id);
                         }
                       }}
-                      title="반려 — 검색/채팅에서 제외됩니다(되돌리는 화면 없음)"
+                      title="반려 — 검색/채팅에서 제외됩니다(펼쳐서 수정하면 재검토 가능)"
                       className="p-1 rounded text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40 disabled:opacity-50"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -286,18 +288,30 @@ export function PolicyItemBrowser() {
                             return (
                               <div key={p.id} className="bg-slate-900 border border-cyan-500/50 rounded-lg px-3 py-2 space-y-1.5">
                                 <div className="grid grid-cols-2 gap-1.5">
-                                  <input type="text" placeholder="항목명 *" value={paramEditForm.name}
-                                    onChange={(e) => setParamEditForm((f) => ({ ...f, name: e.target.value }))}
-                                    className="col-span-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
-                                  <input type="text" placeholder="조건" value={paramEditForm.condition}
-                                    onChange={(e) => setParamEditForm((f) => ({ ...f, condition: e.target.value }))}
-                                    className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
-                                  <input type="text" placeholder="값" value={paramEditForm.value}
-                                    onChange={(e) => setParamEditForm((f) => ({ ...f, value: e.target.value }))}
-                                    className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
-                                  <input type="text" placeholder="단위" value={paramEditForm.unit}
-                                    onChange={(e) => setParamEditForm((f) => ({ ...f, unit: e.target.value }))}
-                                    className="col-span-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
+                                  <div className="col-span-2">
+                                    <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">항목명 *</label>
+                                    <input type="text" value={paramEditForm.name}
+                                      onChange={(e) => setParamEditForm((f) => ({ ...f, name: e.target.value }))}
+                                      className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">조건</label>
+                                    <input type="text" value={paramEditForm.condition}
+                                      onChange={(e) => setParamEditForm((f) => ({ ...f, condition: e.target.value }))}
+                                      className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">값</label>
+                                    <input type="text" value={paramEditForm.value}
+                                      onChange={(e) => setParamEditForm((f) => ({ ...f, value: e.target.value }))}
+                                      className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
+                                  </div>
+                                  <div className="col-span-2">
+                                    <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">단위</label>
+                                    <input type="text" value={paramEditForm.unit}
+                                      onChange={(e) => setParamEditForm((f) => ({ ...f, unit: e.target.value }))}
+                                      className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500" />
+                                  </div>
                                 </div>
                                 <div className="flex justify-end gap-2">
                                   <button type="button" onClick={() => setEditingParamId(null)}

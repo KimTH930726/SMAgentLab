@@ -225,30 +225,42 @@ export function PolicyUnresolvedReport() {
                                       <p className="text-[11px] text-cyan-700 dark:text-cyan-400">AI 제안 확인 중...</p>
                                     )}
                                     <div className="grid grid-cols-2 gap-2">
-                                      <input
-                                        type="text" placeholder={suggestLoading ? 'AI 제안 확인 중...' : '항목명 *'} value={paramForm.name}
-                                        disabled={suggestLoading}
-                                        onChange={(e) => setParamForm((f) => ({ ...f, name: e.target.value }))}
-                                        className="col-span-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
-                                      />
-                                      <input
-                                        type="text" placeholder="조건(선택)" value={paramForm.condition}
-                                        disabled={suggestLoading}
-                                        onChange={(e) => setParamForm((f) => ({ ...f, condition: e.target.value }))}
-                                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
-                                      />
-                                      <input
-                                        type="text" placeholder="값(선택)" value={paramForm.value}
-                                        disabled={suggestLoading}
-                                        onChange={(e) => setParamForm((f) => ({ ...f, value: e.target.value }))}
-                                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
-                                      />
-                                      <input
-                                        type="text" placeholder="단위(선택)" value={paramForm.unit}
-                                        disabled={suggestLoading}
-                                        onChange={(e) => setParamForm((f) => ({ ...f, unit: e.target.value }))}
-                                        className="col-span-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
-                                      />
+                                      <div className="col-span-2">
+                                        <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">항목명 *</label>
+                                        <input
+                                          type="text" value={paramForm.name}
+                                          disabled={suggestLoading}
+                                          onChange={(e) => setParamForm((f) => ({ ...f, name: e.target.value }))}
+                                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">조건(선택)</label>
+                                        <input
+                                          type="text" value={paramForm.condition}
+                                          disabled={suggestLoading}
+                                          onChange={(e) => setParamForm((f) => ({ ...f, condition: e.target.value }))}
+                                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">값(선택)</label>
+                                        <input
+                                          type="text" value={paramForm.value}
+                                          disabled={suggestLoading}
+                                          onChange={(e) => setParamForm((f) => ({ ...f, value: e.target.value }))}
+                                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
+                                        />
+                                      </div>
+                                      <div className="col-span-2">
+                                        <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">단위(선택)</label>
+                                        <input
+                                          type="text" value={paramForm.unit}
+                                          disabled={suggestLoading}
+                                          onChange={(e) => setParamForm((f) => ({ ...f, unit: e.target.value }))}
+                                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
+                                        />
+                                      </div>
                                     </div>
                                     <div className="flex justify-end gap-2">
                                       <button
