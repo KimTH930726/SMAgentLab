@@ -334,18 +334,42 @@ export function PolicyLab() {
               <TrendingUp className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
               <span className="text-xs font-medium text-slate-300">실행 이력 추이 (B안 hit@K, 최근 {trendAsc.length}회)</span>
             </div>
-            {trendAsc.length >= 2 ? (
-              <div className="flex items-end gap-1.5 h-16">
-                {trendAsc.map((h) => (
-                  <div
-                    key={h.id}
-                    title={`${new Date(h.run_at).toLocaleString('ko-KR')} — hit@K ${(h.b_hit_rate * 100).toFixed(1)}%`}
-                    className="flex-1 bg-indigo-500/70 hover:bg-indigo-400 rounded-t min-w-[6px] transition-colors"
-                    style={{ height: `${Math.max(h.b_hit_rate * 100, 3)}%` }}
-                  />
-                ))}
-              </div>
-            ) : (
+            {trendAsc.length >= 2 ? (() => {
+              // 값 라벨 없이 절대 0~100% 스케일로 막대 높이를 그렸더니, 실제 hit@K가
+              // 80~90%대처럼 좁은 구간에 몰려 있을 땐 막대가 전부 꽉 찬 것처럼 보여
+              // "있으나마나한 UI"가 되는 문제(2026-09-23 실사용 지적) — 실제 값 범위로
+              // 정규화해 변화를 눈에 띄게 하고, 호버 없이도 숫자가 항상 보이게 라벨 추가.
+              const values = trendAsc.map((h) => h.b_hit_rate * 100);
+              const min = Math.min(...values);
+              const max = Math.max(...values);
+              const range = max - min;
+              const BAR_AREA_PX = 56;
+              const latestId = trendAsc[trendAsc.length - 1].id;
+              return (
+                <div className="flex items-end gap-2">
+                  {trendAsc.map((h, i) => {
+                    const pct = values[i];
+                    const barPx = range > 0 ? Math.max(8, ((pct - min) / range) * BAR_AREA_PX) : BAR_AREA_PX * 0.6;
+                    const isLatest = h.id === latestId;
+                    return (
+                      <div
+                        key={h.id}
+                        title={`${new Date(h.run_at).toLocaleString('ko-KR')} — hit@K ${pct.toFixed(1)}%`}
+                        className="flex-1 flex flex-col items-center gap-1 min-w-[24px]"
+                      >
+                        <span className={`text-[10px] font-mono whitespace-nowrap ${isLatest ? 'text-indigo-300 font-semibold' : 'text-slate-500'}`}>
+                          {pct.toFixed(1)}%
+                        </span>
+                        <div
+                          className={`w-full rounded-t transition-colors ${isLatest ? 'bg-indigo-400' : 'bg-indigo-500/50 hover:bg-indigo-400'}`}
+                          style={{ height: `${barPx}px` }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })() : (
               <p className="text-[11px] text-slate-600">실행이 {trendAsc.length}회뿐이라 추이를 그릴 수 없습니다 — 2회 이상부터 막대그래프가 나타납니다.</p>
             )}
           </div>
