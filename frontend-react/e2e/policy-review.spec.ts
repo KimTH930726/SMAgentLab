@@ -34,13 +34,26 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('정책 항목 반려 → 편집 아이콘 노출 → 저장 시 검토대기로 복귀', async ({ page }) => {
-  // 검토대기 항목 중 첫 번째를 대상으로 — 실사용 큐라 어떤 항목인지는 매번 다를 수 있음
-  await page.locator('select').nth(2).selectOption('pending_review');
-  await page.waitForTimeout(600);
+  // "대분류" 드롭다운은 categoryOptions가 있을 때만 렌더링돼(PolicyItemBrowser.tsx)
+  // select 순서가 namespace에 따라 달라진다 — 인덱스(nth) 대신 실제 option 값으로 찾는다
+  // (/code-review 지적, 2026-09-23: knowledge-registration.spec.ts도 인덱스 대신
+  // filter({hasText})를 쓰는 동일한 이유).
+  const statusSelect = page.locator('select:has(option[value="rejected"])');
 
-  const firstRow = page.locator('.space-y-2 > div.bg-slate-800').first();
-  await expect(firstRow).toBeVisible({ timeout: 10_000 });
-  const policyName = (await firstRow.locator('span.font-medium').first().textContent())?.trim() ?? '';
+  const listResponse1 = page.waitForResponse((r) => /\/api\/policy\/items\?/.test(r.url()) && r.request().method() === 'GET');
+  await statusSelect.selectOption('pending_review');
+  await listResponse1;
+  await page.waitForTimeout(300); // 응답 후 리스트 렌더 반영
+
+  // param이나 narrative가 실제로 하나라도 있는 항목만 대상으로 고른다 — 아무것도
+  // 없는 항목("이 항목엔 param/narrative가 없습니다")은 편집 아이콘 자체가 안 뜬다
+  // (/code-review 지적, 2026-09-23: 첫 항목이 우연히 그런 케이스면 테스트가 기능과
+  // 무관하게 실패함).
+  const editableRow = page.locator('.space-y-2 > div.bg-slate-800').filter({
+    has: page.locator('[title="RDB 정확조회 파라미터"], [title="벡터 검색 서술 청크"]'),
+  }).first();
+  await expect(editableRow).toBeVisible({ timeout: 10_000 });
+  const policyName = (await editableRow.locator('span.font-medium').first().textContent())?.trim() ?? '';
   expect(policyName.length).toBeGreaterThan(0);
 
   // 반려 — confirm 문구가 "되돌릴 수 있다"고 정확히 안내하는지도 같이 확인
@@ -48,35 +61,38 @@ test('정책 항목 반려 → 편집 아이콘 노출 → 저장 시 검토대�
   // 없다"고 거짓 안내하던 버그가 있었음 — 회귀 방지).
   let dialogMessage = '';
   page.once('dialog', async (d) => { dialogMessage = d.message(); await d.accept(); });
-  await firstRow.locator('button[title*="반려"]').click();
-  await page.waitForTimeout(800);
+  const rejectResponse = page.waitForResponse((r) => /\/api\/policy\/items\/\d+\/reject/.test(r.url()));
+  await editableRow.locator('button[title*="반려"]').click();
+  await rejectResponse;
   expect(dialogMessage).toContain('다시 검토대기로 되돌릴 수 있습니다');
 
   // 반려됨 필터로 좁혀서 방금 그 항목을 다시 찾는다
-  await page.locator('select').nth(2).selectOption('rejected');
-  await page.waitForTimeout(600);
+  const listResponse2 = page.waitForResponse((r) => /\/api\/policy\/items\?/.test(r.url()) && r.request().method() === 'GET');
+  await statusSelect.selectOption('rejected');
+  await listResponse2;
+  await page.waitForTimeout(300);
   const rejectedRow = page.locator('.space-y-2 > div.bg-slate-800').filter({ hasText: policyName }).first();
   await expect(rejectedRow).toBeVisible({ timeout: 10_000 });
   await rejectedRow.click();
-  await page.waitForTimeout(400);
 
   // 반려 안내 배너 + 편집(연필) 아이콘 노출 확인
   await expect(page.getByText('반려된 항목입니다')).toBeVisible();
   const editBtn = page.locator('button:has(svg.lucide-pencil)').first();
   await expect(editBtn).toBeVisible();
   await editBtn.click();
-  await page.waitForTimeout(300);
 
   // 라벨이 항상 보이는지 확인(2026-09-23 실사고: placeholder만 있어서 값이 채워지면
   // 뭐가 뭔지 안 보이던 버그 — 라벨로 교체한 회귀 방지)
   await expect(page.getByText('항목명', { exact: false }).first()).toBeVisible();
 
   // 값은 안 건드리고 그대로 저장 — 원본 내용 보존한 채 상태만 검토대기로 되돌린다
+  const saveResponse = page.waitForResponse((r) => /\/api\/policy\/(params|narratives)\/\d+/.test(r.url()) && r.request().method() === 'PATCH');
   await page.getByRole('button', { name: /저장/ }).first().click();
-  await page.waitForTimeout(1500);
+  await saveResponse;
 
   // 검토대기 필터로 돌아가 방금 그 항목이 복귀했는지 확인 — 반려 이전과 동일한 상태로 원복됨
-  await page.locator('select').nth(2).selectOption('pending_review');
-  await page.waitForTimeout(600);
+  const listResponse3 = page.waitForResponse((r) => /\/api\/policy\/items\?/.test(r.url()) && r.request().method() === 'GET');
+  await statusSelect.selectOption('pending_review');
+  await listResponse3;
   await expect(page.locator('.space-y-2 > div.bg-slate-800').filter({ hasText: policyName }).first()).toBeVisible({ timeout: 10_000 });
 });
