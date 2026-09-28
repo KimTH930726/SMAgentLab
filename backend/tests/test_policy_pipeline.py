@@ -452,3 +452,117 @@ class TestIngestGlossaryRow:
         await service._ingest_glossary_row("ns", row, 1, patch_db, summary)
 
         create_mock.assert_awaited_once_with("ns", "딜리버스", "배달 서비스")
+
+
+class TestImportExcelAtomicSheet:
+    """정책 임포트 시트 단위 원자적 적재(2026-09-28) — 예전엔 행마다 autocommit이라 적재 도중
+    반쯤 들어간 시트가 챗 검색(pending_review도 노출)에 바로 잡혔고, 중간 실패 시 "새 버전은
+    청크 없이, 옛 버전은 deprecated"인 행이 남아 그 정책이 검색에서 사라졌다."""
+
+    ROWS = [
+        excel_parser.ParsedPolicyRow(category_path=["a"], policy_name="정책1", raw_body="본문1", remark=None, source_row=2),
+        excel_parser.ParsedPolicyRow(category_path=["a"], policy_name="정책2", raw_body="본문2", remark=None, source_row=3),
+    ]
+
+    def _setup(self, monkeypatch, patch_db, *, fail_on_chunk_insert=None):
+        conn = patch_db
+        events: list[str] = []
+
+        class _Tx:
+            async def __aenter__(self):
+                events.append("begin")
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("rollback" if exc_type else "commit")
+                return False
+        conn.transaction = MagicMock(side_effect=lambda: _Tx())
+
+        ids = iter([100, 101])
+
+        async def fetchrow(query, *args):
+            if "INSERT INTO policy_item" in query:
+                events.append("insert_item")
+                i = next(ids)
+                return {"id": i, "logical_id": i}
+            return None  # _find_current_version → 신규
+        conn.fetchrow = AsyncMock(side_effect=fetchrow)
+
+        chunk_count = {"n": 0}
+
+        async def execute(query, *args):
+            if "policy_chunk" in query:
+                chunk_count["n"] += 1
+                if fail_on_chunk_insert == chunk_count["n"]:
+                    raise RuntimeError("DB 오류")
+                events.append(f"chunk:{args[1]}")
+        conn.execute = AsyncMock(side_effect=execute)
+
+        sheet = excel_parser.ParsedSheet(sheet_name="시트1", kind="policy", policy_rows=list(self.ROWS))
+        monkeypatch.setattr(excel_parser, "parse_workbook", lambda b: [sheet])
+        monkeypatch.setattr(decompose, "decompose_policy_body", AsyncMock(side_effect=lambda name, body: [
+            decompose.Segment(type="narrative", text=f"{name} 서술"),
+        ]))
+        emb = MagicMock()
+        emb.embed_batch = AsyncMock(side_effect=lambda texts: [[float(i)] * 3 for i, _ in enumerate(texts)])
+        emb.embed = AsyncMock(side_effect=AssertionError("임포트 경로는 트랜잭션 안에서 임베딩하면 안 됨"))
+        monkeypatch.setattr(service, "embedding_service", emb)
+        invalidate = AsyncMock(return_value=0)
+        cache_mod = MagicMock(invalidate_namespace=invalidate)
+        monkeypatch.setitem(sys.modules, "shared.cache", cache_mod)
+        return conn, events, emb, invalidate
+
+    @pytest.mark.asyncio
+    async def test_sheet_written_in_one_transaction_with_precomputed_embeddings(self, patch_db, monkeypatch):
+        conn, events, emb, invalidate = self._setup(monkeypatch, patch_db)
+        result = await service.import_excel("ns", "sys", "f.xlsx", b"")
+
+        # 모든 쓰기가 begin~commit 사이에 있고, 임베딩은 트랜잭션 전에 한 번에 계산됨
+        assert events[0] == "begin" and events[-1] == "commit"
+        assert events.count("insert_item") == 2
+        emb.embed_batch.assert_awaited_once_with(["정책1 서술", "정책2 서술"])
+        assert [e for e in events if e.startswith("chunk:")] == ["chunk:정책1 서술", "chunk:정책2 서술"]
+        assert result.sheets[0].created_items == 2
+        invalidate.assert_awaited_once_with("ns")
+
+    @pytest.mark.asyncio
+    async def test_failure_mid_sheet_rolls_back_and_skips_cache_invalidation(self, patch_db, monkeypatch):
+        conn, events, emb, invalidate = self._setup(monkeypatch, patch_db, fail_on_chunk_insert=2)
+        with pytest.raises(RuntimeError):
+            await service.import_excel("ns", "sys", "f.xlsx", b"")
+        assert events[0] == "begin" and events[-1] == "rollback"
+        invalidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unchanged_sheet_does_not_invalidate_cache(self, patch_db, monkeypatch):
+        conn, events, emb, invalidate = self._setup(monkeypatch, patch_db)
+        same = {r.source_row: service._content_hash(r.category_path, r.policy_name, r.raw_body, r.remark) for r in self.ROWS}
+
+        async def fetchrow(query, *args):
+            return {"id": 5, "logical_id": 5, "version": 1, "content_hash": same[args[3]]}
+        conn.fetchrow = AsyncMock(side_effect=fetchrow)
+
+        result = await service.import_excel("ns", "sys", "f.xlsx", b"")
+        assert result.sheets[0].unchanged_skipped == 2
+        emb.embed_batch.assert_not_awaited()
+        invalidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_committed_sheet_invalidates_cache_even_if_later_sheet_fails(self, patch_db, monkeypatch):
+        """시트1 커밋 후 시트2 실패 — 시트1은 이미 반영됐으니 캐시는 비워져 있어야 한다."""
+        conn, events, emb, invalidate = self._setup(monkeypatch, patch_db, fail_on_chunk_insert=3)
+        sheet1 = excel_parser.ParsedSheet(sheet_name="시트1", kind="policy", policy_rows=list(self.ROWS))
+        sheet2 = excel_parser.ParsedSheet(sheet_name="시트2", kind="policy", policy_rows=[self.ROWS[0]])
+        monkeypatch.setattr(excel_parser, "parse_workbook", lambda b: [sheet1, sheet2])
+        ids = iter([100, 101, 102])
+
+        async def fetchrow(query, *args):
+            if "INSERT INTO policy_item" in query:
+                i = next(ids)
+                return {"id": i, "logical_id": i}
+            return None
+        conn.fetchrow = AsyncMock(side_effect=fetchrow)
+
+        with pytest.raises(RuntimeError):
+            await service.import_excel("ns", "sys", "f.xlsx", b"")
+        assert events.count("commit") == 1 and events[-1] == "rollback"
+        invalidate.assert_awaited_once_with("ns")

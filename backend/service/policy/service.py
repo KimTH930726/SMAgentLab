@@ -14,12 +14,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 from service.policy import excel_parser, decompose
 from agents.knowledge_rag.knowledge.service import create_glossary
+
+logger = logging.getLogger(__name__)
 
 # 한 시트(100~200 row 규모, docs/policy-doc-pipeline-plan.md §1)를 row마다 순차로 LLM
 # 분해하면 row당 1~3초씩 걸려 파일 하나 임포트에 수 분이 걸린다 — LLM 호출은 I/O 바운드라
@@ -101,15 +104,36 @@ async def _check_version(
     return skip, current, new_hash
 
 
+def _chunk_texts(row: excel_parser.ParsedPolicyRow, segments: list[decompose.Segment]) -> tuple[list[str], bool]:
+    """policy_chunk로 들어갈 텍스트 목록과 폴백 여부. 임베딩을 트랜잭션 밖에서 미리 계산하려고
+    (import_excel) 적재 로직에서 분리 — 적재 시에도 같은 함수를 써서 순서가 어긋날 수 없다.
+
+    벡터 폴백(2026-09-04, Track 2 실측) — narrative segment가 하나도 안 남은 item(param만
+    있거나 전부 unresolved인 경우, 실측 378건 중 136건=36%가 여기 해당)은 policy_chunk가
+    아예 없어서 벡터 검색으로 못 찾는다. 자연어 질문이 짧은 param 필드(name/condition)와
+    어휘가 안 겹치면 to_tsquery 정확매칭도 실패해 이런 item은 아예 검색 불가능해진다 —
+    Track 2 A/B 비교에서 param 유형만 하이브리드(B)가 지식-only(A)에 오히려 크게 진 원인.
+    원문 전체(정책명+본문)를 벡터 색인해두면 어휘가 안 겹쳐도 의미 유사도로는 찾을 수 있다.
+    """
+    texts = [s.text for s in segments if s.type == "narrative" and s.text.strip()]
+    if texts:
+        return texts, False
+    return [f"{row.policy_name} ({' / '.join(row.category_path)}): {row.raw_body}"], True
+
+
 async def _write_policy_result(
     conn, ns_id: int, system_key: str, source_file: str, sheet_name: str,
     row: excel_parser.ParsedPolicyRow, current, new_hash: str,
     segments: list[decompose.Segment], summary: SheetSummary,
+    chunk_embeddings: list[list[float]] | None = None,
 ) -> None:
     """LLM 분해 결과(segments)를 실제 policy_item/param/chunk로 적재. DB 쓰기만 하는
     단계라 여러 row를 처리할 때도 이 부분은 커넥션 하나로 순차 실행해야 안전하다
     (asyncpg 커넥션은 동시 쿼리를 지원하지 않음) — LLM 분해(느림, 동시 처리 가능)와
-    분리해둔 이유."""
+    분리해둔 이유.
+
+    chunk_embeddings: `_chunk_texts()` 순서대로 미리 계산한 임베딩. 없으면 여기서 계산한다
+    (단건 경로 `_ingest_policy_row`)."""
     logical_id = current["logical_id"] if current is not None else None
     version = (current["version"] + 1) if current is not None else 1
     supersedes_id = current["id"] if current is not None else None
@@ -143,7 +167,6 @@ async def _write_policy_result(
     else:
         summary.created_items += 1
 
-    narrative_written = False
     for seg in segments:
         if seg.type == "param" and seg.extracted:
             await conn.execute(
@@ -158,31 +181,19 @@ async def _write_policy_result(
                 _coerce_param_field(seg.extracted.get("unit")),
             )
             summary.params_extracted += 1
-        elif seg.type == "narrative" and seg.text.strip():
-            embedding = await embedding_service.embed(seg.text)
-            await conn.execute(
-                "INSERT INTO policy_chunk (policy_item_id, chunk_text, embedding, chunk_idx) VALUES ($1, $2, $3::vector, $4)",
-                item_id, seg.text, str(embedding), summary.narratives_extracted,
-            )
-            summary.narratives_extracted += 1
-            narrative_written = True
         elif seg.type == "unresolved":
             summary.unresolved_segments += 1
 
-    # 벡터 폴백(2026-09-04, Track 2 실측) — narrative segment가 하나도 안 남은 item(param만
-    # 있거나 전부 unresolved인 경우, 실측 378건 중 136건=36%가 여기 해당)은 policy_chunk가
-    # 아예 없어서 벡터 검색으로 못 찾는다. 자연어 질문이 짧은 param 필드(name/condition)와
-    # 어휘가 안 겹치면 to_tsquery 정확매칭도 실패해 이런 item은 아예 검색 불가능해진다 —
-    # Track 2 A/B 비교에서 param 유형만 하이브리드(B)가 지식-only(A)에 오히려 크게 진 원인.
-    # 원문 전체(정책명+본문)를 벡터 색인해두면 어휘가 안 겹쳐도 의미 유사도로는 찾을 수 있다.
-    if not narrative_written:
-        fallback_text = f"{row.policy_name} ({' / '.join(row.category_path)}): {row.raw_body}"
-        embedding = await embedding_service.embed(fallback_text)
+    texts, is_fallback = _chunk_texts(row, segments)
+    if chunk_embeddings is None:
+        chunk_embeddings = [await embedding_service.embed(t) for t in texts]
+    for text, embedding in zip(texts, chunk_embeddings, strict=True):
         await conn.execute(
             "INSERT INTO policy_chunk (policy_item_id, chunk_text, embedding, chunk_idx) VALUES ($1, $2, $3::vector, $4)",
-            item_id, fallback_text, str(embedding), summary.narratives_extracted,
+            item_id, text, str(embedding), summary.narratives_extracted,
         )
         summary.narratives_extracted += 1
+    if is_fallback:
         summary.fallback_chunks_added += 1
 
 
@@ -260,12 +271,40 @@ async def import_excel(namespace: str, system_key: str, filename: str, file_byte
 
             segments_list = await asyncio.gather(*[_bounded_decompose(item[0]) for item in to_process])
 
+            # ④ 시트 단위 원자적 적재(2026-09-28, WBS 1-2와 같은 문제) — 예전엔 행마다 autocommit이라
+            # 적재 도중 반쯤 들어간 시트가 챗 검색(status NOT IN deprecated/rejected — pending_review도
+            # 노출)에 바로 잡혔고, 중간에 임베딩이 실패하면 "새 버전은 청크 없이 들어가고 옛 버전은
+            # deprecated"인 행이 남아 그 정책이 검색에서 사라졌다. 임베딩은 트랜잭션 밖에서 미리
+            # 한 번에 계산해 트랜잭션은 DB 쓰기만 담도록 짧게 유지한다.
+            chunk_plan = [_chunk_texts(row, segs)[0] for (row, _, _), segs in zip(to_process, segments_list)]
+            flat_texts = [t for texts in chunk_plan for t in texts]
+            flat_embeddings = await embedding_service.embed_batch(flat_texts) if flat_texts else []
+            per_row_embeddings, offset = [], 0
+            for texts in chunk_plan:
+                per_row_embeddings.append(flat_embeddings[offset:offset + len(texts)])
+                offset += len(texts)
+
             async with get_conn() as conn:
-                for (row, current, new_hash), segments in zip(to_process, segments_list):
-                    await _write_policy_result(
-                        conn, ns_id, system_key, filename, sheet.sheet_name,
-                        row, current, new_hash, segments, summary,
-                    )
+                async with conn.transaction():
+                    for (row, current, new_hash), segments, embeddings in zip(to_process, segments_list, per_row_embeddings):
+                        await _write_policy_result(
+                            conn, ns_id, system_key, filename, sheet.sheet_name,
+                            row, current, new_hash, segments, summary, chunk_embeddings=embeddings,
+                        )
+            # 시트 커밋 직후 바로 비운다 — 파일 끝에서 한 번만 하면 뒤 시트가 실패했을 때 이미
+            # 커밋된 앞 시트가 반영 안 된 캐시 답이 그대로 남는다
+            if to_process:
+                await _invalidate_semantic_cache(namespace)
         result.sheets.append(summary)
 
     return result
+
+
+async def _invalidate_semantic_cache(namespace: str) -> None:
+    """시맨틱 캐시엔 임포트 전 계산된 답이 TTL 동안 남아 새 정책이 반영 안 된 답이 계속 서빙될
+    수 있다 — 적재가 커밋된 뒤 네임스페이스 캐시를 비운다(best-effort)."""
+    try:
+        from shared.cache import invalidate_namespace
+        await invalidate_namespace(namespace)
+    except Exception:
+        logger.warning("정책 임포트 후 시맨틱 캐시 무효화 실패 (namespace=%s)", namespace, exc_info=True)

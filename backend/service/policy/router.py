@@ -39,7 +39,12 @@ async def import_policy_excel(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"정책서 임포트 실패: {e}")
+        # 시트 단위 트랜잭션이라 실패한 시트는 통째로 반영되지 않는다(앞서 성공한 시트는 반영됨 —
+        # 같은 파일을 다시 올리면 그 시트들은 내용 변경 없음으로 스킵되고 실패한 시트만 재처리)
+        raise HTTPException(
+            status_code=400,
+            detail=f"정책서 임포트 실패: {e} — 실패한 시트는 반영되지 않았습니다. 같은 파일을 다시 올리면 이어서 처리됩니다.",
+        )
     return ImportSummaryOut(
         source_file=result.source_file,
         sheets=[s.__dict__ for s in result.sheets],
