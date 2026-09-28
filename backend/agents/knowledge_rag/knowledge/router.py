@@ -1064,13 +1064,9 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
                 "heading_path": _enrich_heading_path(doc, c.heading_path),
             })
 
-    if pages_to_deprecate:
-        async with get_conn() as conn:
-            await conn.execute(
-                "UPDATE rag_knowledge SET status = 'deprecated' "
-                "WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[]) AND status = 'active'",
-                ns_id, pages_to_deprecate,
-            )
+    # 옛 버전 deprecate는 여기서 미리 하지 않고 bulk_create_knowledge의 일괄 전환 트랜잭션에서
+    # 한다(2026-09-28) — 미리 내리면 job 도중엔 그 페이지가 검색에서 통째로 빠지고, job이
+    # 실패·취소되면(새 행은 폐기) 옛 행도 되살릴 방법 없이 사라진다.
 
     if not items:
         if unchanged_pages:
@@ -1099,6 +1095,7 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
         source_type="confluence_bulk",
         created_by_part=user["part"],
         created_by_user_id=user["id"],
+        supersede_confluence_pages=pages_to_deprecate or None,
     )
 
     # 용어 자동 추출 (선택, 전체 합쳐서)

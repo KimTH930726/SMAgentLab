@@ -467,6 +467,19 @@ async def _migrate_duplicate_review(conn) -> None:
     """지식 중복 등록 방지 — 청크 단위 유사도 검사 + 승인 대기(pending_review) 리뷰."""
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'")
     await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS pending_chunks INT NOT NULL DEFAULT 0")
+    # 원래 init/05-ingestion-job-progress.sql(수동 적용)에만 있던 컬럼 — 폐쇄망 배포 문서의
+    # 전송 목록엔 init/01·02만 있어 누락될 수 있었다. 벌크 수집의 스테이징→일괄 전환이 이
+    # 두 컬럼에 의존하므로(2026-09-28) 여기서도 멱등하게 보장한다.
+    await conn.execute(
+        "ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+    await conn.execute(
+        "ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS ingestion_job_id INT "
+        "REFERENCES rag_ingestion_job(id) ON DELETE SET NULL"
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rag_knowledge_ingestion_job ON rag_knowledge(ingestion_job_id)"
+    )
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS rag_knowledge_duplicate_match (
             id                    SERIAL PRIMARY KEY,
@@ -1232,6 +1245,14 @@ async def _cleanup_orphaned_ingestion_jobs(conn) -> None:
     )
     if result and "UPDATE 0" not in result:
         logger.info("[Startup] 이전 프로세스에서 멈춘 수집 작업(processing) 정리: %s", result)
+    # 벌크 수집은 끝까지 성공해야만 스테이징 행을 일괄 전환한다(2026-09-28) — 기동 시점에
+    # 남아있는 스테이징 행은 전부 위에서 정리한 고아 job의 부분 결과라 폐기한다(한 번도
+    # 검색에 노출된 적 없는 행이라 지워도 사용자에게 보이던 게 사라지진 않는다).
+    staged = await conn.execute(
+        "DELETE FROM rag_knowledge WHERE status IN ('staging', 'staging_review')"
+    )
+    if staged and "DELETE 0" not in staged:
+        logger.info("[Startup] 중단된 수집 작업의 스테이징 행 폐기: %s", staged)
 
 
 async def _run_migrations() -> None:

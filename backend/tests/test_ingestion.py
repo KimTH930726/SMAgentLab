@@ -176,11 +176,13 @@ class TestBulkCreateKnowledge:
         fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
         fake_conn.__aexit__ = AsyncMock(return_value=False)
 
-        async def mock_fetchval(*args, **kwargs):
+        async def mock_fetchval(query, *args, **kwargs):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return 1  # job_id (INSERT INTO rag_ingestion_job RETURNING id)
-            return False  # cancel_requested (UPDATE ... RETURNING cancel_requested)
+            if "RETURNING cancel_requested" in query:
+                return False  # 배치별 취소 확인
+            return 1  # 완료 전환(UPDATE ... AND cancel_requested = FALSE RETURNING id)
         fake_conn.fetchval = AsyncMock(side_effect=mock_fetchval)
         fake_conn.execute = AsyncMock()
         fake_conn.executemany = AsyncMock()
@@ -212,7 +214,7 @@ class TestBulkCreateKnowledge:
         fake_conn = MagicMock()
         fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
         fake_conn.__aexit__ = AsyncMock(return_value=False)
-        fake_conn.fetchval = AsyncMock(side_effect=[1, False])
+        fake_conn.fetchval = AsyncMock(side_effect=[1, False, 1])  # job_id, cancel_requested, 완료 전환
         fake_conn.execute = AsyncMock()
         fake_conn.executemany = AsyncMock()
         fake_conn.fetch = AsyncMock(return_value=[])
@@ -237,49 +239,203 @@ class TestBulkCreateKnowledge:
             rows = insert_call.args[1]
             assert rows[0][4] == "자동배정됨"
 
-    @pytest.mark.asyncio
-    async def test_batches_commit_independently_before_job_completes(self):
-        """현재 동작 문서화(2026-09-22, RAG 거버넌스 감사 v2) — 배치별로 독립 커밋되고,
-        각 행은 삽입 즉시 status='active'가 되어 검색에 노출된다. job 전체가
-        'completed'로 바뀌는 건 모든 배치가 끝난 뒤 딱 한 번뿐이라, 배치가 여러 개면
-        "일부만 처리된 job"의 앞쪽 배치 내용이 뒤쪽 배치가 아직 진행 중인 동안에도
-        이미 검색 가능한 상태가 된다(원자적 활성화 아님 — 알려진 개선 대상, 지금은
-        고치지 않고 이 테스트로 현재 동작만 캡처해둔다. 고칠 때 이 테스트가 기준선).
-        """
-        executemany_calls = []
 
-        fake_conn = MagicMock()
-        fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
-        fake_conn.__aexit__ = AsyncMock(return_value=False)
-        fake_conn.fetchval = AsyncMock(side_effect=[1, False, False])  # job_id, cancel_requested x2
-        fake_conn.fetch = AsyncMock(return_value=[])
+class TestBulkIngestionStagedActivation:
+    """WBS 1-2 수집 원자적 활성화(2026-09-28) — 예전엔 50건 배치마다 곧바로 status='active'로
+    커밋돼 job 도중(실패 시엔 영구히) 반쪽짜리 문서가 챗 검색에 섞였다(2026-09-22 감사에서
+    이 파일에 "현재 동작" 기준선 테스트로 캡처해뒀던 것 — 이 클래스가 그걸 뒤집은 대체본).
+    이제 배치 행은 staging으로 숨겨졌다가 job 끝에 한 번에 전환되고, 취소·실패면 지워진다.
+    """
 
-        async def record_executemany(query, rows):
-            executemany_calls.append((query, rows))
-        fake_conn.executemany = AsyncMock(side_effect=record_executemany)
-        fake_conn.execute = AsyncMock()
+    ITEMS = [{"content": "지식1", "category": "공통지식"}, {"content": "지식2", "category": "공통지식"}]
 
-        fake_emb = MagicMock()
-        fake_emb.embed_batch = AsyncMock(side_effect=lambda texts: [[0.1] * 768 for _ in texts])
+    def _make_conn(self, *, activation_result=1, cancel_flags=None, fail_on_embed_call=None):
+        """쿼리 문자열로 fetchval을 분기하는 가짜 커넥션 — 호출 순서에 기대지 않도록."""
+        calls = {"execute": [], "executemany": [], "fetchval": []}
+        cancel_flags = list(cancel_flags or [])
 
-        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        conn.fetch = AsyncMock(return_value=[])
+
+        async def fetchval(query, *args):
+            calls["fetchval"].append((query, args))
+            if "INSERT INTO rag_ingestion_job" in query:
+                return 7  # job_id
+            if "RETURNING cancel_requested" in query:
+                return cancel_flags.pop(0) if cancel_flags else False
+            if "cancel_requested = FALSE" in query:
+                if isinstance(activation_result, Exception):
+                    raise activation_result
+                return activation_result
+            raise AssertionError(f"예상 못 한 fetchval: {query}")
+        conn.fetchval = AsyncMock(side_effect=fetchval)
+
+        async def executemany(query, rows):
+            calls["executemany"].append((query, rows))
+        conn.executemany = AsyncMock(side_effect=executemany)
+
+        async def execute(query, *args):
+            calls["execute"].append((query, args))
+        conn.execute = AsyncMock(side_effect=execute)
+
+        emb = MagicMock()
+        n = {"i": 0}
+
+        async def embed_batch(texts):
+            n["i"] += 1
+            if fail_on_embed_call == n["i"]:
+                raise RuntimeError("임베딩 서버 다운")
+            return [[0.1] * 768 for _ in texts]
+        emb.embed_batch = AsyncMock(side_effect=embed_batch)
+        return conn, emb, calls
+
+    async def _run(self, conn, emb, *, similar=None, invalidate=None, **kwargs):
+        similar = similar or AsyncMock(return_value=[])
+        invalidate = invalidate or AsyncMock(return_value=0)
+        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=conn), \
              patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
-             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
-             patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1):
+             patch("agents.knowledge_rag.knowledge.service.embedding_service", emb), \
+             patch("agents.knowledge_rag.knowledge.service.find_similar_active_knowledge", similar), \
+             patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1), \
+             patch("shared.cache.invalidate_namespace", invalidate, create=True):
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
-            await bulk_create_knowledge(
-                "test-ns",
-                [{"content": "지식1", "category": "공통지식"}, {"content": "지식2", "category": "공통지식"}],
-                background=False,
-            )
+            return await bulk_create_knowledge("test-ns", [dict(i) for i in self.ITEMS], background=False, **kwargs)
 
-        # 배치 크기 1로 강제했으니 rag_knowledge INSERT executemany가 배치마다(=2번)
-        # 독립적으로 호출됨 — 한 번의 트랜잭션으로 묶이지 않는다는 뜻
-        knowledge_inserts = [c for c in executemany_calls if "INSERT INTO rag_knowledge" in c[0]]
-        assert len(knowledge_inserts) == 2
-        # 각 배치의 행이 곧바로 status='active'로 삽입됨(뒤 배치의 완료를 기다리지 않음)
-        for _, rows in knowledge_inserts:
-            assert rows[0][11] == "active"  # rows 튜플의 12번째 값이 status 컬럼
+    @staticmethod
+    def _activation_updates(calls):
+        return [a for q, a in calls["execute"] if "UPDATE rag_knowledge" in q and "'active'" in q]
+
+    @staticmethod
+    def _staging_deletes(calls):
+        return [a for q, a in calls["execute"] if "DELETE FROM rag_knowledge" in q]
+
+    @pytest.mark.asyncio
+    async def test_batches_insert_as_staging_then_activate_once(self):
+        conn, emb, calls = self._make_conn()
+        invalidate = AsyncMock(return_value=3)
+        result = await self._run(conn, emb, invalidate=invalidate)
+
+        assert result["status"] == "completed" and result["created"] == 2
+        inserts = [rows for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q]
+        assert len(inserts) == 2  # 배치 크기 1 → 배치 2개
+        # 배치 도중엔 어느 행도 active가 아니다 — 검색 허용목록(status='active')에 안 걸림
+        for rows in inserts:
+            assert rows[0][11] == "staging"
+        # 전환은 모든 배치 이후 딱 한 번, 이 job의 스테이징 행만 대상
+        activations = self._activation_updates(calls)
+        assert activations == [(7,)]
+        assert not self._staging_deletes(calls)
+        # 전환 이후 네임스페이스 시맨틱 캐시 무효화
+        invalidate.assert_awaited_once_with("test-ns")
+
+    @pytest.mark.asyncio
+    async def test_duplicate_goes_to_staging_review_then_pending(self):
+        """중복 의심 행은 staging_review → 전환 시 pending_review(검토 큐에도 job 끝나야 뜬다)."""
+        conn, emb, calls = self._make_conn()
+        # 중복 매칭 기록용 역조회(SELECT id, source_chunk_idx ...) — 요청된 chunk_idx를 그대로 돌려줌
+        conn.fetch = AsyncMock(side_effect=lambda q, job_id, idxs: [
+            {"id": 100 + i, "source_chunk_idx": i} for i in idxs
+        ])
+        similar = AsyncMock(return_value=[{"id": 99, "content": "기존", "similarity": 0.999}])
+        result = await self._run(conn, emb, similar=similar)
+
+        assert result["pending"] == 2
+        inserts = [rows for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q]
+        assert all(rows[0][11] == "staging_review" for rows in inserts)
+        activation_sql = next(q for q, _ in calls["execute"] if "UPDATE rag_knowledge" in q and "'active'" in q)
+        assert "'pending_review'" in activation_sql and "'staging_review'" in activation_sql
+
+    @pytest.mark.asyncio
+    async def test_dedup_sees_own_job_staging_rows(self):
+        """앞 배치가 staging으로 숨겨져도 같은 job 안의 중복검사는 그걸 봐야 한다 —
+        안 넘기면 job 내부 배치 간 중복 판정이 조용히 사라진다."""
+        conn, emb, _ = self._make_conn()
+        similar = AsyncMock(return_value=[])
+        await self._run(conn, emb, similar=similar)
+
+        assert similar.await_count == 2
+        for c in similar.await_args_list:
+            assert c.kwargs.get("staging_job_id") == 7
+
+    @pytest.mark.asyncio
+    async def test_cancel_mid_job_discards_staging_only(self):
+        conn, emb, calls = self._make_conn(cancel_flags=[True])
+        invalidate = AsyncMock()
+        result = await self._run(conn, emb, invalidate=invalidate)
+
+        assert result["status"] == "cancelled" and result["created"] == 0
+        assert not self._activation_updates(calls)
+        deletes = [q for q, _ in calls["execute"] if "DELETE FROM rag_knowledge" in q]
+        assert len(deletes) == 1 and "staging" in deletes[0]
+        invalidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_late_cancel_after_last_batch_blocks_activation(self):
+        """마지막 배치 확인 뒤 들어온 취소 → 조건부 완료 UPDATE가 0행 → 전환 없이 폐기."""
+        conn, emb, calls = self._make_conn(activation_result=None)
+        invalidate = AsyncMock()
+        result = await self._run(conn, emb, invalidate=invalidate)
+
+        assert result["status"] == "cancelled"
+        assert not self._activation_updates(calls)
+        assert len(self._staging_deletes(calls)) == 1
+        cancel_update = next(a for q, a in calls["execute"] if "UPDATE rag_ingestion_job" in q)
+        assert cancel_update[1] == "cancelled"
+        invalidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failure_mid_job_discards_staged_batches(self):
+        """2번째 배치 임베딩 실패 → 1번째 배치 스테이징 행도 지워져 흔적 없음
+        (예전엔 앞 배치가 active로 영구히 남았다)."""
+        conn, emb, calls = self._make_conn(fail_on_embed_call=2)
+        result = await self._run(conn, emb)
+
+        assert result["status"] == "failed" and result["created"] == 0
+        assert not self._activation_updates(calls)
+        assert len(self._staging_deletes(calls)) == 1
+        job_update = next(a for q, a in calls["execute"] if "UPDATE rag_ingestion_job" in q)
+        assert job_update[1] == "failed"
+        assert "1/2" in job_update[2]  # 진행 정도는 error_message에 남김
+
+    @pytest.mark.asyncio
+    async def test_activation_db_error_marks_job_failed_not_stuck(self):
+        """/code-review 지적(2026-09-28) — 전환 트랜잭션이 DB 오류로 롤백되면 예전 구조에선
+        예외가 그대로 새어나가 job이 'processing'으로 영원히 남았다(UI 무한 진행중)."""
+        conn, emb, calls = self._make_conn(activation_result=ConnectionError("connection lost"))
+        result = await self._run(conn, emb)
+
+        assert result["status"] == "failed"
+        job_update = next(a for q, a in calls["execute"] if "UPDATE rag_ingestion_job" in q)
+        assert job_update[1] == "failed" and "일괄 전환 실패" in job_update[2]
+        assert len(self._staging_deletes(calls)) == 1
+
+    @pytest.mark.asyncio
+    async def test_confluence_supersede_happens_inside_activation(self):
+        """/code-review 지적(2026-09-28) — 재임포트 시 옛 버전 deprecate를 job 시작 전에 하면
+        job 도중엔 그 페이지가 검색에서 사라지고, 실패·취소 시엔 영영 사라진다. 이제 전환
+        트랜잭션 안에서, 새 행 전환 직전에만 내린다."""
+        conn, emb, calls = self._make_conn()
+        await self._run(conn, emb, supersede_confluence_pages=["p1"])
+        queries = [q for q, _ in calls["execute"]]
+        dep_idx = next(i for i, q in enumerate(queries) if "'deprecated'" in q)
+        act_idx = next(i for i, q in enumerate(queries) if "UPDATE rag_knowledge" in q and "'active' ELSE" in q)
+        assert dep_idx < act_idx
+        assert calls["execute"][dep_idx][1] == (1, ["p1"])
+
+    @pytest.mark.asyncio
+    async def test_confluence_supersede_skipped_when_cancelled_or_failed(self):
+        for kwargs in ({"cancel_flags": [True]}, {"fail_on_embed_call": 1}, {"activation_result": None}):
+            conn, emb, calls = self._make_conn(**kwargs)
+            await self._run(conn, emb, supersede_confluence_pages=["p1"])
+            assert not any("'deprecated'" in q for q, _ in calls["execute"]), kwargs
+
+    @pytest.mark.asyncio
+    async def test_cache_invalidation_failure_does_not_fail_job(self):
+        conn, emb, _ = self._make_conn()
+        result = await self._run(conn, emb, invalidate=AsyncMock(side_effect=RuntimeError("redis down")))
+        assert result["status"] == "completed"
 
 
 # ─── CSV 파싱 로직 테스트 (router 레벨) ──────────────────────────────────────

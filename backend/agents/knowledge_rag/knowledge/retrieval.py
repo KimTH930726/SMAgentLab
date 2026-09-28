@@ -138,23 +138,33 @@ async def map_glossary_term(
 
 
 async def find_similar_active_knowledge(
-    ns_id: int, embedding: list[float], *, limit: int = 3,
+    ns_id: int, embedding: list[float], *, limit: int = 3, staging_job_id: Optional[int] = None,
 ) -> list[dict]:
     """같은 네임스페이스의 활성(active) 지식 중 embedding과 가장 유사한 상위 N건 조회.
 
     지식 등록 시 중복 의심 판정(승인 대기)에 사용 — 이미 pending_review/rejected인
     행은 후보에서 제외해 "대기 중인 것끼리" 비교되는 것을 막는다.
+
+    `staging_job_id`: 벌크 수집 job이 자기 앞 배치와 비교할 때 넘긴다(2026-09-28). 벌크
+    행은 job이 끝날 때까지 'staging'으로 숨겨져 있어(검색 노출 방지) 그냥 active만 보면
+    같은 job 안의 앞 배치를 못 본다 — 예전엔 앞 배치가 즉시 active라 자연히 비교됐던
+    동작을 그대로 유지하기 위해, 그 job의 비중복 스테이징 행까지 후보에 포함한다.
     """
+    staging_clause = ""
+    args: list = [ns_id, str(embedding), limit]
+    if staging_job_id is not None:
+        args.append(staging_job_id)
+        staging_clause = "OR (status = 'staging' AND ingestion_job_id = $4)"
     async with get_conn() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT id, content, 1 - (embedding <=> $2::vector) AS similarity
             FROM rag_knowledge
-            WHERE namespace_id = $1 AND status = 'active' AND embedding IS NOT NULL
+            WHERE namespace_id = $1 AND (status = 'active' {staging_clause}) AND embedding IS NOT NULL
             ORDER BY embedding <=> $2::vector
             LIMIT $3
             """,
-            ns_id, str(embedding), limit,
+            *args,
         )
     return [{"id": r["id"], "content": r["content"], "similarity": float(r["similarity"])} for r in rows]
 

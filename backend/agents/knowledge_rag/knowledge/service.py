@@ -644,8 +644,13 @@ async def bulk_create_knowledge(
     created_by_part: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
     background: bool = True,
+    supersede_confluence_pages: Optional[list[str]] = None,
 ) -> dict:
     """여러 지식을 배치 단위로 등록 — 기본적으로 백그라운드에서 실행.
+
+    supersede_confluence_pages: 컨플루언스 재임포트 시 교체될 페이지 id 목록 — 해당 페이지의
+    기존 active 행은 이 job이 성공적으로 전환되는 같은 트랜잭션에서 deprecated 처리된다
+    (job 시작 전에 미리 내리면 job 도중·실패 시 그 페이지가 검색에서 통째로 사라진다).
 
     작업(rag_ingestion_job) 행을 먼저 만들고 job_id를 즉시 반환한다.
     실제 임베딩/INSERT는 백그라운드 태스크가 _INGEST_BATCH_SIZE개씩 나눠 처리하며,
@@ -686,6 +691,8 @@ async def bulk_create_knowledge(
 
     coro = _run_bulk_ingestion(
         job_id, ns_id, items,
+        namespace_name=namespace,
+        supersede_confluence_pages=supersede_confluence_pages,
         source_file=source_file, source_type=source_type,
         created_by_part=created_by_part, created_by_user_id=created_by_user_id,
     )
@@ -702,12 +709,20 @@ async def _run_bulk_ingestion(
     ns_id: int,
     items: list[dict],
     *,
+    namespace_name: Optional[str] = None,
+    supersede_confluence_pages: Optional[list[str]] = None,
     source_file: Optional[str],
     source_type: str,
     created_by_part: Optional[str],
     created_by_user_id: Optional[int],
 ) -> dict:
     """배치 단위 임베딩+INSERT. 배치마다 진행률 갱신 + 취소 요청 확인.
+
+    2단계 활성화(2026-09-28, WBS 1-2): 배치 행은 'staging'(비중복)/'staging_review'
+    (중복 의심)로 넣어 job이 끝날 때까지 검색·검토 큐 어디에도 안 보이게 하고, 마지막에
+    한 트랜잭션으로 'active'/'pending_review'로 일괄 전환한다. 예전엔 50건 배치마다
+    바로 active로 커밋돼 job 도중(그리고 실패 시엔 영구히) 반쪽짜리 문서가 챗 답변에
+    섞였다. 취소·실패 시엔 스테이징 행을 지워 흔적을 남기지 않는다.
 
     각 청크는 삽입 전 같은 네임스페이스의 활성 지식과 유사도를 비교해, 임계값
     이상이면 'pending_review' 상태로 등록해 검색에서 숨기고 승인 대기 큐로 보낸다
@@ -724,7 +739,7 @@ async def _run_bulk_ingestion(
             embeddings = await embedding_service.embed_batch(texts)
 
             match_results = await asyncio.gather(
-                *(find_similar_active_knowledge(ns_id, emb) for emb in embeddings)
+                *(find_similar_active_knowledge(ns_id, emb, staging_job_id=job_id) for emb in embeddings)
             )
             db_is_duplicate = [
                 bool(m) and m[0]["similarity"] >= dup_threshold for m in match_results
@@ -777,7 +792,7 @@ async def _run_bulk_ingestion(
                     created_by_part,
                     created_by_user_id,
                     job_id,
-                    "pending_review" if is_duplicate else "active",
+                    "staging_review" if is_duplicate else "staging",
                     _EMBEDDING_MODEL_NAME,
                     item.get("confluence_page_id"),
                     item.get("confluence_version"),
@@ -831,32 +846,87 @@ async def _run_bulk_ingestion(
                 """, created, pending_total, job_id)
 
             if cancel_requested:
-                async with get_conn() as conn:
-                    await conn.execute("DELETE FROM rag_knowledge WHERE ingestion_job_id = $1", job_id)
-                    await conn.execute("""
-                        UPDATE rag_ingestion_job
-                        SET status = 'cancelled', created_chunks = 0, pending_chunks = 0, completed_at = NOW()
-                        WHERE id = $1
-                    """, job_id)
+                await _discard_staged_job(job_id, "cancelled")
                 return {"created": 0, "job_id": job_id, "status": "cancelled"}
     except Exception as e:
         logger.exception("인제스천 작업 실패 (job_id=%s)", job_id)
-        async with get_conn() as conn:
-            await conn.execute("""
-                UPDATE rag_ingestion_job
-                SET status = 'failed', created_chunks = $1, pending_chunks = $2, error_message = $3, completed_at = NOW()
-                WHERE id = $4
-            """, created, pending_total, str(e)[:2000], job_id)
-        return {"created": created, "job_id": job_id, "status": "failed"}
+        # 스테이징 행은 한 번도 노출된 적 없으니 지워도 안전 — 예전엔 실패한 job의 앞 배치가
+        # active로 남아 반쪽짜리 문서가 계속 검색됐다. 진행 정도는 error_message에만 남긴다.
+        try:
+            await _discard_staged_job(
+                job_id, "failed", error_message=f"{str(e)[:1900]} (진행 {created}/{len(items)}건 폐기)",
+            )
+        except Exception:
+            # DB 자체가 죽은 경우 — 스테이징 행은 원래 안 보이고, 재시작 시
+            # _cleanup_orphaned_ingestion_jobs가 processing job과 함께 정리한다.
+            logger.exception("실패한 인제스천 작업 정리 실패 (job_id=%s)", job_id)
+        return {"created": 0, "job_id": job_id, "status": "failed"}
 
-    async with get_conn() as conn:
-        await conn.execute("""
-            UPDATE rag_ingestion_job
-            SET status = 'completed', created_chunks = $1, pending_chunks = $2, completed_at = NOW()
-            WHERE id = $3
-        """, created, pending_total, job_id)
+    # 일괄 전환 — job 완료 표시와 행 전환을 한 트랜잭션으로 묶는다. cancel_requested 조건은
+    # 마지막 배치 확인 뒤에 들어온 취소 요청(레이스)을 여기서 잡기 위함: 0행이면 전환 대신 폐기.
+    try:
+        async with get_conn() as conn:
+            async with conn.transaction():
+                activated = await conn.fetchval("""
+                    UPDATE rag_ingestion_job
+                    SET status = 'completed', created_chunks = $1, pending_chunks = $2, completed_at = NOW()
+                    WHERE id = $3 AND cancel_requested = FALSE
+                    RETURNING id
+                """, created, pending_total, job_id)
+                if activated:
+                    if supersede_confluence_pages:
+                        # 새 행은 아직 staging이라 status='active' 조건에 안 걸린다 — 옛 버전만 내림
+                        await conn.execute("""
+                            UPDATE rag_knowledge SET status = 'deprecated'
+                            WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[]) AND status = 'active'
+                        """, ns_id, supersede_confluence_pages)
+                    await conn.execute("""
+                        UPDATE rag_knowledge
+                        SET status = CASE status WHEN 'staging' THEN 'active' ELSE 'pending_review' END
+                        WHERE ingestion_job_id = $1 AND status IN ('staging', 'staging_review')
+                    """, job_id)
+        if not activated:
+            await _discard_staged_job(job_id, "cancelled")
+            return {"created": 0, "job_id": job_id, "status": "cancelled"}
+    except Exception as e:
+        # 전환 트랜잭션은 롤백됐으니 행은 전부 staging 그대로 — 여기서 안 잡으면 job이
+        # 'processing'으로 영원히 남고(UI 무한 진행중) 재시작 때 에러 기록 없이 폐기된다.
+        logger.exception("인제스천 일괄 전환 실패 (job_id=%s)", job_id)
+        try:
+            await _discard_staged_job(job_id, "failed", error_message=f"일괄 전환 실패: {str(e)[:1900]}")
+        except Exception:
+            logger.exception("일괄 전환 실패 후 정리도 실패 (job_id=%s) — 재시작 시 정리됨", job_id)
+        return {"created": 0, "job_id": job_id, "status": "failed"}
+
+    # 시맨틱 캐시엔 job 도중 계산된 답("지식 없음" 포함)이 TTL 동안 남아 있어, 방금 활성화한
+    # 지식이 반영 안 된 답이 계속 서빙될 수 있다 — 네임스페이스 캐시를 비운다(best-effort).
+    if namespace_name:
+        try:
+            from shared.cache import invalidate_namespace
+            await invalidate_namespace(namespace_name)
+        except Exception:
+            logger.warning("수집 완료 후 시맨틱 캐시 무효화 실패 (job_id=%s)", job_id, exc_info=True)
 
     return {"created": created, "job_id": job_id, "status": "completed", "pending": pending_total}
+
+
+async def _discard_staged_job(job_id: int, status: str, *, error_message: Optional[str] = None) -> None:
+    """job의 스테이징 행을 지우고 job을 종료 상태로 표시(취소·실패 공통).
+
+    스테이징 상태로 한정해 지운다 — 이미 전환된(검토자가 다룰 수 있는) 행은 건드리지 않는다.
+    """
+    async with get_conn() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM rag_knowledge WHERE ingestion_job_id = $1 AND status IN ('staging', 'staging_review')",
+                job_id,
+            )
+            await conn.execute("""
+                UPDATE rag_ingestion_job
+                SET status = $2, created_chunks = 0, pending_chunks = 0, completed_at = NOW(),
+                    error_message = COALESCE($3, error_message)
+                WHERE id = $1
+            """, job_id, status, error_message)
 
 
 async def get_ingestion_job(job_id: int) -> Optional[dict]:
