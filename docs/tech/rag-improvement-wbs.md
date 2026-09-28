@@ -97,7 +97,7 @@
 
 | # | 태스크 | 완료조건 | 의존성 |
 |---|---|---|---|
-| 1-1 | `policy_item.approved_at`/`approved_by` 기록 연결 | 실 E2E로 승인 액션 시 기록 확인(오늘 rag_knowledge와 동일 검증 방식) | 없음 |
+| 1-1 | ~~`policy_item.approved_at`/`approved_by` 기록 연결~~ | **완료(2026-09-23, v2.105)** — 실제 컬럼명은 `reviewed_at`/`reviewed_by`(테이블 생성 시점부터 있었지만 한 번도 안 채워지던 컬럼). `service/policy/review.py`의 승인/반려가 기록, 반려 후 수정→재검토 시엔 NULL로 초기화(v2.106 + /code-review 반영). 실 DB로 기록 확인, E2E 스펙(`policy-review.spec.ts`) | 없음 |
 | 1-2 | 수집 원자적 활성화 — 설계 스파이크 | 2단계(스테이징→일괄전환) 설계 문서 1장, 배치 크기별 트랜잭션 시간 실측 | 없음 |
 | 1-2b | 위 설계대로 구현 | `test_batches_commit_independently_...`(오늘 작성) 테스트가 "더 이상 중간노출 없음"으로 바뀌는 것 확인 | 1-2 |
 | 1-3 | 인젝션 최소 방어(델리미터+지시문) | 골든셋 89문항 재실행, 기존 대비 답변 품질 회귀 없음 확인 | 없음 |
