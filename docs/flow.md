@@ -179,6 +179,12 @@
 │  │                                                     │   │
 │  │  build_messages(context, question, history)          │   │
 │  │  → [system + 과거요약] + [최근2회 교환] + [현재 질문] │   │
+│  │  (inhouse는 _build_query로 같은 내용을 한 문자열로)   │   │
+│  │  참고 문서는 wrap_reference_context()로 조립(v2.109): │   │
+│  │    [참고 문서] + 문서 + 고정 지시문(경계 역할),        │   │
+│  │    문서 안의 [사용자]/[참고 문서] 등 라벨은 괄호로     │   │
+│  │    중화 — 문서가 턴을 흉내 못 내게. 끝 표시는 "지식    │   │
+│  │    없음" 응답 급증 원인으로 실측돼 두지 않음          │   │
 │  │                                                     │   │
 │  │  LLMProvider.generate(context, question, history)   │   │
 │  │  POST /api/chat (messages 배열, multi-turn)          │   │
@@ -557,7 +563,13 @@ Teams 등록 폼은 내용이 확정되는 시점(파일 미리보기 성공·�
 │  → _run_bulk_ingestion()                │
 │    임베딩 + INSERT INTO rag_knowledge    │
 │    (category, heading_path 포함)         │
-│    중복 유사도 높으면 pending_review     │
+│    배치마다 status='staging'             │
+│    (중복 유사도 높으면 'staging_review') │
+│    → job 끝에 한 트랜잭션으로 일괄 전환   │
+│      staging→active,                    │
+│      staging_review→pending_review      │
+│    → 시맨틱 캐시 네임스페이스 무효화      │
+│    취소·실패 시 스테이징 행 삭제          │
 └─────────────────────────────────────────┘
 ```
 

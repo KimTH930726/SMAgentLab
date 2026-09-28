@@ -71,6 +71,8 @@
 
 | 55 | `ops_namespace`, `policy_param`, `ops_http_tool`, `ops_mcp_tool`, `ops_mcp_tool_log`, `sql_*`(10개) | `DROP COLUMN`/`DROP TABLE IF EXISTS` | 전체 스키마 죽은 컬럼/테이블 감사(코드 grep + 실 population 실측 + 문서 대조) 후 정리. `ops_namespace.owner_part`(VARCHAR, `owner_part_id` FK 전환용 1회성 브릿지, 전환 완료돼 0/4건) — `_migrate_core_tables`의 `ADD COLUMN IF NOT EXISTS owner_part`와 그 하위 동기화 UPDATE 2곳도 같이 제거(안 하면 재생성됨). `policy_param.approved`(INSERT 경로에 컬럼이 빠져있어 전부 기본값, 389/389 false, 아무도 안 읽음). `ops_http_tool`/`ops_mcp_tool`/`ops_mcp_tool_log`(MCP 도구 에이전트 제거 v2.67 후 방치). `sql_*` 10개(Text2SQL 제거 v2.51 후 완전히 죽음, 코드는 `archive/with-text2sql` 브랜치 보존). `rag_knowledge.supersedes_id`/`version`/`logical_document_id`는 원래 의도(#40)와 다른 방향으로 기능이 진화한 정황이 있어 이번엔 보류(별도 재검토 필요) (v2.100) |
 
+| 56 | `rag_ingestion_job`, `rag_knowledge` | `ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT FALSE`, `ADD COLUMN IF NOT EXISTS ingestion_job_id INT REFERENCES rag_ingestion_job(id) ON DELETE SET NULL`, `CREATE INDEX IF NOT EXISTS idx_rag_knowledge_ingestion_job` + `rag_knowledge.status`에 신규 값 `staging`/`staging_review`(스키마 변경 없음, VARCHAR) | 벌크 수집 원자적 활성화(WBS 1-2) — 두 컬럼은 원래 `init/05-ingestion-job-progress.sql`(수동 적용)에만 있어 폐쇄망 배포(전송 목록 `init/01·02`)에서 누락될 수 있었음 → 멱등 마이그레이션으로 보장. 수집 행은 job 완료 전까지 `staging`/`staging_review`로 숨겨졌다가 완료 시 한 트랜잭션으로 `active`/`pending_review` 전환. 기동 시 남은 스테이징 행은 고아 job의 부분 결과로 보고 삭제(`_cleanup_orphaned_ingestion_jobs`) (v2.108) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.
