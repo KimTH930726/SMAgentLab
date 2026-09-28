@@ -19,7 +19,7 @@ from typing import AsyncIterator, Callable, Optional
 import httpx
 
 from core.config import settings
-from service.llm.base import LLMProvider, _FALLBACK_SYSTEM_PROMPT
+from service.llm.base import LLMProvider, _FALLBACK_SYSTEM_PROMPT, wrap_reference_context
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,9 @@ def _build_query(
     sp = system_prompt if system_prompt is not None else _FALLBACK_SYSTEM_PROMPT
     parts = [sp]
     if context:
-        parts.append(f"\n[참고 문서]\n{context}")
+        # 한 문자열로 평평하게 보내는 게이트웨이라 경계가 없으면 마지막 문서가 [사용자] 줄로
+        # 곧장 이어진다 — 문서 뒤 고정 지시문 + 문서 속 라벨 중화로 경계를 만든다(WBS 1-3)
+        parts.append(f"\n{wrap_reference_context(context)}")
     if history:
         for msg in history:
             role = "사용자" if msg["role"] == "user" else "어시스턴트"
