@@ -17,10 +17,28 @@ from shared.embedding import embedding_service
 
 
 async def _resubmit_for_review(conn, item_id: int) -> None:
+    """수정 후 검토대기로 되돌림 — reviewed_at/reviewed_by도 같이 비운다(/code-review
+    지적, 2026-09-23). 이 두 컬럼은 review.py의 실제 승인/반려 "결정"을 나타내는데,
+    재제출은 검토 행위가 아니라 그 전 결정을 무효화하는 수정이다 — 이전 반려 시점의
+    reviewed_at/reviewed_by를 그대로 남겨두면, 나중에 이 값을 "현재 상태에 대한 검토
+    기록"으로 잘못 읽었을 때 이미 검토 끝난 것처럼 보이는 오해의 소지가 있다."""
     await conn.execute(
-        "UPDATE policy_item SET status = 'pending_review', updated_at = NOW() WHERE id = $1",
+        """UPDATE policy_item SET status = 'pending_review', reviewed_at = NULL,
+           reviewed_by = NULL, updated_at = NOW() WHERE id = $1""",
         item_id,
     )
+
+
+async def _get_rejected_item_id(conn, query: str, args: tuple, not_found_message: str) -> int:
+    """소유권(namespace) 확인 + 반려 상태 검증 — update_param/update_narrative가 JOIN
+    대상 테이블만 다르고 나머지 검증 로직이 완전히 같아 중복이었다(/code-review 지적,
+    2026-09-23)."""
+    row = await conn.fetchrow(query, *args)
+    if row is None:
+        raise ValueError(not_found_message)
+    if row["status"] != "rejected":
+        raise ValueError(f"반려(rejected) 상태의 항목만 수정할 수 있습니다(현재: {row['status']})")
+    return row["policy_item_id"]
 
 
 async def update_param(
@@ -33,16 +51,14 @@ async def update_param(
         if ns_id is None:
             raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
 
-        row = await conn.fetchrow(
+        item_id = await _get_rejected_item_id(
+            conn,
             """SELECT p.policy_item_id, i.status FROM policy_param p
                JOIN policy_item i ON i.id = p.policy_item_id
                WHERE p.id = $1 AND i.namespace_id = $2""",
-            param_id, ns_id,
+            (param_id, ns_id),
+            f"파라미터를 찾을 수 없습니다: param_id={param_id}",
         )
-        if row is None:
-            raise ValueError(f"파라미터를 찾을 수 없습니다: param_id={param_id}")
-        if row["status"] != "rejected":
-            raise ValueError(f"반려(rejected) 상태의 항목만 수정할 수 있습니다(현재: {row['status']})")
 
         if not name.strip():
             raise ValueError("파라미터 항목명은 비워둘 수 없습니다.")
@@ -53,7 +69,7 @@ async def update_param(
             "UPDATE policy_param SET name = $1, condition = $2, value = $3, unit = $4 WHERE id = $5",
             name.strip(), (condition or None), (value or None), unit_value, param_id,
         )
-        await _resubmit_for_review(conn, row["policy_item_id"])
+        await _resubmit_for_review(conn, item_id)
     return "pending_review"
 
 
@@ -69,21 +85,19 @@ async def update_narrative(namespace: str, chunk_id: int, chunk_text: str) -> st
         if ns_id is None:
             raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
 
-        row = await conn.fetchrow(
+        item_id = await _get_rejected_item_id(
+            conn,
             """SELECT c.policy_item_id, i.status FROM policy_chunk c
                JOIN policy_item i ON i.id = c.policy_item_id
                WHERE c.id = $1 AND i.namespace_id = $2""",
-            chunk_id, ns_id,
+            (chunk_id, ns_id),
+            f"서술을 찾을 수 없습니다: chunk_id={chunk_id}",
         )
-        if row is None:
-            raise ValueError(f"서술을 찾을 수 없습니다: chunk_id={chunk_id}")
-        if row["status"] != "rejected":
-            raise ValueError(f"반려(rejected) 상태의 항목만 수정할 수 있습니다(현재: {row['status']})")
 
         embedding = await embedding_service.embed(chunk_text.strip())
         await conn.execute(
             "UPDATE policy_chunk SET chunk_text = $1, embedding = $2::vector WHERE id = $3",
             chunk_text.strip(), str(embedding), chunk_id,
         )
-        await _resubmit_for_review(conn, row["policy_item_id"])
+        await _resubmit_for_review(conn, item_id)
     return "pending_review"

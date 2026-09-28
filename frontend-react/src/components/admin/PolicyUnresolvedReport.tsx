@@ -31,7 +31,11 @@ export function PolicyUnresolvedReport() {
   const [expandedItemId, setExpandedItemId] = useState<number | null>(null);
   const [paramFormKey, setParamFormKey] = useState<string | null>(null);
   const [paramForm, setParamForm] = useState(EMPTY_PARAM_FORM);
-  const [suggestLoading, setSuggestLoading] = useState(false);
+  // 어떤 segment의 프리필 요청이 로딩 중인지를 key로 기록(/code-review 지적,
+  // 2026-09-23): 단순 boolean이면 A 요청이 진행 중일 때 B로 폼을 옮겨도 A가 먼저
+  // 끝나며 finally에서 무조건 false로 꺼버려 B가 아직 로딩 중인데 입력이 풀리고
+  // "AI 제안 확인 중" 표시가 사라지는 경쟁 상태가 있었음.
+  const [suggestLoadingKey, setSuggestLoadingKey] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   // "값 넣을 사람이 없겠다"는 지적(2026-09-23)으로 폼을 열자마자 LLM 1차 추측을 자동
@@ -39,7 +43,7 @@ export function PolicyUnresolvedReport() {
   const openParamForm = async (itemId: number, segmentIndex: number, key: string) => {
     setParamFormKey(key);
     setParamForm(EMPTY_PARAM_FORM);
-    setSuggestLoading(true);
+    setSuggestLoadingKey(key);
     try {
       const suggestion = await suggestParamFields(itemId, segmentIndex, selectedNs);
       // 응답이 늦게 와서 그 사이 다른 segment로 폼을 옮겼으면 무시(경쟁 방지)
@@ -56,7 +60,9 @@ export function PolicyUnresolvedReport() {
     } catch {
       // best-effort 제안일 뿐 — 실패해도 조용히 빈 폼 유지
     } finally {
-      setSuggestLoading(false);
+      // 이 요청(key)이 여전히 "지금 로딩 중"으로 표시된 요청일 때만 끈다 — 아니면
+      // 그 사이 열린 다른 segment(B)의 로딩 표시를 A의 완료가 지워버리게 됨.
+      setSuggestLoadingKey((current) => (current === key ? null : current));
     }
   };
 
@@ -204,6 +210,7 @@ export function PolicyUnresolvedReport() {
                               && promoteMutation.variables?.segmentIndex === idx;
                             const thisKey = `${item.item_id}-${idx}`;
                             const isFormOpen = paramFormKey === thisKey;
+                            const suggestLoading = suggestLoadingKey === thisKey;
                             const isParamPending = promoteParamMutation.isPending
                               && promoteParamMutation.variables?.itemId === item.item_id
                               && promoteParamMutation.variables?.segmentIndex === idx;
