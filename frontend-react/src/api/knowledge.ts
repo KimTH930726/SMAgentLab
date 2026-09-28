@@ -293,7 +293,6 @@ export interface FileUploadResult {
   created: number;
   job_id: number | null;
   chunks: number;
-  auto_glossary: number;
   analyzer: Record<string, unknown> | null;
   source_name: string;
   page_count: number | null;
@@ -343,7 +342,6 @@ export interface UrlImportResult {
   created: number;
   job_id: number | null;
   chunks: number;
-  auto_glossary: number;
   source_name: string;
   source_type: string;
   url: string;
@@ -431,7 +429,6 @@ export interface ConfluenceBulkResult {
   failed_pages: Array<{ page_id: string; error: string }>;
   page_summaries: Array<{ page_id: string; title: string; chunks: number; chars: number }>;
   unchanged_pages: Array<{ page_id: string; title: string; version: number | null }>;
-  auto_glossary: number;
   source_name: string;
   source_type: string;
 }

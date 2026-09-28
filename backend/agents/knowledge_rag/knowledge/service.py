@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import numpy as np
 
@@ -645,8 +645,13 @@ async def bulk_create_knowledge(
     created_by_user_id: Optional[int] = None,
     background: bool = True,
     supersede_confluence_pages: Optional[list[str]] = None,
+    after_activation: Optional[Callable[[], Awaitable[int]]] = None,
 ) -> dict:
     """여러 지식을 배치 단위로 등록 — 기본적으로 백그라운드에서 실행.
+
+    after_activation: job이 성공적으로 일괄 전환된 "뒤에만" 실행할 후속 작업(자동 용어 추출).
+    반환값(등록된 용어 수)은 rag_ingestion_job.auto_glossary에 기록된다. 예전엔 라우터가 job
+    시작 직후 바로 용어를 추출해, job이 실패·취소돼도 용어만 남았다(2026-09-28).
 
     supersede_confluence_pages: 컨플루언스 재임포트 시 교체될 페이지 id 목록 — 해당 페이지의
     기존 active 행은 이 job이 성공적으로 전환되는 같은 트랜잭션에서 deprecated 처리된다
@@ -693,6 +698,7 @@ async def bulk_create_knowledge(
         job_id, ns_id, items,
         namespace_name=namespace,
         supersede_confluence_pages=supersede_confluence_pages,
+        after_activation=after_activation,
         source_file=source_file, source_type=source_type,
         created_by_part=created_by_part, created_by_user_id=created_by_user_id,
     )
@@ -711,6 +717,7 @@ async def _run_bulk_ingestion(
     *,
     namespace_name: Optional[str] = None,
     supersede_confluence_pages: Optional[list[str]] = None,
+    after_activation: Optional[Callable[[], Awaitable[int]]] = None,
     source_file: Optional[str],
     source_type: str,
     created_by_part: Optional[str],
@@ -907,7 +914,20 @@ async def _run_bulk_ingestion(
         except Exception:
             logger.warning("수집 완료 후 시맨틱 캐시 무효화 실패 (job_id=%s)", job_id, exc_info=True)
 
-    return {"created": created, "job_id": job_id, "status": "completed", "pending": pending_total}
+    result = {"created": created, "job_id": job_id, "status": "completed", "pending": pending_total}
+    if after_activation is not None:
+        # 지식은 이미 커밋·활성화됐으니 여기 실패는 job 결과를 바꾸지 않는다(로그만)
+        try:
+            glossary_count = await after_activation()
+            result["auto_glossary"] = glossary_count
+            if glossary_count:
+                async with get_conn() as conn:
+                    await conn.execute(
+                        "UPDATE rag_ingestion_job SET auto_glossary = $1 WHERE id = $2", glossary_count, job_id,
+                    )
+        except Exception:
+            logger.warning("수집 완료 후 자동 용어 추출 실패 (job_id=%s)", job_id, exc_info=True)
+    return result
 
 
 async def _discard_staged_job(job_id: int, status: str, *, error_message: Optional[str] = None) -> None:

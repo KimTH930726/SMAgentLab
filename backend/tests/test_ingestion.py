@@ -432,6 +432,43 @@ class TestBulkIngestionStagedActivation:
             assert not any("'deprecated'" in q for q, _ in calls["execute"]), kwargs
 
     @pytest.mark.asyncio
+    async def test_glossary_hook_runs_only_after_activation_and_records_count(self):
+        """자동 용어 추출(2026-09-28) — 예전엔 라우터가 job 시작 직후 바로 추출해, job이
+        실패·취소돼도 용어만 남았다. 이제 전환 성공 뒤에만 실행되고 개수는 job 행에 기록."""
+        conn, emb, calls = self._make_conn()
+        order = []
+        orig_execute = conn.execute.side_effect
+
+        async def execute(query, *args):
+            if "UPDATE rag_knowledge" in query and "'active' ELSE" in query:
+                order.append("activate")
+            await orig_execute(query, *args)
+        conn.execute = AsyncMock(side_effect=execute)
+
+        async def hook():
+            order.append("glossary")
+            return 3
+        result = await self._run(conn, emb, after_activation=hook)
+
+        assert order == ["activate", "glossary"]
+        assert result["auto_glossary"] == 3
+        assert any("auto_glossary" in q and a == (3, 7) for q, a in calls["execute"])
+
+    @pytest.mark.asyncio
+    async def test_glossary_hook_skipped_when_cancelled_or_failed(self):
+        for kwargs in ({"cancel_flags": [True]}, {"fail_on_embed_call": 1}, {"activation_result": None}):
+            conn, emb, _ = self._make_conn(**kwargs)
+            hook = AsyncMock(return_value=3)
+            await self._run(conn, emb, after_activation=hook)
+            hook.assert_not_awaited(), kwargs
+
+    @pytest.mark.asyncio
+    async def test_glossary_hook_failure_does_not_fail_job(self):
+        conn, emb, _ = self._make_conn()
+        result = await self._run(conn, emb, after_activation=AsyncMock(side_effect=RuntimeError("LLM down")))
+        assert result["status"] == "completed" and result["created"] == 2
+
+    @pytest.mark.asyncio
     async def test_cache_invalidation_failure_does_not_fail_job(self):
         conn, emb, _ = self._make_conn()
         result = await self._run(conn, emb, invalidate=AsyncMock(side_effect=RuntimeError("redis down")))

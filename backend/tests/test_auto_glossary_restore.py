@@ -30,7 +30,11 @@ class TestAutoGlossaryWiredIntoLiveRoutes:
             assert args[1] == body.content
 
     @pytest.mark.asyncio
-    async def test_bulk_create_triggers_auto_glossary_with_combined_text(self):
+    async def test_bulk_create_defers_auto_glossary_until_job_activation(self):
+        """2026-09-28 변경 — 예전엔 bulk_create가 job 시작 직후 바로 _run_auto_glossary를 불러,
+        job이 실패·취소돼도 용어만 남았다. 이제 라우트는 즉시 추출하지 않고 after_activation 훅으로
+        넘기며(서비스가 전환 성공 뒤에만 실행 — test_ingestion.py TestBulkIngestionStagedActivation),
+        그 훅을 실행하면 합친 텍스트로 추출이 일어나야 한다(복원된 연결 자체는 유지)."""
         body = BulkCreateRequest(
             namespace="test-ns",
             items=[
@@ -38,31 +42,15 @@ class TestAutoGlossaryWiredIntoLiveRoutes:
                 BulkKnowledgeItem(content="두 번째 청크 — 리워드"),
             ],
         )
-        fake_result = {"created": 2, "job_id": 1, "status": "completed"}
+        fake_result = {"created": 0, "job_id": 1, "status": "processing"}
+        bulk_mock = AsyncMock(return_value=fake_result)
 
-        with patch("agents.knowledge_rag.knowledge.router.check_namespace_ownership", AsyncMock()), \
-             patch("agents.knowledge_rag.knowledge.router.service.bulk_create_knowledge", AsyncMock(return_value=fake_result)), \
-             patch("agents.knowledge_rag.knowledge.router._run_auto_glossary", AsyncMock(return_value=1)) as mock_glossary:
+        with patch("agents.knowledge_rag.knowledge.router.check_namespace_ownership", AsyncMock()),              patch("agents.knowledge_rag.knowledge.router.service.bulk_create_knowledge", bulk_mock),              patch("agents.knowledge_rag.knowledge.router._run_auto_glossary", AsyncMock(return_value=1)) as mock_glossary:
             response = await bulk_create(body, user=_FAKE_USER)
-            mock_glossary.assert_awaited_once()
+            mock_glossary.assert_not_awaited()  # 요청 시점엔 추출하지 않는다
+            assert response == fake_result
+
+            hook = bulk_mock.await_args.kwargs["after_activation"]
+            assert await hook() == 1
             combined_text = mock_glossary.await_args.args[1]
             assert "첫 번째 청크" in combined_text and "두 번째 청크" in combined_text
-            assert response["auto_glossary"] == 1
-
-    @pytest.mark.asyncio
-    async def test_bulk_create_still_succeeds_if_auto_glossary_fails(self):
-        """_run_auto_glossary 자체 내부에 이미 try/except가 있지만, 혹시라도 예외가
-        새어나와도 등록 자체(bulk_create_knowledge)는 이미 끝난 뒤라 실패하면 안 된다는
-        걸 회귀로 고정 — 용어 추출 실패가 지식 등록 실패로 번지면 안 됨."""
-        body = BulkCreateRequest(namespace="test-ns", items=[BulkKnowledgeItem(content="내용")])
-        fake_result = {"created": 1, "job_id": 1, "status": "completed"}
-
-        with patch("agents.knowledge_rag.knowledge.router.check_namespace_ownership", AsyncMock()), \
-             patch("agents.knowledge_rag.knowledge.router.service.bulk_create_knowledge", AsyncMock(return_value=fake_result)), \
-             patch("agents.knowledge_rag.knowledge.router._run_auto_glossary", AsyncMock(side_effect=RuntimeError("LLM 오류"))):
-            with pytest.raises(RuntimeError):
-                await bulk_create(body, user=_FAKE_USER)
-            # 주의: 현재 구현은 _run_auto_glossary 호출부에 별도 try/except가 없어
-            # 여기서 예외가 그대로 전파된다 — _run_auto_glossary 내부 try/except가
-            # 항상 지켜진다는 전제가 깨지면(예: 리팩터링으로 내부 예외처리가 빠지면)
-            # 이 테스트가 실패하며 알려준다.

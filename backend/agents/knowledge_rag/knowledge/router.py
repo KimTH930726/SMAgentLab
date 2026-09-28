@@ -261,20 +261,20 @@ async def vector_search_glossary(body: VectorSearchRequest, user: dict = Depends
 async def bulk_create(body: BulkCreateRequest, user: dict = Depends(get_current_user)):
     """JSON 배열로 지식 벌크 등록."""
     await check_namespace_ownership(body.namespace, user)
-    result = await service.bulk_create_knowledge(
+    # 용어 자동 추출 복원(2026-09-24) — 파일/URL 단발성 등록에만 있던 _run_auto_glossary()가
+    # 미리보기+검토 2단계 흐름(파일/텍스트/컨플루언스 전부 이 엔드포인트로 확정)으로
+    # 넘어오며 끊겨있던 것을 모든 벌크 등록 경로 공통으로 되살림 — 체크박스 없이 항상 실행.
+    # job 성공 후에만 실행되고, 개수는 job 행(auto_glossary)에 기록된다(화면은 job 행을 읽음).
+    combined_text = "\n".join(item.content for item in body.items)
+    return await service.bulk_create_knowledge(
         namespace=body.namespace,
         items=[item.model_dump() for item in body.items],
         source_file=body.source_file,
         source_type=body.source_type,
         created_by_part=user["part"],
         created_by_user_id=user["id"],
+        after_activation=_glossary_after_activation(body.namespace, combined_text, user, max_chars=20000),
     )
-    # 용어 자동 추출 복원(2026-09-24) — 파일/URL 단발성 등록에만 있던 _run_auto_glossary()가
-    # 미리보기+검토 2단계 흐름(파일/텍스트/컨플루언스 전부 이 엔드포인트로 확정)으로
-    # 넘어오며 끊겨있던 것을 모든 벌크 등록 경로 공통으로 되살림 — 체크박스 없이 항상 실행.
-    combined_text = "\n".join(item.content for item in body.items)
-    glossary_count = await _run_auto_glossary(body.namespace, combined_text, user, max_chars=20000)
-    return {**result, "auto_glossary": glossary_count}
 
 
 @router.post("/import/csv", status_code=201)
@@ -454,6 +454,15 @@ async def _run_auto_tag(
         logger.warning("자동 태깅 실패 (무시하고 계속): %s", e)
 
 
+def _glossary_after_activation(namespace: str, raw_text: str, user: dict, *, max_chars: Optional[int] = None):
+    """벌크 등록 job이 성공적으로 전환된 뒤에만 용어를 추출하도록 넘기는 후속 작업
+    (bulk_create_knowledge의 after_activation). 예전엔 job 시작 직후 바로 추출해, job이
+    실패·취소돼 지식은 한 건도 안 남았는데 용어만 남는 경우가 있었다(2026-09-28)."""
+    async def _run() -> int:
+        return await _run_auto_glossary(namespace, raw_text, user, max_chars=max_chars)
+    return _run
+
+
 async def _run_auto_glossary(namespace: str, raw_text: str, user: dict, *, max_chars: Optional[int] = None) -> int:
     """raw_text에서 LLM으로 용어를 추출해 rag_glossary에 등록. 등록된 용어 수 반환."""
     count = 0
@@ -557,31 +566,26 @@ async def import_file(
         source_type="file_upload",
         created_by_part=user["part"],
         created_by_user_id=user["id"],
+        # 용어 추출은 job 성공 후에만(개수는 job 행에 기록) — 예전엔 여기서 바로 실행했다
+        after_activation=_glossary_after_activation(namespace, doc.raw_text, user) if auto_glossary else None,
     )
 
-    # 용어 자동 추출 (선택적)
-    glossary_count = 0
-    if auto_glossary:
-        glossary_count = await _run_auto_glossary(namespace, doc.raw_text, user)
-
-    # job 업데이트 (용어 수)
-    if result.get("job_id") and glossary_count > 0:
+    # 분석 결과 기록 — 예전엔 용어 수 갱신과 한 UPDATE로 묶여 있어 추출된 용어가 0건이면
+    # analyzer_result도 같이 버려졌다(조건이 glossary_count > 0). 이제 독립적으로 남긴다.
+    if result.get("job_id") and analyzer_result:
         try:
             from core.database import get_conn
             async with get_conn() as conn:
                 await conn.execute(
-                    "UPDATE rag_ingestion_job SET auto_glossary = $1, analyzer_result = $2 WHERE id = $3",
-                    glossary_count,
-                    json.dumps(analyzer_result, ensure_ascii=False) if analyzer_result else None,
-                    result["job_id"],
+                    "UPDATE rag_ingestion_job SET analyzer_result = $1 WHERE id = $2",
+                    json.dumps(analyzer_result, ensure_ascii=False), result["job_id"],
                 )
         except Exception:
-            pass
+            logger.warning("분석 결과 기록 실패 (job_id=%s)", result.get("job_id"), exc_info=True)
 
     return {
         **result,
         "chunks": len(chunks),
-        "auto_glossary": glossary_count,
         "analyzer": analyzer_result,
         "source_name": doc.source_name,
         "page_count": doc.metadata.get("page_count"),
@@ -683,17 +687,12 @@ async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current
         source_type=doc.source_type,
         created_by_part=user["part"],
         created_by_user_id=user["id"],
+        after_activation=_glossary_after_activation(body.namespace, doc.raw_text, user) if body.auto_glossary else None,
     )
-
-    # 용어 자동 추출 (선택적)
-    glossary_count = 0
-    if body.auto_glossary:
-        glossary_count = await _run_auto_glossary(body.namespace, doc.raw_text, user)
 
     return {
         **result,
         "chunks": len(chunks),
-        "auto_glossary": glossary_count,
         "source_name": doc.source_name,
         "source_type": doc.source_type,
         "url": body.url,
@@ -1096,13 +1095,10 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
         created_by_part=user["part"],
         created_by_user_id=user["id"],
         supersede_confluence_pages=pages_to_deprecate or None,
+        after_activation=_glossary_after_activation(
+            body.namespace, "\n\n".join(f["doc"].raw_text for f in fetched if f["doc"]), user, max_chars=20000,
+        ) if body.auto_glossary else None,
     )
-
-    # 용어 자동 추출 (선택, 전체 합쳐서)
-    glossary_count = 0
-    if body.auto_glossary:
-        combined_text = "\n\n".join(f["doc"].raw_text for f in fetched if f["doc"])
-        glossary_count = await _run_auto_glossary(body.namespace, combined_text, user, max_chars=20000)
 
     return {
         **result,
@@ -1111,7 +1107,6 @@ async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_
         "failed_pages": failed_pages,
         "page_summaries": page_summaries,
         "unchanged_pages": unchanged_pages,
-        "auto_glossary": glossary_count,
         "chunks": len(items),
         "source_name": source_file,
         "source_type": "confluence_bulk",
