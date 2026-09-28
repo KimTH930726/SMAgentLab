@@ -412,26 +412,6 @@ class TestBulkIngestionStagedActivation:
         assert len(self._staging_deletes(calls)) == 1
 
     @pytest.mark.asyncio
-    async def test_confluence_supersede_happens_inside_activation(self):
-        """/code-review 지적(2026-09-28) — 재임포트 시 옛 버전 deprecate를 job 시작 전에 하면
-        job 도중엔 그 페이지가 검색에서 사라지고, 실패·취소 시엔 영영 사라진다. 이제 전환
-        트랜잭션 안에서, 새 행 전환 직전에만 내린다."""
-        conn, emb, calls = self._make_conn()
-        await self._run(conn, emb, supersede_confluence_pages=["p1"])
-        queries = [q for q, _ in calls["execute"]]
-        dep_idx = next(i for i, q in enumerate(queries) if "'deprecated'" in q)
-        act_idx = next(i for i, q in enumerate(queries) if "UPDATE rag_knowledge" in q and "'active' ELSE" in q)
-        assert dep_idx < act_idx
-        assert calls["execute"][dep_idx][1] == (1, ["p1"])
-
-    @pytest.mark.asyncio
-    async def test_confluence_supersede_skipped_when_cancelled_or_failed(self):
-        for kwargs in ({"cancel_flags": [True]}, {"fail_on_embed_call": 1}, {"activation_result": None}):
-            conn, emb, calls = self._make_conn(**kwargs)
-            await self._run(conn, emb, supersede_confluence_pages=["p1"])
-            assert not any("'deprecated'" in q for q, _ in calls["execute"]), kwargs
-
-    @pytest.mark.asyncio
     async def test_glossary_hook_runs_only_after_activation_and_records_count(self):
         """자동 용어 추출(2026-09-28) — 예전엔 라우터가 job 시작 직후 바로 추출해, job이
         실패·취소돼도 용어만 남았다. 이제 전환 성공 뒤에만 실행되고 개수는 job 행에 기록."""
@@ -464,9 +444,38 @@ class TestBulkIngestionStagedActivation:
 
     @pytest.mark.asyncio
     async def test_glossary_hook_failure_does_not_fail_job(self):
-        conn, emb, _ = self._make_conn()
+        conn, emb, calls = self._make_conn()
         result = await self._run(conn, emb, after_activation=AsyncMock(side_effect=RuntimeError("LLM down")))
         assert result["status"] == "completed" and result["created"] == 2
+        # 훅이 실패해도 job은 반드시 completed로 닫힌다(안 닫으면 화면 무한 진행중)
+        assert any("status = 'completed'" in q and "auto_glossary" in q for q, _ in calls["execute"])
+
+    @pytest.mark.asyncio
+    async def test_job_stays_processing_until_hook_finishes(self):
+        """/code-review 지적(2026-09-28) — 전환 시점에 completed로 바꾸면 화면 폴링이 멈춰
+        뒤늦게 기록되는 용어 수가 안 보였다. 훅이 있으면 전환 트랜잭션은 processing 유지."""
+        conn, emb, calls = self._make_conn()
+        await self._run(conn, emb, after_activation=AsyncMock(return_value=1))
+        activation = next((q, a) for q, a in calls["fetchval"] if "cancel_requested = FALSE" in q)
+        assert activation[1][3] is True  # $4 = run_follow_up → status 'processing' 유지
+
+        conn, emb, calls = self._make_conn()
+        await self._run(conn, emb)  # 훅 없음 → 전환 트랜잭션에서 바로 completed
+        activation = next((q, a) for q, a in calls["fetchval"] if "cancel_requested = FALSE" in q)
+        assert activation[1][3] is False
+
+    @pytest.mark.asyncio
+    async def test_glossary_hook_skipped_when_nothing_became_active(self):
+        """/code-review 지적 — 전부 승인 대기로 빠지면(검토에서 반려될 수 있음) 용어를 만들지 않는다."""
+        conn, emb, calls = self._make_conn()
+        conn.fetch = AsyncMock(side_effect=lambda q, job_id, idxs: [
+            {"id": 100 + i, "source_chunk_idx": i} for i in idxs
+        ])
+        hook = AsyncMock(return_value=3)
+        similar = AsyncMock(return_value=[{"id": 99, "content": "기존", "similarity": 0.999}])
+        result = await self._run(conn, emb, similar=similar, after_activation=hook)
+        assert result["pending"] == 2 and result["status"] == "completed"
+        hook.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_cache_invalidation_failure_does_not_fail_job(self):

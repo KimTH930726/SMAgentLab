@@ -743,17 +743,6 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
 # ─── Confluence 트리 + 일괄 인제스천 ─────────────────────────────────────────
 
 
-def _confluence_page_is_unchanged(
-    page_id: str, fetched_version: Optional[int], existing_versions: dict[str, Optional[int]],
-) -> bool:
-    """재임포트 시 스킵 여부(v2.81) — Confluence가 버전을 안 주면(REST 응답에 version
-    필드가 없는 구버전 서버 등) 안전한 쪽으로(항상 재등록) 판단한다 — "바뀐 걸 놓치는
-    것"보다 "안 바뀐 걸 한 번 더 등록하는 것"이 훨씬 싸고 안전하다."""
-    if fetched_version is None:
-        return False
-    return existing_versions.get(page_id) == fetched_version
-
-
 class _UrlTreeBody(BaseModel):
     url: str
     confluence_token: Optional[str] = None
@@ -829,9 +818,9 @@ async def _resolve_confluence_page_category(
     """페이지 1건의 업무구분 폴백(2026-09-22 설계, 2026-09-24 정정 — 새 카테고리 자동 생성
     허용, `docs/tech/knowledge-category-automation.md` 참고).
 
-    `preview_confluence_bulk`(실제 UI 확정 흐름 이전의 리뷰 단계)와 `import_confluence_bulk`
-    양쪽에서 공유 — 미리보기에서 계산한 값이 리뷰 화면에 그대로 보이고, 사용자가 선택 항목을
-    거르기만 해도 그 값이 최종 등록까지 살아남아야 하므로 같은 로직을 한 곳에 둔다.
+    `preview_confluence_bulk`(실제 UI 확정 흐름의 리뷰 단계)에서 계산 — 미리보기에서 계산한
+    값이 리뷰 화면에 그대로 보이고, 사용자가 선택 항목을 거르기만 해도 그 값이 최종 등록
+    (`POST /knowledge/bulk`)까지 살아남는다.
 
     1순위 `override`(폼에서 사람이 직접 지정) — 있으면 그대로 우선.
     2순위 직계 상위 페이지 제목(`doc.metadata["parent_title"]`) — 기존 목록에 있으면 그대로
@@ -966,154 +955,6 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
         "failed_pages": failed,
     }
 
-
-@router.post("/import/url/bulk-pages", status_code=201)
-async def import_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_current_user)):
-    """선택된 Confluence 페이지들을 일괄 인제스천. 각 페이지의 청크를 모두 합쳐 단일 ingestion_job."""
-    await check_namespace_ownership(body.namespace, user)
-    if not body.pages:
-        raise HTTPException(status_code=400, detail="선택된 페이지가 없습니다.")
-    if len(body.pages) > 200:
-        raise HTTPException(status_code=400, detail="한 번에 최대 200개 페이지까지 등록할 수 있습니다.")
-
-    from agents.knowledge_rag.ingestion.web_crawler import fetch_confluence_by_id
-    from agents.knowledge_rag.ingestion.chunker import chunk_document
-    from core.security import get_user_confluence_pat
-
-    token = body.confluence_token or get_user_confluence_pat(user)
-    if not token:
-        raise HTTPException(status_code=400, detail="Confluence PAT가 필요합니다.")
-
-    import asyncio
-
-    # 각 페이지를 병렬 fetch + 청킹 (실패는 개별 처리)
-    async def _fetch_and_chunk(page_ref: _ConfluencePageRef):
-        try:
-            doc = await fetch_confluence_by_id(body.base_url, page_ref.page_id, token)
-            chunks = chunk_document(doc, strategy=body.chunk_strategy)
-            return {
-                "page_id": page_ref.page_id,
-                "doc": doc,
-                "chunks": chunks,
-                "error": None,
-            }
-        except Exception as e:
-            logger.warning("페이지 %s fetch 실패: %s", page_ref.page_id, e)
-            return {"page_id": page_ref.page_id, "doc": None, "chunks": [], "error": str(e)}
-
-    fetched = await asyncio.gather(*(_fetch_and_chunk(p) for p in body.pages))
-
-    # 페이지 버전 추적(v2.81) — 같은 페이지를 재임포트할 때 Confluence 쪽 버전이 안
-    # 바뀌었으면 스킵한다. 기존 rag_knowledge.version/logical_document_id는 "우리 쪽
-    # 재등록 횟수"일 뿐 Confluence 원본이 바뀌었는지와 무관해 이 목적엔 못 쓴다(그래서
-    # confluence_page_id/confluence_version을 별도로 씀, main.py 마이그레이션 참고).
-    from core.database import get_conn, resolve_namespace_id
-
-    async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, body.namespace)
-        existing_versions = {
-            r["confluence_page_id"]: r["confluence_version"]
-            for r in await conn.fetch(
-                "SELECT DISTINCT confluence_page_id, confluence_version FROM rag_knowledge "
-                "WHERE namespace_id = $1 AND confluence_page_id IS NOT NULL AND status = 'active'",
-                ns_id,
-            )
-        }
-    existing_categories = await _load_existing_categories(ns_id)
-
-    async def _resolve_category(doc) -> str:
-        return await _resolve_confluence_page_category(ns_id, doc, body.category, existing_categories)
-
-    # 청크 → items 변환 + per-page 메타데이터 보존
-    items: list[dict] = []
-    failed_pages: list[dict] = []
-    page_summaries: list[dict] = []
-    unchanged_pages: list[dict] = []
-    pages_to_deprecate: list[str] = []
-    for f in fetched:
-        if f["error"]:
-            failed_pages.append({"page_id": f["page_id"], "error": f["error"]})
-            continue
-        doc = f["doc"]
-        chunks = f["chunks"]
-        page_id = f["page_id"]
-        fetched_version = doc.metadata.get("version")
-
-        if _confluence_page_is_unchanged(page_id, fetched_version, existing_versions):
-            unchanged_pages.append({"page_id": page_id, "title": doc.source_name, "version": fetched_version})
-            continue
-
-        if page_id in existing_versions:
-            pages_to_deprecate.append(page_id)
-
-        page_category = await _resolve_category(doc)
-        page_summaries.append({
-            "page_id": page_id,
-            "title": doc.source_name,
-            "chunks": len(chunks),
-            "chars": len(doc.raw_text),
-            "category": page_category,
-        })
-        for c in chunks:
-            items.append({
-                "content": c.text,
-                "category": page_category,
-                "confluence_page_id": page_id,
-                "confluence_version": fetched_version,
-                "heading_path": _enrich_heading_path(doc, c.heading_path),
-            })
-
-    # 옛 버전 deprecate는 여기서 미리 하지 않고 bulk_create_knowledge의 일괄 전환 트랜잭션에서
-    # 한다(2026-09-28) — 미리 내리면 job 도중엔 그 페이지가 검색에서 통째로 빠지고, job이
-    # 실패·취소되면(새 행은 폐기) 옛 행도 되살릴 방법 없이 사라진다.
-
-    if not items:
-        if unchanged_pages:
-            return {
-                "created": 0, "job_id": None, "status": "skipped",
-                "pages_succeeded": 0, "pages_failed": len(failed_pages),
-                "failed_pages": failed_pages, "page_summaries": [],
-                "unchanged_pages": unchanged_pages,
-                "chunks": 0, "source_name": "", "source_type": "confluence_bulk",
-            }
-        raise HTTPException(
-            status_code=400,
-            detail=f"수집된 청크가 없습니다. failed_pages={failed_pages}",
-        )
-
-    # LLM 자동 태깅 (선택)
-    if body.auto_tag and items:
-        await _run_auto_tag(items, body.namespace, user)
-
-    # 벌크 등록 — source_file은 root URL 또는 페이지 수 표기
-    source_file = f"Confluence bulk ({len(page_summaries)} pages)"
-    result = await service.bulk_create_knowledge(
-        namespace=body.namespace,
-        items=items,
-        source_file=source_file,
-        source_type="confluence_bulk",
-        created_by_part=user["part"],
-        created_by_user_id=user["id"],
-        supersede_confluence_pages=pages_to_deprecate or None,
-        after_activation=_glossary_after_activation(
-            body.namespace, "\n\n".join(f["doc"].raw_text for f in fetched if f["doc"]), user, max_chars=20000,
-        ) if body.auto_glossary else None,
-    )
-
-    return {
-        **result,
-        "pages_succeeded": len(page_summaries),
-        "pages_failed": len(failed_pages),
-        "failed_pages": failed_pages,
-        "page_summaries": page_summaries,
-        "unchanged_pages": unchanged_pages,
-        "chunks": len(items),
-        "source_name": source_file,
-        "source_type": "confluence_bulk",
-    }
-
-
-# ─── 인제스천 작업 이력 ──────────────────────────────────────────────────────
 
 @router.get("/ingestion-jobs", response_model=list[IngestionJobOut])
 async def get_ingestion_jobs(

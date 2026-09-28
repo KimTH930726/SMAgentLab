@@ -1238,6 +1238,17 @@ async def _cleanup_orphaned_ingestion_jobs(conn) -> None:
     정리한다. 전제: 백엔드가 단일 인스턴스로 실행됨(수평 확장 시 다른 인스턴스가 실제로
     처리 중인 job까지 잘못 정리할 위험 — 그땐 이 전제부터 재검토할 것).
     """
+    # 일괄 전환까지 끝나고 후속 작업(자동 용어 추출) 중에 죽은 job — 행은 이미 active/pending으로
+    # 반영돼 있으니 failed가 아니라 completed로 닫는다(2026-09-28, 스테이징 행이 하나도 없음이 기준)
+    finished = await conn.execute(
+        "UPDATE rag_ingestion_job j SET status = 'completed', completed_at = NOW() "
+        "WHERE j.status = 'processing' "
+        "AND EXISTS (SELECT 1 FROM rag_knowledge k WHERE k.ingestion_job_id = j.id) "
+        "AND NOT EXISTS (SELECT 1 FROM rag_knowledge k WHERE k.ingestion_job_id = j.id "
+        "AND k.status IN ('staging', 'staging_review'))"
+    )
+    if finished and "UPDATE 0" not in finished:
+        logger.info("[Startup] 전환 후 후속 작업 중 멈춘 수집 작업 완료 처리: %s", finished)
     result = await conn.execute(
         "UPDATE rag_ingestion_job SET status = 'failed', "
         "error_message = COALESCE(error_message, '') || '이전 프로세스 재시작으로 중단됨', "

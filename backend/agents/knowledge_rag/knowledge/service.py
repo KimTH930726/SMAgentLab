@@ -644,7 +644,6 @@ async def bulk_create_knowledge(
     created_by_part: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
     background: bool = True,
-    supersede_confluence_pages: Optional[list[str]] = None,
     after_activation: Optional[Callable[[], Awaitable[int]]] = None,
 ) -> dict:
     """여러 지식을 배치 단위로 등록 — 기본적으로 백그라운드에서 실행.
@@ -652,10 +651,6 @@ async def bulk_create_knowledge(
     after_activation: job이 성공적으로 일괄 전환된 "뒤에만" 실행할 후속 작업(자동 용어 추출).
     반환값(등록된 용어 수)은 rag_ingestion_job.auto_glossary에 기록된다. 예전엔 라우터가 job
     시작 직후 바로 용어를 추출해, job이 실패·취소돼도 용어만 남았다(2026-09-28).
-
-    supersede_confluence_pages: 컨플루언스 재임포트 시 교체될 페이지 id 목록 — 해당 페이지의
-    기존 active 행은 이 job이 성공적으로 전환되는 같은 트랜잭션에서 deprecated 처리된다
-    (job 시작 전에 미리 내리면 job 도중·실패 시 그 페이지가 검색에서 통째로 사라진다).
 
     작업(rag_ingestion_job) 행을 먼저 만들고 job_id를 즉시 반환한다.
     실제 임베딩/INSERT는 백그라운드 태스크가 _INGEST_BATCH_SIZE개씩 나눠 처리하며,
@@ -697,7 +692,6 @@ async def bulk_create_knowledge(
     coro = _run_bulk_ingestion(
         job_id, ns_id, items,
         namespace_name=namespace,
-        supersede_confluence_pages=supersede_confluence_pages,
         after_activation=after_activation,
         source_file=source_file, source_type=source_type,
         created_by_part=created_by_part, created_by_user_id=created_by_user_id,
@@ -716,7 +710,6 @@ async def _run_bulk_ingestion(
     items: list[dict],
     *,
     namespace_name: Optional[str] = None,
-    supersede_confluence_pages: Optional[list[str]] = None,
     after_activation: Optional[Callable[[], Awaitable[int]]] = None,
     source_file: Optional[str],
     source_type: str,
@@ -869,24 +862,27 @@ async def _run_bulk_ingestion(
             logger.exception("실패한 인제스천 작업 정리 실패 (job_id=%s)", job_id)
         return {"created": 0, "job_id": job_id, "status": "failed"}
 
+    # 후속 작업(자동 용어 추출)은 실제로 active가 된 행이 있을 때만 — 전부 승인 대기로 빠졌으면
+    # 검토에서 반려될 수 있는 내용이라 용어를 미리 만들지 않는다(/code-review 지적, 2026-09-28).
+    run_follow_up = after_activation is not None and created > pending_total
+
     # 일괄 전환 — job 완료 표시와 행 전환을 한 트랜잭션으로 묶는다. cancel_requested 조건은
     # 마지막 배치 확인 뒤에 들어온 취소 요청(레이스)을 여기서 잡기 위함: 0행이면 전환 대신 폐기.
+    # 후속 작업이 있으면 job은 그게 끝날 때까지 'processing'으로 둔다 — 화면이 processing 동안만
+    # 폴링해서, 먼저 completed로 바꾸면 뒤늦게 기록되는 용어 수가 새로고침 전엔 안 보였다
+    # (/code-review 지적). 행 전환 자체는 이 트랜잭션에서 끝나므로 검색 반영은 지연되지 않는다.
     try:
         async with get_conn() as conn:
             async with conn.transaction():
                 activated = await conn.fetchval("""
                     UPDATE rag_ingestion_job
-                    SET status = 'completed', created_chunks = $1, pending_chunks = $2, completed_at = NOW()
+                    SET status = CASE WHEN $4 THEN 'processing' ELSE 'completed' END,
+                        created_chunks = $1, pending_chunks = $2,
+                        completed_at = CASE WHEN $4 THEN NULL ELSE NOW() END
                     WHERE id = $3 AND cancel_requested = FALSE
                     RETURNING id
-                """, created, pending_total, job_id)
+                """, created, pending_total, job_id, run_follow_up)
                 if activated:
-                    if supersede_confluence_pages:
-                        # 새 행은 아직 staging이라 status='active' 조건에 안 걸린다 — 옛 버전만 내림
-                        await conn.execute("""
-                            UPDATE rag_knowledge SET status = 'deprecated'
-                            WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[]) AND status = 'active'
-                        """, ns_id, supersede_confluence_pages)
                     await conn.execute("""
                         UPDATE rag_knowledge
                         SET status = CASE status WHEN 'staging' THEN 'active' ELSE 'pending_review' END
@@ -915,18 +911,22 @@ async def _run_bulk_ingestion(
             logger.warning("수집 완료 후 시맨틱 캐시 무효화 실패 (job_id=%s)", job_id, exc_info=True)
 
     result = {"created": created, "job_id": job_id, "status": "completed", "pending": pending_total}
-    if after_activation is not None:
-        # 지식은 이미 커밋·활성화됐으니 여기 실패는 job 결과를 바꾸지 않는다(로그만)
+    if run_follow_up:
+        # 지식은 이미 커밋·활성화됐으니 여기 실패는 job 결과를 바꾸지 않는다(로그만). 어떤 경우든
+        # job은 마지막에 completed로 닫는다(안 닫으면 화면이 무한 진행중).
+        glossary_count = 0
         try:
             glossary_count = await after_activation()
             result["auto_glossary"] = glossary_count
-            if glossary_count:
-                async with get_conn() as conn:
-                    await conn.execute(
-                        "UPDATE rag_ingestion_job SET auto_glossary = $1 WHERE id = $2", glossary_count, job_id,
-                    )
         except Exception:
             logger.warning("수집 완료 후 자동 용어 추출 실패 (job_id=%s)", job_id, exc_info=True)
+        finally:
+            async with get_conn() as conn:
+                await conn.execute(
+                    "UPDATE rag_ingestion_job SET status = 'completed', auto_glossary = $1, completed_at = NOW() "
+                    "WHERE id = $2",
+                    glossary_count, job_id,
+                )
     return result
 
 
@@ -974,7 +974,9 @@ async def get_ingestion_job_namespace(job_id: int) -> Optional[str]:
 async def cancel_ingestion_job(job_id: int) -> Optional[dict]:
     """진행 중인 인제스천 작업에 취소 요청 플래그를 설정.
 
-    실제 중단·롤백은 백그라운드 태스크가 다음 배치 경계에서 수행한다.
+    실제 중단·롤백은 백그라운드 태스크가 다음 배치 경계에서 수행한다. 일괄 전환이 끝난 뒤
+    후속 작업(자동 용어 추출) 동안에도 job은 'processing'이라 여기서 요청은 받지만, 행은 이미
+    반영된 뒤라 취소되지 않고 그대로 completed로 끝난다(몇 초 창).
     """
     async with get_conn() as conn:
         row = await conn.fetchrow("""

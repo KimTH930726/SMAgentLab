@@ -420,40 +420,6 @@ export async function previewConfluenceTree(
   });
 }
 
-export interface ConfluenceBulkResult {
-  created: number;
-  job_id: number | null;
-  chunks: number;
-  pages_succeeded: number;
-  pages_failed: number;
-  failed_pages: Array<{ page_id: string; error: string }>;
-  page_summaries: Array<{ page_id: string; title: string; chunks: number; chars: number }>;
-  unchanged_pages: Array<{ page_id: string; title: string; version: number | null }>;
-  source_name: string;
-  source_type: string;
-}
-
-export async function importConfluenceBulk(
-  namespace: string,
-  baseUrl: string,
-  pages: Array<{ page_id: string; title?: string; url?: string }>,
-  opts?: { confluenceToken?: string; chunkStrategy?: string; category?: string; autoTag?: boolean; autoGlossary?: boolean },
-): Promise<ConfluenceBulkResult> {
-  return apiFetch('/knowledge/import/url/bulk-pages', {
-    method: 'POST',
-    body: JSON.stringify({
-      namespace,
-      base_url: baseUrl,
-      pages,
-      confluence_token: opts?.confluenceToken || null,
-      chunk_strategy: opts?.chunkStrategy ?? 'auto',
-      category: opts?.category || null,
-      auto_tag: opts?.autoTag ?? false,
-      auto_glossary: opts?.autoGlossary ?? false,
-    }),
-  });
-}
-
 export interface ConfluenceBulkChunk {
   idx: number;
   page_id: string;

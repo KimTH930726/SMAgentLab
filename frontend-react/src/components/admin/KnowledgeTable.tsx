@@ -17,7 +17,6 @@ import {
   previewFileUpload,
   previewUrl,
   previewConfluenceTree,
-  importConfluenceBulk,
   previewConfluenceBulk,
   getIngestionJobs,
   getIngestionJobStatus,

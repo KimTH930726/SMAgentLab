@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.110)
+# Ops-Navigator 시스템 아키텍처 (v2.111)
 
 ## 개요
 
@@ -11,6 +11,25 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.111: **v2.108 후속 정리 3건.**
+  (1) **자동 용어 추출을 job 성공 후로** — 대량 등록 4개 경로가 job 시작 직후 바로 용어를 추출해,
+  job이 실패·취소돼 지식은 없는데 용어만 남던 문제. `bulk_create_knowledge(after_activation=)` 훅으로
+  일괄 전환 성공 뒤에만 실행, 개수는 `rag_ingestion_job.auto_glossary`에 기록(화면은 원래 job 행을
+  읽음). 요청이 LLM 추출을 안 기다려 응답도 빨라짐. 응답의 `auto_glossary` 필드는 제거(화면 미사용,
+  요청 시점엔 값이 없음). `import_file`은 analyzer_result가 용어 0건이면 같이 버려지던 결합 UPDATE도
+  분리. 실측: 완료 job 용어 23건 기록·반영, 취소 job 용어 0건.
+  (2) **관리자 지식 수를 active만** — `/api/namespaces/detail`·`/api/stats`의 `knowledge_count`가
+  승인대기·반려·폐기·수집 중 행까지 세어 부풀려져 있었음(실측 외부서비스DB 53→42, 딜리버스 DB
+  43→25). 지식 기반 용어 추천 샘플링도 active만.
+  (3) **죽은 컨플루언스 라우트 삭제** — `POST /import/url/bulk-pages`(`import_confluence_bulk`)는 화면이
+  더 이상 호출하지 않는데(실 흐름은 미리보기→`POST /knowledge/bulk`), 재임포트 버전 추적(변경 없는
+  페이지 스킵·옛 버전 deprecate) 로직이 **이 라우트에만** 있었다. 실 DB 확인 결과 컨플루언스 행 64건
+  모두 `confluence_page_id`가 NULL — 실 흐름은 페이지 id·버전을 한 번도 실어 나르지 않아 버전 추적이
+  실제로 동작한 적이 없음. 라우트·전용 헬퍼(`_confluence_page_is_unchanged`)·v2.108에서 이 라우트용으로
+  넣었던 `supersede_confluence_pages`·프론트 `importConfluenceBulk`를 함께 삭제. **알려진 공백**: 실 흐름에서
+  바뀐 페이지를 재등록하면 옛 버전이 active로 남는다(중복검사가 거의 같은 청크는 승인대기로 돌리지만
+  내용이 바뀐 청크는 못 거름). 재등록 실사용이 확인되면 미리보기가 버전을 돌려주고 `/knowledge/bulk`가
+  받는 방식으로 재구현(원자적 교체 구현은 커밋 150d132 참고).
 - v2.110: **정책서 임포트 시트 단위 원자적 적재** (v2.108 벌크 수집과 같은 문제의 정책 쪽).
   `service/policy/service.py`의 `import_excel` 쓰기 단계가 행마다 autocommit이라, 적재 도중
   반쯤 들어간 시트가 챗 검색(`status NOT IN ('deprecated','rejected')` — pending_review도 노출)에
@@ -50,7 +69,8 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
   job의 모든 행을 지워 검토자가 그새 승인한 행까지 날아갔음). job 내부 배치 간 중복검사는
   `find_similar_active_knowledge(staging_job_id=)`로 같은 job의 스테이징 행까지 봐서 유지.
   컨플루언스 재임포트(`/import/url/bulk-pages`)의 옛 버전 deprecate도 job 시작 전이 아니라 이
-  전환 트랜잭션 안으로 이동(/code-review 지적 — 미리 내리면 실패 시 페이지가 검색에서 사라짐).
+  전환 트랜잭션 안으로 이동(/code-review 지적 — 미리 내리면 실패 시 페이지가 검색에서 사라짐) —
+  단, 이 라우트는 화면이 안 쓰는 죽은 경로로 확인돼 v2.111에서 교체 로직과 함께 삭제됨.
   `main.py`: `cancel_requested`/`ingestion_job_id` 컬럼을 멱등 마이그레이션으로 보장(원래
   수동 적용 SQL에만 있었음), 기동 시 남은 스테이징 행 폐기. 실 dev 스택 실측: 150건(3배치)
   진행 중 active 0건 → 완료 시 일괄 전환, 200건 job 1배치 후 취소 → 잔존 0건·기존 상태 불변.
