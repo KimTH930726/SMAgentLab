@@ -29,7 +29,7 @@ async def list_namespaces_detail() -> list[dict]:
             LEFT JOIN ops_part p ON n.owner_part_id = p.id
             LEFT JOIN ops_user u ON n.created_by_user_id = u.id
             LEFT JOIN (
-                SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge GROUP BY namespace_id
+                SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge WHERE status = 'active' GROUP BY namespace_id
             ) k ON n.id = k.namespace_id
             LEFT JOIN (
                 SELECT namespace_id, COUNT(*) AS cnt FROM rag_glossary GROUP BY namespace_id

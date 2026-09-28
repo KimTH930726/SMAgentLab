@@ -250,7 +250,9 @@ async def get_stats(user: dict = Depends(get_current_user)):
                     COUNT(*) FILTER (WHERE NOT is_positive) AS negative_feedback
                 FROM ops_feedback GROUP BY namespace_id
             ),
-            k_agg AS (SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge GROUP BY namespace_id),
+            -- 검색에 실제로 쓰이는 지식만 센다(2026-09-28) — 예전엔 deprecated/rejected/검토대기에
+            -- 수집 중(staging) 행까지 모두 세어 등록 도중엔 수치가 부풀었다
+            k_agg AS (SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge WHERE status = 'active' GROUP BY namespace_id),
             g_agg AS (SELECT namespace_id, COUNT(*) AS cnt FROM rag_glossary GROUP BY namespace_id)
             SELECT n.name AS namespace,
                 COALESCE(q.total_queries, 0) AS total_queries,
@@ -652,7 +654,8 @@ async def suggest_glossary_terms(
 
         if source == "knowledge":
             rows = await conn.fetch(
-                "SELECT content FROM rag_knowledge WHERE namespace_id = $1 ORDER BY created_at DESC LIMIT $2",
+                # active만 — 반려·폐기·수집 중(staging, 취소되면 사라질) 행에서 용어를 추천하지 않게
+                "SELECT content FROM rag_knowledge WHERE namespace_id = $1 AND status = 'active' ORDER BY created_at DESC LIMIT $2",
                 ns_id, limit,
             )
             items = [r["content"] for r in rows]

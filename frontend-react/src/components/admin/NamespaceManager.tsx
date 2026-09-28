@@ -317,6 +317,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                   )}
                   <button
                     onClick={(e) => { e.stopPropagation(); setNamespace(ns.name); onNavigate?.('knowledge'); }}
+                    title="검색에 쓰이는(활성) 지식 수 — 승인 대기·반려·폐기·수집 중인 항목은 제외"
                     className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded-full hover:bg-indigo-100 hover:text-indigo-700 dark:hover:bg-indigo-900/40 dark:hover:text-indigo-300 transition-colors"
                   >
                     지식 {ns.knowledge_count}건
