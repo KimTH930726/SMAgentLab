@@ -16,7 +16,9 @@ from service.admin import service
 from service.llm.factory import get_llm_provider, switch_provider, get_runtime_config
 from service.llm.ollama import OllamaProvider
 from service.llm.inhouse import InHouseLLMProvider
-from agents.knowledge_rag.knowledge.retrieval import get_thresholds, set_thresholds, get_search_defaults, set_search_defaults
+from agents.knowledge_rag.knowledge.retrieval import (
+    get_thresholds, set_thresholds, get_search_defaults, set_search_defaults, persist_runtime_overrides,
+)
 from service.prompt.loader import get_prompt as load_prompt
 from shared import cache as sem_cache
 from agents.base import AgentRegistry
@@ -525,6 +527,7 @@ async def update_threshold_config(body: ThresholdUpdate, admin: dict = Depends(g
     for k, v in updates.items():
         if not 0.0 <= v <= 1.0:
             raise HTTPException(status_code=400, detail=f"{k}는 0~1 범위여야 합니다.")
+    await persist_runtime_overrides(updates)  # 저장 성공 후에만 메모리 반영(재시작해도 유지)
     return set_thresholds(updates)
 
 
@@ -541,6 +544,7 @@ async def update_search_defaults_config(body: SearchDefaultsUpdate, admin: dict 
     for k in ("default_w_vector", "default_w_keyword"):
         if k in updates and not 0.0 <= updates[k] <= 1.0:
             raise HTTPException(status_code=400, detail=f"{k}는 0~1 범위여야 합니다.")
+    await persist_runtime_overrides(updates)  # 저장 성공 후에만 메모리 반영(재시작해도 유지)
     return set_search_defaults(updates)
 
 

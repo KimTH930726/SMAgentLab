@@ -29,6 +29,7 @@ from shared import cache as sem_cache
 from shared.http_client import close_http_client
 from agents.base import AgentRegistry
 from agents.knowledge_rag.agent import KnowledgeRagAgent
+from agents.knowledge_rag.knowledge.retrieval import load_runtime_overrides_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -1336,6 +1337,7 @@ async def lifespan(_app: FastAPI):
     await _run_migrations()
     async with get_conn() as conn:
         await sem_cache.load_config_from_db(conn)
+        await load_runtime_overrides_from_db(conn)
         await _warn_if_embedding_model_stale(conn)
     embedding_service.load()
     if settings.reranker_enabled:

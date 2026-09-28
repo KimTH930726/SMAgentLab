@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.112)
+# Ops-Navigator 시스템 아키텍처 (v2.113)
 
 ## 개요
 
@@ -11,6 +11,12 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.113: **관리자 검색 설정(임계치·top_k·가중치) 재시작 후에도 유지.** `PUT /api/llm/thresholds`·
+  `PUT /api/llm/search-defaults`가 메모리 오버라이드만 바꿔 재시작·재배포마다 조용히 기본값으로
+  돌아가던 문제(화면에선 저장된 것처럼 보임, v2.112 부수 발견). VOC 폴링·시맨틱 캐시 설정과 같은
+  `ops_system_config`에 `retrieval_` 접두사로 저장(`persist_runtime_overrides`)하고 기동 시
+  `load_runtime_overrides_from_db`로 복원. 저장이 먼저 성공해야 메모리에 반영(실패 시 오류가 화면
+  alert로 보임). 실 서버로 변경 → 재시작 → 유지(0.35→0.41, top_k 3→4) 확인 후 원상복구.
 - v2.112: **채팅 정책 검색 top_k 5 → 10 + "지식 없음" 원인 진단 도구.** 신규
   `scripts/diagnose_no_knowledge.py` — 골든셋 문항마다 실제 챗 경로로 컨텍스트를 만들고 정답 정책
   항목(track2 로더) 포함 여부 + LLM 답변으로 A(컨텍스트 없음)/B(검색이 정답 못 찾음, B-rank=6~20위라
@@ -22,8 +28,8 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
   분석 대상). `agent.POLICY_CONTEXT_TOP_K` 상수로 빼 평가 스크립트들도 같은 값을 참조. 실 서버로
   k=5에선 정답이 빠지던 문항 3건을 챗 API에 보내 전부 정책 근거 카드 포함 정상 답변 확인.
   실사용 no_knowledge 로그 38건은 26건이 9월(정책 적재·DB 오염 정리) 이전, "팀 공통 DB" 18건은
-  지식 1건뿐인 콘텐츠 공백 — 파이프라인 결함 증거는 약함. 부수 발견(미수정): 관리자 화면의 검색
-  임계치·top_k(`set_thresholds`/`set_search_defaults`)가 메모리에만 저장돼 재시작 시 초기화됨.
+  지식 1건뿐인 콘텐츠 공백 — 파이프라인 결함 증거는 약함. 부수 발견: 관리자 화면의 검색
+  임계치·top_k(`set_thresholds`/`set_search_defaults`)가 메모리에만 저장돼 재시작 시 초기화됨 → v2.113에서 수정.
 - v2.111: **v2.108 후속 정리 3건.**
   (1) **자동 용어 추출을 job 성공 후로** — 대량 등록 4개 경로가 job 시작 직후 바로 용어를 추출해,
   job이 실패·취소돼 지식은 없는데 용어만 남던 문제. `bulk_create_knowledge(after_activation=)` 훅으로

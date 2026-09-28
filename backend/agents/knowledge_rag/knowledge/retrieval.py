@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import datetime
+import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -10,6 +11,7 @@ from core.database import get_conn, resolve_namespace_id
 from core.config import settings
 from shared.embedding import embedding_service
 
+logger = logging.getLogger(__name__)
 
 # ── Runtime threshold overrides ──────────────────────────────────────────────
 _runtime_thresholds: dict[str, float] = {}
@@ -52,6 +54,49 @@ def set_search_defaults(updates: dict[str, float]) -> dict[str, float]:
         if k in _SEARCH_DEFAULT_KEYS:
             _runtime_search_defaults[k] = v
     return get_search_defaults()
+
+
+# ── 관리자 설정 영속화 (2026-09-28) ───────────────────────────────────────────
+# 위 두 오버라이드는 원래 메모리에만 있어 재시작·재배포마다 조용히 기본값으로 돌아갔다(관리자
+# 화면에선 저장된 것처럼 보임). VOC 폴링 설정·시맨틱 캐시 설정과 같은 ops_system_config에
+# 접두사를 붙여 저장하고, 기동 시 load_runtime_overrides_from_db()로 되살린다.
+_CONFIG_PREFIX = "retrieval_"
+
+
+async def persist_runtime_overrides(updates: dict[str, float]) -> None:
+    """관리자가 바꾼 임계치/검색 기본값을 DB에 저장. 실패하면 예외를 그대로 올린다 —
+    호출부는 저장이 성공한 뒤에만 메모리 값을 바꿔야 "저장된 줄 알았는데 재시작하니 사라짐"이
+    재발하지 않는다."""
+    known = set(_THRESHOLD_KEYS) | set(_SEARCH_DEFAULT_KEYS)
+    rows = [(f"{_CONFIG_PREFIX}{k}", str(v)) for k, v in updates.items() if k in known]
+    if not rows:
+        return
+    async with get_conn() as conn:
+        await conn.executemany(
+            """INSERT INTO ops_system_config (key, value, updated_at) VALUES ($1, $2, NOW())
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+            rows,
+        )
+
+
+async def load_runtime_overrides_from_db(conn) -> None:
+    """앱 시작 시 저장된 관리자 설정을 메모리 오버라이드로 복원. 실패하면 기본값으로 계속(로그만)."""
+    try:
+        rows = await conn.fetch(
+            "SELECT key, value FROM ops_system_config WHERE key LIKE $1", f"{_CONFIG_PREFIX}%",
+        )
+        for row in rows:
+            k = row["key"][len(_CONFIG_PREFIX):]
+            if k in _THRESHOLD_KEYS:
+                _runtime_thresholds[k] = float(row["value"])
+            elif k == "default_top_k":
+                _runtime_search_defaults[k] = int(float(row["value"]))
+            elif k in _SEARCH_DEFAULT_KEYS:
+                _runtime_search_defaults[k] = float(row["value"])
+        if rows:
+            logger.info("[Retrieval] 저장된 관리자 설정 복원: %s", {r["key"]: r["value"] for r in rows})
+    except Exception:
+        logger.warning("[Retrieval] 저장된 관리자 설정 복원 실패 — 기본값 사용", exc_info=True)
 
 
 @dataclass
