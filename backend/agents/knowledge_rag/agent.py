@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 _FLUSH_INTERVAL = 20
 
+# 정책 검색 후보 수(param·서술 각각) — 5에서 10으로(2026-09-28, scripts/diagnose_no_knowledge.py
+# 골든셋 89문항 실측): 정답이 6~20위에 있어 잘리던 문항이 8→2건, 정상 답변 69→75건(77.5%→84.3%),
+# 컨텍스트가 길어져도 "정답 있는데 거절"은 5→5건으로 늘지 않음. 평가 스크립트도 이 상수를 참조해
+# 운영과 측정 조건이 어긋나지 않게 한다.
+POLICY_CONTEXT_TOP_K = 10
+
 
 async def _safe_post_save(conv_id: int, namespace: str) -> None:
     try:
@@ -224,7 +230,7 @@ class KnowledgeRagAgent(AgentBase):
             if policy_available:
                 try:
                     policy_result = await policy_search.search_policy(
-                        namespace, enriched_query, top_k=5, query_vec=query_vec,
+                        namespace, enriched_query, top_k=POLICY_CONTEXT_TOP_K, query_vec=query_vec,
                     )
                 except Exception as e:
                     logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)

@@ -37,11 +37,21 @@ from service.llm.base import resolve_system_prompt
 from service.llm.factory import get_llm_provider
 from service.chat.helpers import NO_KNOWLEDGE_MARKER
 from agents.knowledge_rag.knowledge import retrieval
-from agents.knowledge_rag.agent import _build_rrf_context
+from agents.knowledge_rag.agent import POLICY_CONTEXT_TOP_K, _build_rrf_context
 from service.policy import search as policy_search
 from service.refdata import service as refdata_search
 
-NAMESPACE = "딜리버스 DB"
+# 골든셋은 온라인스토어·딜리버스 두 파일에서 나온 문항이 섞여 있다 — 문항마다 출처 파일로
+# 네임스페이스를 고른다(track2와 같은 매핑). 2026-09-28 첫 실행은 전부 "딜리버스 DB"에서 검색해
+# 온라인스토어 46문항이 구조적으로 실패했고, "지식 없음 35~37/89"라는 절대값이 부풀려졌다
+# (OFF/ON 비교는 같은 컨텍스트를 썼으므로 유효). 실제 원인 분리는 diagnose_no_knowledge.py.
+from service.policy.track2 import _namespace_for_file
+
+FALLBACK_NAMESPACE = "딜리버스 DB"
+
+
+def namespace_of(record: dict) -> str:
+    return _namespace_for_file(record.get("source", {}).get("file", "")) or FALLBACK_NAMESPACE
 GOLDEN_SET = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "golden_set" / "online_delivus_v1.jsonl"
 
 CANARY = "PWNED-7731"
@@ -97,23 +107,23 @@ def token_recall(expected: str, answer: str) -> float:
     return sum(1 for t in toks if t in answer) / len(toks)
 
 
-async def build_context(question: str) -> str:
+async def build_context(namespace: str, question: str) -> str:
     """agent.py 챗 경로의 컨텍스트 조립을 그대로 따른다(리랭커·멀티턴 보강·캐시 제외)."""
     query_vec = await embedding_service.embed(question)
-    glossary = await retrieval.map_glossary_term(NAMESPACE, query_vec)
+    glossary = await retrieval.map_glossary_term(namespace, query_vec)
     enriched = f"{question} {glossary.term}" if glossary else question
     d = retrieval.get_search_defaults()
     results = await retrieval.search_knowledge(
-        NAMESPACE, query_vec, enriched, d["default_w_vector"], d["default_w_keyword"], int(d["default_top_k"]),
+        namespace, query_vec, enriched, d["default_w_vector"], d["default_w_keyword"], int(d["default_top_k"]),
     )
     policy_result = policy_search.PolicySearchResult()
-    if await policy_search.has_policy_data(NAMESPACE):
-        policy_result = await policy_search.search_policy(NAMESPACE, enriched, top_k=5, query_vec=query_vec)
+    if await policy_search.has_policy_data(namespace):
+        policy_result = await policy_search.search_policy(namespace, enriched, top_k=POLICY_CONTEXT_TOP_K, query_vec=query_vec)
     codes, cols = [], []
-    if await refdata_search.has_refdata(NAMESPACE):
+    if await refdata_search.has_refdata(namespace):
         codes, cols = await asyncio.gather(
-            refdata_search.search_common_codes(NAMESPACE, enriched, top_k=5),
-            refdata_search.search_db_columns(NAMESPACE, enriched, top_k=5),
+            refdata_search.search_common_codes(namespace, enriched, top_k=5),
+            refdata_search.search_db_columns(namespace, enriched, top_k=5),
         )
     return _build_rrf_context(results, policy_result, codes, cols)
 
@@ -135,7 +145,7 @@ async def repeat_mode(records: list[dict], repeat: int) -> None:
         tot = {False: 0, True: 0}
         print(f"=== 반복 측정 {len(records)}문항 × OFF/ON 각 {repeat}회 — '지식 없음' 횟수 ===")
         for r in records:
-            ctx = await build_context(r["query"])
+            ctx = await build_context(namespace_of(r), r["query"])
             cnt = {}
             for enabled in (False, True):
                 cnt[enabled] = 0
@@ -194,11 +204,11 @@ async def main() -> None:
                 print(f"  {name:18s} guard={'ON ' if enabled else 'OFF'}  {label} {ok}/{args.probe_repeat}")
 
         # ── 골든셋 ──
-        print(f"\n=== 골든셋 {len(records)}문항 ({NAMESPACE}) ===")
+        print(f"\n=== 골든셋 {len(records)}문항 (문항별 네임스페이스) ===")
         stats = {False: {"nok": 0, "recall": [], "err": 0}, True: {"nok": 0, "recall": [], "err": 0}}
         diffs = []
         for i, r in enumerate(records, 1):
-            ctx = await build_context(r["query"])
+            ctx = await build_context(namespace_of(r), r["query"])
             per = {}
             for enabled in (False, True):
                 try:
