@@ -223,8 +223,10 @@ class TestRunComparison:
         assert by_type["param"].b_hit_both == 1.0
 
     @pytest.mark.asyncio
-    async def test_unresolvable_namespace_file_skipped(self, monkeypatch, tmp_path):
-        """golden set의 source.file이 알려진 팀 파일명을 안 담고 있으면 그 문항은 건너뛴다."""
+    async def test_unresolvable_namespace_file_skipped(self, monkeypatch, tmp_path, caplog):
+        """golden set의 source.file이 알려진 팀 파일명을 안 담고 있으면 그 문항은 건너뛴다 —
+        단 조용히가 아니라 경고로(2026-09-28: 재정제로 파일명이 바뀌면 분모가 줄어든 점수를
+        정확도 상승으로 오독할 수 있음)."""
         golden_path = tmp_path / "golden.jsonl"
         golden_path.write_text(json.dumps({
             "qid": "q1", "query": "질문", "type": "param",
@@ -242,10 +244,14 @@ class TestRunComparison:
         monkeypatch.setattr(track2, "resolve_namespace_id", AsyncMock(return_value=1))
         monkeypatch.setattr(track2.embedding_service, "embed", AsyncMock(return_value=[0.1] * 768))
 
-        result = await track2.run_comparison()
+        import logging
+        with caplog.at_level(logging.WARNING, logger=track2.__name__):
+            result = await track2.run_comparison()
 
         assert result.total_n == 0
         assert result.by_type == []
+        assert any("1문항 중 0문항만 채점 대상" in r.getMessage() and "네임스페이스 매핑 실패" in r.getMessage()
+                   for r in caplog.records)
 
 
 class TestSaveRun:

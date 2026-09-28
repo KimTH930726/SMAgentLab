@@ -31,6 +31,7 @@ docs/policy-doc-pipeline-plan.md §4 실험을 매번 일회성 스크립트로 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -40,6 +41,8 @@ from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 from agents.knowledge_rag.knowledge.retrieval import search_knowledge
 from service.policy import search as search_service
+
+logger = logging.getLogger(__name__)
 
 _GOLDEN_SET_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "golden_set" / "online_delivus_v1.jsonl"
 _TRACK_A_NAMESPACE = "TrackA_정책비교_테스트 DB"
@@ -218,10 +221,15 @@ async def _load_golden_set(golden_set_path: Path, real_ns_ids: dict[str, int]) -
         raw = [json.loads(line) for line in f if line.strip()]
 
     entries: list[dict] = []
+    # 조용히 빠지는 문항을 드러낸다(2026-09-28) — 재정제로 원본 파일명이 바뀌면 _FILE_TO_NAMESPACE
+    # 매핑이 안 맞거나 source_row가 달라져 정답 id를 못 찾고, 그 문항은 채점에서 그냥 사라진다.
+    # 분모가 줄어든 채 점수만 보면 "정확도가 올랐다"로 오독할 수 있어 사유별 건수를 경고로 남긴다.
+    dropped = {"네임스페이스 매핑 실패": 0, "정답 항목 없음": 0}
     for e in raw:
         qtype, query, src = e["type"], e["query"], e["source"]
         namespace_name = _namespace_for_file(src.get("file", ""))
         if namespace_name is None or namespace_name not in real_ns_ids:
+            dropped["네임스페이스 매핑 실패"] += 1
             continue
         real_ns_id = real_ns_ids[namespace_name]
 
@@ -234,9 +242,16 @@ async def _load_golden_set(golden_set_path: Path, real_ns_ids: dict[str, int]) -
             else:
                 gold_ids = await _resolve_items_by_condition(conn, real_ns_id, src["condition"])
         if not gold_ids:
+            dropped["정답 항목 없음"] += 1
             continue
 
         entries.append({"query": query, "type": qtype, "gold_ids": gold_ids, "namespace_name": namespace_name})
+    if any(dropped.values()):
+        logger.warning(
+            "[골든셋] %d문항 중 %d문항만 채점 대상 — 제외 사유: %s. 원본 파일명(_FILE_TO_NAMESPACE)이나 "
+            "시트/행 번호가 바뀌었는지 확인하세요(docs/tech/golden-set-procedure.md).",
+            len(raw), len(entries), dropped,
+        )
     return entries
 
 
