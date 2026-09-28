@@ -412,6 +412,55 @@ class TestBulkIngestionStagedActivation:
         assert len(self._staging_deletes(calls)) == 1
 
     @pytest.mark.asyncio
+    async def test_confluence_reregistration_replaces_old_version_atomically(self):
+        """컨플루언스 원본 식별 보존(2026-09-28) — 같은 페이지 재등록 시 옛 active 행은 일괄 전환
+        트랜잭션 안에서, 새 행 전환 직전에만 deprecated. 중복 검사는 그 옛 행을 비교에서 뺀다."""
+        conn, emb, calls = self._make_conn()
+        similar = AsyncMock(return_value=[])
+        items = [{"content": "c1", "category": "공통지식", "confluence_page_id": "p1", "confluence_version": 3},
+                 {"content": "c2", "category": "공통지식", "confluence_page_id": "p1", "confluence_version": 3}]
+        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=conn), \
+             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch("agents.knowledge_rag.knowledge.service.embedding_service", emb), \
+             patch("agents.knowledge_rag.knowledge.service.find_similar_active_knowledge", similar), \
+             patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1), \
+             patch("shared.cache.invalidate_namespace", AsyncMock(), create=True):
+            from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
+            result = await bulk_create_knowledge("test-ns", items, background=False)
+
+        assert result["status"] == "completed"
+        queries = [q for q, _ in calls["execute"]]
+        dep = next(i for i, q in enumerate(queries) if "'deprecated'" in q)
+        act = next(i for i, q in enumerate(queries) if "'active' ELSE" in q)
+        assert dep < act and calls["execute"][dep][1] == (1, ["p1"])
+        assert all(c.kwargs["replacing_confluence_pages"] == ["p1"] for c in similar.await_args_list)
+        # 원본 식별자가 행에 실제로 저장됨(rows 튜플 13·14번째 = confluence_page_id/version)
+        inserts = [rows for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q]
+        assert inserts[0][0][13] == "p1" and inserts[0][0][14] == 3
+
+    @pytest.mark.asyncio
+    async def test_confluence_old_version_kept_when_job_fails_or_cancels(self):
+        items = [{"content": "c1", "category": "공통지식", "confluence_page_id": "p1"}] * 2
+        for kwargs in ({"cancel_flags": [True]}, {"fail_on_embed_call": 1}, {"activation_result": None}):
+            conn, emb, calls = self._make_conn(**kwargs)
+            with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=conn), \
+                 patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
+                 patch("agents.knowledge_rag.knowledge.service.embedding_service", emb), \
+                 patch("agents.knowledge_rag.knowledge.service.find_similar_active_knowledge", AsyncMock(return_value=[])), \
+                 patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1):
+                from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
+                await bulk_create_knowledge("test-ns", [dict(i) for i in items], background=False)
+            assert not any("'deprecated'" in q for q, _ in calls["execute"]), kwargs
+
+    @pytest.mark.asyncio
+    async def test_non_confluence_items_replace_nothing(self):
+        conn, emb, calls = self._make_conn()
+        similar = AsyncMock(return_value=[])
+        await self._run(conn, emb, similar=similar)
+        assert not any("'deprecated'" in q for q, _ in calls["execute"])
+        assert all(c.kwargs.get("replacing_confluence_pages") is None for c in similar.await_args_list)
+
+    @pytest.mark.asyncio
     async def test_glossary_hook_runs_only_after_activation_and_records_count(self):
         """자동 용어 추출(2026-09-28) — 예전엔 라우터가 job 시작 직후 바로 추출해, job이
         실패·취소돼도 용어만 남았다. 이제 전환 성공 뒤에만 실행되고 개수는 job 행에 기록."""

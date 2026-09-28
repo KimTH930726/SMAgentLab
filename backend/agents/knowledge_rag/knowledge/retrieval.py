@@ -184,6 +184,7 @@ async def map_glossary_term(
 
 async def find_similar_active_knowledge(
     ns_id: int, embedding: list[float], *, limit: int = 3, staging_job_id: Optional[int] = None,
+    replacing_confluence_pages: Optional[list[str]] = None,
 ) -> list[dict]:
     """같은 네임스페이스의 활성(active) 지식 중 embedding과 가장 유사한 상위 N건 조회.
 
@@ -194,18 +195,31 @@ async def find_similar_active_knowledge(
     행은 job이 끝날 때까지 'staging'으로 숨겨져 있어(검색 노출 방지) 그냥 active만 보면
     같은 job 안의 앞 배치를 못 본다 — 예전엔 앞 배치가 즉시 active라 자연히 비교됐던
     동작을 그대로 유지하기 위해, 그 job의 비중복 스테이징 행까지 후보에 포함한다.
+
+    `replacing_confluence_pages`: 이 등록이 교체할 컨플루언스 페이지 id들(2026-09-28). 그
+    페이지의 기존 active 행은 곧 deprecated될 옛 버전이라 비교 대상에서 뺀다 — 빼지 않으면
+    안 바뀐 청크가 옛 버전과 거의 같아 중복 판정(승인 대기)으로 빠지고, 뒤이어 옛 버전이
+    폐기되면서 그 내용이 검색에서 통째로 사라진다.
     """
     staging_clause = ""
+    replace_clause = ""
     args: list = [ns_id, str(embedding), limit]
     if staging_job_id is not None:
         args.append(staging_job_id)
-        staging_clause = "OR (status = 'staging' AND ingestion_job_id = $4)"
+        staging_clause = f"OR (status = 'staging' AND ingestion_job_id = ${len(args)})"
+    if replacing_confluence_pages:
+        args.append(list(replacing_confluence_pages))
+        replace_clause = (
+            f"AND NOT (status = 'active' AND confluence_page_id IS NOT NULL "
+            f"AND confluence_page_id = ANY(${len(args)}::text[]))"
+        )
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""
             SELECT id, content, 1 - (embedding <=> $2::vector) AS similarity
             FROM rag_knowledge
-            WHERE namespace_id = $1 AND (status = 'active' {staging_clause}) AND embedding IS NOT NULL
+            WHERE namespace_id = $1 AND (status = 'active' {staging_clause}) {replace_clause}
+              AND embedding IS NOT NULL
             ORDER BY embedding <=> $2::vector
             LIMIT $3
             """,

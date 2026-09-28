@@ -750,6 +750,10 @@ interface ReviewChunk {
   /** 컨플루언스 벌크 등록에서만 쓰임 — 직계 상위 페이지 제목 + 페이지 내 헤딩 조상
    * (2026-09-22). 확정(bulkCreateKnowledge)까지 실려가야 검색 컨텍스트에 반영된다. */
   headingPath?: string[] | null;
+  /** 컨플루언스 원본 페이지 식별(2026-09-28) — 확정까지 실려가야 같은 페이지 재등록 시 옛 버전이
+   * 교체된다(예전엔 여기서 버려져 재등록마다 옛 버전과 새 버전이 함께 검색됐음). */
+  confluencePageId?: string | null;
+  confluenceVersion?: number | null;
 }
 
 // analyzer.py의 chunk_strategy 어휘(section/paragraph/fixed/auto) — 파일 업로드와
@@ -1865,7 +1869,10 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
     try {
       const result = await previewUrl(namespace, url.trim());
       setSourceMeta({ name: result.source_name, type: result.source_type });
-      setReviewChunks(result.chunks.map(c => ({ ...c, selected: true })));
+      setReviewChunks(result.chunks.map(c => ({
+        ...c, selected: true,
+        confluencePageId: result.confluence_page_id, confluenceVersion: result.confluence_version,
+      })));
       setShowReview(true);
     } catch (e: any) { setError(e.message || '수집 실패'); }
     finally { setPreviewing(false); }
@@ -1903,6 +1910,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         selected: true,
         category: c.category,
         headingPath: c.heading_path,
+        confluencePageId: c.confluence_page_id,
+        confluenceVersion: c.confluence_version,
       })));
       setShowTreeModal(false);
       setShowReview(true);
@@ -1934,9 +1943,14 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       // 그대로 쓴다 — 리뷰에서 안 보이는 공통 category state로 덮어쓰면 배치 전체가 하나로
       // 도로 뭉친다(2026-09-22). heading_path는 이전엔 이 확정 경로 자체에 필드가 없어서
       // v2.98 이후로도 계속 NULL로 저장되고 있던 것까지 이번에 같이 고침.
-      const items = sourceMeta?.type === 'confluence_bulk'
-        ? selected.map(c => ({ content: c.text, category: c.category || category, heading_path: c.headingPath }))
-        : selected.map(c => ({ content: c.text, category }));
+      // 컨플루언스 원본 식별자(2026-09-28)는 단일 URL/트리 일괄 둘 다 실어 보낸다 — 없으면 null
+      const items = selected.map(c => ({
+        ...(sourceMeta?.type === 'confluence_bulk'
+          ? { content: c.text, category: c.category || category, heading_path: c.headingPath }
+          : { content: c.text, category }),
+        confluence_page_id: c.confluencePageId ?? null,
+        confluence_version: c.confluenceVersion ?? null,
+      }));
       const srcName = sourceMeta?.name ?? url;
       const srcType = sourceMeta?.type ?? (isConfluence ? 'confluence' : 'web');
       const result = await bulkCreateKnowledge(namespace, items, srcName, srcType);

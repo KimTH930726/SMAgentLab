@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.114)
+# Ops-Navigator 시스템 아키텍처 (v2.115)
 
 ## 개요
 
@@ -11,6 +11,20 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.115: **컨플루언스 원본 식별 보존 + 재등록 시 옛 버전 원자적 교체.** 실 등록 흐름(미리보기 →
+  `POST /knowledge/bulk`)이 페이지 id·버전을 확정 요청에 싣지 않아 실 DB 컨플루언스 행 64건 전부
+  `confluence_page_id` NULL — `heading_path`(v2.98)에 이은 **같은 결함의 두 번째 사례**(공용 `/bulk`
+  경계에서 원본 고유 정보가 버려짐). 크롤러가 단일 URL도 버전·id 수집(`expand=version`), 두 미리보기
+  응답이 청크별로 반환, 화면(`KnowledgeTable` 확정)이 그대로 전달, `BulkKnowledgeItem`에 필드 추가.
+  같은 페이지가 다시 들어오면 일괄 전환 트랜잭션 안에서 옛 active 행 deprecated(실패·취소면 옛 버전
+  유지). 함정 처리: 안 바뀐 청크가 옛 버전과 거의 같아 중복 판정(승인 대기)으로 빠진 뒤 옛 버전이
+  폐기돼 내용이 사라지는 것을 막으려고 `find_similar_active_knowledge(replacing_confluence_pages=)`로
+  교체 대상 옛 행을 비교에서 제외. 실 서버: p1 v1 3청크 → v2 재등록(2청크 동일+1청크 변경) → 옛 3행
+  deprecated·새 3행 전부 active(승인 대기 0), 다른 페이지 무영향. 자동 동기화(현행화 Phase 2)는 여전히
+  보류 — 이번 건은 그 선행 조건(원본 추적)만.
+  덤: 골든셋 로더가 매핑 실패·정답 없음 문항을 조용히 버리던 것을 사유별 경고로(재정제로 파일명·행이
+  바뀌면 분모가 줄어든 점수를 정확도 상승으로 오독할 수 있음). 재정제 시 절차는
+  `docs/tech/golden-set-procedure.md` 신규.
 - v2.114: **정책서 재처리 경로** (data-storage-philosophy.md §9-① "다른 모든 재구조화의 선행 조건").
   원본 content_hash만 보고 스킵해서 파서·분해 프롬프트를 개선해도 같은 파일 재업로드 시 반영될 길이
   없었다. `policy_item.pipeline_version`(= `r{PIPELINE_REVISION}-{분해 프롬프트 해시}`) 기록 — 스킵은

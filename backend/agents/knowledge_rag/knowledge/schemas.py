@@ -55,6 +55,11 @@ class BulkKnowledgeItem(BaseModel):
     # 그 값을 한 번도 실어 나르지 않아 백필 스크립트로 소급 적용한 레거시 행 외엔 전부
     # NULL로 저장되고 있었다 — 이번에 함께 수정.
     heading_path: Optional[list[str]] = None
+    # 컨플루언스 원본 식별(2026-09-28) — 미리보기가 이 값을 갖고 있었지만 확정 요청 스키마에
+    # 필드가 없어 조용히 버려졌다(heading_path와 같은 결함의 두 번째 사례, 실 DB 64건 전부 NULL).
+    # 있으면 같은 페이지의 기존 active 행을 이 등록이 성공할 때 원자적으로 교체한다.
+    confluence_page_id: Optional[str] = None
+    confluence_version: Optional[int] = None
 
 
 class BulkCreateRequest(BaseModel):

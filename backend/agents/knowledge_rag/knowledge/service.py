@@ -732,6 +732,10 @@ async def _run_bulk_ingestion(
     created = 0
     pending_total = 0
     dup_threshold = get_thresholds()["duplicate_min_similarity"]
+    # 컨플루언스 재등록 교체(2026-09-28) — 이 등록에 실린 페이지의 기존 active 행은 옛 버전이다.
+    # 중복 검사에선 비교 대상에서 빼고(안 그러면 안 바뀐 청크가 승인 대기로 빠진 뒤 옛 버전 폐기로
+    # 내용이 사라짐), 일괄 전환 트랜잭션에서 deprecated로 내린다(실패·취소면 옛 버전 그대로 유지).
+    replacing_pages = sorted({str(it["confluence_page_id"]) for it in items if it.get("confluence_page_id")})
     try:
         for start in range(0, len(items), _INGEST_BATCH_SIZE):
             batch = items[start:start + _INGEST_BATCH_SIZE]
@@ -739,7 +743,9 @@ async def _run_bulk_ingestion(
             embeddings = await embedding_service.embed_batch(texts)
 
             match_results = await asyncio.gather(
-                *(find_similar_active_knowledge(ns_id, emb, staging_job_id=job_id) for emb in embeddings)
+                *(find_similar_active_knowledge(
+                    ns_id, emb, staging_job_id=job_id, replacing_confluence_pages=replacing_pages or None,
+                ) for emb in embeddings)
             )
             db_is_duplicate = [
                 bool(m) and m[0]["similarity"] >= dup_threshold for m in match_results
@@ -883,6 +889,12 @@ async def _run_bulk_ingestion(
                     RETURNING id
                 """, created, pending_total, job_id, run_follow_up)
                 if activated:
+                    if replacing_pages:
+                        # 새 행은 아직 staging이라 status='active' 조건에 안 걸린다 — 옛 버전만 내림
+                        await conn.execute("""
+                            UPDATE rag_knowledge SET status = 'deprecated'
+                            WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[]) AND status = 'active'
+                        """, ns_id, replacing_pages)
                     await conn.execute("""
                         UPDATE rag_knowledge
                         SET status = CASE status WHEN 'staging' THEN 'active' ELSE 'pending_review' END

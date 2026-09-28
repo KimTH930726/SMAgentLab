@@ -737,6 +737,9 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
         "chunk_count": len(chunks),
         "detected_strategy": detected_strategy,
         "url": body.url,
+        # 컨플루언스 단일 페이지면 원본 식별자 — 확정 시 청크마다 실어 보내 재등록 교체에 쓴다
+        "confluence_page_id": doc.metadata.get("page_id") if doc.source_type == "confluence" else None,
+        "confluence_version": doc.metadata.get("version") if doc.source_type == "confluence" else None,
     }
 
 
@@ -938,6 +941,8 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
                 "title": c.section_title,
                 "category": page_category,
                 "heading_path": _enrich_heading_path(f["doc"], c.heading_path),
+                "confluence_page_id": f["page_id"],
+                "confluence_version": f["doc"].metadata.get("version"),
             })
             idx += 1
         pages_meta.append({

@@ -144,7 +144,7 @@ async def _fetch_confluence(url: str, token: str) -> ParsedDocument:
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
             if page_id:
-                api_url = f"{base_url}/rest/api/content/{page_id}?expand=body.storage,title,space"
+                api_url = f"{base_url}/rest/api/content/{page_id}?expand=body.storage,title,space,version"
                 r = await client.get(api_url, headers=headers)
                 r.raise_for_status()
                 data = r.json()
@@ -155,7 +155,7 @@ async def _fetch_confluence(url: str, token: str) -> ParsedDocument:
                 r = await client.get(api_url, headers=headers, params={
                     "spaceKey": space_key,
                     "title": title_hint,
-                    "expand": "body.storage,title",
+                    "expand": "body.storage,title,version",
                     "limit": 1,
                 })
                 r.raise_for_status()
@@ -183,9 +183,12 @@ async def _fetch_confluence(url: str, token: str) -> ParsedDocument:
         sections=sections,
         metadata={
             "url": url,
-            "page_id": page_id,
+            # 제목 검색 경로는 URL에 page_id가 없어 응답의 id를 쓴다 — 재등록 시 같은 페이지
+            # 판별(옛 버전 교체)의 키라 둘 다 채운다(2026-09-28)
+            "page_id": page_id or page.get("id"),
             "space": space_name,
             "title": page_title,
+            "version": page.get("version", {}).get("number"),
         },
     )
     logger.info("Confluence 페이지 수집 완료: %s (%d자)", page_title, len(raw_text))

@@ -196,7 +196,10 @@ export async function vectorSearchGlossary(namespace: string, query: string, top
 
 export async function bulkCreateKnowledge(
   namespace: string,
-  items: Array<{ content: string; category?: string; heading_path?: string[] | null }>,
+  items: Array<{
+    content: string; category?: string; heading_path?: string[] | null;
+    confluence_page_id?: string | null; confluence_version?: number | null;
+  }>,
   sourceFile?: string,
   sourceType = 'manual',
 ): Promise<{ created: number; job_id: number; status: string }> {
@@ -355,6 +358,8 @@ export interface UrlPreviewResult {
   chunks: Array<{ idx: number; text: string; title: string | null }>;
   chunk_count: number;
   url: string;
+  confluence_page_id: string | null;
+  confluence_version: number | null;
 }
 
 export async function importFromUrl(
@@ -428,6 +433,8 @@ export interface ConfluenceBulkChunk {
   title: string | null;
   category: string | null;
   heading_path: string[] | null;
+  confluence_page_id: string | null;
+  confluence_version: number | null;
 }
 
 export interface ConfluenceBulkPreviewResult {
