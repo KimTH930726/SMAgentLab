@@ -849,6 +849,10 @@ async def _migrate_policy_tables(conn) -> None:
             reviewed_by         INT REFERENCES ops_user(id) ON DELETE SET NULL
         )
     """)
+    # 재처리 경로(2026-09-28, data-storage-philosophy.md §9-①) — 어떤 파서·분해 프롬프트로 만든
+    # 행인지 기록. 원본 content_hash가 같아도 이 값이 현재 파이프라인과 다르면 재업로드 시 다시
+    # 분해한다(service.pipeline_version()). 기존 행은 NULL = "어느 버전인지 모름" → 다음 업로드에 재처리.
+    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS pipeline_version VARCHAR(40)")
     # logical_id 기본값은 자기 자신의 id — INSERT 시점엔 id를 몰라 컬럼 DEFAULT로 못 넣으므로
     # 트리거로 채운다(최초 INSERT에서만, logical_id가 NULL일 때만 — 새 버전 INSERT 시 호출부가
     # 이전 row의 logical_id를 명시적으로 넘기면 트리거가 덮어쓰지 않아야 함).

@@ -73,6 +73,8 @@
 
 | 56 | `rag_ingestion_job`, `rag_knowledge` | `ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT FALSE`, `ADD COLUMN IF NOT EXISTS ingestion_job_id INT REFERENCES rag_ingestion_job(id) ON DELETE SET NULL`, `CREATE INDEX IF NOT EXISTS idx_rag_knowledge_ingestion_job` + `rag_knowledge.status`에 신규 값 `staging`/`staging_review`(스키마 변경 없음, VARCHAR) | 벌크 수집 원자적 활성화(WBS 1-2) — 두 컬럼은 원래 `init/05-ingestion-job-progress.sql`(수동 적용)에만 있어 폐쇄망 배포(전송 목록 `init/01·02`)에서 누락될 수 있었음 → 멱등 마이그레이션으로 보장. 수집 행은 job 완료 전까지 `staging`/`staging_review`로 숨겨졌다가 완료 시 한 트랜잭션으로 `active`/`pending_review` 전환. 기동 시 남은 스테이징 행은 고아 job의 부분 결과로 보고 삭제(`_cleanup_orphaned_ingestion_jobs`) (v2.108) |
 
+| 57 | `policy_item` | `ADD COLUMN IF NOT EXISTS pipeline_version VARCHAR(40)` | 재처리 경로 — 행을 만든 파서 개정·분해 프롬프트 해시. 원본이 같아도 이 값이 현재와 다르면 재업로드 시 재분해. 기존 행 NULL(버전 모름 → 다음 업로드에 재처리) (v2.114) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.

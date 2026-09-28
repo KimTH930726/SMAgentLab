@@ -24,9 +24,14 @@ async def import_policy_excel(
     file: UploadFile = File(...),
     namespace: str = Form(...),
     system_key: str = Form(default=""),
+    reprocess_all: bool = Form(default=False),
     user: dict = Depends(get_current_user),
 ):
     """정책서 엑셀 업로드 → 파싱 → LLM 분해 → RDB 적재(pending_review).
+
+    reprocess_all=true면 내용·파이프라인 버전이 같은 행도 전부 다시 분해한다(재정제 후 전체 재적재용).
+    그렇지 않아도 파서·분해 프롬프트가 바뀐 뒤 올린 파일은 바뀐 행만이 아니라 전체가 재분해된다
+    (응답의 pipeline_reprocessed).
 
     시트는 위치가 아니라 헤더 내용으로 용어집/정책 시트를 자동 판별한다. 재업로드 시 내용이
     바뀐 row만 새 버전으로 처리하고(변경 없으면 LLM 재호출 없이 스킵), 이전 버전은 삭제하지
@@ -35,7 +40,9 @@ async def import_policy_excel(
     await check_namespace_ownership(namespace, user)
     try:
         raw = await file.read()
-        result = await service.import_excel(namespace, system_key, file.filename or "unknown.xlsx", raw)
+        result = await service.import_excel(
+            namespace, system_key, file.filename or "unknown.xlsx", raw, force_reprocess=reprocess_all,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

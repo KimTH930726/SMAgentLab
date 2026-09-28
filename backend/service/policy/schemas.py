@@ -19,6 +19,7 @@ class SheetSummaryOut(BaseModel):
     glossary_added: int = 0
     glossary_duplicate_skipped: int = 0
     fallback_chunks_added: int = 0
+    pipeline_reprocessed: int = 0
     skip_reason: Optional[str] = None
 
 

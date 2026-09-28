@@ -46,6 +46,19 @@ def _coerce_param_field(v, max_len: int | None = None) -> str | None:
     return v[:max_len] if max_len else v
 
 
+# 재처리 경로(2026-09-28, data-storage-philosophy.md §9-①) — 원본 content_hash만 보고 스킵하면 파서·
+# 분해 프롬프트를 개선해도 같은 파일 재업로드 시 "변경 없음"으로 건너뛰어 개선이 기존 데이터에 반영될 길이
+# 없었다. 행마다 만든 파이프라인 버전을 기록하고, 원본이 같아도 버전이 다르면 다시 분해한다.
+# 분해 프롬프트(decompose.SYSTEM_PROMPT)는 해시로 자동 반영되고, 파서·청크 조립처럼 프롬프트 밖의
+# 출력 로직(excel_parser, _chunk_texts, _write_policy_result)을 바꿀 땐 이 번호를 올린다.
+PIPELINE_REVISION = 1
+
+
+def pipeline_version() -> str:
+    prompt_hash = hashlib.sha256(decompose.SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:10]
+    return f"r{PIPELINE_REVISION}-{prompt_hash}"
+
+
 def _content_hash(category_path: list[str], policy_name: str, raw_body: str, remark: str | None) -> str:
     payload = json.dumps(
         {"category_path": category_path, "policy_name": policy_name, "raw_body": raw_body, "remark": remark},
@@ -67,6 +80,7 @@ class SheetSummary:
     glossary_added: int = 0
     glossary_duplicate_skipped: int = 0
     fallback_chunks_added: int = 0
+    pipeline_reprocessed: int = 0  # 원본은 같지만 파이프라인 버전이 달라(또는 강제) 다시 분해한 행
     skip_reason: str | None = None
 
 
@@ -81,7 +95,7 @@ async def _find_current_version(conn, ns_id: int, source_file: str, sheet_name: 
     없으면 None — 신규로 처리."""
     return await conn.fetchrow(
         """
-        SELECT id, logical_id, version, content_hash FROM policy_item
+        SELECT id, logical_id, version, content_hash, pipeline_version FROM policy_item
         WHERE namespace_id = $1 AND source_file = $2 AND source_sheet = $3 AND source_row = $4
           AND status != 'deprecated'
         ORDER BY version DESC LIMIT 1
@@ -92,16 +106,30 @@ async def _find_current_version(conn, ns_id: int, source_file: str, sheet_name: 
 
 async def _check_version(
     conn, ns_id: int, source_file: str, sheet_name: str, row: excel_parser.ParsedPolicyRow,
+    *, force: bool = False,
 ):
     """버전 체크(§2-1) — DB만 건드리는 저렴한 단계. LLM 호출과 분리해둬야 여러 row를
     동시(concurrent)에 처리할 때 "내용 안 바뀐 row"는 LLM 비용을 아예 안 태울 수 있다.
+
+    스킵 조건 = 원본 content_hash 동일 **그리고** 파이프라인 버전 동일(그리고 force 아님).
+    파이프라인 버전이 NULL(2026-09-28 이전 행 — 어느 프롬프트로 만들었는지 모름)이면 재처리.
 
     Returns: (skip: bool, current: Optional[Record], new_hash: str)
     """
     new_hash = _content_hash(row.category_path, row.policy_name, row.raw_body, row.remark)
     current = await _find_current_version(conn, ns_id, source_file, sheet_name, row.source_row)
-    skip = current is not None and current["content_hash"] == new_hash
+    skip = (
+        not force
+        and current is not None
+        and current["content_hash"] == new_hash
+        and current.get("pipeline_version") == pipeline_version()
+    )
     return skip, current, new_hash
+
+
+def _is_pipeline_reprocess(current, new_hash: str) -> bool:
+    """원본은 그대로인데 다시 분해하는 경우(파이프라인 변경·강제) — 요약 집계용."""
+    return current is not None and current["content_hash"] == new_hash
 
 
 def _chunk_texts(row: excel_parser.ParsedPolicyRow, segments: list[decompose.Segment]) -> tuple[list[str], bool]:
@@ -150,20 +178,24 @@ async def _write_policy_result(
         INSERT INTO policy_item (
             namespace_id, system_key, category_path, policy_name, raw_body, remark,
             source_file, source_sheet, source_row, content_hash, status,
-            logical_id, version, supersedes_id, parse_status, unresolved_segments
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending_review',$11,$12,$13,$14,$15::jsonb)
+            logical_id, version, supersedes_id, parse_status, unresolved_segments, pipeline_version
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending_review',$11,$12,$13,$14,$15::jsonb,$16)
         RETURNING id, logical_id
         """,
         ns_id, system_key, row.category_path, row.policy_name, row.raw_body, row.remark,
         source_file, sheet_name, row.source_row, new_hash,
         logical_id, version, supersedes_id, parse_status,
         json.dumps(unresolved_payload, ensure_ascii=False) if unresolved_payload else None,
+        pipeline_version(),
     )
     item_id = item_row["id"]
 
     if supersedes_id is not None:
         await conn.execute("UPDATE policy_item SET status = 'deprecated' WHERE id = $1", supersedes_id)
-        summary.new_versions += 1
+        if _is_pipeline_reprocess(current, new_hash):
+            summary.pipeline_reprocessed += 1
+        else:
+            summary.new_versions += 1
     else:
         summary.created_items += 1
 
@@ -233,7 +265,11 @@ async def _ingest_glossary_row(
         summary.glossary_duplicate_skipped += 1
 
 
-async def import_excel(namespace: str, system_key: str, filename: str, file_bytes: bytes) -> ImportSummary:
+async def import_excel(
+    namespace: str, system_key: str, filename: str, file_bytes: bytes, *, force_reprocess: bool = False,
+) -> ImportSummary:
+    """force_reprocess=True면 원본·파이프라인 버전이 같아도 모든 정책 행을 다시 분해한다(재정제 후
+    같은 파일로 전체를 다시 돌리고 싶을 때). 결과는 평소처럼 새 버전 INSERT + 이전 버전 deprecated."""
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
     if ns_id is None:
@@ -257,7 +293,9 @@ async def import_excel(namespace: str, system_key: str, filename: str, file_byte
             to_process: list[tuple] = []
             async with get_conn() as conn:
                 for row in sheet.policy_rows:
-                    skip, current, new_hash = await _check_version(conn, ns_id, filename, sheet.sheet_name, row)
+                    skip, current, new_hash = await _check_version(
+                        conn, ns_id, filename, sheet.sheet_name, row, force=force_reprocess,
+                    )
                     if skip:
                         summary.unchanged_skipped += 1
                     else:

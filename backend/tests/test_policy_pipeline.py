@@ -280,7 +280,10 @@ class TestIngestPolicyRowVersioning:
     async def test_unchanged_content_skips_llm_and_insert(self, patch_db, monkeypatch):
         conn = patch_db
         same_hash = service._content_hash(["a"], "정책1", "본문", None)
-        conn.fetchrow = AsyncMock(return_value={"id": 5, "logical_id": 5, "version": 1, "content_hash": same_hash})
+        conn.fetchrow = AsyncMock(return_value={
+            "id": 5, "logical_id": 5, "version": 1, "content_hash": same_hash,
+            "pipeline_version": service.pipeline_version(),  # 같은 파이프라인으로 만든 행이어야 스킵
+        })
         decompose_mock = AsyncMock(return_value=[])
         monkeypatch.setattr(decompose, "decompose_policy_body", decompose_mock)
 
@@ -538,7 +541,8 @@ class TestImportExcelAtomicSheet:
         same = {r.source_row: service._content_hash(r.category_path, r.policy_name, r.raw_body, r.remark) for r in self.ROWS}
 
         async def fetchrow(query, *args):
-            return {"id": 5, "logical_id": 5, "version": 1, "content_hash": same[args[3]]}
+            return {"id": 5, "logical_id": 5, "version": 1, "content_hash": same[args[3]],
+                    "pipeline_version": service.pipeline_version()}
         conn.fetchrow = AsyncMock(side_effect=fetchrow)
 
         result = await service.import_excel("ns", "sys", "f.xlsx", b"")
@@ -566,3 +570,77 @@ class TestImportExcelAtomicSheet:
             await service.import_excel("ns", "sys", "f.xlsx", b"")
         assert events.count("commit") == 1 and events[-1] == "rollback"
         invalidate.assert_awaited_once_with("ns")
+
+
+class TestPipelineReprocess:
+    """재처리 경로(2026-09-28, data-storage-philosophy.md §9-①) — 예전엔 원본 content_hash만 보고
+    스킵해서, 파서·분해 프롬프트를 개선해도 같은 파일 재업로드 시 "변경 없음"으로 건너뛰었다."""
+
+    ROW = excel_parser.ParsedPolicyRow(category_path=["a"], policy_name="정책1", raw_body="본문", remark=None, source_row=2)
+
+    def _current(self, pipeline_version):
+        return {"id": 5, "logical_id": 5, "version": 1,
+                "content_hash": service._content_hash(["a"], "정책1", "본문", None),
+                "pipeline_version": pipeline_version}
+
+    async def _ingest(self, conn, monkeypatch, current, **kw):
+        conn.fetchrow = AsyncMock(side_effect=[current, {"id": 11, "logical_id": 5}])
+        decompose_mock = AsyncMock(return_value=[])
+        monkeypatch.setattr(decompose, "decompose_policy_body", decompose_mock)
+        summary = service.SheetSummary(sheet_name="시트1", kind="policy")
+        sheet = excel_parser.ParsedSheet(sheet_name="시트1", kind="policy")
+        skip, cur, h = await service._check_version(conn, 1, "file.xlsx", "시트1", self.ROW, **kw)
+        if not skip:
+            segs = await decompose.decompose_policy_body(self.ROW.policy_name, self.ROW.raw_body)
+            await service._write_policy_result(conn, 1, "sys", "file.xlsx", "시트1", self.ROW, cur, h, segs, summary)
+        return skip, summary, decompose_mock
+
+    @pytest.mark.asyncio
+    async def test_legacy_row_without_version_is_reprocessed(self, patch_db, monkeypatch):
+        """2026-09-28 이전 행(pipeline_version NULL — 어느 프롬프트로 만들었는지 모름)은 재처리."""
+        skip, summary, dec = await self._ingest(patch_db, monkeypatch, self._current(None))
+        assert skip is False
+        dec.assert_awaited_once()
+        assert summary.pipeline_reprocessed == 1 and summary.new_versions == 0
+        deprecate = next(c for c in patch_db.execute.call_args_list if "deprecated" in c.args[0])
+        assert deprecate.args[1] == 5  # 이력 보존: 옛 행은 deprecated(UPDATE 덮어쓰기 아님)
+
+    @pytest.mark.asyncio
+    async def test_prompt_change_triggers_reprocess(self, patch_db, monkeypatch):
+        old = service.pipeline_version()
+        monkeypatch.setattr(decompose, "SYSTEM_PROMPT", decompose.SYSTEM_PROMPT + " (개선된 규칙)")
+        assert service.pipeline_version() != old  # 프롬프트만 바꿔도 버전이 자동으로 바뀜
+        skip, summary, _ = await self._ingest(patch_db, monkeypatch, self._current(old))
+        assert skip is False and summary.pipeline_reprocessed == 1
+
+    @pytest.mark.asyncio
+    async def test_revision_bump_triggers_reprocess(self, patch_db, monkeypatch):
+        old = service.pipeline_version()
+        monkeypatch.setattr(service, "PIPELINE_REVISION", service.PIPELINE_REVISION + 1)
+        skip, _, _ = await self._ingest(patch_db, monkeypatch, self._current(old))
+        assert skip is False
+
+    @pytest.mark.asyncio
+    async def test_same_version_same_content_skips(self, patch_db, monkeypatch):
+        skip, summary, dec = await self._ingest(patch_db, monkeypatch, self._current(service.pipeline_version()))
+        assert skip is True
+        dec.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_force_reprocesses_even_when_current(self, patch_db, monkeypatch):
+        skip, summary, _ = await self._ingest(
+            patch_db, monkeypatch, self._current(service.pipeline_version()), force=True,
+        )
+        assert skip is False and summary.pipeline_reprocessed == 1
+
+    @pytest.mark.asyncio
+    async def test_new_row_records_pipeline_version(self, patch_db, monkeypatch):
+        patch_db.fetchrow = AsyncMock(side_effect=[None, {"id": 12, "logical_id": 12}])
+        monkeypatch.setattr(decompose, "decompose_policy_body", AsyncMock(return_value=[]))
+        summary = service.SheetSummary(sheet_name="시트1", kind="policy")
+        sheet = excel_parser.ParsedSheet(sheet_name="시트1", kind="policy")
+        await service._ingest_policy_row(patch_db, 1, "sys", "file.xlsx", sheet, self.ROW, summary)
+        insert = patch_db.fetchrow.call_args_list[-1]
+        assert "pipeline_version" in insert.args[0]
+        assert insert.args[-1] == service.pipeline_version()
+        assert summary.created_items == 1 and summary.pipeline_reprocessed == 0

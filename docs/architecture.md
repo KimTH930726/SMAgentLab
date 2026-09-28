@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.113)
+# Ops-Navigator 시스템 아키텍처 (v2.114)
 
 ## 개요
 
@@ -11,6 +11,15 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.114: **정책서 재처리 경로** (data-storage-philosophy.md §9-① "다른 모든 재구조화의 선행 조건").
+  원본 content_hash만 보고 스킵해서 파서·분해 프롬프트를 개선해도 같은 파일 재업로드 시 반영될 길이
+  없었다. `policy_item.pipeline_version`(= `r{PIPELINE_REVISION}-{분해 프롬프트 해시}`) 기록 — 스킵은
+  원본과 파이프라인 버전이 **둘 다** 같을 때만. 프롬프트를 고치면 자동으로, 파서·청크 조립 로직을
+  고치면 `PIPELINE_REVISION`을 올리면 다음 업로드에 재분해(기존 버전 관리대로 새 행 INSERT + 옛 행
+  deprecated, 이력 보존). `POST /api/policy/import`에 `reprocess_all` 강제 옵션, 응답에
+  `pipeline_reprocessed` 건수. 기존 행은 NULL = "어느 프롬프트로 만들었는지 모름" → 다음 업로드에
+  재처리(재정제 예정이라 의도된 동작). 실 서버: 재업로드 스킵 / 강제 재처리 2건 / NULL 행 재처리 2건,
+  청크 누락 0 확인.
 - v2.113: **관리자 검색 설정(임계치·top_k·가중치) 재시작 후에도 유지.** `PUT /api/llm/thresholds`·
   `PUT /api/llm/search-defaults`가 메모리 오버라이드만 바꿔 재시작·재배포마다 조용히 기본값으로
   돌아가던 문제(화면에선 저장된 것처럼 보임, v2.112 부수 발견). VOC 폴링·시맨틱 캐시 설정과 같은
