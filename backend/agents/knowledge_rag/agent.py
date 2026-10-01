@@ -44,6 +44,7 @@ async def _safe_post_save(conv_id: int, namespace: str) -> None:
 def _build_rrf_context(
     results: list[retrieval.RetrievalResult], policy_result: policy_search.PolicySearchResult,
     common_codes: Optional[list[dict]] = None, db_columns: Optional[list[dict]] = None,
+    parent_expansions: Optional[list[dict]] = None,
 ) -> str:
     """일반지식(코사인)·정책 파라미터(RDB ts_rank)·정책 서술(코사인)·구조화 참조데이터
     (공통코드/DB스키마, ts_rank)를 RRF로 합쳐 하나의 LLM 컨텍스트로 만든다(2026-09-18,
@@ -107,7 +108,14 @@ def _build_rrf_context(
         items.append((rrf_score(i), f"[DB 스키마 · 정확 매칭: {d['table_name']}.{d['column_name']}] {d.get('column_comment') or ''} ({d.get('data_type') or ''})"))
 
     items.sort(key=lambda x: x[0], reverse=True)
-    return "\n\n".join(text for _, text in items)
+    blocks = [text for _, text in items]
+    # 부모 섹션 보충(retrieval.expand_parent_sections) — 순위 경쟁에 넣지 않고 맨 뒤에, 보충임을 표시해서
+    # 붙인다. 실측에서 확장 컨텍스트가 단일 질문 4/51건에서 정답과 어긋난 답을 만들어(이웃 내용 혼입 추정),
+    # 검색된 문서를 우선 근거로 삼도록 구분한다.
+    for e in parent_expansions or []:
+        heading_str = f"\n상위 맥락: {' > '.join(e['heading_path'])}" if e.get("heading_path") else ""
+        blocks.append(f"--- 문서 #{e['id']} (같은 상위 섹션 보충 — 위 문서를 우선 근거로) ---{heading_str}\n내용:\n{e['content']}")
+    return "\n\n".join(blocks)
 
 
 class KnowledgeRagAgent(AgentBase):
@@ -250,7 +258,16 @@ class KnowledgeRagAgent(AgentBase):
                 except Exception as e:
                     logger.warning("참조데이터 검색 실패(채팅 흐름은 계속 진행): %s", e)
 
-            llm_context = _build_rrf_context(results, policy_result, common_codes, db_columns)
+            # 부모 섹션 확장 — 채택된 지식 청크의 같은 상위 섹션 이웃을 컨텍스트에 보충(실패해도 답변은 계속)
+            parent_expansions: list[dict] = []
+            try:
+                th = retrieval.get_thresholds()
+                parent_expansions = await retrieval.expand_parent_sections(
+                    [r for r in results if retrieval.is_adopted(r, th)],
+                )
+            except Exception as e:
+                logger.warning("부모 섹션 확장 실패(확장 없이 진행): %s", e)
+            llm_context = _build_rrf_context(results, policy_result, common_codes, db_columns, parent_expansions)
             has_results = len(results) > 0 or bool(policy_result.params or policy_result.narratives) or bool(common_codes or db_columns)
             had_context = bool(llm_context.strip())
 

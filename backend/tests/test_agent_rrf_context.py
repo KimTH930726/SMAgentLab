@@ -167,3 +167,70 @@ class TestBuildRrfContext:
         results = [_make_result(12852, 0.9, "본문")]
         text = agent._build_rrf_context(results, PolicySearchResult())
         assert "문서 #12852" in text
+
+
+class TestParentSectionExpansion:
+    """부모 섹션 확장(parent-child, 2026-10-01) — 검색 청크와 같은 상위 섹션의 이웃 청크를
+    컨텍스트 맨 뒤에 '보충'으로 표시해 붙인다(순위 경쟁에 넣지 않음)."""
+
+    def test_expansions_appended_after_ranked_items_with_marker(self, monkeypatch):
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        results = [_make_result(1, 0.9, "검색된 본문")]
+        exp = [{"id": 2, "content": "이웃 본문", "heading_path": ["페이지", "섹션"]}]
+        text = agent._build_rrf_context(results, PolicySearchResult(), parent_expansions=exp)
+        assert text.index("검색된 본문") < text.index("이웃 본문")
+        assert "같은 상위 섹션 보충" in text and "위 문서를 우선 근거로" in text
+        assert "상위 맥락: 페이지 > 섹션" in text and "문서 #2" in text
+
+    def test_no_expansions_unchanged(self, monkeypatch):
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        results = [_make_result(1, 0.9, "본문")]
+        base = agent._build_rrf_context(results, PolicySearchResult())
+        assert agent._build_rrf_context(results, PolicySearchResult(), parent_expansions=[]) == base
+        assert "보충" not in base
+
+
+class TestExpandParentSections:
+    """retrieval.expand_parent_sections — 적재 구조(등록 묶음·heading_path·문서 순서)로 경계를 복원."""
+
+    def _conn(self, info_rows, sibling_rows):
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        calls = []
+
+        async def fetch(q, *args):
+            calls.append((q, args))
+            return info_rows if "WHERE id = ANY" in q else sibling_rows
+        conn.fetch = AsyncMock(side_effect=fetch)
+        return conn, calls
+
+    @pytest.mark.asyncio
+    async def test_parent_key_job_scope_and_char_budget(self, monkeypatch):
+        retrieval = agent.retrieval
+        info = [{"id": 1, "ingestion_job_id": 9, "source_chunk_idx": 5, "heading_path": ["페이지", "섹션A"]}]
+        sibs = [{"id": 2, "content": "가" * 100, "heading_path": ["페이지", "섹션A"]},
+                {"id": 3, "content": "나" * 100, "heading_path": ["페이지", "섹션B"]},
+                {"id": 4, "content": "다" * 100, "heading_path": ["페이지", "섹션C"]}]
+        conn, calls = self._conn(info, sibs)
+        monkeypatch.setattr(retrieval, "get_conn", MagicMock(return_value=conn))
+        out = await retrieval.expand_parent_sections([_make_result(1, 0.9)], char_budget=250)
+        assert [o["id"] for o in out] == [2, 3]  # 문서 순서상 가까운 순, 250자 상한에서 멈춤
+        q, args = calls[1]
+        assert "ingestion_job_id = $1" in q and "ORDER BY abs(source_chunk_idx - $5)" in q
+        assert args[0] == 9 and args[1] == 1 and args[2] == ["페이지"] and args[4] == 5  # 직계 상위 = 페이지
+
+    @pytest.mark.asyncio
+    async def test_no_structure_no_expansion(self, monkeypatch):
+        """등록 묶음이나 heading_path가 없으면 추정으로 확장하지 않는다."""
+        retrieval = agent.retrieval
+        info = [{"id": 1, "ingestion_job_id": None, "source_chunk_idx": None, "heading_path": ["페이지"]},
+                {"id": 2, "ingestion_job_id": 9, "source_chunk_idx": 0, "heading_path": None}]
+        conn, calls = self._conn(info, [{"id": 5, "content": "x", "heading_path": []}])
+        monkeypatch.setattr(retrieval, "get_conn", MagicMock(return_value=conn))
+        out = await retrieval.expand_parent_sections([_make_result(1, 0.9), _make_result(2, 0.9)])
+        assert out == [] and len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_hits(self):
+        assert await agent.retrieval.expand_parent_sections([]) == []

@@ -228,6 +228,51 @@ async def find_similar_active_knowledge(
     return [{"id": r["id"], "content": r["content"], "similarity": float(r["similarity"])} for r in rows]
 
 
+# ── 부모 섹션 확장 (parent-child, 2026-10-01) ─────────────────────────────────
+# 검색은 작은 청크로 정확히 하고, LLM에는 그 청크가 속한 상위 섹션의 이웃 청크까지 넘긴다(small-to-big).
+# 실측(scripts/eval_confluence_routing.py 등, 컨플루언스 51+21문항, 로컬 LLM 핵심항목 판정): 여러 섹션을
+# 봐야 하는 통합형 질문의 핵심항목 재현율 76%→92%, 단일 질문 78%→86%, 응답시간 차이 없음(4.6s→4.3s),
+# 조건부 라우팅은 단일 질문에서도 82%가 켜져 구분력이 없어 항상 켠다. 근사(같은 상위 문자열 + id 근접)가
+# 아니라 적재 때 남은 구조로 경계를 복원한다 — 같은 등록 묶음(ingestion_job_id) 안에서 직계 상위
+# (heading_path[:-1], 1단계면 페이지)가 같은 청크를 문서 순서(source_chunk_idx)상 가까운 것부터.
+PARENT_EXPANSION_CHAR_BUDGET = 6000  # 검색 청크 하나당 덧붙일 최대 글자 수
+
+
+async def expand_parent_sections(
+    hits: list["RetrievalResult"], *, char_budget: int = PARENT_EXPANSION_CHAR_BUDGET,
+) -> list[dict]:
+    """채택된 검색 결과의 부모 섹션 이웃 청크(검색 결과 자신과 중복 제외). 구조 정보(등록 묶음·
+    heading_path)가 없는 청크는 확장하지 않는다 — 추정으로 경계를 만들지 않는다."""
+    if not hits:
+        return []
+    async with get_conn() as conn:
+        info = {r["id"]: r for r in await conn.fetch(
+            "SELECT id, ingestion_job_id, source_chunk_idx, heading_path FROM rag_knowledge WHERE id = ANY($1::int[])",
+            [h.id for h in hits])}
+        seen = {h.id for h in hits}
+        out: list[dict] = []
+        for h in hits:
+            m = info.get(h.id)
+            if not m or m["ingestion_job_id"] is None or not m["heading_path"]:
+                continue
+            path = list(m["heading_path"])
+            parent = path[:-1] if len(path) > 1 else path
+            rows = await conn.fetch("""
+                SELECT id, content, heading_path FROM rag_knowledge
+                WHERE ingestion_job_id = $1 AND status = 'active'
+                  AND heading_path[1:$2] = $3::text[] AND id <> ALL($4::int[])
+                ORDER BY abs(source_chunk_idx - $5), source_chunk_idx
+            """, m["ingestion_job_id"], len(parent), parent, list(seen), m["source_chunk_idx"] or 0)
+            budget = char_budget
+            for r in rows:
+                if len(r["content"]) > budget:
+                    break
+                budget -= len(r["content"])
+                seen.add(r["id"])
+                out.append({"id": r["id"], "content": r["content"], "heading_path": list(r["heading_path"] or [])})
+    return out
+
+
 _VECTOR_CANDIDATE_LIMIT = 300  # top_k/reranker_candidates(기본 20)보다 넉넉한 후보 풀 —
 # 벡터 CTE를 ORDER BY + LIMIT로 유계화해 정렬 비용을 줄인다(테이블이 커지면 HNSW
 # 인덱스도 이 형태에서만 자동으로 쓰이기 시작함).
