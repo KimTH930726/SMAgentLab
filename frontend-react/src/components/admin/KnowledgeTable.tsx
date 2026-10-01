@@ -765,7 +765,7 @@ const STRATEGY_OPTIONS: { value: string; label: string; desc: string }[] = [
   { value: 'fixed', label: '고정 길이', desc: '구조가 불규칙하거나 아주 긴 텍스트를 균등 분할' },
 ];
 
-function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, category, categoryNames, onCategoryChange, currentStrategy, onRestrategize, perChunkCategory }: {
+function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, category, categoryNames, onCategoryChange, currentStrategy, onRestrategize, perChunkCategory, unstructuredPages }: {
   isOpen: boolean;
   onClose: () => void;
   chunks: ReviewChunk[];
@@ -780,6 +780,9 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   /** 컨플루언스 벌크 등록 전용(2026-09-22) — 페이지별로 이미 자동 배정된 업무구분이 있어
    * 공통 드롭다운 하나를 강제하지 않는다. 각 청크에 배정된 값을 뱃지로 보여주기만 한다. */
   perChunkCategory?: boolean;
+  /** 헤딩 없이 작성된 페이지 제목(2026-10-01) — 섹션 경계·부모 섹션 확장이 원본 헤딩에 의존해서
+   * 등록 전에 알린다(정적 파싱이라 원본을 고치는 게 근본 해결). */
+  unstructuredPages?: string[];
 }) {
   const [rows, setRows] = useState<ReviewChunk[]>([]);
   const [expandedIdx, setExpandedIdx] = useState<Set<number>>(new Set());
@@ -817,6 +820,14 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`청크 검토 — ${sourceName}`} maxWidth="max-w-3xl">
       <div className="space-y-3">
+        {unstructuredPages && unstructuredPages.length > 0 && (
+          <div
+            className="rounded-lg border px-3 py-2 text-xs bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/30 dark:border-amber-700/40 dark:text-amber-300"
+            title={`헤딩(제목 스타일) 없이 작성된 페이지라 섹션이 나뉘지 않습니다. 검색 정확도와 문맥 확장이 떨어질 수 있으니, 가능하면 원본에서 섹션 제목을 헤딩으로 지정해 주세요.\n\n${unstructuredPages.join('\n')}`}
+          >
+            헤딩 없는 페이지 {unstructuredPages.length}개 — 섹션 구분 안 됨
+          </div>
+        )}
         {perChunkCategory ? (
           <div className="rounded-lg bg-slate-900/60 border border-slate-700 px-3 py-2 text-xs text-slate-400">
             업무구분은 페이지별로 자동 배정됩니다(각 청크 옆 뱃지 참고) — 상위 페이지 제목이나
@@ -1821,6 +1832,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [sourceMeta, setSourceMeta] = useState<{ name: string; type: string } | null>(null);
+  const [unstructuredPages, setUnstructuredPages] = useState<string[]>([]);
   const [showReview, setShowReview] = useState(false);
   const [loading, setLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -1869,6 +1881,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
     try {
       const result = await previewUrl(namespace, url.trim());
       setSourceMeta({ name: result.source_name, type: result.source_type });
+      setUnstructuredPages(result.structure && !result.structure.structured ? [result.source_name] : []);
       setReviewChunks(result.chunks.map(c => ({
         ...c, selected: true,
         confluencePageId: result.confluence_page_id, confluenceVersion: result.confluence_version,
@@ -1903,6 +1916,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         name: `Confluence ${pages.length}개 페이지`,
         type: 'confluence_bulk',
       });
+      setUnstructuredPages(result.pages.filter(p => !p.structured).map(p => p.title));
       setReviewChunks(result.chunks.map(c => ({
         idx: c.idx,
         text: c.text,
@@ -2058,6 +2072,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         sourceName={sourceMeta?.name ?? url}
         category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
         perChunkCategory={sourceMeta?.type === 'confluence_bulk'}
+        unstructuredPages={unstructuredPages}
       />
 
       {/* Confluence 하위 페이지 트리 선택 모달 */}

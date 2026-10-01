@@ -360,6 +360,7 @@ export interface UrlPreviewResult {
   url: string;
   confluence_page_id: string | null;
   confluence_version: number | null;
+  structure: { heading_sections: number; structured: boolean };
 }
 
 export async function importFromUrl(
@@ -440,7 +441,11 @@ export interface ConfluenceBulkChunk {
 export interface ConfluenceBulkPreviewResult {
   chunks: ConfluenceBulkChunk[];
   chunk_count: number;
-  pages: Array<{ page_id: string; title: string; chunk_start: number; chunk_count: number; category: string | null }>;
+  pages: Array<{
+    page_id: string; title: string; chunk_start: number; chunk_count: number; category: string | null;
+    /** 헤딩(h1~h4)으로 나뉜 섹션 수 — 2개 미만이면 구조 없음(섹션 경계·부모 확장이 약해짐) */
+    heading_sections: number; structured: boolean;
+  }>;
   failed_pages: Array<{ page_id: string; title: string; error: string }>;
 }
 

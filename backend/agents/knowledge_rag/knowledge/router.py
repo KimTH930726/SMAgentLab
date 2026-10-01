@@ -740,6 +740,7 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
         # 컨플루언스 단일 페이지면 원본 식별자 — 확정 시 청크마다 실어 보내 재등록 교체에 쓴다
         "confluence_page_id": doc.metadata.get("page_id") if doc.source_type == "confluence" else None,
         "confluence_version": doc.metadata.get("version") if doc.source_type == "confluence" else None,
+        "structure": _structure_summary(doc),
     }
 
 
@@ -856,6 +857,14 @@ async def _resolve_confluence_page_category(
     return _UNSORTED_CATEGORY
 
 
+def _structure_summary(doc) -> dict:
+    """페이지 구조 품질(2026-10-01) — 헤딩(h1~h4)으로 나뉜 섹션 수. 섹션 경계와 부모 섹션 확장(v2.116)은
+    전부 원본 헤딩에 의존하므로(정적 파싱, LLM 미사용), 헤딩 없이 굵은 글씨·번호로만 구분한 페이지는
+    등록 시점에 드러내 작성자가 고치거나 감안하게 한다. 섹션이 2개 이상이어야 구조화된 것으로 본다."""
+    n = sum(1 for s in (doc.sections or []) if (s.get("title") or "").strip())
+    return {"heading_sections": n, "structured": n >= 2}
+
+
 def _enrich_heading_path(doc, in_page_heading_path: Optional[list[str]]) -> list[str]:
     """페이지 조상(직계 상위 페이지 제목)을 청크의 페이지 내 헤딩 조상 앞에 붙인다
     (2026-09-22, `docs/tech/knowledge-category-automation.md` §8). `heading_path`(v2.98)는
@@ -951,6 +960,7 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
             "chunk_start": page_start,
             "chunk_count": idx - page_start,
             "category": page_category,
+            **_structure_summary(f["doc"]),
         })
 
     return {

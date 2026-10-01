@@ -257,6 +257,9 @@ async def expand_parent_sections(
                 continue
             path = list(m["heading_path"])
             parent = path[:-1] if len(path) > 1 else path
+            # 정렬은 문서 순서상 가까운 순만 쓴다. "같은 섹션 먼저 + 다른 섹션은 '참고용' 표시"를 실측했으나
+            # (2026-10-01) 단일 질문 모순 3→3으로 줄지 않고 통합형 핵심항목 재현율 90%→86%로 오히려 떨어져
+            # 채택하지 않음 — 통합형 질문은 원래 다른 섹션 내용이 필요해서, 그걸 '참고용'으로 낮추면 손해.
             rows = await conn.fetch("""
                 SELECT id, content, heading_path FROM rag_knowledge
                 WHERE ingestion_job_id = $1 AND status = 'active'
