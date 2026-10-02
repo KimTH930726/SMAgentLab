@@ -1232,6 +1232,57 @@ async def _migrate_policy_risk_review(conn) -> None:
     """)
 
 
+async def _migrate_review_flags_to_ledger(conn) -> None:
+    """옛 리뷰 신호(rag_knowledge_review_flag) → 개선 원장(ops_improvement_item) 이관 (2026-10-02, #60).
+
+    같은 "답변 틀림" 한 번이 리뷰 신호(근거 전부)와 정정 검토(AI가 고른 근거)로 두 탭에 따로 쌓이던 중복을 없애고 검토를
+    원장 하나로 합친다. 미해결 신호만 옮기고 옮긴 뒤 resolved로 표시해 다시 돌려도 중복되지 않는다(멱등). 테이블은
+    이력 보존용으로 남기고 더는 쓰지 않는다.
+    - 답변 틀림 신호: 같은 답변(message_id)의 신호들 → 대상 미지정 1건(kind='answer_signal'), 근거 전부를 후보로
+    - 그 밖(평가 게이트 "이상해요" 등): 지식별 1건(kind='search_noise', 대상 = 그 지식)
+    """
+    async with conn.transaction():
+        await conn.execute("""
+            INSERT INTO ops_improvement_item
+                (kind, source, namespace_id, message_id, target_type, original, candidates, created_at)
+            SELECT 'answer_signal', 'review_flag_migrated', f.namespace_id, f.message_id, 'auto',
+                   jsonb_build_object(
+                       'question', (SELECT u.content FROM ops_message u WHERE u.conversation_id = m.conversation_id
+                                    AND u.role = 'user' AND u.id < m.id ORDER BY u.id DESC LIMIT 1),
+                       'answer', m.content),
+                   jsonb_agg(jsonb_build_object(
+                       'key', 'k-' || f.knowledge_id, 'target_type', 'knowledge', 'target_id', f.knowledge_id,
+                       'target_sub_id', NULL, 'label', '문서 #' || f.knowledge_id, 'preview', left(k.content, 200))
+                       ORDER BY f.knowledge_id),
+                   MIN(f.flagged_at)
+            FROM rag_knowledge_review_flag f
+            JOIN rag_knowledge k ON k.id = f.knowledge_id
+            LEFT JOIN ops_message m ON m.id = f.message_id  -- 대화가 지워졌어도 신호는 살림(질문·답변만 비게 됨)
+            WHERE f.resolved = FALSE AND f.reason = 'negative_feedback' AND f.namespace_id IS NOT NULL
+              AND f.message_id IS NOT NULL
+            GROUP BY f.namespace_id, f.message_id, m.id, m.conversation_id, m.content
+        """)
+        await conn.execute("""
+            INSERT INTO ops_improvement_item
+                (kind, source, namespace_id, target_type, target_id, user_input, original, created_at)
+            SELECT DISTINCT ON (f.knowledge_id)
+                   'search_noise', 'review_flag_migrated', f.namespace_id, 'knowledge', f.knowledge_id,
+                   '평가 게이트에서 ''이상해요''로 표시(리뷰 신호에서 이관)',
+                   jsonb_build_object('content', k.content, 'category', k.category,
+                                      'heading_path', to_jsonb(COALESCE(k.heading_path, ARRAY[]::text[]))),
+                   f.flagged_at
+            FROM rag_knowledge_review_flag f JOIN rag_knowledge k ON k.id = f.knowledge_id
+            WHERE f.resolved = FALSE AND f.namespace_id IS NOT NULL
+              AND (f.reason <> 'negative_feedback' OR f.message_id IS NULL)
+              AND NOT EXISTS (SELECT 1 FROM ops_improvement_item i WHERE i.kind = 'search_noise'
+                              AND i.target_id = f.knowledge_id AND i.status = 'pending')
+            ORDER BY f.knowledge_id, f.flagged_at
+        """)
+        moved = await conn.execute("UPDATE rag_knowledge_review_flag SET resolved = TRUE WHERE resolved = FALSE")
+        if moved and not moved.endswith(" 0"):
+            logger.info("[migrate #60] 리뷰 신호 → 개선 원장 이관: %s", moved)
+
+
 async def _migrate_improvement_ledger(conn) -> None:
     """개선 원장 `ops_improvement_item` (2026-10-01, 근거 정정 흐름).
 
@@ -1406,6 +1457,7 @@ async def _run_migrations() -> None:
         await _migrate_drop_dead_schema_2026_09_22(conn)
         await _migrate_improvement_ledger(conn)
         await _migrate_policy_risk_review(conn)
+        await _migrate_review_flags_to_ledger(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

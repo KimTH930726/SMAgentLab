@@ -35,7 +35,7 @@ import type { DebugSearchResult } from '../../types';
  * 1위로 튀는 실제 사례를 발견 — 카테고리를 "공통코드"로 재태깅해 키워드 전용 라우팅으로
  * 옮겨 해결했지만, 같은 클래스 문제(보일러플레이트 문서가 여러 무관한 질문에 반복
  * 노출)가 또 나올 수 있다는 지적으로 카드에 "이상해요" 플래그를 추가 — 기존
- * rag_knowledge_review_flag 큐(나빠요 피드백과 동일한 곳, 지식베이스 탭에서 처리)에
+ * 정정 검토(개선 원장, 지식 베이스 > 정정 검토 탭 — 2026-10-02 리뷰 신호를 합침)에
  * reason='search_noise'로 올린다. 정책 결과(params/narratives)는 rag_knowledge가 아니라
  * 별도 테이블이라 이 큐에 못 올림 — 플래그는 일반지식 카드에만 노출.
  *
@@ -371,7 +371,7 @@ export function UnifiedAdhocSearch() {
     if (!selectedNs || hit.knowledgeId == null || flaggedIds.has(hit.knowledgeId)) return;
     setFlaggingId(hit.knowledgeId);
     try {
-      await flagKnowledgeForReview(hit.knowledgeId, selectedNs, 'search_noise');
+      await flagKnowledgeForReview(hit.knowledgeId, selectedNs, question.trim() || undefined);
       setFlaggedIds((prev) => new Set(prev).add(hit.knowledgeId!));
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));

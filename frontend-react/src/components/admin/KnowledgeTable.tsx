@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, Check, Search, Flag } from 'lucide-react';
+import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, Check, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -23,8 +23,6 @@ import {
   cancelIngestionJob,
   getDuplicateMatches,
   resolveDuplicate,
-  getReviewFlags,
-  resolveReviewFlag,
   getKeywordOnlyCategories,
   type IngestionJob,
   type IngestionJobStatus,
@@ -41,7 +39,7 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
-import type { KnowledgeItem, DuplicateMatch, ReviewFlag } from '../../types';
+import type { KnowledgeItem, DuplicateMatch } from '../../types';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
 
@@ -161,13 +159,15 @@ export function KnowledgeTable() {
   const qc = useQueryClient();
   const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces } = useNamespaceAccess();
 
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'corrections' | 'flags'>('list');
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'corrections'>('list');
   // 정정 검토는 관리자 승인 전용(API도 admin) — 대기 건수 배지로 방치 방지
+  // 정정 검토(옛 리뷰 신호 포함, 2026-10-02) — 그 파트 담당자 + 관리자가 처리. 대기 건수 배지로 방치 방지
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const { data: correctionCount } = useQuery({
-    queryKey: ['corrections-pending-count'],
-    queryFn: getCorrectionPendingCount,
-    enabled: isAdmin,
+    // 관리자는 전체(탭 안 "다른 파트 대기" 안내와 사이드바 배지가 같은 숫자), 파트 담당자는 자기 파트
+    queryKey: ['corrections-pending-count', isAdmin ? '*' : selectedNs],
+    queryFn: () => getCorrectionPendingCount(isAdmin ? undefined : selectedNs),
+    enabled: !!selectedNs && canModifyNs,
     staleTime: 30_000,
   });
 
@@ -222,14 +222,6 @@ export function KnowledgeTable() {
     refetchOnMount: 'always',
   });
 
-  // 나빠요 피드백으로 리뷰 후보에 오른 지식 — feedback→역추적 레버
-  const { data: reviewFlags = [] } = useQuery({
-    queryKey: ['knowledge', selectedNs, 'review-flags'],
-    queryFn: () => getReviewFlags(selectedNs),
-    enabled: !!selectedNs,
-    staleTime: 10_000,
-    refetchOnMount: 'always',
-  });
 
   const updateMutation = useMutation({
     mutationFn: (id: number) =>
@@ -400,7 +392,7 @@ export function KnowledgeTable() {
             <span className="ml-1 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-400 px-1.5 py-0.5 rounded-full">{pendingItems.length}</span>
           )}
         </button>
-        {isAdmin && (
+        {canModifyNs && (
           <button
             onClick={() => setSubTab('corrections')}
             className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
@@ -408,7 +400,7 @@ export function KnowledgeTable() {
                 ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
-            title="사용자가 채팅에서 신고한 정정 의견 — 승인해야만 검색에 반영됨"
+            title="채팅 '답변 틀림'·'이 근거 틀림'과 평가 게이트 '이상해요'가 모이는 곳 — 승인해야만 검색에 반영됨"
           >
             <PenLine className="w-4 h-4" />
             정정 검토
@@ -417,21 +409,6 @@ export function KnowledgeTable() {
             )}
           </button>
         )}
-        <button
-          onClick={() => setSubTab('flags')}
-          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
-            subTab === 'flags'
-              ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-          title="'답변 틀림' 신호가 들어온 답변의 근거 지식 — 원인일 수 있어 검토 후보로 남은 항목"
-        >
-          <Flag className="w-4 h-4" />
-          리뷰 신호
-          {reviewFlags.length > 0 && (
-            <span className="ml-1 text-[10px] bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-400 px-1.5 py-0.5 rounded-full">{reviewFlags.length}</span>
-          )}
-        </button>
       </div>
 
       {/* ── 서브탭 1: 조회 ── */}
@@ -629,26 +606,8 @@ export function KnowledgeTable() {
         </div>
       )}
 
-      {subTab === 'corrections' && isAdmin && (
+      {subTab === 'corrections' && canModifyNs && (
         <CorrectionReviewTab namespace={selectedNs} pendingByNamespace={correctionCount?.by_namespace ?? {}} onSelectNamespace={setSelectedNs} />
-      )}
-
-      {subTab === 'flags' && (
-        <div className="space-y-3">
-          <TabGuide
-            what="답변이 틀렸다는 신호가 들어온 답변의 근거 지식 — 원인일 수 있는 후보"
-            when="채팅에서 '답변 틀림'을 누르거나, 평가 게이트에서 '이상해요'로 표시할 때"
-            todo="내용을 확인해 틀렸으면 '수정', 문제 없으면 '확인 완료'로 목록에서 빼기"
-            detail="자동으로 가중치를 깎지 않습니다 — 그 답변의 근거였다는 것뿐, 지식 자체가 틀렸다는 뜻은 아닙니다. 사용자가 맞는 내용까지 알려준 신고는 '정정 검토' 탭으로 갑니다."
-          />
-        <ReviewFlagsTab
-          flags={reviewFlags}
-          items={items}
-          canModify={canModifyNs}
-          onEdit={startEdit}
-          onResolved={onReviewResolved}
-        />
-        </div>
       )}
 
       {/* Edit Modal */}
@@ -1447,77 +1406,6 @@ function ReviewTab({ items, canModify, onResolved }: {
           </div>
         )}
       </Modal>
-    </div>
-  );
-}
-
-
-// ── 리뷰 신호 (나빠요 피드백 → 근거 지식 역추적) ─────────────────────────────
-
-function ReviewFlagsTab({ flags, items, canModify, onEdit, onResolved }: {
-  flags: ReviewFlag[];
-  items: KnowledgeItem[];
-  canModify: boolean;
-  onEdit: (item: KnowledgeItem) => void;
-  onResolved: () => void;
-}) {
-  const [resolvingId, setResolvingId] = useState<number | null>(null);
-  const [error, setError] = useState('');
-
-  const resolveMutation = useMutation({
-    mutationFn: (flagId: number) => {
-      setResolvingId(flagId);
-      return resolveReviewFlag(flagId);
-    },
-    onSuccess: () => { setError(''); setResolvingId(null); onResolved(); },
-    onError: (e: any) => { setError(e.message || '처리에 실패했습니다.'); setResolvingId(null); },
-  });
-
-  if (flags.length === 0) {
-    return (
-      <div className="text-center py-16 text-slate-500">
-        <CheckCircle className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-        리뷰 신호가 없습니다.
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
-      <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
-        {flags.map((flag) => {
-          const item = items.find((i) => i.id === flag.knowledge_id);
-          return (
-            <div key={flag.flag_id} className="px-4 py-3 flex items-center gap-3">
-              <Badge color="rose">{flag.reason === 'search_noise' ? '검색 노이즈' : '답변 틀림 근거'}</Badge>
-              {flag.status !== 'active' && <Badge color="slate">{flag.status}</Badge>}
-              {flag.category && <Badge color="cyan">{flag.category}</Badge>}
-              <span className="text-sm text-slate-300 truncate flex-1">{flag.content}</span>
-              <span className="text-[11px] text-slate-600 flex-shrink-0">
-                {new Date(flag.flagged_at).toLocaleDateString('ko-KR')}
-              </span>
-              {canModify && (
-                <Button
-                  variant="ghost" size="sm"
-                  disabled={!item}
-                  title={item ? undefined : '원본 지식을 찾을 수 없습니다(삭제됨).'}
-                  onClick={() => item && onEdit(item)}
-                >
-                  <PenLine className="w-3.5 h-3.5" />수정
-                </Button>
-              )}
-              <Button
-                variant="ghost" size="sm"
-                loading={resolveMutation.isPending && resolvingId === flag.flag_id}
-                onClick={() => resolveMutation.mutate(flag.flag_id)}
-              >
-                확인 완료
-              </Button>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

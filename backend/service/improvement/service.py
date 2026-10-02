@@ -6,6 +6,7 @@ AI 수정안은 **이 원장에만** 저장되고, 지식/정책 테이블은 �
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -23,7 +24,12 @@ KIND_BY_TARGET = {
     "knowledge": "correction", "policy_param": "correction", "policy_narrative": "correction",
     "missing": "missing_knowledge",
     "answer": "answer_quality",  # 근거는 맞는데 답변이 잘못 읽음 — 지식은 안 건드리고 답변 품질 신호로만
+    "auto": "answer_signal",     # "답변 틀림"만 누르고 의견은 아직 없음 — 대상 미지정(담당자가 정하거나 한 줄이 오면 채움)
 }
+# 옛 리뷰 신호(rag_knowledge_review_flag)를 이 원장으로 합침(2026-10-02) — 같은 "답변 틀림" 한 번이 리뷰 신호(근거 전부)와
+# 정정 검토(AI가 고른 근거)로 두 번 쌓이던 중복을 없앤다. 평가 게이트 "이상해요"도 여기로(kind='search_noise').
+SOURCE_SIGNAL = "chat_answer_wrong"
+SOURCE_EVAL_GATE = "eval_gate"
 # 진입점 구분 — AI 판정이 얼마나 맞았는지(담당자가 대상을 바꾼 비율)를 재려면 직접 지정과 나눠 둬야 한다
 SOURCE_DIRECT = "chat_evidence_card"
 SOURCE_AUTO = "chat_answer_auto"
@@ -185,6 +191,27 @@ async def _identify(candidates: list[dict], context: dict, user_input: str) -> t
     return "answer", None, None, context, None, meta
 
 
+async def _write_item(conn, values: tuple, signal_id: Optional[int]) -> int:
+    """신고 저장 — 신호 건이 있으면 그 건을 채우고, 없으면 새로 만든다. savepoint 안에서 실행해 중복(유니크 위반)이
+    나도 바깥 트랜잭션은 이어갈 수 있게 한다."""
+    async with conn.transaction():
+        if signal_id is not None:
+            return await conn.fetchval("""
+                UPDATE ops_improvement_item
+                SET kind = $1, source = $2, namespace_id = $3, message_id = $4, reporter_user_id = $5,
+                    target_type = $6, target_id = $7, target_sub_id = $8, user_input = $9,
+                    original = $10::jsonb, proposed = $11::jsonb, candidates = $12::jsonb, ai_verdict = $13::jsonb
+                WHERE id = $14 RETURNING id
+            """, *values, signal_id)
+        return await conn.fetchval("""
+            INSERT INTO ops_improvement_item
+                (kind, source, namespace_id, message_id, reporter_user_id, target_type, target_id,
+                 target_sub_id, user_input, original, proposed, candidates, ai_verdict)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb)
+            RETURNING id
+        """, *values)
+
+
 async def create_item(namespace: str, user: dict, *, target_type: str, target_id: Optional[int],
                       target_sub_id: Optional[int], message_id: Optional[int], user_input: str) -> dict:
     """신고 접수. 직접 지정(근거 카드)이면 원장 저장 → AI 초안. 자동(auto, "답변 틀림")이면 판정+초안을 한 번에
@@ -218,22 +245,32 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
         target_type, target_id, target_sub_id, original, proposed, verdict = await _identify(candidates, context, user_input)
     stored_candidates = [{k: c[k] for k in ("key", "target_type", "target_id", "target_sub_id", "label")}
                          | {"preview": _preview(c["target_type"], c["original"])} for c in candidates]
+    values = (KIND_BY_TARGET[target_type], SOURCE_AUTO if auto else SOURCE_DIRECT, ns_id, message_id,
+              user.get("id"), target_type, target_id, target_sub_id, user_input,
+              json.dumps(original, ensure_ascii=False),
+              json.dumps(proposed, ensure_ascii=False) if proposed is not None else None,
+              json.dumps(stored_candidates, ensure_ascii=False),
+              json.dumps(verdict, ensure_ascii=False) if verdict is not None else None)
+    conflict = False
     async with get_conn() as conn:
-        try:
-            item_id = await conn.fetchval("""
-                INSERT INTO ops_improvement_item
-                    (kind, source, namespace_id, message_id, reporter_user_id, target_type, target_id,
-                     target_sub_id, user_input, original, proposed, candidates, ai_verdict)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb)
-                RETURNING id
-            """, KIND_BY_TARGET[target_type], SOURCE_AUTO if auto else SOURCE_DIRECT, ns_id, message_id,
-                user.get("id"), target_type, target_id, target_sub_id, user_input,
-                json.dumps(original, ensure_ascii=False),
-                json.dumps(proposed, ensure_ascii=False) if proposed is not None else None,
-                json.dumps(stored_candidates, ensure_ascii=False),
-                json.dumps(verdict, ensure_ascii=False) if verdict is not None else None)
-        except asyncpg.UniqueViolationError:
-            raise ConflictError("이 근거에 대해 이미 검토 중인 정정 신고가 있습니다.")
+        async with conn.transaction():
+            # "답변 틀림"을 누른 순간 같은 답변으로 신호 건이 먼저 생겨 있다(record_answer_signal) —
+            # 한 줄이 들어오면 새로 만들지 않고 그 건을 채운다(신고 1번 = 검토 1건).
+            signal_id = None
+            if message_id is not None:
+                signal_id = await conn.fetchval(
+                    "SELECT id FROM ops_improvement_item WHERE message_id = $1 AND reporter_user_id = $2 "
+                    "AND kind = 'answer_signal' AND status = 'pending' ORDER BY id DESC LIMIT 1 FOR UPDATE",
+                    message_id, user.get("id"))
+            try:
+                item_id = await _write_item(conn, values, signal_id)
+            except asyncpg.UniqueViolationError:
+                # 같은 근거로 이미 대기 중인 신고가 있다 — 방금 생긴 신호 건은 그 신고와 중복이라 지운다(데이터 손실 없음)
+                conflict = True
+                if signal_id is not None:
+                    await conn.execute("DELETE FROM ops_improvement_item WHERE id = $1", signal_id)
+    if conflict:  # 커밋한 뒤에 알린다(트랜잭션 안에서 raise하면 중복 신호 삭제까지 되돌려짐)
+        raise ConflictError("이 근거에 대해 이미 검토 중인 정정 신고가 있습니다.")
 
     if proposed is None and target_type != "answer":
         proposed = await draft_mod.draft_correction(target_type, original, user_input)
@@ -243,6 +280,111 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
                                    json.dumps(proposed, ensure_ascii=False), item_id)
     return {"id": item_id, "status": "pending", "kind": KIND_BY_TARGET[target_type], "target_type": target_type,
             "ai_verdict": verdict, "original": original, "proposed": proposed}
+
+
+async def record_answer_signal(ns_id: int, message_id: int, reporter_id: Optional[int]) -> Optional[int]:
+    """"답변 틀림"을 누른 순간 원장에 1건 — 한 줄 의견이 이어서 오면 create_item이 이 건을 채운다. 같은 사람의 같은
+    답변에 대기 건이 이미 있으면 그대로 둔다(여러 번 눌러도 1건). best-effort: 실패해도 피드백 자체는 막지 않는다."""
+    try:
+        async with get_conn() as conn:
+            existing = await conn.fetchval(
+                "SELECT id FROM ops_improvement_item WHERE message_id = $1 AND reporter_user_id IS NOT DISTINCT FROM $2 "
+                "AND status = 'pending'", message_id, reporter_id)
+            if existing:
+                return existing
+            candidates = await _load_candidates(conn, ns_id, message_id)
+            context = await _load_original(conn, ns_id, "missing", None, None, message_id)
+            stored = [{k: c[k] for k in ("key", "target_type", "target_id", "target_sub_id", "label")}
+                      | {"preview": _preview(c["target_type"], c["original"])} for c in candidates]
+            item_id = await conn.fetchval("""
+                INSERT INTO ops_improvement_item
+                    (kind, source, namespace_id, message_id, reporter_user_id, target_type, original, candidates)
+                VALUES ('answer_signal', $1, $2, $3, $4, 'auto', $5::jsonb, $6::jsonb) RETURNING id
+            """, SOURCE_SIGNAL, ns_id, message_id, reporter_id, json.dumps(context, ensure_ascii=False),
+                json.dumps(stored, ensure_ascii=False))
+    except Exception:
+        logger.warning("답변 틀림 신호 기록 실패 (message=%s)", message_id, exc_info=True)
+        return None
+    if candidates:
+        # 응답을 막지 않도록 백그라운드로 — 사용자가 이어서 한 줄을 보내면 그쪽이 우선(analyze_signal이 덮어쓰지 않음)
+        task = asyncio.create_task(analyze_signal(item_id, ns_id, message_id))
+        _BACKGROUND.add(task)
+        task.add_done_callback(_BACKGROUND.discard)
+    return item_id
+
+
+_BACKGROUND: set = set()  # 백그라운드 분석 태스크 참조 유지(가비지 컬렉션으로 중간에 사라지지 않게)
+
+
+async def analyze_signal(item_id: int, ns_id: int, message_id: int) -> None:
+    """의견 없는 "답변 틀림" — AI가 질문·답변·근거의 어긋남으로 원인을 추정해 대상을 미리 골라 둔다(사실은 모르므로
+    "추정"으로 표시, 수정안은 확실할 때만). 아직 의견이 없을 때만 갱신 — 그 사이 사용자 한 줄이 오면 손대지 않는다."""
+    try:
+        async with get_conn() as conn:
+            candidates = await _load_candidates(conn, ns_id, message_id)
+            context = await _load_original(conn, ns_id, "missing", None, None, message_id)
+        if not candidates:
+            return
+        out = await draft_mod.analyze_without_opinion(context.get("question"), context.get("answer"), candidates)
+        if out is None:
+            return
+        meta = {"verdict": out["verdict"], "method": "llm_no_opinion", "reason": out["reason"],
+                "wrong_part": out["wrong_part"], "fix_summary": out["fix_summary"]}
+        target_type, target_id, sub_id, original = "auto", None, None, context
+        if out["verdict"] == "evidence":
+            c = candidates[out["index"]]
+            target_type, target_id, sub_id, original = c["target_type"], c["target_id"], c["target_sub_id"], c["original"]
+            meta |= {"key": c["key"], "label": c["label"], "preview": _preview(c["target_type"], c["original"])}
+        elif out["verdict"] == "answer_error":
+            target_type = "answer"
+        async with get_conn() as conn:
+            await conn.execute("""
+                UPDATE ops_improvement_item
+                SET target_type = $2, target_id = $3, target_sub_id = $4, original = $5::jsonb,
+                    proposed = $6::jsonb, ai_verdict = $7::jsonb
+                WHERE id = $1 AND status = 'pending' AND kind = 'answer_signal' AND user_input IS NULL
+            """, item_id, target_type, target_id, sub_id, json.dumps(original, ensure_ascii=False),
+                json.dumps(out["proposed"], ensure_ascii=False) if out["proposed"] else None,
+                json.dumps(meta, ensure_ascii=False))
+    except Exception:
+        logger.warning("의견 없는 답변 틀림 추정 실패 (item=%s)", item_id, exc_info=True)
+
+
+async def record_search_noise(namespace: str, knowledge_id: int, reporter_id: Optional[int],
+                              query: Optional[str]) -> int:
+    """평가 게이트 즉석 질의에서 "이 결과 이상하다"고 표시한 지식 — 같은 지식의 대기 건이 있으면 중복 생성 안 함."""
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
+        existing = await conn.fetchval(
+            "SELECT id FROM ops_improvement_item WHERE kind = 'search_noise' AND target_id = $1 AND status = 'pending'",
+            knowledge_id)
+        if existing:
+            return existing
+        original = await _load_original(conn, ns_id, "knowledge", knowledge_id, None, None)
+        note = f"평가 게이트 질의 \"{query}\" 결과에서 '이상해요'로 표시" if query else "평가 게이트에서 '이상해요'로 표시"
+        return await conn.fetchval("""
+            INSERT INTO ops_improvement_item
+                (kind, source, namespace_id, reporter_user_id, target_type, target_id, user_input, original)
+            VALUES ('search_noise', $1, $2, $3, 'knowledge', $4, $5, $6::jsonb) RETURNING id
+        """, SOURCE_EVAL_GATE, ns_id, reporter_id, knowledge_id, note, json.dumps(original, ensure_ascii=False))
+
+
+async def is_part_owned_by(namespace: str, user: dict) -> bool:
+    """소유 파트가 지정돼 있고 그게 이 사용자의 파트인가(공용 네임스페이스는 False)."""
+    async with get_conn() as conn:
+        return bool(await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM ops_namespace n JOIN ops_user u ON u.part_id = n.owner_part_id "
+            "WHERE n.name = $1 AND u.id = $2 AND n.owner_part_id IS NOT NULL)", namespace, user.get("id")))
+
+
+async def item_namespace(item_id: int) -> Optional[str]:
+    """권한 확인용 — 이 신고가 속한 파트(처리 권한 = 그 파트 담당자 + 관리자)."""
+    async with get_conn() as conn:
+        return await conn.fetchval(
+            "SELECT n.name FROM ops_improvement_item i JOIN ops_namespace n ON n.id = i.namespace_id WHERE i.id = $1",
+            item_id)
 
 
 async def retarget(item_id: int, approver: dict, key: str) -> dict:
@@ -261,7 +403,9 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
                 raise ValueError("이 답변의 근거가 아닙니다.")
             target_type, target_id, sub_id = c["target_type"], c["target_id"], c["target_sub_id"]
             original = await _load_original(conn, ns_id, target_type, target_id, sub_id, None)
-    proposed = None if target_type == "answer" else await draft_mod.draft_correction(
+    # 사용자 의견이 없으면 맞는 내용 정보가 없다 — 자리표시 문구로 초안을 만들면 원문 그대로이거나(무의미한 새 버전),
+    # "빠진 내용"이면 틀렸다고 신고된 답변을 지식으로 옮겨 적는다(/code-review). 담당자가 직접 수정한다.
+    proposed = None if target_type == "answer" or not item["user_input"] else await draft_mod.draft_correction(
         target_type, original, item["user_input"])
     # 변경 이력은 AI 판정이 있던 신고에서 대상이 실제로 바뀔 때만 남긴다 — 같은 대상 재생성("초안 다시 만들기")을
     # 변경으로 세면 "담당자가 AI 판정을 뒤집은 비율" 측정이 부풀고, 직접 지정 신고엔 판정 자체가 없다(/code-review).
@@ -520,6 +664,8 @@ async def approve(item_id: int, approver: dict, proposed_override: Optional[dict
     stored = json.loads(item["proposed"]) if isinstance(item["proposed"], str) else item["proposed"]
     if item["target_type"] == "answer":
         raise ValueError("답변 오류 판정은 반영할 지식이 없습니다 — 대상을 바꾸거나 반려(종료)하세요.")
+    if item["target_type"] == "auto":
+        raise ValueError("정정 대상을 먼저 정하세요 — '정정 대상'에서 근거를 고르거나 반려(종료)하세요.")
     proposed = _validate_proposed(item["target_type"], proposed_override or stored)
     # 지식 본문 임베딩은 트랜잭션 밖에서 미리(트랜잭션은 DB 쓰기만 짧게)
     embedding = None

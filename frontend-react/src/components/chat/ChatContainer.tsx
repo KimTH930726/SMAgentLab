@@ -42,10 +42,13 @@ function CorrectionResultsBanner() {
         <p key={i.id} className="text-slate-400">
           {i.status === 'approved'
             ? <span className="text-emerald-600 dark:text-emerald-400">반영됨</span>
-            : i.kind === 'answer_quality'
-              ? <span className="text-sky-600 dark:text-sky-400">확인됨(답변 오류)</span>
+            : i.kind === 'answer_quality' || i.target_type === 'answer' || i.kind === 'answer_signal'
+              ? <span className="text-sky-600 dark:text-sky-400">확인됨</span>
               : <span className="text-rose-600 dark:text-rose-400">반려</span>}
-          {' · '}“{i.user_input}”
+          {' · '}
+          {i.user_input
+            ? <>“{i.user_input}”</>
+            : <>'답변 틀림' 신고 — {String((i.original as Record<string, unknown> | null)?.question ?? '질문 정보 없음').slice(0, 40)}</>}
           {i.status === 'rejected' && i.reject_reason && <> — {i.kind === 'answer_quality' ? '' : '사유: '}{i.reject_reason}</>}
         </p>
       ))}

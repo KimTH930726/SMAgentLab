@@ -1,52 +1,13 @@
 """POST /api/feedback — 좋아요/싫어요 피드백 처리."""
-import json
 
 from fastapi import APIRouter, Depends
 
 from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user
 from service.feedback.schemas import FeedbackCreate
+from service.improvement import service as improvement
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
-
-
-async def _flag_answer_sources_for_review(conn, ns_id: int, message_id: int) -> None:
-    """나빠요 피드백이 달린 메시지가 실제로 근거로 삼은 지식 전체를 리뷰 후보로 남긴다.
-
-    지금까지는 프론트가 넘긴 knowledge_id 하나만 base_weight 페널티를 받았다 — 사용자가
-    "이 문서 때문에 틀렸다"고 콕 집지 않으면(대부분 그냥 👎만 누름) 그 답변에 실제로 쓰인
-    나머지 근거 문서들은 아무 신호도 안 남았다. ops_message.results(검색 시점에 이미
-    저장돼 있음)에서 근거 문서 id를 전부 꺼내 리뷰 큐에 올린다 — 자동 페널티는 아니고
-    "리뷰 후보"로만 남겨 사람이 실제로 원인인지 판단하게 한다(전부 자동 감점하면 답변엔
-    안 쓰였지만 컨텍스트에 끼어있던 무관한 문서까지 억울하게 맞을 수 있어서).
-    이미 같은 메시지로 미해결 상태 플래그가 있으면 중복 생성하지 않는다.
-    """
-    row = await conn.fetchrow("SELECT results FROM ops_message WHERE id = $1", message_id)
-    if not row or not row["results"]:
-        return
-    try:
-        results = json.loads(row["results"]) if isinstance(row["results"], str) else row["results"]
-    except (TypeError, ValueError):
-        return
-    knowledge_ids = {r["id"] for r in results if isinstance(r, dict) and r.get("id") is not None}
-    if not knowledge_ids:
-        return
-
-    existing = await conn.fetch(
-        "SELECT DISTINCT knowledge_id FROM rag_knowledge_review_flag "
-        "WHERE message_id = $1 AND resolved = FALSE",
-        message_id,
-    )
-    already_flagged = {r["knowledge_id"] for r in existing}
-    to_flag = knowledge_ids - already_flagged
-    if not to_flag:
-        return
-
-    await conn.executemany(
-        "INSERT INTO rag_knowledge_review_flag (knowledge_id, namespace_id, reason, message_id) "
-        "VALUES ($1, $2, 'negative_feedback', $3)",
-        [(kid, ns_id, message_id) for kid in to_flag],
-    )
 
 
 @router.post("", status_code=201)
@@ -62,12 +23,8 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
             body.knowledge_id, ns_id, body.question, body.is_positive, body.message_id,
         )
 
-        if not body.is_positive and body.message_id is not None:
-            await _flag_answer_sources_for_review(conn, ns_id, body.message_id)
-
-        # 👎의 base_weight 자동 감점(-0.1)은 제거(2026-10-01, 근거 정정 흐름) — 사람 확인 없는 자동
-        # 반영이었다. 👎는 이제 신호만 남기고(위 review_flag), 근거가 틀렸으면 근거 카드의 "이 근거
-        # 틀림" → 개선 원장(ops_improvement_item) → 담당자 승인으로만 지식이 바뀐다. 👍 +0.1은 범위 밖.
+        # 👎의 base_weight 자동 감점(-0.1)은 제거(2026-10-01) — 사람 확인 없는 자동 반영이었다. "답변 틀림"은
+        # 개선 원장에 신호 1건으로만 남고(아래 record_answer_signal), 지식은 담당자 승인으로만 바뀐다. 👍 +0.1은 범위 밖.
         if body.knowledge_id and body.is_positive:
             await conn.execute(
                 "UPDATE rag_knowledge SET base_weight = LEAST(base_weight + 0.1, 5.0) WHERE id = $1",
@@ -111,5 +68,15 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
                 """,
                 ns_id, body.question, new_status, body.resolved_knowledge_id,
             )
+
+    # "답변 틀림" → 개선 원장에 1건(옛 리뷰 신호 대체, 2026-10-02). 근거 전부를 후보로 올려두고, 이어서 한 줄 의견이
+    # 오면 그 건을 채워 AI가 틀린 근거를 고른다. 본인 대화의 이 파트 메시지일 때만(남의 질문·답변이 원장에 실리지 않게).
+    if not body.is_positive and body.message_id is not None:
+        async with get_conn() as conn:
+            owned = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM ops_message m JOIN ops_conversation c ON c.id = m.conversation_id "
+                "WHERE m.id = $1 AND c.user_id = $2 AND c.namespace_id = $3)", body.message_id, user.get("id"), ns_id)
+        if owned is True:
+            await improvement.record_answer_signal(ns_id, body.message_id, user.get("id"))
 
     return {"status": "ok"}

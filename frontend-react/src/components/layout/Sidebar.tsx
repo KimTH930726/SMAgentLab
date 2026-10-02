@@ -54,7 +54,7 @@ export function Sidebar() {
   // 정정 신고 대기 건수 — 승인자(관리자)가 탭을 안 열면 쌓이기만 하므로 메뉴에서 바로 보이게
   const { data: correctionCount } = useQuery({
     queryKey: ['corrections-pending-count'],
-    queryFn: getCorrectionPendingCount,
+    queryFn: () => getCorrectionPendingCount(),
     enabled: user?.role === 'admin',
     staleTime: 60_000,
   });

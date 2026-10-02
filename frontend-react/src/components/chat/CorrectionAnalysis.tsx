@@ -7,7 +7,7 @@ import type { AiVerdict } from '../../api/corrections';
  * 판정은 신호일 뿐 — 반영은 담당자 승인 후에만이라는 걸 카드 안에서 항상 밝힌다.
  */
 
-const VERDICT_TEXT: Record<AiVerdict['verdict'], { title: string; tone: string }> = {
+const VERDICT_TEXT: Record<NonNullable<AiVerdict['verdict']>, { title: string; tone: string }> = {
   evidence: {
     title: '근거 내용이 틀린 것 같아요',
     tone: 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-700/50',
@@ -32,8 +32,9 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 export function CorrectionAnalysis({ verdict, audience }: { verdict: AiVerdict; audience: 'reporter' | 'admin' }) {
+  if (!verdict.verdict) return null;
   const v = VERDICT_TEXT[verdict.verdict];
-  const guessed = verdict.method === 'similarity';
+  const guessed = verdict.method === 'similarity' || verdict.method === 'llm_no_opinion';
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -43,7 +44,9 @@ export function CorrectionAnalysis({ verdict, audience }: { verdict: AiVerdict; 
         {guessed && (
           <span
             className="text-[11px] text-amber-600 dark:text-amber-400"
-            title="AI 판정이 원활하지 않아 의견과 가장 비슷한 근거로 추정했습니다. 담당자가 대상을 확인합니다."
+            title={verdict.method === 'llm_no_opinion'
+              ? '사용자가 맞는 내용을 알려주지 않아, 질문·답변·근거의 어긋남만 보고 추정했습니다. 담당자가 확인합니다.'
+              : 'AI 판정이 원활하지 않아 의견과 가장 비슷한 근거로 추정했습니다. 담당자가 대상을 확인합니다.'}
           >
             추정
           </span>

@@ -123,35 +123,22 @@ async def resolve_duplicate(knowledge_id: int, body: ResolveDuplicateRequest, us
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/review-flags")
-async def get_review_flags(
-    namespace: str = Query(...),
-    user: dict = Depends(get_current_user),
-):
-    await check_namespace_ownership(namespace, user)
-    return await service.get_review_flags(namespace)
-
-
-@router.post("/review-flags/{flag_id}/resolve", status_code=200)
-async def resolve_review_flag(flag_id: int, user: dict = Depends(get_current_user)):
-    ns = await service.get_review_flag_namespace(flag_id)
-    await _require_resource_namespace(ns, user, "Review flag not found")
-    resolved = await service.resolve_review_flag(flag_id)
-    if not resolved:
-        raise HTTPException(status_code=404, detail="Review flag not found")
-    return {"status": "resolved"}
-
-
 class FlagForReviewRequest(BaseModel):
     namespace: str
     reason: str = "search_noise"
+    query: Optional[str] = None  # 어떤 질의 결과에서 이상했는지 — 담당자가 맥락을 보도록
 
 
 @router.post("/{knowledge_id}/flag-for-review", status_code=201)
 async def flag_knowledge_for_review(knowledge_id: int, body: FlagForReviewRequest, user: dict = Depends(get_current_user)):
+    """평가 게이트 "이상해요" — 개선 원장(정정 검토 탭)에 검색 노이즈 1건으로 기록(2026-10-02, 옛 리뷰 신호 대체)."""
+    from service.improvement import service as improvement  # 지연 import — 지식 모듈이 개선 원장에 묶이지 않게
     ns = await service.get_knowledge_namespace(knowledge_id)
     await _require_resource_namespace(ns, user, "Knowledge not found")
-    await service.flag_knowledge_for_review(knowledge_id, body.namespace, body.reason)
+    try:
+        await improvement.record_search_noise(ns, knowledge_id, user.get("id"), (body.query or "").strip() or None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"status": "flagged"}
 
 

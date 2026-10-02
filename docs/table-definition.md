@@ -79,6 +79,8 @@
 
 | 59 | `policy_item`, `policy_review_log` (신규) | `ADD COLUMN IF NOT EXISTS review_source VARCHAR(20)`·`review_rule VARCHAR(40)`·`review_sample BOOLEAN NOT NULL DEFAULT FALSE` + `CREATE TABLE IF NOT EXISTS policy_review_log`(action CHECK: approved/rejected/auto_approved/sampled/auto_reverted/resubmitted/rule_paused/rule_resumed) + 인덱스 3개 + 기존 rejected 항목 이력 1회 백필 | 정책 승인 대기 큐 위험도 분류·자동 통과. `review_source`로 사람 승인(human)과 규칙 자동 통과(auto_rule) 구분(`reviewed_by`는 사용자 FK라 자동 표시 불가). 결정 이력은 append-only로 등급·근거 스냅샷과 함께 — 자동 승인 기준 조정용. `_migrate_policy_risk_review` (v2.119) |
 
+| 60 | `ops_improvement_item`, `rag_knowledge_review_flag` | 데이터 이관(미해결 리뷰 신호 → 개선 원장, 옮긴 신호는 resolved) — 스키마 변경 없음, kind에 `answer_signal`·`search_noise` 추가 | 리뷰 신호와 정정 검토 통합(신고 1번 = 검토 1건). 답변 틀림 신호는 답변별 1건(근거 후보 포함), 평가 게이트 신호는 지식별 1건. 메시지가 지워진 신호도 질문·답변만 비운 채 이관. 옛 테이블은 기록용으로 남기고 더는 쓰지 않음. `_migrate_review_flags_to_ledger` (v2.120) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.

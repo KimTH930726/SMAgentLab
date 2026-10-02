@@ -5,7 +5,6 @@ import type {
   KnowledgeUpdatePayload,
   KnowledgeStatus,
   DuplicateMatch,
-  ReviewFlag,
   GlossaryItem,
   GlossaryCreatePayload,
   GlossaryUpdatePayload,
@@ -57,35 +56,14 @@ export async function resolveDuplicate(
   }
 }
 
-// 나빠요 피드백 → 지식 리뷰 신호 (feedback→역추적 레버)
-
-export async function getReviewFlags(namespace: string): Promise<ReviewFlag[]> {
-  try {
-    const params = new URLSearchParams({ namespace });
-    return await apiFetch<ReviewFlag[]>(`/knowledge/review-flags?${params.toString()}`);
-  } catch (err) {
-    console.error('getReviewFlags error:', err);
-    throw err;
-  }
-}
-
-export async function resolveReviewFlag(flagId: number): Promise<{ status: string }> {
-  try {
-    return await apiFetch(`/knowledge/review-flags/${flagId}/resolve`, { method: 'POST' });
-  } catch (err) {
-    console.error('resolveReviewFlag error:', err);
-    throw err;
-  }
-}
-
-// 즉석 질의(평가 게이트)에서 "이 결과 이상하다" 수동 표시 → 같은 리뷰 신호 큐로
+/** 평가 게이트 "이상해요" — 정정 검토(개선 원장)에 검색 노이즈로 기록. query는 어떤 질의 결과였는지(담당자 맥락용) */
 export async function flagKnowledgeForReview(
-  knowledgeId: number, namespace: string, reason = 'search_noise',
+  knowledgeId: number, namespace: string, query?: string,
 ): Promise<{ status: string }> {
   try {
     return await apiFetch(`/knowledge/${knowledgeId}/flag-for-review`, {
       method: 'POST',
-      body: JSON.stringify({ namespace, reason }),
+      body: JSON.stringify({ namespace, reason: 'search_noise', query: query ?? null }),
     });
   } catch (err) {
     console.error('flagKnowledgeForReview error:', err);

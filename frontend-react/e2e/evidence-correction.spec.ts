@@ -90,7 +90,7 @@ async function ask(page: Page, question: string) {
   await expect(page.getByRole('button', { name: '도움됐어요' })).toHaveCount(before + 1, { timeout: 120_000 });
 }
 
-async function approveInAdmin(page: Page, userInput: string, targetLabel?: string) {
+async function approveInAdmin(page: Page, userInput: string, targetLabel?: string, expectedFix?: string) {
   await page.getByRole('link', { name: 'Admin' }).click();
   await page.getByRole('button', { name: '지식 베이스' }).click();
   await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NS);
@@ -108,7 +108,15 @@ async function approveInAdmin(page: Page, userInput: string, targetLabel?: strin
     }
   }
   const approved = page.waitForResponse((r) => /\/api\/corrections\/\d+\/approve/.test(r.url()));
-  await card.getByRole('button', { name: '승인 · 반영' }).click();
+  // 사용자 입력으로 정리된 수정안이 있으면 [AI 수정안으로 대체], 초안이 없으면(게이트웨이 장애 등) [직접 수정] → 반영
+  const replace = card.getByRole('button', { name: 'AI 수정안으로 대체' });
+  if (await replace.isVisible().catch(() => false)) {
+    await replace.click();
+  } else {
+    await card.getByRole('button', { name: '직접 수정' }).click();
+    for (const ta of await card.locator('textarea').all()) await ta.fill(expectedFix ?? userInput);
+    await card.getByRole('button', { name: '수정 내용으로 반영' }).click();
+  }
   expect((await approved).ok()).toBeTruthy();
   await page.getByRole('link', { name: 'Chat' }).click();
 }
@@ -129,7 +137,7 @@ test('지식 — 근거 카드 "이 근거 틀림" → 승인 전 원본 유지 
   await expect(page.getByText('정정 검토 중').last()).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText(/90일마다 변경/).last()).toBeVisible();
 
-  await approveInAdmin(page, '60일마다 바꿔야 합니다');
+  await approveInAdmin(page, '60일마다 바꿔야 합니다', undefined, '사내 VPN 접속 비밀번호는 60일마다 변경해야 한다.');
 
   await ask(page, Q);
   await expect(page.getByText(/60일마다 변경/).last()).toBeVisible({ timeout: 10_000 });
@@ -156,7 +164,7 @@ test('정책 — "답변 틀림" 한 줄 → AI 분석 → (대상 확인) 승�
   await expect(page.getByText('정정 검토 중').last()).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText(/7일 이내/).last()).toBeVisible();
 
-  await approveInAdmin(page, '14일 이내로 바뀌었습니다', '임시 반품 기한');
+  await approveInAdmin(page, '14일 이내로 바뀌었습니다', '임시 반품 기한', '반품은 수령 후 14일 이내에 신청할 수 있다.');
 
   await ask(page, Q);
   await expect(page.getByText(/14일 이내/).last()).toBeVisible({ timeout: 10_000 });

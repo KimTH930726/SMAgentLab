@@ -206,3 +206,65 @@ async def identify_and_draft(question: Optional[str], answer: Optional[str], can
     if out is None:
         logger.warning("정정 대상 자동 판정 형식 불일치 — 유사도로 대체")
     return out
+
+
+# ── 의견 없는 "답변 틀림" 추정(2026-10-02) — 사용자가 맞는 내용을 안 알려줬으니 사실은 모른다. AI는 질문·답변·근거끼리의
+# 어긋남만 보고 "어디가 원인일 가능성이 높은지"를 추정한다. 수정안은 근거끼리 모순되는 것처럼 확실한 경우에만 —
+# 지어낸 값이 수정안으로 올라가 담당자가 그대로 승인하는 일을 막으려는 것.
+
+NO_OPINION_SYSTEM = (
+    "너는 챗봇 답변에 '틀렸어요' 표시만 받은(이유 설명 없음) 사례를 분석하는 운영 지식 담당 보조다.\n"
+    "사용자가 맞는 내용을 알려주지 않았으므로 사실을 단정하지 말고, [질문]·[답변]·[근거 목록] 사이의 어긋남만 보고 추정하라.\n"
+    "1) answer_mismatch: 답변이 근거와 다른 값·조건을 말한 곳이 있으면 true(근거는 정상, 답변이 잘못 옮김).\n"
+    "2) suspect: 원인일 가능성이 가장 높은 근거 번호 — 근거끼리 서로 다른 값을 말하거나, 근거가 질문과 맞지 않는 내용이면 그 근거. 모르겠으면 null.\n"
+    "3) proposed: suspect 근거를 고칠 확실한 근거(다른 근거와의 명백한 모순 등)가 있을 때만 그 근거의 정정안, 아니면 null. 값을 지어내지 마라.\n"
+    + _COMMON_RULES.replace("[원문]·[사용자 의견]", "[질문]·[답변]·[근거 목록]") + "\n"
+    + _PROPOSED_SPEC + "\n"
+    "설명 필드는 담당자가 읽는다 — 쉬운 말로, 각 한 문장. 근거는 번호가 아니라 이름(예: '문서 #123')으로 불러라.\n"
+    "- reason: 왜 그렇게 추정했는지 / - wrong_part: 의심되는 부분을 원문 그대로 짧게 인용(없으면 null) / "
+    "- fix_summary: proposed가 있을 때 무엇이 바뀌는지(없으면 null)\n"
+    '출력 형식: {"answer_mismatch": true|false, "suspect": 근거번호|null, "reason": "...", '
+    '"wrong_part": "..."|null, "fix_summary": "..."|null, "proposed": {...}|null}'
+)
+
+
+def build_no_opinion_prompt(question: Optional[str], answer: Optional[str], candidates: list[dict]) -> str:
+    return build_identify_prompt(question, answer, candidates, "(의견 없음 — 사용자는 '답변 틀림'만 표시)").split(
+        "\n\n[사용자 의견]")[0]
+
+
+def parse_no_opinion(raw: str, candidates: list[dict]) -> Optional[dict]:
+    """→ {"verdict": "answer_error"|"evidence"|None, "index", "reason", "wrong_part", "fix_summary", "proposed"}.
+    답변 불일치가 먼저(근거는 정상) → 아니면 의심 근거 → 둘 다 없으면 verdict None(대상 미지정 유지)."""
+    try:
+        parsed = json.loads(_strip_code_fence(raw))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict) or "suspect" not in parsed:
+        return None
+    index = _index(parsed.get("suspect"), len(candidates))
+    if parsed.get("answer_mismatch") is True:
+        verdict, index = "answer_error", None
+    elif index is not None:
+        verdict = "evidence"
+    else:
+        verdict = None
+    proposed = None
+    if verdict == "evidence" and isinstance(parsed.get("proposed"), dict):
+        proposed = parse_draft(candidates[index]["target_type"], json.dumps(parsed["proposed"], ensure_ascii=False))
+    return {"verdict": verdict, "index": index, "reason": _as_text(parsed.get("reason")) or "",
+            "wrong_part": _as_text(parsed.get("wrong_part")),
+            "fix_summary": _as_text(parsed.get("fix_summary")) if proposed else None, "proposed": proposed}
+
+
+async def analyze_without_opinion(question: Optional[str], answer: Optional[str], candidates: list[dict]) -> Optional[dict]:
+    try:
+        raw = await get_llm_provider().generate_once(
+            prompt=build_no_opinion_prompt(question, answer, candidates), system=NO_OPINION_SYSTEM, max_tokens=2000)
+    except Exception:
+        logger.warning("의견 없는 답변 틀림 추정 실패 — 담당자가 대상을 고름", exc_info=True)
+        return None
+    out = parse_no_opinion(raw, candidates)
+    if out is None:
+        logger.warning("의견 없는 답변 틀림 추정 형식 불일치 — 담당자가 대상을 고름")
+    return out

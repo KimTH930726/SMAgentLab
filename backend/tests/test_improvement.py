@@ -415,3 +415,143 @@ class TestPendingStatus:
         with patch.object(svc, "get_conn", return_value=conn):
             out = await svc.pending_count()
         assert out == {"count": 3, "by_namespace": {"A": 2, "B": 1}}
+
+
+class TestSignalMerge:
+    """리뷰 신호를 원장으로 합침(2026-10-02) — "답변 틀림" 1번 = 검토 1건."""
+
+    @pytest.mark.asyncio
+    async def test_line_fills_existing_signal_instead_of_new_item(self):
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value={"id": 1, "content": "c", "category": "x", "heading_path": None})
+        # 소유권 확인 True → (직접 지정 원문 로드) → 신호 건 조회 41 → UPDATE … RETURNING 41
+        conn.fetchval = AsyncMock(side_effect=[True, 41, 41])
+        conn.fetch = AsyncMock(return_value=[])
+        conn.execute = AsyncMock()
+        with patch.object(svc, "get_conn", return_value=conn), \
+             patch.object(svc, "resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch.object(svc, "_load_candidates", AsyncMock(return_value=[])), \
+             patch.object(svc, "_load_original", AsyncMock(return_value={"content": "c"})), \
+             patch.object(svc.draft_mod, "draft_correction", AsyncMock(return_value={"content": "new"})):
+            out = await svc.create_item("ns", {"id": 7}, target_type="knowledge", target_id=1, target_sub_id=None,
+                                        message_id=99, user_input="60일")
+        assert out["id"] == 41
+        sqls = [c.args[0] for c in conn.fetchval.await_args_list]
+        assert "kind = 'answer_signal'" in sqls[1] and "UPDATE ops_improvement_item" in sqls[2]
+        assert not any("INSERT INTO ops_improvement_item" in q for q in sqls)
+
+    @pytest.mark.asyncio
+    async def test_duplicate_target_removes_signal_then_conflicts(self):
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value={"id": 1, "content": "c", "category": "x", "heading_path": None})
+        conn.fetchval = AsyncMock(side_effect=[True, 41, svc.asyncpg.UniqueViolationError("dup")])
+        conn.execute = AsyncMock()
+        with patch.object(svc, "get_conn", return_value=conn), \
+             patch.object(svc, "resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch.object(svc, "_load_candidates", AsyncMock(return_value=[])), \
+             patch.object(svc, "_load_original", AsyncMock(return_value={"content": "c"})):
+            with pytest.raises(svc.ConflictError):
+                await svc.create_item("ns", {"id": 7}, target_type="knowledge", target_id=1, target_sub_id=None,
+                                      message_id=99, user_input="60일")
+        assert conn.execute.await_args.args == ("DELETE FROM ops_improvement_item WHERE id = $1", 41)
+
+    @pytest.mark.asyncio
+    async def test_signal_dedup_per_reporter_and_message(self):
+        conn = _conn()
+        conn.fetchval = AsyncMock(return_value=55)  # 이미 대기 건 있음
+        with patch.object(svc, "get_conn", return_value=conn):
+            assert await svc.record_answer_signal(1, 99, 7) == 55
+        assert conn.fetchval.await_count == 1  # 새로 만들지 않음
+
+    @pytest.mark.asyncio
+    async def test_new_signal_schedules_background_analysis(self):
+        conn = _conn()
+        conn.fetchval = AsyncMock(side_effect=[None, 56])
+        analyze = AsyncMock()
+        with patch.object(svc, "get_conn", return_value=conn), \
+             patch.object(svc, "_load_candidates", AsyncMock(return_value=_CANDS)), \
+             patch.object(svc, "_load_original", AsyncMock(return_value={"question": "q", "answer": "a"})), \
+             patch.object(svc, "analyze_signal", analyze):
+            assert await svc.record_answer_signal(1, 99, 7) == 56
+            await svc.asyncio.sleep(0)
+        analyze.assert_awaited_once_with(56, 1, 99)
+
+    @pytest.mark.asyncio
+    async def test_analysis_never_overwrites_user_line(self):
+        """추정이 끝나기 전에 사용자 한 줄이 들어오면 그쪽이 우선 — UPDATE는 의견 없을 때만."""
+        conn = _conn()
+        conn.execute = AsyncMock()
+        out = {"verdict": "evidence", "index": 0, "reason": "r", "wrong_part": "w", "fix_summary": None, "proposed": None}
+        with patch.object(svc, "get_conn", return_value=conn), \
+             patch.object(svc, "_load_candidates", AsyncMock(return_value=_CANDS)), \
+             patch.object(svc, "_load_original", AsyncMock(return_value={"question": "q", "answer": "a"})), \
+             patch.object(svc.draft_mod, "analyze_without_opinion", AsyncMock(return_value=out)):
+            await svc.analyze_signal(56, 1, 99)
+        sql, *args = conn.execute.await_args.args
+        assert "user_input IS NULL" in sql and "kind = 'answer_signal'" in sql
+        assert args[1:4] == ["knowledge", 1, None]
+        meta = json.loads(args[6])
+        assert meta["method"] == "llm_no_opinion" and meta["key"] == "k-1"
+
+    @pytest.mark.asyncio
+    async def test_search_noise_dedup(self):
+        conn = _conn()
+        conn.fetchval = AsyncMock(return_value=77)
+        with patch.object(svc, "get_conn", return_value=conn), \
+             patch.object(svc, "resolve_namespace_id", AsyncMock(return_value=1)):
+            assert await svc.record_search_noise("ns", 5, 7, "질의") == 77
+
+    @pytest.mark.asyncio
+    async def test_approve_requires_target_for_no_opinion_signal(self):
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value={"id": 1, "status": "pending", "target_type": "auto",
+                                                "proposed": None, "namespace_id": 1})
+        with patch.object(svc, "get_conn", return_value=conn):
+            with pytest.raises(ValueError, match="대상을 먼저"):
+                await svc.approve(1, {"id": 1}, {"content": "x"})
+
+
+class TestParseNoOpinion:
+    def _p(self, **kw):
+        base = {"answer_mismatch": False, "suspect": None, "reason": "r", "wrong_part": None,
+                "fix_summary": "f", "proposed": None}
+        return draft.parse_no_opinion(json.dumps(base | kw, ensure_ascii=False), _CANDS)
+
+    def test_answer_mismatch_wins(self):
+        out = self._p(answer_mismatch=True, suspect=1)
+        assert out["verdict"] == "answer_error" and out["index"] is None
+
+    def test_suspect_without_proof_has_no_proposal(self):
+        out = self._p(suspect=1)
+        assert out["verdict"] == "evidence" and out["index"] == 0 and out["proposed"] is None and out["fix_summary"] is None
+
+    def test_suspect_with_proposal_validated(self):
+        out = self._p(suspect=2, proposed={"chunk_text": "14일", "raw_body": "14일"})
+        assert out["proposed"] == {"chunk_text": "14일", "raw_body": "14일"}
+
+    def test_unknown_keeps_no_target(self):
+        assert self._p()["verdict"] is None
+
+    def test_prompt_has_no_user_opinion_block(self):
+        p = draft.build_no_opinion_prompt("q", "a", _CANDS)
+        assert "[근거 목록]" in p and "[사용자 의견]" not in p
+
+
+class TestNoOpinionRetarget:
+    @pytest.mark.asyncio
+    async def test_retarget_without_user_input_makes_no_draft(self):
+        """의견 없는 신고는 대상을 골라도 초안을 만들지 않는다 — 원문 그대로이거나 틀린 답변을 지식으로 옮겨 적게 됨."""
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value={
+            "status": "pending", "namespace_id": 1, "message_id": 3, "user_input": None, "ai_verdict": None,
+            "candidates": json.dumps([{"key": "k-1", "target_type": "knowledge", "target_id": 1, "target_sub_id": None}]),
+            "target_type": "auto", "target_id": None, "target_sub_id": None})
+        conn.execute = AsyncMock()
+        redraft = AsyncMock()
+        with patch.object(svc, "get_conn", return_value=conn), \
+             patch.object(svc, "_load_original", AsyncMock(return_value={"content": "c"})), \
+             patch.object(svc.draft_mod, "draft_correction", redraft):
+            for key in ("k-1", "missing"):
+                out = await svc.retarget(1, {"id": 9}, key)
+                assert out["proposed"] is None
+        redraft.assert_not_awaited()

@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.119)
+# Ops-Navigator 시스템 아키텍처 (v2.120)
 
 ## 개요
 
@@ -11,6 +11,12 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.120: **리뷰 신호를 정정 검토로 통합 — 신고 1번 = 검토 1건.** "답변 틀림" 한 번이 리뷰 신호(근거 전부)와
+  정정 검토(AI가 고른 근거)로 두 탭에 쌓이던 중복 제거. "답변 틀림"을 누르면 개선 원장에 1건(대상 미지정, 근거 후보
+  저장), 한 줄이 오면 그 건을 채워 AI 판정. 의견이 없으면 백그라운드로 질문·답변·근거의 어긋남만 보고 원인을 "추정"
+  (수정안은 확실할 때만 — 값을 지어내지 않음). 평가 게이트 "이상해요"도 원장(검색 노이즈). 검토 카드는 [AI 수정안으로
+  대체] / [직접 수정](AI안 또는 현재 내용으로 미리 채움) / 반려. 처리 권한 = 소유 파트 담당자 + 관리자(공용 네임스페이스는
+  관리자만). 옛 리뷰 신호는 원장으로 이관(#60), 테이블은 기록용으로만 남김.
 - v2.119: **정책 승인 대기 큐 — 위험도 분류 + 낮음 자동 통과.** 검토대기 368건이 9/23 하루 11건 승인 뒤 줄지
   않아, 결정론적 규칙(`service/policy/risk.py`, LLM 미사용, 조회 시 계산)으로 높음(구조화 실패·이전 반려·자동 통과
   되돌림)/중간(서술 2개+)/낮음(구조화 완료+서술 1개)을 나누고 낮음만 자동 통과(`auto_review.py`, `review_source=
@@ -1271,7 +1277,7 @@ ops_namespace         -- 네임스페이스 (owner_part_id FK, created_by_user_i
 ops_conversation      -- 대화방 (namespace_id FK, user_id FK, agent_type)
 ops_message           -- 대화 메시지 (role, content, results JSONB, metadata JSONB)
 ops_feedback          -- 도움됐어요/답변 틀림 피드백 로그 (agent_type, meta JSONB)
-ops_improvement_item  -- 개선 원장: 정정·빠진 내용 신고 + AI 수정안, 승인 전 검색 미노출 (v2.118)
+ops_improvement_item  -- 개선 원장(정정 검토): 답변 틀림·근거 정정·빠진 내용·검색 노이즈 + AI 수정안, 승인 전 검색 미노출 (v2.118/120)
 ops_query_log         -- 질의 로그 (status: pending/resolved/unresolved, agent_type)
 ops_prompt            -- 프롬프트 관리 (agent_type별 에이전트 스코핑, Admin 시스템설정 탭에서 편집)
 ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 영속화, VOC 폴링 정책/Graph 자격증명도 여기 저장)
@@ -1288,7 +1294,7 @@ rag_knowledge         -- 지식 베이스 (HNSW + GIN FTS, base_weight, source_f
                       --   logical_document_id/version/supersedes_id: 근거 정정 승인 시 버전 교체에 사용(v2.118))
 rag_knowledge_duplicate_match -- 중복탐지 매칭 후보 (v2.34)
 rag_knowledge_history -- 병합(merge) 시 덮어써지기 전 content/embedding 보존 (v2.68)
-rag_knowledge_review_flag -- '답변 틀림' 답변의 근거 지식 리뷰 큐 (v2.68)
+rag_knowledge_review_flag -- 옛 리뷰 신호 큐 — v2.120부터 쓰지 않음(개선 원장으로 이관, 기록용 보존)
 rag_knowledge_category -- 카테고리 목록
 rag_glossary          -- 용어집 (HNSW, 유사도 0.5+ 매핑)
 rag_fewshot           -- Few-shot Q&A (HNSW, status: active/candidate)

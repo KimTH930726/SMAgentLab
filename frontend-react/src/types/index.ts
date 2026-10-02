@@ -53,17 +53,6 @@ export interface DuplicateMatch {
   similarity: number;
 }
 
-export interface ReviewFlag {
-  flag_id: number;
-  knowledge_id: number;
-  reason: string;
-  message_id: number | null;
-  flagged_at: string;
-  content: string;
-  category: string | null;
-  status: KnowledgeStatus;
-}
-
 export interface KnowledgeItem {
   id: number;
   namespace: string;
