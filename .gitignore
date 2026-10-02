@@ -26,6 +26,8 @@ pgdata/
 # 로컬 백업
 *.sql
 *.dump
+# DB 초기화 SQL은 반입 대상이라 추적(위 *.sql에 걸려 init/08이 빠져 있었음, 2026-10-02)
+!init/*.sql
 
 # macOS
 .DS_Store
@@ -47,3 +49,7 @@ backend/tests/fixtures/real_policy_samples/
 
 # 실 정책 데이터 기반 골든셋 (실제 회사 정책 내용 포함, 커밋 금지)
 backend/tests/fixtures/golden_set/
+
+# 폐쇄망 반입용 이미지 묶음(scripts/export-images.*) — 수 GB, 저장소에 넣지 않음
+smagentlab-images-*.tar.gz
+smagentlab-images-*.tar.gz.sha256

@@ -1,0 +1,5 @@
+# 폐쇄망 리눅스 서버로 반입되는 파일은 항상 LF — Windows에서 CRLF로 체크아웃되면 서버에서
+# `bash scripts/*.sh`가 $'\r' 오류로 실패한다(2026-10-02 v2.119 반입 준비 중 발견).
+*.sh                text eol=lf
+*.sql               text eol=lf
+docker-compose*.yml text eol=lf

@@ -1,6 +1,8 @@
 # 폐쇄망 리눅스 서버 배포 가이드
 
 > 인터넷이 차단된 사내 리눅스 서버에 SMAgentLab(Ops-Navigator)을 배포하는 절차.
+> **현재 배포 버전: `v2.119`** (2026-10-02, 직전 운영 반입 `v2.17`). 아래 명령의 `<TAG>`는 배포할 버전으로 바꿔 쓴다.
+> 처음 설치는 §1→§2, 기존 서버 업그레이드는 §1→§3(**v2.17에서 올리면 §3-4 필수**).
 
 ---
 
@@ -11,7 +13,7 @@
 | 환경 | 필요 사항 |
 |---|---|
 | **빌드 PC** (인터넷 가능) | Docker Desktop 또는 Docker 24+, 인터넷 접속, 본 저장소 clone |
-| **운영 서버** (폐쇄망) | Linux (Rocky Linux 9 / RHEL 9 / Ubuntu 22.04 LTS 권장), Docker 24+, Docker Compose v2, 디스크 여유 ≥ 10GB |
+| **운영 서버** (폐쇄망) | Linux (Rocky Linux 9 / RHEL 9 / Ubuntu 22.04 LTS 권장), Docker 24+, Docker Compose v2, 디스크 여유 ≥ 30GB (이미지 묶음 + 로드된 이미지 + 직전 버전 1개 유지) |
 
 ### 반입할 파일 목록
 
@@ -22,18 +24,16 @@ SMAgentLab/
 ├── docker-compose.yml              # 베이스 compose
 ├── docker-compose.prod.yml         # 운영 오버라이드 (build 제거, 볼륨 마운트 제거)
 ├── .env                            # 시크릿 + IMAGE_TAG (운영 PC에서 작성)
-├── init/                           # DB 초기화 SQL
-│   ├── 01-init.sql
-│   └── 02-migrate-fk.sql
+├── init/                           # DB 초기화 SQL — 빈 DB 최초 기동 시 1회 자동 실행(01~08 전부 반입)
 ├── scripts/
 │   ├── import-and-run.sh           # 폐쇄망 배포 스크립트
 │   ├── update-images.sh            # 버전 업데이트 스크립트
 │   ├── backup-db.sh                # DB 백업
 │   └── restore-db.sh               # DB 복원
-└── smagentlab-images-v2.16.tar.gz  # 이미지 묶음 (별도 전송)
+└── smagentlab-images-<TAG>.tar.gz  # 이미지 묶음 (별도 전송)
 ```
 
-> 소스 코드(`backend/`, `frontend-react/`)는 **반입 불필요** — 이미지에 동봉됩니다.
+> 소스 코드(`backend/`, `frontend-react/`)는 **반입 불필요** — 이미지에 동봉됩니다(일회성 마이그레이션 스크립트 `backend/scripts/*`도 이미지 안에 있음).
 
 ---
 
@@ -73,7 +73,7 @@ cp .env.example .env
 
 ```env
 # ── 이미지 버전 태그 (필수, :latest 비추천) ────────────────
-IMAGE_TAG=v2.16
+IMAGE_TAG=v2.119
 
 # ── DB ──────────────────────────────────────────────────
 POSTGRES_DB=opsdb
@@ -113,7 +113,7 @@ BACKEND_URL=http://backend:8000
 grep -E "^(IMAGE_TAG|POSTGRES_PASSWORD|JWT_SECRET_KEY|FERNET_SECRET_KEY)=" .env
 
 # 출력 예 (값이 비어있거나 'change-this' 같은 기본값이면 안 됨):
-# IMAGE_TAG=v2.16
+# IMAGE_TAG=v2.119
 # POSTGRES_PASSWORD=Pa$$w0rd!2026
 # JWT_SECRET_KEY=a1b2c3...
 # FERNET_SECRET_KEY=Unq_TuJ4...=
@@ -134,38 +134,44 @@ docker info             # 에러 없이 실행되어야 함
 
 **Linux/macOS (bash):**
 ```bash
-bash scripts/export-images.sh v2.16
+bash scripts/export-images.sh <TAG>
 ```
 
 **Windows (PowerShell):**
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\export-images.ps1 -Tag v2.16
+powershell -ExecutionPolicy Bypass -File scripts\export-images.ps1 -Tag <TAG>
 ```
 
 **처리 내용:**
 1. `docker compose build --no-cache` (백엔드/프론트엔드 빌드, 약 10~15분)
-   - 백엔드 빌드 시 임베딩 모델(`nlpai-lab/KURE-v1`, v2.72부터 — 이전 `paraphrase-multilingual-mpnet-base-v2`, ~420MB — 대비 훨씬 큰 ~2.2GB) **이미지 안에 사전 다운로드**
+   - 백엔드 빌드 시 임베딩 모델(`nlpai-lab/KURE-v1`, ~2.3GB)과 리랭커 모델(`dragonkue/bge-reranker-v2-m3-ko`, ~2.3GB,
+     기본 꺼짐 — 폐쇄망에서 켤 수 있게 번들) **이미지 안에 사전 다운로드**
+   - ⚠️ 다운로드가 실패해도 빌드는 `[build] ... 사전 다운로드 실패` 로그만 남기고 계속된다 — 모델 없는 이미지는
+     폐쇄망에서 임베딩이 안 된다. Step 3의 모델 포함 확인을 반드시 할 것
 2. `pgvector/pgvector:pg16`, `redis:7-alpine` pull
-3. 4개 이미지를 단일 tar.gz로 패키징 → `smagentlab-images-v2.16.tar.gz` (약 1.5~2GB)
+3. 4개 이미지를 단일 tar.gz로 패키징 → `smagentlab-images-<TAG>.tar.gz` (약 4.4GB, 백엔드 이미지 자체는 11.4GB)
 
 #### Step 3) 결과물 검증
 
 ```bash
-ls -lh smagentlab-images-v2.16.tar.gz       # 1.5~2GB 정도여야 정상
+ls -lh smagentlab-images-<TAG>.tar.gz       # 약 4.4GB
 docker images | grep -E "smagentlab|pgvector|redis"
-# 4개 이미지가 모두 v2.16 또는 pg16/7-alpine 태그로 있어야 함
+# 4개 이미지가 모두 <TAG> 또는 pg16/7-alpine 태그로 있어야 함
+
+# 모델이 이미지에 들어갔는지 확인 — models--nlpai-lab--KURE-v1, models--dragonkue--bge-reranker-v2-m3-ko 둘 다 보여야 함(없으면 인터넷 확인 후 재빌드)
+docker run --rm --entrypoint sh smagentlab-backend:<TAG> -c 'ls /root/.cache/huggingface /root/.cache/huggingface/hub | grep -E "KURE|reranker"'
 ```
 
 #### Step 4) 체크섬 생성 (반입 후 무결성 확인용)
 
 ```bash
 # Linux/macOS
-sha256sum smagentlab-images-v2.16.tar.gz > smagentlab-images-v2.16.tar.gz.sha256
+sha256sum smagentlab-images-<TAG>.tar.gz > smagentlab-images-<TAG>.tar.gz.sha256
 
 # Windows PowerShell
-Get-FileHash smagentlab-images-v2.16.tar.gz -Algorithm SHA256 | `
-  ForEach-Object { "$($_.Hash)  smagentlab-images-v2.16.tar.gz" } | `
-  Out-File smagentlab-images-v2.16.tar.gz.sha256 -Encoding ASCII
+Get-FileHash smagentlab-images-<TAG>.tar.gz -Algorithm SHA256 | `
+  ForEach-Object { "$($_.Hash.ToLower())  smagentlab-images-<TAG>.tar.gz" } | `
+  Out-File smagentlab-images-<TAG>.tar.gz.sha256 -Encoding ASCII
 ```
 
 ### 1-4. 폐쇄망 서버로 반입
@@ -173,13 +179,12 @@ Get-FileHash smagentlab-images-v2.16.tar.gz -Algorithm SHA256 | `
 다음 파일들을 함께 전송 (USB/SCP/사내 파일전송):
 
 ```
-smagentlab-images-v2.16.tar.gz       # 메인 이미지 묶음
-smagentlab-images-v2.16.tar.gz.sha256 # 체크섬
+smagentlab-images-<TAG>.tar.gz       # 메인 이미지 묶음
+smagentlab-images-<TAG>.tar.gz.sha256 # 체크섬
 docker-compose.yml
 docker-compose.prod.yml
 .env                                  # ⚠️ 시크릿 — 안전한 채널로 전송
-init/01-init.sql
-init/02-migrate-fk.sql
+init/                                 # 01~08 전부
 scripts/import-and-run.sh
 scripts/update-images.sh
 scripts/backup-db.sh
@@ -301,14 +306,12 @@ cd /opt/smagentlab
 ```bash
 ls -la
 # 다음 구조여야 함:
-# ├── smagentlab-images-v2.16.tar.gz
-# ├── smagentlab-images-v2.16.tar.gz.sha256
+# ├── smagentlab-images-<TAG>.tar.gz
+# ├── smagentlab-images-<TAG>.tar.gz.sha256
 # ├── docker-compose.yml
 # ├── docker-compose.prod.yml
 # ├── .env
-# ├── init/
-# │   ├── 01-init.sql
-# │   └── 02-migrate-fk.sql
+# ├── init/            (01~08 *.sql)
 # └── scripts/
 #     ├── import-and-run.sh
 #     ├── update-images.sh
@@ -319,8 +322,8 @@ ls -la
 #### 무결성 검증
 
 ```bash
-sha256sum -c smagentlab-images-v2.16.tar.gz.sha256
-# 출력: smagentlab-images-v2.16.tar.gz: OK   ← 이 메시지여야 진행
+sha256sum -c smagentlab-images-<TAG>.tar.gz.sha256
+# 출력: smagentlab-images-<TAG>.tar.gz: OK   ← 이 메시지여야 진행
 ```
 
 #### 권한 설정
@@ -334,11 +337,11 @@ mkdir -p backups && chmod 700 backups   # 백업 디렉토리
 ### 2-3. 실행
 
 ```bash
-bash scripts/import-and-run.sh smagentlab-images-v2.16.tar.gz
+bash scripts/import-and-run.sh smagentlab-images-<TAG>.tar.gz
 ```
 
 **처리 내용:**
-1. `docker load` — 이미지 로드 (1~3분)
+1. `docker load` — 이미지 로드 (수 분, 이미지가 커서 디스크 속도에 좌우)
 2. `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build`
 3. 백엔드 헬스체크 폴링 (최대 120초)
 4. 성공 시 접속 URL 출력
@@ -361,10 +364,9 @@ bash scripts/import-and-run.sh smagentlab-images-v2.16.tar.gz
 |---|---|---|
 | 1 | admin 계정 로그인 | 우측 상단 로그인 |
 | 2 | 파트 생성 | 어드민 → 사용자 관리 → 파트 관리 |
-| 3 | 네임스페이스 생성 | 어드민 → 네임스페이스 |
-| 4 | 지식베이스 등록 | 어드민 → 지식베이스 |
-| 5 | (선택) HTTP 도구 등록 | 어드민 → HTTP 도구 |
-| 6 | 일반 사용자 계정 생성 | 어드민 → 사용자 관리 |
+| 3 | 네임스페이스(지식 범위) 생성 | 어드민 → 기준 정보 관리 |
+| 4 | 지식 등록 / 정책서 임포트 | 어드민 → 지식 베이스 / 정책 |
+| 5 | 일반 사용자 계정 생성 | 어드민 → 사용자 관리 |
 
 > 초기 로그인 후 반드시 admin 비밀번호를 변경하세요.
 
@@ -376,68 +378,62 @@ bash scripts/import-and-run.sh smagentlab-images-v2.16.tar.gz
 
 ```bash
 git pull origin main
-# .env의 IMAGE_TAG 갱신: v2.16 → v2.17
-bash scripts/export-images.sh v2.17
+bash scripts/export-images.sh <TAG>      # §1-3 Step 3의 모델 포함 확인까지
 ```
 
 ### 3-2. 폐쇄망 서버에서 적용
 
 ```bash
 cd /opt/smagentlab
-
-# 새 .env 반영 (IMAGE_TAG=v2.17 로 업데이트)
-# 새 이미지 tar.gz 반입
-
-bash scripts/update-images.sh smagentlab-images-v2.17.tar.gz
+# 1) 새 tar.gz 반입 + sha256 확인(§2-2), .env의 IMAGE_TAG=<TAG> 로 갱신
+# 2) init/ 디렉토리도 새 것으로 교체(빈 DB 재설치 대비 — 기존 DB엔 자동 적용 안 됨)
+bash scripts/update-images.sh smagentlab-images-<TAG>.tar.gz   # 백업 제안에 반드시 y
 ```
 
-**처리 내용:**
-1. (선택) DB 백업 자동 제안
-2. 새 이미지 로드
-3. `backend`, `frontend` 컨테이너만 재생성 (postgres, redis 볼륨은 그대로 유지)
+**처리 내용:** (선택) DB 백업 → 이미지 로드 → `backend`·`frontend`만 재생성(postgres·redis 볼륨 유지).
+백엔드가 기동하면서 **스키마 마이그레이션을 자동 적용**한다(`main.py`의 멱등 마이그레이션 — 새 테이블·컬럼·함수).
+로그에서 오류가 없는지 확인: `docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail=100 backend`
 
 ### 3-3. 롤백
 
-`.env`의 `IMAGE_TAG`를 이전 버전으로 되돌리고 `up -d --force-recreate backend frontend`만 실행하면 즉시 롤백됩니다 (이전 이미지가 서버에 남아있는 한).
+이미지만 되돌리면 되는 경우: `.env`의 `IMAGE_TAG`를 직전 버전으로 바꾸고
 
 ```bash
-# .env: IMAGE_TAG=v2.16 으로 되돌리기
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate backend frontend
 ```
 
-> 이전 이미지를 정리했다면 백업 tar.gz을 다시 `docker load` 해야 합니다. 운영 서버에서는 직전 버전 이미지 1개는 유지 권장.
+> ⚠️ **§3-4 임베딩 재색인을 실행한 뒤에는 이미지만 되돌리면 안 된다** — DB 벡터가 1024차원으로 바뀌어 옛 이미지(768차원)가
+> 동작하지 않는다. 이 경우 업데이트 직전 백업으로 DB 복원(§4-2) 후 이미지를 되돌린다.
+> 운영 서버에는 직전 버전 이미지 1개를 남겨둔다(정리했다면 그 tar.gz을 다시 `docker load`).
 
-### 3-4. v2.16 → v2.17 마이그레이션 시 주의
+### 3-4. v2.17 → v2.119 업그레이드 시 추가 작업 (1회)
 
-**(1) DB 마이그레이션 수동 실행** — `init/`는 빈 pgdata에서만 자동 실행되므로 운영 서버에서는 수동 적용:
+자동 마이그레이션이 못 하는 일회성 작업 두 가지. 순서대로, §3-2 직후에 실행한다.
+
+**(1) 임베딩 모델 교체 재색인 — 벡터 768 → 1024차원 (v2.72)**
 
 ```bash
-docker exec -i ops-postgres psql -U ops -d opsdb < init/03-llm-credentials.sql
+# 먼저 현재 차원 확인 — vector(768)이면 실행, vector(1024)면 이미 끝난 것이니 건너뜀
+docker exec ops-postgres psql -U ops -d opsdb -tAc \
+  "SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid='rag_knowledge'::regclass AND attname='embedding'"
+
+# vector(768)일 때만 — 8개 테이블 컬럼 변경 + 전량 재임베딩(데이터 양에 따라 수 분~수십 분)
+docker exec -it ops-backend python scripts/migrate_embedding_model.py
 ```
 
-이 마이그레이션은 옛 `ops_user.encrypted_llm_api_key` 컬럼을 제거하고 `encrypted_llm_credentials` 컬럼을 추가합니다.
+> 끝나면 같은 확인 쿼리가 `vector(1024)`. 그 전까지 채팅 검색·지식 등록은 실패한다(작업 시간대에 진행).
+> 모델은 이미지에 들어 있어 인터넷이 필요 없다. 개발망에서 `encode()` 단계 오류가 났던 이력이 있어(스크립트 주석 참고)
+> 같은 증상이면 `-e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0`을 붙여 재실행 — 폐쇄망에서 이 옵션은 외부 접속 시도로
+> 지연될 수 있으니 기본 실행이 먼저다.
 
-**(2) .env 환경변수 교체** — v2.16의 `INHOUSE_LLM_URL`/`INHOUSE_LLM_API_KEY`는 v2.17에서 제거:
+**(2) 업무구분 기본값 백필 (v2.28)** — 업무구분이 필수가 되면서 비어 있는 지식을 '공통지식'으로 채운다. 여러 번 실행해도 안전.
 
-```env
-# 옛 (제거)
-# INHOUSE_LLM_URL=...
-# INHOUSE_LLM_API_KEY=...
-
-# 신규 (필수)
-INHOUSE_LLM_BASE_URL=https://devx-gw.shinsegae-inc.com
-INHOUSE_LLM_CLIENT_ID=usr-...
-INHOUSE_LLM_CLIENT_SECRET=...
-INHOUSE_LLM_AGENT_ID=...
-INHOUSE_LLM_AGENT_CODE=playground
-INHOUSE_LLM_CONVERSATION_ID=...   # dify 사전 등록 conv_id (없으면 0바이트 응답 가능)
+```bash
+docker exec -i ops-postgres psql -U ops -d opsdb < init/04-category-required-backfill.sql
 ```
 
-**(3) 새 의존성** — 이미지 안에 동봉됨 (사용자는 별도 작업 불필요):
-- `pymupdf==1.24.13` (PDF 파싱 — v2.16에서 누락되어 있었음)
-- `openpyxl==3.1.5` (Excel `.xlsx`/`.xlsm` 파싱)
-
-**(4) 파일 업로드 한도** — nginx `client_max_body_size 50M` 설정이 이미지에 포함됨. 사내 리버스 프록시 앞단을 거치는 경우 그쪽도 50M 이상 허용 필요.
+`.env`에 새로 넣어야 하는 필수 변수는 없다(v2.17 이후 추가된 설정은 모두 기본값 있음 — 리랭커는 `RERANKER_ENABLED=true`로 켤 수 있음).
+v2.16 → v2.17 절차(LLM 자격증명 컬럼 교체·환경변수 변경)는 이 문서의 git 이력(커밋 `cbcaacf`) 참고.
 
 ---
 
@@ -492,7 +488,9 @@ docker compose $COMPOSE down -v       # 컨테이너 + 볼륨 삭제 (데이터 
 |---|---|---|
 | `docker load` 실패 (no space left) | 디스크 부족 | `df -h`, 이전 이미지 정리: `docker image prune -a` |
 | `pgvector` 확장 오류 | 잘못된 postgres 이미지 사용 | 반드시 `pgvector/pgvector:pg16` 이미지 사용 확인 |
-| 백엔드 시작 시 "model not found" | 이미지 빌드 시 모델 다운로드 누락 | 빌드 PC에서 인터넷 확인 후 재빌드 |
+| 백엔드 시작 시 "model not found" | 이미지 빌드 시 모델 다운로드 누락(빌드는 실패하지 않음) | §1-3 Step 3 모델 포함 확인 → 빌드 PC 인터넷 확인 후 재빌드 |
+| 채팅·지식 등록 시 `expected 768 dimensions, not 1024` 류 오류 | v2.17 DB에 새 이미지만 올림 | §3-4 (1) 임베딩 재색인 실행 |
+| `$'\r': command not found` (스크립트 실행 시) | Windows에서 CRLF로 복사된 파일 | 저장소는 `.gitattributes`로 LF 고정(2026-10-02). 이미 반입했다면 `sed -i 's/\r$//' scripts/*.sh` |
 | OAuth 토큰 발급 실패 (401/403) | client_id/client_secret 오류 또는 폐쇄망에서 게이트웨이 미허용 | `.env`의 `INHOUSE_LLM_CLIENT_ID/SECRET` 재확인, 방화벽에서 `INHOUSE_LLM_BASE_URL` 도메인 HTTPS 허용. 임시로 `LLM_PROVIDER=ollama` 전환 |
 | 포트 8501/8000 충돌 | 다른 서비스 사용 중 | `.env`의 `FRONTEND_PORT`, `BACKEND_PORT` 변경 |
 | 컨테이너 재시작 반복 | DB 헬스체크 대기 | 1~2분 대기 후 `docker compose ps` 재확인 |
@@ -502,23 +500,12 @@ docker compose $COMPOSE down -v       # 컨테이너 + 볼륨 삭제 (데이터 
 | `docker compose` 명령 없음 | Compose v1 만 설치 | `docker-compose` (구버전) 대신 `docker compose` (공백) 사용. Plugin 재설치 필요 |
 | 한국어 텍스트 깨짐 (DB) | 로케일 미설정 | postgres 이미지는 기본 UTF-8, 문제없음. 클라이언트 PC의 입력 인코딩 확인 |
 
-### 5-2. ⚠️ init/ SQL 스크립트는 최초 1회만 실행됨
+### 5-2. init/ SQL은 빈 DB 최초 1회만 — 스키마 변경은 백엔드 기동 시 자동
 
-PostgreSQL은 `pgdata` 볼륨이 **비어있을 때만** `init/*.sql`을 실행합니다.
-
-**증상:** 두 번째 배포 시 새로운 `init/` 변경사항이 적용 안 됨.
-
-**해결 (운영 데이터 손실 주의):**
-```bash
-# 옵션 1) 데이터 다 지우고 재초기화 — 운영 데이터 손실
-docker compose -f docker-compose.yml -f docker-compose.prod.yml down -v
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-
-# 옵션 2) 추가 SQL을 수동으로 적용 — 권장
-docker exec -i ops-postgres psql -U ops -d opsdb < init/03-new-migration.sql
-```
-
-> 스키마 변경은 마이그레이션 파일(`init/03-...`, `init/04-...`)을 새로 만들고 수동 적용. 기존 파일 수정 금지.
+PostgreSQL은 `pgdata` 볼륨이 **비어있을 때만** `init/*.sql`을 실행한다. 이후 스키마 변경은 백엔드가 기동하면서
+`main.py`의 멱등 마이그레이션으로 자동 적용되므로 업그레이드 때 SQL을 손으로 돌릴 필요가 없다 — **예외는 데이터
+재가공이 필요한 일회성 작업**뿐이고, 해당 버전 업그레이드 절차(§3-4)에 명시한다. 마이그레이션 이력은
+`docs/table-definition.md`.
 
 ### 5-3. 빠른 진단 명령
 
@@ -562,16 +549,17 @@ df -h /var/lib/docker
 ## 7. 폐쇄망 운영 체크리스트 (요약)
 
 **최초 배포:**
-- [ ] 빌드 PC에서 `bash scripts/export-images.sh v2.16` 실행
+- [ ] 빌드 PC에서 `bash scripts/export-images.sh <TAG>` 실행 + 모델 포함 확인
 - [ ] `.env`의 시크릿 키들 운영용으로 새로 생성
-- [ ] `smagentlab-images-v2.16.tar.gz` + 설정 파일들 서버 반입
+- [ ] `smagentlab-images-<TAG>.tar.gz` + 설정 파일들 서버 반입
 - [ ] 서버에서 `bash scripts/import-and-run.sh` 실행
 - [ ] `http://<서버IP>:8501` 접속 확인
 - [ ] admin 로그인 → 비밀번호 변경 → 파트/네임스페이스/사용자 생성
 - [ ] cron에 일일 백업 등록
 
 **버전 업데이트:**
-- [ ] 빌드 PC에서 `IMAGE_TAG`를 새 버전으로 갱신 후 export
-- [ ] 서버 `.env`의 `IMAGE_TAG` 갱신
-- [ ] `bash scripts/update-images.sh` 실행 (백업 자동 제안 → yes)
-- [ ] 헬스체크 통과 후 `docker image prune -f` 로 이전 이미지 정리
+- [ ] 빌드 PC에서 `bash scripts/export-images.sh <TAG>` + 모델 포함 확인
+- [ ] 서버 `.env`의 `IMAGE_TAG` 갱신, `init/` 교체
+- [ ] `bash scripts/update-images.sh` 실행 (백업 제안 → **y**)
+- [ ] 해당 버전의 일회성 작업(§3-4 — v2.17에서 올리면 임베딩 재색인 + 업무구분 백필)
+- [ ] 헬스체크·채팅 질문 1건 확인 후 이전 이미지는 직전 버전 1개만 남기고 정리

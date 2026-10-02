@@ -6,7 +6,7 @@
 - 운영(폐쇄망): `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build`
   - 사전 `docker load` 로 이미지 반입 필요. 자세한 절차는 `docs/deployment-closed-network.md`
 - 특정 서비스만 빌드: `docker compose build backend frontend`
-- 이미지 버전 태그: `.env`의 `IMAGE_TAG` (예: `v2.16`) — compose가 자동 참조
+- 이미지 버전 태그: `.env`의 `IMAGE_TAG` (현재 운영 반입 `v2.119`, 2026-10-02) — compose가 자동 참조. 반입·업그레이드 절차는 `docs/deployment-closed-network.md`
 - Backend: FastAPI (port 8000), Frontend: React+nginx (port 8501)
 - DB: PostgreSQL + pgvector (ops-postgres 컨테이너)
 - Ollama: 호스트에서 별도 실행 (`ollama serve`)
