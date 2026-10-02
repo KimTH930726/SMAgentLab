@@ -50,7 +50,6 @@ def _require_category(category: Optional[str]) -> str:
 async def create_knowledge(
     namespace: str,
     content: str,
-    base_weight: float = 1.0,
     category: Optional[str] = None,
     *,
     created_by_part: Optional[str] = None,
@@ -96,7 +95,7 @@ async def create_knowledge(
                           created_by_part, created_by_user_id,
                           created_at::text, updated_at::text
                 """,
-                ns_id, content, str(embedding), base_weight, category,
+                ns_id, content, str(embedding), 1.0, category,
                 created_by_part, created_by_user_id, status, _EMBEDDING_MODEL_NAME,
             )
             if is_duplicate:
@@ -116,7 +115,6 @@ async def create_knowledge(
 async def update_knowledge(
     knowledge_id: int,
     content: Optional[str] = None,
-    base_weight: Optional[float] = None,
     category: Optional[str] = None,
     *,
     updated_by_part: Optional[str] = None,
@@ -131,7 +129,7 @@ async def update_knowledge(
             return None
 
         new_content = content if content is not None else current["content"]
-        new_weight = base_weight if base_weight is not None else current["base_weight"]
+        new_weight = current["base_weight"]  # 가중치 입력 제거(2026-10-02) — 값은 그대로 둔다
         # category=None은 "변경 없음". 업무구분은 필수값이라 빈 문자열로 초기화하는 것은 허용하지 않음.
         new_category = _require_category(category) if category is not None else current.get("category")
 
@@ -167,10 +165,16 @@ async def delete_knowledge(knowledge_id: int) -> bool:
     삭제된 행은 즉시 안 보이게 되지만, 실수 삭제 시 복구 가능하다(knowledge-lifecycle-design.md
     §4 Phase 1 — 하드 삭제 위험 대응)."""
     async with get_conn() as conn:
-        result = await conn.execute(
-            "UPDATE rag_knowledge SET status = 'deleted', updated_at = NOW() WHERE id = $1 AND status != 'deleted'",
-            knowledge_id,
-        )
+        async with conn.transaction():
+            result = await conn.execute(
+                "UPDATE rag_knowledge SET status = 'deleted', updated_at = NOW() WHERE id = $1 AND status != 'deleted'",
+                knowledge_id,
+            )
+            # 이 지식으로 메운 지식 공백은 다시 열린다(반려와 같은 처리) — 안 그러면 "공백 메움"으로 계속 세진다
+            await conn.execute(
+                "UPDATE ops_query_log SET resolved_knowledge_id = NULL, resolved_at = NULL WHERE resolved_knowledge_id = $1",
+                knowledge_id,
+            )
     return result == "UPDATE 1"
 
 
@@ -179,10 +183,15 @@ async def bulk_delete_knowledge(ids: list[int]) -> int:
     if not ids:
         return 0
     async with get_conn() as conn:
-        result = await conn.execute(
-            "UPDATE rag_knowledge SET status = 'deleted', updated_at = NOW() WHERE id = ANY($1::int[]) AND status != 'deleted'",
-            ids,
-        )
+        async with conn.transaction():
+            result = await conn.execute(
+                "UPDATE rag_knowledge SET status = 'deleted', updated_at = NOW() WHERE id = ANY($1::int[]) AND status != 'deleted'",
+                ids,
+            )
+            await conn.execute(
+                "UPDATE ops_query_log SET resolved_knowledge_id = NULL, resolved_at = NULL "
+                "WHERE resolved_knowledge_id = ANY($1::int[])", ids,
+            )
     return int(result.split()[-1])
 
 
@@ -363,7 +372,7 @@ async def resolve_duplicate(
             # 이 지식으로 "해결됨" 처리된 질의가 있었다면 연결을 끊는다 — 반려된 내용이
             # 통계 화면에 계속 "해결된 답변"으로 남아있는 걸 막기 위함
             await conn.execute(
-                "UPDATE ops_query_log SET resolved_knowledge_id = NULL WHERE resolved_knowledge_id = $1",
+                "UPDATE ops_query_log SET resolved_knowledge_id = NULL, resolved_at = NULL WHERE resolved_knowledge_id = $1",
                 knowledge_id,
             )
         return {"id": knowledge_id, "status": "rejected"}
@@ -725,7 +734,7 @@ async def _run_bulk_ingestion(
                     ns_id,
                     content,
                     str(emb),
-                    item.get("base_weight", 1.0),
+                    1.0,  # 가중치 입력 제거(2026-10-02)
                     item.get("category"),
                     source_file,
                     chunk_idx,

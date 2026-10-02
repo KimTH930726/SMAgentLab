@@ -84,7 +84,6 @@ interface UnifiedHit {
   adopted: boolean;
   adoptedReason: string;
   rawCategory?: string;
-  rawBaseWeight?: number;
   storage: { table: string; recordId: string | number; rows: MetaRow[] };
 }
 
@@ -129,7 +128,7 @@ export function UnifiedAdhocSearch() {
   const [flaggedIds, setFlaggedIds] = useState<Set<number>>(new Set());
   const [flaggingId, setFlaggingId] = useState<number | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [editForm, setEditForm] = useState({ content: '', category: '', base_weight: 1.0 });
+  const [editForm, setEditForm] = useState({ content: '', category: '' });
 
   const { data: categories = [] } = useQuery({
     queryKey: ['categories', selectedNs],
@@ -198,7 +197,6 @@ export function UnifiedAdhocSearch() {
           strengthPct: Math.max(4, Math.min(100, Math.round(r.v_score * 100))),
           knowledgeId: r.id,
           rawCategory: r.category ?? '',
-          rawBaseWeight: r.base_weight,
           adopted,
           adoptedReason: isKeywordOnly
             ? (adopted
@@ -389,7 +387,6 @@ export function UnifiedAdhocSearch() {
     setEditForm({
       content: hit.fullContent,
       category: hit.rawCategory ?? '',
-      base_weight: hit.rawBaseWeight ?? 1.0,
     });
     setIsEditing(true);
   };
@@ -673,16 +670,6 @@ export function UnifiedAdhocSearch() {
                     value={editForm.content}
                     onChange={(e) => setEditForm((f) => ({ ...f, content: e.target.value }))}
                     className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[220px] leading-relaxed"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">
-                    문서 우선순위: <span className="font-medium text-slate-300">{editForm.base_weight.toFixed(1)}</span>
-                  </label>
-                  <input
-                    type="range" min={0} max={3} step={0.1} value={editForm.base_weight}
-                    onChange={(e) => setEditForm((f) => ({ ...f, base_weight: parseFloat(e.target.value) }))}
-                    className="w-full accent-indigo-500"
                   />
                 </div>
                 {updateMutation.error && (

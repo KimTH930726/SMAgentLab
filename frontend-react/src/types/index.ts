@@ -72,13 +72,11 @@ export interface KnowledgeItem {
 export interface KnowledgeCreatePayload {
   namespace: string;
   content: string;
-  base_weight?: number;
   category?: string | null;
 }
 
 export interface KnowledgeUpdatePayload {
   content?: string;
-  base_weight?: number;
   category?: string | null;
 }
 
@@ -263,11 +261,12 @@ export interface FeedbackPayload {
   is_positive: boolean;
   comment?: string | null;
   message_id?: number | null;
-  resolved_knowledge_id?: number | null;
 }
 
-// Query log item from /stats/namespace/{name}/queries
-export type QueryStatus = 'pending' | 'resolved' | 'unresolved' | 'no_knowledge';
+// Query log item from /stats/namespace/{name}/queries — 상태는 답변(pending)/지식 공백(no_knowledge) 둘뿐(2026-10-02)
+export type QueryStatus = 'pending' | 'no_knowledge';
+/** 목록 필터 — filled = 지식 등록으로 메운 공백(상태는 no_knowledge, resolved_knowledge_id 있음) */
+export type QueryFilter = QueryStatus | 'filled';
 
 export interface QueryLog {
   id: number;
@@ -278,18 +277,20 @@ export interface QueryLog {
   resolved_at: string | null;
   answer: string | null;
   resolved_knowledge_id: number | null;
+  /** 연결 지식이 지금 검색에 쓰이는(active) 상태라 answer가 그 지식 내용인지 */
+  knowledge_active?: boolean;
 }
 
 // Stats types — matches backend NamespaceDetailStats
 export interface NamespaceStats {
   namespace: string;
   total_queries: number;
-  resolved: number;
-  pending: number;
-  unresolved: number;
+  answered: number;
   no_knowledge: number;
-  term_distribution: Array<{ term: string; total: number; pending: number; unresolved: number; description: string | null }>;
-  unresolved_cases: Array<{ id: number; question: string; mapped_term: string | null; created_at: string }>;
+  filled: number;
+  system_errors: number;
+  corrections_open: number;
+  term_distribution: Array<{ term: string; total: number; no_knowledge: number; description: string | null }>;
 }
 
 

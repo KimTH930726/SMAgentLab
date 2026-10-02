@@ -285,7 +285,8 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
 
 async def record_answer_signal(ns_id: int, message_id: int, reporter_id: Optional[int]) -> Optional[int]:
     """"답변 틀림"을 누른 순간 원장에 1건 — 한 줄 의견이 이어서 오면 create_item이 이 건을 채운다. 같은 사람의 같은
-    답변에 대기 건이 이미 있으면 그대로 둔다(여러 번 눌러도 1건). best-effort: 실패해도 피드백 자체는 막지 않는다."""
+    답변에 대기 건이 이미 있으면 그대로 둔다(여러 번 눌러도 1건). 실패하면 None(로그 남김) — 이 건이 신고의 유일한
+    기록이라 호출측(피드백 라우터)이 사용자에게 실패를 알린다."""
     try:
         async with get_conn() as conn:
             existing = await conn.fetchval(
@@ -568,6 +569,9 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
         settings.embedding_model, old["owner"], old["confluence_page_id"], old["confluence_version"],
         old["heading_path"])
     await conn.execute("UPDATE rag_knowledge SET status = 'deprecated' WHERE id = $1", old["id"])
+    # 이 지식으로 메운 지식 공백은 새 버전을 가리키게 — 안 그러면 통계 목록이 폐기된 옛 버전을 "메운 지식"으로 잡는다
+    await conn.execute("UPDATE ops_query_log SET resolved_knowledge_id = $2 WHERE resolved_knowledge_id = $1",
+                       old["id"], new_id)
     return new_id
 
 

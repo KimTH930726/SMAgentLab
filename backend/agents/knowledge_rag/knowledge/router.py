@@ -56,7 +56,6 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
     row = await service.create_knowledge(
         namespace=body.namespace,
         content=body.content,
-        base_weight=body.base_weight,
         category=body.category,
         created_by_part=user["part"],
         created_by_user_id=user["id"],
@@ -77,7 +76,6 @@ async def modify_knowledge(knowledge_id: int, body: KnowledgeUpdate, user: dict 
     row = await service.update_knowledge(
         knowledge_id=knowledge_id,
         content=body.content,
-        base_weight=body.base_weight,
         category=body.category,
         updated_by_part=user["part"],
         updated_by_user_id=user["id"],
@@ -160,6 +158,10 @@ class VectorSearchRequest(BaseModel):
 
 @router.post("/bulk-delete", status_code=200)
 async def bulk_remove_knowledge(body: BulkDeleteRequest, user: dict = Depends(get_current_user)):
+    # 권한 검사(2026-10-02) — 예전엔 없어서 조회 전용·다른 파트 사용자도 아무 지식이나 지울 수 있었다.
+    # 단건 삭제·bulk-update와 같은 기준: 대상 지식이 속한 파트마다 소유권 확인
+    for ns in await service.get_knowledge_namespaces(body.ids):
+        await check_namespace_ownership(ns, user)
     deleted = await service.bulk_delete_knowledge(body.ids)
     return {"deleted": deleted}
 
@@ -406,7 +408,7 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
 
 async def _run_auto_tag(
     items: list[dict], namespace: str, user: dict,
-    *, lookup_categories: bool = False, apply_priority_weight: bool = False,
+    *, lookup_categories: bool = False,
 ) -> None:
     """items(각 dict에 "content" 키 필요)를 LLM으로 자동 태깅 — item을 in-place 갱신."""
     try:
@@ -435,8 +437,6 @@ async def _run_auto_tag(
             tag = tag_map.get(i, {})
             if tag.get("category"):
                 item["category"] = tag["category"]
-            if apply_priority_weight and tag.get("priority_score") is not None:
-                item["base_weight"] = 0.5 + float(tag["priority_score"]) * 1.5
     except Exception as e:
         logger.warning("자동 태깅 실패 (무시하고 계속): %s", e)
 
@@ -536,14 +536,11 @@ async def import_file(
         raise HTTPException(status_code=400, detail="분할된 청크가 없습니다.")
 
     # items 구성
-    base_weight = 1.0
-    if analyzer_result and analyzer_result.get("priority_score") is not None:
-        base_weight = 0.5 + float(analyzer_result["priority_score"]) * 1.5
-    items = [{"content": c.text, "category": category, "base_weight": base_weight} for c in chunks]
+    items = [{"content": c.text, "category": category} for c in chunks]
 
     # LLM 자동 태깅 (선택적)
     if auto_tag:
-        await _run_auto_tag(items, namespace, user, lookup_categories=True, apply_priority_weight=True)
+        await _run_auto_tag(items, namespace, user, lookup_categories=True)
 
     # 벌크 등록
     result = await service.bulk_create_knowledge(

@@ -9,7 +9,7 @@ from core.dependencies import get_current_user, get_current_admin, check_namespa
 from service.admin.schemas import (
     NamespaceCreate, NamespaceInfo,
     KnowledgeCategoryCreate, KnowledgeCategoryOut,
-    NamespaceStats, StatsResponse, TermStat, NamespaceDetailStats,
+    TermStat, NamespaceDetailStats,
     LLMConfigUpdate, LLMTestRequest, ThresholdUpdate, SearchDefaultsUpdate,
 )
 from service.admin import service
@@ -58,17 +58,6 @@ def _extract_config(body) -> dict:
         if val is not None:
             cfg[field] = val
     return cfg
-
-
-async def _insert_feedback_if_message_exists(conn, namespace_id: int, question: str, message_id: int | None) -> None:
-    if not message_id:
-        return
-    exists = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM ops_message WHERE id = $1)", message_id)
-    if exists:
-        await conn.execute(
-            "INSERT INTO ops_feedback (namespace_id, question, is_positive, message_id) VALUES ($1, $2, TRUE, $3)",
-            namespace_id, question, message_id,
-        )
 
 
 # ── Namespace ────────────────────────────────────────────────────────────────
@@ -234,59 +223,14 @@ async def suggest_category(name: str, body: dict, user: dict = Depends(get_curre
 
 # ── Stats ────────────────────────────────────────────────────────────────────
 
-@router.get("/api/stats", response_model=StatsResponse)
-async def get_stats(user: dict = Depends(get_current_user)):
-    async with get_conn() as conn:
-        ns_rows = await conn.fetch(
-            """
-            WITH q_agg AS (
-                SELECT namespace_id, COUNT(*) AS total_queries,
-                    COUNT(*) FILTER (WHERE status = 'resolved') AS resolved,
-                    COUNT(*) FILTER (WHERE status = 'pending') AS pending,
-                    COUNT(*) FILTER (WHERE status = 'unresolved') AS unresolved
-                FROM ops_query_log GROUP BY namespace_id
-            ),
-            fb_agg AS (
-                SELECT namespace_id,
-                    COUNT(*) FILTER (WHERE is_positive) AS positive_feedback,
-                    COUNT(*) FILTER (WHERE NOT is_positive) AS negative_feedback
-                FROM ops_feedback GROUP BY namespace_id
-            ),
-            -- 검색에 실제로 쓰이는 지식만 센다(2026-09-28) — 예전엔 deprecated/rejected/검토대기에
-            -- 수집 중(staging) 행까지 모두 세어 등록 도중엔 수치가 부풀었다
-            k_agg AS (SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge WHERE status = 'active' GROUP BY namespace_id),
-            g_agg AS (SELECT namespace_id, COUNT(*) AS cnt FROM rag_glossary GROUP BY namespace_id)
-            SELECT n.name AS namespace,
-                COALESCE(q.total_queries, 0) AS total_queries,
-                COALESCE(q.resolved, 0) AS resolved,
-                COALESCE(q.pending, 0) AS pending,
-                COALESCE(q.unresolved, 0) AS unresolved,
-                COALESCE(f.positive_feedback, 0) AS positive_feedback,
-                COALESCE(f.negative_feedback, 0) AS negative_feedback,
-                COALESCE(k.cnt, 0) AS knowledge_count,
-                COALESCE(g.cnt, 0) AS glossary_count
-            FROM ops_namespace n
-            LEFT JOIN q_agg q ON n.id = q.namespace_id
-            LEFT JOIN fb_agg f ON n.id = f.namespace_id
-            LEFT JOIN k_agg k ON n.id = k.namespace_id
-            LEFT JOIN g_agg g ON n.id = g.namespace_id
-            ORDER BY total_queries DESC, n.name
-            """
-        )
-        unresolved_rows = await conn.fetch(
-            """
-            SELECT n.name AS namespace, ql.question, ql.created_at::text
-            FROM ops_query_log ql
-            JOIN ops_namespace n ON ql.namespace_id = n.id
-            WHERE ql.status = 'unresolved'
-            ORDER BY ql.created_at DESC LIMIT 20
-            """
-        )
-
-    return StatsResponse(
-        namespaces=[NamespaceStats(**dict(r)) for r in ns_rows],
-        unresolved_cases=[dict(r) for r in unresolved_rows],
-    )
+# 질의 상태는 "답변(pending)"과 "지식 공백(no_knowledge)" 둘뿐(2026-10-02, #61) — 좋아요/싫어요 기반 해결·미해결은
+# 없앴고, 틀린 답은 정정 요청(개선 원장 pending)으로 센다. 공백을 지식 등록으로 메우면 상태는 그대로, 연결 지식만 채운다.
+# {a} = 테이블 별칭 자리(빈 문자열이면 별칭 없음) — 같은 조건을 집계·목록·용어 분포에서 같이 쓴다
+_OPEN_GAP = "{a}status = 'no_knowledge' AND {a}resolved_knowledge_id IS NULL"
+_FILLED_GAP = "{a}status = 'no_knowledge' AND {a}resolved_knowledge_id IS NOT NULL"
+# 목록 필터 — 화면의 카드 하나 = 필터 하나
+_QUERY_FILTERS = {"pending": "q.status = 'pending'", "no_knowledge": _OPEN_GAP.format(a="q."),
+                  "filled": _FILLED_GAP.format(a="q.")}
 
 
 @router.get("/api/stats/namespace/{name}", response_model=NamespaceDetailStats)
@@ -296,45 +240,40 @@ async def get_namespace_stats(name: str, user: dict = Depends(get_current_user))
         if ns_id is None:
             raise HTTPException(status_code=404, detail=f"Namespace '{name}' not found")
         summary = await conn.fetchrow(
-            """
-            SELECT COUNT(*) AS total_queries,
-                COUNT(*) FILTER (WHERE status = 'resolved') AS resolved,
-                COUNT(*) FILTER (WHERE status = 'pending') AS pending,
-                COUNT(*) FILTER (WHERE status = 'unresolved') AS unresolved,
-                COUNT(*) FILTER (WHERE status = 'no_knowledge') AS no_knowledge
+            f"""
+            SELECT COUNT(*) FILTER (WHERE status <> 'system_error') AS total_queries,
+                COUNT(*) FILTER (WHERE status = 'pending') AS answered,
+                COUNT(*) FILTER (WHERE status = 'system_error') AS system_errors,
+                COUNT(*) FILTER (WHERE {_OPEN_GAP.format(a="")}) AS no_knowledge,
+                COUNT(*) FILTER (WHERE {_FILLED_GAP.format(a="")}) AS filled
             FROM ops_query_log WHERE namespace_id = $1
             """, ns_id,
         )
         term_rows = await conn.fetch(
-            """
+            f"""
             SELECT COALESCE(ql.mapped_term, '기타') AS term,
                 COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE ql.status = 'pending') AS pending,
-                COUNT(*) FILTER (WHERE ql.status = 'unresolved') AS unresolved,
+                COUNT(*) FILTER (WHERE {_OPEN_GAP.format(a="ql.")}) AS no_knowledge,
                 MAX(g.description) AS description
             FROM ops_query_log ql
             LEFT JOIN rag_glossary g ON g.namespace_id = ql.namespace_id AND g.term = ql.mapped_term
-            WHERE ql.namespace_id = $1
+            WHERE ql.namespace_id = $1 AND ql.status <> 'system_error'
             GROUP BY ql.mapped_term ORDER BY total DESC LIMIT 20
             """, ns_id,
         )
-        unresolved_rows = await conn.fetch(
-            """
-            SELECT id, question, mapped_term, created_at::text
-            FROM ops_query_log WHERE namespace_id = $1 AND status = 'unresolved'
-            ORDER BY created_at DESC LIMIT 30
-            """, ns_id,
+        corrections_open = await conn.fetchval(
+            "SELECT COUNT(*) FROM ops_improvement_item WHERE namespace_id = $1 AND status = 'pending'", ns_id,
         )
 
     return NamespaceDetailStats(
         namespace=name,
         total_queries=summary["total_queries"] or 0,
-        resolved=summary["resolved"] or 0,
-        pending=summary["pending"] or 0,
-        unresolved=summary["unresolved"] or 0,
+        answered=summary["answered"] or 0,
         no_knowledge=summary["no_knowledge"] or 0,
+        filled=summary["filled"] or 0,
+        system_errors=summary["system_errors"] or 0,
+        corrections_open=corrections_open or 0,
         term_distribution=[TermStat(**dict(r)) for r in term_rows],
-        unresolved_cases=[dict(r) for r in unresolved_rows],
     )
 
 
@@ -345,96 +284,58 @@ async def get_namespace_queries(
     limit: int = QueryParam(default=100, le=500),
     user: dict = Depends(get_current_user),
 ):
-    # resolved_knowledge_id가 있으면(= 관리자가 지식을 등록해 해결한 건) 등록된 지식의
-    # 최신 내용을 answer로 반환 — 그렇지 않으면(또는 그 지식이 아직 승인 대기거나 이후
-    # 반려/병합으로 status가 active가 아니게 됐다면) 원래의 AI 답변을 그대로 반환
-    base_select = """
-        SELECT q.id, q.question,
-               COALESCE(k.content, q.answer) AS answer,
-               q.mapped_term, q.status, q.created_at::text, q.resolved_at::text,
-               k.id AS resolved_knowledge_id
-        FROM ops_query_log q
-        LEFT JOIN rag_knowledge k ON k.id = q.resolved_knowledge_id AND k.status = 'active'
-    """
-    # 해결된 건은 "해결된 시각" 기준으로 최신순 — 질문한 시각(created_at)순으로 두면
-    # 오래전에 질문했다가 방금 해결된 건이 목록 맨 아래로 묻힌다. 해결 안 된 상태들은
-    # resolved_at이 NULL이라 created_at으로 자연히 폴백된다.
-    order_by = "ORDER BY COALESCE(q.resolved_at, q.created_at) DESC"
+    """status = pending(답변) / no_knowledge(열린 공백) / filled(메운 공백), 없으면 전체.
+    메운 공백은 등록된 지식의 최신 내용을 answer로 보여준다(그 지식이 검토 대기거나 이후 반려·병합되면 원래 답변으로 폴백).
+    resolved_knowledge_id는 원래 연결 값 그대로 — 집계(메움)와 화면 판단이 어긋나지 않게(검토 대기 지식으로 메운 경우)."""
+    if status is not None and status not in _QUERY_FILTERS:
+        raise HTTPException(status_code=400, detail="status는 pending / no_knowledge / filled 중 하나")
+    # 전체 목록에도 시스템 오류(LLM 연결 실패)는 뺀다 — 질문에 대한 기록이 아니라 장애 기록
+    where = "q.namespace_id = $1 AND " + (_QUERY_FILTERS[status] if status else "q.status <> 'system_error'")
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, name)
         if ns_id is None:
             return []
-        if status:
-            rows = await conn.fetch(
-                base_select + f" WHERE q.namespace_id = $1 AND q.status = $2 {order_by} LIMIT $3",
-                ns_id, status, limit,
-            )
-        else:
-            rows = await conn.fetch(
-                base_select + f" WHERE q.namespace_id = $1 {order_by} LIMIT $2",
-                ns_id, limit,
-            )
+        rows = await conn.fetch(
+            f"""
+            SELECT q.id, q.question, COALESCE(k.content, q.answer) AS answer,
+                   q.mapped_term, q.status, q.created_at::text, q.resolved_at::text,
+                   q.resolved_knowledge_id, (k.id IS NOT NULL) AS knowledge_active
+            FROM ops_query_log q
+            LEFT JOIN rag_knowledge k ON k.id = q.resolved_knowledge_id AND k.status = 'active'
+            WHERE {where}
+            ORDER BY COALESCE(q.resolved_at, q.created_at) DESC LIMIT $2
+            """, ns_id, limit,
+        )
     return [dict(r) for r in rows]
 
 
-@router.patch("/api/stats/query-log/{log_id}/resolve", status_code=200)
-async def resolve_query_log(log_id: int, user: dict = Depends(get_current_user)):
-    from agents.knowledge_rag.knowledge import service as knowledge_service
+class FillGapRequest(BaseModel):
+    knowledge_id: int
 
+
+@router.patch("/api/stats/query-log/{log_id}/fill", status_code=200)
+async def fill_knowledge_gap(log_id: int, body: FillGapRequest, user: dict = Depends(get_current_user)):
+    """지식 공백 질의를 등록한 지식으로 메웠다고 기록 — 상태는 공백 그대로, 연결 지식·시각만 채운다(메움 실적).
+    연결할 지식은 같은 파트의 살아 있는 지식만(없는 id면 FK 오류로 500, 남의 파트 지식이면 엉뚱한 내용이 "메움"으로 보였다)."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
-            SELECT ql.namespace_id, n.name AS namespace, ql.question, ql.answer, ql.mapped_term, ql.message_id
-            FROM ops_query_log ql
-            JOIN ops_namespace n ON ql.namespace_id = n.id
-            WHERE ql.id = $1 AND ql.status = 'pending'
+            SELECT n.name AS namespace, ql.namespace_id FROM ops_query_log ql JOIN ops_namespace n ON ql.namespace_id = n.id
+            WHERE ql.id = $1 AND ql.status = 'no_knowledge'
             """, log_id,
         )
         if not row:
-            raise HTTPException(status_code=404, detail="Query log not found or not pending")
+            raise HTTPException(status_code=404, detail="지식 공백 질의가 아닙니다.")
         await check_namespace_ownership(row["namespace"], user)
-        if not row["answer"]:
-            raise HTTPException(status_code=400, detail="답변이 없어 지식으로 등록할 수 없습니다.")
-
-    # 원클릭 승인이라 별도 업무구분 입력이 없음 — 기본값 '공통지식'으로 등록.
-    # create_knowledge()를 그대로 재사용해 지식등록 탭과 동일하게 유사 지식 검사(pending_review)를 거친다.
-    created = await knowledge_service.create_knowledge(
-        row["namespace"], row["answer"],
-        category="공통지식",
-        created_by_part=user["part"], created_by_user_id=user["id"],
-    )
-
-    async with get_conn() as conn:
+        same_ns = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM rag_knowledge WHERE id = $1 AND namespace_id = $2 "
+            "AND status NOT IN ('deleted', 'rejected', 'deprecated'))", body.knowledge_id, row["namespace_id"])
+        if not same_ns:
+            raise HTTPException(status_code=400, detail="이 파트에 등록된 지식이 아닙니다.")
         await conn.execute(
-            "UPDATE ops_query_log SET status = 'resolved', resolved_knowledge_id = $2, resolved_at = NOW() WHERE id = $1",
-            log_id, created["id"],
-        )
-        await _insert_feedback_if_message_exists(conn, row["namespace_id"], row["question"], row["message_id"])
-    return {"status": "ok", "pending_review": created.get("pending_review", False)}
-
-
-class MarkResolvedRequest(BaseModel):
-    knowledge_id: Optional[int] = None
-
-
-@router.patch("/api/stats/query-log/{log_id}/mark-resolved", status_code=200)
-async def mark_query_log_resolved(log_id: int, body: MarkResolvedRequest = MarkResolvedRequest(), user: dict = Depends(get_current_user)):
-    async with get_conn() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT ql.namespace_id, n.name AS namespace, ql.question, ql.message_id
-            FROM ops_query_log ql
-            JOIN ops_namespace n ON ql.namespace_id = n.id
-            WHERE ql.id = $1
-            """, log_id,
-        )
-        if not row:
-            raise HTTPException(status_code=404, detail="Query log not found")
-        await conn.execute(
-            "UPDATE ops_query_log SET status = 'resolved', resolved_knowledge_id = COALESCE($2, resolved_knowledge_id), resolved_at = NOW() WHERE id = $1",
+            "UPDATE ops_query_log SET resolved_knowledge_id = $2, resolved_at = NOW() WHERE id = $1",
             log_id, body.knowledge_id,
         )
-        await _insert_feedback_if_message_exists(conn, row["namespace_id"], row["question"], row["message_id"])
     return {"status": "ok"}
 
 

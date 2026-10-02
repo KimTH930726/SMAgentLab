@@ -72,28 +72,16 @@ function KnowledgeContentView({ content }: { content: string }) {
   );
 }
 
+// 가중치(문서 우선순위) 입력·표시는 2026-10-02 제거 — 쓰인 적 없고 틀린 검색은 내용·업무구분·용어집을 고친다(정정 흐름)
 interface KnowledgeFormData {
   content: string;
-  base_weight: number;
   category: string;
 }
 
 const defaultForm: KnowledgeFormData = {
   content: '',
-  base_weight: 1.0,
   category: '',
 };
-
-function weightLabel(w: number) {
-  return w >= 2 ? '높음' : w >= 1.5 ? '보통' : '기본';
-}
-function weightClass(w: number) {
-  return w >= 2
-    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'
-    : w >= 1.5
-    ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300'
-    : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-600/40 dark:text-zinc-300';
-}
 
 // 수동/파일/텍스트 등록 폼 공용(2026-09-22, 지식 카테고리 자동화 §3-3 일반화) — 컨텐츠를
 // 실제로 확인할 수 있게 된 시점(미리보기 성공 직후)에 한 번 호출해 "공통지식" 기본값을 실제
@@ -176,7 +164,6 @@ export function KnowledgeTable() {
   const [showEdit, setShowEdit] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [categoryFilter, setCategoryFilter] = useState('');
-  const [sortBy, setSortBy] = useState<'default' | 'weight_desc' | 'weight_asc'>('default');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'text' | 'vector'>('text');
   const [vectorSearchInput, setVectorSearchInput] = useState('');
@@ -226,7 +213,6 @@ export function KnowledgeTable() {
     mutationFn: (id: number) =>
       updateKnowledge(id, {
         content: editForm.content,
-        base_weight: editForm.base_weight,
         category: editForm.category,
       }),
     onSuccess: () => {
@@ -282,7 +268,6 @@ export function KnowledgeTable() {
     setEditingId(item.id);
     setEditForm({
       content: item.content,
-      base_weight: item.base_weight,
       category: item.category ?? '',
     });
     setShowEdit(true);
@@ -302,12 +287,7 @@ export function KnowledgeTable() {
   const searchedItems = searchMode === 'vector' && vectorQuery
     ? (vectorSearchQuery.data ?? [])
     : textFilteredItems;
-  // 가중치 정렬 — 벡터 검색 모드에서는 유사도순이 더 유용하므로 정렬을 덮어쓰지 않는다
-  const displayItems = sortBy === 'default' || (searchMode === 'vector' && vectorQuery)
-    ? searchedItems
-    : [...searchedItems].sort((a, b) =>
-        sortBy === 'weight_desc' ? b.base_weight - a.base_weight : a.base_weight - b.base_weight
-      );
+  const displayItems = searchedItems;
   const { totalPages, totalItems, slice } = useClientPaging(displayItems, pageSize);
   const pagedItems = slice(page);
 
@@ -425,20 +405,6 @@ export function KnowledgeTable() {
                 </select>
               </div>
             )}
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">정렬</label>
-              <select
-                value={sortBy}
-                onChange={(e) => { setSortBy(e.target.value as typeof sortBy); setPage(1); }}
-                disabled={searchMode === 'vector' && !!vectorQuery}
-                title={searchMode === 'vector' && !!vectorQuery ? '벡터 검색 중에는 유사도순으로 고정됩니다' : undefined}
-                className="w-40 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
-              >
-                <option value="default">기본순</option>
-                <option value="weight_desc">가중치 높은순</option>
-                <option value="weight_asc">가중치 낮은순</option>
-              </select>
-            </div>
             {/* Search mode toggle */}
             <div className="flex rounded-lg border border-slate-600 overflow-hidden text-xs font-medium flex-shrink-0">
               <button
@@ -546,11 +512,6 @@ export function KnowledgeTable() {
                           {((item as KnowledgeItem & { similarity?: number }).similarity! * 100).toFixed(1)}%
                         </span>
                       )}
-                      {/* 가중치를 항상 같은 자리(우측 고정 컬럼)에 표시 — 다른 배지가
-                          몇 개 붙든 위치가 안 밀려서 목록에서 한눈에 비교하기 쉽다 */}
-                      <span className={`px-1.5 py-0.5 rounded font-semibold whitespace-nowrap ${weightClass(item.base_weight)}`}>
-                        가중치 {item.base_weight.toFixed(1)}
-                      </span>
                       <span>{new Date(item.updated_at !== item.created_at ? item.updated_at : item.created_at).toISOString().slice(0, 10)}</span>
                       {item.created_by_username && <span>{item.created_by_username}</span>}
                       {item.created_by_part && <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>}
@@ -637,18 +598,6 @@ export function KnowledgeTable() {
               onChange={(e) => setEditForm((f) => ({ ...f, content: e.target.value }))}
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[260px] read-only:border-slate-700 leading-relaxed" />
           </div>
-          {canModifyNs && (
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">
-                문서 우선순위: <span className={`font-medium ${editForm.base_weight >= 2 ? 'text-emerald-600 dark:text-emerald-400' : editForm.base_weight >= 1.5 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-300'}`}>
-                  {editForm.base_weight.toFixed(1)} — {weightLabel(editForm.base_weight)}
-                </span>
-              </label>
-              <input type="range" min={0} max={3} step={0.1} value={editForm.base_weight}
-                onChange={(e) => setEditForm((f) => ({ ...f, base_weight: parseFloat(e.target.value) }))}
-                className="w-full accent-indigo-500" />
-            </div>
-          )}
           {updateMutation.error && <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>}
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="ghost" size="sm" onClick={() => { setShowEdit(false); setEditingId(null); }}>
@@ -1687,7 +1636,6 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       createKnowledge({
         namespace,
         content: form.content,
-        base_weight: form.base_weight,
         category: form.category,
       }),
     onSuccess: (created) => {
@@ -1716,17 +1664,6 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
           onBlur={() => autoSuggestCategoryIfUntouched(namespace, categoryNames, form.category,
             (v) => setForm((f) => ({ ...f, category: v })), form.content)}
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[160px]" />
-      </div>
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1">
-          문서 우선순위: <span className={`font-medium ${form.base_weight >= 2 ? 'text-emerald-600 dark:text-emerald-400' : form.base_weight >= 1.5 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-300'}`}>
-            {form.base_weight.toFixed(1)} — {weightLabel(form.base_weight)}
-          </span>
-        </label>
-        <input type="range" min={0} max={3} step={0.1} value={form.base_weight}
-          onChange={(e) => setForm((f) => ({ ...f, base_weight: parseFloat(e.target.value) }))}
-          className="w-full accent-indigo-500" />
-        <p className="text-[11px] text-slate-500 mt-1">1.0=기본 · 1.5+=보통 · 2.0+=높음(핵심 문서)</p>
       </div>
 
       {done && <p className={`text-sm font-medium ${donePending ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>{done}</p>}

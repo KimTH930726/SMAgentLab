@@ -19,7 +19,6 @@ LLM_UNAVAILABLE_MSG = "[LLM 서버에 연결할 수 없습니다. 검색 결과�
 NO_KNOWLEDGE_MARKER = "관련 지식을 찾지 못했습니다"
 
 MAX_MESSAGES_PER_NS = 100
-QUERY_LOG_RETENTION_DAYS = 90
 # 스케줄러 인프라(cron/APScheduler 등)가 없어 채팅 턴에 얹혀 실행되는 하우스키핑 작업.
 # 매 턴마다 돌리면 DB 스캔 비용이 누적되므로 확률적으로만 샘플링 실행한다.
 CLEANUP_SAMPLE_RATE = 0.05
@@ -63,26 +62,24 @@ async def update_inhouse_conv_id(conv_id: int, inhouse_conv_id: str) -> None:
 
 async def create_query_log(
     namespace: str, question: str, answer: str,
-    has_results: bool, mapped_term: Optional[str] = None,
+    mapped_term: Optional[str] = None,
     message_id: Optional[int] = None,
-    had_context: bool = True,
     user_id: Optional[int] = None,
+    had_context: bool = True,
 ) -> int:
-    is_real_answer = answer and answer != LLM_UNAVAILABLE_MSG
-    # LLM이 마커 문구로 "시작"하는 답변만 준다는 가정(예전 startswith 체크)은 실제로는
-    # 안 지켜짐 — 프롬프트의 [형식] 규칙(마크다운/근거 표시 등)이 이 케이스에도 그대로
-    # 적용돼, "DS14에 대한 정의가 없습니다 ... 정리 ... 관련 지식을 찾지 못했습니다"처럼
-    # 마커가 답변 뒤쪽 문단에 섞여 나와 지식공백으로 분류되지 않는 사례가 실사용에서
-    # 확인됨. 이 마커 문구는 프롬프트상 모른다고 답할 때만 쓰도록 지정된 전용 문구라
-    # 정상 답변에 우연히 섞일 가능성이 낮으므로 in으로 완화.
-    llm_says_no_knowledge = bool(answer) and NO_KNOWLEDGE_MARKER in answer
-    if not had_context or llm_says_no_knowledge:
-        # had_context=False: 임계값을 넘는 문서가 아예 없었음
-        # llm_says_no_knowledge: 문서는 임계값을 넘어 컨텍스트에 포함됐지만, 실제로는
-        #   질문과 무관해서 LLM이 스스로 "모르겠다"고 답한 경우 — 둘 다 지식 갭으로 취급
+    """질의 기록 — 상태는 "답변(pending)"과 "지식 공백(no_knowledge)", 그리고 통계 밖의 "시스템 오류(system_error)"
+    (2026-10-02, #61·#64).
+
+    공백 = 임계값을 넘는 근거가 하나도 없었거나(had_context=False — 근거 없이 LLM이 답했으면 환각 위험이라 답변으로
+    세지 않는다), LLM이 "관련 지식을 찾지 못했습니다"라고 답한 것. 틀린 답은 정정 요청(개선 원장)이 맡아 좋아요/싫어요로
+    해결·미해결을 나누지 않는다. LLM 연결 실패는 공백도 답변도 아닌 장애 — system_error로 따로 남겨 답변률·공백 통계엔
+    섞지 않고 장애 건수만 본다(예전엔 "답변"으로 세져 답변률을 부풀렸다).
+    """
+    if not answer or answer == LLM_UNAVAILABLE_MSG:
+        status = "system_error"
+    # 마커는 프롬프트상 모른다고 답할 때만 쓰는 전용 문구 — 답변 뒤쪽 문단에 섞여 나오는 사례가 있어 포함 여부로 본다
+    elif not had_context or NO_KNOWLEDGE_MARKER in answer:
         status = "no_knowledge"
-    elif not has_results and not is_real_answer:
-        status = "unresolved"
     else:
         status = "pending"
     async with get_conn() as conn:
@@ -133,18 +130,6 @@ async def cleanup_old_messages(namespace: str) -> int:
         return deleted
 
 
-async def cleanup_resolved_query_logs() -> int:
-    async with get_conn() as conn:
-        result = await conn.execute(
-            "DELETE FROM ops_query_log WHERE status = 'resolved' AND created_at < NOW() - INTERVAL '1 day' * $1",
-            QUERY_LOG_RETENTION_DAYS,
-        )
-    deleted = int(result.split()[-1]) if result else 0
-    if deleted > 0:
-        logger.info("cleanup: resolved query_log %d건 삭제 (%d일 경과)", deleted, QUERY_LOG_RETENTION_DAYS)
-    return deleted
-
-
 async def cleanup_old_conversations() -> int:
     """`chat_retention_days`(ops_system_config)보다 오래 활동이 없는 대화를 삭제.
 
@@ -184,7 +169,6 @@ async def post_save_tasks(conv_id: int, namespace: Optional[str] = None) -> None
     if random.random() < CLEANUP_SAMPLE_RATE:
         if namespace:
             tasks.append(cleanup_old_messages(namespace))
-        tasks.append(cleanup_resolved_query_logs())
         tasks.append(cleanup_old_conversations())
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for r in results:

@@ -66,7 +66,7 @@ async def _migrate_core_tables(conn) -> None:
     # ── 기존 컬럼 추가 (하위 호환) ─────────────────────────────────
     await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS answer TEXT")
     await conn.execute("ALTER TABLE ops_conversation ADD COLUMN IF NOT EXISTS trimmed BOOLEAN NOT NULL DEFAULT FALSE")
-    await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS message_id INT REFERENCES ops_message(id) ON DELETE SET NULL")
+    await conn.execute("ALTER TABLE IF EXISTS ops_feedback ADD COLUMN IF NOT EXISTS message_id INT REFERENCES ops_message(id) ON DELETE SET NULL")
 
     # ── ops_part 테이블 ────────────────────────────────────────────
     await conn.execute("""
@@ -222,7 +222,6 @@ async def _migrate_core_tables(conn) -> None:
                 UNION SELECT namespace FROM rag_knowledge WHERE namespace IS NOT NULL
                 UNION SELECT namespace FROM ops_query_log WHERE namespace IS NOT NULL
                 UNION SELECT namespace FROM ops_conversation WHERE namespace IS NOT NULL
-                UNION SELECT namespace FROM ops_feedback WHERE namespace IS NOT NULL
             ) t WHERE ns IS NOT NULL
             ON CONFLICT (name) DO NOTHING
         """)
@@ -230,8 +229,8 @@ async def _migrate_core_tables(conn) -> None:
     # ── agent_type 컬럼 추가 (멀티 에이전트 확장 준비) ───────────────
     await conn.execute("ALTER TABLE ops_conversation ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
     await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
-    await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
-    await conn.execute("ALTER TABLE ops_feedback ADD COLUMN IF NOT EXISTS meta JSONB")
+    await conn.execute("ALTER TABLE IF EXISTS ops_feedback ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'knowledge_rag'")
+    await conn.execute("ALTER TABLE IF EXISTS ops_feedback ADD COLUMN IF NOT EXISTS meta JSONB")
 
     # ── query_log answer 역매칭 ────────────────────────────────────
     # namespace 내에서 ql.question과 동일한 내용의 user 메시지가 앞서 존재하는
@@ -279,14 +278,13 @@ async def _migrate_core_tables(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_user_id ON ops_conversation (user_id, created_at DESC)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_ns_user ON ops_conversation (namespace_id, user_id)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_query_log_ns_status ON ops_query_log (namespace_id, status)")
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_ns_id ON ops_feedback (namespace_id)")
 
 
 async def _migrate_namespace_ids(conn) -> None:
     """namespace_id 컬럼 추가 및 FK 제약 조건 마이그레이션 (모든 관련 테이블)."""
     # ── namespace_id 컬럼 추가 및 데이터 채우기 ────────────────────
     for tbl in ("rag_glossary", "rag_knowledge", "rag_knowledge_category",
-                "ops_query_log", "ops_conversation", "ops_feedback"):
+                "ops_query_log", "ops_conversation"):
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS namespace_id INT")
         # string namespace → namespace_id 동기화 (namespace 컬럼이 있는 경우)
         if await _column_exists(conn, tbl, "namespace"):
@@ -304,7 +302,6 @@ async def _migrate_namespace_ids(conn) -> None:
         "rag_knowledge_category": "fk_knowledge_cat_namespace_id",
         "ops_query_log": "fk_query_log_namespace_id",
         "ops_conversation": "fk_conversation_namespace_id",
-        "ops_feedback": "fk_feedback_namespace_id",
     }
     for tbl, constraint in fk_map.items():
         await conn.execute(f"""
@@ -529,19 +526,6 @@ async def _migrate_knowledge_lifecycle(conn) -> None:
     """)
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_history_knowledge_id ON rag_knowledge_history (knowledge_id)")
 
-    # ── 피드백 → 지식 리뷰 신호 ──
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS rag_knowledge_review_flag (
-            id           SERIAL PRIMARY KEY,
-            knowledge_id INT NOT NULL REFERENCES rag_knowledge(id) ON DELETE CASCADE,
-            namespace_id INT REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            reason       VARCHAR(50) NOT NULL DEFAULT 'negative_feedback',
-            message_id   INT,
-            resolved     BOOLEAN NOT NULL DEFAULT FALSE,
-            flagged_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_review_flag_unresolved ON rag_knowledge_review_flag (namespace_id, resolved)")
 
 
 async def _migrate_query_log_resolution(conn) -> None:
@@ -1240,7 +1224,10 @@ async def _migrate_review_flags_to_ledger(conn) -> None:
     이력 보존용으로 남기고 더는 쓰지 않는다.
     - 답변 틀림 신호: 같은 답변(message_id)의 신호들 → 대상 미지정 1건(kind='answer_signal'), 근거 전부를 후보로
     - 그 밖(평가 게이트 "이상해요" 등): 지식별 1건(kind='search_noise', 대상 = 그 지식)
+    옛 테이블은 #62에서 DROP — 없으면(이미 정리됐거나 새 설치) 건너뛴다.
     """
+    if await conn.fetchval("SELECT to_regclass('rag_knowledge_review_flag')") is None:
+        return
     async with conn.transaction():
         await conn.execute("""
             INSERT INTO ops_improvement_item
@@ -1281,6 +1268,102 @@ async def _migrate_review_flags_to_ledger(conn) -> None:
         moved = await conn.execute("UPDATE rag_knowledge_review_flag SET resolved = TRUE WHERE resolved = FALSE")
         if moved and not moved.endswith(" 0"):
             logger.info("[migrate #60] 리뷰 신호 → 개선 원장 이관: %s", moved)
+
+
+async def _migrate_query_status_without_feedback(conn) -> None:
+    """질의 상태를 "답변 / 지식 공백" 둘로 줄인다 (2026-10-02, #61).
+
+    좋아요/싫어요를 거의 안 눌러(7개월 👍 29건) 질의가 "대기"로만 쌓였고, 틀린 답은 이제 정정 요청(개선 원장)이
+    맡는다 → 신고 없는 답변은 맞은 것으로 본다. 해결/미해결은 없애고:
+    - pending = 답변, no_knowledge = 지식 공백(근거가 임계값을 못 넘었거나 "관련 지식을 찾지 못했습니다"가 뜬 것).
+    - 공백을 지식 등록으로 메우면 상태는 그대로 두고 resolved_knowledge_id·resolved_at만 채운다(메움 실적).
+    상태만 바꾸고 행·연결은 지우지 않는다. 조건이 현재 상태 기준이라 다시 돌려도 바뀌는 건 없다(멱등).
+    """
+    # 한 번만 — 재분류 조건이 문구 LIKE '%…%'라 매 기동마다 질의 기록 전체를 훑게 된다(기록은 보존 정리 없이 계속 쌓임)
+    done_key = "migration_61_query_status"
+    if await conn.fetchval("SELECT 1 FROM ops_system_config WHERE key = $1", done_key):
+        return
+    from service.chat.helpers import NO_KNOWLEDGE_MARKER
+    marker = f"%{NO_KNOWLEDGE_MARKER}%"
+    async with conn.transaction():
+        moved = [
+            # 문구가 뜬 것 → 공백(해결 처리됐던 공백은 연결을 남겨 "메움"으로)
+            await conn.execute(
+                "UPDATE ops_query_log SET status = 'no_knowledge' WHERE status <> 'no_knowledge' AND answer LIKE $1", marker),
+            # 지식 등록으로 "해결"된 것(연결 지식 있음) → 메운 공백. 문구 없이 근거 미달로 공백이었다가 메운 것도 포함.
+            # (옛 원클릭 "답변을 지식으로 등록"도 섞여 있지만 구분할 기록이 없다 — 그 질의를 위해 지식을 등록했다는 사실은 같다)
+            await conn.execute(
+                "UPDATE ops_query_log SET status = 'no_knowledge' WHERE status = 'resolved' "
+                "AND resolved_knowledge_id IS NOT NULL"),
+            # 나머지 해결(👍·답변 승인)·미해결(👎·실패) → 답변
+            await conn.execute(
+                "UPDATE ops_query_log SET status = 'pending', resolved_at = NULL "
+                "WHERE status NOT IN ('pending', 'no_knowledge')"),
+        ]
+        await conn.execute(
+            "INSERT INTO ops_system_config (key, value) VALUES ($1, 'done') ON CONFLICT (key) DO NOTHING", done_key)
+    if any(r and not r.endswith(" 0") for r in moved):
+        logger.info("[migrate #61] 질의 상태 정리: %s", moved)
+
+
+async def _migrate_drop_feedback_tables(conn) -> None:
+    """좋아요/싫어요 기록·옛 리뷰 신호 테이블 정리 (2026-10-02, #62, 사용자 확인 후).
+
+    - 피드백이 지식 가중치에 남긴 자동 가감(👍 +0.1 / 옛 👎 -0.1)을 기록 기준으로 되돌린다(가중치 입력은 v2.121에 제거).
+      운영(v2.17)은 모든 피드백이 ±0.1을 적용한 코드로 쌓였다. 한계: 👎 감점을 없앤 v2.118 이후의 👎·5.0 상한에 걸린
+      👍는 정확히 되돌리지 못한다(dev 실측: 1.0이던 2건이 1.1로 — #63에서 정리).
+    - 그 뒤 ops_feedback DROP(v2.121부터 읽지도 쓰지도 않음 — "신고했는지"는 개선 원장으로 판단).
+    - rag_knowledge_review_flag DROP(#60에서 원장으로 이관 끝 — 이 함수는 #60 뒤에 돈다).
+    테이블이 이미 없으면 건너뛴다(멱등). 새 설치는 init SQL이 ops_feedback을 만들고 여기서 바로 지운다(fewshot과 같은 방식).
+    """
+    async with conn.transaction():
+        if await conn.fetchval("SELECT to_regclass('ops_feedback')") is not None:
+            restored = await conn.execute("""
+                UPDATE rag_knowledge k
+                SET base_weight = GREATEST(0, ROUND((k.base_weight - 0.1 * f.pos + 0.1 * f.neg)::numeric, 2))
+                FROM (SELECT knowledge_id, COUNT(*) FILTER (WHERE is_positive) AS pos,
+                             COUNT(*) FILTER (WHERE NOT is_positive) AS neg
+                      FROM ops_feedback WHERE knowledge_id IS NOT NULL GROUP BY knowledge_id) f
+                WHERE k.id = f.knowledge_id
+            """)
+            await conn.execute("DROP TABLE ops_feedback")
+            logger.info("[migrate #62] 피드백 가중치 되돌림 %s, ops_feedback DROP", restored)
+        if await conn.fetchval("SELECT to_regclass('rag_knowledge_review_flag')") is not None:
+            await conn.execute("DROP TABLE rag_knowledge_review_flag")
+            logger.info("[migrate #62] rag_knowledge_review_flag DROP")
+
+
+async def _migrate_reset_knowledge_weight(conn) -> None:
+    """지식 가중치 기능 제거 — 모든 base_weight를 1.0으로 (2026-10-02, #63, v2.121).
+
+    활성 지식은 #62 뒤 전부 1.0이었고(의도적으로 조정한 사례 없음), 문서 분석 자동 가중치·화면 슬라이더·API 입력은 모두
+    뺐다. 틀린 검색은 배수로 덮지 않고 내용·업무구분·용어집을 고친다(정정 흐름). 검색식의 (1 + base_weight)는 남는다.
+    dev는 이미 전부 1.0이라 순위 불변이지만, 운영엔 문서 분석 자동 가중치(0.5~2.0)가 남아 있을 수 있어 그 문서들의 순위가
+    바뀐다 — 개발 단계라 일괄 적용하기로 사용자 결정(2026-10-02). 멱등.
+    """
+    r = await conn.execute("UPDATE rag_knowledge SET base_weight = 1.0 WHERE base_weight <> 1.0")
+    if r and not r.endswith(" 0"):
+        logger.info("[migrate #63] 지식 가중치 1.0으로: %s", r)
+
+
+async def _migrate_query_system_error(conn) -> None:
+    """LLM 연결 실패 질의 기록을 system_error로 분리 (2026-10-02, #64, v2.121).
+
+    예전 코드는 LLM 연결 실패 응답도 검색 결과가 있으면 "답변(pending)"으로 남겨 답변률을 부풀렸다(dev 20건). 지우지 않고
+    통계 밖 분류로 옮겨 장애 건수는 따로 본다. 한 번만(문구 비교로 질의 기록 전체를 훑으므로).
+    """
+    done_key = "migration_64_query_system_error"
+    if await conn.fetchval("SELECT 1 FROM ops_system_config WHERE key = $1", done_key):
+        return
+    from service.chat.helpers import LLM_UNAVAILABLE_MSG
+    async with conn.transaction():
+        r = await conn.execute(
+            "UPDATE ops_query_log SET status = 'system_error', resolved_knowledge_id = NULL, resolved_at = NULL "
+            "WHERE status <> 'system_error' AND answer = $1", LLM_UNAVAILABLE_MSG)
+        await conn.execute(
+            "INSERT INTO ops_system_config (key, value) VALUES ($1, 'done') ON CONFLICT (key) DO NOTHING", done_key)
+    if r and not r.endswith(" 0"):
+        logger.info("[migrate #64] LLM 연결 실패 기록 → system_error: %s", r)
 
 
 async def _migrate_improvement_ledger(conn) -> None:
@@ -1333,6 +1416,8 @@ async def _migrate_improvement_ledger(conn) -> None:
     await conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_improvement_reporter ON ops_improvement_item(reporter_user_id, status)"
     )
+    # 채팅 메시지별 "신고했는지"(버튼 숨김) 조회용 — ops_feedback 대신 원장을 본다(2026-10-02)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_improvement_message ON ops_improvement_item(message_id)")
     # 같은 사용자가 같은 근거에 검토 중인 정정을 중복으로 올리지 못하게(버튼 연타·재신고)
     await conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS uq_improvement_pending_correction
@@ -1458,6 +1543,10 @@ async def _run_migrations() -> None:
         await _migrate_improvement_ledger(conn)
         await _migrate_policy_risk_review(conn)
         await _migrate_review_flags_to_ledger(conn)
+        await _migrate_query_status_without_feedback(conn)
+        await _migrate_drop_feedback_tables(conn)
+        await _migrate_reset_knowledge_weight(conn)
+        await _migrate_query_system_error(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

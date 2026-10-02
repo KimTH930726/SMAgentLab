@@ -81,6 +81,14 @@
 
 | 60 | `ops_improvement_item`, `rag_knowledge_review_flag` | 데이터 이관(미해결 리뷰 신호 → 개선 원장, 옮긴 신호는 resolved) — 스키마 변경 없음, kind에 `answer_signal`·`search_noise` 추가 | 리뷰 신호와 정정 검토 통합(신고 1번 = 검토 1건). 답변 틀림 신호는 답변별 1건(근거 후보 포함), 평가 게이트 신호는 지식별 1건. 메시지가 지워진 신호도 질문·답변만 비운 채 이관. 옛 테이블은 기록용으로 남기고 더는 쓰지 않음. `_migrate_review_flags_to_ledger` (v2.120) |
 
+| 61 | `ops_query_log`, `ops_improvement_item` | 데이터 재분류 — 스키마 변경 없음(행·연결 삭제 없음). `answer`에 "관련 지식을 찾지 못했습니다"가 있으면 `no_knowledge`, 해결(👍·답변 승인)·미해결(👎·실패) → `pending`(기존 공백은 그대로 — 근거 임계값 미달 공백 포함). 인덱스 `idx_improvement_message(message_id)` 추가 | 질의 상태를 답변/지식 공백 둘로(해결·미해결 폐지). 공백을 메우면 상태 그대로 `resolved_knowledge_id`·`resolved_at`만 채움(공백 메움 실적). 채팅의 "신고했는지"는 `ops_feedback` 대신 원장으로 판단. 멱등. `_migrate_query_status_without_feedback` (v2.121) |
+
+| 62 | `ops_feedback`, `rag_knowledge_review_flag`, `rag_knowledge` | `DROP TABLE ops_feedback`·`DROP TABLE rag_knowledge_review_flag`(있을 때만) + 그 전에 `rag_knowledge.base_weight`를 피드백 기록 기준으로 되돌림(`w - 0.1×👍 + 0.1×👎`, 하한 0) | 좋아요/싫어요 기록·옛 리뷰 신호 정리(사용자 확인 후). 가중치는 등록 시 산정 + 관리자 조정만 남김. 리뷰 신호는 #60 이관 뒤에 지우고, #60은 테이블이 없으면 건너뜀. 앞쪽 하위호환 ALTER는 `IF EXISTS`로, 리뷰 신호 테이블 생성 구문은 제거. 새 설치는 init SQL이 만든 `ops_feedback`을 여기서 바로 지움(fewshot과 같은 방식). `_migrate_drop_feedback_tables` (v2.121) |
+
+| 63 | `rag_knowledge` | `UPDATE base_weight = 1.0`(1.0이 아닌 행만) — 스키마 변경 없음 | 지식 가중치 입력 제거(화면·API·문서 분석 자동 가중치). 검색식 × (1 + base_weight)는 상수로 남김 — 운영의 문서 분석 자동 가중치도 초기화되어 그 문서 순위는 바뀜(개발 단계라 일괄 적용 결정). #62 되돌림이 1.0이던 지식 2건을 1.1로 넘긴 것도 여기서 정리). 멱등. `_migrate_reset_knowledge_weight` (v2.121) |
+
+| 64 | `ops_query_log` | `UPDATE status = 'system_error'`(답변이 LLM 연결 실패 문구인 행, 한 번만 — `ops_system_config` 키 `migration_64_query_system_error`) | LLM 연결 실패 기록을 통계 밖으로 분리(예전엔 "답변"으로 세져 답변률을 부풀림, dev 20건). 지우지 않고 장애 건수로만 표시. 이후 새 실패도 system_error로 기록. #61도 같은 방식으로 한 번만 실행(`migration_61_query_status`). `_migrate_query_system_error` (v2.121) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.

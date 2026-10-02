@@ -156,7 +156,6 @@ class KnowledgeRagAgent(AgentBase):
         full_answer = ""
         token_count = 0
         mapped_term: Optional[str] = None
-        has_results = False
         llm_failed = False
 
         try:
@@ -201,7 +200,11 @@ class KnowledgeRagAgent(AgentBase):
                     "policy_citations": cached_citations,
                 }
                 yield {"type": "token", "data": cached["answer"]}
-                await create_query_log(namespace, query, cached["answer"], bool(cached.get("results")), cached.get("mapped_term"), msg_id, had_context=bool(cached.get("results")), user_id=user.get("id"))
+                # 근거 유무는 캐시 저장 시점 값으로 — 예전엔 results(지식)만 봐서 정책·공통코드만으로 답한 캐시 응답이
+                # 공백으로 잘못 세졌다(2026-10-02 실측: 정책 답변 3건). 옛 캐시 항목엔 값이 없어 지식·정책 근거로 대신 판단.
+                had_context = cached.get("had_context", bool(cached.get("results") or cached_citations))
+                await create_query_log(namespace, query, cached["answer"], cached.get("mapped_term"), msg_id,
+                                       user_id=user.get("id"), had_context=had_context)
                 yield {"type": "done", "message_id": msg_id, "status": "completed"}
                 return
 
@@ -276,8 +279,6 @@ class KnowledgeRagAgent(AgentBase):
             except Exception as e:
                 logger.warning("부모 섹션 확장 실패(확장 없이 진행): %s", e)
             llm_context = _build_rrf_context(results, policy_result, common_codes, db_columns, parent_expansions)
-            has_results = len(results) > 0 or bool(policy_result.params or policy_result.narratives) or bool(common_codes or db_columns)
-            had_context = bool(llm_context.strip())
 
             async with get_conn() as conn:
                 await conn.execute(
@@ -344,7 +345,9 @@ class KnowledgeRagAgent(AgentBase):
                 }
             if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
                 await update_inhouse_conv_id(conversation_id, new_inhouse_conv_id)
-            await create_query_log(namespace, query, final_answer, has_results, mapped_term, msg_id, had_context=had_context, user_id=user.get("id"))
+            had_context = bool(llm_context.strip())
+            await create_query_log(namespace, query, final_answer, mapped_term, msg_id, user_id=user.get("id"),
+                                   had_context=had_context)
 
             # ── Semantic Cache 저장 (LLM 정상 응답 시만, 결과 유무 무관) ──
             if final_answer != LLM_UNAVAILABLE_MSG:
@@ -354,6 +357,7 @@ class KnowledgeRagAgent(AgentBase):
                     "results": results_to_payload(results),
                     "policy_citations": policy_citations,
                     "query": query,
+                    "had_context": had_context,
                 })
 
             yield {"type": "done", "message_id": msg_id, "status": msg_status}

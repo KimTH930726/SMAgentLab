@@ -33,7 +33,6 @@ function ClusterKnowledgeRegisterModal({
   open: boolean; onClose: () => void; cluster: VocCluster | null; namespace: string; onSuccess: () => void;
 }) {
   const [content, setContent] = useState('');
-  const [baseWeight, setBaseWeight] = useState(1.0);
   const [category, setCategory] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,14 +50,11 @@ function ClusterKnowledgeRegisterModal({
   useEffect(() => {
     if (open && cluster) {
       setContent(`[반복 유형] ${cluster.representative_subject}\n\n해결 방안: `);
-      setBaseWeight(1.0);
       setCategory(sortedCategories[0]?.name ?? '');
       setError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, cluster, sortedCategories.length]);
-
-  const weightLabel = (w: number) => w >= 2 ? '높음' : w >= 1.5 ? '보통' : '기본';
 
   const handleSubmit = async () => {
     if (!cluster || !content.trim() || !category) return;
@@ -67,7 +63,7 @@ function ClusterKnowledgeRegisterModal({
     try {
       const created = await createKnowledge({
         namespace, content,
-        base_weight: baseWeight, category,
+        category,
       });
       if (created.pending_review) {
         window.alert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다. 관리자 승인 후 검색에 반영됩니다.');
@@ -116,22 +112,6 @@ function ClusterKnowledgeRegisterModal({
           </p>
         )}
 
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            문서 우선순위:{' '}
-            <span className={`font-medium ${
-              baseWeight >= 2 ? 'text-emerald-600 dark:text-emerald-400' : baseWeight >= 1.5 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-300'
-            }`}>
-              {baseWeight.toFixed(1)} — {weightLabel(baseWeight)}
-            </span>
-          </label>
-          <input
-            type="range" min={0} max={3} step={0.1} value={baseWeight}
-            onChange={(e) => setBaseWeight(parseFloat(e.target.value))}
-            className="w-full accent-indigo-500"
-          />
-          <p className="text-[11px] text-slate-400 mt-1">1.0=기본 · 1.5+=보통 · 2.0+=높음(핵심 문서, 항상 상위 노출)</p>
-        </div>
 
         {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 

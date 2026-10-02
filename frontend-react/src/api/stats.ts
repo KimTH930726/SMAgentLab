@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { NamespaceStats, QueryLog, QueryStatus } from '../types';
+import type { NamespaceStats, QueryLog, QueryFilter } from '../types';
 
 export async function getNamespaceStats(namespace: string): Promise<NamespaceStats> {
   try {
@@ -10,22 +10,13 @@ export async function getNamespaceStats(namespace: string): Promise<NamespaceSta
   }
 }
 
-export async function getQueryLogs(namespace: string, status?: QueryStatus): Promise<QueryLog[]> {
+export async function getQueryLogs(namespace: string, status?: QueryFilter): Promise<QueryLog[]> {
   try {
     const params = new URLSearchParams();
     if (status !== undefined) params.set('status', status);
     return await apiFetch<QueryLog[]>(`/stats/namespace/${encodeURIComponent(namespace)}/queries?${params}`);
   } catch (err) {
     console.error('getQueryLogs error:', err);
-    throw err;
-  }
-}
-
-export async function resolveQueryLog(id: number): Promise<{ status: string; pending_review?: boolean }> {
-  try {
-    return await apiFetch(`/stats/query-log/${id}/resolve`, { method: 'PATCH' });
-  } catch (err) {
-    console.error('resolveQueryLog error:', err);
     throw err;
   }
 }
@@ -39,10 +30,11 @@ export async function deleteQueryLog(id: number): Promise<void> {
   }
 }
 
-export async function markQueryLogResolved(id: number, knowledgeId?: number | null): Promise<void> {
-  await apiFetch<void>(`/stats/query-log/${id}/mark-resolved`, {
+/** 지식 공백 질의를 등록한 지식으로 메웠다고 기록 — 상태는 공백 그대로, 연결 지식만(메움 실적) */
+export async function fillKnowledgeGap(id: number, knowledgeId: number): Promise<void> {
+  await apiFetch<void>(`/stats/query-log/${id}/fill`, {
     method: 'PATCH',
-    body: JSON.stringify({ knowledge_id: knowledgeId ?? null }),
+    body: JSON.stringify({ knowledge_id: knowledgeId }),
   });
 }
 

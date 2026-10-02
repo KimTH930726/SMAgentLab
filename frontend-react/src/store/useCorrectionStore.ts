@@ -37,8 +37,8 @@ interface CorrectionState {
   submitted: Record<number, { result: CorrectionCreated; target: CorrectionTarget }>;
   /** 이번 세션에 피드백을 보낸 답변 — 다음 질문 때 답변 목록이 다시 그려지면(스트림 사본은 has_feedback=false)
    *  피드백 버튼이 되살아나 같은 답변에 두 번 보낼 수 있었다. 컴포넌트 밖에 기억해 둔다. */
-  feedbackSent: Record<number, 'positive' | 'negative'>;
-  markFeedback: (messageId: number, kind: 'positive' | 'negative') => void;
+  feedbackSent: Record<number, 'negative'>;
+  markFeedback: (messageId: number, kind: 'negative') => void;
   start: (ctx: ActiveCorrection) => void;
   cancel: () => void;
   markSubmitted: (messageId: number, result: CorrectionCreated, target: CorrectionTarget) => void;

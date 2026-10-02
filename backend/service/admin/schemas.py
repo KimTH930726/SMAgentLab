@@ -34,40 +34,23 @@ class NamespaceInfo(BaseModel):
 
 # ─── Stats ───────────────────────────────────────────────────────────────────
 
-class NamespaceStats(BaseModel):
-    namespace: str
-    total_queries: int
-    resolved: int
-    pending: int
-    unresolved: int
-    positive_feedback: int
-    negative_feedback: int
-    knowledge_count: int = 0
-    glossary_count: int = 0
-
-
-class StatsResponse(BaseModel):
-    namespaces: list[NamespaceStats]
-    unresolved_cases: list[dict]
-
-
 class TermStat(BaseModel):
     term: str
     total: int
-    pending: int
-    unresolved: int
+    no_knowledge: int = 0
     description: Optional[str] = None
 
 
 class NamespaceDetailStats(BaseModel):
+    """질의 상태는 답변 / 지식 공백 둘뿐(2026-10-02, #61). 틀린 답은 정정 요청(개선 원장 pending)으로 센다."""
     namespace: str
     total_queries: int
-    resolved: int
-    pending: int
-    unresolved: int
-    no_knowledge: int = 0
+    answered: int
+    no_knowledge: int          # 아직 안 메운 공백
+    filled: int                # 지식 등록으로 메운 공백
+    system_errors: int = 0     # LLM 연결 실패 — 위 통계(전체 포함)에서 빠짐
+    corrections_open: int
     term_distribution: list[TermStat]
-    unresolved_cases: list[dict]
 
 
 # ─── LLM Settings ───────────────────────────────────────────────────────────

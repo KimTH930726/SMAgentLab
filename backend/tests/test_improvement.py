@@ -286,7 +286,10 @@ class TestApplyKnowledge:
         args = conn.fetchval.await_args.args
         assert args[2] == "새 본문"
         assert args[12] == 5 and args[13] == 2 and args[14] == 5  # logical_document_id=원본 id, version 2, supersedes
-        assert "status = 'deprecated'" in conn.execute.await_args.args[0] and conn.execute.await_args.args[1] == 5
+        calls = [c.args for c in conn.execute.await_args_list]
+        assert any("status = 'deprecated'" in c[0] and c[1] == 5 for c in calls)
+        # 이 지식으로 메운 지식 공백도 새 버전을 가리키게(2026-10-02) — 폐기된 옛 버전을 "메운 지식"으로 잡지 않게
+        assert any("ops_query_log SET resolved_knowledge_id = $2" in c[0] and c[1:] == (5, 6) for c in calls)
 
     @pytest.mark.asyncio
     async def test_stale_original_rejected(self):

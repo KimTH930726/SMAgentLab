@@ -673,7 +673,7 @@ class TestSchemas:
         )
         assert req.source_file is None
         assert req.source_type == "manual"
-        assert req.items[0].base_weight == 1.0
+        assert not hasattr(req.items[0], "base_weight")  # 가중치 입력 제거(2026-10-02)
 
     def test_knowledge_out_has_source_fields(self):
         from agents.knowledge_rag.knowledge.schemas import KnowledgeOut

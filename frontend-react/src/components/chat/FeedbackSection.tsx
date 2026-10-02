@@ -4,7 +4,7 @@ import { postFeedback } from '../../api/feedback';
 import { getMyCorrections } from '../../api/corrections';
 import { useCorrectionStore, AUTO_TARGET, MISSING_TARGET } from '../../store/useCorrectionStore';
 
-type FeedbackState = 'idle' | 'positive_sent' | 'negative_sent';
+type FeedbackState = 'idle' | 'negative_sent';
 
 interface FeedbackSectionProps {
   namespace: string;
@@ -17,7 +17,9 @@ interface FeedbackSectionProps {
 }
 
 /**
- * 답변 피드백(2026-10-01 근거 정정 흐름) — "도움됐어요" / "답변 틀림".
+ * 답변 피드백(2026-10-01 근거 정정 흐름) — "답변 틀림"만.
+ * "도움됐어요"는 2026-10-02 제거 — 누를 때마다 지식 가중치가 오르던 무검증 자동 반영이었고, 질의 해결/미해결 구분도
+ * 없앴다(신고 없는 답변은 맞은 것으로 봄). 가중치는 등록 시 산정 + 관리자 조정만.
  * "답변 틀림"은 예전처럼 여기서 지식 등록 폼을 열지 않는다(사용자가 바로 active 지식을 만들던 경로 제거).
  * 👎 신호(review_flag)만 보내고, 채팅 입력창을 정정 모드로 바꿔 한 줄 의견을 받는다 — 반영은 담당자 승인 후.
  */
@@ -40,26 +42,16 @@ export function FeedbackSection({ namespace, question, answer, knowledgeId, mess
   const markFeedback = useCorrectionStore((s) => s.markFeedback);
   const [localState, setState] = useState<FeedbackState>(alreadySent ? 'negative_sent' : 'idle');
   // 다시 그려져도(remount) 이번 세션에 보낸 피드백은 유지
-  const state: FeedbackState = sentKind === 'negative' ? 'negative_sent' : sentKind === 'positive' ? 'positive_sent' : localState;
+  const state: FeedbackState = sentKind === 'negative' ? 'negative_sent' : localState;
   const [error, setError] = useState<string | null>(null);
 
-  const send = async (isPositive: boolean) => {
+  const sendWrong = async () => {
     setError(null);
     try {
-      await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: isPositive, message_id: messageId ?? null });
-      qc.invalidateQueries({ queryKey: ['knowledge'] });
+      await postFeedback({ namespace, question, answer, knowledge_id: knowledgeId ?? null, is_positive: false, message_id: messageId ?? null });
       qc.invalidateQueries({ queryKey: ['stats-ns'] });
-      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : '피드백 전송에 실패했습니다.');
-      return false;
-    }
-  };
-
-  const handlePositive = async () => {
-    if (await send(true)) {
-      setState('positive_sent');
-      if (messageId != null) markFeedback(messageId, 'positive');
     }
   };
 
@@ -73,12 +65,9 @@ export function FeedbackSection({ namespace, question, answer, knowledgeId, mess
     openCorrection();
     setState('negative_sent');
     if (messageId != null) markFeedback(messageId, 'negative');
-    await send(false);
+    await sendWrong();
   };
 
-  if (state === 'positive_sent') {
-    return <p className="mt-3 text-xs text-emerald-600 dark:text-emerald-400">피드백 감사합니다.</p>;
-  }
   if (state === 'negative_sent') {
     return (
       <div className="mt-3 flex items-center gap-2 text-xs">
@@ -100,12 +89,6 @@ export function FeedbackSection({ namespace, question, answer, knowledgeId, mess
 
   return (
     <div className="mt-3 flex items-center gap-2 flex-wrap">
-      <button
-        onClick={handlePositive}
-        className="text-xs px-2.5 py-1 rounded-lg border border-slate-600 text-slate-400 hover:text-emerald-600 hover:border-emerald-300 dark:hover:text-emerald-400 dark:hover:border-emerald-700 transition-colors"
-      >
-        도움됐어요
-      </button>
       <button
         onClick={handleWrong}
         className="text-xs px-2.5 py-1 rounded-lg border border-slate-600 text-slate-400 hover:text-rose-600 hover:border-rose-300 dark:hover:text-rose-400 dark:hover:border-rose-700 transition-colors"

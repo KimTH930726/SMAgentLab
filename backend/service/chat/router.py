@@ -199,10 +199,8 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         _save_user_message(conv_id, req.question),
         _save_assistant_message(conv_id, answer, pipe.mapped_term, pipe.results),
     )
-    await create_query_log(
-        req.namespace, req.question, answer, len(pipe.results) > 0, pipe.mapped_term, msg_id,
-        had_context=bool(pipe.context.strip()), user_id=user["id"],
-    )
+    await create_query_log(req.namespace, req.question, answer, pipe.mapped_term, msg_id, user_id=user["id"],
+                           had_context=bool(pipe.context.strip()))
     t2 = asyncio.create_task(post_save_tasks(conv_id, req.namespace))
     t2.add_done_callback(lambda f: logger.warning("post_save_tasks 실패: %s", f.exception()) if not f.cancelled() and f.exception() else None)
 
@@ -364,7 +362,7 @@ async def get_messages(conv_id: int, user: dict = Depends(get_current_user)):
             SELECT m.id, m.conversation_id, m.role, m.content,
                    m.mapped_term, m.results, m.status, m.created_at::text,
                    m.metadata,
-                   EXISTS(SELECT 1 FROM ops_feedback f WHERE f.message_id = m.id) AS has_feedback
+                   EXISTS(SELECT 1 FROM ops_improvement_item i WHERE i.message_id = m.id) AS has_feedback
             FROM ops_message m WHERE m.conversation_id = $1 ORDER BY m.id ASC
             """,
             conv_id,

@@ -1,17 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, CheckCircle, XCircle, Clock, FileText, ChevronDown, ChevronUp, Trash2, AlertTriangle } from 'lucide-react';
+import { MessageSquare, CheckCircle, FileText, ChevronDown, ChevronUp, Trash2, AlertTriangle, Flag } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
-import { getNamespaceStats, deleteQueryLog, resolveQueryLog, getQueryLogs, bulkDeleteQueryLogs, markQueryLogResolved } from '../../api/stats';
+import { getNamespaceStats, deleteQueryLog, getQueryLogs, bulkDeleteQueryLogs, fillKnowledgeGap } from '../../api/stats';
 import { createKnowledge } from '../../api/knowledge';
 import { getNamespaces, getNamespacesDetail, getCategories } from '../../api/namespaces';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { DonutChart, type DonutSegment } from '../ui/DonutChart';
-import type { QueryLog, QueryStatus } from '../../types';
+import type { QueryLog, QueryFilter } from '../../types';
 
 const TERM_PALETTE = ['#6366f1', '#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#f43f5e', '#ec4899', '#14b8a6'];
 
@@ -37,7 +37,6 @@ interface KnowledgeRegisterModalProps {
 
 function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: KnowledgeRegisterModalProps) {
   const [content, setContent] = useState('');
-  const [baseWeight, setBaseWeight] = useState(1.0);
   const [category, setCategory] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,14 +56,11 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
   useEffect(() => {
     if (open && log) {
       setContent(log.answer ?? '');
-      setBaseWeight(1.0);
       setCategory(sortedCategories[0]?.name ?? '');
       setError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, log, sortedCategories.length]);
-
-  const weightLabel = (w: number) => w >= 2 ? '높음' : w >= 1.5 ? '보통' : '기본';
 
   const handleSubmit = async () => {
     if (!log || !content.trim()) return;
@@ -74,10 +70,9 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
       const created = await createKnowledge({
         namespace,
         content,
-        base_weight: baseWeight,
         category: category || null,
       });
-      await markQueryLogResolved(log.id, created.id);
+      await fillKnowledgeGap(log.id, created.id);
       if (created.pending_review) {
         window.alert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다. 관리자 승인 후 검색에 반영됩니다.');
       }
@@ -140,26 +135,6 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
           </p>
         )}
 
-        {/* 문서 우선순위 */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            문서 우선순위:{' '}
-            <span className={`font-medium ${
-              baseWeight >= 2 ? 'text-emerald-600 dark:text-emerald-400' : baseWeight >= 1.5 ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-300'
-            }`}>
-              {baseWeight.toFixed(1)} — {weightLabel(baseWeight)}
-            </span>
-          </label>
-          <input
-            type="range" min={0} max={3} step={0.1} value={baseWeight}
-            onChange={(e) => setBaseWeight(parseFloat(e.target.value))}
-            className="w-full accent-indigo-500"
-          />
-          <p className="text-[11px] text-slate-400 mt-1">
-            1.0=기본 · 1.5+=보통 · 2.0+=높음(핵심 문서, 항상 상위 노출)
-          </p>
-        </div>
-
         {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
         <div className="flex gap-2 justify-end pt-1">
@@ -170,7 +145,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
             disabled={!content.trim() || !category}
             onClick={handleSubmit}
           >
-            지식 등록 + 해결 처리
+            지식 등록(공백 메우기)
           </Button>
         </div>
       </div>
@@ -180,7 +155,11 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
 
 // ── QueryLog Modal ───────────────────────────────────────────────────────────
 
-type ModalType = 'total' | 'resolved' | 'pending' | 'unresolved' | 'no_knowledge';
+// 질의 상태는 답변 / 지식 공백 둘뿐(2026-10-02) — 좋아요/싫어요 기반 해결·미해결은 없앴고(신고 없는 답변은 맞은 것으로 봄),
+// 틀린 답은 정정 요청(개선 원장)으로 센다. 공백 = 답변에 "관련 지식을 찾지 못했습니다"가 뜬 것. 지식을 등록해 메우면 "메움".
+type ModalType = 'total' | QueryFilter;
+
+const isFilled = (log: QueryLog) => log.status === 'no_knowledge' && log.resolved_knowledge_id != null;
 
 function QueryLogModal({
   open, onClose, modalType, namespace, qc, canModify,
@@ -192,7 +171,7 @@ function QueryLogModal({
   const [registerLog, setRegisterLog] = useState<QueryLog | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
-  const statusParam: QueryStatus | undefined = modalType === 'total' ? undefined : modalType as QueryStatus;
+  const statusParam: QueryFilter | undefined = modalType === 'total' || modalType === null ? undefined : modalType;
   const { data: logs = [], isLoading } = useQuery({
     queryKey: ['query-logs', namespace, modalType],
     queryFn: () => getQueryLogs(namespace, statusParam),
@@ -210,20 +189,6 @@ function QueryLogModal({
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteQueryLog(id),
     onSuccess: () => { invalidateAll(); setExpandedId(null); setActionError(null); },
-    onError: (err: Error) => { setActionError(err.message); },
-  });
-
-  const resolveMutation = useMutation({
-    mutationFn: (id: number) => resolveQueryLog(id),
-    onSuccess: (result) => {
-      invalidateAll();
-      qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
-      setExpandedId(null);
-      setActionError(null);
-      if (result?.pending_review) {
-        window.alert('등록된 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다. 관리자 승인 후 검색에 반영됩니다.');
-      }
-    },
     onError: (err: Error) => { setActionError(err.message); },
   });
 
@@ -246,7 +211,7 @@ function QueryLogModal({
     });
   };
 
-  const selectableLogs = logs.filter((l: QueryLog) => l.status !== 'resolved');
+  const selectableLogs = logs.filter((l: QueryLog) => !isFilled(l));
 
   const toggleSelectAll = () => {
     if (selectedIds.size === selectableLogs.length) {
@@ -257,8 +222,7 @@ function QueryLogModal({
   };
 
   const titleMap: Record<ModalType, string> = {
-    total: '전체 질의', resolved: '해결된 질의', pending: '대기 중 질의',
-    unresolved: '미해결 질의', no_knowledge: '지식 공백 질의',
+    total: '전체 질의', pending: '답변한 질의', no_knowledge: '지식 공백 질의', filled: '공백을 메운 질의',
   };
   const title = modalType ? `${titleMap[modalType]} (${logs.length}건)` : '';
 
@@ -297,7 +261,7 @@ function QueryLogModal({
             <div key={log.id} className="bg-slate-900/60 border border-slate-700 rounded-xl overflow-hidden">
               {/* Row header */}
               <div className="flex items-start">
-                {canModify && log.status !== 'resolved' && (
+                {canModify && !isFilled(log) && (
                   <label className="flex items-center px-3 py-3.5 cursor-pointer" onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
@@ -312,17 +276,16 @@ function QueryLogModal({
                   className="flex-1 text-left px-2 py-3 flex items-start gap-3 hover:bg-slate-700/40 transition-colors"
                 >
                   <span className="flex-shrink-0 mt-0.5">
-                    {log.status === 'resolved' && <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />}
-                    {log.status === 'pending' && <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />}
-                    {log.status === 'unresolved' && <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />}
-                    {log.status === 'no_knowledge' && <AlertTriangle className="w-4 h-4 text-orange-600 dark:text-orange-400" />}
+                    {isFilled(log) ? <FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      : log.status === 'no_knowledge' ? <AlertTriangle className="w-4 h-4 text-orange-600 dark:text-orange-400" />
+                      : <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />}
                   </span>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-slate-200 truncate">{log.question}</p>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       {log.mapped_term && <Badge color="indigo">{log.mapped_term}</Badge>}
-                      {log.status === 'resolved' && log.resolved_at ? (
-                        <span className="text-xs text-slate-500">해결 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
+                      {isFilled(log) && log.resolved_at ? (
+                        <span className="text-xs text-slate-500">메움 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
                       ) : (
                         <span className="text-xs text-slate-500">{new Date(log.created_at).toLocaleString('ko-KR')}</span>
                       )}
@@ -343,20 +306,16 @@ function QueryLogModal({
                   </div>
                   <div className="flex items-center gap-4 text-xs text-slate-500">
                     <span>상태: <span className={
-                      log.status === 'resolved' ? 'text-emerald-600 dark:text-emerald-400'
-                      : log.status === 'pending' ? 'text-amber-600 dark:text-amber-400'
+                      isFilled(log) ? 'text-indigo-600 dark:text-indigo-400'
                       : log.status === 'no_knowledge' ? 'text-orange-600 dark:text-orange-400'
-                      : 'text-rose-600 dark:text-rose-400'
+                      : 'text-emerald-600 dark:text-emerald-400'
                     }>
-                      {log.status === 'resolved' ? '해결됨'
-                        : log.status === 'pending' ? '대기 중'
-                        : log.status === 'no_knowledge' ? '지식 공백'
-                        : '미해결'}
+                      {isFilled(log) ? '공백 메움' : log.status === 'no_knowledge' ? '지식 공백' : '답변'}
                     </span></span>
                     {log.mapped_term && <span>용어: <span className="text-indigo-600 dark:text-indigo-400">{log.mapped_term}</span></span>}
                     <span>질문 {new Date(log.created_at).toLocaleString('ko-KR')}</span>
-                    {log.status === 'resolved' && log.resolved_at && (
-                      <span>해결 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
+                    {isFilled(log) && log.resolved_at && (
+                      <span>메움 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
                     )}
                   </div>
 
@@ -364,38 +323,28 @@ function QueryLogModal({
                   {log.answer && (
                     <div>
                       <p className="text-xs text-slate-500 mb-1">
-                        {log.resolved_knowledge_id
-                          ? '등록된 지식 (수기)'
-                          : log.status === 'pending' ? 'AI 답변 (검토 대상)' : 'AI 답변'}
+                        {log.knowledge_active ? '메운 지식' : isFilled(log) ? 'AI 답변 (메운 지식은 검토 대기)' : 'AI 답변'}
                       </p>
                       <div className="bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
                         {log.answer}
                       </div>
                     </div>
                   )}
-                  {!log.answer && log.status !== 'resolved' && (
+                  {!log.answer && !isFilled(log) && (
                     <p className="text-xs text-slate-500 italic">답변 없음 (마이그레이션 이전 데이터)</p>
                   )}
 
-                  {/* Actions for pending/unresolved */}
-                  {log.status !== 'resolved' && (
+                  {/* 조치 — 공백은 지식 등록으로 메우고, 답변·공백 모두 기록 삭제 가능(메운 공백은 실적이라 그대로) */}
+                  {!isFilled(log) && (
                     <div className="space-y-2 pt-1">
                       {actionError && <p className="text-xs text-rose-600 dark:text-rose-400">{actionError}</p>}
                       {canModify ? (
                         <div className="flex gap-2">
-                          {log.status === 'pending' && (
-                            <Button variant="primary" size="sm"
-                              loading={resolveMutation.isPending && resolveMutation.variables === log.id}
-                              disabled={!log.answer}
-                              onClick={() => { setActionError(null); resolveMutation.mutate(log.id); }}>
-                              <CheckCircle className="w-3.5 h-3.5" />승인 (지식 등록 + 해결)
+                          {log.status === 'no_knowledge' && (
+                            <Button variant="primary" size="sm" onClick={() => setRegisterLog(log)}>
+                              <FileText className="w-3.5 h-3.5" />지식 등록
                             </Button>
                           )}
-                          <Button variant={log.status === 'pending' ? 'ghost' : 'primary'} size="sm"
-                            onClick={() => setRegisterLog(log)}>
-                            <FileText className="w-3.5 h-3.5" />
-                            {log.status === 'pending' ? '수정 후 등록' : '지식 등록'}
-                          </Button>
                           <Button variant="danger" size="sm"
                             loading={deleteMutation.isPending && deleteMutation.variables === log.id}
                             onClick={() => deleteMutation.mutate(log.id)}>
@@ -460,14 +409,14 @@ export function StatsPanel() {
     refetchOnMount: 'always',
   });
 
-  const resolveRate = stats && stats.total_queries > 0
-    ? Math.round((stats.resolved / stats.total_queries) * 100) : 0;
+  // 답변률 = 답변한 질의 비율(신고 없는 답변은 맞은 것으로 봄). 공백은 메웠어도 그때는 답 못 한 질의라 분모에만.
+  const answerRate = stats && stats.total_queries > 0
+    ? Math.round((stats.answered / stats.total_queries) * 100) : 0;
 
-  const resolveSegments: DonutSegment[] = [
-    { value: stats?.resolved ?? 0, color: '#10b981', label: '해결됨', tooltip: '피드백 긍정 또는 관리자 승인' },
-    { value: stats?.pending ?? 0, color: '#f59e0b', label: '대기 중', tooltip: '검색 결과 있음, 피드백 대기' },
-    { value: stats?.unresolved ?? 0, color: '#f43f5e', label: '미해결', tooltip: '검색 결과 없음 또는 부정 피드백' },
-    { value: stats?.no_knowledge ?? 0, color: '#f97316', label: '지식 공백', tooltip: '관련 지식이 아예 없어 답변 불가 — 지식 등록 필요' },
+  const answerSegments: DonutSegment[] = [
+    { value: stats?.answered ?? 0, color: '#10b981', label: '답변', tooltip: '근거를 찾아 답변함 — 틀렸으면 사용자가 "답변 틀림"으로 신고(정정 요청)' },
+    { value: stats?.no_knowledge ?? 0, color: '#f97316', label: '지식 공백', tooltip: '"관련 지식을 찾지 못했습니다"가 뜬 질의 — 지식 등록 필요' },
+    { value: stats?.filled ?? 0, color: '#6366f1', label: '공백 메움', tooltip: '지식 공백이었다가 지식을 등록해 메운 질의' },
   ];
 
   const topTerms = (stats?.term_distribution ?? []).slice(0, 8);
@@ -475,34 +424,35 @@ export function StatsPanel() {
     value: t.total, color: TERM_PALETTE[i % TERM_PALETTE.length], label: friendlyTermLabel(t.term, t.description),
     tooltip: t.term === '기타'
       ? '용어집에 매칭되지 않은 질의'
-      : `${t.description || t.term} — 원본 용어: "${t.term}" (대기 ${t.pending}, 미해결 ${t.unresolved})`,
+      : `${t.description || t.term} — 원본 용어: "${t.term}" (지식 공백 ${t.no_knowledge})`,
   }));
 
   const kpiCards = [
     {
       label: '전체 질의', value: stats?.total_queries ?? 0, type: 'total' as ModalType,
       icon: <MessageSquare className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />, bg: 'bg-indigo-100 dark:bg-indigo-900/40',
-      highlight: false,
+      highlight: false, tip: '이 파트에 들어온 모든 질의',
     },
     {
-      label: '해결됨', value: stats?.resolved ?? 0, type: 'resolved' as ModalType,
+      label: '답변', value: stats?.answered ?? 0, type: 'pending' as ModalType,
       icon: <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />, bg: 'bg-emerald-100 dark:bg-emerald-900/40',
-      highlight: false,
+      highlight: false, tip: '근거를 찾아 답변한 질의 — 정정 신고가 없으면 맞은 것으로 봅니다',
     },
     {
-      label: '대기 중', value: stats?.pending ?? 0, type: 'pending' as ModalType,
-      icon: <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400" />, bg: 'bg-amber-100 dark:bg-amber-900/40',
-      highlight: false,
-    },
-    {
-      label: '미해결', value: stats?.unresolved ?? 0, type: 'unresolved' as ModalType,
-      icon: <XCircle className="w-5 h-5 text-rose-600 dark:text-rose-400" />, bg: 'bg-rose-100 dark:bg-rose-900/40',
-      highlight: false,
+      // 질의 목록이 아니라 개선 원장 건수 — 처리는 지식 베이스 › 정정 검토에서
+      label: '정정 요청', value: stats?.corrections_open ?? 0, type: null,
+      icon: <Flag className="w-5 h-5 text-rose-600 dark:text-rose-400" />, bg: 'bg-rose-100 dark:bg-rose-900/40',
+      highlight: false, tip: '"답변 틀림" 신고 중 아직 처리 안 된 건 — 지식 베이스 › 정정 검토에서 처리',
     },
     {
       label: '지식 공백', value: stats?.no_knowledge ?? 0, type: 'no_knowledge' as ModalType,
       icon: <AlertTriangle className="w-5 h-5 text-orange-600 dark:text-orange-400" />, bg: 'bg-orange-100 dark:bg-orange-900/40',
-      highlight: (stats?.no_knowledge ?? 0) > 0,
+      highlight: (stats?.no_knowledge ?? 0) > 0, tip: '"관련 지식을 찾지 못했습니다"가 뜬 질의 — 눌러서 지식 등록',
+    },
+    {
+      label: '공백 메움', value: stats?.filled ?? 0, type: 'filled' as ModalType,
+      icon: <FileText className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />, bg: 'bg-indigo-100 dark:bg-indigo-900/40',
+      highlight: false, tip: '지식 공백을 지식 등록으로 메운 질의',
     },
   ];
 
@@ -529,11 +479,12 @@ export function StatsPanel() {
         <>
           {/* KPI cards — clickable */}
           <div className="grid grid-cols-5 gap-3">
-            {kpiCards.map(({ label, value, type, icon, bg, highlight }) => (
+            {kpiCards.map(({ label, value, type, icon, bg, highlight, tip }) => (
               <button
                 key={label}
-                onClick={() => setModalType(type)}
-                className={`bg-slate-800 border rounded-xl p-4 flex items-center gap-3 hover:bg-slate-700/60 transition-colors cursor-pointer text-left ${
+                title={tip}
+                onClick={() => { if (type) setModalType(type); }}
+                className={`bg-slate-800 border rounded-xl p-4 flex items-center gap-3 transition-colors text-left ${type ? 'hover:bg-slate-700/60 cursor-pointer' : 'cursor-default'} ${
                   highlight
                     ? 'border-orange-400 ring-1 ring-orange-300 hover:border-orange-500 dark:border-orange-500/60 dark:ring-orange-500/30 dark:hover:border-orange-400/80'
                     : 'border-slate-700 hover:border-indigo-500/50'
@@ -552,12 +503,20 @@ export function StatsPanel() {
           {/* Donut charts */}
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-slate-800 border border-slate-700 rounded-xl p-5">
-              <h3 className="text-sm font-semibold text-slate-300 mb-4">해결률</h3>
+              <h3 className="text-sm font-semibold text-slate-300 mb-4">
+                답변 현황
+                {(stats.system_errors ?? 0) > 0 && (
+                  <span className="ml-2 text-[11px] font-normal text-slate-500"
+                    title="LLM 서버 연결 실패로 답하지 못한 질의 — 장애라 답변·공백 통계(전체 포함)에서 뺐습니다">
+                    · LLM 연결 실패 {stats.system_errors}건(통계 제외)
+                  </span>
+                )}
+              </h3>
               <div className="flex items-center gap-5">
-                <DonutChart segments={resolveSegments} centerTop={`${resolveRate}%`} centerBottom="해결률" />
+                <DonutChart segments={answerSegments} centerTop={`${answerRate}%`} centerBottom="답변률" />
                 <div className="space-y-2.5 flex-1">
-                  {resolveSegments.map((seg) => (
-                    <div key={seg.label} className="flex items-center gap-2">
+                  {answerSegments.map((seg) => (
+                    <div key={seg.label} className="flex items-center gap-2" title={seg.tooltip}>
                       <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: seg.color }} />
                       <span className="text-xs text-slate-400 flex-1">{seg.label}</span>
                       <span className="text-xs font-semibold text-slate-200">{seg.value}</span>

@@ -84,10 +84,10 @@ async function login(page: Page) {
 
 /** 질문을 보내고 답변 완료(피드백 버튼 노출)까지 기다린다. 마지막 답변 영역 텍스트를 돌려준다. */
 async function ask(page: Page, question: string) {
-  const before = await page.getByRole('button', { name: '도움됐어요' }).count();
+  const before = await page.getByRole('button', { name: '답변 틀림' }).count();
   await page.locator('textarea:visible').first().fill(question);
   await page.getByTitle('전송 (Ctrl+Enter)').click();
-  await expect(page.getByRole('button', { name: '도움됐어요' })).toHaveCount(before + 1, { timeout: 120_000 });
+  await expect(page.getByRole('button', { name: '답변 틀림' })).toHaveCount(before + 1, { timeout: 120_000 });
 }
 
 async function approveInAdmin(page: Page, userInput: string, targetLabel?: string, expectedFix?: string) {

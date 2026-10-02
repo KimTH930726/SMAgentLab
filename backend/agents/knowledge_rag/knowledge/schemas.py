@@ -5,16 +5,17 @@ from pydantic import BaseModel, Field
 
 # ─── Knowledge ───────────────────────────────────────────────────────────────
 
+# 가중치(base_weight) 입력은 2026-10-02 제거 — 쓰인 적 없고(활성 지식 전부 1.0) 틀린 검색은 배수로 덮지 않고 내용·업무구분·
+# 용어집을 고친다(정정 흐름). 컬럼과 검색식의 (1 + base_weight)는 남겨 모든 값 1.0 = 순위·임계값 그대로(메일 VOC 인용 임계값이
+# 부풀려진 점수 기준이라, 식에서 빼려면 그 임계값 재측정이 먼저). 옛 화면이 보내도 무시된다(정의 안 된 필드).
 class KnowledgeCreate(BaseModel):
     namespace: str
     content: str
-    base_weight: float = Field(default=1.0, ge=0.0)
     category: Optional[str] = None
 
 
 class KnowledgeUpdate(BaseModel):
     content: Optional[str] = None
-    base_weight: Optional[float] = Field(default=None, ge=0.0)
     category: Optional[str] = None
 
 
@@ -47,7 +48,6 @@ class KnowledgeOut(BaseModel):
 
 class BulkKnowledgeItem(BaseModel):
     content: str
-    base_weight: float = Field(default=1.0, ge=0.0)
     category: Optional[str] = None
     # 컨플루언스 벌크 리뷰 화면에서 넘어오는 조상 헤딩 목록(2026-09-22 수정) — 이전엔
     # 이 필드가 스키마에 없어서 확정(POST /knowledge/bulk) 시점에 조용히 버려지고 있었다.
