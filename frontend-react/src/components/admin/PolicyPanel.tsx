@@ -20,7 +20,7 @@ type PolicySubTab = 'items' | 'unresolved';
 
 const SUB_TABS: { id: PolicySubTab; label: string; icon: React.ReactNode }[] = [
   { id: 'items', label: '항목 브라우저', icon: <List className="w-4 h-4" /> },
-  { id: 'unresolved', label: '미분류', icon: <FileWarning className="w-4 h-4" /> },
+  { id: 'unresolved', label: '미분류 집계', icon: <FileWarning className="w-4 h-4" /> },
 ];
 
 export function PolicyPanel() {

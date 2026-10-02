@@ -180,6 +180,7 @@ class PolicyItemOut(BaseModel):
     review_source: Optional[str] = None
     review_rule: Optional[str] = None
     review_sample: bool = False
+    unresolved_segments: list[dict] = []
 
 
 class Track2TypeResultOut(BaseModel):

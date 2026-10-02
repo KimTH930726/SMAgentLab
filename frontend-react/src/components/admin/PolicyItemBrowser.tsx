@@ -6,6 +6,7 @@ import {
   type PolicyItem, type RiskLevel,
 } from '../../api/policy';
 import { PolicyReviewQueuePanel } from './PolicyReviewQueuePanel';
+import { UnresolvedSegmentActions } from './UnresolvedSegmentActions';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
@@ -336,6 +337,26 @@ export function PolicyItemBrowser() {
                       <ul className="text-xs text-slate-400 list-disc pl-4 space-y-0.5">
                         {item.risk_reasons.map((r) => <li key={r}>{r}</li>)}
                       </ul>
+                    </div>
+                  )}
+                  {item.unresolved_segments.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-amber-700 dark:text-amber-400"
+                        title="AI가 서술·파라미터 어디에도 넣지 못한 원문 조각입니다. 편입하면 구조화 상태와 위험도가 바로 다시 계산됩니다.">
+                        미분류 조각 {item.unresolved_segments.length}개 — 편입하면 위험도가 다시 계산돼요
+                      </p>
+                      <UnresolvedSegmentActions
+                        namespace={selectedNs}
+                        itemId={item.item_id}
+                        segments={item.unresolved_segments}
+                        canModify={canModifyNs}
+                        onChanged={() => Promise.all([
+                          queryClient.invalidateQueries({ queryKey: ['policy-items', selectedNs] }),
+                          queryClient.invalidateQueries({ queryKey: ['policy-items-all', selectedNs] }),
+                          queryClient.invalidateQueries({ queryKey: ['policy-review-summary', selectedNs] }),
+                          queryClient.invalidateQueries({ queryKey: ['policy-unresolved-summary', selectedNs] }),
+                        ])}
+                      />
                     </div>
                   )}
                   <div>

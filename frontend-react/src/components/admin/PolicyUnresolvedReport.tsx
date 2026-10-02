@@ -1,70 +1,21 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp, FileWarning, Info, ArrowRightCircle, Database, Check, X } from 'lucide-react';
-import { getUnresolvedSummary, promoteUnresolvedSegment, promoteUnresolvedSegmentToParam, suggestParamFields } from '../../api/policy';
+import { useQuery } from '@tanstack/react-query';
+import { ChevronDown, ChevronUp, FileWarning, Info } from 'lucide-react';
+import { getUnresolvedSummary } from '../../api/policy';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
 
 /**
- * 정책서 unresolved 팀별 집계 리포트.
+ * 정책서 미분류(unresolved) 팀별 집계 — 읽기 전용(2026-10-02).
  *
- * LLM 분해가 서술/파라미터 어디에도 못 넣은 내용을 팀(system_key)별로 보여준다. 2026-09-16,
- * "조회만 있고 아무 액션도 없다"는 지적을 받고 서술로 편입하는 원클릭 액션을 추가했었다.
- *
- * 파라미터로 편입(2026-09-23) — "서술로 편입밖에 없으면 반쪽짜리 아니냐, RDB로도 세분화
- * 해야 하는거 아니냐"는 지적으로 두 번째 액션 추가. 서술 편입과 달리 원문을 그대로 못 쓴다
- * (name/condition/value/unit 구조화 필드가 필요 — LLM이 애초에 여기서 자동 추출을 실패했기
- * 때문에 unresolved로 남은 것) — 그래서 사람이 최소한의 폼을 채워야 한다(v1은 LLM 프리필
- * 없이 수동 입력만).
- *
- * 2026-09-04 사용자 피드백 반영: (1) 라이트모드에서 amber 텍스트 대비가 낮아 안 읽힘 —
- * slate 팔레트는 CSS 변수로 테마에 따라 자동 전환되지만 amber 등 강조색은 그렇지 않아 dark:
- * 변형을 명시해야 함(Badge.tsx가 이미 하던 패턴을 여기서 놓쳤었음). (2) "표준화 요청 근거로
- * 쓰라"는 설명이 추상적이라 사용자가 뭘 해야 할지 안 와닿음 — 원문/사유/다음 액션을 명시적으로
- * 분리해 보여주도록 재구성.
+ * AI가 정책 원문을 서술/파라미터 어디에도 분류하지 못한 조각을 팀(system_key)별로 모아, 팀에 정책서 작성 표준화를 요청할
+ * 근거로 쓴다. 편입(서술/파라미터) 액션은 검토 큐로 옮겼다 — 미분류 조각이 있는 항목이 곧 검토 큐의 "위험 높음"이라,
+ * 같은 항목을 두 탭에서 따로 처리하던 중복을 없앴다(항목 브라우저에서 펼치면 그 자리에서 편입, UnresolvedSegmentActions).
  */
-const EMPTY_PARAM_FORM = { name: '', condition: '', value: '', unit: '' };
-
 export function PolicyUnresolvedReport() {
   const { selectedNs, setSelectedNs, sortedNamespaces } = useNamespaceAccess();
   const [systemFilter, setSystemFilter] = useState('');
   const [expandedItemId, setExpandedItemId] = useState<number | null>(null);
-  const [paramFormKey, setParamFormKey] = useState<string | null>(null);
-  const [paramForm, setParamForm] = useState(EMPTY_PARAM_FORM);
-  // 어떤 segment의 프리필 요청이 로딩 중인지를 key로 기록(/code-review 지적,
-  // 2026-09-23): 단순 boolean이면 A 요청이 진행 중일 때 B로 폼을 옮겨도 A가 먼저
-  // 끝나며 finally에서 무조건 false로 꺼버려 B가 아직 로딩 중인데 입력이 풀리고
-  // "AI 제안 확인 중" 표시가 사라지는 경쟁 상태가 있었음.
-  const [suggestLoadingKey, setSuggestLoadingKey] = useState<string | null>(null);
-  const queryClient = useQueryClient();
-
-  // "값 넣을 사람이 없겠다"는 지적(2026-09-23)으로 폼을 열자마자 LLM 1차 추측을 자동
-  // 호출해 프리필한다(버튼 없이 자동) — 실패/빈 값이면 그냥 빈 폼(현재 동작)과 동일.
-  const openParamForm = async (itemId: number, segmentIndex: number, key: string) => {
-    setParamFormKey(key);
-    setParamForm(EMPTY_PARAM_FORM);
-    setSuggestLoadingKey(key);
-    try {
-      const suggestion = await suggestParamFields(itemId, segmentIndex, selectedNs);
-      // 응답이 늦게 와서 그 사이 다른 segment로 폼을 옮겼으면 무시(경쟁 방지)
-      setParamFormKey((current) => {
-        if (current !== key) return current;
-        setParamForm({
-          name: suggestion.name ?? '',
-          condition: suggestion.condition ?? '',
-          value: suggestion.value ?? '',
-          unit: suggestion.unit ?? '',
-        });
-        return current;
-      });
-    } catch {
-      // best-effort 제안일 뿐 — 실패해도 조용히 빈 폼 유지
-    } finally {
-      // 이 요청(key)이 여전히 "지금 로딩 중"으로 표시된 요청일 때만 끈다 — 아니면
-      // 그 사이 열린 다른 segment(B)의 로딩 표시를 A의 완료가 지워버리게 됨.
-      setSuggestLoadingKey((current) => (current === key ? null : current));
-    }
-  };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['policy-unresolved-summary', selectedNs],
@@ -72,31 +23,6 @@ export function PolicyUnresolvedReport() {
     enabled: !!selectedNs,
     staleTime: 15_000,
     refetchOnMount: 'always',
-  });
-
-  // segment_index는 서버의 unresolved_segments 배열 순서에 의존한다 — 편입 성공 후 배열이
-  // 한 칸씩 당겨지므로, 같은 item에서 연달아 편입할 때 인덱스가 어긋나지 않도록 매번
-  // summary를 다시 받아온다(로컬에서 배열을 직접 잘라내지 않음).
-  const promoteMutation = useMutation({
-    mutationFn: ({ itemId, segmentIndex }: { itemId: number; segmentIndex: number }) =>
-      promoteUnresolvedSegment(itemId, segmentIndex, selectedNs),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['policy-unresolved-summary', selectedNs] }),
-  });
-
-  const promoteParamMutation = useMutation({
-    mutationFn: ({ itemId, segmentIndex }: { itemId: number; segmentIndex: number }) =>
-      promoteUnresolvedSegmentToParam(itemId, segmentIndex, selectedNs, {
-        name: paramForm.name.trim(),
-        condition: paramForm.condition.trim() || null,
-        value: paramForm.value.trim() || null,
-        unit: paramForm.unit.trim() || null,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['policy-unresolved-summary', selectedNs] });
-      setParamFormKey(null);
-      setParamForm(EMPTY_PARAM_FORM);
-    },
-    onError: (err: Error) => alert(err.message),
   });
 
   const groups = systemFilter
@@ -107,7 +33,7 @@ export function PolicyUnresolvedReport() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">
-          정책서 미분류(unresolved) 리포트
+          정책서 미분류 팀별 집계
           {selectedNs && <span className="text-sm font-normal text-slate-500 ml-2">({selectedNs})</span>}
         </h2>
       </div>
@@ -117,14 +43,11 @@ export function PolicyUnresolvedReport() {
         <Info className="w-4 h-4 text-indigo-500 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
         <div className="space-y-1">
           <p>
-            AI가 정책 원문을 "서술 설명"이나 "값 하나짜리 파라미터" 어느 쪽으로도 자동 분류하지
-            못한 부분입니다. <b>데이터가 사라진 건 아니고</b> 원문 그대로 보존된 상태입니다.
+            AI가 정책 원문을 "서술 설명"이나 "값 하나짜리 파라미터" 어느 쪽으로도 분류하지 못한 부분을 <b>팀별로 모은 집계</b>입니다.
+            데이터가 사라진 건 아니고 원문 그대로 보존돼 있습니다 — 팀에 정책서 작성 표준화를 요청할 근거로 쓰세요.
           </p>
           <p>
-            펼쳐서 <b>"서술로 편입"</b>을 누르면 원문을 그대로 검색 가능한 서술 지식으로 바로
-            등록합니다(값·조건을 정밀하게 구조화하는 건 아니고, 최소한 검색은 되게 만드는
-            원클릭 액션입니다). 정밀 재분류가 필요하거나 팀에 원문 수정을 요청할 근거로 쓰고
-            싶으면 편입하지 않고 그대로 둬도 됩니다.
+            편입(서술/파라미터)은 <b>항목 브라우저 → 검토 큐(위험 높음)</b>에서 그 항목을 펼쳐 바로 할 수 있습니다.
           </p>
         </div>
       </div>
@@ -204,118 +127,20 @@ export function PolicyUnresolvedReport() {
                       </div>
                       {expandedItemId === item.item_id && (
                         <div className="px-4 pb-3 space-y-2">
-                          {item.segments.map((seg, idx) => {
-                            const isThisPending = promoteMutation.isPending
-                              && promoteMutation.variables?.itemId === item.item_id
-                              && promoteMutation.variables?.segmentIndex === idx;
-                            const thisKey = `${item.item_id}-${idx}`;
-                            const isFormOpen = paramFormKey === thisKey;
-                            const suggestLoading = suggestLoadingKey === thisKey;
-                            const isParamPending = promoteParamMutation.isPending
-                              && promoteParamMutation.variables?.itemId === item.item_id
-                              && promoteParamMutation.variables?.segmentIndex === idx;
-                            return (
-                              <div key={idx} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 space-y-1.5">
-                                <div>
-                                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">원문</p>
-                                  <p className="text-sm text-slate-300 leading-relaxed">{seg.text}</p>
-                                </div>
-                                {seg.reason && (
-                                  <div>
-                                    <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">왜 자동 분류가 안 됐나요</p>
-                                    <p className="text-xs text-amber-700 dark:text-amber-400/90">{seg.reason}</p>
-                                  </div>
-                                )}
-                                {isFormOpen && (
-                                  <div className="border border-cyan-200 dark:border-cyan-700/40 bg-cyan-50/60 dark:bg-cyan-950/20 rounded-lg px-3 py-2.5 space-y-2">
-                                    {suggestLoading && (
-                                      <p className="text-[11px] text-cyan-700 dark:text-cyan-400">AI 제안 확인 중...</p>
-                                    )}
-                                    <div className="grid grid-cols-2 gap-2">
-                                      <div className="col-span-2">
-                                        <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">항목명 *</label>
-                                        <input
-                                          type="text" value={paramForm.name}
-                                          disabled={suggestLoading}
-                                          onChange={(e) => setParamForm((f) => ({ ...f, name: e.target.value }))}
-                                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
-                                        />
-                                      </div>
-                                      <div>
-                                        <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">조건(선택)</label>
-                                        <input
-                                          type="text" value={paramForm.condition}
-                                          disabled={suggestLoading}
-                                          onChange={(e) => setParamForm((f) => ({ ...f, condition: e.target.value }))}
-                                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
-                                        />
-                                      </div>
-                                      <div>
-                                        <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">값(선택)</label>
-                                        <input
-                                          type="text" value={paramForm.value}
-                                          disabled={suggestLoading}
-                                          onChange={(e) => setParamForm((f) => ({ ...f, value: e.target.value }))}
-                                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
-                                        />
-                                      </div>
-                                      <div className="col-span-2">
-                                        <label className="block text-[10px] font-medium text-cyan-700/80 dark:text-cyan-400/80 mb-0.5">단위(선택)</label>
-                                        <input
-                                          type="text" value={paramForm.unit}
-                                          disabled={suggestLoading}
-                                          onChange={(e) => setParamForm((f) => ({ ...f, unit: e.target.value }))}
-                                          className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
-                                        />
-                                      </div>
-                                    </div>
-                                    <div className="flex justify-end gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => { setParamFormKey(null); setParamForm(EMPTY_PARAM_FORM); }}
-                                        className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-                                      >
-                                        <X className="w-3.5 h-3.5" />취소
-                                      </button>
-                                      <button
-                                        type="button"
-                                        disabled={!paramForm.name.trim() || isParamPending || suggestLoading}
-                                        onClick={() => promoteParamMutation.mutate({ itemId: item.item_id, segmentIndex: idx })}
-                                        className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border border-cyan-300 text-cyan-700 bg-cyan-50 hover:bg-cyan-100 dark:border-cyan-600/40 dark:text-cyan-300 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                      >
-                                        <Check className="w-3.5 h-3.5" />{isParamPending ? '저장 중...' : '저장'}
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-                                <div className="flex justify-end gap-2 pt-1">
-                                  <button
-                                    type="button"
-                                    disabled={promoteMutation.isPending}
-                                    onClick={() => promoteMutation.mutate({ itemId: item.item_id, segmentIndex: idx })}
-                                    title="원문을 그대로 검색 가능한 서술 지식으로 등록합니다(정밀 재분류는 아님)"
-                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 dark:border-indigo-600/40 dark:text-indigo-300 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                  >
-                                    {isThisPending ? (
-                                      <>편입 중...</>
-                                    ) : (
-                                      <><ArrowRightCircle className="w-3.5 h-3.5" /> 서술로 편입</>
-                                    )}
-                                  </button>
-                                  {!isFormOpen && (
-                                    <button
-                                      type="button"
-                                      onClick={() => openParamForm(item.item_id, idx, thisKey)}
-                                      title="항목명/조건/값/단위를 직접 입력해 파라미터(RDB 정확조회)로 등록합니다"
-                                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-cyan-300 text-cyan-700 bg-cyan-50 hover:bg-cyan-100 dark:border-cyan-600/40 dark:text-cyan-300 dark:bg-cyan-500/10 dark:hover:bg-cyan-500/20 transition-colors"
-                                    >
-                                      <Database className="w-3.5 h-3.5" /> 파라미터로 편입
-                                    </button>
-                                  )}
-                                </div>
+                          {item.segments.map((seg, idx) => (
+                            <div key={idx} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 space-y-1.5">
+                              <div>
+                                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">원문</p>
+                                <p className="text-sm text-slate-300 leading-relaxed">{seg.text}</p>
                               </div>
-                            );
-                          })}
+                              {seg.reason && (
+                                <div>
+                                  <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">왜 자동 분류가 안 됐나요</p>
+                                  <p className="text-xs text-amber-700 dark:text-amber-400/90">{seg.reason}</p>
+                                </div>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>

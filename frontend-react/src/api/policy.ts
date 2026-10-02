@@ -145,6 +145,8 @@ export interface PolicyItem {
   review_source: 'human' | 'auto_rule' | null;
   review_rule: string | null;
   review_sample: boolean;
+  /** 미분류 조각 — 위험 높음 항목을 펼친 자리에서 편입(2026-10-02) */
+  unresolved_segments: UnresolvedSegment[];
 }
 
 export type RiskLevel = 'high' | 'medium' | 'low';

@@ -40,7 +40,7 @@ def _item_row(id_, name="정책", category_path=None, raw_body="본문"):
         "category_path": category_path or [], "raw_body": raw_body,
         "status": "pending_review", "parse_status": "parsed", "system_key": "s",
         "review_source": None, "review_rule": None, "review_sample": False,
-        "chunk_count": 1, "unresolved_count": 0, "prior_reject": False,
+        "chunk_count": 1, "unresolved_count": 0, "prior_reject": False, "unresolved_segments": None,
     }
 
 
@@ -259,3 +259,15 @@ class TestListPolicyItemsWithQuery:
         call = conn.fetch.call_args_list[0]
         assert "ANY(p.category_path)" in call.args[0]
         assert "id = ANY" in call.args[0]
+
+
+class TestUnresolvedSegmentsInList:
+    @pytest.mark.asyncio
+    async def test_segments_returned_for_inline_promotion(self, patch_db):
+        """위험 높음 항목을 펼친 자리에서 편입하려면 목록이 미분류 조각(원문·사유)을 순서대로 내려줘야 한다(2026-10-02)."""
+        row = _item_row(1) | {"parse_status": "partial", "unresolved_count": 2,
+                              "unresolved_segments": '[{"text": "A", "reason": "r1"}, {"text": "B"}]'}
+        patch_db(item_rows=[row])
+        out = await browse.list_policy_items("ns")
+        assert out[0].unresolved_segments == [{"text": "A", "reason": "r1"}, {"text": "B", "reason": None}]
+        assert out[0].risk_level == "high"

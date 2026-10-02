@@ -123,3 +123,33 @@ test('위험도 분류 → 낮음 자동 통과(표본은 사람 큐) → 되돌
   const actions = psql(`SELECT string_agg(DISTINCT action, ',' ORDER BY action) FROM policy_review_log WHERE id > ${logIdBefore}`);
   expect(actions.split(',')).toEqual(expect.arrayContaining(['auto_approved', 'sampled', 'auto_reverted', 'rejected', 'rule_paused']));
 });
+
+test('미분류 조각은 검토 큐에서 바로 편입 → 위험도 재계산, 미분류 탭은 집계만', async ({ page }) => {
+  page.on('dialog', (d) => d.accept());
+  await openBrowser(page);
+  const panel = page.locator('div.rounded-xl').filter({ hasText: '사람이 볼 검토 큐' }).first();
+  await panel.getByRole('button', { name: /검토 큐 보기/ }).click();
+  const row = page.locator('.space-y-2 > div.bg-slate-800').filter({ hasText: 'E2E 미해결 정책' }).first();
+  await expect(row.getByText('위험 높음')).toBeVisible();
+  await row.locator('span.font-medium').first().click();  // 펼치기
+  await expect(row.getByText(/미분류 조각 2개/)).toBeVisible();
+
+  // 두 조각을 서술로 편입(편입마다 목록을 다시 받아 인덱스가 당겨짐)
+  for (let left = 2; left > 0; left--) {
+    const done = page.waitForResponse((r) => /\/unresolved\/\d+\/promote$/.test(r.url()));
+    await row.getByRole('button', { name: /서술로 편입/ }).first().click();
+    expect((await done).ok()).toBeTruthy();
+    if (left > 1) await expect(row.getByText(/미분류 조각 1개/)).toBeVisible();
+  }
+  const ns = `(SELECT id FROM ops_namespace WHERE name='${NS}')`;
+  expect(psql(`SELECT parse_status FROM policy_item WHERE namespace_id=${ns} AND policy_name='E2E 미해결 정책'`)).toBe('parsed');
+  // 구조화 실패가 풀려 위험 높음 → 중간(서술 1+2=3개로 나뉨)
+  await expect(row.getByText('위험 중간', { exact: true })).toBeVisible();
+  await expect(row.getByText(/미분류 조각/)).toHaveCount(0);
+
+  // 미분류 탭은 팀별 집계 — 편입 버튼 없음
+  await page.getByRole('button', { name: '미분류 집계' }).click();
+  await page.locator('select').first().selectOption(NS);
+  await expect(page.getByText(/항목 브라우저 → 검토 큐/)).toBeVisible();
+  await expect(page.getByRole('button', { name: /서술로 편입|파라미터로 편입/ })).toHaveCount(0);
+});

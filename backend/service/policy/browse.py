@@ -15,6 +15,7 @@ RDB tsquery + narrative 벡터)를 그대로 재사용해 "이 item이 어떻게
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -67,6 +68,13 @@ class PolicyItemOut:
     review_source: Optional[str] = None
     review_rule: Optional[str] = None
     review_sample: bool = False
+    # 미분류 조각({text, reason}) — 위험 높음 항목을 펼친 자리에서 바로 편입하려고(2026-10-02, 미분류 탭에서 이동)
+    unresolved_segments: list[dict] = field(default_factory=list)
+
+
+def _segments(raw) -> list[dict]:
+    segs = (json.loads(raw) if isinstance(raw, str) else raw) or []
+    return [{"text": (s or {}).get("text", ""), "reason": (s or {}).get("reason")} for s in segs]
 
 
 async def list_policy_items(
@@ -112,7 +120,7 @@ async def list_policy_items(
         item_rows = await conn.fetch(
             f"""
             SELECT p.id, p.logical_id, p.version, p.policy_name, p.category_path, p.raw_body, p.status,
-                   p.parse_status, p.system_key, p.review_source, p.review_rule, p.review_sample,
+                   p.parse_status, p.system_key, p.review_source, p.review_rule, p.review_sample, p.unresolved_segments,
                    {risk.RISK_FEATURES_SQL}
             FROM policy_item p
             WHERE {' AND '.join(clauses)}
@@ -156,6 +164,7 @@ async def list_policy_items(
             matched_via=sorted(matched_via.get(r["id"], set())),
             risk_level=rk.level, risk_reasons=rk.reasons, review_source=r["review_source"],
             review_rule=r["review_rule"], review_sample=bool(r["review_sample"]),
+            unresolved_segments=_segments(r["unresolved_segments"]),
         ))
     if sort == "risk":
         # 파이썬 정렬은 안정적 — 위 id DESC(최신 먼저)가 같은 등급 안에서 유지된다
