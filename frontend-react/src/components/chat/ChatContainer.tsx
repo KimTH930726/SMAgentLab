@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Send, Square, AlertCircle, ChevronDown, ChevronUp, Tag } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Send, Square, AlertCircle, ChevronDown, ChevronUp, Tag, X, Sparkles } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import {
   useStreamStore,
@@ -11,8 +11,47 @@ import {
 import { getMessages } from '../../api/conversations';
 import { getCategories, suggestCategory } from '../../api/namespaces';
 import { MessageItem } from './MessageItem';
+import { useCorrectionStore } from '../../store/useCorrectionStore';
+import { createCorrection, getMyCorrections, markCorrectionsSeen } from '../../api/corrections';
 import type { ChatMessage, PolicyCitation } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
+
+/** 신고자 결과 알림 — 내가 낸 정정 신고가 처리되면(반영/반려 사유) 채팅 진입 시 한 번 보여준다. */
+function CorrectionResultsBanner() {
+  const qc = useQueryClient();
+  const { data: items = [] } = useQuery({
+    queryKey: ['corrections-mine-unseen'],
+    queryFn: () => getMyCorrections(true),
+    staleTime: 60_000,
+  });
+  const seen = useMutation({
+    mutationFn: () => markCorrectionsSeen(items.map((i) => i.id)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['corrections-mine-unseen'] }),
+    onError: (err: Error) => alert(err.message),
+  });
+  if (items.length === 0) return null;
+  return (
+    <div className="px-4 py-3 rounded-lg border text-xs space-y-1.5 bg-indigo-50 border-indigo-200 dark:bg-indigo-950/30 dark:border-indigo-800/50">
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-indigo-700 dark:text-indigo-300">내 정정 신고 {items.length}건 처리됨</span>
+        <button onClick={() => seen.mutate()} disabled={seen.isPending} className="ml-auto text-slate-500 hover:text-slate-300">
+          확인
+        </button>
+      </div>
+      {items.map((i) => (
+        <p key={i.id} className="text-slate-400">
+          {i.status === 'approved'
+            ? <span className="text-emerald-600 dark:text-emerald-400">반영됨</span>
+            : i.kind === 'answer_quality'
+              ? <span className="text-sky-600 dark:text-sky-400">확인됨(답변 오류)</span>
+              : <span className="text-rose-600 dark:text-rose-400">반려</span>}
+          {' · '}“{i.user_input}”
+          {i.status === 'rejected' && i.reject_reason && <> — {i.kind === 'answer_quality' ? '' : '사유: '}{i.reject_reason}</>}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 function PipelineStepsToggle({ steps }: { steps: PipelineStep[] }) {
   const [expanded, setExpanded] = useState(false);
@@ -206,6 +245,16 @@ export function ChatContainer() {
   const historyConvIdRef = useRef<number | null>(null);
   const selectedAgent = useAppStore((s) => s.selectedAgent);
   const [input, setInput] = useState('');
+  // 정정 입력 모드 — "답변 틀림"/"이 근거 틀림"을 누르면 입력창이 정정 의견 입력으로 바뀐다.
+  // 질문 초안과 섞이지 않게 별도 state. 전송은 채팅 흐름이 아니라 /api/corrections로.
+  const qc = useQueryClient();
+  const correction = useCorrectionStore((s) => s.active);
+  const cancelCorrection = useCorrectionStore((s) => s.cancel);
+  const markSubmitted = useCorrectionStore((s) => s.markSubmitted);
+  const [correctionText, setCorrectionText] = useState('');
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
+  const [correctionNotice, setCorrectionNotice] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
@@ -423,6 +472,40 @@ export function ChatContainer() {
     userScrolledUpRef.current = !atBottom;
   };
 
+  useEffect(() => {
+    if (correction) {
+      setCorrectionError(null);
+      setCorrectionNotice(null);
+      textareaRef.current?.focus();
+    }
+  }, [correction]);
+  // 다른 대화/파트로 옮기면 정정 모드는 그 답변 맥락을 잃으므로 해제
+  useEffect(() => { cancelCorrection(); setCorrectionText(''); }, [conversationId, namespace, cancelCorrection]);
+
+  // 접수 맥락은 변수로 넘긴다 — AI 판정에 몇 초 걸리는 사이 대화를 옮기면 정정 모드가 해제돼(active=null)
+  // 완료 시점의 상태를 읽으면 접수 카드·배지 갱신이 깨진다(/code-review). 서버엔 이미 저장된 상태.
+  const submitCorrection = useMutation({
+    mutationFn: ({ ctx, text }: { ctx: NonNullable<typeof correction>; text: string }) => createCorrection({
+      namespace: ctx.namespace,
+      message_id: ctx.messageId ?? null,
+      target_type: ctx.selected.targetType,
+      target_id: ctx.selected.targetId ?? null,
+      target_sub_id: ctx.selected.subId ?? null,
+      user_input: text,
+    }),
+    onSuccess: (result, { ctx }) => {
+      if (ctx.messageId != null) markSubmitted(ctx.messageId, result, ctx.selected);
+      else setCorrectionNotice('정정 신고 접수 — 담당자 검토 후 반영됩니다.');
+      if (useCorrectionStore.getState().active === ctx) {
+        cancelCorrection();
+        setCorrectionText('');
+      }
+      qc.invalidateQueries({ queryKey: ['correction-status'] });
+      qc.invalidateQueries({ queryKey: ['corrections-pending-count'] });
+    },
+    onError: (err: Error) => setCorrectionError(err.message),
+  });
+
   const handleStop = () => {
     stopChatStream();
   };
@@ -464,11 +547,24 @@ export function ChatContainer() {
     });
   };
 
+  const canSubmitCorrection = !!correction && !!correctionText.trim() && !submitCorrection.isPending;
+  const handleSend = () => {
+    if (correction) {
+      if (canSubmitCorrection && correction) {
+        setCorrectionError(null);
+        submitCorrection.mutate({ ctx: correction, text: correctionText.trim() });
+      }
+      return;
+    }
+    handleSubmit();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      handleSubmit();
+      handleSend();
     }
+    if (e.key === 'Escape' && correction) cancelCorrection();
   };
 
   return (
@@ -485,6 +581,8 @@ export function ChatContainer() {
             <span>이전 대화는 보관 정책에 따라 삭제되었습니다.</span>
           </div>
         )}
+
+        <CorrectionResultsBanner />
 
         {displayMessages.length === 0 && (
           <div className="flex items-center justify-center h-full text-slate-500">
@@ -515,14 +613,44 @@ export function ChatContainer() {
         <div className="flex items-center gap-2 mb-2">
           {selectedAgent === 'knowledge_rag' && namespace && <CategoryFilter namespace={namespace} />}
         </div>
+        {correction && (
+          <div className="mb-2 px-3 py-2 rounded-lg border text-xs space-y-1 bg-rose-50 border-rose-200 dark:bg-rose-950/30 dark:border-rose-800/50">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-rose-700 dark:text-rose-300">
+                {correction.selected.targetType === 'auto' ? '어디가 틀렸나요?' : `${correction.selected.label} 정정`}
+              </span>
+              <span className="text-slate-500" title="입력한 내용은 바로 반영되지 않고, 담당자가 확인한 뒤에만 검색에 반영됩니다.">
+                {correction.selected.targetType === 'auto'
+                  ? '맞는 내용을 한 줄로 — 어느 근거 문제인지는 AI가 찾아요'
+                  : '맞는 내용을 한 줄로 적어주세요'}
+              </span>
+              <button onClick={cancelCorrection} disabled={submitCorrection.isPending}
+                className="ml-auto text-slate-500 hover:text-slate-300 flex items-center gap-0.5 disabled:opacity-50" title="정정 취소 (Esc)">
+                <X className="w-3.5 h-3.5" />취소
+              </button>
+            </div>
+            {submitCorrection.isPending && (
+              <p className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400 animate-pulse">
+                <Sparkles className="w-3.5 h-3.5" />
+                {correction.selected.targetType === 'auto' ? 'AI가 어느 근거 문제인지 분석하고 수정안을 만드는 중…' : 'AI가 수정안을 만드는 중…'}
+              </p>
+            )}
+            {correctionError && <p className="text-rose-600 dark:text-rose-400">{correctionError}</p>}
+          </div>
+        )}
+        {correctionNotice && !correction && (
+          <p className="mb-2 text-xs text-amber-700 dark:text-amber-300">{correctionNotice}</p>
+        )}
         <div className="flex gap-3 items-end">
           <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
+            ref={textareaRef}
+            value={correction ? correctionText : input}
+            onChange={(e) => (correction ? setCorrectionText(e.target.value) : setInput(e.target.value))}
             onKeyDown={handleKeyDown}
-            placeholder="질문을 입력하세요... (Ctrl+Enter로 전송)"
+            placeholder={correction ? '예) 90일이 아니라 60일이에요 (Ctrl+Enter로 접수)' : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
+            maxLength={correction ? 1000 : undefined}
             rows={2}
-            disabled={!namespace || isLoading}
+            disabled={!namespace || isLoading || submitCorrection.isPending}
             className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none disabled:opacity-50 text-sm"
           />
           {isLoading ? (
@@ -535,10 +663,10 @@ export function ChatContainer() {
             </button>
           ) : (
             <button
-              onClick={handleSubmit}
-              disabled={!input.trim() || !namespace || streamActive}
+              onClick={handleSend}
+              disabled={correction ? !canSubmitCorrection : (!input.trim() || !namespace || streamActive)}
               className="p-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:opacity-50 rounded-xl transition-colors flex-shrink-0"
-              title="전송 (Ctrl+Enter)"
+              title={correction ? '정정 접수 (Ctrl+Enter)' : '전송 (Ctrl+Enter)'}
             >
               <Send className="w-5 h-5 text-white" />
             </button>

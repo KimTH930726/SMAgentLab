@@ -24,6 +24,7 @@ from service.email_voc.router import router as email_voc_router
 from service.email_voc.scheduler import start_scheduler, stop_scheduler
 from service.policy.router import router as policy_router
 from service.refdata.router import router as refdata_router
+from service.improvement.router import router as improvement_router
 
 from shared import cache as sem_cache
 from shared.http_client import close_http_client
@@ -40,6 +41,7 @@ _ROUTERS = [
     email_voc_router,
     policy_router,
     refdata_router,
+    improvement_router,
 ]
 
 
@@ -1180,6 +1182,64 @@ async def _migrate_knowledge_heading_path(conn) -> None:
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS heading_path TEXT[]")
 
 
+async def _migrate_improvement_ledger(conn) -> None:
+    """개선 원장 `ops_improvement_item` (2026-10-01, 근거 정정 흐름).
+
+    자기개선 루프(감지→진단→제안→**담당자 결정**→반영)의 집결지. 이번엔 채팅 근거 카드의
+    "이 근거 틀림" 정정 신호만 쌓지만, 지식 없음 질의·품질 점검 결과도 같은 곳에 쌓을 예정이라
+    정정 전용 이름·구조로 좁히지 않는다(kind/source로 구분). 기존 `rag_knowledge_review_flag`는
+    rag_knowledge FK에 묶여 정책·수정안·사유·처리자를 못 담아 확장 대신 신설(👎 신호용으로 유지).
+
+    **수정안(proposed)은 이 테이블에만** 둔다 — 승인 전엔 지식/정책 테이블에 아무 행도 생기지 않아
+    "사용자 정정은 승인 전 검색 미노출"이 상태 필터가 아니라 구조로 보장된다(정책 검색은
+    pending_review도 노출하므로 정책 쪽에 pending 행을 넣는 방식은 쓸 수 없었음).
+    target_id는 target_type에 따라 rag_knowledge/policy_item을 가리키는 다형 참조라 FK를 걸지 않는다.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_improvement_item (
+            id                 SERIAL PRIMARY KEY,
+            kind               VARCHAR(30) NOT NULL,
+            source             VARCHAR(50) NOT NULL,
+            namespace_id       INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            message_id         INT REFERENCES ops_message(id) ON DELETE SET NULL,
+            reporter_user_id   INT REFERENCES ops_user(id) ON DELETE SET NULL,
+            target_type        VARCHAR(30),
+            target_id          INT,
+            target_sub_id      INT,
+            user_input         TEXT,
+            original           JSONB,
+            proposed           JSONB,
+            status             VARCHAR(20) NOT NULL DEFAULT 'pending'
+                               CHECK (status IN ('pending', 'approved', 'rejected')),
+            reject_reason      TEXT,
+            decided_by         INT REFERENCES ops_user(id) ON DELETE SET NULL,
+            decided_at         TIMESTAMPTZ,
+            applied_target_id  INT,
+            reporter_seen_at   TIMESTAMPTZ,
+            created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    # "답변 틀림" 자동 식별 — 그 답변의 근거 후보(담당자 대상 변경용)와 AI 판정(대상·이유·방식, 변경 이력)
+    await conn.execute("ALTER TABLE ops_improvement_item ADD COLUMN IF NOT EXISTS candidates JSONB")
+    await conn.execute("ALTER TABLE ops_improvement_item ADD COLUMN IF NOT EXISTS ai_verdict JSONB")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_improvement_ns_status ON ops_improvement_item(namespace_id, status, created_at DESC)"
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_improvement_pending_target ON ops_improvement_item(target_type, target_id) "
+        "WHERE status = 'pending'"
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_improvement_reporter ON ops_improvement_item(reporter_user_id, status)"
+    )
+    # 같은 사용자가 같은 근거에 검토 중인 정정을 중복으로 올리지 못하게(버튼 연타·재신고)
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_improvement_pending_correction
+        ON ops_improvement_item(reporter_user_id, target_type, target_id, COALESCE(target_sub_id, 0))
+        WHERE status = 'pending' AND kind = 'correction'
+    """)
+
+
 async def _migrate_drop_dead_schema_2026_09_22(conn) -> None:
     """죽은 컬럼/테이블 정리 (v2.100, 2026-09-22).
 
@@ -1294,6 +1354,7 @@ async def _run_migrations() -> None:
         await _migrate_ensure_ko_text_search_helpers(conn)
         await _migrate_knowledge_heading_path(conn)
         await _migrate_drop_dead_schema_2026_09_22(conn)
+        await _migrate_improvement_ledger(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

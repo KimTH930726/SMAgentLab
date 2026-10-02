@@ -627,6 +627,24 @@ class TestPipelineReprocess:
         dec.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_approved_correction_survives_reprocess(self, patch_db, monkeypatch):
+        """근거 정정(2026-10-01)으로 승인된 버전 — 엑셀이 그대로면 파이프라인 변경·강제여도 다시 분해 안 함
+        (다시 분해하면 엑셀의 옛 본문으로 새 버전이 생겨 정정이 조용히 사라진다)."""
+        patch_db.fetchval = AsyncMock(return_value=True)
+        skip, _, dec = await self._ingest(patch_db, monkeypatch, self._current(None), force=True)
+        assert skip is True
+        dec.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_excel_change_overrides_approved_correction(self, patch_db, monkeypatch):
+        """엑셀 원본이 실제로 바뀌면(content_hash 다름) 원본 소유자 우선 — 정정 버전도 새 버전으로 대체."""
+        patch_db.fetchval = AsyncMock(return_value=True)
+        cur = {**self._current(service.pipeline_version()), "content_hash": "엑셀이 바뀌기 전 해시"}
+        skip, _, dec = await self._ingest(patch_db, monkeypatch, cur)
+        assert skip is False
+        dec.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_force_reprocesses_even_when_current(self, patch_db, monkeypatch):
         skip, summary, _ = await self._ingest(
             patch_db, monkeypatch, self._current(service.pipeline_version()), force=True,

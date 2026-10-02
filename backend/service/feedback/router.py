@@ -65,20 +65,13 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
         if not body.is_positive and body.message_id is not None:
             await _flag_answer_sources_for_review(conn, ns_id, body.message_id)
 
-        if body.knowledge_id:
-            weight_delta = 0.1 if body.is_positive else -0.1
-            bound = 5.0 if body.is_positive else 0.0
-            # 동적 SQL(f-string 함수명 삽입) 대신 CASE로 분기 — 파라미터화된 단일 쿼리
+        # 👎의 base_weight 자동 감점(-0.1)은 제거(2026-10-01, 근거 정정 흐름) — 사람 확인 없는 자동
+        # 반영이었다. 👎는 이제 신호만 남기고(위 review_flag), 근거가 틀렸으면 근거 카드의 "이 근거
+        # 틀림" → 개선 원장(ops_improvement_item) → 담당자 승인으로만 지식이 바뀐다. 👍 +0.1은 범위 밖.
+        if body.knowledge_id and body.is_positive:
             await conn.execute(
-                """
-                UPDATE rag_knowledge
-                SET base_weight = CASE WHEN $1
-                    THEN LEAST(base_weight + $2, $3)
-                    ELSE GREATEST(base_weight + $2, $3)
-                END
-                WHERE id = $4
-                """,
-                body.is_positive, weight_delta, bound, body.knowledge_id,
+                "UPDATE rag_knowledge SET base_weight = LEAST(base_weight + 0.1, 5.0) WHERE id = $1",
+                body.knowledge_id,
             )
 
         # resolved_knowledge_id가 함께 오면(= 나빠요 후 지식 등록으로 교정) is_positive 값과

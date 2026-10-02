@@ -124,6 +124,18 @@ async def _check_version(
         and current["content_hash"] == new_hash
         and current.get("pipeline_version") == pipeline_version()
     )
+    # 근거 정정(2026-10-01)으로 담당자가 승인한 버전은 엑셀 원본이 그대로면 재처리하지 않는다 —
+    # 파이프라인 버전이 바뀌거나 강제 재처리여도 다시 분해하면 엑셀의 옛(틀린) 본문으로 새 버전이 생겨
+    # 정정이 조용히 사라진다. 엑셀 원본이 실제로 바뀐 경우(content_hash 다름)만 원본 소유자가 우선.
+    if not skip and current is not None and current["content_hash"] == new_hash:
+        corrected = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM ops_improvement_item WHERE applied_target_id = $1 "
+            "AND target_type IN ('policy_param', 'policy_narrative') AND status = 'approved')",
+            current["id"],
+        )
+        if corrected is True:
+            logger.info("정책 재처리 스킵 — 승인된 정정 버전 유지 (policy_item=%s)", current["id"])
+            skip = True
     return skip, current, new_hash
 
 

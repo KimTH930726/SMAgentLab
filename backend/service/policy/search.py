@@ -49,6 +49,7 @@ class ParamHit:
     value: Optional[str]
     unit: Optional[str]
     raw_body: str = ""  # 원문 전체 — 채팅 인용 카드의 "근거" 표시용(2026-09-06)
+    param_id: Optional[int] = None  # 근거 정정(2026-10-01) — 인용 카드에서 "이 근거 틀림" 대상 지정용
     score: float = 0.0  # ts_rank 관련도 — 예전엔 i.id DESC(최신순)로만 정렬해 무의미했음,
     # select_top_policy_hit()에서 narrative가 없을 때 최선의 param 1건을 고르는 데 씀(2026-09-07)
 
@@ -69,6 +70,7 @@ class NarrativeHit:
     chunk_text: str
     score: float
     raw_body: str = ""  # 원문 전체 — 채팅 인용 카드의 "근거" 표시용(2026-09-06)
+    chunk_id: Optional[int] = None  # 근거 정정(2026-10-01) — 인용 카드에서 "이 근거 틀림" 대상 지정용
 
 
 @dataclass
@@ -123,7 +125,7 @@ async def search_policy(
         param_rows = await conn.fetch(
             f"""
             SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
-                   p.name AS param_name, p.condition, p.value, p.unit,
+                   p.id AS param_id, p.name AS param_name, p.condition, p.value, p.unit,
                    ts_rank(to_tsvector('simple', policy_strip_ko(p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name)), q.tsq) AS rank
             FROM policy_param p
             JOIN policy_item i ON i.id = p.policy_item_id
@@ -147,7 +149,7 @@ async def search_policy(
         chunk_rows = await conn.fetch(
             f"""
             SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
-                   c.chunk_text, 1 - (c.embedding <=> $2::vector) AS score
+                   c.id AS chunk_id, c.chunk_text, 1 - (c.embedding <=> $2::vector) AS score
             FROM policy_chunk c
             JOIN policy_item i ON i.id = c.policy_item_id
             WHERE i.namespace_id = $1 AND i.status NOT IN ('deprecated', 'rejected')
@@ -162,12 +164,12 @@ async def search_policy(
         item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
         category_path=list(r["category_path"] or []), status=r["status"],
         param_name=r["param_name"], condition=r["condition"], value=r["value"], unit=r["unit"],
-        raw_body=r["raw_body"], score=float(r["rank"]),
+        raw_body=r["raw_body"], score=float(r["rank"]), param_id=r["param_id"],
     ) for r in param_rows]
     narratives = [NarrativeHit(
         item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
         category_path=list(r["category_path"] or []), status=r["status"],
-        chunk_text=r["chunk_text"], score=float(r["score"]), raw_body=r["raw_body"],
+        chunk_text=r["chunk_text"], score=float(r["score"]), raw_body=r["raw_body"], chunk_id=r["chunk_id"],
     ) for r in chunk_rows]
 
     if use_reranker:
@@ -303,10 +305,14 @@ def build_policy_citations(result: PolicySearchResult) -> list[dict]:
         citations.append({
             "kind": "param", "policy_name": p.policy_name, "category_path": p.category_path,
             "detail": detail, "raw_body": p.raw_body,
+            # 근거 정정(2026-10-01): 카드에서 "이 근거 틀림"을 누르면 어느 항목·어느 파라미터인지
+            # 서버가 알아야 한다(예전 카드엔 id가 없어 정책은 정정 대상이 될 수 없었음)
+            "item_id": p.item_id, "logical_id": p.logical_id, "param_id": p.param_id,
         })
     for n in result.narratives:
         citations.append({
             "kind": "narrative", "policy_name": n.policy_name, "category_path": n.category_path,
             "detail": n.chunk_text, "raw_body": n.raw_body,
+            "item_id": n.item_id, "logical_id": n.logical_id, "chunk_id": n.chunk_id,
         })
     return citations

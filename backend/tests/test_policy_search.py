@@ -53,12 +53,12 @@ class TestSearchPolicy:
         param_rows = [{
             "item_id": 1, "logical_id": 1, "policy_name": "장바구니 담기",
             "category_path": ["1.주문", "1-1.장바구니"], "status": "pending_review", "raw_body": "일반 배달: 20개",
-            "param_name": "최대개수", "condition": "일반 배달", "value": "20", "unit": "개", "rank": 0.06,
+            "param_id": 11, "param_name": "최대개수", "condition": "일반 배달", "value": "20", "unit": "개", "rank": 0.06,
         }]
         chunk_rows = [{
             "item_id": 2, "logical_id": 2, "policy_name": "장바구니 조회",
             "category_path": ["1.주문"], "status": "pending_review", "raw_body": "재고 없으면 SOLD OUT 표기",
-            "chunk_text": "재고 없으면 SOLD OUT 표기", "score": 0.83,
+            "chunk_id": 21, "chunk_text": "재고 없으면 SOLD OUT 표기", "score": 0.83,
         }]
         patch_db(param_rows=param_rows, chunk_rows=chunk_rows)
 
@@ -310,12 +310,12 @@ class TestSearchPolicyReranker:
         param_rows = [{
             "item_id": 1, "logical_id": 1, "policy_name": "장바구니 담기",
             "category_path": [], "status": "active", "raw_body": "본문",
-            "param_name": "최대개수", "condition": None, "value": "20", "unit": "개", "rank": 0.5,
+            "param_id": 11, "param_name": "최대개수", "condition": None, "value": "20", "unit": "개", "rank": 0.5,
         }]
         chunk_rows = [{
             "item_id": 2, "logical_id": 2, "policy_name": "재고정책",
             "category_path": [], "status": "active", "raw_body": "본문2",
-            "chunk_text": "재고 없으면 SOLD OUT", "score": 0.8,
+            "chunk_id": 22, "chunk_text": "재고 없으면 SOLD OUT", "score": 0.8,
         }]
         conn = patch_db(param_rows=param_rows, chunk_rows=chunk_rows)
         monkeypatch.setattr(search.settings, "reranker_enabled", True)
@@ -341,7 +341,7 @@ class TestSearchPolicyReranker:
         (불필요한 모델 호출 방지)."""
         param_rows = [{
             "item_id": 1, "logical_id": 1, "policy_name": "P", "category_path": [], "status": "active",
-            "raw_body": "", "param_name": "N", "condition": None, "value": "1", "unit": None, "rank": 0.1,
+            "raw_body": "", "param_id": 12, "param_name": "N", "condition": None, "value": "1", "unit": None, "rank": 0.1,
         }]
         conn = patch_db(param_rows=param_rows, chunk_rows=[])
         monkeypatch.setattr(search.settings, "reranker_enabled", True)
@@ -376,6 +376,18 @@ class TestBuildPolicyCitations:
         assert c["category_path"] == ["1.주문"]
         assert "최대개수" in c["detail"] and "20개" in c["detail"]
         assert c["raw_body"] == "일반 배달: 20개\n도보 배달: 4개"
+
+    def test_citations_carry_ids_for_correction(self):
+        """근거 정정(2026-10-01) — 카드의 "이 근거 틀림"이 어느 항목·파라미터/서술인지 서버에 알려야 한다."""
+        result = search.PolicySearchResult(
+            params=[search.ParamHit(item_id=7, logical_id=3, policy_name="p", category_path=[], status="active",
+                                    param_name="n", condition=None, value="1", unit=None, param_id=70)],
+            narratives=[search.NarrativeHit(item_id=8, logical_id=4, policy_name="q", category_path=[], status="active",
+                                            chunk_text="t", score=0.5, chunk_id=80)],
+        )
+        p, n = search.build_policy_citations(result)
+        assert (p["item_id"], p["logical_id"], p["param_id"]) == (7, 3, 70)
+        assert (n["item_id"], n["logical_id"], n["chunk_id"]) == (8, 4, 80)
 
     def test_narrative_citation_uses_chunk_text_as_detail(self):
         result = search.PolicySearchResult(narratives=[

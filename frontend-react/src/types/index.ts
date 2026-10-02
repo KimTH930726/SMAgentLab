@@ -162,6 +162,11 @@ export interface PolicyCitation {
   category_path: string[];
   detail: string;
   raw_body: string;
+  /** 근거 정정(2026-10-01) — "이 근거 틀림" 대상 지정용. 이전에 저장된 메시지엔 없을 수 있음 */
+  item_id?: number;
+  logical_id?: number;
+  param_id?: number;
+  chunk_id?: number;
 }
 
 export interface ChatMessage {

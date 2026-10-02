@@ -75,6 +75,8 @@
 
 | 57 | `policy_item` | `ADD COLUMN IF NOT EXISTS pipeline_version VARCHAR(40)` | 재처리 경로 — 행을 만든 파서 개정·분해 프롬프트 해시. 원본이 같아도 이 값이 현재와 다르면 재업로드 시 재분해. 기존 행 NULL(버전 모름 → 다음 업로드에 재처리) (v2.114) |
 
+| 58 | `ops_improvement_item` (신규) | `CREATE TABLE IF NOT EXISTS` + 인덱스 4개(유니크 부분 `uq_improvement_pending_correction` = 같은 신고자·같은 근거의 pending 정정 1건) | 개선 원장 — 근거 정정 흐름. 정정 의견·원문 스냅샷·AI 수정안을 승인 전까지 여기에만 둬 검색 미노출을 구조적으로 보장. 승인=버전 교체(`applied_target_id`), 반려 사유·처리자 기록. `candidates`(그 답변의 근거 후보, 담당자 대상 변경용)·`ai_verdict`("답변 틀림" AI 판정·이유·변경 이력) JSONB. `_migrate_improvement_ledger` (v2.118) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.

@@ -34,6 +34,9 @@ import { getCategories, suggestCategory } from '../../api/namespaces';
 import { updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { useAuthStore } from '../../store/useAuthStore';
+import { CorrectionReviewTab } from './CorrectionReviewTab';
+import { TabGuide } from './TabGuide';
+import { getCorrectionPendingCount } from '../../api/corrections';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
@@ -158,7 +161,15 @@ export function KnowledgeTable() {
   const qc = useQueryClient();
   const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces } = useNamespaceAccess();
 
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'flags'>('list');
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'corrections' | 'flags'>('list');
+  // 정정 검토는 관리자 승인 전용(API도 admin) — 대기 건수 배지로 방치 방지
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const { data: correctionCount } = useQuery({
+    queryKey: ['corrections-pending-count'],
+    queryFn: getCorrectionPendingCount,
+    enabled: isAdmin,
+    staleTime: 30_000,
+  });
 
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -389,6 +400,23 @@ export function KnowledgeTable() {
             <span className="ml-1 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-400 px-1.5 py-0.5 rounded-full">{pendingItems.length}</span>
           )}
         </button>
+        {isAdmin && (
+          <button
+            onClick={() => setSubTab('corrections')}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
+              subTab === 'corrections'
+                ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+            title="사용자가 채팅에서 신고한 정정 의견 — 승인해야만 검색에 반영됨"
+          >
+            <PenLine className="w-4 h-4" />
+            정정 검토
+            {(correctionCount?.by_namespace[selectedNs] ?? 0) > 0 && (
+              <span className="ml-1 text-[10px] bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-400 px-1.5 py-0.5 rounded-full">{correctionCount!.by_namespace[selectedNs]}</span>
+            )}
+          </button>
+        )}
         <button
           onClick={() => setSubTab('flags')}
           className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
@@ -396,7 +424,7 @@ export function KnowledgeTable() {
               ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
-          title="나빠요 피드백이 달린 답변이 실제로 근거로 삼았던 지식 — 원인일 수 있어 검토 후보로 남은 항목"
+          title="'답변 틀림' 신호가 들어온 답변의 근거 지식 — 원인일 수 있어 검토 후보로 남은 항목"
         >
           <Flag className="w-4 h-4" />
           리뷰 신호
@@ -586,14 +614,33 @@ export function KnowledgeTable() {
 
       {/* ── 서브탭 3: 승인 대기 ── */}
       {subTab === 'review' && (
-        <ReviewTab
-          items={pendingItems}
-          canModify={canModifyNs}
-          onResolved={onReviewResolved}
-        />
+        <div className="space-y-3">
+          <TabGuide
+            what="새로 등록된 지식 중 기존 지식과 내용이 많이 겹쳐 아직 검색에 안 쓰이는 항목"
+            when="지식 등록(파일·텍스트·직접 입력·URL) 시 기존 지식과 유사도가 높게 나올 때"
+            todo="항목을 눌러 겹치는 기존 지식을 확인하고 승인 · 병합 · 반려"
+            detail="중복 지식이 쌓이면 검색 결과가 같은 내용으로 채워져 다른 근거가 밀려납니다. 승인하면 그대로 검색에 쓰이고, 병합하면 기존 지식에 합쳐지며, 반려하면 쓰이지 않습니다."
+          />
+          <ReviewTab
+            items={pendingItems}
+            canModify={canModifyNs}
+            onResolved={onReviewResolved}
+          />
+        </div>
+      )}
+
+      {subTab === 'corrections' && isAdmin && (
+        <CorrectionReviewTab namespace={selectedNs} pendingByNamespace={correctionCount?.by_namespace ?? {}} onSelectNamespace={setSelectedNs} />
       )}
 
       {subTab === 'flags' && (
+        <div className="space-y-3">
+          <TabGuide
+            what="답변이 틀렸다는 신호가 들어온 답변의 근거 지식 — 원인일 수 있는 후보"
+            when="채팅에서 '답변 틀림'을 누르거나, 평가 게이트에서 '이상해요'로 표시할 때"
+            todo="내용을 확인해 틀렸으면 '수정', 문제 없으면 '확인 완료'로 목록에서 빼기"
+            detail="자동으로 가중치를 깎지 않습니다 — 그 답변의 근거였다는 것뿐, 지식 자체가 틀렸다는 뜻은 아닙니다. 사용자가 맞는 내용까지 알려준 신고는 '정정 검토' 탭으로 갑니다."
+          />
         <ReviewFlagsTab
           flags={reviewFlags}
           items={items}
@@ -601,6 +648,7 @@ export function KnowledgeTable() {
           onEdit={startEdit}
           onResolved={onReviewResolved}
         />
+        </div>
       )}
 
       {/* Edit Modal */}
@@ -1284,10 +1332,6 @@ function ReviewTab({ items, canModify, onResolved }: {
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-slate-500">
-        기존 지식과 유사도가 높아 자동 반영되지 않고 검토를 기다리는 항목입니다. 클릭해서 어떤
-        기존 지식과 겹치는지 확인 후 처리하세요.
-      </p>
       <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
         {items.map((item) => (
           <button
@@ -1440,19 +1484,13 @@ function ReviewFlagsTab({ flags, items, canModify, onEdit, onResolved }: {
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-slate-500">
-        나빠요 피드백이 달린 답변의 근거 지식, 또는 평가 게이트 즉석 질의에서 "이상해요"로
-        직접 표시된 지식입니다. 자동 감점 대상이 아니라 "문제가 있을 수 있다"는 후보일
-        뿐이니, 내용을 확인해 고칠 필요가 있으면 바로 "수정"으로 고치고, 문제 없다고
-        판단되면 "확인 완료"로 큐에서 빼세요.
-      </p>
       {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
       <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
         {flags.map((flag) => {
           const item = items.find((i) => i.id === flag.knowledge_id);
           return (
             <div key={flag.flag_id} className="px-4 py-3 flex items-center gap-3">
-              <Badge color="rose">{flag.reason === 'search_noise' ? '검색 노이즈' : '나빠요 근거'}</Badge>
+              <Badge color="rose">{flag.reason === 'search_noise' ? '검색 노이즈' : '답변 틀림 근거'}</Badge>
               {flag.status !== 'active' && <Badge color="slate">{flag.status}</Badge>}
               {flag.category && <Badge color="cyan">{flag.category}</Badge>}
               <span className="text-sm text-slate-300 truncate flex-1">{flag.content}</span>

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { Bot, User, ChevronDown, ChevronUp, CheckCircle, Database, BarChart2, Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -11,6 +12,9 @@ import { SearchResultCard } from './SearchResultCard';
 import { PolicyCitationCard } from './PolicyCitationCard';
 import { FeedbackSection } from './FeedbackSection';
 import { useThemeStore } from '../../store/useThemeStore';
+import { useCorrectionStore, evidenceTargets, type CorrectionTarget } from '../../store/useCorrectionStore';
+import { CorrectionAnalysis } from './CorrectionAnalysis';
+import { getCorrectionStatus } from '../../api/corrections';
 import type { ChatMessage } from '../../types';
 
 interface MessageItemProps {
@@ -246,8 +250,68 @@ function SimpleBarChart({ chartResult, rows, columns }: {
 
 // ── MessageItem ───────────────────────────────────────────────────────────────
 
+// ── 정정 신고 접수 카드 ─────────────────────────────────────────────────────────
+
+function CorrectionReceipt({ messageId }: { messageId: number }) {
+  const entry = useCorrectionStore((s) => s.submitted[messageId]);
+  const [open, setOpen] = useState(false);
+  if (!entry) return null;
+  const { result, target } = entry;
+  const orig = result.original ?? {};
+  const originalText = String(orig.content ?? orig.chunk_text ?? orig.raw_body ?? orig.question ?? '');
+  const p = result.proposed;
+  const proposedText = p ? String(p.content ?? p.chunk_text ?? p.raw_body ?? '') : '';
+  const hasDiff = result.target_type !== 'answer';
+  return (
+    <div className="rounded-xl border px-3 py-2.5 text-xs space-y-2 bg-indigo-50/60 border-indigo-200 dark:bg-indigo-950/20 dark:border-indigo-800/50">
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-indigo-700 dark:text-indigo-300">정정 신고 접수됨</span>
+        {!result.ai_verdict?.verdict && <span className="text-slate-500 truncate">{target.label}</span>}
+        {hasDiff && (
+          <button onClick={() => setOpen((v) => !v)} className="ml-auto text-slate-500 hover:text-slate-300">
+            {open ? '접기' : '기존 vs 수정안'}
+          </button>
+        )}
+      </div>
+      {result.ai_verdict?.verdict
+        ? <CorrectionAnalysis verdict={result.ai_verdict} audience="reporter" />
+        : <p className="text-[11px] text-slate-500">담당자가 확인한 뒤에만 반영돼요. 결과는 다음에 채팅을 열 때 알려드려요.</p>}
+      {open && hasDiff && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div>
+            <p className="text-slate-500 mb-1">기존</p>
+            <p className="whitespace-pre-wrap text-slate-300 max-h-48 overflow-y-auto">{originalText || '(없음)'}</p>
+          </div>
+          <div>
+            <p className="text-slate-500 mb-1">수정안(AI 초안)</p>
+            <p className="whitespace-pre-wrap text-slate-300 max-h-48 overflow-y-auto">
+              {proposedText || '초안을 만들지 못했어요 — 담당자가 직접 작성해요.'}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MessageItem({ message, namespace }: MessageItemProps) {
   const isUser = message.role === 'user';
+  const startCorrection = useCorrectionStore((s) => s.start);
+  const evidence = isUser ? [] : evidenceTargets(message);
+  const knowledgeIds = (message.results ?? []).map((r) => r.id);
+  const policyItemIds = [...new Set((message.policyCitations ?? []).map((c) => c.item_id).filter((v): v is number => v != null))];
+  // "정정 검토 중" 배지 — 같은 근거가 다른 답변에 나와도 표시되도록 근거 id 기준으로 조회
+  const { data: underReview } = useQuery({
+    queryKey: ['correction-status', knowledgeIds.join(','), policyItemIds.join(',')],
+    queryFn: () => getCorrectionStatus(knowledgeIds, policyItemIds),
+    enabled: !isUser && !message.isStreaming && (knowledgeIds.length > 0 || policyItemIds.length > 0),
+    staleTime: 30_000,
+  });
+  const canReport = !isUser && !message.isStreaming && !!namespace && message.status !== 'failed';
+  // 카드의 "이 근거 틀림"은 사용자가 대상을 이미 아는 지름길 — AI 판정 없이 그 근거로 바로 접수
+  const report = (target: CorrectionTarget) =>
+    startCorrection({ messageId: message.messageId, namespace, selected: target });
+  const findTarget = (key: string) => evidence.find((t) => t.key === key);
 
   if (isUser) {
     return (
@@ -294,6 +358,8 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
                   result={result}
                   defaultOpen={false}
                   index={idx}
+                  underReview={underReview?.knowledge.includes(result.id)}
+                  onReport={canReport && findTarget(`k-${result.id}`) ? () => report(findTarget(`k-${result.id}`)!) : undefined}
                 />
               ))}
             </div>
@@ -305,14 +371,22 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
               <p className="text-xs text-violet-600 dark:text-violet-400 font-medium">
                 📋 정책 근거 {message.policyCitations.length}건
               </p>
-              {message.policyCitations.map((citation, idx) => (
-                <PolicyCitationCard
-                  key={idx}
-                  citation={citation}
-                  defaultOpen={false}
-                  index={idx}
-                />
-              ))}
+              {message.policyCitations.map((citation, idx) => {
+                const key = citation.kind === 'param' ? `pp-${citation.param_id}` : `pn-${citation.chunk_id}`;
+                const target = findTarget(key);
+                return (
+                  <PolicyCitationCard
+                    key={idx}
+                    citation={citation}
+                    defaultOpen={false}
+                    index={idx}
+                    underReview={citation.kind === 'param'
+                      ? citation.param_id != null && !!underReview?.policy_param.includes(citation.param_id)
+                      : citation.chunk_id != null && !!underReview?.policy_narrative.includes(citation.chunk_id)}
+                    onReport={canReport && target ? () => report(target) : undefined}
+                  />
+                );
+              })}
             </div>
           )}
 
@@ -371,16 +445,18 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
             />
           )}
 
-          {/* Feedback - hide while streaming, already feedbacked, or failed messages */}
-          {!message.isStreaming && message.content && namespace && !message.has_feedback && message.status !== 'failed' && (
+          {/* Feedback — 피드백을 이미 보낸 답변도 "정정 의견 남기기"는 남긴다(취소했거나 새로고침한 뒤에도 AI 정정 가능) */}
+          {!message.isStreaming && message.content && namespace && message.status !== 'failed' && (
             <FeedbackSection
               namespace={namespace}
               question={message.question ?? ''}
               answer={message.content}
               knowledgeId={message.results?.[0]?.id ?? null}
               messageId={message.messageId}
+              alreadySent={!!message.has_feedback}
             />
           )}
+          {message.messageId != null && <CorrectionReceipt messageId={message.messageId} />}
         </div>
       </div>
     </div>

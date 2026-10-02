@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 아키텍처 (v2.117)
+# Ops-Navigator 시스템 아키텍처 (v2.118)
 
 ## 개요
 
@@ -11,6 +11,13 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 > v2.67 항목 참고).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.118: **근거 정정 흐름.** 👎 지식 등록 폼(바로 active 등록)과 👎 가중치 자동 감점을 없애고, "답변 틀림"·근거
+  카드 "이 근거 틀림" → 한 줄 의견 → 개선 원장 `ops_improvement_item`(#58, AI 수정안 포함) → 관리자 "정정 검토"
+  승인(버전 교체) / 반려(사유 필수). 수정안은 원장에만 있어 승인 전 검색 미노출이 구조적으로 보장. "답변 틀림"은
+  근거를 고르지 않고 AI가 틀린 근거·빠진 내용·답변 오류를 판정(판정은 LLM 사실 확인 결과로 코드가 결정 — 한 번에
+  고르게 하면 근거를 답변과 비교하는 오판이 실측됨), 이유·틀린 부분을 사용자·담당자에게 표시, 담당자가 대상 변경
+  가능. 캐시 응답도 근거(results)를 메시지에 저장(안 하면 다시 열 때 근거 카드가 사라지고 판정 후보가 없었음).
+  흐름 상세는 flow.md §6-1. 검증: 실 채팅 시나리오(지식·정책·자동 판정 3종) + E2E `evidence-correction.spec.ts`.
 - v2.117: **컨플루언스 페이지 구조 품질 표시 + 작성 가이드.** 섹션 경계와 v2.116 부모 섹션 확장은 전부 원본
   헤딩(h1~h4) 정적 파싱에 의존하는데(LLM 미사용), 당시 데이터의 33%가 헤딩 없이 작성돼 페이지 전체가 한
   단위로 묶였다. 미리보기 응답(트리 일괄 `pages[]`, 단일 URL `structure`)에 헤딩 섹션 수·구조화 여부
@@ -1256,7 +1263,8 @@ ops_user              -- 사용자 (role, part_id FK, encrypted_llm_api_key, enc
 ops_namespace         -- 네임스페이스 (owner_part_id FK, created_by_user_id)
 ops_conversation      -- 대화방 (namespace_id FK, user_id FK, agent_type)
 ops_message           -- 대화 메시지 (role, content, results JSONB, metadata JSONB)
-ops_feedback          -- 👍/👎 피드백 로그 (agent_type, meta JSONB)
+ops_feedback          -- 도움됐어요/답변 틀림 피드백 로그 (agent_type, meta JSONB)
+ops_improvement_item  -- 개선 원장: 정정·빠진 내용 신고 + AI 수정안, 승인 전 검색 미노출 (v2.118)
 ops_query_log         -- 질의 로그 (status: pending/resolved/unresolved, agent_type)
 ops_prompt            -- 프롬프트 관리 (agent_type별 에이전트 스코핑, Admin 시스템설정 탭에서 편집)
 ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 영속화, VOC 폴링 정책/Graph 자격증명도 여기 저장)
@@ -1270,11 +1278,10 @@ ops_voc_cluster       -- 반복 VOC 클러스터 (representative_embedding=centr
 -- KnowledgeRAG 전용 (rag_* prefix, v2.8에서 ops_*→rag_* 변경)
 rag_knowledge         -- 지식 베이스 (HNSW + GIN FTS, base_weight, source_file/chunk_idx 추적,
                       --   status: active/pending_review/rejected/deleted(v2.68 소프트삭제),
-                      --   logical_document_id/version/supersedes_id/embedding_model 등 스키마
-                      --   선추가만 됨(v2.68 Phase 0, 로직 아직 없음))
+                      --   logical_document_id/version/supersedes_id: 근거 정정 승인 시 버전 교체에 사용(v2.118))
 rag_knowledge_duplicate_match -- 중복탐지 매칭 후보 (v2.34)
 rag_knowledge_history -- 병합(merge) 시 덮어써지기 전 content/embedding 보존 (v2.68)
-rag_knowledge_review_flag -- 나빠요 피드백이 근거로 삼은 지식 리뷰 큐 (v2.68)
+rag_knowledge_review_flag -- '답변 틀림' 답변의 근거 지식 리뷰 큐 (v2.68)
 rag_knowledge_category -- 카테고리 목록
 rag_glossary          -- 용어집 (HNSW, 유사도 0.5+ 매핑)
 rag_fewshot           -- Few-shot Q&A (HNSW, status: active/candidate)

@@ -1,5 +1,6 @@
 """지식베이스 RAG 에이전트 — AgentBase 구현."""
 import asyncio
+import json
 import logging
 from typing import AsyncIterator, Optional
 
@@ -182,6 +183,13 @@ class KnowledgeRagAgent(AgentBase):
             cached = await sem_cache.get_cached(namespace, "knowledge_rag", cache_vec)
             if cached:
                 cached_citations = cached.get("policy_citations", [])
+                # 캐시 응답도 근거(results)를 메시지에 남긴다 — 안 남기면 다시 열었을 때 근거 카드가 사라지고,
+                # "답변 틀림" 자동 식별이 그 답변의 근거를 못 찾아 "빠진 내용"으로 잘못 분류된다(2026-10-01 실측).
+                async with get_conn() as conn:
+                    await conn.execute(
+                        "UPDATE ops_message SET mapped_term = $1, results = $2::jsonb WHERE id = $3",
+                        cached.get("mapped_term"), json.dumps(cached.get("results", []), ensure_ascii=False), msg_id,
+                    )
                 await update_assistant_message(
                     msg_id, cached["answer"], "completed",
                     metadata={"policy_citations": cached_citations} if cached_citations else None,
