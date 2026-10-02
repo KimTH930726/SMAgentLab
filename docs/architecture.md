@@ -1145,8 +1145,8 @@ Ops-Navigator는 IT 운영팀의 반복적인 조회·확인 업무를 자동화
 | **Login** (`/login`) | JWT 로그인 — Access Token + Refresh Token 발급 |
 | **Register** (`/register`) | 회원가입 — 부서 선택 + 선택적 LLM API Key 등록 |
 | **AgentSelect** (로그인 직후) | 에이전트 선택 화면 — 지식베이스 AI 카드 선택. `selectedAgent=null`이면 이 화면 표시 (사이드바 없음) |
-| **Chat** (`/`) | 에이전트별 채팅 — SSE 스트리밍, 결과 카드, 피드백(👍→few-shot/base_weight), 대화 메모리(요약+리콜), Markdown 답변 |
-| **Admin** (`/admin`) | 에이전트별 관리 화면 — `agentScope` 필드로 탭 필터링. knowledge_rag: 네임스페이스·지식·용어집·Few-shot·캐시현황·통계·디버그. 공통: 시스템설정·사용자관리. (에이전트현황 탭 제거 — AgentSelect 화면에 헬스배지로 대체) |
+| **Chat** (`/`) | 에이전트별 채팅 — SSE 스트리밍, 근거 카드, "답변 틀림"·"이 근거 틀림" 신고(정정 검토로), 대화 메모리(요약+리콜), Markdown 답변 |
+| **Admin** (`/admin`) | 에이전트별 관리 화면 — `agentScope` 필드로 탭 필터링. knowledge_rag: 기준정보·지식 베이스(정정 검토 포함)·VOC·용어집·평가 게이트·정책·캐시현황·통계. 공통: 시스템설정·사용자관리. (에이전트현황 탭 제거 — AgentSelect 화면에 헬스배지로 대체) |
 
 - **Agent-centric 라우팅**: `useAppStore.selectedAgent: 'knowledge_rag' | null`. null이면 AgentSelect 표시, 설정 시 에이전트별 UI로 전환. 로그아웃 시 null로 리셋
 - **ProtectedRoute**: 로그인되지 않은 사용자는 `/login`으로 리다이렉트
@@ -1175,14 +1175,13 @@ backend/
 │   │   │   ├── chunker.py       #   청킹 엔진 (section/paragraph/fixed/auto)
 │   │   │   ├── analyzer.py      #   LLM Analyzer Agent (doc_type, chunk_strategy 자동 결정)
 │   │   │   ├── tagger.py        #   LLM 자동 태깅 + 용어 추출
-│   │   │   ├── qa_gen.py        #   LLM Q&A 자동 생성 → fewshot candidate
-│   │   │   ├── web_crawler.py   #   URL/Confluence 수집 (httpx + BeautifulSoup + Confluence REST API)
-│   │   │   └── utils.py         #   공통 JSON 파싱 헬퍼
-│   │   └── fewshot/     #   Few-shot CRUD (status: active/candidate)
+│   │   │   └── web_crawler.py   #   URL/Confluence 수집 (httpx + BeautifulSoup + Confluence REST API)
 ├── service/             # 플랫폼 공통 레이어 (was domain/, platform/ 명칭 stdlib 충돌로 service/ 확정)
 │   ├── auth/            #   인증/계정 (JWT, bcrypt, Fernet API Key 암호화)
 │   ├── chat/            #   채팅 라우터·헬퍼·메모리 (AgentRegistry 위임)
-│   ├── feedback/        #   피드백 기록 + base_weight 조정
+│   ├── feedback/        #   "답변 틀림" 신고 접수 → 개선 원장 (v2.121부터 가중치·질의 상태 안 바꿈)
+│   ├── improvement/     #   개선 원장(정정 검토) — 신고·AI 판정/수정안(draft.py)·승인 시 버전 교체 (v2.118/120)
+│   ├── refdata/         #   공통코드·DB 컬럼 참조 데이터 검색
 │   ├── admin/           #   네임스페이스·통계·LLM 설정
 │   ├── prompt/          #   프롬프트 관리 (get_prompt: DB 우선, fallback)
 │   ├── llm/             #   LLM Provider 추상화 (ollama / inhouse)
@@ -1206,6 +1205,7 @@ backend/
 │       ├── unresolved_report.py #   unresolved/partial 항목 system_key별 집계 (v2.53 신규)
 │       ├── browse.py          #   item 단위 브라우저 — param/chunk 자식 포함, q는 실제 검색 재사용(matched_via) (v2.59 신규, v2.63 q 개선)
 │       ├── track2.py          #   Track 2 A(지식-only)/B(하이브리드) 비교를 API로 실행 (v2.63 신규)
+│       ├── risk.py · auto_review.py · review.py · edit.py  #   검토 큐 위험도 분류·낮음 자동 통과·승인/반려·반려 후 수정 (v2.119)
 │       ├── schemas.py         #   Pydantic 스키마
 │       └── router.py          #   POST /api/policy/import, GET /api/policy/search, GET /api/policy/unresolved-summary, GET /api/policy/items, POST /api/policy/track2/run
 ├── core/
@@ -1231,7 +1231,7 @@ backend/
 - **마크다운 답변**: 시스템 프롬프트에 Markdown 형식 지시 포함, 프론트엔드에서 `react-markdown` + `remark-gfm` + `rehype-raw`로 테이블/코드/리스트/HTML 태그 렌더링
 - **JWT 인증/인가**: Access Token(30분) + Refresh Token(7일), FastAPI Depends로 라우터 수준 보호
 - **네임스페이스 소유 파트 기반 권한**: 네임스페이스의 `owner_part`와 동일한 부서 구성원만 해당 네임스페이스의 데이터 CRUD 가능, 타 부서는 읽기 전용. `owner_part` NULL이면 **모든 사용자(파트 무관)**가 CRUD 가능 (공통 namespace). Admin이 생성한 namespace는 자동으로 `owner_part = NULL`. Admin은 모든 권한 보유
-- **수정 시 작성자 갱신**: 지식/용어/퓨샷 수정 시 `created_by_part`/`created_by_user_id`가 최종 수정자로 갱신됨
+- **수정 시 작성자 갱신**: 지식/용어 수정 시 `created_by_part`/`created_by_user_id`가 최종 수정자로 갱신됨
 - **Graceful Degradation**: LLM 연결 실패 시 검색 결과는 정상 반환, 안내 메시지 출력
 
 ### 3. 인증/인가 시스템 (v2.0.0 신규)
@@ -1293,29 +1293,27 @@ ops_user              -- 사용자 (role, part_id FK, encrypted_llm_api_key, enc
 ops_namespace         -- 네임스페이스 (owner_part_id FK, created_by_user_id)
 ops_conversation      -- 대화방 (namespace_id FK, user_id FK, agent_type)
 ops_message           -- 대화 메시지 (role, content, results JSONB, metadata JSONB)
-ops_feedback          -- 도움됐어요/답변 틀림 피드백 로그 (agent_type, meta JSONB)
 ops_improvement_item  -- 개선 원장(정정 검토): 답변 틀림·근거 정정·빠진 내용·검색 노이즈 + AI 수정안, 승인 전 검색 미노출 (v2.118/120)
-ops_query_log         -- 질의 로그 (status: pending/resolved/unresolved, agent_type)
+ops_query_log         -- 질의 로그 (status: pending=답변 / no_knowledge=지식 공백 / system_error=LLM 연결 실패(통계 밖),
+                      --   공백을 메우면 resolved_knowledge_id — v2.121)
 ops_prompt            -- 프롬프트 관리 (agent_type별 에이전트 스코핑, Admin 시스템설정 탭에서 편집)
 ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 영속화, VOC 폴링 정책/Graph 자격증명도 여기 저장)
 
 -- VOC 이메일 분석 채널 전용 (v2.40 신규)
 ops_voc_routing       -- 파트별 담당 메일함 ↔ Teams 웹훅 ↔ 온콜 연락처 매핑
-ops_email_analysis    -- 이메일 건별 분석 결과 (source_message_id UNIQUE로 중복 수집 방지, 30일 보관, v2.47: embedding VECTOR(768)/voc_cluster_id FK 추가)
+ops_email_analysis    -- 이메일 건별 분석 결과 (source_message_id UNIQUE로 중복 수집 방지, 30일 보관, v2.47: embedding/voc_cluster_id FK 추가 — 벡터는 1024차원)
 ops_email_poll_cycle  -- 폴링 사이클(스케줄러 실행 회차)별 성공/실패 이력 (30일 보관)
 ops_voc_cluster       -- 반복 VOC 클러스터 (representative_embedding=centroid, member_count, coverage_knowledge_id/coverage_verified — 해결방안 LLM 검증 캐시) (v2.47 신규)
 
 -- KnowledgeRAG 전용 (rag_* prefix, v2.8에서 ops_*→rag_* 변경)
-rag_knowledge         -- 지식 베이스 (HNSW + GIN FTS, base_weight, source_file/chunk_idx 추적,
+rag_knowledge         -- 지식 베이스 (HNSW + GIN FTS, base_weight(v2.121부터 입력 없음·전부 1.0), source_file/chunk_idx 추적,
                       --   status: active/pending_review/rejected/deleted(v2.68 소프트삭제),
                       --   logical_document_id/version/supersedes_id: 근거 정정 승인 시 버전 교체에 사용(v2.118))
 rag_knowledge_duplicate_match -- 중복탐지 매칭 후보 (v2.34)
 rag_knowledge_history -- 병합(merge) 시 덮어써지기 전 content/embedding 보존 (v2.68)
-rag_knowledge_review_flag -- 옛 리뷰 신호 큐 — v2.120부터 쓰지 않음(개선 원장으로 이관, 기록용 보존)
 rag_knowledge_category -- 카테고리 목록
 rag_glossary          -- 용어집 (HNSW, 유사도 0.5+ 매핑)
-rag_fewshot           -- Few-shot Q&A (HNSW, status: active/candidate)
-rag_conv_summary      -- 대화 요약 (embedding VECTOR(768), Semantic Recall용)
+rag_conv_summary      -- 대화 요약 (embedding VECTOR(1024), Semantic Recall용)
 rag_ingestion_job     -- 인제스천 작업 이력 (source_type, status, auto_glossary/fewshot 수, analyzer_result JSONB)
 
 -- Text-to-SQL 전용 (sql_* prefix) — v2.51에서 에이전트 제거, 마이그레이션 호출도 제거됨
@@ -1354,132 +1352,10 @@ rag_ingestion_job     -- 인제스천 작업 이력 (source_type, status, auto_g
 
 ---
 
-## API 엔드포인트 목록
+## API 엔드포인트
 
-### 인증 (`/api/auth`) — v2.0.0 신규
-
-| 메서드 | 경로 | 인증 | 설명 |
-|--------|------|------|------|
-| `POST` | `/api/auth/register` | 없음 | 회원가입 (부서 선택 + 선택적 LLM API Key) |
-| `POST` | `/api/auth/login` | 없음 | 로그인 → Access Token(30min) + Refresh Token(7days) 발급 |
-| `POST` | `/api/auth/refresh` | Refresh Token | Access Token 갱신 |
-| `GET` | `/api/auth/me` | Bearer | 내 정보 조회 |
-| `PUT` | `/api/auth/me/password` | Bearer | 비밀번호 변경 |
-| `PUT` | `/api/auth/me/api-key` | Bearer | 개인 LLM API Key 등록/변경 (Fernet 암호화 저장) |
-| `PUT` | `/api/auth/me/confluence-pat` | Bearer | 개인 Confluence PAT 등록/변경 (Fernet 암호화 저장) |
-| `DELETE` | `/api/auth/me/confluence-pat` | Bearer | 개인 Confluence PAT 삭제 |
-| `GET` | `/api/auth/me/confluence-pat/status` | Bearer | Confluence PAT 등록 여부 조회 |
-| `GET` | `/api/auth/users` | Admin | 전체 사용자 목록 |
-| `PUT` | `/api/auth/users/{id}` | Admin | 사용자 정보 수정 (역할 변경 등) |
-| `DELETE` | `/api/auth/users/{id}` | Admin | 사용자 삭제 |
-| `GET` | `/api/auth/parts` | 없음 | 부서 목록 조회 (회원가입용 — 슈퍼어드민 파트 자동 제외) |
-| `GET` | `/api/auth/parts/all` | Admin | 부서 목록 전체 조회 (관리자용 — 슈퍼어드민 파트 포함) |
-| `POST` | `/api/auth/parts` | Admin | 부서 생성 |
-| `PATCH` | `/api/auth/parts/{id}` | Admin | 부서 이름 변경 (name 컬럼만 업데이트 — integer FK로 cascade 불필요) |
-| `DELETE` | `/api/auth/parts/{id}` | Admin | 부서 삭제 (소속 사용자 없는 경우만) |
-
-### 채팅/대화
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `GET` | `/health` | 서버·LLM 상태 확인 |
-| `POST` | `/api/chat` | 하이브리드 검색 + LLM 답변 (JSON) |
-| `POST` | `/api/chat/stream` | 하이브리드 검색 + LLM 답변 (SSE 스트리밍, 단계별 status 이벤트) |
-| `POST` | `/api/chat/debug` | LLM 없이 검색 파이프라인 전 과정 반환 (v_score, k_score, 용어집 유사도, few-shot 목록, LLM 컨텍스트 미리보기 포함) |
-| `GET` | `/api/conversations` | 네임스페이스별 대화방 목록 (최근 50개, 본인 소유만) |
-| `POST` | `/api/conversations` | 대화방 신규 생성 (user_id 자동 연결) |
-| `GET` | `/api/conversations/{id}/messages` | 대화방 전체 메시지 조회 (status 필드 포함) |
-| `DELETE` | `/api/conversations/{id}` | 대화방 삭제 (메시지 cascade) |
-| `PATCH` | `/api/chat/messages/{id}/content` | 메시지 부분 저장 (프론트엔드 스트림 중단 시) |
-| `DELETE` | `/api/chat/messages/{id}` | Ghost 메시지 삭제 (빈 assistant + 짝 user + 빈 대화방) |
-
-### 지식/용어집
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `GET` | `/api/knowledge` | 지식 목록 조회 (namespace 필터) |
-| `POST` | `/api/knowledge` | 지식 신규 등록 (네임스페이스 소유 파트 검증, 임베딩 자동 생성) |
-| `PUT` | `/api/knowledge/{id}` | 지식 수정 (네임스페이스 소유 파트 또는 admin만) |
-| `DELETE` | `/api/knowledge/{id}` | 지식 삭제 (네임스페이스 소유 파트 또는 admin만) |
-| `POST` | `/api/knowledge/bulk` | JSON 배열 벌크 등록 — job_id 즉시 반환, 실제 임베딩+등록은 백그라운드 배치 처리 (v2.29) |
-| `POST` | `/api/knowledge/import/csv` | CSV 파일 업로드 → 컬럼 매핑 → 벌크 등록 |
-| `POST` | `/api/knowledge/import/text-split` | 대량 텍스트 붙여넣기 → 자동 분할 → 벌크 등록 |
-| `POST` | `/api/knowledge/import/text-split/preview` | 텍스트 분할 미리보기 (등록 없음) |
-| `POST` | `/api/knowledge/import/file` | 파일 업로드(.txt/.md/.pdf) → 파싱 → 청킹 → 벌크 등록 (Analyzer·태깅·용어추출·Q&A 선택적) |
-| `POST` | `/api/knowledge/import/file/preview` | 파일 파싱+청킹 미리보기 (등록 없음) |
-| `POST` | `/api/knowledge/import/url` | URL/Confluence 페이지 수집 → 청킹 → 벌크 등록 (PAT 미전달 시 DB 저장 개인 PAT 자동 로드) |
-| `POST` | `/api/knowledge/import/url/preview` | URL 수집 미리보기 — LLM Analyzer 자동 청킹 전략 결정 (등록 없음) |
-| `GET` | `/api/knowledge/ingestion-jobs` | 인제스천 작업 이력 조회 |
-| `GET` | `/api/knowledge/ingestion-jobs/{id}` | 인제스천 작업 진행률 조회 (폴링용) — v2.29 신규 |
-| `POST` | `/api/knowledge/ingestion-jobs/{id}/cancel` | 진행 중인 인제스천 작업 중지 요청 — 다음 배치 경계에서 중단 + 이미 등록된 데이터 롤백 — v2.29 신규 |
-| `GET` | `/api/knowledge/glossary` | 용어집 목록 |
-| `POST` | `/api/knowledge/glossary` | 용어 신규 등록 (임베딩 자동 생성) |
-| `PUT` | `/api/knowledge/glossary/{id}` | 용어 수정 (재임베딩 자동, 같은 부서 또는 admin만) |
-| `DELETE` | `/api/knowledge/glossary/{id}` | 용어 삭제 (같은 부서 또는 admin만) |
-
-### 피드백/Few-shot
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `POST` | `/api/feedback` | 피드백 기록 + base_weight 조정 + few-shot 저장(👍시) |
-| `GET` | `/api/fewshots` | Few-shot 목록 조회 (namespace 필터) |
-| `POST` | `/api/fewshots` | Few-shot 신규 등록 (임베딩 자동 생성) |
-| `PUT` | `/api/fewshots/{id}` | Few-shot 수정 (질문 변경 시 재임베딩, 같은 부서 또는 admin만) |
-| `DELETE` | `/api/fewshots/{id}` | Few-shot 삭제 (같은 부서 또는 admin만) |
-| `POST` | `/api/fewshots/search` | 질문으로 few-shot 검색 테스트 (실제 검색 결과 + 프롬프트 섹션 미리보기) |
-| `PATCH` | `/api/fewshots/{id}/status` | Few-shot 상태 전환 (`active` ↔ `candidate`) |
-
-### 관리/설정
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `GET` | `/api/namespaces` | 등록된 네임스페이스 목록 (문자열 배열) |
-| `GET` | `/api/namespaces/detail` | 네임스페이스 상세 목록 (지식 수, 용어집 수 포함) |
-| `POST` | `/api/namespaces` | 네임스페이스 신규 생성 (admin이 생성하면 owner_part=NULL) |
-| `PATCH` | `/api/namespaces/{name}` | 네임스페이스 이름 변경 (name 컬럼만 업데이트 — integer FK로 cascade 불필요) |
-| `DELETE` | `/api/namespaces/{name}` | 네임스페이스 및 하위 데이터 전체 삭제 |
-| `GET` | `/api/llm/config` | 현재 LLM 프로바이더 설정 + 연결 상태 조회 |
-| `PUT` | `/api/llm/config` | LLM 프로바이더 런타임 전환 — Admin은 전체 시스템 저장, 일반 사용자는 브라우저 localStorage에만 저장 |
-| `POST` | `/api/llm/test` | 설정값으로 연결 테스트 (실제 전환 없음) |
-| `GET` | `/api/stats` | 네임스페이스별 통계 (전체 namespace, 지식/용어집 개수 포함) |
-| `GET` | `/api/stats/namespace/{name}` | 네임스페이스 상세 통계 (업무 유형별 분포, 미해결 목록) |
-| `DELETE` | `/api/stats/query-log/{id}` | 미해결 질의 로그 삭제 (지식 등록 후 처리 완료 표시) |
-| `GET` | `/api/admin/cache/stats` | 네임스페이스 Semantic Cache 통계 (total_entries, total_hits, connected) |
-| `GET` | `/api/admin/cache/entries` | 캐시 엔트리 목록 (히트 수 내림차순, 질문·TTL·hits 포함) |
-| `DELETE` | `/api/admin/cache` | 네임스페이스 캐시 전체 무효화 |
-| `DELETE` | `/api/admin/cache/entry` | 단일 캐시 엔트리 삭제 |
-| `POST` | `/api/admin/glossary/suggest` | 미매핑 질문 LLM 분석 → 용어 후보 반환 (`limit` 파라미터로 조회 건수 설정, 기본 50, 최대 200) |
-| `POST` | `/api/admin/glossary/suggest/apply` | 추천 용어 1-click 등록 (임베딩 자동 생성) |
-
-### VOC 이메일 수집 (`/api/email-voc`) — v2.40 신규, v2.44~v2.46 개선
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| `POST` | `/api/email-voc/test-analyze` | 텍스트 직접 입력으로 분류/심각도/오배치 판정 프롬프트 테스트 (Graph API 연동 전에도 검증 가능) |
-| `POST` | `/api/email-voc/test-notify` | 임의 Teams 웹훅 URL로 실제 알림 발송 테스트 (Admin) |
-| `GET/PUT` | `/api/email-voc/settings` | 폴링 정책(활성화 여부/주기/조회기간) 조회·변경 (PUT은 Admin) |
-| `GET/POST/PUT/DELETE` | `/api/email-voc/routing[/{id}]` | 파트별 메일함 라우팅 CRUD — PUT/DELETE는 `namespace` 쿼리로 소유 네임스페이스까지 검증(크로스 네임스페이스 변조 방지) |
-| `GET/PUT` | `/api/email-voc/graph-credentials` | Microsoft Graph API 자격증명(Application 권한) 상태 조회·등록 (Admin, Fernet 암호화 저장, client_secret은 응답에 미포함) |
-| `GET/PUT/POST` | `/api/email-voc/delegated-auth/{status,config,start}` | Delegated Permission(Authorization Code Flow, PKCE) 로그인 상태 조회·앱정보 저장·로그인 시작 (Admin, v2.41 신규·v2.42 인증방식 교체) — Application 권한 승인 전 임시 대체 경로 |
-| `GET` | `/api/email-voc/delegated-auth/callback` | Microsoft 로그인 완료 후 리다이렉트 콜백 (인증 불필요 — 브라우저가 직접 호출, MSAL의 PKCE/state 검증으로 CSRF 방어, v2.42 신규) |
-| `POST` | `/api/email-voc/collect/run` | 관리자가 기간(from~to, 최대 90일) 지정해 즉시 수집+분석+Teams 발송 1회 실행 (Admin) |
-| `GET` | `/api/email-voc/history` | 이메일 분석+알림 이력 조회 (원본 메일 정보 + 분류결과 + 발송 성공/실패) |
-| `GET` | `/api/email-voc/scheduler-status` | 백그라운드 폴링 스케줄러 실시간 상태 (동작 중 여부, 마지막 사이클 결과, 다음 예상 실행시각) |
-| `GET` | `/api/email-voc/poll-cycles` | 폴링 사이클(스케줄러 실행 회차) 이력 조회 |
-| `GET` | `/api/email-voc/mail-folders?mailbox_upn=` | 지정 메일함의 Outlook 폴더 목록 조회(Graph API 실조회, Admin) — 라우팅 등록 시 "전체 메일함" 대신 특정 폴더로 범위를 좁힐 때 사용(v2.44) |
-| `GET` | `/api/email-voc/stats` | 유형(category)·심각도(severity) 분포 통계 — "VOC 통계" 탭 (v2.47 신규) |
-| `GET` | `/api/email-voc/clusters` | 반복 VOC 클러스터 목록 — 멤버 수, 대표 제목, category/severity 분포(불일치 감지용), 해결방안 커버리지 (v2.47 신규) |
-| `GET` | `/api/email-voc/clusters/{cluster_id}/members` | 클러스터에 속한 개별 VOC 목록 (v2.47 신규) |
-
-`GET /api/email-voc/history`는 `severity`/`status`/`mismatch_only`/`keyword` 쿼리 파라미터로 필터링 가능(v2.44, keyword는 제목/발신자/본문 `ILIKE` 검색).
-
-**수집 흐름 요약**: 백그라운드 스케줄러(`asyncio.create_task`, lifespan 등록)가 `email_polling_interval_minutes` 주기로 활성 라우팅 메일함을 Graph API로 조회(`mail_folder_id` 지정 시 그 폴더만, v2.44) → `check_relevance()`로 등록된 지식과의 최고 유사도 계산(base_weight 랭킹 부스팅이 섞이지 않은 원점수 기준, v2.45) → `email_relevance_min_score`(기본 0.38, v2.45에 0.35에서 재조정) 미만이면 LLM 호출 없이 `skipped_relevance`로 기록 후 다음 메일로(v2.41) → 이상이면 기존 하이브리드 검색+LLM 파이프라인 재사용해 분류(system_error/user_mistake/uncertain)·심각도·오배치 판정(LLM 프롬프트에 넣기 직전 IP/이메일/전화번호는 마스킹 — 인하우스 LLM 게이트웨이가 이런 패턴 포함 시 응답을 통째로 거부하는 정책이 있어 대응, v2.46) → `pattern_detection.detect_and_update_cluster()`로 반복 유형 클러스터링(category 무관하게 항상 수행 — 통계 화면 정확도용, v2.47; 비교 임베딩은 원문이 아니라 LLM이 뽑은 정규화 이슈요약 `issue_signature`의 임베딩 — 표현이 달라도 같은 이슈면 묶이도록, v2.49) → `source_message_id` UNIQUE 제약으로 중복 스킵(fetch 직후 배치 사전 체크로 이미 처리된 메일은 관련지식 검색·LLM 분석 자체를 건너뜀, v2.43) → **발송 게이트(v2.48)**: not_it_related면 미발송, 클러스터가 없으면(반복 아닌 단독 VOC) 미발송, 클러스터가 있어도 `email_pattern_min_count` 미만이면 미발송, 채운 뒤로는 그 배수(3/6/9건째)에서만 담당 파트 Teams 채널에 Workflows 웹훅으로 알림(제목/내용/해결방안/참고지식 근거 섹션 구조화, 심각도별 4단계 색상, v2.44 — "🔁 반복 패턴 — N건째 발생 (M건마다 감지·K번째 감지)" 한 줄 + 해결방안 추가, v2.47~v2.48 — 자동 전화는 없음, 온콜 담당자명만 멘션). `ops_email_analysis`/`ops_email_poll_cycle`은 30일 고정 보관정책으로 자동 정리됨.
-
-**Graph API 토큰 조달 우선순위(v2.41)**: `pipeline.run_manual_collection()`이 ① 호출부가 넘긴 `access_token` → ② Application 권한 자격증명(`graph-credentials`) → ③ Delegated 로그인 세션(`delegated_auth`, 본인 메일함 한정) 순으로 시도. 셋 다 없으면 메일함별로 "자격증명 없음" 에러만 기록하고 다른 메일함은 계속 처리(전체 실패 처리 안 함). 스케줄러는 namespace 순회 전 credentials/access_token을 한 번만 해석해 `skip_credential_resolution=True`로 넘겨 매 namespace마다 재시도하지 않음. 로컬 검증은 `backend/scripts/email_voc_local_test.py`(Device Code Flow로 본인 메일함 대상 전체 파이프라인 실행) 참고.
-
-상세 설계·의사결정 배경은 `docs/email-analysis-channel-plan.md` 참조.
-
----
+손으로 관리하던 엔드포인트 목록은 제거했다(2026-10-02) — 실제와 계속 어긋났다(없어진 `/api/feedback` 가중치 조정,
+`/api/stats` 해결 처리 등이 남아 있었음). 현재 스펙은 FastAPI 자동 문서 `http://<backend>:8000/docs`가 정확하다.
 
 ## LLM Provider 확장 구조
 
@@ -1565,10 +1441,10 @@ messages = [
 
 | 테이블 | 벡터 컬럼 | 용도 |
 |--------|----------|------|
-| `rag_knowledge` | `embedding VECTOR(768)` | 문서 내용 임베딩 → 질문과 코사인 유사도로 관련 문서 검색 |
-| `rag_glossary` | `embedding VECTOR(768)` | 용어 설명 임베딩 → 질문과 비교해 표준 용어 자동 매핑 (유사도 0.5 이상만 사용) |
-| `rag_fewshot` | `embedding VECTOR(768)` | 과거 질문 임베딩 → 유사 Q&A를 LLM 프롬프트에 few-shot 삽입 (유사도 0.6 이상) |
-| `rag_conv_summary` | `embedding VECTOR(768)` | 과거 대화 요약 임베딩 → 현재 질문과 유사한 과거 맥락 Semantic Recall (유사도 0.45 이상) |
+| `rag_knowledge` | `embedding VECTOR(1024)` | 문서 내용 임베딩 → 질문과 코사인 유사도로 관련 문서 검색 |
+| `rag_glossary` | `embedding VECTOR(1024)` | 용어 설명 임베딩 → 질문과 비교해 표준 용어 자동 매핑 (유사도 0.5 이상만 사용) |
+| `rag_conv_summary` | `embedding VECTOR(1024)` | 과거 대화 요약 임베딩 → 현재 질문과 유사한 과거 맥락 Semantic Recall (유사도 0.45 이상) |
+| `policy_chunk` · `ops_email_analysis` · `ops_voc_cluster` | `VECTOR(1024)` | 정책 서술 검색 · VOC 메일 유사도/클러스터 |
 
 ### 검색 점수 공식
 
@@ -1579,10 +1455,11 @@ final_score = (w_vec × v_score + w_kw × k_score) × (1 + base_weight)
 
 - **v_score**: 코사인 유사도 (0~1) — HNSW 인덱스로 근사 탐색
 - **k_score**: `ts_rank` BM25 점수 — GIN 인덱스로 전문 검색
-- **base_weight**: `ops_knowledge` 행(문서)에 직접 붙는 가중치. 👍 피드백 시 +0.1, 👎 시 -0.1 자동 조정
+- **base_weight**: 문서별 가중치 — v2.121부터 입력 경로가 없고 전부 1.0(상수). 채팅 채택 게이트는 이 값을 걷어낸 원점수로 판단.
+  식에서 빼려면 메일 VOC 인용 임계값 재측정이 먼저(컬럼 삭제 때 같이)
 
 ### 비벡터 주요 테이블
 
-`ops_part`, `ops_user`, `ops_namespace`, `rag_knowledge_category`, `ops_feedback`, `ops_query_log`, `ops_conversation`, `ops_message`, `ops_prompt`, `ops_system_config`
+`ops_part`, `ops_user`, `ops_namespace`, `rag_knowledge_category`, `ops_improvement_item`, `ops_query_log`, `ops_conversation`, `ops_message`, `ops_prompt`, `ops_system_config`
 
 전체 스키마 정의는 `docs/table-definition.md` 참조.
