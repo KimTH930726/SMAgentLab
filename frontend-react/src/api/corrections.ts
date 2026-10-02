@@ -43,6 +43,9 @@ export interface CorrectionItem {
   kind: 'correction' | 'missing_knowledge' | 'answer_quality' | 'answer_signal' | 'search_noise';
   source: string;
   candidates: CorrectionCandidate[] | null;
+  /** 이 신고가 나온 질문·당시 답변(근거 대상 건도 맥락이 보이도록) */
+  question_text: string | null;
+  answer_text: string | null;
   ai_verdict: AiVerdict | null;
   namespace: string;
   message_id: number | null;
@@ -110,6 +113,11 @@ export async function approveCorrection(id: number, proposed?: Record<string, st
 
 export async function rejectCorrection(id: number, reason: string): Promise<unknown> {
   return apiFetch(`/corrections/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
+}
+
+/** 의견 없는 "답변 틀림"을 AI로 원인 추정(이관된 옛 신호 등 분석을 못 받은 건) */
+export async function analyzeCorrection(id: number): Promise<{ analyzed: boolean }> {
+  return apiFetch(`/corrections/${id}/analyze`, { method: 'POST' });
 }
 
 /** 담당자가 AI 판정 대상을 바꿈(같은 대상이면 초안만 다시 생성) */

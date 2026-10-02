@@ -555,3 +555,45 @@ class TestNoOpinionRetarget:
                 out = await svc.retarget(1, {"id": 9}, key)
                 assert out["proposed"] is None
         redraft.assert_not_awaited()
+
+
+class TestContextInDraft:
+    def test_prompt_includes_question_and_answer_when_given(self):
+        """근거만 보고 고치면 질문과 엮이지 않는다 — 질문·당시 답변을 맥락으로 같이 준다(2026-10-02)."""
+        p = draft.build_prompt("knowledge", {"content": "90일"}, "60일이에요", {"question": "주기는?", "answer": "90일입니다"})
+        assert p.index("[질문]\n주기는?") < p.index("[원문]") and "[당시 답변]\n90일입니다" in p
+
+    def test_prompt_without_context_unchanged(self):
+        p = draft.build_prompt("knowledge", {"content": "90일"}, "60일")
+        assert p.startswith("[원문]") and "[질문]" not in p
+
+    @pytest.mark.asyncio
+    async def test_missing_target_draft_does_not_duplicate_context(self):
+        """빠진 내용은 원문 자체가 질문·답변이라 맥락을 또 넣지 않는다."""
+        conn = _conn()
+        conn.fetchval = AsyncMock(side_effect=[True, None, 5])
+        conn.execute = AsyncMock()
+        drafter = AsyncMock(return_value={"content": "x"})
+        with patch.object(svc, "get_conn", return_value=conn), \
+             patch.object(svc, "resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch.object(svc, "_load_candidates", AsyncMock(return_value=[])), \
+             patch.object(svc, "_load_original", AsyncMock(return_value={"question": "q", "answer": "a"})), \
+             patch.object(svc.draft_mod, "draft_correction", drafter):
+            await svc.create_item("ns", {"id": 7}, target_type="missing", target_id=None, target_sub_id=None,
+                                  message_id=99, user_input="주소는 x")
+        assert drafter.await_args.args[3] is None
+
+
+class TestAnalyzeItem:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("row, msg", [
+        ({"namespace_id": 1, "message_id": 3, "user_input": "60일", "status": "pending"}, "이미 그 의견"),
+        ({"namespace_id": 1, "message_id": None, "user_input": None, "status": "pending"}, "대화가 삭제"),
+        ({"namespace_id": 1, "message_id": 3, "user_input": None, "status": "approved"}, "대기 중"),
+    ])
+    async def test_guards(self, row, msg):
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value=row)
+        with patch.object(svc, "get_conn", return_value=conn):
+            with pytest.raises(ValueError, match=msg):
+                await svc.analyze_item(1)

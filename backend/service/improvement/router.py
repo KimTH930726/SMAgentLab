@@ -103,6 +103,16 @@ async def reject_correction(item_id: int, body: RejectBody, user: dict = Depends
     return await service.reject(item_id, user, body.reason.strip())
 
 
+@router.post("/{item_id}/analyze")
+async def analyze_correction(item_id: int, user: dict = Depends(get_current_user)):
+    """의견 없는 "답변 틀림"을 AI로 다시 추정 — 이관된 옛 신호처럼 분석을 못 받은 건에 담당자가 실행."""
+    await _require_item_owner(item_id, user)
+    try:
+        return {"analyzed": await service.analyze_item(item_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/{item_id}/retarget")
 async def retarget_correction(item_id: int, body: RetargetBody, user: dict = Depends(get_current_user)):
     """AI가 고른 대상이 틀렸거나 대상이 없을 때(답변 틀림만 누른 건) 담당자가 정한다 — 그 대상 기준으로 수정안 생성."""

@@ -162,11 +162,10 @@ export function KnowledgeTable() {
   const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'corrections'>('list');
   // 정정 검토는 관리자 승인 전용(API도 admin) — 대기 건수 배지로 방치 방지
   // 정정 검토(옛 리뷰 신호 포함, 2026-10-02) — 그 파트 담당자 + 관리자가 처리. 대기 건수 배지로 방치 방지
-  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const { data: correctionCount } = useQuery({
-    // 관리자는 전체(탭 안 "다른 파트 대기" 안내와 사이드바 배지가 같은 숫자), 파트 담당자는 자기 파트
-    queryKey: ['corrections-pending-count', isAdmin ? '*' : selectedNs],
-    queryFn: () => getCorrectionPendingCount(isAdmin ? undefined : selectedNs),
+    // 탭 건수는 지금 보고 있는 파트만(다른 파트 건은 여기서 보여줄 필요 없음 — 사이드바 관리자 배지는 전체)
+    queryKey: ['corrections-pending-count', selectedNs],
+    queryFn: () => getCorrectionPendingCount(selectedNs),
     enabled: !!selectedNs && canModifyNs,
     staleTime: 30_000,
   });
@@ -607,7 +606,7 @@ export function KnowledgeTable() {
       )}
 
       {subTab === 'corrections' && canModifyNs && (
-        <CorrectionReviewTab namespace={selectedNs} pendingByNamespace={correctionCount?.by_namespace ?? {}} onSelectNamespace={setSelectedNs} />
+        <CorrectionReviewTab namespace={selectedNs} />
       )}
 
       {/* Edit Modal */}

@@ -273,7 +273,8 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
         raise ConflictError("이 근거에 대해 이미 검토 중인 정정 신고가 있습니다.")
 
     if proposed is None and target_type != "answer":
-        proposed = await draft_mod.draft_correction(target_type, original, user_input)
+        proposed = await draft_mod.draft_correction(
+            target_type, original, user_input, None if target_type == "missing" else context)
         if proposed is not None:
             async with get_conn() as conn:
                 await conn.execute("UPDATE ops_improvement_item SET proposed = $1::jsonb WHERE id = $2",
@@ -316,7 +317,7 @@ async def record_answer_signal(ns_id: int, message_id: int, reporter_id: Optiona
 _BACKGROUND: set = set()  # 백그라운드 분석 태스크 참조 유지(가비지 컬렉션으로 중간에 사라지지 않게)
 
 
-async def analyze_signal(item_id: int, ns_id: int, message_id: int) -> None:
+async def analyze_signal(item_id: int, ns_id: int, message_id: int) -> bool:
     """의견 없는 "답변 틀림" — AI가 질문·답변·근거의 어긋남으로 원인을 추정해 대상을 미리 골라 둔다(사실은 모르므로
     "추정"으로 표시, 수정안은 확실할 때만). 아직 의견이 없을 때만 갱신 — 그 사이 사용자 한 줄이 오면 손대지 않는다."""
     try:
@@ -324,10 +325,10 @@ async def analyze_signal(item_id: int, ns_id: int, message_id: int) -> None:
             candidates = await _load_candidates(conn, ns_id, message_id)
             context = await _load_original(conn, ns_id, "missing", None, None, message_id)
         if not candidates:
-            return
+            return False
         out = await draft_mod.analyze_without_opinion(context.get("question"), context.get("answer"), candidates)
         if out is None:
-            return
+            return False
         meta = {"verdict": out["verdict"], "method": "llm_no_opinion", "reason": out["reason"],
                 "wrong_part": out["wrong_part"], "fix_summary": out["fix_summary"]}
         target_type, target_id, sub_id, original = "auto", None, None, context
@@ -338,16 +339,32 @@ async def analyze_signal(item_id: int, ns_id: int, message_id: int) -> None:
         elif out["verdict"] == "answer_error":
             target_type = "answer"
         async with get_conn() as conn:
-            await conn.execute("""
+            res = await conn.execute("""
                 UPDATE ops_improvement_item
-                SET target_type = $2, target_id = $3, target_sub_id = $4, original = $5::jsonb,
+                SET kind = 'answer_signal', target_type = $2, target_id = $3, target_sub_id = $4, original = $5::jsonb,
                     proposed = $6::jsonb, ai_verdict = $7::jsonb
-                WHERE id = $1 AND status = 'pending' AND kind = 'answer_signal' AND user_input IS NULL
+                WHERE id = $1 AND status = 'pending' AND user_input IS NULL
             """, item_id, target_type, target_id, sub_id, json.dumps(original, ensure_ascii=False),
                 json.dumps(out["proposed"], ensure_ascii=False) if out["proposed"] else None,
                 json.dumps(meta, ensure_ascii=False))
+        return res.endswith(" 1")
     except Exception:
         logger.warning("의견 없는 답변 틀림 추정 실패 (item=%s)", item_id, exc_info=True)
+        return False
+
+
+async def analyze_item(item_id: int) -> bool:
+    """담당자가 "AI로 원인 추정"을 누름 — 이관된 옛 신호처럼 클릭 시점 분석을 못 받은 의견 없는 건용."""
+    async with get_conn() as conn:
+        item = await conn.fetchrow(
+            "SELECT namespace_id, message_id, user_input, status FROM ops_improvement_item WHERE id = $1", item_id)
+    if not item or item["status"] != "pending":
+        raise ValueError("대기 중인 신고가 아닙니다.")
+    if item["user_input"]:
+        raise ValueError("사용자 의견이 있는 신고는 이미 그 의견으로 판정돼 있습니다.")
+    if item["message_id"] is None:
+        raise ValueError("어느 답변의 신고인지 알 수 없어 추정할 수 없습니다(대화가 삭제됨).")
+    return await analyze_signal(item_id, item["namespace_id"], item["message_id"])
 
 
 async def record_search_noise(namespace: str, knowledge_id: int, reporter_id: Optional[int],
@@ -406,7 +423,7 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
     # 사용자 의견이 없으면 맞는 내용 정보가 없다 — 자리표시 문구로 초안을 만들면 원문 그대로이거나(무의미한 새 버전),
     # "빠진 내용"이면 틀렸다고 신고된 답변을 지식으로 옮겨 적는다(/code-review). 담당자가 직접 수정한다.
     proposed = None if target_type == "answer" or not item["user_input"] else await draft_mod.draft_correction(
-        target_type, original, item["user_input"])
+        target_type, original, item["user_input"], None if target_type == "missing" else context)
     # 변경 이력은 AI 판정이 있던 신고에서 대상이 실제로 바뀔 때만 남긴다 — 같은 대상 재생성("초안 다시 만들기")을
     # 변경으로 세면 "담당자가 AI 판정을 뒤집은 비율" 측정이 부풀고, 직접 지정 신고엔 판정 자체가 없다(/code-review).
     verdict = _json(item["ai_verdict"])
@@ -452,9 +469,14 @@ _LIST_SQL = """
     SELECT i.id, i.kind, n.name AS namespace, i.message_id, i.target_type, i.target_id, i.target_sub_id,
            i.user_input, i.original, i.proposed, i.status, i.reject_reason, i.applied_target_id,
            i.created_at, i.decided_at, i.reporter_seen_at, i.source, i.candidates, i.ai_verdict,
-           ru.username AS reporter, du.username AS decided_by
+           ru.username AS reporter, du.username AS decided_by,
+           -- 근거를 대상으로 한 건도 어떤 질문·답변에서 나온 신고인지 카드에 보이도록(원문은 근거 스냅샷뿐이라)
+           m.content AS answer_text,
+           (SELECT u.content FROM ops_message u WHERE u.conversation_id = m.conversation_id AND u.role = 'user'
+              AND u.id < m.id ORDER BY u.id DESC LIMIT 1) AS question_text
     FROM ops_improvement_item i
     JOIN ops_namespace n ON n.id = i.namespace_id
+    LEFT JOIN ops_message m ON m.id = i.message_id
     LEFT JOIN ops_user ru ON ru.id = i.reporter_user_id
     LEFT JOIN ops_user du ON du.id = i.decided_by
 """

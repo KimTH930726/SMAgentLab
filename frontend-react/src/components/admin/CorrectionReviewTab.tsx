@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle, Sparkles, PenLine } from 'lucide-react';
 import {
-  listCorrections, approveCorrection, rejectCorrection, retargetCorrection, type CorrectionItem,
+  listCorrections, approveCorrection, rejectCorrection, retargetCorrection, analyzeCorrection, type CorrectionItem,
 } from '../../api/corrections';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -133,6 +133,14 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
     onSuccess: () => { setError(''); onDone(); },
     onError: (e: Error) => setError(e.message || '반려에 실패했습니다.'),
   });
+  const analyze = useMutation({
+    mutationFn: () => analyzeCorrection(item.id),
+    onSuccess: (r) => {
+      setError(r.analyzed ? '' : 'AI가 원인을 추정하지 못했어요(근거가 없거나 AI 응답 실패) — 직접 고르세요.');
+      onDone();
+    },
+    onError: (e: Error) => setError(e.message || '추정에 실패했습니다.'),
+  });
   const retarget = useMutation({
     mutationFn: (key: string) => retargetCorrection(item.id, key),
     onSuccess: () => { setError(''); onDone(); },
@@ -163,6 +171,17 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
         </span>
       </div>
 
+      {item.question_text && canFix && (
+        <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs space-y-1">
+          <p><span className="text-slate-500 mr-1">질문</span><span className="text-slate-200">{item.question_text}</span></p>
+          {item.answer_text && (
+            <p className="text-slate-400 line-clamp-3" title={item.answer_text}>
+              <span className="text-slate-500 mr-1">당시 답변</span>{item.answer_text}
+            </p>
+          )}
+        </div>
+      )}
+
       {item.user_input ? (
         <p className="text-sm text-slate-200">
           <span className="text-slate-500 text-xs mr-1">{item.kind === 'search_noise' ? '표시 내용' : '사용자 입력'}</span>“{item.user_input}”
@@ -172,7 +191,14 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
           사용자 입력 없음 — '답변 틀림'만 눌렀어요.{' '}
           {item.ai_verdict?.method === 'llm_no_opinion'
             ? (item.ai_verdict.verdict ? 'AI가 질문·답변·근거를 비교해 원인을 추정했어요(아래).' : `AI가 원인을 특정하지 못했어요 — ${item.ai_verdict.reason ?? ''}`)
-            : 'AI 추정 중이거나 근거가 없어요.'}
+            : '아직 AI 추정이 없어요.'}
+          {pending && item.message_id != null && !item.ai_verdict && (
+            <button onClick={() => analyze.mutate()} disabled={analyze.isPending}
+              className="ml-2 inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50"
+              title="질문·답변·근거를 비교해 틀렸을 가능성이 높은 근거를 골라 둡니다(이관된 옛 신고처럼 분석을 못 받은 건)">
+              <Sparkles className="w-3 h-3" />{analyze.isPending ? 'AI가 분석 중…' : 'AI로 원인 추정'}
+            </button>
+          )}
         </p>
       )}
 
@@ -325,12 +351,7 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
   );
 }
 
-export function CorrectionReviewTab({ namespace, pendingByNamespace, onSelectNamespace }: {
-  namespace: string;
-  pendingByNamespace: Record<string, number>;
-  onSelectNamespace: (ns: string) => void;
-}) {
-  const otherParts = Object.entries(pendingByNamespace).filter(([ns, n]) => ns !== namespace && n > 0);
+export function CorrectionReviewTab({ namespace }: { namespace: string }) {
   const qc = useQueryClient();
   const [status, setStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
   const { data: items = [], isLoading, error } = useQuery({
@@ -363,17 +384,6 @@ export function CorrectionReviewTab({ namespace, pendingByNamespace, onSelectNam
           </button>
         ))}
       </div>
-      {otherParts.length > 0 && (
-        <p className="text-xs text-slate-500">
-          다른 파트 대기:{' '}
-          {otherParts.map(([ns, n], i) => (
-            <span key={ns}>
-              {i > 0 && ', '}
-              <button onClick={() => onSelectNamespace(ns)} className="text-indigo-600 dark:text-indigo-400 hover:underline">{ns} {n}건</button>
-            </span>
-          ))}
-        </p>
-      )}
       {error && <p className="text-xs text-rose-600 dark:text-rose-400">{(error as Error).message}</p>}
       {isLoading ? (
         <p className="text-xs text-slate-500">불러오는 중…</p>
