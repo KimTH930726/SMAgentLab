@@ -99,7 +99,19 @@ test('위험도 분류 → 낮음 자동 통과(표본은 사람 큐) → 되돌
   await panel.getByRole('button', { name: /검토 큐 보기/ }).click();
   const rows = page.locator('.space-y-2 > div.bg-slate-800');
   await expect(rows.first().getByText('위험 높음')).toBeVisible();
-  await expect(page.getByText('표본 확인').first()).toBeVisible();
+  await expect(rows.getByText('표본 확인', { exact: true }).first()).toBeVisible();
+
+  // 위험도 필터 — 표본만 남기면 행마다 "표본 확인", 배지를 누르면 설명 모달
+  const riskSelect = page.locator('select').filter({ has: page.locator('option[value="sample"]') });
+  await riskSelect.selectOption('sample');
+  await expect(rows.first()).toBeVisible();
+  expect(await rows.count()).toBe(await rows.filter({ hasText: '표본 확인' }).count());
+  await rows.first().getByRole('button', { name: /표본 확인/ }).click();
+  await expect(page.getByText('이 등급은')).toBeVisible();
+  await expect(page.getByText('내용이 맞으면 승인, 틀리면 반려하세요.')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByText('이 등급은')).toBeHidden();
+  await riskSelect.selectOption('');
 
   // 자동 통과는 사람 승인과 구분되어 보이고, 되돌릴 수 있다
   await page.locator('select').filter({ has: page.locator('option[value="rejected"]') }).selectOption('active');

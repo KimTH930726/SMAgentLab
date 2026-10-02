@@ -9,6 +9,8 @@ import { PolicyReviewQueuePanel } from './PolicyReviewQueuePanel';
 import { UnresolvedSegmentActions } from './UnresolvedSegmentActions';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
+import { Modal } from '../ui/Modal';
+import { Button } from '../ui/Button';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -30,6 +32,16 @@ const RISK_CLASS: Record<RiskLevel, string> = {
   medium: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700/50',
   low: 'border-slate-600 text-slate-400',
 };
+
+const RISK_MEANING: Record<RiskLevel, string> = {
+  high: 'AI가 원문을 제대로 구조화하지 못했거나, 이전에 사람이 반려했거나, 자동 통과를 사람이 되돌린 항목이에요. 사람이 꼭 봐야 해요.',
+  medium: '서술이 여러 조각으로 나뉜 항목이에요. 조건이 엉뚱하게 쪼개져 의미가 바뀌지 않았는지 사람이 확인해요.',
+  low: '구조화가 끝났고 서술도 하나라 위험이 낮아요. 규칙에 따라 자동 통과돼요.',
+};
+const SAMPLE_MEANING = '자동 통과 대상(위험 낮음) 중에서 규칙이 맞게 동작하는지 보려고 일부러 사람에게 남긴 표본이에요. '
+  + '내용이 맞으면 승인, 틀리면 반려하세요 — 반려하면 같은 규칙의 자동 통과가 멈춰요(나머지 자동 통과 건도 다시 볼 수 있게).';
+
+type RiskFilter = '' | 'high' | 'medium' | 'sample' | 'low';
 
 function StatusBadge({ item }: { item: PolicyItem }) {
   // 자동 통과는 사람 승인과 다른 표시 — 되돌릴 수 있고, 나중에 기준 조정의 대상
@@ -61,6 +73,9 @@ export function PolicyItemBrowser() {
   const { selectedNs, setSelectedNs, sortedNamespaces, canModifyNs } = useNamespaceAccess();
   const [categoryFilter, setCategoryFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  // 위험도 필터(검토대기에서만 의미) — 서버 목록은 그대로, 화면에서 거름
+  const [riskFilter, setRiskFilter] = useState<RiskFilter>('');
+  const [riskInfo, setRiskInfo] = useState<PolicyItem | null>(null);
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
@@ -139,11 +154,15 @@ export function PolicyItemBrowser() {
     onError: (err: Error) => alert(err.message),
   });
 
-  useEffect(() => { setPage(1); }, [selectedNs, categoryFilter, q, statusFilter, pageSize]);
+  useEffect(() => { setPage(1); }, [selectedNs, categoryFilter, q, statusFilter, riskFilter, pageSize]);
+  useEffect(() => { if (statusFilter !== 'pending_review') setRiskFilter(''); }, [statusFilter]);
 
   const categoryOptions = Array.from(new Set(allItems.map((i) => i.category_path[0]).filter(Boolean))).sort();
 
-  const { totalPages, totalItems, slice } = useClientPaging(items, pageSize);
+  const visibleItems = riskFilter === ''
+    ? items
+    : items.filter((i) => (riskFilter === 'sample' ? i.review_sample : !i.review_sample && i.risk_level === riskFilter));
+  const { totalPages, totalItems, slice } = useClientPaging(visibleItems, pageSize);
   const pagedItems = slice(page);
 
   return (
@@ -200,6 +219,22 @@ export function PolicyItemBrowser() {
             <option value="rejected">반려됨</option>
           </select>
         </div>
+        {statusFilter === 'pending_review' && (
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5" title="위험도별로 골라 보기 — 표본은 자동 통과 대상 중 사람이 확인하도록 남긴 건">위험도</label>
+            <select
+              value={riskFilter}
+              onChange={(e) => setRiskFilter(e.target.value as RiskFilter)}
+              className="w-32 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="">전체</option>
+              <option value="high">높음</option>
+              <option value="medium">중간</option>
+              <option value="sample">표본 확인</option>
+              <option value="low">낮음(자동 통과 대기)</option>
+            </select>
+          </div>
+        )}
         <div className="flex-1 min-w-[200px]">
           <label className="block text-xs font-medium text-slate-400 mb-1.5">정책명 검색</label>
           <div className="relative">
@@ -262,21 +297,22 @@ export function PolicyItemBrowser() {
                     <Sparkles className="w-3.5 h-3.5" />{item.narratives.length}
                   </span>
                 )}
-                {item.status === 'pending_review' && item.review_sample && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-700/50"
-                    title="자동 통과 대상 중 사람이 확인하도록 남긴 표본 — 반려하면 같은 규칙의 자동 통과가 멈춥니다">
-                    표본 확인
-                  </span>
-                )}
                 {item.status === 'pending_review' && item.risk_level && (
-                  <>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${RISK_CLASS[item.risk_level]}`}
-                      title={item.risk_reasons.join('\n')}>
+                  // 배지를 누르면 "왜 여기 있고 뭘 하면 되나"를 모달로(배지만으로는 의미를 알기 어렵다는 지적)
+                  <button type="button" onClick={(e) => { e.stopPropagation(); setRiskInfo(item); }}
+                    className="flex items-center gap-1.5 flex-shrink-0 rounded hover:bg-slate-700/60 px-1 -mx-1"
+                    title="눌러서 이 항목이 왜 검토 큐에 있는지, 무엇을 하면 되는지 보기">
+                    {item.review_sample && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-700/50">
+                        표본 확인
+                      </span>
+                    )}
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${RISK_CLASS[item.risk_level]}`}>
                       {RISK_LABEL[item.risk_level]}
                     </span>
-                    {/* 왜 이 등급인지 — 마우스를 올리거나 펼치지 않아도 목록에서 바로 보이게 */}
-                    {item.risk_short && <span className="text-[11px] text-slate-500 flex-shrink-0">{item.risk_short}</span>}
-                  </>
+                    {item.risk_short && <span className="text-[11px] text-slate-500">{item.risk_short}</span>}
+                    <span className="text-[10px] text-indigo-600 dark:text-indigo-400">?</span>
+                  </button>
                 )}
                 <StatusBadge item={item} />
                 {canModifyNs && item.status === 'active' && item.review_source === 'auto_rule' && (
@@ -341,8 +377,10 @@ export function PolicyItemBrowser() {
                       <ul className="text-xs text-slate-400 list-disc pl-4 space-y-0.5">
                         {item.risk_reasons.map((r) => <li key={r}>{r}</li>)}
                       </ul>
-                      {item.risk_next_step && (
-                        <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-1">→ {item.risk_next_step}</p>
+                      {(item.review_sample || item.risk_next_step) && (
+                        <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-1">
+                          → {item.review_sample ? '표본 확인: 내용이 맞으면 승인, 틀리면 반려하세요(반려하면 같은 규칙의 자동 통과가 멈춰요).' : item.risk_next_step}
+                        </p>
                       )}
                     </div>
                   )}
@@ -505,6 +543,53 @@ export function PolicyItemBrowser() {
           <PaginationNav page={page} totalPages={totalPages} onPageChange={setPage} />
         </div>
       )}
+      <Modal isOpen={riskInfo !== null} onClose={() => setRiskInfo(null)}
+        title={riskInfo ? `${riskInfo.policy_name} — ${riskInfo.review_sample ? '표본 확인' : RISK_LABEL[riskInfo.risk_level ?? 'low']}` : ''}
+        maxWidth="max-w-lg">
+        {riskInfo && (
+          <div className="space-y-3 text-sm">
+            <div>
+              <p className="text-xs font-medium text-slate-400 mb-1">이 등급은</p>
+              <p className="text-slate-200">{riskInfo.review_sample ? SAMPLE_MEANING : RISK_MEANING[riskInfo.risk_level ?? 'low']}</p>
+            </div>
+            {riskInfo.risk_reasons.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-slate-400 mb-1">이 항목이 이 등급인 이유</p>
+                <ul className="list-disc pl-4 text-slate-300 space-y-0.5">
+                  {riskInfo.risk_reasons.map((r) => <li key={r}>{r}</li>)}
+                </ul>
+              </div>
+            )}
+            <div>
+              <p className="text-xs font-medium text-slate-400 mb-1">할 일</p>
+              <p className="text-indigo-600 dark:text-indigo-400">
+                {riskInfo.review_sample ? '내용이 맞으면 승인, 틀리면 반려하세요.' : riskInfo.risk_next_step}
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="ghost" size="sm" onClick={() => { setExpandedId(riskInfo.item_id); setRiskInfo(null); }}>
+                펼쳐서 내용 보기
+              </Button>
+              {canModifyNs && riskInfo.status === 'pending_review' && (
+                <>
+                  <Button variant="danger" size="sm" disabled={rejectMutation.isPending}
+                    onClick={() => {
+                      if (window.confirm(`"${riskInfo.policy_name}" 항목을 반려할까요?\n검색/채팅에서 제외됩니다. 반려 후 이 화면에서 항목을 펼쳐 파라미터/서술을 고치면 다시 검토대기로 되돌릴 수 있습니다.`)) {
+                        rejectMutation.mutate(riskInfo.item_id); setRiskInfo(null);
+                      }
+                    }}>
+                    반려
+                  </Button>
+                  <Button variant="primary" size="sm" disabled={approveMutation.isPending}
+                    onClick={() => { approveMutation.mutate(riskInfo.item_id); setRiskInfo(null); }}>
+                    승인
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
