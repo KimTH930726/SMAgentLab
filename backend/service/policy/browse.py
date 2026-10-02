@@ -65,6 +65,8 @@ class PolicyItemOut:
     matched_via: list[str] = field(default_factory=list)  # q 검색 시에만 채움: "param"/"narrative"
     risk_level: Optional[str] = None
     risk_reasons: list[str] = field(default_factory=list)
+    risk_short: str = ""
+    risk_next_step: str = ""
     review_source: Optional[str] = None
     review_rule: Optional[str] = None
     review_sample: bool = False
@@ -162,7 +164,8 @@ async def list_policy_items(
             raw_body=r["raw_body"], status=r["status"], parse_status=r["parse_status"], system_key=r["system_key"],
             params=params_by_item.get(r["id"], []), narratives=chunks_by_item.get(r["id"], []),
             matched_via=sorted(matched_via.get(r["id"], set())),
-            risk_level=rk.level, risk_reasons=rk.reasons, review_source=r["review_source"],
+            risk_level=rk.level, risk_reasons=rk.reasons, risk_short=rk.short, risk_next_step=rk.next_step,
+            review_source=r["review_source"],
             review_rule=r["review_rule"], review_sample=bool(r["review_sample"]),
             unresolved_segments=_segments(r["unresolved_segments"]),
         ))

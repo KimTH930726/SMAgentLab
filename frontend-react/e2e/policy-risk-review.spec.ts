@@ -132,14 +132,14 @@ test('미분류 조각은 검토 큐에서 바로 편입 → 위험도 재계산
   const row = page.locator('.space-y-2 > div.bg-slate-800').filter({ hasText: 'E2E 미해결 정책' }).first();
   await expect(row.getByText('위험 높음')).toBeVisible();
   await row.locator('span.font-medium').first().click();  // 펼치기
-  await expect(row.getByText(/미분류 조각 2개/)).toBeVisible();
+  await expect(row.getByText(/미분류 조각 2개 — /)).toBeVisible();
 
   // 두 조각을 서술로 편입(편입마다 목록을 다시 받아 인덱스가 당겨짐)
   for (let left = 2; left > 0; left--) {
     const done = page.waitForResponse((r) => /\/unresolved\/\d+\/promote$/.test(r.url()));
     await row.getByRole('button', { name: /서술로 편입/ }).first().click();
     expect((await done).ok()).toBeTruthy();
-    if (left > 1) await expect(row.getByText(/미분류 조각 1개/)).toBeVisible();
+    if (left > 1) await expect(row.getByText(/미분류 조각 1개 — /)).toBeVisible();
   }
   const ns = `(SELECT id FROM ops_namespace WHERE name='${NS}')`;
   expect(psql(`SELECT parse_status FROM policy_item WHERE namespace_id=${ns} AND policy_name='E2E 미해결 정책'`)).toBe('parsed');

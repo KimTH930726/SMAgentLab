@@ -177,6 +177,8 @@ class PolicyItemOut(BaseModel):
     # 위험도(조회 시 계산, risk.py) + 결정 출처 — 검토 큐 정렬·배지용
     risk_level: Optional[str] = None
     risk_reasons: list[str] = []
+    risk_short: str = ""        # 목록 한 줄용 핵심 이유
+    risk_next_step: str = ""    # 담당자가 할 일
     review_source: Optional[str] = None
     review_rule: Optional[str] = None
     review_sample: bool = False

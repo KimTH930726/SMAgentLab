@@ -505,6 +505,7 @@ export function ChatContainer() {
       }
       qc.invalidateQueries({ queryKey: ['correction-status'] });
       qc.invalidateQueries({ queryKey: ['corrections-pending-count'] });
+      qc.invalidateQueries({ queryKey: ['corrections-mine-all'] });
     },
     onError: (err: Error) => setCorrectionError(err.message),
   });

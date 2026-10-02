@@ -142,6 +142,10 @@ export interface PolicyItem {
   /** 위험도(서버가 조회 시 계산하는 결정론적 규칙) + 결정 출처 — 2026-10-01 위험도 기반 검토 큐 */
   risk_level: RiskLevel | null;
   risk_reasons: string[];
+  /** 목록 한 줄에 보이는 핵심 이유(예: "미분류 조각 2개") */
+  risk_short: string;
+  /** 그래서 담당자가 할 일 */
+  risk_next_step: string;
   review_source: 'human' | 'auto_rule' | null;
   review_rule: string | null;
   review_sample: boolean;

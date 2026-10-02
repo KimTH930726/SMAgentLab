@@ -445,7 +445,7 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
             />
           )}
 
-          {/* Feedback — 피드백을 이미 보낸 답변도 "정정 의견 남기기"는 남긴다(취소했거나 새로고침한 뒤에도 AI 정정 가능) */}
+          {/* Feedback — 피드백을 이미 보낸 답변도 의견이 아직 없으면 "의견 덧붙이기"를 남긴다(의견까지 접수했으면 숨김) */}
           {!message.isStreaming && message.content && namespace && message.status !== 'failed' && (
             <FeedbackSection
               namespace={namespace}

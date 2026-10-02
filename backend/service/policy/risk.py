@@ -32,25 +32,34 @@ class Risk:
     level: str                      # high | medium | low
     rule_key: str | None            # 자동 통과 후보면 그 규칙(low만)
     reasons: list[str] = field(default_factory=list)
+    short: str = ""                 # 목록 한 줄에 배지 옆에 붙는 핵심 이유(마우스·펼침 없이 보이게)
+    next_step: str = ""             # 그래서 담당자가 할 일
 
 
 def classify(parse_status: str | None, unresolved_count: int, chunk_count: int, prior_reject: bool,
              prior_revert: bool = False) -> Risk:
     """사람이 봐야 하는 이유를 앞에 쌓는다 — 높음 사유가 하나라도 있으면 높음."""
-    high: list[str] = []
+    high: list[tuple[str, str, str]] = []  # (상세 이유, 짧은 이유, 할 일) — 앞에 있을수록 먼저 볼 이유
     if parse_status in ("unresolved", "partial"):
         label = "전혀" if parse_status == "unresolved" else "일부"
-        high.append(f"원문을 {label} 구조화하지 못함(미해결 조각 {unresolved_count}개)")
+        high.append((f"원문을 {label} 구조화하지 못함(미해결 조각 {unresolved_count}개)",
+                     f"미분류 조각 {unresolved_count}개",
+                     "펼쳐서 미분류 조각을 서술/파라미터로 편입한 뒤 내용을 확인해 승인·반려하세요."))
     if prior_reject:
-        high.append("이전에 사람이 반려한 항목 — 수정·재등록돼도 사람이 다시 확인")
+        high.append(("이전에 사람이 반려한 항목 — 수정·재등록돼도 사람이 다시 확인", "이전에 반려됨",
+                     "반려됐던 내용이 제대로 고쳐졌는지 원문과 비교한 뒤 승인·반려하세요."))
     if prior_revert:
-        high.append("자동 통과를 사람이 되돌린 항목 — 다시 자동 통과하지 않음")
+        high.append(("자동 통과를 사람이 되돌린 항목 — 다시 자동 통과하지 않음", "자동 통과 되돌림",
+                     "누군가 자동 통과를 되돌린 항목입니다 — 내용을 확인해 직접 승인·반려하세요."))
     split = f"서술이 {chunk_count}개로 나뉨 — 조건이 쪼개졌을 위험" if chunk_count >= 2 else None
     if high:
-        return Risk("high", None, high + ([split] if split else []))
+        return Risk("high", None, [h[0] for h in high] + ([split] if split else []),
+                    " · ".join(h[1] for h in high), high[0][2])
     if split:
-        return Risk("medium", None, [split])
-    return Risk("low", LOW_RISK_RULE, ["구조화 완료 + 서술 1개 — 자동 통과 후보"])
+        return Risk("medium", None, [split], f"서술 {chunk_count}개로 나뉨",
+                    "서술들을 원문과 비교해 조건이 엉뚱하게 쪼개지지 않았는지 확인하고 승인·반려하세요.")
+    return Risk("low", LOW_RISK_RULE, ["구조화 완료 + 서술 1개 — 자동 통과 후보"], "구조화 완료",
+                "자동 통과 대상이라 따로 볼 필요 없어요(표본으로 남은 건만 확인).")
 
 
 def classify_row(row) -> Risk:

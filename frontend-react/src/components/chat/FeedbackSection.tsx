@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { postFeedback } from '../../api/feedback';
+import { getMyCorrections } from '../../api/corrections';
 import { useCorrectionStore, AUTO_TARGET, MISSING_TARGET } from '../../store/useCorrectionStore';
 
 type FeedbackState = 'idle' | 'positive_sent' | 'negative_sent';
@@ -11,7 +12,7 @@ interface FeedbackSectionProps {
   answer: string;
   knowledgeId?: number | null;
   messageId?: number;
-  /** 이미 피드백을 보낸 답변(재조회) — 신호는 다시 안 보내고 "정정 의견 남기기"만 */
+  /** 이미 피드백을 보낸 답변(재조회) — 신호는 다시 안 보내고, 아직 의견이 없으면 "의견 덧붙이기"만 */
   alreadySent?: boolean;
 }
 
@@ -25,6 +26,16 @@ export function FeedbackSection({ namespace, question, answer, knowledgeId, mess
   const startCorrection = useCorrectionStore((s) => s.start);
   // 이 답변의 정정 입력창이 열려 있는지 — 닫혀 있으면(취소·대화 이동·접수 완료) 다시 열 수 있게 버튼을 보인다
   const inputOpen = useCorrectionStore((s) => s.active != null && s.active.messageId === messageId);
+  // 이 답변에 이미 의견(한 줄)까지 접수했으면 "의견 덧붙이기"를 숨긴다 — 이번 세션 접수는 스토어에서, 새로고침 뒤엔
+  // 서버의 내 신고 기록으로 판단(접수했는데 또 신고하라는 듯 보이던 혼란, 2026-10-02 사용자 지적)
+  const submittedHere = useCorrectionStore((s) => messageId != null && s.submitted[messageId] != null);
+  const { data: mine = [] } = useQuery({
+    queryKey: ['corrections-mine-all'],
+    queryFn: () => getMyCorrections(false),
+    enabled: messageId != null && !submittedHere,
+    staleTime: 60_000,
+  });
+  const hasOpinion = submittedHere || mine.some((c) => c.message_id === messageId && !!c.user_input);
   const sentKind = useCorrectionStore((s) => (messageId != null ? s.feedbackSent[messageId] : undefined));
   const markFeedback = useCorrectionStore((s) => s.markFeedback);
   const [localState, setState] = useState<FeedbackState>(alreadySent ? 'negative_sent' : 'idle');
@@ -73,13 +84,13 @@ export function FeedbackSection({ namespace, question, answer, knowledgeId, mess
       <div className="mt-3 flex items-center gap-2 text-xs">
         {inputOpen ? (
           <span className="text-slate-500">아래 입력창에 맞는 내용을 한 줄로 적어주세요.</span>
-        ) : (
+        ) : hasOpinion ? null : (
           <button
             onClick={openCorrection}
             className="px-2.5 py-1 rounded-lg border border-slate-600 text-slate-400 hover:text-rose-600 hover:border-rose-300 dark:hover:text-rose-400 dark:hover:border-rose-700 transition-colors"
-            title="이 답변에서 틀린 내용을 한 줄로 알려주세요. AI가 어느 근거 문제인지 찾고, 담당자 확인 후 반영됩니다."
+            title="'답변 틀림'은 이미 접수됐어요. 맞는 내용을 한 줄로 덧붙이면 AI가 어느 근거 문제인지 찾고 수정안까지 만들어 담당자에게 전달합니다."
           >
-            정정 의견 남기기
+            의견 덧붙이기
           </button>
         )}
         {error && <span className="text-rose-600 dark:text-rose-400">신호 전송 실패: {error}</span>}

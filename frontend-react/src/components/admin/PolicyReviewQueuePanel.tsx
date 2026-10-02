@@ -99,6 +99,12 @@ export function PolicyReviewQueuePanel({ namespace, onShowQueue }: { namespace: 
         </div>
       </div>
 
+      <p className="text-[11px] text-slate-500">
+        <span className="text-rose-600 dark:text-rose-400">높음</span> = 원문 일부를 구조화 못 함·이전에 반려됨·자동 통과를 되돌림 ·{' '}
+        <span className="text-amber-600 dark:text-amber-400">중간</span> = 서술이 여러 개로 나뉨(조건이 쪼개졌을 수 있음) ·{' '}
+        낮음 = 구조화 완료 + 서술 1개 → 자동 통과(일부는 표본으로 사람 확인)
+      </p>
+
       {preview && (
         <div className="rounded-lg border border-cyan-200 bg-cyan-50/60 dark:border-cyan-800/50 dark:bg-cyan-950/20 px-3 py-2 text-xs flex items-center gap-2 flex-wrap">
           <span className="text-slate-300">

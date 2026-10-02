@@ -269,10 +269,14 @@ export function PolicyItemBrowser() {
                   </span>
                 )}
                 {item.status === 'pending_review' && item.risk_level && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${RISK_CLASS[item.risk_level]}`}
-                    title={item.risk_reasons.join('\n')}>
-                    {RISK_LABEL[item.risk_level]}
-                  </span>
+                  <>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${RISK_CLASS[item.risk_level]}`}
+                      title={item.risk_reasons.join('\n')}>
+                      {RISK_LABEL[item.risk_level]}
+                    </span>
+                    {/* 왜 이 등급인지 — 마우스를 올리거나 펼치지 않아도 목록에서 바로 보이게 */}
+                    {item.risk_short && <span className="text-[11px] text-slate-500 flex-shrink-0">{item.risk_short}</span>}
+                  </>
                 )}
                 <StatusBadge item={item} />
                 {canModifyNs && item.status === 'active' && item.review_source === 'auto_rule' && (
@@ -337,6 +341,9 @@ export function PolicyItemBrowser() {
                       <ul className="text-xs text-slate-400 list-disc pl-4 space-y-0.5">
                         {item.risk_reasons.map((r) => <li key={r}>{r}</li>)}
                       </ul>
+                      {item.risk_next_step && (
+                        <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-1">→ {item.risk_next_step}</p>
+                      )}
                     </div>
                   )}
                   {item.unresolved_segments.length > 0 && (

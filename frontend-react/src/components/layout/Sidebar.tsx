@@ -27,7 +27,6 @@ import { clsx } from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
-import { getCorrectionPendingCount } from '../../api/corrections';
 import { stopChatStream, clearStreamState, useStreamStore } from '../../store/useStreamStore';
 import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
@@ -51,13 +50,6 @@ export function Sidebar() {
   const searchConfig = useAppStore((s) => s.searchConfig);
   const setSearchConfig = useAppStore((s) => s.setSearchConfig);
   const user = useAuthStore((s) => s.user);
-  // 정정 신고 대기 건수 — 승인자(관리자)가 탭을 안 열면 쌓이기만 하므로 메뉴에서 바로 보이게
-  const { data: correctionCount } = useQuery({
-    queryKey: ['corrections-pending-count'],
-    queryFn: () => getCorrectionPendingCount(),
-    enabled: user?.role === 'admin',
-    staleTime: 60_000,
-  });
   const { data: namespaces = [] } = useQuery({
     queryKey: ['namespaces'],
     queryFn: getNamespaces,
@@ -252,14 +244,6 @@ export function Sidebar() {
         >
           <Settings className="w-4 h-4" />
           Admin
-          {(correctionCount?.count ?? 0) > 0 && (
-            <span
-              className="text-[10px] bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-400 px-1.5 py-0.5 rounded-full"
-              title="검토 대기 중인 정정 신고 (지식 관리 > 정정 검토)"
-            >
-              {correctionCount!.count}
-            </span>
-          )}
         </NavLink>
       </nav>
 

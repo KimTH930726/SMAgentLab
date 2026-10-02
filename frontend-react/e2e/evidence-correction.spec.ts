@@ -150,15 +150,17 @@ test('정책 — "답변 틀림" 한 줄 → AI 분석 → (대상 확인) 승�
 
   await page.getByRole('button', { name: '답변 틀림' }).last().click();
   await expect(page.getByText('어디가 틀렸나요?')).toBeVisible();  // 근거를 고르지 않는다 — AI가 찾음
-  // 취소해도 다시 열 수 있어야 한다(👎 신호는 이미 보냈으니 "정정 의견 남기기"로)
+  // 취소해도 다시 열 수 있어야 한다(👎 신호는 이미 보냈으니 "의견 덧붙이기"로)
   await page.locator('textarea:visible').first().press('Escape');
   await expect(page.getByText('어디가 틀렸나요?')).toBeHidden();
-  await page.getByRole('button', { name: '정정 의견 남기기' }).last().click();
+  await page.getByRole('button', { name: '의견 덧붙이기' }).last().click();
   await expect(page.getByText('어디가 틀렸나요?')).toBeVisible();
   await page.locator('textarea:visible').first().fill('14일 이내로 바뀌었습니다');
   await page.getByTitle('정정 접수 (Ctrl+Enter)').click();
   await expect(page.getByText('정정 신고 접수됨')).toBeVisible({ timeout: 120_000 });
   await expect(page.getByText('AI 분석')).toBeVisible();  // 어느 근거·왜·무엇이 틀렸는지 사용자에게도 보여줌
+  // 의견까지 접수했으면 '의견 덧붙이기'는 사라진다(이미 신고했는데 또 하라는 듯 보이지 않게)
+  await expect(page.getByRole('button', { name: '의견 덧붙이기' })).toHaveCount(0);
 
   await ask(page, Q);
   await expect(page.getByText('정정 검토 중').last()).toBeVisible({ timeout: 10_000 });
