@@ -22,6 +22,7 @@ sys.modules["service.policy"] = _policy_pkg
 _policy_pkg.query_type = _load("service.policy.query_type", "service/policy/query_type.py")
 search = _load("service.policy.search", "service/policy/search.py")
 _policy_pkg.search = search
+_policy_pkg.risk = _load("service.policy.risk", "service/policy/risk.py")
 browse = _load("service.policy.browse", "service/policy/browse.py")
 
 
@@ -38,6 +39,8 @@ def _item_row(id_, name="정책", category_path=None, raw_body="본문"):
         "id": id_, "logical_id": id_, "version": 1, "policy_name": name,
         "category_path": category_path or [], "raw_body": raw_body,
         "status": "pending_review", "parse_status": "parsed", "system_key": "s",
+        "review_source": None, "review_rule": None, "review_sample": False,
+        "chunk_count": 1, "unresolved_count": 0, "prior_reject": False,
     }
 
 
@@ -123,7 +126,7 @@ class TestListPolicyItems:
         await browse.list_policy_items("ns", category="1.주문")
 
         call = conn.fetch.call_args_list[0]
-        assert "= ANY(category_path)" in call.args[0]
+        assert "= ANY(p.category_path)" in call.args[0]
         assert call.args[-1] == "1.주문"
 
     @pytest.mark.asyncio
@@ -132,7 +135,7 @@ class TestListPolicyItems:
         await browse.list_policy_items("ns")
 
         call = conn.fetch.call_args_list[0]
-        assert "ANY(category_path)" not in call.args[0]
+        assert "ANY(p.category_path)" not in call.args[0]
         assert "id = ANY" not in call.args[0]
         assert len(call.args) == 2  # sql + ns_id만
 
@@ -145,7 +148,7 @@ class TestListPolicyItems:
 
         call = conn.fetch.call_args_list[0]
         assert "status != 'deprecated'" in call.args[0]
-        assert "rejected" not in call.args[0]
+        assert "rejected" not in call.args[0].rsplit("WHERE", 1)[1]  # 위험도 계산의 이력 조회(action='rejected')는 SELECT 목록에 있음
 
     @pytest.mark.asyncio
     async def test_status_filter_passed_to_query(self, patch_db):
@@ -254,5 +257,5 @@ class TestListPolicyItemsWithQuery:
         await browse.list_policy_items("ns", category="1.주문", q="q")
 
         call = conn.fetch.call_args_list[0]
-        assert "ANY(category_path)" in call.args[0]
+        assert "ANY(p.category_path)" in call.args[0]
         assert "id = ANY" in call.args[0]

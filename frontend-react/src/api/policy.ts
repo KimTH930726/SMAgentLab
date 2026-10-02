@@ -139,15 +139,24 @@ export interface PolicyItem {
   params: PolicyParam[];
   narratives: PolicyChunk[];
   matched_via: string[];
+  /** 위험도(서버가 조회 시 계산하는 결정론적 규칙) + 결정 출처 — 2026-10-01 위험도 기반 검토 큐 */
+  risk_level: RiskLevel | null;
+  risk_reasons: string[];
+  review_source: 'human' | 'auto_rule' | null;
+  review_rule: string | null;
+  review_sample: boolean;
 }
 
+export type RiskLevel = 'high' | 'medium' | 'low';
+
 export async function getPolicyItems(
-  namespace: string, category?: string, q?: string, status?: string,
+  namespace: string, category?: string, q?: string, status?: string, sort?: 'risk',
 ): Promise<PolicyItem[]> {
   const params = new URLSearchParams({ namespace });
   if (category) params.set('category', category);
   if (q) params.set('q', q);
   if (status) params.set('status', status);
+  if (sort) params.set('sort', sort);
   return apiFetch<PolicyItem[]>(`/policy/items?${params.toString()}`);
 }
 
@@ -161,10 +170,60 @@ export async function approvePolicyItem(itemId: number, namespace: string): Prom
   });
 }
 
-export async function rejectPolicyItem(itemId: number, namespace: string): Promise<{ status: string }> {
-  return apiFetch<{ status: string }>(`/policy/items/${itemId}/reject`, {
+/** rule_paused=true면 자동 통과 표본이 반려돼 그 규칙의 자동 통과가 멈춘 것 */
+export async function rejectPolicyItem(itemId: number, namespace: string): Promise<{ status: string; rule_paused?: boolean }> {
+  return apiFetch<{ status: string; rule_paused?: boolean }>(`/policy/items/${itemId}/reject`, {
     method: 'POST',
     body: JSON.stringify({ namespace }),
+  });
+}
+
+// ── 위험도 기반 자동 통과(2026-10-01) — 낮음만 규칙으로 통과, 사람은 위험한 것만 ──
+
+export interface AutoRule { enabled: boolean; paused_at: string | null; paused_reason: string | null }
+
+export interface ReviewSummary {
+  pending: number;
+  /** 사람이 실제로 봐야 할 건수 — 높음 + 중간 + 표본 (+ 규칙이 멈췄으면 낮음) */
+  human_queue: number;
+  queue: { high: number; medium: number; sample: number; low_waiting: number };
+  auto_approved: Record<string, number>;
+  sample_rate: number;
+  rules: Record<string, AutoRule>;
+  rule_active: boolean;
+}
+
+export interface AutoReviewResult {
+  run_id: string | null;
+  dry_run: boolean;
+  pending: number;
+  by_level: Record<RiskLevel, number>;
+  auto_approved: number;
+  sampled: number;
+  human_queue_after: number;
+}
+
+export async function getReviewSummary(namespace: string): Promise<ReviewSummary> {
+  return apiFetch<ReviewSummary>(`/policy/review-summary?namespace=${encodeURIComponent(namespace)}`);
+}
+
+export async function runAutoReview(namespace: string | null, dryRun: boolean): Promise<AutoReviewResult> {
+  return apiFetch<AutoReviewResult>('/policy/auto-review/run', {
+    method: 'POST', body: JSON.stringify({ namespace, dry_run: dryRun }),
+  });
+}
+
+export async function resumeAutoRule(ruleKey: string): Promise<AutoRule> {
+  return apiFetch<AutoRule>(`/policy/auto-review/rules/${encodeURIComponent(ruleKey)}/resume`, { method: 'POST' });
+}
+
+export async function revertAutoReview(scope: { run_id?: string; rule_key?: string; namespace?: string }): Promise<{ reverted: number }> {
+  return apiFetch<{ reverted: number }>('/policy/auto-review/revert', { method: 'POST', body: JSON.stringify(scope) });
+}
+
+export async function revertAutoPolicyItem(itemId: number, namespace: string): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>(`/policy/items/${itemId}/revert-auto`, {
+    method: 'POST', body: JSON.stringify({ namespace }),
   });
 }
 

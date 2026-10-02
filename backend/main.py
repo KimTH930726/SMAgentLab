@@ -1182,6 +1182,56 @@ async def _migrate_knowledge_heading_path(conn) -> None:
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS heading_path TEXT[]")
 
 
+async def _migrate_policy_risk_review(conn) -> None:
+    """정책 승인 대기 큐 위험도 분류 + 자동 통과 (2026-10-01, #59).
+
+    `review_source`로 사람 승인(human)과 규칙 자동 통과(auto_rule)를 구분한다 — `reviewed_by`는 사용자 FK라
+    자동 표시를 담을 수 없어 자동 통과는 NULL로 두고 이 컬럼으로 가린다. `review_sample`은 자동 통과 대상 중
+    사람 확인용으로 남긴 표본(반려가 나오면 그 규칙을 멈추는 근거).
+
+    `policy_review_log`는 append-only 결정 이력 — 승인·반려·자동 통과·되돌리기·규칙 정지를 결정 시점의
+    위험도·근거와 함께 남겨, 나중에 자동 승인 기준을 데이터로 조정한다. 기존엔 reviewed_by/at을 덮어쓰기만
+    해서(재제출 시 NULL로 지움) 이력이 남지 않았다. ops_improvement_item을 재사용하지 않은 이유: status CHECK에
+    자동 값이 없고, `_check_version`이 policy 대상 approved 행을 "정정 유지"로 읽어 재임포트를 막는다.
+    """
+    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS review_source VARCHAR(20)")
+    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS review_rule VARCHAR(40)")
+    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS review_sample BOOLEAN NOT NULL DEFAULT FALSE")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS policy_review_log (
+            id              SERIAL PRIMARY KEY,
+            policy_item_id  INT REFERENCES policy_item(id) ON DELETE SET NULL,
+            logical_id      INT,
+            namespace_id    INT REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            action          VARCHAR(20) NOT NULL CHECK (action IN (
+                                'approved', 'rejected', 'auto_approved', 'sampled', 'auto_reverted',
+                                'resubmitted', 'rule_paused', 'rule_resumed')),
+            actor_user_id   INT REFERENCES ops_user(id) ON DELETE SET NULL,
+            rule_key        VARCHAR(40),
+            risk_level      VARCHAR(10),
+            risk_reasons    JSONB,
+            run_id          VARCHAR(36),
+            note            TEXT,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_policy_review_log_logical ON policy_review_log(logical_id, action)")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_policy_review_log_run ON policy_review_log(run_id) WHERE run_id IS NOT NULL")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_policy_review_log_ns ON policy_review_log(namespace_id, created_at DESC)")
+    # 이력 테이블 이전에 반려된 항목도 "이전에 반려된 항목"(위험 높음)으로 잡히도록 1회 채움 — 멱등(이미 있으면 건너뜀)
+    await conn.execute("""
+        INSERT INTO policy_review_log (policy_item_id, logical_id, namespace_id, action, actor_user_id, note, created_at)
+        SELECT p.id, p.logical_id, p.namespace_id, 'rejected', p.reviewed_by, '이력 도입 전 반려(백필)',
+               COALESCE(p.reviewed_at, p.updated_at)
+        FROM policy_item p
+        WHERE p.status = 'rejected'
+          AND NOT EXISTS (SELECT 1 FROM policy_review_log l WHERE l.policy_item_id = p.id AND l.action = 'rejected')
+    """)
+
+
 async def _migrate_improvement_ledger(conn) -> None:
     """개선 원장 `ops_improvement_item` (2026-10-01, 근거 정정 흐름).
 
@@ -1355,6 +1405,7 @@ async def _run_migrations() -> None:
         await _migrate_knowledge_heading_path(conn)
         await _migrate_drop_dead_schema_2026_09_22(conn)
         await _migrate_improvement_ledger(conn)
+        await _migrate_policy_risk_review(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

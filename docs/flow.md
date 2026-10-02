@@ -661,6 +661,29 @@ resolved_knowledge_id가 설정된 항목은 통계 화면에서 원래의 AI �
 
 ---
 
+## 6-2. 정책 승인 대기 큐 — 위험도 분류 + 자동 통과 (v2.119, 2026-10-01)
+
+"위험한 것만 사람이 본다." 위험도는 저장하지 않고 조회할 때마다 계산(parse_status·청크를 바꾸는 경로가 여럿).
+
+```
+검토대기 항목 → risk.classify (LLM 미사용)
+   높음: parse_status unresolved/partial · 이전 반려(rejected/resubmitted 이력) · 자동 통과를 사람이 되돌림
+   중간: 서술 청크 2개 이상(조건이 쪼개졌을 위험)
+   낮음: 구조화 완료 + 서술 1개 → 규칙 low_risk_v1 후보
+                 ▼
+auto_review.run (관리자 미리보기→실행, 또는 임포트 직후 그 파트에 자동)
+   낮음 중 md5(id) 기준 결정론적 10% → 표본(review_sample, 검토대기 유지)
+   나머지 → active + review_source='auto_rule'(reviewed_by NULL — 사람 승인과 구분)
+   전부 policy_review_log에 등급·근거·run_id 기록, FOR UPDATE SKIP LOCKED로 사람 결정과 경합 방지
+                 ▼
+사람: 검토 큐(위험도순) = 높음 + 중간 + 표본 (+ 규칙 정지 시 낮음)
+   표본 반려 → 규칙 정지(ops_system_config policy_auto_review) → 관리자 확인 후 재개
+   되돌리기: 단건 / 실행(run_id) / 규칙 — 파트 범위로, 되돌린 항목은 이후 위험 높음
+검색: rejected·deprecated만 제외 → 검토대기↔자동 통과 이동은 채팅 결과에 영향 없음
+```
+
+---
+
 ## 7. SSE 스트리밍 응답 흐름 (`/api/chat/stream`)
 
 **asyncio.Task + Queue 디커플링** 방식으로 LLM 생성이 HTTP 연결 수명에서 완전히 분리된다.

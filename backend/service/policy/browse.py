@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from service.policy import risk
 from core.database import get_conn, resolve_namespace_id
 from service.policy import search as search_service
 
@@ -61,12 +62,18 @@ class PolicyItemOut:
     params: list[ParamOut] = field(default_factory=list)
     narratives: list[ChunkOut] = field(default_factory=list)
     matched_via: list[str] = field(default_factory=list)  # q 검색 시에만 채움: "param"/"narrative"
+    risk_level: Optional[str] = None
+    risk_reasons: list[str] = field(default_factory=list)
+    review_source: Optional[str] = None
+    review_rule: Optional[str] = None
+    review_sample: bool = False
 
 
 async def list_policy_items(
     namespace: str, category: Optional[str] = None, q: Optional[str] = None,
-    status: Optional[str] = None,
+    status: Optional[str] = None, sort: Optional[str] = None,
 ) -> list[PolicyItemOut]:
+    """sort='risk'면 위험도 높은 순(높음 → 중간 → 낮음, 같은 등급 안에선 표본 먼저, 그다음 최신) — 검토 큐용."""
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
@@ -90,24 +97,26 @@ async def list_policy_items(
         # 사람이 훑어보는 관리 화면이라 반려 이력도 보여야 한다(검토 UI의 상태 필터로
         # 좁혀 볼 수 있음). deprecated(재업로드로 대체된 옛 버전)만 기본적으로 숨김 —
         # 채팅에 실제로 노출되는 search.py는 별도로 rejected까지 항상 제외한다.
-        clauses = ["namespace_id = $1", "status != 'deprecated'"]
+        clauses = ["p.namespace_id = $1", "p.status != 'deprecated'"]
         args: list = [ns_id]
         if category:
             args.append(category)
-            clauses.append(f"${len(args)} = ANY(category_path)")
+            clauses.append(f"${len(args)} = ANY(p.category_path)")
         if q:
             args.append(list(matched_via.keys()))
-            clauses.append(f"id = ANY(${len(args)})")
+            clauses.append(f"p.id = ANY(${len(args)})")
         if status:
             args.append(status)
-            clauses.append(f"status = ${len(args)}")
+            clauses.append(f"p.status = ${len(args)}")
 
         item_rows = await conn.fetch(
             f"""
-            SELECT id, logical_id, version, policy_name, category_path, raw_body, status, parse_status, system_key
-            FROM policy_item
+            SELECT p.id, p.logical_id, p.version, p.policy_name, p.category_path, p.raw_body, p.status,
+                   p.parse_status, p.system_key, p.review_source, p.review_rule, p.review_sample,
+                   {risk.RISK_FEATURES_SQL}
+            FROM policy_item p
             WHERE {' AND '.join(clauses)}
-            ORDER BY id DESC
+            ORDER BY p.id DESC
             LIMIT {_LIST_LIMIT}
             """,
             *args,
@@ -136,13 +145,19 @@ async def list_policy_items(
             ChunkOut(id=r["id"], chunk_text=r["chunk_text"], chunk_idx=r["chunk_idx"])
         )
 
-    return [
-        PolicyItemOut(
+    out = []
+    for r in item_rows:
+        rk = risk.classify_row(r)
+        out.append(PolicyItemOut(
             item_id=r["id"], logical_id=r["logical_id"], version=r["version"],
             policy_name=r["policy_name"], category_path=list(r["category_path"] or []),
             raw_body=r["raw_body"], status=r["status"], parse_status=r["parse_status"], system_key=r["system_key"],
             params=params_by_item.get(r["id"], []), narratives=chunks_by_item.get(r["id"], []),
             matched_via=sorted(matched_via.get(r["id"], set())),
-        )
-        for r in item_rows
-    ]
+            risk_level=rk.level, risk_reasons=rk.reasons, review_source=r["review_source"],
+            review_rule=r["review_rule"], review_sample=bool(r["review_sample"]),
+        ))
+    if sort == "risk":
+        # 파이썬 정렬은 안정적 — 위 id DESC(최신 먼저)가 같은 등급 안에서 유지된다
+        out.sort(key=lambda o: (risk.LEVEL_ORDER[o.risk_level or "low"], not o.review_sample))
+    return out

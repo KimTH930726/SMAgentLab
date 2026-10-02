@@ -15,34 +15,54 @@
 from __future__ import annotations
 
 from core.database import get_conn, resolve_namespace_id
+from service.policy import auto_review, risk
 
 
-async def _transition(namespace: str, item_id: int, reviewer_id: int, new_status: str) -> None:
+async def _transition(namespace: str, item_id: int, reviewer_id: int, new_status: str) -> dict:
+    """상태 전이 + 결정 이력(2026-10-01). 상태 확인과 변경 사이에 다른 결정(자동 통과 포함)이 끼지 않도록
+    한 트랜잭션에서 행을 잠근다. 사람 결정은 review_source='human'으로 자동 통과와 구분하고, 결정 시점의
+    위험도·근거를 policy_review_log에 남긴다(자동 승인 기준 조정용)."""
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
 
-        row = await conn.fetchrow(
-            "SELECT status FROM policy_item WHERE id = $1 AND namespace_id = $2", item_id, ns_id,
-        )
-        if row is None:
-            raise ValueError(f"정책 항목을 찾을 수 없습니다: item_id={item_id}")
-        if row["status"] != "pending_review":
-            raise ValueError(f"검토 대기 상태가 아닌 항목은 처리할 수 없습니다(현재: {row['status']})")
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                f"""SELECT p.id, p.logical_id, p.namespace_id, p.status, p.parse_status, p.review_sample, p.review_rule,
+                           {risk.RISK_FEATURES_SQL}
+                    FROM policy_item p WHERE p.id = $1 AND p.namespace_id = $2 FOR UPDATE OF p""",
+                item_id, ns_id,
+            )
+            if row is None:
+                raise ValueError(f"정책 항목을 찾을 수 없습니다: item_id={item_id}")
+            if row["status"] != "pending_review":
+                raise ValueError(f"검토 대기 상태가 아닌 항목은 처리할 수 없습니다(현재: {row['status']})")
 
-        await conn.execute(
-            """UPDATE policy_item SET status = $1, reviewed_at = NOW(), reviewed_by = $2, updated_at = NOW()
-               WHERE id = $3""",
-            new_status, reviewer_id, item_id,
-        )
+            await conn.execute(
+                """UPDATE policy_item SET status = $1, reviewed_at = NOW(), reviewed_by = $2, review_source = 'human',
+                   updated_at = NOW() WHERE id = $3""",
+                new_status, reviewer_id, item_id,
+            )
+            rk = risk.classify_row(row)
+            row = dict(row)
+            snap = {"id": row["id"], "logical_id": row["logical_id"], "namespace_id": row["namespace_id"],
+                    "rule_key": row["review_rule"] if row["review_sample"] else rk.rule_key,
+                    "risk_level": rk.level, "risk_reasons": rk.reasons}
+            action = "approved" if new_status == "active" else "rejected"
+            await auto_review.log(conn, [snap], action, actor_id=reviewer_id,
+                                  note="자동 통과 표본 확인" if row["review_sample"] else None)
+            paused = False
+            if action == "rejected":
+                paused = await auto_review.on_human_reject(conn, row, rk, reviewer_id)
+    return {"rule_paused": paused}
 
 
-async def approve_item(namespace: str, item_id: int, reviewer_id: int) -> None:
+async def approve_item(namespace: str, item_id: int, reviewer_id: int) -> dict:
     """검토 대기(pending_review) 항목을 승인 — status='active'."""
-    await _transition(namespace, item_id, reviewer_id, "active")
+    return await _transition(namespace, item_id, reviewer_id, "active")
 
 
-async def reject_item(namespace: str, item_id: int, reviewer_id: int) -> None:
-    """검토 대기(pending_review) 항목을 반려 — status='rejected'."""
-    await _transition(namespace, item_id, reviewer_id, "rejected")
+async def reject_item(namespace: str, item_id: int, reviewer_id: int) -> dict:
+    """검토 대기(pending_review) 항목을 반려 — status='rejected'. 자동 통과 표본이었다면 그 규칙을 멈춘다."""
+    return await _transition(namespace, item_id, reviewer_id, "rejected")

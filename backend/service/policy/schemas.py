@@ -26,6 +26,7 @@ class SheetSummaryOut(BaseModel):
 class ImportSummaryOut(BaseModel):
     source_file: str
     sheets: list[SheetSummaryOut]
+    auto_review: Optional[dict] = None  # 임포트 직후 위험도 낮음 자동 통과 결과(규칙 꺼짐이면 None)
 
 
 class ParamHitOut(BaseModel):
@@ -106,6 +107,17 @@ class ItemActionRequest(BaseModel):
     namespace: str
 
 
+class AutoReviewRunRequest(BaseModel):
+    namespace: Optional[str] = None  # 없으면 전체 파트
+    dry_run: bool = True             # 기본은 미리보기 — 실제 실행은 명시적으로
+
+
+class AutoReviewRevertRequest(BaseModel):
+    run_id: Optional[str] = None
+    rule_key: Optional[str] = None
+    namespace: Optional[str] = None  # 주면 그 파트만 — 화면은 항상 현재 파트로 보낸다
+
+
 class UpdateParamRequest(BaseModel):
     namespace: str
     name: str
@@ -162,6 +174,12 @@ class PolicyItemOut(BaseModel):
     params: list[ParamOut]
     narratives: list[ChunkOut]
     matched_via: list[str] = []
+    # 위험도(조회 시 계산, risk.py) + 결정 출처 — 검토 큐 정렬·배지용
+    risk_level: Optional[str] = None
+    risk_reasons: list[str] = []
+    review_source: Optional[str] = None
+    review_rule: Optional[str] = None
+    review_sample: bool = False
 
 
 class Track2TypeResultOut(BaseModel):

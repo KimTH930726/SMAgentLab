@@ -77,6 +77,8 @@
 
 | 58 | `ops_improvement_item` (신규) | `CREATE TABLE IF NOT EXISTS` + 인덱스 4개(유니크 부분 `uq_improvement_pending_correction` = 같은 신고자·같은 근거의 pending 정정 1건) | 개선 원장 — 근거 정정 흐름. 정정 의견·원문 스냅샷·AI 수정안을 승인 전까지 여기에만 둬 검색 미노출을 구조적으로 보장. 승인=버전 교체(`applied_target_id`), 반려 사유·처리자 기록. `candidates`(그 답변의 근거 후보, 담당자 대상 변경용)·`ai_verdict`("답변 틀림" AI 판정·이유·변경 이력) JSONB. `_migrate_improvement_ledger` (v2.118) |
 
+| 59 | `policy_item`, `policy_review_log` (신규) | `ADD COLUMN IF NOT EXISTS review_source VARCHAR(20)`·`review_rule VARCHAR(40)`·`review_sample BOOLEAN NOT NULL DEFAULT FALSE` + `CREATE TABLE IF NOT EXISTS policy_review_log`(action CHECK: approved/rejected/auto_approved/sampled/auto_reverted/resubmitted/rule_paused/rule_resumed) + 인덱스 3개 + 기존 rejected 항목 이력 1회 백필 | 정책 승인 대기 큐 위험도 분류·자동 통과. `review_source`로 사람 승인(human)과 규칙 자동 통과(auto_rule) 구분(`reviewed_by`는 사용자 FK라 자동 표시 불가). 결정 이력은 append-only로 등급·근거 스냅샷과 함께 — 자동 승인 기준 조정용. `_migrate_policy_risk_review` (v2.119) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.

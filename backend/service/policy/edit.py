@@ -23,8 +23,15 @@ async def _resubmit_for_review(conn, item_id: int) -> None:
     reviewed_at/reviewed_by를 그대로 남겨두면, 나중에 이 값을 "현재 상태에 대한 검토
     기록"으로 잘못 읽었을 때 이미 검토 끝난 것처럼 보이는 오해의 소지가 있다."""
     await conn.execute(
-        """UPDATE policy_item SET status = 'pending_review', reviewed_at = NULL,
-           reviewed_by = NULL, updated_at = NOW() WHERE id = $1""",
+        """UPDATE policy_item SET status = 'pending_review', reviewed_at = NULL, reviewed_by = NULL,
+           review_source = NULL, review_rule = NULL, review_sample = FALSE, updated_at = NOW() WHERE id = $1""",
+        item_id,
+    )
+    # 결정 기록은 지우지 않고 이력에 "재제출"로 남긴다(2026-10-01) — 이전 반려가 이력에 있어야 위험도가
+    # "이전에 반려된 항목"(높음, 자동 통과 금지)으로 잡힌다(risk.py).
+    await conn.execute(
+        """INSERT INTO policy_review_log (policy_item_id, logical_id, namespace_id, action, note)
+           SELECT id, logical_id, namespace_id, 'resubmitted', '반려 후 수정' FROM policy_item WHERE id = $1""",
         item_id,
     )
 

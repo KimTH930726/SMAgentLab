@@ -6,7 +6,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
-from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review, edit, decompose
+from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review, edit, decompose, auto_review
+from service.policy.schemas import AutoReviewRevertRequest, AutoReviewRunRequest
 from service.policy.schemas import (
     ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
     Track2RunHistoryOut, PipelineStatsOut, PromoteSegmentRequest, PromoteSegmentOut,
@@ -52,9 +53,13 @@ async def import_policy_excel(
             status_code=400,
             detail=f"정책서 임포트 실패: {e} — 실패한 시트는 반영되지 않았습니다. 같은 파일을 다시 올리면 이어서 처리됩니다.",
         )
+    # 재임포트는 바뀐 행을 새 버전(pending_review)으로 다시 쌓는다 — 규칙이 켜져 있으면 그 파트에 바로 자동 통과를
+    # 적용해 큐가 다시 차지 않게 한다(실패해도 임포트는 성공, auto_review.run_after_import 참고)
+    auto = await auto_review.run_after_import(namespace)
     return ImportSummaryOut(
         source_file=result.source_file,
         sheets=[s.__dict__ for s in result.sheets],
+        auto_review=auto,
     )
 
 
@@ -68,8 +73,8 @@ async def search_policy(
 ):
     """정책 데이터 검색 — 파라미터(RDB 정확 조회)와 서술(벡터 검색) 두 갈래를 함께 반환한다.
 
-    v1엔 검토/승인 화면이 없어(§2-4) status='pending_review'인 데이터도 검색 대상에
-    포함한다 — 응답의 `status` 필드로 미검토 여부를 구분할 수 있다.
+    검토대기(pending_review)도 검색 대상에 포함한다(WBS 2-1 결정 — 반려·폐기만 제외). 그래서 위험도 기반
+    자동 통과(auto_review.py)로 검토대기↔승인이 바뀌어도 검색 결과는 같다. 응답의 `status`로 미검토 여부 구분.
     """
     await check_namespace_ownership(namespace, user)
     try:
@@ -221,10 +226,59 @@ async def reject_policy_item(
     """검토 대기 정책 항목을 반려 — status: pending_review → rejected(review.py 참고)."""
     await check_namespace_ownership(body.namespace, user)
     try:
-        await review.reject_item(body.namespace, item_id, user["id"])
+        result = await review.reject_item(body.namespace, item_id, user["id"])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "rejected"}
+    # 자동 통과 표본이 반려되면 그 규칙이 멈춘다 — 화면이 바로 알리도록 같이 돌려준다
+    return {"status": "rejected", **result}
+
+
+# ── 위험도 기반 자동 통과(2026-10-01, auto_review.py) ──────────────────────────
+
+@router.get("/review-summary")
+async def policy_review_summary(namespace: Optional[str] = Query(default=None), user: dict = Depends(get_current_user)):
+    """사람이 실제로 봐야 할 큐 크기(높음·중간·표본) + 자동 통과 누계 + 규칙 상태."""
+    if namespace:
+        await check_namespace_ownership(namespace, user)
+    elif user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="전체 요약은 관리자만 볼 수 있습니다.")
+    return await auto_review.summary(namespace)
+
+
+@router.post("/auto-review/run")
+async def run_policy_auto_review(body: AutoReviewRunRequest, admin: dict = Depends(get_current_admin)):
+    """낮음 등급 자동 통과 실행(dry_run=true면 건수 미리보기만). 표본은 사람 큐에 남긴다."""
+    return await auto_review.run(body.namespace, actor_id=admin["id"], dry_run=body.dry_run)
+
+
+@router.post("/auto-review/rules/{rule_key}/resume")
+async def resume_policy_auto_rule(rule_key: str, admin: dict = Depends(get_current_admin)):
+    """표본 반려로 멈춘 규칙을 확인 후 재개."""
+    try:
+        return await auto_review.resume_rule(rule_key, admin["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/auto-review/revert")
+async def revert_policy_auto_review(body: AutoReviewRevertRequest, admin: dict = Depends(get_current_admin)):
+    """한 번의 실행 또는 한 규칙으로 자동 통과된 항목을 검토대기로 일괄 되돌림."""
+    try:
+        return {"reverted": await auto_review.revert_bulk(run_id=body.run_id, rule_key=body.rule_key,
+                                                          actor_id=admin["id"], namespace=body.namespace)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/items/{item_id}/revert-auto")
+async def revert_auto_policy_item(item_id: int, body: ItemActionRequest, user: dict = Depends(get_current_user)):
+    """자동 통과된 항목 하나를 검토대기로 되돌림(승인 권한과 동일)."""
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        await auto_review.revert_item(body.namespace, item_id, user["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "pending_review"}
 
 
 @router.get("/items", response_model=list[PolicyItemOut])
@@ -233,6 +287,7 @@ async def list_policy_items(
     category: Optional[str] = Query(default=None),
     q: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
+    sort: Optional[str] = Query(default=None, pattern="^risk$"),
     user: dict = Depends(get_current_user),
 ):
     """정책 항목을 item 단위로 목록 조회 — 각 item에 실제로 달린 param(RDB)/narrative(벡터)
@@ -242,7 +297,7 @@ async def list_policy_items(
     """
     await check_namespace_ownership(namespace, user)
     try:
-        items = await browse.list_policy_items(namespace, category, q, status)
+        items = await browse.list_policy_items(namespace, category, q, status, sort)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return [PolicyItemOut(**asdict(i)) for i in items]

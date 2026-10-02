@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 
 // 이 테스트가 존재하는 이유(2026-09-23): 정책 검토 UI(승인/반려 + 반려 항목 수정→재검토
 // 유도)는 이번 세션에 새로 만든 기능이고, 실사용 중 "반려하면 그냥 버려지는데?"라는 지적으로
@@ -13,6 +14,21 @@ import { test, expect } from '@playwright/test';
 const ADMIN_USER = 'admin';
 const ADMIN_PASS = '1111';
 const NAMESPACE = '딜리버스 DB';
+
+// 결정 이력(policy_review_log, 2026-10-01) — 이 테스트의 반려·재제출은 실제 정책 항목에 대한 "가짜" 결정이라
+// 이력에 남기면 그 항목이 영구히 "이전에 반려된 항목"(위험 높음)이 되고 자동 승인 기준 데이터가 오염된다 — 지운다.
+const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'psql', '-U', 'ops', '-d', 'opsdb', '-tA', '-c', sql],
+  { encoding: 'utf-8' }).trim();
+let logIdBefore = 0;
+test.beforeAll(() => { logIdBefore = Number(psql('SELECT COALESCE(MAX(id), 0) FROM policy_review_log')); });
+let rejectedItemId = 0;
+test.afterAll(() => {
+  psql(`DELETE FROM policy_review_log WHERE id > ${logIdBefore} AND action IN ('rejected', 'resubmitted')`);
+  // 중간에 실패해도 실제 정책 항목이 반려(검색 제외)로 남지 않게 — 정상 종료면 이미 검토대기라 영향 없음
+  if (rejectedItemId) {
+    psql(`UPDATE policy_item SET status='pending_review', reviewed_by=NULL, reviewed_at=NULL, review_source=NULL WHERE id=${rejectedItemId} AND status='rejected'`);
+  }
+});
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/login');
@@ -49,8 +65,10 @@ test('정책 항목 반려 → 편집 아이콘 노출 → 저장 시 검토대�
   // 없는 항목("이 항목엔 param/narrative가 없습니다")은 편집 아이콘 자체가 안 뜬다
   // (/code-review 지적, 2026-09-23: 첫 항목이 우연히 그런 케이스면 테스트가 기능과
   // 무관하게 실패함).
+  // 파라미터가 있는 항목으로 — 아래 "항목명" 라벨은 파라미터 편집 폼의 것이다. 검토대기가 위험도 순으로 정렬된 뒤
+  // (2026-10-01) 맨 위가 서술만 있는 위험 높음 항목이 되자, 첫 연필이 서술 편집을 열어 라벨 확인이 깨졌다.
   const editableRow = page.locator('.space-y-2 > div.bg-slate-800').filter({
-    has: page.locator('[title="RDB 정확조회 파라미터"], [title="벡터 검색 서술 청크"]'),
+    has: page.locator('[title="RDB 정확조회 파라미터"]'),
   }).first();
   await expect(editableRow).toBeVisible({ timeout: 10_000 });
   const policyName = (await editableRow.locator('span.font-medium').first().textContent())?.trim() ?? '';
@@ -63,7 +81,7 @@ test('정책 항목 반려 → 편집 아이콘 노출 → 저장 시 검토대�
   page.once('dialog', async (d) => { dialogMessage = d.message(); await d.accept(); });
   const rejectResponse = page.waitForResponse((r) => /\/api\/policy\/items\/\d+\/reject/.test(r.url()));
   await editableRow.locator('button[title*="반려"]').click();
-  await rejectResponse;
+  rejectedItemId = Number((await rejectResponse).url().match(/items\/(\d+)\/reject/)?.[1] ?? 0);
   expect(dialogMessage).toContain('다시 검토대기로 되돌릴 수 있습니다');
 
   // 반려됨 필터로 좁혀서 방금 그 항목을 다시 찾는다

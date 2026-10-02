@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp, Database, Sparkles, Search, X, Check, Pencil } from 'lucide-react';
-import { getPolicyItems, approvePolicyItem, rejectPolicyItem, updatePolicyParam, updatePolicyNarrative } from '../../api/policy';
+import { ChevronDown, ChevronUp, Database, Sparkles, Search, X, Check, Pencil, RotateCcw } from 'lucide-react';
+import {
+  getPolicyItems, approvePolicyItem, rejectPolicyItem, updatePolicyParam, updatePolicyNarrative, revertAutoPolicyItem,
+  type PolicyItem, type RiskLevel,
+} from '../../api/policy';
+import { PolicyReviewQueuePanel } from './PolicyReviewQueuePanel';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
@@ -17,6 +21,27 @@ const STATUS_BADGE_COLOR: Record<string, 'yellow' | 'emerald' | 'rose' | 'slate'
   active: 'emerald',
   rejected: 'rose',
 };
+
+// 위험도(서버 risk.py) — 높음/중간은 사람이 보고, 낮음은 자동 통과 후보
+const RISK_LABEL: Record<RiskLevel, string> = { high: '위험 높음', medium: '위험 중간', low: '위험 낮음' };
+const RISK_CLASS: Record<RiskLevel, string> = {
+  high: 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-700/50',
+  medium: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700/50',
+  low: 'border-slate-600 text-slate-400',
+};
+
+function StatusBadge({ item }: { item: PolicyItem }) {
+  // 자동 통과는 사람 승인과 다른 표시 — 되돌릴 수 있고, 나중에 기준 조정의 대상
+  if (item.status === 'active' && item.review_source === 'auto_rule') {
+    return (
+      <span className="text-[10px] px-1.5 py-0.5 rounded border bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-900/40 dark:text-cyan-300 dark:border-cyan-700/50"
+        title={`위험도 낮음 규칙(${item.review_rule})으로 자동 통과 — 사람이 승인한 것이 아닙니다`}>
+        자동 통과
+      </span>
+    );
+  }
+  return <Badge color={STATUS_BADGE_COLOR[item.status] ?? 'slate'}>{STATUS_LABEL[item.status] ?? item.status}</Badge>;
+}
 
 /**
  * 정책 항목(policy_item) 브라우저.
@@ -44,7 +69,9 @@ export function PolicyItemBrowser() {
 
   const { data: items = [], isLoading, error } = useQuery({
     queryKey: ['policy-items', selectedNs, categoryFilter, q, statusFilter],
-    queryFn: () => getPolicyItems(selectedNs, categoryFilter || undefined, q || undefined, statusFilter || undefined),
+    // 검토대기는 위험도 순(높음 → 중간 → 표본 → 낮음) — 사람이 위에서부터 보면 되게
+    queryFn: () => getPolicyItems(selectedNs, categoryFilter || undefined, q || undefined, statusFilter || undefined,
+      statusFilter === 'pending_review' ? 'risk' : undefined),
     enabled: !!selectedNs,
     staleTime: 15_000,
     refetchOnMount: 'always',
@@ -63,6 +90,7 @@ export function PolicyItemBrowser() {
   const invalidateItems = () => {
     queryClient.invalidateQueries({ queryKey: ['policy-items', selectedNs] });
     queryClient.invalidateQueries({ queryKey: ['policy-items-all', selectedNs] });
+    queryClient.invalidateQueries({ queryKey: ['policy-review-summary', selectedNs] });
   };
 
   const approveMutation = useMutation({
@@ -72,6 +100,16 @@ export function PolicyItemBrowser() {
   });
   const rejectMutation = useMutation({
     mutationFn: (itemId: number) => rejectPolicyItem(itemId, selectedNs),
+    onSuccess: (res) => {
+      invalidateItems();
+      if (res.rule_paused) {
+        alert('자동 통과 표본이 반려되어, 같은 규칙의 자동 통과를 멈췄습니다.\n상단 요약에서 이미 자동 통과된 항목을 되돌리거나 확인 후 재개할 수 있습니다.');
+      }
+    },
+    onError: (err: Error) => alert(err.message),
+  });
+  const revertMutation = useMutation({
+    mutationFn: (itemId: number) => revertAutoPolicyItem(itemId, selectedNs),
     onSuccess: invalidateItems,
     onError: (err: Error) => alert(err.message),
   });
@@ -119,6 +157,9 @@ export function PolicyItemBrowser() {
         지금까지 임포트된 정책 항목을 전체 목록으로 훑어봅니다. 항목을 펼치면 파라미터(RDB 정확
         조회)와 서술(벡터 검색)이 각각 어떻게 저장돼 있는지 확인할 수 있습니다.
       </p>
+      {selectedNs && (
+        <PolicyReviewQueuePanel namespace={selectedNs} onShowQueue={() => { setStatusFilter('pending_review'); setQ(''); setQInput(''); }} />
+      )}
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
@@ -220,10 +261,33 @@ export function PolicyItemBrowser() {
                     <Sparkles className="w-3.5 h-3.5" />{item.narratives.length}
                   </span>
                 )}
-                {item.parse_status !== 'parsed' && (
-                  <Badge color="amber">{item.parse_status}</Badge>
+                {item.status === 'pending_review' && item.review_sample && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-700/50"
+                    title="자동 통과 대상 중 사람이 확인하도록 남긴 표본 — 반려하면 같은 규칙의 자동 통과가 멈춥니다">
+                    표본 확인
+                  </span>
                 )}
-                <Badge color={STATUS_BADGE_COLOR[item.status] ?? 'slate'}>{STATUS_LABEL[item.status] ?? item.status}</Badge>
+                {item.status === 'pending_review' && item.risk_level && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${RISK_CLASS[item.risk_level]}`}
+                    title={item.risk_reasons.join('\n')}>
+                    {RISK_LABEL[item.risk_level]}
+                  </span>
+                )}
+                <StatusBadge item={item} />
+                {canModifyNs && item.status === 'active' && item.review_source === 'auto_rule' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm(`"${item.policy_name}"의 자동 통과를 되돌려 검토대기로 보낼까요?`)) revertMutation.mutate(item.item_id);
+                    }}
+                    disabled={revertMutation.isPending && revertMutation.variables === item.item_id}
+                    title="자동 통과 되돌리기 — 검토대기로 보내 사람이 확인(검색 결과는 바뀌지 않음)"
+                    className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 {canModifyNs && item.status === 'pending_review' && (
                   <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                     <button
@@ -264,6 +328,16 @@ export function PolicyItemBrowser() {
 
               {expandedId === item.item_id && (
                 <div className="border-t border-slate-700 px-4 py-4 space-y-4">
+                  {item.status === 'pending_review' && item.risk_reasons.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-slate-400 mb-1">
+                        왜 {item.risk_level ? RISK_LABEL[item.risk_level] : ''}인가
+                      </p>
+                      <ul className="text-xs text-slate-400 list-disc pl-4 space-y-0.5">
+                        {item.risk_reasons.map((r) => <li key={r}>{r}</li>)}
+                      </ul>
+                    </div>
+                  )}
                   <div>
                     <p className="text-xs font-medium text-slate-400 mb-2">원문</p>
                     <div className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
