@@ -261,7 +261,12 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
                   {proposedMarked ? 'AI 검토 초안 — 의견이 없어 값은 그대로, 의심 부분에 【확인 필요】 표시'
                     : item.user_input && item.kind !== 'search_noise' ? '사용자 입력으로 정리된 수정안' : item.proposed ? 'AI 수정안(추정 — 사용자 의견 없음)' : '수정안'}
                 </p>
-                {item.proposed ? (
+                {/* 만드는 동안 "의견이 없어요" 안내가 그대로 남아 멈춘 것처럼 보였다(2026-10-07 리허설) — 진행 중 표시 */}
+                {retarget.isPending ? (
+                  <p className="text-xs text-indigo-600 dark:text-indigo-400 border border-dashed border-slate-700 rounded-lg p-3 animate-pulse">
+                    AI가 {item.user_input ? '수정안' : '검토 초안'}을 만드는 중… 사내 AI라 30초~2분 걸려요. 창을 닫지 마세요.
+                  </p>
+                ) : item.proposed ? (
                   <pre className="whitespace-pre-wrap text-xs text-slate-200 bg-slate-900/60 border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3 max-h-80 overflow-y-auto font-sans">
                     {fields.map((f) => (item.proposed?.[f.key] ? `${fields.length > 1 ? `[${f.label}] ` : ''}${item.proposed[f.key]}` : null)).filter(Boolean).join('\n\n')}
                   </pre>
