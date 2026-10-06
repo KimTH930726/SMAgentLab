@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import { List, FileWarning } from 'lucide-react';
+import { List, FileWarning, Upload } from 'lucide-react';
 import { PolicyItemBrowser } from './PolicyItemBrowser';
 import { PolicyUnresolvedReport } from './PolicyUnresolvedReport';
+import { PolicyImportPanel } from './PolicyImportPanel';
 
 /**
  * 정책서 관련 화면들을 하나의 "정책" 대분류 탭 아래 서브탭으로 묶는다(2026-09-04) —
@@ -16,11 +17,12 @@ import { PolicyUnresolvedReport } from './PolicyUnresolvedReport';
  * 최상위 "실험실" 탭(ExperimentLab)으로 통합 — 둘 다 "질의→검색결과→유사도" 축이라는
  * 지적.
  */
-type PolicySubTab = 'items' | 'unresolved';
+type PolicySubTab = 'items' | 'unresolved' | 'import';
 
 const SUB_TABS: { id: PolicySubTab; label: string; icon: React.ReactNode }[] = [
   { id: 'items', label: '항목 브라우저', icon: <List className="w-4 h-4" /> },
   { id: 'unresolved', label: '미분류 집계', icon: <FileWarning className="w-4 h-4" /> },
+  { id: 'import', label: '정책서 올리기', icon: <Upload className="w-4 h-4" /> },
 ];
 
 export function PolicyPanel() {
@@ -50,6 +52,7 @@ export function PolicyPanel() {
 
       {subTab === 'items' && <PolicyItemBrowser />}
       {subTab === 'unresolved' && <PolicyUnresolvedReport />}
+      {subTab === 'import' && <PolicyImportPanel onGoReview={() => setSubTab('items')} />}
     </div>
   );
 }

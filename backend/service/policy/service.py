@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
-from service.policy import excel_parser, decompose
+from service.policy import excel_parser, decompose, json_format
 from agents.knowledge_rag.knowledge.service import create_glossary
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,8 @@ class SheetSummary:
     matched_by_body: int = 0     # 분류 경로·정책명이 바뀌었지만 본문이 같아 같은 정책으로 이은 행
     duplicate_keys: int = 0      # 엑셀 안에 같은 식별키(분류 경로+정책명)가 또 나와 신규로 넣은 행
     skip_reason: str | None = None
+    columns: dict | None = None  # 어느 엑셀 칸을 어디로 읽었는지(엑셀 업로드일 때)
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -92,6 +94,7 @@ class ImportSummary:
     source_file: str
     sheets: list[SheetSummary] = field(default_factory=list)
     missing_marked: int = 0      # 이번 파일의 정책 시트에서 사라져 "원본에서 사라짐"으로 검토 큐에 올린 항목
+    warnings: list[str] = field(default_factory=list)  # 파일 단위 경고(JSON의 모르는 항목 무시 등) — 반영은 됐음
 
 
 def _norm(text: str | None) -> str:
@@ -370,15 +373,30 @@ async def _ingest_glossary_row(
 async def import_excel(
     namespace: str, system_key: str, filename: str, file_bytes: bytes, *, force_reprocess: bool = False,
 ) -> ImportSummary:
-    """force_reprocess=True면 원본·파이프라인 버전이 같아도 모든 정책 행을 다시 분해한다(재정제 후
+    """정책서 임포트 — 확장자로 엑셀(.xlsx)·표준 JSON(.json, `json_format`)을 가린다. 이후 단계는 같다.
+    force_reprocess=True면 원본·파이프라인 버전이 같아도 모든 정책 행을 다시 분해한다(재정제 후
     같은 파일로 전체를 다시 돌리고 싶을 때). 결과는 평소처럼 새 버전 INSERT + 이전 버전 deprecated."""
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
     if ns_id is None:
         raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
 
-    sheets = excel_parser.parse_workbook(file_bytes)
-    result = ImportSummary(source_file=filename)
+    # 표준 입력은 JSON(사내 문서 보안 암호화로 서버가 엑셀을 못 여는 경우가 있어 2026-10-06 추가). 엑셀도 계속 받는다.
+    check_missing = True
+    if filename.lower().endswith(".json"):
+        sheets, source_name, file_warnings = json_format.parse_policy_json(file_bytes)
+        # source_name은 파일 안에 적힌 값이라 그대로 믿으면 다른 엑셀의 정책까지 "사라짐"으로 표시할 수 있다(/code-review) —
+        # 올린 파일 이름과 같은 원본(확장자만 다름)일 때만 "사라진 정책" 판단을 하고, 다르면 그 판단만 건너뛰고 알린다
+        upload_stem = filename.rsplit(".", 1)[0]
+        if source_name and source_name.rsplit(".", 1)[0] != upload_stem:
+            check_missing = False
+            file_warnings = [*file_warnings, (
+                f"파일 안의 원본 이름('{source_name}')이 올린 파일 이름('{filename}')과 달라, 엑셀에서 사라진 정책 확인은 "
+                "건너뛰었습니다 — 변환기가 만든 파일 이름 그대로 올리면 확인합니다.")]
+        filename = source_name or filename
+    else:
+        sheets, file_warnings = excel_parser.parse_workbook(file_bytes), []
+    result = ImportSummary(source_file=filename, warnings=list(file_warnings))
     async with get_conn() as conn:
         matcher = await _PolicyMatcher.load(conn, ns_id)
     imported_policy_sheets: set[str] = set()
@@ -387,7 +405,8 @@ async def import_excel(
                                  for i, row in enumerate(sh.policy_rows)])
 
     for sheet in sheets:
-        summary = SheetSummary(sheet_name=sheet.sheet_name, kind=sheet.kind, skip_reason=sheet.skip_reason)
+        summary = SheetSummary(sheet_name=sheet.sheet_name, kind=sheet.kind, skip_reason=sheet.skip_reason,
+                               columns=sheet.columns, warnings=list(sheet.warnings))
         if sheet.kind == "glossary":
             async with get_conn() as conn:
                 for row in sheet.glossary_rows:
@@ -469,7 +488,7 @@ async def import_excel(
     # 원본에서 사라진 정책 → 자동 폐기하지 않고 검토 큐로(사용자 결정 2026-10-06). active였으면 pending_review로 되돌려
     # 큐에 올린다 — 검색은 pending_review도 포함이라 담당자가 결정하기 전까진 답변이 그대로다(위험도 "높음" 사유로 표시,
     # 반려 = 폐기 / 승인 = 유지). 모든 시트가 성공한 뒤에만(중간에 실패하면 여기까지 안 옴).
-    missing_ids = matcher.missing(imported_policy_sheets, filename)
+    missing_ids = matcher.missing(imported_policy_sheets, filename) if check_missing else []
     if missing_ids:
         async with get_conn() as conn:
             res = await conn.execute(

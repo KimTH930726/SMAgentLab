@@ -24,12 +24,15 @@ class SheetSummaryOut(BaseModel):
     matched_by_body: int = 0
     duplicate_keys: int = 0
     skip_reason: Optional[str] = None
+    columns: Optional[dict] = None
+    warnings: list[str] = []
 
 
 class ImportSummaryOut(BaseModel):
     source_file: str
     sheets: list[SheetSummaryOut]
     missing_marked: int = 0
+    warnings: list[str] = []
     auto_review: Optional[dict] = None  # 임포트 직후 위험도 낮음 자동 통과 결과(규칙 꺼짐이면 None)
 
 

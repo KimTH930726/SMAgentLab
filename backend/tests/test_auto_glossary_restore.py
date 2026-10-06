@@ -4,6 +4,7 @@
 안에만 남아있던 _run_auto_glossary 호출을, 실제로 살아있는 등록 경로(POST /api/knowledge,
 POST /api/knowledge/bulk)에 다시 연결했다 — 그 연결 자체가 살아있는지 확인한다(실 LLM
 추출 품질은 scripts/verify_auto_glossary.py류 실 DB 스크립트로 별도 확인함)."""
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,8 +24,19 @@ class TestAutoGlossaryWiredIntoLiveRoutes:
         with patch("agents.knowledge_rag.knowledge.router.check_namespace_ownership", AsyncMock()), \
              patch("agents.knowledge_rag.knowledge.router.service.create_knowledge", AsyncMock(return_value=fake_row)), \
              patch("agents.knowledge_rag.knowledge.router._run_auto_glossary", AsyncMock(return_value=2)) as mock_glossary:
-            await add_knowledge(body, user=_FAKE_USER)
-            mock_glossary.assert_awaited_once()
+            # 2026-10-06: 용어 추출은 백그라운드 — 응답은 LLM을 기다리지 않는다(사내 LLM 지연 시 등록 1건 89초 실측)
+            gate = asyncio.Event()
+
+            async def slow(*a, **k):
+                await gate.wait()   # LLM이 안 끝나도
+                return 2
+            mock_glossary.side_effect = slow
+            row = await asyncio.wait_for(add_knowledge(body, user=_FAKE_USER), timeout=1)   # 응답은 바로
+            assert row == fake_row
+            gate.set()
+            from agents.knowledge_rag.knowledge import service as ksvc
+            await asyncio.wait_for(asyncio.gather(*list(ksvc._background_tasks)), timeout=2)   # 백그라운드 끝까지 기다림
+            mock_glossary.assert_awaited_once()   # 추출은 여전히 실행된다
             args = mock_glossary.await_args.args
             assert args[0] == "test-ns"
             assert args[1] == body.content

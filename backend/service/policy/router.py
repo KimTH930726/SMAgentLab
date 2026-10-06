@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
-from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review, edit, decompose, auto_review
+from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review, edit, decompose, auto_review, json_format
 from service.policy.schemas import AutoReviewRevertRequest, AutoReviewRunRequest
 from service.policy.schemas import (
     ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
@@ -39,11 +39,17 @@ async def import_policy_excel(
     않고 deprecated로 보존한다(docs/policy-doc-pipeline-plan.md §2-1).
     """
     await check_namespace_ownership(namespace, user)
+    if reprocess_all and user.get("role") != "admin":
+        # 전 항목을 다시 AI로 분해해 새 버전으로 넣는다(수십 분 + 검토 큐 재충전) — 화면처럼 서버도 관리자만(/code-review)
+        raise HTTPException(status_code=403, detail="'전체 다시 분해'는 관리자만 할 수 있습니다. 체크를 끄고 다시 올려 주세요.")
     try:
         raw = await file.read()
         result = await service.import_excel(
             namespace, system_key, file.filename or "unknown.xlsx", raw, force_reprocess=reprocess_all,
         )
+    except json_format.PolicyJsonError as e:
+        # 사용자가 바로 고칠 수 있게 "어디 / 무엇이 문제 / 어떻게 고치나" 목록 그대로(화면이 표로 보여 줌)
+        raise HTTPException(status_code=400, detail=e.detail())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -60,6 +66,7 @@ async def import_policy_excel(
         source_file=result.source_file,
         sheets=[s.__dict__ for s in result.sheets],
         missing_marked=result.missing_marked,
+        warnings=result.warnings,
         auto_review=auto,
     )
 

@@ -343,3 +343,40 @@ export async function getTrack2Axes(): Promise<Track2Axis[]> {
 // "재사용 가능하니 유지"로 의도적으로 남겼지만, 그 화면만 쓰던 이 프론트 래퍼는 정리
 // 대상에서 빠진 채 고아로 남아있었다(2026-09-24 정리). 다시 필요해지면
 // docs/architecture.md v2.77 항목과 git 이력(001aa4c) 참고해 복원.
+
+
+// 정책서 올리기(2026-10-06) — 표준 JSON(권장) 또는 엑셀. 같은 정책은 식별키로 찾고 사라진 정책은 검토 큐로(v2.123)
+export interface PolicyImportSheet {
+  sheet_name: string;
+  kind: 'policy' | 'glossary' | 'unknown';
+  created_items: number;
+  new_versions: number;
+  unchanged_skipped: number;
+  moved: number;
+  matched_by_body: number;
+  duplicate_keys: number;
+  glossary_added: number;
+  glossary_duplicate_skipped: number;
+  skip_reason: string | null;
+  columns: { 정책명: string; 분류: string[]; 본문: string | null; 비고: string | null } | null;
+  warnings: string[];
+}
+
+/** 업로드 실패 시 서버가 주는 "어디 / 무엇이 문제 / 어떻게 고치나" */
+export interface PolicyImportProblem { where: string; problem: string; fix: string }
+
+export interface PolicyImportResult {
+  source_file: string;
+  sheets: PolicyImportSheet[];
+  missing_marked: number;
+  warnings: string[];
+  auto_review: { auto_approved?: number; sampled?: number } | null;
+}
+
+export async function importPolicyFile(file: File, namespace: string, reprocessAll: boolean): Promise<PolicyImportResult> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('namespace', namespace);
+  form.append('reprocess_all', String(reprocessAll));
+  return apiFetch<PolicyImportResult>('/policy/import', { method: 'POST', body: form });
+}

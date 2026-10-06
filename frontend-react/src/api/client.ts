@@ -7,6 +7,8 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** 서버가 구조화된 detail(예: 정책서 업로드의 {message, problems})을 줬을 때 원본 그대로 — 화면이 표로 보여 줌 */
+    public detail?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -74,18 +76,22 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
+    let rawDetail: unknown;
     try {
       const body = await response.json();
       const detail = body.detail ?? body.message;
+      rawDetail = detail;
       if (Array.isArray(detail)) {
         message = detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d)).join('; ');
+      } else if (detail && typeof detail === 'object' && 'message' in detail) {
+        message = String((detail as { message: unknown }).message);
       } else if (detail) {
         message = String(detail);
       }
     } catch {
       // ignore parse error
     }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, rawDetail);
   }
 
   // Handle 204 No Content

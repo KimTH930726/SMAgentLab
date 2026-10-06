@@ -1,4 +1,5 @@
 """지식 베이스 및 용어집 CRUD — 네임스페이스 소유 파트 기반 권한."""
+import asyncio
 import csv
 import io
 import json
@@ -83,7 +84,9 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
     # _run_auto_glossary()를 모든 등록 경로 공통으로 되살림. 사람이 체크박스를 켜야
     # 했던 예전 opt-in 방식 대신, 이 세션 내내 적용한 "사람 개입 최소화" 원칙대로
     # 항상 실행(실패해도 등록 자체는 막지 않음 — 함수 내부에 이미 try/except 있음).
-    await _run_auto_glossary(body.namespace, body.content, user, max_chars=20000)
+    # 백그라운드로(2026-10-06) — 요청 안에서 LLM 응답을 기다리느라 지식 1건 등록이 89초 걸렸다(사내 LLM 지연 시
+    # 실측, E2E 30초 초과). 등록 결과는 바로 돌려주고 용어는 잠시 뒤 추가된다(벌크 등록도 이미 비동기).
+    _spawn(_run_auto_glossary(body.namespace, body.content, user, max_chars=20000))
     return row
 
 
@@ -467,6 +470,22 @@ def _glossary_after_activation(namespace: str, raw_text: str, user: dict, *, max
     async def _run() -> int:
         return await _run_auto_glossary(namespace, raw_text, user, max_chars=max_chars)
     return _run
+
+
+# 단건 등록의 용어 추출(백그라운드) 동시 실행 상한 — 연달아 등록하면 느린 사내 LLM에 호출이 몰리지 않게(/code-review)
+_GLOSSARY_CONCURRENCY = asyncio.Semaphore(2)
+
+
+def _spawn(coro) -> None:
+    """응답을 막지 않는 보조 작업. 태스크 참조는 지식 서비스의 기존 집합에 둔다(GC로 중간에 사라지지 않게 — 같은 패턴을
+    두 군데 두지 않으려고). 실패는 작업 안에서 로그로 남긴다(_run_auto_glossary가 try/except + warning). 재시작 때 진행 중이던
+    추출은 사라진다 — 용어는 보조 정보라 감수(다음 등록·벌크 때 다시 뽑힘)."""
+    async def _limited():
+        async with _GLOSSARY_CONCURRENCY:
+            return await coro
+    task = asyncio.create_task(_limited())
+    service._background_tasks.add(task)
+    task.add_done_callback(service._background_tasks.discard)
 
 
 async def _run_auto_glossary(namespace: str, raw_text: str, user: dict, *, max_chars: Optional[int] = None) -> int:
