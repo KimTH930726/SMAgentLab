@@ -27,7 +27,7 @@
 
 ```json
 {
-  "schema": "ops-navigator/policy/v1",
+  "schema": "opslens/policy/v1",
   "source_name": "비즈니스정책서_온라인스토어.xlsx",
   "sheets": [
     {
@@ -49,7 +49,7 @@
 
 | 필드 | 필수 | 규칙 |
 |---|---|---|
-| `schema` | ✓ | `"ops-navigator/policy/v1"` 고정 |
+| `schema` | ✓ | `"opslens/policy/v1"` 고정 |
 | `source_name` | | 원본 엑셀 파일명. 있으면 출처 파일명으로 쓴다(엑셀로 올리던 걸 JSON으로 바꿔도 "파일명 변경"이 안 됨, 골든셋 파일명 매핑 유지) |
 | `sheets[].name` | ✓ | 시트 이름, 파일 안에서 중복 불가. "원본에서 사라짐" 판단이 시트 이름 단위라 **바꾸지 않는다** |
 | `sheets[].kind` | ✓ | `policy` 또는 `glossary` |

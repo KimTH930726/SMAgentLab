@@ -1,4 +1,4 @@
-"""Ops-Navigator FastAPI 진입점 — DDD 구조."""
+"""OpsLens(구 Ops-Navigator) FastAPI 진입점 — DDD 구조."""
 import logging
 from contextlib import asynccontextmanager
 
@@ -373,7 +373,7 @@ async def _migrate_system_tables(conn) -> None:
     """,
         # chat_system — NO_KNOWLEDGE_MARKER를 그대로 삽입해 service/chat/helpers.py의
         # 지식공백 감지 문자열과 프롬프트 지시문이 절대 따로 놀지 않도록 한다
-        f"""IT 운영 보조 에이전트. 아래 규칙을 따르세요.
+        f"""IT 운영 지식 AI(OpsLens). 아래 규칙을 따르세요.
 
 [원칙]
 - 반드시 제공된 [참고 문서]만 근거로 답변. 문서에 없는 내용은 절대 만들어내지 마세요.
@@ -1359,6 +1359,19 @@ async def _migrate_policy_source_missing(conn) -> None:
     await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS source_missing_at TIMESTAMPTZ")
 
 
+async def _migrate_rename_opslens(conn) -> None:
+    """제품명 변경 Ops-Navigator → OpsLens (2026-10-06, #67) — DB에 저장된 답변 프롬프트의 첫 줄(자기소개)만 바꾼다.
+
+    "너 누구야"에 옛 이름·옛 정체성("IT 운영 보조 에이전트")으로 답하지 않게. 관리자가 프롬프트를 고쳐 첫 줄이 다르면 건드리지
+    않는다(그 문장으로 시작할 때만). 멱등.
+    """
+    r = await conn.execute(
+        "UPDATE ops_prompt SET content = 'IT 운영 지식 AI(OpsLens).' || substr(content, length('IT 운영 보조 에이전트.') + 1) "
+        "WHERE content LIKE 'IT 운영 보조 에이전트.%'")
+    if r and not r.endswith(" 0"):
+        logger.info("[migrate #67] 프롬프트 자기소개 OpsLens로: %s", r)
+
+
 async def _migrate_improvement_ledger(conn) -> None:
     """개선 원장 `ops_improvement_item` (2026-10-01, 근거 정정 흐름).
 
@@ -1540,6 +1553,7 @@ async def _run_migrations() -> None:
         await _migrate_query_system_error(conn)
         await _migrate_drop_orphans_2026_10_06(conn)
         await _migrate_policy_source_missing(conn)
+        await _migrate_rename_opslens(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 
@@ -1608,7 +1622,7 @@ async def lifespan(_app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="Ops-Navigator API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="OpsLens API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

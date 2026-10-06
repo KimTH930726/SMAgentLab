@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Ops-Navigator 이미지 빌드 + 내보내기 (인터넷 PC에서 실행)
+# OpsLens 이미지 빌드 + 내보내기 (인터넷 PC에서 실행)
 #
 # 사용법:
 #   cd SMAgentLab
@@ -28,7 +28,7 @@ PG_IMG="pgvector/pgvector:pg16"
 REDIS_IMG="redis:7-alpine"
 
 echo "=========================================="
-echo " Ops-Navigator 이미지 빌드 + 내보내기"
+echo " OpsLens 이미지 빌드 + 내보내기"
 echo " 태그: ${TAG}"
 echo "=========================================="
 

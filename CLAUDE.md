@@ -1,4 +1,4 @@
-# Ops-Navigator 프로젝트 가이드
+# OpsLens 프로젝트 가이드 (구 Ops-Navigator, 저장소 SMAgentLab)
 
 ## 빌드 & 실행
 - 개발: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`

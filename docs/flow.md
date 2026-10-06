@@ -1,4 +1,4 @@
-# Ops-Navigator 시스템 흐름도
+# OpsLens 시스템 흐름도
 
 ## 1. 질문 처리 전체 흐름
 

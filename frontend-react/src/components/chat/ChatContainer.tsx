@@ -592,8 +592,8 @@ export function ChatContainer() {
           <div className="flex items-center justify-center h-full text-slate-500">
             <div className="text-center">
               <p className="text-4xl mb-4">⚡</p>
-              <p className="text-lg font-medium text-slate-400">Ops-Navigator</p>
-              <p className="text-sm mt-2 text-slate-500">운영 관련 질문을 입력하세요</p>
+              <p className="text-lg font-medium text-slate-400">OpsLens</p>
+              <p className="text-sm mt-2 text-slate-500">정책·매뉴얼·운영 지식에 대해 물어보세요 — 근거와 함께 답합니다</p>
               <p className="text-xs mt-1 text-slate-500">Ctrl+Enter로 전송</p>
             </div>
           </div>

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Ops-Navigator DB 백업
+# OpsLens DB 백업
 #
 # pg_dump를 컨테이너 내부에서 실행하여 호스트 backups/ 디렉토리에 저장.
 # pgvector 확장도 함께 덤프 (CREATE EXTENSION 포함).
@@ -31,7 +31,7 @@ POSTGRES_DB=${POSTGRES_DB:-opsdb}
 CONTAINER=${POSTGRES_CONTAINER:-ops-postgres}
 
 echo "=========================================="
-echo " Ops-Navigator DB 백업"
+echo " OpsLens DB 백업"
 echo " 컨테이너: ${CONTAINER}"
 echo " DB:       ${POSTGRES_DB} (user: ${POSTGRES_USER})"
 echo " 출력:     ${OUTPUT_FILE}"

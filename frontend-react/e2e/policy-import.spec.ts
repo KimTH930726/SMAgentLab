@@ -14,7 +14,7 @@ const ROWS = [
   { row: 4, category_path: ['주문', '취소'], policy_name: 'E2E 부분 취소', body: '부분 취소는 주문당 1회만 가능', remark: '예외 있음' },
 ];
 const doc = (rows: object[]) => Buffer.from(JSON.stringify({
-  schema: 'ops-navigator/policy/v1', source_name: 'E2E_정책서.xlsx', sheets: [{ name: '정책', kind: 'policy', rows }],
+  schema: 'opslens/policy/v1', source_name: 'E2E_정책서.xlsx', sheets: [{ name: '정책', kind: 'policy', rows }],
 }));
 
 test.describe.configure({ mode: 'serial' });
@@ -64,14 +64,14 @@ test('JSON 업로드 → 재업로드(변경 없음) → 정책 삭제(검토 �
   expect(psql(`SELECT count(*) FROM policy_item p JOIN ops_namespace n ON n.id=p.namespace_id WHERE n.name='${NS}' AND p.source_missing_at IS NOT NULL`)).toBe('1');
 
   // 틀린 파일 — 아무것도 반영하지 않고, 엑셀에서 찾을 수 있는 위치(시트·행)와 고칠 방법을 표로
-  const bad = Buffer.from(JSON.stringify({ schema: 'ops-navigator/policy/v1', sheets: [{ name: '정책', kind: 'policy', rows: [{ ...ROWS[0], policy_name: ' ' }] }] }));
+  const bad = Buffer.from(JSON.stringify({ schema: 'opslens/policy/v1', sheets: [{ name: '정책', kind: 'policy', rows: [{ ...ROWS[0], policy_name: ' ' }] }] }));
   await upload(page, 'bad.json', bad);
   await expect(page.getByText(/아무것도 반영되지 않았습니다/)).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('cell', { name: "'정책' 시트 3행" })).toBeVisible();
   await expect(page.getByRole('cell', { name: '정책명이 비어 있습니다.' })).toBeVisible();
   await expect(page.getByText('이렇게 고치세요')).toBeVisible();
   // 모르는 항목은 막지 않고 경고로 — 반영됨 + "확인할 것"
-  const extra = Buffer.from(JSON.stringify({ schema: 'ops-navigator/policy/v1', source_name: 'E2E_정책서.xlsx', exported_by: 'tool',
+  const extra = Buffer.from(JSON.stringify({ schema: 'opslens/policy/v1', source_name: 'E2E_정책서.xlsx', exported_by: 'tool',
     sheets: [{ name: '정책', kind: 'policy', rows: [ROWS[0]] }] }));
   await upload(page, 'extra.json', extra);
   await expect(page.getByText('반영은 됐지만 확인할 것')).toBeVisible({ timeout: 60_000 });

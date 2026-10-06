@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Ops-Navigator 이미지 업데이트 (폐쇄망 서버에서 실행)
+# OpsLens 이미지 업데이트 (폐쇄망 서버에서 실행)
 #
 # 새 버전 이미지를 반입했을 때 사용
 # pgdata, redisdata 볼륨은 유지되어 DB 데이터 손실 없음
@@ -31,7 +31,7 @@ IMAGE_TAG=${IMAGE_TAG:-latest}
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 
 echo "=========================================="
-echo " Ops-Navigator 이미지 업데이트"
+echo " OpsLens 이미지 업데이트"
 echo " 새 태그(.env): ${IMAGE_TAG}"
 echo "=========================================="
 

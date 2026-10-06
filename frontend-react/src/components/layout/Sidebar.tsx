@@ -194,7 +194,7 @@ export function Sidebar() {
       <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <img src={logoSvg} alt="logo" className="w-7 h-7" />
-          <span className="font-semibold text-slate-100 text-sm">Ops-Navigator</span>
+          <span className="font-semibold text-slate-100 text-sm">OpsLens</span>
         </div>
         {/* Backend health indicator */}
         {backendOk === null && (

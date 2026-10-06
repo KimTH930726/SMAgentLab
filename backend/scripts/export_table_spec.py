@@ -352,7 +352,7 @@ def build(d: dict, out: Path) -> None:
     # ── 개요 ──
     ws = wb.active
     ws.title = "개요"
-    ws["A1"] = "Ops-Navigator(SMAgentLab) 테이블 명세서 — 공통화 분류 초안"
+    ws["A1"] = "OpsLens(SMAgentLab) 테이블 명세서 — 공통화 분류 초안"
     ws["A1"].font = Font(bold=True, size=15)
     meta = [
         ("추출 기준", f"{now} · 실 DB(ops-postgres, opsdb) 카탈로그 직접 조회 — 문서가 아니라 DB가 기준"),

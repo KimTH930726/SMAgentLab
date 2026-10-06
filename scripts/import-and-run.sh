@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Ops-Navigator 폐쇄망 배포 (폐쇄망 리눅스 서버에서 실행)
+# OpsLens 폐쇄망 배포 (폐쇄망 리눅스 서버에서 실행)
 #
 # 사전 조건:
 #   - Docker 24+ 및 Docker Compose v2 설치됨
@@ -44,7 +44,7 @@ IMAGE_TAG=$(grep -E "^IMAGE_TAG=" .env | cut -d= -f2 | tr -d '"' | tr -d "'")
 IMAGE_TAG=${IMAGE_TAG:-latest}
 
 echo "=========================================="
-echo " Ops-Navigator 폐쇄망 배포"
+echo " OpsLens 폐쇄망 배포"
 echo " 이미지 파일: ${IMPORT_FILE}"
 echo " 태그:        ${IMAGE_TAG}"
 echo "=========================================="

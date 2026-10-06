@@ -1,8 +1,8 @@
-# Ops-Navigator 로그인 SSO — 사내 IdP 연동 확인 체크리스트 (2026-09-03 기준)
+# OpsLens 로그인 SSO — 사내 IdP 연동 확인 체크리스트 (2026-09-03 기준)
 
 ## 1. 이 문서의 용도
 
-로그인 SSO는 M365 메일함(VOC 이메일 채널)용으로 등록된 Azure AD 앱(`InC_OpsNavigator_
+로그인 SSO는 M365 메일함(VOC 이메일 채널)용으로 등록된 Azure AD 앱(`InC_OpsLens_
 MailAgent_SCK`)과는 **완전히 별개**로, 사내 자체 IdP(SSO 게이트웨이, Azure AD와 별개)를
 통해 연동하기로 확인됨(2026-09-03, 원래 Azure AD 직접 로그인 앱 등록을 검토했던
 `sso-login-request.md`는 이 결정으로 폐기·통합됨 — §5에 그 문서의 실측 함정만 참고용으로
@@ -39,7 +39,7 @@ MailAgent_SCK`)과는 **완전히 별개**로, 사내 자체 IdP(SSO 게이트�
 ## 5. 참고 — Azure AD 앱 등록 때 실측된 함정 (`sso-login-request.md`에서 통합, 2026-09-23)
 
 사내 IdP는 Azure AD와 별개라 그대로 적용되진 않지만, 같은 조직의 앱 등록/승인 프로세스에서
-반복될 수 있는 절차적 함정이라 참고용으로 남긴다(mail-agent 앱 `InC_OpsNavigator_
+반복될 수 있는 절차적 함정이라 참고용으로 남긴다(mail-agent 앱 `InC_OpsLens_
 MailAgent_SCK` 등록 시 실측):
 
 - **Device Code Flow(퍼블릭 클라이언트) 요청하지 말 것** — 피싱 리스크로 보안팀이 비권장

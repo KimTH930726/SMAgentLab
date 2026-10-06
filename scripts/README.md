@@ -1,4 +1,4 @@
-# Ops-Navigator 운영 스크립트
+# OpsLens 운영 스크립트
 
 폐쇄망 배포/운영에 쓰이는 스크립트 모음. Docker 이미지 export/import, DB 백업/복원.
 

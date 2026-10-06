@@ -6,7 +6,7 @@ from typing import AsyncIterator, Callable, Optional
 from service.prompt.loader import get_prompt as _load_prompt
 
 
-_FALLBACK_SYSTEM_PROMPT = """IT 운영 보조 에이전트. 아래 규칙을 따르세요.
+_FALLBACK_SYSTEM_PROMPT = """IT 운영 지식 AI(OpsLens). 아래 규칙을 따르세요.
 
 [원칙]
 - 반드시 제공된 [참고 문서]만 근거로 답변. 문서에 없는 내용은 절대 만들어내지 마세요.

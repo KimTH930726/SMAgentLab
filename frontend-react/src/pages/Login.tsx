@@ -49,8 +49,9 @@ export default function Login() {
           <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center">
             <Zap className="w-6 h-6 text-white" />
           </div>
-          <span className="text-2xl font-bold text-slate-100">Ops-Navigator</span>
+          <span className="text-2xl font-bold text-slate-100">OpsLens</span>
         </div>
+        <p className="-mt-6 mb-8 text-center text-sm text-slate-400">IT 운영 지식 통합 AI 플랫폼</p>
 
         <div className="bg-slate-800 rounded-2xl p-8 border border-slate-700">
           <h2 className="text-xl font-semibold text-slate-100 mb-6 text-center">로그인</h2>

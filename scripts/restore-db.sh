@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# Ops-Navigator DB 복원
+# OpsLens DB 복원
 #
 # 주의: 복원은 기존 데이터를 덮어씁니다. (pg_dump --clean --if-exists)
 #
@@ -30,7 +30,7 @@ POSTGRES_DB=${POSTGRES_DB:-opsdb}
 CONTAINER=${POSTGRES_CONTAINER:-ops-postgres}
 
 echo "=========================================="
-echo " Ops-Navigator DB 복원"
+echo " OpsLens DB 복원"
 echo " 컨테이너: ${CONTAINER}"
 echo " DB:       ${POSTGRES_DB} (user: ${POSTGRES_USER})"
 echo " 백업파일: ${BACKUP_FILE}"

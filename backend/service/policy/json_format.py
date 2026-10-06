@@ -5,7 +5,7 @@
 그대로 탄다. MD는 표 병합·줄바꿈 본문이 깨지고 결국 지식 문서 경로로 가 정책 구조(파라미터·식별키)를 잃어서 택하지 않았다.
 
 형식(`docs/tech/policy-json-format.md`가 원본):
-    {"schema": "ops-navigator/policy/v1",
+    {"schema": "opslens/policy/v1",
      "sheets": [{"name": "온라인스토어", "kind": "policy",
                  "rows": [{"row": 2, "category_path": ["주문", "취소"], "policy_name": "...", "body": "...", "remark": null}]},
                 {"name": "용어집", "kind": "glossary",
@@ -20,7 +20,7 @@ import json
 
 from service.policy.excel_parser import ParsedGlossaryRow, ParsedPolicyRow, ParsedSheet
 
-SCHEMA_V1 = "ops-navigator/policy/v1"
+SCHEMA_V1 = "opslens/policy/v1"
 _MAX_ERRORS = 20
 _POLICY_FIELDS = {"row", "category_path", "policy_name", "body", "remark"}
 _GLOSSARY_FIELDS = {"row", "term", "definition", "remark"}

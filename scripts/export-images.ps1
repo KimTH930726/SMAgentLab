@@ -1,5 +1,5 @@
 # ============================================================
-# Ops-Navigator 이미지 빌드 + 내보내기 (Windows PowerShell)
+# OpsLens 이미지 빌드 + 내보내기 (Windows PowerShell)
 #
 # 사용법:
 #   cd D:\personalPJT\SMAgentLab
@@ -29,7 +29,7 @@ $PgImg       = "pgvector/pgvector:pg16"
 $RedisImg    = "redis:7-alpine"
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host " Ops-Navigator 이미지 빌드 + 내보내기" -ForegroundColor Cyan
+Write-Host " OpsLens 이미지 빌드 + 내보내기" -ForegroundColor Cyan
 Write-Host " 태그: $Tag" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
