@@ -1349,6 +1349,16 @@ async def _migrate_drop_orphans_2026_10_06(conn) -> None:
             logger.info("[migrate #65] %s 삭제: %s", label, r)
 
 
+async def _migrate_policy_source_missing(conn) -> None:
+    """정책 버전 관리 1단계 (2026-10-06, #66) — 재임포트한 엑셀에서 사라진 정책 표시.
+
+    재임포트 때 같은 정책을 엑셀 위치가 아니라 식별키(분류 경로+정책명 → 본문)로 찾게 바꾸면서(`service/policy/service.py`
+    `_PolicyMatcher`), 새 파일의 같은 시트에 더는 없는 현행 항목을 자동 폐기하지 않고 이 시각을 남겨 검토 큐(위험 높음)로
+    올린다(사용자 결정). 승인 = 유지(표시 해제), 반려 = 폐기. 멱등.
+    """
+    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS source_missing_at TIMESTAMPTZ")
+
+
 async def _migrate_improvement_ledger(conn) -> None:
     """개선 원장 `ops_improvement_item` (2026-10-01, 근거 정정 흐름).
 
@@ -1529,6 +1539,7 @@ async def _run_migrations() -> None:
         await _migrate_reset_knowledge_weight(conn)
         await _migrate_query_system_error(conn)
         await _migrate_drop_orphans_2026_10_06(conn)
+        await _migrate_policy_source_missing(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

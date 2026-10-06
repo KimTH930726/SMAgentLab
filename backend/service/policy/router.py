@@ -59,6 +59,7 @@ async def import_policy_excel(
     return ImportSummaryOut(
         source_file=result.source_file,
         sheets=[s.__dict__ for s in result.sheets],
+        missing_marked=result.missing_marked,
         auto_review=auto,
     )
 

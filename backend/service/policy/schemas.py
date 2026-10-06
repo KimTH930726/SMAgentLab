@@ -20,12 +20,16 @@ class SheetSummaryOut(BaseModel):
     glossary_duplicate_skipped: int = 0
     fallback_chunks_added: int = 0
     pipeline_reprocessed: int = 0
+    moved: int = 0
+    matched_by_body: int = 0
+    duplicate_keys: int = 0
     skip_reason: Optional[str] = None
 
 
 class ImportSummaryOut(BaseModel):
     source_file: str
     sheets: list[SheetSummaryOut]
+    missing_marked: int = 0
     auto_review: Optional[dict] = None  # 임포트 직후 위험도 낮음 자동 통과 결과(규칙 꺼짐이면 None)
 
 

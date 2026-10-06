@@ -538,15 +538,17 @@ class TestImportExcelAtomicSheet:
     @pytest.mark.asyncio
     async def test_unchanged_sheet_does_not_invalidate_cache(self, patch_db, monkeypatch):
         conn, events, emb, invalidate = self._setup(monkeypatch, patch_db)
-        same = {r.source_row: service._content_hash(r.category_path, r.policy_name, r.raw_body, r.remark) for r in self.ROWS}
-
-        async def fetchrow(query, *args):
-            return {"id": 5, "logical_id": 5, "version": 1, "content_hash": same[args[3]],
-                    "pipeline_version": service.pipeline_version()}
-        conn.fetchrow = AsyncMock(side_effect=fetchrow)
+        # 임포트는 현행 항목을 한 번에 읽어 식별키로 잇는다(2026-10-06, _PolicyMatcher) — 같은 위치·같은 내용
+        conn.fetch = AsyncMock(return_value=[
+            {"id": 5 + i, "logical_id": 5 + i, "version": 1, "status": "active",
+             "content_hash": service._content_hash(r.category_path, r.policy_name, r.raw_body, r.remark),
+             "pipeline_version": service.pipeline_version(), "category_path": r.category_path,
+             "policy_name": r.policy_name, "raw_body": r.raw_body, "remark": r.remark,
+             "source_file": "f.xlsx", "source_sheet": "시트1", "source_row": r.source_row, "source_missing_at": None}
+            for i, r in enumerate(self.ROWS)])
 
         result = await service.import_excel("ns", "sys", "f.xlsx", b"")
-        assert result.sheets[0].unchanged_skipped == 2
+        assert result.sheets[0].unchanged_skipped == 2 and result.sheets[0].moved == 0
         emb.embed_batch.assert_not_awaited()
         invalidate.assert_not_awaited()
 

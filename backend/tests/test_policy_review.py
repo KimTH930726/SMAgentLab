@@ -88,7 +88,7 @@ class TestApproveItem:
         update_call = conn.execute.call_args_list[0]
         assert "UPDATE policy_item" in update_call.args[0]
         assert "reviewed_by" in update_call.args[0] and "review_source = 'human'" in update_call.args[0]
-        assert update_call.args[1:] == ("active", 99, 1)
+        assert update_call.args[1:] == ("active", 99, 1, True)  # 승인 = "원본에서 사라짐" 표시 해제(2026-10-06)
 
     @pytest.mark.asyncio
     async def test_decision_logged_with_risk_snapshot(self, patch_db):
@@ -113,7 +113,7 @@ class TestRejectItem:
         out = await review.reject_item("ns", 1, 99)
 
         update_call = conn.execute.call_args_list[0]
-        assert update_call.args[1:] == ("rejected", 99, 1)
+        assert update_call.args[1:] == ("rejected", 99, 1, False)  # 반려 = 폐기, 표시는 이력으로 남김
         assert auto_review.log.await_args.args[2] == "rejected"
         assert out == {"rule_paused": False}
 

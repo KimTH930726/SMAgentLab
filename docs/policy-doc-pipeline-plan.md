@@ -131,6 +131,12 @@ row는 `status='deprecated'`로 전환하되 **삭제하지 않고 그대로 보
 row로 재생성되고, 이전 버전의 파라미터는 이전 `policy_item_id`에 그대로 남아 자동으로 버전이
 격리된다 — FK 관계를 통한 자연스러운 이력 보존.
 
+**"같은 정책" 판단 (2026-10-06, 10/1 회의 액션 · v2.123)**: 예전엔 엑셀 위치(파일·시트·행)로만 찾아 행 삽입·파일명 변경에
+깨졌다. 이제 `(파트, 분류 경로, 정책명)` 식별키 → 없으면 본문(본문+비고) 일치 1건 → 신규 순서로 찾는다(엑셀엔 고정 정책 ID가
+없고 앞으로도 없음). 내용이 같고 위치만 바뀌면 그 자리에서 위치만 갱신(새 버전·승인 변화 없음). 새 파일의 같은 시트에서
+사라진 현행 정책은 자동 폐기하지 않고 `source_missing_at` 표시 + 검토 큐(위험 높음 "원본에서 사라짐") — 반려 = 폐기, 승인 = 유지.
+유사도(임베딩) 매칭·시행일/종료일은 실사례가 생길 때(`service/policy/service.py` `_PolicyMatcher`).
+
 ### 2-2. 용어집 — 새 테이블 아니라 기존 `rag_glossary` 재사용 (2026-09-03 발견)
 
 정책서 파일 맨 앞 시트가 용어집이라는 게 실측으로 확인됐다(§1). 이 구조가 기존 `rag_glossary`
@@ -240,7 +246,8 @@ UI(채팅 화면에 출처를 보여주는 부분)를 2단계로 바로 이어�
   → policy_item + policy_param(후보) + policy_chunk(후보) 를 status='pending_review'로 적재
   → 검토 UI: 사람이 파라미터 값·조건 위주로 승인/수정/반려, unresolved 건은 별도 탭에서 확인
   → 승인 → RDB 확정 + policy_chunk 임베딩·인덱싱
-  → 재업로드 시: source_row + content_hash 비교 → 바뀐 row만 재처리 (pending_review)
+  → 재업로드 시: 식별키(분류 경로+정책명 → 본문)로 같은 정책을 찾아 content_hash 비교 → 바뀐 row만 재처리 (pending_review)
+    (v2.123 전엔 source_row 위치로 찾았음 — §2-1)
     ※ "재처리" = 기존 row UPDATE가 아니라 새 row INSERT(version+1, supersedes_id=이전 row) —
       이전 row는 deprecated로 전환·보존(§2-1). 과거 정책 조회는 deprecated row를 그대로 읽음
   → 비고에 external_source 있는 파라미터는 "신뢰 주의 — 외부 시스템 관리" 플래그 표시

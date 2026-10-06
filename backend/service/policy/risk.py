@@ -21,7 +21,8 @@ RISK_FEATURES_SQL = """
     EXISTS (SELECT 1 FROM policy_review_log l
             WHERE l.logical_id = p.logical_id AND l.action IN ('rejected', 'resubmitted')) AS prior_reject,
     EXISTS (SELECT 1 FROM policy_review_log l
-            WHERE l.logical_id = p.logical_id AND l.action = 'auto_reverted') AS prior_revert
+            WHERE l.logical_id = p.logical_id AND l.action = 'auto_reverted') AS prior_revert,
+    (p.source_missing_at IS NOT NULL) AS source_missing
 """
 # prior_reject에 resubmitted도 센다 — 이력 테이블 이전(9/23~)에 반려됐다가 수정·재제출된 항목은 'rejected' 행이 없다.
 # prior_revert — 사람이 자동 통과를 되돌린 항목은 다음 실행·임포트 때 다시 자동 통과되면 안 된다(/code-review).
@@ -37,9 +38,13 @@ class Risk:
 
 
 def classify(parse_status: str | None, unresolved_count: int, chunk_count: int, prior_reject: bool,
-             prior_revert: bool = False) -> Risk:
+             prior_revert: bool = False, source_missing: bool = False) -> Risk:
     """사람이 봐야 하는 이유를 앞에 쌓는다 — 높음 사유가 하나라도 있으면 높음."""
     high: list[tuple[str, str, str]] = []  # (상세 이유, 짧은 이유, 할 일) — 앞에 있을수록 먼저 볼 이유
+    # 재임포트한 엑셀에서 사라진 정책(2026-10-06, 정책 버전 관리) — 자동 폐기하지 않고 사람이 결정
+    if source_missing:
+        high.append(("최근 임포트한 원본 엑셀에서 사라진 정책 — 폐기할지 확인", "원본에서 사라짐",
+                     "원본에서 일부러 뺀 정책이면 반려(검색에서 제외), 실수로 빠진 거면 승인(유지)하세요."))
     if parse_status in ("unresolved", "partial"):
         label = "전혀" if parse_status == "unresolved" else "일부"
         high.append((f"원문을 {label} 구조화하지 못함(미해결 조각 {unresolved_count}개)",
@@ -64,4 +69,4 @@ def classify(parse_status: str | None, unresolved_count: int, chunk_count: int, 
 
 def classify_row(row) -> Risk:
     return classify(row["parse_status"], row["unresolved_count"] or 0, row["chunk_count"] or 0, bool(row["prior_reject"]),
-                    bool(row.get("prior_revert")))
+                    bool(row.get("prior_revert")), bool(row.get("source_missing")))

@@ -39,10 +39,12 @@ async def _transition(namespace: str, item_id: int, reviewer_id: int, new_status
             if row["status"] != "pending_review":
                 raise ValueError(f"검토 대기 상태가 아닌 항목은 처리할 수 없습니다(현재: {row['status']})")
 
+            # 승인 = "원본에서 사라짐" 표시 해제(실수로 빠진 정책을 유지). 반려 = 폐기라 표시는 남겨 둔다(이력)
             await conn.execute(
                 """UPDATE policy_item SET status = $1, reviewed_at = NOW(), reviewed_by = $2, review_source = 'human',
+                   source_missing_at = CASE WHEN $4 THEN NULL ELSE source_missing_at END,
                    updated_at = NOW() WHERE id = $3""",
-                new_status, reviewer_id, item_id,
+                new_status, reviewer_id, item_id, new_status == "active",
             )
             rk = risk.classify_row(row)
             row = dict(row)

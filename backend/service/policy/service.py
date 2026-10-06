@@ -2,8 +2,8 @@
 
 docs/policy-doc-pipeline-plan.md §3 파이프라인, §2-1 버전 관리를 구현한다.
 
-버전 관리(§2-1): 같은 (namespace, source_file, source_sheet, source_row)의 이전 버전과
-content_hash를 비교한다. 같으면 재처리 없이 스킵(같은 파일 재업로드 시 불필요한 LLM 호출
+버전 관리(§2-1): 같은 정책의 이전 버전과 content_hash를 비교한다. "같은 정책"은 2026-10-06부터
+엑셀 위치가 아니라 정책 식별키로 찾는다(`_PolicyMatcher` — 행 삽입·파일명 변경에 흔들리지 않게). 같으면 재처리 없이 스킵(같은 파일 재업로드 시 불필요한 LLM 호출
 방지). 다르면(내용 변경 또는 신규) — 절대 UPDATE하지 않고 새 policy_item row를 INSERT한다
 (logical_id는 이전 row와 동일하게 유지, version+1, supersedes_id=이전 row). 이전 row는
 status='deprecated'로 전환하되 삭제하지 않는다 — rag_knowledge 병합이 content를 그 자리에서
@@ -81,6 +81,9 @@ class SheetSummary:
     glossary_duplicate_skipped: int = 0
     fallback_chunks_added: int = 0
     pipeline_reprocessed: int = 0  # 원본은 같지만 파이프라인 버전이 달라(또는 강제) 다시 분해한 행
+    moved: int = 0               # 내용은 같고 위치(파일·시트·행)만 바뀌어 그 자리에서 위치만 갱신한 행
+    matched_by_body: int = 0     # 분류 경로·정책명이 바뀌었지만 본문이 같아 같은 정책으로 이은 행
+    duplicate_keys: int = 0      # 엑셀 안에 같은 식별키(분류 경로+정책명)가 또 나와 신규로 넣은 행
     skip_reason: str | None = None
 
 
@@ -88,6 +91,91 @@ class SheetSummary:
 class ImportSummary:
     source_file: str
     sheets: list[SheetSummary] = field(default_factory=list)
+    missing_marked: int = 0      # 이번 파일의 정책 시트에서 사라져 "원본에서 사라짐"으로 검토 큐에 올린 항목
+
+
+def _norm(text: str | None) -> str:
+    """식별키·본문 비교용 — 앞뒤·연속 공백만 정리(대소문자·문장부호는 그대로: 과매칭 방지)."""
+    return " ".join((text or "").split())
+
+
+def _policy_key(category_path, policy_name: str) -> tuple:
+    return (tuple(_norm(p) for p in (category_path or [])), _norm(policy_name))
+
+
+class _PolicyMatcher:
+    """재임포트 때 엑셀 행 → 현행 policy_item(같은 파트)을 찾는다 (2026-10-06, 10/1 회의 액션 "정책 버전 관리").
+
+    예전엔 (파일·시트·행번호) 위치로만 찾아서 행 하나만 끼워 넣어도 아래 행이 전부 다른 정책의 새 버전으로 잘못
+    이어지고, 파일명이 바뀌면 전부 신규 + 옛 파일 정책이 활성으로 남아 중복됐다. 엑셀엔 고정 정책 ID 열이 없어(앞으로도
+    없음 — 사용자 확인) 식별키 = (분류 경로, 정책명) — 실데이터 활성 378건 전부 유일(정책명만으론 33건 중복).
+    1) 식별키 일치 → 2) 없으면 본문(raw_body+비고) 일치 1건(분류만 옮기거나 이름만 바꾼 경우, 2건 이상이면 안 이음)
+    → 3) 신규. 유사도(임베딩) 매칭은 "이름·분류·본문이 다 조금씩 바뀐" 실사례가 생길 때까지 안 한다 — 그런 건
+    신규 + "원본에서 사라짐" 한 쌍으로 검토 큐에 나와 사람이 판단한다.
+    한 임포트 안에서 같은 현행 항목을 두 행이 가져가지 않게 이미 이은 항목은 다시 안 준다(먼저 나온 행 우선)."""
+
+    _SELECT = """
+        SELECT id, logical_id, version, content_hash, pipeline_version, status, category_path, policy_name,
+               raw_body, remark, source_file, source_sheet, source_row, source_missing_at
+        FROM policy_item WHERE namespace_id = $1 AND status <> 'deprecated'
+        ORDER BY version DESC, id DESC
+    """
+
+    def __init__(self, rows):
+        self.items = list(rows)
+        self.by_key: dict[tuple, list] = {}
+        self.by_body: dict[tuple, list] = {}
+        for r in self.items:
+            self.by_key.setdefault(_policy_key(r["category_path"], r["policy_name"]), []).append(r)
+            self.by_body.setdefault((_norm(r["raw_body"]), _norm(r["remark"])), []).append(r)
+        self.taken: set[int] = set()
+        self.seen_keys: set[tuple] = set()
+
+    @classmethod
+    async def load(cls, conn, ns_id: int) -> "_PolicyMatcher":
+        return cls(await conn.fetch(cls._SELECT, ns_id))
+
+    def assign(self, rows: list[tuple]) -> dict:
+        """rows: [(ref, ParsedPolicyRow)] (파일 전체, 파일 순서) → {ref: (현행 항목 또는 None, 방법, 엑셀 안 중복 키 여부)}.
+
+        두 단계(/code-review 지적) — ① 모든 행의 식별키 매칭을 먼저 끝내고 ② 남은 행만 본문 매칭. 행 순서대로 섞어 하면
+        이름이 바뀐 앞 행이 본문으로 뒤 행의 정확한 키 항목을 먼저 가져가 이력이 엉뚱한 정책으로 옮겨 갈 수 있다.
+        엑셀 안에 같은 키가 또 나오면 그 키의 아직 안 가져간 현행 항목부터 준다 — 안 그러면 같은 파일을 다시 올릴 때마다
+        둘째 행이 신규로 쌓이고 기존 둘째 항목은 "사라짐"으로 표시되는 일이 반복된다."""
+        out: dict = {}
+        seen: set[tuple] = set()
+        rest: list[tuple] = []
+        for ref, row in rows:
+            key = _policy_key(row.category_path, row.policy_name)
+            dup = key in seen
+            seen.add(key)
+            hit = next((r for r in self.by_key.get(key, []) if r["id"] not in self.taken), None)
+            if hit is not None:
+                self.taken.add(hit["id"])
+                out[ref] = (hit, "key", dup)
+            elif dup:
+                out[ref] = (None, "new", True)   # 같은 키가 또 나왔는데 남은 현행 항목이 없음 — 신규
+            else:
+                rest.append((ref, row))
+        for ref, row in rest:
+            free = [r for r in self.by_body.get((_norm(row.raw_body), _norm(row.remark)), []) if r["id"] not in self.taken]
+            if len(free) == 1:
+                self.taken.add(free[0]["id"])
+                out[ref] = (free[0], "body", False)
+            else:
+                out[ref] = (None, "new", False)
+        return out
+
+    def missing(self, sheet_names: set[str], filename: str) -> list[int]:
+        """이번 파일이 다룬 범위에 있던 현행 항목 중 아무 행과도 안 이어진 것.
+
+        범위 = 이번 파일의 정책 시트 이름 × "이번 임포트가 건드린 파일"(이번 파일명 + 이어진 항목들의 이전 파일명 — 파일명이
+        바뀐 경우까지). 같은 파트에 같은 시트 이름을 쓰는 다른 엑셀이 있어도 그 항목은 건드리지 않는다(/code-review 지적).
+        파일에 없는 시트의 항목도 건드리지 않는다(시트 일부만 올린 실수로 대량 표시되는 사고 방지). 반려 항목은 제외."""
+        files = {filename} | {r["source_file"] for r in self.items if r["id"] in self.taken}
+        return [r["id"] for r in self.items
+                if r["source_sheet"] in sheet_names and r["source_file"] in files
+                and r["id"] not in self.taken and r["status"] != "rejected"]
 
 
 async def _find_current_version(conn, ns_id: int, source_file: str, sheet_name: str, source_row: int):
@@ -106,7 +194,7 @@ async def _find_current_version(conn, ns_id: int, source_file: str, sheet_name: 
 
 async def _check_version(
     conn, ns_id: int, source_file: str, sheet_name: str, row: excel_parser.ParsedPolicyRow,
-    *, force: bool = False,
+    *, force: bool = False, matcher: "_PolicyMatcher | None" = None,
 ):
     """버전 체크(§2-1) — DB만 건드리는 저렴한 단계. LLM 호출과 분리해둬야 여러 row를
     동시(concurrent)에 처리할 때 "내용 안 바뀐 row"는 LLM 비용을 아예 안 태울 수 있다.
@@ -117,7 +205,9 @@ async def _check_version(
     Returns: (skip: bool, current: Optional[Record], new_hash: str)
     """
     new_hash = _content_hash(row.category_path, row.policy_name, row.raw_body, row.remark)
-    current = await _find_current_version(conn, ns_id, source_file, sheet_name, row.source_row)
+    # 파일 임포트는 식별키 매칭(matcher), 단건 경로(`_ingest_policy_row`)는 예전처럼 위치로 찾는다
+    current = (matcher.match(row)[0] if matcher is not None
+               else await _find_current_version(conn, ns_id, source_file, sheet_name, row.source_row))
     skip = (
         not force
         and current is not None
@@ -289,6 +379,12 @@ async def import_excel(
 
     sheets = excel_parser.parse_workbook(file_bytes)
     result = ImportSummary(source_file=filename)
+    async with get_conn() as conn:
+        matcher = await _PolicyMatcher.load(conn, ns_id)
+    imported_policy_sheets: set[str] = set()
+    # 파일 전체를 한 번에 매칭(시트를 넘나드는 이동·키 우선 순서를 위해) — 시트 처리 루프는 결과만 꺼내 쓴다
+    assignment = matcher.assign([((sh.sheet_name, i), row) for sh in sheets if sh.kind == "policy"
+                                 for i, row in enumerate(sh.policy_rows)])
 
     for sheet in sheets:
         summary = SheetSummary(sheet_name=sheet.sheet_name, kind=sheet.kind, skip_reason=sheet.skip_reason)
@@ -303,13 +399,25 @@ async def import_excel(
             # ③ DB 쓰기는 커넥션 하나로 다시 순차 실행(asyncpg 커넥션은 동시 쿼리를 지원하지
             # 않음 — 그래서 쓰기 단계는 병렬화 대상에서 뺐다).
             to_process: list[tuple] = []
+            relocate: list[tuple] = []   # 내용 그대로 — 위치만 갱신(+ "사라짐" 표시가 있었으면 해제)
+            if sheet.policy_rows:
+                imported_policy_sheets.add(sheet.sheet_name)
             async with get_conn() as conn:
-                for row in sheet.policy_rows:
+                for i, row in enumerate(sheet.policy_rows):
+                    current, how, dup = assignment[(sheet.sheet_name, i)]
+                    summary.matched_by_body += how == "body"
+                    summary.duplicate_keys += dup
                     skip, current, new_hash = await _check_version(
                         conn, ns_id, filename, sheet.sheet_name, row, force=force_reprocess,
+                        matcher=_Fixed(current),
                     )
                     if skip:
                         summary.unchanged_skipped += 1
+                        if current is not None and (
+                            (current["source_file"], current["source_sheet"], current["source_row"])
+                            != (filename, sheet.sheet_name, row.source_row) or current["source_missing_at"] is not None
+                        ):
+                            relocate.append((current["id"], row.source_row))
                     else:
                         to_process.append((row, current, new_hash))
 
@@ -336,6 +444,17 @@ async def import_excel(
 
             async with get_conn() as conn:
                 async with conn.transaction():
+                    for item_id, source_row in relocate:
+                        # "사라짐"으로 큐에 올라갔던 항목이 그대로 돌아오면: 전에 승인(사람·자동)된 적 있으면 active로 복귀
+                        # (검토 이력 reviewed_at 기준 — 원래 검토 대기였던 항목은 그대로). SET의 CASE는 갱신 전 값으로 계산된다.
+                        await conn.execute(
+                            "UPDATE policy_item SET source_file = $2, source_sheet = $3, source_row = $4, "
+                            "status = CASE WHEN source_missing_at IS NOT NULL AND status = 'pending_review' "
+                            "AND reviewed_at IS NOT NULL THEN 'active' ELSE status END, "
+                            "source_missing_at = NULL WHERE id = $1",
+                            item_id, filename, sheet.sheet_name, source_row,
+                        )
+                    summary.moved += len(relocate)
                     for (row, current, new_hash), segments, embeddings in zip(to_process, segments_list, per_row_embeddings):
                         await _write_policy_result(
                             conn, ns_id, system_key, filename, sheet.sheet_name,
@@ -347,7 +466,32 @@ async def import_excel(
                 await _invalidate_semantic_cache(namespace)
         result.sheets.append(summary)
 
+    # 원본에서 사라진 정책 → 자동 폐기하지 않고 검토 큐로(사용자 결정 2026-10-06). active였으면 pending_review로 되돌려
+    # 큐에 올린다 — 검색은 pending_review도 포함이라 담당자가 결정하기 전까진 답변이 그대로다(위험도 "높음" 사유로 표시,
+    # 반려 = 폐기 / 승인 = 유지). 모든 시트가 성공한 뒤에만(중간에 실패하면 여기까지 안 옴).
+    missing_ids = matcher.missing(imported_policy_sheets, filename)
+    if missing_ids:
+        async with get_conn() as conn:
+            res = await conn.execute(
+                "UPDATE policy_item SET source_missing_at = COALESCE(source_missing_at, NOW()), "
+                "status = CASE WHEN status = 'active' THEN 'pending_review' ELSE status END "
+                "WHERE id = ANY($1::int[]) AND status NOT IN ('deprecated', 'rejected')",
+                missing_ids,
+            )
+        result.missing_marked = int(str(res).split()[-1]) if res else 0
+        await _invalidate_semantic_cache(namespace)
+
     return result
+
+
+class _Fixed:
+    """이미 고른 매칭 결과를 _check_version에 그대로 넘기는 얇은 어댑터(match를 두 번 돌리지 않게)."""
+
+    def __init__(self, current):
+        self._current = current
+
+    def match(self, row):
+        return self._current, "fixed"
 
 
 async def _invalidate_semantic_cache(namespace: str) -> None:
