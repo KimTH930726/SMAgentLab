@@ -97,7 +97,10 @@ def env(monkeypatch):
         monkeypatch.setattr(excel_parser, "parse_workbook", lambda b: [
             excel_parser.ParsedSheet(sheet_name=name, kind="policy", policy_rows=rows) for name, rows in sheets])
         return service.import_excel("ns", "sys", filename, b"")
-    env_obj = MagicMock(run=run, inserted=inserted, executed=executed)
+    def run_paste(current_rows, pasted, source_file="f.xlsx"):
+        conn.fetch = AsyncMock(return_value=current_rows)
+        return service.import_pasted("ns", "sys", source_file, pasted)
+    env_obj = MagicMock(run=run, run_paste=run_paste, inserted=inserted, executed=executed)
     return env_obj
 
 
@@ -244,3 +247,71 @@ async def test_reappearing_reviewed_item_returns_to_active(env):
     await env.run([_current(1, a, missing="2026-10-06")], [("시트1", [a])])
     q = [q for q, _ in env.executed if q.startswith("UPDATE policy_item SET source_file")][0]
     assert "reviewed_at IS NOT NULL THEN 'active'" in q and "source_missing_at = NULL" in q
+
+
+# ── 붙여넣기 임포트 (2026-10-06, v2.127) — 보안(DRM) 엑셀은 서버·브라우저가 못 열어 엑셀에서 복사해 붙여넣는다 ──
+
+_HEADER = "No\t대분류\t정책명\t조건/상세\t비고"
+
+
+def test_pasted_table_handles_excel_quoting_and_trailing_blank_rows():
+    """엑셀은 칸 안 줄바꿈·따옴표가 있으면 그 칸을 큰따옴표로 감싸고("" = 따옴표), 끝에 빈 줄이 붙는다."""
+    text = 'No\t정책명\t조건/상세\r\n1\t카드 환불\t"당일 취소\r\n익일 ""3~7일"""\r\n\t\t\r\n'
+    rows = service.parse_pasted_table(text)
+    assert rows == [("No", "정책명", "조건/상세"), ("1", "카드 환불", '당일 취소\n익일 "3~7일"')]
+
+
+def test_pasted_sheet_parses_like_excel_including_merged_fill_and_row_numbers():
+    """Ctrl+A로 복사하면 제목 행·빈 병합 칸까지 그대로 와서, 파일 업로드와 같은 엑셀 행 번호·분류 채우기가 나와야 한다."""
+    text = "비즈니스 정책서\t\t\t\t\n" + _HEADER + "\n1\t주문\t카드 환불\t당일\t\n2\t\t부분 취소\t1회만\t예외\n"
+    sheet = excel_parser.parse_sheet_rows("온라인", service.parse_pasted_table(text))
+    assert sheet.kind == "policy"
+    assert [(r.category_path, r.policy_name, r.source_row, r.remark) for r in sheet.policy_rows] == [
+        (["주문"], "카드 환불", 3, None), (["주문"], "부분 취소", 4, "예외")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_file, pasted, msg", [
+    ("", [("시트1", _HEADER)], "원본 정책서 파일 이름"),
+    ("f.xlsx", [], "붙여넣은 시트가 없습니다"),
+    ("f.xlsx", [(" ", _HEADER)], "시트 이름이 빈 칸"),
+    ("f.xlsx", [("시트1", _HEADER), ("시트1 ", _HEADER)], "같은 시트 이름"),
+    ("f.xlsx", [("시트1", "  \n\t\n")], "붙여넣은 내용이 없습니다"),
+])
+async def test_paste_rejects_before_writing_anything(env, source_file, pasted, msg):
+    with pytest.raises(ValueError, match=msg):
+        await env.run_paste([], pasted, source_file=source_file)
+    assert not env.inserted and not env.executed
+
+
+def _paste_text(rows):
+    return _HEADER + "\n" + "\n".join(
+        f"{i}\t{r.category_path[0]}\t{r.policy_name}\t{r.raw_body}\t" for i, r in enumerate(rows, 1))
+
+
+@pytest.mark.asyncio
+async def test_paste_same_content_changes_nothing(env):
+    """붙여넣은 시트 내용이 그대로면 새 버전·신규 0 — 파일 업로드와 같은 매칭(식별키)을 탄다."""
+    a, b = _row("A", 2), _row("B", 3)
+    res = await env.run_paste([_current(1, a), _current(2, b)], [("시트1", _paste_text([a, b]))])
+    s = res.sheets[0]
+    assert (s.created_items, s.new_versions, s.unchanged_skipped, s.moved) == (0, 0, 2, 0)
+    assert res.source_file == "f.xlsx" and res.missing_marked == 0 and not res.warnings
+
+
+@pytest.mark.asyncio
+async def test_paste_marks_genuinely_removed_policy(env):
+    """기존 5개 중 1개가 빠진 정도면 실제로 지운 정책으로 보고 평소처럼 '사라짐' 표시."""
+    rows = [_row(n, i) for i, n in enumerate("ABCDE", 2)]
+    res = await env.run_paste([_current(i, r) for i, r in enumerate(rows, 1)], [("시트1", _paste_text(rows[:4]))])
+    assert res.missing_marked == 1 and _missing_update(env)[0][0] == [5]
+
+
+@pytest.mark.asyncio
+async def test_paste_partial_copy_does_not_flood_review_queue(env):
+    """시트 일부만 복사한 실수(기존 10개 중 7개 빠짐) — 사라짐 표시 대신 경고. 붙여넣은 정책 자체는 정상 반영."""
+    rows = [_row(f"P{i}", i + 2) for i in range(10)]
+    res = await env.run_paste([_current(i + 1, r) for i, r in enumerate(rows)], [("시트1", _paste_text(rows[:3]))])
+    assert res.missing_marked == 0 and not _missing_update(env)
+    assert len(res.warnings) == 1 and "'시트1' 시트: 기존 정책 10개 중 7개" in res.warnings[0]
+    assert res.sheets[0].unchanged_skipped == 3

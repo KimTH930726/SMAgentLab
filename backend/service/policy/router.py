@@ -12,12 +12,47 @@ from service.policy.schemas import (
     ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
     Track2RunHistoryOut, PipelineStatsOut, PromoteSegmentRequest, PromoteSegmentOut,
     PromoteParamRequest, ItemActionRequest, UpdateParamRequest, UpdateNarrativeRequest,
-    ItemStatusOut, SuggestParamRequest, SuggestParamOut,
+    ItemStatusOut, SuggestParamRequest, SuggestParamOut, PolicyPasteImportRequest,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
+
+
+@router.get("/sources")
+async def list_policy_sources(namespace: str = Query(...), user: dict = Depends(get_current_user)):
+    """이 파트의 정책서 원본 파일·시트 목록 — 붙여넣기 화면이 원본 이름·시트 이름을 고르게."""
+    return await service.list_sources(namespace)
+
+
+@router.post("/import-paste", response_model=ImportSummaryOut)
+async def import_policy_paste(body: PolicyPasteImportRequest, user: dict = Depends(get_current_user)):
+    """엑셀에서 복사한 시트를 붙여넣어 임포트 — 보안(DRM) 엑셀용. 이후 처리는 파일 임포트와 같다."""
+    await check_namespace_ownership(body.namespace, user)
+    if body.reprocess_all and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="'전체 다시 분해'는 관리자만 할 수 있습니다. 체크를 끄고 다시 올려 주세요.")
+    try:
+        result = await service.import_pasted(
+            body.namespace, body.system_key, body.source_file,
+            [(s.sheet_name, s.text) for s in body.sheets], force_reprocess=body.reprocess_all,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("붙여넣기 임포트 실패")
+        raise HTTPException(
+            status_code=400,
+            detail=f"정책서 반영 실패: {e} — 실패한 시트는 반영되지 않았습니다. 같은 내용을 다시 올리면 이어서 처리됩니다.",
+        )
+    auto = await auto_review.run_after_import(body.namespace)
+    return ImportSummaryOut(
+        source_file=result.source_file,
+        sheets=[s.__dict__ for s in result.sheets],
+        missing_marked=result.missing_marked,
+        warnings=result.warnings,
+        auto_review=auto,
+    )
 
 
 @router.post("/import", response_model=ImportSummaryOut)

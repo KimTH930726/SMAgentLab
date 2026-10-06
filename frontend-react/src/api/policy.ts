@@ -380,3 +380,19 @@ export async function importPolicyFile(file: File, namespace: string, reprocessA
   form.append('reprocess_all', String(reprocessAll));
   return apiFetch<PolicyImportResult>('/policy/import', { method: 'POST', body: form });
 }
+
+/** 보안(DRM) 엑셀용 — 엑셀에서 복사한 시트를 붙여넣어 반영(v2.127). 처리는 파일 업로드와 같다. */
+export async function importPolicyPaste(
+  namespace: string, sourceFile: string, sheets: { sheet_name: string; text: string }[], reprocessAll: boolean,
+): Promise<PolicyImportResult> {
+  return apiFetch<PolicyImportResult>('/policy/import-paste', {
+    method: 'POST',
+    body: JSON.stringify({ namespace, source_file: sourceFile, sheets, reprocess_all: reprocessAll }),
+  });
+}
+
+export interface PolicySource { source_file: string; sheets: { name: string; items: number }[] }
+
+export async function fetchPolicySources(namespace: string): Promise<PolicySource[]> {
+  return apiFetch<PolicySource[]>(`/policy/sources?namespace=${encodeURIComponent(namespace)}`);
+}

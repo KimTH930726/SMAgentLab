@@ -36,6 +36,19 @@ class ImportSummaryOut(BaseModel):
     auto_review: Optional[dict] = None  # 임포트 직후 위험도 낮음 자동 통과 결과(규칙 꺼짐이면 None)
 
 
+class PastedSheetIn(BaseModel):
+    sheet_name: str
+    text: str  # 엑셀에서 복사한 그대로(탭 구분, 칸 안 줄바꿈은 큰따옴표로 감싸짐)
+
+
+class PolicyPasteImportRequest(BaseModel):
+    namespace: str
+    source_file: str
+    sheets: list[PastedSheetIn]
+    system_key: str = ""
+    reprocess_all: bool = False
+
+
 class ParamHitOut(BaseModel):
     item_id: int
     logical_id: int

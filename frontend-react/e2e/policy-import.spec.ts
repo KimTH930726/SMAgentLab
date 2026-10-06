@@ -37,6 +37,7 @@ async function open(page: Page) {
   await page.getByRole('button', { name: '정책' }).click();
   await page.getByRole('button', { name: '정책서 올리기' }).click();
   await page.locator('select').first().selectOption(NS);
+  await page.getByRole('button', { name: '파일 올리기' }).click();   // 기본은 '시트 붙여넣기'(v2.127)
 }
 
 async function upload(page: Page, name: string, buffer: Buffer) {

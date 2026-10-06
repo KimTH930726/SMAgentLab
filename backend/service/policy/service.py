@@ -12,7 +12,9 @@ status='deprecated'로 전환하되 삭제하지 않는다 — rag_knowledge 병
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
+import io
 import json
 import logging
 from dataclasses import dataclass, field
@@ -370,6 +372,26 @@ async def _ingest_glossary_row(
         summary.glossary_duplicate_skipped += 1
 
 
+def _apply_paste_guard(matcher, missing_ids: list[int], result) -> list[int]:
+    """시트별로 기존 현행 항목 대비 "사라짐" 비율이 크면 그 시트는 표시하지 않고 경고 — 일부만 복사한 실수 방지."""
+    by_id = {r["id"]: r for r in matcher.items}
+    keep: list[int] = []
+    per_sheet: dict[tuple, list[int]] = {}
+    for i in missing_ids:
+        per_sheet.setdefault((by_id[i]["source_file"], by_id[i]["source_sheet"]), []).append(i)
+    for (src, sheet), ids in per_sheet.items():
+        total = sum(1 for r in matcher.items
+                    if (r["source_file"], r["source_sheet"]) == (src, sheet) and r["status"] != "rejected")
+        if len(ids) >= _PASTE_MISSING_GUARD_MIN and len(ids) > total * _PASTE_MISSING_GUARD_RATIO:
+            result.warnings.append(
+                f"'{sheet}' 시트: 기존 정책 {total}개 중 {len(ids)}개가 붙여넣은 내용에 없습니다 — 시트 일부만 복사됐을 수 "
+                "있어 '원본에서 사라짐' 표시는 하지 않았습니다. 시트 전체(Ctrl+A)를 복사했는지 확인해 주세요. 정말 지운 "
+                "정책이면 항목 브라우저에서 반려하면 됩니다.")
+        else:
+            keep.extend(ids)
+    return keep
+
+
 async def import_excel(
     namespace: str, system_key: str, filename: str, file_bytes: bytes, *, force_reprocess: bool = False,
 ) -> ImportSummary:
@@ -396,6 +418,77 @@ async def import_excel(
         filename = source_name or filename
     else:
         sheets, file_warnings = excel_parser.parse_workbook(file_bytes), []
+    return await _import_sheets(namespace, ns_id, system_key, filename, sheets, file_warnings,
+                                check_missing=check_missing, force_reprocess=force_reprocess)
+
+
+# 붙여넣기는 시트 일부만 복사하는 실수가 쉬워서, 기존 정책 상당수가 한꺼번에 "사라짐"으로 검토 큐에 쏟아질 수 있다 —
+# 이 비율·건수를 넘으면 그 시트는 사라짐 표시를 하지 않고 확인하라고 알린다(파일 업로드는 시트 전체가 오니 해당 없음)
+_PASTE_MISSING_GUARD_RATIO = 0.3
+_PASTE_MISSING_GUARD_MIN = 3
+
+
+async def import_pasted(
+    namespace: str, system_key: str, source_file: str, pasted: list[tuple[str, str]], *, force_reprocess: bool = False,
+) -> ImportSummary:
+    """엑셀에서 복사해 붙여넣은 시트(탭 구분 텍스트)로 임포트 (2026-10-06, v2.127).
+
+    사내 문서 보안(DRM) 엑셀은 서버도 브라우저도 못 열지만 엑셀에서 복사는 된다 — 담당자가 설치·변환 없이 바뀐 시트만
+    붙여넣는다. 파싱 규칙(헤더 인식·병합 칸 채우기·행 번호)은 엑셀 업로드와 같은 `parse_sheet_rows`. 원본 파일 이름·시트
+    이름은 "같은 정책서의 같은 시트"를 가리는 기준이라 화면이 이 파트의 기존 값에서 고르게 한다(`list_sources`)."""
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+    if ns_id is None:
+        raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
+    source_file = (source_file or "").strip()
+    if not source_file:
+        raise ValueError("원본 정책서 파일 이름을 골라 주세요 — 같은 정책서의 정책을 찾는 기준입니다.")
+    if not pasted:
+        raise ValueError("붙여넣은 시트가 없습니다.")
+    names = [n.strip() for n, _ in pasted]
+    if any(not n for n in names):
+        raise ValueError("시트 이름이 빈 칸이 있습니다 — 엑셀 아래쪽 탭에 적힌 이름 그대로 넣어 주세요.")
+    if len(set(names)) != len(names):
+        raise ValueError("같은 시트 이름이 두 번 들어 있습니다 — 시트마다 한 번씩만 붙여넣어 주세요.")
+    sheets = []
+    for name, text in pasted:
+        rows = parse_pasted_table(text)
+        if not rows:
+            raise ValueError(f"'{name.strip()}' 시트에 붙여넣은 내용이 없습니다.")
+        sheets.append(excel_parser.parse_sheet_rows(name.strip(), rows))
+    return await _import_sheets(namespace, ns_id, system_key, source_file, sheets, [],
+                                check_missing=True, force_reprocess=force_reprocess, paste_guard=True)
+
+
+def parse_pasted_table(text: str) -> list[tuple]:
+    """엑셀 복사 텍스트 → 행 목록. 엑셀은 칸 안 줄바꿈·따옴표가 있으면 그 칸을 큰따옴표로 감싸 내보낸다(csv 규칙)."""
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    rows = [tuple(r) for r in csv.reader(io.StringIO(text), delimiter="\t")]
+    while rows and not any(c.strip() for c in rows[-1]):
+        rows.pop()
+    return rows
+
+
+async def list_sources(namespace: str) -> list[dict]:
+    """이 파트에 들어 있는 정책서 원본 파일·시트 목록(현행 항목 기준) — 붙여넣기 화면이 이름을 고르게."""
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return []
+        rows = await conn.fetch(
+            "SELECT source_file, source_sheet, count(*) AS n FROM policy_item "
+            "WHERE namespace_id = $1 AND status NOT IN ('deprecated', 'rejected') AND source_file IS NOT NULL "
+            "GROUP BY 1, 2 ORDER BY 1, 2", ns_id)
+    out: dict[str, list] = {}
+    for r in rows:
+        out.setdefault(r["source_file"], []).append({"name": r["source_sheet"], "items": r["n"]})
+    return [{"source_file": f, "sheets": sh} for f, sh in out.items()]
+
+
+async def _import_sheets(
+    namespace: str, ns_id: int, system_key: str, filename: str, sheets: list, file_warnings: list[str], *,
+    check_missing: bool, force_reprocess: bool, paste_guard: bool = False,
+) -> ImportSummary:
     result = ImportSummary(source_file=filename, warnings=list(file_warnings))
     async with get_conn() as conn:
         matcher = await _PolicyMatcher.load(conn, ns_id)
@@ -489,6 +582,8 @@ async def import_excel(
     # 큐에 올린다 — 검색은 pending_review도 포함이라 담당자가 결정하기 전까진 답변이 그대로다(위험도 "높음" 사유로 표시,
     # 반려 = 폐기 / 승인 = 유지). 모든 시트가 성공한 뒤에만(중간에 실패하면 여기까지 안 옴).
     missing_ids = matcher.missing(imported_policy_sheets, filename) if check_missing else []
+    if paste_guard and missing_ids:
+        missing_ids = _apply_paste_guard(matcher, missing_ids, result)
     if missing_ids:
         async with get_conn() as conn:
             res = await conn.execute(

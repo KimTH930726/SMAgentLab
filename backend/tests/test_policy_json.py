@@ -136,11 +136,11 @@ def test_excel_reports_columns_and_warns_when_body_column_missing():
     assert any("본문 칸" in w and "--map" in w for w in sh.warnings)
 
 
-def test_encrypted_excel_gives_json_guidance():
-    """사내 문서 보안 암호화 파일(엑셀 형식 아님) — 서버 오류 대신 JSON 변환 안내."""
+def test_encrypted_excel_gives_paste_guidance():
+    """사내 문서 보안 암호화 파일(엑셀 형식 아님) — 서버 오류 대신 '시트 붙여넣기' 안내(v2.127, 파이썬 변환기는 담당자가 못 씀)."""
     with pytest.raises(ValueError) as e:
         excel_parser.parse_workbook(b"DRM-encrypted-bytes")
-    assert "JSON" in str(e.value)
+    assert "시트 붙여넣기" in str(e.value)
 
 
 @pytest.mark.asyncio

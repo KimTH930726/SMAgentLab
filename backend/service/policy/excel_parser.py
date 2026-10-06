@@ -210,7 +210,7 @@ def parse_sheet_rows(sheet_name: str, rows: list[tuple]) -> ParsedSheet:
         if body_col is None:
             sheet.warnings.append(
                 "본문 칸(조건/상세·내용 등)을 찾지 못해 본문이 빈 채로 들어갑니다 — 본문 칸의 헤더 이름을 확인하거나, "
-                "변환기에 --map 본문=\"헤더 이름\"으로 지정해 다시 변환하세요.")
+                "변환기를 쓴다면 --map 본문=\"헤더 이름\"으로 지정해 다시 변환하세요.")
         if not sheet.policy_rows:
             sheet.warnings.append("정책명이 채워진 행이 하나도 없습니다.")
         return sheet
@@ -231,9 +231,9 @@ def parse_workbook(file_bytes: bytes) -> list[ParsedSheet]:
         if file_bytes[:8] == bytes.fromhex("D0CF11E0A1B11AE1"):
             raise ValueError(
                 "옛 엑셀 형식(.xls)이거나 사내 문서 보안으로 암호화된 파일이라 열 수 없습니다 — .xls면 엑셀에서 .xlsx로 다시 "
-                "저장해 올리고, 보안 문서면 변환기(scripts/excel_to_policy_json.py)로 JSON을 만들어 올려 주세요.") from e
+                "저장해 올리고, 보안 문서면 '시트 붙여넣기'로 엑셀에서 복사해 붙여넣어 주세요.") from e
         raise ValueError(
-            "엑셀 파일이 아닙니다(또는 사내 문서 보안으로 암호화된 파일) — 정책서 엑셀(.xlsx)이나 변환기로 만든 JSON을 올려 주세요.") from e
+            "엑셀 파일이 아닙니다(또는 사내 문서 보안으로 암호화된 파일) — 보안 문서면 '시트 붙여넣기'로 엑셀에서 복사해 붙여넣어 주세요. 보안이 없는 엑셀(.xlsx)은 파일로 올리면 됩니다.") from e
     try:
         return [parse_sheet_rows(ws.title, list(ws.iter_rows(values_only=True))) for ws in wb.worksheets]
     finally:
