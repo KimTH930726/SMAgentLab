@@ -421,10 +421,15 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
                 raise ValueError("이 답변의 근거가 아닙니다.")
             target_type, target_id, sub_id = c["target_type"], c["target_id"], c["target_sub_id"]
             original = await _load_original(conn, ns_id, target_type, target_id, sub_id, None)
-    # 사용자 의견이 없으면 맞는 내용 정보가 없다 — 자리표시 문구로 초안을 만들면 원문 그대로이거나(무의미한 새 버전),
-    # "빠진 내용"이면 틀렸다고 신고된 답변을 지식으로 옮겨 적는다(/code-review). 담당자가 직접 수정한다.
-    proposed = None if target_type == "answer" or not item["user_input"] else await draft_mod.draft_correction(
-        target_type, original, item["user_input"], None if target_type == "missing" else context)
+    # 사용자 의견이 없으면 맞는 내용 정보가 없다 — 값을 지어내지 않고 의심 구간에 【확인 필요】만 단 "검토 초안"을 만든다
+    # (2026-10-07, 사용자 지적 "양식은 만들어줘야"). 표시가 남으면 승인이 막혀 확인 안 된 초안이 반영되지 않는다.
+    if target_type == "answer":
+        proposed = None
+    elif not item["user_input"]:
+        proposed = await draft_mod.draft_review_template(target_type, original, context)
+    else:
+        proposed = await draft_mod.draft_correction(
+            target_type, original, item["user_input"], None if target_type == "missing" else context)
     # 변경 이력은 AI 판정이 있던 신고에서 대상이 실제로 바뀔 때만 남긴다 — 같은 대상 재생성("초안 다시 만들기")을
     # 변경으로 세면 "담당자가 AI 판정을 뒤집은 비율" 측정이 부풀고, 직접 지정 신고엔 판정 자체가 없다(/code-review).
     verdict = _json(item["ai_verdict"])
@@ -546,6 +551,9 @@ def _validate_proposed(target_type: str, proposed: Optional[dict]) -> dict:
     for k in draft_mod._REQUIRED[target_type]:
         if not str(proposed.get(k) or "").strip():
             raise ValueError(f"수정안의 '{k}'가 비어 있습니다.")
+    if draft_mod.has_review_marks(proposed):
+        # 검토 초안(의견 없는 신고)의 표시가 남은 채 반영되면 "【확인 필요…】"가 지식·정책 본문에 그대로 들어간다
+        raise ValueError("【확인 필요】 표시가 남아 있어요 — [직접 수정]에서 해당 부분을 확인해 고치고 표시를 지운 뒤 반영하세요.")
     return proposed
 
 

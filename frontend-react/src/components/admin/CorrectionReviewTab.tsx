@@ -143,7 +143,13 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
   });
   const retarget = useMutation({
     mutationFn: (key: string) => retargetCorrection(item.id, key),
-    onSuccess: () => { setError(''); onDone(); },
+    // 서버는 초안을 못 만들어도 200(proposed=null)이라, 의견이 있는데 초안이 비면 AI 실패로 보고 알린다(2026-10-07 — 눌러도 아무 표시가
+    // 없어 고장처럼 보였다). 의견 없음·답변 오류 대상은 원래 초안이 없는 경우라 알리지 않는다.
+    onSuccess: (r) => {
+      setError(r.proposed === null && item.user_input && r.target_type !== 'answer'
+        ? 'AI가 초안을 만들지 못했어요(사내 AI 응답 실패일 수 있음) — 잠시 후 다시 누르거나 [직접 수정]으로 고치세요.' : '');
+      onDone();
+    },
     onError: (e: Error) => setError(e.message || '대상 변경에 실패했습니다.'),
   });
   const pending = item.status === 'pending';
@@ -154,6 +160,10 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
   const key = currentKey(item);
   const candidates = item.candidates ?? [];
   const busy = approve.isPending || retarget.isPending;
+  // 의견 없는 신고의 검토 초안(2026-10-07): AI는 값을 안 바꾸고 의심 구간에 【확인 필요】만 단다 — 표시가 남으면 서버가 승인을 막는다
+  const REVIEW_MARK = '【확인 필요';
+  const proposedMarked = !!item.proposed && Object.values(item.proposed).some((v) => String(v ?? '').includes(REVIEW_MARK));
+  const draftMarks = Object.values(draft).reduce((n, v) => n + (String(v ?? '').split(REVIEW_MARK).length - 1), 0);
 
   return (
     <div className="rounded-xl border border-slate-700 p-4 space-y-3">
@@ -248,7 +258,8 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
             {!editing ? (
               <>
                 <p className="text-xs text-slate-500">
-                  {item.user_input && item.kind !== 'search_noise' ? '사용자 입력으로 정리된 수정안' : item.proposed ? 'AI 수정안(추정 — 사용자 의견 없음)' : '수정안'}
+                  {proposedMarked ? 'AI 검토 초안 — 의견이 없어 값은 그대로, 의심 부분에 【확인 필요】 표시'
+                    : item.user_input && item.kind !== 'search_noise' ? '사용자 입력으로 정리된 수정안' : item.proposed ? 'AI 수정안(추정 — 사용자 의견 없음)' : '수정안'}
                 </p>
                 {item.proposed ? (
                   <pre className="whitespace-pre-wrap text-xs text-slate-200 bg-slate-900/60 border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3 max-h-80 overflow-y-auto font-sans">
@@ -258,8 +269,8 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
                   <p className="text-xs text-amber-600 dark:text-amber-400 border border-dashed border-slate-700 rounded-lg p-3">
                     {item.kind === 'search_noise'
                       ? '검색 노이즈 표시라 AI 수정안이 없습니다 — 내용을 직접 고치거나, 문제 없으면 종료하세요.'
-                      : item.kind === 'answer_signal' && !item.user_input
-                        ? '사용자 의견이 없어 맞는 내용을 알 수 없어요 — [직접 수정]으로 지금 내용에서 고치거나, 문제 없으면 종료하세요.'
+                      : !item.user_input
+                        ? '신고 의견이 없어요 — [AI 검토 초안]으로 의심 부분 표시를 받거나 [직접 수정]으로 고치세요. 문제 없으면 종료하세요.'
                         : 'AI 수정안이 없습니다 — 직접 수정하거나 AI 초안을 만드세요.'}
                   </p>
                 )}
@@ -315,9 +326,12 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
               <Button variant="ghost" size="sm" onClick={() => setRejecting(true)}>
                 {canFix && item.kind !== 'search_noise' ? '반려…' : '종료…'}
               </Button>
-              {canFix && !editing && !item.proposed && item.kind !== 'search_noise' && !(item.kind === 'answer_signal' && !item.user_input) && (
-                <Button variant="ghost" size="sm" loading={retarget.isPending} onClick={() => retarget.mutate(key)}>
-                  <Sparkles className="w-3.5 h-3.5" />AI 초안 만들기
+              {/* 의견이 없으면 "검토 초안"(값은 그대로, 의심 부분 표시) — 예전엔 초안을 안 만들어 눌러도 아무 일이 없었다(2026-10-07, 99번) */}
+              {canFix && !editing && !item.proposed && item.kind !== 'search_noise' && (
+                <Button variant="ghost" size="sm" loading={retarget.isPending} onClick={() => retarget.mutate(key)}
+                  title={item.user_input ? '신고 의견대로 고친 수정안을 AI가 만듭니다'
+                    : '의견이 없어 맞는 값은 모릅니다 — AI가 질문과 견줘 의심되는 부분에 【확인 필요】를 달아 둡니다(값은 안 바꿈)'}>
+                  <Sparkles className="w-3.5 h-3.5" />{item.user_input ? 'AI 초안 만들기' : 'AI 검토 초안'}
                 </Button>
               )}
               {canFix && !editing && (
@@ -326,7 +340,7 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
                   <PenLine className="w-3.5 h-3.5" />직접 수정
                 </Button>
               )}
-              {canFix && !editing && item.proposed && (
+              {canFix && !editing && item.proposed && !proposedMarked && (
                 <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy}
                   title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
                   onClick={() => approve.mutate(undefined)}>
@@ -336,7 +350,10 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
               {canFix && editing && (
                 <>
                   <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>편집 취소</Button>
-                  <Button variant="primary" size="sm" loading={approve.isPending} disabled={!draftReady || busy}
+                  {draftMarks > 0 && (
+                    <span className="text-xs text-amber-600 dark:text-amber-400">【확인 필요】 {draftMarks}곳을 고치고 표시를 지워야 반영돼요</span>
+                  )}
+                  <Button variant="primary" size="sm" loading={approve.isPending} disabled={!draftReady || busy || draftMarks > 0}
                     title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
                     onClick={() => approve.mutate(draft)}>
                     수정 내용으로 반영

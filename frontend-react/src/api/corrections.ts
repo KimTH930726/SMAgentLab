@@ -121,6 +121,7 @@ export async function analyzeCorrection(id: number): Promise<{ analyzed: boolean
 }
 
 /** 담당자가 AI 판정 대상을 바꿈(같은 대상이면 초안만 다시 생성) */
-export async function retargetCorrection(id: number, key: string): Promise<unknown> {
+/** 대상 변경·초안 다시 만들기 — proposed가 null이면 초안 없음(의견 없음·답변 오류 대상·AI 응답 실패) */
+export async function retargetCorrection(id: number, key: string): Promise<{ id: number; target_type: string; proposed: Record<string, string> | null }> {
   return apiFetch(`/corrections/${id}/retarget`, { method: 'POST', body: JSON.stringify({ key }) });
 }

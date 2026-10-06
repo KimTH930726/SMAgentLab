@@ -542,8 +542,10 @@ class TestParseNoOpinion:
 
 class TestNoOpinionRetarget:
     @pytest.mark.asyncio
-    async def test_retarget_without_user_input_makes_no_draft(self):
-        """의견 없는 신고는 대상을 골라도 초안을 만들지 않는다 — 원문 그대로이거나 틀린 답변을 지식으로 옮겨 적게 됨."""
+    async def test_retarget_without_user_input_makes_review_template_not_correction(self):
+        """의견 없는 신고는 "의견대로 고친 초안"을 만들지 않는다(맞는 값을 모름) — 대신 값은 그대로 두고 【확인 필요】만 단 검토 초안
+        (2026-10-07, 예전엔 초안이 아예 없어 버튼을 눌러도 아무 일이 없었다). 예전 가드의 전제(원문 그대로인 무의미한 새 버전 /
+        틀린 답변을 지식으로 옮겨 적기)는 표시가 남으면 승인이 막히고 빠진 내용 양식엔 답변을 넣지 않는 것으로 지킨다."""
         conn = _conn()
         conn.fetchrow = AsyncMock(return_value={
             "status": "pending", "namespace_id": 1, "message_id": 3, "user_input": None, "ai_verdict": None,
@@ -551,13 +553,66 @@ class TestNoOpinionRetarget:
             "target_type": "auto", "target_id": None, "target_sub_id": None})
         conn.execute = AsyncMock()
         redraft = AsyncMock()
-        with patch.object(svc, "get_conn", return_value=conn), \
-             patch.object(svc, "_load_original", AsyncMock(return_value={"content": "c"})), \
-             patch.object(svc.draft_mod, "draft_correction", redraft):
+        template = AsyncMock(return_value={"content": "【확인 필요: x】 c"})
+        with patch.object(svc, "get_conn", return_value=conn),              patch.object(svc, "_load_original", AsyncMock(return_value={"content": "c"})),              patch.object(svc.draft_mod, "draft_correction", redraft),              patch.object(svc.draft_mod, "draft_review_template", template):
             for key in ("k-1", "missing"):
                 out = await svc.retarget(1, {"id": 9}, key)
-                assert out["proposed"] is None
+                assert draft.has_review_marks(out["proposed"])
+            out = await svc.retarget(1, {"id": 9}, "answer")
+            assert out["proposed"] is None                 # 답변 오류 대상은 고칠 지식이 없음
         redraft.assert_not_awaited()
+        assert template.await_count == 2
+
+
+class _ReviewLLM:
+    def __init__(self, reply=None, exc=None):
+        self.reply, self.exc = reply, exc
+
+    async def generate_once(self, **k):
+        if self.exc:
+            raise self.exc
+        return self.reply
+
+
+class TestReviewTemplate:
+    """의견 없는 신고의 검토 초안 — 값을 지어내지 않고 표시만, 실패해도 항상 양식은 나온다."""
+    ORIG_K = {"content": "비밀번호 변경 주기는 90일이다.", "category": "보안", "heading_path": []}
+    ORIG_P = {"policy_name": "최대 주문 수량", "category_path": ["배민"], "raw_body": "최대 주문 수량 : 20개",
+              "param": {"name": "최대 주문 수량", "condition": None, "value": "20", "unit": "개"}}
+
+    @pytest.mark.asyncio
+    async def test_llm_marks_kept_when_text_otherwise_unchanged(self):
+        llm = _ReviewLLM('{"content": "비밀번호 변경 주기는 90일【확인 필요: 질문은 60일 기준】이다."}')
+        with patch.object(draft, "get_llm_provider", return_value=llm):
+            out = await draft.draft_review_template("knowledge", self.ORIG_K, {"question": "주기는?", "answer": "90일"})
+        assert out == {"content": "비밀번호 변경 주기는 90일【확인 필요: 질문은 60일 기준】이다."}
+
+    @pytest.mark.asyncio
+    async def test_llm_that_changes_values_falls_back_to_copy(self):
+        """표시를 달면서 값을 바꾸면(20→50) 담당자가 놓칠 수 있다 — 원문 복사 양식으로."""
+        llm = _ReviewLLM('{"name": "최대 주문 수량", "condition": null, "value": "50【확인 필요: x】", "unit": "개",'
+                         ' "raw_body": "최대 주문 수량 : 50개【확인 필요: x】"}')
+        with patch.object(draft, "get_llm_provider", return_value=llm):
+            out = await draft.draft_review_template("policy_param", self.ORIG_P)
+        assert out["value"] == "20" and out["raw_body"].startswith("【확인 필요") and out["raw_body"].endswith("최대 주문 수량 : 20개")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("llm", [_ReviewLLM(exc=RuntimeError("gw down")), _ReviewLLM("not json"),
+                                     _ReviewLLM('{"content": "비밀번호 변경 주기는 90일이다."}')])   # 표시 없음
+    async def test_failure_or_no_marks_still_returns_template(self, llm):
+        with patch.object(draft, "get_llm_provider", return_value=llm):
+            out = await draft.draft_review_template("knowledge", self.ORIG_K)
+        assert draft.has_review_marks(out) and out["content"].endswith("비밀번호 변경 주기는 90일이다.")
+
+    @pytest.mark.asyncio
+    async def test_missing_template_has_question_but_never_the_answer(self):
+        out = await draft.draft_review_template("missing", {"question": "주기는?", "answer": "틀린 답 90일"})
+        assert out["content"].startswith("주기는?") and "틀린 답" not in out["content"] and draft.has_review_marks(out)
+
+    def test_marked_proposal_cannot_be_approved(self):
+        with pytest.raises(ValueError, match="확인 필요"):
+            svc._validate_proposed("knowledge", {"content": "본문【확인 필요: 기한】"})
+        assert svc._validate_proposed("knowledge", {"content": "고친 본문"}) == {"content": "고친 본문"}
 
 
 class TestContextInDraft:
