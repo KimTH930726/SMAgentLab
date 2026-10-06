@@ -6,7 +6,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { getNamespaceStats, deleteQueryLog, getQueryLogs, bulkDeleteQueryLogs, fillKnowledgeGap } from '../../api/stats';
 import { createKnowledge } from '../../api/knowledge';
-import { getNamespaces, getNamespacesDetail, getCategories } from '../../api/namespaces';
+import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
@@ -37,30 +37,17 @@ interface KnowledgeRegisterModalProps {
 
 function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: KnowledgeRegisterModalProps) {
   const [content, setContent] = useState('');
-  const [category, setCategory] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: categories = [] } = useQuery({
-    queryKey: ['categories', namespace],
-    queryFn: () => getCategories(namespace),
-    enabled: !!namespace,
-    staleTime: 0,
-  });
-  // 업무구분은 등록 시 필수값 — '공통지식'을 최상단 기본값으로 노출
-  const sortedCategories = [...categories].sort((a, b) =>
-    a.name === '공통지식' ? -1 : b.name === '공통지식' ? 1 : a.name.localeCompare(b.name)
-  );
-
-  // open 또는 log가 바뀔 때 폼 초기화 (AI 답변을 내용에 미리 채워줌)
+  // 열 때 빈 칸으로 — 공백 질의의 AI 답변은 "관련 지식을 찾지 못했습니다"뿐이라 채워 두면 지우는 수고만 생겼다(2026-10-06).
+  // 업무구분도 묻지 않는다 — 서버가 내용으로 추천, 없으면 "미분류"(다른 등록 경로와 같음, 업무구분 없는 파트도 등록 가능)
   useEffect(() => {
     if (open && log) {
-      setContent(log.answer ?? '');
-      setCategory(sortedCategories[0]?.name ?? '');
+      setContent('');
       setError(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, log, sortedCategories.length]);
+  }, [open, log]);
 
   const handleSubmit = async () => {
     if (!log || !content.trim()) return;
@@ -70,7 +57,6 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
       const created = await createKnowledge({
         namespace,
         content,
-        category: category || null,
       });
       await fillKnowledgeGap(log.id, created.id);
       if (created.pending_review) {
@@ -111,29 +97,13 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
             value={content}
             onChange={(e) => setContent(e.target.value)}
             className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[200px] leading-relaxed"
-            placeholder="지식 베이스에 등록할 가이드 내용을 작성하세요"
+            placeholder="이 질문에 답이 될 내용을 적어 주세요"
           />
         </div>
 
-        {/* 업무구분 */}
-        {sortedCategories.length > 0 ? (
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              업무구분 <span className="text-rose-600 dark:text-rose-400">*</span>
-            </label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-            >
-              {sortedCategories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-            </select>
-          </div>
-        ) : (
-          <p className="text-xs text-amber-600 dark:text-amber-400">
-            이 파트에 등록된 업무구분이 없어 지식을 등록할 수 없습니다. 기준정보관리에서 업무구분을 먼저 추가해주세요.
-          </p>
-        )}
+        <p className="text-[11px] text-slate-500" title="기존 업무구분 중 내용에 맞는 것을 추천하고, 없으면 '미분류'로 등록합니다">
+          업무구분은 내용으로 자동 지정됩니다.
+        </p>
 
         {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
@@ -142,10 +112,10 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
           <Button
             variant="primary" size="sm"
             loading={submitting}
-            disabled={!content.trim() || !category}
+            disabled={!content.trim()}
             onClick={handleSubmit}
           >
-            지식 등록(공백 메우기)
+            지식 등록
           </Button>
         </div>
       </div>
@@ -222,7 +192,7 @@ function QueryLogModal({
   };
 
   const titleMap: Record<ModalType, string> = {
-    total: '전체 질의', pending: '답변한 질의', no_knowledge: '지식 공백 질의', filled: '공백을 메운 질의',
+    total: '전체 질의', pending: '답변한 질의', no_knowledge: '지식 공백 질의', filled: '해결된 공백 질의',
   };
   const title = modalType ? `${titleMap[modalType]} (${logs.length}건)` : '';
 
@@ -285,7 +255,7 @@ function QueryLogModal({
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       {log.mapped_term && <Badge color="indigo">{log.mapped_term}</Badge>}
                       {isFilled(log) && log.resolved_at ? (
-                        <span className="text-xs text-slate-500">메움 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
+                        <span className="text-xs text-slate-500">해결 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
                       ) : (
                         <span className="text-xs text-slate-500">{new Date(log.created_at).toLocaleString('ko-KR')}</span>
                       )}
@@ -310,12 +280,12 @@ function QueryLogModal({
                       : log.status === 'no_knowledge' ? 'text-orange-600 dark:text-orange-400'
                       : 'text-emerald-600 dark:text-emerald-400'
                     }>
-                      {isFilled(log) ? '공백 메움' : log.status === 'no_knowledge' ? '지식 공백' : '답변'}
+                      {isFilled(log) ? '공백 해결' : log.status === 'no_knowledge' ? '지식 공백' : '답변'}
                     </span></span>
                     {log.mapped_term && <span>용어: <span className="text-indigo-600 dark:text-indigo-400">{log.mapped_term}</span></span>}
                     <span>질문 {new Date(log.created_at).toLocaleString('ko-KR')}</span>
                     {isFilled(log) && log.resolved_at && (
-                      <span>메움 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
+                      <span>해결 {new Date(log.resolved_at).toLocaleString('ko-KR')}</span>
                     )}
                   </div>
 
@@ -323,7 +293,7 @@ function QueryLogModal({
                   {log.answer && (
                     <div>
                       <p className="text-xs text-slate-500 mb-1">
-                        {log.knowledge_active ? '메운 지식' : isFilled(log) ? 'AI 답변 (메운 지식은 검토 대기)' : 'AI 답변'}
+                        {log.knowledge_active ? '등록한 지식' : isFilled(log) ? 'AI 답변 (등록한 지식은 검토 대기)' : 'AI 답변'}
                       </p>
                       <div className="bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
                         {log.answer}
@@ -381,8 +351,8 @@ function QueryLogModal({
 
 // ── StatsPanel ───────────────────────────────────────────────────────────────
 
-export function StatsPanel() {
-  const { namespace: storeNamespace } = useAppStore();
+export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => void } = {}) {
+  const { namespace: storeNamespace, setNamespace } = useAppStore();
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
   const [selectedNs, setSelectedNs] = useState(storeNamespace || '');
@@ -416,7 +386,7 @@ export function StatsPanel() {
   const answerSegments: DonutSegment[] = [
     { value: stats?.answered ?? 0, color: '#10b981', label: '답변', tooltip: '근거를 찾아 답변함 — 틀렸으면 사용자가 "답변 틀림"으로 신고(정정 요청)' },
     { value: stats?.no_knowledge ?? 0, color: '#f97316', label: '지식 공백', tooltip: '"관련 지식을 찾지 못했습니다"가 뜬 질의 — 지식 등록 필요' },
-    { value: stats?.filled ?? 0, color: '#6366f1', label: '공백 메움', tooltip: '지식 공백이었다가 지식을 등록해 메운 질의' },
+    { value: stats?.filled ?? 0, color: '#6366f1', label: '공백 해결', tooltip: '지식 공백이었다가 지식을 등록해 해결한 질의' },
   ];
 
   const topTerms = (stats?.term_distribution ?? []).slice(0, 8);
@@ -439,10 +409,10 @@ export function StatsPanel() {
       highlight: false, tip: '근거를 찾아 답변한 질의 — 정정 신고가 없으면 맞은 것으로 봅니다',
     },
     {
-      // 질의 목록이 아니라 개선 원장 건수 — 처리는 지식 베이스 › 정정 검토에서
-      label: '정정 요청', value: stats?.corrections_open ?? 0, type: null,
+      // 질의 목록이 아니라 개선 원장 건수 — 누르면 이 파트의 지식 베이스 › 정정 검토로 이동
+      label: '정정 요청', value: stats?.corrections_open ?? 0, type: null, go: onOpenCorrections,
       icon: <Flag className="w-5 h-5 text-rose-600 dark:text-rose-400" />, bg: 'bg-rose-100 dark:bg-rose-900/40',
-      highlight: false, tip: '"답변 틀림" 신고 중 아직 처리 안 된 건 — 지식 베이스 › 정정 검토에서 처리',
+      highlight: false, tip: '"답변 틀림" 신고 중 아직 처리 안 된 건 — 눌러서 정정 검토로 이동',
     },
     {
       label: '지식 공백', value: stats?.no_knowledge ?? 0, type: 'no_knowledge' as ModalType,
@@ -450,9 +420,9 @@ export function StatsPanel() {
       highlight: (stats?.no_knowledge ?? 0) > 0, tip: '"관련 지식을 찾지 못했습니다"가 뜬 질의 — 눌러서 지식 등록',
     },
     {
-      label: '공백 메움', value: stats?.filled ?? 0, type: 'filled' as ModalType,
+      label: '공백 해결', value: stats?.filled ?? 0, type: 'filled' as ModalType,
       icon: <FileText className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />, bg: 'bg-indigo-100 dark:bg-indigo-900/40',
-      highlight: false, tip: '지식 공백을 지식 등록으로 메운 질의',
+      highlight: false, tip: '지식 공백이었다가 지식을 등록해 해결한 질의',
     },
   ];
 
@@ -479,12 +449,15 @@ export function StatsPanel() {
         <>
           {/* KPI cards — clickable */}
           <div className="grid grid-cols-5 gap-3">
-            {kpiCards.map(({ label, value, type, icon, bg, highlight, tip }) => (
+            {kpiCards.map(({ label, value, type, icon, bg, highlight, tip, go }) => (
               <button
                 key={label}
                 title={tip}
-                onClick={() => { if (type) setModalType(type); }}
-                className={`bg-slate-800 border rounded-xl p-4 flex items-center gap-3 transition-colors text-left ${type ? 'hover:bg-slate-700/60 cursor-pointer' : 'cursor-default'} ${
+                onClick={() => {
+                  if (type) setModalType(type);
+                  else if (go) { setNamespace(selectedNs); go(); }
+                }}
+                className={`bg-slate-800 border rounded-xl p-4 flex items-center gap-3 transition-colors text-left ${type || go ? 'hover:bg-slate-700/60 cursor-pointer' : 'cursor-default'} ${
                   highlight
                     ? 'border-orange-400 ring-1 ring-orange-300 hover:border-orange-500 dark:border-orange-500/60 dark:ring-orange-500/30 dark:hover:border-orange-400/80'
                     : 'border-slate-700 hover:border-indigo-500/50'

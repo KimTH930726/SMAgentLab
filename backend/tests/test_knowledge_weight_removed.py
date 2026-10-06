@@ -37,3 +37,21 @@ async def test_old_client_weight_is_dropped_everywhere():
     assert "base_weight" not in create.await_args.kwargs
     assert "base_weight" not in update.await_args.kwargs
     assert all("base_weight" not in it for it in bulk.await_args.kwargs["items"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suggested, expected", [("배송", "배송"), (None, "미분류")])
+async def test_missing_category_is_auto_assigned(suggested, expected):
+    """업무구분 없이 등록(통계 "지식 공백" → 지식 등록, 2026-10-06) — 벌크 등록과 같은 방식: 내용 추천 → 없으면 "미분류".
+    업무구분이 하나도 없는 파트(정책서만 쓰는 곳)에서 등록이 막히던 문제."""
+    create = AsyncMock(return_value={})
+    ensure = AsyncMock()
+    with patch(f"{R}.check_namespace_ownership", AsyncMock()), \
+         patch(f"{R}.service.create_knowledge", create), \
+         patch(f"{R}._run_auto_glossary", AsyncMock(return_value=0)), \
+         patch(f"{R}._ensure_category_exists", ensure), \
+         patch("core.database.resolve_namespace_id", AsyncMock(return_value=7)), \
+         patch("service.admin.service.suggest_category_for_content", AsyncMock(return_value=suggested)):
+        await add_knowledge(KnowledgeCreate.model_validate({"namespace": "ns", "content": "c"}), user=ADMIN)
+    assert create.await_args.kwargs["category"] == expected
+    assert ensure.await_count == (1 if suggested is None else 0)

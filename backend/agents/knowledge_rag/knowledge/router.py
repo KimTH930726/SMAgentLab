@@ -50,13 +50,32 @@ async def get_knowledge_list(
     return await service.list_knowledge(namespace, status)
 
 
+async def _auto_category(namespace: str, content: str) -> str:
+    """업무구분을 안 고르고 등록할 때(통계 "지식 공백" → 지식 등록 등, 2026-10-06) — 벌크 등록과 같은 방식:
+    내용으로 기존 업무구분 중 추천 → 없으면 "미분류"(파트별 최초 1회 자동 생성). 업무구분이 하나도 없는 파트
+    (정책서만 쓰는 온라인스토어 등)에서 등록 자체가 막히던 문제도 같이 풀린다."""
+    from core.database import get_conn, resolve_namespace_id
+    from service.admin.service import suggest_category_for_content
+
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+    if ns_id is None:
+        raise HTTPException(status_code=404, detail="namespace를 찾을 수 없습니다.")
+    suggested = await suggest_category_for_content(ns_id, content)
+    if suggested:
+        return suggested
+    await _ensure_category_exists(ns_id, _UNSORTED_CATEGORY, set())
+    return _UNSORTED_CATEGORY
+
+
 @router.post("", response_model=KnowledgeOut, status_code=201)
 async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_user)):
     await check_namespace_ownership(body.namespace, user)
+    category = body.category if (body.category or "").strip() else await _auto_category(body.namespace, body.content)
     row = await service.create_knowledge(
         namespace=body.namespace,
         content=body.content,
-        category=body.category,
+        category=category,
         created_by_part=user["part"],
         created_by_user_id=user["id"],
     )

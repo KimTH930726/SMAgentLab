@@ -16,7 +16,7 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
     답변: q("status = 'pending'"),
     '정정 요청': psql(`SELECT COUNT(*) FROM ops_improvement_item WHERE namespace_id = ${id} AND status = 'pending'`),
     '지식 공백': q("status = 'no_knowledge' AND resolved_knowledge_id IS NULL"),
-    '공백 메움': q("status = 'no_knowledge' AND resolved_knowledge_id IS NOT NULL"),
+    '공백 해결': q("status = 'no_knowledge' AND resolved_knowledge_id IS NOT NULL"),
   };
   // 상태는 답변·공백 + 통계 밖 시스템 오류뿐 — 해결/미해결 행이 남아 있으면 마이그레이션 #61 회귀
   expect(q("status NOT IN ('pending', 'no_knowledge', 'system_error')")).toBe('0');
@@ -45,7 +45,7 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
     await expect(page.getByText(gone, { exact: true })).toHaveCount(0);
   }
 
-  // 지식 공백 카드 → 공백 목록(펼치면 "지식 등록"), 정정 요청 카드는 목록을 열지 않는다(처리는 정정 검토 탭)
+  // 지식 공백 카드 → 공백 목록(펼치면 "지식 등록"), 정정 요청 카드 → 이 파트의 지식 베이스 › 정정 검토로 이동
   await card('지식 공백').click();
   await expect(page.getByText(`지식 공백 질의 (${expected['지식 공백']}건)`)).toBeVisible();
   if (expected['지식 공백'] !== '0') {
@@ -55,4 +55,6 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
   await page.keyboard.press('Escape');
   await card('정정 요청').click();
   await expect(page.getByText(/질의 \(\d+건\)/)).toHaveCount(0);
+  await expect(page.getByText('지식·정책을 고치자는 신호가 모두 모이는 곳', { exact: false })).toBeVisible();
+  await expect(page.locator('select').filter({ hasText: '파트 선택' })).toHaveValue(NAMESPACE);
 });

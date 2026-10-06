@@ -317,25 +317,6 @@ async def _migrate_namespace_ids(conn) -> None:
         """)
 
 
-async def _migrate_part_agent_access_table(conn) -> None:
-    """ops_part_agent_access 테이블 마이그레이션.
-
-    (2026-09-08 이전엔 ops_mcp_tool/ops_mcp_tool_log도 이 함수에서 같이 만들었다 — MCP 도구
-    기능 제거와 함께 그 부분은 삭제됐다. 이 테이블은 MCP 전용이 아닌 범용 파트-에이전트
-    접근권한 테이블이라 그대로 남긴다.)"""
-    # ── 파트-에이전트 접근 제어 ──────────────────────────────────────────
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS ops_part_agent_access (
-            id          SERIAL PRIMARY KEY,
-            part_id     INT NOT NULL REFERENCES ops_part(id) ON DELETE CASCADE,
-            agent_type  VARCHAR(50) NOT NULL,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (part_id, agent_type)
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_part_agent_access ON ops_part_agent_access (part_id)")
-
-
 async def _migrate_system_tables(conn) -> None:
     """ops_system_config, ops_prompt 테이블 및 시드 데이터 마이그레이션."""
     # ── ops_message.metadata 컬럼 추가 (text2sql 결과 영속화) ──────────
@@ -506,7 +487,6 @@ async def _migrate_knowledge_lifecycle(conn) -> None:
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1")
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS supersedes_id INT REFERENCES rag_knowledge(id) ON DELETE SET NULL")
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(200)")
-    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS quality_score FLOAT")
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ")
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS owner VARCHAR(100)")
     # logical_document_id 기본값 = 자기 id. DEFAULT절에서 자기참조가 안 되므로 백필로 대신한다 —
@@ -1033,29 +1013,6 @@ async def _migrate_drop_unused_knowledge_fields(conn) -> None:
     await conn.execute("ALTER TABLE rag_knowledge DROP COLUMN IF EXISTS query_template")
 
 
-async def _migrate_prompt_category_guides(conn) -> None:
-    """카테고리별 답변 안내문 (v2.83) — fewshot(승인 대기 12건/활성 1건, 2개월 방치, 2026-09-17
-    실측) 대체.
-
-    fewshot은 "과거 성공 답변을 예시로 보여주는" 방식이라 원리상 타당하지만, 후보→활성
-    승격에 담당자의 지속적 검토가 필요한데 그 역할을 맡을 사람이 없어(파트별 전담 관리자
-    부재) 사실상 죽어있었다. rag_knowledge_category와 동일하게 (namespace, category) 단위로
-    스코핑하되, 동적 큐 대신 관리자가 직접 쓰는 정적 안내문으로 — 승인 절차 자체가 없어야
-    유지보수 부담이 0에 수렴한다는 게 이 프로젝트에서 반복 확인된 교훈(container_name 등).
-    """
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS ops_prompt_category_guide (
-            id            SERIAL PRIMARY KEY,
-            namespace_id  INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            category      VARCHAR(100) NOT NULL,
-            guide_text    TEXT NOT NULL,
-            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (namespace_id, category)
-        )
-    """)
-
-
 async def _migrate_remove_fewshot(conn) -> None:
     """fewshot 기능 전체 제거 (v2.84).
 
@@ -1366,6 +1323,32 @@ async def _migrate_query_system_error(conn) -> None:
         logger.info("[migrate #64] LLM 연결 실패 기록 → system_error: %s", r)
 
 
+async def _migrate_drop_orphans_2026_10_06(conn) -> None:
+    """고아 스키마·잔재 데이터 정리 (2026-10-06, #65, 사용자 확인 후).
+
+    - `ops_part_agent_access`: 에이전트가 여럿이던 시절 파트별 사용 가능 에이전트 — 읽고 쓰는 코드 없음, 0행.
+    - `ops_prompt_category_guide`: fewshot 대체용 업무구분별 안내문(v2.83) — 테이블만 만들고 코드 연결 안 됨, 0행.
+    - `rag_knowledge.quality_score`: 생명주기 Phase 0에 미리 추가했으나 한 번도 안 씀(전부 NULL).
+    - 검토가 끝난 지식의 중복 의심 매칭 — 검토 대기 화면·병합에서만 읽는다(이제 처리 시 같이 지움).
+    - 소속 메일이 모두 보관기간(30일)으로 지워진 VOC 반복 클러스터 — 탐지는 최근 창 안의 클러스터만 보므로 다시 안 쓰임
+      (이제 보관 정리에서 같이 지움).
+    전부 조건부라 다시 돌려도 안전(멱등).
+    """
+    async with conn.transaction():
+        await conn.execute("DROP TABLE IF EXISTS ops_part_agent_access")
+        await conn.execute("DROP TABLE IF EXISTS ops_prompt_category_guide")
+        await conn.execute("ALTER TABLE rag_knowledge DROP COLUMN IF EXISTS quality_score")
+        dup = await conn.execute(
+            "DELETE FROM rag_knowledge_duplicate_match d USING rag_knowledge k "
+            "WHERE k.id = d.new_knowledge_id AND k.status <> 'pending_review'")
+        clusters = await conn.execute(
+            "DELETE FROM ops_voc_cluster v WHERE last_seen_at < NOW() - INTERVAL '30 days' "
+            "AND NOT EXISTS (SELECT 1 FROM ops_email_analysis e WHERE e.voc_cluster_id = v.id)")
+    for label, r in (("끝난 중복 매칭", dup), ("빈 VOC 클러스터", clusters)):
+        if r and not r.endswith(" 0"):
+            logger.info("[migrate #65] %s 삭제: %s", label, r)
+
+
 async def _migrate_improvement_ledger(conn) -> None:
     """개선 원장 `ops_improvement_item` (2026-10-01, 근거 정정 흐름).
 
@@ -1440,7 +1423,7 @@ async def _migrate_drop_dead_schema_2026_09_22(conn) -> None:
     - policy_param.approved (BOOLEAN): INSERT 경로에 이 컬럼이 아예 빠져 있어 전부 기본값
       false(389/389)로만 존재 — 어디서도 읽거나 true로 세팅하는 코드 없음.
     - ops_http_tool / ops_mcp_tool / ops_mcp_tool_log: MCP 도구 에이전트 완전 제거(v2.67)
-      후 삭제 마이그레이션 없이 방치된 테이블 — architecture.md v2.67에 스스로 명시.
+      후 삭제 마이그레이션 없이 방치된 테이블 — architecture 이력 v2.67에 스스로 명시(docs/archive/architecture-history-v2.0-v2.99.md).
     - sql_*(10개, Text2SQL 에이전트 제거 v2.51 이후 완전히 죽음, 코드는 archive/with-text2sql
       브랜치에 보존): audit_log/cache/fewshot/pipeline_stage/relation/schema_column/
       schema_table/schema_vector/synonym/target_db.
@@ -1522,7 +1505,6 @@ async def _run_migrations() -> None:
     async with get_conn() as conn:
         await _migrate_core_tables(conn)
         await _migrate_namespace_ids(conn)
-        await _migrate_part_agent_access_table(conn)
         await _migrate_system_tables(conn)
         await _migrate_knowledge_ingestion(conn)
         await _migrate_duplicate_review(conn)
@@ -1535,7 +1517,6 @@ async def _run_migrations() -> None:
         await _migrate_policy_track2_history(conn)
         await _migrate_confluence_sync(conn)
         await _migrate_drop_unused_knowledge_fields(conn)
-        await _migrate_prompt_category_guides(conn)
         await _migrate_remove_fewshot(conn)
         await _migrate_ensure_ko_text_search_helpers(conn)
         await _migrate_knowledge_heading_path(conn)
@@ -1547,6 +1528,7 @@ async def _run_migrations() -> None:
         await _migrate_drop_feedback_tables(conn)
         await _migrate_reset_knowledge_weight(conn)
         await _migrate_query_system_error(conn)
+        await _migrate_drop_orphans_2026_10_06(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

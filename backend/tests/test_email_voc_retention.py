@@ -19,11 +19,11 @@ sys.modules[_spec.name] = retention
 _spec.loader.exec_module(retention)
 
 
-def _make_fake_conn(analysis_result="DELETE 0", cycle_result="DELETE 0"):
+def _make_fake_conn(analysis_result="DELETE 0", cycle_result="DELETE 0", cluster_result="DELETE 0"):
     conn = MagicMock()
     conn.__aenter__ = AsyncMock(return_value=conn)
     conn.__aexit__ = AsyncMock(return_value=False)
-    conn.execute = AsyncMock(side_effect=[analysis_result, cycle_result])
+    conn.execute = AsyncMock(side_effect=[analysis_result, cycle_result, cluster_result])
     return conn
 
 
@@ -42,17 +42,17 @@ class TestParseDeleteCount:
 class TestCleanupOldRecords:
     @pytest.mark.asyncio
     async def test_returns_deleted_counts(self, monkeypatch):
-        conn = _make_fake_conn(analysis_result="DELETE 12", cycle_result="DELETE 3")
+        conn = _make_fake_conn(analysis_result="DELETE 12", cycle_result="DELETE 3", cluster_result="DELETE 2")
         monkeypatch.setattr(retention, "get_conn", MagicMock(return_value=conn))
         result = await retention.cleanup_old_records()
-        assert result == {"deleted_analysis": 12, "deleted_cycles": 3}
+        assert result == {"deleted_analysis": 12, "deleted_cycles": 3, "deleted_clusters": 2}
 
     @pytest.mark.asyncio
     async def test_zero_deletions_is_safe_to_call_repeatedly(self, monkeypatch):
         conn = _make_fake_conn(analysis_result="DELETE 0", cycle_result="DELETE 0")
         monkeypatch.setattr(retention, "get_conn", MagicMock(return_value=conn))
         result = await retention.cleanup_old_records()
-        assert result == {"deleted_analysis": 0, "deleted_cycles": 0}
+        assert result == {"deleted_analysis": 0, "deleted_cycles": 0, "deleted_clusters": 0}
 
     @pytest.mark.asyncio
     async def test_uses_retention_days_cutoff(self, monkeypatch):
@@ -65,3 +65,7 @@ class TestCleanupOldRecords:
         assert "ops_email_analysis" in first_call_args[0]
         second_call_args = conn.execute.call_args_list[1].args
         assert "ops_email_poll_cycle" in second_call_args[0]
+        # 소속 메일이 모두 지워진 반복 클러스터도 같은 기준으로(2026-10-06) — 메일이 남아 있는 클러스터는 건드리지 않음
+        third = conn.execute.call_args_list[2].args
+        assert "DELETE FROM ops_voc_cluster" in third[0] and "NOT EXISTS" in third[0]
+        assert third[1] == timedelta(days=retention.RETENTION_DAYS)

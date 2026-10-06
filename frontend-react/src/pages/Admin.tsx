@@ -80,6 +80,8 @@ export default function Admin() {
 
   const defaultTab = visibleTabs[0]?.id ?? 'llm';
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
+  // 통계 "정정 요청" 카드 → 지식 베이스의 정정 검토 서브탭으로 바로(탭 바에서 직접 고르면 기본 목록)
+  const [knowledgeSubTab, setKnowledgeSubTab] = useState<'list' | 'corrections'>('list');
 
   const firstVisibleId = visibleTabs[0]?.id;
   const isCurrentVisible = visibleTabs.some((t) => t.id === activeTab);
@@ -93,7 +95,7 @@ export default function Admin() {
           {visibleTabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => { setKnowledgeSubTab('list'); setActiveTab(tab.id); }}
               className={clsx(
                 'flex items-center gap-2 px-4 py-3.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors',
                 resolvedTab === tab.id
@@ -112,13 +114,15 @@ export default function Admin() {
       <div className="flex-1 overflow-y-auto p-6">
         <TabErrorBoundary key={resolvedTab}>
           {resolvedTab === 'namespaces'   && <NamespaceManager onNavigate={(id) => setActiveTab(id as TabId)} />}
-          {resolvedTab === 'knowledge'    && <KnowledgeTable />}
+          {resolvedTab === 'knowledge'    && <KnowledgeTable initialSubTab={knowledgeSubTab} />}
           {resolvedTab === 'glossary'     && <GlossaryTable />}
           {resolvedTab === 'lab'          && <EvaluationGate />}
           {resolvedTab === 'policy'       && <PolicyPanel />}
           {resolvedTab === 'cache'        && isAdmin && <CachePanel />}
           {resolvedTab === 'voc_email'    && <VocEmailPanel />}
-          {resolvedTab === 'stats'        && <StatsPanel />}
+          {resolvedTab === 'stats'        && (
+            <StatsPanel onOpenCorrections={() => { setKnowledgeSubTab('corrections'); setActiveTab('knowledge'); }} />
+          )}
           {resolvedTab === 'llm'          && <LLMSettings />}
           {resolvedTab === 'users'        && isAdmin && <UserManager />}
         </TabErrorBoundary>

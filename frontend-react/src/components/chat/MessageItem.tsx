@@ -12,7 +12,7 @@ import { SearchResultCard } from './SearchResultCard';
 import { PolicyCitationCard } from './PolicyCitationCard';
 import { FeedbackSection } from './FeedbackSection';
 import { useThemeStore } from '../../store/useThemeStore';
-import { useCorrectionStore, evidenceTargets, type CorrectionTarget } from '../../store/useCorrectionStore';
+import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { CorrectionAnalysis } from './CorrectionAnalysis';
 import { getCorrectionStatus } from '../../api/corrections';
 import type { ChatMessage } from '../../types';
@@ -296,8 +296,6 @@ function CorrectionReceipt({ messageId }: { messageId: number }) {
 
 export function MessageItem({ message, namespace }: MessageItemProps) {
   const isUser = message.role === 'user';
-  const startCorrection = useCorrectionStore((s) => s.start);
-  const evidence = isUser ? [] : evidenceTargets(message);
   const knowledgeIds = (message.results ?? []).map((r) => r.id);
   const policyItemIds = [...new Set((message.policyCitations ?? []).map((c) => c.item_id).filter((v): v is number => v != null))];
   // "정정 검토 중" 배지 — 같은 근거가 다른 답변에 나와도 표시되도록 근거 id 기준으로 조회
@@ -307,11 +305,8 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
     enabled: !isUser && !message.isStreaming && (knowledgeIds.length > 0 || policyItemIds.length > 0),
     staleTime: 30_000,
   });
-  const canReport = !isUser && !message.isStreaming && !!namespace && message.status !== 'failed';
-  // 카드의 "이 근거 틀림"은 사용자가 대상을 이미 아는 지름길 — AI 판정 없이 그 근거로 바로 접수
-  const report = (target: CorrectionTarget) =>
-    startCorrection({ messageId: message.messageId, namespace, selected: target });
-  const findTarget = (key: string) => evidence.find((t) => t.key === key);
+  // 근거 카드의 "이 근거 틀림"은 2026-10-06 제거 — 신고는 "답변 틀림" 하나로(틀린 근거는 AI가 찾고 담당자가 바꿀 수 있음).
+  // 실사용 0건이었고 버튼이 둘이라 차이를 헷갈렸다. 카드엔 "정정 검토 중" 배지만 남긴다.
 
   if (isUser) {
     return (
@@ -359,7 +354,6 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
                   defaultOpen={false}
                   index={idx}
                   underReview={underReview?.knowledge.includes(result.id)}
-                  onReport={canReport && findTarget(`k-${result.id}`) ? () => report(findTarget(`k-${result.id}`)!) : undefined}
                 />
               ))}
             </div>
@@ -372,8 +366,6 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
                 📋 정책 근거 {message.policyCitations.length}건
               </p>
               {message.policyCitations.map((citation, idx) => {
-                const key = citation.kind === 'param' ? `pp-${citation.param_id}` : `pn-${citation.chunk_id}`;
-                const target = findTarget(key);
                 return (
                   <PolicyCitationCard
                     key={idx}
@@ -383,7 +375,6 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
                     underReview={citation.kind === 'param'
                       ? citation.param_id != null && !!underReview?.policy_param.includes(citation.param_id)
                       : citation.chunk_id != null && !!underReview?.policy_narrative.includes(citation.chunk_id)}
-                    onReport={canReport && target ? () => report(target) : undefined}
                   />
                 );
               })}

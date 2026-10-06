@@ -143,11 +143,11 @@ type IngestMethod = 'file' | 'text' | 'manual' | 'url' | null;
 
 // ── KnowledgeTable (메인) ─────────────────────────────────────────────────────
 
-export function KnowledgeTable() {
+export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'list' | 'corrections' } = {}) {
   const qc = useQueryClient();
   const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces } = useNamespaceAccess();
 
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'corrections'>('list');
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'corrections'>(initialSubTab);
   // 정정 검토는 관리자 승인 전용(API도 admin) — 대기 건수 배지로 방치 방지
   // 정정 검토(옛 리뷰 신호 포함, 2026-10-02) — 그 파트 담당자 + 관리자가 처리. 대기 건수 배지로 방치 방지
   const { data: correctionCount } = useQuery({
@@ -379,7 +379,7 @@ export function KnowledgeTable() {
                 ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
-            title="채팅 '답변 틀림'·'이 근거 틀림'과 평가 게이트 '이상해요'가 모이는 곳 — 승인해야만 검색에 반영됨"
+            title="채팅 '답변 틀림'과 평가 게이트 '이상해요'가 모이는 곳 — 승인해야만 검색에 반영됨"
           >
             <PenLine className="w-4 h-4" />
             정정 검토
@@ -566,9 +566,12 @@ export function KnowledgeTable() {
         </div>
       )}
 
-      {subTab === 'corrections' && canModifyNs && (
+      {subTab === 'corrections' && (canModifyNs ? (
         <CorrectionReviewTab namespace={selectedNs} />
-      )}
+      ) : (
+        // 통계 "정정 요청" 카드로 들어왔지만 이 파트 수정 권한이 없는 경우
+        <p className="text-sm text-slate-400 py-6 text-center">이 파트의 정정 검토는 담당 파트와 관리자만 처리할 수 있습니다.</p>
+      ))}
 
       {/* Edit Modal */}
       <Modal isOpen={showEdit} onClose={() => { setShowEdit(false); setEditingId(null); }}

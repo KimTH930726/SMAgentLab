@@ -121,13 +121,15 @@ async function approveInAdmin(page: Page, userInput: string, targetLabel?: strin
   await page.getByRole('link', { name: 'Chat' }).click();
 }
 
-test('지식 — 근거 카드 "이 근거 틀림" → 승인 전 원본 유지 + 검토중 → 승인 후 수정 답변', async ({ page }) => {
+// 근거 카드 "이 근거 틀림" 버튼은 2026-10-06 제거 — 신고는 "답변 틀림" 하나, 틀린 근거(여기선 지식 문서)는 AI가 찾는다
+test('지식 — "답변 틀림" 한 줄 → AI가 틀린 지식 근거 지목 → 승인 전 원본 유지 + 검토중 → 승인 후 수정 답변', async ({ page }) => {
   await login(page);
   const Q = 'VPN 비밀번호 변경 주기가 어떻게 돼?';
   await ask(page, Q);
 
-  await page.getByRole('button', { name: '이 근거 틀림' }).first().click();
-  await expect(page.getByText(/문서 #\d+ 정정/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '이 근거 틀림' })).toHaveCount(0);
+  await page.getByRole('button', { name: '답변 틀림' }).last().click();
+  await expect(page.getByText('어디가 틀렸나요?')).toBeVisible();
   await page.locator('textarea:visible').first().fill('60일마다 바꿔야 합니다');
   await page.getByTitle('정정 접수 (Ctrl+Enter)').click();
   await expect(page.getByText('정정 신고 접수됨')).toBeVisible({ timeout: 120_000 });

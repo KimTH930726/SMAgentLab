@@ -248,7 +248,7 @@ export function ChatContainer() {
   const historyConvIdRef = useRef<number | null>(null);
   const selectedAgent = useAppStore((s) => s.selectedAgent);
   const [input, setInput] = useState('');
-  // 정정 입력 모드 — "답변 틀림"/"이 근거 틀림"을 누르면 입력창이 정정 의견 입력으로 바뀐다.
+  // 정정 입력 모드 — "답변 틀림"을 누르면 입력창이 정정 의견 입력으로 바뀐다.
   // 질문 초안과 섞이지 않게 별도 state. 전송은 채팅 흐름이 아니라 /api/corrections로.
   const qc = useQueryClient();
   const correction = useCorrectionStore((s) => s.active);

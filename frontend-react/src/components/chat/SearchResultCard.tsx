@@ -8,7 +8,6 @@ interface SearchResultCardProps {
   defaultOpen?: boolean;
   index: number;
   underReview?: boolean;
-  onReport?: () => void;
 }
 
 function getScoreInfo(score: number) {
@@ -17,7 +16,7 @@ function getScoreInfo(score: number) {
   return { label: '낮음', barColor: 'bg-slate-500', textColor: 'text-slate-400' };
 }
 
-export function SearchResultCard({ result, defaultOpen = false, index, underReview, onReport }: SearchResultCardProps) {
+export function SearchResultCard({ result, defaultOpen = false, index, underReview }: SearchResultCardProps) {
   const scoreInfo = getScoreInfo(result.final_score);
   const displayName = `문서 #${result.id}`;
   const pct = Math.min(Math.round(result.final_score * 100), 100);
@@ -46,7 +45,7 @@ export function SearchResultCard({ result, defaultOpen = false, index, underRevi
       defaultOpen={defaultOpen}
       className="bg-slate-900/60 border border-slate-700/50"
       headerClassName="hover:bg-slate-800/50"
-      actions={(underReview || onReport) ? <EvidenceReportControls underReview={underReview} onReport={onReport} /> : undefined}
+      actions={underReview ? <EvidenceReportControls /> : undefined}
     >
       <div className="px-4 pb-4 space-y-3">
         {/* Content */}

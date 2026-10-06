@@ -89,6 +89,8 @@
 
 | 64 | `ops_query_log` | `UPDATE status = 'system_error'`(답변이 LLM 연결 실패 문구인 행, 한 번만 — `ops_system_config` 키 `migration_64_query_system_error`) | LLM 연결 실패 기록을 통계 밖으로 분리(예전엔 "답변"으로 세져 답변률을 부풀림, dev 20건). 지우지 않고 장애 건수로만 표시. 이후 새 실패도 system_error로 기록. #61도 같은 방식으로 한 번만 실행(`migration_61_query_status`). `_migrate_query_system_error` (v2.121) |
 
+| 65 | `ops_part_agent_access`, `ops_prompt_category_guide`, `rag_knowledge`, `rag_knowledge_duplicate_match`, `ops_voc_cluster` | `DROP TABLE`×2(코드 미사용·0행), `DROP COLUMN rag_knowledge.quality_score`(미사용·전부 NULL), 검토 끝난 지식의 중복 매칭 삭제, 소속 메일이 모두 보관기간으로 지워진 VOC 클러스터 삭제 | 고아 스키마·잔재 데이터 정리(사용자 확인 후, 2026-10-06 점검). 앞으로 중복 매칭은 검토 처리 시, 빈 클러스터는 VOC 보관 정리 때 같이 지움. 멱등. `_migrate_drop_orphans_2026_10_06` (v2.122) |
+
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
 - namespace FK 추가 전, 각 테이블의 namespace 값 중 `ops_namespace`에 없는 값을 자동 생성한다.

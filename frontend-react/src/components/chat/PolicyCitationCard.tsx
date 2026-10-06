@@ -8,13 +8,12 @@ interface PolicyCitationCardProps {
   defaultOpen?: boolean;
   index: number;
   underReview?: boolean;
-  onReport?: () => void;
 }
 
 // 정책 검색 편입 2단계(2026-09-06) — "정책에서 온 답인지 기준정보에서 온 답인지 구분이 안
 // 되고 원문도 안 보인다"는 피드백에 대응하는 카드. SearchResultCard(rag_knowledge)와 스타일
 // 계열은 맞추되 보라색 계열로 색만 바꿔서 "이건 다른 출처다"가 한눈에 보이게 한다.
-export function PolicyCitationCard({ citation, defaultOpen = false, index, underReview, onReport }: PolicyCitationCardProps) {
+export function PolicyCitationCard({ citation, defaultOpen = false, index, underReview }: PolicyCitationCardProps) {
   const isParam = citation.kind === 'param';
   const kindLabel = isParam ? '파라미터 · 정확 일치' : '서술';
 
@@ -46,7 +45,7 @@ export function PolicyCitationCard({ citation, defaultOpen = false, index, under
       defaultOpen={defaultOpen}
       className="bg-violet-50 border border-violet-200 dark:bg-violet-950/20 dark:border-violet-800/30"
       headerClassName="hover:bg-violet-100 dark:hover:bg-violet-900/20"
-      actions={(underReview || onReport) ? <EvidenceReportControls underReview={underReview} onReport={onReport} /> : undefined}
+      actions={underReview ? <EvidenceReportControls /> : undefined}
     >
       <div className="px-4 pb-4 space-y-3">
         <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">

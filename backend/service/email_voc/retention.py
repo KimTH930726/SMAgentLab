@@ -39,11 +39,18 @@ async def cleanup_old_records() -> dict:
         cycle_result = await conn.execute(
             "DELETE FROM ops_email_poll_cycle WHERE started_at < NOW() - $1::interval", cutoff,
         )
+        # 소속 메일이 모두 지워진 반복 클러스터도 같이(2026-10-06) — 탐지는 최근 창 안의 클러스터만 보므로 다시 안 쓰이는데
+        # 안 지우면 "건수는 있는데 메일은 0건"인 행이 계속 쌓였다(38/123건 발견)
+        cluster_result = await conn.execute(
+            "DELETE FROM ops_voc_cluster v WHERE last_seen_at < NOW() - $1::interval "
+            "AND NOT EXISTS (SELECT 1 FROM ops_email_analysis e WHERE e.voc_cluster_id = v.id)", cutoff,
+        )
     deleted_analysis = _parse_delete_count(analysis_result)
     deleted_cycles = _parse_delete_count(cycle_result)
-    if deleted_analysis or deleted_cycles:
+    deleted_clusters = _parse_delete_count(cluster_result)
+    if deleted_analysis or deleted_cycles or deleted_clusters:
         logger.info(
-            "[VOC 보관정책] %d일 초과 데이터 정리 완료 — 분석기록 %d건, 사이클로그 %d건 삭제",
-            RETENTION_DAYS, deleted_analysis, deleted_cycles,
+            "[VOC 보관정책] %d일 초과 데이터 정리 완료 — 분석기록 %d건, 사이클로그 %d건, 빈 클러스터 %d건 삭제",
+            RETENTION_DAYS, deleted_analysis, deleted_cycles, deleted_clusters,
         )
-    return {"deleted_analysis": deleted_analysis, "deleted_cycles": deleted_cycles}
+    return {"deleted_analysis": deleted_analysis, "deleted_cycles": deleted_cycles, "deleted_clusters": deleted_clusters}

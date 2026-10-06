@@ -312,6 +312,11 @@ async def get_knowledge_namespace(knowledge_id: int) -> Optional[str]:
 
 # ─── 중복 승인 대기 리뷰 ─────────────────────────────────────────────────────
 
+# 중복 의심 매칭은 검토 대기 화면·병합 대상 선택에서만 읽는다 — 검토가 끝나면(승인·반려·병합) 지운다(2026-10-06).
+# 안 지우면 끝난 건의 매칭이 계속 쌓였다(55건 중 49건).
+_DELETE_DUP_MATCHES = "DELETE FROM rag_knowledge_duplicate_match WHERE new_knowledge_id = $1"
+
+
 async def get_duplicate_matches(knowledge_id: int) -> list[dict]:
     """pending_review 지식이 어떤 기존 활성 지식(들)과 얼마나 유사했는지 원문과 함께 반환."""
     async with get_conn() as conn:
@@ -357,10 +362,12 @@ async def resolve_duplicate(
 
     if action == "approve":
         async with get_conn() as conn:
-            await conn.execute(
-                "UPDATE rag_knowledge SET status = 'active', reviewed_at = NOW(), owner = $2 WHERE id = $1",
-                knowledge_id, reviewer_username,
-            )
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE rag_knowledge SET status = 'active', reviewed_at = NOW(), owner = $2 WHERE id = $1",
+                    knowledge_id, reviewer_username,
+                )
+                await conn.execute(_DELETE_DUP_MATCHES, knowledge_id)
         return {"id": knowledge_id, "status": "active"}
 
     if action == "reject":
@@ -375,6 +382,7 @@ async def resolve_duplicate(
                 "UPDATE ops_query_log SET resolved_knowledge_id = NULL, resolved_at = NULL WHERE resolved_knowledge_id = $1",
                 knowledge_id,
             )
+            await conn.execute(_DELETE_DUP_MATCHES, knowledge_id)
         return {"id": knowledge_id, "status": "rejected"}
 
     # merge
@@ -410,6 +418,7 @@ async def resolve_duplicate(
                 "UPDATE rag_knowledge SET status = 'rejected', reviewed_at = NOW(), owner = $2 WHERE id = $1",
                 knowledge_id, reviewer_username,
             )
+            await conn.execute(_DELETE_DUP_MATCHES, knowledge_id)
         # 반려되는 pending 지식이 이미 어떤 질의를 "해결"한 상태였다면, 실제 내용이 옮겨간
         # target으로 연결을 옮겨줘야 통계 화면이 계속 유효한 내용을 보여준다
         await conn.execute(

@@ -1,9 +1,8 @@
 import { create } from 'zustand';
 import type { CorrectionRequestTarget, CorrectionCreated } from '../api/corrections';
-import type { ChatMessage } from '../types';
 
 /**
- * 근거 정정 입력 모드(2026-10-01) — 답변 아래 "답변 틀림" / 근거 카드 "이 근거 틀림"을 누르면 채팅 입력창이
+ * 근거 정정 입력 모드(2026-10-01) — 답변 아래 "답변 틀림"을 누르면 채팅 입력창이
  * "정정 입력 모드"로 바뀐다. 버튼(MessageItem·카드)과 입력창(ChatContainer)이 서로 다른 컴포넌트라
  * 공유 상태로 둔다. 사용자는 한 줄만 쓴다("답변 틀림"이면 대상도 AI가 찾음) — 가중치·업무구분은 묻지 않는다.
  */
@@ -27,7 +26,7 @@ export const MISSING_TARGET: CorrectionTarget = {
 interface ActiveCorrection {
   messageId?: number;
   namespace: string;
-  /** 정정 대상 — AUTO_TARGET("답변 틀림", 서버가 판정) 또는 카드에서 고른 근거 */
+  /** 정정 대상 — AUTO_TARGET("답변 틀림", 서버가 판정) 또는 MISSING_TARGET(답변 id가 없을 때) */
   selected: CorrectionTarget;
 }
 
@@ -54,22 +53,3 @@ export const useCorrectionStore = create<CorrectionState>((set) => ({
   markSubmitted: (messageId, result, target) =>
     set((s) => ({ submitted: { ...s.submitted, [messageId]: { result, target } } })),
 }));
-
-/** 답변의 근거(지식 결과 + 정책 인용)를 정정 대상 후보로. id가 없는 옛 정책 인용은 제외. */
-export function evidenceTargets(message: ChatMessage): CorrectionTarget[] {
-  const out: CorrectionTarget[] = [];
-  (message.results ?? []).forEach((r, i) => {
-    out.push({ key: `k-${r.id}`, targetType: 'knowledge', targetId: r.id, label: `근거 ${i + 1} · 문서 #${r.id}` });
-  });
-  (message.policyCitations ?? []).forEach((c) => {
-    if (c.item_id == null) return;
-    if (c.kind === 'param' && c.param_id != null) {
-      out.push({ key: `pp-${c.param_id}`, targetType: 'policy_param', targetId: c.item_id, subId: c.param_id,
-        label: `정책 · ${c.policy_name}` });
-    } else if (c.kind === 'narrative' && c.chunk_id != null) {
-      out.push({ key: `pn-${c.chunk_id}`, targetType: 'policy_narrative', targetId: c.item_id, subId: c.chunk_id,
-        label: `정책 · ${c.policy_name}` });
-    }
-  });
-  return out;
-}
