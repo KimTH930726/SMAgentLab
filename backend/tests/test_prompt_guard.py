@@ -21,7 +21,8 @@ def _load(name: str, filename: str):
 
 
 _base = _load("_real_llm_base", "base.py")
-with patch.dict(sys.modules, {"service.llm.base": _base}):
+_gw = _load("_real_llm_gateway_text", "gateway_text.py")
+with patch.dict(sys.modules, {"service.llm.base": _base, "service.llm.gateway_text": _gw}):
     _inhouse = _load("_real_llm_inhouse", "inhouse.py")
 
 REF_BLOCK_START = _base.REF_BLOCK_START
@@ -139,3 +140,21 @@ class TestVocPromptGuard:
         prompt = llm.generate_once.await_args.kwargs["prompt"]
         assert "(관련 지식 없음)" in prompt
         assert prompt.count(voc._UNTRUSTED_START) == 2
+
+
+class TestGatewayTransformScope:
+    """게이트웨이 오탐 회피 변환(v2.126, 시연용 임시책)은 근거 문서·이전 답에만 — 사용자 입력은 그대로 보내
+    사용자가 직접 넣은 민감정보는 게이트웨이가 계속 막아야 한다."""
+
+    def test_context_and_assistant_history_transformed_user_untouched(self):
+        q = _build_query(
+            "매뉴얼 3.1.2.4 항목, 처리번호 123456789012",
+            "내 서버 10.20.30.40 이랑 카드 1234567812345678 괜찮아?",
+            [{"role": "user", "content": "이전 질문 192.168.0.1"},
+             {"role": "assistant", "content": "이전 답 3.1.2.4 참고"}],
+            system_prompt="SYS",
+        )
+        assert "3.1.2.4" not in q.split("[사용자] 이전 질문")[0]       # 문서 블록은 변환
+        assert "[어시스턴트] 이전 답 3\uff0e1\uff0e2\uff0e4 참고" in q  # 이전 답도 변환
+        assert "[사용자] 이전 질문 192.168.0.1" in q                  # 사용자 이력은 원문
+        assert "10.20.30.40" in q and "1234567812345678" in q          # 현재 질문도 원문

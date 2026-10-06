@@ -12,6 +12,14 @@ from agents.knowledge_rag.knowledge.retrieval import RetrievalResult
 logger = logging.getLogger(__name__)
 
 LLM_UNAVAILABLE_MSG = "[LLM 서버에 연결할 수 없습니다. 검색 결과를 참고하세요.]"
+# 사내 게이트웨이(DevX)가 민감정보 필터에 걸린 요청에 LLM 대신 돌려주는 거부 문구의 앞부분. 답이 아니라 장애라
+# 답변으로 세거나 시맨틱 캐시에 넣으면 안 된다(캐시되면 원인을 고친 뒤에도 TTL 동안 거부가 계속 나감).
+GATEWAY_REFUSAL_MARKER = "요청하신 내용에 다음과 같은 민감 정보가 포함되어"
+
+
+def is_llm_failure(answer: str | None) -> bool:
+    """LLM이 답을 못 낸 응답(연결 실패·게이트웨이 거부) — 질의 기록은 system_error, 캐시 저장 안 함."""
+    return not answer or answer == LLM_UNAVAILABLE_MSG or GATEWAY_REFUSAL_MARKER in answer[:200]
 # 시스템 프롬프트가 LLM에게 "관련 문서가 없으면 이 문구로 답변" 하도록 지시하는 고정 문구
 # (main.py / service/llm/base.py 기본 프롬프트 참고). had_context만으로는 임계값을 살짝
 # 넘는 "약하게만 관련된" 문서가 섞여 들어간 경우를 지식 공백으로 못 잡아서, LLM 스스로
@@ -75,7 +83,7 @@ async def create_query_log(
     해결·미해결을 나누지 않는다. LLM 연결 실패는 공백도 답변도 아닌 장애 — system_error로 따로 남겨 답변률·공백 통계엔
     섞지 않고 장애 건수만 본다(예전엔 "답변"으로 세져 답변률을 부풀렸다).
     """
-    if not answer or answer == LLM_UNAVAILABLE_MSG:
+    if is_llm_failure(answer):
         status = "system_error"
     # 마커는 프롬프트상 모른다고 답할 때만 쓰는 전용 문구 — 답변 뒤쪽 문단에 섞여 나오는 사례가 있어 포함 여부로 본다
     elif not had_context or NO_KNOWLEDGE_MARKER in answer:

@@ -38,7 +38,8 @@ print(urllib.request.urlopen(req, timeout=300).status)
 `;
 
 test.describe.configure({ mode: 'serial' });
-test.setTimeout(240_000);
+// 정정 접수·AI 판정·답변이 모두 사내 게이트웨이를 거친다 — 호출당 90~180초까지 느려지는 날이 있어(2026-10-06 실측) 넉넉히
+test.setTimeout(900_000);
 
 test.beforeAll(async ({ request }) => {
   psql(`DELETE FROM ops_namespace WHERE name='${NS}'`);
@@ -87,7 +88,7 @@ async function ask(page: Page, question: string) {
   const before = await page.getByRole('button', { name: '답변 틀림' }).count();
   await page.locator('textarea:visible').first().fill(question);
   await page.getByTitle('전송 (Ctrl+Enter)').click();
-  await expect(page.getByRole('button', { name: '답변 틀림' })).toHaveCount(before + 1, { timeout: 120_000 });
+  await expect(page.getByRole('button', { name: '답변 틀림' })).toHaveCount(before + 1, { timeout: 300_000 });
 }
 
 async function approveInAdmin(page: Page, userInput: string, targetLabel?: string, expectedFix?: string) {
@@ -102,7 +103,7 @@ async function approveInAdmin(page: Page, userInput: string, targetLabel?: strin
     const targetSelect = card.locator('select').filter({ hasText: '답변 오류' });
     const value = await targetSelect.locator('option', { hasText: targetLabel }).getAttribute('value');
     if (value && (await targetSelect.inputValue()) !== value) {
-      const retargeted = page.waitForResponse((r) => /\/api\/corrections\/\d+\/retarget/.test(r.url()), { timeout: 120_000 });
+      const retargeted = page.waitForResponse((r) => /\/api\/corrections\/\d+\/retarget/.test(r.url()), { timeout: 300_000 });
       await targetSelect.selectOption(value);
       expect((await retargeted).ok()).toBeTruthy();
     }
@@ -132,7 +133,7 @@ test('지식 — "답변 틀림" 한 줄 → AI가 틀린 지식 근거 지목 �
   await expect(page.getByText('어디가 틀렸나요?')).toBeVisible();
   await page.locator('textarea:visible').first().fill('60일마다 바꿔야 합니다');
   await page.getByTitle('정정 접수 (Ctrl+Enter)').click();
-  await expect(page.getByText('정정 신고 접수됨')).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText('정정 신고 접수됨')).toBeVisible({ timeout: 300_000 });
 
   // 승인 전: 같은 질문 → 여전히 원본(90일) + 근거에 "정정 검토 중"
   await ask(page, Q);
@@ -159,7 +160,7 @@ test('정책 — "답변 틀림" 한 줄 → AI 분석 → (대상 확인) 승�
   await expect(page.getByText('어디가 틀렸나요?')).toBeVisible();
   await page.locator('textarea:visible').first().fill('14일 이내로 바뀌었습니다');
   await page.getByTitle('정정 접수 (Ctrl+Enter)').click();
-  await expect(page.getByText('정정 신고 접수됨')).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText('정정 신고 접수됨')).toBeVisible({ timeout: 300_000 });
   await expect(page.getByText('AI 분석')).toBeVisible();  // 어느 근거·왜·무엇이 틀렸는지 사용자에게도 보여줌
   // 의견까지 접수했으면 '의견 덧붙이기'는 사라진다(이미 신고했는데 또 하라는 듯 보이지 않게)
   await expect(page.getByRole('button', { name: '의견 덧붙이기' })).toHaveCount(0);

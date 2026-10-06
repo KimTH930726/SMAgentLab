@@ -20,6 +20,7 @@ import httpx
 
 from core.config import settings
 from service.llm.base import LLMProvider, _FALLBACK_SYSTEM_PROMPT, wrap_reference_context
+from service.llm.gateway_text import StreamRestorer, from_gateway, to_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +35,23 @@ def _build_query(
     if context:
         # 한 문자열로 평평하게 보내는 게이트웨이라 경계가 없으면 마지막 문서가 [사용자] 줄로
         # 곧장 이어진다 — 문서 뒤 고정 지시문 + 문서 속 라벨 중화로 경계를 만든다(WBS 1-3)
-        parts.append(f"\n{wrap_reference_context(context)}")
+        # 근거 문서 본문만 숫자 형태를 바꾼다(gateway_text 참고) — 사용자 질문·이력은 그대로 보내 사용자가 직접 넣은
+        # 민감정보는 게이트웨이가 계속 막게 한다(시연용 임시책, 변환 범위를 검수된 지식 문서로 한정)
+        parts.append(f"\n{wrap_reference_context(to_gateway(context))}")
     if history:
         for msg in history:
-            role = "사용자" if msg["role"] == "user" else "어시스턴트"
-            parts.append(f"\n[{role}] {msg['content']}")
+            if msg["role"] == "user":
+                parts.append(f"\n[사용자] {msg['content']}")
+            else:
+                # 이전 답은 근거 문서에서 나온 값이라 같은 변환 — 안 하면 원복된 번호 때문에 후속 질문이 거부된다
+                parts.append(f"\n[어시스턴트] {to_gateway(msg['content'])}")
     parts.append(f"\n[사용자] {question}")
     return "\n".join(parts)
 
 
 def _extract_answer(data: dict) -> str:
     """응답 JSON에서 answer를 추출. 게이트웨이는 `answer` 또는 `message` 필드로 반환."""
-    return data.get("answer") or data.get("message") or json.dumps(data, ensure_ascii=False)
+    return from_gateway(data.get("answer") or data.get("message") or json.dumps(data, ensure_ascii=False))
 
 
 @dataclass
@@ -298,6 +304,7 @@ class InHouseLLMProvider(LLMProvider):
                 resp.raise_for_status()
                 line_count = 0
                 captured_ext_conv_id: Optional[str] = None
+                restorer = StreamRestorer()
                 async for line in resp.aiter_lines():
                     line = line.strip()
                     if not line or not line.startswith("data:"):
@@ -325,9 +332,12 @@ class InHouseLLMProvider(LLMProvider):
                             on_ext_conversation_id(captured_ext_conv_id)
                         break
                     if event_type == "message":
-                        token = chunk.get("answer", "")
+                        token = restorer.feed(chunk.get("answer", ""))
                         if token:
                             yield token
+                tail = restorer.flush()
+                if tail:
+                    yield tail
 
     async def health_check(self) -> bool:
         """시스템 자격증명으로 토큰 발급 시도. 4xx 응답도 게이트웨이 도달 가능 의미로 간주."""

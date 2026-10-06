@@ -65,8 +65,18 @@ async def test_status(inserted, answer, had_context, expected):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("answer", ["", None, helpers.LLM_UNAVAILABLE_MSG])
+@pytest.mark.parametrize("answer", [
+    "", None, helpers.LLM_UNAVAILABLE_MSG,
+    "⚠️ 요청하신 내용에 다음과 같은 민감 정보가 포함되어 있어 응답을 제공할 수 없습니다. (IP: 1.2.3.4)",
+])
 async def test_llm_failure_is_system_error(inserted, answer):
-    """LLM 연결 실패는 답변·공백이 아닌 system_error — 통계에선 빠지고 장애 건수로만 보인다(#64)."""
+    """LLM 연결 실패·게이트웨이 민감정보 거부는 답변·공백이 아닌 system_error — 통계에선 빠지고 장애 건수로만 보인다(#64·#68)."""
     await helpers.create_query_log("ns", "q", answer, None, 1, had_context=True)
     assert inserted[-1][3] == "system_error"
+
+
+def test_refusal_marker_only_at_start():
+    """답변 본문 뒤쪽에서 같은 문구를 인용한 정상 답은 거부로 보지 않는다(앞 200자만 본다)."""
+    assert helpers.is_llm_failure("⚠️ 요청하신 내용에 다음과 같은 민감 정보가 포함되어 있어")
+    assert not helpers.is_llm_failure("가" * 300 + "요청하신 내용에 다음과 같은 민감 정보가 포함되어")
+    assert not helpers.is_llm_failure("정상 답변입니다.")

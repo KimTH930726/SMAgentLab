@@ -1372,6 +1372,26 @@ async def _migrate_rename_opslens(conn) -> None:
         logger.info("[migrate #67] 프롬프트 자기소개 OpsLens로: %s", r)
 
 
+async def _migrate_query_gateway_refusal(conn) -> None:
+    """게이트웨이 민감정보 거부 질의 기록을 system_error로 (2026-10-06, #68, v2.126).
+
+    게이트웨이가 매뉴얼의 버전 번호·긴 숫자를 IP·ID로 오탐해 거부한 응답이 "답변(pending)"으로 세져 답변률을 부풀렸다
+    (dev 31건). #64(LLM 연결 실패)와 같은 처리 — 지우지 않고 통계 밖 분류로. 한 번만.
+    """
+    done_key = "migration_68_query_gateway_refusal"
+    if await conn.fetchval("SELECT 1 FROM ops_system_config WHERE key = $1", done_key):
+        return
+    from service.chat.helpers import GATEWAY_REFUSAL_MARKER
+    async with conn.transaction():
+        r = await conn.execute(
+            "UPDATE ops_query_log SET status = 'system_error', resolved_knowledge_id = NULL, resolved_at = NULL "
+            "WHERE status <> 'system_error' AND left(answer, 200) LIKE '%' || $1 || '%'", GATEWAY_REFUSAL_MARKER)
+        await conn.execute(
+            "INSERT INTO ops_system_config (key, value) VALUES ($1, 'done') ON CONFLICT (key) DO NOTHING", done_key)
+    if r and not r.endswith(" 0"):
+        logger.info("[migrate #68] 게이트웨이 거부 기록 → system_error: %s", r)
+
+
 async def _migrate_improvement_ledger(conn) -> None:
     """개선 원장 `ops_improvement_item` (2026-10-01, 근거 정정 흐름).
 
@@ -1554,6 +1574,7 @@ async def _run_migrations() -> None:
         await _migrate_drop_orphans_2026_10_06(conn)
         await _migrate_policy_source_missing(conn)
         await _migrate_rename_opslens(conn)
+        await _migrate_query_gateway_refusal(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

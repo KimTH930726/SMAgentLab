@@ -94,6 +94,7 @@
 | 66 | `policy_item` | `ADD COLUMN IF NOT EXISTS source_missing_at TIMESTAMPTZ` | 정책 버전 관리 1단계 — 재임포트한 엑셀의 같은 시트에서 사라진 현행 정책 표시(자동 폐기 대신 검토 큐, 위험 높음). 승인 시 해제, 반려 시 이력으로 남음. `_migrate_policy_source_missing` (v2.123) |
 
 | 67 | `ops_prompt` | 데이터 — 'IT 운영 보조 에이전트.'로 시작하는 프롬프트의 첫 문장만 'IT 운영 지식 AI(OpsLens).'로 | 제품명 변경(OpsLens). 관리자가 첫 줄을 바꿨으면 건드리지 않음. 멱등. `_migrate_rename_opslens` (v2.125) |
+| 68 | `ops_query_log` | 데이터 — 사내 게이트웨이 민감정보 거부 응답(앞 200자에 거부 문구)인 기록의 `status`를 `system_error`로 | 거부가 "답변"으로 세져 답변률을 부풀림(dev 31건). #64와 같은 처리 — 지우지 않음. 1회(`migration_68_query_gateway_refusal`). `_migrate_query_gateway_refusal` (v2.126) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

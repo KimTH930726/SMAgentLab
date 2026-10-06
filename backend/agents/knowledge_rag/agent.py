@@ -9,7 +9,7 @@ from core.database import get_conn
 from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
-    LLM_UNAVAILABLE_MSG,
+    LLM_UNAVAILABLE_MSG, is_llm_failure,
     results_to_json, results_to_payload,
     update_assistant_message, update_inhouse_conv_id,
     create_query_log, post_save_tasks,
@@ -349,8 +349,8 @@ class KnowledgeRagAgent(AgentBase):
             await create_query_log(namespace, query, final_answer, mapped_term, msg_id, user_id=user.get("id"),
                                    had_context=had_context)
 
-            # ── Semantic Cache 저장 (LLM 정상 응답 시만, 결과 유무 무관) ──
-            if final_answer != LLM_UNAVAILABLE_MSG:
+            # ── Semantic Cache 저장 (LLM 정상 응답 시만, 결과 유무 무관 — 연결 실패·게이트웨이 거부는 제외) ──
+            if not is_llm_failure(final_answer):
                 await sem_cache.set_cached(namespace, "knowledge_rag", cache_vec, {
                     "answer": final_answer,
                     "mapped_term": mapped_term,
