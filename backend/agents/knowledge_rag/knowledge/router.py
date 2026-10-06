@@ -253,8 +253,21 @@ async def remove_glossary(glossary_id: int, user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Glossary term not found")
 
 
+@router.delete("/glossary/synonyms/{synonym_id}", status_code=204)
+async def remove_glossary_synonym(synonym_id: int, user: dict = Depends(get_current_user)):
+    """동의어 지우기(v2.128) — 동의어는 LLM이 자동으로 붙이고 사람은 틀린 것만 지운다. 지운 표현은 다시 붙지 않는다(막힘 표시)."""
+    ns = await service.get_synonym_namespace(synonym_id)
+    await _require_resource_namespace(ns, user, "Synonym not found")
+    if not await service.block_glossary_synonym(synonym_id):
+        raise HTTPException(status_code=404, detail="Synonym not found")
+
+
 @router.post("/glossary/bulk-delete", status_code=200)
 async def bulk_remove_glossary(body: BulkDeleteRequest, user: dict = Depends(get_current_user)):
+    # 권한 검사(2026-10-06, v2.128) — 예전엔 없어서 조회 전용·다른 파트 사용자도 아무 용어나 지울 수 있었다.
+    # 지식 bulk-delete(2026-10-02)·용어 단건 삭제와 같은 기준: 대상 용어가 속한 파트마다 소유권 확인(하나라도 안 되면 전체 거부)
+    for ns in await service.get_glossary_namespaces(body.ids):
+        await check_namespace_ownership(ns, user)
     deleted = await service.bulk_delete_glossary(body.ids)
     return {"deleted": deleted}
 

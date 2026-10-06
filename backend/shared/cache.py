@@ -175,7 +175,7 @@ async def set_cached(namespace: str, agent_type: str, query_vec: list[float], pa
             "hits": 0,
         })
         await r.expire(key, _cache_ttl)
-        logger.info("[Cache SET] namespace=%s key=%s query=%s", namespace, key, payload.get("query", "")[:40])
+        logger.info("[Cache SET] namespace=%s key=%s query=%d chars", namespace, key, len(payload.get("query", "")))
     except Exception as e:
         logger.warning("[Cache] 저장 실패 (무시): %s", e)
 

@@ -17,9 +17,16 @@ LLM_UNAVAILABLE_MSG = "[LLM 서버에 연결할 수 없습니다. 검색 결과�
 GATEWAY_REFUSAL_MARKER = "요청하신 내용에 다음과 같은 민감 정보가 포함되어"
 
 
+# LLM이 예외 없이 토큰 0개로 끝났을 때 화면에 보내는 문구(v2.128) — 예전엔 아무것도 안 보내 빈 말풍선만 남았다
+LLM_EMPTY_MSG = "[AI가 빈 답변을 보냈습니다. 잠시 후 다시 질문해 주세요.]"
+
+
 def is_llm_failure(answer: str | None) -> bool:
-    """LLM이 답을 못 낸 응답(연결 실패·게이트웨이 거부) — 질의 기록은 system_error, 캐시 저장 안 함."""
-    return not answer or answer == LLM_UNAVAILABLE_MSG or GATEWAY_REFUSAL_MARKER in answer[:200]
+    """LLM이 답을 못 낸 응답(연결 실패·빈 응답·게이트웨이 거부) — 질의 기록은 system_error, 캐시 저장 안 함."""
+    return (not answer or answer in (LLM_UNAVAILABLE_MSG, LLM_EMPTY_MSG)
+            or GATEWAY_REFUSAL_MARKER in answer[:200])
+
+
 # 시스템 프롬프트가 LLM에게 "관련 문서가 없으면 이 문구로 답변" 하도록 지시하는 고정 문구
 # (main.py / service/llm/base.py 기본 프롬프트 참고). had_context만으로는 임계값을 살짝
 # 넘는 "약하게만 관련된" 문서가 섞여 들어간 경우를 지식 공백으로 못 잡아서, LLM 스스로

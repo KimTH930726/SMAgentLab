@@ -139,6 +139,11 @@ export async function updateGlossaryItem(id: number, payload: GlossaryUpdatePayl
   }
 }
 
+/** 다른 표현 지우기 — 지운 표현은 AI가 다시 붙이지 않는다(v2.128) */
+export async function deleteGlossarySynonym(id: number): Promise<void> {
+  await apiFetch<void>(`/knowledge/glossary/synonyms/${id}`, { method: 'DELETE' });
+}
+
 export async function deleteGlossaryItem(id: number): Promise<void> {
   try {
     await apiFetch<void>(`/knowledge/glossary/${id}`, { method: 'DELETE' });

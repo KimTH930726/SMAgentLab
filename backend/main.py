@@ -22,6 +22,7 @@ from service.admin.router import router as admin_router
 from service.prompt.router import router as prompt_router
 from service.email_voc.router import router as email_voc_router
 from service.email_voc.scheduler import start_scheduler, stop_scheduler
+from agents.knowledge_rag.knowledge import glossary_mining
 from service.policy.router import router as policy_router
 from service.refdata.router import router as refdata_router
 from service.improvement.router import router as improvement_router
@@ -31,6 +32,12 @@ from shared.http_client import close_http_client
 from agents.base import AgentRegistry
 from agents.knowledge_rag.agent import KnowledgeRagAgent
 from agents.knowledge_rag.knowledge.retrieval import load_runtime_overrides_from_db
+
+# 앱 로그 출력(v2.128) — 예전엔 설정이 없어 INFO는 아예 안 나오고 경고는 시간·위치 없이 맨 문장만 나와, 장애(빈 응답 등)를 로그로
+# 추적할 수 없었다. uvicorn 자체 로거는 propagate=False라 중복 출력되지 않는다. 답변·문서 본문은 로그에 남기지 않는다(길이만).
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+for _noisy in ("httpx", "httpcore", "urllib3", "sentence_transformers", "transformers"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
@@ -1372,6 +1379,28 @@ async def _migrate_rename_opslens(conn) -> None:
         logger.info("[migrate #67] 프롬프트 자기소개 OpsLens로: %s", r)
 
 
+async def _migrate_glossary_synonym(conn) -> None:
+    """용어집 동의어 (2026-10-06, #69, v2.128) — 질문에 나온 용어를 찾을 때 쓰는 다른 표현.
+
+    사람이 등록하지 않는다(사용자 결정): 용어 등록·수정 시 LLM이 만들고(source='llm_term'), 실제 질문 기록에서 LLM이 뽑아 붙인다
+    (source='llm_query', 서로 다른 질문 evidence_count건 이상이어야 사용 — glossary_terms.QUERY_MIN_EVIDENCE). 사람은 화면에서
+    지우기만 한다 — 지우면 행을 없애지 않고 blocked=TRUE로 남겨 LLM이 같은 표현을 다시 만들거나 질문 기록에서 다시 뽑아도 되살아나지
+    않게 한다. synonym_norm(띄어쓰기·대소문자·문장부호 제거)으로 같은 용어의 중복을 막는다. 용어가 지워지면 같이 지워진다. 멱등.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rag_glossary_synonym (
+            id SERIAL PRIMARY KEY,
+            glossary_id INTEGER NOT NULL REFERENCES rag_glossary(id) ON DELETE CASCADE,
+            synonym VARCHAR(100) NOT NULL,
+            synonym_norm VARCHAR(100) NOT NULL,
+            source VARCHAR(20) NOT NULL,
+            evidence_count INTEGER NOT NULL DEFAULT 1,
+            blocked BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (glossary_id, synonym_norm)
+        )""")
+
+
 async def _migrate_query_gateway_refusal(conn) -> None:
     """게이트웨이 민감정보 거부 질의 기록을 system_error로 (2026-10-06, #68, v2.126).
 
@@ -1575,6 +1604,7 @@ async def _run_migrations() -> None:
         await _migrate_policy_source_missing(conn)
         await _migrate_rename_opslens(conn)
         await _migrate_query_gateway_refusal(conn)
+        await _migrate_glossary_synonym(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 
@@ -1636,9 +1666,11 @@ async def lifespan(_app: FastAPI):
     logger.log(logging.getLevelName(level), "LLM(%s) %s", settings.llm_provider, msg)
 
     start_scheduler()
+    glossary_mining.start()   # 질문 기록 → 용어 동의어(하루 1회, v2.128)
 
     yield
     await stop_scheduler()
+    await glossary_mining.stop()
     await close_http_client()
     await close_pool()
 

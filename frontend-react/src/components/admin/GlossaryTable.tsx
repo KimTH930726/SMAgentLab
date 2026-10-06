@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Edit2, Trash2, X, BookOpen, Wand2, Search, Check } from 'lucide-react';
-import { getGlossary, createGlossaryItem, updateGlossaryItem, deleteGlossaryItem, bulkDeleteGlossary, vectorSearchGlossary, suggestGlossaryTerms, applyGlossarySuggestion, type GlossarySuggestSource } from '../../api/knowledge';
+import { getGlossary, createGlossaryItem, updateGlossaryItem, deleteGlossaryItem, deleteGlossarySynonym, bulkDeleteGlossary, vectorSearchGlossary, suggestGlossaryTerms, applyGlossarySuggestion, type GlossarySuggestSource } from '../../api/knowledge';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -66,6 +66,12 @@ export function GlossaryTable() {
     onError: (err: Error) => alert(err.message || '삭제 실패'),
   });
 
+  const synonymDeleteMutation = useMutation({
+    mutationFn: (id: number) => deleteGlossarySynonym(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }),
+    onError: (err: Error) => alert(err.message || '다른 표현 삭제 실패'),
+  });
+
   const bulkDeleteMutation = useMutation({
     mutationFn: (ids: number[]) => bulkDeleteGlossary(ids),
     onSuccess: () => {
@@ -111,7 +117,8 @@ export function GlossaryTable() {
     : searchQuery.trim()
     ? items.filter((i) => {
         const q = searchQuery.toLowerCase();
-        return i.term.toLowerCase().includes(q) || i.description.toLowerCase().includes(q);
+        return i.term.toLowerCase().includes(q) || i.description.toLowerCase().includes(q)
+          || !!i.synonyms?.some((syn) => syn.synonym.toLowerCase().includes(q));
       })
     : items;
 
@@ -307,7 +314,32 @@ export function GlossaryTable() {
                         )}
                       </div>
                     </div>
-                    <p className="flex-1 min-w-0 text-sm text-slate-300 leading-relaxed">{item.description}</p>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-slate-300 leading-relaxed">{item.description}</p>
+                      {!!item.synonyms?.length && (
+                        <div className="flex flex-wrap items-center gap-1 mt-1.5"
+                          title="질문에 이 표현이 나와도 이 용어로 알아듣습니다. AI가 자동으로 붙이며, 틀린 표현만 지우세요(지운 표현은 다시 안 붙음)">
+                          <span className="text-[11px] text-slate-500">다른 표현</span>
+                          {item.synonyms.map((s) => (
+                            <span key={s.id}
+                              title={s.source === 'llm_query'
+                                ? `실제 질문 ${s.evidence_count}건에서 AI가 수집${s.active ? '' : ' — 2건 이상이면 사용'}`
+                                : '용어 등록 때 AI가 만든 표현'}
+                              className={`inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded border ${s.active
+                                ? 'border-slate-600 text-slate-300'
+                                : 'border-dashed border-slate-600 text-slate-500'}`}>
+                              {s.synonym}
+                              {canModifyNs && (
+                                <button type="button" onClick={() => synonymDeleteMutation.mutate(s.id)} aria-label={`${s.synonym} 지우기`}
+                                  className="text-slate-500 hover:text-rose-500 dark:hover:text-rose-400">
+                                  <X className="w-3 h-3" />
+                                </button>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <div className="flex flex-col items-end gap-1 flex-shrink-0">
                       {canModifyNs && (
                         <div className="flex gap-1">

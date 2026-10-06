@@ -66,7 +66,7 @@ async def test_status(inserted, answer, had_context, expected):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("answer", [
-    "", None, helpers.LLM_UNAVAILABLE_MSG,
+    "", None, helpers.LLM_UNAVAILABLE_MSG, helpers.LLM_EMPTY_MSG,
     "⚠️ 요청하신 내용에 다음과 같은 민감 정보가 포함되어 있어 응답을 제공할 수 없습니다. (IP: 1.2.3.4)",
 ])
 async def test_llm_failure_is_system_error(inserted, answer):

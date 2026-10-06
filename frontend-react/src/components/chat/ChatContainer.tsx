@@ -56,9 +56,22 @@ function CorrectionResultsBanner() {
   );
 }
 
+// 사내 게이트웨이 응답이 1~2분 걸리는 날이 있어(2026-10-06 실측 100~150초) 아무 표시 없이 기다리면 멈춘 줄 안다 — 경과 시간 + 안내
+const SLOW_STEP_SECONDS = 30;
+
 function PipelineStepsToggle({ steps }: { steps: PipelineStep[] }) {
   const [expanded, setExpanded] = useState(false);
   const currentStep = [...steps].reverse().find((s) => !s.done) ?? steps[steps.length - 1];
+  const running = !!currentStep && !currentStep.done;
+  const stepKey = `${steps.length}:${currentStep?.message ?? ''}`;
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    setElapsed(0);
+    if (!running) return;
+    const started = Date.now();
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [stepKey, running]);
 
   return (
     <div className="ml-9">
@@ -72,6 +85,10 @@ function PipelineStepsToggle({ steps }: { steps: PipelineStep[] }) {
           <span className="text-emerald-600 dark:text-emerald-400">✓</span>
         )}
         <span>{currentStep?.message}</span>
+        {running && elapsed >= 5 && <span className="tabular-nums text-slate-500">{elapsed}초</span>}
+        {running && elapsed >= SLOW_STEP_SECONDS && (
+          <span className="text-amber-600 dark:text-amber-400">사내 AI 응답이 느립니다 — 보통 1~2분 걸려요</span>
+        )}
         {expanded ? (
           <ChevronUp className="w-3 h-3" />
         ) : (

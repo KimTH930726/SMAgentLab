@@ -90,6 +90,17 @@ export interface GlossaryItem {
   created_by_user_id?: number | null;
   created_by_username?: string | null;
   created_at: string;
+  /** 다른 표현(v2.128) — 사람이 등록하지 않음. AI가 용어 등록 시 생성(llm_term)하거나 실제 질문에서 수집(llm_query) */
+  synonyms?: GlossarySynonym[];
+}
+
+export interface GlossarySynonym {
+  id: number;
+  synonym: string;
+  source: 'llm_term' | 'llm_query' | string;
+  evidence_count: number;
+  /** 질문 기록에서 온 표현은 서로 다른 질문 2건 이상이어야 검색에 쓰임 */
+  active: boolean;
 }
 
 export interface GlossaryCreatePayload {

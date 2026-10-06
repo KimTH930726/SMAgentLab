@@ -12,7 +12,9 @@
 import asyncio
 import json
 import logging
+import re
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable, Optional
 
@@ -23,6 +25,14 @@ from service.llm.base import LLMProvider, _FALLBACK_SYSTEM_PROMPT, wrap_referenc
 from service.llm.gateway_text import StreamRestorer, from_gateway, to_gateway
 
 logger = logging.getLogger(__name__)
+
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+_DIGITS = re.compile(r"\d")
+
+
+def _mask_for_log(s: str, limit: int = 200) -> str:
+    """게이트웨이 원문을 로그에 남길 때 — 앞부분만, 숫자·이메일은 가림(전화·ID·IP 류가 로그로 새지 않게)."""
+    return _DIGITS.sub("#", _EMAIL.sub("<email>", (s or "")[:limit]))
 
 
 def _build_query(
@@ -252,7 +262,8 @@ class InHouseLLMProvider(LLMProvider):
         )
         async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
             resp = await client.post(self._chat_url, json=payload)
-            logger.info("generate ← status=%d, body=%s", resp.status_code, resp.text[:200])
+            # 본문은 남기지 않는다(답변엔 컨플루언스·정책 원문이 섞여 로그로 새면 안 됨, v2.128) — 길이만
+            logger.info("generate ← status=%d, body=%d chars", resp.status_code, len(resp.text))
             resp.raise_for_status()
             data = resp.json()
             answer = _extract_answer(data)
@@ -303,6 +314,9 @@ class InHouseLLMProvider(LLMProvider):
                 logger.info("generate_stream ← status=%d", resp.status_code)
                 resp.raise_for_status()
                 line_count = 0
+                yielded = 0
+                events: Counter = Counter()
+                last_other = ""     # 토큰이 아닌 마지막 이벤트(빈 응답 원인 추적용, 가려서 로그)
                 captured_ext_conv_id: Optional[str] = None
                 restorer = StreamRestorer()
                 async for line in resp.aiter_lines():
@@ -316,13 +330,14 @@ class InHouseLLMProvider(LLMProvider):
                     try:
                         chunk = json.loads(raw)
                     except json.JSONDecodeError:
-                        logger.warning("SSE parse error: %s", raw[:100])
+                        logger.warning("SSE parse error: %s", _mask_for_log(raw, 100))
                         continue
                     if not captured_ext_conv_id:
                         cidc = chunk.get("conversation_id")
                         if cidc:
                             captured_ext_conv_id = cidc
                     event_type = chunk.get("event", "")
+                    events[event_type] += 1
                     if event_type == "message_end":
                         logger.info(
                             "SSE message_end (data_lines=%d, ext_conv_id=%s)",
@@ -331,13 +346,36 @@ class InHouseLLMProvider(LLMProvider):
                         if captured_ext_conv_id and on_ext_conversation_id:
                             on_ext_conversation_id(captured_ext_conv_id)
                         break
-                    if event_type == "message":
+                    # dify 계열 이벤트(v2.128): 에이전트형 앱은 agent_message로 토큰을 보내고, 검열(moderation)은 message_replace로
+                    # 답을 통째로 바꾸고, 실패는 error 이벤트로 온다 — 예전엔 message만 읽어 나머지는 조용히 버려져 빈 답이 됐다
+                    if event_type in ("message", "agent_message"):
                         token = restorer.feed(chunk.get("answer", ""))
                         if token:
+                            yielded += 1
                             yield token
+                    elif event_type == "message_replace":
+                        replacement = from_gateway(chunk.get("answer", ""))
+                        if replacement:
+                            if yielded:
+                                logger.warning("게이트웨이가 답변 도중 내용을 교체함(message_replace) — 교체문을 뒤에 붙임")
+                                replacement = "\n\n" + replacement
+                            yielded += 1
+                            yield replacement
+                    elif event_type == "error":
+                        raise RuntimeError(
+                            f"게이트웨이 오류 이벤트(status={chunk.get('status')}, code={chunk.get('code')}): "
+                            f"{_mask_for_log(str(chunk.get('message', '')))}")
+                    else:
+                        last_other = raw
                 tail = restorer.flush()
                 if tail:
+                    yielded += 1
                     yield tail
+                if not yielded:
+                    logger.warning(
+                        "게이트웨이 스트림이 토큰 0개로 끝남: status=%d, data_lines=%d, 이벤트=%s, 마지막 기타 이벤트=%s",
+                        resp.status_code, line_count, dict(events), _mask_for_log(last_other),
+                    )
 
     async def health_check(self) -> bool:
         """시스템 자격증명으로 토큰 발급 시도. 4xx 응답도 게이트웨이 도달 가능 의미로 간주."""

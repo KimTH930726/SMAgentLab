@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Awaitable, Callable, Optional
 
@@ -11,6 +12,7 @@ from core.config import settings
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 from agents.knowledge_rag.knowledge.retrieval import find_similar_active_knowledge, get_thresholds, is_keyword_only_category
+from agents.knowledge_rag.knowledge import glossary_terms
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +23,10 @@ _KNOWLEDGE_COLS = """k.id, n.name AS namespace,
     k.created_at::text, k.updated_at::text"""
 
 _GLOSSARY_COLS = """g.id, n.name AS namespace, g.term, g.description,
-    g.created_by_part, g.created_by_user_id, u.username AS created_by_username"""
+    g.created_by_part, g.created_by_user_id, u.username AS created_by_username,
+    COALESCE((SELECT json_agg(json_build_object('id', s.id, 'synonym', s.synonym, 'source', s.source,
+                                                'evidence_count', s.evidence_count) ORDER BY s.id)
+              FROM rag_glossary_synonym s WHERE s.glossary_id = g.id AND NOT s.blocked), '[]') AS synonyms"""
 
 
 def _require_category(category: Optional[str]) -> str:
@@ -457,6 +462,7 @@ async def create_glossary(
         )
         result = dict(row)
         result["namespace"] = namespace
+    glossary_terms.schedule_synonym_refresh(result["id"])   # 동의어는 LLM이 자동으로(v2.128, 사람 등록 없음)
     return result
 
 
@@ -487,7 +493,31 @@ async def list_glossary(namespace: Optional[str] = None) -> list[dict]:
                 ORDER BY g.id DESC
                 """
             )
-    return [dict(r) for r in rows]
+    return [_with_synonyms(dict(r)) for r in rows]
+
+
+def _with_synonyms(row: dict) -> dict:
+    """json_agg 결과(문자열)를 목록으로 + 질문 기록 동의어가 아직 근거가 모자라 검색에 안 쓰이는지 표시."""
+    raw = row.get("synonyms")
+    items = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    for s in items:
+        s["active"] = s["source"] != "llm_query" or s["evidence_count"] >= glossary_terms.QUERY_MIN_EVIDENCE
+    row["synonyms"] = items
+    return row
+
+
+async def get_synonym_namespace(synonym_id: int) -> Optional[str]:
+    async with get_conn() as conn:
+        return await conn.fetchval(
+            "SELECT n.name FROM rag_glossary_synonym s JOIN rag_glossary g ON g.id = s.glossary_id "
+            "JOIN ops_namespace n ON n.id = g.namespace_id WHERE s.id = $1", synonym_id)
+
+
+async def block_glossary_synonym(synonym_id: int) -> bool:
+    """동의어 지우기 = 막기(행은 남김) — LLM·질문 기록 배치가 같은 표현을 다시 붙이지 못하게."""
+    async with get_conn() as conn:
+        r = await conn.execute("UPDATE rag_glossary_synonym SET blocked = TRUE WHERE id = $1 AND NOT blocked", synonym_id)
+    return r == "UPDATE 1"
 
 
 async def update_glossary(
@@ -514,6 +544,7 @@ async def update_glossary(
             return None
         result = dict(row)
         result["namespace"] = ns_name
+    glossary_terms.schedule_synonym_refresh(glossary_id)   # 설명이 바뀌었을 수 있어 LLM 동의어 다시 생성(v2.128)
     return result
 
 
@@ -523,6 +554,17 @@ async def delete_glossary(glossary_id: int) -> bool:
             "DELETE FROM rag_glossary WHERE id = $1", glossary_id
         )
     return result == "DELETE 1"
+
+
+async def get_glossary_namespaces(ids: list[int]) -> list[str]:
+    """주어진 용어 id들이 걸쳐 있는 네임스페이스 이름 목록 (권한 확인용)."""
+    if not ids:
+        return []
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            "SELECT DISTINCT n.name FROM rag_glossary g JOIN ops_namespace n ON g.namespace_id = n.id "
+            "WHERE g.id = ANY($1::int[])", ids)
+    return [r["name"] for r in rows]
 
 
 async def bulk_delete_glossary(ids: list[int]) -> int:

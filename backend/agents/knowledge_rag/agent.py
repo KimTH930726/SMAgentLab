@@ -2,19 +2,20 @@
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from agents.base import AgentBase
-from core.database import get_conn
+from core.database import get_conn, resolve_namespace_id
 from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
-    LLM_UNAVAILABLE_MSG, is_llm_failure,
+    LLM_UNAVAILABLE_MSG, LLM_EMPTY_MSG, NO_KNOWLEDGE_MARKER, is_llm_failure,
     results_to_json, results_to_payload,
     update_assistant_message, update_inhouse_conv_id,
     create_query_log, post_save_tasks,
 )
-from agents.knowledge_rag.knowledge import retrieval
+from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from service.policy import search as policy_search
 from service.refdata import service as refdata_search
 from service.llm.base import resolve_system_prompt
@@ -119,6 +120,130 @@ def _build_rrf_context(
     return "\n\n".join(blocks)
 
 
+@dataclass
+class ChatContext:
+    """채팅 한 턴의 검색·문맥 조립 결과 — 채팅과 측정 스크립트(scripts/eval_chat_retrieval.py)가 같은 함수를 써서
+    "측정한 경로 = 실제 채팅 경로"가 되게 한다(v2.128: 예전 측정은 용어 매핑을 안 거쳐 채팅과 달랐다)."""
+    results: list
+    policy_result: policy_search.PolicySearchResult
+    common_codes: list
+    db_columns: list
+    llm_context: str
+    enriched_query: str
+    mapped_term: Optional[str]
+    term_matches: list = field(default_factory=list)
+    signals: dict = field(default_factory=dict)
+    abstain: bool = False
+
+
+def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: float) -> bool:
+    """근거 없음 즉시 판정 — 지식 채택 0·공통코드/DB 0·정책 파라미터 약함·정책 서술 최고점 < 하한. min_score가 None이면 끔.
+    실측(2026-10-06, 채팅 경로·새 용어 방식, 골든 88 vs 답 없는 질문 60): (서술 0.50, 파라미터 0.05)에서 골든 거짓 거절 0,
+    답 없음 35/60 차단 — 점수만으론 다 못 거르므로(분포가 겹침) 나머지는 LLM 거절에 맡긴다. 정답 질문의 파라미터 rank도 대부분
+    0.05 미만이라 파라미터 하한은 사실상 "강하게 걸린 파라미터"만 근거로 친다. 배포 후 다시 재서 켠다(그래서 기본 꺼짐)."""
+    if min_score is None:
+        return False
+    return (signals.get("adopted", 0) == 0 and signals.get("codes", 0) == 0 and signals.get("columns", 0) == 0
+            and signals.get("max_param_rank", 0.0) <= min_param_rank
+            and signals.get("top_narrative", 0.0) < min_score)
+
+
+async def build_chat_context(
+    namespace: str, search_question: str, query_vec: list[float], *,
+    top_k: int, w_vector: float, w_keyword: float, categories: Optional[list[str]] = None,
+    glossary_mode: Optional[str] = None, glossary_entries: Optional[list] = None,
+    policy_top_k: int = POLICY_CONTEXT_TOP_K,
+) -> ChatContext:
+    """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB)."""
+    mode = glossary_mode or settings.glossary_match_mode
+    term_matches: list = []
+    mapped_term: Optional[str] = None
+    enriched_query = search_question
+    if mode == "lexical":
+        entries = glossary_entries
+        if entries is None:
+            async with get_conn() as conn:
+                ns_id = await resolve_namespace_id(conn, namespace)
+                entries = await glossary_terms.load_entries(conn, ns_id) if ns_id is not None else []
+        term_matches = glossary_terms.find_terms(search_question, entries)
+        enriched_query = glossary_terms.expansion_text(search_question, term_matches)
+        mapped_term = ", ".join(m.term for m in term_matches)[:200] or None
+    elif mode == "embedding":
+        glossary_match = await retrieval.map_glossary_term(namespace, query_vec)
+        mapped_term = glossary_match.term if glossary_match else None
+        enriched_query = f"{search_question} {mapped_term}" if mapped_term else search_question
+
+    # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
+    candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
+    results_raw, policy_available, refdata_available = await asyncio.gather(
+        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories),
+        policy_search.has_policy_data(namespace),
+        refdata_search.has_refdata(namespace),
+    )
+    if settings.reranker_enabled and len(results_raw) > top_k:
+        results = await reranker_svc.rerank(enriched_query, results_raw, top_k)
+    else:
+        results = results_raw[:top_k]
+
+    # 정책서 데이터 편입(2026-09-04 1단계, 2026-09-06 2단계, 2026-09-07 근거 1건 선별)
+    # — Track 2로 하이브리드 스키마 우세 확정 후 rag_knowledge 검색과 별개로 정책
+    # 데이터도 doc_context에 텍스트로 얹는다(1단계). policy_available=False인
+    # 네임스페이스(정책 데이터 없음)는 이 블록 자체를 건너뛰어 매 턴 불필요한 쿼리를
+    # 피한다. 2단계: "정책에서 온 답인지 기준정보에서 온 답인지 구분이 안 되고 원문도
+    # 안 보인다"는 사용자 피드백으로 policy_citations를 별도로 만들어 화면에 "정책 근거"
+    # 카드로 노출(§4-2/§6) — 기존 results(rag_knowledge 인용) 배열엔 안 섞는다
+    # (FeedbackSection이 results[0].id를 rag_knowledge id로 쓰는 것과 충돌 방지).
+    # 근거 1건 선별(2026-09-07): LLM 컨텍스트는 top_k 다중 후보를 그대로 유지해 재현율을 지키고,
+    # 화면에 보여줄 근거 1건은 답변이 다 나온 "뒤에" select_cited_hit()으로 역추적한다.
+    policy_result = policy_search.PolicySearchResult()
+    if policy_available:
+        try:
+            policy_result = await policy_search.search_policy(
+                namespace, enriched_query, top_k=policy_top_k, query_vec=query_vec,
+            )
+        except Exception as e:
+            logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
+
+    # 구조화 참조데이터(공통코드/DB스키마) 병행 검색(2026-09-18) — 정확 조회 전용이라 키워드(ts_rank)로만 찾는다.
+    common_codes: list[dict] = []
+    db_columns: list[dict] = []
+    if refdata_available:
+        try:
+            common_codes, db_columns = await asyncio.gather(
+                refdata_search.search_common_codes(namespace, enriched_query, top_k=5),
+                refdata_search.search_db_columns(namespace, enriched_query, top_k=5),
+            )
+        except Exception as e:
+            logger.warning("참조데이터 검색 실패(채팅 흐름은 계속 진행): %s", e)
+
+    # 부모 섹션 확장 — 채택된 지식 청크의 같은 상위 섹션 이웃을 컨텍스트에 보충(실패해도 답변은 계속)
+    th = retrieval.get_thresholds()
+    adopted = [r for r in results if retrieval.is_adopted(r, th)]
+    parent_expansions: list[dict] = []
+    try:
+        parent_expansions = await retrieval.expand_parent_sections(adopted)
+    except Exception as e:
+        logger.warning("부모 섹션 확장 실패(확장 없이 진행): %s", e)
+    llm_context = _build_rrf_context(results, policy_result, common_codes, db_columns, parent_expansions)
+    # 용어 설명은 근거가 있을 때만 앞에 — 근거 없이 설명만 있으면 LLM이 설명으로 답을 지어낼 수 있다
+    definitions = glossary_terms.definitions_block(term_matches)
+    if definitions and llm_context.strip():
+        llm_context = f"{definitions}\n\n{llm_context}"
+
+    signals = {
+        "adopted": len(adopted), "codes": len(common_codes), "columns": len(db_columns),
+        "params": len(policy_result.params),
+        "max_param_rank": max((p.score for p in policy_result.params), default=0.0),
+        "top_narrative": max((n.score for n in policy_result.narratives), default=0.0),
+    }
+    return ChatContext(
+        results=results, policy_result=policy_result, common_codes=common_codes, db_columns=db_columns,
+        llm_context=llm_context, enriched_query=enriched_query, mapped_term=mapped_term,
+        term_matches=term_matches, signals=signals,
+        abstain=should_abstain(signals, settings.policy_abstain_min_score, settings.policy_abstain_min_param_rank),
+    )
+
+
 class KnowledgeRagAgent(AgentBase):
 
     @property
@@ -208,77 +333,14 @@ class KnowledgeRagAgent(AgentBase):
                 yield {"type": "done", "message_id": msg_id, "status": "completed"}
                 return
 
-            yield {"type": "status", "step": "context", "message": "용어 매핑 및 대화 맥락 검색 중..."}
-            glossary_match, history = await asyncio.gather(
-                retrieval.map_glossary_term(namespace, query_vec),
+            yield {"type": "status", "step": "context", "message": "용어 확인 및 관련 문서 검색 중..."}
+            cc, history = await asyncio.gather(
+                build_chat_context(namespace, search_question, query_vec, top_k=top_k, w_vector=w_vector,
+                                   w_keyword=w_keyword, categories=categories),
                 memory.build_context_history(conversation_id, query_vec),
             )
-            mapped_term = glossary_match.term if glossary_match else None
-            enriched_query = f"{search_question} {mapped_term}" if mapped_term else search_question
-
-            yield {"type": "status", "step": "search", "message": "관련 문서 검색 중..."}
-            # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
-            candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
-            results_raw, policy_available, refdata_available = await asyncio.gather(
-                retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories),
-                policy_search.has_policy_data(namespace),
-                refdata_search.has_refdata(namespace),
-            )
-            if settings.reranker_enabled and len(results_raw) > top_k:
-                results = await reranker_svc.rerank(enriched_query, results_raw, top_k)
-            else:
-                results = results_raw[:top_k]
-
-            # 정책서 데이터 편입(2026-09-04 1단계, 2026-09-06 2단계, 2026-09-07 근거 1건 선별)
-            # — Track 2로 하이브리드 스키마 우세 확정 후 rag_knowledge 검색과 별개로 정책
-            # 데이터도 doc_context에 텍스트로 얹는다(1단계). policy_available=False인
-            # 네임스페이스(정책 데이터 없음)는 이 블록 자체를 건너뛰어 매 턴 불필요한 쿼리를
-            # 피한다. 2단계: "정책에서 온 답인지 기준정보에서 온 답인지 구분이 안 되고 원문도
-            # 안 보인다"는 사용자 피드백으로 policy_citations를 별도로 만들어 화면에 "정책 근거"
-            # 카드로 노출(§4-2/§6) — 기존 results(rag_knowledge 인용) 배열엔 안 섞는다
-            # (FeedbackSection이 results[0].id를 rag_knowledge id로 쓰는 것과 충돌 방지).
-            # 근거 1건 선별(2026-09-07): "근거가 너무 많이 보인다, 원문 1건만" 피드백에 검색
-            # 직후 벡터 점수 1위 하나로 LLM 컨텍스트까지 줄여봤다가, 그 1위가 실제로 무관한
-            # 후보라 정답이 컨텍스트에서 빠져 "관련 지식을 찾지 못했습니다"로 답변이 실패하는
-            # 걸 실측으로 발견 — 즉시 되돌림. 그래서 LLM 컨텍스트(policy_context)는 원래대로
-            # top_k=5 다중 후보를 그대로 유지해 재현율을 지키고, 화면에 보여줄 근거 1건은
-            # 답변이 다 나온 "뒤에" select_cited_hit()으로 역추적한다(아래, final_answer 계산
-            # 직후). 그 전까지 policy_citations는 비워두고, 두 번째 meta 이벤트로 늦게 채운다.
-            policy_result = policy_search.PolicySearchResult()
+            results, policy_result, llm_context, mapped_term = cc.results, cc.policy_result, cc.llm_context, cc.mapped_term
             policy_citations: list[dict] = []
-            if policy_available:
-                try:
-                    policy_result = await policy_search.search_policy(
-                        namespace, enriched_query, top_k=POLICY_CONTEXT_TOP_K, query_vec=query_vec,
-                    )
-                except Exception as e:
-                    logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
-
-            # 구조화 참조데이터(공통코드/DB스키마) 병행 검색(2026-09-18) — 정책과 같은
-            # 이유로 게이트(refdata_available)를 먼저 확인해 데이터 없는 네임스페이스의
-            # 낭비를 피한다. ref_common_code/ref_db_column은 정확 조회 전용이라 임베딩이
-            # 없어 벡터 검색 자체가 불가능 — 항상 키워드(ts_rank)로만 찾는다.
-            common_codes: list[dict] = []
-            db_columns: list[dict] = []
-            if refdata_available:
-                try:
-                    common_codes, db_columns = await asyncio.gather(
-                        refdata_search.search_common_codes(namespace, enriched_query, top_k=5),
-                        refdata_search.search_db_columns(namespace, enriched_query, top_k=5),
-                    )
-                except Exception as e:
-                    logger.warning("참조데이터 검색 실패(채팅 흐름은 계속 진행): %s", e)
-
-            # 부모 섹션 확장 — 채택된 지식 청크의 같은 상위 섹션 이웃을 컨텍스트에 보충(실패해도 답변은 계속)
-            parent_expansions: list[dict] = []
-            try:
-                th = retrieval.get_thresholds()
-                parent_expansions = await retrieval.expand_parent_sections(
-                    [r for r in results if retrieval.is_adopted(r, th)],
-                )
-            except Exception as e:
-                logger.warning("부모 섹션 확장 실패(확장 없이 진행): %s", e)
-            llm_context = _build_rrf_context(results, policy_result, common_codes, db_columns, parent_expansions)
 
             async with get_conn() as conn:
                 await conn.execute(
@@ -291,6 +353,16 @@ class KnowledgeRagAgent(AgentBase):
                 "mapped_term": mapped_term, "results": results_to_payload(results),
                 "policy_citations": policy_citations,
             }
+
+            # 근거 없음 즉시 판정(v2.128, 설정으로 켬) — LLM을 안 불러 지어낼 기회도, 게이트웨이 대기(100초+)도 없다.
+            # 캐시에는 넣지 않는다(지식이 새로 들어오면 바로 답해야 하는데 고정 거절이 TTL 동안 남는다).
+            if cc.abstain:
+                await update_assistant_message(msg_id, NO_KNOWLEDGE_MARKER, "completed")
+                yield {"type": "token", "data": NO_KNOWLEDGE_MARKER}
+                await create_query_log(namespace, query, NO_KNOWLEDGE_MARKER, mapped_term, msg_id,
+                                       user_id=user.get("id"), had_context=False)
+                yield {"type": "done", "message_id": msg_id, "status": "completed"}
+                return
 
             yield {"type": "status", "step": "llm", "message": "AI 답변 생성 중..."}
 
@@ -320,6 +392,15 @@ class KnowledgeRagAgent(AgentBase):
                 llm_failed = True
                 full_answer = LLM_UNAVAILABLE_MSG
                 yield {"type": "token", "data": LLM_UNAVAILABLE_MSG}
+
+            if not llm_failed and not full_answer:
+                # 예외 없이 토큰 0개로 끝남(2026-10-06 실측: 0.4초 만에 빈 응답 4건) — 예전엔 화면에 아무것도 안 보내 빈 말풍선만
+                # 남았고 로그도 없었다. 게이트웨이 쪽 상세(받은 이벤트 종류·상태)는 provider가 경고로 남긴다.
+                logger.warning("LLM 빈 응답(토큰 0개, 예외 없음): namespace=%s msg_id=%s context=%d자",
+                               namespace, msg_id, len(llm_context))
+                llm_failed = True
+                full_answer = LLM_EMPTY_MSG
+                yield {"type": "token", "data": LLM_EMPTY_MSG}
 
             final_answer = full_answer or LLM_UNAVAILABLE_MSG
             msg_status = "failed" if llm_failed else "completed"

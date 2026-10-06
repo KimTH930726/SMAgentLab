@@ -1,0 +1,20 @@
+{"qid": "N01", "kind": "offtopic", "query": "오늘 날씨 어때?"}
+{"qid": "N02", "kind": "offtopic", "query": "내일 비 와?"}
+{"qid": "N03", "kind": "offtopic", "query": "점심 메뉴 추천해줘"}
+{"qid": "N04", "kind": "offtopic", "query": "안녕 반가워"}
+{"qid": "N05", "kind": "offtopic", "query": "고마워 수고했어"}
+{"qid": "N06", "kind": "offtopic", "query": "오늘 코스피 지수 알려줘"}
+{"qid": "N07", "kind": "offtopic", "query": "어제 프로야구 결과는?"}
+{"qid": "N08", "kind": "offtopic", "query": "환율 얼마야?"}
+{"qid": "N09", "kind": "offtopic", "query": "주말에 볼 영화 추천해줘"}
+{"qid": "N10", "kind": "offtopic", "query": "지구에서 달까지 거리는?"}
+{"qid": "N11", "kind": "adjacent", "query": "연차 신청은 어떻게 해?"}
+{"qid": "N12", "kind": "adjacent", "query": "회사 주차 등록은 어디서 해?"}
+{"qid": "N13", "kind": "adjacent", "query": "법인카드 한도 올리려면 어떻게 해?"}
+{"qid": "N14", "kind": "adjacent", "query": "노트북 교체 신청 방법 알려줘"}
+{"qid": "N15", "kind": "adjacent", "query": "사내 와이파이 비밀번호 알려줘"}
+{"qid": "N16", "kind": "adjacent", "query": "복지포인트는 어디서 쓸 수 있어?"}
+{"qid": "N17", "kind": "adjacent", "query": "출장비 정산 기한은 언제까지야?"}
+{"qid": "N18", "kind": "adjacent", "query": "신입사원 교육 일정 알려줘"}
+{"qid": "N19", "kind": "adjacent", "query": "회의실 예약은 어떻게 해?"}
+{"qid": "N20", "kind": "adjacent", "query": "사내 메신저 설치 방법 알려줘"}

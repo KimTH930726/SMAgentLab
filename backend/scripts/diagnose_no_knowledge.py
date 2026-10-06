@@ -32,34 +32,20 @@ from service.llm.base import resolve_system_prompt
 from service.llm.factory import get_llm_provider
 from service.chat.helpers import NO_KNOWLEDGE_MARKER
 from agents.knowledge_rag.knowledge import retrieval
-from agents.knowledge_rag.agent import POLICY_CONTEXT_TOP_K, _build_rrf_context
+from agents.knowledge_rag.agent import POLICY_CONTEXT_TOP_K, build_chat_context
 from service.policy import search as policy_search
 from service.policy import track2
-from service.refdata import service as refdata_search
 
 
 async def build(namespace: str, question: str, policy_top_k: int = POLICY_CONTEXT_TOP_K):
-    """agent.py stream_chat의 컨텍스트 조립과 같은 순서(리랭커·멀티턴 보강·카테고리 라우팅 제외)."""
+    """채팅과 같은 함수(agent.build_chat_context)로 컨텍스트 조립(리랭커·멀티턴 보강·카테고리 라우팅 제외) — v2.128부터 공용."""
     query_vec = await embedding_service.embed(question)
-    glossary = await retrieval.map_glossary_term(namespace, query_vec)
-    enriched = f"{question} {glossary.term}" if glossary else question
     d = retrieval.get_search_defaults()
-    results = await retrieval.search_knowledge(
-        namespace, query_vec, enriched, d["default_w_vector"], d["default_w_keyword"], int(d["default_top_k"]),
+    cc = await build_chat_context(
+        namespace, question, query_vec, top_k=int(d["default_top_k"]), w_vector=d["default_w_vector"],
+        w_keyword=d["default_w_keyword"], policy_top_k=policy_top_k,
     )
-    policy_result = policy_search.PolicySearchResult()
-    if await policy_search.has_policy_data(namespace):
-        policy_result = await policy_search.search_policy(namespace, enriched, top_k=policy_top_k, query_vec=query_vec)
-    codes, cols = [], []
-    if await refdata_search.has_refdata(namespace):
-        codes, cols = await asyncio.gather(
-            refdata_search.search_common_codes(namespace, enriched, top_k=5),
-            refdata_search.search_db_columns(namespace, enriched, top_k=5),
-        )
-    ctx = _build_rrf_context(results, policy_result, codes, cols)
-    th = retrieval.get_thresholds()
-    adopted = sum(1 for r in results if retrieval.is_adopted(r, th))
-    return ctx, policy_result, enriched, query_vec, len(results), adopted
+    return cc.llm_context, cc.policy_result, cc.enriched_query, query_vec, len(cc.results), cc.signals["adopted"]
 
 
 def policy_ids(pr) -> set[int]:

@@ -53,3 +53,5 @@ backend/tests/fixtures/golden_set/
 # 폐쇄망 반입용 이미지 묶음(scripts/export-images.*) — 수 GB, 저장소에 넣지 않음
 smagentlab-images-*.tar.gz
 smagentlab-images-*.tar.gz.sha256
+# 측정 결과(질문·용어 등 사내 데이터 포함) — 로컬 전용
+backend/eval_out/

@@ -100,6 +100,14 @@ class GlossaryUpdate(BaseModel):
     description: str
 
 
+class GlossarySynonymOut(BaseModel):
+    id: int
+    synonym: str
+    source: str             # llm_term(용어 등록 시 LLM) / llm_query(질문 기록에서 LLM)
+    evidence_count: int = 1
+    active: bool = True     # 질문 기록 동의어는 서로 다른 질문 2건 이상이어야 검색에 쓰임
+
+
 class GlossaryOut(BaseModel):
     id: int
     namespace: str
@@ -108,3 +116,4 @@ class GlossaryOut(BaseModel):
     created_by_part: Optional[str] = None
     created_by_user_id: Optional[int] = None
     created_by_username: Optional[str] = None
+    synonyms: list[GlossarySynonymOut] = []
