@@ -178,7 +178,7 @@ cascade = 실험실 L2 테스트 전략 후보.
 |---|---|---|
 | 타입 컬럼 (정확·고정값) | `policy_item`: `namespace_id`, `system_key`, `category_path text[]`, `policy_name`, `source_file/sheet/row`, `content_hash`, `status`, `logical_id`, `version`, `supersedes_id`, `parse_status` | ✅ 대체로 충족. 단 ① `category_path` **GIN 인덱스 없음**(btree만 — `= ANY()` 스캔), ② `embedding_model` **컬럼 없음**(§6 위반, `rag_knowledge`엔 있음) |
 | JSONB (유동·희소·중첩) | `policy_item.unresolved_segments jsonb` **하나뿐** — 파서/LLM이 **못 푼** 것 캡처용 | ⚠️ 철학이 말하는 `spec` / `raw_structure`(파서가 만든 **정제 구조 트리**, 답변 payload로 fetch)에 해당하는 컬럼이 **없다**. 파싱 결과를 보존할 곳이 없어 LLM이 매 적재마다 `raw_body` 문자열을 다시 구조 파싱함 → **`raw_structure jsonb` 추가 필요 (YES)** |
-| 벡터 (자연어) | `policy_chunk.chunk_text` + `embedding vector(768)` + HNSW 인덱스, `chunk_idx`로 다중 청크 | ✅ 매핑 자체는 충족. 단 `chunk_text` 생성 방식이 §4 규칙 미준수(§8-C) |
+| 벡터 (자연어) | `policy_chunk.chunk_text` + `embedding vector(1024)` + HNSW 인덱스, `chunk_idx`로 다중 청크 | ✅ 매핑 자체는 충족. 단 `chunk_text` 생성 방식이 §4 규칙 미준수(§8-C) |
 | 트리플 (`policy_param`) | `name` / `condition` / `value` / `unit` (+ `external_source`, `approved`) | ⚠️ `(action, event, trigger)` 정규화 전용 아님. 상태전이는 아예 안 들어옴 |
 
 ### 8-B. `조건/상세` 3단 트리 → indent 파서 → JSON → 트리플 정규화 — **미구현**

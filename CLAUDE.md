@@ -28,7 +28,7 @@
 - `backend/service/chat/memory.py` — 대화 요약 + 시맨틱 리콜
 - `backend/service/policy/` — 정책서 임포트/검색 파이프라인 (v1, docs/policy-doc-pipeline-plan.md)
 - `frontend-react/src/components/` — React UI 컴포넌트
-- `docs/` — architecture.md(버전별 변경이력), flow.md(처리 흐름), table-definition.md(마이그레이션
+- `docs/` — architecture.md(버전별 변경이력 — v2.99 이전은 `docs/archive/`로 분리), flow.md(처리 흐름), table-definition.md(마이그레이션
   이력만 — 전체 컬럼 스펙은 실 DB가 항상 정확, 2026-09-16 경량화) — 변경 시 동기화. API
   스펙은 FastAPI 자동 문서(`/docs`)로 대체(손 유지보수 안 함)
 

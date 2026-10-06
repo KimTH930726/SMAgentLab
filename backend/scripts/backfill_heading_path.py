@@ -8,7 +8,7 @@
 
 한계: 원본에 실제 h1 경계가 없었던 문서(예: "배달의민족"/"쿠팡이츠" 두 섹션이 상위
 구분 헤딩 없이 나열된 경우)는 이 소급 채우기로도 못 구분한다 — 그 특정 사례(id=12857/
-12862)는 이미 별도로 채널명 라벨을 수동 삽입해뒀다(2026-09-22, architecture.md v2.97).
+12862)는 이미 별도로 채널명 라벨을 수동 삽입해뒀다(2026-09-22, docs/archive/architecture-history-v2.0-v2.99.md v2.97).
 이 스크립트는 "번호 체계가 있는 나머지 문서"에 유효하다.
 
 실행: docker compose exec backend python scripts/backfill_heading_path.py
