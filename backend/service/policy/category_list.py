@@ -52,6 +52,35 @@ def pick_categories(question: str, names: list[str], sims: Optional[dict[str, fl
     return []
 
 
+# "주제 전체" 질문 판별(2026-10-07) — 키워드 판별기(전체·모든·목록…)는 골든셋 말투("~ 모든 정책을 한 번에")에 맞춰져, 실제 질문 기록의
+# "재고 정책 좀", "쿠폰에 대해서 알려줘", "재고에 관련된 정책은 없나?"를 거의 다 놓쳤다(실측 144개 중 주제 전체 질문 약 8개 → 탐지 0).
+# 질문이 "분류 이름 + 아래 일반 표현"만으로 이뤄졌으면 주제 전체를 묻는 것으로 본다 — "배송비 얼마야?"처럼 구체적으로 묻는 말
+# (얼마·몇·언제·어떻게·가능 등)이 남으면 단건 질문. 분류 이름 자체가 데이터라 말투 키워드를 따로 늘리지 않아도 된다.
+_GENERIC = sorted({
+    "정책", "규칙", "규정", "기준", "내용", "관련된", "관련", "대해서", "대해", "대한", "알려줘", "알려주세요", "알려", "설명해줘", "설명해주세요",
+    "설명", "정리해줘", "정리", "보여줘", "보여주세요", "목록", "종류", "전부", "전체", "모든", "모두", "어떤게", "어떤", "뭐가", "뭐있어", "있어",
+    "있나", "없나", "있나요", "있어요", "있습니까", "주세요", "해줘", "좀", "들", "것", "거", "은", "는", "이", "가", "을", "를",
+    "에", "의", "요", "다", "말해줘", "말해봐", "찾아줘", "찾아봐", "궁금해", "궁금합니다", "확인", "볼래", "보고싶어", "싶어", "싶은데",
+}, key=len, reverse=True)
+
+
+def is_topic_overview(question: str, names: list[str]) -> list[str]:
+    """질문이 분류 이름(여러 개 가능) + 일반 표현뿐이면 그 분류 이름들, 아니면 빈 목록. 글자 매칭만(의미 추정 없음 — 정밀도 우선).
+    다른 이름 안에 들어가는 이름은 뺀다("재고정책"이 있으면 "재고"는 안 씀). "상품 환불 정책은?"처럼 두 분류가 함께 나오면 둘 다 돌려주고,
+    목록은 두 분류에 함께 속한 정책으로 좁힌다(find_category_list) — 큰 "상품" 분류 전체를 붙이지 않게."""
+    qn = norm_category(question)
+    lex = [n for n in names if len(n) >= 2 and n in qn]
+    if not lex or len(qn) > 40:
+        return []
+    picked = [n for n in lex if not any(n != m and n in m for m in lex)]
+    rest = qn
+    for n in sorted(picked, key=len, reverse=True):
+        rest = rest.replace(n, "", 1)
+    for g in _GENERIC:
+        rest = rest.replace(g, "")
+    return sorted(picked) if len(rest) <= 1 else []
+
+
 _cache: dict[int, CategoryIndex] = {}
 
 
@@ -87,17 +116,30 @@ class CategoryList:
                 + "\n".join(self.lines))
 
 
-async def find_category_list(ns_id: int, question: str, query_vec: list[float]) -> Optional[CategoryList]:
-    """탐색형 질문의 대상 분류를 찾아 그 정책 목록(분류 경로 > 정책명: 본문 첫 줄)을 돌려준다. 못 찾으면 None."""
+async def find_category_list(ns_id: int, question: str, query_vec: list[float], *,
+                             keyword_nav: bool) -> Optional[CategoryList]:
+    """대상 분류의 정책 목록(분류 경로 > 정책명: 본문 첫 줄). 두 경로:
+    - keyword_nav(키워드 판별기 "전체·모든·목록…"가 잡음): 분류 이름 글자 매칭 → 없으면 의미 1위(_MIN_SIM 이상). 같은 이름은 합침
+    - 그 외: 질문이 "분류 이름 + 일반 표현"뿐일 때만(is_topic_overview — "재고 정책 좀"). 여러 분류면 함께 속한 정책만
+    실측(2026-10-07, 실제 질문 기록 103개 사람 라벨): 키워드만 재현 1/10·정밀도 33% → 결합 재현 6/10(분류가 있는 6개 전부)·
+    새 규칙 오탐 0. 나머지 4개("사이렌 오더 정책은?" 등)는 그런 분류가 없어 목록 대상이 아님(검색으로 답함). 못 찾으면 None."""
     async with get_conn() as conn:
         idx = await _index(conn, ns_id)
         if not idx.item_ids:
             return None
-        sims = {n: sum(a * b for a, b in zip(query_vec, v)) for n, v in idx.vectors.items()}
-        picked = pick_categories(question, list(idx.item_ids), sims)
-        if not picked:
+        names = list(idx.item_ids)
+        if keyword_nav:
+            sims = {n: sum(a * b for a, b in zip(query_vec, v)) for n, v in idx.vectors.items()}
+            picked = pick_categories(question, names, sims)
+            sets = [idx.item_ids[n] for n in picked]
+            ids = sorted(set().union(*sets)) if sets else []
+        else:
+            picked = is_topic_overview(question, names)
+            sets = [idx.item_ids[n] for n in picked]
+            both = set.intersection(*sets) if sets else set()
+            ids = sorted(both or (min(sets, key=len) if sets else set()))
+        if not picked or not ids:
             return None
-        ids = sorted(set().union(*(idx.item_ids[n] for n in picked)))
         rows = await conn.fetch(
             "SELECT array_to_string(category_path, ' > ') AS cat, policy_name, split_part(coalesce(raw_body, ''), E'\\n', 1) AS first "
             "FROM policy_item WHERE id = ANY($1::int[]) ORDER BY category_path, source_row LIMIT $2", ids, _MAX_ITEMS)

@@ -192,15 +192,16 @@ async def build_chat_context(
         except Exception as e:
             logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
 
-    # 탐색형("○○ 관련 정책 다 보여줘")은 검색(상위 몇 개)으로는 분류 전체가 안 온다 — 그 분류의 정책 목록을 DB에서 그대로
-    # (service/policy/category_list.py, 실측 포함률 42%→91%). 못 찾으면 지금처럼 검색 결과만. category_lists=False는 측정 비교용
+    # 탐색형("○○ 관련 정책 다 보여줘")·주제 전체("재고 정책 좀")는 검색(상위 몇 개)으로는 분류 전체가 안 온다 — 그 분류의 정책 목록을
+    # DB에서 그대로(service/policy/category_list.py, 실측 포함률 42%→91%). 못 찾으면 지금처럼 검색 결과만. category_lists=False는 측정 비교용
     category = None
-    if policy_available and category_lists and looks_like_navigation_query(search_question):
+    if policy_available and category_lists:
         try:
             async with get_conn() as conn:
                 ns_id = await resolve_namespace_id(conn, namespace)
             if ns_id is not None:
-                category = await category_list.find_category_list(ns_id, search_question, query_vec)
+                category = await category_list.find_category_list(
+                    ns_id, search_question, query_vec, keyword_nav=looks_like_navigation_query(search_question))
         except Exception as e:
             logger.warning("분류 목록 조회 실패(검색 결과만으로 진행): %s", e)
 

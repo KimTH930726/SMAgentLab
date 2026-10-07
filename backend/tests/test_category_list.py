@@ -41,3 +41,24 @@ def test_block_says_when_truncated():
     b = cl.CategoryList(names=["배송정책"], total=55, lines=["- a > b: c"] * 40).block()
     assert b.startswith("[분류 목록: 배송정책 — 정책 55개 — 그중 40개만 표시")
     assert "그중" not in cl.CategoryList(names=["x"], total=2, lines=["- 1", "- 2"]).block()
+
+
+
+class TestTopicOverview:
+    """실제 사용자 말투("재고 정책 좀") — 키워드 판별기가 놓치던 주제 전체 질문(2026-10-07 실측 키워드 재현 1/10)."""
+    NAMES = ["재고", "재고정책", "환불", "상품", "쿠폰", "배송비"]
+
+    def test_overview_phrasings(self):
+        assert cl.is_topic_overview("재고 정책 좀", self.NAMES) == ["재고정책"]
+        assert cl.is_topic_overview("재고에 관련된 정책은 없나?", self.NAMES) == ["재고"]
+        assert cl.is_topic_overview("쿠폰에 대해서 알려줘", self.NAMES) == ["쿠폰"]
+        assert cl.is_topic_overview("환불 규정 알려줘", self.NAMES) == ["환불"]
+        assert cl.is_topic_overview("상품 환불 정책은?", self.NAMES) == ["상품", "환불"]   # 둘 다 → 함께 속한 정책만
+
+    def test_specific_questions_are_not_overview(self):
+        for q in ["배송비 얼마야?", "쿠폰이 뭐야?", "재고 최대 개수가 몇개야", "환불은 언제 돼?", "쿠폰 회수 어떻게 해?",
+                  "단순변심이면 교환 가능해?"]:
+            assert cl.is_topic_overview(q, self.NAMES) == [], q
+
+    def test_no_category_name_no_overview(self):
+        assert cl.is_topic_overview("사이렌 오더 정책은?", self.NAMES) == []
