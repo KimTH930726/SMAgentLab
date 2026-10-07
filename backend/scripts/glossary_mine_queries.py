@@ -37,7 +37,7 @@ async def main() -> None:
                 "ORDER BY id DESC LIMIT $2", ns["id"], args.limit)]
             entries = await glossary_terms.load_entries(conn, ns["id"])
         found = await glossary_terms.mine_query_expressions(qs, entries, llm)
-        per = collections.Counter((glossary_terms.norm(e), t) for e, t, _ in {(e, t, qi) for e, t, qi in found})
+        per = collections.Counter((n, t) for n, t, _ in {(glossary_terms.norm(e), t, qi) for e, t, qi in found})
         surface = {(glossary_terms.norm(e), t): e for e, t, _ in found}
         print(f"[{ns['name']}] 질문 {len(qs)}개 → 표현 {len(per)}종 (서로 다른 질문 2건 이상: {sum(c >= glossary_terms.QUERY_MIN_EVIDENCE for c in per.values())})")
         for (n, t), c in per.most_common(40):

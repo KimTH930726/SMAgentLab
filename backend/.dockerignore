@@ -2,3 +2,6 @@ __pycache__
 *.pyc
 .git
 .env
+# 측정 결과·골든셋(사내 데이터) — 이미지에 넣지 않는다(v2.128 리뷰)
+eval_out/
+tests/fixtures/golden_set/

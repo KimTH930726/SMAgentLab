@@ -701,6 +701,8 @@ async def approve(item_id: int, approver: dict, proposed_override: Optional[dict
     if item["target_type"] == "auto":
         raise ValueError("정정 대상을 먼저 정하세요 — '정정 대상'에서 근거를 고르거나 반려(종료)하세요.")
     proposed = _validate_proposed(item["target_type"], proposed_override or stored)
+    if draft_mod.is_unchanged(item["target_type"], _json(item["original"]) or {}, proposed):
+        raise ValueError("수정안이 기존 내용과 같아요 — 고칠 게 없으면 반려(종료)하세요.")
     # 지식 본문 임베딩은 트랜잭션 밖에서 미리(트랜잭션은 DB 쓰기만 짧게)
     embedding = None
     if item["target_type"] in ("knowledge", "missing"):

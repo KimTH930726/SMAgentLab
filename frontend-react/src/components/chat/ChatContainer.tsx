@@ -59,10 +59,11 @@ function CorrectionResultsBanner() {
 // 사내 게이트웨이 응답이 1~2분 걸리는 날이 있어(2026-10-06 실측 100~150초) 아무 표시 없이 기다리면 멈춘 줄 안다 — 경과 시간 + 안내
 const SLOW_STEP_SECONDS = 30;
 
-function PipelineStepsToggle({ steps }: { steps: PipelineStep[] }) {
+function PipelineStepsToggle({ steps, answering = false }: { steps: PipelineStep[]; answering?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const currentStep = [...steps].reverse().find((s) => !s.done) ?? steps[steps.length - 1];
-  const running = !!currentStep && !currentStep.done;
+  // 답변 글자가 나오기 시작하면 기다리는 게 아니다 — 경과 시간·느림 안내는 첫 글자 전까지만
+  const running = !!currentStep && !currentStep.done && !answering;
   const stepKey = `${steps.length}:${currentStep?.message ?? ''}`;
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
@@ -622,7 +623,9 @@ export function ChatContainer() {
 
         {/* Pipeline steps — inline below last message */}
         {isLoading && streamSteps.length > 0 && (
-          <PipelineStepsToggle steps={streamSteps} />
+          <PipelineStepsToggle steps={streamSteps}
+            answering={!!displayMessages.length && displayMessages[displayMessages.length - 1].role === 'assistant'
+              && !!displayMessages[displayMessages.length - 1].content?.trim()} />
         )}
 
         <div ref={messagesEndRef} />

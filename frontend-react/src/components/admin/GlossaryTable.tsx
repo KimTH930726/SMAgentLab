@@ -68,7 +68,10 @@ export function GlossaryTable() {
 
   const synonymDeleteMutation = useMutation({
     mutationFn: (id: number) => deleteGlossarySynonym(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['glossary', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['glossary-vector-search', selectedNs] });
+    },
     onError: (err: Error) => alert(err.message || '다른 표현 삭제 실패'),
   });
 

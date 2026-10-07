@@ -89,9 +89,20 @@ async def test_message_and_agent_message_both_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_message_replace_without_prior_tokens_yields_replacement(monkeypatch):
-    p = _provider(monkeypatch, [{"event": "message_replace", "answer": "검열로 교체된 안내"}, {"event": "message_end"}])
-    assert await _collect(p) == ["검열로 교체된 안내"]
+async def test_message_replace_sends_replace_signal_and_drops_held_digits(monkeypatch):
+    """교체는 이어 붙이지 않고 신호로 — 원복 대기 중이던 숫자 조각("90")도 버린다(리뷰 2026-10-07)."""
+    p = _provider(monkeypatch, [{"event": "message", "answer": "주기는 90"}, {"event": "message_replace", "answer": "검열로 교체된 안내"},
+                                {"event": "message_end"}])
+    out = await _collect(p)
+    assert out == ["주기는 ", inhouse.REPLACE_PREFIX + "검열로 교체된 안내"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_text_chunk_streams(monkeypatch):
+    """워크플로형 앱은 text_chunk(data.text)로 토큰을 보낸다 — 예전엔 버려져 빈 답이 됐을 경로."""
+    p = _provider(monkeypatch, [{"event": "workflow_started"}, {"event": "text_chunk", "data": {"text": "안녕"}},
+                                {"event": "text_chunk", "data": {"text": "하세요"}}, {"event": "message_end"}])
+    assert "".join(await _collect(p)) == "안녕하세요"
 
 
 @pytest.mark.asyncio

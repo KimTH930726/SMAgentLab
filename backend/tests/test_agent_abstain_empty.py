@@ -78,6 +78,7 @@ class _ConnCtx:
 
 
 UNAVAILABLE = "[LLM 서버에 연결할 수 없습니다. 검색 결과를 참고하세요.]"
+REPLACE = "\x00REPLACE\x00"
 
 
 def _wire(monkeypatch, *, abstain: bool, tokens: list[str]):
@@ -86,6 +87,7 @@ def _wire(monkeypatch, *, abstain: bool, tokens: list[str]):
     monkeypatch.setattr(agent, "LLM_EMPTY_MSG", EMPTY)
     monkeypatch.setattr(agent, "LLM_UNAVAILABLE_MSG", UNAVAILABLE)
     monkeypatch.setattr(agent, "is_llm_failure", lambda a: not a or a in (UNAVAILABLE, EMPTY))
+    monkeypatch.setattr(agent, "REPLACE_PREFIX", REPLACE)
     monkeypatch.setattr(agent.memory, "augment_query_for_search", AsyncMock(return_value=("q", [0.1])))
     monkeypatch.setattr(agent.memory, "build_context_history", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent.embedding_service, "embed", AsyncMock(return_value=[0.1]))
@@ -151,3 +153,13 @@ async def test_normal_answer_unchanged(monkeypatch):
     assert "".join(e["data"] for e in events if e["type"] == "token") == "정상 답변"
     set_cached.assert_awaited_once()
     assert events[-1]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_gateway_replace_discards_streamed_text(monkeypatch):
+    """게이트웨이 검열(message_replace)은 답을 통째로 바꾼다 — 저장·캐시·화면 모두 교체문만(리뷰 2026-10-07: 원문 뒤에 붙던 문제)."""
+    upd, log, set_cached, _ = _wire(monkeypatch, abstain=False, tokens=["검열될 ", "원래 답", REPLACE + "교체된 안내문"])
+    events = await _run()
+    assert {"type": "replace", "data": "교체된 안내문"} in events
+    assert log.await_args.args[2] == "교체된 안내문"
+    assert set_cached.await_args.args[3]["answer"] == "교체된 안내문"

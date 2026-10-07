@@ -6,6 +6,10 @@ from typing import AsyncIterator, Callable, Optional
 from service.prompt.loader import get_prompt as _load_prompt
 
 
+# 스트리밍 중 "지금까지 보낸 답을 버리고 이 내용으로" 신호(v2.128) — 게이트웨이 검열 message_replace. generate_stream이 이 접두사로
+# 시작하는 토큰을 보내면 에이전트가 답변을 교체한다(뒤에 붙이면 원문과 교체문이 함께 저장·캐시된다 — 리뷰 2026-10-07)
+REPLACE_PREFIX = "\x00REPLACE\x00"
+
 _FALLBACK_SYSTEM_PROMPT = """IT 운영 지식 AI(OpsLens). 아래 규칙을 따르세요.
 
 [원칙]

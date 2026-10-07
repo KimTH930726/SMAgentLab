@@ -195,6 +195,10 @@ async function _runStream(
       } else if (event.type === 'token') {
         const token = (event as { type: 'token'; data: string }).data;
         updateLastMessage((m) => ({ ...m, content: m.content + token }));
+      } else if ((event as { type: string }).type === 'replace') {
+        // 게이트웨이 검열이 답을 통째로 교체(v2.128) — 지금까지 받은 내용을 버리고 교체문으로
+        const text = (event as unknown as { data: string }).data;
+        updateLastMessage((m) => ({ ...m, content: text }));
       } else if (event.type === 'sql') {
         const sqlEvent = event as SSESqlEvent;
         set({ sqlResult: sqlEvent });

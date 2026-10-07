@@ -95,7 +95,8 @@ async def _get_redis():
             import redis.asyncio as redis
             _redis_client = redis.from_url(settings.redis_url, decode_responses=False)
             await _redis_client.ping()
-            logger.info("[Cache] Redis 연결 성공: %s", settings.redis_url)
+            # URL에 비밀번호가 들어갈 수 있어 사용자·비밀번호 부분은 가린다(리뷰 2026-10-07)
+            logger.info("[Cache] Redis 연결 성공: %s", re.sub(r"//[^@/]*@", "//***@", settings.redis_url))
         except Exception as e:
             logger.warning("[Cache] Redis 연결 실패 (캐시 비활성화): %s", e)
             _redis_client = None

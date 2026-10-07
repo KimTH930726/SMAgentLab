@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from agents.base import AgentBase
-from core.database import get_conn, resolve_namespace_id
+from core.database import get_conn
 from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
@@ -18,7 +18,7 @@ from service.chat.helpers import (
 from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from service.policy import search as policy_search
 from service.refdata import service as refdata_search
-from service.llm.base import resolve_system_prompt
+from service.llm.base import REPLACE_PREFIX, resolve_system_prompt
 from service.llm.factory import get_llm_provider
 from shared.embedding import embedding_service
 from shared import cache as sem_cache
@@ -155,23 +155,8 @@ async def build_chat_context(
     policy_top_k: int = POLICY_CONTEXT_TOP_K,
 ) -> ChatContext:
     """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB)."""
-    mode = glossary_mode or settings.glossary_match_mode
-    term_matches: list = []
-    mapped_term: Optional[str] = None
-    enriched_query = search_question
-    if mode == "lexical":
-        entries = glossary_entries
-        if entries is None:
-            async with get_conn() as conn:
-                ns_id = await resolve_namespace_id(conn, namespace)
-                entries = await glossary_terms.load_entries(conn, ns_id) if ns_id is not None else []
-        term_matches = glossary_terms.find_terms(search_question, entries)
-        enriched_query = glossary_terms.expansion_text(search_question, term_matches)
-        mapped_term = ", ".join(m.term for m in term_matches)[:200] or None
-    elif mode == "embedding":
-        glossary_match = await retrieval.map_glossary_term(namespace, query_vec)
-        mapped_term = glossary_match.term if glossary_match else None
-        enriched_query = f"{search_question} {mapped_term}" if mapped_term else search_question
+    term_matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(
+        namespace, search_question, query_vec, mode=glossary_mode, entries=glossary_entries)
 
     # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
     candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
@@ -382,6 +367,13 @@ class KnowledgeRagAgent(AgentBase):
                     on_ext_conversation_id=_capture_inhouse_conv_id,
                     system_prompt=chat_prompt,
                 ):
+                    if isinstance(token, str) and token.startswith(REPLACE_PREFIX):
+                        # 게이트웨이 검열이 답을 통째로 교체 — 저장·캐시·화면 모두 교체문으로(지금까지 보낸 토큰은 버림)
+                        full_answer = token[len(REPLACE_PREFIX):]
+                        logger.warning("게이트웨이가 답변을 교체함(message_replace) — 교체문 %d자", len(full_answer))
+                        await update_assistant_message(msg_id, full_answer)
+                        yield {"type": "replace", "data": full_answer}
+                        continue
                     full_answer += token
                     token_count += 1
                     if token_count == 1 or token_count % _FLUSH_INTERVAL == 0:
@@ -393,7 +385,7 @@ class KnowledgeRagAgent(AgentBase):
                 full_answer = LLM_UNAVAILABLE_MSG
                 yield {"type": "token", "data": LLM_UNAVAILABLE_MSG}
 
-            if not llm_failed and not full_answer:
+            if not llm_failed and not full_answer.strip():   # 공백만 온 것도 빈 응답(리뷰 2026-10-07)
                 # 예외 없이 토큰 0개로 끝남(2026-10-06 실측: 0.4초 만에 빈 응답 4건) — 예전엔 화면에 아무것도 안 보내 빈 말풍선만
                 # 남았고 로그도 없었다. 게이트웨이 쪽 상세(받은 이벤트 종류·상태)는 provider가 경고로 남긴다.
                 logger.warning("LLM 빈 응답(토큰 0개, 예외 없음): namespace=%s msg_id=%s context=%d자",

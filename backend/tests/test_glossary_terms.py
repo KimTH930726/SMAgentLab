@@ -139,3 +139,38 @@ async def test_mine_query_expressions_validates_against_question_and_glossary():
     embed = _fake_embed({"쿠폰 규정": math.acos(0.90), "환불": math.acos(0.80), "상품 쿠폰": 0.0, "반품확정": 0.0})
     found = await gt.mine_query_expressions(questions, entries, llm, embed=embed)
     assert found == [("쿠폰 규정", "상품 쿠폰", 0)]
+
+
+
+class TestFindTermsBoundaries:
+    """코드 리뷰 2026-10-07 재현 사례 — 짧은 영문·띄어쓰기 건너뛰기·여러 위치."""
+    ENTRIES = [E("PG", "결제대행"), E("PO", "발주"), E("POS", "판매시점"), E("고객", "구매자"),
+               E("기초재고", "시작 재고"), E("재고", "보유 수량"), E("상품 쿠폰", "쿠폰")]
+
+    @pytest.mark.parametrize("q", ["앱 upgrade 후 오류", "report 출력이 안돼요", "재고 객체 생성", "position 값"])
+    def test_no_match_inside_other_words_or_across_space(self, q):
+        assert "PG" not in [m.term for m in gt.find_terms(q, self.ENTRIES)]
+        assert "PO" not in [m.term for m in gt.find_terms(q, self.ENTRIES)]
+        assert "POS" not in [m.term for m in gt.find_terms(q, self.ENTRIES)]
+        assert "고객" not in [m.term for m in gt.find_terms(q, self.ENTRIES)]
+
+    @pytest.mark.parametrize("q, term", [("PG 승인 실패", "PG"), ("POS시스템 오류", "POS"), ("pos 화면", "POS"),
+                                         ("고객센터 번호", "고객"), ("상품쿠폰 규정", "상품 쿠폰")])
+    def test_real_mentions_still_match(self, q, term):
+        assert term in [m.term for m in gt.find_terms(q, self.ENTRIES)]
+
+    def test_standalone_short_term_after_longer_one_kept(self):
+        assert [m.term for m in gt.find_terms("기초재고 말고 재고 수량", self.ENTRIES)] == ["기초재고", "재고"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_single_representative_term():
+    """질의 기록·용어별 통계는 용어 하나로 집계 — 쉼표로 이으면 통계 조인이 깨진다(리뷰 2026-10-07)."""
+    entries = [E("기초재고", "시작 재고"), E("배송비", "요금")]
+    matches, mapped, enriched = await gt.resolve_query_terms("ns", "기초재고와 배송비", None, mode="lexical", entries=entries)
+    assert mapped == "기초재고" and len(matches) == 2 and enriched == "기초재고와 배송비"
+    assert await gt.resolve_query_terms("ns", "q", None, mode="off") == ([], None, "q")
+
+
+def test_question_key_ignores_spacing_and_punctuation():
+    assert gt.question_key("택배비 얼마?") == gt.question_key("택배비얼마") != gt.question_key("배송비 얼마")

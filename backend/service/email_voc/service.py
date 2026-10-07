@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from agents.knowledge_rag.knowledge import retrieval
+from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from agents.knowledge_rag.knowledge.retrieval import RetrievalResult
 from service.llm.base import neutralize_structural_labels
 from service.llm.factory import get_llm_provider
@@ -215,9 +215,8 @@ async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceC
     # 짧아 embed()로 충분).
     query_vec = await embedding_service.embed_long(query_text)
 
-    glossary_match = await retrieval.map_glossary_term(namespace, query_vec)
-    mapped_term = glossary_match.term if glossary_match else None
-    enriched_query = f"{query_text} {mapped_term}" if mapped_term else query_text
+    # 용어집 방식은 채팅과 같은 설정(GLOSSARY_MATCH_MODE)을 따른다(v2.128)
+    _, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(namespace, query_text, query_vec)
 
     defaults = retrieval.get_search_defaults()
     w_vector, w_keyword = defaults["default_w_vector"], defaults["default_w_keyword"]

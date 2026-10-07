@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -54,10 +55,38 @@ class TermMatch:
     synonyms: list[str] = field(default_factory=list)
 
 
+def _norm_with_index(question: str) -> tuple[str, list[int]]:
+    """norm()과 같은 정규화 + 정규화 문자열 각 글자의 원래 질문 위치(걸린 구간이 원문에서 띄어쓰기를 건너뛰었는지 보려고)."""
+    chars, idx = [], []
+    for i, ch in enumerate((question or "").lower()):
+        if not _NON_WORD.fullmatch(ch):
+            chars.append(ch)
+            idx.append(i)
+    return "".join(chars), idx
+
+
+def _is_ascii_word(ch: str) -> bool:
+    return ch.isascii() and ch.isalnum()
+
+
+def _valid_hit(q: str, idx: list[int], question: str, start: int, n: str, expr: str) -> bool:
+    """정규화 문자열에서 찾은 위치가 진짜 그 표현인지(코드 리뷰 2026-10-07 재현 사례):
+    - 영문·숫자 표현은 앞뒤가 영문·숫자면 안 됨 — "앱 upgrade"에 PG, "report"에 PO가 걸렸다
+    - 원문에서 표현보다 띄어쓰기를 더 건너뛰면 안 됨 — "재고 객체"에 "고객"이 걸렸다(반대로 "상품쿠폰"에 "상품 쿠폰"은 허용)"""
+    end = start + len(n)
+    if _is_ascii_word(n[0]) and start > 0 and _is_ascii_word(q[start - 1]):
+        return False
+    if _is_ascii_word(n[-1]) and end < len(q) and _is_ascii_word(q[end]):
+        return False
+    span = question[idx[start]: idx[end - 1] + 1]
+    # 표현 쪽 구분자는 띄어쓰기·밑줄·하이픈 등 글자가 아닌 것 전부(APPUSER_SELECT_ROLE ↔ "appuser select role")
+    return sum(c.isspace() for c in span) <= sum(bool(_NON_WORD.fullmatch(c)) for c in expr)
+
+
 def find_terms(question: str, entries: list[GlossaryEntry], limit: int = MAX_MATCHES) -> list[TermMatch]:
     """질문에 글자 그대로 나온 용어·동의어. 긴 표현부터 잡고, 이미 잡힌 구간 안에 들어가는 짧은 표현은 버린다
-    ("기초재고"가 잡히면 그 안의 "재고" 용어는 따로 안 씀). 같은 용어는 한 번만."""
-    q = norm(question)
+    ("기초재고"가 잡히면 그 안의 "재고" 용어는 따로 안 씀 — 단 같은 질문의 다른 위치에 따로 나온 "재고"는 씀). 같은 용어는 한 번만."""
+    q, idx = _norm_with_index(question)
     if not q:
         return []
     candidates: list[tuple[int, int, GlossaryEntry, str]] = []   # (길이, 시작, 항목, 걸린 표현)
@@ -67,8 +96,10 @@ def find_terms(question: str, entries: list[GlossaryEntry], limit: int = MAX_MAT
             if len(n) < MIN_NORM_LEN:
                 continue
             start = q.find(n)
-            if start >= 0:
-                candidates.append((len(n), start, e, expr))
+            while start >= 0:   # 모든 위치 — 첫 위치가 긴 용어 안이어도 뒤에 따로 나온 걸 놓치지 않게
+                if _valid_hit(q, idx, question, start, n, expr):
+                    candidates.append((len(n), start, e, expr))
+                start = q.find(n, start + 1)
     candidates.sort(key=lambda c: (-c[0], c[1]))
     taken: list[tuple[int, int]] = []
     out: list[TermMatch] = []
@@ -109,6 +140,29 @@ def definitions_block(matches: list[TermMatch]) -> str:
     if not lines:
         return ""
     return "[용어 설명 — 질문에 나온 사내 용어의 뜻. 답의 근거는 아래 문서로]\n" + "\n".join(lines)
+
+
+async def resolve_query_terms(namespace: str, question: str, query_vec, *, mode: Optional[str] = None,
+                              entries: Optional[list[GlossaryEntry]] = None) -> tuple[list[TermMatch], Optional[str], str]:
+    """채팅·디버그 검색·VOC 공용 — (매칭 목록, 대표 용어, 키워드 검색용 질문). 설정(GLOSSARY_MATCH_MODE)을 한 곳에서 따른다
+    (코드 리뷰 2026-10-07: 디버그 검색·VOC가 예전 방식에 남아 "측정 경로 = 실제 경로"가 깨져 있었다).
+    대표 용어는 1개(가장 긴 매칭) — 질의 기록·용어별 통계가 용어 하나로 조인·집계해서, 쉼표로 이으면 통계가 깨진다."""
+    from core.config import settings
+    mode = mode or settings.glossary_match_mode
+    if mode == "lexical":
+        if entries is None:
+            from core.database import get_conn, resolve_namespace_id
+            async with get_conn() as conn:
+                ns_id = await resolve_namespace_id(conn, namespace)
+                entries = await load_entries(conn, ns_id) if ns_id is not None else []
+        matches = find_terms(question, entries)
+        return matches, (matches[0].term if matches else None), expansion_text(question, matches)
+    if mode == "embedding":
+        from agents.knowledge_rag.knowledge import retrieval
+        gm = await retrieval.map_glossary_term(namespace, query_vec)
+        term = gm.term if gm else None
+        return [], term, (f"{question} {term}" if term else question)
+    return [], None, question
 
 
 def clean_synonyms(term: str, raw) -> list[str]:
@@ -212,7 +266,7 @@ _QUERY_SYSTEM = (
 
 
 async def mine_query_expressions(
-    questions: list[str], entries: list[GlossaryEntry], llm, embed=None,
+    questions: list[str], entries: list[GlossaryEntry], llm, embed=None, failed: Optional[list[int]] = None,
 ) -> list[tuple[str, str, int]]:
     """질문 기록 → [(표현, 용어, 질문 인덱스)]. 검증: 표현이 그 질문에 실제로 있고, 용어가 용어집에 있고, 용어 이름·기존 동의어와
     다를 것(LLM이 지어낸 표현·이미 아는 표현은 버림) + 품질 게이트(임베딩 유사도 0.85 이상 — 개념 건너뛰기 차단)."""
@@ -226,7 +280,9 @@ async def mine_query_expressions(
         try:
             arr = parse_json_array(await llm.generate_once(prompt, system=_QUERY_SYSTEM))
         except Exception as e:
-            logger.warning("질문 기록 용어 추출 실패(배치 %d~%d, 건너뜀): %s", i, i + len(batch), e)
+            logger.warning("질문 기록 용어 추출 실패(배치 %d~%d — 다음 주기에 다시): %s", i, i + len(batch), e)
+            if failed is not None:
+                failed.append(i)   # 호출부가 처리 위치를 이 배치 앞까지만 옮겨 다음 주기에 다시 처리(리뷰 2026-10-07: 영구 누락)
             continue
         for obj in arr:
             if not isinstance(obj, dict):
@@ -269,17 +325,35 @@ async def load_entries(conn, ns_id: int) -> list[GlossaryEntry]:
             for r in rows]
 
 
-async def save_synonyms(conn, glossary_id: int, synonyms: list[str], source: str) -> int:
-    """동의어 저장. 같은 용어에 같은 표현(정규화 기준)이 있으면 근거 건수만 올린다(질문 기록분이 여러 번 나오면 활성화).
-    사람이 지운(blocked) 표현은 그대로 막힌 채 남는다."""
+def question_key(question: str) -> str:
+    """질문 근거의 "같은 질문" 판별 키 — 띄어쓰기·문장부호를 무시한 질문의 해시(원문은 저장하지 않음)."""
+    return hashlib.sha1(norm(question).encode("utf-8")).hexdigest()[:16]
+
+
+_SAVE_SQL = """
+    INSERT INTO rag_glossary_synonym (glossary_id, synonym, synonym_norm, source, evidence_questions)
+    VALUES ($1, $2, $3, $4, CASE WHEN $5::text IS NULL THEN '{}'::text[] ELSE ARRAY[$5::text] END)
+    ON CONFLICT (glossary_id, synonym_norm) DO UPDATE SET
+        source = CASE WHEN EXCLUDED.source = 'llm_term' THEN 'llm_term' ELSE rag_glossary_synonym.source END,
+        evidence_count = CASE WHEN $5::text IS NOT NULL AND NOT ($5::text = ANY(rag_glossary_synonym.evidence_questions))
+                              THEN rag_glossary_synonym.evidence_count + 1 ELSE rag_glossary_synonym.evidence_count END,
+        evidence_questions = CASE WHEN $5::text IS NOT NULL AND NOT ($5::text = ANY(rag_glossary_synonym.evidence_questions))
+                                  THEN (rag_glossary_synonym.evidence_questions || $5::text)[1:50]
+                                  ELSE rag_glossary_synonym.evidence_questions END
+    RETURNING (xmax = 0) AS inserted
+"""
+
+
+async def save_synonyms(conn, glossary_id: int, synonyms: list[str], source: str,
+                        question: Optional[str] = None) -> int:
+    """동의어 저장 → 새로 들어간 건수. 같은 용어에 같은 표현(정규화 기준)이 이미 있으면:
+    - 질문 기록분(question 있음): 그 질문이 처음일 때만 근거 +1 — 같은 질문 재질문·캐시 응답 기록·재실행으로 부풀지 않게(리뷰 2026-10-07)
+    - 용어 등록분: 근거는 그대로, 출처만 llm_term으로(용어 설명을 보고 LLM이 따로 만든 표현이면 게이트 0.65를 통과한 등록분과 같다)
+    사람이 지운(blocked) 표현은 막힌 채 남는다(blocked는 건드리지 않음)."""
+    key = question_key(question) if question else None
     n = 0
     for s in synonyms:
-        await conn.execute(
-            "INSERT INTO rag_glossary_synonym (glossary_id, synonym, synonym_norm, source) VALUES ($1, $2, $3, $4) "
-            "ON CONFLICT (glossary_id, synonym_norm) DO UPDATE SET evidence_count = rag_glossary_synonym.evidence_count + 1",
-            glossary_id, s, norm(s), source,
-        )
-        n += 1
+        n += bool(await conn.fetchval(_SAVE_SQL, glossary_id, s, norm(s), source, key))
     return n
 
 
@@ -297,14 +371,18 @@ async def refresh_term_synonyms(glossary_ids: list[int], llm=None) -> int:
     generated = await generate_term_synonyms([(r["term"], r["description"] or "") for r in rows], llm)
     saved = 0
     async with get_conn() as conn:
-        async with conn.transaction():
-            for r in rows:
-                syn = generated.get(r["term"])
-                if syn is None:
-                    continue
-                await conn.execute(
-                    "DELETE FROM rag_glossary_synonym WHERE glossary_id = $1 AND source = 'llm_term' AND NOT blocked", r["id"])
-                saved += await save_synonyms(conn, r["id"], syn, "llm_term")
+        for r in rows:
+            syn = generated.get(r["term"])
+            if syn is None:
+                continue
+            try:
+                # 용어마다 따로 — LLM을 기다리는 사이 한 용어가 지워지면(FK) 같은 배치 전체가 롤백되던 것 방지(리뷰 2026-10-07)
+                async with conn.transaction():
+                    await conn.execute(
+                        "DELETE FROM rag_glossary_synonym WHERE glossary_id = $1 AND source = 'llm_term' AND NOT blocked", r["id"])
+                    saved += await save_synonyms(conn, r["id"], syn, "llm_term")
+            except Exception as e:
+                logger.warning("용어 동의어 저장 실패(용어 id=%s — 그새 지워졌을 수 있음): %s", r["id"], e)
     return saved
 
 

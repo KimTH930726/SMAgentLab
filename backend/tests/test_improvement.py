@@ -655,3 +655,31 @@ class TestAnalyzeItem:
         with patch.object(svc, "get_conn", return_value=conn):
             with pytest.raises(ValueError, match=msg):
                 await svc.analyze_item(1)
+
+
+
+class TestReviewTemplateGuards:
+    """코드 리뷰 2026-10-07 보완."""
+
+    def test_space_before_mark_is_fine_but_flattened_lines_are_not(self):
+        assert draft._unmarked_equal("90일 【확인 필요: x】이다", "90일이다")
+        assert not draft._unmarked_equal("- a\n- b【확인 필요: x】", "- a - b")          # 원래 한 줄인데 두 줄로
+        assert not draft._unmarked_equal("| a | b |【확인 필요: x】", "| a |\n| b |")      # 표를 한 줄로 뭉갬
+
+    def test_marks_only_removed_counts_as_unchanged(self):
+        orig = {"content": "비밀번호 변경 주기는 90일이다."}
+        assert draft.is_unchanged("knowledge", orig, {"content": "비밀번호 변경 주기는 90일이다."})
+        assert not draft.is_unchanged("knowledge", orig, {"content": "비밀번호 변경 주기는 60일이다."})
+        assert not draft.is_unchanged("missing", {}, {"content": "아무거나"})
+
+    @pytest.mark.asyncio
+    async def test_long_original_skips_llm(self):
+        called = []
+
+        class _L:
+            async def generate_once(self, **k):
+                called.append(1)
+                return "{}"
+        with patch.object(draft, "get_llm_provider", return_value=_L()):
+            out = await draft.draft_review_template("knowledge", {"content": "가" * 4000})
+        assert called == [] and draft.has_review_marks(out)

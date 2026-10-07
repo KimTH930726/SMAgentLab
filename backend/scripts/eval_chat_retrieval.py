@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, "/app")
 
 import logging  # noqa: E402
-logging.disable(logging.WARNING)
+logging.disable(logging.INFO)   # 경고(골든셋 탈락 문항·검색 실패)는 보이게
 
 from core.database import init_pool, get_conn, resolve_namespace_id  # noqa: E402
 from shared.embedding import embedding_service  # noqa: E402

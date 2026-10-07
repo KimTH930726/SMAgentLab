@@ -144,13 +144,26 @@ def has_review_marks(proposed: Optional[dict]) -> bool:
     return bool(proposed) and any(REVIEW_MARK in str(v or "") for v in proposed.values())
 
 
-_MARK_RE = re.compile(r"【확인 필요[^】]*】\s*")
+_MARK_RE = re.compile(r"[ \t]*【확인 필요[^】]*】[ \t]*")
 
 
 def _unmarked_equal(a, b) -> bool:
-    """표시를 지우고 공백을 정리하면 원문과 같은가 — LLM이 표시를 달면서 값을 몰래 바꾸지 않았는지."""
-    clean = lambda s: " ".join(_MARK_RE.sub("", str(s or "")).split())
+    """표시를 지우면 원문과 같은가 — LLM이 표시를 달면서 값을 몰래 바꾸지 않았는지(리뷰 2026-10-07 보완).
+    표시 앞뒤 공백은 표시와 함께 지우고, 줄 안의 띄어쓰기 차이는 무시하되 줄 구조(줄바꿈)는 그대로 비교한다 — 표·목록을 한 줄로
+    뭉갠 초안이 "같음"으로 통과하지 않게, 표시 앞에 띄어쓰기를 둔 정상 초안이 "다름"으로 버려지지 않게."""
+    def clean(s):
+        lines = _MARK_RE.sub("", str(s or "")).strip().splitlines()
+        return [re.sub(r"[ \t]+", "", ln) for ln in lines if ln.strip()]
     return clean(a) == clean(b)
+
+
+def is_unchanged(target_type: str, original: dict, proposed: dict) -> bool:
+    """수정안이 원문과 (표시 빼고) 같은가 — 표시만 지우고 승인하면 내용이 같은 새 버전이 생기고, 같은 근거의 다른 대기 신고가
+    자동 종료된다(리뷰 2026-10-07). 빠진 내용(새 지식)은 비교할 원문이 없어 해당 없음."""
+    if target_type not in _REVIEW_SYSTEMS:
+        return False
+    orig = _original_fields(target_type, original or {})
+    return all(_unmarked_equal(proposed.get(k), orig.get(k)) for k in orig)
 
 
 def _original_fields(target_type: str, original: dict) -> dict:
@@ -177,9 +190,14 @@ def _fallback_template(target_type: str, original: dict, context: Optional[dict]
     return out
 
 
+# 원문이 이보다 길면 LLM이 JSON 안에 원문을 통째로 되풀이하다 잘려(max_tokens) 어차피 실패한다 — 기다리지 않고 바로 원문 복사 양식
+_REVIEW_MAX_CHARS = 3000
+
+
 async def draft_review_template(target_type: str, original: dict, context: Optional[dict] = None) -> dict:
-    """의견 없는 신고의 검토 초안 — 항상 무언가를 돌려준다(LLM 실패·형식 불일치·표시 누락이면 원문 복사 양식)."""
-    if target_type in _REVIEW_SYSTEMS:
+    """의견 없는 신고의 검토 초안 — 항상 무언가를 돌려준다(LLM 실패·형식 불일치·표시 누락·원문이 길면 원문 복사 양식)."""
+    too_long = sum(len(str(v or "")) for v in _original_fields(target_type, original).values()) > _REVIEW_MAX_CHARS
+    if target_type in _REVIEW_SYSTEMS and not too_long:
         ctx = ""
         if context and (context.get("question") or context.get("answer")):
             ctx = ("[질문]\n" + (context.get("question") or "") + "\n[질문 끝]\n\n"

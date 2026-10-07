@@ -184,7 +184,8 @@ async def _migrate_core_tables(conn) -> None:
             "INSERT INTO ops_user (username, hashed_password, role, part_id) VALUES ($1, $2, $3, $4)",
             "admin", hashed, "admin", superadmin_part_id,
         )
-        logger.info("기본 관리자 계정 생성됨 (admin / %s)", settings.admin_default_password)
+        # 비밀번호는 로그에 남기지 않는다(v2.128에서 INFO 로그가 켜지며 새 DB 설치 때 평문으로 찍힐 뻔함 — 리뷰 2026-10-07)
+        logger.info("기본 관리자 계정 생성됨 (admin / 비밀번호는 ADMIN_DEFAULT_PASSWORD)")
     else:
         # role/part_id만 동기화 — 비밀번호는 건드리지 않는다(2026-09-03 수정).
         # 예전엔 재시작마다 hashed_password를 admin_default_password로 무조건 덮어써서,
@@ -1399,6 +1400,10 @@ async def _migrate_glossary_synonym(conn) -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (glossary_id, synonym_norm)
         )""")
+    # 근거가 된 질문 키(정규화 질문 해시, 최대 50) — evidence_count를 "서로 다른 질문 수"로 지키려고(리뷰 2026-10-07: 같은 질문의 재질문·
+    # 캐시 응답 기록·용어 재생성이 근거를 부풀려 오추출 표현이 활성화될 수 있었다). 원문 질문은 저장하지 않는다.
+    await conn.execute(
+        "ALTER TABLE rag_glossary_synonym ADD COLUMN IF NOT EXISTS evidence_questions TEXT[] NOT NULL DEFAULT '{}'")
 
 
 async def _migrate_query_gateway_refusal(conn) -> None:

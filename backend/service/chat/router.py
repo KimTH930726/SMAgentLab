@@ -23,7 +23,7 @@ from service.chat.helpers import (
     update_assistant_message,
 )
 from service.llm.factory import get_llm_provider
-from agents.knowledge_rag.knowledge import retrieval
+from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from service.chat import memory
 from agents.knowledge_rag.knowledge.retrieval import GlossaryMatch, RetrievalResult
 from shared.embedding import embedding_service
@@ -54,9 +54,10 @@ async def _run_pipeline(
     w_vector: float, w_keyword: float, top_k: int,
     *, categories: Optional[list[str]] = None,
 ) -> PipelineResult:
-    glossary_match = await retrieval.map_glossary_term(namespace, query_vec)
-    mapped_term = glossary_match.term if glossary_match else None
-    enriched_query = f"{question} {mapped_term}" if mapped_term else question
+    # 용어집 방식은 채팅과 같은 설정(GLOSSARY_MATCH_MODE)을 따른다(v2.128) — 디버그 검색이 채팅과 달리 보이지 않게
+    matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(namespace, question, query_vec)
+    glossary_match = (GlossaryMatch(term=matches[0].term, description=matches[0].description, similarity=1.0) if matches
+                      else (await retrieval.map_glossary_term(namespace, query_vec) if mapped_term else None))
 
     results = await retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k, categories)
     context = retrieval.build_context(results)

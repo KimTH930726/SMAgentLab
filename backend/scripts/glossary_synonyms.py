@@ -75,6 +75,9 @@ async def main() -> None:
                     ids = {r["term"]: r["id"] for r in items}
                     for term, syns in (result.get(ns) or {}).items():
                         if term in ids:
+                            # 다시 돌려도 같은 결과 — 그 용어의 LLM 등록분(사람이 지운 것 제외)을 갈아끼운다(리뷰 2026-10-07)
+                            await conn.execute("DELETE FROM rag_glossary_synonym WHERE glossary_id = $1 "
+                                               "AND source = 'llm_term' AND NOT blocked", ids[term])
                             saved += await glossary_terms.save_synonyms(conn, ids[term], syns, "llm_term")
         print(f"DB 저장: 동의어 {saved}건")
 

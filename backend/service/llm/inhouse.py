@@ -12,7 +12,6 @@
 import asyncio
 import json
 import logging
-import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -21,19 +20,10 @@ from typing import AsyncIterator, Callable, Optional
 import httpx
 
 from core.config import settings
-from service.llm.base import LLMProvider, _FALLBACK_SYSTEM_PROMPT, wrap_reference_context
+from service.llm.base import LLMProvider, REPLACE_PREFIX, _FALLBACK_SYSTEM_PROMPT, wrap_reference_context
 from service.llm.gateway_text import StreamRestorer, from_gateway, to_gateway
 
 logger = logging.getLogger(__name__)
-
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
-_DIGITS = re.compile(r"\d")
-
-
-def _mask_for_log(s: str, limit: int = 200) -> str:
-    """게이트웨이 원문을 로그에 남길 때 — 앞부분만, 숫자·이메일은 가림(전화·ID·IP 류가 로그로 새지 않게)."""
-    return _DIGITS.sub("#", _EMAIL.sub("<email>", (s or "")[:limit]))
-
 
 def _build_query(
     context: str, question: str, history: list[dict] | None = None,
@@ -316,7 +306,7 @@ class InHouseLLMProvider(LLMProvider):
                 line_count = 0
                 yielded = 0
                 events: Counter = Counter()
-                last_other = ""     # 토큰이 아닌 마지막 이벤트(빈 응답 원인 추적용, 가려서 로그)
+                last_other = ""     # 토큰이 아닌 마지막 이벤트의 "모양"(종류·키 이름만 — 내용은 로그에 안 남김)
                 captured_ext_conv_id: Optional[str] = None
                 restorer = StreamRestorer()
                 async for line in resp.aiter_lines():
@@ -330,7 +320,7 @@ class InHouseLLMProvider(LLMProvider):
                     try:
                         chunk = json.loads(raw)
                     except json.JSONDecodeError:
-                        logger.warning("SSE parse error: %s", _mask_for_log(raw, 100))
+                        logger.warning("SSE parse error (%d chars)", len(raw))   # 내용은 답변일 수 있어 길이만
                         continue
                     if not captured_ext_conv_id:
                         cidc = chunk.get("conversation_id")
@@ -346,35 +336,36 @@ class InHouseLLMProvider(LLMProvider):
                         if captured_ext_conv_id and on_ext_conversation_id:
                             on_ext_conversation_id(captured_ext_conv_id)
                         break
-                    # dify 계열 이벤트(v2.128): 에이전트형 앱은 agent_message로 토큰을 보내고, 검열(moderation)은 message_replace로
-                    # 답을 통째로 바꾸고, 실패는 error 이벤트로 온다 — 예전엔 message만 읽어 나머지는 조용히 버려져 빈 답이 됐다
-                    if event_type in ("message", "agent_message"):
-                        token = restorer.feed(chunk.get("answer", ""))
+                    # dify 계열 이벤트(v2.128): 에이전트형 앱은 agent_message, 워크플로형 앱은 text_chunk(data.text)로 토큰을 보내고,
+                    # 검열(moderation)은 message_replace로 답을 통째로 바꾸고, 실패는 error 이벤트로 온다 — 예전엔 message만 읽어 나머지는
+                    # 조용히 버려져 빈 답이 됐다
+                    if event_type in ("message", "agent_message", "text_chunk"):
+                        piece = (chunk.get("data") or {}).get("text", "") if event_type == "text_chunk" else chunk.get("answer", "")
+                        token = restorer.feed(piece or "")
                         if token:
                             yielded += 1
                             yield token
                     elif event_type == "message_replace":
-                        replacement = from_gateway(chunk.get("answer", ""))
-                        if replacement:
-                            if yielded:
-                                logger.warning("게이트웨이가 답변 도중 내용을 교체함(message_replace) — 교체문을 뒤에 붙임")
-                                replacement = "\n\n" + replacement
-                            yielded += 1
-                            yield replacement
+                        # 지금까지 보낸 답을 버리고 이 내용으로 바꿔야 한다 — 호출부(에이전트)가 REPLACE_PREFIX를 보고 답변을 교체한다.
+                        # 원복 대기 중인 숫자 조각도 버린다(리뷰 2026-10-07: 뒤에 붙여 원문과 교체문이 함께 저장·캐시되던 문제)
+                        restorer = StreamRestorer()
+                        yielded += 1
+                        yield REPLACE_PREFIX + from_gateway(chunk.get("answer", "") or "")
                     elif event_type == "error":
+                        # 메시지 본문은 남기지 않는다(답변·문서 내용이 섞일 수 있음) — 상태·코드·길이만
                         raise RuntimeError(
-                            f"게이트웨이 오류 이벤트(status={chunk.get('status')}, code={chunk.get('code')}): "
-                            f"{_mask_for_log(str(chunk.get('message', '')))}")
+                            f"게이트웨이 오류 이벤트(status={chunk.get('status')}, code={chunk.get('code')}, "
+                            f"message {len(str(chunk.get('message') or ''))} chars)")
                     else:
-                        last_other = raw
+                        last_other = f"{event_type}{sorted(chunk.keys())}"
                 tail = restorer.flush()
                 if tail:
                     yielded += 1
                     yield tail
                 if not yielded:
                     logger.warning(
-                        "게이트웨이 스트림이 토큰 0개로 끝남: status=%d, data_lines=%d, 이벤트=%s, 마지막 기타 이벤트=%s",
-                        resp.status_code, line_count, dict(events), _mask_for_log(last_other),
+                        "게이트웨이 스트림이 토큰 0개로 끝남: status=%d, data_lines=%d, 이벤트=%s, 마지막 기타 이벤트(종류·키)=%s",
+                        resp.status_code, line_count, dict(events), last_other,
                     )
 
     async def health_check(self) -> bool:

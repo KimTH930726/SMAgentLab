@@ -57,8 +57,11 @@ async def main() -> None:
     from service.llm.factory import get_llm_provider
     llm = get_llm_provider()
 
-    golden = [json.loads(line) for line in track2._GOLDEN_SET_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
-    used = {(g["source"].get("file"), g["source"].get("sheet"), g["source"].get("row")) for g in golden}
+    # 골든셋 정답 항목은 유형과 무관하게 전부 제외 — navigation·condition 질문은 분류 전체가 정답이라, 위치(file/sheet/row)만 빼면
+    # 튜닝 때 본 항목이 검증 문항에 섞인다(코드 리뷰 2026-10-07: 후보 40개 중 19개 겹침)
+    async with get_conn() as conn:
+        ns_ids = {r["name"]: r["id"] for r in await conn.fetch("SELECT id, name FROM ops_namespace")}
+    used_ids = set().union(*(e["gold_ids"] for e in await track2._load_golden_set(track2._GOLDEN_SET_PATH, ns_ids)))
     rng = random.Random(args.seed)
     candidates, review = [], []
     async with get_conn() as conn:
@@ -69,7 +72,7 @@ async def main() -> None:
                 "FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id "
                 "WHERE n.name = $1 AND i.status NOT IN ('deprecated','rejected') AND length(coalesce(i.raw_body,'')) >= 20",
                 ns)
-            pool = [r for r in rows if (r["source_file"], r["source_sheet"], r["source_row"]) not in used]
+            pool = [r for r in rows if r["id"] not in used_ids]
             # 시트 고르게 — 시트별로 섞어 돌아가며 뽑는다(한 시트 몰림 방지)
             by_sheet: dict[str, list] = {}
             for r in pool:

@@ -595,7 +595,8 @@ async def vector_search_glossary(namespace: str, query_vec: list[float], top_k: 
             """,
             ns_id, str(query_vec), top_k,
         )
-    return [dict(r) for r in rows]
+    # 동의어(json_agg)를 목록으로 — 안 하면 문자열로 나가 화면이 .map에서 깨졌다(리뷰 2026-10-07, 용어집 벡터 검색)
+    return [_with_synonyms(dict(r)) for r in rows]
 
 
 async def get_glossary_part(glossary_id: int) -> Optional[str]:

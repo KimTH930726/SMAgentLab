@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     @classmethod
     def _empty_as_off(cls, v):
         # compose가 비어 있는 값을 ""로 넘긴다(POLICY_ABSTAIN_MIN_SCORE: ${...:-}) — 빈 값 = 꺼짐
-        return None if v in ("", None) else v
+        return None if v is None or str(v).strip().lower() in ("", "off", "none", "false") else v
 
     # ── .env에서 주입 (인프라/시크릿) ─────────────────────────────
     database_url: str = "postgresql://ops:ops1234@localhost:5432/opsdb"
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     #   lexical   — 질문에 글자 그대로 나온 용어·동의어만(설명은 LLM 문맥, 동의어는 키워드 검색 확장)
     #   embedding — 예전 방식(질문 임베딩 ↔ 용어 설명 최근접 1개를 glossary_min_similarity 이상이면 검색어에 붙임)
     #   off       — 안 씀
-    glossary_match_mode: str = "lexical"
+    glossary_match_mode: Literal["lexical", "embedding", "off"] = "lexical"   # 오타면 기동 시 오류(조용히 꺼지지 않게)
     # 근거 없음 즉시 판정(v2.128, 기본 꺼짐 — 10/8 이후 실측으로 값 확정): 지식 채택 0건·공통코드/DB 0건이고, 정책 서술 최고점이
     # 이 값 미만이며 정책 파라미터 ts_rank 최고가 policy_abstain_min_param_rank 미만이면 LLM을 부르지 않고 "관련 지식을 찾지 못했습니다"
     policy_abstain_min_score: Optional[float] = None
