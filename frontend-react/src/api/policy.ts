@@ -323,6 +323,25 @@ export async function runTrack2(topK = 10, axis = 'policy'): Promise<Track2Resul
   return apiFetch<Track2Result>(`/policy/track2/run?top_k=${topK}&axis=${encodeURIComponent(axis)}`, { method: 'POST' });
 }
 
+/** 최종 답변 정확도 실행 이력(집계만) — scripts/eval_answers.py report --save */
+export interface AnswerEvalRun {
+  id: number;
+  run_at: string;
+  label: string;
+  variant: string;
+  total_n: number;
+  counts: Record<string, number>;
+  by_type: Record<string, Record<string, number>>;
+  retrieval_ok_but_wrong: number;
+  retrieval_ok: number;
+  judge_model: string | null;
+  notes: string | null;
+}
+
+export async function getAnswerEvalHistory(limit = 30): Promise<AnswerEvalRun[]> {
+  return apiFetch<AnswerEvalRun[]>(`/policy/answer-eval/history?limit=${limit}`);
+}
+
 export async function getTrack2History(limit = 50): Promise<Track2RunHistory[]> {
   return apiFetch<Track2RunHistory[]>(`/policy/track2/history?limit=${limit}`);
 }

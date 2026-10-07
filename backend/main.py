@@ -1380,6 +1380,25 @@ async def _migrate_rename_opslens(conn) -> None:
         logger.info("[migrate #67] 프롬프트 자기소개 OpsLens로: %s", r)
 
 
+async def _migrate_answer_eval_run(conn) -> None:
+    """최종 답변 정확도 실행 이력 (2026-10-07, #70) — scripts/eval_answers.py report --save가 집계만 저장, 평가 게이트 "답변 정확도" 탭이
+    읽는다. 질문·답 원문은 저장하지 않는다(라벨별·유형별 건수만). 멱등."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS eval_answer_run (
+            id SERIAL PRIMARY KEY,
+            run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            label VARCHAR(100) NOT NULL,
+            variant VARCHAR(30) NOT NULL,
+            total_n INTEGER NOT NULL,
+            counts JSONB NOT NULL,
+            by_type JSONB NOT NULL,
+            retrieval_ok_but_wrong INTEGER NOT NULL DEFAULT 0,
+            retrieval_ok INTEGER NOT NULL DEFAULT 0,
+            judge_model VARCHAR(100),
+            notes TEXT
+        )""")
+
+
 async def _migrate_glossary_synonym(conn) -> None:
     """용어집 동의어 (2026-10-06, #69, v2.128) — 질문에 나온 용어를 찾을 때 쓰는 다른 표현.
 
@@ -1610,6 +1629,7 @@ async def _run_migrations() -> None:
         await _migrate_rename_opslens(conn)
         await _migrate_query_gateway_refusal(conn)
         await _migrate_glossary_synonym(conn)
+        await _migrate_answer_eval_run(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
+from service.policy import answer_eval
 from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review, edit, decompose, auto_review, json_format
 from service.policy.schemas import AutoReviewRevertRequest, AutoReviewRunRequest
 from service.policy.schemas import (
@@ -395,6 +396,12 @@ async def get_track2_history(
     """Track2 실행 이력 — 모니터링 뷰의 추이 차트용(실험실 게이트 작업3)."""
     rows = await track2.list_run_history(limit=limit)
     return [Track2RunHistoryOut(**r) for r in rows]
+
+
+@router.get("/answer-eval/history")
+async def get_answer_eval_history(limit: int = Query(default=30, ge=1, le=200), user: dict = Depends(get_current_user)):
+    """최종 답변 정확도 실행 이력(집계만) — 평가 게이트 "답변 정확도" 탭. 실행은 scripts/eval_answers.py(문항당 사내 LLM 호출이라 화면에서 안 돌림)."""
+    return await answer_eval.list_history(limit)
 
 
 @router.get("/pipeline-stats", response_model=PipelineStatsOut)
