@@ -33,7 +33,8 @@
   스펙은 FastAPI 자동 문서(`/docs`)로 대체(손 유지보수 안 함)
 
 ## 아키텍처 핵심
-- 검색: Glossary Term Mapping(0.5+) → Weighted Hybrid Search (vector+keyword)
+- 검색: 용어집 글자 매칭(질문에 나온 용어·동의어만, v2.128) → Weighted Hybrid Search (vector+keyword) + 정책 RRF,
+  탐색형 질문은 분류 목록, 근거 약하면 LLM 없이 "관련 지식을 찾지 못했습니다"
 - 메모리: 4회 교환마다 LLM 요약 → pgvector 저장, 새 질문과 유사 요약 리콜
 - 임베딩: nlpai-lab/KURE-v1 (1024차원)
 - SSE 스트리밍: fetch 기반, AbortController로 중단 지원

@@ -48,7 +48,7 @@ def _append(path: str, row: dict) -> None:
 
 # ── collect ────────────────────────────────────────────────────────────────
 
-async def collect(variant: str, out: str, limit: int) -> None:
+async def collect(variant: str, out: str, limit: int, prompt_file: str = "") -> None:
     from core.database import init_pool, get_conn
     from shared.embedding import embedding_service
     from agents.knowledge_rag.agent import build_chat_context
@@ -66,7 +66,8 @@ async def collect(variant: str, out: str, limit: int) -> None:
     raw = {r["query"]: r for r in (json.loads(l) for l in track2._GOLDEN_SET_PATH.read_text(encoding="utf-8").splitlines() if l.strip())}
     done = {r["qid"] for r in _read(out)}
     d = retrieval.get_search_defaults()
-    system_prompt = await resolve_system_prompt()
+    # --prompt-file: 운영 프롬프트(DB)는 그대로 두고 후보 프롬프트로만 답을 받아 비교
+    system_prompt = Path(prompt_file).read_text(encoding="utf-8") if prompt_file else await resolve_system_prompt()
     llm = get_llm_provider()
     if variant == "no_defs":
         glossary_terms.definitions_block = lambda matches: ""   # 이 실행에서만 용어 설명 빼기
@@ -93,7 +94,7 @@ async def collect(variant: str, out: str, limit: int) -> None:
                 "SELECT id, policy_name, array_to_string(category_path, ' > ') AS cat, raw_body FROM policy_item "
                 "WHERE id = ANY($1::int[]) ORDER BY id LIMIT 15", list(g["gold_ids"]))
         _append(out, {
-            "qid": qid, "variant": variant, "namespace": g["namespace_name"], "type": g["type"], "question": g["query"],
+            "qid": qid, "variant": variant, "prompt": Path(prompt_file).name if prompt_file else "운영", "namespace": g["namespace_name"], "type": g["type"], "question": g["query"],
             "expected": raw.get(g["query"], {}).get("expected_answer"), "answer": answer, "error": err,
             "abstained": abstained, "mapped_term": cc.mapped_term, "sec": round(time.time() - t0, 1),
             "gold_in_context": bool({h.item_id for h in cc.policy_result.params + cc.policy_result.narratives} & g["gold_ids"]),
@@ -228,13 +229,99 @@ def report(inp: str, compare: str, sample_out: str, save_label: str = "", notes:
     print(f"\n사람 확인 표본: {sample_out}")
 
 
+# ── review-html: 채점기 검증용 로컬 화면 ──────────────────────────────────────
+# 정책 원문·답이 들어가 외부 공유 페이지로 만들지 않는다 — 이 PC에서 파일로 열고, 판정 결과는 JSON으로 내려받는다(review-apply로 집계).
+
+_REVIEW_HTML = """<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>채점기 검증</title><style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2433;--sub:#5b6577;--line:#dfe3ea;--ok:#0f7b4f;--bad:#b4232c;--acc:#4f46e5}
+@media (prefers-color-scheme:dark){:root{--bg:#0f172a;--card:#1e293b;--ink:#e2e8f0;--sub:#94a3b8;--line:#334155;--ok:#34d399;--bad:#f87171;--acc:#818cf8}}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 system-ui,-apple-system,"Malgun Gothic",sans-serif;padding:16px}
+main{max-width:980px;margin:0 auto;display:grid;gap:14px}h1{font-size:18px;margin:0}p.sub{color:var(--sub);margin:4px 0 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:8px}
+.meta{font-size:12px;color:var(--sub)}.lab{font-weight:600}.q{font-weight:600}
+pre{white-space:pre-wrap;margin:0;font:13px/1.55 inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:320px;overflow:auto}
+details summary{cursor:pointer;color:var(--sub);font-size:12px}.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:6px 12px;cursor:pointer}
+button.on.ok{border-color:var(--ok);color:var(--ok);font-weight:600}button.on.bad{border-color:var(--bad);color:var(--bad);font-weight:600}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+select,input{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:5px 8px}
+input{flex:1;min-width:200px}.bar{position:sticky;bottom:0;background:var(--bg);padding:10px 0;display:flex;gap:10px;align-items:center}
+</style></head><body><main>
+<div><h1>채점기 검증 — __TITLE__</h1><p class="sub">로컬 AI 채점이 맞는지 사람이 확인합니다. 각 문항에서 "채점 맞음/틀림"을 고르고, 틀리면 올바른 라벨을 고르세요. 진행 상황은 이 브라우저에 자동 저장되고, 다 끝나면 아래 "결과 내려받기".</p></div>
+<div id="list"></div>
+<div class="bar"><button id="dl">결과 내려받기 (JSON)</button><span id="prog" class="meta"></span></div>
+</main><script>
+const DATA=__DATA__;const KEY="review:"+__KEYJSON__;
+let st={};try{st=JSON.parse(localStorage.getItem(KEY)||"{}")}catch(e){}
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(st))}catch(e){};prog()};
+const esc=s=>(s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+function prog(){const n=DATA.filter(d=>st[d.qid]&&st[d.qid].verdict).length;document.getElementById("prog").textContent=n+" / "+DATA.length+" 확인";}
+document.getElementById("list").innerHTML=DATA.map((d,i)=>`<section class="card" id="c${i}">
+<div class="meta">${i+1}/${DATA.length} · ${esc(d.qid)} · ${esc(d.type)} · 채점: <span class="lab">${esc(d.label)}</span> — ${esc(d.reason)}</div>
+<div class="q">${esc(d.question)}</div>${d.expected?`<div class="meta">기대 답: ${esc(d.expected)}</div>`:""}
+<div><div class="meta">챗봇 답변</div><pre>${esc(d.answer)}</pre></div>
+<details><summary>기준 — 정답 정책 원문 (${d.refs.length}개${d.more?`, 전체 ${d.more}개 중`:""})</summary><pre>${esc(d.refs.join("\\n\\n"))}</pre></details>
+<div class="row"><button data-i="${i}" data-v="ok" class="ok">채점 맞음</button><button data-i="${i}" data-v="bad" class="bad">채점 틀림</button>
+<label class="meta" for="s${i}">올바른 라벨</label><select id="s${i}" data-i="${i}"><option value="">—</option><option>정답</option><option>부분</option><option>오답</option><option>거절</option></select>
+<input id="n${i}" data-i="${i}" placeholder="메모(선택)"></div></section>`).join("");
+function paint(){DATA.forEach((d,i)=>{const s=st[d.qid]||{};document.querySelectorAll(`#c${i} button`).forEach(b=>b.classList.toggle("on",b.dataset.v===s.verdict));
+document.getElementById("s"+i).value=s.correct||"";document.getElementById("n"+i).value=s.note||"";});prog();}
+document.addEventListener("click",e=>{const b=e.target.closest("button[data-v]");if(!b)return;const d=DATA[b.dataset.i];st[d.qid]={...(st[d.qid]||{}),verdict:b.dataset.v};save();paint();});
+document.addEventListener("change",e=>{const t=e.target;if(t.dataset.i===undefined)return;const d=DATA[t.dataset.i];const k=t.tagName==="SELECT"?"correct":"note";st[d.qid]={...(st[d.qid]||{}),[k]:t.value};save();});
+document.getElementById("dl").onclick=()=>{const out=DATA.map(d=>({qid:d.qid,type:d.type,judge:d.label,...(st[d.qid]||{})}));
+const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(out,null,1)],{type:"application/json"}));a.download="review_result_"+__KEYJSON__+".json";a.click();};
+paint();
+</script></body></html>"""
+
+
+def review_html(inp: str, out: str, n: int) -> None:
+    rows = _read(inp)
+    rng = random.Random(11)
+    by: dict = collections.defaultdict(list)
+    for r in rows:
+        by[(r["judge"]["label"], r["type"])].append(r)
+    keys = sorted(by)
+    picked: list = []
+    while len(picked) < n and any(by.values()):   # 라벨×유형 조합을 돌아가며 — 한쪽으로 몰리지 않게
+        for k in keys:
+            if by[k] and len(picked) < n:
+                picked.append(by[k].pop(rng.randrange(len(by[k]))))
+    data = [{"qid": r["qid"], "type": r["type"], "label": r["judge"]["label"], "reason": r["judge"]["reason"],
+             "question": r["question"], "expected": r.get("expected"), "answer": r["answer"],
+             "refs": [f"[{x['category']} / {x['policy']}]\n{x['body']}" for x in r["refs"]],
+             "more": r["n_refs_total"] if r["n_refs_total"] > len(r["refs"]) else 0} for r in picked]
+    key = Path(out).stem
+    html = (_REVIEW_HTML.replace("__TITLE__", Path(inp).name).replace("__KEYJSON__", json.dumps(key))
+            .replace("__DATA__", json.dumps(data, ensure_ascii=False).replace("</", "<\\/")))
+    Path(out).write_text(html, encoding="utf-8")
+    print(f"검증 화면: {out} ({len(data)}문항 — 라벨별 {dict(collections.Counter(d['label'] for d in data))})")
+
+
+def review_apply(result_json: str) -> None:
+    """내려받은 판정 결과 → 채점기 일치율(사람 판정 기준)."""
+    res = [r for r in json.loads(Path(result_json).read_text(encoding="utf-8")) if r.get("verdict")]
+    ok = sum(1 for r in res if r["verdict"] == "ok")
+    print(f"사람이 본 {len(res)}문항 중 채점 맞음 {ok} ({ok / max(len(res), 1) * 100:.0f}%)")
+    for r in res:
+        if r["verdict"] == "bad":
+            print(f"  {r['qid']} ({r['type']}) 채점 {r['judge']} → 사람 {r.get('correct') or '?'} {r.get('note') or ''}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
+    h = sub.add_parser("review-html")
+    h.add_argument("--in", dest="inp", required=True)
+    h.add_argument("--out", required=True)
+    h.add_argument("-n", type=int, default=10)
+    ra = sub.add_parser("review-apply")
+    ra.add_argument("--result", required=True)
     c = sub.add_parser("collect")
     c.add_argument("--variant", choices=["after", "before", "no_defs"], default="after")
     c.add_argument("--out", required=True)
     c.add_argument("--limit", type=int, default=0)
+    c.add_argument("--prompt-file", default="", help="후보 시스템 프롬프트 파일(운영 DB 프롬프트 대신)")
     j = sub.add_parser("judge")
     j.add_argument("--in", dest="inp", required=True)
     j.add_argument("--out", required=True)
@@ -246,9 +333,13 @@ def main() -> None:
     r.add_argument("--notes", default="")
     a = ap.parse_args()
     if a.cmd == "collect":
-        asyncio.run(collect(a.variant, a.out, a.limit))
+        asyncio.run(collect(a.variant, a.out, a.limit, a.prompt_file))
     elif a.cmd == "judge":
         asyncio.run(judge(a.inp, a.out))
+    elif a.cmd == "review-html":
+        review_html(a.inp, a.out, a.n)
+    elif a.cmd == "review-apply":
+        review_apply(a.result)
     else:
         report(a.inp, a.compare, a.sample_out, a.save_label, a.notes)
 
