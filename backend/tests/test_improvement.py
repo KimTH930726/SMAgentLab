@@ -666,6 +666,12 @@ class TestReviewTemplateGuards:
         assert not draft._unmarked_equal("- a\n- b【확인 필요: x】", "- a - b")          # 원래 한 줄인데 두 줄로
         assert not draft._unmarked_equal("| a | b |【확인 필요: x】", "| a |\n| b |")      # 표를 한 줄로 뭉갬
 
+    def test_lead_mark_and_mark_before_heading_get_own_line(self):
+        """2026-10-07 화면 실사례: "【확인 필요: …】## 배달 SKU 관리"로 붙어 제목이 깨져 보였다. 줄 안 표시는 그대로."""
+        out = draft._tidy_marks({"content": "【확인 필요: 전체 확인】## 제목\n\n- a 90일【확인 필요: x】\n【확인 필요: y】### 소제목"})
+        assert out["content"] == "【확인 필요: 전체 확인】\n## 제목\n\n- a 90일【확인 필요: x】\n【확인 필요: y】\n### 소제목"
+        assert draft._unmarked_equal(out["content"], "## 제목\n\n- a 90일\n### 소제목")
+
     def test_marks_only_removed_counts_as_unchanged(self):
         orig = {"content": "비밀번호 변경 주기는 90일이다."}
         assert draft.is_unchanged("knowledge", orig, {"content": "비밀번호 변경 주기는 90일이다."})
@@ -683,3 +689,10 @@ class TestReviewTemplateGuards:
         with patch.object(draft, "get_llm_provider", return_value=_L()):
             out = await draft.draft_review_template("knowledge", {"content": "가" * 4000})
         assert called == [] and draft.has_review_marks(out)
+
+
+
+def test_tidy_marks_ignores_inline_hash():
+    """리뷰 2026-10-07: 줄 안 "#A01"까지 제목으로 보고 줄을 바꿔 원문과 줄 구조가 달라졌다."""
+    out = draft._tidy_marks({"content": "매장 코드 【확인 필요: 값】#A01 기준"})
+    assert out["content"] == "매장 코드 【확인 필요: 값】#A01 기준"

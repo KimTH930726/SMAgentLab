@@ -41,6 +41,7 @@ import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { KnowledgeItem, DuplicateMatch } from '../../types';
 import { showAlert } from '../../store/useDialogStore';
+import { KnowledgeStructurePanel } from './KnowledgeStructurePanel';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
 
@@ -596,6 +597,7 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
               </div>
             </div>
           )}
+          {editingId !== null && <KnowledgeStructurePanel knowledgeId={editingId} />}
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">내용</label>
             <textarea rows={10} value={editForm.content} readOnly={!canModifyNs}
@@ -706,8 +708,8 @@ interface ReviewChunk {
   /** 컨플루언스 벌크 등록에서만 쓰임 — 페이지 단위로 자동 배정된 업무구분(2026-09-22,
    * 지식 카테고리 자동화). 다른 경로는 항상 undefined이고 공통 category state를 그대로 쓴다. */
   category?: string | null;
-  /** 컨플루언스 벌크 등록에서만 쓰임 — 직계 상위 페이지 제목 + 페이지 내 헤딩 조상
-   * (2026-09-22). 확정(bulkCreateKnowledge)까지 실려가야 검색 컨텍스트에 반영된다. */
+  /** 상위 맥락 — 컨플루언스 일괄은 상위·자기 페이지 제목 + 페이지 내 헤딩 조상, 파일·붙여넣기·단일 URL은 문서 안 제목 조상
+   * (2026-09-22 일괄, 2026-10-07 전 경로). 확정(bulkCreateKnowledge)까지 실려가야 검색 컨텍스트에 반영된다. */
   headingPath?: string[] | null;
   /** 컨플루언스 원본 페이지 식별(2026-09-28) — 확정까지 실려가야 같은 페이지 재등록 시 옛 버전이
    * 교체된다(예전엔 여기서 버려져 재등록마다 옛 버전과 새 버전이 함께 검색됐음). */
@@ -983,6 +985,17 @@ function IngestionProgressModal({ jobId, onClose, onSettled }: {
 
           {job.status === 'cancelled' && (
             <p className="text-xs text-slate-500">중지되어 이미 등록된 항목도 함께 롤백(삭제)되었습니다.</p>
+          )}
+
+          {job.status === 'completed' && job.quality && job.quality.warnings.length > 0 && (
+            <div data-testid="ingestion-quality-warning"
+              className="rounded-lg border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs space-y-1"
+              title="저장된 청크를 구조로 검사한 결과 — 원문을 다시 확인하고 필요하면 지우고 다시 등록하세요">
+              <p className="font-medium text-amber-800 dark:text-amber-200">분할 품질 확인 필요</p>
+              <ul className="list-disc pl-4 text-amber-700 dark:text-amber-300">
+                {job.quality.warnings.map((w) => <li key={w}>{w}</li>)}
+              </ul>
+            </div>
           )}
 
           {cancelError && <p className="text-xs text-rose-600 dark:text-rose-400">{cancelError}</p>}
@@ -1421,7 +1434,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     try {
       const result = await previewFileUpload(file);
       setDetectedStrategy(result.detected_strategy ?? null);
-      setReviewChunks(result.chunks.map(c => ({ ...c, selected: true })));
+      setReviewChunks(result.chunks.map(c => ({ ...c, headingPath: c.heading_path ?? null, selected: true })));
       setShowReview(true);
       const hint = result.chunks.slice(0, 3).map(c => c.text).join('\n');
       autoSuggestCategoryIfUntouched(namespace, categoryNames, category, setCategory, hint);
@@ -1444,7 +1457,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category }));
+      const items = selected.map(c => ({ content: c.text, category, heading_path: c.headingPath ?? null }));
       const result = await bulkCreateKnowledge(namespace, items, file!.name, 'file_upload');
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
@@ -1457,7 +1470,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     if (!file) return;
     const result = await previewFileUpload(file, strategy);
     setDetectedStrategy(result.detected_strategy ?? strategy);
-    setReviewChunks(result.chunks.map(c => ({ ...c, selected: true })));
+    setReviewChunks(result.chunks.map(c => ({ ...c, headingPath: c.heading_path ?? null, selected: true })));
   };
 
   return (
@@ -1552,7 +1565,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
     try {
       const result = await previewTextSplit(text);
       setDetectedStrategy(result.detected_strategy ?? null);
-      setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true })));
+      setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true, headingPath: result.heading_paths?.[i] ?? null })));
       setShowReview(true);
       autoSuggestCategoryIfUntouched(namespace, categoryNames, category, setCategory, text);
     } catch (e: any) { setError(e.message || '분할 미리보기 실패'); }
@@ -1562,7 +1575,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category }));
+      const items = selected.map(c => ({ content: c.text, category, heading_path: c.headingPath ?? null }));
       const result = await bulkCreateKnowledge(namespace, items, '텍스트 직접입력', 'paste_split');
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
@@ -1574,7 +1587,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleRestrategize = async (strategy: string) => {
     const result = await previewTextSplit(text, strategy);
     setDetectedStrategy(result.detected_strategy ?? strategy);
-    setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true })));
+    setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true, headingPath: result.heading_paths?.[i] ?? null })));
   };
 
   return (
@@ -1749,7 +1762,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setSourceMeta({ name: result.source_name, type: result.source_type });
       setUnstructuredPages(result.structure && !result.structure.structured ? [result.source_name] : []);
       setReviewChunks(result.chunks.map(c => ({
-        ...c, selected: true,
+        ...c, selected: true, headingPath: c.heading_path ?? null,
         confluencePageId: result.confluence_page_id, confluenceVersion: result.confluence_version,
       })));
       setShowReview(true);
@@ -1827,7 +1840,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       const items = selected.map(c => ({
         ...(sourceMeta?.type === 'confluence_bulk'
           ? { content: c.text, category: c.category || category, heading_path: c.headingPath }
-          : { content: c.text, category }),
+          : { content: c.text, category, heading_path: c.headingPath ?? null }),
         confluence_page_id: c.confluencePageId ?? null,
         confluence_version: c.confluenceVersion ?? null,
       }));

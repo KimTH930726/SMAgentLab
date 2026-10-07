@@ -20,45 +20,73 @@ class ParsedDocument:
     metadata: dict = field(default_factory=dict)
 
 
+# 줄 단위 제목 인식(2026-10-07) — txt·md·PDF·붙여넣기 공통. 예전엔 경로마다 따로였다: 붙여넣기는 "## "만, md는 코드 블록 안
+# "# 주석"도 제목으로, PDF는 `^(?:\d+[\.\-])+\s*`라 "3.5kg"·"2026-10-07"을 제목으로 잘라 본문을 바꾸고 제목엔 번호만 남겼다.
+# 규칙(데이터 무관 일반 규칙):
+#   - "#"~"######" + 공백 → 레벨 = # 개수
+#   - 두 단계 이상 번호("1.2", "1.2.1.", "1-1") + 공백 + 글자, 100자 이하 → 레벨 = 번호 단계 수
+#     ("1." 한 단계는 목록 항목으로 본다 — 본문 "1. 대분류 적용 가능"을 제목으로 쪼개지 않게)
+#   - 숫자 바로 뒤에 공백이 아닌 글자가 오면 제목 아님("3.5kg"), 번호 한 단계가 4자리 이상이면 날짜·코드("2026-10-07 배포")
+#   - 문장으로 끝나면(마침표, "~다") 번호로 시작해도 본문("1.5 이상이면 할인한다")
+#   - ``` / ~~~ 코드 블록 안은 제목으로 보지 않음, PDF 쪽 표시("--- Page N ---")는 본문에서 뺌
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(\S.*)$")
+_OUTLINE_HEADING_RE = re.compile(r"^\s{0,3}(\d{1,2}(?:[.\-]\d{1,2})+)[.)]?\s+(\S.*)$")   # 단계당 2자리 — IP("192.168…")·날짜 제외
+_SENTENCE_END_RE = re.compile(r"(\.|。|다|:|：)\s*$")   # "요"는 명사(개요·필요)와 겹쳐 제외 — "~요."는 마침표로 걸림
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_PDF_PAGE_RE = re.compile(r"^--- Page \d+ ---$")
+
+
+def heading_of(line: str):
+    """제목 줄이면 (레벨, 제목), 아니면 None."""
+    m = _MD_HEADING_RE.match(line)
+    if m:
+        return len(m.group(1)), m.group(2).strip()
+    m = _OUTLINE_HEADING_RE.match(line)
+    if m and len(line.strip()) <= 100 and not _SENTENCE_END_RE.search(m.group(2)):
+        depth = len(re.split(r"[.\-]", m.group(1)))
+        return depth, line.strip()
+    return None
+
+
+def extract_heading_sections(text: str) -> list[dict]:
+    """텍스트 → [{title, content, level}]. 첫 제목 앞 서두는 level 0 섹션."""
+    sections: list[dict] = []
+    title, level, lines = "", 0, []
+    in_fence = False
+    for line in (text or "").split("\n"):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            lines.append(line)
+            continue
+        if not in_fence and _PDF_PAGE_RE.match(line.strip()):
+            continue
+        h = None if in_fence else heading_of(line)
+        if h:
+            if title or "\n".join(lines).strip():
+                sections.append({"title": title, "content": "\n".join(lines).strip(), "level": level})
+            level, title = h
+            lines = []
+        else:
+            lines.append(line)
+    if title or "\n".join(lines).strip():
+        sections.append({"title": title, "content": "\n".join(lines).strip(), "level": level})
+    return sections
+
+
 def parse_text(content: str, filename: str) -> ParsedDocument:
-    """일반 텍스트 파싱."""
+    """일반 텍스트 파싱 — 제목이 2개 이상이면 섹션으로(없으면 단락 분할)."""
+    sections = extract_heading_sections(content)
     return ParsedDocument(
         source_type="txt",
         source_name=filename,
         raw_text=content,
+        sections=sections if sum(1 for x in sections if x["title"]) >= 2 else [],
     )
 
 
 def parse_markdown(content: str, filename: str) -> ParsedDocument:
-    """마크다운 파싱 — 헤더 기반 섹션 추출."""
-    sections: list[dict] = []
-    current_title = ""
-    current_level = 0
-    current_lines: list[str] = []
-
-    for line in content.split("\n"):
-        m = re.match(r'^(#{1,4})\s+(.+)', line)
-        if m:
-            # 이전 섹션 저장
-            if current_lines or current_title:
-                sections.append({
-                    "title": current_title,
-                    "content": "\n".join(current_lines).strip(),
-                    "level": current_level,
-                })
-            current_level = len(m.group(1))
-            current_title = m.group(2).strip()
-            current_lines = []
-        else:
-            current_lines.append(line)
-
-    # 마지막 섹션
-    if current_lines or current_title:
-        sections.append({
-            "title": current_title,
-            "content": "\n".join(current_lines).strip(),
-            "level": current_level,
-        })
+    """마크다운 파싱 — 공통 제목 인식기로 섹션 추출(코드 블록 안 "#"은 제목 아님)."""
+    sections = extract_heading_sections(content)
 
     # 테이블 추출 (마크다운 테이블)
     tables = _extract_md_tables(content)
@@ -106,7 +134,7 @@ def parse_pdf(content_bytes: bytes, filename: str) -> ParsedDocument:
         doc.close()
 
     raw_text = "\n".join(all_text_lines)
-    sections = _extract_sections_from_text(raw_text)
+    sections = extract_heading_sections(raw_text)
 
     return ParsedDocument(
         source_type="pdf",
@@ -267,31 +295,6 @@ def parse_file(content_bytes: bytes, filename: str) -> ParsedDocument:
 
 
 # ── 내부 헬퍼 ────────────────────────────────────────────────────────────────
-
-def _extract_sections_from_text(text: str) -> list[dict]:
-    """텍스트에서 번호 매기기 패턴 (1. 2. 또는 # 헤더) 기반 섹션 추출."""
-    sections: list[dict] = []
-    # 패턴: "1. ", "1-1. ", "## " 등
-    pattern = re.compile(r'^(?:#{1,4}\s+|(?:\d+[\.\-])+\s*)', re.MULTILINE)
-
-    parts = pattern.split(text)
-    titles = pattern.findall(text)
-
-    # 첫 부분 (헤더 없는 서두)
-    if parts and parts[0].strip():
-        sections.append({"title": "", "content": parts[0].strip(), "level": 0})
-
-    for i, title in enumerate(titles):
-        content = parts[i + 1].strip() if i + 1 < len(parts) else ""
-        level = title.count("#") if "#" in title else 1
-        sections.append({
-            "title": title.strip().rstrip("."),
-            "content": content,
-            "level": level,
-        })
-
-    return sections
-
 
 def _extract_md_tables(text: str) -> list[dict]:
     """마크다운 테이블 추출."""

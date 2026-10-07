@@ -20,7 +20,7 @@ _KNOWLEDGE_COLS = """k.id, n.name AS namespace,
     k.content, k.base_weight, k.category, k.status,
     k.source_file, k.source_chunk_idx, k.source_type,
     k.created_by_part, k.created_by_user_id, u.username AS created_by_username,
-    k.created_at::text, k.updated_at::text"""
+    k.created_at::text, k.updated_at::text, k.heading_path, k.ingestion_job_id"""
 
 _GLOSSARY_COLS = """g.id, n.name AS namespace, g.term, g.description,
     g.created_by_part, g.created_by_user_id, u.username AS created_by_username,
@@ -262,6 +262,60 @@ async def vector_search_knowledge(namespace: str, query_vec: list[float], top_k:
     return [dict(r) for r in rows]
 
 
+def _chunk_title(content: str) -> str:
+    """청크 첫 줄(제목이면 # 떼고) — 구조 화면의 목록 표시용."""
+    first = next((ln.strip() for ln in (content or "").split("\n") if ln.strip()), "")
+    return first.lstrip("#").strip()[:80]
+
+
+async def get_knowledge_structure(knowledge_id: int) -> Optional[dict]:
+    """지식의 문서 안 위치(2026-10-07) — 분할 방식에 따라 보여줄 게 다르다.
+    - section: 섹션 구조로 잘린 청크(heading_path 있음) — 상위 경로 + 검색 때 함께 붙는 이웃 섹션(retrieval.expand_parent_sections와
+      같은 규칙: 같은 등록 묶음 안에서 상위 경로[:-1]를 공유하는 활성 청크) + 문서 순서상 앞뒤
+    - sequence: 단락·고정 길이로 잘린 청크(등록 묶음은 있으나 상위 경로 없음) — 같은 문서의 앞뒤 청크(검색 때 붙지 않음)
+    - single: 직접 입력 단건(등록 묶음 없음)"""
+    async with get_conn() as conn:
+        me = await conn.fetchrow(
+            "SELECT k.id, k.ingestion_job_id, k.source_chunk_idx, k.heading_path, k.source_file, k.source_type, n.name AS namespace "
+            "FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id WHERE k.id = $1", knowledge_id)
+        if not me:
+            return None
+        base = {"id": me["id"], "namespace": me["namespace"], "heading_path": list(me["heading_path"] or []),
+                "source_file": me["source_file"], "source_type": me["source_type"]}
+        if me["ingestion_job_id"] is None:
+            return {**base, "mode": "single", "position": None, "total": None, "prev": None, "next": None, "expansion": []}
+        # 본문 전체 대신 미리보기 400자 + 길이만(리뷰: 일괄 job이면 수천 행 × 본문)
+        rows = await conn.fetch(
+            "SELECT id, source_chunk_idx, left(content, 400) AS content, length(content) AS clen, heading_path FROM rag_knowledge "
+            "WHERE ingestion_job_id = $1 AND status = 'active' ORDER BY source_chunk_idx NULLS LAST, id", me["ingestion_job_id"])
+        order = [r["id"] for r in rows]
+        pos = order.index(me["id"]) if me["id"] in order else None
+        brief = lambda r: {"id": r["id"], "title": _chunk_title(r["content"]), "preview": r["content"] or "",
+                           "truncated": (r["clen"] or 0) > 400, "heading_path": list(r["heading_path"] or [])}
+        prev_r = rows[pos - 1] if pos is not None and pos > 0 else None
+        next_r = rows[pos + 1] if pos is not None and pos + 1 < len(rows) else None
+        path = list(me["heading_path"] or [])
+        expansion = []
+        if path:
+            # 검색 코드와 같게: 후보 = 같은 상위 경로[:-1], 문서 순서상 가까운 순, 글자 수 한도 안에서만 실제로 붙는다
+            from agents.knowledge_rag.knowledge.retrieval import PARENT_EXPANSION_CHAR_BUDGET
+            parent = path[:-1] if len(path) > 1 else path
+            cands = sorted((r for r in rows if r["id"] != me["id"] and list(r["heading_path"] or [])[:len(parent)] == parent),
+                           key=lambda r: (abs((r["source_chunk_idx"] or 0) - (me["source_chunk_idx"] or 0)), r["source_chunk_idx"] or 0))
+            budget = PARENT_EXPANSION_CHAR_BUDGET
+            for r in cands:
+                if (r["clen"] or 0) > budget:
+                    break
+                budget -= r["clen"] or 0
+                expansion.append(brief(r))
+            expansion.sort(key=lambda b: order.index(b["id"]))
+        # 섹션 분할 묶음이면 최상위 섹션(상위 경로 없음)도 섹션 구조로 — 묶음 안 누구라도 상위 경로가 있으면 섹션 분할(리뷰)
+        sectioned = bool(path) or any(r["heading_path"] for r in rows)
+        return {**base, "mode": "section" if sectioned else "sequence", "position": (pos + 1) if pos is not None else None,
+                "total": len(rows), "prev": brief(prev_r) if prev_r else None, "next": brief(next_r) if next_r else None,
+                "expansion": expansion}
+
+
 async def list_knowledge(namespace: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
     """지식 목록 조회. status 미지정 시 기본으로 'active'만 반환 —
     승인 대기(pending_review)/반려(rejected) 항목은 명시적으로 status를 넘겨야 보임
@@ -327,7 +381,7 @@ async def get_duplicate_matches(knowledge_id: int) -> list[dict]:
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
-            SELECT m.matched_knowledge_id AS id, k.content, m.similarity
+            SELECT m.matched_knowledge_id AS id, k.content, m.similarity, k.status
             FROM rag_knowledge_duplicate_match m
             JOIN rag_knowledge k ON m.matched_knowledge_id = k.id
             WHERE m.new_knowledge_id = $1
@@ -360,7 +414,7 @@ async def resolve_duplicate(
 
     async with get_conn() as conn:
         pending = await conn.fetchrow(
-            "SELECT id, content, status FROM rag_knowledge WHERE id = $1", knowledge_id
+            "SELECT id, content, status, namespace_id FROM rag_knowledge WHERE id = $1", knowledge_id
         )
     if not pending:
         raise ValueError("지식을 찾을 수 없습니다.")
@@ -392,9 +446,9 @@ async def resolve_duplicate(
 
     # merge
     if target_id is None:
-        matches = await get_duplicate_matches(knowledge_id)
+        matches = [m for m in await get_duplicate_matches(knowledge_id) if m.get("status") == "active"]
         if not matches:
-            raise ValueError("병합할 기존 지식을 찾을 수 없습니다 (매칭 기록 없음).")
+            raise ValueError("병합할 기존 지식을 찾을 수 없습니다 (활성 상태인 매칭 없음).")
         target_id = matches[0]["id"]
 
     merge_content = content.strip() if content and content.strip() else pending["content"]
@@ -405,10 +459,17 @@ async def resolve_duplicate(
             # 이전엔 병합이 대상 행을 그 자리에서 덮어써 원문이 어디에도 안 남았다
             # (knowledge-lifecycle-design.md §2.2 "실질적 데이터 소실 위험", 우선순위 1위).
             before = await conn.fetchrow(
-                "SELECT content, embedding FROM rag_knowledge WHERE id = $1", target_id
+                "SELECT content, embedding, status, namespace_id FROM rag_knowledge WHERE id = $1 FOR UPDATE", target_id
             )
             if not before:
                 raise ValueError(f"병합 대상 지식을 찾을 수 없습니다 (id={target_id}).")
+            # 대상은 같은 파트여야 한다 — 예전엔 target_id만 받아 자기 파트 권한으로 다른 파트 지식을 덮어쓸 수 있었다(리뷰 2026-10-07)
+            if before["namespace_id"] != pending["namespace_id"]:
+                raise ValueError("병합 대상 지식이 다른 파트에 있습니다 — 같은 파트의 지식만 병합할 수 있습니다.")
+            # 재등록으로 이미 내려간(deprecated 등) 행에 병합하면 내용이 안 보이는 행에 쓰이고 승인 대기 행은 반려로 사라졌다
+            # (2026-10-07 감사) — 활성 지식에만 병합
+            if before["status"] != "active":
+                raise ValueError(f"병합 대상 지식이 활성 상태가 아닙니다 (id={target_id}, 상태={before['status']}) — 다른 대상을 고르거나 그대로 승인하세요.")
             await conn.execute(
                 "INSERT INTO rag_knowledge_history (knowledge_id, content, embedding, replaced_by_knowledge_id) "
                 "VALUES ($1, $2, $3::vector, $4)",
@@ -886,10 +947,12 @@ async def _run_bulk_ingestion(
                 """, created, pending_total, job_id, run_follow_up)
                 if activated:
                     if replacing_pages:
-                        # 새 행은 아직 staging이라 status='active' 조건에 안 걸린다 — 옛 버전만 내림
+                        # 새 행은 아직 staging이라 이 조건에 안 걸린다 — 옛 버전만 내림. 옛 버전의 승인 대기 행도 같이
+                        # (2026-10-07 감사: active만 내려 옛 pending이 큐에 남았다가 승인되면 옛 내용이 다시 active가 됐다)
                         await conn.execute("""
                             UPDATE rag_knowledge SET status = 'deprecated'
-                            WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[]) AND status = 'active'
+                            WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[])
+                              AND status IN ('active', 'pending_review')
                         """, ns_id, replacing_pages)
                     await conn.execute("""
                         UPDATE rag_knowledge
@@ -917,6 +980,14 @@ async def _run_bulk_ingestion(
             await invalidate_namespace(namespace_name)
         except Exception:
             logger.warning("수집 완료 후 시맨틱 캐시 무효화 실패 (job_id=%s)", job_id, exc_info=True)
+
+    # 저장된 청크 품질 검사(2026-10-07) — 실패해도 등록 결과는 그대로(로그만)
+    try:
+        from agents.knowledge_rag.ingestion.quality import record_job_quality
+        async with get_conn() as qconn:
+            await record_job_quality(qconn, job_id)
+    except Exception:
+        logger.warning("등록 품질 검사 실패 (job_id=%s)", job_id, exc_info=True)
 
     result = {"created": created, "job_id": job_id, "status": "completed", "pending": pending_total}
     if run_follow_up:
@@ -963,10 +1034,14 @@ async def get_ingestion_job(job_id: int) -> Optional[dict]:
         row = await conn.fetchrow("""
             SELECT id, namespace_id, source_file, source_type, status,
                    total_chunks, created_chunks, pending_chunks, cancel_requested,
-                   error_message, created_at::text, completed_at::text
+                   error_message, created_at::text, completed_at::text, quality::text AS quality
             FROM rag_ingestion_job WHERE id = $1
         """, job_id)
-    return dict(row) if row else None
+    if not row:
+        return None
+    out = dict(row)
+    out["quality"] = json.loads(out["quality"]) if out.get("quality") else None
+    return out
 
 
 async def get_ingestion_job_namespace(job_id: int) -> Optional[str]:
@@ -1014,6 +1089,23 @@ async def list_ingestion_jobs(namespace: str) -> list[dict]:
             LIMIT 50
         """, ns_id)
     return [dict(r) for r in rows]
+
+
+def split_text_to_items(text: str, strategy: str = "auto") -> list[dict]:
+    """붙여넣기 분할 → [{content, heading_path}] (2026-10-07).
+
+    "섹션 기준"이 예전엔 조용히 단락 분할로 바뀌었고(붙여넣은 텍스트엔 제목 구조가 없다고 보고) 상위 맥락(heading_path)도
+    없었다 — 이제 파일·컨플루언스와 같은 제목 인식기(adapters.extract_heading_sections)와 같은 섹션 청크 함수로 자른다.
+    제목이 2개 이상 인식되면 섹션 분할, 아니면 기존 규칙(split_text_to_chunks)."""
+    if strategy in ("auto", "section", "heading") and text.strip():
+        from agents.knowledge_rag.ingestion.adapters import ParsedDocument, extract_heading_sections
+        from agents.knowledge_rag.ingestion.chunker import chunk_document
+        sections = extract_heading_sections(text)
+        if sum(1 for x in sections if x["title"]) >= 2:
+            doc = ParsedDocument(source_type="paste", source_name="paste", raw_text=text, sections=sections)
+            return [{"content": c.text, "heading_path": list(c.heading_path or [])}
+                    for c in chunk_document(doc, strategy="section")]
+    return [{"content": c, "heading_path": []} for c in split_text_to_chunks(text, strategy)]
 
 
 def split_text_to_chunks(

@@ -57,6 +57,29 @@ class TestShortIntroCarriedForward:
         assert len(chunks) == 1
         assert chunks[0].text.count("짧은 도입부") == 1
 
+    def test_short_sibling_not_duplicated_into_next_chunk(self):
+        """2026-10-07 실데이터 재현(외부서비스DB 쿠팡이츠 컨플루언스 일괄 등록): "짧은 섹션을 다음 섹션 앞에 다시
+        붙이기"가 하위가 아닌 형제·상위 섹션에도 적용돼, 1.2.1.1이 1.2.1.2 청크에 또 들어가고 1.2.1.2(폐점)가
+        "1.2.2. 메뉴" 제목과 함께 두 청크에 중복됐다. 원래 의도(짧은 상위 도입부 → 하위 섹션 맥락)는 유지."""
+        sections = [
+            {"title": "1.2.1. 매장", "content": "", "level": 3},
+            {"title": "1.2.1.1. 매장 관리", "content": "매장 등록·수정·삭제는 관리자 화면에서 한다. " * 2, "level": 4},
+            {"title": "1.2.1.2. 매장 개점 관리", "content": "매장 OPEN을 전송해 개점 처리한다. " * 8, "level": 4},
+            {"title": "1.2.1.2. 매장 폐점 관리", "content": "영업 시간이 끝난 매장을 데몬이 폐점 처리한다. " * 2, "level": 4},
+            {"title": "1.2.2. 메뉴", "content": "", "level": 3},
+            {"title": "1.2.2.1. 메뉴 등록", "content": "메뉴는 관리자 화면에서 등록한다. " * 2, "level": 4},
+        ]
+        chunks = _chunk_by_sections(_doc(sections), MAX_CHUNK_CHARS, 50, always_split=True)
+        chunks = [c for c in chunks if len(c.text.strip()) >= 50]   # chunk_document의 최소 길이 필터와 같게
+        texts = [c.text for c in chunks]
+        for key in ("관리자 화면에서 한다", "개점 처리한다", "폐점 처리한다", "메뉴는 관리자"):
+            assert sum(key in t for t in texts) == 1, (key, texts)
+        # 다음 상위 제목이 앞 형제 청크 끝에 매달리지 않는다
+        assert not any(t.rstrip().endswith("## 1.2.2. 메뉴") for t in texts), texts
+        # 원래 의도: 상위 제목은 하위 섹션 청크 앞에 붙는다
+        assert next(t for t in texts if "메뉴는 관리자" in t).startswith("## 1.2.2. 메뉴")
+        assert next(t for t in texts if "관리자 화면에서 한다" in t).startswith("## 1.2.1. 매장")
+
 
 class TestHeadingPath:
     """Parent-Child 문맥 유실 수정(2026-09-22) — 조상 헤딩 추적 회귀 테스트.

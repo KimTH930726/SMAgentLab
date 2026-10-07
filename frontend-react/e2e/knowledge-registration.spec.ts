@@ -143,3 +143,40 @@ test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아
     }
   }
 });
+
+test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문서 구조"에 상위 경로·이웃이 보인다', async ({ page }) => {
+  // 2026-10-07 적재 결함: 붙여넣기 "섹션 기준"이 단락 분할로 바뀌고 상위 맥락이 비었다 + 지식 화면에서 구조가 안 보였다.
+  page.on('dialog', (d) => { throw new Error(`브라우저 기본 대화상자: ${d.message()}`); });
+  const marker = `E2E구조_${Date.now()}`;
+  const text = `1.2.1. ${marker} 매장\n1.2.1.1. 매장 관리\n매장 등록·수정·삭제는 관리자 화면에서 한다(구조 테스트 A).\n` +
+    `1.2.1.2. 매장 개점 관리\n매장 OPEN을 전송해 개점 처리한다(구조 테스트 B).\n1.2.2. 메뉴\n1.2.2.1. 메뉴 등록\n메뉴는 관리자 화면에서 등록한다(구조 테스트 C).`;
+  const authState = await page.evaluate(() => localStorage.getItem('ops_auth'));
+  const authHeader = { Authorization: `Bearer ${authState ? JSON.parse(authState).accessToken : ''}` };
+  const prev = await (await page.request.post('/api/knowledge/import/text-split/preview', { headers: authHeader, data: { raw_text: text, strategy: 'auto' } })).json();
+  expect(prev.detected_strategy).toBe('section');
+  expect(prev.heading_paths.every((h: string[]) => h.length > 0)).toBeTruthy();
+  const items = prev.chunks.map((c: string, i: number) => ({ content: c, category: '공통지식', heading_path: prev.heading_paths[i] }));
+  const job = (await (await page.request.post('/api/knowledge/bulk', { headers: authHeader,
+    data: { namespace: NAMESPACE, items, source_file: '텍스트 직접입력', source_type: 'paste_split' } })).json()).job_id;
+  let ids: number[] = [];
+  try {
+    await expect.poll(async () => (await (await page.request.get(`/api/knowledge/ingestion-jobs/${job}`, { headers: authHeader })).json()).status,
+      { timeout: 30_000 }).toBe('completed');
+    const list = await (await page.request.get(`/api/knowledge?namespace=${encodeURIComponent(NAMESPACE)}`, { headers: authHeader })).json();
+    ids = list.filter((k: { content: string }) => k.content.includes('구조 테스트')).map((k: { id: number }) => k.id);
+    expect(ids.length).toBe(prev.count);
+
+    await page.getByRole('link', { name: 'Admin' }).click();
+    await page.getByRole('button', { name: '지식 베이스' }).click();
+    await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NAMESPACE);
+    await page.getByPlaceholder(/검색/).fill('구조 테스트 B');
+    await page.getByText('구조 테스트 B').first().click();
+    const panel = page.getByTestId('knowledge-structure');
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText('섹션 구조');
+    await expect(panel).toContainText(`1.2.1. ${marker} 매장`);   // 상위 경로
+    await expect(panel).toContainText('검색 때 함께 붙는 이웃 섹션');
+  } finally {
+    for (const id of ids) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
+  }
+});

@@ -97,6 +97,7 @@
 | 68 | `ops_query_log` | 데이터 — 사내 게이트웨이 민감정보 거부 응답(앞 200자에 거부 문구)인 기록의 `status`를 `system_error`로 | 거부가 "답변"으로 세져 답변률을 부풀림(dev 31건). #64와 같은 처리 — 지우지 않음. 1회(`migration_68_query_gateway_refusal`). `_migrate_query_gateway_refusal` (v2.126) |
 | 69 | `rag_glossary_synonym` (신규) | `CREATE TABLE IF NOT EXISTS` — glossary_id(FK CASCADE), synonym, synonym_norm, source(llm_term/llm_query), evidence_count, blocked, UNIQUE(glossary_id, synonym_norm) | 용어집 동의어 — 사람 등록 없이 LLM 자동(용어 등록 시 / 질문 기록 배치) + 품질 게이트. 질문 기록분은 서로 다른 질문 2건 이상이어야 사용. 화면에서 지우면 blocked(다시 안 붙음). `_migrate_glossary_synonym` (v2.128) |
 | 70 | `eval_answer_run` (신규) | `CREATE TABLE IF NOT EXISTS` — label, variant, total_n, counts/by_type(JSONB), retrieval_ok·retrieval_ok_but_wrong, judge_model, notes | 최종 답변 정확도 실행 이력(집계만, 질문·답 원문 없음). `scripts/eval_answers.py report --save`가 쓰고 평가 게이트 "답변 정확도" 탭이 읽음. #69에 evidence_questions(TEXT[]) 추가. `_migrate_answer_eval_run` (v2.128) |
+| 71 | `rag_ingestion_job.quality` | `ADD COLUMN IF NOT EXISTS quality JSONB` | 등록 묶음 품질 검사 집계(이웃 청크 중복·매달린 제목·제목만 청크·상위 맥락 수·경고 문구, 본문 없음). job 끝에 `ingestion/quality.record_job_quality`가 쓰고 등록 진행 화면이 경고로 표시. `_migrate_ingestion_quality` (v2.129) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

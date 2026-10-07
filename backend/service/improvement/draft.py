@@ -147,6 +147,21 @@ def has_review_marks(proposed: Optional[dict]) -> bool:
 _MARK_RE = re.compile(r"[ \t]*【확인 필요[^】]*】[ \t]*")
 
 
+_LEAD_MARK_RE = re.compile(r"^(【확인 필요[^】]*】)[ \t]*(?=\S)")
+_MARK_BEFORE_HEADING_RE = re.compile(r"(?m)^(【확인 필요[^】]*】)[ \t]*(?=#{1,6}\s)")   # 줄 시작 표시 + 진짜 제목만(줄 안 "#A01" 아님)
+
+
+def _tidy_marks(draft: dict) -> dict:
+    """본문 맨 앞 표시·제목(#) 바로 앞 표시는 제 줄로 — LLM이 "【확인 필요…】## 제목"처럼 붙여 제목이 깨져 보였다(2026-10-07).
+    줄 안 값 뒤에 단 표시는 그대로 둔다. 표시를 지우면 원문과 같은지 비교(_unmarked_equal)는 빈 줄을 무시하므로 영향 없음."""
+    out = {}
+    for k, v in draft.items():
+        if isinstance(v, str):
+            v = _MARK_BEFORE_HEADING_RE.sub(lambda m: m.group(1) + "\n", _LEAD_MARK_RE.sub(lambda m: m.group(1) + "\n", v))
+        out[k] = v
+    return out
+
+
 def _unmarked_equal(a, b) -> bool:
     """표시를 지우면 원문과 같은가 — LLM이 표시를 달면서 값을 몰래 바꾸지 않았는지(리뷰 2026-10-07 보완).
     표시 앞뒤 공백은 표시와 함께 지우고, 줄 안의 띄어쓰기 차이는 무시하되 줄 구조(줄바꿈)는 그대로 비교한다 — 표·목록을 한 줄로
@@ -211,7 +226,7 @@ async def draft_review_template(target_type: str, original: dict, context: Optio
             orig = _original_fields(target_type, original)
             if (draft is not None and has_review_marks(draft)
                     and all(_unmarked_equal(draft.get(k), orig.get(k)) for k in orig)):
-                return draft
+                return _tidy_marks(draft)
             logger.warning("검토 초안이 형식 불일치·표시 없음·원문 변경(%s) — 원문 복사 양식으로", target_type)
         except Exception:
             logger.warning("검토 초안 생성 실패(%s) — 원문 복사 양식으로", target_type, exc_info=True)

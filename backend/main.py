@@ -1380,6 +1380,12 @@ async def _migrate_rename_opslens(conn) -> None:
         logger.info("[migrate #67] 프롬프트 자기소개 OpsLens로: %s", r)
 
 
+async def _migrate_ingestion_quality(conn) -> None:
+    """등록 묶음 품질 검사 결과 (2026-10-07, #71) — agents/knowledge_rag/ingestion/quality.py가 job 끝에 저장된 청크를 구조로만 검사한
+    집계(이웃 청크 중복·매달린 제목·제목만 청크·상위 맥락 수, 본문 없음). 등록 진행 화면이 경고로 보여준다. 멱등."""
+    await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS quality JSONB")
+
+
 async def _migrate_answer_eval_run(conn) -> None:
     """최종 답변 정확도 실행 이력 (2026-10-07, #70) — scripts/eval_answers.py report --save가 집계만 저장, 평가 게이트 "답변 정확도" 탭이
     읽는다. 질문·답 원문은 저장하지 않는다(라벨별·유형별 건수만). 멱등."""
@@ -1630,6 +1636,7 @@ async def _run_migrations() -> None:
         await _migrate_query_gateway_refusal(conn)
         await _migrate_glossary_synonym(conn)
         await _migrate_answer_eval_run(conn)
+        await _migrate_ingestion_quality(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

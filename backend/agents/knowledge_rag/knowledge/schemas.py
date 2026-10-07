@@ -42,6 +42,9 @@ class KnowledgeOut(BaseModel):
     updated_at: str
     pending_review: bool = False
     duplicate_matches: list[DuplicateMatchOut] = []
+    # 문서 안 위치(2026-10-07) — 상위 경로와 등록 묶음. 구조 화면은 GET /{id}/structure
+    heading_path: Optional[list[str]] = None
+    ingestion_job_id: Optional[int] = None
 
 
 # ─── Bulk / Ingestion ──────────────────────────────────────────────────────

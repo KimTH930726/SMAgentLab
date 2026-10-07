@@ -218,10 +218,30 @@ export async function importTextSplit(
   });
 }
 
+// 지식의 문서 안 위치(2026-10-07) — 분할 방식별(섹션 구조/문서 순서/단건)
+export interface KnowledgeBrief { id: number; title: string; preview: string; truncated?: boolean; heading_path: string[] }
+export interface KnowledgeStructure {
+  id: number;
+  namespace: string;
+  mode: 'section' | 'sequence' | 'single';
+  heading_path: string[];
+  source_file: string | null;
+  source_type: string | null;
+  position: number | null;
+  total: number | null;
+  prev: KnowledgeBrief | null;
+  next: KnowledgeBrief | null;
+  expansion: KnowledgeBrief[];
+}
+
+export async function getKnowledgeStructure(id: number): Promise<KnowledgeStructure> {
+  return apiFetch(`/knowledge/${id}/structure`);
+}
+
 export async function previewTextSplit(
   rawText: string,
   strategy = 'auto',
-): Promise<{ chunks: string[]; count: number; detected_strategy: string }> {
+): Promise<{ chunks: string[]; heading_paths?: string[][]; count: number; detected_strategy: string }> {
   return apiFetch('/knowledge/import/text-split/preview', {
     method: 'POST',
     body: JSON.stringify({ raw_text: rawText, strategy }),
@@ -263,6 +283,9 @@ export interface IngestionJobStatus {
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
+  /** 저장된 청크 품질 검사(2026-10-07) — 완료 후 채워짐 */
+  quality?: { chunks: number; adjacent_overlap: number; trailing_heading: number; heading_only: number;
+              with_heading_path: number; warnings: string[] } | null;
 }
 
 export async function getIngestionJobStatus(jobId: number): Promise<IngestionJobStatus> {
@@ -307,7 +330,7 @@ export interface FilePreviewResult {
   total_chars: number;
   sections: number;
   tables: number;
-  chunks: Array<{ idx: number; text: string; title: string | null }>;
+  chunks: Array<{ idx: number; text: string; title: string | null; heading_path?: string[] }>;
   chunk_count: number;
   detected_strategy: string;
 }
@@ -338,7 +361,7 @@ export interface UrlPreviewResult {
   source_type: string;
   total_chars: number;
   sections: number;
-  chunks: Array<{ idx: number; text: string; title: string | null }>;
+  chunks: Array<{ idx: number; text: string; title: string | null; heading_path?: string[] }>;
   chunk_count: number;
   url: string;
   confluence_page_id: string | null;

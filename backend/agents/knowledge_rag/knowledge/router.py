@@ -69,6 +69,17 @@ async def _auto_category(namespace: str, content: str) -> str:
     return _UNSORTED_CATEGORY
 
 
+@router.get("/{knowledge_id}/structure")
+async def get_knowledge_structure(knowledge_id: int, user: dict = Depends(get_current_user)):
+    """지식의 문서 안 위치 — 분할 방식별(섹션 구조/문서 순서/단건) 상위 경로·앞뒤 청크·검색 때 함께 붙는 이웃(2026-10-07)."""
+    # 이웃 미리보기가 나가므로 단건 읽기(duplicate-matches)와 같은 파트 권한(리뷰 2026-10-07)
+    await _require_resource_namespace(await service.get_knowledge_namespace(knowledge_id), user, "Knowledge not found")
+    out = await service.get_knowledge_structure(knowledge_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="지식을 찾을 수 없습니다.")
+    return out
+
+
 @router.post("", response_model=KnowledgeOut, status_code=201)
 async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_user)):
     await check_namespace_ownership(body.namespace, user)
@@ -392,11 +403,12 @@ async def import_text_split(body: _TextSplitBody, user: dict = Depends(get_curre
     """대량 텍스트 → 자동 분할 → 벌크 등록."""
     await check_namespace_ownership(body.namespace, user)
 
-    chunks = service.split_text_to_chunks(body.raw_text, body.strategy)
-    if not chunks:
+    split = service.split_text_to_items(body.raw_text, body.strategy)
+    if not split:
         raise HTTPException(status_code=400, detail="분할된 청크가 없습니다.")
+    chunks = [x["content"] for x in split]
 
-    items = [{"content": c, "category": body.category} for c in chunks]
+    items = [{"content": x["content"], "category": body.category, "heading_path": x["heading_path"] or None} for x in split]
     result = await service.bulk_create_knowledge(
         namespace=body.namespace,
         items=items,
@@ -423,6 +435,12 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
     strategy = body.strategy
     detected_strategy = strategy
 
+    # 제목이 실제로 2개 이상 인식되면 LLM 추측보다 문서 구조가 우선(2026-10-07 — LLM이 "단락"을 고르면 제목 구조가 무시됐다)
+    if strategy == "auto":
+        from agents.knowledge_rag.ingestion.adapters import extract_heading_sections
+        if sum(1 for x in extract_heading_sections(body.raw_text) if x["title"]) >= 2:
+            strategy = detected_strategy = "section"
+
     if strategy == "auto":
         try:
             from agents.knowledge_rag.ingestion.analyzer import analyze_document
@@ -435,8 +453,9 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
         except Exception as e:
             logger.warning("텍스트 분할 전략 자동 감지 실패 (auto 사용): %s", e)
 
-    chunks = service.split_text_to_chunks(body.raw_text, strategy)
-    return {"chunks": chunks, "count": len(chunks), "detected_strategy": detected_strategy}
+    split = service.split_text_to_items(body.raw_text, strategy)
+    return {"chunks": [x["content"] for x in split], "heading_paths": [x["heading_path"] for x in split],
+            "count": len(split), "detected_strategy": detected_strategy}
 
 
 # ─── 파일 업로드 + 자동 청킹 (Tier 2) ────────────────────────────────────────
@@ -526,7 +545,8 @@ async def _run_auto_glossary(namespace: str, raw_text: str, user: dict, *, max_c
                 )
                 count += 1
             except Exception:
-                pass
+                # 이미 있는 용어(중복) 등 — 한 용어 실패가 나머지를 막지 않게 넘기되 흔적은 남긴다(2026-10-07 감사)
+                logger.warning("자동 용어 등록 건너뜀: %s", term_data.get("term"), exc_info=True)
     except Exception as e:
         logger.warning("용어 추출 실패 (무시하고 계속): %s", e)
     return count
@@ -670,7 +690,7 @@ async def preview_file_upload(
         "total_chars": len(doc.raw_text),
         "sections": len(doc.sections),
         "tables": len(doc.tables),
-        "chunks": [{"idx": c.idx, "text": c.text, "title": c.section_title} for c in chunks],
+        "chunks": [{"idx": c.idx, "text": c.text, "title": c.section_title, "heading_path": list(c.heading_path or [])} for c in chunks],
         "chunk_count": len(chunks),
         "detected_strategy": detected_strategy,
     }
@@ -768,7 +788,7 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
         "source_type": doc.source_type,
         "total_chars": len(doc.raw_text),
         "sections": len(doc.sections),
-        "chunks": [{"idx": c.idx, "text": c.text, "title": c.section_title} for c in chunks],
+        "chunks": [{"idx": c.idx, "text": c.text, "title": c.section_title, "heading_path": list(c.heading_path or [])} for c in chunks],
         "chunk_count": len(chunks),
         "detected_strategy": detected_strategy,
         "url": body.url,
@@ -900,7 +920,7 @@ def _structure_summary(doc) -> dict:
     return {"heading_sections": n, "structured": n >= 2}
 
 
-def _enrich_heading_path(doc, in_page_heading_path: Optional[list[str]]) -> list[str]:
+def _enrich_heading_path(doc, in_page_heading_path: Optional[list[str]], page_title: Optional[str] = None) -> list[str]:
     """페이지 조상(직계 상위 페이지 제목)을 청크의 페이지 내 헤딩 조상 앞에 붙인다
     (2026-09-22, `docs/tech/knowledge-category-automation.md` §8). `heading_path`(v2.98)는
     지금까지 페이지 **안**의 h1~h4 조상만 담았는데, 페이지 자체에 구분되는 제목이 없는
@@ -909,6 +929,12 @@ def _enrich_heading_path(doc, in_page_heading_path: Optional[list[str]]) -> list
     재사용 — 새 API 호출이나 저장 없이 기존 heading_path 배열 맨 앞에 얹기만 한다."""
     parent_title = doc.metadata.get("parent_title")
     base = list(in_page_heading_path or [])
+    # 페이지 자기 제목도(2026-10-07 감사) — 없으면 같은 상위 아래 형제 페이지(배민/쿠팡이츠처럼 구조가 같은 페이지)를 문맥에서
+    # 구분할 수 없고, 부모 섹션 확장(path[:-1])이 형제 페이지 청크까지 끌어왔다
+    if page_title:
+        # [페이지 제목, 페이지 안 조상] — 상위 페이지 제목까지 앞에 두면 최상위 섹션의 path[:-1]이 상위 페이지가 돼 부모 섹션 확장이
+        # 형제 페이지로 번졌다(리뷰 2026-10-07). 상위 페이지(채널 구분)는 업무구분 자동 배정에 이미 쓰인다
+        return base if base[:1] == [page_title] else [page_title] + base
     if parent_title and (not base or base[0] != parent_title):
         return [parent_title] + base
     return base
@@ -984,7 +1010,7 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
                 "text": c.text,
                 "title": c.section_title,
                 "category": page_category,
-                "heading_path": _enrich_heading_path(f["doc"], c.heading_path),
+                "heading_path": _enrich_heading_path(f["doc"], c.heading_path, f["title"]),
                 "confluence_page_id": f["page_id"],
                 "confluence_version": f["doc"].metadata.get("version"),
             })

@@ -172,7 +172,7 @@ async def _fetch_confluence(url: str, token: str) -> ParsedDocument:
     storage_html = page.get("body", {}).get("storage", {}).get("value", "")
     space_name = page.get("space", {}).get("name", "")
 
-    soup = BeautifulSoup(storage_html, "lxml")
+    soup = BeautifulSoup(prepare_storage_html(storage_html), "lxml")
     raw_text = _extract_text(soup)
     sections = _extract_heading_sections(soup)
 
@@ -242,81 +242,124 @@ def _parse_confluence_url(url: str) -> tuple[str, str | None, str | None, str | 
 
 # ── 텍스트 추출 헬퍼 ───────────────────────────────────────────────────────────
 
-# _extract_text 전용: div 포함 — 중첩된 가장 바깥 블록 하나만 추출해 중복 방지
-_BLOCK_TAGS = ("p", "li", "td", "th", "div", "pre", "blockquote", "dt", "dd")
+# HTML → 섹션 (2026-10-07 재작성 — 적재 파이프라인 감사). 예전 결함:
+#  - 코드 매크로(<ac:plain-text-body><![CDATA[SQL…]]>)가 섹션·raw_text 양쪽에서 사라짐 — lxml이 CDATA를 버림
+#  - h5/h6 제목이 사라지고 본문이 앞 섹션에 붙음, dt/dd·div 직속 텍스트가 섹션에서 빠짐
+#  - 표가 칸마다 한 줄로 풀려 행·열 관계가 사라짐
+#  - raw_text는 바깥 div가 전체를 한 줄로 먼저 삼키고 제목이 뒤에 붙어 순서가 깨짐
+# 이제 문서 순서대로 한 번만 훑는다: 제목(h1~h6) / 표(행마다 "| a | b |") / 코드(``` 블록) / 단락성 태그 / div 직속 글자.
+_HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+_CONTENT_TAGS = ("p", "li", "pre", "blockquote", "dt", "dd")
+_CDATA_RE = re.compile(r"<!\[CDATA\[(.*?)\]\]>", re.S)
 
-# _extract_heading_sections 전용: div 제외 — div는 컨테이너이므로 검색 대상에서 뺌
-# div를 포함하면 외부 div가 모든 텍스트를 먼저 흡수해 섹션 내용이 사라지는 버그 발생
-_CONTENT_TAGS = ("p", "li", "td", "th", "pre", "blockquote")
+
+def prepare_storage_html(html: str) -> str:
+    """컨플루언스 storage HTML 전처리 — CDATA(코드 매크로 본문)를 글자로 살리고 코드 본문을 <pre>로."""
+    import html as _html
+    html = _CDATA_RE.sub(lambda m: _html.escape(m.group(1)), html or "")
+    return (html.replace("<ac:plain-text-body>", "<pre>").replace("</ac:plain-text-body>", "</pre>"))
 
 
-def _extract_text(tag) -> str:
-    """BS4 태그 → 줄바꿈 정리된 순수 텍스트.
+def _inside(element, names, stop) -> bool:
+    return any(p.name in names for p in element.parents if p is not stop and p is not None)
 
-    div>p, li>ul>li 같이 블록 요소가 중첩된 경우 가장 바깥 블록의 get_text()로
-    한 번만 추출해 내용 중복을 방지한다.
-    """
-    lines = []
-    for element in tag.descendants:
-        if element.name in ("h1", "h2", "h3", "h4", "h5", "h6"):
-            text = element.get_text(" ", strip=True)
-            if text:
-                lines.append(f"\n## {text}\n")
-        elif element.name in _BLOCK_TAGS and not any(
-            p.name in _BLOCK_TAGS for p in element.parents if p != tag
-        ):
-            text = element.get_text(" ", strip=True)
-            if text:
-                lines.append(text)
-        elif element.name == "br":
-            lines.append("")
 
-    raw = "\n".join(lines)
-    raw = re.sub(r"\n{3,}", "\n\n", raw)
-    return raw.strip()
+def _is_data_table(table) -> bool:
+    """제목(h1~h6)을 품은 표는 화면 배치용(레이아웃) 표 — 행으로 펼치지 않고 안쪽을 평소처럼 읽는다(리뷰 2026-10-07:
+    옛 페이지·웹에서 표로 배치한 섹션의 제목이 표 한 행으로 뭉개졌다)."""
+    return table.find(list(_HEADINGS)) is None
+
+
+def _cell_text(cell) -> str:
+    # 칸 안 줄바꿈(코드 등)과 "|"는 표 한 행을 깨므로 공백·이스케이프로
+    return re.sub(r"\s*\n\s*", " ", cell.get_text(" ", strip=True)).replace("|", "\\|")
+
+
+def _table_lines(table) -> list[str]:
+    rows = []
+    for tr in table.find_all("tr"):
+        if tr.find_parent("table") is not table:
+            continue   # 표 안의 표는 그 표에서
+        cells = [_cell_text(c) for c in tr.find_all(["th", "td"]) if c.find_parent("tr") is tr]
+        if any(cells):
+            rows.append("| " + " | ".join(cells) + " |")
+    return rows
+
+
+def _wrap_div_text(tag) -> None:
+    """div 직속 글자를 <p>로 감싸 문서 순서를 지킨다(리뷰: "<div><p>첫째</p>둘째</div>"가 "둘째, 첫째"로 뒤집혔다)."""
+    from bs4 import BeautifulSoup, NavigableString
+    root = tag if isinstance(tag, BeautifulSoup) else next((p for p in tag.parents if isinstance(p, BeautifulSoup)), None)
+    if root is None:
+        return
+    for div in tag.find_all("div"):
+        for child in list(div.children):
+            if child.__class__ is NavigableString and str(child).strip():   # 주석·CDATA 등 하위 클래스는 제외
+                p = root.new_tag("p")
+                p.string = str(child).strip()
+                child.replace_with(p)
+
+
+def _walk_blocks(tag):
+    """문서 순서대로 ("heading", level, text) / ("text", 0, text) 를 낸다."""
+    _wrap_div_text(tag)
+    in_data_table = lambda el: any(p.name == "table" and _is_data_table(p) for p in el.parents if p is not tag and p is not None)
+    for el in tag.find_all(list(_HEADINGS) + list(_CONTENT_TAGS) + ["table", "div"]):
+        if el.name == "table":
+            if not _is_data_table(el) or in_data_table(el) or _inside(el, _CONTENT_TAGS, tag):
+                continue   # 레이아웃 표는 안쪽을 평소처럼, 데이터 표 안의 표·단락 안의 표는 바깥에서 한 번에
+            lines = _table_lines(el)
+            if lines:
+                yield ("text", 0, "\n".join(lines))
+            continue
+        if in_data_table(el):
+            continue   # 데이터 표 안 요소는 표에서 한 번에
+        if el.name in _HEADINGS:
+            t = el.get_text(" ", strip=True)
+            if t:
+                yield ("heading", int(el.name[1]), t)
+            continue
+        if el.name == "div":
+            # 다른 태그로 감싸지 않은 div 직속 글자만(나머지는 안쪽 태그가 낸다)
+            own = " ".join(str(x).strip() for x in el.find_all(string=True, recursive=False) if str(x).strip())
+            if own and not _inside(el, _CONTENT_TAGS, tag):
+                yield ("text", 0, own)
+            continue
+        if _inside(el, _CONTENT_TAGS, tag):
+            continue   # 같은 계열 부모가 이미 포함
+        if el.name == "pre":
+            code = el.get_text().strip("\n")
+            if code.strip():
+                yield ("text", 0, "```\n" + code + "\n```")
+            continue
+        t = el.get_text(" ", strip=True)
+        if t:
+            yield ("text", 0, t)
 
 
 def _extract_heading_sections(tag) -> list[dict]:
-    """헤딩 태그 기반 섹션 분리.
-
-    td>p, li>ul>li 같이 콘텐츠 태그가 중첩된 경우 바깥 요소만 추출한다.
-    div는 컨테이너 역할이므로 검색·부모 제외 대상에서 모두 뺀다.
-    """
+    """헤딩(h1~h6) 기반 섹션 — 표·코드·dt/dd·div 직속 글자 포함, 문서 순서 유지."""
     sections: list[dict] = []
-    current_title = ""
-    current_level = 0
-    current_lines: list[str] = []
-
-    for element in tag.find_all(["h1", "h2", "h3", "h4"] + list(_CONTENT_TAGS)):
-        # 같은 유형 부모 안에 중첩된 콘텐츠는 바깥 요소의 get_text()에 이미 포함됨
-        if element.name in _CONTENT_TAGS and any(
-            p.name in _CONTENT_TAGS for p in element.parents if p != tag
-        ):
-            continue
-
-        if element.name in ("h1", "h2", "h3", "h4"):
-            if current_lines or current_title:
-                sections.append({
-                    "title": current_title,
-                    "content": "\n".join(current_lines).strip(),
-                    "level": current_level,
-                })
-            current_title = element.get_text(" ", strip=True)
-            current_level = int(element.name[1])
-            current_lines = []
+    title, level, lines = "", 0, []
+    for kind, lv, text in _walk_blocks(tag):
+        if kind == "heading":
+            if lines or title:
+                sections.append({"title": title, "content": "\n".join(lines).strip(), "level": level})
+            title, level, lines = text, lv, []
         else:
-            text = element.get_text(" ", strip=True)
-            if text:
-                current_lines.append(text)
-
-    if current_lines or current_title:
-        sections.append({
-            "title": current_title,
-            "content": "\n".join(current_lines).strip(),
-            "level": current_level,
-        })
-
+            lines.append(text)
+    if lines or title:
+        sections.append({"title": title, "content": "\n".join(lines).strip(), "level": level})
     return sections
+
+
+def _extract_text(tag) -> str:
+    """BS4 태그 → 문서 순서 그대로의 텍스트(제목은 "## 제목"). 섹션 추출과 같은 순회를 써서 둘이 어긋나지 않는다."""
+    out = []
+    for kind, _lv, text in _walk_blocks(tag):
+        out.append(f"\n## {text}\n" if kind == "heading" else text)
+    raw = "\n".join(out)
+    return re.sub(r"\n{3,}", "\n\n", raw).strip()
 
 
 # ── Confluence 자손 페이지 트리 ───────────────────────────────────────────────
@@ -500,7 +543,7 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
     ancestors = page.get("ancestors") or []
     parent_title = ancestors[-1].get("title") if ancestors else None
 
-    soup = BeautifulSoup(storage_html, "lxml")
+    soup = BeautifulSoup(prepare_storage_html(storage_html), "lxml")
     raw_text = _extract_text(soup)
     sections = _extract_heading_sections(soup)
 
