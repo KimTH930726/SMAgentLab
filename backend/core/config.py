@@ -1,5 +1,6 @@
 from typing import Optional
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -10,6 +11,12 @@ class Settings(BaseSettings):
     - 앱 로직 설정은 여기 코드 기본값으로 관리한다 (Admin UI에서 런타임 변경 가능)
     """
     model_config = {"env_file": ".env"}
+
+    @field_validator("policy_abstain_min_score", mode="before")
+    @classmethod
+    def _empty_as_off(cls, v):
+        # compose가 비어 있는 값을 ""로 넘긴다(POLICY_ABSTAIN_MIN_SCORE: ${...:-}) — 빈 값 = 꺼짐
+        return None if v in ("", None) else v
 
     # ── .env에서 주입 (인프라/시크릿) ─────────────────────────────
     database_url: str = "postgresql://ops:ops1234@localhost:5432/opsdb"

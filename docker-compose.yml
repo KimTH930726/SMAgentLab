@@ -57,6 +57,12 @@ services:
       REDIS_URL: redis://ops-redis:6379/0
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
+      # v2.128 — 용어집 활용·근거 없음 판정·게이트웨이 대기(.env로 조정, 비우면 기본값/꺼짐). 여기 나열한 변수만 컨테이너로 들어간다
+      GLOSSARY_MATCH_MODE: ${GLOSSARY_MATCH_MODE:-lexical}
+      GLOSSARY_MINING_INTERVAL_HOURS: ${GLOSSARY_MINING_INTERVAL_HOURS:-24}
+      POLICY_ABSTAIN_MIN_SCORE: ${POLICY_ABSTAIN_MIN_SCORE:-}
+      POLICY_ABSTAIN_MIN_PARAM_RANK: ${POLICY_ABSTAIN_MIN_PARAM_RANK:-0.0}
+      INHOUSE_LLM_TIMEOUT: ${INHOUSE_LLM_TIMEOUT:-180}
       # 나머지 설정은 backend/core/config.py 코드 기본값 사용
     extra_hosts:
       - "host.docker.internal:host-gateway"
