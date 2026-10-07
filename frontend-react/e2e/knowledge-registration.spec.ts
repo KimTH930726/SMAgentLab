@@ -173,9 +173,13 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
     await page.getByText('구조 테스트 B').first().click();
     const panel = page.getByTestId('knowledge-structure');
     await expect(panel).toBeVisible();
-    await expect(panel).toContainText('섹션 구조');
+    await expect(panel).toContainText('원문 위치');
+    // 지식 내용이 주인공 — 원문 목차는 기본 접힘, 눌러야 펼쳐짐
+    await expect(panel.getByText('지금 보는 지식')).toBeHidden();
+    await panel.locator('summary').click();
+    await expect(panel.getByText('지금 보는 지식')).toBeVisible();
     await expect(panel).toContainText(`1.2.1. ${marker} 매장`);   // 상위 경로
-    await expect(panel).toContainText('검색 때 함께 붙는 이웃 섹션');
+    await expect(panel).toContainText('함께 전달');                 // 검색 때 같이 전달되는 조각 표시
   } finally {
     for (const id of ids) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
   }

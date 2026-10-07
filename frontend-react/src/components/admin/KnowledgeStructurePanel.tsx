@@ -1,35 +1,45 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronRight, Layers, ListOrdered, FileText } from 'lucide-react';
-import { getKnowledgeStructure, type KnowledgeStructure, type KnowledgeBrief } from '../../api/knowledge';
+import { ChevronRight } from 'lucide-react';
+import { getKnowledgeStructure, type KnowledgeStructure, type KnowledgeOutlineItem } from '../../api/knowledge';
 
 /**
- * 지식의 문서 안 위치(2026-10-07) — 분할 방식에 따라 보여줄 게 다르다.
- *  - 섹션 구조: 상위 경로 + 검색 때 이 청크와 함께 AI에게 붙는 이웃 섹션(검색 코드와 같은 규칙) + 앞뒤
- *  - 문서 순서(단락·고정 길이): 같은 문서의 앞뒤 청크(검색 때 붙지 않음)
- *  - 단건(직접 입력): 문서 구조 없음
- * 청크 경계가 이상하면(같은 내용이 앞뒤에 또 있음, 제목이 엉뚱한 곳에 붙음) 여기서 바로 보이게 하려는 것.
+ * 원문에서의 위치(2026-10-07) — 지식 상세·수정 창.
+ * "앞·뒤·이웃" 같은 내부 용어 대신 원문 목차를 그대로 보여준다(사용자 피드백: 앞·뒤·이웃이 뭔지 모르겠다).
+ *  - 경로: 원문 제목 › 상위 섹션 › 이 지식
+ *  - 목차: 같은 원문의 조각 전체를 원문 순서대로, 상위 경로 깊이만큼 들여쓰기, 지금 보는 지식 강조
+ *  - "함께 전달": 이 지식이 검색되면 AI에게 같이 전달되는 조각(검색 코드와 같은 규칙) — 설명은 툴팁
+ *  - 직접 입력: 원문 목차 없음 한 줄
+ * 청크 경계가 이상하면(같은 내용이 위아래에 또 있음, 제목이 엉뚱한 곳에 붙음) 목차에서 바로 보이게 하려는 것.
  */
 
-const MODE = {
-  section: { icon: Layers, label: '섹션 구조', hint: '문서 제목 구조대로 잘린 지식 — 검색되면 같은 상위 섹션의 이웃이 함께 AI에게 전달됩니다' },
-  sequence: { icon: ListOrdered, label: '문서 순서', hint: '단락·길이로 잘린 지식 — 같은 문서의 앞뒤 조각을 볼 수 있습니다(검색 때 함께 붙지는 않음)' },
-  single: { icon: FileText, label: '단건', hint: '직접 입력한 지식 — 다른 조각과 연결되지 않습니다' },
-} as const;
+const MAX_VISIBLE = 12;
 
-function BriefRow({ b, label }: { b: KnowledgeBrief; label?: string }) {
+function OutlineRow({ item }: { item: KnowledgeOutlineItem }) {
   const [open, setOpen] = useState(false);
+  const pad = Math.min(item.depth, 4) * 12;
   return (
     <li>
-      <button type="button" onClick={() => setOpen((v) => !v)}
-        className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-700/50 focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400">
-        {label && <span className="text-[11px] text-slate-500 w-8 flex-shrink-0">{label}</span>}
-        <span className="text-xs text-slate-300 truncate flex-1">{b.title || '(제목 없음)'}</span>
-        <span className="text-[11px] text-slate-500 tabular-nums">#{b.id}</span>
+      <button type="button" onClick={() => !item.is_self && setOpen((v) => !v)} disabled={item.is_self}
+        title={item.is_self ? '지금 보는 지식' : '눌러서 내용 보기'}
+        style={{ paddingLeft: 8 + pad }}
+        className={`w-full text-left flex items-center gap-2 pr-2 py-1.5 rounded-md text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 ${
+          item.is_self
+            ? 'bg-indigo-50 text-indigo-800 font-medium dark:bg-indigo-950/40 dark:text-indigo-200 cursor-default'
+            : 'text-slate-300 hover:bg-slate-700/50'}`}>
+        <span className="truncate flex-1">{item.title || '(제목 없음)'}</span>
+        {item.is_self && <span className="text-[11px] flex-shrink-0">지금 보는 지식</span>}
+        {item.attached && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+            title="이 지식이 검색되면 이 조각도 AI에게 함께 전달됩니다(같은 상위 섹션, 원문에서 가까운 순, 글자 수 한도 안)">
+            함께 전달
+          </span>
+        )}
       </button>
       {open && (
-        <pre className="mx-2 mb-2 mt-0.5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-400 bg-slate-900 border border-slate-700 rounded-md p-2 max-h-48 overflow-y-auto">
-          {b.preview}{b.truncated ? '…' : ''}
+        <pre style={{ marginLeft: 8 + pad }}
+          className="mr-2 mb-2 mt-0.5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-400 bg-slate-900 border border-slate-700 rounded-md p-2 max-h-48 overflow-y-auto">
+          {item.preview}{item.truncated ? '…' : ''}
         </pre>
       )}
     </li>
@@ -37,63 +47,58 @@ function BriefRow({ b, label }: { b: KnowledgeBrief; label?: string }) {
 }
 
 export function KnowledgeStructurePanel({ knowledgeId }: { knowledgeId: number }) {
+  const [showAll, setShowAll] = useState(false);
   const { data, isLoading, error } = useQuery<KnowledgeStructure>({
     queryKey: ['knowledge-structure', knowledgeId],
     queryFn: () => getKnowledgeStructure(knowledgeId),
     staleTime: 30_000,
   });
 
-  if (isLoading) return <p className="text-xs text-slate-500">문서 구조 불러오는 중…</p>;
-  if (error) return <p className="text-xs text-rose-600 dark:text-rose-400">문서 구조를 불러오지 못했습니다: {(error as Error).message}</p>;
+  if (isLoading) return <p className="text-xs text-slate-500">원문 위치 불러오는 중…</p>;
+  if (error) return <p className="text-xs text-rose-600 dark:text-rose-400">원문 위치를 불러오지 못했습니다: {(error as Error).message}</p>;
   if (!data) return null;
-  const m = MODE[data.mode];
-  const Icon = m.icon;
 
+  if (data.mode === 'single') {
+    return (
+      <p data-testid="knowledge-structure" className="text-[11px] text-slate-500">
+        원문 위치: 직접 입력한 지식(원문 목차 없음)
+      </p>
+    );
+  }
+
+  const outline = data.outline ?? [];
+  const selfIdx = Math.max(0, outline.findIndex((o) => o.is_self));
+  // 긴 원문은 지금 보는 지식 주변만 먼저 보여준다
+  const start = showAll || outline.length <= MAX_VISIBLE ? 0 : Math.max(0, Math.min(selfIdx - 4, outline.length - MAX_VISIBLE));
+  const visible = showAll ? outline : outline.slice(start, start + MAX_VISIBLE);
+  const attachedN = outline.filter((o) => o.attached).length;
+
+  // 지식 내용이 주인공 — 원문 위치는 접힌 한 줄(경로·몇 번째), 펼치면 목차(사용자 피드백 2026-10-07)
   return (
-    <section data-testid="knowledge-structure" className="rounded-lg border border-slate-700 bg-slate-900/40 p-3 space-y-2.5">
-      <div className="flex flex-wrap items-center gap-2" title={m.hint}>
-        <Icon className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-        <span className="text-xs font-medium text-slate-300">문서 구조 · {m.label}</span>
-        {data.position && data.total && (
-          <span className="text-[11px] text-slate-500 tabular-nums">{data.total}개 조각 중 {data.position}번째</span>
+    <details data-testid="knowledge-structure" className="group rounded-lg border border-slate-700 bg-slate-900/40">
+      <summary className="cursor-pointer list-none flex items-center gap-1.5 px-3 py-2 text-xs text-slate-400 hover:text-slate-200 min-w-0"
+        title="같은 원문의 다른 조각과 이 지식이 검색될 때 함께 전달되는 조각을 봅니다">
+        <ChevronRight className="w-3.5 h-3.5 flex-shrink-0 group-open:rotate-90 transition-transform" />
+        <span className="flex-shrink-0 text-slate-500">원문 위치</span>
+        <span className="truncate text-slate-300">{data.heading_path.length > 0 ? data.heading_path.join(' › ') : (data.source_file || '원문')}</span>
+        <span className="flex-shrink-0 text-[11px] text-slate-500 tabular-nums">· {data.total}개 중 {data.position}번째</span>
+        {data.mode === 'section' && attachedN > 0 && (
+          <span className="ml-auto flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+            title="이 지식이 검색되면 AI에게 함께 전달되는 조각 수">함께 전달 {attachedN}</span>
         )}
-        {data.source_file && <span className="text-[11px] text-slate-500 truncate max-w-[16rem]">· {data.source_file}</span>}
+      </summary>
+      <div className="px-3 pb-3 space-y-1">
+        {data.source_file && <p className="text-[11px] text-slate-500 truncate">원문: {data.source_file}</p>}
+        <ol className="space-y-0.5 max-h-72 overflow-y-auto">
+          {visible.map((o) => <OutlineRow key={o.id} item={o} />)}
+        </ol>
+        {outline.length > MAX_VISIBLE && (
+          <button type="button" onClick={() => setShowAll((v) => !v)}
+            className="mt-1 text-[11px] text-indigo-700 dark:text-indigo-300 hover:underline">
+            {showAll ? '주변만 보기' : `전체 목차 보기 (${outline.length}개)`}
+          </button>
+        )}
       </div>
-
-      {data.heading_path.length > 0 && (
-        <nav aria-label="상위 경로" className="flex flex-wrap items-center gap-1 text-xs">
-          {data.heading_path.map((h, i) => (
-            <span key={`${i}-${h}`} className="inline-flex items-center gap-1">
-              {i > 0 && <ChevronRight className="w-3 h-3 text-slate-500" />}
-              <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">{h}</span>
-            </span>
-          ))}
-          <ChevronRight className="w-3 h-3 text-slate-500" />
-          <span className="px-1.5 py-0.5 rounded border border-indigo-300 dark:border-indigo-700/60 text-indigo-700 dark:text-indigo-300">이 지식</span>
-        </nav>
-      )}
-
-      {data.mode !== 'single' && (data.prev || data.next) && (
-        <ul className="space-y-0.5">
-          {data.prev && <BriefRow b={data.prev} label="앞" />}
-          {data.next && <BriefRow b={data.next} label="뒤" />}
-        </ul>
-      )}
-
-      {data.mode === 'section' && (
-        <details className="group">
-          <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 list-none"
-            title="검색에서 이 지식이 채택되면, 같은 상위 섹션의 이 지식들이 문서 순서상 가까운 것부터(글자 수 한도 안에서) 함께 AI에게 전달됩니다">
-            <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
-            검색 때 함께 붙는 이웃 섹션 {data.expansion.length}개
-          </summary>
-          {data.expansion.length > 0 ? (
-            <ul className="mt-1 space-y-0.5 max-h-56 overflow-y-auto">
-              {data.expansion.map((b) => <BriefRow key={b.id} b={b} />)}
-            </ul>
-          ) : <p className="mt-1 text-[11px] text-slate-500">같은 상위 섹션의 다른 지식이 없습니다.</p>}
-        </details>
-      )}
-    </section>
+    </details>
   );
 }

@@ -86,3 +86,18 @@ async def test_top_level_section_in_sectioned_job_is_section_mode():
     with _patch(me, rows):
         s = await service.get_knowledge_structure(1)
     assert s["mode"] == "section"
+
+
+@pytest.mark.asyncio
+async def test_outline_lists_whole_document_with_self_and_attached_flags():
+    """화면은 '앞·뒤·이웃' 대신 원문 목차 — 순서·들여쓰기(상위 경로 깊이)·지금 보는 지식·함께 전달 표시가 검색 규칙과 맞아야 한다."""
+    me = {"id": 2, "ingestion_job_id": 9, "source_chunk_idx": 1, "heading_path": ["페이지", "1.2"], "source_file": "f",
+          "source_type": "confluence_bulk", "namespace": "ns"}
+    rows = [_row(1, 0, ["페이지"]), _row(2, 1, ["페이지", "1.2"]), _row(3, 2, ["페이지", "1.2"]), _row(4, 3, ["다른"])]
+    with _patch(me, rows):
+        s = await service.get_knowledge_structure(2)
+    o = s["outline"]
+    assert [x["id"] for x in o] == [1, 2, 3, 4]
+    assert [x["depth"] for x in o] == [1, 2, 2, 1]
+    assert [x["is_self"] for x in o] == [False, True, False, False]
+    assert [x["attached"] for x in o] == [True, False, True, False]   # 상위 경로[:-1]=["페이지"] 공유 → 1·3, "다른"은 아님

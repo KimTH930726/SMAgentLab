@@ -597,13 +597,14 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
               </div>
             </div>
           )}
-          {editingId !== null && <KnowledgeStructurePanel knowledgeId={editingId} />}
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">내용</label>
             <textarea rows={10} value={editForm.content} readOnly={!canModifyNs}
               onChange={(e) => setEditForm((f) => ({ ...f, content: e.target.value }))}
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[260px] read-only:border-slate-700 leading-relaxed" />
           </div>
+          {/* 원문 위치는 부차 정보 — 내용 아래, 접힌 한 줄(사용자 피드백 2026-10-07) */}
+          {editingId !== null && <KnowledgeStructurePanel knowledgeId={editingId} />}
           {updateMutation.error && <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>}
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="ghost" size="sm" onClick={() => { setShowEdit(false); setEditingId(null); }}>

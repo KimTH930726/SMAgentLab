@@ -232,7 +232,10 @@ export interface KnowledgeStructure {
   prev: KnowledgeBrief | null;
   next: KnowledgeBrief | null;
   expansion: KnowledgeBrief[];
+  outline?: KnowledgeOutlineItem[];
 }
+
+export interface KnowledgeOutlineItem { id: number; title: string; depth: number; is_self: boolean; attached: boolean; preview: string; truncated: boolean }
 
 export async function getKnowledgeStructure(id: number): Promise<KnowledgeStructure> {
   return apiFetch(`/knowledge/${id}/structure`);

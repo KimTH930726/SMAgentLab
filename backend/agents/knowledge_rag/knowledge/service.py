@@ -283,7 +283,7 @@ async def get_knowledge_structure(knowledge_id: int) -> Optional[dict]:
         base = {"id": me["id"], "namespace": me["namespace"], "heading_path": list(me["heading_path"] or []),
                 "source_file": me["source_file"], "source_type": me["source_type"]}
         if me["ingestion_job_id"] is None:
-            return {**base, "mode": "single", "position": None, "total": None, "prev": None, "next": None, "expansion": []}
+            return {**base, "mode": "single", "position": None, "total": None, "prev": None, "next": None, "expansion": [], "outline": []}
         # 본문 전체 대신 미리보기 400자 + 길이만(리뷰: 일괄 job이면 수천 행 × 본문)
         rows = await conn.fetch(
             "SELECT id, source_chunk_idx, left(content, 400) AS content, length(content) AS clen, heading_path FROM rag_knowledge "
@@ -311,9 +311,14 @@ async def get_knowledge_structure(knowledge_id: int) -> Optional[dict]:
             expansion.sort(key=lambda b: order.index(b["id"]))
         # 섹션 분할 묶음이면 최상위 섹션(상위 경로 없음)도 섹션 구조로 — 묶음 안 누구라도 상위 경로가 있으면 섹션 분할(리뷰)
         sectioned = bool(path) or any(r["heading_path"] for r in rows)
+        # 원문 목차(화면용, 2026-10-07 사용자 피드백 "앞·뒤·이웃이 뭔지 모르겠다") — 원문 순서대로 조각 전체, 들여쓰기 = 상위 경로 깊이
+        attached = {b["id"] for b in expansion}
+        outline = [{"id": r["id"], "title": _chunk_title(r["content"]), "depth": len(r["heading_path"] or []),
+                    "is_self": r["id"] == me["id"], "attached": r["id"] in attached,
+                    "preview": r["content"] or "", "truncated": (r["clen"] or 0) > 400} for r in rows]
         return {**base, "mode": "section" if sectioned else "sequence", "position": (pos + 1) if pos is not None else None,
                 "total": len(rows), "prev": brief(prev_r) if prev_r else None, "next": brief(next_r) if next_r else None,
-                "expansion": expansion}
+                "expansion": expansion, "outline": outline}
 
 
 async def list_knowledge(namespace: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
