@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from agents.base import AgentBase
-from core.database import get_conn
+from core.database import get_conn, resolve_namespace_id
 from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
@@ -17,6 +17,8 @@ from service.chat.helpers import (
 )
 from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from service.policy import search as policy_search
+from service.policy import category_list
+from service.policy.query_type import looks_like_navigation_query
 from service.refdata import service as refdata_search
 from service.llm.base import REPLACE_PREFIX, resolve_system_prompt
 from service.llm.factory import get_llm_provider
@@ -144,6 +146,7 @@ def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: fl
     if min_score is None:
         return False
     return (signals.get("adopted", 0) == 0 and signals.get("codes", 0) == 0 and signals.get("columns", 0) == 0
+            and signals.get("category_items", 0) == 0
             and signals.get("max_param_rank", 0.0) <= min_param_rank
             and signals.get("top_narrative", 0.0) < min_score)
 
@@ -152,7 +155,7 @@ async def build_chat_context(
     namespace: str, search_question: str, query_vec: list[float], *,
     top_k: int, w_vector: float, w_keyword: float, categories: Optional[list[str]] = None,
     glossary_mode: Optional[str] = None, glossary_entries: Optional[list] = None,
-    policy_top_k: int = POLICY_CONTEXT_TOP_K,
+    policy_top_k: int = POLICY_CONTEXT_TOP_K, category_lists: bool = True,
 ) -> ChatContext:
     """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB)."""
     term_matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(
@@ -189,6 +192,18 @@ async def build_chat_context(
         except Exception as e:
             logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
 
+    # 탐색형("○○ 관련 정책 다 보여줘")은 검색(상위 몇 개)으로는 분류 전체가 안 온다 — 그 분류의 정책 목록을 DB에서 그대로
+    # (service/policy/category_list.py, 실측 포함률 42%→91%). 못 찾으면 지금처럼 검색 결과만. category_lists=False는 측정 비교용
+    category = None
+    if policy_available and category_lists and looks_like_navigation_query(search_question):
+        try:
+            async with get_conn() as conn:
+                ns_id = await resolve_namespace_id(conn, namespace)
+            if ns_id is not None:
+                category = await category_list.find_category_list(ns_id, search_question, query_vec)
+        except Exception as e:
+            logger.warning("분류 목록 조회 실패(검색 결과만으로 진행): %s", e)
+
     # 구조화 참조데이터(공통코드/DB스키마) 병행 검색(2026-09-18) — 정확 조회 전용이라 키워드(ts_rank)로만 찾는다.
     common_codes: list[dict] = []
     db_columns: list[dict] = []
@@ -211,6 +226,8 @@ async def build_chat_context(
         logger.warning("부모 섹션 확장 실패(확장 없이 진행): %s", e)
     llm_context = _build_rrf_context(results, policy_result, common_codes, db_columns, parent_expansions)
     # 용어 설명은 근거가 있을 때만 앞에 — 근거 없이 설명만 있으면 LLM이 설명으로 답을 지어낼 수 있다
+    if category:
+        llm_context = f"{category.block()}\n\n{llm_context}" if llm_context.strip() else category.block()
     definitions = glossary_terms.definitions_block(term_matches)
     if definitions and llm_context.strip():
         llm_context = f"{definitions}\n\n{llm_context}"
@@ -220,6 +237,7 @@ async def build_chat_context(
         "params": len(policy_result.params),
         "max_param_rank": max((p.score for p in policy_result.params), default=0.0),
         "top_narrative": max((n.score for n in policy_result.narratives), default=0.0),
+        "category_items": category.total if category else 0,
     }
     return ChatContext(
         results=results, policy_result=policy_result, common_codes=common_codes, db_columns=db_columns,

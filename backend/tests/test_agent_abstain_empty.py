@@ -59,7 +59,7 @@ class TestShouldAbstain:
         assert agent.should_abstain(self.weak, 0.50, 0.05) is True
 
     @pytest.mark.parametrize("override", [{"adopted": 1}, {"codes": 1}, {"columns": 2}, {"max_param_rank": 0.2},
-                                          {"top_narrative": 0.52}])
+                                          {"top_narrative": 0.52}, {"category_items": 3}])
     def test_any_real_evidence_keeps_answering(self, override):
         assert agent.should_abstain({**self.weak, **override}, 0.50, 0.05) is False
 
