@@ -57,7 +57,8 @@
   **없이** 단일 클래스로(붙이면 이중 반전으로 깨짐). slate가 아닌 accent 색상(indigo/amber/
   emerald 등)은 반대로 `dark:` 쌍을 직접 명시해야 함(자동 반전 대상이 아님).
 - **`useMutation`은 항상 `onError`를 갖는다** — 폼 컨텍스트가 있으면 기존 에러 상태 슬롯
-  재사용, 없으면 `alert(err.message)` 최소 패턴.
+  재사용, 없으면 `showError(err)`(앱 모달, `store/useDialogStore`). 브라우저 기본 `alert`/`confirm`은 쓰지 않음 —
+  안내는 `showAlert`, 확인은 `await showConfirm(...)`(2026-10-07).
 - 관리자 화면 문구는 짧고 직관적으로 — 배경 설명은 `title` 툴팁으로.
 
 ## Allowed tools

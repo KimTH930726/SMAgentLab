@@ -12,6 +12,7 @@ import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
+import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
 
 const STATUS_LABEL: Record<string, string> = {
   pending_review: '검토대기',
@@ -112,22 +113,22 @@ export function PolicyItemBrowser() {
   const approveMutation = useMutation({
     mutationFn: (itemId: number) => approvePolicyItem(itemId, selectedNs),
     onSuccess: invalidateItems,
-    onError: (err: Error) => alert(err.message),
+    onError: (err: Error) => void showError(err),
   });
   const rejectMutation = useMutation({
     mutationFn: (itemId: number) => rejectPolicyItem(itemId, selectedNs),
     onSuccess: (res) => {
       invalidateItems();
       if (res.rule_paused) {
-        alert('자동 통과 표본이 반려되어, 같은 규칙의 자동 통과를 멈췄습니다.\n상단 요약에서 이미 자동 통과된 항목을 되돌리거나 확인 후 재개할 수 있습니다.');
+        void showAlert('자동 통과 표본이 반려되어, 같은 규칙의 자동 통과를 멈췄습니다.\n상단 요약에서 이미 자동 통과된 항목을 되돌리거나 확인 후 재개할 수 있습니다.', { title: '자동 통과 정지', tone: 'warning' });
       }
     },
-    onError: (err: Error) => alert(err.message),
+    onError: (err: Error) => void showError(err),
   });
   const revertMutation = useMutation({
     mutationFn: (itemId: number) => revertAutoPolicyItem(itemId, selectedNs),
     onSuccess: invalidateItems,
-    onError: (err: Error) => alert(err.message),
+    onError: (err: Error) => void showError(err),
   });
 
   // 반려된 항목의 파라미터/서술 수정(2026-09-23) — "반려하면 그냥 데이터를 버리는데?"라는
@@ -146,12 +147,12 @@ export function PolicyItemBrowser() {
       unit: paramEditForm.unit.trim() || null,
     }),
     onSuccess: () => { invalidateItems(); setEditingParamId(null); },
-    onError: (err: Error) => alert(err.message),
+    onError: (err: Error) => void showError(err),
   });
   const updateNarrativeMutation = useMutation({
     mutationFn: (chunkId: number) => updatePolicyNarrative(chunkId, selectedNs, chunkEditForm.trim()),
     onSuccess: () => { invalidateItems(); setEditingChunkId(null); },
-    onError: (err: Error) => alert(err.message),
+    onError: (err: Error) => void showError(err),
   });
 
   useEffect(() => { setPage(1); }, [selectedNs, categoryFilter, q, statusFilter, riskFilter, pageSize]);
@@ -320,7 +321,7 @@ export function PolicyItemBrowser() {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (window.confirm(`"${item.policy_name}"의 자동 통과를 되돌려 검토대기로 보낼까요?`)) revertMutation.mutate(item.item_id);
+                      void showConfirm(`"${item.policy_name}"의 자동 통과를 되돌려 검토대기로 보낼까요?`, { confirmLabel: '되돌리기' }).then((ok) => { if (ok) revertMutation.mutate(item.item_id); });
                     }}
                     disabled={revertMutation.isPending && revertMutation.variables === item.item_id}
                     title="자동 통과 되돌리기 — 검토대기로 보내 사람이 확인(검색 결과는 바뀌지 않음)"
@@ -346,12 +347,12 @@ export function PolicyItemBrowser() {
                       onClick={() => {
                         // 승인과 달리 반려는 검색/채팅에서 실제로 빠져서, 확인 없이 바로
                         // 누르면 위험하다(아이콘이 붙어 있어 오클릭 가능성도 있음) —
-                        // confirm으로 한 번 막는다. 반려 후에는 이 화면에서 항목을 펼쳐
+                        // 확인 모달로 한 번 막는다. 반려 후에는 이 화면에서 항목을 펼쳐
                         // 파라미터/서술을 고치면 다시 검토대기로 되돌릴 수 있다(2026-09-23
                         // 추가 — 예전엔 되돌릴 방법이 없었지만 지금은 있음, 문구도 갱신).
-                        if (window.confirm(`"${item.policy_name}" 항목을 반려할까요?\n검색/채팅에서 제외됩니다. 반려 후 이 화면에서 항목을 펼쳐 파라미터/서술을 고치면 다시 검토대기로 되돌릴 수 있습니다.`)) {
-                          rejectMutation.mutate(item.item_id);
-                        }
+                        const id = item.item_id;
+                        void showConfirm(`"${item.policy_name}" 항목을 반려할까요?\n검색/채팅에서 제외됩니다. 반려 후 이 화면에서 항목을 펼쳐 파라미터/서술을 고치면 다시 검토대기로 되돌릴 수 있습니다.`, { tone: 'danger', confirmLabel: '반려' })
+                          .then((ok) => { if (ok) rejectMutation.mutate(id); });
                       }}
                       title="반려 — 검색/채팅에서 제외됩니다(펼쳐서 수정하면 재검토 가능)"
                       className="p-1 rounded text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40 disabled:opacity-50"
@@ -574,9 +575,9 @@ export function PolicyItemBrowser() {
                 <>
                   <Button variant="danger" size="sm" disabled={rejectMutation.isPending}
                     onClick={() => {
-                      if (window.confirm(`"${riskInfo.policy_name}" 항목을 반려할까요?\n검색/채팅에서 제외됩니다. 반려 후 이 화면에서 항목을 펼쳐 파라미터/서술을 고치면 다시 검토대기로 되돌릴 수 있습니다.`)) {
-                        rejectMutation.mutate(riskInfo.item_id); setRiskInfo(null);
-                      }
+                      const id = riskInfo.item_id;
+                      void showConfirm(`"${riskInfo.policy_name}" 항목을 반려할까요?\n검색/채팅에서 제외됩니다. 반려 후 이 화면에서 항목을 펼쳐 파라미터/서술을 고치면 다시 검토대기로 되돌릴 수 있습니다.`, { tone: 'danger', confirmLabel: '반려' })
+                        .then((ok) => { if (ok) { rejectMutation.mutate(id); setRiskInfo(null); } });
                     }}>
                     반려
                   </Button>

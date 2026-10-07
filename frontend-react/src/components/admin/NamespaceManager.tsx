@@ -11,6 +11,7 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import type { KnowledgeCategory } from '../../types';
+import { showError } from '../../store/useDialogStore';
 
 type AdminTabId = 'knowledge' | 'glossary';
 interface NamespaceManagerProps {
@@ -213,7 +214,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       setEditingNs(null);
     },
     onError: (err: Error) => {
-      alert(err.message || '이름 변경 실패');
+      void showError(err, '이름 변경 실패');
     },
   });
 

@@ -77,12 +77,13 @@ test('정책 항목 반려 → 편집 아이콘 노출 → 저장 시 검토대�
   // 반려 — confirm 문구가 "되돌릴 수 있다"고 정확히 안내하는지도 같이 확인
   // (2026-09-23 실사고: 편집→재검토 기능을 만들고 이 문구를 안 고쳐서 "되돌릴 화면이
   // 없다"고 거짓 안내하던 버그가 있었음 — 회귀 방지).
-  let dialogMessage = '';
-  page.once('dialog', async (d) => { dialogMessage = d.message(); await d.accept(); });
+  // (2026-10-07부터 브라우저 confirm 대신 앱 확인 모달)
   const rejectResponse = page.waitForResponse((r) => /\/api\/policy\/items\/\d+\/reject/.test(r.url()));
   await editableRow.locator('button[title*="반려"]').click();
+  await expect(page.getByTestId('app-dialog-message')).toContainText('다시 검토대기로 되돌릴 수 있습니다');
+  await page.getByTestId('app-dialog-ok').click();
   rejectedItemId = Number((await rejectResponse).url().match(/items\/(\d+)\/reject/)?.[1] ?? 0);
-  expect(dialogMessage).toContain('다시 검토대기로 되돌릴 수 있습니다');
+  await expect(page.getByTestId('app-dialog')).toHaveCount(0);
 
   // 반려됨 필터로 좁혀서 방금 그 항목을 다시 찾는다
   const listResponse2 = page.waitForResponse((r) => /\/api\/policy\/items\?/.test(r.url()) && r.request().method() === 'GET');

@@ -7,6 +7,7 @@ import { Modal } from '../ui/Modal';
 import { getUsers, updateUser, deleteUser, getAllParts, createPart, deletePart, renamePart } from '../../api/auth';
 import { useAuthStore } from '../../store/useAuthStore';
 import type { User } from '../../types';
+import { showConfirm, showError } from '../../store/useDialogStore';
 
 type SubTab = 'users' | 'parts';
 
@@ -312,7 +313,7 @@ function UserSection() {
       qc.invalidateQueries({ queryKey: ['users'] });
     },
     onError: (err: Error) => {
-      alert(err.message || '변경 실패');
+      void showError(err, '변경 실패');
     },
   });
 
@@ -322,7 +323,7 @@ function UserSection() {
       qc.invalidateQueries({ queryKey: ['users'] });
     },
     onError: (err: Error) => {
-      alert(err.message || '사용자 삭제 실패');
+      void showError(err, '사용자 삭제 실패');
     },
   });
 
@@ -338,8 +339,8 @@ function UserSection() {
     updateMutation.mutate({ id: u.id, payload: { part } });
   };
 
-  const handleDelete = (u: User) => {
-    if (!confirm(`'${u.username}' 사용자를 삭제하시겠습니까?`)) return;
+  const handleDelete = async (u: User) => {
+    if (!(await showConfirm(`'${u.username}' 사용자를 삭제하시겠습니까?`, { tone: 'danger', confirmLabel: '삭제' }))) return;
     deleteMutation.mutate(u.id);
   };
 

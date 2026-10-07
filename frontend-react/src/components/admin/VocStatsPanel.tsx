@@ -13,6 +13,7 @@ import { Button } from '../ui/Button';
 import { DonutChart, type DonutSegment } from '../ui/DonutChart';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import { CATEGORY_LABEL, SEVERITY_LABEL, formatRelative } from './VocEmailPanel';
+import { showAlert } from '../../store/useDialogStore';
 
 // Teams 카드(teams_notify.py의 _SEVERITY_COLOR)와 동일한 4단계 팔레트 — 어디서
 // 봐도 같은 심각도가 같은 색으로 읽히도록 색상 값 자체를 맞춘다.
@@ -66,7 +67,7 @@ function ClusterKnowledgeRegisterModal({
         category,
       });
       if (created.pending_review) {
-        window.alert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다. 관리자 승인 후 검색에 반영됩니다.');
+        void showAlert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다.\n관리자 승인 후 검색에 반영됩니다.', { title: '승인 대기로 등록' });
       }
       onSuccess();
       onClose();

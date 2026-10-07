@@ -12,6 +12,8 @@ interface ModalProps {
   title?: string;
   children: ReactNode;
   maxWidth?: string;
+  /** 다른 모달 위에 떠야 할 때(앱 안내·확인 모달) */
+  zClass?: string;
 }
 
 export function Modal({
@@ -20,6 +22,7 @@ export function Modal({
   title,
   children,
   maxWidth = 'max-w-md',
+  zClass = 'z-50',
 }: ModalProps) {
   // Close on Escape key
   useEffect(() => {
@@ -44,7 +47,7 @@ export function Modal({
   return createPortal(
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className={`fixed inset-0 ${zClass} flex items-center justify-center p-4`}>
           {/* Backdrop */}
           <motion.div
             key="backdrop"

@@ -12,6 +12,7 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { DonutChart, type DonutSegment } from '../ui/DonutChart';
 import type { QueryLog, QueryFilter } from '../../types';
+import { showAlert } from '../../store/useDialogStore';
 
 const TERM_PALETTE = ['#6366f1', '#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#f43f5e', '#ec4899', '#14b8a6'];
 
@@ -60,7 +61,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
       });
       await fillKnowledgeGap(log.id, created.id);
       if (created.pending_review) {
-        window.alert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다. 관리자 승인 후 검색에 반영됩니다.');
+        void showAlert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다.\n관리자 승인 후 검색에 반영됩니다.', { title: '승인 대기로 등록' });
       }
       onSuccess();
       onClose();

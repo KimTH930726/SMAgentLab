@@ -4,6 +4,7 @@ import { Save, XCircle, CheckCircle, AlertTriangle } from 'lucide-react';
 import { listPrompts, updatePrompt } from '../../api/prompts';
 import type { Prompt, PromptUpdate } from '../../api/prompts';
 import { Button } from '../ui/Button';
+import { showError } from '../../store/useDialogStore';
 
 const AGENT_TYPE_LABELS: Record<string, string> = {
   all:           '공통',
@@ -38,7 +39,7 @@ export function PromptManager({ agentType }: Props) {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     },
-    onError: (err: Error) => alert(err.message || '프롬프트 저장 실패'),
+    onError: (err: Error) => void showError(err, '프롬프트 저장 실패'),
   });
 
   // agentType이 지정된 경우 해당 agent + 'all' 표시, null/undefined면 전체

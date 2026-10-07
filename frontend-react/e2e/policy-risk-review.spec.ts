@@ -81,7 +81,7 @@ async function openBrowser(page: Page) {
 }
 
 test('위험도 분류 → 낮음 자동 통과(표본은 사람 큐) → 되돌리기 → 표본 반려 시 규칙 정지', async ({ page }) => {
-  page.on('dialog', (d) => d.accept());
+  page.on('dialog', (d) => { throw new Error(`브라우저 기본 대화상자가 떴습니다(앱 모달이어야 함): ${d.message()}`); });
   await openBrowser(page);
   const panel = page.locator('div.rounded-xl').filter({ hasText: '사람이 볼 검토 큐' }).first();
 
@@ -119,6 +119,7 @@ test('위험도 분류 → 낮음 자동 통과(표본은 사람 큐) → 되돌
   await expect(autoRow).toBeVisible();
   const reverted = page.waitForResponse((r) => /\/revert-auto$/.test(r.url()));
   await autoRow.locator('button[title*="자동 통과 되돌리기"]').click();
+  await page.getByTestId('app-dialog-ok').click();   // 앱 확인 모달(브라우저 confirm 아님)
   expect((await reverted).ok()).toBeTruthy();
   const autoAfterRevert = Number(psql(
     `SELECT COUNT(*) FROM policy_item WHERE namespace_id=(SELECT id FROM ops_namespace WHERE name='${NS}') AND review_source='auto_rule'`));
@@ -129,7 +130,10 @@ test('위험도 분류 → 낮음 자동 통과(표본은 사람 큐) → 되돌
   const sampleRow = rows.filter({ hasText: '표본 확인' }).first();
   const rejected = page.waitForResponse((r) => /\/reject$/.test(r.url()));
   await sampleRow.locator('button[title*="반려"]').click();
+  await page.getByTestId('app-dialog-ok').click();   // 반려 확인
   expect(await (await rejected).json()).toMatchObject({ status: 'rejected', rule_paused: true });
+  await expect(page.getByTestId('app-dialog-message')).toContainText('자동 통과를 멈췄습니다');
+  await page.getByTestId('app-dialog-ok').click();   // 규칙 정지 안내 닫기
   await expect(panel.getByText('자동 통과 멈춤')).toBeVisible();
   // 이력: 자동 통과·표본·되돌리기·반려·규칙 정지가 모두 남는다
   const actions = psql(`SELECT string_agg(DISTINCT action, ',' ORDER BY action) FROM policy_review_log WHERE id > ${logIdBefore}`);
@@ -137,7 +141,7 @@ test('위험도 분류 → 낮음 자동 통과(표본은 사람 큐) → 되돌
 });
 
 test('미분류 조각은 검토 큐에서 바로 편입 → 위험도 재계산, 미분류 탭은 집계만', async ({ page }) => {
-  page.on('dialog', (d) => d.accept());
+  page.on('dialog', (d) => { throw new Error(`브라우저 기본 대화상자가 떴습니다(앱 모달이어야 함): ${d.message()}`); });
   await openBrowser(page);
   const panel = page.locator('div.rounded-xl').filter({ hasText: '사람이 볼 검토 큐' }).first();
   await panel.getByRole('button', { name: /검토 큐 보기/ }).click();

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { DialogHost } from './components/ui/DialogHost';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from './components/layout/Sidebar';
 import { useAppStore } from './store/useAppStore';
@@ -91,6 +92,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeSync />
       <SearchConfigSync />
+      <DialogHost />
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />

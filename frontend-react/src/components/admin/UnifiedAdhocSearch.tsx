@@ -11,6 +11,7 @@ import { getCategories } from '../../api/namespaces';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Modal } from '../ui/Modal';
 import type { DebugSearchResult } from '../../types';
+import { showError } from '../../store/useDialogStore';
 
 /**
  * "즉석 질의" 통합 결과(2026-09-18, 카드/모달 리디자인) — "정책이 벡터검색/정책서
@@ -372,7 +373,7 @@ export function UnifiedAdhocSearch() {
       await flagKnowledgeForReview(hit.knowledgeId, selectedNs, question.trim() || undefined);
       setFlaggedIds((prev) => new Set(prev).add(hit.knowledgeId!));
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      void showError(err);
     } finally {
       setFlaggingId(null);
     }

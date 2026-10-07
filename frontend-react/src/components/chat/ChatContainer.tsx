@@ -15,6 +15,7 @@ import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { createCorrection, getMyCorrections, markCorrectionsSeen } from '../../api/corrections';
 import type { ChatMessage, PolicyCitation } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
+import { showError } from '../../store/useDialogStore';
 
 /** 신고자 결과 알림 — 내가 낸 정정 신고가 처리되면(반영/반려 사유) 채팅 진입 시 한 번 보여준다. */
 function CorrectionResultsBanner() {
@@ -27,7 +28,7 @@ function CorrectionResultsBanner() {
   const seen = useMutation({
     mutationFn: () => markCorrectionsSeen(items.map((i) => i.id)),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['corrections-mine-unseen'] }),
-    onError: (err: Error) => alert(err.message),
+    onError: (err: Error) => void showError(err),
   });
   if (items.length === 0) return null;
   return (

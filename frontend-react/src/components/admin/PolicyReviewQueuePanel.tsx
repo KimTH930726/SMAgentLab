@@ -6,6 +6,7 @@ import {
 } from '../../api/policy';
 import { useAuthStore } from '../../store/useAuthStore';
 import { Button } from '../ui/Button';
+import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
 
 const RULE = 'low_risk_v1';
 
@@ -36,22 +37,22 @@ export function PolicyReviewQueuePanel({ namespace, onShowQueue }: { namespace: 
   const previewRun = useMutation({
     mutationFn: () => runAutoReview(namespace, true),
     onSuccess: setPreview,
-    onError: (e: Error) => alert(e.message),
+    onError: (e: Error) => void showError(e),
   });
   const run = useMutation({
     mutationFn: () => runAutoReview(namespace, false),
     onSuccess: (r) => { setPreview(null); setLastRun(r); refresh(); },
-    onError: (e: Error) => alert(e.message),
+    onError: (e: Error) => void showError(e),
   });
   const resume = useMutation({
     mutationFn: () => resumeAutoRule(RULE),
     onSuccess: refresh,
-    onError: (e: Error) => alert(e.message),
+    onError: (e: Error) => void showError(e),
   });
   const revert = useMutation({
     mutationFn: (scope: { run_id?: string; rule_key?: string; namespace: string }) => revertAutoReview(scope),
-    onSuccess: (r) => { alert(`${r.reverted}건을 검토대기로 되돌렸습니다.`); setLastRun(null); refresh(); },
-    onError: (e: Error) => alert(e.message),
+    onSuccess: (r) => { void showAlert(`${r.reverted}건을 검토대기로 되돌렸습니다.`, { tone: 'success' }); setLastRun(null); refresh(); },
+    onError: (e: Error) => void showError(e),
   });
 
   if (!namespace || !s) return null;
@@ -122,7 +123,7 @@ export function PolicyReviewQueuePanel({ namespace, onShowQueue }: { namespace: 
         <div className="text-xs text-slate-400 flex items-center gap-2">
           방금 {lastRun.auto_approved}건 자동 통과(표본 {lastRun.sampled}건).
           <button className="text-indigo-600 dark:text-indigo-400 hover:underline"
-            onClick={() => window.confirm(`방금 자동 통과된 ${lastRun.auto_approved}건을 검토대기로 되돌릴까요?`) && revert.mutate({ run_id: lastRun.run_id!, namespace })}>
+            onClick={() => { const runId = lastRun.run_id!; void showConfirm(`방금 자동 통과된 ${lastRun.auto_approved}건을 검토대기로 되돌릴까요?`, { confirmLabel: '되돌리기' }).then((ok) => { if (ok) revert.mutate({ run_id: runId, namespace }); }); }}>
             되돌리기
           </button>
         </div>
@@ -137,7 +138,7 @@ export function PolicyReviewQueuePanel({ namespace, onShowQueue }: { namespace: 
             <span className="ml-auto flex gap-1.5">
               {autoCount > 0 && (
                 <Button variant="ghost" size="sm" loading={revert.isPending}
-                  onClick={() => window.confirm(`이 파트(${namespace})에서 이 규칙으로 자동 통과된 ${autoCount}건을 전부 검토대기로 되돌릴까요?`) && revert.mutate({ rule_key: RULE, namespace })}
+                  onClick={() => void showConfirm(`이 파트(${namespace})에서 이 규칙으로 자동 통과된 ${autoCount}건을 전부 검토대기로 되돌릴까요?`, { confirmLabel: '되돌리기' }).then((ok) => { if (ok) revert.mutate({ rule_key: RULE, namespace }); })}
                   title="이미 자동 통과된 항목은 그대로 둡니다 — 의심되면 되돌려 사람이 다시 봅니다">
                   자동 통과 {autoCount}건 되돌리기
                 </Button>

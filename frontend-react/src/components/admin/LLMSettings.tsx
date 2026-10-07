@@ -9,6 +9,7 @@ import { Button } from '../ui/Button';
 import { PromptManager } from './PromptManager';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
+import { showError } from '../../store/useDialogStore';
 
 type Provider = 'ollama' | 'inhouse';
 
@@ -612,7 +613,7 @@ function ThresholdSettings() {
       setValues(data);
       setDirty(false);
     },
-    onError: (err: Error) => alert(err.message || '임계값 저장 실패'),
+    onError: (err: Error) => void showError(err, '임계값 저장 실패'),
   });
 
   const handleChange = (key: keyof SearchThresholds, val: number) => {
@@ -734,7 +735,7 @@ function SearchDefaultsSettings() {
         topK: data.default_top_k,
       });
     },
-    onError: (err: Error) => alert(err.message || '기본값 저장 실패'),
+    onError: (err: Error) => void showError(err, '기본값 저장 실패'),
   });
 
   const handleChange = (key: keyof SearchDefaults, val: number) => {
@@ -868,7 +869,7 @@ function CacheSettings() {
       setValues(data);
       setDirty(false);
     },
-    onError: (err: Error) => alert(err.message || '캐시 설정 저장 실패'),
+    onError: (err: Error) => void showError(err, '캐시 설정 저장 실패'),
   });
 
   const handleChange = (key: keyof CacheConfig, val: number | boolean) => {

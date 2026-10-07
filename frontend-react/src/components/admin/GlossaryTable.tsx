@@ -8,6 +8,7 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { GlossaryItem } from '../../types';
+import { showError } from '../../store/useDialogStore';
 
 interface GlossaryFormData { term: string; description: string; }
 const defaultForm: GlossaryFormData = { term: '', description: '' };
@@ -51,19 +52,19 @@ export function GlossaryTable() {
   const createMutation = useMutation({
     mutationFn: () => createGlossaryItem({ namespace: selectedNs, term: createForm.term.trim(), description: createForm.description.trim() }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }); qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] }); setShowCreate(false); setCreateForm(defaultForm); },
-    onError: (err: Error) => alert(err.message || '등록 실패'),
+    onError: (err: Error) => void showError(err, '등록 실패'),
   });
 
   const updateMutation = useMutation({
     mutationFn: (id: number) => updateGlossaryItem(id, { term: editForm.term.trim(), description: editForm.description.trim() }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }); setEditingId(null); },
-    onError: (err: Error) => alert(err.message || '수정 실패'),
+    onError: (err: Error) => void showError(err, '수정 실패'),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteGlossaryItem(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }); qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] }); setDeleteTarget(null); },
-    onError: (err: Error) => alert(err.message || '삭제 실패'),
+    onError: (err: Error) => void showError(err, '삭제 실패'),
   });
 
   const synonymDeleteMutation = useMutation({
@@ -72,7 +73,7 @@ export function GlossaryTable() {
       qc.invalidateQueries({ queryKey: ['glossary', selectedNs] });
       qc.invalidateQueries({ queryKey: ['glossary-vector-search', selectedNs] });
     },
-    onError: (err: Error) => alert(err.message || '다른 표현 삭제 실패'),
+    onError: (err: Error) => void showError(err, '다른 표현 삭제 실패'),
   });
 
   const bulkDeleteMutation = useMutation({
@@ -83,7 +84,7 @@ export function GlossaryTable() {
       setSelectedIds(new Set());
       setShowBulkConfirm(false);
     },
-    onError: (err: Error) => alert(err.message || '일괄 삭제 실패'),
+    onError: (err: Error) => void showError(err, '일괄 삭제 실패'),
   });
 
   const suggestMutation = useMutation({
@@ -93,7 +94,7 @@ export function GlossaryTable() {
       setSuggestMessage(data.message);
       setAppliedTerms(new Set());
     },
-    onError: (err: Error) => alert(err.message || 'AI 추천 실패'),
+    onError: (err: Error) => void showError(err, 'AI 추천 실패'),
   });
 
   const [vectorSearchInput, setVectorSearchInput] = useState('');
@@ -112,7 +113,7 @@ export function GlossaryTable() {
       qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
       setAppliedTerms((prev) => new Set([...prev, variables.term]));
     },
-    onError: (err: Error) => alert(err.message || '용어 등록 실패'),
+    onError: (err: Error) => void showError(err, '용어 등록 실패'),
   });
 
   const displayItems = searchMode === 'vector' && vectorQuery

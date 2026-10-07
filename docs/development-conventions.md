@@ -112,7 +112,9 @@ API 스펙은 FastAPI 자동 문서(`/docs`)로 대체했으므로 손으로 동
   안 붙이면 한쪽 테마에서 대비가 깨진다.
 - **useMutation은 항상 onError를 갖는다** — 실패해도 화면에 아무 것도 안 뜨면 사용자가
   성공한 줄 알고 넘어간다. 폼 컨텍스트가 있으면 기존 에러 상태 슬롯을 재사용, 없으면
-  `alert(err.message)` 최소 패턴이라도 넣는다(이 프로젝트 관례).
+  `showError(err)` 최소 패턴이라도 넣는다(이 프로젝트 관례). 브라우저 기본 `alert`/`confirm`은 디자인과 동떨어져
+  쓰지 않는다 — `store/useDialogStore`의 `showAlert`/`showConfirm`/`showError`가 앱 모달(`ui/DialogHost`)로 띄운다
+  (2026-10-07 사용자 지적으로 43곳 일괄 교체, E2E는 `page.on('dialog')`가 뜨면 실패하게).
 
 ## 6. 인프라 관련
 

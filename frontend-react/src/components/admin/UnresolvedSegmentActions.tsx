@@ -4,6 +4,7 @@ import { ArrowRightCircle, Database, Check, X } from 'lucide-react';
 import {
   promoteUnresolvedSegment, promoteUnresolvedSegmentToParam, suggestParamFields, type UnresolvedSegment,
 } from '../../api/policy';
+import { showError } from '../../store/useDialogStore';
 
 /**
  * 정책 항목 하나의 미분류 조각 처리(2026-10-02) — AI가 서술/파라미터 어디에도 넣지 못한 원문 조각을 그 자리에서 편입.
@@ -53,7 +54,7 @@ export function UnresolvedSegmentActions({ namespace, itemId, segments, canModif
     mutationFn: (idx: number) => promoteUnresolvedSegment(itemId, idx, namespace),
     // 조각이 하나 빠지면 뒤 순번이 당겨진다 — 열린 파라미터 폼은 다른 조각 아래로 밀려가므로 닫고, 새 목록을 받을 때까지 잠근다
     onSuccess: () => { setFormIdx(null); setForm(EMPTY); setSuggesting(null); return onChanged(); },
-    onError: (e: Error) => alert(e.message),
+    onError: (e: Error) => void showError(e),
   });
   const toParam = useMutation({
     mutationFn: (idx: number) => promoteUnresolvedSegmentToParam(itemId, idx, namespace, {
@@ -61,7 +62,7 @@ export function UnresolvedSegmentActions({ namespace, itemId, segments, canModif
       value: form.value.trim() || null, unit: form.unit.trim() || null,
     }),
     onSuccess: () => { setFormIdx(null); setForm(EMPTY); return onChanged(); },
-    onError: (e: Error) => alert(e.message),
+    onError: (e: Error) => void showError(e),
   });
   const busy = toNarrative.isPending || toParam.isPending;
 

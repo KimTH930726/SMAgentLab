@@ -97,3 +97,49 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
     }
   }
 });
+
+test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아니라 앱 모달로 뜨고, 확인하면 승인 대기 탭으로', async ({ page }) => {
+  // 2026-10-07: 이 안내가 브라우저 기본 alert으로 떠서 디자인이 깨졌다 — 앱 모달(DialogHost)로 바꾼 회귀 방지.
+  page.on('dialog', (d) => { throw new Error(`브라우저 기본 대화상자가 떴습니다(앱 모달이어야 함): ${d.message()}`); });
+  const runId = `${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+  const marker = `E2E유사등록_${runId}`;
+  const content = `${marker} — 유사 지식 판정 확인용으로 같은 문장을 두 번 등록하는 Playwright 회귀 테스트 문장입니다.`;
+
+  const authState = await page.evaluate(() => localStorage.getItem('ops_auth'));
+  const authHeader = { Authorization: `Bearer ${authState ? JSON.parse(authState).accessToken : ''}` };
+  // 첫 번째는 API로 바로 등록(활성) — 두 번째를 화면에서 같은 내용으로 등록하면 유사 판정
+  const first = await page.request.post('/api/knowledge', { headers: authHeader, data: { namespace: NAMESPACE, content } });
+  expect(first.ok()).toBeTruthy();
+  const ids: number[] = [(await first.json()).id];
+
+  try {
+    await page.getByRole('link', { name: 'Admin' }).click();
+    await page.getByRole('button', { name: '지식 베이스' }).click();
+    await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NAMESPACE);
+    await page.getByRole('button', { name: '지식 등록' }).click();
+    await page.getByText('직접 입력').click();
+    const createResponse = page.waitForResponse((r) => r.url().includes('/api/knowledge') && r.request().method() === 'POST');
+    await page.locator('textarea:visible').first().fill(content);
+    await page.getByRole('button', { name: '추가' }).click();
+    const second = await (await createResponse).json();
+    ids.push(second.id);
+    expect(second.pending_review).toBeTruthy();
+
+    const dialog = page.getByTestId('app-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('승인 대기');
+    await page.getByTestId('app-dialog-ok').click();
+    await expect(dialog).toHaveCount(0);
+    // 승인 대기 탭으로 이동해 방금 등록한 항목이 보인다(이 탭엔 검색창 없음)
+    await expect(page.getByText(marker).first()).toBeVisible({ timeout: 10_000 });
+  } finally {
+    for (const id of ids) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
+    const g = await page.request.get(`/api/knowledge/glossary?namespace=${encodeURIComponent(NAMESPACE)}`, { headers: authHeader }).catch(() => null);
+    if (g?.ok()) {
+      const items: Array<{ id: number; term: string; description: string }> = await g.json();
+      for (const t of items.filter((x) => x.term.includes(marker) || x.term.includes('Playwright') || x.description.includes('Playwright'))) {
+        await page.request.delete(`/api/knowledge/glossary/${t.id}`, { headers: authHeader }).catch(() => {});
+      }
+    }
+  }
+});

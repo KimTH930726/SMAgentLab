@@ -40,6 +40,7 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { KnowledgeItem, DuplicateMatch } from '../../types';
+import { showAlert } from '../../store/useDialogStore';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
 
@@ -1025,8 +1026,8 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
       setProgressJobId(outcome.jobId);
       setAutoNavigate(true);
     } else if (outcome?.pendingReview) {
-      alert('유사한 기존 지식이 있어 승인 대기 상태로 등록됐습니다. 승인 대기 탭으로 이동합니다.');
-      onGoToReview();
+      void showAlert('유사한 기존 지식이 있어 승인 대기 상태로 등록됐습니다.\n승인 대기 탭으로 이동합니다.', { title: '승인 대기로 등록' })
+        .then(onGoToReview);
     } else {
       onGoToList();
     }
@@ -1175,8 +1176,8 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
           if (!autoNavigate) return;
           setAutoNavigate(false);
           if (job.pending_chunks > 0) {
-            alert(`유사한 기존 지식이 있어 ${job.pending_chunks}건이 승인 대기 상태로 등록됐습니다. 승인 대기 탭으로 이동합니다.`);
-            onGoToReview();
+            void showAlert(`유사한 기존 지식이 있어 ${job.pending_chunks}건이 승인 대기 상태로 등록됐습니다.\n승인 대기 탭으로 이동합니다.`, { title: '승인 대기로 등록' })
+              .then(onGoToReview);
           } else if (job.status === 'completed') {
             onGoToList();
           }
