@@ -325,7 +325,9 @@ export function GlossaryTable() {
                           <span className="text-[11px] text-slate-500">다른 표현</span>
                           {item.synonyms.map((s) => (
                             <span key={s.id}
-                              title={s.source === 'llm_query'
+                              title={s.source === 'llm_gap'
+                                ? '같은 질문이 여러 번 답을 못 찾아 AI가 찾은 표현 — 넣었을 때 근거가 찾아지는 것을 확인함'
+                                : s.source === 'llm_query'
                                 ? `실제 질문 ${s.evidence_count}건에서 AI가 수집${s.active ? '' : ' — 2건 이상이면 사용'}`
                                 : '용어 등록 때 AI가 만든 표현'}
                               className={`inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded border ${s.active

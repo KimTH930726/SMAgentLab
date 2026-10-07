@@ -69,8 +69,11 @@ class Settings(BaseSettings):
     # 이 값 미만이며 정책 파라미터 ts_rank 최고가 policy_abstain_min_param_rank 미만이면 LLM을 부르지 않고 "관련 지식을 찾지 못했습니다"
     policy_abstain_min_score: Optional[float] = None
     policy_abstain_min_param_rank: float = 0.0
-    # 질문 기록 → 용어 동의어 자동 수집 주기(시간, 0이면 끔) — agents/knowledge_rag/knowledge/glossary_mining.py
+    # 반복된 지식 공백 → 용어 동의어 확인 주기(시간, 0이면 끔) — agents/knowledge_rag/knowledge/glossary_mining.py
     glossary_mining_interval_hours: int = 24
+    # 같은 질문이 이 기간(일) 안에 이 횟수 이상 "관련 지식을 찾지 못했습니다"면 동의어 후보를 찾는다(그 전엔 LLM 안 부름)
+    glossary_gap_min_repeats: int = 3
+    glossary_gap_window_days: int = 14
 
     # 검색 임계값
     glossary_min_similarity: float = 0.5

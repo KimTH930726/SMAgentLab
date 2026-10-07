@@ -103,7 +103,7 @@ class GlossaryUpdate(BaseModel):
 class GlossarySynonymOut(BaseModel):
     id: int
     synonym: str
-    source: str             # llm_term(용어 등록 시 LLM) / llm_query(질문 기록에서 LLM)
+    source: str             # llm_term(용어 등록 시 LLM) / llm_gap(반복된 지식 공백에서 LLM + 효과 확인) / llm_query(옛 수집분)
     evidence_count: int = 1
     active: bool = True     # 질문 기록 동의어는 서로 다른 질문 2건 이상이어야 검색에 쓰임
 
