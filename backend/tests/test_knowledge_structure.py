@@ -16,11 +16,13 @@ S = "agents.knowledge_rag.knowledge.service"
 class _Conn:
     def __init__(self, me, rows):
         self.me, self.rows = me, rows
+        self.fetch_args = None
 
     async def fetchrow(self, sql, *a):
-        return self.me
+        return {"confluence_page_id": None, **self.me}
 
     async def fetch(self, sql, *a):
+        self.fetch_args = (sql, a)
         return self.rows
 
 
@@ -101,3 +103,32 @@ async def test_outline_lists_whole_document_with_self_and_attached_flags():
     assert [x["depth"] for x in o] == [1, 2, 2, 1]
     assert [x["is_self"] for x in o] == [False, True, False, False]
     assert [x["attached"] for x in o] == [True, False, True, False]   # 상위 경로[:-1]=["페이지"] 공유 → 1·3, "다른"은 아님
+
+
+
+@pytest.mark.asyncio
+async def test_confluence_outline_scoped_to_same_page():
+    """리뷰 2026-10-08: 트리 등록은 등록 묶음 하나에 여러 페이지 — 원문 목차 조회가 같은 페이지로 좁혀져야 한다."""
+    me = {"id": 2, "ingestion_job_id": 9, "source_chunk_idx": 1, "heading_path": ["페이지"], "source_file": "f",
+          "source_type": "confluence_bulk", "namespace": "ns", "confluence_page_id": "123"}
+    conn = _Conn(me, [_row(2, 1, ["페이지"])])
+
+    @asynccontextmanager
+    async def cm():
+        yield conn
+    with patch(f"{S}.get_conn", cm):
+        await service.get_knowledge_structure(2)
+    sql, args = conn.fetch_args
+    assert "confluence_page_id = $2" in sql and args == (9, "123")
+
+
+@pytest.mark.asyncio
+async def test_null_chunk_index_sorts_last_like_search():
+    """검색 SQL은 순번 NULL의 거리를 NULL(맨 뒤)로 본다 — 화면도 같게(예전엔 0으로 봐 한도 컷이 달라질 수 있었다)."""
+    me = {"id": 1, "ingestion_job_id": 9, "source_chunk_idx": 0, "heading_path": ["P", "a"], "source_file": "f",
+          "source_type": "confluence_bulk", "namespace": "ns"}
+    big = "가" * 5000
+    rows = [_row(1, 0, ["P", "a"]), _row(2, None, ["P", "b"], big), _row(3, 5, ["P", "c"], big)]
+    with _patch(me, rows), patch("agents.knowledge_rag.knowledge.retrieval.PARENT_EXPANSION_CHAR_BUDGET", 6000):
+        s = await service.get_knowledge_structure(1)
+    assert [b["id"] for b in s["expansion"]] == [3]       # 순번 있는 5번이 먼저, NULL은 뒤라 한도에서 잘림

@@ -53,7 +53,7 @@ async def get_knowledge_list(
 
 async def _auto_category(namespace: str, content: str) -> str:
     """업무구분을 안 고르고 등록할 때(통계 "지식 공백" → 지식 등록 등, 2026-10-06) — 벌크 등록과 같은 방식:
-    내용으로 기존 업무구분 중 추천 → 없으면 "미분류"(파트별 최초 1회 자동 생성). 업무구분이 하나도 없는 파트
+    내용으로 기존 업무구분 중 추천 → 없으면 "분류 확인 필요"(예전 "미분류", 파트별 최초 1회 자동 생성). 업무구분이 하나도 없는 파트
     (정책서만 쓰는 온라인스토어 등)에서 등록 자체가 막히던 문제도 같이 풀린다."""
     from core.database import get_conn, resolve_namespace_id
     from service.admin.service import suggest_category_for_content

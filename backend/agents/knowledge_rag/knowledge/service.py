@@ -276,7 +276,8 @@ async def get_knowledge_structure(knowledge_id: int) -> Optional[dict]:
     - single: 직접 입력 단건(등록 묶음 없음)"""
     async with get_conn() as conn:
         me = await conn.fetchrow(
-            "SELECT k.id, k.ingestion_job_id, k.source_chunk_idx, k.heading_path, k.source_file, k.source_type, n.name AS namespace "
+            "SELECT k.id, k.ingestion_job_id, k.source_chunk_idx, k.heading_path, k.source_file, k.source_type, k.confluence_page_id, "
+            "n.name AS namespace "
             "FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id WHERE k.id = $1", knowledge_id)
         if not me:
             return None
@@ -285,9 +286,11 @@ async def get_knowledge_structure(knowledge_id: int) -> Optional[dict]:
         if me["ingestion_job_id"] is None:
             return {**base, "mode": "single", "position": None, "total": None, "prev": None, "next": None, "expansion": [], "outline": []}
         # 본문 전체 대신 미리보기 400자 + 길이만(리뷰: 일괄 job이면 수천 행 × 본문)
+        # 컨플루언스 트리 등록은 등록 묶음 하나에 여러 페이지 — 원문 = 같은 페이지(리뷰 2026-10-08: 100페이지 전체가 한 원문처럼 보였다)
         rows = await conn.fetch(
             "SELECT id, source_chunk_idx, left(content, 400) AS content, length(content) AS clen, heading_path FROM rag_knowledge "
-            "WHERE ingestion_job_id = $1 AND status = 'active' ORDER BY source_chunk_idx NULLS LAST, id", me["ingestion_job_id"])
+            "WHERE ingestion_job_id = $1 AND status = 'active' AND ($2::text IS NULL OR confluence_page_id = $2) "
+            "ORDER BY source_chunk_idx NULLS LAST, id", me["ingestion_job_id"], me["confluence_page_id"])
         order = [r["id"] for r in rows]
         pos = order.index(me["id"]) if me["id"] in order else None
         brief = lambda r: {"id": r["id"], "title": _chunk_title(r["content"]), "preview": r["content"] or "",
@@ -300,8 +303,14 @@ async def get_knowledge_structure(knowledge_id: int) -> Optional[dict]:
             # 검색 코드와 같게: 후보 = 같은 상위 경로[:-1], 문서 순서상 가까운 순, 글자 수 한도 안에서만 실제로 붙는다
             from agents.knowledge_rag.knowledge.retrieval import PARENT_EXPANSION_CHAR_BUDGET
             parent = path[:-1] if len(path) > 1 else path
-            cands = sorted((r for r in rows if r["id"] != me["id"] and list(r["heading_path"] or [])[:len(parent)] == parent),
-                           key=lambda r: (abs((r["source_chunk_idx"] or 0) - (me["source_chunk_idx"] or 0)), r["source_chunk_idx"] or 0))
+            # 검색 SQL과 같은 정렬 — 순번이 NULL이면 거리도 NULL이라 맨 뒤(리뷰: 화면이 0으로 취급해 한도 컷이 달라질 수 있었다)
+            big = float("inf")
+            me_idx = me["source_chunk_idx"]
+
+            def dist(r):
+                i = r["source_chunk_idx"]
+                return (big if i is None or me_idx is None else abs(i - me_idx), big if i is None else i)
+            cands = sorted((r for r in rows if r["id"] != me["id"] and list(r["heading_path"] or [])[:len(parent)] == parent), key=dist)
             budget = PARENT_EXPANSION_CHAR_BUDGET
             for r in cands:
                 if (r["clen"] or 0) > budget:
@@ -734,9 +743,11 @@ async def bulk_create_knowledge(
     from service.admin.service import resolve_or_create_category
     # 업무구분이 빈 청크("AI 분석")는 묶음 전체에 한 번만 정한다(2026-10-08) — 예전엔 청크마다 사내 LLM을 순차 호출해
     # 비용·시간이 청크 수만큼 들고, 한 문서의 청크가 여러 업무구분으로 흩어졌다(코드 감사 지적). 문서 앞부분으로 판단.
+    # CSV 가져오기는 행마다 독립 지식(FAQ 등)이라 예전처럼 행마다 판단(리뷰 2026-10-08). 샘플은 업무구분이 빈 조각에서.
     batch_category: Optional[str] = None
-    if any(not (it.get("category") or "").strip() for it in items):
-        sample = "\n\n".join(it["content"] for it in items[:3])[:4000]
+    blank = [it for it in items if not (it.get("category") or "").strip()]
+    if blank and source_type != "csv_import":
+        sample = "\n\n".join(it["content"] for it in blank[:3])[:4000]
         batch_category = await resolve_or_create_category(ns_id, None, sample)
     for item in items:
         if not (item.get("category") or "").strip():

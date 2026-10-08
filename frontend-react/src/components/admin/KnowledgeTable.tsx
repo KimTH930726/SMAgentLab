@@ -92,20 +92,24 @@ const defaultForm: KnowledgeFormData = {
 // 아님, 어차피 RequiredCategoryField에서 사람이 최종 확인/수정 가능).
 // 등록 화면 업무구분 "AI 자동분석"(2026-10-08 사용자 요청 — 첫 선택지 "선택하세요" 대신). 서버로는 빈 값으로 보내고, 서버가 내용으로
 // 기존 업무구분 중 추천(없으면 "분류 확인 필요"). 이 칸은 AI가 못 고른 결과라 등록 화면 선택지에선 뺀다.
-export const AI_CATEGORY = '__ai__';
+const AI_CATEGORY = '__ai__';
 const UNSORTED = '분류 확인 필요';  // AI가 못 고른 결과 칸(예전 "미분류")
 const categoryForServer = (c: string) => (c === AI_CATEGORY ? '' : c);
 
+// 추천은 사내 LLM이라 수 초 — 응답이 왔을 때 아직 "AI 자동분석"일 때만 바꾼다(리뷰 2026-10-08: 그사이 사용자가 고른 값이나
+// 등록 후 초기화된 다음 폼을 늦은 응답이 덮어썼다). applySuggestion은 그 시점 상태를 보고 바꿀지 정하는 함수형 갱신.
 async function autoSuggestCategoryIfUntouched(
   namespace: string, categoryNames: string[], category: string,
-  setCategory: (v: string) => void, hintContent: string,
+  applySuggestion: (suggested: string) => void, hintContent: string,
 ) {
   if (category !== AI_CATEGORY || !hintContent.trim() || categoryNames.length === 0) return;
   try {
     const suggested = await suggestCategory(namespace, hintContent);
-    if (suggested && suggested !== UNSORTED) setCategory(suggested);
+    if (suggested && suggested !== UNSORTED) applySuggestion(suggested);
   } catch { /* 추천 실패는 무시 — "AI 자동분석" 그대로(서버가 등록 때 다시 고름) */ }
 }
+const keepUserChoice = (set: (u: (prev: string) => string) => void) =>
+  (suggested: string) => set((prev) => (prev === AI_CATEGORY ? suggested : prev));
 
 // 업무구분은 필수값 — 카테고리가 없는 네임스페이스는 "네임스페이스 관리"에서 먼저 추가해야 함
 function RequiredCategoryField({ categoryNames, value, onChange, allowAi = false }: {
@@ -1452,7 +1456,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setReviewChunks(result.chunks.map(c => ({ ...c, headingPath: c.heading_path ?? null, selected: true })));
       setShowReview(true);
       const hint = result.chunks.slice(0, 3).map(c => c.text).join('\n');
-      autoSuggestCategoryIfUntouched(namespace, categoryNames, category, setCategory, hint);
+      autoSuggestCategoryIfUntouched(namespace, categoryNames, category, keepUserChoice(setCategory), hint);
     } catch (e: any) {
       const msg = e.message || '파일 분석 실패';
       // 사용자 친화적 메시지로 변환
@@ -1582,7 +1586,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setDetectedStrategy(result.detected_strategy ?? null);
       setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true, headingPath: result.heading_paths?.[i] ?? null })));
       setShowReview(true);
-      autoSuggestCategoryIfUntouched(namespace, categoryNames, category, setCategory, text);
+      autoSuggestCategoryIfUntouched(namespace, categoryNames, category, keepUserChoice(setCategory), text);
     } catch (e: any) { setError(e.message || '분할 미리보기 실패'); }
     finally { setPreviewing(false); }
   };
@@ -1693,8 +1697,12 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">내용 <span className="text-rose-400">*</span></label>
         <textarea rows={8} value={form.content} onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
-          onBlur={() => autoSuggestCategoryIfUntouched(namespace, categoryNames, form.category,
-            (v) => setForm((f) => ({ ...f, category: v })), form.content)}
+          onBlur={() => {
+            const hint = form.content;
+            // 등록 후 폼이 비워진 뒤 늦게 온 추천은 버린다(내용이 그대로일 때만)
+            void autoSuggestCategoryIfUntouched(namespace, categoryNames, form.category,
+              (v) => setForm((f) => (f.category === AI_CATEGORY && f.content === hint ? { ...f, category: v } : f)), hint);
+          }}
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[160px]" />
       </div>
 
@@ -1764,7 +1772,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         // 페이지별 자동 배정을 쓰도록 기본값 초기화 — 채워둔 채로 두면 배치 전체가 그
         // 값 하나로 다시 뭉친다(2026-09-22, 지식 카테고리 자동화). 비워두면 자동 배정,
         // 사람이 직접 고르면 그 값이 모든 페이지에 적용되는 오버라이드로 남는다.
-        setCategory('');
+        setCategory(AI_CATEGORY);
         setShowTreeModal(true);
       } catch (e: any) { setError(e.message || '트리 조회 실패'); }
       finally { setTreeLoading(false); }

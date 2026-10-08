@@ -57,6 +57,15 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
   const response = await createResponse;
   expect(response.ok()).toBeTruthy();
   const created = await response.json();
+  // "AI 자동분석" 표시값(__ai__)이 서버로 새지 않고 빈 값으로 가서, 서버가 실제 업무구분을 정해 저장(리뷰 2026-10-08)
+  expect(response.request().postDataJSON().category).toBe('');
+  expect(created.category).toBeTruthy();
+  expect(created.category).not.toBe('__ai__');
+  // 유사 지식으로 승인 대기가 되면 앱 모달("승인 대기로 등록")이 뜬다 — 닫고 진행(2026-10-07 alert → 앱 모달 전환 반영)
+  if (created.pending_review) {
+    await expect(page.getByTestId('app-dialog')).toBeVisible();
+    await page.getByTestId('app-dialog-ok').click();
+  }
   const createdId: number = created.id;
 
   // 등록 성공 시 폼이 곧바로 "지식 조회" 탭으로 전환돼(ManualForm onSuccess) 폼 안의
@@ -92,7 +101,7 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
       // LLM이 fictionalTerm 그대로가 아니라 문장 속 다른 표현("Playwright 회귀 테스트"
       // 같은 구문)을 용어로 뽑아낼 수도 있어(2026-09-24 실측), "Playwright"까지 넓게 잡는다.
       const junkTerms = glossaryItems.filter((g) =>
-        g.term.includes(fictionalTerm) || g.term.includes(uniqueMarker) ||
+        g.term.includes(fictionalTerm) || g.term.includes(uniqueMarker) || g.term.startsWith('E2E') || g.term.startsWith('가상업무') ||
         g.term.includes('Playwright') || g.description.includes('Playwright')
       );
       for (const g of junkTerms) {
@@ -141,7 +150,7 @@ test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아
     const g = await page.request.get(`/api/knowledge/glossary?namespace=${encodeURIComponent(NAMESPACE)}`, { headers: authHeader }).catch(() => null);
     if (g?.ok()) {
       const items: Array<{ id: number; term: string; description: string }> = await g.json();
-      for (const t of items.filter((x) => x.term.includes(marker) || x.term.includes('Playwright') || x.description.includes('Playwright'))) {
+      for (const t of items.filter((x) => x.term.includes(marker) || x.term.startsWith('E2E') || x.term.includes('Playwright') || x.description.includes('Playwright'))) {
         await page.request.delete(`/api/knowledge/glossary/${t.id}`, { headers: authHeader }).catch(() => {});
       }
     }
@@ -183,7 +192,8 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
     await panel.locator('summary').click();
     await expect(panel.getByText('지금 보는 지식')).toBeVisible();
     await expect(panel).toContainText(`1.2.1. ${marker} 매장`);   // 상위 경로
-    await expect(panel).toContainText('함께 전달');                 // 검색 때 같이 전달되는 조각 표시
+    // 펼친 목차의 행 배지 — 접힌 요약줄의 "함께 전달 N"이 아니라 목차 행에 붙은 것
+    await expect(panel.locator('li', { hasText: '함께 전달' }).first()).toBeVisible();
   } finally {
     for (const id of ids) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
   }

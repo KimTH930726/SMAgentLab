@@ -21,6 +21,7 @@ function OutlineRow({ item }: { item: KnowledgeOutlineItem }) {
   return (
     <li>
       <button type="button" onClick={() => !item.is_self && setOpen((v) => !v)} disabled={item.is_self}
+        aria-expanded={item.is_self ? undefined : open}
         title={item.is_self ? '지금 보는 지식' : '눌러서 내용 보기'}
         style={{ paddingLeft: 8 + pad }}
         className={`w-full text-left flex items-center gap-2 pr-2 py-1.5 rounded-md text-xs focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400 ${
@@ -31,7 +32,7 @@ function OutlineRow({ item }: { item: KnowledgeOutlineItem }) {
         {item.is_self && <span className="text-[11px] flex-shrink-0">지금 보는 지식</span>}
         {item.attached && (
           <span className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
-            title="이 지식이 검색되면 이 조각도 AI에게 함께 전달됩니다(같은 상위 섹션, 원문에서 가까운 순, 글자 수 한도 안)">
+            title="이 지식이 검색되면 이 조각도 AI에게 함께 전달됩니다(같은 상위 섹션, 원문에서 가까운 순, 글자 수 한도 안 — 같은 원문의 다른 지식이 함께 검색되면 조금 달라질 수 있음)">
             함께 전달
           </span>
         )}
@@ -67,7 +68,9 @@ export function KnowledgeStructurePanel({ knowledgeId }: { knowledgeId: number }
   }
 
   const outline = data.outline ?? [];
+  // 지금 보는 지식이 목차에 없을 수 있다(승인 대기 등 활성 아님 — 리뷰 2026-10-08) → 맨 앞부터
   const selfIdx = Math.max(0, outline.findIndex((o) => o.is_self));
+  const where = data.position ? `${data.total}개 중 ${data.position}번째` : `조각 ${data.total}개`;
   // 긴 원문은 지금 보는 지식 주변만 먼저 보여준다
   const start = showAll || outline.length <= MAX_VISIBLE ? 0 : Math.max(0, Math.min(selfIdx - 4, outline.length - MAX_VISIBLE));
   const visible = showAll ? outline : outline.slice(start, start + MAX_VISIBLE);
@@ -76,12 +79,12 @@ export function KnowledgeStructurePanel({ knowledgeId }: { knowledgeId: number }
   // 지식 내용이 주인공 — 원문 위치는 접힌 한 줄(경로·몇 번째), 펼치면 목차(사용자 피드백 2026-10-07)
   return (
     <details data-testid="knowledge-structure" className="group rounded-lg border border-slate-700 bg-slate-900/40">
-      <summary className="cursor-pointer list-none flex items-center gap-1.5 px-3 py-2 text-xs text-slate-400 hover:text-slate-200 min-w-0"
+      <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-center gap-1.5 px-3 py-2 text-xs text-slate-400 hover:text-slate-200 min-w-0"
         title="같은 원문의 다른 조각과 이 지식이 검색될 때 함께 전달되는 조각을 봅니다">
         <ChevronRight className="w-3.5 h-3.5 flex-shrink-0 group-open:rotate-90 transition-transform" />
         <span className="flex-shrink-0 text-slate-500">원문 위치</span>
         <span className="truncate text-slate-300">{data.heading_path.length > 0 ? data.heading_path.join(' › ') : (data.source_file || '원문')}</span>
-        <span className="flex-shrink-0 text-[11px] text-slate-500 tabular-nums">· {data.total}개 중 {data.position}번째</span>
+        <span className="flex-shrink-0 text-[11px] text-slate-500 tabular-nums">· {where}</span>
         {data.mode === 'section' && attachedN > 0 && (
           <span className="ml-auto flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
             title="이 지식이 검색되면 AI에게 함께 전달되는 조각 수">함께 전달 {attachedN}</span>

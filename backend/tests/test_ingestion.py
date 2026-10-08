@@ -269,8 +269,40 @@ class TestBulkCreateKnowledge:
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
             await bulk_create_knowledge("test-ns", items, background=False)
         assert len(llm_calls) == 1
+        assert "조각4" not in llm_calls[0]          # 샘플은 업무구분이 빈 조각에서만
         rows = next(c for c in fake_conn.executemany.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]).args[1]
         assert [r[4] for r in rows] == ["AI가고름", "AI가고름", "AI가고름", "공통지식"]
+
+    @pytest.mark.asyncio
+    async def test_csv_import_still_decides_per_row(self):
+        """리뷰 2026-10-08: CSV는 행마다 독립 지식(FAQ 등) — 묶음 1회 판단을 적용하면 주제가 섞인 행이 전부 한 업무구분으로 묶인다."""
+        fake_conn = MagicMock()
+        fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
+        fake_conn.__aexit__ = AsyncMock(return_value=False)
+        fake_conn.fetchval = AsyncMock(side_effect=[1, False, 1])
+        fake_conn.execute = AsyncMock()
+        fake_conn.executemany = AsyncMock()
+        fake_conn.fetch = AsyncMock(return_value=[])
+        fake_emb = MagicMock()
+        fake_emb.embed_batch = AsyncMock(return_value=[[0.1] * 768] * 2)
+        calls = []
+
+        async def resolve(ns_id, category, content):
+            if category and category.strip():
+                return category.strip()
+            calls.append(content)
+            return "배송" if "배송" in content else "환불"
+
+        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
+             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
+             patch("service.admin.service.resolve_or_create_category", resolve):
+            from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
+            await bulk_create_knowledge("test-ns", [{"content": "배송 문의"}, {"content": "환불 문의"}],
+                                        source_type="csv_import", background=False)
+        assert len(calls) == 2
+        rows = next(c for c in fake_conn.executemany.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]).args[1]
+        assert [r[4] for r in rows] == ["배송", "환불"]
 
 
 class TestBulkIngestionStagedActivation:
