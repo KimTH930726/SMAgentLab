@@ -732,7 +732,15 @@ async def bulk_create_knowledge(
     # 반환), 파일 업로드/텍스트 분할처럼 프론트가 못 채웠거나 안 채운 경우도
     # 여기서 항상 유효한 값을 갖도록 안전망을 건다.
     from service.admin.service import resolve_or_create_category
+    # 업무구분이 빈 청크("AI 분석")는 묶음 전체에 한 번만 정한다(2026-10-08) — 예전엔 청크마다 사내 LLM을 순차 호출해
+    # 비용·시간이 청크 수만큼 들고, 한 문서의 청크가 여러 업무구분으로 흩어졌다(코드 감사 지적). 문서 앞부분으로 판단.
+    batch_category: Optional[str] = None
+    if any(not (it.get("category") or "").strip() for it in items):
+        sample = "\n\n".join(it["content"] for it in items[:3])[:4000]
+        batch_category = await resolve_or_create_category(ns_id, None, sample)
     for item in items:
+        if not (item.get("category") or "").strip():
+            item["category"] = batch_category
         item["category"] = await resolve_or_create_category(ns_id, item.get("category"), item["content"])
         if is_keyword_only_category(item["category"]):
             logger.warning(

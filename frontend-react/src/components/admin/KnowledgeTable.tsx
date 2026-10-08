@@ -90,21 +90,28 @@ const defaultForm: KnowledgeFormData = {
 // 추천값으로 바꿔치기한다. 사용자가 미리보기 전에 이미 다른 값을 직접 골라뒀으면(기본값과
 // 다르면) 건드리지 않는다 — 실패해도 폼은 그냥 기본값 그대로 두고 조용히 넘어간다(치명적
 // 아님, 어차피 RequiredCategoryField에서 사람이 최종 확인/수정 가능).
+// 등록 화면 업무구분 "AI 자동분석"(2026-10-08 사용자 요청 — 첫 선택지 "선택하세요" 대신). 서버로는 빈 값으로 보내고, 서버가 내용으로
+// 기존 업무구분 중 추천(없으면 "분류 확인 필요"). 이 칸은 AI가 못 고른 결과라 등록 화면 선택지에선 뺀다.
+export const AI_CATEGORY = '__ai__';
+const UNSORTED = '분류 확인 필요';  // AI가 못 고른 결과 칸(예전 "미분류")
+const categoryForServer = (c: string) => (c === AI_CATEGORY ? '' : c);
+
 async function autoSuggestCategoryIfUntouched(
   namespace: string, categoryNames: string[], category: string,
   setCategory: (v: string) => void, hintContent: string,
 ) {
-  const defaultValue = categoryNames.includes('공통지식') ? '공통지식' : '';
-  if (category !== defaultValue || !hintContent.trim() || categoryNames.length === 0) return;
+  if (category !== AI_CATEGORY || !hintContent.trim() || categoryNames.length === 0) return;
   try {
     const suggested = await suggestCategory(namespace, hintContent);
-    if (suggested) setCategory(suggested);
-  } catch { /* 추천 실패는 무시 — 기본값 유지 */ }
+    if (suggested && suggested !== UNSORTED) setCategory(suggested);
+  } catch { /* 추천 실패는 무시 — "AI 자동분석" 그대로(서버가 등록 때 다시 고름) */ }
 }
 
 // 업무구분은 필수값 — 카테고리가 없는 네임스페이스는 "네임스페이스 관리"에서 먼저 추가해야 함
-function RequiredCategoryField({ categoryNames, value, onChange }: {
+function RequiredCategoryField({ categoryNames, value, onChange, allowAi = false }: {
   categoryNames: string[]; value: string; onChange: (v: string) => void;
+  /** 등록 화면 — "AI 자동분석" 선택지(기본, 예전 "선택하세요" 자리), "분류 확인 필요"은 숨김 */
+  allowAi?: boolean;
 }) {
   // retrieval._KEYWORD_ONLY_CATEGORIES(2026-09-18) — 이 카테고리로 태깅되면 rag_knowledge
   // 안에서 벡터축과 final_score로 경쟁하다 top_k 후보 선별 단계에서 밀려날 수 있음
@@ -116,7 +123,7 @@ function RequiredCategoryField({ categoryNames, value, onChange }: {
     staleTime: 5 * 60_000,
   });
 
-  if (categoryNames.length === 0) {
+  if (categoryNames.length === 0 && !allowAi) {
     return (
       <div className="rounded-lg bg-amber-900/20 border border-amber-700/40 px-3 py-2 text-xs text-amber-300">
         이 네임스페이스에 업무구분이 없습니다. "네임스페이스 관리"에서 먼저 업무구분을 추가해주세요.
@@ -128,9 +135,16 @@ function RequiredCategoryField({ categoryNames, value, onChange }: {
       <label className="block text-xs font-medium text-slate-400 mb-1">업무구분 <span className="text-rose-400">*</span></label>
       <select value={value} onChange={(e) => onChange(e.target.value)}
         className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-        <option value="" disabled>선택하세요</option>
-        {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
+        {allowAi
+          ? <option value={AI_CATEGORY}>AI 자동분석</option>
+          : <option value="" disabled>선택하세요</option>}
+        {categoryNames.filter((c) => !(allowAi && c === UNSORTED)).map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
+      {allowAi && value === AI_CATEGORY && (
+        <p className="mt-1 text-[11px] text-slate-500" title="기존 업무구분 중 내용에 맞는 것을 고르고, 맞는 게 없으면 '분류 확인 필요'으로 둡니다">
+          등록할 때 AI가 내용을 보고 업무구분을 정합니다
+        </p>
+      )}
       {keywordOnlyCategories.includes(value) && (
         <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
           이 업무구분은 검색 우선순위 문제가 있는 유형(코드표/DB스키마)입니다 — 짧은 코드 항목이면
@@ -593,7 +607,7 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
             <div>
               <label className="text-xs font-medium text-slate-400">업무구분</label>
               <div className="mt-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
-                {editForm.category || <span className="text-slate-500">미분류</span>}
+                {editForm.category || <span className="text-slate-500">분류 확인 필요</span>}
               </div>
             </div>
           )}
@@ -796,7 +810,7 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
             내용으로 판단하며, 필요하면 등록 후 지식 목록에서 직접 수정할 수 있습니다.
           </div>
         ) : (
-          <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={onCategoryChange} />
+          <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={onCategoryChange} allowAi />
         )}
 
         {/* 청킹 전략 재선택 */}
@@ -1384,7 +1398,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
+  const [category, setCategory] = useState(AI_CATEGORY);
   const [detectedStrategy, setDetectedStrategy] = useState<string | null>(null);
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [showReview, setShowReview] = useState(false);
@@ -1458,7 +1472,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category, heading_path: c.headingPath ?? null }));
+      const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null }));
       const result = await bulkCreateKnowledge(namespace, items, file!.name, 'file_upload');
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
@@ -1478,7 +1492,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-4">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><Upload className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />파일 업로드</h3>
 
-      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
+      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} allowAi />
 
       <div
         className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
@@ -1551,7 +1565,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
 }) {
   const [text, setText] = useState('');
-  const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
+  const [category, setCategory] = useState(AI_CATEGORY);
   const [detectedStrategy, setDetectedStrategy] = useState<string | null>(null);
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [showReview, setShowReview] = useState(false);
@@ -1576,7 +1590,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category, heading_path: c.headingPath ?? null }));
+      const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null }));
       const result = await bulkCreateKnowledge(namespace, items, '텍스트 직접입력', 'paste_split');
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
@@ -1595,7 +1609,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
     <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-4">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />대량 텍스트 등록</h3>
 
-      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
+      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} allowAi />
 
       <textarea rows={10} value={text} onChange={(e) => { setText(e.target.value); setDetectedStrategy(null); setDone(''); }}
         placeholder={"여기에 긴 텍스트를 붙여넣으세요...\n\nAI가 내용을 분석하여 최적의 분할 방식을 자동으로 결정합니다."}
@@ -1644,7 +1658,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const qc = useQueryClient();
   const [form, setForm] = useState<KnowledgeFormData>({
     ...defaultForm,
-    category: categoryNames.includes('공통지식') ? '공통지식' : '',
+    category: AI_CATEGORY,
   });
   const [done, setDone] = useState('');
   const [donePending, setDonePending] = useState(false);
@@ -1654,7 +1668,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       createKnowledge({
         namespace,
         content: form.content,
-        category: form.category,
+        category: categoryForServer(form.category),
       }),
     onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
@@ -1665,7 +1679,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
           : '등록 완료'
       );
       setDonePending(!!created.pending_review);
-      setForm({ ...defaultForm, category: categoryNames.includes('공통지식') ? '공통지식' : '' });
+      setForm({ ...defaultForm, category: AI_CATEGORY });
       onSuccess({ pendingReview: !!created.pending_review });
     },
   });
@@ -1675,7 +1689,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><PenLine className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />직접 입력</h3>
 
       <RequiredCategoryField categoryNames={categoryNames} value={form.category}
-        onChange={(v) => setForm((f) => ({ ...f, category: v }))} />
+        onChange={(v) => setForm((f) => ({ ...f, category: v }))} allowAi />
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">내용 <span className="text-rose-400">*</span></label>
         <textarea rows={8} value={form.content} onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
@@ -1709,7 +1723,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
 }) {
   const { user, updateUser } = useAuthStore();
   const [url, setUrl] = useState('');
-  const [category, setCategory] = useState(categoryNames.includes('공통지식') ? '공통지식' : '');
+  const [category, setCategory] = useState(AI_CATEGORY);
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [sourceMeta, setSourceMeta] = useState<{ name: string; type: string } | null>(null);
   const [unstructuredPages, setUnstructuredPages] = useState<string[]>([]);
@@ -1840,8 +1854,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       // 컨플루언스 원본 식별자(2026-09-28)는 단일 URL/트리 일괄 둘 다 실어 보낸다 — 없으면 null
       const items = selected.map(c => ({
         ...(sourceMeta?.type === 'confluence_bulk'
-          ? { content: c.text, category: c.category || category, heading_path: c.headingPath }
-          : { content: c.text, category, heading_path: c.headingPath ?? null }),
+          ? { content: c.text, category: c.category || categoryForServer(category), heading_path: c.headingPath }
+          : { content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null }),
         confluence_page_id: c.confluencePageId ?? null,
         confluence_version: c.confluenceVersion ?? null,
       }));
@@ -1879,7 +1893,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />URL / Confluence 수집
       </h3>
 
-      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} />
+      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} allowAi />
 
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">URL <span className="text-rose-400">*</span></label>

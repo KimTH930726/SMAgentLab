@@ -219,7 +219,7 @@ export function UnifiedAdhocSearch() {
             recordId: r.id,
             rows: [
               { key: '파트(namespace)', value: selectedNs },
-              { key: '업무구분(category)', value: r.category ?? '미분류' },
+              { key: '업무구분(category)', value: r.category ?? '분류 확인 필요' },
               { key: '등록 방식', value: r.source_type ? (SOURCE_TYPE_LABEL[r.source_type] ?? r.source_type) : '-' },
               ...(r.source_file ? [{ key: '원본 파일/문서', value: r.source_file }] : []),
               { key: '등록일', value: r.created_at ? new Date(r.created_at).toISOString().slice(0, 10) : '-' },

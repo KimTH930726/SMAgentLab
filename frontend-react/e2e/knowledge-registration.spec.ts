@@ -35,6 +35,10 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
 
   await page.getByRole('button', { name: '지식 등록' }).click();
   await page.getByText('직접 입력').click();
+  // 업무구분 첫 선택지는 'AI 자동분석'(기본) — 예전 '선택하세요'. AI가 못 고른 칸('분류 확인 필요')은 등록 선택지에 없음(2026-10-08)
+  const catSelect = page.locator('select').filter({ hasText: 'AI 자동분석' });
+  await expect(catSelect).toBeVisible();
+  await expect(catSelect.locator('option', { hasText: '분류 확인 필요' })).toHaveCount(0);
 
   // 매 실행마다 의미상으로도 충분히 다른 문장이어야 한다 — 타임스탬프만 바꾸고 나머지
   // 문장이 똑같으면 반복 실행 시 임베딩 유사도가 쌓여 중복 판정(승인 대기)으로 튈 수 있음.

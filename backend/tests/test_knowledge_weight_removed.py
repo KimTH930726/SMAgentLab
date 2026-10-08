@@ -40,7 +40,7 @@ async def test_old_client_weight_is_dropped_everywhere():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("suggested, expected", [("배송", "배송"), (None, "미분류")])
+@pytest.mark.parametrize("suggested, expected", [("배송", "배송"), (None, "분류 확인 필요")])
 async def test_missing_category_is_auto_assigned(suggested, expected):
     """업무구분 없이 등록(통계 "지식 공백" → 지식 등록, 2026-10-06) — 벌크 등록과 같은 방식: 내용 추천 → 없으면 "미분류".
     업무구분이 하나도 없는 파트(정책서만 쓰는 곳)에서 등록이 막히던 문제."""

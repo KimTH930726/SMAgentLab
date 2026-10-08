@@ -1380,6 +1380,21 @@ async def _migrate_rename_opslens(conn) -> None:
         logger.info("[migrate #67] 프롬프트 자기소개 OpsLens로: %s", r)
 
 
+async def _migrate_rename_unsorted_category(conn) -> None:
+    """지식 업무구분 "미분류" → "분류 확인 필요"(2026-10-08, #72) — AI가 기존 업무구분 중 못 골랐을 때 들어가는 칸. 이름이 이상하고
+    사람이 정해야 하는 상태가 안 드러났다(사용자). 같은 파트에 새 이름이 이미 있으면 옛 칸의 지식을 새 칸으로 옮기고 옛 칸을 지운다.
+    정책서의 "미분류 조각"(unresolved)은 다른 개념이라 건드리지 않는다. 멱등."""
+    async with conn.transaction():
+        await conn.execute("""
+            UPDATE rag_knowledge SET category = '분류 확인 필요' WHERE category = '미분류'""")
+        await conn.execute("""
+            DELETE FROM rag_knowledge_category o WHERE o.name = '미분류' AND EXISTS (
+                SELECT 1 FROM rag_knowledge_category n WHERE n.name = '분류 확인 필요' AND n.namespace_id IS NOT DISTINCT FROM o.namespace_id)""")
+        r = await conn.execute("UPDATE rag_knowledge_category SET name = '분류 확인 필요' WHERE name = '미분류'")
+        if r and not r.endswith(" 0"):
+            logger.info("[migrate #72] 업무구분 미분류 → 분류 확인 필요: %s", r)
+
+
 async def _migrate_ingestion_quality(conn) -> None:
     """등록 묶음 품질 검사 결과 (2026-10-07, #71) — agents/knowledge_rag/ingestion/quality.py가 job 끝에 저장된 청크를 구조로만 검사한
     집계(이웃 청크 중복·매달린 제목·제목만 청크·상위 맥락 수, 본문 없음). 등록 진행 화면이 경고로 보여준다. 멱등."""
@@ -1637,6 +1652,7 @@ async def _run_migrations() -> None:
         await _migrate_glossary_synonym(conn)
         await _migrate_answer_eval_run(conn)
         await _migrate_ingestion_quality(conn)
+        await _migrate_rename_unsorted_category(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

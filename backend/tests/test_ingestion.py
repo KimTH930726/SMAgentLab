@@ -239,6 +239,39 @@ class TestBulkCreateKnowledge:
             rows = insert_call.args[1]
             assert rows[0][4] == "자동배정됨"
 
+    @pytest.mark.asyncio
+    async def test_ai_category_decided_once_per_batch(self):
+        """'AI 분석'(빈 업무구분) 일괄 등록은 묶음 전체에 한 번만 추천(2026-10-08) — 예전엔 청크마다 사내 LLM 순차 호출이라
+        비용이 청크 수만큼, 한 문서가 여러 업무구분으로 흩어졌다. 사람이 고른 값이 있는 청크는 그대로."""
+        fake_conn = MagicMock()
+        fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
+        fake_conn.__aexit__ = AsyncMock(return_value=False)
+        fake_conn.fetchval = AsyncMock(side_effect=[1, False, 1])
+        fake_conn.execute = AsyncMock()
+        fake_conn.executemany = AsyncMock()
+        fake_conn.fetch = AsyncMock(return_value=[])
+        fake_emb = MagicMock()
+        fake_emb.embed_batch = AsyncMock(return_value=[[0.1] * 768] * 4)
+        llm_calls = []
+
+        async def resolve(ns_id, category, content):
+            if category and category.strip():
+                return category.strip()
+            llm_calls.append(content)          # 빈 값일 때만 LLM 추천이 돈다
+            return "AI가고름"
+
+        items = [{"content": "조각1"}, {"content": "조각2", "category": ""}, {"content": "조각3"},
+                 {"content": "조각4", "category": "공통지식"}]
+        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
+             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
+             patch("service.admin.service.resolve_or_create_category", resolve):
+            from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
+            await bulk_create_knowledge("test-ns", items, background=False)
+        assert len(llm_calls) == 1
+        rows = next(c for c in fake_conn.executemany.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]).args[1]
+        assert [r[4] for r in rows] == ["AI가고름", "AI가고름", "AI가고름", "공통지식"]
+
 
 class TestBulkIngestionStagedActivation:
     """WBS 1-2 수집 원자적 활성화(2026-09-28) — 예전엔 50건 배치마다 곧바로 status='active'로

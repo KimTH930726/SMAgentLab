@@ -852,7 +852,7 @@ class _BulkPagesBody(BaseModel):
     auto_glossary: bool = False
 
 
-_UNSORTED_CATEGORY = "미분류"
+from service.admin.service import UNSORTED_CATEGORY as _UNSORTED_CATEGORY  # "분류 확인 필요"(예전 "미분류")
 
 
 async def _ensure_category_exists(ns_id: int, name: str, existing_categories: set[str]) -> None:
