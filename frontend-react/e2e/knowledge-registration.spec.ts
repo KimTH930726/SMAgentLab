@@ -165,10 +165,10 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
     `1.2.1.2. 매장 개점 관리\n매장 OPEN을 전송해 개점 처리한다(구조 테스트 B).\n1.2.2. 메뉴\n1.2.2.1. 메뉴 등록\n메뉴는 관리자 화면에서 등록한다(구조 테스트 C).`;
   const authState = await page.evaluate(() => localStorage.getItem('ops_auth'));
   const authHeader = { Authorization: `Bearer ${authState ? JSON.parse(authState).accessToken : ''}` };
-  const prev = await (await page.request.post('/api/knowledge/import/text-split/preview', { headers: authHeader, data: { raw_text: text, strategy: 'auto' } })).json();
+  const prev = await (await page.request.post('/api/knowledge/import/text-split/preview', { headers: authHeader, data: { raw_text: text, strategy: 'auto', namespace: NAMESPACE } })).json();
   expect(prev.detected_strategy).toBe('section');
   expect(prev.heading_paths.every((h: string[]) => h.length > 0)).toBeTruthy();
-  const items = prev.chunks.map((c: string, i: number) => ({ content: c, category: '공통지식', heading_path: prev.heading_paths[i] }));
+  const items = prev.chunks.map((c: string, i: number) => ({ content: c, category: '공통지식', heading_path: prev.heading_paths[i], source_document_id: prev.source_document_id }));
   const job = (await (await page.request.post('/api/knowledge/bulk', { headers: authHeader,
     data: { namespace: NAMESPACE, items, source_file: '텍스트 직접입력', source_type: 'paste_split' } })).json()).job_id;
   let ids: number[] = [];
@@ -194,6 +194,12 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
     await expect(panel).toContainText(`1.2.1. ${marker} 매장`);   // 상위 경로
     // 펼친 목차의 행 배지 — 접힌 요약줄의 "함께 전달 N"이 아니라 목차 행에 붙은 것
     await expect(panel.locator('li', { hasText: '함께 전달' }).first()).toBeVisible();
+    // 원문 원장(2026-10-08): 원문이 보관되고, 지금 코드로 다시 나눠도 결과가 같으면 아무것도 안 바뀐다
+    expect(prev.source_document_id).toBeTruthy();
+    await expect(panel).toContainText('원문 보관됨');
+    await panel.getByRole('button', { name: '원문에서 다시 분할' }).click();
+    await expect(page.getByTestId('app-dialog-message')).toContainText('바뀐 것이 없습니다');
+    await page.getByTestId('app-dialog-ok').click();
   } finally {
     for (const id of ids) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
   }

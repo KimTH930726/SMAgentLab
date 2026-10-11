@@ -180,7 +180,7 @@ export async function vectorSearchGlossary(namespace: string, query: string, top
 export async function bulkCreateKnowledge(
   namespace: string,
   items: Array<{
-    content: string; category?: string; heading_path?: string[] | null;
+    content: string; category?: string; heading_path?: string[] | null; source_document_id?: number | null; source_document_partial?: boolean;
     confluence_page_id?: string | null; confluence_version?: number | null;
   }>,
   sourceFile?: string,
@@ -233,6 +233,21 @@ export interface KnowledgeStructure {
   next: KnowledgeBrief | null;
   expansion: KnowledgeBrief[];
   outline?: KnowledgeOutlineItem[];
+  source_document?: SourceDocumentInfo | null;
+}
+
+export interface SourceDocumentInfo {
+  id: number; title: string | null; status: string; raw_format: string; parser_version: string | null; chars: number; created_at: string;
+}
+
+export interface RechunkResult {
+  changed: boolean; blocked?: boolean; edited?: number; removed?: number; partial?: boolean; mixed_category?: boolean;
+  old: number; new: number; job_id?: number; status?: string;
+  quality?: { warnings: string[] } | null;
+}
+
+export async function rechunkSourceDocument(docId: number, force = false): Promise<RechunkResult> {
+  return apiFetch(`/knowledge/source-documents/${docId}/rechunk${force ? '?force=true' : ''}`, { method: 'POST' });
 }
 
 export interface KnowledgeOutlineItem { id: number; title: string; depth: number; is_self: boolean; attached: boolean; preview: string; truncated: boolean }
@@ -244,10 +259,12 @@ export async function getKnowledgeStructure(id: number): Promise<KnowledgeStruct
 export async function previewTextSplit(
   rawText: string,
   strategy = 'auto',
-): Promise<{ chunks: string[]; heading_paths?: string[][]; count: number; detected_strategy: string }> {
+  namespace?: string,
+): Promise<{ chunks: string[]; heading_paths?: string[][]; count: number; detected_strategy: string; source_document_id?: number | null }> {
+  // namespace: 원문 원장 초안 저장(2026-10-08) — 확정 때 source_document_id를 청크에 실어 보낸다
   return apiFetch('/knowledge/import/text-split/preview', {
     method: 'POST',
-    body: JSON.stringify({ raw_text: rawText, strategy }),
+    body: JSON.stringify({ raw_text: rawText, strategy, namespace }),
   });
 }
 
@@ -334,6 +351,7 @@ export interface FilePreviewResult {
   sections: number;
   tables: number;
   chunks: Array<{ idx: number; text: string; title: string | null; heading_path?: string[] }>;
+  source_document_id?: number | null;
   chunk_count: number;
   detected_strategy: string;
 }
@@ -341,10 +359,12 @@ export interface FilePreviewResult {
 export async function previewFileUpload(
   file: File,
   strategy?: string,
+  namespace?: string,
 ): Promise<FilePreviewResult> {
   const form = new FormData();
   form.append('file', file);
   if (strategy) form.append('strategy', strategy);
+  if (namespace) form.append('namespace', namespace);   // 원문 원장(2026-10-08)
   return apiFetch('/knowledge/import/file/preview', { method: 'POST', body: form });
 }
 
@@ -365,6 +385,7 @@ export interface UrlPreviewResult {
   total_chars: number;
   sections: number;
   chunks: Array<{ idx: number; text: string; title: string | null; heading_path?: string[] }>;
+  source_document_id?: number | null;
   chunk_count: number;
   url: string;
   confluence_page_id: string | null;
@@ -445,6 +466,8 @@ export interface ConfluenceBulkChunk {
   heading_path: string[] | null;
   confluence_page_id: string | null;
   confluence_version: number | null;
+  /** 원문 원장 id(2026-10-08) — 페이지별 원문 */
+  source_document_id?: number | null;
 }
 
 export interface ConfluenceBulkPreviewResult {

@@ -184,7 +184,7 @@ async def map_glossary_term(
 
 async def find_similar_active_knowledge(
     ns_id: int, embedding: list[float], *, limit: int = 3, staging_job_id: Optional[int] = None,
-    replacing_confluence_pages: Optional[list[str]] = None,
+    replacing_confluence_pages: Optional[list[str]] = None, replacing_documents: Optional[list[int]] = None,
 ) -> list[dict]:
     """같은 네임스페이스의 활성(active) 지식 중 embedding과 가장 유사한 상위 N건 조회.
 
@@ -213,6 +213,10 @@ async def find_similar_active_knowledge(
             f"AND NOT (status = 'active' AND confluence_page_id IS NOT NULL "
             f"AND confluence_page_id = ANY(${len(args)}::text[]))"
         )
+    if replacing_documents:
+        # 원문 원장(2026-10-08): 같은 원문의 옛 청크(재등록·다시 분할로 곧 폐기)는 비교에서 뺀다 — 컨플루언스 페이지 교체와 같은 이유
+        args.append(list(replacing_documents))
+        replace_clause += f" AND NOT (status = 'active' AND source_document_id = ANY(${len(args)}::int[]))"
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""

@@ -96,35 +96,8 @@ async def _fetch_web(url: str) -> ParsedDocument:
             raise _translate_httpx_error(e, service="웹") from e
         html = r.text
 
-    soup = BeautifulSoup(html, "lxml")
-
-    # 불필요한 태그 제거
-    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
-        tag.decompose()
-
-    title = ""
-    if soup.title and soup.title.string:
-        title = soup.title.string.strip()
-
-    # 메인 콘텐츠 우선 추출 (article > main > body 순서)
-    main = (
-        soup.find("article")
-        or soup.find("main")
-        or soup.find(id=re.compile(r"content|main|body", re.I))
-        or soup.find("body")
-    )
-    raw_text = _extract_text(main or soup)
-
-    sections = _extract_heading_sections(main or soup)
-
-    parsed = ParsedDocument(
-        source_type="web",
-        source_name=title or url,
-        raw_text=raw_text,
-        sections=sections,
-        metadata={"url": url, "title": title},
-    )
-    logger.info("웹 크롤링 완료: %s (%d자)", url, len(raw_text))
+    parsed = parse_web_html(html, url)
+    logger.info("웹 크롤링 완료: %s (%d자)", url, len(parsed.raw_text))
     return parsed
 
 
@@ -189,10 +162,26 @@ async def _fetch_confluence(url: str, token: str) -> ParsedDocument:
             "space": space_name,
             "title": page_title,
             "version": page.get("version", {}).get("number"),
+            "raw_html": storage_html,   # 원문 원장용(2026-10-08)
         },
     )
     logger.info("Confluence 페이지 수집 완료: %s (%d자)", page_title, len(raw_text))
     return parsed
+
+
+def parse_web_html(html: str, url: str) -> ParsedDocument:
+    """웹 페이지 HTML → ParsedDocument. 수집(_fetch_web)과 원문 원장 다시 분할이 같은 함수를 쓴다(2026-10-08 리뷰: 다시 분할이
+    페이지 전체를 읽어 미리보기(본문 요소만)와 결과가 달랐다)."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
+        tag.decompose()
+    title = soup.title.string.strip() if soup.title and soup.title.string else ""
+    main = (soup.find("article") or soup.find("main") or soup.find(id=re.compile(r"content|main|body", re.I))
+            or soup.find("body"))
+    return ParsedDocument(source_type="web", source_name=title or url, raw_text=_extract_text(main or soup),
+                          sections=_extract_heading_sections(main or soup),
+                          metadata={"url": url, "title": title, "raw_html": html})   # 원문 원장용
 
 
 # ── URL 파싱 헬퍼 ──────────────────────────────────────────────────────────────
@@ -559,5 +548,6 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
             "title": page_title,
             "version": page_version,
             "parent_title": parent_title,
+            "raw_html": storage_html,   # 원문 원장용(2026-10-08)
         },
     )

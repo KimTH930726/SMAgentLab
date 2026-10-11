@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 from typing import Awaitable, Callable, Optional
@@ -144,6 +145,7 @@ async def update_knowledge(
             """
             UPDATE rag_knowledge
             SET content=$1, embedding=$2::vector, base_weight=$3,
+                content_edited_at = CASE WHEN content IS DISTINCT FROM $1 THEN NOW() ELSE content_edited_at END,
                 category=$5,
                 updated_at=NOW()
             WHERE id = $4
@@ -277,12 +279,17 @@ async def get_knowledge_structure(knowledge_id: int) -> Optional[dict]:
     async with get_conn() as conn:
         me = await conn.fetchrow(
             "SELECT k.id, k.ingestion_job_id, k.source_chunk_idx, k.heading_path, k.source_file, k.source_type, k.confluence_page_id, "
-            "n.name AS namespace "
+            "k.source_document_id, n.name AS namespace "
             "FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id WHERE k.id = $1", knowledge_id)
         if not me:
             return None
         base = {"id": me["id"], "namespace": me["namespace"], "heading_path": list(me["heading_path"] or []),
-                "source_file": me["source_file"], "source_type": me["source_type"]}
+                "source_file": me["source_file"], "source_type": me["source_type"], "source_document": None}
+        if me.get("source_document_id"):
+            d = await conn.fetchrow(
+                "SELECT id, title, status, raw_format, parser_version, length(raw_content) AS chars, created_at::text AS created_at "
+                "FROM rag_source_document WHERE id = $1", me["source_document_id"])
+            base["source_document"] = dict(d) if d else None
         if me["ingestion_job_id"] is None:
             return {**base, "mode": "single", "position": None, "total": None, "prev": None, "next": None, "expansion": [], "outline": []}
         # 본문 전체 대신 미리보기 400자 + 길이만(리뷰: 일괄 job이면 수천 행 × 본문)
@@ -328,6 +335,79 @@ async def get_knowledge_structure(knowledge_id: int) -> Optional[dict]:
         return {**base, "mode": "section" if sectioned else "sequence", "position": (pos + 1) if pos is not None else None,
                 "total": len(rows), "prev": brief(prev_r) if prev_r else None, "next": brief(next_r) if next_r else None,
                 "expansion": expansion, "outline": outline}
+
+
+# ─── 원문 원장: 원문에서 다시 분할 (2026-10-08) ─────────────────────────────
+
+# 사람이 고친 청크 — 지식 수정(updated_at)·정정 승인 새 버전(supersedes_id). 다시 분할이 조용히 덮지 않게 멈춘다.
+# updated_at은 트리거라 상태 변경에도 갱신돼 쓸 수 없다 — 내용을 바꾼 곳(수정·병합·정정 승인)만 남기는 content_edited_at
+_HUMAN_EDITED_SQL = "(content_edited_at IS NOT NULL OR supersedes_id IS NOT NULL)"
+
+
+async def get_source_document_namespace(doc_id: int) -> Optional[str]:
+    async with get_conn() as conn:
+        return await conn.fetchval(
+            "SELECT n.name FROM rag_source_document d JOIN ops_namespace n ON n.id = d.namespace_id WHERE d.id = $1", doc_id)
+
+
+async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Optional[dict] = None) -> dict:
+    """원장의 원문을 지금 코드로 다시 분할해 그 원문의 청크를 한꺼번에 교체(등록과 같은 원자적 전환·품질 검사).
+    결과가 지금 청크와 같으면 아무것도 안 함. 사람이 고친 청크가 있으면 force 없이는 멈춘다."""
+    from agents.knowledge_rag.ingestion.source_ledger import rechunk_items
+    async with get_conn() as conn:
+        doc = await conn.fetchrow(
+            "SELECT d.*, n.name AS namespace FROM rag_source_document d JOIN ops_namespace n ON n.id = d.namespace_id "
+            "WHERE d.id = $1", doc_id)
+        if not doc:
+            raise ValueError("원문을 찾을 수 없습니다.")
+        if doc["status"] != "active":
+            raise ValueError("사용 중인 원문만 다시 분할할 수 있습니다(교체됐거나 등록 전 초안).")
+        current = await conn.fetch(
+            f"SELECT id, content, heading_path, category, source_type, source_file, {_HUMAN_EDITED_SQL} AS edited FROM rag_knowledge "
+            "WHERE source_document_id = $1 AND status IN ('active', 'pending_review') ORDER BY source_chunk_idx NULLS LAST, id", doc_id)
+        # 사람이 뺀 조각(삭제·반려) — 다시 분할이 되살리면 안 된다(리뷰 2026-10-08)
+        removed = await conn.fetchval(
+            "SELECT count(*) FROM rag_knowledge WHERE source_document_id = $1 AND status IN ('deleted', 'rejected')", doc_id)
+    items = rechunk_items(doc)
+    if not items:
+        raise ValueError("원문을 다시 나눈 결과가 비었습니다 — 원문 형식을 확인하세요(교체하지 않음).")
+    same = [(it["content"], list(it["heading_path"] or [])) for it in items] == \
+           [(r["content"], list(r["heading_path"] or [])) for r in current]
+    if same:
+        return {"changed": False, "old": len(current), "new": len(items)}
+    # 사람의 판단을 조용히 덮지 않는다 — 하나라도 있으면 멈추고 사유를 알린다(force로만 진행)
+    reasons = {
+        "edited": sum(1 for r in current if r["edited"]),               # 내용을 고친 조각
+        "removed": int(removed or 0),                                     # 삭제·반려한 조각
+        "partial": bool(doc["registered_partial"]),                       # 등록 때 일부 조각만 고름
+        "mixed_category": len({r["category"] for r in current if r["category"]}) > 1,   # 조각마다 업무구분을 다르게 둠
+    }
+    if any(reasons.values()) and not force:
+        return {"changed": False, "blocked": True, **reasons, "old": len(current), "new": len(items)}
+    category = collections.Counter(r["category"] for r in current if r["category"]).most_common(1)
+    first = current[0] if current else None
+    for it in items:
+        it["source_document_id"] = doc_id
+        it["category"] = category[0][0] if category else None
+        if doc["source_type"] == "confluence" and doc["source_ref"]:
+            it["confluence_page_id"] = doc["source_ref"]
+            it["confluence_version"] = doc["source_version"]
+    result = await bulk_create_knowledge(
+        doc["namespace"], items,
+        source_file=(first["source_file"] if first else doc["title"]) or doc["title"],
+        source_type=(first["source_type"] if first else doc["source_type"]),
+        created_by_part=(user or {}).get("part"), created_by_user_id=(user or {}).get("id"),
+        background=False)
+    if result.get("status") != "completed":
+        # 실패·취소면 옛 조각이 그대로 남는다(전환 트랜잭션 롤백) — 성공으로 알리지 않는다(리뷰 2026-10-08)
+        raise ValueError(f"다시 분할 등록이 끝나지 않았습니다(상태: {result.get('status')}) — 기존 조각은 그대로입니다.")
+    from agents.knowledge_rag.ingestion.source_ledger import PARSER_VERSION
+    async with get_conn() as conn:
+        await conn.execute("UPDATE rag_source_document SET parser_version = $2, registered_partial = FALSE WHERE id = $1",
+                           doc_id, PARSER_VERSION)
+        quality = await conn.fetchval("SELECT quality::text FROM rag_ingestion_job WHERE id = $1", result.get("job_id"))
+    return {"changed": True, "old": len(current), "new": len(items), "job_id": result.get("job_id"),
+            "status": result.get("status"), "quality": json.loads(quality) if quality else None}
 
 
 async def list_knowledge(namespace: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
@@ -490,7 +570,7 @@ async def resolve_duplicate(
                 target_id, before["content"], before["embedding"], knowledge_id,
             )
             target = await conn.fetchrow(
-                "UPDATE rag_knowledge SET content = $1, embedding = $2::vector, updated_at = NOW() "
+                "UPDATE rag_knowledge SET content = $1, embedding = $2::vector, updated_at = NOW(), content_edited_at = NOW() "
                 "WHERE id = $3 RETURNING id, content",
                 merge_content, str(embedding), target_id,
             )
@@ -817,6 +897,25 @@ async def _run_bulk_ingestion(
     # 중복 검사에선 비교 대상에서 빼고(안 그러면 안 바뀐 청크가 승인 대기로 빠진 뒤 옛 버전 폐기로
     # 내용이 사라짐), 일괄 전환 트랜잭션에서 deprecated로 내린다(실패·취소면 옛 버전 그대로 유지).
     replacing_pages = sorted({str(it["confluence_page_id"]) for it in items if it.get("confluence_page_id")})
+    # 원문 원장(2026-10-08): 이 등록이 쓰는 원문과, 같은 원본 위치(파트·종류·위치)의 이전 원문 — 그 원문들의 기존 청크는 옛 버전
+    # (재등록·다시 분할)이라 중복 비교에서 빼고 전환 때 폐기한다. 컨플루언스 페이지 교체를 모든 원문 종류로 넓힌 것.
+    # "같은 원본" 규칙은 source_ledger.replacing_documents(위치가 확실한 컨플루언스·웹만 위치로, 파일·붙여넣기는 위치+내용).
+    from agents.knowledge_rag.ingestion import source_ledger as _ledger
+    source_doc_ids = sorted({int(it["source_document_id"]) for it in items if it.get("source_document_id")})
+    partial_doc_ids = sorted({int(it["source_document_id"]) for it in items
+                              if it.get("source_document_id") and it.get("source_document_partial")})
+    replacing_docs: list[int] = []
+    if source_doc_ids:
+        async with get_conn() as conn:
+            valid = await _ledger.valid_documents(conn, ns_id, source_doc_ids)
+            if len(valid) != len(source_doc_ids):
+                logger.warning("등록 요청의 원문 id 중 이 파트의 초안·사용 중이 아닌 것은 연결하지 않음: %s",
+                               sorted(set(source_doc_ids) - set(valid)))
+                for it in items:
+                    if it.get("source_document_id") and int(it["source_document_id"]) not in valid:
+                        it["source_document_id"] = None
+            source_doc_ids = valid
+            replacing_docs = await _ledger.replacing_documents(conn, ns_id, source_doc_ids)
     try:
         for start in range(0, len(items), _INGEST_BATCH_SIZE):
             batch = items[start:start + _INGEST_BATCH_SIZE]
@@ -826,6 +925,7 @@ async def _run_bulk_ingestion(
             match_results = await asyncio.gather(
                 *(find_similar_active_knowledge(
                     ns_id, emb, staging_job_id=job_id, replacing_confluence_pages=replacing_pages or None,
+                    replacing_documents=replacing_docs or None,
                 ) for emb in embeddings)
             )
             db_is_duplicate = [
@@ -884,6 +984,7 @@ async def _run_bulk_ingestion(
                     item.get("confluence_page_id"),
                     item.get("confluence_version"),
                     item.get("heading_path") or None,
+                    item.get("source_document_id"),
                 ))
 
             async with get_conn() as conn:
@@ -893,8 +994,8 @@ async def _run_bulk_ingestion(
                          embedding, base_weight, category,
                          source_file, source_chunk_idx, source_type,
                          created_by_part, created_by_user_id, ingestion_job_id, status,
-                         embedding_model, confluence_page_id, confluence_version, heading_path)
-                    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                         embedding_model, confluence_page_id, confluence_version, heading_path, source_document_id)
+                    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                 """, rows)
                 created += len(rows)
                 pending_total += len(pending_chunk_indices) + len(local_pending)
@@ -978,6 +1079,15 @@ async def _run_bulk_ingestion(
                             WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[])
                               AND status IN ('active', 'pending_review')
                         """, ns_id, replacing_pages)
+                    if replacing_docs:
+                        # 같은 원문(재등록·다시 분할)의 옛 청크 폐기 — 새 청크는 아직 staging이라 안 걸린다
+                        await conn.execute("""
+                            UPDATE rag_knowledge SET status = 'deprecated'
+                            WHERE namespace_id = $1 AND source_document_id = ANY($2::int[])
+                              AND status IN ('active', 'pending_review') AND ingestion_job_id IS DISTINCT FROM $3
+                        """, ns_id, replacing_docs, job_id)
+                    if source_doc_ids:
+                        await _ledger.activate(conn, ns_id, source_doc_ids, replacing_docs, partial_doc_ids)
                     await conn.execute("""
                         UPDATE rag_knowledge
                         SET status = CASE status WHEN 'staging' THEN 'active' ELSE 'pending_review' END

@@ -96,6 +96,18 @@ const AI_CATEGORY = '__ai__';
 const UNSORTED = '분류 확인 필요';  // AI가 못 고른 결과 칸(예전 "미분류")
 const categoryForServer = (c: string) => (c === AI_CATEGORY ? '' : c);
 
+// 원문 원장(2026-10-08): 원문마다 미리보기 조각 중 일부만 골랐나 — 다시 분할이 사람이 뺀 조각을 되살리지 않게 서버에 알린다
+function partialSourceDocs(selected: ReviewChunk[], all: ReviewChunk[]): Set<number> {
+  const count = (list: ReviewChunk[]) => list.reduce((m, c) => {
+    if (c.sourceDocumentId) m.set(c.sourceDocumentId, (m.get(c.sourceDocumentId) ?? 0) + 1);
+    return m;
+  }, new Map<number, number>());
+  const sel = count(selected);
+  const out = new Set<number>();
+  count(all).forEach((n, id) => { if ((sel.get(id) ?? 0) < n) out.add(id); });
+  return out;
+}
+
 // 추천은 사내 LLM이라 수 초 — 응답이 왔을 때 아직 "AI 자동분석"일 때만 바꾼다(리뷰 2026-10-08: 그사이 사용자가 고른 값이나
 // 등록 후 초기화된 다음 폼을 늦은 응답이 덮어썼다). applySuggestion은 그 시점 상태를 보고 바꿀지 정하는 함수형 갱신.
 async function autoSuggestCategoryIfUntouched(
@@ -622,7 +634,7 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[260px] read-only:border-slate-700 leading-relaxed" />
           </div>
           {/* 원문 위치는 부차 정보 — 내용 아래, 접힌 한 줄(사용자 피드백 2026-10-07) */}
-          {editingId !== null && <KnowledgeStructurePanel knowledgeId={editingId} />}
+          {editingId !== null && <KnowledgeStructurePanel knowledgeId={editingId} canModify={canModifyNs} />}
           {updateMutation.error && <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>}
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="ghost" size="sm" onClick={() => { setShowEdit(false); setEditingId(null); }}>
@@ -730,6 +742,8 @@ interface ReviewChunk {
   /** 상위 맥락 — 컨플루언스 일괄은 상위·자기 페이지 제목 + 페이지 내 헤딩 조상, 파일·붙여넣기·단일 URL은 문서 안 제목 조상
    * (2026-09-22 일괄, 2026-10-07 전 경로). 확정(bulkCreateKnowledge)까지 실려가야 검색 컨텍스트에 반영된다. */
   headingPath?: string[] | null;
+  /** 원문 원장 id(2026-10-08) — 미리보기가 저장한 원문. 확정 때 청크에 연결 */
+  sourceDocumentId?: number | null;
   /** 컨플루언스 원본 페이지 식별(2026-09-28) — 확정까지 실려가야 같은 페이지 재등록 시 옛 버전이
    * 교체된다(예전엔 여기서 버려져 재등록마다 옛 버전과 새 버전이 함께 검색됐음). */
   confluencePageId?: string | null;
@@ -1451,9 +1465,9 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     if (!file) return;
     setPreviewing(true); setError('');
     try {
-      const result = await previewFileUpload(file);
+      const result = await previewFileUpload(file, undefined, namespace);
       setDetectedStrategy(result.detected_strategy ?? null);
-      setReviewChunks(result.chunks.map(c => ({ ...c, headingPath: c.heading_path ?? null, selected: true })));
+      setReviewChunks(result.chunks.map(c => ({ ...c, headingPath: c.heading_path ?? null, sourceDocumentId: result.source_document_id ?? null, selected: true })));
       setShowReview(true);
       const hint = result.chunks.slice(0, 3).map(c => c.text).join('\n');
       autoSuggestCategoryIfUntouched(namespace, categoryNames, category, keepUserChoice(setCategory), hint);
@@ -1476,7 +1490,9 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null }));
+      const partial = partialSourceDocs(selected, reviewChunks);
+      const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null,
+        source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
       const result = await bulkCreateKnowledge(namespace, items, file!.name, 'file_upload');
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
@@ -1487,9 +1503,9 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
   const handleRestrategize = async (strategy: string) => {
     if (!file) return;
-    const result = await previewFileUpload(file, strategy);
+    const result = await previewFileUpload(file, strategy, namespace);
     setDetectedStrategy(result.detected_strategy ?? strategy);
-    setReviewChunks(result.chunks.map(c => ({ ...c, headingPath: c.heading_path ?? null, selected: true })));
+    setReviewChunks(result.chunks.map(c => ({ ...c, headingPath: c.heading_path ?? null, sourceDocumentId: result.source_document_id ?? null, selected: true })));
   };
 
   return (
@@ -1582,9 +1598,9 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
     if (!text.trim()) return;
     setPreviewing(true); setError('');
     try {
-      const result = await previewTextSplit(text);
+      const result = await previewTextSplit(text, 'auto', namespace);
       setDetectedStrategy(result.detected_strategy ?? null);
-      setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true, headingPath: result.heading_paths?.[i] ?? null })));
+      setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true, headingPath: result.heading_paths?.[i] ?? null, sourceDocumentId: result.source_document_id ?? null })));
       setShowReview(true);
       autoSuggestCategoryIfUntouched(namespace, categoryNames, category, keepUserChoice(setCategory), text);
     } catch (e: any) { setError(e.message || '분할 미리보기 실패'); }
@@ -1594,7 +1610,9 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null }));
+      const partial = partialSourceDocs(selected, reviewChunks);
+      const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null,
+        source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
       const result = await bulkCreateKnowledge(namespace, items, '텍스트 직접입력', 'paste_split');
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
@@ -1604,9 +1622,9 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   };
 
   const handleRestrategize = async (strategy: string) => {
-    const result = await previewTextSplit(text, strategy);
+    const result = await previewTextSplit(text, strategy, namespace);
     setDetectedStrategy(result.detected_strategy ?? strategy);
-    setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true, headingPath: result.heading_paths?.[i] ?? null })));
+    setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true, headingPath: result.heading_paths?.[i] ?? null, sourceDocumentId: result.source_document_id ?? null })));
   };
 
   return (
@@ -1785,7 +1803,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setSourceMeta({ name: result.source_name, type: result.source_type });
       setUnstructuredPages(result.structure && !result.structure.structured ? [result.source_name] : []);
       setReviewChunks(result.chunks.map(c => ({
-        ...c, selected: true, headingPath: c.heading_path ?? null,
+        ...c, selected: true, headingPath: c.heading_path ?? null, sourceDocumentId: result.source_document_id ?? null,
         confluencePageId: result.confluence_page_id, confluenceVersion: result.confluence_version,
       })));
       setShowReview(true);
@@ -1826,6 +1844,7 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         selected: true,
         category: c.category,
         headingPath: c.heading_path,
+        sourceDocumentId: c.source_document_id ?? null,
         confluencePageId: c.confluence_page_id,
         confluenceVersion: c.confluence_version,
       })));
@@ -1860,12 +1879,15 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       // 도로 뭉친다(2026-09-22). heading_path는 이전엔 이 확정 경로 자체에 필드가 없어서
       // v2.98 이후로도 계속 NULL로 저장되고 있던 것까지 이번에 같이 고침.
       // 컨플루언스 원본 식별자(2026-09-28)는 단일 URL/트리 일괄 둘 다 실어 보낸다 — 없으면 null
+      const partialUrl = partialSourceDocs(selected, reviewChunks);
       const items = selected.map(c => ({
         ...(sourceMeta?.type === 'confluence_bulk'
           ? { content: c.text, category: c.category || categoryForServer(category), heading_path: c.headingPath }
           : { content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null }),
         confluence_page_id: c.confluencePageId ?? null,
         confluence_version: c.confluenceVersion ?? null,
+        source_document_id: c.sourceDocumentId ?? null,
+        source_document_partial: !!c.sourceDocumentId && partialUrl.has(c.sourceDocumentId),
       }));
       const srcName = sourceMeta?.name ?? url;
       const srcType = sourceMeta?.type ?? (isConfluence ? 'confluence' : 'web');

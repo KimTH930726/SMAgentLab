@@ -63,6 +63,10 @@ class BulkKnowledgeItem(BaseModel):
     # 있으면 같은 페이지의 기존 active 행을 이 등록이 성공할 때 원자적으로 교체한다.
     confluence_page_id: Optional[str] = None
     confluence_version: Optional[int] = None
+    # 원문 원장(2026-10-08) — 미리보기가 저장한 원문 id. 확정 때 청크에 연결하고 원문을 "사용 중"으로
+    source_document_id: Optional[int] = None
+    # 그 원문의 미리보기 조각 중 일부만 골라 등록했나 — 다시 분할이 뺀 조각을 되살리지 않게(리뷰 2026-10-08)
+    source_document_partial: bool = False
 
 
 class BulkCreateRequest(BaseModel):

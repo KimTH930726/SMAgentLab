@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
 import { ChevronRight } from 'lucide-react';
-import { getKnowledgeStructure, type KnowledgeStructure, type KnowledgeOutlineItem } from '../../api/knowledge';
+import { getKnowledgeStructure, rechunkSourceDocument, type KnowledgeStructure, type KnowledgeOutlineItem } from '../../api/knowledge';
 
 /**
  * 원문에서의 위치(2026-10-07) — 지식 상세·수정 창.
@@ -47,7 +48,47 @@ function OutlineRow({ item }: { item: KnowledgeOutlineItem }) {
   );
 }
 
-export function KnowledgeStructurePanel({ knowledgeId }: { knowledgeId: number }) {
+// 원문에서 다시 분할(2026-10-08 원문 원장) — 결과를 앱 모달로 알리고, 사람이 고친 조각이 있으면 한 번 더 확인
+function RechunkButton({ docId, namespace }: { docId: number; namespace: string }) {
+  const qc = useQueryClient();
+  const run = useMutation({
+    mutationFn: (force: boolean) => rechunkSourceDocument(docId, force),
+    onSuccess: async (r) => {
+      if (r.blocked) {
+        // 사람의 판단이 들어간 흔적 — 다시 나누면 원문 기준으로 되돌아간다(옛 조각은 폐기 상태로 남음)
+        const why = [
+          r.edited ? `내용을 고친 조각 ${r.edited}개` : '',
+          r.removed ? `삭제·반려한 조각 ${r.removed}개(다시 생김)` : '',
+          r.partial ? '등록 때 일부 조각만 고름(뺀 조각이 다시 생김)' : '',
+          r.mixed_category ? '조각마다 업무구분을 다르게 둠(하나로 통일됨)' : '',
+        ].filter(Boolean).join('\n· ');
+        const ok = await showConfirm(
+          `사람이 손댄 부분이 있습니다:\n· ${why}\n\n다시 나누면 원문 기준으로 바뀝니다(옛 조각은 폐기 상태로 남음). 진행할까요?`,
+          { tone: 'danger', confirmLabel: '다시 나누기' });
+        if (ok) run.mutate(true);
+        return;
+      }
+      if (!r.changed) {
+        void showAlert('지금 코드로 다시 나눠도 결과가 같습니다 — 바뀐 것이 없습니다.', { title: '원문에서 다시 분할' });
+        return;
+      }
+      const warn = r.quality?.warnings?.length ? `\n품질 확인 필요: ${r.quality.warnings.join(', ')}` : '';
+      void showAlert(`조각 ${r.old}개 → ${r.new}개로 다시 나눴습니다.${warn}`, { title: '원문에서 다시 분할', tone: 'success' });
+      qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
+      qc.invalidateQueries({ queryKey: ['knowledge-structure'] });
+    },
+    onError: (e: Error) => void showError(e),
+  });
+  return (
+    <button type="button" onClick={() => run.mutate(false)} disabled={run.isPending}
+      title="저장된 원문을 지금 코드로 다시 나눕니다 — 나누는 규칙이 고쳐졌을 때 사용. 결과가 같으면 아무것도 바뀌지 않습니다"
+      className="text-[11px] px-2 py-0.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700/60 dark:text-indigo-300 dark:hover:bg-indigo-950/40 disabled:opacity-50">
+      {run.isPending ? '다시 나누는 중…' : '원문에서 다시 분할'}
+    </button>
+  );
+}
+
+export function KnowledgeStructurePanel({ knowledgeId, canModify = false }: { knowledgeId: number; canModify?: boolean }) {
   const [showAll, setShowAll] = useState(false);
   const { data, isLoading, error } = useQuery<KnowledgeStructure>({
     queryKey: ['knowledge-structure', knowledgeId],
@@ -91,7 +132,15 @@ export function KnowledgeStructurePanel({ knowledgeId }: { knowledgeId: number }
         )}
       </summary>
       <div className="px-3 pb-3 space-y-1">
-        {data.source_file && <p className="text-[11px] text-slate-500 truncate">원문: {data.source_file}</p>}
+        <div className="flex flex-wrap items-center gap-2">
+          {data.source_file && <p className="text-[11px] text-slate-500 truncate">원문: {data.source_file}</p>}
+          {data.source_document
+            ? <span className="text-[11px] text-slate-500" title={`원문 원장 #${data.source_document.id} · ${data.source_document.chars.toLocaleString()}자 · 분할 코드 ${data.source_document.parser_version ?? '-'}`}>원문 보관됨</span>
+            : <span className="text-[11px] text-slate-500" title="원문 원장 도입(2026-10-08) 전에 등록돼 원문이 저장돼 있지 않습니다 — 다시 등록하면 보관됩니다">원문 보관 안 됨</span>}
+          {canModify && data.source_document?.status === 'active' && (
+            <span className="ml-auto"><RechunkButton docId={data.source_document.id} namespace={data.namespace} /></span>
+          )}
+        </div>
         <ol className="space-y-0.5 max-h-72 overflow-y-auto">
           {visible.map((o) => <OutlineRow key={o.id} item={o} />)}
         </ol>

@@ -69,6 +69,17 @@ async def _auto_category(namespace: str, content: str) -> str:
     return _UNSORTED_CATEGORY
 
 
+@router.post("/source-documents/{doc_id}/rechunk")
+async def rechunk_source_document(doc_id: int, force: bool = Query(default=False), user: dict = Depends(get_current_user)):
+    """원문 원장의 원문을 지금 코드로 다시 분할(2026-10-08) — 파이프라인 결함 뒤 재처리. 파트 수정 권한 필요.
+    결과가 같으면 변화 없음, 사람이 고친 청크가 있으면 force 없이는 멈춘다(blocked)."""
+    await _require_resource_namespace(await service.get_source_document_namespace(doc_id), user, "Source document not found")
+    try:
+        return await service.rechunk_source_document(doc_id, force=force, user=user)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{knowledge_id}/structure")
 async def get_knowledge_structure(knowledge_id: int, user: dict = Depends(get_current_user)):
     """지식의 문서 안 위치 — 분할 방식별(섹션 구조/문서 순서/단건) 상위 경로·앞뒤 청크·검색 때 함께 붙는 이웃(2026-10-07)."""
@@ -423,6 +434,36 @@ async def import_text_split(body: _TextSplitBody, user: dict = Depends(get_curre
 class _TextSplitPreviewBody(_BM):
     raw_text: str
     strategy: str = "auto"
+    namespace: Optional[str] = None   # 원문 원장 초안 저장용(2026-10-08) — 없으면 원장 없이
+
+
+async def _ledger_ns_id(namespace: Optional[str], user: dict) -> Optional[int]:
+    """원문 원장 초안을 저장할 파트(2026-10-08). 파트를 안 보낸 옛 호출은 원장 없이 진행(호환)."""
+    if not namespace:
+        return None
+    from core.database import get_conn, resolve_namespace_id
+    try:
+        await check_namespace_ownership(namespace, user)
+    except HTTPException:
+        return None   # 조회 전용 사용자도 미리보기는 그대로(원장만 건너뜀 — 어차피 등록 권한이 없다, 리뷰 2026-10-08)
+    async with get_conn() as conn:
+        return await resolve_namespace_id(conn, namespace)
+
+
+async def _save_ledger_draft(ns_id: Optional[int], doc, strategy: Optional[str], user: dict,
+                             source_ref: Optional[str] = None) -> Optional[int]:
+    if ns_id is None:
+        return None
+    from core.database import get_conn
+    from agents.knowledge_rag.ingestion.source_ledger import save_draft_for_parsed
+    try:
+        async with get_conn() as conn:
+            return await save_draft_for_parsed(conn, ns_id, doc, chunk_strategy=strategy, user_id=user.get("id"),
+                                               source_ref=source_ref)
+    except Exception:
+        # 원장 저장 실패가 미리보기를 막지 않게 — 원장 없이 등록되면 "다시 분할"만 안 될 뿐(로그로 추적)
+        logger.warning("원문 원장 초안 저장 실패 — 원장 없이 진행", exc_info=True)
+        return None
 
 
 @router.post("/import/text-split/preview")
@@ -454,8 +495,12 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
             logger.warning("텍스트 분할 전략 자동 감지 실패 (auto 사용): %s", e)
 
     split = service.split_text_to_items(body.raw_text, strategy)
+    from agents.knowledge_rag.ingestion.adapters import ParsedDocument
+    doc_id = await _save_ledger_draft(await _ledger_ns_id(body.namespace, user),
+                                      ParsedDocument(source_type="paste", source_name="텍스트 직접입력", raw_text=body.raw_text),
+                                      strategy, user, source_ref=None)
     return {"chunks": [x["content"] for x in split], "heading_paths": [x["heading_path"] for x in split],
-            "count": len(split), "detected_strategy": detected_strategy}
+            "count": len(split), "detected_strategy": detected_strategy, "source_document_id": doc_id}
 
 
 # ─── 파일 업로드 + 자동 청킹 (Tier 2) ────────────────────────────────────────
@@ -651,6 +696,7 @@ async def import_file(
 async def preview_file_upload(
     file: UploadFile = File(...),
     strategy: Optional[str] = Form(None),
+    namespace: Optional[str] = Form(None),
     user: dict = Depends(get_current_user),
 ):
     """파일 업로드 미리보기 — strategy 미지정(auto)일 때만 LLM Analyzer로 전략 자동
@@ -682,8 +728,11 @@ async def preview_file_upload(
             pass
 
     chunks = chunk_document(doc, strategy=strategy)
+    doc_id = await _save_ledger_draft(await _ledger_ns_id(namespace, user), doc, strategy, user,
+                                      source_ref=file.filename or None)
 
     return {
+        "source_document_id": doc_id,
         "source_name": doc.source_name,
         "source_type": doc.source_type,
         "page_count": doc.metadata.get("page_count"),
@@ -783,12 +832,17 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
         pass
 
     chunks = chunk_document(doc, strategy=strategy)
+    doc_id = await _save_ledger_draft(await _ledger_ns_id(body.namespace, user), doc, strategy, user)
     return {
+        "source_document_id": doc_id,
         "source_name": doc.source_name,
         "source_type": doc.source_type,
         "total_chars": len(doc.raw_text),
         "sections": len(doc.sections),
-        "chunks": [{"idx": c.idx, "text": c.text, "title": c.section_title, "heading_path": list(c.heading_path or [])} for c in chunks],
+        # 컨플루언스 단일 페이지도 일괄 등록·원장 다시 분할과 같은 상위 경로(페이지 제목 포함, 리뷰 2026-10-08)
+        "chunks": [{"idx": c.idx, "text": c.text, "title": c.section_title,
+                    "heading_path": (_enrich_heading_path(doc, c.heading_path, doc.metadata.get("title") or doc.source_name)
+                                     if doc.source_type == "confluence" else list(c.heading_path or []))} for c in chunks],
         "chunk_count": len(chunks),
         "detected_strategy": detected_strategy,
         "url": body.url,
@@ -1002,8 +1056,10 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
             if ns_id is not None else (body.category or _UNSORTED_CATEGORY)
         )
         page_start = idx
+        page_doc_id = await _save_ledger_draft(ns_id, f["doc"], body.chunk_strategy, user, source_ref=str(f["page_id"]))
         for c in f["chunks"]:
             chunks_out.append({
+                "source_document_id": page_doc_id,
                 "idx": idx,
                 "page_id": f["page_id"],
                 "page_title": f["title"],

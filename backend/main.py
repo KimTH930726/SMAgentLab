@@ -1380,6 +1380,44 @@ async def _migrate_rename_opslens(conn) -> None:
         logger.info("[migrate #67] 프롬프트 자기소개 OpsLens로: %s", r)
 
 
+async def _migrate_source_document(conn) -> None:
+    """지식 원문 원장 (2026-10-08, #73) — 원문 = SoT, 청크·임베딩 = 다시 만들 수 있는 파생물(업계 표준, 사용자 결정 10/07).
+    docs/tech/source-ledger-plan.md. 미리보기 때 초안 → 확정 때 사용 중 → 같은 원본 위치 재등록 시 교체됨. 멱등."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rag_source_document (
+            id SERIAL PRIMARY KEY,
+            namespace_id INTEGER NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            source_type VARCHAR(30) NOT NULL,
+            source_ref TEXT,
+            title TEXT,
+            parent_title TEXT,
+            raw_format VARCHAR(10) NOT NULL,
+            raw_content TEXT NOT NULL,
+            content_hash CHAR(64) NOT NULL,
+            source_version INTEGER,
+            chunk_strategy VARCHAR(30),
+            parser_version VARCHAR(20),
+            status VARCHAR(20) NOT NULL DEFAULT 'draft',
+            superseded_by INTEGER REFERENCES rag_source_document(id) ON DELETE SET NULL,
+            created_by_user_id INTEGER,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            activated_at TIMESTAMPTZ
+        )""")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_source_doc_hash ON rag_source_document (namespace_id, content_hash)")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_source_doc_ref ON rag_source_document (namespace_id, source_type, source_ref)")
+    await conn.execute(
+        "ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS source_document_id INTEGER "
+        "REFERENCES rag_source_document(id) ON DELETE SET NULL")
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_source_doc ON rag_knowledge (source_document_id) WHERE source_document_id IS NOT NULL")
+    # 사람이 내용을 고친 시각 — updated_at은 트리거라 상태만 바뀌어도 갱신돼 "사람이 고쳤나"를 못 가린다(다시 분할이 덮지 않게)
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS content_edited_at TIMESTAMPTZ")
+    # 등록 때 미리보기 조각 중 일부만 골랐나 — 다시 분할이 사람이 뺀 조각을 되살리지 않게
+    await conn.execute("ALTER TABLE rag_source_document ADD COLUMN IF NOT EXISTS registered_partial BOOLEAN NOT NULL DEFAULT FALSE")
+
+
 async def _migrate_rename_unsorted_category(conn) -> None:
     """지식 업무구분 "미분류" → "분류 확인 필요"(2026-10-08, #72) — AI가 기존 업무구분 중 못 골랐을 때 들어가는 칸. 이름이 이상하고
     사람이 정해야 하는 상태가 안 드러났다(사용자). 같은 파트에 새 이름이 이미 있으면 옛 칸의 지식을 새 칸으로 옮기고 옛 칸을 지운다.
@@ -1659,6 +1697,7 @@ async def _run_migrations() -> None:
         await _migrate_answer_eval_run(conn)
         await _migrate_ingestion_quality(conn)
         await _migrate_rename_unsorted_category(conn)
+        await _migrate_source_document(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

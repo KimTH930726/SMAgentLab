@@ -567,15 +567,15 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
             (namespace_id, content, embedding, base_weight, category, created_by_part, created_by_user_id,
              source_file, source_chunk_idx, source_type, ingestion_job_id, status,
              logical_document_id, version, supersedes_id, embedding_model, reviewed_at, owner,
-             confluence_page_id, confluence_version, heading_path)
+             confluence_page_id, confluence_version, heading_path, source_document_id, content_edited_at)
         VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, 'active',
-                $12, $13, $14, $15, NOW(), $16, $17, $18, $19)
+                $12, $13, $14, $15, NOW(), $16, $17, $18, $19, $20, NOW())
         RETURNING id
     """, ns_id, content, str(embedding), old["base_weight"], old["category"], old["created_by_part"],
         old["created_by_user_id"], old["source_file"], old["source_chunk_idx"], old["source_type"],
         old["ingestion_job_id"], old["logical_document_id"] or old["id"], (old["version"] or 1) + 1, old["id"],
         settings.embedding_model, old["owner"], old["confluence_page_id"], old["confluence_version"],
-        old["heading_path"])
+        old["heading_path"], old.get("source_document_id"))   # 원문 연결 유지 — 다시 분할이 이 정정본을 보고 멈추게(2026-10-08)
     await conn.execute("UPDATE rag_knowledge SET status = 'deprecated' WHERE id = $1", old["id"])
     # 이 지식으로 메운 지식 공백은 새 버전을 가리키게 — 안 그러면 통계 목록이 폐기된 옛 버전을 "메운 지식"으로 잡는다
     await conn.execute("UPDATE ops_query_log SET resolved_knowledge_id = $2 WHERE resolved_knowledge_id = $1",

@@ -99,6 +99,7 @@
 | 70 | `eval_answer_run` (신규) | `CREATE TABLE IF NOT EXISTS` — label, variant, total_n, counts/by_type(JSONB), retrieval_ok·retrieval_ok_but_wrong, judge_model, notes | 최종 답변 정확도 실행 이력(집계만, 질문·답 원문 없음). `scripts/eval_answers.py report --save`가 쓰고 평가 게이트 "답변 정확도" 탭이 읽음. #69에 evidence_questions(TEXT[]) 추가. `_migrate_answer_eval_run` (v2.128) |
 | 71 | `rag_ingestion_job.quality` | `ADD COLUMN IF NOT EXISTS quality JSONB` | 등록 묶음 품질 검사 집계(이웃 청크 중복·매달린 제목·제목만 청크·상위 맥락 수·경고 문구, 본문 없음). job 끝에 `ingestion/quality.record_job_quality`가 쓰고 등록 진행 화면이 경고로 표시. `_migrate_ingestion_quality` (v2.129) |
 | 72 | `rag_knowledge_category`·`rag_knowledge.category` | 이름 변경 `미분류` → `분류 확인 필요`(같은 파트에 새 이름이 있으면 옛 칸 삭제·지식 이동) | AI가 기존 업무구분 중 못 골랐을 때 들어가는 칸 — 이름이 이상하고 사람이 정해야 하는 상태가 안 드러났다(사용자 2026-10-08). 정책서 "미분류 조각"과 무관. `_migrate_rename_unsorted_category` (v2.129) |
+| 73 | `rag_source_document` (신규) + `rag_knowledge.source_document_id`·`content_edited_at` | `CREATE TABLE IF NOT EXISTS` — namespace_id, source_type, source_ref, title, parent_title, raw_format(html/text), raw_content, content_hash, source_version, chunk_strategy, parser_version, status(draft/active/superseded), superseded_by. 인덱스 (namespace_id, content_hash)·(namespace_id, source_type, source_ref)·지식 source_document_id | 지식 원문 원장(원문 = SoT, 청크 = 파생물). 미리보기가 초안 저장 → 확정 때 사용 중·연결, 같은 원본 위치 재등록 시 교체됨. `content_edited_at`은 사람이 내용을 고친 시각(다시 분할이 덮지 않게 — updated_at은 트리거라 못 씀). `_migrate_source_document` (v2.130) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.
