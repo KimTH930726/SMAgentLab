@@ -136,6 +136,7 @@ class ChatContext:
     term_matches: list = field(default_factory=list)
     signals: dict = field(default_factory=dict)
     abstain: bool = False
+    clarify: Optional[dict] = None   # 재질문(목록이 너무 넓거나 업무가 여럿) — 있으면 답 대신 선택지를 보낸다(v2.134)
 
 
 def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: float) -> bool:
@@ -155,7 +156,8 @@ async def build_chat_context(
     namespace: str, search_question: str, query_vec: list[float], *,
     top_k: int, w_vector: float, w_keyword: float, categories: Optional[list[str]] = None,
     glossary_mode: Optional[str] = None, glossary_entries: Optional[list] = None,
-    policy_top_k: int = POLICY_CONTEXT_TOP_K, category_lists: bool = True,
+    policy_top_k: int = POLICY_CONTEXT_TOP_K, category_lists: bool = True, clarify_scope: Optional[str] = None,
+    list_question: Optional[str] = None,
 ) -> ChatContext:
     """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB)."""
     term_matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(
@@ -200,8 +202,12 @@ async def build_chat_context(
             async with get_conn() as conn:
                 ns_id = await resolve_namespace_id(conn, namespace)
             if ns_id is not None:
+                # 분류 목록·재질문은 "이번 질문"만으로 — 멀티턴 보강(직전 턴을 붙인 search_question)으로 고르면 앞 턴의 범위가 넘어온다
+                # (2026-10-12 실측: "주문 > 장바구니" 다음 "주문 정책 전부"가 장바구니 10개만). 검색 재현율용 보강은 위 검색에만.
+                lq = list_question or search_question
+                lvec = query_vec if lq == search_question else await embedding_service.embed(lq)
                 category = await category_list.find_category_list(
-                    ns_id, search_question, query_vec, keyword_nav=looks_like_navigation_query(search_question))
+                    ns_id, lq, lvec, keyword_nav=looks_like_navigation_query(lq), scope=clarify_scope)
         except Exception as e:
             logger.warning("분류 목록 조회 실패(검색 결과만으로 진행): %s", e)
 
@@ -239,12 +245,15 @@ async def build_chat_context(
         "max_param_rank": max((p.score for p in policy_result.params), default=0.0),
         "top_narrative": max((n.score for n in policy_result.narratives), default=0.0),
         "category_items": category.total if category else 0,
+        "scope_missed": bool(category and category.scope_missed),
     }
     return ChatContext(
         results=results, policy_result=policy_result, common_codes=common_codes, db_columns=db_columns,
         llm_context=llm_context, enriched_query=enriched_query, mapped_term=mapped_term,
         term_matches=term_matches, signals=signals,
         abstain=should_abstain(signals, settings.policy_abstain_min_score, settings.policy_abstain_min_param_rank),
+        # 재질문 선택에서 온 질문(clarify_scope 있음)엔 다시 묻지 않는다 — 대화가 같은 질문으로 맴돌지 않게
+        clarify=None if clarify_scope else category_list.clarify_for(category, list_question or search_question),
     )
 
 
@@ -281,6 +290,7 @@ class KnowledgeRagAgent(AgentBase):
         user_credentials: Optional[dict] = context.get("user_credentials")
         inhouse_conv_id: Optional[str] = context.get("inhouse_conv_id")
         categories: Optional[list[str]] = context.get("categories")
+        clarify_scope: Optional[str] = context.get("clarify_scope")
 
         full_answer = ""
         token_count = 0
@@ -308,7 +318,8 @@ class KnowledgeRagAgent(AgentBase):
             cache_vec = await embedding_service.embed(sem_cache.normalize_query(query))
 
             # ── Semantic Cache 조회 ──
-            cached = await sem_cache.get_cached(namespace, "knowledge_rag", cache_vec)
+            # 재질문에서 범위를 고른 요청은 캐시를 읽지도 쓰지도 않는다 — 범위 없이 답한 비슷한 질문의 답이 걸리면 고른 범위와 무관
+            cached = None if clarify_scope else await sem_cache.get_cached(namespace, "knowledge_rag", cache_vec)
             if cached:
                 cached_citations = cached.get("policy_citations", [])
                 # 캐시 응답도 근거(results)를 메시지에 남긴다 — 안 남기면 다시 열었을 때 근거 카드가 사라지고,
@@ -340,10 +351,13 @@ class KnowledgeRagAgent(AgentBase):
             yield {"type": "status", "step": "context", "message": "용어 확인 및 관련 문서 검색 중..."}
             cc, history = await asyncio.gather(
                 build_chat_context(namespace, search_question, query_vec, top_k=top_k, w_vector=w_vector,
-                                   w_keyword=w_keyword, categories=categories),
+                                   w_keyword=w_keyword, categories=categories, clarify_scope=clarify_scope,
+                                   list_question=query),
                 memory.build_context_history(conversation_id, query_vec),
             )
             results, policy_result, llm_context, mapped_term = cc.results, cc.policy_result, cc.llm_context, cc.mapped_term
+            if cc.signals.get("scope_missed"):
+                yield {"type": "status", "step": "context", "message": "고른 범위를 찾지 못해 질문 내용으로 다시 찾았습니다"}
             policy_citations: list[dict] = []
 
             async with get_conn() as conn:
@@ -360,6 +374,15 @@ class KnowledgeRagAgent(AgentBase):
 
             # 근거 없음 즉시 판정(v2.128, 설정으로 켬) — LLM을 안 불러 지어낼 기회도, 게이트웨이 대기(100초+)도 없다.
             # 캐시에는 넣지 않는다(지식이 새로 들어오면 바로 답해야 하는데 고정 거절이 TTL 동안 남는다).
+            # 재질문(v2.134): 목록이 너무 넓거나 같은 이름이 여러 업무에 있으면 답 대신 선택지 — LLM 호출 없음. 같은 대화에 남아 다음 선택이
+            # 그대로 이어진다(메시지 metadata에 선택지 저장 → 다시 열어도 버튼). 질의 기록·캐시엔 안 남긴다(선택한 다음 질문이 남음)
+            if cc.clarify:
+                await update_assistant_message(msg_id, cc.clarify["message"], "completed", metadata={"clarify": cc.clarify})
+                yield {"type": "clarify", **cc.clarify}
+                yield {"type": "token", "data": cc.clarify["message"]}
+                yield {"type": "done", "message_id": msg_id, "status": "completed"}
+                return
+
             if cc.abstain:
                 await update_assistant_message(msg_id, NO_KNOWLEDGE_MARKER, "completed")
                 yield {"type": "token", "data": NO_KNOWLEDGE_MARKER}
@@ -442,7 +465,7 @@ class KnowledgeRagAgent(AgentBase):
                                    had_context=had_context)
 
             # ── Semantic Cache 저장 (LLM 정상 응답 시만, 결과 유무 무관 — 연결 실패·게이트웨이 거부는 제외) ──
-            if not is_llm_failure(final_answer):
+            if not is_llm_failure(final_answer) and not clarify_scope:
                 await sem_cache.set_cached(namespace, "knowledge_rag", cache_vec, {
                     "answer": final_answer,
                     "mapped_term": mapped_term,

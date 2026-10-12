@@ -13,7 +13,7 @@ import { getCategories, suggestCategory } from '../../api/namespaces';
 import { MessageItem } from './MessageItem';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { createCorrection, getMyCorrections, markCorrectionsSeen } from '../../api/corrections';
-import type { ChatMessage, PolicyCitation } from '../../types';
+import type { ChatMessage, ClarifyOption, ClarifyPrompt, PolicyCitation } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
 import { showError } from '../../store/useDialogStore';
 
@@ -115,7 +115,7 @@ function PipelineStepsToggle({ steps, answering = false }: { steps: PipelineStep
   );
 }
 
-function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null } | null }[]): ChatMessage[] {
+function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null; clarify?: ClarifyPrompt | null } | null }[]): ChatMessage[] {
   // Fix out-of-order pairs from old data (parallel saves could put assistant before user)
   // Check pairs at step=2: (0,1), (2,3), ... and swap reversed pairs
   const ordered = [...msgs];
@@ -155,6 +155,7 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
         sqlResult: m.metadata?.sql_result ?? null,
         tableResult: m.metadata?.table_result ?? null,
         chartResult: m.metadata?.chart_result ?? null,
+        clarify: m.metadata?.clarify ?? null,
       });
     }
   }
@@ -537,6 +538,28 @@ export function ChatContainer() {
     if (!input.trim() || streamActive || !namespace) return;
     const question = input.trim();
     setInput('');
+    await sendQuestion(question);
+  };
+
+  // 재질문 선택(v2.134) — 같은 대화에서 고른 범위로 다시 묻는다(scope가 있으면 서버가 다시 묻지 않음)
+  const handleClarify = (opt: ClarifyOption) => {
+    if (streamActive || !namespace) return;
+    void sendQuestion(opt.query, opt.scope);
+  };
+  const handleClarifyOther = () => textareaRef.current?.focus();
+
+  // 두 번 나가지 않게 — 업무구분 자동 감지를 기다리는 동안 재질문 버튼·Enter를 또 눌러도(재리뷰 2026-10-12)
+  const sendingRef = useRef(false);
+  const sendQuestion = async (question: string, clarifyScope: string | null = null) => {
+    if (!namespace || sendingRef.current) return;
+    sendingRef.current = true;
+    try {
+      await sendQuestionInner(question, clarifyScope);
+    } finally {
+      sendingRef.current = false;
+    }
+  };
+  const sendQuestionInner = async (question: string, clarifyScope: string | null) => {
     userScrolledUpRef.current = false;
 
     // Increment epoch to invalidate any in-flight getMessages from previous stream completion
@@ -558,6 +581,7 @@ export function ChatContainer() {
       topK: searchConfig.topK,
       conversationId,
       categories: resolvedCategories,
+      clarifyScope,
       agentType: selectedAgent ?? 'knowledge_rag',
       onConversationCreated: (id) => {
         // Guard: if stream was already stopped/cleared, don't navigate
@@ -619,7 +643,9 @@ export function ChatContainer() {
         )}
 
         {displayMessages.map((msg, i) => (
-          <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace} />
+          <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace}
+            {...(i === displayMessages.length - 1 && msg.clarify && !isLoading
+              ? { onClarify: handleClarify, onClarifyOther: handleClarifyOther } : {})} />
         ))}
 
         {/* Pipeline steps — inline below last message */}

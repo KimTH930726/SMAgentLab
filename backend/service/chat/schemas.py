@@ -23,6 +23,8 @@ class ChatRequest(BaseModel):
     categories: Optional[list[str]] = None
     approved_tool: Optional[ApprovedTool] = None
     selected_tool_id: Optional[int] = None
+    # 재질문에서 고른 범위(분류 경로, "*"는 전부) — 있으면 그 범위로 답하고 다시 묻지 않는다(v2.134)
+    clarify_scope: Optional[str] = None
 
 
 class KnowledgeResult(BaseModel):

@@ -16,8 +16,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+import logging
+
 from core.database import get_conn
 
+logger = logging.getLogger(__name__)
 _NUM = re.compile(r"^\s*[\d\-]+[.)]\s*")
 _NON_WORD = re.compile(r"[\s\W_]+")
 _MIN_SIM = 0.58
@@ -27,6 +30,13 @@ except ValueError:
     __import__("logging").getLogger(__name__).warning("CATEGORY_SPECIFIC_MARGIN 값이 숫자가 아님 — 0.15 사용")
     _SPECIFIC_MARGIN = 0.15
 _MAX_ITEMS = 40
+# 재질문(2026-10-12, 사용자 결정 "20개로 시작해서 조절") — 주제만 말한 질문의 목록이 이보다 크면 어느 부분을 볼지 먼저 묻는다
+try:
+    CLARIFY_MAX_ITEMS = int(__import__("os").environ.get("CATEGORY_CLARIFY_MAX_ITEMS", "20"))
+except ValueError:
+    CLARIFY_MAX_ITEMS = 20
+_CLARIFY_MIN_COVER = 0.8   # 하위 분류 선택지가 목록의 이 비율 이상을 덮어야 하위 분류로 묻는다
+_CLARIFY_MAX_OPTIONS = 3   # 범위 선택지 수(+ "전부 보기" — 선택지 5개 이하가 업계 관행, 화면의 "기타(직접 입력)" 포함)
 _CACHE_TTL = 600.0   # 정책 임포트·정정이 분류를 바꿀 수 있어 10분마다 다시 만든다(분류 수백 개 임베딩 ~수 초)
 
 
@@ -40,6 +50,10 @@ class CategoryIndex:
     item_ids: dict[str, set[int]] = field(default_factory=dict)   # 정규화 이름 → 정책 id
     display: dict[str, str] = field(default_factory=dict)          # 정규화 이름 → 화면용 이름(번호 뺀 첫 표기)
     vectors: dict[str, list[float]] = field(default_factory=dict)
+    # 같은 이름이 어느 위치(업무 경로)들에 있나 — 정규화 이름 → {경로("배송 > B2B 배송정책 > 공통"): 정책 id}. 재질문·범위 좁히기용
+    places: dict[str, dict[str, set[int]]] = field(default_factory=dict)
+    # 경로 → {바로 아래 하위 분류 경로: 정책 id}
+    children: dict[str, dict[str, set[int]]] = field(default_factory=dict)
     built_at: float = 0.0
 
 
@@ -111,12 +125,17 @@ async def _index(conn, ns_id: int) -> CategoryIndex:
     idx = CategoryIndex(built_at=time.time())
     for r in await conn.fetch(
             "SELECT id, category_path FROM policy_item WHERE namespace_id = $1 AND status NOT IN ('deprecated', 'rejected')", ns_id):
-        for cat in r["category_path"] or []:
+        segs = [_NUM.sub("", c).strip() for c in (r["category_path"] or [])]
+        for i, cat in enumerate(r["category_path"] or []):
             n = norm_category(cat)
+            path = " > ".join(segs[:i + 1])
+            if i + 1 < len(segs) and len(norm_category(segs[i + 1])) >= 2:
+                idx.children.setdefault(path, {}).setdefault(" > ".join(segs[:i + 2]), set()).add(r["id"])
             if len(n) < 2:
                 continue
             idx.item_ids.setdefault(n, set()).add(r["id"])
             idx.display.setdefault(n, _NUM.sub("", cat).strip())
+            idx.places.setdefault(n, {}).setdefault(path, set()).add(r["id"])
     for n, label in idx.display.items():
         idx.vectors[n] = await embedding_service.embed(label)
     _cache[ns_id] = idx
@@ -128,17 +147,78 @@ class CategoryList:
     names: list[str]
     total: int
     lines: list[str]
+    places: list[tuple[str, int]] = field(default_factory=list)     # 고른 이름이 있는 위치(경로, 정책 수) — 2곳 이상이면 업무가 다른 같은 이름
+    children: list[tuple[str, int]] = field(default_factory=list)   # 위치가 하나일 때 그 바로 아래 하위 분류(경로, 정책 수)
+    explicit_all: bool = False   # 질문이 "전부·모든·목록"으로 전체를 명시(키워드 판별) — 그러면 묻지 않고 다 보여준다
+    scope_missed: bool = False   # 재질문에서 고른 범위를 못 찾아 질문 글로 다시 찾음(분류가 바뀐 경우 등) — 화면에 알린다
 
     def block(self) -> str:
         more = f" — 그중 {len(self.lines)}개만 표시" if self.total > len(self.lines) else ""
         # "전부·목록" 질문의 답 형식(사용자 결정 2026-10-12): 빠짐없이, 정책마다 "정책명 — 한 줄 요약". 세부 조건은 묻는 사람이 다음 질문으로
+        # 같은 이름이 여러 업무에 있으면 업무(경로)별로 묶어 — 섞어서 한 분류처럼 보이지 않게(재질문 대신, v2.134)
+        group = (f" 같은 이름이 여러 업무({', '.join(p for p, _ in self.places)})에 있으니 업무별로 묶어 제목을 달아라."
+                 if len(self.places) >= 2 else "")
         return (f"[분류 목록: {', '.join(self.names)} — 정책 {self.total}개{more}. \"전부·목록\" 질문이면 이 목록의 정책을 빠짐없이, "
-                f"정책마다 \"정책명 — 한 줄 요약\"으로 답하고 세부 조건은 궁금한 정책을 다시 물어보라고 안내]\n"
+                f"정책마다 \"정책명 — 한 줄 요약\"으로 답하고 세부 조건은 궁금한 정책을 다시 물어보라고 안내.{group}]\n"
                 + "\n".join(self.lines))
 
 
+_ALL_WORDS = ("전부", "모든", "전체", "모두", "목록", "한번에", "한눈에", "다보여", "싹다")
+
+
+def says_all(question: str, names: list[str] = ()) -> bool:
+    """질문이 전체를 명시했나("배송 정책 전부 보여줘") — 키워드 판별기를 안 거치고 주제 질문 경로로 온 것도 잡는다(2026-10-12 진단).
+    분류 이름 안의 단어("전체취소", "목록관리")는 빼고 본다(리뷰 2026-10-12)."""
+    qn = norm_category(question)
+    for n in sorted((norm_category(x) for x in names), key=len, reverse=True):
+        if n:
+            qn = qn.replace(n, "")
+    return any(w in qn for w in _ALL_WORDS)
+
+
+def _narrow_by_parent(question: str, places: dict[str, set[int]]) -> dict[str, set[int]]:
+    """같은 이름이 여러 위치에 있을 때 질문에 상위 이름이 나온 위치만("클레임 공통 정책" → 클레임 > 공통). 못 좁히면 그대로."""
+    # 질문에 나온 상위 이름을 긴 것부터 지워 가며 찾는다 — "주문서 공통"에서 "주문"이 "주문서" 안에 있다고 잡히지 않게(리뷰 2026-10-12)
+    qn = norm_category(question)
+    for leaf in sorted({norm_category(p.split(" > ")[-1]) for p in places}, key=len, reverse=True):
+        if leaf:
+            qn = qn.replace(leaf, "")
+    parents = sorted({norm_category(seg) for p in places for seg in p.split(" > ")[:-1] if len(norm_category(seg)) >= 2},
+                     key=len, reverse=True)
+    hit = set()
+    for n in parents:
+        if n in qn:
+            hit.add(n)
+            qn = qn.replace(n, "")
+    kept = {p: ids for p, ids in places.items() if any(norm_category(seg) in hit for seg in p.split(" > ")[:-1])}
+    return kept if 0 < len(kept) < len(places) else places
+
+
+def clarify_for(cl: Optional[CategoryList], question: str) -> Optional[dict]:
+    """재질문할지 — 대화가 끊기지 않게 좁은 규칙 하나만(LLM 없음, 2026-10-12). 아니면 None(평소대로 답).
+    묻는 경우 = 분류 목록이 붙은 질문 중 **주제만 말하고**("재고 정책 좀" — "전부·모든·목록"으로 전체를 명시하지 않음) 정책이
+    CLARIFY_MAX_ITEMS개 초과일 때. 선택지 = 업무가 여럿이면 업무별, 하나면 하위 분류별(정책 많은 순 최대 3) + "전부 보기".
+    안 묻는 경우: 일반 질문(목록 없음), 전체를 명시한 질문(다 보여주되 업무별로 묶음), 작은 목록, 재질문에서 고른 질문(호출부가 막음).
+    진단(10/12): 업무가 여럿이면 묻는 규칙은 골든 탐색형 6/24·실제 질문 1건(구체 질문)에 걸려 버림 — "배치 정책 전부"처럼 서비스마다
+    같은 분류가 있는 건 다 보여주는 게 맞았다."""
+    if not cl or cl.explicit_all or cl.total <= CLARIFY_MAX_ITEMS:
+        return None
+    name = cl.names[0] if cl.names else ""
+    if len(cl.places) >= 2:
+        opts, msg = cl.places, f"'{name}' 정책이 여러 업무에 {cl.total}개 있어요. 어느 쪽을 볼까요?"
+    elif len(cl.children) >= 2 and sum(n for _, n in cl.children) >= cl.total * _CLARIFY_MIN_COVER:
+        # 하위 분류들이 목록 대부분을 덮을 때만 — 분류에 바로 붙은 정책이 많으면 하위로 나눠 물어도 대부분이 "전부 보기"에만 있다(리뷰)
+        opts, msg = cl.children, f"'{name}' 정책이 {cl.total}개로 많아요. 어느 부분을 볼까요?"
+    else:
+        return None
+    opts = opts[:_CLARIFY_MAX_OPTIONS]
+    options = [{"label": f"{p} ({n}개)", "scope": p, "query": f"{p} 정책 전부 보여줘"} for p, n in opts]
+    options.append({"label": f"전부 보기 ({cl.total}개)", "scope": "*", "query": question})
+    return {"message": msg, "options": options}
+
+
 async def find_category_list(ns_id: int, question: str, query_vec: list[float], *,
-                             keyword_nav: bool) -> Optional[CategoryList]:
+                             keyword_nav: bool, scope: Optional[str] = None) -> Optional[CategoryList]:
     """대상 분류의 정책 목록(분류 경로 > 정책명: 본문 첫 줄). 두 경로:
     - keyword_nav(키워드 판별기 "전체·모든·목록…"가 잡음): 분류 이름 글자 매칭 → 없으면 의미 1위(_MIN_SIM 이상). 같은 이름은 합침
     - 그 외: 질문이 "분류 이름 + 일반 표현"뿐일 때만(is_topic_overview — "재고 정책 좀"). 여러 분류면 함께 속한 정책만
@@ -149,7 +229,18 @@ async def find_category_list(ns_id: int, question: str, query_vec: list[float], 
         if not idx.item_ids:
             return None
         names = list(idx.item_ids)
-        if keyword_nav:
+        scoped = None
+        if scope and scope != "*":
+            # 재질문에서 고른 범위 — 경로로 바로 찾는다(질문 글을 다시 해석하지 않아 "클레임 > 공통"이 "클레임" 전체로 새지 않는다)
+            for n, pl in idx.places.items():
+                if scope in pl:
+                    scoped = (n, pl[scope])
+                    break
+        if scope and scope != "*" and not scoped:
+            logger.warning("재질문에서 고른 범위를 찾지 못함(분류가 바뀌었을 수 있음) — 질문 글로 다시 찾음: %s", scope)
+        if scoped:
+            picked, ids = [scoped[0]], sorted(scoped[1])
+        elif keyword_nav:
             sims = {n: sum(a * b for a, b in zip(query_vec, v)) for n, v in idx.vectors.items()}
             picked = pick_categories(question, names, sims)
             sets = [idx.item_ids[n] for n in picked]
@@ -159,10 +250,41 @@ async def find_category_list(ns_id: int, question: str, query_vec: list[float], 
             sets = [idx.item_ids[n] for n in picked]
             both = set.intersection(*sets) if sets else set()
             ids = sorted(both or (min(sets, key=len) if sets else set()))
+        if keyword_nav and not scoped:
+            # 질문에 상위·하위 이름이 함께 나오면("클레임 공통 정책") 하위 위치로 — 글자 수로만 고르면 긴 상위("클레임" 39개)가 이겼다
+            # (2026-10-12 테스트로 발견). 상위 이름이 그 위치의 조상인 경우만이라 엉뚱한 분류로 새지 않는다.
+            qn = norm_category(question)
+            lex_all = {n for n in names if len(n) >= 2 and n in qn}
+            # 이미 고른 이름이 그 위치의 조상일 때만(고른 것보다 더 구체적일 때만) — "주문서 쿠폰정책"을 고른 걸 "주문서"로 되돌리지 않게
+            specific = {p: (n, pid) for n in lex_all for p, pid in idx.places.get(n, {}).items()
+                        if {norm_category(seg) for seg in p.split(" > ")[:-1]} & (set(picked) - {n})}
+            # 서로 조상·자손인 위치만 깊은 쪽으로(배송 > 공통 / 배송 > B2B > 공통처럼 조상 관계가 아니면 둘 다 — 재리뷰 2026-10-12)
+            specific = {p: v for p, v in specific.items() if not any(q.startswith(p + " > ") for q in specific)}
+            if specific:
+                picked = sorted({n for n, _ in specific.values()})
+                ids = sorted(set().union(*(pid for _, pid in specific.values())))
         if not picked or not ids:
             return None
+        if scoped:
+            places = {scope: set(ids)}
+        else:
+            idset = set(ids)
+            places = {p: pid & idset for n in picked for p, pid in idx.places.get(n, {}).items() if pid & idset}
+            # 같은 이름이 자기 아래에 또 있으면("재고" > "재고") 조상 하나로 — 다른 업무가 아니다(실제 질문 진단 2026-10-12)
+            places = {p: v for p, v in places.items() if not any(p.startswith(q + " > ") for q in places)}
+            if len(places) >= 2:
+                places = _narrow_by_parent(question, places)
+                ids = sorted(set().union(*places.values()))
+        children = []
+        if len(places) == 1:
+            only = next(iter(places))
+            children = sorted(((c, len(cid & set(ids))) for c, cid in idx.children.get(only, {}).items() if cid & set(ids)),
+                              key=lambda x: -x[1])
         rows = await conn.fetch(
             "SELECT array_to_string(category_path, ' > ') AS cat, policy_name, split_part(coalesce(raw_body, ''), E'\\n', 1) AS first "
             "FROM policy_item WHERE id = ANY($1::int[]) ORDER BY category_path, source_row LIMIT $2", ids, _MAX_ITEMS)
     lines = [f"- {r['cat']} > {r['policy_name']}: {(r['first'] or '').strip()[:100]}" for r in rows]
-    return CategoryList(names=[idx.display[n] for n in picked], total=len(ids), lines=lines)
+    return CategoryList(names=[idx.display[n] for n in picked], total=len(ids), lines=lines,
+                        places=sorted(((p, len(v)) for p, v in places.items()), key=lambda x: -x[1]), children=children,
+                        explicit_all=not scoped and (bool(keyword_nav) or says_all(question, [idx.display[n] for n in picked])),
+                        scope_missed=bool(scope and scope != "*" and not scoped))

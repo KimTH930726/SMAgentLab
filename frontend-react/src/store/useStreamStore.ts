@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { streamChat } from '../api/chat';
-import type { ChatMessage, KnowledgeResult, PolicyCitation, SSESqlEvent, SSETableEvent, SSEChartEvent } from '../types';
+import type { ChatMessage, KnowledgeResult, PolicyCitation, SSESqlEvent, SSETableEvent, SSEChartEvent, ClarifyPrompt } from '../types';
 
 // Module-level (non-reactive, not in Zustand state)
 let _controller: AbortController | null = null;
@@ -55,6 +55,7 @@ export function startChatStream(params: {
   topK: number;
   conversationId: number | null;
   categories?: string[] | null;
+  clarifyScope?: string | null;
   onConversationCreated: (id: number) => void;
 }) {
   // Abort any existing stream & detach controller so old _runStream can't mutate state
@@ -130,6 +131,7 @@ async function _runStream(
     topK: number;
     conversationId: number | null;
     categories?: string[] | null;
+    clarifyScope?: string | null;
     onConversationCreated: (id: number) => void;
   },
   controller: AbortController,
@@ -157,6 +159,7 @@ async function _runStream(
       topK: params.topK,
       conversationId: params.conversationId,
       categories: params.categories,
+      clarifyScope: params.clarifyScope ?? null,
       signal: controller.signal,
     });
 
@@ -192,6 +195,10 @@ async function _runStream(
           results: meta.results ?? [],
           policyCitations: meta.policy_citations ?? [],
         }));
+      } else if ((event as { type: string }).type === 'clarify') {
+        // 재질문(v2.134) — 답 대신 범위 선택지. 글은 뒤따르는 token으로 온다
+        const c = event as unknown as ClarifyPrompt;
+        updateLastMessage((m) => ({ ...m, clarify: { message: c.message, options: c.options } }));
       } else if (event.type === 'token') {
         const token = (event as { type: 'token'; data: string }).data;
         updateLastMessage((m) => ({ ...m, content: m.content + token }));

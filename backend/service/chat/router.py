@@ -237,6 +237,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
         "user_credentials": user_creds,
         "inhouse_conv_id": inhouse_conv_id,
         "categories": req.categories,
+        "clarify_scope": req.clarify_scope,
     }
     # HTTP 도구 승인 정보가 있으면 컨텍스트에 추가
     if req.approved_tool:

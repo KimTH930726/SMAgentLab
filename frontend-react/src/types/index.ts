@@ -139,8 +139,13 @@ export interface ConversationMessage {
     table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null;
     chart_result?: { type: string; x: string; y: string; title: string } | null;
     policy_citations?: PolicyCitation[] | null;
+    clarify?: ClarifyPrompt | null;
   } | null;
 }
+
+/** 재질문(v2.134) — 목록이 너무 넓을 때 답 대신 범위 선택지. scope는 분류 경로("*" = 전부 보기) */
+export interface ClarifyOption { label: string; scope: string; query: string }
+export interface ClarifyPrompt { message: string; options: ClarifyOption[] }
 
 export interface KnowledgeResult {
   id: number;
@@ -182,6 +187,7 @@ export interface ChatMessage {
   tableResult?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null;
   chartResult?: { type: string; x: string; y: string; title: string } | null;
   auditId?: number | null;
+  clarify?: ClarifyPrompt | null;
 }
 
 // Agent directory
@@ -260,6 +266,7 @@ export interface ChatRequest {
   topK?: number;
   conversationId?: number | null;
   categories?: string[] | null;
+  clarifyScope?: string | null;
   signal?: AbortSignal;
 }
 

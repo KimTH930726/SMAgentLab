@@ -15,11 +15,35 @@ import { useThemeStore } from '../../store/useThemeStore';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { CorrectionAnalysis } from './CorrectionAnalysis';
 import { getCorrectionStatus } from '../../api/corrections';
-import type { ChatMessage } from '../../types';
+import type { ChatMessage, ClarifyOption } from '../../types';
 
 interface MessageItemProps {
   message: ChatMessage;
   namespace: string;
+  /** 재질문 선택(마지막 답변에만) — 고른 범위로 다시 묻는다. 없으면 버튼을 비활성으로 보여준다(지난 대화) */
+  onClarify?: (opt: ClarifyOption) => void;
+  /** "기타" — 입력창으로 */
+  onClarifyOther?: () => void;
+}
+
+const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
+
+function ClarifyChoices({ options, onPick, onOther }: { options: ClarifyOption[]; onPick?: (o: ClarifyOption) => void; onOther?: () => void }) {
+  return (
+    <div data-testid="clarify-options" className="mt-2 flex flex-col gap-1.5">
+      {options.map((o, i) => (
+        <button key={o.scope + i} type="button" disabled={!onPick} onClick={() => onPick?.(o)}
+          className="text-left text-sm px-3 py-2 rounded-lg border border-slate-600 bg-slate-900 text-slate-200 hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-300 disabled:opacity-50 disabled:hover:border-slate-600 disabled:hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
+          <span className="mr-1.5 text-slate-400">{CIRCLED[i] ?? `${i + 1}.`}</span>{o.label}
+        </button>
+      ))}
+      <button type="button" disabled={!onOther} onClick={() => onOther?.()}
+        title="원하는 범위를 직접 입력합니다"
+        className="text-left text-sm px-3 py-2 rounded-lg border border-dashed border-slate-600 text-slate-400 hover:border-indigo-500 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
+        <span className="mr-1.5">{CIRCLED[options.length] ?? `${options.length + 1}.`}</span>기타 (직접 입력)
+      </button>
+    </div>
+  );
 }
 
 // ── SQL Block ────────────────────────────────────────────────────────────────
@@ -294,7 +318,7 @@ function CorrectionReceipt({ messageId }: { messageId: number }) {
   );
 }
 
-export function MessageItem({ message, namespace }: MessageItemProps) {
+export function MessageItem({ message, namespace, onClarify, onClarifyOther }: MessageItemProps) {
   const isUser = message.role === 'user';
   const knowledgeIds = (message.results ?? []).map((r) => r.id);
   const policyItemIds = [...new Set((message.policyCitations ?? []).map((c) => c.item_id).filter((v): v is number => v != null))];
@@ -418,6 +442,9 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
                   <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
                     {message.content}
                   </ReactMarkdown>
+                  {message.clarify && !message.isStreaming && (
+                    <ClarifyChoices options={message.clarify.options} onPick={onClarify} onOther={onClarifyOther} />
+                  )}
                 </div>
               ) : (
                 message.isStreaming && (
@@ -437,7 +464,8 @@ export function MessageItem({ message, namespace }: MessageItemProps) {
           )}
 
           {/* Feedback — 피드백을 이미 보낸 답변도 의견이 아직 없으면 "의견 덧붙이기"를 남긴다(의견까지 접수했으면 숨김) */}
-          {!message.isStreaming && message.content && namespace && message.status !== 'failed' && (
+          {/* 재질문은 답이 아니라 "답변 틀림" 대상이 아니다 */}
+          {!message.isStreaming && message.content && namespace && message.status !== 'failed' && !message.clarify && (
             <FeedbackSection
               namespace={namespace}
               question={message.question ?? ''}

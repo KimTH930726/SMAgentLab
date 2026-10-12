@@ -83,3 +83,137 @@ class TestTopicOverview:
 
     def test_no_category_name_no_overview(self):
         assert cl.is_topic_overview("사이렌 오더 정책은?", self.NAMES) == []
+
+
+class TestClarify:
+    """재질문(2026-10-12) — 대화가 끊기지 않게 좁은 규칙 하나: 주제만 말한 질문의 목록이 CLARIFY_MAX_ITEMS개 초과일 때만."""
+
+    def _cl(self, total, places=(("주문", 1),), children=(), explicit=False):
+        return cl.CategoryList(names=["주문"], total=total, lines=[], places=list(places), children=list(children), explicit_all=explicit)
+
+    def test_asks_only_for_topic_question_over_limit(self):
+        big = self._cl(cl.CLARIFY_MAX_ITEMS + 1, children=[("주문 > 장바구니", 10), ("주문 > 선물하기", 8), ("주문 > 결제", 3), ("주문 > 기타", 1)])
+        c = cl.clarify_for(big, "주문 정책 좀")
+        assert c and [o["scope"] for o in c["options"]] == ["주문 > 장바구니", "주문 > 선물하기", "주문 > 결제", "*"]   # 많은 순 3 + 전부
+        assert c["options"][-1]["query"] == "주문 정책 좀"
+        assert cl.clarify_for(self._cl(cl.CLARIFY_MAX_ITEMS, children=big.children), "주문 정책 좀") is None   # 기준 이하
+        assert cl.clarify_for(self._cl(99, children=big.children, explicit=True), "주문 정책 전부") is None     # 전체 명시
+        assert cl.clarify_for(self._cl(99, children=[("주문 > 장바구니", 99)]), "주문 정책 좀") is None        # 나눌 데가 없음
+        assert cl.clarify_for(None, "아무 질문") is None                                                    # 목록 없는 일반 질문
+
+    def test_places_first_when_name_is_in_several_jobs(self):
+        c = cl.clarify_for(self._cl(30, places=[("배송 > 공통", 20), ("클레임 > 공통", 10)]), "공통 정책 좀")
+        assert [o["scope"] for o in c["options"]] == ["배송 > 공통", "클레임 > 공통", "*"] and "여러 업무" in c["message"]
+
+    def test_says_all_and_parent_narrowing(self):
+        assert cl.says_all("배송 정책 전부 보여줘") and cl.says_all("모든 쿠폰 정책") and not cl.says_all("배송 정책 좀")
+        places = {"배송 > B2B > 공통": {1}, "클레임 > 공통": {2}}
+        assert cl._narrow_by_parent("클레임 공통 정책 좀", places) == {"클레임 > 공통": {2}}
+        assert cl._narrow_by_parent("공통 정책 좀", places) == places   # 못 좁히면 그대로(다 보여주되 업무별로 묶음)
+
+    def test_block_groups_by_job_when_several_places(self):
+        b = self._cl(2, places=[("배송 > 공통", 1), ("클레임 > 공통", 1)]).block()
+        assert "업무별로 묶어" in b and "배송 > 공통" in b
+        assert "업무별로" not in self._cl(2).block()
+
+
+class TestFindCategoryListWithIndex:
+    """find_category_list를 가짜 DB로 끝까지 — 색인(위치·하위 분류), 고른 범위(scope) 조회, 업무로 좁히기, 전체 명시(리뷰 2026-10-12 M4)."""
+    ROWS = [  # (id, category_path, policy_name)
+        (1, ["5.클레임", "5-5.공통", "1.중복 클레임"], "중복 클레임"),
+        (2, ["4.배송", "4-3.비즈몰(B2B) 배송정책", "1.공통"], "공통 정책"),
+        (3, ["3.주문", "3-1.장바구니", "1.담기"], "담기"),
+        (4, ["3.주문", "3-1.장바구니", "2.보관"], "보관"),
+        (5, ["3.주문", "3-2.선물하기", "1.선물"], "선물"),
+        (6, ["3.주문", "A", "x"], "한 글자 하위 분류"),
+    ]
+
+    def _patch(self, monkeypatch):
+        import asyncio
+        from contextlib import asynccontextmanager
+        rows = self.ROWS
+
+        class Conn:
+            async def fetch(self, sql, *a):
+                if "SELECT id, category_path" in sql:
+                    return [{"id": i, "category_path": p} for i, p, _ in rows]
+                ids = set(a[0])
+                return [{"cat": " > ".join(p), "policy_name": n, "first": "본문"} for i, p, n in rows if i in ids]
+
+        @asynccontextmanager
+        async def cm():
+            yield Conn()
+
+        class Emb:
+            async def embed(self, text):
+                return [0.0, 0.0]
+        import types
+        monkeypatch.setattr(cl, "get_conn", cm)
+        monkeypatch.setitem(sys.modules, "shared.embedding", types.SimpleNamespace(embedding_service=Emb()))
+        cl._cache.clear()
+        return asyncio
+
+    def test_index_places_children_and_scope(self, monkeypatch):
+        asyncio = self._patch(monkeypatch)
+        run = lambda q, **k: asyncio.run(cl.find_category_list(1, q, [0.0, 0.0], **k))
+        r = run("주문 정책 좀", keyword_nav=False)
+        assert r.total == 4 and r.places == [("주문", 4)]
+        assert sorted(c for c, _ in r.children) == ["주문 > 선물하기", "주문 > 장바구니"]   # 한 글자 하위 분류("A")는 선택지 아님
+        assert not r.explicit_all
+        s = run("주문 > 장바구니 정책 전부 보여줘", keyword_nav=True, scope="주문 > 장바구니")   # 고른 범위는 경로로 바로
+        assert s.total == 2 and s.names == ["장바구니"] and not s.scope_missed
+        m = run("주문 정책 전부", keyword_nav=True, scope="주문 > 없음")
+        assert m is not None and m.scope_missed and m.total == 4   # 못 찾으면 질문 글로 다시 찾고 표시
+
+    def test_same_name_in_two_jobs_narrowed_by_question(self, monkeypatch):
+        asyncio = self._patch(monkeypatch)
+        both = asyncio.run(cl.find_category_list(1, "공통 정책 전부", [0.0, 0.0], keyword_nav=True))
+        assert both.total == 2 and len(both.places) == 2 and both.explicit_all and "업무별로 묶어" in both.block()
+        only = asyncio.run(cl.find_category_list(1, "클레임 공통 정책 전부", [0.0, 0.0], keyword_nav=True))
+        assert only.total == 1 and only.places == [("클레임 > 공통", 1)]
+
+
+def test_parent_narrowing_longest_first():
+    """"주문서 공통"에서 "주문"이 "주문서" 안에 있다고 "주문 > 공통"까지 남기지 않는다."""
+    places = {"주문 > 공통": {1}, "주문서 > 공통": {2}, "배송 > 공통": {3}}
+    assert cl._narrow_by_parent("주문서 공통 정책 좀", places) == {"주문서 > 공통": {2}}
+
+
+def test_says_all_ignores_words_inside_category_names():
+    assert not cl.says_all("전체취소 정책 좀", ["전체취소"]) and cl.says_all("전체취소 정책 전부", ["전체취소"])
+
+
+def test_children_must_cover_most_of_list():
+    """하위 분류가 목록 대부분을 덮을 때만 하위 분류로 묻는다 — 분류에 바로 붙은 정책이 많으면 안 묻는다."""
+    many_direct = cl.CategoryList(names=["주문"], total=30, lines=[], places=[("주문", 30)],
+                                  children=[("주문 > 장바구니", 2), ("주문 > 결제", 1)])
+    assert cl.clarify_for(many_direct, "주문 정책 좀") is None
+
+
+def test_specific_keeps_non_ancestor_places_and_leaf_not_parent():
+    """재리뷰 2026-10-12: 조상 관계가 아닌 두 위치는 둘 다 남고, 고른 이름 안의 글자는 상위 이름으로 안 잡는다."""
+    places = {"쿠폰 > 쿠폰회수": {1}, "클레임 > 쿠폰회수": {2}}
+    assert cl._narrow_by_parent("쿠폰회수 정책 전부", places) == places   # "쿠폰회수"의 "쿠폰"은 상위 "쿠폰"이 아니다
+    assert cl._narrow_by_parent("클레임 쿠폰회수 정책", places) == {"클레임 > 쿠폰회수": {2}}
+
+
+class TestSpecificRule:
+    ROWS = [(1, ["4.배송", "1.공통", "x"], "a"), (2, ["4.배송", "4-3.B2B", "1.공통"], "b"), (3, ["4.배송", "2.기타"], "c"),
+            (4, ["1.주문관리", "3-1. 2) 공통"], "d")]
+
+    def _run(self, monkeypatch, q):
+        TestFindCategoryListWithIndex.ROWS, saved = self.ROWS, TestFindCategoryListWithIndex.ROWS
+        try:
+            asyncio = TestFindCategoryListWithIndex()._patch(monkeypatch)
+            return asyncio.run(cl.find_category_list(1, q, [0.0, 0.0], keyword_nav=True))
+        finally:
+            TestFindCategoryListWithIndex.ROWS = saved
+
+    def test_non_ancestor_places_both_kept(self, monkeypatch):
+        r = self._run(monkeypatch, "배송 공통 정책 전부")
+        assert sorted(p for p, _ in r.places) == ["배송 > B2B > 공통", "배송 > 공통"]
+
+    def test_double_numbered_category_no_keyerror(self, monkeypatch):
+        r = self._run(monkeypatch, "주문관리 공통 정책 전부")
+        assert r is not None and r.total >= 1
+
