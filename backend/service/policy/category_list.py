@@ -21,6 +21,11 @@ from core.database import get_conn
 _NUM = re.compile(r"^\s*[\d\-]+[.)]\s*")
 _NON_WORD = re.compile(r"[\s\W_]+")
 _MIN_SIM = 0.58
+try:   # 측정용 환경값(pick_categories) — 잘못된 값이면 기본값으로(기동이 막히지 않게)
+    _SPECIFIC_MARGIN = float(__import__("os").environ.get("CATEGORY_SPECIFIC_MARGIN", "0.15"))
+except ValueError:
+    __import__("logging").getLogger(__name__).warning("CATEGORY_SPECIFIC_MARGIN 값이 숫자가 아님 — 0.15 사용")
+    _SPECIFIC_MARGIN = 0.15
 _MAX_ITEMS = 40
 _CACHE_TTL = 600.0   # 정책 임포트·정정이 분류를 바꿀 수 있어 10분마다 다시 만든다(분류 수백 개 임베딩 ~수 초)
 
@@ -39,12 +44,26 @@ class CategoryIndex:
 
 
 def pick_categories(question: str, names: list[str], sims: Optional[dict[str, float]]) -> list[str]:
-    """글자 매칭(가장 긴 이름 — 같은 길이면 전부) → 없으면 의미 1위(_MIN_SIM 이상). 못 찾으면 빈 목록."""
+    """글자 매칭(가장 긴 이름 — 같은 길이면 전부, 각 이름은 그 이름을 품은 더 구체적인 분류가 의미상 _SPECIFIC_MARGIN 이상 가까우면
+    그쪽으로) → 없으면 의미 1위(_MIN_SIM 이상). 못 찾으면 빈 목록."""
     qn = norm_category(question)
     lex = [n for n in names if len(n) >= 2 and n in qn]
     if lex:
         longest = max(len(n) for n in lex)
-        return [n for n in lex if len(n) == longest]
+        picked = [n for n in lex if len(n) == longest]
+        # 글자로 나온 이름을 품은 더 구체적인 분류가 의미상 확연히 가까우면 그쪽(2026-10-12 진단: "주문서에 적용되는 쿠폰 정책 전부"가
+        # "주문서"(0.60)를 골라 정답 "주문서 쿠폰정책"(0.85)을 놓침 — 질문 말투가 분류 이름과 글자로 안 맞아서). 품은 이름만 후보라 엉뚱한 분류로 안 샌다.
+        # 이름마다 따로(같은 길이로 함께 잡힌 다른 이름은 그대로 — 리뷰 2026-10-12). 유사도가 없는 이름은 바꾸지 않는다.
+        if sims:
+            out = []
+            for n in picked:
+                if n in sims:
+                    wider = [m for m in names if m != n and n in m and m in sims and sims[m] >= sims[n] + _SPECIFIC_MARGIN]
+                    n = max(wider, key=lambda m: sims[m]) if wider else n
+                if n not in out:
+                    out.append(n)
+            return out
+        return picked
     if sims:
         best = max(sims, key=sims.get)
         if sims[best] >= _MIN_SIM:
@@ -112,7 +131,9 @@ class CategoryList:
 
     def block(self) -> str:
         more = f" — 그중 {len(self.lines)}개만 표시" if self.total > len(self.lines) else ""
-        return (f"[분류 목록: {', '.join(self.names)} — 정책 {self.total}개{more}. \"전부·목록\" 질문이면 이 목록을 빠짐없이 근거로]\n"
+        # "전부·목록" 질문의 답 형식(사용자 결정 2026-10-12): 빠짐없이, 정책마다 "정책명 — 한 줄 요약". 세부 조건은 묻는 사람이 다음 질문으로
+        return (f"[분류 목록: {', '.join(self.names)} — 정책 {self.total}개{more}. \"전부·목록\" 질문이면 이 목록의 정책을 빠짐없이, "
+                f"정책마다 \"정책명 — 한 줄 요약\"으로 답하고 세부 조건은 궁금한 정책을 다시 물어보라고 안내]\n"
                 + "\n".join(self.lines))
 
 

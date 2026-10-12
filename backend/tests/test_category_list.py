@@ -37,6 +37,27 @@ def test_semantic_fallback_needs_threshold():
     assert cl.pick_categories("아무 질문", names, None) == []
 
 
+def test_more_specific_category_wins_only_when_clearly_closer():
+    """글자로 나온 이름("주문서")을 품은 더 구체적인 분류("주문서쿠폰정책")가 의미상 확연히(여유 이상) 가까울 때만 그쪽(2026-10-12)."""
+    names = ["주문", "주문서", "주문서쿠폰정책", "주문서세부정책", "쿠폰"]
+    q = "주문서에 적용되는 모든 쿠폰 관련 정책들을 한눈에"
+    m = cl._SPECIFIC_MARGIN
+    sims = {"주문": 0.55, "주문서": 0.60, "주문서쿠폰정책": 0.60 + m + 0.05, "주문서세부정책": 0.60 + m - 0.05, "쿠폰": 0.5}
+    assert cl.pick_categories(q, names, sims) == ["주문서쿠폰정책"]
+    # 여유보다 덜 가까우면 글자로 나온 이름 그대로("주문서" 자체를 묻는 질문을 구체 분류로 빼앗지 않게)
+    close = {**sims, "주문서쿠폰정책": 0.60 + cl._SPECIFIC_MARGIN - 0.01, "주문서세부정책": 0.6}
+    assert cl.pick_categories(q, names, close) == ["주문서"]
+    # 글자로 나온 이름을 품지 않은 분류는 아무리 가까워도 후보가 아니다(엉뚱한 분류로 새지 않게)
+    other = {**sims, "주문서쿠폰정책": 0.3, "주문서세부정책": 0.3, "배송정책": 0.99}
+    assert cl.pick_categories(q, names + ["배송정책"], other) == ["주문서"]
+    # 같은 길이로 함께 잡힌 이름은 각각 따로 — 한쪽만 구체 분류로 바뀌고 다른 쪽은 그대로(리뷰 2026-10-12)
+    two = cl.pick_categories("배송 환불 정책 전부", ["배송", "환불", "배송비정책"],
+                             {"배송": 0.5, "환불": 0.6, "배송비정책": 0.5 + m + 0.05})
+    assert sorted(two) == ["배송비정책", "환불"]
+    # 유사도가 없는 이름은 바꾸지 않는다
+    assert sorted(cl.pick_categories("배송 환불 정책 전부", ["배송", "환불", "배송비정책"], {"배송비정책": 0.99})) == ["배송", "환불"]
+
+
 def test_block_says_when_truncated():
     b = cl.CategoryList(names=["배송정책"], total=55, lines=["- a > b: c"] * 40).block()
     assert b.startswith("[분류 목록: 배송정책 — 정책 55개 — 그중 40개만 표시")
