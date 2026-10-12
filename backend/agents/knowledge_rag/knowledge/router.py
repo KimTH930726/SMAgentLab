@@ -312,15 +312,40 @@ async def bulk_create(body: BulkCreateRequest, user: dict = Depends(get_current_
     # 넘어오며 끊겨있던 것을 모든 벌크 등록 경로 공통으로 되살림 — 체크박스 없이 항상 실행.
     # job 성공 후에만 실행되고, 개수는 job 행(auto_glossary)에 기록된다(화면은 job 행을 읽음).
     combined_text = "\n".join(item.content for item in body.items)
-    return await service.bulk_create_knowledge(
-        namespace=body.namespace,
-        items=[item.model_dump() for item in body.items],
-        source_file=body.source_file,
-        source_type=body.source_type,
-        created_by_part=user["part"],
-        created_by_user_id=user["id"],
-        after_activation=_glossary_after_activation(body.namespace, combined_text, user, max_chars=20000),
-    )
+    try:
+        return await service.bulk_create_knowledge(
+            namespace=body.namespace,
+            items=[item.model_dump() for item in body.items],
+            source_file=body.source_file,
+            source_type=body.source_type,
+            created_by_part=user["part"],
+            created_by_user_id=user["id"],
+            after_activation=_glossary_after_activation(body.namespace, combined_text, user, max_chars=20000),
+            confirm_replace=body.confirm_replace,
+        )
+    except service.ReplaceConfirmRequired as e:
+        # 화면은 등록 전에 /bulk/replace-check로 먼저 묻는다 — 여기는 확인 없이 들어온 요청을 막는 두 번째 벽
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+class _ReplaceCheckBody(BaseModel):
+    namespace: str
+    source_document_ids: list[int] = []
+    confluence_page_ids: list[str] = []
+
+
+@router.post("/bulk/replace-check")
+async def bulk_replace_check(body: _ReplaceCheckBody, user: dict = Depends(get_current_user)):
+    """등록 전 확인(A안 2026-10-12) — 이 등록이 교체할 같은 원본의 기존 조각에 사람이 손댄 흔적(고친·뺀 조각, 일부만 등록,
+    업무구분 혼재). needs_confirm이면 화면이 사유를 보여주고 확인받은 뒤 confirm_replace=true로 등록한다."""
+    await check_namespace_ownership(body.namespace, user)
+    from core.database import get_conn, resolve_namespace_id
+    from agents.knowledge_rag.ingestion.source_ledger import replace_check
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, body.namespace)
+        if ns_id is None:
+            raise HTTPException(status_code=404, detail="파트를 찾을 수 없습니다.")
+        return await replace_check(conn, ns_id, body.source_document_ids, body.confluence_page_ids)
 
 
 @router.post("/import/csv", status_code=201)

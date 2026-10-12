@@ -204,3 +204,70 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
     for (const id of ids) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
   }
 });
+
+test('같은 원본 다시 등록 — 사람이 고친 조각이 있으면 사유를 보여주고, 취소하면 그대로·확인하면 교체', async ({ page }) => {
+  // A안(2026-10-12): 같은 글을 다시 등록하면 기존 조각이 교체되는데, 사람이 고친 조각까지 조용히 덮었다.
+  page.on('dialog', (d) => { throw new Error(`브라우저 기본 대화상자: ${d.message()}`); });
+  const marker = `E2E재등록_${Date.now()}`;
+  const text = `1.1. ${marker} 개요\n재등록 확인 테스트 첫째 조각입니다 충분히 길게 씁니다.\n` +
+    `1.2. 처리\n재등록 확인 테스트 둘째 조각입니다 충분히 길게 씁니다.`;
+  const authState = await page.evaluate(() => localStorage.getItem('ops_auth'));
+  const authHeader = { Authorization: `Bearer ${authState ? JSON.parse(authState).accessToken : ''}` };
+  const listMine = async () => ((await (await page.request.get(`/api/knowledge?namespace=${encodeURIComponent(NAMESPACE)}`,
+    { headers: authHeader })).json()) as Array<{ id: number; content: string }>).filter((k) => k.content.includes('재등록 확인 테스트') || k.content.includes(marker));
+  const prev = await (await page.request.post('/api/knowledge/import/text-split/preview', { headers: authHeader,
+    data: { raw_text: text, strategy: 'section', namespace: NAMESPACE } })).json();
+  const items = prev.chunks.map((c: string, i: number) => ({ content: c, category: '공통지식', heading_path: prev.heading_paths[i], source_document_id: prev.source_document_id }));
+  const job = (await (await page.request.post('/api/knowledge/bulk', { headers: authHeader,
+    data: { namespace: NAMESPACE, items, source_file: '텍스트 직접입력', source_type: 'paste_split' } })).json()).job_id;
+  let cleanup: number[] = [];
+  try {
+    await expect.poll(async () => (await (await page.request.get(`/api/knowledge/ingestion-jobs/${job}`, { headers: authHeader })).json()).status,
+      { timeout: 30_000 }).toBe('completed');
+    const first = await listMine();
+    cleanup = first.map((k) => k.id);
+    expect(first.length).toBe(prev.count);
+    const edited = first.find((k) => k.content.includes('둘째'))!;
+    expect((await page.request.put(`/api/knowledge/${edited.id}`, { headers: authHeader,
+      data: { content: `${marker} 사람이 고친 둘째 조각 — 재등록 확인 테스트` } })).ok()).toBeTruthy();
+
+    await page.getByRole('link', { name: 'Admin' }).click();
+    await page.getByRole('button', { name: '지식 베이스' }).click();
+    await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NAMESPACE);
+    await page.getByRole('button', { name: '지식 등록' }).click();
+    await page.getByText('대량 텍스트', { exact: true }).first().click();
+    await page.locator('select').filter({ hasText: 'AI 자동분석' }).selectOption('공통지식');   // 업무구분 추천(LLM) 없이
+    await page.locator('textarea:visible').first().fill(text);
+    await page.getByRole('button', { name: '청크 검토 & 등록' }).click();
+    const register = page.getByRole('button', { name: /선택 항목 등록/ });
+
+    // 1) 취소 — 등록 요청 자체가 안 나가고 기존 조각 그대로
+    let bulkPosted = false;
+    page.on('request', (r) => { if (r.url().endsWith('/api/knowledge/bulk') && r.method() === 'POST') bulkPosted = true; });
+    await register.click();
+    const dialog = page.getByTestId('app-dialog');
+    await expect(dialog).toContainText('기존 조각 교체 확인');
+    await expect(page.getByTestId('app-dialog-message')).toContainText('내용을 고친 조각 1건');
+    await page.getByTestId('app-dialog-cancel').click();
+    await expect(dialog).toHaveCount(0);
+    expect(bulkPosted).toBeFalsy();
+    expect((await listMine()).map((k) => k.id).sort()).toEqual(cleanup.slice().sort());
+
+    // 2) 확인 — 교체: 옛 조각(고친 것 포함)은 목록에서 빠지고 새 조각이 들어온다
+    const posted = page.waitForResponse((r) => r.url().endsWith('/api/knowledge/bulk') && r.request().method() === 'POST');
+    await register.click();
+    await page.getByTestId('app-dialog-ok').click();
+    const res = await posted;
+    expect(res.status()).toBe(201);
+    const job2 = (await res.json()).job_id;
+    await expect.poll(async () => (await (await page.request.get(`/api/knowledge/ingestion-jobs/${job2}`, { headers: authHeader })).json()).status,
+      { timeout: 30_000 }).toBe('completed');
+    const after = await listMine();
+    cleanup = cleanup.concat(after.map((k) => k.id));
+    expect(after.length).toBe(prev.count);
+    expect(after.some((k) => first.some((f) => f.id === k.id))).toBeFalsy();
+    expect(after.some((k) => k.content.includes('사람이 고친'))).toBeFalsy();
+  } finally {
+    for (const id of cleanup) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
+  }
+});

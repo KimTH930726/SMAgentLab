@@ -13,6 +13,7 @@ import {
   bulkUpdateKnowledge,
   vectorSearchKnowledge,
   bulkCreateKnowledge,
+  checkBulkReplace,
   previewTextSplit,
   previewFileUpload,
   previewUrl,
@@ -40,7 +41,7 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { KnowledgeItem, DuplicateMatch } from '../../types';
-import { showAlert } from '../../store/useDialogStore';
+import { showAlert, showConfirm } from '../../store/useDialogStore';
 import { KnowledgeStructurePanel } from './KnowledgeStructurePanel';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
@@ -106,6 +107,38 @@ function partialSourceDocs(selected: ReviewChunk[], all: ReviewChunk[]): Set<num
   const out = new Set<number>();
   count(all).forEach((n, id) => { if ((sel.get(id) ?? 0) < n) out.add(id); });
   return out;
+}
+
+type BulkItems = Parameters<typeof bulkCreateKnowledge>[1];
+
+// 같은 원본 다시 등록(A안 2026-10-12): 교체될 기존 조각에 사람이 손댄 흔적(고친·뺀 조각 등)이 있으면 사유를 보여주고 확인받는다.
+// 흔적이 없으면 묻지 않고 바로 교체. 취소하면 null(등록 안 함). 서버도 확인 없이 들어온 교체는 409로 막는다.
+async function bulkCreateConfirmed(namespace: string, items: BulkItems, sourceFile: string, sourceType: string) {
+  const docIds = [...new Set(items.map(i => i.source_document_id).filter((x): x is number => !!x))];
+  const pages = [...new Set(items.map(i => i.confluence_page_id).filter((x): x is string => !!x))];
+  let confirmReplace = false;
+  if (docIds.length || pages.length) {
+    const c = await checkBulkReplace(namespace, docIds, pages);
+    if (c.needs_confirm) {
+      const why = [
+        c.edited ? `· 내용을 고친 조각 ${c.edited}건` : '',
+        c.removed ? `· 삭제·반려한 조각 ${c.removed}건` : '',
+        c.partial ? '· 지난번에 일부 조각만 골라 등록함' : '',
+        c.mixed_category ? '· 조각마다 업무구분을 다르게 둠' : '',
+      ].filter(Boolean).join('\n');
+      const ok = await showConfirm(
+        `이미 등록된 같은 원본이 있고, 그 조각에 사람이 손댄 흔적이 있습니다.\n${why}\n\n등록하면 기존 조각은 새 조각으로 교체되어 위 변경이 사라집니다.`,
+        { title: '기존 조각 교체 확인', confirmLabel: '교체하고 등록' });
+      if (!ok) return null;
+      confirmReplace = true;
+    }
+  }
+  const result = await bulkCreateKnowledge(namespace, items, sourceFile, sourceType, confirmReplace);
+  if (result.unlinked_sources?.length) {
+    void showAlert('미리보기 뒤에 원문이 바뀌어(다른 등록으로 교체 등) 이번 조각은 원문에 연결하지 않았습니다.\n'
+      + '등록은 진행되지만 "다시 분할"은 쓸 수 없습니다 — 필요하면 다시 미리보기 후 등록하세요.', { title: '원문 연결 안 됨' });
+  }
+  return result;
 }
 
 // 추천은 사내 LLM이라 수 초 — 응답이 왔을 때 아직 "AI 자동분석"일 때만 바꾼다(리뷰 2026-10-08: 그사이 사용자가 고른 값이나
@@ -1493,7 +1526,8 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
       const partial = partialSourceDocs(selected, reviewChunks);
       const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null,
         source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
-      const result = await bulkCreateKnowledge(namespace, items, file!.name, 'file_upload');
+      const result = await bulkCreateConfirmed(namespace, items, file!.name, 'file_upload');
+      if (!result) return;
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
       onSuccess({ jobId: result.job_id });
@@ -1613,7 +1647,8 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
       const partial = partialSourceDocs(selected, reviewChunks);
       const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null,
         source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
-      const result = await bulkCreateKnowledge(namespace, items, '텍스트 직접입력', 'paste_split');
+      const result = await bulkCreateConfirmed(namespace, items, '텍스트 직접입력', 'paste_split');
+      if (!result) return;
       setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
       onSuccess({ jobId: result.job_id });
@@ -1891,7 +1926,8 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       }));
       const srcName = sourceMeta?.name ?? url;
       const srcType = sourceMeta?.type ?? (isConfluence ? 'confluence' : 'web');
-      const result = await bulkCreateKnowledge(namespace, items, srcName, srcType);
+      const result = await bulkCreateConfirmed(namespace, items, srcName, srcType);
+      if (!result) return;
       setDone(`"${srcName}" — ${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
       setShowReview(false);
       onSuccess({ jobId: result.job_id });

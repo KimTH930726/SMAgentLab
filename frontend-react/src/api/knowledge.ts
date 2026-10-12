@@ -185,10 +185,28 @@ export async function bulkCreateKnowledge(
   }>,
   sourceFile?: string,
   sourceType = 'manual',
-): Promise<{ created: number; job_id: number; status: string }> {
+  confirmReplace = false,
+): Promise<{ created: number; job_id: number; status: string; unlinked_sources?: number[] }> {
   return apiFetch('/knowledge/bulk', {
     method: 'POST',
-    body: JSON.stringify({ namespace, items, source_file: sourceFile, source_type: sourceType }),
+    body: JSON.stringify({ namespace, items, source_file: sourceFile, source_type: sourceType, confirm_replace: confirmReplace }),
+  });
+}
+
+/** 같은 원본 재등록 확인(A안 2026-10-12) — 교체될 기존 조각에 사람이 손댄 흔적. */
+export interface ReplaceCheck {
+  needs_confirm: boolean;
+  edited: number;          // 내용을 고친 조각
+  removed: number;         // 삭제·반려한 조각
+  partial: boolean;        // 일부 조각만 골라 등록했음
+  mixed_category: boolean; // 조각마다 업무구분이 다름
+  unlinked_sources: number[];
+}
+
+export async function checkBulkReplace(namespace: string, sourceDocumentIds: number[], confluencePageIds: string[]): Promise<ReplaceCheck> {
+  return apiFetch('/knowledge/bulk/replace-check', {
+    method: 'POST',
+    body: JSON.stringify({ namespace, source_document_ids: sourceDocumentIds, confluence_page_ids: confluencePageIds }),
   });
 }
 

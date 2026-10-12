@@ -133,7 +133,7 @@ def parse_pdf(content_bytes: bytes, filename: str) -> ParsedDocument:
     finally:
         doc.close()
 
-    raw_text = "\n".join(all_text_lines)
+    raw_text = "\n".join(all_text_lines).replace("\x00", "")   # PostgreSQL이 NUL을 거부(리뷰 L4 2026-10-12)
     sections = extract_heading_sections(raw_text)
 
     return ParsedDocument(

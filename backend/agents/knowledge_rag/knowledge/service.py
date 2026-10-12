@@ -133,6 +133,9 @@ async def update_knowledge(
         )
         if not current:
             return None
+        if current["status"] in ("deprecated", "deleted"):
+            # 옛 버전·삭제된 조각을 고치면 content_edited_at이 찍혀 재등록 확인이 엉뚱하게 걸리고, 검색에 안 나오는 걸 고친 셈(리뷰 L6)
+            raise ValueError("폐기되었거나 삭제된 지식은 수정할 수 없습니다.")
 
         new_content = content if content is not None else current["content"]
         new_weight = current["base_weight"]  # 가중치 입력 제거(2026-10-02) — 값은 그대로 둔다
@@ -339,9 +342,16 @@ async def get_knowledge_structure(knowledge_id: int) -> Optional[dict]:
 
 # ─── 원문 원장: 원문에서 다시 분할 (2026-10-08) ─────────────────────────────
 
-# 사람이 고친 청크 — 지식 수정(updated_at)·정정 승인 새 버전(supersedes_id). 다시 분할이 조용히 덮지 않게 멈춘다.
-# updated_at은 트리거라 상태 변경에도 갱신돼 쓸 수 없다 — 내용을 바꾼 곳(수정·병합·정정 승인)만 남기는 content_edited_at
-_HUMAN_EDITED_SQL = "(content_edited_at IS NOT NULL OR supersedes_id IS NOT NULL)"
+class ReplaceConfirmRequired(ValueError):
+    """같은 원본을 다시 등록하는데 기존 조각에 사람 손이 닿은 흔적이 있음 — 확인 없이 교체하지 않는다(A안 2026-10-12)."""
+
+    def __init__(self, reasons: dict):
+        self.reasons = reasons
+        parts = [f"내용을 고친 조각 {reasons['edited']}건" if reasons.get("edited") else "",
+                 f"삭제·반려한 조각 {reasons['removed']}건" if reasons.get("removed") else "",
+                 "일부 조각만 골라 등록함" if reasons.get("partial") else "",
+                 "조각마다 업무구분이 다름" if reasons.get("mixed_category") else ""]
+        super().__init__("기존 조각에 사람이 손댄 흔적이 있어 확인이 필요합니다: " + ", ".join(p for p in parts if p))
 
 
 async def get_source_document_namespace(doc_id: int) -> Optional[str]:
@@ -353,7 +363,7 @@ async def get_source_document_namespace(doc_id: int) -> Optional[str]:
 async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Optional[dict] = None) -> dict:
     """원장의 원문을 지금 코드로 다시 분할해 그 원문의 청크를 한꺼번에 교체(등록과 같은 원자적 전환·품질 검사).
     결과가 지금 청크와 같으면 아무것도 안 함. 사람이 고친 청크가 있으면 force 없이는 멈춘다."""
-    from agents.knowledge_rag.ingestion.source_ledger import rechunk_items
+    from agents.knowledge_rag.ingestion.source_ledger import rechunk_items, touched_reasons, has_touch
     async with get_conn() as conn:
         doc = await conn.fetchrow(
             "SELECT d.*, n.name AS namespace FROM rag_source_document d JOIN ops_namespace n ON n.id = d.namespace_id "
@@ -363,11 +373,11 @@ async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Opt
         if doc["status"] != "active":
             raise ValueError("사용 중인 원문만 다시 분할할 수 있습니다(교체됐거나 등록 전 초안).")
         current = await conn.fetch(
-            f"SELECT id, content, heading_path, category, source_type, source_file, {_HUMAN_EDITED_SQL} AS edited FROM rag_knowledge "
+            "SELECT id, content, heading_path, category, source_type, source_file FROM rag_knowledge "
             "WHERE source_document_id = $1 AND status IN ('active', 'pending_review') ORDER BY source_chunk_idx NULLS LAST, id", doc_id)
-        # 사람이 뺀 조각(삭제·반려) — 다시 분할이 되살리면 안 된다(리뷰 2026-10-08)
-        removed = await conn.fetchval(
-            "SELECT count(*) FROM rag_knowledge WHERE source_document_id = $1 AND status IN ('deleted', 'rejected')", doc_id)
+        # 사람의 판단(고친 조각·뺀 조각·일부만 등록·업무구분 혼재) — 재등록 확인(A안)과 같은 기준(source_ledger.touched_reasons)
+        reasons = await touched_reasons(conn, doc["namespace_id"], [doc_id],
+                                        [doc["source_ref"]] if doc["source_type"] == "confluence" and doc["source_ref"] else [])
     items = rechunk_items(doc)
     if not items:
         raise ValueError("원문을 다시 나눈 결과가 비었습니다 — 원문 형식을 확인하세요(교체하지 않음).")
@@ -376,13 +386,7 @@ async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Opt
     if same:
         return {"changed": False, "old": len(current), "new": len(items)}
     # 사람의 판단을 조용히 덮지 않는다 — 하나라도 있으면 멈추고 사유를 알린다(force로만 진행)
-    reasons = {
-        "edited": sum(1 for r in current if r["edited"]),               # 내용을 고친 조각
-        "removed": int(removed or 0),                                     # 삭제·반려한 조각
-        "partial": bool(doc["registered_partial"]),                       # 등록 때 일부 조각만 고름
-        "mixed_category": len({r["category"] for r in current if r["category"]}) > 1,   # 조각마다 업무구분을 다르게 둠
-    }
-    if any(reasons.values()) and not force:
+    if has_touch(reasons) and not force:
         return {"changed": False, "blocked": True, **reasons, "old": len(current), "new": len(items)}
     category = collections.Counter(r["category"] for r in current if r["category"]).most_common(1)
     first = current[0] if current else None
@@ -397,10 +401,13 @@ async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Opt
         source_file=(first["source_file"] if first else doc["title"]) or doc["title"],
         source_type=(first["source_type"] if first else doc["source_type"]),
         created_by_part=(user or {}).get("part"), created_by_user_id=(user or {}).get("id"),
-        background=False)
+        background=False, confirm_replace=force, strict_source=True)
     if result.get("status") != "completed":
         # 실패·취소면 옛 조각이 그대로 남는다(전환 트랜잭션 롤백) — 성공으로 알리지 않는다(리뷰 2026-10-08)
-        raise ValueError(f"다시 분할 등록이 끝나지 않았습니다(상태: {result.get('status')}) — 기존 조각은 그대로입니다.")
+        async with get_conn() as conn:
+            why = await conn.fetchval("SELECT error_message FROM rag_ingestion_job WHERE id = $1", result.get("job_id"))
+        raise ValueError(f"다시 분할 등록이 끝나지 않았습니다(상태: {result.get('status')}{', ' + why if why else ''}) "
+                         "— 기존 조각은 그대로입니다.")
     from agents.knowledge_rag.ingestion.source_ledger import PARSER_VERSION
     async with get_conn() as conn:
         await conn.execute("UPDATE rag_source_document SET parser_version = $2, registered_partial = FALSE WHERE id = $1",
@@ -796,8 +803,13 @@ async def bulk_create_knowledge(
     created_by_user_id: Optional[int] = None,
     background: bool = True,
     after_activation: Optional[Callable[[], Awaitable[int]]] = None,
+    confirm_replace: bool = False,
+    strict_source: bool = False,
 ) -> dict:
     """여러 지식을 배치 단위로 등록 — 기본적으로 백그라운드에서 실행.
+
+    confirm_replace: 같은 원본의 기존 조각에 사람 손이 닿았어도 교체(사용자가 확인함). 아니면 ReplaceConfirmRequired(A안).
+    strict_source: 실린 원문이 확정 순간 이미 교체됐으면 실패로(다시 분할 — 조용히 연결만 끊지 않게, 리뷰 M2).
 
     after_activation: job이 성공적으로 일괄 전환된 "뒤에만" 실행할 후속 작업(자동 용어 추출).
     반환값(등록된 용어 수)은 rag_ingestion_job.auto_glossary에 기록된다. 예전엔 라우터가 job
@@ -815,6 +827,26 @@ async def bulk_create_knowledge(
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
+
+    # 원문 원장(A안 2026-10-12): 같은 원본 재등록이 사람이 고친·뺀 조각을 조용히 덮지 않게 — 흔적이 있으면 확인 후에만.
+    # 업무구분 추천(LLM)·job 생성 전에 판단해 거절될 등록에 비용을 쓰지 않는다. 연결 못 하는 원문 id는 여기서 끊고 응답에 알린다(L1).
+    unlinked_sources: list[int] = []
+    req_doc_ids = sorted({int(it["source_document_id"]) for it in items if it.get("source_document_id")})
+    req_pages = sorted({str(it["confluence_page_id"]) for it in items if it.get("confluence_page_id")})
+    if req_doc_ids or req_pages:
+        from agents.knowledge_rag.ingestion import source_ledger as _ledger
+        async with get_conn() as conn:
+            check = await _ledger.replace_check(conn, ns_id, req_doc_ids, req_pages)
+        if check["needs_confirm"] and not confirm_replace:
+            raise ReplaceConfirmRequired(check)
+        unlinked_sources = check["unlinked_sources"]
+        if unlinked_sources and strict_source:
+            raise ValueError(f"원문이 그사이 다른 등록으로 교체됐습니다(원문 {unlinked_sources}) — 기존 조각은 그대로입니다.")
+        if unlinked_sources:
+            logger.warning("등록 요청의 원문 id 중 이 파트의 초안·사용 중이 아닌 것은 연결하지 않음: %s", unlinked_sources)
+            for it in items:
+                if it.get("source_document_id") and int(it["source_document_id"]) in unlinked_sources:
+                    it["source_document_id"] = None
 
     # 카테고리 자동 관리(2026-09-24) — 컨플루언스 벌크는 이 시점에 이미 페이지별로
     # 카테고리가 정해진 채로 들어오지만(빈 값 없음, resolve_or_create_category가 그대로
@@ -856,13 +888,14 @@ async def bulk_create_knowledge(
         after_activation=after_activation,
         source_file=source_file, source_type=source_type,
         created_by_part=created_by_part, created_by_user_id=created_by_user_id,
+        strict_source=strict_source, confirm_replace=confirm_replace,
     )
     if background:
         task = asyncio.create_task(coro)
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
-        return {"created": 0, "job_id": job_id, "status": "processing"}
-    return await coro
+        return {"created": 0, "job_id": job_id, "status": "processing", "unlinked_sources": unlinked_sources}
+    return {**await coro, "unlinked_sources": unlinked_sources}
 
 
 async def _run_bulk_ingestion(
@@ -876,6 +909,8 @@ async def _run_bulk_ingestion(
     source_type: str,
     created_by_part: Optional[str],
     created_by_user_id: Optional[int],
+    strict_source: bool = False,
+    confirm_replace: bool = False,
 ) -> dict:
     """배치 단위 임베딩+INSERT. 배치마다 진행률 갱신 + 취소 요청 확인.
 
@@ -905,9 +940,14 @@ async def _run_bulk_ingestion(
     partial_doc_ids = sorted({int(it["source_document_id"]) for it in items
                               if it.get("source_document_id") and it.get("source_document_partial")})
     replacing_docs: list[int] = []
-    if source_doc_ids:
+    if source_doc_ids or replacing_pages:
         async with get_conn() as conn:
             valid = await _ledger.valid_documents(conn, ns_id, source_doc_ids)
+            if len(valid) != len(source_doc_ids) and strict_source:
+                # 다시 분할: 사전 확인~여기(업무구분 추천 등) 사이에 원문이 교체됨 — 연결만 끊고 진행하면 원문 없는 중복(리뷰 2026-10-12)
+                gone = sorted(set(source_doc_ids) - set(valid))
+                await _discard_staged_job(job_id, "failed", error_message=f"원문이 등록 중에 다른 등록으로 교체됐습니다(원문 {gone})")
+                return {"created": 0, "job_id": job_id, "status": "failed"}
             if len(valid) != len(source_doc_ids):
                 logger.warning("등록 요청의 원문 id 중 이 파트의 초안·사용 중이 아닌 것은 연결하지 않음: %s",
                                sorted(set(source_doc_ids) - set(valid)))
@@ -915,7 +955,7 @@ async def _run_bulk_ingestion(
                     if it.get("source_document_id") and int(it["source_document_id"]) not in valid:
                         it["source_document_id"] = None
             source_doc_ids = valid
-            replacing_docs = await _ledger.replacing_documents(conn, ns_id, source_doc_ids)
+            replacing_docs = await _ledger.replacing_documents(conn, ns_id, source_doc_ids, replacing_pages)
     try:
         for start in range(0, len(items), _INGEST_BATCH_SIZE):
             batch = items[start:start + _INGEST_BATCH_SIZE]
@@ -1070,6 +1110,29 @@ async def _run_bulk_ingestion(
                     WHERE id = $3 AND cancel_requested = FALSE
                     RETURNING id
                 """, created, pending_total, job_id, run_follow_up)
+                if activated and (source_doc_ids or replacing_pages):
+                    # 등록 시작(사전 확인·중복 비교)~전환 사이에 같은 원본이 바뀌었을 수 있다 — 잠그고 지금 기준으로 다시 본다.
+                    # 실패면 이 트랜잭션이 롤백돼 기존 조각은 그대로, job은 실패 사유와 함께 등록 이력에 남는다(조용히 덮지 않는다).
+                    await _ledger.lock_sources(conn, ns_id, source_doc_ids, replacing_pages)
+                    still = await _ledger.valid_documents(conn, ns_id, source_doc_ids)
+                    gone = sorted(set(source_doc_ids) - set(still))
+                    if gone:
+                        # 연결만 끊고 활성화하면 새 버전 옆에 옛 내용이 원문 없이 중복으로 남는다 — 실패로 알린다(등록 이력에 사유)
+                        raise ValueError(f"원문이 등록 중에 다른 등록으로 교체됐습니다(원문 {gone}) — 다시 미리보기 후 등록하세요.")
+                    source_doc_ids = still
+                    partial_doc_ids = [d for d in partial_doc_ids if d in still]
+                    now_replacing = await _ledger.replacing_documents(conn, ns_id, source_doc_ids, replacing_pages)
+                    newcomers = sorted(set(now_replacing) - set(replacing_docs))
+                    if newcomers and await conn.fetchval(
+                            "SELECT count(*) FROM rag_source_document WHERE id = ANY($1::int[]) AND status = 'active'", newcomers):
+                        # 같은 원본이 그사이 다른 등록으로 확정됨 — 중복 비교가 그 조각을 옛 버전으로 빼지 않은 채 끝나, 그대로 교체하면
+                        # 이 등록의 조각이 "중복 의심"(승인 대기)으로 남고 옛 조각만 폐기돼 내용이 검색에서 사라진다(리뷰 L1)
+                        raise ValueError("같은 원본이 등록 중에 다른 등록으로 먼저 확정됐습니다 — 다시 미리보기 후 등록하세요.")
+                    if not confirm_replace:
+                        # 사전 확인 뒤(임베딩 동안) 기존 조각이 수정·삭제됐으면 확인 없이 덮지 않는다(리뷰 2026-10-12)
+                        if _ledger.has_touch(await _ledger.touched_reasons(conn, ns_id, now_replacing, replacing_pages)):
+                            raise ValueError("등록하는 동안 기존 조각이 수정·삭제됐습니다 — 다시 등록하면 확인 후 교체할 수 있습니다.")
+                    replacing_docs = now_replacing
                 if activated:
                     if replacing_pages:
                         # 새 행은 아직 staging이라 이 조건에 안 걸린다 — 옛 버전만 내림. 옛 버전의 승인 대기 행도 같이

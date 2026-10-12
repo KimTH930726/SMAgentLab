@@ -74,6 +74,8 @@ class BulkCreateRequest(BaseModel):
     items: list[BulkKnowledgeItem]
     source_file: Optional[str] = None
     source_type: str = "manual"
+    # 같은 원본 재등록 때 기존 조각에 사람 손이 닿은 흔적이 있어도 교체 — 사용자가 사유를 보고 확인했을 때만(A안 2026-10-12)
+    confirm_replace: bool = False
 
 
 class IngestionJobOut(BaseModel):

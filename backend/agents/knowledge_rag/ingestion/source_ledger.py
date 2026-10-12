@@ -32,16 +32,22 @@ def content_hash(raw: str) -> str:
 async def save_draft(conn, *, ns_id: int, source_type: str, source_ref: Optional[str], title: Optional[str],
                      parent_title: Optional[str], raw_format: str, raw_content: str, chunk_strategy: Optional[str],
                      source_version: Optional[int] = None, user_id: Optional[int] = None) -> int:
-    """미리보기 원문을 초안으로 저장. 같은 파트·종류·위치·내용의 **초안**이 있으면 그 id(분할 방식 갱신)."""
+    """미리보기 원문을 초안으로 저장. 같은 파트·종류·위치·내용·분할 방식의 **초안**이 있으면 그 id.
+
+    분할 방식도 같아야 재사용(리뷰 M3 2026-10-12): 예전엔 같은 원문을 다른 방식으로 다시 미리보면 초안의 방식을 덮어,
+    먼저 본 미리보기로 확정하면 원장의 방식과 실제 조각이 어긋났다(다시 분할이 바뀐 것 없는데 "바뀜"으로 교체)."""
     raw_content = (raw_content or "").replace("\x00", "")   # 청크 저장과 같게(PostgreSQL이 NUL을 거부)
     h = content_hash(raw_content)
     row = await conn.fetchrow(
         "SELECT id FROM rag_source_document WHERE namespace_id = $1 AND status = 'draft' AND source_type = $2 "
-        "AND source_ref IS NOT DISTINCT FROM $3 AND content_hash = $4 ORDER BY id DESC LIMIT 1",
-        ns_id, source_type, source_ref, h)
+        "AND source_ref IS NOT DISTINCT FROM $3 AND content_hash = $4 AND chunk_strategy IS NOT DISTINCT FROM $5 "
+        "ORDER BY id DESC LIMIT 1",
+        ns_id, source_type, source_ref, h, chunk_strategy)
     if row:
-        await conn.execute("UPDATE rag_source_document SET chunk_strategy = COALESCE($2, chunk_strategy) WHERE id = $1",
-                           row["id"], chunk_strategy)
+        # 제목·상위 제목·원본 판은 최신 미리보기 값으로(리뷰 L3 — 내용이 같아도 페이지 이름·판이 바뀔 수 있다)
+        await conn.execute("UPDATE rag_source_document SET title = COALESCE($2, title), parent_title = $3, "
+                           "source_version = COALESCE($4, source_version) WHERE id = $1",
+                           row["id"], title, parent_title, source_version)
         return row["id"]
     return await conn.fetchval("""
         INSERT INTO rag_source_document
@@ -81,9 +87,13 @@ async def valid_documents(conn, ns_id: int, doc_ids: list[int]) -> list[int]:
     return sorted(r["id"] for r in rows)
 
 
-async def replacing_documents(conn, ns_id: int, doc_ids: list[int]) -> list[int]:
-    """이 등록이 대체하는 원문(자기 자신 포함 — 다시 분할) — 그 원문들의 기존 청크는 옛 버전이라 중복 비교에서 빼고 전환 때 폐기."""
-    if not doc_ids:
+async def replacing_documents(conn, ns_id: int, doc_ids: list[int], page_ids: list[str] = ()) -> list[int]:
+    """이 등록이 대체하는 원문(자기 자신 포함 — 다시 분할) — 그 원문들의 기존 청크는 옛 버전이라 중복 비교에서 빼고 전환 때 폐기.
+
+    page_ids: 이 등록에 실린 컨플루언스 페이지 — 그 페이지의 사용 중 원문도 대체 대상(리뷰 2026-10-12: 요청의 원문 id가 무효로 끊겨도
+    페이지 교체는 그 페이지 조각을 전부 폐기하는데, 확인은 그 원문을 안 봐서 사람이 고친 조각이 확인 없이 사라질 수 있었다)."""
+    doc_ids, page_ids = list(doc_ids or []), list(page_ids or [])
+    if not doc_ids and not page_ids:
         return []
     rows = await conn.fetch("""
         SELECT DISTINCT o.id FROM rag_source_document o JOIN rag_source_document n ON n.id = ANY($2::int[])
@@ -91,8 +101,71 @@ async def replacing_documents(conn, ns_id: int, doc_ids: list[int]) -> list[int]
               o.id = n.id
            OR (n.source_type = ANY($3::text[]) AND o.source_ref IS NOT NULL AND o.source_ref = n.source_ref)
            OR (o.source_ref IS NOT DISTINCT FROM n.source_ref AND o.content_hash = n.content_hash))
-    """, ns_id, doc_ids, list(STABLE_REF_TYPES))
-    return [r["id"] for r in rows]
+        UNION
+        SELECT id FROM rag_source_document WHERE namespace_id = $1 AND source_type = 'confluence' AND status = 'active'
+          AND source_ref = ANY($4::text[])
+    """, ns_id, doc_ids, list(STABLE_REF_TYPES), page_ids)
+    return sorted(r["id"] for r in rows)
+
+
+def has_touch(reasons: dict) -> bool:
+    return bool(reasons.get("edited") or reasons.get("removed") or reasons.get("partial") or reasons.get("mixed_category"))
+
+
+async def touched_reasons(conn, ns_id: int, doc_ids: list[int], page_ids: list[str] = ()) -> dict:
+    """원문(doc_ids)의 지금 조각에 사람이 손댄 흔적 — 교체(재등록·다시 분할)가 조용히 덮으면 안 되는 것(A안 2026-10-12).
+
+    page_ids: 원장 이전에 등록된 컨플루언스 페이지 조각(원문 연결 없음) — 지금 데이터 대부분이 이것이라 같이 본다(고친 조각만 —
+    v2.129 이전엔 조각마다 업무구분을 LLM이 따로 정해, 업무구분이 섞인 게 사람 손이 아니다).
+    removed는 지금 "사용 중"인 원문에서, 사용 중이 된 뒤 빠진 조각만(리뷰 L2 — 이미 교체된 옛 원문이나 다시 분할 전 등록분의
+    삭제가 다음 재등록마다 계속 걸리던 것. 실서버 시나리오에서 교체 직후 재등록이 또 확인을 묻는 것으로 발견).
+    """
+    doc_ids, page_ids = list(doc_ids or []), list(page_ids or [])
+    if not doc_ids and not page_ids:
+        return {"edited": 0, "removed": 0, "partial": False, "mixed_category": False}
+    scope = ("k.namespace_id = $1 AND (k.source_document_id = ANY($2::int[]) "
+             "OR (k.source_document_id IS NULL AND k.confluence_page_id = ANY($3::text[])))")
+    row = await conn.fetchrow(f"""
+        SELECT count(*) FILTER (WHERE k.status IN ('active', 'pending_review')
+                                  AND (k.content_edited_at IS NOT NULL OR k.supersedes_id IS NOT NULL)) AS edited,
+               (SELECT count(DISTINCT x.category) FROM rag_knowledge x
+                WHERE x.namespace_id = $1 AND x.source_document_id = ANY($2::int[])
+                  AND x.status IN ('active', 'pending_review') AND x.category IS NOT NULL
+                GROUP BY x.source_document_id ORDER BY 1 DESC LIMIT 1) AS max_categories
+        FROM rag_knowledge k WHERE {scope}
+    """, ns_id, doc_ids, page_ids)
+    removed = await conn.fetchval("""
+        SELECT count(*) FROM rag_knowledge k JOIN rag_source_document d ON d.id = k.source_document_id
+        WHERE k.namespace_id = $1 AND d.id = ANY($2::int[]) AND k.status IN ('deleted', 'rejected')
+          AND d.status = 'active' AND k.updated_at > d.activated_at
+    """, ns_id, doc_ids) if doc_ids else 0
+    partial = await conn.fetchval("SELECT bool_or(registered_partial) FROM rag_source_document "
+                                  "WHERE namespace_id = $1 AND id = ANY($2::int[]) AND status = 'active'",
+                                  ns_id, doc_ids) if doc_ids else False
+    return {"edited": int(row["edited"] or 0), "removed": int(removed or 0), "partial": bool(partial),
+            "mixed_category": int(row["max_categories"] or 0) > 1}   # 한 원문 안에서 조각마다 업무구분을 다르게 둠
+
+
+async def lock_sources(conn, ns_id: int, doc_ids: list[int], page_ids: list[str] = ()) -> None:
+    """같은 원본(파트·종류·위치)의 확정을 한 번에 하나씩 — 트랜잭션 안에서만(리뷰 M2 2026-10-12).
+    다른 초안 두 개로 같은 페이지를 동시에 확정하면 둘 다 "사용 중"이 돼 조각이 중복됐다. 원문 없이 페이지만 실린 등록도 같은 키."""
+    if not doc_ids and not page_ids:
+        return
+    keys = await conn.fetch("""
+        SELECT DISTINCT hashtext(namespace_id::text || '|' || source_type || '|' || COALESCE(source_ref, content_hash)) AS k
+        FROM rag_source_document WHERE id = ANY($1::int[])
+        UNION SELECT hashtext($2::text || '|confluence|' || p) FROM unnest($3::text[]) AS p
+        ORDER BY 1""", list(doc_ids or []), str(ns_id), list(page_ids or []))
+    for r in keys:   # 정렬 순서로 잡아 교착 방지
+        await conn.execute("SELECT pg_advisory_xact_lock(7301, $1)", r["k"])
+
+
+async def replace_check(conn, ns_id: int, doc_ids: list[int], page_ids: list[str] = ()) -> dict:
+    """이 등록이 교체할 기존 조각에 사람 손이 닿은 흔적(A안). 흔적이 없으면 바로 교체해도 된다."""
+    valid = await valid_documents(conn, ns_id, doc_ids)
+    replacing = await replacing_documents(conn, ns_id, valid, page_ids)
+    reasons = await touched_reasons(conn, ns_id, replacing, page_ids)
+    return {**reasons, "needs_confirm": has_touch(reasons), "unlinked_sources": sorted(set(doc_ids or []) - set(valid))}
 
 
 async def activate(conn, ns_id: int, doc_ids: list[int], replaced: list[int], partial_ids: list[int]) -> None:
@@ -104,8 +177,10 @@ async def activate(conn, ns_id: int, doc_ids: list[int], replaced: list[int], pa
                        doc_ids, ns_id, partial_ids)
     old = [d for d in replaced if d not in doc_ids]
     if old:
-        await conn.execute("UPDATE rag_source_document SET status = 'superseded' WHERE id = ANY($1::int[]) AND namespace_id = $2",
-                           old, ns_id)
+        # 사용 중이던 것만 — 같은 원본의 다른 초안은 다른 등록이 아직 쓰는 중일 수 있다(동시 확정 시 그 등록의 조각이 원문 연결 없이
+        # 중복으로 살아남던 것, 실서버 동시 시나리오로 발견 2026-10-12). 그 등록이 끝나면 이 원문을 교체한다.
+        await conn.execute("UPDATE rag_source_document SET status = 'superseded' WHERE id = ANY($1::int[]) AND namespace_id = $2 "
+                           "AND status = 'active'", old, ns_id)
 
 
 def rebuild_parsed(doc_row) -> ParsedDocument:

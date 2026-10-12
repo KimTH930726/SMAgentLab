@@ -312,6 +312,17 @@ class TestBulkIngestionStagedActivation:
     이제 배치 행은 staging으로 숨겨졌다가 job 끝에 한 번에 전환되고, 취소·실패면 지워진다.
     """
 
+    @pytest.fixture(autouse=True)
+    def _no_ledger_sql(self):
+        # 원문 원장 SQL(잠금·교체 대상·사람 손 흔적)은 이 가짜 conn이 모른다 — 원장 동작은 test_source_ledger·실서버 시나리오에서
+        from agents.knowledge_rag.ingestion import source_ledger as L
+        with patch.object(L, "lock_sources", AsyncMock()), \
+             patch.object(L, "valid_documents", AsyncMock(return_value=[])), \
+             patch.object(L, "replacing_documents", AsyncMock(return_value=[])), \
+             patch.object(L, "touched_reasons", AsyncMock(return_value={"edited": 0, "removed": 0, "partial": False,
+                                                                           "mixed_category": False})):
+            yield
+
     ITEMS = [{"content": "지식1", "category": "공통지식"}, {"content": "지식2", "category": "공통지식"}]
 
     def _make_conn(self, *, activation_result=1, cancel_flags=None, fail_on_embed_call=None):
@@ -364,6 +375,8 @@ class TestBulkIngestionStagedActivation:
              patch("agents.knowledge_rag.knowledge.service.embedding_service", emb), \
              patch("agents.knowledge_rag.knowledge.service.find_similar_active_knowledge", similar), \
              patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1), \
+             patch("agents.knowledge_rag.ingestion.source_ledger.replace_check",   # 재등록 확인(A안)은 test_source_ledger에서
+                   AsyncMock(return_value={"needs_confirm": False, "unlinked_sources": []})), \
              patch("shared.cache.invalidate_namespace", invalidate, create=True):
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
             return await bulk_create_knowledge("test-ns", [dict(i) for i in self.ITEMS], background=False, **kwargs)
@@ -489,6 +502,8 @@ class TestBulkIngestionStagedActivation:
              patch("agents.knowledge_rag.knowledge.service.embedding_service", emb), \
              patch("agents.knowledge_rag.knowledge.service.find_similar_active_knowledge", similar), \
              patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1), \
+             patch("agents.knowledge_rag.ingestion.source_ledger.replace_check",
+                   AsyncMock(return_value={"needs_confirm": False, "unlinked_sources": []})), \
              patch("shared.cache.invalidate_namespace", AsyncMock(), create=True):
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
             result = await bulk_create_knowledge("test-ns", items, background=False)
@@ -503,6 +518,87 @@ class TestBulkIngestionStagedActivation:
         inserts = [rows for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q]
         assert inserts[0][0][13] == "p1" and inserts[0][0][14] == 3
 
+    # ── 원문 원장: 전환 직전(잠금 안) 다시 확인 — 리뷰 2026-10-12 ──
+    def _ledger_state(self, *, replacing, touched=None):
+        from agents.knowledge_rag.ingestion import source_ledger as L
+        rep = AsyncMock(side_effect=replacing)
+        return rep, [patch.object(L, "valid_documents", AsyncMock(return_value=[5])),
+                     patch.object(L, "replacing_documents", rep),
+                     patch.object(L, "touched_reasons", AsyncMock(return_value={"edited": 0, "removed": 0, "partial": False,
+                                                                                 "mixed_category": False, **(touched or {})})),
+                     patch.object(L, "activate", AsyncMock())]
+
+    async def _run_ledger(self, conn, emb, patches, *, active_newcomers=0, **kwargs):
+        from contextlib import ExitStack
+        self.ITEMS = [{**i, "source_document_id": 5} for i in type(self).ITEMS]
+        base = conn.fetchval.side_effect
+
+        async def fetchval(query, *args):   # 새로 끼어든 원문 중 "사용 중" 개수 — 테스트가 정한 값
+            if "status = 'active'" in query and "rag_source_document" in query:
+                return active_newcomers
+            return await base(query, *args)
+        conn.fetchval = AsyncMock(side_effect=fetchval)
+        with ExitStack() as st:
+            for c in patches:
+                st.enter_context(c)
+            return await self._run(conn, emb, **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_activation_refuses_when_old_chunks_touched_during_ingest(self):
+        """사전 확인 땐 흔적이 없었는데 임베딩 동안 누가 옛 조각을 고침 → 확인 없이 덮지 않고 실패(기존 조각 그대로)."""
+        conn, emb, calls = self._make_conn()
+        _, patches = self._ledger_state(replacing=[[5, 4], [5, 4]], touched={"edited": 1})
+        result = await self._run_ledger(conn, emb, patches)
+        assert result["status"] == "failed" and not self._activation_updates(calls)
+        assert not any("'deprecated'" in q for q, _ in calls["execute"])
+
+    @pytest.mark.asyncio
+    async def test_activation_proceeds_when_user_confirmed(self):
+        conn, emb, calls = self._make_conn()
+        _, patches = self._ledger_state(replacing=[[5, 4], [5, 4]], touched={"edited": 1})
+        result = await self._run_ledger(conn, emb, patches, confirm_replace=True)
+        assert result["status"] == "completed" and self._activation_updates(calls)
+
+    @pytest.mark.asyncio
+    async def test_activation_refuses_when_own_source_replaced_meanwhile(self):
+        """등록 중 이 원문이 교체됨 → 연결만 끊고 활성화하면 원문 없는 중복이 남는다(실서버 동시 시나리오) — 실패로."""
+        from agents.knowledge_rag.ingestion import source_ledger as L
+        conn, emb, calls = self._make_conn()
+        _, patches = self._ledger_state(replacing=[[5], [5]])
+        patches[0] = patch.object(L, "valid_documents", AsyncMock(side_effect=[[5], []]))
+        result = await self._run_ledger(conn, emb, patches, confirm_replace=True)
+        assert result["status"] == "failed" and not self._activation_updates(calls)
+
+    @pytest.mark.asyncio
+    async def test_activation_refuses_when_same_source_confirmed_meanwhile(self):
+        """동시에 같은 원본이 먼저 확정됨(교체 대상에 새로 "사용 중"인 원문 9) → 중복 비교가 낡았으니 실패(리뷰 L1)."""
+        conn, emb, calls = self._make_conn()
+        _, patches = self._ledger_state(replacing=[[5, 4], [5, 4, 9]])
+        result = await self._run_ledger(conn, emb, patches, confirm_replace=True, active_newcomers=1)
+        assert result["status"] == "failed" and not self._activation_updates(calls)
+
+    @pytest.mark.asyncio
+    async def test_activation_ignores_new_drafts_of_same_source(self):
+        """등록 중 누가 같은 원본을 미리보기만 함(새 초안 9) → 실패 사유가 아니다(재리뷰 2026-10-12: 정상 등록이 실패하던 것)."""
+        conn, emb, calls = self._make_conn()
+        _, patches = self._ledger_state(replacing=[[5, 4], [5, 4, 9]])
+        result = await self._run_ledger(conn, emb, patches, confirm_replace=True, active_newcomers=0)
+        assert result["status"] == "completed" and self._activation_updates(calls)
+
+    @pytest.mark.asyncio
+    async def test_strict_source_fails_when_own_source_replaced_before_ingest(self):
+        """다시 분할(strict): 사전 확인 뒤 job 시작 전에 원문이 교체됨 → 연결만 끊고 진행하지 않고 실패 기록."""
+        from agents.knowledge_rag.ingestion import source_ledger as L
+        from agents.knowledge_rag.knowledge import service
+        conn, emb, calls = self._make_conn()
+        _, patches = self._ledger_state(replacing=[[5]])
+        patches[0] = patch.object(L, "valid_documents", AsyncMock(return_value=[]))
+        discard = AsyncMock()
+        patches.append(patch.object(service, "_discard_staged_job", discard))
+        result = await self._run_ledger(conn, emb, patches, confirm_replace=True, strict_source=True)
+        assert result["status"] == "failed" and not emb.embed_batch.called
+        assert discard.call_args.args[1] == "failed" and "교체" in discard.call_args.kwargs["error_message"]
+
     @pytest.mark.asyncio
     async def test_confluence_old_version_kept_when_job_fails_or_cancels(self):
         items = [{"content": "c1", "category": "공통지식", "confluence_page_id": "p1"}] * 2
@@ -512,7 +608,9 @@ class TestBulkIngestionStagedActivation:
                  patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
                  patch("agents.knowledge_rag.knowledge.service.embedding_service", emb), \
                  patch("agents.knowledge_rag.knowledge.service.find_similar_active_knowledge", AsyncMock(return_value=[])), \
-                 patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1):
+                 patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1), \
+                 patch("agents.knowledge_rag.ingestion.source_ledger.replace_check",
+                       AsyncMock(return_value={"needs_confirm": False, "unlinked_sources": []})):
                 from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
                 await bulk_create_knowledge("test-ns", [dict(i) for i in items], background=False)
             assert not any("'deprecated'" in q for q, _ in calls["execute"]), kwargs
