@@ -1380,6 +1380,30 @@ async def _migrate_rename_opslens(conn) -> None:
         logger.info("[migrate #67] 프롬프트 자기소개 OpsLens로: %s", r)
 
 
+async def _migrate_llm_usage(conn) -> None:
+    """사내 LLM 사용량 기록 (2026-10-12, #74) — 호출 1건마다 기능·입출력 글자·토큰(게이트웨이 metadata.usage)·시간·성공.
+    본문은 저장하지 않는다. 90일 지난 기록은 기동 때 지운다(집계 화면은 최근 7일). service/llm/usage.py. 멱등."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_llm_usage (
+            id BIGSERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            provider VARCHAR(30) NOT NULL,
+            method VARCHAR(20) NOT NULL,
+            module VARCHAR(200),
+            feature VARCHAR(100),
+            input_chars INTEGER NOT NULL DEFAULT 0,
+            output_chars INTEGER NOT NULL DEFAULT 0,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            duration_ms INTEGER,
+            ok BOOLEAN
+        )""")
+    # ok: TRUE 성공 / FALSE 실패 / NULL 사용자가 중단(답변 멈춤 — 실패로 세지 않음, 리뷰 2026-10-12)
+    await conn.execute("ALTER TABLE ops_llm_usage ALTER COLUMN ok DROP NOT NULL")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON ops_llm_usage (created_at)")
+    await conn.execute("DELETE FROM ops_llm_usage WHERE created_at < NOW() - interval '90 days'")
+
+
 async def _migrate_source_document(conn) -> None:
     """지식 원문 원장 (2026-10-08, #73) — 원문 = SoT, 청크·임베딩 = 다시 만들 수 있는 파생물(업계 표준, 사용자 결정 10/07).
     docs/tech/source-ledger-plan.md. 미리보기 때 초안 → 확정 때 사용 중 → 같은 원본 위치 재등록 시 교체됨. 멱등."""
@@ -1698,6 +1722,7 @@ async def _run_migrations() -> None:
         await _migrate_ingestion_quality(conn)
         await _migrate_rename_unsorted_category(conn)
         await _migrate_source_document(conn)
+        await _migrate_llm_usage(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

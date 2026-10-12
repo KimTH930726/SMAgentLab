@@ -21,9 +21,29 @@ import httpx
 
 from core.config import settings
 from service.llm.base import LLMProvider, REPLACE_PREFIX, _FALLBACK_SYSTEM_PROMPT, wrap_reference_context
+from service.llm import usage
 from service.llm.gateway_text import StreamRestorer, from_gateway, to_gateway
 
 logger = logging.getLogger(__name__)
+
+def _log_usage(*, meta, method: str, module: str, input_chars: int, output_chars: int, duration_ms: int,
+               ok: Optional[bool]) -> None:
+    """사용량 기록 — 어떤 이유로도 LLM 호출을 깨뜨리지 않는다(기록 실패는 경고 로그만, 2026-10-12)."""
+    try:
+        it, ot = usage.tokens_from(meta if isinstance(meta, dict) else None)
+        usage.record(provider="inhouse", method=method, module=module, input_chars=input_chars, output_chars=output_chars,
+                     input_tokens=it, output_tokens=ot, duration_ms=duration_ms, ok=ok)
+    except Exception:
+        logger.warning("LLM 사용량 기록 실패(호출에는 영향 없음)", exc_info=True)
+
+
+def _caller() -> str:
+    try:
+        name = usage.caller_module()
+        return name if isinstance(name, str) else ""
+    except Exception:
+        return ""
+
 
 def _build_query(
     context: str, question: str, history: list[dict] | None = None,
@@ -222,11 +242,22 @@ class InHouseLLMProvider(LLMProvider):
             query, response_mode="blocking",
             payload_user=uid or "system", ext_conversation_id=None,
         )
-        headers = await self._build_headers(client_id=cid, client_secret=csec)
-        async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
-            resp = await client.post(self._chat_url, json=payload)
-            resp.raise_for_status()
-            return _extract_answer(resp.json())
+        module, t0, data, answer, ok = _caller(), time.monotonic(), None, "", False
+        try:
+            headers = await self._build_headers(client_id=cid, client_secret=csec)   # 토큰 발급 실패도 기록되게 try 안
+            async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
+                resp = await client.post(self._chat_url, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                answer = _extract_answer(data)
+                ok = True
+                return answer
+        except asyncio.CancelledError:
+            ok = None   # 요청 취소(사용자 중단) — 실패로 세지 않는다
+            raise
+        finally:
+            _log_usage(meta=(data or {}).get("metadata"), method="once", module=module, input_chars=len(query), output_chars=len(answer),
+                       duration_ms=int((time.monotonic() - t0) * 1000), ok=ok)
 
     async def generate(
         self,
@@ -244,21 +275,30 @@ class InHouseLLMProvider(LLMProvider):
             query, response_mode="blocking",
             payload_user=uid or "system", ext_conversation_id=ext_conversation_id,
         )
-        headers = await self._build_headers(client_id=cid, client_secret=csec)
         logger.info(
             "generate(blocking) → POST %s (query=%d chars, conv_id=%s, user=%s, system_creds=%s)",
             self._chat_url, len(query), ext_conversation_id, uid or "system",
             user_credentials is None,
         )
-        async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
-            resp = await client.post(self._chat_url, json=payload)
-            # 본문은 남기지 않는다(답변엔 컨플루언스·정책 원문이 섞여 로그로 새면 안 됨, v2.128) — 길이만
-            logger.info("generate ← status=%d, body=%d chars", resp.status_code, len(resp.text))
-            resp.raise_for_status()
-            data = resp.json()
-            answer = _extract_answer(data)
-            new_conv_id = data.get("conversation_id")
-            return answer, new_conv_id
+        module, t0, data, answer, ok = _caller(), time.monotonic(), None, "", False
+        try:
+            headers = await self._build_headers(client_id=cid, client_secret=csec)
+            async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
+                resp = await client.post(self._chat_url, json=payload)
+                # 본문은 남기지 않는다(답변엔 컨플루언스·정책 원문이 섞여 로그로 새면 안 됨, v2.128) — 길이만
+                logger.info("generate ← status=%d, body=%d chars", resp.status_code, len(resp.text))
+                resp.raise_for_status()
+                data = resp.json()
+                answer = _extract_answer(data)
+                new_conv_id = data.get("conversation_id")
+                ok = True
+                return answer, new_conv_id
+        except asyncio.CancelledError:
+            ok = None
+            raise
+        finally:
+            _log_usage(meta=(data or {}).get("metadata"), method="generate", module=module, input_chars=len(query), output_chars=len(answer),
+                       duration_ms=int((time.monotonic() - t0) * 1000), ok=ok)
 
     async def generate_stream(
         self,
@@ -279,94 +319,120 @@ class InHouseLLMProvider(LLMProvider):
             payload_user=uid or "system", ext_conversation_id=ext_conversation_id,
         )
 
+        module, t0 = _caller(), time.monotonic()
         if not use_streaming:
             # blocking 모드: 전체 응답을 한번에 받아서 yield
-            headers = await self._build_headers(client_id=cid, client_secret=csec)
-            async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
-                resp = await client.post(self._chat_url, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                new_ext_conv_id = data.get("conversation_id")
-                if new_ext_conv_id and on_ext_conversation_id:
-                    on_ext_conversation_id(new_ext_conv_id)
-                yield _extract_answer(data)
+            data, answer, ok = None, "", False
+            try:
+                headers = await self._build_headers(client_id=cid, client_secret=csec)
+                async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
+                    resp = await client.post(self._chat_url, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    new_ext_conv_id = data.get("conversation_id")
+                    if new_ext_conv_id and on_ext_conversation_id:
+                        on_ext_conversation_id(new_ext_conv_id)
+                    answer = _extract_answer(data)
+                    ok = True
+                yield answer
+            except (GeneratorExit, asyncio.CancelledError):
+                if not ok:
+                    ok = None   # 받기 전 취소면 중단(받은 뒤 소비자가 닫은 건 성공 그대로)
+                raise
+            finally:
+                _log_usage(meta=(data or {}).get("metadata"), method="stream", module=module, input_chars=len(query), output_chars=len(answer),
+                           duration_ms=int((time.monotonic() - t0) * 1000), ok=ok)
             return
 
         # streaming 모드: SSE 파싱
-        headers = await self._build_headers(client_id=cid, client_secret=csec, accept_sse=True)
-        logger.info(
-            "generate_stream(streaming) → POST %s (query=%d chars, ext_conv_id=%s, user=%s, system_creds=%s)",
-            self._chat_url, len(query), ext_conversation_id, uid or "system",
-            user_credentials is None,
-        )
-        async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
-            async with client.stream("POST", self._chat_url, json=payload) as resp:
-                logger.info("generate_stream ← status=%d", resp.status_code)
-                resp.raise_for_status()
-                line_count = 0
-                yielded = 0
-                events: Counter = Counter()
-                last_other = ""     # 토큰이 아닌 마지막 이벤트의 "모양"(종류·키 이름만 — 내용은 로그에 안 남김)
-                captured_ext_conv_id: Optional[str] = None
-                restorer = StreamRestorer()
-                async for line in resp.aiter_lines():
-                    line = line.strip()
-                    if not line or not line.startswith("data:"):
-                        continue
-                    line_count += 1
-                    raw = line[5:].strip()
-                    if raw in ("[DONE]", ""):
-                        continue
-                    try:
-                        chunk = json.loads(raw)
-                    except json.JSONDecodeError:
-                        logger.warning("SSE parse error (%d chars)", len(raw))   # 내용은 답변일 수 있어 길이만
-                        continue
-                    if not captured_ext_conv_id:
-                        cidc = chunk.get("conversation_id")
-                        if cidc:
-                            captured_ext_conv_id = cidc
-                    event_type = chunk.get("event", "")
-                    events[event_type] += 1
-                    if event_type == "message_end":
-                        logger.info(
-                            "SSE message_end (data_lines=%d, ext_conv_id=%s)",
-                            line_count, captured_ext_conv_id,
-                        )
-                        if captured_ext_conv_id and on_ext_conversation_id:
-                            on_ext_conversation_id(captured_ext_conv_id)
-                        break
-                    # dify 계열 이벤트(v2.128): 에이전트형 앱은 agent_message, 워크플로형 앱은 text_chunk(data.text)로 토큰을 보내고,
-                    # 검열(moderation)은 message_replace로 답을 통째로 바꾸고, 실패는 error 이벤트로 온다 — 예전엔 message만 읽어 나머지는
-                    # 조용히 버려져 빈 답이 됐다
-                    if event_type in ("message", "agent_message", "text_chunk"):
-                        piece = (chunk.get("data") or {}).get("text", "") if event_type == "text_chunk" else chunk.get("answer", "")
-                        token = restorer.feed(piece or "")
-                        if token:
+        out_chars, end_meta, ok = 0, {}, False
+        try:
+            headers = await self._build_headers(client_id=cid, client_secret=csec, accept_sse=True)
+            logger.info(
+                "generate_stream(streaming) → POST %s (query=%d chars, ext_conv_id=%s, user=%s, system_creds=%s)",
+                self._chat_url, len(query), ext_conversation_id, uid or "system",
+                user_credentials is None,
+            )
+            async with httpx.AsyncClient(timeout=self._timeout, headers=headers) as client:
+                async with client.stream("POST", self._chat_url, json=payload) as resp:
+                    logger.info("generate_stream ← status=%d", resp.status_code)
+                    resp.raise_for_status()
+                    line_count = 0
+                    yielded = 0
+                    events: Counter = Counter()
+                    last_other = ""     # 토큰이 아닌 마지막 이벤트의 "모양"(종류·키 이름만 — 내용은 로그에 안 남김)
+                    captured_ext_conv_id: Optional[str] = None
+                    restorer = StreamRestorer()
+                    async for line in resp.aiter_lines():
+                        line = line.strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+                        line_count += 1
+                        raw = line[5:].strip()
+                        if raw in ("[DONE]", ""):
+                            continue
+                        try:
+                            chunk = json.loads(raw)
+                        except json.JSONDecodeError:
+                            logger.warning("SSE parse error (%d chars)", len(raw))   # 내용은 답변일 수 있어 길이만
+                            continue
+                        if not captured_ext_conv_id:
+                            cidc = chunk.get("conversation_id")
+                            if cidc:
+                                captured_ext_conv_id = cidc
+                        event_type = chunk.get("event", "")
+                        events[event_type] += 1
+                        if event_type == "message_end":
+                            end_meta = chunk.get("metadata") or {}   # 게이트웨이 토큰 사용량(usage)
+                            logger.info(
+                                "SSE message_end (data_lines=%d, ext_conv_id=%s)",
+                                line_count, captured_ext_conv_id,
+                            )
+                            if captured_ext_conv_id and on_ext_conversation_id:
+                                on_ext_conversation_id(captured_ext_conv_id)
+                            break
+                        # dify 계열 이벤트(v2.128): 에이전트형 앱은 agent_message, 워크플로형 앱은 text_chunk(data.text)로 토큰을 보내고,
+                        # 검열(moderation)은 message_replace로 답을 통째로 바꾸고, 실패는 error 이벤트로 온다 — 예전엔 message만 읽어 나머지는
+                        # 조용히 버려져 빈 답이 됐다
+                        if event_type in ("message", "agent_message", "text_chunk"):
+                            piece = (chunk.get("data") or {}).get("text", "") if event_type == "text_chunk" else chunk.get("answer", "")
+                            token = restorer.feed(piece or "")
+                            if token:
+                                yielded += 1
+                                out_chars += len(token)
+                                yield token
+                        elif event_type == "message_replace":
+                            # 지금까지 보낸 답을 버리고 이 내용으로 바꿔야 한다 — 호출부(에이전트)가 REPLACE_PREFIX를 보고 답변을 교체한다.
+                            # 원복 대기 중인 숫자 조각도 버린다(리뷰 2026-10-07: 뒤에 붙여 원문과 교체문이 함께 저장·캐시되던 문제)
+                            restorer = StreamRestorer()
                             yielded += 1
-                            yield token
-                    elif event_type == "message_replace":
-                        # 지금까지 보낸 답을 버리고 이 내용으로 바꿔야 한다 — 호출부(에이전트)가 REPLACE_PREFIX를 보고 답변을 교체한다.
-                        # 원복 대기 중인 숫자 조각도 버린다(리뷰 2026-10-07: 뒤에 붙여 원문과 교체문이 함께 저장·캐시되던 문제)
-                        restorer = StreamRestorer()
+                            replaced = from_gateway(chunk.get("answer", "") or "")
+                            out_chars = len(replaced)   # 답을 통째로 바꾸므로 지금까지 길이 대신
+                            yield REPLACE_PREFIX + replaced
+                        elif event_type == "error":
+                            # 메시지 본문은 남기지 않는다(답변·문서 내용이 섞일 수 있음) — 상태·코드·길이만
+                            raise RuntimeError(
+                                f"게이트웨이 오류 이벤트(status={chunk.get('status')}, code={chunk.get('code')}, "
+                                f"message {len(str(chunk.get('message') or ''))} chars)")
+                        else:
+                            last_other = f"{event_type}{sorted(chunk.keys())}"
+                    tail = restorer.flush()
+                    if tail:
                         yielded += 1
-                        yield REPLACE_PREFIX + from_gateway(chunk.get("answer", "") or "")
-                    elif event_type == "error":
-                        # 메시지 본문은 남기지 않는다(답변·문서 내용이 섞일 수 있음) — 상태·코드·길이만
-                        raise RuntimeError(
-                            f"게이트웨이 오류 이벤트(status={chunk.get('status')}, code={chunk.get('code')}, "
-                            f"message {len(str(chunk.get('message') or ''))} chars)")
-                    else:
-                        last_other = f"{event_type}{sorted(chunk.keys())}"
-                tail = restorer.flush()
-                if tail:
-                    yielded += 1
-                    yield tail
-                if not yielded:
-                    logger.warning(
-                        "게이트웨이 스트림이 토큰 0개로 끝남: status=%d, data_lines=%d, 이벤트=%s, 마지막 기타 이벤트(종류·키)=%s",
-                        resp.status_code, line_count, dict(events), last_other,
-                    )
+                        out_chars += len(tail)
+                        yield tail
+                    if not yielded:
+                        logger.warning(
+                            "게이트웨이 스트림이 토큰 0개로 끝남: status=%d, data_lines=%d, 이벤트=%s, 마지막 기타 이벤트(종류·키)=%s",
+                            resp.status_code, line_count, dict(events), last_other,
+                        )
+            ok = True
+        except (GeneratorExit, asyncio.CancelledError):
+            ok = None   # 사용자가 답변을 멈춤(AbortController) — 실패로 세지 않는다
+            raise
+        finally:
+            _log_usage(meta=end_meta, method="stream", module=module, input_chars=len(query), output_chars=out_chars,
+                       duration_ms=int((time.monotonic() - t0) * 1000), ok=ok)
 
     async def health_check(self) -> bool:
         """시스템 자격증명으로 토큰 발급 시도. 4xx 응답도 게이트웨이 도달 가능 의미로 간주."""

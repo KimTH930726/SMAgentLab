@@ -121,3 +121,72 @@ async def test_zero_tokens_logs_warning_with_event_types(monkeypatch, caplog):
         assert await _collect(p) == []
     msg = " ".join(r.getMessage() for r in caplog.records)
     assert "토큰 0개" in msg and "node_finished" in msg and "10.1.2.3" not in msg
+
+
+# ── 사용량 기록(2026-10-12 리뷰) — 성공·실패·사용자 중단을 구분하고, 토큰 발급 실패도 남긴다 ──
+
+@pytest.mark.asyncio
+async def test_usage_logged_once_per_stream_with_ok_flag(monkeypatch):
+    log = []
+    monkeypatch.setattr(inhouse, "_log_usage", lambda **k: log.append(k))
+    p = _provider(monkeypatch, [{"event": "message", "answer": "안녕"},
+                                {"event": "message_end", "metadata": {"usage": {"prompt_tokens": 10, "completion_tokens": 2}}}])
+    await _collect(p)
+    assert len(log) == 1 and log[0]["ok"] is True and log[0]["output_chars"] == 2
+    assert log[0]["meta"]["usage"]["prompt_tokens"] == 10
+
+
+@pytest.mark.asyncio
+async def test_usage_user_abort_is_not_a_failure(monkeypatch):
+    """답변 중 멈춤(소비자가 스트림을 닫음)은 실패로 세지 않는다 — ok=None."""
+    log = []
+    monkeypatch.setattr(inhouse, "_log_usage", lambda **k: log.append(k))
+    p = _provider(monkeypatch, [{"event": "message", "answer": "첫 조각 "}, {"event": "message", "answer": "둘째"},
+                                {"event": "message_end"}])
+    gen = p.generate_stream("ctx", "q", system_prompt="S")
+    await gen.__anext__()
+    await gen.aclose()
+    assert len(log) == 1 and log[0]["ok"] is None
+
+
+@pytest.mark.asyncio
+async def test_usage_gateway_error_is_a_failure(monkeypatch):
+    log = []
+    monkeypatch.setattr(inhouse, "_log_usage", lambda **k: log.append(k))
+    p = _provider(monkeypatch, [{"event": "error", "status": 500, "code": "x", "message": "boom"}])
+    with pytest.raises(Exception):
+        await _collect(p)
+    assert len(log) == 1 and log[0]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_usage_logged_when_token_issue_fails(monkeypatch):
+    """토큰 발급(_build_headers) 실패도 기록 — 예전엔 try 밖이라 인증 장애가 사용량 화면에 안 보였다."""
+    log = []
+    monkeypatch.setattr(inhouse, "_log_usage", lambda **k: log.append(k))
+    p = _provider(monkeypatch, [])
+    monkeypatch.setattr(p, "_build_headers", AsyncMock(side_effect=RuntimeError("토큰 발급 실패")))
+    with pytest.raises(RuntimeError):
+        await p.generate_once("질문")
+    with pytest.raises(RuntimeError):
+        await p.generate("ctx", "q")
+    assert [x["method"] for x in log] == ["once", "generate"] and all(x["ok"] is False for x in log)
+
+
+@pytest.mark.asyncio
+async def test_usage_blocking_cancel_is_abort_not_failure(monkeypatch):
+    """요청 도중 취소(사용자 중단)는 blocking 경로에서도 실패가 아니라 중단(재리뷰 2026-10-12)."""
+    import asyncio
+    log = []
+    monkeypatch.setattr(inhouse, "_log_usage", lambda **k: log.append(k))
+    p = _provider(monkeypatch, [])
+
+    class _Cancel(_Client):
+        async def post(self, *a, **k):
+            raise asyncio.CancelledError()
+    monkeypatch.setattr(inhouse.httpx, "AsyncClient", lambda **k: _Cancel(None))
+    with pytest.raises(asyncio.CancelledError):
+        await p.generate_once("질문")
+    with pytest.raises(asyncio.CancelledError):
+        await p.generate("ctx", "q")
+    assert [x["ok"] for x in log] == [None, None]

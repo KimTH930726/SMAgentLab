@@ -100,3 +100,13 @@ export async function updateSearchDefaults(payload: Partial<SearchDefaults>): Pr
     body: JSON.stringify(payload),
   });
 }
+
+// 사내 LLM 사용량(2026-10-12) — 기능별 집계, 읽기 전용
+export interface LlmUsageFeature {
+  feature: string; calls: number; failed: number; aborted?: number; input_tokens: number | null; output_tokens: number | null;
+  with_tokens: number; input_chars: number | null; output_chars: number | null; avg_ms: number | null; last_at: string | null;
+}
+
+export async function getLlmUsage(days = 7): Promise<{ days: number; features: LlmUsageFeature[] }> {
+  return await apiFetch(`/admin/llm-usage?days=${days}`);
+}

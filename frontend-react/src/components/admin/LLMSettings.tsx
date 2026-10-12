@@ -10,6 +10,7 @@ import { PromptManager } from './PromptManager';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
 import { showError } from '../../store/useDialogStore';
+import { LlmUsagePanel } from './LlmUsagePanel';
 
 type Provider = 'ollama' | 'inhouse';
 
@@ -313,6 +314,8 @@ function ProviderSettings() {
           )}
         </div>
       </div>
+
+      <LlmUsagePanel />
 
       {/* Provider selector */}
       <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 space-y-4">

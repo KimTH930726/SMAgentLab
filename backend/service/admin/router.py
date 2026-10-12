@@ -461,6 +461,14 @@ class CacheConfigRequest(BaseModel):
     cache_ttl: int | None = None
 
 
+@router.get("/api/admin/llm-usage")
+async def get_llm_usage(days: int = 7, admin: dict = Depends(get_current_admin)):
+    """사내 LLM 사용량 — 기능별 호출 수·실패·토큰(없으면 글자)·평균 시간, 최근 N일(2026-10-12, 읽기 전용)."""
+    from service.llm.usage import summary
+    days = max(1, min(days, 90))   # 기록은 90일만 보관 — 화면에도 실제 집계 기간을 돌려준다
+    return {"days": days, "features": await summary(days)}
+
+
 @router.get("/api/admin/cache/config")
 async def get_cache_config(admin: dict = Depends(get_current_admin)):
     return {
