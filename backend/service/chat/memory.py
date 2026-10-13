@@ -18,6 +18,14 @@ RECALL_THRESHOLD = 0.45
 MULTITURN_RELEVANCE_THRESHOLD = 0.35
 
 
+async def has_previous_turns(conversation_id: int, *, exclude_message_id: Optional[int] = None) -> bool:
+    """이 대화에 지금 질문 이전 메시지가 있나 — 있으면 답이 대화 이력(직전 교환·요약)에 기대므로 캐시를 쓰지 않는다(2026-10-13)."""
+    async with get_conn() as conn:
+        return bool(await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM ops_message WHERE conversation_id = $1 AND ($2::int IS NULL OR id < $2))",
+            conversation_id, exclude_message_id))
+
+
 async def augment_query_for_search(
     conversation_id: int, query: str, *, exclude_message_id: Optional[int] = None,
 ) -> tuple[str, list[float]]:

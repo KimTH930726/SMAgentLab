@@ -319,7 +319,11 @@ class KnowledgeRagAgent(AgentBase):
 
             # ── Semantic Cache 조회 ──
             # 재질문에서 범위를 고른 요청은 캐시를 읽지도 쓰지도 않는다 — 범위 없이 답한 비슷한 질문의 답이 걸리면 고른 범위와 무관
-            cached = None if clarify_scope else await sem_cache.get_cached(namespace, "knowledge_rag", cache_vec)
+            # 대화의 첫 질문만 캐시를 쓴다: 2턴째부터는 LLM이 대화 이력(직전 교환·요약)을 보고 답해 같은 글("수신자는요?")이라도 대화마다
+            # 뜻이 다르다 — 다른 대화의 답이 그대로 나갔다(2026-10-13 멀티턴 실측: 텀블러 쿠폰 대화에 선물하기 수신자 답). 검색 보강
+            # 여부로만 가르면 보강 기준(유사도 0.35)에 못 미친 짧은 후속 질문이 새어 나갔다(리뷰).
+            contextual = search_question != query or await memory.has_previous_turns(conversation_id, exclude_message_id=user_msg_id)
+            cached = None if (clarify_scope or contextual) else await sem_cache.get_cached(namespace, "knowledge_rag", cache_vec)
             if cached:
                 cached_citations = cached.get("policy_citations", [])
                 # 캐시 응답도 근거(results)를 메시지에 남긴다 — 안 남기면 다시 열었을 때 근거 카드가 사라지고,
@@ -465,7 +469,7 @@ class KnowledgeRagAgent(AgentBase):
                                    had_context=had_context)
 
             # ── Semantic Cache 저장 (LLM 정상 응답 시만, 결과 유무 무관 — 연결 실패·게이트웨이 거부는 제외) ──
-            if not is_llm_failure(final_answer) and not clarify_scope:
+            if not is_llm_failure(final_answer) and not clarify_scope and not contextual:
                 await sem_cache.set_cached(namespace, "knowledge_rag", cache_vec, {
                     "answer": final_answer,
                     "mapped_term": mapped_term,

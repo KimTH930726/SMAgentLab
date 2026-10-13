@@ -81,22 +81,27 @@ UNAVAILABLE = "[LLM 서버에 연결할 수 없습니다. 검색 결과를 참�
 REPLACE = "\x00REPLACE\x00"
 
 
-def _wire(monkeypatch, *, abstain: bool, tokens: list[str]):
+def _wire(monkeypatch, *, abstain: bool, tokens: list[str], contextual: bool = False, clarify=None, has_prev: bool = False):
     # service.chat.helpers도 conftest가 MagicMock — 이 테스트가 보는 상수·판정만 실제 값으로
     monkeypatch.setattr(agent, "NO_KNOWLEDGE_MARKER", NO_KNOWLEDGE)
     monkeypatch.setattr(agent, "LLM_EMPTY_MSG", EMPTY)
     monkeypatch.setattr(agent, "LLM_UNAVAILABLE_MSG", UNAVAILABLE)
     monkeypatch.setattr(agent, "is_llm_failure", lambda a: not a or a in (UNAVAILABLE, EMPTY))
     monkeypatch.setattr(agent, "REPLACE_PREFIX", REPLACE)
-    monkeypatch.setattr(agent.memory, "augment_query_for_search", AsyncMock(return_value=("q", [0.1])))
+    # 단독 질문이면 검색 질의 = 질문 그대로, 후속 질문이면 직전 턴이 붙는다(contextual)
+    monkeypatch.setattr(agent.memory, "augment_query_for_search",
+                        AsyncMock(side_effect=lambda conv, q, **k: ((f"직전 턴 {q}" if contextual else q), [0.1])))
     monkeypatch.setattr(agent.memory, "build_context_history", AsyncMock(return_value=[]))
+    monkeypatch.setattr(agent.memory, "has_previous_turns", AsyncMock(return_value=has_prev or contextual))
     monkeypatch.setattr(agent.embedding_service, "embed", AsyncMock(return_value=[0.1]))
     monkeypatch.setattr(agent.sem_cache, "normalize_query", lambda q: q)
-    monkeypatch.setattr(agent.sem_cache, "get_cached", AsyncMock(return_value=None))
+    get_cached = AsyncMock(return_value=None)
+    monkeypatch.setattr(agent.sem_cache, "get_cached", get_cached)
     set_cached = AsyncMock()
     monkeypatch.setattr(agent.sem_cache, "set_cached", set_cached)
     cc = agent.ChatContext(results=[], policy_result=PolicySearchResult(), common_codes=[], db_columns=[],
-                           llm_context="" if abstain else "ctx", enriched_query="q", mapped_term=None, abstain=abstain)
+                           llm_context="" if abstain else "ctx", enriched_query="q", mapped_term=None, abstain=abstain,
+                           clarify=clarify)
     monkeypatch.setattr(agent, "build_chat_context", AsyncMock(return_value=cc))
     monkeypatch.setattr(agent, "get_conn", lambda: _ConnCtx())
     upd = AsyncMock()
@@ -114,6 +119,7 @@ def _wire(monkeypatch, *, abstain: bool, tokens: list[str]):
             yield t
     llm.generate_stream = gen
     monkeypatch.setattr(agent, "get_llm_provider", lambda: llm)
+    _wire.get_cached = get_cached
     return upd, log, set_cached, calls
 
 
@@ -163,3 +169,48 @@ async def test_gateway_replace_discards_streamed_text(monkeypatch):
     assert {"type": "replace", "data": "교체된 안내문"} in events
     assert log.await_args.args[2] == "교체된 안내문"
     assert set_cached.await_args.args[3]["answer"] == "교체된 안내문"
+
+
+@pytest.mark.asyncio
+async def test_followup_question_skips_cache(monkeypatch):
+    """앞 턴에 기대는 후속 질문(검색에 직전 턴이 붙음)은 캐시를 읽지도 쓰지도 않는다 — 같은 글("수신자는요?")이라도 대화마다 뜻이
+    달라 다른 대화의 답이 나갔다(2026-10-13 멀티턴 실측)."""
+    upd, log, set_cached, calls = _wire(monkeypatch, abstain=False, tokens=["대화 맥락 답"], contextual=True)
+    events = await _run()
+    assert calls == [1]
+    _wire.get_cached.assert_not_awaited()
+    set_cached.assert_not_awaited()
+    assert "".join(e["data"] for e in events if e["type"] == "token") == "대화 맥락 답"
+
+
+@pytest.mark.asyncio
+async def test_standalone_question_still_cached(monkeypatch):
+    upd, log, set_cached, calls = _wire(monkeypatch, abstain=False, tokens=["단독 답"], contextual=False)
+    await _run()
+    _wire.get_cached.assert_awaited_once()
+    set_cached.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_clarify_returns_options_without_llm_log_or_cache(monkeypatch):
+    """재질문(v2.134): LLM 없이 선택지 이벤트 + 같은 글 토큰, 메시지 metadata에 선택지 저장, 질의 기록·캐시 없음."""
+    cf = {"message": "어느 부분을 볼까요?", "options": [{"label": "A (3개)", "scope": "A", "query": "A 정책 전부 보여줘"},
+                                                     {"label": "전부 보기 (30개)", "scope": "*", "query": "q"}]}
+    upd, log, set_cached, calls = _wire(monkeypatch, abstain=False, tokens=["안 불려야 함"], clarify=cf)
+    events = await _run()
+    assert calls == []
+    assert {"type": "clarify", **cf} in events
+    assert [e["data"] for e in events if e["type"] == "token"] == ["어느 부분을 볼까요?"]
+    assert upd.await_args.kwargs["metadata"] == {"clarify": cf}
+    log.assert_not_awaited()
+    set_cached.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_second_turn_without_augmentation_skips_cache(monkeypatch):
+    """검색 보강이 안 붙은(유사도 미달) 짧은 후속 질문도 2턴째면 캐시를 안 쓴다 — LLM은 이력을 보고 답하기 때문(리뷰 2026-10-13)."""
+    upd, log, set_cached, calls = _wire(monkeypatch, abstain=False, tokens=["이력 기반 답"], contextual=False, has_prev=True)
+    await _run()
+    _wire.get_cached.assert_not_awaited()
+    set_cached.assert_not_awaited()
+
