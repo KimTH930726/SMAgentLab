@@ -10,6 +10,7 @@ from core.config import settings
 from core.database import init_pool, close_pool, get_conn
 from core.security import hash_password
 from service.chat.helpers import NO_KNOWLEDGE_MARKER
+from service.llm.base import CHAT_SYSTEM_PROMPT
 from shared.embedding import embedding_service
 from shared import reranker as reranker_service
 from service.llm.factory import get_llm_provider
@@ -379,24 +380,8 @@ async def _migrate_system_tables(conn) -> None:
         ('conv_summarize',      '대화 요약',               $4,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all')
         ON CONFLICT (func_key) DO NOTHING
     """,
-        # chat_system — NO_KNOWLEDGE_MARKER를 그대로 삽입해 service/chat/helpers.py의
-        # 지식공백 감지 문자열과 프롬프트 지시문이 절대 따로 놀지 않도록 한다
-        f"""IT 운영 지식 AI(OpsLens). 아래 규칙을 따르세요.
-
-[원칙]
-- 반드시 제공된 [참고 문서]만 근거로 답변. 문서에 없는 내용은 절대 만들어내지 마세요.
-- 관련 문서가 없으면 다른 설명이나 마크다운 서식 없이 정확히 "{NO_KNOWLEDGE_MARKER}"라고만
-  답변하세요. 이 경우 아래 [형식] 규칙(마크다운, 근거 표시 등)은 적용하지 않습니다.
-- 신뢰도 높음 문서를 우선 근거로 사용. 낮음은 보조 참고만.
-
-[문맥 활용]
-- [과거 유사 사례]가 있으면 답변 형식을 참고하되 현재 문서 내용 우선.
-- 이전 대화가 있으면 맥락을 이어서 답변.
-
-[형식]
-- Markdown(표, 목록, 코드 블록, 볼드) 사용. 한국어 답변.
-- 컨테이너명, 테이블명, SQL이 있으면 반드시 포함.
-- 답변 끝에 근거 표시: 📎 문서 N, 문서 M 참고""",
+        # chat_system — 코드 기본값과 같은 문구(service/llm/base.CHAT_SYSTEM_PROMPT, 2026-10-13 한 곳으로)
+        CHAT_SYSTEM_PROMPT,
         # category_suggest
         """다음 지식 내용을 읽고, 제시된 업무구분 중 가장 적합한 하나를 골라주세요. 반드시 제시된 업무구분 중 하나의 이름만 답하고, 다른 설명은 절대 하지 마세요.
 
@@ -1380,6 +1365,31 @@ async def _migrate_rename_opslens(conn) -> None:
         logger.info("[migrate #67] 프롬프트 자기소개 OpsLens로: %s", r)
 
 
+async def _migrate_prompt_cleanup(conn) -> None:
+    """프롬프트 점검 반영 (2026-10-13, #75). 멱등.
+    - chat_system: 안 쓰이는 두 줄("[과거 유사 사례]" 지시, "📎 문서 N 참고" 근거 표시)만 정확히 그 문구일 때 지운다 — 관리자가 고친
+      다른 부분은 그대로(시드는 ON CONFLICT DO NOTHING이라 기존 DB엔 안 들어가 운영 DB도 이걸로 맞춘다)
+    - 안 쓰는 프롬프트 삭제: sql2_fix·sql2_fix_system·sql2_generate(제거된 Text-to-SQL), autocomplete, sql2_* 나머지 5개, tool_answer·tool_select(제거된 MCP 도구) — 코드 참조 0건(사용자 승인 10/13, 백업 eval_out/ops_prompt_backup_20261013.json)"""
+    from service.llm.base import CHAT_PROMPT_MIGRATIONS
+    for old, new in CHAT_PROMPT_MIGRATIONS:
+        r = await conn.execute("UPDATE ops_prompt SET content = replace(replace(content, E'\\r\\n', E'\\n'), $1, $2) "
+                               "WHERE func_key = 'chat_system' AND replace(content, E'\\r\\n', E'\\n') LIKE '%' || $1 || '%'", old, new)
+        if r != "UPDATE 0":
+            logger.info("[migrate #75] chat_system 정리: %s ← %s", r, old[:30].strip())
+    cur = await conn.fetchval("SELECT replace(content, E'\\r\\n', E'\\n') FROM ops_prompt WHERE func_key = 'chat_system'")
+    if cur is not None and cur != CHAT_SYSTEM_PROMPT:
+        # 관리자가 고친 운영 DB면 일부 치환만 걸릴 수 있다 — 조용히 넘어가지 않게(과잉 거절 방지 줄이 빠졌을 수 있음)
+        logger.warning("[migrate #75] chat_system이 코드 기본 문구와 다름(관리자 수정 또는 일부만 정리됨) — 프롬프트 관리 화면에서 확인")
+    r = await conn.execute("DELETE FROM ops_prompt WHERE func_key IN ('sql2_fix', 'sql2_fix_system', 'sql2_generate', 'autocomplete', 'sql2_generate_system', 'sql2_parse', 'sql2_parse_system', 'sql2_summarize', 'sql2_summarize_system', 'tool_answer', 'tool_select')")
+    if r != "DELETE 0":
+        logger.info("[migrate #75] 안 쓰는 프롬프트 삭제: %s", r)
+    try:
+        from service.prompt.loader import invalidate_cache
+        invalidate_cache("chat_system")
+    except Exception:
+        logger.warning("프롬프트 캐시 비우기 실패 — 재시작 뒤 반영", exc_info=True)
+
+
 async def _migrate_llm_usage(conn) -> None:
     """사내 LLM 사용량 기록 (2026-10-12, #74) — 호출 1건마다 기능·입출력 글자·토큰(게이트웨이 metadata.usage)·시간·성공.
     본문은 저장하지 않는다. 90일 지난 기록은 기동 때 지운다(집계 화면은 최근 7일). service/llm/usage.py. 멱등."""
@@ -1723,6 +1733,7 @@ async def _run_migrations() -> None:
         await _migrate_rename_unsorted_category(conn)
         await _migrate_source_document(conn)
         await _migrate_llm_usage(conn)
+        await _migrate_prompt_cleanup(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

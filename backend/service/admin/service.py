@@ -137,7 +137,10 @@ async def suggest_category_for_content(ns_id: int, content: str) -> Optional[str
     if "{categories}" in prompt or "{content}" in prompt:
         prompt = fallback.replace("{categories}", categories_str).replace("{content}", content[:600])
     try:
-        answer, _ = await get_llm_provider().generate(context="", question=prompt)
+        # 채팅 답변 규칙이 붙지 않게 분류 전용 시스템 프롬프트(2026-10-13 점검)
+        answer, _ = await get_llm_provider().generate(
+            context="", question=prompt,
+            system_prompt="너는 분류기다. 제시된 업무구분 목록 중 가장 맞는 이름 하나만 그대로 답한다. 설명·기호·근거 표시를 붙이지 않는다.")
         suggested = answer.strip().strip('"').strip("'").strip()
         if suggested not in categories:
             matched = next((c for c in categories if c in suggested or suggested in c), None)

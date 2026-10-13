@@ -195,6 +195,10 @@ _CONV_SUMMARIZE_FALLBACK = (
 )
 
 
+_SUMMARY_SYSTEM = ("너는 대화 요약기다. 주어진 대화에 실제로 나온 내용만 요약하고, 대화에 없는 사실·추측·동의어 관계를 덧붙이지 마라. "
+                   "요약만 출력한다.")
+
+
 async def _summarize_with_llm(messages: list, llm_provider) -> Optional[str]:
     dialogue = "\n".join(
         f"{'사용자' if r['role'] == 'user' else '어시스턴트'}: {r['content']}" for r in messages
@@ -207,7 +211,8 @@ async def _summarize_with_llm(messages: list, llm_provider) -> Optional[str]:
         # replace가 실패한 경우(템플릿에 플레이스홀더 없음) → fallback 사용
         prompt = _CONV_SUMMARIZE_FALLBACK.replace("{dialogue}", dialogue)
     try:
-        summary, _ = await llm_provider.generate(context="", question=prompt)
+        # 시스템 프롬프트를 안 넘기면 채팅 답변 규칙("참고 문서만 근거로", "없으면 찾지 못했습니다")이 붙었다(2026-10-13 점검)
+        summary, _ = await llm_provider.generate(context="", question=prompt, system_prompt=_SUMMARY_SYSTEM)
         return summary.strip() or None
     except Exception as e:
         logger.warning("요약 생성 실패: %s", e)
