@@ -51,7 +51,7 @@ class Chunk:
     # 순서대로(자기 자신은 제외 — section_title에 이미 있음). h1~h4 레벨은
     # web_crawler.py의 _extract_heading_sections()가 이미 추출해두고 있었지만
     # 지금까지 청킹 단계에서 버려지고 있었다(2026-09-22 — Parent-Child 문맥 유실
-    # 실사고 이후 추가, docs/tech/rag-improvement-wbs.md 2-7).
+    # 실사고 이후 추가, docs/archive/rag-improvement-wbs.md 2-7).
     heading_path: list[str] = None
     metadata: dict = None
 

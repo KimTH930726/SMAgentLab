@@ -26,7 +26,7 @@
 > 필요 여부, 상태전이 전용 구조 필요 여부)은 v1 범위 밖(Phase 2+) 또는 데이터가 더 쌓인 뒤 재검토.
 > 목적: 엑셀로 된 비즈니스 정책서를 운영에서 활용 가능한 데이터로 전환하는 **파이프라인(Track 1)** 과, 그 결과를 어떤 저장소 전략으로 관리할지 **수치로 판정하는 실험실(Track 2)** 을 설계한다.
 > 관련: `D:\MD자료\work-os\WBS\smagent.md`, `docs/tech/knowledge-lifecycle-design.md`(경로 정정),
-> `docs/knowledge-refresh-automation-plan.md`
+> `docs/archive/knowledge-refresh-automation-plan.md`
 > (`docs/rag-improvement-strategy.md`는 2026-09-03 삭제 — 2026-06-30 시점 로드맵으로 실 코드
 > 참조 없었고, 그 안의 "골든셋+Recall@K 평가 프레임워크" 제안은 이후 실측 검토 결과 지금 시스템
 > 규모(전체 질의 104건)엔 안 맞는다는 게 확인됨, 메모리 `project_retrieval_routing` 참고)
@@ -262,7 +262,7 @@ UI(채팅 화면에 출처를 보여주는 부분)를 2단계로 바로 이어�
 |---|---|
 | 1 | 용어집 시트 → `rag_glossary` 적재(§2-2) + 정책 시트 파서(동적 깊이 감지, §1) + LLM 분해(segment 단위, 4유형 + unresolved, §2-3) + pending_review 적재 + 검토 UI + 승인 → 확정. 재업로드 content_hash diff(§2-1: UPDATE 아닌 새 버전 INSERT). 재검토 큐에 오른 row는 이전 버전과의 **diff를 검토 화면에 표시**(전체 재검토 부담 축소). **여기까지가 "PoC 올리는" 최소 동작.** |
 | 2 | external_source 파라미터의 실제 대조(reconcile) — 영업정보 시스템 등 조회 API 연동. Text2SQL의 스키마 스캔(원격 접속 → diff → 변경분만 갱신) 패턴 재사용 검토 — ⚠️ 원본(`agents/text2sql/admin/service.py`)은 2026-09-03 `dev_0`/`main`에서 제거됨, `archive/with-text2sql` 브랜치에서 패턴만 참고해 새로 이식해야 함. |
-| 3 | 정책서 원문 변경 알림 / 대량 변경 안전장치 — `docs/knowledge-refresh-automation-plan.md`와 스케줄러 인프라 공유(아래 자산 표 — 스케줄러 이미 존재). |
+| 3 | 정책서 원문 변경 알림 / 대량 변경 안전장치 — `docs/archive/knowledge-refresh-automation-plan.md`와 스케줄러 인프라 공유(아래 자산 표 — 스케줄러 이미 존재). |
 
 **현재 자산 — 재사용 / 신규 (2026-09-03 구현 세션에서 실측 확인 완료)**
 | 구성 요소 | 실측 결과 | 확인 포인트 |
