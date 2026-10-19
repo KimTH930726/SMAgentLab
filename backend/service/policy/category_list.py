@@ -117,6 +117,12 @@ def is_topic_overview(question: str, names: list[str]) -> list[str]:
 _cache: dict[int, CategoryIndex] = {}
 
 
+def invalidate() -> None:
+    """정책 가져오기·정정 승인 뒤 분류 색인을 비운다 — 안 비우면 TTL(10분) 동안 목록이 옛 정책 id를 가리켜, 목록 답 문맥 거르기(v2.138)가
+    새 버전을 "목록 밖"으로 보고 뺄 수 있다(리뷰 10/13)."""
+    _cache.clear()
+
+
 async def _index(conn, ns_id: int) -> CategoryIndex:
     idx = _cache.get(ns_id)
     if idx and time.time() - idx.built_at < _CACHE_TTL:
@@ -150,6 +156,7 @@ class CategoryList:
     places: list[tuple[str, int]] = field(default_factory=list)     # 고른 이름이 있는 위치(경로, 정책 수) — 2곳 이상이면 업무가 다른 같은 이름
     children: list[tuple[str, int]] = field(default_factory=list)   # 위치가 하나일 때 그 바로 아래 하위 분류(경로, 정책 수)
     explicit_all: bool = False   # 질문이 "전부·모든·목록"으로 전체를 명시(키워드 판별) — 그러면 묻지 않고 다 보여준다
+    item_ids: list[int] = field(default_factory=list)   # 목록에 든 정책 id — 목록 답의 문맥에서 목록 밖 검색 결과를 빼는 데(v2.138)
     scope_missed: bool = False   # 재질문에서 고른 범위를 못 찾아 질문 글로 다시 찾음(분류가 바뀐 경우 등) — 화면에 알린다
 
     def block(self) -> str:
@@ -160,7 +167,8 @@ class CategoryList:
                  if len(self.places) >= 2 else "")
         return (f"[분류 목록: {', '.join(self.names)} — 정책 {self.total}개{more}. \"전부·목록\" 질문이면 이 목록의 정책을 빠짐없이, "
                 f"정책마다 \"정책명 — 한 줄 요약\"으로 답하고 세부 조건은 궁금한 정책을 다시 물어보라고 안내.{group}]\n"
-                + "\n".join(self.lines))
+                # 번호를 붙인다 — 긴 목록(20개)에서 LLM이 중간을 건너뛰던 것(q077 등). 줄 내용은 그대로
+                + "\n".join(f"{i}. {ln[2:] if ln.startswith('- ') else ln}" for i, ln in enumerate(self.lines, 1)))
 
 
 _ALL_WORDS = ("전부", "모든", "전체", "모두", "목록", "한번에", "한눈에", "다보여", "싹다")
@@ -284,7 +292,7 @@ async def find_category_list(ns_id: int, question: str, query_vec: list[float], 
             "SELECT array_to_string(category_path, ' > ') AS cat, policy_name, split_part(coalesce(raw_body, ''), E'\\n', 1) AS first "
             "FROM policy_item WHERE id = ANY($1::int[]) ORDER BY category_path, source_row LIMIT $2", ids, _MAX_ITEMS)
     lines = [f"- {r['cat']} > {r['policy_name']}: {(r['first'] or '').strip()[:100]}" for r in rows]
-    return CategoryList(names=[idx.display[n] for n in picked], total=len(ids), lines=lines,
+    return CategoryList(names=[idx.display[n] for n in picked], total=len(ids), lines=lines, item_ids=list(ids),
                         places=sorted(((p, len(v)) for p, v in places.items()), key=lambda x: -x[1]), children=children,
                         explicit_all=not scoped and (bool(keyword_nav) or says_all(question, [idx.display[n] for n in picked])),
                         scope_missed=bool(scope and scope != "*" and not scoped))

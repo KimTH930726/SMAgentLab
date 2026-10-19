@@ -214,3 +214,118 @@ async def test_second_turn_without_augmentation_skips_cache(monkeypatch):
     _wire.get_cached.assert_not_awaited()
     set_cached.assert_not_awaited()
 
+
+
+class TestAnswerShaping:
+    """답 생성 문맥 다듬기(v2.138) — 목록 답은 목록 밖 정책 검색 결과를 빼고, 조건 한정 질문엔 답 구조를 붙인다."""
+
+    def _wire_ctx(self, monkeypatch, *, explicit_all: bool, item_ids):
+        from service.policy.search import NarrativeHit
+        H = lambda i: NarrativeHit(item_id=i, logical_id=i, policy_name=f"p{i}", category_path=[], status="active",  # noqa: E731
+                                   chunk_text="t", score=0.6, raw_body="b")
+        pr = PolicySearchResult(narratives=[H(1), H(2), H(3)])
+        monkeypatch.setattr(agent.glossary_terms, "resolve_query_terms", AsyncMock(return_value=([], None, "q")))
+        monkeypatch.setattr(agent.glossary_terms, "definitions_block", lambda m: "")
+        monkeypatch.setattr(agent.retrieval, "search_knowledge", AsyncMock(return_value=[]))
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: None)
+        monkeypatch.setattr(agent.retrieval, "is_adopted", lambda r, th: False)
+        monkeypatch.setattr(agent.retrieval, "expand_parent_sections", AsyncMock(return_value=[]))
+        monkeypatch.setattr(agent.policy_search, "has_policy_data", AsyncMock(return_value=True))
+        monkeypatch.setattr(agent.policy_search, "PolicySearchResult", PolicySearchResult)   # 부모 패키지가 MagicMock이라 진짜 클래스로
+        monkeypatch.setattr(agent.policy_search, "search_policy", AsyncMock(return_value=pr))
+        monkeypatch.setattr(agent.refdata_search, "has_refdata", AsyncMock(return_value=False))
+        monkeypatch.setattr(agent, "get_conn", lambda: _ConnCtx())
+        monkeypatch.setattr(agent, "resolve_namespace_id", AsyncMock(return_value=1))
+        cat = MagicMock(item_ids=list(item_ids), explicit_all=explicit_all, total=len(item_ids), scope_missed=False)
+        cat.block.return_value = "[분류 목록]"
+        monkeypatch.setattr(agent.category_list, "find_category_list", AsyncMock(return_value=cat if item_ids else None))
+        monkeypatch.setattr(agent.category_list, "clarify_for", lambda c, q: None)
+        monkeypatch.setattr(agent, "should_abstain", lambda *a: False)
+        seen = {}
+
+        def build(results, policy_result, *a):
+            seen["ids"] = [n.item_id for n in policy_result.narratives]
+            return "ctx"
+        monkeypatch.setattr(agent, "_build_rrf_context", build)
+        return pr, seen
+
+    async def _run(self, q, scope=None):
+        return await agent.build_chat_context("ns", q, [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, clarify_scope=scope)
+
+    @pytest.mark.asyncio
+    async def test_listing_answer_drops_out_of_list_policies(self, monkeypatch):
+        pr, seen = self._wire_ctx(monkeypatch, explicit_all=True, item_ids=[1, 3])
+        cc = await self._run("교환 정책 전부 보여줘")
+        assert seen["ids"] == [1, 3]                                  # 목록 밖(2)은 문맥에서 빠짐
+        assert [n.item_id for n in cc.policy_result.narratives] == [1, 2, 3]   # 인용·판정용 원래 결과는 그대로
+
+    @pytest.mark.asyncio
+    async def test_out_of_list_hit_ranked_above_list_is_kept(self, monkeypatch):
+        """ "전체 취소하면 쿠폰은?"처럼 "전체"만 든 구체 질문 — 1위 정답이 목록 밖이어도 문맥에 남는다(리뷰 H1)."""
+        _, seen = self._wire_ctx(monkeypatch, explicit_all=True, item_ids=[2])
+        await self._run("전체 취소하면 쿠폰은 복원되나요?")
+        assert seen["ids"] == [1, 2]                                  # 1(목록 밖, 1위) 유지 · 3(목록 아래 섞임) 제외
+
+    @pytest.mark.asyncio
+    async def test_clarify_scope_choice_is_a_listing_answer(self, monkeypatch):
+        _, seen = self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[1])   # 범위를 고르면 explicit_all은 False로 온다
+        await self._run("주문 > 장바구니 정책 전부 보여줘", scope="주문 > 장바구니")
+        assert seen["ids"] == [1]
+
+    @pytest.mark.asyncio
+    async def test_topic_question_keeps_search_results(self, monkeypatch):
+        _, seen = self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[1])
+        await self._run("교환 정책 좀")                               # 전부·목록 신호 없음 → 거르지 않음
+        assert seen["ids"] == [1, 2, 3]
+
+    @pytest.mark.asyncio
+    async def test_condition_hint_only_for_condition_questions(self, monkeypatch):
+        self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[])
+        cc = await self._run("투고백에만 따로 적용되는 규정이 있나요?")
+        assert cc.llm_context.startswith(agent.CONDITION_ANSWER_HINT)
+        cc = await self._run("투고백 구매 제한은 몇 세트인가요?")
+        assert agent.CONDITION_ANSWER_HINT not in cc.llm_context
+
+
+@pytest.mark.parametrize("q,want", [
+    ("투고백에만 따로 적용되는 규정이 있나요?", True),
+    ("반품할 때만 추가되는 비용이 있어?", True),
+    ("임직원 전용 쿠폰 조건 알려줘", True),
+    ("일반 신용카드 결제인 경우에만 해당하는 제한", True),
+    ("배송비는 얼마인가요?", False),
+    ("장바구니 최대 몇 개까지 담을 수 있나요", False),
+    ("만 원 이상 무료배송인가요", False),
+    ("3만 적용 기준이 뭐야", False),
+    ("전용계좌 입금 기한은?", False),
+    ("쿠폰만 따로 쓸 수 있나요", True),
+])
+def test_condition_query_detection(q, want):
+    from service.policy.query_type import looks_like_condition_query
+    assert looks_like_condition_query(q) is want
+
+
+
+def test_list_scoped_invariants():
+    """목록 안 정책은 하나도 안 빠지고, 순서는 그대로, 목록 밖은 첫 목록 안 정책보다 위에 있던 것만."""
+    import random
+    rng = random.Random(3)
+    H = lambda i: MagicMock(item_id=i)  # noqa: E731
+    for _ in range(200):
+        hits = [H(i) for i in rng.sample(range(30), rng.randint(0, 12))]
+        keep = set(rng.sample(range(30), rng.randint(0, 10)))
+        out = agent.list_scoped(hits, keep)
+        ids = [h.item_id for h in hits]
+        assert [h.item_id for h in out] == [i for i in ids if i in {h.item_id for h in out}]   # 순서 유지
+        assert {i for i in ids if i in keep} <= {h.item_id for h in out}                     # 목록 안 유실 0
+        first = next((k for k, i in enumerate(ids) if i in keep), len(ids))
+        assert all(i in keep or ids.index(i) < first for i in (h.item_id for h in out))
+
+
+@pytest.mark.parametrize("q,want", [
+    ("임직원 전용으로 발급되는 쿠폰은?", True),
+    ("전용은 뭐야", True),
+    ("전용계좌 입금 기한", False),
+])
+def test_condition_query_particles(q, want):
+    from service.policy.query_type import looks_like_condition_query
+    assert looks_like_condition_query(q) is want

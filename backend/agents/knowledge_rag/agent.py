@@ -18,7 +18,7 @@ from service.chat.helpers import (
 from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from service.policy import search as policy_search
 from service.policy import category_list
-from service.policy.query_type import looks_like_navigation_query
+from service.policy.query_type import looks_like_condition_query, looks_like_navigation_query
 from service.refdata import service as refdata_search
 from service.llm.base import REPLACE_PREFIX, resolve_system_prompt
 from service.llm.factory import get_llm_provider
@@ -152,6 +152,22 @@ def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: fl
             and signals.get("top_narrative", 0.0) < min_score)
 
 
+def list_scoped(hits: list, keep: set[int]) -> list:
+    """목록 답 문맥용 — 목록 안 정책 전부 + 첫 목록 안 정책보다 순위가 높은 목록 밖 정책(입력 순서 유지)."""
+    first = next((i for i, h in enumerate(hits) if h.item_id in keep), len(hits))
+    return [h for i, h in enumerate(hits) if h.item_id in keep or i < first]
+
+
+# 첫 판(10/13)은 "② 그 조건 전용 규정이 없으면 없다고 밝혀라"였는데, 거절 6→0 대신 "3만 원 넘을 때만"에 "30,000원 이상 무료"를 두고
+# "따로 정한 규정은 없다"고 단정하는 오답이 1→4로 늘었다(조건을 글자 그대로 읽음) — "없다" 단정 지시를 빼고 해당 내용 찾기로.
+CONDITION_ANSWER_HINT = (
+    "[답 구조: 이 질문은 특정 조건에 적용되는 규정을 묻는다. 아래 문서에서 그 조건에 적용되는 내용(그 조건이 적힌 규정, "
+    "그 조건 값에 해당하는 기준 — 금액 구간·유형 코드·대상 상품 등)을 찾아 먼저 답하고, 그 조건에도 함께 적용되는 일반 규정은 "
+    "\"공통 적용\"으로 구분해 짧게 적는다. 문서에 있는 내용을 두고 \"따로 정한 규정이 없다\"고 단정하지 않는다. "
+    "아래 문서에 관련 내용이 있으면 \"관련 지식을 찾지 못했습니다\"로 답하지 않는다.]"
+)
+
+
 async def build_chat_context(
     namespace: str, search_question: str, query_vec: list[float], *,
     top_k: int, w_vector: float, w_keyword: float, categories: Optional[list[str]] = None,
@@ -194,6 +210,7 @@ async def build_chat_context(
         except Exception as e:
             logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
 
+    lq = list_question or search_question
     # 탐색형("○○ 관련 정책 다 보여줘")·주제 전체("재고 정책 좀")는 검색(상위 몇 개)으로는 분류 전체가 안 온다 — 그 분류의 정책 목록을
     # DB에서 그대로(service/policy/category_list.py, 실측 포함률 42%→91%). 못 찾으면 지금처럼 검색 결과만. category_lists=False는 측정 비교용
     category = None
@@ -204,7 +221,6 @@ async def build_chat_context(
             if ns_id is not None:
                 # 분류 목록·재질문은 "이번 질문"만으로 — 멀티턴 보강(직전 턴을 붙인 search_question)으로 고르면 앞 턴의 범위가 넘어온다
                 # (2026-10-12 실측: "주문 > 장바구니" 다음 "주문 정책 전부"가 장바구니 10개만). 검색 재현율용 보강은 위 검색에만.
-                lq = list_question or search_question
                 lvec = query_vec if lq == search_question else await embedding_service.embed(lq)
                 category = await category_list.find_category_list(
                     ns_id, lq, lvec, keyword_nav=looks_like_navigation_query(lq), scope=clarify_scope)
@@ -231,7 +247,22 @@ async def build_chat_context(
         parent_expansions = await retrieval.expand_parent_sections(adopted)
     except Exception as e:
         logger.warning("부모 섹션 확장 실패(확장 없이 진행): %s", e)
-    llm_context = _build_rrf_context(results, policy_result, common_codes, db_columns, parent_expansions)
+    # 목록 답(전부·목록 질문 + 분류 목록 있음)의 문맥에선 목록 밖 정책 검색 결과를 뺀다(v2.138) — 분류 목록은 정답과 개수까지 맞는데
+    # (골든 탐색형 24문항 진단) 함께 실린 검색 결과(다른 분류 정책 최대 10개)를 LLM이 목록에 섞어 "다른 분류 섞임"이 탐색형 오답·부분의
+    # 대부분이었다. 메타데이터로 범위를 정한 질문은 그 범위만 문맥에 두는 것이 업계 방식(self-query / metadata filtering).
+    # 단 "전체 취소하면 쿠폰은?"처럼 "전체·모든"이 단어로만 든 구체 질문도 목록 답으로 잡히므로(리뷰 10/13 H1) 다 버리지 않고 순위로 거른다 —
+    # 첫 목록 안 정책보다 위에 온 목록 밖 정책(그 질문의 진짜 정답일 수 있음)은 남기고, 그 아래 섞여 든 것만 뺀다.
+    # 재질문에서 범위를 고른 경우(clarify_scope)도 목록 답이다. 인용 카드·근거 판정(signals)은 원래 검색 결과 그대로.
+    ctx_policy = policy_result
+    if category and category.item_ids and (category.explicit_all or clarify_scope):
+        ctx_policy = policy_search.PolicySearchResult(
+            params=list_scoped(policy_result.params, set(category.item_ids)),
+            narratives=list_scoped(policy_result.narratives, set(category.item_ids)))
+    llm_context = _build_rrf_context(results, ctx_policy, common_codes, db_columns, parent_expansions)
+    # 조건 한정 질문("X에만 따로 …")의 답 구조(v2.138) — 근거가 문맥에 있는데도 "X 전용 규정"이 안 보이면 통째로 거절하거나
+    # (조건형 18문항 중 거절 최대 6) 일반 규정을 X 전용처럼 섞어 답했다. 있는 것·없는 것·공통을 나눠 답하게 한다.
+    if llm_context.strip() and looks_like_condition_query(lq):
+        llm_context = f"{CONDITION_ANSWER_HINT}\n\n{llm_context}"
     # 용어 설명은 근거가 있을 때만 앞에 — 근거 없이 설명만 있으면 LLM이 설명으로 답을 지어낼 수 있다
     if category:
         llm_context = f"{category.block()}\n\n{llm_context}" if llm_context.strip() else category.block()

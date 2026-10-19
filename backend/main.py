@@ -1,4 +1,5 @@
 """OpsLens(구 Ops-Navigator) FastAPI 진입점 — DDD 구조."""
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -1390,6 +1391,16 @@ async def _migrate_prompt_cleanup(conn) -> None:
         logger.warning("프롬프트 캐시 비우기 실패 — 재시작 뒤 반영", exc_info=True)
 
 
+async def _migrate_data_marker(conn) -> None:
+    """일회성 데이터 작업 기록 (2026-10-13, #76) — 예: 정책 조각 재임베딩이 어느 규칙 판까지 끝났는지. 멱등."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_data_marker (
+            key VARCHAR(100) PRIMARY KEY,
+            value VARCHAR(200) NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""")
+
+
 async def _migrate_llm_usage(conn) -> None:
     """사내 LLM 사용량 기록 (2026-10-12, #74) — 호출 1건마다 기능·입출력 글자·토큰(게이트웨이 metadata.usage)·시간·성공.
     본문은 저장하지 않는다. 90일 지난 기록은 기동 때 지운다(집계 화면은 최근 7일). service/llm/usage.py. 멱등."""
@@ -1734,6 +1745,7 @@ async def _run_migrations() -> None:
         await _migrate_source_document(conn)
         await _migrate_llm_usage(conn)
         await _migrate_prompt_cleanup(conn)
+        await _migrate_data_marker(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 
@@ -1774,6 +1786,9 @@ async def _warn_if_embedding_model_stale(conn) -> None:
         )
 
 
+_startup_tasks: set = set()   # 기동 백그라운드 작업 참조 보관(실행 중 GC 방지)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _warn_if_insecure_defaults()
@@ -1784,6 +1799,9 @@ async def lifespan(_app: FastAPI):
         await load_runtime_overrides_from_db(conn)
         await _warn_if_embedding_model_stale(conn)
     embedding_service.load()
+    # 정책 조각 임베딩 규칙이 바뀌었으면 한 번 다시 임베딩(백그라운드 — 기동을 막지 않음, 끝나면 표시 남김)
+    from service.policy.service import reembed_chunks_if_needed
+    _startup_tasks.add(asyncio.create_task(reembed_chunks_if_needed()))
     if settings.reranker_enabled:
         reranker_service.load(settings.reranker_model)
 

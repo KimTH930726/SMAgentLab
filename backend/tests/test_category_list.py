@@ -217,3 +217,18 @@ class TestSpecificRule:
         r = self._run(monkeypatch, "주문관리 공통 정책 전부")
         assert r is not None and r.total >= 1
 
+
+
+def test_block_numbers_every_listed_policy():
+    lines = [f"- a > 정책{i}: 첫 줄" for i in range(1, 21)]
+    b = cl.CategoryList(names=["a"], total=20, lines=lines, item_ids=list(range(20))).block()
+    body = b.split("\n")[1:]
+    assert len(body) == 20                                             # 유실·중복 없음
+    assert [ln.split(". ", 1)[0] for ln in body] == [str(i) for i in range(1, 21)]
+    assert [ln.split(". ", 1)[1] for ln in body] == [ln[2:] for ln in lines]   # 내용은 그대로
+
+
+def test_invalidate_clears_index():
+    cl._cache[1] = object()
+    cl.invalidate()
+    assert cl._cache == {}

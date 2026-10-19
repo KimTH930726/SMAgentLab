@@ -522,7 +522,7 @@ class TestImportExcelAtomicSheet:
         # 모든 쓰기가 begin~commit 사이에 있고, 임베딩은 트랜잭션 전에 한 번에 계산됨
         assert events[0] == "begin" and events[-1] == "commit"
         assert events.count("insert_item") == 2
-        emb.embed_batch.assert_awaited_once_with(["정책1 서술", "정책2 서술"])
+        emb.embed_batch.assert_awaited_once_with(["정책1 (a): 정책1 서술", "정책2 (a): 정책2 서술"])   # 임베딩엔 "정책명 (분류):" 머리(2026-10-13)
         assert [e for e in events if e.startswith("chunk:")] == ["chunk:정책1 서술", "chunk:정책2 서술"]
         assert result.sheets[0].created_items == 2
         invalidate.assert_awaited_once_with("ns")
@@ -664,3 +664,35 @@ class TestPipelineReprocess:
         assert "pipeline_version" in insert.args[0]
         assert insert.args[-1] == service.pipeline_version()
         assert summary.created_items == 1 and summary.pipeline_reprocessed == 0
+
+
+class TestReembedChunks:
+    """기동 시 재임베딩 — 임베딩하는 사이 편집된 조각은 덮지 않는다(비교 후 갱신, 리뷰 10/13)."""
+
+    @pytest.mark.asyncio
+    async def test_compare_and_set_and_marker(self, patch_db, monkeypatch):
+        conn = patch_db
+        conn.fetchval = AsyncMock(return_value=None)          # 아직 안 함
+        conn.fetch = AsyncMock(return_value=[
+            {"id": 1, "chunk_text": "조각1", "policy_name": "정책", "category_path": ["a"]},
+            {"id": 2, "chunk_text": "정책 (a): 대체", "policy_name": "정책", "category_path": ["a"]},
+        ])
+        tx = MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False))
+        conn.transaction = MagicMock(return_value=tx)
+        conn.executemany = AsyncMock()
+        emb = MagicMock(embed_batch=AsyncMock(side_effect=lambda texts: [[0.1] for _ in texts]))
+        monkeypatch.setattr(service, "embedding_service", emb)
+        await service.reembed_chunks_if_needed()
+        assert emb.embed_batch.call_args.args[0] == ["정책 (a): 조각1", "정책 (a): 대체"]   # 머리 한 번만
+        sql, args = conn.executemany.call_args.args
+        assert "AND chunk_text = $3" in sql
+        assert [a[2] for a in args] == ["조각1", "정책 (a): 대체"]                       # 읽은 그 글일 때만 갱신
+        assert service.CHUNK_EMBED_VERSION in conn.execute.call_args.args
+
+    @pytest.mark.asyncio
+    async def test_skips_when_marker_current(self, patch_db, monkeypatch):
+        patch_db.fetchval = AsyncMock(return_value=service.CHUNK_EMBED_VERSION)
+        emb = MagicMock(embed_batch=AsyncMock())
+        monkeypatch.setattr(service, "embedding_service", emb)
+        await service.reembed_chunks_if_needed()
+        emb.embed_batch.assert_not_called()

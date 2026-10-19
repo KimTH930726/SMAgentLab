@@ -164,7 +164,8 @@ async def promote_segment_to_narrative(namespace: str, item_id: int, segment_ind
         next_chunk_idx = await conn.fetchval(
             "SELECT COALESCE(MAX(chunk_idx) + 1, 0) FROM policy_chunk WHERE policy_item_id = $1", item_id,
         )
-        embedding = await embedding_service.embed(segment_text)
+        from service.policy.service import embed_policy_chunk
+        embedding = await embed_policy_chunk(conn, item_id, segment_text)   # 머리 붙인 임베딩(가져오기와 같은 규칙)
         await conn.execute(
             "INSERT INTO policy_chunk (policy_item_id, chunk_text, embedding, chunk_idx) VALUES ($1, $2, $3::vector, $4)",
             item_id, segment_text, str(embedding), next_chunk_idx,

@@ -239,6 +239,55 @@ def _is_pipeline_reprocess(current, new_hash: str) -> bool:
     return current is not None and current["content_hash"] == new_hash
 
 
+# 정책 서술 조각의 임베딩 입력 = "정책명 (분류 > …): 조각"(2026-10-13). 저장 chunk_text·답 문맥은 조각 그대로.
+# 막힌 일: 조각만 임베딩해("최대 20개"처럼 중앙값 28자, 정책명 포함 35%) 무엇에 대한 값인지가 벡터에 없었다 — 서술 없는 항목만
+# 머리를 붙여(아래 _chunk_texts 대체 조각) 한 색인에 두 방식이 섞여 있었다. 골든 88 검색 측정: Recall@10 88.6→92.0%, 나빠진 문항 0
+# (contextual chunk header — 업계 방식, LLM 없이 결정적). 바꾸면 CHUNK_EMBED_VERSION을 올린다 → 기동 때 기존 조각을 한 번 다시 임베딩.
+CHUNK_EMBED_VERSION = "header1"
+
+
+def chunk_embed_text(policy_name: str, category_path, chunk: str) -> str:
+    """임베딩에 넣을 글 — 이미 머리가 붙은 대체 조각("정책명 (…): 원문")은 그대로."""
+    if chunk.startswith(f"{policy_name} ("):
+        return chunk
+    return f"{policy_name} ({' > '.join(category_path or [])}): {chunk}"
+
+
+async def embed_policy_chunk(conn, item_id: int, chunk: str) -> list[float]:
+    """정책 항목 id로 머리를 붙여 임베딩 — 편집·미분류 편입처럼 항목 정보를 따로 안 가진 경로용(한 곳에서 같은 규칙)."""
+    row = await conn.fetchrow("SELECT policy_name, category_path FROM policy_item WHERE id = $1", item_id)
+    name = row.get("policy_name") if row else None
+    text = chunk_embed_text(name, row.get("category_path"), chunk) if name else chunk   # 항목을 못 찾으면 조각 그대로
+    return await embedding_service.embed(text)
+
+
+async def reembed_chunks_if_needed() -> None:
+    """기존 조각 임베딩을 지금 규칙(CHUNK_EMBED_VERSION)으로 한 번 다시 만든다 — 운영 DB 반입 뒤 첫 기동에 자동(로컬 임베딩, 토큰 0).
+    끝나면 ops_data_marker에 버전을 남겨 다시 돌지 않는다. 실패해도 서비스는 그대로(옛 임베딩으로 검색) — 다음 기동에 다시."""
+    try:
+        async with get_conn() as conn:
+            done = await conn.fetchval("SELECT value FROM ops_data_marker WHERE key = 'policy_chunk_embed'")
+            if done == CHUNK_EMBED_VERSION:
+                return
+            rows = await conn.fetch("SELECT c.id, c.chunk_text, i.policy_name, i.category_path FROM policy_chunk c "
+                                    "JOIN policy_item i ON i.id = c.policy_item_id")
+        texts = [chunk_embed_text(r["policy_name"], r["category_path"], r["chunk_text"]) for r in rows]
+        embs: list = []
+        for i in range(0, len(texts), 64):
+            embs += await embedding_service.embed_batch(texts[i:i + 64])
+        async with get_conn() as conn:
+            async with conn.transaction():
+                # 비교 후 갱신 — 임베딩하는 몇 분 사이 편집된 조각(같은 id 제자리 UPDATE)을 옛 글 임베딩으로 덮지 않게(리뷰 10/13).
+                # 편집 경로는 이미 새 규칙으로 임베딩하므로 건너뛰어도 맞다.
+                await conn.executemany("UPDATE policy_chunk SET embedding = $2::vector WHERE id = $1 AND chunk_text = $3",
+                                       [(r["id"], str(e), r["chunk_text"]) for r, e in zip(rows, embs)])
+                await conn.execute("INSERT INTO ops_data_marker (key, value, updated_at) VALUES ('policy_chunk_embed', $1, NOW()) "
+                                   "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()", CHUNK_EMBED_VERSION)
+        logger.info("[정책 조각 재임베딩] %d개 → %s", len(rows), CHUNK_EMBED_VERSION)
+    except Exception:
+        logger.warning("정책 조각 재임베딩 실패 — 옛 임베딩으로 계속(다음 기동에 다시)", exc_info=True)
+
+
 def _chunk_texts(row: excel_parser.ParsedPolicyRow, segments: list[decompose.Segment]) -> tuple[list[str], bool]:
     """policy_chunk로 들어갈 텍스트 목록과 폴백 여부. 임베딩을 트랜잭션 밖에서 미리 계산하려고
     (import_excel) 적재 로직에서 분리 — 적재 시에도 같은 함수를 써서 순서가 어긋날 수 없다.
@@ -325,7 +374,7 @@ async def _write_policy_result(
 
     texts, is_fallback = _chunk_texts(row, segments)
     if chunk_embeddings is None:
-        chunk_embeddings = [await embedding_service.embed(t) for t in texts]
+        chunk_embeddings = [await embedding_service.embed(chunk_embed_text(row.policy_name, row.category_path, t)) for t in texts]
     for text, embedding in zip(texts, chunk_embeddings, strict=True):
         await conn.execute(
             "INSERT INTO policy_chunk (policy_item_id, chunk_text, embedding, chunk_idx) VALUES ($1, $2, $3::vector, $4)",
@@ -547,7 +596,8 @@ async def _import_sheets(
             # deprecated"인 행이 남아 그 정책이 검색에서 사라졌다. 임베딩은 트랜잭션 밖에서 미리
             # 한 번에 계산해 트랜잭션은 DB 쓰기만 담도록 짧게 유지한다.
             chunk_plan = [_chunk_texts(row, segs)[0] for (row, _, _), segs in zip(to_process, segments_list)]
-            flat_texts = [t for texts in chunk_plan for t in texts]
+            flat_texts = [chunk_embed_text(row.policy_name, row.category_path, t)
+                          for (row, _, _), texts in zip(to_process, chunk_plan) for t in texts]
             flat_embeddings = await embedding_service.embed_batch(flat_texts) if flat_texts else []
             per_row_embeddings, offset = [], 0
             for texts in chunk_plan:
@@ -611,6 +661,12 @@ class _Fixed:
 async def _invalidate_semantic_cache(namespace: str) -> None:
     """시맨틱 캐시엔 임포트 전 계산된 답이 TTL 동안 남아 새 정책이 반영 안 된 답이 계속 서빙될
     수 있다 — 적재가 커밋된 뒤 네임스페이스 캐시를 비운다(best-effort)."""
+    try:   # 정책 색인(키워드·분류)은 프로세스 메모리 — 따로 비워 시맨틱 캐시 비우기와 실패가 엮이지 않게
+        from service.policy import category_list, keyword_index
+        keyword_index.invalidate()
+        category_list.invalidate()
+    except Exception:
+        logger.warning("정책 임포트 후 정책 색인 비우기 실패", exc_info=True)
     try:
         from shared.cache import invalidate_namespace
         await invalidate_namespace(namespace)

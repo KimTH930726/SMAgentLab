@@ -101,7 +101,8 @@ async def update_narrative(namespace: str, chunk_id: int, chunk_text: str) -> st
             f"서술을 찾을 수 없습니다: chunk_id={chunk_id}",
         )
 
-        embedding = await embedding_service.embed(chunk_text.strip())
+        from service.policy.service import embed_policy_chunk
+        embedding = await embed_policy_chunk(conn, item_id, chunk_text.strip())   # 머리 붙인 임베딩(가져오기와 같은 규칙)
         await conn.execute(
             "UPDATE policy_chunk SET chunk_text = $1, embedding = $2::vector WHERE id = $3",
             chunk_text.strip(), str(embedding), chunk_id,

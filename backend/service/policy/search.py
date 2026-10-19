@@ -26,6 +26,7 @@ v1엔 검토/승인 UI가 없어(브리프 §2-4) 데이터가 전부 status='pe
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -33,8 +34,11 @@ from typing import Optional
 from core.config import settings
 from core.database import get_conn, resolve_namespace_id
 from shared import reranker
+from service.policy import keyword_index
 from shared.embedding import embedding_service
 from service.policy.query_type import looks_like_navigation_query
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -137,14 +141,16 @@ async def search_policy(
             WHERE i.namespace_id = $1 AND i.status NOT IN ('deprecated', 'rejected')
               AND to_tsvector('simple', policy_strip_ko(p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name)) @@ q.tsq
               {category_clause}
-            ORDER BY rank DESC
+            ORDER BY rank DESC, p.id   -- 동점(ts_rank는 흔함) 순서 고정 — 같은 질문은 같은 문맥(목록 답 거르기·측정 재사용, 리뷰 10/13)
             LIMIT $3
             """,
             *param_args,
         )
 
         vec = query_vec if query_vec is not None else await embedding_service.embed(query)
-        chunk_args = [ns_id, str(vec), fetch_k] + ([category] if category else [])
+        # 조각 단위로 자르면 같은 정책의 조각 여러 개가 자리를 차지해 다른 정책이 밀려나고 같은 원문(raw_body)이 문맥에 반복됐다
+        # (조각 2개 이상인 항목 144개, 2026-10-13 점검) — 넓게 가져와 정책 항목당 최고 조각 하나로 묶은 뒤 자른다(_best_per_item)
+        chunk_args = [ns_id, str(vec), fetch_k * NARRATIVE_FETCH_MULT] + ([category] if category else [])
         category_clause2 = "AND $4 = ANY(i.category_path)" if category else ""
         chunk_rows = await conn.fetch(
             f"""
@@ -172,18 +178,91 @@ async def search_policy(
         chunk_text=r["chunk_text"], score=float(r["score"]), raw_body=r["raw_body"], chunk_id=r["chunk_id"],
     ) for r in chunk_rows]
 
+    narratives = _best_per_item(narratives)
+    # 키워드 채널(BM25 — 드문 조건어·금액 표기) + 벡터를 정책 항목 순위로 합친다(기본 "구제" 방식, 2026-10-13). 점수(score)는 벡터 유사도 그대로라
+    # 근거 없음 판정·신뢰도 라벨의 뜻은 바뀌지 않는다 — 바뀌는 건 어떤 항목이 상위 top_k에 드느냐뿐.
+    try:
+        kw = await keyword_index.search(ns_id, query, fetch_k * NARRATIVE_FETCH_MULT, category)
+        narratives = await _fuse_keyword(ns_id, str(vec), narratives, kw, top_k)
+    except Exception:
+        logger.warning("정책 키워드 채널 실패 — 벡터 결과만 사용", exc_info=True)
     if use_reranker:
         # 채널별로 따로 재정렬한다(합쳐서 전체 top_k로 줄이지 않음) — LLM 컨텍스트 재현율을
         # 지키려고 param/narrative를 각각 top_k씩 유지하는 기존 설계(2026-09-07, "1건만
         # 남겼다가 정답이 통째로 빠진" 실사고 이후 확정된 원칙)를 그대로 지키면서, 더 넓게
         # 가져온 fetch_k 후보 안에서 "어느 top_k가 진짜 상위인지"만 리랭커로 다시 판단한다.
         params = await _rerank_hits(query, params, top_k, lambda p: f"{p.policy_name} {p.param_name} {p.condition or ''}".strip())
-        narratives = await _rerank_hits(query, narratives, top_k, lambda n: n.chunk_text)
+        # 항목 묶기용으로 3배 가져온 후보를 그대로 넘기면 리랭커 입력이 커진다 — 원래 후보 수 + 구제 자리만(리뷰 10/13)
+        narratives = await _rerank_hits(query, narratives[:fetch_k + KEYWORD_RESCUE_SLOTS], top_k, lambda n: n.chunk_text)
     else:
         params = params[:top_k]
         narratives = narratives[:top_k]
 
     return PolicySearchResult(params=params, narratives=narratives)
+
+
+RRF_K = 60   # RRF 표준 상수
+# 키워드 순위의 무게(벡터 = 1) — 같은 무게면 키워드 1위가 벡터 1위를 밀어내 서술 질문의 맨 앞 정답이 91%→65%로 떨어졌다(10/13 측정).
+# 낮추면 키워드는 주로 벡터가 놓친 항목을 채운다. 측정용 환경값
+try:
+    KEYWORD_RRF_WEIGHT = float(__import__("os").environ.get("POLICY_KEYWORD_RRF_WEIGHT", "0.5"))
+except ValueError:
+    KEYWORD_RRF_WEIGHT = 0.5
+
+
+async def _fuse_keyword(ns_id: int, vec: str, narratives: list, kw: list[tuple[int, float]], top_k: int = 10) -> list:
+    """벡터(항목당 최고 조각) 순위와 키워드 순위를 합친 항목 순서 — 기본 "구제"(벡터 상위 top_k 중 아래 자리에 벡터가 놓친 키워드
+    상위 항목), 측정용 "rrf". 키워드에만 걸린 항목은 그 항목의 가장 가까운 조각을 붙인다."""
+    if not kw:
+        return narratives
+    by_item = {h.item_id: h for h in narratives}
+    score: dict[int, float] = {}
+    for r, h in enumerate(narratives):
+        score[h.item_id] = score.get(h.item_id, 0) + 1 / (RRF_K + r + 1)
+    for r, (item_id, _) in enumerate(kw):
+        score[item_id] = score.get(item_id, 0) + KEYWORD_RRF_WEIGHT / (RRF_K + r + 1)
+    missing = [i for i, _ in kw if i not in by_item]
+    if missing:
+        async with get_conn() as conn:
+            rows = await conn.fetch("""
+                SELECT DISTINCT ON (i.id) i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
+                       c.id AS chunk_id, c.chunk_text, 1 - (c.embedding <=> $2::vector) AS score
+                FROM policy_chunk c JOIN policy_item i ON i.id = c.policy_item_id
+                WHERE i.id = ANY($1::int[]) AND i.namespace_id = $3 AND i.status NOT IN ('deprecated', 'rejected')
+                ORDER BY i.id, c.embedding <=> $2::vector""", missing, vec, ns_id)
+        for r in rows:
+            by_item[r["item_id"]] = NarrativeHit(
+                item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
+                category_path=list(r["category_path"] or []), status=r["status"], chunk_text=r["chunk_text"],
+                score=float(r["score"]), raw_body=r["raw_body"], chunk_id=r["chunk_id"])
+    if KEYWORD_FUSION == "rescue":
+        # 벡터 순서는 그대로(맨 앞 정답 유지), 벡터가 놓친 키워드 상위 항목만 아래 자리에 채운다(최대 KEYWORD_RESCUE_SLOTS)
+        # top_k를 호출측에서 받는다 — 고정 10이면 top_k=5 호출에서 구제 항목이 8~10번째에 들어갔다가 잘려 효과가 없었다(리뷰 10/13)
+        slots = min(KEYWORD_RESCUE_SLOTS, max(top_k - 1, 0))   # 1위는 늘 벡터 그대로
+        top = [h.item_id for h in narratives[:top_k]]
+        rescue = [i for i, _ in kw if i not in top and i in by_item][:slots]
+        keep = top[:top_k - len(rescue)]
+        order = keep + rescue + [h.item_id for h in narratives if h.item_id not in keep and h.item_id not in rescue]
+        return [by_item[i] for i in order]
+    return [by_item[i] for i in sorted(score, key=lambda i: -score[i]) if i in by_item]
+
+
+KEYWORD_FUSION = __import__("os").environ.get("POLICY_KEYWORD_FUSION", "rescue")   # rescue | rrf (측정용)
+try:   # 환경값 오타로 기동이 실패하지 않게
+    KEYWORD_RESCUE_SLOTS = int(__import__("os").environ.get("POLICY_KEYWORD_RESCUE_SLOTS", "3"))
+except ValueError:
+    KEYWORD_RESCUE_SLOTS = 3
+NARRATIVE_FETCH_MULT = 3   # 항목으로 묶기 전 조각 후보 배수(항목당 조각 평균 1.6개 — 묶은 뒤에도 top_k를 채우게)
+
+
+def _best_per_item(hits: list) -> list:
+    """정책 항목마다 가장 점수 높은 조각 하나(입력 순서 = 점수 순서 유지)."""
+    seen, out = set(), []
+    for h in hits:
+        if h.item_id not in seen:
+            seen.add(h.item_id)
+            out.append(h)
+    return out
 
 
 async def _rerank_hits(query: str, hits: list, top_k: int, text_fn) -> list:

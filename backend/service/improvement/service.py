@@ -620,7 +620,9 @@ async def _prepare_policy(ns_id: int, item: dict, proposed: dict) -> dict[int, t
             raise ValueError("원본 정책을 찾을 수 없습니다.")
         chunks = await conn.fetch(_POLICY_CHUNKS_SQL, old["id"])
     rewrites = _policy_chunk_rewrites(dict(old), chunks, item, proposed)
-    return {cid: (text, await embedding_service.embed(text)) for cid, text in rewrites.items()}
+    from service.policy.service import chunk_embed_text   # 머리 붙인 임베딩(가져오기와 같은 규칙)
+    return {cid: (text, await embedding_service.embed(chunk_embed_text(old["policy_name"], old["category_path"], text)))
+            for cid, text in rewrites.items()}
 
 
 async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: dict,
@@ -738,6 +740,12 @@ async def approve(item_id: int, approver: dict, proposed_override: Optional[dict
             ns_name = await conn.fetchval("SELECT name FROM ops_namespace WHERE id = $1", ns_id)
 
     # 승인 반영 후 시맨틱 캐시엔 옛 답이 TTL 동안 남아 있다 — 네임스페이스 캐시를 비운다(best-effort)
+    try:   # 새 정책 버전이 키워드 채널·분류 목록에 바로 잡히게(리뷰 10/13) — 시맨틱 캐시 비우기와 실패가 엮이지 않게 따로
+        from service.policy import category_list, keyword_index
+        keyword_index.invalidate()
+        category_list.invalidate()
+    except Exception:
+        logger.warning("정정 승인 후 정책 색인 비우기 실패 (item=%s)", item_id, exc_info=True)
     try:
         from shared.cache import invalidate_namespace
         await invalidate_namespace(ns_name)
