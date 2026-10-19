@@ -390,7 +390,12 @@ cd /opt/smagentlab
 bash scripts/update-images.sh smagentlab-images-<TAG>.tar.gz   # 백업 제안에 반드시 y
 ```
 
-**처리 내용:** (선택) DB 백업 → 이미지 로드 → `backend`·`frontend`만 재생성(postgres·redis 볼륨 유지).
+**처리 내용:** (선택) DB 백업 → 이미지 로드 → `backend`·`frontend`만 재생성(postgres·redis 볼륨 유지) → (선택) 옛 이미지 정리.
+
+**옛 이미지 정리**(2026-10-19 — 10-12 수동 정리 때 약 22GB가 옛 버전 이미지였다): 스크립트 마지막에 지울 후보를 보여 주고 y/N으로 묻는다.
+현재 `IMAGE_TAG`와 **직전 태그는 남긴다**(§3-3 롤백이 직전 태그로 되돌리므로). 기동 확인(`/health`) 뒤에만 y.
+**볼륨(pgdata·redisdata·model-cache)은 절대 정리 대상이 아니다** — `docker volume prune`, `docker system prune --volumes`,
+`docker compose down -v`는 쓰지 않는다(DB·모델 캐시가 사라진다). 수동으로 할 때도 `docker rmi <이미지:태그>`와 `docker image prune -f`(태그 없는 것만)만.
 백엔드가 기동하면서 **스키마 마이그레이션을 자동 적용**한다(`main.py`의 멱등 마이그레이션 — 새 테이블·컬럼·함수).
 로그에서 오류가 없는지 확인: `docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail=100 backend`
 

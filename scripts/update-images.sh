@@ -58,4 +58,25 @@ echo "[3/3] 서비스 상태"
 docker compose ${COMPOSE_FILES} ps
 echo ""
 echo "기동 확인: curl http://localhost:8000/health"
-echo "이전 이미지 정리: docker image prune -f"
+
+# 5. 옛 이미지 정리(선택, 2026-10-19) — 10-12 수동 정리 때 약 22GB가 옛 버전 이미지였다.
+#    현재 IMAGE_TAG와 그 직전 태그는 남긴다(§3-3 롤백은 직전 태그로 되돌림). **볼륨(pgdata·redisdata·model-cache)은 대상이 아니다** —
+#    여기서 docker volume prune / docker system prune --volumes / docker compose down -v 는 절대 쓰지 않는다.
+echo ""
+echo "[선택] 옛 이미지 정리 — 기동 확인(/health) 뒤에 진행하세요."
+CURRENT_TAG=$(grep -E '^IMAGE_TAG=' .env 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+CURRENT_TAG=${CURRENT_TAG:-latest}
+TAGS_NEWEST_FIRST=$(docker images --format '{{.CreatedAt}}|{{.Tag}}' 'smagentlab-*' | grep -v '|<none>$' | sort -r | cut -d'|' -f2 | awk '!seen[$0]++')
+PREV_TAG=$(echo "${TAGS_NEWEST_FIRST}" | grep -v -x "${CURRENT_TAG}" | head -1)
+OLD_IMAGES=$(docker images --format '{{.Repository}}:{{.Tag}}' 'smagentlab-*' | grep -v ':<none>$' | grep -v -E ":(${CURRENT_TAG}|${PREV_TAG:-__none__})$")
+echo "  남길 태그: ${CURRENT_TAG}(현재), ${PREV_TAG:-없음}(직전 — 롤백용)"
+if [ -z "${OLD_IMAGES}" ]; then
+  echo "  지울 옛 이미지 없음"
+else
+  echo "  지울 후보:"; echo "${OLD_IMAGES}" | sed 's/^/    /'
+  read -p "  위 이미지와 태그 없는(dangling) 이미지를 지울까요? (y/N): " prune_yn
+  if [ "${prune_yn}" = "y" ] || [ "${prune_yn}" = "Y" ]; then
+    echo "${OLD_IMAGES}" | xargs -r docker rmi || echo "  일부 이미지는 사용 중이라 남김"
+    docker image prune -f
+  fi
+fi
