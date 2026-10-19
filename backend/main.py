@@ -1799,6 +1799,8 @@ async def lifespan(_app: FastAPI):
         await load_runtime_overrides_from_db(conn)
         await _warn_if_embedding_model_stale(conn)
     embedding_service.load()
+    from agents.knowledge_rag.knowledge.retrieval import KEYWORD_RESCUE as _kr
+    logger.info("[지식 검색] BM25 키워드 구제: %s (KNOWLEDGE_KEYWORD_RESCUE)", "켬" if _kr else "끔")   # 켰다고 생각했는데 꺼진 채인 일이 없게
     # 정책 조각 임베딩 규칙이 바뀌었으면 한 번 다시 임베딩(백그라운드 — 기동을 막지 않음, 끝나면 표시 남김)
     from service.policy.service import reembed_chunks_if_needed
     _startup_tasks.add(asyncio.create_task(reembed_chunks_if_needed()))

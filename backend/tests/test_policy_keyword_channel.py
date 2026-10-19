@@ -34,32 +34,37 @@ for _n, _m in (("korean_text", kt), ("query_type", _qt), ("keyword_index", K)):
     setattr(_pkg, _n, _m)
 
 
+from trustkit.retrieval.bm25 import BM25Index  # noqa: E402
+from trustkit.text.ko import normalize_numbers, tokenize  # noqa: E402
+
+
 def test_numbers_normalized_generically():
-    assert "30000" in K.normalize_numbers("3만 원을 넘을 때")
-    assert K.normalize_numbers("30,000원 이상") == "30000 원 이상"
-    assert "15000" in K.normalize_numbers("1.5만원") and "5000" in K.normalize_numbers("5천 원")
+    assert "30000" in normalize_numbers("3만 원을 넘을 때")
+    assert normalize_numbers("30,000원 이상") == "30000 원 이상"
+    assert "15000" in normalize_numbers("1.5만원") and "5000" in normalize_numbers("5천 원")
     # 양쪽이 같은 토큰이 된다 — 질문 "3만 원" ↔ 원문 "30,000원"
-    assert set(K.tokenize("3만 원")) & set(K.tokenize("30,000원 이상 : 무료")) >= {"30000"}
+    assert set(tokenize("3만 원")) & set(tokenize("30,000원 이상 : 무료")) >= {"30000"}
 
 
 def test_two_suffix_passes():
-    assert "투고백" in K.tokenize("투고백에만 따로 적용되는")      # "만" → "에" 두 번
-    assert "정책" in K.tokenize("정책은")
+    assert "투고백" in tokenize("투고백에만 따로 적용되는")      # "만" → "에" 두 번
+    assert "정책" in tokenize("정책은")
 
 
 def test_bm25_prefers_rare_matching_term():
     rows = [(1, "배송 정책 일반 안내 정책"), (2, "SKU 구매 제한 투고백 2세트"), (3, "정책 정책 정책 쿠폰")] + \
            [(10 + i, f"정책 안내 {i}") for i in range(20)]
-    idx = K.build(rows)
-    top = K.score(idx, "투고백에만 적용되는 정책", 3)
+    idx = BM25Index(rows)
+    top = idx.score("투고백에만 적용되는 정책", 3)
     assert top[0][0] == 2     # 드문 단어(투고백)가 흔한 단어(정책)보다 무겁다 — IDF
-    assert K.score(idx, "전혀 없는 단어", 3) == []
+    assert idx.score("전혀 없는 단어", 3) == []
 
 
 def test_chunk_embed_header_not_doubled():
     import re
     src = (_b / "service/policy/service.py").read_text(encoding="utf-8")
-    ns: dict = {}
+    from trustkit.retrieval.chunk_header import contextual_header
+    ns: dict = {"contextual_header": contextual_header}   # service.py 맨 위 import(함수 소스만 실행하므로 직접 넣음)
     exec(re.search(r"def chunk_embed_text\(.*?\n(?=\n\n)", src, re.S).group(0), ns)
     f = ns["chunk_embed_text"]
     assert f("배송비", ["배송", "배송비"], "3만원 이상 무료") == "배송비 (배송 > 배송비): 3만원 이상 무료"
@@ -100,6 +105,6 @@ def test_rescue_respects_caller_top_k():
 
 
 def test_keyword_index_invalidate():
-    K._cache[1] = K.build([(1, "a")])
+    K._cache[1] = BM25Index([(1, "a")])
     K.invalidate()
     assert K._cache == {}

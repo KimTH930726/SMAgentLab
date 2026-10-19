@@ -16,6 +16,7 @@ import pytest
 
 from agents.knowledge_rag.ingestion.adapters import ParsedDocument
 from agents.knowledge_rag.ingestion.chunker import chunk_document
+from trustkit.ingest.invariants import check_chunks
 
 MAX = 2000
 HEAD_SLACK = 0   # 재분할 조각의 제목 머리말까지 포함해 max 이내(제목이 아주 길어 max의 절반을 넘는 경우만 예외 — 생성기엔 없음)
@@ -46,38 +47,10 @@ def _body_lines(sections):
 
 
 def _check(sections, st="confluence"):
+    """I1~I5 검사 본체는 trustkit.ingest.invariants.check_chunks(이식 가능한 신뢰도 레이어, 2026-10-19) — 여기는 우리 분할기를 넣어 돌린다."""
     chunks = chunk_document(_doc(sections, st), strategy="section")
-    texts = [c.text for c in chunks]
-    for ln in _body_lines(sections):
-        n = sum(t.count(ln) for t in texts)
-        assert n >= 1, f"I1 유실: {ln[:20]}"
-        assert n == 1, f"I2 중복({n}): {ln[:20]}"
-    # I2b 잘린 줄 없음 — 출력의 본문 줄은 전부 입력 줄 그대로(리뷰 2026-10-07: 줄 전체 일치만 세면 문장 중간 절단·부분 겹침을 못 봄)
-    inputs = set(_body_lines(sections))
-    for t in texts:
-        for ln in t.split("\n"):
-            s = ln.strip()
-            if s and not s.startswith("#"):
-                assert s in inputs, f"I2b 잘린 줄: {s[:20]}"
-    for t in texts:
-        last = [ln for ln in t.split("\n") if ln.strip()][-1]
-        assert not last.lstrip().startswith("#"), f"I3 제목으로 끝남: {last}"
-        assert len(t) <= MAX + HEAD_SLACK, f"I4 크기 {len(t)}"
-    # I5: 청크 첫 본문 줄의 섹션 조상
-    owner, stack = {}, []
-    for s in sections:
-        while stack and stack[-1][0] >= s["level"]:
-            stack.pop()
-        for ln in (s["content"] or "").split("\n"):
-            if ln.strip():
-                owner[ln.strip()] = [t for _, t in stack]
-        stack.append((s["level"], s["title"]))
-    for c in chunks:
-        first = next((ln.strip() for ln in c.text.split("\n") if ln.strip() and not ln.lstrip().startswith("#")), None)
-        if first and first in owner:
-            ctx = set(c.heading_path) | {ln.lstrip("# ").strip() for ln in c.text.split("\n") if ln.lstrip().startswith("#")}
-            missing = [a for a in owner[first] if a not in ctx]
-            assert not missing, f"I5 상위 맥락 빠짐: {missing}"
+    errs = check_chunks(sections, [(c.text, c.heading_path) for c in chunks], max_chars=MAX + HEAD_SLACK)
+    assert not errs, errs[:5]
     return chunks
 
 

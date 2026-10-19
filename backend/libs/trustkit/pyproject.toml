@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trustkit"
+version = "0.1.0"
+description = "신뢰도 레이어 — 적재 품질·검색 기법·문맥/답 다듬기·평가(오차 범위·게이트). 표준 라이브러리만."
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["trustkit*"]

@@ -20,29 +20,5 @@ SQL 쪽은 "일치하는 접미사 중 가장 긴 것" 방식이라 배열 순�
 """
 from __future__ import annotations
 
-# 조사·어미(생산적/규칙적인 것 위주) — 길이 긴 것부터 그리디 매칭. 불규칙 활용(듣다→들어류)은
-# 못 잡음, 실험의 한계로 결과 해석 시 감안. 최소 잔여 어간 2글자 보장(과도한 절단 방지).
-_SUFFIXES = sorted([
-    "까지는", "에서는", "으로는", "한테는", "에게서", "으로써",
-    "이라도", "에서", "으로", "부터", "한테", "에게", "까지", "처럼", "보다",
-    "이랑", "랑", "하고", "이며",
-    "습니다", "입니다", "겠습니다", "습니까",
-    "으며", "면서", "니까", "아서", "어서", "인데", "은데",
-    "어요", "아요", "네요", "군요",
-    "았고", "었고",
-    "은", "는", "이", "가", "을", "를", "의", "도", "만", "에", "로", "와", "과",
-    "고", "게", "지", "며", "니", "자", "다", "죠", "기", "아", "어",
-], key=len, reverse=True)
-
-
-def strip_suffix(word: str) -> str:
-    """단어 하나에서 가장 긴 매칭 접미사 1개를 제거. 남는 어간이 2글자 미만이면 절단하지 않는다."""
-    for suf in _SUFFIXES:
-        if word.endswith(suf) and len(word) - len(suf) >= 2:
-            return word[: -len(suf)]
-    return word
-
-
-def strip_text(text: str) -> str:
-    """공백 단위로 쪼개 단어마다 조사/어미를 제거하고 다시 합친다."""
-    return " ".join(strip_suffix(w) for w in text.split())
+# 규칙 본체는 trustkit(신뢰도 레이어, libs/trustkit — 2026-10-19 이동). 이 모듈은 기존 import 경로를 위한 재노출.
+from trustkit.text.ko import SUFFIXES as _SUFFIXES, strip_suffix, strip_text  # noqa: F401

@@ -131,3 +131,38 @@ class TestSearchKnowledgeCategoryRouting:
         assert "AND k.category = ANY($9)" not in sql
         # 고정 파라미터(_KEYWORD_ONLY_CATEGORIES)까지만 있고 사용자 필터는 없어야 함
         assert len(params) == 8
+
+
+def _row(i, score):
+    return {"id": i, "namespace": "ns", "content": f"c{i}", "base_weight": 0.0, "category": None, "heading_path": [],
+            "source_type": None, "source_file": None, "created_at": None, "v_score": score, "k_score": 0.0,
+            "final_score": score, "updated_at": None}
+
+
+class TestKnowledgeKeywordRescue:
+    """지식 BM25 구제(v2.139, 기본 꺼짐) — 컨플루언스 게이트 실패로 꺼 둠. 켜면 trustkit 규칙(문맥 30%, 1위 고정)대로."""
+
+    def test_default_off(self):
+        import os
+        # 환경값이 없으면 꺼짐(재적재 후 1로 켜고 게이트를 다시 돌리는 상태에서도 이 테스트가 깨지지 않게 — 리뷰 10/19)
+        assert retrieval.KEYWORD_RESCUE is (os.environ.get("KNOWLEDGE_KEYWORD_RESCUE", "0") == "1")
+        assert "KNOWLEDGE_KEYWORD_RESCUE\", \"0\")" in open(retrieval.__file__, encoding="utf-8").read()
+
+    @pytest.mark.asyncio
+    async def test_off_keeps_sql_limit_and_order(self, patch_db, monkeypatch):
+        monkeypatch.setattr(retrieval.settings, "freshness_decay_halflife_days", 0)
+        patch_db.fetch = AsyncMock(return_value=[_row(1, .9), _row(2, .8), _row(3, .7)])
+        res = await retrieval.search_knowledge("ns", [0.1], "질문", top_k=3)
+        sql, *params = patch_db.fetch.call_args.args
+        assert params[5] == 3 and "ORDER BY final_score DESC, k.id" in sql   # 동점 순서 고정
+        assert [r.id for r in res] == [1, 2, 3]
+
+    @pytest.mark.asyncio
+    async def test_on_rescues_one_slot_and_keeps_top1(self, patch_db, monkeypatch):
+        monkeypatch.setattr(retrieval.settings, "freshness_decay_halflife_days", 0)
+        patch_db.fetch = AsyncMock(return_value=[_row(i, 1 - i / 100) for i in range(1, 8)])
+        monkeypatch.setattr(retrieval, "_keyword_ids", AsyncMock(return_value=[6, 99, 2]))   # 99는 후보 풀에 없음 → 구제 안 함
+        res = await retrieval.search_knowledge("ns", [0.1], "질문", top_k=3, keyword_rescue=True)
+        _, *params = patch_db.fetch.call_args.args
+        assert params[5] == retrieval._RESCUE_POOL                        # 구제 후보를 고르려고 더 깊게
+        assert [r.id for r in res] == [1, 2, 6]                           # 3자리 중 1자리(30%)만, 1위 그대로

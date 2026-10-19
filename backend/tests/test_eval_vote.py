@@ -104,3 +104,10 @@ def test_reuse_per_repetition():
     assert not E.reusable(ok, "h", True)                            # 근거 없음 판정은 LLM 안 부름
     src = (Path(__file__).resolve().parent.parent / "scripts" / "eval_answers.py").read_text(encoding="utf-8")
     assert '(r["qid"], r.get("rep", 0))' in src and "prev.get((qid, k))" in src and "and k == 0" not in src
+
+
+def test_unscorable_rule_comes_first():
+    """정답 정책이 모두 비활성이면 답이 거절·오류여도 판정불가 — 정상 답만 빠지고 거절만 0점으로 남는 쏠림 방지(리뷰 10/19)."""
+    base = {"n_refs_total": 0, "gold_inactive": 1}
+    assert E._judge_rule({**base, "answer": "", "error": "X"})["label"] == "판정불가"
+    assert E._judge_rule({**base, "answer": "관련 지식을 찾지 못했습니다", "error": None})["label"] == "판정불가"

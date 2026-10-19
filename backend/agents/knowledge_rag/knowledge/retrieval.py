@@ -1,15 +1,19 @@
 """2단계 하이브리드 검색 파이프라인."""
 from __future__ import annotations
 
-import math
 import datetime
 import logging
+import math
+import os
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
 from core.config import settings
 from shared.embedding import embedding_service
+from trustkit.retrieval.bm25 import BM25Index
+from trustkit.retrieval.fusion import default_rescue_slots, rescue_order
 
 logger = logging.getLogger(__name__)
 
@@ -301,10 +305,35 @@ def is_keyword_only_category(category: Optional[str]) -> bool:
     return category in _KEYWORD_ONLY_CATEGORIES
 
 
+# BM25 키워드 구제(v2.139, trustkit) — 하이브리드 점수(벡터 + ts_rank 가중합)는 ts_rank에 IDF가 없어 드문 단어가 약하다. 채팅 문맥용
+# 호출에만 붙인다(keyword_rescue=True) — VOC 판정·관리 화면 검색·측정 스크립트는 그대로.
+# **기본 꺼짐**: 컨플루언스 합성 106문항 게이트 실패 — 문맥 3자리 중 1자리를 넘기면 4·6위 정답 3개를 건지지만 3위 정답 2개를 밀어냄
+# (순증 +1, p=1.0, "검색 나빠짐 0" 규칙 위반). 데이터 재적재로 문서가 늘면 KNOWLEDGE_KEYWORD_RESCUE=1로 같은 게이트를 다시 돌려 판단.
+# 맥락 머리 임베딩도 지식에선 손해라 안 씀(Recall@3 95.3→94.3%, 같은 페이지 조각끼리 유사도 중앙 0.51→0.65·중복 판정 0.88 넘는 쌍
+# 13→30 — 조각이 길고 본문에 제목 줄이 이미 있어 같은 페이지명 머리가 구분력을 깎음). 근거: docs/tech/trustkit-design.md §7.
+KEYWORD_RESCUE = os.environ.get("KNOWLEDGE_KEYWORD_RESCUE", "0") == "1"
+# 리랭커를 같이 켜면 구제는 리랭커 후보 수(reranker_candidates) 기준 자리로 잡힌 뒤 리랭커가 다시 정렬한다 — 게이트로 잰 "문맥 3자리 중
+# 1자리"와 다른 조합이라 둘 다 켤 땐 게이트를 그 조합으로 다시 돌린다(리뷰 10/19). 비스트리밍·디버그 검색(service/chat/router.py)은 구제 없음.
+_RESCUE_POOL = 30          # 구제 후보를 고를 하이브리드 결과 깊이 — 이 안에 없는 키워드 전용 문서는 구제하지 않는다(점수를 모름)
+_KW_TTL = 600.0            # 키워드 색인 수명(지식 쓰기 경로가 많아 TTL로만 — 벡터 채널은 즉시 반영이라 구제만 최대 10분 늦음)
+_kw_cache: dict[int, BM25Index] = {}
+
+
+async def _keyword_ids(conn, ns_id: int, query: str, k: int) -> list[int]:
+    idx = _kw_cache.get(ns_id)
+    if not idx or time.time() - idx.built_at > _KW_TTL:
+        rows = await conn.fetch(
+            "SELECT id, coalesce(source_file, '') AS f, coalesce(array_to_string(heading_path, ' '), '') AS h, content FROM rag_knowledge "
+            "WHERE namespace_id = $1 AND (status IS NULL OR status = 'active')", ns_id)
+        idx = BM25Index([(r["id"], f"{r['f']} {r['h']} {r['content']}") for r in rows])
+        _kw_cache[ns_id] = idx
+    return [i for i, _ in idx.score(query, k)]
+
+
 async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
     w_vector: float = 0.7, w_keyword: float = 0.3, top_k: int = 5,
-    categories: Optional[list[str]] = None,
+    categories: Optional[list[str]] = None, keyword_rescue: bool = False,
 ) -> list[RetrievalResult]:
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
@@ -312,7 +341,8 @@ async def search_knowledge(
             return []
         category_filter = "AND k.category = ANY($9)" if categories else ""
         params = [
-            str(query_vec), ns_id, enriched_query, w_vector, w_keyword, top_k, _VECTOR_CANDIDATE_LIMIT,
+            str(query_vec), ns_id, enriched_query, w_vector, w_keyword, max(top_k, _RESCUE_POOL) if keyword_rescue else top_k,
+            _VECTOR_CANDIDATE_LIMIT,
             list(_KEYWORD_ONLY_CATEGORIES),
         ]
         if categories:
@@ -373,10 +403,16 @@ async def search_knowledge(
               AND (k.status IS NULL OR k.status = 'active')
               AND (vs.v_score IS NOT NULL OR ks.k_score IS NOT NULL)
               {category_filter}
-            ORDER BY final_score DESC LIMIT $6
+            ORDER BY final_score DESC, k.id LIMIT $6   -- 동점 순서 고정(완전 동일 조각 쌍이 있으면 실행마다 순위가 바뀌었다)
             """,
             *params,
         )
+        kw_ids: list[int] = []
+        if keyword_rescue and rows:
+            try:
+                kw_ids = await _keyword_ids(conn, ns_id, enriched_query, _RESCUE_POOL)
+            except Exception:
+                logger.warning("지식 키워드 구제 실패 — 하이브리드 결과만 사용", exc_info=True)
 
     halflife = settings.freshness_decay_halflife_days
     now = datetime.datetime.now(tz=datetime.timezone.utc)
@@ -402,6 +438,10 @@ async def search_knowledge(
             source_type=r["source_type"], source_file=r["source_file"],
             created_at=r["created_at"],
         ))
+    if keyword_rescue:
+        by_id = {r.id: r for r in results}
+        order = rescue_order([r.id for r in results], kw_ids, top_k, default_rescue_slots(top_k), available=set(by_id))
+        results = [by_id[i] for i in order][:top_k]
     return results
 
 

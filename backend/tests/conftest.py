@@ -7,6 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 backend_dir = str(Path(__file__).resolve().parent.parent)
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
+# 신뢰도 레이어 패키지(libs/trustkit) — 컨테이너는 Dockerfile PYTHONPATH로, 테스트는 여기서
+_trustkit_dir = str(Path(backend_dir) / "libs" / "trustkit")
+if _trustkit_dir not in sys.path:
+    sys.path.insert(0, _trustkit_dir)
 
 # ── 외부 의존성 stub ──────────────────────────────────────────────────────────
 

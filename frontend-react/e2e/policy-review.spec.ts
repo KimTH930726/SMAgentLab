@@ -19,6 +19,10 @@ const NAMESPACE = '딜리버스 DB';
 // 이력에 남기면 그 항목이 영구히 "이전에 반려된 항목"(위험 높음)이 되고 자동 승인 기준 데이터가 오염된다 — 지운다.
 const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'psql', '-U', 'ops', '-d', 'opsdb', '-tA', '-c', sql],
   { encoding: 'utf-8' }).trim();
+// 전제: 이 파트에 검토 대기 정책이 있어야 한다. 2026-10-19 기존 정책을 v0 교체로 보관(deprecated)해 비어 있으면 이유를 밝히고 건너뛴다
+// — v0 적재 후 새 파트 이름으로 바꿔 다시 켤 것(docs/tech/post-demo-backlog.md).
+const pendingPolicies = Number(psql(`SELECT count(*) FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id WHERE n.name = '${NAMESPACE}' AND i.status = 'pending_review'`));
+test.skip(pendingPolicies === 0, `${NAMESPACE}에 검토 대기 정책 없음(v0 교체로 보관됨) — v0 적재 후 새 파트로 다시 켤 것`);
 let logIdBefore = 0;
 test.beforeAll(() => { logIdBefore = Number(psql('SELECT COALESCE(MAX(id), 0) FROM policy_review_log')); });
 let rejectedItemId = 0;

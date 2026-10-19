@@ -27,6 +27,8 @@
 - `backend/agents/knowledge_rag/knowledge/retrieval.py` — 하이브리드 검색(Glossary Mapping + Vector/Keyword)
 - `backend/service/chat/memory.py` — 대화 요약 + 시맨틱 리콜
 - `backend/service/policy/` — 정책서 임포트/검색 파이프라인 (v1, docs/policy-doc-pipeline-plan.md)
+- `backend/libs/trustkit/` — **신뢰도 레이어**(이식 가능한 팀 자산: 적재 품질·검색 기법·문맥/답 다듬기·평가). 표준 라이브러리만,
+  앱 코드(core/service/shared/agents) import 금지. 기법 본체는 여기, 앱 쪽은 DB 어댑터만. 설계: docs/tech/trustkit-design.md
 - `frontend-react/src/components/` — React UI 컴포넌트
 - `docs/` — architecture.md(버전별 변경이력 — v2.99 이전은 `docs/archive/`로 분리), flow.md(처리 흐름), table-definition.md(마이그레이션
   이력만 — 전체 컬럼 스펙은 실 DB가 항상 정확, 2026-09-16 경량화) — 변경 시 동기화. API
@@ -41,6 +43,8 @@
 
 ## 배포 전 체크리스트
 - `npx tsc --noEmit` 통과 확인
+- 백엔드 테스트: `docker exec -w /app ops-backend python -m pytest -q tests libs/trustkit/tests`
+- 검색·답 생성을 바꿨으면 정확도 게이트: 전/후 측정 → `scripts/eval_gate.py`(검색 나빠짐 0 · 답 의미 있는 하락 없음, 같은 날 채점끼리)
 - `docker compose build` 성공 확인
 - 아키텍처 변경 시 docs/ 3개 파일(architecture.md/flow.md/table-definition.md 마이그레이션 이력) 동기화 — API 스펙은 `/docs` 자동 생성이라 손 동기화 불필요
 

@@ -27,6 +27,7 @@ v1엔 검토/승인 UI가 없어(브리프 §2-4) 데이터가 전부 status='pe
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -37,6 +38,7 @@ from shared import reranker
 from service.policy import keyword_index
 from shared.embedding import embedding_service
 from service.policy.query_type import looks_like_navigation_query
+from trustkit.retrieval.fusion import best_per_doc, rescue_order, rrf_order
 
 logger = logging.getLogger(__name__)
 
@@ -202,10 +204,16 @@ async def search_policy(
 
 
 RRF_K = 60   # RRF 표준 상수
+KEYWORD_FUSION = os.environ.get("POLICY_KEYWORD_FUSION", "rescue")   # rescue | rrf (측정용)
+try:   # 환경값 오타로 기동이 실패하지 않게
+    KEYWORD_RESCUE_SLOTS = int(os.environ.get("POLICY_KEYWORD_RESCUE_SLOTS", "3"))
+except ValueError:
+    KEYWORD_RESCUE_SLOTS = 3
+NARRATIVE_FETCH_MULT = 3   # 항목으로 묶기 전 조각 후보 배수(항목당 조각 평균 1.6개 — 묶은 뒤에도 top_k를 채우게)
 # 키워드 순위의 무게(벡터 = 1) — 같은 무게면 키워드 1위가 벡터 1위를 밀어내 서술 질문의 맨 앞 정답이 91%→65%로 떨어졌다(10/13 측정).
 # 낮추면 키워드는 주로 벡터가 놓친 항목을 채운다. 측정용 환경값
 try:
-    KEYWORD_RRF_WEIGHT = float(__import__("os").environ.get("POLICY_KEYWORD_RRF_WEIGHT", "0.5"))
+    KEYWORD_RRF_WEIGHT = float(os.environ.get("POLICY_KEYWORD_RRF_WEIGHT", "0.5"))
 except ValueError:
     KEYWORD_RRF_WEIGHT = 0.5
 
@@ -216,11 +224,6 @@ async def _fuse_keyword(ns_id: int, vec: str, narratives: list, kw: list[tuple[i
     if not kw:
         return narratives
     by_item = {h.item_id: h for h in narratives}
-    score: dict[int, float] = {}
-    for r, h in enumerate(narratives):
-        score[h.item_id] = score.get(h.item_id, 0) + 1 / (RRF_K + r + 1)
-    for r, (item_id, _) in enumerate(kw):
-        score[item_id] = score.get(item_id, 0) + KEYWORD_RRF_WEIGHT / (RRF_K + r + 1)
     missing = [i for i, _ in kw if i not in by_item]
     if missing:
         async with get_conn() as conn:
@@ -235,34 +238,20 @@ async def _fuse_keyword(ns_id: int, vec: str, narratives: list, kw: list[tuple[i
                 item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
                 category_path=list(r["category_path"] or []), status=r["status"], chunk_text=r["chunk_text"],
                 score=float(r["score"]), raw_body=r["raw_body"], chunk_id=r["chunk_id"])
+    vec_ids, kw_ids = [h.item_id for h in narratives], [i for i, _ in kw]
     if KEYWORD_FUSION == "rescue":
-        # 벡터 순서는 그대로(맨 앞 정답 유지), 벡터가 놓친 키워드 상위 항목만 아래 자리에 채운다(최대 KEYWORD_RESCUE_SLOTS)
+        # 벡터 순서는 그대로(맨 앞 정답 유지), 벡터가 놓친 키워드 상위 항목만 아래 자리에(최대 KEYWORD_RESCUE_SLOTS, trustkit.rescue_order).
         # top_k를 호출측에서 받는다 — 고정 10이면 top_k=5 호출에서 구제 항목이 8~10번째에 들어갔다가 잘려 효과가 없었다(리뷰 10/13)
-        slots = min(KEYWORD_RESCUE_SLOTS, max(top_k - 1, 0))   # 1위는 늘 벡터 그대로
-        top = [h.item_id for h in narratives[:top_k]]
-        rescue = [i for i, _ in kw if i not in top and i in by_item][:slots]
-        keep = top[:top_k - len(rescue)]
-        order = keep + rescue + [h.item_id for h in narratives if h.item_id not in keep and h.item_id not in rescue]
+        order = rescue_order(vec_ids, kw_ids, top_k, KEYWORD_RESCUE_SLOTS, available=set(by_item))
         return [by_item[i] for i in order]
-    return [by_item[i] for i in sorted(score, key=lambda i: -score[i]) if i in by_item]
+    return [by_item[i] for i in rrf_order([vec_ids, kw_ids], [1.0, KEYWORD_RRF_WEIGHT], k=RRF_K) if i in by_item]
 
 
-KEYWORD_FUSION = __import__("os").environ.get("POLICY_KEYWORD_FUSION", "rescue")   # rescue | rrf (측정용)
-try:   # 환경값 오타로 기동이 실패하지 않게
-    KEYWORD_RESCUE_SLOTS = int(__import__("os").environ.get("POLICY_KEYWORD_RESCUE_SLOTS", "3"))
-except ValueError:
-    KEYWORD_RESCUE_SLOTS = 3
-NARRATIVE_FETCH_MULT = 3   # 항목으로 묶기 전 조각 후보 배수(항목당 조각 평균 1.6개 — 묶은 뒤에도 top_k를 채우게)
 
 
 def _best_per_item(hits: list) -> list:
-    """정책 항목마다 가장 점수 높은 조각 하나(입력 순서 = 점수 순서 유지)."""
-    seen, out = set(), []
-    for h in hits:
-        if h.item_id not in seen:
-            seen.add(h.item_id)
-            out.append(h)
-    return out
+    """정책 항목마다 가장 점수 높은 조각 하나(입력 순서 = 점수 순서 유지) — trustkit.best_per_doc."""
+    return best_per_doc(hits, key=lambda h: h.item_id)
 
 
 async def _rerank_hits(query: str, hits: list, top_k: int, text_fn) -> list:

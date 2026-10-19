@@ -45,6 +45,9 @@ RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${R
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 신뢰도 레이어 패키지(libs/trustkit, 표준 라이브러리만) — 설치 단계 없이 경로로 import(폐쇄망·dev 마운트 그대로)
+ENV PYTHONPATH=/app/libs/trustkit
+
 # 소스 코드 복사
 COPY . .
 

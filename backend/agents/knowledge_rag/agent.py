@@ -19,6 +19,7 @@ from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from service.policy import search as policy_search
 from service.policy import category_list
 from service.policy.query_type import looks_like_condition_query, looks_like_navigation_query
+from trustkit.answer.shaping import CONDITION_ANSWER_HINT_KO, list_scoped as _list_scoped
 from service.refdata import service as refdata_search
 from service.llm.base import REPLACE_PREFIX, resolve_system_prompt
 from service.llm.factory import get_llm_provider
@@ -153,19 +154,13 @@ def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: fl
 
 
 def list_scoped(hits: list, keep: set[int]) -> list:
-    """목록 답 문맥용 — 목록 안 정책 전부 + 첫 목록 안 정책보다 순위가 높은 목록 밖 정책(입력 순서 유지)."""
-    first = next((i for i, h in enumerate(hits) if h.item_id in keep), len(hits))
-    return [h for i, h in enumerate(hits) if h.item_id in keep or i < first]
+    """목록 답 문맥용 — 목록 안 정책 전부 + 첫 목록 안 정책보다 순위가 높은 목록 밖 정책(입력 순서 유지, trustkit)."""
+    return _list_scoped(hits, keep, key=lambda h: h.item_id)
 
 
 # 첫 판(10/13)은 "② 그 조건 전용 규정이 없으면 없다고 밝혀라"였는데, 거절 6→0 대신 "3만 원 넘을 때만"에 "30,000원 이상 무료"를 두고
 # "따로 정한 규정은 없다"고 단정하는 오답이 1→4로 늘었다(조건을 글자 그대로 읽음) — "없다" 단정 지시를 빼고 해당 내용 찾기로.
-CONDITION_ANSWER_HINT = (
-    "[답 구조: 이 질문은 특정 조건에 적용되는 규정을 묻는다. 아래 문서에서 그 조건에 적용되는 내용(그 조건이 적힌 규정, "
-    "그 조건 값에 해당하는 기준 — 금액 구간·유형 코드·대상 상품 등)을 찾아 먼저 답하고, 그 조건에도 함께 적용되는 일반 규정은 "
-    "\"공통 적용\"으로 구분해 짧게 적는다. 문서에 있는 내용을 두고 \"따로 정한 규정이 없다\"고 단정하지 않는다. "
-    "아래 문서에 관련 내용이 있으면 \"관련 지식을 찾지 못했습니다\"로 답하지 않는다.]"
-)
+CONDITION_ANSWER_HINT = CONDITION_ANSWER_HINT_KO   # 문구 본체는 trustkit.answer.shaping
 
 
 async def build_chat_context(
@@ -182,7 +177,8 @@ async def build_chat_context(
     # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
     candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
     results_raw, policy_available, refdata_available = await asyncio.gather(
-        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories),
+        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories,
+                                   keyword_rescue=retrieval.KEYWORD_RESCUE),
         policy_search.has_policy_data(namespace),
         refdata_search.has_refdata(namespace),
     )

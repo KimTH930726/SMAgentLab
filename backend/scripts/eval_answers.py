@@ -70,6 +70,7 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
     from shared.embedding import embedding_service
     from agents.knowledge_rag.agent import build_chat_context
     from agents.knowledge_rag.knowledge import retrieval, glossary_terms
+    from service.chat.helpers import is_llm_failure
     from service.llm.base import resolve_system_prompt
     from service.llm.factory import get_llm_provider
     from service.policy import track2
@@ -142,7 +143,8 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
           else:
             try:
                 answer, _ = await llm.generate(cc.llm_context, g["query"], None, system_prompt=system_prompt)
-                err = None
+                # 게이트웨이 거부·빈 응답은 운영 채팅과 같은 장애 판정으로 "오류"(답 품질과 섞지 않음 — 리뷰 10/19)
+                err = "llm_failure" if is_llm_failure(answer) else None
             except Exception as e:  # noqa: BLE001
                 answer, err = "", f"{type(e).__name__}"
           _append(out, {
@@ -246,13 +248,14 @@ def _judge_prompt(r: dict) -> str:
 
 def _judge_rule(r: dict) -> Optional[dict]:
     """LLM 없이 규칙으로 정하는 판정(빈 답·거절·채점 기준 없음). 없으면 None — judge의 다수결도 이걸로 건너뛴다."""
+    if r.get("n_refs_total") == 0 and r.get("gold_inactive"):
+        # 정답 정책이 전부 반려·폐기 — 기준 없이 LLM이 채점하면 임의 라벨이 분모에 들어간다(리뷰 2026-10-12).
+        # 맨 앞에: 뒤에 두면 거절·오류 답만 0점으로 남고 정상 답만 빠져 정답률이 한쪽으로 기운다(리뷰 10/19, 지식 평가와 같게)
+        return {"label": "판정불가", "reason": "정답 정책이 모두 반려·폐기됨 — 골든셋 정리 대상"}
     if r.get("error") or not (r.get("answer") or "").strip():
         return {"label": "오류", "reason": f"답 생성 실패({r.get('error') or '빈 답'})"}
     if NO_KNOWLEDGE in r["answer"]:
         return {"label": "거절", "reason": "관련 지식을 찾지 못했다고 답함"}
-    if r.get("n_refs_total") == 0 and r.get("gold_inactive"):
-        # 정답 정책이 전부 반려·폐기 — 기준 없이 LLM이 채점하면 임의 라벨이 분모에 들어간다(리뷰 2026-10-12)
-        return {"label": "판정불가", "reason": "정답 정책이 모두 반려·폐기됨 — 골든셋 정리 대상"}
     return None
 
 
@@ -336,7 +339,7 @@ def _correct(r: dict) -> float:
 
 def accuracy_line(rows: list[dict]) -> str:
     """정답률 + 95% 구간(같은 원문 시트끼리 묶은 오차) — 88문항이면 구간이 ±8%p 안팎이라 그보다 작은 차이는 개선이라 못 한다."""
-    from eval_stats import estimate, pct
+    from trustkit.eval.stats import estimate, pct
     per_q, cl, reps = per_question(rows)
     e = estimate(list(per_q.values()), [cl[q] for q in per_q])
     if e["lo"] is None:
@@ -357,7 +360,7 @@ def per_question(rows: list[dict]) -> tuple[dict, dict, int]:
 
 def paired_line(rows: list[dict], other: dict) -> str:
     """같은 문항끼리 정답 여부 차이 — 구간이 0을 안 품을 때만 "의미 있는 차이"."""
-    from eval_stats import paired_diff
+    from trustkit.eval.stats import paired_diff
     mine, cl, _ = per_question(rows)
     theirs, _, _ = per_question(list(other.values()) if isinstance(other, dict) else other)
     d = paired_diff(mine, theirs, lambda q: cl[q])
@@ -433,7 +436,7 @@ async def _save(rows: list[dict], label: str, notes: str) -> int:
 
 def report(inp: str, compare: str, sample_out: str, save_label: str = "", notes: str = "") -> None:
     rows = _read(inp)
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "libs" / "trustkit"))   # 호스트 실행에서도 trustkit(표준 라이브러리만)
     print(f"== {inp} ==\n{_summary(rows)}\n  {accuracy_line(rows)}")
     if save_label:
         print(f"이력 저장: eval_answer_run id={asyncio.run(_save(rows, save_label, notes))} (평가 게이트 > 답변 정확도)")
@@ -457,7 +460,7 @@ def report(inp: str, compare: str, sample_out: str, save_label: str = "", notes:
             better = [q for q in mine_q if q in theirs_q and mine_q[q] > theirs_q[q]]
             worse = [q for q in mine_q if q in theirs_q and mine_q[q] < theirs_q[q]]
         else:
-            rank = {"정답": 3, "부분": 2, "거절": 1, "오답": 0, "오류": 0, "판정불가": 0, "채점실패": 0}
+            rank = _RANK
             both = [r for r in rows if r["qid"] in other and "판정불가" not in (r["judge"]["label"], other[r["qid"]]["judge"]["label"])]
             better = [r["qid"] for r in both if rank[r["judge"]["label"]] > rank[other[r["qid"]]["judge"]["label"]]]
             worse = [r["qid"] for r in both if rank[r["judge"]["label"]] < rank[other[r["qid"]]["judge"]["label"]]]
@@ -568,8 +571,8 @@ def human_label(r: dict) -> Optional[str]:
 
 def review_apply(result_json: str) -> None:
     """내려받은 판정 결과 → 채점기와 사람의 일치(원 일치율·카파·혼동행렬, 정답 여부·4라벨 둘 다, 유형별)."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from eval_stats import cohen_kappa, kappa_band, pct
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "libs" / "trustkit"))   # 호스트 실행에서도 trustkit(표준 라이브러리만)
+    from trustkit.eval.stats import cohen_kappa, kappa_band, pct
     allr = json.loads(Path(result_json).read_text(encoding="utf-8"))
     res = [r for r in allr if human_label(r)]
     missing = [r["qid"] for r in allr if r.get("verdict") == "bad" and not r.get("correct")]

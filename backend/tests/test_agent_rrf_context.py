@@ -234,3 +234,17 @@ class TestExpandParentSections:
     @pytest.mark.asyncio
     async def test_empty_hits(self):
         assert await agent.retrieval.expand_parent_sections([]) == []
+
+
+def test_context_doc_marker_covers_adopted_and_expansions(monkeypatch):
+    """지식 답 평가의 '정답 조각이 문맥에 있나'는 문맥 속 "--- 문서 #id (" 표식으로 센다 — 채택 문서와 부모 섹션 보충 둘 다 잡혀야 한다.
+    표식이 바뀌면 그 지표가 조용히 전부 False가 되므로 여기서 고정(재리뷰 10/19)."""
+    import re
+    spec = _ilu.spec_from_file_location("_eval_kans_marker", str(_backend_dir / "scripts" / "eval_knowledge_answers.py"))
+    m = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+    exp = [{"id": 7, "content": "이웃 본문", "heading_path": ["페이지"]}]
+    text = agent._build_rrf_context([_make_result(3, 0.9, "본문")], PolicySearchResult(), parent_expansions=exp)
+    assert {int(x) for x in m._CTX_DOC.findall(text)} == {3, 7}
+    assert isinstance(m._CTX_DOC, re.Pattern)

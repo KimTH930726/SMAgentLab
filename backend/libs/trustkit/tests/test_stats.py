@@ -1,11 +1,10 @@
-"""평가 통계(2026-10-13) — 오차 범위·같은 문항 차이·채점기-사람 카파. 손 계산과 맞는지."""
-import importlib.util
+"""trustkit.eval.stats(2026-10-13, 앱 tests/에서 옮김 10/19) — 오차 범위·같은 문항 차이·채점기-사람 카파. 손 계산과 맞는지."""
 import math
+import sys
 from pathlib import Path
 
-_spec = importlib.util.spec_from_file_location("_eval_stats", str(Path(__file__).resolve().parent.parent / "scripts" / "eval_stats.py"))
-S = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(S)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from trustkit.eval import stats as S  # noqa: E402
 
 
 def test_iid_estimate_matches_hand_calc():

@@ -91,6 +91,8 @@ async def main() -> None:
         ns_ids = {r["name"]: r["id"] for r in await conn.fetch("SELECT id, name FROM ops_namespace")}
     path = Path(args.golden_file) if args.golden_file else track2._GOLDEN_SET_PATH
     gold = await track2._load_golden_set(path, ns_ids)
+    # 문항 번호 — 게이트(scripts/eval_gate.py)가 전/후를 같은 문항끼리 짝짓는다(줄 순서에 기대지 않게)
+    qids = {r["query"]: r.get("qid") for r in (json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip())}
     neg = [] if args.no_negative else [json.loads(l) for l in NEGATIVE_FILE.read_text(encoding="utf-8").splitlines() if l.strip()]
     entries_by_ns = {ns: await load_entries(ns, synonyms) for ns in {*(g["namespace_name"] for g in gold), *NEGATIVE_NAMESPACES}
                      if ns in ns_ids}
@@ -106,7 +108,7 @@ async def main() -> None:
             r.update(hit=bool(set(r["policy_ids"]) & e["gold_ids"]), top1=bool(r["first"] & e["gold_ids"]), type=e["type"])
             g_rows.append(r)
             if details:
-                details.write(json.dumps({"mode": mode, "set": args.set, "type": e["type"], "hit": r["hit"], "top1": r["top1"],
+                details.write(json.dumps({"mode": mode, "set": args.set, "qid": qids.get(e["query"]), "type": e["type"], "hit": r["hit"], "top1": r["top1"],
                                           "mapped": r["mapped"], "signals": r["signals"]}, ensure_ascii=False) + "\n")
         n_rows = []
         for ns in NEGATIVE_NAMESPACES:

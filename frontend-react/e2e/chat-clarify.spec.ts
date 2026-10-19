@@ -1,10 +1,17 @@
 import { test, expect } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 
 // 재질문(v2.134, 2026-10-12) — 주제만 말한 질문의 목록이 크면 답 대신 범위 선택지(①②③ + 전부 보기 + 기타)를 보여주고,
 // 고르면 같은 대화에서 그 범위로 답한다(다시 묻지 않음). 재질문은 답이 아니라 "답변 틀림"이 없다. 실 dev 스택 그대로(LLM 1회).
 const NS = '온라인스토어 DB';
+// 전제: 이 파트에 살아 있는 정책이 있어야 재질문이 뜬다. 2026-10-19 기존 정책을 v0 교체로 보관(deprecated)해 비어 있으면 이유를 밝히고 건너뛴다
+// — v0 적재 후 새 파트 이름으로 바꿔 다시 켤 것(docs/tech/post-demo-backlog.md).
+const livePolicies = Number(execFileSync('docker', ['exec', 'ops-postgres', 'psql', '-U', 'ops', '-d', 'opsdb', '-tA', '-c',
+  `SELECT count(*) FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id WHERE n.name = '${NS}' AND i.status IN ('active', 'pending_review')`],
+  { encoding: 'utf-8' }).trim());
 
 test('주제만 말한 큰 목록 → 범위 선택지 → 고르면 그 범위로 답', async ({ page }) => {
+  test.skip(livePolicies === 0, `${NS}에 살아 있는 정책 없음(v0 교체로 보관됨) — v0 적재 후 새 파트로 다시 켤 것`);
   test.setTimeout(360_000);   // 선택 후 답은 사내 LLM(수십 초~)
   page.on('dialog', (d) => { throw new Error(`브라우저 기본 대화상자: ${d.message()}`); });
   await page.goto('/login');

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
+from trustkit.retrieval.chunk_header import contextual_header
 from service.policy import excel_parser, decompose, json_format
 from agents.knowledge_rag.knowledge.service import create_glossary
 
@@ -247,10 +248,8 @@ CHUNK_EMBED_VERSION = "header1"
 
 
 def chunk_embed_text(policy_name: str, category_path, chunk: str) -> str:
-    """임베딩에 넣을 글 — 이미 머리가 붙은 대체 조각("정책명 (…): 원문")은 그대로."""
-    if chunk.startswith(f"{policy_name} ("):
-        return chunk
-    return f"{policy_name} ({' > '.join(category_path or [])}): {chunk}"
+    """임베딩에 넣을 글 — 이미 머리가 붙은 대체 조각("정책명 (…): 원문")은 그대로(trustkit.contextual_header)."""
+    return contextual_header(policy_name, category_path, chunk)
 
 
 async def embed_policy_chunk(conn, item_id: int, chunk: str) -> list[float]:
