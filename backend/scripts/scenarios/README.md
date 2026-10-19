@@ -1,0 +1,19 @@
+# 실서버 시나리오 (dev 스택 대상)
+
+단위 테스트(가짜 DB)로 못 잡는 것 — 실제 SQL·트랜잭션·캐시·LLM 경로를 **전/후 값까지** 확인한다(개발 규율: "200 OK는 검증이 아니다").
+한 번에 하나만 돈다(`_lock.py` — 겹치면 캐시 비우기·임시 파트가 서로를 망친다). 결과·기록은 `backend/eval_out/`(git 제외).
+
+| 시나리오 | 확인하는 것 | 실행 위치 | LLM 호출 | 부작용 |
+|---|---|---|---|---|
+| `ledger_reregister.py` | 원문 원장 재등록 확인(A안)·409·교체·L1~L6 | 호스트 `py` | 0 | 임시 파트 생성 후 삭제 |
+| `ledger_race.py` | 같은 원본 동시 확정 → 사용 중 원문 1개·살아있는 조각 수 | 호스트 | 0 | 임시 파트 생성 후 삭제 |
+| `ledger_confluence.py <페이지 URL>` | 컨플루언스 실경로(원장 HTML·연결·다시 분할 no-op·재등록 확인) | 호스트 | 0(분석기 1) | 임시 파트. **본문 출력 안 함** |
+| `chat_clarify.py` | 재질문 → 선택 → 같은 대화에서 범위 답, 다시 열기, 전체 명시면 안 물음 | 호스트 | 1~2 | 대화 기록 남음 |
+| `chat_cache_followup.py` | 후속 질문이 다른 대화의 캐시 답을 받지 않음, 첫 질문은 캐시 | 컨테이너 | 4~6 | **온라인스토어 DB 캐시 비움** |
+| `chat_multiturn.py` | 생략형 후속·주제 전환·긴 대화·목록 뒤 참조·앞 대화 뒤 정확도(골든 8) | 컨테이너 | ~45 | **캐시 비움**, 대화 기록 |
+
+```bash
+py backend/scripts/scenarios/ledger_reregister.py                       # 호스트
+MSYS_NO_PATHCONV=1 docker exec -w /app ops-backend python scripts/scenarios/chat_multiturn.py   # 컨테이너
+```
+운영(폐쇄망)에서는 돌리지 않는다 — 임시 파트·캐시 비우기·관리자 로그인(dev 기본 계정)을 쓴다.

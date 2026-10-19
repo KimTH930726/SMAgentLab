@@ -92,3 +92,15 @@ def test_indented_detail_lines_are_not_items():
     ans = "- A — 요약\n  - 기간: 7일\n  - 대상: 전체\n- B — 요약"
     assert E.answer_items(ans) == ["- A — 요약", "- B — 요약"]
 
+
+
+def test_reuse_per_repetition():
+    """--reuse는 회차마다 같은 회차의 이전 답을 — 예전엔 0회차만 재사용해 1회차는 문맥이 같아도 매번 새로 생성(10/13)."""
+    ok = {"ctx_hash": "h", "answer": "a", "error": None}
+    assert E.reusable(ok, "h", False)
+    assert not E.reusable(ok, "other", False)                       # 입력이 바뀜
+    assert not E.reusable({**ok, "error": "HTTPStatusError"}, "h", False)
+    assert not E.reusable({**ok, "answer": ""}, "h", False)
+    assert not E.reusable(ok, "h", True)                            # 근거 없음 판정은 LLM 안 부름
+    src = (Path(__file__).resolve().parent.parent / "scripts" / "eval_answers.py").read_text(encoding="utf-8")
+    assert '(r["qid"], r.get("rep", 0))' in src and "prev.get((qid, k))" in src and "and k == 0" not in src
