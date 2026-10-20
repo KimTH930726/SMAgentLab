@@ -400,9 +400,9 @@ async def bulk_delete_query_logs(body: QueryLogIds, user: dict = Depends(get_cur
 
 @router.get("/api/llm/config")
 async def get_llm_config(user: dict = Depends(get_current_user)):
-    config = get_runtime_config()
+    # 연결 확인을 먼저 — 로컬 LLM은 확인하면서 실제 모델을 알아 두므로, 순서가 반대면 첫 화면에 모델이 비어 보였다(리뷰 L4)
     is_connected = await get_llm_provider().health_check()
-    return {**config, "is_connected": is_connected}
+    return {**get_runtime_config(), "is_connected": is_connected}
 
 
 @router.put("/api/llm/config")
@@ -412,7 +412,7 @@ async def update_llm_config(body: LLMConfigUpdate, admin: dict = Depends(get_cur
     # 다른 전역 설정 엔드포인트와 동일하게 관리자 전용이어야 한다(기존엔 일반 사용자도
     # 호출 가능해, LLM 엔드포인트·자격증명을 임의로 바꿔치기할 수 있었음)
     allowed = ("ollama", "inhouse") + (("openai_compat",) if settings.openai_compat_base_url else ())
-    if body.provider not in allowed:   # openai_compat(로컬 LLM)은 주소가 설정된 dev에서만 — 운영 화면에선 고를 수 없다
+    if body.provider not in allowed:   # 로컬 LLM(openai_compat)은 주소(.env)가 설정된 환경에서만, ollama는 API로는 받되 화면 선택지엔 없음(비상용)
         raise HTTPException(status_code=400, detail=f"provider는 {', '.join(allowed)} 중 하나여야 합니다.")
     try:
         new_provider = switch_provider(_extract_config(body))
@@ -435,14 +435,15 @@ async def test_llm_connection(body: LLMTestRequest, admin: dict = Depends(get_cu
     try:
         if body.provider == "inhouse":
             provider = InHouseLLMProvider(cfg)
-        elif body.provider == "openai_compat" and settings.openai_compat_base_url:   # 로컬 LLM(dev) — 예전엔 Ollama를 시험했다(리뷰 L4)
+        elif body.provider == "openai_compat":   # 로컬 LLM — 주소가 없으면 생성자가 ValueError(예전엔 조용히 Ollama를 시험했다)
             provider = OpenAICompatProvider(cfg)
         else:
             provider = OllamaProvider(cfg)
         is_connected = await provider.health_check()
     except ValueError as e:
         return {"is_connected": False, "error": str(e)}
-    return {"is_connected": is_connected, "provider": body.provider}
+    return {"is_connected": is_connected, "provider": body.provider,
+            "model": provider.model if isinstance(provider, OpenAICompatProvider) else None}
 
 
 @router.get("/api/llm/thresholds")

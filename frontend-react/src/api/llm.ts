@@ -1,11 +1,11 @@
 import { apiFetch } from './client';
 
 export interface LLMConfig {
-  /** openai_compat = dev 전용 로컬 LLM(E2E 동안 등, 2026-10-20) — 설정 화면에선 고를 수 없다 */
+  /** openai_compat = 로컬 LLM(OpenAI 호환). ollama는 .env로만(화면에선 고르지 않음 — 비상용) */
   provider: 'ollama' | 'inhouse' | 'openai_compat';
   is_runtime_override: boolean;
   is_connected: boolean;
-  openai_compat?: { enabled: boolean; model: string };
+  openai_compat?: { enabled: boolean; base_url: string; model: string; active_model: string; timeout: number };
   ollama: {
     base_url: string;
     model: string;
@@ -24,7 +24,7 @@ export interface LLMConfig {
 }
 
 export interface LLMConfigUpdate {
-  provider: 'ollama' | 'inhouse';
+  provider: 'ollama' | 'inhouse' | 'openai_compat';
   ollama_base_url?: string;
   ollama_model?: string;
   ollama_timeout?: number;
@@ -44,6 +44,7 @@ export interface LLMTestResult {
   is_connected: boolean;
   provider: string;
   error?: string;
+  model?: string | null;   // 로컬 LLM이 감지한 모델
 }
 
 export async function getLLMConfig(): Promise<LLMConfig> {

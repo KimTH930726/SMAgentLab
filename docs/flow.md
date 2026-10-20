@@ -893,8 +893,8 @@ POST /api/chat/stream              ── HTTP 핸들러 (동기) ──
 
 ```
 관리자
-  │  Admin → LLM 설정 탭
-  │  프로바이더 선택 + 설정값 입력 + "저장 및 적용"
+  │  Admin → 시스템 설정 → LLM 프로바이더(관리자만)
+  │  사내 LLM(모델·자격증명 입력) / 로컬 LLM(주소·모델은 .env, 보기만) 선택 + "저장 및 적용"  (Ollama는 .env·API로만, v2.143)
   ▼
 PUT /api/llm/config
   │  { provider, ollama_base_url, ... }

@@ -75,8 +75,8 @@ export function Sidebar() {
   const currentModel = llmConfig
     ? llmConfig.provider === 'ollama'
       ? llmConfig.ollama.model
-      : llmConfig.provider === 'openai_compat'   // dev 로컬 LLM(E2E 등) — 사내 모델 이름으로 잘못 보이지 않게
-        ? `로컬 LLM${llmConfig.openai_compat?.model ? ` · ${llmConfig.openai_compat.model}` : ''}`
+      : llmConfig.provider === 'openai_compat'   // 로컬 LLM — 사내 모델 이름으로 잘못 보이지 않게, 모델은 설정값 또는 자동 감지값
+        ? `로컬 LLM${(llmConfig.openai_compat?.model || llmConfig.openai_compat?.active_model) ? ` · ${llmConfig.openai_compat?.model || llmConfig.openai_compat?.active_model}` : ''}`
         : llmConfig.inhouse.model || 'Agent 기본'
     : null;
 

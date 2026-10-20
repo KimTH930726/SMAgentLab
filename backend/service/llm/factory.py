@@ -59,9 +59,12 @@ def get_runtime_config() -> dict:
             "model": cfg.get("ollama_model", settings.ollama_model),
             "timeout": cfg.get("ollama_timeout", settings.ollama_timeout),
         },
-        "openai_compat": {   # dev 전용(로컬 LLM) — 주소가 설정된 환경에서만 고를 수 있다
+        "openai_compat": {   # 로컬 LLM(OpenAI 호환, vLLM 등) — 주소(.env OPENAI_COMPAT_BASE_URL)가 있을 때만 고를 수 있다
             "enabled": bool(settings.openai_compat_base_url),
-            "model": settings.openai_compat_model or "",
+            "base_url": settings.openai_compat_base_url,   # 화면에선 바꾸지 않는다(관리자가 임의 주소로 요청을 보내게 하지 않으려고)
+            "model": settings.openai_compat_model or "",    # 비우면 서버의 첫 모델(자동 감지)
+            "active_model": _provider.model if isinstance(_provider, OpenAICompatProvider) else "",
+            "timeout": settings.openai_compat_timeout,
         },
         "inhouse": {
             "base_url": cfg.get("inhouse_llm_base_url", settings.inhouse_llm_base_url),

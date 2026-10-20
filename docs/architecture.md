@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.142)
+# OpsLens 시스템 아키텍처 (v2.143)
 
 ## 개요
 
@@ -12,6 +12,9 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.143 (2026-10-20, dev_0): **LLM 설정 화면 — Ollama 자리를 로컬 LLM으로.** 선택지 = 사내 LLM / 로컬 LLM(OpenAI 호환 vLLM, 주소·모델은
+  .env `OPENAI_COMPAT_*`, 화면은 보기만 — 관리자가 임의 주소로 요청을 보내지 않게). 모델은 비우면 연결 확인 때 서버의 첫 모델을 알아 두고 화면·사이드바에
+  표시. 로컬 사용 중에도 화면이 "사내"로 보이던 것 수정. Ollama는 .env·API로만(비상용, 사용자 결정 — 기본 LLM은 사내 유지).
 - v2.142 (2026-10-20, dev_0): **조직(사람)과 업무 영역(지식) 분리.** 파트 이름은 바뀔 수 있어 지식은 업무 중심으로 관리한다(사용자 결정).
   ① 사람 축: 팀 > 파트 > 사용자(`ops_team`, `ops_part.team_id`) — 파트는 소속·권한만, 데이터에 파트 이름을 남기지 않음(등록자는 사람으로 표시).
   슈퍼어드민은 역할(role=admin)이고 파트에 속하지 않음('슈퍼어드민' 파트 폐지). ② 지식 축: 업무 영역(`ops_namespace`) — 정책/업무 영역
@@ -332,6 +335,7 @@ rag_ingestion_job     -- 인제스천 작업 이력 (source_type, status, auto_g
 
 ### 5. Ollama — LLM 추론 (`:11434`)
 
+- **비상용**(v2.143): `.env LLM_PROVIDER=ollama` 또는 API로만 — 관리자 설정 화면 선택지는 사내 LLM / 로컬 LLM(OpenAI 호환)
 - 호스트 머신에서 직접 실행 (컨테이너 외부)
 - 모델: `exaone3.5:2.4b`
 - Backend에서 `host.docker.internal:11434`로 접근
@@ -374,7 +378,8 @@ class LLMProvider(ABC):
     async def health_check() -> bool: ...
 
 # 현재 구현체
-OllamaProvider     # LLM_PROVIDER=ollama — /api/chat (messages 배열, multi-turn)
+OllamaProvider     # LLM_PROVIDER=ollama — /api/chat (messages 배열, multi-turn) — 비상용
+OpenAICompatProvider # LLM_PROVIDER=openai_compat — 로컬 LLM(vLLM 등) /v1/chat/completions, 생각 과정 걸러냄, 모델 자동 감지
 InHouseLLMProvider # LLM_PROVIDER=inhouse — DevX MCP API (usecase_code, query, response_mode)
                    #   inputs.model로 모델 선택 (GPT 5.2 / Claude Sonnet 4.5 / Gemini 3.0 Pro)
                    #   SSE: data JSON 안에 event 필드 포함하는 비표준 형식 대응
@@ -422,6 +427,9 @@ messages = [
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama 서버 주소 |
 | `OLLAMA_MODEL` | `exaone3.5:7.8b` | 사용할 Ollama 모델명 |
 | `OLLAMA_TIMEOUT` | `900` | CPU 추론 최대 대기 시간(초), httpx read timeout에 적용 |
+| `OPENAI_COMPAT_BASE_URL` | (없음) | 로컬 LLM(OpenAI 호환) 주소 — 비면 화면에서 고를 수 없음(운영 .env엔 없음) |
+| `OPENAI_COMPAT_MODEL` | (없음) | 비우면 서버의 첫 모델 자동 사용 |
+| `OPENAI_COMPAT_TIMEOUT` | `300` | 응답 대기 시간(초) |
 | `INHOUSE_LLM_URL` | (없음) | DevX MCP API 엔드포인트 URL |
 | `INHOUSE_LLM_API_KEY` | (없음) | 사내 LLM 시스템 기본 API 키 (Bearer 토큰) |
 | `INHOUSE_LLM_MODEL` | (없음) | inputs.model 파라미터 (gpt-5.2, claude-sonnet-4.5, gemini-3.0-pro) |

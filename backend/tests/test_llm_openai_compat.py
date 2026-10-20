@@ -64,3 +64,44 @@ def test_stream_filter_property_random_chunking():
             cuts = sorted(rng.sample(range(1, len(t)), rng.randint(0, min(6, len(t) - 1))))
             parts = [t[a:b] for a, b in zip([0, *cuts], [*cuts, len(t)])]
             assert _stream(parts) == want.rstrip() or _stream(parts) == want, (t, parts)
+
+
+class _FakeClient:
+    """httpx.AsyncClient 대역 — /models 응답만."""
+    def __init__(self, status=200, data=None, raises=None, **_):
+        self.status, self.data, self.raises = status, data, raises
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url):
+        if self.raises:
+            raise self.raises
+        return SimpleNamespace(status_code=self.status, json=lambda: {"data": self.data or []})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status, data, raises, ok, model", [
+    (200, [{"id": "qwen-x"}], None, True, "qwen-x"),     # 연결 확인 응답으로 모델을 알아 둔다(설정 화면 표시, 요청 추가 없음)
+    (200, [], None, True, ""),                          # 모델이 아직 없으면 빈 값(첫 호출 때 다시)
+    (503, None, None, False, ""),
+    (None, None, OSError("down"), False, ""),            # 연결 실패는 False(로그만)
+])
+async def test_health_check_learns_model(monkeypatch, status, data, raises, ok, model):
+    monkeypatch.setattr(oc, "settings", _settings("http://x/v1"))
+    monkeypatch.setattr(oc.httpx, "AsyncClient", lambda **kw: _FakeClient(status, data, raises))
+    p = oc.OpenAICompatProvider()
+    assert await p.health_check() is ok
+    assert p.model == model
+
+
+@pytest.mark.asyncio
+async def test_health_check_keeps_configured_model(monkeypatch):
+    monkeypatch.setattr(oc, "settings", SimpleNamespace(openai_compat_base_url="http://x/v1", openai_compat_model="fixed", openai_compat_timeout=30))
+    monkeypatch.setattr(oc.httpx, "AsyncClient", lambda **kw: _FakeClient(200, [{"id": "other"}]))
+    p = oc.OpenAICompatProvider()
+    await p.health_check()
+    assert p.model == "fixed"                            # .env에 정한 모델은 바꾸지 않는다

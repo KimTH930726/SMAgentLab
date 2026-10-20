@@ -129,9 +129,21 @@ class OpenAICompatProvider(LLMProvider):
         if tail:
             yield tail
 
+    @property
+    def model(self) -> str:
+        """지금 쓰는 모델(비워 두면 연결 확인·첫 호출 때 서버의 첫 모델로 채워짐) — 설정 화면 표시용."""
+        return self._model
+
     async def health_check(self) -> bool:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                return (await client.get(f"{self._base_url}/models")).status_code == 200
-        except Exception:
+                r = await client.get(f"{self._base_url}/models")
+                if r.status_code != 200:
+                    return False
+                if not self._model:   # 같은 응답으로 모델을 미리 알아 둔다(화면에 실제 모델이 보이게, 요청 추가 없음)
+                    data = r.json().get("data") or []
+                    self._model = data[0]["id"] if data else ""
+                return True
+        except Exception as e:   # noqa: BLE001 — 연결 확인은 실패를 False로(원인은 로그)
+            logger.warning("[로컬 LLM] 연결 확인 실패 %s: %s", self._base_url, type(e).__name__)
             return False

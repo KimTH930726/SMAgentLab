@@ -12,7 +12,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { showError } from '../../store/useDialogStore';
 import { LlmUsagePanel } from './LlmUsagePanel';
 
-type Provider = 'ollama' | 'inhouse';
+type Provider = 'inhouse' | 'openai_compat';   // 화면 선택지 — Ollama는 .env로만(비상용, 2026-10-20 사용자 결정)
 
 type ResponseMode = 'streaming' | 'blocking';
 
@@ -69,9 +69,6 @@ const INHOUSE_MODELS: InhouseModelOption[] = [
 
 interface FormState {
   provider: Provider;
-  ollama_base_url: string;
-  ollama_model: string;
-  ollama_timeout: number;
   inhouse_llm_base_url: string;
   inhouse_llm_client_id: string;
   inhouse_llm_client_secret: string;
@@ -85,11 +82,8 @@ interface FormState {
 
 function configToForm(cfg: LLMConfig): FormState {
   return {
-    // 로컬 LLM(openai_compat)은 dev E2E가 잠깐 거는 것 — 이 화면에선 고를 수 없어 사내로 보여 준다(저장하면 사내로 돌아감)
-    provider: cfg.provider === 'openai_compat' ? 'inhouse' : cfg.provider,
-    ollama_base_url: cfg.ollama.base_url,
-    ollama_model: cfg.ollama.model,
-    ollama_timeout: cfg.ollama.timeout,
+    // 실제 쓰는 것을 그대로 보여 준다(예전엔 로컬 LLM 사용 중에도 "사내"로 보였다). Ollama(.env 전용)면 선택은 사내로 두고 안내를 띄운다
+    provider: cfg.provider === 'ollama' ? 'inhouse' : cfg.provider,
     inhouse_llm_base_url: cfg.inhouse.base_url,
     inhouse_llm_client_id: '',           // 시크릿이라 GET 응답에 없음 — 변경 시에만 입력
     inhouse_llm_client_secret: '',       // 시크릿이라 GET 응답에 없음 — 변경 시에만 입력
@@ -211,7 +205,7 @@ function ProviderSettings() {
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const [form, setForm] = useState<FormState | null>(null);
-  const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; error?: string; model?: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -248,10 +242,8 @@ function ProviderSettings() {
   const buildPayload = (): LLMConfigUpdate => {
     if (!form) throw new Error('no form');
     const payload: LLMConfigUpdate = { provider: form.provider };
-    if (form.provider === 'ollama') {
-      payload.ollama_base_url = form.ollama_base_url;
-      payload.ollama_model = form.ollama_model;
-      payload.ollama_timeout = form.ollama_timeout;
+    if (form.provider === 'openai_compat') {
+      // 로컬 LLM은 주소·모델을 .env에서 — 화면에선 고르기만
     } else {
       payload.inhouse_llm_base_url = form.inhouse_llm_base_url;
       payload.inhouse_llm_agent_code = form.inhouse_llm_agent_code;
@@ -274,7 +266,7 @@ function ProviderSettings() {
     try {
       const payload = buildPayload();
       const result = await testLLMConnection(payload);
-      setTestResult({ ok: result.is_connected, error: result.error });
+      setTestResult({ ok: result.is_connected, error: result.error, model: result.model ?? undefined });
     } catch {
       setTestResult({ ok: false, error: '요청 실패' });
     } finally {
@@ -293,6 +285,8 @@ function ProviderSettings() {
 
   const currentProvider = config?.provider;
   const isConnected = config?.is_connected;
+  const local = config?.openai_compat;
+  const localEnabled = !!local?.enabled;
 
   return (
     <div className="space-y-6">
@@ -323,20 +317,22 @@ function ProviderSettings() {
         <div>
           <label className="block text-xs font-medium text-slate-400 mb-2">프로바이더 선택</label>
           <div className="flex gap-3">
-            {(['inhouse', 'ollama'] as Provider[]).map((p) => (
+            {(['inhouse', 'openai_compat'] as Provider[]).map((p) => (
               <button
                 key={p}
                 onClick={() => handleChange('provider', p)}
+                disabled={p === 'openai_compat' && !localEnabled}
+                title={p === 'openai_compat' && !localEnabled ? '로컬 LLM 주소(OPENAI_COMPAT_BASE_URL)가 설정되지 않은 환경입니다' : undefined}
                 className={`flex-1 py-3 px-4 rounded-lg border text-sm font-medium transition-all ${
                   form.provider === p
                     ? 'border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-500/10 dark:text-indigo-300'
                     : 'border-slate-600 bg-slate-900 text-slate-400 hover:border-slate-500'
-                }`}
+                } disabled:opacity-40 disabled:cursor-not-allowed`}
               >
-                <div className="text-base mb-0.5">{p === 'ollama' ? '🦙' : '🏢'}</div>
-                <div>{p === 'ollama' ? 'Ollama' : '사내 LLM'}</div>
+                <div className="text-base mb-0.5">{p === 'openai_compat' ? '🖥️' : '🏢'}</div>
+                <div>{p === 'openai_compat' ? '로컬 LLM' : '사내 LLM'}</div>
                 <div className="text-xs opacity-70 mt-0.5">
-                  {p === 'ollama' ? '로컬 / 내부망' : 'DevX MCP API'}
+                  {p === 'openai_compat' ? 'OpenAI 호환(vLLM 등)' : 'DevX MCP API'}
                 </div>
                 {currentProvider === p && (
                   <div className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">현재 사용 중</div>
@@ -494,44 +490,24 @@ function ProviderSettings() {
           </div>
         )}
 
-        {/* Ollama settings */}
-        {form.provider === 'ollama' && (
-          <div className="space-y-3 pt-1">
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Ollama URL</label>
-              <input
-                type="text"
-                value={form.ollama_base_url}
-                onChange={(e) => handleChange('ollama_base_url', e.target.value)}
-                placeholder="http://host.docker.internal:11434"
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">모델명</label>
-              <input
-                type="text"
-                value={form.ollama_model}
-                onChange={(e) => handleChange('ollama_model', e.target.value)}
-                placeholder="exaone3.5:7.8b"
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">
-                타임아웃 (초): <span className="text-indigo-600 dark:text-indigo-400">{form.ollama_timeout}s</span>
-              </label>
-              <input
-                type="range" min={30} max={1800} step={30}
-                value={form.ollama_timeout}
-                onChange={(e) => handleChange('ollama_timeout', parseInt(e.target.value))}
-                className="w-full accent-indigo-500"
-              />
-              <div className="flex justify-between text-xs text-slate-500 mt-0.5">
-                <span>30s</span><span>30분</span>
-              </div>
-            </div>
-          </div>
+        {currentProvider === 'ollama' && (
+          <p className="text-xs text-amber-700 dark:text-amber-300" title="Ollama는 .env(LLM_PROVIDER=ollama)나 API로만 쓰는 비상용입니다">
+            지금은 {config?.is_runtime_override ? 'API로 전환해' : '.env 설정으로'} Ollama를 쓰고 있어요. 이 화면에서는 사내 LLM과 로컬 LLM만 고를 수 있어요.
+          </p>
+        )}
+
+        {/* 로컬 LLM — 주소·모델은 .env(OPENAI_COMPAT_*), 화면은 보기만 */}
+        {form.provider === 'openai_compat' && local && (
+          <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1.5 pt-1 text-sm">
+            <dt className="text-xs text-slate-400 pt-0.5">주소</dt>
+            <dd className="font-mono text-slate-200 break-all">{local.base_url}</dd>
+            <dt className="text-xs text-slate-400 pt-0.5">모델</dt>
+            <dd className="font-mono text-slate-200 break-all" title="비워 두면 서버가 올린 첫 모델을 자동으로 씁니다(.env OPENAI_COMPAT_MODEL)">
+              {local.model || testResult?.model || local.active_model || '자동 감지(연결 테스트로 확인)'}
+            </dd>
+            <dt className="text-xs text-slate-400 pt-0.5">타임아웃</dt>
+            <dd className="text-slate-200">{local.timeout}초</dd>
+          </dl>
         )}
       </div>
 
