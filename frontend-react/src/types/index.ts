@@ -41,7 +41,6 @@ export interface KnowledgeCategory {
 export interface NamespaceDetail extends Namespace {
   id: number;
   kind?: string;
-  parent_name?: string | null;   // 상위 업무 영역
   owner_part?: string | null;
   knowledge_count: number;
   glossary_count: number;

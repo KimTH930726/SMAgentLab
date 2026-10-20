@@ -1458,7 +1458,7 @@ async def _migrate_policy_v0(conn) -> None:
 async def _migrate_org_domain(conn) -> None:
     """조직(사람) 축과 업무 영역(지식) 축 분리 (2026-10-20, #78). 멱등.
     - ops_team + ops_part.team_id: 조직은 팀 > 파트(사람이 파트에 속함). 파트는 소속·역할·권한만 — 데이터는 파트 이름을 들지 않는다.
-    - ops_namespace.parent_id: 업무 영역 트리(상위 묶음은 kind='group', 데이터를 직접 갖지 않음). 담당은 owner_part_id(기존).
+    - ops_namespace.parent_id: 업무 영역 트리 자리(지금 비움 — 하위 업무를 트리 단계로 두는 P2에서 쓴다, 상위 묶음은 10/20 과설계로 뺌). 담당은 owner_part_id(기존).
     - ops_voc_routing.part_id: VOC 메일 담당을 파트 이름(글자) 대신 연결로 — 파트 이름이 바뀌어도 끊기지 않게(기존 part 글자는 보관)."""
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS ops_team (
@@ -1474,7 +1474,7 @@ async def _migrate_org_domain(conn) -> None:
             UPDATE ops_voc_routing r SET part_id = p.id FROM ops_part p
             WHERE r.part_id IS NULL AND r.part = p.name""")
         await conn.execute("ALTER TABLE ops_voc_routing ALTER COLUMN part DROP NOT NULL")
-    # 영역 종류: '정책 영역/업무 영역' 구분 폐지 — 일반은 'domain'. 남는 종류는 group(상위 묶음)·policy_test(E2E 임시)뿐.
+    # 영역 종류: '정책 영역/업무 영역' 구분 폐지 — 일반은 'domain', 그 밖엔 policy_test(E2E 임시)뿐.
     await conn.execute("ALTER TABLE ops_namespace ALTER COLUMN kind SET DEFAULT 'domain'")
     await conn.execute("UPDATE ops_namespace SET kind = 'domain' WHERE kind IN ('policy', 'business')")
     # 연결 표의 업무 영역 종류 이름 'part' → 'domain'('파트'는 사람 조직 — 같은 단어 두 뜻 금지)

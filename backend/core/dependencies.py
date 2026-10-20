@@ -88,12 +88,8 @@ async def check_namespace_ownership(namespace: str, user: dict) -> None:
     예전엔 "공통"이라 누구나 고칠 수 있었다. 정책서 영역 대부분이 아직 담당 미지정이라 아무나 고치면 안 된다).
     """
     async with get_conn() as conn:
-        row = await conn.fetchrow("SELECT owner_part_id, kind FROM ops_namespace WHERE name = $1", namespace)
-    if row is not None and row["kind"] == "group":
-        # 상위 묶음은 데이터를 갖지 않는다 — 관리자도(목록에서 빠져 있어 넣으면 안 보이는 데이터가 된다, 리뷰 L2)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="상위 업무 영역에는 데이터를 넣을 수 없습니다. 하위 업무 영역을 고르세요.")
-    reason = edit_denied_reason(row["owner_part_id"] if row else None, user)
+        owner_part_id = await conn.fetchval("SELECT owner_part_id FROM ops_namespace WHERE name = $1", namespace)
+    reason = edit_denied_reason(owner_part_id, user)
     if reason:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
 

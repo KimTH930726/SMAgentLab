@@ -17,11 +17,9 @@ class NamespaceRename(BaseModel):
 
 
 class NamespaceSettings(BaseModel):
-    """업무 영역 담당·위치(관리자) — 보낸 칸만 바꾼다. 빈 문자열/None = 해제."""
+    """업무 영역 담당 파트(관리자). owner_part 빈 문자열 또는 clear_owner = 해제."""
     owner_part: Optional[str] = None
-    parent: Optional[str] = None
     clear_owner: bool = False
-    clear_parent: bool = False
 
 
 class KnowledgeCategoryCreate(BaseModel):
@@ -39,8 +37,7 @@ class NamespaceInfo(BaseModel):
     id: int
     name: str
     description: str
-    kind: str = "domain"                  # domain | policy_test(E2E 임시) — 상위 묶음(group)은 목록에서 뺀다
-    parent_name: Optional[str] = None     # 상위 업무 영역(트리, 2026-10-20)
+    kind: str = "domain"                  # domain | policy_test(E2E 임시)
     owner_part: Optional[str] = None
     knowledge_count: int
     glossary_count: int

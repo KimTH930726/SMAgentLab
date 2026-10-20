@@ -82,7 +82,7 @@ async def create_namespace_endpoint(body: NamespaceCreate, user: dict = Depends(
     # 담당 파트는 업무 영역 관리에서 따로 지정
     created = await service.create_namespace(body.name, body.description, owner_part=None, created_by_user_id=user["id"])
     if created is None:
-        raise HTTPException(status_code=409, detail=await service.name_taken_reason(body.name))
+        raise HTTPException(status_code=409, detail=service.NAME_TAKEN)
     return created
 
 
@@ -96,17 +96,12 @@ async def rename_namespace_endpoint(name: str, body: NamespaceRename, user: dict
 
 @router.patch("/api/namespaces/{name}/settings", response_model=dict)
 async def update_namespace_settings(name: str, body: NamespaceSettings, user: dict = Depends(get_current_admin)):
-    """업무 영역의 담당 파트·상위 영역 지정(관리자, 2026-10-20) — 담당이 정해져야 그 파트 사람이 수정할 수 있다."""
+    """업무 영역의 담당 파트 지정(관리자, 2026-10-20) — 담당이 정해져야 그 파트 사람이 수정할 수 있다."""
     try:
         return await service.update_namespace_settings(name, body)
     except service.NamespaceNotFound as e:   # 전역 LookupError 처리는 KeyError(버그)까지 404로 바꿔 숨겨서 쓰지 않는다
         raise HTTPException(status_code=404, detail=str(e))
 
-
-@router.get("/api/namespaces/groups", response_model=list[dict])
-async def list_namespace_groups(user: dict = Depends(get_current_admin)):
-    """상위 업무 영역(묶음) 목록 — 담당·위치 설정 화면의 상위 선택용."""
-    return await service.list_groups()
 
 
 @router.delete("/api/namespaces/{name}", status_code=204)

@@ -10,10 +10,9 @@ logger = logging.getLogger(__name__)
 
 
 async def list_namespaces() -> list[str]:
-    """고를 수 있는 업무 영역 — 상위 묶음(kind='group')은 데이터가 없어 빼고 이름만(2026-10-20)."""
     async with get_conn() as conn:
         rows = await conn.fetch(
-            "SELECT name FROM ops_namespace WHERE kind <> 'group' ORDER BY name"
+            "SELECT name FROM ops_namespace ORDER BY name"
         )
     return [r["name"] for r in rows]
 
@@ -22,7 +21,7 @@ async def list_namespaces_detail() -> list[dict]:
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
-            SELECT n.id, n.name, n.description, n.kind, n.parent_id, pn.name AS parent_name,
+            SELECT n.id, n.name, n.description, n.kind,
                    p.name AS owner_part,
                    n.created_at::text,
                    n.created_by_user_id,
@@ -31,7 +30,6 @@ async def list_namespaces_detail() -> list[dict]:
                    COALESCE(g.cnt, 0) AS glossary_count
             FROM ops_namespace n
             LEFT JOIN ops_part p ON n.owner_part_id = p.id
-            LEFT JOIN ops_namespace pn ON pn.id = n.parent_id
             LEFT JOIN ops_user u ON n.created_by_user_id = u.id
             LEFT JOIN (
                 SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge WHERE status = 'active' GROUP BY namespace_id
@@ -39,7 +37,6 @@ async def list_namespaces_detail() -> list[dict]:
             LEFT JOIN (
                 SELECT namespace_id, COUNT(*) AS cnt FROM rag_glossary GROUP BY namespace_id
             ) g ON n.id = g.namespace_id
-            WHERE n.kind <> 'group'
             ORDER BY n.name
             """
         )
@@ -66,7 +63,7 @@ async def create_namespace(
             """,
             name, description, owner_part_id, created_by_user_id,
         )
-        if row is None:   # 같은 이름(숨은 상위 묶음 포함)의 설명을 조용히 덮어쓰던 것(리뷰 L1)
+        if row is None:   # 같은 이름이면 설명을 조용히 덮어쓰던 것(리뷰 L1)
             return None
         # owner_part name 보충
         result = dict(row)
@@ -86,11 +83,7 @@ async def _forget_cached_answers(*names: str) -> None:
         await sem_cache.invalidate_namespace(n)
 
 
-async def name_taken_reason(name: str) -> str:
-    async with get_conn() as conn:
-        kind = await conn.fetchval("SELECT kind FROM ops_namespace WHERE name = $1", name)
-    # 상위 묶음은 목록에 안 보여 "이미 있다"만으론 이유를 알 수 없다(리뷰 L8)
-    return "상위 업무 영역(묶음) 이름과 같습니다." if kind == "group" else "이미 있는 업무 영역 이름입니다."
+NAME_TAKEN = "이미 있는 업무 영역 이름입니다."
 
 
 async def rename_namespace(old_name: str, new_name: str) -> tuple[int, str]:
@@ -106,21 +99,18 @@ async def rename_namespace(old_name: str, new_name: str) -> tuple[int, str]:
         except asyncpg.exceptions.UniqueViolationError:   # 확인과 변경 사이 동시 요청(막 쓰기 테스트: 500)
             result = "UPDATE 0"
     if result != "UPDATE 1":
-        return 409, await name_taken_reason(new_name)
+        return 409, NAME_TAKEN
     await _forget_cached_answers(old_name, new_name)
     return 200, ""
 
 
 async def delete_namespace(name: str) -> tuple[int, str]:
-    """(상태, 사유). 하위 영역이 있는 묶음은 지우지 않는다 — 지우면 하위 영역이 조용히 최상위로 빠졌다(막 쓰기 테스트 10/20)."""
+    """(상태, 사유). 연결 표의 글자 키 연결도 같이 지운다."""
     async with get_conn() as conn:
         async with conn.transaction():
             row = await conn.fetchrow("SELECT id FROM ops_namespace WHERE name = $1 FOR UPDATE", name)
             if row is None:
                 return 404, "업무 영역을 찾을 수 없습니다."
-            children = await conn.fetchval("SELECT count(*) FROM ops_namespace WHERE parent_id = $1", row["id"])
-            if children:
-                return 409, f"하위 업무 영역 {children}개가 있어 지울 수 없습니다. 하위 영역을 먼저 옮기세요."
             # 연결 표는 영역을 글자 키로 가리켜 FK로 같이 안 지워진다 — 남으면 정책 범위가 조용히 "전부"로 바뀐다(리뷰 L6)
             await conn.execute("""DELETE FROM ops_link WHERE (from_type = 'domain' AND from_key = $1) OR (to_type = 'domain' AND to_key = $1)
                                   OR (from_type = 'section' AND from_key LIKE $1 || '|%') OR (to_type = 'section' AND to_key LIKE $1 || '|%')""",
@@ -131,40 +121,22 @@ async def delete_namespace(name: str) -> tuple[int, str]:
     return 204, ""
 
 
-async def list_groups() -> list[dict]:
-    async with get_conn() as conn:
-        rows = await conn.fetch("SELECT id, name FROM ops_namespace WHERE kind = 'group' ORDER BY name")
-    return [dict(r) for r in rows]
-
-
 async def update_namespace_settings(name: str, body) -> dict:
-    """담당 파트·상위 영역 지정. 묶음엔 담당을 두지 않고(데이터 없음), 상위는 묶음만 고를 수 있다(한 단계 트리)."""
+    """담당 파트 지정(관리자) — 화면은 조직 관리 메뉴 설계 검수 뒤(10/20 사용자 결정), 그 전엔 이 API·스크립트로."""
     async with get_conn() as conn:
         async with conn.transaction():
-            ns = await conn.fetchrow("SELECT id, kind FROM ops_namespace WHERE name = $1 FOR UPDATE", name)
+            ns = await conn.fetchrow("SELECT id FROM ops_namespace WHERE name = $1 FOR UPDATE", name)
             if ns is None:
                 raise NamespaceNotFound("업무 영역을 찾을 수 없습니다.")
             if body.clear_owner or body.owner_part is not None:   # 빈 문자열 = 해제(스키마 설명과 같게, 재리뷰 L1)
-                if ns["kind"] == "group":
-                    raise ValueError("상위 업무 영역(묶음)에는 담당 파트를 두지 않습니다.")
                 owner = None
                 if body.owner_part and not body.clear_owner:
                     owner = await conn.fetchval("SELECT id FROM ops_part WHERE name = $1 FOR KEY SHARE", body.owner_part)
                     if owner is None:
                         raise ValueError(f"없는 파트입니다: {body.owner_part}")
                 await conn.execute("UPDATE ops_namespace SET owner_part_id = $2 WHERE id = $1", ns["id"], owner)
-            if body.clear_parent or body.parent is not None:
-                if ns["kind"] == "group":
-                    raise ValueError("상위 업무 영역(묶음)은 다른 묶음 아래에 둘 수 없습니다.")
-                parent = None
-                if body.parent and not body.clear_parent:
-                    parent = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1 AND kind = 'group'", body.parent)
-                    if parent is None:
-                        raise ValueError(f"상위 업무 영역(묶음)이 아닙니다: {body.parent}")
-                await conn.execute("UPDATE ops_namespace SET parent_id = $2 WHERE id = $1", ns["id"], parent)
-            row = await conn.fetchrow("""SELECT n.name, p.name AS owner_part, g.name AS parent_name FROM ops_namespace n
-                                         LEFT JOIN ops_part p ON p.id = n.owner_part_id LEFT JOIN ops_namespace g ON g.id = n.parent_id
-                                         WHERE n.id = $1""", ns["id"])
+            row = await conn.fetchrow("""SELECT n.name, p.name AS owner_part FROM ops_namespace n
+                                         LEFT JOIN ops_part p ON p.id = n.owner_part_id WHERE n.id = $1""", ns["id"])
     return dict(row)
 
 

@@ -18,10 +18,9 @@ _spec.loader.exec_module(dep)
 check_namespace_ownership = dep.check_namespace_ownership
 
 
-def _db(owner_part_id, kind="domain"):
+def _db(owner_part_id):
     conn = AsyncMock()
-    conn.fetchval.return_value = owner_part_id                                    # 조회 검사
-    conn.fetchrow.return_value = {"owner_part_id": owner_part_id, "kind": kind}   # 수정 검사
+    conn.fetchval.return_value = owner_part_id
 
     @asynccontextmanager
     async def get_conn():
@@ -51,16 +50,6 @@ async def test_domain_edit_rule(owner, user, allowed):
             with pytest.raises(HTTPException) as e:
                 await check_namespace_ownership("영역", user)
             assert e.value.status_code == 403
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("role", ["admin", "user"])
-async def test_group_domain_holds_no_data(role):
-    """상위 묶음(kind=group)은 데이터를 갖지 않는다 — 관리자도 막는다(목록에서 빠져 넣으면 안 보이는 데이터가 됨, 리뷰 L2)."""
-    with _db(None, kind="group"):
-        with pytest.raises(HTTPException) as e:
-            await check_namespace_ownership("고객", _user(role=role, part_id=None))
-    assert e.value.status_code == 400
 
 
 @pytest.mark.parametrize("owner, user, allowed", [

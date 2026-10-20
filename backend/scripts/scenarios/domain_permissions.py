@@ -32,7 +32,6 @@ async def main() -> int:
     await init_pool()
     async with get_conn() as c:
         admin_id = await c.fetchval("SELECT id FROM ops_user WHERE role = 'admin' ORDER BY id LIMIT 1")
-        group = await c.fetchval("SELECT name FROM ops_namespace WHERE kind = 'group' ORDER BY id LIMIT 1")
         ownerless = await c.fetchval("SELECT name FROM ops_namespace WHERE kind = 'domain' AND owner_part_id IS NULL ORDER BY id LIMIT 1")
     A = tok(admin_id, "admin", "admin")
     created_users: list[int] = []
@@ -44,8 +43,8 @@ async def main() -> int:
                 assert r.status_code == 201, r.text
             r = await h.post("/api/namespaces", json={"name": P + "ns"}, headers=A)
             chk("영역 만들기(관리자)", r.status_code, 200)
-            r = await h.patch(f"/api/namespaces/{P}ns/settings", json={"owner_part": P + "p1", "parent": group}, headers=A)
-            chk("담당·상위 지정", (r.status_code, r.json().get("owner_part"), r.json().get("parent_name")), (200, P + "p1", group))
+            r = await h.patch(f"/api/namespaces/{P}ns/settings", json={"owner_part": P + "p1"}, headers=A)
+            chk("담당 지정", (r.status_code, r.json().get("owner_part")), (200, P + "p1"))
             users = {}
             for n, part in (("u1", "p1"), ("u2", "p2")):
                 r = await h.post("/api/auth/register", json={"username": P + n, "password": "Passw0rd!", "part": P + part})
@@ -63,8 +62,6 @@ async def main() -> int:
             chk("담당 파트 수정", (await h.post(f"/api/namespaces/{P}ns/categories", json={"name": "c"}, headers=U1)).status_code, 201)
             chk("다른 파트 수정", (await h.post(f"/api/namespaces/{P}ns/categories", json={"name": "d"}, headers=U2)).status_code, 403)
             chk("담당 없는 영역 수정(일반)", (await h.post(f"/api/namespaces/{ownerless}/categories", json={"name": "x"}, headers=U1)).status_code, 403)
-            chk("상위 묶음에 데이터(관리자)", (await h.post("/api/knowledge", json={"namespace": group, "content": "x", "category": "y"}, headers=A)).status_code, 400)
-            chk("상위 묶음에 대화방", (await h.post("/api/conversations", json={"namespace": group}, headers=A)).status_code in (400, 404), True)
 
             # 없는 업무구분 이름 변경·삭제 → 지식을 건드리기 전에 404
             async with get_conn() as c:
@@ -85,7 +82,6 @@ async def main() -> int:
             for bad in ("", "   ", "a/b", "x" * 101):
                 chk(f"이상한 영역 이름 {bad[:8]!r}", (await h.post("/api/namespaces", json={"name": bad}, headers=A)).status_code, 422)
             chk("같은 이름 영역", (await h.post("/api/namespaces", json={"name": P + "ns"}, headers=A)).status_code, 409)
-            chk("상위 묶음 이름으로 영역", (await h.post("/api/namespaces", json={"name": group}, headers=A)).status_code, 409)
             chk("없는 역할", (await h.put(f"/api/auth/users/{users['u2']}", json={"role": "superadmin"}, headers=A)).status_code, 422)
             r = await h.put(f"/api/auth/users/{users['u2']}", json={"part": "없는파트__"}, headers=A)
             async with get_conn() as c:
@@ -99,11 +95,10 @@ async def main() -> int:
             codes = sorted(r.status_code for r in rs)
             chk("같은 파트 동시 10번(성공 1·500 없음)", (codes.count(201), 500 in codes), (1, False))
 
-            # 쓰이는 파트 삭제 금지, 하위 있는 묶음 삭제 금지
+            # 쓰이는 파트 삭제 금지
             async with get_conn() as c:
                 p1 = await c.fetchval("SELECT id FROM ops_part WHERE name = $1", P + "p1")
             chk("담당·소속 있는 파트 삭제", (await h.delete(f"/api/auth/parts/{p1}", headers=A)).status_code, 400)
-            chk("하위 있는 묶음 삭제", (await h.delete(f"/api/namespaces/{group}", headers=A)).status_code, 409)
         finally:
             async with get_conn() as c:   # 정리 — 만든 것만
                 await c.execute("DELETE FROM ops_namespace WHERE name LIKE $1", P + "%")

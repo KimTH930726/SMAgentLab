@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Database, Tag, Pencil, Check, X } from 'lucide-react';
 import {
-  getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace, updateNamespaceSettings, getNamespaceGroups,
+  getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace,
   getCategories, createCategory, deleteCategory, renameCategory,
 } from '../../api/namespaces';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -13,7 +13,6 @@ import { Badge } from '../ui/Badge';
 import type { KnowledgeCategory } from '../../types';
 import { showError } from '../../store/useDialogStore';
 import { canEditDomain } from '../../utils/domainAccess';
-import { getAllParts } from '../../api/auth';
 
 type AdminTabId = 'knowledge' | 'glossary';
 interface NamespaceManagerProps {
@@ -219,18 +218,6 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
     },
   });
 
-  // 담당 파트·상위 영역(관리자만) — 목록은 관리자일 때만 불러온다
-  const { data: allParts = [] } = useQuery({ queryKey: ['all-parts'], queryFn: getAllParts, enabled: isAdmin });
-  const { data: groups = [] } = useQuery({ queryKey: ['namespace-groups'], queryFn: getNamespaceGroups, enabled: isAdmin });
-  const settingsMutation = useMutation({
-    mutationFn: ({ name, field, value }: { name: string; field: 'owner' | 'parent'; value: string }) =>
-      updateNamespaceSettings(name, field === 'owner'
-        ? (value ? { owner_part: value } : { clear_owner: true })
-        : (value ? { parent: value } : { clear_parent: true })),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['namespaces-detail'] }),
-    onError: (err: Error) => { void showError(err, '담당·상위 영역 저장 실패'); },
-  });
-
   const commitNsRename = (oldName: string) => {
     const trimmed = editingNsName.trim();
     if (!trimmed || trimmed === oldName) { setEditingNs(null); return; }
@@ -352,40 +339,8 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                   {ns.created_by_username && (
                     <span className="text-xs text-slate-500">{ns.created_by_username}</span>
                   )}
-                  {isAdmin ? (
-                    <span className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                      <select
-                        id={`ns-parent-${ns.id}`}
-                        aria-label="상위 업무 영역"
-                        title="상위 업무 영역(묶음)"
-                        value={ns.parent_name ?? ''}
-                        disabled={settingsMutation.isPending}
-                        onChange={(e) => settingsMutation.mutate({ name: ns.name, field: 'parent', value: e.target.value })}
-                        className="bg-slate-900 border border-slate-600 rounded px-1.5 py-0.5 text-xs text-slate-300"
-                      >
-                        <option value="">상위 없음</option>
-                        {groups.map((g) => <option key={g.id} value={g.name}>{g.name}</option>)}
-                      </select>
-                      <select
-                        id={`ns-owner-${ns.id}`}
-                        aria-label="담당 파트"
-                        title="담당 파트 — 이 파트 사람이 이 업무 영역을 수정할 수 있다(없으면 관리자만)"
-                        value={ns.owner_part ?? ''}
-                        disabled={settingsMutation.isPending}
-                        onChange={(e) => settingsMutation.mutate({ name: ns.name, field: 'owner', value: e.target.value })}
-                        className="bg-slate-900 border border-slate-600 rounded px-1.5 py-0.5 text-xs text-slate-300"
-                      >
-                        <option value="">담당 없음(관리자만)</option>
-                        {allParts.map((p) => <option key={p.id} value={p.name}>{p.team ? `${p.team} · ${p.name}` : p.name}</option>)}
-                      </select>
-                    </span>
-                  ) : (
-                    <>
-                      {ns.parent_name && <span className="text-xs text-slate-500">{ns.parent_name}</span>}
-                      {ns.owner_part && (
-                        <Badge color={canModifyNs(ns.owner_part) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
-                      )}
-                    </>
+                  {ns.owner_part && (
+                    <Badge color={canModifyNs(ns.owner_part) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
                   )}
                   <span className="text-xs text-slate-500">
                     생성: {new Date(ns.created_at).toLocaleDateString('ko-KR')}

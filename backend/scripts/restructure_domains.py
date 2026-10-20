@@ -5,8 +5,7 @@
      충돌: 업무구분(카테고리) 같은 이름은 하나로(지식의 category는 이름이라 그대로 맞음), VOC 메일함·분석 중복은 중단(사람 확인).
      연결 표(ops_link)의 영역 id 글자 키, 용어 수집 상태(ops_system_config 키에 영역 id)도 옮긴다.
   2. 영역 이름 정리("팀 공통 DB" → "팀 공통" 등) — DB는 모두 id로 가리켜 이름만 바뀐다(캐시는 이름 키라 비운다).
-  3. 상위 영역(kind='group', 데이터 없음)과 트리(parent_id).
-  4. 조직: 팀 > 파트, 사용자 소속 이동, 영역 담당 파트, VOC 담당 연결. 옛 파트(영역 이름이던 것·슈퍼어드민)는 비운 뒤 지운다.
+  3. 조직: 팀 > 파트, 사용자 소속 이동, 영역 담당 파트, VOC 담당 연결. 옛 파트(영역 이름이던 것·슈퍼어드민)는 비운 뒤 지운다.
 점검(적용 전·후): 표마다 (합칠 두 영역 행 수 합) = (합친 뒤 행 수) — 카테고리 병합으로 줄어든 수만 예외. 옛 영역을 가리키는 행 0.
 
 실행(컨테이너): python scripts/restructure_domains.py            # 미리보기(바꾸지 않음)
@@ -21,16 +20,6 @@ sys.path.insert(0, "/app")
 
 MERGE = {"온라인스토어 DB": "온라인스토어", "딜리버스 DB": "딜리버스"}          # 지식 공간 → 같은 업무 영역(정책서)
 RENAME = {"팀 공통 DB": "팀 공통", "외부서비스DB": "외부서비스"}
-GROUPS = {   # 상위 영역 → 업무 영역(초안, 10/20 — 관리자 화면에서 슈퍼어드민이 바꾼다)
-    "고객": ["회원", "멤버십 서비스"],
-    "결제": ["스타벅스카드"],
-    "혜택": ["리워드", "쿠폰", "챌린지"],
-    "주문": ["주문 서비스", "제휴 주문 서비스"],
-    "온라인 서비스": ["온라인스토어", "딜리버스", "외부서비스"],
-    "제휴": ["제휴서비스"],
-    "매장·영업": ["영업시스템", "영업연계시스템", "POS"],
-    "공통": ["팀 공통"],
-}
 TEAMS = {"스타벅스CSP팀": ["온라인서비스 파트", "온라인스토어 파트"]}
 OWNERS = {"딜리버스": "온라인서비스 파트", "외부서비스": "온라인서비스 파트", "온라인스토어": "온라인스토어 파트"}
 MOVE_USERS = {"딜리버스": "온라인서비스 파트", "외부서비스": "온라인서비스 파트"}   # 옛 파트 → 새 파트
@@ -120,7 +109,7 @@ async def main() -> None:
                                                             WHERE a.namespace_id = $1 AND b.namespace_id = $2""", ns[s], ns[d])
         print("합친 뒤 같은 이름 용어(둘 다 남김, 출처 영역별 정의):", dup_terms)
         print("이름 정리:", {k: v for k, v in RENAME.items() if k in ns})
-        print("상위 영역:", list(GROUPS), "· 조직:", TEAMS, "· 담당:", OWNERS)
+        print("조직:", TEAMS, "· 담당:", OWNERS)
         users = await conn.fetch("SELECT u.username, u.role, p.name AS part FROM ops_user u LEFT JOIN ops_part p ON p.id = u.part_id ORDER BY u.id")
         print("사용자 소속 변경:", [(u["username"], u["part"], MOVE_USERS.get(u["part"]) if u["role"] not in NO_PART_ROLES else None)
                                 for u in users])
@@ -139,15 +128,6 @@ async def main() -> None:
                 reports[f"{s}→{d}"] = await merge(conn, ns[s], ns[d], tables)
             for old, new in RENAME.items():
                 await conn.execute("UPDATE ops_namespace SET name = $2 WHERE name = $1", old, new)
-            # 상위 영역 + 트리
-            for g, children in GROUPS.items():
-                # 같은 이름의 데이터 있는 영역을 묶음으로 바꾸면 그 데이터가 목록·검색에서 사라진다(리뷰 L4b) — 그땐 멈춘다
-                same = await conn.fetchrow("SELECT id, kind FROM ops_namespace WHERE name = $1", g)
-                if same and same["kind"] != "group":
-                    raise RuntimeError(f"상위 영역 이름 '{g}'과 같은 업무 영역이 이미 있음 — 묶음 이름을 바꾸거나 그 영역을 먼저 정리: 되돌림")
-                gid = same["id"] if same else await conn.fetchval(
-                    "INSERT INTO ops_namespace (name, description, kind) VALUES ($1, '상위 업무 영역', 'group') RETURNING id", g)
-                await conn.execute("UPDATE ops_namespace SET parent_id = $1 WHERE name = ANY($2::text[])", gid, children)
             # 조직
             part_id = {}
             for team, parts in TEAMS.items():
@@ -194,8 +174,7 @@ async def main() -> None:
             self_links = await conn.fetchval("SELECT count(*) FROM ops_link WHERE from_type = to_type AND from_key = to_key")
             if dangling or src_keys or self_links:
                 raise RuntimeError(f"점검 실패 — 없는 영역 연결 {dangling} · 옛 설정 키 {src_keys} · 자기 연결 {self_links}: 되돌림")
-            orphans = await conn.fetchval("SELECT count(*) FROM ops_namespace WHERE kind <> 'group' AND parent_id IS NULL AND kind <> 'policy_test'")
-            print("합치기 결과:", reports, "· 상위 영역 없는 영역:", orphans)
+            print("합치기 결과:", reports)
         # 캐시는 영역 이름이 키 — 합친·바뀐 이름 전부 비운다(트랜잭션 밖, 실패해도 TTL로 사라짐)
         try:
             from shared import cache as sem_cache

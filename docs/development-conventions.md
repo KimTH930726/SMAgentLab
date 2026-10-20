@@ -162,7 +162,7 @@ API 스펙은 FastAPI 자동 문서(`/docs`)로 대체했으므로 손으로 동
   플레이스홀더 사용). 동적 컬럼/함수명이 필요하면 f-string 삽입 대신 `CASE` 분기로 우회한
   전례가 있음(`feedback/router.py`의 가중치 갱신 쿼리).
 - **모든 쓰기 API는 소유권을 검사한다** — `check_namespace_ownership()`(규칙 본체 `edit_denied_reason` 한 곳: 관리자 / 업무 영역의
-  담당 파트 사람 / 담당 없는 영역은 관리자만 / 상위 묶음엔 쓰기 금지)을 새 엔드포인트에도 적용. 여러 영역을 한 번에 검사하는 경로도
+  담당 파트 사람 / 담당 없는 영역은 관리자만)을 새 엔드포인트에도 적용. 여러 영역을 한 번에 검사하는 경로도
   인라인 사본 대신 `edit_denied_reason`(v2.142 — 사본이 규칙과 어긋났던 실사고). 관리 화면 조회는 `check_namespace_read`.
   프론트 `utils/domainAccess.ts canEditDomain`이 같은 규칙. 이름 입력 칸은 `service/validation.py`의 공통 타입.
 - **admin 전용 엔드포인트는 `get_current_admin`으로 명시적으로 막는다** — 일반 인증
