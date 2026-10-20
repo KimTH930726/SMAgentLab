@@ -44,6 +44,10 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       INHOUSE_LLM_BASE_URL: ${INHOUSE_LLM_BASE_URL:-https://devx-gw.shinsegae-inc.com}
+      # dev 전용 로컬 LLM(OpenAI 호환) — 운영 .env엔 넣지 않는다(비면 선택 불가)
+      OPENAI_COMPAT_BASE_URL: ${OPENAI_COMPAT_BASE_URL:-}
+      OPENAI_COMPAT_MODEL: ${OPENAI_COMPAT_MODEL:-}
+      OPENAI_COMPAT_TIMEOUT: ${OPENAI_COMPAT_TIMEOUT:-300}
       INHOUSE_LLM_CLIENT_ID: ${INHOUSE_LLM_CLIENT_ID:-}
       INHOUSE_LLM_CLIENT_SECRET: ${INHOUSE_LLM_CLIENT_SECRET:-}
       # 빈 값 fallback은 settings 기본값을 덮어쓰지 않도록 코드 기본과 동일하게 둠

@@ -19,6 +19,13 @@ def list_scoped(hits: Sequence[T], keep: set, key: Callable[[T], Hashable]) -> l
     return [h for i, h in enumerate(hits) if key(h) in keep or i < first]
 
 
+def with_note(body: str, note, label: str = "비고") -> str:
+    """답변 문맥용 원문 = 본문 + 비고. 비고(예외·외부 시스템 안내)는 답을 바꾸므로 LLM이 봐야 하지만 검색 조각엔 넣지 않는다
+    — 붙이면 비고 있는 문서의 1위가 떨어졌다(OpsLens 정책서 v0, 88→82%). 검색 텍스트와 답변 문맥 텍스트를 따로 둔다."""
+    note = (note or "").strip()
+    return f"{body}\n{label}: {note}" if note else body
+
+
 CONDITION_ANSWER_HINT_KO = (
     "[답 구조: 이 질문은 특정 조건에 적용되는 규정을 묻는다. 아래 문서에서 그 조건에 적용되는 내용(그 조건이 적힌 규정, "
     "그 조건 값에 해당하는 기준 — 금액 구간·유형 코드·대상 상품 등)을 찾아 먼저 답하고, 그 조건에도 함께 적용되는 일반 규정은 "

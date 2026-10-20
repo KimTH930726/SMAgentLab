@@ -15,6 +15,9 @@ from typing import Optional
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 
+# 원문 통째 정책(v0) — service/policy/v0_convert.PIPELINE_WHOLE과 같은 값(테스트가 service.policy를 가짜 패키지로 두어 import 대신 값)
+PIPELINE_WHOLE = "v0_whole"
+
 
 async def _resubmit_for_review(conn, item_id: int) -> None:
     """수정 후 검토대기로 되돌림 — reviewed_at/reviewed_by도 같이 비운다(/code-review
@@ -107,5 +110,8 @@ async def update_narrative(namespace: str, chunk_id: int, chunk_text: str) -> st
             "UPDATE policy_chunk SET chunk_text = $1, embedding = $2::vector WHERE id = $3",
             chunk_text.strip(), str(embedding), chunk_id,
         )
+        # 원문 통째 항목(v0)은 조각이 곧 원문 — 조각만 고치면 답변·근거(raw_body)엔 옛 글이 남는다(감사 10/20)
+        await conn.execute("UPDATE policy_item SET raw_body = $1 WHERE id = $2 AND pipeline_version = $3",
+                           chunk_text.strip(), item_id, PIPELINE_WHOLE)
         await _resubmit_for_review(conn, item_id)
     return "pending_review"

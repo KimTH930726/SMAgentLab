@@ -85,7 +85,8 @@ interface FormState {
 
 function configToForm(cfg: LLMConfig): FormState {
   return {
-    provider: cfg.provider,
+    // 로컬 LLM(openai_compat)은 dev E2E가 잠깐 거는 것 — 이 화면에선 고를 수 없어 사내로 보여 준다(저장하면 사내로 돌아감)
+    provider: cfg.provider === 'openai_compat' ? 'inhouse' : cfg.provider,
     ollama_base_url: cfg.ollama.base_url,
     ollama_model: cfg.ollama.model,
     ollama_timeout: cfg.ollama.timeout,

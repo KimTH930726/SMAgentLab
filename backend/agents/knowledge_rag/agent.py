@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from agents.base import AgentBase
-from core.database import get_conn, resolve_namespace_id
+from core.database import get_conn
 from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
@@ -18,8 +18,9 @@ from service.chat.helpers import (
 from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from service.policy import search as policy_search
 from service.policy import category_list
+from service.policy import scope as policy_scope
 from service.policy.query_type import looks_like_condition_query, looks_like_navigation_query
-from trustkit.answer.shaping import CONDITION_ANSWER_HINT_KO, list_scoped as _list_scoped
+from trustkit.answer.shaping import CONDITION_ANSWER_HINT_KO, list_scoped as _list_scoped, with_note as _with_note
 from service.refdata import service as refdata_search
 from service.llm.base import REPLACE_PREFIX, resolve_system_prompt
 from service.llm.factory import get_llm_provider
@@ -44,6 +45,11 @@ async def _safe_post_save(conv_id: int, namespace: str) -> None:
         await post_save_tasks(conv_id, namespace)
     except Exception as e:
         logger.warning("post_save_tasks 실패: %s", e)
+
+
+def _part_and_path(part, path) -> str:
+    """정책 근거 머리 — 정책서 범위가 여러 파트면 어느 파트 정책인지(같은 제목이 여러 파트에 있다, 2026-10-20)."""
+    return (f" [파트: {part}]" if part else "") + (f" [분류: {' > '.join(path)}]" if path else "")
 
 
 def _build_rrf_context(
@@ -98,14 +104,14 @@ def _build_rrf_context(
     for i, p in enumerate(policy_result.params):
         value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
         condition_str = f" ({p.condition})" if p.condition else ""
-        category_str = f" [분류: {' > '.join(p.category_path)}]" if p.category_path else ""
+        category_str = _part_and_path(p.part, p.category_path)
         items.append((rrf_score(i), f"[정책 파라미터 · 정확 일치: {p.policy_name}{condition_str}]{category_str} {p.param_name} = {value_str}"))
     for i, n in enumerate(policy_result.narratives):
         confidence = "높음" if n.score >= 0.6 else "보통" if n.score >= 0.4 else "낮음"
-        category_str = f" [분류: {' > '.join(n.category_path)}]" if n.category_path else ""
+        category_str = _part_and_path(n.part, n.category_path)
         # chunk_text 대신 raw_body(원문 전체) 사용 이유는 service/policy/search.py의
         # build_policy_context()와 동일 — 여러 조각으로 쪼개진 항목의 적용범위 조건 유실 방지.
-        body = n.raw_body or n.chunk_text
+        body = _with_note(n.raw_body or n.chunk_text, n.remark)
         items.append((rrf_score(i), f"[정책 서술: {n.policy_name}]{category_str} (신뢰도: {confidence})\n{body}"))
     for i, c in enumerate(common_codes or []):
         items.append((rrf_score(i), f"[공통코드 · 정확 매칭: {c['group_code_name']}] {c['code_id']} = {c['code_name']}"))
@@ -171,15 +177,23 @@ async def build_chat_context(
     list_question: Optional[str] = None,
 ) -> ChatContext:
     """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB)."""
+    # 정책서 범위(2026-10-20, 사용자 결정): 지식은 고른 파트만, 정책서(정책·용어)는 정책 파트까지 — service/policy/scope.py.
+    # 정책 데이터가 있는 파트만 돌려주므로 비어 있으면 정책 검색·분류 목록을 건너뛴다(예전 has_policy_data와 같은 역할).
+    try:
+        async with get_conn() as conn:
+            policy_ns_ids = await policy_scope.policy_namespace_ids(conn, namespace)
+    except Exception as e:
+        logger.warning("정책서 범위 계산 실패(정책 없이 진행): %s", e)
+        policy_ns_ids = []
+    policy_available = bool(policy_ns_ids)
     term_matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(
-        namespace, search_question, query_vec, mode=glossary_mode, entries=glossary_entries)
+        namespace, search_question, query_vec, mode=glossary_mode, entries=glossary_entries, extra_ns_ids=policy_ns_ids)
 
     # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
     candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
-    results_raw, policy_available, refdata_available = await asyncio.gather(
+    results_raw, refdata_available = await asyncio.gather(
         retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories,
                                    keyword_rescue=retrieval.KEYWORD_RESCUE),
-        policy_search.has_policy_data(namespace),
         refdata_search.has_refdata(namespace),
     )
     if settings.reranker_enabled and len(results_raw) > top_k:
@@ -201,7 +215,7 @@ async def build_chat_context(
     if policy_available:
         try:
             policy_result = await policy_search.search_policy(
-                namespace, enriched_query, top_k=policy_top_k, query_vec=query_vec,
+                namespace, enriched_query, top_k=policy_top_k, query_vec=query_vec, ns_ids=policy_ns_ids,
             )
         except Exception as e:
             logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
@@ -212,14 +226,12 @@ async def build_chat_context(
     category = None
     if policy_available and category_lists:
         try:
-            async with get_conn() as conn:
-                ns_id = await resolve_namespace_id(conn, namespace)
-            if ns_id is not None:
+            if policy_ns_ids:
                 # 분류 목록·재질문은 "이번 질문"만으로 — 멀티턴 보강(직전 턴을 붙인 search_question)으로 고르면 앞 턴의 범위가 넘어온다
                 # (2026-10-12 실측: "주문 > 장바구니" 다음 "주문 정책 전부"가 장바구니 10개만). 검색 재현율용 보강은 위 검색에만.
                 lvec = query_vec if lq == search_question else await embedding_service.embed(lq)
                 category = await category_list.find_category_list(
-                    ns_id, lq, lvec, keyword_nav=looks_like_navigation_query(lq), scope=clarify_scope)
+                    policy_ns_ids, lq, lvec, keyword_nav=looks_like_navigation_query(lq), scope=clarify_scope)
         except Exception as e:
             logger.warning("분류 목록 조회 실패(검색 결과만으로 진행): %s", e)
 

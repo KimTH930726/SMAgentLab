@@ -38,6 +38,7 @@ from shared import reranker
 from service.policy import keyword_index
 from shared.embedding import embedding_service
 from service.policy.query_type import looks_like_navigation_query
+from trustkit.answer.shaping import with_note
 from trustkit.retrieval.fusion import best_per_doc, rescue_order, rrf_order
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,8 @@ class ParamHit:
     value: Optional[str]
     unit: Optional[str]
     raw_body: str = ""  # 원문 전체 — 채팅 인용 카드의 "근거" 표시용(2026-09-06)
+    remark: Optional[str] = None  # 비고 — 검색엔 안 넣고 답변 문맥·근거 카드에만(v0 10/20: 조각에 붙이면 1위가 떨어짐)
+    part: Optional[str] = None    # 파트 이름 — 정책서 범위가 여러 파트일 때 근거에 표시(2026-10-20)
     param_id: Optional[int] = None  # 근거 정정(2026-10-01) — 인용 카드에서 "이 근거 틀림" 대상 지정용
     score: float = 0.0  # ts_rank 관련도 — 예전엔 i.id DESC(최신순)로만 정렬해 무의미했음,
     # select_top_policy_hit()에서 narrative가 없을 때 최선의 param 1건을 고르는 데 씀(2026-09-07)
@@ -76,6 +79,8 @@ class NarrativeHit:
     chunk_text: str
     score: float
     raw_body: str = ""  # 원문 전체 — 채팅 인용 카드의 "근거" 표시용(2026-09-06)
+    remark: Optional[str] = None  # 비고 — ParamHit.remark와 같은 이유
+    part: Optional[str] = None    # 파트 이름 — ParamHit.part와 같은 이유
     chunk_id: Optional[int] = None  # 근거 정정(2026-10-01) — 인용 카드에서 "이 근거 틀림" 대상 지정용
 
 
@@ -87,7 +92,7 @@ class PolicySearchResult:
 
 async def search_policy(
     namespace: str, query: str, category: Optional[str] = None, top_k: int = 10,
-    query_vec: Optional[list[float]] = None,
+    query_vec: Optional[list[float]] = None, ns_ids: Optional[list[int]] = None,
 ) -> PolicySearchResult:
     """파라미터(RDB ILIKE)와 서술(벡터) 두 갈래로 동시에 찾아 합쳐서 반환한다 — 어느
     쪽이 정답인지는 질문 유형에 달려있어(§4) 미리 하나로 안 좁히고 둘 다 보여준다.
@@ -95,7 +100,9 @@ async def search_policy(
     `query_vec`을 넘기면 임베딩을 다시 계산하지 않는다 — `agent.py`가 이미 같은 질문을
     임베딩해뒀는데 여기서 또 계산하면 채팅 메인 경로에서 매 턴 중복 임베딩이 생긴다
     (2026-09-04, 편입 1단계에서 발견해 방어). `/api/policy/search` 전용 엔드포인트처럼
-    호출측에 미리 계산된 벡터가 없으면 생략해도 되고, 그러면 기존처럼 내부에서 계산한다."""
+    호출측에 미리 계산된 벡터가 없으면 생략해도 되고, 그러면 기존처럼 내부에서 계산한다.
+
+    `ns_ids`를 넘기면 그 파트들을 한 번에 찾는다(채팅 정책서 범위, service/policy/scope.py — 2026-10-20). 없으면 namespace 하나."""
     # 리랭커 조건부 적용(v2.73, 2026-09-11): navigation형(카테고리 전체조회) 질문에서
     # CrossEncoder 재정렬이 구조적으로 손해를 낸다는 게 실측 확인됨(query_type.py 문서
     # 참고, 한국어 리랭커 3종 전부 이 유형에서만 예외 없이 악화). 그 유형만 걸러내고
@@ -108,9 +115,13 @@ async def search_policy(
     fetch_k = settings.reranker_candidates if use_reranker else top_k
 
     async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-        if ns_id is None:
-            raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
+        if ns_ids is None:
+            ns_id = await resolve_namespace_id(conn, namespace)
+            if ns_id is None:
+                raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
+            ns_ids = [ns_id]
+        if not ns_ids:
+            return PolicySearchResult()
 
         # 실측(2026-09-03): ILIKE 부분문자열 매칭은 "장바구니 개수" 질의가 실제 파라미터명
         # "장바구니 최대 메뉴 개수"(사이에 다른 단어가 낀 경우)를 못 찾는 게 실 API 테스트로
@@ -127,10 +138,10 @@ async def search_policy(
         # (init/06-policy-strip-ko.sql)를 적용한다 — 저장 컬럼 추가 없이 조회 시점 변환이라
         # policy_param/policy_item 데이터는 그대로 둔다(건수가 작아 성능 영향 없음).
         category_clause = "AND $4 = ANY(i.category_path)" if category else ""
-        param_args = [ns_id, query, fetch_k] + ([category] if category else [])
+        param_args = [ns_ids, query, fetch_k] + ([category] if category else [])
         param_rows = await conn.fetch(
             f"""
-            SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
+            SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body, i.remark, (SELECT name FROM ops_namespace WHERE id = i.namespace_id) AS part,
                    p.id AS param_id, p.name AS param_name, p.condition, p.value, p.unit,
                    ts_rank(to_tsvector('simple', policy_strip_ko(p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name)), q.tsq) AS rank
             FROM policy_param p
@@ -140,7 +151,7 @@ async def search_policy(
                 FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($2)))) t
                 WHERE lexeme IS NOT NULL
             ) q
-            WHERE i.namespace_id = $1 AND i.status NOT IN ('deprecated', 'rejected')
+            WHERE i.namespace_id = ANY($1::int[]) AND i.status NOT IN ('deprecated', 'rejected')
               AND to_tsvector('simple', policy_strip_ko(p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name)) @@ q.tsq
               {category_clause}
             ORDER BY rank DESC, p.id   -- 동점(ts_rank는 흔함) 순서 고정 — 같은 질문은 같은 문맥(목록 답 거르기·측정 재사용, 리뷰 10/13)
@@ -152,15 +163,15 @@ async def search_policy(
         vec = query_vec if query_vec is not None else await embedding_service.embed(query)
         # 조각 단위로 자르면 같은 정책의 조각 여러 개가 자리를 차지해 다른 정책이 밀려나고 같은 원문(raw_body)이 문맥에 반복됐다
         # (조각 2개 이상인 항목 144개, 2026-10-13 점검) — 넓게 가져와 정책 항목당 최고 조각 하나로 묶은 뒤 자른다(_best_per_item)
-        chunk_args = [ns_id, str(vec), fetch_k * NARRATIVE_FETCH_MULT] + ([category] if category else [])
+        chunk_args = [ns_ids, str(vec), fetch_k * NARRATIVE_FETCH_MULT] + ([category] if category else [])
         category_clause2 = "AND $4 = ANY(i.category_path)" if category else ""
         chunk_rows = await conn.fetch(
             f"""
-            SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
+            SELECT i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body, i.remark, (SELECT name FROM ops_namespace WHERE id = i.namespace_id) AS part,
                    c.id AS chunk_id, c.chunk_text, 1 - (c.embedding <=> $2::vector) AS score
             FROM policy_chunk c
             JOIN policy_item i ON i.id = c.policy_item_id
-            WHERE i.namespace_id = $1 AND i.status NOT IN ('deprecated', 'rejected')
+            WHERE i.namespace_id = ANY($1::int[]) AND i.status NOT IN ('deprecated', 'rejected')
               {category_clause2}
             ORDER BY c.embedding <=> $2::vector
             LIMIT $3
@@ -172,20 +183,21 @@ async def search_policy(
         item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
         category_path=list(r["category_path"] or []), status=r["status"],
         param_name=r["param_name"], condition=r["condition"], value=r["value"], unit=r["unit"],
-        raw_body=r["raw_body"], score=float(r["rank"]), param_id=r["param_id"],
+        raw_body=r["raw_body"], remark=r.get("remark"), part=r.get("part") if len(ns_ids) > 1 else None, score=float(r["rank"]), param_id=r["param_id"],
     ) for r in param_rows]
     narratives = [NarrativeHit(
         item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
         category_path=list(r["category_path"] or []), status=r["status"],
-        chunk_text=r["chunk_text"], score=float(r["score"]), raw_body=r["raw_body"], chunk_id=r["chunk_id"],
+        chunk_text=r["chunk_text"], score=float(r["score"]), raw_body=r["raw_body"], remark=r.get("remark"),
+        part=r.get("part") if len(ns_ids) > 1 else None, chunk_id=r["chunk_id"],
     ) for r in chunk_rows]
 
     narratives = _best_per_item(narratives)
     # 키워드 채널(BM25 — 드문 조건어·금액 표기) + 벡터를 정책 항목 순위로 합친다(기본 "구제" 방식, 2026-10-13). 점수(score)는 벡터 유사도 그대로라
     # 근거 없음 판정·신뢰도 라벨의 뜻은 바뀌지 않는다 — 바뀌는 건 어떤 항목이 상위 top_k에 드느냐뿐.
     try:
-        kw = await keyword_index.search(ns_id, query, fetch_k * NARRATIVE_FETCH_MULT, category)
-        narratives = await _fuse_keyword(ns_id, str(vec), narratives, kw, top_k)
+        kw = await keyword_index.search(ns_ids, query, fetch_k * NARRATIVE_FETCH_MULT, category)
+        narratives = await _fuse_keyword(ns_ids, str(vec), narratives, kw, top_k)
     except Exception:
         logger.warning("정책 키워드 채널 실패 — 벡터 결과만 사용", exc_info=True)
     if use_reranker:
@@ -218,7 +230,7 @@ except ValueError:
     KEYWORD_RRF_WEIGHT = 0.5
 
 
-async def _fuse_keyword(ns_id: int, vec: str, narratives: list, kw: list[tuple[int, float]], top_k: int = 10) -> list:
+async def _fuse_keyword(ns_ids: list[int], vec: str, narratives: list, kw: list[tuple[int, float]], top_k: int = 10) -> list:
     """벡터(항목당 최고 조각) 순위와 키워드 순위를 합친 항목 순서 — 기본 "구제"(벡터 상위 top_k 중 아래 자리에 벡터가 놓친 키워드
     상위 항목), 측정용 "rrf". 키워드에만 걸린 항목은 그 항목의 가장 가까운 조각을 붙인다."""
     if not kw:
@@ -228,16 +240,17 @@ async def _fuse_keyword(ns_id: int, vec: str, narratives: list, kw: list[tuple[i
     if missing:
         async with get_conn() as conn:
             rows = await conn.fetch("""
-                SELECT DISTINCT ON (i.id) i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body,
+                SELECT DISTINCT ON (i.id) i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body, i.remark, (SELECT name FROM ops_namespace WHERE id = i.namespace_id) AS part,
                        c.id AS chunk_id, c.chunk_text, 1 - (c.embedding <=> $2::vector) AS score
                 FROM policy_chunk c JOIN policy_item i ON i.id = c.policy_item_id
-                WHERE i.id = ANY($1::int[]) AND i.namespace_id = $3 AND i.status NOT IN ('deprecated', 'rejected')
-                ORDER BY i.id, c.embedding <=> $2::vector""", missing, vec, ns_id)
+                WHERE i.id = ANY($1::int[]) AND i.namespace_id = ANY($3::int[]) AND i.status NOT IN ('deprecated', 'rejected')
+                ORDER BY i.id, c.embedding <=> $2::vector""", missing, vec, ns_ids)
         for r in rows:
             by_item[r["item_id"]] = NarrativeHit(
                 item_id=r["item_id"], logical_id=r["logical_id"], policy_name=r["policy_name"],
                 category_path=list(r["category_path"] or []), status=r["status"], chunk_text=r["chunk_text"],
-                score=float(r["score"]), raw_body=r["raw_body"], chunk_id=r["chunk_id"])
+                score=float(r["score"]), raw_body=r["raw_body"], remark=r.get("remark"), part=r.get("part") if len(ns_ids) > 1 else None,
+                chunk_id=r["chunk_id"])
     vec_ids, kw_ids = [h.item_id for h in narratives], [i for i, _ in kw]
     if KEYWORD_FUSION == "rescue":
         # 벡터 순서는 그대로(맨 앞 정답 유지), 벡터가 놓친 키워드 상위 항목만 아래 자리에(최대 KEYWORD_RESCUE_SLOTS, trustkit.rescue_order).
@@ -315,9 +328,9 @@ def select_cited_hit(result: PolicySearchResult, answer_text: str) -> PolicySear
     빈 결과를 반환한다."""
     candidates: list[tuple[int, str, object]] = []
     for p in result.params:
-        candidates.append((_token_overlap_score(p.raw_body, answer_text), "param", p))
+        candidates.append((_token_overlap_score(with_note(p.raw_body, p.remark), answer_text), "param", p))
     for n in result.narratives:
-        candidates.append((_token_overlap_score(n.raw_body or n.chunk_text, answer_text), "narrative", n))
+        candidates.append((_token_overlap_score(with_note(n.raw_body or n.chunk_text, n.remark), answer_text), "narrative", n))
     if not candidates:
         return PolicySearchResult()
     best_score, kind, hit = max(candidates, key=lambda c: c[0])
@@ -339,18 +352,18 @@ def build_policy_context(result: PolicySearchResult) -> str:
     for p in result.params:
         value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
         condition_str = f" ({p.condition})" if p.condition else ""
-        category_str = f" [분류: {' > '.join(p.category_path)}]" if p.category_path else ""
+        category_str = (f" [파트: {p.part}]" if p.part else "") + (f" [분류: {' > '.join(p.category_path)}]" if p.category_path else "")
         parts.append(f"[정책 파라미터 · 정확 일치: {p.policy_name}{condition_str}]{category_str} {p.param_name} = {value_str}")
     for n in result.narratives:
         confidence = "높음" if n.score >= 0.6 else "보통" if n.score >= 0.4 else "낮음"
-        category_str = f" [분류: {' > '.join(n.category_path)}]" if n.category_path else ""
+        category_str = (f" [파트: {n.part}]" if n.part else "") + (f" [분류: {' > '.join(n.category_path)}]" if n.category_path else "")
         # chunk_text는 LLM이 분해한 조각 하나뿐이라, 한 항목이 여러 조각으로 쪼개졌을 때
         # (예: "1. 자사몰만 적용" 같은 적용범위 조건이 뒤 조각들과 분리되는 경우) 그 조각만
         # 보면 적용범위/전제조건이 빠진 채 LLM에 전달된다(2026-09-22 실측 확인 — 정책 378건
         # 중 125건이 이렇게 여러 조각으로 쪼개져 있음). raw_body(원문 전체)는 이미 검색
         # 시점에 같이 가져와뒀는데 인용카드 표시에만 쓰이고 여기선 안 쓰이고 있었다 —
         # 새 조회 없이 원문 전체를 쓰도록 전환.
-        body = n.raw_body or n.chunk_text
+        body = with_note(n.raw_body or n.chunk_text, n.remark)
         parts.append(f"[정책 서술: {n.policy_name}]{category_str} (신뢰도: {confidence})\n{body}")
 
     return "--- 정책 데이터 ---\n" + "\n\n".join(parts)
@@ -372,7 +385,7 @@ def build_policy_citations(result: PolicySearchResult) -> list[dict]:
         detail = f"{p.param_name}" + (f" ({p.condition})" if p.condition else "") + f" = {value_str}"
         citations.append({
             "kind": "param", "policy_name": p.policy_name, "category_path": p.category_path,
-            "detail": detail, "raw_body": p.raw_body,
+            "detail": detail, "raw_body": p.raw_body, "remark": p.remark, "part": p.part,
             # 근거 정정(2026-10-01): 카드에서 "이 근거 틀림"을 누르면 어느 항목·어느 파라미터인지
             # 서버가 알아야 한다(예전 카드엔 id가 없어 정책은 정정 대상이 될 수 없었음)
             "item_id": p.item_id, "logical_id": p.logical_id, "param_id": p.param_id,
@@ -380,7 +393,8 @@ def build_policy_citations(result: PolicySearchResult) -> list[dict]:
     for n in result.narratives:
         citations.append({
             "kind": "narrative", "policy_name": n.policy_name, "category_path": n.category_path,
-            "detail": n.chunk_text, "raw_body": n.raw_body,
+            # v0은 조각 = 원문 통째라 detail을 그대로 주면 카드에 본문이 두 번 나온다 — 원문과 같으면 비운다
+            "detail": "" if n.chunk_text == n.raw_body else n.chunk_text, "raw_body": n.raw_body, "remark": n.remark, "part": n.part,
             "item_id": n.item_id, "logical_id": n.logical_id, "chunk_id": n.chunk_id,
         })
     return citations

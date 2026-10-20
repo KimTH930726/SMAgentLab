@@ -230,12 +230,11 @@ class TestAnswerShaping:
         monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: None)
         monkeypatch.setattr(agent.retrieval, "is_adopted", lambda r, th: False)
         monkeypatch.setattr(agent.retrieval, "expand_parent_sections", AsyncMock(return_value=[]))
-        monkeypatch.setattr(agent.policy_search, "has_policy_data", AsyncMock(return_value=True))
+        monkeypatch.setattr(agent.policy_scope, "policy_namespace_ids", AsyncMock(return_value=[1]))   # 정책서 범위(2026-10-20)
         monkeypatch.setattr(agent.policy_search, "PolicySearchResult", PolicySearchResult)   # 부모 패키지가 MagicMock이라 진짜 클래스로
         monkeypatch.setattr(agent.policy_search, "search_policy", AsyncMock(return_value=pr))
         monkeypatch.setattr(agent.refdata_search, "has_refdata", AsyncMock(return_value=False))
         monkeypatch.setattr(agent, "get_conn", lambda: _ConnCtx())
-        monkeypatch.setattr(agent, "resolve_namespace_id", AsyncMock(return_value=1))
         cat = MagicMock(item_ids=list(item_ids), explicit_all=explicit_all, total=len(item_ids), scope_missed=False)
         cat.block.return_value = "[분류 목록]"
         monkeypatch.setattr(agent.category_list, "find_category_list", AsyncMock(return_value=cat if item_ids else None))

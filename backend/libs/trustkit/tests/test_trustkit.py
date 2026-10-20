@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from trustkit.answer.shaping import list_scoped  # noqa: E402
+from trustkit.answer.shaping import list_scoped, with_note  # noqa: E402
 from trustkit.eval.gate import answer_gate, mcnemar_p, retrieval_gate  # noqa: E402
 from trustkit.ingest.invariants import check_chunks  # noqa: E402
 from trustkit.ingest.quality import assess  # noqa: E402
@@ -167,3 +167,10 @@ def test_strip_suffix_cache_keeps_results():
         w = "".join(rng.choice(syll) for _ in range(rng.randint(1, 6)))
         assert ko.strip_suffix(w) == raw(w)
     assert BM25Index([(1, "a")]).built_at > 0
+
+
+def test_with_note_appends_only_real_notes():
+    assert with_note("본문", None) == "본문"
+    assert with_note("본문", "  ") == "본문"                       # 공백뿐인 비고는 붙이지 않는다
+    assert with_note("본문", " 외부 시스템 값 ") == "본문\n비고: 외부 시스템 값"
+    assert with_note("본문", "x", label="주의") == "본문\n주의: x"

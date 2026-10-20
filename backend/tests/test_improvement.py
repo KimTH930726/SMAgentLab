@@ -308,7 +308,7 @@ class TestApplyPolicy:
         old_item = {"id": 10, "status": "active", "system_key": "", "category_path": ["반품"], "policy_name": "기한",
                     "raw_body": "7일 이내", "remark": None, "source_file": "f.xlsx", "source_sheet": "s",
                     "source_row": 2, "content_hash": "h", "logical_id": 10, "version": 1, "parse_status": "parsed",
-                    "unresolved_segments": None, "pipeline_version": "r1-x"}
+                    "unresolved_segments": None, "pipeline_version": "r1-x", "source_key": "pol_abc"}
         params = [{"id": 100, "name": "기한", "condition": None, "value": "7", "unit": "일", "external_source": None},
                   {"id": 101, "name": "대상", "condition": None, "value": "전체", "unit": None, "external_source": None}]
         chunks = [{"id": 200, "chunk_text": "기한 (반품): 7일 이내", "chunk_idx": 0}]
@@ -329,6 +329,7 @@ class TestApplyPolicy:
         assert new_id == 11
         ins = conn.fetchval.await_args.args
         assert ins[5] == "14일 이내" and ins[10] == "h" and ins[11] == 10 and ins[12] == 2 and ins[13] == 10
+        assert "source_key" in ins[0] and ins[-1] == "pol_abc"   # 새 버전도 원천 키 유지(리뷰 M1 — 골든셋 정답이 새 버전을 찾게)
         calls = [c.args for c in conn.execute.await_args_list]
         param_inserts = [c for c in calls if "INSERT INTO policy_param" in c[0]]
         assert [c[4] for c in param_inserts] == ["14", "전체"]  # 대상만 교체
@@ -696,3 +697,15 @@ def test_tidy_marks_ignores_inline_hash():
     """리뷰 2026-10-07: 줄 안 "#A01"까지 제목으로 보고 줄을 바꿔 원문과 줄 구조가 달라졌다."""
     out = draft._tidy_marks({"content": "매장 코드 【확인 필요: 값】#A01 기준"})
     assert out["content"] == "매장 코드 【확인 필요: 값】#A01 기준"
+
+
+def test_whole_body_policy_correction_keeps_chunk_equal_to_raw():
+    """원문 통째 항목(v0, 10/20): 서술 정정안이 와도 조각 = 새 원문(조각·원문이 따로 놀면 답변엔 옛 글, 검색엔 새 글)."""
+    old = {"raw_body": "옛 원문", "policy_name": "p", "category_path": [], "pipeline_version": svc.PIPELINE_WHOLE}
+    chunks = [{"id": 5, "chunk_text": "옛 원문"}]
+    item = {"target_type": "policy_narrative", "target_sub_id": 5}
+    assert svc._policy_new_raw(old, item, {"chunk_text": "새 원문"}) == "새 원문"
+    assert svc._policy_chunk_rewrites(old, chunks, item, {"chunk_text": "조각만", "raw_body": "새 원문 전체"}) == {5: "새 원문 전체"}
+    assert svc._policy_chunk_rewrites(old, chunks, item, {"raw_body": "옛 원문"}) == {}      # 안 바뀌면 다시 임베딩 안 함
+    # 검토자가 "서술"만 고치고 원문 칸은 그대로 둔 경우(정정안엔 둘 다 온다) — 고친 서술이 새 원문(리뷰 M2)
+    assert svc._policy_chunk_rewrites(old, chunks, item, {"chunk_text": "고친 서술", "raw_body": "옛 원문"}) == {5: "고친 서술"}

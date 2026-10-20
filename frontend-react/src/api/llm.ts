@@ -1,9 +1,11 @@
 import { apiFetch } from './client';
 
 export interface LLMConfig {
-  provider: 'ollama' | 'inhouse';
+  /** openai_compat = dev 전용 로컬 LLM(E2E 동안 등, 2026-10-20) — 설정 화면에선 고를 수 없다 */
+  provider: 'ollama' | 'inhouse' | 'openai_compat';
   is_runtime_override: boolean;
   is_connected: boolean;
+  openai_compat?: { enabled: boolean; model: string };
   ollama: {
     base_url: string;
     model: string;

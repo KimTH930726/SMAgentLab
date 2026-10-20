@@ -18,6 +18,9 @@ from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 from service.improvement import draft as draft_mod
 
+# 원문 통째 정책(v0) 표시 — service/policy/v0_convert.PIPELINE_WHOLE과 같은 값(테스트가 service.policy를 가짜 패키지로 두어 import 대신 값)
+PIPELINE_WHOLE = "v0_whole"
+
 logger = logging.getLogger(__name__)
 
 KIND_BY_TARGET = {
@@ -594,10 +597,27 @@ async def _apply_missing(conn, ns_id: int, content: str, embedding: list[float],
         settings.embedding_model, approver.get("username"))
 
 
+def _policy_new_raw(old: dict, item: dict, proposed: dict) -> str:
+    """정정된 새 원문. 원문 통째 항목(v0)은 서술 = 원문이라 서술 정정안만 왔어도 그게 새 원문이다(감사 10/20)."""
+    if old.get("pipeline_version") == PIPELINE_WHOLE and item["target_type"] == "policy_narrative":
+        # 정정안엔 "서술 조각"과 "원문"이 둘 다 온다(draft·검토 화면이 둘 다 채움) — 통째 항목은 둘이 같은 글이라 바뀐 쪽을 쓴다.
+        # 원문 우선이면 검토자가 "서술"만 고쳤을 때 아무것도 안 바뀐 새 버전이 승인됐다(리뷰 10/20 M2). 둘 다 다르게 바뀌면 원문.
+        raw, chunk = proposed.get("raw_body"), proposed.get("chunk_text")
+        if raw and raw != old["raw_body"]:
+            return raw
+        if chunk and chunk != old["raw_body"]:
+            return chunk
+        return old["raw_body"]
+    return proposed.get("raw_body") or old["raw_body"]
+
+
 def _policy_chunk_rewrites(old: dict, chunks: list, item: dict, proposed: dict) -> dict[int, str]:
     """새 버전에서 본문이 바뀌는 청크 {chunk_id: 새 텍스트} — 나머지는 임베딩째 복사.
-    정정 대상 서술 청크 + (원문이 바뀌었으면) 원문 통째로 만든 폴백 청크(안 그러면 옛 값이 검색됨)."""
-    new_raw = proposed.get("raw_body") or old["raw_body"]
+    정정 대상 서술 청크 + (원문이 바뀌었으면) 원문 통째로 만든 폴백 청크(안 그러면 옛 값이 검색됨).
+    원문 통째 항목(v0)은 조각이 곧 원문 — 조각과 원문이 따로 놀지 않게 조각을 새 원문으로(정정안의 "서술 조각"을 따로 쓰지 않음)."""
+    new_raw = _policy_new_raw(old, item, proposed)
+    if old.get("pipeline_version") == PIPELINE_WHOLE:
+        return {c["id"]: new_raw for c in chunks if c["chunk_text"] != new_raw}
     old_fallback = _fallback_chunk_text(old["policy_name"], list(old["category_path"] or []), old["raw_body"])
     out = {}
     for c in chunks:
@@ -640,18 +660,18 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
     # 잠금 후 다시 계산한 결과가 미리 임베딩한 것과 다르면(준비 사이에 원본 편집) 옛 임베딩을 쓰게 되므로 중단
     if rewrites != {cid: text for cid, (text, _) in prepared.items()}:
         raise ValueError("승인 준비 중 원본 정책이 바뀌었습니다 — 다시 승인해 주세요.")
-    new_raw = proposed.get("raw_body") or old["raw_body"]
+    new_raw = _policy_new_raw(dict(old), item, proposed)
     new_id = await conn.fetchval("""
         INSERT INTO policy_item
             (namespace_id, system_key, category_path, policy_name, raw_body, remark, source_file, source_sheet,
              source_row, content_hash, status, logical_id, version, supersedes_id, parse_status,
-             unresolved_segments, reviewed_at, reviewed_by, pipeline_version)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, $14, $15, NOW(), $16, $17)
+             unresolved_segments, reviewed_at, reviewed_by, pipeline_version, source_key)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, $14, $15, NOW(), $16, $17, $18)
         RETURNING id
     """, ns_id, old["system_key"], old["category_path"], old["policy_name"], new_raw, old["remark"],
         old["source_file"], old["source_sheet"], old["source_row"], old["content_hash"], old["logical_id"],
         (old["version"] or 1) + 1, old["id"], old["parse_status"], old["unresolved_segments"],
-        approver.get("id"), old["pipeline_version"])
+        approver.get("id"), old["pipeline_version"], old.get("source_key"))   # 원천 키 유지 — 골든셋 정답·재적재 대조가 새 버전에서도 찾게(리뷰 M1)
 
     for p in await conn.fetch("SELECT * FROM policy_param WHERE policy_item_id = $1 ORDER BY id", old["id"]):
         src = proposed if (item["target_type"] == "policy_param" and p["id"] == item["target_sub_id"]) else p

@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 import logging
 
@@ -114,7 +114,12 @@ def is_topic_overview(question: str, names: list[str]) -> list[str]:
     return sorted(picked) if len(rest) <= 1 else []
 
 
-_cache: dict[int, CategoryIndex] = {}
+_cache: dict[tuple[int, ...], CategoryIndex] = {}
+_label_vecs: dict[str, list[float]] = {}   # 분류 이름 → 임베딩. 이름이 같으면 벡터도 같아 색인을 다시 만들어도 재사용(TTL 무관)
+
+
+def _key(ns_ids: Union[int, Sequence[int]]) -> tuple[int, ...]:
+    return (ns_ids,) if isinstance(ns_ids, int) else tuple(sorted(set(ns_ids)))
 
 
 def invalidate() -> None:
@@ -123,16 +128,21 @@ def invalidate() -> None:
     _cache.clear()
 
 
-async def _index(conn, ns_id: int) -> CategoryIndex:
-    idx = _cache.get(ns_id)
+async def _index(conn, key: tuple[int, ...]) -> CategoryIndex:
+    """파트가 여러 개면(채팅 정책서 범위, 2026-10-20) 파트 이름을 맨 위 분류로 둔다 — 파트마다 같은 절 이름("1-1. 공통 기준")이 있어
+    합치면 다른 업무가 한 분류로 섞인다. 파트 이름 자체도 분류가 된다("회원 정책 전부" → 회원 파트 전체)."""
+    idx = _cache.get(key)
     if idx and time.time() - idx.built_at < _CACHE_TTL:
         return idx
     from shared.embedding import embedding_service
     idx = CategoryIndex(built_at=time.time())
+    multi = len(key) > 1
     for r in await conn.fetch(
-            "SELECT id, category_path FROM policy_item WHERE namespace_id = $1 AND status NOT IN ('deprecated', 'rejected')", ns_id):
-        segs = [_NUM.sub("", c).strip() for c in (r["category_path"] or [])]
-        for i, cat in enumerate(r["category_path"] or []):
+            "SELECT i.id, i.category_path, n.name AS part FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id "
+            "WHERE i.namespace_id = ANY($1::int[]) AND i.status NOT IN ('deprecated', 'rejected')", list(key)):
+        path_raw = ([r["part"]] if multi else []) + list(r["category_path"] or [])
+        segs = [_NUM.sub("", c).strip() for c in path_raw]
+        for i, cat in enumerate(path_raw):
             n = norm_category(cat)
             path = " > ".join(segs[:i + 1])
             if i + 1 < len(segs) and len(norm_category(segs[i + 1])) >= 2:
@@ -142,9 +152,13 @@ async def _index(conn, ns_id: int) -> CategoryIndex:
             idx.item_ids.setdefault(n, set()).add(r["id"])
             idx.display.setdefault(n, _NUM.sub("", cat).strip())
             idx.places.setdefault(n, {}).setdefault(path, set()).add(r["id"])
-    for n, label in idx.display.items():
-        idx.vectors[n] = await embedding_service.embed(label)
-    _cache[ns_id] = idx
+    # 성능: 이름마다 한 번씩 임베딩하던 것을 새 이름만 묶어서 한 번에(정책 파트 14개 = 분류 수백 개, 첫 질문이 수십 초 걸렸을 것)
+    new = [label for label in set(idx.display.values()) if label not in _label_vecs]
+    for i in range(0, len(new), 64):
+        for label, v in zip(new[i:i + 64], await embedding_service.embed_batch(new[i:i + 64])):
+            _label_vecs[label] = v
+    idx.vectors = {n: _label_vecs[label] for n, label in idx.display.items()}
+    _cache[key] = idx
     return idx
 
 
@@ -225,15 +239,18 @@ def clarify_for(cl: Optional[CategoryList], question: str) -> Optional[dict]:
     return {"message": msg, "options": options}
 
 
-async def find_category_list(ns_id: int, question: str, query_vec: list[float], *,
+async def find_category_list(ns_ids: Union[int, Sequence[int]], question: str, query_vec: list[float], *,
                              keyword_nav: bool, scope: Optional[str] = None) -> Optional[CategoryList]:
     """대상 분류의 정책 목록(분류 경로 > 정책명: 본문 첫 줄). 두 경로:
     - keyword_nav(키워드 판별기 "전체·모든·목록…"가 잡음): 분류 이름 글자 매칭 → 없으면 의미 1위(_MIN_SIM 이상). 같은 이름은 합침
     - 그 외: 질문이 "분류 이름 + 일반 표현"뿐일 때만(is_topic_overview — "재고 정책 좀"). 여러 분류면 함께 속한 정책만
     실측(2026-10-07, 실제 질문 기록 103개 사람 라벨): 키워드만 재현 1/10·정밀도 33% → 결합 재현 6/10(분류가 있는 6개 전부)·
     새 규칙 오탐 0. 나머지 4개("사이렌 오더 정책은?" 등)는 그런 분류가 없어 목록 대상이 아님(검색으로 답함). 못 찾으면 None."""
+    key = _key(ns_ids)
+    if not key:
+        return None
     async with get_conn() as conn:
-        idx = await _index(conn, ns_id)
+        idx = await _index(conn, key)
         if not idx.item_ids:
             return None
         names = list(idx.item_ids)
@@ -288,9 +305,12 @@ async def find_category_list(ns_id: int, question: str, query_vec: list[float], 
             only = next(iter(places))
             children = sorted(((c, len(cid & set(ids))) for c, cid in idx.children.get(only, {}).items() if cid & set(ids)),
                               key=lambda x: -x[1])
+        part_sql = "n.name || ' > ' || " if len(key) > 1 else ""   # 여러 파트면 어느 파트 정책인지
         rows = await conn.fetch(
-            "SELECT array_to_string(category_path, ' > ') AS cat, policy_name, split_part(coalesce(raw_body, ''), E'\\n', 1) AS first "
-            "FROM policy_item WHERE id = ANY($1::int[]) ORDER BY category_path, source_row LIMIT $2", ids, _MAX_ITEMS)
+            f"SELECT {part_sql}array_to_string(i.category_path, ' > ') AS cat, i.policy_name, "
+            "split_part(coalesce(i.raw_body, ''), E'\\n', 1) AS first "
+            "FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id "
+            "WHERE i.id = ANY($1::int[]) ORDER BY n.name, i.category_path, i.source_row, i.id LIMIT $2", ids, _MAX_ITEMS)
     lines = [f"- {r['cat']} > {r['policy_name']}: {(r['first'] or '').strip()[:100]}" for r in rows]
     return CategoryList(names=[idx.display[n] for n in picked], total=len(ids), lines=lines, item_ids=list(ids),
                         places=sorted(((p, len(v)) for p, v in places.items()), key=lambda x: -x[1]), children=children,

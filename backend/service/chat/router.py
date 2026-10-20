@@ -55,7 +55,15 @@ async def _run_pipeline(
     *, categories: Optional[list[str]] = None,
 ) -> PipelineResult:
     # 용어집 방식은 채팅과 같은 설정(GLOSSARY_MATCH_MODE)을 따른다(v2.128) — 디버그 검색이 채팅과 달리 보이지 않게
-    matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(namespace, question, query_vec)
+    from service.policy import scope as policy_scope   # 채팅과 같은 용어 범위(정책서 파트 용어 포함, 2026-10-20 리뷰 L3)
+    try:   # 채팅(agent.py)과 같이 — 범위 계산이 실패해도 디버그 검색은 정책 용어 없이 계속(재리뷰 10/20)
+        async with get_conn() as conn:
+            policy_ns_ids = await policy_scope.policy_namespace_ids(conn, namespace)
+    except Exception as e:
+        logger.warning("정책서 범위 계산 실패(디버그 검색은 정책 용어 없이 진행): %s", e)
+        policy_ns_ids = []
+    matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(
+        namespace, question, query_vec, extra_ns_ids=policy_ns_ids)
     glossary_match = (GlossaryMatch(term=matches[0].term, description=matches[0].description, similarity=1.0) if matches
                       else (await retrieval.map_glossary_term(namespace, query_vec) if mapped_term else None))
 

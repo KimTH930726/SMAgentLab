@@ -1,49 +1,26 @@
 import { test, expect, type Page } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
+import { createPolicyPart, dropPolicyPart } from './v0-fixture';
 
 // 이 테스트가 존재하는 이유(2026-10-01): 근거 정정 흐름은 버튼(근거 카드·답변 아래) → 입력창
 // 정정 모드(ChatContainer) → 개선 원장 → 관리자 정정 검토 탭 → 승인 = 버전 교체 → 같은 질문
 // 재답변까지 서로 다른 컴포넌트를 건너가는 경로라, 유닛테스트로는 "화면에서 실제로 이어지는가"를
 // 못 본다. 핵심 약속("승인 전엔 절대 반영 안 됨, 승인 후엔 반영됨")을 실 dev 스택 그대로 확인한다.
 //
-// 데이터: 실 지식/정책을 건드리지 않도록 임시 네임스페이스를 만들고 끝나면 통째로 지운다
-// (ops_namespace ON DELETE CASCADE). 정책 임포트는 xlsx만 받아서 openpyxl이 있는 backend
-// 컨테이너 안에서 시트를 만들어 올린다.
+// 데이터: 실 지식/정책을 건드리지 않도록 임시 정책서 파트(v0 방식 — 원문 통째, 2026-10-20 현행화)를 만들고 끝나면 통째로 지운다
+// (ops_namespace ON DELETE CASCADE). 정책서 파트는 채팅 범위가 그 파트뿐이라 실데이터(v0 정책서 14개 파트)가 섞이지 않는다.
 
 const ADMIN_USER = 'admin';
 const ADMIN_PASS = '1111';
 const NS = 'zz_e2e_correction';
 const API = 'http://localhost:8000';
 
-function psql(sql: string): string {
-  return execFileSync('docker', ['exec', 'ops-postgres', 'psql', '-U', 'ops', '-d', 'opsdb', '-tA', '-c', sql],
-    { encoding: 'utf-8' }).trim();
-}
-
-const POLICY_FIXTURE = `
-import io, json, os, uuid, urllib.request
-from openpyxl import Workbook
-wb = Workbook(); ws = wb.active; ws.title = "정책"
-ws.append(["No.", "대분류", "정책명", "조건/상세"])
-ws.append([1, "테스트", "임시 반품 기한", "반품은 수령 후 7일 이내에 신청할 수 있다."])
-buf = io.BytesIO(); wb.save(buf)
-b = uuid.uuid4().hex
-ns = os.environ["NS"]
-body = (f'--{b}\\r\\nContent-Disposition: form-data; name="namespace"\\r\\n\\r\\n{ns}\\r\\n'.encode()
-        + f'--{b}\\r\\nContent-Disposition: form-data; name="file"; filename="zz_e2e.xlsx"\\r\\nContent-Type: application/octet-stream\\r\\n\\r\\n'.encode()
-        + buf.getvalue() + f"\\r\\n--{b}--\\r\\n".encode())
-req = urllib.request.Request("http://localhost:8000/api/policy/import", data=body, method="POST",
-    headers={"Content-Type": f"multipart/form-data; boundary={b}", "Authorization": "Bearer " + os.environ["TOK"]})
-print(urllib.request.urlopen(req, timeout=300).status)
-`;
-
 test.describe.configure({ mode: 'serial' });
-// 정정 접수·AI 판정·답변이 모두 사내 게이트웨이를 거친다 — 호출당 90~180초까지 느려지는 날이 있어(2026-10-06 실측) 넉넉히
+// 정정 접수·AI 판정·답변이 모두 LLM을 거친다(E2E는 로컬 LLM — llm-local.setup.ts) — 느린 날을 대비해 넉넉히
 test.setTimeout(900_000);
 
 test.beforeAll(async ({ request }) => {
-  psql(`DELETE FROM ops_namespace WHERE name='${NS}'`);
-  psql(`INSERT INTO ops_namespace (name, description) VALUES ('${NS}', 'e2e correction')`);
+  test.setTimeout(180_000);   // 임시 정책 임베딩 — 백엔드 컨테이너에 새 프로세스로 임베딩 모델을 올려 20~40초
+  createPolicyPart(NS, [{ name: '임시 반품 기한', path: ['테스트'], body: '반품은 수령 후 7일 이내에 신청할 수 있다.' }]);
   const login = await request.post(`${API}/api/auth/login`, { data: { username: ADMIN_USER, password: ADMIN_PASS } });
   const tok = (await login.json()).access_token as string;
   // 같은 이름으로 다시 만든 파트에 지난 실행의 시맨틱 캐시가 남아 있으면, 캐시 답변이 이미 지운 근거를 가리킨다
@@ -53,21 +30,13 @@ test.beforeAll(async ({ request }) => {
     data: { namespace: NS, content: '사내 VPN 접속 비밀번호는 90일마다 변경해야 한다.' },
   });
   expect(k.ok()).toBeTruthy();
-  execFileSync('docker', ['exec', '-i', '-e', `NS=${NS}`, '-e', `TOK=${tok}`, 'ops-backend', 'python', '-'],
-    { input: POLICY_FIXTURE, encoding: 'utf-8' });
-  // 임포트 결과가 검토대기로 들어오면 채팅 근거로 안 잡힐 수 있어 활성화(이 테스트의 대상은 정정 흐름)
-  psql(`UPDATE policy_item SET status='active' WHERE namespace_id=(SELECT id FROM ops_namespace WHERE name='${NS}') AND status='pending_review'`);
 });
 
 test.afterAll(async ({ request }) => {
   const login = await request.post(`${API}/api/auth/login`, { data: { username: ADMIN_USER, password: ADMIN_PASS } });
   const tok = (await login.json()).access_token as string;
   await request.delete(`${API}/api/admin/cache?namespace=${encodeURIComponent(NS)}`, { headers: { Authorization: `Bearer ${tok}` } });
-  const ns = `(SELECT id FROM ops_namespace WHERE name='${NS}')`;
-  psql(`DELETE FROM ops_improvement_item WHERE namespace_id=${ns}`);
-  psql(`UPDATE policy_item SET supersedes_id=NULL WHERE namespace_id=${ns}`);
-  psql(`UPDATE rag_knowledge SET supersedes_id=NULL WHERE namespace_id=${ns}`);
-  psql(`DELETE FROM ops_namespace WHERE name='${NS}'`);
+  dropPolicyPart(NS);
 });
 
 async function login(page: Page) {
@@ -91,25 +60,39 @@ async function ask(page: Page, question: string) {
   await expect(page.getByRole('button', { name: '답변 틀림' })).toHaveCount(before + 1, { timeout: 300_000 });
 }
 
-async function approveInAdmin(page: Page, userInput: string, targetLabel?: string, expectedFix?: string) {
+async function openCorrectionCard(page: Page, userInput: string) {
   await page.getByRole('link', { name: 'Admin' }).click();
   await page.getByRole('button', { name: '지식 베이스' }).click();
   await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NS);
   await page.getByRole('button', { name: /정정 검토/ }).click();
   const card = page.locator('div.rounded-xl').filter({ hasText: userInput }).first();
   await expect(card).toBeVisible({ timeout: 10_000 });
-  if (targetLabel) {
-    // AI가 다른 대상을 골랐으면 담당자가 "정정 대상"에서 바꾼다(바꾼 대상 기준으로 수정안 재생성)
-    const targetSelect = card.locator('select').filter({ hasText: '답변 오류' });
-    const value = await targetSelect.locator('option', { hasText: targetLabel }).getAttribute('value');
-    if (value && (await targetSelect.inputValue()) !== value) {
-      const retargeted = page.waitForResponse((r) => /\/api\/corrections\/\d+\/retarget/.test(r.url()), { timeout: 300_000 });
-      await targetSelect.selectOption(value);
-      expect((await retargeted).ok()).toBeTruthy();
-    }
+  return card;
+}
+
+// AI가 다른 대상을 골랐으면 담당자가 "정정 대상"에서 바꾼다(바꾼 대상 기준으로 수정안 재생성). AI 판정은 모델마다 흔들린다 —
+// 로컬 Qwen이 "근거와 다르다"고 쓰고도 분류는 "근거에 없음"을 고른 적이 있다(10/20). 대상 확인은 실제로도 담당자 몫이라 테스트도 거친다.
+async function ensureTarget(page: Page, card: ReturnType<Page['locator']>, targetLabel: string) {
+  const targetSelect = card.locator('select').filter({ hasText: '답변 오류' });
+  const value = await targetSelect.locator('option', { hasText: targetLabel }).getAttribute('value');
+  if (value && (await targetSelect.inputValue()) !== value) {
+    const retargeted = page.waitForResponse((r) => /\/api\/corrections\/\d+\/retarget/.test(r.url()), { timeout: 300_000 });
+    await targetSelect.selectOption(value);
+    expect((await retargeted).ok()).toBeTruthy();
   }
+}
+
+/** 승인 전에 대상만 맞춰 두고 채팅으로 돌아간다 — "검토 중" 표시는 대상 근거에 붙는다. */
+async function confirmTargetInAdmin(page: Page, userInput: string, targetLabel: string) {
+  await ensureTarget(page, await openCorrectionCard(page, userInput), targetLabel);
+  await page.getByRole('link', { name: 'Chat' }).click();
+}
+
+async function approveInAdmin(page: Page, userInput: string, targetLabel?: string, expectedFix?: string) {
+  const card = await openCorrectionCard(page, userInput);
+  if (targetLabel) await ensureTarget(page, card, targetLabel);
   const approved = page.waitForResponse((r) => /\/api\/corrections\/\d+\/approve/.test(r.url()));
-  // 사용자 입력으로 정리된 수정안이 있으면 [AI 수정안으로 대체], 초안이 없으면(게이트웨이 장애 등) [직접 수정] → 반영
+  // 사용자 입력으로 정리된 수정안이 있으면 [AI 수정안으로 대체], 초안이 없으면(LLM 장애 등) [직접 수정] → 반영
   const replace = card.getByRole('button', { name: 'AI 수정안으로 대체' });
   if (await replace.isVisible().catch(() => false)) {
     await replace.click();
@@ -134,6 +117,7 @@ test('지식 — "답변 틀림" 한 줄 → AI가 틀린 지식 근거 지목 �
   await page.locator('textarea:visible').first().fill('60일마다 바꿔야 합니다');
   await page.getByTitle('정정 접수 (Ctrl+Enter)').click();
   await expect(page.getByText('정정 신고 접수됨')).toBeVisible({ timeout: 300_000 });
+  await confirmTargetInAdmin(page, '60일마다 바꿔야 합니다', 'VPN');
 
   // 승인 전: 같은 질문 → 여전히 원본(90일) + 근거에 "정정 검토 중"
   await ask(page, Q);
@@ -165,6 +149,7 @@ test('정책 — "답변 틀림" 한 줄 → AI 분석 → (대상 확인) 승�
   // 의견까지 접수했으면 '의견 덧붙이기'는 사라진다(이미 신고했는데 또 하라는 듯 보이지 않게)
   await expect(page.getByRole('button', { name: '의견 덧붙이기' })).toHaveCount(0);
 
+  await confirmTargetInAdmin(page, '14일 이내로 바뀌었습니다', '임시 반품 기한');
   await ask(page, Q);
   await expect(page.getByText('정정 검토 중').last()).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText(/7일 이내/).last()).toBeVisible();

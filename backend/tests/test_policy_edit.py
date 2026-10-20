@@ -124,6 +124,11 @@ class TestUpdateNarrative:
         assert update_call.args[1] == "고친 서술 내용"
         assert update_call.args[3] == 3  # chunk_id
 
-        resubmit_call = conn.execute.call_args_list[1]
+        # 원문 통째 항목(v0)이면 원문도 같이 — 조건(pipeline_version)은 SQL이 건다(옛 분해 항목은 0행 갱신)
+        body_call = conn.execute.call_args_list[1]
+        assert "UPDATE policy_item SET raw_body" in body_call.args[0] and "pipeline_version" in body_call.args[0]
+        assert body_call.args[1:] == ("고친 서술 내용", 7, edit.PIPELINE_WHOLE)
+
+        resubmit_call = conn.execute.call_args_list[2]
         assert "pending_review" in resubmit_call.args[0]
         assert resubmit_call.args[1] == 7  # policy_item_id

@@ -22,8 +22,10 @@ RISK_FEATURES_SQL = """
             WHERE l.logical_id = p.logical_id AND l.action IN ('rejected', 'resubmitted')) AS prior_reject,
     EXISTS (SELECT 1 FROM policy_review_log l
             WHERE l.logical_id = p.logical_id AND l.action = 'auto_reverted') AS prior_revert,
-    (p.source_missing_at IS NOT NULL) AS source_missing
+    (p.source_missing_at IS NOT NULL) AS source_missing,
+    (p.pipeline_version = 'v0_whole') AS whole_body
 """
+# whole_body: v0_convert.PIPELINE_WHOLE과 같은 값 — 원문 통째 항목엔 분해 실패·쪼개짐 사유가 없다(있다고 보면 전부 "높음" 또는 틀린 사유로 통과)
 # prior_reject에 resubmitted도 센다 — 이력 테이블 이전(9/23~)에 반려됐다가 수정·재제출된 항목은 'rejected' 행이 없다.
 # prior_revert — 사람이 자동 통과를 되돌린 항목은 다음 실행·임포트 때 다시 자동 통과되면 안 된다(/code-review).
 
@@ -38,14 +40,14 @@ class Risk:
 
 
 def classify(parse_status: str | None, unresolved_count: int, chunk_count: int, prior_reject: bool,
-             prior_revert: bool = False, source_missing: bool = False) -> Risk:
+             prior_revert: bool = False, source_missing: bool = False, whole_body: bool = False) -> Risk:
     """사람이 봐야 하는 이유를 앞에 쌓는다 — 높음 사유가 하나라도 있으면 높음."""
     high: list[tuple[str, str, str]] = []  # (상세 이유, 짧은 이유, 할 일) — 앞에 있을수록 먼저 볼 이유
     # 재임포트한 엑셀에서 사라진 정책(2026-10-06, 정책 버전 관리) — 자동 폐기하지 않고 사람이 결정
     if source_missing:
         high.append(("최근 임포트한 원본 엑셀에서 사라진 정책 — 폐기할지 확인", "원본에서 사라짐",
                      "원본에서 일부러 뺀 정책이면 반려(검색에서 제외), 실수로 빠진 거면 승인(유지)하세요."))
-    if parse_status in ("unresolved", "partial"):
+    if not whole_body and parse_status in ("unresolved", "partial"):
         label = "전혀" if parse_status == "unresolved" else "일부"
         high.append((f"원문을 {label} 구조화하지 못함(미해결 조각 {unresolved_count}개)",
                      f"미분류 조각 {unresolved_count}개",
@@ -56,17 +58,21 @@ def classify(parse_status: str | None, unresolved_count: int, chunk_count: int, 
     if prior_revert:
         high.append(("자동 통과를 사람이 되돌린 항목 — 다시 자동 통과하지 않음", "자동 통과 되돌림",
                      "누군가 자동 통과를 되돌린 항목입니다 — 내용을 확인해 직접 승인·반려하세요."))
-    split = f"서술이 {chunk_count}개로 나뉨 — 조건이 쪼개졌을 위험" if chunk_count >= 2 else None
+    split = f"서술이 {chunk_count}개로 나뉨 — 조건이 쪼개졌을 위험" if chunk_count >= 2 and not whole_body else None
     if high:
         return Risk("high", None, [h[0] for h in high] + ([split] if split else []),
                     " · ".join(h[1] for h in high), high[0][2])
     if split:
         return Risk("medium", None, [split], f"서술 {chunk_count}개로 나뉨",
                     "서술들을 원문과 비교해 조건이 엉뚱하게 쪼개지지 않았는지 확인하고 승인·반려하세요.")
+    if whole_body:
+        # 규칙 키는 같은 낮음 규칙 — 자동 통과 설정(auto_review.DEFAULT_CONFIG)이 이 키만 켜 둔다. 따로 키를 만들면 영원히 대기(리뷰 M3)
+        return Risk("low", LOW_RISK_RULE, ["원문 그대로(분해 없음) — 자동 통과 후보"], "원문 그대로",
+                    "자동 통과 대상이라 따로 볼 필요 없어요(표본으로 남은 건만 확인).")
     return Risk("low", LOW_RISK_RULE, ["구조화 완료 + 서술 1개 — 자동 통과 후보"], "구조화 완료",
                 "자동 통과 대상이라 따로 볼 필요 없어요(표본으로 남은 건만 확인).")
 
 
 def classify_row(row) -> Risk:
     return classify(row["parse_status"], row["unresolved_count"] or 0, row["chunk_count"] or 0, bool(row["prior_reject"]),
-                    bool(row.get("prior_revert")), bool(row.get("source_missing")))
+                    bool(row.get("prior_revert")), bool(row.get("source_missing")), bool(row.get("whole_body")))

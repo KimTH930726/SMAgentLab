@@ -174,3 +174,27 @@ async def test_resolve_returns_single_representative_term():
 
 def test_question_key_ignores_spacing_and_punctuation():
     assert gt.question_key("택배비 얼마?") == gt.question_key("택배비얼마") != gt.question_key("배송비 얼마")
+
+
+@pytest.mark.asyncio
+async def test_policy_scope_terms_added_but_own_part_meaning_wins(monkeypatch):
+    """정책서 범위(2026-10-20): 정책 파트 용어도 쓰되, 같은 이름이면 고른 파트 뜻 — 다른 파트의 더 긴 동의어가 이기지 않게(리뷰 L3)."""
+    from contextlib import asynccontextmanager
+    import core.database as db
+
+    @asynccontextmanager
+    async def cm():
+        yield object()
+    monkeypatch.setattr(db, "get_conn", cm)
+    monkeypatch.setattr(db, "resolve_namespace_id", lambda conn, ns: _async(1))
+    monkeypatch.setattr(gt, "load_entries", lambda conn, ns_id: _async([E("회원", "우리 파트 뜻")]))
+    monkeypatch.setattr(gt, "load_entries_many", lambda conn, ids: _async([
+        E("회원", "정책 파트 뜻", synonyms=["회원 고객"], part="회원정책"), E("응모권", "추첨 권리", part="챌린지")]))
+    matches, _, _ = await gt.resolve_query_terms("ns", "회원 고객 응모권 문의", None, mode="lexical", extra_ns_ids=[1, 7])
+    by = {m.term: m for m in matches}
+    assert by["회원"].description == "우리 파트 뜻" and by["응모권"].part == "챌린지"
+    assert "응모권 (챌린지): 추첨 권리" in gt.definitions_block(matches)
+
+
+async def _async(v):
+    return v

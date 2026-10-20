@@ -70,3 +70,12 @@ def test_short_reason_and_next_step(args, short, step_kw):
 def test_multiple_high_reasons_all_in_short():
     r = risk.classify("unresolved", 1, 1, True, prior_revert=True)
     assert r.short == "미분류 조각 1개 · 이전에 반려됨 · 자동 통과 되돌림" and "편입" in r.next_step
+
+
+def test_whole_body_item_has_no_decomposition_reasons():
+    """원문 통째 항목(v0, 10/20): parse_status 기본값('unresolved')이어도 "구조화 실패"로 높음이 되면 안 되고,
+    낮음 사유도 "구조화 완료 + 서술 1개"(틀린 말)가 아니라 원문 그대로."""
+    r = risk.classify("unresolved", 0, 1, False, whole_body=True)
+    assert r.level == "low" and r.rule_key == risk.LOW_RISK_RULE and "원문 그대로" in r.reasons[0]
+    assert risk.classify("unresolved", 0, 1, False).level == "high"          # 옛 분해 항목은 그대로
+    assert risk.classify("parsed", 0, 1, True, whole_body=True).level == "high"   # 반려 이력 같은 다른 높음 사유는 그대로

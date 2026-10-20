@@ -18,7 +18,7 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Sequence
 
 from shared.json_utils import parse_json_array
 
@@ -45,6 +45,7 @@ class GlossaryEntry:
     term: str
     description: str
     synonyms: list[str] = field(default_factory=list)
+    part: str = ""              # 다른 파트에서 온 용어(정책서 범위)면 그 파트 이름 — 설명에 붙여 어느 업무의 뜻인지
 
 
 @dataclass
@@ -53,6 +54,7 @@ class TermMatch:
     description: str
     matched: str                # 질문에서 실제로 걸린 표현(용어 자체 또는 동의어)
     synonyms: list[str] = field(default_factory=list)
+    part: str = ""
 
 
 def _norm_with_index(question: str) -> tuple[str, list[int]]:
@@ -110,7 +112,7 @@ def find_terms(question: str, entries: list[GlossaryEntry], limit: int = MAX_MAT
             continue
         taken.append((start, end))
         seen.add(e.term)
-        out.append(TermMatch(term=e.term, description=e.description, matched=expr, synonyms=list(e.synonyms)))
+        out.append(TermMatch(term=e.term, description=e.description, matched=expr, synonyms=list(e.synonyms), part=e.part))
         if len(out) >= limit:
             break
     return out
@@ -136,14 +138,16 @@ def definitions_block(matches: list[TermMatch]) -> str:
     """LLM 문맥 맨 앞에 붙는 용어 설명 — 근거 문서가 아니라 질문 해석용이라는 걸 명시."""
     if not matches:
         return ""
-    lines = [f"- {m.term}: {m.description.strip()}" for m in matches if m.description and m.description.strip()]
+    lines = [f"- {m.term}{f' ({m.part})' if m.part else ''}: {m.description.strip()}"
+             for m in matches if m.description and m.description.strip()]
     if not lines:
         return ""
     return "[용어 설명 — 질문에 나온 사내 용어의 뜻. 답의 근거는 아래 문서로]\n" + "\n".join(lines)
 
 
 async def resolve_query_terms(namespace: str, question: str, query_vec, *, mode: Optional[str] = None,
-                              entries: Optional[list[GlossaryEntry]] = None) -> tuple[list[TermMatch], Optional[str], str]:
+                              entries: Optional[list[GlossaryEntry]] = None,
+                              extra_ns_ids: Sequence[int] = ()) -> tuple[list[TermMatch], Optional[str], str]:
     """채팅·디버그 검색·VOC 공용 — (매칭 목록, 대표 용어, 키워드 검색용 질문). 설정(GLOSSARY_MATCH_MODE)을 한 곳에서 따른다
     (코드 리뷰 2026-10-07: 디버그 검색·VOC가 예전 방식에 남아 "측정 경로 = 실제 경로"가 깨져 있었다).
     대표 용어는 1개(가장 긴 매칭) — 질의 기록·용어별 통계가 용어 하나로 조인·집계해서, 쉼표로 이으면 통계가 깨진다."""
@@ -155,6 +159,13 @@ async def resolve_query_terms(namespace: str, question: str, query_vec, *, mode:
             async with get_conn() as conn:
                 ns_id = await resolve_namespace_id(conn, namespace)
                 entries = await load_entries(conn, ns_id) if ns_id is not None else []
+                # 정책서 범위의 파트 용어도(용어는 데이터와 세트 — 정책 파트 용어가 정책을 찾는 열쇠, 2026-10-20). 같은 이름이면 고른 파트
+                # 뜻을 쓴다 — find_terms는 긴 표현부터 잡아 다른 파트의 긴 동의어가 이길 수 있어 순서로는 보장 안 됨(리뷰 L3), 그래서 미리 뺀다.
+                # 정책 파트끼리 같은 이름이면 파트 이름순 첫 것(설명에 파트를 붙여 어느 업무 뜻인지 보이게).
+                others = [i for i in extra_ns_ids if i != ns_id]
+                if others:
+                    own = {norm(e.term) for e in entries}
+                    entries = entries + [e for e in await load_entries_many(conn, others) if norm(e.term) not in own]
         matches = find_terms(question, entries)
         return matches, (matches[0].term if matches else None), expansion_text(question, matches)
     if mode == "embedding":
@@ -322,6 +333,25 @@ async def load_entries(conn, ns_id: int) -> list[GlossaryEntry]:
     except Exception as e:  # asyncpg.UndefinedTableError — 배포 전 코드 경로(측정 스크립트 등)
         logger.warning("동의어 테이블 조회 실패(동의어 없이 진행): %s", e)
     return [GlossaryEntry(term=r["term"], description=r["description"] or "", synonyms=syn.get(r["id"], []))
+            for r in rows]
+
+
+async def load_entries_many(conn, ns_ids: Sequence[int]) -> list[GlossaryEntry]:
+    """여러 파트 용어를 쿼리 두 번으로(파트마다 load_entries를 부르면 14개 파트 = 28쿼리). 파트 이름을 붙인다."""
+    rows = await conn.fetch(
+        "SELECT g.id, g.term, g.description, n.name AS part FROM rag_glossary g JOIN ops_namespace n ON n.id = g.namespace_id "
+        "WHERE g.namespace_id = ANY($1::int[]) ORDER BY n.name, g.id", list(ns_ids))
+    syn: dict[int, list[str]] = {}
+    try:
+        for r in await conn.fetch(
+            "SELECT s.glossary_id, s.synonym FROM rag_glossary_synonym s JOIN rag_glossary g ON g.id = s.glossary_id "
+            "WHERE g.namespace_id = ANY($1::int[]) AND NOT s.blocked AND (s.source <> 'llm_query' OR s.evidence_count >= $2) ORDER BY s.id",
+            list(ns_ids), QUERY_MIN_EVIDENCE,
+        ):
+            syn.setdefault(r["glossary_id"], []).append(r["synonym"])
+    except Exception as e:
+        logger.warning("동의어 테이블 조회 실패(동의어 없이 진행): %s", e)
+    return [GlossaryEntry(term=r["term"], description=r["description"] or "", synonyms=syn.get(r["id"], []), part=r["part"])
             for r in rows]
 
 

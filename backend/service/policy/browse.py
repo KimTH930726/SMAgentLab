@@ -60,6 +60,7 @@ class PolicyItemOut:
     status: str
     parse_status: str
     system_key: Optional[str]
+    remark: Optional[str] = None   # 비고(v0 10/20) — 관리자도 원문과 함께 봐야 한다(예전 응답엔 없었음)
     params: list[ParamOut] = field(default_factory=list)
     narratives: list[ChunkOut] = field(default_factory=list)
     matched_via: list[str] = field(default_factory=list)  # q 검색 시에만 채움: "param"/"narrative"
@@ -121,7 +122,7 @@ async def list_policy_items(
 
         item_rows = await conn.fetch(
             f"""
-            SELECT p.id, p.logical_id, p.version, p.policy_name, p.category_path, p.raw_body, p.status,
+            SELECT p.id, p.logical_id, p.version, p.policy_name, p.category_path, p.raw_body, p.remark, p.status,
                    p.parse_status, p.system_key, p.review_source, p.review_rule, p.review_sample, p.unresolved_segments,
                    {risk.RISK_FEATURES_SQL}
             FROM policy_item p
@@ -161,7 +162,8 @@ async def list_policy_items(
         out.append(PolicyItemOut(
             item_id=r["id"], logical_id=r["logical_id"], version=r["version"],
             policy_name=r["policy_name"], category_path=list(r["category_path"] or []),
-            raw_body=r["raw_body"], status=r["status"], parse_status=r["parse_status"], system_key=r["system_key"],
+            raw_body=r["raw_body"], status=r["status"], parse_status=r["parse_status"], remark=r.get("remark"),
+            system_key=r["system_key"],
             params=params_by_item.get(r["id"], []), narratives=chunks_by_item.get(r["id"], []),
             matched_via=sorted(matched_via.get(r["id"], set())),
             risk_level=rk.level, risk_reasons=rk.reasons, risk_short=rk.short, risk_next_step=rk.next_step,

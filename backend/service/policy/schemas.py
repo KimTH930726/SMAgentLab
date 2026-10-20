@@ -60,6 +60,7 @@ class ParamHitOut(BaseModel):
     value: Optional[str] = None
     unit: Optional[str] = None
     raw_body: str = ""
+    remark: Optional[str] = None   # 비고(v0 10/20) — 검색엔 안 쓰고 답변 근거로
     score: float = 0.0
 
 
@@ -72,6 +73,7 @@ class NarrativeHitOut(BaseModel):
     chunk_text: str
     score: float
     raw_body: str = ""
+    remark: Optional[str] = None   # 비고(v0 10/20)
 
 
 class PolicySearchOut(BaseModel):
@@ -191,6 +193,7 @@ class PolicyItemOut(BaseModel):
     status: str
     parse_status: str
     system_key: Optional[str] = None
+    remark: Optional[str] = None   # 비고(v0 10/20)
     params: list[ParamOut]
     narratives: list[ChunkOut]
     matched_via: list[str] = []

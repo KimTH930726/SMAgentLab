@@ -136,6 +136,8 @@ export interface PolicyItem {
   status: string;
   parse_status: string;
   system_key: string | null;
+  /** 비고(v0 2026-10-20) — 답변에 쓰고 검색엔 안 씀 */
+  remark?: string | null;
   params: PolicyParam[];
   narratives: PolicyChunk[];
   matched_via: string[];

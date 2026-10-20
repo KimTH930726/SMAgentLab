@@ -30,6 +30,11 @@ export function PolicyCitationCard({ citation, defaultOpen = false, index, under
       >
         {kindLabel}
       </span>
+      {citation.part && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded border flex-shrink-0 bg-slate-800 text-slate-300 border-slate-600">
+          {citation.part}
+        </span>
+      )}
       <span className="text-sm text-slate-200 truncate font-medium flex-1">{citation.policy_name}</span>
       {citation.category_path.length > 0 && (
         <span className="text-[10px] text-slate-500 truncate hidden sm:inline max-w-[40%]">
@@ -48,15 +53,27 @@ export function PolicyCitationCard({ citation, defaultOpen = false, index, under
       actions={underReview ? <EvidenceReportControls /> : undefined}
     >
       <div className="px-4 pb-4 space-y-3">
-        <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-          {citation.detail}
-        </p>
+        {/* 정책 통째 조각(v0)은 서버가 detail을 비운다 — 원문과 같은 글이 두 번 나오지 않게 */}
+        {citation.detail && (
+          <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
+            {citation.detail}
+          </p>
+        )}
 
         {citation.raw_body && (
           <div>
             <p className="text-xs text-slate-500 mb-1.5">원문 정책</p>
             <div className="rounded-lg bg-slate-900/60 border border-slate-700/50 px-3 py-2 text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">
               {citation.raw_body}
+            </div>
+          </div>
+        )}
+
+        {citation.remark && (
+          <div>
+            <p className="text-xs text-slate-500 mb-1.5">비고</p>
+            <div className="rounded-lg bg-slate-900/60 border border-slate-700/50 px-3 py-2 text-xs text-slate-400 whitespace-pre-wrap leading-relaxed">
+              {citation.remark}
             </div>
           </div>
         )}

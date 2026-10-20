@@ -81,7 +81,7 @@ def test_best_per_item_and_rescue_fusion():
     vec = [H(i, 1 - i / 100) for i in range(1, 13)]                 # 벡터 순서 1..12
     S.KEYWORD_FUSION, S.KEYWORD_RESCUE_SLOTS = "rescue", 3
     kw = [(2, 9.0), (11, 8.0), (12, 7.0), (5, 1.0)]                 # 11·12는 벡터 상위 10에 없음
-    out = asyncio.run(S._fuse_keyword(1, "[0]", vec, kw, 10))
+    out = asyncio.run(S._fuse_keyword([1], "[0]", vec, kw, 10))
     ids = [h.item_id for h in out]
     assert ids[0] == 1                                              # 벡터 1위 그대로(맨 앞 정답 유지)
     assert ids[:10] == [1, 2, 3, 4, 5, 6, 7, 8, 11, 12]             # 놓친 키워드 상위만 아래 자리에
@@ -97,7 +97,7 @@ def test_rescue_respects_caller_top_k():
     S.KEYWORD_FUSION, S.KEYWORD_RESCUE_SLOTS = "rescue", 3
     for top_k in (1, 2, 5, 10):
         kw = [(11, 9.0), (12, 8.0), (1, 1.0)]
-        ids = [h.item_id for h in asyncio.run(S._fuse_keyword(1, "[0]", vec, kw, top_k))]
+        ids = [h.item_id for h in asyncio.run(S._fuse_keyword([1], "[0]", vec, kw, top_k))]
         assert ids[0] == 1                                          # 1위는 늘 벡터
         assert sorted(ids) == list(range(1, 13))                    # 유실·중복 없음
         slots = min(3, top_k - 1)

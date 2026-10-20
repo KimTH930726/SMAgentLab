@@ -3,6 +3,7 @@ from core.config import settings
 from service.llm.base import LLMProvider
 from service.llm.inhouse import InHouseLLMProvider
 from service.llm.ollama import OllamaProvider
+from service.llm.openai_compat import OpenAICompatProvider
 
 _provider: LLMProvider | None = None
 _runtime_config: dict | None = None
@@ -24,6 +25,8 @@ def _create_provider() -> LLMProvider:
 
     if provider_type == "inhouse":
         return InHouseLLMProvider(_runtime_config)
+    if provider_type == "openai_compat":
+        return OpenAICompatProvider(_runtime_config)
     else:
         return OllamaProvider(_runtime_config)
 
@@ -32,6 +35,14 @@ def switch_provider(config: dict) -> LLMProvider:
     """런타임에 LLM Provider를 전환한다. 재시작 시 .env 값으로 복귀."""
     global _provider, _runtime_config
     _runtime_config = config
+    _provider = _create_provider()
+    return _provider
+
+
+def reset_provider() -> LLMProvider:
+    """런타임 전환을 지우고 .env 설정으로 돌아간다(재시작과 같은 효과) — E2E가 로컬 LLM으로 바꿨다가 되돌릴 때(2026-10-20)."""
+    global _provider, _runtime_config
+    _runtime_config = None
     _provider = _create_provider()
     return _provider
 
@@ -47,6 +58,10 @@ def get_runtime_config() -> dict:
             "base_url": cfg.get("ollama_base_url", settings.ollama_base_url),
             "model": cfg.get("ollama_model", settings.ollama_model),
             "timeout": cfg.get("ollama_timeout", settings.ollama_timeout),
+        },
+        "openai_compat": {   # dev 전용(로컬 LLM) — 주소가 설정된 환경에서만 고를 수 있다
+            "enabled": bool(settings.openai_compat_base_url),
+            "model": settings.openai_compat_model or "",
         },
         "inhouse": {
             "base_url": cfg.get("inhouse_llm_base_url", settings.inhouse_llm_base_url),

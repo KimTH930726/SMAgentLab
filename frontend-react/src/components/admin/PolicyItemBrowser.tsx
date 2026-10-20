@@ -411,6 +411,14 @@ export function PolicyItemBrowser() {
                       {item.raw_body}
                     </div>
                   </div>
+                  {item.remark && (
+                    <div>
+                      <p className="text-xs font-medium text-slate-400 mb-2" title="답변에는 쓰고 검색에는 쓰지 않습니다">비고</p>
+                      <div className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
+                        {item.remark}
+                      </div>
+                    </div>
+                  )}
                   {item.status === 'rejected' && canModifyNs && (
                     <p className="text-xs text-amber-700 dark:text-amber-400/90 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-lg px-3 py-2">
                       반려된 항목입니다 — 아래 파라미터/서술을 고쳐 저장하면 다시 검토대기 상태로

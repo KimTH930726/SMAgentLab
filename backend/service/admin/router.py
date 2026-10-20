@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query as QueryParam
 from pydantic import BaseModel
 
+from core.config import settings
 from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
 from service.admin.schemas import (
@@ -13,9 +14,10 @@ from service.admin.schemas import (
     LLMConfigUpdate, LLMTestRequest, ThresholdUpdate, SearchDefaultsUpdate,
 )
 from service.admin import service
-from service.llm.factory import get_llm_provider, switch_provider, get_runtime_config
+from service.llm.factory import get_llm_provider, switch_provider, get_runtime_config, reset_provider
 from service.llm.ollama import OllamaProvider
 from service.llm.inhouse import InHouseLLMProvider
+from service.llm.openai_compat import OpenAICompatProvider
 from agents.knowledge_rag.knowledge.retrieval import (
     get_thresholds, set_thresholds, get_search_defaults, set_search_defaults, persist_runtime_overrides,
 )
@@ -396,8 +398,9 @@ async def update_llm_config(body: LLMConfigUpdate, admin: dict = Depends(get_cur
     # 영향을 주는 시스템 설정이므로 thresholds/search-defaults/cache-config 등
     # 다른 전역 설정 엔드포인트와 동일하게 관리자 전용이어야 한다(기존엔 일반 사용자도
     # 호출 가능해, LLM 엔드포인트·자격증명을 임의로 바꿔치기할 수 있었음)
-    if body.provider not in ("ollama", "inhouse"):
-        raise HTTPException(status_code=400, detail="provider는 'ollama' 또는 'inhouse'여야 합니다.")
+    allowed = ("ollama", "inhouse") + (("openai_compat",) if settings.openai_compat_base_url else ())
+    if body.provider not in allowed:   # openai_compat(로컬 LLM)은 주소가 설정된 dev에서만 — 운영 화면에선 고를 수 없다
+        raise HTTPException(status_code=400, detail=f"provider는 {', '.join(allowed)} 중 하나여야 합니다.")
     try:
         new_provider = switch_provider(_extract_config(body))
         is_connected = await new_provider.health_check()
@@ -406,11 +409,23 @@ async def update_llm_config(body: LLMConfigUpdate, admin: dict = Depends(get_cur
     return {**get_runtime_config(), "is_connected": is_connected}
 
 
+@router.delete("/api/llm/config")
+async def reset_llm_config(admin: dict = Depends(get_current_admin)):
+    """화면에서 바꾼 LLM 설정을 지우고 .env 설정으로(재시작과 같음) — E2E 되돌리기용(2026-10-20)."""
+    new_provider = reset_provider()
+    return {**get_runtime_config(), "is_connected": await new_provider.health_check()}
+
+
 @router.post("/api/llm/test")
 async def test_llm_connection(body: LLMTestRequest, admin: dict = Depends(get_current_admin)):
     cfg = _extract_config(body)
     try:
-        provider = InHouseLLMProvider(cfg) if body.provider == "inhouse" else OllamaProvider(cfg)
+        if body.provider == "inhouse":
+            provider = InHouseLLMProvider(cfg)
+        elif body.provider == "openai_compat" and settings.openai_compat_base_url:   # 로컬 LLM(dev) — 예전엔 Ollama를 시험했다(리뷰 L4)
+            provider = OpenAICompatProvider(cfg)
+        else:
+            provider = OllamaProvider(cfg)
         is_connected = await provider.health_check()
     except ValueError as e:
         return {"is_connected": False, "error": str(e)}

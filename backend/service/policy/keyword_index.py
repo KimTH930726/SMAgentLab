@@ -12,13 +12,13 @@ BM25·토큰화 본체는 trustkit(신뢰도 레이어) — 이 모듈은 정책
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 from core.database import get_conn
 from trustkit.retrieval.bm25 import BM25Index
 
 _CACHE_TTL = 600.0
-_cache: dict[int, BM25Index] = {}
+_cache: dict[tuple[int, ...], BM25Index] = {}
 
 
 def invalidate() -> None:
@@ -26,15 +26,21 @@ def invalidate() -> None:
     _cache.clear()
 
 
-async def search(ns_id: int, query: str, top_k: int, category: Optional[str] = None) -> list[tuple[int, float]]:
-    idx = _cache.get(ns_id)
+async def search(ns_ids: Union[int, Sequence[int]], query: str, top_k: int,
+                 category: Optional[str] = None) -> list[tuple[int, float]]:
+    """ns_ids = 파트 하나 또는 여러 개(채팅 정책서 범위, 2026-10-20). 여러 파트는 색인 하나로 합친다 — 파트마다 따로 매기면 IDF가 달라
+    점수를 비교할 수 없다(v0 실험의 "전체" 범위도 합친 색인으로 측정)."""
+    key = (ns_ids,) if isinstance(ns_ids, int) else tuple(sorted(set(ns_ids)))
+    if not key:
+        return []
+    idx = _cache.get(key)
     if not idx or time.time() - idx.built_at > _CACHE_TTL:
         async with get_conn() as conn:
             rows = await conn.fetch(
                 "SELECT id, policy_name, array_to_string(category_path, ' ') AS cat, coalesce(raw_body, '') AS body "
-                "FROM policy_item WHERE namespace_id = $1 AND status NOT IN ('deprecated', 'rejected')", ns_id)
+                "FROM policy_item WHERE namespace_id = ANY($1::int[]) AND status NOT IN ('deprecated', 'rejected')", list(key))
         idx = BM25Index([(r["id"], f"{r['policy_name']} {r['cat']} {r['body']}") for r in rows])
-        _cache[ns_id] = idx
+        _cache[key] = idx
     hits = idx.score(query, top_k * (4 if category else 1))
     if category:   # 분류를 고른 검색은 그 분류 항목만(벡터 쪽 조건과 같게)
         async with get_conn() as conn:

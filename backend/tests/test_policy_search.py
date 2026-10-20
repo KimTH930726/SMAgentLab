@@ -40,6 +40,36 @@ def patch_db(monkeypatch):
     return _apply
 
 
+class TestSearchPolicyScope:
+    """정책서 범위(2026-10-20): 여러 파트를 쿼리 한 번(= ANY)으로, 파트 이름은 여러 파트일 때만(한 파트면 기존 문맥 그대로 — 리뷰 L4)."""
+
+    @staticmethod
+    def _chunk(part):
+        return [{"item_id": 2, "logical_id": 2, "policy_name": "p", "category_path": [], "status": "active", "raw_body": "b",
+                 "remark": None, "part": part, "chunk_id": 5, "chunk_text": "b", "score": 0.7}]
+
+    @pytest.mark.asyncio
+    async def test_multi_part_single_query_with_part_label(self, patch_db, monkeypatch):
+        conn = patch_db(chunk_rows=self._chunk("회원"))
+        monkeypatch.setattr(search.keyword_index, "search", AsyncMock(return_value=[]))
+        r = await search.search_policy("업무", "질문", ns_ids=[3, 4])
+        assert conn.fetch.call_args_list[1].args[1] == [3, 4] and "ANY($1::int[])" in conn.fetch.call_args_list[1].args[0]
+        assert r.narratives[0].part == "회원"
+
+    @pytest.mark.asyncio
+    async def test_single_part_has_no_part_label(self, patch_db, monkeypatch):
+        patch_db(chunk_rows=self._chunk("회원"))
+        monkeypatch.setattr(search.keyword_index, "search", AsyncMock(return_value=[]))
+        r = await search.search_policy("회원", "질문", ns_ids=[3])
+        assert r.narratives[0].part is None
+
+    @pytest.mark.asyncio
+    async def test_empty_scope_returns_nothing_without_query(self, patch_db):
+        conn = patch_db()
+        r = await search.search_policy("업무", "질문", ns_ids=[])
+        assert not r.narratives and not r.params and conn.fetch.call_count == 0
+
+
 class TestSearchPolicy:
     @pytest.mark.asyncio
     async def test_namespace_not_found_raises(self, patch_db, monkeypatch):
@@ -96,7 +126,7 @@ class TestSearchPolicy:
         await search.search_policy("ns", "질문")
 
         param_call = conn.fetch.call_args_list[0]
-        assert "category_path" not in param_call.args[0] or "= ANY" not in param_call.args[0]
+        assert "ANY(i.category_path)" not in param_call.args[0]   # 파트는 = ANY(여러 파트, 2026-10-20) — 분류 조건만 없어야
 
     @pytest.mark.asyncio
     async def test_rejected_and_deprecated_excluded_from_both_queries(self, patch_db):
@@ -388,6 +418,23 @@ class TestBuildPolicyCitations:
         p, n = search.build_policy_citations(result)
         assert (p["item_id"], p["logical_id"], p["param_id"]) == (7, 3, 70)
         assert (n["item_id"], n["logical_id"], n["chunk_id"]) == (8, 4, 80)
+
+    def test_whole_body_chunk_not_shown_twice_and_remark_carried(self):
+        """v0(10/20): 조각 = 원문 통째 → detail을 비워 카드에 본문이 두 번 안 나오게, 비고는 따로 싣는다."""
+        result = search.PolicySearchResult(narratives=[
+            search.NarrativeHit(item_id=1, logical_id=1, policy_name="환불", category_path=[], status="active",
+                                chunk_text="전액 환불", raw_body="전액 환불", remark="10월 31일부터", score=0.8),
+        ])
+        c = search.build_policy_citations(result)[0]
+        assert c["detail"] == "" and c["raw_body"] == "전액 환불" and c["remark"] == "10월 31일부터"
+
+    def test_cited_hit_can_match_on_remark(self):
+        """답이 비고 내용을 옮겨 적었으면 그 정책을 근거로 골라야 한다(비고도 근거 원문)."""
+        result = search.PolicySearchResult(narratives=[
+            search.NarrativeHit(item_id=1, logical_id=1, policy_name="a", category_path=[], status="active",
+                                chunk_text="무관한 본문", raw_body="무관한 본문", remark="영업정보시스템 기준", score=0.5),
+        ])
+        assert search.select_cited_hit(result, "영업정보시스템 기준을 따릅니다").narratives
 
     def test_narrative_citation_uses_chunk_text_as_detail(self):
         result = search.PolicySearchResult(narratives=[

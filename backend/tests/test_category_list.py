@@ -135,8 +135,8 @@ class TestFindCategoryListWithIndex:
 
         class Conn:
             async def fetch(self, sql, *a):
-                if "SELECT id, category_path" in sql:
-                    return [{"id": i, "category_path": p} for i, p, _ in rows]
+                if "i.category_path, n.name AS part" in sql:   # 색인(파트 이름 포함, 2026-10-20)
+                    return [{"id": i, "category_path": p, "part": "파트A"} for i, p, _ in rows]
                 ids = set(a[0])
                 return [{"cat": " > ".join(p), "policy_name": n, "first": "본문"} for i, p, n in rows if i in ids]
 
@@ -147,10 +147,14 @@ class TestFindCategoryListWithIndex:
         class Emb:
             async def embed(self, text):
                 return [0.0, 0.0]
+
+            async def embed_batch(self, texts):   # 분류 이름은 묶어서 임베딩(2026-10-20)
+                return [[0.0, 0.0] for _ in texts]
         import types
         monkeypatch.setattr(cl, "get_conn", cm)
         monkeypatch.setitem(sys.modules, "shared.embedding", types.SimpleNamespace(embedding_service=Emb()))
         cl._cache.clear()
+        cl._label_vecs.clear()
         return asyncio
 
     def test_index_places_children_and_scope(self, monkeypatch):

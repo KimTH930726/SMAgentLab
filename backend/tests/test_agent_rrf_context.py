@@ -248,3 +248,16 @@ def test_context_doc_marker_covers_adopted_and_expansions(monkeypatch):
     text = agent._build_rrf_context([_make_result(3, 0.9, "본문")], PolicySearchResult(), parent_expansions=exp)
     assert {int(x) for x in m._CTX_DOC.findall(text)} == {3, 7}
     assert isinstance(m._CTX_DOC, re.Pattern)
+
+
+class TestPolicyRemarkInContext:
+    """v0(10/20): 비고는 검색 조각엔 없고 답변 문맥에만 — 옛 파이프라인은 문맥에도 안 넣었다."""
+
+    def test_remark_reaches_llm_context(self, monkeypatch):
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        policy_result = PolicySearchResult(narratives=[NarrativeHit(
+            item_id=1, logical_id=1, policy_name="카드 환불", category_path=[], status="active",
+            chunk_text="60% 이상 사용 시 전액 환불", raw_body="60% 이상 사용 시 전액 환불", remark="10월 31일부터 적용", score=0.7,
+        )])
+        text = agent._build_rrf_context([], policy_result)
+        assert "60% 이상 사용 시 전액 환불" in text and "비고: 10월 31일부터 적용" in text

@@ -6,6 +6,8 @@ import { defineConfig, devices } from '@playwright/test';
 // 이미 떠 있는 dev 스택(docker-compose.dev.yml)에 대고 돈다 — 별도 webServer 기동 없음.
 export default defineConfig({
   testDir: './e2e',
+  // E2E 동안만 로컬 LLM으로(게이트웨이 토큰 0) — e2e/llm-local.setup.ts
+  globalSetup: './e2e/llm-local.setup.ts',
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,

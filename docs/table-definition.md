@@ -103,6 +103,7 @@
 | 74 | `ops_llm_usage` (신규) | `CREATE TABLE IF NOT EXISTS` — provider, method(once/generate/stream), module, feature, input_chars, output_chars, input_tokens, output_tokens, duration_ms, ok(TRUE 성공·FALSE 실패·NULL 사용자 중단) + created_at 인덱스. 기동 때 90일 지난 행 삭제 | 사내 LLM 사용량(호출 1건마다, 본문 없음). 기능은 호출 스택 모듈로 자동 판별. 시스템 설정 "사내 LLM 사용량"이 읽음. `_migrate_llm_usage` (v2.131) |
 | 75 | `ops_prompt` (내용·행) | chat_system에서 안 쓰는 두 줄("[과거 유사 사례]" 지시, "📎 문서 N 참고")을 정확히 그 문구일 때만 지움 + 안 쓰는 프롬프트 행 11개 삭제(sql2_* 8·tool_answer·tool_select·autocomplete — 코드 참조 0건) | 프롬프트 점검(2026-10-13). 멱등. `_migrate_prompt_cleanup` (v2.136) |
 | 76 | `ops_data_marker` (신규) | `CREATE TABLE IF NOT EXISTS` — key(PK), value, updated_at | 일회성 데이터 작업이 어느 판까지 끝났는지 기록. 첫 사용: `policy_chunk_embed` = 정책 조각 임베딩 규칙 판(`CHUNK_EMBED_VERSION`) — 기동 때 다르면 백그라운드로 전 조각 재임베딩 후 기록(v2.138 머리 붙인 임베딩). `_migrate_data_marker` (v2.138) |
+| 77 | `ops_namespace.kind`·`policy_item.source_key` + `ref_table`·`ref_table_row`·`ops_link`·`policy_doc_overview` (신규) | `ADD COLUMN IF NOT EXISTS` + `CREATE TABLE IF NOT EXISTS` | 정책서 v0: 파트 종류(policy/business), 원천 고정 키(골든셋 정답·재적재 대조), 참고표 원표·행(압축본·표 요약은 파생), 범용 연결((종류, 키) — 대상 존재는 적재 점검이 확인), 문서 개요(서문). `_migrate_policy_v0` (v2.140) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

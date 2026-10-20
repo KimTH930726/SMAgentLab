@@ -440,6 +440,13 @@ def _apply_paste_guard(matcher, missing_ids: list[int], result) -> list[int]:
     return keep
 
 
+async def _ensure_excel_part(conn, ns_id: int) -> None:
+    """정책서 파트(v0, 원문 통째)엔 엑셀·붙여넣기·엑셀 JSON 경로를 막는다 — 이 경로는 AI 분해로 조각을 여러 개 만들어 통째 조각과
+    섞이고 비고·참고표 구조도 모른다(감사 10/20). 정책서 파트의 변경은 수정 제안, 문서 개정본은 정책서 JSON 가져오기(예정)로."""
+    if await conn.fetchval("SELECT kind FROM ops_namespace WHERE id = $1", ns_id) == "policy":
+        raise ValueError("정책서 파트는 엑셀로 올릴 수 없습니다(원문 그대로 관리). 정책 수정은 '수정 제안'으로 해 주세요.")
+
+
 async def import_excel(
     namespace: str, system_key: str, filename: str, file_bytes: bytes, *, force_reprocess: bool = False,
 ) -> ImportSummary:
@@ -448,6 +455,8 @@ async def import_excel(
     같은 파일로 전체를 다시 돌리고 싶을 때). 결과는 평소처럼 새 버전 INSERT + 이전 버전 deprecated."""
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is not None:
+            await _ensure_excel_part(conn, ns_id)
     if ns_id is None:
         raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
 
@@ -486,6 +495,8 @@ async def import_pasted(
     이름은 "같은 정책서의 같은 시트"를 가리는 기준이라 화면이 이 파트의 기존 값에서 고르게 한다(`list_sources`)."""
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is not None:
+            await _ensure_excel_part(conn, ns_id)
     if ns_id is None:
         raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
     source_file = (source_file or "").strip()

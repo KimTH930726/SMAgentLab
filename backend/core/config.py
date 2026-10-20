@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://ops:ops1234@localhost:5432/opsdb"
     llm_provider: str = "inhouse"
     ollama_base_url: str = "http://host.docker.internal:11434"
+    # OpenAI 호환(로컬 vLLM Qwen 등) — dev에서 E2E·확인을 게이트웨이 없이 돌릴 때만(2026-10-20). 비어 있으면 고를 수 없다(운영은 비워 둔다)
+    openai_compat_base_url: str = ""
+    openai_compat_model: str = ""          # 비우면 서버의 첫 모델
+    openai_compat_timeout: int = 300
 
     # InHouse DevX LLM — OAuth2 Client Credentials 인증
     # base_url 이하 /api/v1/auth/token, /api/v1/agent/chat 사용

@@ -1401,6 +1401,71 @@ async def _migrate_data_marker(conn) -> None:
         )""")
 
 
+async def _migrate_policy_v0(conn) -> None:
+    """정책서 v0 적재 스키마 (2026-10-20, #77, docs/tech/policy-v0-design.md §4). 멱등.
+    - ops_namespace.kind: 정책(정책서 영역 파트) / 업무(기존). 채팅 범위 확장이 종류를 본다.
+    - policy_item.source_key: 원천의 고정 id(팀원 데이터 pol_…) — 골든셋 정답이 우리 id·엑셀 행 대신 이걸 가리킨다.
+    - ref_table / ref_table_row: 참고표(결정표) 원표. 압축본·표 요약은 원표에서 계산하는 파생물이라 원표만 기준으로 저장.
+    - ops_link: 종류를 가로지르는 관계(파트↔파트, 정책→정책·절, 정책→용어, 참고표→정책). 대상마다 테이블을 늘리지 않으려고
+      (종류, 키) 문자열 — DB가 대상 존재를 보장하지 않으므로 적재 점검이 끊긴 연결 0을 확인한다.
+    - policy_doc_overview: 정책서 서문(목적·적용 대상·영역 구성) 1건/문서."""
+    await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'business'")
+    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS source_key VARCHAR(100)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_item_source_key ON policy_item (source_key)")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ref_table (
+            id              SERIAL PRIMARY KEY,
+            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            logical_id      INT,
+            version         INT NOT NULL DEFAULT 1,
+            supersedes_id   INT REFERENCES ref_table(id) ON DELETE SET NULL,
+            title           TEXT NOT NULL,
+            category_path   TEXT[] NOT NULL DEFAULT '{}',
+            columns         JSONB NOT NULL,
+            source_key      VARCHAR(200),
+            source_file     VARCHAR(500),
+            content_hash    VARCHAR(64) NOT NULL,
+            status          VARCHAR(20) NOT NULL DEFAULT 'active',
+            embedding       vector(1024),
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ref_table_ns ON ref_table (namespace_id)")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ref_table_row (
+            id              SERIAL PRIMARY KEY,
+            ref_table_id    INT NOT NULL REFERENCES ref_table(id) ON DELETE CASCADE,
+            row_no          INT NOT NULL,
+            cells           JSONB NOT NULL
+        )""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ref_table_row_table ON ref_table_row (ref_table_id, row_no)")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_link (
+            id          SERIAL PRIMARY KEY,
+            from_type   VARCHAR(30) NOT NULL,
+            from_key    VARCHAR(300) NOT NULL,
+            relation    VARCHAR(30) NOT NULL,
+            to_type     VARCHAR(30) NOT NULL,
+            to_key      VARCHAR(300) NOT NULL,
+            source      VARCHAR(30) NOT NULL,
+            status      VARCHAR(20) NOT NULL DEFAULT 'active',
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (from_type, from_key, relation, to_type, to_key)
+        )""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ops_link_to ON ops_link (to_type, to_key)")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS policy_doc_overview (
+            id              SERIAL PRIMARY KEY,
+            namespace_id    INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            title           TEXT NOT NULL,
+            body            TEXT NOT NULL,
+            source_key      VARCHAR(100),
+            source_file     VARCHAR(500),
+            status          VARCHAR(20) NOT NULL DEFAULT 'active',
+            embedding       vector(1024),
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""")
+
+
 async def _migrate_llm_usage(conn) -> None:
     """사내 LLM 사용량 기록 (2026-10-12, #74) — 호출 1건마다 기능·입출력 글자·토큰(게이트웨이 metadata.usage)·시간·성공.
     본문은 저장하지 않는다. 90일 지난 기록은 기동 때 지운다(집계 화면은 최근 7일). service/llm/usage.py. 멱등."""
@@ -1746,6 +1811,7 @@ async def _run_migrations() -> None:
         await _migrate_llm_usage(conn)
         await _migrate_prompt_cleanup(conn)
         await _migrate_data_marker(conn)
+        await _migrate_policy_v0(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

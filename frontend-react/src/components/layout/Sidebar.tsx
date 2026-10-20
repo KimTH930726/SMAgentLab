@@ -75,7 +75,9 @@ export function Sidebar() {
   const currentModel = llmConfig
     ? llmConfig.provider === 'ollama'
       ? llmConfig.ollama.model
-      : llmConfig.inhouse.model || 'Agent 기본'
+      : llmConfig.provider === 'openai_compat'   // dev 로컬 LLM(E2E 등) — 사내 모델 이름으로 잘못 보이지 않게
+        ? `로컬 LLM${llmConfig.openai_compat?.model ? ` · ${llmConfig.openai_compat.model}` : ''}`
+        : llmConfig.inhouse.model || 'Agent 기본'
     : null;
 
   // Health check on mount and every 30s
