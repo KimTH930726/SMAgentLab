@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, "/app")
 
-from service.policy.v0_convert import (PIPELINE_WHOLE, SOURCE_LABEL, build_plan, check_plan,  # noqa: E402
+from service.policy.v0_convert import (PIPELINE_WHOLE, GLOSSARY_SOURCE, build_plan, check_plan,  # noqa: E402
                                        compressed_view, load_source)
 
 MARKER = "policy_v0_load"
@@ -102,7 +102,7 @@ async def apply(plan) -> None:
             ns = {}
             for p in plan.parts:
                 ns[p.doc_id] = await conn.fetchval(
-                    "INSERT INTO ops_namespace (name, description, kind) VALUES ($1, $2, 'policy') RETURNING id",
+                    "INSERT INTO ops_namespace (name, description, kind) VALUES ($1, $2, 'domain') RETURNING id",
                     p.name, f"정책서: {p.source_file}")
             pol_logical = {}
             for r, e in zip(plan.policies, pol_emb):
@@ -120,9 +120,9 @@ async def apply(plan) -> None:
             term_id = {}
             for t, e in zip(plan.terms, term_emb):
                 term_id[t.source_key] = await conn.fetchval(
-                    """INSERT INTO rag_glossary (namespace_id, term, description, embedding, created_by_part)
+                    """INSERT INTO rag_glossary (namespace_id, term, description, embedding, source)
                        VALUES ($1, $2, $3, $4::vector, $5) RETURNING id""",
-                    ns[t.doc_id], t.term, t.description, str(e), SOURCE_LABEL)
+                    ns[t.doc_id], t.term, t.description, str(e), GLOSSARY_SOURCE)
             table_id = {}
             for t, e in zip(plan.tables, tab_emb):
                 tid = await conn.fetchval(
@@ -146,9 +146,9 @@ async def apply(plan) -> None:
                     return str(term_id[ref])
                 if typ == "ref_table":
                     return str(table_id[ref])
-                if typ == "part":
+                if typ == "domain":
                     return str(ns[ref])
-                doc, path = ref.split("|", 1)        # 절: "파트id|L1 > L2"
+                doc, path = ref.split("|", 1)        # 절: "업무 영역 id|L1 > L2"
                 return f"{ns[doc]}|{path}"
             await conn.executemany(
                 """INSERT INTO ops_link (from_type, from_key, relation, to_type, to_key, source, status)
@@ -185,7 +185,7 @@ async def add_suggested_links(plan) -> None:
     await init_pool()
     sug = [l for l in plan.links if l.status == "suggested"]
     async with get_conn() as conn:
-        ns = {p.doc_id: await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1 AND kind = 'policy'", p.name)
+        ns = {p.doc_id: await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", p.name)
               for p in plan.parts}
         rows = []
         for l in sug:

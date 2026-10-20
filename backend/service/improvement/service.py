@@ -392,14 +392,6 @@ async def record_search_noise(namespace: str, knowledge_id: int, reporter_id: Op
         """, SOURCE_EVAL_GATE, ns_id, reporter_id, knowledge_id, note, json.dumps(original, ensure_ascii=False))
 
 
-async def is_part_owned_by(namespace: str, user: dict) -> bool:
-    """소유 파트가 지정돼 있고 그게 이 사용자의 파트인가(공용 네임스페이스는 False)."""
-    async with get_conn() as conn:
-        return bool(await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM ops_namespace n JOIN ops_user u ON u.part_id = n.owner_part_id "
-            "WHERE n.name = $1 AND u.id = $2 AND n.owner_part_id IS NOT NULL)", namespace, user.get("id")))
-
-
 async def item_namespace(item_id: int) -> Optional[str]:
     """권한 확인용 — 이 신고가 속한 파트(처리 권한 = 그 파트 담당자 + 관리자)."""
     async with get_conn() as conn:
@@ -567,14 +559,14 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
         raise ValueError("원본 지식이 이미 바뀌었거나 현행이 아닙니다 — 이 신고는 반려하세요.")
     new_id = await conn.fetchval("""
         INSERT INTO rag_knowledge
-            (namespace_id, content, embedding, base_weight, category, created_by_part, created_by_user_id,
+            (namespace_id, content, embedding, base_weight, category, created_by_user_id,
              source_file, source_chunk_idx, source_type, ingestion_job_id, status,
              logical_document_id, version, supersedes_id, embedding_model, reviewed_at, owner,
              confluence_page_id, confluence_version, heading_path, source_document_id, content_edited_at)
-        VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, 'active',
-                $12, $13, $14, $15, NOW(), $16, $17, $18, $19, $20, NOW())
+        VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, 'active',
+                $11, $12, $13, $14, NOW(), $15, $16, $17, $18, $19, NOW())
         RETURNING id
-    """, ns_id, content, str(embedding), old["base_weight"], old["category"], old["created_by_part"],
+    """, ns_id, content, str(embedding), old["base_weight"], old["category"],
         old["created_by_user_id"], old["source_file"], old["source_chunk_idx"], old["source_type"],
         old["ingestion_job_id"], old["logical_document_id"] or old["id"], (old["version"] or 1) + 1, old["id"],
         settings.embedding_model, old["owner"], old["confluence_page_id"], old["confluence_version"],
@@ -589,11 +581,11 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
 async def _apply_missing(conn, ns_id: int, content: str, embedding: list[float], category: str,
                          approver: dict) -> int:
     return await conn.fetchval("""
-        INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight, category, created_by_part,
+        INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight, category,
                                    created_by_user_id, source_type, status, embedding_model, reviewed_at, owner)
-        VALUES ($1, $2, $3::vector, 1.0, $4, $5, $6, 'correction', 'active', $7, NOW(), $8)
+        VALUES ($1, $2, $3::vector, 1.0, $4, $5, 'correction', 'active', $6, NOW(), $7)
         RETURNING id
-    """, ns_id, content, str(embedding), category, approver.get("part"), approver.get("id"),
+    """, ns_id, content, str(embedding), category, approver.get("id"),
         settings.embedding_model, approver.get("username"))
 
 

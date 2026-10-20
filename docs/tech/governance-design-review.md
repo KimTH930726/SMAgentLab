@@ -44,6 +44,10 @@
 
 ### 2-2. 접근권한 세분화 — "AI Read/Write 계정 분리까지만, 사용자·부서별 조회범위 제한 없음"
 
+> **갱신(2026-10-20, v2.142)**: 아래는 9/22 실측. 지금은 사람 조직(팀 > 파트)과 업무 영역(트리)을 분리했고, 역할은 admin/user/viewer
+> (가입은 viewer로 시작 → 관리자 승인), 담당 없는 영역은 관리자만 수정, 관리 화면 조회는 `check_namespace_read`로 분리.
+> 현재 규칙은 `docs/architecture.md` "조직·업무 영역·권한". 감사로그·보존 정책(§2-1·2-3) 검토는 그대로 유효.
+
 - 실제 역할은 `admin` / `user` 단 2단계뿐(`ops_user.role`, `backend/main.py:85`). 그 사이 단계(예:
   조회만 가능한 뷰어, 특정 파트만 보는 매니저) 없음.
 - 스코핑은 **파트(part) 단위**로만 존재한다 — `check_namespace_ownership()`/`check_part_ownership()`

@@ -32,7 +32,7 @@ from pathlib import Path
 import asyncpg
 
 _GOLDEN_SET_PATH = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "golden_set" / "online_delivus_v1.jsonl"
-_FILE_TO_NAMESPACE = [("온라인스토어", "온라인스토어 DB"), ("딜리버스", "딜리버스 DB")]
+_FILE_TO_NAMESPACE = [("온라인스토어", "온라인스토어"), ("딜리버스", "딜리버스")]
 _TOP_K = 20  # core/config.py reranker_candidates 기본값과 동일
 
 _CANDIDATES = [

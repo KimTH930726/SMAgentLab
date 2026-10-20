@@ -34,7 +34,7 @@ from agents.knowledge_rag.knowledge import retrieval
 from service.policy import search as policy_search
 from agents.knowledge_rag.agent import _build_rrf_context
 
-NAMESPACE = "딜리버스 DB"
+NAMESPACE = "딜리버스"
 
 # 정책 축이 실제로 걸리는 것까지 함께 검증하기 위한 추가 질문(1차 검증에서 이미
 # 확인된 교차축 질문 재사용) — ops_query_log엔 정책 질문이 없었음(실측)

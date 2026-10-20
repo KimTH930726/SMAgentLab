@@ -7,6 +7,7 @@ import { useAppStore } from './store/useAppStore';
 import { useAuthStore } from './store/useAuthStore';
 import { useThemeStore } from './store/useThemeStore';
 import { getSearchDefaults } from './api/llm';
+import { getMe } from './api/auth';
 import Chat from './pages/Chat';
 import Admin from './pages/Admin';
 import Login from './pages/Login';
@@ -31,6 +32,23 @@ function ThemeSync() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+  return null;
+}
+
+// 로그인 때 받은 사용자(역할·소속)를 계속 쓰면 승인·소속 변경·파트 이름 변경이 다시 로그인할 때까지 화면에 안 보였다
+// (리뷰 10/20 — 승인돼도 "승인 대기"·수정 버튼 숨김 유지). 앱을 열 때와 창으로 돌아올 때 서버 값으로 맞춘다.
+function UserSync() {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const updateUser = useAuthStore((s) => s.updateUser);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const refresh = () => {
+      getMe().then(updateUser).catch((err) => console.warn('사용자 정보 새로고침 실패', err));
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [isAuthenticated, updateUser]);
   return null;
 }
 
@@ -92,6 +110,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeSync />
       <SearchConfigSync />
+      <UserSync />
       <DialogHost />
       <BrowserRouter>
         <Routes>

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-SOURCE_LABEL = "시스템"          # 출처 표기(사용자 결정 10/19)
+GLOSSARY_SOURCE = "policy_doc"   # 용어 출처(화면 "정책서") — 10/19 "출처 표기" 결정, 10/20 파트 이름 칸 대신 출처 칸
 # policy_item.pipeline_version — 정책 1건 = 조각 1개(원문 통째, LLM 분해 없음). 위험도·수정·정정 경로가 이 값으로 옛 분해 항목과 가른다
 PIPELINE_WHOLE = "v0_whole"
 _NAME_LINE_MAX = 40
@@ -441,7 +441,7 @@ def build_links(src: dict, plan: Plan) -> None:
             if t in term_ids:
                 add(LinkRec("policy", p["policy_id"], "uses", "term", t))
     for t in plan.tables:
-        add(LinkRec("ref_table", t.source_key, "appendix_of", "part", t.doc_id))
+        add(LinkRec("ref_table", t.source_key, "appendix_of", "domain", t.doc_id))
         if t.category_path:
             add(LinkRec("ref_table", t.source_key, "about", "section", section_key(t.doc_id, t.category_path)))
             plan.notes.append(f"참고표 '{t.title}' → 절 '{' > '.join(t.category_path)}'(표 제목에 절 이름)")
@@ -566,7 +566,7 @@ def check_plan(src: dict, plan: Plan) -> list[str]:
     term_keys = {t.source_key for t in plan.terms}
     table_keys = {t.source_key for t in plan.tables}
     sections = {section_key(r.doc_id, r.category_path[:n]) for r in plan.policies for n in range(1, len(r.category_path) + 1)}
-    exists = {"policy": pol_keys, "term": term_keys, "ref_table": table_keys, "section": sections, "part": docs}
+    exists = {"policy": pol_keys, "term": term_keys, "ref_table": table_keys, "section": sections, "domain": docs}
     for ln in plan.links:
         for typ, ref in ((ln.from_type, ln.from_ref), (ln.to_type, ln.to_ref)):
             if ref not in exists.get(typ, set()):

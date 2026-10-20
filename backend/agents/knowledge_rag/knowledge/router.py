@@ -48,6 +48,9 @@ async def get_knowledge_list(
     status: Optional[str] = Query(default=None),
     user: dict = Depends(get_current_user),
 ):
+    # 영역 없이 부르면 전 영역 지식이 한 번에 나갔다 — 관리자만 허용(막 쓰기 테스트 10/20). 영역별 열람은 그대로(다른 파트는 읽기 전용 설계)
+    if not namespace and user["role"] != "admin":
+        raise HTTPException(status_code=400, detail="업무 영역을 골라 주세요.")
     return await service.list_knowledge(namespace, status)
 
 
@@ -99,7 +102,6 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
         namespace=body.namespace,
         content=body.content,
         category=category,
-        created_by_part=user["part"],
         created_by_user_id=user["id"],
     )
     # 용어 자동 추출 복원(2026-09-24) — 미리보기+검토 2단계 흐름으로 전환되며 끊겼던
@@ -121,7 +123,6 @@ async def modify_knowledge(knowledge_id: int, body: KnowledgeUpdate, user: dict 
         knowledge_id=knowledge_id,
         content=body.content,
         category=body.category,
-        updated_by_part=user["part"],
         updated_by_user_id=user["id"],
     )
     if not row:
@@ -245,7 +246,7 @@ async def add_glossary(body: GlossaryCreate, user: dict = Depends(get_current_us
     try:
         return await service.create_glossary(
             body.namespace, body.term, body.description,
-            created_by_part=user["part"], created_by_user_id=user["id"],
+            created_by_user_id=user["id"],
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -258,7 +259,7 @@ async def modify_glossary(glossary_id: int, body: GlossaryUpdate, user: dict = D
 
     row = await service.update_glossary(
         glossary_id, body.term, body.description,
-        updated_by_part=user["part"], updated_by_user_id=user["id"],
+        updated_by_user_id=user["id"],
     )
     if not row:
         raise HTTPException(status_code=404, detail="Glossary term not found")
@@ -318,7 +319,6 @@ async def bulk_create(body: BulkCreateRequest, user: dict = Depends(get_current_
             items=[item.model_dump() for item in body.items],
             source_file=body.source_file,
             source_type=body.source_type,
-            created_by_part=user["part"],
             created_by_user_id=user["id"],
             after_activation=_glossary_after_activation(body.namespace, combined_text, user, max_chars=20000),
             confirm_replace=body.confirm_replace,
@@ -418,7 +418,6 @@ async def import_csv(
         items=items,
         source_file=file.filename,
         source_type="csv_import",
-        created_by_part=user["part"],
         created_by_user_id=user["id"],
     )
     return result
@@ -450,7 +449,6 @@ async def import_text_split(body: _TextSplitBody, user: dict = Depends(get_curre
         items=items,
         source_file="텍스트 직접입력",
         source_type="paste_split",
-        created_by_part=user["part"],
         created_by_user_id=user["id"],
     )
     return {**result, "chunks": len(chunks)}
@@ -611,7 +609,7 @@ async def _run_auto_glossary(namespace: str, raw_text: str, user: dict, *, max_c
             try:
                 await service.create_glossary(
                     namespace, term_data["term"], term_data.get("description", ""),
-                    created_by_part=user["part"], created_by_user_id=user["id"],
+                    created_by_user_id=user["id"],
                 )
                 count += 1
             except Exception:
@@ -689,7 +687,6 @@ async def import_file(
         items=items,
         source_file=file.filename,
         source_type="file_upload",
-        created_by_part=user["part"],
         created_by_user_id=user["id"],
         # 용어 추출은 job 성공 후에만(개수는 job 행에 기록) — 예전엔 여기서 바로 실행했다
         after_activation=_glossary_after_activation(namespace, doc.raw_text, user) if auto_glossary else None,
@@ -814,7 +811,6 @@ async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current
         items=items,
         source_file=body.url,
         source_type=doc.source_type,
-        created_by_part=user["part"],
         created_by_user_id=user["id"],
         after_activation=_glossary_after_activation(body.namespace, doc.raw_text, user) if body.auto_glossary else None,
     )

@@ -35,7 +35,6 @@ class KnowledgeOut(BaseModel):
     source_file: Optional[str] = None
     source_chunk_idx: Optional[int] = None
     source_type: Optional[str] = None
-    created_by_part: Optional[str] = None
     created_by_user_id: Optional[int] = None
     created_by_username: Optional[str] = None
     created_at: str
@@ -122,7 +121,7 @@ class GlossaryOut(BaseModel):
     namespace: str
     term: str
     description: str
-    created_by_part: Optional[str] = None
+    source: Optional[str] = None            # 출처: policy_doc(정책서 최종본) / NULL(사람·AI 등록 — 등록자 표시)
     created_by_user_id: Optional[int] = None
     created_by_username: Optional[str] = None
     synonyms: list[GlossarySynonymOut] = []

@@ -3,7 +3,7 @@ export interface User {
   id: number;
   username: string;
   role: 'admin' | 'user' | 'viewer';
-  part: string;
+  part: string | null;   // 소속 없음 가능(슈퍼어드민은 역할, 2026-10-20)
   is_active: boolean;
   has_llm_credentials: boolean;
   has_confluence_pat?: boolean;
@@ -20,6 +20,7 @@ export interface Part {
   id: number;
   name: string;
   created_at: string;
+  team?: string | null;   // 조직: 팀 > 파트
   user_count?: number;
 }
 
@@ -38,6 +39,9 @@ export interface KnowledgeCategory {
 }
 
 export interface NamespaceDetail extends Namespace {
+  id: number;
+  kind?: string;
+  parent_name?: string | null;   // 상위 업무 영역
   owner_part?: string | null;
   knowledge_count: number;
   glossary_count: number;
@@ -60,7 +64,6 @@ export interface KnowledgeItem {
   base_weight: number;
   category?: string | null;
   status?: KnowledgeStatus;
-  created_by_part?: string | null;
   created_by_user_id?: number | null;
   created_by_username?: string | null;
   created_at: string;
@@ -86,7 +89,7 @@ export interface GlossaryItem {
   namespace: string;
   term: string;
   description: string;
-  created_by_part?: string | null;
+  source?: string | null;   // policy_doc = 정책서 최종본
   created_by_user_id?: number | null;
   created_by_username?: string | null;
   created_at: string;

@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from core.dependencies import get_current_user, check_namespace_ownership, get_current_admin
+from core.dependencies import get_current_user, check_namespace_ownership, check_namespace_read, get_current_admin
 from core.security import get_user_llm_credentials
 from service.email_voc import (
     delegated_auth, service, teams_notify, routing_service, pipeline, scheduler, graph_client, pattern_detection,
@@ -85,7 +85,7 @@ async def update_collection_settings(body: EmailCollectionSettingsUpdate, admin:
 
 @router.get("/routing", response_model=list[VocRoutingOut])
 async def list_voc_routing(namespace: str, user: dict = Depends(get_current_user)):
-    await check_namespace_ownership(namespace, user)
+    await check_namespace_read(namespace, user)
     return await routing_service.list_routing(namespace)
 
 
@@ -113,7 +113,8 @@ async def update_voc_routing(routing_id: int, namespace: str, body: VocRoutingUp
 @router.delete("/routing/{routing_id}", status_code=204)
 async def delete_voc_routing(routing_id: int, namespace: str, user: dict = Depends(get_current_user)):
     await check_namespace_ownership(namespace, user)
-    await routing_service.delete_routing(routing_id, namespace)
+    if not await routing_service.delete_routing(routing_id, namespace):
+        raise HTTPException(status_code=404, detail="메일함 담당을 찾을 수 없습니다.")
 
 
 @router.get("/mail-folders", response_model=list[MailFolderOut])
@@ -216,7 +217,7 @@ async def get_history(
     mismatch_only: bool = False, keyword: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
-    await check_namespace_ownership(namespace, user)
+    await check_namespace_read(namespace, user)
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     return await pipeline.list_history(
@@ -235,7 +236,7 @@ async def get_knowledge_refs(
     ids는 콤마 구분 문자열(예: "4570,251,1001")로 받는다 — 쿼리 파라미터로
     숫자 배열을 넘기는 표준 방식이 없어 프론트에서 join(',')해 보낸다.
     """
-    await check_namespace_ownership(namespace, user)
+    await check_namespace_read(namespace, user)
     try:
         knowledge_ids = [int(x) for x in ids.split(",") if x.strip()]
     except ValueError:
@@ -247,19 +248,19 @@ async def get_knowledge_refs(
 
 @router.get("/stats", response_model=VocStatsOut)
 async def get_voc_stats(namespace: str, user: dict = Depends(get_current_user)):
-    await check_namespace_ownership(namespace, user)
+    await check_namespace_read(namespace, user)
     return await pipeline.get_voc_stats(namespace)
 
 
 @router.get("/clusters", response_model=list[VocClusterOut])
 async def get_voc_clusters(namespace: str, user: dict = Depends(get_current_user)):
-    await check_namespace_ownership(namespace, user)
+    await check_namespace_read(namespace, user)
     return await pattern_detection.list_clusters(namespace)
 
 
 @router.get("/clusters/{cluster_id}/members", response_model=list[VocClusterMemberOut])
 async def get_voc_cluster_members(cluster_id: int, namespace: str, user: dict = Depends(get_current_user)):
-    await check_namespace_ownership(namespace, user)
+    await check_namespace_read(namespace, user)
     return await pattern_detection.get_cluster_members(namespace, cluster_id)
 
 

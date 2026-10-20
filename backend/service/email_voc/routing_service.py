@@ -121,9 +121,21 @@ async def get_graph_credentials_decrypted() -> Optional[dict]:
 
 # ─── §10 담당자 라우팅 매핑 (ops_voc_routing) ─────────────────────────────────
 
-_ROUTING_COLUMNS = """id, part, mailbox_upn, teams_webhook_url, oncall_contact_name,
-                      oncall_contact_phone, mail_folder_id, mail_folder_name,
-                      is_active, created_at::text, updated_at::text"""
+# 담당 파트는 연결(part_id, 필수)로 — 파트 이름은 바뀔 수 있어 이름(글자)을 들고 있으면 끊긴다(2026-10-20, 옛 글자 칸은 삭제).
+# 응답의 part는 지금 이름을 조인해 돌려준다(화면·Teams 알림·오배치 판단 프롬프트가 쓰는 모양 그대로).
+_ROUTING_SELECT = """SELECT r.id, p.name AS part, r.part_id, r.mailbox_upn, r.teams_webhook_url,
+                            r.oncall_contact_name, r.oncall_contact_phone, r.mail_folder_id, r.mail_folder_name,
+                            r.is_active, r.created_at::text, r.updated_at::text
+                     FROM ops_voc_routing r LEFT JOIN ops_part p ON p.id = r.part_id"""
+
+
+async def _part_id(conn, name: Optional[str]) -> Optional[int]:
+    if not name:
+        raise ValueError("담당 파트를 골라 주세요.")
+    pid = await conn.fetchval("SELECT id FROM ops_part WHERE name = $1", name)
+    if pid is None:
+        raise ValueError(f"없는 파트입니다: {name}")
+    return pid
 
 
 async def list_routing(namespace: str) -> list[dict]:
@@ -131,10 +143,7 @@ async def list_routing(namespace: str) -> list[dict]:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             return []
-        rows = await conn.fetch(
-            f"SELECT {_ROUTING_COLUMNS} FROM ops_voc_routing WHERE namespace_id = $1 ORDER BY part",
-            ns_id,
-        )
+        rows = await conn.fetch(f"{_ROUTING_SELECT} WHERE r.namespace_id = $1 ORDER BY 2", ns_id)
     return [{**dict(r), "namespace": namespace} for r in rows]
 
 
@@ -149,14 +158,15 @@ async def create_routing(namespace: str, data: dict) -> dict:
         )
         if existing:
             raise ValueError(f"이미 등록된 메일함입니다: {data['mailbox_upn']}")
+        part_id = await _part_id(conn, data.get("part"))
         try:
-            row = await conn.fetchrow(
-                f"""INSERT INTO ops_voc_routing
-                        (namespace_id, part, mailbox_upn, teams_webhook_url, oncall_contact_name,
+            new_id = await conn.fetchval(
+                """INSERT INTO ops_voc_routing
+                        (namespace_id, part_id, mailbox_upn, teams_webhook_url, oncall_contact_name,
                          oncall_contact_phone, mail_folder_id, mail_folder_name)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    RETURNING {_ROUTING_COLUMNS}""",
-                ns_id, data["part"], data["mailbox_upn"], data.get("teams_webhook_url"),
+                    RETURNING id""",
+                ns_id, part_id, data["mailbox_upn"], data.get("teams_webhook_url"),
                 data.get("oncall_contact_name"), data.get("oncall_contact_phone"),
                 data.get("mail_folder_id"), data.get("mail_folder_name"),
             )
@@ -165,6 +175,7 @@ async def create_routing(namespace: str, data: dict) -> dict:
             # 등록하려는 요청이 겹치면 DB 제약이 최종 방어선이 되므로 여기서도 같은
             # 친절한 메시지로 변환한다 (그대로 두면 500 UniqueViolationError로 샘).
             raise ValueError(f"이미 등록된 메일함입니다: {data['mailbox_upn']}")
+        row = await conn.fetchrow(f"{_ROUTING_SELECT} WHERE r.id = $1", new_id)
     return {**dict(row), "namespace": namespace}
 
 
@@ -187,22 +198,23 @@ async def update_routing(routing_id: int, namespace: str, updates: dict) -> Opti
             v = updates.get(key)
             return v if v is not None else current[key]
 
+        part_id = await _part_id(conn, updates["part"]) if updates.get("part") is not None else current["part_id"]
         try:
-            row = await conn.fetchrow(
-                f"""UPDATE ops_voc_routing
-                    SET part=$1, mailbox_upn=$2, teams_webhook_url=$3,
+            await conn.execute(
+                """UPDATE ops_voc_routing
+                    SET part_id=$1, mailbox_upn=$2, teams_webhook_url=$3,
                         oncall_contact_name=$4, oncall_contact_phone=$5, is_active=$6,
                         mail_folder_id=$7, mail_folder_name=$8,
                         updated_at=NOW()
-                    WHERE id=$9 AND namespace_id=$10
-                    RETURNING {_ROUTING_COLUMNS}""",
-                _pick("part"), _pick("mailbox_upn"), _pick("teams_webhook_url"),
+                    WHERE id=$9 AND namespace_id=$10""",
+                part_id, _pick("mailbox_upn"), _pick("teams_webhook_url"),
                 _pick("oncall_contact_name"), _pick("oncall_contact_phone"), _pick("is_active"),
                 _pick("mail_folder_id"), _pick("mail_folder_name"),
                 routing_id, ns_id,
             )
         except asyncpg.exceptions.UniqueViolationError:
             raise ValueError(f"이미 등록된 메일함입니다: {_pick('mailbox_upn')}")
+        row = await conn.fetchrow(f"{_ROUTING_SELECT} WHERE r.id = $1", routing_id)
     return {**dict(row), "namespace": namespace}
 
 

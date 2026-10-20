@@ -469,6 +469,8 @@ class TestImportExcelAtomicSheet:
 
     def _setup(self, monkeypatch, patch_db, *, fail_on_chunk_insert=None):
         conn = patch_db
+        # 이 클래스는 시트 원자성만 본다 — 정책서 최종본 영역 차단(가짜 연결의 fetchval이 늘 1이라 걸림)은 따로 시험
+        monkeypatch.setattr(service, "_ensure_excel_part", AsyncMock())
         events: list[str] = []
 
         class _Tx:
@@ -696,3 +698,22 @@ class TestReembedChunks:
         monkeypatch.setattr(service, "embedding_service", emb)
         await service.reembed_chunks_if_needed()
         emb.embed_batch.assert_not_called()
+
+
+
+class TestExcelBlockedWhereWholeBodyPolicies:
+    """정책서 최종본(원문 통째)이 있는 업무 영역엔 엑셀 경로를 막는다 — 영역 종류가 아니라 내용으로(2026-10-20)."""
+
+    @pytest.mark.asyncio
+    async def test_blocked_when_whole_body_policy_exists(self):
+        conn = MagicMock()
+        conn.fetchval = AsyncMock(return_value=True)
+        with pytest.raises(ValueError, match="엑셀로 올릴 수 없습니다"):
+            await service._ensure_excel_part(conn, 1)
+        assert "v0_whole" in conn.fetchval.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_allowed_otherwise(self):
+        conn = MagicMock()
+        conn.fetchval = AsyncMock(return_value=False)
+        await service._ensure_excel_part(conn, 1)

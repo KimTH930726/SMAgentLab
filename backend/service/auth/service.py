@@ -31,6 +31,9 @@ async def register_user(
 ) -> dict:
     """사용자 등록. 실패 시 RegisterError 발생.
 
+    가입은 조회 전용(viewer)으로 시작하고 관리자가 사용자 관리에서 승인해야 일반 사용자가 된다(2026-10-20 사용자 결정, 리뷰 M3) —
+    가입은 인증 없이 열려 있고 파트는 고를 수 있어서, 바로 user가 되면 그 파트 담당 업무 영역의 지식·정책을 곧장 고칠 수 있었다.
+
     llm_credentials: {client_id, client_secret, user_id} 트리플 (선택)
     """
     # bcrypt는 의도적으로 느려서(~100-300ms) 동기 호출하면 이벤트루프가 그 동안
@@ -46,18 +49,13 @@ async def register_user(
             raise RegisterError("서버에 암호화 키가 설정되지 않아 자격증명을 등록할 수 없습니다.", 500)
 
     async with get_conn() as conn:
-        # 파트 id 조회(관리자가 속한 파트는 GET /parts와 동일하게 가입 대상에서 제외 —
-        # 그렇지 않으면 API를 직접 호출해 관리자 파트로 가입, 그 파트가 소유한 모든
-        # 네임스페이스에 대한 CRUD 권한을 자가 획득할 수 있었다) + 사용자 중복 확인
+        # 파트 id 조회 + 사용자 중복 확인. 예전엔 관리자가 속한 파트를 가입 대상에서 뺐다(관리자 파트로 가입해 그 파트 소유 영역의
+        # 권한을 얻는 걸 막으려고). 2026-10-20부터 슈퍼어드민은 역할(role)이고 파트에 속하지 않으며, 담당이 없는 영역은 관리자만
+        # 고친다 — 그 전제가 사라져 제외 규칙도 뺐다(남겨 두면 관리자를 실제 파트에 넣는 순간 그 파트 가입이 막힌다).
         check = await conn.fetchrow(
             """
             SELECT
-                (SELECT id FROM ops_part p WHERE p.name = $1
-                    AND p.id NOT IN (
-                        SELECT DISTINCT part_id FROM ops_user
-                        WHERE role = 'admin' AND part_id IS NOT NULL
-                    )
-                ) AS part_id,
+                (SELECT id FROM ops_part p WHERE p.name = $1) AS part_id,
                 EXISTS(SELECT 1 FROM ops_user WHERE username = $2) AS user_exists
             """, part, username,
         )
@@ -69,8 +67,8 @@ async def register_user(
         part_id = check["part_id"]
         row = await conn.fetchrow(
             """
-            INSERT INTO ops_user (username, hashed_password, encrypted_llm_credentials, part_id)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO ops_user (username, hashed_password, encrypted_llm_credentials, part_id, role)
+            VALUES ($1, $2, $3, $4, 'viewer')
             RETURNING id, username, role, part_id, is_active, encrypted_llm_credentials, created_at::text
             """,
             username, hashed, encrypted_creds, part_id,
@@ -158,47 +156,30 @@ async def list_users() -> list[dict]:
 
 
 async def update_user(user_id: int, role: Optional[str] = None, part: Optional[str] = None, is_active: Optional[bool] = None) -> Optional[dict]:
-    async with get_conn() as conn:
-        current = await conn.fetchrow(
-            """
-            SELECT u.*, p.name AS part_name
-            FROM ops_user u
-            LEFT JOIN ops_part p ON u.part_id = p.id
-            WHERE u.id = $1
-            """, user_id,
-        )
-        if not current:
-            return None
-
-        new_role = role if role is not None else current["role"]
-        new_active = is_active if is_active is not None else current["is_active"]
-
-        # part 변경 시 part_id lookup
+    """보낸 칸만 바꾼다(COALESCE 한 문장) — 읽은 값 전체를 다시 쓰면 승인과 동시에 바뀐 소속을 옛 값으로 덮었다(리뷰 L2).
+    없는 파트는 400 — 예전엔 소속을 조용히 비우고 응답엔 그 이름을 돌려줬다(막 쓰기 테스트 10/20)."""
+    async with get_conn() as conn, conn.transaction():
+        new_part_id = None
         if part is not None:
-            new_part_id = await conn.fetchval("SELECT id FROM ops_part WHERE name = $1", part)
-        else:
-            new_part_id = current["part_id"]
-
+            # KEY SHARE: 이 파트를 지우는 쪽(delete_part, FOR UPDATE)과 순서를 맞춘다
+            new_part_id = await conn.fetchval("SELECT id FROM ops_part WHERE name = $1 FOR KEY SHARE", part)
+            if new_part_id is None:
+                raise ValueError(f"없는 파트입니다: {part}")
         row = await conn.fetchrow(
             """
-            UPDATE ops_user SET role = $2, part_id = $3, is_active = $4
-            WHERE id = $1
-            RETURNING id, username, role, part_id, is_active,
-                      (encrypted_llm_credentials IS NOT NULL) AS has_llm_credentials,
-                      created_at::text
+            UPDATE ops_user u SET role = COALESCE($2, u.role), part_id = COALESCE($3, u.part_id),
+                                  is_active = COALESCE($4, u.is_active)
+            WHERE u.id = $1
+            RETURNING u.id, u.username, u.role, u.part_id, u.is_active,
+                      (u.encrypted_llm_credentials IS NOT NULL) AS has_llm_credentials, u.created_at::text,
+                      (SELECT name FROM ops_part p WHERE p.id = u.part_id) AS part
             """,
-            user_id, new_role, new_part_id, new_active,
+            user_id, role, new_part_id, is_active,
         )
-        if not row:
-            return None
-        result = dict(row)
-        # part name 보충
-        if part is not None:
-            result["part"] = part
-        else:
-            result["part"] = current["part_name"]
+    if not row:
+        return None
     invalidate_user_cache(user_id)
-    return result
+    return dict(row)
 
 
 async def delete_user(user_id: int) -> bool:
@@ -269,34 +250,20 @@ async def delete_confluence_pat(user_id: int) -> bool:
 
 # ── 파트 CRUD ────────────────────────────────────────────────────────────────
 
-async def list_parts(exclude_admin_parts: bool = False) -> list[dict]:
+async def list_parts() -> list[dict]:
+    """파트 목록(조직: 팀 > 파트, 2026-10-20). 팀이 없는 파트는 team=None."""
     async with get_conn() as conn:
-        if exclude_admin_parts:
-            rows = await conn.fetch(
-                """
-                SELECT p.id, p.name, p.created_at::text,
-                       COUNT(u.id) AS user_count
-                FROM ops_part p
-                LEFT JOIN ops_user u ON u.part_id = p.id
-                WHERE p.id NOT IN (
-                    SELECT DISTINCT part_id FROM ops_user
-                    WHERE role = 'admin' AND part_id IS NOT NULL
-                )
-                GROUP BY p.id, p.name, p.created_at
-                ORDER BY p.name
-                """
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT p.id, p.name, p.created_at::text,
-                       COUNT(u.id) AS user_count
-                FROM ops_part p
-                LEFT JOIN ops_user u ON u.part_id = p.id
-                GROUP BY p.id, p.name, p.created_at
-                ORDER BY p.name
-                """
-            )
+        rows = await conn.fetch(
+            """
+            SELECT p.id, p.name, p.created_at::text, t.name AS team,
+                   COUNT(u.id) AS user_count
+            FROM ops_part p
+            LEFT JOIN ops_team t ON t.id = p.team_id
+            LEFT JOIN ops_user u ON u.part_id = p.id
+            GROUP BY p.id, p.name, p.created_at, t.name
+            ORDER BY t.name NULLS LAST, p.name
+            """
+        )
     return [dict(r) for r in rows]
 
 
@@ -326,18 +293,15 @@ async def rename_part(part_id: int, new_name: str) -> Optional[dict]:
             "UPDATE ops_part SET name = $2 WHERE id = $1 RETURNING id, name, created_at::text",
             part_id, new_name,
         )
-        if row:
-            # 비정규화 부서명 컬럼 cascade 업데이트 — ops_namespace는 owner_part_id(FK)만
-            # 갖고 있어 이름 변경과 무관하게 그대로 유효하므로 별도 갱신이 필요 없다.
-            # (예전에 존재하지 않는 owner_part 컬럼에 UPDATE를 시도해 신규 설치에서
-            # 파트 이름 변경이 항상 500으로 실패하던 버그가 있었음)
-            await conn.execute("UPDATE rag_knowledge SET created_by_part = $2 WHERE created_by_part = $1", old_name, new_name)
-            await conn.execute("UPDATE rag_glossary SET created_by_part = $2 WHERE created_by_part = $1", old_name, new_name)
+        # 파트는 모두 id로 연결된다(사용자·담당 영역·VOC) — 이름만 바뀌고 따라 고칠 데이터가 없다(2026-10-20, 파트 이름 글자 컬럼 삭제)
     return dict(row) if row else None
 
 
 async def delete_part(part_id: int) -> bool:
-    async with get_conn() as conn:
+    async with get_conn() as conn, conn.transaction():
+        # 행을 잠가 확인~삭제 사이에 이 파트로 사용자 이동·VOC 지정이 끼어들지 못하게(그쪽은 KEY SHARE를 잡아 기다린다)
+        if await conn.fetchval("SELECT id FROM ops_part WHERE id = $1 FOR UPDATE", part_id) is None:
+            return False
         # 해당 파트에 사용자가 있는지 확인
         user_count = await conn.fetchval(
             "SELECT COUNT(*) FROM ops_user WHERE part_id = $1",
@@ -345,14 +309,16 @@ async def delete_part(part_id: int) -> bool:
         )
         if user_count > 0:
             return False  # 사용자가 있으면 삭제 불가
-        # 이 파트가 소유한 네임스페이스가 있는지 확인 — FK가 ON DELETE SET NULL이라
-        # 체크 없이 삭제하면 owner_part_id가 NULL이 되어 check_namespace_ownership
-        # 규칙상 "공통 파트"(모든 로그인 사용자 허용)로 조용히 바뀌어버린다
+        # 이 파트가 담당하는 업무 영역이 있는지 확인 — FK가 ON DELETE SET NULL이라 체크 없이 지우면
+        # 담당이 조용히 사라진다(담당 없는 영역은 관리자만 수정 — 담당 파트 사람들이 갑자기 못 고치게 됨)
         namespace_count = await conn.fetchval(
             "SELECT COUNT(*) FROM ops_namespace WHERE owner_part_id = $1",
             part_id,
         )
         if namespace_count > 0:
+            return False
+        # VOC 메일함 담당도 확인 — 연결(part_id)은 필수라 담당 파트를 먼저 바꿔야 한다(리뷰 M2: 지우면 VOC 화면·수집이 깨졌다)
+        if await conn.fetchval("SELECT COUNT(*) FROM ops_voc_routing WHERE part_id = $1", part_id):
             return False
         result = await conn.execute("DELETE FROM ops_part WHERE id = $1", part_id)
     return "DELETE 1" in result

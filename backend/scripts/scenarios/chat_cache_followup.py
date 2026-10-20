@@ -9,7 +9,7 @@ import json
 import urllib.parse
 import urllib.request
 
-API, NS = "http://localhost:8000", "온라인스토어 DB"
+API, NS = "http://localhost:8000", "온라인스토어"
 
 
 def _req(method, path, body=None, tok=None):

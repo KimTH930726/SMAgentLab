@@ -28,10 +28,10 @@ track2 = _load("service.policy.track2", "service/policy/track2.py")
 
 class TestNamespaceForFile:
     def test_online_store_file_maps_correctly(self):
-        assert track2._namespace_for_file("비즈니스정책서_온라인스토어_재구성.xlsx") == "온라인스토어 DB"
+        assert track2._namespace_for_file("비즈니스정책서_온라인스토어_재구성.xlsx") == "온라인스토어"
 
     def test_delivus_file_maps_correctly(self):
-        assert track2._namespace_for_file("비즈니스정책서_딜리버스_외부서비스_재구성.xlsx") == "딜리버스 DB"
+        assert track2._namespace_for_file("비즈니스정책서_딜리버스_외부서비스_재구성.xlsx") == "딜리버스"
 
     def test_unknown_file_returns_none(self):
         assert track2._namespace_for_file("모르는파일.xlsx") is None

@@ -31,7 +31,10 @@ export default function Register() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password || !part) return;
+    if (!username.trim() || !password || !part) {
+      setError(!username.trim() ? '아이디를 입력해 주세요.' : !part ? '파트를 골라 주세요.' : '비밀번호를 입력해 주세요.');
+      return;
+    }
 
     if (password !== confirmPw) {
       setError('비밀번호가 일치하지 않습니다.');
@@ -153,6 +156,9 @@ export default function Register() {
               </p>
             )}
 
+            <p className="text-xs text-slate-500" title="관리자가 사용자 관리에서 승인하면 소속 파트가 담당하는 업무 영역을 수정할 수 있습니다.">
+              가입하면 조회 전용으로 시작해요. 관리자가 승인하면 수정할 수 있어요.
+            </p>
             <Button type="submit" loading={loading} className="w-full" size="lg">
               가입하기
             </Button>

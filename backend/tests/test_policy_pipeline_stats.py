@@ -80,7 +80,7 @@ class TestGetPipelineStats:
             },
             trend_rows=[{"day": date(2026, 9, 4), "n": 378}],
         )
-        result = await pipeline_stats.get_pipeline_stats("온라인스토어 DB")
+        result = await pipeline_stats.get_pipeline_stats("온라인스토어")
         assert result["policy_item"] == 378
         assert result["policy_param"] == 389
         assert result["policy_chunk"] == 597

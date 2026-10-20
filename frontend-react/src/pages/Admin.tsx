@@ -49,6 +49,7 @@ interface Tab {
   label: string;
   icon: React.ReactNode;
   adminOnly?: boolean;
+  viewerOk?: boolean;   // 조회 전용(가입 후 승인 대기)에게도 보이는 탭 — 나머지는 서버가 403이라 숨긴다
   agentScope?: 'knowledge_rag' | 'all';
 }
 
@@ -63,7 +64,7 @@ const TABS: Tab[] = [
   // 공통 탭
   { id: 'cache',        label: '캐시 현황',             icon: <BarChart2 className="w-4 h-4" />, adminOnly: true, agentScope: 'knowledge_rag' },
   { id: 'stats',        label: '통계',                  icon: <BarChart2 className="w-4 h-4" />, agentScope: 'knowledge_rag' },
-  { id: 'llm',          label: '시스템 설정',            icon: <Settings className="w-4 h-4" />, agentScope: 'all' },
+  { id: 'llm',          label: '시스템 설정',            icon: <Settings className="w-4 h-4" />, viewerOk: true, agentScope: 'all' },
   { id: 'users',        label: '사용자 관리',            icon: <Users className="w-4 h-4" />,    adminOnly: true, agentScope: 'all' },
 ];
 
@@ -74,6 +75,7 @@ export default function Admin() {
 
   const visibleTabs = TABS.filter((tab) => {
     if (tab.adminOnly && !isAdmin) return false;
+    if (user?.role === 'viewer' && !tab.viewerOk) return false;
     if (!tab.agentScope || tab.agentScope === 'all') return true;
     return tab.agentScope === selectedAgent;
   });
@@ -89,6 +91,12 @@ export default function Admin() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      {user?.role === 'viewer' && (
+        <div className="flex-shrink-0 px-6 py-2 text-xs bg-amber-50 text-amber-800 border-b border-amber-200 dark:bg-amber-900/30 dark:text-amber-200 dark:border-amber-700/40"
+          title="사용자 관리에서 관리자가 승인하면 소속 파트가 담당하는 업무 영역의 관리 화면을 쓸 수 있습니다.">
+          승인 대기 중이에요 — 관리자가 승인하면 관리 화면을 쓸 수 있어요. 채팅은 지금도 쓸 수 있어요.
+        </div>
+      )}
       {/* Tab bar */}
       <div className="flex-shrink-0 border-b border-slate-700 bg-slate-800 px-6">
         <div className="flex gap-1 overflow-x-auto">

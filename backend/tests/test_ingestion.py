@@ -400,7 +400,7 @@ class TestBulkIngestionStagedActivation:
         assert len(inserts) == 2  # 배치 크기 1 → 배치 2개
         # 배치 도중엔 어느 행도 active가 아니다 — 검색 허용목록(status='active')에 안 걸림
         for rows in inserts:
-            assert rows[0][11] == "staging"
+            assert rows[0][10] == "staging"
         # 전환은 모든 배치 이후 딱 한 번, 이 job의 스테이징 행만 대상
         activations = self._activation_updates(calls)
         assert activations == [(7,)]
@@ -421,7 +421,7 @@ class TestBulkIngestionStagedActivation:
 
         assert result["pending"] == 2
         inserts = [rows for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q]
-        assert all(rows[0][11] == "staging_review" for rows in inserts)
+        assert all(rows[0][10] == "staging_review" for rows in inserts)
         activation_sql = next(q for q, _ in calls["execute"] if "UPDATE rag_knowledge" in q and "'active'" in q)
         assert "'pending_review'" in activation_sql and "'staging_review'" in activation_sql
 
@@ -516,7 +516,7 @@ class TestBulkIngestionStagedActivation:
         assert all(c.kwargs["replacing_confluence_pages"] == ["p1"] for c in similar.await_args_list)
         # 원본 식별자가 행에 실제로 저장됨(rows 튜플 13·14번째 = confluence_page_id/version)
         inserts = [rows for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q]
-        assert inserts[0][0][13] == "p1" and inserts[0][0][14] == 3
+        assert inserts[0][0][12] == "p1" and inserts[0][0][13] == 3
 
     # ── 원문 원장: 전환 직전(잠금 안) 다시 확인 — 리뷰 2026-10-12 ──
     def _ledger_state(self, *, replacing, touched=None):
@@ -714,7 +714,7 @@ class TestCreateKnowledgeCategoryAutoResolve:
         fake_conn.fetchrow = AsyncMock(return_value={
             "id": 1, "namespace_id": 1, "content": "카테고리 없는 지식", "base_weight": 1.0,
             "category": "자동배정됨", "status": "active",
-            "created_by_part": None, "created_by_user_id": None,
+            "created_by_user_id": None,
             "created_at": "2026-09-24", "updated_at": "2026-09-24",
         })
 

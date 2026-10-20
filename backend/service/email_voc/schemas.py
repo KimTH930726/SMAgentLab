@@ -3,6 +3,12 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 from pydantic import BaseModel, Field, model_validator
 
+from service.validation import Name, name_type
+
+# 메일함 주소(공백만·앞뒤 공백 금지 — 막 쓰기 테스트 10/20), 연락처 길이 상한(초과 시 500이던 것)
+Mailbox = name_type(max_length=200, allow_slash=True)
+ShortText = name_type(max_length=50, min_length=0, allow_slash=True)
+
 
 class EmailAnalyzeRequest(BaseModel):
     """§11 Track A #2 테스트 진입점 — 실제 Graph API 연동 전, 텍스트 직접 입력으로
@@ -48,11 +54,11 @@ class EmailCollectionSettingsUpdate(BaseModel):
 class VocRoutingCreate(BaseModel):
     """§10 담당자 라우팅 매핑 — 파트별 메일함 1개당 1행(§3 Q7 결정: 메일함 분리)."""
     namespace: str
-    part: str = Field(min_length=1)
-    mailbox_upn: str = Field(min_length=1)
-    teams_webhook_url: Optional[str] = None
-    oncall_contact_name: Optional[str] = None
-    oncall_contact_phone: Optional[str] = None
+    part: Name
+    mailbox_upn: Mailbox
+    teams_webhook_url: Optional[str] = Field(default=None, max_length=1000)
+    oncall_contact_name: Optional[ShortText] = None
+    oncall_contact_phone: Optional[ShortText] = None
     mail_folder_id: Optional[str] = None
     mail_folder_name: Optional[str] = None
 
@@ -60,11 +66,11 @@ class VocRoutingCreate(BaseModel):
 class VocRoutingUpdate(BaseModel):
     # min_length=1 — None(값 변경 안 함)은 허용하되, 빈 문자열로 지우는 건 금지
     # (routing_service.update_routing은 part/mailbox_upn 없이는 파이프라인이 동작 못 함)
-    part: Optional[str] = Field(default=None, min_length=1)
-    mailbox_upn: Optional[str] = Field(default=None, min_length=1)
-    teams_webhook_url: Optional[str] = None
-    oncall_contact_name: Optional[str] = None
-    oncall_contact_phone: Optional[str] = None
+    part: Optional[Name] = None
+    mailbox_upn: Optional[Mailbox] = None
+    teams_webhook_url: Optional[str] = Field(default=None, max_length=1000)
+    oncall_contact_name: Optional[ShortText] = None
+    oncall_contact_phone: Optional[ShortText] = None
     is_active: Optional[bool] = None
     # mail_folder_*는 다른 필드와 달리 빈 문자열로 "지우는"(전체 메일함으로 되돌리는)
     # 것도 허용해야 하므로 min_length 제약을 두지 않는다.
@@ -75,7 +81,7 @@ class VocRoutingUpdate(BaseModel):
 class VocRoutingOut(BaseModel):
     id: int
     namespace: str
-    part: str
+    part: Optional[str] = None   # 담당 파트 연결이 없으면 None(마이그레이션 #78 보류 상태)
     mailbox_upn: str
     teams_webhook_url: Optional[str] = None
     oncall_contact_name: Optional[str] = None
@@ -123,7 +129,7 @@ class ManualCollectionRequest(BaseModel):
 
 class MailboxCollectionResult(BaseModel):
     mailbox_upn: str
-    part: str
+    part: Optional[str] = None   # 담당 파트 연결이 없으면 None(마이그레이션 #78 보류 상태)
     ok: bool
     error: Optional[str] = None
     fetched: int = 0

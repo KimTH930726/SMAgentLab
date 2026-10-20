@@ -50,14 +50,9 @@ async def mark_my_corrections_seen(body: SeenBody, user: dict = Depends(get_curr
 
 
 async def _require_reviewer(namespace: str, user: dict) -> None:
-    """정정 검토 권한 = 관리자 또는 그 네임스페이스 소유 파트 사용자. check_namespace_ownership은 소유 파트가 없는
-    (공용) 네임스페이스를 아무 사용자에게나 열어 주는데, 여기선 다른 사람의 채팅 질문·답변이 담겨 있고 승인이 곧 지식
-    변경이라 공용 네임스페이스는 관리자만 처리한다(/code-review)."""
-    if user.get("role") == "admin":
-        return
+    """정정 검토 권한 = 관리자 또는 그 업무 영역 담당 파트 사용자(담당 없는 영역은 관리자만). 예전엔 기본 규칙이 담당 없는 영역을
+    누구에게나 열어 줘서 여기서 한 번 더 막았다 — 2026-10-20부터 기본 규칙이 같아져 그대로 쓴다."""
     await check_namespace_ownership(namespace, user)
-    if not await service.is_part_owned_by(namespace, user):
-        raise HTTPException(status_code=403, detail="이 파트의 담당자만 정정 검토를 처리할 수 있습니다.")
 
 
 async def _require_item_owner(item_id: int, user: dict) -> None:

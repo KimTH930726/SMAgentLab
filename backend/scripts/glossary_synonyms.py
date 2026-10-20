@@ -7,7 +7,7 @@
   --write      DB(rag_glossary_synonym, #69 이후)에 저장. --from FILE이면 LLM을 다시 부르지 않고 그 파일을 넣는다
   --from FILE  LLM 대신 이 JSON을 쓴다(품질 게이트는 다시 적용). --out과 함께 쓰면 게이트만 다시 거친 파일을 만든다
 
-실행(컨테이너 안): python scripts/glossary_synonyms.py --out eval_out/synonyms.json [--namespace "온라인스토어 DB"]
+실행(컨테이너 안): python scripts/glossary_synonyms.py --out eval_out/synonyms.json [--namespace "온라인스토어"]
 """
 import argparse
 import asyncio

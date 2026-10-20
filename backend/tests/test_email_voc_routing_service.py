@@ -146,18 +146,28 @@ class TestCreateRouting:
     @pytest.mark.asyncio
     async def test_toctou_unique_violation_converted_to_value_error(self, patch_db):
         conn, _ = patch_db
-        conn.fetchval.return_value = None  # 사전체크는 통과
-        conn.fetchrow.side_effect = asyncpg.exceptions.UniqueViolationError("dup")
+        # 사전체크 통과(None) → 파트 id(3) → INSERT에서 경합
+        conn.fetchval.side_effect = [None, 3, asyncpg.exceptions.UniqueViolationError("dup")]
         with pytest.raises(ValueError, match="이미 등록된 메일함"):
             await routing_service.create_routing("ns", {"part": "p", "mailbox_upn": "a@b.com"})
 
     @pytest.mark.asyncio
-    async def test_success_attaches_namespace(self, patch_db):
+    async def test_success_stores_part_link_and_returns_current_name(self, patch_db):
+        """담당 파트는 이름 대신 연결(part_id)로 저장 — 파트 이름이 바뀌어도 끊기지 않게(2026-10-20)."""
         conn, _ = patch_db
-        conn.fetchval.return_value = None
-        conn.fetchrow.return_value = {"id": 5, "part": "p", "mailbox_upn": "a@b.com"}
+        conn.fetchval.side_effect = [None, 3, 5]          # 사전체크 · 파트 id · 새 행 id
+        conn.fetchrow.return_value = {"id": 5, "part": "p", "part_id": 3, "mailbox_upn": "a@b.com"}
         result = await routing_service.create_routing("ns", {"part": "p", "mailbox_upn": "a@b.com"})
-        assert result == {"id": 5, "part": "p", "mailbox_upn": "a@b.com", "namespace": "ns"}
+        assert result == {"id": 5, "part": "p", "part_id": 3, "mailbox_upn": "a@b.com", "namespace": "ns"}
+        insert = conn.fetchval.call_args_list[2].args
+        assert "part_id" in insert[0] and insert[2] == 3      # 이름이 아니라 id
+
+    @pytest.mark.asyncio
+    async def test_unknown_part_rejected(self, patch_db):
+        conn, _ = patch_db
+        conn.fetchval.side_effect = [None, None]          # 사전체크 통과 · 파트 없음
+        with pytest.raises(ValueError, match="없는 파트"):
+            await routing_service.create_routing("ns", {"part": "없는파트", "mailbox_upn": "a@b.com"})
 
 
 class TestUpdateRouting:
@@ -179,18 +189,18 @@ class TestUpdateRouting:
     async def test_partial_update_falls_back_to_current_values(self, patch_db):
         conn, _ = patch_db
         current = {
-            "part": "old_part", "mailbox_upn": "old@b.com", "teams_webhook_url": None,
+            "part": "old_part", "part_id": 1, "mailbox_upn": "old@b.com", "teams_webhook_url": None,
             "oncall_contact_name": None, "oncall_contact_phone": None, "is_active": True,
             "mail_folder_id": None, "mail_folder_name": None,
         }
-        updated = {**current, "id": 1, "part": "new_part"}
+        updated = {**current, "id": 1, "part": "new_part", "part_id": 2}
         conn.fetchrow.side_effect = [current, updated]
+        conn.fetchval.return_value = 2                     # new_part의 id
         result = await routing_service.update_routing(1, "ns", {"part": "new_part"})
         assert result["part"] == "new_part"
-        # UPDATE 호출의 두 번째 위치 인자가 _pick("part") 결과("new_part")여야 함
-        update_call_args = conn.fetchrow.call_args_list[1].args
-        assert update_call_args[1] == "new_part"
-        assert update_call_args[2] == "old@b.com"  # 안 넘긴 필드는 기존값 유지
+        update_call_args = conn.execute.call_args_list[0].args
+        assert update_call_args[1] == 2                    # 담당 파트는 연결(id)로
+        assert update_call_args[2] == "old@b.com"          # 안 넘긴 필드는 기존값 유지
 
 
 class TestDeleteRouting:

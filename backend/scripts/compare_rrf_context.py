@@ -22,7 +22,7 @@ from service.llm.base import resolve_system_prompt
 from agents.knowledge_rag.knowledge import retrieval
 from service.policy import search as policy_search
 
-NAMESPACE = "딜리버스 DB"
+NAMESPACE = "딜리버스"
 TEST_QUESTIONS = [
     "쿠폰 재발급 언제 돼?",
     "배차 지연되면 어떻게 돼?",

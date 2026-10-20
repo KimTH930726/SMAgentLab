@@ -388,12 +388,13 @@ async def list_history(
         params.extend([limit, offset])
         rows = await conn.fetch(
             f"""
-            SELECT a.id, a.mailbox_upn, r.part, a.subject, a.sender,
+            SELECT a.id, a.mailbox_upn, p.name AS part, a.subject, a.sender,
                    a.received_at::text, a.category, a.severity, a.mismatch_flagged,
                    a.knowledge_ref_ids, a.resolution_draft, a.reasoning, a.status,
                    a.teams_sent_at::text, a.notify_error, a.created_at::text
             FROM ops_email_analysis a
             LEFT JOIN ops_voc_routing r ON a.routing_id = r.id
+            LEFT JOIN ops_part p ON p.id = r.part_id   -- 담당 파트는 연결로(이름은 지금 이름)
             WHERE {" AND ".join(conditions)}
             ORDER BY COALESCE(a.received_at, a.created_at) DESC
             LIMIT ${len(params) - 1} OFFSET ${len(params)}

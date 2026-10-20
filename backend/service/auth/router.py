@@ -87,14 +87,14 @@ async def refresh_token(body: RefreshRequest):
 
 @router.get("/parts", response_model=list[PartOut])
 async def get_parts():
-    """파트 목록 조회 (가입 폼용, 인증 불필요 — admin 전용 파트 제외)."""
-    return await service.list_parts(exclude_admin_parts=True)
+    """파트 목록 조회 (가입 폼용, 인증 불필요)."""
+    return await service.list_parts()
 
 
 @router.get("/parts/all", response_model=list[PartOut])
 async def get_all_parts(admin: dict = Depends(get_current_admin)):
-    """파트 목록 전체 조회 (관리자 전용, admin 파트 포함)."""
-    return await service.list_parts(exclude_admin_parts=False)
+    """파트 목록 전체 조회 (관리자 전용 — 지금은 가입용과 같다, 화면 호환으로 유지)."""
+    return await service.list_parts()
 
 
 # ── 인증 필요 엔드포인트 ─────────────────────────────────────────────────────
@@ -154,6 +154,8 @@ async def list_users(admin: dict = Depends(get_current_admin)):
 async def update_user(user_id: int, body: UserAdminUpdate, admin: dict = Depends(get_current_admin)):
     if user_id == admin["id"] and body.role is not None and body.role != "admin":
         raise HTTPException(status_code=400, detail="자기 자신의 관리자 권한은 해제할 수 없습니다.")
+    if user_id == admin["id"] and body.is_active is False:
+        raise HTTPException(status_code=400, detail="자기 자신은 비활성화할 수 없습니다.")
     updated = await service.update_user(user_id, role=body.role, part=body.part, is_active=body.is_active)
     if not updated:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
@@ -191,4 +193,4 @@ async def rename_part_endpoint(part_id: int, body: PartCreate, admin: dict = Dep
 async def delete_part(part_id: int, admin: dict = Depends(get_current_admin)):
     success = await service.delete_part(part_id)
     if not success:
-        raise HTTPException(status_code=400, detail="해당 파트에 소속된 사용자 또는 이 파트가 소유한 네임스페이스가 있어 삭제할 수 없습니다.")
+        raise HTTPException(status_code=400, detail="이 파트를 쓰는 곳이 있어 삭제할 수 없습니다 — 소속 사용자, 담당 업무 영역, VOC 메일함 담당을 먼저 옮겨 주세요.")

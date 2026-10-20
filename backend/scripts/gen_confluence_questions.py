@@ -5,7 +5,7 @@
 eval_confluence_structure.py / eval_confluence_integrated.py가 이 파일을 읽는다.
 
 실행(컨테이너 안):
-  python scripts/gen_confluence_questions.py --out eval_out/conf_questions_v2129.jsonl [--namespaces 외부서비스DB,딜리버스\\ DB]
+  python scripts/gen_confluence_questions.py --out eval_out/conf_questions_v2129.jsonl [--namespaces 외부서비스,딜리버스\\ DB]
 """
 import argparse
 import asyncio
@@ -53,6 +53,6 @@ async def main(out: str, namespaces: list[str]) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--namespaces", default="외부서비스DB,딜리버스 DB")
+    ap.add_argument("--namespaces", default="외부서비스,딜리버스")
     a = ap.parse_args()
     asyncio.run(main(a.out, [x.strip() for x in a.namespaces.split(",") if x.strip()]))

@@ -274,7 +274,7 @@ class TestApplyKnowledge:
     @pytest.mark.asyncio
     async def test_new_version_chain_and_old_deprecated(self):
         conn = _conn()
-        old = {"id": 5, "status": "active", "base_weight": 1.2, "category": "공통", "created_by_part": "p",
+        old = {"id": 5, "status": "active", "base_weight": 1.2, "category": "공통",
                "created_by_user_id": 3, "source_file": "f", "source_chunk_idx": 0, "source_type": "manual",
                "ingestion_job_id": 9, "logical_document_id": None, "version": None, "owner": None,
                "confluence_page_id": "p1", "confluence_version": 2, "heading_path": ["A"]}
@@ -285,7 +285,7 @@ class TestApplyKnowledge:
         assert new_id == 6
         args = conn.fetchval.await_args.args
         assert args[2] == "새 본문"
-        assert args[12] == 5 and args[13] == 2 and args[14] == 5  # logical_document_id=원본 id, version 2, supersedes
+        assert args[11] == 5 and args[12] == 2 and args[13] == 5  # logical_document_id=원본 id, version 2, supersedes
         calls = [c.args for c in conn.execute.await_args_list]
         assert any("status = 'deprecated'" in c[0] and c[1] == 5 for c in calls)
         # 이 지식으로 메운 지식 공백도 새 버전을 가리키게(2026-10-02) — 폐기된 옛 버전을 "메운 지식"으로 잡지 않게

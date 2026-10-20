@@ -579,7 +579,6 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
                       )}
                       <span>{new Date(item.updated_at !== item.created_at ? item.updated_at : item.created_at).toISOString().slice(0, 10)}</span>
                       {item.created_by_username && <span>{item.created_by_username}</span>}
-                      {item.created_by_part && <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>}
                     </div>
                   </div>
                 </div>

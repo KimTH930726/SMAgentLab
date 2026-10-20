@@ -354,11 +354,11 @@ def build_policy_context(result: PolicySearchResult) -> str:
     for p in result.params:
         value_str = f"{p.value}{p.unit or ''}" if p.value else "값 없음"
         condition_str = f" ({p.condition})" if p.condition else ""
-        category_str = (f" [파트: {p.part}]" if p.part else "") + (f" [분류: {' > '.join(p.category_path)}]" if p.category_path else "")
+        category_str = (f" [업무 영역: {p.part}]" if p.part else "") + (f" [분류: {' > '.join(p.category_path)}]" if p.category_path else "")
         parts.append(f"[정책 파라미터 · 정확 일치: {p.policy_name}{condition_str}]{category_str} {p.param_name} = {value_str}")
     for n in result.narratives:
         confidence = "높음" if n.score >= 0.6 else "보통" if n.score >= 0.4 else "낮음"
-        category_str = (f" [파트: {n.part}]" if n.part else "") + (f" [분류: {' > '.join(n.category_path)}]" if n.category_path else "")
+        category_str = (f" [업무 영역: {n.part}]" if n.part else "") + (f" [분류: {' > '.join(n.category_path)}]" if n.category_path else "")
         # chunk_text는 LLM이 분해한 조각 하나뿐이라, 한 항목이 여러 조각으로 쪼개졌을 때
         # (예: "1. 자사몰만 적용" 같은 적용범위 조건이 뒤 조각들과 분리되는 경우) 그 조각만
         # 보면 적용범위/전제조건이 빠진 채 LLM에 전달된다(2026-09-22 실측 확인 — 정책 378건

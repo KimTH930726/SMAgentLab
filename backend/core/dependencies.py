@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import time
 
+from typing import Optional
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -37,7 +39,10 @@ async def get_current_user(
     if not payload or payload.get("type") != "access":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다.")
 
-    uid = int(payload.get("sub") or 0)
+    try:
+        uid = int(payload.get("sub") or 0)
+    except (TypeError, ValueError):
+        uid = 0
     if not uid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="토큰에 사용자 정보가 없습니다.")
 
@@ -76,54 +81,49 @@ async def get_current_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
-def check_part_ownership(resource_part: str | None, user: dict) -> None:
-    """리소스의 created_by_part와 현재 사용자의 part를 비교.
-
-    Admin이면 무조건 통과, viewer면 파트 무관 항상 조회만(403), 같은 파트면 통과,
-    다르면 403.
-    """
-    if user["role"] == "admin":
-        return
-    if user["role"] == "viewer":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="조회 전용 계정은 데이터를 수정/삭제할 수 없습니다.",
-        )
-    if resource_part is None or resource_part != user["part"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="다른 파트의 데이터를 수정/삭제할 수 없습니다.",
-        )
-
-
 async def check_namespace_ownership(namespace: str, user: dict) -> None:
-    """네임스페이스의 owner_part_id와 현재 사용자의 part_id를 비교.
+    """업무 영역(namespace)의 담당 파트(owner_part_id)와 사용자 소속 파트(part_id)를 비교 — 사람(파트) → 담당 영역으로 매번 계산.
 
-    Admin이면 무조건 통과, viewer면 파트 무관 항상 조회만(403), 같은 파트면 통과,
-    다르면 403. owner_part_id가 없으면(NULL) admin 외엔 viewer 여부만 관건.
+    관리자는 통과, 조회 전용은 403, 담당 파트 사람이면 통과. 담당이 정해지지 않은 영역은 관리자만(2026-10-20 사용자 결정 —
+    예전엔 "공통"이라 누구나 고칠 수 있었다. 정책서 영역 대부분이 아직 담당 미지정이라 아무나 고치면 안 된다).
     """
+    async with get_conn() as conn:
+        row = await conn.fetchrow("SELECT owner_part_id, kind FROM ops_namespace WHERE name = $1", namespace)
+    if row is not None and row["kind"] == "group":
+        # 상위 묶음은 데이터를 갖지 않는다 — 관리자도(목록에서 빠져 있어 넣으면 안 보이는 데이터가 된다, 리뷰 L2)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="상위 업무 영역에는 데이터를 넣을 수 없습니다. 하위 업무 영역을 고르세요.")
+    reason = edit_denied_reason(row["owner_part_id"] if row else None, user)
+    if reason:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
+
+
+def edit_denied_reason(owner_part_id: Optional[int], user: dict) -> Optional[str]:
+    """업무 영역 수정 규칙(한 곳 — 프론트 utils/domainAccess.ts와 같음). 막히면 이유, 되면 None.
+    여러 영역을 한 번에 검사하는 경로(질의 기록 일괄 삭제 등)도 이 함수를 쓴다 — 따로 쓰면 규칙이 어긋난다(리뷰 M1)."""
+    if user["role"] == "admin":
+        return None
+    if user["role"] == "viewer":
+        return "조회 전용 계정은 이 업무 영역을 수정할 수 없습니다."
+    if owner_part_id is None:
+        return "담당 파트가 정해지지 않은 업무 영역은 관리자만 수정할 수 있습니다."
+    if owner_part_id != user.get("part_id"):
+        return "이 업무 영역의 담당 파트가 아닙니다."
+    return None
+
+
+async def check_namespace_read(namespace: str, user: dict) -> None:
+    """관리 화면 조회(정책 목록·검토 요약·VOC 이력 등) 권한 — 수정 규칙과 분리(리뷰 M5, 2026-10-20).
+    수정은 "담당 없으면 관리자만"으로 좁혔지만 조회는 예전 그대로: 조회 전용 계정 X, 담당 없는 영역은 누구나,
+    담당이 있으면 그 파트 사람과 관리자. 채팅 검색은 이 검사를 쓰지 않는다(log_cross_part_namespace_read)."""
     if user["role"] == "admin":
         return
     if user["role"] == "viewer":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="조회 전용 계정은 이 네임스페이스를 수정할 수 없습니다.",
-        )
-
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="조회 전용 계정은 이 화면을 볼 수 없습니다.")
     async with get_conn() as conn:
-        owner_part_id = await conn.fetchval(
-            "SELECT owner_part_id FROM ops_namespace WHERE name = $1", namespace,
-        )
-
-    # owner_part_id가 NULL이면 공통 파트 — 모든 로그인 사용자 허용
-    if owner_part_id is None:
-        return
-    # 다른 파트면 403
-    if owner_part_id != user["part_id"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="이 네임스페이스에 대한 권한이 없습니다.",
-        )
+        owner_part_id = await conn.fetchval("SELECT owner_part_id FROM ops_namespace WHERE name = $1", namespace)
+    if owner_part_id is not None and owner_part_id != user.get("part_id"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="이 업무 영역의 담당 파트가 아닙니다.")
 
 
 async def log_cross_part_namespace_read(namespace: str, user: dict) -> None:

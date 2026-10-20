@@ -108,7 +108,7 @@ class TestGetKnowledgeRefs:
             {"id": 1, "content": "내용1", "category": "DB"},
             {"id": 2, "content": "내용2", "category": None},
         ]
-        result = await pipeline.get_knowledge_refs("딜리버스 DB", [1, 2, 999])
+        result = await pipeline.get_knowledge_refs("딜리버스", [1, 2, 999])
         assert result == [
             {"id": 1, "content": "내용1", "category": "DB"},
             {"id": 2, "content": "내용2", "category": None},

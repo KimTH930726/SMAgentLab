@@ -99,8 +99,8 @@ export function Sidebar() {
 
     const currentPart = user?.part ?? null;
 
-    // namespace 미설정 → 정렬된 첫 번째 선택
-    if (!namespace) {
+    // namespace 미설정, 또는 고른 영역이 목록에 없음(이름이 바뀌었거나 지워짐 — 다른 탭에서 바꾼 것 포함) → 정렬된 첫 번째 선택
+    if (!namespace || !sortedNamespaces.includes(namespace)) {
       setNamespace(sortedNamespaces[0]);
       return;
     }
@@ -496,7 +496,7 @@ function UserSection() {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-medium text-slate-200 truncate">{user.username}</p>
-            <p className="text-[10px] text-slate-500 truncate">{user.part}</p>
+            <p className="text-[10px] text-slate-500 truncate">{user.part ?? '소속 없음'}</p>
           </div>
           <button
             onClick={() => setShowSettings(true)}
@@ -530,7 +530,7 @@ function UserSection() {
 interface AccountSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  user: { username: string; part: string; role: string; has_llm_credentials: boolean; has_confluence_pat?: boolean };
+  user: { username: string; part: string | null; role: string; has_llm_credentials: boolean; has_confluence_pat?: boolean };
   onUserUpdate: (u: Partial<{ has_llm_credentials: boolean; has_confluence_pat: boolean }>) => void;
 }
 
@@ -665,11 +665,11 @@ function AccountSettingsModal({ isOpen, onClose, user, onUserUpdate }: AccountSe
             </div>
             <div>
               <span className="text-slate-500 text-xs">파트</span>
-              <p className="text-slate-200 font-medium">{user.part}</p>
+              <p className="text-slate-200 font-medium">{user.part ?? '소속 없음'}</p>
             </div>
             <div>
               <span className="text-slate-500 text-xs">역할</span>
-              <p className="text-slate-200 font-medium">{user.role === 'admin' ? '슈퍼어드민' : '일반 사용자'}</p>
+              <p className="text-slate-200 font-medium">{user.role === 'admin' ? '슈퍼어드민' : user.role === 'viewer' ? '조회 전용(승인 대기)' : '일반 사용자'}</p>
             </div>
             <div>
               <span className="text-slate-500 text-xs">LLM 자격증명</span>

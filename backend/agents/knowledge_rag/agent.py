@@ -49,8 +49,8 @@ async def _safe_post_save(conv_id: int, namespace: str) -> None:
 
 
 def _part_and_path(part, path) -> str:
-    """정책 근거 머리 — 정책서 범위가 여러 파트면 어느 파트 정책인지(같은 제목이 여러 파트에 있다, 2026-10-20)."""
-    return (f" [파트: {part}]" if part else "") + (f" [분류: {' > '.join(path)}]" if path else "")
+    """정책 근거 머리 — 정책 범위가 여러 업무 영역이면 어느 영역 정책인지(같은 제목이 여러 영역에 있다, 2026-10-20)."""
+    return (f" [업무 영역: {part}]" if part else "") + (f" [분류: {' > '.join(path)}]" if path else "")
 
 
 def _build_rrf_context(

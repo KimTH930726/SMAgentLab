@@ -25,7 +25,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 _GOLDEN_SET_PATH = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "golden_set" / "online_delivus_v1.jsonl"
-_FILE_TO_NAMESPACE = [("온라인스토어", "온라인스토어 DB"), ("딜리버스", "딜리버스 DB")]
+_FILE_TO_NAMESPACE = [("온라인스토어", "온라인스토어"), ("딜리버스", "딜리버스")]
 _TOP_K = 10
 
 # 비교 후보 — (표시 이름, HF 모델 id). 2026-09-07 시점 MTEB-ko-retrieval 리더보드 기준 상위권 +

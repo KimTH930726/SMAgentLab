@@ -42,12 +42,12 @@ from service.policy import search as policy_search
 from service.refdata import service as refdata_search
 
 # 골든셋은 온라인스토어·딜리버스 두 파일에서 나온 문항이 섞여 있다 — 문항마다 출처 파일로
-# 네임스페이스를 고른다(track2와 같은 매핑). 2026-09-28 첫 실행은 전부 "딜리버스 DB"에서 검색해
+# 네임스페이스를 고른다(track2와 같은 매핑). 2026-09-28 첫 실행은 전부 "딜리버스"에서 검색해
 # 온라인스토어 46문항이 구조적으로 실패했고, "지식 없음 35~37/89"라는 절대값이 부풀려졌다
 # (OFF/ON 비교는 같은 컨텍스트를 썼으므로 유효). 실제 원인 분리는 diagnose_no_knowledge.py.
 from service.policy.track2 import _namespace_for_file
 
-FALLBACK_NAMESPACE = "딜리버스 DB"
+FALLBACK_NAMESPACE = "딜리버스"
 
 
 def namespace_of(record: dict) -> str:

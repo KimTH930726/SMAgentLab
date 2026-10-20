@@ -11,7 +11,7 @@ import subprocess
 import urllib.request
 
 API = "http://localhost:8000"
-NS = "온라인스토어 DB"
+NS = "온라인스토어"
 
 
 def post(path, body, tok=None):

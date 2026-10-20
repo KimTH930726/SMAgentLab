@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Database, Tag, Pencil, Check, X } from 'lucide-react';
 import {
-  getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace,
+  getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace, updateNamespaceSettings, getNamespaceGroups,
   getCategories, createCategory, deleteCategory, renameCategory,
 } from '../../api/namespaces';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -12,6 +12,8 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import type { KnowledgeCategory } from '../../types';
 import { showError } from '../../store/useDialogStore';
+import { canEditDomain } from '../../utils/domainAccess';
+import { getAllParts } from '../../api/auth';
 
 type AdminTabId = 'knowledge' | 'glossary';
 interface NamespaceManagerProps {
@@ -160,13 +162,10 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
 export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
-  const { setNamespace } = useAppStore();
-  // owner_part 없으면 공통(모두 가능), 있으면 같은 파트 or admin
-  const canModifyNs = (ownerPart?: string | null) =>
-    user?.role === 'admin' || !ownerPart || ownerPart === user?.part;
-  // 공통 파트(owner_part=null) 삭제는 admin 전용
-  const canDeleteNs = (ownerPart?: string | null) =>
-    user?.role === 'admin' || (!!ownerPart && ownerPart === user?.part);
+  const { namespace: selectedNamespace, setNamespace } = useAppStore();
+  // 영역 안 데이터(업무구분 등)는 담당 파트 사람 또는 관리자, 영역 자체(만들기·이름·삭제)는 관리자만(2026-10-20)
+  const canModifyNs = (ownerPart?: string | null) => canEditDomain(user, ownerPart);
+  const isAdmin = user?.role === 'admin';
   const [showCreate, setShowCreate] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
@@ -211,11 +210,25 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       );
       qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
       qc.invalidateQueries({ queryKey: ['namespaces'] });
+      // 고른 영역의 이름을 바꿨으면 새 이름으로 따라간다 — 안 그러면 사이드바가 "목록에 없음"으로 보고 첫 영역으로 넘어간다(재리뷰 L3)
+      if (selectedNamespace === oldName) setNamespace(nn);
       setEditingNs(null);
     },
     onError: (err: Error) => {
       void showError(err, '이름 변경 실패');
     },
+  });
+
+  // 담당 파트·상위 영역(관리자만) — 목록은 관리자일 때만 불러온다
+  const { data: allParts = [] } = useQuery({ queryKey: ['all-parts'], queryFn: getAllParts, enabled: isAdmin });
+  const { data: groups = [] } = useQuery({ queryKey: ['namespace-groups'], queryFn: getNamespaceGroups, enabled: isAdmin });
+  const settingsMutation = useMutation({
+    mutationFn: ({ name, field, value }: { name: string; field: 'owner' | 'parent'; value: string }) =>
+      updateNamespaceSettings(name, field === 'owner'
+        ? (value ? { owner_part: value } : { clear_owner: true })
+        : (value ? { parent: value } : { clear_parent: true })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['namespaces-detail'] }),
+    onError: (err: Error) => { void showError(err, '담당·상위 영역 저장 실패'); },
   });
 
   const commitNsRename = (oldName: string) => {
@@ -256,14 +269,16 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">기준 정보 관리</h2>
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => setShowCreate(true)}
-        >
-          <Plus className="w-4 h-4" />
-          새 파트
-        </Button>
+        {isAdmin && (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setShowCreate(true)}
+          >
+            <Plus className="w-4 h-4" />
+            새 업무 영역
+          </Button>
+        )}
       </div>
 
       {isLoading && (
@@ -305,7 +320,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                   ) : (
                     <span className="flex items-center gap-1 group">
                       <span className="font-semibold text-slate-200">{ns.name}</span>
-                      {canModifyNs(ns.owner_part) && (
+                      {isAdmin && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setEditingNs(ns.name); setEditingNsName(ns.name); }}
                           className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
@@ -337,8 +352,40 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                   {ns.created_by_username && (
                     <span className="text-xs text-slate-500">{ns.created_by_username}</span>
                   )}
-                  {ns.owner_part && (
-                    <Badge color={canModifyNs(ns.owner_part) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
+                  {isAdmin ? (
+                    <span className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        id={`ns-parent-${ns.id}`}
+                        aria-label="상위 업무 영역"
+                        title="상위 업무 영역(묶음)"
+                        value={ns.parent_name ?? ''}
+                        disabled={settingsMutation.isPending}
+                        onChange={(e) => settingsMutation.mutate({ name: ns.name, field: 'parent', value: e.target.value })}
+                        className="bg-slate-900 border border-slate-600 rounded px-1.5 py-0.5 text-xs text-slate-300"
+                      >
+                        <option value="">상위 없음</option>
+                        {groups.map((g) => <option key={g.id} value={g.name}>{g.name}</option>)}
+                      </select>
+                      <select
+                        id={`ns-owner-${ns.id}`}
+                        aria-label="담당 파트"
+                        title="담당 파트 — 이 파트 사람이 이 업무 영역을 수정할 수 있다(없으면 관리자만)"
+                        value={ns.owner_part ?? ''}
+                        disabled={settingsMutation.isPending}
+                        onChange={(e) => settingsMutation.mutate({ name: ns.name, field: 'owner', value: e.target.value })}
+                        className="bg-slate-900 border border-slate-600 rounded px-1.5 py-0.5 text-xs text-slate-300"
+                      >
+                        <option value="">담당 없음(관리자만)</option>
+                        {allParts.map((p) => <option key={p.id} value={p.name}>{p.team ? `${p.team} · ${p.name}` : p.name}</option>)}
+                      </select>
+                    </span>
+                  ) : (
+                    <>
+                      {ns.parent_name && <span className="text-xs text-slate-500">{ns.parent_name}</span>}
+                      {ns.owner_part && (
+                        <Badge color={canModifyNs(ns.owner_part) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
+                      )}
+                    </>
                   )}
                   <span className="text-xs text-slate-500">
                     생성: {new Date(ns.created_at).toLocaleDateString('ko-KR')}
@@ -346,7 +393,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                 </div>
               </div>
               <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                {canDeleteNs(ns.owner_part) && (
+                {isAdmin && (
                   <Button
                     variant="danger"
                     size="sm"

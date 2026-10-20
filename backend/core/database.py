@@ -33,5 +33,6 @@ async def get_conn() -> AsyncIterator[asyncpg.Connection]:
 
 
 async def resolve_namespace_id(conn: asyncpg.Connection, namespace: str) -> int | None:
-    """namespace name → id 변환. 없으면 None."""
-    return await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace)
+    """업무 영역 name → id. 없거나 상위 묶음(kind='group')이면 None — 묶음은 데이터를 갖지 않아 데이터 경로(채팅·대화방·신고·통계·
+    등록)에선 없는 영역과 같다(2026-10-20 막 쓰기 테스트: 묶음에 대화방·신고가 생기고 통계는 0으로 답했다). 트리 편집은 직접 조회."""
+    return await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1 AND kind <> 'group'", namespace)

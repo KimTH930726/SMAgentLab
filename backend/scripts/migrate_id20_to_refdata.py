@@ -18,7 +18,7 @@ from core.database import init_pool, close_pool, get_conn
 from service.refdata.parser import ParsedCommonCode
 from service.refdata.service import ingest_common_codes
 
-NAMESPACE = "딜리버스 DB"
+NAMESPACE = "딜리버스"
 KNOWLEDGE_ID = 20
 
 _GROUP_RE = re.compile(r"^-\s*(.+)$")

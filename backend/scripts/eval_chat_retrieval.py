@@ -33,7 +33,7 @@ from agents.knowledge_rag.knowledge import retrieval, glossary_terms  # noqa: E4
 from service.policy import track2  # noqa: E402
 
 NEGATIVE_FILE = Path("/app/tests/fixtures/eval/negative_v1.jsonl")
-NEGATIVE_NAMESPACES = ["온라인스토어 DB", "딜리버스 DB", "외부서비스DB"]
+NEGATIVE_NAMESPACES = ["온라인스토어", "딜리버스", "외부서비스"]
 ABSTAIN_GRID = [(s, r) for s in (0.45, 0.50, 0.52, 0.55) for r in (0.0, 0.05, 0.1)]
 
 

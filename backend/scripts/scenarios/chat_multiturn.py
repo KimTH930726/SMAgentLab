@@ -19,7 +19,7 @@ import logging  # noqa: E402
 logging.disable(logging.INFO)
 
 API = "http://localhost:8000"
-NS = "온라인스토어 DB"
+NS = "온라인스토어"
 OUT = "eval_out/multiturn_result.jsonl"
 
 

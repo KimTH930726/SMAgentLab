@@ -310,7 +310,6 @@ export function GlossaryTable() {
                     <div className="w-full sm:w-36 flex-shrink-0">
                       <span className="text-sm font-semibold text-slate-100 break-words">{item.term}</span>
                       <div className="flex flex-wrap gap-1 mt-1">
-                        {item.created_by_part && <Badge color={canModifyNs ? 'emerald' : 'slate'}>{item.created_by_part}</Badge>}
                         {similarity != null && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 font-mono">
                             {(similarity * 100).toFixed(1)}%
@@ -359,7 +358,9 @@ export function GlossaryTable() {
                           </button>
                         </div>
                       )}
-                      {item.created_by_username && (
+                      {item.source === 'policy_doc' ? (
+                        <span className="text-[11px] text-slate-500" title="정책서 최종본에서 가져온 용어">정책서</span>
+                      ) : item.created_by_username && (
                         <span className="text-[11px] text-slate-500">{item.created_by_username}</span>
                       )}
                     </div>

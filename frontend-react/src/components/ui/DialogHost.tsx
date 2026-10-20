@@ -27,7 +27,7 @@ export function DialogHost() {
         <div className="flex gap-3">
           <Icon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${tone.cls}`} />
           <div className="flex flex-col gap-1.5 min-w-0">
-            <h3 className="text-base font-semibold text-slate-100">{current.title ?? tone.title}</h3>
+            <h3 className="text-base font-semibold text-slate-100">{current.title ?? (isConfirm ? '확인' : tone.title)}</h3>
             <p data-testid="app-dialog-message" className="text-sm text-slate-300 whitespace-pre-line break-words leading-relaxed">
               {current.message}
             </p>

@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 // 줄였다. 통계는 "답변 / 정정 요청 / 지식 공백 / 공백 메움" — 카드 숫자가 실제 DB 집계(질의 상태·메움 연결·개선 원장
 // 대기 건)와 맞는지, 옛 "해결·미해결·해결률"이 다시 나타나지 않는지 실 dev 스택으로 확인한다(읽기 전용).
 
-const NAMESPACE = '온라인스토어 DB';
+const NAMESPACE = '온라인스토어';
 const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'psql', '-U', 'ops', '-d', 'opsdb', '-tA', '-c', sql],
   { encoding: 'utf-8' }).trim();
 

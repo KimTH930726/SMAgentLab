@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 _KNOWLEDGE_COLS = """k.id, n.name AS namespace,
     k.content, k.base_weight, k.category, k.status,
     k.source_file, k.source_chunk_idx, k.source_type,
-    k.created_by_part, k.created_by_user_id, u.username AS created_by_username,
+    k.created_by_user_id, u.username AS created_by_username,
     k.created_at::text, k.updated_at::text, k.heading_path, k.ingestion_job_id"""
 
 _GLOSSARY_COLS = """g.id, n.name AS namespace, g.term, g.description,
-    g.created_by_part, g.created_by_user_id, u.username AS created_by_username,
+    g.source, g.created_by_user_id, u.username AS created_by_username,
     COALESCE((SELECT json_agg(json_build_object('id', s.id, 'synonym', s.synonym, 'source', s.source,
                                                 'evidence_count', s.evidence_count) ORDER BY s.id)
               FROM rag_glossary_synonym s WHERE s.glossary_id = g.id AND NOT s.blocked), '[]') AS synonyms"""
@@ -58,7 +58,6 @@ async def create_knowledge(
     content: str,
     category: Optional[str] = None,
     *,
-    created_by_part: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
 ) -> dict:
     async with get_conn() as conn:
@@ -95,14 +94,14 @@ async def create_knowledge(
                 f"""
                 INSERT INTO rag_knowledge
                     (namespace_id, content, embedding, base_weight, category,
-                     created_by_part, created_by_user_id, status, embedding_model)
-                VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9)
+                     created_by_user_id, status, embedding_model)
+                VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8)
                 RETURNING id, namespace_id, content, base_weight, category, status,
-                          created_by_part, created_by_user_id,
+                          created_by_user_id,
                           created_at::text, updated_at::text
                 """,
                 ns_id, content, str(embedding), 1.0, category,
-                created_by_part, created_by_user_id, status, _EMBEDDING_MODEL_NAME,
+                created_by_user_id, status, _EMBEDDING_MODEL_NAME,
             )
             if is_duplicate:
                 await conn.executemany(
@@ -123,7 +122,6 @@ async def update_knowledge(
     content: Optional[str] = None,
     category: Optional[str] = None,
     *,
-    updated_by_part: Optional[str] = None,
     updated_by_user_id: Optional[int] = None,
 ) -> Optional[dict]:
     async with get_conn() as conn:
@@ -154,7 +152,7 @@ async def update_knowledge(
             WHERE id = $4
             RETURNING id, namespace_id,
                       content, base_weight, category,
-                      created_by_part, created_by_user_id,
+                      created_by_user_id,
                       created_at::text, updated_at::text
             """,
             new_content,
@@ -400,7 +398,7 @@ async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Opt
         doc["namespace"], items,
         source_file=(first["source_file"] if first else doc["title"]) or doc["title"],
         source_type=(first["source_type"] if first else doc["source_type"]),
-        created_by_part=(user or {}).get("part"), created_by_user_id=(user or {}).get("id"),
+        created_by_user_id=(user or {}).get("id"),
         background=False, confirm_replace=force, strict_source=True)
     if result.get("status") != "completed":
         # 실패·취소면 옛 조각이 그대로 남는다(전환 트랜잭션 롤백) — 성공으로 알리지 않는다(리뷰 2026-10-08)
@@ -451,14 +449,6 @@ async def list_knowledge(namespace: Optional[str] = None, status: Optional[str] 
                 status_filter,
             )
     return [dict(r) for r in rows]
-
-
-async def get_knowledge_part(knowledge_id: int) -> Optional[str]:
-    """리소스의 created_by_part 반환 (레거시 호환용)."""
-    async with get_conn() as conn:
-        return await conn.fetchval(
-            "SELECT created_by_part FROM rag_knowledge WHERE id = $1", knowledge_id
-        )
 
 
 async def get_knowledge_namespace(knowledge_id: int) -> Optional[str]:
@@ -599,7 +589,7 @@ async def resolve_duplicate(
 
 async def create_glossary(
     namespace: str, term: str, description: str,
-    *, created_by_part: Optional[str] = None, created_by_user_id: Optional[int] = None,
+    *, created_by_user_id: Optional[int] = None,
 ) -> dict:
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
@@ -616,11 +606,11 @@ async def create_glossary(
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO rag_glossary (namespace_id, term, description, embedding, created_by_part, created_by_user_id)
-            VALUES ($1, $2, $3, $4::vector, $5, $6)
-            RETURNING id, namespace_id, term, description, created_by_part, created_by_user_id
+            INSERT INTO rag_glossary (namespace_id, term, description, embedding, created_by_user_id)
+            VALUES ($1, $2, $3, $4::vector, $5)
+            RETURNING id, namespace_id, term, description, source, created_by_user_id
             """,
-            ns_id, term, description, str(embedding), created_by_part, created_by_user_id,
+            ns_id, term, description, str(embedding), created_by_user_id,
         )
         result = dict(row)
         result["namespace"] = namespace
@@ -684,7 +674,7 @@ async def block_glossary_synonym(synonym_id: int) -> bool:
 
 async def update_glossary(
     glossary_id: int, term: str, description: str,
-    *, updated_by_part: Optional[str] = None, updated_by_user_id: Optional[int] = None,
+    *, updated_by_user_id: Optional[int] = None,
 ) -> Optional[dict]:
     embedding = await embedding_service.embed(description)
     async with get_conn() as conn:
@@ -698,7 +688,7 @@ async def update_glossary(
             UPDATE rag_glossary
             SET term = $1, description = $2, embedding = $3::vector
             WHERE id = $4
-            RETURNING id, namespace_id, term, description, created_by_part, created_by_user_id
+            RETURNING id, namespace_id, term, description, source, created_by_user_id
             """,
             term, description, str(embedding), glossary_id,
         )
@@ -761,13 +751,6 @@ async def vector_search_glossary(namespace: str, query_vec: list[float], top_k: 
     return [_with_synonyms(dict(r)) for r in rows]
 
 
-async def get_glossary_part(glossary_id: int) -> Optional[str]:
-    async with get_conn() as conn:
-        return await conn.fetchval(
-            "SELECT created_by_part FROM rag_glossary WHERE id = $1", glossary_id
-        )
-
-
 async def get_glossary_namespace(glossary_id: int) -> Optional[str]:
     """용어집의 namespace name 반환 (네임스페이스 소유 파트 기반 권한 체크용)."""
     async with get_conn() as conn:
@@ -799,7 +782,6 @@ async def bulk_create_knowledge(
     *,
     source_file: Optional[str] = None,
     source_type: str = "manual",
-    created_by_part: Optional[str] = None,
     created_by_user_id: Optional[int] = None,
     background: bool = True,
     after_activation: Optional[Callable[[], Awaitable[int]]] = None,
@@ -887,7 +869,7 @@ async def bulk_create_knowledge(
         namespace_name=namespace,
         after_activation=after_activation,
         source_file=source_file, source_type=source_type,
-        created_by_part=created_by_part, created_by_user_id=created_by_user_id,
+        created_by_user_id=created_by_user_id,
         strict_source=strict_source, confirm_replace=confirm_replace,
     )
     if background:
@@ -907,7 +889,6 @@ async def _run_bulk_ingestion(
     after_activation: Optional[Callable[[], Awaitable[int]]] = None,
     source_file: Optional[str],
     source_type: str,
-    created_by_part: Optional[str],
     created_by_user_id: Optional[int],
     strict_source: bool = False,
     confirm_replace: bool = False,
@@ -1016,7 +997,6 @@ async def _run_bulk_ingestion(
                     source_file,
                     chunk_idx,
                     source_type,
-                    created_by_part,
                     created_by_user_id,
                     job_id,
                     "staging_review" if is_duplicate else "staging",
@@ -1033,9 +1013,9 @@ async def _run_bulk_ingestion(
                         (namespace_id, content,
                          embedding, base_weight, category,
                          source_file, source_chunk_idx, source_type,
-                         created_by_part, created_by_user_id, ingestion_job_id, status,
+                         created_by_user_id, ingestion_job_id, status,
                          embedding_model, confluence_page_id, confluence_version, heading_path, source_document_id)
-                    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 """, rows)
                 created += len(rows)
                 pending_total += len(pending_chunk_indices) + len(local_pending)

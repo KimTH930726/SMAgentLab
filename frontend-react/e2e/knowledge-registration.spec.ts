@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test';
 
 const ADMIN_USER = 'admin';
 const ADMIN_PASS = '1111';
-const NAMESPACE = '딜리버스 DB';
+const NAMESPACE = '딜리버스';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/login');

@@ -50,6 +50,6 @@
 ## 4. 관련 문서
 
 - `docs/tech/knowledge-lifecycle-design.md` §2.6 — 사례 1의 상세 배경
-- `docs/policy-doc-pipeline-plan.md` §2 "왜 3층인가" — 사례 2의 상세 배경
+- `docs/archive/policy-doc-pipeline-plan.md` §2 "왜 3층인가" — 사례 2의 상세 배경
 - `backend/agents/knowledge_rag/knowledge/retrieval.py` `_KEYWORD_ONLY_CATEGORIES` — 사례 1 코드
 - `backend/service/policy/decompose.py`, `service.py`, `search.py` — 사례 2 코드

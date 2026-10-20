@@ -250,6 +250,6 @@ cascade = 실험실 L2 테스트 전략 후보.
 
 - `docs/tech/retrieval-routing-pattern.md` — 질의 유형 → 검색 전략 라우팅 (이 문서의 뒷단)
 - `docs/tech/knowledge-lifecycle-design.md` — `content_hash` INSERT+deprecated, merge 이력 소실 배경
-- `docs/policy-doc-pipeline-plan.md` §2 "왜 3층인가" — `policy_item`/`param`/`chunk` 분리 배경
+- `docs/archive/policy-doc-pipeline-plan.md` §2 "왜 3층인가" — `policy_item`/`param`/`chunk` 분리 배경
 - `backend/service/policy/{excel_parser,decompose,service,search}.py` — 현행 구현
 - `backend/service/policy/korean_text.py` + `init/06-policy-strip-ko.sql` — RDB 채널 한국어 조사/어미 제거 (v2.71)

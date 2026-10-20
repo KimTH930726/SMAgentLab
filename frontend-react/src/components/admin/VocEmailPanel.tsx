@@ -16,7 +16,7 @@ import {
 } from '../../api/emailVoc';
 import { getNamespaces } from '../../api/namespaces';
 import { VocStatsPanel } from './VocStatsPanel';
-import { getAllParts } from '../../api/auth';
+import { getParts } from '../../api/auth';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
@@ -205,7 +205,7 @@ export function VocEmailPanel() {
   });
   // 담당 파트를 자유 입력 대신 사용자관리에 등록된 실제 파트 중에서 고르도록 —
   // 오타로 존재하지 않는 파트명이 들어가는 걸 막는다.
-  const { data: parts = [] } = useQuery({ queryKey: ['all-parts'], queryFn: getAllParts });
+  const { data: parts = [] } = useQuery({ queryKey: ['parts'], queryFn: getParts });
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -254,7 +254,7 @@ export function VocEmailPanel() {
   const startEdit = (r: VocRouting) => {
     setEditingId(r.id);
     setForm({
-      part: r.part, mailbox_upn: r.mailbox_upn,
+      part: r.part ?? '', mailbox_upn: r.mailbox_upn,
       teams_webhook_url: r.teams_webhook_url ?? '',
       oncall_contact_name: r.oncall_contact_name ?? '',
       oncall_contact_phone: r.oncall_contact_phone ?? '',

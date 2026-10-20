@@ -1,17 +1,31 @@
 """관리 도메인 — Pydantic 스키마 (namespace, stats, llm)."""
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from service.validation import Name
 
 
 # ─── Namespace ───────────────────────────────────────────────────────────────
 
 class NamespaceCreate(BaseModel):
-    name: str
-    description: str = ""
+    name: Name
+    description: str = Field(default="", max_length=1000)
+
+
+class NamespaceRename(BaseModel):
+    new_name: Name
+
+
+class NamespaceSettings(BaseModel):
+    """업무 영역 담당·위치(관리자) — 보낸 칸만 바꾼다. 빈 문자열/None = 해제."""
+    owner_part: Optional[str] = None
+    parent: Optional[str] = None
+    clear_owner: bool = False
+    clear_parent: bool = False
 
 
 class KnowledgeCategoryCreate(BaseModel):
-    name: str
+    name: Name
 
 
 class KnowledgeCategoryOut(BaseModel):
@@ -22,8 +36,11 @@ class KnowledgeCategoryOut(BaseModel):
 
 
 class NamespaceInfo(BaseModel):
+    id: int
     name: str
     description: str
+    kind: str = "domain"                  # domain | policy_test(E2E 임시) — 상위 묶음(group)은 목록에서 뺀다
+    parent_name: Optional[str] = None     # 상위 업무 영역(트리, 2026-10-20)
     owner_part: Optional[str] = None
     knowledge_count: int
     glossary_count: int

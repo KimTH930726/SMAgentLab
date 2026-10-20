@@ -4,6 +4,7 @@ import { getNamespaces, getNamespacesDetail } from '../api/namespaces';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { sortNamespacesByUserPart } from './sortNamespaces';
+import { canEditDomain } from './domainAccess';
 
 /**
  * KnowledgeTable / GlossaryTable 공통 네임스페이스 선택 + 권한 훅
@@ -40,8 +41,7 @@ export function useNamespaceAccess() {
   }, [namespaces, selectedNs]);
 
   const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
-  const canModifyNs = user?.role === 'admin'
-    || (user?.role !== 'viewer' && (!nsOwnerPart || nsOwnerPart === user?.part));
+  const canModifyNs = canEditDomain(user, nsOwnerPart);
 
   return { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, namespaces, nsDetails, user };
 }

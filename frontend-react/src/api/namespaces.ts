@@ -39,6 +39,24 @@ export async function renameNamespace(oldName: string, newName: string): Promise
   });
 }
 
+export interface NamespaceSettingsPayload {
+  owner_part?: string | null;
+  parent?: string | null;
+  clear_owner?: boolean;
+  clear_parent?: boolean;
+}
+
+/** 업무 영역 담당 파트·상위 영역 지정(관리자) — 보낸 칸만 바뀐다 */
+export async function updateNamespaceSettings(name: string, payload: NamespaceSettingsPayload) {
+  return apiFetch<{ name: string; owner_part: string | null; parent_name: string | null }>(
+    `/namespaces/${encodeURIComponent(name)}/settings`, { method: 'PATCH', body: JSON.stringify(payload) });
+}
+
+/** 상위 업무 영역(묶음) 목록 — 관리자 */
+export async function getNamespaceGroups(): Promise<{ id: number; name: string }[]> {
+  return apiFetch<{ id: number; name: string }[]>('/namespaces/groups');
+}
+
 export async function deleteNamespace(name: string): Promise<void> {
   try {
     await apiFetch<void>(`/namespaces/${encodeURIComponent(name)}`, { method: 'DELETE' });

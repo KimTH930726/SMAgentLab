@@ -4,6 +4,7 @@ import { MessageSquare, CheckCircle, FileText, ChevronDown, ChevronUp, Trash2, A
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
+import { canEditDomain } from '../../utils/domainAccess';
 import { getNamespaceStats, deleteQueryLog, getQueryLogs, bulkDeleteQueryLogs, fillKnowledgeGap } from '../../api/stats';
 import { createKnowledge } from '../../api/knowledge';
 import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
@@ -370,8 +371,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
     }
   }, [namespaces, selectedNs]);
   const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
-  // owner_part 없으면 공통(모두 가능), 있으면 같은 파트 or admin
-  const canModifyNs = user?.role === 'admin' || !nsOwnerPart || nsOwnerPart === user?.part;
+  const canModifyNs = canEditDomain(user, nsOwnerPart);
   const { data: stats, isLoading, error, refetch } = useQuery({
     queryKey: ['stats-ns', selectedNs],
     queryFn: () => getNamespaceStats(selectedNs),

@@ -117,6 +117,7 @@ function PartSection() {
   const commitRename = (partId: number, oldName: string) => {
     const trimmed = editingName.trim();
     if (!trimmed || trimmed === oldName) { setEditingId(null); return; }
+    if (renameMutation.isPending) return;
     setRenameError('');
     renameMutation.mutate({ id: partId, name: trimmed });
   };
@@ -221,7 +222,7 @@ function PartSection() {
               type="text"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && createMutation.mutate(newName.trim())}
+              onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && newName.trim() && !createMutation.isPending && createMutation.mutate(newName.trim())}
               placeholder="예: 딜리버스, 인프라, 지원"
               autoFocus
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
@@ -276,7 +277,8 @@ function PartSection() {
                     variant="danger"
                     size="sm"
                     loading={deleteMutation.isPending}
-                    onClick={() => deleteMutation.mutate(deleteTarget.id)}
+                    disabled={deleteMutation.isPending}
+                    onClick={() => !deleteMutation.isPending && deleteMutation.mutate(deleteTarget.id)}
                   >
                     삭제
                   </Button>
@@ -327,8 +329,18 @@ function UserSection() {
     },
   });
 
-  const handleToggleRole = (u: User) => {
-    updateMutation.mutate({ id: u.id, payload: { role: u.role === 'admin' ? 'user' : 'admin' } });
+  const handleToggleRole = async (u: User) => {
+    const toAdmin = u.role !== 'admin';
+    const msg = toAdmin
+      ? `'${u.username}'을(를) 슈퍼어드민으로 바꿀까요? 모든 업무 영역·사용자·시스템 설정을 바꿀 수 있게 됩니다.`
+      : `'${u.username}'의 슈퍼어드민 권한을 해제하고 일반 사용자로 바꿀까요?`;
+    if (!(await showConfirm(msg, { tone: toAdmin ? 'danger' : 'warning', confirmLabel: '변경' }))) return;
+    updateMutation.mutate({ id: u.id, payload: { role: toAdmin ? 'admin' : 'user' } });
+  };
+
+  const handleApprove = async (u: User) => {
+    if (!(await showConfirm(`'${u.username}'을(를) 일반 사용자로 승인할까요? 소속 파트가 담당하는 업무 영역을 수정할 수 있게 됩니다.`, { confirmLabel: '승인' }))) return;
+    updateMutation.mutate({ id: u.id, payload: { role: 'user' } });
   };
 
   const handleToggleActive = (u: User) => {
@@ -353,7 +365,8 @@ function UserSection() {
     );
   }
 
-  const filteredUsers = filterPart ? users.filter((u) => u.part === filterPart) : users;
+  const NO_PART = '__none__';
+  const filteredUsers = filterPart ? users.filter((u) => (filterPart === NO_PART ? !u.part : u.part === filterPart)) : users;
 
   return (
     <div>
@@ -383,6 +396,16 @@ function UserSection() {
             {p.name} <span className="opacity-70">({users.filter((u) => u.part === p.name).length})</span>
           </button>
         ))}
+        {users.some((u) => !u.part) && (
+          <button
+            onClick={() => setFilterPart(filterPart === NO_PART ? '' : NO_PART)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+              filterPart === NO_PART ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-slate-200'
+            }`}
+          >
+            소속 없음 <span className="opacity-70">({users.filter((u) => !u.part).length})</span>
+          </button>
+        )}
       </div>
       <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
         <table className="w-full text-sm">
@@ -406,16 +429,17 @@ function UserSection() {
                     ) : (
                       <UserIcon className="w-4 h-4 text-slate-500" />
                     )}
-                    <span className="text-slate-200">{u.username}</span>
+                    <span className="text-slate-200 truncate max-w-[14rem]" title={u.username}>{u.username}</span>
                   </div>
                 </td>
                 <td className="px-4 py-3">
                   <select
-                    value={u.part}
+                    value={u.part ?? ''}
                     onChange={(e) => handleChangePart(u, e.target.value)}
                     title="파트를 변경하려면 선택하세요"
                     className="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer hover:border-slate-400 transition-colors"
                   >
+                    {!u.part && <option value="" disabled>소속 없음</option>}
                     {parts.map((p) => (
                       <option key={p.id} value={p.name}>{p.name}</option>
                     ))}
@@ -430,24 +454,26 @@ function UserSection() {
                       <Badge color="indigo">슈퍼어드민</Badge>
                     </span>
                   ) : u.role === 'viewer' ? (
-                    // 조회 전용 계정 — 아직 관리자 화면에서 직접 지정하는 UI는 없음(DB 직접
-                    // 설정, 실 수요 생기면 전용 선택 UI 추가). 클릭 토글은 admin/user 2단계만
-                    // 전제하고 있어 viewer에 그대로 적용하면 클릭 한 번에 관리자로 승격되는
-                    // 사고가 날 수 있어 여기서는 비활성 배지로만 표시.
-                    <span title="조회 전용 계정 — 역할 변경은 DB에서 직접" className="inline-block opacity-80">
-                      <Badge color="slate">뷰어</Badge>
+                    // 가입하면 조회 전용으로 시작 → 관리자가 승인해 일반 사용자로(2026-10-20). 관리자 토글(admin↔user)과 분리 —
+                    // 같은 토글을 쓰면 클릭 한 번에 관리자로 승격되는 사고가 날 수 있다.
+                    <span className="inline-flex items-center gap-1.5">
+                      <Badge color="slate">승인 대기</Badge>
+                      <button onClick={() => void handleApprove(u)} title="일반 사용자로 승인 — 소속 파트 담당 업무 영역을 수정할 수 있게 됨"
+                        className="text-xs px-2 py-0.5 rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50 dark:border-indigo-500/50 dark:text-indigo-300 dark:hover:bg-indigo-900/30">
+                        승인
+                      </button>
                     </span>
                   ) : (
                     <span
                       role="button"
                       tabIndex={0}
-                      onClick={() => handleToggleRole(u)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleToggleRole(u)}
+                      onClick={() => void handleToggleRole(u)}
+                      onKeyDown={(e) => e.key === 'Enter' && void handleToggleRole(u)}
                       title={`클릭하여 ${u.role === 'admin' ? '일반 사용자' : '슈퍼어드민'}로 변경`}
                       className="inline-block cursor-pointer transform hover:scale-110 active:scale-95 transition-transform duration-150"
                     >
                       <Badge color={u.role === 'admin' ? 'indigo' : 'slate'}>
-                        {u.role === 'admin' ? '슈퍼어드민' : u.role}
+                        {u.role === 'admin' ? '슈퍼어드민' : '일반 사용자'}
                       </Badge>
                     </span>
                   )}

@@ -1,15 +1,15 @@
 """관리 도메인 — namespace, stats, LLM 설정 라우터."""
 import logging
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query as QueryParam
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.config import settings
 from core.database import get_conn, resolve_namespace_id
-from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership
+from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership, edit_denied_reason, check_namespace_read
 from service.admin.schemas import (
-    NamespaceCreate, NamespaceInfo,
+    NamespaceCreate, NamespaceInfo, NamespaceRename, NamespaceSettings,
     KnowledgeCategoryCreate, KnowledgeCategoryOut,
     TermStat, NamespaceDetailStats,
     LLMConfigUpdate, LLMTestRequest, ThresholdUpdate, SearchDefaultsUpdate,
@@ -77,41 +77,44 @@ async def get_namespaces_detail(user: dict = Depends(get_current_user)):
 
 
 @router.post("/api/namespaces", response_model=dict)
-async def create_namespace_endpoint(body: NamespaceCreate, user: dict = Depends(get_current_user)):
-    # admin이 생성한 네임스페이스는 공통(owner_part=NULL) — 모든 사용자가 CRUD 가능
-    owner_part = None if user["role"] == "admin" else user["part"]
-    return await service.create_namespace(
-        body.name, body.description,
-        owner_part=owner_part, created_by_user_id=user["id"],
-    )
+async def create_namespace_endpoint(body: NamespaceCreate, user: dict = Depends(get_current_admin)):
+    # 업무 영역 트리는 관리자만 만든다(2026-10-20 — 예전엔 조회 전용 계정도 만들 수 있었고, 같은 이름이면 설명을 덮어썼다).
+    # 담당 파트는 업무 영역 관리에서 따로 지정
+    created = await service.create_namespace(body.name, body.description, owner_part=None, created_by_user_id=user["id"])
+    if created is None:
+        raise HTTPException(status_code=409, detail=await service.name_taken_reason(body.name))
+    return created
 
 
 @router.patch("/api/namespaces/{name}", response_model=dict)
-async def rename_namespace_endpoint(name: str, body: dict, user: dict = Depends(get_current_user)):
-    await check_namespace_ownership(name, user)
-    new_name = (body.get("new_name") or "").strip()
-    if not new_name:
-        raise HTTPException(status_code=400, detail="새 이름을 입력해주세요.")
-    success = await service.rename_namespace(name, new_name)
-    if not success:
-        raise HTTPException(status_code=409, detail="이미 존재하는 파트 이름입니다.")
-    return {"name": new_name}
+async def rename_namespace_endpoint(name: str, body: NamespaceRename, user: dict = Depends(get_current_admin)):
+    status_, detail = await service.rename_namespace(name, body.new_name)
+    if status_ != 200:
+        raise HTTPException(status_code=status_, detail=detail)
+    return {"name": body.new_name}
+
+
+@router.patch("/api/namespaces/{name}/settings", response_model=dict)
+async def update_namespace_settings(name: str, body: NamespaceSettings, user: dict = Depends(get_current_admin)):
+    """업무 영역의 담당 파트·상위 영역 지정(관리자, 2026-10-20) — 담당이 정해져야 그 파트 사람이 수정할 수 있다."""
+    try:
+        return await service.update_namespace_settings(name, body)
+    except service.NamespaceNotFound as e:   # 전역 LookupError 처리는 KeyError(버그)까지 404로 바꿔 숨겨서 쓰지 않는다
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/api/namespaces/groups", response_model=list[dict])
+async def list_namespace_groups(user: dict = Depends(get_current_admin)):
+    """상위 업무 영역(묶음) 목록 — 담당·위치 설정 화면의 상위 선택용."""
+    return await service.list_groups()
 
 
 @router.delete("/api/namespaces/{name}", status_code=204)
-async def delete_namespace_endpoint(name: str, user: dict = Depends(get_current_user)):
-    # 공통 파트(owner_part_id=NULL) 삭제는 admin 전용
-    if user["role"] != "admin":
-        async with get_conn() as conn:
-            owner_part_id = await conn.fetchval(
-                "SELECT owner_part_id FROM ops_namespace WHERE name = $1", name,
-            )
-        if owner_part_id is None:
-            raise HTTPException(status_code=403, detail="공통 파트는 관리자만 삭제할 수 있습니다.")
-    await check_namespace_ownership(name, user)
-    success = await service.delete_namespace(name)
-    if not success:
-        raise HTTPException(status_code=404, detail=f"Namespace '{name}' not found")
+async def delete_namespace_endpoint(name: str, user: dict = Depends(get_current_admin)):
+    # 업무 영역 삭제는 관리자만 — 하위 데이터(지식·정책·용어…)가 통째로 지워진다
+    status_, detail = await service.delete_namespace(name)
+    if status_ != 204:
+        raise HTTPException(status_code=status_, detail=detail)
 
 
 # ── Knowledge Categories ──────────────────────────────────────────────────────
@@ -161,11 +164,15 @@ async def create_namespace_category(name: str, body: KnowledgeCategoryCreate, us
 @router.patch("/api/namespaces/{name}/categories/{cat_name}", response_model=KnowledgeCategoryOut)
 async def rename_namespace_category(name: str, cat_name: str, body: KnowledgeCategoryCreate, user: dict = Depends(get_current_user)):
     await check_namespace_ownership(name, user)
-    new_name = body.name.strip()
-    async with get_conn() as conn:
+    new_name = body.name
+    async with get_conn() as conn, conn.transaction():
         ns_id = await resolve_namespace_id(conn, name)
         if ns_id is None:
-            raise HTTPException(status_code=404, detail="네임스페이스를 찾을 수 없습니다.")
+            raise HTTPException(status_code=404, detail="업무 영역을 찾을 수 없습니다.")
+        # 없는 업무구분이면 지식을 건드리기 전에 멈춘다 — 예전엔 지식의 업무구분을 먼저 바꾸고 404를 냈다(막 쓰기 테스트 10/20)
+        if not await conn.fetchval("SELECT EXISTS(SELECT 1 FROM rag_knowledge_category WHERE namespace_id = $1 AND name = $2)",
+                                   ns_id, cat_name):
+            raise HTTPException(status_code=404, detail="업무구분을 찾을 수 없습니다.")
         existing = await conn.fetchval(
             "SELECT id FROM rag_knowledge_category WHERE namespace_id = $1 AND name = $2",
             ns_id, new_name,
@@ -192,10 +199,13 @@ async def rename_namespace_category(name: str, cat_name: str, body: KnowledgeCat
 @router.delete("/api/namespaces/{name}/categories/{cat_name}", status_code=204)
 async def delete_namespace_category(name: str, cat_name: str, user: dict = Depends(get_current_user)):
     await check_namespace_ownership(name, user)
-    async with get_conn() as conn:
+    async with get_conn() as conn, conn.transaction():
         ns_id = await resolve_namespace_id(conn, name)
         if ns_id is None:
-            raise HTTPException(status_code=404, detail="네임스페이스를 찾을 수 없습니다.")
+            raise HTTPException(status_code=404, detail="업무 영역을 찾을 수 없습니다.")
+        if not await conn.fetchval("SELECT EXISTS(SELECT 1 FROM rag_knowledge_category WHERE namespace_id = $1 AND name = $2)",
+                                   ns_id, cat_name):
+            raise HTTPException(status_code=404, detail="업무구분을 찾을 수 없습니다.")   # 지식을 건드리기 전에(막 쓰기 테스트)
         # 해당 카테고리를 사용하는 지식 항목의 category를 NULL로 초기화
         await conn.execute(
             "UPDATE rag_knowledge SET category = NULL WHERE namespace_id = $1 AND category = $2",
@@ -239,6 +249,7 @@ _QUERY_FILTERS = {"pending": "q.status = 'pending'", "no_knowledge": _OPEN_GAP.f
 
 @router.get("/api/stats/namespace/{name}", response_model=NamespaceDetailStats)
 async def get_namespace_stats(name: str, user: dict = Depends(get_current_user)):
+    await check_namespace_read(name, user)   # 다른 사용자의 질문·답이 담긴 관리 통계(막 쓰기 테스트 10/20)
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, name)
         if ns_id is None:
@@ -285,12 +296,13 @@ async def get_namespace_stats(name: str, user: dict = Depends(get_current_user))
 async def get_namespace_queries(
     name: str,
     status: Optional[str] = None,
-    limit: int = QueryParam(default=100, le=500),
+    limit: int = QueryParam(default=100, ge=1, le=500),
     user: dict = Depends(get_current_user),
 ):
     """status = pending(답변) / no_knowledge(열린 공백) / filled(메운 공백), 없으면 전체.
     메운 공백은 등록된 지식의 최신 내용을 answer로 보여준다(그 지식이 검토 대기거나 이후 반려·병합되면 원래 답변으로 폴백).
     resolved_knowledge_id는 원래 연결 값 그대로 — 집계(메움)와 화면 판단이 어긋나지 않게(검토 대기 지식으로 메운 경우)."""
+    await check_namespace_read(name, user)
     if status is not None and status not in _QUERY_FILTERS:
         raise HTTPException(status_code=400, detail="status는 pending / no_knowledge / filled 중 하나")
     # 전체 목록에도 시스템 오류(LLM 연결 실패)는 뺀다 — 질문에 대한 기록이 아니라 장애 기록
@@ -360,9 +372,13 @@ async def delete_query_log(log_id: int, user: dict = Depends(get_current_user)):
         await conn.execute("DELETE FROM ops_query_log WHERE id = $1", log_id)
 
 
+class QueryLogIds(BaseModel):
+    ids: list[Annotated[int, Field(ge=1, le=2_147_483_647)]] = Field(default_factory=list, max_length=1000)
+
+
 @router.post("/api/stats/query-logs/bulk-delete", status_code=200)
-async def bulk_delete_query_logs(body: dict, user: dict = Depends(get_current_user)):
-    ids: list[int] = body.get("ids", [])
+async def bulk_delete_query_logs(body: QueryLogIds, user: dict = Depends(get_current_user)):
+    ids = body.ids
     if not ids:
         raise HTTPException(status_code=400, detail="ids is required")
     async with get_conn() as conn:
@@ -376,10 +392,10 @@ async def bulk_delete_query_logs(body: dict, user: dict = Depends(get_current_us
             WHERE ql.id = ANY($1::int[])
             """, ids,
         )
-        if user["role"] != "admin":
-            for r in rows:
-                if r["owner_part_id"] is not None and r["owner_part_id"] != user["part_id"]:
-                    raise HTTPException(status_code=403, detail="이 네임스페이스에 대한 권한이 없습니다.")
+        for r in rows:   # 수정 규칙 한 곳(edit_denied_reason) — 예전 인라인 검사는 담당 없는 영역·조회 전용을 통과시켰다(리뷰 M1)
+            reason = edit_denied_reason(r["owner_part_id"], user)
+            if reason:
+                raise HTTPException(status_code=403, detail=reason)
         result = await conn.execute("DELETE FROM ops_query_log WHERE id = ANY($1::int[])", ids)
     deleted = int(result.split()[-1]) if result else 0
     return {"deleted": deleted}
@@ -660,7 +676,6 @@ async def apply_glossary_suggestion(
     try:
         result = await knowledge_service.create_glossary(
             body.namespace, body.term, body.description,
-            created_by_part=admin.get("part"),
             created_by_user_id=admin.get("id"),
         )
     except ValueError as e:

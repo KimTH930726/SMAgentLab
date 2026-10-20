@@ -27,7 +27,7 @@ from service.policy.korean_text import strip_text  # v2.71로 프로덕션(searc
 # 동일한 규칙 — 이 스크립트가 따로 갖고 있던 사본은 제거하고 단일 출처를 재사용한다.
 
 _GOLDEN_SET_PATH = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "golden_set" / "online_delivus_v1.jsonl"
-_FILE_TO_NAMESPACE = [("온라인스토어", "온라인스토어 DB"), ("딜리버스", "딜리버스 DB")]
+_FILE_TO_NAMESPACE = [("온라인스토어", "온라인스토어"), ("딜리버스", "딜리버스")]
 _TOP_K = 10
 
 

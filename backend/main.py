@@ -1,9 +1,11 @@
 """OpsLens(구 Ops-Navigator) FastAPI 진입점 — DDD 구조."""
+import asyncpg
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -153,17 +155,10 @@ async def _migrate_core_tables(conn) -> None:
         END $$;
     """)
 
-    # ── 슈퍼어드민 파트 + 관리자 시드 ──────────────────────────────
-    await conn.execute("""
-        INSERT INTO ops_part (name) VALUES ('슈퍼어드민') ON CONFLICT (name) DO NOTHING
-    """)
-    # 슈퍼어드민 part_id 조회
-    superadmin_part_id = await conn.fetchval(
-        "SELECT id FROM ops_part WHERE name = '슈퍼어드민'"
-    )
+    # ── 관리자 시드 ──────────────────────────────────────────────
+    # 슈퍼어드민은 파트가 아니라 역할(role=admin)이다(2026-10-20 — 파트는 사람 조직, 팀 > 파트). 예전엔 '슈퍼어드민' 파트를 매 기동마다
+    # 다시 만들고 admin을 거기 고정해, 조직 정리를 해도 재시작하면 되돌아갔다. 이제 파트를 만들지도 고정하지도 않는다.
     # 구 '기본' 파트가 남아있으면 제거 (마이그레이션) — 컬럼이 없으면 skip
-    if await _column_exists(conn, "ops_user", "part"):
-        await conn.execute("UPDATE ops_user SET part = '슈퍼어드민' WHERE part = '기본'")
     await conn.execute("""
         DELETE FROM ops_part WHERE name = '기본'
     """)
@@ -183,20 +178,15 @@ async def _migrate_core_tables(conn) -> None:
     if not admin_exists:
         hashed = hash_password(settings.admin_default_password)
         await conn.execute(
-            "INSERT INTO ops_user (username, hashed_password, role, part_id) VALUES ($1, $2, $3, $4)",
-            "admin", hashed, "admin", superadmin_part_id,
+            "INSERT INTO ops_user (username, hashed_password, role) VALUES ($1, $2, $3)",
+            "admin", hashed, "admin",
         )
         # 비밀번호는 로그에 남기지 않는다(v2.128에서 INFO 로그가 켜지며 새 DB 설치 때 평문으로 찍힐 뻔함 — 리뷰 2026-10-07)
         logger.info("기본 관리자 계정 생성됨 (admin / 비밀번호는 ADMIN_DEFAULT_PASSWORD)")
     else:
-        # role/part_id만 동기화 — 비밀번호는 건드리지 않는다(2026-09-03 수정).
-        # 예전엔 재시작마다 hashed_password를 admin_default_password로 무조건 덮어써서,
-        # 관리자가 UI로 비밀번호를 바꿔도 다음 배포/재시작 때 조용히 원복되는 실제
-        # 취약점이었다 — 팀 규모 SSO 인프라 점검 중 발견.
-        await conn.execute(
-            "UPDATE ops_user SET role = 'admin', part_id = $1 WHERE username = 'admin'",
-            superadmin_part_id,
-        )
+        # role만 동기화 — 비밀번호는 건드리지 않는다(2026-09-03 수정: 예전엔 재시작마다 덮어써 UI 변경이 원복되던 취약점).
+        # 소속 파트도 건드리지 않는다(2026-10-20 — 슈퍼어드민은 역할, 소속은 조직 관리에서)
+        await conn.execute("UPDATE ops_user SET role = 'admin' WHERE username = 'admin'")
 
     # ── ops_conversation.user_id 추가 ──────────────────────────────
     await conn.execute("ALTER TABLE ops_conversation ADD COLUMN IF NOT EXISTS user_id INT")
@@ -218,9 +208,8 @@ async def _migrate_core_tables(conn) -> None:
             "UPDATE ops_conversation SET user_id = $1 WHERE user_id IS NULL", admin_id,
         )
 
-    # ── 지식/용어 테이블에 created_by_part, created_by_user_id 추가 ──
+    # ── 지식/용어 테이블에 created_by_user_id 추가 (파트 이름 글자 created_by_part는 #78에서 삭제 — 여기서 다시 만들지 않는다) ──
     for tbl in ("rag_knowledge", "rag_glossary"):
-        await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_part VARCHAR(100)")
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS created_by_user_id INT")
 
     # ── 기존 ops_namespace 데이터 보충 (namespace 컬럼이 있는 경우만) ──
@@ -1466,6 +1455,58 @@ async def _migrate_policy_v0(conn) -> None:
         )""")
 
 
+async def _migrate_org_domain(conn) -> None:
+    """조직(사람) 축과 업무 영역(지식) 축 분리 (2026-10-20, #78). 멱등.
+    - ops_team + ops_part.team_id: 조직은 팀 > 파트(사람이 파트에 속함). 파트는 소속·역할·권한만 — 데이터는 파트 이름을 들지 않는다.
+    - ops_namespace.parent_id: 업무 영역 트리(상위 묶음은 kind='group', 데이터를 직접 갖지 않음). 담당은 owner_part_id(기존).
+    - ops_voc_routing.part_id: VOC 메일 담당을 파트 이름(글자) 대신 연결로 — 파트 이름이 바뀌어도 끊기지 않게(기존 part 글자는 보관)."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_team (
+            id          SERIAL PRIMARY KEY,
+            name        VARCHAR(100) NOT NULL UNIQUE,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""")
+    await conn.execute("ALTER TABLE ops_part ADD COLUMN IF NOT EXISTS team_id INT REFERENCES ops_team(id) ON DELETE SET NULL")
+    await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS parent_id INT REFERENCES ops_namespace(id) ON DELETE SET NULL")
+    await conn.execute("ALTER TABLE ops_voc_routing ADD COLUMN IF NOT EXISTS part_id INT REFERENCES ops_part(id) ON DELETE SET NULL")
+    if await _column_exists(conn, "ops_voc_routing", "part"):   # 아래에서 옛 글자 칸을 지운 뒤에도 재기동이 깨지지 않게(재리뷰 H1)
+        await conn.execute("""
+            UPDATE ops_voc_routing r SET part_id = p.id FROM ops_part p
+            WHERE r.part_id IS NULL AND r.part = p.name""")
+        await conn.execute("ALTER TABLE ops_voc_routing ALTER COLUMN part DROP NOT NULL")
+    # 영역 종류: '정책 영역/업무 영역' 구분 폐지 — 일반은 'domain'. 남는 종류는 group(상위 묶음)·policy_test(E2E 임시)뿐.
+    await conn.execute("ALTER TABLE ops_namespace ALTER COLUMN kind SET DEFAULT 'domain'")
+    await conn.execute("UPDATE ops_namespace SET kind = 'domain' WHERE kind IN ('policy', 'business')")
+    # 연결 표의 업무 영역 종류 이름 'part' → 'domain'('파트'는 사람 조직 — 같은 단어 두 뜻 금지)
+    await conn.execute("UPDATE ops_link SET from_type = 'domain' WHERE from_type = 'part'")
+    await conn.execute("UPDATE ops_link SET to_type = 'domain' WHERE to_type = 'part'")
+    # 파트 이름 글자 칸 삭제(사용자 확인 10/20). 용어의 '시스템'(정책서 최종본 표시)은 먼저 출처 칸으로 옮긴다
+    await conn.execute("ALTER TABLE rag_glossary ADD COLUMN IF NOT EXISTS source VARCHAR(30)")
+    if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM information_schema.columns "
+                           "WHERE table_name = 'rag_glossary' AND column_name = 'created_by_part')"):
+        await conn.execute("UPDATE rag_glossary SET source = 'policy_doc' WHERE source IS NULL AND created_by_part = '시스템'")
+    await conn.execute("ALTER TABLE rag_glossary DROP COLUMN IF EXISTS created_by_part")
+    await conn.execute("ALTER TABLE rag_knowledge DROP COLUMN IF EXISTS created_by_part")
+    # VOC 담당: 연결이 없는 행은 그 영역의 담당 파트로 → 전부 연결되면 옛 글자 칸 삭제·연결 필수·쓰이는 파트 삭제 금지
+    await conn.execute("""UPDATE ops_voc_routing r SET part_id = n.owner_part_id FROM ops_namespace n
+                          WHERE r.namespace_id = n.id AND r.part_id IS NULL AND n.owner_part_id IS NOT NULL""")
+    unlinked = await conn.fetchval("SELECT count(*) FROM ops_voc_routing WHERE part_id IS NULL")
+    if unlinked:
+        logger.warning("[migrate #78] VOC 담당 파트 연결이 없는 메일함 %d건 — 옛 part 칸 삭제·필수화 보류(담당 파트를 지정한 뒤 재기동)", unlinked)
+    else:
+        await conn.execute("ALTER TABLE ops_voc_routing DROP COLUMN IF EXISTS part")
+        await conn.execute("ALTER TABLE ops_voc_routing ALTER COLUMN part_id SET NOT NULL")
+        fk = await conn.fetchrow("""SELECT conname, confdeltype FROM pg_constraint
+                                    WHERE conrelid = 'ops_voc_routing'::regclass AND contype = 'f'
+                                      AND confrelid = 'ops_part'::regclass""")
+        if not fk or fk["confdeltype"] != "r":   # 교체 도중 끊겨 FK가 없는 상태도 다음 기동에 복구
+            async with conn.transaction():
+                if fk:
+                    await conn.execute(f'ALTER TABLE ops_voc_routing DROP CONSTRAINT "{fk["conname"]}"')
+                await conn.execute("ALTER TABLE ops_voc_routing ADD CONSTRAINT ops_voc_routing_part_id_fkey "
+                                   "FOREIGN KEY (part_id) REFERENCES ops_part(id) ON DELETE RESTRICT")
+
+
 async def _migrate_llm_usage(conn) -> None:
     """사내 LLM 사용량 기록 (2026-10-12, #74) — 호출 1건마다 기능·입출력 글자·토큰(게이트웨이 metadata.usage)·시간·성공.
     본문은 저장하지 않는다. 90일 지난 기록은 기동 때 지운다(집계 화면은 최근 7일). service/llm/usage.py. 멱등."""
@@ -1812,6 +1853,7 @@ async def _run_migrations() -> None:
         await _migrate_prompt_cleanup(conn)
         await _migrate_data_marker(conn)
         await _migrate_policy_v0(conn)
+        await _migrate_org_domain(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 
@@ -1908,6 +1950,58 @@ for r in _ROUTERS:
 async def value_error_handler(request: Request, exc: ValueError):
     """서비스 계층에서 raise한 ValueError(잘못된 요청)를 500 대신 400으로 변환."""
     return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+# 입력 검증 오류(422)를 한국어로 — 화면에 "String should have at least 1 character" 같은 영어 원문이 그대로 떴다(UI 막 누르기 10/20).
+# 모양(detail 목록: loc·msg·type)은 그대로 두고 msg만 바꾼다 — 화면(api/client.ts)이 msg를 이어 붙여 보여 준다.
+_FIELD_KO = {"name": "이름", "new_name": "새 이름", "username": "아이디", "password": "비밀번호", "part": "파트",
+             "mailbox_upn": "메일함", "role": "역할", "description": "설명", "ids": "선택 항목"}
+
+
+def _ko_validation_msg(err: dict) -> str:
+    field = next((str(x) for x in reversed(err.get("loc", ())) if isinstance(x, str) and x != "body"), "")
+    label = _FIELD_KO.get(field, field or "입력")
+    ctx, typ = err.get("ctx") or {}, err.get("type", "")
+    if typ == "string_too_short":
+        return f"{label}: {ctx.get('min_length', 1)}자 이상 입력해 주세요."
+    if typ == "string_too_long":
+        return f"{label}: {ctx.get('max_length')}자 이하로 입력해 주세요."
+    if typ == "missing":
+        return f"{label}: 입력해 주세요."
+    if typ == "literal_error":
+        return f"{label}: 값이 올바르지 않습니다({ctx.get('expected', '')} 중 하나)."
+    if typ in ("int_parsing", "int_type", "greater_than_equal", "less_than_equal", "too_long"):
+        return f"{label}: 값이 올바르지 않습니다."
+    if typ == "value_error":   # 우리 검증기가 던진 한국어 문구(예: '/' 금지)
+        return str(ctx.get("error") or err.get("msg", "")).removeprefix("Value error, ")
+    return f"{label}: 값이 올바르지 않습니다."
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(status_code=422, content={"detail": [
+        {"loc": list(e.get("loc", ())), "msg": _ko_validation_msg(e), "type": e.get("type")} for e in exc.errors()]})
+
+
+# 막 쓰기 테스트(10/20): 너무 긴 값·범위 밖 숫자·동시 중복 요청·연결 대상이 그 사이 지워짐이 500으로 나갔다. 경로마다 막기 전에
+# 공통으로 4xx + 사유로 바꾼다(대체 처리라 로그를 남긴다). 문구에 DB 원문은 싣지 않는다.
+@app.exception_handler(asyncpg.exceptions.DataError)
+async def db_data_error_handler(request: Request, exc: Exception):
+    # 응답은 일반 문구, 로그엔 원문 — 22 계열엔 앱이 만든 SQL 버그(0으로 나눔 등)도 섞여 "입력 탓"으로 숨지 않게(재리뷰 L2)
+    logger.warning("[입력 오류→400] %s %s: %s: %s", request.method, request.url.path, type(exc).__name__, exc)
+    return JSONResponse(status_code=400, content={"detail": "입력 값이 허용 범위를 벗어났습니다(길이·숫자 범위를 확인하세요)."})
+
+
+@app.exception_handler(asyncpg.exceptions.UniqueViolationError)
+async def db_unique_handler(request: Request, exc: Exception):
+    logger.warning("[중복→409] %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=409, content={"detail": "이미 있는 값입니다(같은 요청이 동시에 처리됐을 수 있어요). 새로고침 후 확인하세요."})
+
+
+@app.exception_handler(asyncpg.exceptions.ForeignKeyViolationError)
+async def db_fk_handler(request: Request, exc: Exception):
+    logger.warning("[연결 대상 없음→409] %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=409, content={"detail": "연결된 항목이 그 사이 바뀌거나 지워졌습니다. 새로고침 후 다시 시도하세요."})
 
 
 @app.get("/health")

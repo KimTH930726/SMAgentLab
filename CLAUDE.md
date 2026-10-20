@@ -26,7 +26,7 @@
 - `backend/service/llm/` — LLM 프로바이더 (ollama/inhouse)
 - `backend/agents/knowledge_rag/knowledge/retrieval.py` — 하이브리드 검색(Glossary Mapping + Vector/Keyword)
 - `backend/service/chat/memory.py` — 대화 요약 + 시맨틱 리콜
-- `backend/service/policy/` — 정책서 임포트/검색 파이프라인 (v1, docs/policy-doc-pipeline-plan.md)
+- `backend/service/policy/` — 정책서 적재·검색(v0 최종본 통째: docs/tech/policy-v0-design.md, 옛 v1 엑셀 분해: docs/archive/policy-doc-pipeline-plan.md)
 - `backend/libs/trustkit/` — **신뢰도 레이어**(이식 가능한 팀 자산: 적재 품질·검색 기법·문맥/답 다듬기·평가). 표준 라이브러리만,
   앱 코드(core/service/shared/agents) import 금지. 기법 본체는 여기, 앱 쪽은 DB 어댑터만. 설계: docs/tech/trustkit-design.md
 - `frontend-react/src/components/` — React UI 컴포넌트
@@ -44,7 +44,9 @@
 ## 배포 전 체크리스트
 - `npx tsc --noEmit` 통과 확인
 - 백엔드 테스트: `docker exec -w /app ops-backend python -m pytest -q tests libs/trustkit/tests`
+- 백엔드 재시작 전: `docker exec -w /app ops-backend python -c "import main"` — 단위 테스트는 앱 모듈을 가짜로 바꿔 두고 돌아 import 누락(NameError)을 못 잡는다(10/20 재시작 실패)
 - 검색·답 생성을 바꿨으면 정확도 게이트: 전/후 측정 → `scripts/eval_gate.py`(검색 나빠짐 0 · 답 의미 있는 하락 없음, 같은 날 채점끼리)
+- 마이그레이션(main.py)에서 칸을 지우거나 이름을 바꿨으면: 백업 복사본 DB에 `scripts/check_migrations_twice.py`(두 번 연속 기동해도 안 깨지는지)
 - `docker compose build` 성공 확인
 - 아키텍처 변경 시 docs/ 3개 파일(architecture.md/flow.md/table-definition.md 마이그레이션 이력) 동기화 — API 스펙은 `/docs` 자동 생성이라 손 동기화 불필요
 

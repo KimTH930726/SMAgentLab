@@ -30,7 +30,7 @@ export async function updateEmailCollectionSettings(
 export interface VocRouting {
   id: number;
   namespace: string;
-  part: string;
+  part: string | null;
   mailbox_upn: string;
   teams_webhook_url: string | null;
   oncall_contact_name: string | null;

@@ -26,6 +26,11 @@ export async function register(payload: {
   });
 }
 
+/** 지금 로그인한 사용자(역할·소속)를 서버에서 다시 읽는다 — 승인·소속 변경이 다시 로그인 없이 화면에 반영되게 */
+export async function getMe(): Promise<User> {
+  return apiFetch<User>('/auth/me');
+}
+
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   return apiFetch<void>('/auth/me/password', {
     method: 'PUT',

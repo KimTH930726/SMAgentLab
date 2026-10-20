@@ -6,7 +6,7 @@
 조회 엔드포인트만 제공한다(2026-09-18)."""
 from fastapi import APIRouter, Depends, Query
 
-from core.dependencies import get_current_user, check_namespace_ownership
+from core.dependencies import get_current_user, check_namespace_ownership, check_namespace_read
 from service.refdata import service
 from service.refdata.schemas import RefDataSearchOut
 
@@ -21,7 +21,7 @@ async def search_refdata(
     user: dict = Depends(get_current_user),
 ):
     """공통코드/DB스키마 두 갈래를 함께 검색해 반환 — agent.py의 채택 축과 동일 구조."""
-    await check_namespace_ownership(namespace, user)
+    await check_namespace_read(namespace, user)
     common_codes = await service.search_common_codes(namespace, q, top_k)
     db_columns = await service.search_db_columns(namespace, q, top_k)
     return RefDataSearchOut(common_codes=common_codes, db_columns=db_columns)

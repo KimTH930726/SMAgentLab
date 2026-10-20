@@ -316,7 +316,7 @@ function ProviderSettings() {
         </div>
       </div>
 
-      <LlmUsagePanel />
+      {user?.role === 'admin' && <LlmUsagePanel />}
 
       {/* Provider selector */}
       <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 space-y-4">
@@ -555,7 +555,10 @@ function ProviderSettings() {
         </div>
       )}
 
-      {/* Action buttons */}
+      {/* Action buttons — 전역 설정이라 관리자만(서버도 관리자 전용) */}
+      {user?.role !== 'admin' ? (
+        <p className="text-xs text-slate-500">LLM 설정은 관리자만 바꿀 수 있어요.</p>
+      ) : (
       <div className="flex gap-2">
         <Button variant="secondary" size="sm" onClick={handleTest} loading={testing} disabled={!dirty && testResult !== null}>
           <FlaskConical className="w-4 h-4" /> 연결 테스트
@@ -569,6 +572,7 @@ function ProviderSettings() {
           <Save className="w-4 h-4" /> 저장 및 적용
         </Button>
       </div>
+      )}
 
       {/* Info box */}
       <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4 text-xs text-slate-500 space-y-1">
