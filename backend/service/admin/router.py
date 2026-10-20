@@ -1,4 +1,5 @@
 """관리 도메인 — namespace, stats, LLM 설정 라우터."""
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query as QueryParam
@@ -25,6 +26,7 @@ from service.prompt.loader import get_prompt as load_prompt
 from shared import cache as sem_cache
 from agents.base import AgentRegistry
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin"])
 
 
@@ -632,8 +634,10 @@ async def suggest_glossary_terms(
             suggestions = json.loads(cleaned)
             if not isinstance(suggestions, list):
                 suggestions = []
-    except Exception:
-        suggestions = []
+    except Exception as e:
+        # 예전엔 실패해도 "N건에서 용어 추출 완료"라고 보여 줬다(10/20 대체 처리 점검) — 실패를 화면 문구로 알리고 로그로 남긴다
+        logger.warning("AI 용어 추출 실패: %s", e)
+        return {"suggestions": [], "message": "AI 용어 추출에 실패했습니다. 잠시 후 다시 시도해 주세요."}
 
     # LLM이 프롬프트 지시를 무시하고 기존 용어를 다시 낸 경우를 대비한 후처리 필터
     existing_lower = {t.lower() for t in existing_terms}

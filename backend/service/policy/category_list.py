@@ -34,6 +34,7 @@ _MAX_ITEMS = 40
 try:
     CLARIFY_MAX_ITEMS = int(__import__("os").environ.get("CATEGORY_CLARIFY_MAX_ITEMS", "20"))
 except ValueError:
+    logger.warning("CATEGORY_CLARIFY_MAX_ITEMS 값이 숫자가 아님 — 20 사용")
     CLARIFY_MAX_ITEMS = 20
 _CLARIFY_MIN_COVER = 0.8   # 하위 분류 선택지가 목록의 이 비율 이상을 덮어야 하위 분류로 묻는다
 _CLARIFY_MAX_OPTIONS = 3   # 범위 선택지 수(+ "전부 보기" — 선택지 5개 이하가 업계 관행, 화면의 "기타(직접 입력)" 포함)

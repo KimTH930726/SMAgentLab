@@ -550,8 +550,8 @@ async def _run_auto_tag(
                         "SELECT name FROM rag_knowledge_category WHERE namespace_id = $1", ns_id
                     )
                 categories = [r["name"] for r in cat_rows]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("업무구분 목록 조회 실패 — 분류 없이 태깅: %s", e)
 
         llm = get_llm_provider()
         tag_input = [{"idx": i, "text": it["content"]} for i, it in enumerate(items)]
@@ -749,8 +749,8 @@ async def preview_file_upload(
             analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
             detected_strategy = analysis.get("chunk_strategy", "auto")
             strategy = detected_strategy
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("문서 분석 실패 — 분할 방식 auto로: %s", e)
 
     chunks = chunk_document(doc, strategy=strategy)
     doc_id = await _save_ledger_draft(await _ledger_ns_id(namespace, user), doc, strategy, user,
@@ -853,8 +853,8 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
         analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
         detected_strategy = analysis.get("chunk_strategy", "auto")
         strategy = detected_strategy
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("문서 분석 실패 — 분할 방식 auto로: %s", e)
 
     chunks = chunk_document(doc, strategy=strategy)
     doc_id = await _save_ledger_draft(await _ledger_ns_id(body.namespace, user), doc, strategy, user)

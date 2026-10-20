@@ -9,10 +9,13 @@ unresolved+사유 캡처 전부 정상 동작 확인). (c)코드열거형은 (b)
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
 from service.llm.factory import get_llm_provider
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """당신은 비즈니스 정책서 원문을 구조화된 데이터로 분해하는 전문가입니다.
 정책 본문(중첩 리스트 형식)을 의미 단위(segment)로 나누고, 각 segment를 다음 중 하나로 분류하세요.
@@ -131,7 +134,8 @@ async def suggest_param_fields(segment_text: str, reason: Optional[str] = None) 
             "value": parsed.get("value") or None,
             "unit": parsed.get("unit") or None,
         }
-    except Exception:
+    except Exception as e:   # 화면은 직접 입력으로 — 원인은 로그로(10/20 대체 처리 점검)
+        logger.warning("파라미터 칸 제안 LLM 실패: %s", e)
         return None
 
 
@@ -158,6 +162,7 @@ async def decompose_policy_body(policy_name: str, raw_body: str) -> list[Segment
             ))
         return segments
     except Exception as e:
+        logger.warning("정책 분해 LLM 실패 — 원문 전체를 미분류로: %s %s", policy_name[:40], e)
         return [Segment(
             type="unresolved", text=raw_body,
             reason=f"LLM 분해 실패({type(e).__name__}) — 원문 전체를 검토 대상으로 보존",

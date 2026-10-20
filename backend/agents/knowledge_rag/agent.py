@@ -10,7 +10,7 @@ from core.database import get_conn
 from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
-    LLM_UNAVAILABLE_MSG, LLM_EMPTY_MSG, NO_KNOWLEDGE_MARKER, is_llm_failure,
+    LLM_UNAVAILABLE_MSG, LLM_EMPTY_MSG, NO_KNOWLEDGE_MARKER, SYSTEM_ERROR_MSG, is_llm_failure,
     results_to_json, results_to_payload,
     update_assistant_message, update_inhouse_conv_id,
     create_query_log, post_save_tasks,
@@ -32,6 +32,7 @@ from shared.rrf import rrf_score
 logger = logging.getLogger(__name__)
 
 _FLUSH_INTERVAL = 20
+DEGRADED_POLICY_SOURCES = 3   # AI가 답을 못 냈을 때 보여 줄 정책 근거 수(검색 상위) — 근거만 보여 주기(2026-10-20)
 
 # 정책 검색 후보 수(param·서술 각각) — 5에서 10으로(2026-09-28, scripts/diagnose_no_knowledge.py
 # 골든셋 89문항 실측): 정답이 6~20위에 있어 잘리던 문항이 8→2건, 정상 답변 69→75건(77.5%→84.3%),
@@ -335,6 +336,8 @@ class KnowledgeRagAgent(AgentBase):
         token_count = 0
         mapped_term: Optional[str] = None
         llm_failed = False
+        final_saved = False   # 답을 최종 저장했나 — 그 뒤 오류(질의 기록·캐시 등)로 이미 나간 답을 실패로 덮지 않게(리뷰 L2)
+        msg_status = "completed"   # 저장한 상태 — 저장 뒤 오류에도 끝 신호를 이 값으로(거부도 failed, 재리뷰 D3)
 
         try:
             yield {"type": "status", "step": "embedding", "message": "질문 임베딩 생성 중..."}
@@ -376,6 +379,7 @@ class KnowledgeRagAgent(AgentBase):
                     msg_id, cached["answer"], "completed",
                     metadata={"policy_citations": cached_citations} if cached_citations else None,
                 )
+                final_saved = True
                 yield {
                     "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
                     "mapped_term": cached.get("mapped_term"),
@@ -421,6 +425,7 @@ class KnowledgeRagAgent(AgentBase):
             # 그대로 이어진다(메시지 metadata에 선택지 저장 → 다시 열어도 버튼). 질의 기록·캐시엔 안 남긴다(선택한 다음 질문이 남음)
             if cc.clarify:
                 await update_assistant_message(msg_id, cc.clarify["message"], "completed", metadata={"clarify": cc.clarify})
+                final_saved = True
                 yield {"type": "clarify", **cc.clarify}
                 yield {"type": "token", "data": cc.clarify["message"]}
                 yield {"type": "done", "message_id": msg_id, "status": "completed"}
@@ -428,6 +433,7 @@ class KnowledgeRagAgent(AgentBase):
 
             if cc.abstain:
                 await update_assistant_message(msg_id, NO_KNOWLEDGE_MARKER, "completed")
+                final_saved = True
                 yield {"type": "token", "data": NO_KNOWLEDGE_MARKER}
                 await create_query_log(namespace, query, NO_KNOWLEDGE_MARKER, mapped_term, msg_id,
                                        user_id=user.get("id"), had_context=False)
@@ -480,26 +486,36 @@ class KnowledgeRagAgent(AgentBase):
                 yield {"type": "token", "data": LLM_EMPTY_MSG}
 
             final_answer = full_answer or LLM_UNAVAILABLE_MSG
-            msg_status = "failed" if llm_failed else "completed"
+            # 근거만 보여 주기(2026-10-20): AI가 답을 못 냈어도(연결 실패·빈 응답·게이트웨이 거부) 찾은 근거는 있다 — 일반 답처럼 보이는
+            # 실패 문구 대신 "근거만" 표시로. 예전엔 정책 근거를 실패 문구와 겹치는 것으로 골라 사실상 늘 사라졌다(정책만으로 답하는
+            # 질문은 근거가 0으로 보였다). 업계의 생성 실패 시 출처 목록으로 물러나기(graceful degradation)와 같다.
+            degraded = llm_failed or is_llm_failure(final_answer)
+            msg_status = "failed" if degraded else "completed"
 
-            # 정책 근거 1건 역추적(2026-09-07) — 답변이 실제로 나온 뒤에야 어떤 후보를
-            # 참고했는지 알 수 있다(위 policy_result 정의부 주석 참고).
             if policy_result.params or policy_result.narratives:
                 try:
-                    cited = policy_search.select_cited_hit(policy_result, final_answer)
-                    policy_citations = policy_search.build_policy_citations(cited)
+                    if degraded:   # 답과 겹치는 것을 고를 수 없으니 검색 상위 후보를 그대로
+                        top = policy_search.PolicySearchResult(params=policy_result.params[:DEGRADED_POLICY_SOURCES],
+                                                               narratives=policy_result.narratives[:DEGRADED_POLICY_SOURCES])
+                        policy_citations = policy_search.build_policy_citations(top)
+                    else:          # 정책 근거 1건 역추적(2026-09-07) — 답변이 나온 뒤에야 어떤 후보를 참고했는지 안다
+                        cited = policy_search.select_cited_hit(policy_result, final_answer)
+                        policy_citations = policy_search.build_policy_citations(cited)
                 except Exception as e:
                     logger.warning("정책 근거 선택 실패(답변엔 영향 없음): %s", e)
 
-            await update_assistant_message(
-                msg_id, final_answer, msg_status,
-                metadata={"policy_citations": policy_citations} if policy_citations else None,
-            )
+            meta_out: dict = {}
             if policy_citations:
+                meta_out["policy_citations"] = policy_citations
+            if degraded:
+                meta_out["degraded"] = True
+            await update_assistant_message(msg_id, final_answer, msg_status, metadata=meta_out or None)
+            final_saved = True
+            if policy_citations or degraded:
                 yield {
                     "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
                     "mapped_term": mapped_term, "results": results_to_payload(results),
-                    "policy_citations": policy_citations,
+                    "policy_citations": policy_citations, "degraded": degraded,
                 }
             if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
                 await update_inhouse_conv_id(conversation_id, new_inhouse_conv_id)
@@ -521,9 +537,26 @@ class KnowledgeRagAgent(AgentBase):
             yield {"type": "done", "message_id": msg_id, "status": msg_status}
 
         except Exception as e:
+            # LLM 밖(검색·DB·임베딩)의 오류 — LLM 탓으로 저장하지 않고, 실패 상태·장애 기록·끝 신호까지(2026-10-20 점검: 예전엔 "LLM 연결
+            # 불가"·completed로 저장하고 done도 질의 기록도 없었다)
             logger.error("KnowledgeRagAgent 에러: %s", e, exc_info=True)
-            if not full_answer:
-                full_answer = LLM_UNAVAILABLE_MSG
-            await update_assistant_message(msg_id, full_answer, "completed")
+            if final_saved:   # 답은 이미 저장·전달됨 — 뒤처리 오류는 로그만
+                yield {"type": "done", "message_id": msg_id, "status": msg_status}
+                return
+            answered = bool(full_answer)   # 스트리밍 도중 끊김이면 받은 데까지는 근거만 보여 주기로 표시(일반 답처럼 보이지 않게)
+            if not answered:
+                full_answer = SYSTEM_ERROR_MSG
+            try:
+                await update_assistant_message(msg_id, full_answer, "failed", metadata={"degraded": True} if answered else None)
+                await create_query_log(namespace, query, SYSTEM_ERROR_MSG, mapped_term, msg_id,
+                                       user_id=user.get("id"), had_context=False)
+            except Exception as e2:
+                logger.warning("오류 응답 저장 실패: %s", e2)
+            if answered:
+                # 근거 카드는 이미 화면에 있다 — 빈 목록을 보내면 화면이 지운다(재리뷰 D1). 표시만
+                yield {"type": "meta", "conversation_id": conversation_id, "message_id": msg_id, "degraded": True}
+            else:
+                yield {"type": "token", "data": SYSTEM_ERROR_MSG}
+            yield {"type": "done", "message_id": msg_id, "status": "failed"}
         finally:
             asyncio.create_task(_safe_post_save(conversation_id, namespace))

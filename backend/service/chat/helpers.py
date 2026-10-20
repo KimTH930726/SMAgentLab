@@ -21,9 +21,14 @@ GATEWAY_REFUSAL_MARKER = "요청하신 내용에 다음과 같은 민감 정보�
 LLM_EMPTY_MSG = "[AI가 빈 답변을 보냈습니다. 잠시 후 다시 질문해 주세요.]"
 
 
+# LLM이 아니라 검색·DB 등 처리 중 오류(2026-10-20) — 예전엔 이것도 "LLM 서버에 연결할 수 없습니다"로 저장해 원인을 LLM으로 돌렸고,
+# 상태가 completed라 피드백 버튼까지 떴으며 질의 기록이 없어 장애 통계에서도 빠졌다(대체 처리 전수 점검)
+SYSTEM_ERROR_MSG = "[처리 중 오류가 발생했습니다. 잠시 후 다시 질문해 주세요.]"
+
+
 def is_llm_failure(answer: str | None) -> bool:
-    """LLM이 답을 못 낸 응답(연결 실패·빈 응답·게이트웨이 거부) — 질의 기록은 system_error, 캐시 저장 안 함."""
-    return (not answer or answer in (LLM_UNAVAILABLE_MSG, LLM_EMPTY_MSG)
+    """답을 못 낸 응답(LLM 연결 실패·빈 응답·게이트웨이 거부·처리 오류) — 질의 기록은 system_error, 캐시 저장 안 함."""
+    return (not answer or answer in (LLM_UNAVAILABLE_MSG, LLM_EMPTY_MSG, SYSTEM_ERROR_MSG)
             or GATEWAY_REFUSAL_MARKER in answer[:200])
 
 

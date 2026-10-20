@@ -1,9 +1,12 @@
 """관리 도메인 — 네임스페이스 CRUD 서비스."""
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from core.database import get_conn
+
+logger = logging.getLogger(__name__)
 
 
 async def list_namespaces() -> list[str]:
@@ -145,7 +148,8 @@ async def suggest_category_for_content(ns_id: int, content: str) -> Optional[str
         if suggested not in categories:
             matched = next((c for c in categories if c in suggested or suggested in c), None)
             suggested = matched
-    except Exception:
+    except Exception as e:   # 등록은 계속("분류 확인 필요"로) — 원인은 로그로(10/20 대체 처리 점검)
+        logger.warning("업무구분 추천 LLM 실패 — 분류 없이 진행: %s", e)
         suggested = None
     return suggested
 

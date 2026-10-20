@@ -328,3 +328,92 @@ def test_list_scoped_invariants():
 def test_condition_query_particles(q, want):
     from service.policy.query_type import looks_like_condition_query
     assert looks_like_condition_query(q) is want
+
+
+# ── 근거만 보여 주기(2026-10-20) — AI가 답을 못 내도 찾은 정책 근거를 보여 주고 장애로 표시, LLM 밖 오류는 LLM 탓으로 저장하지 않는다 ──
+
+def _with_policy(monkeypatch, n=5):
+    from service.policy.search import NarrativeHit
+    pr = PolicySearchResult(narratives=[NarrativeHit(item_id=i, logical_id=i, policy_name=f"p{i}", category_path=[], status="active",
+                                                     chunk_text="본문", score=0.7, raw_body="본문") for i in range(n)])
+    monkeypatch.setattr(agent.policy_search, "PolicySearchResult", PolicySearchResult)
+    built = []
+    monkeypatch.setattr(agent.policy_search, "build_policy_citations",
+                        lambda r: built.append(r) or [{"item_id": h.item_id} for h in r.narratives])
+    picked = MagicMock(side_effect=AssertionError("실패 문구와 겹치는 근거를 고르면 안 된다"))
+    monkeypatch.setattr(agent.policy_search, "select_cited_hit", picked)
+    return pr, built
+
+
+@pytest.mark.asyncio
+async def test_llm_failure_shows_top_policy_sources_as_degraded(monkeypatch):
+    upd, log, set_cached, _ = _wire(monkeypatch, abstain=False, tokens=[])   # 토큰 0개 = 빈 응답(장애)
+    pr, built = _with_policy(monkeypatch)
+    cc = agent.build_chat_context.return_value
+    cc.policy_result = pr
+    events = await _run()
+    meta = [e for e in events if e["type"] == "meta" and e.get("degraded")]
+    assert meta and [c["item_id"] for c in meta[-1]["policy_citations"]] == [0, 1, 2]   # 검색 상위 3건
+    assert upd.await_args.args[2] == "failed" and upd.await_args.kwargs["metadata"]["degraded"] is True
+    assert events[-1] == {"type": "done", "message_id": 5, "status": "failed"}
+    set_cached.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_non_llm_error_is_not_blamed_on_llm(monkeypatch):
+    upd, log, set_cached, llm_calls = _wire(monkeypatch, abstain=False, tokens=["답"])
+    monkeypatch.setattr(agent, "SYSTEM_ERROR_MSG", "[처리 오류]")
+    monkeypatch.setattr(agent, "build_chat_context", AsyncMock(side_effect=RuntimeError("DB 끊김")))
+    events = await _run()
+    assert [e["data"] for e in events if e["type"] == "token"] == ["[처리 오류]"]
+    assert events[-1]["type"] == "done" and events[-1]["status"] == "failed"        # 예전엔 done 없음
+    assert upd.await_args.args[1:3] == ("[처리 오류]", "failed")                       # 예전엔 "LLM 연결 불가"·completed
+    assert log.await_args.args[2] == "[처리 오류]"                                    # 장애 통계에 남는다(예전엔 기록 없음)
+    assert not llm_calls
+
+
+@pytest.mark.asyncio
+async def test_gateway_refusal_becomes_degraded(monkeypatch):
+    upd, log, set_cached, _ = _wire(monkeypatch, abstain=False, tokens=["앞부분", REPLACE + "요청하신 내용에 민감 정보"])
+    monkeypatch.setattr(agent, "is_llm_failure", lambda a: not a or "민감 정보" in a)
+    events = await _run()
+    assert any(e["type"] == "meta" and e.get("degraded") for e in events)
+    assert upd.await_args.args[2] == "failed" and events[-1]["status"] == "failed"
+    set_cached.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_error_after_final_save_does_not_relabel_answer(monkeypatch):
+    upd, log, set_cached, _ = _wire(monkeypatch, abstain=False, tokens=["정상 답"])
+    log.side_effect = RuntimeError("질의 기록 DB 끊김")
+    events = await _run()
+    assert [c.args[2] for c in upd.await_args_list if len(c.args) > 2] == ["completed"]   # 실패로 덮어쓰지 않음
+    assert events[-1] == {"type": "done", "message_id": 5, "status": "completed"}
+    assert not [e for e in events if e["type"] == "token" and "오류" in e["data"]]
+
+
+@pytest.mark.asyncio
+async def test_partial_answer_then_error_marks_degraded_without_clearing_sources(monkeypatch):
+    upd, log, set_cached, _ = _wire(monkeypatch, abstain=False, tokens=["받은 데까지의 답"])
+    monkeypatch.setattr(agent, "SYSTEM_ERROR_MSG", "[처리 오류]")
+
+    async def save(msg_id, content, status=None, metadata=None):
+        if status == "completed":
+            raise RuntimeError("최종 저장 DB 끊김")
+    upd.side_effect = save
+    events = await _run()
+    last_meta = [e for e in events if e["type"] == "meta"][-1]
+    assert last_meta.get("degraded") is True and "results" not in last_meta and "policy_citations" not in last_meta   # 근거 카드 유지(재리뷰 D1)
+    assert upd.await_args.args[2] == "failed" and upd.await_args.kwargs["metadata"] == {"degraded": True}
+    assert not [e for e in events if e["type"] == "token" and e["data"] == "[처리 오류]"]   # 받은 답 뒤에 오류 문구를 붙이지 않음
+    assert events[-1]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_then_log_error_does_not_relabel(monkeypatch):
+    upd, log, set_cached, _ = _wire(monkeypatch, abstain=False, tokens=[])
+    _wire.get_cached.return_value = {"answer": "캐시 답", "results": [], "policy_citations": []}
+    log.side_effect = RuntimeError("질의 기록 DB 끊김")
+    events = await _run()
+    assert [c.args[2] for c in upd.await_args_list if len(c.args) > 2] == ["completed"]   # 재리뷰 D2
+    assert events[-1] == {"type": "done", "message_id": 5, "status": "completed"}

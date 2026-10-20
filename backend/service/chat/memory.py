@@ -206,10 +206,12 @@ async def _summarize_with_llm(messages: list, llm_provider) -> Optional[str]:
     template = await load_prompt("conv_summarize", _CONV_SUMMARIZE_FALLBACK)
     # .format() 대신 replace 사용: 대화 내용에 {변수명} 패턴이 있으면 ValueError/KeyError 발생함
     # (IT 운영 질문에는 {table_name}, {env} 같은 패턴이 흔히 포함됨)
+    if "{dialogue}" not in template:
+        # 템플릿에 플레이스홀더가 없으면(관리자가 프롬프트를 고치다 지움) 대화가 빠진 요약을 만든다 — 기본 템플릿으로.
+        # 예전엔 바꾼 *뒤에* 찾아 이 경우를 못 잡았다(10/20 대체 처리 점검)
+        logger.warning("대화 요약 프롬프트에 {dialogue}가 없음 — 기본 템플릿 사용")
+        template = _CONV_SUMMARIZE_FALLBACK
     prompt = template.replace("{dialogue}", dialogue)
-    if "{dialogue}" in prompt:
-        # replace가 실패한 경우(템플릿에 플레이스홀더 없음) → fallback 사용
-        prompt = _CONV_SUMMARIZE_FALLBACK.replace("{dialogue}", dialogue)
     try:
         # 시스템 프롬프트를 안 넘기면 채팅 답변 규칙("참고 문서만 근거로", "없으면 찾지 못했습니다")이 붙었다(2026-10-13 점검)
         summary, _ = await llm_provider.generate(context="", question=prompt, system_prompt=_SUMMARY_SYSTEM)

@@ -48,7 +48,7 @@ async def register(body: RegisterRequest):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, request: Request):
-    client_ip = request.client.host if request.client else None
+    client_ip = rate_limit.client_ip(request)
 
     if await rate_limit.is_locked(body.username, client_ip):
         raise HTTPException(

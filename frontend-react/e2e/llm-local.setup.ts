@@ -47,6 +47,15 @@ export default async function globalSetup(_config: FullConfig) {
     await resetToEnv(token);
     throw new Error('로컬 LLM에 연결되지 않음 — 원래 LLM으로 되돌림');
   }
+  // 모델은 서버가 올린 것을 자동으로 쓴다(공용 샌드박스라 자주 바뀜) — 결과가 모델마다 다를 수 있어 어느 모델로 돌았는지 남긴다
+  // 기록용일 뿐이라 실패해도 준비를 막지 않는다 — 여기서 멈추면 되돌리기가 등록되지 않아 백엔드가 로컬 LLM에 남는다(리뷰 M2)
+  try {
+    const url = `${process.env.E2E_LOCAL_LLM_URL ?? 'http://10.21.37.34:8000/v1'}/models`;
+    const models = await (await fetch(url, { signal: AbortSignal.timeout(5000) })).json();
+    console.log(`[E2E] 로컬 LLM 모델: ${models?.data?.[0]?.id ?? '알 수 없음'}`);
+  } catch {
+    console.log('[E2E] 로컬 LLM 모델: 확인 못 함(기록만, 진행)');
+  }
   return async () => {   // globalTeardown(Playwright 1.63은 globalSetup이 돌려준 함수를 끝에 실행) — 실패해도 백엔드 재시작이면 .env 값
     await resetToEnv(await adminToken());
   };

@@ -220,6 +220,7 @@ KEYWORD_FUSION = os.environ.get("POLICY_KEYWORD_FUSION", "rescue")   # rescue | 
 try:   # 환경값 오타로 기동이 실패하지 않게
     KEYWORD_RESCUE_SLOTS = int(os.environ.get("POLICY_KEYWORD_RESCUE_SLOTS", "3"))
 except ValueError:
+    logger.warning("POLICY_KEYWORD_RESCUE_SLOTS 값이 숫자가 아님 — 3 사용")
     KEYWORD_RESCUE_SLOTS = 3
 NARRATIVE_FETCH_MULT = 3   # 항목으로 묶기 전 조각 후보 배수(항목당 조각 평균 1.6개 — 묶은 뒤에도 top_k를 채우게)
 # 키워드 순위의 무게(벡터 = 1) — 같은 무게면 키워드 1위가 벡터 1위를 밀어내 서술 질문의 맨 앞 정답이 91%→65%로 떨어졌다(10/13 측정).
@@ -227,6 +228,7 @@ NARRATIVE_FETCH_MULT = 3   # 항목으로 묶기 전 조각 후보 배수(항목
 try:
     KEYWORD_RRF_WEIGHT = float(os.environ.get("POLICY_KEYWORD_RRF_WEIGHT", "0.5"))
 except ValueError:
+    logger.warning("POLICY_KEYWORD_RRF_WEIGHT 값이 숫자가 아님 — 0.5 사용")
     KEYWORD_RRF_WEIGHT = 0.5
 
 

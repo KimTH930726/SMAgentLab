@@ -88,8 +88,14 @@ def set_similarity_threshold(threshold: float) -> None:
     logger.info("[Cache] 유사도 임계값 → %.2f", _similarity_threshold)
 
 
+_warned_no_url = False
+
+
 async def _get_redis():
-    global _redis_client
+    global _redis_client, _warned_no_url
+    if not settings.redis_url and not _warned_no_url:   # 설정 누락으로 캐시가 꺼진 걸 운영자가 알 수 있게(한 번만, 10/20 점검)
+        _warned_no_url = True
+        logger.warning("[Cache] REDIS_URL이 비어 있음 — 시맨틱 캐시 꺼짐")
     if _redis_client is None and settings.redis_url:
         try:
             import redis.asyncio as redis

@@ -86,6 +86,7 @@ def parse_draft(target_type: str, raw: str) -> Optional[dict]:
     try:
         parsed = json.loads(_strip_code_fence(raw))
     except (ValueError, TypeError):
+        logger.warning("정정 AI 응답이 JSON이 아님(%d자) — 대체 경로로", len(raw or ""))   # 원문은 안 남김(사내 문서일 수 있음)
         return None
     if not isinstance(parsed, dict):
         return None
@@ -302,6 +303,7 @@ def parse_identification(raw: str, candidates: list[dict]) -> Optional[dict]:
     try:
         parsed = json.loads(_strip_code_fence(raw))
     except (ValueError, TypeError):
+        logger.warning("정정 AI 응답이 JSON이 아님(%d자) — 대체 경로로", len(raw or ""))   # 원문은 안 남김(사내 문서일 수 있음)
         return None
     if not isinstance(parsed, dict) or "conflicting" not in parsed or "same_as_claim" not in parsed:
         return None
@@ -372,6 +374,7 @@ def parse_no_opinion(raw: str, candidates: list[dict]) -> Optional[dict]:
     try:
         parsed = json.loads(_strip_code_fence(raw))
     except (ValueError, TypeError):
+        logger.warning("정정 AI 응답이 JSON이 아님(%d자) — 대체 경로로", len(raw or ""))   # 원문은 안 남김(사내 문서일 수 있음)
         return None
     if not isinstance(parsed, dict) or "suspect" not in parsed:
         return None

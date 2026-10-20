@@ -11,6 +11,8 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,
+  // 파일 간에도 한 번에 하나 — LLM 전환(llm-degraded, 공통 설정)이 백엔드 전체에 걸려 다른 파일의 채팅을 깨뜨린다(리뷰 10/20 M1)
+  workers: 1,
   retries: 0,
   reporter: [['list']],
   use: {

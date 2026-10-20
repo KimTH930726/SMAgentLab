@@ -192,6 +192,8 @@ export interface ChatMessage {
   chartResult?: { type: string; x: string; y: string; title: string } | null;
   auditId?: number | null;
   clarify?: ClarifyPrompt | null;
+  /** AI가 답을 못 내 찾은 근거만 보여 주는 답(2026-10-20) — 일반 답 모양 대신 경고 모양으로 */
+  degraded?: boolean;
 }
 
 // Agent directory

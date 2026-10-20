@@ -321,6 +321,7 @@ function CorrectionReceipt({ messageId }: { messageId: number }) {
 export function MessageItem({ message, namespace, onClarify, onClarifyOther }: MessageItemProps) {
   const isUser = message.role === 'user';
   const knowledgeIds = (message.results ?? []).map((r) => r.id);
+  const showDegraded = !!message.degraded && !message.isStreaming;   // AI가 답을 못 낸 답 — 경고 모양(근거만 보여 주기)
   const policyItemIds = [...new Set((message.policyCitations ?? []).map((c) => c.item_id).filter((v): v is number => v != null))];
   // "정정 검토 중" 배지 — 같은 근거가 다른 답변에 나와도 표시되도록 근거 id 기준으로 조회
   const { data: underReview } = useQuery({
@@ -424,8 +425,22 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther }: M
             />
           )}
 
+          {/* AI가 답을 못 냄 — 일반 답 모양 대신 경고 + 위의 찾은 근거로 안내(근거만 보여 주기, 2026-10-20) */}
+          {showDegraded && (
+            <div data-testid="degraded-answer"
+              className="rounded-2xl rounded-tl-sm px-4 py-3 border text-sm bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800/40 dark:text-amber-300">
+              <p className="font-medium">⚠️ AI 답변을 지금 만들 수 없습니다</p>
+              <p className="mt-1 text-xs">
+                {(message.results?.length ?? 0) + (message.policyCitations?.length ?? 0) > 0
+                  ? '위에 찾은 근거를 먼저 확인하세요. 잠시 후 같은 질문을 다시 보내면 AI 답변을 받을 수 있습니다.'
+                  : '찾은 근거도 없습니다. 잠시 후 다시 질문해 주세요.'}
+              </p>
+              <p className="mt-1 text-[11px] opacity-70" title="원인">{message.content}</p>
+            </div>
+          )}
+
           {/* Answer text (summary) — appears below table, above chart */}
-          {(message.content || message.isStreaming) && (
+          {(message.content || message.isStreaming) && !showDegraded && (
             <div
               className={clsx(
                 'bg-slate-800 rounded-2xl rounded-tl-sm px-4 py-3',

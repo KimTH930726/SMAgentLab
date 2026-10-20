@@ -115,7 +115,7 @@ function PipelineStepsToggle({ steps, answering = false }: { steps: PipelineStep
   );
 }
 
-function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null; clarify?: ClarifyPrompt | null } | null }[]): ChatMessage[] {
+function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null; clarify?: ClarifyPrompt | null; degraded?: boolean } | null }[]): ChatMessage[] {
   // Fix out-of-order pairs from old data (parallel saves could put assistant before user)
   // Check pairs at step=2: (0,1), (2,3), ... and swap reversed pairs
   const ordered = [...msgs];
@@ -156,6 +156,7 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
         tableResult: m.metadata?.table_result ?? null,
         chartResult: m.metadata?.chart_result ?? null,
         clarify: m.metadata?.clarify ?? null,
+        degraded: m.metadata?.degraded ?? false,
       });
     }
   }

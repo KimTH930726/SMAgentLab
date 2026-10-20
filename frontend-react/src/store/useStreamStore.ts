@@ -180,6 +180,7 @@ async function _runStream(
           mapped_term: string | null;
           results: KnowledgeResult[];
           policy_citations?: PolicyCitation[];
+          degraded?: boolean;
         };
         if (meta.conversation_id) {
           set({ convId: meta.conversation_id });
@@ -191,9 +192,11 @@ async function _runStream(
         }
         updateLastMessage((m) => ({
           ...m,
-          mapped_term: meta.mapped_term,
-          results: meta.results ?? [],
-          policyCitations: meta.policy_citations ?? [],
+          // 키가 없는 meta(표시만 바꾸는 이벤트)는 이미 보인 근거를 지우지 않는다(근거만 보여 주기 — 재리뷰 D1)
+          mapped_term: 'mapped_term' in meta ? meta.mapped_term : m.mapped_term,
+          results: meta.results ?? m.results ?? [],
+          policyCitations: meta.policy_citations ?? m.policyCitations ?? [],
+          degraded: meta.degraded ?? m.degraded,
         }));
       } else if ((event as { type: string }).type === 'clarify') {
         // 재질문(v2.134) — 답 대신 범위 선택지. 글은 뒤따르는 token으로 온다
