@@ -9,6 +9,7 @@ import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { GlossaryItem } from '../../types';
 import { showError } from '../../store/useDialogStore';
+import { CurrentDomain } from './CurrentDomain';
 
 interface GlossaryFormData { term: string; description: string; }
 const defaultForm: GlossaryFormData = { term: '', description: '' };
@@ -17,7 +18,10 @@ interface GlossarySuggestion { term: string; description: string; }
 
 export function GlossaryTable() {
   const qc = useQueryClient();
-  const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, user } = useNamespaceAccess();
+  const { selectedNs, canModifyNs, user } = useNamespaceAccess();
+  // 업무 영역이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setEditingId(null); }, [selectedNs]);
 
   // AI 추천 관련 상태
   const [showSuggest, setShowSuggest] = useState(false);
@@ -174,17 +178,7 @@ export function GlossaryTable() {
         </div>
       </div>
 
-      {/* Namespace selector */}
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">업무 영역</label>
-        <select
-          value={selectedNs}
-          onChange={(e) => { setSelectedNs(e.target.value); setEditingId(null); }}
-          className="w-64 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-        >
-          {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-        </select>
-      </div>
+      <CurrentDomain name={selectedNs} />
 
       {!selectedNs && <div className="text-center py-10 text-slate-500">업무 영역을 선택하세요.</div>}
       {selectedNs && isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}

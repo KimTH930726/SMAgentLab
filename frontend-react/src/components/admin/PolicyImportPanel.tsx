@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Upload, AlertTriangle, CheckCircle, ClipboardPaste, Plus, X } from 'lucide-react';
 import {
@@ -8,6 +8,7 @@ import { ApiError } from '../../api/client';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { useAuthStore } from '../../store/useAuthStore';
 import { Button } from '../ui/Button';
+import { CurrentDomain } from './CurrentDomain';
 
 /**
  * 정책서 올리기(2026-10-06, v2.124 → v2.127 붙여넣기).
@@ -62,7 +63,10 @@ type PastedSheet = { name: string; text: string };
 
 export function PolicyImportPanel({ onGoReview }: { onGoReview?: () => void } = {}) {
   const qc = useQueryClient();
-  const { selectedNs, setSelectedNs, sortedNamespaces, canModifyNs } = useNamespaceAccess();
+  const { selectedNs, canModifyNs } = useNamespaceAccess();
+  // 업무 영역이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setSource(''); clearResult(); }, [selectedNs]);
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const [mode, setMode] = useState<'paste' | 'file'>('paste');
   const [file, setFile] = useState<File | null>(null);
@@ -135,13 +139,7 @@ export function PolicyImportPanel({ onGoReview }: { onGoReview?: () => void } = 
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">업무 영역</label>
-          <select value={selectedNs} onChange={(e) => { setSelectedNs(e.target.value); setSource(''); clearResult(); }}
-            className="w-56 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-            {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-          </select>
-        </div>
+        <CurrentDomain name={selectedNs} />
         <div className="flex rounded-lg border border-slate-600 overflow-hidden text-xs">
           {([['paste', '시트 붙여넣기', '보안(DRM) 엑셀도 됩니다 — 엑셀에서 복사해 붙여넣기'],
             ['file', '파일 올리기', '보안이 걸리지 않은 엑셀(.xlsx) 또는 변환기로 만든 JSON']] as const).map(([m, label, tip]) => (

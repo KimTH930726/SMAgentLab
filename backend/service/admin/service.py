@@ -27,7 +27,9 @@ async def list_namespaces_detail() -> list[dict]:
                    n.created_by_user_id,
                    u.username AS created_by_username,
                    COALESCE(k.cnt, 0) AS knowledge_count,
-                   COALESCE(g.cnt, 0) AS glossary_count
+                   COALESCE(g.cnt, 0) AS glossary_count,
+                   COALESCE(pi.cnt, 0) AS policy_count,
+                   COALESCE(c.cnt, 0) AS category_count
             FROM ops_namespace n
             LEFT JOIN ops_part p ON n.owner_part_id = p.id
             LEFT JOIN ops_user u ON n.created_by_user_id = u.id
@@ -37,6 +39,12 @@ async def list_namespaces_detail() -> list[dict]:
             LEFT JOIN (
                 SELECT namespace_id, COUNT(*) AS cnt FROM rag_glossary GROUP BY namespace_id
             ) g ON n.id = g.namespace_id
+            LEFT JOIN (   -- 지금 쓰이는 정책(폐기·반려 제외 — 채팅 검색 대상과 같은 기준)
+                SELECT namespace_id, COUNT(*) AS cnt FROM policy_item WHERE status NOT IN ('deprecated', 'rejected') GROUP BY namespace_id
+            ) pi ON n.id = pi.namespace_id
+            LEFT JOIN (
+                SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge_category GROUP BY namespace_id
+            ) c ON n.id = c.namespace_id
             ORDER BY n.name
             """
         )

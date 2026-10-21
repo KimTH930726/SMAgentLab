@@ -76,7 +76,7 @@ export default function Admin() {
       )}
       <div className="flex-1 overflow-y-auto p-6">
         <TabErrorBoundary key={current}>
-          {current === 'domains'       && <NamespaceManager onNavigate={(id) => go(id === 'glossary' ? 'k.glossary' : 'k.docs')} />}
+          {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} />}
           {current === 'k.policy'      && <PolicyPanel />}
           {current === 'k.docs'        && <KnowledgeTable />}
           {current === 'k.glossary'    && <GlossaryTable />}

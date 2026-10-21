@@ -3,17 +3,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, CheckCircle, FileText, ChevronDown, ChevronUp, Trash2, AlertTriangle, Flag } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
-import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
 import { canEditDomain } from '../../utils/domainAccess';
 import { getNamespaceStats, deleteQueryLog, getQueryLogs, bulkDeleteQueryLogs, fillKnowledgeGap } from '../../api/stats';
 import { createKnowledge } from '../../api/knowledge';
-import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
+import { getNamespacesDetail } from '../../api/namespaces';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { DonutChart, type DonutSegment } from '../ui/DonutChart';
 import type { QueryLog, QueryFilter } from '../../types';
 import { showAlert } from '../../store/useDialogStore';
+import { CurrentDomain } from './CurrentDomain';
 
 const TERM_PALETTE = ['#6366f1', '#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#f43f5e', '#ec4899', '#14b8a6'];
 
@@ -355,14 +355,11 @@ function QueryLogModal({
 
 export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => void } = {}) {
   const selectedNs = useAppStore((s) => s.namespace);
-  const setSelectedNs = useAppStore((s) => s.setNamespace);   // 업무 영역은 공용 상태 하나(10/21)
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
   const [modalType, setModalType] = useState<ModalType | null>(null);
 
-  const { data: namespaces = [] } = useQuery({ queryKey: ['namespaces'], queryFn: getNamespaces, staleTime: 30_000 });
   const { data: nsDetails = [] } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, staleTime: 30_000 });
-  const sortedNamespaces = sortNamespacesByUserPart(namespaces, user?.part, nsDetails);
 
   const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
   const canModifyNs = canEditDomain(user, nsOwnerPart);
@@ -428,13 +425,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
         <button onClick={() => refetch()} className="text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">새로고침</button>
       </div>
 
-      <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">업무 영역</label>
-        <select value={selectedNs} onChange={(e) => setSelectedNs(e.target.value)}
-          className="w-64 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-          {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-        </select>
-      </div>
+      <CurrentDomain name={selectedNs} />
 
       {isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
       {error && <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>}

@@ -46,6 +46,8 @@ export interface NamespaceDetail extends Namespace {
   owner_part?: string | null;
   knowledge_count: number;
   glossary_count: number;
+  policy_count?: number;     // 지금 쓰이는 정책
+  category_count?: number;   // 업무구분 수(④에서 없앨 예정)
   created_by_username?: string | null;
 }
 

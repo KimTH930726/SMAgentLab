@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { Search, Flag, FlagOff, Check, X, PenLine, Database } from 'lucide-react';
@@ -12,6 +12,7 @@ import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Modal } from '../ui/Modal';
 import type { DebugSearchResult } from '../../types';
 import { showError } from '../../store/useDialogStore';
+import { CurrentDomain } from './CurrentDomain';
 
 /**
  * "즉석 질의" 통합 결과(2026-09-18, 카드/모달 리디자인) — "정책이 벡터검색/정책서
@@ -119,7 +120,10 @@ function strengthBand(pct: number): { barClass: string; label: string } {
 
 export function UnifiedAdhocSearch() {
   const qc = useQueryClient();
-  const { selectedNs, setSelectedNs, sortedNamespaces, canModifyNs } = useNamespaceAccess();
+  const { selectedNs, canModifyNs } = useNamespaceAccess();
+  // 업무 영역이 바뀌면(사이드바) 앞 영역의 결과를 지운다 — 남겨 두면 새 영역 이름으로 신고됐다(리뷰 M3)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setHits(null); setActiveHit(null); setFlaggedIds(new Set()); setError(null); setIsEditing(false); }, [selectedNs]);
   const [question, setQuestion] = useState('');
   const [topK, setTopK] = useState(10);
   const [loading, setLoading] = useState(false);
@@ -405,16 +409,7 @@ export function UnifiedAdhocSearch() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">업무 영역</label>
-          <select
-            value={selectedNs}
-            onChange={(e) => setSelectedNs(e.target.value)}
-            className="w-48 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-          >
-            {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-          </select>
-        </div>
+        <CurrentDomain name={selectedNs} />
         <div className="flex-1 min-w-[240px]">
           <label className="block text-xs font-medium text-slate-400 mb-1">질문</label>
           <input

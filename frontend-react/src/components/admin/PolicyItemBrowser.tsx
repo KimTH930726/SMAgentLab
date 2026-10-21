@@ -13,6 +13,7 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
+import { CurrentDomain } from './CurrentDomain';
 
 const STATUS_LABEL: Record<string, string> = {
   pending_review: '검토대기',
@@ -71,7 +72,10 @@ function StatusBadge({ item }: { item: PolicyItem }) {
  * 승인/반려 액션을 먼저 추가하고, 상태 필터는 그 결과를 보기 위한 보조 수단으로 같이 둔다.
  */
 export function PolicyItemBrowser() {
-  const { selectedNs, setSelectedNs, sortedNamespaces, canModifyNs } = useNamespaceAccess();
+  const { selectedNs, canModifyNs } = useNamespaceAccess();
+  // 업무 영역이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setCategoryFilter(''); setQ(''); setQInput(''); setExpandedId(null); }, [selectedNs]);
   const [categoryFilter, setCategoryFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   // 위험도 필터(검토대기에서만 의미) — 서버 목록은 그대로, 화면에서 거름
@@ -183,16 +187,7 @@ export function PolicyItemBrowser() {
       )}
 
       <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">업무 영역</label>
-          <select
-            value={selectedNs}
-            onChange={(e) => { setSelectedNs(e.target.value); setCategoryFilter(''); setQ(''); setQInput(''); setExpandedId(null); }}
-            className="w-56 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-          >
-            {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-          </select>
-        </div>
+        <CurrentDomain name={selectedNs} />
         {categoryOptions.length > 0 && (
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">대분류</label>

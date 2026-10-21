@@ -208,7 +208,10 @@ type IngestMethod = 'file' | 'text' | 'manual' | 'url' | null;
 
 export function KnowledgeTable() {
   const qc = useQueryClient();
-  const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces } = useNamespaceAccess();
+  const { selectedNs, canModifyNs } = useNamespaceAccess();
+  // 업무 영역이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setCategoryFilter(''); setPage(1); setSelectedIds(new Set()); }, [selectedNs]);   // 체크 남으면 앞 영역 것이 일괄 삭제됐다(리뷰 M1)
 
   const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>('list');   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
@@ -375,13 +378,6 @@ export function KnowledgeTable() {
           지식 문서
           {selectedNs && <span className="text-sm font-normal text-slate-500 ml-2">({selectedNs})</span>}
         </h2>
-        <select
-          value={selectedNs}
-          onChange={(e) => { setSelectedNs(e.target.value); setCategoryFilter(''); setPage(1); }}
-          className="w-44 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-        >
-          {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-        </select>
       </div>
 
       {/* 서브탭 */}

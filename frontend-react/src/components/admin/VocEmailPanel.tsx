@@ -22,6 +22,7 @@ import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { ApiError } from '../../api/client';
+import { CurrentDomain } from './CurrentDomain';
 
 const EMPTY_ROUTING_FORM: VocRoutingPayload = {
   part: '', mailbox_upn: '', teams_webhook_url: '', oncall_contact_name: '', oncall_contact_phone: '',
@@ -150,12 +151,14 @@ function QueryErrorNotice({ error, onRetry }: { error: unknown; onRetry: () => v
 export function VocEmailPanel() {
   const queryClient = useQueryClient();
   const namespace = useAppStore((s) => s.namespace);   // 업무 영역은 앱 공용 값 하나(사이드바와 같음, 10/21)
-  const setNamespace = useAppStore((s) => s.setNamespace);
   const [error, setError] = useState('');
   const [subTab, setSubTab] = useState<VocSubTab>('collect');
 
   const { data: namespaces = [] } = useQuery<string[]>({ queryKey: ['namespaces'], queryFn: getNamespaces });
   const selectedNs = namespace || namespaces[0] || '';
+  // 업무 영역이 바뀌면 열린 메일함 담당 폼을 닫는다 — 앞 영역 id로 저장되지 않게(리뷰 L4)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setShowForm(false); setEditingId(null); setForm(EMPTY_ROUTING_FORM); }, [selectedNs]);
 
   // ── §9 폴링 설정 ──────────────────────────────────────────────────────────
   const { data: settings, isError: settingsError, error: settingsErrorObj, refetch: refetchSettings } = useQuery({
@@ -1038,13 +1041,7 @@ export function VocEmailPanel() {
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-300">담당자 라우팅 매핑</h3>
             <div className="flex items-center gap-2">
-              <select
-                value={selectedNs}
-                onChange={(e) => setNamespace(e.target.value)}
-                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-              >
-                {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-              </select>
+              <CurrentDomain name={selectedNs} />
               <Button size="sm" onClick={startCreate}>
                 <Plus className="w-3.5 h-3.5" /> 라우팅 추가
               </Button>
@@ -1194,13 +1191,7 @@ export function VocEmailPanel() {
           {historyError && <QueryErrorNotice error={historyErrorObj} onRetry={() => refetchHistory()} />}
           <div className="flex items-center justify-between">
             <p className="text-xs text-slate-500">원본 메일 · AI 판단 · 발송 결과</p>
-            <select
-              value={selectedNs}
-              onChange={(e) => setNamespace(e.target.value)}
-              className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-            >
-              {namespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-            </select>
+            <CurrentDomain name={selectedNs} />
           </div>
 
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-3 flex flex-wrap items-end gap-3">

@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react';
+import { Fragment, useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Database, Tag, Pencil, Check, X } from 'lucide-react';
+import { Plus, Trash2, Tag, Pencil, Check, X } from 'lucide-react';
 import {
   getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace,
   getCategories, createCategory, deleteCategory, renameCategory,
@@ -10,13 +10,12 @@ import { useAppStore } from '../../store/useAppStore';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
-import type { KnowledgeCategory } from '../../types';
+import type { KnowledgeCategory, NamespaceDetail } from '../../types';
 import { showError } from '../../store/useDialogStore';
 import { canEditDomain } from '../../utils/domainAccess';
 
-type AdminTabId = 'knowledge' | 'glossary';
 interface NamespaceManagerProps {
-  onNavigate?: (tab: AdminTabId) => void;
+  onNavigate?: (to: 'policy' | 'knowledge' | 'glossary') => void;
 }
 
 function CategorySection({ namespace, canModify }: { namespace: string; canModify: boolean }) {
@@ -38,7 +37,7 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
   const addMutation = useMutation({
     mutationFn: (name: string) => createCategory(namespace, name),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['categories', namespace] });
+      qc.invalidateQueries({ queryKey: ['categories', namespace] }); qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
       setNewCat('');
     },
   });
@@ -47,14 +46,14 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
     mutationFn: ({ oldName, newName }: { oldName: string; newName: string }) =>
       renameCategory(namespace, oldName, newName),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['categories', namespace] });
+      qc.invalidateQueries({ queryKey: ['categories', namespace] }); qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
       setEditingId(null);
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (name: string) => deleteCategory(namespace, name),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['categories', namespace] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['categories', namespace] }); qc.invalidateQueries({ queryKey: ['namespaces-detail'] }); },
   });
 
   const handleAdd = () => {
@@ -166,7 +165,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   const canModifyNs = (ownerPart?: string | null) => canEditDomain(user, ownerPart);
   const isAdmin = user?.role === 'admin';
   const [showCreate, setShowCreate] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<NamespaceDetail | null>(null);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
@@ -275,108 +274,112 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
         <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>
       )}
 
-      <div className="grid gap-3">
-        {namespaces.map((ns) => (
-          <div
-            key={ns.name}
-            className="group bg-slate-800 border border-slate-700 rounded-xl overflow-hidden cursor-pointer hover:border-indigo-500/50 transition-colors"
-            onClick={() => setExpandedCat(expandedCat === ns.name ? null : ns.name)}
-          >
-            <div className="flex items-center gap-4 p-4">
-              <div className="w-10 h-10 rounded-xl bg-indigo-100 border border-indigo-200 dark:bg-indigo-900/40 dark:border-indigo-700/40 flex items-center justify-center flex-shrink-0">
-                <Database className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  {editingNs === ns.name ? (
-                    <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        ref={nsEditRef}
-                        value={editingNsName}
-                        onChange={(e) => setEditingNsName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !e.nativeEvent.isComposing) commitNsRename(ns.name);
-                          if (e.key === 'Escape') setEditingNs(null);
-                        }}
-                        onBlur={() => commitNsRename(ns.name)}
-                        className="bg-slate-900 border border-indigo-500 rounded px-2 py-0.5 text-sm text-slate-100 font-semibold outline-none w-36"
-                      />
-                      <button onClick={() => commitNsRename(ns.name)} className="text-emerald-600 hover:text-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300"><Check className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => setEditingNs(null)} className="text-slate-500 hover:text-slate-300"><X className="w-3.5 h-3.5" /></button>
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1 group">
-                      <span className="font-semibold text-slate-200">{ns.name}</span>
-                      {isAdmin && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setEditingNs(ns.name); setEditingNsName(ns.name); }}
-                          className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
-                          title="이름 수정"
-                        >
-                          <Pencil className="w-3 h-3" />
-                        </button>
-                      )}
-                    </span>
-                  )}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setNamespace(ns.name); onNavigate?.('knowledge'); }}
-                    title="검색에 쓰이는(활성) 지식 수 — 승인 대기·반려·폐기·수집 중인 항목은 제외"
-                    className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded-full hover:bg-indigo-100 hover:text-indigo-700 dark:hover:bg-indigo-900/40 dark:hover:text-indigo-300 transition-colors"
-                  >
-                    지식 {ns.knowledge_count}건
+      {/* 업무 영역 목록(③, 10/21) — 줄 = 그 영역 고르기(사이드바와 같은 값), 숫자 = 그 영역을 고른 채 해당 화면으로 */}
+      {!isLoading && namespaces.length > 0 && (
+        <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-700 text-slate-400">
+                <th className="text-left px-4 py-3 font-medium">업무 영역</th>
+                <th className="text-left px-4 py-3 font-medium">담당 파트</th>
+                <th className="text-right px-3 py-3 font-medium" title="지금 쓰이는 정책(폐기·반려 제외)">정책</th>
+                <th className="text-right px-3 py-3 font-medium" title="검색에 쓰이는(활성) 지식 — 승인 대기·반려·폐기·수집 중 제외">지식 문서</th>
+                <th className="text-right px-3 py-3 font-medium">용어</th>
+                <th className="text-left px-3 py-3 font-medium" title="지식 문서의 하위 분류 — 곧 없어질 예정(하위 업무는 업무 영역으로, DB·공통코드는 시스템 정보로)">
+                  업무구분 <span className="text-[10px] text-slate-500">곧 없어짐</span>
+                </th>
+                <th className="w-20"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {namespaces.map((ns) => {
+                const selected = ns.name === selectedNamespace;
+                const count = (n: number | undefined, to: 'policy' | 'knowledge' | 'glossary', label: string) => (
+                  <button onClick={(e) => { e.stopPropagation(); setNamespace(ns.name); onNavigate?.(to); }}
+                    title={`${ns.name}의 ${label} 보기`}
+                    className="tabular-nums text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-300 hover:underline">
+                    {n ?? 0}
                   </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setNamespace(ns.name); onNavigate?.('glossary'); }}
-                    className="text-xs text-slate-500 bg-slate-700 px-2 py-0.5 rounded-full hover:bg-indigo-100 hover:text-indigo-700 dark:hover:bg-indigo-900/40 dark:hover:text-indigo-300 transition-colors"
-                  >
-                    용어 {ns.glossary_count}건
-                  </button>
-                </div>
-                {ns.description && (
-                  <p className="text-sm text-slate-400 mt-0.5 truncate">{ns.description}</p>
-                )}
-                <div className="flex items-center gap-2 mt-0.5">
-                  {ns.created_by_username && (
-                    <span className="text-xs text-slate-500">{ns.created_by_username}</span>
-                  )}
-                  {ns.owner_part && (
-                    <Badge color={canModifyNs(ns.owner_part) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
-                  )}
-                  <span className="text-xs text-slate-500">
-                    생성: {new Date(ns.created_at).toLocaleDateString('ko-KR')}
-                  </span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                {isAdmin && (
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => setDeleteTarget(ns.name)}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                )}
-              </div>
-            </div>
-            {expandedCat !== ns.name && (
-              <div className="max-h-0 overflow-hidden group-hover:max-h-10 transition-all duration-200">
-                <div className="px-4 py-2 bg-indigo-50 border-t border-indigo-200 dark:bg-indigo-900/30 dark:border-indigo-700/30">
-                  <span className="text-[11px] text-indigo-600 dark:text-indigo-300/80">클릭하면 이 업무 영역의 업무구분을 추가·수정·삭제할 수 있습니다</span>
-                </div>
-              </div>
-            )}
-            {expandedCat === ns.name && (
-              <div className="px-4 pb-4" onClick={(e) => e.stopPropagation()}>
-                <CategorySection namespace={ns.name} canModify={canModifyNs(ns.owner_part)} />
-              </div>
-            )}
-          </div>
-        ))}
-        {!isLoading && namespaces.length === 0 && (
-          <div className="text-center py-10 text-slate-500">업무 영역이 없습니다.</div>
-        )}
-      </div>
+                );
+                const toggleCat = (e: React.MouseEvent) => { e.stopPropagation(); setExpandedCat(expandedCat === ns.name ? null : ns.name); };
+                return (
+                  <Fragment key={ns.name}>
+                    <tr onClick={() => setNamespace(ns.name)} tabIndex={0} aria-current={selected ? 'true' : undefined}
+                      onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); setNamespace(ns.name); } }}
+                      className={`border-b border-slate-700/50 cursor-pointer transition-colors ${selected ? 'bg-indigo-50 dark:bg-indigo-900/20' : 'hover:bg-slate-700/30'}`}>
+                      <td className="px-4 py-2.5">
+                        {editingNs === ns.name ? (
+                          <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              ref={nsEditRef}
+                              value={editingNsName}
+                              onChange={(e) => setEditingNsName(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.nativeEvent.isComposing) commitNsRename(ns.name);
+                                if (e.key === 'Escape') setEditingNs(null);
+                              }}
+                              onBlur={() => commitNsRename(ns.name)}
+                              className="bg-slate-900 border border-indigo-500 rounded px-2 py-0.5 text-sm text-slate-100 font-semibold outline-none w-36"
+                            />
+                            <button onClick={() => commitNsRename(ns.name)} className="text-emerald-600 hover:text-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300"><Check className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => setEditingNs(null)} className="text-slate-500 hover:text-slate-300"><X className="w-3.5 h-3.5" /></button>
+                          </span>
+                        ) : (
+                          <div>
+                            <div className="font-medium text-slate-200">{ns.name}</div>
+                            {ns.description && <div className="text-xs text-slate-500 truncate max-w-[16rem]" title={ns.description}>{ns.description}</div>}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {ns.owner_part
+                          ? <Badge color={canModifyNs(ns.owner_part) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
+                          : <span className="text-xs text-slate-500" title="담당 지정: 조직 › 담당 업무 영역">없음(관리자만)</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-right">{count(ns.policy_count, 'policy', '정책')}</td>
+                      <td className="px-3 py-2.5 text-right">{count(ns.knowledge_count, 'knowledge', '지식 문서')}</td>
+                      <td className="px-3 py-2.5 text-right">{count(ns.glossary_count, 'glossary', '용어')}</td>
+                      <td className="px-3 py-2.5">
+                        {(ns.category_count ?? 0) > 0 || canModifyNs(ns.owner_part) ? (
+                          <button onClick={toggleCat} aria-expanded={expandedCat === ns.name}
+                            title={canModifyNs(ns.owner_part) ? '업무구분 보기·추가·수정' : '업무구분 보기'}
+                            className="text-xs text-slate-400 hover:text-slate-200">
+                            {(ns.category_count ?? 0) > 0 ? `${ns.category_count}개` : '-'} {expandedCat === ns.name ? '▾' : '▸'}
+                          </button>
+                        ) : <span className="text-xs text-slate-500">-</span>}
+                      </td>
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        {isAdmin && (
+                          <div className="flex items-center justify-end gap-1">
+                            <button onClick={() => { setEditingNs(ns.name); setEditingNsName(ns.name); }} title="이름 바꾸기"
+                              className="p-1.5 rounded text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-700/60">
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => setDeleteTarget(ns)} title="삭제"
+                              className="p-1.5 rounded text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-700/60">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                    {expandedCat === ns.name && (
+                      <tr className="border-b border-slate-700/50">
+                        <td colSpan={7} className="px-4 pb-4 pt-1">
+                          <CategorySection namespace={ns.name} canModify={canModifyNs(ns.owner_part)} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {!isLoading && namespaces.length === 0 && (
+        <div className="text-center py-10 text-slate-500">업무 영역이 없습니다.</div>
+      )}
 
       {/* Create Modal */}
       <Modal
@@ -436,9 +439,15 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       >
         <div className="space-y-4">
           <p className="text-sm text-slate-300">
-            <span className="font-semibold text-rose-600 dark:text-rose-400">{deleteTarget}</span> 업무 영역을
-            삭제하면 모든 지식과 용어도 함께 삭제됩니다. 계속하시겠습니까?
+            <span className="font-semibold text-rose-600 dark:text-rose-400">{deleteTarget?.name}</span> 업무 영역을 삭제하면 안의 데이터가 함께 지워지고 되돌릴 수 없어요.
           </p>
+          {deleteTarget && (
+            <p className="text-sm text-slate-400 tabular-nums">
+              사용 중: 정책 {deleteTarget.policy_count ?? 0} · 지식 문서 {deleteTarget.knowledge_count} · 용어 {deleteTarget.glossary_count}
+              {(deleteTarget.category_count ?? 0) > 0 && ` · 업무구분 ${deleteTarget.category_count}`}.
+              검토 대기·반려·폐기된 정책과 지식, 질의 기록·대화도 모두 함께 지워져요.
+            </p>
+          )}
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" size="sm" onClick={() => setDeleteTarget(null)}>
               취소
@@ -447,7 +456,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
               variant="danger"
               size="sm"
               loading={deleteMutation.isPending}
-              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget)}
+              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.name)}
             >
               삭제
             </Button>

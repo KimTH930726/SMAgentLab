@@ -8,6 +8,7 @@ import { getNamespaces } from '../../api/namespaces';
 import { Button } from '../ui/Button';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import { showAlert, showError } from '../../store/useDialogStore';
+import { CurrentDomain } from './CurrentDomain';
 
 function formatTtl(seconds: number): string {
   if (seconds <= 0) return '만료됨';
@@ -19,7 +20,6 @@ function formatTtl(seconds: number): string {
 export function CachePanel() {
   const queryClient = useQueryClient();
   const namespace = useAppStore((s) => s.namespace);   // 업무 영역은 앱 공용 값 하나(사이드바와 같음, 10/21)
-  const setNamespace = useAppStore((s) => s.setNamespace);
   const [confirmClear, setConfirmClear] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);
@@ -119,15 +119,7 @@ export function CachePanel() {
             )} />
             {cacheConfig?.enabled !== false ? 'ON' : 'OFF'}
           </button>
-          <select
-            value={selectedNs}
-            onChange={(e) => setNamespace(e.target.value)}
-            className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-          >
-            {namespaces.map((ns) => (
-              <option key={ns} value={ns}>{ns}</option>
-            ))}
-          </select>
+          <CurrentDomain name={selectedNs} />
           <button
             onClick={handleRefresh}
             className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"

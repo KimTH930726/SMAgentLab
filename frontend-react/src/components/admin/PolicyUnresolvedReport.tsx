@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp, FileWarning, Info } from 'lucide-react';
 import { getUnresolvedSummary } from '../../api/policy';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
+import { CurrentDomain } from './CurrentDomain';
 
 /**
  * 정책서 미분류(unresolved) 팀별 집계 — 읽기 전용(2026-10-02).
@@ -13,7 +14,10 @@ import { Badge } from '../ui/Badge';
  * 같은 항목을 두 탭에서 따로 처리하던 중복을 없앴다(항목 브라우저에서 펼치면 그 자리에서 편입, UnresolvedSegmentActions).
  */
 export function PolicyUnresolvedReport() {
-  const { selectedNs, setSelectedNs, sortedNamespaces } = useNamespaceAccess();
+  const { selectedNs } = useNamespaceAccess();
+  // 업무 영역이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setSystemFilter(''); setExpandedItemId(null); }, [selectedNs]);
   const [systemFilter, setSystemFilter] = useState('');
   const [expandedItemId, setExpandedItemId] = useState<number | null>(null);
 
@@ -54,16 +58,7 @@ export function PolicyUnresolvedReport() {
 
       {/* Namespace selector */}
       <div className="flex items-end gap-3">
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">업무 영역</label>
-          <select
-            value={selectedNs}
-            onChange={(e) => { setSelectedNs(e.target.value); setSystemFilter(''); setExpandedItemId(null); }}
-            className="w-56 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-          >
-            {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-          </select>
-        </div>
+        <CurrentDomain name={selectedNs} />
         {data && data.by_system.length > 0 && (
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">시스템(팀)</label>

@@ -42,6 +42,8 @@ class NamespaceInfo(BaseModel):
     owner_part: Optional[str] = None
     knowledge_count: int
     glossary_count: int
+    policy_count: int = 0      # 지금 쓰이는 정책(폐기·반려 제외)
+    category_count: int = 0    # 업무구분 수(④에서 없앨 예정)
     created_by_user_id: Optional[int] = None
     created_by_username: Optional[str] = None
     created_at: str
