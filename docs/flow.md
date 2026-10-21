@@ -344,7 +344,7 @@ ops_glossary 테이블
 "○○ 관련 정책 전부/목록" (looks_like_navigation_query) 또는 "재고 정책 좀"처럼 분류 이름 + 일반 표현뿐(is_topic_overview,
   글자 매칭만, 두 분류면 함께 속한 정책만) → 분류 찾기(이름 글자 매칭 → 없으면 의미 1위 0.58 이상)
     (글자로 나온 이름을 품은 더 구체적인 분류가 의미상 0.15 이상 가까우면 그쪽 — "주문서 … 쿠폰 정책" → "주문서 쿠폰정책", v2.133)
-  → 그 분류 정책 전부(최대 40개, 정책명 + 본문 첫 줄)를 [분류 목록] 블록으로 문맥 맨 앞에(용어 설명 다음) → 아래는 평소 검색 결과
+  → 그 분류 정책 전부(최대 40개, "경로 > 정책명 — 요약"(v2.152, 본문 앞줄 80자))를 [분류 목록] 블록으로 문맥 맨 앞에(용어 설명 다음) → 아래는 평소 검색 결과
   → 답 형식: 빠짐없이 "정책명 — 한 줄 요약", 세부는 다시 물어보라고 안내(v2.133, 사용자 결정). 같은 이름이 여러 업무면 업무별로 묶음
   분류 목록은 이번 질문만으로 고른다(멀티턴 보강 질문 X — 앞 턴 범위가 넘어오지 않게, v2.134)
   재질문(v2.134): 주제만 말한 질문("주문 정책 좀", 전부·모든·목록 명시 없음) + 정책 20개 초과 → LLM 없이 clarify 이벤트
@@ -726,6 +726,7 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
   └─ 정책서 화면(담당 파트·관리자, v2.150) — 같은 POST에 source를 붙여서
         직접 수정(source=policy_direct): 원문·비고 그대로 수정안(AI 호출 없음, v0는 서술 조각 = 원문)
         AI 수정 제안(source=policy_ai): 한 줄 → AI 초안(실패해도 제안은 남음 → 정정 요청에서 [AI 초안 만들기]/[직접 수정])
+        JSON 가져오기(source=json_import, v2.151 — 관리자 전용 /api/policy/json/apply만): 바뀐 정책마다 직접 수정과 같은 제안
         같은 정책에 대기 중 정정이 있으면(출처 무관) 만들지 않고 409 + existing_id → 화면 "정정 #N 검토 중 → 정정 요청에서 보기"
         (확인·저장은 정책 항목 단위 advisory 잠금 안 — 동시에 두 번 눌러도 1건)
                                  ▼
@@ -737,7 +738,8 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
      ├─ 원장 INSERT(pending, 원문 스냅샷, 후보·AI 판정) — 같은 사용자·같은 근거 중복은 409
      └─ 답변 아래 "AI 분석" 카드(어느 근거·왜·틀린 부분·반영되면) / 근거 카드 "정정 검토 중" 배지
                                  ▼
-  소유 파트 담당자·관리자: 품질 › 정정 요청 (대기 건수 배지: 메뉴) — 출처 거르기(채팅·정책 직접 수정·정책 AI 제안·평가 게이트)
+  소유 파트 담당자·관리자: 품질 › 정정 요청 (대기 건수 배지: 메뉴) — 출처 거르기(채팅·정책 직접 수정·정책 AI 제안·JSON 가져오기·평가 게이트)
+     (원문 확인 kind='source_check'는 여기 안 나옴 — 정책서 › 원문 확인, §6-1a)
      ├─ [승인](저장된 수정안) / [직접 수정](v2.150 되살림 — PATCH /{id}/proposed, 승인과 같은 검사, ai_verdict.edits에 누가·언제)
      │   / [AI 다시 쓰기](요청 한 줄 → AI가 다시 씀, POST /redraft) / 반려 — 대상 변경도 가능
      │   카드: 기존 vs 수정안 줄 비교(바뀐 줄 강조). 【확인 필요】 표시가 남으면 승인 불가 → 직접 수정하거나 다시 쓰기로 맞는 내용을 알려 줌
@@ -762,7 +764,7 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
 
 ---
 
-## 6-1a. 정책서 화면 — 지식 › 정책서 (v2.150, v0 재구축 2단계)
+## 6-1a. 정책서 화면 — 지식 › 정책서 (v2.150, v0 재구축 2단계 · v2.151 원문 확인·JSON)
 
 ```
 [정책] GET /api/policy/policies?namespace=&q=   ← 현행(active) 1건 = 1줄, 문서 순서(source_file·source_row), 첫 절로 접기
@@ -774,10 +776,28 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
          검토 중 정정이 있으면 두 버튼 막힘 + "정정 요청에서 보기"(/admin/q.corrections?focus=N — 그 카드로)
 [참고표] GET /api/policy/ref-tables → GET /ref-tables/{id}: 열(결정 열 표시) + 행 {열: 값}, 머리 고정·가로 스크롤
 [문서 개요] GET /api/policy/overviews: 문서 서문(목적·적용 대상)
-조회 권한 = 로그인 사용자 누구나(check_knowledge_read), 제안 = 담당 파트·관리자(check_namespace_ownership)
+[원문 확인] GET /api/policy/source-checks?namespace=&status=open|done   (v2.151 — 정정이 아니라 원문에 대한 질문·문제)
+   ├─ 항목 = 정정 원장 kind='source_check'(새 테이블 없음): 담당자 질문(적재 점검) · 정책끼리 어긋남 · 참고표 오류(골든셋 작성)
+   │     대상 = 정책 logical_id들 / 참고표 logical_id들(original), 설명 = user_input(원문 인용 없이)
+   │     [해결](메모) POST …/source-checks/{id}/resolve → approved · [닫기](사유) …/dismiss → rejected — 메모는 ai_verdict {resolution, note}
+   │     고칠 게 정해지면 정책 상세의 수정 제안 → §6-1 정정 요청(여기선 정책이 안 바뀜)
+   │     정정 요청 목록·배지·내 신고·정정 처리 API(/api/corrections/{id}/…)는 이 kind를 뺀다(처리 API는 404)
+   └─ 제안 연결 = ops_link status='suggested'(source v0_rule, 적재기가 원문 절 번호 오류를 규칙으로 추정한 정책→절 참조)
+         [확정] POST /api/policy/links/{id}/confirm → active · [거절] …/reject → rejected (처리자는 로그)
+   씨앗: scripts/load_policy_v0.py --add-source-checks <jsonl> [--dry-run] — 원천 키 → 현행 logical_id, (출처, 해시) 중복은 건너뜀
+[JSON](관리자 전용, v2.151) — 문서 개정본용
+   ├─ GET /api/policy/json/export?namespace= → {schema: opslens/policy-v0/1, domain, exported_at, policies[source_key, category_path,
+   │     policy_name, raw_body, remark, order, version]} (현행만, 원천 키 없는 정책은 빼고 로그)
+   ├─ POST /api/policy/json/preview {namespace, content}: 얇은 형식 또는 팀원 policies.jsonl(v0_convert.build_policies로 같은 정리)
+   │     → 원천 키로 비교(원문·비고만): 같음 · 바뀜 · 파일에만(보고만 — 새 정책 추가 미지원) · DB에만(보고만, 지우지 않음)
+   │       · 검토 중이라 제외(대기 정정 있음) · 이름·경로 변경(가져오지 않음, 보고만) + doc_hash(파일) · plan_hash(바뀐 목록·지금 원문 해시)
+   └─ POST /api/policy/json/apply {…, doc_hash, plan_hash}: 다시 계산해 다르면 409 → 바뀐 정책마다 정정 제안 1건
+         (create_policy_proposal mode json_import — 직접 수정처럼 받은 원문·비고 그대로, AI 없음, 정책 테이블엔 안 씀)
+         → §6-1 정정 요청(출처 "JSON 가져오기")에서 승인(일괄 승인 포함) = 새 버전
+조회 권한 = 로그인 사용자 누구나(check_knowledge_read), 제안·원문 확인 처리 = 담당 파트·관리자(check_namespace_ownership), JSON = 관리자
 ```
 옛 엑셀 경로(정책서 올리기·붙여넣기 → LLM 분해 → 검토 대기, 위험도 자동 통과 큐, 미분류 집계, 줄 안 파라미터/서술 편집)는 v2.150에서 화면·API·모듈을
-뺐다 — v0는 `scripts/load_policy_v0.py`로 적재하고 변경은 정정 요청으로만. 문서 개정본 JSON 가져오기는 다음 단계.
+뺐다 — v0는 `scripts/load_policy_v0.py`로 적재하고 변경은 정정 요청으로만(문서 개정본도 JSON 가져오기 → 정정 요청, v2.151).
 
 ---
 

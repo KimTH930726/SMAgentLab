@@ -15,7 +15,7 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
   const q = (where: string) => psql(`SELECT COUNT(*) FROM ops_query_log WHERE namespace_id = ${id} AND ${where}`);
   const expected = {
     답변: q("status = 'pending'"),
-    '정정 요청': psql(`SELECT COUNT(*) FROM ops_improvement_item WHERE namespace_id = ${id} AND status = 'pending'`),
+    '정정 요청': psql(`SELECT COUNT(*) FROM ops_improvement_item WHERE namespace_id = ${id} AND status = 'pending' AND kind <> 'source_check'`),
     '지식 공백': q("status = 'no_knowledge' AND resolved_knowledge_id IS NULL"),
     '공백 해결': q("status = 'no_knowledge' AND resolved_knowledge_id IS NOT NULL"),
   };

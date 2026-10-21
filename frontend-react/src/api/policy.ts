@@ -138,6 +138,102 @@ export async function listOverviews(namespace: string): Promise<PolicyOverview[]
   return apiFetch<PolicyOverview[]>(`/policy/overviews?namespace=${encodeURIComponent(namespace)}`);
 }
 
+// ─── 원문 확인(v0 재구축 3단계, 2026-10-21) — 원문에 대한 질문·문제(정정 아님) + 제안 연결 ───
+
+export type SourceCheckType = 'question' | 'conflict' | 'ref_error';
+export type SourceCheckStatus = 'open' | 'resolved' | 'dismissed';
+
+export interface SourceCheck {
+  id: number;
+  /** v0_load_check(적재 점검) | golden_set(골든셋 작성) */
+  source: string;
+  type: SourceCheckType;
+  description: string;
+  status: SourceCheckStatus;
+  note: string | null;
+  /** policy_name이 null이면 지금 쓰이는 버전이 없음 */
+  policies: { logical_id: number; policy_name: string | null; category_path: string[] }[];
+  ref_tables: { logical_id: number; id: number | null; title: string | null }[];
+  created_at: string | null;
+  decided_at: string | null;
+  decided_by: string | null;
+}
+
+export interface SuggestedLink {
+  id: number;
+  /** suggested(확인 전) | active(확정) | rejected(거절) */
+  status: string;
+  relation: string;
+  policy: { logical_id: number; policy_name: string; category_path: string[] };
+  target: { type: string; namespace: string | null; path: string[] };
+}
+
+export async function listSourceChecks(namespace: string, status: 'open' | 'done'): Promise<{ checks: SourceCheck[]; links: SuggestedLink[] }> {
+  return apiFetch(`/policy/source-checks?namespace=${encodeURIComponent(namespace)}&status=${status}`);
+}
+
+export async function decideSourceCheck(id: number, action: 'resolve' | 'dismiss', note: string): Promise<{ id: number; status: string }> {
+  return apiFetch(`/policy/source-checks/${id}/${action}`, { method: 'POST', body: JSON.stringify({ note }) });
+}
+
+export async function decideLink(id: number, action: 'confirm' | 'reject'): Promise<{ id: number; status: string }> {
+  return apiFetch(`/policy/links/${id}/${action}`, { method: 'POST' });
+}
+
+// ─── 정책서 JSON 내려받기·가져오기(관리자, 10/21) — 가져오기는 바뀐 정책마다 정정 제안(승인은 정정 요청에서) ───
+
+export const POLICY_JSON_SCHEMA = 'opslens/policy-v0/1';
+
+export interface PolicyJsonExport {
+  schema: string;
+  domain: string;
+  exported_at: string;
+  policies: { source_key: string; category_path: string[]; policy_name: string; raw_body: string; remark: string | null; order: number; version: number }[];
+}
+
+interface ImportRef { source_key: string; logical_id: number; policy_name: string }
+
+export interface PolicyJsonPreview {
+  format: 'thin' | 'team';
+  domain: string;
+  total: number;
+  /** 팀원 파일에서 다른 업무 영역 정책(비교 안 함) */
+  other_domain: number;
+  unchanged: number;
+  changed: (ImportRef & { item_id: number; before_hash: string; after_hash: string; body_changed: boolean; remark_changed: boolean })[];
+  added: { source_key: string; policy_name: string | null }[];
+  missing: ImportRef[];
+  blocked: (ImportRef & { correction_id: number })[];
+  ignored_fields: { source_key: string; logical_id: number; fields: string[] }[];
+  doc_hash: string;
+  plan_hash: string;
+}
+
+export interface PolicyJsonApplyResult {
+  created: { source_key: string; logical_id: number; correction_id: number }[];
+  blocked: { source_key: string; logical_id: number; correction_id: number | null }[];
+  failed: { source_key: string; logical_id: number; reason: string }[];
+  added_skipped: number;
+  missing: number;
+  unchanged: number;
+}
+
+export async function exportPolicyJson(namespace: string): Promise<PolicyJsonExport> {
+  return apiFetch(`/policy/json/export?namespace=${encodeURIComponent(namespace)}`);
+}
+
+export async function previewPolicyJson(namespace: string, content: string, filename?: string): Promise<PolicyJsonPreview> {
+  return apiFetch('/policy/json/preview', { method: 'POST', body: JSON.stringify({ namespace, content, filename }) });
+}
+
+export async function applyPolicyJson(
+  namespace: string, content: string, docHash: string, planHash: string, filename?: string,
+): Promise<PolicyJsonApplyResult> {
+  return apiFetch('/policy/json/apply', {
+    method: 'POST', body: JSON.stringify({ namespace, content, filename, doc_hash: docHash, plan_hash: planHash }),
+  });
+}
+
 // ─── Track 2 저장소 전략 실험실 ─────────────────────────────────────────────
 
 export interface Track2TypeResult {

@@ -4,6 +4,12 @@
   --apply      불변식이 통과하면 임베딩 후 트랜잭션 하나로 적재(실패하면 아무것도 안 남음). 한 번만 — ops_data_marker
                'policy_v0_load'가 있으면 거부.
 
+  --add-source-checks <jsonl> [--dry-run]
+               원문 확인 항목(담당자 질문·서로 어긋나는 정책·참고표 오류, 10/21)을 정정 원장에 kind='source_check'로 보탠다.
+               한 줄 = {id: 씨앗 id(같은 대상에 문제가 둘이면 구분), source: v0_load_check|golden_set, type: question|conflict|ref_error, policies: [원천 키], ref_tables: [원천 키],
+               description: 문제 설명(원문 인용 금지)}. 원천 키 → 현행 logical_id로 해석, (출처, 해시)가 이미 있으면 건너뜀(멱등).
+               --dry-run은 해석·중복만 보고 개수만 출력(쓰기 없음). --src 불필요.
+
 LLM 없음(임베딩만, 로컬). 실행(컨테이너 안): python scripts/load_policy_v0.py --src eval_out/v0full [--apply]
 적재 후: 새 파트라 정책 색인 캐시는 비어 있어 재시작 불필요. 파라미터 추출·동의어는 별도 단계.
 """
@@ -227,13 +233,91 @@ async def refresh_overviews(plan) -> None:
     print(f"개요 갱신 {len(changed)}건: {[o.doc_id for o in changed]}")
 
 
+async def add_source_checks(path: Path, dry_run: bool) -> None:
+    """원문 확인 씨앗 → 정정 원장(kind=source_check). 원천 키를 현행 logical_id로 바꾸고, 한 항목의 대상은 한 업무 영역이어야 한다.
+    해석 못 한 키·영역이 섞인 항목이 하나라도 있으면 아무것도 쓰지 않는다. 같은 (출처, 해시)는 건너뜀."""
+    from core.database import get_conn, init_pool
+    from service.policy.source_check import KIND, seed_hash, validate_seed
+    recs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    bad = [(i, e) for i, r in enumerate(recs, 1) for e in validate_seed(r)]
+    if bad:
+        sys.exit("씨앗 형식 오류: " + "; ".join(f"{i}번째 줄 {e}" for i, e in bad[:20]))
+    await init_pool()
+    rows, problems, dup, seen = [], [], 0, set()
+    async with get_conn() as conn:
+        for i, r in enumerate(recs, 1):
+            pols, tabs, ns = [], [], set()
+            n_before = len(problems)
+            for k in r.get("policies") or []:
+                found = await conn.fetch("SELECT logical_id, namespace_id FROM policy_item WHERE source_key = $1 AND status = 'active'", k)
+                if len(found) != 1:   # 원천 키는 영역을 가로질러 유일하다는 전제 — 깨지면 조용히 하나를 고르지 않고 멈춘다(리뷰 L7)
+                    problems.append(f"{i}번째 줄: 현행 정책 {len(found)}건 {k}")
+                    continue
+                row = found[0]
+                pols.append(row["logical_id"]); ns.add(row["namespace_id"])
+            for k in r.get("ref_tables") or []:
+                found = await conn.fetch("SELECT logical_id, namespace_id FROM ref_table WHERE source_key = $1 AND status = 'active'", k)
+                if len(found) != 1:   # 원천 키는 영역을 가로질러 유일하다는 전제 — 깨지면 조용히 하나를 고르지 않고 멈춘다(리뷰 L7)
+                    problems.append(f"{i}번째 줄: 현행 참고표 {len(found)}건 {k}")
+                    continue
+                row = found[0]
+                tabs.append(row["logical_id"]); ns.add(row["namespace_id"])
+            if len(ns) > 1:
+                problems.append(f"{i}번째 줄: 대상이 여러 업무 영역에 걸침")
+            if len(problems) > n_before:
+                continue
+            h = seed_hash(r["source"], r["type"], r.get("policies") or [], r.get("ref_tables") or [], r.get("id") or "")
+            if h in seen:
+                problems.append(f"{i}번째 줄: 파일 안에서 같은 항목(출처·종류·대상·id)이 두 번 — id로 구분하세요")
+                continue
+            seen.add(h)
+            if await conn.fetchval("SELECT id FROM ops_improvement_item WHERE kind = $1 AND source = $2 AND original->>'hash' = $3",
+                                   KIND, r["source"], h):
+                dup += 1
+                continue
+            original = {"type": r["type"], "policies": pols, "ref_tables": tabs, "hash": h, "seed_id": r.get("id"),
+                        "source_keys": {"policies": r.get("policies") or [], "ref_tables": r.get("ref_tables") or []}}
+            rows.append((KIND, r["source"], ns.pop(), "policy" if pols else "ref_table", (pols or tabs)[0],
+                         r["description"].strip(), json.dumps(original, ensure_ascii=False)))
+        print(f"씨앗 {len(recs)}줄 · 출처별 {dict(Counter(r['source'] for r in recs))} · 종류별 {dict(Counter(r['type'] for r in recs))}")
+        print(f"새로 넣을 것 {len(rows)} · 이미 있음 {dup} · 문제 {len(problems)}")
+        for p in problems:
+            print("  !", p)
+        if problems:
+            sys.exit(1)
+        if dry_run:
+            print("--dry-run: 쓰지 않음")
+            return
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(7303)")   # 동시에 두 번 돌려도 중복 0(확인은 잠금 안에서 다시)
+            n = 0
+            for v in rows:
+                h = json.loads(v[6])["hash"]
+                if await conn.fetchval("SELECT 1 FROM ops_improvement_item WHERE kind = $1 AND source = $2 AND original->>'hash' = $3",
+                                       v[0], v[1], h):
+                    continue
+                await conn.execute(
+                    "INSERT INTO ops_improvement_item (kind, source, namespace_id, target_type, target_id, user_input, original) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)", *v)
+                n += 1
+        total = await conn.fetchval("SELECT count(*) FROM ops_improvement_item WHERE kind = $1", KIND)
+    print(f"원문 확인 {n}건 추가(전체 {total}건)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", required=True, help="팀원 산출물 폴더(policies.jsonl·sources/ 등)")
+    ap.add_argument("--src", help="팀원 산출물 폴더(policies.jsonl·sources/ 등) — --add-source-checks 외엔 필수")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--add-suggested-links", action="store_true", help="적재된 DB에 제안 연결만 보탬")
     ap.add_argument("--refresh-overviews", action="store_true", help="적재된 문서 개요를 지금 규칙으로 갱신")
+    ap.add_argument("--add-source-checks", metavar="JSONL", help="원문 확인 씨앗(jsonl)을 정정 원장에 보탬(kind=source_check)")
+    ap.add_argument("--dry-run", action="store_true", help="--add-source-checks: 해석·중복만 보고 쓰지 않음")
     args = ap.parse_args()
+    if args.add_source_checks:
+        asyncio.run(add_source_checks(Path(args.add_source_checks), args.dry_run))
+        return
+    if not args.src:
+        ap.error("--src가 필요합니다")
     src = load_source(Path(args.src))
     plan = build_plan(src)
     summarize(plan)

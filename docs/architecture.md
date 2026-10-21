@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.150)
+# OpsLens 시스템 아키텍처 (v2.152)
 
 ## 개요
 
@@ -12,6 +12,25 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.152 (2026-10-21, dev_0): **목록형 답 개선 — 목록 질문 알아보기 + 목록 줄 = 정책명 — 요약.** 골든셋 v0 진단(목록형 18문항×2): 실패 25회 중
+  10회는 한 정책의 세부 조건을 줄줄이 펼쳐 "목록 밖 항목"이 됐고, 18문항 중 9문항은 "정리해줘·기준엔 뭐가 있어"처럼 "전체·모든" 없이 물어 목록 질문으로
+  안 잡혔다. ① trustkit `query/intent.py` 목록 질문 말투 추가(기준·정책·규정·항목이 붙을 때만 — 골든 목록형 42/42, 새 오탐 0) ② trustkit
+  `answer/shaping.list_line_summary()` — 목록 줄 = "경로 > 정책명 — 요약"(본문 앞줄을 글머리만 떼고 80자, LLM 없음, 정책명과 같은 제목 줄은 건너뜀;
+  981개 전부 빈 요약 0·본문 밖 글자 0) ③ `category_list.py` 목록 블록 지시: 정책 개수 명시, 목록 밖 정책 금지, 세부 조건 펼치지 말기, 잘렸으면 남은 개수;
+  분류 이름 비교에서 띄어 쓴 "및" 무시, 질문 속 더 긴 분류 이름 우선. 측정(로컬 Qwen, 같은 날): 목록형 11/36 → **19/36**(좋아짐 5·나빠짐 0),
+  전체 89.6 → 89.9%(오차 안), 검색 문항별 동일 — 게이트 통과.
+- v2.151 (2026-10-21, dev_0): **정책 v0 재구축 3단계 — 원문 확인 + JSON 내려받기·가져오기.** 고치는 곳은 여전히 하나(품질 › 정정 요청).
+  ① 정책서 › [원문 확인](`SourceCheckTab`, `service/policy/source_check.py`): 원문 자체에 대한 질문·문제(내용 수정이 아님) — 적재 점검의 담당자 질문 4,
+  골든셋 작성 중 찾은 정책끼리 어긋남 3쌍·참고표 오류 4. 저장은 새 테이블 없이 정정 원장 `kind='source_check'`(대상 = 정책/참고표 logical_id,
+  original {type, policies, ref_tables, hash}, 설명은 원문 인용 없이). [해결](메모)/[닫기](사유)만, 담당 파트·관리자. 정정 요청 목록·대기 배지·내 신고·
+  업무 영역 통계의 정정 건수·정정 처리 API(승인·반려·다시 쓰기 등은 404)에서 이 kind를 뺀다. 같은 화면에 제안 연결(ops_link `suggested`, 6건) [확정]/[거절].
+  씨앗: `scripts/load_policy_v0.py --add-source-checks <jsonl> [--dry-run]`(원천 키 → 현행 logical_id, (출처, 해시) 멱등 — 씨앗 파일은 git 제외 eval_out).
+  API: `GET /api/policy/source-checks`, `POST …/source-checks/{id}/resolve|dismiss`, `POST /api/policy/links/{id}/confirm|reject`.
+  ② 정책서 › [JSON](관리자, `PolicyJsonTab`, `service/policy/json_io.py`): 내려받기 = 얇은 형식 `opslens/policy-v0/1`(현행 버전). 가져오기 = 그 형식 또는 팀원
+  v0 policies.jsonl(적재기와 같은 `v0_convert.build_policies` 정리) → 미리보기(원천 키로 원문·비고 비교: 같음·바뀜·파일에만·DB에만·검토 중이라 제외, 이름·경로
+  변경은 보고만) → 반영 = 바뀐 정책마다 정정 제안 1건(source `json_import`, AI 없음, 정책 테이블엔 안 씀) → 정정 요청(출처 "JSON 가져오기")에서 승인.
+  미리보기 뒤 파일(doc_hash)·정책/정정 상태(plan_hash)가 바뀌면 409. 새 정책 추가·삭제는 안 함(보고만). API: `GET /api/policy/json/export`,
+  `POST /api/policy/json/preview|apply`. 스키마 변경 없음.
 - v2.150 (2026-10-21, dev_0): **정책 v0 재구축 2단계 — 정책서 화면 새로 + 모든 정책 변경은 정정 요청에서 승인.** ① 지식 › 정책서 =
   [정책 | 참고표 | 문서 개요](`components/admin/policy/`). 정책: 문서 순서 목록(첫 절로 접기, 정책명·원문 검색, "정정 #N 검토 중" 배지) → 상세 모달
   (경로·이름·버전, 원문, 비고, 용어, 값은 있을 때만 — 원문에 칠하고 원문에 없는 값은 빨강, 버전 이력 "적재/정정 #N", [이전][다음]).

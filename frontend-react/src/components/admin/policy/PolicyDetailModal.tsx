@@ -14,7 +14,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const SOURCE_LABEL: Record<string, string> = {
-  policy_direct: '직접 수정', policy_ai: 'AI 제안', chat_answer_auto: '채팅 답변 틀림', chat_answer_wrong: '채팅 답변 틀림',
+  policy_direct: '직접 수정', policy_ai: 'AI 제안', json_import: 'JSON 가져오기', chat_answer_auto: '채팅 답변 틀림', chat_answer_wrong: '채팅 답변 틀림',
 };
 
 /** 원문에서 파라미터 값을 칠한다 — 값이 원문에 글자로 있어야 원문 파생이 맞다(설계 §7). */

@@ -43,6 +43,14 @@ SOURCE_AUTO = "chat_answer_auto"
 SOURCE_POLICY_DIRECT = "policy_direct"
 SOURCE_POLICY_AI = "policy_ai"
 POLICY_SOURCES = (SOURCE_POLICY_DIRECT, SOURCE_POLICY_AI)
+# 정책서 JSON 가져오기(10/21, v0 재구축 3단계 — service/policy/json_io.py): 바뀐 정책마다 직접 수정과 같은 제안(AI 호출 없음).
+# 화면의 POST /api/corrections로는 못 만든다(관리자 전용 가져오기 API만) — 그래서 POLICY_SOURCES(요청 스키마가 받는 값)엔 안 넣는다.
+SOURCE_JSON_IMPORT = "json_import"
+_PROPOSAL_MODES = POLICY_SOURCES + (SOURCE_JSON_IMPORT,)
+_AS_IS_MODES = (SOURCE_POLICY_DIRECT, SOURCE_JSON_IMPORT)   # 받은 수정안 그대로 저장(AI 없음)
+# 원문 확인(10/21, service/policy/source_check.py): 정책서 원문에 대한 질문·문제 — 내용 정정이 아니라 정정 요청 목록·배지·내 신고·
+# 정정 처리 API에 섞이지 않게 모든 정정 조회에서 이 kind를 뺀다.
+KIND_SOURCE_CHECK = "source_check"
 _POLICY_TARGETS = POLICY_TARGETS   # 정책 화면(catalog)과 같은 목록(10/21 리뷰 L10)
 # pg_advisory_xact_lock(이 값, 정책 항목 id) — 같은 정책에 대기 정정 두 개가 동시에 생기지 않게. 정책을 대상으로 정하는 모든 길
 # (정책 화면 제안·채팅 신고·AI 추정·대상 변경)이 이 잠금 + _pending_policy_correction 확인을 거친다(10/21 리뷰 M1)
@@ -395,12 +403,12 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
     직접 수정(mode=policy_direct)은 받은 원문·비고를 그대로 수정안으로(AI 호출 없음), AI 제안(policy_ai)은 한 줄 요청으로 AI 초안.
     같은 정책에 대기 중 정정이 있으면(채팅 신고 포함) 만들지 않고 ConflictError(existing_id) — 한 정책에 안이 둘이면 승인 때 하나가
     다른 하나를 덮는다. 확인·저장은 정책 항목 단위 잠금 안에서(동시에 두 번 눌러도 1건)."""
-    if mode not in POLICY_SOURCES:
+    if mode not in _PROPOSAL_MODES:
         raise ValueError("알 수 없는 수정 방식입니다.")
     user_input = (user_input or "").strip() or None
     if mode == SOURCE_POLICY_AI and not user_input:
         raise ValueError("AI에게 어떻게 고칠지 한 줄로 적어 주세요.")
-    if mode == SOURCE_POLICY_DIRECT and not proposed:
+    if mode in _AS_IS_MODES and not proposed:
         raise ValueError("수정한 원문이 없습니다.")
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
@@ -418,7 +426,7 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
         original = await _load_original(conn, ns_id, "policy_narrative", item_id, chunk_id, None)
     whole = row["pipeline_version"] == PIPELINE_WHOLE
     stored = None
-    if mode == SOURCE_POLICY_DIRECT:
+    if mode in _AS_IS_MODES:
         stored = _clean_proposal("policy_narrative", proposed or {}, whole=whole)
         _validate_proposed("policy_narrative", stored, editing=True)
         if _unchanged("policy_narrative", original, stored):
@@ -627,8 +635,8 @@ async def item_namespace(item_id: int) -> Optional[str]:
     """권한 확인용 — 이 신고가 속한 파트(처리 권한 = 그 파트 담당자 + 관리자)."""
     async with get_conn() as conn:
         return await conn.fetchval(
-            "SELECT n.name FROM ops_improvement_item i JOIN ops_namespace n ON n.id = i.namespace_id WHERE i.id = $1",
-            item_id)
+            "SELECT n.name FROM ops_improvement_item i JOIN ops_namespace n ON n.id = i.namespace_id WHERE i.id = $1 AND i.kind <> $2",
+            item_id, KIND_SOURCE_CHECK)   # 원문 확인 항목은 정정 처리 API(승인·반려·다시 쓰기…)로 못 집는다 — 404
 
 
 async def retarget(item_id: int, approver: dict, key: str) -> dict:
@@ -816,7 +824,7 @@ def _row(r) -> dict:
 
 
 async def list_items(namespace: Optional[str], status: Optional[str], limit: int = 200) -> list[dict]:
-    conds, args = [], []
+    conds, args = [f"i.kind <> '{KIND_SOURCE_CHECK}'"], []
     if namespace:
         args.append(namespace)
         conds.append(f"n.name = ${len(args)}")
@@ -836,7 +844,7 @@ async def pending_count() -> dict:
     async with get_conn() as conn:
         rows = await conn.fetch(
             "SELECT n.name, COUNT(*) AS cnt FROM ops_improvement_item i JOIN ops_namespace n ON n.id = i.namespace_id "
-            "WHERE i.status = 'pending' GROUP BY n.name")
+            "WHERE i.status = 'pending' AND i.kind <> $1 GROUP BY n.name", KIND_SOURCE_CHECK)
     by_ns = {r["name"]: int(r["cnt"]) for r in rows}
     return {"count": sum(by_ns.values()), "by_namespace": by_ns}
 
@@ -845,8 +853,8 @@ async def list_mine(user_id: int, unseen_only: bool) -> list[dict]:
     """신고자에게 결과 알림 — 처리됐는데 아직 확인 안 한 것."""
     extra = "AND i.status <> 'pending' AND i.reporter_seen_at IS NULL" if unseen_only else ""
     async with get_conn() as conn:
-        rows = await conn.fetch(f"{_LIST_SQL} WHERE i.reporter_user_id = $1 {extra} ORDER BY i.created_at DESC LIMIT 50",
-                                user_id)
+        rows = await conn.fetch(f"{_LIST_SQL} WHERE i.reporter_user_id = $1 AND i.kind <> $2 {extra} ORDER BY i.created_at DESC LIMIT 50",
+                                user_id, KIND_SOURCE_CHECK)
     return [_row(r) for r in rows]
 
 
@@ -854,8 +862,8 @@ async def mark_seen(user_id: int, ids: list[int]) -> int:
     async with get_conn() as conn:
         res = await conn.execute(
             "UPDATE ops_improvement_item SET reporter_seen_at = NOW() "
-            "WHERE reporter_user_id = $1 AND id = ANY($2::int[]) AND status <> 'pending' AND reporter_seen_at IS NULL",
-            user_id, ids)
+            "WHERE reporter_user_id = $1 AND id = ANY($2::int[]) AND status <> 'pending' AND reporter_seen_at IS NULL AND kind <> $3",
+            user_id, ids, KIND_SOURCE_CHECK)
     return int(res.split()[-1]) if res else 0
 
 

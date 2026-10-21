@@ -124,17 +124,18 @@ function elapsed(from: string, to: string | null): string {
   return h >= 24 ? `${Math.floor(h / 24)}일` : `${h}시간`;
 }
 
-type SourceGroup = 'all' | 'chat' | 'policy_direct' | 'policy_ai' | 'eval_gate';
+type SourceGroup = 'all' | 'chat' | 'policy_direct' | 'policy_ai' | 'json_import' | 'eval_gate';
 const SOURCE_FILTERS: { id: SourceGroup; label: string }[] = [
   { id: 'all', label: '전체' },
   { id: 'chat', label: '채팅' },
   { id: 'policy_direct', label: '정책 직접 수정' },
   { id: 'policy_ai', label: '정책 AI 제안' },
+  { id: 'json_import', label: 'JSON 가져오기' },
   { id: 'eval_gate', label: '평가 게이트' },
 ];
 
 function sourceGroup(item: CorrectionItem): Exclude<SourceGroup, 'all'> {
-  if (item.source === 'policy_direct' || item.source === 'policy_ai') return item.source;
+  if (item.source === 'policy_direct' || item.source === 'policy_ai' || item.source === 'json_import') return item.source;
   if (item.kind === 'search_noise' || item.source === 'eval_gate') return 'eval_gate';
   return 'chat';
 }
@@ -143,6 +144,7 @@ function sourceLabel(item: CorrectionItem): string {
   if (item.kind === 'search_noise') return '평가 게이트 이상해요';
   if (item.source === 'policy_direct') return '정책 직접 수정';
   if (item.source === 'policy_ai') return '정책 AI 제안';
+  if (item.source === 'json_import') return 'JSON 가져오기';
   if (item.source === 'chat_answer_auto') return '답변 틀림 + 한 줄(AI 판정)';
   if (item.source === 'chat_answer_wrong' || item.source === 'review_flag_migrated') return '답변 틀림(의견 없음)';
   return '근거 직접 지정';
@@ -245,7 +247,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
   const proposedMarks = item.proposed ? Object.values(item.proposed).reduce((n, v) => n + (String(v ?? '').split(REVIEW_MARK).length - 1), 0) : 0;
   const edits = item.ai_verdict?.edits ?? [];
   const lastEdit = edits.length ? edits[edits.length - 1] : null;
-  const isPolicySource = item.source === 'policy_direct' || item.source === 'policy_ai';
+  const isPolicySource = item.source === 'policy_direct' || item.source === 'policy_ai' || item.source === 'json_import';
   // 기존 vs 수정안 줄 비교 — 고칠 원문이 있는 대상만(빠진 내용·답변 오류는 질문·답변이 왼쪽)
   const hasOriginal = item.target_type === 'knowledge' || item.target_type === 'policy_param' || item.target_type === 'policy_narrative';
   const ops = useMemo(
@@ -259,6 +261,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
     : lastEdit ? `직접 수정한 안${lastEdit.by_name ? ` (${lastEdit.by_name})` : ''}`
       : item.source === 'policy_direct' ? '정책 화면에서 직접 쓴 수정안'
         : item.source === 'policy_ai' ? 'AI 수정안(정책 화면 요청)'
+        : item.source === 'json_import' ? 'JSON 가져오기의 원문·비고'
           : item.user_input && item.kind !== 'search_noise' ? '사용자 입력으로 정리된 수정안' : item.proposed ? 'AI 수정안(추정 — 사용자 의견 없음)' : '수정안';
 
   return (
@@ -298,7 +301,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
 
       {item.user_input ? (
         <p className="text-sm text-slate-200">
-          <span className="text-slate-500 text-xs mr-1">{item.kind === 'search_noise' ? '표시 내용' : item.source === 'policy_ai' ? 'AI에게 한 요청' : '사용자 입력'}</span>“{item.user_input}”
+          <span className="text-slate-500 text-xs mr-1">{item.kind === 'search_noise' ? '표시 내용' : item.source === 'policy_ai' ? 'AI에게 한 요청' : item.source === 'json_import' ? '가져온 파일' : '사용자 입력'}</span>“{item.user_input}”
         </p>
       ) : item.kind === 'answer_signal' && (
         <p className="text-xs text-slate-500">

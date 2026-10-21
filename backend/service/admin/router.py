@@ -272,7 +272,8 @@ async def get_namespace_stats(name: str, user: dict = Depends(get_current_user))
             """, ns_id,
         )
         corrections_open = await conn.fetchval(
-            "SELECT COUNT(*) FROM ops_improvement_item WHERE namespace_id = $1 AND status = 'pending'", ns_id,
+            # 원문 확인(kind source_check)은 정정이 아니다 — 정정 요청 배지와 같은 기준(10/21)
+            "SELECT COUNT(*) FROM ops_improvement_item WHERE namespace_id = $1 AND status = 'pending' AND kind <> 'source_check'", ns_id,
         )
 
     return NamespaceDetailStats(

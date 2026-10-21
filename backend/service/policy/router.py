@@ -8,10 +8,12 @@ from dataclasses import asdict
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
-from core.dependencies import get_current_user, get_current_admin, check_knowledge_read
+from core.dependencies import get_current_user, get_current_admin, check_knowledge_read, check_namespace_ownership
 from service.policy import answer_eval
 from service.policy import catalog, search as search_service, track2, pipeline_stats
+from service.policy import json_io, source_check
 from service.policy.schemas import PolicySearchOut, Track2ResultOut, Track2RunHistoryOut, PipelineStatsOut
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,92 @@ async def list_overviews(namespace: str = Query(...), user: dict = Depends(get_c
     """문서 개요(서문)."""
     await check_knowledge_read(namespace, user)
     return await catalog.list_overviews(namespace)
+
+
+# ── 원문 확인(v0 재구축 3단계, 10/21) — 정책서 원문에 대한 질문·문제 + 제안 연결. 조회는 누구나, 처리는 담당 파트·관리자 ──────
+
+class SourceCheckDecision(BaseModel):
+    """[해결]의 메모 / [닫기]의 사유 — 필수."""
+    note: str = Field(min_length=1, max_length=1000)
+
+
+@router.get("/source-checks")
+async def list_source_checks(namespace: str = Query(...), status: Optional[str] = Query(default=None, pattern="^(open|done)$"),
+                             user: dict = Depends(get_current_user)):
+    await check_knowledge_read(namespace, user)
+    return await source_check.list_checks(namespace, status)
+
+
+async def _check_owner(item_id: int, user: dict) -> None:
+    ns = await source_check.check_namespace(item_id)
+    if ns is None:
+        raise HTTPException(status_code=404, detail="원문 확인 항목을 찾을 수 없어요.")
+    await check_namespace_ownership(ns, user)
+
+
+@router.post("/source-checks/{item_id}/resolve")
+async def resolve_source_check(item_id: int, body: SourceCheckDecision, user: dict = Depends(get_current_user)):
+    await _check_owner(item_id, user)
+    return await source_check.decide_check(item_id, user, "resolved", body.note)
+
+
+@router.post("/source-checks/{item_id}/dismiss")
+async def dismiss_source_check(item_id: int, body: SourceCheckDecision, user: dict = Depends(get_current_user)):
+    await _check_owner(item_id, user)
+    return await source_check.decide_check(item_id, user, "dismissed", body.note)
+
+
+async def _link_owner(link_id: int, user: dict) -> None:
+    ns = await source_check.link_namespace(link_id)
+    if ns is None:
+        raise HTTPException(status_code=404, detail="제안 연결을 찾을 수 없어요.")
+    await check_namespace_ownership(ns, user)
+
+
+@router.post("/links/{link_id}/confirm")
+async def confirm_link(link_id: int, user: dict = Depends(get_current_user)):
+    await _link_owner(link_id, user)
+    return await source_check.decide_link(link_id, user, True)
+
+
+@router.post("/links/{link_id}/reject")
+async def reject_link(link_id: int, user: dict = Depends(get_current_user)):
+    await _link_owner(link_id, user)
+    return await source_check.decide_link(link_id, user, False)
+
+
+# ── JSON 내려받기·가져오기(관리자 전용, 10/21) — 가져오기는 바뀐 정책마다 정정 제안만 만든다(승인은 정정 요청에서) ──────
+
+class JsonImportBody(BaseModel):
+    namespace: str
+    content: str = Field(min_length=1, max_length=json_io.MAX_CONTENT)
+    filename: Optional[str] = Field(default=None, max_length=200)
+
+
+class JsonApplyBody(JsonImportBody):
+    doc_hash: str = Field(min_length=1, max_length=128)
+    plan_hash: str = Field(min_length=1, max_length=128)
+
+
+@router.get("/json/export")
+async def export_policy_json(namespace: str = Query(...), user: dict = Depends(get_current_admin)):
+    """지금 쓰이는 정책(얇은 형식 opslens/policy-v0/1)."""
+    return await json_io.export_domain(namespace)
+
+
+@router.post("/json/preview")
+async def preview_policy_json(body: JsonImportBody, user: dict = Depends(get_current_admin)):
+    """파일과 지금 정책 비교 — 같음·바뀜·파일에만·DB에만·검토 중이라 막힘. 아무것도 안 쓴다."""
+    return await json_io.preview(body.namespace, body.content)
+
+
+@router.post("/json/apply")
+async def apply_policy_json(body: JsonApplyBody, user: dict = Depends(get_current_admin)):
+    """바뀐 정책마다 정정 제안 1건(출처 json_import). 미리보기 뒤 파일·정책이 바뀌었으면 409."""
+    try:
+        return await json_io.apply(body.namespace, user, body.content, body.doc_hash, body.plan_hash, body.filename)
+    except json_io.ImportConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.get("/search", response_model=PolicySearchOut)
