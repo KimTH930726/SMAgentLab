@@ -28,7 +28,6 @@ _ANALYZER_PROMPT = """아래 문서의 처음과 끝 부분을 분석하여 메�
   "key_terms": [
     {{"term": "용어", "description": "간단 설명"}}
   ],
-  "priority_score": 0.0~1.0,
   "chunk_strategy": "section | paragraph | fixed | auto",
   "estimated_chunks": 예상 청크 수
 }}
@@ -36,7 +35,6 @@ _ANALYZER_PROMPT = """아래 문서의 처음과 끝 부분을 분석하여 메�
 규칙:
 - chunk_strategy는 반드시 section, paragraph, fixed, auto 중 하나
 - hierarchical_sections 구조면 section, flat_paragraphs면 paragraph 추천
-- priority_score: 장애 대응/핵심 프로세스는 0.8+, 일반 참고자료는 0.3~0.5
 - key_terms: 이 조직/시스템에서 특별한 의미를 가진 용어만 (일반 단어 제외)
 - suggested_categories: 1~3개"""
 
@@ -69,7 +67,6 @@ async def analyze_document(
             "has_code_blocks": bool,
             "suggested_categories": list[str],
             "key_terms": list[dict],
-            "priority_score": float,
             "chunk_strategy": str,
             "estimated_chunks": int,
         }
@@ -108,7 +105,6 @@ def _default_result() -> dict:
         "has_code_blocks": False,
         "suggested_categories": [],
         "key_terms": [],
-        "priority_score": 0.5,
         "chunk_strategy": "auto",
         "estimated_chunks": 0,
     }
@@ -124,13 +120,8 @@ def _validate_and_normalize(result: dict) -> dict:
         strategy = _STRATEGY_MAP.get(doc_type, "auto")
         result["chunk_strategy"] = strategy
 
-    # priority_score 범위 보정
-    score = result.get("priority_score", 0.5)
-    try:
-        score = float(score)
-    except (TypeError, ValueError):
-        score = 0.5
-    result["priority_score"] = max(0.0, min(1.0, score))
+    # priority_score(중요도)는 묻지 않는다 — 10/2 가중치 제거(v2.121) 뒤로 읽는 곳이 없어 등록마다 토큰만 썼다(10/21 누락 점검 ⑰)
+    result.pop("priority_score", None)
 
     # estimated_chunks 보정
     try:

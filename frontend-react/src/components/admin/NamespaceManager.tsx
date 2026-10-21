@@ -2,18 +2,22 @@ import { Fragment, useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Tag, Pencil } from 'lucide-react';
 import {
-  getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace,
+  getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace, setNamespaceOwner,
   getCategories, createCategory, deleteCategory, renameCategory,
 } from '../../api/namespaces';
+import { getAllParts } from '../../api/auth';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import type { KnowledgeCategory, NamespaceDetail } from '../../types';
-import { showError } from '../../store/useDialogStore';
+import { showConfirm, showError } from '../../store/useDialogStore';
 import { canEditDomain } from '../../utils/domainAccess';
 import { FormModal } from '../ui/FormModal';
+
+/** 이름은 바뀌었는데 담당 저장만 실패 — 화면이 "이름 변경은 됨"을 알아야 다시 저장할 때 옛 이름으로 또 바꾸지 않는다(10/21 리뷰 L1) */
+class RenamedButOwnerFailed extends Error {}
 
 interface NamespaceManagerProps {
   onNavigate?: (to: 'policy' | 'knowledge' | 'glossary') => void;
@@ -173,8 +177,11 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
-  const [editingNs, setEditingNs] = useState<string | null>(null);
+  // 업무 영역 수정 모달 — 이름 + 담당 파트(10/21 사용자: 담당은 영역의 속성이라 이름과 같은 자리에서). 조직 › 담당 업무 영역과 같은 칸(owner_part_id)
+  const [editingNs, setEditingNs] = useState<NamespaceDetail | null>(null);
   const [editingNsName, setEditingNsName] = useState('');
+  const [editingOwner, setEditingOwner] = useState('');   // '' = 담당 없음
+  const { data: parts = [] } = useQuery({ queryKey: ['parts-all'], queryFn: getAllParts, enabled: isAdmin && editingNs !== null });
 
   const { data: namespaces = [], isLoading, error } = useQuery({
     queryKey: ['namespaces-detail'],
@@ -198,27 +205,59 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
     },
   });
 
-  const renameMutation = useMutation({
-    mutationFn: ({ oldName, newName: nn }: { oldName: string; newName: string }) =>
-      renameNamespace(oldName, nn),
-    onSuccess: (_data, { oldName, newName: nn }) => {
-      qc.setQueryData<string[]>(['namespaces'], (old) =>
-        old?.map((ns) => (ns === oldName ? nn : ns)),
-      );
+  const openEditNs = (ns: NamespaceDetail) => {
+    editMutation.reset();
+    setEditingNs(ns);
+    setEditingNsName(ns.name);
+    setEditingOwner(ns.owner_part ?? '');
+  };
+
+  // 바뀐 것만 보낸다: 이름 → (새 이름으로) 담당. 이름만 바뀌고 담당이 실패하면 오류 문구에 그렇게 적는다(조용히 반쯤 저장 안 되게)
+  const editMutation = useMutation({
+    mutationFn: async ({ oldName, newName: nn, owner }: { oldName: string; newName: string | null; owner: string | null | undefined }) => {
+      if (nn) await renameNamespace(oldName, nn);
+      if (owner !== undefined) {
+        try {
+          await setNamespaceOwner(nn ?? oldName, owner);
+        } catch (e) {
+          if (nn) throw new RenamedButOwnerFailed(`이름은 '${nn}'(으)로 바뀌었지만 담당 파트는 저장하지 못했어요 — ${(e as Error).message}`);
+          throw e;
+        }
+      }
+    },
+    onSettled: (_data, err, { oldName, newName: nn }) => {
+      // 이름이 실제로 바뀌었을 때만(성공, 또는 담당만 실패) 새 이름으로 — 이름 변경 자체가 실패했으면 옛 이름 그대로
+      if (nn && (!err || err instanceof RenamedButOwnerFailed)) {
+        qc.setQueryData<string[]>(['namespaces'], (old) => old?.map((ns) => (ns === oldName ? nn : ns)));
+        // 고른 영역의 이름을 바꿨으면 새 이름으로 따라간다 — 안 그러면 사이드바가 "목록에 없음"으로 보고 첫 영역으로 넘어간다(재리뷰 L3)
+        if (selectedNamespace === oldName) setNamespace(nn);
+        // 모달은 열어 둔 채(오류 표시) 편집 대상을 새 이름으로 — 다시 저장하면 담당만 보낸다(옛 이름으로 또 바꾸면 404였다, 10/21 리뷰 L1)
+        if (err) setEditingNs((cur) => (cur && cur.name === oldName ? { ...cur, name: nn } : cur));
+      }
       qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
       qc.invalidateQueries({ queryKey: ['namespaces'] });
-      // 고른 영역의 이름을 바꿨으면 새 이름으로 따라간다 — 안 그러면 사이드바가 "목록에 없음"으로 보고 첫 영역으로 넘어간다(재리뷰 L3)
-      if (selectedNamespace === oldName) setNamespace(nn);
-      setEditingNs(null);
     },
+    onSuccess: () => setEditingNs(null),
     onError: () => { /* 모달 안에 표시 */ },
   });
 
-  const commitNsRename = (oldName: string) => {
-    const trimmed = editingNsName.trim();
-    if (!trimmed || trimmed === oldName) { setEditingNs(null); return; }
-    renameMutation.reset();
-    renameMutation.mutate({ oldName, newName: trimmed });
+  const editNameChanged = !!editingNs && !!editingNsName.trim() && editingNsName.trim() !== editingNs.name;
+  const editOwnerChanged = !!editingNs && editingOwner !== (editingNs.owner_part ?? '');
+
+  const commitNsEdit = async () => {
+    if (!editingNs || editMutation.isPending || (!editNameChanged && !editOwnerChanged)) return;
+    if (editOwnerChanged) {
+      const msg = editingOwner
+        ? `'${editingOwner}' 사람이 '${editingNsName.trim()}'의 지식·정책·용어를 수정하게 됩니다.` +
+          (editingNs.owner_part ? `\n(지금 담당 '${editingNs.owner_part}'은 수정할 수 없게 돼요)` : '')
+        : `'${editingNsName.trim()}'의 담당 파트를 없앱니다 — 관리자만 수정할 수 있게 돼요.`;
+      if (!(await showConfirm(msg, { tone: 'warning', confirmLabel: '저장', title: '담당 파트 변경' }))) return;
+    }
+    editMutation.mutate({
+      oldName: editingNs.name,
+      newName: editNameChanged ? editingNsName.trim() : null,
+      owner: editOwnerChanged ? (editingOwner || null) : undefined,
+    });
   };
 
   const deleteMutation = useMutation({
@@ -331,7 +370,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                         {isAdmin && (
                           <div className="flex items-center justify-end gap-1">
-                            <button onClick={() => { renameMutation.reset(); setEditingNs(ns.name); setEditingNsName(ns.name); }} title="이름 바꾸기"
+                            <button onClick={() => openEditNs(ns)} title="수정(이름·담당 파트)"
                               className="p-1.5 rounded text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-700/60">
                               <Pencil className="w-3.5 h-3.5" />
                             </button>
@@ -361,21 +400,32 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
         <div className="text-center py-10 text-slate-500">업무 영역이 없습니다.</div>
       )}
 
-      {/* 이름 바꾸기 — 모달(10/21, 그 자리에서 고치던 칸은 포커스가 빠지면 저장됐고 취소를 눌러도 저장됐다) */}
+      {/* 업무 영역 수정 — 이름 + 담당 파트(10/21). 모달: 그 자리에서 고치던 칸은 포커스가 빠지거나 취소를 눌러도 저장됐다 */}
       <FormModal
         isOpen={editingNs !== null}
-        title="업무 영역 이름 바꾸기"
+        title="업무 영역 수정"
         onClose={() => setEditingNs(null)}
-        onSubmit={() => editingNs && commitNsRename(editingNs)}
-        submitting={renameMutation.isPending}
-        submitDisabled={!editingNsName.trim() || editingNsName.trim() === editingNs}
-        error={renameMutation.isError ? String((renameMutation.error as Error)?.message ?? '이름 변경 실패') : null}
+        onSubmit={commitNsEdit}
+        submitting={editMutation.isPending}
+        submitDisabled={!editingNsName.trim() || (!editNameChanged && !editOwnerChanged)}
+        error={editMutation.isError ? String((editMutation.error as Error)?.message ?? '저장 실패') : null}
       >
-        <label htmlFor="ns-rename" className="block text-xs text-slate-400">
-          새 이름 — 안의 정책·지식·용어는 그대로 따라가요
-        </label>
-        <input id="ns-rename" autoFocus value={editingNsName} onChange={(e) => setEditingNsName(e.target.value)}
-          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+        <div>
+          <label htmlFor="ns-rename" className="block text-xs text-slate-400 mb-1">이름</label>
+          <input id="ns-rename" autoFocus value={editingNsName} onChange={(e) => setEditingNsName(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+          <p className="text-xs text-slate-500 mt-1">안의 정책·지식·용어는 그대로 따라가요</p>
+        </div>
+        <div>
+          <label htmlFor="ns-owner" className="block text-xs text-slate-400 mb-1">담당 파트</label>
+          <select id="ns-owner" value={editingOwner} onChange={(e) => setEditingOwner(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
+            <option value="">담당 없음</option>
+            {editingOwner && !parts.some((p) => p.name === editingOwner) && <option value={editingOwner}>{editingOwner}</option>}
+            {parts.map((p) => <option key={p.id} value={p.name}>{p.team ? `${p.team} · ${p.name}` : p.name}</option>)}
+          </select>
+          <p className="text-xs text-slate-500 mt-1">이 파트 사람이 이 영역의 정책·지식·용어를 수정하게 돼요. 없으면 관리자만.</p>
+        </div>
       </FormModal>
 
       {/* Create Modal */}

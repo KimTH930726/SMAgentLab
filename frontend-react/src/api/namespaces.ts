@@ -32,6 +32,14 @@ export async function createNamespace(payload: { name: string; description: stri
   }
 }
 
+/** 업무 영역 담당 파트 지정(관리자) — null이면 담당 해제(담당이 없으면 관리자만 수정) */
+export async function setNamespaceOwner(name: string, ownerPart: string | null): Promise<{ name: string; owner_part: string | null }> {
+  return apiFetch(`/namespaces/${encodeURIComponent(name)}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(ownerPart ? { owner_part: ownerPart } : { clear_owner: true }),
+  });
+}
+
 export async function renameNamespace(oldName: string, newName: string): Promise<{ name: string }> {
   return apiFetch<{ name: string }>(`/namespaces/${encodeURIComponent(oldName)}`, {
     method: 'PATCH',

@@ -207,13 +207,12 @@ class TestAutoTagChunks:
     @pytest.mark.asyncio
     async def test_success(self):
         llm = MagicMock()
-        llm.generate_once = AsyncMock(return_value='[{"idx": 0, "category": "쿠폰", "priority_score": 0.8}]')
+        llm.generate_once = AsyncMock(return_value='[{"idx": 0, "category": "쿠폰"}]')
 
         chunks = [{"idx": 0, "text": "쿠폰 발급 절차입니다."}]
         result = await auto_tag_chunks(chunks, ["쿠폰", "배치"], llm)
         assert len(result) == 1
         assert result[0]["category"] == "쿠폰"
-        assert result[0]["priority_score"] == 0.8
 
     @pytest.mark.asyncio
     async def test_llm_failure_fallback(self):
@@ -223,7 +222,7 @@ class TestAutoTagChunks:
         chunks = [{"idx": 0, "text": "test"}, {"idx": 1, "text": "test2"}]
         result = await auto_tag_chunks(chunks, [], llm)
         assert len(result) == 2
-        assert result[0]["priority_score"] == 0.5  # fallback
+        assert result[0] == {"idx": 0, "category": None}  # fallback — 중요도 점수 없음(10/21)
 
     @pytest.mark.asyncio
     async def test_empty_chunks(self):

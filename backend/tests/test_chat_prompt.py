@@ -60,3 +60,9 @@ def test_over_refusal_guard_present():
     """근거 표시 줄을 빼자 거절이 늘어 넣은 줄(88문항 A/B) — 빠지면 다시 과잉 거절."""
     assert "일부만 있어도 있는 만큼 답하고" in B.CHAT_SYSTEM_PROMPT and "관련 문서가 전혀 없으면" in B.CHAT_SYSTEM_PROMPT
 
+
+
+def test_removed_field_instruction_gone():
+    """컨테이너·테이블 칸은 v2.82에 지식에서 뺐다 — 지시도 없어야(10/21). SQL·코드 포함 지시는 남는다."""
+    assert "컨테이너명" not in B.CHAT_SYSTEM_PROMPT and "테이블명" not in B.CHAT_SYSTEM_PROMPT
+    assert "SQL" in B.CHAT_SYSTEM_PROMPT

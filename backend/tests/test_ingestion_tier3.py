@@ -47,16 +47,15 @@ class TestValidateAndNormalize:
         })
         assert result["chunk_strategy"] == "auto"
 
-    def test_priority_score_clamped(self):
-        result = _validate_and_normalize({"priority_score": 1.5})
-        assert result["priority_score"] == 1.0
+    def test_priority_score_dropped(self):
+        """중요도 점수는 묻지도 남기지도 않는다(10/21 — 읽는 곳 없음). LLM이 내놓아도 결과에서 뺀다."""
+        assert "priority_score" not in _validate_and_normalize({"priority_score": 0.9})
+        assert "priority_score" not in _validate_and_normalize({})
 
-        result = _validate_and_normalize({"priority_score": -0.3})
-        assert result["priority_score"] == 0.0
-
-    def test_priority_score_non_numeric(self):
-        result = _validate_and_normalize({"priority_score": "high"})
-        assert result["priority_score"] == 0.5
+    def test_prompts_do_not_ask_priority(self):
+        from agents.knowledge_rag.ingestion import analyzer, tagger
+        assert "priority_score" not in analyzer._ANALYZER_PROMPT
+        assert "priority_score" not in tagger._TAGGER_PROMPT
 
     def test_estimated_chunks_non_numeric(self):
         result = _validate_and_normalize({"estimated_chunks": "many"})
@@ -79,7 +78,7 @@ class TestAnalyzeDocument:
         result = await analyze_document("## 1. 개요\n쿠폰 시스템..." * 100, llm)
         assert result["doc_type"] == "operation_manual"
         assert result["chunk_strategy"] == "section"
-        assert result["priority_score"] == 0.8
+        assert "priority_score" not in result   # LLM이 내놓아도 버린다(10/21)
         assert len(result["key_terms"]) == 1
 
     @pytest.mark.asyncio
@@ -90,7 +89,7 @@ class TestAnalyzeDocument:
         result = await analyze_document("some text", llm)
         assert result["doc_type"] == "mixed"
         assert result["chunk_strategy"] == "auto"
-        assert result["priority_score"] == 0.5
+        assert "priority_score" not in result
 
     @pytest.mark.asyncio
     async def test_empty_text_returns_default(self):
