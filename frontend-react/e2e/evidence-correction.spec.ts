@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { goAdmin, domainSelect } from './admin-nav';
 import { createPolicyPart, dropPolicyPart } from './v0-fixture';
+import { API, adminToken, loginAdmin } from './auth';
 
 // 이 테스트가 존재하는 이유(2026-10-01): 근거 정정 흐름은 버튼(근거 카드·답변 아래) → 입력창
 // 정정 모드(ChatContainer) → 개선 원장 → 관리자 정정 검토 탭 → 승인 = 버전 교체 → 같은 질문
@@ -10,10 +11,7 @@ import { createPolicyPart, dropPolicyPart } from './v0-fixture';
 // 데이터: 실 지식/정책을 건드리지 않도록 임시 정책서 파트(v0 방식 — 원문 통째, 2026-10-20 현행화)를 만들고 끝나면 통째로 지운다
 // (ops_namespace ON DELETE CASCADE). 정책서 파트는 채팅 범위가 그 파트뿐이라 실데이터(v0 정책서 14개 파트)가 섞이지 않는다.
 
-const ADMIN_USER = 'admin';
-const ADMIN_PASS = '1111';
 const NS = 'zz_e2e_correction';
-const API = 'http://localhost:8000';
 
 test.describe.configure({ mode: 'serial' });
 // 정정 접수·AI 판정·답변이 모두 LLM을 거친다(E2E는 로컬 LLM — llm-local.setup.ts) — 느린 날을 대비해 넉넉히
@@ -22,8 +20,7 @@ test.setTimeout(900_000);
 test.beforeAll(async ({ request }) => {
   test.setTimeout(180_000);   // 임시 정책 임베딩 — 백엔드 컨테이너에 새 프로세스로 임베딩 모델을 올려 20~40초
   createPolicyPart(NS, [{ name: '임시 반품 기한', path: ['테스트'], body: '반품은 수령 후 7일 이내에 신청할 수 있다.' }]);
-  const login = await request.post(`${API}/api/auth/login`, { data: { username: ADMIN_USER, password: ADMIN_PASS } });
-  const tok = (await login.json()).access_token as string;
+  const tok = await adminToken();
   // 같은 이름으로 다시 만든 파트에 지난 실행의 시맨틱 캐시가 남아 있으면, 캐시 답변이 이미 지운 근거를 가리킨다
   await request.delete(`${API}/api/admin/cache?namespace=${encodeURIComponent(NS)}`, { headers: { Authorization: `Bearer ${tok}` } });
   const k = await request.post(`${API}/api/knowledge`, {
@@ -34,22 +31,13 @@ test.beforeAll(async ({ request }) => {
 });
 
 test.afterAll(async ({ request }) => {
-  const login = await request.post(`${API}/api/auth/login`, { data: { username: ADMIN_USER, password: ADMIN_PASS } });
-  const tok = (await login.json()).access_token as string;
+  const tok = await adminToken();
   await request.delete(`${API}/api/admin/cache?namespace=${encodeURIComponent(NS)}`, { headers: { Authorization: `Bearer ${tok}` } });
   dropPolicyPart(NS);
 });
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill(ADMIN_USER);
-  await page.getByPlaceholder('비밀번호').fill(ADMIN_PASS);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) {
-    await page.getByText('선택하기').first().click();
-  }
+  await loginAdmin(page, { openAdmin: false });
   await page.locator('select').filter({ hasText: NS }).first().selectOption(NS);
 }
 

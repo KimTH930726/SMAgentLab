@@ -19,10 +19,11 @@ import logging
 from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
+from service.policy.visibility import KIND_SOURCE_CHECK
 
 logger = logging.getLogger(__name__)
 
-KIND = "source_check"
+KIND = KIND_SOURCE_CHECK   # 정정 원장과 같은 값 한 곳(visibility.py, 10/21 리뷰 C6)
 SOURCES = ("v0_load_check", "golden_set")
 TYPES = ("question", "conflict", "ref_error")
 LINK_SOURCE = "v0_rule"          # 적재기의 제안 연결 출처(scripts/load_policy_v0.py add_suggested_links)

@@ -1,17 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { goAdmin } from './admin-nav';
+import { loginAdmin } from './auth';
 
 // 프롬프트 관리(10/21) — VOC 메일 분석 프롬프트가 "RAG"로 표시되던 것(#79 voc). 채팅 에이전트를 골라 둔 상태에서도
 // 공통·VOC 프롬프트가 목록에 보이고 VOC 라벨이 붙는지 확인한다(읽기 전용 — 저장·LLM 호출 없음).
 test('프롬프트 관리 — VOC 프롬프트는 VOC로 표시되고 목록에서 빠지지 않는다', async ({ page }) => {
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill('admin');
-  await page.getByPlaceholder('비밀번호').fill('1111');
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
-  await page.getByRole('link', { name: 'Admin' }).click();
+  await loginAdmin(page);
   await goAdmin(page, '시스템', '설정');
   await page.getByRole('button', { name: '프롬프트 관리' }).click();
 

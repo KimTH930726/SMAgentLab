@@ -463,7 +463,25 @@ class TestPendingStatus:
         ])
         with patch.object(svc, "get_conn", return_value=conn):
             out = await svc.pending_status([3], [10])
-        assert out == {"knowledge": [3], "policy_param": [101], "policy_narrative": [201]}
+        assert out == {"knowledge": [3], "policy_item": [10], "policy_param": [101], "policy_narrative": [201]}
+
+    @pytest.mark.asyncio
+    async def test_policy_badge_uses_same_rule_as_slot_lock(self):
+        """10/21 리뷰 5a — 정책 배지는 "정책당 대기 정정 1건" 잠금(open_correction_sql)과 같은 기준: 종류 무관(AI 추정이 정책을 골라 둔
+        "답변 틀림" 신호도 검토 중), 대상 종류는 POLICY_TARGETS. 예전엔 kind='correction'만 봐서 배지는 없는데 제안은 409였다."""
+        conn = _conn()
+        conn.fetch = AsyncMock(return_value=[{"target_type": "policy_narrative", "target_id": 10, "target_sub_id": None}])
+        with patch.object(svc, "get_conn", return_value=conn):
+            out = await svc.pending_status([], [10])
+        assert out["policy_item"] == [10] and out["policy_narrative"] == []   # 대상 조각이 없는 건도 항목 배지는 선다
+        sql, *args = conn.fetch.await_args.args
+        lock_sql = svc.open_correction_sql("$1", "$2")
+        # 잠금 SQL엔 종류 조건이 없다 — 배지의 정책 쪽 조건에도 없어야 같은 기준
+        assert "kind" not in lock_sql
+        policy_cond = sql.split("OR", 1)[1]
+        assert "kind" not in policy_cond and "target_type = ANY($3::text[])" in policy_cond
+        assert args[2] == list(svc.POLICY_TARGETS)
+        assert "kind = 'correction' AND target_type = 'knowledge'" in sql   # 지식은 그대로(대상당 잠금 없음)
 
     @pytest.mark.asyncio
     async def test_pending_count_has_per_namespace(self):
@@ -829,7 +847,7 @@ class TestRedraft:
         c.execute = AsyncMock(return_value="UPDATE 0")      # 대상이 바뀌어 조건에 안 맞음
         with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
              patch.object(svc.draft_mod, "draft_correction", AsyncMock(return_value={"content": "x"})), \
-             pytest.raises(ValueError, match="대상이 바뀐"):
+             pytest.raises(svc.ConflictError, match="대상이 바뀐"):
             await svc.redraft(7, {"id": 9}, "x")
 
     @pytest.mark.asyncio
@@ -955,7 +973,8 @@ class TestApproveShownProposal:
             out = await svc.approve(7, {"id": 9}, {"content": "v1"})
         assert out["status"] == "approved" and apply.await_args.args[3] == "v1"
 
-    @pytest.mark.parametrize("changed", [{"proposed": json.dumps({"content": "v2"})}, {"target_id": 12}])
+    @pytest.mark.parametrize("changed", [{"proposed": json.dumps({"content": "v2"})}, {"target_id": 12},
+                                         {"status": "approved"}])   # 승인 두 번 동시 — 늦은 쪽도 409(10/21 리뷰 5b, 실서버 policy_slot_race C3)
     @pytest.mark.asyncio
     async def test_changed_while_embedding_is_conflict(self, changed):
         """임베딩·분류를 기다리는 사이 다시 쓰기·대상 변경이 끼어들면 잠근 뒤 다시 보고 409 — 반영도 상태 변경도 없음(리뷰 10/21)."""

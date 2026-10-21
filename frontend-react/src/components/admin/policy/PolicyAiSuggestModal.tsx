@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ApiError } from '../../../api/client';
-import { createPolicyProposal } from '../../../api/corrections';
 import type { PolicyDetail } from '../../../api/policy';
-import { showAlert } from '../../../store/useDialogStore';
 import { FormModal } from '../../ui/FormModal';
+import { usePolicyProposal } from './usePolicyProposal';
 
 /** AI 수정 제안(10/21) — 한 줄 요청 → AI가 수정안을 써서 정정 요청에 올린다. 승인해야 반영. */
 export function PolicyAiSuggestModal({ isOpen, namespace, policy, onClose, onDone }: {
@@ -15,34 +12,20 @@ export function PolicyAiSuggestModal({ isOpen, namespace, policy, onClose, onDon
   onDone: () => void;
 }) {
   const [text, setText] = useState('');
-  const [error, setError] = useState('');
-  const qc = useQueryClient();
-  useEffect(() => { if (isOpen) { setText(''); setError(''); } }, [isOpen, policy.item_id]);
-
-  const save = useMutation({
-    mutationFn: () => createPolicyProposal(namespace, policy.item_id, 'policy_ai', { user_input: text.trim() }),
-    onSuccess: (r) => {
-      onDone();
-      if (r.ai_failed) {
-        void showAlert(`정정 #${r.id}로 올렸지만 AI가 수정안을 만들지 못했어요 — 정정 요청에서 [AI 초안 만들기]나 [직접 수정]으로 이어 가세요.`,
-          { tone: 'warning' });
-      } else {
-        void showAlert(`정정 #${r.id}로 올렸어요 — 품질 › 정정 요청에서 AI 수정안을 확인하고 승인하세요.`, { tone: 'success' });
-      }
-    },
-    onError: (e: Error) => {
-      setError(e.message || '올리지 못했어요.');
-      // 그 사이 다른 정정이 생겼으면(409) 상세를 새로 받아 "정정 #N 검토 중" 안내가 보이게
-      if (e instanceof ApiError && e.status === 409) qc.invalidateQueries({ queryKey: ['policy', namespace] });
-    },
+  const { save, error, setError } = usePolicyProposal({
+    namespace, itemId: policy.item_id, source: 'policy_ai', onDone,
+    done: (r) => (r.ai_failed
+      ? { message: `정정 #${r.id}로 올렸지만 AI가 수정안을 만들지 못했어요 — 정정 요청에서 [AI 초안 만들기]나 [직접 수정]으로 이어 가세요.`, tone: 'warning' }
+      : { message: `정정 #${r.id}로 올렸어요 — 품질 › 정정 요청에서 AI 수정안을 확인하고 승인하세요.`, tone: 'success' }),
   });
+  useEffect(() => { if (isOpen) { setText(''); setError(''); } }, [isOpen, policy.item_id, setError]);
 
   return (
     <FormModal
       isOpen={isOpen}
       title={`AI 수정 제안 — ${policy.policy_name}`}
       onClose={onClose}
-      onSubmit={() => save.mutate()}
+      onSubmit={() => save.mutate({ user_input: text.trim() })}
       submitLabel="AI에게 맡기기"
       submitting={save.isPending}
       submitDisabled={!text.trim()}

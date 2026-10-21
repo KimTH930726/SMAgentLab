@@ -1,6 +1,7 @@
-import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { goAdmin, domainSelect } from './admin-nav';
 import { createPolicyPart, dropPolicyPart, psql } from './v0-fixture';
+import { API, adminToken, loginAdmin } from './auth';
 
 // 정책서 화면 → 직접 수정 → 정정 요청 → 승인 = 새 버전(v0 재구축 2단계, 2026-10-21).
 // 핵심 약속: 직접 수정은 정책 테이블을 건드리지 않고 정정 요청에 제안 1건만 만든다(승인 전 검색에 안 나옴) →
@@ -8,7 +9,6 @@ import { createPolicyPart, dropPolicyPart, psql } from './v0-fixture';
 // 화면 문구가 아니라 DB 값과 실제 검색 API로 전/후를 본다(200 OK ≠ 반영됨). LLM 호출 없음(직접 수정 경로).
 
 const NS = 'zz_e2e_policy_edit';
-const API = 'http://localhost:8000';
 const NAME = 'E2E 반품 기한';
 const OLD = '반품은 수령 후 7일 이내에 신청할 수 있다.';
 const NEW = '반품은 수령 후 14일 이내에 신청할 수 있다.';
@@ -19,19 +19,8 @@ const nsId = () => psql(`SELECT id FROM ops_namespace WHERE name = '${NS}'`);
 const rows = () => psql(`SELECT version || ':' || status || ':' || raw_body || ':' || coalesce(remark, '') FROM policy_item `
   + `WHERE namespace_id = ${nsId()} ORDER BY version`).split('\n').filter(Boolean);
 
-async function token(request: APIRequestContext): Promise<string> {
-  const r = await request.post(`${API}/api/auth/login`, { data: { username: 'admin', password: '1111' } });
-  return (await r.json()).access_token as string;
-}
-
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill('admin');
-  await page.getByPlaceholder('비밀번호').fill('1111');
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
+  await loginAdmin(page, { openAdmin: false });
 }
 
 async function openPolicy(page: Page) {
@@ -84,7 +73,7 @@ test('직접 수정 → 정정 요청(정책 직접 수정) → 승인 → 옛 �
   // 상세에 "정정 #N 검토 중" + 새 제안 막힘, 서버도 409(그 번호를 같이)
   await expect(page.getByText(`정정 #${corrId} 검토 중`).first()).toBeVisible();   // 상세 안내 + 뒤 목록 배지
   await expect(page.getByRole('button', { name: '직접 수정' })).toBeDisabled();
-  const tok = await token(request);
+  const tok = await adminToken();
   const itemId = Number(psql(`SELECT id FROM policy_item WHERE namespace_id = ${nsId()} AND status = 'active'`));
   const dup = await request.post(`${API}/api/corrections`, {
     headers: { Authorization: `Bearer ${tok}` },

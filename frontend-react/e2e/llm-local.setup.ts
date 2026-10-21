@@ -1,4 +1,5 @@
 import type { FullConfig } from '@playwright/test';
+import { API, adminToken } from './auth';
 
 // E2E는 채팅·정정 시나리오에서 LLM을 실제로 부른다 — 기본은 사내 게이트웨이라 토큰을 쓴다(2026-10-20 실측 42회·약 9.9만 토큰).
 // 그래서 E2E 동안만 로컬 LLM(OpenAI 호환, 백엔드 OPENAI_COMPAT_BASE_URL)으로 전환하고 끝나면 원래 LLM으로 되돌린다.
@@ -6,15 +7,6 @@ import type { FullConfig } from '@playwright/test';
 //
 // 되돌리기 = 화면 설정 해제(DELETE /api/llm/config → .env 설정, 재시작과 같음). 관리자가 화면에서 바꿔 둔 설정(모델·자격증명 등)이
 // 있으면 그것도 지워지므로(자격증명은 다시 읽을 수 없다, 리뷰 10/20 M2) 그런 상태면 시작하지 않는다.
-const API = 'http://localhost:8000';
-
-async function adminToken(): Promise<string> {
-  const r = await fetch(`${API}/api/auth/login`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'admin', password: '1111' }),
-  });
-  return (await r.json()).access_token;
-}
 
 async function resetToEnv(token: string) {
   const r = await fetch(`${API}/api/llm/config`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });

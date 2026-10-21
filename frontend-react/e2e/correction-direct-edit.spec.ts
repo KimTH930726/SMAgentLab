@@ -1,12 +1,12 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { goAdmin, domainSelect } from './admin-nav';
 import { createPolicyPart, dropPolicyPart, psql } from './v0-fixture';
+import { API, adminToken, loginAdmin } from './auth';
 
 // 정정 요청 카드의 [직접 수정](2026-10-21 되살림) — 수정안을 담당자가 고쳐 저장 → [승인]이 고친 안으로 새 버전을 만든다.
 // 저장만으로는 정책이 안 바뀌고(승인 전 미반영), 누가 고쳤는지 원장에 남는지 DB로 본다. LLM 호출 없음.
 
 const NS = 'zz_e2e_correction_edit';
-const API = 'http://localhost:8000';
 const NAME = 'E2E 직접 수정 대상';
 const OLD = '포인트는 적립 후 30일 뒤 소멸된다.';
 const PROPOSED = '포인트는 적립 후 60일 뒤 소멸된다.';
@@ -14,11 +14,6 @@ const EDITED = '포인트는 적립 후 90일 뒤 소멸된다.';
 
 const active = () => psql(`SELECT i.version || ':' || i.raw_body FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id `
   + `WHERE n.name = '${NS}' AND i.status = 'active'`);
-
-async function token(request: APIRequestContext): Promise<string> {
-  const r = await request.post(`${API}/api/auth/login`, { data: { username: 'admin', password: '1111' } });
-  return (await r.json()).access_token as string;
-}
 
 test.beforeAll(async () => {
   test.setTimeout(180_000);
@@ -32,7 +27,7 @@ test.afterAll(() => {
 
 test('카드에서 직접 수정 → 저장(미반영) → 승인 → 고친 안이 새 버전', async ({ page, request }) => {
   test.setTimeout(180_000);
-  const tok = await token(request);
+  const tok = await adminToken();
   const itemId = Number(psql(`SELECT i.id FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id WHERE n.name = '${NS}' AND i.status = 'active'`));
   const r = await request.post(`${API}/api/corrections`, {
     headers: { Authorization: `Bearer ${tok}` },
@@ -41,14 +36,7 @@ test('카드에서 직접 수정 → 저장(미반영) → 승인 → 고친 안
   expect(r.status()).toBe(201);
   const id = (await r.json()).id as number;
 
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill('admin');
-  await page.getByPlaceholder('비밀번호').fill('1111');
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
-  await page.getByRole('link', { name: 'Admin' }).click();
+  await loginAdmin(page);
   await domainSelect(page).selectOption(NS);
   await goAdmin(page, '품질', '정정 요청');
 
@@ -80,7 +68,7 @@ test('카드에서 직접 수정 → 저장(미반영) → 승인 → 고친 안
 });
 
 test('【확인 필요】 표시를 남긴 수정안은 저장이 막힌다(400 · 수정안 그대로)', async ({ request }) => {
-  const tok = await token(request);
+  const tok = await adminToken();
   const itemId = Number(psql(`SELECT i.id FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id WHERE n.name = '${NS}' AND i.status = 'active'`));
   const r = await request.post(`${API}/api/corrections`, {
     headers: { Authorization: `Bearer ${tok}` },

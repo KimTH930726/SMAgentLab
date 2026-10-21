@@ -26,8 +26,9 @@ class CorrectionCreate(BaseModel):
 
 
 class ApproveBody(BaseModel):
-    """승인할 때 화면에 보인 수정안(검증용) — 저장된 안과 다르면 409. 반영되는 건 늘 저장된 안(고치려면 먼저 PATCH …/proposed)."""
-    proposed: Optional[dict] = None
+    """승인할 때 화면에 보인 수정안(검증용) — 저장된 안과 다르면 409. 반영되는 건 늘 저장된 안(고치려면 먼저 PATCH …/proposed).
+    필수(10/21 리뷰 5c) — 비워 보내면 검사를 건너뛰어 그 사이 남이 바꾼 안이 보지 못한 채 반영될 수 있었다(화면·시나리오는 늘 보냄)."""
+    proposed: dict
 
 
 class ProposedBody(BaseModel):

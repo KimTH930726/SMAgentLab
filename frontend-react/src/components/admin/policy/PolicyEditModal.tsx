@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ApiError } from '../../../api/client';
-import { createPolicyProposal } from '../../../api/corrections';
 import type { PolicyDetail } from '../../../api/policy';
-import { showAlert } from '../../../store/useDialogStore';
 import { FormModal } from '../../ui/FormModal';
+import { usePolicyProposal } from './usePolicyProposal';
 
 const AREA = 'w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y';
 
@@ -18,24 +15,13 @@ export function PolicyEditModal({ isOpen, namespace, policy, onClose, onDone }: 
 }) {
   const [body, setBody] = useState(policy.raw_body);
   const [remark, setRemark] = useState(policy.remark ?? '');
-  const [error, setError] = useState('');
-  const qc = useQueryClient();
+  const { save, error, setError } = usePolicyProposal({
+    namespace, itemId: policy.item_id, source: 'policy_direct', onDone,
+    done: (r) => ({ message: `정정 #${r.id}로 올렸어요 — 품질 › 정정 요청에서 승인하면 새 버전으로 반영돼요.`, tone: 'success' }),
+  });
   useEffect(() => {   // 열 때마다 지금 버전으로 채운다(다음 정책으로 넘긴 뒤 다시 열어도)
     if (isOpen) { setBody(policy.raw_body); setRemark(policy.remark ?? ''); setError(''); }
-  }, [isOpen, policy.item_id, policy.raw_body, policy.remark]);
-
-  const save = useMutation({
-    mutationFn: () => createPolicyProposal(namespace, policy.item_id, 'policy_direct', { proposed: { raw_body: body, remark } }),
-    onSuccess: (r) => {
-      onDone();
-      void showAlert(`정정 #${r.id}로 올렸어요 — 품질 › 정정 요청에서 승인하면 새 버전으로 반영돼요.`, { tone: 'success' });
-    },
-    onError: (e: Error) => {
-      setError(e.message || '올리지 못했어요.');
-      // 그 사이 다른 정정이 생겼으면(409) 상세를 새로 받아 "정정 #N 검토 중" 안내가 보이게
-      if (e instanceof ApiError && e.status === 409) qc.invalidateQueries({ queryKey: ['policy', namespace] });
-    },
-  });
+  }, [isOpen, policy.item_id, policy.raw_body, policy.remark, setError]);
   const unchanged = body === policy.raw_body && remark.trim() === (policy.remark ?? '').trim();
 
   return (
@@ -43,7 +29,7 @@ export function PolicyEditModal({ isOpen, namespace, policy, onClose, onDone }: 
       isOpen={isOpen}
       title={`직접 수정 — ${policy.policy_name}`}
       onClose={onClose}
-      onSubmit={() => save.mutate()}
+      onSubmit={() => save.mutate({ proposed: { raw_body: body, remark } })}
       submitLabel="정정 요청에 올리기"
       submitting={save.isPending}
       submitDisabled={unchanged || !body.trim()}

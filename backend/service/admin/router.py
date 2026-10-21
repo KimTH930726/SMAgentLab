@@ -23,6 +23,7 @@ from agents.knowledge_rag.knowledge.retrieval import (
     get_thresholds, set_thresholds, get_search_defaults, set_search_defaults, persist_runtime_overrides,
 )
 from service.prompt.loader import get_prompt as load_prompt
+from service.policy.visibility import KIND_SOURCE_CHECK
 from shared import cache as sem_cache
 from agents.base import AgentRegistry
 
@@ -273,7 +274,7 @@ async def get_namespace_stats(name: str, user: dict = Depends(get_current_user))
         )
         corrections_open = await conn.fetchval(
             # 원문 확인(kind source_check)은 정정이 아니다 — 정정 요청 배지와 같은 기준(10/21)
-            "SELECT COUNT(*) FROM ops_improvement_item WHERE namespace_id = $1 AND status = 'pending' AND kind <> 'source_check'", ns_id,
+            "SELECT COUNT(*) FROM ops_improvement_item WHERE namespace_id = $1 AND status = 'pending' AND kind <> $2", ns_id, KIND_SOURCE_CHECK,
         )
 
     return NamespaceDetailStats(

@@ -344,6 +344,81 @@ class TestClassify:
         out = json_io.classify("ns", json_io.parse_import(_thin([{"source_key": "pol_a", "raw_body": "줄1 값 A 줄2", "remark": "비고 A"}])), cur)
         assert len(out["changed"]) == 1
 
+    def test_property_classify_changed_iff_ledger_sees_change(self):
+        """성질 테스트(10/21 리뷰 6) — 무작위 원문에 띄어쓰기·탭·줄 끝 공백·CRLF·빈 줄·전각/줄바꿈 없는 공백 편집(같아야 함)과
+        실제 편집(글자 추가·줄 합치기·줄 나누기·비고 변경)을 섞어, 같은 (DB 원문, 파일 원문) 쌍에 대해
+        미리보기 "바뀜" ⇔ 원장(_unchanged)이 "바뀜"을 확인한다. 어긋나면 미리보기엔 바뀜인데 반영 땐 "바뀐 내용 없음"으로 실패하거나
+        (L1 사고), 반대로 바뀐 파일이 "같음"으로 조용히 빠진다. 파일 → 원장 수정안은 apply와 같은 길(parse_import → _proposed → _clean_proposal)."""
+        import random
+        rnd = random.Random(20261021)
+        words = ["반품", "기한", "7일", "이내", "신청", "가능", "수수료", "A", "b2", "(예외)", "·", "※"]
+        # 전각·줄바꿈 없는 공백은 양쪽 다 "다름"으로 본다(줄 안 [ \t]만 무시) — 드물게 섞어 그 방향도 같은지 본다
+        ws_noise = [" "] * 40 + ["  ", "\t", " \t ", "　", "\xa0"]
+
+        def body():
+            return "\n".join(" ".join(rnd.choice(words) for _ in range(rnd.randint(1, 5))) for _ in range(rnd.randint(1, 4)))
+
+        def cosmetic(text):
+            out = []
+            for ln in text.split("\n"):
+                toks = ln.split(" ")
+                ln = "".join(t + (rnd.choice(ws_noise) if i < len(toks) - 1 else "") for i, t in enumerate(toks))
+                if rnd.random() < 0.3:
+                    ln += rnd.choice([" ", "\t", "   "])
+                if rnd.random() < 0.3:
+                    ln = rnd.choice([" ", "\t"]) + ln
+                out.append(ln)
+                if rnd.random() < 0.2:
+                    out.append(rnd.choice(["", "  ", "\t"]))
+            t = rnd.choice(["\n", "\r\n"]).join(out)
+            return rnd.choice(["", "\n", "\r\n\r\n", "  "]) + t + rnd.choice(["", "\n", " \r\n"])
+
+        def real_edit(text):
+            lines = text.split("\n")
+            k = rnd.randrange(3)
+            if k == 0 or (k == 1 and len(lines) == 1):
+                i = rnd.randrange(len(lines))
+                lines[i] = lines[i] + rnd.choice(["추가", "9", "!"])
+            elif k == 1:
+                i = rnd.randrange(len(lines) - 1)
+                lines[i:i + 2] = [lines[i] + " " + lines[i + 1]]          # 줄 합치기(줄 구조 바뀜)
+            else:
+                i = rnd.randrange(len(lines))
+                toks = lines[i].split(" ")
+                lines[i:i + 1] = [toks[0], " ".join(toks[1:]) or "새 줄"]   # 줄 나누기
+            return "\n".join(lines)
+
+        seen = {True: 0, False: 0}
+        for n in range(600):
+            db_body = body()
+            if rnd.random() < 0.2:
+                db_body = db_body.replace("\n", "\r\n")                   # DB 쪽에 CRLF가 남은 옛 데이터
+            db_remark = rnd.choice([None, "", "비고 A", " 비고 A "])
+            file_body = cosmetic(db_body) if rnd.random() < 0.6 else real_edit(db_body)
+            if rnd.random() < 0.5:
+                file_body = cosmetic(file_body)
+            rec = {"source_key": "pol_a", "raw_body": file_body}
+            r_choice = rnd.random()
+            if r_choice < 0.3:
+                pass                                                       # 비고 키 없음 = 지금 비고 그대로
+            elif r_choice < 0.8:
+                rec["remark"] = rnd.choice([db_remark, f"  {db_remark or ''}  ", None, ""])
+            else:
+                rec["remark"] = "새 비고"
+            out = json_io.classify("ns", json_io.parse_import(_thin([rec])), [_cur("pol_a", 1, db_body, db_remark)])
+            assert out["unchanged"] + len(out["changed"]) == 1
+            preview_changed = len(out["changed"]) == 1
+            # 원장 쪽: apply가 넘기는 수정안 그대로(바뀜이면 _proposed, 같음이면 같은 규칙으로 만든 안)
+            parsed = json_io.parse_import(_thin([rec]))["records"][0]
+            new_remark = parsed["remark"] if parsed["has_remark"] else json_io._remark(db_remark)
+            proposed = out["changed"][0]["_proposed"] if preview_changed else {"raw_body": parsed["raw_body"], "remark": new_remark or ""}
+            stored = svc._clean_proposal("policy_narrative", proposed, whole=True)
+            original = {"raw_body": db_body, "chunk_text": db_body, "remark": db_remark}
+            ledger_changed = not svc._unchanged("policy_narrative", original, stored)
+            assert preview_changed == ledger_changed, (n, db_body, file_body, db_remark, rec.get("remark", "<없음>"))
+            seen[preview_changed] += 1
+        assert seen[True] > 100 and seen[False] > 100       # 두 방향 모두 충분히 나왔는지(생성기가 한쪽만 만들면 의미 없음)
+
     def test_single_line_team_file_is_team_format(self):
         line = json.dumps({"policy_id": "pol_a", "document_id": "doc_01", "domain": "ns", "section_path": ["1. 가"], "title": "t",
                            "source_ref": {}, "source_text": "원문 A", "source_notes": "비고 A"}, ensure_ascii=False)

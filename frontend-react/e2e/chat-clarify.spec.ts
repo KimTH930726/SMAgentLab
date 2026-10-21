@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginAdmin } from './auth';
 
 // 재질문(v2.134, 2026-10-12) — 주제만 말한 질문의 목록이 크면 답 대신 범위 선택지(①②③ + 전부 보기 + 기타)를 보여주고,
 // 고르면 같은 대화에서 그 범위로 답한다(다시 묻지 않음). 재질문은 답이 아니라 "답변 틀림"이 없다. 실 dev 스택 그대로(LLM 1회).
@@ -10,13 +11,7 @@ const Q = '배송 정책 좀';
 test('주제만 말한 큰 목록 → 범위 선택지 → 고르면 그 범위로 답', async ({ page }) => {
   test.setTimeout(360_000);   // 선택 후 답은 LLM(E2E는 로컬 LLM — llm-local.setup.ts)
   page.on('dialog', (d) => { throw new Error(`브라우저 기본 대화상자: ${d.message()}`); });
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill('admin');
-  await page.getByPlaceholder('비밀번호').fill('1111');
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
+  await loginAdmin(page, { openAdmin: false });
   const authState = await page.evaluate(() => localStorage.getItem('ops_auth'));
   const auth = { Authorization: `Bearer ${authState ? JSON.parse(authState).accessToken : ''}` };
   // 캐시된 예전 답(재질문 전)이 있으면 재질문이 안 나온다 — 이 파트 캐시를 비우고 시작

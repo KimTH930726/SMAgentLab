@@ -398,9 +398,12 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther }: M
                     citation={citation}
                     defaultOpen={false}
                     index={idx}
-                    underReview={citation.kind === 'param'
-                      ? citation.param_id != null && !!underReview?.policy_param.includes(citation.param_id)
-                      : citation.chunk_id != null && !!underReview?.policy_narrative.includes(citation.chunk_id)}
+                    underReview={underReview?.policy_item
+                      // 정책은 항목 단위 — "정책당 대기 정정 1건" 잠금과 같은 기준(10/21 리뷰 5a: 배지는 없는데 신고하면 409였다)
+                      ? citation.item_id != null && underReview.policy_item.includes(citation.item_id)
+                      : citation.kind === 'param'
+                        ? citation.param_id != null && !!underReview?.policy_param.includes(citation.param_id)
+                        : citation.chunk_id != null && !!underReview?.policy_narrative.includes(citation.chunk_id)}
                   />
                 );
               })}

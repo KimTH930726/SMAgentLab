@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { goAdmin } from './admin-nav';
 import { psql } from './v0-fixture';
+import { loginAdmin } from './auth';
 
 // 업무 영역 수정 모달(10/21) — 이름과 담당 파트를 한 자리에서. 담당은 조직 › 담당 업무 영역과 같은 칸(owner_part_id)이라
 // 화면 문구가 아니라 DB 값으로 전/후를 확인한다(200 OK ≠ 저장됨). 임시 영역은 테스트 종류(policy_test)로 만들어 채팅에 안 섞인다.
@@ -18,14 +19,7 @@ test('업무 영역 수정 — 이름과 담당 파트를 바꾸고(확인 창),
   expect(part).not.toBe('');
   expect(ownerOf(NS)).toBe('');
 
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill('admin');
-  await page.getByPlaceholder('비밀번호').fill('1111');
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
-  await page.getByRole('link', { name: 'Admin' }).click();
+  await loginAdmin(page);
   await goAdmin(page, '업무 영역', '업무 영역');
 
   // ① 이름 + 담당 함께 바꾸기 → 확인 창 → 저장

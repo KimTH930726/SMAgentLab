@@ -31,6 +31,11 @@ def is_searchable(status: str, pipeline_version: str | None) -> bool:
 # 두 곳에 같은 SQL·대상 목록이 복사돼 있어 한쪽만 바뀌면 화면엔 "검토 중"이 없는데 제안은 막히는 식으로 어긋날 수 있었다.
 POLICY_TARGETS = ("policy_param", "policy_narrative")
 
+# 정정 원장(ops_improvement_item)의 정책 쪽 값 — 정정 원장(improvement)·원문 확인(source_check)·JSON 가져오기(json_io)·관리자 통계가
+# 같은 문자열을 각자 적고 있었다(10/21 리뷰 C6). 잎 모듈이라 어디서 import해도 순환이 없다.
+KIND_SOURCE_CHECK = "source_check"   # 원문 확인 항목 — 정정이 아니라 정정 목록·배지·처리 API에서 뺀다
+SOURCE_JSON_IMPORT = "json_import"   # 정책서 JSON 가져오기로 만든 수정 제안의 source
+
 
 def open_correction_sql(item_expr: str, targets_param: str, *, cols: str = "id", extra: str = "") -> str:
     """이 정책 항목을 겨눈 대기 중 정정(출처 무관 — 채팅 신고 포함) 중 가장 오래된 1건의 SELECT.

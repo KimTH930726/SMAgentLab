@@ -115,7 +115,7 @@ async def approve_correction(item_id: int, body: ApproveBody, user: dict = Depen
     try:
         return await service.approve(item_id, user, body.proposed)
     except service.ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise _conflict(e)
 
 
 @router.patch("/{item_id}/proposed")
@@ -138,7 +138,10 @@ async def reject_correction(item_id: int, body: RejectBody, user: dict = Depends
 async def redraft_correction(item_id: int, body: RedraftBody, user: dict = Depends(get_current_user)):
     """담당자 요청 한 줄 → AI가 수정안을 다시 씀(직접 고치려면 PATCH …/proposed)."""
     await _require_item_owner(item_id, user)
-    return await service.redraft(item_id, user, body.feedback.strip())
+    try:
+        return await service.redraft(item_id, user, body.feedback.strip())
+    except service.ConflictError as e:
+        raise _conflict(e)   # AI가 쓰는 사이 수정안·대상이 바뀜 — 다른 "그 사이 바뀜"과 같이 409(10/21 리뷰 5b)
 
 
 @router.post("/{item_id}/analyze")

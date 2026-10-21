@@ -28,9 +28,13 @@ async function fetchOrNetworkError(url: string, init?: RequestInit): Promise<Res
   }
 }
 
+/** 요청 본문이 nginx 업로드 한도(client_max_body_size)를 넘음 — nginx가 HTML 413을 줘 화면에 "HTTP 413"만 보이던 것(10/21 리뷰) */
+export const TOO_LARGE_MSG = '파일이 너무 커요 — 더 작은 파일로 나눠서 다시 시도해 주세요.';
+
 /** 오류 본문이 JSON이 아닐 때의 기본 문구 — 서버 재시작 중엔 연결 실패가 아니라 nginx가 HTML 502·504를 준다(10/21 리뷰).
  *  서버 자신의 502·503은 JSON detail이 있어 그 문구가 이 기본값을 덮어쓴다. */
 function gatewayDownMessage(status: number): string {
+  if (status === 413) return TOO_LARGE_MSG;
   return status === 502 || status === 503 || status === 504 ? NETWORK_ERROR_MSG : `HTTP ${status}`;
 }
 
@@ -121,35 +125,6 @@ export async function apiFetch<T>(
   }
 
   return response.json() as Promise<T>;
-}
-
-// 바이너리 응답(파일 다운로드)용 — apiFetch와 동일한 401 갱신-재시도 + 에러 상세 파싱을 공유하되 blob을 반환한다.
-export async function apiFetchBlob(path: string): Promise<Blob> {
-  const url = `${BASE_URL}${path}`;
-  const doFetch = (authHeaders: Record<string, string>) => fetchOrNetworkError(url, { headers: authHeaders });
-
-  let response = await doFetch(getAuthHeaders());
-
-  if (response.status === 401) {
-    const refreshed = await tryRefreshToken();
-    if (refreshed) {
-      response = await doFetch(getAuthHeaders());
-    }
-  }
-
-  if (!response.ok) {
-    let message = gatewayDownMessage(response.status);
-    try {
-      const body = await response.json();
-      const detail = body.detail ?? body.message;
-      if (detail) message = String(detail);
-    } catch {
-      // ignore — binary/empty error body
-    }
-    throw new ApiError(response.status, message);
-  }
-
-  return response.blob();
 }
 
 export async function* streamSSE(

@@ -25,13 +25,15 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
-from service.policy.visibility import POLICY_TARGETS, open_correction_sql
+from service.policy.visibility import POLICY_TARGETS, SOURCE_JSON_IMPORT, open_correction_sql
 
 logger = logging.getLogger(__name__)
 
 SCHEMA = "opslens/policy-v0/1"
-SOURCE_JSON_IMPORT = "json_import"   # 정정 원장 source — improvement/service.SOURCE_JSON_IMPORT와 같은 값
-MAX_CONTENT = 20_000_000             # 글자 — 14개 문서 전체 policies.jsonl도 수 MB
+# 글자 — 14개 문서 전체 policies.jsonl도 수 MB. 요청 본문(JSON 문자열 안의 파일 내용)은 nginx client_max_body_size(50M,
+# frontend-react/nginx.conf) 안에 들어와야 한다 — 한글은 UTF-8 3바이트·따옴표/줄바꿈은 이스케이프로 2바이트라 2천만 자면 최대 60MB를
+# 넘어 nginx가 HTML 413으로 먼저 끊었다(10/21 리뷰). 1천2백만 자 × 3바이트 = 36MB(여유 14MB).
+MAX_CONTENT = 12_000_000
 
 
 class ImportConflict(Exception):
@@ -91,7 +93,7 @@ def parse_import(content: str) -> dict:
     if not content or not content.strip():
         raise ValueError("파일이 비어 있어요.")
     if len(content) > MAX_CONTENT:
-        raise ValueError("파일이 너무 커요(2천만 자 초과).")
+        raise ValueError(f"파일이 너무 커요({MAX_CONTENT // 10_000:,}만 자 초과).")
     doc = None
     try:
         doc = json.loads(content)

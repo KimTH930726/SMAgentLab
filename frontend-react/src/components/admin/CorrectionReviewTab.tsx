@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle, Sparkles, RefreshCw, Pencil } from 'lucide-react';
 import {
-  listCorrections, approveCorrection, rejectCorrection, retargetCorrection, analyzeCorrection, redraftCorrection,
+  correctionSourceLabel, listCorrections, approveCorrection, rejectCorrection, retargetCorrection, analyzeCorrection, redraftCorrection,
   updateCorrectionProposed, type CorrectionItem,
 } from '../../api/corrections';
 import { Button } from '../ui/Button';
@@ -140,16 +140,6 @@ function sourceGroup(item: CorrectionItem): Exclude<SourceGroup, 'all'> {
   return 'chat';
 }
 
-function sourceLabel(item: CorrectionItem): string {
-  if (item.kind === 'search_noise') return '평가 게이트 이상해요';
-  if (item.source === 'policy_direct') return '정책 직접 수정';
-  if (item.source === 'policy_ai') return '정책 AI 제안';
-  if (item.source === 'json_import') return 'JSON 가져오기';
-  if (item.source === 'chat_answer_auto') return '답변 틀림 + 한 줄(AI 판정)';
-  if (item.source === 'chat_answer_wrong' || item.source === 'review_flag_migrated') return '답변 틀림(의견 없음)';
-  return '근거 직접 지정';
-}
-
 const isMarked = (item: CorrectionItem) => !!item.proposed && Object.values(item.proposed).some((v) => String(v ?? '').includes(REVIEW_MARK));
 const canFixItem = (item: CorrectionItem) => item.target_type !== 'answer' && item.target_type !== 'auto';
 /** 일괄 승인 대상 — 카드의 [승인]이 보이는 건과 같은 조건 */
@@ -172,7 +162,7 @@ function DiffPane({ ops, side }: { ops: DiffOp[]; side: 'before' | 'after' }) {
 
 function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
   item: CorrectionItem;
-  onDone: () => void;
+  onDone: (effect?: DoneEffect) => void;
   selected: boolean;
   onSelect: (on: boolean) => void;
   focused: boolean;
@@ -192,13 +182,13 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
   };
 
   const approve = useMutation({
-    mutationFn: (shown?: Record<string, string | null>) => approveCorrection(item.id, shown),   // 화면에 보인 안(서버가 저장된 안과 같은지 확인)
-    onSuccess: () => { setError(''); onDone(); },
+    mutationFn: (shown: Record<string, string | null>) => approveCorrection(item.id, shown),   // 화면에 보인 안(서버가 저장된 안과 같은지 확인)
+    onSuccess: () => { setError(''); onDone('applied'); },
     onError: (e: Error) => setError(e.message || '반영에 실패했습니다.'),
   });
   const reject = useMutation({
     mutationFn: () => rejectCorrection(item.id, text.trim()),
-    onSuccess: () => { setModal(null); setError(''); onDone(); },
+    onSuccess: () => { setModal(null); setError(''); onDone('slot'); },
     onError: (e: Error) => setModalError(e.message || '반려에 실패했습니다.'),
   });
   const redraft = useMutation({
@@ -220,7 +210,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
     mutationFn: () => analyzeCorrection(item.id),
     onSuccess: (r) => {
       setError(r.analyzed ? '' : 'AI가 원인을 추정하지 못했어요(근거가 없거나 AI 응답 실패) — 직접 고르세요.');
-      onDone();
+      onDone('slot');
     },
     onError: (e: Error) => setError(e.message || '추정에 실패했습니다.'),
   });
@@ -231,7 +221,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
     onSuccess: (r) => {
       setError(r.proposed === null && item.user_input && r.target_type !== 'answer'
         ? 'AI가 초안을 만들지 못했어요(사내 AI 응답 실패일 수 있음) — 잠시 후 다시 누르거나 [직접 수정]하세요.' : '');
-      onDone();
+      onDone('slot');
     },
     onError: (e: Error) => setError(e.message || '대상 변경에 실패했습니다.'),
   });
@@ -281,7 +271,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
         {item.status === 'approved' && <Badge color="emerald">반영됨</Badge>}
         {item.status === 'rejected' && <Badge color="slate">반려</Badge>}
         <span className="text-slate-500">{item.namespace}</span>
-        <span className="text-slate-500">· {sourceLabel(item)}</span>
+        <span className="text-slate-500">· {correctionSourceLabel(item.source, item.kind)}</span>
         {item.reporter && <span className="text-slate-500">· {isPolicySource ? '제안' : '신고'} {item.reporter}</span>}
         <span className="text-slate-500" title={new Date(item.created_at).toLocaleString('ko-KR')}>
           · {pending ? `대기 ${elapsed(item.created_at, null)}` : `처리 ${elapsed(item.created_at, item.decided_at)} 소요${item.decided_by ? ` (${item.decided_by})` : ''}`}
@@ -436,7 +426,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
           {canFix && item.proposed && !proposedMarked && (
             <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy}
               title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
-              onClick={() => approve.mutate(item.proposed ?? undefined)}>
+              onClick={() => item.proposed && approve.mutate(item.proposed)}>
               승인
             </Button>
           )}
@@ -494,6 +484,9 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
 }
 
 type BulkResult = { id: number; ok: boolean; message?: string };
+/** 처리 뒤 다시 불러올 범위 — applied = 승인(지식·정책 내용이 바뀜), slot = 반려·대상 변경·AI 추정(정책 화면의 "정정 #N 검토 중"이
+ *  바뀔 수 있음), 없음 = 다시 쓰기·직접 수정(수정안만 바뀜 — 정정 목록만) */
+type DoneEffect = 'applied' | 'slot';
 
 export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: string; focusId?: number | null }) {
   const qc = useQueryClient();
@@ -507,12 +500,15 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
     staleTime: 10_000,
   });
   const items = useMemo(() => (source === 'all' ? all : all.filter((i) => sourceGroup(i) === source)), [all, source]);
-  const onDone = () => {
+  // 무엇을 다시 불러올지는 그 동작이 바꾼 것만(10/21 리뷰 5f — 예전엔 다시 쓰기·직접 수정에도 지식·정책 목록을 전부 다시 불렀다)
+  const onDone = (effect?: DoneEffect) => {
     qc.invalidateQueries({ queryKey: ['corrections'] });
     qc.invalidateQueries({ queryKey: ['corrections-pending-count'] });
-    qc.invalidateQueries({ queryKey: ['knowledge'] });
-    qc.invalidateQueries({ queryKey: ['policies'] });
-    qc.invalidateQueries({ queryKey: ['policy'] });
+    if (effect === 'applied') qc.invalidateQueries({ queryKey: ['knowledge'] });
+    if (effect) {
+      qc.invalidateQueries({ queryKey: ['policies'] });
+      qc.invalidateQueries({ queryKey: ['policy'] });
+    }
   };
   // 목록이 바뀌면(승인·필터) 더는 승인할 수 없는 건은 선택에서 뺀다
   useEffect(() => {
@@ -540,12 +536,12 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
       const out: BulkResult[] = [];
       for (const id of ids) {
         const item = items.find((i) => i.id === id);
-        if (!item || !approvable(item)) {
+        if (!item || !approvable(item) || !item.proposed) {
           out.push({ id, ok: false, message: '승인할 수 없는 상태예요(수정안 없음·【확인 필요】).' });
           continue;
         }
         try {
-          await approveCorrection(id, item.proposed ?? undefined);
+          await approveCorrection(id, item.proposed);
           out.push({ id, ok: true });
         } catch (e) {
           out.push({ id, ok: false, message: e instanceof Error ? e.message : String(e) });
@@ -556,9 +552,9 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
     onSuccess: (out) => {
       setResults(out);
       setSelected(new Set(out.filter((r) => !r.ok).map((r) => r.id)));
-      onDone();
+      onDone('applied');
     },
-    onError: (e) => { void showError(e, '일괄 승인 중 오류가 났어요'); onDone(); },
+    onError: (e) => { void showError(e, '일괄 승인 중 오류가 났어요'); onDone('applied'); },
   });
 
   return (

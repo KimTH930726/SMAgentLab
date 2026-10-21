@@ -182,8 +182,6 @@ export async function decideLink(id: number, action: 'confirm' | 'reject'): Prom
 
 // ─── 정책서 JSON 내려받기·가져오기(관리자, 10/21) — 가져오기는 바뀐 정책마다 정정 제안(승인은 정정 요청에서) ───
 
-export const POLICY_JSON_SCHEMA = 'opslens/policy-v0/1';
-
 export interface PolicyJsonExport {
   schema: string;
   domain: string;

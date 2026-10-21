@@ -93,6 +93,23 @@ export interface PolicyProposalCreated {
   ai_failed: boolean;
 }
 
+/** 정정 출처 이름 — 정정 요청 카드와 정책 상세의 "정정 #N 검토 중 (…)"이 같은 이름을 쓴다(10/21 리뷰 C4 — 두 곳에 따로 있어 이름이 달랐다).
+ *  kind는 평가 게이트 "이상해요"(search_noise)를 가르는 데만 쓴다. */
+const CORRECTION_SOURCE_LABEL: Record<string, string> = {
+  policy_direct: '정책 직접 수정',
+  policy_ai: '정책 AI 제안',
+  json_import: 'JSON 가져오기',
+  chat_answer_auto: '답변 틀림 + 한 줄(AI 판정)',
+  chat_answer_wrong: '답변 틀림(의견 없음)',
+  review_flag_migrated: '답변 틀림(의견 없음)',
+  eval_gate: '평가 게이트 이상해요',
+};
+
+export function correctionSourceLabel(source: string | null | undefined, kind?: string): string {
+  if (kind === 'search_noise') return CORRECTION_SOURCE_LABEL.eval_gate;
+  return (source && CORRECTION_SOURCE_LABEL[source]) || '근거 직접 지정';
+}
+
 export async function createPolicyProposal(
   namespace: string, itemId: number, source: PolicyProposalSource,
   body: { proposed?: { raw_body: string; remark: string }; user_input?: string },
@@ -110,7 +127,7 @@ export async function updateCorrectionProposed(id: number, proposed: Record<stri
 
 export async function getCorrectionStatus(
   knowledgeIds: number[], policyItemIds: number[],
-): Promise<{ knowledge: number[]; policy_param: number[]; policy_narrative: number[] }> {
+): Promise<{ knowledge: number[]; policy_item?: number[]; policy_param: number[]; policy_narrative: number[] }> {
   const q = new URLSearchParams();
   if (knowledgeIds.length) q.set('knowledge_ids', knowledgeIds.join(','));
   if (policyItemIds.length) q.set('policy_item_ids', policyItemIds.join(','));
@@ -137,8 +154,9 @@ export async function listCorrections(namespace: string | null, status: string |
   return apiFetch(`/corrections?${q.toString()}`);
 }
 
-export async function approveCorrection(id: number, proposed?: Record<string, string | null>): Promise<unknown> {
-  return apiFetch(`/corrections/${id}/approve`, { method: 'POST', body: JSON.stringify({ proposed: proposed ?? null }) });
+/** proposed = 화면에 보인 수정안(필수, 10/21 리뷰 5c) — 서버가 저장된 안과 다르면 409(보지 못한 안이 반영되지 않게) */
+export async function approveCorrection(id: number, proposed: Record<string, string | null>): Promise<unknown> {
+  return apiFetch(`/corrections/${id}/approve`, { method: 'POST', body: JSON.stringify({ proposed }) });
 }
 
 export async function rejectCorrection(id: number, reason: string): Promise<unknown> {

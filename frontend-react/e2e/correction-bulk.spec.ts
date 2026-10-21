@@ -1,12 +1,12 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 import { goAdmin, domainSelect } from './admin-nav';
 import { createPolicyPart, dropPolicyPart, psql } from './v0-fixture';
+import { API, adminToken, loginAdmin } from './auth';
 
 // 정정 요청 일괄 승인(2026-10-21) — 골라서 [선택한 N건 승인] = 건마다 같은 승인 요청을 차례로. 화면에 보인 안을 보내므로
 // 그 사이 바뀐 건은 409로 빠지고(이유 표시, 대기 유지) 나머지는 승인된다. DB 값으로 확인한다. LLM 호출 없음(직접 수정 제안).
 
 const NS = 'zz_e2e_correction_bulk';
-const API = 'http://localhost:8000';
 const P = [
   { name: 'E2E 일괄 A', body: 'A 정책: 적립은 결제 후 1일 뒤.' },
   { name: 'E2E 일괄 B', body: 'B 정책: 쿠폰은 발급 후 7일 사용.' },
@@ -22,11 +22,6 @@ const activeBody = (name: string) => psql(`SELECT i.raw_body FROM policy_item i 
   + `WHERE n.name = '${NS}' AND i.policy_name = '${name}' AND i.status = 'active'`);
 const corrStatus = (id: number) => psql(`SELECT status FROM ops_improvement_item WHERE id = ${id}`);
 
-async function token(request: APIRequestContext): Promise<string> {
-  const r = await request.post(`${API}/api/auth/login`, { data: { username: 'admin', password: '1111' } });
-  return (await r.json()).access_token as string;
-}
-
 /** 정책 화면의 [직접 수정]과 같은 요청 — 화면 흐름은 policy-v0-edit.spec.ts가 본다 */
 async function propose(request: APIRequestContext, tok: string, name: string, rawBody: string): Promise<number> {
   const r = await request.post(`${API}/api/corrections`, {
@@ -38,14 +33,7 @@ async function propose(request: APIRequestContext, tok: string, name: string, ra
 }
 
 async function openQueue(page: Page) {
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill('admin');
-  await page.getByPlaceholder('비밀번호').fill('1111');
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
-  await page.getByRole('link', { name: 'Admin' }).click();
+  await loginAdmin(page);
   await domainSelect(page).selectOption(NS);
   await goAdmin(page, '품질', '정정 요청');
   await page.getByLabel('출처').selectOption({ label: '정책 직접 수정' });
@@ -63,7 +51,7 @@ test.afterAll(() => {
 
 test('두 건 골라 한꺼번에 승인 → 둘 다 새 버전', async ({ page, request }) => {
   test.setTimeout(180_000);
-  const tok = await token(request);
+  const tok = await adminToken();
   const a = await propose(request, tok, 'E2E 일괄 A', 'A 정책: 적립은 결제 후 2일 뒤.');
   const b = await propose(request, tok, 'E2E 일괄 B', 'B 정책: 쿠폰은 발급 후 14일 사용.');
   await openQueue(page);
@@ -79,7 +67,7 @@ test('두 건 골라 한꺼번에 승인 → 둘 다 새 버전', async ({ page,
 
 test('그 사이 바뀐 건은 실패(이유 표시·대기 유지), 나머지는 승인', async ({ page, request }) => {
   test.setTimeout(180_000);
-  const tok = await token(request);
+  const tok = await adminToken();
   const c = await propose(request, tok, 'E2E 일괄 C', 'C 정책: 배송은 2일 이내 출고.');
   const d = await propose(request, tok, 'E2E 일괄 D', 'D 정책: 교환은 2회까지 가능.');
   await openQueue(page);

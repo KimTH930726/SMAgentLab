@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { goAdmin, domainSelect } from './admin-nav';
+import { loginAdmin } from './auth';
 
 // 이 테스트가 존재하는 이유(2026-09-24): 지식 등록 흐름이 미리보기+검토 2단계로
 // 재설계되면서, LLM 자동 태깅/용어 자동추출 호출이 화면 어디서도 안 불리게 조용히
@@ -7,23 +8,10 @@ import { goAdmin, domainSelect } from './admin-nav';
 // 하고 폼을 채우고 제출해서 화면에 결과가 뜨는지까지 확인해야 이런 종류의 회귀를
 // 잡는다 — 그래서 이 스펙은 API를 목킹하지 않고 떠 있는 실 dev 스택 그대로 사용한다.
 
-const ADMIN_USER = 'admin';
-const ADMIN_PASS = '1111';
 const NAMESPACE = '딜리버스';
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill(ADMIN_USER);
-  await page.getByPlaceholder('비밀번호').fill(ADMIN_PASS);
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-
-  // 로그인 직후엔 매번 에이전트 선택 화면부터 나온다(Zustand store, 새 브라우저
-  // 컨텍스트라 저장된 선택이 없음) — 하나 골라야 그다음 화면(사이드바+Admin)이 보인다.
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) {
-    await page.getByText('선택하기').first().click();
-  }
+  await loginAdmin(page, { openAdmin: false });
 });
 
 test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까지 된다', async ({ page }) => {

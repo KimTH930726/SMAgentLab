@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { goAdmin, domainSelect } from './admin-nav';
 import { execFileSync } from 'node:child_process';
+import { loginAdmin } from './auth';
 
 // 이 테스트가 존재하는 이유(2026-10-02): 좋아요/싫어요 기반 해결·미해결을 없애고 질의 상태를 "답변 / 지식 공백" 둘로
 // 줄였다. 통계는 "답변 / 정정 요청 / 지식 공백 / 공백 메움" — 카드 숫자가 실제 DB 집계(질의 상태·메움 연결·개선 원장
@@ -23,14 +24,7 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
   expect(q("status NOT IN ('pending', 'no_knowledge', 'system_error')")).toBe('0');
   const systemErrors = q("status = 'system_error'");
 
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill('admin');
-  await page.getByPlaceholder('비밀번호').fill('1111');
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
-  await page.getByRole('link', { name: 'Admin' }).click();
+  await loginAdmin(page);
   await goAdmin(page, '품질', '통계');
   await domainSelect(page).selectOption(NAMESPACE);
 

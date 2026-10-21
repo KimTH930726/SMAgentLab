@@ -21,7 +21,9 @@ from core.config import settings
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 from service.improvement import draft as draft_mod
-from service.policy.visibility import PIPELINE_WHOLE, POLICY_TARGETS, is_searchable, open_correction_sql, searchable_sql
+from service.policy.visibility import (
+    KIND_SOURCE_CHECK, PIPELINE_WHOLE, POLICY_TARGETS, SOURCE_JSON_IMPORT, is_searchable, open_correction_sql, searchable_sql,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +47,11 @@ SOURCE_POLICY_AI = "policy_ai"
 POLICY_SOURCES = (SOURCE_POLICY_DIRECT, SOURCE_POLICY_AI)
 # 정책서 JSON 가져오기(10/21, v0 재구축 3단계 — service/policy/json_io.py): 바뀐 정책마다 직접 수정과 같은 제안(AI 호출 없음).
 # 화면의 POST /api/corrections로는 못 만든다(관리자 전용 가져오기 API만) — 그래서 POLICY_SOURCES(요청 스키마가 받는 값)엔 안 넣는다.
-SOURCE_JSON_IMPORT = "json_import"
+# 값(SOURCE_JSON_IMPORT)은 json_io와 같이 쓰려고 visibility.py에 둔다(10/21 리뷰 C6).
 _PROPOSAL_MODES = POLICY_SOURCES + (SOURCE_JSON_IMPORT,)
 _AS_IS_MODES = (SOURCE_POLICY_DIRECT, SOURCE_JSON_IMPORT)   # 받은 수정안 그대로 저장(AI 없음)
 # 원문 확인(10/21, service/policy/source_check.py): 정책서 원문에 대한 질문·문제 — 내용 정정이 아니라 정정 요청 목록·배지·내 신고·
-# 정정 처리 API에 섞이지 않게 모든 정정 조회에서 이 kind를 뺀다.
-KIND_SOURCE_CHECK = "source_check"
+# 정정 처리 API에 섞이지 않게 모든 정정 조회에서 이 kind를 뺀다. 값(KIND_SOURCE_CHECK)은 visibility.py 한 곳(10/21 리뷰 C6).
 _POLICY_TARGETS = POLICY_TARGETS   # 정책 화면(catalog)과 같은 목록(10/21 리뷰 L10)
 # pg_advisory_xact_lock(이 값, 정책 항목 id) — 같은 정책에 대기 정정 두 개가 동시에 생기지 않게. 정책을 대상으로 정하는 모든 길
 # (정책 화면 제안·채팅 신고·AI 추정·대상 변경)이 이 잠금 + _pending_policy_correction 확인을 거친다(10/21 리뷰 M1)
@@ -69,7 +70,8 @@ class ConflictError(Exception):
 
 
 def _fallback_chunk_text(policy_name: str, category_path: list[str], raw_body: str) -> str:
-    # service/policy/service.py _chunk_texts()의 폴백 청크와 같은 형식이어야 재생성 판정이 맞는다
+    # 옛 엑셀 경로(v1)가 서술 없는 항목에 만들던 대체 조각 형식("정책명 (분류 / …): 원문") — 만들던 코드(_chunk_texts)는 10/21 그 경로와
+    # 함께 지웠지만, 남은 v1 데이터의 대체 조각을 알아보려면(원문이 바뀌면 같이 다시 쓰기) 이 형식 그대로여야 한다. v0는 안 쓴다.
     return f"{policy_name} ({' / '.join(category_path or [])}): {raw_body}"
 
 
@@ -137,6 +139,12 @@ def _preview(target_type: str, original: dict) -> str:
     else:
         text = original.get("chunk_text") or ""
     return text[:200]
+
+
+def _stored_candidates(candidates: list[dict]) -> list[dict]:
+    """원장 candidates 칸에 저장하는 모양 — 원문 스냅샷 대신 미리보기만(신고 접수·"답변 틀림" 신호가 같은 모양을 쓴다, 10/21 리뷰 C2)."""
+    return [{k: c[k] for k in ("key", "target_type", "target_id", "target_sub_id", "label")}
+            | {"preview": _preview(c["target_type"], c["original"])} for c in candidates]
 
 
 async def _load_candidates(conn, ns_id: int, message_id: int) -> list[dict]:
@@ -272,8 +280,7 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
     proposed, verdict = None, None
     if auto:
         target_type, target_id, target_sub_id, original, proposed, verdict = await _identify(candidates, context, user_input)
-    stored_candidates = [{k: c[k] for k in ("key", "target_type", "target_id", "target_sub_id", "label")}
-                         | {"preview": _preview(c["target_type"], c["original"])} for c in candidates]
+    stored_candidates = _stored_candidates(candidates)
 
     def _values() -> tuple:
         return (KIND_BY_TARGET[target_type], SOURCE_AUTO if auto else SOURCE_DIRECT, ns_id, message_id,
@@ -382,6 +389,20 @@ async def _claim_policy_slot(conn, target_type: Optional[str], target_id: Option
     return await _pending_policy_correction(conn, target_id, exclude_id)
 
 
+async def _is_whole_policy(conn, target_type: str, target_id: Optional[int]) -> bool:
+    """정정 대상이 원문 통째(v0) 정책인가 — 수정안 정리(_clean_proposal whole=)가 쓴다. 정책이 아니면 False(10/21 리뷰 C2)."""
+    if target_type not in _POLICY_TARGETS:
+        return False
+    return (await conn.fetchval("SELECT pipeline_version FROM policy_item WHERE id = $1", target_id)) == PIPELINE_WHOLE
+
+
+def _same_target_sql(first: int) -> str:
+    """UPDATE 가드 "읽은 뒤 대상이 그대로일 때만" — $first·$first+1·$first+2 = 읽어 둔 (target_type, target_id, target_sub_id).
+    직접 수정·대상 변경·다시 쓰기가 같은 조각을 쓴다(10/21 리뷰 C2). 0건이면 그 사이 다른 사람이 대상을 바꾼 것 → 409."""
+    return (f"target_type = ${first} AND target_id IS NOT DISTINCT FROM ${first + 1} "
+            f"AND target_sub_id IS NOT DISTINCT FROM ${first + 2}")
+
+
 def _duplicate_message(existing_id: int) -> str:
     return f"이 정책은 이미 정정 #{existing_id} 검토 중이에요 — 품질 › 정정 요청에서 그 건을 처리한 뒤 다시 올리세요."
 
@@ -486,9 +507,7 @@ async def update_proposed(item_id: int, editor: dict, proposed: dict) -> dict:
         target_type = item["target_type"]
         if target_type not in _REDRAFT_TARGETS:
             raise ValueError("고칠 대상(근거)이 정해진 신고만 직접 수정할 수 있어요 — 먼저 정정 대상을 고르세요.")
-        whole = False
-        if target_type in _POLICY_TARGETS:
-            whole = (await conn.fetchval("SELECT pipeline_version FROM policy_item WHERE id = $1", item["target_id"])) == PIPELINE_WHOLE
+        whole = await _is_whole_policy(conn, target_type, item["target_id"])
     original = _json(item["original"]) or {}
     cleaned = _clean_proposal(target_type, proposed or {}, whole=whole)
     if "remark" not in original:
@@ -501,10 +520,9 @@ async def update_proposed(item_id: int, editor: dict, proposed: dict) -> dict:
     verdict["edits"] = [*verdict.get("edits", []), {"by": editor.get("id"), "by_name": editor.get("username"),
                                                     "at": datetime.now(timezone.utc).isoformat()}]
     async with get_conn() as conn:
-        res = await conn.execute("""
+        res = await conn.execute(f"""
             UPDATE ops_improvement_item SET proposed = $2::jsonb, ai_verdict = $3::jsonb
-            WHERE id = $1 AND status = 'pending'
-              AND target_type = $4 AND target_id IS NOT DISTINCT FROM $5 AND target_sub_id IS NOT DISTINCT FROM $6
+            WHERE id = $1 AND status = 'pending' AND {_same_target_sql(4)}
         """, item_id, json.dumps(cleaned, ensure_ascii=False), json.dumps(verdict, ensure_ascii=False),
             target_type, item["target_id"], item["target_sub_id"])
     if res.endswith(" 0"):
@@ -525,8 +543,7 @@ async def record_answer_signal(ns_id: int, message_id: int, reporter_id: Optiona
                 return existing
             candidates = await _load_candidates(conn, ns_id, message_id)
             context = await _load_original(conn, ns_id, "missing", None, None, message_id)
-            stored = [{k: c[k] for k in ("key", "target_type", "target_id", "target_sub_id", "label")}
-                      | {"preview": _preview(c["target_type"], c["original"])} for c in candidates]
+            stored = _stored_candidates(candidates)
             item_id = await conn.fetchval("""
                 INSERT INTO ops_improvement_item
                     (kind, source, namespace_id, message_id, reporter_user_id, target_type, original, candidates)
@@ -700,12 +717,11 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
                 if not stale and moves_policy:
                     busy = await _claim_policy_slot(conn, target_type, target_id, item_id)
                 if not stale and busy is None:
-                    res = await conn.execute("""
+                    res = await conn.execute(f"""
                         UPDATE ops_improvement_item
                         SET kind = $2, target_type = $3, target_id = $4, target_sub_id = $5, original = $6::jsonb,
                             proposed = $7::jsonb, ai_verdict = $8::jsonb
-                        WHERE id = $1 AND status = 'pending'
-                          AND target_type = $9 AND target_id IS NOT DISTINCT FROM $10 AND target_sub_id IS NOT DISTINCT FROM $11
+                        WHERE id = $1 AND status = 'pending' AND {_same_target_sql(9)}
                     """, item_id, KIND_BY_TARGET[target_type], target_type, target_id, sub_id,
                         json.dumps(original, ensure_ascii=False),
                         json.dumps(proposed, ensure_ascii=False) if proposed is not None else None,
@@ -734,9 +750,7 @@ async def redraft(item_id: int, approver: dict, feedback: str) -> dict:
         if item["target_type"] not in _REDRAFT_TARGETS:
             raise ValueError("고칠 대상(근거)이 정해진 신고만 다시 쓸 수 있어요 — 먼저 틀린 근거를 고르세요.")
         context = await _load_original(conn, item["namespace_id"], "missing", None, None, item["message_id"])
-        whole = False
-        if item["target_type"] in _POLICY_TARGETS:
-            whole = (await conn.fetchval("SELECT pipeline_version FROM policy_item WHERE id = $1", item["target_id"])) == PIPELINE_WHOLE
+        whole = await _is_whole_policy(conn, item["target_type"], item["target_id"])
     target_type = item["target_type"]
     original = _json(item["original"]) or {}
     stored = _json(item["proposed"])
@@ -762,36 +776,44 @@ async def redraft(item_id: int, approver: dict, feedback: str) -> dict:
     verdict["redrafts"] = [*verdict.get("redrafts", []), {"by": approver.get("id"), "feedback": feedback,
                                                           "at": datetime.now(timezone.utc).isoformat(), "previous": stored}]
     async with get_conn() as conn:
-        res = await conn.execute("""
+        res = await conn.execute(f"""
             UPDATE ops_improvement_item SET proposed = $2::jsonb, ai_verdict = $3::jsonb
-            WHERE id = $1 AND status = 'pending'
-              AND target_type = $4 AND target_id IS NOT DISTINCT FROM $5 AND target_sub_id IS NOT DISTINCT FROM $6
+            WHERE id = $1 AND status = 'pending' AND {_same_target_sql(4)}
               AND proposed IS NOT DISTINCT FROM $7::jsonb
         """, item_id, json.dumps(proposed, ensure_ascii=False), json.dumps(verdict, ensure_ascii=False),
             item["target_type"], item["target_id"], item["target_sub_id"],
             json.dumps(stored, ensure_ascii=False) if stored is not None else None)
         # AI가 쓰는 동안 대상이 바뀌었거나(리뷰 L4) 누가 [직접 수정]으로 안을 바꿨으면(출발점이 낡음 — 리뷰 M2) 덮어쓰지 않는다
-    if res.endswith(" 0"):
-        raise ValueError("그 사이 처리됐거나 수정안·정정 대상이 바뀐 신고예요 — 새로고침해서 확인하세요.")
+    if res.endswith(" 0"):   # "그 사이 바뀜"은 직접 수정·대상 변경·승인과 같이 409(10/21 리뷰 5b — 예전엔 여기만 400)
+        raise ConflictError("그 사이 처리됐거나 수정안·정정 대상이 바뀐 신고예요 — 새로고침해서 확인하세요.")
     return {"id": item_id, "proposed": proposed, "marked": draft_mod.has_review_marks(proposed)}
 
 
 async def pending_status(knowledge_ids: list[int], policy_item_ids: list[int]) -> dict:
     """근거별 "정정 검토 중" 여부 — 채팅 카드 배지용(실시간·재조회·캐시 응답 모두 이 경로).
-    정책은 항목(item)이 아니라 파라미터/서술 단위로 돌려준다 — 항목 단위면 한 파라미터 신고가 같은 항목의
-    다른 카드까지 전부 "검토 중"으로 덮어 다른 부분을 신고할 수 없게 된다(/code-review 지적)."""
-    out = {"knowledge": [], "policy_param": [], "policy_narrative": []}
+    정책은 "정책당 대기 정정 1건" 잠금(_claim_policy_slot → open_correction_sql)과 같은 기준(10/21 리뷰 5a): 대기 중이고 그 정책 항목을
+    겨눈 건이면 종류 무관(AI 추정이 대상을 골라 둔 "답변 틀림" 신호 포함 — 원문 확인은 대상 종류가 달라 안 걸린다). 그래서 정책은
+    항목 단위(policy_item)로도 돌려준다 — 예전엔 파라미터/서술 단위만 줘서(다른 부분 신고를 막지 않으려고, /code-review) 배지는 없는데
+    신고하면 409가 났다. 잠금이 항목 단위가 된 지금은 그 전제가 없다. policy_param/policy_narrative는 옛 화면 호환으로 남긴다.
+    지식은 그대로 kind='correction'(지식엔 대상당 1건 잠금이 없고, 같은 신고자 중복만 유니크 인덱스가 막는다)."""
+    out = {"knowledge": [], "policy_item": [], "policy_param": [], "policy_narrative": []}
     if not knowledge_ids and not policy_item_ids:
         return out
     async with get_conn() as conn:
         rows = await conn.fetch("""
             SELECT DISTINCT target_type, target_id, target_sub_id FROM ops_improvement_item
-            WHERE status = 'pending' AND kind = 'correction'
-              AND ((target_type = 'knowledge' AND target_id = ANY($1::int[]))
-                OR (target_type IN ('policy_param', 'policy_narrative') AND target_id = ANY($2::int[])))
-        """, knowledge_ids or [], policy_item_ids or [])
+            WHERE status = 'pending'
+              AND ((kind = 'correction' AND target_type = 'knowledge' AND target_id = ANY($1::int[]))
+                OR (target_type = ANY($3::text[]) AND target_id = ANY($2::int[])))
+        """, knowledge_ids or [], policy_item_ids or [], list(_POLICY_TARGETS))
     for r in rows:
-        out[r["target_type"]].append(r["target_id"] if r["target_type"] == "knowledge" else r["target_sub_id"])
+        if r["target_type"] == "knowledge":
+            out["knowledge"].append(r["target_id"])
+            continue
+        if r["target_id"] not in out["policy_item"]:
+            out["policy_item"].append(r["target_id"])
+        if r["target_sub_id"] is not None:
+            out[r["target_type"]].append(r["target_sub_id"])
     return out
 
 
@@ -976,8 +998,9 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
                         prepared: dict[int, tuple[str, list[float]]]) -> int:
     """정책 새 버전: policy_item 복사(raw_body=수정안) + param/chunk 복사(정정 대상만 교체) + 원본 deprecated.
     `prepared`는 트랜잭션 밖에서 미리 만든 {chunk_id: (새 텍스트, 임베딩)}.
-    content_hash·pipeline_version·source 위치는 원본 그대로 — 엑셀이 안 바뀐 채 재업로드되면 스킵돼 정정이 유지되고,
-    엑셀 원본이 실제로 바뀌면 그 버전이 정정을 대체한다(원본 소유자 우선)."""
+    content_hash·pipeline_version·원천 키(source_key)·출처 위치는 원본 그대로 — 원천 키가 같아야 JSON 가져오기(json_io)·골든셋·재적재
+    대조가 새 버전을 같은 정책으로 찾는다. content_hash는 처음 적재한 원문 기준 그대로다(10/21: 이 값으로 재업로드를 건너뛰던 옛 엑셀
+    경로는 없어졌다 — 지금 원문과의 비교는 json_io가 원문·비고로 직접 한다)."""
     old = await conn.fetchrow("SELECT * FROM policy_item WHERE id = $1 AND namespace_id = $2 FOR UPDATE",
                               item["target_id"], ns_id)
     # 검색 대상과 같은 기준(10/21) — v0 검토 대기 버전을 원본 삼아 새 버전을 만들면 승인 전 수정안이 그대로 현행이 된다
@@ -1085,7 +1108,8 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
                 "SELECT status, proposed, target_type, target_id, target_sub_id FROM ops_improvement_item WHERE id = $1 FOR UPDATE",
                 item_id)
             if not locked or locked["status"] != "pending":
-                raise ValueError("이미 처리된 신고입니다.")
+                # 처음 읽을 땐 대기였다 = 임베딩·분류를 기다리는 사이 다른 승인·반려가 먼저 끝남 — "그 사이 바뀜"과 같이 409(10/21 리뷰 5b)
+                raise ConflictError("그 사이 다른 사람이 먼저 처리한 신고예요 — 새로고침해서 확인하세요.")
             # 임베딩·분류(LLM)를 기다리는 동안 다른 사람이 다시 쓰기·대상 변경을 했으면 보지 못한 상태로 반영하지 않는다(리뷰 10/21)
             if (_json(locked["proposed"]) != stored
                     or (locked["target_type"], locked["target_id"], locked["target_sub_id"])

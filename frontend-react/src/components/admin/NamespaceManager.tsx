@@ -155,12 +155,7 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
           </Button>
         </div>
       )}
-      {addMutation.isError && (
-        <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">{String(addMutation.error)}</p>
-      )}
-      {renameMutation.isError && (
-        <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">{String(renameMutation.error)}</p>
-      )}
+      {/* 추가·이름 변경 실패는 onError의 오류 창 하나로만 알린다 — 아래 줄 표시와 두 번 보이던 것(10/21 리뷰 5e) */}
     </div>
   );
 }

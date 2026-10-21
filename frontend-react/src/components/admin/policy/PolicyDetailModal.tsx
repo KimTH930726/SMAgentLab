@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Pencil, Sparkles } from 'lucide-react';
 import { getPolicy, type PolicyDetail, type PolicyParamRow } from '../../../api/policy';
+import { correctionSourceLabel } from '../../../api/corrections';
 import { useNamespaceAccess } from '../../../utils/useNamespaceAccess';
 import { Modal } from '../../ui/Modal';
 import { Button } from '../../ui/Button';
@@ -11,10 +12,6 @@ import { PolicyAiSuggestModal } from './PolicyAiSuggestModal';
 
 const STATUS_LABEL: Record<string, string> = {
   active: '사용 중', deprecated: '이전 버전', rejected: '반려', pending_review: '검토 대기',
-};
-
-const SOURCE_LABEL: Record<string, string> = {
-  policy_direct: '직접 수정', policy_ai: 'AI 제안', json_import: 'JSON 가져오기', chat_answer_auto: '채팅 답변 틀림', chat_answer_wrong: '채팅 답변 틀림',
 };
 
 /** 원문에서 파라미터 값을 칠한다 — 값이 원문에 글자로 있어야 원문 파생이 맞다(설계 §7). */
@@ -137,7 +134,7 @@ function DetailBody({ data, open, onOpenCorrection }: {
 
       {open && (
         <div className="flex items-center gap-2 flex-wrap rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700/50 dark:bg-amber-900/20 dark:text-amber-200">
-          <span>정정 #{open.id} 검토 중{SOURCE_LABEL[open.source] ? ` (${SOURCE_LABEL[open.source]})` : ''}</span>
+          <span>정정 #{open.id} 검토 중 · {correctionSourceLabel(open.source)}</span>
           <button onClick={() => onOpenCorrection(open.id)} className="font-medium underline hover:no-underline">
             정정 요청에서 보기 →
           </button>

@@ -306,6 +306,29 @@ class TestUpdateProposed:
         assert e.value.status_code == 403
         update.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint,fn,body", [
+        ("approve_correction", "approve", lambda: schemas.ApproveBody(proposed={"raw_body": "x"})),
+        ("redraft_correction", "redraft", lambda: schemas.RedraftBody(feedback="7일")),
+        ("update_correction_proposed", "update_proposed", lambda: schemas.ProposedBody(proposed={"raw_body": "x"})),
+        ("retarget_correction", "retarget", lambda: schemas.RetargetBody(key="missing")),
+    ])
+    async def test_changed_meanwhile_is_409_everywhere(self, endpoint, fn, body):
+        """10/21 리뷰 5b — "그 사이 바뀜"은 어느 처리든 같은 409 + (있으면) existing_id. 다시 쓰기만 400이었고 승인은 번호를 버렸다."""
+        with patch.object(router.service, "item_namespace", AsyncMock(return_value="ns")), \
+             patch.object(router, "check_namespace_ownership", AsyncMock()), \
+             patch.object(router.service, fn, AsyncMock(side_effect=svc.ConflictError("바뀜", existing_id=12))):
+            with pytest.raises(HTTPException) as e:
+                await getattr(router, endpoint)(7, body(), user=USER)
+        assert e.value.status_code == 409 and e.value.detail == {"message": "바뀜", "existing_id": 12}
+
+    def test_approve_requires_shown_proposal(self):
+        """10/21 리뷰 5c — 승인은 화면에 보인 안이 필수(비워 보내면 "그 사이 바뀜" 검사를 건너뛴다)."""
+        with pytest.raises(Exception):
+            schemas.ApproveBody()
+        with pytest.raises(Exception):
+            schemas.ApproveBody(proposed=None)
+
 
 class TestRemarkOnApprove:
     @staticmethod

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
 import { goAdmin, domainSelect } from './admin-nav';
 import { createPolicyPart, dropPolicyPart, psql } from './v0-fixture';
+import { adminToken, loginAdmin } from './auth';
 
 // 정책서 v0 재구축 3단계(2026-10-21) — 원문 확인 + JSON 가져오기.
 // 약속 1: 원문 확인은 정정이 아니다 — [해결]은 원장 항목(kind=source_check)만 approved + 메모로 바꾸고, 정정 요청 배지에 안 섞인다.
@@ -20,13 +21,7 @@ const rows = (name: string) => psql(`SELECT version || ':' || status || ':' || r
   + `WHERE namespace_id = ${nsId()} AND policy_name = '${name}' ORDER BY version`).split('\n').filter(Boolean);
 
 async function login(page: Page) {
-  await page.goto('/login');
-  await page.getByPlaceholder('사용자 아이디').fill('admin');
-  await page.getByPlaceholder('비밀번호').fill('1111');
-  await page.getByRole('button', { name: '로그인' }).click();
-  await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
+  await loginAdmin(page, { openAdmin: false });
 }
 
 async function openPolicyTab(page: Page, tab: string) {
@@ -57,7 +52,7 @@ test.afterAll(() => {
 test('원문 확인 → [해결] 메모 → 원장 approved + 메모, 정정 요청 배지엔 안 셈', async ({ page, request }) => {
   await login(page);
   // 원문 확인 항목은 정정 요청 건수에 안 들어간다
-  const tok = (await (await request.post('http://localhost:8000/api/auth/login', { data: { username: 'admin', password: '1111' } })).json()).access_token;
+  const tok = await adminToken();
   const cnt = await request.get(`http://localhost:8000/api/corrections/pending-count?namespace=${encodeURIComponent(NS)}`,
     { headers: { Authorization: `Bearer ${tok}` } });
   expect((await cnt.json()).count).toBe(0);
