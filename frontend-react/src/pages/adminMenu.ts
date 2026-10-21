@@ -44,7 +44,7 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
   ] },
   { id: 'quality', label: '품질', items: [
     { id: 'q.stats', label: '통계', scoped: true },
-    { id: 'q.corrections', label: '정정 요청', hint: '채팅 "답변 틀림"과 평가 게이트 "이상해요"가 모이는 곳 — 승인해야 검색에 반영', scoped: true },
+    { id: 'q.corrections', label: '정정 요청', hint: '채팅 "답변 틀림"·평가 게이트 "이상해요"·정책서 수정 제안이 모이는 곳 — 승인해야 검색에 반영', scoped: true },
     { id: 'q.eval', label: '평가 게이트' },
   ] },
   { id: 'voc', label: 'VOC 이메일', items: [

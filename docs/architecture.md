@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.148)
+# OpsLens 시스템 아키텍처 (v2.150)
 
 ## 개요
 
@@ -12,6 +12,36 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.150 (2026-10-21, dev_0): **정책 v0 재구축 2단계 — 정책서 화면 새로 + 모든 정책 변경은 정정 요청에서 승인.** ① 지식 › 정책서 =
+  [정책 | 참고표 | 문서 개요](`components/admin/policy/`). 정책: 문서 순서 목록(첫 절로 접기, 정책명·원문 검색, "정정 #N 검토 중" 배지) → 상세 모달
+  (경로·이름·버전, 원문, 비고, 용어, 값은 있을 때만 — 원문에 칠하고 원문에 없는 값은 빨강, 버전 이력 "적재/정정 #N", [이전][다음]).
+  담당 파트·관리자는 [AI 수정 제안](한 줄)·[직접 수정](원문·비고 모달)을 같은 모양으로 — 둘 다 정정 원장에 제안 1건(source `policy_ai`/`policy_direct`)만
+  만들고 정책 테이블엔 아무것도 안 쓴다. 같은 정책에 대기 중 정정이 있으면(출처 무관) 409 + 그 번호(`detail.existing_id`), 화면은 "정정 요청에서 보기"로 그 카드에.
+  참고표: 표 고르기 + 원표(머리 고정·가로 스크롤, 결정 열 표시). 새 API(읽기, 누구나): `GET /api/policy/policies`·`/policies/{logical_id}`·`/ref-tables`·
+  `/ref-tables/{id}`·`/overviews`(`service/policy/catalog.py`). 정책→용어 연결은 `ops_link(from_type='policy', relation='uses')`, from_key = 정책 logical_id.
+  ② 정정 요청: [직접 수정] 되살림(`PATCH /api/corrections/{id}/proposed` — 승인과 같은 검사, 대기 중만, `ai_verdict.edits`에 누가·언제) + [AI 다시 쓰기] +
+  [반려] + [승인]. 기존 vs 수정안 줄 비교(LCS, `utils/lineDiff.ts`), 출처 거르기(채팅·정책 직접 수정·정책 AI 제안·평가 게이트), 골라서 일괄 승인
+  (화면이 건마다 승인 요청을 차례로 — 그 사이 바뀐 건은 409로 빠지고 이유 표시, 【확인 필요】는 고를 수 없음). 비고 정정: 수정안에 비고 칸이 있으면
+  새 버전 비고가 그 값(빈 값 = 지움), 없으면 그대로 — 비고만 바꾼 안도 "바뀐 안". 원문 통째(v0) 정책의 수정안은 서술 조각 = 원문으로 맞춰 저장.
+  ③ 삭제(사용자 승인): 옛 엑셀 경로 화면(항목 브라우저·미분류 집계·정책서 올리기/붙여넣기·위험도 자동 통과 큐·줄 안 파라미터/서술 편집)과 API
+  (`/policy/sources`·`import`·`import-paste`·`unresolved-summary`·`unresolved/*`·`params/*`·`narratives/*`·`review-summary`·`auto-review/*`·
+  `GET items`·`items/*/approve|reject|revert-auto`), 그것만 쓰던 모듈(`browse`·`unresolved_report`·`review`·`edit`·`auto_review`·`risk`·`decompose`·
+  `excel_parser`·`json_format`, `policy/service.py`의 엑셀 가져오기 파이프라인 — 임베딩 규칙만 남김, `scripts/excel_to_policy_json.py`)와 그 테스트·E2E.
+  스키마 변경 없음(`policy_review_log`·`policy_item.review_*` 칸은 남음 — 이력 보존).
+- v2.149 (2026-10-21, dev_0): **정책 v0 재구축 1단계 — 승인된 버전만 검색, 승인 = 옛 버전 은퇴.** ① 검색 대상 조건을 한 곳으로
+  (`service/policy/visibility.searchable_sql`): v0(원문 통째)는 active만, 옛 엑셀 경로는 예전처럼 검토 대기도 — 정책 검색·키워드 색인·분류 목록·
+  채팅 정책 범위·업무 영역 정책 개수·정정 대상 찾기가 모두 같은 조건(사람이 고친 새 버전이 승인 전에 답변에 섞이던 것). ② v0 새 버전 승인은
+  한 트랜잭션에서 옛 버전(supersedes_id)을 잠그고 아직 현행인지 본 뒤 deprecated → 새 버전 active(그 사이 바뀌었으면 "반려 후 다시 고쳐 주세요"),
+  반려는 새 버전만. ③ 정정 승인의 새 버전 번호 = 같은 정책의 가장 큰 번호 + 1(반려된 v2와 겹치던 것). ④ 정책이 바뀌면(가져오기·승인·정정 승인)
+  정책 색인 + 모든 업무 영역 답변 캐시를 비움(`caches.invalidate_policy_caches` — 채팅은 정책을 여러 영역에 걸쳐 찾는데 고친 영역만 비웠다).
+  ⑤ 자동 통과는 v0 항목을 건너뜀(사람 큐로 셈). ⑥ #80: 리뷰 이력 action에 submitted, 같은 정책에 v0 대기 하나·active 하나 고유 인덱스.
+- v2.148a (2026-10-21, dev_0): **정책서 v0 골든셋 평가 + 업무 영역 수정 모달 + 등록 점수 요청 제거 + 프롬프트 정리 + v0 용어 동의어.**
+  ① 골든셋 v0 485문항(옛 정책 평가 자산 폐기 후 재출발, 파일은 git 제외 `eval_out/golden_v0/`) — 검색 측정 `scripts/eval_golden_v0.py`(정답 = 원천 키 →
+  현행 정책, 못 찾으면 실패로 셈), 답 측정 `eval_answers.py --golden v0 --llm local --concurrency N`(이 측정에서만 로컬 LLM, 답 없는 질문 채점 규칙).
+  기준선(로컬 Qwen): 검색 Recall@10 98.4%·Top-1 81.9%, 답 90%(목록형 6/18이 가장 약함, 답 없음 거절 53/60). ② 업무 영역 수정 모달에서 이름 + 담당 파트(관리자,
+  확인 창). ③ 지식 등록의 문서 분석·청크 태깅이 안 쓰는 중요도 점수(priority_score)를 더는 LLM에 요청하지 않음(토큰 절약). ④ 채팅 프롬프트의
+  "컨테이너명·테이블명" 지시(v2.82에 칸은 이미 뺌) → "SQL·코드는 코드 블록으로" — 답 게이트 통과(-1.0%p, 오차 안). ⑤ v0 용어 712개에 동의어 811건
+  (Claude 생성 → 임베딩 유사도 게이트) — 검색 나빠짐 0, 답 +0.9%p(오차 안).
 - v2.148 (2026-10-21, dev_0): **VOC 프롬프트 분류 정리.** 프롬프트 관리에서 VOC 이메일 분석 프롬프트 2개가 "RAG"로 표시되던 것을
   "VOC"로(#79 `ops_prompt.agent_type` = voc). 공통·VOC는 어떤 에이전트를 골라도 보인다. 점검 결과 안 쓰는 프롬프트는 0개 — 업무구분 추천은 ④ 업무구분 폐지 때 제거.
 - v2.147 (2026-10-21, dev_0): **수정은 모달 + 정정은 승인/다시 쓰기/반려 + 경로 표시줄 + 조직 트리.** ① 수정 기능을 공통 `ui/FormModal`로(업무 영역
@@ -214,17 +244,18 @@ backend/
 │   │   ├── retention.py       #   30일 고정 보관정책 자동 정리
 │   │   ├── schemas.py         #   Pydantic 스키마
 │   │   └── router.py          #   /api/email-voc/* 엔드포인트
-│   └── policy/           #   정책서 데이터화 파이프라인 v1 (v2.52 신규, docs/archive/policy-doc-pipeline-plan.md)
-│       ├── excel_parser.py    #   시트 판별(용어집/정책) + 헤더 퍼지매핑 + 동적 깊이 감지(category_path)
-│       ├── decompose.py       #   LLM segment 분해 — narrative/param/unresolved 3분류
-│       ├── service.py         #   버전 관리(logical_id/version/supersedes_id, INSERT-only) + LLM 분해 동시성(세마포어5) + policy_item/param/chunk 적재
-│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터) 검색. 전용 엔드포인트(/api/policy/search)로도, agent.py 채팅 흐름에 has_policy_data()/build_policy_context()/build_policy_citations()로도 사용 (v2.64 편입 1단계, v2.65 인용 카드 2단계)
-│       ├── unresolved_report.py #   unresolved/partial 항목 system_key별 집계 (v2.53 신규)
-│       ├── browse.py          #   item 단위 브라우저 — param/chunk 자식 포함, q는 실제 검색 재사용(matched_via) (v2.59 신규, v2.63 q 개선)
-│       ├── track2.py          #   Track 2 A(지식-only)/B(하이브리드) 비교를 API로 실행 (v2.63 신규)
-│       ├── risk.py · auto_review.py · review.py · edit.py  #   검토 큐 위험도 분류·낮음 자동 통과·승인/반려·반려 후 수정 (v2.119)
+│   └── policy/           #   정책서(v0 원문 통째, docs/tech/policy-v0-design.md) — 옛 엑셀 분해 파이프라인은 v2.150에서 삭제(docs/archive/policy-doc-pipeline-plan.md)
+│       ├── v0_convert.py      #   팀원 구조화 데이터 → 저장 단위 변환(LLM 없음·결정적, 적재는 scripts/load_policy_v0.py)
+│       ├── service.py         #   서술 조각 머리 붙인 임베딩(chunk_embed_text) + 기동 때 재임베딩
+│       ├── visibility.py      #   검색 대상 조건(searchable_sql) + 정책을 겨눈 대기 중 정정 조회(open_correction_sql) — 잎 모듈
+│       ├── catalog.py         #   정책서 화면 조회(목록·상세·버전·참고표·개요, 읽기 전용 — 내용 변경은 정정 원장 제안으로만)
+│       ├── caches.py          #   정책이 바뀐 뒤 비울 캐시 한 곳(답변 캐시 전 영역 + 키워드·분류 색인)
+│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터·BM25 RRF) 검색 — 채팅(agent.py)과 /api/policy/search가 같이 사용
+│       ├── keyword_index.py · category_list.py · scope.py  #   키워드 색인(BM25) · 탐색형 분류 목록 · 채팅의 정책 범위(영역 넘어 찾기)
+│       ├── query_type.py · korean_text.py  #   navigation형 질문 판별 · 한국어 조사/어미 제거
+│       ├── track2.py · answer_eval.py · pipeline_stats.py  #   검색 비교 실행 · 답변 정확도 이력 · 축적 현황 집계
 │       ├── schemas.py         #   Pydantic 스키마
-│       └── router.py          #   POST /api/policy/import, GET /api/policy/search, GET /api/policy/unresolved-summary, GET /api/policy/items, POST /api/policy/track2/run
+│       └── router.py          #   GET /api/policy/policies(/{logical_id}), /ref-tables(/{id}), /overviews, /search, /track2/*, /answer-eval/history, /pipeline-stats
 ├── core/
 │   ├── config.py        # pydantic-settings, JWT·Fernet 키
 │   ├── database.py      # asyncpg 풀 + resolve_namespace_id() 헬퍼

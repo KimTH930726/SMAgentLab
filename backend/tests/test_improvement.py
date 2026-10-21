@@ -191,7 +191,7 @@ class TestRetarget:
             "status": "pending", "namespace_id": 1, "message_id": 3, "candidates": "[]", "user_input": "u",
             "ai_verdict": json.dumps({"verdict": "evidence"}), "target_type": "knowledge", "target_id": 1,
             "target_sub_id": None})
-        conn.execute = AsyncMock()
+        conn.execute = AsyncMock(return_value="UPDATE 1")
         redraft = AsyncMock()
         with patch.object(svc, "get_conn", return_value=conn), \
              patch.object(svc, "_load_original", AsyncMock(return_value={"question": "q"})), \
@@ -213,7 +213,7 @@ class TestRetarget:
             "status": "pending", "namespace_id": 1, "message_id": 3, "candidates": json.dumps([{"key": "k-1",
             "target_type": "knowledge", "target_id": 1, "target_sub_id": None}]), "user_input": "u",
             "ai_verdict": verdict, "target_type": "knowledge", "target_id": 1, "target_sub_id": None})
-        conn.execute = AsyncMock()
+        conn.execute = AsyncMock(return_value="UPDATE 1")
         with patch.object(svc, "get_conn", return_value=conn), \
              patch.object(svc, "_load_original", AsyncMock(return_value={"content": "c"})), \
              patch.object(svc.draft_mod, "draft_correction", AsyncMock(return_value={"content": "new"})):
@@ -313,7 +313,8 @@ class TestApplyPolicy:
                   {"id": 101, "name": "대상", "condition": None, "value": "전체", "unit": None, "external_source": None}]
         chunks = [{"id": 200, "chunk_text": "기한 (반품): 7일 이내", "chunk_idx": 0}]
         conn.fetchrow = AsyncMock(return_value=old_item)
-        conn.fetchval = AsyncMock(return_value=11)
+        # 첫 fetchval = 다음 버전 번호(MAX+1, 10/21), 둘째 = 새 버전 INSERT
+        conn.fetchval = AsyncMock(side_effect=[2, 11])
         conn.fetch = AsyncMock(side_effect=[chunks, params])
         conn.execute = AsyncMock()
         proposed = {"name": "기한", "condition": None, "value": "14", "unit": "일", "raw_body": "14일 이내"}
@@ -350,6 +351,58 @@ class TestApplyPolicy:
             await svc._apply_policy(conn, 1, item, {"chunk_text": "새 단락", "raw_body": "7일"}, {"id": 1},
                                     {200: ("예전에 준비한 단락", [0.1])})
         conn.fetchval.assert_not_awaited()  # 새 버전 INSERT 전에 중단
+
+
+class TestPolicyVersionV0:
+    """v0 재구축 1단계(2026-10-21) — 정정 승인의 새 버전 번호·대상 기준."""
+
+    @staticmethod
+    def _old(**kw):
+        return {"id": 10, "status": "active", "system_key": "", "category_path": [], "policy_name": "p", "raw_body": "7일",
+                "remark": None, "source_file": None, "source_sheet": None, "source_row": None, "content_hash": "h",
+                "logical_id": 10, "version": 1, "parse_status": "parsed", "unresolved_segments": None,
+                "pipeline_version": svc.PIPELINE_WHOLE, "source_key": "pol_x"} | kw
+
+    @pytest.mark.asyncio
+    async def test_new_version_is_max_plus_one(self):
+        """원본이 v1이어도 같은 정책에 반려된 v2가 이미 있으면 새 버전은 v3 — 원본+1이면 번호가 겹쳤다."""
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value=self._old())
+        conn.fetch = AsyncMock(side_effect=[[{"id": 200, "chunk_text": "7일", "chunk_idx": 0}], []])
+        conn.execute = AsyncMock()
+        versions = {10: [1, 2]}      # logical_id → 있는 버전(2 = 반려된 수정본)
+
+        async def fetchval(sql, *args):
+            if "MAX(version)" in sql:
+                assert "logical_id = $1" in sql and args == (10,)
+                return max(versions[args[0]]) + 1
+            return 11
+        conn.fetchval = AsyncMock(side_effect=fetchval)
+        item = {"target_id": 10, "target_type": "policy_narrative", "target_sub_id": 200}
+        proposed = {"chunk_text": "14일", "raw_body": "14일"}
+        rewrites = svc._policy_chunk_rewrites(self._old(), [{"id": 200, "chunk_text": "7일", "chunk_idx": 0}], item, proposed)
+        await svc._apply_policy(conn, 1, item, proposed, {"id": 1}, {c: (t, [0.1]) for c, t in rewrites.items()})
+        ins = next(c.args for c in conn.fetchval.await_args_list if "INSERT INTO policy_item" in c.args[0])
+        assert ins[12] == 3 and ins[12] not in versions[10]
+
+    @pytest.mark.asyncio
+    async def test_pending_v0_version_cannot_be_correction_base(self):
+        """승인 전 v0 수정본을 원본 삼아 새 버전을 만들면 사람 승인 없이 수정안이 현행이 된다 — 막는다."""
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value=self._old(status="pending_review"))
+        conn.fetchval = AsyncMock()
+        with pytest.raises(ValueError, match="현행이 아닙니다"):
+            await svc._apply_policy(conn, 1, {"target_id": 10, "target_type": "policy_narrative", "target_sub_id": 200},
+                                    {"chunk_text": "x", "raw_body": "x"}, {"id": 1}, {})
+        conn.fetchval.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_target_lookup_uses_search_rule(self):
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value=None)
+        with pytest.raises(ValueError):
+            await svc._load_original(conn, 1, "policy_narrative", 10, 200, None)
+        assert svc.searchable_sql("policy_item") in conn.fetchrow.await_args.args[0]
 
 
 class TestApproveReject:
@@ -485,6 +538,7 @@ class TestSignalMerge:
         """추정이 끝나기 전에 사용자 한 줄이 들어오면 그쪽이 우선 — UPDATE는 의견 없을 때만."""
         conn = _conn()
         conn.execute = AsyncMock()
+        conn.fetchrow = AsyncMock(return_value={"status": "pending", "user_input": None, "ai_verdict": None})   # 자기 행 잠금(재리뷰 1)
         out = {"verdict": "evidence", "index": 0, "reason": "r", "wrong_part": "w", "fix_summary": None, "proposed": None}
         with patch.object(svc, "get_conn", return_value=conn), \
              patch.object(svc, "_load_candidates", AsyncMock(return_value=_CANDS)), \
@@ -553,7 +607,7 @@ class TestNoOpinionRetarget:
             "status": "pending", "namespace_id": 1, "message_id": 3, "user_input": None, "ai_verdict": None,
             "candidates": json.dumps([{"key": "k-1", "target_type": "knowledge", "target_id": 1, "target_sub_id": None}]),
             "target_type": "auto", "target_id": None, "target_sub_id": None})
-        conn.execute = AsyncMock()
+        conn.execute = AsyncMock(return_value="UPDATE 1")
         redraft = AsyncMock()
         template = AsyncMock(return_value={"content": "【확인 필요: x】 c"})
         with patch.object(svc, "get_conn", return_value=conn),              patch.object(svc, "_load_original", AsyncMock(return_value={"content": "c"})),              patch.object(svc.draft_mod, "draft_correction", redraft),              patch.object(svc.draft_mod, "draft_review_template", template):
@@ -718,7 +772,8 @@ class TestRedraft:
     def _item(self, **kw):
         base = {"id": 7, "status": "pending", "target_type": "knowledge", "namespace_id": 1, "message_id": 3,
                 "target_id": 11, "target_sub_id": None,
-                "user_input": "기한이 틀렸어요", "original": json.dumps({"content": "기한 3일"}), "ai_verdict": None}
+                "user_input": "기한이 틀렸어요", "original": json.dumps({"content": "기한 3일"}), "ai_verdict": None,
+                "proposed": None}
         return {**base, **kw}
 
     @pytest.mark.asyncio
@@ -730,14 +785,16 @@ class TestRedraft:
         with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={"question": "q"})), \
              patch.object(svc.draft_mod, "draft_correction", drafted):
             out = await svc.redraft(7, {"id": 9}, "7일이 맞아요")
-        _, original, combined, _ctx = drafted.await_args.args
-        assert original == {"content": "기한 3일"}
+        _, original, combined, _ctx, base = drafted.await_args.args
+        assert original == {"content": "기한 3일"} and base is None          # 저장된 수정안이 없으면 원문에서 출발
         assert combined == "기한이 틀렸어요\n\n[담당자 요청 1] 7일이 맞아요"          # 신고 의견 뒤에 요청
         sql, item_id, proposed, verdict, *target = c.execute.await_args.args
         assert "status = 'pending'" in sql and item_id == 7
-        assert "target_type = $4" in sql and target == ["knowledge", 11, None]   # 그 사이 대상이 바뀌면 덮어쓰지 않음
+        # 그 사이 대상이 바뀌거나 수정안이 바뀌면(출발점이 낡음) 덮어쓰지 않음
+        assert "target_type = $4" in sql and "proposed IS NOT DISTINCT FROM $7" in sql and target == ["knowledge", 11, None, None]
         assert json.loads(proposed) == {"content": "기한 7일"}
-        assert json.loads(verdict)["redrafts"] == [{"by": 9, "feedback": "7일이 맞아요"}]
+        [entry] = json.loads(verdict)["redrafts"]
+        assert entry["by"] == 9 and entry["feedback"] == "7일이 맞아요" and entry["previous"] is None and entry["at"]
         assert out == {"id": 7, "proposed": {"content": "기한 7일"}, "marked": False}
 
     @pytest.mark.asyncio
@@ -793,6 +850,78 @@ class TestRedraft:
         c.fetchrow = AsyncMock(return_value=self._item(**item))
         with patch.object(svc, "get_conn", return_value=c), pytest.raises(ValueError):
             await svc.redraft(7, {"id": 9}, "x")
+
+
+class TestRedraftFromStoredProposal:
+    """다시 쓰기는 지금 저장된 수정안에서 출발한다(10/21 리뷰 M2) — 원문부터 다시 쓰면 정책 화면 직접 수정(신고 의견 없음)이나
+    카드 [직접 수정]으로 사람이 고친 본문·비고가 담당자 요청 한 줄에 말없이 사라졌다."""
+
+    _ORIG = {"policy_name": "반품", "category_path": [], "raw_body": "반품은 7일 이내", "remark": "옛 비고",
+             "chunk_text": "반품은 7일 이내"}
+    _HUMAN = {"chunk_text": "반품은 14일 이내(영업일)", "raw_body": "반품은 14일 이내(영업일)", "remark": "사람이 쓴 비고"}
+
+    def _run(self, stored, drafted_out, whole=True, user_input=None):
+        c = _conn()
+        c.fetchrow = AsyncMock(return_value={
+            "id": 7, "status": "pending", "target_type": "policy_narrative", "target_id": 10, "target_sub_id": 200,
+            "namespace_id": 1, "message_id": None, "user_input": user_input, "original": json.dumps(self._ORIG),
+            "proposed": json.dumps(stored) if stored is not None else None, "ai_verdict": None})
+        c.fetchval = AsyncMock(return_value=svc.PIPELINE_WHOLE if whole else "r1-x")
+        c.execute = AsyncMock(return_value="UPDATE 1")
+        drafted = AsyncMock(return_value=drafted_out)
+        return c, drafted
+
+    @pytest.mark.asyncio
+    async def test_policy_direct_edit_is_the_base_and_remark_kept(self):
+        c, drafted = self._run(self._HUMAN, {"chunk_text": "반품은 14일 이내(영업일), 단 식품 제외",
+                                             "raw_body": "반품은 14일 이내(영업일), 단 식품 제외"})
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
+             patch.object(svc.draft_mod, "draft_correction", drafted):
+            out = await svc.redraft(7, {"id": 9}, "식품은 제외라고 덧붙여 주세요")
+        _, original, combined, _ctx, base = drafted.await_args.args
+        assert base == {"chunk_text": self._HUMAN["chunk_text"], "raw_body": self._HUMAN["raw_body"]}   # 사람이 고친 안이 출발점
+        assert original == self._ORIG and combined == "[담당자 요청 1] 식품은 제외라고 덧붙여 주세요"
+        assert out["proposed"]["remark"] == "사람이 쓴 비고"                                         # 비고는 AI가 안 건드림
+        assert out["proposed"]["raw_body"] == out["proposed"]["chunk_text"] == "반품은 14일 이내(영업일), 단 식품 제외"
+        sql, *args = c.execute.await_args.args
+        [entry] = json.loads(args[2])["redrafts"]
+        assert entry["previous"] == self._HUMAN                                                     # 덮어쓴 안은 이력으로 되살릴 수 있다
+        assert json.loads(args[6]) == self._HUMAN and "proposed IS NOT DISTINCT FROM $7" in sql     # 그 사이 직접 수정되면 덮지 않음
+
+    @pytest.mark.asyncio
+    async def test_marked_review_template_starts_from_original(self):
+        """【확인 필요】 표시가 남은 안은 AI 검토 초안(사람이 고친 안은 저장 때 표시가 막힘) — 원문에서 출발해 표시 없는 안을 만든다."""
+        marked = {"chunk_text": "반품은 7일【확인 필요: 기한】 이내", "raw_body": "반품은 7일【확인 필요: 기한】 이내"}
+        c, drafted = self._run(marked, {"chunk_text": "반품은 3일 이내", "raw_body": "반품은 3일 이내"})
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
+             patch.object(svc.draft_mod, "draft_correction", drafted):
+            out = await svc.redraft(7, {"id": 9}, "맞는 값은 3일")
+        assert drafted.await_args.args[4] is None and out["marked"] is False
+        assert "remark" not in out["proposed"]                                                       # 비고 칸이 없던 안 — 그대로
+
+    @pytest.mark.asyncio
+    async def test_whole_policy_chunk_only_change_relative_to_base(self):
+        """v0: AI가 조각만 고치고 원문 칸은 출발점(현재 수정안) 그대로 두면 조각이 새 원문 — 사람이 고친 원문으로 되돌아가지 않는다."""
+        c, drafted = self._run(self._HUMAN, {"chunk_text": "반품은 10일 이내", "raw_body": self._HUMAN["raw_body"]})
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
+             patch.object(svc.draft_mod, "draft_correction", drafted):
+            out = await svc.redraft(7, {"id": 9}, "10일로")
+        assert out["proposed"]["raw_body"] == out["proposed"]["chunk_text"] == "반품은 10일 이내"
+
+    def test_prompt_carries_base_block_and_rule(self):
+        p = draft.build_prompt("policy_narrative", {"raw_body": "옛"}, "[담당자 요청 1] x", None, {"raw_body": "사람 안"})
+        assert "[현재 수정안]\n" in p and "사람 안" in p and p.index("[원문]") < p.index("[현재 수정안]") < p.index("[사용자 의견]")
+        assert "[현재 수정안]" not in draft.build_prompt("knowledge", {"content": "c"}, "x")
+
+    @pytest.mark.asyncio
+    async def test_base_rule_added_to_system_only_with_base(self):
+        llm = MagicMock()
+        llm.generate_once = AsyncMock(return_value='{"content": "새"}')
+        with patch.object(draft, "get_llm_provider", return_value=llm):
+            await draft.draft_correction("knowledge", {"content": "c"}, "x", None, {"content": "사람 안"})
+            assert "[현재 수정안]이 있으면" in llm.generate_once.await_args.kwargs["system"]
+            await draft.draft_correction("knowledge", {"content": "c"}, "x")
+            assert "[현재 수정안]이 있으면" not in llm.generate_once.await_args.kwargs["system"]
 
 
 class TestApproveShownProposal:
@@ -851,7 +980,7 @@ class TestRetargetDropsOldRequests:
             "status": "pending", "namespace_id": 1, "message_id": 3, "candidates": "[]", "user_input": "u",
             "ai_verdict": json.dumps({"redrafts": [{"by": 9, "feedback": "3번째 문단 빼 주세요"}]}),
             "target_type": "knowledge", "target_id": 1, "target_sub_id": None})
-        conn.execute = AsyncMock()
+        conn.execute = AsyncMock(return_value="UPDATE 1")
         with patch.object(svc, "get_conn", return_value=conn), \
              patch.object(svc, "_load_original", AsyncMock(return_value={"question": "q"})), \
              patch.object(svc.draft_mod, "draft_correction", AsyncMock(return_value={"content": "new"})):
@@ -864,7 +993,7 @@ class TestRetargetDropsOldRequests:
         c = _conn()
         c.fetchrow = AsyncMock(return_value={"id": 1, "status": "pending", "target_type": "missing", "target_id": None,
                                              "target_sub_id": None, "namespace_id": 1, "message_id": 3, "user_input": "u",
-                                             "original": "{}", "ai_verdict": json.dumps(verdict)})
+                                             "original": "{}", "ai_verdict": json.dumps(verdict), "proposed": None})
         c.execute = AsyncMock(return_value="UPDATE 1")
         drafted = AsyncMock(return_value={"content": "x"})
         with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
@@ -879,10 +1008,36 @@ class TestRetargetDropsOldRequests:
             "status": "pending", "namespace_id": 1, "message_id": 3, "candidates": "[]", "user_input": "u",
             "ai_verdict": json.dumps({"verdict": "evidence", "redrafts": [{"by": 9, "feedback": "f"}]}),
             "target_type": "knowledge", "target_id": 1, "target_sub_id": None})
-        conn.execute = AsyncMock()
+        conn.execute = AsyncMock(return_value="UPDATE 1")
         with patch.object(svc, "get_conn", return_value=conn), \
              patch.object(svc, "_load_original", AsyncMock(return_value={})), \
              patch.object(svc.draft_mod, "draft_correction", AsyncMock(return_value={"content": "new"})):
             await svc.retarget(1, {"id": 9}, "missing")
         verdict = json.loads(conn.execute.await_args.args[8])
         assert verdict["retargeted"]["to"] == "missing" and "redrafts" not in verdict
+
+
+class TestApprovePolicyCaches:
+    """정책 정정 승인 뒤엔 모든 업무 영역 답변 캐시 + 정책 색인을 비운다(10/21) — 채팅이 정책서를 여러 영역에 걸쳐 찾으므로."""
+
+    @pytest.mark.asyncio
+    async def test_policy_approve_clears_all_policy_caches(self):
+        item = {"id": 7, "status": "pending", "target_type": "policy_narrative", "target_id": 11, "target_sub_id": 3,
+                "namespace_id": 1, "proposed": json.dumps({"chunk_text": "14일", "raw_body": "14일"}),
+                "original": json.dumps({"chunk_text": "7일", "raw_body": "7일"})}
+        locked = {k: item[k] for k in ("status", "proposed", "target_type", "target_id", "target_sub_id")}
+        c = _conn()
+        c.fetchrow = AsyncMock(side_effect=[item, locked])
+        c.fetchval = AsyncMock(return_value="ns")
+        c.execute = AsyncMock()
+        inv_all, inv_ns = AsyncMock(), AsyncMock()
+        with patch.object(svc, "get_conn", return_value=c), \
+             patch.object(svc, "_prepare_policy", AsyncMock(return_value={})), \
+             patch.object(svc, "_apply_policy", AsyncMock(return_value=99)), \
+             patch.object(svc, "_close_superseded", AsyncMock(return_value=0)), \
+             patch.object(sys.modules["service.policy.caches"], "invalidate_policy_caches", inv_all), \
+             patch.dict(sys.modules, {"shared.cache": MagicMock(invalidate_namespace=inv_ns)}):
+            out = await svc.approve(7, {"id": 9}, None)
+        assert out["status"] == "approved"
+        inv_all.assert_awaited_once()
+        inv_ns.assert_not_awaited()        # 영역 하나만 비우던 옛 경로는 정책엔 안 탄다

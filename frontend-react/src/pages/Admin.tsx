@@ -1,5 +1,5 @@
 import { Component, useEffect, type ReactNode } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
@@ -10,7 +10,7 @@ import { UserSection, PartSection } from '../components/admin/UserManager';
 import { PartDomainSection } from '../components/admin/PartDomainSection';
 import { CachePanel } from '../components/admin/CachePanel';
 import { VocEmailPanel } from '../components/admin/VocEmailPanel';
-import { PolicyPanel } from '../components/admin/PolicyPanel';
+import { PolicyPanel } from '../components/admin/policy/PolicyPanel';
 import { CorrectionReviewTab } from '../components/admin/CorrectionReviewTab';
 import { useAuthStore } from '../store/useAuthStore';
 import { useNamespaceAccess } from '../utils/useNamespaceAccess';
@@ -42,12 +42,15 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 }
 
 // 정정 요청(품질) — 지식·정책 공통이라 지식 탭에서 뺐다(10/21). 처리는 그 업무 영역 담당 파트 + 관리자
+// ?focus=N — 정책서 화면의 "정정 #N 검토 중 → 정정 요청에서 보기"가 그 카드로 바로 오게(10/21)
 function CorrectionsPanel() {
   const { selectedNs, canModifyNs } = useNamespaceAccess();
+  const [params] = useSearchParams();
+  const focus = Number(params.get('focus')) || null;
   if (!canModifyNs) {
     return <p className="text-sm text-slate-400 py-6 text-center">이 업무 영역의 정정 요청은 담당 파트와 관리자만 처리할 수 있어요.</p>;
   }
-  return <CorrectionReviewTab namespace={selectedNs} />;
+  return <CorrectionReviewTab namespace={selectedNs} focusId={focus} />;
 }
 
 function NotReady({ what }: { what: string }) {
@@ -79,7 +82,7 @@ export default function Admin() {
       <div className="flex-1 overflow-y-auto p-6">
         <TabErrorBoundary key={current}>
           {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} />}
-          {current === 'k.policy'      && <PolicyPanel />}
+          {current === 'k.policy'      && <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} />}
           {current === 'k.docs'        && <KnowledgeTable />}
           {current === 'k.glossary'    && <GlossaryTable />}
           {current === 'k.system'      && <NotReady what="시스템 정보(DB 칼럼·공통코드)" />}

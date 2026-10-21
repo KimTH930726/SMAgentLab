@@ -15,6 +15,7 @@ import time
 from typing import Optional, Sequence, Union
 
 from core.database import get_conn
+from service.policy.visibility import searchable_sql
 from trustkit.retrieval.bm25 import BM25Index
 
 _CACHE_TTL = 600.0
@@ -38,7 +39,7 @@ async def search(ns_ids: Union[int, Sequence[int]], query: str, top_k: int,
         async with get_conn() as conn:
             rows = await conn.fetch(
                 "SELECT id, policy_name, array_to_string(category_path, ' ') AS cat, coalesce(raw_body, '') AS body "
-                "FROM policy_item WHERE namespace_id = ANY($1::int[]) AND status NOT IN ('deprecated', 'rejected')", list(key))
+                f"FROM policy_item WHERE namespace_id = ANY($1::int[]) AND {searchable_sql('policy_item')}", list(key))
         idx = BM25Index([(r["id"], f"{r['policy_name']} {r['cat']} {r['body']}") for r in rows])
         _cache[key] = idx
     hits = idx.score(query, top_k * (4 if category else 1))

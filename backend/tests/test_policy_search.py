@@ -137,8 +137,9 @@ class TestSearchPolicy:
 
         param_call = conn.fetch.call_args_list[0]
         chunk_call = conn.fetch.call_args_list[1]
-        assert "status NOT IN ('deprecated', 'rejected')" in param_call.args[0]
-        assert "status NOT IN ('deprecated', 'rejected')" in chunk_call.args[0]
+        # 검색 대상 조건은 한 곳(searchable_sql, 10/21 — v0 검토 대기도 제외)
+        assert search.searchable_sql("i") in param_call.args[0]
+        assert search.searchable_sql("i") in chunk_call.args[0]
         assert len(param_call.args) == 4  # sql + ns_id + like + top_k (category 없음)
 
     @pytest.mark.asyncio

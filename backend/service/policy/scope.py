@@ -11,7 +11,10 @@
 """
 from __future__ import annotations
 
-_SQL = """
+from service.policy.visibility import searchable_sql
+
+# 정책이 "있다" = 검색에 보이는 정책(10/21 — v0 검토 대기만 있는 영역은 범위에 안 넣는다)
+_SQL = f"""
 WITH me AS (SELECT id, kind FROM ops_namespace WHERE name = $1),
 linked AS (
     SELECT n.id FROM ops_link l, me, ops_namespace n
@@ -28,7 +31,7 @@ cand AS (
     WHERE n.kind <> 'policy_test' AND (SELECT kind FROM me) <> 'policy_test' AND NOT EXISTS (SELECT 1 FROM linked)
 )
 SELECT c.id FROM cand c
-WHERE EXISTS (SELECT 1 FROM policy_item i WHERE i.namespace_id = c.id AND i.status NOT IN ('deprecated', 'rejected'))
+WHERE EXISTS (SELECT 1 FROM policy_item i WHERE i.namespace_id = c.id AND {searchable_sql('i')})
 GROUP BY c.id ORDER BY min(c.ord), c.id
 """
 

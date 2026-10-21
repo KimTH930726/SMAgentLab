@@ -1,5 +1,8 @@
 """개선 원장 서비스 — 근거 정정(correction)·지식 누락(missing_knowledge) 신호의 접수·승인·반려.
 
+출처(source): 채팅 "답변 틀림"·평가 게이트 "이상해요" + 정책서 화면의 직접 수정·AI 수정 제안(policy_direct/policy_ai, 10/21) —
+정책 내용 변경은 전부 이 원장의 제안이고 정정 요청에서 승인할 때만 새 버전이 된다(정책 테이블에 대기 행을 만들지 않는다).
+
 원칙(2026-10-01, docs: AIOps/지식관리_고도화방안.md 방안 4): 사용자는 고치지 않고 신호만 준다. 사용자 입력과
 AI 수정안은 **이 원장에만** 저장되고, 지식/정책 테이블은 담당자 승인 순간에만 바뀐다(버전 교체, 이전 버전
 보존). 그래서 "승인 전 검색 미노출"이 상태 필터가 아니라 구조로 보장된다.
@@ -9,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 import asyncpg
@@ -17,9 +21,7 @@ from core.config import settings
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
 from service.improvement import draft as draft_mod
-
-# 원문 통째 정책(v0) 표시 — service/policy/v0_convert.PIPELINE_WHOLE과 같은 값(테스트가 service.policy를 가짜 패키지로 두어 import 대신 값)
-PIPELINE_WHOLE = "v0_whole"
+from service.policy.visibility import PIPELINE_WHOLE, POLICY_TARGETS, is_searchable, open_correction_sql, searchable_sql
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +38,26 @@ SOURCE_EVAL_GATE = "eval_gate"
 # 진입점 구분 — AI 판정이 얼마나 맞았는지(담당자가 대상을 바꾼 비율)를 재려면 직접 지정과 나눠 둬야 한다
 SOURCE_DIRECT = "chat_evidence_card"
 SOURCE_AUTO = "chat_answer_auto"
+# 정책서 화면에서 올린 수정 제안(2026-10-21, v0 재구축 2단계) — 내용 변경은 모두 이 원장의 제안이고 정정 요청에서만 승인한다.
+# 직접 수정 = 담당자가 쓴 원문 그대로(AI 호출 없음), AI 제안 = 한 줄 요청 → AI 초안. 승인하면 같은 _apply_policy로 새 버전.
+SOURCE_POLICY_DIRECT = "policy_direct"
+SOURCE_POLICY_AI = "policy_ai"
+POLICY_SOURCES = (SOURCE_POLICY_DIRECT, SOURCE_POLICY_AI)
+_POLICY_TARGETS = POLICY_TARGETS   # 정책 화면(catalog)과 같은 목록(10/21 리뷰 L10)
+# pg_advisory_xact_lock(이 값, 정책 항목 id) — 같은 정책에 대기 정정 두 개가 동시에 생기지 않게. 정책을 대상으로 정하는 모든 길
+# (정책 화면 제안·채팅 신고·AI 추정·대상 변경)이 이 잠금 + _pending_policy_correction 확인을 거친다(10/21 리뷰 M1)
+# 잠금 순서는 어느 길이든 "자기 원장 행(FOR UPDATE) → 이 잠금" — 순서가 엇갈리면 교착(10/21 재리뷰 1).
+# 쓰는 advisory 키(겹치면 남의 잠금을 기다린다, 10/21 재리뷰 6): 7301 = 원문 원장(ingestion/source_ledger.py),
+# 7302 = 이것, 1개 인자 = 지식 단건 등록(knowledge/service.py, 네임스페이스 id)
+_POLICY_LOCK_KEY = 7302
 
 
 class ConflictError(Exception):
-    """이미 검토 중인 같은 신고 등 — 라우터가 409로 변환."""
+    """이미 검토 중인 같은 신고 등 — 라우터가 409로 변환. existing_id = 이미 검토 중인 정정(화면이 그 카드로 안내)."""
+
+    def __init__(self, message: str, existing_id: Optional[int] = None):
+        super().__init__(message)
+        self.existing_id = existing_id
 
 
 def _fallback_chunk_text(policy_name: str, category_path: list[str], raw_body: str) -> str:
@@ -60,12 +78,12 @@ async def _load_original(conn, ns_id: int, target_type: str, target_id: Optional
 
     if target_type in ("policy_param", "policy_narrative"):
         item = await conn.fetchrow(
-            "SELECT id, policy_name, category_path, raw_body FROM policy_item "
-            "WHERE id = $1 AND namespace_id = $2 AND status NOT IN ('deprecated', 'rejected')", target_id, ns_id)
+            "SELECT id, policy_name, category_path, raw_body, remark FROM policy_item "
+            f"WHERE id = $1 AND namespace_id = $2 AND {searchable_sql('policy_item')}", target_id, ns_id)   # 검색 대상과 같은 기준 — v0 검토 대기 버전은 정정 대상이 못 된다(10/21)
         if not item:
             raise ValueError("정정 대상 정책을 찾을 수 없거나 이미 바뀌었습니다.")
         base = {"policy_name": item["policy_name"], "category_path": list(item["category_path"] or []),
-                "raw_body": item["raw_body"]}
+                "raw_body": item["raw_body"], "remark": item.get("remark")}   # 비고도 고칠 수 있다(10/21) — 수정안에 비고가 없으면 그대로
         if target_type == "policy_param":
             p = await conn.fetchrow(
                 "SELECT name, condition, value, unit FROM policy_param WHERE id = $1 AND policy_item_id = $2",
@@ -248,13 +266,16 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
         target_type, target_id, target_sub_id, original, proposed, verdict = await _identify(candidates, context, user_input)
     stored_candidates = [{k: c[k] for k in ("key", "target_type", "target_id", "target_sub_id", "label")}
                          | {"preview": _preview(c["target_type"], c["original"])} for c in candidates]
-    values = (KIND_BY_TARGET[target_type], SOURCE_AUTO if auto else SOURCE_DIRECT, ns_id, message_id,
-              user.get("id"), target_type, target_id, target_sub_id, user_input,
-              json.dumps(original, ensure_ascii=False),
-              json.dumps(proposed, ensure_ascii=False) if proposed is not None else None,
-              json.dumps(stored_candidates, ensure_ascii=False),
-              json.dumps(verdict, ensure_ascii=False) if verdict is not None else None)
+
+    def _values() -> tuple:
+        return (KIND_BY_TARGET[target_type], SOURCE_AUTO if auto else SOURCE_DIRECT, ns_id, message_id,
+                user.get("id"), target_type, target_id, target_sub_id, user_input,
+                json.dumps(original, ensure_ascii=False),
+                json.dumps(proposed, ensure_ascii=False) if proposed is not None else None,
+                json.dumps(stored_candidates, ensure_ascii=False),
+                json.dumps(verdict, ensure_ascii=False) if verdict is not None else None)
     conflict = False
+    busy = None   # 이 정책을 이미 검토 중인 다른 정정(직접 지정이면 409로 그 번호를 알린다)
     async with get_conn() as conn:
         async with conn.transaction():
             # "답변 틀림"을 누른 순간 같은 답변으로 신호 건이 먼저 생겨 있다(record_answer_signal) —
@@ -265,17 +286,29 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
                     "SELECT id FROM ops_improvement_item WHERE message_id = $1 AND reporter_user_id = $2 "
                     "AND kind = 'answer_signal' AND status = 'pending' ORDER BY id DESC LIMIT 1 FOR UPDATE",
                     message_id, user.get("id"))
-            try:
-                item_id = await _write_item(conn, values, signal_id)
-            except asyncpg.UniqueViolationError:
-                # 같은 근거로 이미 대기 중인 신고가 있다 — 방금 생긴 신호 건은 그 신고와 중복이라 지운다(데이터 손실 없음)
-                conflict = True
-                if signal_id is not None:
-                    await conn.execute("DELETE FROM ops_improvement_item WHERE id = $1", signal_id)
+            # 정책 대상이면 "정책당 대기 정정 1건"(10/21 리뷰 M1) — 신호 건 자신(AI 추정이 이미 이 정책을 골라 둔 경우)은 빼고 본다.
+            # 직접 지정(근거 카드)은 사용자가 고른 대상이라 409로 알리고(신호 건은 그대로 — "답변 틀림" 기록은 남김),
+            # 자동(AI가 고름)은 사용자가 대상을 고른 적이 없으니 신고는 받되 대상을 비워(auto) 둔다 — 두 번째 대기 정정을 만들지 않는다.
+            existing = await _claim_policy_slot(conn, target_type, target_id, signal_id)
+            if existing is not None and not auto:
+                busy = existing
+            else:
+                if existing is not None:
+                    verdict = _park_on_existing(verdict, existing)
+                    target_type, target_id, target_sub_id, original, proposed = "auto", None, None, context, None
+                try:
+                    item_id = await _write_item(conn, _values(), signal_id)
+                except asyncpg.UniqueViolationError:
+                    # 같은 근거로 이미 대기 중인 신고가 있다 — 방금 생긴 신호 건은 그 신고와 중복이라 지운다(데이터 손실 없음)
+                    conflict = True
+                    if signal_id is not None:
+                        await conn.execute("DELETE FROM ops_improvement_item WHERE id = $1", signal_id)
+    if busy is not None:
+        raise ConflictError(f"이 정책은 이미 다른 정정(#{busy})으로 검토 중이에요 — 담당자가 처리하면 반영돼요.", existing_id=busy)
     if conflict:  # 커밋한 뒤에 알린다(트랜잭션 안에서 raise하면 중복 신호 삭제까지 되돌려짐)
         raise ConflictError("이 근거에 대해 이미 검토 중인 정정 신고가 있습니다.")
 
-    if proposed is None and target_type != "answer":
+    if proposed is None and target_type not in ("answer", "auto"):
         proposed = await draft_mod.draft_correction(
             target_type, original, user_input, None if target_type == "missing" else context)
         if proposed is not None:
@@ -284,6 +317,191 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
                                    json.dumps(proposed, ensure_ascii=False), item_id)
     return {"id": item_id, "status": "pending", "kind": KIND_BY_TARGET[target_type], "target_type": target_type,
             "ai_verdict": verdict, "original": original, "proposed": proposed}
+
+
+def _norm_remark(v) -> Optional[str]:
+    s = str(v or "").strip()
+    return s or None
+
+
+def _remark_changed(original: dict, proposed: Optional[dict]) -> bool:
+    """수정안이 비고를 바꾸는가 — 비고 키가 없으면 "그대로"(AI 초안·채팅 정정은 비고를 안 건드린다)."""
+    return bool(proposed) and "remark" in proposed and _norm_remark(proposed.get("remark")) != _norm_remark((original or {}).get("remark"))
+
+
+def _clean_proposal(target_type: str, proposed: dict, *, whole: bool) -> dict:
+    """저장할 수정안 — 그 대상의 칸 + (정책이면) 비고만 남긴다(모르는 키는 버림). 원문 통째(v0) 정책은 서술 조각 = 원문이라
+    둘을 같은 글로 맞춘다(따로 놀면 _policy_new_raw가 어느 쪽을 쓸지 골라야 한다)."""
+    allowed = draft_mod._FIELDS[target_type] + (("remark",) if target_type in _POLICY_TARGETS else ())
+    out = {k: (None if proposed.get(k) is None else str(proposed.get(k))) for k in allowed if k in proposed}
+    if whole and target_type == "policy_narrative":
+        body = out["raw_body"] if out.get("raw_body") is not None else out.get("chunk_text")
+        if body is not None:
+            out["raw_body"] = out["chunk_text"] = body
+    return out
+
+
+def _clean_policy_draft(target_type: str, drafted: dict, ref_raw: Optional[str], *, whole: bool) -> dict:
+    """AI 초안 → 저장할 수정안. 원문 통째(v0)에서 AI가 조각 쪽만 고쳤으면(원문 칸은 출발점 그대로) 그게 새 원문(_policy_new_raw와 같은 규칙).
+    ref_raw = AI에게 준 출발점의 원문(처음 초안 = 원문, 다시 쓰기 = 현재 수정안). 정책 화면 AI 제안과 다시 쓰기가 같이 쓴다(10/21 리뷰 M2)."""
+    if (whole and target_type == "policy_narrative" and drafted.get("raw_body") == ref_raw
+            and drafted.get("chunk_text") not in (None, ref_raw)):
+        drafted = {**drafted, "raw_body": drafted["chunk_text"]}
+    return _clean_proposal(target_type, drafted, whole=whole)
+
+
+def _unchanged(target_type: str, original: dict, proposed: dict) -> bool:
+    return draft_mod.is_unchanged(target_type, original, proposed) and not _remark_changed(original, proposed)
+
+
+async def _pending_policy_correction(conn, item_id: int, exclude_id: Optional[int] = None) -> Optional[int]:
+    """이 정책 항목을 겨눈 대기 중 정정(출처 무관) — 정책 화면의 "정정 #N 검토 중"과 중복 제안 막기가 같은 기준을 쓴다.
+    exclude_id = 자기 자신(신호 건을 채우거나 대상을 바꾸는 그 건)은 빼고 본다."""
+    return await conn.fetchval(
+        open_correction_sql("$1", "$2", extra=" AND o.id IS DISTINCT FROM $3::int"),
+        item_id, list(_POLICY_TARGETS), exclude_id)
+
+
+async def _claim_policy_slot(conn, target_type: Optional[str], target_id: Optional[int],
+                             exclude_id: Optional[int] = None) -> Optional[int]:
+    """정책 대상이면 그 정책 항목 잠금을 잡고, 이미 대기 중인 다른 정정 id를 돌려준다(없으면 None = 써도 됨). 정책이 아니면 None.
+    트랜잭션 안에서 부르고 같은 트랜잭션에서 쓴다 — 잠금이 커밋까지 유지돼 확인과 쓰기 사이에 다른 길이 끼어들지 못한다.
+    왜(10/21 리뷰 M1): 유니크 인덱스는 "같은 신고자" 단위라, 정책 화면 제안 #10이 있는데 채팅 신고 #11이 같은 정책에 생기면
+    #11 승인 때 _close_superseded가 #10을 자동 종료했다(담당자가 쓴 수정안이 말없이 사라짐)."""
+    if target_type not in _POLICY_TARGETS or target_id is None:
+        return None
+    await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", _POLICY_LOCK_KEY, target_id)
+    return await _pending_policy_correction(conn, target_id, exclude_id)
+
+
+def _duplicate_message(existing_id: int) -> str:
+    return f"이 정책은 이미 정정 #{existing_id} 검토 중이에요 — 품질 › 정정 요청에서 그 건을 처리한 뒤 다시 올리세요."
+
+
+def _park_on_existing(verdict: Optional[dict], existing_id: int) -> dict:
+    """AI가 고른 정책에 이미 검토 중 정정이 있을 때 — 신고(사용자 한 줄·AI 판단)는 남기되 대상은 비운다(target='auto').
+    정정 #N과 같은 정책이라 담당자가 그 건에서 함께 보면 되고, 굳이 이 건을 그 정책으로 옮기려 하면 대상 변경이 409로 막는다."""
+    meta = dict(verdict or {})
+    note = f"이 정책은 이미 정정 #{existing_id} 검토 중이라 대상을 비워 뒀어요 — 그 건에서 함께 확인하세요."
+    meta["reason"] = f"{meta['reason']} · {note}" if meta.get("reason") else note
+    meta["duplicate_of"] = existing_id
+    meta.pop("fix_summary", None)   # 고칠 대상을 비웠으니 "이렇게 고치면 돼요"는 이 건의 안이 아니다(10/21 재리뷰 4)
+    return meta
+
+
+async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mode: str,
+                                 proposed: Optional[dict], user_input: Optional[str]) -> dict:
+    """정책서 화면의 수정 제안 → 원장에 1건(정책 테이블은 그대로 — 승인 때만 새 버전). 대상 = 그 정책의 서술 조각(v0는 조각 1개 = 원문).
+    직접 수정(mode=policy_direct)은 받은 원문·비고를 그대로 수정안으로(AI 호출 없음), AI 제안(policy_ai)은 한 줄 요청으로 AI 초안.
+    같은 정책에 대기 중 정정이 있으면(채팅 신고 포함) 만들지 않고 ConflictError(existing_id) — 한 정책에 안이 둘이면 승인 때 하나가
+    다른 하나를 덮는다. 확인·저장은 정책 항목 단위 잠금 안에서(동시에 두 번 눌러도 1건)."""
+    if mode not in POLICY_SOURCES:
+        raise ValueError("알 수 없는 수정 방식입니다.")
+    user_input = (user_input or "").strip() or None
+    if mode == SOURCE_POLICY_AI and not user_input:
+        raise ValueError("AI에게 어떻게 고칠지 한 줄로 적어 주세요.")
+    if mode == SOURCE_POLICY_DIRECT and not proposed:
+        raise ValueError("수정한 원문이 없습니다.")
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            raise ValueError(f"업무 영역을 찾을 수 없습니다: {namespace}")
+        row = await conn.fetchrow(
+            "SELECT i.id, i.pipeline_version, (SELECT c.id FROM policy_chunk c WHERE c.policy_item_id = i.id "
+            "ORDER BY c.chunk_idx, c.id LIMIT 1) AS chunk_id FROM policy_item i "
+            f"WHERE i.id = $1 AND i.namespace_id = $2 AND {searchable_sql('i')}", item_id, ns_id)
+        if not row:
+            raise ValueError("고칠 정책을 찾을 수 없거나 그 사이 바뀌었어요 — 새로고침하세요.")
+        if row["chunk_id"] is None:
+            raise ValueError("이 정책엔 검색 조각이 없어 수정 제안을 만들 수 없어요.")
+        chunk_id = row["chunk_id"]
+        original = await _load_original(conn, ns_id, "policy_narrative", item_id, chunk_id, None)
+    whole = row["pipeline_version"] == PIPELINE_WHOLE
+    stored = None
+    if mode == SOURCE_POLICY_DIRECT:
+        stored = _clean_proposal("policy_narrative", proposed or {}, whole=whole)
+        _validate_proposed("policy_narrative", stored, editing=True)
+        if _unchanged("policy_narrative", original, stored):
+            raise ValueError("바뀐 내용이 없어요 — 원문이나 비고를 고친 뒤 올리세요.")
+    values = ("correction", mode, ns_id, None, user.get("id"), "policy_narrative", item_id, chunk_id, user_input,
+              json.dumps(original, ensure_ascii=False),
+              json.dumps(stored, ensure_ascii=False) if stored is not None else None, "[]", None)
+    new_id = existing = None
+    gone = False
+    async with get_conn() as conn:
+        async with conn.transaction():
+            existing = await _claim_policy_slot(conn, "policy_narrative", item_id)
+            if existing is None:
+                # 위의 "검색 대상인가" 확인은 잠금 전 — 그 사이 다른 정정 승인으로 이 버전이 은퇴했으면 낡은 버전에 제안이 붙는다.
+                # 잠금 안에서 다시 본다(10/21 재리뷰 3). 진행 중인 승인은 아직 대기 건이라 위 확인에서 먼저 걸린다.
+                gone = await conn.fetchval(
+                    f"SELECT NOT EXISTS (SELECT 1 FROM policy_item i WHERE i.id = $1 AND i.namespace_id = $2 AND {searchable_sql('i')})",
+                    item_id, ns_id)
+            if existing is None and not gone:
+                try:
+                    new_id = await _write_item(conn, values, None)
+                except asyncpg.UniqueViolationError:   # 같은 사람의 같은 대상 대기 건(유니크 인덱스) — 위 확인과 같은 뜻
+                    existing = await _pending_policy_correction(conn, item_id)
+    if gone:
+        raise ValueError("고칠 정책을 찾을 수 없거나 그 사이 바뀌었어요 — 새로고침하세요.")
+    if new_id is None:
+        if existing is None:
+            raise ConflictError("이 정책에 이미 검토 중인 정정이 있어요 — 정정 요청에서 확인하세요.")
+        raise ConflictError(_duplicate_message(existing), existing_id=existing)
+
+    ai_failed = False
+    if mode == SOURCE_POLICY_AI:
+        drafted = await draft_mod.draft_correction("policy_narrative", original, user_input, None)
+        if drafted is None:
+            ai_failed = True   # 제안은 남긴다 — 정정 요청에서 [AI 초안 만들기]나 [직접 수정]으로 이어 간다(화면이 알림)
+        else:
+            stored = _clean_policy_draft("policy_narrative", drafted, original.get("raw_body"), whole=whole)
+            async with get_conn() as conn:
+                # AI가 쓰는 30초~2분 사이 담당자가 [직접 수정]·[AI 초안 만들기]로 안을 넣었으면 덮어쓰지 않는다(리뷰 M2 10/21)
+                res = await conn.execute(
+                    "UPDATE ops_improvement_item SET proposed = $1::jsonb WHERE id = $2 AND status = 'pending' AND proposed IS NULL",
+                    json.dumps(stored, ensure_ascii=False), new_id)
+            if res.endswith(" 0"):
+                stored = None   # 화면엔 "이미 다른 안이 있음" — 정정 요청에서 확인
+    return {"id": new_id, "status": "pending", "kind": "correction", "target_type": "policy_narrative", "source": mode,
+            "original": original, "proposed": stored, "ai_failed": ai_failed}
+
+
+async def update_proposed(item_id: int, editor: dict, proposed: dict) -> dict:
+    """정정 요청 카드의 [직접 수정] — 담당자가 고친 안으로 저장된 수정안을 바꾼다(10/21 사용자 정정: 아는 사람이 직접 고치는 게 빠를 수 있다).
+    반영은 여전히 [승인]에서만(승인은 화면에 보인 안을 보내 그 사이 바뀌었으면 409). 검사는 승인과 같다(필수 칸·【확인 필요】·원문과 같음).
+    누가 언제 고쳤는지 ai_verdict.edits에 남긴다. 대기 중이고 대상이 그대로일 때만."""
+    async with get_conn() as conn:
+        item = await conn.fetchrow("SELECT * FROM ops_improvement_item WHERE id = $1", item_id)
+        if not item or item["status"] != "pending":
+            raise ValueError("대기 중인 신고가 아닙니다.")
+        target_type = item["target_type"]
+        if target_type not in _REDRAFT_TARGETS:
+            raise ValueError("고칠 대상(근거)이 정해진 신고만 직접 수정할 수 있어요 — 먼저 정정 대상을 고르세요.")
+        whole = False
+        if target_type in _POLICY_TARGETS:
+            whole = (await conn.fetchval("SELECT pipeline_version FROM policy_item WHERE id = $1", item["target_id"])) == PIPELINE_WHOLE
+    original = _json(item["original"]) or {}
+    cleaned = _clean_proposal(target_type, proposed or {}, whole=whole)
+    if "remark" not in original:
+        # 10/21 이전 신고는 원문 스냅샷에 비고가 없다 — 그 비고를 모르는 채 비고 칸을 받으면 승인 때 실제 비고를 지울 수 있어 버린다
+        cleaned.pop("remark", None)
+    _validate_proposed(target_type, cleaned, editing=True)
+    if _unchanged(target_type, original, cleaned):
+        raise ValueError("기존 내용과 같아요 — 고칠 게 없으면 반려(종료)하세요.")
+    verdict = dict(_json(item["ai_verdict"]) or {})
+    verdict["edits"] = [*verdict.get("edits", []), {"by": editor.get("id"), "by_name": editor.get("username"),
+                                                    "at": datetime.now(timezone.utc).isoformat()}]
+    async with get_conn() as conn:
+        res = await conn.execute("""
+            UPDATE ops_improvement_item SET proposed = $2::jsonb, ai_verdict = $3::jsonb
+            WHERE id = $1 AND status = 'pending'
+              AND target_type = $4 AND target_id IS NOT DISTINCT FROM $5 AND target_sub_id IS NOT DISTINCT FROM $6
+        """, item_id, json.dumps(cleaned, ensure_ascii=False), json.dumps(verdict, ensure_ascii=False),
+            target_type, item["target_id"], item["target_sub_id"])
+    if res.endswith(" 0"):
+        raise ConflictError("그 사이 처리됐거나 정정 대상이 바뀐 신고예요 — 새로고침해서 확인하세요.")
+    return {"id": item_id, "proposed": cleaned}
 
 
 async def record_answer_signal(ns_id: int, message_id: int, reporter_id: Optional[int]) -> Optional[int]:
@@ -342,15 +560,28 @@ async def analyze_signal(item_id: int, ns_id: int, message_id: int) -> bool:
             meta |= {"key": c["key"], "label": c["label"], "preview": _preview(c["target_type"], c["original"])}
         elif out["verdict"] == "answer_error":
             target_type = "answer"
+        proposed = out["proposed"]
         async with get_conn() as conn:
-            res = await conn.execute("""
-                UPDATE ops_improvement_item
-                SET kind = 'answer_signal', target_type = $2, target_id = $3, target_sub_id = $4, original = $5::jsonb,
-                    proposed = $6::jsonb, ai_verdict = $7::jsonb
-                WHERE id = $1 AND status = 'pending' AND user_input IS NULL AND ai_verdict IS NULL
-            """, item_id, target_type, target_id, sub_id, json.dumps(original, ensure_ascii=False),
-                json.dumps(out["proposed"], ensure_ascii=False) if out["proposed"] else None,
-                json.dumps(meta, ensure_ascii=False))
+            async with conn.transaction():
+                # 자기 행을 먼저 잠근다 — create_item(한 줄 의견)은 신호 행 → 정책 잠금 순서라, 여기서 정책 잠금부터 잡으면
+                # "답변 틀림" 직후 한 줄을 보낼 때 서로 기다려 교착(한 줄 유실)이 났다(10/21 재리뷰 1). 이미 의견·판정이 있으면 손대지 않는다.
+                own = await conn.fetchrow(
+                    "SELECT status, user_input, ai_verdict FROM ops_improvement_item WHERE id = $1 FOR UPDATE", item_id)
+                if not own or own["status"] != "pending" or own["user_input"] is not None or own["ai_verdict"] is not None:
+                    return False
+                # 추정이 고른 정책에 다른 대기 정정이 있으면 대상을 비워 둔다 — 이 건도 승인될 수 있는 대기 건이라 정책당 1건을 지킨다(10/21 리뷰 M1)
+                existing = await _claim_policy_slot(conn, target_type, target_id, item_id)
+                if existing is not None:
+                    meta = _park_on_existing(meta, existing)
+                    target_type, target_id, sub_id, original, proposed = "auto", None, None, context, None
+                res = await conn.execute("""
+                    UPDATE ops_improvement_item
+                    SET kind = 'answer_signal', target_type = $2, target_id = $3, target_sub_id = $4, original = $5::jsonb,
+                        proposed = $6::jsonb, ai_verdict = $7::jsonb
+                    WHERE id = $1 AND status = 'pending' AND user_input IS NULL AND ai_verdict IS NULL
+                """, item_id, target_type, target_id, sub_id, json.dumps(original, ensure_ascii=False),
+                    json.dumps(proposed, ensure_ascii=False) if proposed else None,
+                    json.dumps(meta, ensure_ascii=False))
         return res.endswith(" 1")
     except Exception:
         logger.warning("의견 없는 답변 틀림 추정 실패 (item=%s)", item_id, exc_info=True)
@@ -410,12 +641,23 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
         context = await _load_original(conn, ns_id, "missing", None, None, item["message_id"])
         if key in ("missing", "answer"):
             target_type, target_id, sub_id, original = key, None, None, context
+        elif (item.get("target_type") in _REDRAFT_TARGETS
+              and key == _key(item["target_type"], item.get("target_id"), item.get("target_sub_id"))):
+            # 같은 대상으로 초안만 다시(정책 화면 제안처럼 답변 근거 후보가 없는 건도 [AI 초안 만들기]가 되게, 10/21)
+            target_type, target_id, sub_id = item["target_type"], item["target_id"], item["target_sub_id"]
+            original = await _load_original(conn, ns_id, target_type, target_id, sub_id, None)
         else:
             c = next((c for c in (_json(item["candidates"]) or []) if c["key"] == key), None)
             if c is None:
                 raise ValueError("이 답변의 근거가 아닙니다.")
             target_type, target_id, sub_id = c["target_type"], c["target_id"], c["target_sub_id"]
             original = await _load_original(conn, ns_id, target_type, target_id, sub_id, None)
+        # 다른 정책으로 옮길 때만 "정책당 대기 정정 1건" 확인(10/21 리뷰 M1) — 같은 정책 안(초안 다시·파라미터↔서술)은 이미 이 건이 그 자리.
+        # AI 초안(수십 초)을 쓰기 전에 먼저 한 번 보고, 실제 저장 때 잠금 안에서 다시 본다.
+        moves_policy = target_type in _POLICY_TARGETS and not (
+            item.get("target_type") in _POLICY_TARGETS and item.get("target_id") == target_id)
+        if moves_policy and (busy := await _pending_policy_correction(conn, target_id, item_id)) is not None:
+            raise ConflictError(_duplicate_message(busy), existing_id=busy)
     # 사용자 의견이 없으면 맞는 내용 정보가 없다 — 값을 지어내지 않고 의심 구간에 【확인 필요】만 단 "검토 초안"을 만든다
     # (2026-10-07, 사용자 지적 "양식은 만들어줘야"). 표시가 남으면 승인이 막혀 확인 안 된 초안이 반영되지 않는다.
     if target_type == "answer":
@@ -433,21 +675,40 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
     if old_requests := verdict.pop("redrafts", None):
         verdict["redrafts_before_retarget"] = [*verdict.get("redrafts_before_retarget", []), *old_requests]
     old_key = _key(item["target_type"], item["target_id"], item["target_sub_id"])
-    if set(verdict) - {"redrafts_before_retarget"} and old_key != key:
+    if set(verdict) - {"redrafts_before_retarget", "edits"} and old_key != key:
         verdict = dict(verdict) | {"retargeted": {"from": old_key, "to": key, "by": approver.get("id")}}
+    busy, stale = None, False
+    read_target = (item["target_type"], item["target_id"], item["target_sub_id"])   # moves_policy·이력은 이 값 기준으로 계산했다
     async with get_conn() as conn:
         try:
-            await conn.execute("""
-                UPDATE ops_improvement_item
-                SET kind = $2, target_type = $3, target_id = $4, target_sub_id = $5, original = $6::jsonb,
-                    proposed = $7::jsonb, ai_verdict = $8::jsonb
-                WHERE id = $1 AND status = 'pending'
-            """, item_id, KIND_BY_TARGET[target_type], target_type, target_id, sub_id,
-                json.dumps(original, ensure_ascii=False),
-                json.dumps(proposed, ensure_ascii=False) if proposed is not None else None,
-                json.dumps(verdict, ensure_ascii=False) if verdict else None)
+            async with conn.transaction():
+                # 자기 행 → 정책 잠금 순서(create_item·analyze_signal과 같게 — 엇갈리면 교착, 10/21 재리뷰 1). AI 초안을 쓰는 사이
+                # 다른 사람이 대상을 바꿨으면 처음 읽은 대상으로 계산한 moves_policy·변경 이력이 낡았으니 쓰지 않는다(10/21 재리뷰 2)
+                own = await conn.fetchrow(
+                    "SELECT status, target_type, target_id, target_sub_id FROM ops_improvement_item WHERE id = $1 FOR UPDATE",
+                    item_id)
+                stale = (not own or own["status"] != "pending"
+                         or (own["target_type"], own["target_id"], own["target_sub_id"]) != read_target)
+                if not stale and moves_policy:
+                    busy = await _claim_policy_slot(conn, target_type, target_id, item_id)
+                if not stale and busy is None:
+                    res = await conn.execute("""
+                        UPDATE ops_improvement_item
+                        SET kind = $2, target_type = $3, target_id = $4, target_sub_id = $5, original = $6::jsonb,
+                            proposed = $7::jsonb, ai_verdict = $8::jsonb
+                        WHERE id = $1 AND status = 'pending'
+                          AND target_type = $9 AND target_id IS NOT DISTINCT FROM $10 AND target_sub_id IS NOT DISTINCT FROM $11
+                    """, item_id, KIND_BY_TARGET[target_type], target_type, target_id, sub_id,
+                        json.dumps(original, ensure_ascii=False),
+                        json.dumps(proposed, ensure_ascii=False) if proposed is not None else None,
+                        json.dumps(verdict, ensure_ascii=False) if verdict else None, *read_target)
+                    stale = res.endswith(" 0")
         except asyncpg.UniqueViolationError:
             raise ConflictError("같은 신고자의 같은 근거 신고가 이미 대기 중입니다.")
+    if stale:
+        raise ConflictError("그 사이 처리됐거나 다른 사람이 정정 대상을 바꾼 신고예요 — 새로고침해서 확인하세요.")
+    if busy is not None:   # AI 초안을 쓰는 사이 다른 길로 그 정책에 정정이 생겼다
+        raise ConflictError(_duplicate_message(busy), existing_id=busy)
     return {"id": item_id, "target_type": target_type, "original": original, "proposed": proposed}
 
 
@@ -455,7 +716,7 @@ _REDRAFT_TARGETS = ("knowledge", "missing", "policy_param", "policy_narrative")
 
 
 async def redraft(item_id: int, approver: dict, feedback: str) -> dict:
-    """담당자의 한 줄 요청으로 AI가 수정안을 다시 쓴다(2026-10-21 — 사람은 직접 고치지 않고 승인/다시 쓰기/반려만).
+    """담당자의 한 줄 요청으로 AI가 수정안을 다시 쓴다(2026-10-21 — 직접 고치려면 update_proposed).
     의견 없는 신고의 검토 초안(【확인 필요】 표시)도 담당자가 "맞는 값은 3일" 같은 요청을 주면 이걸로 표시 없는 수정안이 된다.
     요청은 신고 의견 뒤에 붙여 같은 초안 생성기에 넘기고, 누가 무엇을 요청했는지 ai_verdict.redrafts에 남긴다. 신고는 대기 그대로."""
     async with get_conn() as conn:
@@ -465,26 +726,45 @@ async def redraft(item_id: int, approver: dict, feedback: str) -> dict:
         if item["target_type"] not in _REDRAFT_TARGETS:
             raise ValueError("고칠 대상(근거)이 정해진 신고만 다시 쓸 수 있어요 — 먼저 틀린 근거를 고르세요.")
         context = await _load_original(conn, item["namespace_id"], "missing", None, None, item["message_id"])
+        whole = False
+        if item["target_type"] in _POLICY_TARGETS:
+            whole = (await conn.fetchval("SELECT pipeline_version FROM policy_item WHERE id = $1", item["target_id"])) == PIPELINE_WHOLE
+    target_type = item["target_type"]
     original = _json(item["original"]) or {}
+    stored = _json(item["proposed"])
     verdict = dict(_json(item["ai_verdict"]) or {})
-    # 앞선 다시 쓰기 요청을 모두 쌓아 넘긴다 — 매번 원문 + 마지막 요청만 쓰면 두 번째 다시 쓰기에서 첫 번째 고침이 사라졌다(리뷰 M1)
+    # 출발점 = 지금 저장된 수정안(10/21 리뷰 M2) — 원문부터 다시 쓰면 정책 화면 [직접 수정]·카드 [직접 수정]으로 사람이 고친 본문·비고가
+    # 사라졌다. 단 【확인 필요】 표시가 남은 안은 AI 검토 초안(사람이 고친 안은 저장 때 표시가 막힌다)이라 원문에서 출발한다.
+    base = None
+    if stored and not draft_mod.has_review_marks(stored):
+        base = {k: stored[k] for k in draft_mod._FIELDS[target_type] if k in stored}
+    # 앞선 다시 쓰기 요청도 함께 넘긴다(무엇을 이미 고쳤는지 맥락) — 출발점이 현재 수정안이라 프롬프트가 "마지막 요청만 반영"을 지시한다
     requests = [r["feedback"] for r in verdict.get("redrafts", []) if r.get("feedback")] + [feedback]
     combined = "\n\n".join([*([item["user_input"]] if item["user_input"] else []),
                               *(f"[담당자 요청 {i}] {r}" for i, r in enumerate(requests, 1))])
-    proposed = await draft_mod.draft_correction(item["target_type"], original, combined,
-                                                None if item["target_type"] == "missing" else context)
-    if proposed is None:   # AI 실패는 숨기지 않는다 — 옛 수정안을 그대로 두고 알린다
+    drafted = await draft_mod.draft_correction(target_type, original, combined,
+                                               None if target_type == "missing" else context, base)
+    if drafted is None:   # AI 실패는 숨기지 않는다 — 옛 수정안을 그대로 두고 알린다
         raise ValueError("AI가 수정안을 다시 쓰지 못했어요(사내 AI 응답 실패일 수 있음) — 잠시 후 다시 시도하세요.")
-    verdict["redrafts"] = [*verdict.get("redrafts", []), {"by": approver.get("id"), "feedback": feedback}]
+    ref_raw = (base or original).get("raw_body")
+    proposed = _clean_policy_draft(target_type, drafted, ref_raw, whole=whole) if target_type in _POLICY_TARGETS else drafted
+    if stored and "remark" in stored and "remark" in original:
+        proposed["remark"] = stored["remark"]   # 비고는 AI가 안 쓴다(초안 칸에 없음) — 사람이 고친 비고를 그대로 이어 간다
+    # 덮어쓰기 전 안을 이력에 남긴다 — 다시 쓰기가 사람이 고친 안을 망쳐도 되돌릴 수 있게(직접 수정 이력 edits와 짝)
+    verdict["redrafts"] = [*verdict.get("redrafts", []), {"by": approver.get("id"), "feedback": feedback,
+                                                          "at": datetime.now(timezone.utc).isoformat(), "previous": stored}]
     async with get_conn() as conn:
         res = await conn.execute("""
             UPDATE ops_improvement_item SET proposed = $2::jsonb, ai_verdict = $3::jsonb
             WHERE id = $1 AND status = 'pending'
               AND target_type = $4 AND target_id IS NOT DISTINCT FROM $5 AND target_sub_id IS NOT DISTINCT FROM $6
+              AND proposed IS NOT DISTINCT FROM $7::jsonb
         """, item_id, json.dumps(proposed, ensure_ascii=False), json.dumps(verdict, ensure_ascii=False),
-            item["target_type"], item["target_id"], item["target_sub_id"])   # AI가 쓰는 동안 대상이 바뀌었으면 덮어쓰지 않는다(리뷰 L4)
+            item["target_type"], item["target_id"], item["target_sub_id"],
+            json.dumps(stored, ensure_ascii=False) if stored is not None else None)
+        # AI가 쓰는 동안 대상이 바뀌었거나(리뷰 L4) 누가 [직접 수정]으로 안을 바꿨으면(출발점이 낡음 — 리뷰 M2) 덮어쓰지 않는다
     if res.endswith(" 0"):
-        raise ValueError("그 사이 처리됐거나 정정 대상이 바뀐 신고예요 — 새로고침해서 확인하세요.")
+        raise ValueError("그 사이 처리됐거나 수정안·정정 대상이 바뀐 신고예요 — 새로고침해서 확인하세요.")
     return {"id": item_id, "proposed": proposed, "marked": draft_mod.has_review_marks(proposed)}
 
 
@@ -581,15 +861,21 @@ async def mark_seen(user_id: int, ids: list[int]) -> int:
 
 # ── 승인 = 반영(버전 교체 / 누락 지식 등록) ─────────────────────────────────────
 
-def _validate_proposed(target_type: str, proposed: Optional[dict]) -> dict:
+_FIELD_LABEL = {"content": "본문", "raw_body": "정책 원문", "chunk_text": "서술 단락", "name": "항목명"}
+
+
+def _validate_proposed(target_type: str, proposed: Optional[dict], *, editing: bool = False) -> dict:
+    """승인·직접 수정 저장이 같은 검사를 쓴다(editing=True면 사람이 고친 안이라 안내 문구만 다르다)."""
     if not proposed:
         raise ValueError("수정안이 비어 있습니다 — 수정안을 작성한 뒤 승인하세요.")
-    for k in draft_mod._REQUIRED[target_type]:
+    for k in sorted(draft_mod._REQUIRED[target_type], key=lambda k: k != "raw_body"):   # 원문부터 — v0는 원문 칸만 보인다
         if not str(proposed.get(k) or "").strip():
-            raise ValueError(f"수정안의 '{k}'가 비어 있습니다.")
+            raise ValueError(f"수정안의 '{_FIELD_LABEL.get(k, k)}'이(가) 비어 있습니다.")
     if draft_mod.has_review_marks(proposed):
         # 검토 초안(의견 없는 신고)의 표시가 남은 채 반영되면 "【확인 필요…】"가 지식·정책 본문에 그대로 들어간다
-        raise ValueError("【확인 필요】 표시가 남아 있어요 — [다시 쓰기]로 맞는 내용을 알려 주면 AI가 표시 없는 안을 만들어요.")
+        if editing:
+            raise ValueError("【확인 필요】 표시가 남아 있어요 — 맞는 내용으로 고치고 표시를 지운 뒤 저장하세요.")
+        raise ValueError("【확인 필요】 표시가 남아 있어요 — [직접 수정]으로 고치거나 [AI 다시 쓰기]로 맞는 내용을 알려 주세요.")
     return proposed
 
 
@@ -686,7 +972,8 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
     엑셀 원본이 실제로 바뀌면 그 버전이 정정을 대체한다(원본 소유자 우선)."""
     old = await conn.fetchrow("SELECT * FROM policy_item WHERE id = $1 AND namespace_id = $2 FOR UPDATE",
                               item["target_id"], ns_id)
-    if not old or old["status"] in ("deprecated", "rejected"):
+    # 검색 대상과 같은 기준(10/21) — v0 검토 대기 버전을 원본 삼아 새 버전을 만들면 승인 전 수정안이 그대로 현행이 된다
+    if not old or not is_searchable(old["status"], old.get("pipeline_version")):
         raise ValueError("원본 정책이 이미 바뀌었거나 현행이 아닙니다 — 이 신고는 반려하세요.")
     chunks = await conn.fetch(_POLICY_CHUNKS_SQL, old["id"])
     rewrites = _policy_chunk_rewrites(dict(old), chunks, item, proposed)
@@ -694,6 +981,15 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
     if rewrites != {cid: text for cid, (text, _) in prepared.items()}:
         raise ValueError("승인 준비 중 원본 정책이 바뀌었습니다 — 다시 승인해 주세요.")
     new_raw = _policy_new_raw(dict(old), item, proposed)
+    # 비고: 수정안에 비고 칸이 있으면 그 값(빈 값 = 지움), 없으면 원본 그대로(AI 초안·채팅 정정은 비고를 안 건드린다, 10/21)
+    new_remark = _norm_remark(proposed.get("remark")) if "remark" in proposed else old["remark"]
+    # 새 버전 번호 = 같은 정책(logical_id)의 가장 큰 번호 + 1(10/21) — 원본+1이면 반려된 v2가 이미 있을 때 번호가 겹쳤다.
+    # 원본 행을 FOR UPDATE로 잡고 있어 같은 정책의 다른 정정 승인과는 순서대로 돈다.
+    next_version = await conn.fetchval(
+        "SELECT COALESCE(MAX(version), 0) + 1 FROM policy_item WHERE logical_id = $1", old["logical_id"])
+    # 원본을 먼저 내리고 새 버전을 넣는다 — "정책당 사용 중 1개" 고유 인덱스(#80)는 즉시 검사라, 새 active를 먼저 넣으면
+    # 정정 승인이 전부 고유 위반(500)으로 막혔다(리뷰 H1 10/21). 같은 트랜잭션이라 중간 상태는 밖에서 안 보인다.
+    await conn.execute("UPDATE policy_item SET status = 'deprecated', updated_at = NOW() WHERE id = $1", old["id"])
     new_id = await conn.fetchval("""
         INSERT INTO policy_item
             (namespace_id, system_key, category_path, policy_name, raw_body, remark, source_file, source_sheet,
@@ -701,9 +997,9 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
              unresolved_segments, reviewed_at, reviewed_by, pipeline_version, source_key)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, $14, $15, NOW(), $16, $17, $18)
         RETURNING id
-    """, ns_id, old["system_key"], old["category_path"], old["policy_name"], new_raw, old["remark"],
+    """, ns_id, old["system_key"], old["category_path"], old["policy_name"], new_raw, new_remark,
         old["source_file"], old["source_sheet"], old["source_row"], old["content_hash"], old["logical_id"],
-        (old["version"] or 1) + 1, old["id"], old["parse_status"], old["unresolved_segments"],
+        next_version, old["id"], old["parse_status"], old["unresolved_segments"],
         approver.get("id"), old["pipeline_version"], old.get("source_key"))   # 원천 키 유지 — 골든셋 정답·재적재 대조가 새 버전에서도 찾게(리뷰 M1)
 
     for p in await conn.fetch("SELECT * FROM policy_param WHERE policy_item_id = $1 ORDER BY id", old["id"]):
@@ -724,7 +1020,6 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
             "INSERT INTO policy_chunk (policy_item_id, chunk_text, embedding, chunk_idx) VALUES ($1, $2, $3::vector, $4)",
             new_id, text, str(emb), c["chunk_idx"])
 
-    await conn.execute("UPDATE policy_item SET status = 'deprecated', updated_at = NOW() WHERE id = $1", old["id"])
     return new_id
 
 
@@ -745,8 +1040,9 @@ async def _close_superseded(conn, item: dict, approver: dict) -> int:
 
 
 async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dict:
-    """저장된 AI 수정안을 반영한다. expected = 승인한 사람이 화면에서 본 수정안 — 그 사이 다른 사람이 다시 쓰기·대상 변경을 했으면
-    보지 못한 안이 반영되지 않게 409(10/21, 사람은 고치지 않으므로 화면에서 고친 안으로 덮어쓰는 길은 없다)."""
+    """저장된 수정안(AI 초안 또는 [직접 수정]으로 고친 안)을 반영한다. expected = 승인한 사람이 화면에서 본 수정안 — 그 사이 다른 사람이
+    다시 쓰기·직접 수정·대상 변경을 했으면 보지 못한 안이 반영되지 않게 409. 고친 안은 먼저 update_proposed로 저장한 뒤 승인한다
+    (승인 요청이 안을 덮어쓰는 길은 없다 — 일괄 승인도 건마다 이 검사를 그대로 탄다)."""
     async with get_conn() as conn:
         item = await conn.fetchrow("SELECT * FROM ops_improvement_item WHERE id = $1", item_id)
     if not item or item["status"] != "pending":
@@ -760,7 +1056,7 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
     if expected is not None and expected != stored:
         raise ConflictError("그 사이 수정안이 바뀌었어요 — 새로고침해서 바뀐 안을 확인한 뒤 승인하세요.")
     proposed = _validate_proposed(item["target_type"], stored)
-    if draft_mod.is_unchanged(item["target_type"], _json(item["original"]) or {}, proposed):
+    if _unchanged(item["target_type"], _json(item["original"]) or {}, proposed):   # 비고만 바꾼 안은 바뀐 것(10/21)
         raise ValueError("수정안이 기존 내용과 같아요 — 고칠 게 없으면 반려(종료)하세요.")
     # 지식 본문 임베딩은 트랜잭션 밖에서 미리(트랜잭션은 DB 쓰기만 짧게)
     embedding = None
@@ -802,18 +1098,23 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
             superseded = await _close_superseded(conn, item, approver)
             ns_name = await conn.fetchval("SELECT name FROM ops_namespace WHERE id = $1", ns_id)
 
-    # 승인 반영 후 시맨틱 캐시엔 옛 답이 TTL 동안 남아 있다 — 네임스페이스 캐시를 비운다(best-effort)
-    try:   # 새 정책 버전이 키워드 채널·분류 목록에 바로 잡히게(리뷰 10/13) — 시맨틱 캐시 비우기와 실패가 엮이지 않게 따로
-        from service.policy import category_list, keyword_index
-        keyword_index.invalidate()
-        category_list.invalidate()
-    except Exception:
-        logger.warning("정정 승인 후 정책 색인 비우기 실패 (item=%s)", item_id, exc_info=True)
-    try:
-        from shared.cache import invalidate_namespace
-        await invalidate_namespace(ns_name)
-    except Exception:
-        logger.warning("정정 승인 후 시맨틱 캐시 무효화 실패 (item=%s)", item_id, exc_info=True)
+    # 승인 반영 후 시맨틱 캐시엔 옛 답이 TTL 동안 남아 있다 — 캐시를 비운다(best-effort)
+    if item["target_type"] in ("policy_param", "policy_narrative"):
+        # 정책은 채팅이 여러 업무 영역에 걸쳐 찾는다(scope.py) — 고친 영역만 비우면 다른 영역 답에 옛 정책이 남는다(10/21).
+        # 정책 색인(키워드·분류)도 함께(리뷰 10/13).
+        # 일괄 승인은 건마다 이 승인을 부르므로 Redis 전체 훑기가 건수만큼 돈다(10/21 리뷰 L8) — 지금 규모(대기 수십 건)에선 감수,
+        # 한 번만 비우게 바꿀 조건은 docs/tech/post-demo-backlog.md §4
+        try:
+            from service.policy.caches import invalidate_policy_caches
+            await invalidate_policy_caches()
+        except Exception:
+            logger.warning("정정 승인 후 정책 캐시 비우기 실패 (item=%s)", item_id, exc_info=True)
+    else:
+        try:
+            from shared.cache import invalidate_namespace
+            await invalidate_namespace(ns_name)
+        except Exception:
+            logger.warning("정정 승인 후 시맨틱 캐시 무효화 실패 (item=%s)", item_id, exc_info=True)
     return {"id": item_id, "status": "approved", "applied_target_id": new_id, "superseded": superseded}
 
 

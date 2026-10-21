@@ -41,238 +41,101 @@ export async function searchPolicy(
   return apiFetch<PolicySearchResult>(`/policy/search?${params.toString()}`);
 }
 
-// ─── unresolved 팀별 집계 리포트 (docs/policy-doc-pipeline-plan.md §2-3) ────────
+// ─── 정책서 화면(v0, 2026-10-21 재구축 2단계) — 읽기 전용. 내용 변경은 정정 원장의 제안(api/corrections)으로만 ───
 
-export interface UnresolvedSegment {
-  text: string;
-  reason: string | null;
-}
-
-export interface UnresolvedItem {
-  item_id: number;
-  logical_id: number;
-  policy_name: string;
-  category_path: string[];
-  segments: UnresolvedSegment[];
-}
-
-export interface SystemUnresolvedGroup {
-  system_key: string;
-  item_count: number;
-  segment_count: number;
-  items: UnresolvedItem[];
-}
-
-export interface UnresolvedSummary {
-  total_items: number;
-  total_segments: number;
-  by_system: SystemUnresolvedGroup[];
-}
-
-export async function getUnresolvedSummary(namespace: string, systemKey?: string): Promise<UnresolvedSummary> {
-  const params = new URLSearchParams({ namespace });
-  if (systemKey) params.set('system_key', systemKey);
-  return apiFetch<UnresolvedSummary>(`/policy/unresolved-summary?${params.toString()}`);
-}
-
-// unresolved segment를 서술(policy_chunk)로 수동 편입(2026-09-16) — "조회만 있고 액션이
-// 없다"는 지적으로 추가된 유일한 쓰기 액션. 정밀 재분류가 아니라 최소한 검색은 되게
-// 만드는 원클릭 액션이다.
-export interface PromoteSegmentResult {
-  remaining_segments: number;
-}
-
-export async function promoteUnresolvedSegment(
-  itemId: number, segmentIndex: number, namespace: string,
-): Promise<PromoteSegmentResult> {
-  return apiFetch<PromoteSegmentResult>(`/policy/unresolved/${itemId}/promote`, {
-    method: 'POST',
-    body: JSON.stringify({ namespace, segment_index: segmentIndex }),
-  });
-}
-
-// unresolved segment를 파라미터(policy_param)로 수동 편입(2026-09-23) — "서술로 편입밖에
-// 없으면 반쪽짜리 아니냐"는 지적으로 추가. 서술과 달리 원문 그대로 못 쓰고(구조화된 필드가
-// 필요 — LLM이 애초에 못 뽑아낸 부분) 사람이 폼으로 입력한 값을 그대로 저장한다.
-export interface PromoteParamFields {
-  name: string;
-  condition?: string | null;
-  value?: string | null;
-  unit?: string | null;
-}
-
-export async function promoteUnresolvedSegmentToParam(
-  itemId: number, segmentIndex: number, namespace: string, fields: PromoteParamFields,
-): Promise<PromoteSegmentResult> {
-  return apiFetch<PromoteSegmentResult>(`/policy/unresolved/${itemId}/promote-param`, {
-    method: 'POST',
-    body: JSON.stringify({ namespace, segment_index: segmentIndex, ...fields }),
-  });
-}
-
-// ─── 정책 항목 브라우저 (item 단위, param/narrative 자식 포함) ─────────────────
-
-export interface PolicyParam {
-  id: number;
-  name: string;
-  condition: string | null;
-  value: string | null;
-  unit: string | null;
-}
-
-export interface PolicyChunk {
-  id: number;
-  chunk_text: string;
-  chunk_idx: number;
-}
-
-export interface PolicyItem {
+/** 지금 쓰이는 정책 1건 = 1줄(문서 순서) */
+export interface PolicyRow {
   item_id: number;
   logical_id: number;
   version: number;
-  policy_name: string;
   category_path: string[];
-  raw_body: string;
-  status: string;
-  parse_status: string;
-  system_key: string | null;
-  /** 비고(v0 2026-10-20) — 답변에 쓰고 검색엔 안 씀 */
-  remark?: string | null;
-  params: PolicyParam[];
-  narratives: PolicyChunk[];
-  matched_via: string[];
-  /** 위험도(서버가 조회 시 계산하는 결정론적 규칙) + 결정 출처 — 2026-10-01 위험도 기반 검토 큐 */
-  risk_level: RiskLevel | null;
-  risk_reasons: string[];
-  /** 목록 한 줄에 보이는 핵심 이유(예: "미분류 조각 2개") */
-  risk_short: string;
-  /** 그래서 담당자가 할 일 */
-  risk_next_step: string;
-  review_source: 'human' | 'auto_rule' | null;
-  review_rule: string | null;
-  review_sample: boolean;
-  /** 미분류 조각 — 위험 높음 항목을 펼친 자리에서 편입(2026-10-02) */
-  unresolved_segments: UnresolvedSegment[];
+  policy_name: string;
+  has_remark: boolean;
+  /** 이 정책을 겨눈 검토 중 정정(출처 무관) — 있으면 새 제안을 못 만든다 */
+  open_correction_id: number | null;
 }
 
-export type RiskLevel = 'high' | 'medium' | 'low';
-
-export async function getPolicyItems(
-  namespace: string, category?: string, q?: string, status?: string, sort?: 'risk',
-): Promise<PolicyItem[]> {
-  const params = new URLSearchParams({ namespace });
-  if (category) params.set('category', category);
-  if (q) params.set('q', q);
-  if (status) params.set('status', status);
-  if (sort) params.set('sort', sort);
-  return apiFetch<PolicyItem[]>(`/policy/items?${params.toString()}`);
-}
-
-// 검토 대기(pending_review) 정책 항목 승인/반려(2026-09-23) — "pending 필터링이 없다"는
-// 지적의 근본 원인은 필터 부재가 아니라 상태를 바꾸는 액션 자체가 없었던 것이라, 필터보다
-// 이 액션을 먼저 추가한다.
-export async function approvePolicyItem(itemId: number, namespace: string): Promise<{ status: string }> {
-  return apiFetch<{ status: string }>(`/policy/items/${itemId}/approve`, {
-    method: 'POST',
-    body: JSON.stringify({ namespace }),
-  });
-}
-
-/** rule_paused=true면 자동 통과 표본이 반려돼 그 규칙의 자동 통과가 멈춘 것 */
-export async function rejectPolicyItem(itemId: number, namespace: string): Promise<{ status: string; rule_paused?: boolean }> {
-  return apiFetch<{ status: string; rule_paused?: boolean }>(`/policy/items/${itemId}/reject`, {
-    method: 'POST',
-    body: JSON.stringify({ namespace }),
-  });
-}
-
-// ── 위험도 기반 자동 통과(2026-10-01) — 낮음만 규칙으로 통과, 사람은 위험한 것만 ──
-
-export interface AutoRule { enabled: boolean; paused_at: string | null; paused_reason: string | null }
-
-export interface ReviewSummary {
-  pending: number;
-  /** 사람이 실제로 봐야 할 건수 — 높음 + 중간 + 표본 (+ 규칙이 멈췄으면 낮음) */
-  human_queue: number;
-  queue: { high: number; medium: number; sample: number; low_waiting: number };
-  auto_approved: Record<string, number>;
-  sample_rate: number;
-  rules: Record<string, AutoRule>;
-  rule_active: boolean;
-}
-
-export interface AutoReviewResult {
-  run_id: string | null;
-  dry_run: boolean;
-  pending: number;
-  by_level: Record<RiskLevel, number>;
-  auto_approved: number;
-  sampled: number;
-  human_queue_after: number;
-}
-
-export async function getReviewSummary(namespace: string): Promise<ReviewSummary> {
-  return apiFetch<ReviewSummary>(`/policy/review-summary?namespace=${encodeURIComponent(namespace)}`);
-}
-
-export async function runAutoReview(namespace: string | null, dryRun: boolean): Promise<AutoReviewResult> {
-  return apiFetch<AutoReviewResult>('/policy/auto-review/run', {
-    method: 'POST', body: JSON.stringify({ namespace, dry_run: dryRun }),
-  });
-}
-
-export async function resumeAutoRule(ruleKey: string): Promise<AutoRule> {
-  return apiFetch<AutoRule>(`/policy/auto-review/rules/${encodeURIComponent(ruleKey)}/resume`, { method: 'POST' });
-}
-
-export async function revertAutoReview(scope: { run_id?: string; rule_key?: string; namespace?: string }): Promise<{ reverted: number }> {
-  return apiFetch<{ reverted: number }>('/policy/auto-review/revert', { method: 'POST', body: JSON.stringify(scope) });
-}
-
-export async function revertAutoPolicyItem(itemId: number, namespace: string): Promise<{ status: string }> {
-  return apiFetch<{ status: string }>(`/policy/items/${itemId}/revert-auto`, {
-    method: 'POST', body: JSON.stringify({ namespace }),
-  });
-}
-
-// 반려된 항목의 파라미터/서술 수정(2026-09-23) — "반려하면 그냥 데이터를 버리는데?"라는
-// 지적으로 추가. 저장하면 서버가 자동으로 다시 검토대기(pending_review)로 되돌린다 —
-// 반환되는 status를 그대로 쓰면 화면을 즉시 갱신할 수 있다.
-export async function updatePolicyParam(
-  paramId: number, namespace: string, fields: PromoteParamFields,
-): Promise<{ status: string }> {
-  return apiFetch<{ status: string }>(`/policy/params/${paramId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ namespace, ...fields }),
-  });
-}
-
-export async function updatePolicyNarrative(
-  chunkId: number, namespace: string, chunkText: string,
-): Promise<{ status: string }> {
-  return apiFetch<{ status: string }>(`/policy/narratives/${chunkId}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ namespace, chunk_text: chunkText }),
-  });
-}
-
-// 미분류 segment의 파라미터 필드 LLM 1차 추측(2026-09-23) — "파라미터로 편입" 폼을 열 때
-// 자동 호출해 프리필하는 용도. 실패해도 에러 없이 전부 null로 옴(사람이 그냥 수동 입력).
-// name까지 null일 수 있어(백엔드 SuggestParamOut) PromoteParamFields(name 필수)와는 별도 타입.
-export interface ParamSuggestion {
-  name: string | null;
+export interface PolicyParamRow {
+  id: number;
+  name: string;
   condition: string | null;
   value: string | null;
   unit: string | null;
+  external_source: string | null;
 }
 
-export async function suggestParamFields(
-  itemId: number, segmentIndex: number, namespace: string,
-): Promise<ParamSuggestion> {
-  return apiFetch<ParamSuggestion>(`/policy/unresolved/${itemId}/suggest-param`, {
-    method: 'POST',
-    body: JSON.stringify({ namespace, segment_index: segmentIndex }),
-  });
+export interface PolicyTerm { id: number; term: string; description: string }
+
+export interface PolicyVersion {
+  item_id: number;
+  version: number;
+  status: string;
+  created_at: string | null;
+  /** '적재' | '정정 #N' */
+  origin: string;
+}
+
+export interface PolicyDetail {
+  item_id: number;
+  chunk_id: number | null;
+  logical_id: number;
+  version: number;
+  status: string;
+  category_path: string[];
+  policy_name: string;
+  raw_body: string;
+  remark: string | null;
+  source_file: string | null;
+  params: PolicyParamRow[];
+  terms: PolicyTerm[];
+  versions: PolicyVersion[];
+  open_correction: { id: number; source: string } | null;
+}
+
+export async function listPolicies(namespace: string, q?: string): Promise<PolicyRow[]> {
+  const params = new URLSearchParams({ namespace });
+  if (q?.trim()) params.set('q', q.trim());
+  return apiFetch<PolicyRow[]>(`/policy/policies?${params.toString()}`);
+}
+
+export async function getPolicy(namespace: string, logicalId: number): Promise<PolicyDetail> {
+  return apiFetch<PolicyDetail>(`/policy/policies/${logicalId}?namespace=${encodeURIComponent(namespace)}`);
+}
+
+export interface RefTableRow {
+  id: number;
+  logical_id: number;
+  version: number;
+  title: string;
+  category_path: string[];
+  n_columns: number;
+  n_rows: number;
+}
+
+export interface RefTableColumn { name: string; role?: string; decisive?: boolean }
+
+export interface RefTableDetail {
+  id: number;
+  logical_id: number;
+  version: number;
+  title: string;
+  category_path: string[];
+  columns: RefTableColumn[];
+  rows: Record<string, string | number | null>[];
+}
+
+export async function listRefTables(namespace: string): Promise<RefTableRow[]> {
+  return apiFetch<RefTableRow[]>(`/policy/ref-tables?namespace=${encodeURIComponent(namespace)}`);
+}
+
+export async function getRefTable(namespace: string, id: number): Promise<RefTableDetail> {
+  return apiFetch<RefTableDetail>(`/policy/ref-tables/${id}?namespace=${encodeURIComponent(namespace)}`);
+}
+
+export interface PolicyOverview { id: number; title: string; body: string; source_key: string | null; source_file: string | null }
+
+export async function listOverviews(namespace: string): Promise<PolicyOverview[]> {
+  return apiFetch<PolicyOverview[]>(`/policy/overviews?namespace=${encodeURIComponent(namespace)}`);
 }
 
 // ─── Track 2 저장소 전략 실험실 ─────────────────────────────────────────────
@@ -357,63 +220,4 @@ export interface Track2Axis {
 
 export async function getTrack2Axes(): Promise<Track2Axis[]> {
   return apiFetch<Track2Axis[]>('/policy/track2/axes');
-}
-
-// 파이프라인 모니터(실험실 게이트 작업3)의 프론트 소비부(PolicyPipelineMonitor.tsx)는
-// 2026-09-16 화면 재설계로 제거됨(커밋 001aa4c) — 백엔드 GET /policy/pipeline-stats는
-// "재사용 가능하니 유지"로 의도적으로 남겼지만, 그 화면만 쓰던 이 프론트 래퍼는 정리
-// 대상에서 빠진 채 고아로 남아있었다(2026-09-24 정리). 다시 필요해지면
-// docs/architecture.md v2.77 항목과 git 이력(001aa4c) 참고해 복원.
-
-
-// 정책서 올리기(2026-10-06) — 표준 JSON(권장) 또는 엑셀. 같은 정책은 식별키로 찾고 사라진 정책은 검토 큐로(v2.123)
-export interface PolicyImportSheet {
-  sheet_name: string;
-  kind: 'policy' | 'glossary' | 'unknown';
-  created_items: number;
-  new_versions: number;
-  unchanged_skipped: number;
-  moved: number;
-  matched_by_body: number;
-  duplicate_keys: number;
-  glossary_added: number;
-  glossary_duplicate_skipped: number;
-  skip_reason: string | null;
-  columns: { 정책명: string; 분류: string[]; 본문: string | null; 비고: string | null } | null;
-  warnings: string[];
-}
-
-/** 업로드 실패 시 서버가 주는 "어디 / 무엇이 문제 / 어떻게 고치나" */
-export interface PolicyImportProblem { where: string; problem: string; fix: string }
-
-export interface PolicyImportResult {
-  source_file: string;
-  sheets: PolicyImportSheet[];
-  missing_marked: number;
-  warnings: string[];
-  auto_review: { auto_approved?: number; sampled?: number } | null;
-}
-
-export async function importPolicyFile(file: File, namespace: string, reprocessAll: boolean): Promise<PolicyImportResult> {
-  const form = new FormData();
-  form.append('file', file);
-  form.append('namespace', namespace);
-  form.append('reprocess_all', String(reprocessAll));
-  return apiFetch<PolicyImportResult>('/policy/import', { method: 'POST', body: form });
-}
-
-/** 보안(DRM) 엑셀용 — 엑셀에서 복사한 시트를 붙여넣어 반영(v2.127). 처리는 파일 업로드와 같다. */
-export async function importPolicyPaste(
-  namespace: string, sourceFile: string, sheets: { sheet_name: string; text: string }[], reprocessAll: boolean,
-): Promise<PolicyImportResult> {
-  return apiFetch<PolicyImportResult>('/policy/import-paste', {
-    method: 'POST',
-    body: JSON.stringify({ namespace, source_file: sourceFile, sheets, reprocess_all: reprocessAll }),
-  });
-}
-
-export interface PolicySource { source_file: string; sheets: { name: string; items: number }[] }
-
-export async function fetchPolicySources(namespace: string): Promise<PolicySource[]> {
-  return apiFetch<PolicySource[]>(`/policy/sources?namespace=${encodeURIComponent(namespace)}`);
 }

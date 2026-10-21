@@ -23,6 +23,8 @@ Track 2(저장 전략 실험실, §4) 실행 결과(2026-09-04) — 벡터 폴�
 v1엔 검토/승인 UI가 없어(브리프 §2-4) 데이터가 전부 status='pending_review'로 쌓인다 —
 검색은 '검토 대기' 상태도 포함한다(안 그러면 아무것도 안 나옴), 대신 결과에 status를 노출해
 호출측이 "미검토" 표시를 할 수 있게 한다.
+v0(원문 통째, 2026-10-21)는 승인된 것만 검색한다 — 사람이 고친 새 버전이 승인 전에 옛 버전과 함께 답변에 섞이지 않게.
+조건은 `searchable_sql`(visibility.py) 한 곳 — 옛 엑셀 경로는 위 동작 그대로.
 """
 from __future__ import annotations
 
@@ -36,6 +38,8 @@ from core.config import settings
 from core.database import get_conn, resolve_namespace_id
 from shared import reranker
 from service.policy import keyword_index
+# 검색 대상 조건(10/21) — 잎 모듈에 두고 여기서 다시 내보낸다(keyword_index가 search를 import하면 순환)
+from service.policy.visibility import searchable_sql
 from shared.embedding import embedding_service
 from service.policy.query_type import looks_like_navigation_query
 from trustkit.answer.shaping import with_note
@@ -151,7 +155,7 @@ async def search_policy(
                 FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($2)))) t
                 WHERE lexeme IS NOT NULL
             ) q
-            WHERE i.namespace_id = ANY($1::int[]) AND i.status NOT IN ('deprecated', 'rejected')
+            WHERE i.namespace_id = ANY($1::int[]) AND {searchable_sql('i')}
               AND to_tsvector('simple', policy_strip_ko(p.name || ' ' || COALESCE(p.condition, '') || ' ' || i.policy_name)) @@ q.tsq
               {category_clause}
             ORDER BY rank DESC, p.id   -- 동점(ts_rank는 흔함) 순서 고정 — 같은 질문은 같은 문맥(목록 답 거르기·측정 재사용, 리뷰 10/13)
@@ -171,7 +175,7 @@ async def search_policy(
                    c.id AS chunk_id, c.chunk_text, 1 - (c.embedding <=> $2::vector) AS score
             FROM policy_chunk c
             JOIN policy_item i ON i.id = c.policy_item_id
-            WHERE i.namespace_id = ANY($1::int[]) AND i.status NOT IN ('deprecated', 'rejected')
+            WHERE i.namespace_id = ANY($1::int[]) AND {searchable_sql('i')}
               {category_clause2}
             ORDER BY c.embedding <=> $2::vector
             LIMIT $3
@@ -241,11 +245,11 @@ async def _fuse_keyword(ns_ids: list[int], vec: str, narratives: list, kw: list[
     missing = [i for i, _ in kw if i not in by_item]
     if missing:
         async with get_conn() as conn:
-            rows = await conn.fetch("""
+            rows = await conn.fetch(f"""
                 SELECT DISTINCT ON (i.id) i.id AS item_id, i.logical_id, i.policy_name, i.category_path, i.status, i.raw_body, i.remark, (SELECT name FROM ops_namespace WHERE id = i.namespace_id) AS part,
                        c.id AS chunk_id, c.chunk_text, 1 - (c.embedding <=> $2::vector) AS score
                 FROM policy_chunk c JOIN policy_item i ON i.id = c.policy_item_id
-                WHERE i.id = ANY($1::int[]) AND i.namespace_id = ANY($3::int[]) AND i.status NOT IN ('deprecated', 'rejected')
+                WHERE i.id = ANY($1::int[]) AND i.namespace_id = ANY($3::int[]) AND {searchable_sql('i')}
                 ORDER BY i.id, c.embedding <=> $2::vector""", missing, vec, ns_ids)
         for r in rows:
             by_item[r["item_id"]] = NarrativeHit(
@@ -295,7 +299,7 @@ async def has_policy_data(namespace: str) -> bool:
         if ns_id is None:
             return False
         exists = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM policy_item WHERE namespace_id = $1 AND status NOT IN ('deprecated', 'rejected'))",
+            f"SELECT EXISTS(SELECT 1 FROM policy_item WHERE namespace_id = $1 AND {searchable_sql('policy_item')})",
             ns_id,
         )
         return bool(exists)

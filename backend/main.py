@@ -1389,6 +1389,42 @@ async def _migrate_prompt_voc_type(conn) -> None:
         logger.info("[migrate #79] VOC 프롬프트 분류 → voc: %s", r)
 
 
+async def _migrate_policy_v0_revisions(conn) -> None:
+    """정책 v0 새 버전 흐름 (2026-10-21, #80, v0 재구축 1단계). 멱등.
+    - policy_review_log.action에 'submitted' 허용 — 1단계 설계(직접 수정 → 정책 테이블에 검토 대기 새 버전)용이었으나 2단계에서
+      수정은 전부 정정 원장(ops_improvement_item)의 제안으로 바뀌어 지금은 쓰는 코드가 없다. 옛 이력 해석·안전을 위해 남겨 둠(10/21 리뷰 L4).
+    - 같은 정책(logical_id)에 v0 검토 대기 새 버전은 하나만(uq_policy_one_pending_v0) — 위와 같은 이유로 지금은 pending_review 행을
+      만드는 길이 없어 쓰이지 않지만, 누가 다시 만들면 한쪽 수정이 조용히 사라지는 것을 막는 안전장치로 남김.
+    - 같은 정책에 active는 하나만 — 정정 승인(improvement/service._apply_policy)이 옛 버전을 내리는 것을 DB가 보장. 이미 겹친 데이터가 있으면
+      기동을 막지 않고 경고만 남기고 건너뛴다(데이터 정리 후 다음 기동 때 만들어짐)."""
+    defs = await conn.fetch(
+        "SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint "
+        "WHERE conrelid = 'policy_review_log'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%action%'")
+    # 'resubmitted'에도 submitted가 들어 있어 따옴표까지 붙여 찾는다
+    if not any("'submitted'" in d["def"] for d in defs):
+        async with conn.transaction():
+            for d in defs:
+                await conn.execute(f'ALTER TABLE policy_review_log DROP CONSTRAINT IF EXISTS "{d["conname"]}"')
+            await conn.execute(
+                "ALTER TABLE policy_review_log ADD CONSTRAINT policy_review_log_action_check CHECK (action IN ("
+                "'approved', 'rejected', 'auto_approved', 'sampled', 'auto_reverted', "
+                "'resubmitted', 'rule_paused', 'rule_resumed', 'submitted'))")
+        logger.info("[migrate #80] policy_review_log.action에 submitted 허용")
+    for name, where, label in (
+            ("uq_policy_one_pending_v0", "status = 'pending_review' AND pipeline_version = 'v0_whole'", "v0 검토 대기"),
+            ("uq_policy_one_active", "status = 'active'", "active")):
+        if await conn.fetchval("SELECT 1 FROM pg_indexes WHERE indexname = $1", name):
+            continue
+        dup = await conn.fetch(
+            f"SELECT logical_id, COUNT(*) AS n FROM policy_item WHERE {where} AND logical_id IS NOT NULL "
+            "GROUP BY logical_id HAVING COUNT(*) > 1 ORDER BY logical_id LIMIT 10")
+        if dup:
+            logger.warning("[migrate #80] 같은 정책에 %s 버전이 여럿이라 고유 인덱스 %s를 건너뜀 — 정리 후 재기동하면 만들어짐: %s",
+                           label, name, [(r["logical_id"], r["n"]) for r in dup])
+            continue
+        await conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON policy_item(logical_id) WHERE {where}")
+
+
 async def _migrate_data_marker(conn) -> None:
     """일회성 데이터 작업 기록 (2026-10-13, #76) — 예: 정책 조각 재임베딩이 어느 규칙 판까지 끝났는지. 멱등."""
     await conn.execute("""
@@ -1864,6 +1900,7 @@ async def _run_migrations() -> None:
         await _migrate_policy_v0(conn)
         await _migrate_org_domain(conn)
         await _migrate_prompt_voc_type(conn)
+        await _migrate_policy_v0_revisions(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

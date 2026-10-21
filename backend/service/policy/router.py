@@ -1,111 +1,65 @@
-"""정책서 임포트/검색 API."""
+"""정책서 API — 정책서 화면 조회(v0, 2026-10-21) · 즉석 검색 · 실험실(Track2·답변 정확도·축적 현황).
+
+v0 재구축 2단계(10/21)에서 옛 엑셀 경로 화면의 API(올리기·붙여넣기·미분류·파라미터/서술 줄 안 편집·위험도 검토 큐·항목 승인/반려)를 뺐다.
+정책 내용 변경은 모두 정정 원장(/api/corrections — 정책 화면의 직접 수정·AI 수정 제안)으로 들어가 정정 요청에서 승인할 때만 새 버전이 된다.
+"""
 import logging
 from dataclasses import asdict
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership, check_knowledge_read
+from core.dependencies import get_current_user, get_current_admin, check_knowledge_read
 from service.policy import answer_eval
-from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review, edit, decompose, auto_review, json_format
-from service.policy.schemas import AutoReviewRevertRequest, AutoReviewRunRequest
-from service.policy.schemas import (
-    ImportSummaryOut, PolicySearchOut, UnresolvedSummaryOut, PolicyItemOut, Track2ResultOut,
-    Track2RunHistoryOut, PipelineStatsOut, PromoteSegmentRequest, PromoteSegmentOut,
-    PromoteParamRequest, ItemActionRequest, UpdateParamRequest, UpdateNarrativeRequest,
-    ItemStatusOut, SuggestParamRequest, SuggestParamOut, PolicyPasteImportRequest,
-)
+from service.policy import catalog, search as search_service, track2, pipeline_stats
+from service.policy.schemas import PolicySearchOut, Track2ResultOut, Track2RunHistoryOut, PipelineStatsOut
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
 
 
-@router.get("/sources")
-async def list_policy_sources(namespace: str = Query(...), user: dict = Depends(get_current_user)):
-    """이 파트의 정책서 원본 파일·시트 목록 — 붙여넣기 화면이 원본 이름·시트 이름을 고르게."""
+# ── 정책서 화면(v0) — 읽기 전용. 권한: 조회는 로그인 사용자 누구나(check_knowledge_read) ─────────────
+
+@router.get("/policies")
+async def list_policies(namespace: str = Query(...), q: Optional[str] = Query(default=None, max_length=200),
+                        user: dict = Depends(get_current_user)):
+    """지금 쓰이는 정책 1건 = 1줄(문서 순서) + 검토 중 정정 번호."""
     await check_knowledge_read(namespace, user)
-    return await service.list_sources(namespace)
+    return await catalog.list_policies(namespace, q)
 
 
-@router.post("/import-paste", response_model=ImportSummaryOut)
-async def import_policy_paste(body: PolicyPasteImportRequest, user: dict = Depends(get_current_user)):
-    """엑셀에서 복사한 시트를 붙여넣어 임포트 — 보안(DRM) 엑셀용. 이후 처리는 파일 임포트와 같다."""
-    await check_namespace_ownership(body.namespace, user)
-    if body.reprocess_all and user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="'전체 다시 분해'는 관리자만 할 수 있습니다. 체크를 끄고 다시 올려 주세요.")
-    try:
-        result = await service.import_pasted(
-            body.namespace, body.system_key, body.source_file,
-            [(s.sheet_name, s.text) for s in body.sheets], force_reprocess=body.reprocess_all,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.exception("붙여넣기 임포트 실패")
-        raise HTTPException(
-            status_code=400,
-            detail=f"정책서 반영 실패: {e} — 실패한 시트는 반영되지 않았습니다. 같은 내용을 다시 올리면 이어서 처리됩니다.",
-        )
-    auto = await auto_review.run_after_import(body.namespace)
-    return ImportSummaryOut(
-        source_file=result.source_file,
-        sheets=[s.__dict__ for s in result.sheets],
-        missing_marked=result.missing_marked,
-        warnings=result.warnings,
-        auto_review=auto,
-    )
+@router.get("/policies/{logical_id}")
+async def get_policy(logical_id: int, namespace: str = Query(...), user: dict = Depends(get_current_user)):
+    """정책 상세 — 원문·비고·파라미터·용어·버전 이력·검토 중 정정."""
+    await check_knowledge_read(namespace, user)
+    out = await catalog.get_policy(namespace, logical_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="이 업무 영역에 지금 쓰이는 그 정책이 없어요 — 새로고침하세요.")
+    return out
 
 
-@router.post("/import", response_model=ImportSummaryOut)
-async def import_policy_excel(
-    file: UploadFile = File(...),
-    namespace: str = Form(...),
-    system_key: str = Form(default=""),
-    reprocess_all: bool = Form(default=False),
-    user: dict = Depends(get_current_user),
-):
-    """정책서 엑셀 업로드 → 파싱 → LLM 분해 → RDB 적재(pending_review).
+@router.get("/ref-tables")
+async def list_ref_tables(namespace: str = Query(...), user: dict = Depends(get_current_user)):
+    await check_knowledge_read(namespace, user)
+    return await catalog.list_ref_tables(namespace)
 
-    reprocess_all=true면 내용·파이프라인 버전이 같은 행도 전부 다시 분해한다(재정제 후 전체 재적재용).
-    그렇지 않아도 파서·분해 프롬프트가 바뀐 뒤 올린 파일은 바뀐 행만이 아니라 전체가 재분해된다
-    (응답의 pipeline_reprocessed).
 
-    시트는 위치가 아니라 헤더 내용으로 용어집/정책 시트를 자동 판별한다. 재업로드 시 내용이
-    바뀐 row만 새 버전으로 처리하고(변경 없으면 LLM 재호출 없이 스킵), 이전 버전은 삭제하지
-    않고 deprecated로 보존한다(docs/policy-doc-pipeline-plan.md §2-1).
-    """
-    await check_namespace_ownership(namespace, user)
-    if reprocess_all and user.get("role") != "admin":
-        # 전 항목을 다시 AI로 분해해 새 버전으로 넣는다(수십 분 + 검토 큐 재충전) — 화면처럼 서버도 관리자만(/code-review)
-        raise HTTPException(status_code=403, detail="'전체 다시 분해'는 관리자만 할 수 있습니다. 체크를 끄고 다시 올려 주세요.")
-    try:
-        raw = await file.read()
-        result = await service.import_excel(
-            namespace, system_key, file.filename or "unknown.xlsx", raw, force_reprocess=reprocess_all,
-        )
-    except json_format.PolicyJsonError as e:
-        # 사용자가 바로 고칠 수 있게 "어디 / 무엇이 문제 / 어떻게 고치나" 목록 그대로(화면이 표로 보여 줌)
-        raise HTTPException(status_code=400, detail=e.detail())
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        # 시트 단위 트랜잭션이라 실패한 시트는 통째로 반영되지 않는다(앞서 성공한 시트는 반영됨 —
-        # 같은 파일을 다시 올리면 그 시트들은 내용 변경 없음으로 스킵되고 실패한 시트만 재처리)
-        raise HTTPException(
-            status_code=400,
-            detail=f"정책서 임포트 실패: {e} — 실패한 시트는 반영되지 않았습니다. 같은 파일을 다시 올리면 이어서 처리됩니다.",
-        )
-    # 재임포트는 바뀐 행을 새 버전(pending_review)으로 다시 쌓는다 — 규칙이 켜져 있으면 그 파트에 바로 자동 통과를
-    # 적용해 큐가 다시 차지 않게 한다(실패해도 임포트는 성공, auto_review.run_after_import 참고)
-    auto = await auto_review.run_after_import(namespace)
-    return ImportSummaryOut(
-        source_file=result.source_file,
-        sheets=[s.__dict__ for s in result.sheets],
-        missing_marked=result.missing_marked,
-        warnings=result.warnings,
-        auto_review=auto,
-    )
+@router.get("/ref-tables/{table_id}")
+async def get_ref_table(table_id: int, namespace: str = Query(...), user: dict = Depends(get_current_user)):
+    """참고표 원표 — 열 + 행({열 이름: 값})."""
+    await check_knowledge_read(namespace, user)
+    out = await catalog.get_ref_table(namespace, table_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="참고표를 찾을 수 없어요.")
+    return out
+
+
+@router.get("/overviews")
+async def list_overviews(namespace: str = Query(...), user: dict = Depends(get_current_user)):
+    """문서 개요(서문)."""
+    await check_knowledge_read(namespace, user)
+    return await catalog.list_overviews(namespace)
 
 
 @router.get("/search", response_model=PolicySearchOut)
@@ -118,8 +72,8 @@ async def search_policy(
 ):
     """정책 데이터 검색 — 파라미터(RDB 정확 조회)와 서술(벡터 검색) 두 갈래를 함께 반환한다.
 
-    검토대기(pending_review)도 검색 대상에 포함한다(WBS 2-1 결정 — 반려·폐기만 제외). 그래서 위험도 기반
-    자동 통과(auto_review.py)로 검토대기↔승인이 바뀌어도 검색 결과는 같다. 응답의 `status`로 미검토 여부 구분.
+    대상은 채팅 검색과 같은 기준(visibility.searchable_sql — v0는 승인된 것만, 옛 엑셀 경로는 검토 대기 포함).
+    응답의 `status`로 미검토 여부 구분.
     """
     await check_knowledge_read(namespace, user)
     try:
@@ -130,222 +84,6 @@ async def search_policy(
         params=[p.__dict__ for p in result.params],
         narratives=[n.__dict__ for n in result.narratives],
     )
-
-
-@router.get("/unresolved-summary", response_model=UnresolvedSummaryOut)
-async def get_unresolved_summary(
-    namespace: str = Query(...),
-    system_key: Optional[str] = Query(default=None),
-    user: dict = Depends(get_current_user),
-):
-    """unresolved/partial로 분류된 정책 항목을 system_key별로 집계.
-
-    LLM 분해가 서술/파라미터 어디에도 못 넣은 내용이 팀별로 몇 건, 어떤 사유로 쌓였는지
-    보여준다 — 팀 표준화 요청의 근거 자료(§2-3), 그리고 분해 프롬프트 개선 여지를 사람이
-    발견하는 유일한 경로(2026-09-04 데모 중 발견된 헤더/데이터유실 버그가 이 갭을 드러냈다).
-    """
-    await check_knowledge_read(namespace, user)
-    try:
-        summary = await unresolved_report.get_unresolved_summary(namespace, system_key)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return UnresolvedSummaryOut(**asdict(summary))
-
-
-@router.post("/unresolved/{item_id}/promote", response_model=PromoteSegmentOut)
-async def promote_unresolved_segment(
-    item_id: int,
-    body: PromoteSegmentRequest,
-    user: dict = Depends(get_current_user),
-):
-    """unresolved segment 1건을 서술(policy_chunk)로 수동 편입 — "조회만 있고 액션이 없다"는
-    지적(2026-09-16)으로 신규. 정밀 재분류(param 필드 추출)가 아니라 최소한 검색은 되게
-    만드는 원클릭 액션이다(unresolved_report.promote_segment_to_narrative 참고)."""
-    await check_namespace_ownership(body.namespace, user)
-    try:
-        remaining = await unresolved_report.promote_segment_to_narrative(
-            body.namespace, item_id, body.segment_index,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return PromoteSegmentOut(remaining_segments=remaining)
-
-
-@router.post("/unresolved/{item_id}/promote-param", response_model=PromoteSegmentOut)
-async def promote_unresolved_segment_to_param(
-    item_id: int,
-    body: PromoteParamRequest,
-    user: dict = Depends(get_current_user),
-):
-    """unresolved segment 1건을 파라미터(policy_param)로 수동 편입 — "서술로 편입밖에
-    없으면 반쪽짜리 아니냐"는 지적(2026-09-23)으로 신규. name/condition/value/unit은
-    사람이 폼으로 직접 입력한 값 그대로 저장한다(unresolved_report.promote_segment_to_param
-    참고, v1은 LLM 프리필 없음)."""
-    await check_namespace_ownership(body.namespace, user)
-    try:
-        remaining = await unresolved_report.promote_segment_to_param(
-            body.namespace, item_id, body.segment_index,
-            body.name, body.condition, body.value, body.unit,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return PromoteSegmentOut(remaining_segments=remaining)
-
-
-@router.post("/unresolved/{item_id}/suggest-param", response_model=SuggestParamOut)
-async def suggest_unresolved_segment_param(
-    item_id: int,
-    body: SuggestParamRequest,
-    user: dict = Depends(get_current_user),
-):
-    """미분류 segment의 파라미터 필드를 LLM이 1차 추측 — "값 넣을 사람이 없겠다"는
-    지적(2026-09-23)으로 신규. 폼을 열자마자 프론트가 자동 호출해 프리필하는 용도라,
-    추측이 안 되거나 실패해도 에러를 내지 않고 빈 필드로 200을 반환한다(decompose.
-    suggest_param_fields 참고 — 사람이 그냥 수동으로 채우면 되는 보조 기능일 뿐)."""
-    await check_namespace_ownership(body.namespace, user)
-    try:
-        text, reason = await unresolved_report.get_unresolved_segment(
-            body.namespace, item_id, body.segment_index,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    suggestion = await decompose.suggest_param_fields(text, reason)
-    return SuggestParamOut(**(suggestion or {}))
-
-
-@router.patch("/params/{param_id}", response_model=ItemStatusOut)
-async def update_policy_param(
-    param_id: int,
-    body: UpdateParamRequest,
-    user: dict = Depends(get_current_user),
-):
-    """반려된 항목의 파라미터 수정 — "반려하면 그냥 데이터를 버리는데?"라는 지적(2026-09-23)
-    으로 신규. 저장하면 검토대기로 되돌아가 재승인 기회를 얻는다(edit.py 참고)."""
-    await check_namespace_ownership(body.namespace, user)
-    try:
-        new_status = await edit.update_param(
-            body.namespace, param_id, body.name, body.condition, body.value, body.unit,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return ItemStatusOut(status=new_status)
-
-
-@router.patch("/narratives/{chunk_id}", response_model=ItemStatusOut)
-async def update_policy_narrative(
-    chunk_id: int,
-    body: UpdateNarrativeRequest,
-    user: dict = Depends(get_current_user),
-):
-    """반려된 항목의 서술 수정 — 위 update_policy_param과 동일 취지. 텍스트가 바뀌므로
-    재임베딩 후 검토대기로 되돌린다(edit.py 참고)."""
-    await check_namespace_ownership(body.namespace, user)
-    try:
-        new_status = await edit.update_narrative(body.namespace, chunk_id, body.chunk_text)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return ItemStatusOut(status=new_status)
-
-
-@router.post("/items/{item_id}/approve")
-async def approve_policy_item(
-    item_id: int,
-    body: ItemActionRequest,
-    user: dict = Depends(get_current_user),
-):
-    """검토 대기 정책 항목을 승인 — status: pending_review → active(review.py 참고)."""
-    await check_namespace_ownership(body.namespace, user)
-    try:
-        await review.approve_item(body.namespace, item_id, user["id"])
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "active"}
-
-
-@router.post("/items/{item_id}/reject")
-async def reject_policy_item(
-    item_id: int,
-    body: ItemActionRequest,
-    user: dict = Depends(get_current_user),
-):
-    """검토 대기 정책 항목을 반려 — status: pending_review → rejected(review.py 참고)."""
-    await check_namespace_ownership(body.namespace, user)
-    try:
-        result = await review.reject_item(body.namespace, item_id, user["id"])
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    # 자동 통과 표본이 반려되면 그 규칙이 멈춘다 — 화면이 바로 알리도록 같이 돌려준다
-    return {"status": "rejected", **result}
-
-
-# ── 위험도 기반 자동 통과(2026-10-01, auto_review.py) ──────────────────────────
-
-@router.get("/review-summary")
-async def policy_review_summary(namespace: Optional[str] = Query(default=None), user: dict = Depends(get_current_user)):
-    """사람이 실제로 봐야 할 큐 크기(높음·중간·표본) + 자동 통과 누계 + 규칙 상태."""
-    if namespace:
-        await check_knowledge_read(namespace, user)
-    elif user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="전체 요약은 관리자만 볼 수 있습니다.")
-    return await auto_review.summary(namespace)
-
-
-@router.post("/auto-review/run")
-async def run_policy_auto_review(body: AutoReviewRunRequest, admin: dict = Depends(get_current_admin)):
-    """낮음 등급 자동 통과 실행(dry_run=true면 건수 미리보기만). 표본은 사람 큐에 남긴다."""
-    return await auto_review.run(body.namespace, actor_id=admin["id"], dry_run=body.dry_run)
-
-
-@router.post("/auto-review/rules/{rule_key}/resume")
-async def resume_policy_auto_rule(rule_key: str, admin: dict = Depends(get_current_admin)):
-    """표본 반려로 멈춘 규칙을 확인 후 재개."""
-    try:
-        return await auto_review.resume_rule(rule_key, admin["id"])
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.post("/auto-review/revert")
-async def revert_policy_auto_review(body: AutoReviewRevertRequest, admin: dict = Depends(get_current_admin)):
-    """한 번의 실행 또는 한 규칙으로 자동 통과된 항목을 검토대기로 일괄 되돌림."""
-    try:
-        return {"reverted": await auto_review.revert_bulk(run_id=body.run_id, rule_key=body.rule_key,
-                                                          actor_id=admin["id"], namespace=body.namespace)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.post("/items/{item_id}/revert-auto")
-async def revert_auto_policy_item(item_id: int, body: ItemActionRequest, user: dict = Depends(get_current_user)):
-    """자동 통과된 항목 하나를 검토대기로 되돌림(승인 권한과 동일)."""
-    await check_namespace_ownership(body.namespace, user)
-    try:
-        await auto_review.revert_item(body.namespace, item_id, user["id"])
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "pending_review"}
-
-
-@router.get("/items", response_model=list[PolicyItemOut])
-async def list_policy_items(
-    namespace: str = Query(...),
-    category: Optional[str] = Query(default=None),
-    q: Optional[str] = Query(default=None),
-    status: Optional[str] = Query(default=None),
-    sort: Optional[str] = Query(default=None, pattern="^risk$"),
-    user: dict = Depends(get_current_user),
-):
-    """정책 항목을 item 단위로 목록 조회 — 각 item에 실제로 달린 param(RDB)/narrative(벡터)
-    자식까지 함께 반환한다. `/search`와 달리 쿼리 없이도 전체 목록을 볼 수 있고, 결과가
-    검색 히트가 아니라 3층 구조(item→param/chunk) 그대로다 — "지금 뭐가 어떻게 저장돼
-    있는지" 사람이 훑어보는 용도(§4-2 참고: 검색과 목적이 달라 별도 함수로 분리).
-    """
-    await check_knowledge_read(namespace, user)
-    try:
-        items = await browse.list_policy_items(namespace, category, q, status, sort)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return [PolicyItemOut(**asdict(i)) for i in items]
 
 
 @router.get("/track2/axes")

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 
 // v0 방식(정책서 파트, 원문 통째 조각 1개 — 2026-10-20) 임시 정책을 만드는 E2E 공용 도구.
-// 예전 테스트는 업무 파트에 엑셀로 정책을 올렸는데, v0에선 정책서 파트에 엑셀 업로드가 막혀 있고(service.py _ensure_excel_part)
+// 예전 테스트는 업무 파트에 엑셀로 정책을 올렸는데, v0에선 엑셀 분해 적재 경로 자체가 없어졌고(10/21 삭제)
 // 업무 파트에서 질문하면 정책서 파트 14개를 함께 찾아 실데이터가 섞인다. 정책서 파트로 만들면 채팅 범위가 그 파트뿐이라 격리된다.
 
 export function psql(sql: string): string {

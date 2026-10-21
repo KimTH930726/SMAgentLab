@@ -285,7 +285,8 @@ function CorrectionReceipt({ messageId }: { messageId: number }) {
   const originalText = String(orig.content ?? orig.chunk_text ?? orig.raw_body ?? orig.question ?? '');
   const p = result.proposed;
   const proposedText = p ? String(p.content ?? p.chunk_text ?? p.raw_body ?? '') : '';
-  const hasDiff = result.target_type !== 'answer';
+  // 대상 없음(auto — 예: 같은 정책을 이미 다른 정정이 검토 중이라 대상을 비워 둔 신고, 10/21 리뷰)도 고칠 원문·수정안이 없다
+  const hasDiff = result.target_type !== 'answer' && result.target_type !== 'auto';
   return (
     <div className="rounded-xl border px-3 py-2.5 text-xs space-y-2 bg-indigo-50/60 border-indigo-200 dark:bg-indigo-950/20 dark:border-indigo-800/50">
       <div className="flex items-center gap-2">

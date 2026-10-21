@@ -246,11 +246,10 @@ def test_compress_reports_conflict_and_keeps_all_columns():
 
 
 def test_whole_body_marker_is_the_same_everywhere():
-    """원문 통째 표시값은 테스트 격리 때문에 여러 곳에 값으로 적혀 있다 — 하나라도 다르면 위험도·수정·정정이 v0을 옛 항목으로 본다."""
+    """원문 통째 표시값은 테스트 격리 때문에 visibility.py에 값으로 적혀 있다 — 다르면 검색·정정이 v0을 옛 항목으로 본다."""
     root = Path(__file__).resolve().parents[1]
-    for rel in ("service/policy/edit.py", "service/improvement/service.py"):
-        assert f'PIPELINE_WHOLE = "{vc.PIPELINE_WHOLE}"' in (root / rel).read_text(encoding="utf-8"), rel
-    assert f"p.pipeline_version = '{vc.PIPELINE_WHOLE}'" in (root / "service/policy/risk.py").read_text(encoding="utf-8")
+    # 정정·승인·검색은 visibility에서 가져다 씀(10/21 중복 정리). 옛 edit.py·risk.py는 v0 재구축 2단계에서 삭제
+    assert f'PIPELINE_WHOLE = "{vc.PIPELINE_WHOLE}"' in (root / "service/policy/visibility.py").read_text(encoding="utf-8")
 
 
 

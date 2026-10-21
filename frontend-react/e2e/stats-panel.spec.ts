@@ -57,6 +57,6 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
   await page.keyboard.press('Escape');
   await card('정정 요청').click();
   await expect(page.getByText(/질의 \(\d+건\)/)).toHaveCount(0);
-  await expect(page.getByText('지식·정책을 고치자는 신호가 모두 모이는 곳', { exact: false })).toBeVisible();
+  await expect(page.getByText(/지식·정책을 고치자는 신호.*모두 모이는 곳/)).toBeVisible();
   await expect(domainSelect(page)).toHaveValue(NAMESPACE);
 });

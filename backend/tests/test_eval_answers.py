@@ -40,3 +40,23 @@ def test_judge_prompt_marks_truncated_reference_list():
          "refs": [{"category": "재고", "policy": f"p{i}", "body": "b"} for i in range(15)]}
     p = ea._judge_prompt(r)
     assert "30개 중 15개만 표시" in p and "[기대 답]" not in p
+
+
+def test_v0_golden_prefers_searchable_row_for_same_source_key(tmp_path, monkeypatch):
+    """같은 원천 키에 반려 행과 현행 행이 같이 있으면 현행(검색 대상)을 정답으로 — 아무 행이나 잡으면 맞는 답이 gold_inactive로 빠졌다(10/21 리뷰 L2)."""
+    import json as _json
+    (tmp_path / "a.jsonl").write_text(_json.dumps({
+        "qid": "q1", "verdict": "approved", "layer": "param", "query": "반품 기한?", "expect": "answer", "doc": "정책",
+        "gold": [{"kind": "policy", "source_key": "pol_1"}]}, ensure_ascii=False) + "\n", encoding="utf-8")
+    monkeypatch.setattr(ea, "V0_GOLDEN_DIR", tmp_path)
+    seen = {}
+
+    class Conn:
+        async def fetch(self, sql, *a):
+            seen["sql"] = sql
+            # DB가 ORDER BY대로 검색 대상(현행)을 먼저 준다 — 뒤의 반려 행이 덮어쓰면 안 된다
+            return [{"id": 11, "source_key": "pol_1", "ns": "정책"}, {"id": 12, "source_key": "pol_1", "ns": "정책"}]
+
+    golden, _raw, _skipped = asyncio.run(ea.load_v0_golden(Conn()))
+    assert golden[0]["gold_ids"] == {11} and golden[0]["unresolved"] == 0
+    assert "ORDER BY" in seen["sql"] and "status = 'active'" in seen["sql"]

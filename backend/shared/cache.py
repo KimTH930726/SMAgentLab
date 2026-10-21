@@ -205,6 +205,29 @@ async def invalidate_namespace(namespace: str) -> int:
         return 0
 
 
+async def invalidate_all() -> int:
+    """답변 캐시 전체 무효화 — 정책처럼 여러 업무 영역에 걸쳐 쓰이는 지식이 바뀌었을 때(10/21).
+    영역마다 따로 훑으면 영역 수만큼 키 공간을 SCAN했다(리뷰 P1) → 한 번 훑고 묶어서 지운다."""
+    r = await _get_redis()
+    if r is None:
+        return 0
+    try:
+        count, batch = 0, []
+        async for key in r.scan_iter("semcache:*"):
+            batch.append(key)
+            if len(batch) >= 500:
+                count += await r.unlink(*batch)
+                batch = []
+        if batch:
+            count += await r.unlink(*batch)
+        if count:
+            logger.info("[Cache INVALIDATE] 전체 count=%d", count)
+        return count
+    except Exception as e:
+        logger.warning("[Cache] 전체 무효화 실패 (무시): %s", e)
+        return 0
+
+
 async def get_stats(namespace: str) -> dict:
     """namespace 캐시 통계 반환."""
     r = await _get_redis()

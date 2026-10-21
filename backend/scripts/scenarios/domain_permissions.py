@@ -75,7 +75,7 @@ async def main() -> int:
 
             # 조회 규칙: 통계·질의 기록은 담당 파트·관리자만, 조회 전용 X
             chk("다른 파트 통계 조회(사람 데이터)", (await h.get(f"/api/stats/namespace/{P}ns", headers=U2)).status_code, 403)
-            chk("다른 파트 지식(정책 목록) 조회", (await h.get("/api/policy/items", params={"namespace": P + "ns"}, headers=U2)).status_code, 200)
+            chk("다른 파트 지식(정책 목록) 조회", (await h.get("/api/policy/policies", params={"namespace": P + "ns"}, headers=U2)).status_code, 200)   # 옛 /items는 v2.150 삭제
             chk("담당 파트 통계 조회", (await h.get(f"/api/stats/namespace/{P}ns", headers=U1)).status_code, 200)
             chk("영역 없이 지식 전체 조회(일반)", (await h.get("/api/knowledge", headers=U1)).status_code, 400)
 

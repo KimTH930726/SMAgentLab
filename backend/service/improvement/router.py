@@ -7,9 +7,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from core.dependencies import check_namespace_ownership, get_current_user
 from service.improvement import service
-from service.improvement.schemas import ApproveBody, CorrectionCreate, RejectBody, RetargetBody, SeenBody, RedraftBody
+from service.improvement.schemas import (
+    ApproveBody, CorrectionCreate, ProposedBody, RejectBody, RetargetBody, SeenBody, RedraftBody,
+)
 
 router = APIRouter(prefix="/api/corrections", tags=["corrections"])
+
+
+def _conflict(e: "service.ConflictError") -> HTTPException:
+    """409 — 이미 검토 중인 정정이 있으면 그 id도 같이(정책 화면이 "정정 #N 보기"로 안내)."""
+    existing = getattr(e, "existing_id", None)
+    return HTTPException(status_code=409, detail={"message": str(e), "existing_id": existing} if existing else str(e))
 
 
 def _ids(csv: Optional[str]) -> list[int]:
@@ -23,13 +31,28 @@ def _ids(csv: Optional[str]) -> list[int]:
 
 @router.post("", status_code=201)
 async def create_correction(body: CorrectionCreate, user: dict = Depends(get_current_user)):
+    """채팅 신고(로그인 사용자 누구나 — 신호일 뿐) 또는 정책서 화면의 수정 제안(source 있음 — 그 업무 영역 담당 파트·관리자만)."""
+    if body.source is not None:
+        await check_namespace_ownership(body.namespace, user)
+        if body.target_type != "policy_narrative" or body.target_id is None:
+            raise HTTPException(status_code=400, detail="정책 수정 제안은 정책 항목을 지정해야 합니다.")
+        try:
+            return await service.create_policy_proposal(
+                body.namespace, user, item_id=body.target_id, mode=body.source, proposed=body.proposed,
+                user_input=body.user_input,
+            )
+        except service.ConflictError as e:
+            raise _conflict(e)
+    user_input = (body.user_input or "").strip()
+    if not user_input:
+        raise HTTPException(status_code=400, detail="어디가 틀렸는지 한 줄 적어 주세요.")
     try:
         return await service.create_item(
             body.namespace, user, target_type=body.target_type, target_id=body.target_id,
-            target_sub_id=body.target_sub_id, message_id=body.message_id, user_input=body.user_input.strip(),
+            target_sub_id=body.target_sub_id, message_id=body.message_id, user_input=user_input,
         )
     except service.ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise _conflict(e)
 
 
 @router.get("/status")
@@ -95,6 +118,16 @@ async def approve_correction(item_id: int, body: ApproveBody, user: dict = Depen
         raise HTTPException(status_code=409, detail=str(e))
 
 
+@router.patch("/{item_id}/proposed")
+async def update_correction_proposed(item_id: int, body: ProposedBody, user: dict = Depends(get_current_user)):
+    """[직접 수정] — 저장된 수정안을 담당자가 고친 안으로 바꾼다(반영은 [승인]에서). 승인과 같은 권한·검사."""
+    await _require_item_owner(item_id, user)
+    try:
+        return await service.update_proposed(item_id, user, body.proposed)
+    except service.ConflictError as e:
+        raise _conflict(e)
+
+
 @router.post("/{item_id}/reject")
 async def reject_correction(item_id: int, body: RejectBody, user: dict = Depends(get_current_user)):
     await _require_item_owner(item_id, user)
@@ -103,7 +136,7 @@ async def reject_correction(item_id: int, body: RejectBody, user: dict = Depends
 
 @router.post("/{item_id}/redraft")
 async def redraft_correction(item_id: int, body: RedraftBody, user: dict = Depends(get_current_user)):
-    """담당자 요청 한 줄 → AI가 수정안을 다시 씀(사람은 직접 고치지 않는다, 10/21)."""
+    """담당자 요청 한 줄 → AI가 수정안을 다시 씀(직접 고치려면 PATCH …/proposed)."""
     await _require_item_owner(item_id, user)
     return await service.redraft(item_id, user, body.feedback.strip())
 
@@ -125,4 +158,4 @@ async def retarget_correction(item_id: int, body: RetargetBody, user: dict = Dep
     try:
         return await service.retarget(item_id, user, body.key)
     except service.ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise _conflict(e)   # 다른 정책 정정이 검토 중이면 그 번호도 같이(10/21 리뷰 M1)

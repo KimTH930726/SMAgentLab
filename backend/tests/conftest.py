@@ -97,6 +97,17 @@ sys.modules["service.chat.memory"] = MagicMock()
 # 패키지처럼 서브모듈을 못 찾아 ModuleNotFoundError가 난다(테스트 실행 순서에 따라
 # 우연히 다른 파일이 먼저 등록해줘야만 통과하던 실사고, 2026-09-24). 여기 한 곳에서
 # 등록해 모든 테스트 파일이 순서와 무관하게 안전하게 import할 수 있게 한다.
+# 정책 검색 대상 조건·정책 캐시 비우기(2026-10-21) — 여러 모듈(search·keyword_index·category_list·scope·catalog·admin·improvement)이
+# import하는 잎 모듈이라 실제 파일을 등록한다. 테스트 파일들이 service.policy를 MagicMock으로 갈아 끼워도 전체 이름
+# ("service.policy.visibility")으로 sys.modules에서 바로 찾으므로 영향 없다.
+for _leaf in ("visibility", "caches"):
+    _leaf_name = f"service.policy.{_leaf}"
+    if _leaf_name not in sys.modules:
+        _leaf_spec = _ilu.spec_from_file_location(_leaf_name, str(Path(backend_dir) / "service" / "policy" / f"{_leaf}.py"))
+        _leaf_mod = _ilu.module_from_spec(_leaf_spec)
+        sys.modules[_leaf_name] = _leaf_mod
+        _leaf_spec.loader.exec_module(_leaf_mod)
+
 sys.modules.setdefault("service.admin", MagicMock())
 if "service.admin.service" not in sys.modules:
     _admin_service_spec = _ilu.spec_from_file_location(

@@ -19,6 +19,7 @@ from typing import Optional, Sequence, Union
 import logging
 
 from core.database import get_conn
+from service.policy.visibility import searchable_sql
 
 logger = logging.getLogger(__name__)
 _NUM = re.compile(r"^\s*[\d\-]+[.)]\s*")
@@ -140,7 +141,7 @@ async def _index(conn, key: tuple[int, ...]) -> CategoryIndex:
     multi = len(key) > 1
     for r in await conn.fetch(
             "SELECT i.id, i.category_path, n.name AS part FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id "
-            "WHERE i.namespace_id = ANY($1::int[]) AND i.status NOT IN ('deprecated', 'rejected')", list(key)):
+            f"WHERE i.namespace_id = ANY($1::int[]) AND {searchable_sql('i')}", list(key)):   # v0 검토 대기 제외(10/21)
         path_raw = ([r["part"]] if multi else []) + list(r["category_path"] or [])
         segs = [_NUM.sub("", c).strip() for c in path_raw]
         for i, cat in enumerate(path_raw):

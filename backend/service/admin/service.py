@@ -5,6 +5,7 @@ import logging
 from typing import Optional
 
 from core.database import get_conn
+from service.policy.visibility import searchable_sql
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ async def list_namespaces() -> list[str]:
 async def list_namespaces_detail() -> list[dict]:
     async with get_conn() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT n.id, n.name, n.description, n.kind,
                    n.owner_part_id, p.name AS owner_part,
                    n.created_at::text,
@@ -39,8 +40,8 @@ async def list_namespaces_detail() -> list[dict]:
             LEFT JOIN (
                 SELECT namespace_id, COUNT(*) AS cnt FROM rag_glossary GROUP BY namespace_id
             ) g ON n.id = g.namespace_id
-            LEFT JOIN (   -- 지금 쓰이는 정책(폐기·반려 제외 — 채팅 검색 대상과 같은 기준)
-                SELECT namespace_id, COUNT(*) AS cnt FROM policy_item WHERE status NOT IN ('deprecated', 'rejected') GROUP BY namespace_id
+            LEFT JOIN (   -- 지금 쓰이는 정책 — 채팅 검색 대상과 같은 기준(searchable_sql, v0 검토 대기 제외 10/21)
+                SELECT namespace_id, COUNT(*) AS cnt FROM policy_item WHERE {searchable_sql('policy_item')} GROUP BY namespace_id
             ) pi ON n.id = pi.namespace_id
             LEFT JOIN (
                 SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge_category GROUP BY namespace_id

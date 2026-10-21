@@ -18,6 +18,8 @@ export interface AiVerdict {
   label?: string;
   preview?: string;
   retargeted?: { from: string; to: string; by: number | null };
+  /** 정정 요청의 [직접 수정] 기록(누가·언제) */
+  edits?: { by: number | null; by_name?: string | null; at: string }[];
 }
 
 export interface CorrectionCandidate {
@@ -52,7 +54,8 @@ export interface CorrectionItem {
   target_type: CorrectionTargetType;
   target_id: number | null;
   target_sub_id: number | null;
-  user_input: string;
+  /** 정책 화면 직접 수정은 없음(null) */
+  user_input: string | null;
   original: Record<string, unknown> | null;
   proposed: Record<string, string | null> | null;
   status: 'pending' | 'approved' | 'rejected';
@@ -76,6 +79,33 @@ export interface CorrectionCreated {
 
 export async function createCorrection(payload: CorrectionCreatePayload): Promise<CorrectionCreated> {
   return apiFetch('/corrections', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+/** 정책서 화면의 수정 제안(10/21) — 직접 수정(원문·비고 그대로) 또는 AI 제안(한 줄). 정정 요청에서 승인해야 반영된다.
+ *  같은 정책에 검토 중 정정이 있으면 409(ApiError.detail.existing_id). */
+export type PolicyProposalSource = 'policy_direct' | 'policy_ai';
+
+export interface PolicyProposalCreated {
+  id: number;
+  source: PolicyProposalSource;
+  proposed: Record<string, string | null> | null;
+  /** AI 제안인데 AI가 초안을 못 만듦 — 제안은 남았고 정정 요청에서 이어 간다 */
+  ai_failed: boolean;
+}
+
+export async function createPolicyProposal(
+  namespace: string, itemId: number, source: PolicyProposalSource,
+  body: { proposed?: { raw_body: string; remark: string }; user_input?: string },
+): Promise<PolicyProposalCreated> {
+  return apiFetch('/corrections', {
+    method: 'POST',
+    body: JSON.stringify({ namespace, target_type: 'policy_narrative', target_id: itemId, source, ...body }),
+  });
+}
+
+/** 정정 요청 카드의 [직접 수정] — 저장된 수정안을 바꾼다(반영은 [승인]에서) */
+export async function updateCorrectionProposed(id: number, proposed: Record<string, string | null>): Promise<{ id: number; proposed: Record<string, string | null> }> {
+  return apiFetch(`/corrections/${id}/proposed`, { method: 'PATCH', body: JSON.stringify({ proposed }) });
 }
 
 export async function getCorrectionStatus(
@@ -115,7 +145,7 @@ export async function rejectCorrection(id: number, reason: string): Promise<unkn
   return apiFetch(`/corrections/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
 }
 
-/** 담당자 요청 한 줄 → AI가 수정안을 다시 씀(사람은 직접 고치지 않는다, 10/21) */
+/** 담당자 요청 한 줄 → AI가 수정안을 다시 씀(직접 고치려면 updateCorrectionProposed) */
 export async function redraftCorrection(id: number, feedback: string): Promise<{ id: number; proposed: Record<string, string>; marked: boolean }> {
   return apiFetch(`/corrections/${id}/redraft`, { method: 'POST', body: JSON.stringify({ feedback }) });
 }
