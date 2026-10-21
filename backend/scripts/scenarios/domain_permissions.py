@@ -74,7 +74,8 @@ async def main() -> int:
             chk("없는 업무구분 이름 변경 → 404 + 지식 그대로", (r.status_code, cat), (404, P + "ghost"))
 
             # 조회 규칙: 통계·질의 기록은 담당 파트·관리자만, 조회 전용 X
-            chk("다른 파트 통계 조회", (await h.get(f"/api/stats/namespace/{P}ns", headers=U2)).status_code, 403)
+            chk("다른 파트 통계 조회(사람 데이터)", (await h.get(f"/api/stats/namespace/{P}ns", headers=U2)).status_code, 403)
+            chk("다른 파트 지식(정책 목록) 조회", (await h.get("/api/policy/items", params={"namespace": P + "ns"}, headers=U2)).status_code, 200)
             chk("담당 파트 통계 조회", (await h.get(f"/api/stats/namespace/{P}ns", headers=U1)).status_code, 200)
             chk("영역 없이 지식 전체 조회(일반)", (await h.get("/api/knowledge", headers=U1)).status_code, 400)
 
@@ -94,6 +95,25 @@ async def main() -> int:
             rs = await asyncio.gather(*[h.post("/api/auth/parts", json={"name": P + "dup"}, headers=A) for _ in range(10)])
             codes = sorted(r.status_code for r in rs)
             chk("같은 파트 동시 10번(성공 1·500 없음)", (codes.count(201), 500 in codes), (1, False))
+
+            # 담당 업무 영역 통째 저장(1:N): 붙이면 그 파트가 수정, 빼면 관리자만, 없는 영역이 섞이면 아무것도 안 바뀜
+            await h.post("/api/namespaces", json={"name": P + "ns2"}, headers=A)
+            async with get_conn() as c:
+                p2 = await c.fetchval("SELECT id FROM ops_part WHERE name = $1", P + "p2")
+            r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns", P + "ns2"]}, headers=A)
+            chk("파트2가 영역 2개 맡기(1:N, 파트1 것 옮겨 옴)", (r.status_code, r.json().get("domains")), (200, [P + "ns", P + "ns2"]))
+            chk("  → 파트2 사람 수정", (await h.post(f"/api/namespaces/{P}ns2/categories", json={"name": "e"}, headers=U2)).status_code, 201)
+            chk("  → 파트1 사람은 이제 못 고침", (await h.post(f"/api/namespaces/{P}ns/categories", json={"name": "f"}, headers=U1)).status_code, 403)
+            r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns", "없는영역__"]}, headers=A)
+            async with get_conn() as c:
+                owned = await c.fetchval("SELECT count(*) FROM ops_namespace WHERE owner_part_id = $1", p2)
+            chk("없는 영역 섞이면 400 + 그대로(2개)", (r.status_code, owned), (400, 2))
+            r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns"]}, headers=A)
+            chk("하나 빼기 → 그 영역은 관리자만", (await h.post(f"/api/namespaces/{P}ns2/categories", json={"name": "g"}, headers=U2)).status_code, 403)
+            chk("일반 사용자는 담당 저장 불가", (await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": []}, headers=U2)).status_code, 403)
+            r = await h.get("/api/auth/parts")
+            chk("가입용 공개 목록엔 담당 영역 없음", all(not x.get("domains") for x in r.json()), True)
+            await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": []}, headers=A)
 
             # 쓰이는 파트 삭제 금지
             async with get_conn() as c:

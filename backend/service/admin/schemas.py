@@ -38,6 +38,7 @@ class NamespaceInfo(BaseModel):
     name: str
     description: str
     kind: str = "domain"                  # domain | policy_test(E2E 임시)
+    owner_part_id: Optional[int] = None   # 담당 비교는 id로(파트 이름은 바뀔 수 있다)
     owner_part: Optional[str] = None
     knowledge_count: int
     glossary_count: int

@@ -250,21 +250,43 @@ async def delete_confluence_pat(user_id: int) -> bool:
 
 # ── 파트 CRUD ────────────────────────────────────────────────────────────────
 
-async def list_parts() -> list[dict]:
-    """파트 목록(조직: 팀 > 파트, 2026-10-20). 팀이 없는 파트는 team=None."""
+async def list_parts(with_domains: bool = False) -> list[dict]:
+    """파트 목록(조직: 팀 > 파트, 2026-10-20). 팀이 없는 파트는 team=None.
+    with_domains: 파트가 담당하는 업무 영역 이름들(관리자 화면용 — 가입 화면의 공개 목록엔 싣지 않는다)."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
             SELECT p.id, p.name, p.created_at::text, t.name AS team,
-                   COUNT(u.id) AS user_count
+                   (SELECT COUNT(*) FROM ops_user u WHERE u.part_id = p.id) AS user_count,
+                   CASE WHEN $1 THEN COALESCE((SELECT array_agg(n.name ORDER BY n.name) FROM ops_namespace n
+                                              WHERE n.owner_part_id = p.id), '{}') END AS domains
             FROM ops_part p
             LEFT JOIN ops_team t ON t.id = p.team_id
-            LEFT JOIN ops_user u ON u.part_id = p.id
-            GROUP BY p.id, p.name, p.created_at, t.name
             ORDER BY t.name NULLS LAST, p.name
-            """
+            """, with_domains,
         )
-    return [dict(r) for r in rows]
+    return [{**dict(r), "domains": list(r["domains"] or [])} for r in rows]
+
+
+async def set_part_domains(part_id: int, names: list[str]) -> Optional[dict]:
+    """파트가 담당하는 업무 영역을 통째로 정한다(1:N — 한 파트가 여러 영역, 영역 하나엔 담당 파트 하나). 한 트랜잭션:
+    목록에 있는 영역은 이 파트로(다른 파트 담당이었으면 옮겨 옴), 이 파트가 맡던 영역 중 목록에서 빠진 것은 담당 없음(관리자만 수정)으로.
+    없는 영역 이름이 하나라도 있으면 아무것도 바꾸지 않는다. 파트가 없으면 None."""
+    wanted = sorted(set(names))
+    async with get_conn() as conn, conn.transaction():
+        if await conn.fetchval("SELECT id FROM ops_part WHERE id = $1 FOR KEY SHARE", part_id) is None:
+            return None
+        found = {r["name"] for r in await conn.fetch(
+            "SELECT name FROM ops_namespace WHERE name = ANY($1::text[]) OR owner_part_id = $2 FOR UPDATE", wanted, part_id)}
+        missing = [n for n in wanted if n not in found]
+        if missing:
+            raise ValueError(f"없는 업무 영역입니다: {', '.join(missing)}")
+        await conn.execute("UPDATE ops_namespace SET owner_part_id = NULL WHERE owner_part_id = $1 AND NOT (name = ANY($2::text[]))",
+                           part_id, wanted)
+        await conn.execute("UPDATE ops_namespace SET owner_part_id = $1 WHERE name = ANY($2::text[])", part_id, wanted)
+        domains = [r["name"] for r in await conn.fetch(
+            "SELECT name FROM ops_namespace WHERE owner_part_id = $1 ORDER BY name", part_id)]
+    return {"part_id": part_id, "domains": domains}
 
 
 async def create_part(name: str) -> Optional[dict]:

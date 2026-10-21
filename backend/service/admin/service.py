@@ -22,7 +22,7 @@ async def list_namespaces_detail() -> list[dict]:
         rows = await conn.fetch(
             """
             SELECT n.id, n.name, n.description, n.kind,
-                   p.name AS owner_part,
+                   n.owner_part_id, p.name AS owner_part,
                    n.created_at::text,
                    n.created_by_user_id,
                    u.username AS created_by_username,

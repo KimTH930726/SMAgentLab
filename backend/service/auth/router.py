@@ -6,6 +6,7 @@ from core.security import decode_token
 from service.auth import service
 from service.auth.service import RegisterError, LoginError
 from service.auth.schemas import (
+    PartDomainsUpdate,
     RegisterRequest, LoginRequest, TokenResponse,
     RefreshRequest, AccessTokenResponse,
     PasswordChangeRequest, LLMCredentialsUpdateRequest, ConfluencePATRequest,
@@ -93,8 +94,8 @@ async def get_parts():
 
 @router.get("/parts/all", response_model=list[PartOut])
 async def get_all_parts(admin: dict = Depends(get_current_admin)):
-    """파트 목록 전체 조회 (관리자 전용 — 지금은 가입용과 같다, 화면 호환으로 유지)."""
-    return await service.list_parts()
+    """파트 목록 전체 조회 (관리자 전용) — 파트별 담당 업무 영역 포함."""
+    return await service.list_parts(with_domains=True)
 
 
 # ── 인증 필요 엔드포인트 ─────────────────────────────────────────────────────
@@ -186,6 +187,15 @@ async def rename_part_endpoint(part_id: int, body: PartCreate, admin: dict = Dep
     result = await service.rename_part(part_id, body.name.strip())
     if result is None:
         raise HTTPException(status_code=409, detail="이미 존재하는 파트 이름입니다.")
+    return result
+
+
+@router.put("/parts/{part_id}/domains")
+async def set_part_domains(part_id: int, body: PartDomainsUpdate, admin: dict = Depends(get_current_admin)):
+    """파트의 담당 업무 영역을 통째로 저장(관리자) — 이 파트 사람이 그 영역의 지식·정책·용어를 수정하게 된다."""
+    result = await service.set_part_domains(part_id, body.domains)
+    if result is None:
+        raise HTTPException(status_code=404, detail="파트를 찾을 수 없습니다.")
     return result
 
 

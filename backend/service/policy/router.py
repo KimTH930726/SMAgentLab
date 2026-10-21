@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
-from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership, check_namespace_read
+from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership, check_knowledge_read
 from service.policy import answer_eval
 from service.policy import service, search as search_service, unresolved_report, browse, track2, pipeline_stats, review, edit, decompose, auto_review, json_format
 from service.policy.schemas import AutoReviewRevertRequest, AutoReviewRunRequest
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/policy", tags=["policy"])
 @router.get("/sources")
 async def list_policy_sources(namespace: str = Query(...), user: dict = Depends(get_current_user)):
     """이 파트의 정책서 원본 파일·시트 목록 — 붙여넣기 화면이 원본 이름·시트 이름을 고르게."""
-    await check_namespace_read(namespace, user)
+    await check_knowledge_read(namespace, user)
     return await service.list_sources(namespace)
 
 
@@ -121,7 +121,7 @@ async def search_policy(
     검토대기(pending_review)도 검색 대상에 포함한다(WBS 2-1 결정 — 반려·폐기만 제외). 그래서 위험도 기반
     자동 통과(auto_review.py)로 검토대기↔승인이 바뀌어도 검색 결과는 같다. 응답의 `status`로 미검토 여부 구분.
     """
-    await check_namespace_read(namespace, user)
+    await check_knowledge_read(namespace, user)
     try:
         result = await search_service.search_policy(namespace, q, category, top_k)
     except ValueError as e:
@@ -144,7 +144,7 @@ async def get_unresolved_summary(
     보여준다 — 팀 표준화 요청의 근거 자료(§2-3), 그리고 분해 프롬프트 개선 여지를 사람이
     발견하는 유일한 경로(2026-09-04 데모 중 발견된 헤더/데이터유실 버그가 이 갭을 드러냈다).
     """
-    await check_namespace_read(namespace, user)
+    await check_knowledge_read(namespace, user)
     try:
         summary = await unresolved_report.get_unresolved_summary(namespace, system_key)
     except ValueError as e:
@@ -284,7 +284,7 @@ async def reject_policy_item(
 async def policy_review_summary(namespace: Optional[str] = Query(default=None), user: dict = Depends(get_current_user)):
     """사람이 실제로 봐야 할 큐 크기(높음·중간·표본) + 자동 통과 누계 + 규칙 상태."""
     if namespace:
-        await check_namespace_read(namespace, user)
+        await check_knowledge_read(namespace, user)
     elif user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="전체 요약은 관리자만 볼 수 있습니다.")
     return await auto_review.summary(namespace)
@@ -340,7 +340,7 @@ async def list_policy_items(
     검색 히트가 아니라 3층 구조(item→param/chunk) 그대로다 — "지금 뭐가 어떻게 저장돼
     있는지" 사람이 훑어보는 용도(§4-2 참고: 검색과 목적이 달라 별도 함수로 분리).
     """
-    await check_namespace_read(namespace, user)
+    await check_knowledge_read(namespace, user)
     try:
         items = await browse.list_policy_items(namespace, category, q, status, sort)
     except ValueError as e:
@@ -411,6 +411,6 @@ async def get_pipeline_stats(
     user: dict = Depends(get_current_user),
 ):
     """기준정보 축적 현황 — 모니터링 뷰(실험실 게이트 작업3)의 "①기준정보 축적" 섹션."""
-    await check_namespace_read(namespace, user)
+    await check_knowledge_read(namespace, user)
     stats = await pipeline_stats.get_pipeline_stats(namespace)
     return PipelineStatsOut(**stats)

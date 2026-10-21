@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Plus, Shield, User as UserIcon, Users, Building2, Pencil, Check, X } from 'lucide-react';
+import { Trash2, Plus, Shield, User as UserIcon, Users, Building2, Pencil, Check, X, Layers } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
@@ -8,8 +8,9 @@ import { getUsers, updateUser, deleteUser, getAllParts, createPart, deletePart, 
 import { useAuthStore } from '../../store/useAuthStore';
 import type { User } from '../../types';
 import { showConfirm, showError } from '../../store/useDialogStore';
+import { PartDomainSection } from './PartDomainSection';
 
-type SubTab = 'users' | 'parts';
+type SubTab = 'users' | 'parts' | 'domains';
 
 export function UserManager() {
   const [subTab, setSubTab] = useState<SubTab>('parts');
@@ -40,10 +41,22 @@ export function UserManager() {
           <Users className="w-3.5 h-3.5" />
           사용자 목록
         </button>
+        <button
+          onClick={() => setSubTab('domains')}
+          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            subTab === 'domains'
+              ? 'text-indigo-400 border-indigo-500'
+              : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          담당 업무 영역
+        </button>
       </div>
 
       {subTab === 'parts' && <PartSection />}
       {subTab === 'users' && <UserSection />}
+      {subTab === 'domains' && <PartDomainSection />}
     </div>
   );
 }

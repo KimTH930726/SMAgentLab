@@ -108,8 +108,15 @@ def edit_denied_reason(owner_part_id: Optional[int], user: dict) -> Optional[str
     return None
 
 
+async def check_knowledge_read(namespace: str, user: dict) -> None:
+    """지식(정책서·참고 데이터 등) 조회 — 로그인한 사용자 누구나, 다른 파트 담당 영역도(2026-10-21 사용자 결정: 다른 파트 지식이 궁금할 수 있다).
+    수정은 담당 파트·관리자만(check_namespace_ownership). 사람 데이터(질의 기록·VOC 메일)는 check_namespace_read로 따로 좁힌다.
+    규칙이 바뀌면 여기 한 곳만 고친다."""
+    return None
+
+
 async def check_namespace_read(namespace: str, user: dict) -> None:
-    """관리 화면 조회(정책 목록·검토 요약·VOC 이력 등) 권한 — 수정 규칙과 분리(리뷰 M5, 2026-10-20).
+    """사람 데이터 조회(질의 기록 통계·VOC 메일) 권한 — 수정 규칙과 분리(리뷰 M5, 2026-10-20). 지식은 check_knowledge_read(누구나).
     수정은 "담당 없으면 관리자만"으로 좁혔지만 조회는 예전 그대로: 조회 전용 계정 X, 담당 없는 영역은 누구나,
     담당이 있으면 그 파트 사람과 관리자. 채팅 검색은 이 검사를 쓰지 않는다(log_cross_part_namespace_read)."""
     if user["role"] == "admin":

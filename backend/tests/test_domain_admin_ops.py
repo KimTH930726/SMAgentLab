@@ -121,3 +121,33 @@ async def test_settings_empty_string_clears_owner():
     with _patch(admin_service, conn):
         await admin_service.update_namespace_settings("영역", _settings(owner_part=""))
     assert ("UPDATE ops_namespace SET owner_part_id = $2 WHERE id = $1", 1, None) in [c.args for c in conn.execute.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_part_domains_unknown_domain_changes_nothing():
+    """없는 영역 이름이 하나라도 있으면 아무것도 바꾸지 않는다(한 트랜잭션 — 일부만 저장되지 않게)."""
+    conn = _Conn(fetchval=[5])
+    conn.fetch = AsyncMock(return_value=[{"name": "딜리버스"}])
+    with _patch(auth_service, conn), pytest.raises(ValueError, match="없는 업무 영역"):
+        await auth_service.set_part_domains(5, ["딜리버스", "없는영역"])
+    assert not any("UPDATE ops_namespace" in c.args[0] for c in conn.execute.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_part_domains_sets_exact_list():
+    """목록 밖의 이 파트 영역은 담당 해제 → 목록 영역은 이 파트로(다른 파트 것은 옮겨 옴). 1:N."""
+    conn = _Conn(fetchval=[5])
+    conn.fetch = AsyncMock(side_effect=[[{"name": "A"}, {"name": "B"}, {"name": "C"}], [{"name": "A"}, {"name": "B"}]])
+    with _patch(auth_service, conn):
+        out = await auth_service.set_part_domains(5, ["B", "A", "A"])
+    sqls = [c.args for c in conn.execute.await_args_list]
+    assert sqls[0][0].startswith("UPDATE ops_namespace SET owner_part_id = NULL") and sqls[0][1:] == (5, ["A", "B"])
+    assert sqls[1][0].startswith("UPDATE ops_namespace SET owner_part_id = $1") and sqls[1][1:] == (5, ["A", "B"])
+    assert out == {"part_id": 5, "domains": ["A", "B"]}
+
+
+@pytest.mark.asyncio
+async def test_part_domains_missing_part_is_none():
+    conn = _Conn(fetchval=[None])
+    with _patch(auth_service, conn):
+        assert await auth_service.set_part_domains(99, ["A"]) is None

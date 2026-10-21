@@ -22,6 +22,7 @@ export interface Part {
   created_at: string;
   team?: string | null;   // 조직: 팀 > 파트
   user_count?: number;
+  domains?: string[];      // 담당 업무 영역(관리자 목록에서만)
 }
 
 // Namespace types
@@ -41,6 +42,7 @@ export interface KnowledgeCategory {
 export interface NamespaceDetail extends Namespace {
   id: number;
   kind?: string;
+  owner_part_id?: number | null;
   owner_part?: string | null;
   knowledge_count: number;
   glossary_count: number;

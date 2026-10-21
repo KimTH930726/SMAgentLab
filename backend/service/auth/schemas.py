@@ -80,3 +80,9 @@ class PartOut(BaseModel):
     created_at: str
     team: Optional[str] = None
     user_count: int = 0
+    domains: list[str] = []   # 담당 업무 영역(관리자 목록에서만 채움)
+
+
+class PartDomainsUpdate(BaseModel):
+    # 저장된 이름을 그대로 받는다(이름 규칙이 생기기 전 영역도 있을 수 있어 공통 이름 검사를 걸지 않음 — 없는 이름은 서비스가 400)
+    domains: list[str] = Field(default_factory=list, max_length=500)
