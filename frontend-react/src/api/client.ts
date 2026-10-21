@@ -15,6 +15,25 @@ export class ApiError extends Error {
   }
 }
 
+/** 서버에 아예 닿지 못함(서버 재시작·네트워크 끊김) — 브라우저 원문 "Failed to fetch" 대신 한국어 안내(10/21, 사용자가 본 그대로 노출됐다) */
+export const NETWORK_ERROR_MSG = '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.';
+
+async function fetchOrNetworkError(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;   // 사용자가 멈춘 것은 그대로
+    console.warn('네트워크 오류', url, err);
+    throw new ApiError(0, NETWORK_ERROR_MSG);
+  }
+}
+
+/** 오류 본문이 JSON이 아닐 때의 기본 문구 — 서버 재시작 중엔 연결 실패가 아니라 nginx가 HTML 502·504를 준다(10/21 리뷰).
+ *  서버 자신의 502·503은 JSON detail이 있어 그 문구가 이 기본값을 덮어쓴다. */
+function gatewayDownMessage(status: number): string {
+  return status === 502 || status === 503 || status === 504 ? NETWORK_ERROR_MSG : `HTTP ${status}`;
+}
+
 function getAuthHeaders(): Record<string, string> {
   const token = useAuthStore.getState().accessToken;
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -31,14 +50,16 @@ async function tryRefreshToken(): Promise<boolean> {
       body: JSON.stringify({ refresh_token: refreshToken }),
     });
     if (!resp.ok) {
-      logout();
+      // 갱신 토큰이 거절된 것(401/403)만 로그인 만료 — 서버 재시작 중 nginx 502·504는 로그인을 유지(10/21 리뷰)
+      if (resp.status === 401 || resp.status === 403) logout();
       return false;
     }
     const data = await resp.json();
     setAccessToken(data.access_token);
     return true;
-  } catch {
-    logout();
+  } catch (err) {
+    // 네트워크가 잠깐 끊긴 것(서버 재시작 등)은 로그인 만료가 아니다 — 로그아웃하지 않고 다음 요청에서 다시 갱신(10/21 리뷰)
+    console.warn('토큰 갱신 요청 실패(네트워크) — 로그인은 유지', err);
     return false;
   }
 }
@@ -54,7 +75,7 @@ export async function apiFetch<T>(
     // FormData 전송 시 Content-Type을 생략 (브라우저가 boundary 자동 설정)
     const isFormData = restOptions.body instanceof FormData;
     const baseHeaders: Record<string, string> = isFormData ? {} : { 'Content-Type': 'application/json' };
-    return fetch(url, {
+    return fetchOrNetworkError(url, {
       ...restOptions,
       headers: {
         ...baseHeaders,
@@ -75,7 +96,7 @@ export async function apiFetch<T>(
   }
 
   if (!response.ok) {
-    let message = `HTTP ${response.status}`;
+    let message = gatewayDownMessage(response.status);
     let rawDetail: unknown;
     try {
       const body = await response.json();
@@ -105,7 +126,7 @@ export async function apiFetch<T>(
 // 바이너리 응답(파일 다운로드)용 — apiFetch와 동일한 401 갱신-재시도 + 에러 상세 파싱을 공유하되 blob을 반환한다.
 export async function apiFetchBlob(path: string): Promise<Blob> {
   const url = `${BASE_URL}${path}`;
-  const doFetch = (authHeaders: Record<string, string>) => fetch(url, { headers: authHeaders });
+  const doFetch = (authHeaders: Record<string, string>) => fetchOrNetworkError(url, { headers: authHeaders });
 
   let response = await doFetch(getAuthHeaders());
 
@@ -117,7 +138,7 @@ export async function apiFetchBlob(path: string): Promise<Blob> {
   }
 
   if (!response.ok) {
-    let message = `HTTP ${response.status}`;
+    let message = gatewayDownMessage(response.status);
     try {
       const body = await response.json();
       const detail = body.detail ?? body.message;
@@ -139,7 +160,7 @@ export async function* streamSSE(
   const url = `${BASE_URL}${path}`;
 
   const doFetch = (authHeaders: Record<string, string>) =>
-    fetch(url, {
+    fetchOrNetworkError(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify(body),
@@ -157,7 +178,7 @@ export async function* streamSSE(
   }
 
   if (!response.ok) {
-    let message = `HTTP ${response.status}`;
+    let message = gatewayDownMessage(response.status);
     try {
       const errBody = await response.json();
       const detail = errBody.detail ?? errBody.message;

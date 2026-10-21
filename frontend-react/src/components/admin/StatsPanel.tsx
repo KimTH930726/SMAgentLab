@@ -13,7 +13,6 @@ import { Badge } from '../ui/Badge';
 import { DonutChart, type DonutSegment } from '../ui/DonutChart';
 import type { QueryLog, QueryFilter } from '../../types';
 import { showAlert } from '../../store/useDialogStore';
-import { CurrentDomain } from './CurrentDomain';
 
 const TERM_PALETTE = ['#6366f1', '#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#f43f5e', '#ec4899', '#14b8a6'];
 
@@ -424,8 +423,6 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
         <h2 className="text-lg font-semibold text-slate-200">통계 대시보드</h2>
         <button onClick={() => refetch()} className="text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 dark:hover:text-indigo-300">새로고침</button>
       </div>
-
-      <CurrentDomain name={selectedNs} />
 
       {isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
       {error && <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>}

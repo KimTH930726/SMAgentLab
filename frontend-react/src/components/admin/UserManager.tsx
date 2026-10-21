@@ -1,13 +1,15 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, Plus, Shield, User as UserIcon, Users, Building2, Pencil, Check, X } from 'lucide-react';
+import { Trash2, Plus, Shield, User as UserIcon, Users, Building2, Pencil } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { getUsers, updateUser, deleteUser, getAllParts, createPart, deletePart, renamePart } from '../../api/auth';
 import { useAuthStore } from '../../store/useAuthStore';
-import type { User } from '../../types';
+import type { Part, User } from '../../types';
 import { showConfirm, showError } from '../../store/useDialogStore';
+import { FormModal } from '../ui/FormModal';
+import { PartTreeModal } from './PartTreeModal';
 
 // ── Part (부서) 관리 ────────────────────────────────────────────────────────
 
@@ -22,7 +24,7 @@ export function PartSection() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState('');
   const [renameError, setRenameError] = useState('');
-  const editRef = useRef<HTMLInputElement>(null);
+  const [treePart, setTreePart] = useState<Part | null>(null);   // 파트 현황 트리 모달
 
   const { data: parts = [], isLoading } = useQuery({
     queryKey: ['parts-all'],
@@ -30,9 +32,6 @@ export function PartSection() {
     refetchOnMount: 'always',
   });
 
-  useEffect(() => {
-    if (editingId !== null) editRef.current?.focus();
-  }, [editingId]);
 
   const createMutation = useMutation({
     mutationFn: (name: string) => createPart(name),
@@ -79,7 +78,7 @@ export function PartSection() {
   const commitRename = (partId: number, oldName: string) => {
     const trimmed = editingName.trim();
     if (!trimmed || trimmed === oldName) { setEditingId(null); return; }
-    if (renameMutation.isPending) return;
+    if (renameMutation.isPending) return;   // 모달 저장 연타 방지
     setRenameError('');
     renameMutation.mutate({ id: partId, name: trimmed });
   };
@@ -110,42 +109,23 @@ export function PartSection() {
 
               {/* 파트 이름 + 편집 */}
               <div className="flex-1 min-w-0">
-                {editingId === p.id ? (
-                  <span className="flex items-center gap-1.5">
-                    <input
-                      ref={editRef}
-                      value={editingName}
-                      onChange={(e) => setEditingName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) commitRename(p.id, p.name);
-                        if (e.key === 'Escape') { setEditingId(null); setRenameError(''); }
-                      }}
-                      onBlur={() => commitRename(p.id, p.name)}
-                      className="bg-slate-900 border border-indigo-500 rounded px-2 py-0.5 text-sm text-slate-100 font-semibold outline-none w-40"
-                    />
-                    <button onClick={() => commitRename(p.id, p.name)} className="text-emerald-600 hover:text-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300">
-                      <Check className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={() => { setEditingId(null); setRenameError(''); }} className="text-slate-500 hover:text-slate-300">
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                    {renameError && <span className="text-xs text-rose-600 dark:text-rose-400">{renameError}</span>}
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1.5 group">
-                    <span className="font-semibold text-slate-200">{p.name}</span>
-                    <button
-                      onClick={() => { setEditingId(p.id); setEditingName(p.name); }}
-                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
-                      title="이름 수정"
-                    >
-                      <Pencil className="w-3 h-3" />
-                    </button>
-                  </span>
-                )}
+                {/* 이름 = 현황 트리 모달, 연필 = 이름 바꾸기 모달(10/21 — 그 자리에서 고치던 칸은 포커스가 빠지면 저장됐다) */}
+                <span className="flex items-center gap-1.5 group">
+                  <button onClick={() => setTreePart(p)} title="사람·담당 업무 영역 현황 보기"
+                    className="font-semibold text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-300 hover:underline">
+                    {p.name}
+                  </button>
+                  <button
+                    onClick={() => { setEditingId(p.id); setEditingName(p.name); setRenameError(''); }}
+                    className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
+                    title="이름 바꾸기"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                </span>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className="text-xs text-slate-500">
-                    생성: {new Date(p.created_at).toLocaleDateString('ko-KR')}
+                    {p.team ?? '팀 없음'} · 사람 {p.user_count ?? 0}명
                   </span>
                 </div>
               </div>
@@ -174,6 +154,23 @@ export function PartSection() {
       </div>
 
       {/* 파트 생성 모달 */}
+      <PartTreeModal part={treePart} onClose={() => setTreePart(null)} />
+      <FormModal
+        isOpen={editingId !== null}
+        title="파트 이름 바꾸기"
+        onClose={() => { setEditingId(null); setRenameError(''); }}
+        onSubmit={() => {
+          const old = parts.find((x) => x.id === editingId);
+          if (old) commitRename(old.id, old.name);
+        }}
+        submitting={renameMutation.isPending}
+        submitDisabled={!editingName.trim()}
+        error={renameError}
+      >
+        <label htmlFor="part-rename" className="block text-xs text-slate-400">새 이름 — 사람·담당 업무 영역 연결은 그대로 유지돼요</label>
+        <input id="part-rename" autoFocus value={editingName} onChange={(e) => setEditingName(e.target.value)}
+          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+      </FormModal>
       <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="새 파트 생성">
         <div className="space-y-4">
           <div>
@@ -306,13 +303,27 @@ export function UserSection() {
     updateMutation.mutate({ id: u.id, payload: { role: 'user' } });
   };
 
-  const handleToggleActive = (u: User) => {
-    updateMutation.mutate({ id: u.id, payload: { is_active: !u.is_active } });
-  };
-
-  const handleChangePart = (u: User, part: string) => {
-    updateMutation.mutate({ id: u.id, payload: { part } });
-  };
+  // 사용자 수정(소속 파트·상태) — 모달(10/21). 예전엔 표의 선택칸을 바꾸는 순간·배지를 누르는 순간 저장됐다
+  const [editUser, setEditUser] = useState<User | null>(null);
+  const [editForm, setEditForm] = useState<{ part: string; is_active: boolean }>({ part: '', is_active: true });
+  const openEdit = (u: User) => { editMutation.reset(); setEditUser(u); setEditForm({ part: u.part ?? '', is_active: u.is_active }); };
+  const editMutation = useMutation({
+    mutationFn: () => {
+      if (!editUser) throw new Error('사용자를 고르세요.');
+      const payload: Record<string, unknown> = {};
+      if (editForm.part && editForm.part !== (editUser.part ?? '')) payload.part = editForm.part;
+      if (editForm.is_active !== editUser.is_active) payload.is_active = editForm.is_active;
+      return updateUser(editUser.id, payload);
+    },
+    onSuccess: (updated) => {
+      // 내 소속을 바꿨으면 로그인 정보도 맞춘다 — 안 그러면 새로고침 전까지 사이드바가 옛 파트 기준(10/21 리뷰)
+      const me = useAuthStore.getState().user;
+      if (me && updated.id === me.id) useAuthStore.getState().updateUser({ ...me, part: updated.part });
+      qc.invalidateQueries({ queryKey: ['users'] }); qc.invalidateQueries({ queryKey: ['parts-all'] }); setEditUser(null);
+    },
+    onError: () => { /* 모달 안에 표시 */ },
+  });
+  const editChanged = !!editUser && ((!!editForm.part && editForm.part !== (editUser.part ?? '')) || editForm.is_active !== editUser.is_active);
 
   const handleDelete = async (u: User) => {
     if (!(await showConfirm(`'${u.username}' 사용자를 삭제하시겠습니까?`, { tone: 'danger', confirmLabel: '삭제' }))) return;
@@ -396,17 +407,7 @@ export function UserSection() {
                   </div>
                 </td>
                 <td className="px-4 py-3">
-                  <select
-                    value={u.part ?? ''}
-                    onChange={(e) => handleChangePart(u, e.target.value)}
-                    title="파트를 변경하려면 선택하세요"
-                    className="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer hover:border-slate-400 transition-colors"
-                  >
-                    {!u.part && <option value="" disabled>소속 없음</option>}
-                    {parts.map((p) => (
-                      <option key={p.id} value={p.name}>{p.name}</option>
-                    ))}
-                  </select>
+                  <span className={u.part ? 'text-slate-300' : 'text-slate-500'}>{u.part ?? '소속 없음'}</span>
                 </td>
                 <td className="px-4 py-3">
                   {u.id === currentUser?.id ? (
@@ -455,21 +456,21 @@ export function UserSection() {
                       <Badge color="emerald">활성</Badge>
                     </span>
                   ) : (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => handleToggleActive(u)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleToggleActive(u)}
-                      title={`클릭하여 ${u.is_active ? '비활성화' : '활성화'}`}
-                      className="inline-block cursor-pointer transform hover:scale-110 active:scale-95 transition-transform duration-150"
-                    >
-                      <Badge color={u.is_active ? 'emerald' : 'rose'}>
-                        {u.is_active ? '활성' : '비활성'}
-                      </Badge>
-                    </span>
+                    <Badge color={u.is_active ? 'emerald' : 'rose'}>
+                      {u.is_active ? '활성' : '비활성'}
+                    </Badge>
                   )}
                 </td>
-                <td className="px-4 py-3 text-right">
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  {(
+                    <button
+                      onClick={() => openEdit(u)}
+                      className="text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors p-1 mr-1"
+                      title="소속 파트·상태 수정"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                  )}
                   {u.id !== currentUser?.id && (
                     <button
                       onClick={() => handleDelete(u)}
@@ -485,6 +486,30 @@ export function UserSection() {
           </tbody>
         </table>
       </div>
+      <FormModal
+        isOpen={!!editUser}
+        title={editUser ? `사용자 수정 — ${editUser.username}` : ''}
+        onClose={() => setEditUser(null)}
+        onSubmit={() => editMutation.mutate()}
+        submitting={editMutation.isPending}
+        submitDisabled={!editChanged}
+        error={editMutation.error ? String((editMutation.error as Error).message) : null}
+      >
+        <div>
+          <label htmlFor="user-edit-part" className="block text-xs font-medium text-slate-400 mb-1">소속 파트</label>
+          <select id="user-edit-part" value={editForm.part} onChange={(e) => setEditForm((f) => ({ ...f, part: e.target.value }))}
+            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
+            {!editForm.part && <option value="" disabled>소속 없음</option>}
+            {parts.map((p) => <option key={p.id} value={p.name}>{p.team ? `${p.team} · ${p.name}` : p.name}</option>)}
+          </select>
+          <p className="text-xs text-slate-500 mt-1">소속 파트가 맡은 업무 영역을 수정할 수 있게 돼요.</p>
+        </div>
+        {editUser?.id !== currentUser?.id && <label htmlFor="user-edit-active" className="flex items-center gap-2 text-sm text-slate-300">
+          <input id="user-edit-active" type="checkbox" checked={editForm.is_active}
+            onChange={(e) => setEditForm((f) => ({ ...f, is_active: e.target.checked }))} className="accent-indigo-500" />
+          활성(로그인 가능)
+        </label>}
+      </FormModal>
     </div>
   );
 }

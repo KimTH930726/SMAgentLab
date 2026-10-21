@@ -22,7 +22,7 @@ import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { ApiError } from '../../api/client';
-import { CurrentDomain } from './CurrentDomain';
+import { FormModal } from '../ui/FormModal';
 
 const EMPTY_ROUTING_FORM: VocRoutingPayload = {
   part: '', mailbox_upn: '', teams_webhook_url: '', oncall_contact_name: '', oncall_contact_phone: '',
@@ -155,7 +155,7 @@ export function VocEmailPanel() {
   const [subTab, setSubTab] = useState<VocSubTab>('collect');
 
   const { data: namespaces = [] } = useQuery<string[]>({ queryKey: ['namespaces'], queryFn: getNamespaces });
-  const selectedNs = namespace || namespaces[0] || '';
+  const selectedNs = namespace;   // 공용 값 그대로 — 경로 표시줄과 어긋나지 않게
   // 업무 영역이 바뀌면 열린 메일함 담당 폼을 닫는다 — 앞 영역 id로 저장되지 않게(리뷰 L4)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setShowForm(false); setEditingId(null); setForm(EMPTY_ROUTING_FORM); }, [selectedNs]);
@@ -254,6 +254,7 @@ export function VocEmailPanel() {
   });
 
   const startEdit = (r: VocRouting) => {
+    setError('');
     setEditingId(r.id);
     setForm({
       part: r.part ?? '', mailbox_upn: r.mailbox_upn,
@@ -268,6 +269,7 @@ export function VocEmailPanel() {
   };
 
   const startCreate = () => {
+    setError('');
     setEditingId(null);
     setForm(EMPTY_ROUTING_FORM);
     setFolderOptions(null);
@@ -1041,7 +1043,6 @@ export function VocEmailPanel() {
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-300">담당자 라우팅 매핑</h3>
             <div className="flex items-center gap-2">
-              <CurrentDomain name={selectedNs} />
               <Button size="sm" onClick={startCreate}>
                 <Plus className="w-3.5 h-3.5" /> 라우팅 추가
               </Button>
@@ -1049,8 +1050,16 @@ export function VocEmailPanel() {
           </div>
           <p className="text-xs text-slate-500">메일함 ↔ 담당 파트 ↔ Teams 웹훅 매핑</p>
 
-          {showForm && (
-            <div className="bg-slate-800 border border-indigo-200 dark:border-indigo-500/30 rounded-lg p-4 space-y-3">
+          {/* 메일함 담당 추가·수정 — 모달(10/21, 예전엔 화면 중간에 폼이 펼쳐졌다) */}
+          <FormModal
+            isOpen={showForm}
+            title={editingId != null ? '메일함 담당 수정' : '메일함 담당 추가'}
+            onClose={() => { setShowForm(false); setEditingId(null); setError(''); }}
+            onSubmit={handleSubmit}
+            submitting={createMutation.isPending || updateMutation.isPending}
+            error={showForm ? error : null}
+            maxWidth="max-w-2xl"
+          >
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-xs text-slate-400">
                   담당 파트
@@ -1132,16 +1141,7 @@ export function VocEmailPanel() {
                   />
                 </label>
               </div>
-              <div className="flex items-center gap-2">
-                <Button size="sm" onClick={handleSubmit} loading={createMutation.isPending || updateMutation.isPending}>
-                  <Save className="w-3.5 h-3.5" /> 저장
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => { setShowForm(false); setEditingId(null); }}>
-                  <X className="w-3.5 h-3.5" /> 취소
-                </Button>
-              </div>
-            </div>
-          )}
+          </FormModal>
 
           {routingError ? null : routingLoading ? (
             <div className="text-sm text-slate-500 animate-pulse py-6 text-center">로딩 중...</div>
@@ -1191,7 +1191,6 @@ export function VocEmailPanel() {
           {historyError && <QueryErrorNotice error={historyErrorObj} onRetry={() => refetchHistory()} />}
           <div className="flex items-center justify-between">
             <p className="text-xs text-slate-500">원본 메일 · AI 판단 · 발송 결과</p>
-            <CurrentDomain name={selectedNs} />
           </div>
 
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-3 flex flex-wrap items-end gap-3">

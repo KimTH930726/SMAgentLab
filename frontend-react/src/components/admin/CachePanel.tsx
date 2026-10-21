@@ -8,7 +8,6 @@ import { getNamespaces } from '../../api/namespaces';
 import { Button } from '../ui/Button';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import { showAlert, showError } from '../../store/useDialogStore';
-import { CurrentDomain } from './CurrentDomain';
 
 function formatTtl(seconds: number): string {
   if (seconds <= 0) return '만료됨';
@@ -30,7 +29,7 @@ export function CachePanel() {
   });
 
 
-  const selectedNs = namespace || namespaces[0] || '';
+  const selectedNs = namespace;   // 공용 값 그대로(비어 있으면 사이드바가 첫 영역을 채운다) — 경로 표시줄과 어긋나지 않게
 
   const { data: stats, isLoading: statsLoading, refetch: refetchStats } = useQuery({
     queryKey: ['cache-stats', selectedNs],
@@ -119,7 +118,6 @@ export function CachePanel() {
             )} />
             {cacheConfig?.enabled !== false ? 'ON' : 'OFF'}
           </button>
-          <CurrentDomain name={selectedNs} />
           <button
             onClick={handleRefresh}
             className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"

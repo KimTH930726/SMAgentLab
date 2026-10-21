@@ -376,7 +376,6 @@ export function KnowledgeTable() {
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">
           지식 문서
-          {selectedNs && <span className="text-sm font-normal text-slate-500 ml-2">({selectedNs})</span>}
         </h2>
       </div>
 

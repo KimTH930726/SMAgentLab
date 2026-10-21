@@ -1,6 +1,6 @@
 import { Fragment, useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Tag, Pencil, Check, X } from 'lucide-react';
+import { Plus, Trash2, Tag, Pencil } from 'lucide-react';
 import {
   getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace,
   getCategories, createCategory, deleteCategory, renameCategory,
@@ -13,6 +13,7 @@ import { Badge } from '../ui/Badge';
 import type { KnowledgeCategory, NamespaceDetail } from '../../types';
 import { showError } from '../../store/useDialogStore';
 import { canEditDomain } from '../../utils/domainAccess';
+import { FormModal } from '../ui/FormModal';
 
 interface NamespaceManagerProps {
   onNavigate?: (to: 'policy' | 'knowledge' | 'glossary') => void;
@@ -40,6 +41,7 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
       qc.invalidateQueries({ queryKey: ['categories', namespace] }); qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
       setNewCat('');
     },
+    onError: (err: Error) => { void showError(err, '업무구분 추가 실패'); },
   });
 
   const renameMutation = useMutation({
@@ -49,11 +51,13 @@ function CategorySection({ namespace, canModify }: { namespace: string; canModif
       qc.invalidateQueries({ queryKey: ['categories', namespace] }); qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
       setEditingId(null);
     },
+    onError: (err: Error) => { void showError(err, '업무구분 이름 변경 실패'); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (name: string) => deleteCategory(namespace, name),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['categories', namespace] }); qc.invalidateQueries({ queryKey: ['namespaces-detail'] }); },
+    onError: (err: Error) => { void showError(err, '업무구분 삭제 실패'); },
   });
 
   const handleAdd = () => {
@@ -171,11 +175,6 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
   const [editingNs, setEditingNs] = useState<string | null>(null);
   const [editingNsName, setEditingNsName] = useState('');
-  const nsEditRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (editingNs !== null) nsEditRef.current?.focus();
-  }, [editingNs]);
 
   const { data: namespaces = [], isLoading, error } = useQuery({
     queryKey: ['namespaces-detail'],
@@ -212,14 +211,13 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       if (selectedNamespace === oldName) setNamespace(nn);
       setEditingNs(null);
     },
-    onError: (err: Error) => {
-      void showError(err, '이름 변경 실패');
-    },
+    onError: () => { /* 모달 안에 표시 */ },
   });
 
   const commitNsRename = (oldName: string) => {
     const trimmed = editingNsName.trim();
     if (!trimmed || trimmed === oldName) { setEditingNs(null); return; }
+    renameMutation.reset();
     renameMutation.mutate({ oldName, newName: trimmed });
   };
 
@@ -308,28 +306,10 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                       onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); setNamespace(ns.name); } }}
                       className={`border-b border-slate-700/50 cursor-pointer transition-colors ${selected ? 'bg-indigo-50 dark:bg-indigo-900/20' : 'hover:bg-slate-700/30'}`}>
                       <td className="px-4 py-2.5">
-                        {editingNs === ns.name ? (
-                          <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              ref={nsEditRef}
-                              value={editingNsName}
-                              onChange={(e) => setEditingNsName(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.nativeEvent.isComposing) commitNsRename(ns.name);
-                                if (e.key === 'Escape') setEditingNs(null);
-                              }}
-                              onBlur={() => commitNsRename(ns.name)}
-                              className="bg-slate-900 border border-indigo-500 rounded px-2 py-0.5 text-sm text-slate-100 font-semibold outline-none w-36"
-                            />
-                            <button onClick={() => commitNsRename(ns.name)} className="text-emerald-600 hover:text-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300"><Check className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => setEditingNs(null)} className="text-slate-500 hover:text-slate-300"><X className="w-3.5 h-3.5" /></button>
-                          </span>
-                        ) : (
-                          <div>
-                            <div className="font-medium text-slate-200">{ns.name}</div>
-                            {ns.description && <div className="text-xs text-slate-500 truncate max-w-[16rem]" title={ns.description}>{ns.description}</div>}
-                          </div>
-                        )}
+                        <div>
+                          <div className="font-medium text-slate-200">{ns.name}</div>
+                          {ns.description && <div className="text-xs text-slate-500 truncate max-w-[16rem]" title={ns.description}>{ns.description}</div>}
+                        </div>
                       </td>
                       <td className="px-4 py-2.5">
                         {ns.owner_part
@@ -351,7 +331,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                         {isAdmin && (
                           <div className="flex items-center justify-end gap-1">
-                            <button onClick={() => { setEditingNs(ns.name); setEditingNsName(ns.name); }} title="이름 바꾸기"
+                            <button onClick={() => { renameMutation.reset(); setEditingNs(ns.name); setEditingNsName(ns.name); }} title="이름 바꾸기"
                               className="p-1.5 rounded text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-700/60">
                               <Pencil className="w-3.5 h-3.5" />
                             </button>
@@ -380,6 +360,23 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       {!isLoading && namespaces.length === 0 && (
         <div className="text-center py-10 text-slate-500">업무 영역이 없습니다.</div>
       )}
+
+      {/* 이름 바꾸기 — 모달(10/21, 그 자리에서 고치던 칸은 포커스가 빠지면 저장됐고 취소를 눌러도 저장됐다) */}
+      <FormModal
+        isOpen={editingNs !== null}
+        title="업무 영역 이름 바꾸기"
+        onClose={() => setEditingNs(null)}
+        onSubmit={() => editingNs && commitNsRename(editingNs)}
+        submitting={renameMutation.isPending}
+        submitDisabled={!editingNsName.trim() || editingNsName.trim() === editingNs}
+        error={renameMutation.isError ? String((renameMutation.error as Error)?.message ?? '이름 변경 실패') : null}
+      >
+        <label htmlFor="ns-rename" className="block text-xs text-slate-400">
+          새 이름 — 안의 정책·지식·용어는 그대로 따라가요
+        </label>
+        <input id="ns-rename" autoFocus value={editingNsName} onChange={(e) => setEditingNsName(e.target.value)}
+          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+      </FormModal>
 
       {/* Create Modal */}
       <Modal

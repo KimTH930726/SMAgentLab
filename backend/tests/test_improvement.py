@@ -493,6 +493,7 @@ class TestSignalMerge:
             await svc.analyze_signal(56, 1, 99)
         sql, *args = conn.execute.await_args.args
         assert "user_input IS NULL" in sql and "kind = 'answer_signal'" in sql
+        assert "ai_verdict IS NULL" in sql   # 이미 판정·다시 쓰기가 있는 신고는 늦게 끝난 추정이 덮어쓰지 않음(리뷰 10/21)
         assert args[1:4] == ["knowledge", 1, None]
         meta = json.loads(args[6])
         assert meta["method"] == "llm_no_opinion" and meta["key"] == "k-1"
@@ -709,3 +710,179 @@ def test_whole_body_policy_correction_keeps_chunk_equal_to_raw():
     assert svc._policy_chunk_rewrites(old, chunks, item, {"raw_body": "옛 원문"}) == {}      # 안 바뀌면 다시 임베딩 안 함
     # 검토자가 "서술"만 고치고 원문 칸은 그대로 둔 경우(정정안엔 둘 다 온다) — 고친 서술이 새 원문(리뷰 M2)
     assert svc._policy_chunk_rewrites(old, chunks, item, {"chunk_text": "고친 서술", "raw_body": "옛 원문"}) == {5: "고친 서술"}
+
+
+class TestRedraft:
+    """담당자 요청 한 줄 → AI가 수정안을 다시 씀(2026-10-21 — 사람은 직접 고치지 않고 승인/다시 쓰기/반려만)."""
+
+    def _item(self, **kw):
+        base = {"id": 7, "status": "pending", "target_type": "knowledge", "namespace_id": 1, "message_id": 3,
+                "target_id": 11, "target_sub_id": None,
+                "user_input": "기한이 틀렸어요", "original": json.dumps({"content": "기한 3일"}), "ai_verdict": None}
+        return {**base, **kw}
+
+    @pytest.mark.asyncio
+    async def test_feedback_appended_to_user_opinion_and_logged(self):
+        c = _conn()
+        c.fetchrow = AsyncMock(return_value=self._item())
+        c.execute = AsyncMock(return_value="UPDATE 1")
+        drafted = AsyncMock(return_value={"content": "기한 7일"})
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={"question": "q"})), \
+             patch.object(svc.draft_mod, "draft_correction", drafted):
+            out = await svc.redraft(7, {"id": 9}, "7일이 맞아요")
+        _, original, combined, _ctx = drafted.await_args.args
+        assert original == {"content": "기한 3일"}
+        assert combined == "기한이 틀렸어요\n\n[담당자 요청 1] 7일이 맞아요"          # 신고 의견 뒤에 요청
+        sql, item_id, proposed, verdict, *target = c.execute.await_args.args
+        assert "status = 'pending'" in sql and item_id == 7
+        assert "target_type = $4" in sql and target == ["knowledge", 11, None]   # 그 사이 대상이 바뀌면 덮어쓰지 않음
+        assert json.loads(proposed) == {"content": "기한 7일"}
+        assert json.loads(verdict)["redrafts"] == [{"by": 9, "feedback": "7일이 맞아요"}]
+        assert out == {"id": 7, "proposed": {"content": "기한 7일"}, "marked": False}
+
+    @pytest.mark.asyncio
+    async def test_no_opinion_uses_request_only(self):
+        c = _conn()
+        c.fetchrow = AsyncMock(return_value=self._item(user_input=None))
+        c.execute = AsyncMock(return_value="UPDATE 1")
+        drafted = AsyncMock(return_value={"content": "기한 7일"})
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
+             patch.object(svc.draft_mod, "draft_correction", drafted):
+            await svc.redraft(7, {"id": 9}, "7일이 맞아요")
+        assert drafted.await_args.args[2] == "[담당자 요청 1] 7일이 맞아요"
+
+    @pytest.mark.asyncio
+    async def test_second_redraft_keeps_first_request(self):
+        """두 번째 다시 쓰기에도 첫 번째 요청이 들어간다 — 매번 원문 + 마지막 요청만 쓰면 첫 고침이 사라졌다(리뷰 M1)."""
+        c = _conn()
+        c.fetchrow = AsyncMock(return_value=self._item(
+            user_input=None, ai_verdict=json.dumps({"redrafts": [{"by": 9, "feedback": "기한은 7일"}]})))
+        c.execute = AsyncMock(return_value="UPDATE 1")
+        drafted = AsyncMock(return_value={"content": "기한 7일, 3번째 문단 없음"})
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
+             patch.object(svc.draft_mod, "draft_correction", drafted):
+            await svc.redraft(7, {"id": 9}, "3번째 문단 빼 주세요")
+        assert drafted.await_args.args[2] == "[담당자 요청 1] 기한은 7일\n\n[담당자 요청 2] 3번째 문단 빼 주세요"
+        assert [r["feedback"] for r in json.loads(c.execute.await_args.args[3])["redrafts"]] == ["기한은 7일", "3번째 문단 빼 주세요"]
+
+    @pytest.mark.asyncio
+    async def test_target_changed_meanwhile_not_overwritten(self):
+        c = _conn()
+        c.fetchrow = AsyncMock(return_value=self._item())
+        c.execute = AsyncMock(return_value="UPDATE 0")      # 대상이 바뀌어 조건에 안 맞음
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
+             patch.object(svc.draft_mod, "draft_correction", AsyncMock(return_value={"content": "x"})), \
+             pytest.raises(ValueError, match="대상이 바뀐"):
+            await svc.redraft(7, {"id": 9}, "x")
+
+    @pytest.mark.asyncio
+    async def test_ai_failure_keeps_old_proposal(self):
+        c = _conn()
+        c.fetchrow = AsyncMock(return_value=self._item())
+        c.execute = AsyncMock()
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
+             patch.object(svc.draft_mod, "draft_correction", AsyncMock(return_value=None)), \
+             pytest.raises(ValueError, match="다시 쓰지 못했어요"):
+            await svc.redraft(7, {"id": 9}, "x")
+        c.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("item", [{"status": "approved"}, {"target_type": "answer"}, {"target_type": "auto"}])
+    async def test_rejects_non_redraftable(self, item):
+        c = _conn()
+        c.fetchrow = AsyncMock(return_value=self._item(**item))
+        with patch.object(svc, "get_conn", return_value=c), pytest.raises(ValueError):
+            await svc.redraft(7, {"id": 9}, "x")
+
+
+class TestApproveShownProposal:
+    """승인 = 화면에 보인 안과 저장된 안이 같을 때만(리뷰 M2) — 사람은 고치지 않으므로 덮어쓰는 길은 없다."""
+
+    @pytest.mark.asyncio
+    async def test_changed_meanwhile_is_conflict(self):
+        c = _conn()
+        c.fetchrow = AsyncMock(return_value={"id": 7, "status": "pending", "target_type": "knowledge",
+                                             "proposed": json.dumps({"content": "v2"}), "original": "{}"})
+        with patch.object(svc, "get_conn", return_value=c), pytest.raises(svc.ConflictError):
+            await svc.approve(7, {"id": 9}, {"content": "v1"})
+
+    def _approve_mocks(self, c, locked_overrides=None):
+        item = {"id": 7, "status": "pending", "target_type": "knowledge", "target_id": 11, "target_sub_id": None,
+                "namespace_id": 1, "proposed": json.dumps({"content": "v1"}), "original": json.dumps({"content": "v0"})}
+        locked = {"status": "pending", "proposed": item["proposed"], "target_type": "knowledge", "target_id": 11,
+                  "target_sub_id": None} | (locked_overrides or {})
+        c.fetchrow = AsyncMock(side_effect=[item, locked])   # 첫 읽기 → 잠근 뒤 다시 읽기
+        c.fetchval = AsyncMock(return_value="ns")
+        c.execute = AsyncMock()
+        return item
+
+    @pytest.mark.asyncio
+    async def test_same_as_shown_applies_stored(self):
+        c = _conn()
+        self._approve_mocks(c)
+        apply = AsyncMock(return_value=99)
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc.embedding_service, "embed", AsyncMock(return_value=[0.1])), \
+             patch.object(svc, "_apply_knowledge", apply), patch.object(svc, "_close_superseded", AsyncMock(return_value=[])):
+            out = await svc.approve(7, {"id": 9}, {"content": "v1"})
+        assert out["status"] == "approved" and apply.await_args.args[3] == "v1"
+
+    @pytest.mark.parametrize("changed", [{"proposed": json.dumps({"content": "v2"})}, {"target_id": 12}])
+    @pytest.mark.asyncio
+    async def test_changed_while_embedding_is_conflict(self, changed):
+        """임베딩·분류를 기다리는 사이 다시 쓰기·대상 변경이 끼어들면 잠근 뒤 다시 보고 409 — 반영도 상태 변경도 없음(리뷰 10/21)."""
+        c = _conn()
+        self._approve_mocks(c, changed)
+        apply = AsyncMock(return_value=99)
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc.embedding_service, "embed", AsyncMock(return_value=[0.1])), \
+             patch.object(svc, "_apply_knowledge", apply), pytest.raises(svc.ConflictError):
+            await svc.approve(7, {"id": 9}, {"content": "v1"})
+        apply.assert_not_awaited()
+        c.execute.assert_not_awaited()
+
+
+class TestRetargetDropsOldRequests:
+    """대상을 바꾸면 앞선 다시 쓰기 요청은 다음 다시 쓰기에 넘기지 않는다 — 옛 근거에 대한 "3번째 문단 빼 주세요"가
+    새 근거에 적용되던 결함(리뷰 10/21). 기록은 지난 요청으로 남기고, 요청만 있던 직접 지정 신고엔 변경 이력을 만들지 않는다."""
+
+    @pytest.mark.asyncio
+    async def test_retarget_then_redraft_uses_only_new_request(self):
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value={
+            "status": "pending", "namespace_id": 1, "message_id": 3, "candidates": "[]", "user_input": "u",
+            "ai_verdict": json.dumps({"redrafts": [{"by": 9, "feedback": "3번째 문단 빼 주세요"}]}),
+            "target_type": "knowledge", "target_id": 1, "target_sub_id": None})
+        conn.execute = AsyncMock()
+        with patch.object(svc, "get_conn", return_value=conn), \
+             patch.object(svc, "_load_original", AsyncMock(return_value={"question": "q"})), \
+             patch.object(svc.draft_mod, "draft_correction", AsyncMock(return_value={"content": "new"})):
+            await svc.retarget(1, {"id": 9}, "missing")
+        verdict = json.loads(conn.execute.await_args.args[8])
+        assert "redrafts" not in verdict and "retargeted" not in verdict     # 직접 지정 신고 — AI 판정이 없었음
+        assert verdict["redrafts_before_retarget"] == [{"by": 9, "feedback": "3번째 문단 빼 주세요"}]
+
+        # 이어서 다시 쓰기 — 새 요청만 넘어간다
+        c = _conn()
+        c.fetchrow = AsyncMock(return_value={"id": 1, "status": "pending", "target_type": "missing", "target_id": None,
+                                             "target_sub_id": None, "namespace_id": 1, "message_id": 3, "user_input": "u",
+                                             "original": "{}", "ai_verdict": json.dumps(verdict)})
+        c.execute = AsyncMock(return_value="UPDATE 1")
+        drafted = AsyncMock(return_value={"content": "x"})
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", AsyncMock(return_value={})), \
+             patch.object(svc.draft_mod, "draft_correction", drafted):
+            await svc.redraft(1, {"id": 9}, "기한은 5일")
+        assert drafted.await_args.args[2] == "u\n\n[담당자 요청 1] 기한은 5일"
+
+    @pytest.mark.asyncio
+    async def test_ai_verdict_retarget_still_logged(self):
+        conn = _conn()
+        conn.fetchrow = AsyncMock(return_value={
+            "status": "pending", "namespace_id": 1, "message_id": 3, "candidates": "[]", "user_input": "u",
+            "ai_verdict": json.dumps({"verdict": "evidence", "redrafts": [{"by": 9, "feedback": "f"}]}),
+            "target_type": "knowledge", "target_id": 1, "target_sub_id": None})
+        conn.execute = AsyncMock()
+        with patch.object(svc, "get_conn", return_value=conn), \
+             patch.object(svc, "_load_original", AsyncMock(return_value={})), \
+             patch.object(svc.draft_mod, "draft_correction", AsyncMock(return_value={"content": "new"})):
+            await svc.retarget(1, {"id": 9}, "missing")
+        verdict = json.loads(conn.execute.await_args.args[8])
+        assert verdict["retargeted"]["to"] == "missing" and "redrafts" not in verdict

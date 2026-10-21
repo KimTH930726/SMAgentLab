@@ -92,15 +92,32 @@ async function approveInAdmin(page: Page, userInput: string, targetLabel?: strin
   const card = await openCorrectionCard(page, userInput);
   if (targetLabel) await ensureTarget(page, card, targetLabel);
   const approved = page.waitForResponse((r) => /\/api\/corrections\/\d+\/approve/.test(r.url()));
-  // 사용자 입력으로 정리된 수정안이 있으면 [AI 수정안으로 대체], 초안이 없으면(LLM 장애 등) [직접 수정] → 반영
-  const replace = card.getByRole('button', { name: 'AI 수정안으로 대체' });
-  if (await replace.isVisible().catch(() => false)) {
-    await replace.click();
-  } else {
-    await card.getByRole('button', { name: '직접 수정' }).click();
-    for (const ta of await card.locator('textarea').all()) await ta.fill(expectedFix ?? userInput);
-    await card.getByRole('button', { name: '수정 내용으로 반영' }).click();
+  // 사람은 고치지 않는다(10/21): 수정안이 있으면 [승인], 없으면 [AI 초안 만들기], 그래도 승인할 수 없으면(초안 실패·【확인 필요】)
+  // [다시 쓰기] 모달에 맞는 내용을 한 줄 적어 AI가 다시 쓰게 한 뒤 [승인]
+  const approveBtn = card.getByRole('button', { name: '승인', exact: true });
+  if (!(await approveBtn.isVisible().catch(() => false))) {
+    const make = card.getByRole('button', { name: /AI (초안 만들기|검토 초안)/ });
+    if (await make.isVisible().catch(() => false)) {
+      await make.click();
+      // AI 초안 실패는 카드에 문구가 뜬다 — 5분 기다리지 말고 바로 실패로(리뷰 L10)
+      await expect(card.getByRole('button', { name: '다시 쓰기' }).or(card.getByText('AI가 초안을 만들지 못했어요'))).toBeVisible({ timeout: 300_000 });
+      await expect(card.getByText('AI가 초안을 만들지 못했어요')).toHaveCount(0);
+    }
   }
+  if (!(await approveBtn.isVisible().catch(() => false))) {
+    await card.getByRole('button', { name: '다시 쓰기' }).click();
+    const form = page.locator('form').filter({ has: page.locator('textarea[id^="corr-"]') });
+    await form.locator('textarea').fill(expectedFix ?? userInput);
+    await form.getByRole('button', { name: '다시 쓰기' }).click();
+    // 닫히거나(성공) 오류가 뜰 때까지(실패) 기다리고, 오류면 바로 실패 — 5분을 다 기다리지 않게(리뷰 L10)
+    await expect(async () => {
+      expect((await form.count()) === 0 || (await form.getByRole('alert').count()) > 0).toBeTruthy();
+    }).toPass({ timeout: 300_000 });
+    await expect(form.getByRole('alert')).toHaveCount(0);
+    await expect(form).toHaveCount(0);
+  }
+  await expect(approveBtn).toBeVisible({ timeout: 30_000 });
+  await approveBtn.click();
   expect((await approved).ok()).toBeTruthy();
   await page.getByRole('link', { name: 'Chat' }).click();
 }

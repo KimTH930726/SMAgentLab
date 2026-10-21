@@ -19,13 +19,18 @@ class CorrectionCreate(BaseModel):
 
 
 class ApproveBody(BaseModel):
-    """담당자가 수정안을 고쳐서 승인할 수 있다(없으면 원장에 저장된 AI 수정안 그대로)."""
+    """승인할 때 화면에 보인 수정안(검증용) — 저장된 안과 다르면 409. 반영되는 건 늘 저장된 AI 수정안(10/21 사람은 고치지 않음)."""
     proposed: Optional[dict] = None
 
 
 class RejectBody(BaseModel):
     """반려 사유 필수 — 사용자 오정정 데이터로 쌓인다."""
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class RedraftBody(BaseModel):
+    """담당자가 AI에게 주는 다시 쓰기 요청 한 줄(예: "기한은 7일이 맞아요")."""
+    feedback: str = Field(min_length=1, max_length=1000)
 
 
 class RetargetBody(BaseModel):

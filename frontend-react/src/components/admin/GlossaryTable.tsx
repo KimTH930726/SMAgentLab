@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Edit2, Trash2, X, BookOpen, Wand2, Search, Check } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, BookOpen, Wand2, Search } from 'lucide-react';
 import { getGlossary, createGlossaryItem, updateGlossaryItem, deleteGlossaryItem, deleteGlossarySynonym, bulkDeleteGlossary, vectorSearchGlossary, suggestGlossaryTerms, applyGlossarySuggestion, type GlossarySuggestSource } from '../../api/knowledge';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Button } from '../ui/Button';
@@ -9,7 +9,7 @@ import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { GlossaryItem } from '../../types';
 import { showError } from '../../store/useDialogStore';
-import { CurrentDomain } from './CurrentDomain';
+import { FormModal } from '../ui/FormModal';
 
 interface GlossaryFormData { term: string; description: string; }
 const defaultForm: GlossaryFormData = { term: '', description: '' };
@@ -62,7 +62,7 @@ export function GlossaryTable() {
   const updateMutation = useMutation({
     mutationFn: (id: number) => updateGlossaryItem(id, { term: editForm.term.trim(), description: editForm.description.trim() }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['glossary', selectedNs] }); setEditingId(null); },
-    onError: (err: Error) => void showError(err, '수정 실패'),
+    onError: () => { /* 모달 안에 표시 — 닫히지 않게 */ },
   });
 
   const deleteMutation = useMutation({
@@ -148,6 +148,7 @@ export function GlossaryTable() {
   };
 
   const startEdit = (item: GlossaryItem) => {
+    updateMutation.reset();
     setEditingId(item.id);
     setEditForm({ term: item.term, description: item.description });
   };
@@ -164,7 +165,6 @@ export function GlossaryTable() {
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">
           용어집
-          {selectedNs && <span className="text-sm font-normal text-slate-500 ml-2">({selectedNs})</span>}
         </h2>
         <div className="flex items-center gap-2">
           {selectedNs && canModifyNs && (
@@ -178,7 +178,6 @@ export function GlossaryTable() {
         </div>
       </div>
 
-      <CurrentDomain name={selectedNs} />
 
       {!selectedNs && <div className="text-center py-10 text-slate-500">업무 영역을 선택하세요.</div>}
       {selectedNs && isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
@@ -260,36 +259,12 @@ export function GlossaryTable() {
 
           <PaginationInfo totalItems={totalItems} pageSize={pageSize} onPageSizeChange={setPageSize} />
           {pagedItems.map((item) => {
-            const isEditing = editingId === item.id;
+            const isEditing = editingId === item.id;   // 수정 중인 카드 테두리만 강조 — 편집은 모달(10/21)
             const similarity = (item as GlossaryItem & { similarity?: number }).similarity;
             return (
               <div key={item.id}
                 className={`bg-slate-800 border rounded-xl px-4 py-3 transition-colors ${isEditing ? 'border-indigo-500' : 'border-slate-700'}`}>
-                {isEditing ? (
-                  <div className="space-y-3">
-                    <div className="grid sm:grid-cols-[10rem_1fr] gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-400 mb-1">용어</label>
-                        <input type="text" value={editForm.term} onChange={(e) => setEditForm((f) => ({ ...f, term: e.target.value }))}
-                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-slate-400 mb-1">설명</label>
-                        <textarea rows={3} value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
-                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-none" />
-                      </div>
-                    </div>
-                    {updateMutation.error && (
-                      <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>
-                    )}
-                    <div className="flex gap-2 justify-end">
-                      <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}><X className="w-3.5 h-3.5" />취소</Button>
-                      <Button variant="primary" size="sm" loading={updateMutation.isPending} onClick={() => updateMutation.mutate(item.id)}>
-                        <Check className="w-3.5 h-3.5" />저장
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
+                {(
                   <div className="flex items-start gap-3">
                     {canModifyNs && (
                       <input
@@ -531,6 +506,28 @@ export function GlossaryTable() {
           </div>
         </div>
       </Modal>
+      {/* 용어 수정 — 모달(10/21) */}
+      <FormModal
+        isOpen={editingId !== null}
+        title={`용어 수정${editForm.term ? ` — ${editForm.term}` : ''}`}
+        onClose={() => setEditingId(null)}
+        onSubmit={() => editingId !== null && updateMutation.mutate(editingId)}
+        submitting={updateMutation.isPending}
+        submitDisabled={!editForm.term.trim()}
+        error={updateMutation.error ? String((updateMutation.error as Error).message ?? updateMutation.error) : null}
+        maxWidth="max-w-lg"
+      >
+        <div>
+          <label htmlFor="glossary-edit-term" className="block text-xs font-medium text-slate-400 mb-1">용어</label>
+          <input id="glossary-edit-term" autoFocus type="text" value={editForm.term} onChange={(e) => setEditForm((f) => ({ ...f, term: e.target.value }))}
+            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+        </div>
+        <div>
+          <label htmlFor="glossary-edit-desc" className="block text-xs font-medium text-slate-400 mb-1">설명</label>
+          <textarea id="glossary-edit-desc" rows={5} value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y" />
+        </div>
+      </FormModal>
     </div>
   );
 }

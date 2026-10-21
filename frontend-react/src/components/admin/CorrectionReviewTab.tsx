@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle, Sparkles, PenLine } from 'lucide-react';
+import { CheckCircle, Sparkles, RefreshCw } from 'lucide-react';
 import {
-  listCorrections, approveCorrection, rejectCorrection, retargetCorrection, analyzeCorrection, type CorrectionItem,
+  listCorrections, approveCorrection, rejectCorrection, retargetCorrection, analyzeCorrection, redraftCorrection, type CorrectionItem,
 } from '../../api/corrections';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { TabGuide } from './TabGuide';
 import { CorrectionAnalysis } from '../chat/CorrectionAnalysis';
+import { FormModal } from '../ui/FormModal';
 
 /**
  * 정정 검토(2026-10-01, 10-02 리뷰 신호를 합침) — 지식·정책을 고치자는 신호가 모두 모이는 곳.
@@ -15,7 +16,8 @@ import { CorrectionAnalysis } from '../chat/CorrectionAnalysis';
  *  - 채팅 "답변 틀림"만(의견 없음) → 근거 후보만 있음, 담당자가 대상을 고르면 그 기준으로 수정안 생성
  *  - (근거 카드 "이 근거 틀림"은 2026-10-06 제거 — 대상 지정은 담당자가 여기서)
  *  - 평가 게이트 "이상해요" → 검색 노이즈(대상 지식), 수정안 없음
- * 담당자는 [AI 수정안으로 대체] / [직접 수정](미리 채운 편집창) / 반려 중 고른다. 승인 전엔 검색에 반영되지 않는다.
+ * 담당자는 고치지 않는다(2026-10-21, 사람은 최종 승인만): [승인](AI 수정안 그대로) / [다시 쓰기](요청 한 줄 → AI가 다시 씀) / [반려].
+ * 승인 전엔 검색에 반영되지 않는다.
  */
 
 type TargetType = CorrectionItem['target_type'];
@@ -54,16 +56,6 @@ const FIELDS: Record<TargetType, { key: string; label: string; rows: number }[]>
   auto: [],
 };
 
-// 백엔드 improvement/draft.py _REQUIRED와 같아야 한다(다르면 버튼은 눌리는데 400, 또는 반대로 못 누름)
-const REQUIRED: Record<TargetType, string[]> = {
-  knowledge: ['content'],
-  missing: ['content'],
-  policy_param: ['name', 'raw_body'],
-  policy_narrative: ['chunk_text', 'raw_body'],
-  answer: [],
-  auto: [],
-};
-
 /** 백엔드 service._key와 같은 대상 식별자 */
 function currentKey(item: CorrectionItem): string {
   if (item.target_type === 'knowledge') return `k-${item.target_id}`;
@@ -87,17 +79,6 @@ function originalText(item: CorrectionItem): string {
   return `${head}\n[단락] ${o.chunk_text ?? ''}\n\n${o.raw_body ?? ''}`;
 }
 
-/** [직접 수정] 편집창 초기값 — AI 수정안이 있으면 그것, 없으면 지금 내용(원문)으로 채워 손만 대면 되게 */
-function editSeed(item: CorrectionItem): Record<string, string> {
-  const fields = FIELDS[item.target_type];
-  const p = item.proposed;
-  if (p) return Object.fromEntries(fields.map((f) => [f.key, String(p[f.key] ?? '')]));
-  const o = (item.original ?? {}) as Record<string, unknown>;
-  const param = (o.param ?? {}) as Record<string, unknown>;
-  const src: Record<string, unknown> = item.target_type === 'policy_param' ? { ...param, raw_body: o.raw_body } : o;
-  return Object.fromEntries(fields.map((f) => [f.key, f.key === 'content' && item.target_type === 'missing' ? '' : String(src[f.key] ?? '')]));
-}
-
 function elapsed(from: string, to: string | null): string {
   const ms = (to ? new Date(to).getTime() : Date.now()) - new Date(from).getTime();
   const h = Math.floor(ms / 3_600_000);
@@ -113,25 +94,27 @@ function sourceLabel(item: CorrectionItem): string {
 
 function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => void }) {
   const fields = FIELDS[item.target_type];
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [rejecting, setRejecting] = useState(false);
-  const [reason, setReason] = useState('');
+  // 반려 사유 / 다시 쓰기 요청은 모달로 받는다(10/21 — 수정·입력은 모달)
+  const [modal, setModal] = useState<'reject' | 'redraft' | null>(null);
+  const [text, setText] = useState('');
+  const [modalError, setModalError] = useState('');
   const [error, setError] = useState('');
-  // 대상 변경·초안 재생성 후엔 같은 신고라도 수정안이 바뀐다 — 편집 상태를 초기화
-  const proposedSig = JSON.stringify(item.proposed ?? null);
-  useEffect(() => { setEditing(false); setDraft(editSeed(item)); },
-    [item.id, item.target_type, item.target_id, item.target_sub_id, proposedSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openModal = (m: 'reject' | 'redraft') => { setModal(m); setText(''); setModalError(''); };
 
   const approve = useMutation({
-    mutationFn: (proposed?: Record<string, string>) => approveCorrection(item.id, proposed),
+    mutationFn: (shown?: Record<string, string | null>) => approveCorrection(item.id, shown),   // 화면에 보인 안(서버가 저장된 안과 같은지 확인)
     onSuccess: () => { setError(''); onDone(); },
     onError: (e: Error) => setError(e.message || '반영에 실패했습니다.'),
   });
   const reject = useMutation({
-    mutationFn: () => rejectCorrection(item.id, reason.trim()),
-    onSuccess: () => { setError(''); onDone(); },
-    onError: (e: Error) => setError(e.message || '반려에 실패했습니다.'),
+    mutationFn: () => rejectCorrection(item.id, text.trim()),
+    onSuccess: () => { setModal(null); setError(''); onDone(); },
+    onError: (e: Error) => setModalError(e.message || '반려에 실패했습니다.'),
+  });
+  const redraft = useMutation({
+    mutationFn: () => redraftCorrection(item.id, text.trim()),
+    onSuccess: () => { setModal(null); setError(''); onDone(); },
+    onError: (e: Error) => setModalError(e.message || '다시 쓰기에 실패했습니다.'),
   });
   const analyze = useMutation({
     mutationFn: () => analyzeCorrection(item.id),
@@ -147,7 +130,7 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
     // 없어 고장처럼 보였다). 의견 없음·답변 오류 대상은 원래 초안이 없는 경우라 알리지 않는다.
     onSuccess: (r) => {
       setError(r.proposed === null && item.user_input && r.target_type !== 'answer'
-        ? 'AI가 초안을 만들지 못했어요(사내 AI 응답 실패일 수 있음) — 잠시 후 다시 누르거나 [직접 수정]으로 고치세요.' : '');
+        ? 'AI가 초안을 만들지 못했어요(사내 AI 응답 실패일 수 있음) — 잠시 후 다시 눌러 주세요.' : '');
       onDone();
     },
     onError: (e: Error) => setError(e.message || '대상 변경에 실패했습니다.'),
@@ -156,14 +139,13 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
   const isAnswer = item.target_type === 'answer';
   const noTarget = item.target_type === 'auto';
   const canFix = !isAnswer && !noTarget;
-  const draftReady = REQUIRED[item.target_type].every((k) => (draft[k] ?? '').trim());
   const key = currentKey(item);
   const candidates = item.candidates ?? [];
-  const busy = approve.isPending || retarget.isPending;
+  const busy = approve.isPending || retarget.isPending || redraft.isPending;
   // 의견 없는 신고의 검토 초안(2026-10-07): AI는 값을 안 바꾸고 의심 구간에 【확인 필요】만 단다 — 표시가 남으면 서버가 승인을 막는다
   const REVIEW_MARK = '【확인 필요';
   const proposedMarked = !!item.proposed && Object.values(item.proposed).some((v) => String(v ?? '').includes(REVIEW_MARK));
-  const draftMarks = Object.values(draft).reduce((n, v) => n + (String(v ?? '').split(REVIEW_MARK).length - 1), 0);
+  const proposedMarks = item.proposed ? Object.values(item.proposed).reduce((n, v) => n + (String(v ?? '').split(REVIEW_MARK).length - 1), 0) : 0;
 
   return (
     <div className="rounded-xl border border-slate-700 p-4 space-y-3">
@@ -255,46 +237,27 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
 
         {canFix && (
           <div className="space-y-2">
-            {!editing ? (
-              <>
-                <p className="text-xs text-slate-500">
-                  {proposedMarked ? 'AI 검토 초안 — 의견이 없어 값은 그대로, 의심 부분에 【확인 필요】 표시'
-                    : item.user_input && item.kind !== 'search_noise' ? '사용자 입력으로 정리된 수정안' : item.proposed ? 'AI 수정안(추정 — 사용자 의견 없음)' : '수정안'}
-                </p>
-                {/* 만드는 동안 "의견이 없어요" 안내가 그대로 남아 멈춘 것처럼 보였다(2026-10-07 리허설) — 진행 중 표시 */}
-                {retarget.isPending ? (
-                  <p className="text-xs text-indigo-600 dark:text-indigo-400 border border-dashed border-slate-700 rounded-lg p-3 animate-pulse">
-                    AI가 {item.user_input ? '수정안' : '검토 초안'}을 만드는 중… 사내 AI라 30초~2분 걸려요. 창을 닫지 마세요.
-                  </p>
-                ) : item.proposed ? (
-                  <pre className="whitespace-pre-wrap text-xs text-slate-200 bg-slate-900/60 border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3 max-h-80 overflow-y-auto font-sans">
-                    {fields.map((f) => (item.proposed?.[f.key] ? `${fields.length > 1 ? `[${f.label}] ` : ''}${item.proposed[f.key]}` : null)).filter(Boolean).join('\n\n')}
-                  </pre>
-                ) : (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 border border-dashed border-slate-700 rounded-lg p-3">
-                    {item.kind === 'search_noise'
-                      ? '검색 노이즈 표시라 AI 수정안이 없습니다 — 내용을 직접 고치거나, 문제 없으면 종료하세요.'
-                      : !item.user_input
-                        ? '신고 의견이 없어요 — [AI 검토 초안]으로 의심 부분 표시를 받거나 [직접 수정]으로 고치세요. 문제 없으면 종료하세요.'
-                        : 'AI 수정안이 없습니다 — 직접 수정하거나 AI 초안을 만드세요.'}
-                  </p>
-                )}
-              </>
+            <p className="text-xs text-slate-500">
+              {proposedMarked ? 'AI 검토 초안 — 의견이 없어 값은 그대로, 의심 부분에 【확인 필요】 표시'
+                : item.user_input && item.kind !== 'search_noise' ? '사용자 입력으로 정리된 수정안' : item.proposed ? 'AI 수정안(추정 — 사용자 의견 없음)' : '수정안'}
+            </p>
+            {/* 만드는 동안 "의견이 없어요" 안내가 그대로 남아 멈춘 것처럼 보였다(2026-10-07 리허설) — 진행 중 표시 */}
+            {retarget.isPending ? (
+              <p className="text-xs text-indigo-600 dark:text-indigo-400 border border-dashed border-slate-700 rounded-lg p-3 animate-pulse">
+                AI가 {item.user_input ? '수정안' : '검토 초안'}을 만드는 중… 사내 AI라 30초~2분 걸려요. 창을 닫지 마세요.
+              </p>
+            ) : item.proposed ? (
+              <pre className="whitespace-pre-wrap text-xs text-slate-200 bg-slate-900/60 border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3 max-h-80 overflow-y-auto font-sans">
+                {fields.map((f) => (item.proposed?.[f.key] ? `${fields.length > 1 ? `[${f.label}] ` : ''}${item.proposed[f.key]}` : null)).filter(Boolean).join('\n\n')}
+              </pre>
             ) : (
-              <>
-                <p className="text-xs text-slate-500">직접 수정 {item.proposed ? '(AI 수정안에서 시작)' : '(지금 내용에서 시작)'}</p>
-                {fields.map((f) => (
-                  <div key={f.key}>
-                    <label className="block text-[11px] text-slate-500 mb-0.5">{f.label}</label>
-                    <textarea
-                      rows={f.rows}
-                      value={draft[f.key] ?? ''}
-                      onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 resize-y"
-                    />
-                  </div>
-                ))}
-              </>
+              <p className="text-xs text-amber-600 dark:text-amber-400 border border-dashed border-slate-700 rounded-lg p-3">
+                {item.kind === 'search_noise'
+                  ? '검색 노이즈 표시라 AI 수정안이 없습니다 — [다시 쓰기]로 무엇이 이상한지 알려 주면 AI가 고친 안을 만들어요. 문제 없으면 종료하세요.'
+                  : !item.user_input
+                    ? '신고 의견이 없어요 — [AI 검토 초안]으로 의심 부분 표시를 받은 뒤 [다시 쓰기]로 맞는 내용을 알려 주세요. 문제 없으면 종료하세요.'
+                    : 'AI 수정안이 없습니다 — [AI 초안 만들기]를 누르세요.'}
+              </p>
             )}
           </div>
         )}
@@ -307,66 +270,62 @@ function CorrectionCard({ item, onDone }: { item: CorrectionItem; onDone: () => 
 
       {pending && (
         <div className="flex items-center gap-2 justify-end flex-wrap">
-          {noTarget && !rejecting && (
+          {noTarget && (
             <span className="text-xs text-slate-500 mr-auto">사용자가 의견 없이 '답변 틀림'만 눌렀어요 — 틀린 근거를 고르거나, 문제 없으면 종료하세요.</span>
           )}
-          {isAnswer && !rejecting && (
+          {isAnswer && (
             <span className="text-xs text-slate-500 mr-auto">지식은 정상 — 반영할 내용이 없어요. 확인했으면 종료하세요.</span>
           )}
-          {rejecting ? (
-            <>
-              <input
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder={canFix && item.kind !== 'search_noise' ? '반려 사유 (신고자에게 보입니다)' : '종료 사유 (예: 확인 결과 문제 없음)'}
-                className="flex-1 min-w-0 bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-              />
-              <Button variant="ghost" size="sm" onClick={() => setRejecting(false)}>취소</Button>
-              <Button variant="danger" size="sm" loading={reject.isPending} disabled={!reason.trim()} onClick={() => reject.mutate()}>
-                {canFix && item.kind !== 'search_noise' ? '반려' : '종료'}
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button variant="ghost" size="sm" onClick={() => setRejecting(true)}>
-                {canFix && item.kind !== 'search_noise' ? '반려…' : '종료…'}
-              </Button>
-              {/* 의견이 없으면 "검토 초안"(값은 그대로, 의심 부분 표시) — 예전엔 초안을 안 만들어 눌러도 아무 일이 없었다(2026-10-07, 99번) */}
-              {canFix && !editing && !item.proposed && item.kind !== 'search_noise' && (
-                <Button variant="ghost" size="sm" loading={retarget.isPending} onClick={() => retarget.mutate(key)}
-                  title={item.user_input ? '신고 의견대로 고친 수정안을 AI가 만듭니다'
-                    : '의견이 없어 맞는 값은 모릅니다 — AI가 질문과 견줘 의심되는 부분에 【확인 필요】를 달아 둡니다(값은 안 바꿈)'}>
-                  <Sparkles className="w-3.5 h-3.5" />{item.user_input ? 'AI 초안 만들기' : 'AI 검토 초안'}
-                </Button>
-              )}
-              {canFix && !editing && (
-                <Button variant="secondary" size="sm" disabled={busy} onClick={() => { setDraft(editSeed(item)); setEditing(true); }}
-                  title="편집창이 AI 수정안(없으면 지금 내용)으로 미리 채워집니다">
-                  <PenLine className="w-3.5 h-3.5" />직접 수정
-                </Button>
-              )}
-              {canFix && !editing && item.proposed && !proposedMarked && (
-                <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy}
-                  title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
-                  onClick={() => approve.mutate(undefined)}>
-                  AI 수정안으로 대체
-                </Button>
-              )}
-              {canFix && editing && (
-                <>
-                  <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>편집 취소</Button>
-                  {draftMarks > 0 && (
-                    <span className="text-xs text-amber-600 dark:text-amber-400">【확인 필요】 {draftMarks}곳을 고치고 표시를 지워야 반영돼요</span>
-                  )}
-                  <Button variant="primary" size="sm" loading={approve.isPending} disabled={!draftReady || busy || draftMarks > 0}
-                    title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
-                    onClick={() => approve.mutate(draft)}>
-                    수정 내용으로 반영
-                  </Button>
-                </>
-              )}
-            </>
+          <Button variant="ghost" size="sm" onClick={() => openModal('reject')} disabled={busy}>
+            {canFix && item.kind !== 'search_noise' ? '반려…' : '종료…'}
+          </Button>
+          {/* 의견이 없으면 "검토 초안"(값은 그대로, 의심 부분 표시) — 예전엔 초안을 안 만들어 눌러도 아무 일이 없었다(2026-10-07, 99번) */}
+          {canFix && !item.proposed && item.kind !== 'search_noise' && (
+            <Button variant="ghost" size="sm" loading={retarget.isPending} disabled={busy} onClick={() => retarget.mutate(key)}
+              title={item.user_input ? '신고 의견대로 고친 수정안을 AI가 만듭니다'
+                : '의견이 없어 맞는 값은 모릅니다 — AI가 질문과 견줘 의심되는 부분에 【확인 필요】를 달아 둡니다(값은 안 바꿈)'}>
+              <Sparkles className="w-3.5 h-3.5" />{item.user_input ? 'AI 초안 만들기' : 'AI 검토 초안'}
+            </Button>
           )}
+          {canFix && (item.proposed || item.kind === 'search_noise') && (
+            <Button variant="secondary" size="sm" disabled={busy} onClick={() => openModal('redraft')}
+              title="어떻게 고치면 될지 한 줄로 알려 주면 AI가 수정안을 다시 씁니다">
+              <RefreshCw className="w-3.5 h-3.5" />다시 쓰기
+            </Button>
+          )}
+          {canFix && item.proposed && proposedMarks > 0 && (
+            <span className="text-xs text-amber-600 dark:text-amber-400">【확인 필요】 {proposedMarks}곳 — [다시 쓰기]로 맞는 내용을 알려 주세요</span>
+          )}
+          {canFix && item.proposed && !proposedMarked && (
+            <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy}
+              title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
+              onClick={() => approve.mutate(item.proposed ?? undefined)}>
+              승인
+            </Button>
+          )}
+
+          <FormModal
+            isOpen={modal !== null}
+            title={modal === 'redraft' ? '다시 쓰기 — AI에게 요청' : canFix && item.kind !== 'search_noise' ? '반려' : '종료'}
+            onClose={() => setModal(null)}
+            onSubmit={() => (modal === 'redraft' ? redraft.mutate() : reject.mutate())}
+            submitLabel={modal === 'redraft' ? '다시 쓰기' : canFix && item.kind !== 'search_noise' ? '반려' : '종료'}
+            submitting={redraft.isPending || reject.isPending}
+            submitDisabled={!text.trim()}
+            danger={modal === 'reject'}
+            error={modalError}
+          >
+            <label htmlFor={`corr-${item.id}-text`} className="block text-xs text-slate-400">
+              {modal === 'redraft' ? '어떻게 고치면 될지 한 줄로 적어 주세요. AI가 그대로 반영해 수정안을 다시 써요.'
+                : canFix && item.kind !== 'search_noise' ? '반려 사유 (신고자에게 보입니다)' : '종료 사유'}
+            </label>
+            <textarea id={`corr-${item.id}-text`} rows={3} value={text} onChange={(e) => setText(e.target.value)} autoFocus
+              placeholder={modal === 'redraft' ? '예: 기한은 7일이 맞아요 / 3번째 문단은 빼 주세요' : '예: 확인 결과 문제 없음'}
+              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y" />
+            {modal === 'redraft' && redraft.isPending && (
+              <p className="text-xs text-indigo-600 dark:text-indigo-400 animate-pulse">AI가 수정안을 다시 쓰는 중… 30초~2분 걸려요. 창을 닫지 마세요.</p>
+            )}
+          </FormModal>
         </div>
       )}
     </div>
@@ -392,7 +351,7 @@ export function CorrectionReviewTab({ namespace }: { namespace: string }) {
       <TabGuide
         what="지식·정책을 고치자는 신호가 모두 모이는 곳 — 신고 1번 = 1건"
         when="채팅 '답변 틀림'(한 줄 의견은 선택, 틀린 근거는 AI가 찾음) · 평가 게이트 '이상해요'"
-        todo="AI 수정안으로 대체 / 직접 수정 / 반려 중 선택. 의견 없는 '답변 틀림'은 틀린 근거를 고르면 AI가 수정안을 만듦"
+        todo="승인 / 다시 쓰기(요청 한 줄 → AI가 다시 씀) / 반려 중 선택. 의견 없는 '답변 틀림'은 틀린 근거를 고르면 AI가 수정안을 만듦"
         detail="사용자 의견은 승인 전까지 검색·답변에 전혀 반영되지 않습니다. 승인하면 기존 내용은 이력으로 남고 새 버전이 쓰이며, 반려 사유는 신고자에게 보여집니다. 처리는 그 파트 담당자와 관리자가 할 수 있습니다."
       />
       <div className="flex gap-1">

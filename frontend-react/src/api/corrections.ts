@@ -115,6 +115,11 @@ export async function rejectCorrection(id: number, reason: string): Promise<unkn
   return apiFetch(`/corrections/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
 }
 
+/** 담당자 요청 한 줄 → AI가 수정안을 다시 씀(사람은 직접 고치지 않는다, 10/21) */
+export async function redraftCorrection(id: number, feedback: string): Promise<{ id: number; proposed: Record<string, string>; marked: boolean }> {
+  return apiFetch(`/corrections/${id}/redraft`, { method: 'POST', body: JSON.stringify({ feedback }) });
+}
+
 /** 의견 없는 "답변 틀림"을 AI로 원인 추정(이관된 옛 신호 등 분석을 못 받은 건) */
 export async function analyzeCorrection(id: number): Promise<{ analyzed: boolean }> {
   return apiFetch(`/corrections/${id}/analyze`, { method: 'POST' });

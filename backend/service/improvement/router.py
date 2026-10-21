@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from core.dependencies import check_namespace_ownership, get_current_user
 from service.improvement import service
-from service.improvement.schemas import ApproveBody, CorrectionCreate, RejectBody, RetargetBody, SeenBody
+from service.improvement.schemas import ApproveBody, CorrectionCreate, RejectBody, RetargetBody, SeenBody, RedraftBody
 
 router = APIRouter(prefix="/api/corrections", tags=["corrections"])
 
@@ -89,13 +89,23 @@ async def list_corrections(namespace: Optional[str] = Query(default=None),
 @router.post("/{item_id}/approve")
 async def approve_correction(item_id: int, body: ApproveBody, user: dict = Depends(get_current_user)):
     await _require_item_owner(item_id, user)
-    return await service.approve(item_id, user, body.proposed)
+    try:
+        return await service.approve(item_id, user, body.proposed)
+    except service.ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.post("/{item_id}/reject")
 async def reject_correction(item_id: int, body: RejectBody, user: dict = Depends(get_current_user)):
     await _require_item_owner(item_id, user)
     return await service.reject(item_id, user, body.reason.strip())
+
+
+@router.post("/{item_id}/redraft")
+async def redraft_correction(item_id: int, body: RedraftBody, user: dict = Depends(get_current_user)):
+    """담당자 요청 한 줄 → AI가 수정안을 다시 씀(사람은 직접 고치지 않는다, 10/21)."""
+    await _require_item_owner(item_id, user)
+    return await service.redraft(item_id, user, body.feedback.strip())
 
 
 @router.post("/{item_id}/analyze")

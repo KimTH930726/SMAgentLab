@@ -347,7 +347,7 @@ async def analyze_signal(item_id: int, ns_id: int, message_id: int) -> bool:
                 UPDATE ops_improvement_item
                 SET kind = 'answer_signal', target_type = $2, target_id = $3, target_sub_id = $4, original = $5::jsonb,
                     proposed = $6::jsonb, ai_verdict = $7::jsonb
-                WHERE id = $1 AND status = 'pending' AND user_input IS NULL
+                WHERE id = $1 AND status = 'pending' AND user_input IS NULL AND ai_verdict IS NULL
             """, item_id, target_type, target_id, sub_id, json.dumps(original, ensure_ascii=False),
                 json.dumps(out["proposed"], ensure_ascii=False) if out["proposed"] else None,
                 json.dumps(meta, ensure_ascii=False))
@@ -427,9 +427,13 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
             target_type, original, item["user_input"], None if target_type == "missing" else context)
     # 변경 이력은 AI 판정이 있던 신고에서 대상이 실제로 바뀔 때만 남긴다 — 같은 대상 재생성("초안 다시 만들기")을
     # 변경으로 세면 "담당자가 AI 판정을 뒤집은 비율" 측정이 부풀고, 직접 지정 신고엔 판정 자체가 없다(/code-review).
-    verdict = _json(item["ai_verdict"])
+    verdict = dict(_json(item["ai_verdict"]) or {})
+    # 앞선 다시 쓰기 요청은 옛 초안에 대한 것 — 새 초안을 만들면 다음 다시 쓰기에 넘기지 않는다(다른 근거에 "3번째 문단 빼 주세요"가
+    # 적용되는 사고, 리뷰 10/21). 누가 무엇을 요청했는지는 지난 요청으로 남긴다. 요청만 있던 직접 지정 신고는 AI 판정이 없는 것으로 본다.
+    if old_requests := verdict.pop("redrafts", None):
+        verdict["redrafts_before_retarget"] = [*verdict.get("redrafts_before_retarget", []), *old_requests]
     old_key = _key(item["target_type"], item["target_id"], item["target_sub_id"])
-    if verdict and old_key != key:
+    if set(verdict) - {"redrafts_before_retarget"} and old_key != key:
         verdict = dict(verdict) | {"retargeted": {"from": old_key, "to": key, "by": approver.get("id")}}
     async with get_conn() as conn:
         try:
@@ -445,6 +449,43 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
         except asyncpg.UniqueViolationError:
             raise ConflictError("같은 신고자의 같은 근거 신고가 이미 대기 중입니다.")
     return {"id": item_id, "target_type": target_type, "original": original, "proposed": proposed}
+
+
+_REDRAFT_TARGETS = ("knowledge", "missing", "policy_param", "policy_narrative")
+
+
+async def redraft(item_id: int, approver: dict, feedback: str) -> dict:
+    """담당자의 한 줄 요청으로 AI가 수정안을 다시 쓴다(2026-10-21 — 사람은 직접 고치지 않고 승인/다시 쓰기/반려만).
+    의견 없는 신고의 검토 초안(【확인 필요】 표시)도 담당자가 "맞는 값은 3일" 같은 요청을 주면 이걸로 표시 없는 수정안이 된다.
+    요청은 신고 의견 뒤에 붙여 같은 초안 생성기에 넘기고, 누가 무엇을 요청했는지 ai_verdict.redrafts에 남긴다. 신고는 대기 그대로."""
+    async with get_conn() as conn:
+        item = await conn.fetchrow("SELECT * FROM ops_improvement_item WHERE id = $1", item_id)
+        if not item or item["status"] != "pending":
+            raise ValueError("대기 중인 신고가 아닙니다.")
+        if item["target_type"] not in _REDRAFT_TARGETS:
+            raise ValueError("고칠 대상(근거)이 정해진 신고만 다시 쓸 수 있어요 — 먼저 틀린 근거를 고르세요.")
+        context = await _load_original(conn, item["namespace_id"], "missing", None, None, item["message_id"])
+    original = _json(item["original"]) or {}
+    verdict = dict(_json(item["ai_verdict"]) or {})
+    # 앞선 다시 쓰기 요청을 모두 쌓아 넘긴다 — 매번 원문 + 마지막 요청만 쓰면 두 번째 다시 쓰기에서 첫 번째 고침이 사라졌다(리뷰 M1)
+    requests = [r["feedback"] for r in verdict.get("redrafts", []) if r.get("feedback")] + [feedback]
+    combined = "\n\n".join([*([item["user_input"]] if item["user_input"] else []),
+                              *(f"[담당자 요청 {i}] {r}" for i, r in enumerate(requests, 1))])
+    proposed = await draft_mod.draft_correction(item["target_type"], original, combined,
+                                                None if item["target_type"] == "missing" else context)
+    if proposed is None:   # AI 실패는 숨기지 않는다 — 옛 수정안을 그대로 두고 알린다
+        raise ValueError("AI가 수정안을 다시 쓰지 못했어요(사내 AI 응답 실패일 수 있음) — 잠시 후 다시 시도하세요.")
+    verdict["redrafts"] = [*verdict.get("redrafts", []), {"by": approver.get("id"), "feedback": feedback}]
+    async with get_conn() as conn:
+        res = await conn.execute("""
+            UPDATE ops_improvement_item SET proposed = $2::jsonb, ai_verdict = $3::jsonb
+            WHERE id = $1 AND status = 'pending'
+              AND target_type = $4 AND target_id IS NOT DISTINCT FROM $5 AND target_sub_id IS NOT DISTINCT FROM $6
+        """, item_id, json.dumps(proposed, ensure_ascii=False), json.dumps(verdict, ensure_ascii=False),
+            item["target_type"], item["target_id"], item["target_sub_id"])   # AI가 쓰는 동안 대상이 바뀌었으면 덮어쓰지 않는다(리뷰 L4)
+    if res.endswith(" 0"):
+        raise ValueError("그 사이 처리됐거나 정정 대상이 바뀐 신고예요 — 새로고침해서 확인하세요.")
+    return {"id": item_id, "proposed": proposed, "marked": draft_mod.has_review_marks(proposed)}
 
 
 async def pending_status(knowledge_ids: list[int], policy_item_ids: list[int]) -> dict:
@@ -548,7 +589,7 @@ def _validate_proposed(target_type: str, proposed: Optional[dict]) -> dict:
             raise ValueError(f"수정안의 '{k}'가 비어 있습니다.")
     if draft_mod.has_review_marks(proposed):
         # 검토 초안(의견 없는 신고)의 표시가 남은 채 반영되면 "【확인 필요…】"가 지식·정책 본문에 그대로 들어간다
-        raise ValueError("【확인 필요】 표시가 남아 있어요 — [직접 수정]에서 해당 부분을 확인해 고치고 표시를 지운 뒤 반영하세요.")
+        raise ValueError("【확인 필요】 표시가 남아 있어요 — [다시 쓰기]로 맞는 내용을 알려 주면 AI가 표시 없는 안을 만들어요.")
     return proposed
 
 
@@ -703,7 +744,9 @@ async def _close_superseded(conn, item: dict, approver: dict) -> int:
     return int(res.split()[-1]) if res else 0
 
 
-async def approve(item_id: int, approver: dict, proposed_override: Optional[dict]) -> dict:
+async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dict:
+    """저장된 AI 수정안을 반영한다. expected = 승인한 사람이 화면에서 본 수정안 — 그 사이 다른 사람이 다시 쓰기·대상 변경을 했으면
+    보지 못한 안이 반영되지 않게 409(10/21, 사람은 고치지 않으므로 화면에서 고친 안으로 덮어쓰는 길은 없다)."""
     async with get_conn() as conn:
         item = await conn.fetchrow("SELECT * FROM ops_improvement_item WHERE id = $1", item_id)
     if not item or item["status"] != "pending":
@@ -714,7 +757,9 @@ async def approve(item_id: int, approver: dict, proposed_override: Optional[dict
         raise ValueError("답변 오류 판정은 반영할 지식이 없습니다 — 대상을 바꾸거나 반려(종료)하세요.")
     if item["target_type"] == "auto":
         raise ValueError("정정 대상을 먼저 정하세요 — '정정 대상'에서 근거를 고르거나 반려(종료)하세요.")
-    proposed = _validate_proposed(item["target_type"], proposed_override or stored)
+    if expected is not None and expected != stored:
+        raise ConflictError("그 사이 수정안이 바뀌었어요 — 새로고침해서 바뀐 안을 확인한 뒤 승인하세요.")
+    proposed = _validate_proposed(item["target_type"], stored)
     if draft_mod.is_unchanged(item["target_type"], _json(item["original"]) or {}, proposed):
         raise ValueError("수정안이 기존 내용과 같아요 — 고칠 게 없으면 반려(종료)하세요.")
     # 지식 본문 임베딩은 트랜잭션 밖에서 미리(트랜잭션은 DB 쓰기만 짧게)
@@ -732,10 +777,16 @@ async def approve(item_id: int, approver: dict, proposed_override: Optional[dict
 
     async with get_conn() as conn:
         async with conn.transaction():
-            locked = await conn.fetchval(
-                "SELECT status FROM ops_improvement_item WHERE id = $1 FOR UPDATE", item_id)
-            if locked != "pending":
+            locked = await conn.fetchrow(
+                "SELECT status, proposed, target_type, target_id, target_sub_id FROM ops_improvement_item WHERE id = $1 FOR UPDATE",
+                item_id)
+            if not locked or locked["status"] != "pending":
                 raise ValueError("이미 처리된 신고입니다.")
+            # 임베딩·분류(LLM)를 기다리는 동안 다른 사람이 다시 쓰기·대상 변경을 했으면 보지 못한 상태로 반영하지 않는다(리뷰 10/21)
+            if (_json(locked["proposed"]) != stored
+                    or (locked["target_type"], locked["target_id"], locked["target_sub_id"])
+                    != (item["target_type"], item["target_id"], item["target_sub_id"])):
+                raise ConflictError("그 사이 수정안이 바뀌었어요 — 새로고침해서 바뀐 안을 확인한 뒤 승인하세요.")
             ns_id = item["namespace_id"]
             if item["target_type"] == "knowledge":
                 new_id = await _apply_knowledge(conn, ns_id, item["target_id"], proposed["content"], embedding)

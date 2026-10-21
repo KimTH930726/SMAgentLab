@@ -14,6 +14,7 @@ import { PolicyPanel } from '../components/admin/PolicyPanel';
 import { CorrectionReviewTab } from '../components/admin/CorrectionReviewTab';
 import { useAuthStore } from '../store/useAuthStore';
 import { useNamespaceAccess } from '../utils/useNamespaceAccess';
+import { AdminCrumb } from '../components/layout/AdminCrumb';
 import { adminPath, resolveAdminMenu, visibleAdminMenu, type AdminMenuId } from './adminMenu';
 
 // ── ErrorBoundary ─────────────────────────────────────────────────────────────
@@ -74,6 +75,7 @@ export default function Admin() {
           승인 대기 중이에요 — 관리자가 승인하면 관리 화면을 쓸 수 있어요. 채팅은 지금도 쓸 수 있어요.
         </div>
       )}
+      <AdminCrumb current={current} />
       <div className="flex-1 overflow-y-auto p-6">
         <TabErrorBoundary key={current}>
           {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} />}

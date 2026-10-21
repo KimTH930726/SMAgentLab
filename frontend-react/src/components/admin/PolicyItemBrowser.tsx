@@ -13,7 +13,6 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
-import { CurrentDomain } from './CurrentDomain';
 
 const STATUS_LABEL: Record<string, string> = {
   pending_review: '검토대기',
@@ -175,7 +174,6 @@ export function PolicyItemBrowser() {
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">
           정책 항목 브라우저
-          {selectedNs && <span className="text-sm font-normal text-slate-500 ml-2">({selectedNs})</span>}
         </h2>
       </div>
       <p className="text-xs text-slate-500 -mt-2">
@@ -187,7 +185,6 @@ export function PolicyItemBrowser() {
       )}
 
       <div className="flex flex-wrap items-end gap-3">
-        <CurrentDomain name={selectedNs} />
         {categoryOptions.length > 0 && (
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">대분류</label>

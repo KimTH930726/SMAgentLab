@@ -8,7 +8,6 @@ import { ApiError } from '../../api/client';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { useAuthStore } from '../../store/useAuthStore';
 import { Button } from '../ui/Button';
-import { CurrentDomain } from './CurrentDomain';
 
 /**
  * 정책서 올리기(2026-10-06, v2.124 → v2.127 붙여넣기).
@@ -139,7 +138,6 @@ export function PolicyImportPanel({ onGoReview }: { onGoReview?: () => void } = 
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
-        <CurrentDomain name={selectedNs} />
         <div className="flex rounded-lg border border-slate-600 overflow-hidden text-xs">
           {([['paste', '시트 붙여넣기', '보안(DRM) 엑셀도 됩니다 — 엑셀에서 복사해 붙여넣기'],
             ['file', '파일 올리기', '보안이 걸리지 않은 엑셀(.xlsx) 또는 변환기로 만든 JSON']] as const).map(([m, label, tip]) => (

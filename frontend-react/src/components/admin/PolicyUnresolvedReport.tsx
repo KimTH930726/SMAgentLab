@@ -4,7 +4,6 @@ import { ChevronDown, ChevronUp, FileWarning, Info } from 'lucide-react';
 import { getUnresolvedSummary } from '../../api/policy';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Badge } from '../ui/Badge';
-import { CurrentDomain } from './CurrentDomain';
 
 /**
  * 정책서 미분류(unresolved) 팀별 집계 — 읽기 전용(2026-10-02).
@@ -38,7 +37,6 @@ export function PolicyUnresolvedReport() {
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">
           정책서 미분류 팀별 집계
-          {selectedNs && <span className="text-sm font-normal text-slate-500 ml-2">({selectedNs})</span>}
         </h2>
       </div>
 
@@ -58,7 +56,6 @@ export function PolicyUnresolvedReport() {
 
       {/* Namespace selector */}
       <div className="flex items-end gap-3">
-        <CurrentDomain name={selectedNs} />
         {data && data.by_system.length > 0 && (
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">시스템(팀)</label>

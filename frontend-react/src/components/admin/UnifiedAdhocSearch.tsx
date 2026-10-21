@@ -12,7 +12,6 @@ import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Modal } from '../ui/Modal';
 import type { DebugSearchResult } from '../../types';
 import { showError } from '../../store/useDialogStore';
-import { CurrentDomain } from './CurrentDomain';
 
 /**
  * "즉석 질의" 통합 결과(2026-09-18, 카드/모달 리디자인) — "정책이 벡터검색/정책서
@@ -409,7 +408,6 @@ export function UnifiedAdhocSearch() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        <CurrentDomain name={selectedNs} />
         <div className="flex-1 min-w-[240px]">
           <label className="block text-xs font-medium text-slate-400 mb-1">질문</label>
           <input
