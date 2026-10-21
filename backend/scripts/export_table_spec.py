@@ -65,7 +65,7 @@ T = {
     "ops_system_config": ("설정", "키-값 시스템 설정(캐시·VOC 폴링·보존정책·검색 임계치 등)", CLS_PLATFORM,
                           "키-값 구조라 공통화 쉬움. 단 키 이름이 이 앱 기능명(email_*, cache_*, retrieval_*)이라 공통 DB에선 서비스 접두사/스코프 컬럼 필요. email_graph_delegated 값은 암호화 자격증명."),
     "ops_prompt": ("설정", "LLM 프롬프트 템플릿(관리자 화면에서 수정). func_key로 조회", CLS_PLATFORM,
-                   "프롬프트 관리 자체는 공통 기능 후보. 단 agent_type에 제거된 에이전트(text2sql, mcp_tool) 프롬프트 행이 남아 있어 옮기기 전 정리 필요."),
+                   "프롬프트 관리 자체는 공통 기능 후보. 제거된 에이전트(text2sql, mcp_tool) 프롬프트 행은 #75에서 삭제됨."),
     "ops_prompt_category_guide": ("설정", "카테고리별 정적 답변 안내문(fewshot 대체안)", CLS_DROP,
                                   "v2.83에 스키마만 선추가, CRUD/UI 미착수, 행 0건, 앱 코드 참조 없음."),
     "ops_conversation": ("챗봇", "대화 세션(사용자·네임스페이스·에이전트)", CLS_SERVICE,
@@ -124,7 +124,7 @@ C = {
     ("ops_system_config", "key"): "설정 키(예: cache_ttl, email_*, retrieval_*, chat_retention_days)",
     ("ops_system_config", "value"): "문자열로 저장(숫자·불리언도). email_graph_delegated는 암호화 JSON",
     ("ops_prompt", "func_key"): "코드가 조회하는 키(예: chat_system, email_voc_analysis_prompt)",
-    ("ops_prompt", "agent_type"): "all / knowledge_rag (text2sql·mcp_tool은 제거된 에이전트 잔재)",
+    ("ops_prompt", "agent_type"): "all(공통) / knowledge_rag(채팅) / voc(VOC 메일 분석, #79)",
     ("ops_conversation", "trimmed"): "메시지 100건 캡으로 앞부분이 잘렸는지", ("ops_conversation", "inhouse_conv_id"): "사내 LLM 게이트웨이 대화 id",
     ("ops_message", "results"): "근거 지식 검색 결과 JSON(답변 카드용)", ("ops_message", "metadata"): "policy_citations 등 부가 JSON",
     ("ops_message", "mapped_term"): "용어집 매핑된 용어", ("ops_message", "status"): "generating / completed / failed",
@@ -232,7 +232,7 @@ GENERIC = {
     "id": "PK(일련번호)", "created_at": "생성 시각", "updated_at": "수정 시각", "namespace_id": "소속 네임스페이스",
     "embedding": "임베딩 벡터(nlpai-lab/KURE-v1)", "created_by_user_id": "등록 사용자", "user_id": "사용자",
     "conversation_id": "소속 대화", "message_id": "관련 메시지", "knowledge_id": "대상 지식", "policy_item_id": "소속 정책 항목",
-    "agent_type": "에이전트 구분(현재 knowledge_rag만 운영)", "name": "이름", "description": "설명", "content": "본문",
+    "agent_type": "에이전트 구분(대화·캐시는 knowledge_rag만 운영, 프롬프트는 all/voc도)", "name": "이름", "description": "설명", "content": "본문",
     "status": "상태", "source_file": "원본 파일명/출처 표기", "is_active": "활성 여부", "part_id": "소속 파트",
 }
 

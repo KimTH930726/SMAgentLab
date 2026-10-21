@@ -9,12 +9,17 @@ import { showError } from '../../store/useDialogStore';
 const AGENT_TYPE_LABELS: Record<string, string> = {
   all:           '공통',
   knowledge_rag: 'RAG',
+  voc:           'VOC',
 };
 
 const AGENT_TYPE_COLORS: Record<string, string> = {
   all:           'text-slate-400 bg-slate-700',
   knowledge_rag: 'text-violet-700 bg-violet-100 dark:text-violet-300 dark:bg-violet-500/20',
+  voc:           'text-amber-700 bg-amber-100 dark:text-amber-300 dark:bg-amber-500/20',
 };
+
+// 에이전트에 속하지 않는 기능 묶음 — 어떤 에이전트를 골라도 늘 보인다(VOC 메일 분석은 채팅 에이전트와 무관, 10/21)
+const ALWAYS_SHOWN = new Set(['all', 'voc']);
 
 interface Props {
   agentType?: string | null;
@@ -42,9 +47,9 @@ export function PromptManager({ agentType }: Props) {
     onError: (err: Error) => void showError(err, '프롬프트 저장 실패'),
   });
 
-  // agentType이 지정된 경우 해당 agent + 'all' 표시, null/undefined면 전체
+  // agentType이 지정된 경우 해당 agent + 공통·VOC 표시, null/undefined면 전체
   const filtered = prompts?.filter((p) =>
-    !agentType ? true : p.agent_type === agentType || p.agent_type === 'all'
+    !agentType ? true : p.agent_type === agentType || ALWAYS_SHOWN.has(p.agent_type)
   ) ?? [];
 
   const selectedPrompt = filtered.find((p) => p.id === selectedId) ?? null;

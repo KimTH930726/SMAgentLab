@@ -695,9 +695,9 @@ async def _migrate_email_voc_tables(conn) -> None:
         """
         INSERT INTO ops_prompt (func_key, func_name, content, description, agent_type) VALUES
         ('email_voc_analysis_system', 'VOC 이메일 분석 시스템', $1,
-         'VOC 이메일 건별 분류/심각도/오배치 판정의 시스템 프롬프트', 'knowledge_rag'),
+         'VOC 이메일 건별 분류/심각도/오배치 판정의 시스템 프롬프트', 'voc'),
         ('email_voc_analysis_prompt', 'VOC 이메일 분석', $2,
-         'VOC 이메일 건별 분석 프롬프트. {subject}·{body}·{part}·{context} 플레이스홀더 필수', 'knowledge_rag')
+         'VOC 이메일 건별 분석 프롬프트. {subject}·{body}·{part}·{context} 플레이스홀더 필수', 'voc')
         ON CONFLICT (func_key) DO NOTHING
         """,
         """You are a VOC(Voice of Customer) triage expert for an IT operations team.
@@ -1380,6 +1380,15 @@ async def _migrate_prompt_cleanup(conn) -> None:
         logger.warning("프롬프트 캐시 비우기 실패 — 재시작 뒤 반영", exc_info=True)
 
 
+async def _migrate_prompt_voc_type(conn) -> None:
+    """VOC 이메일 프롬프트 분류 'knowledge_rag' → 'voc' (2026-10-21, #79). 멱등.
+    채팅(RAG) 에이전트와 무관한 VOC 메일 분석인데 프롬프트 관리 화면에 "RAG"로 표시됐다(10/21 점검)."""
+    r = await conn.execute("UPDATE ops_prompt SET agent_type = 'voc' "
+                           "WHERE func_key IN ('email_voc_analysis_system', 'email_voc_analysis_prompt') AND agent_type <> 'voc'")
+    if r != "UPDATE 0":
+        logger.info("[migrate #79] VOC 프롬프트 분류 → voc: %s", r)
+
+
 async def _migrate_data_marker(conn) -> None:
     """일회성 데이터 작업 기록 (2026-10-13, #76) — 예: 정책 조각 재임베딩이 어느 규칙 판까지 끝났는지. 멱등."""
     await conn.execute("""
@@ -1854,6 +1863,7 @@ async def _run_migrations() -> None:
         await _migrate_data_marker(conn)
         await _migrate_policy_v0(conn)
         await _migrate_org_domain(conn)
+        await _migrate_prompt_voc_type(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 
