@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from trustkit.answer.shaping import list_scoped, with_note  # noqa: E402
+from trustkit.answer.shaping import list_line_summary, list_scoped, with_note  # noqa: E402
 from trustkit.eval.gate import answer_gate, mcnemar_p, retrieval_gate  # noqa: E402
 from trustkit.ingest.invariants import check_chunks  # noqa: E402
 from trustkit.ingest.quality import assess  # noqa: E402
@@ -174,3 +174,46 @@ def test_with_note_appends_only_real_notes():
     assert with_note("본문", "  ") == "본문"                       # 공백뿐인 비고는 붙이지 않는다
     assert with_note("본문", " 외부 시스템 값 ") == "본문\n비고: 외부 시스템 값"
     assert with_note("본문", "x", label="주의") == "본문\n주의: x"
+
+
+def test_intent_list_phrasings_without_all_words():
+    """10/21 확장 — "전체·모든" 없이 묻는 목록 말투는 잡고, 한 정책 안의 값·처분을 묻는 말은 안 잡는다."""
+    for q in ("POS 영업 중 운영기준 항목들 정리해줘", "SRM 협력회사 평가 관련 기준을 정리해 주세요", "결재기준 전반을 알려주세요",
+              "카드 환불·교환 관련 기준에는 뭐가 있어?", "매장 기준정보에는 어떤 운영 기준들이 있어?",
+              "배송비 기준에 어떤 것들이 있어?", "회원 탈퇴가 제한되는 조건들 정리해줘", "거래대사·정산 쪽 기준엔 뭐가 있나요?"):
+        assert looks_like_navigation_query(q), q
+    for q in ("매장 폐점할 때 남은 재고는 어떤 절차로 정리해?", "지류상품권 권종은 뭐가 있어?", "쿠폰이 발급되는 결제수단은 뭐가 있나요?",
+              "도보 배달할 때 장바구니에 몇 개까지 담을 수 있어?", "긴급보고되는 항목은?",
+              "회원 탈퇴 절차 정리해줘", "방금 답변 정리해줘", "쿠폰 적용 조건이 뭐가 있어?", "주의사항들 알려줘",
+              "반품 사유들 알려줘", "쿠폰 발급 시 어떤 제약들이 있어?", "이 정책 전반적으로 어때?"):   # 리뷰 10/21 오탐 사례
+        assert not looks_like_navigation_query(q), q
+
+
+def test_list_line_summary_invariants():
+    """성질: 비지 않음(본문에 글자가 있으면), 길이 상한, 조각은 전부 본문에 있는 글자(새 내용 0), 이름과 같은 제목 줄은 건너뜀."""
+    import re
+    rng = random.Random(7)
+    words = ["기준", "대상", "적용", "3,000원", "1일 1회", "가입", "해지", "(앱)", "3.5%", "-5%", "가능", "불가"]
+    marks = ["", "1. ", "  1) ", "    - ", "① ", "가) ", "• ", "(2) "]
+    for _ in range(300):
+        name = " ".join(rng.sample(words, 2))
+        lines = [rng.choice(marks) + " ".join(rng.choice(words) for _ in range(rng.randint(1, 6))) for _ in range(rng.randint(1, 8))]
+        if rng.random() < 0.5:
+            lines.insert(0, "1. " + name)
+        body = "\n".join(lines)
+        limit = rng.choice([20, 40, 80])
+        s = list_line_summary(name, body, limit=limit)
+        assert s and len(s) <= limit
+        flat = re.sub(r"\s+", " ", body)
+        for piece in s.rstrip("…").split(" · "):
+            assert piece in flat, (piece, body)
+        if lines[0] == "1. " + name and all(name not in ln for ln in lines[1:]):   # 이름과 같은 제목 줄은 요약 조각이 아님
+            assert name not in s.rstrip("…").split(" · ")
+    assert list_line_summary("환불", "1. 환불\n  1) 대상 : 전액") == "대상 : 전액"
+    assert list_line_summary("할인", "1) 3.5% 할인") == "3.5% 할인"                 # 숫자 값은 기호로 안 뗌
+    assert list_line_summary("환불", "1. 환불") == "1. 환불"                          # 쓸 줄이 없으면 첫 줄
+    assert list_line_summary("x", "") == ""
+    assert list_line_summary("변경가능여부", "1. 변경가능여부\n- 가능\n- 불가") == "가능 · 불가"   # 이름에 든 값 줄 유지(리뷰 10/21)
+    assert list_line_summary("x", "가나다라마바사", limit=0) == "…"                              # 상한 0 이하도 지킴
+    assert list_line_summary("a", "(2023) 개정 반영") == "(2023) 개정 반영"                      # 연도 괄호는 기호 아님
+

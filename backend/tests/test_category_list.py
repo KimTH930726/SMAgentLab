@@ -138,7 +138,7 @@ class TestFindCategoryListWithIndex:
                 if "i.category_path, n.name AS part" in sql:   # 색인(파트 이름 포함, 2026-10-20)
                     return [{"id": i, "category_path": p, "part": "파트A"} for i, p, _ in rows]
                 ids = set(a[0])
-                return [{"cat": " > ".join(p), "policy_name": n, "first": "본문"} for i, p, n in rows if i in ids]
+                return [{"cat": " > ".join(p), "policy_name": n, "body": f"1. {n}\n  1) {n} 본문"} for i, p, n in rows if i in ids]
 
         @asynccontextmanager
         async def cm():
@@ -236,3 +236,48 @@ def test_invalidate_clears_index():
     cl._cache[1] = object()
     cl.invalidate()
     assert cl._cache == {}
+
+
+# ── 목록 답 개선(10/21): "및" 정규화 · 질문에 나온 긴 이름 우선 · 줄 = 정책명 — 요약 · 개수 지시 ─────────────────────────
+
+def test_norm_ignores_spaced_and_conjunction():
+    assert cl.norm_category("2-3. 환불 및 교환") == cl.norm_category("환불·교환") == "환불교환"
+    assert cl.norm_category("및") == "및"          # 띄어 쓴 접속어만 — 이름 자체·붙어 쓴 글자는 그대로
+    assert cl.norm_category("가및나") == "가및나"
+
+
+class TestListAnswerShape:
+    ROWS = [(1, ["2.모바일선불카드", "2-3.환불 및 교환", "x"], "환불"), (2, ["2.모바일선불카드", "2-3.환불 및 교환", "x"], "교환"),
+            (3, ["2.모바일선불카드", "2-3.환불 및 교환", "x"], "만료카드 연장"),
+            (4, ["2.모바일선불카드", "2-4.환불", "x"], "다른 환불"), (5, ["2.모바일선불카드", "2-5.교환", "x"], "다른 교환"),
+            (6, ["2.모바일선불카드", "2-6.충전", "x"], "충전")]
+
+    def _run(self, monkeypatch, q, kn=True):
+        TestFindCategoryListWithIndex.ROWS, saved = self.ROWS, TestFindCategoryListWithIndex.ROWS
+        try:
+            asyncio = TestFindCategoryListWithIndex()._patch(monkeypatch)
+            return asyncio.run(cl.find_category_list(1, q, [0.0, 0.0], keyword_nav=kn))
+        finally:
+            TestFindCategoryListWithIndex.ROWS = saved
+
+    def test_longer_name_in_question_beats_its_parts(self, monkeypatch):
+        """"모바일선불카드 환불·교환 기준"(더 긴 상위 이름이 먼저 잡힘) → "환불 및 교환" 3개만(예전: "환불"·"교환" 분류를 따로 골라 정답 0개)."""
+        r = self._run(monkeypatch, "모바일선불카드 환불·교환 관련 기준에는 뭐가 있어?")
+        assert sorted(r.item_ids) == [1, 2, 3] and r.names == ["환불 및 교환"]
+
+    def test_every_listed_policy_once_in_order_with_summary(self, monkeypatch):
+        r = self._run(monkeypatch, "모바일선불카드 정책 전부 보여줘")
+        names = [n for _, _, n in self.ROWS]
+        assert r.total == len(self.ROWS) and len(r.lines) == len(self.ROWS)        # 유실·중복 없음
+        assert [ln.split(" > ")[-1].split(" — ")[0] for ln in r.lines] == names    # 정책명 그대로, 문서 순서(가짜 DB 순서) 유지
+        for ln, n in zip(r.lines, names):
+            summary = ln.split(" — ", 1)[1]
+            assert summary and summary in f"{n} 본문"                              # 요약은 비지 않고 본문에 있는 글자만
+
+    def test_block_states_count_and_one_line_rule(self):
+        b = cl.CategoryList(names=["a"], total=3, lines=["- a > p1 — s", "- a > p2 — s", "- a > p3 — s"]).block()
+        assert "아래 정책 3개를" in b and "아래에 없는 정책은 목록에 넣지 않" in b and "표 행으로 펼치지 않" in b
+        big = cl.CategoryList(names=["a"], total=55, lines=["- a > p — s"] * 40).block()
+        assert "그중 40개만 표시" in big and "아래 정책 40개를" in big
+        assert "15개 더 있으니" in big and "더 있으니" not in b                     # 잘린 목록은 나머지가 있다고 알림
+

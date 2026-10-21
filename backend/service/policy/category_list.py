@@ -20,10 +20,12 @@ import logging
 
 from core.database import get_conn
 from service.policy.visibility import searchable_sql
+from trustkit.answer.shaping import list_line_summary
 
 logger = logging.getLogger(__name__)
 _NUM = re.compile(r"^\s*[\d\-]+[.)]\s*")
 _NON_WORD = re.compile(r"[\s\W_]+")
+_AND = re.compile(r"\s+및\s+")
 _MIN_SIM = 0.58
 try:   # 측정용 환경값(pick_categories) — 잘못된 값이면 기본값으로(기동이 막히지 않게)
     _SPECIFIC_MARGIN = float(__import__("os").environ.get("CATEGORY_SPECIFIC_MARGIN", "0.15"))
@@ -43,8 +45,9 @@ _CACHE_TTL = 600.0   # 정책 임포트·정정이 분류를 바꿀 수 있어 1
 
 
 def norm_category(s: str) -> str:
-    """"4-2.배송정책" == "배송 정책" — 번호 접두사·띄어쓰기·문장부호 무시."""
-    return _NON_WORD.sub("", _NUM.sub("", s or "").lower())
+    """"4-2.배송정책" == "배송 정책" — 번호 접두사·띄어쓰기·문장부호 무시. 띄어 쓴 접속어 "및"도 뺀다(10/21) — 분류 이름은
+    "환불 및 교환"인데 질문은 "환불·교환"이라 글자 매칭이 안 돼, 더 짧은 "환불"·"교환" 분류를 따로 골랐다."""
+    return _NON_WORD.sub("", _AND.sub(" ", _NUM.sub("", s or "")).lower())
 
 
 @dataclass
@@ -181,8 +184,15 @@ class CategoryList:
         # 같은 이름이 여러 업무에 있으면 업무(경로)별로 묶어 — 섞어서 한 분류처럼 보이지 않게(재질문 대신, v2.134)
         group = (f" 같은 이름이 여러 업무({', '.join(p for p, _ in self.places)})에 있으니 업무별로 묶어 제목을 달아라."
                  if len(self.places) >= 2 else "")
-        return (f"[분류 목록: {', '.join(self.names)} — 정책 {self.total}개{more}. \"전부·목록\" 질문이면 이 목록의 정책을 빠짐없이, "
-                f"정책마다 \"정책명 — 한 줄 요약\"으로 답하고 세부 조건은 궁금한 정책을 다시 물어보라고 안내.{group}]\n"
+        # 잘린 목록이면 나머지가 있다는 것도 알리게(리뷰 10/21 — "아래에 없는 정책은 넣지 않는다"만 있으면 이게 전부인 것처럼 답한다)
+        tail = (f" 이 분류엔 정책이 {self.total - len(self.lines)}개 더 있으니, 더 좁은 범위로 다시 물어보면 나머지도 볼 수 있다고 알린다."
+                if self.total > len(self.lines) else "")
+        # 10/21: 개수·한 줄 원칙을 못 박는다 — 목록형 오답의 절반이 한 정책의 세부 조건을 글머리·표 행으로 펼친 것(채점상 목록 밖 항목),
+        # 다른 분류 정책을 끼워 넣은 것이었다. 줄마다 요약이 붙어 있으니 그걸 쓰게 한다
+        return (f"[분류 목록: {', '.join(self.names)} — 정책 {self.total}개{more}. \"전부·목록\" 질문이면 아래 정책 {len(self.lines)}개를 "
+                f"빠짐없이 이 순서대로, 정책 하나당 글머리 한 줄(\"정책명 — 한 줄 요약\", 요약은 각 줄의 — 뒤 내용 기준)로 답한다. "
+                f"아래에 없는 정책은 목록에 넣지 않고, 한 정책의 세부 조건을 따로 글머리나 표 행으로 펼치지 않는다. "
+                f"세부 조건은 궁금한 정책을 다시 물어보라고 안내.{group}{tail}]\n"
                 # 번호를 붙인다 — 긴 목록(20개)에서 LLM이 중간을 건너뛰던 것(q077 등). 줄 내용은 그대로
                 + "\n".join(f"{i}. {ln[2:] if ln.startswith('- ') else ln}" for i, ln in enumerate(self.lines, 1)))
 
@@ -282,6 +292,8 @@ async def find_category_list(ns_ids: Union[int, Sequence[int]], question: str, q
             # (2026-10-12 테스트로 발견). 상위 이름이 그 위치의 조상인 경우만이라 엉뚱한 분류로 새지 않는다.
             qn = norm_category(question)
             lex_all = {n for n in names if len(n) >= 2 and n in qn}
+            # 질문에 나온 더 긴 이름 안에 든 이름은 뺀다("환불교환"이 나왔으면 "환불"·"교환"은 아님 — is_topic_overview와 같은 규칙, 10/21)
+            lex_all = {n for n in lex_all if not any(n != m and n in m for m in lex_all)}
             # 이미 고른 이름이 그 위치의 조상일 때만(고른 것보다 더 구체적일 때만) — "주문서 쿠폰정책"을 고른 걸 "주문서"로 되돌리지 않게
             specific = {p: (n, pid) for n in lex_all for p, pid in idx.places.get(n, {}).items()
                         if {norm_category(seg) for seg in p.split(" > ")[:-1]} & (set(picked) - {n})}
@@ -310,10 +322,12 @@ async def find_category_list(ns_ids: Union[int, Sequence[int]], question: str, q
         part_sql = "n.name || ' > ' || " if len(key) > 1 else ""   # 여러 파트면 어느 파트 정책인지
         rows = await conn.fetch(
             f"SELECT {part_sql}array_to_string(i.category_path, ' > ') AS cat, i.policy_name, "
-            "split_part(coalesce(i.raw_body, ''), E'\\n', 1) AS first "
+            "coalesce(i.raw_body, '') AS body "
             "FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id "
             "WHERE i.id = ANY($1::int[]) ORDER BY n.name, i.category_path, i.source_row, i.id LIMIT $2", ids, _MAX_ITEMS)
-    lines = [f"- {r['cat']} > {r['policy_name']}: {(r['first'] or '').strip()[:100]}" for r in rows]
+    # 줄 = "경로 > 정책명 — 요약"(10/21) — 예전엔 본문 첫 줄(중앙값 15자, 대개 이름과 같은 제목)이라 LLM이 요약을 본문에서 다시
+    # 만들며 세부 조건을 글머리·표 행으로 줄줄이 펼쳤다(채점에서 목록 밖 항목). 요약은 본문 앞쪽 줄을 그대로 이어 붙임(LLM 없음, trustkit)
+    lines = [f"- {r['cat']} > {r['policy_name']} — {list_line_summary(r['policy_name'], r['body'])}" for r in rows]
     return CategoryList(names=[idx.display[n] for n in picked], total=len(ids), lines=lines, item_ids=list(ids),
                         places=sorted(((p, len(v)) for p, v in places.items()), key=lambda x: -x[1]), children=children,
                         explicit_all=not scoped and (bool(keyword_nav) or says_all(question, [idx.display[n] for n in picked])),
