@@ -109,7 +109,7 @@ function ClusterKnowledgeRegisterModal({
           </div>
         ) : (
           <p className="text-xs text-amber-600 dark:text-amber-400">
-            이 파트에 등록된 업무구분이 없어 지식을 등록할 수 없습니다. 기준정보관리에서 업무구분을 먼저 추가해주세요.
+            이 업무 영역에 등록된 업무구분이 없어 지식을 등록할 수 없습니다. 업무 영역 메뉴에서 업무구분을 먼저 추가해 주세요.
           </p>
         )}
 
@@ -241,7 +241,7 @@ export function VocStatsPanel({ namespace }: { namespace: string }) {
   const inconsistentCount = meaningfulClusters.filter((c) => c.category_breakdown.length > 1).length;
 
   if (!namespace) {
-    return <div className="text-center py-10 text-slate-500">파트를 선택하세요.</div>;
+    return <div className="text-center py-10 text-slate-500">업무 영역을 선택하세요.</div>;
   }
 
   return (

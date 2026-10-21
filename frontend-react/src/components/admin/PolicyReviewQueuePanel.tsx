@@ -138,7 +138,7 @@ export function PolicyReviewQueuePanel({ namespace, onShowQueue }: { namespace: 
             <span className="ml-auto flex gap-1.5">
               {autoCount > 0 && (
                 <Button variant="ghost" size="sm" loading={revert.isPending}
-                  onClick={() => void showConfirm(`이 파트(${namespace})에서 이 규칙으로 자동 통과된 ${autoCount}건을 전부 검토대기로 되돌릴까요?`, { confirmLabel: '되돌리기' }).then((ok) => { if (ok) revert.mutate({ rule_key: RULE, namespace }); })}
+                  onClick={() => void showConfirm(`이 업무 영역(${namespace})에서 이 규칙으로 자동 통과된 ${autoCount}건을 전부 검토대기로 되돌릴까요?`, { confirmLabel: '되돌리기' }).then((ok) => { if (ok) revert.mutate({ rule_key: RULE, namespace }); })}
                   title="이미 자동 통과된 항목은 그대로 둡니다 — 의심되면 되돌려 사람이 다시 봅니다">
                   자동 통과 {autoCount}건 되돌리기
                 </Button>

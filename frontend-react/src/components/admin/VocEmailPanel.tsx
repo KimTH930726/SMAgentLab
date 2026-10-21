@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAppStore } from '../../store/useAppStore';
 import { Mail, Plus, Trash2, Pencil, X, Save, Send, FlaskConical, AlertCircle, Inbox, Route, PlayCircle, KeyRound, History as HistoryIcon, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react';
 import { clsx } from 'clsx';
 import {
@@ -148,14 +149,12 @@ function QueryErrorNotice({ error, onRetry }: { error: unknown; onRetry: () => v
 
 export function VocEmailPanel() {
   const queryClient = useQueryClient();
-  const [namespace, setNamespace] = useState('');
+  const namespace = useAppStore((s) => s.namespace);   // 업무 영역은 앱 공용 값 하나(사이드바와 같음, 10/21)
+  const setNamespace = useAppStore((s) => s.setNamespace);
   const [error, setError] = useState('');
   const [subTab, setSubTab] = useState<VocSubTab>('collect');
 
   const { data: namespaces = [] } = useQuery<string[]>({ queryKey: ['namespaces'], queryFn: getNamespaces });
-  useEffect(() => {
-    if (namespaces.length > 0 && !namespace) setNamespace(namespaces[0]);
-  }, [namespaces, namespace]);
   const selectedNs = namespace || namespaces[0] || '';
 
   // ── §9 폴링 설정 ──────────────────────────────────────────────────────────

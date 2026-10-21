@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { goAdmin, domainSelect } from './admin-nav';
 import { execFileSync } from 'node:child_process';
 
 // 사내 LLM 사용량(2026-10-12) — "토큰이 너무 많이 나간다"는데 기능별 숫자가 없던 것. 시스템 설정 화면의 사용량 표가 실제 기록(DB)과
@@ -16,7 +17,7 @@ test('시스템 설정 — 사내 LLM 사용량이 기록과 같은 호출 수�
   const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
   if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
   await page.getByRole('link', { name: 'Admin' }).click();
-  await page.getByRole('button', { name: '시스템 설정' }).click();
+  await goAdmin(page, '시스템', '설정');
   await page.getByRole('button', { name: 'LLM 프로바이더' }).click();   // 사용량은 LLM 프로바이더 영역 안
   const panel = page.getByTestId('llm-usage');
   await expect(panel).toBeVisible();

@@ -122,7 +122,7 @@ export function PolicyImportPanel({ onGoReview }: { onGoReview?: () => void } = 
           → <kbd className="px-1 rounded bg-slate-900">Ctrl+C</kbd>로 시트 전체를 복사합니다. 바뀐 시트만 올리면 되고, 안 올린 시트는 그대로 둡니다.
         </p>
         <p>
-          <span className="font-medium text-slate-200">② 이 화면</span> — 파트·정책서·시트 이름을 고르고 붙여넣은 뒤 반영합니다. 바뀐 정책만 AI가
+          <span className="font-medium text-slate-200">② 이 화면</span> — 업무 영역·정책서·시트 이름을 고르고 붙여넣은 뒤 반영합니다. 바뀐 정책만 AI가
           분해하고, 내용이 같은 정책은 그대로 둡니다.
         </p>
         <p>
@@ -136,10 +136,9 @@ export function PolicyImportPanel({ onGoReview }: { onGoReview?: () => void } = 
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">파트</label>
+          <label className="block text-xs font-medium text-slate-400 mb-1.5">업무 영역</label>
           <select value={selectedNs} onChange={(e) => { setSelectedNs(e.target.value); setSource(''); clearResult(); }}
             className="w-56 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-            <option value="">선택...</option>
             {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
           </select>
         </div>
@@ -249,8 +248,8 @@ export function PolicyImportPanel({ onGoReview }: { onGoReview?: () => void } = 
             : '전체 다시 분해: 평소엔 끄세요. 바뀐 정책만 처리하는 게 기본이고, 분해 방식이 바뀌면 시스템이 알아서 다시 분해합니다(사내 LLM 모델만 바꿨을 때 등 예외용).'}
         </p>
       )}
-      {!selectedNs && <p className="text-xs text-slate-500">파트를 먼저 고르세요.</p>}
-      {selectedNs && !canModifyNs && <p className="text-xs text-slate-500">이 파트에 올릴 권한이 없습니다 — 파트 담당자나 관리자만 올릴 수 있어요.</p>}
+      {!selectedNs && <p className="text-xs text-slate-500">업무 영역을 먼저 고르세요.</p>}
+      {selectedNs && !canModifyNs && <p className="text-xs text-slate-500">이 업무 영역에 올릴 권한이 없습니다 — 담당 파트나 관리자만 올릴 수 있어요.</p>}
       {mutation.isPending && <p className="text-xs text-slate-500">바뀐 정책을 AI가 분해하는 중입니다 — 수십 건이면 몇 분 걸릴 수 있어요. 창을 닫지 마세요.</p>}
 
       {error && (

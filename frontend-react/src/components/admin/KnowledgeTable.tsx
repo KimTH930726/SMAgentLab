@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Trash2, X, FileText, Upload, Database, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, Check, Search } from 'lucide-react';
+import { Trash2, X, FileText, Upload, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -33,9 +33,7 @@ import { getCategories, suggestCategory } from '../../api/namespaces';
 import { updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { useAuthStore } from '../../store/useAuthStore';
-import { CorrectionReviewTab } from './CorrectionReviewTab';
 import { TabGuide } from './TabGuide';
-import { getCorrectionPendingCount } from '../../api/corrections';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
@@ -208,21 +206,11 @@ type IngestMethod = 'file' | 'text' | 'manual' | 'url' | null;
 
 // ── KnowledgeTable (메인) ─────────────────────────────────────────────────────
 
-export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'list' | 'corrections' } = {}) {
+export function KnowledgeTable() {
   const qc = useQueryClient();
   const { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces } = useNamespaceAccess();
 
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'corrections'>(initialSubTab);
-  // 정정 검토는 관리자 승인 전용(API도 admin) — 대기 건수 배지로 방치 방지
-  // 정정 검토(옛 리뷰 신호 포함, 2026-10-02) — 그 파트 담당자 + 관리자가 처리. 대기 건수 배지로 방치 방지
-  const { data: correctionCount } = useQuery({
-    // 탭 건수는 지금 보고 있는 파트만(다른 파트 건은 여기서 보여줄 필요 없음 — 사이드바 관리자 배지는 전체)
-    queryKey: ['corrections-pending-count', selectedNs],
-    queryFn: () => getCorrectionPendingCount(selectedNs),
-    enabled: !!selectedNs && canModifyNs,
-    staleTime: 30_000,
-  });
-
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>('list');   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<KnowledgeFormData>(defaultForm);
@@ -384,7 +372,7 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
       {/* 헤더 + 네임스페이스 */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">
-          지식 베이스
+          지식 문서
           {selectedNs && <span className="text-sm font-normal text-slate-500 ml-2">({selectedNs})</span>}
         </h2>
         <select
@@ -392,7 +380,6 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
           onChange={(e) => { setSelectedNs(e.target.value); setCategoryFilter(''); setPage(1); }}
           className="w-44 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
         >
-          <option value="">파트 선택...</option>
           {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
         </select>
       </div>
@@ -436,23 +423,6 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
             <span className="ml-1 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-400 px-1.5 py-0.5 rounded-full">{pendingItems.length}</span>
           )}
         </button>
-        {canModifyNs && (
-          <button
-            onClick={() => setSubTab('corrections')}
-            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
-              subTab === 'corrections'
-                ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-            title="채팅 '답변 틀림'과 평가 게이트 '이상해요'가 모이는 곳 — 승인해야만 검색에 반영됨"
-          >
-            <PenLine className="w-4 h-4" />
-            정정 검토
-            {(correctionCount?.by_namespace[selectedNs] ?? 0) > 0 && (
-              <span className="ml-1 text-[10px] bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-400 px-1.5 py-0.5 rounded-full">{correctionCount!.by_namespace[selectedNs]}</span>
-            )}
-          </button>
-        )}
       </div>
 
       {/* ── 서브탭 1: 조회 ── */}
@@ -543,7 +513,7 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
             </div>
           )}
 
-          {!selectedNs && <div className="text-center py-16 text-slate-500">파트를 선택하세요.</div>}
+          {!selectedNs && <div className="text-center py-16 text-slate-500">업무 영역을 선택하세요.</div>}
           {selectedNs && isLoading && <div className="text-center py-16 text-slate-500 animate-pulse">로딩 중...</div>}
           {selectedNs && error && <div className="text-center py-16 text-rose-400">오류가 발생했습니다.</div>}
 
@@ -630,12 +600,6 @@ export function KnowledgeTable({ initialSubTab = 'list' }: { initialSubTab?: 'li
         </div>
       )}
 
-      {subTab === 'corrections' && (canModifyNs ? (
-        <CorrectionReviewTab namespace={selectedNs} />
-      ) : (
-        // 통계 "정정 요청" 카드로 들어왔지만 이 파트 수정 권한이 없는 경우
-        <p className="text-sm text-slate-400 py-6 text-center">이 파트의 정정 검토는 담당 파트와 관리자만 처리할 수 있습니다.</p>
-      ))}
 
       {/* Edit Modal */}
       <Modal isOpen={showEdit} onClose={() => { setShowEdit(false); setEditingId(null); }}
@@ -1112,10 +1076,10 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
   };
 
   if (!namespace) {
-    return <div className="text-center py-16 text-slate-500">파트를 선택하세요.</div>;
+    return <div className="text-center py-16 text-slate-500">업무 영역을 선택하세요.</div>;
   }
   if (!canModify) {
-    return <div className="text-center py-16 text-slate-500">이 파트의 지식 등록 권한이 없습니다.</div>;
+    return <div className="text-center py-16 text-slate-500">이 업무 영역의 지식 등록 권한이 없습니다.</div>;
   }
 
   const methods: { id: IngestMethod; icon: React.ReactNode; title: string; desc: string; badge?: string }[] = [
@@ -1431,7 +1395,7 @@ function ReviewTab({ items, canModify, onResolved }: {
                 </Button>
               </div>
             ) : (
-              <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 파트의 승인 권한이 없습니다.</p>
+              <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 업무 영역의 승인 권한이 없습니다.</p>
             )}
           </div>
         )}

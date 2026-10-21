@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { goAdmin, domainSelect } from './admin-nav';
 import { execFileSync } from 'node:child_process';
 
 // 이 테스트가 존재하는 이유(2026-10-06, v2.123~124): 정책서는 사내 문서 보안 암호화 때문에 표준 JSON으로 올리고,
@@ -34,9 +35,9 @@ async function open(page: Page) {
   const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
   if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
   await page.getByRole('link', { name: 'Admin' }).click();
-  await page.getByRole('button', { name: '정책' }).click();
+  await goAdmin(page, '지식', '정책서');
   await page.getByRole('button', { name: '정책서 올리기' }).click();
-  await page.locator('select').first().selectOption(NS);
+  await domainSelect(page).selectOption(NS);
   await page.getByRole('button', { name: '파일 올리기' }).click();   // 기본은 '시트 붙여넣기'(v2.127)
 }
 

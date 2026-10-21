@@ -1,18 +1,20 @@
-import { useState, Component, type ReactNode } from 'react';
-import { clsx } from 'clsx';
-import { Database, BookOpen, BarChart2, Layers, Settings, Users, Mail, FileStack, FlaskConical } from 'lucide-react';
+import { Component, useEffect, type ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
 import { StatsPanel } from '../components/admin/StatsPanel';
 import { EvaluationGate } from '../components/admin/EvaluationGate';
 import { LLMSettings } from '../components/admin/LLMSettings';
-import { UserManager } from '../components/admin/UserManager';
+import { UserSection, PartSection } from '../components/admin/UserManager';
+import { PartDomainSection } from '../components/admin/PartDomainSection';
 import { CachePanel } from '../components/admin/CachePanel';
 import { VocEmailPanel } from '../components/admin/VocEmailPanel';
 import { PolicyPanel } from '../components/admin/PolicyPanel';
+import { CorrectionReviewTab } from '../components/admin/CorrectionReviewTab';
 import { useAuthStore } from '../store/useAuthStore';
-import { useAppStore } from '../store/useAppStore';
+import { useNamespaceAccess } from '../utils/useNamespaceAccess';
+import { adminPath, resolveAdminMenu, visibleAdminMenu, type AdminMenuId } from './adminMenu';
 
 // ── ErrorBoundary ─────────────────────────────────────────────────────────────
 
@@ -38,56 +40,31 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
   }
 }
 
-type TabId =
-  // knowledge_rag
-  | 'namespaces' | 'knowledge' | 'glossary' | 'lab'
-  // common
-  | 'cache' | 'stats' | 'llm' | 'users' | 'voc_email' | 'policy';
-
-interface Tab {
-  id: TabId;
-  label: string;
-  icon: React.ReactNode;
-  adminOnly?: boolean;
-  viewerOk?: boolean;   // 조회 전용(가입 후 승인 대기)에게도 보이는 탭 — 나머지는 서버가 403이라 숨긴다
-  agentScope?: 'knowledge_rag' | 'all';
+// 정정 요청(품질) — 지식·정책 공통이라 지식 탭에서 뺐다(10/21). 처리는 그 업무 영역 담당 파트 + 관리자
+function CorrectionsPanel() {
+  const { selectedNs, canModifyNs } = useNamespaceAccess();
+  if (!canModifyNs) {
+    return <p className="text-sm text-slate-400 py-6 text-center">이 업무 영역의 정정 요청은 담당 파트와 관리자만 처리할 수 있어요.</p>;
+  }
+  return <CorrectionReviewTab namespace={selectedNs} />;
 }
 
-const TABS: Tab[] = [
-  // knowledge_rag 전용 탭
-  { id: 'namespaces',   label: '기준 정보 관리',    icon: <Layers className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
-  { id: 'knowledge',    label: '지식 베이스',        icon: <BookOpen className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
-  { id: 'voc_email',    label: 'VOC 이메일',            icon: <Mail className="w-4 h-4" />,     agentScope: 'knowledge_rag' },
-  { id: 'glossary',     label: '용어집',              icon: <Database className="w-4 h-4" />,   agentScope: 'knowledge_rag' },
-  { id: 'lab',          label: '평가 게이트',          icon: <FlaskConical className="w-4 h-4" />, agentScope: 'knowledge_rag' },
-  { id: 'policy',            label: '정책',                icon: <FileStack className="w-4 h-4" />,  agentScope: 'knowledge_rag' },
-  // 공통 탭
-  { id: 'cache',        label: '캐시 현황',             icon: <BarChart2 className="w-4 h-4" />, adminOnly: true, agentScope: 'knowledge_rag' },
-  { id: 'stats',        label: '통계',                  icon: <BarChart2 className="w-4 h-4" />, agentScope: 'knowledge_rag' },
-  { id: 'llm',          label: '시스템 설정',            icon: <Settings className="w-4 h-4" />, viewerOk: true, agentScope: 'all' },
-  { id: 'users',        label: '사용자 관리',            icon: <Users className="w-4 h-4" />,    adminOnly: true, agentScope: 'all' },
-];
+function NotReady({ what }: { what: string }) {
+  return <p className="text-sm text-slate-400 py-10 text-center">{what} 화면은 준비 중이에요.</p>;
+}
 
 export default function Admin() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
-  const selectedAgent = useAppStore((s) => s.selectedAgent);
   const isAdmin = user?.role === 'admin';
-
-  const visibleTabs = TABS.filter((tab) => {
-    if (tab.adminOnly && !isAdmin) return false;
-    if (user?.role === 'viewer' && !tab.viewerOk) return false;
-    if (!tab.agentScope || tab.agentScope === 'all') return true;
-    return tab.agentScope === selectedAgent;
-  });
-
-  const defaultTab = visibleTabs[0]?.id ?? 'llm';
-  const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
-  // 통계 "정정 요청" 카드 → 지식 베이스의 정정 검토 서브탭으로 바로(탭 바에서 직접 고르면 기본 목록)
-  const [knowledgeSubTab, setKnowledgeSubTab] = useState<'list' | 'corrections'>('list');
-
-  const firstVisibleId = visibleTabs[0]?.id;
-  const isCurrentVisible = visibleTabs.some((t) => t.id === activeTab);
-  const resolvedTab = isCurrentVisible ? activeTab : (firstVisibleId ?? 'llm');
+  const groups = visibleAdminMenu(user);
+  const current = resolveAdminMenu(location.pathname, groups);
+  const go = (id: AdminMenuId) => navigate(adminPath(id));
+  // 없는 메뉴·볼 수 없는 메뉴 주소로 들어오면 실제로 보여 주는 메뉴 주소로 바로잡는다(주소창과 화면이 어긋나지 않게)
+  useEffect(() => {
+    if (location.pathname !== adminPath(current)) navigate(adminPath(current), { replace: true });
+  }, [location.pathname, current, navigate]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -97,42 +74,22 @@ export default function Admin() {
           승인 대기 중이에요 — 관리자가 승인하면 관리 화면을 쓸 수 있어요. 채팅은 지금도 쓸 수 있어요.
         </div>
       )}
-      {/* Tab bar */}
-      <div className="flex-shrink-0 border-b border-slate-700 bg-slate-800 px-6">
-        <div className="flex gap-1 overflow-x-auto">
-          {visibleTabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => { setKnowledgeSubTab('list'); setActiveTab(tab.id); }}
-              className={clsx(
-                'flex items-center gap-2 px-4 py-3.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors',
-                resolvedTab === tab.id
-                  ? 'text-indigo-400 border-indigo-500'
-                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600',
-              )}
-            >
-              {tab.icon}
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Tab content */}
       <div className="flex-1 overflow-y-auto p-6">
-        <TabErrorBoundary key={resolvedTab}>
-          {resolvedTab === 'namespaces'   && <NamespaceManager onNavigate={(id) => setActiveTab(id as TabId)} />}
-          {resolvedTab === 'knowledge'    && <KnowledgeTable initialSubTab={knowledgeSubTab} />}
-          {resolvedTab === 'glossary'     && <GlossaryTable />}
-          {resolvedTab === 'lab'          && <EvaluationGate />}
-          {resolvedTab === 'policy'       && <PolicyPanel />}
-          {resolvedTab === 'cache'        && isAdmin && <CachePanel />}
-          {resolvedTab === 'voc_email'    && <VocEmailPanel />}
-          {resolvedTab === 'stats'        && (
-            <StatsPanel onOpenCorrections={() => { setKnowledgeSubTab('corrections'); setActiveTab('knowledge'); }} />
-          )}
-          {resolvedTab === 'llm'          && <LLMSettings />}
-          {resolvedTab === 'users'        && isAdmin && <UserManager />}
+        <TabErrorBoundary key={current}>
+          {current === 'domains'       && <NamespaceManager onNavigate={(id) => go(id === 'glossary' ? 'k.glossary' : 'k.docs')} />}
+          {current === 'k.policy'      && <PolicyPanel />}
+          {current === 'k.docs'        && <KnowledgeTable />}
+          {current === 'k.glossary'    && <GlossaryTable />}
+          {current === 'k.system'      && <NotReady what="시스템 정보(DB 칼럼·공통코드)" />}
+          {current === 'org.users'     && isAdmin && <UserSection />}
+          {current === 'org.parts'     && isAdmin && <PartSection />}
+          {current === 'org.domains'   && isAdmin && <PartDomainSection />}
+          {current === 'q.stats'       && <StatsPanel onOpenCorrections={() => go('q.corrections')} />}
+          {current === 'q.corrections' && <CorrectionsPanel />}
+          {current === 'q.eval'        && <EvaluationGate />}
+          {current === 'voc'           && <VocEmailPanel />}
+          {current === 'sys.settings'  && <LLMSettings />}
+          {current === 'sys.cache'     && isAdmin && <CachePanel />}
         </TabErrorBoundary>
       </div>
     </div>

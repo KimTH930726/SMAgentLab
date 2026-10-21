@@ -218,7 +218,7 @@ export function UnifiedAdhocSearch() {
             table: 'rag_knowledge',
             recordId: r.id,
             rows: [
-              { key: '파트(namespace)', value: selectedNs },
+              { key: '업무 영역(namespace)', value: selectedNs },
               { key: '업무구분(category)', value: r.category ?? '(업무구분 없음)' },
               { key: '등록 방식', value: r.source_type ? (SOURCE_TYPE_LABEL[r.source_type] ?? r.source_type) : '-' },
               ...(r.source_file ? [{ key: '원본 파일/문서', value: r.source_file }] : []),
@@ -406,13 +406,12 @@ export function UnifiedAdhocSearch() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">파트</label>
+          <label className="block text-xs font-medium text-slate-400 mb-1">업무 영역</label>
           <select
             value={selectedNs}
             onChange={(e) => setSelectedNs(e.target.value)}
             className="w-48 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
           >
-            <option value="">선택...</option>
             {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
           </select>
         </div>
@@ -445,7 +444,7 @@ export function UnifiedAdhocSearch() {
         </button>
       </div>
 
-      {!selectedNs && <p className="text-xs text-slate-500">파트를 선택하세요.</p>}
+      {!selectedNs && <p className="text-xs text-slate-500">업무 영역을 선택하세요.</p>}
       {error && <p className="text-xs text-rose-600 dark:text-rose-400">검색 실패: {error}</p>}
 
       {hits && counts && (

@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getNamespaces, getNamespacesDetail } from '../api/namespaces';
 import { useAppStore } from '../store/useAppStore';
@@ -7,17 +6,13 @@ import { sortNamespacesByUserPart } from './sortNamespaces';
 import { canEditDomain } from './domainAccess';
 
 /**
- * KnowledgeTable / GlossaryTable 공통 네임스페이스 선택 + 권한 훅
+ * 업무 영역 선택 + 수정 권한 — 고른 영역은 앱 공용 상태 하나(사이드바 선택기·채팅·관리 화면이 같은 값, 10/21).
+ * 예전엔 화면마다 따로 들고 있어 지식 화면을 옮겨 다니면 선택이 풀렸다. 없어진 영역 리셋은 사이드바가 한다.
  */
 export function useNamespaceAccess() {
-  const { namespace: storeNamespace } = useAppStore();
+  const selectedNs = useAppStore((s) => s.namespace);
+  const setSelectedNs = useAppStore((s) => s.setNamespace);
   const user = useAuthStore((s) => s.user);
-  const [selectedNs, setSelectedNs] = useState(storeNamespace || '');
-
-  // 스토어 namespace 변경(파트 관리 네비게이션 등) 시 동기화
-  useEffect(() => {
-    if (storeNamespace) setSelectedNs(storeNamespace);
-  }, [storeNamespace]);
 
   const { data: nsDetails = [] } = useQuery({
     queryKey: ['namespaces-detail'],
@@ -32,13 +27,6 @@ export function useNamespaceAccess() {
   });
 
   const sortedNamespaces = sortNamespacesByUserPart(namespaces, user?.part, nsDetails);
-
-  // 삭제된 네임스페이스 선택 상태 자동 리셋
-  useEffect(() => {
-    if (selectedNs && namespaces.length > 0 && !namespaces.includes(selectedNs)) {
-      setSelectedNs('');
-    }
-  }, [namespaces, selectedNs]);
 
   const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
   const canModifyNs = canEditDomain(user, nsOwnerPart);

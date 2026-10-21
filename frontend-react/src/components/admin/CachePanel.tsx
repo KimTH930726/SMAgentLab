@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAppStore } from '../../store/useAppStore';
 import { RefreshCw, Trash2, Database, BarChart2, AlertCircle } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getCacheStats, getCacheEntries, invalidateCache, deleteCacheEntry, getCacheConfig, setCacheConfig } from '../../api/cache';
@@ -17,7 +18,8 @@ function formatTtl(seconds: number): string {
 
 export function CachePanel() {
   const queryClient = useQueryClient();
-  const [namespace, setNamespace] = useState('');
+  const namespace = useAppStore((s) => s.namespace);   // 업무 영역은 앱 공용 값 하나(사이드바와 같음, 10/21)
+  const setNamespace = useAppStore((s) => s.setNamespace);
   const [confirmClear, setConfirmClear] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);
@@ -27,9 +29,6 @@ export function CachePanel() {
     queryFn: getNamespaces,
   });
 
-  useEffect(() => {
-    if (namespaces.length > 0 && !namespace) setNamespace(namespaces[0]);
-  }, [namespaces, namespace]);
 
   const selectedNs = namespace || namespaces[0] || '';
 

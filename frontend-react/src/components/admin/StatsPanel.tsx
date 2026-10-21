@@ -324,7 +324,7 @@ function QueryLogModal({
                           </Button>
                         </div>
                       ) : (
-                        <p className="text-xs text-slate-500">이 파트에 대한 수정 권한이 없습니다.</p>
+                        <p className="text-xs text-slate-500">이 업무 영역에 대한 수정 권한이 없습니다.</p>
                       )}
                     </div>
                   )}
@@ -354,22 +354,16 @@ function QueryLogModal({
 // ── StatsPanel ───────────────────────────────────────────────────────────────
 
 export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => void } = {}) {
-  const { namespace: storeNamespace, setNamespace } = useAppStore();
+  const selectedNs = useAppStore((s) => s.namespace);
+  const setSelectedNs = useAppStore((s) => s.setNamespace);   // 업무 영역은 공용 상태 하나(10/21)
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
-  const [selectedNs, setSelectedNs] = useState(storeNamespace || '');
   const [modalType, setModalType] = useState<ModalType | null>(null);
 
   const { data: namespaces = [] } = useQuery({ queryKey: ['namespaces'], queryFn: getNamespaces, staleTime: 30_000 });
   const { data: nsDetails = [] } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, staleTime: 30_000 });
   const sortedNamespaces = sortNamespacesByUserPart(namespaces, user?.part, nsDetails);
 
-  // 삭제 등으로 selectedNs가 유효하지 않으면 리셋
-  useEffect(() => {
-    if (selectedNs && namespaces.length > 0 && !namespaces.includes(selectedNs)) {
-      setSelectedNs('');
-    }
-  }, [namespaces, selectedNs]);
   const nsOwnerPart = nsDetails.find((n) => n.name === selectedNs)?.owner_part;
   const canModifyNs = canEditDomain(user, nsOwnerPart);
   const { data: stats, isLoading, error, refetch } = useQuery({
@@ -402,7 +396,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
     {
       label: '전체 질의', value: stats?.total_queries ?? 0, type: 'total' as ModalType,
       icon: <MessageSquare className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />, bg: 'bg-indigo-100 dark:bg-indigo-900/40',
-      highlight: false, tip: '이 파트에 들어온 모든 질의',
+      highlight: false, tip: '이 업무 영역에 들어온 모든 질의',
     },
     {
       label: '답변', value: stats?.answered ?? 0, type: 'pending' as ModalType,
@@ -410,10 +404,10 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
       highlight: false, tip: '근거를 찾아 답변한 질의 — 정정 신고가 없으면 맞은 것으로 봅니다',
     },
     {
-      // 질의 목록이 아니라 개선 원장 건수 — 누르면 이 파트의 지식 베이스 › 정정 검토로 이동
+      // 질의 목록이 아니라 개선 원장 건수 — 누르면 품질 › 정정 요청으로 이동(같은 업무 영역)
       label: '정정 요청', value: stats?.corrections_open ?? 0, type: null, go: onOpenCorrections,
       icon: <Flag className="w-5 h-5 text-rose-600 dark:text-rose-400" />, bg: 'bg-rose-100 dark:bg-rose-900/40',
-      highlight: false, tip: '"답변 틀림" 신고 중 아직 처리 안 된 건 — 눌러서 정정 검토로 이동',
+      highlight: false, tip: '"답변 틀림" 신고 중 아직 처리 안 된 건 — 눌러서 정정 요청으로 이동',
     },
     {
       label: '지식 공백', value: stats?.no_knowledge ?? 0, type: 'no_knowledge' as ModalType,
@@ -435,10 +429,9 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">파트</label>
+        <label className="block text-xs font-medium text-slate-400 mb-1.5">업무 영역</label>
         <select value={selectedNs} onChange={(e) => setSelectedNs(e.target.value)}
           className="w-64 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-          <option value="">선택...</option>
           {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
         </select>
       </div>
@@ -456,7 +449,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
                 title={tip}
                 onClick={() => {
                   if (type) setModalType(type);
-                  else if (go) { setNamespace(selectedNs); go(); }
+                  else if (go) go();   // 업무 영역은 이미 공용 상태
                 }}
                 className={`bg-slate-800 border rounded-xl p-4 flex items-center gap-3 transition-colors text-left ${type || go ? 'hover:bg-slate-700/60 cursor-pointer' : 'cursor-default'} ${
                   highlight
@@ -526,7 +519,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
       )}
 
       {!selectedNs && !isLoading && (
-        <div className="text-center py-10 text-slate-500">파트를 선택하세요.</div>
+        <div className="text-center py-10 text-slate-500">업무 영역을 선택하세요.</div>
       )}
 
       {/* Query log modal */}

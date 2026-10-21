@@ -255,7 +255,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-200">기준 정보 관리</h2>
+        <h2 className="text-lg font-semibold text-slate-200">업무 영역</h2>
         {isAdmin && (
           <Button
             variant="primary"
@@ -362,7 +362,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
             {expandedCat !== ns.name && (
               <div className="max-h-0 overflow-hidden group-hover:max-h-10 transition-all duration-200">
                 <div className="px-4 py-2 bg-indigo-50 border-t border-indigo-200 dark:bg-indigo-900/30 dark:border-indigo-700/30">
-                  <span className="text-[11px] text-indigo-600 dark:text-indigo-300/80">클릭하면 이 파트의 업무구분을 추가·수정·삭제할 수 있습니다</span>
+                  <span className="text-[11px] text-indigo-600 dark:text-indigo-300/80">클릭하면 이 업무 영역의 업무구분을 추가·수정·삭제할 수 있습니다</span>
                 </div>
               </div>
             )}
@@ -374,7 +374,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
           </div>
         ))}
         {!isLoading && namespaces.length === 0 && (
-          <div className="text-center py-10 text-slate-500">파트가 없습니다.</div>
+          <div className="text-center py-10 text-slate-500">업무 영역이 없습니다.</div>
         )}
       </div>
 
@@ -382,7 +382,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       <Modal
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
-        title="새 파트 생성"
+        title="새 업무 영역"
       >
         <div className="space-y-4">
           <div>
@@ -404,7 +404,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
               type="text"
               value={newDescription}
               onChange={(e) => setNewDescription(e.target.value)}
-              placeholder="파트 설명"
+              placeholder="업무 영역 설명"
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
             />
           </div>
@@ -432,11 +432,11 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       <Modal
         isOpen={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}
-        title="파트 삭제"
+        title="업무 영역 삭제"
       >
         <div className="space-y-4">
           <p className="text-sm text-slate-300">
-            <span className="font-semibold text-rose-600 dark:text-rose-400">{deleteTarget}</span> 파트를
+            <span className="font-semibold text-rose-600 dark:text-rose-400">{deleteTarget}</span> 업무 영역을
             삭제하면 모든 지식과 용어도 함께 삭제됩니다. 계속하시겠습니까?
           </p>
           <div className="flex gap-2 justify-end">

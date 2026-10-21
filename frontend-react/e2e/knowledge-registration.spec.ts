@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { goAdmin, domainSelect } from './admin-nav';
 
 // 이 테스트가 존재하는 이유(2026-09-24): 지식 등록 흐름이 미리보기+검토 2단계로
 // 재설계되면서, LLM 자동 태깅/용어 자동추출 호출이 화면 어디서도 안 불리게 조용히
@@ -29,9 +30,9 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
   // page.goto('/admin')는 풀 리로드라 selectedAgent(비영속 Zustand 상태)가 초기화돼
   // 다시 에이전트 선택 화면으로 튕긴다 — 사이드바 링크 클릭(클라이언트 라우팅)으로 이동.
   await page.getByRole('link', { name: 'Admin' }).click();
-  await page.getByRole('button', { name: '지식 베이스' }).click();
+  await goAdmin(page, '지식', '지식 문서');
 
-  await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NAMESPACE);
+  await domainSelect(page).selectOption(NAMESPACE);
 
   await page.getByRole('button', { name: '지식 등록' }).click();
   await page.getByText('직접 입력').click();
@@ -127,8 +128,8 @@ test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아
 
   try {
     await page.getByRole('link', { name: 'Admin' }).click();
-    await page.getByRole('button', { name: '지식 베이스' }).click();
-    await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NAMESPACE);
+    await goAdmin(page, '지식', '지식 문서');
+    await domainSelect(page).selectOption(NAMESPACE);
     await page.getByRole('button', { name: '지식 등록' }).click();
     await page.getByText('직접 입력').click();
     const createResponse = page.waitForResponse((r) => r.url().includes('/api/knowledge') && r.request().method() === 'POST');
@@ -180,8 +181,8 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
     expect(ids.length).toBe(prev.count);
 
     await page.getByRole('link', { name: 'Admin' }).click();
-    await page.getByRole('button', { name: '지식 베이스' }).click();
-    await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NAMESPACE);
+    await goAdmin(page, '지식', '지식 문서');
+    await domainSelect(page).selectOption(NAMESPACE);
     await page.getByPlaceholder(/검색/).fill('구조 테스트 B');
     await page.getByText('구조 테스트 B').first().click();
     const panel = page.getByTestId('knowledge-structure');
@@ -232,8 +233,8 @@ test('같은 원본 다시 등록 — 사람이 고친 조각이 있으면 사�
       data: { content: `${marker} 사람이 고친 둘째 조각 — 재등록 확인 테스트` } })).ok()).toBeTruthy();
 
     await page.getByRole('link', { name: 'Admin' }).click();
-    await page.getByRole('button', { name: '지식 베이스' }).click();
-    await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NAMESPACE);
+    await goAdmin(page, '지식', '지식 문서');
+    await domainSelect(page).selectOption(NAMESPACE);
     await page.getByRole('button', { name: '지식 등록' }).click();
     await page.getByText('대량 텍스트', { exact: true }).first().click();
     await page.locator('select').filter({ hasText: 'AI 자동분석' }).selectOption('공통지식');   // 업무구분 추천(LLM) 없이

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { goAdmin, domainSelect } from './admin-nav';
 import { createPolicyPart, dropPolicyPart } from './v0-fixture';
 
 // 이 테스트가 존재하는 이유(2026-09-23): 정책 검토 UI(승인/반려 + 반려 항목 수정→재검토
@@ -34,9 +35,9 @@ test.beforeEach(async ({ page }) => {
   }
 
   await page.getByRole('link', { name: 'Admin' }).click();
-  await page.getByRole('button', { name: '정책' }).click();
+  await goAdmin(page, '지식', '정책서');
   await page.getByRole('button', { name: '항목 브라우저' }).click();
-  await page.locator('select').first().selectOption(NAMESPACE);
+  await domainSelect(page).selectOption(NAMESPACE);
   await page.waitForTimeout(500);
 });
 

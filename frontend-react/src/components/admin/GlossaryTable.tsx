@@ -176,18 +176,17 @@ export function GlossaryTable() {
 
       {/* Namespace selector */}
       <div>
-        <label className="block text-xs font-medium text-slate-400 mb-1.5">파트</label>
+        <label className="block text-xs font-medium text-slate-400 mb-1.5">업무 영역</label>
         <select
           value={selectedNs}
           onChange={(e) => { setSelectedNs(e.target.value); setEditingId(null); }}
           className="w-64 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
         >
-          <option value="">선택...</option>
           {sortedNamespaces.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
         </select>
       </div>
 
-      {!selectedNs && <div className="text-center py-10 text-slate-500">파트를 선택하세요.</div>}
+      {!selectedNs && <div className="text-center py-10 text-slate-500">업무 영역을 선택하세요.</div>}
       {selectedNs && isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
       {selectedNs && error && <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>}
 

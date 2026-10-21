@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { goAdmin, domainSelect } from './admin-nav';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
@@ -75,9 +76,9 @@ async function openBrowser(page: Page) {
   const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
   if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
   await page.getByRole('link', { name: 'Admin' }).click();
-  await page.getByRole('button', { name: '정책' }).click();
+  await goAdmin(page, '지식', '정책서');
   await page.getByRole('button', { name: '항목 브라우저' }).click();
-  await page.locator('select').first().selectOption(NS);
+  await domainSelect(page).selectOption(NS);
 }
 
 test('위험도 분류 → 낮음 자동 통과(표본은 사람 큐) → 되돌리기 → 표본 반려 시 규칙 정지', async ({ page }) => {
@@ -165,7 +166,7 @@ test('미분류 조각은 검토 큐에서 바로 편입 → 위험도 재계산
 
   // 미분류 탭은 팀별 집계 — 편입 버튼 없음
   await page.getByRole('button', { name: '미분류 집계' }).click();
-  await page.locator('select').first().selectOption(NS);
+  await domainSelect(page).selectOption(NS);
   await expect(page.getByText(/항목 브라우저 → 검토 큐/)).toBeVisible();
   await expect(page.getByRole('button', { name: /서술로 편입|파라미터로 편입/ })).toHaveCount(0);
 });

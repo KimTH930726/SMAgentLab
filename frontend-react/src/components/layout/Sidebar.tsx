@@ -38,6 +38,7 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { useThemeStore } from '../../store/useThemeStore';
 import logoSvg from '../../assets/logo.svg';
+import { AdminNav } from './AdminNav';
 
 export function Sidebar() {
   const location = useLocation();
@@ -284,17 +285,18 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* Namespace + Category selector — Chat only */}
-      {isChatPage && (
+      {/* 업무 영역 선택 — 채팅·관리 화면 공통(관리 화면의 지식 화면들이 이 값을 같이 씀, 10/21) */}
+      {(
         <div className="px-3 py-3 border-b border-slate-700 space-y-2">
           <div>
-            <label className="text-xs font-medium text-slate-500 uppercase tracking-wider block mb-1.5">
-              파트
+            <label htmlFor="sidebar-domain" className="text-xs font-medium text-slate-500 uppercase tracking-wider block mb-1.5">
+              업무 영역
             </label>
             {namespaces.length === 0 ? (
-              <div className="text-xs text-slate-500 px-1">파트 없음</div>
+              <div className="text-xs text-slate-500 px-1">업무 영역 없음</div>
             ) : (
               <select
+                id="sidebar-domain"
                 value={namespace}
                 onChange={(e) => setNamespace(e.target.value)}
                 className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
@@ -434,8 +436,8 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* If admin page, show nothing extra */}
-      {!isChatPage && <div className="flex-1" />}
+      {/* 관리 화면: 왼쪽 아코디언 메뉴(10/21) */}
+      {location.pathname.startsWith('/admin') ? <AdminNav /> : !isChatPage && <div className="flex-1" />}
 
       {/* Theme toggle */}
       <ThemeToggle />

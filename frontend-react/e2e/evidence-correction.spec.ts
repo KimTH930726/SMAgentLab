@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { goAdmin, domainSelect } from './admin-nav';
 import { createPolicyPart, dropPolicyPart } from './v0-fixture';
 
 // 이 테스트가 존재하는 이유(2026-10-01): 근거 정정 흐름은 버튼(근거 카드·답변 아래) → 입력창
@@ -62,9 +63,8 @@ async function ask(page: Page, question: string) {
 
 async function openCorrectionCard(page: Page, userInput: string) {
   await page.getByRole('link', { name: 'Admin' }).click();
-  await page.getByRole('button', { name: '지식 베이스' }).click();
-  await page.locator('select').filter({ hasText: '파트 선택' }).selectOption(NS);
-  await page.getByRole('button', { name: /정정 검토/ }).click();
+  await domainSelect(page).selectOption(NS);
+  await goAdmin(page, '품질', '정정 요청');   // 정정 요청은 품질 메뉴로(10/21)
   const card = page.locator('div.rounded-xl').filter({ hasText: userInput }).first();
   await expect(card).toBeVisible({ timeout: 10_000 });
   return card;
