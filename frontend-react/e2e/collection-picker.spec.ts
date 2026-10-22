@@ -1,17 +1,17 @@
 import { test, expect } from '@playwright/test';
-import { goAdmin, domainSelect } from './admin-nav';
+import { domainSelect } from './admin-nav';
 import { psql } from './v0-fixture';
 import { loginAdmin } from './auth';
 
 // 보는 컬렉션 고르기(10/22, 컬렉션 설계 S5·S6) — ① 고르는 창에 테스트 컬렉션이 안 보인다 ② 카드를 누르면 칩이 바뀐다
-// ③ 새로고침해도 고른 값이 그대로(예전엔 저장이 없어 내 담당으로 덮였다) ④ 메뉴 "+ 지식 등록"은 등록 화면으로 바로.
+// ③ 새로고침해도 고른 값이 그대로(예전엔 저장이 없어 내 담당으로 덮였다).
 const HIDDEN = 'E2E숨김컬렉션';
 const cleanup = () => psql(`DELETE FROM ops_namespace WHERE name = '${HIDDEN}'`);
 const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 test.afterEach(cleanup);
 
-test('보는 컬렉션 — 테스트 컬렉션 숨김 · 고르면 칩 반영 · 새로고침 유지 · 지식 등록 메뉴', async ({ page }) => {
+test('보는 컬렉션 — 테스트 컬렉션 숨김 · 고르면 칩 반영 · 새로고침 유지', async ({ page }) => {
   cleanup();
   psql(`INSERT INTO ops_namespace (name, description, kind) VALUES ('${HIDDEN}', 'e2e', 'policy_test')`);
 
@@ -43,6 +43,4 @@ test('보는 컬렉션 — 테스트 컬렉션 숨김 · 고르면 칩 반영 ·
     return localStorage.getItem(`opslens.namespace:${u}`);
   })).toBe(target);
 
-  await goAdmin(page, '지식', '+ 지식 등록');                                                           // ④ 등록 화면으로 바로
-  await expect(page.getByText('직접 입력').first()).toBeVisible();
 });

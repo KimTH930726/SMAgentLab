@@ -206,14 +206,14 @@ type IngestMethod = 'file' | 'text' | 'manual' | 'url' | null;
 
 // ── KnowledgeTable (메인) ─────────────────────────────────────────────────────
 
-export function KnowledgeTable({ initialTab = 'list' }: { initialTab?: 'list' | 'ingest' } = {}) {   // 메뉴 "지식 등록"은 등록 탭으로 바로(10/22)
+export function KnowledgeTable() {
   const qc = useQueryClient();
   const { selectedNs, canModifyNs } = useNamespaceAccess();
   // 업무 컬렉션이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setCategoryFilter(''); setPage(1); setSelectedIds(new Set()); }, [selectedNs]);   // 체크 남으면 앞 영역 것이 일괄 삭제됐다(리뷰 M1)
 
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>(initialTab);   // 정정 요청은 품질 메뉴로(10/21)
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>('list');   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<KnowledgeFormData>(defaultForm);

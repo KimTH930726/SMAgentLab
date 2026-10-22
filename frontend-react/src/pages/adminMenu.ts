@@ -6,7 +6,7 @@ import type { User } from '../types';
 
 export type AdminMenuId =
   | 'domains'
-  | 'k.register' | 'k.policy' | 'k.docs' | 'k.glossary' | 'k.system'
+  | 'k.policy' | 'k.docs' | 'k.glossary' | 'k.system'
   | 'org.users' | 'org.parts' | 'org.domains'
   | 'q.stats' | 'q.corrections' | 'q.eval'
   | 'voc'
@@ -27,11 +27,10 @@ export interface AdminMenuGroup {
   items: AdminMenuItem[];  // 하나면 묶음 이름을 누르면 바로 그 화면(아코디언 없음)
 }
 
-// 10/22 컬렉션 개편: 지식(등록이 맨 위) → 컬렉션 → 품질 → VOC → 시스템. 사람·권한(옛 "조직" 묶음)은 시스템 아래로 — 컬렉션 › 조직(팀·파트 노하우)과
+// 10/22 컬렉션 개편: 지식 → 컬렉션 → 품질 → VOC → 시스템. 사람·권한(옛 "조직" 묶음)은 시스템 아래로 — 컬렉션 › 조직(팀·파트 노하우)과
 // 이름이 겹쳐 헷갈렸다(사용자). 주소(id)는 그대로 둬 옛 링크가 안 깨진다.
 export const ADMIN_MENU: AdminMenuGroup[] = [
   { id: 'knowledge', label: '지식', items: [
-    { id: 'k.register', label: '+ 지식 등록', hint: '지식은 여기 한 곳에서 넣는다', scoped: true },
     { id: 'k.policy', label: '정책서', scoped: true },
     { id: 'k.docs', label: '지식 문서', hint: '컨플루언스 등에서 가져온 업무 지식', scoped: true },
     { id: 'k.glossary', label: '용어집', scoped: true },
@@ -70,7 +69,7 @@ export function visibleAdminMenu(user: Pick<User, 'role'> | null | undefined): A
 export function resolveAdminMenu(pathname: string, groups: AdminMenuGroup[]): AdminMenuId {
   const want = decodeURIComponent(pathname.replace(/^\/admin\/?/, '').split('/')[0] || '');
   const all = groups.flatMap((g) => g.items.map((it) => it.id));
-  // 주소 없이 들어오면 지식 문서(첫 항목인 "지식 등록"이 첫 화면이면 어색하다), 못 보면 보이는 첫 메뉴
+  // 주소 없이 들어오면 지식 문서, 못 보면 보이는 첫 메뉴
   const home = all.includes('k.docs') ? 'k.docs' : all[0];
   return (all.find((id) => id === want) ?? home ?? 'sys.settings') as AdminMenuId;
 }
