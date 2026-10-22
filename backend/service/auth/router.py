@@ -11,7 +11,7 @@ from service.auth.schemas import (
     RefreshRequest, AccessTokenResponse,
     PasswordChangeRequest, LLMCredentialsUpdateRequest, ConfluencePATRequest,
     UserOut, UserAdminUpdate,
-    PartCreate, PartOut,
+    PartCreate, PartOut, PartTeamUpdate, TeamCreate, TeamOut,
 )
 from shared import rate_limit
 
@@ -176,10 +176,60 @@ async def delete_user(user_id: int, admin: dict = Depends(get_current_admin)):
 
 @router.post("/parts", response_model=PartOut, status_code=201)
 async def create_part(body: PartCreate, admin: dict = Depends(get_current_admin)):
-    part = await service.create_part(body.name)
+    try:
+        part = await service.create_part(body.name, body.team_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not part:
         raise HTTPException(status_code=409, detail="이미 존재하는 파트입니다.")
     return part
+
+
+@router.put("/parts/{part_id}/team", response_model=PartOut)
+async def set_part_team(part_id: int, body: PartTeamUpdate, admin: dict = Depends(get_current_admin)):
+    """파트를 다른 팀으로 옮긴다(관리자). 사람·담당 업무는 파트에 붙어 있어 같이 간다."""
+    try:
+        part = await service.set_part_team(part_id, body.team_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if part is None:
+        raise HTTPException(status_code=404, detail="파트를 찾을 수 없습니다.")
+    return part
+
+
+# ── 팀 관리 (Admin, 10/22) ────────────────────────────────────────────────────
+
+@router.get("/teams", response_model=list[TeamOut])
+async def get_teams(admin: dict = Depends(get_current_admin)):
+    return await service.list_teams()
+
+
+@router.post("/teams", response_model=TeamOut, status_code=201)
+async def create_team(body: TeamCreate, admin: dict = Depends(get_current_admin)):
+    team = await service.create_team(body.name.strip())
+    if not team:
+        raise HTTPException(status_code=409, detail="이미 있는 팀입니다.")
+    return team
+
+
+@router.patch("/teams/{team_id}", response_model=TeamOut)
+async def rename_team(team_id: int, body: TeamCreate, admin: dict = Depends(get_current_admin)):
+    try:
+        team = await service.rename_team(team_id, body.name.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if team is None:
+        raise HTTPException(status_code=404, detail="팀을 찾을 수 없습니다.")
+    return team
+
+
+@router.delete("/teams/{team_id}", status_code=204)
+async def delete_team(team_id: int, admin: dict = Depends(get_current_admin)):
+    result = await service.delete_team(team_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="팀을 찾을 수 없습니다.")
+    if result is False:
+        raise HTTPException(status_code=409, detail="이 팀에 파트가 있어 삭제할 수 없습니다 — 파트를 다른 팀으로 먼저 옮겨 주세요.")
 
 
 @router.patch("/parts/{part_id}", response_model=PartOut)

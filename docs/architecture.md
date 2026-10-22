@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.156)
+# OpsLens 시스템 아키텍처 (v2.157)
 
 ## 개요
 
@@ -12,6 +12,12 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.157 (2026-10-22, dev_0): **조직·권한 묶음 — 팀 관리 · 서브탭 · 트리.** 사용자 요청(팀 7개·파트 4~6개로 늘어 "팀 추가가 없다", "사용자·팀파트·담당 업무를 하나로").
+  백엔드: 팀 API `GET/POST /api/auth/teams`, `PATCH/DELETE /api/auth/teams/{id}`(파트가 남은 팀 삭제는 409 — FK가 SET NULL이라 그냥 지우면 파트가 조용히 팀 없음이 된다),
+  파트 만들기에 `team_id`(없는 팀 400), `PUT /api/auth/parts/{id}/team`(옮기기). 삭제는 팀 행 FOR UPDATE, 파트 만들기·옮기기는 KEY SHARE — 동시에 들어와도 팀 없는 파트 0
+  (실서버 시나리오 `scripts/scenarios/team_crud.py` 31/31 — 동시 이름 겹침도 500 없이 409). 화면: 시스템·권한 › **조직·권한** 하나 + 서브탭[사용자 | 팀·파트 | 담당 업무](설정 화면과 같은 모양) —
+  팀·파트 = 팀 › 파트 트리([+ 팀], 팀마다 이름·삭제·[+ 파트], 파트 카드에 팀 옮기기), 담당 업무 = 팀 줄 아래 파트. 관리자 메뉴: 지금 화면이 든 묶음도 접힌다(화살표가 안 먹어 고장처럼 보임).
+  E2E `org-access.spec`. 옛 메뉴 id(org.users·org.parts·org.domains) → `org` 하나.
 - v2.156 (2026-10-22, dev_0): **컬렉션 개편 A — 보는 컬렉션 고르기 · 메뉴 · 문구.** 설계 `docs/tech/collection-design.md` §14~16(10/22 확정).
   사이드바 업무 select → "보는 컬렉션" 칩 + 고르는 창(`DomainPicker`): 타이핑 없이 카드, 묶음 = 내 파트 담당 › 우리 팀 담당(팀은 `/auth/parts`의 team) › 다른 팀·담당 없음,
   묶음 안은 내용 있는 것 먼저·가나다, 빈 컬렉션 흐리게. 테스트 컬렉션(kind=policy_test) 숨김(값으로는 유효 — E2E·직접 주소). **선택 유지**: 예전엔 저장이 없어

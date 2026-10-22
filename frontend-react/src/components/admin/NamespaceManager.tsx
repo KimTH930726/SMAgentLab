@@ -172,7 +172,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
-  // 업무 컬렉션 수정 모달 — 이름 + 담당 파트(10/21 사용자: 담당은 영역의 속성이라 이름과 같은 자리에서). 시스템·권한 › 담당 업무와 같은 칸(owner_part_id)
+  // 업무 컬렉션 수정 모달 — 이름 + 담당 파트(10/21 사용자: 담당은 영역의 속성이라 이름과 같은 자리에서). 조직·권한 › 담당 업무와 같은 칸(owner_part_id)
   const [editingNs, setEditingNs] = useState<NamespaceDetail | null>(null);
   const [editingNsName, setEditingNsName] = useState('');
   const [editingOwner, setEditingOwner] = useState('');   // '' = 담당 없음
@@ -348,7 +348,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                       <td className="px-4 py-2.5">
                         {ns.owner_part
                           ? <Badge color={canModifyNs(effectiveOwnerPart(ns)) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
-                          : <span className="text-xs text-slate-500" title="담당 지정: 시스템·권한 › 담당 업무">없음(관리자만)</span>}
+                          : <span className="text-xs text-slate-500" title="담당 지정: 조직·권한 › 담당 업무">없음(관리자만)</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right">{count(ns.policy_count, 'policy', '정책')}</td>
                       <td className="px-3 py-2.5 text-right">{count(ns.knowledge_count, 'knowledge', '지식 문서')}</td>

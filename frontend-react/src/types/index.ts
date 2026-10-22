@@ -16,11 +16,19 @@ export interface LoginResponse {
   user: User;
 }
 
+export interface Team {
+  id: number;
+  name: string;
+  created_at: string;
+  part_count: number;
+}
+
 export interface Part {
   id: number;
   name: string;
   created_at: string;
   team?: string | null;   // 조직: 팀 > 파트
+  team_id?: number | null;
   user_count?: number;
   domains?: string[];      // 담당 업무(관리자 목록에서만)
 }

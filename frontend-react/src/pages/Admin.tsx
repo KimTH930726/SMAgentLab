@@ -6,8 +6,7 @@ import { GlossaryTable } from '../components/admin/GlossaryTable';
 import { StatsPanel } from '../components/admin/StatsPanel';
 import { EvaluationGate } from '../components/admin/EvaluationGate';
 import { LLMSettings } from '../components/admin/LLMSettings';
-import { UserSection, PartSection } from '../components/admin/UserManager';
-import { PartDomainSection } from '../components/admin/PartDomainSection';
+import { OrgAccessPanel } from '../components/admin/OrgAccessPanel';
 import { CachePanel } from '../components/admin/CachePanel';
 import { VocEmailPanel } from '../components/admin/VocEmailPanel';
 import { PolicyPanel } from '../components/admin/policy/PolicyPanel';
@@ -86,9 +85,7 @@ export default function Admin() {
           {current === 'k.docs'        && <KnowledgeTable />}
           {current === 'k.glossary'    && <GlossaryTable />}
           {current === 'k.system'      && <NotReady what="시스템 정보(DB 칼럼·공통코드)" />}
-          {current === 'org.users'     && isAdmin && <UserSection />}
-          {current === 'org.parts'     && isAdmin && <PartSection />}
-          {current === 'org.domains'   && isAdmin && <PartDomainSection />}
+          {current === 'org'           && isAdmin && <OrgAccessPanel />}
           {current === 'q.stats'       && <StatsPanel onOpenCorrections={() => go('q.corrections')} />}
           {current === 'q.corrections' && <CorrectionsPanel />}
           {current === 'q.eval'        && <EvaluationGate />}

@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { User, LoginResponse, Part } from '../types';
+import type { User, LoginResponse, Part, Team } from '../types';
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
   return apiFetch<LoginResponse>('/auth/login', {
@@ -87,11 +87,34 @@ export async function deleteUser(userId: number): Promise<void> {
   return apiFetch<void>(`/auth/users/${userId}`, { method: 'DELETE' });
 }
 
-export async function createPart(name: string): Promise<Part> {
+export async function createPart(name: string, teamId?: number): Promise<Part> {
   return apiFetch<Part>('/auth/parts', {
     method: 'POST',
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, team_id: teamId ?? null }),
   });
+}
+
+/** 파트를 다른 팀으로(관리자) — 사람·담당 업무는 파트에 붙어 같이 간다 */
+export async function setPartTeam(partId: number, teamId: number): Promise<Part> {
+  return apiFetch<Part>(`/auth/parts/${partId}/team`, { method: 'PUT', body: JSON.stringify({ team_id: teamId }) });
+}
+
+// 팀(조직: 팀 > 파트, 10/22)
+export async function getTeams(): Promise<Team[]> {
+  return apiFetch<Team[]>('/auth/teams');
+}
+
+export async function createTeam(name: string): Promise<Team> {
+  return apiFetch<Team>('/auth/teams', { method: 'POST', body: JSON.stringify({ name }) });
+}
+
+export async function renameTeam(teamId: number, name: string): Promise<Team> {
+  return apiFetch<Team>(`/auth/teams/${teamId}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+}
+
+/** 파트가 남아 있으면 409(파트를 먼저 옮겨야 함) */
+export async function deleteTeam(teamId: number): Promise<void> {
+  return apiFetch<void>(`/auth/teams/${teamId}`, { method: 'DELETE' });
 }
 
 export async function renamePart(partId: number, name: string): Promise<Part> {

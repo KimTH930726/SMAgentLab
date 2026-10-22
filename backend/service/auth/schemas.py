@@ -72,6 +72,22 @@ class UserAdminUpdate(BaseModel):
 
 class PartCreate(BaseModel):
     name: Name   # 파트 이름 — URL 경로에 들어가 '/' 금지
+    team_id: Optional[int] = None   # 새 파트는 팀 아래에서 만든다(10/22 팀 관리) — 비우면 팀 없음(옛 호출 호환)
+
+
+class PartTeamUpdate(BaseModel):
+    team_id: int   # 파트를 다른 팀으로 옮긴다(팀 없음으로 빼는 길은 두지 않는다 — 팀 없는 파트가 새로 생기지 않게)
+
+
+class TeamCreate(BaseModel):
+    name: Name
+
+
+class TeamOut(BaseModel):
+    id: int
+    name: str
+    created_at: str
+    part_count: int = 0
 
 
 class PartOut(BaseModel):
@@ -79,6 +95,7 @@ class PartOut(BaseModel):
     name: str
     created_at: str
     team: Optional[str] = None
+    team_id: Optional[int] = None
     user_count: int = 0
     domains: list[str] = []   # 담당 업무 영역(관리자 목록에서만 채움)
 

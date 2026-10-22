@@ -7,7 +7,7 @@ import type { User } from '../types';
 export type AdminMenuId =
   | 'domains'
   | 'k.policy' | 'k.docs' | 'k.glossary' | 'k.system'
-  | 'org.users' | 'org.parts' | 'org.domains'
+  | 'org'
   | 'q.stats' | 'q.corrections' | 'q.eval'
   | 'voc'
   | 'sys.settings' | 'sys.cache';
@@ -48,9 +48,7 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
     { id: 'voc', label: 'VOC 이메일', scoped: true },
   ] },
   { id: 'system', label: '시스템·권한', items: [
-    { id: 'org.users', label: '사용자', adminOnly: true },
-    { id: 'org.parts', label: '팀·파트', adminOnly: true, hint: '팀 > 파트 — 파트를 누르면 사람·담당 업무를 한눈에' },
-    { id: 'org.domains', label: '담당 업무', adminOnly: true, hint: '파트가 맡은 업무 컬렉션 — 그 파트 사람이 수정할 수 있다' },
+    { id: 'org', label: '조직·권한', adminOnly: true, hint: '사용자 · 팀 › 파트 · 담당 업무(서브탭)' },
     { id: 'sys.settings', label: '설정', viewerOk: true, hint: 'LLM · 프롬프트 · 검색 기준값' },
     { id: 'sys.cache', label: '캐시', adminOnly: true, scoped: true },
   ] },

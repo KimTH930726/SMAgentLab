@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
+import asyncpg
+
 from core.database import get_conn
 from core.dependencies import invalidate_user_cache
 from core.security import (
@@ -256,7 +258,7 @@ async def list_parts(with_domains: bool = False) -> list[dict]:
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
-            SELECT p.id, p.name, p.created_at::text, t.name AS team,
+            SELECT p.id, p.name, p.created_at::text, t.name AS team, p.team_id,
                    (SELECT COUNT(*) FROM ops_user u WHERE u.part_id = p.id) AS user_count,
                    CASE WHEN $1 THEN COALESCE((SELECT array_agg(n.name ORDER BY n.name) FROM ops_namespace n
                                               WHERE n.owner_part_id = p.id), '{}') END AS domains
@@ -289,16 +291,77 @@ async def set_part_domains(part_id: int, names: list[str]) -> Optional[dict]:
     return {"part_id": part_id, "domains": domains}
 
 
-async def create_part(name: str) -> Optional[dict]:
-    async with get_conn() as conn:
+async def create_part(name: str, team_id: Optional[int] = None) -> Optional[dict]:
+    """파트 만들기. 이름이 겹치면 None. team_id가 있으면 그 팀 아래(없는 팀이면 ValueError) — 팀 행을 KEY SHARE로 잡아
+    같은 순간 팀 삭제(FOR UPDATE)와 엇갈려 팀 없는 파트가 생기지 않게 한다."""
+    async with get_conn() as conn, conn.transaction():
+        if team_id is not None and await conn.fetchval("SELECT id FROM ops_team WHERE id = $1 FOR KEY SHARE", team_id) is None:
+            raise ValueError("없는 팀입니다.")
         existing = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM ops_part WHERE name = $1)", name)
         if existing:
             return None
-        row = await conn.fetchrow(
-            "INSERT INTO ops_part (name) VALUES ($1) RETURNING id, name, created_at::text",
-            name,
+        row = await conn.fetchrow(   # 확인~저장 사이 같은 이름이 끼면 아래 ON CONFLICT로 None(겹침) — 예전엔 UNIQUE 위반 500
+            "INSERT INTO ops_part (name, team_id) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING "
+            "RETURNING id, name, created_at::text, team_id, (SELECT t.name FROM ops_team t WHERE t.id = team_id) AS team",
+            name, team_id,
         )
-    return dict(row)
+    return dict(row) if row else None
+
+
+async def set_part_team(part_id: int, team_id: int) -> Optional[dict]:
+    """파트를 다른 팀으로 옮긴다. 파트가 없으면 None, 팀이 없으면 ValueError. 사람·담당 업무는 파트에 붙어 있어 같이 따라간다."""
+    async with get_conn() as conn, conn.transaction():
+        if await conn.fetchval("SELECT id FROM ops_team WHERE id = $1 FOR KEY SHARE", team_id) is None:
+            raise ValueError("없는 팀입니다.")
+        row = await conn.fetchrow(
+            "UPDATE ops_part SET team_id = $2 WHERE id = $1 "
+            "RETURNING id, name, created_at::text, team_id, (SELECT t.name FROM ops_team t WHERE t.id = $2) AS team", part_id, team_id)
+    return dict(row) if row else None
+
+
+# ── 팀 (조직: 팀 > 파트, 10/22 — 팀이 7개로 늘어 관리 화면 필요) ──────────────────────
+
+async def list_teams() -> list[dict]:
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            """SELECT t.id, t.name, t.created_at::text, (SELECT COUNT(*) FROM ops_part p WHERE p.team_id = t.id) AS part_count
+               FROM ops_team t ORDER BY t.name""")
+    return [dict(r) for r in rows]
+
+
+async def create_team(name: str) -> Optional[dict]:
+    """이름이 겹치면 None."""
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO ops_team (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id, name, created_at::text", name)
+    return {**dict(row), "part_count": 0} if row else None
+
+
+async def rename_team(team_id: int, new_name: str) -> Optional[dict]:
+    """없는 팀이면 None, 이름이 다른 팀과 겹치면 ValueError. 파트·사람은 팀 id로 붙어 있어 따라 고칠 데이터가 없다."""
+    async with get_conn() as conn:
+        if await conn.fetchval("SELECT EXISTS(SELECT 1 FROM ops_team WHERE name = $1 AND id <> $2)", new_name, team_id):
+            raise ValueError("이미 있는 팀 이름입니다.")
+        try:
+            row = await conn.fetchrow(
+                """UPDATE ops_team SET name = $2 WHERE id = $1
+                   RETURNING id, name, created_at::text, (SELECT COUNT(*) FROM ops_part p WHERE p.team_id = ops_team.id) AS part_count""",
+                team_id, new_name)
+        except asyncpg.UniqueViolationError:
+            raise ValueError("이미 있는 팀 이름입니다.") from None
+    return dict(row) if row else None
+
+
+async def delete_team(team_id: int) -> Optional[bool]:
+    """없는 팀이면 None, 파트가 남아 있으면 False(삭제 안 함 — FK가 SET NULL이라 그냥 지우면 파트가 조용히 팀 없음이 된다).
+    팀 행을 FOR UPDATE로 잠가 확인~삭제 사이에 파트 만들기·옮기기(KEY SHARE)가 끼어들지 못하게."""
+    async with get_conn() as conn, conn.transaction():
+        if await conn.fetchval("SELECT id FROM ops_team WHERE id = $1 FOR UPDATE", team_id) is None:
+            return None
+        if await conn.fetchval("SELECT COUNT(*) FROM ops_part WHERE team_id = $1", team_id):
+            return False
+        await conn.execute("DELETE FROM ops_team WHERE id = $1", team_id)
+    return True
 
 
 async def rename_part(part_id: int, new_name: str) -> Optional[dict]:

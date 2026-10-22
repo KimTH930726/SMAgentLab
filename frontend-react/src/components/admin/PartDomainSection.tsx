@@ -89,11 +89,16 @@ export function PartDomainSection() {
             </tr>
           </thead>
           <tbody>
-            {parts.map((p) => (
+            {/* 팀 › 파트 › 담당 업무 트리(10/22) — 파트 목록이 팀 이름 순이라, 팀이 바뀌는 줄 앞에 팀 줄을 끼운다 */}
+            {parts.map((p, i) => [
+              (i === 0 || parts[i - 1].team !== p.team) && (
+                <tr key={`team-${p.team ?? 'none'}`} className="bg-slate-900/40 border-b border-slate-700/50">
+                  <td colSpan={3} className="px-4 py-2 text-xs font-semibold text-slate-300">{p.team ?? '팀 없음'}</td>
+                </tr>
+              ),
               <tr key={p.id} className="border-b border-slate-700/50 align-top">
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 pl-8">
                   <div className="text-slate-200">{p.name}</div>
-                  {p.team && <div className="text-xs text-slate-500">{p.team}</div>}
                 </td>
                 <td className="px-4 py-3">
                   {domainsOf(p.id).length ? (
@@ -105,10 +110,14 @@ export function PartDomainSection() {
                     <Pencil className="w-3.5 h-3.5" /> 변경
                   </Button>
                 </td>
-              </tr>
-            ))}
+              </tr>,
+            ])}
+            {/* 마지막 팀 소속처럼 읽히지 않게 팀 줄과 같은 모양의 구분 줄(리뷰) */}
+            <tr className="bg-slate-900/40 border-b border-slate-700/50">
+              <td colSpan={3} className="px-4 py-2 text-xs font-semibold text-slate-300">담당 파트 없음</td>
+            </tr>
             <tr>
-              <td className="px-4 py-3 text-slate-400">담당 없음</td>
+              <td className="px-4 py-3 pl-8 text-slate-400">—</td>
               <td className="px-4 py-3" colSpan={2}>
                 {unowned.length ? (
                   <div className="flex flex-wrap gap-1 items-center">

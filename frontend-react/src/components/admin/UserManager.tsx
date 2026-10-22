@@ -4,9 +4,9 @@ import { Trash2, Plus, Shield, User as UserIcon, Users, Building2, Pencil } from
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
-import { getUsers, updateUser, deleteUser, getAllParts, createPart, deletePart, renamePart } from '../../api/auth';
+import { getUsers, updateUser, deleteUser, getAllParts, createPart, deletePart, renamePart, getTeams, createTeam, renameTeam, deleteTeam, setPartTeam } from '../../api/auth';
 import { useAuthStore } from '../../store/useAuthStore';
-import type { Part, User } from '../../types';
+import type { Part, Team, User } from '../../types';
 import { showConfirm, showError } from '../../store/useDialogStore';
 import { FormModal } from '../ui/FormModal';
 import { PartTreeModal } from './PartTreeModal';
@@ -25,6 +25,43 @@ export function PartSection() {
   const [editingName, setEditingName] = useState('');
   const [renameError, setRenameError] = useState('');
   const [treePart, setTreePart] = useState<Part | null>(null);   // 파트 현황 트리 모달
+  const [createTeamId, setCreateTeamId] = useState<number | null>(null);   // 새 파트를 만들 팀(팀 아래에서만 만든다)
+  const [teamModal, setTeamModal] = useState<{ mode: 'create' } | { mode: 'rename'; team: Team } | null>(null);
+  const [teamName, setTeamName] = useState('');
+  const [teamError, setTeamError] = useState('');
+  const { data: teams = [] } = useQuery({ queryKey: ['teams'], queryFn: getTeams, refetchOnMount: 'always' });
+  const invalidateOrg = () => {
+    qc.invalidateQueries({ queryKey: ['teams'] });
+    qc.invalidateQueries({ queryKey: ['parts-all'] });
+    qc.invalidateQueries({ queryKey: ['parts-public'] });   // 사이드바 고르는 창의 "우리 팀" 묶음
+  };
+  const teamSaveMutation = useMutation({
+    mutationFn: (v: { mode: 'create' } | { mode: 'rename'; team: Team }) =>
+      v.mode === 'create' ? createTeam(teamName.trim()) : renameTeam(v.team.id, teamName.trim()),
+    onSuccess: () => { invalidateOrg(); setTeamModal(null); setTeamError(''); },
+    onError: (err: Error) => setTeamError(err.message || '팀 저장 실패'),
+  });
+  const teamDeleteMutation = useMutation({
+    mutationFn: (t: Team) => deleteTeam(t.id),
+    onSuccess: invalidateOrg,
+    onError: (err: Error) => { void showError(err, '팀 삭제 실패'); },
+  });
+  const moveMutation = useMutation({
+    mutationFn: ({ part, teamId }: { part: Part; teamId: number }) => setPartTeam(part.id, teamId),
+    onSuccess: invalidateOrg,
+    onError: (err: Error) => { void showError(err, '파트 옮기기 실패'); },
+  });
+  const askDeleteTeam = async (t: Team) => {
+    if (teamDeleteMutation.isPending) return;
+    if (!(await showConfirm(`'${t.name}' 팀을 삭제할까요?`, { tone: 'warning', confirmLabel: '삭제', title: '팀 삭제' }))) return;
+    teamDeleteMutation.mutate(t);
+  };
+  const askMove = async (p: Part, teamId: number) => {
+    const to = teams.find((t) => t.id === teamId);
+    if (!to || teamId === p.team_id || moveMutation.isPending) return;
+    if (!(await showConfirm(`'${p.name}'을(를) '${to.name}'(으)로 옮길까요? 사람·담당 업무는 그대로 따라가요.`, { confirmLabel: '옮기기', title: '파트 옮기기' }))) return;
+    moveMutation.mutate({ part: p, teamId });
+  };
 
   const { data: parts = [], isLoading } = useQuery({
     queryKey: ['parts-all'],
@@ -34,8 +71,9 @@ export function PartSection() {
 
 
   const createMutation = useMutation({
-    mutationFn: (name: string) => createPart(name),
+    mutationFn: (name: string) => createPart(name, createTeamId ?? undefined),
     onSuccess: () => {
+      invalidateOrg();
       qc.invalidateQueries({ queryKey: ['parts-all'] });
       qc.invalidateQueries({ queryKey: ['namespaces'] });
       setShowCreate(false);
@@ -54,6 +92,7 @@ export function PartSection() {
       qc.invalidateQueries({ queryKey: ['users'] });
       qc.invalidateQueries({ queryKey: ['namespaces'] });
       qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
+      qc.invalidateQueries({ queryKey: ['parts-public'] });   // 사이드바 고르는 창이 파트 이름으로 팀을 찾는다(리뷰 L3)
       setEditingId(null);
       setRenameError('');
     },
@@ -67,6 +106,8 @@ export function PartSection() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['parts-all'] });
       qc.invalidateQueries({ queryKey: ['users'] });
+      qc.invalidateQueries({ queryKey: ['parts-public'] });
+      qc.invalidateQueries({ queryKey: ['teams'] });   // 팀별 파트 수
       setDeleteTarget(null);
       setDeleteError('');
     },
@@ -86,75 +127,132 @@ export function PartSection() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-200">파트 관리</h2>
-        <Button variant="primary" size="sm" onClick={() => { setShowCreate(true); setNewName(''); setCreateError(''); }}>
+        <h2 className="text-lg font-semibold text-slate-200" title="팀 아래에 파트 — 파트를 누르면 사람·담당 업무 현황">팀 › 파트</h2>
+        <Button variant="primary" size="sm" onClick={() => { setTeamModal({ mode: 'create' }); setTeamName(''); setTeamError(''); }}>
           <Plus className="w-4 h-4" />
-          새 파트
+          팀
         </Button>
       </div>
 
       {isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
 
-      <div className="grid gap-3">
-        {parts.map((p) => (
-          <div
-            key={p.id}
-            className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden hover:border-slate-600 transition-colors"
-          >
-            <div className="flex items-center gap-4 p-4">
-              {/* 아이콘 */}
-              <div className="w-10 h-10 rounded-xl bg-indigo-100 border border-indigo-200 dark:bg-indigo-900/40 dark:border-indigo-700/40 flex items-center justify-center flex-shrink-0">
-                <Building2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-              </div>
-
-              {/* 파트 이름 + 편집 */}
-              <div className="flex-1 min-w-0">
-                {/* 이름 = 현황 트리 모달, 연필 = 이름 바꾸기 모달(10/21 — 그 자리에서 고치던 칸은 포커스가 빠지면 저장됐다) */}
-                <span className="flex items-center gap-1.5 group">
-                  <button onClick={() => setTreePart(p)} title="사람·담당 업무 현황 보기"
-                    className="font-semibold text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-300 hover:underline">
-                    {p.name}
-                  </button>
-                  <button
-                    onClick={() => { setEditingId(p.id); setEditingName(p.name); setRenameError(''); }}
-                    className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
-                    title="이름 바꾸기"
-                  >
-                    <Pencil className="w-3 h-3" />
-                  </button>
-                </span>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-xs text-slate-500">
-                    {p.team ?? '팀 없음'} · 사람 {p.user_count ?? 0}명
+      {(() => {
+        const partCard = (p: Part) => (
+            <div
+              key={p.id}
+              className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden hover:border-slate-600 transition-colors"
+            >
+              <div className="flex items-center gap-4 p-4">
+                {/* 아이콘 */}
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 border border-indigo-200 dark:bg-indigo-900/40 dark:border-indigo-700/40 flex items-center justify-center flex-shrink-0">
+                  <Building2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                </div>
+  
+                {/* 파트 이름 + 편집 */}
+                <div className="flex-1 min-w-0">
+                  {/* 이름 = 현황 트리 모달, 연필 = 이름 바꾸기 모달(10/21 — 그 자리에서 고치던 칸은 포커스가 빠지면 저장됐다) */}
+                  <span className="flex items-center gap-1.5 group">
+                    <button onClick={() => setTreePart(p)} title="사람·담당 업무 현황 보기"
+                      className="font-semibold text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-300 hover:underline">
+                      {p.name}
+                    </button>
+                    <button
+                      onClick={() => { setEditingId(p.id); setEditingName(p.name); setRenameError(''); }}
+                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-slate-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"
+                      title="이름 바꾸기"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
                   </span>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-xs text-slate-500">사람 {p.user_count ?? 0}명</span>
+                    {(teams.length > 1 || !p.team_id) && (
+                      <select aria-label={`${p.name} 팀 옮기기`} value={p.team_id ?? ''} onChange={(e) => void askMove(p, Number(e.target.value))}
+                        className="text-xs bg-slate-900 border border-slate-600 rounded px-1.5 py-0.5 text-slate-300">
+                        {!p.team_id && <option value="">팀 고르기</option>}
+                        {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              {/* 소속 인원 수 + 삭제 */}
-              <div className="flex items-center gap-3 flex-shrink-0">
-                <div className="flex items-center gap-1.5 bg-slate-700/50 rounded-lg px-3 py-1.5">
-                  <Users className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="text-sm font-medium text-slate-200">{p.user_count ?? 0}</span>
-                  <span className="text-xs text-slate-500">명</span>
+                {/* 소속 인원 수 + 삭제 */}
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="flex items-center gap-1.5 bg-slate-700/50 rounded-lg px-3 py-1.5">
+                    <Users className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-sm font-medium text-slate-200">{p.user_count ?? 0}</span>
+                    <span className="text-xs text-slate-500">명</span>
+                  </div>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => { setDeleteTarget({ id: p.id, name: p.name }); setDeleteError(''); }}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                 </div>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  onClick={() => { setDeleteTarget({ id: p.id, name: p.name }); setDeleteError(''); }}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
               </div>
             </div>
+          );
+        const noTeam = parts.filter((p) => !p.team_id);
+        return (
+          <div className="space-y-4">
+            {teams.map((t) => {
+              const tp = parts.filter((p) => p.team_id === t.id);
+              return (
+                <section key={t.id} className="space-y-2" aria-label={`${t.name} 팀`}>
+                  <div className="flex items-center gap-2 px-1">
+                    <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" aria-hidden="true" />
+                    <span className="font-semibold text-slate-100">{t.name}</span>
+                    <span className="text-xs text-slate-500">파트 {tp.length}</span>
+                    <button onClick={() => { setTeamModal({ mode: 'rename', team: t }); setTeamName(t.name); setTeamError(''); }}
+                      className="text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400" title="팀 이름 바꾸기" aria-label={`${t.name} 이름 바꾸기`}>
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <span className="flex-1" />
+                    <Button variant="secondary" size="sm" onClick={() => { setCreateTeamId(t.id); setShowCreate(true); setNewName(''); setCreateError(''); }}>
+                      <Plus className="w-3.5 h-3.5" /> 파트
+                    </Button>
+                    <Button variant="danger" size="sm" onClick={() => void askDeleteTeam(t)} title={tp.length ? '파트를 먼저 다른 팀으로 옮겨야 삭제돼요' : '팀 삭제'}
+                      aria-label={`${t.name} 팀 삭제`}>
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  <div className="grid gap-2 pl-6 border-l border-slate-700 ml-2">
+                    {tp.map(partCard)}
+                    {tp.length === 0 && <div className="text-sm text-slate-500 py-2">파트 없음</div>}
+                  </div>
+                </section>
+              );
+            })}
+            {noTeam.length > 0 && (
+              <section className="space-y-2" aria-label="팀 없는 파트">
+                <div className="px-1 text-sm text-amber-700 dark:text-amber-300" title="파트 카드의 팀 칸에서 팀을 고르면 옮겨져요">팀 없는 파트 — 팀으로 옮겨 주세요</div>
+                <div className="grid gap-2 pl-6 border-l border-slate-700 ml-2">{noTeam.map(partCard)}</div>
+              </section>
+            )}
+            {!isLoading && parts.length === 0 && teams.length === 0 && (
+              <div className="text-center py-10 text-slate-500">팀을 먼저 만들어 주세요</div>
+            )}
           </div>
-        ))}
-        {!isLoading && parts.length === 0 && (
-          <div className="text-center py-10 text-slate-500">등록된 파트 없음</div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* 파트 생성 모달 */}
       <PartTreeModal part={treePart} onClose={() => setTreePart(null)} />
+      <FormModal
+        isOpen={teamModal !== null}
+        title={teamModal?.mode === 'rename' ? '팀 이름 바꾸기' : '새 팀'}
+        onClose={() => { setTeamModal(null); setTeamError(''); }}
+        onSubmit={() => { if (teamModal && teamName.trim() && !teamSaveMutation.isPending) teamSaveMutation.mutate(teamModal); }}
+        submitting={teamSaveMutation.isPending}
+        submitDisabled={!teamName.trim() || (teamModal?.mode === 'rename' && teamName.trim() === teamModal.team.name)}
+        error={teamError}
+      >
+        <label htmlFor="team-name" className="block text-xs text-slate-400">팀 이름 — 파트·사람 연결은 그대로 유지돼요</label>
+        <input id="team-name" autoFocus value={teamName} onChange={(e) => setTeamName(e.target.value)}
+          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+      </FormModal>
       <FormModal
         isOpen={editingId !== null}
         title="파트 이름 바꾸기"
@@ -171,7 +269,7 @@ export function PartSection() {
         <input id="part-rename" autoFocus value={editingName} onChange={(e) => setEditingName(e.target.value)}
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
       </FormModal>
-      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="새 파트 생성">
+      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title={`새 파트 — ${teams.find((t) => t.id === createTeamId)?.name ?? ''}`}>
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">

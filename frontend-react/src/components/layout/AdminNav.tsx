@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
@@ -24,7 +24,7 @@ function loadOpen(): string[] | null {
 
 /**
  * 관리자 메뉴 — 왼쪽 아코디언(사용자 결정 10/21). 하위가 하나인 묶음은 누르면 바로 그 화면,
- * 지금 화면이 속한 묶음은 늘 펼침, 묶음 이름은 접고 펼치기만(여러 묶음 동시 가능, 펼친 상태 기억).
+ * 지금 화면이 속한 묶음은 펼쳐서 시작하되 접을 수도 있다(10/22 사용자: 화살표를 눌러도 안 닫혀 고장처럼 보임), 묶음 이름은 접고 펼치기만(여러 묶음 동시 가능, 펼친 상태 기억).
  */
 export function AdminNav() {
   const location = useLocation();
@@ -33,6 +33,8 @@ export function AdminNav() {
   const groups = visibleAdminMenu(user);
   const current = resolveAdminMenu(location.pathname, groups);
   const [open, setOpen] = useState<string[]>(() => loadOpen() ?? []);
+  const [closedCurrent, setClosedCurrent] = useState<string | null>(null);   // 지금 화면이 든 묶음을 사람이 접었으면 그 묶음 id — 화면을 옮기면 풀린다
+  useEffect(() => { setClosedCurrent(null); }, [current]);
 
   // 정정 요청 대기 건수(지금 고른 업무 컬렉션, 처리 권한이 있을 때) — 지식 탭 안에 있던 배지를 옮겨 옴(방치 방지)
   const { selectedNs, canModifyNs } = useNamespaceAccess();
@@ -68,10 +70,10 @@ export function AdminNav() {
             </button>
           );
         }
-        const isOpen = containsCurrent || open.includes(g.id);
+        const isOpen = containsCurrent ? closedCurrent !== g.id : open.includes(g.id);
         return (
           <div key={g.id}>
-            <button onClick={() => { if (!containsCurrent) toggle(g.id); }} aria-expanded={isOpen}
+            <button onClick={() => { if (containsCurrent) setClosedCurrent(isOpen ? g.id : null); else toggle(g.id); }} aria-expanded={isOpen}
               className={clsx('w-full flex items-center gap-2.5 px-3 py-2 rounded-lg font-medium transition-colors text-left hover:bg-slate-700',
                 containsCurrent ? 'text-slate-100' : 'text-slate-300')}>
               <Icon className="w-4 h-4 flex-shrink-0" />

@@ -8,7 +8,7 @@ import type { Part } from '../../types';
 
 /**
  * 파트 현황 트리(10/21, 사용자 요청 — 조직은 트리가 직관적): 팀 › 파트 › 사람 · 담당 업무를 한눈에. 보기 전용 —
- * 사람 이동·승인은 시스템·권한 › 사용자, 담당 변경은 시스템·권한 › 담당 업무에서.
+ * 사람 이동·승인은 조직·권한 › 사용자, 담당 변경은 조직·권한 › 담당 업무에서.
  */
 export function PartTreeModal({ part, onClose }: { part: Part | null; onClose: () => void }) {
   const usersQ = useQuery({ queryKey: ['users'], queryFn: getUsers, enabled: !!part });
@@ -57,7 +57,7 @@ export function PartTreeModal({ part, onClose }: { part: Part | null; onClose: (
               </div>
               {owned.length ? (
                 <div className="flex flex-wrap gap-1">{owned.map((d) => <Badge key={d} color="emerald">{d}</Badge>)}</div>
-              ) : <p className="text-xs text-slate-500">없음 — 시스템·권한 › 담당 업무에서 지정해요</p>}
+              ) : <p className="text-xs text-slate-500">없음 — 조직·권한 › 담당 업무에서 지정해요</p>}
             </div>
           </div>
         </div>
