@@ -2,7 +2,7 @@
 
 지식 문서는 지금처럼 고른 업무 영역만, 정책서는 넓힌다 — 정책은 모든 업무가 참조하는 공통 기준이고, 범위를 넓혀도 정확도가
 그대로였다(v0 실험: 사람 26문항 1위 85% = 영역 하나와 같음). 지식은 컨플루언스 92%가 검증된 경로라 측정 전엔 그대로.
-  - 고른 영역 자신(정책이 있으면)
+  - 고른 영역 자신(정책이 있으면) + 직계 하위 영역(트리 깊이 1, 10/22 category-removal-design §2-6 — 하위가 없어도 "전부"에 들지만 순서만 앞으로)
   - + "같은 업무"로 연결된 영역(ops_link) / 연결이 없으면 정책이 있는 영역 전부
 "정책 영역 / 업무 영역" 구분은 없앴다(2026-10-20 — 지식은 업무 영역 하나에 정책·지식·용어가 함께 붙는다).
 테스트용 영역(kind='policy_test', E2E 임시)은 그 영역을 직접 고를 때만 — "전부"에 넣으면 테스트 중 실제 채팅·측정에 가짜 정책이
@@ -24,6 +24,10 @@ linked AS (
 ),
 cand AS (
     SELECT me.id, 0 AS ord FROM me
+    UNION ALL
+    -- 직계 하위 = 고른 영역의 일부라 자신과 같은 순위. 테스트용 하위는 고른 영역도 테스트용일 때만(위 M1과 같은 이유)
+    SELECT c.id, 0 FROM ops_namespace c, me
+    WHERE c.parent_id = me.id AND (c.kind <> 'policy_test' OR me.kind = 'policy_test')
     UNION ALL
     SELECT id, 1 FROM linked WHERE (SELECT kind FROM me) <> 'policy_test'
     UNION ALL

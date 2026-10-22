@@ -155,14 +155,20 @@ async def resolve_query_terms(namespace: str, question: str, query_vec, *, mode:
     mode = mode or settings.glossary_match_mode
     if mode == "lexical":
         if entries is None:
-            from core.database import get_conn, resolve_namespace_id
+            from core.database import get_conn, namespace_scope_ids
             async with get_conn() as conn:
-                ns_id = await resolve_namespace_id(conn, namespace)
+                # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6). 하위 용어도 고른 영역 용어처럼 우선(파트 이름을 붙여
+                # 어느 하위 업무 뜻인지 보이게). 하위를 골랐을 때 상위 용어는 정책 범위(extra_ns_ids "전부")로 이미 들어온다.
+                scope = await namespace_scope_ids(conn, namespace)
+                ns_id = scope[0] if scope else None
                 entries = await load_entries(conn, ns_id) if ns_id is not None else []
+                if len(scope) > 1:
+                    own = {norm(e.term) for e in entries}
+                    entries = entries + [e for e in await load_entries_many(conn, scope[1:]) if norm(e.term) not in own]
                 # 정책서 범위의 파트 용어도(용어는 데이터와 세트 — 정책 파트 용어가 정책을 찾는 열쇠, 2026-10-20). 같은 이름이면 고른 파트
                 # 뜻을 쓴다 — find_terms는 긴 표현부터 잡아 다른 파트의 긴 동의어가 이길 수 있어 순서로는 보장 안 됨(리뷰 L3), 그래서 미리 뺀다.
                 # 정책 파트끼리 같은 이름이면 파트 이름순 첫 것(설명에 파트를 붙여 어느 업무 뜻인지 보이게).
-                others = [i for i in extra_ns_ids if i != ns_id]
+                others = [i for i in extra_ns_ids if i not in scope]
                 if others:
                     own = {norm(e.term) for e in entries}
                     entries = entries + [e for e in await load_entries_many(conn, others) if norm(e.term) not in own]

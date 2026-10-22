@@ -18,7 +18,7 @@ from typing import Optional
 import asyncpg
 
 from core.config import settings
-from core.database import get_conn, resolve_namespace_id
+from core.database import get_conn, resolve_namespace_id, scope_ids_same_owner_subquery
 from shared.embedding import embedding_service
 from service.improvement import draft as draft_mod
 from service.policy.visibility import (
@@ -75,13 +75,20 @@ def _fallback_chunk_text(policy_name: str, category_path: list[str], raw_body: s
     return f"{policy_name} ({' / '.join(category_path or [])}): {raw_body}"
 
 
+# 신고 대상이 "이 영역 것"인지 = 신고한 영역 + 직계 하위 중 담당이 같은 것(트리, category-removal-design §2-6). 상위를 골라 물으면
+# 하위 지식·정책도 근거로 나오므로(검색 범위) 그 근거를 고칠 대상으로 받아야 한다 — 영역 하나로만 보면 하위 근거가 조용히 후보에서
+# 빠졌다(리뷰 M1). 단 권한은 신고 영역 담당만 보므로, 다른 파트가 직접 맡은 하위는 뺀다(리뷰 H1 — 그 하위 영역에서 신고해야 함).
+# 범위 밖(무관한 다른 영역) 행은 여전히 거부. $2 = 신고한 영역 id.
+_IN_SCOPE_2 = f"IN ({scope_ids_same_owner_subquery('$2')})"
+
+
 async def _load_original(conn, ns_id: int, target_type: str, target_id: Optional[int],
                          target_sub_id: Optional[int], message_id: Optional[int]) -> dict:
-    """신고 대상의 현재 원문 스냅샷. 대상이 이 네임스페이스의 현행 데이터가 아니면 ValueError."""
+    """신고 대상의 현재 원문 스냅샷. 대상이 이 네임스페이스(+ 직계 하위)의 현행 데이터가 아니면 ValueError."""
     if target_type == "knowledge":
         r = await conn.fetchrow(
             "SELECT id, content, category, heading_path FROM rag_knowledge "
-            "WHERE id = $1 AND namespace_id = $2 AND status = 'active'", target_id, ns_id)
+            f"WHERE id = $1 AND namespace_id {_IN_SCOPE_2} AND status = 'active'", target_id, ns_id)
         if not r:
             raise ValueError("정정 대상 지식을 찾을 수 없거나 이미 바뀌었습니다.")
         return {"content": r["content"], "category": r["category"], "heading_path": list(r["heading_path"] or [])}
@@ -89,7 +96,7 @@ async def _load_original(conn, ns_id: int, target_type: str, target_id: Optional
     if target_type in ("policy_param", "policy_narrative"):
         item = await conn.fetchrow(
             "SELECT id, policy_name, category_path, raw_body, remark FROM policy_item "
-            f"WHERE id = $1 AND namespace_id = $2 AND {searchable_sql('policy_item')}", target_id, ns_id)   # 검색 대상과 같은 기준 — v0 검토 대기 버전은 정정 대상이 못 된다(10/21)
+            f"WHERE id = $1 AND namespace_id {_IN_SCOPE_2} AND {searchable_sql('policy_item')}", target_id, ns_id)   # 검색 대상과 같은 기준 — v0 검토 대기 버전은 정정 대상이 못 된다(10/21)
         if not item:
             raise ValueError("정정 대상 정책을 찾을 수 없거나 이미 바뀌었습니다.")
         base = {"policy_name": item["policy_name"], "category_path": list(item["category_path"] or []),
@@ -438,7 +445,7 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
         row = await conn.fetchrow(
             "SELECT i.id, i.pipeline_version, (SELECT c.id FROM policy_chunk c WHERE c.policy_item_id = i.id "
             "ORDER BY c.chunk_idx, c.id LIMIT 1) AS chunk_id FROM policy_item i "
-            f"WHERE i.id = $1 AND i.namespace_id = $2 AND {searchable_sql('i')}", item_id, ns_id)
+            f"WHERE i.id = $1 AND i.namespace_id {_IN_SCOPE_2} AND {searchable_sql('i')}", item_id, ns_id)
         if not row:
             raise ValueError("고칠 정책을 찾을 수 없거나 그 사이 바뀌었어요 — 새로고침하세요.")
         if row["chunk_id"] is None:
@@ -464,7 +471,7 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
                 # 위의 "검색 대상인가" 확인은 잠금 전 — 그 사이 다른 정정 승인으로 이 버전이 은퇴했으면 낡은 버전에 제안이 붙는다.
                 # 잠금 안에서 다시 본다(10/21 재리뷰 3). 진행 중인 승인은 아직 대기 건이라 위 확인에서 먼저 걸린다.
                 gone = await conn.fetchval(
-                    f"SELECT NOT EXISTS (SELECT 1 FROM policy_item i WHERE i.id = $1 AND i.namespace_id = $2 AND {searchable_sql('i')})",
+                    f"SELECT NOT EXISTS (SELECT 1 FROM policy_item i WHERE i.id = $1 AND i.namespace_id {_IN_SCOPE_2} AND {searchable_sql('i')})",
                     item_id, ns_id)
             if existing is None and not gone:
                 try:
@@ -910,7 +917,7 @@ def _validate_proposed(target_type: str, proposed: Optional[dict], *, editing: b
 
 
 async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embedding: list[float]) -> int:
-    old = await conn.fetchrow("SELECT * FROM rag_knowledge WHERE id = $1 AND namespace_id = $2 FOR UPDATE",
+    old = await conn.fetchrow(f"SELECT * FROM rag_knowledge WHERE id = $1 AND namespace_id {_IN_SCOPE_2} FOR UPDATE",
                               target_id, ns_id)
     if not old or old["status"] != "active":
         raise ValueError("원본 지식이 이미 바뀌었거나 현행이 아닙니다 — 이 신고는 반려하세요.")
@@ -923,7 +930,7 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
         VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, 'active',
                 $11, $12, $13, $14, NOW(), $15, $16, $17, $18, $19, NOW())
         RETURNING id
-    """, ns_id, content, str(embedding), old["base_weight"], old["category"],
+    """, old["namespace_id"], content, str(embedding), old["base_weight"], old["category"],   # 원래 행의 영역 — 신고한 영역(상위)으로 옮기지 않는다
         old["created_by_user_id"], old["source_file"], old["source_chunk_idx"], old["source_type"],
         old["ingestion_job_id"], old["logical_document_id"] or old["id"], (old["version"] or 1) + 1, old["id"],
         settings.embedding_model, old["owner"], old["confluence_page_id"], old["confluence_version"],
@@ -983,7 +990,7 @@ _POLICY_CHUNKS_SQL = "SELECT id, chunk_text, chunk_idx FROM policy_chunk WHERE p
 async def _prepare_policy(ns_id: int, item: dict, proposed: dict) -> dict[int, tuple[str, list[float]]]:
     """재임베딩은 트랜잭션 밖에서 미리 — 임베딩 호출 동안 원본 행 잠금을 쥐고 있지 않도록(지식 경로와 동일)."""
     async with get_conn() as conn:
-        old = await conn.fetchrow("SELECT * FROM policy_item WHERE id = $1 AND namespace_id = $2",
+        old = await conn.fetchrow(f"SELECT * FROM policy_item WHERE id = $1 AND namespace_id {_IN_SCOPE_2}",
                                   item["target_id"], ns_id)
         if not old:
             raise ValueError("원본 정책을 찾을 수 없습니다.")
@@ -1001,7 +1008,7 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
     content_hash·pipeline_version·원천 키(source_key)·출처 위치는 원본 그대로 — 원천 키가 같아야 JSON 가져오기(json_io)·골든셋·재적재
     대조가 새 버전을 같은 정책으로 찾는다. content_hash는 처음 적재한 원문 기준 그대로다(10/21: 이 값으로 재업로드를 건너뛰던 옛 엑셀
     경로는 없어졌다 — 지금 원문과의 비교는 json_io가 원문·비고로 직접 한다)."""
-    old = await conn.fetchrow("SELECT * FROM policy_item WHERE id = $1 AND namespace_id = $2 FOR UPDATE",
+    old = await conn.fetchrow(f"SELECT * FROM policy_item WHERE id = $1 AND namespace_id {_IN_SCOPE_2} FOR UPDATE",
                               item["target_id"], ns_id)
     # 검색 대상과 같은 기준(10/21) — v0 검토 대기 버전을 원본 삼아 새 버전을 만들면 승인 전 수정안이 그대로 현행이 된다
     if not old or not is_searchable(old["status"], old.get("pipeline_version")):
@@ -1028,7 +1035,7 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
              unresolved_segments, reviewed_at, reviewed_by, pipeline_version, source_key)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, $14, $15, NOW(), $16, $17, $18)
         RETURNING id
-    """, ns_id, old["system_key"], old["category_path"], old["policy_name"], new_raw, new_remark,
+    """, old["namespace_id"], old["system_key"], old["category_path"], old["policy_name"], new_raw, new_remark,   # 원래 행의 영역
         old["source_file"], old["source_sheet"], old["source_row"], old["content_hash"], old["logical_id"],
         next_version, old["id"], old["parse_status"], old["unresolved_segments"],
         approver.get("id"), old["pipeline_version"], old.get("source_key"))   # 원천 키 유지 — 골든셋 정답·재적재 대조가 새 버전에서도 찾게(리뷰 M1)
@@ -1129,6 +1136,11 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
             """, item_id, json.dumps(proposed, ensure_ascii=False), new_id, approver.get("id"))
             superseded = await _close_superseded(conn, item, approver)
             ns_name = await conn.fetchval("SELECT name FROM ops_namespace WHERE id = $1", ns_id)
+            # 고친 지식이 하위 영역 것이면 그 영역 캐시도(상위 신고로 하위 근거를 고칠 수 있다, 리뷰 M1·M2)
+            row_ns_name = None
+            if item["target_type"] in ("knowledge", "missing"):
+                row_ns_name = await conn.fetchval(
+                    "SELECT n.name FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id WHERE k.id = $1", new_id)
 
     # 승인 반영 후 시맨틱 캐시엔 옛 답이 TTL 동안 남아 있다 — 캐시를 비운다(best-effort)
     if item["target_type"] in ("policy_param", "policy_narrative"):
@@ -1143,8 +1155,8 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
             logger.warning("정정 승인 후 정책 캐시 비우기 실패 (item=%s)", item_id, exc_info=True)
     else:
         try:
-            from shared.cache import invalidate_namespace
-            await invalidate_namespace(ns_name)
+            from shared.cache import invalidate_namespace_family   # 자신 + 상위 이름(트리 — 상위 검색 범위에 하위 지식이 든다)
+            await invalidate_namespace_family(ns_name, row_ns_name)
         except Exception:
             logger.warning("정정 승인 후 시맨틱 캐시 무효화 실패 (item=%s)", item_id, exc_info=True)
     return {"id": item_id, "status": "approved", "applied_target_id": new_id, "superseded": superseded}

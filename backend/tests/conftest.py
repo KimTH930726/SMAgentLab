@@ -47,6 +47,14 @@ _fake_conn.execute = AsyncMock()
 _db_mod = MagicMock()
 _db_mod.get_conn = MagicMock(return_value=_fake_conn)
 _db_mod.resolve_namespace_id = AsyncMock(return_value=1)
+_db_mod.namespace_scope_ids = AsyncMock(return_value=[1])   # 검색 범위(자신 + 직계 하위) — 기본은 하위 없음
+# 범위 규칙 SQL 조각은 순수 함수 — 가짜로 두면 모듈 상수 SQL(improvement·VOC)에 MagicMock 글자가 박힌다. 실제 파일에서 가져온다.
+import importlib.util as _ilu_db
+_real_db_spec = _ilu_db.spec_from_file_location("_conftest_real_database", str(Path(backend_dir) / "core" / "database.py"))
+_real_db = _ilu_db.module_from_spec(_real_db_spec)
+_real_db_spec.loader.exec_module(_real_db)
+_db_mod.scope_ids_subquery = _real_db.scope_ids_subquery
+_db_mod.scope_ids_same_owner_subquery = _real_db.scope_ids_same_owner_subquery
 sys.modules["core.database"] = _db_mod
 
 sys.modules["core.dependencies"] = MagicMock()

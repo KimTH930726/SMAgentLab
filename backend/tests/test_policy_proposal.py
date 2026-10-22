@@ -333,7 +333,7 @@ class TestUpdateProposed:
 class TestRemarkOnApprove:
     @staticmethod
     def _old(**kw):
-        return {"id": 10, "status": "active", "system_key": "", "category_path": [], "policy_name": "p", "raw_body": "7일",
+        return {"id": 10, "namespace_id": 1, "status": "active", "system_key": "", "category_path": [], "policy_name": "p", "raw_body": "7일",
                 "remark": "옛 비고", "source_file": None, "source_sheet": None, "source_row": 3, "content_hash": "h",
                 "logical_id": 10, "version": 1, "parse_status": "parsed", "unresolved_segments": None,
                 "pipeline_version": WHOLE, "source_key": "pol_x"} | kw

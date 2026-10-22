@@ -205,6 +205,23 @@ async def invalidate_namespace(namespace: str) -> int:
         return 0
 
 
+async def invalidate_namespace_family(*names: str) -> int:
+    """쓰기 경로 공용 — 받은 영역 + 그 상위 영역 이름의 캐시를 비운다(트리, category-removal-design §2-6).
+    캐시 키는 고른 영역 이름이고 상위를 고르면 하위 지식까지 검색하므로, 하위에 쓰면 상위 이름 캐시도 옛 답이 된다.
+    상위를 못 찾으면(DB 오류) 받은 이름만이라도 비운다 — 로그는 남긴다."""
+    from core.database import get_conn, namespace_names_with_parents
+    targets = [n for n in names if n]
+    try:
+        async with get_conn() as conn:
+            targets = await namespace_names_with_parents(conn, targets)
+    except Exception as e:
+        logger.warning("[Cache] 상위 영역 조회 실패 — 받은 이름만 비움: %s", e)
+    total = 0
+    for n in targets:
+        total += await invalidate_namespace(n)
+    return total
+
+
 async def invalidate_all() -> int:
     """답변 캐시 전체 무효화 — 정책처럼 여러 업무 영역에 걸쳐 쓰이는 지식이 바뀌었을 때(10/21).
     영역마다 따로 훑으면 영역 수만큼 키 공간을 SCAN했다(리뷰 P1) → 한 번 훑고 묶어서 지운다."""

@@ -274,7 +274,7 @@ class TestApplyKnowledge:
     @pytest.mark.asyncio
     async def test_new_version_chain_and_old_deprecated(self):
         conn = _conn()
-        old = {"id": 5, "status": "active", "base_weight": 1.2, "category": "공통",
+        old = {"id": 5, "namespace_id": 1, "status": "active", "base_weight": 1.2, "category": "공통",
                "created_by_user_id": 3, "source_file": "f", "source_chunk_idx": 0, "source_type": "manual",
                "ingestion_job_id": 9, "logical_document_id": None, "version": None, "owner": None,
                "confluence_page_id": "p1", "confluence_version": 2, "heading_path": ["A"]}
@@ -305,7 +305,7 @@ class TestApplyPolicy:
         """파라미터 정정 시 raw_body가 바뀌면, 원문 통째로 만든 폴백 청크도 새 원문으로 다시 만든다
         (안 그러면 옛 값이 벡터 검색에 계속 걸림). 정정 대상이 아닌 파라미터는 그대로 복사."""
         conn = _conn()
-        old_item = {"id": 10, "status": "active", "system_key": "", "category_path": ["반품"], "policy_name": "기한",
+        old_item = {"id": 10, "namespace_id": 1, "status": "active", "system_key": "", "category_path": ["반품"], "policy_name": "기한",
                     "raw_body": "7일 이내", "remark": None, "source_file": "f.xlsx", "source_sheet": "s",
                     "source_row": 2, "content_hash": "h", "logical_id": 10, "version": 1, "parse_status": "parsed",
                     "unresolved_segments": None, "pipeline_version": "r1-x", "source_key": "pol_abc"}
@@ -358,7 +358,7 @@ class TestPolicyVersionV0:
 
     @staticmethod
     def _old(**kw):
-        return {"id": 10, "status": "active", "system_key": "", "category_path": [], "policy_name": "p", "raw_body": "7일",
+        return {"id": 10, "namespace_id": 1, "status": "active", "system_key": "", "category_path": [], "policy_name": "p", "raw_body": "7일",
                 "remark": None, "source_file": None, "source_sheet": None, "source_row": None, "content_hash": "h",
                 "logical_id": 10, "version": 1, "parse_status": "parsed", "unresolved_segments": None,
                 "pipeline_version": svc.PIPELINE_WHOLE, "source_key": "pol_x"} | kw
@@ -972,6 +972,17 @@ class TestApproveShownProposal:
              patch.object(svc, "_apply_knowledge", apply), patch.object(svc, "_close_superseded", AsyncMock(return_value=[])):
             out = await svc.approve(7, {"id": 9}, {"content": "v1"})
         assert out["status"] == "approved" and apply.await_args.args[3] == "v1"
+
+    @pytest.mark.asyncio
+    async def test_approve_clears_reported_and_row_namespace_with_parents(self):
+        """상위 신고로 하위 지식을 고치면 신고 영역·고친 행의 영역 둘 다(각 상위 포함) 캐시를 비운다(트리, 리뷰 M2)."""
+        c = _conn()
+        self._approve_mocks(c)
+        c.fetchval = AsyncMock(side_effect=lambda sql, *a: "배달의민족" if "rag_knowledge k JOIN" in sql else "제휴서비스")
+        fam = AsyncMock(return_value=2)
+        with patch.object(svc, "get_conn", return_value=c), patch.object(svc.embedding_service, "embed", AsyncMock(return_value=[0.1])),              patch.object(svc, "_apply_knowledge", AsyncMock(return_value=99)),              patch.object(svc, "_close_superseded", AsyncMock(return_value=[])),              patch.dict(sys.modules, {"shared.cache": MagicMock(invalidate_namespace_family=fam)}):
+            await svc.approve(7, {"id": 9}, {"content": "v1"})
+        fam.assert_awaited_once_with("제휴서비스", "배달의민족")
 
     @pytest.mark.parametrize("changed", [{"proposed": json.dumps({"content": "v2"})}, {"target_id": 12},
                                          {"status": "approved"}])   # 승인 두 번 동시 — 늦은 쪽도 409(10/21 리뷰 5b, 실서버 policy_slot_race C3)

@@ -42,8 +42,13 @@ export interface KnowledgeCategory {
 export interface NamespaceDetail extends Namespace {
   id: number;
   kind?: string;
-  owner_part_id?: number | null;
-  owner_part?: string | null;
+  owner_part_id?: number | null;           // 직접 지정된 담당(수정 창·파트별 담당 지정이 읽고 쓰는 값)
+  owner_part?: string | null;              // 직접 지정된 담당 파트 이름
+  effective_owner_part?: string | null;    // 실효 담당(하위 영역이 비어 있으면 상위 것) — 권한 판단은 이것으로(effectiveOwnerPart)
+  effective_owner_part_id?: number | null;
+  owner_inherited?: boolean;               // 실효 담당을 상위에서 물려받았는지
+  parent_id?: number | null;               // 상위 영역(트리 깊이 1)
+  parent?: string | null;                  // 상위 영역 이름
   knowledge_count: number;
   glossary_count: number;
   policy_count?: number;     // 지금 쓰이는 정책

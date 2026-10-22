@@ -38,7 +38,8 @@ def patch_db(monkeypatch):
     def _apply(fetch_return=None):
         conn = _make_fake_conn(fetch_return)
         monkeypatch.setattr(service, "get_conn", MagicMock(return_value=conn))
-        monkeypatch.setattr(service, "resolve_namespace_id", AsyncMock(return_value=1))
+        monkeypatch.setattr(service, "resolve_namespace_id", AsyncMock(return_value=1))      # 적재(고른 영역 자신)
+        monkeypatch.setattr(service, "namespace_scope_ids", AsyncMock(return_value=[1]))   # 검색(자신 + 직계 하위)
         return conn
     return _apply
 
@@ -98,9 +99,10 @@ class TestIngestCommonCodes:
 class TestSearchDbColumns:
     @pytest.mark.asyncio
     async def test_namespace_not_found_returns_empty(self, patch_db, monkeypatch):
-        patch_db()
-        monkeypatch.setattr(service, "resolve_namespace_id", AsyncMock(return_value=None))
+        conn = patch_db()
+        monkeypatch.setattr(service, "namespace_scope_ids", AsyncMock(return_value=[]))
         assert await service.search_db_columns("없는곳", "질문") == []
+        conn.fetch.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_returns_mapped_rows(self, patch_db):

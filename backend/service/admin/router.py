@@ -80,8 +80,9 @@ async def get_namespaces_detail(user: dict = Depends(get_current_user)):
 @router.post("/api/namespaces", response_model=dict)
 async def create_namespace_endpoint(body: NamespaceCreate, user: dict = Depends(get_current_admin)):
     # 업무 영역 트리는 관리자만 만든다(2026-10-20 — 예전엔 조회 전용 계정도 만들 수 있었고, 같은 이름이면 설명을 덮어썼다).
-    # 담당 파트는 업무 영역 관리에서 따로 지정
-    created = await service.create_namespace(body.name, body.description, owner_part=None, created_by_user_id=user["id"])
+    # 담당 파트는 업무 영역 관리에서 따로 지정. 상위 영역(선택) 검사 위반은 ValueError → 400(main.py 공통 처리)
+    created = await service.create_namespace(body.name, body.description, owner_part=None, created_by_user_id=user["id"],
+                                             parent_id=body.parent_id)
     if created is None:
         raise HTTPException(status_code=409, detail=service.NAME_TAKEN)
     return created
@@ -97,7 +98,8 @@ async def rename_namespace_endpoint(name: str, body: NamespaceRename, user: dict
 
 @router.patch("/api/namespaces/{name}/settings", response_model=dict)
 async def update_namespace_settings(name: str, body: NamespaceSettings, user: dict = Depends(get_current_admin)):
-    """업무 영역의 담당 파트 지정(관리자, 2026-10-20) — 담당이 정해져야 그 파트 사람이 수정할 수 있다."""
+    """업무 영역의 담당 파트·상위 영역 지정(관리자, 2026-10-20 / 상위 10-22) — 담당이 정해져야 그 파트 사람이 수정할 수 있다.
+    하위 영역은 담당을 비워 두면 상위 담당을 물려받는다. 상위 검사 위반은 ValueError → 400."""
     try:
         return await service.update_namespace_settings(name, body)
     except service.NamespaceNotFound as e:   # 전역 LookupError 처리는 KeyError(버그)까지 404로 바꿔 숨겨서 쓰지 않는다
@@ -383,9 +385,10 @@ async def bulk_delete_query_logs(body: QueryLogIds, user: dict = Depends(get_cur
         # check_namespace_ownership()을 호출하면 매번 DB 왕복이 생기므로 인라인 검증
         rows = await conn.fetch(
             """
-            SELECT DISTINCT n.name AS namespace, n.owner_part_id
+            SELECT DISTINCT n.name AS namespace, COALESCE(n.owner_part_id, p.owner_part_id) AS owner_part_id   -- 하위 영역은 상위 담당 상속
             FROM ops_query_log ql
             JOIN ops_namespace n ON ql.namespace_id = n.id
+            LEFT JOIN ops_namespace p ON p.id = n.parent_id
             WHERE ql.id = ANY($1::int[])
             """, ids,
         )

@@ -180,13 +180,14 @@ def test_question_key_ignores_spacing_and_punctuation():
 async def test_policy_scope_terms_added_but_own_part_meaning_wins(monkeypatch):
     """정책서 범위(2026-10-20): 정책 파트 용어도 쓰되, 같은 이름이면 고른 파트 뜻 — 다른 파트의 더 긴 동의어가 이기지 않게(리뷰 L3)."""
     from contextlib import asynccontextmanager
-    import core.database as db
+    import sys
+    db = sys.modules["core.database"]   # "import core.database as db"는 가짜 core의 속성(다른 객체)을 줘서 패치가 함수에 안 닿았다
 
     @asynccontextmanager
     async def cm():
         yield object()
     monkeypatch.setattr(db, "get_conn", cm)
-    monkeypatch.setattr(db, "resolve_namespace_id", lambda conn, ns: _async(1))
+    monkeypatch.setattr(db, "namespace_scope_ids", lambda conn, ns: _async([1]))   # 검색 범위(하위 없음)
     monkeypatch.setattr(gt, "load_entries", lambda conn, ns_id: _async([E("회원", "우리 파트 뜻")]))
     monkeypatch.setattr(gt, "load_entries_many", lambda conn, ids: _async([
         E("회원", "정책 파트 뜻", synonyms=["회원 고객"], part="회원정책"), E("응모권", "추첨 권리", part="챌린지")]))
@@ -198,3 +199,31 @@ async def test_policy_scope_terms_added_but_own_part_meaning_wins(monkeypatch):
 
 async def _async(v):
     return v
+
+
+@pytest.mark.asyncio
+async def test_child_domain_terms_are_in_scope_and_win_over_policy_scope(monkeypatch):
+    """트리(10/22): 상위 영역을 고르면 직계 하위 용어도 범위 — 하위 용어는 고른 영역 것처럼 정책 범위 용어보다 앞선다(같은 이름이면 하위 뜻).
+    정책 범위에 하위 id가 또 들어와도 두 번 읽지 않는다."""
+    from contextlib import asynccontextmanager
+    import sys
+    db = sys.modules["core.database"]   # "import core.database as db"는 가짜 core의 속성(다른 객체)을 줘서 패치가 함수에 안 닿았다
+
+    @asynccontextmanager
+    async def cm():
+        yield object()
+    calls: list[list[int]] = []
+
+    async def many(conn, ids):
+        calls.append(list(ids))
+        if list(ids) == [5]:   # 하위 영역(id 5)
+            return [E("배달", "하위 뜻", part="배달의민족")]
+        return [E("배달", "정책 파트 뜻", part="정책"), E("응모권", "추첨 권리", part="챌린지")]
+    monkeypatch.setattr(db, "get_conn", cm)
+    monkeypatch.setattr(db, "namespace_scope_ids", lambda conn, ns: _async([1, 5]))
+    monkeypatch.setattr(gt, "load_entries", lambda conn, ns_id: _async([E("회원", "상위 뜻")] if ns_id == 1 else []))
+    monkeypatch.setattr(gt, "load_entries_many", many)
+    matches, _, _ = await gt.resolve_query_terms("상위", "회원 배달 응모권", None, mode="lexical", extra_ns_ids=[5, 9])
+    by = {m.term: m for m in matches}
+    assert by["회원"].description == "상위 뜻" and by["배달"].description == "하위 뜻" and by["응모권"].part == "챌린지"
+    assert calls == [[5], [9]]   # 하위는 범위로 한 번, 정책 범위에서는 범위 밖(9)만

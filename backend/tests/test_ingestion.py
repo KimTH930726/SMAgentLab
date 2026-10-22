@@ -377,7 +377,7 @@ class TestBulkIngestionStagedActivation:
              patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1), \
              patch("agents.knowledge_rag.ingestion.source_ledger.replace_check",   # 재등록 확인(A안)은 test_source_ledger에서
                    AsyncMock(return_value={"needs_confirm": False, "unlinked_sources": []})), \
-             patch("shared.cache.invalidate_namespace", invalidate, create=True):
+             patch("shared.cache.invalidate_namespace_family", invalidate, create=True):
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
             return await bulk_create_knowledge("test-ns", [dict(i) for i in self.ITEMS], background=False, **kwargs)
 
@@ -504,7 +504,7 @@ class TestBulkIngestionStagedActivation:
              patch("agents.knowledge_rag.knowledge.service._INGEST_BATCH_SIZE", 1), \
              patch("agents.knowledge_rag.ingestion.source_ledger.replace_check",
                    AsyncMock(return_value={"needs_confirm": False, "unlinked_sources": []})), \
-             patch("shared.cache.invalidate_namespace", AsyncMock(), create=True):
+             patch("shared.cache.invalidate_namespace_family", AsyncMock(), create=True):
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
             result = await bulk_create_knowledge("test-ns", items, background=False)
 

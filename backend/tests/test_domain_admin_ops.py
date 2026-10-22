@@ -50,14 +50,14 @@ def _patch(mod, conn):
 
 @pytest.fixture(autouse=True)
 def _no_cache():
-    fake = types.SimpleNamespace(invalidate_namespace=AsyncMock())
+    fake = types.SimpleNamespace(invalidate_namespace=AsyncMock(), invalidate_namespace_family=AsyncMock())
     with patch.dict(sys.modules, {"shared": MagicMock(cache=fake), "shared.cache": fake}):
         yield
 
 
 @pytest.mark.asyncio
 async def test_delete_removes_text_key_links_too():
-    conn = _Conn(fetchrow=[{"id": 7}])
+    conn = _Conn(fetchrow=[{"id": 7, "parent": None}], fetchval=[0])   # 하위 영역 0개
     with _patch(admin_service, conn):
         status, _ = await admin_service.delete_namespace("x")
     sqls = [c.args[0] for c in conn.execute.await_args_list]
@@ -74,12 +74,13 @@ async def test_missing_domain_delete_is_404():
 
 
 def _settings(**kw):
-    return types.SimpleNamespace(owner_part=kw.get("owner_part"), clear_owner=kw.get("clear_owner", False))
+    return types.SimpleNamespace(owner_part=kw.get("owner_part"), clear_owner=kw.get("clear_owner", False),
+                                 parent_id=kw.get("parent_id"), clear_parent=kw.get("clear_parent", False))
 
 
 @pytest.mark.asyncio
 async def test_settings_unknown_part_rejected():
-    conn = _Conn(fetchrow=[{"id": 1}], fetchval=[None])
+    conn = _Conn(fetchrow=[{"id": 1, "parent_id": None}], fetchval=[None])
     with _patch(admin_service, conn), pytest.raises(ValueError, match="없는 파트"):
         await admin_service.update_namespace_settings("영역", _settings(owner_part="없는파트"))
     assert not any("UPDATE ops_namespace" in c.args[0] for c in conn.execute.await_args_list)
@@ -87,7 +88,7 @@ async def test_settings_unknown_part_rejected():
 
 @pytest.mark.asyncio
 async def test_settings_sets_owner():
-    conn = _Conn(fetchrow=[{"id": 1}, {"name": "영역", "owner_part": "P"}], fetchval=[3])
+    conn = _Conn(fetchrow=[{"id": 1, "parent_id": None}, {"name": "영역", "owner_part": "P"}], fetchval=[3])
     with _patch(admin_service, conn):
         out = await admin_service.update_namespace_settings("영역", _settings(owner_part="P"))
     assert ("UPDATE ops_namespace SET owner_part_id = $2 WHERE id = $1", 1, 3) in [c.args for c in conn.execute.await_args_list]
@@ -117,7 +118,7 @@ async def test_user_update_unknown_part_rejected():
 @pytest.mark.asyncio
 async def test_settings_empty_string_clears_owner():
     """빈 문자열 = 해제(스키마 설명과 같게 — 예전엔 아무 일도 안 하고 200, 재리뷰 L1)."""
-    conn = _Conn(fetchrow=[{"id": 1}, {"name": "영역", "owner_part": None}])
+    conn = _Conn(fetchrow=[{"id": 1, "parent_id": None}, {"name": "영역", "owner_part": None}])
     with _patch(admin_service, conn):
         await admin_service.update_namespace_settings("영역", _settings(owner_part=""))
     assert ("UPDATE ops_namespace SET owner_part_id = $2 WHERE id = $1", 1, None) in [c.args for c in conn.execute.await_args_list]

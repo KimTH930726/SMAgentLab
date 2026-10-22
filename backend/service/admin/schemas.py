@@ -10,6 +10,7 @@ from service.validation import Name
 class NamespaceCreate(BaseModel):
     name: Name
     description: str = Field(default="", max_length=1000)
+    parent_id: Optional[int] = Field(default=None, ge=1, le=2_147_483_647)   # 상위 영역(선택, 최상위만 — 트리 깊이 1)
 
 
 class NamespaceRename(BaseModel):
@@ -17,9 +18,11 @@ class NamespaceRename(BaseModel):
 
 
 class NamespaceSettings(BaseModel):
-    """업무 영역 담당 파트(관리자). owner_part 빈 문자열 또는 clear_owner = 해제."""
+    """업무 영역 담당 파트·상위 영역(관리자). owner_part 빈 문자열 또는 clear_owner = 해제. parent_id = 상위 지정, clear_parent = 최상위로."""
     owner_part: Optional[str] = None
     clear_owner: bool = False
+    parent_id: Optional[int] = Field(default=None, ge=1, le=2_147_483_647)
+    clear_parent: bool = False
 
 
 class KnowledgeCategoryCreate(BaseModel):
@@ -38,8 +41,13 @@ class NamespaceInfo(BaseModel):
     name: str
     description: str
     kind: str = "domain"                  # domain | policy_test(E2E 임시)
-    owner_part_id: Optional[int] = None   # 담당 비교는 id로(파트 이름은 바뀔 수 있다)
-    owner_part: Optional[str] = None
+    owner_part_id: Optional[int] = None   # 이 영역에 직접 지정된 담당(수정 창·파트별 담당 지정이 읽고 쓰는 값). 담당 비교는 id로(파트 이름은 바뀔 수 있다)
+    owner_part: Optional[str] = None      # 직접 지정된 담당 파트 이름
+    effective_owner_part: Optional[str] = None      # 실효 담당 파트 이름 — 하위 영역이 비어 있으면 상위 담당(수정 권한 규칙과 같음, 권한 판단용)
+    effective_owner_part_id: Optional[int] = None   # 실효 담당 id(상속 반영)
+    owner_inherited: bool = False         # 실효 담당이 상위에서 물려받은 것인지
+    parent_id: Optional[int] = None       # 상위 영역(트리 깊이 1, 없으면 최상위)
+    parent: Optional[str] = None          # 상위 영역 이름
     knowledge_count: int
     glossary_count: int
     policy_count: int = 0      # 지금 쓰이는 정책(폐기·반려 제외)

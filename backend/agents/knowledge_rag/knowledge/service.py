@@ -1153,8 +1153,8 @@ async def _run_bulk_ingestion(
     # 지식이 반영 안 된 답이 계속 서빙될 수 있다 — 네임스페이스 캐시를 비운다(best-effort).
     if namespace_name:
         try:
-            from shared.cache import invalidate_namespace
-            await invalidate_namespace(namespace_name)
+            from shared.cache import invalidate_namespace_family   # 자신 + 상위 이름(트리 — 상위 검색 범위에 하위 지식이 든다)
+            await invalidate_namespace_family(namespace_name)
         except Exception:
             logger.warning("수집 완료 후 시맨틱 캐시 무효화 실패 (job_id=%s)", job_id, exc_info=True)
 

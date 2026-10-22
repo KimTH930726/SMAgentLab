@@ -13,7 +13,7 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import type { KnowledgeCategory, NamespaceDetail } from '../../types';
 import { showConfirm, showError } from '../../store/useDialogStore';
-import { canEditDomain } from '../../utils/domainAccess';
+import { canEditDomain, effectiveOwnerPart } from '../../utils/domainAccess';
 import { FormModal } from '../ui/FormModal';
 
 /** 이름은 바뀌었는데 담당 저장만 실패 — 화면이 "이름 변경은 됨"을 알아야 다시 저장할 때 옛 이름으로 또 바꾸지 않는다(10/21 리뷰 L1) */
@@ -347,16 +347,16 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                       </td>
                       <td className="px-4 py-2.5">
                         {ns.owner_part
-                          ? <Badge color={canModifyNs(ns.owner_part) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
+                          ? <Badge color={canModifyNs(effectiveOwnerPart(ns)) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
                           : <span className="text-xs text-slate-500" title="담당 지정: 조직 › 담당 업무 영역">없음(관리자만)</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right">{count(ns.policy_count, 'policy', '정책')}</td>
                       <td className="px-3 py-2.5 text-right">{count(ns.knowledge_count, 'knowledge', '지식 문서')}</td>
                       <td className="px-3 py-2.5 text-right">{count(ns.glossary_count, 'glossary', '용어')}</td>
                       <td className="px-3 py-2.5">
-                        {(ns.category_count ?? 0) > 0 || canModifyNs(ns.owner_part) ? (
+                        {(ns.category_count ?? 0) > 0 || canModifyNs(effectiveOwnerPart(ns)) ? (
                           <button onClick={toggleCat} aria-expanded={expandedCat === ns.name}
-                            title={canModifyNs(ns.owner_part) ? '업무구분 보기·추가·수정' : '업무구분 보기'}
+                            title={canModifyNs(effectiveOwnerPart(ns)) ? '업무구분 보기·추가·수정' : '업무구분 보기'}
                             className="text-xs text-slate-400 hover:text-slate-200">
                             {(ns.category_count ?? 0) > 0 ? `${ns.category_count}개` : '-'} {expandedCat === ns.name ? '▾' : '▸'}
                           </button>
@@ -380,7 +380,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                     {expandedCat === ns.name && (
                       <tr className="border-b border-slate-700/50">
                         <td colSpan={7} className="px-4 pb-4 pt-1">
-                          <CategorySection namespace={ns.name} canModify={canModifyNs(ns.owner_part)} />
+                          <CategorySection namespace={ns.name} canModify={canModifyNs(effectiveOwnerPart(ns))} />
                         </td>
                       </tr>
                     )}

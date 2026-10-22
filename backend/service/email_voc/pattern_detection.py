@@ -62,9 +62,12 @@ from typing import Optional
 import numpy as np
 
 from agents.knowledge_rag.knowledge.retrieval import _KEYWORD_ONLY_CATEGORIES
-from core.database import get_conn, resolve_namespace_id
+from core.database import get_conn, resolve_namespace_id, scope_ids_subquery
 from service.llm.factory import get_llm_provider
 from shared.json_utils import parse_json_object
+
+# VOC 커버리지(해결방안 지식) 찾는 범위 = 클러스터 영역 + 직계 하위 — 채팅 지식 검색(namespace_scope_ids)과 같은 규칙
+_VOC_SCOPE = scope_ids_subquery("c.namespace_id")
 
 logger = logging.getLogger(__name__)
 
@@ -341,7 +344,7 @@ async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
     """
     async with get_conn() as conn:
         row = await conn.fetchrow(
-            """
+            f"""
             SELECT c.representative_subject, c.coverage_knowledge_id, c.coverage_verified,
                    best.knowledge_id, best.similarity, best.snippet, best.content
             FROM ops_voc_cluster c
@@ -350,7 +353,8 @@ async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
                        1 - (k.embedding <=> c.representative_embedding) AS similarity,
                        LEFT(k.content, 200) AS snippet, k.content
                 FROM rag_knowledge k
-                WHERE k.namespace_id = c.namespace_id
+                -- 클러스터 영역 + 직계 하위 영역(트리, category-removal-design §2-6 — 채팅 지식 검색과 같은 규칙 scope_ids_subquery)
+                WHERE k.namespace_id IN ({_VOC_SCOPE})
                   AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
                   -- 구조화 코드/스키마 덤프(DB/공통코드)는 "해결방안"으로 성립할 수 없는
                   -- 데이터인데도 코사인 유사도만으론 걸러지지 않아 후보에서 아예 제외한다
@@ -392,7 +396,7 @@ async def list_clusters(namespace: str) -> list[dict]:
         if ns_id is None:
             return []
         rows = await conn.fetch(
-            """
+            f"""
             SELECT c.id, c.representative_subject, c.member_count,
                    c.first_seen_at, c.last_seen_at, c.notified_at,
                    c.coverage_knowledge_id, c.coverage_verified,
@@ -405,7 +409,8 @@ async def list_clusters(namespace: str) -> list[dict]:
                        1 - (k.embedding <=> c.representative_embedding) AS similarity,
                        LEFT(k.content, 100) AS snippet, k.content
                 FROM rag_knowledge k
-                WHERE k.namespace_id = c.namespace_id
+                -- 클러스터 영역 + 직계 하위 영역(트리, category-removal-design §2-6 — 채팅 지식 검색과 같은 규칙 scope_ids_subquery)
+                WHERE k.namespace_id IN ({_VOC_SCOPE})
                   AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
                   -- get_cluster_coverage()와 동일 기준 — 구조화 코드/스키마 덤프 제외
                   AND (k.category IS NULL OR k.category != ALL($2::text[]))

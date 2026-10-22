@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from core.database import get_conn, resolve_namespace_id
+from core.database import get_conn, namespace_scope_ids, resolve_namespace_id
 from service.refdata.parser import ParsedCommonCode, ParsedDbColumn
 
 
@@ -72,13 +72,14 @@ async def has_refdata(namespace: str) -> bool:
     """policy_search.has_policy_data()와 동일한 이유의 게이트(2026-09-18) — 이 데이터가
     없는 네임스페이스(대부분)에서 매 채팅 턴마다 두 테이블을 괜히 조회하는 낭비를 막는다."""
     async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-        if ns_id is None:
+        # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6) — 지식 검색과 같은 범위
+        ns_ids = await namespace_scope_ids(conn, namespace)
+        if not ns_ids:
             return False
         exists = await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM ref_common_code WHERE namespace_id = $1) "
-            "OR EXISTS(SELECT 1 FROM ref_db_column WHERE namespace_id = $1)",
-            ns_id,
+            "SELECT EXISTS(SELECT 1 FROM ref_common_code WHERE namespace_id = ANY($1::int[])) "
+            "OR EXISTS(SELECT 1 FROM ref_db_column WHERE namespace_id = ANY($1::int[]))",
+            ns_ids,
         )
         return bool(exists)
 
@@ -92,8 +93,8 @@ async def search_db_columns(namespace: str, query: str, top_k: int = 10) -> list
     일반지식 키워드 검색과 동일한 이유·동일한 함수 재사용) — 안 그러면 "DS14가"처럼
     조사가 붙은 자연어 질의가 본문의 깔끔한 "DS14"와 매칭이 안 된다."""
     async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-        if ns_id is None:
+        ns_ids = await namespace_scope_ids(conn, namespace)   # 고른 영역 + 직계 하위(has_refdata와 같은 범위)
+        if not ns_ids:
             return []
         rows = await conn.fetch(
             """
@@ -106,12 +107,12 @@ async def search_db_columns(namespace: str, query: str, top_k: int = 10) -> list
                 FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($2)))) t
                 WHERE lexeme IS NOT NULL
             ) q
-            WHERE namespace_id = $1
+            WHERE namespace_id = ANY($1::int[])
               AND to_tsvector('simple', policy_strip_ko(table_name || ' ' || COALESCE(table_comment,'') || ' ' ||
                   column_name || ' ' || COALESCE(column_comment,''))) @@ q.tsq
             ORDER BY rank DESC LIMIT $3
             """,
-            ns_id, query, top_k,
+            ns_ids, query, top_k,
         )
     return [dict(r) for r in rows]
 
@@ -123,8 +124,8 @@ async def search_common_codes(namespace: str, query: str, top_k: int = 10) -> li
     코드값 자체를 묻는 질문이 가장 흔한 패턴인데, code_id를 안 넣으면 group_code_name/
     code_name(설명 텍스트)에만 매칭돼 정작 코드값으로는 못 찾는 문제가 있었다."""
     async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-        if ns_id is None:
+        ns_ids = await namespace_scope_ids(conn, namespace)   # 고른 영역 + 직계 하위(has_refdata와 같은 범위)
+        if not ns_ids:
             return []
         rows = await conn.fetch(
             """
@@ -136,10 +137,10 @@ async def search_common_codes(namespace: str, query: str, top_k: int = 10) -> li
                 FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($2)))) t
                 WHERE lexeme IS NOT NULL
             ) q
-            WHERE namespace_id = $1
+            WHERE namespace_id = ANY($1::int[])
               AND to_tsvector('simple', policy_strip_ko(COALESCE(group_code_name,'') || ' ' || code_id || ' ' || COALESCE(code_name,''))) @@ q.tsq
             ORDER BY rank DESC LIMIT $3
             """,
-            ns_id, query, top_k,
+            ns_ids, query, top_k,
         )
     return [dict(r) for r in rows]

@@ -32,7 +32,7 @@ def _make_fake_conn(fetch_return=None):
 def patch_db(monkeypatch):
     conn = _make_fake_conn()
     monkeypatch.setattr(retrieval, "get_conn", MagicMock(return_value=conn))
-    monkeypatch.setattr(retrieval, "resolve_namespace_id", AsyncMock(return_value=1))
+    monkeypatch.setattr(retrieval, "namespace_scope_ids", AsyncMock(return_value=[1]))   # 검색 범위(자신 + 직계 하위) — 하위 없음
     return conn
 
 

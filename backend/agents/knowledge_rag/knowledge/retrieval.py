@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from core.database import get_conn, resolve_namespace_id
+from core.database import get_conn, namespace_scope_ids
 from core.config import settings
 from shared.embedding import embedding_service
 from trustkit.retrieval.bm25 import BM25Index
@@ -163,20 +163,21 @@ async def map_glossary_term(
     namespace: str, query_vec: list[float]
 ) -> Optional[GlossaryMatch]:
     async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-        if ns_id is None:
+        # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6)
+        ns_ids = await namespace_scope_ids(conn, namespace)
+        if not ns_ids:
             return None
         row = await conn.fetchrow(
             """
             SELECT term, description,
                    1 - (embedding <=> $2::vector) AS similarity
             FROM rag_glossary
-            WHERE namespace_id = $1
+            WHERE namespace_id = ANY($1::int[])
               AND embedding IS NOT NULL
             ORDER BY embedding <=> $2::vector
             LIMIT 1
             """,
-            ns_id, str(query_vec),
+            ns_ids, str(query_vec),
         )
     if row and float(row["similarity"]) >= get_thresholds()["glossary_min_similarity"]:
         return GlossaryMatch(
@@ -316,17 +317,19 @@ KEYWORD_RESCUE = os.environ.get("KNOWLEDGE_KEYWORD_RESCUE", "0") == "1"
 # 1자리"와 다른 조합이라 둘 다 켤 땐 게이트를 그 조합으로 다시 돌린다(리뷰 10/19). 비스트리밍·디버그 검색(service/chat/router.py)은 구제 없음.
 _RESCUE_POOL = 30          # 구제 후보를 고를 하이브리드 결과 깊이 — 이 안에 없는 키워드 전용 문서는 구제하지 않는다(점수를 모름)
 _KW_TTL = 600.0            # 키워드 색인 수명(지식 쓰기 경로가 많아 TTL로만 — 벡터 채널은 즉시 반영이라 구제만 최대 10분 늦음)
-_kw_cache: dict[int, BM25Index] = {}
+# 키 = 검색 범위 id 튜플(자신 + 직계 하위) — 영역 id 하나로 두면 하위가 생기거나 옮겨진 뒤에도 옛 문서 집합으로 점수를 낸다(트리, 10/22)
+_kw_cache: dict[tuple[int, ...], BM25Index] = {}
 
 
-async def _keyword_ids(conn, ns_id: int, query: str, k: int) -> list[int]:
-    idx = _kw_cache.get(ns_id)
+async def _keyword_ids(conn, ns_ids: list[int], query: str, k: int) -> list[int]:
+    key = tuple(ns_ids)
+    idx = _kw_cache.get(key)
     if not idx or time.time() - idx.built_at > _KW_TTL:
         rows = await conn.fetch(
             "SELECT id, coalesce(source_file, '') AS f, coalesce(array_to_string(heading_path, ' '), '') AS h, content FROM rag_knowledge "
-            "WHERE namespace_id = $1 AND (status IS NULL OR status = 'active')", ns_id)
+            "WHERE namespace_id = ANY($1::int[]) AND (status IS NULL OR status = 'active')", list(ns_ids))
         idx = BM25Index([(r["id"], f"{r['f']} {r['h']} {r['content']}") for r in rows])
-        _kw_cache[ns_id] = idx
+        _kw_cache[key] = idx
     return [i for i, _ in idx.score(query, k)]
 
 
@@ -336,12 +339,13 @@ async def search_knowledge(
     categories: Optional[list[str]] = None, keyword_rescue: bool = False,
 ) -> list[RetrievalResult]:
     async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-        if ns_id is None:
+        # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6). 하위가 없으면 [자신] — 예전과 같은 행 집합
+        ns_ids = await namespace_scope_ids(conn, namespace)
+        if not ns_ids:
             return []
         category_filter = "AND k.category = ANY($9)" if categories else ""
         params = [
-            str(query_vec), ns_id, enriched_query, w_vector, w_keyword, max(top_k, _RESCUE_POOL) if keyword_rescue else top_k,
+            str(query_vec), ns_ids, enriched_query, w_vector, w_keyword, max(top_k, _RESCUE_POOL) if keyword_rescue else top_k,
             _VECTOR_CANDIDATE_LIMIT,
             list(_KEYWORD_ONLY_CATEGORIES),
         ]
@@ -352,7 +356,7 @@ async def search_knowledge(
             WITH vector_scores AS (
                 SELECT id, 1 - (embedding <=> $1::vector) AS v_score
                 FROM rag_knowledge
-                WHERE namespace_id = $2 AND embedding IS NOT NULL
+                WHERE namespace_id = ANY($2::int[]) AND embedding IS NOT NULL
                   AND (status IS NULL OR status = 'active')
                 ORDER BY embedding <=> $1::vector
                 LIMIT $7
@@ -378,7 +382,7 @@ async def search_knowledge(
                     FROM (SELECT DISTINCT lexeme FROM unnest(to_tsvector('simple', policy_strip_ko($3)))) t
                     WHERE lexeme IS NOT NULL
                 ) q
-                WHERE k.namespace_id = $2
+                WHERE k.namespace_id = ANY($2::int[])
                   AND (k.status IS NULL OR k.status = 'active')
                   AND to_tsvector('simple', policy_strip_ko(k.content)) @@ q.tsq
             )
@@ -399,7 +403,7 @@ async def search_knowledge(
             JOIN ops_namespace n ON k.namespace_id = n.id
             LEFT JOIN vector_scores vs ON k.id = vs.id
             LEFT JOIN keyword_scores ks ON k.id = ks.id
-            WHERE k.namespace_id = $2
+            WHERE k.namespace_id = ANY($2::int[])
               AND (k.status IS NULL OR k.status = 'active')
               AND (vs.v_score IS NOT NULL OR ks.k_score IS NOT NULL)
               {category_filter}
@@ -410,7 +414,7 @@ async def search_knowledge(
         kw_ids: list[int] = []
         if keyword_rescue and rows:
             try:
-                kw_ids = await _keyword_ids(conn, ns_id, enriched_query, _RESCUE_POOL)
+                kw_ids = await _keyword_ids(conn, ns_ids, enriched_query, _RESCUE_POOL)
             except Exception:
                 logger.warning("지식 키워드 구제 실패 — 하이브리드 결과만 사용", exc_info=True)
 

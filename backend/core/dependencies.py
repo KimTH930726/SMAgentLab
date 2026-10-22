@@ -22,6 +22,11 @@ _bearer_scheme = HTTPBearer()
 _USER_CACHE_TTL = 5.0
 _user_cache: dict[int, tuple[float, dict]] = {}
 
+# 실효 담당 파트 — 하위 영역은 담당이 비어 있으면 상위 영역 담당을 물려받는다(트리 깊이 1단, category-removal-design §2-6).
+# 수정·조회·읽기 기록 3곳이 같이 쓴다. 여러 영역을 한 번에 보는 질의 기록 일괄 삭제(admin/router.py)도 같은 COALESCE·JOIN.
+EFFECTIVE_OWNER_SQL = """SELECT COALESCE(n.owner_part_id, p.owner_part_id) FROM ops_namespace n
+                         LEFT JOIN ops_namespace p ON p.id = n.parent_id WHERE n.name = $1"""
+
 
 def invalidate_user_cache(user_id: int) -> None:
     """사용자 정보 변경(비활성화/권한 변경 등) 시 캐시를 즉시 무효화."""
@@ -88,7 +93,7 @@ async def check_namespace_ownership(namespace: str, user: dict) -> None:
     예전엔 "공통"이라 누구나 고칠 수 있었다. 정책서 영역 대부분이 아직 담당 미지정이라 아무나 고치면 안 된다).
     """
     async with get_conn() as conn:
-        owner_part_id = await conn.fetchval("SELECT owner_part_id FROM ops_namespace WHERE name = $1", namespace)
+        owner_part_id = await conn.fetchval(EFFECTIVE_OWNER_SQL, namespace)   # 하위 영역은 상위 담당 상속
     reason = edit_denied_reason(owner_part_id, user)
     if reason:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
@@ -124,7 +129,7 @@ async def check_namespace_read(namespace: str, user: dict) -> None:
     if user["role"] == "viewer":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="조회 전용 계정은 이 화면을 볼 수 없습니다.")
     async with get_conn() as conn:
-        owner_part_id = await conn.fetchval("SELECT owner_part_id FROM ops_namespace WHERE name = $1", namespace)
+        owner_part_id = await conn.fetchval(EFFECTIVE_OWNER_SQL, namespace)   # 하위 영역은 상위 담당 상속
     if owner_part_id is not None and owner_part_id != user.get("part_id"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="이 업무 영역의 담당 파트가 아닙니다.")
 
@@ -139,9 +144,7 @@ async def log_cross_part_namespace_read(namespace: str, user: dict) -> None:
     if user["role"] == "admin":
         return
     async with get_conn() as conn:
-        owner_part_id = await conn.fetchval(
-            "SELECT owner_part_id FROM ops_namespace WHERE name = $1", namespace,
-        )
+        owner_part_id = await conn.fetchval(EFFECTIVE_OWNER_SQL, namespace)   # 하위 영역은 상위 담당 상속
     if owner_part_id is not None and owner_part_id != user["part_id"]:
         logger.warning(
             "[읽기ACL 미강제] user_id=%s(role=%s, part_id=%s)가 다른 파트 소유 네임스페이스 "
