@@ -108,7 +108,7 @@ async def load_v0_golden(conn) -> tuple[list[dict], dict, dict]:
 
 
 async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reuse: str = "", repeat: int = 1,
-                  golden_set: str = "v1", llm_choice: str = "system", concurrency: int = 1) -> None:
+                  golden_set: str = "v1", llm_choice: str = "system", concurrency: int = 1, only_ns: str = "") -> None:
     from core.database import init_pool, get_conn
     from shared.embedding import embedding_service
     from agents.knowledge_rag.agent import build_chat_context
@@ -131,24 +131,16 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
     else:
         golden = await track2._load_golden_set(track2._GOLDEN_SET_PATH, ns_ids)
         raw = {r["query"]: r for r in (json.loads(l) for l in track2._GOLDEN_SET_PATH.read_text(encoding="utf-8").splitlines() if l.strip())}
+    if only_ns:   # 영향권 측정(예: 영역 합치기 → 그 영역에서 묻는 문항만) — 뺀 수를 찍어 조용히 줄지 않게
+        keep = {x.strip() for x in only_ns.split(",") if x.strip()}
+        n_all = len(golden)
+        golden = [g for g in golden if g["namespace_name"] in keep]
+        print(f"[collect] --ns {sorted(keep)}: {n_all}문항 중 {len(golden)}문항만", flush=True)
     done = {row_key(r) for r in _read(out)}
     d = retrieval.get_search_defaults()
     # --prompt-file: 운영 프롬프트(DB)는 그대로 두고 후보 프롬프트로만 답을 받아 비교
     system_prompt = Path(prompt_file).read_text(encoding="utf-8") if prompt_file else await resolve_system_prompt()
-    if llm_choice == "local":
-        # 이 측정 프로세스 안에서만 로컬 LLM으로 — 서비스 중인 서버의 설정은 그대로(이번 주 게이트웨이 0, 10/20 사용자). 운영 답 모델과
-        # 달라 절대 수치는 참고용, 같은 모델끼리의 전후 비교에 쓴다.
-        import httpx
-        from core.config import settings
-        from service.llm.factory import switch_provider
-        base = (settings.openai_compat_base_url or "").rstrip("/")
-        model = settings.openai_compat_model
-        if not model:   # 모델 이름을 미리 정해 입력 해시(--reuse)에 들어가게 — 비우면 첫 호출 때 정해져 해시엔 빈 이름이 남았다(리뷰 L6)
-            async with httpx.AsyncClient(timeout=10) as c:
-                model = (await c.get(f"{base}/models")).json()["data"][0]["id"]
-        llm = switch_provider({"provider": "openai_compat", "openai_compat_model": model})
-    else:
-        llm = get_llm_provider()
+    llm = await local_llm() if llm_choice == "local" else get_llm_provider()
     if variant == "no_defs":
         glossary_terms.definitions_block = lambda matches: ""   # 이 실행에서만 용어 설명 빼기
     # --reuse: LLM에 들어갈 입력(variant·시스템 프롬프트·문맥)이 이전과 **같은** 문항만 이전 답을 쓴다 — 입력 해시(ctx_hash)로 확인.
@@ -235,6 +227,20 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
 
     await asyncio.gather(*(one(g) for g in todo))
     print(f"[collect:{variant}] 저장: {out}")
+
+
+async def local_llm():
+    """이 측정 프로세스 안에서만 로컬 LLM으로 답 생성 — 서비스 중인 서버의 설정은 그대로(이번 주 게이트웨이 0, 10/20 사용자).
+    운영 답 모델과 달라 절대 수치는 참고용, 같은 모델끼리의 전후 비교에 쓴다. eval_knowledge_answers도 같이 쓴다."""
+    import httpx
+    from core.config import settings
+    from service.llm.factory import switch_provider
+    base = (settings.openai_compat_base_url or "").rstrip("/")
+    model = settings.openai_compat_model
+    if not model:   # 모델 이름을 미리 정해 입력 해시(--reuse)에 들어가게 — 비우면 첫 호출 때 정해져 해시엔 빈 이름이 남았다(리뷰 L6)
+        async with httpx.AsyncClient(timeout=10) as c:
+            model = (await c.get(f"{base}/models")).json()["data"][0]["id"]
+    return switch_provider({"provider": "openai_compat", "openai_compat_model": model})
 
 
 # ── judge ──────────────────────────────────────────────────────────────────
@@ -726,6 +732,7 @@ def main() -> None:
     c.add_argument("--concurrency", type=int, default=1, help="문항 동시 처리 수(로컬 LLM 측정은 4 권장 — 게이트웨이는 한도 때문에 1)")
     c.add_argument("--golden", choices=["v1", "v0"], default="v1", help="v0 = 정책서 v0 골든셋(eval_out/golden_v0, 10/21 재출발)")
     c.add_argument("--llm", choices=["system", "local"], default="system", help="local = 이 측정에서만 로컬 LLM으로 답 생성(서버 설정은 그대로)")
+    c.add_argument("--ns", default="", help="쉼표로 구분한 영역 이름 — 그 영역에서 묻는 문항만(영향권 전후 측정)")
     c.add_argument("--reuse", default="", help="이전 answers 파일 — LLM 입력(질문·문맥·프롬프트·모델) 해시가 같고 오류가 아니던 문항만 그 답을 그대로(게이트웨이 호출 절약)")
     j = sub.add_parser("judge")
     j.add_argument("--in", dest="inp", required=True)
@@ -740,7 +747,7 @@ def main() -> None:
     r.add_argument("--notes", default="")
     a = ap.parse_args()
     if a.cmd == "collect":
-        asyncio.run(collect(a.variant, a.out, a.limit, a.prompt_file, a.reuse, a.repeat, a.golden, a.llm, a.concurrency))
+        asyncio.run(collect(a.variant, a.out, a.limit, a.prompt_file, a.reuse, a.repeat, a.golden, a.llm, a.concurrency, a.ns))
     elif a.cmd == "judge":
         asyncio.run(judge(a.inp, a.out, a.votes, a.concurrency))
     elif a.cmd == "review-html":

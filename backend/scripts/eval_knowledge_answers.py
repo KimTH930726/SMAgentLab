@@ -1,7 +1,7 @@
 """지식(컨플루언스) 답 정확도 — 채팅과 같은 경로로 답을 만들고, 로컬 LLM이 정답 조각과 대조해 채점한다.
 
 보안 규칙: 컨플루언스 원문·질문·답은 eval_out/(git 제외)에만 저장. 채점은 폐쇄망 로컬 LLM(JUDGE_LLM_BASE_URL). 화면 출력은 라벨 개수·
-정답률 구간·실패 유형 숫자만(원문·질문·답·채점 이유를 찍지 않는다). 답 생성은 운영 채팅과 같은 사내 게이트웨이(시스템 안 처리).
+정답률 구간·실패 유형 숫자만(원문·질문·답·채점 이유를 찍지 않는다). 답 생성은 운영 채팅과 같은 사내 게이트웨이(시스템 안 처리), `--llm local`이면 이 측정에서만 로컬 LLM.
 채점 기준은 정책 채점기 v3(scripts/eval_answers.py JUDGE_SYSTEM)과 같은 원칙 — 문서 조각용으로 문구만 바꿈. 규칙 판정(오류·거절·
 판정불가)도 eval_answers와 같게: 생성 실패·게이트웨이 거부·빈 답 → 오류, 답에 "관련 지식을 찾지 못했습니다" → 거절, 정답 조각이
 활성 상태로 하나도 없으면 → 판정불가(분모 제외). 채점 서버 장애는 라벨로 섞지 않고 중단 — 다시 실행하면 이어서(행 단위 저장).
@@ -114,6 +114,7 @@ async def main() -> int:
     ap.add_argument("--set", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--llm", choices=["system", "local"], default="system", help="local = 이 측정에서만 로컬 LLM으로 답 생성(서버 설정은 그대로)")
     a = ap.parse_args()
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -129,7 +130,11 @@ async def main() -> int:
             sorted({i for it in items for i in it["gold_ids"]}))}
     d = retrieval.get_search_defaults()
     sp = await resolve_system_prompt()
-    llm = get_llm_provider()
+    if a.llm == "local":
+        from eval_answers import local_llm   # scripts/가 실행 경로라 바로 import된다
+        llm = await local_llm()
+    else:
+        llm = get_llm_provider()
     today = datetime.date.today().isoformat()
     todo = [it for it in items if any((it["qid"], k) not in done for k in range(a.repeat))]
     print(f"문항 {len(items)}개 중 남은 {len(todo)}개 (이어하기 {len(done)}행)", flush=True)
@@ -166,7 +171,8 @@ async def main() -> int:
                     j = rule_label(err, ans, ref) or await judge(client, model, it["question"], ref, ans)
                     row = {"qid": it["qid"], "rep": k, "type": "knowledge", "cluster": it.get("cluster"), "question": it["question"],
                            "answer": ans, "error": err, "abstained": cc.abstain, "clarified": clarified, "gold_in_context": gic,
-                           "n_gold": len(it["gold_ids"]), "n_gold_active": n_active, "judge": j, "judge_rubric": RUBRIC, "judged_on": today}
+                           "n_gold": len(it["gold_ids"]), "n_gold_active": n_active, "judge": j, "judge_rubric": RUBRIC, "judged_on": today,
+                           "answer_llm": a.llm}   # 이어 하기에서 답 모델이 섞이지 않았는지 볼 수 있게(리뷰 L8)
                     with out.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 if n % 20 == 0:
