@@ -142,8 +142,8 @@ class TestRunManualCollectionCategoryGate:
     (2026-08-27, 명시적 피드백: "게이트가 나뉘어져있으면 안 된다 — 반복 게이트일
     때만 팀즈를 보내는 게 맞고, 형식은 기존 개별 VOC 카드에 반복 정보를 얹어라").
     클러스터가 없거나(단독 VOC) min_count 미만이거나 min_count의 배수가 아니면
-    카테고리·심각도와 무관하게 발송하지 않는다. category=not_it_related는 그
-    위에 얹히는 별도 필터로 남아있다(반복 패턴이 확정돼도 IT 무관이면 안 보냄).
+    카테고리·심각도와 무관하게 발송하지 않는다. 10/22부터 IT 무관 판정·관련도는 발송을 막지 않는다
+    (반복이면 보냄 — 반복 묶기가 먼저, 업무 지식은 해결책 찾기에만).
     """
 
     def _patch_common(self, monkeypatch, *, category: str, relevance_score: float = 0.9):
@@ -193,7 +193,9 @@ class TestRunManualCollectionCategoryGate:
         )
 
     @pytest.mark.asyncio
-    async def test_not_it_related_skips_teams_but_records_history(self, patch_db, monkeypatch):
+    async def test_not_it_related_repeated_still_notifies(self, patch_db, monkeypatch):
+        """10/22 사용자: "메일끼리 반복되면 일단 팀즈" — IT 무관 판정은 더는 발송을 막지 않고 카드 분류 표시로만 남는다.
+        (예전 테스트는 IT 무관이면 안 보냄을 확인했다 — 그 결과 이벤트 문의 반복이 한 번도 안 나갔다.)"""
         conn, _ = patch_db
         conn.fetchrow.return_value = {"id": 1}
         self._patch_common(monkeypatch, category="not_it_related")
@@ -203,12 +205,66 @@ class TestRunManualCollectionCategoryGate:
         )
 
         mailbox_result = result["mailboxes"][0]
-        assert mailbox_result["skipped_not_it"] == 1
-        assert mailbox_result["analyzed"] == 1
-        assert mailbox_result["notified"] == 0
-        pipeline.teams_notify.send_teams_notification.assert_not_called()
-        # record_analysis()가 실제로 INSERT를 실행했는지 — 이력에는 남아야 함
-        conn.fetchrow.assert_awaited()
+        assert mailbox_result["skipped_not_it"] == 0
+        assert mailbox_result["notified"] == 1
+        pipeline.teams_notify.send_teams_notification.assert_awaited_once()
+        conn.fetchrow.assert_awaited()   # 이력에도 남는다
+
+    @pytest.mark.asyncio
+    async def test_low_relevance_is_not_dropped_but_marked_no_knowledge(self, patch_db, monkeypatch):
+        """관련도(업무 지식과의 유사도)가 기준 미만이어도 버리지 않는다 — 분석·반복 묶기·발송까지 가고, 카드엔 "관련 지식 없음"(지식 공백 후보),
+        무관한 지식으로 만든 해결 방안·지식 링크는 비운다. 예전엔 여기서 건너뛰어 반복 묶기까지 못 갔다(9/22~10/22 팀즈 0)."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        self._patch_common(monkeypatch, category="uncertain", relevance_score=0.1)   # 기준 0.3 미만
+        pipeline.analyze_email.return_value = {
+            "category": "uncertain", "severity": "medium", "mismatch_flagged": False,
+            "knowledge_ref_ids": [7, 8], "knowledge_refs": [{"id": 7, "title": "무관한 문서", "score": 0.72}],
+            "resolution_draft": "무관한 지식으로 만든 초안", "reasoning": "이벤트 스티커 지급 문의", "mapped_term": None,
+        }
+        pipeline.check_relevance.return_value = SimpleNamespace(   # 관련도는 미달인데 근거 목록은 찬 실제 모양(리뷰 M1)
+            top_score=0.1, mapped_term=None, results=["무관한 근거"], context="무관한 문맥", query_vec=[0.1, 0.2],
+        )
+        monkeypatch.setattr(pipeline.dataclasses, "replace", lambda obj, **kw: SimpleNamespace(**{**vars(obj), **kw}))
+
+        result = await pipeline.run_manual_collection(
+            "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
+        )
+
+        mailbox_result = result["mailboxes"][0]
+        assert mailbox_result["skipped_low_relevance"] == 0
+        assert mailbox_result["notified"] == 1
+        pipeline.analyze_email.assert_awaited_once()
+        pipeline.pattern_detection.detect_and_update_cluster.assert_awaited_once()
+        build_kwargs = pipeline.teams_notify.build_teams_message.call_args.kwargs
+        assert build_kwargs["pattern_info"]["knowledge_found"] is False
+        assert build_kwargs["analysis"]["resolution_draft"] is None
+        assert build_kwargs["analysis"]["knowledge_ref_ids"] == []
+        assert build_kwargs["analysis"]["knowledge_refs"] == []   # 카드 "참고 지식"에 무관한 문서가 안 나감
+        sent_relevance = pipeline.analyze_email.await_args.kwargs["precomputed"]
+        assert sent_relevance.results == [] and sent_relevance.context == ""   # LLM 문맥에도 무관한 근거를 안 넣음
+        # 저장되는 분석에서도 비워져 있어야 한다(이력 화면이 무관한 지식을 근거처럼 보여 주지 않게) — INSERT 인자 확인
+        args = conn.fetchrow.await_args.args
+        assert args[12] == [] and args[13] is None   # knowledge_ref_ids, resolution_draft
+
+    @pytest.mark.asyncio
+    async def test_high_relevance_keeps_draft_and_marks_knowledge_found(self, patch_db, monkeypatch):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        self._patch_common(monkeypatch, category="system_error", relevance_score=0.9)
+        pipeline.analyze_email.return_value = {
+            "category": "system_error", "severity": "high", "mismatch_flagged": False,
+            "knowledge_ref_ids": [7], "knowledge_refs": [], "resolution_draft": "관련 지식 기반 초안",
+            "reasoning": "x", "mapped_term": None,
+        }
+
+        await pipeline.run_manual_collection(
+            "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
+        )
+
+        build_kwargs = pipeline.teams_notify.build_teams_message.call_args.kwargs
+        assert build_kwargs["pattern_info"]["knowledge_found"] is True
+        assert build_kwargs["analysis"]["resolution_draft"] == "관련 지식 기반 초안"
 
     @pytest.mark.asyncio
     async def test_system_error_still_notifies(self, patch_db, monkeypatch):
@@ -255,27 +311,6 @@ class TestRunManualCollectionCategoryGate:
         assert build_kwargs["pattern_info"]["member_count"] == 3
         assert build_kwargs["pattern_info"]["min_count"] == 3
         assert build_kwargs["pattern_info"]["nth_detection"] == 1
-
-    @pytest.mark.asyncio
-    async def test_not_it_related_with_pattern_trigger_sends_nothing(self, patch_db, monkeypatch):
-        """반복 패턴이 감지돼도 카테고리가 IT 무관이면 발송 자체를 안 한다 —
-        "IT 유관한거로만 보내라"는 피드백 검증."""
-        conn, _ = patch_db
-        conn.fetchrow.return_value = {"id": 1}
-        self._patch_common(monkeypatch, category="not_it_related")
-        monkeypatch.setattr(
-            pipeline.pattern_detection, "detect_and_update_cluster",
-            AsyncMock(return_value={"cluster_id": 55, "member_count": 3}),
-        )
-        monkeypatch.setattr(pipeline.pattern_detection, "get_cluster_coverage", AsyncMock())
-
-        result = await pipeline.run_manual_collection(
-            "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
-        )
-
-        assert result["mailboxes"][0]["skipped_not_it"] == 1
-        pipeline.teams_notify.send_teams_notification.assert_not_called()
-        pipeline.pattern_detection.get_cluster_coverage.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_below_min_count_suppresses_teams_send(self, patch_db, monkeypatch):

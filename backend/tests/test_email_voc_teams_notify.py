@@ -222,6 +222,25 @@ class TestPatternInfoInTeamsMessage:
         assert "3건마다 감지" in text
         assert "1번째 감지" in text
 
+    def test_no_knowledge_line_only_when_not_found_and_not_covered(self):
+        """10/22: 반복인데 업무 지식에 관련 내용이 없으면 "관련 지식 없음 — 지식 공백 후보"를 카드에 — 등록된 반복 유형 지식(coverage)이
+        있으면 그게 답이므로 안 띄운다, 관련 지식이 있으면(knowledge_found True) 안 띄운다, 옛 호출(칸 없음)도 안 띄운다."""
+        def card(knowledge_found, covered):
+            pi = {"member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
+                  "coverage": {"covered": covered, "snippet": "기등록 답" if covered else None}}
+            if knowledge_found is not None:
+                pi["knowledge_found"] = knowledge_found
+            return teams_notify.build_teams_message(subject="s", sender="s@example.com", part="테스트",
+                                                    analysis=_base_analysis(category="uncertain", resolution_draft=None),
+                                                    pattern_info=pi)["text"]
+        assert "관련 지식 없음" in card(False, False)
+        assert "관련 지식 없음" not in card(False, True)
+        assert "관련 지식 없음" not in card(True, False)
+        assert "관련 지식 없음" not in card(None, False)
+        # 해결 방안 칸도 "관련 지식 없음"으로 — 분류 탓·분석 실패로 설명하지 않는다(리뷰 L2)
+        no_kn = card(False, False)
+        assert "이 유형의 답을 지식으로 등록하면" in no_kn and "해당 없음" not in no_kn and "생성되지 않음" not in no_kn
+
     def test_nth_detection_reflects_multiple(self):
         # 6건째(min_count=3의 배수) — "3건마다 감지 · 2번째 감지"로 몇 번째 배수
         # 지점인지 명확히 보여야 한다(2026-08-27, 원본 건수만으론 기준이 안 보임).

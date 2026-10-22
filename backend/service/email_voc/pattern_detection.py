@@ -207,7 +207,7 @@ async def detect_and_update_cluster(
             cluster = await conn.fetchrow(
                 """
                 UPDATE ops_voc_cluster
-                SET member_count = member_count + 1, last_seen_at = $2, representative_embedding = $3::vector
+                SET member_count = member_count + 1, last_seen_at = GREATEST(last_seen_at, $2), representative_embedding = $3::vector
                 WHERE id = $1
                 RETURNING id, member_count, notified_at, representative_subject
                 """,

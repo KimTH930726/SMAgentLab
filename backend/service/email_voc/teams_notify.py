@@ -127,6 +127,9 @@ def build_teams_message(
             f'유사한 VOC {pattern_info["member_count"]}건째 발생 '
             f'({pattern_info["min_count"]}건마다 감지 · {pattern_info["nth_detection"]}번째 감지)'
         )
+        if pattern_info.get("knowledge_found") is False and not pattern_info.get("coverage", {}).get("covered"):
+            # 반복되는데 업무 지식에 관련 내용이 없음 = 지식 공백 후보(10/22) — 담당자가 지식을 만들 차례라는 신호
+            detail_items.append("📭 관련 지식 없음 — 지식 공백 후보(이 유형의 답을 지식으로 등록해 주세요)")
     if urgent and oncall_contact_name:
         detail_items.append(f"온콜 담당자: {_esc(oncall_contact_name)} — 필요 시 직접 전화 부탁드립니다")
     detail_list = "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
@@ -160,6 +163,9 @@ def build_teams_message(
         sections.append(f"{_section_title('해결 방안')}<blockquote>{_esc(resolution_draft)}</blockquote>")
     elif pattern_snippet:
         sections.append(f"{_section_title('해결 방안(반복 유형 기등록 지식)')}<blockquote>{_esc(pattern_snippet)}</blockquote>")
+    elif pattern_info and pattern_info.get("knowledge_found") is False:
+        # 관련 지식이 없어 초안을 비운 경우 — 분류 탓("해당 없음")이나 분석 실패("생성되지 않음")로 설명하지 않는다(리뷰 L2)
+        sections.append(f'{_section_title("해결 방안")}<blockquote>관련 지식 없음 — 이 유형의 답을 지식으로 등록하면 다음부터 함께 나갑니다.</blockquote>')
     elif category != "system_error":
         # 심각도 팔레트(low/medium/high/urgent) 색상과 겹치지 않도록 별도 색상
         # 없이 순수 텍스트로만 표시 — 색상을 넣으면 무관한 심각도 신호로 오인될 수 있다.

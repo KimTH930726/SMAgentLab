@@ -746,11 +746,11 @@ export function VocEmailPanel() {
 
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
               <div>
-                <h4 className="text-xs font-semibold text-slate-300">관련성 필터</h4>
-                <p className="text-[11px] text-slate-500 mt-0.5">우리 지식과 무관한 메일을 LLM 호출 전에 걸러냄</p>
+                <h4 className="text-xs font-semibold text-slate-300">관련 지식 표시</h4>
+                <p className="text-[11px] text-slate-500 mt-0.5">메일을 거르지 않음 — 업무 지식과 맞으면 해결 방안을 붙이고, 아니면 "관련 지식 없음"</p>
               </div>
               <NumberSetting
-                label="관련지식 임계치(0~1)" hint="등록된 지식과의 최고 유사도가 이 값 미만이면 LLM 분석·Teams 발송 없이 건너뜁니다 — 높이면 노이즈↓ 놓치는 것↑"
+                label="관련 지식 기준(0~1)" hint="업무 지식과의 최고 유사도가 이 값 이상이면 해결 방안·지식을 붙이고, 미만이면 '관련 지식 없음(지식 공백 후보)'으로 표시합니다. 메일을 거르지는 않습니다 — 반복(같은 유형 N건)이면 팀즈로 보냅니다"
                 value={settings?.email_relevance_min_score ?? 0.35} min={0} max={1} step={0.05}
                 onCommit={(v) => settingsMutation.mutate({ email_relevance_min_score: v })}
               />

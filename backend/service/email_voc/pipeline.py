@@ -7,6 +7,7 @@
 전체가 죽지 않게 하기 위함.
 """
 import asyncio
+import dataclasses
 import logging
 from datetime import date, datetime, time, timezone
 from typing import Optional
@@ -42,9 +43,8 @@ async def record_analysis(
     저장하지 않고 None을 반환한다 — §9의 재조회 윈도우 겹침에 대한 중복 방지.
 
     status: 기본은 'analyzed'(이후 mark_notify_result가 notified/notify_failed로 갱신).
-    관련지식 임계치 미달로 LLM을 태우지 않고 건너뛴 경우 'skipped_relevance'로 직접
-    저장한다(컬럼이 VARCHAR(20)이라 'skipped_low_relevance'는 21자로 안 들어감 —
-    실제로 겪고 줄임) — 이 경우 category/severity 등은 None으로 들어온다.
+    'skipped_relevance'는 10/22 이전 규칙(관련도 입구 필터)으로 건너뛴 옛 기록에만 있다 — 지금 파이프라인은 쓰지 않고,
+    scripts/voc_reprocess.py가 그 기록을 새 순서로 다시 처리한다.
 
     embedding: 반복 VOC 패턴 탐지(pattern_detection.py)가 과거 VOC와 비교할 때 쓰는
     벡터. LLM이 뽑은 정규화 요약(issue_signature)이 있으면 그걸 새로 임베딩한 값,
@@ -117,6 +117,96 @@ async def mark_notify_result(analysis_id: int, ok: bool, error: Optional[str]) -
         )
 
 
+async def analyze_message(namespace: str, part: Optional[str], msg: dict, relevance_min_score: float) -> tuple[dict, list[float], bool]:
+    """메일 1건 분석 — (분석 결과, 반복 묶기용 임베딩, 관련 지식 있음). 파이프라인과 재처리(scripts/voc_reprocess.py)가 같이 쓴다.
+
+    순서(10/22 사용자): **VOC끼리 반복 묶기가 먼저**, 업무 지식은 해결책 찾기에만 쓴다. 예전엔 "이 메일함 업무 지식과 비슷한가"(관련도)를
+    입구 필터로 써서, 업무 지식에 없는 주제(예: 이벤트 문의 20여 건)는 반복 묶기까지 가지도 못하고 버려졌다(9/22~10/22 팀즈 발송 0).
+    이제 관련도는 "관련 지식 있음/없음" 표시 — 없으면 지식 공백 후보로 카드에 적고, 무관한 지식으로 만든 해결 방안 초안은 비운다.
+    """
+    relevance = await check_relevance(namespace, msg["subject"], msg["body"])
+    knowledge_found = relevance.top_score >= relevance_min_score
+    if not knowledge_found:
+        # 관련 지식이 없으면 LLM에도 빈 근거로 — 무관한 지식이 문맥·카드 "참고 지식"에 끼지 않게(리뷰 M1: 근거 고르는 점수는 부풀려져
+        # 관련도 미달 메일도 근거 목록이 거의 늘 찼다) + 토큰 절약. 반복 묶기용 원문 벡터(query_vec)는 그대로 쓴다.
+        relevance = dataclasses.replace(relevance, results=[], context="")
+    analysis = await analyze_email(namespace, msg["subject"], msg["body"], part=part, precomputed=relevance)
+    if not knowledge_found:
+        analysis = {**analysis, "knowledge_ref_ids": [], "knowledge_refs": [], "resolution_draft": None}
+    # 반복 묶기는 원문 임베딩 대신 LLM이 뽑은 정규화 요약(issue_signature)을 임베딩해 쓴다(2026-08-27) — 같은 유형이어도 발신자마다
+    # 표현이 달라 원문끼리는 기준을 못 넘는 게 실측 확인됐다("로그인이 안돼요" vs "앱 접속이 안됩니다"). 요약이 없으면(LLM 실패 등) 원문으로 폴백.
+    issue_signature = analysis.get("issue_signature")
+    pattern_embedding = await embedding_service.embed(issue_signature) if issue_signature else relevance.query_vec
+    return analysis, pattern_embedding, knowledge_found
+
+
+async def cluster_and_notify(ns_id: int, routing: dict, msg: dict, analysis_id: int, analysis: dict,
+                             pattern_embedding: list[float], knowledge_found: bool, settings: dict, send: bool = True) -> str:
+    """저장된 분석 1건을 반복 묶음에 넣고, 반복 조건(3·6·9건째)이면 팀즈로 보낸다. 결과 종류 문자열을 돌려준다.
+    send=False면 묶기만 하고 발송할 자리면 "would_notify" — 재처리가 밀린 메일을 다 묶은 뒤 묶음당 1건만 보낼 때."""
+    # 반복 패턴 "탐지·집계"는 category와 무관하게 항상 수행한다 —
+    # not_it_related류도 클러스터 멤버로는 계속 쌓여야 VOC 통계 화면에서
+    # 전체 그림(유형 분포·클러스터 크기)이 정확하다. LLM은 이미 위에서
+    # 호출했으니(issue_signature 생성) 추가 호출 없음 — 임베딩 1회
+    # (로컬, 무료)만 더 들 뿐 pgvector 코사인 비교 자체는 비용 없음.
+    occurred_at = datetime.fromisoformat(msg["received_at"].replace("Z", "+00:00")) \
+        if msg.get("received_at") else datetime.now(timezone.utc)
+    pattern = await pattern_detection.detect_and_update_cluster(
+        ns_id, analysis_id, msg["subject"], pattern_embedding, occurred_at, settings,
+    )
+
+    # "IT 무관" 판정은 더 이상 발송을 막지 않는다(10/22 사용자: 반복되면 일단 팀즈) — 카드의 분류 표시로만 남는다.
+    # 단독 메일은 아래 반복 조건 때문에 여전히 안 나간다(8/27 "반복일 때만" 원칙 유지).
+
+    # 발송 여부 자체를 "반복 패턴 확정 여부" 하나로 완전히 통합했다
+    # (2026-08-27, 명시적 피드백: "게이트가 나뉘어져있으면 안 된다 —
+    # 반복 게이트일 때만 팀즈를 보내는 게 맞고, 보낼 때 형식은 기존
+    # 개별 VOC 카드 그대로에 반복 정보만 추가하라"). 클러스터가 아예
+    # 없는(반복 아닌) 단독 VOC는 이제 카테고리·심각도와 무관하게 발송
+    # 자체를 하지 않는다 — §10 "심각도 무관 항상 발송"은 폐기됐다.
+    # 클러스터가 있어도 min_count 채우기 전엔 발송 안 함, 채운 뒤로는
+    # min_count의 배수(예: 3/6/9건째)에서만 발송한다. 카드 포맷은 예전
+    # 개별 VOC 카드(build_teams_message)를 그대로 쓰되 pattern_info로
+    # 반복 정보를 그 안에 얹는다 — 형식 자체를 새로 안 만든다.
+    if not pattern:
+        return "skipped_no_pattern"
+    min_count = settings["email_pattern_min_count"]
+    member_count = pattern["member_count"]
+    if member_count < min_count:
+        return "skipped_pattern_building"
+    if member_count % min_count != 0:
+        return "skipped_pattern_repeat"
+    if not send:
+        return "would_notify"
+    return await notify_cluster(ns_id, routing, msg, analysis_id, analysis, pattern["cluster_id"], member_count, knowledge_found, settings)
+
+
+async def notify_cluster(ns_id: int, routing: dict, msg: dict, analysis_id: int, analysis: dict, cluster_id: int,
+                         member_count: int, knowledge_found: bool, settings: dict) -> str:
+    """반복 묶음 하나를 팀즈 카드 1건으로 — 카드 포맷은 기존 개별 VOC 알림(build_teams_message) 그대로, 그 안에 반복 정보를 얹는다.
+    파이프라인(배수 지점마다)과 재처리(밀린 메일은 묶음당 최종 건수로 1건)가 같이 쓴다."""
+    min_count = settings["email_pattern_min_count"]
+    pattern_info = {
+        "member_count": member_count,
+        "window_days": settings["email_pattern_window_days"],
+        "min_count": min_count,
+        "nth_detection": member_count // min_count,
+        "coverage": await pattern_detection.get_cluster_coverage(ns_id, cluster_id),
+        "knowledge_found": knowledge_found,
+    }
+    if not routing.get("teams_webhook_url"):
+        return "analyzed"
+    message = teams_notify.build_teams_message(
+        subject=msg["subject"], sender=msg["sender"], part=routing["part"],
+        body=_strip_forwarded_chain(msg["body"]),
+        analysis=analysis, oncall_contact_name=routing.get("oncall_contact_name"),
+        pattern_info=pattern_info,
+    )
+    ok, error = await teams_notify.send_teams_notification(routing["teams_webhook_url"], message)
+    await mark_notify_result(analysis_id, ok, error)
+    return "notified" if ok else "notify_failed"
+
+
 async def run_manual_collection(
     namespace: str, date_from: date, date_to: date, *,
     credentials: Optional[dict] = None, access_token: Optional[str] = None,
@@ -168,6 +258,7 @@ async def run_manual_collection(
         result = {
             "mailbox_upn": routing["mailbox_upn"], "part": routing["part"],
             "ok": False, "error": None, "fetched": 0, "analyzed": 0,
+            # 관련도·IT 무관으로 건너뛰는 일은 10/22부터 없다 — 두 칸은 수집 이력 표·DB 칸(옛 기록)과 모양을 맞추려 0으로 남긴다
             "skipped_duplicate": 0, "skipped_low_relevance": 0, "skipped_not_it": 0,
             "skipped_no_pattern": 0, "skipped_pattern_building": 0, "skipped_pattern_repeat": 0,
             "notified": 0, "notify_failed": 0,
@@ -212,45 +303,8 @@ async def run_manual_collection(
 
         async def _process_one(msg: dict) -> str:
             async with semaphore:
-                # §9 관련지식 사전 필터 — 모든 메일을 무조건 LLM에 태우면 VOC와 무관한
-                # 메일(스팸/사내공지/CC참조 등)까지 비용을 쓰고 Teams 알림 노이즈가
-                # 생긴다. 등록된 지식과의 최고 유사도가 임계치 미만이면 LLM 호출과
-                # Teams 발송을 건너뛰고 이력에만 기록한다.
-                relevance = await check_relevance(namespace, msg["subject"], msg["body"])
-                if relevance.top_score < relevance_min_score:
-                    saved = await record_analysis(
-                        ns_id, routing["id"], msg["id"], routing["mailbox_upn"],
-                        msg["subject"], msg["sender"], msg["received_at"], msg["body"],
-                        {
-                            "category": None, "severity": None, "mismatch_flagged": False,
-                            "knowledge_ref_ids": [], "resolution_draft": None,
-                            "reasoning": (
-                                f"관련 지식 최고 유사도({relevance.top_score:.2f})가 "
-                                f"임계치({relevance_min_score:.2f}) 미만이라 분석을 건너뜀"
-                            ),
-                        },
-                        status="skipped_relevance",  # ops_email_analysis.status는 VARCHAR(20) — 20자 제한
-                    )
-                    return "skipped_low_relevance" if saved else "skipped_duplicate"
-
-                analysis = await analyze_email(
-                    namespace, msg["subject"], msg["body"], part=routing["part"],
-                    precomputed=relevance,
-                )
-
-                # 반복 패턴 비교는 원문 임베딩(relevance.query_vec) 대신 LLM이 뽑은
-                # 정규화 요약(issue_signature)을 새로 임베딩해서 쓴다(2026-08-27) —
-                # 같은 유형이어도 발신자마다 표현이 달라 원문끼리는 코사인 임계치
-                # (0.85)를 못 넘는 게 실측 확인됐다("로그인이 안돼요" vs "앱 접속이
-                # 안됩니다"). LLM이 정규화한 짧은 문구끼리는 훨씬 가깝게 임베딩돼
-                # 같은 유형으로 묶인다. issue_signature가 없으면(LLM 호출 실패 등)
-                # 원문 임베딩으로 안전하게 폴백 — 클러스터링이 아예 안 되는 것보다
-                # 낫다. 짧은 문구라 embed_long()의 청킹은 불필요, embed()로 충분.
-                issue_signature = analysis.get("issue_signature")
-                pattern_embedding = (
-                    await embedding_service.embed(issue_signature)
-                    if issue_signature else relevance.query_vec
-                )
+                analysis, pattern_embedding, knowledge_found = await analyze_message(
+                    namespace, routing["part"], msg, relevance_min_score)
 
                 saved = await record_analysis(
                     ns_id, routing["id"], msg["id"], routing["mailbox_upn"],
@@ -260,66 +314,7 @@ async def run_manual_collection(
                 if saved is None:
                     return "skipped_duplicate"
 
-                # 반복 패턴 "탐지·집계"는 category와 무관하게 항상 수행한다 —
-                # not_it_related류도 클러스터 멤버로는 계속 쌓여야 VOC 통계 화면에서
-                # 전체 그림(유형 분포·클러스터 크기)이 정확하다. LLM은 이미 위에서
-                # 호출했으니(issue_signature 생성) 추가 호출 없음 — 임베딩 1회
-                # (로컬, 무료)만 더 들 뿐 pgvector 코사인 비교 자체는 비용 없음.
-                occurred_at = datetime.fromisoformat(msg["received_at"].replace("Z", "+00:00")) \
-                    if msg.get("received_at") else datetime.now(timezone.utc)
-                pattern = await pattern_detection.detect_and_update_cluster(
-                    ns_id, saved["id"], msg["subject"], pattern_embedding, occurred_at, settings,
-                )
-
-                # 관련지식 임계치를 넘긴 메일이라도, LLM이 "system 문제가 아니라 그냥
-                # 상품/배송 자체에 대한 CS성 불만"이라고 판단하면(not_it_related) IT
-                # 담당 채널에 알림을 보낼 이유가 없다 — 실사용 중 "IT와 상관없는 불만이
-                # 너무 많이 온다"는 피드백. 이력에는 남기되(위 record_analysis) 알림만 생략.
-                # 반복 패턴 여부와 무관하게 이 게이트 하나로 전부 걸러진다 — "찢지 말고
-                # 하나의 흐름으로" 피드백에 따라 발송 여부 판단 지점을 하나로 합쳤다.
-                if analysis["category"] == "not_it_related":
-                    return "skipped_not_it"
-
-                # 발송 여부 자체를 "반복 패턴 확정 여부" 하나로 완전히 통합했다
-                # (2026-08-27, 명시적 피드백: "게이트가 나뉘어져있으면 안 된다 —
-                # 반복 게이트일 때만 팀즈를 보내는 게 맞고, 보낼 때 형식은 기존
-                # 개별 VOC 카드 그대로에 반복 정보만 추가하라"). 클러스터가 아예
-                # 없는(반복 아닌) 단독 VOC는 이제 카테고리·심각도와 무관하게 발송
-                # 자체를 하지 않는다 — §10 "심각도 무관 항상 발송"은 폐기됐다.
-                # 클러스터가 있어도 min_count 채우기 전엔 발송 안 함, 채운 뒤로는
-                # min_count의 배수(예: 3/6/9건째)에서만 발송한다. 카드 포맷은 예전
-                # 개별 VOC 카드(build_teams_message)를 그대로 쓰되 pattern_info로
-                # 반복 정보를 그 안에 얹는다 — 형식 자체를 새로 안 만든다.
-                if not pattern:
-                    return "skipped_no_pattern"
-                min_count = settings["email_pattern_min_count"]
-                member_count = pattern["member_count"]
-                if member_count < min_count:
-                    return "skipped_pattern_building"
-                if member_count % min_count != 0:
-                    return "skipped_pattern_repeat"
-                coverage = await pattern_detection.get_cluster_coverage(ns_id, pattern["cluster_id"])
-                pattern_info = {
-                    "member_count": member_count,
-                    "window_days": settings["email_pattern_window_days"],
-                    "min_count": min_count,
-                    "nth_detection": member_count // min_count,
-                    "coverage": coverage,
-                }
-
-                # 카드 포맷은 기존 개별 VOC 알림(build_teams_message) 그대로 —
-                # 반복 패턴이 확정된 건에만, 그 형식 안에 반복 정보를 함께 실어 보낸다.
-                if routing.get("teams_webhook_url"):
-                    message = teams_notify.build_teams_message(
-                        subject=msg["subject"], sender=msg["sender"], part=routing["part"],
-                        body=_strip_forwarded_chain(msg["body"]),
-                        analysis=analysis, oncall_contact_name=routing.get("oncall_contact_name"),
-                        pattern_info=pattern_info,
-                    )
-                    ok, error = await teams_notify.send_teams_notification(routing["teams_webhook_url"], message)
-                    await mark_notify_result(saved["id"], ok, error)
-                    return "notified" if ok else "notify_failed"
-                return "analyzed"
+                return await cluster_and_notify(ns_id, routing, msg, saved["id"], analysis, pattern_embedding, knowledge_found, settings)
 
         outcomes = await asyncio.gather(*(_process_one(m) for m in messages), return_exceptions=True)
         for outcome in outcomes:
@@ -328,11 +323,6 @@ async def run_manual_collection(
                 continue
             if outcome == "skipped_duplicate":
                 result["skipped_duplicate"] += 1
-            elif outcome == "skipped_low_relevance":
-                result["skipped_low_relevance"] += 1
-            elif outcome == "skipped_not_it":
-                result["analyzed"] += 1
-                result["skipped_not_it"] += 1
             elif outcome == "skipped_no_pattern":
                 result["analyzed"] += 1
                 result["skipped_no_pattern"] += 1
