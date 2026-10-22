@@ -12,6 +12,7 @@ const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'p
   { encoding: 'utf-8' }).trim();
 
 test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB 집계와 일치, 옛 해결·미해결 없음', async ({ page }) => {
+  test.setTimeout(60_000);   // DB 집계(docker exec 여러 번)만으로 평소 20초 — 기본 30초면 부하 때 로그인 단계에서 시간 초과(10/22)
   const id = psql(`SELECT id FROM ops_namespace WHERE name = '${NAMESPACE}'`);
   const q = (where: string) => psql(`SELECT COUNT(*) FROM ops_query_log WHERE namespace_id = ${id} AND ${where}`);
   const expected = {

@@ -257,6 +257,13 @@ test('같은 원본 다시 등록 — 사람이 고친 조각이 있으면 사�
     expect(after.some((k) => first.some((f) => f.id === k.id))).toBeFalsy();
     expect(after.some((k) => k.content.includes('사람이 고친'))).toBeFalsy();
   } finally {
-    for (const id of cleanup) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
+    // 중간에 실패해도 이 테스트가 만든 조각을 다 지운다 — 처음 만든 것만 지우면 남은 조각이 다음 실행에서 "유사 지식"으로 잡혀
+    // 연달아 실패했다(10/22). 사용 중·승인 대기 둘 다 같은 표시 글자로 다시 찾는다.
+    const pendingRes = await page.request.get(`/api/knowledge?namespace=${encodeURIComponent(NAMESPACE)}&status=pending_review`,
+      { headers: authHeader }).then((r) => r.json()).catch(() => []);
+    const pending = (Array.isArray(pendingRes) ? pendingRes as Array<{ id: number; content: string }> : [])
+      .filter((k) => k.content.includes('재등록 확인 테스트') || k.content.includes(marker));
+    const left = (await listMine().catch(() => [])).concat(pending).map((k) => k.id);
+    for (const id of new Set(cleanup.concat(left))) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
   }
 });
