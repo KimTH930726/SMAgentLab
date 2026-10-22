@@ -168,3 +168,35 @@ class TestSnippet:
 
     def test_collapses_whitespace(self):
         assert service._snippet("여러   줄\n바꿈\n\n텍스트") == "여러 줄 바꿈 텍스트"
+
+
+class TestIssueSignaturePrompt:
+    """반복 묶기용 요약 지침(10/22, #81) — 옛 "핵심 이슈" 지침은 주제 수준 요약이라 같은 주제의 다른 문제가 한 묶음이 됐다."""
+
+    def _migrate(self, text):
+        for old, new in service.VOC_PROMPT_MIGRATIONS:
+            text = text.replace(old, new)
+        return text
+
+    def test_default_prompt_has_new_line_only(self):
+        p = service._DEFAULT_ANALYSIS_PROMPT
+        assert p.count(service.ISSUE_SIGNATURE_LINE) == 1
+        assert service._OLD_SIGNATURE_LINE not in p
+        assert "대상 기능 + 증상" in p
+
+    def test_old_db_prompt_migrates_to_default_idempotently(self):
+        """운영 DB(옛 시드, CRLF 포함) → #81과 같은 치환 → 코드 기본 문구와 정확히 같고, 다시 돌려도 그대로."""
+        old_db = service._DEFAULT_ANALYSIS_PROMPT.replace(service.ISSUE_SIGNATURE_LINE, service._OLD_SIGNATURE_LINE)
+        once = self._migrate(old_db.replace("\n", "\r\n").replace("\r\n", "\n"))
+        assert once == service._DEFAULT_ANALYSIS_PROMPT
+        assert self._migrate(once) == once
+
+    def test_admin_edited_prompt_untouched(self):
+        edited = service._DEFAULT_ANALYSIS_PROMPT.replace(service.ISSUE_SIGNATURE_LINE, "6. issue_signature: 관리자가 고친 지침")
+        assert self._migrate(edited) == edited
+
+    def test_template_still_formats(self):
+        """새 줄에 중괄호가 섞이면 .format()이 깨져 모든 메일 분석이 실패한다."""
+        assert "{" not in service.ISSUE_SIGNATURE_LINE and "}" not in service.ISSUE_SIGNATURE_LINE
+        out = service._DEFAULT_ANALYSIS_PROMPT.format(subject="s", body="b", part="p", context="c")
+        assert service.ISSUE_SIGNATURE_LINE in out

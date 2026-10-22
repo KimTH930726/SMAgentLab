@@ -762,13 +762,13 @@ export function VocEmailPanel() {
                 <p className="text-[11px] text-slate-500 mt-0.5">Teams 발송 여부 자체가 이 조건으로 결정됩니다 — 아래 최소 건수를 채우기 전엔 알림이 나가지 않고, 채운 뒤로는 그 배수(3/6/9건째 등)에서만 발송됩니다</p>
               </div>
               <NumberSetting
-                label="유사도(0~1)" hint="과거 VOC와 이 유사도 이상이면 같은 반복 유형으로 묶습니다 — 실 데이터로 검증한 기본값 0.85"
-                value={settings?.email_pattern_similarity_threshold ?? 0.85} min={0} max={1} step={0.05}
+                label="유사도(0~1)" hint="과거 VOC와 이 유사도 이상이면 같은 반복 유형으로 묶습니다 — 기본값 0.8(10/22 대상 기능·증상 요약 기준 실측)"
+                value={settings?.email_pattern_similarity_threshold ?? 0.8} min={0} max={1} step={0.05}
                 onCommit={(v) => settingsMutation.mutate({ email_pattern_similarity_threshold: v })}
               />
               <NumberSetting
                 label="판정 기간(일)" hint="이 기간 안에 발생한 VOC끼리만 반복 여부를 비교합니다"
-                value={settings?.email_pattern_window_days ?? 7} min={1}
+                value={settings?.email_pattern_window_days ?? 3} min={1}
                 onCommit={(v) => settingsMutation.mutate({ email_pattern_window_days: v })}
               />
               <NumberSetting

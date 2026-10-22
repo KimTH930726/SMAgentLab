@@ -14,6 +14,7 @@ from core.database import init_pool, close_pool, get_conn
 from core.security import hash_password
 from service.chat.helpers import NO_KNOWLEDGE_MARKER
 from service.llm.base import CHAT_SYSTEM_PROMPT
+from service.email_voc.service import ISSUE_SIGNATURE_LINE, VOC_PROMPT_MIGRATIONS
 from shared.embedding import embedding_service
 from shared import reranker as reranker_service
 from service.llm.factory import get_llm_provider
@@ -678,12 +679,13 @@ async def _migrate_email_voc_tables(conn) -> None:
         ON CONFLICT (key) DO NOTHING
     """)
     # 반복 패턴 탐지 임계치 — 실 VOC 데이터 시뮬레이션으로 검증한 값(§ 반복 VOC
-    # 패턴 탐지 설계 문서 참고). 0.90은 너무 엄격(거의 안 잡힘), 0.80은 너무 느슨
+    # 패턴 탐지 설계 문서 참고). 0.90은 너무 엄격(거의 안 잡힘), 0.80은 너무 느슨(옛 요약 기준)
     # (무관한 것끼리도 묶임) — 0.85/7일/3건이 노이즈 없이 진짜 반복 신호만 잡음.
+    # 10/22: 요약 지침을 "대상 기능 + 증상"으로 바꾼 뒤(#81) 운영 게이트웨이 재분석 기준 0.8에서 섞임 0, 기간 3일(사용자) — 위 0.85/7일은 옛 요약 기준.
     await conn.execute("""
         INSERT INTO ops_system_config (key, value) VALUES
-        ('email_pattern_similarity_threshold', '0.85'),
-        ('email_pattern_window_days', '7'),
+        ('email_pattern_similarity_threshold', '0.8'),
+        ('email_pattern_window_days', '3'),
         ('email_pattern_min_count', '3')
         ON CONFLICT (key) DO NOTHING
     """)
@@ -727,7 +729,7 @@ Always respond with valid JSON only.""",
 3. mismatch_flagged: 이메일 내용이 위 "수신 메일함 담당 파트"의 업무 영역과 명백히 다르면 true, 아니면 false
 4. resolution_draft: category가 system_error일 때 참고 지식 기반 해결 방안 초안(2~3문장), 아니면 null
 5. reasoning: 판단 근거 요약 (1문장)
-6. issue_signature: 이 VOC의 핵심 이슈를 짧고 정규화된 문구로 요약(3~8단어, 예: "로그인 500 에러", "결제 후 주문내역 미반영", "배달 상태 준비중 고착"). 발신자마다 표현이 달라도 같은 유형의 문제라면 최대한 같은 문구로 통일하세요 — 이 요약은 서로 다른 사람이 다르게 쓴 같은 유형의 반복 이슈를 찾아내는 데 쓰입니다. category와 무관하게 항상 채우세요
+""" + ISSUE_SIGNATURE_LINE + """
 
 [판단 예시 — 실제로 헷갈렸던 경계 사례]
 예시 1:
@@ -1389,6 +1391,35 @@ async def _migrate_prompt_voc_type(conn) -> None:
         logger.info("[migrate #79] VOC 프롬프트 분류 → voc: %s", r)
 
 
+async def _migrate_voc_signature_prompt(conn) -> None:
+    """VOC 반복 묶기용 요약 지침 → "대상 기능 + 증상" (2026-10-22, #81). 멱등.
+    옛 줄이 그대로 있을 때만 바꾼다(#75와 같은 방식 — 관리자가 고친 프롬프트는 안 건드리고 경고만)."""
+    for old, new in VOC_PROMPT_MIGRATIONS:
+        # 교체와 경계 기록을 한 묶음으로 — 교체만 되고 경계가 빠지면 다음 기동은 교체 0건이라 경계를 영영 못 남긴다(리뷰 L1)
+        async with conn.transaction():
+            r = await conn.execute("UPDATE ops_prompt SET content = replace(replace(content, E'\\r\\n', E'\\n'), $1, $2), updated_at = NOW() "
+                                   "WHERE func_key = 'email_voc_analysis_prompt' AND replace(content, E'\\r\\n', E'\\n') LIKE '%' || $1 || '%'",
+                                   old, new)
+            if r != "UPDATE 0":
+                logger.info("[migrate #81] VOC 요약 지침 교체: %s", r)
+                # 옛 요약으로 만든 묶음·단독 메일과는 묶지 않는다 — 옛 주제 수준 묶음 중심에 새 요약이 0.8 넘게 붙고(실측 선물하기 6건 중 3),
+                # 메일이 계속 오면 마지막 메일 시각이 갱신돼 탐지 기간이 지나도 안 닫힌다(10/22 리뷰). 데이터는 그대로 두고 경계만 기록:
+                # 묶음 = 번호(묶음은 묶기 때만 생김), 단독 메일 = 벡터를 쓴 시각(updated_at) — 재처리는 옛 번호 행에 새 벡터를 쓰므로 번호로는 못 가른다(재리뷰).
+                await conn.execute(
+                    "INSERT INTO ops_system_config (key, value) VALUES "
+                    "('email_pattern_cluster_min_id', (SELECT COALESCE(MAX(id), 0)::text FROM ops_voc_cluster)), "
+                    "('email_pattern_signature_since', NOW()::text) "
+                    "ON CONFLICT (key) DO NOTHING")
+    cur = await conn.fetchval("SELECT content FROM ops_prompt WHERE func_key = 'email_voc_analysis_prompt'")
+    if cur is not None and ISSUE_SIGNATURE_LINE not in cur.replace("\r\n", "\n"):
+        logger.warning("[migrate #81] VOC 분석 프롬프트에 새 요약 지침이 없음(관리자 수정) — 프롬프트 관리 화면에서 확인")
+    try:
+        from service.prompt.loader import invalidate_cache
+        invalidate_cache("email_voc_analysis_prompt")
+    except Exception:
+        logger.warning("프롬프트 캐시 비우기 실패 — 재시작 뒤 반영", exc_info=True)
+
+
 async def _migrate_policy_v0_revisions(conn) -> None:
     """정책 v0 새 버전 흐름 (2026-10-21, #80, v0 재구축 1단계). 멱등.
     - policy_review_log.action에 'submitted' 허용 — 1단계 설계(직접 수정 → 정책 테이블에 검토 대기 새 버전)용이었으나 2단계에서
@@ -1900,6 +1931,7 @@ async def _run_migrations() -> None:
         await _migrate_policy_v0(conn)
         await _migrate_org_domain(conn)
         await _migrate_prompt_voc_type(conn)
+        await _migrate_voc_signature_prompt(conn)
         await _migrate_policy_v0_revisions(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)

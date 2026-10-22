@@ -432,3 +432,28 @@ class TestGetClusterMembers:
         args = conn.fetch.call_args.args
         assert args[1] == 1  # ns_id
         assert args[2] == 55  # cluster_id
+
+
+class TestSignatureBoundary:
+    """요약 방식이 바뀐 경계(#81) 이전 묶음·단독 메일과는 묶지 않는다(10/22 — 옛 주제 수준 묶음에 새 요약이 계속 흡수됨)."""
+
+    @pytest.mark.asyncio
+    async def test_boundary_passed_to_both_queries(self, patch_db):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = None
+        conn.fetch.return_value = []
+        settings = {**_SETTINGS, "email_pattern_cluster_min_id": 197, "email_pattern_signature_since": "2026-10-22 21:00:00+09"}
+        await pattern_detection.detect_and_update_cluster(1, 4000, "프리퀀시 선물", [0.1, 0.2], _NOW, settings)
+        cluster_sql, *cluster_args = conn.fetchrow.call_args_list[0].args
+        assert "id > $5" in cluster_sql and cluster_args[4] == 197
+        single_sql, *single_args = conn.fetch.call_args_list[0].args
+        assert "NULLIF($6::text" in single_sql and single_args[5] == "2026-10-22 21:00:00+09"
+
+    @pytest.mark.asyncio
+    async def test_no_boundary_means_zero(self, patch_db):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = None
+        conn.fetch.return_value = []
+        await pattern_detection.detect_and_update_cluster(1, 4000, "배달 지연", [0.1, 0.2], _NOW, _SETTINGS)
+        assert conn.fetchrow.call_args_list[0].args[5] == 0
+        assert conn.fetch.call_args_list[0].args[6] == ""

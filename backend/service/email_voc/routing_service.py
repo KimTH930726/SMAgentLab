@@ -13,6 +13,8 @@ _SETTINGS_KEYS = (
     "email_relevance_min_score",
     "email_pattern_similarity_threshold", "email_pattern_window_days", "email_pattern_min_count",
 )
+# 요약 방식이 바뀐 경계(main.py #81이 기록) — 화면에서 고치는 값이 아니라 읽기만(update_settings 대상 아님)
+_BOUNDARY_KEYS = ("email_pattern_cluster_min_id", "email_pattern_signature_since")
 _MIN_POLLING_INTERVAL_MINUTES = 1  # §9 — Graph API 호출 한도 보호용 하한
 
 
@@ -22,7 +24,7 @@ async def get_settings() -> dict:
     async with get_conn() as conn:
         rows = await conn.fetch(
             "SELECT key, value FROM ops_system_config WHERE key = ANY($1::text[])",
-            list(_SETTINGS_KEYS),
+            list(_SETTINGS_KEYS + _BOUNDARY_KEYS),
         )
     values = {r["key"]: r["value"] for r in rows}
     return {
@@ -30,9 +32,11 @@ async def get_settings() -> dict:
         "email_polling_interval_minutes": int(values.get("email_polling_interval_minutes", 5)),
         "email_lookback_days": int(values.get("email_lookback_days", 7)),
         "email_relevance_min_score": float(values.get("email_relevance_min_score", 0.38)),
-        "email_pattern_similarity_threshold": float(values.get("email_pattern_similarity_threshold", 0.85)),
-        "email_pattern_window_days": int(values.get("email_pattern_window_days", 7)),
+        "email_pattern_similarity_threshold": float(values.get("email_pattern_similarity_threshold", 0.8)),
+        "email_pattern_window_days": int(values.get("email_pattern_window_days", 3)),
         "email_pattern_min_count": int(values.get("email_pattern_min_count", 3)),
+        "email_pattern_cluster_min_id": int(values.get("email_pattern_cluster_min_id", 0)),
+        "email_pattern_signature_since": values.get("email_pattern_signature_since", ""),   # '' = 경계 없음
     }
 
 

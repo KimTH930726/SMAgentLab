@@ -14,6 +14,7 @@
 import argparse
 import asyncio
 import collections
+import hashlib
 import pickle
 import sys
 from pathlib import Path
@@ -27,7 +28,7 @@ logging.disable(logging.INFO)
 
 CACHE_DIR = Path("/app/eval_out")
 # 분석 규칙이 바뀌면 올린다 — 옛 규칙으로 만든 캐시(예: 관련 지식 없는데 무관한 근거가 든 분석)를 다시 쓰지 않게(10/22 리뷰)
-CACHE_VERSION = 2
+CACHE_VERSION = 3   # 3: 요약 지침 "대상 기능 + 증상"(10/22 #81)
 
 
 def _cos(a, b) -> float:
@@ -109,8 +110,12 @@ async def main() -> int:
         return 0
 
     cache_path = CACHE_DIR / f"voc_reprocess_{ns_id}.pkl"
+    # 캐시는 분석에 쓴 프롬프트까지 같아야 재사용 — 마이그레이션(#81) 전 미리보기 캐시의 옛 요약 벡터를 --send가 새 시각으로 저장하면
+    # 요약 방식 경계를 통과해 새 묶음에 섞인다(리뷰 M1). 관리자가 화면에서 프롬프트를 고쳐도 같이 무효.
+    prompt_text = await voc_service.get_prompt("email_voc_analysis_prompt", voc_service._DEFAULT_ANALYSIS_PROMPT)
+    cache_key = (CACHE_VERSION, hashlib.sha256(prompt_text.encode()).hexdigest())
     saved = pickle.loads(cache_path.read_bytes()) if cache_path.exists() else {}
-    cache = saved.get("items", {}) if isinstance(saved, dict) and saved.get("version") == CACHE_VERSION else {}
+    cache = saved.get("items", {}) if isinstance(saved, dict) and saved.get("version") == cache_key else {}
     items = []
     for r in rows:
         msg = {"subject": r["subject"], "sender": r["sender"], "body": r["body"] or "",
@@ -118,7 +123,7 @@ async def main() -> int:
         if r["id"] not in cache:
             analysis, vec, kn = await pipeline.analyze_message(a.namespace, routing["part"], msg, settings["email_relevance_min_score"])
             cache[r["id"]] = {"analysis": analysis, "vec": list(vec), "kn": kn}
-            cache_path.write_bytes(pickle.dumps({"version": CACHE_VERSION, "items": cache}))   # 건마다 저장 — 중간에 끊겨도 이어서
+            cache_path.write_bytes(pickle.dumps({"version": cache_key, "items": cache}))   # 건마다 저장 — 중간에 끊겨도 이어서
         items.append({"id": r["id"], "msg": msg, "subj": _normalize_subject(r["subject"]), **cache[r["id"]]})
     cats = collections.Counter(it["analysis"]["category"] for it in items)
     print(f"분석: {dict(cats)} · 관련 지식 없음 {sum(not it['kn'] for it in items)}건")
@@ -143,7 +148,7 @@ async def main() -> int:
         async with get_conn() as c:
             done = await c.execute(
                 """UPDATE ops_email_analysis SET category = $2, severity = $3, mismatch_flagged = $4, knowledge_ref_ids = $5,
-                          resolution_draft = $6, reasoning = $7, status = 'analyzed', embedding = $8::vector
+                          resolution_draft = $6, reasoning = $7, status = 'analyzed', embedding = $8::vector, updated_at = NOW()
                    WHERE id = $1 AND status = 'skipped_relevance'""",
                 it["id"], an["category"], an["severity"], an["mismatch_flagged"], an["knowledge_ref_ids"],
                 an["resolution_draft"], an["reasoning"], str(it["vec"]))

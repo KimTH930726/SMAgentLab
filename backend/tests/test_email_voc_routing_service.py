@@ -90,10 +90,24 @@ class TestGetSettings:
             "email_polling_interval_minutes": 5,
             "email_lookback_days": 7,
             "email_relevance_min_score": 0.38,
-            "email_pattern_similarity_threshold": 0.85,
-            "email_pattern_window_days": 7,
+            "email_pattern_similarity_threshold": 0.8,   # 10/22 "대상 기능 + 증상" 요약 기준(#81)
+            "email_pattern_window_days": 3,
             "email_pattern_min_count": 3,
+            "email_pattern_cluster_min_id": 0,           # 요약 방식 경계 없음
+            "email_pattern_signature_since": "",
         }
+
+    @pytest.mark.asyncio
+    async def test_boundary_keys_read_but_not_updatable(self, patch_db):
+        """경계는 #81이 기록하는 값 — 읽어서 묶기에 넘기되, 설정 저장(화면)으로는 못 바꾼다."""
+        conn, _ = patch_db
+        conn.fetch.return_value = [{"key": "email_pattern_cluster_min_id", "value": "197"},
+                                   {"key": "email_pattern_signature_since", "value": "2026-10-22 21:00:00+09"}]
+        result = await routing_service.get_settings()
+        assert result["email_pattern_cluster_min_id"] == 197 and result["email_pattern_signature_since"] == "2026-10-22 21:00:00+09"
+        conn.execute.reset_mock()
+        await routing_service.update_settings({"email_pattern_cluster_min_id": 0})
+        assert conn.execute.await_count == 0
 
     @pytest.mark.asyncio
     async def test_parses_stored_values(self, patch_db):

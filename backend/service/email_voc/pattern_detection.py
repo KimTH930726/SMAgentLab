@@ -182,16 +182,20 @@ async def detect_and_update_cluster(
     window_start = occurred_at - timedelta(days=window_days)
 
     async with get_conn() as conn:
+        # 요약 방식이 바뀐 경계(main.py #81이 기록) 이전 묶음·단독 메일과는 묶지 않는다 — 옛 요약 벡터와 새 요약 벡터를 섞어 비교하면
+        # 옛 주제 수준 묶음에 계속 흡수된다. 키가 없으면 0(경계 없음).
+        min_cluster_id = settings.get("email_pattern_cluster_min_id", 0)
+        signature_since = settings.get("email_pattern_signature_since", "")   # 단독 메일은 벡터를 쓴 시각(updated_at)으로 — 재처리가 옛 행에 새 벡터를 씀
         best_cluster = await conn.fetchrow(
             """
             SELECT id, member_count, representative_embedding
             FROM ops_voc_cluster
-            WHERE namespace_id = $1 AND last_seen_at >= $2
+            WHERE namespace_id = $1 AND last_seen_at >= $2 AND id > $5
               AND 1 - (representative_embedding <=> $3::vector) >= $4
             ORDER BY representative_embedding <=> $3::vector
             LIMIT 1
             """,
-            ns_id, window_start, str(embedding), threshold,
+            ns_id, window_start, str(embedding), threshold, min_cluster_id,
         )
 
         if best_cluster is not None:
@@ -223,11 +227,11 @@ async def detect_and_update_cluster(
                 SELECT id, subject, embedding
                 FROM ops_email_analysis
                 WHERE namespace_id = $1 AND id != $2 AND voc_cluster_id IS NULL AND embedding IS NOT NULL
-                  AND created_at >= $3
+                  AND created_at >= $3 AND updated_at >= COALESCE(NULLIF($6::text, '')::timestamptz, '-infinity'::timestamptz)
                   AND 1 - (embedding <=> $4::vector) >= $5
                 ORDER BY embedding <=> $4::vector
                 """,
-                ns_id, analysis_id, window_start, str(embedding), threshold,
+                ns_id, analysis_id, window_start, str(embedding), threshold, signature_since,
             )
             candidates = [c for c in candidates if _normalize_subject(c["subject"]) != norm_subject]
             if not candidates:
