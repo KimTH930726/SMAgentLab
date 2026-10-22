@@ -6,7 +6,6 @@ import {
   type VocCluster, type VocClusterMember,
 } from '../../api/emailVoc';
 import { createKnowledge } from '../../api/knowledge';
-import { getCategories } from '../../api/namespaces';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -34,38 +33,23 @@ function ClusterKnowledgeRegisterModal({
   open: boolean; onClose: () => void; cluster: VocCluster | null; namespace: string; onSuccess: () => void;
 }) {
   const [content, setContent] = useState('');
-  const [category, setCategory] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: categories = [] } = useQuery({
-    queryKey: ['categories', namespace],
-    queryFn: () => getCategories(namespace),
-    enabled: !!namespace,
-    staleTime: 0,
-  });
-  const sortedCategories = [...categories].sort((a, b) =>
-    a.name === '공통지식' ? -1 : b.name === '공통지식' ? 1 : a.name.localeCompare(b.name)
-  );
-
+  // 업무구분 선택(필수)은 10/22 업무구분 폐지로 삭제 — 업무구분 없이 바로 등록된다
   useEffect(() => {
     if (open && cluster) {
       setContent(`[반복 유형] ${cluster.representative_subject}\n\n해결 방안: `);
-      setCategory(sortedCategories[0]?.name ?? '');
       setError(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, cluster, sortedCategories.length]);
+  }, [open, cluster]);
 
   const handleSubmit = async () => {
-    if (!cluster || !content.trim() || !category) return;
+    if (!cluster || !content.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      const created = await createKnowledge({
-        namespace, content,
-        category,
-      });
+      const created = await createKnowledge({ namespace, content });
       if (created.pending_review) {
         void showAlert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다.\n관리자 승인 후 검색에 반영됩니다.', { title: '승인 대기로 등록' });
       }
@@ -94,33 +78,13 @@ function ClusterKnowledgeRegisterModal({
           />
         </div>
 
-        {sortedCategories.length > 0 ? (
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              업무구분 <span className="text-rose-600 dark:text-rose-400">*</span>
-            </label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-            >
-              {sortedCategories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-            </select>
-          </div>
-        ) : (
-          <p className="text-xs text-amber-600 dark:text-amber-400">
-            이 업무 컬렉션에 등록된 업무구분이 없어 지식을 등록할 수 없습니다. 업무 컬렉션 메뉴에서 업무구분을 먼저 추가해 주세요.
-          </p>
-        )}
-
-
         {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
         <div className="flex gap-2 justify-end pt-1">
           <Button variant="ghost" size="sm" onClick={onClose}>취소</Button>
           <Button
             variant="primary" size="sm" loading={submitting}
-            disabled={!content.trim() || !category}
+            disabled={!content.trim()}
             onClick={handleSubmit}
           >
             지식 등록

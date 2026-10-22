@@ -54,7 +54,6 @@ export function startChatStream(params: {
   wKeyword: number;
   topK: number;
   conversationId: number | null;
-  categories?: string[] | null;
   clarifyScope?: string | null;
   onConversationCreated: (id: number) => void;
 }) {
@@ -130,7 +129,6 @@ async function _runStream(
     wKeyword: number;
     topK: number;
     conversationId: number | null;
-    categories?: string[] | null;
     clarifyScope?: string | null;
     onConversationCreated: (id: number) => void;
   },
@@ -158,7 +156,6 @@ async function _runStream(
       wKeyword: params.wKeyword,
       topK: params.topK,
       conversationId: params.conversationId,
-      categories: params.categories,
       clarifyScope: params.clarifyScope ?? null,
       signal: controller.signal,
     });

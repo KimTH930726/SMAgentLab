@@ -48,7 +48,6 @@ tok = call("POST", "/api/auth/login", {"username": "admin", "password": "1111"})
 assert call("POST", "/api/namespaces", {"name": NS, "description": "원장 동시 확정 시나리오(자동 삭제)"}, tok)[0] == 200
 ok = 0
 try:
-    call("POST", f"/api/namespaces/{NS}/categories", {"name": "시나리오"}, tok)
     ns_id = sql(f"SELECT id FROM ops_namespace WHERE name = '{NS}'")
     for rnd in range(3):
         url = f"http://race.example/{rnd}"
@@ -60,7 +59,7 @@ try:
         jobs = {}
 
         def go(d, v):
-            items = [{"content": f"동시 확정 {v} 판 {rnd} 조각 {i} 입니다 충분히 길게 씁니다 {time.time()}", "category": "시나리오",
+            items = [{"content": f"동시 확정 {v} 판 {rnd} 조각 {i} 입니다 충분히 길게 씁니다 {time.time()}",
                       "source_document_id": int(d)} for i in range(2)]
             s, r = call("POST", "/api/knowledge/bulk", {"namespace": NS, "items": items, "source_file": url, "source_type": "web",
                                                         "confirm_replace": True}, tok)

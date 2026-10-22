@@ -5,7 +5,7 @@
 아무것도 바꾸지 않고, 👎는 본인 대화의 답변일 때만 개선 원장에 신고 1건 — 이 "부작용 없음"을 고정한다. API는 둘 다
 201이라 스모크 테스트로는 안 걸린다.
 
-conftest가 service/core를 MagicMock으로 막아 두므로 파일 경로로 실제 모듈을 로드한다(test_admin_category_suggest.py 참고).
+conftest가 service/core를 MagicMock으로 막아 두므로 파일 경로로 실제 모듈을 로드한다(test_agent_rrf_context.py 참고).
 """
 import importlib.util as _ilu
 import sys

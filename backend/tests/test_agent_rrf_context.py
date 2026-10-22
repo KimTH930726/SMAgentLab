@@ -45,8 +45,8 @@ _THRESHOLDS = {
 }
 
 
-def _make_result(id_, final_score, content="내용", category=None):
-    return RetrievalResult(id=id_, namespace="ns", content=content, base_weight=0.0, final_score=final_score, category=category)
+def _make_result(id_, final_score, content="내용"):
+    return RetrievalResult(id=id_, namespace="ns", content=content, base_weight=0.0, final_score=final_score)
 
 
 class TestBuildRrfContext:
@@ -66,19 +66,13 @@ class TestBuildRrfContext:
         text = agent._build_rrf_context(results, PolicySearchResult())
         assert text.index("첫 번째") < text.index("두 번째")
 
-    def test_keyword_only_category_included_despite_low_score(self, monkeypatch):
-        """DB/공통코드는 final_score가 knowledge_min_score보다 낮아도(ts_rank 스케일이
-        코사인보다 항상 작음) 매칭이 됐으면 채택돼야 한다 — "DS14가 뭐야?" 실측 버그."""
+    def test_low_score_excluded_and_no_exact_match_label(self, monkeypatch):
+        """업무구분 키워드 전용(DB/공통코드) 채택·"정확 매칭" 라벨은 10/22 업무구분 폐지로 삭제 — 낮은 점수는 모두 제외,
+        채택된 지식의 신뢰도 라벨은 높음/보통/낮음뿐."""
         monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
-        results = [_make_result(1, 0.03, "DS14 : 배차 취소(POS)", category="공통코드")]
-        text = agent._build_rrf_context(results, PolicySearchResult())
-        assert "DS14" in text
-        assert "정확 매칭" in text
-
-    def test_keyword_only_category_excluded_when_no_match(self, monkeypatch):
-        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
-        results = [_make_result(1, 0.0, "무관한 코드표", category="DB")]
-        assert agent._build_rrf_context(results, PolicySearchResult()) == ""
+        assert agent._build_rrf_context([_make_result(1, 0.03, "DS14 : 배차 취소(POS)")], PolicySearchResult()) == ""
+        text = agent._build_rrf_context([_make_result(2, 0.55, "보통 문서")], PolicySearchResult())
+        assert "보통 문서" in text and "정확 매칭" not in text and "신뢰도: 낮음" in text
 
     def test_cross_axis_interleaves_by_rank_not_by_axis(self, monkeypatch):
         """정책 1위가 일반지식 1위보다 먼저 나올 수 있어야 함 — 예전엔 일반지식이 항상 먼저."""

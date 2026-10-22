@@ -10,7 +10,6 @@ export function streamChat(params: ChatRequest): AsyncGenerator<SSEEvent> {
     w_keyword: params.wKeyword,
     top_k: params.topK,
     conversation_id: params.conversationId ?? null,
-    categories: params.categories && params.categories.length > 0 ? params.categories : null,
     clarify_scope: params.clarifyScope ?? null,
   };
   return streamSSE('/chat/stream', body, params.signal);
@@ -26,7 +25,6 @@ export async function debugSearch(params: DebugSearchRequest): Promise<DebugSear
         w_vector: params.w_vector,
         w_keyword: params.w_keyword,
         top_k: params.top_k,
-        categories: params.categories && params.categories.length > 0 ? params.categories : null,
       }),
     });
   } catch (err) {

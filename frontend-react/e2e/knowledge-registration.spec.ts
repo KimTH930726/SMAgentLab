@@ -24,10 +24,8 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
 
   await page.getByRole('button', { name: '지식 등록', exact: true }).click();
   await page.getByText('직접 입력').click();
-  // 업무구분 첫 선택지는 'AI 자동분석'(기본) — 예전 '선택하세요'. AI가 못 고른 칸('분류 확인 필요')은 등록 선택지에 없음(2026-10-08)
-  const catSelect = page.locator('select').filter({ hasText: 'AI 자동분석' });
-  await expect(catSelect).toBeVisible();
-  await expect(catSelect.locator('option', { hasText: '분류 확인 필요' })).toHaveCount(0);
+  // 업무구분 선택 칸은 10/22 업무구분 폐지로 없다 — 등록 폼에 업무구분 선택지가 보이면 안 된다
+  await expect(page.locator('select').filter({ hasText: 'AI 자동분석' })).toHaveCount(0);
 
   // 매 실행마다 의미상으로도 충분히 다른 문장이어야 한다 — 타임스탬프만 바꾸고 나머지
   // 문장이 똑같으면 반복 실행 시 임베딩 유사도가 쌓여 중복 판정(승인 대기)으로 튈 수 있음.
@@ -46,10 +44,9 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
   const response = await createResponse;
   expect(response.ok()).toBeTruthy();
   const created = await response.json();
-  // "AI 자동분석" 표시값(__ai__)이 서버로 새지 않고 빈 값으로 가서, 서버가 실제 업무구분을 정해 저장(리뷰 2026-10-08)
-  expect(response.request().postDataJSON().category).toBe('');
-  expect(created.category).toBeTruthy();
-  expect(created.category).not.toBe('__ai__');
+  // 업무구분은 보내지도 돌려받지도 않는다(10/22 폐지 — 서버는 category NULL로 저장)
+  expect(response.request().postDataJSON().category).toBeUndefined();
+  expect(created.category).toBeUndefined();
   // 유사 지식으로 승인 대기가 되면 앱 모달("승인 대기로 등록")이 뜬다 — 닫고 진행(2026-10-07 alert → 앱 모달 전환 반영)
   if (created.pending_review) {
     await expect(page.getByTestId('app-dialog')).toBeVisible();
@@ -157,7 +154,7 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
   const prev = await (await page.request.post('/api/knowledge/import/text-split/preview', { headers: authHeader, data: { raw_text: text, strategy: 'auto', namespace: NAMESPACE } })).json();
   expect(prev.detected_strategy).toBe('section');
   expect(prev.heading_paths.every((h: string[]) => h.length > 0)).toBeTruthy();
-  const items = prev.chunks.map((c: string, i: number) => ({ content: c, category: '공통지식', heading_path: prev.heading_paths[i], source_document_id: prev.source_document_id }));
+  const items = prev.chunks.map((c: string, i: number) => ({ content: c, heading_path: prev.heading_paths[i], source_document_id: prev.source_document_id }));
   const job = (await (await page.request.post('/api/knowledge/bulk', { headers: authHeader,
     data: { namespace: NAMESPACE, items, source_file: '텍스트 직접입력', source_type: 'paste_split' } })).json()).job_id;
   let ids: number[] = [];
@@ -206,7 +203,7 @@ test('같은 원본 다시 등록 — 사람이 고친 조각이 있으면 사�
     { headers: authHeader })).json()) as Array<{ id: number; content: string }>).filter((k) => k.content.includes('재등록 확인 테스트') || k.content.includes(marker));
   const prev = await (await page.request.post('/api/knowledge/import/text-split/preview', { headers: authHeader,
     data: { raw_text: text, strategy: 'section', namespace: NAMESPACE } })).json();
-  const items = prev.chunks.map((c: string, i: number) => ({ content: c, category: '공통지식', heading_path: prev.heading_paths[i], source_document_id: prev.source_document_id }));
+  const items = prev.chunks.map((c: string, i: number) => ({ content: c, heading_path: prev.heading_paths[i], source_document_id: prev.source_document_id }));
   const job = (await (await page.request.post('/api/knowledge/bulk', { headers: authHeader,
     data: { namespace: NAMESPACE, items, source_file: '텍스트 직접입력', source_type: 'paste_split' } })).json()).job_id;
   let cleanup: number[] = [];
@@ -225,7 +222,6 @@ test('같은 원본 다시 등록 — 사람이 고친 조각이 있으면 사�
     await selectDomain(page, NAMESPACE);
     await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     await page.getByText('대량 텍스트', { exact: true }).first().click();
-    await page.locator('select').filter({ hasText: 'AI 자동분석' }).selectOption('공통지식');   // 업무구분 추천(LLM) 없이
     await page.locator('textarea:visible').first().fill(text);
     await page.getByRole('button', { name: '청크 검토 & 등록' }).click();
     const register = page.getByRole('button', { name: /선택 항목 등록/ });

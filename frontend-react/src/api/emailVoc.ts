@@ -264,7 +264,6 @@ export async function getEmailHistory(
 export interface KnowledgeRef {
   id: number;
   content: string;
-  category: string | null;
 }
 
 export async function getKnowledgeRefs(namespace: string, ids: number[]): Promise<KnowledgeRef[]> {

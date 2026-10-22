@@ -60,7 +60,6 @@ function RechunkButton({ docId, namespace }: { docId: number; namespace: string 
           r.edited ? `내용을 고친 조각 ${r.edited}개` : '',
           r.removed ? `삭제·반려한 조각 ${r.removed}개(다시 생김)` : '',
           r.partial ? '등록 때 일부 조각만 고름(뺀 조각이 다시 생김)' : '',
-          r.mixed_category ? '조각마다 업무구분을 다르게 둠(하나로 통일됨)' : '',
         ].filter(Boolean).join('\n· ');
         const ok = await showConfirm(
           `사람이 손댄 부분이 있습니다:\n· ${why}\n\n다시 나누면 원문 기준으로 바뀝니다(옛 조각은 폐기 상태로 남음). 진행할까요?`,

@@ -24,12 +24,10 @@ import {
   cancelIngestionJob,
   getDuplicateMatches,
   resolveDuplicate,
-  getKeywordOnlyCategories,
   type IngestionJob,
   type IngestionJobStatus,
   type ConfluenceTreeResponse,
 } from '../../api/knowledge';
-import { getCategories, suggestCategory } from '../../api/namespaces';
 import { updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -73,27 +71,15 @@ function KnowledgeContentView({ content }: { content: string }) {
   );
 }
 
-// 가중치(문서 우선순위) 입력·표시는 2026-10-02 제거 — 쓰인 적 없고 틀린 검색은 내용·업무구분·용어집을 고친다(정정 흐름)
+// 가중치(문서 우선순위) 입력·표시는 2026-10-02 제거 — 쓰인 적 없고 틀린 검색은 내용·용어집을 고친다(정정 흐름)
+// 업무구분(선택·AI 자동분석·필터·배지·일괄 변경)은 10/22 업무구분 폐지로 삭제 — 지식은 업무 컬렉션에 바로 붙는다
 interface KnowledgeFormData {
   content: string;
-  category: string;
 }
 
 const defaultForm: KnowledgeFormData = {
   content: '',
-  category: '',
 };
-
-// 수동/파일/텍스트 등록 폼 공용(2026-09-22, 지식 카테고리 자동화 §3-3 일반화) — 컨텐츠를
-// 실제로 확인할 수 있게 된 시점(미리보기 성공 직후)에 한 번 호출해 "공통지식" 기본값을 실제
-// 추천값으로 바꿔치기한다. 사용자가 미리보기 전에 이미 다른 값을 직접 골라뒀으면(기본값과
-// 다르면) 건드리지 않는다 — 실패해도 폼은 그냥 기본값 그대로 두고 조용히 넘어간다(치명적
-// 아님, 어차피 RequiredCategoryField에서 사람이 최종 확인/수정 가능).
-// 등록 화면 업무구분 "AI 자동분석"(2026-10-08 사용자 요청 — 첫 선택지 "선택하세요" 대신). 서버로는 빈 값으로 보내고, 서버가 내용으로
-// 기존 업무구분 중 추천(없으면 "분류 확인 필요"). 이 칸은 AI가 못 고른 결과라 등록 화면 선택지에선 뺀다.
-const AI_CATEGORY = '__ai__';
-const UNSORTED = '분류 확인 필요';  // AI가 못 고른 결과 칸(예전 "미분류")
-const categoryForServer = (c: string) => (c === AI_CATEGORY ? '' : c);
 
 // 원문 원장(2026-10-08): 원문마다 미리보기 조각 중 일부만 골랐나 — 다시 분할이 사람이 뺀 조각을 되살리지 않게 서버에 알린다
 function partialSourceDocs(selected: ReviewChunk[], all: ReviewChunk[]): Set<number> {
@@ -122,7 +108,6 @@ async function bulkCreateConfirmed(namespace: string, items: BulkItems, sourceFi
         c.edited ? `· 내용을 고친 조각 ${c.edited}건` : '',
         c.removed ? `· 삭제·반려한 조각 ${c.removed}건` : '',
         c.partial ? '· 지난번에 일부 조각만 골라 등록함' : '',
-        c.mixed_category ? '· 조각마다 업무구분을 다르게 둠' : '',
       ].filter(Boolean).join('\n');
       const ok = await showConfirm(
         `이미 등록된 같은 원본이 있고, 그 조각에 사람이 손댄 흔적이 있습니다.\n${why}\n\n등록하면 기존 조각은 새 조각으로 교체되어 위 변경이 사라집니다.`,
@@ -139,69 +124,6 @@ async function bulkCreateConfirmed(namespace: string, items: BulkItems, sourceFi
   return result;
 }
 
-// 추천은 사내 LLM이라 수 초 — 응답이 왔을 때 아직 "AI 자동분석"일 때만 바꾼다(리뷰 2026-10-08: 그사이 사용자가 고른 값이나
-// 등록 후 초기화된 다음 폼을 늦은 응답이 덮어썼다). applySuggestion은 그 시점 상태를 보고 바꿀지 정하는 함수형 갱신.
-async function autoSuggestCategoryIfUntouched(
-  namespace: string, categoryNames: string[], category: string,
-  applySuggestion: (suggested: string) => void, hintContent: string,
-) {
-  if (category !== AI_CATEGORY || !hintContent.trim() || categoryNames.length === 0) return;
-  try {
-    const suggested = await suggestCategory(namespace, hintContent);
-    if (suggested && suggested !== UNSORTED) applySuggestion(suggested);
-  } catch { /* 추천 실패는 무시 — "AI 자동분석" 그대로(서버가 등록 때 다시 고름) */ }
-}
-const keepUserChoice = (set: (u: (prev: string) => string) => void) =>
-  (suggested: string) => set((prev) => (prev === AI_CATEGORY ? suggested : prev));
-
-// 업무구분은 필수값 — 카테고리가 없는 네임스페이스는 "네임스페이스 관리"에서 먼저 추가해야 함
-function RequiredCategoryField({ categoryNames, value, onChange, allowAi = false }: {
-  categoryNames: string[]; value: string; onChange: (v: string) => void;
-  /** 등록 화면 — "AI 자동분석" 선택지(기본, 예전 "선택하세요" 자리), "분류 확인 필요"은 숨김 */
-  allowAi?: boolean;
-}) {
-  // retrieval._KEYWORD_ONLY_CATEGORIES(2026-09-18) — 이 카테고리로 태깅되면 rag_knowledge
-  // 안에서 벡터축과 final_score로 경쟁하다 top_k 후보 선별 단계에서 밀려날 수 있음
-  // ("DS14가 뭐야?" 실사고, id=20을 ref_common_code로 이전해 해결) — 재발 방지 경고.
-  // 8군데(생성/수정/일괄수정 등)에서 이 필드를 재사용해서 여기 한 곳에만 넣으면 전부 적용됨.
-  const { data: keywordOnlyCategories = [] } = useQuery({
-    queryKey: ['keyword-only-categories'],
-    queryFn: getKeywordOnlyCategories,
-    staleTime: 5 * 60_000,
-  });
-
-  if (categoryNames.length === 0 && !allowAi) {
-    return (
-      <div className="rounded-lg bg-amber-900/20 border border-amber-700/40 px-3 py-2 text-xs text-amber-300">
-        이 네임스페이스에 업무구분이 없습니다. "네임스페이스 관리"에서 먼저 업무구분을 추가해주세요.
-      </div>
-    );
-  }
-  return (
-    <div>
-      <label className="block text-xs font-medium text-slate-400 mb-1">업무구분 <span className="text-rose-400">*</span></label>
-      <select value={value} onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-        {allowAi
-          ? <option value={AI_CATEGORY}>AI 자동분석</option>
-          : <option value="" disabled>선택하세요</option>}
-        {categoryNames.filter((c) => !(allowAi && c === UNSORTED)).map((c) => <option key={c} value={c}>{c}</option>)}
-      </select>
-      {allowAi && value === AI_CATEGORY && (
-        <p className="mt-1 text-[11px] text-slate-500" title="기존 업무구분 중 내용에 맞는 것을 고르고, 맞는 게 없으면 '분류 확인 필요'으로 둡니다">
-          등록할 때 AI가 내용을 보고 업무구분을 정합니다
-        </p>
-      )}
-      {keywordOnlyCategories.includes(value) && (
-        <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
-          이 업무구분은 검색 우선순위 문제가 있는 유형(코드표/DB스키마)입니다 — 짧은 코드 항목이면
-          지식베이스보다 참조데이터(공통코드/DB스키마) 등록을 권장합니다.
-        </p>
-      )}
-    </div>
-  );
-}
-
 type IngestMethod = 'file' | 'text' | 'manual' | 'url' | null;
 
 // ── KnowledgeTable (메인) ─────────────────────────────────────────────────────
@@ -211,7 +133,7 @@ export function KnowledgeTable() {
   const { selectedNs, canModifyNs } = useNamespaceAccess();
   // 업무 컬렉션이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { setCategoryFilter(''); setPage(1); setSelectedIds(new Set()); }, [selectedNs]);   // 체크 남으면 앞 영역 것이 일괄 삭제됐다(리뷰 M1)
+  useEffect(() => { setPage(1); setSelectedIds(new Set()); }, [selectedNs]);   // 체크 남으면 앞 영역 것이 일괄 삭제됐다(리뷰 M1)
 
   const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>('list');   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
@@ -219,7 +141,6 @@ export function KnowledgeTable() {
   const [editForm, setEditForm] = useState<KnowledgeFormData>(defaultForm);
   const [showEdit, setShowEdit] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
-  const [categoryFilter, setCategoryFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'text' | 'vector'>('text');
   const [vectorSearchInput, setVectorSearchInput] = useState('');
@@ -227,18 +148,9 @@ export function KnowledgeTable() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
   const [showBulkEdit, setShowBulkEdit] = useState(false);
-  const [bulkEditCategory, setBulkEditCategory] = useState('');
   const [bulkEditSourceType, setBulkEditSourceType] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);
-
-  const { data: categories = [] } = useQuery({
-    queryKey: ['categories', selectedNs],
-    queryFn: () => getCategories(selectedNs),
-    enabled: !!selectedNs,
-    staleTime: 30_000,
-  });
-  const categoryNames = categories.map((c) => c.name);
 
   const { data: jobs = [] } = useQuery({
     queryKey: ['ingestion-jobs', selectedNs],
@@ -269,7 +181,6 @@ export function KnowledgeTable() {
     mutationFn: (id: number) =>
       updateKnowledge(id, {
         content: editForm.content,
-        category: editForm.category,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
@@ -307,7 +218,6 @@ export function KnowledgeTable() {
 
   const bulkUpdateMutation = useMutation({
     mutationFn: (ids: number[]) => bulkUpdateKnowledge(ids, {
-      ...(bulkEditCategory ? { category: bulkEditCategory } : {}),
       ...(bulkEditSourceType ? { source_type: bulkEditSourceType } : {}),
     }),
     onSuccess: () => {
@@ -315,22 +225,17 @@ export function KnowledgeTable() {
       qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
       setSelectedIds(new Set());
       setShowBulkEdit(false);
-      setBulkEditCategory('');
       setBulkEditSourceType('');
     },
   });
 
   const startEdit = (item: KnowledgeItem) => {
     setEditingId(item.id);
-    setEditForm({
-      content: item.content,
-      category: item.category ?? '',
-    });
+    setEditForm({ content: item.content });
     setShowEdit(true);
   };
 
   const textFilteredItems = items.filter((item) => {
-    if (categoryFilter && item.category !== categoryFilter) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const content = item.content.toLowerCase();
@@ -425,16 +330,6 @@ export function KnowledgeTable() {
         <div className="space-y-3">
           {/* 필터 바 */}
           <div className="flex items-end gap-3 flex-wrap">
-            {categoryNames.length > 0 && (
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">업무구분</label>
-                <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); setSelectedIds(new Set()); }}
-                  className="w-36 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-                  <option value="">전체</option>
-                  {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-            )}
             {/* Search mode toggle */}
             <div className="flex rounded-lg border border-slate-600 overflow-hidden text-xs font-medium flex-shrink-0">
               <button
@@ -529,12 +424,7 @@ export function KnowledgeTable() {
                   )}
                   <div className="flex flex-1 items-center gap-3 cursor-pointer min-w-0" onClick={() => startEdit(item)}>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {item.category && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 font-medium">{item.category}</span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-500 mt-0.5 truncate">{item.content.slice(0, 100)}...</p>
+                      <p className="text-xs text-slate-500 truncate">{item.content.slice(0, 100)}...</p>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0 text-[10px] text-slate-500">
                       {searchMode === 'vector' && (item as KnowledgeItem & { similarity?: number }).similarity != null && (
@@ -550,7 +440,7 @@ export function KnowledgeTable() {
               ))}
               {displayItems.length === 0 && !vectorSearchQuery.isFetching && (
                 <div className="text-center py-16 text-slate-500">
-                  {searchQuery || categoryFilter || vectorQuery ? '검색 결과가 없습니다.' : '지식 항목이 없습니다.'}
+                  {searchQuery || vectorQuery ? '검색 결과가 없습니다.' : '지식 항목이 없습니다.'}
                 </div>
               )}
               {vectorSearchQuery.isFetching && (
@@ -569,7 +459,6 @@ export function KnowledgeTable() {
       {subTab === 'ingest' && (
         <IngestTab
           namespace={selectedNs}
-          categoryNames={categoryNames}
           canModify={canModifyNs}
           jobs={jobs}
           onSuccess={onIngestSuccess}
@@ -607,17 +496,6 @@ export function KnowledgeTable() {
               </Button>
             </div>
           )}
-          {canModifyNs ? (
-            <RequiredCategoryField categoryNames={categoryNames} value={editForm.category}
-              onChange={(v) => setEditForm((f) => ({ ...f, category: v }))} />
-          ) : categoryNames.length > 0 && (
-            <div>
-              <label className="text-xs font-medium text-slate-400">업무구분</label>
-              <div className="mt-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-300">
-                {editForm.category || <span className="text-slate-500">분류 확인 필요</span>}
-              </div>
-            </div>
-          )}
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">내용</label>
             <textarea rows={10} value={editForm.content} readOnly={!canModifyNs}
@@ -634,7 +512,7 @@ export function KnowledgeTable() {
             {canModifyNs && (
               <Button variant="primary" size="sm" loading={updateMutation.isPending}
                 onClick={() => editingId !== null && updateMutation.mutate(editingId)}
-                disabled={!editForm.content.trim() || !editForm.category || categoryNames.length === 0}>
+                disabled={!editForm.content.trim()}>
                 저장
               </Button>
             )}
@@ -657,18 +535,7 @@ export function KnowledgeTable() {
       {/* Bulk Edit Modal */}
       <Modal isOpen={showBulkEdit} onClose={() => setShowBulkEdit(false)} title="지식 일괄 수정">
         <div className="space-y-4">
-          <p className="text-sm text-slate-300">선택한 <span className="text-indigo-400 font-semibold">{selectedIds.size}개</span> 지식 항목의 업무구분·소스유형을 변경합니다. 값을 지정한 필드만 바뀌고, 비워두면 그대로 유지됩니다.</p>
-          <div>
-            <label className="text-xs font-medium text-slate-400 block mb-1">업무구분</label>
-            <select
-              value={bulkEditCategory}
-              onChange={(e) => setBulkEditCategory(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-            >
-              <option value="">(변경 안 함)</option>
-              {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
+          <p className="text-sm text-slate-300">선택한 <span className="text-indigo-400 font-semibold">{selectedIds.size}개</span> 지식 항목의 소스유형을 변경합니다.</p>
           <div>
             <label className="text-xs font-medium text-slate-400 block mb-1">소스유형</label>
             <select
@@ -691,7 +558,7 @@ export function KnowledgeTable() {
             <Button variant="secondary" size="sm" onClick={() => setShowBulkEdit(false)}>취소</Button>
             <Button
               variant="primary" size="sm"
-              disabled={!bulkEditCategory && !bulkEditSourceType}
+              disabled={!bulkEditSourceType}
               loading={bulkUpdateMutation.isPending}
               onClick={() => bulkUpdateMutation.mutate(Array.from(selectedIds))}
             >
@@ -727,9 +594,6 @@ interface ReviewChunk {
   text: string;
   title: string | null;
   selected: boolean;
-  /** 컨플루언스 벌크 등록에서만 쓰임 — 페이지 단위로 자동 배정된 업무구분(2026-09-22,
-   * 지식 카테고리 자동화). 다른 경로는 항상 undefined이고 공통 category state를 그대로 쓴다. */
-  category?: string | null;
   /** 상위 맥락 — 컨플루언스 일괄은 상위·자기 페이지 제목 + 페이지 내 헤딩 조상, 파일·붙여넣기·단일 URL은 문서 안 제목 조상
    * (2026-09-22 일괄, 2026-10-07 전 경로). 확정(bulkCreateKnowledge)까지 실려가야 검색 컨텍스트에 반영된다. */
   headingPath?: string[] | null;
@@ -750,21 +614,15 @@ const STRATEGY_OPTIONS: { value: string; label: string; desc: string }[] = [
   { value: 'fixed', label: '고정 길이', desc: '구조가 불규칙하거나 아주 긴 텍스트를 균등 분할' },
 ];
 
-function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, category, categoryNames, onCategoryChange, currentStrategy, onRestrategize, perChunkCategory, unstructuredPages }: {
+function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, currentStrategy, onRestrategize, unstructuredPages }: {
   isOpen: boolean;
   onClose: () => void;
   chunks: ReviewChunk[];
   onConfirm: (selected: ReviewChunk[]) => Promise<void>;
   loading: boolean;
   sourceName: string;
-  category: string;
-  categoryNames: string[];
-  onCategoryChange: (v: string) => void;
   currentStrategy?: string | null;
   onRestrategize?: (strategy: string) => Promise<void>;
-  /** 컨플루언스 벌크 등록 전용(2026-09-22) — 페이지별로 이미 자동 배정된 업무구분이 있어
-   * 공통 드롭다운 하나를 강제하지 않는다. 각 청크에 배정된 값을 뱃지로 보여주기만 한다. */
-  perChunkCategory?: boolean;
   /** 헤딩 없이 작성된 페이지 제목(2026-10-01) — 섹션 경계·부모 섹션 확장이 원본 헤딩에 의존해서
    * 등록 전에 알린다(정적 파싱이라 원본을 고치는 게 근본 해결). */
   unstructuredPages?: string[];
@@ -813,15 +671,6 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
             헤딩 없는 페이지 {unstructuredPages.length}개 — 섹션 구분 안 됨
           </div>
         )}
-        {perChunkCategory ? (
-          <div className="rounded-lg bg-slate-900/60 border border-slate-700 px-3 py-2 text-xs text-slate-400">
-            업무구분은 페이지별로 자동 배정됩니다(각 청크 옆 뱃지 참고) — 상위 페이지 제목이나
-            내용으로 판단하며, 필요하면 등록 후 지식 목록에서 직접 수정할 수 있습니다.
-          </div>
-        ) : (
-          <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={onCategoryChange} allowAi />
-        )}
-
         {/* 청킹 전략 재선택 */}
         {onRestrategize && (
           <div className="rounded-lg border border-slate-700/60 bg-slate-900/40 px-3 py-2.5 space-y-1.5">
@@ -879,11 +728,6 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
                       {chunk.title && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 border border-amber-700/30">
                           {chunk.title}
-                        </span>
-                      )}
-                      {perChunkCategory && chunk.category && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-700/30">
-                          {chunk.category}
                         </span>
                       )}
                       <span className="text-[10px] text-slate-600">{chunk.text.length}자</span>
@@ -1039,9 +883,8 @@ function IngestionProgressModal({ jobId, onClose, onSettled }: {
 
 // ── 서브탭 2: 지식 등록 ───────────────────────────────────────────────────────
 
-function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoToList, onGoToReview }: {
+function IngestTab({ namespace, canModify, jobs, onSuccess, onGoToList, onGoToReview }: {
   namespace: string;
-  categoryNames: string[];
   canModify: boolean;
   jobs: IngestionJob[];
   onSuccess: () => void;
@@ -1095,10 +938,6 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
         <div className="space-y-1.5 pl-1">
           <div className="flex items-start gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0 mt-1" />
-            <span><span className="text-slate-300">AI 자동 태깅</span><span className="text-slate-600 mx-1.5">—</span>카테고리 · 시스템명 · 중요도 자동 분류<span className="ml-2 text-slate-600">파일 업로드 · URL/Confluence</span></span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0 mt-1" />
             <span><span className="text-slate-300">AI 청크 전략</span><span className="text-slate-600 mx-1.5">—</span>텍스트 구조 분석 후 최적 분할 방식 자동 결정<span className="ml-2 text-slate-600">파일 업로드 · 대량 텍스트 · URL/Confluence</span></span>
           </div>
           <div className="flex items-start gap-2">
@@ -1137,19 +976,19 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
 
       {/* 선택된 방법의 인라인 폼 */}
       {activeMethod === 'file' && (
-        <FileUploadForm namespace={namespace} categoryNames={categoryNames}
+        <FileUploadForm namespace={namespace}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'text' && (
-        <TextSplitForm namespace={namespace} categoryNames={categoryNames}
+        <TextSplitForm namespace={namespace}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'manual' && (
-        <ManualForm namespace={namespace} categoryNames={categoryNames}
+        <ManualForm namespace={namespace}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'url' && (
-        <UrlForm namespace={namespace} categoryNames={categoryNames}
+        <UrlForm namespace={namespace}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
 
@@ -1288,7 +1127,6 @@ function ReviewTab({ items, canModify, onResolved }: {
             className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-slate-800/60 transition-colors"
           >
             <Badge color="amber">승인 대기</Badge>
-            {item.category && <Badge color="cyan">{item.category}</Badge>}
             <span className="text-sm text-slate-300 truncate flex-1">{item.content}</span>
             {item.created_by_username && (
               <span className="text-[11px] text-slate-500 flex-shrink-0">{item.created_by_username}</span>
@@ -1402,12 +1240,11 @@ function ReviewTab({ items, canModify, onResolved }: {
 
 // ── 파일 업로드 인라인 폼 ────────────────────────────────────────────────────
 
-function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
-  namespace: string; categoryNames: string[];
+function FileUploadForm({ namespace, onSuccess, onCancel }: {
+  namespace: string;
   onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [category, setCategory] = useState(AI_CATEGORY);
   const [detectedStrategy, setDetectedStrategy] = useState<string | null>(null);
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [showReview, setShowReview] = useState(false);
@@ -1460,8 +1297,6 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setDetectedStrategy(result.detected_strategy ?? null);
       setReviewChunks(result.chunks.map(c => ({ ...c, headingPath: c.heading_path ?? null, sourceDocumentId: result.source_document_id ?? null, selected: true })));
       setShowReview(true);
-      const hint = result.chunks.slice(0, 3).map(c => c.text).join('\n');
-      autoSuggestCategoryIfUntouched(namespace, categoryNames, category, keepUserChoice(setCategory), hint);
     } catch (e: any) {
       const msg = e.message || '파일 분석 실패';
       // 사용자 친화적 메시지로 변환
@@ -1482,7 +1317,7 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setLoading(true); setError('');
     try {
       const partial = partialSourceDocs(selected, reviewChunks);
-      const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null,
+      const items = selected.map(c => ({ content: c.text, heading_path: c.headingPath ?? null,
         source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
       const result = await bulkCreateConfirmed(namespace, items, file!.name, 'file_upload');
       if (!result) return;
@@ -1503,8 +1338,6 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
   return (
     <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-4">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><Upload className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />파일 업로드</h3>
-
-      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} allowAi />
 
       <div
         className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-colors ${
@@ -1562,7 +1395,6 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
         onConfirm={handleConfirm}
         loading={loading}
         sourceName={file?.name ?? ''}
-        category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
         currentStrategy={detectedStrategy} onRestrategize={handleRestrategize}
       />
     </div>
@@ -1572,12 +1404,11 @@ function FileUploadForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
 // ── 대량 텍스트 인라인 폼 ────────────────────────────────────────────────────
 
-function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
-  namespace: string; categoryNames: string[];
+function TextSplitForm({ namespace, onSuccess, onCancel }: {
+  namespace: string;
   onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
 }) {
   const [text, setText] = useState('');
-  const [category, setCategory] = useState(AI_CATEGORY);
   const [detectedStrategy, setDetectedStrategy] = useState<string | null>(null);
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [showReview, setShowReview] = useState(false);
@@ -1594,7 +1425,6 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
       setDetectedStrategy(result.detected_strategy ?? null);
       setReviewChunks(result.chunks.map((c, i) => ({ idx: i, text: c, title: null, selected: true, headingPath: result.heading_paths?.[i] ?? null, sourceDocumentId: result.source_document_id ?? null })));
       setShowReview(true);
-      autoSuggestCategoryIfUntouched(namespace, categoryNames, category, keepUserChoice(setCategory), text);
     } catch (e: any) { setError(e.message || '분할 미리보기 실패'); }
     finally { setPreviewing(false); }
   };
@@ -1603,7 +1433,7 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
     setLoading(true); setError('');
     try {
       const partial = partialSourceDocs(selected, reviewChunks);
-      const items = selected.map(c => ({ content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null,
+      const items = selected.map(c => ({ content: c.text, heading_path: c.headingPath ?? null,
         source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
       const result = await bulkCreateConfirmed(namespace, items, '텍스트 직접입력', 'paste_split');
       if (!result) return;
@@ -1623,8 +1453,6 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
   return (
     <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-4">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><FileText className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />대량 텍스트 등록</h3>
-
-      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} allowAi />
 
       <textarea rows={10} value={text} onChange={(e) => { setText(e.target.value); setDetectedStrategy(null); setDone(''); }}
         placeholder={"여기에 긴 텍스트를 붙여넣으세요...\n\nAI가 내용을 분석하여 최적의 분할 방식을 자동으로 결정합니다."}
@@ -1656,7 +1484,6 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
         onConfirm={handleConfirm}
         loading={loading}
         sourceName="텍스트 직접입력"
-        category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
         currentStrategy={detectedStrategy} onRestrategize={handleRestrategize}
       />
     </div>
@@ -1666,15 +1493,12 @@ function TextSplitForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
 // ── 직접 입력 인라인 폼 ──────────────────────────────────────────────────────
 
-function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
-  namespace: string; categoryNames: string[];
+function ManualForm({ namespace, onSuccess, onCancel }: {
+  namespace: string;
   onSuccess: (outcome?: { pendingReview?: boolean }) => void; onCancel: () => void;
 }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState<KnowledgeFormData>({
-    ...defaultForm,
-    category: AI_CATEGORY,
-  });
+  const [form, setForm] = useState<KnowledgeFormData>(defaultForm);
   const [done, setDone] = useState('');
   const [donePending, setDonePending] = useState(false);
 
@@ -1683,7 +1507,6 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
       createKnowledge({
         namespace,
         content: form.content,
-        category: categoryForServer(form.category),
       }),
     onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
@@ -1694,7 +1517,7 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
           : '등록 완료'
       );
       setDonePending(!!created.pending_review);
-      setForm({ ...defaultForm, category: AI_CATEGORY });
+      setForm(defaultForm);
       onSuccess({ pendingReview: !!created.pending_review });
     },
   });
@@ -1703,17 +1526,9 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
     <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-3">
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2"><PenLine className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />직접 입력</h3>
 
-      <RequiredCategoryField categoryNames={categoryNames} value={form.category}
-        onChange={(v) => setForm((f) => ({ ...f, category: v }))} allowAi />
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">내용 <span className="text-rose-400">*</span></label>
         <textarea rows={8} value={form.content} onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
-          onBlur={() => {
-            const hint = form.content;
-            // 등록 후 폼이 비워진 뒤 늦게 온 추천은 버린다(내용이 그대로일 때만)
-            void autoSuggestCategoryIfUntouched(namespace, categoryNames, form.category,
-              (v) => setForm((f) => (f.category === AI_CATEGORY && f.content === hint ? { ...f, category: v } : f)), hint);
-          }}
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[160px]" />
       </div>
 
@@ -1736,13 +1551,12 @@ function ManualForm({ namespace, categoryNames, onSuccess, onCancel }: {
 
 // ── URL / Confluence 인라인 폼 ────────────────────────────────────────────────
 
-function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
-  namespace: string; categoryNames: string[];
+function UrlForm({ namespace, onSuccess, onCancel }: {
+  namespace: string;
   onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
 }) {
   const { user, updateUser } = useAuthStore();
   const [url, setUrl] = useState('');
-  const [category, setCategory] = useState(AI_CATEGORY);
   const [reviewChunks, setReviewChunks] = useState<ReviewChunk[]>([]);
   const [sourceMeta, setSourceMeta] = useState<{ name: string; type: string } | null>(null);
   const [unstructuredPages, setUnstructuredPages] = useState<string[]>([]);
@@ -1780,10 +1594,6 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         setTree(result);
         // 기본 선택: 모두 체크
         setSelectedPageIds(new Set(result.tree.map(n => n.page_id)));
-        // 페이지별 자동 배정을 쓰도록 기본값 초기화 — 채워둔 채로 두면 배치 전체가 그
-        // 값 하나로 다시 뭉친다(2026-09-22, 지식 카테고리 자동화). 비워두면 자동 배정,
-        // 사람이 직접 고르면 그 값이 모든 페이지에 적용되는 오버라이드로 남는다.
-        setCategory(AI_CATEGORY);
         setShowTreeModal(true);
       } catch (e: any) { setError(e.message || '트리 조회 실패'); }
       finally { setTreeLoading(false); }
@@ -1835,7 +1645,6 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         text: c.text,
         title: c.title ? `${c.page_title} — ${c.title}` : c.page_title,
         selected: true,
-        category: c.category,
         headingPath: c.heading_path,
         sourceDocumentId: c.source_document_id ?? null,
         confluencePageId: c.confluence_page_id,
@@ -1867,16 +1676,14 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
   const handleConfirm = async (selected: ReviewChunk[]) => {
     setLoading(true); setError('');
     try {
-      // confluence_bulk는 페이지별 자동 배정 카테고리(c.category)와 조상 헤딩(c.headingPath)을
-      // 그대로 쓴다 — 리뷰에서 안 보이는 공통 category state로 덮어쓰면 배치 전체가 하나로
-      // 도로 뭉친다(2026-09-22). heading_path는 이전엔 이 확정 경로 자체에 필드가 없어서
-      // v2.98 이후로도 계속 NULL로 저장되고 있던 것까지 이번에 같이 고침.
+      // confluence_bulk는 조상 헤딩(c.headingPath)을 그대로 쓴다(2026-09-22). heading_path는 이전엔 이 확정 경로 자체에
+      // 필드가 없어서 v2.98 이후로도 계속 NULL로 저장되고 있던 것까지 같이 고침. 업무구분은 10/22 폐지.
       // 컨플루언스 원본 식별자(2026-09-28)는 단일 URL/트리 일괄 둘 다 실어 보낸다 — 없으면 null
       const partialUrl = partialSourceDocs(selected, reviewChunks);
       const items = selected.map(c => ({
         ...(sourceMeta?.type === 'confluence_bulk'
-          ? { content: c.text, category: c.category || categoryForServer(category), heading_path: c.headingPath }
-          : { content: c.text, category: categoryForServer(category), heading_path: c.headingPath ?? null }),
+          ? { content: c.text, heading_path: c.headingPath }
+          : { content: c.text, heading_path: c.headingPath ?? null }),
         confluence_page_id: c.confluencePageId ?? null,
         confluence_version: c.confluenceVersion ?? null,
         source_document_id: c.sourceDocumentId ?? null,
@@ -1916,8 +1723,6 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
       <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
         <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />URL / Confluence 수집
       </h3>
-
-      <RequiredCategoryField categoryNames={categoryNames} value={category} onChange={setCategory} allowAi />
 
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">URL <span className="text-rose-400">*</span></label>
@@ -1988,8 +1793,6 @@ function UrlForm({ namespace, categoryNames, onSuccess, onCancel }: {
         onConfirm={handleConfirm}
         loading={loading}
         sourceName={sourceMeta?.name ?? url}
-        category={category} categoryNames={categoryNames} onCategoryChange={setCategory}
-        perChunkCategory={sourceMeta?.type === 'confluence_bulk'}
         unstructuredPages={unstructuredPages}
       />
 

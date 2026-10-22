@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { NamespaceDetail, KnowledgeCategory } from '../types';
+import type { NamespaceDetail } from '../types';
 
 // GET /api/namespaces returns string[]
 export async function getNamespaces(): Promise<string[]> {
@@ -56,36 +56,4 @@ export async function deleteNamespace(name: string): Promise<void> {
   }
 }
 
-// Category CRUD
-
-export async function getCategories(namespace: string): Promise<KnowledgeCategory[]> {
-  return apiFetch<KnowledgeCategory[]>(`/namespaces/${encodeURIComponent(namespace)}/categories`);
-}
-
-export async function createCategory(namespace: string, name: string): Promise<KnowledgeCategory> {
-  return apiFetch<KnowledgeCategory>(`/namespaces/${encodeURIComponent(namespace)}/categories`, {
-    method: 'POST',
-    body: JSON.stringify({ name }),
-  });
-}
-
-export async function renameCategory(namespace: string, catName: string, newName: string): Promise<KnowledgeCategory> {
-  return apiFetch<KnowledgeCategory>(`/namespaces/${encodeURIComponent(namespace)}/categories/${encodeURIComponent(catName)}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ name: newName }),
-  });
-}
-
-export async function deleteCategory(namespace: string, catName: string): Promise<void> {
-  await apiFetch<void>(`/namespaces/${encodeURIComponent(namespace)}/categories/${encodeURIComponent(catName)}`, {
-    method: 'DELETE',
-  });
-}
-
-export async function suggestCategory(namespace: string, content: string): Promise<string | null> {
-  const res = await apiFetch<{ suggested_category: string | null }>(
-    `/namespaces/${encodeURIComponent(namespace)}/categories/suggest`,
-    { method: 'POST', body: JSON.stringify({ content }) },
-  );
-  return res.suggested_category;
-}
+// 업무구분 CRUD·AI 추천 API는 10/22 업무구분 폐지로 삭제

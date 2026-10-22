@@ -4,7 +4,7 @@
 뜬 것. LLM 연결 실패는 통계 밖 system_error로. 한때 문구 기준으로만 좁혔다가 "근거 없으면 공백이 맞다"는 지적으로 되돌렸고,
 그 과정에서 캐시 응답이 정책 근거를 못 보고 공백으로 잘못 세지던 버그도 고쳤다(agent.py) — 이 판정을 고정한다.
 
-conftest가 service/core를 MagicMock으로 막아 두므로 파일 경로로 실제 모듈을 로드한다(test_admin_category_suggest.py 참고).
+conftest가 service/core를 MagicMock으로 막아 두므로 파일 경로로 실제 모듈을 로드한다(test_agent_rrf_context.py 참고).
 """
 import importlib.util as _ilu
 import sys

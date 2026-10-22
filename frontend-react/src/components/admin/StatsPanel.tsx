@@ -42,7 +42,6 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
   const [error, setError] = useState<string | null>(null);
 
   // 열 때 빈 칸으로 — 공백 질의의 AI 답변은 "관련 지식을 찾지 못했습니다"뿐이라 채워 두면 지우는 수고만 생겼다(2026-10-06).
-  // 업무구분도 묻지 않는다 — 서버가 내용으로 추천, 없으면 "분류 확인 필요"(다른 등록 경로와 같음, 업무구분 없는 파트도 등록 가능)
   useEffect(() => {
     if (open && log) {
       setContent('');
@@ -101,10 +100,6 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
             placeholder="이 질문에 답이 될 내용을 적어 주세요"
           />
         </div>
-
-        <p className="text-[11px] text-slate-500" title="기존 업무구분 중 내용에 맞는 것을 추천하고, 없으면 '분류 확인 필요'로 등록합니다">
-          업무구분은 내용으로 자동 지정됩니다.
-        </p>
 
         {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 

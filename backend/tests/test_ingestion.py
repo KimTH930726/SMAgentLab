@@ -207,10 +207,11 @@ class TestBulkCreateKnowledge:
             fake_emb.embed_batch.assert_called_once_with(["지식1", "지식2"])
 
     @pytest.mark.asyncio
-    async def test_missing_category_auto_resolved_not_rejected(self):
-        """카테고리 자동 관리(2026-09-24) — 예전엔 category가 비어있으면 _require_category가
-        ValueError로 등록 자체를 거부했다. 지금은 resolve_or_create_category()가 대신 값을
-        채워 넣어 등록이 그대로 성공해야 한다(수동/파일/텍스트 등록 전부 해당)."""
+    async def test_category_never_saved_and_no_llm(self):
+        """업무구분 폐지(10/22) — 옛 화면·스크립트가 category를 실어 보내도 저장하지 않고(칸 자체를 INSERT에서 뺌),
+        업무구분 AI 추천(예전 resolve_or_create_category — 묶음·행마다 LLM)도 부르지 않는다.
+        불변식: INSERT 자리표시자 수 = 행 튜플 길이(번호를 당기다 어긋나면 실 DB에서야 깨진다), 내용·순서 유실 0."""
+        import re
         fake_conn = MagicMock()
         fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
         fake_conn.__aexit__ = AsyncMock(return_value=False)
@@ -218,91 +219,24 @@ class TestBulkCreateKnowledge:
         fake_conn.execute = AsyncMock()
         fake_conn.executemany = AsyncMock()
         fake_conn.fetch = AsyncMock(return_value=[])
-
-        fake_emb = MagicMock()
-        fake_emb.embed_batch = AsyncMock(return_value=[[0.1] * 768])
-
-        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
-             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
-             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
-             patch("service.admin.service.resolve_or_create_category", AsyncMock(return_value="자동배정됨")):
-            from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
-            result = await bulk_create_knowledge(
-                "test-ns", [{"content": "카테고리 없는 지식"}], background=False,
-            )
-            assert result["created"] == 1
-            # 실제 INSERT는 executemany(rows)로 나가고, category는 각 row 튜플의
-            # 5번째 값(namespace_id, content, embedding, base_weight, category, ...)
-            insert_call = next(
-                c for c in fake_conn.executemany.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]
-            )
-            rows = insert_call.args[1]
-            assert rows[0][4] == "자동배정됨"
-
-    @pytest.mark.asyncio
-    async def test_ai_category_decided_once_per_batch(self):
-        """'AI 분석'(빈 업무구분) 일괄 등록은 묶음 전체에 한 번만 추천(2026-10-08) — 예전엔 청크마다 사내 LLM 순차 호출이라
-        비용이 청크 수만큼, 한 문서가 여러 업무구분으로 흩어졌다. 사람이 고른 값이 있는 청크는 그대로."""
-        fake_conn = MagicMock()
-        fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
-        fake_conn.__aexit__ = AsyncMock(return_value=False)
-        fake_conn.fetchval = AsyncMock(side_effect=[1, False, 1])
-        fake_conn.execute = AsyncMock()
-        fake_conn.executemany = AsyncMock()
-        fake_conn.fetch = AsyncMock(return_value=[])
         fake_emb = MagicMock()
         fake_emb.embed_batch = AsyncMock(return_value=[[0.1] * 768] * 4)
-        llm_calls = []
-
-        async def resolve(ns_id, category, content):
-            if category and category.strip():
-                return category.strip()
-            llm_calls.append(content)          # 빈 값일 때만 LLM 추천이 돈다
-            return "AI가고름"
-
-        items = [{"content": "조각1"}, {"content": "조각2", "category": ""}, {"content": "조각3"},
-                 {"content": "조각4", "category": "공통지식"}]
-        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
-             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
-             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
-             patch("service.admin.service.resolve_or_create_category", resolve):
-            from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
-            await bulk_create_knowledge("test-ns", items, background=False)
-        assert len(llm_calls) == 1
-        assert "조각4" not in llm_calls[0]          # 샘플은 업무구분이 빈 조각에서만
-        rows = next(c for c in fake_conn.executemany.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]).args[1]
-        assert [r[4] for r in rows] == ["AI가고름", "AI가고름", "AI가고름", "공통지식"]
-
-    @pytest.mark.asyncio
-    async def test_csv_import_still_decides_per_row(self):
-        """리뷰 2026-10-08: CSV는 행마다 독립 지식(FAQ 등) — 묶음 1회 판단을 적용하면 주제가 섞인 행이 전부 한 업무구분으로 묶인다."""
-        fake_conn = MagicMock()
-        fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
-        fake_conn.__aexit__ = AsyncMock(return_value=False)
-        fake_conn.fetchval = AsyncMock(side_effect=[1, False, 1])
-        fake_conn.execute = AsyncMock()
-        fake_conn.executemany = AsyncMock()
-        fake_conn.fetch = AsyncMock(return_value=[])
-        fake_emb = MagicMock()
-        fake_emb.embed_batch = AsyncMock(return_value=[[0.1] * 768] * 2)
-        calls = []
-
-        async def resolve(ns_id, category, content):
-            if category and category.strip():
-                return category.strip()
-            calls.append(content)
-            return "배송" if "배송" in content else "환불"
-
-        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
-             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
-             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
-             patch("service.admin.service.resolve_or_create_category", resolve):
-            from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
-            await bulk_create_knowledge("test-ns", [{"content": "배송 문의"}, {"content": "환불 문의"}],
-                                        source_type="csv_import", background=False)
-        assert len(calls) == 2
-        rows = next(c for c in fake_conn.executemany.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]).args[1]
-        assert [r[4] for r in rows] == ["배송", "환불"]
+        items = [{"content": "조각1"}, {"content": "조각2", "category": ""}, {"content": "조각3", "category": "공통지식"},
+                 {"content": "조각4", "category": "DB"}]
+        with (patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn),
+              patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)),
+              patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb)):
+            from agents.knowledge_rag.knowledge import service as svc
+            result = await svc.bulk_create_knowledge("test-ns", items, background=False)
+        assert result["created"] == 4
+        insert = next(c for c in fake_conn.executemany.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]
+                      and "duplicate_match" not in c.args[0])
+        sql, rows = insert.args
+        assert "category" not in sql
+        assert all(len(r) == len(set(re.findall(r"[$](\d+)", sql))) for r in rows)
+        assert [r[1] for r in rows] == ["조각1", "조각2", "조각3", "조각4"]
+        assert all("공통지식" not in r and "DB" not in r for r in rows)
+        assert not hasattr(svc, "_require_category")
 
 
 class TestBulkIngestionStagedActivation:
@@ -319,8 +253,7 @@ class TestBulkIngestionStagedActivation:
         with patch.object(L, "lock_sources", AsyncMock()), \
              patch.object(L, "valid_documents", AsyncMock(return_value=[])), \
              patch.object(L, "replacing_documents", AsyncMock(return_value=[])), \
-             patch.object(L, "touched_reasons", AsyncMock(return_value={"edited": 0, "removed": 0, "partial": False,
-                                                                           "mixed_category": False})):
+             patch.object(L, "touched_reasons", AsyncMock(return_value={"edited": 0, "removed": 0, "partial": False})):
             yield
 
     ITEMS = [{"content": "지식1", "category": "공통지식"}, {"content": "지식2", "category": "공통지식"}]
@@ -400,7 +333,7 @@ class TestBulkIngestionStagedActivation:
         assert len(inserts) == 2  # 배치 크기 1 → 배치 2개
         # 배치 도중엔 어느 행도 active가 아니다 — 검색 허용목록(status='active')에 안 걸림
         for rows in inserts:
-            assert rows[0][10] == "staging"
+            assert rows[0][9] == "staging"   # 업무구분 칸 제거(10/22)로 한 칸 당겨짐
         # 전환은 모든 배치 이후 딱 한 번, 이 job의 스테이징 행만 대상
         activations = self._activation_updates(calls)
         assert activations == [(7,)]
@@ -421,7 +354,7 @@ class TestBulkIngestionStagedActivation:
 
         assert result["pending"] == 2
         inserts = [rows for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q]
-        assert all(rows[0][10] == "staging_review" for rows in inserts)
+        assert all(rows[0][9] == "staging_review" for rows in inserts)
         activation_sql = next(q for q, _ in calls["execute"] if "UPDATE rag_knowledge" in q and "'active'" in q)
         assert "'pending_review'" in activation_sql and "'staging_review'" in activation_sql
 
@@ -516,7 +449,7 @@ class TestBulkIngestionStagedActivation:
         assert all(c.kwargs["replacing_confluence_pages"] == ["p1"] for c in similar.await_args_list)
         # 원본 식별자가 행에 실제로 저장됨(rows 튜플 13·14번째 = confluence_page_id/version)
         inserts = [rows for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q]
-        assert inserts[0][0][12] == "p1" and inserts[0][0][13] == 3
+        assert inserts[0][0][11] == "p1" and inserts[0][0][12] == 3
 
     # ── 원문 원장: 전환 직전(잠금 안) 다시 확인 — 리뷰 2026-10-12 ──
     def _ledger_state(self, *, replacing, touched=None):
@@ -525,7 +458,7 @@ class TestBulkIngestionStagedActivation:
         return rep, [patch.object(L, "valid_documents", AsyncMock(return_value=[5])),
                      patch.object(L, "replacing_documents", rep),
                      patch.object(L, "touched_reasons", AsyncMock(return_value={"edited": 0, "removed": 0, "partial": False,
-                                                                                 "mixed_category": False, **(touched or {})})),
+                                                                                 **(touched or {})})),
                      patch.object(L, "activate", AsyncMock())]
 
     async def _run_ledger(self, conn, emb, patches, *, active_newcomers=0, **kwargs):
@@ -698,12 +631,12 @@ class TestBulkIngestionStagedActivation:
 
 # ─── CSV 파싱 로직 테스트 (router 레벨) ──────────────────────────────────────
 
-class TestCreateKnowledgeCategoryAutoResolve:
-    """create_knowledge()(단건 등록) 카테고리 자동 관리(2026-09-24) — bulk 경로와 동일한
-    resolve_or_create_category() 안전망이 단건 등록(ManualForm)에도 걸려있는지 확인."""
+class TestCreateKnowledgeNoCategory:
+    """create_knowledge()(단건 등록) — 업무구분 폐지(10/22): category 없이 저장, 업무구분 AI 추천 안 부름."""
 
     @pytest.mark.asyncio
-    async def test_missing_category_auto_resolved_not_rejected(self):
+    async def test_saved_without_category(self):
+        import re
         fake_conn = MagicMock()
         fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
         fake_conn.__aexit__ = AsyncMock(return_value=False)
@@ -712,28 +645,23 @@ class TestCreateKnowledgeCategoryAutoResolve:
         fake_conn.transaction.return_value.__aenter__ = AsyncMock(return_value=None)
         fake_conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
         fake_conn.fetchrow = AsyncMock(return_value={
-            "id": 1, "namespace_id": 1, "content": "카테고리 없는 지식", "base_weight": 1.0,
-            "category": "자동배정됨", "status": "active",
-            "created_by_user_id": None,
-            "created_at": "2026-09-24", "updated_at": "2026-09-24",
+            "id": 1, "namespace_id": 1, "content": "업무구분 없는 지식", "base_weight": 1.0, "status": "active",
+            "created_by_user_id": None, "created_at": "2026-10-22", "updated_at": "2026-10-22",
         })
-
         fake_emb = MagicMock()
         fake_emb.embed = AsyncMock(return_value=[0.1] * 1024)
-
-        with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
-             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)), \
-             patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb), \
-             patch("agents.knowledge_rag.knowledge.service.find_similar_active_knowledge", AsyncMock(return_value=[])), \
-             patch("agents.knowledge_rag.knowledge.service.get_thresholds", return_value={"duplicate_min_similarity": 0.95}), \
-             patch("service.admin.service.resolve_or_create_category", AsyncMock(return_value="자동배정됨")):
+        with (patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn),
+              patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=1)),
+              patch("agents.knowledge_rag.knowledge.service.embedding_service", fake_emb),
+              patch("agents.knowledge_rag.knowledge.service.find_similar_active_knowledge", AsyncMock(return_value=[])),
+              patch("agents.knowledge_rag.knowledge.service.get_thresholds", return_value={"duplicate_min_similarity": 0.95})):
             from agents.knowledge_rag.knowledge.service import create_knowledge
-            result = await create_knowledge("test-ns", "카테고리 없는 지식")
-            assert result["category"] == "자동배정됨"
-            insert_call = next(
-                c for c in fake_conn.fetchrow.call_args_list if "INSERT INTO rag_knowledge" in c.args[0]
-            )
-            assert "자동배정됨" in insert_call.args
+            result = await create_knowledge("test-ns", "업무구분 없는 지식")
+        assert "category" not in result
+        insert_call = next(c for c in fake_conn.fetchrow.call_args_list if "INSERT INTO rag_knowledge" in c.args[0])
+        sql, *args = insert_call.args
+        assert "category" not in sql
+        assert {int(n) for n in re.findall(r"[$](\d+)", sql)} == set(range(1, len(args) + 1))
 
 
 class TestCsvParsing:
@@ -757,7 +685,7 @@ class TestCsvParsing:
         import io
         import json
 
-        mapping = {"content": "설명", "category": "분류"}
+        mapping = {"content": "설명"}   # 업무구분 열 매핑은 10/22 폐지
         text = "설명,분류\n테스트 내용,장애\n"
         reader = csv.DictReader(io.StringIO(text))
         rows = list(reader)
@@ -767,14 +695,9 @@ class TestCsvParsing:
             content = row.get(mapping["content"], "").strip()
             if not content:
                 continue
-            item = {"content": content}
-            if mapping.get("category") and row.get(mapping["category"]):
-                item["category"] = row[mapping["category"]].strip()
-            items.append(item)
+            items.append({"content": content})
 
-        assert len(items) == 1
-        assert items[0]["content"] == "테스트 내용"
-        assert items[0]["category"] == "장애"
+        assert items == [{"content": "테스트 내용"}]
 
     def test_csv_empty_content_skipped(self):
         """content가 비어있는 행은 skip."""

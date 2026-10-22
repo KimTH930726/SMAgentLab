@@ -53,9 +53,9 @@ class TestValidateAndNormalize:
         assert "priority_score" not in _validate_and_normalize({})
 
     def test_prompts_do_not_ask_priority(self):
-        from agents.knowledge_rag.ingestion import analyzer, tagger
+        from agents.knowledge_rag.ingestion import analyzer
         assert "priority_score" not in analyzer._ANALYZER_PROMPT
-        assert "priority_score" not in tagger._TAGGER_PROMPT
+        assert "suggested_categories" not in analyzer._ANALYZER_PROMPT   # 업무구분 추천도 묻지 않는다(10/22)
 
     def test_estimated_chunks_non_numeric(self):
         result = _validate_and_normalize({"estimated_chunks": "many"})
@@ -65,7 +65,7 @@ class TestValidateAndNormalize:
         result = _validate_and_normalize({})
         assert result["doc_type"] == "mixed"
         assert result["domain"] == ""
-        assert result["suggested_categories"] == []
+        assert "suggested_categories" not in result   # 업무구분 추천은 10/22 폐지
         assert result["key_terms"] == []
 
 
@@ -79,6 +79,7 @@ class TestAnalyzeDocument:
         assert result["doc_type"] == "operation_manual"
         assert result["chunk_strategy"] == "section"
         assert "priority_score" not in result   # LLM이 내놓아도 버린다(10/21)
+        assert "suggested_categories" not in result   # 업무구분 추천도 버린다(10/22 폐지)
         assert len(result["key_terms"]) == 1
 
     @pytest.mark.asyncio
@@ -90,6 +91,7 @@ class TestAnalyzeDocument:
         assert result["doc_type"] == "mixed"
         assert result["chunk_strategy"] == "auto"
         assert "priority_score" not in result
+        assert "suggested_categories" not in result
 
     @pytest.mark.asyncio
     async def test_empty_text_returns_default(self):

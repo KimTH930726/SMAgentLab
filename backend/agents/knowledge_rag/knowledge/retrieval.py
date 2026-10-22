@@ -119,7 +119,6 @@ class RetrievalResult:
     final_score: float
     v_score: float = field(default=0.0)
     k_score: float = field(default=0.0)
-    category: Optional[str] = field(default=None)
     heading_path: list[str] = field(default_factory=list)
     source_type: Optional[str] = field(default=None)
     source_file: Optional[str] = field(default=None)
@@ -144,18 +143,8 @@ def relevance_score(r: RetrievalResult) -> float:
 def is_adopted(r: RetrievalResult, thresholds: dict[str, float]) -> bool:
     """이 결과를 실제 LLM 컨텍스트에 넣을지 최종 판단 (2026-09-18).
 
-    `_KEYWORD_ONLY_CATEGORIES`(DB/공통코드) 문서는 벡터 점수 대신 ts_rank로만
-    순위가 매겨지는데, ts_rank는 코사인 유사도(대략 0.2~0.9대)와 스케일 자체가 달라
-    보통 0.01~0.1대다("DS14가 뭐야?" 실측: policy_strip_ko 조사 제거 버그를 고친 뒤에도
-    k_score=0.0304). 코사인 스케일로 보정된 knowledge_min_score(0.35)를 그대로 대면
-    "매칭은 됐지만 ts_rank가 작다"는 이유로 항상 걸러진다 — RRF가 풀었던 것과 똑같은
-    스케일 불일치 문제가 단일 축 안에서 재현된 것. 이 카테고리의 원래 설계 의도
-    (`_KEYWORD_ONLY_CATEGORIES` 주석 참고)는 "정확히 일치해야 의미 있다"는 이진 판단
-    이라, ts_rank 크기가 아니라 "키워드 매칭이 됐는지"(final_score > 0 — 매칭 안 되면
-    SQL의 keyword_scores CTE에 아예 없어 final_score가 0으로 떨어짐)만으로 채택 여부를
-    가른다."""
-    if r.category in _KEYWORD_ONLY_CATEGORIES:
-        return r.final_score > 0
+    업무구분 "DB/공통코드" 키워드 전용 분기(매칭만 되면 채택)는 10/22 업무구분 폐지로 삭제 —
+    해당 활성 지식 0건, 구조화 데이터는 ref_common_code(refdata 채널)로 검색된다."""
     return relevance_score(r) >= thresholds["knowledge_min_score"]
 
 
@@ -289,21 +278,8 @@ _VECTOR_CANDIDATE_LIMIT = 300  # top_k/reranker_candidates(기본 20)보다 넉�
 # 벡터 CTE를 ORDER BY + LIMIT로 유계화해 정렬 비용을 줄인다(테이블이 커지면 HNSW
 # 인덱스도 이 형태에서만 자동으로 쓰이기 시작함).
 
-# "정확히 일치해야 의미 있는" 구조화 데이터(DB 스키마/코드표 덤프) — 코사인 유사도로
-# 비교하면 다른 카테고리 지식과 어휘만 겹쳐도 오탐이 난다는 게 실측으로 확인됨
-# (2026-08-28, VOC 반복 유형 커버리지 판정에서 완전히 무관한 코드표 항목이 매칭됨).
-# 이 카테고리는 벡터 점수를 랭킹에서 배제하고 키워드(RDB 텍스트) 매칭만으로 순위를
-# 매긴다 — 질문 자체를 분류하는 게 아니라, 이미 등록된 지식 행의 category 값으로
-# 판단한다(등록 시점에 정해지는 값이라 별도 분류 로직 불필요). 관리자 설정으로
-# 노출하지 않고 코드 상수로 고정 — 카테고리가 딱 2개뿐이라 지금은 설정 화면을
-# 만들 정도의 규모가 아니라고 판단(few-shot 관리 UI를 일부러 안 만든 것과 같은 이유).
-_KEYWORD_ONLY_CATEGORIES = ("DB", "공통코드")
-
-
-def is_keyword_only_category(category: Optional[str]) -> bool:
-    """다른 모듈(agent.py 등)이 private 상수(_KEYWORD_ONLY_CATEGORIES)를 직접 참조하지
-    않고도 같은 판단을 할 수 있게 하는 공개 헬퍼."""
-    return category in _KEYWORD_ONLY_CATEGORIES
+# 업무구분 키워드 전용 분기(DB·공통코드 상수)는 10/22 업무구분 폐지로 삭제 —
+# 해당 활성 지식 0건이라 점수·순위 변화 없음. 구조화 데이터는 ref_common_code/ref_db_column(refdata 채널).
 
 
 # BM25 키워드 구제(v2.139, trustkit) — 하이브리드 점수(벡터 + ts_rank 가중합)는 ts_rank에 IDF가 없어 드문 단어가 약하다. 채팅 문맥용
@@ -336,23 +312,19 @@ async def _keyword_ids(conn, ns_ids: list[int], query: str, k: int) -> list[int]
 async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
     w_vector: float = 0.7, w_keyword: float = 0.3, top_k: int = 5,
-    categories: Optional[list[str]] = None, keyword_rescue: bool = False,
+    keyword_rescue: bool = False,
 ) -> list[RetrievalResult]:
     async with get_conn() as conn:
         # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6). 하위가 없으면 [자신] — 예전과 같은 행 집합
         ns_ids = await namespace_scope_ids(conn, namespace)
         if not ns_ids:
             return []
-        category_filter = "AND k.category = ANY($9)" if categories else ""
         params = [
             str(query_vec), ns_ids, enriched_query, w_vector, w_keyword, max(top_k, _RESCUE_POOL) if keyword_rescue else top_k,
             _VECTOR_CANDIDATE_LIMIT,
-            list(_KEYWORD_ONLY_CATEGORIES),
         ]
-        if categories:
-            params.append(categories)
         rows = await conn.fetch(
-            f"""
+            """
             WITH vector_scores AS (
                 SELECT id, 1 - (embedding <=> $1::vector) AS v_score
                 FROM rag_knowledge
@@ -387,17 +359,12 @@ async def search_knowledge(
                   AND to_tsvector('simple', policy_strip_ko(k.content)) @@ q.tsq
             )
             SELECT k.id, n.name AS namespace,
-                   k.content, k.base_weight, k.category, k.heading_path,
+                   k.content, k.base_weight, k.heading_path,
                    k.source_type, k.source_file, k.created_at,
                    COALESCE(vs.v_score, 0.0) AS v_score,
                    COALESCE(ks.k_score, 0.0) AS k_score,
-                   -- 카테고리별로 RDB(키워드) 검색을 쓸지 벡터 검색을 쓸지 여기서 갈린다
-                   -- ($8 = _KEYWORD_ONLY_CATEGORIES) — 구조화 코드/스키마 데이터는 벡터
-                   -- 점수를 0으로 만들어 랭킹에서 배제하고 키워드 점수만으로 순위를 매김.
-                   (CASE WHEN k.category = ANY($8::text[])
-                         THEN COALESCE(ks.k_score, 0.0)
-                         ELSE $4 * COALESCE(vs.v_score, 0.0) + $5 * COALESCE(ks.k_score, 0.0)
-                    END) * (1.0 + k.base_weight) AS final_score,
+                   -- 업무구분 키워드 전용 분기는 10/22 삭제(해당 활성 행 0건 — 모든 행이 원래 쓰던 가중합 그대로)
+                   ($4 * COALESCE(vs.v_score, 0.0) + $5 * COALESCE(ks.k_score, 0.0)) * (1.0 + k.base_weight) AS final_score,
                    k.updated_at
             FROM rag_knowledge k
             JOIN ops_namespace n ON k.namespace_id = n.id
@@ -406,7 +373,6 @@ async def search_knowledge(
             WHERE k.namespace_id = ANY($2::int[])
               AND (k.status IS NULL OR k.status = 'active')
               AND (vs.v_score IS NOT NULL OR ks.k_score IS NOT NULL)
-              {category_filter}
             ORDER BY final_score DESC, k.id LIMIT $6   -- 동점 순서 고정(완전 동일 조각 쌍이 있으면 실행마다 순위가 바뀌었다)
             """,
             *params,
@@ -437,7 +403,7 @@ async def search_knowledge(
             content=r["content"],
             base_weight=r["base_weight"],
             v_score=float(r["v_score"]), k_score=float(r["k_score"]),
-            final_score=score, category=r["category"],
+            final_score=score,
             heading_path=list(r["heading_path"] or []),
             source_type=r["source_type"], source_file=r["source_file"],
             created_at=r["created_at"],
@@ -475,11 +441,7 @@ def build_context(results: list[RetrievalResult]) -> str:
     parts = []
     for i, r in enumerate(relevant, 1):
         rel = relevance_score(r)
-        # 키워드 전용 카테고리는 ts_rank가 코사인 스케일보다 항상 작아 mid/high 라벨이
-        # 무의미(is_adopted에서 이미 매칭 여부로만 채택 판단) — "정확 매칭"으로 고정 표시
-        confidence = "정확 매칭" if r.category in _KEYWORD_ONLY_CATEGORIES else (
-            "높음" if rel >= th["knowledge_high_score"] else "보통" if rel >= th["knowledge_mid_score"] else "낮음"
-        )
+        confidence = "높음" if rel >= th["knowledge_high_score"] else "보통" if rel >= th["knowledge_mid_score"] else "낮음"
         part = [f"--- 문서 {i} (점수: {rel:.4f}, 신뢰도: {confidence}) ---"]
         if r.heading_path:
             part.append(f"상위 맥락: {' > '.join(r.heading_path)}")

@@ -5,9 +5,8 @@ import { Search, Flag, FlagOff, Check, X, PenLine, Database } from 'lucide-react
 import { debugSearch } from '../../api/chat';
 import { searchPolicy, type ParamHit, type NarrativeHit } from '../../api/policy';
 import { searchRefdata, type CommonCodeHit, type DbColumnHit } from '../../api/refdata';
-import { flagKnowledgeForReview, updateKnowledge, getKeywordOnlyCategories } from '../../api/knowledge';
+import { flagKnowledgeForReview, updateKnowledge } from '../../api/knowledge';
 import { getSearchThresholds } from '../../api/llm';
-import { getCategories } from '../../api/namespaces';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { Modal } from '../ui/Modal';
 import type { DebugSearchResult } from '../../types';
@@ -33,8 +32,8 @@ import { showError } from '../../store/useDialogStore';
  * 이유와 정확히 같은 함정). 원점수는 배지 텍스트로 그대로 보여줘 투명성은 유지.
  *
  * 검색 오염 지식 관리(2026-09-18): 딜리버스 DB에서 무관한 질문에 공통코드 표(id=20)가
- * 1위로 튀는 실제 사례를 발견 — 카테고리를 "공통코드"로 재태깅해 키워드 전용 라우팅으로
- * 옮겨 해결했지만, 같은 클래스 문제(보일러플레이트 문서가 여러 무관한 질문에 반복
+ * 1위로 튀는 실제 사례를 발견 — 그 표를 참조데이터(ref_common_code)로
+ * 옮겨 해결했지만(업무구분 키워드 전용 라우팅은 10/22 폐지), 같은 클래스 문제(보일러플레이트 문서가 여러 무관한 질문에 반복
  * 노출)가 또 나올 수 있다는 지적으로 카드에 "이상해요" 플래그를 추가 — 기존
  * 정정 검토(개선 원장, 지식 베이스 > 정정 검토 탭 — 2026-10-02 리뷰 신호를 합침)에
  * reason='search_noise'로 올린다. 정책 결과(params/narratives)는 rag_knowledge가 아니라
@@ -51,7 +50,7 @@ import { showError } from '../../store/useDialogStore';
  *
  * 인라인 수정(2026-09-18): "검색해서 나온 지식을 그 자리에서 고치면서 품질 관리를
  * 하고 싶다, 지금은 조회만 된다"는 요청 — 지식베이스 탭까지 왕복하지 않고 상세 모달
- * 안에서 바로 수정할 수 있게 KnowledgeTable의 편집 폼(content/category/base_weight)과
+ * 안에서 바로 수정할 수 있게 KnowledgeTable의 편집 폼(content — 업무구분은 10/22 폐지)과
  * 동일한 필드를 넣었다. 정책 항목(params/narratives)은 rag_knowledge가 아니라 별도
  * 테이블이라 이 경로로 수정 불가 — 수정 버튼은 일반지식 카드에만 노출. 저장 후에는
  * 점수·채택 여부가 바뀔 수 있어(내용이 달라지면 재임베딩되고 유사도도 달라짐) 그냥
@@ -84,7 +83,6 @@ interface UnifiedHit {
   meta: MetaRow[];
   adopted: boolean;
   adoptedReason: string;
-  rawCategory?: string;
   storage: { table: string; recordId: string | number; rows: MetaRow[] };
 }
 
@@ -132,15 +130,7 @@ export function UnifiedAdhocSearch() {
   const [flaggedIds, setFlaggedIds] = useState<Set<number>>(new Set());
   const [flaggingId, setFlaggingId] = useState<number | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [editForm, setEditForm] = useState({ content: '', category: '' });
-
-  const { data: categories = [] } = useQuery({
-    queryKey: ['categories', selectedNs],
-    queryFn: () => getCategories(selectedNs),
-    enabled: !!selectedNs,
-    staleTime: 30_000,
-  });
-  const categoryNames = categories.map((c) => c.name);
+  const [editForm, setEditForm] = useState({ content: '' });
 
   const updateMutation = useMutation({
     mutationFn: (id: number) => updateKnowledge(id, editForm),
@@ -159,14 +149,6 @@ export function UnifiedAdhocSearch() {
     staleTime: 60_000,
   });
 
-  // retrieval._KEYWORD_ONLY_CATEGORIES 단일 소스(2026-09-18) — 예전엔 이 배열을 여기
-  // 직접 하드코딩해서 백엔드 상수와 따로 관리됐음(드리프트 위험, 사용자 지적으로 수정).
-  const { data: keywordOnlyCategories = [] } = useQuery({
-    queryKey: ['keyword-only-categories'],
-    queryFn: getKeywordOnlyCategories,
-    staleTime: 5 * 60_000,
-  });
-
   const handleSearch = async () => {
     if (!selectedNs || !question.trim()) return;
     setLoading(true);
@@ -179,38 +161,27 @@ export function UnifiedAdhocSearch() {
       ]);
       const minScore = thresholds?.knowledge_min_score ?? 0;
 
-      // "DB"/"공통코드"는 벡터 대신 ts_rank로만 순위가 매겨져(retrieval.py
-      // _KEYWORD_ONLY_CATEGORIES, 위 keywordOnlyCategories 쿼리로 백엔드에서 받아옴)
-      // 코사인 스케일용 임계치를 그대로 대면 항상 걸러진다(ts_rank는 보통 0.01~0.1대)
-      // — 백엔드 is_adopted()와 동일하게 이 카테고리는 "키워드 매칭이 됐는지"
-      // (final_score>0)만으로 채택 여부를 가른다.
+      // 업무구분 키워드 전용 채택 분기(DB/공통코드)는 10/22 업무구분 폐지로 삭제 — 백엔드 is_adopted()와 같이 임계치만 본다
       const generalHits: UnifiedHit[] = general.results.map((r: DebugSearchResult, i) => {
         // base_weight를 걷어낸 원점수로 게이트 판단(2026-09-18) — final_score를 그대로
         // 쓰면 base_weight(기본 1.0, 최대 5.0)가 곱해져 있어 "관련성"이 아니라 "피드백을
         // 얼마나 받았는지"를 재게 됨(백엔드 retrieval.relevance_score()와 동일 공식).
         const rawScore = r.final_score / (1 + r.base_weight);
-        const isKeywordOnly = r.category != null && keywordOnlyCategories.includes(r.category);
-        const adopted = isKeywordOnly ? r.final_score > 0 : rawScore >= minScore;
+        const adopted = rawScore >= minScore;
         return {
           source: 'general',
-          label: `문서 #${r.id}${r.category ? ` · ${r.category}` : ''}`,
+          label: `문서 #${r.id}`,
           snippet: r.content,
           fullContent: r.content,
           scoreLabel: `유사도(cosine) ${r.v_score.toFixed(4)}`,
           rrf: rrf(i),
           strengthPct: Math.max(4, Math.min(100, Math.round(r.v_score * 100))),
           knowledgeId: r.id,
-          rawCategory: r.category ?? '',
           adopted,
-          adoptedReason: isKeywordOnly
-            ? (adopted
-                ? '키워드 전용 카테고리(DB/공통코드) — 키워드 매칭이 돼 채택됩니다(ts_rank 크기는 무관).'
-                : '키워드 전용 카테고리(DB/공통코드) — 키워드 매칭이 안 돼 제외됩니다.')
-            : adopted
+          adoptedReason: adopted
               ? `관련성 점수 ${rawScore.toFixed(4)}(base_weight 제외) ≥ 채택 임계치 ${minScore.toFixed(2)} — 실제 chat 프롬프트에 포함됩니다.`
               : `관련성 점수 ${rawScore.toFixed(4)}(base_weight 제외) < 채택 임계치 ${minScore.toFixed(2)} — 순위와 무관하게 실제 chat 프롬프트엔 포함되지 않습니다.`,
           meta: [
-            { key: '분류', value: r.category ?? '-' },
             { key: '벡터 유사도', value: r.v_score.toFixed(4) },
             { key: '키워드 점수', value: r.k_score.toFixed(4) },
             { key: '관련성 점수(base_weight 제외)', value: rawScore.toFixed(4) },
@@ -222,7 +193,6 @@ export function UnifiedAdhocSearch() {
             recordId: r.id,
             rows: [
               { key: '업무 컬렉션(namespace)', value: selectedNs },
-              { key: '업무구분(category)', value: r.category ?? '(업무구분 없음)' },
               { key: '등록 방식', value: r.source_type ? (SOURCE_TYPE_LABEL[r.source_type] ?? r.source_type) : '-' },
               ...(r.source_file ? [{ key: '원본 파일/문서', value: r.source_file }] : []),
               { key: '등록일', value: r.created_at ? new Date(r.created_at).toISOString().slice(0, 10) : '-' },
@@ -388,10 +358,7 @@ export function UnifiedAdhocSearch() {
   };
 
   const startEdit = (hit: UnifiedHit) => {
-    setEditForm({
-      content: hit.fullContent,
-      category: hit.rawCategory ?? '',
-    });
+    setEditForm({ content: hit.fullContent });
     setIsEditing(true);
   };
 
@@ -448,7 +415,7 @@ export function UnifiedAdhocSearch() {
             <p><b className="text-slate-300">상단 막대</b> — 원점수 아님, 이번 검색 1위 대비 상대 강도.</p>
             <p>
               <b className="text-emerald-600 dark:text-emerald-400">채택</b>/<b className="text-rose-600 dark:text-rose-400">제외</b> — 실제 chat 프롬프트 포함 여부.
-              일반지식은 점수 ≥ {thresholds ? thresholds.knowledge_min_score.toFixed(2) : '…'} 필요(단, DB/공통코드 카테고리는 매칭 여부로만 판정), 정책·참조데이터는 항상 채택.
+              일반지식은 점수 ≥ {thresholds ? thresholds.knowledge_min_score.toFixed(2) : '…'} 필요, 정책·참조데이터는 항상 채택.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -646,17 +613,6 @@ export function UnifiedAdhocSearch() {
             ) : (
               <div className="space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1">업무구분</label>
-                  <select
-                    value={editForm.category}
-                    onChange={(e) => setEditForm((f) => ({ ...f, category: e.target.value }))}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-                  >
-                    <option value="" disabled>선택하세요</option>
-                    {categoryNames.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div>
                   <label className="block text-xs font-medium text-slate-400 mb-1">내용</label>
                   <textarea
                     rows={10}
@@ -678,7 +634,7 @@ export function UnifiedAdhocSearch() {
                   </button>
                   <button
                     onClick={() => activeHit.knowledgeId != null && updateMutation.mutate(activeHit.knowledgeId)}
-                    disabled={!editForm.content.trim() || !editForm.category || updateMutation.isPending}
+                    disabled={!editForm.content.trim() || updateMutation.isPending}
                     className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium transition-colors"
                   >
                     <Check className="w-3.5 h-3.5" />{updateMutation.isPending ? '저장 중...' : '저장'}

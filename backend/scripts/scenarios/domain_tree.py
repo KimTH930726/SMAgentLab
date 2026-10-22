@@ -33,6 +33,12 @@ async def ns_row(name: str):
         return await c.fetchrow("SELECT id, parent_id, owner_part_id FROM ops_namespace WHERE name = $1", name)
 
 
+def edit_probe(h, ns: str, headers: dict):
+    """영역 수정 권한 확인 — 예전엔 업무구분 만들기 API(10/22 업무구분 폐지로 삭제). 같은 검사(check_namespace_ownership)를 거치고
+    아무것도 쓰지 않는 등록 전 확인(replace-check)으로 바꿨다 — 허용 200 / 거부 403."""
+    return h.post("/api/knowledge/bulk/replace-check", json={"namespace": ns}, headers=headers)
+
+
 async def main() -> int:
     await init_pool()
     async with get_conn() as c:
@@ -74,15 +80,15 @@ async def main() -> int:
             chk("하위 있는 영역을 다른 영역 아래로 → 400 + 그대로", (r.status_code, (await ns_row(P + "top"))["parent_id"]), (400, None))
 
             # ③ 담당 상속: 하위 담당 비면 상위 담당 파트가 수정, 다른 파트 403
-            chk("상속: 상위 담당 파트가 하위 수정", (await h.post(f"/api/namespaces/{P}sub/categories", json={"name": "a"}, headers=U1)).status_code, 201)
-            chk("상속: 다른 파트는 하위 수정 불가", (await h.post(f"/api/namespaces/{P}sub/categories", json={"name": "b"}, headers=U2)).status_code, 403)
+            chk("상속: 상위 담당 파트가 하위 수정", (await edit_probe(h, P + "sub", U1)).status_code, 200)
+            chk("상속: 다른 파트는 하위 수정 불가", (await edit_probe(h, P + "sub", U2)).status_code, 403)
             chk("상속: 상위 담당 파트가 하위 통계 조회", (await h.get(f"/api/stats/namespace/{P}sub", headers=U1)).status_code, 200)
             chk("상속: 다른 파트는 하위 통계 불가", (await h.get(f"/api/stats/namespace/{P}sub", headers=U2)).status_code, 403)
 
             # ④ 하위에 다른 파트를 직접 지정하면 그게 우선
             await h.patch(f"/api/namespaces/{P}sub/settings", json={"owner_part": P + "p2"}, headers=A)
-            chk("직접 지정: 파트2 수정 가능", (await h.post(f"/api/namespaces/{P}sub/categories", json={"name": "c"}, headers=U2)).status_code, 201)
-            chk("직접 지정: 상위 담당 파트1은 불가", (await h.post(f"/api/namespaces/{P}sub/categories", json={"name": "d"}, headers=U1)).status_code, 403)
+            chk("직접 지정: 파트2 수정 가능", (await edit_probe(h, P + "sub", U2)).status_code, 200)
+            chk("직접 지정: 상위 담당 파트1은 불가", (await edit_probe(h, P + "sub", U1)).status_code, 403)
 
             # ⑤ 범위 SQL(실제 Postgres): 검색 = 자신 + 하위, 정정 = 담당 같은 하위만
             async with get_conn() as c:

@@ -180,8 +180,9 @@ class TestTableToMarkdown:
 
 # ─── LLM 태거 테스트 ────────────────────────────────────────────────────────
 
+from agents.knowledge_rag.ingestion import tagger as _tagger_mod
 from agents.knowledge_rag.ingestion.tagger import (
-    auto_tag_chunks, extract_glossary_terms, _parse_json_array,
+    extract_glossary_terms, _parse_json_array,
 )
 
 
@@ -203,31 +204,11 @@ class TestParseJsonArray:
             _parse_json_array('{"key": "value"}')
 
 
-class TestAutoTagChunks:
-    @pytest.mark.asyncio
-    async def test_success(self):
-        llm = MagicMock()
-        llm.generate_once = AsyncMock(return_value='[{"idx": 0, "category": "쿠폰"}]')
-
-        chunks = [{"idx": 0, "text": "쿠폰 발급 절차입니다."}]
-        result = await auto_tag_chunks(chunks, ["쿠폰", "배치"], llm)
-        assert len(result) == 1
-        assert result[0]["category"] == "쿠폰"
-
-    @pytest.mark.asyncio
-    async def test_llm_failure_fallback(self):
-        llm = MagicMock()
-        llm.generate_once = AsyncMock(side_effect=Exception("LLM error"))
-
-        chunks = [{"idx": 0, "text": "test"}, {"idx": 1, "text": "test2"}]
-        result = await auto_tag_chunks(chunks, [], llm)
-        assert len(result) == 2
-        assert result[0] == {"idx": 0, "category": None}  # fallback — 중요도 점수 없음(10/21)
-
-    @pytest.mark.asyncio
-    async def test_empty_chunks(self):
-        result = await auto_tag_chunks([], [], MagicMock())
-        assert result == []
+class TestAutoTagRemoved:
+    def test_category_tagger_gone(self):
+        # 업무구분 자동 태깅(auto_tag_chunks)은 10/22 업무구분 폐지로 삭제 — 용어 추출만 남는다
+        assert not hasattr(_tagger_mod, "auto_tag_chunks")
+        assert not hasattr(_tagger_mod, "_TAGGER_PROMPT")
 
 
 class TestExtractGlossaryTerms:

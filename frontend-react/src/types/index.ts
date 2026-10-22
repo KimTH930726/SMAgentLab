@@ -40,13 +40,6 @@ export interface Namespace {
   created_at: string;
 }
 
-export interface KnowledgeCategory {
-  id: number;
-  namespace: string;
-  name: string;
-  created_at: string;
-}
-
 export interface NamespaceDetail extends Namespace {
   id: number;
   kind?: string;
@@ -60,7 +53,6 @@ export interface NamespaceDetail extends Namespace {
   knowledge_count: number;
   glossary_count: number;
   policy_count?: number;     // 지금 쓰이는 정책
-  category_count?: number;   // 업무구분 수(④에서 없앨 예정)
   created_by_username?: string | null;
 }
 
@@ -78,7 +70,6 @@ export interface KnowledgeItem {
   namespace: string;
   content: string;
   base_weight: number;
-  category?: string | null;
   status?: KnowledgeStatus;
   created_by_user_id?: number | null;
   created_by_username?: string | null;
@@ -91,12 +82,10 @@ export interface KnowledgeItem {
 export interface KnowledgeCreatePayload {
   namespace: string;
   content: string;
-  category?: string | null;
 }
 
 export interface KnowledgeUpdatePayload {
   content?: string;
-  category?: string | null;
 }
 
 // Glossary types
@@ -290,7 +279,6 @@ export interface ChatRequest {
   wKeyword?: number;
   topK?: number;
   conversationId?: number | null;
-  categories?: string[] | null;
   clarifyScope?: string | null;
   signal?: AbortSignal;
 }
@@ -344,13 +332,11 @@ export interface DebugSearchRequest {
   w_vector?: number;
   w_keyword?: number;
   top_k?: number;
-  categories?: string[] | null;
 }
 
 export interface DebugSearchResult {
   id: number;
   content: string;
-  category: string | null;
   v_score: number;
   k_score: number;
   final_score: number;

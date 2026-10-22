@@ -4,7 +4,7 @@ import type { CorrectionRequestTarget, CorrectionCreated } from '../api/correcti
 /**
  * 근거 정정 입력 모드(2026-10-01) — 답변 아래 "답변 틀림"을 누르면 채팅 입력창이
  * "정정 입력 모드"로 바뀐다. 버튼(MessageItem·카드)과 입력창(ChatContainer)이 서로 다른 컴포넌트라
- * 공유 상태로 둔다. 사용자는 한 줄만 쓴다("답변 틀림"이면 대상도 AI가 찾음) — 가중치·업무구분은 묻지 않는다.
+ * 공유 상태로 둔다. 사용자는 한 줄만 쓴다("답변 틀림"이면 대상도 AI가 찾음) — 가중치는 묻지 않는다.
  */
 export interface CorrectionTarget {
   key: string;

@@ -102,8 +102,7 @@ class MailFolderOut(BaseModel):
 
 class KnowledgeRefOut(BaseModel):
     id: int
-    content: str
-    category: Optional[str] = None
+    content: str   # 지식 업무구분(category)은 10/22 폐지로 뺐다
 
 
 class ManualCollectionRequest(BaseModel):

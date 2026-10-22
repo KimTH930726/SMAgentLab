@@ -46,17 +46,14 @@ interface AppState {
   initSearchConfig: (cfg: SearchConfig) => void;
   chatRefreshKey: number;
   bumpChatRefresh: () => void;
-  categories: string[];
-  setCategories: (cats: string[]) => void;
-  autoDetectCategory: boolean;
-  setAutoDetectCategory: (v: boolean) => void;
+  // 채팅 업무구분 필터·자동 감지 상태는 10/22 업무구분 폐지로 삭제
 }
 
 export const useAppStore = create<AppState>((set) => ({
   selectedAgent: null,
   setSelectedAgent: (selectedAgent) => set({ selectedAgent, conversationId: null, conversations: [] }),
   namespace: '',
-  setNamespace: (namespace) => set({ namespace, conversationId: null, conversations: [], categories: [], autoDetectCategory: false }),
+  setNamespace: (namespace) => set({ namespace, conversationId: null, conversations: [] }),
   conversationId: null,
   setConversationId: (conversationId) =>
     set((state) => (state.conversationId === conversationId ? state : { conversationId })),
@@ -78,8 +75,4 @@ export const useAppStore = create<AppState>((set) => ({
   },
   chatRefreshKey: 0,
   bumpChatRefresh: () => set((state) => ({ chatRefreshKey: state.chatRefreshKey + 1 })),
-  categories: [],
-  setCategories: (categories) => set({ categories, autoDetectCategory: false }),
-  autoDetectCategory: false,
-  setAutoDetectCategory: (autoDetectCategory) => set({ autoDetectCategory, categories: [] }),
 }));

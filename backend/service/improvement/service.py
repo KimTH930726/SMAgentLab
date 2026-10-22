@@ -87,11 +87,12 @@ async def _load_original(conn, ns_id: int, target_type: str, target_id: Optional
     """신고 대상의 현재 원문 스냅샷. 대상이 이 네임스페이스(+ 직계 하위)의 현행 데이터가 아니면 ValueError."""
     if target_type == "knowledge":
         r = await conn.fetchrow(
-            "SELECT id, content, category, heading_path FROM rag_knowledge "
+            "SELECT id, content, heading_path FROM rag_knowledge "
             f"WHERE id = $1 AND namespace_id {_IN_SCOPE_2} AND status = 'active'", target_id, ns_id)
         if not r:
             raise ValueError("정정 대상 지식을 찾을 수 없거나 이미 바뀌었습니다.")
-        return {"content": r["content"], "category": r["category"], "heading_path": list(r["heading_path"] or [])}
+        # 업무구분(category)은 10/22 폐지로 스냅샷에서 뺐다(이미 저장된 옛 스냅샷의 category 키는 그대로 둔다)
+        return {"content": r["content"], "heading_path": list(r["heading_path"] or [])}
 
     if target_type in ("policy_param", "policy_narrative"):
         item = await conn.fetchrow(
@@ -923,14 +924,14 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
         raise ValueError("원본 지식이 이미 바뀌었거나 현행이 아닙니다 — 이 신고는 반려하세요.")
     new_id = await conn.fetchval("""
         INSERT INTO rag_knowledge
-            (namespace_id, content, embedding, base_weight, category, created_by_user_id,
+            (namespace_id, content, embedding, base_weight, created_by_user_id,
              source_file, source_chunk_idx, source_type, ingestion_job_id, status,
              logical_document_id, version, supersedes_id, embedding_model, reviewed_at, owner,
              confluence_page_id, confluence_version, heading_path, source_document_id, content_edited_at)
-        VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, 'active',
-                $11, $12, $13, $14, NOW(), $15, $16, $17, $18, $19, NOW())
+        VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, 'active',
+                $10, $11, $12, $13, NOW(), $14, $15, $16, $17, $18, NOW())
         RETURNING id
-    """, old["namespace_id"], content, str(embedding), old["base_weight"], old["category"],   # 원래 행의 영역 — 신고한 영역(상위)으로 옮기지 않는다
+    """, old["namespace_id"], content, str(embedding), old["base_weight"],   # 원래 행의 영역 — 신고한 영역(상위)으로 옮기지 않는다. 업무구분은 10/22 폐지로 안 옮김
         old["created_by_user_id"], old["source_file"], old["source_chunk_idx"], old["source_type"],
         old["ingestion_job_id"], old["logical_document_id"] or old["id"], (old["version"] or 1) + 1, old["id"],
         settings.embedding_model, old["owner"], old["confluence_page_id"], old["confluence_version"],
@@ -942,14 +943,13 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
     return new_id
 
 
-async def _apply_missing(conn, ns_id: int, content: str, embedding: list[float], category: str,
-                         approver: dict) -> int:
+async def _apply_missing(conn, ns_id: int, content: str, embedding: list[float], approver: dict) -> int:
     return await conn.fetchval("""
-        INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight, category,
+        INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight,
                                    created_by_user_id, source_type, status, embedding_model, reviewed_at, owner)
-        VALUES ($1, $2, $3::vector, 1.0, $4, $5, 'correction', 'active', $6, NOW(), $7)
+        VALUES ($1, $2, $3::vector, 1.0, $4, 'correction', 'active', $5, NOW(), $6)
         RETURNING id
-    """, ns_id, content, str(embedding), category, approver.get("id"),
+    """, ns_id, content, str(embedding), approver.get("id"),
         settings.embedding_model, approver.get("username"))
 
 
@@ -1103,11 +1103,7 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
     prepared = {}
     if item["target_type"] in ("policy_param", "policy_narrative"):
         prepared = await _prepare_policy(item["namespace_id"], item, proposed)
-    category = None
-    if item["target_type"] == "missing":
-        # 카테고리 자동 결정은 LLM을 부를 수 있어 행 잠금을 쥔 트랜잭션 밖에서
-        from service.admin.service import resolve_or_create_category
-        category = await resolve_or_create_category(item["namespace_id"], None, proposed["content"])
+    # 누락 지식의 업무구분 자동 결정(LLM)은 10/22 업무구분 폐지로 삭제
 
     async with get_conn() as conn:
         async with conn.transaction():
@@ -1115,9 +1111,9 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
                 "SELECT status, proposed, target_type, target_id, target_sub_id FROM ops_improvement_item WHERE id = $1 FOR UPDATE",
                 item_id)
             if not locked or locked["status"] != "pending":
-                # 처음 읽을 땐 대기였다 = 임베딩·분류를 기다리는 사이 다른 승인·반려가 먼저 끝남 — "그 사이 바뀜"과 같이 409(10/21 리뷰 5b)
+                # 처음 읽을 땐 대기였다 = 임베딩을 기다리는 사이 다른 승인·반려가 먼저 끝남 — "그 사이 바뀜"과 같이 409(10/21 리뷰 5b)
                 raise ConflictError("그 사이 다른 사람이 먼저 처리한 신고예요 — 새로고침해서 확인하세요.")
-            # 임베딩·분류(LLM)를 기다리는 동안 다른 사람이 다시 쓰기·대상 변경을 했으면 보지 못한 상태로 반영하지 않는다(리뷰 10/21)
+            # 임베딩을 기다리는 동안 다른 사람이 다시 쓰기·대상 변경을 했으면 보지 못한 상태로 반영하지 않는다(리뷰 10/21)
             if (_json(locked["proposed"]) != stored
                     or (locked["target_type"], locked["target_id"], locked["target_sub_id"])
                     != (item["target_type"], item["target_id"], item["target_sub_id"])):
@@ -1126,7 +1122,7 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
             if item["target_type"] == "knowledge":
                 new_id = await _apply_knowledge(conn, ns_id, item["target_id"], proposed["content"], embedding)
             elif item["target_type"] == "missing":
-                new_id = await _apply_missing(conn, ns_id, proposed["content"], embedding, category, approver)
+                new_id = await _apply_missing(conn, ns_id, proposed["content"], embedding, approver)
             else:
                 new_id = await _apply_policy(conn, ns_id, item, proposed, approver, prepared)
             await conn.execute("""

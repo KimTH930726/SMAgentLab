@@ -526,9 +526,8 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
     page_url = _build_page_url(base, page_id, page)
     page_version = page.get("version", {}).get("number")
     # ancestors: REST API가 루트→직계상위 순으로 반환 — 마지막 원소가 직계 상위 페이지.
-    # 카테고리 자동화(2026-09-22, docs/tech/knowledge-category-automation.md)의 1순위
-    # 신호 — space명은 팀 전체가 스페이스 하나에 몰려있어 너무 굵다는 게 실측 확인됨,
-    # 직계 상위 페이지 제목이 실제 업무구분과 훨씬 가깝다(예: "외부서비스" > "배달의민족").
+    # 직계 상위 페이지 제목 — heading_path 보강(_enrich_heading_path)에 쓴다. 예전 업무구분 자동 생성 용도는
+    # 10/22 업무구분 폐지로 삭제(space명은 스페이스 하나에 몰려 너무 굵다는 실측은 그대로 유효).
     ancestors = page.get("ancestors") or []
     parent_title = ancestors[-1].get("title") if ancestors else None
 

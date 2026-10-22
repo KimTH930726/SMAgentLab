@@ -285,7 +285,11 @@ class TestApplyKnowledge:
         assert new_id == 6
         args = conn.fetchval.await_args.args
         assert args[2] == "새 본문"
-        assert args[11] == 5 and args[12] == 2 and args[13] == 5  # logical_document_id=원본 id, version 2, supersedes
+        assert args[10] == 5 and args[11] == 2 and args[12] == 5  # logical_document_id=원본 id, version 2, supersedes
+        # 업무구분은 새 버전에 옮기지 않는다(10/22 폐지) — 자리표시자 수 = 넘긴 값 수(번호를 당기다 어긋나지 않게)
+        import re
+        assert "category" not in args[0]
+        assert {int(n) for n in re.findall(r"\$(\d+)", args[0])} == set(range(1, len(args)))
         calls = [c.args for c in conn.execute.await_args_list]
         assert any("status = 'deprecated'" in c[0] and c[1] == 5 for c in calls)
         # 이 지식으로 메운 지식 공백도 새 버전을 가리키게(2026-10-02) — 폐기된 옛 버전을 "메운 지식"으로 잡지 않게

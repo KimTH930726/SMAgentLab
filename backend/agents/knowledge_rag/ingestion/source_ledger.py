@@ -109,29 +109,25 @@ async def replacing_documents(conn, ns_id: int, doc_ids: list[int], page_ids: li
 
 
 def has_touch(reasons: dict) -> bool:
-    return bool(reasons.get("edited") or reasons.get("removed") or reasons.get("partial") or reasons.get("mixed_category"))
+    return bool(reasons.get("edited") or reasons.get("removed") or reasons.get("partial"))
 
 
 async def touched_reasons(conn, ns_id: int, doc_ids: list[int], page_ids: list[str] = ()) -> dict:
     """원문(doc_ids)의 지금 조각에 사람이 손댄 흔적 — 교체(재등록·다시 분할)가 조용히 덮으면 안 되는 것(A안 2026-10-12).
 
-    page_ids: 원장 이전에 등록된 컨플루언스 페이지 조각(원문 연결 없음) — 지금 데이터 대부분이 이것이라 같이 본다(고친 조각만 —
-    v2.129 이전엔 조각마다 업무구분을 LLM이 따로 정해, 업무구분이 섞인 게 사람 손이 아니다).
+    page_ids: 원장 이전에 등록된 컨플루언스 페이지 조각(원문 연결 없음) — 지금 데이터 대부분이 이것이라 같이 본다(고친 조각만).
+    업무구분 혼재(mixed_category) 사유는 10/22 업무구분 폐지로 삭제.
     removed는 지금 "사용 중"인 원문에서, 사용 중이 된 뒤 빠진 조각만(리뷰 L2 — 이미 교체된 옛 원문이나 다시 분할 전 등록분의
     삭제가 다음 재등록마다 계속 걸리던 것. 실서버 시나리오에서 교체 직후 재등록이 또 확인을 묻는 것으로 발견).
     """
     doc_ids, page_ids = list(doc_ids or []), list(page_ids or [])
     if not doc_ids and not page_ids:
-        return {"edited": 0, "removed": 0, "partial": False, "mixed_category": False}
+        return {"edited": 0, "removed": 0, "partial": False}
     scope = ("k.namespace_id = $1 AND (k.source_document_id = ANY($2::int[]) "
              "OR (k.source_document_id IS NULL AND k.confluence_page_id = ANY($3::text[])))")
     row = await conn.fetchrow(f"""
         SELECT count(*) FILTER (WHERE k.status IN ('active', 'pending_review')
-                                  AND (k.content_edited_at IS NOT NULL OR k.supersedes_id IS NOT NULL)) AS edited,
-               (SELECT count(DISTINCT x.category) FROM rag_knowledge x
-                WHERE x.namespace_id = $1 AND x.source_document_id = ANY($2::int[])
-                  AND x.status IN ('active', 'pending_review') AND x.category IS NOT NULL
-                GROUP BY x.source_document_id ORDER BY 1 DESC LIMIT 1) AS max_categories
+                                  AND (k.content_edited_at IS NOT NULL OR k.supersedes_id IS NOT NULL)) AS edited
         FROM rag_knowledge k WHERE {scope}
     """, ns_id, doc_ids, page_ids)
     removed = await conn.fetchval("""
@@ -142,8 +138,7 @@ async def touched_reasons(conn, ns_id: int, doc_ids: list[int], page_ids: list[s
     partial = await conn.fetchval("SELECT bool_or(registered_partial) FROM rag_source_document "
                                   "WHERE namespace_id = $1 AND id = ANY($2::int[]) AND status = 'active'",
                                   ns_id, doc_ids) if doc_ids else False
-    return {"edited": int(row["edited"] or 0), "removed": int(removed or 0), "partial": bool(partial),
-            "mixed_category": int(row["max_categories"] or 0) > 1}   # 한 원문 안에서 조각마다 업무구분을 다르게 둠
+    return {"edited": int(row["edited"] or 0), "removed": int(removed or 0), "partial": bool(partial)}
 
 
 async def lock_sources(conn, ns_id: int, doc_ids: list[int], page_ids: list[str] = ()) -> None:

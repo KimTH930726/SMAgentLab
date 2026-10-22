@@ -362,26 +362,16 @@ async def _migrate_system_tables(conn) -> None:
     """)
     # agent_type 컬럼 마이그레이션 (기존 DB 대응)
     await conn.execute("ALTER TABLE ops_prompt ADD COLUMN IF NOT EXISTS agent_type VARCHAR(50) NOT NULL DEFAULT 'all'")
-    # 기본 프롬프트 시드 데이터
+    # 기본 프롬프트 시드 데이터 — 업무구분 추천 프롬프트는 10/22 업무구분 폐지로 시드에서 뺐다(기존 행 삭제는 승인 뒤 따로)
     await conn.execute("""
         INSERT INTO ops_prompt (func_key, func_name, content, description, agent_type) VALUES
         ('chat_system',         'RAG 채팅 시스템',         $1,  'RAG 기반 지식 검색 채팅의 시스템 프롬프트',                              'knowledge_rag'),
-        ('category_suggest',    '카테고리 자동 추천',       $2,  '지식 내용 분석 후 업무구분 추천. {categories}·{content} 플레이스홀더 필수', 'knowledge_rag'),
-        ('glossary_suggest',    '용어 추천 시스템',         $3,  '미매핑 질문에서 업무 용어를 추출하는 시스템 프롬프트',                    'knowledge_rag'),
-        ('conv_summarize',      '대화 요약',               $4,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all')
+        ('glossary_suggest',    '용어 추천 시스템',         $2,  '미매핑 질문에서 업무 용어를 추출하는 시스템 프롬프트',                    'knowledge_rag'),
+        ('conv_summarize',      '대화 요약',               $3,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all')
         ON CONFLICT (func_key) DO NOTHING
     """,
         # chat_system — 코드 기본값과 같은 문구(service/llm/base.CHAT_SYSTEM_PROMPT, 2026-10-13 한 곳으로)
         CHAT_SYSTEM_PROMPT,
-        # category_suggest
-        """다음 지식 내용을 읽고, 제시된 업무구분 중 가장 적합한 하나를 골라주세요. 반드시 제시된 업무구분 중 하나의 이름만 답하고, 다른 설명은 절대 하지 마세요.
-
-업무구분 목록: {categories}
-
-지식 내용:
-{content}
-
-가장 적합한 업무구분 이름:""",
         # glossary_suggest
         """당신은 업무 용어를 추출하는 전문가입니다. 답변은 반드시 JSON 형식으로만 출력하세요.""",
         # conv_summarize
@@ -395,7 +385,7 @@ async def _migrate_system_tables(conn) -> None:
     # 기존 rows에 agent_type 업데이트 (DEFAULT 'all'로 들어간 경우 보정)
     await conn.execute("""
         UPDATE ops_prompt SET agent_type = 'knowledge_rag'
-        WHERE func_key IN ('chat_system','category_suggest','glossary_suggest') AND agent_type = 'all'
+        WHERE func_key IN ('chat_system','glossary_suggest') AND agent_type = 'all'
     """)
 
 

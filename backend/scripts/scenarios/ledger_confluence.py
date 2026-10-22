@@ -17,7 +17,6 @@ import urllib.request
 API = "http://localhost:8000"
 URL = sys.argv[1]
 NS = "zz원장컨플" + time.strftime("%H%M%S")
-CAT = "시나리오"
 
 
 def call(method, path, body=None, tok=None):
@@ -65,7 +64,7 @@ def preview():
 
 
 def items_of(p):
-    return [{"content": c["text"], "category": CAT, "heading_path": c["heading_path"], "source_document_id": p["source_document_id"],
+    return [{"content": c["text"], "heading_path": c["heading_path"], "source_document_id": p["source_document_id"],
              "confluence_page_id": p["confluence_page_id"], "confluence_version": p["confluence_version"]} for c in p["chunks"]]
 
 
@@ -77,7 +76,6 @@ def register(p, confirm=False):
 tok = call("POST", "/api/auth/login", {"username": "admin", "password": "1111"})[1]["access_token"]
 assert call("POST", "/api/namespaces", {"name": NS, "description": "원장 컨플루언스 실경로 시나리오(자동 삭제)"}, tok)[0] == 200
 try:
-    call("POST", f"/api/namespaces/{NS}/categories", {"name": CAT}, tok)
     ns_id = sql(f"SELECT id FROM ops_namespace WHERE name = '{NS}'")
 
     p1 = preview()
@@ -105,7 +103,7 @@ try:
     p2 = preview()
     s, c = call("POST", "/api/knowledge/bulk/replace-check", {"namespace": NS, "source_document_ids": [p2["source_document_id"]],
                                                               "confluence_page_ids": [str(p2["confluence_page_id"])]}, tok)
-    check("손대지 않은 페이지 재등록 — 확인 불필요", s == 200 and c["needs_confirm"] is False, str({k: c[k] for k in ("edited", "removed", "partial", "mixed_category")}))
+    check("손대지 않은 페이지 재등록 — 확인 불필요", s == 200 and c["needs_confirm"] is False, str({k: c[k] for k in ("edited", "removed", "partial")}))
 
     kid = sql(f"SELECT min(id) FROM rag_knowledge WHERE source_document_id = {d1} AND status = 'active'")
     old = sql(f"SELECT content FROM rag_knowledge WHERE id = {kid}")

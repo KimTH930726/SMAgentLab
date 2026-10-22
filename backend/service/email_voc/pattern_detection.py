@@ -61,7 +61,6 @@ from typing import Optional
 
 import numpy as np
 
-from agents.knowledge_rag.knowledge.retrieval import _KEYWORD_ONLY_CATEGORIES
 from core.database import get_conn, resolve_namespace_id, scope_ids_subquery
 from service.llm.factory import get_llm_provider
 from shared.json_utils import parse_json_object
@@ -360,18 +359,13 @@ async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
                 -- 클러스터 영역 + 직계 하위 영역(트리, category-removal-design §2-6 — 채팅 지식 검색과 같은 규칙 scope_ids_subquery)
                 WHERE k.namespace_id IN ({_VOC_SCOPE})
                   AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
-                  -- 구조화 코드/스키마 덤프(DB/공통코드)는 "해결방안"으로 성립할 수 없는
-                  -- 데이터인데도 코사인 유사도만으론 걸러지지 않아 후보에서 아예 제외한다
-                  -- (2026-08-28, retrieval.py의 _KEYWORD_ONLY_CATEGORIES와 동일 기준 재사용).
-                  -- category가 NULL인 행은 "= ANY(...)"가 NULL로 평가돼 WHERE에서 그
-                  -- 행 자체가 통째로 빠지므로(오탐 아님) "IS NULL OR" 로 먼저 구제한다.
-                  AND (k.category IS NULL OR k.category != ALL($3::text[]))
+                  -- 업무구분 DB/공통코드 제외 조건은 10/22 업무구분 폐지로 삭제(해당 활성 지식 0건 — 후보 동일)
                 ORDER BY k.embedding <=> c.representative_embedding
                 LIMIT 1
             ) best ON true
             WHERE c.id = $1 AND c.namespace_id = $2
             """,
-            cluster_id, ns_id, list(_KEYWORD_ONLY_CATEGORIES),
+            cluster_id, ns_id,
         )
         if row is None:
             return {"covered": False, "snippet": None}
@@ -416,8 +410,7 @@ async def list_clusters(namespace: str) -> list[dict]:
                 -- 클러스터 영역 + 직계 하위 영역(트리, category-removal-design §2-6 — 채팅 지식 검색과 같은 규칙 scope_ids_subquery)
                 WHERE k.namespace_id IN ({_VOC_SCOPE})
                   AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
-                  -- get_cluster_coverage()와 동일 기준 — 구조화 코드/스키마 덤프 제외
-                  AND (k.category IS NULL OR k.category != ALL($2::text[]))
+                  -- 업무구분 DB/공통코드 제외 조건은 10/22 삭제(get_cluster_coverage()와 같음)
                 ORDER BY k.embedding <=> c.representative_embedding
                 LIMIT 1
             ) best ON true
@@ -444,7 +437,7 @@ async def list_clusters(namespace: str) -> list[dict]:
             WHERE c.namespace_id = $1
             ORDER BY c.last_seen_at DESC
             """,
-            ns_id, list(_KEYWORD_ONLY_CATEGORIES),
+            ns_id,
         )
 
         # LLM 호출(캐시 미스 시)이 끼어들 수 있어 커버리지 판정은 배치 쿼리와 분리해

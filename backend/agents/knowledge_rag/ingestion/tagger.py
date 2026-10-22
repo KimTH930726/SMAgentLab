@@ -1,4 +1,4 @@
-"""LLM 기반 자동 메타데이터 태깅 + 용어 추출."""
+"""LLM 기반 용어 추출(업무구분 자동 태깅 auto_tag_chunks는 10/22 업무구분 폐지로 삭제)."""
 import logging
 from typing import Optional
 
@@ -7,23 +7,6 @@ from shared.json_utils import parse_json_array
 _parse_json_array = parse_json_array  # 테스트 호환성 유지
 
 logger = logging.getLogger(__name__)
-
-_TAGGER_SYSTEM = """You are a metadata extraction expert for an IT operations knowledge base.
-Analyze the given text chunks and extract metadata in JSON format.
-Always respond with valid JSON only."""
-
-_TAGGER_PROMPT = """아래 텍스트 청크들의 메타데이터를 추출해주세요.
-
-[텍스트 청크 목록]
-{chunks_text}
-
-[사용 가능한 카테고리]
-{categories}
-
-각 청크에 대해 category를 고르세요: 위 카테고리 중 하나 (해당 없으면 null)
-
-응답 형식 (JSON 배열만 반환):
-[{{"idx": 0, "category": "카테고리"}}, ...]"""
 
 _GLOSSARY_SYSTEM = """You are a domain terminology expert for IT operations.
 Extract key business terms from the text. Return valid JSON only."""
@@ -39,49 +22,6 @@ _GLOSSARY_PROMPT = """아래 텍스트에서 도메인 전문 용어를 추출�
 
 응답 형식 (JSON 배열만 반환):
 [{{"term": "용어", "description": "설명 (20자 내외)"}}, ...]"""
-
-
-async def auto_tag_chunks(
-    chunks: list[dict],
-    categories: list[str],
-    llm,
-    *,
-    user_credentials: Optional[dict] = None,
-) -> list[dict]:
-    """LLM으로 청크들의 카테고리를 자동 태깅(중요도 점수는 10/21 제거 — 읽는 곳 없음, 토큰 낭비).
-
-    Args:
-        chunks: [{"idx": int, "text": str}, ...]
-        categories: 사용 가능한 카테고리 목록
-        llm: LLM provider instance
-    Returns:
-        [{"idx": 0, "category": str|None}, ...]
-    """
-    if not chunks:
-        return []
-
-    # 청크 텍스트 요약 (토큰 절약 — 각 청크 처음 300자)
-    chunks_text = "\n\n".join(
-        f"[청크 {c['idx']}]\n{c['text'][:600]}{'...' if len(c['text']) > 600 else ''}"
-        for c in chunks
-    )
-    categories_text = ", ".join(categories) if categories else "(미정의 — null 반환)"
-
-    prompt = _TAGGER_PROMPT.format(chunks_text=chunks_text, categories=categories_text)
-
-    try:
-        raw = await llm.generate_once(
-            prompt=prompt,
-            system=_TAGGER_SYSTEM,
-            max_tokens=2000,
-            user_credentials=user_credentials,
-        )
-        result = parse_json_array(raw)
-        logger.info("자동 태깅 완료: %d개 청크", len(result))
-        return result
-    except Exception as e:
-        logger.warning("자동 태깅 실패 (폴백: 빈 태그): %s", e)
-        return [{"idx": c["idx"], "category": None} for c in chunks]
 
 
 async def extract_glossary_terms(

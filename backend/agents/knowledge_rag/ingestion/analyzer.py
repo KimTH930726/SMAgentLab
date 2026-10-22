@@ -24,7 +24,6 @@ _ANALYZER_PROMPT = """아래 문서의 처음과 끝 부분을 분석하여 메�
   "structure": "hierarchical_sections | flat_paragraphs | table_rows | qa_pairs | mixed",
   "has_tables": true/false,
   "has_code_blocks": true/false,
-  "suggested_categories": ["카테고리1", "카테고리2"],
   "key_terms": [
     {{"term": "용어", "description": "간단 설명"}}
   ],
@@ -35,8 +34,7 @@ _ANALYZER_PROMPT = """아래 문서의 처음과 끝 부분을 분석하여 메�
 규칙:
 - chunk_strategy는 반드시 section, paragraph, fixed, auto 중 하나
 - hierarchical_sections 구조면 section, flat_paragraphs면 paragraph 추천
-- key_terms: 이 조직/시스템에서 특별한 의미를 가진 용어만 (일반 단어 제외)
-- suggested_categories: 1~3개"""
+- key_terms: 이 조직/시스템에서 특별한 의미를 가진 용어만 (일반 단어 제외)"""
 
 # doc_type → chunk_strategy 기본 매핑 (LLM 응답이 부적절할 때 fallback)
 _STRATEGY_MAP = {
@@ -65,7 +63,6 @@ async def analyze_document(
             "structure": str,
             "has_tables": bool,
             "has_code_blocks": bool,
-            "suggested_categories": list[str],
             "key_terms": list[dict],
             "chunk_strategy": str,
             "estimated_chunks": int,
@@ -103,7 +100,6 @@ def _default_result() -> dict:
         "structure": "mixed",
         "has_tables": False,
         "has_code_blocks": False,
-        "suggested_categories": [],
         "key_terms": [],
         "chunk_strategy": "auto",
         "estimated_chunks": 0,
@@ -122,6 +118,8 @@ def _validate_and_normalize(result: dict) -> dict:
 
     # priority_score(중요도)는 묻지 않는다 — 10/2 가중치 제거(v2.121) 뒤로 읽는 곳이 없어 등록마다 토큰만 썼다(10/21 누락 점검 ⑰)
     result.pop("priority_score", None)
+    # suggested_categories(업무구분 추천)도 묻지 않는다 — 10/22 업무구분 폐지. 옛 응답에 섞여 와도 버린다
+    result.pop("suggested_categories", None)
 
     # estimated_chunks 보정
     try:
@@ -135,7 +133,6 @@ def _validate_and_normalize(result: dict) -> dict:
     result.setdefault("structure", "mixed")
     result.setdefault("has_tables", False)
     result.setdefault("has_code_blocks", False)
-    result.setdefault("suggested_categories", [])
     result.setdefault("key_terms", [])
 
     return result

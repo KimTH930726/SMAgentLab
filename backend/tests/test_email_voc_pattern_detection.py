@@ -278,16 +278,17 @@ class TestGetClusterCoverage:
         assert result == {"covered": False, "snippet": None}
 
     @pytest.mark.asyncio
-    async def test_excludes_structured_code_categories_from_candidate_query(self, patch_db, monkeypatch):
-        """구조화 코드/스키마 덤프(DB/공통코드)는 "해결방안"으로 성립할 수 없는데도
-        코사인 유사도만으론 안 걸러져 실제 오탐이 났던 카테고리 — 후보 조회 SQL 자체에서
-        제외돼야 한다(2026-08-28). LLM 호출까지 갈 필요도 없이 SQL 단계에서 걸러진다."""
+    async def test_candidate_query_no_category_filter(self, patch_db, monkeypatch):
+        """업무구분 DB/공통코드 제외 조건은 10/22 업무구분 폐지로 삭제(해당 활성 지식 0건) — 지식 칸을 읽지 않고,
+        자리표시자와 넘기는 값 개수가 맞아야 한다."""
+        import re
         conn, _ = patch_db
         conn.fetchrow.return_value = None
         await pattern_detection.get_cluster_coverage(1, 55)
         sql, *params = conn.fetchrow.call_args.args
-        assert "k.category != ALL($3::text[])" in sql
-        assert params[-1] == list(pattern_detection._KEYWORD_ONLY_CATEGORIES)
+        assert "k.category" not in sql
+        assert params == [55, 1]
+        assert {int(n) for n in re.findall(r"\$(\d+)", sql)} == {1, 2}
 
     @pytest.mark.asyncio
     async def test_not_covered_when_similarity_below_threshold_skips_llm(self, patch_db, monkeypatch):
@@ -351,15 +352,16 @@ class TestListClusters:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_excludes_structured_code_categories_from_candidate_query(self, patch_db):
-        """get_cluster_coverage()와 동일한 기준으로 배치 조회 SQL에도 제외 조건이
-        들어가야 한다(2026-08-28)."""
+    async def test_candidate_query_no_category_filter(self, patch_db):
+        """get_cluster_coverage()와 같음 — 업무구분 제외 조건 삭제(10/22), 자리표시자는 $1 하나."""
+        import re
         conn, _ = patch_db
         conn.fetch.return_value = []
         await pattern_detection.list_clusters("ns")
         sql, *params = conn.fetch.call_args.args
-        assert "k.category != ALL($2::text[])" in sql
-        assert params[-1] == list(pattern_detection._KEYWORD_ONLY_CATEGORIES)
+        assert "k.category" not in sql
+        assert len(params) == 1
+        assert {int(n) for n in re.findall(r"\$(\d+)", sql)} == {1}
 
     @pytest.mark.asyncio
     async def test_covered_and_uncovered_clusters(self, patch_db, monkeypatch):

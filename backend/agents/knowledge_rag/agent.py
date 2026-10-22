@@ -68,7 +68,7 @@ def _build_rrf_context(
     3건씩 두 라운드 비교한 결과 사실관계 왜곡은 없었고, 이 방식이 실제 순위 구조를 더
     정확히 반영해 채팅에도 동일하게 적용.
 
-    참조데이터 축 추가 배경: rag_knowledge의 "DB"/"공통코드" 카테고리(_KEYWORD_ONLY_
+    참조데이터 축 추가 배경(예전 — 업무구분 키워드 전용 분기는 10/22 폐지): rag_knowledge의 "DB"/"공통코드" 카테고리(_KEYWORD_ONLY_
     CATEGORIES)는 벡터 채널과 같은 테이블 안에서 final_score로 경쟁하다 보니, ts_rank
     스케일이 코사인보다 항상 작아 ORDER BY ... LIMIT top_k 단계에서부터 후보 풀에도 못
     들어가는 문제가 실측 확인됐다("DS14가 뭐야?"가 자기 매칭 대상인 id=20을 top_k=5
@@ -90,7 +90,7 @@ def _build_rrf_context(
     items: list[tuple[float, str]] = []
     for i, r in enumerate(relevant):
         rel = retrieval.relevance_score(r)
-        confidence = "정확 매칭" if retrieval.is_keyword_only_category(r.category) else (
+        confidence = (
             "높음" if rel >= th["knowledge_high_score"]
             else "보통" if rel >= th["knowledge_mid_score"]
             else "낮음"
@@ -172,7 +172,7 @@ CONDITION_ANSWER_HINT = CONDITION_ANSWER_HINT_KO   # 문구 본체는 trustkit.a
 
 async def build_chat_context(
     namespace: str, search_question: str, query_vec: list[float], *,
-    top_k: int, w_vector: float, w_keyword: float, categories: Optional[list[str]] = None,
+    top_k: int, w_vector: float, w_keyword: float,
     glossary_mode: Optional[str] = None, glossary_entries: Optional[list] = None,
     policy_top_k: int = POLICY_CONTEXT_TOP_K, category_lists: bool = True, clarify_scope: Optional[str] = None,
     list_question: Optional[str] = None,
@@ -193,7 +193,7 @@ async def build_chat_context(
     # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
     candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
     results_raw, refdata_available = await asyncio.gather(
-        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, categories,
+        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k,
                                    keyword_rescue=retrieval.KEYWORD_RESCUE),
         refdata_search.has_refdata(namespace),
     )
@@ -329,7 +329,6 @@ class KnowledgeRagAgent(AgentBase):
         top_k: int = context.get("top_k", 5)
         user_credentials: Optional[dict] = context.get("user_credentials")
         inhouse_conv_id: Optional[str] = context.get("inhouse_conv_id")
-        categories: Optional[list[str]] = context.get("categories")
         clarify_scope: Optional[str] = context.get("clarify_scope")
 
         full_answer = ""
@@ -398,7 +397,7 @@ class KnowledgeRagAgent(AgentBase):
             yield {"type": "status", "step": "context", "message": "용어 확인 및 관련 문서 검색 중..."}
             cc, history = await asyncio.gather(
                 build_chat_context(namespace, search_question, query_vec, top_k=top_k, w_vector=w_vector,
-                                   w_keyword=w_keyword, categories=categories, clarify_scope=clarify_scope,
+                                   w_keyword=w_keyword, clarify_scope=clarify_scope,
                                    list_question=query),
                 memory.build_context_history(conversation_id, query_vec),
             )

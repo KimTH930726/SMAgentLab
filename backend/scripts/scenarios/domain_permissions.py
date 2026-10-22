@@ -24,6 +24,12 @@ def chk(name: str, got, want) -> None:
     print(f"  [{'OK' if ok else 'XX'}] {name}: {got} (기대 {want})")
 
 
+# 영역 수정 권한 확인용 요청 — 예전엔 업무구분 만들기 API였다(10/22 업무구분 폐지로 API 삭제). 같은 수정 권한 검사
+# (check_namespace_ownership)를 거치면서 아무것도 쓰지 않고 LLM도 안 부르는 등록 전 확인(replace-check)으로 바꿨다 — 허용 200 / 거부 403.
+def edit_probe(h: httpx.AsyncClient, ns: str, headers: dict):
+    return h.post("/api/knowledge/bulk/replace-check", json={"namespace": ns}, headers=headers)
+
+
 def tok(uid: int, name: str, role: str) -> dict:
     return {"Authorization": "Bearer " + create_access_token({"sub": str(uid), "username": name, "role": role})}
 
@@ -52,26 +58,18 @@ async def main() -> int:
                 users[n] = r.json()["id"]
                 created_users.append(users[n])
             V1 = tok(users["u1"], P + "u1", "viewer")
-            r = await h.post(f"/api/namespaces/{P}ns/categories", json={"name": "c"}, headers=V1)
+            r = await edit_probe(h, P + "ns", V1)
             chk("승인 전 담당 영역 수정", r.status_code, 403)
             for n in ("u1", "u2"):
                 await h.put(f"/api/auth/users/{users[n]}", json={"role": "user"}, headers=A)
             U1, U2 = tok(users["u1"], P + "u1", "user"), tok(users["u2"], P + "u2", "user")
 
             # 수정 규칙
-            chk("담당 파트 수정", (await h.post(f"/api/namespaces/{P}ns/categories", json={"name": "c"}, headers=U1)).status_code, 201)
-            chk("다른 파트 수정", (await h.post(f"/api/namespaces/{P}ns/categories", json={"name": "d"}, headers=U2)).status_code, 403)
-            chk("담당 없는 영역 수정(일반)", (await h.post(f"/api/namespaces/{ownerless}/categories", json={"name": "x"}, headers=U1)).status_code, 403)
+            chk("담당 파트 수정", (await edit_probe(h, P + "ns", U1)).status_code, 200)
+            chk("다른 파트 수정", (await edit_probe(h, P + "ns", U2)).status_code, 403)
+            chk("담당 없는 영역 수정(일반)", (await edit_probe(h, ownerless, U1)).status_code, 403)
 
-            # 없는 업무구분 이름 변경·삭제 → 지식을 건드리기 전에 404
-            async with get_conn() as c:
-                ns_id = await c.fetchval("SELECT id FROM ops_namespace WHERE name = $1", P + "ns")
-                kid = await c.fetchval("INSERT INTO rag_knowledge (namespace_id, content, category, status) VALUES ($1, 'x', $2, 'active') RETURNING id",
-                                       ns_id, P + "ghost")
-            r = await h.patch(f"/api/namespaces/{P}ns/categories/{P}ghost", json={"name": "new"}, headers=U1)
-            async with get_conn() as c:
-                cat = await c.fetchval("SELECT category FROM rag_knowledge WHERE id = $1", kid)
-            chk("없는 업무구분 이름 변경 → 404 + 지식 그대로", (r.status_code, cat), (404, P + "ghost"))
+            # (없는 업무구분 이름 변경 → 404 확인은 10/22 업무구분 관리 API 삭제로 뺐다)
 
             # 조회 규칙: 통계·질의 기록은 담당 파트·관리자만, 조회 전용 X
             chk("다른 파트 통계 조회(사람 데이터)", (await h.get(f"/api/stats/namespace/{P}ns", headers=U2)).status_code, 403)
@@ -102,14 +100,14 @@ async def main() -> int:
                 p2 = await c.fetchval("SELECT id FROM ops_part WHERE name = $1", P + "p2")
             r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns", P + "ns2"]}, headers=A)
             chk("파트2가 영역 2개 맡기(1:N, 파트1 것 옮겨 옴)", (r.status_code, r.json().get("domains")), (200, [P + "ns", P + "ns2"]))
-            chk("  → 파트2 사람 수정", (await h.post(f"/api/namespaces/{P}ns2/categories", json={"name": "e"}, headers=U2)).status_code, 201)
-            chk("  → 파트1 사람은 이제 못 고침", (await h.post(f"/api/namespaces/{P}ns/categories", json={"name": "f"}, headers=U1)).status_code, 403)
+            chk("  → 파트2 사람 수정", (await edit_probe(h, P + "ns2", U2)).status_code, 200)
+            chk("  → 파트1 사람은 이제 못 고침", (await edit_probe(h, P + "ns", U1)).status_code, 403)
             r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns", "없는영역__"]}, headers=A)
             async with get_conn() as c:
                 owned = await c.fetchval("SELECT count(*) FROM ops_namespace WHERE owner_part_id = $1", p2)
             chk("없는 영역 섞이면 400 + 그대로(2개)", (r.status_code, owned), (400, 2))
             r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns"]}, headers=A)
-            chk("하나 빼기 → 그 영역은 관리자만", (await h.post(f"/api/namespaces/{P}ns2/categories", json={"name": "g"}, headers=U2)).status_code, 403)
+            chk("하나 빼기 → 그 영역은 관리자만", (await edit_probe(h, P + "ns2", U2)).status_code, 403)
             chk("일반 사용자는 담당 저장 불가", (await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": []}, headers=U2)).status_code, 403)
             r = await h.get("/api/auth/parts")
             chk("가입용 공개 목록엔 담당 영역 없음", all(not x.get("domains") for x in r.json()), True)

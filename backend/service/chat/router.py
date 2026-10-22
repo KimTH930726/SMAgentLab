@@ -52,7 +52,6 @@ class PipelineResult:
 async def _run_pipeline(
     namespace: str, question: str, query_vec: list[float],
     w_vector: float, w_keyword: float, top_k: int,
-    *, categories: Optional[list[str]] = None,
 ) -> PipelineResult:
     # 용어집 방식은 채팅과 같은 설정(GLOSSARY_MATCH_MODE)을 따른다(v2.128) — 디버그 검색이 채팅과 달리 보이지 않게
     from service.policy import scope as policy_scope   # 채팅과 같은 용어 범위(정책서 파트 용어 포함, 2026-10-20 리뷰 L3)
@@ -67,7 +66,7 @@ async def _run_pipeline(
     glossary_match = (GlossaryMatch(term=matches[0].term, description=matches[0].description, similarity=1.0) if matches
                       else (await retrieval.map_glossary_term(namespace, query_vec) if mapped_term else None))
 
-    results = await retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k, categories)
+    results = await retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k)
     context = retrieval.build_context(results)
 
     return PipelineResult(
@@ -192,7 +191,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     search_question, query_vec = await memory.augment_query_for_search(conv_id, req.question)
 
     pipe, history = await asyncio.gather(
-        _run_pipeline(req.namespace, search_question, query_vec, req.w_vector, req.w_keyword, req.top_k, categories=req.categories),
+        _run_pipeline(req.namespace, search_question, query_vec, req.w_vector, req.w_keyword, req.top_k),
         memory.build_context_history(conv_id, query_vec),
     )
 
@@ -244,7 +243,6 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
         "top_k": req.top_k,
         "user_credentials": user_creds,
         "inhouse_conv_id": inhouse_conv_id,
-        "categories": req.categories,
         "clarify_scope": req.clarify_scope,
     }
     # HTTP 도구 승인 정보가 있으면 컨텍스트에 추가
@@ -294,7 +292,6 @@ async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
     query_vec = await embedding_service.embed(req.question)
     pipe = await _run_pipeline(
         req.namespace, req.question, query_vec, req.w_vector, req.w_keyword, req.top_k,
-        categories=req.categories,
     )
     return DebugSearchResponse(
         question=req.question, namespace=req.namespace,
@@ -306,7 +303,7 @@ async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
         w_vector=req.w_vector, w_keyword=req.w_keyword,
         results=[
             DebugResult(
-                id=r.id, content=r.content, category=r.category,
+                id=r.id, content=r.content,
                 base_weight=r.base_weight,
                 v_score=r.v_score, k_score=r.k_score, final_score=r.final_score,
                 source_type=r.source_type, source_file=r.source_file, created_at=r.created_at,

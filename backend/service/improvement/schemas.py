@@ -12,7 +12,7 @@ PolicySource = Literal["policy_direct", "policy_ai"]
 
 class CorrectionCreate(BaseModel):
     """채팅 "답변 틀림" 한 줄(source 없음) 또는 정책서 화면의 수정 제안(source=policy_direct/policy_ai, 10/21).
-    가중치·업무구분은 묻지 않는다. target_type='missing'이면 target_id 없음(지식 누락 신호).
+    가중치는 묻지 않는다(업무구분은 10/22 폐지). target_type='missing'이면 target_id 없음(지식 누락 신호).
     정책 제안: target_type='policy_narrative', target_id=policy_item.id(서술 조각은 서버가 고름).
     직접 수정은 proposed({raw_body, remark?}) 필수·user_input 없음, AI 제안은 user_input(한 줄) 필수."""
     namespace: str

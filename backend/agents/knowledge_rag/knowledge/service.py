@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import collections
 import json
 import logging
 from typing import Awaitable, Callable, Optional
@@ -12,13 +11,13 @@ import numpy as np
 from core.config import settings
 from core.database import get_conn, resolve_namespace_id
 from shared.embedding import embedding_service
-from agents.knowledge_rag.knowledge.retrieval import find_similar_active_knowledge, get_thresholds, is_keyword_only_category
+from agents.knowledge_rag.knowledge.retrieval import find_similar_active_knowledge, get_thresholds
 from agents.knowledge_rag.knowledge import glossary_terms
 
 logger = logging.getLogger(__name__)
 
 _KNOWLEDGE_COLS = """k.id, n.name AS namespace,
-    k.content, k.base_weight, k.category, k.status,
+    k.content, k.base_weight, k.status,
     k.source_file, k.source_chunk_idx, k.source_type,
     k.created_by_user_id, u.username AS created_by_username,
     k.created_at::text, k.updated_at::text, k.heading_path, k.ingestion_job_id"""
@@ -30,25 +29,7 @@ _GLOSSARY_COLS = """g.id, n.name AS namespace, g.term, g.description,
               FROM rag_glossary_synonym s WHERE s.glossary_id = g.id AND NOT s.blocked), '[]') AS synonyms"""
 
 
-def _require_category(category: Optional[str]) -> str:
-    """지식 항목의 업무구분(category)은 필수값 — 비어있으면 등록 거부."""
-    if not category or not category.strip():
-        raise ValueError("업무구분(category)은 필수입니다.")
-    category = category.strip()
-    if is_keyword_only_category(category):
-        # 재발 방지 로그(2026-09-18) — 이 카테고리는 rag_knowledge 안에서 벡터축과
-        # final_score로 경쟁하다 top_k LIMIT 단계에서부터 후보 풀에 못 들어가는 구조적
-        # 문제가 실측 확인됨("DS14가 뭐야?" 사고, id=20을 ref_common_code로 이전해
-        # 해결). 이 카테고리로 신규 등록되는 지식은 같은 문제를 조용히 재현할 수 있어
-        # 등록 자체를 막지는 않되(기존 저장 경로를 깨뜨리지 않음), 운영 중 재발을
-        # 알아챌 수 있게 로그만 남긴다.
-        logger.warning(
-            "지식이 키워드 전용 카테고리(%s)로 등록됨 — rag_knowledge 안에서는 "
-            "top_k 후보 선별 단계에서 밀려날 수 있음. 구조화 코드/스키마 데이터는 "
-            "ref_common_code/ref_db_column(service/refdata) 등록을 권장.",
-            category,
-        )
-    return category
+# 업무구분 필수 검사(_require_category)는 10/22 업무구분 폐지로 삭제 — 지식은 영역에 바로 붙고 category는 NULL로 저장
 
 
 # ─── rag_knowledge ────────────────────────────────────────────────────────────
@@ -56,7 +37,6 @@ def _require_category(category: Optional[str]) -> str:
 async def create_knowledge(
     namespace: str,
     content: str,
-    category: Optional[str] = None,
     *,
     created_by_user_id: Optional[int] = None,
 ) -> dict:
@@ -65,17 +45,7 @@ async def create_knowledge(
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
 
-    # 카테고리 자동 관리(2026-09-24) — 사람이 안 골라도 LLM 추천 → 실패 시 "미분류"로
-    # 항상 유효한 값을 갖는다(service/admin/service.py 참고). ns_id 해석을 위로 옮긴 이유.
-    from service.admin.service import resolve_or_create_category
-    category = await resolve_or_create_category(ns_id, category, content)
-    if is_keyword_only_category(category):
-        logger.warning(
-            "지식이 키워드 전용 카테고리(%s)로 등록됨 — rag_knowledge 안에서는 "
-            "top_k 후보 선별 단계에서 밀려날 수 있음. 구조화 코드/스키마 데이터는 "
-            "ref_common_code/ref_db_column(service/refdata) 등록을 권장.",
-            category,
-        )
+    # 업무구분 자동 결정(LLM 추천)은 10/22 업무구분 폐지로 삭제 — category 없이 저장
     embedding = await embedding_service.embed(content)
 
     async with get_conn() as conn:
@@ -93,14 +63,14 @@ async def create_knowledge(
             row = await conn.fetchrow(
                 f"""
                 INSERT INTO rag_knowledge
-                    (namespace_id, content, embedding, base_weight, category,
+                    (namespace_id, content, embedding, base_weight,
                      created_by_user_id, status, embedding_model)
-                VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8)
-                RETURNING id, namespace_id, content, base_weight, category, status,
+                VALUES ($1, $2, $3::vector, $4, $5, $6, $7)
+                RETURNING id, namespace_id, content, base_weight, status,
                           created_by_user_id,
                           created_at::text, updated_at::text
                 """,
-                ns_id, content, str(embedding), 1.0, category,
+                ns_id, content, str(embedding), 1.0,
                 created_by_user_id, status, _EMBEDDING_MODEL_NAME,
             )
             if is_duplicate:
@@ -120,7 +90,6 @@ async def create_knowledge(
 async def update_knowledge(
     knowledge_id: int,
     content: Optional[str] = None,
-    category: Optional[str] = None,
     *,
     updated_by_user_id: Optional[int] = None,
 ) -> Optional[dict]:
@@ -137,8 +106,6 @@ async def update_knowledge(
 
         new_content = content if content is not None else current["content"]
         new_weight = current["base_weight"]  # 가중치 입력 제거(2026-10-02) — 값은 그대로 둔다
-        # category=None은 "변경 없음". 업무구분은 필수값이라 빈 문자열로 초기화하는 것은 허용하지 않음.
-        new_category = _require_category(category) if category is not None else current.get("category")
 
         new_embedding = str(await embedding_service.embed(new_content)) if content else str(current["embedding"])
 
@@ -147,17 +114,15 @@ async def update_knowledge(
             UPDATE rag_knowledge
             SET content=$1, embedding=$2::vector, base_weight=$3,
                 content_edited_at = CASE WHEN content IS DISTINCT FROM $1 THEN NOW() ELSE content_edited_at END,
-                category=$5,
                 updated_at=NOW()
             WHERE id = $4
             RETURNING id, namespace_id,
-                      content, base_weight, category,
+                      content, base_weight,
                       created_by_user_id,
                       created_at::text, updated_at::text
             """,
             new_content,
             new_embedding, new_weight, knowledge_id,
-            new_category,
         )
         if not row:
             return None
@@ -220,25 +185,22 @@ async def get_knowledge_namespaces(ids: list[int]) -> list[str]:
 
 
 async def bulk_update_knowledge(
-    ids: list[int], *, category: Optional[str] = None, source_type: Optional[str] = None,
+    ids: list[int], *, source_type: Optional[str] = None,
 ) -> int:
-    """선택한 지식 항목들의 업무구분/소스유형을 일괄 변경. None인 필드는 유지."""
+    """선택한 지식 항목들의 소스유형을 일괄 변경(업무구분 일괄 변경은 10/22 폐지)."""
     if not ids:
         return 0
-    if category is None and source_type is None:
-        raise ValueError("변경할 필드(업무구분 또는 소스유형)를 지정해야 합니다.")
-    if category is not None:
-        category = _require_category(category)
+    if source_type is None:
+        raise ValueError("변경할 필드(소스유형)를 지정해야 합니다.")
     async with get_conn() as conn:
         result = await conn.execute(
             """
             UPDATE rag_knowledge
-            SET category = COALESCE($2, category),
-                source_type = COALESCE($3, source_type),
+            SET source_type = $2,
                 updated_at = NOW()
             WHERE id = ANY($1::int[])
             """,
-            ids, category, source_type,
+            ids, source_type,
         )
     return int(result.split()[-1])
 
@@ -347,8 +309,7 @@ class ReplaceConfirmRequired(ValueError):
         self.reasons = reasons
         parts = [f"내용을 고친 조각 {reasons['edited']}건" if reasons.get("edited") else "",
                  f"삭제·반려한 조각 {reasons['removed']}건" if reasons.get("removed") else "",
-                 "일부 조각만 골라 등록함" if reasons.get("partial") else "",
-                 "조각마다 업무구분이 다름" if reasons.get("mixed_category") else ""]
+                 "일부 조각만 골라 등록함" if reasons.get("partial") else ""]
         super().__init__("기존 조각에 사람이 손댄 흔적이 있어 확인이 필요합니다: " + ", ".join(p for p in parts if p))
 
 
@@ -371,9 +332,9 @@ async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Opt
         if doc["status"] != "active":
             raise ValueError("사용 중인 원문만 다시 분할할 수 있습니다(교체됐거나 등록 전 초안).")
         current = await conn.fetch(
-            "SELECT id, content, heading_path, category, source_type, source_file FROM rag_knowledge "
+            "SELECT id, content, heading_path, source_type, source_file FROM rag_knowledge "
             "WHERE source_document_id = $1 AND status IN ('active', 'pending_review') ORDER BY source_chunk_idx NULLS LAST, id", doc_id)
-        # 사람의 판단(고친 조각·뺀 조각·일부만 등록·업무구분 혼재) — 재등록 확인(A안)과 같은 기준(source_ledger.touched_reasons)
+        # 사람의 판단(고친 조각·뺀 조각·일부만 등록) — 재등록 확인(A안)과 같은 기준(source_ledger.touched_reasons)
         reasons = await touched_reasons(conn, doc["namespace_id"], [doc_id],
                                         [doc["source_ref"]] if doc["source_type"] == "confluence" and doc["source_ref"] else [])
     items = rechunk_items(doc)
@@ -386,11 +347,10 @@ async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Opt
     # 사람의 판단을 조용히 덮지 않는다 — 하나라도 있으면 멈추고 사유를 알린다(force로만 진행)
     if has_touch(reasons) and not force:
         return {"changed": False, "blocked": True, **reasons, "old": len(current), "new": len(items)}
-    category = collections.Counter(r["category"] for r in current if r["category"]).most_common(1)
+    # 업무구분 최빈값 계승은 10/22 업무구분 폐지로 삭제
     first = current[0] if current else None
     for it in items:
         it["source_document_id"] = doc_id
-        it["category"] = category[0][0] if category else None
         if doc["source_type"] == "confluence" and doc["source_ref"]:
             it["confluence_page_id"] = doc["source_ref"]
             it["confluence_version"] = doc["source_version"]
@@ -811,7 +771,7 @@ async def bulk_create_knowledge(
             raise ValueError(f"Namespace '{namespace}' not found")
 
     # 원문 원장(A안 2026-10-12): 같은 원본 재등록이 사람이 고친·뺀 조각을 조용히 덮지 않게 — 흔적이 있으면 확인 후에만.
-    # 업무구분 추천(LLM)·job 생성 전에 판단해 거절될 등록에 비용을 쓰지 않는다. 연결 못 하는 원문 id는 여기서 끊고 응답에 알린다(L1).
+    # job 생성 전에 판단해 거절될 등록에 비용을 쓰지 않는다. 연결 못 하는 원문 id는 여기서 끊고 응답에 알린다(L1).
     unlinked_sources: list[int] = []
     req_doc_ids = sorted({int(it["source_document_id"]) for it in items if it.get("source_document_id")})
     req_pages = sorted({str(it["confluence_page_id"]) for it in items if it.get("confluence_page_id")})
@@ -830,30 +790,7 @@ async def bulk_create_knowledge(
                 if it.get("source_document_id") and int(it["source_document_id"]) in unlinked_sources:
                     it["source_document_id"] = None
 
-    # 카테고리 자동 관리(2026-09-24) — 컨플루언스 벌크는 이 시점에 이미 페이지별로
-    # 카테고리가 정해진 채로 들어오지만(빈 값 없음, resolve_or_create_category가 그대로
-    # 반환), 파일 업로드/텍스트 분할처럼 프론트가 못 채웠거나 안 채운 경우도
-    # 여기서 항상 유효한 값을 갖도록 안전망을 건다.
-    from service.admin.service import resolve_or_create_category
-    # 업무구분이 빈 청크("AI 분석")는 묶음 전체에 한 번만 정한다(2026-10-08) — 예전엔 청크마다 사내 LLM을 순차 호출해
-    # 비용·시간이 청크 수만큼 들고, 한 문서의 청크가 여러 업무구분으로 흩어졌다(코드 감사 지적). 문서 앞부분으로 판단.
-    # CSV 가져오기는 행마다 독립 지식(FAQ 등)이라 예전처럼 행마다 판단(리뷰 2026-10-08). 샘플은 업무구분이 빈 조각에서.
-    batch_category: Optional[str] = None
-    blank = [it for it in items if not (it.get("category") or "").strip()]
-    if blank and source_type != "csv_import":
-        sample = "\n\n".join(it["content"] for it in blank[:3])[:4000]
-        batch_category = await resolve_or_create_category(ns_id, None, sample)
-    for item in items:
-        if not (item.get("category") or "").strip():
-            item["category"] = batch_category
-        item["category"] = await resolve_or_create_category(ns_id, item.get("category"), item["content"])
-        if is_keyword_only_category(item["category"]):
-            logger.warning(
-                "지식이 키워드 전용 카테고리(%s)로 등록됨 — rag_knowledge 안에서는 "
-                "top_k 후보 선별 단계에서 밀려날 수 있음. 구조화 코드/스키마 데이터는 "
-                "ref_common_code/ref_db_column(service/refdata) 등록을 권장.",
-                item["category"],
-            )
+    # 업무구분 자동 결정(묶음·행마다 LLM 추천)은 10/22 업무구분 폐지로 삭제 — 지식은 category 없이 저장
 
     async with get_conn() as conn:
         job_id = await conn.fetchval("""
@@ -925,7 +862,7 @@ async def _run_bulk_ingestion(
         async with get_conn() as conn:
             valid = await _ledger.valid_documents(conn, ns_id, source_doc_ids)
             if len(valid) != len(source_doc_ids) and strict_source:
-                # 다시 분할: 사전 확인~여기(업무구분 추천 등) 사이에 원문이 교체됨 — 연결만 끊고 진행하면 원문 없는 중복(리뷰 2026-10-12)
+                # 다시 분할: 사전 확인~여기 사이에 원문이 교체됨 — 연결만 끊고 진행하면 원문 없는 중복(리뷰 2026-10-12)
                 gone = sorted(set(source_doc_ids) - set(valid))
                 await _discard_staged_job(job_id, "failed", error_message=f"원문이 등록 중에 다른 등록으로 교체됐습니다(원문 {gone})")
                 return {"created": 0, "job_id": job_id, "status": "failed"}
@@ -993,7 +930,6 @@ async def _run_bulk_ingestion(
                     content,
                     str(emb),
                     1.0,  # 가중치 입력 제거(2026-10-02)
-                    item.get("category"),
                     source_file,
                     chunk_idx,
                     source_type,
@@ -1011,11 +947,11 @@ async def _run_bulk_ingestion(
                 await conn.executemany("""
                     INSERT INTO rag_knowledge
                         (namespace_id, content,
-                         embedding, base_weight, category,
+                         embedding, base_weight,
                          source_file, source_chunk_idx, source_type,
                          created_by_user_id, ingestion_job_id, status,
                          embedding_model, confluence_page_id, confluence_version, heading_path, source_document_id)
-                    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                    VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 """, rows)
                 created += len(rows)
                 pending_total += len(pending_chunk_indices) + len(local_pending)

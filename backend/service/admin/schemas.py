@@ -25,17 +25,6 @@ class NamespaceSettings(BaseModel):
     clear_parent: bool = False
 
 
-class KnowledgeCategoryCreate(BaseModel):
-    name: Name
-
-
-class KnowledgeCategoryOut(BaseModel):
-    id: int
-    namespace: str
-    name: str
-    created_at: str
-
-
 class NamespaceInfo(BaseModel):
     id: int
     name: str
@@ -51,7 +40,6 @@ class NamespaceInfo(BaseModel):
     knowledge_count: int
     glossary_count: int
     policy_count: int = 0      # 지금 쓰이는 정책(폐기·반려 제외)
-    category_count: int = 0    # 업무구분 수(④에서 없앨 예정)
     created_by_user_id: Optional[int] = None
     created_by_username: Optional[str] = None
     created_at: str

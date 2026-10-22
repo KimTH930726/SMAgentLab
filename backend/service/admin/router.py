@@ -10,7 +10,6 @@ from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership, edit_denied_reason, check_namespace_read
 from service.admin.schemas import (
     NamespaceCreate, NamespaceInfo, NamespaceRename, NamespaceSettings,
-    KnowledgeCategoryCreate, KnowledgeCategoryOut,
     TermStat, NamespaceDetailStats,
     LLMConfigUpdate, LLMTestRequest, ThresholdUpdate, SearchDefaultsUpdate,
 )
@@ -115,122 +114,7 @@ async def delete_namespace_endpoint(name: str, user: dict = Depends(get_current_
         raise HTTPException(status_code=status_, detail=detail)
 
 
-# ── Knowledge Categories ──────────────────────────────────────────────────────
-
-@router.get("/api/namespaces/{name}/categories", response_model=list[KnowledgeCategoryOut])
-async def get_namespace_categories(name: str, user: dict = Depends(get_current_user)):
-    async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, name)
-        if ns_id is None:
-            return []
-        rows = await conn.fetch(
-            """
-            SELECT kc.id, n.name AS namespace, kc.name, kc.created_at::text
-            FROM rag_knowledge_category kc
-            JOIN ops_namespace n ON kc.namespace_id = n.id
-            WHERE kc.namespace_id = $1
-            ORDER BY kc.name
-            """,
-            ns_id,
-        )
-    return [dict(r) for r in rows]
-
-
-@router.post("/api/namespaces/{name}/categories", response_model=KnowledgeCategoryOut, status_code=201)
-async def create_namespace_category(name: str, body: KnowledgeCategoryCreate, user: dict = Depends(get_current_user)):
-    await check_namespace_ownership(name, user)
-    async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, name)
-        if ns_id is None:
-            raise HTTPException(status_code=404, detail="네임스페이스를 찾을 수 없습니다.")
-        existing = await conn.fetchval(
-            "SELECT id FROM rag_knowledge_category WHERE namespace_id = $1 AND name = $2",
-            ns_id, body.name.strip(),
-        )
-        if existing:
-            raise HTTPException(status_code=409, detail="이미 존재하는 업무구분입니다.")
-        row = await conn.fetchrow(
-            """
-            INSERT INTO rag_knowledge_category (namespace_id, name) VALUES ($1, $2)
-            RETURNING id, $3::text AS namespace, name, created_at::text
-            """,
-            ns_id, body.name.strip(), name,
-        )
-    return dict(row)
-
-
-@router.patch("/api/namespaces/{name}/categories/{cat_name}", response_model=KnowledgeCategoryOut)
-async def rename_namespace_category(name: str, cat_name: str, body: KnowledgeCategoryCreate, user: dict = Depends(get_current_user)):
-    await check_namespace_ownership(name, user)
-    new_name = body.name
-    async with get_conn() as conn, conn.transaction():
-        ns_id = await resolve_namespace_id(conn, name)
-        if ns_id is None:
-            raise HTTPException(status_code=404, detail="업무 영역을 찾을 수 없습니다.")
-        # 없는 업무구분이면 지식을 건드리기 전에 멈춘다 — 예전엔 지식의 업무구분을 먼저 바꾸고 404를 냈다(막 쓰기 테스트 10/20)
-        if not await conn.fetchval("SELECT EXISTS(SELECT 1 FROM rag_knowledge_category WHERE namespace_id = $1 AND name = $2)",
-                                   ns_id, cat_name):
-            raise HTTPException(status_code=404, detail="업무구분을 찾을 수 없습니다.")
-        existing = await conn.fetchval(
-            "SELECT id FROM rag_knowledge_category WHERE namespace_id = $1 AND name = $2",
-            ns_id, new_name,
-        )
-        if existing:
-            raise HTTPException(status_code=409, detail="이미 존재하는 업무구분입니다.")
-        await conn.execute(
-            "UPDATE rag_knowledge SET category = $3 WHERE namespace_id = $1 AND category = $2",
-            ns_id, cat_name, new_name,
-        )
-        row = await conn.fetchrow(
-            """
-            UPDATE rag_knowledge_category SET name = $3
-            WHERE namespace_id = $1 AND name = $2
-            RETURNING id, $4::text AS namespace, name, created_at::text
-            """,
-            ns_id, cat_name, new_name, name,
-        )
-    if not row:
-        raise HTTPException(status_code=404, detail="업무구분을 찾을 수 없습니다.")
-    return dict(row)
-
-
-@router.delete("/api/namespaces/{name}/categories/{cat_name}", status_code=204)
-async def delete_namespace_category(name: str, cat_name: str, user: dict = Depends(get_current_user)):
-    await check_namespace_ownership(name, user)
-    async with get_conn() as conn, conn.transaction():
-        ns_id = await resolve_namespace_id(conn, name)
-        if ns_id is None:
-            raise HTTPException(status_code=404, detail="업무 영역을 찾을 수 없습니다.")
-        if not await conn.fetchval("SELECT EXISTS(SELECT 1 FROM rag_knowledge_category WHERE namespace_id = $1 AND name = $2)",
-                                   ns_id, cat_name):
-            raise HTTPException(status_code=404, detail="업무구분을 찾을 수 없습니다.")   # 지식을 건드리기 전에(막 쓰기 테스트)
-        # 해당 카테고리를 사용하는 지식 항목의 category를 NULL로 초기화
-        await conn.execute(
-            "UPDATE rag_knowledge SET category = NULL WHERE namespace_id = $1 AND category = $2",
-            ns_id, cat_name,
-        )
-        result = await conn.execute(
-            "DELETE FROM rag_knowledge_category WHERE namespace_id = $1 AND name = $2",
-            ns_id, cat_name,
-        )
-    if result == "DELETE 0":
-        raise HTTPException(status_code=404, detail="업무구분을 찾을 수 없습니다.")
-
-
-@router.post("/api/namespaces/{name}/categories/suggest")
-async def suggest_category(name: str, body: dict, user: dict = Depends(get_current_user)):
-    """지식 내용을 분석해 가장 적합한 업무구분을 LLM으로 추천."""
-    content: str = body.get("content", "").strip()
-    if not content:
-        return {"suggested_category": None}
-
-    async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, name)
-    if ns_id is None:
-        return {"suggested_category": None}
-
-    suggested = await service.suggest_category_for_content(ns_id, content)
-    return {"suggested_category": suggested}
+# 업무구분 관리 API(/api/namespaces/{name}/categories…, /categories/suggest)는 10/22 업무구분 폐지로 삭제
 
 
 # ── Stats ────────────────────────────────────────────────────────────────────

@@ -16,7 +16,6 @@ from agents.knowledge_rag.knowledge.schemas import (
     BulkCreateRequest, IngestionJobOut,
 )
 from agents.knowledge_rag.knowledge import service
-from agents.knowledge_rag.knowledge.retrieval import _KEYWORD_ONLY_CATEGORIES
 
 import logging
 
@@ -35,13 +34,6 @@ async def _require_resource_namespace(namespace: Optional[str], user: dict, not_
     return namespace
 
 
-@router.get("/keyword-only-categories")
-async def get_keyword_only_categories(user: dict = Depends(get_current_user)):
-    """`retrieval._KEYWORD_ONLY_CATEGORIES`를 프론트에 노출 — 관리자 화면(카테고리 선택)의
-    경고 문구가 백엔드 상수와 별도로 하드코딩돼 있던 걸 단일 소스로 통일(2026-09-18)."""
-    return {"categories": list(_KEYWORD_ONLY_CATEGORIES)}
-
-
 @router.get("", response_model=list[KnowledgeOut])
 async def get_knowledge_list(
     namespace: Optional[str] = Query(default=None),
@@ -54,22 +46,7 @@ async def get_knowledge_list(
     return await service.list_knowledge(namespace, status)
 
 
-async def _auto_category(namespace: str, content: str) -> str:
-    """업무구분을 안 고르고 등록할 때(통계 "지식 공백" → 지식 등록 등, 2026-10-06) — 벌크 등록과 같은 방식:
-    내용으로 기존 업무구분 중 추천 → 없으면 "분류 확인 필요"(예전 "미분류", 파트별 최초 1회 자동 생성). 업무구분이 하나도 없는 파트
-    (정책서만 쓰는 온라인스토어 등)에서 등록 자체가 막히던 문제도 같이 풀린다."""
-    from core.database import get_conn, resolve_namespace_id
-    from service.admin.service import suggest_category_for_content
-
-    async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-    if ns_id is None:
-        raise HTTPException(status_code=404, detail="namespace를 찾을 수 없습니다.")
-    suggested = await suggest_category_for_content(ns_id, content)
-    if suggested:
-        return suggested
-    await _ensure_category_exists(ns_id, _UNSORTED_CATEGORY, set())
-    return _UNSORTED_CATEGORY
+# 업무구분 자동 추천(_auto_category)은 10/22 업무구분 폐지로 삭제
 
 
 @router.post("/source-documents/{doc_id}/rechunk")
@@ -97,11 +74,9 @@ async def get_knowledge_structure(knowledge_id: int, user: dict = Depends(get_cu
 @router.post("", response_model=KnowledgeOut, status_code=201)
 async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_user)):
     await check_namespace_ownership(body.namespace, user)
-    category = body.category if (body.category or "").strip() else await _auto_category(body.namespace, body.content)
     row = await service.create_knowledge(
         namespace=body.namespace,
         content=body.content,
-        category=category,
         created_by_user_id=user["id"],
     )
     # 용어 자동 추출 복원(2026-09-24) — 미리보기+검토 2단계 흐름으로 전환되며 끊겼던
@@ -122,7 +97,6 @@ async def modify_knowledge(knowledge_id: int, body: KnowledgeUpdate, user: dict 
     row = await service.update_knowledge(
         knowledge_id=knowledge_id,
         content=body.content,
-        category=body.category,
         updated_by_user_id=user["id"],
     )
     if not row:
@@ -191,8 +165,7 @@ class BulkDeleteRequest(BaseModel):
 
 class BulkUpdateRequest(BaseModel):
     ids: list[int]
-    category: Optional[str] = None
-    source_type: Optional[str] = None
+    source_type: Optional[str] = None   # 업무구분 일괄 변경은 10/22 폐지
 
 
 class VectorSearchRequest(BaseModel):
@@ -215,11 +188,11 @@ async def bulk_remove_knowledge(body: BulkDeleteRequest, user: dict = Depends(ge
 async def bulk_update_knowledge_endpoint(body: BulkUpdateRequest, user: dict = Depends(get_current_user)):
     if not body.ids:
         raise HTTPException(status_code=400, detail="선택된 항목이 없습니다.")
-    if body.category is None and body.source_type is None:
+    if body.source_type is None:
         raise HTTPException(status_code=400, detail="변경할 필드를 하나 이상 선택하세요.")
     for ns in await service.get_knowledge_namespaces(body.ids):
         await check_namespace_ownership(ns, user)
-    updated = await service.bulk_update_knowledge(body.ids, category=body.category, source_type=body.source_type)
+    updated = await service.bulk_update_knowledge(body.ids, source_type=body.source_type)
     return {"updated": updated}
 
 
@@ -336,8 +309,7 @@ class _ReplaceCheckBody(BaseModel):
 
 @router.post("/bulk/replace-check")
 async def bulk_replace_check(body: _ReplaceCheckBody, user: dict = Depends(get_current_user)):
-    """등록 전 확인(A안 2026-10-12) — 이 등록이 교체할 같은 원본의 기존 조각에 사람이 손댄 흔적(고친·뺀 조각, 일부만 등록,
-    업무구분 혼재). needs_confirm이면 화면이 사유를 보여주고 확인받은 뒤 confirm_replace=true로 등록한다."""
+    """등록 전 확인(A안 2026-10-12) — 이 등록이 교체할 같은 원본의 기존 조각에 사람이 손댄 흔적(고친·뺀 조각, 일부만 등록). needs_confirm이면 화면이 사유를 보여주고 확인받은 뒤 confirm_replace=true로 등록한다."""
     await check_namespace_ownership(body.namespace, user)
     from core.database import get_conn, resolve_namespace_id
     from agents.knowledge_rag.ingestion.source_ledger import replace_check
@@ -353,12 +325,11 @@ async def import_csv(
     file: UploadFile = File(...),
     namespace: str = Form(...),
     column_mapping: str = Form(...),
-    category: Optional[str] = Form(default=None),
     user: dict = Depends(get_current_user),
 ):
     """CSV 파일 업로드 → 파싱 → 벌크 등록.
 
-    column_mapping: JSON 문자열 {"content": "csv_col_name", "category": "csv_col_name", ...}
+    column_mapping: JSON 문자열 {"content": "csv_col_name"} (업무구분 열 매핑은 10/22 폐지)
     """
     await check_namespace_ownership(namespace, user)
 
@@ -403,12 +374,7 @@ async def import_csv(
         content = row.get(content_col, "").strip()
         if not content:
             continue
-        item = {"content": content}
-        if mapping.get("category") and row.get(mapping["category"]):
-            item["category"] = row[mapping["category"]].strip()
-        elif category:
-            item["category"] = category
-        items.append(item)
+        items.append({"content": content})
 
     if not items:
         raise HTTPException(status_code=400, detail="유효한 데이터가 없습니다.")
@@ -430,7 +396,6 @@ class _TextSplitBody(_BM):
     namespace: str
     raw_text: str
     strategy: str = "auto"
-    category: Optional[str] = None
 
 
 @router.post("/import/text-split", status_code=201)
@@ -443,7 +408,7 @@ async def import_text_split(body: _TextSplitBody, user: dict = Depends(get_curre
         raise HTTPException(status_code=400, detail="분할된 청크가 없습니다.")
     chunks = [x["content"] for x in split]
 
-    items = [{"content": x["content"], "category": body.category, "heading_path": x["heading_path"] or None} for x in split]
+    items = [{"content": x["content"], "heading_path": x["heading_path"] or None} for x in split]
     result = await service.bulk_create_knowledge(
         namespace=body.namespace,
         items=items,
@@ -528,39 +493,7 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
 
 # ─── 파일 업로드 + 자동 청킹 (Tier 2) ────────────────────────────────────────
 
-async def _run_auto_tag(
-    items: list[dict], namespace: str, user: dict,
-    *, lookup_categories: bool = False,
-) -> None:
-    """items(각 dict에 "content" 키 필요)를 LLM으로 자동 태깅 — item을 in-place 갱신."""
-    try:
-        from agents.knowledge_rag.ingestion.tagger import auto_tag_chunks
-        from service.llm.factory import get_llm_provider
-        from core.security import get_user_llm_credentials
-
-        categories = []
-        if lookup_categories:
-            try:
-                from core.database import get_conn, resolve_namespace_id
-                async with get_conn() as conn:
-                    ns_id = await resolve_namespace_id(conn, namespace)
-                    cat_rows = await conn.fetch(
-                        "SELECT name FROM rag_knowledge_category WHERE namespace_id = $1", ns_id
-                    )
-                categories = [r["name"] for r in cat_rows]
-            except Exception as e:
-                logger.warning("업무구분 목록 조회 실패 — 분류 없이 태깅: %s", e)
-
-        llm = get_llm_provider()
-        tag_input = [{"idx": i, "text": it["content"]} for i, it in enumerate(items)]
-        tags = await auto_tag_chunks(tag_input, categories, llm, user_credentials=get_user_llm_credentials(user))
-        tag_map = {t["idx"]: t for t in tags}
-        for i, item in enumerate(items):
-            tag = tag_map.get(i, {})
-            if tag.get("category"):
-                item["category"] = tag["category"]
-    except Exception as e:
-        logger.warning("자동 태깅 실패 (무시하고 계속): %s", e)
+# 업무구분 자동 태깅(_run_auto_tag)은 10/22 업무구분 폐지로 삭제
 
 
 def _glossary_after_activation(namespace: str, raw_text: str, user: dict, *, max_chars: Optional[int] = None):
@@ -625,9 +558,7 @@ async def import_file(
     file: UploadFile = File(...),
     namespace: str = Form(...),
     chunk_strategy: str = Form(default="auto"),
-    category: Optional[str] = Form(default=None),
     auto_analyze: bool = Form(default=False),
-    auto_tag: bool = Form(default=False),
     auto_glossary: bool = Form(default=False),
     user: dict = Depends(get_current_user),
 ):
@@ -636,7 +567,6 @@ async def import_file(
     지원 포맷: .txt, .md, .pdf, .xlsx, .xlsm, .csv
     chunk_strategy: auto, section, paragraph, fixed
     auto_analyze: True이면 LLM Analyzer Agent로 전략/메타데이터 자동 결정
-    auto_tag: True이면 LLM으로 카테고리/컨테이너명 자동 태깅
     auto_glossary: True이면 LLM으로 용어 자동 추출
     """
     await check_namespace_ownership(namespace, user)
@@ -664,8 +594,6 @@ async def import_file(
 
             # 분석 결과로 전략 오버라이드
             chunk_strategy = analyzer_result.get("chunk_strategy", chunk_strategy)
-            if not category and analyzer_result.get("suggested_categories"):
-                category = analyzer_result["suggested_categories"][0]
         except Exception as e:
             logger.warning("Analyzer 실패 (기존 전략 사용): %s", e)
 
@@ -675,11 +603,7 @@ async def import_file(
         raise HTTPException(status_code=400, detail="분할된 청크가 없습니다.")
 
     # items 구성
-    items = [{"content": c.text, "category": category} for c in chunks]
-
-    # LLM 자동 태깅 (선택적)
-    if auto_tag:
-        await _run_auto_tag(items, namespace, user, lookup_categories=True)
+    items = [{"content": c.text} for c in chunks]
 
     # 벌크 등록
     result = await service.bulk_create_knowledge(
@@ -774,8 +698,6 @@ class _UrlImportBody(_BM):
     url: str
     confluence_token: Optional[str] = None
     chunk_strategy: str = "auto"
-    category: Optional[str] = None
-    auto_tag: bool = False
     auto_glossary: bool = False
 
 
@@ -800,11 +722,7 @@ async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current
     if not chunks:
         raise HTTPException(status_code=400, detail="수집된 콘텐츠가 없습니다.")
 
-    items = [{"content": c.text, "category": body.category} for c in chunks]
-
-    # LLM 자동 태깅 (선택적)
-    if body.auto_tag:
-        await _run_auto_tag(items, body.namespace, user)
+    items = [{"content": c.text} for c in chunks]
 
     result = await service.bulk_create_knowledge(
         namespace=body.namespace,
@@ -922,69 +840,11 @@ class _BulkPagesBody(BaseModel):
     pages: list[_ConfluencePageRef]     # 사용자가 트리에서 체크한 페이지들
     confluence_token: Optional[str] = None
     chunk_strategy: str = "auto"
-    category: Optional[str] = None
-    auto_tag: bool = False
     auto_glossary: bool = False
 
 
-from service.admin.service import UNSORTED_CATEGORY as _UNSORTED_CATEGORY  # "분류 확인 필요"(예전 "미분류")
-
-
-async def _ensure_category_exists(ns_id: int, name: str, existing_categories: set[str]) -> None:
-    """카테고리가 없으면 만들고 캐시 집합에 반영 — 같은 배치 안에서 반복 호출돼도 중복
-    INSERT 없이(ON CONFLICT DO NOTHING) 안전하게 재사용."""
-    if name in existing_categories:
-        return
-    from core.database import get_conn
-
-    async with get_conn() as conn:
-        await conn.execute(
-            "INSERT INTO rag_knowledge_category (namespace_id, name) VALUES ($1, $2) "
-            "ON CONFLICT (namespace_id, name) DO NOTHING",
-            ns_id, name,
-        )
-    existing_categories.add(name)
-
-
-async def _resolve_confluence_page_category(
-    ns_id: int, doc, override: Optional[str], existing_categories: set[str],
-) -> str:
-    """페이지 1건의 업무구분 폴백(2026-09-22 설계, 2026-09-24 정정 — 새 카테고리 자동 생성
-    허용, `docs/tech/knowledge-category-automation.md` 참고).
-
-    `preview_confluence_bulk`(실제 UI 확정 흐름의 리뷰 단계)에서 계산 — 미리보기에서 계산한
-    값이 리뷰 화면에 그대로 보이고, 사용자가 선택 항목을 거르기만 해도 그 값이 최종 등록
-    (`POST /knowledge/bulk`)까지 살아남는다.
-
-    1순위 `override`(폼에서 사람이 직접 지정) — 있으면 그대로 우선.
-    2순위 직계 상위 페이지 제목(`doc.metadata["parent_title"]`) — 기존 목록에 있으면 그대로
-    쓰고, **없으면 그 이름으로 새 카테고리를 자동 생성**한다. 최초 설계는 "새 카테고리는 절대
-    자동 생성 안 함"이었는데, 다시 짚어보니 이 신호는 LLM의 추측이 아니라 **사람이 이미
-    컨플루언스에 만들어둔 실제 정보 구조**다("외부서비스" 아래 배달의민족/쿠팡이츠/땡겨요로
-    나뉜 것처럼) — 이걸 신뢰 안 하고 매번 "미분류"로만 떨어뜨리면, 세분화된 업무구분을 누가
-    먼저 나서서 만들어줄 유인이 없어 결국 "미분류"가 새 이름의 "공통지식" 통짜 바구니가
-    될 뿐이라는 지적으로 정정(사람 개입 없이 첫 등록 순간부터 조직의 실제 구조를 그대로
-    반영). 페이지 자체가 트리 루트라 상위 페이지가 없는 경우만 3순위로 내려간다.
-    3순위(직계 상위 페이지 정보가 아예 없을 때만) `category_suggest` LLM이 기존 목록 중에서만
-    고름 — 이 경로는 신뢰할 구조 정보가 없는 추측이라 여전히 새 카테고리를 못 만들게 막아둠.
-    4순위(그래도 실패) "미분류" — namespace별 최초 1회만 자동 생성. `bulk_create_knowledge()`
-    가 모든 등록 경로 공통으로 category를 필수값 취급해서(`_require_category`) 진짜 NULL은
-    못 넣는다.
-    """
-    from service.admin.service import suggest_category_for_content
-
-    if override:
-        return override
-    parent_title = doc.metadata.get("parent_title")
-    if parent_title:
-        await _ensure_category_exists(ns_id, parent_title, existing_categories)
-        return parent_title
-    hint = f"{doc.source_name}\n{doc.raw_text[:600]}"
-    suggested = await suggest_category_for_content(ns_id, hint)
-    if suggested:
-        return suggested
-    await _ensure_category_exists(ns_id, _UNSORTED_CATEGORY, existing_categories)
-    return _UNSORTED_CATEGORY
+# 컨플루언스 "상위 페이지 제목 → 업무구분 자동 생성"(_resolve_confluence_page_category)은 10/22 업무구분 폐지로 삭제 —
+# 하위 업무는 등록자가 하위 업무 영역을 골라 넣는다(category-removal-design §3)
 
 
 def _structure_summary(doc) -> dict:
@@ -1008,21 +868,11 @@ def _enrich_heading_path(doc, in_page_heading_path: Optional[list[str]], page_ti
     # 구분할 수 없고, 부모 섹션 확장(path[:-1])이 형제 페이지 청크까지 끌어왔다
     if page_title:
         # [페이지 제목, 페이지 안 조상] — 상위 페이지 제목까지 앞에 두면 최상위 섹션의 path[:-1]이 상위 페이지가 돼 부모 섹션 확장이
-        # 형제 페이지로 번졌다(리뷰 2026-10-07). 상위 페이지(채널 구분)는 업무구분 자동 배정에 이미 쓰인다
+        # 형제 페이지로 번졌다(리뷰 2026-10-07). 상위 페이지(채널 구분)는 넣지 않는다
         return base if base[:1] == [page_title] else [page_title] + base
     if parent_title and (not base or base[0] != parent_title):
         return [parent_title] + base
     return base
-
-
-async def _load_existing_categories(ns_id: int) -> set[str]:
-    from core.database import get_conn
-
-    async with get_conn() as conn:
-        rows = await conn.fetch(
-            "SELECT name FROM rag_knowledge_category WHERE namespace_id = $1", ns_id,
-        )
-    return {r["name"] for r in rows}
 
 
 @router.post("/import/url/bulk-pages/preview")
@@ -1058,7 +908,6 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
     from core.database import get_conn
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, body.namespace)
-    existing_categories = await _load_existing_categories(ns_id) if ns_id is not None else set()
 
     chunks_out: list[dict] = []
     pages_meta: list[dict] = []
@@ -1068,14 +917,6 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
         if f["error"]:
             failed.append({"page_id": f["page_id"], "title": f["title"], "error": f["error"]})
             continue
-        # 페이지 단위로 카테고리를 한 번만 계산해 그 페이지의 모든 청크에 공유(2026-09-22,
-        # 지식 카테고리 자동화) — 미리보기 단계에서 계산해야 리뷰 화면에서 사용자가 보고,
-        # 선택/제외만 하더라도 확정 시점까지 페이지별 값이 그대로 살아남는다(확정은
-        # `bulk_create_knowledge`로 가는데 거기엔 페이지 구조가 없어 여기서 미리 붙여야 함).
-        page_category = (
-            await _resolve_confluence_page_category(ns_id, f["doc"], body.category, existing_categories)
-            if ns_id is not None else (body.category or _UNSORTED_CATEGORY)
-        )
         page_start = idx
         page_doc_id = await _save_ledger_draft(ns_id, f["doc"], body.chunk_strategy, user, source_ref=str(f["page_id"]))
         for c in f["chunks"]:
@@ -1086,7 +927,6 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
                 "page_title": f["title"],
                 "text": c.text,
                 "title": c.section_title,
-                "category": page_category,
                 "heading_path": _enrich_heading_path(f["doc"], c.heading_path, f["title"]),
                 "confluence_page_id": f["page_id"],
                 "confluence_version": f["doc"].metadata.get("version"),
@@ -1097,7 +937,6 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
             "title": f["title"],
             "chunk_start": page_start,
             "chunk_count": idx - page_start,
-            "category": page_category,
             **_structure_summary(f["doc"]),
         })
 

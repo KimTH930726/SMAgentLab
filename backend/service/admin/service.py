@@ -37,8 +37,7 @@ async def list_namespaces_detail() -> list[dict]:
                    u.username AS created_by_username,
                    COALESCE(k.cnt, 0) AS knowledge_count,
                    COALESCE(g.cnt, 0) AS glossary_count,
-                   COALESCE(pi.cnt, 0) AS policy_count,
-                   COALESCE(c.cnt, 0) AS category_count
+                   COALESCE(pi.cnt, 0) AS policy_count
             FROM ops_namespace n
             LEFT JOIN ops_part p ON n.owner_part_id = p.id
             LEFT JOIN ops_namespace pn ON pn.id = n.parent_id          -- 상위 영역(트리 깊이 1)
@@ -53,9 +52,6 @@ async def list_namespaces_detail() -> list[dict]:
             LEFT JOIN (   -- 지금 쓰이는 정책 — 채팅 검색 대상과 같은 기준(searchable_sql, v0 검토 대기 제외 10/21)
                 SELECT namespace_id, COUNT(*) AS cnt FROM policy_item WHERE {searchable_sql('policy_item')} GROUP BY namespace_id
             ) pi ON n.id = pi.namespace_id
-            LEFT JOIN (
-                SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge_category GROUP BY namespace_id
-            ) c ON n.id = c.namespace_id
             ORDER BY COALESCE(pn.name, n.name), n.parent_id IS NOT NULL, n.name   -- 상위 바로 아래 하위(하위가 없으면 이름순 그대로)
             """
         )
@@ -209,86 +205,4 @@ async def update_namespace_settings(name: str, body) -> dict:
     return dict(row)
 
 
-async def suggest_category_for_content(ns_id: int, content: str) -> Optional[str]:
-    """지식 내용을 읽고 기존 업무구분 목록 중 하나를 LLM으로 추천 (새 카테고리는 절대 만들지
-    않음 — 제시된 목록 안에서만 고르도록 프롬프트가 강제, 매칭 실패 시 None).
-
-    `service/admin/router.py`의 `POST /categories/suggest` 엔드포인트와 같은 로직을
-    공유하려고 분리(2026-09-22, 지식 카테고리 자동화 — `docs/tech/knowledge-category-
-    automation.md`). 컨플루언스 벌크 등록처럼 HTTP 컨텍스트 밖(요청 처리 도중)에서도
-    호출해야 해서 라우트 핸들러 안에 있던 로직을 재사용 가능한 함수로 뽑았다.
-    """
-    from service.llm.factory import get_llm_provider
-    from service.prompt.loader import get_prompt as load_prompt
-
-    content = (content or "").strip()
-    if not content:
-        return None
-
-    async with get_conn() as conn:
-        rows = await conn.fetch(
-            "SELECT name FROM rag_knowledge_category WHERE namespace_id = $1 ORDER BY name", ns_id
-        )
-    categories = [r["name"] for r in rows]
-    if not categories:
-        return None
-
-    categories_str = ", ".join(f'"{c}"' for c in categories)
-    fallback = (
-        "다음 지식 내용을 읽고, 제시된 업무구분 중 가장 적합한 하나를 골라주세요. "
-        "반드시 제시된 업무구분 중 하나의 이름만 답하고, 다른 설명은 절대 하지 마세요.\n\n"
-        "업무구분 목록: {categories}\n\n"
-        "지식 내용:\n{content}\n\n"
-        "가장 적합한 업무구분 이름:"
-    )
-    template = await load_prompt("category_suggest", fallback)
-    # .format() 대신 replace: 지식 내용에 {테이블명} 같은 패턴이 흔해 KeyError 위험이 있음
-    prompt = template.replace("{categories}", categories_str).replace("{content}", content[:600])
-    if "{categories}" in prompt or "{content}" in prompt:
-        prompt = fallback.replace("{categories}", categories_str).replace("{content}", content[:600])
-    try:
-        # 채팅 답변 규칙이 붙지 않게 분류 전용 시스템 프롬프트(2026-10-13 점검)
-        answer, _ = await get_llm_provider().generate(
-            context="", question=prompt,
-            system_prompt="너는 분류기다. 제시된 업무구분 목록 중 가장 맞는 이름 하나만 그대로 답한다. 설명·기호·근거 표시를 붙이지 않는다.")
-        suggested = answer.strip().strip('"').strip("'").strip()
-        if suggested not in categories:
-            matched = next((c for c in categories if c in suggested or suggested in c), None)
-            suggested = matched
-    except Exception as e:   # 등록은 계속("분류 확인 필요"로) — 원인은 로그로(10/20 대체 처리 점검)
-        logger.warning("업무구분 추천 LLM 실패 — 분류 없이 진행: %s", e)
-        suggested = None
-    return suggested
-
-
-# AI가 기존 업무구분 중 못 고르면 들어가는 칸 — 예전 이름 "미분류"(2026-10-08 사용자: 이름이 이상, 사람이 정해야 하는 상태가 드러나게)
-UNSORTED_CATEGORY = "분류 확인 필요"
-
-
-async def ensure_category_exists(ns_id: int, name: str) -> None:
-    """카테고리가 없으면 만든다(`ON CONFLICT DO NOTHING`이라 이미 있어도 안전하게 재호출
-    가능). 컨플루언스 전용이던 `_ensure_category_exists`(knowledge/router.py)와 동일 SQL —
-    2026-09-24부로 모든 등록 경로가 카테고리를 자동 관리하게 되면서 공용 위치로 옮김."""
-    async with get_conn() as conn:
-        await conn.execute(
-            "INSERT INTO rag_knowledge_category (namespace_id, name) VALUES ($1, $2) "
-            "ON CONFLICT (namespace_id, name) DO NOTHING",
-            ns_id, name,
-        )
-
-
-async def resolve_or_create_category(ns_id: int, category: Optional[str], content: str) -> str:
-    """모든 지식 등록 경로 공용 카테고리 자동 관리(2026-09-24) — 사람이 값을 명시하면
-    그대로 쓰고, 없으면 LLM이 기존 목록 중에서 추천, 그마저 실패하면 "분류 확인 필요"를 자동
-    생성해서 쓴다. 어떤 경로로 등록하든(수동 입력/파일 업로드/텍스트 분할) 사람이
-    카테고리를 반드시 골라야 등록이 되던 것을, 아무것도 안 골라도 항상 유효한 값을
-    갖도록 뒤집는다 — 컨플루언스 벌크의 `_resolve_confluence_page_category()`와 같은
-    철학이지만, 여기엔 페이지 트리 같은 구조 신호가 없어 그 1순위(구조 기반 자동 카테고리
-    생성)는 적용 안 하고 LLM 추천 이후 폴백만 공유한다."""
-    if category and category.strip():
-        return category.strip()
-    suggested = await suggest_category_for_content(ns_id, content)
-    if suggested:
-        return suggested
-    await ensure_category_exists(ns_id, UNSORTED_CATEGORY)
-    return UNSORTED_CATEGORY
+# 업무구분 AI 추천·자동 생성(추천·"분류 확인 필요" 자동 생성, 업무구분 추천 프롬프트)은 10/22 업무구분 폐지로 삭제

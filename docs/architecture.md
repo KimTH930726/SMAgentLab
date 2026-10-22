@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.157)
+# OpsLens 시스템 아키텍처 (v2.158)
 
 ## 개요
 
@@ -12,6 +12,13 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.158 (2026-10-22, dev_0): **업무구분(지식 category) 끊기 — 코드·화면 전부(C3~C5).** 설계 `docs/tech/category-removal-design.md` §3·§4, 사용자 "업무구분 관련 내용 싹 지워줘".
+  읽기: 검색의 DB·공통코드 키워드 전용 분기(점수 CASE·채택·"정확 매칭" 라벨 — 해당 활성 지식 0건), 채팅 업무구분 필터, **질문마다 돌던 업무구분 자동 감지 LLM 호출**,
+  VOC 해결책 후보의 DB·공통코드 제외, `/knowledge/keyword-only-categories`. 쓰기: 등록 필수·AI 추천·자동 태깅(tagger 업무구분 태깅만 — 용어 추출은 유지)·analyzer 추천·
+  컨플 "상위 페이지 제목 → 업무구분 자동 생성"·일괄 변경·원장 `mixed_category`·재분할 최빈값 계승·정정 승인의 category. 관리: 업무구분 CRUD·추천 API, 업무 컬렉션 화면 업무구분 칸,
+  `category_suggest` 시드(기존 행은 DELETE 안 함). 화면: 지식 등록·수정·필터·배지, 통계 공백 창("업무구분은 내용으로 자동 지정"), VOC 등록 필수 칸, 통합 검색 상세.
+  **남긴 것**: `rag_knowledge.category` 칸·`rag_knowledge_category` 표·프롬프트 행(1~2주 운영 뒤 항목별 확인으로 C6 삭제), 옛 마이그레이션. 새 지식은 category NULL.
+  측정(같은 날 전·후, LLM 없음): 지식 106문항 · 정책 골든셋 441문항 **문항별 완전 동일**, `eval_gate` 통과. 실서버 권한 시나리오(업무구분 API 대신 replace-check로 권한 확인) 30/30·20/20.
 - v2.157 (2026-10-22, dev_0): **조직·권한 묶음 — 팀 관리 · 서브탭 · 트리.** 사용자 요청(팀 7개·파트 4~6개로 늘어 "팀 추가가 없다", "사용자·팀파트·담당 업무를 하나로").
   백엔드: 팀 API `GET/POST /api/auth/teams`, `PATCH/DELETE /api/auth/teams/{id}`(파트가 남은 팀 삭제는 409 — FK가 SET NULL이라 그냥 지우면 파트가 조용히 팀 없음이 된다),
   파트 만들기에 `team_id`(없는 팀 400), `PUT /api/auth/parts/{id}/team`(옮기기). 삭제는 팀 행 FOR UPDATE, 파트 만들기·옮기기는 KEY SHARE — 동시에 들어와도 팀 없는 파트 0

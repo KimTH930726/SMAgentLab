@@ -97,7 +97,7 @@ def _patch_conn(doc, current):
     return patch("agents.knowledge_rag.knowledge.service.get_conn", cm)
 
 
-NO_TOUCH = {"edited": 0, "removed": 0, "partial": False, "mixed_category": False}
+NO_TOUCH = {"edited": 0, "removed": 0, "partial": False}   # 업무구분 혼재(mixed_category) 사유는 10/22 폐지
 
 
 def _touch(**kw):
@@ -111,7 +111,7 @@ DOC = {**_row(), "id": 5, "status": "active", "namespace": "ns", "namespace_id":
 @pytest.mark.asyncio
 async def test_rechunk_no_change_when_same():
     from agents.knowledge_rag.knowledge import service
-    current = [{"id": i, "content": x["content"], "heading_path": x["heading_path"], "category": "c", "source_type": "paste_split",
+    current = [{"id": i, "content": x["content"], "heading_path": x["heading_path"], "source_type": "paste_split",
                 "source_file": "f", "edited": False} for i, x in enumerate(split_text_to_items(PASTE, "auto"))]
     bulk = AsyncMock()
     with _patch_conn(DOC, current), _touch(), patch.object(service, "bulk_create_knowledge", bulk):
@@ -122,7 +122,7 @@ async def test_rechunk_no_change_when_same():
 @pytest.mark.asyncio
 async def test_rechunk_blocked_by_human_edit_then_force():
     from agents.knowledge_rag.knowledge import service
-    current = [{"id": 1, "content": "옛 조각(사람이 고침)", "heading_path": None, "category": "c", "source_type": "paste_split",
+    current = [{"id": 1, "content": "옛 조각(사람이 고침)", "heading_path": None, "source_type": "paste_split",
                 "source_file": "f", "edited": True}]
     bulk = AsyncMock(return_value={"job_id": 9, "status": "completed"})
     with _patch_conn(DOC, current), _touch(edited=1), patch.object(service, "bulk_create_knowledge", bulk):
@@ -131,7 +131,7 @@ async def test_rechunk_blocked_by_human_edit_then_force():
         r = await service.rechunk_source_document(5, force=True)
     assert r["changed"] is True
     items = bulk.call_args.args[1]
-    assert all(it["source_document_id"] == 5 and it["category"] == "c" for it in items)   # 원문 연결·기존 업무구분 유지
+    assert all(it["source_document_id"] == 5 and "category" not in it for it in items)   # 원문 연결 유지, 업무구분 최빈값 계승은 10/22 폐지
     kw = bulk.call_args.kwargs
     assert kw["background"] is False
     # 사람 확인은 다시 분할이 이미 받았고(force), 확정 순간 원문이 교체됐으면 조용히 연결만 끊지 말고 실패(리뷰 M2)
@@ -181,11 +181,11 @@ def test_web_rechunk_uses_main_element_like_preview():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reason,value", [("removed", 2), ("partial", True), ("mixed_category", True)])
+@pytest.mark.parametrize("reason,value", [("removed", 2), ("partial", True)])
 async def test_rechunk_blocked_when_people_touched_it(reason, value):
-    """리뷰: 사람이 뺀 조각(삭제·반려·등록 때 체크 해제)이나 조각별 업무구분을 다시 분할이 조용히 되살리거나 통일했다."""
+    """리뷰: 사람이 뺀 조각(삭제·반려·등록 때 체크 해제)을 다시 분할이 조용히 되살렸다(업무구분 혼재 사유는 10/22 폐지)."""
     from agents.knowledge_rag.knowledge import service
-    current = [{"id": 1, "content": "옛 조각", "heading_path": None, "category": "c", "source_type": "paste_split",
+    current = [{"id": 1, "content": "옛 조각", "heading_path": None, "source_type": "paste_split",
                 "source_file": "f"}]
     bulk = AsyncMock()
     with _patch_conn(DOC, current), _touch(**{reason: value}), patch.object(service, "bulk_create_knowledge", bulk):
@@ -196,7 +196,7 @@ async def test_rechunk_blocked_when_people_touched_it(reason, value):
 @pytest.mark.asyncio
 async def test_rechunk_failed_registration_is_an_error_not_success():
     from agents.knowledge_rag.knowledge import service
-    current = [{"id": 1, "content": "옛 조각", "heading_path": None, "category": "c", "source_type": "paste_split",
+    current = [{"id": 1, "content": "옛 조각", "heading_path": None, "source_type": "paste_split",
                 "source_file": "f", "edited": False}]
     class C(_Conn):
         async def fetchval(self, sql, *a):
@@ -268,35 +268,37 @@ def test_draft_reuse_requires_same_strategy_and_refreshes_title():
 
 def test_has_touch_and_confirm_message():
     from agents.knowledge_rag.knowledge.service import ReplaceConfirmRequired
-    assert not L.has_touch({"edited": 0, "removed": 0, "partial": False, "mixed_category": False})
-    for k, v in (("edited", 1), ("removed", 1), ("partial", True), ("mixed_category", True)):
+    assert not L.has_touch({"edited": 0, "removed": 0, "partial": False})
+    for k, v in (("edited", 1), ("removed", 1), ("partial", True)):
         assert L.has_touch({k: v})
-    e = ReplaceConfirmRequired({"edited": 2, "removed": 1, "partial": False, "mixed_category": True})
+    assert not L.has_touch({"mixed_category": True})   # 업무구분 혼재는 더 이상 사람 손 흔적이 아니다(10/22 폐지)
+    e = ReplaceConfirmRequired({"edited": 2, "removed": 1, "partial": False})
     assert isinstance(e, ValueError)
-    assert "고친 조각 2건" in str(e) and "삭제·반려한 조각 1건" in str(e) and "업무구분" in str(e) and "일부" not in str(e)
+    assert "고친 조각 2건" in str(e) and "삭제·반려한 조각 1건" in str(e) and "업무구분" not in str(e) and "일부" not in str(e)
 
 
 class _BulkConn:
     async def fetchval(self, sql, *a):
+        if "INSERT INTO rag_ingestion_job" in sql:
+            raise RuntimeError("stop")   # 원장 확인 다음 단계(job 만들기)에 닿았다는 표시
         return 1 if "ops_namespace" in sql or "resolve" in sql else 77
 
 
 def _bulk_env(check):
-    """bulk_create_knowledge의 job 만들기 전 단계까지만(원장 확인) — 업무구분 추천·job은 막아둔다."""
+    """bulk_create_knowledge의 job 만들기 전 단계까지만(원장 확인) — job 만들기에서 멈춘다."""
     from agents.knowledge_rag.knowledge import service
 
     @asynccontextmanager
     async def cm():
         yield _BulkConn()
     return [patch.object(service, "get_conn", cm), patch.object(service, "resolve_namespace_id", AsyncMock(return_value=1)),
-            patch.object(L, "replace_check", AsyncMock(return_value=check)),
-            patch("service.admin.service.resolve_or_create_category", AsyncMock(side_effect=RuntimeError("stop")))]
+            patch.object(L, "replace_check", AsyncMock(return_value=check))]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("confirm,needs,raised", [(False, True, True), (True, True, False), (False, False, False)])
 async def test_bulk_replace_needs_confirm_only_when_touched(confirm, needs, raised):
-    """A안: 같은 원본 재등록인데 기존 조각에 사람 손 흔적 → 확인 없이는 거부(업무구분 LLM 추천보다 먼저), 확인했거나 흔적 없으면 진행."""
+    """A안: 같은 원본 재등록인데 기존 조각에 사람 손 흔적 → 확인 없이는 거부(job 만들기보다 먼저), 확인했거나 흔적 없으면 진행."""
     from contextlib import ExitStack
     from agents.knowledge_rag.knowledge import service
     check = {**NO_TOUCH, "edited": 1 if needs else 0, "needs_confirm": needs, "unlinked_sources": []}
@@ -331,7 +333,7 @@ async def test_update_rejects_deprecated_or_deleted():
 
     class C:
         async def fetchrow(self, sql, *a):
-            return {"id": 1, "status": "deprecated", "content": "x", "base_weight": 1.0, "category": "c", "embedding": "[0]"}
+            return {"id": 1, "status": "deprecated", "content": "x", "base_weight": 1.0, "embedding": "[0]"}
 
     @asynccontextmanager
     async def cm():

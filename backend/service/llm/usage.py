@@ -21,12 +21,12 @@ _FEATURES: list[tuple[str, str]] = [
     ("service.chat", "채팅(요약·기타)"),
     ("service.improvement", "정정 검토(AI 분석·초안)"),
     ("agents.knowledge_rag.ingestion.analyzer", "등록 — 분할 방식 판단"),
-    ("agents.knowledge_rag.ingestion.tagger", "등록 — 자동 태깅"),
+    ("agents.knowledge_rag.ingestion.tagger", "등록 — 용어 자동 추출"),   # 업무구분 자동 태깅은 10/22 폐지, 용어 추출만 남음
     ("agents.knowledge_rag.ingestion", "등록 — 기타"),
     ("agents.knowledge_rag.knowledge.glossary_terms", "용어집 — 동의어 생성·수집"),
     ("agents.knowledge_rag.knowledge.router", "등록 — 용어 자동 추출"),
     ("agents.knowledge_rag.knowledge", "지식 관리"),
-    ("service.admin", "업무구분 추천"),
+    ("service.admin", "관리(기타)"),   # 업무구분 추천은 10/22 폐지 — 옛 기록은 이 이름으로 보인다
     ("service.policy", "정책서 처리"),
     ("service.email_voc", "VOC 메일"),
     ("service.voc", "VOC"),

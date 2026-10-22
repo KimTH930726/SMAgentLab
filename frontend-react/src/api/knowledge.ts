@@ -12,12 +12,7 @@ import type {
 
 // Knowledge CRUD
 
-// retrieval._KEYWORD_ONLY_CATEGORIES와 동일한 값을 단일 소스(백엔드)에서 가져옴(2026-09-18)
-// — 예전엔 UnifiedAdhocSearch.tsx에 별도로 하드코딩돼 있어 드리프트 위험이 있었음.
-export async function getKeywordOnlyCategories(): Promise<string[]> {
-  const res = await apiFetch<{ categories: string[] }>('/knowledge/keyword-only-categories');
-  return res.categories;
-}
+// 업무구분 키워드 전용 목록 API는 10/22 업무구분 폐지로 삭제
 
 export async function getKnowledge(namespace: string, status?: KnowledgeStatus): Promise<KnowledgeItem[]> {
   try {
@@ -158,7 +153,7 @@ export async function bulkDeleteKnowledge(ids: number[]): Promise<{ deleted: num
 }
 
 export async function bulkUpdateKnowledge(
-  ids: number[], fields: { category?: string; source_type?: string },
+  ids: number[], fields: { source_type?: string },
 ): Promise<{ updated: number }> {
   return apiFetch('/knowledge/bulk-update', { method: 'POST', body: JSON.stringify({ ids, ...fields }) });
 }
@@ -180,7 +175,7 @@ export async function vectorSearchGlossary(namespace: string, query: string, top
 export async function bulkCreateKnowledge(
   namespace: string,
   items: Array<{
-    content: string; category?: string; heading_path?: string[] | null; source_document_id?: number | null; source_document_partial?: boolean;
+    content: string; heading_path?: string[] | null; source_document_id?: number | null; source_document_partial?: boolean;
     confluence_page_id?: string | null; confluence_version?: number | null;
   }>,
   sourceFile?: string,
@@ -199,7 +194,6 @@ export interface ReplaceCheck {
   edited: number;          // 내용을 고친 조각
   removed: number;         // 삭제·반려한 조각
   partial: boolean;        // 일부 조각만 골라 등록했음
-  mixed_category: boolean; // 조각마다 업무구분이 다름
   unlinked_sources: number[];
 }
 
@@ -214,13 +208,11 @@ export async function importCsv(
   file: File,
   namespace: string,
   columnMapping: Record<string, string>,
-  category?: string,
 ): Promise<{ created: number; job_id: number | null }> {
   const form = new FormData();
   form.append('file', file);
   form.append('namespace', namespace);
   form.append('column_mapping', JSON.stringify(columnMapping));
-  if (category) form.append('category', category);
   return apiFetch('/knowledge/import/csv', { method: 'POST', body: form });
 }
 
@@ -228,11 +220,10 @@ export async function importTextSplit(
   namespace: string,
   rawText: string,
   strategy = 'auto',
-  category?: string,
 ): Promise<{ created: number; job_id: number | null; chunks: number }> {
   return apiFetch('/knowledge/import/text-split', {
     method: 'POST',
-    body: JSON.stringify({ namespace, raw_text: rawText, strategy, category }),
+    body: JSON.stringify({ namespace, raw_text: rawText, strategy }),
   });
 }
 
@@ -259,7 +250,7 @@ export interface SourceDocumentInfo {
 }
 
 export interface RechunkResult {
-  changed: boolean; blocked?: boolean; edited?: number; removed?: number; partial?: boolean; mixed_category?: boolean;
+  changed: boolean; blocked?: boolean; edited?: number; removed?: number; partial?: boolean;
   old: number; new: number; job_id?: number; status?: string;
   quality?: { warnings: string[] } | null;
 }
@@ -348,15 +339,13 @@ export interface FileUploadResult {
 export async function importFile(
   file: File,
   namespace: string,
-  opts?: { chunkStrategy?: string; category?: string; autoAnalyze?: boolean; autoTag?: boolean; autoGlossary?: boolean },
+  opts?: { chunkStrategy?: string; autoAnalyze?: boolean; autoGlossary?: boolean },
 ): Promise<FileUploadResult> {
   const form = new FormData();
   form.append('file', file);
   form.append('namespace', namespace);
   form.append('chunk_strategy', opts?.chunkStrategy ?? 'auto');
-  if (opts?.category) form.append('category', opts.category);
   if (opts?.autoAnalyze) form.append('auto_analyze', 'true');
-  if (opts?.autoTag) form.append('auto_tag', 'true');
   if (opts?.autoGlossary) form.append('auto_glossary', 'true');
   return apiFetch('/knowledge/import/file', { method: 'POST', body: form });
 }
@@ -414,7 +403,7 @@ export interface UrlPreviewResult {
 export async function importFromUrl(
   namespace: string,
   url: string,
-  opts?: { confluenceToken?: string; chunkStrategy?: string; category?: string; autoTag?: boolean; autoGlossary?: boolean },
+  opts?: { confluenceToken?: string; chunkStrategy?: string; autoGlossary?: boolean },
 ): Promise<UrlImportResult> {
   return apiFetch('/knowledge/import/url', {
     method: 'POST',
@@ -423,8 +412,6 @@ export async function importFromUrl(
       url,
       confluence_token: opts?.confluenceToken || null,
       chunk_strategy: opts?.chunkStrategy ?? 'auto',
-      category: opts?.category || null,
-      auto_tag: opts?.autoTag ?? false,
       auto_glossary: opts?.autoGlossary ?? false,
     }),
   });
@@ -480,7 +467,6 @@ export interface ConfluenceBulkChunk {
   page_title: string;
   text: string;
   title: string | null;
-  category: string | null;
   heading_path: string[] | null;
   confluence_page_id: string | null;
   confluence_version: number | null;
@@ -492,7 +478,7 @@ export interface ConfluenceBulkPreviewResult {
   chunks: ConfluenceBulkChunk[];
   chunk_count: number;
   pages: Array<{
-    page_id: string; title: string; chunk_start: number; chunk_count: number; category: string | null;
+    page_id: string; title: string; chunk_start: number; chunk_count: number;
     /** 헤딩(h1~h4)으로 나뉜 섹션 수 — 2개 미만이면 구조 없음(섹션 경계·부모 확장이 약해짐) */
     heading_sections: number; structured: boolean;
   }>;

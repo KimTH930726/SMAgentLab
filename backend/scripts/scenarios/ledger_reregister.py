@@ -14,7 +14,6 @@ import urllib.request
 
 API = "http://localhost:8000"
 NS = "zz원장시나리오" + time.strftime("%H%M%S")
-CAT = "시나리오"
 TEXT = ("1.1. 개요\n원장 A안 시나리오 첫째 문장입니다 충분히 길게 씁니다.\n"
         "1.2. 처리\n원장 A안 시나리오 둘째 문장입니다 충분히 길게 씁니다.\n"
         "1.3. 예외\n원장 A안 시나리오 셋째 문장입니다 충분히 길게 씁니다.")
@@ -58,7 +57,7 @@ def preview(strategy="section"):
 
 
 def items_of(r):
-    return [{"content": c, "category": CAT, "heading_path": hp, "source_document_id": r["source_document_id"]}
+    return [{"content": c, "heading_path": hp, "source_document_id": r["source_document_id"]}
             for c, hp in zip(r["chunks"], r["heading_paths"])]
 
 
@@ -71,7 +70,6 @@ tok = call("POST", "/api/auth/login", {"username": "admin", "password": "1111"})
 s, _ = call("POST", "/api/namespaces", {"name": NS, "description": "원장 A안 시나리오(자동 삭제)"}, tok)
 assert s == 200, s
 try:
-    call("POST", f"/api/namespaces/{NS}/categories", {"name": CAT}, tok)
     ns_id = sql(f"SELECT id FROM ops_namespace WHERE name = '{NS}'")
 
     # 1) 처음 등록
