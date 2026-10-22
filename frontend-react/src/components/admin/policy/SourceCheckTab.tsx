@@ -61,7 +61,7 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
     }
   };
 
-  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 영역을 고르세요.</p>;
+  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 컬렉션을 고르세요.</p>;
   const checks = data?.checks ?? [];
   const links = data?.links ?? [];
 

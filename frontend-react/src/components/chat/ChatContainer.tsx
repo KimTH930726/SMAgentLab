@@ -726,7 +726,7 @@ export function ChatContainer() {
         </div>
         {!namespace && (
           <p className="text-xs text-slate-500 mt-2">
-            왼쪽 사이드바에서 업무 영역을 선택하세요.
+            왼쪽 사이드바에서 업무 컬렉션을 선택하세요.
           </p>
         )}
       </div>

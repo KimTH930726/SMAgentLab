@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { goAdmin, domainSelect } from './admin-nav';
+import { goAdmin, selectDomain } from './admin-nav';
 import { loginAdmin } from './auth';
 
 // 이 테스트가 존재하는 이유(2026-09-24): 지식 등록 흐름이 미리보기+검토 2단계로
@@ -20,9 +20,9 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
   await page.getByRole('link', { name: 'Admin' }).click();
   await goAdmin(page, '지식', '지식 문서');
 
-  await domainSelect(page).selectOption(NAMESPACE);
+  await selectDomain(page, NAMESPACE);
 
-  await page.getByRole('button', { name: '지식 등록' }).click();
+  await page.getByRole('button', { name: '지식 등록', exact: true }).click();
   await page.getByText('직접 입력').click();
   // 업무구분 첫 선택지는 'AI 자동분석'(기본) — 예전 '선택하세요'. AI가 못 고른 칸('분류 확인 필요')은 등록 선택지에 없음(2026-10-08)
   const catSelect = page.locator('select').filter({ hasText: 'AI 자동분석' });
@@ -117,8 +117,8 @@ test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아
   try {
     await page.getByRole('link', { name: 'Admin' }).click();
     await goAdmin(page, '지식', '지식 문서');
-    await domainSelect(page).selectOption(NAMESPACE);
-    await page.getByRole('button', { name: '지식 등록' }).click();
+    await selectDomain(page, NAMESPACE);
+    await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     await page.getByText('직접 입력').click();
     const createResponse = page.waitForResponse((r) => r.url().includes('/api/knowledge') && r.request().method() === 'POST');
     await page.locator('textarea:visible').first().fill(content);
@@ -170,7 +170,7 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
 
     await page.getByRole('link', { name: 'Admin' }).click();
     await goAdmin(page, '지식', '지식 문서');
-    await domainSelect(page).selectOption(NAMESPACE);
+    await selectDomain(page, NAMESPACE);
     await page.getByPlaceholder(/검색/).fill('구조 테스트 B');
     await page.getByText('구조 테스트 B').first().click();
     const panel = page.getByTestId('knowledge-structure');
@@ -222,8 +222,8 @@ test('같은 원본 다시 등록 — 사람이 고친 조각이 있으면 사�
 
     await page.getByRole('link', { name: 'Admin' }).click();
     await goAdmin(page, '지식', '지식 문서');
-    await domainSelect(page).selectOption(NAMESPACE);
-    await page.getByRole('button', { name: '지식 등록' }).click();
+    await selectDomain(page, NAMESPACE);
+    await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     await page.getByText('대량 텍스트', { exact: true }).first().click();
     await page.locator('select').filter({ hasText: 'AI 자동분석' }).selectOption('공통지식');   // 업무구분 추천(LLM) 없이
     await page.locator('textarea:visible').first().fill(text);

@@ -29,10 +29,12 @@ import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { stopChatStream, clearStreamState, useStreamStore } from '../../store/useStreamStore';
 import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
-import { sortNamespacesByUserPart } from '../../utils/sortNamespaces';
+import { byContentThenName, initialDomain, isPickableDomain, loadSelectedDomain, saveSelectedDomain } from '../../utils/selectedDomain';
+import { DomainPicker } from './DomainPicker';
+import type { NamespaceDetail } from '../../types';
 import { getConversations, deleteConversation } from '../../api/conversations';
 import { healthCheck } from '../../api/client';
-import { changePassword, updateLLMCredentials, deleteLLMCredentials, updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
+import { changePassword, updateLLMCredentials, deleteLLMCredentials, updateConfluencePAT, deleteConfluencePAT, getParts } from '../../api/auth';
 import { getLLMConfig } from '../../api/llm';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
@@ -56,12 +58,16 @@ export function Sidebar() {
     queryFn: getNamespaces,
     staleTime: 30_000,
   });
-  const { data: nsDetails = [] } = useQuery({
+  const { data: nsDetails = [], isFetched: nsDetailsFetched } = useQuery({
     queryKey: ['namespaces-detail'],
-    queryFn: getNamespacesDetail,
+    queryFn: getNamespacesDetail,   // 실패하면 재시도 뒤 오류 — data는 기본값 []로 남아 아래 대체 처리가 켜진다
     staleTime: 30_000,
   });
-  const sortedNamespaces = sortNamespacesByUserPart(namespaces, user?.part, nsDetails);
+  const { data: parts = [] } = useQuery({   // 업무 고르는 창의 "우리 팀 담당" 묶음용(파트 → 팀)
+    queryKey: ['parts-public'],
+    queryFn: getParts,
+    staleTime: 300_000,
+  });
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [showSearchConfig, setShowSearchConfig] = useState(false);
   const [loadingConvs, setLoadingConvs] = useState(false);
@@ -92,36 +98,32 @@ export function Sidebar() {
     return () => clearInterval(interval);
   }, []);
 
-  // 초기 또는 사용자 변경 시 내 파트 소유 namespace 자동 선택
-  // localStorage에 이전 세션의 namespace가 남아있어도 올바른 파트 namespace로 교체
-  const lastHandledUserPartRef = useRef<string | null | undefined>(undefined);
+  // 보는 컬렉션 정하기(10/22, 컬렉션 설계 S4·S5) — 사용자마다 한 번: 기억한 값(아직 있으면) → 내 담당 첫 업무 → 고를 수 있는 첫 업무.
+  // 예전엔 저장이 없어 새로고침마다 내 담당으로 덮였다(직접 고른 값 유실). 고른 값이 사라지면(이름 변경·삭제) 다시 정한다.
+  const initedUserRef = useRef<string | null | undefined>(undefined);
+  const pendingNsRef = useRef<string | null>(null);   // 처음 선택으로 바꾸는 중인 값 — 반영되기 전 렌더에선 저장하지 않는다
+  // 담당 정보를 못 받았으면(실패·빈 응답) 기다리지 않고 첫 컬렉션으로 연다 — 대체 처리는 화면에 표시(아래)
+  const nsDetailsMissing = nsDetailsFetched && nsDetails.length === 0;
   useEffect(() => {
-    if (sortedNamespaces.length === 0) return;
-
-    const currentPart = user?.part ?? null;
-
-    // namespace 미설정, 또는 고른 영역이 목록에 없음(이름이 바뀌었거나 지워짐 — 다른 탭에서 바꾼 것 포함) → 정렬된 첫 번째 선택
-    if (!namespace || !sortedNamespaces.includes(namespace)) {
-      setNamespace(sortedNamespaces[0]);
-      return;
-    }
-
-    // nsDetails 미로드 → 대기
-    if (nsDetails.length === 0) return;
-
-    // 이미 이 파트 처리 완료 → 사용자가 수동 선택한 거 존중
-    if (lastHandledUserPartRef.current === currentPart) return;
-    lastHandledUserPartRef.current = currentPart;
-
-    // 내 파트 소유 namespace 목록 확인
-    if (currentPart) {
-      const myNsNames = new Set(nsDetails.filter((n) => n.owner_part === currentPart).map((n) => n.name));
-      // 현재 선택된 namespace가 내 파트 소유가 아니고, 내 파트 소유 namespace가 존재하면 → 교체
-      if (myNsNames.size > 0 && !myNsNames.has(namespace)) {
-        setNamespace(sortedNamespaces[0]);
-      }
-    }
-  }, [namespace, sortedNamespaces, nsDetails, user?.part, setNamespace]);
+    if (namespaces.length === 0 || (nsDetails.length === 0 && !nsDetailsMissing)) return;   // 담당 정보까지 와야 "내 담당"을 안다
+    const uname = user?.username ?? null;
+    if (initedUserRef.current === uname && namespace && namespaces.includes(namespace)) { pendingNsRef.current = null; return; }   // 다른 곳이 먼저 바꿨으면 대기 값 버림(리뷰)
+    initedUserRef.current = uname;
+    const ownerOf = (n: NamespaceDetail) => n.effective_owner_part ?? n.owner_part;   // 고르는 창(DomainPicker)과 같은 기준
+    const ordered = nsDetails.filter(isPickableDomain).sort(byContentThenName);   // 고르는 창과 같은 순서
+    const pickable = nsDetailsMissing ? namespaces : ordered.map((n) => n.name);
+    const mine = user?.part ? ordered.filter((n) => ownerOf(n) === user.part).map((n) => n.name) : [];
+    const next = initialDomain({ stored: loadSelectedDomain(user?.username), valid: namespaces, pickable, mine });
+    pendingNsRef.current = next && next !== namespace ? next : null;
+    if (pendingNsRef.current) setNamespace(pendingNsRef.current);
+  }, [namespace, namespaces, nsDetails, nsDetailsMissing, user?.username, user?.part, setNamespace]);
+  // 고른 값 기억 — 이 사용자 처음 선택이 반영된 뒤에만(사용자가 바뀐 렌더에서 앞 사용자의 값을 새 사용자 칸에 쓰지 않게, 리뷰 L7)
+  useEffect(() => {
+    if (!namespace || initedUserRef.current !== (user?.username ?? null)) return;
+    if (pendingNsRef.current && pendingNsRef.current !== namespace) return;
+    pendingNsRef.current = null;
+    saveSelectedDomain(user?.username, namespace);
+  }, [namespace, user?.username]);
 
   // Load conversations when namespace changes (only on chat page)
   const refreshConversations = useCallback(async () => {
@@ -285,30 +287,19 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* 업무 영역 선택 — 채팅·관리 화면 공통(관리 화면의 지식 화면들이 이 값을 같이 씀, 10/21) */}
-      {(
-        <div className="px-3 py-3 border-b border-slate-700 space-y-2">
-          <div>
-            <label htmlFor="sidebar-domain" className="text-xs font-medium text-slate-500 uppercase tracking-wider block mb-1.5">
-              업무 영역
-            </label>
-            {namespaces.length === 0 ? (
-              <div className="text-xs text-slate-500 px-1">업무 영역 없음</div>
-            ) : (
-              <select
-                id="sidebar-domain"
-                value={namespace}
-                onChange={(e) => setNamespace(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
-              >
-                {sortedNamespaces.map((ns) => (
-                  <option key={ns} value={ns}>{ns}</option>
-                ))}
-              </select>
-            )}
-          </div>
-        </div>
-      )}
+      {/* 보는 컬렉션 — 채팅·관리 화면 공통(관리 화면의 지식 화면들이 이 값을 같이 씀). 칩 + 고르는 창(10/22) */}
+      <div className="px-3 py-3 border-b border-slate-700">
+        {namespaces.length === 0 ? (
+          <div className="text-xs text-slate-500 px-1">업무 컬렉션 없음</div>
+        ) : (
+          <DomainPicker value={namespace} onChange={setNamespace} details={nsDetails} parts={parts} userPart={user?.part} />
+        )}
+        {nsDetailsMissing && namespaces.length > 0 && (
+          <p className="mt-1.5 text-[11px] text-amber-700 dark:text-amber-300" role="status">
+            컬렉션 정보를 못 불러와 첫 컬렉션으로 열었어요. 새로고침해 보세요.
+          </p>
+        )}
+      </div>
 
       {/* Chat-only section */}
       {isChatPage && (

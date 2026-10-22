@@ -20,7 +20,7 @@ test('업무 영역 수정 — 이름과 담당 파트를 바꾸고(확인 창),
   expect(ownerOf(NS)).toBe('');
 
   await loginAdmin(page);
-  await goAdmin(page, '업무 영역', '업무 영역');
+  await goAdmin(page, '컬렉션', '컬렉션');
 
   // ① 이름 + 담당 함께 바꾸기 → 확인 창 → 저장
   const row = page.getByRole('row').filter({ hasText: NS });

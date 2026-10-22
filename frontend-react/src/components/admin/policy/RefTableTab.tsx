@@ -23,10 +23,10 @@ export function RefTableTab() {
     staleTime: 60_000,
   });
 
-  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 영역을 고르세요.</p>;
+  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 컬렉션을 고르세요.</p>;
   if (error) return <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{(error as Error).message}</p>;
   if (isLoading) return <p className="text-xs text-slate-500">불러오는 중…</p>;
-  if (tables.length === 0) return <p className="text-sm text-slate-500 py-10 text-center">이 업무 영역엔 참고표가 없어요.</p>;
+  if (tables.length === 0) return <p className="text-sm text-slate-500 py-10 text-center">이 업무 컬렉션엔 참고표가 없어요.</p>;
 
   return (
     <div className="space-y-3">

@@ -172,7 +172,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
-  // 업무 영역 수정 모달 — 이름 + 담당 파트(10/21 사용자: 담당은 영역의 속성이라 이름과 같은 자리에서). 조직 › 담당 업무 영역과 같은 칸(owner_part_id)
+  // 업무 컬렉션 수정 모달 — 이름 + 담당 파트(10/21 사용자: 담당은 영역의 속성이라 이름과 같은 자리에서). 시스템·권한 › 담당 업무와 같은 칸(owner_part_id)
   const [editingNs, setEditingNs] = useState<NamespaceDetail | null>(null);
   const [editingNsName, setEditingNsName] = useState('');
   const [editingOwner, setEditingOwner] = useState('');   // '' = 담당 없음
@@ -286,7 +286,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-200">업무 영역</h2>
+        <h2 className="text-lg font-semibold text-slate-200">업무 컬렉션</h2>
         {isAdmin && (
           <Button
             variant="primary"
@@ -294,7 +294,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
             onClick={() => setShowCreate(true)}
           >
             <Plus className="w-4 h-4" />
-            새 업무 영역
+            새 업무 컬렉션
           </Button>
         )}
       </div>
@@ -306,18 +306,18 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
         <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>
       )}
 
-      {/* 업무 영역 목록(③, 10/21) — 줄 = 그 영역 고르기(사이드바와 같은 값), 숫자 = 그 영역을 고른 채 해당 화면으로 */}
+      {/* 업무 컬렉션 목록(③, 10/21) — 줄 = 그 영역 고르기(사이드바와 같은 값), 숫자 = 그 영역을 고른 채 해당 화면으로 */}
       {!isLoading && namespaces.length > 0 && (
         <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-700 text-slate-400">
-                <th className="text-left px-4 py-3 font-medium">업무 영역</th>
+                <th className="text-left px-4 py-3 font-medium">업무 컬렉션</th>
                 <th className="text-left px-4 py-3 font-medium">담당 파트</th>
                 <th className="text-right px-3 py-3 font-medium" title="지금 쓰이는 정책(폐기·반려 제외)">정책</th>
                 <th className="text-right px-3 py-3 font-medium" title="검색에 쓰이는(활성) 지식 — 승인 대기·반려·폐기·수집 중 제외">지식 문서</th>
                 <th className="text-right px-3 py-3 font-medium">용어</th>
-                <th className="text-left px-3 py-3 font-medium" title="지식 문서의 하위 분류 — 곧 없어질 예정(하위 업무는 업무 영역으로, DB·공통코드는 시스템 정보로)">
+                <th className="text-left px-3 py-3 font-medium" title="지식 문서의 하위 분류 — 곧 없어질 예정(하위 업무는 업무 컬렉션으로, DB·공통코드는 시스템 정보로)">
                   업무구분 <span className="text-[10px] text-slate-500">곧 없어짐</span>
                 </th>
                 <th className="w-20"></th>
@@ -348,7 +348,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                       <td className="px-4 py-2.5">
                         {ns.owner_part
                           ? <Badge color={canModifyNs(effectiveOwnerPart(ns)) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
-                          : <span className="text-xs text-slate-500" title="담당 지정: 조직 › 담당 업무 영역">없음(관리자만)</span>}
+                          : <span className="text-xs text-slate-500" title="담당 지정: 시스템·권한 › 담당 업무">없음(관리자만)</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right">{count(ns.policy_count, 'policy', '정책')}</td>
                       <td className="px-3 py-2.5 text-right">{count(ns.knowledge_count, 'knowledge', '지식 문서')}</td>
@@ -392,13 +392,13 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
         </div>
       )}
       {!isLoading && namespaces.length === 0 && (
-        <div className="text-center py-10 text-slate-500">업무 영역이 없습니다.</div>
+        <div className="text-center py-10 text-slate-500">업무 컬렉션이 없습니다.</div>
       )}
 
-      {/* 업무 영역 수정 — 이름 + 담당 파트(10/21). 모달: 그 자리에서 고치던 칸은 포커스가 빠지거나 취소를 눌러도 저장됐다 */}
+      {/* 업무 컬렉션 수정 — 이름 + 담당 파트(10/21). 모달: 그 자리에서 고치던 칸은 포커스가 빠지거나 취소를 눌러도 저장됐다 */}
       <FormModal
         isOpen={editingNs !== null}
-        title="업무 영역 수정"
+        title="업무 컬렉션 수정"
         onClose={() => setEditingNs(null)}
         onSubmit={commitNsEdit}
         submitting={editMutation.isPending}
@@ -419,7 +419,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
             {editingOwner && !parts.some((p) => p.name === editingOwner) && <option value={editingOwner}>{editingOwner}</option>}
             {parts.map((p) => <option key={p.id} value={p.name}>{p.team ? `${p.team} · ${p.name}` : p.name}</option>)}
           </select>
-          <p className="text-xs text-slate-500 mt-1">이 파트 사람이 이 영역의 정책·지식·용어를 수정하게 돼요. 없으면 관리자만.</p>
+          <p className="text-xs text-slate-500 mt-1">이 파트 사람이 이 컬렉션의 정책·지식·용어를 수정하게 돼요. 없으면 관리자만.</p>
         </div>
       </FormModal>
 
@@ -427,7 +427,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       <Modal
         isOpen={showCreate}
         onClose={() => setShowCreate(false)}
-        title="새 업무 영역"
+        title="새 업무 컬렉션"
       >
         <div className="space-y-4">
           <div>
@@ -449,7 +449,7 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
               type="text"
               value={newDescription}
               onChange={(e) => setNewDescription(e.target.value)}
-              placeholder="업무 영역 설명"
+              placeholder="업무 컬렉션 설명"
               className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
             />
           </div>
@@ -477,11 +477,11 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
       <Modal
         isOpen={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}
-        title="업무 영역 삭제"
+        title="업무 컬렉션 삭제"
       >
         <div className="space-y-4">
           <p className="text-sm text-slate-300">
-            <span className="font-semibold text-rose-600 dark:text-rose-400">{deleteTarget?.name}</span> 업무 영역을 삭제하면 안의 데이터가 함께 지워지고 되돌릴 수 없어요.
+            <span className="font-semibold text-rose-600 dark:text-rose-400">{deleteTarget?.name}</span> 업무 컬렉션을 삭제하면 안의 데이터가 함께 지워지고 되돌릴 수 없어요.
           </p>
           {deleteTarget && (
             <p className="text-sm text-slate-400 tabular-nums">

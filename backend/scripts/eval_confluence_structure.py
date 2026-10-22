@@ -51,7 +51,7 @@ async def make_ctx_embedding_copy(conn, ns_name: str) -> tuple[str, dict[int, in
     tmp_name = f"{ns_name}{TMP_SUFFIX}"
     await conn.execute("DELETE FROM ops_namespace WHERE name=$1", tmp_name)
     tmp_id = await conn.fetchval(
-        "INSERT INTO ops_namespace (name, description) VALUES ($1, 'eval_confluence_structure 임시') RETURNING id", tmp_name)
+        "INSERT INTO ops_namespace (name, description, kind) VALUES ($1, 'eval_confluence_structure 임시', 'policy_test') RETURNING id", tmp_name)
     rows = await conn.fetch("""SELECT id, content, base_weight, category, heading_path, source_type, embedding_model
                                FROM rag_knowledge WHERE namespace_id=$1 AND status='active'""", src_id)
     vecs = await embedding_service.embed_batch([b_embed_text(r["heading_path"], r["content"]) for r in rows])

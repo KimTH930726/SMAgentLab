@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { loginAdmin } from './auth';
+import { selectDomain } from './admin-nav';
 
 // 재질문(v2.134, 2026-10-12) — 주제만 말한 질문의 목록이 크면 답 대신 범위 선택지(①②③ + 전부 보기 + 기타)를 보여주고,
 // 고르면 같은 대화에서 그 범위로 답한다(다시 묻지 않음). 재질문은 답이 아니라 "답변 틀림"이 없다. 실 dev 스택 그대로(LLM 1회).
@@ -16,7 +17,7 @@ test('주제만 말한 큰 목록 → 범위 선택지 → 고르면 그 범위�
   const auth = { Authorization: `Bearer ${authState ? JSON.parse(authState).accessToken : ''}` };
   // 캐시된 예전 답(재질문 전)이 있으면 재질문이 안 나온다 — 이 파트 캐시를 비우고 시작
   await page.request.delete(`/api/admin/cache?namespace=${encodeURIComponent(NS)}`, { headers: auth });
-  await page.locator('select').filter({ hasText: NS }).first().selectOption(NS);
+  await selectDomain(page, NS);
 
   await page.locator('textarea:visible').first().fill(Q);
   await page.getByTitle('전송 (Ctrl+Enter)').click();

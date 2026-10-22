@@ -22,7 +22,7 @@ export interface Part {
   created_at: string;
   team?: string | null;   // 조직: 팀 > 파트
   user_count?: number;
-  domains?: string[];      // 담당 업무 영역(관리자 목록에서만)
+  domains?: string[];      // 담당 업무(관리자 목록에서만)
 }
 
 // Namespace types

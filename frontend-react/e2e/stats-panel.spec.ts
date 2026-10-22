@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { goAdmin, domainSelect } from './admin-nav';
+import { goAdmin, domainSelect, selectDomain } from './admin-nav';
 import { execFileSync } from 'node:child_process';
 import { loginAdmin } from './auth';
 
@@ -27,7 +27,7 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
 
   await loginAdmin(page);
   await goAdmin(page, '품질', '통계');
-  await domainSelect(page).selectOption(NAMESPACE);
+  await selectDomain(page, NAMESPACE);
 
   // 본문(main) 안에서만 — 사이드바 메뉴에도 "정정 요청" 버튼이 있다(10/21 메뉴 재배치)
   const card = (label: string) => page.locator('main').locator('button').filter({ has: page.getByText(label, { exact: true }) }).first();
@@ -47,11 +47,11 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
   await expect(page.getByText(`지식 공백 질의 (${expected['지식 공백']}건)`)).toBeVisible();
   if (expected['지식 공백'] !== '0') {
     await page.locator('.max-h-\\[60vh\\] > div').first().locator('button').first().click();
-    await expect(page.getByRole('button', { name: '지식 등록' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '지식 등록', exact: true })).toBeVisible();
   }
   await page.keyboard.press('Escape');
   await card('정정 요청').click();
   await expect(page.getByText(/질의 \(\d+건\)/)).toHaveCount(0);
   await expect(page.getByText(/지식·정책을 고치자는 신호.*모두 모이는 곳/)).toBeVisible();
-  await expect(domainSelect(page)).toHaveValue(NAMESPACE);
+  await expect(domainSelect(page)).toContainText(NAMESPACE);
 });

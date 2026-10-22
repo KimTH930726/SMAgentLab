@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { goAdmin, domainSelect } from './admin-nav';
+import { goAdmin, selectDomain } from './admin-nav';
 import { createPolicyPart, dropPolicyPart, psql } from './v0-fixture';
 import { API, adminToken, loginAdmin } from './auth';
 
@@ -37,7 +37,7 @@ test('카드에서 직접 수정 → 저장(미반영) → 승인 → 고친 안
   const id = (await r.json()).id as number;
 
   await loginAdmin(page);
-  await domainSelect(page).selectOption(NS);
+  await selectDomain(page, NS);
   await goAdmin(page, '품질', '정정 요청');
 
   const card = page.locator(`#correction-${id}`);

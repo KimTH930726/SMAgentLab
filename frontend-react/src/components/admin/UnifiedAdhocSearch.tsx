@@ -120,7 +120,7 @@ function strengthBand(pct: number): { barClass: string; label: string } {
 export function UnifiedAdhocSearch() {
   const qc = useQueryClient();
   const { selectedNs, canModifyNs } = useNamespaceAccess();
-  // 업무 영역이 바뀌면(사이드바) 앞 영역의 결과를 지운다 — 남겨 두면 새 영역 이름으로 신고됐다(리뷰 M3)
+  // 업무 컬렉션이 바뀌면(사이드바) 앞 영역의 결과를 지운다 — 남겨 두면 새 영역 이름으로 신고됐다(리뷰 M3)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setHits(null); setActiveHit(null); setFlaggedIds(new Set()); setError(null); setIsEditing(false); }, [selectedNs]);
   const [question, setQuestion] = useState('');
@@ -221,7 +221,7 @@ export function UnifiedAdhocSearch() {
             table: 'rag_knowledge',
             recordId: r.id,
             rows: [
-              { key: '업무 영역(namespace)', value: selectedNs },
+              { key: '업무 컬렉션(namespace)', value: selectedNs },
               { key: '업무구분(category)', value: r.category ?? '(업무구분 없음)' },
               { key: '등록 방식', value: r.source_type ? (SOURCE_TYPE_LABEL[r.source_type] ?? r.source_type) : '-' },
               ...(r.source_file ? [{ key: '원본 파일/문서', value: r.source_file }] : []),
@@ -437,7 +437,7 @@ export function UnifiedAdhocSearch() {
         </button>
       </div>
 
-      {!selectedNs && <p className="text-xs text-slate-500">업무 영역을 선택하세요.</p>}
+      {!selectedNs && <p className="text-xs text-slate-500">업무 컬렉션을 선택하세요.</p>}
       {error && <p className="text-xs text-rose-600 dark:text-rose-400">검색 실패: {error}</p>}
 
       {hits && counts && (

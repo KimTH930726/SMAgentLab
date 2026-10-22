@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { API, adminToken, loginAdmin } from './auth';
+import { selectDomain } from './admin-nav';
 
 // 근거만 보여 주기(2026-10-20) — AI가 답을 못 낼 때(LLM 연결 실패) 일반 답 모양의 실패 문구 대신 경고 + 찾은 정책 근거를 보여 준다.
 // 예전엔 정책 근거를 실패 문구와 겹치는 것으로 골라 사실상 늘 사라졌다. LLM 장애는 없는 Ollama 주소로 잠깐 전환해 만들고,
@@ -18,7 +19,7 @@ test('LLM 장애 → 경고 + 정책 근거 카드(근거만 보여 주기), 피
   expect(dead.ok()).toBeTruthy();
   try {
     await loginAdmin(page, { openAdmin: false });
-    await page.locator('select').filter({ hasText: NS }).first().selectOption(NS);
+    await selectDomain(page, NS);
 
     await page.locator('textarea:visible').first().fill('카드 환불 수수료 기준');
     await page.getByTitle('전송 (Ctrl+Enter)').click();

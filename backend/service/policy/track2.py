@@ -274,7 +274,8 @@ async def run_comparison(
         ns_id_a = await resolve_namespace_id(conn, _TRACK_A_NAMESPACE)
         if ns_id_a is None:
             ns_id_a = await conn.fetchval(
-                "INSERT INTO ops_namespace (name, description) VALUES ($1, $2) RETURNING id",
+                # 테스트 종류 — 일반 업무로 만들면 고르는 창·전체 범위에 끼어 채팅·측정을 오염시켰다(10/22 TrackA 최대 오염원)
+                "INSERT INTO ops_namespace (name, description, kind) VALUES ($1, $2, 'policy_test') RETURNING id",
                 _TRACK_A_NAMESPACE, "Track 2 A그룹(지식-only) 임시 테스트 네임스페이스 — 실행 후 삭제",
             )
         id_map = await _setup_track_a(conn, ns_id_a)

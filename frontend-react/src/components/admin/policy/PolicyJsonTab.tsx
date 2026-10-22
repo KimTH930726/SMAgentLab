@@ -17,7 +17,7 @@ export function PolicyJsonTab({ onOpenCorrections }: { onOpenCorrections: () => 
   const { selectedNs } = useNamespaceAccess();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
-  // ns = 그 파일을 비교한 업무 영역 — 비교 중에 영역을 바꾸면 늦게 온 결과를 버린다(10/21 리뷰 L3)
+  // ns = 그 파일을 비교한 업무 컬렉션 — 비교 중에 영역을 바꾸면 늦게 온 결과를 버린다(10/21 리뷰 L3)
   const [file, setFile] = useState<{ name: string; content: string; ns: string } | null>(null);
   const [preview, setPreview] = useState<PolicyJsonPreview | null>(null);
   const [result, setResult] = useState<PolicyJsonApplyResult | null>(null);
@@ -85,7 +85,7 @@ export function PolicyJsonTab({ onOpenCorrections }: { onOpenCorrections: () => 
     }
   };
 
-  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 영역을 고르세요.</p>;
+  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 컬렉션을 고르세요.</p>;
 
   return (
     <div className="space-y-4 max-w-3xl">
@@ -116,7 +116,7 @@ export function PolicyJsonTab({ onOpenCorrections }: { onOpenCorrections: () => 
             <span className="text-amber-600 dark:text-amber-400" title="이미 검토 중인 정정이 있어 올리지 않아요">검토 중이라 제외 <b>{preview.blocked.length}</b></span>
             <span className="text-slate-400" title="파일에만 있음 — 새 정책 추가는 아직 지원하지 않아요">파일에만 <b>{preview.added.length}</b></span>
             <span className="text-slate-400" title="지금 정책엔 있는데 파일엔 없음 — 지우지 않아요">파일에 없음 <b>{preview.missing.length}</b></span>
-            {preview.other_domain > 0 && <span className="text-slate-500">다른 영역 {preview.other_domain}(비교 안 함)</span>}
+            {preview.other_domain > 0 && <span className="text-slate-500">다른 컬렉션 {preview.other_domain}(비교 안 함)</span>}
           </div>
           {preview.changed.length > 0 && (
             <ul className="text-sm divide-y divide-slate-700/60 border border-slate-700 rounded-lg max-h-72 overflow-y-auto">

@@ -6,7 +6,7 @@ import { loginAdmin } from './auth';
 // 공통·VOC 프롬프트가 목록에 보이고 VOC 라벨이 붙는지 확인한다(읽기 전용 — 저장·LLM 호출 없음).
 test('프롬프트 관리 — VOC 프롬프트는 VOC로 표시되고 목록에서 빠지지 않는다', async ({ page }) => {
   await loginAdmin(page);
-  await goAdmin(page, '시스템', '설정');
+  await goAdmin(page, '시스템·권한', '설정');
   await page.getByRole('button', { name: '프롬프트 관리' }).click();
 
   for (const name of ['VOC 이메일 분석', 'VOC 이메일 분석 시스템']) {

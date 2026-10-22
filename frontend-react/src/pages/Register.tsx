@@ -156,7 +156,7 @@ export default function Register() {
               </p>
             )}
 
-            <p className="text-xs text-slate-500" title="관리자가 사용자 관리에서 승인하면 소속 파트가 담당하는 업무 영역을 수정할 수 있습니다.">
+            <p className="text-xs text-slate-500" title="관리자가 사용자 관리에서 승인하면 소속 파트가 담당하는 업무 컬렉션을 수정할 수 있습니다.">
               가입하면 조회 전용으로 시작해요. 관리자가 승인하면 수정할 수 있어요.
             </p>
             <Button type="submit" loading={loading} className="w-full" size="lg">

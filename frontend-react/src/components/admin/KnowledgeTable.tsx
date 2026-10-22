@@ -206,14 +206,14 @@ type IngestMethod = 'file' | 'text' | 'manual' | 'url' | null;
 
 // ── KnowledgeTable (메인) ─────────────────────────────────────────────────────
 
-export function KnowledgeTable() {
+export function KnowledgeTable({ initialTab = 'list' }: { initialTab?: 'list' | 'ingest' } = {}) {   // 메뉴 "지식 등록"은 등록 탭으로 바로(10/22)
   const qc = useQueryClient();
   const { selectedNs, canModifyNs } = useNamespaceAccess();
-  // 업무 영역이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
+  // 업무 컬렉션이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setCategoryFilter(''); setPage(1); setSelectedIds(new Set()); }, [selectedNs]);   // 체크 남으면 앞 영역 것이 일괄 삭제됐다(리뷰 M1)
 
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>('list');   // 정정 요청은 품질 메뉴로(10/21)
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>(initialTab);   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<KnowledgeFormData>(defaultForm);
@@ -508,7 +508,7 @@ export function KnowledgeTable() {
             </div>
           )}
 
-          {!selectedNs && <div className="text-center py-16 text-slate-500">업무 영역을 선택하세요.</div>}
+          {!selectedNs && <div className="text-center py-16 text-slate-500">업무 컬렉션을 선택하세요.</div>}
           {selectedNs && isLoading && <div className="text-center py-16 text-slate-500 animate-pulse">로딩 중...</div>}
           {selectedNs && error && <div className="text-center py-16 text-rose-400">오류가 발생했습니다.</div>}
 
@@ -1071,10 +1071,10 @@ function IngestTab({ namespace, categoryNames, canModify, jobs, onSuccess, onGoT
   };
 
   if (!namespace) {
-    return <div className="text-center py-16 text-slate-500">업무 영역을 선택하세요.</div>;
+    return <div className="text-center py-16 text-slate-500">업무 컬렉션을 선택하세요.</div>;
   }
   if (!canModify) {
-    return <div className="text-center py-16 text-slate-500">이 업무 영역의 지식 등록 권한이 없습니다.</div>;
+    return <div className="text-center py-16 text-slate-500">이 업무 컬렉션의 지식 등록 권한이 없습니다.</div>;
   }
 
   const methods: { id: IngestMethod; icon: React.ReactNode; title: string; desc: string; badge?: string }[] = [
@@ -1390,7 +1390,7 @@ function ReviewTab({ items, canModify, onResolved }: {
                 </Button>
               </div>
             ) : (
-              <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 업무 영역의 승인 권한이 없습니다.</p>
+              <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 업무 컬렉션의 승인 권한이 없습니다.</p>
             )}
           </div>
         )}

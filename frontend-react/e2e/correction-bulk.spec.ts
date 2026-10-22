@@ -1,5 +1,5 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
-import { goAdmin, domainSelect } from './admin-nav';
+import { goAdmin, selectDomain } from './admin-nav';
 import { createPolicyPart, dropPolicyPart, psql } from './v0-fixture';
 import { API, adminToken, loginAdmin } from './auth';
 
@@ -34,7 +34,7 @@ async function propose(request: APIRequestContext, tok: string, name: string, ra
 
 async function openQueue(page: Page) {
   await loginAdmin(page);
-  await domainSelect(page).selectOption(NS);
+  await selectDomain(page, NS);
   await goAdmin(page, '품질', '정정 요청');
   await page.getByLabel('출처').selectOption({ label: '정책 직접 수정' });
 }

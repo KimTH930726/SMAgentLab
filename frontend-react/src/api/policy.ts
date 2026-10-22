@@ -195,7 +195,7 @@ export interface PolicyJsonPreview {
   format: 'thin' | 'team';
   domain: string;
   total: number;
-  /** 팀원 파일에서 다른 업무 영역 정책(비교 안 함) */
+  /** 팀원 파일에서 다른 업무 컬렉션 정책(비교 안 함) */
   other_domain: number;
   unchanged: number;
   changed: (ImportRef & { item_id: number; before_hash: string; after_hash: string; body_changed: boolean; remark_changed: boolean })[];

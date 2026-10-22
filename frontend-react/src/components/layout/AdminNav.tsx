@@ -11,7 +11,7 @@ import { adminPath, resolveAdminMenu, visibleAdminMenu, type AdminMenuId } from 
 const OPEN_KEY = 'opslens.adminNav.open';
 
 // 최상위 메뉴 아이콘 — 6개가 같은 왼쪽 선에서 시작해 같은 급으로 보이게(사용자 10/21: 화살표가 앞에 있으면 하위처럼 보인다)
-const GROUP_ICON: Record<string, LucideIcon> = { domains: Layers, knowledge: BookOpen, org: Users, quality: BarChart2, voc: Mail, system: Settings };
+const GROUP_ICON: Record<string, LucideIcon> = { collections: Layers, knowledge: BookOpen, quality: BarChart2, voc: Mail, system: Settings };
 
 function loadOpen(): string[] | null {
   try {
@@ -34,7 +34,7 @@ export function AdminNav() {
   const current = resolveAdminMenu(location.pathname, groups);
   const [open, setOpen] = useState<string[]>(() => loadOpen() ?? []);
 
-  // 정정 요청 대기 건수(지금 고른 업무 영역, 처리 권한이 있을 때) — 지식 탭 안에 있던 배지를 옮겨 옴(방치 방지)
+  // 정정 요청 대기 건수(지금 고른 업무 컬렉션, 처리 권한이 있을 때) — 지식 탭 안에 있던 배지를 옮겨 옴(방치 방지)
   const { selectedNs, canModifyNs } = useNamespaceAccess();
   const { data: correctionCount } = useQuery({
     queryKey: ['corrections-pending-count', selectedNs],

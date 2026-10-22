@@ -41,7 +41,7 @@ export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: num
   const toggle = (g: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(g)) n.delete(g); else n.add(g); return n; });
   const pendingCount = rows.filter((r) => r.open_correction_id).length;
 
-  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 영역을 고르세요.</p>;
+  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 컬렉션을 고르세요.</p>;
 
   return (
     <div className="space-y-3">
@@ -65,7 +65,7 @@ export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: num
       {isLoading ? (
         <p className="text-xs text-slate-500">불러오는 중…</p>
       ) : rows.length === 0 ? (
-        <p className="text-sm text-slate-500 py-10 text-center">{searching ? '찾는 정책이 없어요.' : '이 업무 영역엔 정책서가 없어요.'}</p>
+        <p className="text-sm text-slate-500 py-10 text-center">{searching ? '찾는 정책이 없어요.' : '이 업무 컬렉션엔 정책서가 없어요.'}</p>
       ) : (
         <div className="space-y-3">
           {groups.map(([g, items]) => {

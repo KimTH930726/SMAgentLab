@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { goAdmin, domainSelect } from './admin-nav';
+import { goAdmin, selectDomain } from './admin-nav';
 import { createPolicyPart, dropPolicyPart } from './v0-fixture';
 import { API, adminToken, loginAdmin } from './auth';
 
@@ -38,7 +38,7 @@ test.afterAll(async ({ request }) => {
 
 async function login(page: Page) {
   await loginAdmin(page, { openAdmin: false });
-  await page.locator('select').filter({ hasText: NS }).first().selectOption(NS);
+  await selectDomain(page, NS);
 }
 
 /** 질문을 보내고 답변 완료(피드백 버튼 노출)까지 기다린다. 마지막 답변 영역 텍스트를 돌려준다. */
@@ -51,7 +51,7 @@ async function ask(page: Page, question: string) {
 
 async function openCorrectionCard(page: Page, userInput: string) {
   await page.getByRole('link', { name: 'Admin' }).click();
-  await domainSelect(page).selectOption(NS);
+  await selectDomain(page, NS);
   await goAdmin(page, '품질', '정정 요청');   // 정정 요청은 품질 메뉴로(10/21)
   const card = page.locator('div.rounded-xl').filter({ hasText: userInput }).first();
   await expect(card).toBeVisible({ timeout: 10_000 });

@@ -41,14 +41,14 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
   }
 }
 
-// 정정 요청(품질) — 지식·정책 공통이라 지식 탭에서 뺐다(10/21). 처리는 그 업무 영역 담당 파트 + 관리자
+// 정정 요청(품질) — 지식·정책 공통이라 지식 탭에서 뺐다(10/21). 처리는 그 업무 컬렉션 담당 파트 + 관리자
 // ?focus=N — 정책서 화면의 "정정 #N 검토 중 → 정정 요청에서 보기"가 그 카드로 바로 오게(10/21)
 function CorrectionsPanel() {
   const { selectedNs, canModifyNs } = useNamespaceAccess();
   const [params] = useSearchParams();
   const focus = Number(params.get('focus')) || null;
   if (!canModifyNs) {
-    return <p className="text-sm text-slate-400 py-6 text-center">이 업무 영역의 정정 요청은 담당 파트와 관리자만 처리할 수 있어요.</p>;
+    return <p className="text-sm text-slate-400 py-6 text-center">이 업무 컬렉션의 정정 요청은 담당 파트와 관리자만 처리할 수 있어요.</p>;
   }
   return <CorrectionReviewTab namespace={selectedNs} focusId={focus} />;
 }
@@ -74,7 +74,7 @@ export default function Admin() {
     <div className="flex flex-col h-full overflow-hidden">
       {user?.role === 'viewer' && (
         <div className="flex-shrink-0 px-6 py-2 text-xs bg-amber-50 text-amber-800 border-b border-amber-200 dark:bg-amber-900/30 dark:text-amber-200 dark:border-amber-700/40"
-          title="사용자 관리에서 관리자가 승인하면 소속 파트가 담당하는 업무 영역의 관리 화면을 쓸 수 있습니다.">
+          title="사용자 관리에서 관리자가 승인하면 소속 파트가 담당하는 업무 컬렉션의 관리 화면을 쓸 수 있습니다.">
           승인 대기 중이에요 — 관리자가 승인하면 관리 화면을 쓸 수 있어요. 채팅은 지금도 쓸 수 있어요.
         </div>
       )}
@@ -83,6 +83,7 @@ export default function Admin() {
         <TabErrorBoundary key={current}>
           {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} />}
           {current === 'k.policy'      && <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} onOpenCorrections={() => go('q.corrections')} />}
+          {current === 'k.register'    && <KnowledgeTable initialTab="ingest" />}
           {current === 'k.docs'        && <KnowledgeTable />}
           {current === 'k.glossary'    && <GlossaryTable />}
           {current === 'k.system'      && <NotReady what="시스템 정보(DB 칼럼·공통코드)" />}

@@ -10,13 +10,13 @@ import { showConfirm, showError } from '../../store/useDialogStore';
 import type { Part } from '../../types';
 
 /**
- * 담당 업무 영역 — 파트(사람 조직)가 어느 업무 영역을 맡는지(2026-10-21, 관리자 화면 설계안 docs/tech/admin-ia-design.md ①).
+ * 담당 업무 — 파트(사람 조직)가 어느 업무 컬렉션을 맡는지(2026-10-21, 관리자 화면 설계안 docs/tech/admin-ia-design.md ①).
  * 파트 하나가 여러 영역(1:N), 영역 하나엔 담당 파트 하나. 담당 파트 사람이 그 영역의 지식·정책·용어를 수정하고, 담당 없는 영역은 관리자만.
  * 저장 전에 무엇이 바뀌는지 확인받는다(고르는 순간 저장하던 칸으로 사고 — 10/20).
  */
 export function PartDomainSection() {
   const qc = useQueryClient();
-  // 파트 이름·팀은 파트 목록에서, 누가 무엇을 맡았는지는 업무 영역 목록(owner_part_id) 하나에서 — 출처가 둘이면 이름 바꾼 직후 어긋났다(리뷰 M1)
+  // 파트 이름·팀은 파트 목록에서, 누가 무엇을 맡았는지는 업무 컬렉션 목록(owner_part_id) 하나에서 — 출처가 둘이면 이름 바꾼 직후 어긋났다(리뷰 M1)
   const { data: parts = [], isLoading: partsLoading } = useQuery({ queryKey: ['parts-all'], queryFn: getAllParts });
   const { data: domains = [], isLoading: nsLoading } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail });
   const [editing, setEditing] = useState<Part | null>(null);
@@ -33,7 +33,7 @@ export function PartDomainSection() {
       qc.invalidateQueries({ queryKey: ['namespaces-detail'] });   // 수정 권한 표시(canEditDomain)가 이 값을 본다
       setEditing(null);
     },
-    onError: (err: Error) => { void showError(err, '담당 업무 영역 저장 실패'); },
+    onError: (err: Error) => { void showError(err, '담당 업무 저장 실패'); },
   });
 
   const openEdit = (p: Part) => {
@@ -62,9 +62,9 @@ export function PartDomainSection() {
       moved.length ? `  └ 다른 파트에서 옮겨 옴: ${moved.map((n) => `${n}(${partName.get(freshOwner.get(n) as number) ?? '다른 파트'})`).join(', ')}` : '',
       removed.length ? `맡지 않음: ${removed.join(', ')} — 담당이 없어지면 관리자만 수정할 수 있어요` : '',
       '',
-      `'${editing.name}' 사람이 맡은 업무 영역의 지식·정책·용어를 수정하게 됩니다.`,
+      `'${editing.name}' 사람이 맡은 업무 컬렉션의 지식·정책·용어를 수정하게 됩니다.`,
     ].filter((l, i) => l || i === 3);
-    if (!(await showConfirm(lines.join('\n'), { tone: 'warning', confirmLabel: '저장', title: `${editing.name} 담당 업무 영역` }))) return;
+    if (!(await showConfirm(lines.join('\n'), { tone: 'warning', confirmLabel: '저장', title: `${editing.name} 담당 업무` }))) return;
     saveMutation.mutate({ part: editing, names: [...checked] });
   };
 
@@ -73,9 +73,9 @@ export function PartDomainSection() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-lg font-semibold text-slate-200">담당 업무 영역</h2>
-        <p className="text-sm text-slate-400 mt-1" title="파트 하나가 여러 업무 영역을 맡을 수 있고, 업무 영역 하나의 담당 파트는 하나입니다.">
-          파트가 맡은 업무 영역은 그 파트 사람이 수정할 수 있어요. 담당이 없으면 관리자만 수정해요.
+        <h2 className="text-lg font-semibold text-slate-200">담당 업무</h2>
+        <p className="text-sm text-slate-400 mt-1" title="파트 하나가 여러 업무 컬렉션을 맡을 수 있고, 업무 컬렉션 하나의 담당 파트는 하나입니다.">
+          파트가 맡은 업무 컬렉션은 그 파트 사람이 수정할 수 있어요. 담당이 없으면 관리자만 수정해요.
         </p>
       </div>
 
@@ -84,7 +84,7 @@ export function PartDomainSection() {
           <thead>
             <tr className="border-b border-slate-700 text-slate-400">
               <th className="text-left px-4 py-3 font-medium w-48">파트</th>
-              <th className="text-left px-4 py-3 font-medium">담당 업무 영역</th>
+              <th className="text-left px-4 py-3 font-medium">담당 업무</th>
               <th className="text-right px-4 py-3 font-medium w-24"></th>
             </tr>
           </thead>
@@ -122,10 +122,10 @@ export function PartDomainSection() {
         </table>
       </div>
 
-      <Modal isOpen={!!editing} onClose={() => setEditing(null)} title={editing ? `${editing.name} — 담당 업무 영역` : ''} maxWidth="max-w-lg">
+      <Modal isOpen={!!editing} onClose={() => setEditing(null)} title={editing ? `${editing.name} — 담당 업무` : ''} maxWidth="max-w-lg">
         {editing && (
           <div className="space-y-4">
-            <p className="text-xs text-slate-400">체크한 업무 영역을 이 파트가 맡아요. 다른 파트가 맡던 영역을 체크하면 이 파트로 옮겨져요.</p>
+            <p className="text-xs text-slate-400">체크한 업무 컬렉션을 이 파트가 맡아요. 다른 파트가 맡던 컬렉션을 체크하면 이 파트로 옮겨져요.</p>
             <div className="max-h-80 overflow-y-auto space-y-1 pr-1">
               {domains.map((d) => {
                 const other = d.owner_part_id && d.owner_part_id !== editing.id ? (partName.get(d.owner_part_id) ?? d.owner_part) : null;

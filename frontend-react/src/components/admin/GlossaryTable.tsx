@@ -19,7 +19,7 @@ interface GlossarySuggestion { term: string; description: string; }
 export function GlossaryTable() {
   const qc = useQueryClient();
   const { selectedNs, canModifyNs, user } = useNamespaceAccess();
-  // 업무 영역이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
+  // 업무 컬렉션이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setEditingId(null); }, [selectedNs]);
 
@@ -179,7 +179,7 @@ export function GlossaryTable() {
       </div>
 
 
-      {!selectedNs && <div className="text-center py-10 text-slate-500">업무 영역을 선택하세요.</div>}
+      {!selectedNs && <div className="text-center py-10 text-slate-500">업무 컬렉션을 선택하세요.</div>}
       {selectedNs && isLoading && <div className="text-center py-10 text-slate-500 animate-pulse">로딩 중...</div>}
       {selectedNs && error && <div className="text-center py-10 text-rose-600 dark:text-rose-400">오류가 발생했습니다.</div>}
 

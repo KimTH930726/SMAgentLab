@@ -323,7 +323,7 @@ function QueryLogModal({
                           </Button>
                         </div>
                       ) : (
-                        <p className="text-xs text-slate-500">이 업무 영역에 대한 수정 권한이 없습니다.</p>
+                        <p className="text-xs text-slate-500">이 업무 컬렉션에 대한 수정 권한이 없습니다.</p>
                       )}
                     </div>
                   )}
@@ -392,7 +392,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
     {
       label: '전체 질의', value: stats?.total_queries ?? 0, type: 'total' as ModalType,
       icon: <MessageSquare className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />, bg: 'bg-indigo-100 dark:bg-indigo-900/40',
-      highlight: false, tip: '이 업무 영역에 들어온 모든 질의',
+      highlight: false, tip: '이 업무 컬렉션에 들어온 모든 질의',
     },
     {
       label: '답변', value: stats?.answered ?? 0, type: 'pending' as ModalType,
@@ -400,7 +400,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
       highlight: false, tip: '근거를 찾아 답변한 질의 — 정정 신고가 없으면 맞은 것으로 봅니다',
     },
     {
-      // 질의 목록이 아니라 개선 원장 건수 — 누르면 품질 › 정정 요청으로 이동(같은 업무 영역)
+      // 질의 목록이 아니라 개선 원장 건수 — 누르면 품질 › 정정 요청으로 이동(같은 업무 컬렉션)
       label: '정정 요청', value: stats?.corrections_open ?? 0, type: null, go: onOpenCorrections,
       icon: <Flag className="w-5 h-5 text-rose-600 dark:text-rose-400" />, bg: 'bg-rose-100 dark:bg-rose-900/40',
       highlight: false, tip: '"답변 틀림" 신고 중 아직 처리 안 된 건 — 눌러서 정정 요청으로 이동',
@@ -437,7 +437,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
                 title={tip}
                 onClick={() => {
                   if (type) setModalType(type);
-                  else if (go) go();   // 업무 영역은 이미 공용 상태
+                  else if (go) go();   // 업무 컬렉션은 이미 공용 상태
                 }}
                 className={`bg-slate-800 border rounded-xl p-4 flex items-center gap-3 transition-colors text-left ${type || go ? 'hover:bg-slate-700/60 cursor-pointer' : 'cursor-default'} ${
                   highlight
@@ -507,7 +507,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
       )}
 
       {!selectedNs && !isLoading && (
-        <div className="text-center py-10 text-slate-500">업무 영역을 선택하세요.</div>
+        <div className="text-center py-10 text-slate-500">업무 컬렉션을 선택하세요.</div>
       )}
 
       {/* Query log modal */}
