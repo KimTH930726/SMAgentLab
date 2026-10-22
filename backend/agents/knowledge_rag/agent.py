@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from agents.base import AgentBase
-from core.database import get_conn
+from core.database import get_conn, org_space_scope_extra_ids
 from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
@@ -175,9 +175,10 @@ async def build_chat_context(
     top_k: int, w_vector: float, w_keyword: float,
     glossary_mode: Optional[str] = None, glossary_entries: Optional[list] = None,
     policy_top_k: int = POLICY_CONTEXT_TOP_K, category_lists: bool = True, clarify_scope: Optional[str] = None,
-    list_question: Optional[str] = None,
+    list_question: Optional[str] = None, asker_part_id: Optional[int] = None,
 ) -> ChatContext:
-    """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB)."""
+    """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB).
+    asker_part_id = 질문한 사람의 파트 — 설정 chat.org_space_scope가 켜졌을 때만 그 사람의 조직 컬렉션을 지식 검색에 더한다(기본 꺼짐, #83)."""
     # 정책서 범위(2026-10-20, 사용자 결정): 지식은 고른 파트만, 정책서(정책·용어)는 정책 파트까지 — service/policy/scope.py.
     # 정책 데이터가 있는 파트만 돌려주므로 비어 있으면 정책 검색·분류 목록을 건너뛴다(예전 has_policy_data와 같은 역할).
     try:
@@ -187,6 +188,15 @@ async def build_chat_context(
         logger.warning("정책서 범위 계산 실패(정책 없이 진행): %s", e)
         policy_ns_ids = []
     policy_available = bool(policy_ns_ids)
+    # 업무 컬렉션 + 내 조직 컬렉션(org-space-design §3) — 정확도 게이트 전엔 꺼짐이라 [](검색 결과는 예전과 같다).
+    # 켤 때 볼 것: 답변 캐시 키가 컬렉션 이름뿐이라 파트마다 다른 범위의 답이 섞인다 — 키에 파트를 넣거나 캐시를 건너뛴 뒤 켠다.
+    org_extra: list[int] = []
+    if asker_part_id is not None:
+        try:
+            async with get_conn() as conn:
+                org_extra = await org_space_scope_extra_ids(conn, namespace, asker_part_id)
+        except Exception as e:
+            logger.warning("조직 컬렉션 범위 계산 실패(고른 컬렉션만 검색): %s", e)
     term_matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(
         namespace, search_question, query_vec, mode=glossary_mode, entries=glossary_entries, extra_ns_ids=policy_ns_ids)
 
@@ -194,7 +204,7 @@ async def build_chat_context(
     candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
     results_raw, refdata_available = await asyncio.gather(
         retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k,
-                                   keyword_rescue=retrieval.KEYWORD_RESCUE),
+                                   keyword_rescue=retrieval.KEYWORD_RESCUE, **({"extra_ns_ids": org_extra} if org_extra else {})),
         refdata_search.has_refdata(namespace),
     )
     if settings.reranker_enabled and len(results_raw) > top_k:
@@ -398,7 +408,7 @@ class KnowledgeRagAgent(AgentBase):
             cc, history = await asyncio.gather(
                 build_chat_context(namespace, search_question, query_vec, top_k=top_k, w_vector=w_vector,
                                    w_keyword=w_keyword, clarify_scope=clarify_scope,
-                                   list_question=query),
+                                   list_question=query, asker_part_id=user.get("part_id")),
                 memory.build_context_history(conversation_id, query_vec),
             )
             results, policy_result, llm_context, mapped_term = cc.results, cc.policy_result, cc.llm_context, cc.mapped_term

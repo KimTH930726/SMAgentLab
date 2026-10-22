@@ -5,6 +5,7 @@ import {
   getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace, setNamespaceOwners,
 } from '../../api/namespaces';
 import { getAllParts } from '../../api/auth';
+import { isBusinessCollection } from '../../utils/collections';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
 import { Button } from '../ui/Button';
@@ -41,12 +42,14 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   const [editingOwners, setEditingOwners] = useState<Set<number>>(new Set());   // 빈 집합 = 담당 없음
   const { data: parts = [] } = useQuery({ queryKey: ['parts-all'], queryFn: getAllParts, enabled: isAdmin && editingNs !== null });
 
-  const { data: namespaces = [], isLoading, error } = useQuery({
+  const { data: allCollections = [], isLoading, error } = useQuery({
     queryKey: ['namespaces-detail'],
     queryFn: getNamespacesDetail,
     staleTime: 10_000,
     refetchOnMount: 'always',
   });
+  // 업무 컬렉션만 — 조직 컬렉션은 컬렉션 › 조직 컬렉션 화면(팀·파트에서 자동 생성, 이름·담당을 여기서 못 바꿈 #83)
+  const namespaces = allCollections.filter(isBusinessCollection);
 
   const createMutation = useMutation({
     mutationFn: (payload: { name: string; description: string }) => createNamespace(payload),

@@ -1547,6 +1547,56 @@ async def _migrate_namespace_owners(conn) -> None:
     logger.info("[migrate #82] 업무 컬렉션 담당 복사(1회): %s", r)
 
 
+async def _migrate_org_collections(conn) -> None:
+    """조직 컬렉션 (2026-10-22, #83, collection-design §2·§15-13, org-space-design §3). 멱등 — 칸·제약 더하기 + 새 행 넣기만(기존 데이터 안 바꿈).
+    - ops_namespace.owner_team_id: 팀 공통 조직 컬렉션의 팀. 담당 = 그 팀의 모든 파트(core/database.py OWNER_ROWS_SQL — 담당 표 줄 없음).
+      파트 조직 컬렉션은 owner_team_id 없이 담당 표(ops_namespace_owner)에 그 파트 한 줄.
+    - 이름 = id 기반 키(org:team:<id> / org:part:<id>) — 팀·파트 이름은 데이터에 넣지 않고 화면 이름은 조회 때 만든다.
+    - 팀·파트마다 하나씩 채워 넣기(ON CONFLICT DO NOTHING) — 앞으로는 팀·파트를 만드는 트랜잭션이 같이 만든다(auth/service.py).
+    - CHECK ops_namespace_org_shape: 조직 컬렉션 ⇔ 이름이 org:로 시작 · 팀 칸은 조직 컬렉션만(이름 = org:team:<그 팀>) ·
+      팀 칸 없는 조직 컬렉션은 이름 = org:part:<숫자> · 조직 컬렉션은 상위 없음.
+      파트 컬렉션의 담당 한 줄(그 파트만)은 담당 표 트리거로 막는다(CHECK는 다른 표를 못 본다)."""
+    await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_team_id INT REFERENCES ops_team(id)")
+    async with conn.transaction():
+        await conn.execute("""INSERT INTO ops_namespace (name, description, kind, owner_team_id)
+                              SELECT 'org:team:' || t.id, '', 'org_space', t.id FROM ops_team t ORDER BY t.id
+                              ON CONFLICT (name) DO NOTHING""")
+        await conn.execute("""INSERT INTO ops_namespace (name, description, kind, owner_part_id)
+                              SELECT 'org:part:' || p.id, '', 'org_space', p.id FROM ops_part p ORDER BY p.id
+                              ON CONFLICT (name) DO NOTHING""")
+        await conn.execute("""INSERT INTO ops_namespace_owner (namespace_id, part_id)
+                              SELECT n.id, p.id FROM ops_part p JOIN ops_namespace n ON n.name = 'org:part:' || p.id AND n.kind = 'org_space'
+                              ON CONFLICT DO NOTHING""")
+    shape = ("(kind = 'org_space') = (name LIKE 'org:%') "
+             "AND (owner_team_id IS NULL OR (kind = 'org_space' AND name = 'org:team:' || owner_team_id)) "
+             "AND (kind <> 'org_space' OR owner_team_id IS NOT NULL OR name ~ '^org:part:[0-9]+$') "
+             "AND (kind <> 'org_space' OR parent_id IS NULL)")
+    if not await conn.fetchval("SELECT 1 FROM pg_constraint WHERE conname = 'ops_namespace_org_shape'"):
+        bad = await conn.fetch(f"SELECT name FROM ops_namespace WHERE NOT ({shape}) ORDER BY name LIMIT 5")
+        if bad:
+            logger.warning("[migrate #83] 조직 컬렉션 모양에 안 맞는 행 %s — CHECK 보류(정리 후 재기동하면 만들어짐)", [r["name"] for r in bad])
+        else:
+            await conn.execute(f"ALTER TABLE ops_namespace ADD CONSTRAINT ops_namespace_org_shape CHECK ({shape})")
+    # 담당 표 트리거: 팀 공통 컬렉션엔 담당 줄 금지(담당 = 그 팀 파트 전부), 파트 컬렉션엔 그 파트 한 줄만(이름 키의 파트)
+    await conn.execute("""
+        CREATE OR REPLACE FUNCTION ops_namespace_owner_org_guard() RETURNS trigger AS $$
+        DECLARE k TEXT; nm TEXT; t INT;
+        BEGIN
+            SELECT kind, name, owner_team_id INTO k, nm, t FROM ops_namespace WHERE id = NEW.namespace_id;
+            IF k = 'org_space' AND (t IS NOT NULL OR nm <> 'org:part:' || NEW.part_id) THEN
+                RAISE EXCEPTION '조직 컬렉션(%)의 담당은 팀·파트에서 정해져 바꿀 수 없습니다', nm USING ERRCODE = 'check_violation';
+            END IF;
+            RETURN NEW;
+        END $$ LANGUAGE plpgsql""")
+    async with conn.transaction():
+        await conn.execute("DROP TRIGGER IF EXISTS trg_namespace_owner_org_guard ON ops_namespace_owner")
+        await conn.execute("""CREATE TRIGGER trg_namespace_owner_org_guard BEFORE INSERT OR UPDATE ON ops_namespace_owner
+                              FOR EACH ROW EXECUTE FUNCTION ops_namespace_owner_org_guard()""")
+    n_team, n_part = await conn.fetchval("SELECT count(*) FROM ops_namespace WHERE kind = 'org_space' AND owner_team_id IS NOT NULL"), \
+        await conn.fetchval("SELECT count(*) FROM ops_namespace WHERE kind = 'org_space' AND owner_team_id IS NULL")
+    logger.info("[migrate #83] 조직 컬렉션: 팀 공통 %s · 파트 %s", n_team, n_part)
+
+
 async def _migrate_org_domain(conn) -> None:
     """조직(사람) 축과 업무 영역(지식) 축 분리 (2026-10-20, #78). 멱등.
     - ops_team + ops_part.team_id: 조직은 팀 > 파트(사람이 파트에 속함). 파트는 소속·역할·권한만 — 데이터는 파트 이름을 들지 않는다.
@@ -1950,6 +2000,7 @@ async def _run_migrations() -> None:
         await _migrate_voc_signature_prompt(conn)
         await _migrate_policy_v0_revisions(conn)
         await _migrate_namespace_owners(conn)
+        await _migrate_org_collections(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

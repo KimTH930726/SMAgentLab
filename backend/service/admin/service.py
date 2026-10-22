@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from core.database import OWNER_MIRROR_SYNC_SQL, get_conn
+from core.database import ORG_KIND, ORG_NAME_PREFIX, OWNER_MIRROR_SYNC_SQL, get_conn, org_display_name
 from service.policy.visibility import searchable_sql
 
 logger = logging.getLogger(__name__)
@@ -23,11 +23,14 @@ async def list_namespaces_detail() -> list[dict]:
     담당은 N개(ops_namespace_owner, 10/22 #82). owner_parts = 이 영역에 **직접** 지정된 담당들(수정 창·파트별 담당 지정이 이 값을 읽고 쓴다 —
     뜻을 바꾸면 하위 수정 창에 상위 담당이 미리 채워져 저장 때 직접 지정으로 굳었다, 리뷰 M3). effective_owner_parts = 실효 담당(하위에 자기 담당이
     없으면 상위 것 전부 — check_namespace_ownership과 같은 규칙, 프론트 권한 판단용), owner_inherited = 실효 담당을 상위에서 물려받았는지.
-    owner_part(_id)·effective_owner_part(_id)는 옛 화면 호환용 — 담당 중 id가 가장 작은 것 하나(옛 칸 임시 거울과 같은 값)."""
+    owner_part(_id)·effective_owner_part(_id)는 옛 화면 호환용 — 담당 중 id가 가장 작은 것 하나(옛 칸 임시 거울과 같은 값).
+    조직 컬렉션(kind='org_space', #83)도 같은 목록에 싣는다(이름 = id 키): display_name("팀 공통 · <팀>" / "<파트>")·team_id(묶기용 —
+    팀 공통은 그 팀, 파트는 그 파트의 팀)·owner_team_id. 팀 공통의 실효 담당 = 그 팀의 모든 파트(권한 규칙 OWNER_ROWS_SQL과 같음).
+    업무 컬렉션은 display_name = name, team_id = None."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""
-            SELECT n.id, n.name, n.description, n.kind,
+            SELECT n.id, n.name, n.description, n.kind, n.owner_team_id,
                    n.parent_id, pn.name AS parent,
                    n.created_at::text,
                    n.created_by_user_id,
@@ -52,15 +55,31 @@ async def list_namespaces_detail() -> list[dict]:
         )
         owner_rows = await conn.fetch("""SELECT o.namespace_id, p.id, p.name FROM ops_namespace_owner o
                                          JOIN ops_part p ON p.id = o.part_id ORDER BY p.name, p.id""")
+        part_rows = await conn.fetch("SELECT id, name, team_id FROM ops_part ORDER BY name, id")
+        team_names = {r["id"]: r["name"] for r in await conn.fetch("SELECT id, name FROM ops_team")}
     direct: dict[int, list[dict]] = {}
     for r in owner_rows:
         direct.setdefault(r["namespace_id"], []).append({"id": r["id"], "name": r["name"]})
+    team_parts: dict[int, list[dict]] = {}
+    for p in part_rows:
+        if p["team_id"] is not None:
+            team_parts.setdefault(p["team_id"], []).append({"id": p["id"], "name": p["name"]})
+    part_team = {p["id"]: p["team_id"] for p in part_rows}
     out = []
     for r in rows:
         d = dict(r)
         own = direct.get(d["id"], [])
+        if d["kind"] == ORG_KIND and d["owner_team_id"] is not None:   # 팀 공통: 담당 표 줄 없이 그 팀 파트 전부
+            own = team_parts.get(d["owner_team_id"], [])
         inherited = not own and bool(d["parent_id"] and direct.get(d["parent_id"]))
         eff = direct.get(d["parent_id"], []) if inherited else own
+        if d["kind"] == ORG_KIND:
+            part = own[0] if d["owner_team_id"] is None and own else None
+            d["team_id"] = d["owner_team_id"] if d["owner_team_id"] is not None else (part and part_team.get(part["id"]))
+            d["team"] = team_names.get(d["team_id"])
+            d["display_name"] = org_display_name(d["owner_team_id"], team_names.get(d["owner_team_id"]), part and part["name"])
+        else:
+            d["team_id"], d["team"], d["display_name"] = None, None, d["name"]
         first, eff_first = _first_owner(own), _first_owner(eff)
         d.update(owner_parts=own, effective_owner_parts=eff, owner_inherited=inherited,
                  owner_part_id=first and first["id"], owner_part=first and first["name"],
@@ -95,9 +114,11 @@ async def _check_parent(conn, parent_id: int, child_id: Optional[int]) -> None:
     상위 행을 FOR UPDATE로 잡는다: 같은 때 "상위가 다른 영역의 하위가 되는" 요청·상위 삭제와 순서가 갈리지 않게(둘 다 그 행을 잡는다)."""
     if child_id is not None and parent_id == child_id:
         raise ValueError("자기 자신을 상위 영역으로 지정할 수 없습니다.")
-    parent = await conn.fetchrow("SELECT id, parent_id FROM ops_namespace WHERE id = $1 FOR UPDATE", parent_id)
+    parent = await conn.fetchrow("SELECT id, parent_id, kind FROM ops_namespace WHERE id = $1 FOR UPDATE", parent_id)
     if parent is None:
         raise ValueError("없는 상위 영역입니다.")
+    if parent["kind"] == ORG_KIND:   # 조직 컬렉션은 트리에 안 든다 — 하위가 생기면 검색 범위가 "그 컬렉션 하나"가 아니게 된다(#83)
+        raise ValueError("조직 컬렉션은 상위 영역이 될 수 없습니다.")
     if parent["parent_id"] is not None:
         raise ValueError("상위 영역은 최상위 영역이어야 합니다(하위 영역은 한 단계까지).")
     if child_id is not None:
@@ -111,7 +132,10 @@ async def create_namespace(
     owner_part: str | None = None, created_by_user_id: int | None = None,
     parent_id: int | None = None,
 ) -> dict | None:
-    """parent_id(선택) = 상위 영역. 하위 영역은 담당을 비워 두면 상위 담당을 물려받는다(check_namespace_ownership)."""
+    """parent_id(선택) = 상위 영역. 하위 영역은 담당을 비워 두면 상위 담당을 물려받는다(check_namespace_ownership).
+    업무 컬렉션만 만든다 — "org:"로 시작하는 이름은 조직 컬렉션 키라 ValueError(→ 400, 조직 컬렉션은 팀·파트를 만들 때 생긴다)."""
+    if name.startswith(ORG_NAME_PREFIX):
+        raise ValueError(f'"{ORG_NAME_PREFIX}"로 시작하는 이름은 조직 컬렉션용이라 쓸 수 없습니다.')
     async with get_conn() as conn:
         async with conn.transaction():
             if parent_id is not None:
@@ -154,14 +178,18 @@ async def _forget_cached_answers(*names: str) -> None:
 
 
 NAME_TAKEN = "이미 있는 업무 영역 이름입니다."
+ORG_NOT_EDITABLE = "조직 컬렉션은 팀·파트에서 정해져 여기서 이름·담당·상위를 바꾸거나 지울 수 없습니다 — 조직·권한에서 팀·파트를 고치세요."
 
 
 async def rename_namespace(old_name: str, new_name: str) -> tuple[int, str]:
     """(상태, 사유). 없는 영역 404, 같은 이름·이미 있는 이름 409 — 예전엔 없는 영역도 409 "이미 있음"이었다."""
     import asyncpg
     async with get_conn() as conn:
-        if not await conn.fetchval("SELECT EXISTS(SELECT 1 FROM ops_namespace WHERE name = $1)", old_name):
+        kind = await conn.fetchval("SELECT kind FROM ops_namespace WHERE name = $1", old_name)
+        if kind is None:
             return 404, "업무 영역을 찾을 수 없습니다."
+        if kind == ORG_KIND or new_name.startswith(ORG_NAME_PREFIX):   # 조직 컬렉션 이름은 id 키 — 화면 이름은 팀·파트 이름을 바꾸면 따라간다(#83)
+            return 400, ORG_NOT_EDITABLE
         if old_name == new_name:
             return 409, "지금 이름과 같습니다."
         try:
@@ -179,10 +207,12 @@ async def delete_namespace(name: str) -> tuple[int, str]:
     async with get_conn() as conn:
         async with conn.transaction():
             # 상위 이름은 캐시 비우기용 — 지운 뒤엔 DB에서 못 찾는다
-            row = await conn.fetchrow("""SELECT n.id, p.name AS parent FROM ops_namespace n
+            row = await conn.fetchrow("""SELECT n.id, n.kind, p.name AS parent FROM ops_namespace n
                                          LEFT JOIN ops_namespace p ON p.id = n.parent_id WHERE n.name = $1 FOR UPDATE OF n""", name)
             if row is None:
                 return 404, "업무 영역을 찾을 수 없습니다."
+            if row["kind"] == ORG_KIND:   # 조직 컬렉션은 팀·파트를 지울 때만 같이 지운다(지식이 있으면 거부, auth/service.py)
+                return 400, ORG_NOT_EDITABLE
             # 하위가 있으면 막는다 — FK SET NULL로 하위가 조용히 최상위가 되고 담당 상속이 끊긴다(트리, category-removal-design §2-6).
             # 하위 생성·이동도 상위 행을 FOR UPDATE로 잡아(_check_parent) 이 확인과 엇갈리지 않는다.
             children = await conn.fetchval("SELECT COUNT(*) FROM ops_namespace WHERE parent_id = $1", row["id"])
@@ -209,13 +239,15 @@ async def update_namespace_settings(name: str, body) -> dict:
             if set_parent:
                 # 이 영역과 새 상위 두 행을 id 오름차순으로 잠근다 — "X를 Y 아래로"·"Y를 X 아래로"가 동시에 오면 잠금 순서가 엇갈려
                 # 교착(500)이 났다(리뷰 L1). _check_parent가 상위를 다시 FOR UPDATE로 읽어도 이미 잡은 잠금이라 기다리지 않는다.
-                locked = await conn.fetch("SELECT id, name, parent_id FROM ops_namespace WHERE name = $1 OR id = $2 ORDER BY id FOR UPDATE",
+                locked = await conn.fetch("SELECT id, name, parent_id, kind FROM ops_namespace WHERE name = $1 OR id = $2 ORDER BY id FOR UPDATE",
                                           name, body.parent_id)
                 ns = next((r for r in locked if r["name"] == name), None)
             else:
-                ns = await conn.fetchrow("SELECT id, parent_id FROM ops_namespace WHERE name = $1 FOR UPDATE", name)
+                ns = await conn.fetchrow("SELECT id, parent_id, kind FROM ops_namespace WHERE name = $1 FOR UPDATE", name)
             if ns is None:
                 raise NamespaceNotFound("업무 영역을 찾을 수 없습니다.")
+            if ns["kind"] == ORG_KIND:
+                raise ValueError(ORG_NOT_EDITABLE)   # 조직 컬렉션 담당·상위는 팀·파트에서 정해진다(#83) → 400
             owner_ids = getattr(body, "owner_part_ids", None)
             if owner_ids is None and (body.clear_owner or body.owner_part is not None):   # 옛 단일 칸 — 빈 문자열 = 해제(재리뷰 L1)
                 owner_ids = []

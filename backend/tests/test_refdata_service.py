@@ -30,6 +30,7 @@ def _make_fake_conn(fetch_return=None):
     conn.__aexit__ = AsyncMock(return_value=False)
     conn.execute = AsyncMock()
     conn.fetch = AsyncMock(return_value=fetch_return or [])
+    conn.fetchval = AsyncMock(return_value="domain")   # 영역 종류(조직 컬렉션이면 적재 거부, #83)
     return conn
 
 

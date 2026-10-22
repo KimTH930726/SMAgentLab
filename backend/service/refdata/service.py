@@ -18,12 +18,19 @@ class RefDataIngestSummary:
     skipped_empty: int = 0
 
 
+async def _ensure_not_org(conn, namespace: str) -> None:
+    """시스템 정보(참조데이터)는 업무 컬렉션에만 — 조직 컬렉션엔 지식 문서·용어만 둔다(collection-design §2, #83)."""
+    if await conn.fetchval("SELECT kind FROM ops_namespace WHERE name = $1", namespace) == "org_space":
+        raise ValueError("조직 컬렉션엔 시스템 정보를 둘 수 없습니다 — 업무 컬렉션에 넣어 주세요.")
+
+
 async def ingest_db_columns(namespace: str, rows: list[ParsedDbColumn], source_file: str) -> RefDataIngestSummary:
     summary = RefDataIngestSummary()
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
+        await _ensure_not_org(conn, namespace)
         for r in rows:
             if not r.table_name or not r.column_name:
                 summary.skipped_empty += 1
@@ -48,6 +55,7 @@ async def ingest_common_codes(namespace: str, rows: list[ParsedCommonCode], sour
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
             raise ValueError(f"네임스페이스를 찾을 수 없습니다: {namespace}")
+        await _ensure_not_org(conn, namespace)
         for r in rows:
             if not r.group_code or not r.code_id:
                 summary.skipped_empty += 1

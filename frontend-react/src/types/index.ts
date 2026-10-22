@@ -47,7 +47,11 @@ export interface OwnerPart {
 
 export interface NamespaceDetail extends Namespace {
   id: number;
-  kind?: string;
+  kind?: string;                           // domain(업무) | org_space(조직, 10/22 #83) | policy_test(E2E 임시)
+  display_name?: string;                   // 화면 이름 — 업무 = name, 조직 = "팀 공통 · <팀>" / "<파트>"(조직 name은 id 키 org:team:1)
+  owner_team_id?: number | null;           // 팀 공통 조직 컬렉션의 팀
+  team_id?: number | null;                 // 조직 컬렉션이 속한 팀(팀 공통 = 그 팀, 파트 = 그 파트의 팀)
+  team?: string | null;                    // 그 팀 이름
   owner_parts?: OwnerPart[];               // 직접 지정된 담당들(N개, 10/22 — 수정 창·파트별 담당 지정이 읽고 쓰는 값)
   effective_owner_parts?: OwnerPart[];     // 실효 담당들(하위 영역에 자기 담당이 없으면 상위 것 전부) — 권한 판단은 이것으로(effectiveOwnerParts)
   // 옛 단일 칸(서버 호환용 — 담당 중 id가 가장 작은 하나). 화면 로직은 위 목록을 쓴다

@@ -5,7 +5,7 @@
 import type { User } from '../types';
 
 export type AdminMenuId =
-  | 'domains'
+  | 'domains' | 'org.collections'
   | 'k.policy' | 'k.docs' | 'k.glossary' | 'k.system'
   | 'org'
   | 'q.stats' | 'q.corrections' | 'q.eval'
@@ -38,6 +38,7 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
   ] },
   { id: 'collections', label: '컬렉션', items: [
     { id: 'domains', label: '업무 컬렉션', hint: '업무별 지식을 두는 곳 — 담당 파트·건수' },
+    { id: 'org.collections', label: '조직 컬렉션', hint: '팀 공통 · 파트 노하우 — 팀·파트를 만들면 생긴다(지식 문서·용어만)' },
   ] },
   { id: 'quality', label: '품질', items: [
     { id: 'q.stats', label: '통계', scoped: true },

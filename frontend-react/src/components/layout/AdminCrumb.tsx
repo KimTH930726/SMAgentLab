@@ -1,6 +1,7 @@
 import { ChevronRight } from 'lucide-react';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { effectiveOwnerParts, ownerNames } from '../../utils/domainAccess';
+import { collectionLabel } from '../../utils/collections';
 import { findAdminItem, type AdminMenuId } from '../../pages/adminMenu';
 
 /**
@@ -24,7 +25,7 @@ export function AdminCrumb({ current }: { current: AdminMenuId }) {
           <>
             <button onClick={focusPicker} title="보는 컬렉션 바꾸기"
               className="font-semibold text-indigo-700 dark:text-indigo-300 hover:underline truncate">
-              {selectedNs}
+              {collectionLabel(selectedNs, nsDetails)}
             </button>
             <ChevronRight className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
           </>
@@ -38,7 +39,7 @@ export function AdminCrumb({ current }: { current: AdminMenuId }) {
         <span className="text-slate-200 font-medium">{item.label}</span>
       </nav>
       {scoped && (
-        <span className="ml-auto text-xs text-slate-400 whitespace-nowrap" title="이 업무 컬렉션을 수정할 수 있는 파트(없으면 관리자만)">
+        <span className="ml-auto text-xs text-slate-400 whitespace-nowrap" title="이 컬렉션을 수정할 수 있는 파트(없으면 관리자만) — 팀 공통은 그 팀의 모든 파트">
           담당: <span className="text-slate-300">{owner ?? '없음(관리자만)'}</span>
         </span>
       )}

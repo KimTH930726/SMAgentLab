@@ -9,7 +9,7 @@ from typing import Iterable, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from core.database import EFFECTIVE_OWNERS_SQL, get_conn
+from core.database import EFFECTIVE_OWNERS_SQL, ORG_KIND, get_conn
 from core.security import decode_token
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ _user_cache: dict[int, tuple[float, dict]] = {}
 # 실효 담당 파트들 — 담당은 N개(ops_namespace_owner, 10/22 #82). 하위 영역은 자기 담당이 없으면 상위 담당 전부를 물려받는다
 # (트리 깊이 1단, category-removal-design §2-6). SQL은 core/database.py 한 곳(EFFECTIVE_OWNERS_SQL·effective_owner_ns_sql) —
 # 수정·조회·읽기 기록 3곳과 여러 영역을 한 번에 보는 질의 기록 일괄 삭제(admin/router.py)가 같이 쓴다.
+# 조직 컬렉션(#83)도 같은 SQL — 파트 컬렉션 = 그 파트, 팀 공통 = 그 팀의 모든 파트(OWNER_ROWS_SQL). 규칙(edit_denied_reason)은 그대로 하나.
 
 
 async def _effective_owner_ids(namespace: str) -> list[int]:
@@ -115,6 +116,16 @@ def edit_denied_reason(owner_part_ids: Iterable[int], user: dict) -> Optional[st
     if user.get("part_id") not in owners:
         return "이 업무 영역의 담당 파트가 아닙니다."
     return None
+
+
+async def reject_org_collection(namespace: str, what: str) -> None:
+    """조직 컬렉션엔 지식 문서·용어만 둔다(collection-design §2, #83) — 정책·시스템 정보(참조데이터) 쓰기 경로가 부른다. 조직 컬렉션이면 400.
+    없는 이름은 그냥 지나간다(그 뒤 검사가 404 등으로 다룬다)."""
+    async with get_conn() as conn:
+        kind = await conn.fetchval("SELECT kind FROM ops_namespace WHERE name = $1", namespace)
+    if kind == ORG_KIND:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"조직 컬렉션엔 {what}을(를) 둘 수 없어요 — 정책·시스템 정보는 업무 컬렉션에 둡니다.")
 
 
 async def check_knowledge_read(namespace: str, user: dict) -> None:

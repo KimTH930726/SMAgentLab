@@ -40,6 +40,7 @@ async def main() -> int:
     A = tok(admin_id, "admin", "admin")
     teams_before = await db("SELECT COUNT(*) FROM ops_team")
     parts_before = await db("SELECT COUNT(*) FROM ops_part")
+    org_before = await db("SELECT COUNT(*) FROM ops_namespace WHERE kind = 'org_space'")
     async with httpx.AsyncClient(base_url=API, timeout=60) as h:
         try:
             print("① 팀 만들기 · 이름 겹침 · 권한")
@@ -114,9 +115,14 @@ async def main() -> int:
             chk("두 팀 같은 이름 동시 → 200 하나·409 하나", sorted([r1.status_code, r2.status_code]), [200, 409])
         finally:
             async with get_conn() as conn:
+                # 팀·파트의 조직 컬렉션(v2.160 #83)을 먼저 — 파트를 바로 지우면 컬렉션이 담당 없이 남고, 팀은 FK(owner_team_id) 때문에 안 지워진다
+                await conn.execute("""DELETE FROM ops_namespace WHERE kind = 'org_space' AND (
+                                          name IN (SELECT 'org:part:' || id FROM ops_part WHERE name LIKE $1)
+                                          OR owner_team_id IN (SELECT id FROM ops_team WHERE name LIKE $1))""", f"{P}%")
                 await conn.execute("DELETE FROM ops_part WHERE name LIKE $1", f"{P}%")
                 await conn.execute("DELETE FROM ops_team WHERE name LIKE $1", f"{P}%")
     chk("정리 후 팀 수 그대로", await db("SELECT COUNT(*) FROM ops_team"), teams_before)
+    chk("정리 후 조직 컬렉션 수 그대로", await db("SELECT COUNT(*) FROM ops_namespace WHERE kind = 'org_space'"), org_before)
     chk("정리 후 파트 수 그대로", await db("SELECT COUNT(*) FROM ops_part"), parts_before)
     ok = sum(results)
     print(f"결과: 통과 {ok}/{len(results)}")

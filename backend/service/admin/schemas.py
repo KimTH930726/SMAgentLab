@@ -36,7 +36,11 @@ class NamespaceInfo(BaseModel):
     id: int
     name: str
     description: str
-    kind: str = "domain"                  # domain | policy_test(E2E 임시)
+    kind: str = "domain"                  # domain | org_space(조직 컬렉션, #83) | policy_test(E2E 임시)
+    display_name: str = ""                # 화면 이름 — 업무 = name, 조직 = "팀 공통 · <팀>" / "<파트>"(조회 때 만듦 — name은 id 키)
+    owner_team_id: Optional[int] = None   # 팀 공통 조직 컬렉션의 팀
+    team_id: Optional[int] = None         # 조직 컬렉션이 속한 팀(묶기용 — 팀 공통은 그 팀, 파트는 그 파트의 팀). 업무 컬렉션은 None
+    team: Optional[str] = None            # 그 팀 이름(고르는 창 1단계 팀 카드 제목)
     owner_parts: list[OwnerPart] = []             # 이 영역에 직접 지정된 담당들(N개, 10/22 — 수정 창·파트별 담당 지정이 읽고 쓰는 값). 비교는 id로
     effective_owner_parts: list[OwnerPart] = []   # 실효 담당들 — 하위 영역에 자기 담당이 없으면 상위 담당 전부(수정 권한 규칙과 같음, 권한 판단용)
     # 옛 단일 칸(호환용 — 담당 중 id가 가장 작은 하나). 새 화면은 위 목록을 쓴다

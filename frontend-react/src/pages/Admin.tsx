@@ -1,6 +1,7 @@
 import { Component, useEffect, type ReactNode } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
+import { OrgCollectionManager } from '../components/admin/OrgCollectionManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
 import { StatsPanel } from '../components/admin/StatsPanel';
@@ -13,6 +14,7 @@ import { PolicyPanel } from '../components/admin/policy/PolicyPanel';
 import { CorrectionReviewTab } from '../components/admin/CorrectionReviewTab';
 import { useAuthStore } from '../store/useAuthStore';
 import { useNamespaceAccess } from '../utils/useNamespaceAccess';
+import { isOrgName } from '../utils/collections';
 import { AdminCrumb } from '../components/layout/AdminCrumb';
 import { adminPath, resolveAdminMenu, visibleAdminMenu, type AdminMenuId } from './adminMenu';
 
@@ -52,6 +54,11 @@ function CorrectionsPanel() {
   return <CorrectionReviewTab namespace={selectedNs} focusId={focus} />;
 }
 
+// 조직 컬렉션엔 지식 문서·용어만(collection-design §2) — 정책서·시스템 정보 화면은 내용 대신 흐린 안내 한 줄(§15-13)
+function NotInOrg() {
+  return <p className="text-sm text-slate-500 py-10 text-center" data-testid="org-no-policy">조직 컬렉션엔 정책·시스템 정보가 없어요</p>;
+}
+
 function NotReady({ what }: { what: string }) {
   return <p className="text-sm text-slate-400 py-10 text-center">{what} 화면은 준비 중이에요.</p>;
 }
@@ -61,6 +68,8 @@ export default function Admin() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
+  const { selectedNs } = useNamespaceAccess();
+  const orgSelected = isOrgName(selectedNs);
   const groups = visibleAdminMenu(user);
   const current = resolveAdminMenu(location.pathname, groups);
   const go = (id: AdminMenuId) => navigate(adminPath(id));
@@ -81,10 +90,12 @@ export default function Admin() {
       <div className="flex-1 overflow-y-auto p-6">
         <TabErrorBoundary key={current}>
           {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} />}
-          {current === 'k.policy'      && <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} onOpenCorrections={() => go('q.corrections')} />}
+          {current === 'org.collections' && <OrgCollectionManager onRegister={(tab) => navigate(tab === 'ingest' ? `${adminPath('k.docs')}?tab=ingest` : adminPath('k.docs'))} />}
+          {current === 'k.policy'      && (orgSelected ? <NotInOrg />
+            : <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} onOpenCorrections={() => go('q.corrections')} />)}
           {current === 'k.docs'        && <KnowledgeTable />}
           {current === 'k.glossary'    && <GlossaryTable />}
-          {current === 'k.system'      && <NotReady what="시스템 정보(DB 칼럼·공통코드)" />}
+          {current === 'k.system'      && (orgSelected ? <NotInOrg /> : <NotReady what="시스템 정보(DB 칼럼·공통코드)" />)}
           {current === 'org'           && isAdmin && <OrgAccessPanel />}
           {current === 'q.stats'       && <StatsPanel onOpenCorrections={() => go('q.corrections')} />}
           {current === 'q.corrections' && <CorrectionsPanel />}

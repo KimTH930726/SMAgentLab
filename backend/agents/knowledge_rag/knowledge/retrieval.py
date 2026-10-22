@@ -7,7 +7,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Sequence
 
 from core.database import get_conn, namespace_scope_ids
 from core.config import settings
@@ -312,13 +312,16 @@ async def _keyword_ids(conn, ns_ids: list[int], query: str, k: int) -> list[int]
 async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
     w_vector: float = 0.7, w_keyword: float = 0.3, top_k: int = 5,
-    keyword_rescue: bool = False,
+    keyword_rescue: bool = False, extra_ns_ids: Sequence[int] = (),
 ) -> list[RetrievalResult]:
     async with get_conn() as conn:
-        # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6). 하위가 없으면 [자신] — 예전과 같은 행 집합
+        # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6). 하위가 없으면 [자신] — 예전과 같은 행 집합.
+        # 조직 컬렉션을 고르면 [그 컬렉션](하위 없음). extra_ns_ids = 질문자의 조직 컬렉션(설정 chat.org_space_scope, 기본 꺼짐 → 빈 값)
         ns_ids = await namespace_scope_ids(conn, namespace)
         if not ns_ids:
             return []
+        if extra_ns_ids:
+            ns_ids = ns_ids + [i for i in extra_ns_ids if i not in ns_ids]
         params = [
             str(query_vec), ns_ids, enriched_query, w_vector, w_keyword, max(top_k, _RESCUE_POOL) if keyword_rescue else top_k,
             _VECTOR_CANDIDATE_LIMIT,

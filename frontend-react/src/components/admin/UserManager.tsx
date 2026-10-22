@@ -34,6 +34,9 @@ export function PartSection() {
     qc.invalidateQueries({ queryKey: ['teams'] });
     qc.invalidateQueries({ queryKey: ['parts-all'] });
     qc.invalidateQueries({ queryKey: ['parts-public'] });   // 사이드바 고르는 창의 "우리 팀" 묶음
+    // 팀·파트마다 조직 컬렉션이 따라 생기고·지워지고·이름이 바뀐다(#83) — 고르는 창·컬렉션 목록·권한 판단이 옛 값으로 남지 않게(리뷰)
+    qc.invalidateQueries({ queryKey: ['namespaces'] });
+    qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
   };
   const teamSaveMutation = useMutation({
     mutationFn: (v: { mode: 'create' } | { mode: 'rename'; team: Team }) =>
@@ -106,8 +109,7 @@ export function PartSection() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['parts-all'] });
       qc.invalidateQueries({ queryKey: ['users'] });
-      qc.invalidateQueries({ queryKey: ['parts-public'] });
-      qc.invalidateQueries({ queryKey: ['teams'] });   // 팀별 파트 수
+      invalidateOrg();   // 팀별 파트 수 · 지워진 파트의 조직 컬렉션(#83)
       setDeleteTarget(null);
       setDeleteError('');
     },

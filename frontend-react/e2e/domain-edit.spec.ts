@@ -23,7 +23,7 @@ test('업무 영역 수정 — 이름과 담당 파트 2개를 바꾸고(확인 
   expect(ownersOf(NS)).toBe('');
 
   await loginAdmin(page);
-  await goAdmin(page, '컬렉션', '컬렉션');
+  await goAdmin(page, '컬렉션', '업무 컬렉션');
 
   // ① 이름 + 담당 2개 함께 → 확인 창(더함 두 파트) → 저장
   const row = page.getByRole('row').filter({ hasText: NS });

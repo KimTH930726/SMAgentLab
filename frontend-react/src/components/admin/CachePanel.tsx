@@ -5,6 +5,7 @@ import { RefreshCw, Trash2, Database, BarChart2, AlertCircle } from 'lucide-reac
 import { clsx } from 'clsx';
 import { getCacheStats, getCacheEntries, invalidateCache, deleteCacheEntry, getCacheConfig, setCacheConfig } from '../../api/cache';
 import { getNamespaces } from '../../api/namespaces';
+import { useCollectionLabel } from '../../utils/useCollectionLabel';
 import { Button } from '../ui/Button';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import { showAlert, showError } from '../../store/useDialogStore';
@@ -29,6 +30,7 @@ export function CachePanel() {
   });
 
 
+  const label = useCollectionLabel();
   const selectedNs = namespace;   // 공용 값 그대로(비어 있으면 사이드바가 첫 영역을 채운다) — 경로 표시줄과 어긋나지 않게
 
   const { data: stats, isLoading: statsLoading, refetch: refetchStats } = useQuery({
@@ -178,7 +180,7 @@ export function CachePanel() {
         ) : (
           <div className="flex items-center gap-2">
             <span className="text-sm text-slate-300">
-              {selectedNs}의 캐시 {stats?.total_entries}건을 모두 삭제합니다.
+              {label(selectedNs)}의 캐시 {stats?.total_entries}건을 모두 삭제합니다.
             </span>
             <Button
               size="sm"

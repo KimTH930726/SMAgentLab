@@ -57,7 +57,7 @@ def _no_cache():
 
 @pytest.mark.asyncio
 async def test_delete_removes_text_key_links_too():
-    conn = _Conn(fetchrow=[{"id": 7, "parent": None}], fetchval=[0])   # 하위 영역 0개
+    conn = _Conn(fetchrow=[{"id": 7, "kind": "domain", "parent": None}], fetchval=[0])   # 하위 영역 0개
     with _patch(admin_service, conn):
         status, _ = await admin_service.delete_namespace("x")
     sqls = [c.args[0] for c in conn.execute.await_args_list]
@@ -80,7 +80,7 @@ def _settings(**kw):
 
 @pytest.mark.asyncio
 async def test_settings_unknown_part_rejected():
-    conn = _Conn(fetchrow=[{"id": 1, "parent_id": None}], fetchval=[None])
+    conn = _Conn(fetchrow=[{"id": 1, "parent_id": None, "kind": "domain"}], fetchval=[None])
     with _patch(admin_service, conn), pytest.raises(ValueError, match="없는 파트"):
         await admin_service.update_namespace_settings("영역", _settings(owner_part="없는파트"))
     assert not any("UPDATE ops_namespace" in c.args[0] for c in conn.execute.await_args_list)

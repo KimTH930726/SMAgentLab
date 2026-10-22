@@ -18,8 +18,9 @@ export const domainSelect = (page: Page) => page.locator('#sidebar-domain');
 /**
  * 보는 컬렉션 고르기 — 테스트 컬렉션(policy_test)은 고르는 창에 안 보이므로(S6), 앱이 기억하는 값(src/utils/selectedDomain.ts의
  * `opslens.namespace:<사용자>`)을 바꾸고 새로고침한다. 지금 주소(관리 메뉴)는 그대로 남는다.
+ * 조직 컬렉션(org:part:N 같은 id 키)은 칩에 화면 이름이 보이므로 label(칩에 보일 글자)을 같이 넘긴다(10/22 #83).
  */
-export async function selectDomain(page: Page, name: string) {
+export async function selectDomain(page: Page, name: string, label: string = name) {
   await page.evaluate((ns) => {
     const auth = JSON.parse(localStorage.getItem('ops_auth') || '{}');
     localStorage.setItem(`opslens.namespace:${auth.user?.username}`, ns);
@@ -29,5 +30,5 @@ export async function selectDomain(page: Page, name: string) {
   const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
   await agentHeading.or(page.locator('#sidebar-domain')).first().waitFor();   // or() — 진 쪽 대기가 남지 않게(리뷰)
   if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
-  await page.locator('#sidebar-domain', { hasText: name }).waitFor();
+  await page.locator('#sidebar-domain', { hasText: label }).waitFor();
 }

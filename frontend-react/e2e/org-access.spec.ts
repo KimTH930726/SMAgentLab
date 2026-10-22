@@ -8,6 +8,9 @@ import { loginAdmin } from './auth';
 const TEAM = 'E2E팀';
 const PART = 'E2E팀파트';
 const cleanup = () => {
+  // 팀·파트의 조직 컬렉션(v2.160)을 먼저 — 파트만 지우면 컬렉션이 담당 없이 남고, 팀은 FK(owner_team_id)로 안 지워진다
+  psql(`DELETE FROM ops_namespace WHERE kind = 'org_space' AND (name IN (SELECT 'org:part:' || id FROM ops_part WHERE name = '${PART}')
+        OR owner_team_id IN (SELECT id FROM ops_team WHERE name = '${TEAM}'))`);
   psql(`DELETE FROM ops_part WHERE name = '${PART}'`);
   psql(`DELETE FROM ops_team WHERE name = '${TEAM}'`);
 };
@@ -42,6 +45,13 @@ test('조직·권한 — 팀 만들기 · 팀 아래 파트 · 파트 있는 팀
   await page.getByRole('button', { name: '확인', exact: true }).click();
   expect(psql(`SELECT count(*) FROM ops_team WHERE name = '${TEAM}'`)).toBe('1');
   expect(psql(`SELECT count(*) FROM ops_part p JOIN ops_team t ON t.id = p.team_id WHERE p.name = '${PART}' AND t.name = '${TEAM}'`)).toBe('1');
+
+  // ③-1 같은 화면 그대로(새로고침 없이) 고르는 창 [조직] 탭에 방금 만든 팀이 보인다 — 저장 뒤 컬렉션 목록 갱신(리뷰 10/22: 예전엔 안 보였다)
+  await page.locator('#sidebar-domain').click();
+  await page.getByRole('tab', { name: '조직' }).click();
+  // 모달은 dialog 역할이 없어 뒤 화면 버튼(E2E팀 이름 바꾸기 등)도 잡힌다 — 조직 탭 패널 안으로 좁혀야 실제로 검증된다(재리뷰)
+  await expect(page.locator('#picker-panel-org').getByRole('button', { name: new RegExp(`^${TEAM}`) })).toBeVisible();
+  await page.keyboard.press('Escape');
 
   // ④ 담당 업무 탭 — 팀 줄 아래 파트(트리)
   await page.getByRole('tab', { name: '담당 업무' }).click();

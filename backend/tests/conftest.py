@@ -59,9 +59,16 @@ _db_mod.scope_ids_same_owner_subquery = _real_db.scope_ids_same_owner_subquery
 _db_mod.effective_owner_ns_sql = _real_db.effective_owner_ns_sql
 _db_mod.EFFECTIVE_OWNERS_SQL = _real_db.EFFECTIVE_OWNERS_SQL
 _db_mod.OWNER_MIRROR_SYNC_SQL = _real_db.OWNER_MIRROR_SYNC_SQL
+# 조직 컬렉션(#83) 상수·순수 함수·연결을 받는 함수도 실제 것 — 가짜 연결(_fake_conn)에서도 그대로 돈다(설정 꺼짐 → 빈 범위)
+for _n in ("OWNER_ROWS_SQL", "ORG_KIND", "ORG_NAME_PREFIX", "ORG_TEAM_PREFIX", "ORG_PART_PREFIX", "ORG_CONTENT_SQL", "ORG_SPACE_SCOPE_KEY",
+           "org_team_key", "org_part_key", "org_display_name", "create_org_collection", "delete_org_collection",
+           "org_space_scope_extra_ids"):
+    setattr(_db_mod, _n, getattr(_real_db, _n))
 sys.modules["core.database"] = _db_mod
 
 sys.modules["core.dependencies"] = MagicMock()
+# 조직 컬렉션 거부(#83) — 기본은 통과(업무 컬렉션). 거부 자체는 test_org_collections.py가 실제 함수로 본다
+sys.modules["core.dependencies"].reject_org_collection = AsyncMock(return_value=None)
 sys.modules["core.security"] = MagicMock()
 
 # shared

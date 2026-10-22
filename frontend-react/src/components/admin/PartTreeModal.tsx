@@ -4,6 +4,7 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { getUsers } from '../../api/auth';
 import { getNamespacesDetail } from '../../api/namespaces';
+import { isBusinessCollection } from '../../utils/collections';
 import type { Part } from '../../types';
 import { directOwnerParts } from '../../utils/domainAccess';
 
@@ -15,7 +16,7 @@ export function PartTreeModal({ part, onClose }: { part: Part | null; onClose: (
   const usersQ = useQuery({ queryKey: ['users'], queryFn: getUsers, enabled: !!part });
   const domainsQ = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, enabled: !!part });
   const users = usersQ.data ?? [];
-  const domains = domainsQ.data ?? [];
+  const domains = (domainsQ.data ?? []).filter(isBusinessCollection);   // 담당 업무 = 업무 컬렉션만(자기 파트 조직 컬렉션은 빼고, #83)
   if (!part) return <Modal isOpen={false} onClose={onClose}>{null}</Modal>;
   const members = users.filter((u) => u.part === part.name);
   const pending = members.filter((u) => u.role === 'viewer').length;

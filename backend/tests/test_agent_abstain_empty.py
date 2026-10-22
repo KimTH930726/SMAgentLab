@@ -272,6 +272,20 @@ class TestAnswerShaping:
         assert seen["ids"] == [1]
 
     @pytest.mark.asyncio
+    async def test_org_space_scope_off_keeps_search_call_identical(self, monkeypatch):
+        """조직 컬렉션 자동 포함(chat.org_space_scope, #83)이 꺼져 있으면 지식 검색 호출이 예전과 똑같다(범위 인자 없음) —
+        켜져서 질문자 조직 컬렉션이 오면 그 id만 더해 넘긴다."""
+        self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[])
+        extra = AsyncMock(return_value=[])
+        monkeypatch.setattr(agent, "org_space_scope_extra_ids", extra)
+        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, asker_part_id=7)
+        assert extra.await_args.args[1:] == ("ns", 7)
+        assert "extra_ns_ids" not in agent.retrieval.search_knowledge.await_args.kwargs
+        extra.return_value = [100, 200]
+        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, asker_part_id=7)
+        assert agent.retrieval.search_knowledge.await_args.kwargs["extra_ns_ids"] == [100, 200]
+
+    @pytest.mark.asyncio
     async def test_topic_question_keeps_search_results(self, monkeypatch):
         _, seen = self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[1])
         await self._run("교환 정책 좀")                               # 전부·목록 신호 없음 → 거르지 않음

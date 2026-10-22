@@ -225,7 +225,10 @@ async def rename_team(team_id: int, body: TeamCreate, admin: dict = Depends(get_
 
 @router.delete("/teams/{team_id}", status_code=204)
 async def delete_team(team_id: int, admin: dict = Depends(get_current_admin)):
-    result = await service.delete_team(team_id)
+    try:
+        result = await service.delete_team(team_id)
+    except service.OrgCollectionInUse as e:   # 팀 공통 조직 컬렉션에 지식·용어(#83)
+        raise HTTPException(status_code=409, detail=e.detail)
     if result is None:
         raise HTTPException(status_code=404, detail="팀을 찾을 수 없습니다.")
     if result is False:
@@ -251,6 +254,9 @@ async def set_part_domains(part_id: int, body: PartDomainsUpdate, admin: dict = 
 
 @router.delete("/parts/{part_id}", status_code=204)
 async def delete_part(part_id: int, admin: dict = Depends(get_current_admin)):
-    success = await service.delete_part(part_id)
+    try:
+        success = await service.delete_part(part_id)
+    except service.OrgCollectionInUse as e:   # 파트 조직 컬렉션에 지식·용어(#83)
+        raise HTTPException(status_code=400, detail=e.detail)
     if not success:
         raise HTTPException(status_code=400, detail="이 파트를 쓰는 곳이 있어 삭제할 수 없습니다 — 소속 사용자, 담당 업무 영역, VOC 메일함 담당을 먼저 옮겨 주세요.")

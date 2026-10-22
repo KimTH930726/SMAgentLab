@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, X, FileText, Upload, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -135,7 +136,9 @@ export function KnowledgeTable() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setPage(1); setSelectedIds(new Set()); }, [selectedNs]);   // 체크 남으면 앞 영역 것이 일괄 삭제됐다(리뷰 M1)
 
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>('list');   // 정정 요청은 품질 메뉴로(10/21)
+  // ?tab=ingest — 컬렉션 › 조직의 [지식 등록 →]이 그 컬렉션을 고른 뒤 등록 탭으로 바로 연다(10/22, collection-design §15-9)
+  const [searchParams] = useSearchParams();
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>(() => (searchParams.get('tab') === 'ingest' ? 'ingest' : 'list'));   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<KnowledgeFormData>(defaultForm);

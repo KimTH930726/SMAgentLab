@@ -6,6 +6,7 @@ import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { getAllParts, setPartDomains } from '../../api/auth';
 import { getNamespacesDetail } from '../../api/namespaces';
+import { isBusinessCollection } from '../../utils/collections';
 import { showConfirm, showError } from '../../store/useDialogStore';
 import type { NamespaceDetail, Part } from '../../types';
 import { directOwnerParts } from '../../utils/domainAccess';
@@ -20,7 +21,9 @@ export function PartDomainSection() {
   const qc = useQueryClient();
   // 파트 이름·팀은 파트 목록에서, 누가 무엇을 맡았는지는 업무 컬렉션 목록(owner_parts) 하나에서 — 출처가 둘이면 이름 바꾼 직후 어긋났다(리뷰 M1)
   const { data: parts = [], isLoading: partsLoading } = useQuery({ queryKey: ['parts-all'], queryFn: getAllParts });
-  const { data: domains = [], isLoading: nsLoading } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail });
+  const { data: allCollections = [], isLoading: nsLoading } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail });
+  // 담당 매핑은 업무 컬렉션만 — 조직 컬렉션(팀 공통·파트) 담당은 팀·파트에서 정해진다(10/22 #83)
+  const domains = useMemo(() => allCollections.filter(isBusinessCollection), [allCollections]);
   const [editing, setEditing] = useState<Part | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
 
@@ -55,7 +58,7 @@ export function PartDomainSection() {
   const save = async () => {
     if (!editing || saveMutation.isPending) return;
     // 저장 직전 최신 담당을 다시 읽어 확인 창을 만든다 — 창을 연 뒤 다른 관리자가 바꾼 것이 조용히 되돌려지지 않게(리뷰 L1)
-    const fresh = await qc.fetchQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, staleTime: 0 });
+    const fresh = (await qc.fetchQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, staleTime: 0 })).filter(isBusinessCollection);
     const before = new Set(domainsOf(editing.id, fresh));
     const added = [...checked].filter((n) => !before.has(n));
     const removed = [...before].filter((n) => !checked.has(n));

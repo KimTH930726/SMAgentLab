@@ -6,7 +6,8 @@ from typing import Optional
 
 import asyncpg
 
-from core.database import OWNER_MIRROR_SYNC_SQL, get_conn
+from core.database import (ORG_KIND, OWNER_MIRROR_SYNC_SQL, create_org_collection, delete_org_collection, get_conn,
+                           org_part_key, org_team_key)
 from core.dependencies import invalidate_user_cache
 from core.security import (
     hash_password, verify_password,
@@ -78,6 +79,13 @@ async def register_user(
         result = dict(row)
         result["part"] = part
     return result
+
+
+class OrgCollectionInUse(Exception):
+    """팀·파트의 조직 컬렉션에 지식·용어가 있어 지울 수 없음(라우터가 409/400으로) — 사유를 담는다(#83)."""
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(detail)
 
 
 class LoginError(Exception):
@@ -262,7 +270,7 @@ async def list_parts(with_domains: bool = False) -> list[dict]:
                    (SELECT COUNT(*) FROM ops_user u WHERE u.part_id = p.id) AS user_count,
                    CASE WHEN $1 THEN COALESCE((SELECT array_agg(n.name ORDER BY n.name) FROM ops_namespace n
                                               JOIN ops_namespace_owner o ON o.namespace_id = n.id
-                                              WHERE o.part_id = p.id), '{}') END AS domains
+                                              WHERE o.part_id = p.id AND n.kind <> 'org_space'), '{}') END AS domains
             FROM ops_part p
             LEFT JOIN ops_team t ON t.id = p.team_id
             ORDER BY t.name NULLS LAST, p.name
@@ -274,15 +282,16 @@ async def list_parts(with_domains: bool = False) -> list[dict]:
 async def set_part_domains(part_id: int, names: list[str]) -> Optional[dict]:
     """이 파트가 담당하는 업무 영역을 통째로 정한다(N:N — 한 파트가 여러 영역, 영역 하나에 담당 파트 여럿, 10/22 #82). 한 트랜잭션:
     목록에 있는 영역엔 이 파트를 담당으로 **더한다**(다른 파트 담당은 그대로 — 함께 담당), 이 파트가 맡던 영역 중 목록에서 빠진 것은
-    이 파트만 뺀다(다른 담당이 없으면 담당 없음 → 관리자만 수정). 없는 영역 이름이 하나라도 있으면 아무것도 바꾸지 않는다. 파트가 없으면 None."""
+    이 파트만 뺀다(다른 담당이 없으면 담당 없음 → 관리자만 수정). 없는 영역 이름이 하나라도 있으면 아무것도 바꾸지 않는다. 파트가 없으면 None.
+    업무 컬렉션만 다룬다 — 조직 컬렉션(#83)의 담당은 팀·파트에서 정해져 여기서 더하거나 빼지 않는다(조직 컬렉션 이름은 "없는 영역")."""
     wanted = sorted(set(names))
     async with get_conn() as conn, conn.transaction():
         if await conn.fetchval("SELECT id FROM ops_part WHERE id = $1 FOR KEY SHARE", part_id) is None:
             return None
         # 바뀔 수 있는 영역 행을 id 순으로 잠근다(영역 수정 창 update_namespace_settings도 영역 행을 먼저 잡는다 — 담당 표 바꾸기가 엇갈리지 않게)
         rows = await conn.fetch(
-            """SELECT id, name FROM ops_namespace WHERE name = ANY($1::text[])
-               OR id IN (SELECT namespace_id FROM ops_namespace_owner WHERE part_id = $2) ORDER BY id FOR UPDATE""", wanted, part_id)
+            """SELECT id, name FROM ops_namespace WHERE kind <> 'org_space' AND (name = ANY($1::text[])
+               OR id IN (SELECT namespace_id FROM ops_namespace_owner WHERE part_id = $2)) ORDER BY id FOR UPDATE""", wanted, part_id)
         found = {r["name"] for r in rows}
         missing = [n for n in wanted if n not in found]
         if missing:
@@ -294,17 +303,18 @@ async def set_part_domains(part_id: int, names: list[str]) -> Optional[dict]:
                               AND namespace_id IN (SELECT id FROM ops_namespace WHERE NOT (name = ANY($2::text[])))""",
                            part_id, wanted, locked_ids)
         await conn.execute("""INSERT INTO ops_namespace_owner (namespace_id, part_id)
-                              SELECT id, $1 FROM ops_namespace WHERE name = ANY($2::text[]) ON CONFLICT DO NOTHING""", part_id, wanted)
+                              SELECT id, $1 FROM ops_namespace WHERE name = ANY($2::text[]) AND kind <> 'org_space'
+                              ON CONFLICT DO NOTHING""", part_id, wanted)
         await conn.execute(OWNER_MIRROR_SYNC_SQL, locked_ids)   # 옛 칸 임시 거울(#82 — 옛 칸 삭제 때 같이 지움)
         domains = [r["name"] for r in await conn.fetch(
             """SELECT n.name FROM ops_namespace n JOIN ops_namespace_owner o ON o.namespace_id = n.id
-               WHERE o.part_id = $1 ORDER BY n.name""", part_id)]
+               WHERE o.part_id = $1 AND n.kind <> 'org_space' ORDER BY n.name""", part_id)]
     return {"part_id": part_id, "domains": domains}
 
 
 async def create_part(name: str, team_id: Optional[int] = None) -> Optional[dict]:
     """파트 만들기. 이름이 겹치면 None. team_id가 있으면 그 팀 아래(없는 팀이면 ValueError) — 팀 행을 KEY SHARE로 잡아
-    같은 순간 팀 삭제(FOR UPDATE)와 엇갈려 팀 없는 파트가 생기지 않게 한다."""
+    같은 순간 팀 삭제(FOR UPDATE)와 엇갈려 팀 없는 파트가 생기지 않게 한다. 같은 트랜잭션에서 그 파트의 조직 컬렉션도 만든다(#83)."""
     async with get_conn() as conn, conn.transaction():
         if team_id is not None and await conn.fetchval("SELECT id FROM ops_team WHERE id = $1 FOR KEY SHARE", team_id) is None:
             raise ValueError("없는 팀입니다.")
@@ -316,6 +326,8 @@ async def create_part(name: str, team_id: Optional[int] = None) -> Optional[dict
             "RETURNING id, name, created_at::text, team_id, (SELECT t.name FROM ops_team t WHERE t.id = team_id) AS team",
             name, team_id,
         )
+        if row:
+            await create_org_collection(conn, part_id=row["id"])
     return dict(row) if row else None
 
 
@@ -341,10 +353,12 @@ async def list_teams() -> list[dict]:
 
 
 async def create_team(name: str) -> Optional[dict]:
-    """이름이 겹치면 None."""
-    async with get_conn() as conn:
+    """이름이 겹치면 None. 같은 트랜잭션에서 그 팀의 팀 공통 조직 컬렉션도 만든다(#83)."""
+    async with get_conn() as conn, conn.transaction():
         row = await conn.fetchrow(
             "INSERT INTO ops_team (name) VALUES ($1) ON CONFLICT (name) DO NOTHING RETURNING id, name, created_at::text", name)
+        if row:
+            await create_org_collection(conn, team_id=row["id"])
     return {**dict(row), "part_count": 0} if row else None
 
 
@@ -365,12 +379,16 @@ async def rename_team(team_id: int, new_name: str) -> Optional[dict]:
 
 async def delete_team(team_id: int) -> Optional[bool]:
     """없는 팀이면 None, 파트가 남아 있으면 False(삭제 안 함 — FK가 SET NULL이라 그냥 지우면 파트가 조용히 팀 없음이 된다).
-    팀 행을 FOR UPDATE로 잠가 확인~삭제 사이에 파트 만들기·옮기기(KEY SHARE)가 끼어들지 못하게."""
+    팀 행을 FOR UPDATE로 잠가 확인~삭제 사이에 파트 만들기·옮기기(KEY SHARE)가 끼어들지 못하게.
+    팀 공통 조직 컬렉션(#83)에 지식·용어가 있으면 OrgCollectionInUse(삭제 안 함), 없으면 같은 트랜잭션에서 컬렉션도 지운다."""
     async with get_conn() as conn, conn.transaction():
         if await conn.fetchval("SELECT id FROM ops_team WHERE id = $1 FOR UPDATE", team_id) is None:
             return None
         if await conn.fetchval("SELECT COUNT(*) FROM ops_part WHERE team_id = $1", team_id):
             return False
+        reason = await delete_org_collection(conn, org_team_key(team_id))
+        if reason:
+            raise OrgCollectionInUse(reason)
         await conn.execute("DELETE FROM ops_team WHERE id = $1", team_id)
     return True
 
@@ -407,14 +425,19 @@ async def delete_part(part_id: int) -> bool:
             return False  # 사용자가 있으면 삭제 불가
         # 이 파트가 담당하는 업무 영역이 있는지 확인(담당 표, #82) — FK가 ON DELETE CASCADE라 체크 없이 지우면
         # 담당이 조용히 사라진다(담당 없는 영역은 관리자만 수정 — 담당 파트 사람들이 갑자기 못 고치게 됨)
+        # 이 파트 자신의 조직 컬렉션(담당 한 줄, #83)은 세지 않는다 — 아래에서 내용 확인 뒤 같이 지운다
         namespace_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM ops_namespace_owner WHERE part_id = $1",
-            part_id,
+            "SELECT COUNT(*) FROM ops_namespace_owner o JOIN ops_namespace n ON n.id = o.namespace_id "
+            "WHERE o.part_id = $1 AND n.kind <> $2",
+            part_id, ORG_KIND,
         )
         if namespace_count > 0:
             return False
         # VOC 메일함 담당도 확인 — 연결(part_id)은 필수라 담당 파트를 먼저 바꿔야 한다(리뷰 M2: 지우면 VOC 화면·수집이 깨졌다)
         if await conn.fetchval("SELECT COUNT(*) FROM ops_voc_routing WHERE part_id = $1", part_id):
             return False
+        reason = await delete_org_collection(conn, org_part_key(part_id))   # 지식·용어가 있으면 OrgCollectionInUse(삭제 안 함)
+        if reason:
+            raise OrgCollectionInUse(reason)
         result = await conn.execute("DELETE FROM ops_part WHERE id = $1", part_id)
     return "DELETE 1" in result

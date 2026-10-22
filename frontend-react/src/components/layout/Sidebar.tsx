@@ -31,6 +31,7 @@ import { stopChatStream, clearStreamState, useStreamStore } from '../../store/us
 import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { byContentThenName, initialDomain, isPickableDomain, loadSelectedDomain, saveSelectedDomain } from '../../utils/selectedDomain';
 import { DomainPicker } from './DomainPicker';
+import { isOrgName } from '../../utils/collections';
 import { effectiveOwnerParts } from '../../utils/domainAccess';
 import type { NamespaceDetail } from '../../types';
 import { getConversations, deleteConversation } from '../../api/conversations';
@@ -112,7 +113,7 @@ export function Sidebar() {
     initedUserRef.current = uname;
     const isMine = (n: NamespaceDetail) => effectiveOwnerParts(n).some((o) => o.name === user?.part);   // 고르는 창(DomainPicker)과 같은 기준(담당 N개)
     const ordered = nsDetails.filter(isPickableDomain).sort(byContentThenName);   // 고르는 창과 같은 순서
-    const pickable = nsDetailsMissing ? namespaces : ordered.map((n) => n.name);
+    const pickable = nsDetailsMissing ? namespaces.filter((n) => !isOrgName(n)) : ordered.map((n) => n.name);   // 처음 선택은 업무 컬렉션(조직은 기억한 값일 때만)
     const mine = user?.part ? ordered.filter(isMine).map((n) => n.name) : [];
     const next = initialDomain({ stored: loadSelectedDomain(user?.username), valid: namespaces, pickable, mine });
     pendingNsRef.current = next && next !== namespace ? next : null;

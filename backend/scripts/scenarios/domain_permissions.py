@@ -111,7 +111,9 @@ async def main() -> int:
             chk("  → 담당 표 2줄 + 옛 칸 거울 = 가장 작은 id", (len(ns_owners), mirror), (2, min(ns_owners)))
             r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns", "없는영역__"]}, headers=A)
             async with get_conn() as c:
-                owned = await c.fetchval("SELECT count(*) FROM ops_namespace_owner WHERE part_id = $1", p2)
+                # 업무 컬렉션만 센다 — 파트마다 조직 컬렉션(#83)의 담당 줄이 하나 더 있다
+                owned = await c.fetchval("""SELECT count(*) FROM ops_namespace_owner o JOIN ops_namespace n ON n.id = o.namespace_id
+                                            WHERE o.part_id = $1 AND n.kind = 'domain'""", p2)
             chk("없는 영역 섞이면 400 + 그대로(2개)", (r.status_code, owned), (400, 2))
             r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns"]}, headers=A)
             chk("하나 빼기 → 그 영역은 관리자만", (await edit_probe(h, P + "ns2", U2)).status_code, 403)
@@ -145,6 +147,9 @@ async def main() -> int:
             async with get_conn() as c:   # 정리 — 만든 것만
                 await c.execute("DELETE FROM ops_namespace WHERE name LIKE $1", P + "%")
                 await c.execute("DELETE FROM ops_user WHERE id = ANY($1::int[])", created_users)
+                # 파트의 조직 컬렉션(v2.160 #83)도 — 파트만 지우면 담당 없는 조직 컬렉션이 남는다
+                await c.execute("DELETE FROM ops_namespace WHERE kind = 'org_space' AND name IN "
+                                "(SELECT 'org:part:' || id FROM ops_part WHERE name LIKE $1)", P + "%")
                 await c.execute("DELETE FROM ops_part WHERE name LIKE $1", P + "%")
                 left = await c.fetchval("""SELECT (SELECT count(*) FROM ops_namespace WHERE name LIKE $1)
                                                 + (SELECT count(*) FROM ops_part WHERE name LIKE $1)

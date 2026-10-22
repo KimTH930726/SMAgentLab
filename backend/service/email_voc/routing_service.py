@@ -3,7 +3,7 @@ from typing import Optional
 
 import asyncpg
 
-from core.database import get_conn, resolve_namespace_id
+from core.database import ORG_NAME_PREFIX, get_conn, resolve_namespace_id
 from core.security import encrypt_dict, decrypt_dict
 
 _GRAPH_CREDENTIALS_KEY = "email_graph_credentials"
@@ -152,6 +152,9 @@ async def list_routing(namespace: str) -> list[dict]:
 
 
 async def create_routing(namespace: str, data: dict) -> dict:
+    # VOC 메일함은 업무 컬렉션에만 — 조직 컬렉션(이름 org:…, DB CHECK로 종류와 같음 #83)엔 VOC가 없다
+    if namespace.startswith(ORG_NAME_PREFIX):
+        raise ValueError("조직 컬렉션엔 VOC 메일함을 연결할 수 없습니다 — 업무 컬렉션을 고르세요.")
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:

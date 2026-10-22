@@ -12,6 +12,7 @@ import { CorrectionAnalysis } from '../chat/CorrectionAnalysis';
 import { FormModal } from '../ui/FormModal';
 import { showError } from '../../store/useDialogStore';
 import { lineDiff, type DiffOp } from '../../utils/lineDiff';
+import { useCollectionLabel } from '../../utils/useCollectionLabel';
 
 /**
  * 정정 요청(2026-10-01, 10-02 리뷰 신호를 합침) — 지식·정책을 고치자는 신호·제안이 모두 모이는 곳. 승인해야만 반영된다.
@@ -167,6 +168,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
   onSelect: (on: boolean) => void;
   focused: boolean;
 }) {
+  const label = useCollectionLabel();   // 조직 컬렉션은 id 키 대신 화면 이름(#83)
   const fields = shownFields(item);
   // 반려 사유 / 다시 쓰기 요청 / 직접 수정은 모달로 받는다(10/21 — 수정·입력은 모달)
   const [modal, setModal] = useState<'reject' | 'redraft' | 'edit' | null>(null);
@@ -270,7 +272,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
         </Badge>
         {item.status === 'approved' && <Badge color="emerald">반영됨</Badge>}
         {item.status === 'rejected' && <Badge color="slate">반려</Badge>}
-        <span className="text-slate-500">{item.namespace}</span>
+        <span className="text-slate-500">{label(item.namespace)}</span>
         <span className="text-slate-500">· {correctionSourceLabel(item.source, item.kind)}</span>
         {item.reporter && <span className="text-slate-500">· {isPolicySource ? '제안' : '신고'} {item.reporter}</span>}
         <span className="text-slate-500" title={new Date(item.created_at).toLocaleString('ko-KR')}>

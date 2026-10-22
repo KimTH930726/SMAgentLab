@@ -123,6 +123,9 @@ async def main() -> int:
                 await c.execute("DELETE FROM ops_namespace WHERE name = ANY($1::text[]) AND parent_id IS NOT NULL", ns_names)
                 await c.execute("DELETE FROM ops_namespace WHERE name = ANY($1::text[])", ns_names)
                 await c.execute("DELETE FROM ops_user WHERE id = ANY($1::int[]) OR username = ANY($2::text[])", created_users, user_names)
+                # 파트의 조직 컬렉션(v2.160 #83)도 — 파트만 지우면 담당 없는 조직 컬렉션이 남는다
+                await c.execute("DELETE FROM ops_namespace WHERE kind = 'org_space' AND name IN "
+                                "(SELECT 'org:part:' || id FROM ops_part WHERE name = ANY($1::text[]))", part_names)
                 await c.execute("DELETE FROM ops_part WHERE name = ANY($1::text[])", part_names)
                 left = await c.fetchval("""SELECT (SELECT count(*) FROM ops_namespace WHERE name = ANY($1::text[]))
                                                 + (SELECT count(*) FROM ops_part WHERE name = ANY($2::text[]))

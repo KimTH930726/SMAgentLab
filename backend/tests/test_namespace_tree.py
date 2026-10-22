@@ -46,12 +46,16 @@ improvement = _load("_tree_real_improvement", "service/improvement/service.py")
 # ── sqlite로 asyncpg 흉내 ─────────────────────────────────────────────────────
 
 _SCHEMA = """
-CREATE TABLE ops_part (id INTEGER PRIMARY KEY, name TEXT UNIQUE);
-CREATE TABLE ops_user (id INTEGER PRIMARY KEY, username TEXT);
+CREATE TABLE ops_team (id INTEGER PRIMARY KEY, name TEXT UNIQUE, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE ops_part (id INTEGER PRIMARY KEY, name TEXT UNIQUE, team_id INTEGER REFERENCES ops_team(id), created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE ops_user (id INTEGER PRIMARY KEY, username TEXT, part_id INTEGER);
+CREATE TABLE ops_voc_routing (id INTEGER PRIMARY KEY, namespace_id INTEGER, part_id INTEGER);
+CREATE TABLE ops_system_config (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE ops_namespace (
     id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, description TEXT DEFAULT '', kind TEXT NOT NULL DEFAULT 'domain',
     owner_part_id INTEGER REFERENCES ops_part(id) ON DELETE SET NULL,
     parent_id INTEGER REFERENCES ops_namespace(id) ON DELETE SET NULL,
+    owner_team_id INTEGER REFERENCES ops_team(id),
     created_by_user_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE ops_namespace_owner (
     namespace_id INTEGER NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
@@ -345,7 +349,7 @@ class TestOwnerInheritance:
         src = (ROOT / "service" / "admin" / "router.py").read_text(encoding="utf-8")
         body = src[src.index("async def bulk_delete_query_logs"):]
         sql = re.search(r'conn\.fetch\(\s*f"""(.*?)"""', body, re.S).group(1)
-        sql = sql.replace("{effective_owner_ns_sql('n')}", database.effective_owner_ns_sql("n"))
+        sql = sql.replace("{effective_owner_ns_sql('n')}", database.effective_owner_ns_sql("n")).replace("{OWNER_ROWS_SQL}", database.OWNER_ROWS_SQL)
         db.ns(20, "제휴서비스", owner=[7, 9])
         db.ns(30, "배달의민족", parent=20)
         db.ns(40, "딜리버스", owner=8)
