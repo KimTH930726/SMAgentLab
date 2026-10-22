@@ -139,7 +139,7 @@ async def log_cross_part_namespace_read(namespace: str, user: dict) -> None:
     기록만 한다(거버넌스 선제 설계 검토 §4 P0 발견: 쓰기 경로엔 `check_namespace_ownership`
     이 있지만 읽기·채팅 경로엔 아무 권한 검사가 없어 로그인만 하면 누구나 아무 네임스페이스나
     조회 가능했음). 강제 차단부터 배포하면 지금까지 있었을지 모르는 정당한 cross-part
-    조회 사용 패턴을 갑자기 막아버릴 위험이 있어(`_KEYWORD_ONLY_CATEGORIES` 때와 동일한
+    조회 사용 패턴을 갑자기 막아버릴 위험이 있어(예전 업무구분 키워드 전용 분기 때와 동일한
     이유로) 먼저 로그 온리로 실측한 뒤에 강제 전환 여부를 판단한다."""
     if user["role"] == "admin":
         return
