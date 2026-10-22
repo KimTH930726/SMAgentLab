@@ -67,20 +67,20 @@ export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: num
       ) : rows.length === 0 ? (
         <p className="text-sm text-slate-500 py-10 text-center">{searching ? '찾는 정책이 없어요.' : '이 업무 영역엔 정책서가 없어요.'}</p>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {groups.map(([g, items]) => {
             const expanded = searching || !collapsed.has(g);
             const groupPending = items.filter((r) => r.open_correction_id).length;
             return (
-              <div key={g} className="rounded-lg border border-slate-700">
+              <div key={g} className="rounded-lg border border-slate-700 overflow-hidden">
                 <button
                   onClick={() => toggle(g)}
                   aria-expanded={expanded}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800/60 rounded-lg"
+                  className="w-full flex items-center gap-2 px-3 py-2.5 bg-slate-800 hover:bg-slate-700/70 border-l-4 border-indigo-500 dark:border-indigo-400"
                 >
-                  {expanded ? <ChevronDown className="w-4 h-4 text-slate-500" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}
-                  <span className="font-medium text-left">{g}</span>
-                  <span className="text-xs text-slate-500">{items.length}</span>
+                  {expanded ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
+                  <span className="text-[15px] font-semibold text-slate-100 text-left">{g}</span>
+                  <span className="text-xs text-slate-400 bg-slate-700 rounded-full px-2 py-0.5">{items.length}</span>
                   {groupPending > 0 && <Badge color="amber" className="ml-auto">검토 중 {groupPending}</Badge>}
                 </button>
                 {expanded && (
@@ -89,9 +89,9 @@ export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: num
                       <li key={r.logical_id}>
                         <button
                           onClick={() => setCurrent(r.logical_id)}
-                          className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-slate-800/60"
+                          className="w-full flex items-center gap-2 pl-10 pr-4 py-2 text-left hover:bg-slate-800/60"
                         >
-                          <span className="text-sm text-slate-200 flex-1 min-w-0 truncate" title={r.policy_name}>{r.policy_name}</span>
+                          <span className="text-sm text-slate-300 flex-1 min-w-0 truncate" title={r.policy_name}>{r.policy_name}</span>
                           {r.category_path.length > 1 && (
                             <span className="text-xs text-slate-500 truncate max-w-[40%]" title={r.category_path.join(' › ')}>
                               {r.category_path.slice(1).join(' › ')}
