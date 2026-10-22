@@ -30,7 +30,8 @@ def tok(uid: int, name: str, role: str) -> dict:
 
 async def ns_row(name: str):
     async with get_conn() as c:
-        return await c.fetchrow("SELECT id, parent_id, owner_part_id FROM ops_namespace WHERE name = $1", name)
+        return await c.fetchrow("""SELECT id, parent_id, (SELECT COUNT(*) FROM ops_namespace_owner o WHERE o.namespace_id = n.id) AS owner_count
+                                   FROM ops_namespace n WHERE name = $1""", name)   # 담당은 담당 표(N개, #82)
 
 
 def edit_probe(h, ns: str, headers: dict):
@@ -65,10 +66,10 @@ async def main() -> int:
             # ① 하위 만들기 + 목록에 상위·물려받은 담당
             r = await h.post("/api/namespaces", json={"name": P + "sub", "parent_id": top["id"]}, headers=A)
             sub = await ns_row(P + "sub")
-            chk("하위 만들기", (r.status_code, sub["parent_id"], sub["owner_part_id"]), (200, top["id"], None))
+            chk("하위 만들기", (r.status_code, sub["parent_id"], sub["owner_count"]), (200, top["id"], 0))
             row = next(x for x in (await h.get("/api/namespaces/detail", headers=A)).json() if x["name"] == P + "sub")
-            chk("목록: 상위·직접 담당 없음·물려받은 담당", (row.get("parent"), row.get("owner_part"), row.get("effective_owner_part"), row.get("owner_inherited")),
-                (P + "top", None, P + "p1", True))
+            chk("목록: 상위·직접 담당 없음·물려받은 담당", (row.get("parent"), row.get("owner_parts"), [x["name"] for x in row.get("effective_owner_parts", [])],
+                                                     row.get("owner_inherited")), (P + "top", [], [P + "p1"], True))
 
             # ② 깊이·자기 자신·하위 있는 영역 규칙 → 400, DB 그대로
             r = await h.post("/api/namespaces", json={"name": P + "grand", "parent_id": sub["id"]}, headers=A)

@@ -1521,6 +1521,32 @@ async def _migrate_policy_v0(conn) -> None:
         )""")
 
 
+async def _migrate_namespace_owners(conn) -> None:
+    """업무 컬렉션 담당 파트 N개 (2026-10-22, #82, collection-design §15-8). 멱등 — 새 표 만들기 + 복사만(기존 데이터 안 지움).
+    - ops_namespace_owner(namespace_id, part_id): 담당의 단일 기준. 담당 파트 중 어느 파트 사람이든 쓰기·승인(주 담당 없음).
+    - 옛 ops_namespace.owner_part_id 값은 그대로 복사(ON CONFLICT DO NOTHING — 두 번 돌려도 같음). 옛 칸은 승인 뒤 지운다 —
+      그 전까지는 쓰기 경로가 "담당 중 가장 작은 part_id"로 맞춰 두는 **임시 거울**(놓친 읽기 경로가 있어도 크게 어긋나지 않게).
+    - part_id ON DELETE CASCADE: 옛 칸 FK(SET NULL)와 같은 뜻(파트가 지워지면 그 담당만 빠짐). 화면·API의 파트 삭제는 담당이 있으면 거부(auth delete_part)."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_namespace_owner (
+            namespace_id INT NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+            part_id      INT NOT NULL REFERENCES ops_part(id) ON DELETE CASCADE,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (namespace_id, part_id)
+        )""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_namespace_owner_part ON ops_namespace_owner(part_id)")
+    # 복사는 한 번만 — 매 기동 다시 복사하면, 옛 칸 거울이 잠깐이라도 어긋난 뒤(동시 저장 등) 표에서 뺀 담당을 기동이 몰래 되살린다(리뷰 10/22)
+    done_key = "migration_82_owner_copy"
+    if await conn.fetchval("SELECT 1 FROM ops_system_config WHERE key = $1", done_key):
+        return
+    async with conn.transaction():
+        r = await conn.execute("""INSERT INTO ops_namespace_owner (namespace_id, part_id)
+                                  SELECT id, owner_part_id FROM ops_namespace WHERE owner_part_id IS NOT NULL
+                                  ON CONFLICT DO NOTHING""")
+        await conn.execute("INSERT INTO ops_system_config (key, value) VALUES ($1, 'done') ON CONFLICT (key) DO NOTHING", done_key)
+    logger.info("[migrate #82] 업무 컬렉션 담당 복사(1회): %s", r)
+
+
 async def _migrate_org_domain(conn) -> None:
     """조직(사람) 축과 업무 영역(지식) 축 분리 (2026-10-20, #78). 멱등.
     - ops_team + ops_part.team_id: 조직은 팀 > 파트(사람이 파트에 속함). 파트는 소속·역할·권한만 — 데이터는 파트 이름을 들지 않는다.
@@ -1923,6 +1949,7 @@ async def _run_migrations() -> None:
         await _migrate_prompt_voc_type(conn)
         await _migrate_voc_signature_prompt(conn)
         await _migrate_policy_v0_revisions(conn)
+        await _migrate_namespace_owners(conn)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

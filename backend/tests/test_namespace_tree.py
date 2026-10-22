@@ -30,6 +30,7 @@ def _load(name: str, rel: str):
 database = _load("_tree_real_database", "core/database.py")
 dep = _load("_tree_real_dependencies", "core/dependencies.py")
 admin_service = _load("_tree_real_admin_service", "service/admin/service.py")
+auth_service = _load("_tree_real_auth_service", "service/auth/service.py")
 scope = _load("_tree_real_policy_scope", "service/policy/scope.py")
 real_cache = _load("_tree_real_cache", "shared/cache.py")
 from agents.knowledge_rag.knowledge import retrieval  # noqa: E402
@@ -52,6 +53,10 @@ CREATE TABLE ops_namespace (
     owner_part_id INTEGER REFERENCES ops_part(id) ON DELETE SET NULL,
     parent_id INTEGER REFERENCES ops_namespace(id) ON DELETE SET NULL,
     created_by_user_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE ops_namespace_owner (
+    namespace_id INTEGER NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
+    part_id INTEGER NOT NULL REFERENCES ops_part(id) ON DELETE CASCADE,
+    PRIMARY KEY (namespace_id, part_id));
 CREATE TABLE ops_link (id INTEGER PRIMARY KEY, relation TEXT, status TEXT, from_type TEXT, from_key TEXT, to_type TEXT, to_key TEXT);
 CREATE TABLE ops_query_log (id INTEGER PRIMARY KEY, namespace_id INTEGER REFERENCES ops_namespace(id) ON DELETE CASCADE);
 CREATE TABLE rag_knowledge (id INTEGER PRIMARY KEY, namespace_id INTEGER, status TEXT, content TEXT, category TEXT, heading_path TEXT);
@@ -104,10 +109,20 @@ class _SqliteConn:
             yield
         return tx()
 
-    # 시험 데이터 넣기
+    # 시험 데이터 넣기 — owner = 파트 id 하나 또는 목록(담당 N개, #82). 담당 표에 넣고 옛 칸은 임시 거울(가장 작은 id)로
     def ns(self, id_, name, owner=None, parent=None, kind="domain"):
+        owners = [] if owner is None else [owner] if isinstance(owner, int) else list(owner)
         self.db.execute("INSERT INTO ops_namespace (id, name, owner_part_id, parent_id, kind) VALUES (?,?,?,?,?)",
-                        (id_, name, owner, parent, kind))
+                        (id_, name, min(owners) if owners else None, parent, kind))
+        for o in owners:
+            self.db.execute("INSERT INTO ops_namespace_owner (namespace_id, part_id) VALUES (?, ?)", (id_, o))
+
+    def owners_of(self, name):
+        return sorted(r[0] for r in self.db.execute(
+            "SELECT o.part_id FROM ops_namespace_owner o JOIN ops_namespace n ON n.id = o.namespace_id WHERE n.name = ?", (name,)))
+
+    def mirror_of(self, name):
+        return self.db.execute("SELECT owner_part_id FROM ops_namespace WHERE name = ?", (name,)).fetchone()[0]
 
     def parent_of(self, name):
         return self.db.execute("SELECT parent_id FROM ops_namespace WHERE name = ?", (name,)).fetchone()[0]
@@ -123,7 +138,7 @@ def _patch_conn(mod, conn):
 @pytest.fixture
 def db():
     c = _SqliteConn()
-    c.db.execute("INSERT INTO ops_part (id, name) VALUES (7, '온라인서비스'), (8, '다른파트')")
+    c.db.execute("INSERT INTO ops_part (id, name) VALUES (7, '온라인서비스'), (8, '다른파트'), (9, '세번째파트')")
     return c
 
 
@@ -329,15 +344,129 @@ class TestOwnerInheritance:
         """질의 기록 일괄 삭제(admin/router.py)의 담당 SQL — 라우터 원문 SQL을 그대로 꺼내 돌린다."""
         src = (ROOT / "service" / "admin" / "router.py").read_text(encoding="utf-8")
         body = src[src.index("async def bulk_delete_query_logs"):]
-        sql = re.search(r'conn\.fetch\(\s*"""(.*?)"""', body, re.S).group(1)
-        db.ns(20, "제휴서비스", owner=7)
+        sql = re.search(r'conn\.fetch\(\s*f"""(.*?)"""', body, re.S).group(1)
+        sql = sql.replace("{effective_owner_ns_sql('n')}", database.effective_owner_ns_sql("n"))
+        db.ns(20, "제휴서비스", owner=[7, 9])
         db.ns(30, "배달의민족", parent=20)
         db.ns(40, "딜리버스", owner=8)
-        db.db.execute("INSERT INTO ops_query_log (id, namespace_id) VALUES (1, 30), (2, 40), (3, 20)")
-        rows = {r["namespace"]: r["owner_part_id"] for r in await db.fetch(sql, [1, 2, 3])}
-        assert rows == {"배달의민족": 7, "딜리버스": 8, "제휴서비스": 7}
-        assert dep.edit_denied_reason(rows["배달의민족"], _user(part_id=7)) is None
+        db.ns(50, "담당없음")
+        db.db.execute("INSERT INTO ops_query_log (id, namespace_id) VALUES (1, 30), (2, 40), (3, 20), (4, 50)")
+        rows: dict = {}
+        for r in await db.fetch(sql, [1, 2, 3, 4]):
+            rows.setdefault(r["namespace"], set()).update({r["part_id"]} - {None})
+        assert rows == {"배달의민족": {7, 9}, "딜리버스": {8}, "제휴서비스": {7, 9}, "담당없음": set()}
+        assert dep.edit_denied_reason(rows["배달의민족"], _user(part_id=9)) is None   # 두 번째 담당 파트도
         assert dep.edit_denied_reason(rows["배달의민족"], _user(part_id=8)) is not None
+        assert dep.edit_denied_reason(rows["담당없음"], _user(part_id=7)) is not None
+
+
+# ── 담당 N개(#82, collection-design §15-8) ────────────────────────────────────
+
+class TestMultiOwner:
+    """담당 파트 중 어느 파트 사람이든 쓰기(주 담당 없음). 담당 없으면 관리자만. 하위에 자기 담당이 없으면 상위 담당 전부를 물려받는다.
+    쓰기는 담당 표가 기준이고 옛 칸(owner_part_id)은 "가장 작은 part_id" 임시 거울 — 전/후 값을 표에서 직접 잰다."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("parent_owner, child_owner, user, allowed", [
+        ([7, 8], None, _user(part_id=8), True),        # 상속: 상위의 두 번째 담당 파트도
+        ([7, 8], None, _user(part_id=9), False),       # 어느 담당에도 없음 → 403
+        (None, [7, 9], _user(part_id=9), True),        # 하위 직접 담당의 두 번째
+        ([7], [8, 9], _user(part_id=7), False),        # 하위에 자기 담당이 있으면 상위 것은 안 물려받음
+        (None, None, _user(part_id=7), False),         # 담당 없음 → 관리자만
+        (None, None, _user(role="admin", part_id=None), True),
+        ([7, 8], None, _user(role="viewer", part_id=7), False),
+    ])
+    async def test_edit_rule_any_owner(self, db, parent_owner, child_owner, user, allowed):
+        db.ns(20, "제휴서비스", owner=parent_owner)
+        db.ns(30, "배달의민족", owner=child_owner, parent=20)
+        with _patch_conn(dep, db):
+            if allowed:
+                await dep.check_namespace_ownership("배달의민족", user)
+            else:
+                with pytest.raises(HTTPException) as e:
+                    await dep.check_namespace_ownership("배달의민족", user)
+                assert e.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_read_rule_and_log_any_owner(self, db):
+        db.ns(20, "제휴서비스", owner=[7, 8])
+        with _patch_conn(dep, db), patch.object(dep.logger, "warning") as warn:
+            await dep.check_namespace_read("제휴서비스", _user(part_id=8))
+            with pytest.raises(HTTPException):
+                await dep.check_namespace_read("제휴서비스", _user(part_id=9))
+            await dep.log_cross_part_namespace_read("제휴서비스", _user(part_id=8))
+            warn.assert_not_called()
+            await dep.log_cross_part_namespace_read("제휴서비스", _user(part_id=9))
+            warn.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_settings_replace_owner_set(self, db, cleared):
+        db.ns(20, "제휴서비스", owner=[7])
+        db.ns(21, "딜리버스", owner=[8])
+        with _patch_conn(admin_service, db):
+            out = await admin_service.update_namespace_settings("제휴서비스", _settings(owner_part_ids=[9, 8, 8]))
+        assert db.owners_of("제휴서비스") == [8, 9] and db.mirror_of("제휴서비스") == 8   # 7은 빠지고 8·9 — 거울 = 가장 작은 id
+        assert db.owners_of("딜리버스") == [8]                                             # 다른 영역은 그대로
+        assert [p["id"] for p in out["owner_parts"]] == [8, 9] and out["owner_part"] == "다른파트"
+        assert cleared == []                                                               # 담당만 바꾸면 캐시 안 건드림
+        with _patch_conn(admin_service, db):
+            await admin_service.update_namespace_settings("제휴서비스", _settings(owner_part_ids=[]))
+        assert db.owners_of("제휴서비스") == [] and db.mirror_of("제휴서비스") is None
+
+    @pytest.mark.asyncio
+    async def test_settings_unknown_part_changes_nothing(self, db):
+        db.ns(20, "제휴서비스", owner=[7])
+        with _patch_conn(admin_service, db), pytest.raises(ValueError, match="없는 파트"):
+            await admin_service.update_namespace_settings("제휴서비스", _settings(owner_part_ids=[8, 999]))
+        assert db.owners_of("제휴서비스") == [7] and db.mirror_of("제휴서비스") == 7
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kw, expect", [
+        ({"owner_part": "다른파트"}, [8]),     # 옛 단일 칸 호환 — 그 파트 하나로 교체
+        ({"owner_part": ""}, []),             # 빈 문자열 = 해제
+        ({"clear_owner": True}, []),
+        ({"owner_part": "다른파트", "owner_part_ids": [9]}, [9]),   # 둘 다 오면 목록이 우선
+    ])
+    async def test_settings_legacy_single_owner(self, db, kw, expect):
+        db.ns(20, "제휴서비스", owner=[7, 9])
+        with _patch_conn(admin_service, db):
+            await admin_service.update_namespace_settings("제휴서비스", _settings(**kw))
+        assert db.owners_of("제휴서비스") == expect and db.mirror_of("제휴서비스") == (min(expect) if expect else None)
+
+    @pytest.mark.asyncio
+    async def test_part_domains_adds_coowner_and_removes_only_self(self, db):
+        """파트별 담당 지정: 체크 = 이 파트를 담당에 더함(다른 파트 담당 유지), 체크 해제 = 이 파트만 뺌."""
+        db.ns(20, "제휴서비스", owner=[8])       # 다른 파트 담당 → 7이 함께 담당
+        db.ns(21, "딜리버스", owner=[7, 8])      # 7이 빠져도 8은 남음
+        db.ns(22, "혼자영역", owner=[7])         # 7이 빠지면 담당 없음
+        db.ns(23, "무관", owner=[9])
+        with _patch_conn(auth_service, db):
+            out = await auth_service.set_part_domains(7, ["제휴서비스", "제휴서비스"])
+        assert out == {"part_id": 7, "domains": ["제휴서비스"]}
+        assert (db.owners_of("제휴서비스"), db.owners_of("딜리버스"), db.owners_of("혼자영역"), db.owners_of("무관")) == ([7, 8], [8], [], [9])
+        assert (db.mirror_of("제휴서비스"), db.mirror_of("딜리버스"), db.mirror_of("혼자영역"), db.mirror_of("무관")) == (7, 8, None, 9)
+        # 불변식: 다른 파트(8·9)의 담당 줄은 하나도 안 바뀐다
+        assert db.db.execute("SELECT COUNT(*) FROM ops_namespace_owner WHERE part_id <> 7").fetchone()[0] == 3
+
+    @pytest.mark.asyncio
+    async def test_part_domains_unknown_domain_changes_nothing(self, db):
+        db.ns(20, "제휴서비스", owner=[7])
+        with _patch_conn(auth_service, db), pytest.raises(ValueError, match="없는 업무 영역"):
+            await auth_service.set_part_domains(7, ["없는영역"])
+        assert db.owners_of("제휴서비스") == [7]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("parent_owner, child_owner, included", [
+        ([7, 8], None, True),        # 하위 담당 없음(상속)
+        ([7, 8], [7, 8, 9], True),   # 상위 담당 전부가 하위에도 → 상위에서 쓸 수 있는 사람이 하위도 쓸 수 있음
+        ([7, 8], [7], False),        # 상위 담당 8은 하위를 못 씀 → 빠짐
+        (None, [8], False),          # 상위 담당 없음(관리자만) + 담당 있는 하위 → 빠짐(예전과 같음)
+    ])
+    async def test_write_scope_needs_parent_owners_in_child(self, db, parent_owner, child_owner, included):
+        db.ns(20, "제휴서비스", owner=parent_owner)
+        db.ns(30, "배달의민족", owner=child_owner, parent=20)
+        ids = [r["id"] for r in await db.fetch(database.scope_ids_same_owner_subquery("$1"), 20)]
+        assert sorted(ids) == ([20, 30] if included else [20])
 
 
 # ── 목록 API: parent·실효 담당 ────────────────────────────────────────────────
@@ -362,12 +491,27 @@ class TestListDetail:
         assert not by["쿠팡이츠"]["owner_inherited"]
         assert by["제휴서비스"]["owner_part"] == by["제휴서비스"]["effective_owner_part"] == "온라인서비스"
         assert by["가딜리버스"]["effective_owner_part"] is None and by["가딜리버스"]["parent_id"] is None
+        assert by["배달의민족"]["owner_parts"] == [] and by["배달의민족"]["effective_owner_parts"] == [{"id": 7, "name": "온라인서비스"}]
+
+    @pytest.mark.asyncio
+    async def test_multi_owner_lists(self, db):
+        """담당 N개(#82) — owner_parts는 이름순 전부, 옛 단일 칸은 id가 가장 작은 하나(옛 칸 임시 거울과 같은 값)."""
+        db.ns(20, "제휴서비스", owner=[9, 8])
+        db.ns(30, "배달의민족", parent=20)
+        db.ns(31, "쿠팡이츠", owner=[7], parent=20)
+        with _patch_conn(admin_service, db):
+            by = {r["name"]: r for r in await admin_service.list_namespaces_detail()}
+        assert by["제휴서비스"]["owner_parts"] == [{"id": 8, "name": "다른파트"}, {"id": 9, "name": "세번째파트"}]
+        assert by["제휴서비스"]["owner_part_id"] == 8 == db.mirror_of("제휴서비스")
+        assert by["배달의민족"]["effective_owner_parts"] == by["제휴서비스"]["owner_parts"] and by["배달의민족"]["owner_inherited"]
+        assert by["쿠팡이츠"]["effective_owner_parts"] == [{"id": 7, "name": "온라인서비스"}] and not by["쿠팡이츠"]["owner_inherited"]
 
 
 # ── 생성·수정 검사(400)·삭제 409 ──────────────────────────────────────────────
 
 def _settings(**kw):
     return types.SimpleNamespace(owner_part=kw.get("owner_part"), clear_owner=kw.get("clear_owner", False),
+                                 owner_part_ids=kw.get("owner_part_ids"),
                                  parent_id=kw.get("parent_id"), clear_parent=kw.get("clear_parent", False))
 
 

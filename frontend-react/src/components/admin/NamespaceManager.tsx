@@ -2,7 +2,7 @@ import { Fragment, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Pencil } from 'lucide-react';
 import {
-  getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace, setNamespaceOwner,
+  getNamespacesDetail, createNamespace, deleteNamespace, renameNamespace, setNamespaceOwners,
 } from '../../api/namespaces';
 import { getAllParts } from '../../api/auth';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -10,9 +10,9 @@ import { useAppStore } from '../../store/useAppStore';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
-import type { NamespaceDetail } from '../../types';
+import type { NamespaceDetail, OwnerPart, Part } from '../../types';
 import { showConfirm, showError } from '../../store/useDialogStore';
-import { canEditDomain, effectiveOwnerPart } from '../../utils/domainAccess';
+import { canEditDomain, directOwnerParts, effectiveOwnerParts, ownerNames } from '../../utils/domainAccess';
 import { FormModal } from '../ui/FormModal';
 
 /** 이름은 바뀌었는데 담당 저장만 실패 — 화면이 "이름 변경은 됨"을 알아야 다시 저장할 때 옛 이름으로 또 바꾸지 않는다(10/21 리뷰 L1) */
@@ -29,16 +29,16 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   const user = useAuthStore((s) => s.user);
   const { namespace: selectedNamespace, setNamespace } = useAppStore();
   // 영역 안 데이터(지식·용어 등)는 담당 파트 사람 또는 관리자, 영역 자체(만들기·이름·삭제)는 관리자만(2026-10-20)
-  const canModifyNs = (ownerPart?: string | null) => canEditDomain(user, ownerPart);
+  const canModifyNs = (owners: OwnerPart[]) => canEditDomain(user, owners);
   const isAdmin = user?.role === 'admin';
   const [showCreate, setShowCreate] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<NamespaceDetail | null>(null);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
-  // 업무 컬렉션 수정 모달 — 이름 + 담당 파트(10/21 사용자: 담당은 영역의 속성이라 이름과 같은 자리에서). 조직·권한 › 담당 업무와 같은 칸(owner_part_id)
+  // 업무 컬렉션 수정 모달 — 이름 + 담당 파트(10/21 사용자: 담당은 영역의 속성이라 이름과 같은 자리에서). 조직·권한 › 담당 업무와 같은 담당 표(N개, 10/22)
   const [editingNs, setEditingNs] = useState<NamespaceDetail | null>(null);
   const [editingNsName, setEditingNsName] = useState('');
-  const [editingOwner, setEditingOwner] = useState('');   // '' = 담당 없음
+  const [editingOwners, setEditingOwners] = useState<Set<number>>(new Set());   // 빈 집합 = 담당 없음
   const { data: parts = [] } = useQuery({ queryKey: ['parts-all'], queryFn: getAllParts, enabled: isAdmin && editingNs !== null });
 
   const { data: namespaces = [], isLoading, error } = useQuery({
@@ -67,16 +67,22 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
     editMutation.reset();
     setEditingNs(ns);
     setEditingNsName(ns.name);
-    setEditingOwner(ns.owner_part ?? '');
+    setEditingOwners(new Set(directOwnerParts(ns).map((o) => o.id)));
   };
+
+  const toggleOwner = (id: number) => setEditingOwners((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   // 바뀐 것만 보낸다: 이름 → (새 이름으로) 담당. 이름만 바뀌고 담당이 실패하면 오류 문구에 그렇게 적는다(조용히 반쯤 저장 안 되게)
   const editMutation = useMutation({
-    mutationFn: async ({ oldName, newName: nn, owner }: { oldName: string; newName: string | null; owner: string | null | undefined }) => {
+    mutationFn: async ({ oldName, newName: nn, owners }: { oldName: string; newName: string | null; owners: number[] | undefined }) => {
       if (nn) await renameNamespace(oldName, nn);
-      if (owner !== undefined) {
+      if (owners !== undefined) {
         try {
-          await setNamespaceOwner(nn ?? oldName, owner);
+          await setNamespaceOwners(nn ?? oldName, owners);
         } catch (e) {
           if (nn) throw new RenamedButOwnerFailed(`이름은 '${nn}'(으)로 바뀌었지만 담당 파트는 저장하지 못했어요 — ${(e as Error).message}`);
           throw e;
@@ -100,23 +106,41 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
   });
 
   const editNameChanged = !!editingNs && !!editingNsName.trim() && editingNsName.trim() !== editingNs.name;
-  const editOwnerChanged = !!editingNs && editingOwner !== (editingNs.owner_part ?? '');
+  const beforeOwners = editingNs ? directOwnerParts(editingNs) : [];
+  const editOwnerChanged = !!editingNs && (beforeOwners.length !== editingOwners.size || beforeOwners.some((o) => !editingOwners.has(o.id)));
+  const partLabel = (id: number) => parts.find((p) => p.id === id)?.name ?? beforeOwners.find((o) => o.id === id)?.name ?? `#${id}`;
 
   const commitNsEdit = async () => {
     if (!editingNs || editMutation.isPending || (!editNameChanged && !editOwnerChanged)) return;
     if (editOwnerChanged) {
-      const msg = editingOwner
-        ? `'${editingOwner}' 사람이 '${editingNsName.trim()}'의 지식·정책·용어를 수정하게 됩니다.` +
-          (editingNs.owner_part ? `\n(지금 담당 '${editingNs.owner_part}'은 수정할 수 없게 돼요)` : '')
-        : `'${editingNsName.trim()}'의 담당 파트를 없앱니다 — 관리자만 수정할 수 있게 돼요.`;
+      const before = new Set(beforeOwners.map((o) => o.id));
+      const added = [...editingOwners].filter((id) => !before.has(id)).map(partLabel);
+      const removed = [...before].filter((id) => !editingOwners.has(id)).map(partLabel);
+      const after = [...editingOwners].map(partLabel);
+      const msg = [
+        added.length ? `더함: ${added.join(', ')}` : '',
+        removed.length ? `뺌: ${removed.join(', ')}` : '',
+        '',
+        after.length
+          ? `담당: ${after.join(' · ')} — 이 파트 사람들이 '${editingNsName.trim()}'의 지식·정책·용어를 수정하게 됩니다.`
+          : `'${editingNsName.trim()}'의 담당 파트를 없앱니다 — 관리자만 수정할 수 있게 돼요.`,
+      ].filter((l, i) => l || i === 2).join('\n');
       if (!(await showConfirm(msg, { tone: 'warning', confirmLabel: '저장', title: '담당 파트 변경' }))) return;
     }
     editMutation.mutate({
       oldName: editingNs.name,
       newName: editNameChanged ? editingNsName.trim() : null,
-      owner: editOwnerChanged ? (editingOwner || null) : undefined,
+      owners: editOwnerChanged ? [...editingOwners] : undefined,
     });
   };
+
+  // 수정 창의 담당 고르기 — 팀별로 묶은 체크 목록(파트 목록은 팀 이름 순)
+  const partsByTeam = parts.reduce<Array<{ team: string; items: Part[] }>>((acc, p) => {
+    const team = p.team ?? '팀 없음';
+    const last = acc[acc.length - 1];
+    if (last && last.team === team) last.items.push(p); else acc.push({ team, items: [p] });
+    return acc;
+  }, []);
 
   const deleteMutation = useMutation({
     mutationFn: (name: string) => deleteNamespace(name),
@@ -204,9 +228,17 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
                         </div>
                       </td>
                       <td className="px-4 py-2.5">
-                        {ns.owner_part
-                          ? <Badge color={canModifyNs(effectiveOwnerPart(ns)) ? 'emerald' : 'slate'}>{ns.owner_part}</Badge>
-                          : <span className="text-xs text-slate-500" title="담당 지정: 조직·권한 › 담당 업무">없음(관리자만)</span>}
+                        {directOwnerParts(ns).length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {directOwnerParts(ns).map((o) => (
+                              <Badge key={o.id} color={canModifyNs(effectiveOwnerParts(ns)) ? 'emerald' : 'slate'}>{o.name}</Badge>
+                            ))}
+                          </div>
+                        ) : ns.owner_inherited ? (
+                          <span className="text-xs text-slate-400" title="이 컬렉션엔 담당이 없어 상위 컬렉션 담당을 물려받아요">
+                            상위: {ownerNames(effectiveOwnerParts(ns))}
+                          </span>
+                        ) : <span className="text-xs text-slate-500" title="담당 지정: 수정(연필) 또는 조직·권한 › 담당 업무">없음(관리자만)</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right">{count(ns.policy_count, 'policy', '정책')}</td>
                       <td className="px-3 py-2.5 text-right">{count(ns.knowledge_count, 'knowledge', '지식 문서')}</td>
@@ -253,16 +285,30 @@ export function NamespaceManager({ onNavigate }: NamespaceManagerProps) {
             className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
           <p className="text-xs text-slate-500 mt-1">안의 정책·지식·용어는 그대로 따라가요</p>
         </div>
-        <div>
-          <label htmlFor="ns-owner" className="block text-xs text-slate-400 mb-1">담당 파트</label>
-          <select id="ns-owner" value={editingOwner} onChange={(e) => setEditingOwner(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-            <option value="">담당 없음</option>
-            {editingOwner && !parts.some((p) => p.name === editingOwner) && <option value={editingOwner}>{editingOwner}</option>}
-            {parts.map((p) => <option key={p.id} value={p.name}>{p.team ? `${p.team} · ${p.name}` : p.name}</option>)}
-          </select>
-          <p className="text-xs text-slate-500 mt-1">이 파트 사람이 이 컬렉션의 정책·지식·용어를 수정하게 돼요. 없으면 관리자만.</p>
-        </div>
+        <fieldset id="ns-owner">
+          <legend className="block text-xs text-slate-400 mb-1">
+            담당 파트 <span className="text-slate-500">· {editingOwners.size ? `${editingOwners.size}개` : '없음'}</span>
+          </legend>
+          <div className="max-h-56 overflow-y-auto bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 space-y-1.5">
+            {partsByTeam.map((g) => (
+              <div key={g.team}>
+                <div className="text-xs font-semibold text-slate-400 px-1">{g.team}</div>
+                {g.items.map((p) => (
+                  <label key={p.id} htmlFor={`ns-owner-${p.id}`}
+                    className="flex items-center gap-2 pl-4 pr-1 py-1 rounded hover:bg-slate-700/40 cursor-pointer">
+                    <input id={`ns-owner-${p.id}`} type="checkbox" checked={editingOwners.has(p.id)} onChange={() => toggleOwner(p.id)}
+                      className="accent-indigo-500" />
+                    <span className="text-sm text-slate-200">{p.name}</span>
+                  </label>
+                ))}
+              </div>
+            ))}
+            {parts.length === 0 && <p className="text-xs text-slate-500 px-1 py-1">파트 목록을 불러오는 중…</p>}
+          </div>
+          <p className="text-xs text-slate-500 mt-1" title="주 담당은 없어요 — 체크한 파트 모두 같은 권한">
+            체크한 파트 사람 모두 이 컬렉션의 정책·지식·용어를 수정해요. 없으면 관리자만.
+          </p>
+        </fieldset>
       </FormModal>
 
       {/* Create Modal */}

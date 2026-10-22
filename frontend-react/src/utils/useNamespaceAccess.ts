@@ -3,7 +3,7 @@ import { getNamespaces, getNamespacesDetail } from '../api/namespaces';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { sortNamespacesByUserPart } from './sortNamespaces';
-import { canEditDomain, effectiveOwnerPart } from './domainAccess';
+import { canEditDomain, effectiveOwnerParts } from './domainAccess';
 
 /**
  * 업무 컬렉션 선택 + 수정 권한 — 고른 영역은 앱 공용 상태 하나(사이드바 선택기·채팅·관리 화면이 같은 값, 10/21).
@@ -28,8 +28,8 @@ export function useNamespaceAccess() {
 
   const sortedNamespaces = sortNamespacesByUserPart(namespaces, user?.part, nsDetails);
 
-  const nsOwnerPart = effectiveOwnerPart(nsDetails.find((n) => n.name === selectedNs));
-  const canModifyNs = canEditDomain(user, nsOwnerPart);
+  const nsOwners = effectiveOwnerParts(nsDetails.find((n) => n.name === selectedNs));
+  const canModifyNs = canEditDomain(user, nsOwners);
 
   return { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, namespaces, nsDetails, user };
 }

@@ -121,7 +121,8 @@ def test_admin_policy_count_uses_rule():
         asyncio.run(admin.list_namespaces_detail())
     finally:
         admin.get_conn = orig
-    assert vis.searchable_sql("policy_item") in conn.fetch.await_args.args[0]
+    # 첫 조회 = 영역 목록(정책 수), 둘째 = 담당 표(담당 N개, #82)
+    assert vis.searchable_sql("policy_item") in conn.fetch.await_args_list[0].args[0]
 
 
 # ── 정책 캐시 비우기 ─────────────────────────────────────────────────────────────

@@ -55,6 +55,10 @@ _real_db = _ilu_db.module_from_spec(_real_db_spec)
 _real_db_spec.loader.exec_module(_real_db)
 _db_mod.scope_ids_subquery = _real_db.scope_ids_subquery
 _db_mod.scope_ids_same_owner_subquery = _real_db.scope_ids_same_owner_subquery
+# 업무 컬렉션 담당(N개, #82) SQL 조각·상수도 실제 값 — 가짜면 권한 검사·담당 쓰기 SQL에 MagicMock 글자가 박힌다
+_db_mod.effective_owner_ns_sql = _real_db.effective_owner_ns_sql
+_db_mod.EFFECTIVE_OWNERS_SQL = _real_db.EFFECTIVE_OWNERS_SQL
+_db_mod.OWNER_MIRROR_SYNC_SQL = _real_db.OWNER_MIRROR_SYNC_SQL
 sys.modules["core.database"] = _db_mod
 
 sys.modules["core.dependencies"] = MagicMock()

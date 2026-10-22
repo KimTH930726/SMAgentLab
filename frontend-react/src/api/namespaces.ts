@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { NamespaceDetail } from '../types';
+import type { NamespaceDetail, OwnerPart } from '../types';
 
 // GET /api/namespaces returns string[]
 export async function getNamespaces(): Promise<string[]> {
@@ -32,11 +32,11 @@ export async function createNamespace(payload: { name: string; description: stri
   }
 }
 
-/** 업무 컬렉션 담당 파트 지정(관리자) — null이면 담당 해제(담당이 없으면 관리자만 수정) */
-export async function setNamespaceOwner(name: string, ownerPart: string | null): Promise<{ name: string; owner_part: string | null }> {
+/** 업무 컬렉션 담당 파트 지정(관리자) — 담당 파트 목록으로 통째로 교체(담당 N개, 10/22). []이면 담당 없음(관리자만 수정) */
+export async function setNamespaceOwners(name: string, partIds: number[]): Promise<{ name: string; owner_parts: OwnerPart[] }> {
   return apiFetch(`/namespaces/${encodeURIComponent(name)}/settings`, {
     method: 'PATCH',
-    body: JSON.stringify(ownerPart ? { owner_part: ownerPart } : { clear_owner: true }),
+    body: JSON.stringify({ owner_part_ids: partIds }),
   });
 }
 

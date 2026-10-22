@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.158)
+# OpsLens 시스템 아키텍처 (v2.159)
 
 ## 개요
 
@@ -12,6 +12,15 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.159 (2026-10-22, dev_0): **업무 컬렉션 담당 파트 N개.** 설계 `docs/tech/collection-design.md` §15-8(사용자 결정 10/22 — 주 담당 없음).
+  규칙: 담당 파트 중 어느 파트 사람이든 쓰기·승인, 담당 없으면 관리자만, 하위는 자기 담당이 없으면 상위 담당 전부를 물려받음(깊이 1단). 정정(쓰기) 범위의 하위 포함은
+  "상위 담당 전부가 하위 담당에도 있을 때"(상위에서 쓸 수 있는 사람이 하위도 쓸 수 있을 때만 — 예전 "같은 담당"의 일반화).
+  스키마: `ops_namespace_owner`(마이그레이션 #82, 옛 `owner_part_id` 1회 복사) = 담당의 단일 기준. 읽기 전부 이 표로(권한 검사 3곳·질의 기록 일괄 삭제·정정 범위·목록·파트 담당·파트 삭제 확인),
+  SQL 조각은 `core/database.py` 한 곳(`effective_owner_ns_sql`·`EFFECTIVE_OWNERS_SQL`). 옛 칸은 승인 뒤 삭제 — 그때까지 쓰기 때 "가장 작은 part_id" **임시 거울**.
+  API: `/namespaces/detail`에 `owner_parts`·`effective_owner_parts`([{id, name}], 옛 단일 칸은 호환용으로 유지), `PATCH /namespaces/{name}/settings`에 `owner_part_ids`(통째 교체, 없는 파트 400,
+  옛 `owner_part`·`clear_owner`도 받음). `PUT /auth/parts/{id}/domains`: 체크 = 이 파트를 담당에 **더함**(다른 파트 담당 유지), 해제 = 이 파트만 뺌.
+  화면: 업무 컬렉션 목록 담당 칸 전부 표시, 수정 창 담당 = 팀별 체크 목록(확인 창에 더함/뺌), 담당 업무 창 "다른 담당: …"·확인 창 "함께 담당", 경로 표시줄 "담당: A · B",
+  고르는 창·사이드바 첫 선택 = 내 파트가 담당 중 하나면 '내 담당', 하나라도 우리 팀 파트면 '우리 팀'. 테스트: sqlite 실제 SQL로 N개 담당 규칙·교체·파트별 담당·정정 범위(`TestMultiOwner`).
 - v2.158 (2026-10-22, dev_0): **업무구분(지식 category) 끊기 — 코드·화면 전부(C3~C5).** 설계 `docs/tech/category-removal-design.md` §3·§4, 사용자 "업무구분 관련 내용 싹 지워줘".
   읽기: 검색의 DB·공통코드 키워드 전용 분기(점수 CASE·채택·"정확 매칭" 라벨 — 해당 활성 지식 0건), 채팅 업무구분 필터, **질문마다 돌던 업무구분 자동 감지 LLM 호출**,
   VOC 해결책 후보의 DB·공통코드 제외, `/knowledge/keyword-only-categories`. 쓰기: 등록 필수·AI 추천·자동 태깅(tagger 업무구분 태깅만 — 용어 추출은 유지)·analyzer 추천·

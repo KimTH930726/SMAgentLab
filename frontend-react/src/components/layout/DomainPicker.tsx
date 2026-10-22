@@ -4,6 +4,7 @@ import { clsx } from 'clsx';
 import { Modal } from '../ui/Modal';
 import type { NamespaceDetail, Part } from '../../types';
 import { byContentThenName, isPickableDomain } from '../../utils/selectedDomain';
+import { effectiveOwnerParts, ownerNames } from '../../utils/domainAccess';
 
 type Tier = 'mine' | 'team' | 'other';
 
@@ -23,11 +24,11 @@ export function DomainPicker({ value, onChange, details, parts, userPart }: {
   const { groups, myTeam } = useMemo(() => {
     const teamOf = new Map(parts.map((p) => [p.name, p.team ?? null]));
     const myTeam = userPart ? teamOf.get(userPart) ?? null : null;
-    const owner = (d: NamespaceDetail) => d.effective_owner_part ?? d.owner_part ?? null;
+    // 담당 N개(10/22): 내 파트가 담당 중 하나면 '내 담당', 담당 중 하나라도 우리 팀 파트면 '우리 팀'
     const tier = (d: NamespaceDetail): Tier => {
-      const o = owner(d);
-      if (userPart && o === userPart) return 'mine';
-      if (myTeam && o && teamOf.get(o) === myTeam) return 'team';
+      const owners = effectiveOwnerParts(d).map((o) => o.name);
+      if (userPart && owners.includes(userPart)) return 'mine';
+      if (myTeam && owners.some((o) => teamOf.get(o) === myTeam)) return 'team';
       return 'other';
     };
     const pickable = details.filter(isPickableDomain);
@@ -50,7 +51,7 @@ export function DomainPicker({ value, onChange, details, parts, userPart }: {
   const card = (d: NamespaceDetail, t: Tier) => {
     const empty = (d.policy_count ?? 0) + d.knowledge_count === 0;
     const current = d.name === value;
-    const ownerName = d.effective_owner_part ?? d.owner_part;
+    const ownerName = ownerNames(effectiveOwnerParts(d));
     return (
       <button
         key={d.name}

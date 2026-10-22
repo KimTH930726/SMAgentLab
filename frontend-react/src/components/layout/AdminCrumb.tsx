@@ -1,5 +1,6 @@
 import { ChevronRight } from 'lucide-react';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
+import { effectiveOwnerParts, ownerNames } from '../../utils/domainAccess';
 import { findAdminItem, type AdminMenuId } from '../../pages/adminMenu';
 
 /**
@@ -13,7 +14,7 @@ export function AdminCrumb({ current }: { current: AdminMenuId }) {
   if (!found) return null;
   const { group, item } = found;
   const scoped = !!item.scoped && !!selectedNs;
-  const owner = (() => { const d = nsDetails.find((n) => n.name === selectedNs); return d?.effective_owner_part ?? d?.owner_part ?? null; })();   // 고르는 창과 같은 기준(물려받은 담당 포함)
+  const owner = ownerNames(effectiveOwnerParts(nsDetails.find((n) => n.name === selectedNs))) || null;   // 고르는 창과 같은 기준(물려받은 담당 포함, "A · B")
   // 사이드바 "보는 컬렉션" 칩을 눌러 고르는 창을 연다(10/22 select → 칩 + 창)
   const focusPicker = () => document.getElementById('sidebar-domain')?.click();
   return (

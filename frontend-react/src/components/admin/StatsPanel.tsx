@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, CheckCircle, FileText, ChevronDown, ChevronUp, Trash2, AlertTriangle, Flag } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
-import { canEditDomain, effectiveOwnerPart } from '../../utils/domainAccess';
+import { canEditDomain, effectiveOwnerParts } from '../../utils/domainAccess';
 import { getNamespaceStats, deleteQueryLog, getQueryLogs, bulkDeleteQueryLogs, fillKnowledgeGap } from '../../api/stats';
 import { createKnowledge } from '../../api/knowledge';
 import { getNamespacesDetail } from '../../api/namespaces';
@@ -355,8 +355,8 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
 
   const { data: nsDetails = [] } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, staleTime: 30_000 });
 
-  const nsOwnerPart = effectiveOwnerPart(nsDetails.find((n) => n.name === selectedNs));
-  const canModifyNs = canEditDomain(user, nsOwnerPart);
+  const nsOwners = effectiveOwnerParts(nsDetails.find((n) => n.name === selectedNs));
+  const canModifyNs = canEditDomain(user, nsOwners);
   const { data: stats, isLoading, error, refetch } = useQuery({
     queryKey: ['stats-ns', selectedNs],
     queryFn: () => getNamespaceStats(selectedNs),

@@ -6,7 +6,7 @@ from typing import Optional
 
 import asyncpg
 
-from core.database import get_conn
+from core.database import OWNER_MIRROR_SYNC_SQL, get_conn
 from core.dependencies import invalidate_user_cache
 from core.security import (
     hash_password, verify_password,
@@ -261,7 +261,8 @@ async def list_parts(with_domains: bool = False) -> list[dict]:
             SELECT p.id, p.name, p.created_at::text, t.name AS team, p.team_id,
                    (SELECT COUNT(*) FROM ops_user u WHERE u.part_id = p.id) AS user_count,
                    CASE WHEN $1 THEN COALESCE((SELECT array_agg(n.name ORDER BY n.name) FROM ops_namespace n
-                                              WHERE n.owner_part_id = p.id), '{}') END AS domains
+                                              JOIN ops_namespace_owner o ON o.namespace_id = n.id
+                                              WHERE o.part_id = p.id), '{}') END AS domains
             FROM ops_part p
             LEFT JOIN ops_team t ON t.id = p.team_id
             ORDER BY t.name NULLS LAST, p.name
@@ -271,23 +272,33 @@ async def list_parts(with_domains: bool = False) -> list[dict]:
 
 
 async def set_part_domains(part_id: int, names: list[str]) -> Optional[dict]:
-    """파트가 담당하는 업무 영역을 통째로 정한다(1:N — 한 파트가 여러 영역, 영역 하나엔 담당 파트 하나). 한 트랜잭션:
-    목록에 있는 영역은 이 파트로(다른 파트 담당이었으면 옮겨 옴), 이 파트가 맡던 영역 중 목록에서 빠진 것은 담당 없음(관리자만 수정)으로.
-    없는 영역 이름이 하나라도 있으면 아무것도 바꾸지 않는다. 파트가 없으면 None."""
+    """이 파트가 담당하는 업무 영역을 통째로 정한다(N:N — 한 파트가 여러 영역, 영역 하나에 담당 파트 여럿, 10/22 #82). 한 트랜잭션:
+    목록에 있는 영역엔 이 파트를 담당으로 **더한다**(다른 파트 담당은 그대로 — 함께 담당), 이 파트가 맡던 영역 중 목록에서 빠진 것은
+    이 파트만 뺀다(다른 담당이 없으면 담당 없음 → 관리자만 수정). 없는 영역 이름이 하나라도 있으면 아무것도 바꾸지 않는다. 파트가 없으면 None."""
     wanted = sorted(set(names))
     async with get_conn() as conn, conn.transaction():
         if await conn.fetchval("SELECT id FROM ops_part WHERE id = $1 FOR KEY SHARE", part_id) is None:
             return None
-        found = {r["name"] for r in await conn.fetch(
-            "SELECT name FROM ops_namespace WHERE name = ANY($1::text[]) OR owner_part_id = $2 FOR UPDATE", wanted, part_id)}
+        # 바뀔 수 있는 영역 행을 id 순으로 잠근다(영역 수정 창 update_namespace_settings도 영역 행을 먼저 잡는다 — 담당 표 바꾸기가 엇갈리지 않게)
+        rows = await conn.fetch(
+            """SELECT id, name FROM ops_namespace WHERE name = ANY($1::text[])
+               OR id IN (SELECT namespace_id FROM ops_namespace_owner WHERE part_id = $2) ORDER BY id FOR UPDATE""", wanted, part_id)
+        found = {r["name"] for r in rows}
         missing = [n for n in wanted if n not in found]
         if missing:
             raise ValueError(f"없는 업무 영역입니다: {', '.join(missing)}")
-        await conn.execute("UPDATE ops_namespace SET owner_part_id = NULL WHERE owner_part_id = $1 AND NOT (name = ANY($2::text[]))",
-                           part_id, wanted)
-        await conn.execute("UPDATE ops_namespace SET owner_part_id = $1 WHERE name = ANY($2::text[])", part_id, wanted)
+        # 지우기는 위에서 잠근 영역으로만 — 잠근 뒤 다른 요청이 커밋한 담당(이 SELECT가 못 본 영역)까지 지우면 그 영역의 옛 칸 거울을
+        # 못 맞춰 표와 칸이 어긋났다(리뷰 10/22). 못 본 영역은 그 요청의 결과를 그대로 둔다.
+        locked_ids = [r["id"] for r in rows]
+        await conn.execute("""DELETE FROM ops_namespace_owner WHERE part_id = $1 AND namespace_id = ANY($3::int[])
+                              AND namespace_id IN (SELECT id FROM ops_namespace WHERE NOT (name = ANY($2::text[])))""",
+                           part_id, wanted, locked_ids)
+        await conn.execute("""INSERT INTO ops_namespace_owner (namespace_id, part_id)
+                              SELECT id, $1 FROM ops_namespace WHERE name = ANY($2::text[]) ON CONFLICT DO NOTHING""", part_id, wanted)
+        await conn.execute(OWNER_MIRROR_SYNC_SQL, locked_ids)   # 옛 칸 임시 거울(#82 — 옛 칸 삭제 때 같이 지움)
         domains = [r["name"] for r in await conn.fetch(
-            "SELECT name FROM ops_namespace WHERE owner_part_id = $1 ORDER BY name", part_id)]
+            """SELECT n.name FROM ops_namespace n JOIN ops_namespace_owner o ON o.namespace_id = n.id
+               WHERE o.part_id = $1 ORDER BY n.name""", part_id)]
     return {"part_id": part_id, "domains": domains}
 
 
@@ -394,10 +405,10 @@ async def delete_part(part_id: int) -> bool:
         )
         if user_count > 0:
             return False  # 사용자가 있으면 삭제 불가
-        # 이 파트가 담당하는 업무 영역이 있는지 확인 — FK가 ON DELETE SET NULL이라 체크 없이 지우면
+        # 이 파트가 담당하는 업무 영역이 있는지 확인(담당 표, #82) — FK가 ON DELETE CASCADE라 체크 없이 지우면
         # 담당이 조용히 사라진다(담당 없는 영역은 관리자만 수정 — 담당 파트 사람들이 갑자기 못 고치게 됨)
         namespace_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM ops_namespace WHERE owner_part_id = $1",
+            "SELECT COUNT(*) FROM ops_namespace_owner WHERE part_id = $1",
             part_id,
         )
         if namespace_count > 0:

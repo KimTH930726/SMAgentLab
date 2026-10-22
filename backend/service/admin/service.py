@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from core.database import get_conn
+from core.database import OWNER_MIRROR_SYNC_SQL, get_conn
 from service.policy.visibility import searchable_sql
 
 logger = logging.getLogger(__name__)
@@ -20,17 +20,14 @@ async def list_namespaces() -> list[str]:
 
 async def list_namespaces_detail() -> list[dict]:
     """업무 영역 목록 — 트리(깊이 1단, category-removal-design §2-6): 상위 → 그 하위 순서.
-    owner_part_id·owner_part = 이 영역에 **직접** 지정된 담당(수정 창·파트별 담당 지정이 이 값을 읽고 쓴다 — 뜻을 바꾸면 하위 수정 창에
-    상위 담당이 미리 채워져 저장 때 직접 지정으로 굳었다, 리뷰 M3). effective_owner_part(_id) = 실효 담당(하위가 비어 있으면 상위 것 —
-    check_namespace_ownership과 같은 규칙, 프론트 권한 판단용), owner_inherited = 실효 담당을 상위에서 물려받았는지."""
+    담당은 N개(ops_namespace_owner, 10/22 #82). owner_parts = 이 영역에 **직접** 지정된 담당들(수정 창·파트별 담당 지정이 이 값을 읽고 쓴다 —
+    뜻을 바꾸면 하위 수정 창에 상위 담당이 미리 채워져 저장 때 직접 지정으로 굳었다, 리뷰 M3). effective_owner_parts = 실효 담당(하위에 자기 담당이
+    없으면 상위 것 전부 — check_namespace_ownership과 같은 규칙, 프론트 권한 판단용), owner_inherited = 실효 담당을 상위에서 물려받았는지.
+    owner_part(_id)·effective_owner_part(_id)는 옛 화면 호환용 — 담당 중 id가 가장 작은 것 하나(옛 칸 임시 거울과 같은 값)."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""
             SELECT n.id, n.name, n.description, n.kind,
-                   n.owner_part_id, p.name AS owner_part,
-                   COALESCE(n.owner_part_id, pn.owner_part_id) AS effective_owner_part_id,
-                   COALESCE(p.name, pp.name) AS effective_owner_part,
-                   (n.owner_part_id IS NULL AND pn.owner_part_id IS NOT NULL) AS owner_inherited,
                    n.parent_id, pn.name AS parent,
                    n.created_at::text,
                    n.created_by_user_id,
@@ -39,9 +36,7 @@ async def list_namespaces_detail() -> list[dict]:
                    COALESCE(g.cnt, 0) AS glossary_count,
                    COALESCE(pi.cnt, 0) AS policy_count
             FROM ops_namespace n
-            LEFT JOIN ops_part p ON n.owner_part_id = p.id
             LEFT JOIN ops_namespace pn ON pn.id = n.parent_id          -- 상위 영역(트리 깊이 1)
-            LEFT JOIN ops_part pp ON pp.id = pn.owner_part_id           -- 상위 담당(하위가 비어 있으면 물려받음)
             LEFT JOIN ops_user u ON n.created_by_user_id = u.id
             LEFT JOIN (
                 SELECT namespace_id, COUNT(*) AS cnt FROM rag_knowledge WHERE status = 'active' GROUP BY namespace_id
@@ -55,7 +50,44 @@ async def list_namespaces_detail() -> list[dict]:
             ORDER BY COALESCE(pn.name, n.name), n.parent_id IS NOT NULL, n.name   -- 상위 바로 아래 하위(하위가 없으면 이름순 그대로)
             """
         )
-    return [dict(r) for r in rows]
+        owner_rows = await conn.fetch("""SELECT o.namespace_id, p.id, p.name FROM ops_namespace_owner o
+                                         JOIN ops_part p ON p.id = o.part_id ORDER BY p.name, p.id""")
+    direct: dict[int, list[dict]] = {}
+    for r in owner_rows:
+        direct.setdefault(r["namespace_id"], []).append({"id": r["id"], "name": r["name"]})
+    out = []
+    for r in rows:
+        d = dict(r)
+        own = direct.get(d["id"], [])
+        inherited = not own and bool(d["parent_id"] and direct.get(d["parent_id"]))
+        eff = direct.get(d["parent_id"], []) if inherited else own
+        first, eff_first = _first_owner(own), _first_owner(eff)
+        d.update(owner_parts=own, effective_owner_parts=eff, owner_inherited=inherited,
+                 owner_part_id=first and first["id"], owner_part=first and first["name"],
+                 effective_owner_part_id=eff_first and eff_first["id"], effective_owner_part=eff_first and eff_first["name"])
+        out.append(d)
+    return out
+
+
+def _first_owner(parts: list[dict]) -> Optional[dict]:
+    """옛 단일 담당 칸 호환용 — id가 가장 작은 담당(옛 칸 임시 거울 OWNER_MIRROR_SYNC_SQL과 같은 기준)."""
+    return min(parts, key=lambda p: p["id"]) if parts else None
+
+
+async def replace_namespace_owners(conn, ns_id: int, part_ids: list[int]) -> None:
+    """영역 담당 파트를 통째로 바꾼다(호출부 트랜잭션 안, 영역 행을 FOR UPDATE로 잡은 뒤). 없는 파트가 하나라도 있으면 ValueError(→ 400)
+    — 아무것도 안 바꾼다. 옛 칸(owner_part_id) 임시 거울도 같이 맞춘다."""
+    wanted = sorted(set(part_ids))
+    if wanted:
+        found = {r["id"] for r in await conn.fetch("SELECT id FROM ops_part WHERE id = ANY($1::int[]) FOR KEY SHARE", wanted)}
+        missing = [str(i) for i in wanted if i not in found]
+        if missing:
+            raise ValueError(f"없는 파트입니다: {', '.join(missing)}")
+    await conn.execute("DELETE FROM ops_namespace_owner WHERE namespace_id = $1 AND NOT (part_id = ANY($2::int[]))", ns_id, wanted)
+    if wanted:
+        await conn.execute("""INSERT INTO ops_namespace_owner (namespace_id, part_id)
+                              SELECT $1, id FROM ops_part WHERE id = ANY($2::int[]) ON CONFLICT DO NOTHING""", ns_id, wanted)
+    await conn.execute(OWNER_MIRROR_SYNC_SQL, [ns_id])   # 임시 거울(옛 칸 삭제 때 같이 지움)
 
 
 async def _check_parent(conn, parent_id: int, child_id: Optional[int]) -> None:
@@ -92,15 +124,17 @@ async def create_namespace(
                 )
             row = await conn.fetchrow(
                 """
-                INSERT INTO ops_namespace (name, description, owner_part_id, created_by_user_id, parent_id)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO ops_namespace (name, description, created_by_user_id, parent_id)
+                VALUES ($1, $2, $3, $4)
                 ON CONFLICT (name) DO NOTHING
                 RETURNING id, name, description, parent_id, created_at::text
                 """,
-                name, description, owner_part_id, created_by_user_id, parent_id,
+                name, description, created_by_user_id, parent_id,
             )
             if row is None:   # 같은 이름이면 설명을 조용히 덮어쓰던 것(리뷰 L1)
                 return None
+            if owner_part_id is not None:   # 담당은 담당 표에(#82) — 옛 칸은 임시 거울로 같이 맞춘다
+                await replace_namespace_owners(conn, row["id"], [owner_part_id])
             # owner_part name 보충
             result = dict(row)
             result["owner_part"] = owner_part
@@ -165,8 +199,10 @@ async def delete_namespace(name: str) -> tuple[int, str]:
 
 
 async def update_namespace_settings(name: str, body) -> dict:
-    """담당 파트·상위 영역 지정(관리자) — 화면은 조직 관리 메뉴 설계 검수 뒤(10/20 사용자 결정), 그 전엔 이 API·스크립트로.
-    상위 영역: parent_id = 지정(검사는 _check_parent), clear_parent = 최상위로. 보낸 칸만 바꾼다."""
+    """담당 파트·상위 영역 지정(관리자) — 업무 컬렉션 수정 창·스크립트가 쓴다.
+    담당(N개, #82): owner_part_ids = 담당 파트 목록으로 통째로 교체([] = 담당 없음 → 관리자만). 옛 단일 칸(owner_part 이름 · clear_owner)도
+    호환으로 받는다(그 파트 하나로 교체 / 해제) — 둘 다 오면 owner_part_ids가 우선. 상위 영역: parent_id = 지정(검사는 _check_parent),
+    clear_parent = 최상위로. 보낸 칸만 바꾼다."""
     set_parent = body.parent_id is not None and not body.clear_parent
     async with get_conn() as conn:
         async with conn.transaction():
@@ -180,13 +216,16 @@ async def update_namespace_settings(name: str, body) -> dict:
                 ns = await conn.fetchrow("SELECT id, parent_id FROM ops_namespace WHERE name = $1 FOR UPDATE", name)
             if ns is None:
                 raise NamespaceNotFound("업무 영역을 찾을 수 없습니다.")
-            if body.clear_owner or body.owner_part is not None:   # 빈 문자열 = 해제(스키마 설명과 같게, 재리뷰 L1)
-                owner = None
+            owner_ids = getattr(body, "owner_part_ids", None)
+            if owner_ids is None and (body.clear_owner or body.owner_part is not None):   # 옛 단일 칸 — 빈 문자열 = 해제(재리뷰 L1)
+                owner_ids = []
                 if body.owner_part and not body.clear_owner:
                     owner = await conn.fetchval("SELECT id FROM ops_part WHERE name = $1 FOR KEY SHARE", body.owner_part)
                     if owner is None:
                         raise ValueError(f"없는 파트입니다: {body.owner_part}")
-                await conn.execute("UPDATE ops_namespace SET owner_part_id = $2 WHERE id = $1", ns["id"], owner)
+                    owner_ids = [owner]
+            if owner_ids is not None:
+                await replace_namespace_owners(conn, ns["id"], owner_ids)
             new_parent = None if body.clear_parent else body.parent_id if set_parent else ns["parent_id"]
             parent_changed = new_parent != ns["parent_id"]
             old_parent_name = None
@@ -197,12 +236,14 @@ async def update_namespace_settings(name: str, body) -> dict:
             elif set_parent:
                 await _check_parent(conn, body.parent_id, child_id=ns["id"])
                 await conn.execute("UPDATE ops_namespace SET parent_id = $2 WHERE id = $1", ns["id"], body.parent_id)
-            row = await conn.fetchrow("""SELECT n.name, p.name AS owner_part, pn.name AS parent FROM ops_namespace n
-                                         LEFT JOIN ops_part p ON p.id = n.owner_part_id
+            row = await conn.fetchrow("""SELECT n.name, pn.name AS parent FROM ops_namespace n
                                          LEFT JOIN ops_namespace pn ON pn.id = n.parent_id WHERE n.id = $1""", ns["id"])
+            owners = [dict(r) for r in await conn.fetch("""SELECT p.id, p.name FROM ops_namespace_owner o JOIN ops_part p ON p.id = o.part_id
+                                                           WHERE o.namespace_id = $1 ORDER BY p.name, p.id""", ns["id"])]
     if parent_changed:   # 자신 + 옛 상위 + 새 상위(새 상위는 family가 DB에서 찾는다) — 검색 범위가 바뀐 영역들
         await _forget_cached_answers(row["name"], old_parent_name)
-    return dict(row)
+    first = _first_owner(owners)
+    return {**dict(row), "owner_parts": owners, "owner_part": first and first["name"]}
 
 
 # 업무구분 AI 추천·자동 생성(추천·"분류 확인 필요" 자동 생성, 업무구분 추천 프롬프트)은 10/22 업무구분 폐지로 삭제

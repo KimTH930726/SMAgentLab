@@ -7,24 +7,29 @@ import { Modal } from '../ui/Modal';
 import { getAllParts, setPartDomains } from '../../api/auth';
 import { getNamespacesDetail } from '../../api/namespaces';
 import { showConfirm, showError } from '../../store/useDialogStore';
-import type { Part } from '../../types';
+import type { NamespaceDetail, Part } from '../../types';
+import { directOwnerParts } from '../../utils/domainAccess';
 
 /**
  * 담당 업무 — 파트(사람 조직)가 어느 업무 컬렉션을 맡는지(2026-10-21, 관리자 화면 설계안 docs/tech/admin-ia-design.md ①).
- * 파트 하나가 여러 영역(1:N), 영역 하나엔 담당 파트 하나. 담당 파트 사람이 그 영역의 지식·정책·용어를 수정하고, 담당 없는 영역은 관리자만.
+ * 파트 하나가 여러 영역, 영역 하나에 담당 파트 여럿(N:N, 10/22 — 주 담당 없음). 담당 파트 중 어느 파트 사람이든 그 영역의 지식·정책·용어를
+ * 수정하고, 담당 없는 영역은 관리자만. 체크 = 이 파트를 담당에 더함(다른 파트 담당은 그대로), 체크 해제 = 이 파트만 뺌.
  * 저장 전에 무엇이 바뀌는지 확인받는다(고르는 순간 저장하던 칸으로 사고 — 10/20).
  */
 export function PartDomainSection() {
   const qc = useQueryClient();
-  // 파트 이름·팀은 파트 목록에서, 누가 무엇을 맡았는지는 업무 컬렉션 목록(owner_part_id) 하나에서 — 출처가 둘이면 이름 바꾼 직후 어긋났다(리뷰 M1)
+  // 파트 이름·팀은 파트 목록에서, 누가 무엇을 맡았는지는 업무 컬렉션 목록(owner_parts) 하나에서 — 출처가 둘이면 이름 바꾼 직후 어긋났다(리뷰 M1)
   const { data: parts = [], isLoading: partsLoading } = useQuery({ queryKey: ['parts-all'], queryFn: getAllParts });
   const { data: domains = [], isLoading: nsLoading } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail });
   const [editing, setEditing] = useState<Part | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
 
   const partName = useMemo(() => new Map(parts.map((p) => [p.id, p.name])), [parts]);
-  const domainsOf = (partId: number, list = domains) => list.filter((d) => d.owner_part_id === partId).map((d) => d.name);
-  const unowned = domains.filter((d) => !d.owner_part_id).map((d) => d.name);
+  const domainsOf = (partId: number, list = domains) => list.filter((d) => directOwnerParts(d).some((o) => o.id === partId)).map((d) => d.name);
+  const unowned = domains.filter((d) => directOwnerParts(d).length === 0).map((d) => d.name);
+  // 이 파트 말고 함께 담당하는 파트 이름들(파트 이름은 파트 목록 기준 — 이름 바꾼 직후 어긋나지 않게)
+  const othersOf = (d: NamespaceDetail, partId: number) =>
+    directOwnerParts(d).filter((o) => o.id !== partId).map((o) => partName.get(o.id) ?? o.name);
 
   const saveMutation = useMutation({
     mutationFn: ({ part, names }: { part: Part; names: string[] }) => setPartDomains(part.id, names),
@@ -55,15 +60,18 @@ export function PartDomainSection() {
     const added = [...checked].filter((n) => !before.has(n));
     const removed = [...before].filter((n) => !checked.has(n));
     if (added.length === 0 && removed.length === 0) { setEditing(null); return; }
-    const freshOwner = new Map(fresh.map((d) => [d.name, d.owner_part_id ?? null]));
-    const moved = added.filter((n) => freshOwner.get(n) && freshOwner.get(n) !== editing.id);
+    const freshByName = new Map(fresh.map((d) => [d.name, d]));
+    const others = (n: string) => { const d = freshByName.get(n); return d ? othersOf(d, editing.id) : []; };
+    const shared = added.filter((n) => others(n).length > 0);
+    const orphaned = removed.filter((n) => others(n).length === 0);   // 이 파트가 빠지면 담당이 없어지는 것
     const lines = [
       added.length ? `맡게 됨: ${added.join(', ')}` : '',
-      moved.length ? `  └ 다른 파트에서 옮겨 옴: ${moved.map((n) => `${n}(${partName.get(freshOwner.get(n) as number) ?? '다른 파트'})`).join(', ')}` : '',
-      removed.length ? `맡지 않음: ${removed.join(', ')} — 담당이 없어지면 관리자만 수정할 수 있어요` : '',
+      shared.length ? `  └ 함께 담당: ${shared.map((n) => `${n}(${others(n).join(', ')})`).join(', ')}` : '',
+      removed.length ? `맡지 않음: ${removed.join(', ')}` : '',
+      orphaned.length ? `  └ 담당이 없어져 관리자만 수정: ${orphaned.join(', ')}` : '',
       '',
       `'${editing.name}' 사람이 맡은 업무 컬렉션의 지식·정책·용어를 수정하게 됩니다.`,
-    ].filter((l, i) => l || i === 3);
+    ].filter((l, i) => l || i === 4);
     if (!(await showConfirm(lines.join('\n'), { tone: 'warning', confirmLabel: '저장', title: `${editing.name} 담당 업무` }))) return;
     saveMutation.mutate({ part: editing, names: [...checked] });
   };
@@ -74,7 +82,7 @@ export function PartDomainSection() {
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-semibold text-slate-200">담당 업무</h2>
-        <p className="text-sm text-slate-400 mt-1" title="파트 하나가 여러 업무 컬렉션을 맡을 수 있고, 업무 컬렉션 하나의 담당 파트는 하나입니다.">
+        <p className="text-sm text-slate-400 mt-1" title="파트 하나가 여러 업무 컬렉션을 맡을 수 있고, 업무 컬렉션 하나를 여러 파트가 함께 맡을 수 있습니다.">
           파트가 맡은 업무 컬렉션은 그 파트 사람이 수정할 수 있어요. 담당이 없으면 관리자만 수정해요.
         </p>
       </div>
@@ -134,17 +142,17 @@ export function PartDomainSection() {
       <Modal isOpen={!!editing} onClose={() => setEditing(null)} title={editing ? `${editing.name} — 담당 업무` : ''} maxWidth="max-w-lg">
         {editing && (
           <div className="space-y-4">
-            <p className="text-xs text-slate-400">체크한 업무 컬렉션을 이 파트가 맡아요. 다른 파트가 맡던 컬렉션을 체크하면 이 파트로 옮겨져요.</p>
+            <p className="text-xs text-slate-400">체크한 업무 컬렉션을 이 파트가 맡아요. 다른 파트가 맡던 컬렉션은 함께 담당해요(그 파트도 그대로).</p>
             <div className="max-h-80 overflow-y-auto space-y-1 pr-1">
               {domains.map((d) => {
-                const other = d.owner_part_id && d.owner_part_id !== editing.id ? (partName.get(d.owner_part_id) ?? d.owner_part) : null;
+                const other = othersOf(d, editing.id).join(', ');
                 return (
                   <label key={d.name} htmlFor={`pd-${editing.id}-${d.id}`}
                     className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700/40 cursor-pointer">
                     <input id={`pd-${editing.id}-${d.id}`} type="checkbox" checked={checked.has(d.name)} onChange={() => toggle(d.name)}
                       className="accent-indigo-500" />
                     <span className="text-sm text-slate-200">{d.name}</span>
-                    {other && <span className="text-xs text-amber-700 dark:text-amber-300">{other} 담당</span>}
+                    {other && <span className="text-xs text-amber-700 dark:text-amber-300">다른 담당: {other}</span>}
                   </label>
                 );
               })}

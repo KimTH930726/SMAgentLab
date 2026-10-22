@@ -4,12 +4,12 @@ from __future__ import annotations
 import logging
 import time
 
-from typing import Optional
+from typing import Iterable, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from core.database import get_conn
+from core.database import EFFECTIVE_OWNERS_SQL, get_conn
 from core.security import decode_token
 
 logger = logging.getLogger(__name__)
@@ -22,10 +22,14 @@ _bearer_scheme = HTTPBearer()
 _USER_CACHE_TTL = 5.0
 _user_cache: dict[int, tuple[float, dict]] = {}
 
-# 실효 담당 파트 — 하위 영역은 담당이 비어 있으면 상위 영역 담당을 물려받는다(트리 깊이 1단, category-removal-design §2-6).
-# 수정·조회·읽기 기록 3곳이 같이 쓴다. 여러 영역을 한 번에 보는 질의 기록 일괄 삭제(admin/router.py)도 같은 COALESCE·JOIN.
-EFFECTIVE_OWNER_SQL = """SELECT COALESCE(n.owner_part_id, p.owner_part_id) FROM ops_namespace n
-                         LEFT JOIN ops_namespace p ON p.id = n.parent_id WHERE n.name = $1"""
+# 실효 담당 파트들 — 담당은 N개(ops_namespace_owner, 10/22 #82). 하위 영역은 자기 담당이 없으면 상위 담당 전부를 물려받는다
+# (트리 깊이 1단, category-removal-design §2-6). SQL은 core/database.py 한 곳(EFFECTIVE_OWNERS_SQL·effective_owner_ns_sql) —
+# 수정·조회·읽기 기록 3곳과 여러 영역을 한 번에 보는 질의 기록 일괄 삭제(admin/router.py)가 같이 쓴다.
+
+
+async def _effective_owner_ids(namespace: str) -> list[int]:
+    async with get_conn() as conn:
+        return [r["part_id"] for r in await conn.fetch(EFFECTIVE_OWNERS_SQL, namespace)]
 
 
 def invalidate_user_cache(user_id: int) -> None:
@@ -87,28 +91,28 @@ async def get_current_admin(user: dict = Depends(get_current_user)) -> dict:
 
 
 async def check_namespace_ownership(namespace: str, user: dict) -> None:
-    """업무 영역(namespace)의 담당 파트(owner_part_id)와 사용자 소속 파트(part_id)를 비교 — 사람(파트) → 담당 영역으로 매번 계산.
+    """업무 영역(namespace)의 담당 파트들과 사용자 소속 파트(part_id)를 비교 — 사람(파트) → 담당 영역으로 매번 계산.
 
-    관리자는 통과, 조회 전용은 403, 담당 파트 사람이면 통과. 담당이 정해지지 않은 영역은 관리자만(2026-10-20 사용자 결정 —
-    예전엔 "공통"이라 누구나 고칠 수 있었다. 정책서 영역 대부분이 아직 담당 미지정이라 아무나 고치면 안 된다).
+    관리자는 통과, 조회 전용은 403, 담당 파트 중 하나에 속하면 통과(담당 N개, 주 담당 없음 — 10/22). 담당이 정해지지 않은 영역은
+    관리자만(2026-10-20 사용자 결정 — 예전엔 "공통"이라 누구나 고칠 수 있었다. 정책서 영역 대부분이 아직 담당 미지정이라 아무나 고치면 안 된다).
     """
-    async with get_conn() as conn:
-        owner_part_id = await conn.fetchval(EFFECTIVE_OWNER_SQL, namespace)   # 하위 영역은 상위 담당 상속
-    reason = edit_denied_reason(owner_part_id, user)
+    owner_part_ids = await _effective_owner_ids(namespace)   # 하위 영역은 상위 담당 상속
+    reason = edit_denied_reason(owner_part_ids, user)
     if reason:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
 
 
-def edit_denied_reason(owner_part_id: Optional[int], user: dict) -> Optional[str]:
-    """업무 영역 수정 규칙(한 곳 — 프론트 utils/domainAccess.ts와 같음). 막히면 이유, 되면 None.
+def edit_denied_reason(owner_part_ids: Iterable[int], user: dict) -> Optional[str]:
+    """업무 영역 수정 규칙(한 곳 — 프론트 utils/domainAccess.ts와 같음). owner_part_ids = 실효 담당 파트들(상속 반영). 막히면 이유, 되면 None.
     여러 영역을 한 번에 검사하는 경로(질의 기록 일괄 삭제 등)도 이 함수를 쓴다 — 따로 쓰면 규칙이 어긋난다(리뷰 M1)."""
+    owners = set(owner_part_ids)
     if user["role"] == "admin":
         return None
     if user["role"] == "viewer":
         return "조회 전용 계정은 이 업무 영역을 수정할 수 없습니다."
-    if owner_part_id is None:
+    if not owners:
         return "담당 파트가 정해지지 않은 업무 영역은 관리자만 수정할 수 있습니다."
-    if owner_part_id != user.get("part_id"):
+    if user.get("part_id") not in owners:
         return "이 업무 영역의 담당 파트가 아닙니다."
     return None
 
@@ -128,9 +132,8 @@ async def check_namespace_read(namespace: str, user: dict) -> None:
         return
     if user["role"] == "viewer":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="조회 전용 계정은 이 화면을 볼 수 없습니다.")
-    async with get_conn() as conn:
-        owner_part_id = await conn.fetchval(EFFECTIVE_OWNER_SQL, namespace)   # 하위 영역은 상위 담당 상속
-    if owner_part_id is not None and owner_part_id != user.get("part_id"):
+    owner_part_ids = await _effective_owner_ids(namespace)   # 하위 영역은 상위 담당 상속
+    if owner_part_ids and user.get("part_id") not in owner_part_ids:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="이 업무 영역의 담당 파트가 아닙니다.")
 
 
@@ -143,11 +146,10 @@ async def log_cross_part_namespace_read(namespace: str, user: dict) -> None:
     이유로) 먼저 로그 온리로 실측한 뒤에 강제 전환 여부를 판단한다."""
     if user["role"] == "admin":
         return
-    async with get_conn() as conn:
-        owner_part_id = await conn.fetchval(EFFECTIVE_OWNER_SQL, namespace)   # 하위 영역은 상위 담당 상속
-    if owner_part_id is not None and owner_part_id != user["part_id"]:
+    owner_part_ids = await _effective_owner_ids(namespace)   # 하위 영역은 상위 담당 상속
+    if owner_part_ids and user["part_id"] not in owner_part_ids:
         logger.warning(
             "[읽기ACL 미강제] user_id=%s(role=%s, part_id=%s)가 다른 파트 소유 네임스페이스 "
-            "'%s'(owner_part_id=%s)를 조회함 — 지금은 차단 안 함, 실측용 기록",
-            user["id"], user["role"], user["part_id"], namespace, owner_part_id,
+            "'%s'(담당 part_id=%s)를 조회함 — 지금은 차단 안 함, 실측용 기록",
+            user["id"], user["role"], user["part_id"], namespace, owner_part_ids,
         )

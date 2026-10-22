@@ -18,11 +18,18 @@ class NamespaceRename(BaseModel):
 
 
 class NamespaceSettings(BaseModel):
-    """업무 영역 담당 파트·상위 영역(관리자). owner_part 빈 문자열 또는 clear_owner = 해제. parent_id = 상위 지정, clear_parent = 최상위로."""
+    """업무 영역 담당 파트·상위 영역(관리자). owner_part_ids = 담당 파트 목록으로 통째로 교체(담당 N개, 10/22 — [] = 담당 없음).
+    옛 단일 칸 호환: owner_part(이름) = 그 파트 하나로, 빈 문자열 또는 clear_owner = 해제(owner_part_ids가 오면 무시). parent_id = 상위 지정, clear_parent = 최상위로."""
+    owner_part_ids: Optional[list[int]] = Field(default=None, max_length=100)
     owner_part: Optional[str] = None
     clear_owner: bool = False
     parent_id: Optional[int] = Field(default=None, ge=1, le=2_147_483_647)
     clear_parent: bool = False
+
+
+class OwnerPart(BaseModel):
+    id: int
+    name: str
 
 
 class NamespaceInfo(BaseModel):
@@ -30,10 +37,13 @@ class NamespaceInfo(BaseModel):
     name: str
     description: str
     kind: str = "domain"                  # domain | policy_test(E2E 임시)
-    owner_part_id: Optional[int] = None   # 이 영역에 직접 지정된 담당(수정 창·파트별 담당 지정이 읽고 쓰는 값). 담당 비교는 id로(파트 이름은 바뀔 수 있다)
-    owner_part: Optional[str] = None      # 직접 지정된 담당 파트 이름
-    effective_owner_part: Optional[str] = None      # 실효 담당 파트 이름 — 하위 영역이 비어 있으면 상위 담당(수정 권한 규칙과 같음, 권한 판단용)
-    effective_owner_part_id: Optional[int] = None   # 실효 담당 id(상속 반영)
+    owner_parts: list[OwnerPart] = []             # 이 영역에 직접 지정된 담당들(N개, 10/22 — 수정 창·파트별 담당 지정이 읽고 쓰는 값). 비교는 id로
+    effective_owner_parts: list[OwnerPart] = []   # 실효 담당들 — 하위 영역에 자기 담당이 없으면 상위 담당 전부(수정 권한 규칙과 같음, 권한 판단용)
+    # 옛 단일 칸(호환용 — 담당 중 id가 가장 작은 하나). 새 화면은 위 목록을 쓴다
+    owner_part_id: Optional[int] = None
+    owner_part: Optional[str] = None
+    effective_owner_part: Optional[str] = None
+    effective_owner_part_id: Optional[int] = None
     owner_inherited: bool = False         # 실효 담당이 상위에서 물려받은 것인지
     parent_id: Optional[int] = None       # 상위 영역(트리 깊이 1, 없으면 최상위)
     parent: Optional[str] = None          # 상위 영역 이름

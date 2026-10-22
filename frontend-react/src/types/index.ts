@@ -40,12 +40,20 @@ export interface Namespace {
   created_at: string;
 }
 
+export interface OwnerPart {
+  id: number;
+  name: string;
+}
+
 export interface NamespaceDetail extends Namespace {
   id: number;
   kind?: string;
-  owner_part_id?: number | null;           // 직접 지정된 담당(수정 창·파트별 담당 지정이 읽고 쓰는 값)
-  owner_part?: string | null;              // 직접 지정된 담당 파트 이름
-  effective_owner_part?: string | null;    // 실효 담당(하위 영역이 비어 있으면 상위 것) — 권한 판단은 이것으로(effectiveOwnerPart)
+  owner_parts?: OwnerPart[];               // 직접 지정된 담당들(N개, 10/22 — 수정 창·파트별 담당 지정이 읽고 쓰는 값)
+  effective_owner_parts?: OwnerPart[];     // 실효 담당들(하위 영역에 자기 담당이 없으면 상위 것 전부) — 권한 판단은 이것으로(effectiveOwnerParts)
+  // 옛 단일 칸(서버 호환용 — 담당 중 id가 가장 작은 하나). 화면 로직은 위 목록을 쓴다
+  owner_part_id?: number | null;
+  owner_part?: string | null;
+  effective_owner_part?: string | null;
   effective_owner_part_id?: number | null;
   owner_inherited?: boolean;               // 실효 담당을 상위에서 물려받았는지
   parent_id?: number | null;               // 상위 영역(트리 깊이 1)

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query as QueryParam
 from pydantic import BaseModel, Field
 
 from core.config import settings
-from core.database import get_conn, resolve_namespace_id
+from core.database import effective_owner_ns_sql, get_conn, resolve_namespace_id
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership, edit_denied_reason, check_namespace_read
 from service.admin.schemas import (
     NamespaceCreate, NamespaceInfo, NamespaceRename, NamespaceSettings,
@@ -267,17 +267,23 @@ async def bulk_delete_query_logs(body: QueryLogIds, user: dict = Depends(get_cur
     async with get_conn() as conn:
         # 삭제 대상의 네임스페이스별 소유 파트를 한 번에 조회 — 네임스페이스마다
         # check_namespace_ownership()을 호출하면 매번 DB 왕복이 생기므로 인라인 검증
+        # 담당 N개(#82) — 영역마다 실효 담당 파트 줄이 여러 개(담당 없으면 part_id NULL 한 줄). 하위 영역은 상위 담당 상속(effective_owner_ns_sql)
         rows = await conn.fetch(
-            """
-            SELECT DISTINCT n.name AS namespace, COALESCE(n.owner_part_id, p.owner_part_id) AS owner_part_id   -- 하위 영역은 상위 담당 상속
+            f"""
+            SELECT DISTINCT n.name AS namespace, o.part_id
             FROM ops_query_log ql
             JOIN ops_namespace n ON ql.namespace_id = n.id
-            LEFT JOIN ops_namespace p ON p.id = n.parent_id
+            LEFT JOIN ops_namespace_owner o ON o.namespace_id = {effective_owner_ns_sql('n')}
             WHERE ql.id = ANY($1::int[])
             """, ids,
         )
-        for r in rows:   # 수정 규칙 한 곳(edit_denied_reason) — 예전 인라인 검사는 담당 없는 영역·조회 전용을 통과시켰다(리뷰 M1)
-            reason = edit_denied_reason(r["owner_part_id"], user)
+        owners: dict[str, set[int]] = {}
+        for r in rows:
+            owners.setdefault(r["namespace"], set())
+            if r["part_id"] is not None:
+                owners[r["namespace"]].add(r["part_id"])
+        for ns_owners in owners.values():   # 수정 규칙 한 곳(edit_denied_reason) — 예전 인라인 검사는 담당 없는 영역·조회 전용을 통과시켰다(리뷰 M1)
+            reason = edit_denied_reason(ns_owners, user)
             if reason:
                 raise HTTPException(status_code=403, detail=reason)
         result = await conn.execute("DELETE FROM ops_query_log WHERE id = ANY($1::int[])", ids)

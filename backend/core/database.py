@@ -72,8 +72,38 @@ def scope_ids_same_owner_subquery(me_id: str) -> str:
     다른 파트 하위의 지식·정책을 바꿀 수 있었다(권한은 신고 영역 담당만 봄, 리뷰 H1). 그 하위 근거는 그 하위 영역에서 신고한다.
     (하위를 고르면 자신만 — 하위의 하위는 없다.)"""
     me_id = _checked_me_id(me_id)
+    # 담당 N개(10/22, #82): 하위가 들어가는 건 ① 하위에 자기 담당이 없음(상위 상속) ② 상위 담당이 있고 그 전부가 하위 담당에도 있음 —
+    # 상위에서 쓸 수 있는 사람(상위 담당 파트 아무나)이 그 하위도 쓸 수 있을 때만. 상위 담당이 없으면(관리자만) 담당 있는 하위는 빠진다(예전과 같음).
     return (f"SELECT s.id FROM ops_namespace s WHERE s.id = {me_id} OR (s.parent_id = {me_id} AND {_child_kind_rule(me_id)} "
-            f"AND (s.owner_part_id IS NULL OR s.owner_part_id = (SELECT o.owner_part_id FROM ops_namespace o WHERE o.id = {me_id})))")
+            f"AND (NOT EXISTS (SELECT 1 FROM ops_namespace_owner co WHERE co.namespace_id = s.id) "
+            f"OR (EXISTS (SELECT 1 FROM ops_namespace_owner po WHERE po.namespace_id = {me_id}) "
+            f"AND NOT EXISTS (SELECT 1 FROM ops_namespace_owner po WHERE po.namespace_id = {me_id} AND po.part_id NOT IN "
+            f"(SELECT co.part_id FROM ops_namespace_owner co WHERE co.namespace_id = s.id)))))")
+
+
+# ── 업무 컬렉션 담당(N개, 2026-10-22 #82, collection-design §15-8) ─────────────────────────
+# 담당의 단일 기준은 ops_namespace_owner. 담당 파트 중 어느 파트 사람이든 쓰기·승인(주 담당 없음), 담당이 없으면 관리자만.
+# 하위 영역은 자기 담당이 하나도 없으면 상위 담당 전부를 물려받는다(트리 깊이 1단) — 자기 담당이 하나라도 있으면 그것만.
+_ALIAS = re.compile(r"^[a-z]\w{0,10}$")
+
+
+def effective_owner_ns_sql(alias: str) -> str:
+    """실효 담당을 가진 영역 id SQL 식 — `{alias}`(ops_namespace 별칭)에 자기 담당이 있으면 자신, 없으면 상위(없으면 NULL).
+    `JOIN ops_namespace_owner o ON o.namespace_id = <이것>`으로 실효 담당 파트들을 얻는다(sqlite 시험에서도 그대로 돈다)."""
+    if not _ALIAS.fullmatch(alias):
+        raise ValueError(f"별칭으로 쓸 수 없는 글자입니다: {alias!r}")
+    return (f"CASE WHEN EXISTS (SELECT 1 FROM ops_namespace_owner x WHERE x.namespace_id = {alias}.id) "
+            f"THEN {alias}.id ELSE {alias}.parent_id END")
+
+
+# 실효 담당 파트 id들(이름 $1) — 수정·조회·읽기 기록 검사가 같이 쓴다
+EFFECTIVE_OWNERS_SQL = (f"SELECT o.part_id FROM ops_namespace n JOIN ops_namespace_owner o ON o.namespace_id = {effective_owner_ns_sql('n')} "
+                        "WHERE n.name = $1 ORDER BY o.part_id")
+
+# **임시 거울**(옛 칸 ops_namespace.owner_part_id 삭제 승인 전까지): 담당 표를 바꾼 같은 트랜잭션에서 옛 칸을 "담당 중 가장 작은 part_id"
+# (없으면 NULL)로 맞춘다 — 놓친 옛 읽기 경로가 있어도 크게 어긋나지 않게. 옛 칸을 지울 때 이 문장과 호출부도 같이 지운다. ($1 = 영역 id 배열)
+OWNER_MIRROR_SYNC_SQL = ("UPDATE ops_namespace SET owner_part_id = (SELECT MIN(o.part_id) FROM ops_namespace_owner o "
+                         "WHERE o.namespace_id = ops_namespace.id) WHERE id = ANY($1::int[])")
 
 
 async def namespace_scope_ids(conn: asyncpg.Connection, namespace: str) -> list[int]:

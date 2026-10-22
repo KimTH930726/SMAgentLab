@@ -31,6 +31,7 @@ import { stopChatStream, clearStreamState, useStreamStore } from '../../store/us
 import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { byContentThenName, initialDomain, isPickableDomain, loadSelectedDomain, saveSelectedDomain } from '../../utils/selectedDomain';
 import { DomainPicker } from './DomainPicker';
+import { effectiveOwnerParts } from '../../utils/domainAccess';
 import type { NamespaceDetail } from '../../types';
 import { getConversations, deleteConversation } from '../../api/conversations';
 import { healthCheck } from '../../api/client';
@@ -109,10 +110,10 @@ export function Sidebar() {
     const uname = user?.username ?? null;
     if (initedUserRef.current === uname && namespace && namespaces.includes(namespace)) { pendingNsRef.current = null; return; }   // 다른 곳이 먼저 바꿨으면 대기 값 버림(리뷰)
     initedUserRef.current = uname;
-    const ownerOf = (n: NamespaceDetail) => n.effective_owner_part ?? n.owner_part;   // 고르는 창(DomainPicker)과 같은 기준
+    const isMine = (n: NamespaceDetail) => effectiveOwnerParts(n).some((o) => o.name === user?.part);   // 고르는 창(DomainPicker)과 같은 기준(담당 N개)
     const ordered = nsDetails.filter(isPickableDomain).sort(byContentThenName);   // 고르는 창과 같은 순서
     const pickable = nsDetailsMissing ? namespaces : ordered.map((n) => n.name);
-    const mine = user?.part ? ordered.filter((n) => ownerOf(n) === user.part).map((n) => n.name) : [];
+    const mine = user?.part ? ordered.filter(isMine).map((n) => n.name) : [];
     const next = initialDomain({ stored: loadSelectedDomain(user?.username), valid: namespaces, pickable, mine });
     pendingNsRef.current = next && next !== namespace ? next : null;
     if (pendingNsRef.current) setNamespace(pendingNsRef.current);

@@ -5,6 +5,7 @@ import { Badge } from '../ui/Badge';
 import { getUsers } from '../../api/auth';
 import { getNamespacesDetail } from '../../api/namespaces';
 import type { Part } from '../../types';
+import { directOwnerParts } from '../../utils/domainAccess';
 
 /**
  * 파트 현황 트리(10/21, 사용자 요청 — 조직은 트리가 직관적): 팀 › 파트 › 사람 · 담당 업무를 한눈에. 보기 전용 —
@@ -18,7 +19,7 @@ export function PartTreeModal({ part, onClose }: { part: Part | null; onClose: (
   if (!part) return <Modal isOpen={false} onClose={onClose}>{null}</Modal>;
   const members = users.filter((u) => u.part === part.name);
   const pending = members.filter((u) => u.role === 'viewer').length;
-  const owned = domains.filter((d) => d.owner_part_id === part.id).map((d) => d.name);
+  const owned = domains.filter((d) => directOwnerParts(d).some((o) => o.id === part.id)).map((d) => d.name);   // 담당 N개(10/22) — 함께 담당도 포함
 
   return (
     <Modal isOpen onClose={onClose} title={`${part.name} 현황`} maxWidth="max-w-lg">

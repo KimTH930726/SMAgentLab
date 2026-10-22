@@ -38,7 +38,8 @@ async def main() -> int:
     await init_pool()
     async with get_conn() as c:
         admin_id = await c.fetchval("SELECT id FROM ops_user WHERE role = 'admin' ORDER BY id LIMIT 1")
-        ownerless = await c.fetchval("SELECT name FROM ops_namespace WHERE kind = 'domain' AND owner_part_id IS NULL ORDER BY id LIMIT 1")
+        ownerless = await c.fetchval("""SELECT name FROM ops_namespace n WHERE kind = 'domain' AND parent_id IS NULL
+                                         AND NOT EXISTS (SELECT 1 FROM ops_namespace_owner o WHERE o.namespace_id = n.id) ORDER BY id LIMIT 1""")
     A = tok(admin_id, "admin", "admin")
     created_users: list[int] = []
     async with httpx.AsyncClient(base_url=API, timeout=60) as h:
@@ -94,20 +95,43 @@ async def main() -> int:
             codes = sorted(r.status_code for r in rs)
             chk("같은 파트 동시 10번(성공 1·500 없음)", (codes.count(201), 500 in codes), (1, False))
 
-            # 담당 업무 영역 통째 저장(1:N): 붙이면 그 파트가 수정, 빼면 관리자만, 없는 영역이 섞이면 아무것도 안 바뀜
+            # 담당 업무 영역 통째 저장(N:N, #82): 붙이면 그 파트가 함께 담당(다른 파트 담당 유지), 빼면 그 파트만 빠짐, 없는 영역이 섞이면 아무것도 안 바뀜
             await h.post("/api/namespaces", json={"name": P + "ns2"}, headers=A)
             async with get_conn() as c:
                 p2 = await c.fetchval("SELECT id FROM ops_part WHERE name = $1", P + "p2")
             r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns", P + "ns2"]}, headers=A)
-            chk("파트2가 영역 2개 맡기(1:N, 파트1 것 옮겨 옴)", (r.status_code, r.json().get("domains")), (200, [P + "ns", P + "ns2"]))
+            chk("파트2가 영역 2개 맡기(파트1 것은 함께 담당)", (r.status_code, r.json().get("domains")), (200, [P + "ns", P + "ns2"]))
             chk("  → 파트2 사람 수정", (await edit_probe(h, P + "ns2", U2)).status_code, 200)
-            chk("  → 파트1 사람은 이제 못 고침", (await edit_probe(h, P + "ns", U1)).status_code, 403)
+            chk("  → 함께 담당: 파트2 사람도 ns 수정", (await edit_probe(h, P + "ns", U2)).status_code, 200)
+            chk("  → 파트1 사람도 그대로 수정(옮겨 오지 않음)", (await edit_probe(h, P + "ns", U1)).status_code, 200)
+            async with get_conn() as c:
+                ns_owners = [r["part_id"] for r in await c.fetch(
+                    "SELECT o.part_id FROM ops_namespace_owner o JOIN ops_namespace n ON n.id = o.namespace_id WHERE n.name = $1 ORDER BY 1", P + "ns")]
+                mirror = await c.fetchval("SELECT owner_part_id FROM ops_namespace WHERE name = $1", P + "ns")
+            chk("  → 담당 표 2줄 + 옛 칸 거울 = 가장 작은 id", (len(ns_owners), mirror), (2, min(ns_owners)))
             r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns", "없는영역__"]}, headers=A)
             async with get_conn() as c:
-                owned = await c.fetchval("SELECT count(*) FROM ops_namespace WHERE owner_part_id = $1", p2)
+                owned = await c.fetchval("SELECT count(*) FROM ops_namespace_owner WHERE part_id = $1", p2)
             chk("없는 영역 섞이면 400 + 그대로(2개)", (r.status_code, owned), (400, 2))
             r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": [P + "ns"]}, headers=A)
             chk("하나 빼기 → 그 영역은 관리자만", (await edit_probe(h, P + "ns2", U2)).status_code, 403)
+            r = await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": []}, headers=A)
+            chk("파트2 전부 빼기 → 파트2는 ns 못 고침", (await edit_probe(h, P + "ns", U2)).status_code, 403)
+            chk("  → 파트1은 그대로 담당", (await edit_probe(h, P + "ns", U1)).status_code, 200)
+
+            # 업무 컬렉션 수정 창: 담당 목록 통째 교체(owner_part_ids)
+            async with get_conn() as c:
+                p1_id = await c.fetchval("SELECT id FROM ops_part WHERE name = $1", P + "p1")
+            r = await h.patch(f"/api/namespaces/{P}ns/settings", json={"owner_part_ids": [p1_id, p2]}, headers=A)
+            chk("담당 2개로 교체", (r.status_code, sorted(x["id"] for x in r.json().get("owner_parts", []))), (200, sorted([p1_id, p2])))
+            chk("  → 두 파트 모두 수정", ((await edit_probe(h, P + "ns", U1)).status_code, (await edit_probe(h, P + "ns", U2)).status_code), (200, 200))
+            r = await h.patch(f"/api/namespaces/{P}ns/settings", json={"owner_part_ids": [p2, 2 ** 30]}, headers=A)
+            chk("없는 파트 섞이면 400", r.status_code, 400)
+            r = await h.get("/api/namespaces/detail", headers=A)
+            row = next(x for x in r.json() if x["name"] == P + "ns")
+            chk("  → 목록 owner_parts 그대로 2개", len(row["owner_parts"]), 2)
+            r = await h.patch(f"/api/namespaces/{P}ns/settings", json={"owner_part_ids": [p1_id]}, headers=A)
+            chk("파트1만 남기기 → 파트2 못 고침", (await edit_probe(h, P + "ns", U2)).status_code, 403)
             chk("일반 사용자는 담당 저장 불가", (await h.put(f"/api/auth/parts/{p2}/domains", json={"domains": []}, headers=U2)).status_code, 403)
             r = await h.get("/api/auth/parts")
             chk("가입용 공개 목록엔 담당 영역 없음", all(not x.get("domains") for x in r.json()), True)
@@ -126,6 +150,11 @@ async def main() -> int:
                                                 + (SELECT count(*) FROM ops_part WHERE name LIKE $1)
                                                 + (SELECT count(*) FROM ops_user WHERE username LIKE $1)""", P + "%")
             print("정리 후 남은 시나리오 데이터:", left)
+    # 불변식(#82 과도기, 리뷰 10/22): 옛 칸 owner_part_id = 담당 표의 가장 작은 part_id — 어긋나면 다음 기동 복사가 지운 담당을 되살리던 구조
+    async with get_conn() as c:
+        mismatch = await c.fetchval("""SELECT count(*) FROM ops_namespace n WHERE n.owner_part_id IS DISTINCT FROM
+                                       (SELECT min(part_id) FROM ops_namespace_owner o WHERE o.namespace_id = n.id)""")
+    chk("옛 칸 거울 = 담당 표(전체 영역)", mismatch, 0)
     print("결과:", "통과" if all(results) else "실패", f"{sum(results)}/{len(results)}")
     return 0 if all(results) else 1
 

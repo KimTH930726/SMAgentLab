@@ -19,8 +19,10 @@ check_namespace_ownership = dep.check_namespace_ownership
 
 
 def _db(owner_part_id):
+    """실효 담당 파트 줄(담당 N개, #82) — None = 담당 없음, int = 그 파트 하나, 목록 = 여럿."""
+    owners = [] if owner_part_id is None else [owner_part_id] if isinstance(owner_part_id, int) else owner_part_id
     conn = AsyncMock()
-    conn.fetchval.return_value = owner_part_id
+    conn.fetch.return_value = [{"part_id": o} for o in owners]
 
     @asynccontextmanager
     async def get_conn():
@@ -41,6 +43,8 @@ def _user(role="user", part_id=7):
     (7, _user(role="viewer"), False),                # 조회 전용
     (None, _user(role="admin", part_id=None), True),  # 관리자(소속 없음)
     (8, _user(role="admin", part_id=None), True),
+    ([8, 7], _user(), True),                         # 담당 N개 — 어느 담당 파트든
+    ([8, 9], _user(), False),
 ])
 async def test_domain_edit_rule(owner, user, allowed):
     with _db(owner):
@@ -58,7 +62,8 @@ async def test_domain_edit_rule(owner, user, allowed):
 ])
 def test_bulk_paths_share_the_same_rule(owner, user, allowed):
     """여러 영역을 한 번에 검사하는 경로(질의 기록 일괄 삭제)도 같은 함수 — 예전 인라인 사본은 담당 없는 영역·조회 전용을 통과시켰다(리뷰 M1)."""
-    assert (dep.edit_denied_reason(owner, user) is None) == allowed
+    owners = [] if owner is None else [owner]
+    assert (dep.edit_denied_reason(owners, user) is None) == allowed
 
 
 @pytest.mark.asyncio
@@ -67,6 +72,7 @@ def test_bulk_paths_share_the_same_rule(owner, user, allowed):
     (7, _user(), True), (8, _user(), False),
     (None, _user(role="viewer"), False),
     (8, _user(role="admin", part_id=None), True),
+    ([8, 7], _user(), True), ([8, 9], _user(), False),
 ])
 async def test_read_rule_is_separate_from_edit(owner, user, allowed):
     with _db(owner):

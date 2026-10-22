@@ -110,6 +110,11 @@ async def main() -> None:
     args = ap.parse_args()
     from core.database import get_conn, init_pool
     await init_pool()
+    # 담당 파트 N개(#82, 10/22) 뒤로는 실행 금지 — 이 스크립트는 옛 칸 owner_part_id만 읽고 써서 담당 표(ops_namespace_owner)와 어긋나고,
+    # 쓰는 파트 검사가 거울(가장 작은 id)만 세어 공동 담당을 놓친다(리뷰 10/22). 다시 쓸 일이 생기면 담당 표 기준으로 고친 뒤에.
+    async with get_conn() as _c:
+        if await _c.fetchval("SELECT to_regclass('ops_namespace_owner') IS NOT NULL"):
+            raise SystemExit("중단: 담당 파트 N개(#82) 이후엔 이 1회성 스크립트를 쓰지 않습니다 — 담당 표 기준으로 고친 뒤 실행하세요.")
     async with get_conn() as conn:
         tables = await ns_tables(conn)
         if args.rollback:
