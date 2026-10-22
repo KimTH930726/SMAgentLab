@@ -6,19 +6,19 @@ import { useNamespaceAccess } from '../../../utils/useNamespaceAccess';
 import { Badge } from '../../ui/Badge';
 import { PolicyDetailModal } from './PolicyDetailModal';
 
-/** 정책 목록 — 문서 순서 그대로, 첫 단계 절(category_path[0])로 접었다 펼친다. 검색 중엔 모두 펼침. */
+/** 정책 목록 — 문서 순서 그대로, 첫 단계 절(category_path[0])로 접었다 펼친다. 처음엔 모두 펼침(10/22 사용자), 검색 중엔 접은 것도 펼침. */
 export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: number) => void }) {
   const { selectedNs } = useNamespaceAccess();
   const [text, setText] = useState('');
   const [q, setQ] = useState('');
-  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());   // 사람이 접은 절만 기억
   const [current, setCurrent] = useState<number | null>(null);   // 상세를 연 정책 logical_id
 
   useEffect(() => {   // 입력이 멈추면 검색(타자마다 요청하지 않게)
     const t = setTimeout(() => setQ(text.trim()), 300);
     return () => clearTimeout(t);
   }, [text]);
-  useEffect(() => { setCurrent(null); setOpen(new Set()); }, [selectedNs]);
+  useEffect(() => { setCurrent(null); setCollapsed(new Set()); }, [selectedNs]);
 
   const { data: rows = [], isLoading, error } = useQuery({
     queryKey: ['policies', selectedNs, q],
@@ -38,7 +38,7 @@ export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: num
   }, [rows]);
   const order = useMemo(() => rows.map((r) => r.logical_id), [rows]);
   const searching = q.length > 0;
-  const toggle = (g: string) => setOpen((s) => { const n = new Set(s); if (n.has(g)) n.delete(g); else n.add(g); return n; });
+  const toggle = (g: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(g)) n.delete(g); else n.add(g); return n; });
   const pendingCount = rows.filter((r) => r.open_correction_id).length;
 
   if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 영역을 고르세요.</p>;
@@ -69,7 +69,7 @@ export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: num
       ) : (
         <div className="space-y-2">
           {groups.map(([g, items]) => {
-            const expanded = searching || open.has(g);
+            const expanded = searching || !collapsed.has(g);
             const groupPending = items.filter((r) => r.open_correction_id).length;
             return (
               <div key={g} className="rounded-lg border border-slate-700">

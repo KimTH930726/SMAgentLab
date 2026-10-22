@@ -4,7 +4,7 @@
 > 기록용이라 지금 구조와 다른 서술이 섞여 있을 수 있다. 현재 구조는 `architecture.md` 본문이 기준.
 
 - v2.124: **정책서 표준 JSON 입력 + 정책서 올리기 화면.** 사내 문서 보안(DRM)으로 서버가 엑셀을 못 여는 경우가 있어, 사람이
-  쓰는 원본은 엑셀 그대로 두고 올릴 때 표준 JSON(`docs/tech/policy-json-format.md`)으로 바꾼다. MD는 표 병합·줄바꿈 본문이 깨지고
+  쓰는 원본은 엑셀 그대로 두고 올릴 때 표준 JSON(`docs/archive/policy-json-format.md`)으로 바꾼다. MD는 표 병합·줄바꿈 본문이 깨지고
   지식 문서 경로로 가 정책 구조를 잃어서(정책 경로 hit@10 87.6% vs 지식 경로 82.0%) 택하지 않음. `POST /api/policy/import`가 `.json`
   도 받음(엄격 검증 — 모르는 필드·누락은 위치와 함께 전체 거부, `source_name`을 출처 파일명으로). 변환기
   `scripts/excel_to_policy_json.py`는 서버와 같은 파서(`excel_parser.parse_sheet_rows`로 분리)를 쓰고, 파일을 못 열면 Excel 프로그램
