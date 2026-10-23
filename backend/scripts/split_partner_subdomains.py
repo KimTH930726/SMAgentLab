@@ -80,6 +80,8 @@ async def main() -> None:
     args = ap.parse_args()
     from core.database import get_conn, init_pool
     await init_pool()
+    # 10/22 하위 컬렉션 없음 결정(collection-design §15)으로 취소 + 10/23 업무구분 칸 삭제(#84) — 이 스크립트가 기준으로 쓰던 칸이 없다
+    raise SystemExit("중단: 하위 컬렉션 분리는 취소됐고(10/22) 기준 칸 rag_knowledge.category도 삭제됐습니다(#84).")
     async with get_conn() as conn:
         parent = await conn.fetchrow("SELECT id FROM ops_namespace WHERE name = $1", PARENT)
         if parent is None:

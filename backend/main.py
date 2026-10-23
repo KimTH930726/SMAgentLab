@@ -283,7 +283,8 @@ async def _migrate_core_tables(conn) -> None:
 async def _migrate_namespace_ids(conn) -> None:
     """namespace_id 컬럼 추가 및 FK 제약 조건 마이그레이션 (모든 관련 테이블)."""
     # ── namespace_id 컬럼 추가 및 데이터 채우기 ────────────────────
-    for tbl in ("rag_glossary", "rag_knowledge", "rag_knowledge_category",
+    # rag_knowledge_category는 10/23 삭제(#84) — 목록에 남기면 표가 없는 두 번째 기동부터 ALTER가 깨진다
+    for tbl in ("rag_glossary", "rag_knowledge",
                 "ops_query_log", "ops_conversation"):
         await conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS namespace_id INT")
         # string namespace → namespace_id 동기화 (namespace 컬럼이 있는 경우)
@@ -299,7 +300,6 @@ async def _migrate_namespace_ids(conn) -> None:
     fk_map = {
         "rag_glossary": "fk_glossary_namespace_id",
         "rag_knowledge": "fk_knowledge_namespace_id",
-        "rag_knowledge_category": "fk_knowledge_cat_namespace_id",
         "ops_query_log": "fk_query_log_namespace_id",
         "ops_conversation": "fk_conversation_namespace_id",
     }
@@ -1187,7 +1187,7 @@ async def _migrate_review_flags_to_ledger(conn) -> None:
             SELECT DISTINCT ON (f.knowledge_id)
                    'search_noise', 'review_flag_migrated', f.namespace_id, 'knowledge', f.knowledge_id,
                    '평가 게이트에서 ''이상해요''로 표시(리뷰 신호에서 이관)',
-                   jsonb_build_object('content', k.content, 'category', k.category,
+                   jsonb_build_object('content', k.content,   -- category는 10/23 칸 삭제(#84)로 뺌 — 매 기동 도는 쿼리라 남기면 깨진다
                                       'heading_path', to_jsonb(COALESCE(k.heading_path, ARRAY[]::text[]))),
                    f.flagged_at
             FROM rag_knowledge_review_flag f JOIN rag_knowledge k ON k.id = f.knowledge_id
@@ -1406,6 +1406,24 @@ async def _migrate_voc_signature_prompt(conn) -> None:
     try:
         from service.prompt.loader import invalidate_cache
         invalidate_cache("email_voc_analysis_prompt")
+    except Exception:
+        logger.warning("프롬프트 캐시 비우기 실패 — 재시작 뒤 반영", exc_info=True)
+
+
+async def _migrate_drop_knowledge_category(conn) -> None:
+    """업무구분 칸·표·프롬프트 삭제 (2026-10-23, #84, C6 — 사용자 승인 10/23). 멱등(IF EXISTS).
+    v2.158에서 코드·화면이 다 끊겨 읽는 곳 0. 백업: rag_knowledge_category_value_backup_20261023(763행)·rag_knowledge_category_backup_20261023(9행)·
+    ops_prompt_category_suggest_backup_20261023(1행) + DB 덤프 SMAgentLab_backups/opsdb-before-c6-category-drop-20261023-0925.dump."""
+    r1 = await conn.execute("DELETE FROM ops_prompt WHERE func_key = 'category_suggest'")
+    had_table = await conn.fetchval("SELECT to_regclass('rag_knowledge_category') IS NOT NULL")
+    had_col = await _column_exists(conn, "rag_knowledge", "category")
+    await conn.execute("DROP TABLE IF EXISTS rag_knowledge_category")
+    await conn.execute("ALTER TABLE rag_knowledge DROP COLUMN IF EXISTS category")
+    if r1 != "DELETE 0" or had_table or had_col:
+        logger.info("[migrate #84] 업무구분 삭제 — 프롬프트 %s · 표 %s · 칸 %s", r1, had_table, had_col)
+    try:
+        from service.prompt.loader import invalidate_cache
+        invalidate_cache("category_suggest")
     except Exception:
         logger.warning("프롬프트 캐시 비우기 실패 — 재시작 뒤 반영", exc_info=True)
 
@@ -1719,6 +1737,8 @@ async def _migrate_rename_unsorted_category(conn) -> None:
     done_key = "migration_72_unsorted_rename"
     if await conn.fetchval("SELECT 1 FROM ops_system_config WHERE key = $1", done_key):
         return
+    if not await _column_exists(conn, "rag_knowledge", "category"):   # 10/23 #84로 칸·표 삭제 뒤엔 할 일 없음
+        return
     async with conn.transaction():
         await conn.execute("""
             UPDATE rag_knowledge SET category = '분류 확인 필요' WHERE category = '미분류'""")
@@ -2001,6 +2021,7 @@ async def _run_migrations() -> None:
         await _migrate_policy_v0_revisions(conn)
         await _migrate_namespace_owners(conn)
         await _migrate_org_collections(conn)
+        await _migrate_drop_knowledge_category(conn)   # #84 — 옛 칸·표를 쓰는 마이그레이션들(#60·#72 등)보다 뒤
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

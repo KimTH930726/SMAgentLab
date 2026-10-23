@@ -46,7 +46,6 @@ logger = logging.getLogger(__name__)
 
 _GOLDEN_SET_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "golden_set" / "online_delivus_v1.jsonl"
 _TRACK_A_NAMESPACE = "TrackA_정책비교_테스트 DB"
-_TRACK_A_CATEGORY = "정책서-TrackA-테스트"
 # 골든셋 source.file이 이 중 어느 팀 파일 이름을 포함하는지로 실제 네임스페이스를 판별한다
 # (§4-1 스펙상 source.file은 재구성 워크북 이름). 새 시스템 정책서가 골든셋에 추가되면
 # 여기 목록도 같이 늘려야 매칭된다 — 하드코딩이지만 지금 골든셋 소스가 이 2개뿐이라 YAGNI.
@@ -199,9 +198,10 @@ async def _setup_track_a(conn, ns_id_a: int) -> dict[int, int]:
         content = f"[{r['policy_name']}] ({' / '.join(r['category_path'] or [])})\n{r['raw_body']}"
         embedding = await embedding_service.embed(content)
         kid = await conn.fetchval(
-            """INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight, category, status)
-               VALUES ($1, $2, $3::vector, 1.0, $4, 'active') RETURNING id""",
-            ns_id_a, content, str(embedding), _TRACK_A_CATEGORY,
+            # 업무구분 칸은 #84(10/23)에 삭제 — 넣으면 UndefinedColumn
+            """INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight, status)
+               VALUES ($1, $2, $3::vector, 1.0, 'active') RETURNING id""",
+            ns_id_a, content, str(embedding),
         )
         id_map[kid] = r["id"]
     return id_map

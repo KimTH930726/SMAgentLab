@@ -41,10 +41,12 @@ async def counts(conn, tables, ids) -> dict:
 
 async def merge(conn, src: int, dst: int, tables: list[str]) -> dict:
     report = {}
-    # 업무구분 같은 이름: 옮길 쪽을 지운다(지식은 category 이름으로 가리켜 그대로 맞는다)
-    report["카테고리 병합(같은 이름)"] = int((await conn.execute("""
-        DELETE FROM rag_knowledge_category s USING rag_knowledge_category d
-        WHERE s.namespace_id = $1 AND d.namespace_id = $2 AND s.name = d.name""", src, dst)).split()[-1])
+    # 업무구분 같은 이름: 옮길 쪽을 지운다(지식은 category 이름으로 가리켜 그대로 맞는다). 표는 #84(10/23)에 지워져 없으면 건너뜀
+    report["카테고리 병합(같은 이름)"] = 0
+    if await conn.fetchval("SELECT to_regclass('rag_knowledge_category') IS NOT NULL"):
+        report["카테고리 병합(같은 이름)"] = int((await conn.execute("""
+            DELETE FROM rag_knowledge_category s USING rag_knowledge_category d
+            WHERE s.namespace_id = $1 AND d.namespace_id = $2 AND s.name = d.name""", src, dst)).split()[-1])
     for t, key in (("ops_voc_routing", "mailbox_upn"), ("ops_email_analysis", "source_message_id")):
         dup = await conn.fetchval(f"""SELECT count(*) FROM {t} s JOIN {t} d ON d.namespace_id = $2 AND d.{key} = s.{key}
                                        WHERE s.namespace_id = $1""", src, dst)

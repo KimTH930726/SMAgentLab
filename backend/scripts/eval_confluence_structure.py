@@ -52,16 +52,16 @@ async def make_ctx_embedding_copy(conn, ns_name: str) -> tuple[str, dict[int, in
     await conn.execute("DELETE FROM ops_namespace WHERE name=$1", tmp_name)
     tmp_id = await conn.fetchval(
         "INSERT INTO ops_namespace (name, description, kind) VALUES ($1, 'eval_confluence_structure 임시', 'policy_test') RETURNING id", tmp_name)
-    rows = await conn.fetch("""SELECT id, content, base_weight, category, heading_path, source_type, embedding_model
+    rows = await conn.fetch("""SELECT id, content, base_weight, heading_path, source_type, embedding_model
                                FROM rag_knowledge WHERE namespace_id=$1 AND status='active'""", src_id)
     vecs = await embedding_service.embed_batch([b_embed_text(r["heading_path"], r["content"]) for r in rows])
     id_map = {}
     for r, v in zip(rows, vecs):
         new_id = await conn.fetchval("""
-            INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight, category, heading_path,
+            INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight, heading_path,
                                        source_type, embedding_model, status)
-            VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, 'active') RETURNING id""",
-            tmp_id, r["content"], str(v), r["base_weight"], r["category"], r["heading_path"],
+            VALUES ($1, $2, $3::vector, $4, $5, $6, $7, 'active') RETURNING id""",   # category 칸은 10/23 삭제(#84)
+            tmp_id, r["content"], str(v), r["base_weight"], r["heading_path"],
             r["source_type"], r["embedding_model"])
         id_map[new_id] = r["id"]
     return tmp_name, id_map

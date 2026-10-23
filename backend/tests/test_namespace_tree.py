@@ -63,9 +63,8 @@ CREATE TABLE ops_namespace_owner (
     PRIMARY KEY (namespace_id, part_id));
 CREATE TABLE ops_link (id INTEGER PRIMARY KEY, relation TEXT, status TEXT, from_type TEXT, from_key TEXT, to_type TEXT, to_key TEXT);
 CREATE TABLE ops_query_log (id INTEGER PRIMARY KEY, namespace_id INTEGER REFERENCES ops_namespace(id) ON DELETE CASCADE);
-CREATE TABLE rag_knowledge (id INTEGER PRIMARY KEY, namespace_id INTEGER, status TEXT, content TEXT, category TEXT, heading_path TEXT);
+CREATE TABLE rag_knowledge (id INTEGER PRIMARY KEY, namespace_id INTEGER, status TEXT, content TEXT, heading_path TEXT);
 CREATE TABLE rag_glossary (id INTEGER PRIMARY KEY, namespace_id INTEGER);
-CREATE TABLE rag_knowledge_category (id INTEGER PRIMARY KEY, namespace_id INTEGER);
 CREATE TABLE policy_item (id INTEGER PRIMARY KEY, namespace_id INTEGER, status TEXT, pipeline_version TEXT,
     policy_name TEXT, category_path TEXT, raw_body TEXT, remark TEXT);
 CREATE TABLE policy_chunk (id INTEGER PRIMARY KEY, policy_item_id INTEGER, chunk_text TEXT, chunk_idx INTEGER DEFAULT 0);

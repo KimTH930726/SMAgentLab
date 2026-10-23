@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.160)
+# OpsLens 시스템 아키텍처 (v2.161)
 
 ## 개요
 
@@ -12,6 +12,9 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.161 (2026-10-23, dev_0): **업무구분 칸·표 삭제(C6, 마이그레이션 #84).** 설계 `docs/tech/category-removal-design.md`. `ops_prompt(category_suggest)` 줄 삭제 · `DROP TABLE rag_knowledge_category` · `ALTER TABLE rag_knowledge DROP COLUMN category`(모두 IF EXISTS — 새 설치는 init이 만들고 #84가 지움).
+  매 기동 도는 앞 마이그레이션도 맞춤: #60 스냅샷에서 category 뺌 · 영역 id 이관 표 목록에서 `rag_knowledge_category` 뺌 · #72는 칸이 없으면 건너뜀. 백업: 표 `*_backup_20261023` 3개 + 전체 덤프(10/23).
+  검증: 복사본 DB 두 번 기동 통과 · 검색 게이트 질문별 동일(106·441) · 시나리오 4종 · E2E.
 - v2.160 (2026-10-22, dev_0): **조직 컬렉션 — 팀 공통 · 파트(지식 문서·용어만) + 고르는 창 [업무 | 조직] 탭.** 설계 `docs/tech/collection-design.md` §2·§15-13, `org-space-design.md` §3.
   스키마(#83): `ops_namespace.owner_team_id`(팀 공통의 팀) + `kind='org_space'`, 이름 = id 키(`org:team:<id>` · `org:part:<id>`, 팀·파트 이름은 데이터에 안 넣고 화면 이름은 조회 때),
   CHECK `ops_namespace_org_shape`(org: 접두사 ⇔ 조직 · 팀 칸은 조직만 · 상위 없음) + 담당 표 트리거(팀 공통엔 담당 줄 금지, 파트 컬렉션엔 그 파트 한 줄만). 팀·파트마다 하나씩 채움(멱등).
