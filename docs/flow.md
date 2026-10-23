@@ -534,7 +534,7 @@ LLM에 전달되는 messages:
 ① 미리보기(대량·파일·URL) — 원문 초안은 지금 보는 컬렉션에 저장(담당일 때만)
 ② 넣을 곳 카드(LocationPicker) → POST /api/knowledge/locate
      LLM(업무 전부 + 내 팀 조직 후보, 대표 용어) × 가장 비슷한 사용 중 지식 5건의 컬렉션
-     확신 = 둘 일치(5중 4) → 제안만 보여 줌 / 아니면 "어디 지식인가요?" 버튼 + [잘 모르겠어요] + 다른 곳…
+     확신 = 둘 일치(5중 4) → 제안만 보여 줌 / 아니면 "어디 지식인가요?" 버튼 + 다른 곳…(보는 컬렉션 고르기와 같은 창)
      ?into= 있으면 그곳 고정, AI는 검사만(두 신호가 다른 곳으로 확신할 때만 "옮길까요?")
      → AI 판단 원장 한 줄(ops_ai_decision, kind knowledge_location) · decision_id
 ③ 등록 POST /api/knowledge(직접 입력) · /api/knowledge/bulk(묶음) { namespace=고른 곳, decision_id, location_choice }

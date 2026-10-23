@@ -15,11 +15,17 @@ export async function goAdmin(page: Page, group: string, item: string) {
 /** 보는 컬렉션 칩(사이드바, 채팅·관리 화면 공통) — 10/22부터 select가 아니라 버튼 + 고르는 창 */
 export const domainSelect = (page: Page) => page.locator('#sidebar-domain');
 
-/** 지식 등록 — 넣을 곳 카드에서 컬렉션을 직접 고른다(E2). AI 제안에 맡기면 테스트 문장마다 결과가 달라 "다른 곳…"으로 고정 */
+/** 지식 등록 — 넣을 곳 카드에서 컬렉션을 직접 고른다(E2). AI 제안에 맡기면 테스트 문장마다 결과가 달라 "다른 곳…"으로 고정.
+ *  [다른 곳…] = 보는 컬렉션 고르기와 같은 창(10/23 A안) — 업무 탭에서 그 이름 카드를 누른다 */
 export async function chooseLocation(page: Page, namespace: string) {
-  const select = page.getByRole('combobox', { name: '다른 곳에 넣기' });
-  await select.waitFor({ timeout: 60_000 });   // 판정(로컬 LLM) 대기
-  await select.selectOption(namespace);
+  const other = page.getByRole('button', { name: '다른 곳…' });
+  await other.waitFor({ timeout: 60_000 });   // 판정(로컬 LLM) 대기
+  await other.click();
+  // 창은 지금 고른 곳(AI 제안)이 조직이면 조직 탭으로 열린다 — 업무 탭부터 누르고, 이름이 정확히 같은 카드만(재리뷰 F1)
+  await page.locator('#picker-tab-business').click();
+  const esc = namespace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  await page.locator('#picker-panel-business').getByRole('button', { name: new RegExp(`^${esc}(\\s|·|$)`) }).first().click();
+  await page.locator('#picker-panel-business').waitFor({ state: 'detached' });
 }
 
 /** 주소로 바로 들어가기 — 새로고침이면 에이전트 선택 화면이 먼저 나와 "선택하기"를 누른다(10/23, 메뉴 바로잡기 확인용) */

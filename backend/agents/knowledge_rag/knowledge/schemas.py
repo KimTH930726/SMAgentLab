@@ -13,7 +13,7 @@ class KnowledgeCreate(BaseModel):
     content: str
     # E2(10/23) 위치 판정 원장 줄(POST /locate가 준 id)과 고른 방법 — 있으면 등록 뒤 같은 줄에 확정(다른 곳을 고르면 AI 오답 신호)
     decision_id: Optional[int] = None
-    location_choice: Optional[str] = None   # accept | option | other | unsure | preset
+    location_choice: Optional[str] = None   # accept | option | other | preset
     # 업무구분(category) 입력은 10/22 업무구분 폐지로 제거 — 옛 화면이 보내도 무시된다
 
 

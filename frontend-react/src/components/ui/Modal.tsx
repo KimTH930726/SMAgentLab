@@ -1,6 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 let _openCount = 0;
+// 열린 모달 차례(맨 위가 끝) — Esc는 맨 위 하나만 닫는다(10/23 리뷰 F3: 청크 검토 위 "다른 곳…" 창에서 Esc를 누르면 둘 다 닫혔다)
+const _stack: number[] = [];
+let _seq = 0;
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
@@ -24,10 +27,19 @@ export function Modal({
   maxWidth = 'max-w-md',
   zClass = 'z-50',
 }: ModalProps) {
-  // Close on Escape key
+  const idRef = useRef(0);
+  useEffect(() => {
+    if (!isOpen) return;
+    const id = ++_seq;
+    idRef.current = id;
+    _stack.push(id);
+    return () => { const i = _stack.lastIndexOf(id); if (i >= 0) _stack.splice(i, 1); };
+  }, [isOpen]);
+
+  // Close on Escape key — 맨 위 모달만
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) onClose();
+      if (e.key === 'Escape' && isOpen && _stack[_stack.length - 1] === idRef.current) onClose();
     };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);

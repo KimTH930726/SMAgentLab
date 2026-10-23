@@ -89,7 +89,7 @@ async def locate_knowledge(body: _LocateBody, user: dict = Depends(get_current_u
     return await locate_for_user(text, user, preset_namespace=body.preset_namespace)
 
 
-_LOCATION_CHOICES = {"accept", "option", "other", "unsure", "preset"}
+_LOCATION_CHOICES = {"accept", "option", "other", "preset"}   # "잘 모르겠어요"(unsure)는 10/23 뺐다 — 옛 값이 와도 accept로
 SUGGEST_MAX_ITEMS = 200   # 담당이 아닌 곳에 한 번에 올릴 수 있는 조각 수(리뷰 L1) — 컨플루언스 일괄 미리보기 상한과 같은 수
 
 

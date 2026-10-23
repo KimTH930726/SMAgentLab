@@ -98,8 +98,9 @@ export interface KnowledgeCreatePayload {
   location_choice?: LocationChoice | null;
 }
 
-/** 넣을 곳을 어떻게 정했나(E2) — accept: AI 제안 그대로 · option: 다른 선택지 · other: 목록에서 직접 · unsure: 잘 모르겠어요 · preset: 컬렉션 화면에서 넘어옴 */
-export type LocationChoice = 'accept' | 'option' | 'other' | 'unsure' | 'preset';
+/** 넣을 곳을 어떻게 정했나(E2) — accept: AI 제안 그대로 · option: 다른 선택지 · other: 창에서 직접 · preset: 컬렉션 화면에서 넘어옴
+ *  ("잘 모르겠어요"는 10/23 뺐다 — AI가 추천하고 사람이 고른다) */
+export type LocationChoice = 'accept' | 'option' | 'other' | 'preset';
 
 /** 위치 판정 결과의 컬렉션 한 칸 */
 export interface LocateCollection {

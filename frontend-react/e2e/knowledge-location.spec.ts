@@ -40,3 +40,25 @@ test('[지식 등록 →]으로 오면 넣을 곳 = 그 컬렉션 · 등록하�
     psql(`DELETE FROM ops_ai_decision WHERE id = ${Number(sent.decision_id)}`);
   }
 });
+
+test('청크 검토 위 [다른 곳…] 창 — Esc는 맨 위 창만 닫는다(청크 검토는 그대로) · 창은 "어디에 넣을까요?"', async ({ page }) => {
+  await loginAdmin(page);
+  await goAdmin(page, '지식', '지식 문서');
+  await page.getByRole('button', { name: '지식 등록', exact: true }).click();
+  await page.getByText('대량 텍스트', { exact: true }).first().click();
+  await page.locator('textarea:visible').first().fill(`# E2E창겹침_${Date.now()}\n\n가상의 절차 설명 첫 단락입니다.\n\n## 둘째\n\n가상의 절차 설명 둘째 단락입니다.`);
+  await page.getByRole('button', { name: '청크 검토 & 등록' }).click();
+  const other = page.getByRole('button', { name: '다른 곳…' });
+  await other.waitFor({ timeout: 60_000 });
+  await expect(page.getByTestId('location-reasons')).toContainText('비슷한 지식');   // 추천 이유가 보인다
+  await other.click();
+  await expect(page.getByText('어디에 넣을까요?')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByText('어디에 넣을까요?')).toHaveCount(0);
+  await expect(page.getByText(/^청크 검토 — /)).toBeVisible();   // 아래 창은 그대로
+  await page.keyboard.press('Escape');
+  await expect(page.getByText(/^청크 검토 — /)).toHaveCount(0);
+  // 이 시험이 남긴 확정 전 판정 줄만(관리자 계정·방금) — 다른 사람 줄은 건드리지 않는다
+  psql(`DELETE FROM ops_ai_decision WHERE kind = 'knowledge_location' AND final_value IS NULL AND created_at > now() - interval '5 minutes'
+        AND created_by_user_id = (SELECT id FROM ops_user WHERE username = 'admin')`);
+});

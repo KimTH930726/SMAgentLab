@@ -58,7 +58,10 @@ async def locate_for_user(text: str, user: dict, *, preset_namespace: Optional[s
             confident=r.confident,
             signals={"neighbors": r.neighbors, "vote": [r.vote_top, r.vote_n, locator.NEIGHBOR_K], "preset_id": r.preset_id,
                      "proposed_id": r.proposed_id, "ask": r.ask, "suggest_move": r.suggest_move, "fallback": r.fallback,
-                     "llm_fail": r.llm_fail, "preset_missing": preset_missing, "text_len": len(text)},
+                     "llm_fail": r.llm_fail, "preset_missing": preset_missing, "text_len": len(text),
+                     # AI 이유 한 문장(300자 이하, AI가 쓴 요약 — 원문 아님): 사람이 다른 곳을 골랐을 때 "무엇을 보고 그렇게 판단했나"를
+                     # 자체 개선 리포트가 묶어 본다(10/23 사용자 "추천 이유를 자체 개선에 활용")
+                     "reason": r.reason},
             user_id=user.get("id"), model=model_tag, prompt_version=locator.PROMPT_VERSION)
 
     def card(ns_id: Optional[int]) -> Optional[dict]:
