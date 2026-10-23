@@ -89,21 +89,74 @@ async def locate_knowledge(body: _LocateBody, user: dict = Depends(get_current_u
     return await locate_for_user(text, user, preset_namespace=body.preset_namespace)
 
 
+_LOCATION_CHOICES = {"accept", "option", "other", "unsure", "preset"}
+SUGGEST_MAX_ITEMS = 200   # 담당이 아닌 곳에 한 번에 올릴 수 있는 조각 수(리뷰 L1) — 컨플루언스 일괄 미리보기 상한과 같은 수
+
+
+async def _ingest_gate(namespace: str, user: dict, decision_id: Optional[int]) -> bool:
+    """등록 권한 — 담당이면 그대로(False). 담당이 아니어도 위치 판정(E2)을 거친 등록이면 그 담당의 승인 대기로(True = 제안).
+    판정 줄은 이 사람의 것이고 아직 확정 전이어야 한다(남의 판단 id·재사용으로 승인 대기를 남발하지 못하게). 조회 전용은 늘 403."""
+    try:
+        await check_namespace_ownership(namespace, user)
+        return False
+    except HTTPException:
+        if user["role"] == "viewer" or decision_id is None:
+            raise
+    from core.database import get_conn
+    async with get_conn() as conn:
+        ok = await conn.fetchval(
+            "SELECT 1 FROM ops_ai_decision WHERE id = $1 AND kind = 'knowledge_location' AND final_value IS NULL "
+            "AND created_by_user_id = $2", decision_id, user["id"])
+    if not ok:
+        raise HTTPException(status_code=403, detail="이 컬렉션의 담당 파트가 아닙니다 — 지식 등록 화면에서 넣을 곳을 다시 확인해 주세요.")
+    return True
+
+
+async def _finalize_location(decision_id: Optional[int], namespace: str, user: dict, choice: Optional[str], *,
+                             suggested: bool, target_type: str, target_ids: list[int]) -> None:
+    """등록이 성공한 뒤 위치 판정 줄을 확정 — 고른 곳 ≠ AI가 고른 곳이면 changed(오답 신호). 실패해도 등록은 그대로(로그)."""
+    if decision_id is None:
+        return
+    from core.database import get_conn, resolve_namespace_id
+    from service.decision import ledger
+    try:
+        async with get_conn() as conn:
+            ns_id = await resolve_namespace_id(conn, namespace)
+            ai = await conn.fetchval("SELECT ai_value->>'namespace_id' FROM ops_ai_decision WHERE id = $1", decision_id)
+            # AI가 아무 곳도 못 골랐으면(판단 실패·애매) "AI가 틀림"이 아니다 — 고른 곳과 비교할 값이 없다(리뷰 L4)
+            ok = await ledger.finalize(conn, decision_id, kind="knowledge_location",
+                                       final_value={"namespace_id": ns_id, "choice": choice if choice in _LOCATION_CHOICES else "accept",
+                                                    "suggested": suggested},
+                                       changed=ai is not None and str(ns_id) != ai, user_id=user["id"],
+                                       target_type=target_type, target_ids=target_ids)
+            if not ok:
+                logger.warning("위치 판정 원장 확정 안 됨(이미 확정·남의 줄) decision=%s user=%s", decision_id, user.get("id"))
+    except Exception:   # noqa: BLE001
+        logger.warning("위치 판정 원장 확정 실패(등록은 됨) decision=%s", decision_id, exc_info=True)
+
+
 @router.post("", response_model=KnowledgeOut, status_code=201)
 async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_user)):
-    await check_namespace_ownership(body.namespace, user)
+    suggested = await _ingest_gate(body.namespace, user, body.decision_id)
     row = await service.create_knowledge(
         namespace=body.namespace,
         content=body.content,
         created_by_user_id=user["id"],
+        force_pending=suggested,
     )
+    if body.decision_id is not None:
+        await _finalize_location(body.decision_id, body.namespace, user, body.location_choice, suggested=suggested,
+                                 target_type="knowledge", target_ids=[row["id"]])
     # 용어 자동 추출 복원(2026-09-24) — 미리보기+검토 2단계 흐름으로 전환되며 끊겼던
     # _run_auto_glossary()를 모든 등록 경로 공통으로 되살림. 사람이 체크박스를 켜야
     # 했던 예전 opt-in 방식 대신, 이 세션 내내 적용한 "사람 개입 최소화" 원칙대로
     # 항상 실행(실패해도 등록 자체는 막지 않음 — 함수 내부에 이미 try/except 있음).
     # 백그라운드로(2026-10-06) — 요청 안에서 LLM 응답을 기다리느라 지식 1건 등록이 89초 걸렸다(사내 LLM 지연 시
     # 실측, E2E 30초 초과). 등록 결과는 바로 돌려주고 용어는 잠시 뒤 추가된다(벌크 등록도 이미 비동기).
-    _spawn(_run_auto_glossary(body.namespace, body.content, user, max_chars=20000))
+    if not suggested:
+        # 제안(담당 아닌 곳)은 승인 전 — 담당 용어집에 바로 쓰지 않는다(리뷰 H1 10/23: 승인 대기 지식에서 뽑은 용어가 활성으로 들어갔다).
+        # 묶음은 같은 이유로 전부 승인 대기면 후속 추출을 건너뛴다(service pending_total)
+        _spawn(_run_auto_glossary(body.namespace, body.content, user, max_chars=20000))
     return row
 
 
@@ -298,14 +351,26 @@ async def vector_search_glossary(body: VectorSearchRequest, user: dict = Depends
 @router.post("/bulk", status_code=201)
 async def bulk_create(body: BulkCreateRequest, user: dict = Depends(get_current_user)):
     """JSON 배열로 지식 벌크 등록."""
-    await check_namespace_ownership(body.namespace, user)
+    suggested = await _ingest_gate(body.namespace, user, body.decision_id)
+    if suggested and len(body.items) > SUGGEST_MAX_ITEMS:
+        raise HTTPException(status_code=400, detail=f"담당이 아닌 컬렉션엔 한 번에 {SUGGEST_MAX_ITEMS}건까지 승인 요청할 수 있어요.")
+    if suggested:
+        # 담당이 아닌 곳에 넣는 제안 — 원문 원장·컨플루언스 페이지 연결을 뗀다. 남기면 승인 대기 묶음이 전환되는 순간
+        # "같은 원본 교체" 규칙이 담당의 기존 조각을 폐기한다(다시 분할도 담당 몫이 아님). 내용은 그대로 승인 대기로.
+        for item in body.items:
+            item.source_document_id = None
+            item.source_document_partial = False
+            item.confluence_page_id = None
+            item.confluence_version = None
+    else:
+        await _move_my_drafts(body.namespace, user, {i.source_document_id for i in body.items if i.source_document_id})
     # 용어 자동 추출 복원(2026-09-24) — 파일/URL 단발성 등록에만 있던 _run_auto_glossary()가
     # 미리보기+검토 2단계 흐름(파일/텍스트/컨플루언스 전부 이 엔드포인트로 확정)으로
     # 넘어오며 끊겨있던 것을 모든 벌크 등록 경로 공통으로 되살림 — 체크박스 없이 항상 실행.
     # job 성공 후에만 실행되고, 개수는 job 행(auto_glossary)에 기록된다(화면은 job 행을 읽음).
     combined_text = "\n".join(item.content for item in body.items)
     try:
-        return await service.bulk_create_knowledge(
+        result = await service.bulk_create_knowledge(
             namespace=body.namespace,
             items=[item.model_dump() for item in body.items],
             source_file=body.source_file,
@@ -313,10 +378,30 @@ async def bulk_create(body: BulkCreateRequest, user: dict = Depends(get_current_
             created_by_user_id=user["id"],
             after_activation=_glossary_after_activation(body.namespace, combined_text, user, max_chars=20000),
             confirm_replace=body.confirm_replace,
+            force_pending=suggested,
         )
+        if body.decision_id is not None:
+            await _finalize_location(body.decision_id, body.namespace, user, body.location_choice, suggested=suggested,
+                                     target_type="ingestion_job", target_ids=[result["job_id"]])
+        return result
     except service.ReplaceConfirmRequired as e:
         # 화면은 등록 전에 /bulk/replace-check로 먼저 묻는다 — 여기는 확인 없이 들어온 요청을 막는 두 번째 벽
         raise HTTPException(status_code=409, detail=str(e))
+
+
+async def _move_my_drafts(namespace: str, user: dict, doc_ids: set[int]) -> None:
+    """미리보기 때 다른 컬렉션(그때 보던 곳)에 저장된 내 원문 초안을 고른 곳으로 옮긴다(E2 — 넣을 곳은 미리보기 뒤에 정해진다).
+    내가 만든 확정 전 초안만 — 사용 중 원문·남의 초안은 건드리지 않는다(그런 id는 등록이 원래대로 "연결 안 함"으로 다룬다)."""
+    if not doc_ids:
+        return
+    from core.database import get_conn, resolve_namespace_id
+    async with get_conn() as conn:
+        ns_id = await resolve_namespace_id(conn, namespace)
+        if ns_id is None:
+            return
+        await conn.execute(
+            "UPDATE rag_source_document SET namespace_id = $1 WHERE id = ANY($2::int[]) AND status = 'draft' "
+            "AND created_by_user_id = $3 AND namespace_id <> $1", ns_id, sorted(doc_ids), user["id"])
 
 
 class _ReplaceCheckBody(BaseModel):
@@ -329,6 +414,8 @@ class _ReplaceCheckBody(BaseModel):
 async def bulk_replace_check(body: _ReplaceCheckBody, user: dict = Depends(get_current_user)):
     """등록 전 확인(A안 2026-10-12) — 이 등록이 교체할 같은 원본의 기존 조각에 사람이 손댄 흔적(고친·뺀 조각, 일부만 등록). needs_confirm이면 화면이 사유를 보여주고 확인받은 뒤 confirm_replace=true로 등록한다."""
     await check_namespace_ownership(body.namespace, user)
+    # 넣을 곳이 미리보기 때 보던 곳과 다르면(E2) 내 초안을 먼저 옮겨야 "같은 원본" 확인이 그 초안을 본다 — 등록(/bulk)과 같은 이동, 멱등
+    await _move_my_drafts(body.namespace, user, set(body.source_document_ids))
     from core.database import get_conn, resolve_namespace_id
     from agents.knowledge_rag.ingestion.source_ledger import replace_check
     async with get_conn() as conn:
@@ -448,10 +535,10 @@ async def _ledger_ns_id(namespace: Optional[str], user: dict) -> Optional[int]:
     if not namespace:
         return None
     from core.database import get_conn, resolve_namespace_id
-    try:
-        await check_namespace_ownership(namespace, user)
-    except HTTPException:
-        return None   # 조회 전용 사용자도 미리보기는 그대로(원장만 건너뜀 — 어차피 등록 권한이 없다, 리뷰 2026-10-08)
+    if user["role"] == "viewer":
+        return None   # 조회 전용은 미리보기만(원장 건너뜀 — 어차피 등록 못 한다, 리뷰 2026-10-08)
+    # E2(10/23): 지금 보는 곳의 담당이 아니어도 등록할 수 있다 — 초안은 보는 곳에 두고 등록 때 고른 곳(내가 담당이면)으로 옮긴다.
+    # 담당 아닌 곳에 넣는 제안이면 연결을 떼서 초안은 확정 전으로 남는다(검색·다시 분할에 안 쓰임)
     async with get_conn() as conn:
         return await resolve_namespace_id(conn, namespace)
 
@@ -896,7 +983,9 @@ def _enrich_heading_path(doc, in_page_heading_path: Optional[list[str]], page_ti
 @router.post("/import/url/bulk-pages/preview")
 async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_current_user)):
     """선택된 페이지들을 fetch + 청킹만 수행 (DB 등록 X). 청크 리뷰용."""
-    await check_namespace_ownership(body.namespace, user)
+    # E2: 넣을 곳은 등록 때 정한다 — 보는 곳의 담당이 아니어도 미리보기는 된다(조회 전용만 막음, 리뷰 M3)
+    if user["role"] == "viewer":
+        raise HTTPException(status_code=403, detail="조회 전용 계정은 지식을 등록할 수 없습니다.")
     if not body.pages:
         raise HTTPException(status_code=400, detail="선택된 페이지가 없습니다.")
     if len(body.pages) > 200:
@@ -989,7 +1078,15 @@ async def cancel_ingestion_job_endpoint(job_id: int, user: dict = Depends(get_cu
     ns = await service.get_ingestion_job_namespace(job_id)
     if ns is None:
         raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
-    await check_namespace_ownership(ns, user)
+    try:
+        await check_namespace_ownership(ns, user)
+    except HTTPException:
+        # 담당 아닌 곳에 넣은 제안(E2) — 올린 본인은 자기 작업을 멈출 수 있다(리뷰 M2)
+        from core.database import get_conn
+        async with get_conn() as conn:
+            mine = await conn.fetchval("SELECT created_by_user_id = $2 FROM rag_ingestion_job WHERE id = $1", job_id, user["id"])
+        if not mine or user["role"] == "viewer":
+            raise
 
     job = await service.cancel_ingestion_job(job_id)
     if job is None:

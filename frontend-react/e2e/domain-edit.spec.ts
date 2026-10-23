@@ -54,7 +54,8 @@ test('업무 컬렉션 — 이름만 수정(담당은 그대로) · [지식 등�
   // ③ [지식 등록 →] — 같은 컬렉션을 고르고 등록 탭으로(관리자 = 쓸 수 있음)
   await goAdmin(page, '컬렉션', '업무 컬렉션');
   await page.getByRole('row').filter({ hasText: NS2 }).getByRole('button', { name: '지식 등록 →' }).click();
-  await expect(page).toHaveURL(/\/admin\/k\.docs\?tab=ingest$/);
+  await expect(page).toHaveURL((u) => u.pathname === '/admin/k.docs' && u.searchParams.get('tab') === 'ingest'
+    && u.searchParams.get('into') === NS2);   // 넣을 곳이 그 컬렉션으로 정해진 채(E2)
   await expect.poll(() => selectedNs(page)).toBe(NS2);
   await expect(docsTab(page, '지식 등록')).toHaveClass(/border-indigo-500/);   // 주소만이 아니라 등록 탭이 실제로 열림(리뷰 L2)
 });

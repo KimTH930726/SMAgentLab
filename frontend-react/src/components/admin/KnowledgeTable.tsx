@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, X, FileText, Upload, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, Search } from 'lucide-react';
@@ -37,7 +37,8 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
-import type { KnowledgeItem, DuplicateMatch } from '../../types';
+import type { KnowledgeItem, DuplicateMatch, ChosenLocation } from '../../types';
+import { LocationPicker } from './LocationPicker';
 import { showAlert, showConfirm } from '../../store/useDialogStore';
 import { KnowledgeStructurePanel } from './KnowledgeStructurePanel';
 
@@ -98,12 +99,15 @@ type BulkItems = Parameters<typeof bulkCreateKnowledge>[1];
 
 // 같은 원본 다시 등록(A안 2026-10-12): 교체될 기존 조각에 사람이 손댄 흔적(고친·뺀 조각 등)이 있으면 사유를 보여주고 확인받는다.
 // 흔적이 없으면 묻지 않고 바로 교체. 취소하면 null(등록 안 함). 서버도 확인 없이 들어온 교체는 409로 막는다.
-async function bulkCreateConfirmed(namespace: string, items: BulkItems, sourceFile: string, sourceType: string) {
+async function bulkCreateConfirmed(namespace: string, items: BulkItems, sourceFile: string, sourceType: string,
+                                   loc?: ChosenLocation | null) {
+  // E2: 넣을 곳 카드에서 고른 곳으로. 담당이 아닌 곳(제안)은 서버가 원문·페이지 연결을 떼고 승인 대기로 — 교체 확인이 필요 없다
+  const target = loc?.namespace ?? namespace;
   const docIds = [...new Set(items.map(i => i.source_document_id).filter((x): x is number => !!x))];
   const pages = [...new Set(items.map(i => i.confluence_page_id).filter((x): x is string => !!x))];
   let confirmReplace = false;
-  if (docIds.length || pages.length) {
-    const c = await checkBulkReplace(namespace, docIds, pages);
+  if ((docIds.length || pages.length) && (!loc || loc.writable)) {
+    const c = await checkBulkReplace(target, docIds, pages);
     if (c.needs_confirm) {
       const why = [
         c.edited ? `· 내용을 고친 조각 ${c.edited}건` : '',
@@ -117,7 +121,8 @@ async function bulkCreateConfirmed(namespace: string, items: BulkItems, sourceFi
       confirmReplace = true;
     }
   }
-  const result = await bulkCreateKnowledge(namespace, items, sourceFile, sourceType, confirmReplace);
+  const result = await bulkCreateKnowledge(target, items, sourceFile, sourceType, confirmReplace,
+    loc ? { decisionId: loc.decisionId, choice: loc.choice } : null);
   if (result.unlinked_sources?.length) {
     void showAlert('미리보기 뒤에 원문이 바뀌어(다른 등록으로 교체 등) 이번 조각은 원문에 연결하지 않았습니다.\n'
       + '등록은 진행되지만 "다시 분할"은 쓸 수 없습니다 — 필요하면 다시 미리보기 후 등록하세요.', { title: '원문 연결 안 됨' });
@@ -137,7 +142,12 @@ export function KnowledgeTable() {
   useEffect(() => { setPage(1); setSelectedIds(new Set()); }, [selectedNs]);   // 체크 남으면 앞 영역 것이 일괄 삭제됐다(리뷰 M1)
 
   // ?tab=ingest — 컬렉션 › 조직의 [지식 등록 →]이 그 컬렉션을 고른 뒤 등록 탭으로 바로 연다(10/22, collection-design §15-9)
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // ?into=(컬렉션 화면 [지식 등록 →]의 넣을 곳)는 그 등록 한 번만 — 등록했거나 보는 컬렉션을 바꾸면 지운다(리뷰 M4: 계속 남아 다음 등록까지 고정됐다)
+  const into = searchParams.get('into');
+  const dropInto = () => setSearchParams((p) => { const n = new URLSearchParams(p); n.delete('into'); return n; }, { replace: true });
+  useEffect(() => { if (into && selectedNs && into !== selectedNs) dropInto(); },   // eslint-disable-line react-hooks/exhaustive-deps
+    [selectedNs]);
   const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>(() => (searchParams.get('tab') === 'ingest' ? 'ingest' : 'list'));   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -268,6 +278,9 @@ export function KnowledgeTable() {
   };
 
   const onIngestSuccess = () => {
+    // 판정 캐시 비우기 — 같은 글을 다시 넣을 때 이미 확정된 판정 줄을 다시 쓰지 않게(리뷰 M1: 403·원장 누락)
+    qc.removeQueries({ queryKey: ['locate'] });
+    if (into) dropInto();
     qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
     qc.invalidateQueries({ queryKey: ['ingestion-jobs', selectedNs] });
     qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
@@ -462,7 +475,7 @@ export function KnowledgeTable() {
       {subTab === 'ingest' && (
         <IngestTab
           namespace={selectedNs}
-          canModify={canModifyNs}
+          preset={into}
           jobs={jobs}
           onSuccess={onIngestSuccess}
           onGoToList={() => setSubTab('list')}
@@ -617,11 +630,13 @@ const STRATEGY_OPTIONS: { value: string; label: string; desc: string }[] = [
   { value: 'fixed', label: '고정 길이', desc: '구조가 불규칙하거나 아주 긴 텍스트를 균등 분할' },
 ];
 
-function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, currentStrategy, onRestrategize, unstructuredPages }: {
+function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceName, currentStrategy, onRestrategize, unstructuredPages, preset }: {
   isOpen: boolean;
   onClose: () => void;
   chunks: ReviewChunk[];
-  onConfirm: (selected: ReviewChunk[]) => Promise<void>;
+  onConfirm: (selected: ReviewChunk[], loc: ChosenLocation | null) => Promise<void>;
+  /** 컬렉션 화면에서 넘어온 넣을 곳(?into=) — 없으면 AI가 정한다(E2) */
+  preset?: string | null;
   loading: boolean;
   sourceName: string;
   currentStrategy?: string | null;
@@ -634,6 +649,9 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   const [expandedIdx, setExpandedIdx] = useState<Set<number>>(new Set());
   const [restrategizing, setRestrategizing] = useState(false);
   const [restrategizeError, setRestrategizeError] = useState('');
+  const [loc, setLoc] = useState<ChosenLocation | null>(null);
+  // 넣을 곳 판정에 보내는 글 = 조각 앞부분(문서 단위 — 실측과 같은 단위). 선택을 바꿔도 다시 묻지 않는다
+  const locateText = useMemo(() => chunks.map(c => c.text).join('\n\n').slice(0, 2500), [chunks]);
 
   useEffect(() => {
     setRows(chunks.map(c => ({ ...c, selected: true })));
@@ -666,6 +684,7 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`청크 검토 — ${sourceName}`} maxWidth="max-w-3xl">
       <div className="space-y-3">
+        {isOpen && <LocationPicker text={locateText} preset={preset} onChange={setLoc} />}
         {unstructuredPages && unstructuredPages.length > 0 && (
           <div
             className="rounded-lg border px-3 py-2 text-xs bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/30 dark:border-amber-700/40 dark:text-amber-300"
@@ -760,9 +779,10 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
         <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={loading}>취소</Button>
           <Button variant="primary" size="sm" loading={loading}
-            disabled={selectedCount === 0}
-            onClick={() => onConfirm(rows.filter(r => r.selected))}>
-            <CheckCircle className="w-3.5 h-3.5" />선택 항목 등록 ({selectedCount}건)
+            disabled={selectedCount === 0 || !loc}
+            title={!loc ? '넣을 곳을 먼저 골라 주세요' : undefined}
+            onClick={() => onConfirm(rows.filter(r => r.selected), loc)}>
+            <CheckCircle className="w-3.5 h-3.5" />{loc && !loc.writable ? `승인 요청 (${selectedCount}건)` : `선택 항목 등록 (${selectedCount}건)`}
           </Button>
         </div>
       </div>
@@ -886,17 +906,28 @@ function IngestionProgressModal({ jobId, onClose, onSettled }: {
 
 // ── 서브탭 2: 지식 등록 ───────────────────────────────────────────────────────
 
-function IngestTab({ namespace, canModify, jobs, onSuccess, onGoToList, onGoToReview }: {
-  namespace: string;
-  canModify: boolean;
+/** 폼 → 등록 탭: 비동기 묶음(jobId)·단건 승인 대기 여부 + 실제로 넣은 곳(E2 — 지금 보는 컬렉션과 다를 수 있다) */
+type IngestOutcome = { jobId?: number; pendingReview?: boolean; target?: ChosenLocation | null };
+
+function doneText(n: number, loc: ChosenLocation | null | undefined): string {
+  if (loc && !loc.writable) return `${n}건을 '${loc.label}' 담당의 승인 대기로 보냈어요 — 승인되면 검색에 나와요.`;
+  return `${n}건 등록을 시작했습니다${loc ? ` — 넣는 곳 '${loc.label}'` : ''} · 진행 상황은 아래 등록 이력에서 확인하세요.`;
+}
+
+function IngestTab({ namespace, preset, jobs, onSuccess, onGoToList, onGoToReview }: {
+  namespace: string;          // 지금 보는 컬렉션(미리보기 원문 초안·등록 이력 기준)
+  preset?: string | null;     // 컬렉션 화면의 [지식 등록 →]이 정한 넣을 곳(?into=) — 없으면 AI가 정한다(E2)
   jobs: IngestionJob[];
   onSuccess: () => void;
   onGoToList: () => void;
   onGoToReview: () => void;
 }) {
+  const isViewer = useAuthStore((s) => s.user?.role === 'viewer');
+  const { setSelectedNs } = useNamespaceAccess();
   const [activeMethod, setActiveMethod] = useState<IngestMethod>(null);
   const [progressJobId, setProgressJobId] = useState<number | null>(null);
   const [autoNavigate, setAutoNavigate] = useState(false);
+  const [suggestTarget, setSuggestTarget] = useState<ChosenLocation | null>(null);   // 담당 아닌 곳에 올린 묶음 — 끝나면 결과 안내
   const [jobPage, setJobPage] = useState(1);
   const [jobPageSize, setJobPageSize] = useState(30);
   const { totalPages: jobTotalPages, totalItems: jobTotalItems, slice: sliceJobs } = useClientPaging(jobs, jobPageSize);
@@ -904,7 +935,24 @@ function IngestTab({ namespace, canModify, jobs, onSuccess, onGoToList, onGoToRe
 
   // 폼 제출 성공 시: 비동기 배치 작업(jobId)이면 진행 모달을 띄우고 완료될 때까지
   // 기다렸다가 결과(승인 대기 여부)에 따라 이동, 동기 단건 등록이면 즉시 이동.
-  const handleFormOutcome = (outcome?: { jobId?: number; pendingReview?: boolean }) => {
+  const handleFormOutcome = (outcome?: IngestOutcome) => {
+    const t = outcome?.target;
+    if (t && !t.writable) {
+      // 담당이 아닌 곳에 넣은 제안 — 그 담당의 승인 대기. 지금 보는 컬렉션 목록엔 안 나오니 이동하지 않는다.
+      // 묶음은 진행 창으로 끝까지 보여 주고 실제 결과로 알린다(리뷰 M2 — "보냈어요"만 보이고 실패가 숨었다)
+      if (outcome?.jobId) {
+        setSuggestTarget(t);
+        setProgressJobId(outcome.jobId);
+        return;
+      }
+      if (outcome?.pendingReview) {
+        void showAlert(`'${t.label}' 담당의 승인 대기로 보냈어요. 담당이 승인하면 검색에 나와요.`, { title: '승인 요청을 보냈어요' });
+      } else {
+        void showAlert(`'${t.label}'에 바로 등록됐어요(담당 권한이 있어요).`, { title: '등록 완료' });   // 화면과 서버 판단이 어긋난 경우(리뷰 L3)
+      }
+      return;
+    }
+    if (t && t.namespace !== namespace) setSelectedNs(t.namespace);   // 다른 곳에 넣었으면 그 컬렉션으로 — 결과가 목록에 보이게
     if (outcome?.jobId) {
       setProgressJobId(outcome.jobId);
       setAutoNavigate(true);
@@ -916,11 +964,9 @@ function IngestTab({ namespace, canModify, jobs, onSuccess, onGoToList, onGoToRe
     }
   };
 
-  if (!namespace) {
-    return <div className="text-center py-16 text-slate-500">업무 컬렉션을 선택하세요.</div>;
-  }
-  if (!canModify) {
-    return <div className="text-center py-16 text-slate-500">이 업무 컬렉션의 지식 등록 권한이 없습니다.</div>;
+  // E2: 넣을 곳은 등록할 때 정한다(AI 제안 + 내가 고름) — 지금 보는 컬렉션의 담당이 아니어도 넣을 수 있다(담당이 아닌 곳은 승인 대기)
+  if (isViewer) {
+    return <div className="text-center py-16 text-slate-500">조회 전용 계정은 지식을 등록할 수 없어요.</div>;
   }
 
   const methods: { id: IngestMethod; icon: React.ReactNode; title: string; desc: string; badge?: string }[] = [
@@ -979,19 +1025,19 @@ function IngestTab({ namespace, canModify, jobs, onSuccess, onGoToList, onGoToRe
 
       {/* 선택된 방법의 인라인 폼 */}
       {activeMethod === 'file' && (
-        <FileUploadForm namespace={namespace}
+        <FileUploadForm namespace={namespace} preset={preset}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'text' && (
-        <TextSplitForm namespace={namespace}
+        <TextSplitForm namespace={namespace} preset={preset}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'manual' && (
-        <ManualForm namespace={namespace}
+        <ManualForm namespace={namespace} preset={preset}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'url' && (
-        <UrlForm namespace={namespace}
+        <UrlForm namespace={namespace} preset={preset}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
 
@@ -1049,9 +1095,27 @@ function IngestTab({ namespace, canModify, jobs, onSuccess, onGoToList, onGoToRe
 
       <IngestionProgressModal
         jobId={progressJobId}
-        onClose={() => { setProgressJobId(null); setAutoNavigate(false); }}
+        onClose={() => {
+          // 제안 묶음이 끝나기 전에 닫으면 결과 안내를 못 한다 — 그 작업은 넣은 곳 등록 이력에만 있다(재리뷰 N1)
+          if (suggestTarget) void showAlert(`'${suggestTarget.label}'에 올리는 작업은 뒤에서 계속돼요. 결과는 '${suggestTarget.label}'의 등록 이력·승인 대기에서 확인할 수 있어요.`,
+            { title: '진행 창을 닫았어요' });
+          setProgressJobId(null); setAutoNavigate(false); setSuggestTarget(null);
+        }}
         onSettled={(job) => {
           onSuccess();
+          if (suggestTarget) {
+            const t = suggestTarget;
+            setSuggestTarget(null);
+            if (job.status === 'completed') {
+              void showAlert(job.pending_chunks > 0
+                ? `${job.pending_chunks}건을 '${t.label}' 담당의 승인 대기로 보냈어요. 담당이 승인하면 검색에 나와요.`
+                : `'${t.label}'에 바로 등록됐어요(담당 권한이 있어요).`, { title: job.pending_chunks > 0 ? '승인 요청을 보냈어요' : '등록 완료' });
+            } else {
+              void showAlert(`'${t.label}'에 올리지 못했어요(${job.status === 'cancelled' ? '중지됨' : '실패'}) — 등록 이력의 사유를 확인하고 다시 시도해 주세요.`,
+                { title: '승인 요청 실패' });
+            }
+            return;
+          }
           if (!autoNavigate) return;
           setAutoNavigate(false);
           if (job.pending_chunks > 0) {
@@ -1243,9 +1307,10 @@ function ReviewTab({ items, canModify, onResolved }: {
 
 // ── 파일 업로드 인라인 폼 ────────────────────────────────────────────────────
 
-function FileUploadForm({ namespace, onSuccess, onCancel }: {
-  namespace: string;
-  onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
+function FileUploadForm({ namespace, preset, onSuccess, onCancel }: {
+  namespace: string;      // 미리보기(원문 초안)를 둘 곳 = 지금 보는 컬렉션. 실제로 넣는 곳은 청크 검토의 넣을 곳 카드(E2)
+  preset?: string | null;
+  onSuccess: (outcome?: IngestOutcome) => void; onCancel: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [detectedStrategy, setDetectedStrategy] = useState<string | null>(null);
@@ -1316,17 +1381,17 @@ function FileUploadForm({ namespace, onSuccess, onCancel }: {
     finally { setPreviewing(false); }
   };
 
-  const handleConfirm = async (selected: ReviewChunk[]) => {
+  const handleConfirm = async (selected: ReviewChunk[], loc: ChosenLocation | null) => {
     setLoading(true); setError('');
     try {
       const partial = partialSourceDocs(selected, reviewChunks);
       const items = selected.map(c => ({ content: c.text, heading_path: c.headingPath ?? null,
         source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
-      const result = await bulkCreateConfirmed(namespace, items, file!.name, 'file_upload');
+      const result = await bulkCreateConfirmed(namespace, items, file!.name, 'file_upload', loc);
       if (!result) return;
-      setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
+      setDone(doneText(items.length, loc));
       setShowReview(false);
-      onSuccess({ jobId: result.job_id });
+      onSuccess({ jobId: result.job_id, target: loc });
     } catch (e: any) { setError(e.message || '오류 발생'); }
     finally { setLoading(false); }
   };
@@ -1398,7 +1463,7 @@ function FileUploadForm({ namespace, onSuccess, onCancel }: {
         onConfirm={handleConfirm}
         loading={loading}
         sourceName={file?.name ?? ''}
-        currentStrategy={detectedStrategy} onRestrategize={handleRestrategize}
+        currentStrategy={detectedStrategy} onRestrategize={handleRestrategize} preset={preset}
       />
     </div>
   );
@@ -1407,9 +1472,10 @@ function FileUploadForm({ namespace, onSuccess, onCancel }: {
 
 // ── 대량 텍스트 인라인 폼 ────────────────────────────────────────────────────
 
-function TextSplitForm({ namespace, onSuccess, onCancel }: {
-  namespace: string;
-  onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
+function TextSplitForm({ namespace, preset, onSuccess, onCancel }: {
+  namespace: string;      // 미리보기(원문 초안)를 둘 곳 = 지금 보는 컬렉션. 실제로 넣는 곳은 청크 검토의 넣을 곳 카드(E2)
+  preset?: string | null;
+  onSuccess: (outcome?: IngestOutcome) => void; onCancel: () => void;
 }) {
   const [text, setText] = useState('');
   const [detectedStrategy, setDetectedStrategy] = useState<string | null>(null);
@@ -1432,17 +1498,17 @@ function TextSplitForm({ namespace, onSuccess, onCancel }: {
     finally { setPreviewing(false); }
   };
 
-  const handleConfirm = async (selected: ReviewChunk[]) => {
+  const handleConfirm = async (selected: ReviewChunk[], loc: ChosenLocation | null) => {
     setLoading(true); setError('');
     try {
       const partial = partialSourceDocs(selected, reviewChunks);
       const items = selected.map(c => ({ content: c.text, heading_path: c.headingPath ?? null,
         source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
-      const result = await bulkCreateConfirmed(namespace, items, '텍스트 직접입력', 'paste_split');
+      const result = await bulkCreateConfirmed(namespace, items, '텍스트 직접입력', 'paste_split', loc);
       if (!result) return;
-      setDone(`${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
+      setDone(doneText(items.length, loc));
       setShowReview(false);
-      onSuccess({ jobId: result.job_id });
+      onSuccess({ jobId: result.job_id, target: loc });
     } catch (e: any) { setError(e.message || '오류 발생'); }
     finally { setLoading(false); }
   };
@@ -1487,7 +1553,7 @@ function TextSplitForm({ namespace, onSuccess, onCancel }: {
         onConfirm={handleConfirm}
         loading={loading}
         sourceName="텍스트 직접입력"
-        currentStrategy={detectedStrategy} onRestrategize={handleRestrategize}
+        currentStrategy={detectedStrategy} onRestrategize={handleRestrategize} preset={preset}
       />
     </div>
   );
@@ -1496,32 +1562,42 @@ function TextSplitForm({ namespace, onSuccess, onCancel }: {
 
 // ── 직접 입력 인라인 폼 ──────────────────────────────────────────────────────
 
-function ManualForm({ namespace, onSuccess, onCancel }: {
+function ManualForm({ namespace, preset, onSuccess, onCancel }: {
   namespace: string;
-  onSuccess: (outcome?: { pendingReview?: boolean }) => void; onCancel: () => void;
+  preset?: string | null;
+  onSuccess: (outcome?: IngestOutcome) => void; onCancel: () => void;
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<KnowledgeFormData>(defaultForm);
   const [done, setDone] = useState('');
   const [donePending, setDonePending] = useState(false);
+  // 두 단계(E2): 내용을 쓰고 [넣을 곳 확인] → 카드에서 고르고 [등록]. 내용을 고치면 다시 1단계(판정은 앞부분이 같으면 다시 안 부름)
+  const [locating, setLocating] = useState(false);
+  const [loc, setLoc] = useState<ChosenLocation | null>(null);
 
   const createMutation = useMutation({
     mutationFn: () =>
       createKnowledge({
-        namespace,
+        namespace: loc?.namespace ?? namespace,
         content: form.content,
+        decision_id: loc?.decisionId ?? null,
+        location_choice: loc?.choice ?? null,
       }),
     onSuccess: (created) => {
-      qc.invalidateQueries({ queryKey: ['knowledge', namespace] });
-      qc.invalidateQueries({ queryKey: ['stats-ns', namespace] });
+      const target = loc?.namespace ?? namespace;
+      qc.invalidateQueries({ queryKey: ['knowledge', target] });
+      qc.invalidateQueries({ queryKey: ['stats-ns', target] });
       setDone(
-        created.pending_review
-          ? '유사한 기존 지식이 있어 승인 대기 상태로 등록됐습니다 — "승인 대기" 탭에서 확인하세요.'
-          : '등록 완료'
+        loc && !loc.writable
+          ? `'${loc.label}' 담당의 승인 대기로 보냈어요 — 승인되면 검색에 나와요.`
+          : created.pending_review
+            ? '유사한 기존 지식이 있어 승인 대기 상태로 등록됐습니다 — "승인 대기" 탭에서 확인하세요.'
+            : `등록 완료${loc ? ` — '${loc.label}'` : ''}`
       );
       setDonePending(!!created.pending_review);
       setForm(defaultForm);
-      onSuccess({ pendingReview: !!created.pending_review });
+      setLocating(false);
+      onSuccess({ pendingReview: !!created.pending_review, target: loc });
     },
   });
 
@@ -1531,21 +1607,29 @@ function ManualForm({ namespace, onSuccess, onCancel }: {
 
       <div>
         <label className="block text-xs font-medium text-slate-400 mb-1">내용 <span className="text-rose-400">*</span></label>
-        <textarea rows={8} value={form.content} onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
+        <textarea rows={8} value={form.content} onChange={(e) => { setForm((f) => ({ ...f, content: e.target.value })); setLocating(false); }}
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y min-h-[160px]" />
       </div>
+
+      {locating && <LocationPicker text={form.content} preset={preset} onChange={setLoc} />}
 
       {done && <p className={`text-sm font-medium ${donePending ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>{done}</p>}
       {createMutation.isError && <p className="text-xs text-rose-600 dark:text-rose-400">{String(createMutation.error)}</p>}
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
-        <Button variant="primary" size="sm"
-          loading={createMutation.isPending}
-          onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending || !form.content.trim()}>
-          추가
-        </Button>
+        {!locating ? (
+          <Button variant="primary" size="sm" onClick={() => { setDone(''); setLocating(true); }} disabled={!form.content.trim()}>
+            넣을 곳 확인
+          </Button>
+        ) : (
+          <Button variant="primary" size="sm"
+            loading={createMutation.isPending}
+            onClick={() => createMutation.mutate()}
+            disabled={createMutation.isPending || !form.content.trim() || !loc}>
+            {loc && !loc.writable ? '승인 요청' : '등록'}
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -1554,9 +1638,10 @@ function ManualForm({ namespace, onSuccess, onCancel }: {
 
 // ── URL / Confluence 인라인 폼 ────────────────────────────────────────────────
 
-function UrlForm({ namespace, onSuccess, onCancel }: {
-  namespace: string;
-  onSuccess: (outcome?: { jobId?: number }) => void; onCancel: () => void;
+function UrlForm({ namespace, preset, onSuccess, onCancel }: {
+  namespace: string;      // 미리보기(원문 초안)를 둘 곳 = 지금 보는 컬렉션. 실제로 넣는 곳은 청크 검토의 넣을 곳 카드(E2)
+  preset?: string | null;
+  onSuccess: (outcome?: IngestOutcome) => void; onCancel: () => void;
 }) {
   const { user, updateUser } = useAuthStore();
   const [url, setUrl] = useState('');
@@ -1676,7 +1761,7 @@ function UrlForm({ namespace, onSuccess, onCancel }: {
     setSelectedPageIds(select ? new Set(tree.tree.map(n => n.page_id)) : new Set());
   };
 
-  const handleConfirm = async (selected: ReviewChunk[]) => {
+  const handleConfirm = async (selected: ReviewChunk[], loc: ChosenLocation | null) => {
     setLoading(true); setError('');
     try {
       // confluence_bulk는 조상 헤딩(c.headingPath)을 그대로 쓴다(2026-09-22). heading_path는 이전엔 이 확정 경로 자체에
@@ -1694,11 +1779,11 @@ function UrlForm({ namespace, onSuccess, onCancel }: {
       }));
       const srcName = sourceMeta?.name ?? url;
       const srcType = sourceMeta?.type ?? (isConfluence ? 'confluence' : 'web');
-      const result = await bulkCreateConfirmed(namespace, items, srcName, srcType);
+      const result = await bulkCreateConfirmed(namespace, items, srcName, srcType, loc);
       if (!result) return;
-      setDone(`"${srcName}" — ${items.length}건 등록을 시작했습니다 — 진행 상황은 아래 등록 이력에서 확인하세요.`);
+      setDone(`"${srcName}" — ${doneText(items.length, loc)}`);
       setShowReview(false);
-      onSuccess({ jobId: result.job_id });
+      onSuccess({ jobId: result.job_id, target: loc });
     } catch (e: any) { setError(e.message || '오류 발생'); }
     finally { setLoading(false); }
   };
@@ -1797,6 +1882,7 @@ function UrlForm({ namespace, onSuccess, onCancel }: {
         loading={loading}
         sourceName={sourceMeta?.name ?? url}
         unstructuredPages={unstructuredPages}
+        preset={preset}
       />
 
       {/* Confluence 하위 페이지 트리 선택 모달 */}

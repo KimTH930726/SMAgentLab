@@ -39,6 +39,7 @@ async def create_knowledge(
     content: str,
     *,
     created_by_user_id: Optional[int] = None,
+    force_pending: bool = False,
 ) -> dict:
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
@@ -58,7 +59,8 @@ async def create_knowledge(
 
             matches = await find_similar_active_knowledge(ns_id, embedding)
             is_duplicate = bool(matches) and matches[0]["similarity"] >= get_thresholds()["duplicate_min_similarity"]
-            status = "pending_review" if is_duplicate else "active"
+            # force_pending = 넣는 사람이 그 컬렉션 담당이 아님(E2, 위치 판정으로 고른 곳) — 담당이 승인해야 검색에 나온다
+            status = "pending_review" if (is_duplicate or force_pending) else "active"
 
             row = await conn.fetchrow(
                 f"""
@@ -82,7 +84,7 @@ async def create_knowledge(
 
     result = dict(row)
     result["namespace"] = namespace
-    result["pending_review"] = is_duplicate
+    result["pending_review"] = is_duplicate or force_pending
     result["duplicate_matches"] = matches if is_duplicate else []
     return result
 
@@ -747,8 +749,12 @@ async def bulk_create_knowledge(
     after_activation: Optional[Callable[[], Awaitable[int]]] = None,
     confirm_replace: bool = False,
     strict_source: bool = False,
+    force_pending: bool = False,
 ) -> dict:
     """여러 지식을 배치 단위로 등록 — 기본적으로 백그라운드에서 실행.
+
+    force_pending: 넣는 사람이 그 컬렉션 담당이 아님(E2) — 전부 승인 대기. 원문 원장·컨플루언스 페이지 연결은 부르는 쪽이 떼고 온다
+    (담당의 기존 조각을 "같은 원본 교체"로 폐기하지 않게).
 
     confirm_replace: 같은 원본의 기존 조각에 사람 손이 닿았어도 교체(사용자가 확인함). 아니면 ReplaceConfirmRequired(A안).
     strict_source: 실린 원문이 확정 순간 이미 교체됐으면 실패로(다시 분할 — 조용히 연결만 끊지 않게, 리뷰 M2).
@@ -807,7 +813,7 @@ async def bulk_create_knowledge(
         after_activation=after_activation,
         source_file=source_file, source_type=source_type,
         created_by_user_id=created_by_user_id,
-        strict_source=strict_source, confirm_replace=confirm_replace,
+        strict_source=strict_source, confirm_replace=confirm_replace, force_pending=force_pending,
     )
     if background:
         task = asyncio.create_task(coro)
@@ -829,6 +835,7 @@ async def _run_bulk_ingestion(
     created_by_user_id: Optional[int],
     strict_source: bool = False,
     confirm_replace: bool = False,
+    force_pending: bool = False,
 ) -> dict:
     """배치 단위 임베딩+INSERT. 배치마다 진행률 갱신 + 취소 요청 확인.
 
@@ -1008,6 +1015,8 @@ async def _run_bulk_ingestion(
 
     # 후속 작업(자동 용어 추출)은 실제로 active가 된 행이 있을 때만 — 전부 승인 대기로 빠졌으면
     # 검토에서 반려될 수 있는 내용이라 용어를 미리 만들지 않는다(/code-review 지적, 2026-09-28).
+    if force_pending:
+        pending_total = created   # 전부 승인 대기 — 등록 이력 "승인 대기 n건", 자동 용어 추출 생략(승인 전 내용으로 용어를 만들지 않음)
     run_follow_up = after_activation is not None and created > pending_total
 
     # 일괄 전환 — job 완료 표시와 행 전환을 한 트랜잭션으로 묶는다. cancel_requested 조건은
@@ -1069,9 +1078,9 @@ async def _run_bulk_ingestion(
                         await _ledger.activate(conn, ns_id, source_doc_ids, replacing_docs, partial_doc_ids)
                     await conn.execute("""
                         UPDATE rag_knowledge
-                        SET status = CASE status WHEN 'staging' THEN 'active' ELSE 'pending_review' END
+                        SET status = CASE WHEN $2 THEN 'pending_review' WHEN status = 'staging' THEN 'active' ELSE 'pending_review' END
                         WHERE ingestion_job_id = $1 AND status IN ('staging', 'staging_review')
-                    """, job_id)
+                    """, job_id, force_pending)
         if not activated:
             await _discard_staged_job(job_id, "cancelled")
             return {"created": 0, "job_id": job_id, "status": "cancelled"}

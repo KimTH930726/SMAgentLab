@@ -94,6 +94,44 @@ export interface KnowledgeItem {
 export interface KnowledgeCreatePayload {
   namespace: string;
   content: string;
+  decision_id?: number | null;      // E2: 위치 판정 원장 줄(POST /knowledge/locate)
+  location_choice?: LocationChoice | null;
+}
+
+/** 넣을 곳을 어떻게 정했나(E2) — accept: AI 제안 그대로 · option: 다른 선택지 · other: 목록에서 직접 · unsure: 잘 모르겠어요 · preset: 컬렉션 화면에서 넘어옴 */
+export type LocationChoice = 'accept' | 'option' | 'other' | 'unsure' | 'preset';
+
+/** 위치 판정 결과의 컬렉션 한 칸 */
+export interface LocateCollection {
+  name: string;
+  label: string;
+  kind: 'domain' | 'org_space';
+  writable: boolean;
+}
+
+export interface LocateResult {
+  decision_id: number;
+  doc_type: string;
+  ai: LocateCollection | null;
+  reason: string;
+  confident: boolean;
+  proposed: LocateCollection | null;
+  ask: boolean;
+  options: LocateCollection[];
+  preset: LocateCollection | null;
+  suggest_move: boolean;
+  neighbors: (LocateCollection & { n: number })[];
+  neighbor_total: number;
+  fallback: string;
+}
+
+/** 등록할 곳으로 정해진 값 — 폼이 등록 API에 그대로 싣는다 */
+export interface ChosenLocation {
+  namespace: string;
+  label: string;
+  writable: boolean;
+  decisionId: number | null;
+  choice: LocationChoice;
 }
 
 export interface KnowledgeUpdatePayload {

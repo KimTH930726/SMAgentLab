@@ -79,7 +79,7 @@ async def main() -> None:
         emb = json.loads(r["emb"]) if r["emb"] else await locator.embed_head(text)   # 여러 조각 문서 = 실제처럼 앞부분 임베딩
         async with get_conn() as conn:
             res = await locator.finish(conn, cands, llm_out, emb, exclude_ids=tuple(r["chunks"]),
-                                       user_team_id=team_of.get(r["namespace_id"], a.team))
+                                       user_team_id=team_of.get(r["namespace_id"], a.team), text=text)
         return {"id": r["id"], "n_chunks": len(r["chunks"]), "now": r["namespace_id"], "ai": res.ai_id, "doc_type": res.doc_type,
                 "confident": res.confident, "vote": [res.vote_top, res.vote_n], "neighbors": [n for n, _ in res.neighbors],
                 "failed": llm_out[3], "proposed": res.proposed_id, "mixed": r["mixed"]}

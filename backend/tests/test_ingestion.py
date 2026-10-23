@@ -336,7 +336,7 @@ class TestBulkIngestionStagedActivation:
             assert rows[0][9] == "staging"   # 업무구분 칸 제거(10/22)로 한 칸 당겨짐
         # 전환은 모든 배치 이후 딱 한 번, 이 job의 스테이징 행만 대상
         activations = self._activation_updates(calls)
-        assert activations == [(7,)]
+        assert activations == [(7, False)]   # (job, force_pending) — 담당이 넣은 등록은 제안 아님(E2)
         assert not self._staging_deletes(calls)
         # 전환 이후 네임스페이스 시맨틱 캐시 무효화
         invalidate.assert_awaited_once_with("test-ns")

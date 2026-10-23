@@ -15,6 +15,13 @@ export async function goAdmin(page: Page, group: string, item: string) {
 /** 보는 컬렉션 칩(사이드바, 채팅·관리 화면 공통) — 10/22부터 select가 아니라 버튼 + 고르는 창 */
 export const domainSelect = (page: Page) => page.locator('#sidebar-domain');
 
+/** 지식 등록 — 넣을 곳 카드에서 컬렉션을 직접 고른다(E2). AI 제안에 맡기면 테스트 문장마다 결과가 달라 "다른 곳…"으로 고정 */
+export async function chooseLocation(page: Page, namespace: string) {
+  const select = page.getByRole('combobox', { name: '다른 곳에 넣기' });
+  await select.waitFor({ timeout: 60_000 });   // 판정(로컬 LLM) 대기
+  await select.selectOption(namespace);
+}
+
 /** 주소로 바로 들어가기 — 새로고침이면 에이전트 선택 화면이 먼저 나와 "선택하기"를 누른다(10/23, 메뉴 바로잡기 확인용) */
 export async function gotoAdminUrl(page: Page, path: string) {
   await page.goto(path);

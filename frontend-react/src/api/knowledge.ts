@@ -8,6 +8,8 @@ import type {
   GlossaryItem,
   GlossaryCreatePayload,
   GlossaryUpdatePayload,
+  LocateResult,
+  LocationChoice,
 } from '../types';
 
 // Knowledge CRUD
@@ -64,6 +66,14 @@ export async function flagKnowledgeForReview(
     console.error('flagKnowledgeForReview error:', err);
     throw err;
   }
+}
+
+/** 넣을 곳·종류 판정(E2) — AI 판단 원장에 한 줄 남기고 decision_id를 준다. 저장은 하지 않는다. */
+export async function locateKnowledge(text: string, presetNamespace?: string | null): Promise<LocateResult> {
+  return apiFetch<LocateResult>('/knowledge/locate', {
+    method: 'POST',
+    body: JSON.stringify({ text, preset_namespace: presetNamespace ?? null }),
+  });
 }
 
 export async function createKnowledge(payload: KnowledgeCreatePayload): Promise<KnowledgeItem> {
@@ -181,10 +191,12 @@ export async function bulkCreateKnowledge(
   sourceFile?: string,
   sourceType = 'manual',
   confirmReplace = false,
+  location?: { decisionId: number | null; choice: LocationChoice } | null,
 ): Promise<{ created: number; job_id: number; status: string; unlinked_sources?: number[] }> {
   return apiFetch('/knowledge/bulk', {
     method: 'POST',
-    body: JSON.stringify({ namespace, items, source_file: sourceFile, source_type: sourceType, confirm_replace: confirmReplace }),
+    body: JSON.stringify({ namespace, items, source_file: sourceFile, source_type: sourceType, confirm_replace: confirmReplace,
+      decision_id: location?.decisionId ?? null, location_choice: location?.choice ?? null }),
   });
 }
 

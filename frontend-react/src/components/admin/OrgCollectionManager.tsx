@@ -13,7 +13,7 @@ import { CollectionLinks } from './CollectionLinks';
  * [지식 등록 →](쓸 수 있을 때) · [보기 →](항상) = 그 컬렉션을 고르고 지식 문서 › 등록 탭 / 목록으로(넣는 곳은 [지식 등록] 한 곳, §15-9).
  * 카드 본문을 누르면 보는 컬렉션만 바꾼다(업무 컬렉션 표의 줄과 같게, 10/23) — 지금 보는 카드는 "· 지금" + 테두리.
  */
-export function OrgCollectionManager({ onRegister }: { onRegister: (tab: 'ingest' | 'list') => void }) {
+export function OrgCollectionManager({ onRegister }: { onRegister: (tab: 'ingest' | 'list', into?: string) => void }) {
   const { nsDetails, selectedNs, setSelectedNs, user } = useNamespaceAccess();
   const { data: parts = [] } = useQuery({ queryKey: ['parts-public'], queryFn: getParts, staleTime: 300_000 });
   const userPart = user?.part ?? null;
@@ -23,7 +23,7 @@ export function OrgCollectionManager({ onRegister }: { onRegister: (tab: 'ingest
 
   const go = (d: NamespaceDetail, tab: 'ingest' | 'list') => {
     setSelectedNs(d.name);
-    onRegister(tab);
+    onRegister(tab, d.name);
   };
 
   if (teams.length === 0) {

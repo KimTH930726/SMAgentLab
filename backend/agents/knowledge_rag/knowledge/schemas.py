@@ -11,6 +11,9 @@ from pydantic import BaseModel, Field
 class KnowledgeCreate(BaseModel):
     namespace: str
     content: str
+    # E2(10/23) 위치 판정 원장 줄(POST /locate가 준 id)과 고른 방법 — 있으면 등록 뒤 같은 줄에 확정(다른 곳을 고르면 AI 오답 신호)
+    decision_id: Optional[int] = None
+    location_choice: Optional[str] = None   # accept | option | other | unsure | preset
     # 업무구분(category) 입력은 10/22 업무구분 폐지로 제거 — 옛 화면이 보내도 무시된다
 
 
@@ -72,6 +75,8 @@ class BulkCreateRequest(BaseModel):
     source_type: str = "manual"
     # 같은 원본 재등록 때 기존 조각에 사람 손이 닿은 흔적이 있어도 교체 — 사용자가 사유를 보고 확인했을 때만(A안 2026-10-12)
     confirm_replace: bool = False
+    decision_id: Optional[int] = None        # KnowledgeCreate와 같음(E2)
+    location_choice: Optional[str] = None
 
 
 class IngestionJobOut(BaseModel):

@@ -207,7 +207,8 @@ def neighbor_scope(cands: list[Candidate], user_team_id: Optional[int]) -> list[
 
 
 def decide(cands: list[Candidate], ai_id: Optional[int], neighbors: list[tuple[int, float]], *,
-           preset_id: Optional[int], user_team_id: Optional[int], llm_fail: str = "", preset_missing: bool = False) -> dict:
+           preset_id: Optional[int], user_team_id: Optional[int], llm_fail: str = "", preset_missing: bool = False,
+           ai_named: bool = False) -> dict:
     """두 신호 → 확신·제안 위치·묻기·선택지. 순수 함수(테스트 대상). llm_fail = "" | refusal | error | shape."""
     nb_ids = [n for n, _ in neighbors]
     top, n, _ = vote(nb_ids)
@@ -227,7 +228,12 @@ def decide(cands: list[Candidate], ai_id: Optional[int], neighbors: list[tuple[i
                 "suggest_move": confident and ai_id != preset_id, "vote_top": top, "vote_n": n, "fallback": fallback}
     # 제안(미리 고르는 곳): 이웃이 4/5 이상 모이면 이웃, 아니면 AI — 확신 아닌 문서에서 제안이 맞은 수 로컬 9→11/16·게이트웨이 8→10/17
     # (10/23 eval_locator 문서 단위, 기법 결정 기록 collection-design §17). 확신 규칙은 그대로(두 신호 일치).
-    proposed = top if (top is not None and n >= NEIGHBOR_NEED) else (ai_id if ai_id is not None else top)
+    # 단, AI가 고른 업무 이름이 본문에 그대로 나오면 AI 먼저 — 이웃은 지식이 많은 컬렉션으로 쏠린다(10/23 화면 확인: "딜리버스 …" 글에
+    # 제휴서비스가 미리 골라짐). 측정 데이터에선 해 없음(로컬 11=11·게이트웨이 10=10, 기법 결정 기록 §17)
+    if ai_named and ai_id is not None:
+        proposed = ai_id
+    else:
+        proposed = top if (top is not None and n >= NEIGHBOR_NEED) else (ai_id if ai_id is not None else top)
     options = list(dict.fromkeys(x for x in (proposed, ai_id, top, team_common) if x is not None))[:3]
     return {"confident": confident, "proposed_id": proposed, "ask": not confident, "options": options,
             "suggest_move": False, "vote_top": top, "vote_n": n, "fallback": fallback}
@@ -263,12 +269,20 @@ async def embed_head(text: str) -> list[float]:
     return await embedding_service.embed(text[:TEXT_LIMIT])
 
 
+def names_ai_collection(cands: list[Candidate], ai_id: Optional[int], text: str) -> bool:
+    """AI가 고른 업무 컬렉션 이름이 본문에 그대로 나오나(조직 컬렉션은 이름이 본문에 나올 일이 드물어 업무만)."""
+    c = next((x for x in cands if x.id == ai_id), None)
+    # 3글자 미만 이름("공통" 등)은 거의 모든 글에 나와 신호가 아니다(리뷰 L5)
+    return bool(c and c.kind == "domain" and len(c.label) >= 3 and c.label in text[:TEXT_LIMIT])
+
+
 async def finish(conn, cands: list[Candidate], llm_out: tuple, embedding: list[float], *, preset_id: Optional[int] = None,
-                 user_team_id: Optional[int] = None, exclude_ids: tuple[int, ...] = (), preset_missing: bool = False) -> LocateResult:
+                 user_team_id: Optional[int] = None, exclude_ids: tuple[int, ...] = (), preset_missing: bool = False,
+                 text: str = "") -> LocateResult:
     """신호 ②(이웃) + 결정. 임베딩은 부르는 쪽이 연결 밖에서 만든다. 원장 기록도 부르는 쪽 — 측정 스크립트는 기록 없이 부른다."""
     ai_id, doc_type, reason, llm_fail = llm_out
     neighbors = await nearest_collections(conn, embedding, neighbor_scope(cands, user_team_id), exclude_ids=exclude_ids)
     d = decide(cands, ai_id, neighbors, preset_id=preset_id, user_team_id=user_team_id, llm_fail=llm_fail,
-               preset_missing=preset_missing)
+               preset_missing=preset_missing, ai_named=names_ai_collection(cands, ai_id, text))
     return LocateResult(doc_type=doc_type, ai_id=ai_id, reason=reason, neighbors=neighbors, preset_id=preset_id,
                         llm_fail=llm_fail, **d)

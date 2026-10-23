@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { goAdmin, selectDomain } from './admin-nav';
+import { chooseLocation, goAdmin, selectDomain } from './admin-nav';
 import { loginAdmin } from './auth';
 
 // 이 테스트가 존재하는 이유(2026-09-24): 지식 등록 흐름이 미리보기+검토 2단계로
@@ -34,12 +34,14 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
   const fictionalTerm = `가상업무${Math.floor(Math.random() * 1_000_000)}`;
   const content = `${uniqueMarker} — ${fictionalTerm} 절차는 Playwright 회귀 테스트가 실행마다 무작위로 만들어내는 가상의 업무 프로세스 설명입니다.`;
 
-  const createResponse = page.waitForResponse((r) => r.url().includes('/api/knowledge') && r.request().method() === 'POST');
+  const createResponse = page.waitForResponse((r) => r.url().endsWith('/api/knowledge') && r.request().method() === 'POST')   // 판정(/locate)은 빼고 등록만;
 
   // Chat 화면은 Admin일 때도 DOM에 계속 남아있다(CSS로만 숨김, 스트리밍 유지 목적) —
   // 채팅 질문창 textarea가 먼저 걸리지 않게 보이는 것만 골라야 한다.
   await page.locator('textarea:visible').first().fill(content);
-  await page.getByRole('button', { name: '추가' }).click();
+  await page.getByRole('button', { name: '넣을 곳 확인' }).click();   // E2: 넣을 곳 카드 → 고르고 등록
+  await chooseLocation(page, NAMESPACE);
+  await page.getByRole('button', { name: '등록', exact: true }).click();
 
   const response = await createResponse;
   expect(response.ok()).toBeTruthy();
@@ -117,9 +119,11 @@ test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아
     await selectDomain(page, NAMESPACE);
     await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     await page.getByText('직접 입력').click();
-    const createResponse = page.waitForResponse((r) => r.url().includes('/api/knowledge') && r.request().method() === 'POST');
+    const createResponse = page.waitForResponse((r) => r.url().endsWith('/api/knowledge') && r.request().method() === 'POST')   // 판정(/locate)은 빼고 등록만;
     await page.locator('textarea:visible').first().fill(content);
-    await page.getByRole('button', { name: '추가' }).click();
+    await page.getByRole('button', { name: '넣을 곳 확인' }).click();
+    await chooseLocation(page, NAMESPACE);
+    await page.getByRole('button', { name: '등록', exact: true }).click();
     const second = await (await createResponse).json();
     ids.push(second.id);
     expect(second.pending_review).toBeTruthy();
@@ -224,6 +228,7 @@ test('같은 원본 다시 등록 — 사람이 고친 조각이 있으면 사�
     await page.getByText('대량 텍스트', { exact: true }).first().click();
     await page.locator('textarea:visible').first().fill(text);
     await page.getByRole('button', { name: '청크 검토 & 등록' }).click();
+    await chooseLocation(page, NAMESPACE);
     const register = page.getByRole('button', { name: /선택 항목 등록/ });
 
     // 1) 취소 — 등록 요청 자체가 안 나가고 기존 조각 그대로

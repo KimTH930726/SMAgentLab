@@ -47,7 +47,7 @@ async def locate_for_user(text: str, user: dict, *, preset_namespace: Optional[s
     embedding = await locator.embed_head(text)
     async with get_conn() as conn:
         r = await locator.finish(conn, cands, llm_out, embedding, preset_id=preset.id if preset else None, user_team_id=team_id,
-                                 preset_missing=preset_missing)
+                                 preset_missing=preset_missing, text=text)
         owners: dict[int, list[int]] = {}
         for row in await conn.fetch(f"SELECT namespace_id, part_id FROM {OWNER_ROWS_SQL} o WHERE namespace_id = ANY($1::int[])",
                                     list(by_id)):

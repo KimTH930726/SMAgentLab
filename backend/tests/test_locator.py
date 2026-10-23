@@ -26,6 +26,18 @@ def test_confident_only_when_both_agree():
     assert d["options"] == [1, 2, 10]                      # 제안 · AI · 내 팀 공통
     d = decide(C, 2, nb(1, 1, 1, 2, 2), preset_id=None, user_team_id=1, llm_fail="")
     assert d["proposed_id"] == 2 and d["options"] == [2, 1, 10]   # 이웃 3/5뿐 → AI 먼저
+    d = decide(C, 2, nb(1, 1, 1, 1, 2), preset_id=None, user_team_id=1, llm_fail="", ai_named=True)
+    assert d["proposed_id"] == 2 and not d["confident"]           # 본문에 AI가 고른 업무 이름 → 이웃 4/5여도 AI 먼저(확신은 아님)
+
+
+def test_names_ai_collection_only_business_names_in_text():
+    from agents.knowledge_rag.ingestion.locator import names_ai_collection
+    assert names_ai_collection(C, 1, "딜리버스 배차 화면 상태 코드")
+    assert not names_ai_collection(C, 1, "배차 화면 상태 코드")
+    assert not names_ai_collection(C, 10, "팀 공통 · A팀 규칙")     # 조직은 이름 대조 안 함
+    assert not names_ai_collection(C, None, "딜리버스")
+    short = C + [Candidate(3, "공통", "공통", "domain")]
+    assert not names_ai_collection(short, 3, "공통 절차")             # 3글자 미만 이름은 신호 아님(거의 모든 글에 나옴)
 
 
 def test_llm_fail_and_no_neighbors_are_visible():

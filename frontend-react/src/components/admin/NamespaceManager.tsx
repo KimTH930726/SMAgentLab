@@ -19,7 +19,7 @@ import { CollectionLinks } from './CollectionLinks';
 interface NamespaceManagerProps {
   onNavigate?: (to: 'policy' | 'knowledge' | 'glossary') => void;
   /** [지식 등록 →]·[보기 →] — 그 컬렉션을 고른 채 지식 문서(등록 탭 / 목록)로. 넣는 곳은 [지식 등록] 한 곳(§15-9) */
-  onRegister?: (tab: 'ingest' | 'list') => void;
+  onRegister?: (tab: 'ingest' | 'list', into?: string) => void;
 }
 
 // 업무구분 관리(CategorySection)·업무구분 열은 10/22 업무구분 폐지로 삭제
@@ -196,7 +196,7 @@ export function NamespaceManager({ onNavigate, onRegister }: NamespaceManagerPro
                       <td className="px-3 py-2.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         {onRegister && (
                           <CollectionLinks editable={canModifyNs(effectiveOwnerParts(ns))}
-                            onGo={(tab) => { setNamespace(ns.name); onRegister(tab); }} />
+                            onGo={(tab) => { setNamespace(ns.name); onRegister(tab, ns.name); }} />
                         )}
                       </td>
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>

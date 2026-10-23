@@ -524,41 +524,24 @@ LLM에 전달되는 messages:
 
 ---
 
-## 5. 지식 등록 흐름 (단건, 수동 입력)
+## 5. 지식 등록 흐름 — 넣을 곳은 등록할 때 정한다 (v2.165, E2 · collection-design §7·§17)
 
 ```
-관리자
-  │
-  │  지식 등록 폼 입력
-  │  { namespace, content, category(선택) }
+사용자(조회 전용 제외 — 지금 보는 컬렉션의 담당이 아니어도 된다)
+  │  지식 문서 › 지식 등록 — 직접 입력 / 대량 텍스트 / 파일 / URL
+  │  (컬렉션 화면 [지식 등록 →]으로 오면 ?into=<컬렉션> = 넣을 곳 미리 정함)
   ▼
-┌─────────────────────┐
-│   Admin (React)     │
-│   ManualForm        │
-└────────┬────────────┘
-         │  POST /api/knowledge
-         ▼
-┌─────────────────────────────────────────┐
-│  knowledge/service.py                   │
-│                                         │
-│  1. resolve_or_create_category()        │
-│     사람이 지정 → 그대로                  │
-│     안 지정 → LLM이 기존 목록 중 추천      │
-│     그마저 실패 → "미분류" 자동생성        │
-│  2. EmbeddingService.embed(content)     │
-│     → 1024차원 벡터 생성(KURE-v1)         │
-│  3. 유사도 중복 검사 → 너무 비슷하면       │
-│     pending_review, 아니면 active        │
-│  4. INSERT INTO rag_knowledge           │
-│     (content, embedding, category, …)   │
-└─────────────────────────────────────────┘
-         │
-         │  { id, namespace, content, pending_review, ... }
-         ▼
-┌─────────────────────┐
-│   Admin (React)     │
-│   목록에 즉시 반영   │
-└─────────────────────┘
+① 미리보기(대량·파일·URL) — 원문 초안은 지금 보는 컬렉션에 저장(담당일 때만)
+② 넣을 곳 카드(LocationPicker) → POST /api/knowledge/locate
+     LLM(업무 전부 + 내 팀 조직 후보, 대표 용어) × 가장 비슷한 사용 중 지식 5건의 컬렉션
+     확신 = 둘 일치(5중 4) → 제안만 보여 줌 / 아니면 "어디 지식인가요?" 버튼 + [잘 모르겠어요] + 다른 곳…
+     ?into= 있으면 그곳 고정, AI는 검사만(두 신호가 다른 곳으로 확신할 때만 "옮길까요?")
+     → AI 판단 원장 한 줄(ops_ai_decision, kind knowledge_location) · decision_id
+③ 등록 POST /api/knowledge(직접 입력) · /api/knowledge/bulk(묶음) { namespace=고른 곳, decision_id, location_choice }
+     담당이면 평소대로(중복 의심만 승인 대기) · 내 원문 초안을 고른 곳으로 옮김
+     담당 아님 + 내 확정 전 판정 줄 → 제안: 전부 승인 대기(그 담당이 승인), 원문·컨플루언스 페이지 연결 뗌
+     담당 아님 + 판정 없음 → 403
+④ 원장 같은 줄 확정: final_value {namespace_id, choice, suggested}, 고른 곳 ≠ AI → human_changed(오답 신호)
 ```
 
 카테고리 필드는 원래 `RequiredCategoryField`로 항상 필수 선택이었는데, 2026-09-24부로
