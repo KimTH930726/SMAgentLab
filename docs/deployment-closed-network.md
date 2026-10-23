@@ -87,6 +87,10 @@ LLM_PROVIDER=inhouse
 INHOUSE_LLM_BASE_URL=https://devx-gw.shinsegae-inc.com
 INHOUSE_LLM_CLIENT_ID=DevX발급client_id
 INHOUSE_LLM_CLIENT_SECRET=DevX발급client_secret
+# ── 로컬 LLM(OpenAI 호환, 폐쇄망 Qwen) — v2.163부터 지식 등록 위치 판정이 씀(LOCATOR_LLM=local 기본) ───
+# 비우면 위치 판정은 시스템 LLM(게이트웨이)으로 — 게이트웨이 보안 필터가 컨플루언스 문서를 거부해 판정 실패가 늘어난다(원장 모델 칸에 표시)
+OPENAI_COMPAT_BASE_URL=http://10.21.37.34:8000/v1
+# LOCATOR_LLM=system   # 팀 논의 결과 게이트웨이로 바꿀 때
 INHOUSE_LLM_AGENT_ID=DevX_agent_id_UUID
 INHOUSE_LLM_AGENT_CODE=playground
 # ⚠️ DevX dify에 사전 등록된 conversation_id (없으면 첫 호출이 0바이트 응답)

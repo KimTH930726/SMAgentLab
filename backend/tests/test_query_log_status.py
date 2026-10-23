@@ -80,3 +80,11 @@ def test_refusal_marker_only_at_start():
     assert helpers.is_llm_failure("⚠️ 요청하신 내용에 다음과 같은 민감 정보가 포함되어 있어")
     assert not helpers.is_llm_failure("가" * 300 + "요청하신 내용에 다음과 같은 민감 정보가 포함되어")
     assert not helpers.is_llm_failure("정상 답변입니다.")
+
+
+def test_new_gateway_refusal_text_is_failure():
+    """10/23 위치 판정 측정에서 본 다른 거부 문구 — 채팅도 장애(system_error·캐시 제외)로 본다(예전엔 옛 문구만)."""
+    new = "보안 정책에 따라 민감 정보가 포함된 요청은 처리되지 않으며, 해당 정보를 제거한 뒤 다시 시도해 주세요."
+    assert helpers.is_gateway_refusal(new) and helpers.is_llm_failure(new)
+    assert not helpers.is_gateway_refusal('{"kind":"업무","collection":"딜리버스"}')
+    assert not helpers.is_llm_failure("가" * 300 + new)

@@ -307,6 +307,26 @@ async def build_chat_context(
     )
 
 
+async def _record_clarify(conversation_id: int, msg_id: int, clarify: dict, user: dict) -> None:
+    """되묻기를 AI 판단 원장에 한 줄(E, 사용자 10/23 "재질문 관리") — 답에는 영향 없음, 실패해도 대화는 계속(로그만)."""
+    try:
+        from service.decision import ledger
+        async with get_conn() as conn:
+            await ledger.clarify_asked(conn, conversation_id=conversation_id, message_id=msg_id, clarify=clarify, user_id=user.get("id"))
+    except Exception:   # noqa: BLE001
+        logger.warning("되묻기 원장 기록 실패(대화는 계속)", exc_info=True)
+
+
+async def _close_open_clarify(conversation_id: int, clarify_scope: Optional[str], user: dict) -> None:
+    """이 대화에 열린 되묻기가 있으면 닫는다 — 선택지를 골랐으면(clarify_scope) 그 범위, 아니면 직접 입력. 실패해도 대화는 계속."""
+    try:
+        from service.decision import ledger
+        async with get_conn() as conn:
+            await ledger.clarify_answered(conn, conversation_id=conversation_id, picked_scope=clarify_scope, user_id=user.get("id"))
+    except Exception:   # noqa: BLE001
+        logger.warning("되묻기 원장 닫기 실패(대화는 계속)", exc_info=True)
+
+
 class KnowledgeRagAgent(AgentBase):
 
     @property
@@ -349,6 +369,7 @@ class KnowledgeRagAgent(AgentBase):
         msg_status = "completed"   # 저장한 상태 — 저장 뒤 오류에도 끝 신호를 이 값으로(거부도 failed, 재리뷰 D3)
 
         try:
+            await _close_open_clarify(conversation_id, clarify_scope, user)
             yield {"type": "status", "step": "embedding", "message": "질문 임베딩 생성 중..."}
 
             # ── 멀티턴 검색 보강: 직전 턴과 관련 있을 때만 결합 ──
@@ -435,6 +456,7 @@ class KnowledgeRagAgent(AgentBase):
             if cc.clarify:
                 await update_assistant_message(msg_id, cc.clarify["message"], "completed", metadata={"clarify": cc.clarify})
                 final_saved = True
+                await _record_clarify(conversation_id, msg_id, cc.clarify, user)
                 yield {"type": "clarify", **cc.clarify}
                 yield {"type": "token", "data": cc.clarify["message"]}
                 yield {"type": "done", "message_id": msg_id, "status": "completed"}

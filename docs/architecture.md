@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.162)
+# OpsLens 시스템 아키텍처 (v2.163)
 
 ## 개요
 
@@ -12,6 +12,16 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.163 (2026-10-23, dev_0): **E1 — AI 판단 원장 + 등록 위치 판정(백엔드만, 등록 동작은 그대로).** 설계 `docs/tech/collection-design.md` §16·§17.
+  원장 `ops_ai_decision`(#85): 판단 1건 = 1줄(AI 값·확신·근거 신호·모델/프롬프트 버전), 사람이 확정·변경하면 같은 줄에 최종 값·"AI가 틀렸나요?" 답. 원문 안 남김.
+  계산은 `trustkit.decision.ledger`(확신 = AI 값 = 이웃 5중 4 · 종류별 집계), DB는 `service/decision/ledger.py`(판단하는 쪽은 이 함수만).
+  위치 판정 `ingestion/locator.py` + `POST /api/knowledge/locate`: LLM(§4 기준 프롬프트 `knowledge_locate_system`, 후보 = 업무 전부 + **넣는 사람 팀의** 조직,
+  컬렉션마다 대표 용어 10개를 데이터에서) × 가장 가까운 사용 중 지식 5건의 컬렉션 다수결. 게이트웨이 보안 필터 거부·답 모양 오류 = "AI 판단 실패"(본문 변환 안 함).
+  채팅 되묻기도 원장에(물음 1줄 → 다음 질문이 고른 범위/직접 입력으로 닫음, 고른 글자는 선택지일 때만 · 답에는 영향 없음). 측정 `scripts/eval_locator.py`(문서 단위, 숫자만).
+  판정 LLM = 설정 `LOCATOR_LLM`(기본 local = `OPENAI_COMPAT_BASE_URL`, 없으면 시스템 LLM — 사용자 10/23 "일단 로컬, 팀 논의"). 이웃은 업무 + 넣는 사람 팀 조직에서만,
+  벡터 색인 반복 탐색(`hnsw.iterative_scan`)으로 5건 채움. 미리 고르는 곳 = 이웃 4/5 이상이면 이웃, 아니면 AI.
+  채팅: 게이트웨이의 다른 거부 문구("민감 정보가 포함된 요청은 처리되지 않")도 장애로(`is_gateway_refusal`, 질의 기록 system_error·캐시 제외 — 예전엔 옛 문구만).
+  시나리오 `scripts/scenarios/ai_decision_ledger.py`(남의 줄·두 번 확정 안 됨, 되묻기 글자 주입 안 남음, 옛 열린 줄 닫힘, 조회 전용 403).
 - v2.162 (2026-10-23, dev_0): **컬렉션 현황 화면 = 보기 + 넘기기, 설정은 시스템·권한으로(사용자 10/23).** 업무·조직 컬렉션 줄/카드마다 [지식 등록 →](쓸 수 있을 때) · [보기 →](항상) — 그 컬렉션을 고른 채 지식 문서 등록 탭 / 목록(`CollectionLinks`). 업무 컬렉션 수정 창 = 이름만,
   담당 파트 지정은 시스템·권한 › 조직·권한 › 담당 업무 한 곳(프론트 `setNamespaceOwners` 삭제, 백엔드 `PATCH /namespaces/{name}/settings`는 API·시나리오용으로 유지).
   운영 반입 1회성 `scripts/move_team_common_to_org.py`(업무 "팀 공통" → 조직 팀 공통, 미리보기 기본 · `--apply` · `--rollback`, 정책·VOC·참조·정책 정정·하위·진행 중 적재 있으면 멈춤,

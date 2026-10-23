@@ -71,6 +71,24 @@ async def get_knowledge_structure(knowledge_id: int, user: dict = Depends(get_cu
     return out
 
 
+class _LocateBody(BaseModel):
+    text: str
+    preset_namespace: Optional[str] = None   # 컬렉션 화면에서 넘어온 곳 — 있으면 AI는 검사만
+
+
+@router.post("/locate")
+async def locate_knowledge(body: _LocateBody, user: dict = Depends(get_current_user)):
+    """지식 등록 위치·종류 판정(E, collection-design §7·§15-2) — AI 판단 원장에 한 줄 남기고 decision_id를 준다.
+    등록할 때 그 id와 고른 곳을 보내면 같은 줄에 확정된다(다른 곳을 고르면 = AI 오답 신호). 저장은 하지 않는다."""
+    if user["role"] == "viewer":
+        raise HTTPException(status_code=403, detail="조회 전용 계정은 지식을 등록할 수 없습니다.")
+    text = (body.text or "").strip()[:20000]   # 판정은 앞 2500자만 쓴다 — 큰 본문을 통째로 들고 다니지 않게
+    if not text:
+        raise HTTPException(status_code=400, detail="내용이 비어 있어요.")
+    from agents.knowledge_rag.knowledge.locate import locate_for_user
+    return await locate_for_user(text, user, preset_namespace=body.preset_namespace)
+
+
 @router.post("", response_model=KnowledgeOut, status_code=201)
 async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_user)):
     await check_namespace_ownership(body.namespace, user)

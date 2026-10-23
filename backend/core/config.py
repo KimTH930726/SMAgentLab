@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     openai_compat_base_url: str = ""
     openai_compat_model: str = ""          # 비우면 서버의 첫 모델
     openai_compat_timeout: int = 300
+    # 지식 등록 위치 판정 LLM(E, 10/23 사용자 "일단 로컬로 — 팀에서 논의"): local = 위 OpenAI 호환 주소(없으면 시스템 LLM), system = 시스템 LLM.
+    # 게이트웨이는 보안 필터가 컨플루언스 문서를 거부한다(문서 26 중 3, 조각 74 중 44) — 등록 글은 사용자 입력이라 바꿔 보내지 않는다
+    locator_llm: str = "local"
 
     # InHouse DevX LLM — OAuth2 Client Credentials 인증
     # base_url 이하 /api/v1/auth/token, /api/v1/agent/chat 사용

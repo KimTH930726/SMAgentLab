@@ -1428,6 +1428,50 @@ async def _migrate_drop_knowledge_category(conn) -> None:
         logger.warning("프롬프트 캐시 비우기 실패 — 재시작 뒤 반영", exc_info=True)
 
 
+async def _migrate_ai_decision_ledger(conn) -> None:
+    """AI 판단 원장 + 등록 위치 판정 프롬프트 (2026-10-23, #85, E — collection-design §16). 멱등.
+    판단 1건 = 1줄(AI 값·확신·근거 신호·모델/프롬프트 버전), 사람이 확정·변경하면 같은 줄에 최종 값·"AI가 틀렸나요?" 답.
+    컬렉션 FK는 두지 않는다 — 값(jsonb)에 id만, 원장은 이력이라 컬렉션이 합쳐지거나 지워져도 줄은 남는다. 원문은 넣지 않는다."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_ai_decision (
+            id BIGSERIAL PRIMARY KEY,
+            kind TEXT NOT NULL,
+            ai_value JSONB,
+            confident BOOLEAN NOT NULL DEFAULT FALSE,
+            signals JSONB NOT NULL DEFAULT '{}'::jsonb,
+            model TEXT NOT NULL DEFAULT '',
+            prompt_version TEXT NOT NULL DEFAULT '',
+            created_by_user_id INT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            target_type TEXT,
+            target_ids BIGINT[] NOT NULL DEFAULT '{}',
+            final_value JSONB,
+            human_changed BOOLEAN NOT NULL DEFAULT FALSE,
+            changed_by_user_id INT,
+            changed_at TIMESTAMPTZ,
+            ai_verdict TEXT CHECK (ai_verdict IN ('wrong', 'context_changed', 'unknown')),
+            verdict_reason TEXT,
+            verdict_by_user_id INT
+        )""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_decision_kind_created ON ops_ai_decision (kind, created_at DESC)")
+    # 채팅 되묻기 닫기(질문마다 한 번) — 열린 줄만 대화 id로 찾는다
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_decision_open_conv ON ops_ai_decision "
+                       "(kind, ((signals->>'conversation_id'))) WHERE final_value IS NULL")
+    from agents.knowledge_rag.ingestion.locator import LOCATE_SYSTEM, PROMPT_KEY
+    r = await conn.execute(
+        """INSERT INTO ops_prompt (func_key, func_name, content, description, agent_type)
+           VALUES ($1, '지식 등록 위치 판정', $2, '지식 등록 때 어느 컬렉션(업무·조직)인지·종류를 정하는 시스템 프롬프트(기준: collection-design §4). '
+                   || '확신은 이 판정 + 비슷한 지식 5건 중 4건 일치일 때만', 'knowledge_rag')
+           ON CONFLICT (func_key) DO NOTHING""", PROMPT_KEY, LOCATE_SYSTEM)
+    if r != "INSERT 0 0":
+        logger.info("[migrate #85] 위치 판정 프롬프트 추가")
+    # v1(10/23 오전, 답 모양 {"location": ...})이 그대로 남은 경우만 v2로 — 관리자가 고친 프롬프트는 건드리지 않는다
+    r = await conn.execute("UPDATE ops_prompt SET content = $2 WHERE func_key = $1 AND content LIKE '%\"location\":\"후보 이름 또는 애매\"%'",
+                           PROMPT_KEY, LOCATE_SYSTEM)
+    if r != "UPDATE 0":
+        logger.info("[migrate #85] 위치 판정 프롬프트 v1 → v2(답 모양 kind·collection·org)")
+
+
 async def _migrate_policy_v0_revisions(conn) -> None:
     """정책 v0 새 버전 흐름 (2026-10-21, #80, v0 재구축 1단계). 멱등.
     - policy_review_log.action에 'submitted' 허용 — 1단계 설계(직접 수정 → 정책 테이블에 검토 대기 새 버전)용이었으나 2단계에서
@@ -2022,6 +2066,7 @@ async def _run_migrations() -> None:
         await _migrate_namespace_owners(conn)
         await _migrate_org_collections(conn)
         await _migrate_drop_knowledge_category(conn)   # #84 — 옛 칸·표를 쓰는 마이그레이션들(#60·#72 등)보다 뒤
+        await _migrate_ai_decision_ledger(conn)        # #85
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 
