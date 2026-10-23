@@ -403,6 +403,9 @@ bash scripts/update-images.sh smagentlab-images-<TAG>.tar.gz   # 백업 제안�
 백엔드가 기동하면서 **스키마 마이그레이션을 자동 적용**한다(`main.py`의 멱등 마이그레이션 — 새 테이블·컬럼·함수).
 로그에서 오류가 없는지 확인: `docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail=100 backend`
 
+> **v2.167 이상 반입 때**: 반입 뒤 관리자 › 캐시에서 **답변 캐시를 한 번 비운다** — 이전 버전이 캐시한 "목록 말해줘" 류 답(되묻지 않고 전부 나열)이
+> TTL 동안 새 되묻기를 가린다(10/23 리뷰).
+
 ### 3-3. 롤백
 
 이미지만 되돌리면 되는 경우: `.env`의 `IMAGE_TAG`를 직전 버전으로 바꾸고

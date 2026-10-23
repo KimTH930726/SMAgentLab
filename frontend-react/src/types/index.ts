@@ -199,7 +199,15 @@ export interface ConversationMessage {
     chart_result?: { type: string; x: string; y: string; title: string } | null;
     policy_citations?: PolicyCitation[] | null;
     clarify?: ClarifyPrompt | null;
+    list_answer?: ListAnswer | null;
   } | null;
+}
+
+/** 목록 답이었나(10/23) — 근거 카드(1건) 위에 "목록 n건에서 답함"을 보여 준다 */
+export interface ListAnswer {
+  total: number;
+  names: string[];
+  shown?: number;   // 답 문맥에 실린 줄 수(목록 상한 40) — total보다 적으면 "n건 중 m건으로 답함"
 }
 
 /** 재질문(v2.134) — 목록이 너무 넓을 때 답 대신 범위 선택지. scope는 분류 경로("*" = 전부 보기) */
@@ -241,6 +249,7 @@ export interface ChatMessage {
   mapped_term?: string | null;
   results?: KnowledgeResult[];
   policyCitations?: PolicyCitation[];
+  listAnswer?: ListAnswer | null;
   isStreaming?: boolean;
   question?: string;
   has_feedback?: boolean;

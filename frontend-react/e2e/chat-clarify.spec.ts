@@ -43,3 +43,25 @@ test('주제만 말한 큰 목록 → 범위 선택지 → 고르면 그 범위�
   await expect(page.getByTestId('clarify-options').first().getByRole('button').first()).toBeDisabled();
   expect(firstLabel.length).toBeGreaterThan(0);
 });
+
+// 10/23 실사례 — "목록 말해줘"는 "전부"가 아니다: 36개를 한 번에 늘어놓던 것을 되묻게 고침. 고른 범위 답엔 "목록 답 · n건에서" 표시
+// (근거 카드 1건과 답의 목록 줄 수가 어긋나 보이던 것). 선택 후 답은 LLM 1회.
+test('"목록 말해줘"도 많으면 되묻는다 → 고른 범위의 목록 답엔 "목록 답 · n건" 표시', async ({ page }) => {
+  test.setTimeout(360_000);
+  await loginAdmin(page, { openAdmin: false });
+  const authState = await page.evaluate(() => localStorage.getItem('ops_auth'));
+  const auth = { Authorization: `Bearer ${authState ? JSON.parse(authState).accessToken : ''}` };
+  await page.request.delete(`/api/admin/cache?namespace=${encodeURIComponent(NS)}`, { headers: auth });
+  await selectDomain(page, NS);
+
+  await page.locator('textarea:visible').first().fill('배송 정책에 관련된 정책들 목록 말해줘');
+  await page.getByTitle('전송 (Ctrl+Enter)').click();
+  const opts = page.getByTestId('clarify-options').last();
+  await expect(opts).toBeVisible({ timeout: 60_000 });           // 예전엔 되묻지 않고 36개를 늘어놓았다
+  const first = opts.getByRole('button').first();
+  const n = Number(((await first.innerText()).match(/\((\d+)개\)/) ?? [])[1]);
+  await first.click();
+  const note = page.getByTestId('list-answer-note').last();
+  await expect(note).toBeVisible({ timeout: 300_000 });
+  await expect(note).toContainText(`${n}건`);                    // 고른 범위의 목록 개수
+});

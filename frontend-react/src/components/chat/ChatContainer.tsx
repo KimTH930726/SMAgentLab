@@ -12,7 +12,7 @@ import { getMessages } from '../../api/conversations';
 import { MessageItem } from './MessageItem';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { createCorrection, getMyCorrections, markCorrectionsSeen } from '../../api/corrections';
-import type { ChatMessage, ClarifyOption, ClarifyPrompt, PolicyCitation } from '../../types';
+import type { ChatMessage, ClarifyOption, ClarifyPrompt, PolicyCitation, ListAnswer } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
 import { showError } from '../../store/useDialogStore';
 
@@ -114,7 +114,7 @@ function PipelineStepsToggle({ steps, answering = false }: { steps: PipelineStep
   );
 }
 
-function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null; clarify?: ClarifyPrompt | null; degraded?: boolean } | null }[]): ChatMessage[] {
+function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null; clarify?: ClarifyPrompt | null; degraded?: boolean; list_answer?: ListAnswer | null } | null }[]): ChatMessage[] {
   // Fix out-of-order pairs from old data (parallel saves could put assistant before user)
   // Check pairs at step=2: (0,1), (2,3), ... and swap reversed pairs
   const ordered = [...msgs];
@@ -146,6 +146,7 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
         mapped_term: m.mapped_term,
         results: (m.results ?? []) as ChatMessage['results'],
         policyCitations: m.metadata?.policy_citations ?? [],
+        listAnswer: m.metadata?.list_answer ?? null,
         question: lastQuestion,
         has_feedback: m.has_feedback ?? false,
         messageId: m.id,

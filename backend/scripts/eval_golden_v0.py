@@ -101,12 +101,16 @@ async def main() -> None:
         found = set(got) & lids
         r = {"qid": g["qid"], "type": g["layer"], "expect": g["expect"], "ns": ns,
              "hit": bool(found), "top1": bool(first & lids), "coverage": (len(found) / len(lids)) if lids else 0.0,
-             "signals": cc.signals, "n_policies": len(got), "mapped": cc.mapped_term}
+             "signals": cc.signals, "n_policies": len(got), "mapped": cc.mapped_term,
+             # 답 모양(10/23 평가 게이트 개편) — 되물었나·목록 몇 개였나. 재질문 규칙을 바꿀 때 문항별로 무엇이 달라졌나 본다
+             "clarify": bool(cc.clarify), "list_items": cc.signals.get("category_items", 0),
+             # LLM에 실제로 실린 문맥의 지문 — 문맥 다듬기(목록 답 거르기 등)를 바꿀 때 검색 채점이 못 보는 변화를 문항별로 잡는다(10/23 리뷰 H1)
+             "ctx_hash": __import__("hashlib").sha1(cc.llm_context.encode("utf-8")).hexdigest()[:16]}
         rows.append(r)
         if details:
             # 답 없는 질문은 "negative" — 게이트 검색 비교(정답 들어감)의 분모에서 빠지게(리뷰 L2)
             details.write(json.dumps({"set": "negative" if g["expect"] == "abstain" else "golden_v0",
-                                      **{k: r[k] for k in ("qid", "type", "hit", "top1", "coverage", "ns", "mapped")},
+                                      **{k: r[k] for k in ("qid", "type", "hit", "top1", "coverage", "ns", "mapped", "clarify", "list_items", "ctx_hash")},
                                       "signals": r["signals"]}, ensure_ascii=False) + "\n")
     if details:
         details.close()

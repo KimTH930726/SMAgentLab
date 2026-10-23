@@ -145,6 +145,8 @@ class ChatContext:
     signals: dict = field(default_factory=dict)
     abstain: bool = False
     clarify: Optional[dict] = None   # 재질문(목록이 너무 넓거나 업무가 여럿) — 있으면 답 대신 선택지를 보낸다(v2.134)
+    # 목록 답이었나 {total, names} — 화면이 근거 카드(1건 역추적) 위에 "목록 n건에서 답함"을 붙인다(10/23: 카드 1건 vs 답 36줄이 어긋나 보였다)
+    list_answer: Optional[dict] = None
 
 
 def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: float) -> bool:
@@ -266,14 +268,17 @@ async def build_chat_context(
         parent_expansions = await retrieval.expand_parent_sections(adopted)
     except Exception as e:
         logger.warning("부모 섹션 확장 실패(확장 없이 진행): %s", e)
-    # 목록 답(전부·목록 질문 + 분류 목록 있음)의 문맥에선 목록 밖 정책 검색 결과를 뺀다(v2.138) — 분류 목록은 정답과 개수까지 맞는데
+    # 목록 답(목록 질문 알아보기·전체 명시 — category.is_listing + 분류 목록 있음)의 문맥에선 목록 밖 정책 검색 결과를 뺀다(v2.138) — 분류 목록은 정답과 개수까지 맞는데
     # (골든 탐색형 24문항 진단) 함께 실린 검색 결과(다른 분류 정책 최대 10개)를 LLM이 목록에 섞어 "다른 분류 섞임"이 탐색형 오답·부분의
     # 대부분이었다. 메타데이터로 범위를 정한 질문은 그 범위만 문맥에 두는 것이 업계 방식(self-query / metadata filtering).
     # 단 "전체 취소하면 쿠폰은?"처럼 "전체·모든"이 단어로만 든 구체 질문도 목록 답으로 잡히므로(리뷰 10/13 H1) 다 버리지 않고 순위로 거른다 —
     # 첫 목록 안 정책보다 위에 온 목록 밖 정책(그 질문의 진짜 정답일 수 있음)은 남기고, 그 아래 섞여 든 것만 뺀다.
     # 재질문에서 범위를 고른 경우(clarify_scope)도 목록 답이다. 인용 카드·근거 판정(signals)은 원래 검색 결과 그대로.
     ctx_policy = policy_result
-    if category and category.item_ids and (category.explicit_all or clarify_scope):
+    list_answer = None
+    if category and category.item_ids and (category.is_listing or clarify_scope):
+        # shown = 문맥에 실린 줄 수(목록 상한 40) — 화면이 "n건 중 m건으로 답함"을 알 수 있게(리뷰 L3)
+        list_answer = {"total": category.total, "names": list(category.names), "shown": min(category.total, len(category.lines))}
         ctx_policy = policy_search.PolicySearchResult(
             params=list_scoped(policy_result.params, set(category.item_ids)),
             narratives=list_scoped(policy_result.narratives, set(category.item_ids)))
@@ -304,6 +309,7 @@ async def build_chat_context(
         abstain=should_abstain(signals, settings.policy_abstain_min_score, settings.policy_abstain_min_param_rank),
         # 재질문 선택에서 온 질문(clarify_scope 있음)엔 다시 묻지 않는다 — 대화가 같은 질문으로 맴돌지 않게
         clarify=None if clarify_scope else category_list.clarify_for(category, list_question or search_question),
+        list_answer=list_answer,
     )
 
 
@@ -405,16 +411,16 @@ class KnowledgeRagAgent(AgentBase):
                         "UPDATE ops_message SET mapped_term = $1, results = $2::jsonb WHERE id = $3",
                         cached.get("mapped_term"), json.dumps(cached.get("results", []), ensure_ascii=False), msg_id,
                     )
-                await update_assistant_message(
-                    msg_id, cached["answer"], "completed",
-                    metadata={"policy_citations": cached_citations} if cached_citations else None,
-                )
+                cached_list = cached.get("list_answer")   # 목록 답 표시도 캐시에서(리뷰 L1) — 옛 캐시 항목엔 없음
+                cached_meta = {k: v for k, v in (("policy_citations", cached_citations), ("list_answer", cached_list)) if v}
+                await update_assistant_message(msg_id, cached["answer"], "completed", metadata=cached_meta or None)
                 final_saved = True
                 yield {
                     "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
                     "mapped_term": cached.get("mapped_term"),
                     "results": cached.get("results", []),
                     "policy_citations": cached_citations,
+                    "list_answer": cached_list,
                 }
                 yield {"type": "token", "data": cached["answer"]}
                 # 근거 유무는 캐시 저장 시점 값으로 — 예전엔 results(지식)만 봐서 정책·공통코드만으로 답한 캐시 응답이
@@ -538,15 +544,18 @@ class KnowledgeRagAgent(AgentBase):
             meta_out: dict = {}
             if policy_citations:
                 meta_out["policy_citations"] = policy_citations
+            if cc.list_answer and not degraded:
+                meta_out["list_answer"] = cc.list_answer
             if degraded:
                 meta_out["degraded"] = True
             await update_assistant_message(msg_id, final_answer, msg_status, metadata=meta_out or None)
             final_saved = True
-            if policy_citations or degraded:
+            if policy_citations or degraded or meta_out.get("list_answer"):
                 yield {
                     "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
                     "mapped_term": mapped_term, "results": results_to_payload(results),
                     "policy_citations": policy_citations, "degraded": degraded,
+                    "list_answer": meta_out.get("list_answer"),
                 }
             if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
                 await update_inhouse_conv_id(conversation_id, new_inhouse_conv_id)
@@ -561,6 +570,7 @@ class KnowledgeRagAgent(AgentBase):
                     "mapped_term": mapped_term,
                     "results": results_to_payload(results),
                     "policy_citations": policy_citations,
+                    "list_answer": meta_out.get("list_answer"),
                     "query": query,
                     "had_context": had_context,
                 })

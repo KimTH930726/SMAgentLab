@@ -386,10 +386,18 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther }: M
           )}
 
           {/* Policy citations — rag_knowledge 검색결과(results)와 별개 출처이므로 분리된 섹션으로 표시 */}
+          {message.listAnswer && message.listAnswer.total > 0 && (
+            <p data-testid="list-answer-note" className="text-xs text-violet-600 dark:text-violet-400 font-medium"
+              title="답이 분류 목록에서 나왔어요 — 아래 근거 카드는 그중 답에 가장 가까운 정책이에요">
+              📑 목록 답 · {(message.listAnswer.names ?? []).join(', ')} 정책 {message.listAnswer.total}건
+              {message.listAnswer.shown != null && message.listAnswer.shown < message.listAnswer.total
+                ? ` 중 ${message.listAnswer.shown}건으로 답함` : '에서'}
+            </p>
+          )}
           {message.policyCitations && message.policyCitations.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-xs text-violet-600 dark:text-violet-400 font-medium">
-                📋 정책 근거 {message.policyCitations.length}건
+                📋 정책 근거 {message.policyCitations.length}건{message.listAnswer ? ' · 답에 가장 가까운 것' : ''}
               </p>
               {message.policyCitations.map((citation, idx) => {
                 return (

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { streamChat } from '../api/chat';
-import type { ChatMessage, KnowledgeResult, PolicyCitation, SSESqlEvent, SSETableEvent, SSEChartEvent, ClarifyPrompt } from '../types';
+import type { ChatMessage, KnowledgeResult, PolicyCitation, SSESqlEvent, SSETableEvent, SSEChartEvent, ClarifyPrompt, ListAnswer } from '../types';
 
 // Module-level (non-reactive, not in Zustand state)
 let _controller: AbortController | null = null;
@@ -178,6 +178,7 @@ async function _runStream(
           results: KnowledgeResult[];
           policy_citations?: PolicyCitation[];
           degraded?: boolean;
+          list_answer?: ListAnswer | null;
         };
         if (meta.conversation_id) {
           set({ convId: meta.conversation_id });
@@ -194,6 +195,7 @@ async function _runStream(
           results: meta.results ?? m.results ?? [],
           policyCitations: meta.policy_citations ?? m.policyCitations ?? [],
           degraded: meta.degraded ?? m.degraded,
+          listAnswer: meta.list_answer ?? m.listAnswer ?? null,
         }));
       } else if ((event as { type: string }).type === 'clarify') {
         // 재질문(v2.134) — 답 대신 범위 선택지. 글은 뒤따르는 token으로 온다

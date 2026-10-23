@@ -219,7 +219,7 @@ async def test_second_turn_without_augmentation_skips_cache(monkeypatch):
 class TestAnswerShaping:
     """답 생성 문맥 다듬기(v2.138) — 목록 답은 목록 밖 정책 검색 결과를 빼고, 조건 한정 질문엔 답 구조를 붙인다."""
 
-    def _wire_ctx(self, monkeypatch, *, explicit_all: bool, item_ids):
+    def _wire_ctx(self, monkeypatch, *, explicit_all: bool, item_ids, is_listing=None):
         from service.policy.search import NarrativeHit
         H = lambda i: NarrativeHit(item_id=i, logical_id=i, policy_name=f"p{i}", category_path=[], status="active",  # noqa: E731
                                    chunk_text="t", score=0.6, raw_body="b")
@@ -235,7 +235,9 @@ class TestAnswerShaping:
         monkeypatch.setattr(agent.policy_search, "search_policy", AsyncMock(return_value=pr))
         monkeypatch.setattr(agent.refdata_search, "has_refdata", AsyncMock(return_value=False))
         monkeypatch.setattr(agent, "get_conn", lambda: _ConnCtx())
-        cat = MagicMock(item_ids=list(item_ids), explicit_all=explicit_all, total=len(item_ids), scope_missed=False)
+        cat = MagicMock(item_ids=list(item_ids), explicit_all=explicit_all,
+                        is_listing=explicit_all if is_listing is None else is_listing, total=len(item_ids),
+                        scope_missed=False, names=["교환"], lines=["-"] * len(item_ids))
         cat.block.return_value = "[분류 목록]"
         monkeypatch.setattr(agent.category_list, "find_category_list", AsyncMock(return_value=cat if item_ids else None))
         monkeypatch.setattr(agent.category_list, "clarify_for", lambda c, q: None)
@@ -257,6 +259,14 @@ class TestAnswerShaping:
         cc = await self._run("교환 정책 전부 보여줘")
         assert seen["ids"] == [1, 3]                                  # 목록 밖(2)은 문맥에서 빠짐
         assert [n.item_id for n in cc.policy_result.narratives] == [1, 2, 3]   # 인용·판정용 원래 결과는 그대로
+        assert cc.list_answer["total"] == 2 and cc.list_answer["names"] == ["교환"]   # 화면: 근거 카드 위 "목록 2건에서 답함"(10/23)
+
+    @pytest.mark.asyncio
+    async def test_listing_word_without_all_still_filters_context(self, monkeypatch):
+        """ "쿠폰 정책 목록 보여줘"(20개 이하) — 전체 명시는 아니어도 목록 답이라 문맥 거르기·표시가 켜진다(10/23 리뷰 H1 — 되묻기 판단만 바꿨다)."""
+        _, seen = self._wire_ctx(monkeypatch, explicit_all=False, is_listing=True, item_ids=[1, 3])
+        cc = await self._run("교환 정책 목록 보여줘")
+        assert seen["ids"] == [1, 3] and cc.list_answer["total"] == 2
 
     @pytest.mark.asyncio
     async def test_out_of_list_hit_ranked_above_list_is_kept(self, monkeypatch):
@@ -268,8 +278,8 @@ class TestAnswerShaping:
     @pytest.mark.asyncio
     async def test_clarify_scope_choice_is_a_listing_answer(self, monkeypatch):
         _, seen = self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[1])   # 범위를 고르면 explicit_all은 False로 온다
-        await self._run("주문 > 장바구니 정책 전부 보여줘", scope="주문 > 장바구니")
-        assert seen["ids"] == [1]
+        cc = await self._run("주문 > 장바구니 정책 전부 보여줘", scope="주문 > 장바구니")
+        assert seen["ids"] == [1] and cc.list_answer["total"] == 1
 
     @pytest.mark.asyncio
     async def test_org_space_scope_off_keeps_search_call_identical(self, monkeypatch):

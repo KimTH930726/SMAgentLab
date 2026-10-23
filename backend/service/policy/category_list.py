@@ -174,7 +174,10 @@ class CategoryList:
     lines: list[str]
     places: list[tuple[str, int]] = field(default_factory=list)     # 고른 이름이 있는 위치(경로, 정책 수) — 2곳 이상이면 업무가 다른 같은 이름
     children: list[tuple[str, int]] = field(default_factory=list)   # 위치가 하나일 때 그 바로 아래 하위 분류(경로, 정책 수)
-    explicit_all: bool = False   # 질문이 "전부·모든·목록"으로 전체를 명시(키워드 판별) — 그러면 묻지 않고 다 보여준다
+    explicit_all: bool = False   # 질문이 "전부·모든·전체…"로 전체를 명시(says_all) — 그러면 묻지 않고 다 보여준다("목록"은 아님, 10/23)
+    # 목록 답인가(목록 질문 알아보기 "목록·리스트·정리해줘…" 또는 전체 명시) — 목록 답 문맥 거르기(v2.138)·"목록 답" 표시를 켠다.
+    # 되묻기 판단(explicit_all)과 따로 — 10/23 둘을 함께 풀었다가 20개 이하 "목록" 질문이 문맥 거르기를 잃을 뻔했다(리뷰 H1)
+    is_listing: bool = False
     item_ids: list[int] = field(default_factory=list)   # 목록에 든 정책 id — 목록 답의 문맥에서 목록 밖 검색 결과를 빼는 데(v2.138)
     scope_missed: bool = False   # 재질문에서 고른 범위를 못 찾아 질문 글로 다시 찾음(분류가 바뀐 경우 등) — 화면에 알린다
 
@@ -197,7 +200,9 @@ class CategoryList:
                 + "\n".join(f"{i}. {ln[2:] if ln.startswith('- ') else ln}" for i, ln in enumerate(self.lines, 1)))
 
 
-_ALL_WORDS = ("전부", "모든", "전체", "모두", "목록", "한번에", "한눈에", "다보여", "싹다")
+# "전체를 달라고 분명히 말함" — 이때만 묻지 않고 다 보여준다. "목록·리스트"는 넣지 않는다(10/23 사용자: "배송 정책 목록 말해줘"에 36개를
+# 한 번에 늘어놓음 — 목록은 "목록 형태로"라는 뜻이지 "전부"가 아니다. 목록 질문 알아보기(NAV_SIGNAL_RE)엔 그대로 쓰인다)
+_ALL_WORDS = ("전부", "모든", "전체", "모두", "한번에", "한눈에", "다보여", "싹다")
 
 
 def says_all(question: str, names: list[str] = ()) -> bool:
@@ -230,7 +235,7 @@ def _narrow_by_parent(question: str, places: dict[str, set[int]]) -> dict[str, s
 
 def clarify_for(cl: Optional[CategoryList], question: str) -> Optional[dict]:
     """재질문할지 — 대화가 끊기지 않게 좁은 규칙 하나만(LLM 없음, 2026-10-12). 아니면 None(평소대로 답).
-    묻는 경우 = 분류 목록이 붙은 질문 중 **주제만 말하고**("재고 정책 좀" — "전부·모든·목록"으로 전체를 명시하지 않음) 정책이
+    묻는 경우 = 분류 목록이 붙은 질문 중 **전체를 명시하지 않고**("재고 정책 좀"·"배송 정책 목록 말해줘" — "전부·모든·전체"가 없음) 정책이
     CLARIFY_MAX_ITEMS개 초과일 때. 선택지 = 업무가 여럿이면 업무별, 하나면 하위 분류별(정책 많은 순 최대 3) + "전부 보기".
     안 묻는 경우: 일반 질문(목록 없음), 전체를 명시한 질문(다 보여주되 업무별로 묶음), 작은 목록, 재질문에서 고른 질문(호출부가 막음).
     진단(10/12): 업무가 여럿이면 묻는 규칙은 골든 탐색형 6/24·실제 질문 1건(구체 질문)에 걸려 버림 — "배치 정책 전부"처럼 서비스마다
@@ -330,5 +335,7 @@ async def find_category_list(ns_ids: Union[int, Sequence[int]], question: str, q
     lines = [f"- {r['cat']} > {r['policy_name']} — {list_line_summary(r['policy_name'], r['body'])}" for r in rows]
     return CategoryList(names=[idx.display[n] for n in picked], total=len(ids), lines=lines, item_ids=list(ids),
                         places=sorted(((p, len(v)) for p, v in places.items()), key=lambda x: -x[1]), children=children,
-                        explicit_all=not scoped and (bool(keyword_nav) or says_all(question, [idx.display[n] for n in picked])),
+                        # 목록 질문 알아보기(keyword_nav — "목록·리스트" 포함)와 "전체 명시"는 따로 — 예전엔 목록 신호가 곧 전체 명시였다(10/23)
+                        explicit_all=not scoped and says_all(question, [idx.display[n] for n in picked]),
+                        is_listing=not scoped and (bool(keyword_nav) or says_all(question, [idx.display[n] for n in picked])),
                         scope_missed=bool(scope and scope != "*" and not scoped))

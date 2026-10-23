@@ -107,6 +107,9 @@ class TestClarify:
 
     def test_says_all_and_parent_narrowing(self):
         assert cl.says_all("배송 정책 전부 보여줘") and cl.says_all("모든 쿠폰 정책") and not cl.says_all("배송 정책 좀")
+        # "목록·리스트"는 목록 형태로 달라는 말이지 "전부"가 아니다 — 많으면 되묻는다(10/23 실사례: "배송 정책 목록 말해줘"에 36개)
+        assert not cl.says_all("배송 정책에 관련된 정책들 목록 말해줘") and not cl.says_all("배송 정책 리스트")
+        assert cl.clarify_for(self._cl(36, children=[("B2C", 15), ("B2B", 12), ("알림", 9)]), "배송 정책 목록 말해줘") is not None
         places = {"배송 > B2B > 공통": {1}, "클레임 > 공통": {2}}
         assert cl._narrow_by_parent("클레임 공통 정책 좀", places) == {"클레임 > 공통": {2}}
         assert cl._narrow_by_parent("공통 정책 좀", places) == places   # 못 좁히면 그대로(다 보여주되 업무별로 묶음)
@@ -175,6 +178,15 @@ class TestFindCategoryListWithIndex:
         assert both.total == 2 and len(both.places) == 2 and both.explicit_all and "업무별로 묶어" in both.block()
         only = asyncio.run(cl.find_category_list(1, "클레임 공통 정책 전부", [0.0, 0.0], keyword_nav=True))
         assert only.total == 1 and only.places == [("클레임 > 공통", 1)]
+
+    def test_listing_word_is_listing_but_not_explicit_all(self, monkeypatch):
+        """ "목록·리스트"(목록 질문 알아보기)는 목록 답(문맥 거르기·표시)이지만 "전체 명시"는 아니다 — 크면 되묻고, 작으면 목록 답(10/23 리뷰 H1:
+        둘을 함께 풀어 20개 이하 "목록" 질문이 문맥 거르기를 잃을 뻔했다)."""
+        asyncio = self._patch(monkeypatch)
+        r = asyncio.run(cl.find_category_list(1, "주문 정책 목록 알려줘", [0.0, 0.0], keyword_nav=True))
+        assert r.is_listing and not r.explicit_all
+        e = asyncio.run(cl.find_category_list(1, "주문 정책 전부", [0.0, 0.0], keyword_nav=True))
+        assert e.is_listing and e.explicit_all
 
 
 def test_parent_narrowing_longest_first():
