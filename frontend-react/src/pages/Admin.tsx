@@ -73,6 +73,8 @@ export default function Admin() {
   const groups = visibleAdminMenu(user);
   const current = resolveAdminMenu(location.pathname, groups);
   const go = (id: AdminMenuId) => navigate(adminPath(id));
+  // 컬렉션 현황 화면(업무·조직)의 [지식 등록 →]·[보기 →] — 컬렉션은 링크가 먼저 골라 둔다
+  const toDocs = (tab: 'ingest' | 'list') => navigate(tab === 'ingest' ? `${adminPath('k.docs')}?tab=ingest` : adminPath('k.docs'));
   // 없는 메뉴·볼 수 없는 메뉴 주소로 들어오면 실제로 보여 주는 메뉴 주소로 바로잡는다(주소창과 화면이 어긋나지 않게)
   useEffect(() => {
     if (location.pathname !== adminPath(current)) navigate(adminPath(current), { replace: true });
@@ -89,8 +91,8 @@ export default function Admin() {
       <AdminCrumb current={current} />
       <div className="flex-1 overflow-y-auto p-6">
         <TabErrorBoundary key={current}>
-          {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} />}
-          {current === 'org.collections' && <OrgCollectionManager onRegister={(tab) => navigate(tab === 'ingest' ? `${adminPath('k.docs')}?tab=ingest` : adminPath('k.docs'))} />}
+          {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} onRegister={toDocs} />}
+          {current === 'org.collections' && <OrgCollectionManager onRegister={toDocs} />}
           {current === 'k.policy'      && (orgSelected ? <NotInOrg />
             : <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} onOpenCorrections={() => go('q.corrections')} />)}
           {current === 'k.docs'        && <KnowledgeTable />}

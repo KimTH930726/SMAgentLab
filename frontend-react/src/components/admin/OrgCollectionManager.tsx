@@ -5,11 +5,12 @@ import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { canEditDomain, effectiveOwnerParts } from '../../utils/domainAccess';
 import { OrgCollectionSections, OrgTeamSections, TierCard, orgTeams, teamSub, type OrgTeam, type Tier } from '../layout/collectionCards';
 import type { NamespaceDetail } from '../../types';
+import { CollectionLinks } from './CollectionLinks';
 
 /**
  * 컬렉션 › 조직 컬렉션(10/22, collection-design §3·§15-8·§15-9) — 고르는 창 조직 탭과 같은 팀 → (팀 공통 + 파트) 카드, 개수 보기용.
  * 조직 컬렉션은 팀·파트를 만들면 생기고 지우면 같이 지워진다(지식·용어가 있으면 거부) — 여기서 만들거나 이름을 바꾸지 않는다.
- * [지식 등록 →] = 그 컬렉션을 보는 컬렉션으로 고르고 지식 문서 › 등록 탭으로(넣는 곳은 [지식 등록] 한 곳, §15-9). 쓸 수 없으면 [보기 →].
+ * [지식 등록 →](쓸 수 있을 때) · [보기 →](항상) = 그 컬렉션을 고르고 지식 문서 › 등록 탭 / 목록으로(넣는 곳은 [지식 등록] 한 곳, §15-9).
  */
 export function OrgCollectionManager({ onRegister }: { onRegister: (tab: 'ingest' | 'list') => void }) {
   const { nsDetails, setSelectedNs, user } = useNamespaceAccess();
@@ -37,13 +38,7 @@ export function OrgCollectionManager({ onRegister }: { onRegister: (tab: 'ingest
     return (
       <TierCard key={d.name} tier={tier} title={d.display_name ?? d.name} empty={d.knowledge_count + d.glossary_count === 0}
         sub={`지식 문서 ${d.knowledge_count} · 용어 ${d.glossary_count}`}
-        action={
-          <button type="button" onClick={() => go(d, editable ? 'ingest' : 'list')}
-            title={editable ? '이 컬렉션을 고르고 지식 문서 › 등록으로' : '이 컬렉션을 고르고 지식 문서로(쓰기는 그 팀·파트 사람과 관리자만)'}
-            className="text-xs font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-300 dark:hover:text-indigo-200">
-            {editable ? '지식 등록 →' : '보기 →'}
-          </button>
-        } />
+        action={<CollectionLinks editable={editable} onGo={(tab) => go(d, tab)} />} />
     );
   };
 

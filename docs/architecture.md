@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.161)
+# OpsLens 시스템 아키텍처 (v2.162)
 
 ## 개요
 
@@ -12,6 +12,10 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.162 (2026-10-23, dev_0): **컬렉션 현황 화면 = 보기 + 넘기기, 설정은 시스템·권한으로(사용자 10/23).** 업무·조직 컬렉션 줄/카드마다 [지식 등록 →](쓸 수 있을 때) · [보기 →](항상) — 그 컬렉션을 고른 채 지식 문서 등록 탭 / 목록(`CollectionLinks`). 업무 컬렉션 수정 창 = 이름만,
+  담당 파트 지정은 시스템·권한 › 조직·권한 › 담당 업무 한 곳(프론트 `setNamespaceOwners` 삭제, 백엔드 `PATCH /namespaces/{name}/settings`는 API·시나리오용으로 유지).
+  운영 반입 1회성 `scripts/move_team_common_to_org.py`(업무 "팀 공통" → 조직 팀 공통, 미리보기 기본 · `--apply` · `--rollback`, 정책·VOC·참조·정책 정정·하위·진행 중 적재 있으면 멈춤,
+  지식 updated_at 보존). 마이그레이션 없음.
 - v2.161 (2026-10-23, dev_0): **업무구분 칸·표 삭제(C6, 마이그레이션 #84).** 설계 `docs/tech/category-removal-design.md`. `ops_prompt(category_suggest)` 줄 삭제 · `DROP TABLE rag_knowledge_category` · `ALTER TABLE rag_knowledge DROP COLUMN category`(모두 IF EXISTS — 새 설치는 init이 만들고 #84가 지움).
   매 기동 도는 앞 마이그레이션도 맞춤: #60 스냅샷에서 category 뺌 · 영역 id 이관 표 목록에서 `rag_knowledge_category` 뺌 · #72는 칸이 없으면 건너뜀. 백업: 표 `*_backup_20261023` 3개 + 전체 덤프(10/23).
   검증: 복사본 DB 두 번 기동 통과 · 검색 게이트 질문별 동일(106·441) · 시나리오 4종 · E2E.
