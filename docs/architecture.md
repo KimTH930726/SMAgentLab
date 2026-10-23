@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.163)
+# OpsLens 시스템 아키텍처 (v2.164)
 
 ## 개요
 
@@ -12,6 +12,11 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.164 (2026-10-23, dev_0): **메뉴 노출 관리(영역별) + 조직 컬렉션 카드로 보는 컬렉션 고르기.** 사용자 10/23 "필요 없는 메뉴는 미노출 — 나중엔 권한별도".
+  두 겹: ① 담을 수 있는 것 = 코드(`adminMenu.ts` 항목 `kinds` — 정책서·시스템 정보·VOC는 업무만, 서버도 조직엔 400) ② 보이게 할 것 = 설정(시스템·권한 › 설정 › 메뉴 노출,
+  관리자, `ops_system_config.menu_visibility` = {"hidden": {"kind:<종류>": [메뉴 id]}} — 나중 권한별은 `role:<역할>` 같은 모양). 왼쪽 메뉴·본문이 `useAdminMenu` 하나로,
+  숨긴 메뉴 주소로 오면 기존 바로잡기가 지식 문서로(옛 "조직 컬렉션엔 없음" 흐린 안내 삭제). API `GET/PUT /api/admin/menu-visibility`(읽기 = 로그인 전부, 쓰기 = 관리자).
+  조직 컬렉션 카드 본문을 누르면 보는 컬렉션이 바뀐다(업무 컬렉션 표의 줄과 같게, "· 지금" 표시). 마이그레이션 없음.
 - v2.163 (2026-10-23, dev_0): **E1 — AI 판단 원장 + 등록 위치 판정(백엔드만, 등록 동작은 그대로).** 설계 `docs/tech/collection-design.md` §16·§17.
   원장 `ops_ai_decision`(#85): 판단 1건 = 1줄(AI 값·확신·근거 신호·모델/프롬프트 버전), 사람이 확정·변경하면 같은 줄에 최종 값·"AI가 틀렸나요?" 답. 원문 안 남김.
   계산은 `trustkit.decision.ledger`(확신 = AI 값 = 이웃 5중 4 · 종류별 집계), DB는 `service/decision/ledger.py`(판단하는 쪽은 이 함수만).

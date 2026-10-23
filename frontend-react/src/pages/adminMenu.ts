@@ -19,7 +19,20 @@ export interface AdminMenuItem {
   viewerOk?: boolean;      // 조회 전용(가입 후 승인 대기)에게도 보임 — 나머지는 서버가 403이라 숨긴다
   hint?: string;           // title 툴팁
   scoped?: boolean;        // 고른 업무 컬렉션에 따라 내용이 바뀌는 화면 — 본문 위 경로 표시줄에 업무 컬렉션을 보여 준다
+  /** 이 메뉴가 담을 수 있는 컬렉션 종류(scoped만) — 없으면 둘 다. 서버도 그 종류엔 그 데이터를 400으로 막는다(정책 가져오기·VOC·참조데이터).
+   *  설정(메뉴 노출)은 이 안에서 숨기기만 한다 — 담을 수 없는 종류에 켤 수는 없다(10/23). */
+  kinds?: CollectionKind[];
+  /** 메뉴 노출 설정으로 끌 수 없음 — 지식 문서는 숨긴 메뉴 주소의 도착지이자 [지식 등록 →]·[보기 →] 링크가 가는 곳(리뷰 10/23) */
+  required?: boolean;
 }
+
+export type CollectionKind = 'domain' | 'org_space';
+export const COLLECTION_KINDS: { kind: CollectionKind; label: string }[] = [
+  { kind: 'domain', label: '업무 컬렉션' },
+  { kind: 'org_space', label: '조직 컬렉션' },
+];
+/** 메뉴 노출 설정의 범위 키 — 나중에 권한별은 role:<역할>로 같은 모양(api/menu.ts) */
+export const kindScope = (kind: CollectionKind) => `kind:${kind}`;
 
 export interface AdminMenuGroup {
   id: string;
@@ -31,10 +44,10 @@ export interface AdminMenuGroup {
 // 이름이 겹쳐 헷갈렸다(사용자). 주소(id)는 그대로 둬 옛 링크가 안 깨진다.
 export const ADMIN_MENU: AdminMenuGroup[] = [
   { id: 'knowledge', label: '지식', items: [
-    { id: 'k.policy', label: '정책서', scoped: true },
-    { id: 'k.docs', label: '지식 문서', hint: '컨플루언스 등에서 가져온 업무 지식', scoped: true },
+    { id: 'k.policy', label: '정책서', scoped: true, kinds: ['domain'] },
+    { id: 'k.docs', label: '지식 문서', hint: '컨플루언스 등에서 가져온 업무 지식', scoped: true, required: true },
     { id: 'k.glossary', label: '용어집', scoped: true },
-    { id: 'k.system', label: '시스템 정보', hint: 'DB 칼럼·공통코드 — 준비 중', scoped: true },
+    { id: 'k.system', label: '시스템 정보', hint: 'DB 칼럼·공통코드 — 준비 중', scoped: true, kinds: ['domain'] },
   ] },
   { id: 'collections', label: '컬렉션', items: [
     { id: 'domains', label: '업무 컬렉션', hint: '업무별 지식을 두는 곳 — 담당 파트·건수' },
@@ -46,7 +59,7 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
     { id: 'q.eval', label: '평가 게이트' },
   ] },
   { id: 'voc', label: 'VOC 이메일', items: [
-    { id: 'voc', label: 'VOC 이메일', scoped: true },
+    { id: 'voc', label: 'VOC 이메일', scoped: true, kinds: ['domain'] },
   ] },
   { id: 'system', label: '시스템·권한', items: [
     { id: 'org', label: '조직·권한', adminOnly: true, hint: '사용자 · 팀 › 파트 · 담당 업무(서브탭)' },
@@ -55,12 +68,18 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
   ] },
 ];
 
-/** 이 사용자에게 보이는 메뉴(빈 묶음은 뺀다). */
-export function visibleAdminMenu(user: Pick<User, 'role'> | null | undefined): AdminMenuGroup[] {
+/** 고른 컬렉션 종류에서 이 메뉴를 담을 수 있나(설정과 무관한 상한). */
+export const supportsKind = (it: AdminMenuItem, kind: CollectionKind) => !it.scoped || !it.kinds || it.kinds.includes(kind);
+
+/** 이 사용자에게 보이는 메뉴(빈 묶음은 뺀다). ctx가 있으면 고른 컬렉션 종류에 맞춰 — 담을 수 없는 메뉴 + 설정에서 숨긴 메뉴를 뺀다(10/23). */
+export function visibleAdminMenu(user: Pick<User, 'role'> | null | undefined,
+                                 ctx?: { kind: CollectionKind; hidden?: Record<string, string[]> }): AdminMenuGroup[] {
   const isAdmin = user?.role === 'admin';
   const isViewer = user?.role === 'viewer';
+  const hidden = new Set(ctx ? ctx.hidden?.[kindScope(ctx.kind)] ?? [] : []);
   return ADMIN_MENU
-    .map((g) => ({ ...g, items: g.items.filter((it) => (!it.adminOnly || isAdmin) && (!isViewer || it.viewerOk)) }))
+    .map((g) => ({ ...g, items: g.items.filter((it) => (!it.adminOnly || isAdmin) && (!isViewer || it.viewerOk)
+      && (!ctx || !it.scoped || (supportsKind(it, ctx.kind) && (it.required || !hidden.has(it.id))))) }))
     .filter((g) => g.items.length > 0);
 }
 

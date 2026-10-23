@@ -11,9 +11,10 @@ import { CollectionLinks } from './CollectionLinks';
  * 컬렉션 › 조직 컬렉션(10/22, collection-design §3·§15-8·§15-9) — 고르는 창 조직 탭과 같은 팀 → (팀 공통 + 파트) 카드, 개수 보기용.
  * 조직 컬렉션은 팀·파트를 만들면 생기고 지우면 같이 지워진다(지식·용어가 있으면 거부) — 여기서 만들거나 이름을 바꾸지 않는다.
  * [지식 등록 →](쓸 수 있을 때) · [보기 →](항상) = 그 컬렉션을 고르고 지식 문서 › 등록 탭 / 목록으로(넣는 곳은 [지식 등록] 한 곳, §15-9).
+ * 카드 본문을 누르면 보는 컬렉션만 바꾼다(업무 컬렉션 표의 줄과 같게, 10/23) — 지금 보는 카드는 "· 지금" + 테두리.
  */
 export function OrgCollectionManager({ onRegister }: { onRegister: (tab: 'ingest' | 'list') => void }) {
-  const { nsDetails, setSelectedNs, user } = useNamespaceAccess();
+  const { nsDetails, selectedNs, setSelectedNs, user } = useNamespaceAccess();
   const { data: parts = [] } = useQuery({ queryKey: ['parts-public'], queryFn: getParts, staleTime: 300_000 });
   const userPart = user?.part ?? null;
   const teams = useMemo(() => orgTeams(nsDetails, parts, userPart), [nsDetails, parts, userPart]);
@@ -38,6 +39,8 @@ export function OrgCollectionManager({ onRegister }: { onRegister: (tab: 'ingest
     return (
       <TierCard key={d.name} tier={tier} title={d.display_name ?? d.name} empty={d.knowledge_count + d.glossary_count === 0}
         sub={`지식 문서 ${d.knowledge_count} · 용어 ${d.glossary_count}`}
+        // 카드를 누르면 보는 컬렉션을 이것으로 — 업무 컬렉션 표의 줄 누르기와 같게(10/23 사용자)
+        current={d.name === selectedNs} onClick={() => setSelectedNs(d.name)}
         action={<CollectionLinks editable={editable} onGo={(tab) => go(d, tab)} />} />
     );
   };

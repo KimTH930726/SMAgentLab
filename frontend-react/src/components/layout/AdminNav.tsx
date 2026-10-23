@@ -3,10 +3,10 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { BarChart2, BookOpen, ChevronDown, ChevronUp, Layers, Mail, Settings, Users, type LucideIcon } from 'lucide-react';
-import { useAuthStore } from '../../store/useAuthStore';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { getCorrectionPendingCount } from '../../api/corrections';
-import { adminPath, resolveAdminMenu, visibleAdminMenu, type AdminMenuId } from '../../pages/adminMenu';
+import { adminPath, resolveAdminMenu, type AdminMenuId } from '../../pages/adminMenu';
+import { useAdminMenu } from '../../utils/useAdminMenu';
 
 const OPEN_KEY = 'opslens.adminNav.open';
 
@@ -29,8 +29,8 @@ function loadOpen(): string[] | null {
 export function AdminNav() {
   const location = useLocation();
   const navigate = useNavigate();
-  const user = useAuthStore((s) => s.user);
-  const groups = visibleAdminMenu(user);
+  // 보는 컬렉션 종류(업무/조직)에 따라 담을 수 없는 메뉴·설정에서 숨긴 메뉴는 빠진다(10/23)
+  const { groups } = useAdminMenu();
   const current = resolveAdminMenu(location.pathname, groups);
   const [open, setOpen] = useState<string[]>(() => loadOpen() ?? []);
   const [closedCurrent, setClosedCurrent] = useState<string | null>(null);   // 지금 화면이 든 묶음을 사람이 접었으면 그 묶음 id — 화면을 옮기면 풀린다

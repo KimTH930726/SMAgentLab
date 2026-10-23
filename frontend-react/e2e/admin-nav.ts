@@ -15,6 +15,15 @@ export async function goAdmin(page: Page, group: string, item: string) {
 /** 보는 컬렉션 칩(사이드바, 채팅·관리 화면 공통) — 10/22부터 select가 아니라 버튼 + 고르는 창 */
 export const domainSelect = (page: Page) => page.locator('#sidebar-domain');
 
+/** 주소로 바로 들어가기 — 새로고침이면 에이전트 선택 화면이 먼저 나와 "선택하기"를 누른다(10/23, 메뉴 바로잡기 확인용) */
+export async function gotoAdminUrl(page: Page, path: string) {
+  await page.goto(path);
+  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
+  await agentHeading.or(page.locator('#sidebar-domain')).first().waitFor();
+  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
+  await page.locator('#sidebar-domain').waitFor();
+}
+
 /**
  * 보는 컬렉션 고르기 — 테스트 컬렉션(policy_test)은 고르는 창에 안 보이므로(S6), 앱이 기억하는 값(src/utils/selectedDomain.ts의
  * `opslens.namespace:<사용자>`)을 바꾸고 새로고침한다. 지금 주소(관리 메뉴)는 그대로 남는다.

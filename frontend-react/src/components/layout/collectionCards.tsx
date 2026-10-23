@@ -42,6 +42,16 @@ export function TierCard({ tier, title, sub, empty, current, onClick, action }: 
       <button type="button" onClick={onClick} aria-current={current ? 'true' : undefined} className={cls}>{body}</button>
     );
   }
+  if (onClick && action) {
+    // 관리 화면 카드(10/23 사용자: 업무 표처럼 눌러서 고르기) — 제목·설명 부분만 버튼, 아래 링크는 따로(버튼 안 버튼 금지)
+    return (
+      <div className={clsx(cls, 'flex flex-col gap-1')}>
+        <button type="button" onClick={onClick} aria-current={current ? 'true' : undefined} title="이 컬렉션을 보는 컬렉션으로"
+          className="text-left rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400">{body}</button>
+        <div className="mt-1">{action}</div>
+      </div>
+    );
+  }
   return <div className={clsx(cls, 'flex flex-col gap-1')}>{body}{action && <div className="mt-1">{action}</div>}</div>;
 }
 

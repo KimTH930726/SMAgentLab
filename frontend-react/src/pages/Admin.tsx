@@ -14,9 +14,9 @@ import { PolicyPanel } from '../components/admin/policy/PolicyPanel';
 import { CorrectionReviewTab } from '../components/admin/CorrectionReviewTab';
 import { useAuthStore } from '../store/useAuthStore';
 import { useNamespaceAccess } from '../utils/useNamespaceAccess';
-import { isOrgName } from '../utils/collections';
 import { AdminCrumb } from '../components/layout/AdminCrumb';
-import { adminPath, resolveAdminMenu, visibleAdminMenu, type AdminMenuId } from './adminMenu';
+import { adminPath, resolveAdminMenu, type AdminMenuId } from './adminMenu';
+import { useAdminMenu } from '../utils/useAdminMenu';
 
 // ── ErrorBoundary ─────────────────────────────────────────────────────────────
 
@@ -54,11 +54,6 @@ function CorrectionsPanel() {
   return <CorrectionReviewTab namespace={selectedNs} focusId={focus} />;
 }
 
-// 조직 컬렉션엔 지식 문서·용어만(collection-design §2) — 정책서·시스템 정보 화면은 내용 대신 흐린 안내 한 줄(§15-13)
-function NotInOrg() {
-  return <p className="text-sm text-slate-500 py-10 text-center" data-testid="org-no-policy">조직 컬렉션엔 정책·시스템 정보가 없어요</p>;
-}
-
 function NotReady({ what }: { what: string }) {
   return <p className="text-sm text-slate-400 py-10 text-center">{what} 화면은 준비 중이에요.</p>;
 }
@@ -68,9 +63,8 @@ export default function Admin() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
-  const { selectedNs } = useNamespaceAccess();
-  const orgSelected = isOrgName(selectedNs);
-  const groups = visibleAdminMenu(user);
+  // 보는 컬렉션이 조직이면 정책서·시스템 정보·VOC는 메뉴에서 빠지고(담을 수 없음), 그 주소로 오면 아래 바로잡기가 지식 문서로 옮긴다(10/23)
+  const { groups } = useAdminMenu();
   const current = resolveAdminMenu(location.pathname, groups);
   const go = (id: AdminMenuId) => navigate(adminPath(id));
   // 컬렉션 현황 화면(업무·조직)의 [지식 등록 →]·[보기 →] — 컬렉션은 링크가 먼저 골라 둔다
@@ -93,11 +87,10 @@ export default function Admin() {
         <TabErrorBoundary key={current}>
           {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} onRegister={toDocs} />}
           {current === 'org.collections' && <OrgCollectionManager onRegister={toDocs} />}
-          {current === 'k.policy'      && (orgSelected ? <NotInOrg />
-            : <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} onOpenCorrections={() => go('q.corrections')} />)}
+          {current === 'k.policy'      && <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} onOpenCorrections={() => go('q.corrections')} />}
           {current === 'k.docs'        && <KnowledgeTable />}
           {current === 'k.glossary'    && <GlossaryTable />}
-          {current === 'k.system'      && (orgSelected ? <NotInOrg /> : <NotReady what="시스템 정보(DB 칼럼·공통코드)" />)}
+          {current === 'k.system'      && <NotReady what="시스템 정보(DB 칼럼·공통코드)" />}
           {current === 'org'           && isAdmin && <OrgAccessPanel />}
           {current === 'q.stats'       && <StatsPanel onOpenCorrections={() => go('q.corrections')} />}
           {current === 'q.corrections' && <CorrectionsPanel />}

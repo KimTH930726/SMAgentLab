@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Cpu, CheckCircle2, XCircle, AlertTriangle, RefreshCw, Save, FlaskConical, SlidersHorizontal, KeyRound, ChevronDown, MessageSquareText } from 'lucide-react';
+import { Cpu, CheckCircle2, XCircle, AlertTriangle, RefreshCw, Save, FlaskConical, SlidersHorizontal, KeyRound, ChevronDown, MessageSquareText, PanelLeft } from 'lucide-react';
 import { getLLMConfig, updateLLMConfig, testLLMConnection, getSearchThresholds, updateSearchThresholds, getSearchDefaults, updateSearchDefaults } from '../../api/llm';
 import { getCacheConfig, setCacheConfig } from '../../api/cache';
 import type { CacheConfig } from '../../api/cache';
@@ -11,6 +11,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
 import { showError } from '../../store/useDialogStore';
 import { LlmUsagePanel } from './LlmUsagePanel';
+import { MenuVisibilitySettings } from './MenuVisibilitySettings';
 
 type Provider = 'inhouse' | 'openai_compat';   // 화면 선택지 — Ollama는 .env로만(비상용, 2026-10-20 사용자 결정)
 
@@ -134,11 +135,12 @@ function CollapsibleSection({ title, defaultOpen = true, children }: { title: st
   );
 }
 
-type SubTab = 'provider' | 'thresholds' | 'prompts';
+type SubTab = 'provider' | 'thresholds' | 'prompts' | 'menu';
 
 export function LLMSettings() {
   const [subTab, setSubTab] = useState<SubTab>('thresholds');
   const selectedAgent = useAppStore((s) => s.selectedAgent);
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');   // 메뉴 노출은 관리자만 바꾼다(서버도 관리자만)
 
   return (
     <div className={subTab === 'prompts' ? 'max-w-5xl' : 'max-w-2xl'}>
@@ -177,9 +179,23 @@ export function LLMSettings() {
           <Cpu className="w-3.5 h-3.5" />
           LLM 프로바이더
         </button>
+        {isAdmin && (
+          <button
+            onClick={() => setSubTab('menu')}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              subTab === 'menu'
+                ? 'text-indigo-400 border-indigo-500'
+                : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600'
+            }`}
+          >
+            <PanelLeft className="w-3.5 h-3.5" />
+            메뉴 노출
+          </button>
+        )}
       </div>
 
       {subTab === 'provider' && <ProviderSettings />}
+      {subTab === 'menu' && isAdmin && <MenuVisibilitySettings />}
       {subTab === 'prompts' && <PromptManager agentType={selectedAgent} />}
       {subTab === 'thresholds' && (
         <div className="space-y-4">

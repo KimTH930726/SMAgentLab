@@ -374,6 +374,28 @@ async def update_search_defaults_config(body: SearchDefaultsUpdate, admin: dict 
     return set_search_defaults(updates)
 
 
+# ── 메뉴 노출(10/23) — 범위(컬렉션 종류, 나중엔 역할)마다 숨길 메뉴 ─────────────────────
+
+class MenuVisibilityUpdate(BaseModel):
+    hidden: dict[str, list[str]]
+
+
+@router.get("/api/admin/menu-visibility")
+async def get_menu_visibility(user: dict = Depends(get_current_user)):
+    """왼쪽 메뉴를 그리는 모두가 읽는다(조회 전용 포함) — 값은 메뉴 id뿐."""
+    from service.admin.menu_visibility import get_visibility
+    return await get_visibility()
+
+
+@router.put("/api/admin/menu-visibility")
+async def update_menu_visibility(body: MenuVisibilityUpdate, admin: dict = Depends(get_current_admin)):
+    from service.admin.menu_visibility import set_visibility
+    try:
+        return await set_visibility(body.hidden)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ── Semantic Cache ────────────────────────────────────────────────────────────
 
 class CacheDeleteEntryRequest(BaseModel):

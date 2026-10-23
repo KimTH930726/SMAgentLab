@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { domainSelect, goAdmin } from './admin-nav';
+import { domainSelect, goAdmin, gotoAdminUrl } from './admin-nav';
 import { psql } from './v0-fixture';
 import { API, adminToken, loginAdmin } from './auth';
 
 // 조직 컬렉션(10/22, collection-design §15-13 · v2.160 #83) — 팀·파트를 만들면 조직 컬렉션이 생기고(DB),
-// 고르는 창 [조직] 탭 → 팀 카드 → 파트 카드로 고르면 칩에 파트 이름(id 키가 아니라 화면 이름), 정책서 화면은 "조직 컬렉션엔 없음" 안내.
+// 고르는 창 [조직] 탭 → 팀 카드 → 파트 카드로 고르면 칩에 파트 이름(id 키가 아니라 화면 이름), 정책서·시스템 정보·VOC 메뉴는 숨김(주소로 와도 지식 문서로).
 // 임시 팀·파트는 API로 만들고 끝나면 API로 지운다(지우면 조직 컬렉션도 같이 — 남으면 psql로 정리).
 const TEAM = 'E2E조직팀';
 const PART = 'E2E조직파트';
@@ -29,7 +29,7 @@ async function cleanup() {
 
 test.afterEach(cleanup);
 
-test('조직 컬렉션 — 팀·파트 만들면 생김 · 조직 탭 팀 → 파트로 고르면 칩에 파트 이름 · 정책서는 안내', async ({ page }) => {
+test('조직 컬렉션 — 팀·파트 만들면 생김 · 조직 탭 팀 → 파트로 고르면 칩에 파트 이름 · 정책서 메뉴 숨김', async ({ page }) => {
   await cleanup();
   const team = await api('/api/auth/teams', { method: 'POST', body: JSON.stringify({ name: TEAM }) });
   expect(team.status).toBe(201);
@@ -62,7 +62,14 @@ test('조직 컬렉션 — 팀·파트 만들면 생김 · 조직 탭 팀 → �
     return localStorage.getItem(`opslens.namespace:${u}`);
   })).toBe(`org:part:${partId}`);                                                                      // 기억하는 값은 id 키
 
-  await goAdmin(page, '지식', '정책서');
-  await expect(page.getByTestId('org-no-policy')).toHaveText('조직 컬렉션엔 정책·시스템 정보가 없어요');
+  // 조직 컬렉션을 보는 중엔 담을 수 없는 메뉴(정책서·시스템 정보·VOC)가 왼쪽 메뉴에 없다 — 주소로 와도 지식 문서로(10/23 메뉴 노출)
+  const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
+  await goAdmin(page, '지식', '지식 문서');
+  await expect(nav.getByRole('button', { name: '지식 문서', exact: true })).toBeVisible();
+  for (const hidden of ['정책서', '시스템 정보', 'VOC 이메일']) {
+    await expect(nav.getByRole('button', { name: hidden, exact: true })).toHaveCount(0);
+  }
+  await gotoAdminUrl(page, '/admin/k.policy');
+  await expect(page).toHaveURL(/\/admin\/k\.docs$/);
   await expect(page.getByTestId('admin-crumb')).toContainText(PART);
 });
