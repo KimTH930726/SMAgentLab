@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import { FlaskConical, Search, ArrowRight, CheckCircle2 } from 'lucide-react';
-import { PolicyLab } from './PolicyLab';
+import { FlaskConical, Search, CheckCircle2, History } from 'lucide-react';
 import { UnifiedAdhocSearch } from './UnifiedAdhocSearch';
-import { AnswerEvalHistory } from './AnswerEvalHistory';
+import { AnswerTab, HistoryTab, RetrievalTab } from './GateRuns';
 
 /**
  * "파이프라인 디버그"(즉석 질의 — 아무 질문이나 넣고 점수분해 확인)와 "정책 저장소
@@ -30,68 +29,49 @@ import { AnswerEvalHistory } from './AnswerEvalHistory';
  * 골든셋 문항 → 즉석질의 드릴다운은 여전히 없음 — Track2가 문항별 결과가 아니라 유형별
  * 집계만 반환해서(백엔드 확장 필요) 이번 범위 밖.
  */
-type GateMode = 'adhoc' | 'goldenset' | 'answers';
+type GateMode = 'retrieval' | 'answers' | 'history' | 'adhoc';
 
-const MODE_HINT: Record<GateMode, string> = {
-  adhoc: '질문 하나를 넣어 검색 방식(유사도 점수)을 직접 확인합니다 — 실제 채팅과 동일하게 일반지식·정책을 항상 함께 봅니다. 아래 "골든셋 실행"은 이 방식을 여러 문항에 한 번에 돌려 정확도로 집계한 것입니다.',
-  goldenset: '위 "즉석 질의"와 같은 검색 방식을, 고정된 여러 문항에 한 번에 돌려 hit@K·정확도 등으로 집계합니다.',
-  answers: '골든셋 문항에 실제로 답하게 하고 정책 원문과 대조해 채점한 결과입니다 — 검색이 맞았는지가 아니라 최종 답이 맞았는지.',
-};
+// 탭 = [검색] [답] [판정 이력] [즉석 질의] (v2.169, eval-gate-redesign §4-1 — 10/23 목업 검수). 옛 "골든셋 실행"(v1 Track2)·
+// "답변 정확도"(v1 eval_answer_run)는 v0 숫자를 못 보여 줘 판정 기록(eval_gate_run) 읽기로 바꿨다 — 옛 화면·테이블 정리는 5단계(대상별 승인)
+const TABS: { mode: GateMode; label: string; icon: typeof Search; hint: string }[] = [
+  { mode: 'retrieval', label: '검색', icon: FlaskConical, hint: '현재 기준선의 검색 성적 — 정답 정책이 AI에게 넘기는 문맥에 들어갔나(골든셋, scripts/eval_golden_v0.py)' },
+  { mode: 'answers', label: '답', icon: CheckCircle2, hint: '현재 기준선의 답 성적 — 실제 채팅 경로로 답하고 정책 원문과 대조해 채점(scripts/eval_answers.py)' },
+  { mode: 'history', label: '판정 이력', icon: History, hint: '바꾸기 전/후를 같은 문항으로 비교한 판정 — 검색 나빠짐 0 · 답 의미 있는 하락 없음이면 통과(scripts/eval_gate.py --save)' },
+  { mode: 'adhoc', label: '즉석 질의', icon: Search, hint: '질문 하나를 넣어 검색 방식(유사도 점수)을 직접 확인합니다' },
+];
 
 export function EvaluationGate() {
-  const [mode, setMode] = useState<GateMode>('adhoc');
+  const [mode, setMode] = useState<GateMode>('retrieval');
+  const hint = TABS.find((t) => t.mode === mode)?.hint;
 
   return (
     <div className="space-y-4">
       <div className="border-b border-slate-700">
         <div className="flex gap-1">
-          <button
-            onClick={() => setMode('adhoc')}
-            className={clsx(
-              'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
-              mode === 'adhoc'
-                ? 'text-indigo-400 border-indigo-500'
-                : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600',
-            )}
-          >
-            <Search className="w-4 h-4" />
-            즉석 질의 <span className="text-[10px] text-slate-500 font-normal">(단건)</span>
-          </button>
-          <div className="flex items-center px-1 text-slate-600">
-            <ArrowRight className="w-3.5 h-3.5" />
-          </div>
-          <button
-            onClick={() => setMode('goldenset')}
-            className={clsx(
-              'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
-              mode === 'goldenset'
-                ? 'text-indigo-400 border-indigo-500'
-                : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600',
-            )}
-          >
-            <FlaskConical className="w-4 h-4" />
-            골든셋 실행 <span className="text-[10px] text-slate-500 font-normal">(집계)</span>
-          </button>
-          <button
-            onClick={() => setMode('answers')}
-            className={clsx(
-              'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
-              mode === 'answers'
-                ? 'text-indigo-400 border-indigo-500'
-                : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600',
-            )}
-          >
-            <CheckCircle2 className="w-4 h-4" />
-            답변 정확도 <span className="text-[10px] text-slate-500 font-normal">(최종 답)</span>
-          </button>
+          {TABS.map(({ mode: m, label, icon: Icon }) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={clsx(
+                'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
+                mode === m
+                  ? 'text-indigo-400 border-indigo-500'
+                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600',
+              )}
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+            </button>
+          ))}
         </div>
       </div>
 
-      <p className="text-xs text-slate-500 leading-relaxed -mt-2">{MODE_HINT[mode]}</p>
+      <p className="text-xs text-slate-500 leading-relaxed -mt-2">{hint}</p>
 
+      {mode === 'retrieval' && <RetrievalTab />}
+      {mode === 'answers' && <AnswerTab />}
+      {mode === 'history' && <HistoryTab />}
       {mode === 'adhoc' && <UnifiedAdhocSearch />}
-      {mode === 'goldenset' && <PolicyLab />}
-      {mode === 'answers' && <AnswerEvalHistory />}
     </div>
   );
 }

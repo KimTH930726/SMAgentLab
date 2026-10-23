@@ -23,6 +23,7 @@ async def list_runs(limit: int) -> list[dict]:
         rows = await conn.fetch(
             """SELECT id, run_at, created_by, label, kind, golden_version, verdict, is_baseline, git_commit, notes, judge_meta,
                       summary - 'inputs' AS summary,
+                      retrieval IS NOT NULL AS has_retrieval_gate,   -- 검색 후 파일만 있으면 비교 없이 0/0으로 보였다(재리뷰)
                       jsonb_array_length(COALESCE(retrieval->'down', '[]'::jsonb)) AS retrieval_down,
                       jsonb_array_length(COALESCE(retrieval->'up', '[]'::jsonb)) AS retrieval_up,
                       answers->'failed' AS answers_failed,
@@ -45,6 +46,13 @@ async def list_runs(limit: int) -> list[dict]:
 async def get_run(run_id: int) -> Optional[dict]:
     async with get_conn() as conn:
         r = await conn.fetchrow("SELECT * FROM eval_gate_run WHERE id = $1", run_id)
+    return _row(r) if r else None
+
+
+async def get_baseline() -> Optional[dict]:
+    """현재 기준선 상세(없으면 None) — 화면 [검색]·[답]은 목록 범위(최신 n)와 무관하게 이걸 읽는다(리뷰 M1)."""
+    async with get_conn() as conn:
+        r = await conn.fetchrow("SELECT * FROM eval_gate_run WHERE is_baseline")
     return _row(r) if r else None
 
 

@@ -14,6 +14,12 @@ async def list_gate_runs(limit: int = Query(default=30, ge=1, le=200), user: dic
     return await service.list_runs(limit)
 
 
+@router.get("/gate-runs/baseline")
+async def get_gate_baseline(user: dict = Depends(get_current_user)):
+    """현재 기준선(없으면 null) — /{run_id}보다 먼저(경로 순서)."""
+    return await service.get_baseline()
+
+
 @router.get("/gate-runs/{run_id}")
 async def get_gate_run(run_id: int, user: dict = Depends(get_current_user)):
     r = await service.get_run(run_id)
