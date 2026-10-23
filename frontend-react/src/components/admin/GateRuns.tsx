@@ -110,7 +110,7 @@ export function RetrievalTab() {
   );
 }
 
-function QidList({ title, qids, hint }: { title: string; qids: string[]; hint: string }) {
+export function QidList({ title, qids, hint }: { title: string; qids: string[]; hint: string }) {
   const [open, setOpen] = useState(false);
   if (!qids.length) return <p className="text-xs text-slate-500">{title}: 0문항</p>;
   return (

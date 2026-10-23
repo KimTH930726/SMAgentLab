@@ -91,3 +91,85 @@ export async function getBaselineRun(): Promise<GateRunDetail | null> {
 export async function setGateBaseline(id: number): Promise<{ id: number; is_baseline: boolean }> {
   return apiFetch(`/eval/gate-runs/${id}/baseline`, { method: 'POST' });
 }
+
+/** 자가 개선 루프(#87) — 진단(원인별 qid) + 개선 후보 + 사람 검수. 만들기는 scripts/eval_improve.py --save */
+export type CandidateStatus = 'proposed' | 'approved' | 'held' | 'rejected' | 'adopted';
+
+export interface ReplayRow {
+  min_score: number; min_param_rank: number; refused: number; fixed: number; broken: number; before: number; after: number;
+}
+
+export interface Hypothesis { name: string; hint: string; qids: string[]; cause?: string }
+
+export interface Candidate {
+  id: number;
+  key: string;
+  cause: string;
+  technique: string;
+  technique_name: string;
+  title: string;
+  action: string;
+  measure: 'replay' | 'retrieval' | 'answers';
+  n_target: number;
+  qids: string[];
+  recommend: 'try' | 'reject' | 'review';
+  why: string;
+  replay: { grid: ReplayRow[]; best: ReplayRow | null } | null;
+  hypotheses: Hypothesis[];
+  status: CandidateStatus;
+  review_reason: string | null;
+  reviewed_at: string | null;
+  carried_from_id: number | null;
+  adopted_gate_run_id: number | null;
+  adopted_gate_label: string | null;
+}
+
+export interface Improvement {
+  run: {
+    id: number; created_at: string; gate_run_id: number; gate_label: string; gate_is_baseline: boolean; model: string;
+    diagnosis: { n: number; n_failed: number; causes: Record<string, string[]> };
+    hypotheses: Hypothesis[];
+  };
+  causes: { key: string; name: string; where: string }[];
+  candidates: Candidate[];
+}
+
+export async function getLatestImprovement(): Promise<Improvement | null> {
+  return apiFetch<Improvement | null>('/eval/improvements/latest');
+}
+
+export async function reviewCandidate(id: number, status: Exclude<CandidateStatus, 'adopted'>, reason = ''): Promise<{ id: number; status: string }> {
+  return apiFetch(`/eval/candidates/${id}/review`, { method: 'POST', body: JSON.stringify({ status, reason }) });
+}
+
+export async function adoptCandidate(id: number, gateRunId: number): Promise<{ id: number; status: string }> {
+  return apiFetch(`/eval/candidates/${id}/adopt`, { method: 'POST', body: JSON.stringify({ gate_run_id: gateRunId }) });
+}
+
+/** 답 기법 대장(읽기) — 기준값은 서버 운영값 */
+export interface Technique {
+  key: string; name: string; stage: string; does: string; where: string | null;
+  values: { label: string; value: string; setting: string | null }[];
+  evidence: { date: string; note: string }[];
+}
+
+export async function listTechniques(): Promise<Technique[]> {
+  return apiFetch<Technique[]>('/eval/techniques');
+}
+
+/** AI 판단 원장 집계(관리자) — 종류별 사람 확정·변경·틀림 + 되묻기 고른 분포 + 개선 후보 검수 */
+export interface DecisionKindSummary {
+  total: number; confident: number; decided: number; changed: number; wrong: number; auto_wrong: number;
+  context_changed: number; unknown: number; wrong_rate: number | null; reasons: Record<string, number>;
+}
+
+export interface DecisionsReport {
+  days: number;
+  kinds: Record<string, DecisionKindSummary>;
+  clarify_picks: Record<string, number>;
+  candidates: { total: number; by_status: Record<string, number>; agree: number; disagree: number };
+}
+
+export async function getDecisionsReport(days = 90): Promise<DecisionsReport> {
+  return apiFetch<DecisionsReport>(`/eval/decisions?days=${days}`);
+}

@@ -8,7 +8,7 @@ export type AdminMenuId =
   | 'domains' | 'org.collections'
   | 'k.policy' | 'k.docs' | 'k.glossary' | 'k.system'
   | 'org'
-  | 'q.stats' | 'q.corrections' | 'q.eval'
+  | 'q.stats' | 'q.corrections' | 'q.eval' | 'q.decisions' | 'q.techniques'
   | 'voc'
   | 'sys.settings' | 'sys.cache';
 
@@ -56,7 +56,9 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
   { id: 'quality', label: '품질', items: [
     { id: 'q.stats', label: '통계', scoped: true },
     { id: 'q.corrections', label: '정정 요청', hint: '채팅 "답변 틀림"·평가 게이트 "이상해요"·정책서 수정 제안이 모이는 곳 — 승인해야 검색에 반영', scoped: true },
-    { id: 'q.eval', label: '평가 게이트' },
+    { id: 'q.eval', label: '평가 게이트', hint: '정답률 → 왜 틀렸나 → 개선 후보 → 사람 검수' },
+    { id: 'q.decisions', label: 'AI 판단', adminOnly: true, hint: 'AI가 정한 것(등록 위치·되묻기·개선 후보)을 사람이 얼마나 바꿨나' },
+    { id: 'q.techniques', label: '답 기법', hint: '검색·답을 다듬는 기법의 기준값·근거·코드 위치' },
   ] },
   { id: 'voc', label: 'VOC 이메일', items: [
     { id: 'voc', label: 'VOC 이메일', scoped: true, kinds: ['domain'] },

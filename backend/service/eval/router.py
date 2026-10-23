@@ -1,6 +1,7 @@
 """/api/eval — 평가 게이트 판정 기록(품질 › 평가 게이트 화면). 읽기는 로그인 사용자(옛 /policy/answer-eval/history와 같음),
 기준선 지정은 관리자. 판정 실행은 scripts/eval_gate.py(문항당 LLM 호출·채점이라 화면에서 안 돌림)."""
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from core.dependencies import get_current_admin, get_current_user
 from service.eval import service
@@ -37,3 +38,53 @@ async def set_gate_baseline(run_id: int, admin: dict = Depends(get_current_admin
     if not r:
         raise HTTPException(status_code=404, detail="판정 기록이 없습니다.")
     return r
+
+
+class ReviewBody(BaseModel):
+    status: str
+    reason: str = ""
+
+
+class AdoptBody(BaseModel):
+    gate_run_id: int
+
+
+@router.get("/improvements/latest")
+async def get_latest_improvement(user: dict = Depends(get_current_user)):
+    """최근 진단(원인별 qid·가설) + 개선 후보 — 평가 게이트 [개선] 탭. 만들기는 scripts/eval_improve.py --save."""
+    return await service.latest_improvement()
+
+
+@router.post("/candidates/{cand_id}/review")
+async def review_candidate(cand_id: int, body: ReviewBody, admin: dict = Depends(get_current_admin)):
+    try:
+        r = await service.review_candidate(cand_id, status=body.status, reason=body.reason, user_id=admin["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not r:
+        raise HTTPException(status_code=404, detail="후보가 없습니다.")
+    return r
+
+
+@router.post("/candidates/{cand_id}/adopt")
+async def adopt_candidate(cand_id: int, body: AdoptBody, admin: dict = Depends(get_current_admin)):
+    try:
+        r = await service.adopt_candidate(cand_id, gate_run_id=body.gate_run_id, user_id=admin["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if not r:
+        raise HTTPException(status_code=404, detail="후보가 없습니다.")
+    return r
+
+
+@router.get("/techniques")
+async def list_techniques(user: dict = Depends(get_current_user)):
+    """답 기법 대장(읽기) — 기준값은 지금 서버의 운영값."""
+    from service.eval.techniques import as_rows
+    return as_rows()
+
+
+@router.get("/decisions")
+async def get_decisions_report(days: int = Query(default=90, ge=1, le=365), admin: dict = Depends(get_current_admin)):
+    """AI 판단 원장 집계(품질 › AI 판단, 관리자) — AI가 정한 것을 사람이 얼마나 바꿨나·틀렸다고 했나."""
+    return await service.decisions_report(days)

@@ -1500,6 +1500,50 @@ async def _migrate_eval_gate_run(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_gate_run_at ON eval_gate_run (run_at DESC)")
 
 
+async def _migrate_eval_improvement(conn) -> None:
+    """자가 개선 루프 (2026-10-23, #87 — eval-gate-redesign §10). 멱등.
+    eval_improvement_run = 판정 기록 하나를 진단한 결과(원인별 qid·가설 묶음), eval_candidate = 원인마다 개선 후보 + 사람 검수 상태.
+    쓰기는 scripts/eval_improve.py --save(후보 생성)와 관리자 검수 API(상태)뿐. 원문 없음 — qid·숫자·기법 키·묶음 이름만.
+    채택(adopted)은 통과한 판정 기록과 연결될 때만(adopted_gate_run_id)."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS eval_improvement_run (
+            id BIGSERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_by TEXT NOT NULL DEFAULT '',
+            gate_run_id BIGINT NOT NULL REFERENCES eval_gate_run(id),
+            diagnosis JSONB NOT NULL DEFAULT '{}'::jsonb,
+            hypotheses JSONB NOT NULL DEFAULT '[]'::jsonb,
+            model TEXT NOT NULL DEFAULT '',
+            notes TEXT
+        )""")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS eval_candidate (
+            id BIGSERIAL PRIMARY KEY,
+            run_id BIGINT NOT NULL REFERENCES eval_improvement_run(id),
+            key TEXT NOT NULL,
+            cause TEXT NOT NULL,
+            technique TEXT NOT NULL,
+            title TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT '',
+            measure TEXT NOT NULL CHECK (measure IN ('replay', 'retrieval', 'answers')),
+            n_target INT NOT NULL DEFAULT 0,
+            qids JSONB NOT NULL DEFAULT '[]'::jsonb,
+            recommend TEXT NOT NULL CHECK (recommend IN ('try', 'reject', 'review')),
+            why TEXT NOT NULL DEFAULT '',
+            replay JSONB,
+            hypotheses JSONB NOT NULL DEFAULT '[]'::jsonb,
+            status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'approved', 'held', 'rejected', 'adopted')),
+            review_reason TEXT,
+            reviewed_by_user_id INT,
+            reviewed_at TIMESTAMPTZ,
+            carried_from_id BIGINT,
+            adopted_gate_run_id BIGINT REFERENCES eval_gate_run(id),
+            UNIQUE (run_id, key),
+            CHECK (status <> 'adopted' OR adopted_gate_run_id IS NOT NULL)
+        )""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_improvement_created ON eval_improvement_run (created_at DESC)")
+
+
 async def _migrate_policy_v0_revisions(conn) -> None:
     """정책 v0 새 버전 흐름 (2026-10-21, #80, v0 재구축 1단계). 멱등.
     - policy_review_log.action에 'submitted' 허용 — 1단계 설계(직접 수정 → 정책 테이블에 검토 대기 새 버전)용이었으나 2단계에서
@@ -2096,6 +2140,7 @@ async def _run_migrations() -> None:
         await _migrate_drop_knowledge_category(conn)   # #84 — 옛 칸·표를 쓰는 마이그레이션들(#60·#72 등)보다 뒤
         await _migrate_ai_decision_ledger(conn)        # #85
         await _migrate_eval_gate_run(conn)             # #86
+        await _migrate_eval_improvement(conn)          # #87
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

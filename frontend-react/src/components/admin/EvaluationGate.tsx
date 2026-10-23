@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import { FlaskConical, Search, CheckCircle2, History } from 'lucide-react';
+import { FlaskConical, Search, CheckCircle2, History, Lightbulb } from 'lucide-react';
 import { UnifiedAdhocSearch } from './UnifiedAdhocSearch';
 import { AnswerTab, HistoryTab, RetrievalTab } from './GateRuns';
+import { ImprovementTab } from './GateImprove';
 
 /**
  * "파이프라인 디버그"(즉석 질의 — 아무 질문이나 넣고 점수분해 확인)와 "정책 저장소
@@ -29,13 +30,14 @@ import { AnswerTab, HistoryTab, RetrievalTab } from './GateRuns';
  * 골든셋 문항 → 즉석질의 드릴다운은 여전히 없음 — Track2가 문항별 결과가 아니라 유형별
  * 집계만 반환해서(백엔드 확장 필요) 이번 범위 밖.
  */
-type GateMode = 'retrieval' | 'answers' | 'history' | 'adhoc';
+type GateMode = 'retrieval' | 'answers' | 'improve' | 'history' | 'adhoc';
 
 // 탭 = [검색] [답] [판정 이력] [즉석 질의] (v2.169, eval-gate-redesign §4-1 — 10/23 목업 검수). 옛 "골든셋 실행"(v1 Track2)·
 // "답변 정확도"(v1 eval_answer_run)는 v0 숫자를 못 보여 줘 판정 기록(eval_gate_run) 읽기로 바꿨다 — 옛 화면·테이블 정리는 5단계(대상별 승인)
 const TABS: { mode: GateMode; label: string; icon: typeof Search; hint: string }[] = [
   { mode: 'retrieval', label: '검색', icon: FlaskConical, hint: '현재 기준선의 검색 성적 — 정답 정책이 AI에게 넘기는 문맥에 들어갔나(골든셋, scripts/eval_golden_v0.py)' },
   { mode: 'answers', label: '답', icon: CheckCircle2, hint: '현재 기준선의 답 성적 — 실제 채팅 경로로 답하고 정책 원문과 대조해 채점(scripts/eval_answers.py)' },
+  { mode: 'improve', label: '개선', icon: Lightbulb, hint: '왜 틀렸나(흐름의 첫 실패) → 원인마다 개선 후보 → 사람 검수 → 통과한 판정과 연결해 채택(scripts/eval_improve.py --reasons --save)' },
   { mode: 'history', label: '판정 이력', icon: History, hint: '바꾸기 전/후를 같은 문항으로 비교한 판정 — 검색 나빠짐 0 · 답 의미 있는 하락 없음이면 통과(scripts/eval_gate.py --save)' },
   { mode: 'adhoc', label: '즉석 질의', icon: Search, hint: '질문 하나를 넣어 검색 방식(유사도 점수)을 직접 확인합니다' },
 ];
@@ -70,6 +72,7 @@ export function EvaluationGate() {
 
       {mode === 'retrieval' && <RetrievalTab />}
       {mode === 'answers' && <AnswerTab />}
+      {mode === 'improve' && <ImprovementTab />}
       {mode === 'history' && <HistoryTab />}
       {mode === 'adhoc' && <UnifiedAdhocSearch />}
     </div>
