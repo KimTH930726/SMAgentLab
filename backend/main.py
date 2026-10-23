@@ -31,6 +31,7 @@ from agents.knowledge_rag.knowledge import glossary_mining
 from service.policy.router import router as policy_router
 from service.refdata.router import router as refdata_router
 from service.improvement.router import router as improvement_router
+from service.eval.router import router as eval_router
 
 from shared import cache as sem_cache
 from shared.http_client import close_http_client
@@ -54,6 +55,7 @@ _ROUTERS = [
     policy_router,
     refdata_router,
     improvement_router,
+    eval_router,
 ]
 
 
@@ -1472,6 +1474,32 @@ async def _migrate_ai_decision_ledger(conn) -> None:
         logger.info("[migrate #85] 위치 판정 프롬프트 v1 → v2(답 모양 kind·collection·org)")
 
 
+async def _migrate_eval_gate_run(conn) -> None:
+    """평가 게이트 판정 기록 (2026-10-23, #86, 평가 게이트 개편 1단계 — eval-gate-redesign §4-2). 멱등.
+    scripts/eval_gate.py --save가 한 줄씩 쓰고 화면은 읽기만(재계산 없음). 질문·답 원문은 넣지 않는다 — qid·라벨·숫자만.
+    기준선은 한 행만(부분 고유 인덱스) — 옮길 때는 옛 줄을 먼저 내리는 트랜잭션."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS eval_gate_run (
+            id BIGSERIAL PRIMARY KEY,
+            run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_by TEXT NOT NULL DEFAULT '',
+            label TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('gate', 'baseline', 'judge_check')),
+            golden_version TEXT NOT NULL DEFAULT '',
+            verdict TEXT CHECK (verdict IN ('pass', 'fail')),
+            retrieval JSONB,
+            answers JSONB,
+            summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+            judge_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+            is_baseline BOOLEAN NOT NULL DEFAULT FALSE,
+            git_commit TEXT,
+            notes TEXT,
+            CHECK (kind <> 'baseline' OR verdict IS NULL)
+        )""")
+    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_gate_one_baseline ON eval_gate_run (is_baseline) WHERE is_baseline")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_gate_run_at ON eval_gate_run (run_at DESC)")
+
+
 async def _migrate_policy_v0_revisions(conn) -> None:
     """정책 v0 새 버전 흐름 (2026-10-21, #80, v0 재구축 1단계). 멱등.
     - policy_review_log.action에 'submitted' 허용 — 1단계 설계(직접 수정 → 정책 테이블에 검토 대기 새 버전)용이었으나 2단계에서
@@ -2067,6 +2095,7 @@ async def _run_migrations() -> None:
         await _migrate_org_collections(conn)
         await _migrate_drop_knowledge_category(conn)   # #84 — 옛 칸·표를 쓰는 마이그레이션들(#60·#72 등)보다 뒤
         await _migrate_ai_decision_ledger(conn)        # #85
+        await _migrate_eval_gate_run(conn)             # #86
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

@@ -33,7 +33,7 @@ backend/libs/trustkit/            ← 표준 라이브러리만. core·service·
 │  ├ retrieval/ bm25.py · fusion.py · chunk_header.py
 │  ├ query/    intent.py
 │  ├ answer/   shaping.py
-│  └ eval/     stats.py · gate.py
+│  └ eval/     stats.py · gate.py · summary.py(판정 기록용 헤드라인·골든셋 버전, 10/23)
 └ tests/                          ← 패키지만으로 실행(도커·DB 불필요) + 독립성 검사
 ```
 - 이 프로젝트는 `PYTHONPATH`에 `/app/libs/trustkit`을 더해 import(설치 단계 없음 — 폐쇄망·dev 마운트 그대로).

@@ -108,7 +108,7 @@ async def load_v0_golden(conn) -> tuple[list[dict], dict, dict]:
 
 
 async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reuse: str = "", repeat: int = 1,
-                  golden_set: str = "v1", llm_choice: str = "system", concurrency: int = 1, only_ns: str = "") -> None:
+                  golden_set: str = "v0", llm_choice: str = "system", concurrency: int = 1, only_ns: str = "") -> None:
     from core.database import init_pool, get_conn
     from shared.embedding import embedding_service
     from agents.knowledge_rag.agent import build_chat_context
@@ -223,6 +223,7 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
             "refs": [{"policy": r["policy_name"], "category": r["cat"], "body": (r["raw_body"] or "")[:600]} for r in refs],
             "n_refs_total": len(ref_names), "gold_inactive": len(g["gold_ids"]) - len(ref_names) + g.get("unresolved", 0), "ref_names": ref_names,
             "cluster": "|".join(str(x) for x in ((raw.get(g["query"], {}).get("source") or {}).get(k) for k in ("file", "sheet")) if x), "category_block": has_list, "reused": reused, "ctx_hash": h, "clarified": clarified,
+            "answer_model": model_id,   # 답 생성 모델 — 판정 기록(eval_gate --save)의 채점 조건에 남는다(10/23, 전엔 입력 해시에만)
           })
 
     await asyncio.gather(*(one(g) for g in todo))
@@ -730,7 +731,7 @@ def main() -> None:
     c.add_argument("--prompt-file", default="", help="후보 시스템 프롬프트 파일(운영 DB 프롬프트 대신)")
     c.add_argument("--repeat", type=int, default=1, help="문항마다 답을 N번(생성 흔들림을 평균으로 줄임 — 비용 N배)")
     c.add_argument("--concurrency", type=int, default=1, help="문항 동시 처리 수(로컬 LLM 측정은 4 권장 — 게이트웨이는 한도 때문에 1)")
-    c.add_argument("--golden", choices=["v1", "v0"], default="v1", help="v0 = 정책서 v0 골든셋(eval_out/golden_v0, 10/21 재출발)")
+    c.add_argument("--golden", choices=["v1", "v0"], default="v0", help="v0 = 정책서 v0 골든셋(eval_out/golden_v0, 10/21 재출발 — 기본값 10/23), v1 = 옛 엑셀 골든셋")
     c.add_argument("--llm", choices=["system", "local"], default="system", help="local = 이 측정에서만 로컬 LLM으로 답 생성(서버 설정은 그대로)")
     c.add_argument("--ns", default="", help="쉼표로 구분한 영역 이름 — 그 영역에서 묻는 문항만(영향권 전후 측정)")
     c.add_argument("--reuse", default="", help="이전 answers 파일 — LLM 입력(질문·문맥·프롬프트·모델) 해시가 같고 오류가 아니던 문항만 그 답을 그대로(게이트웨이 호출 절약)")
