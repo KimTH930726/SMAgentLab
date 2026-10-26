@@ -14,8 +14,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import AgentSelect from './pages/AgentSelect';
 
-// export — 컴포넌트 밖(store)에서도 캐시를 갱신할 수 있어야 하는 경우가 있음
-// (예: useTrack2Store — 골든셋 비교 실행 중 화면을 이동해도 결과가 안 끊기게).
+// export — 컴포넌트 밖(store)에서 캐시를 갱신할 때 쓰도록 열어 둠(옛 useTrack2Store는 v2.176에서 화면과 함께 지움)
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
 });

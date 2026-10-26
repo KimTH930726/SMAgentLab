@@ -262,6 +262,17 @@ export interface ChatMessage {
   clarify?: ClarifyPrompt | null;
   /** AI가 답을 못 내 찾은 근거만 보여 주는 답(2026-10-20) — 일반 답 모양 대신 경고 모양으로 */
   degraded?: boolean;
+  /** 다른 컬렉션에서 찾아보기 제안(C2, 기본 꺼짐) — 답은 그대로, 버튼으로만 */
+  collectionSuggest?: CollectionSuggest | null;
+  /** 제안 버튼으로 다른 컬렉션에서 다시 물은 답이면 그 컬렉션 — "답변 틀림"을 그 컬렉션 건으로(C2 리뷰 M1) */
+  answeredNamespace?: string | null;
+}
+
+export interface CollectionSuggest {
+  namespace: string;
+  score: number;
+  here: number;
+  here_adopted: number;
 }
 
 // Agent directory
@@ -340,6 +351,8 @@ export interface ChatRequest {
   topK?: number;
   conversationId?: number | null;
   clarifyScope?: string | null;
+  /** 제안 버튼으로 다시 물을 때 — 제안을 낸 답 메시지 id(C2) */
+  suggestOf?: number | null;
   signal?: AbortSignal;
 }
 

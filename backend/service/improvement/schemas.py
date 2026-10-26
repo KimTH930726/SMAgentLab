@@ -23,6 +23,7 @@ class CorrectionCreate(BaseModel):
     user_input: Optional[str] = Field(default=None, max_length=1000)   # 채팅 신고·AI 제안은 필수(라우터가 확인)
     source: Optional[PolicySource] = None
     proposed: Optional[dict] = None
+    source_check_id: Optional[int] = None   # 원문 확인 카드에서 연 정책의 제안 — 승인되면 그 카드도 해결(C3, #92)
 
 
 class ApproveBody(BaseModel):

@@ -9,6 +9,9 @@ export const LAYERS: { keys: string[]; name: string; hint: string }[] = [
   { keys: ['cross'], name: '영역 넘김', hint: '다른 업무 영역에서 물은 질문' },
   { keys: ['list', 'navigation'], name: '목록', hint: '한 분류를 다 보여 달라는 질문' },
   { keys: ['abstain'], name: '답 없음', hint: '정책서에 답이 없는 질문 — 거절이 정답' },
+  { keys: ['ref'], name: '참고표', hint: '참고표(조건 → 결과 표)에 답이 있는 질문 — 조건을 다 말함' },
+  { keys: ['ref_clarify'], name: '참고표 되묻기', hint: '참고표의 결과를 정하는 조건 하나를 말하지 않은 질문 — 되묻는 게 정답' },
+  { keys: ['overview'], name: '개요', hint: '정책서가 무엇을 다루나·적용 대상(문서 개요) 질문' },
   { keys: ['real'], name: '실사용', hint: '정정 요청이 승인된 실제 채팅 질문 — 정답 = 고친 정책' },
 ];
 

@@ -28,6 +28,7 @@ _load_real("shared.rrf", "shared/rrf.py")
 sys.modules.setdefault("service.policy", MagicMock())
 _load_real("service.policy.query_type", "service/policy/query_type.py")
 _load_real("service.policy.search", "service/policy/search.py")
+sys.modules["service.policy"].ref_search = _load_real("service.policy.ref_search", "service/policy/ref_search.py")   # REF_SCOPE가 글자여야(v2.173)
 sys.modules.setdefault("service.refdata", MagicMock())
 _load_real("service.refdata.parser", "service/refdata/parser.py")
 _load_real("service.refdata.service", "service/refdata/service.py")
@@ -441,3 +442,52 @@ async def test_cache_hit_then_log_error_does_not_relabel(monkeypatch):
     events = await _run()
     assert [c.args[2] for c in upd.await_args_list if len(c.args) > 2] == ["completed"]   # 재리뷰 D2
     assert events[-1] == {"type": "done", "message_id": 5, "status": "completed"}
+
+
+# ── C2 다른 컬렉션에서 찾아보기(v2.174, 리뷰 보강) — 꺼짐이면 그대로, 켜지면 답 뒤 제안 1건, 제안 버튼으로 온 질문엔 다시 제안 안 함 ──
+
+def _fake_suggest(monkeypatch, result):
+    fake = MagicMock()
+    fake.find = AsyncMock(return_value=result)
+    fake.record = AsyncMock(return_value=1)
+    fake.picked = AsyncMock(return_value=True)
+    monkeypatch.setattr(agent, "collection_suggest", fake)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_suggest_off_leaves_answer_and_metadata_unchanged(monkeypatch):
+    upd, *_ = _wire(monkeypatch, abstain=False, tokens=["정상 답변"])
+    fake = _fake_suggest(monkeypatch, None)   # 꺼짐 = find가 None
+    events = await _run()
+    assert not [e for e in events if e["type"] == "suggest"]
+    meta = upd.await_args.kwargs.get("metadata") or {}
+    assert "collection_suggest" not in meta and "answered_namespace" not in meta
+    fake.record.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_suggest_on_yields_after_answer_and_records(monkeypatch):
+    upd, *_ = _wire(monkeypatch, abstain=False, tokens=["정상 답변"])
+    s = {"namespace": "제휴서비스", "score": 0.5, "here": 0.3, "here_adopted": 0}
+    fake = _fake_suggest(monkeypatch, s)
+    events = await _run()
+    types = [e["type"] for e in events]
+    assert types.index("suggest") > max(i for i, t in enumerate(types) if t == "token")   # 답 뒤에(답은 그대로)
+    assert upd.await_args.kwargs["metadata"]["collection_suggest"] == s
+    assert fake.record.await_args.kwargs["message_id"] == 5
+
+
+@pytest.mark.asyncio
+async def test_suggested_follow_up_closes_ledger_and_marks_answered_namespace(monkeypatch):
+    upd, *_ = _wire(monkeypatch, abstain=False, tokens=["다른 곳 답"])
+    fake = _fake_suggest(monkeypatch, {"namespace": "또 다른 곳", "score": 0.9, "here": 0.1, "here_adopted": 0})
+    events = []
+    async for ev in agent.KnowledgeRagAgent().stream_chat("질문", {"id": 7}, 1, {"namespace": "제휴서비스", "msg_id": 6, "suggest_of": 5}):
+        events.append(ev)
+    fake.picked.assert_awaited_once()
+    assert fake.picked.await_args.kwargs == {"message_id": 5, "user_id": 7}
+    fake.find.assert_not_awaited()                                   # 제안으로 온 답엔 다시 제안 안 함
+    assert not [e for e in events if e["type"] == "suggest"]
+    assert upd.await_args.kwargs["metadata"]["answered_namespace"] == "제휴서비스"   # 신고가 답한 컬렉션으로(리뷰 M1)
+    assert any(e.get("answered_namespace") == "제휴서비스" for e in events if e["type"] == "meta")

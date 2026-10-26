@@ -63,6 +63,7 @@ async def main() -> None:
                                   WHERE i.status <> 'deprecated' AND i.source_key IS NOT NULL""")
         from service.eval.questions import real_golden
         real = await real_golden(conn)   # 시험지에 넣은 실사용 문항(정정 승인된 채팅 질문, 10/26)
+        ref_keys = await ref_key_map(conn)   # 참고표·개요 정답 문항(#12) — 원천 키 → (종류, id)
     key_to_lid = {r["source_key"]: r["logical_id"] for r in cur}
     key_to_ns = {r["source_key"]: r["ns"] for r in cur}
     defaults = retrieval.get_search_defaults()
@@ -76,7 +77,24 @@ async def main() -> None:
     for g in gold:
         kinds = {x["kind"] for x in g.get("gold", [])}
         if kinds - {"policy"}:
-            not_connected[g["layer"]] += 1     # 참고표·개요 — 채팅 미연결(계획 #12)
+            if kinds - set(REF_KINDS) or not g.get("doc"):
+                not_connected[g["layer"]] += 1     # 정책과 섞인 정답 등 — 아직 재는 방법 없음
+                continue
+            # 참고표·개요 정답(v0 #12) — 채팅이 그 표·개요를 문맥에 붙였나. 연결이 꺼져 있으면(policy_ref_chat) 전부 못 찾음으로 센다
+            want = {ref_keys.get(x["source_key"]) for x in g["gold"]} - {None}
+            vec = await embedding_service.embed(g["query"])
+            cc = await build_chat_context(g["doc"], g["query"], vec, top_k=int(defaults["default_top_k"]),
+                                          w_vector=defaults["default_w_vector"], w_keyword=defaults["default_w_keyword"])
+            got = ref_hits(cc)
+            r = {"qid": g["qid"], "type": g["layer"], "expect": g["expect"], "ns": g["doc"], "hit": bool(want & got), "top1": bool(want & got),
+                 "coverage": len(want & got) / len(want) if want else 0.0, "signals": cc.signals, "n_policies": 0, "mapped": cc.mapped_term,
+                 "clarify": bool(cc.clarify), "list_items": 0,
+                 "ctx_hash": __import__("hashlib").sha1(cc.llm_context.encode("utf-8")).hexdigest()[:16]}
+            rows.append(r)
+            if details:
+                details.write(json.dumps({"set": "golden_v0", **{k: r[k] for k in ("qid", "type", "hit", "top1", "coverage", "ns", "mapped",
+                                                                                   "clarify", "list_items", "ctx_hash")},
+                                          "signals": r["signals"]}, ensure_ascii=False) + "\n")
             continue
         lids = {key_to_lid.get(x["source_key"]) for x in g.get("gold", [])}
         if None in lids:
@@ -146,6 +164,23 @@ async def main() -> None:
             fa = sum(should_abstain(r["signals"], cut, 0.0) for r in ans if r["signals"])
             ca = sum(should_abstain(r["signals"], cut, 0.0) for r in abst if r["signals"])
             print(f"    하한 {cut:.2f}(파라미터 하한 0) → 정답 있는 질문 거짓 거절 {fa}/{len(ans)} · 답 없는 질문 차단 {ca}/{len(abst)}")
+
+
+REF_KINDS = ("ref_table", "overview")
+
+
+async def ref_key_map(conn) -> dict:
+    """참고표·개요 원천 키 → (종류, id) — 규칙은 한 곳(service/policy/ref_search.ref_key_map)."""
+    from service.policy.ref_search import ref_key_map as _m
+    return await _m(conn)
+
+
+def ref_hits(cc) -> set:
+    """채팅 문맥에 붙은 참고표·개요(종류, id)."""
+    refs = getattr(cc, "refs", None)
+    if not refs:
+        return set()
+    return {("ref_table", t.id) for t in refs.tables} | {("overview", o.id) for o in refs.overviews}
 
 
 if __name__ == "__main__":

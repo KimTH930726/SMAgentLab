@@ -184,11 +184,13 @@ class TestPolicyRouter:
         for gone in ("/api/policy/import", "/api/policy/import-paste", "/api/policy/sources", "/api/policy/items",
                      "/api/policy/unresolved-summary", "/api/policy/review-summary", "/api/policy/auto-review/run",
                      "/api/policy/params/{param_id}", "/api/policy/narratives/{chunk_id}",
-                     "/api/policy/items/{item_id}/approve", "/api/policy/items/{item_id}/reject"):
+                     "/api/policy/items/{item_id}/approve", "/api/policy/items/{item_id}/reject",
+                     # 옛 v1 평가 화면(실험실·답변 정확도)의 길 — v2.176 정리(사용자 10/26 D, 표는 백업 후 삭제 확인 대기)
+                     "/api/policy/track2/run", "/api/policy/track2/history", "/api/policy/track2/axes", "/api/policy/answer-eval/history"):
             assert gone not in paths, gone
         for kept in ("/api/policy/search", "/api/policy/policies", "/api/policy/policies/{logical_id}",
                      "/api/policy/ref-tables", "/api/policy/ref-tables/{table_id}", "/api/policy/overviews",
-                     "/api/policy/track2/run", "/api/policy/answer-eval/history", "/api/policy/pipeline-stats"):
+                     "/api/policy/pipeline-stats"):
             assert kept in paths, kept
 
 

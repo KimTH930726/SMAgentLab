@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
 import { goAdmin, selectDomain } from './admin-nav';
 import { createPolicyPart, dropPolicyPart, psql } from './v0-fixture';
-import { adminToken, loginAdmin } from './auth';
+import { API, adminToken, loginAdmin } from './auth';
 
 // 정책서 v0 재구축 3단계(2026-10-21) — 원문 확인 + JSON 가져오기.
 // 약속 1: 원문 확인은 정정이 아니다 — [해결]은 원장 항목(kind=source_check)만 approved + 메모로 바꾸고, 정정 요청 배지에 안 섞인다.
@@ -127,4 +127,61 @@ test('JSON 내려받기 → 하나 고침 → 미리보기 바뀜 1 → 정정 �
   await expect.poll(() => rows(P2.name)).toEqual([`1:deprecated:${P2.body}`, `2:active:${NEW_BODY}`]);
   expect(rows(P1.name)).toEqual([`1:active:${P1.body}`]);   // 안 바꾼 정책은 그대로
   expect(psql(`SELECT status FROM ops_improvement_item WHERE id = ${corrId}`)).toBe('approved');
+});
+
+// C3(10/26) — 카드에서 연 정책으로 올린 제안 = 카드 "정정 요청 중 #n" → 반려되면 카드는 처리 전 그대로(반려됨 표시) →
+// [문제 없음](사유 고르기)이 원장 + AI 판단 원장에. 다른 카드: 제안 승인 = 카드 자동 해결(메모 "정정 #n 승인").
+test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이면 자동 해결 · [문제 없음] 사유가 AI 판단 원장에', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const lid = psql(`SELECT logical_id FROM policy_item WHERE namespace_id = ${nsId()} AND policy_name = '${P1.name}' AND status = 'active'`);
+  const mk = (desc: string) => Number(psql(`INSERT INTO ops_improvement_item (kind, source, namespace_id, target_type, target_id, user_input, original) `
+    + `VALUES ('source_check', 'golden_set', ${nsId()}, 'policy', ${lid}, '${desc}', `
+    + `'{"type": "conflict", "policies": [${lid}], "ref_tables": [], "hash": "e2e-c3"}'::jsonb) RETURNING id`).split('\n')[0]);
+  const c2 = mk('E2E C3 반려 경로');
+  const c3 = mk('E2E C3 승인 경로');
+  const tok = await adminToken();
+  const H = { Authorization: `Bearer ${tok}` };
+
+  async function proposeFrom(card: number, body: string): Promise<number> {
+    const el = page.getByTestId(`source-check-${card}`);
+    await el.getByRole('button', { name: P1.name }).click();
+    await page.getByRole('button', { name: '직접 수정' }).click();
+    const form = page.locator('form').filter({ has: page.locator('#policy-edit-body') });
+    await form.locator('#policy-edit-body').fill(body);
+    const created = page.waitForResponse((r) => r.url().endsWith('/api/corrections') && r.request().method() === 'POST');
+    await form.getByRole('button', { name: '정정 요청에 올리기' }).click();
+    const id = (await (await created).json()).id as number;
+    await page.getByTestId('app-dialog').getByRole('button', { name: '확인' }).click();
+    await page.keyboard.press('Escape');   // 정책 상세 닫기
+    return id;
+  }
+
+  await login(page);
+  await openPolicyTab(page, '원문 확인');
+  // ① 반려 경로
+  const r1 = await proposeFrom(c2, '교환은 수령 후 10일 이내에 신청한다.');
+  expect(psql(`SELECT source_check_id FROM ops_improvement_item WHERE id = ${r1}`)).toBe(String(c2));
+  await expect(page.getByTestId(`source-check-correction-${c2}`)).toContainText(`정정 요청 중 #${r1}`);
+  expect((await request.post(`${API}/api/corrections/${r1}/reject`, { headers: H, data: { reason: 'E2E 반려' } })).ok()).toBeTruthy();
+  await page.reload();
+  const agent = page.getByText('선택하기');   // 새로고침하면 에이전트 선택 화면부터
+  if (await agent.first().isVisible({ timeout: 5_000 }).catch(() => false)) await agent.first().click();
+  await openPolicyTab(page, '원문 확인');
+  await expect(page.getByTestId(`source-check-${c2}`)).toContainText(`정정 #${r1} 반려됨`);
+  expect(psql(`SELECT status FROM ops_improvement_item WHERE id = ${c2}`)).toBe('pending');   // 카드는 처리 전 그대로
+  // [문제 없음] — 사유 없이는 못 닫고, 고르면 원장 rejected + 사유, AI 판단 원장에 한 줄
+  await page.getByTestId(`source-check-${c2}`).getByRole('button', { name: '문제 없음' }).click();
+  const submit = page.getByRole('button', { name: '문제 없음으로 닫기' });
+  await expect(submit).toBeDisabled();
+  await page.getByLabel('중복').check();
+  await submit.click();
+  await expect.poll(() => psql(`SELECT status || '|' || (ai_verdict->>'reason') FROM ops_improvement_item WHERE id = ${c2}`)).toBe('rejected|duplicate');
+  expect(psql(`SELECT final_value->>'reason' FROM ops_ai_decision WHERE kind = 'source_check' AND ${c2} = ANY(target_ids)`)).toBe('duplicate');
+  // ② 승인 경로 — 제안 승인 = 카드 자동 해결
+  const r2 = await proposeFrom(c3, '교환은 수령 후 10일 이내에 신청한다.');
+  const proposed = JSON.parse(psql(`SELECT proposed::text FROM ops_improvement_item WHERE id = ${r2}`));
+  expect((await request.post(`${API}/api/corrections/${r2}/approve`, { headers: H, data: { proposed } })).ok()).toBeTruthy();
+  expect(psql(`SELECT status || '|' || (ai_verdict->>'note') || '|' || (ai_verdict->>'auto') FROM ops_improvement_item WHERE id = ${c3}`))
+    .toBe(`approved|정정 #${r2} 승인|true`);
+  psql(`DELETE FROM ops_ai_decision WHERE kind = 'source_check' AND ${c2} = ANY(target_ids)`);   // 이 테스트가 남긴 원장 줄
 });

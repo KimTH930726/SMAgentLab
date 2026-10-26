@@ -53,6 +53,10 @@ def test_v0_golden_prefers_searchable_row_for_same_source_key(tmp_path, monkeypa
 
     class Conn:
         async def fetch(self, sql, *a):
+            if "ref_table" in sql:   # 참고표·개요 원천 키(v0 #12) — 이 시나리오엔 없음
+                return [{"id": 7, "source_key": "table_a+table_b"}]
+            if "policy_doc_overview" in sql:
+                return [{"id": 3, "source_key": "doc_01"}]
             seen["sql"] = sql
             # DB가 ORDER BY대로 검색 대상(현행)을 먼저 준다 — 뒤의 반려 행이 덮어쓰면 안 된다
             return [{"id": 11, "source_key": "pol_1", "ns": "정책"}, {"id": 12, "source_key": "pol_1", "ns": "정책"}]
@@ -69,3 +73,45 @@ def test_v0_golden_prefers_searchable_row_for_same_source_key(tmp_path, monkeypa
     same = [{**real[0], "qid": "REAL-2", "query": "반품 기한?"}]
     golden3, _, skipped3 = asyncio.run(ea.load_v0_golden(Conn(), extra=same))
     assert len(golden3) == 1 and skipped3.get("real_dup") == 1
+
+
+def test_ref_clarify_rule_only_rewards_expected_clarify():
+    """v0 #12 — 참고표 결정 조건 되묻기: 되묻기가 기대(ref_clarify)면 정답, 다른 문항에서 되물으면 오답(답을 못 받음)."""
+    base = {"answer": "어느 쪽인가요?", "n_refs_total": 1, "gold_inactive": 0, "ref_clarified": True}
+    assert ea._judge_rule({**base, "type": "ref_clarify"})["label"] == "정답"
+    for t in ("ref", "overview", "fact", "human"):
+        assert ea._judge_rule({**base, "type": t})["label"] == "오답"
+    assert ea._judge_rule({**base, "ref_clarified": False, "type": "ref"}) is None   # 되묻지 않았으면 LLM 채점으로
+
+
+def test_v0_golden_loads_ref_and_overview_questions(tmp_path, monkeypatch):
+    """v0 #12 — 참고표·개요 정답 문항도 잰다(정답 = 그 표·개요). 이어 붙인 표 키("a+b")는 어느 쪽이든 같은 표, 영역 없으면 센다."""
+    import json as _json
+    lines = [{"qid": "참고표-1", "verdict": "approved", "layer": "ref", "query": "적립 몇 번?", "expect": "answer", "doc": "정책",
+              "gold": [{"kind": "ref_table", "source_key": "table_b"}], "answer_facts": ["2회"]},
+             {"qid": "개요-1", "verdict": "approved", "layer": "overview", "query": "이 정책서는 뭘 다뤄?", "expect": "answer", "doc": "정책",
+              "gold": [{"kind": "overview", "source_key": "doc_01"}]},
+             {"qid": "개요-2", "verdict": "approved", "layer": "overview", "query": "영역 없는 개요 질문", "expect": "answer", "doc": None,
+              "gold": [{"kind": "overview", "source_key": "doc_01"}]}]
+    (tmp_path / "a.jsonl").write_text(chr(10).join(_json.dumps(x, ensure_ascii=False) for x in lines), encoding="utf-8")
+    monkeypatch.setattr(ea, "V0_GOLDEN_DIR", tmp_path)
+
+    class Conn:
+        async def fetch(self, sql, *a):
+            if "ref_table" in sql:
+                return [{"id": 7, "source_key": "table_a+table_b"}]
+            if "policy_doc_overview" in sql:
+                return [{"id": 3, "source_key": "doc_01"}]
+            return []
+
+    golden, raw, skipped = asyncio.run(ea.load_v0_golden(Conn(), extra=[]))
+    by = {raw[g["query"]]["qid"]: g for g in golden}
+    assert by["참고표-1"]["ref_keys"] == {("ref_table", 7)} and by["참고표-1"]["type"] == "ref" and not by["참고표-1"]["gold_ids"]
+    assert by["개요-1"]["ref_keys"] == {("overview", 3)}
+    assert "개요-2" not in by and skipped.get("overview") == 1   # 조용히 빼지 않고 센다
+    # 골든이 이어 붙인 키 통째("a+b")로 적어도 같은 표(10/26 측정에서 19문항이 정답 없음으로 빠진 원인)
+    lines2 = [{**lines[0], "qid": "참고표-2", "query": "통째 키 질문", "gold": [{"kind": "ref_table", "source_key": "table_a+table_b"}]}]
+    (tmp_path / "a.jsonl").write_text(chr(10).join(_json.dumps(x, ensure_ascii=False) for x in lines2), encoding="utf-8")
+    g2, _, _ = asyncio.run(ea.load_v0_golden(Conn(), extra=[]))
+    assert g2[0]["ref_keys"] == {("ref_table", 7)} and g2[0]["unresolved"] == 0
+

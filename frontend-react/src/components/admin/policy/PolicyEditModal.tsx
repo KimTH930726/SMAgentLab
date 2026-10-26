@@ -6,17 +6,18 @@ import { usePolicyProposal } from './usePolicyProposal';
 const AREA = 'w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y';
 
 /** 정책 직접 수정(10/21) — 원문·비고를 고쳐 정정 요청에 올린다. 저장해도 바로 바뀌지 않고, 정정 요청에서 승인하면 새 버전. */
-export function PolicyEditModal({ isOpen, namespace, policy, onClose, onDone }: {
+export function PolicyEditModal({ isOpen, namespace, policy, onClose, onDone, sourceCheckId }: {
   isOpen: boolean;
   namespace: string;
   policy: PolicyDetail;
   onClose: () => void;
   onDone: () => void;
+  sourceCheckId?: number | null;
 }) {
   const [body, setBody] = useState(policy.raw_body);
   const [remark, setRemark] = useState(policy.remark ?? '');
   const { save, error, setError } = usePolicyProposal({
-    namespace, itemId: policy.item_id, source: 'policy_direct', onDone,
+    namespace, itemId: policy.item_id, source: 'policy_direct', onDone, sourceCheckId,
     done: (r) => ({ message: `정정 #${r.id}로 올렸어요 — 품질 › 정정 요청에서 승인하면 새 버전으로 반영돼요.`, tone: 'success' }),
   });
   useEffect(() => {   // 열 때마다 지금 버전으로 채운다(다음 정책으로 넘긴 뒤 다시 열어도)

@@ -66,11 +66,16 @@ TECHNIQUES: list[dict] = [
     {"key": "param_derive", "name": "파라미터 파생(원문에서)", "stage": "검색",
      "does": "정책 원문에서 값(금액·개수·기간)을 뽑아 파라미터로 덧붙인다 — 원문을 대신하지 않고, 원문에 글자로 있는 값만",
      "values": {}, "evidence": [("2026-09-04", "파라미터만 남기면 34.8% vs 원문 통째 73.9% → 원문이 기준·파라미터는 파생(v0 §1)"),
-                                ("2026-10-26", "적재 검수: 설계 #9 미실행 — 현행 파라미터 0건(파생 실험 중)")],
+                                ("2026-10-26", "적재 검수: 설계 #9 미실행 — 현행 파라미터 0건"),
+                                ("2026-10-26", "사본 DB 실험(899값): 카드 10장 사람 문항 ±0 · 답 없음 +5.8%p / 카드 3장 사람 −5.0%p·목록 −8.3%p → 채택 안 함", 18),
+                                ("2026-10-26", "카드 3장 판정", 19)],
      "where": "service/policy/param_derive.py:validate_params"},
-    {"key": "ref_table_chat", "name": "참고표·개요 채팅 연결(예정)", "stage": "검색",
-     "does": "참고표(구간·조건 표)와 문서 개요를 채팅 문맥에 넣는다 — 적재는 돼 있음",
-     "values": {}, "evidence": [("2026-10-26", "쓰임 검사: 정답이 참고표인 30문항·개요인 14문항 모두 문맥에 없음")], "where": None},
+    {"key": "ref_table_chat", "name": "참고표·개요 채팅 연결", "stage": "검색",
+     "does": "표·개요 요약 벡터로 찾아 표 압축본·개요 본문을 문맥에, 결정 조건이 빠지면 되묻기(정책 서술보다 강할 때만)",
+     "values": {"채팅 연결": ("POLICY_REF_CHAT", "꺼짐")},
+     "evidence": [("2026-10-26", "쓰임 검사: 정답이 참고표인 30문항·개요인 14문항 모두 문맥에 없음"),
+                  ("2026-10-26", "붙이는 규칙 측정(검색만): 표 23/30·엉뚱하게 7/455, 개요 12/14·0/471 — 유사도만으론 0.6에서도 42/455")],
+     "where": "service/policy/ref_search.py:search_refs"},
     {"key": "knowledge_dedupe", "name": "지식 중복 조각 정리", "stage": "검색",
      "does": "같은 내용 조각이 한 컬렉션에 둘 이상이면 하나만 남긴다(검색 자리 낭비·답 반복 방지)",
      "values": {}, "evidence": [("2026-10-26", "적재 검수: 제휴서비스 컨플루언스 적재분 4쌍")], "where": None},
@@ -110,6 +115,7 @@ def current_values(t: dict) -> dict[str, str]:
     out = {}
     for label, (env, default) in t["values"].items():
         v = _setting(env) if env else None
+        v = {"True": "켜짐", "False": "꺼짐"}.get(v, v)   # 켜기/끄기 설정은 사람 말로
         out[label] = v if v not in (None, "") else default
     return out
 

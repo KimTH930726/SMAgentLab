@@ -40,7 +40,7 @@ async def create_correction(body: CorrectionCreate, user: dict = Depends(get_cur
         try:
             return await service.create_policy_proposal(
                 body.namespace, user, item_id=body.target_id, mode=body.source, proposed=body.proposed,
-                user_input=body.user_input,
+                user_input=body.user_input, source_check_id=body.source_check_id,
             )
         except service.ConflictError as e:
             raise _conflict(e)

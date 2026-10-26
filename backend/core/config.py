@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     # 이 값 미만이며 정책 파라미터 ts_rank 최고가 policy_abstain_min_param_rank 미만이면 LLM을 부르지 않고 "관련 지식을 찾지 못했습니다"
     policy_abstain_min_score: Optional[float] = None
     policy_abstain_min_param_rank: float = 0.0
+    # 참고표·문서 개요를 채팅 문맥에(v0 #12, service/policy/ref_search.py) — 기본 꺼짐: 켜는 건 정확도 게이트 통과 후 사람 결정
+    policy_ref_chat: bool = False
     # 반복된 지식 공백 → 용어 동의어 확인 주기(시간, 0이면 끔) — agents/knowledge_rag/knowledge/glossary_mining.py
     glossary_mining_interval_hours: int = 24
     # 같은 질문이 이 기간(일) 안에 이 횟수 이상 "관련 지식을 찾지 못했습니다"면 동의어 후보를 찾는다(그 전엔 LLM 안 부름)

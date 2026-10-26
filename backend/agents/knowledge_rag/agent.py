@@ -18,6 +18,8 @@ from service.chat.helpers import (
 from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from service.policy import search as policy_search
 from service.policy import category_list
+from service.policy import ref_search
+from service.chat import collection_suggest
 from service.policy import scope as policy_scope
 from service.policy.query_type import looks_like_condition_query, looks_like_navigation_query
 from trustkit.answer.shaping import CONDITION_ANSWER_HINT_KO, list_scoped as _list_scoped, with_note as _with_note
@@ -147,6 +149,7 @@ class ChatContext:
     clarify: Optional[dict] = None   # 재질문(목록이 너무 넓거나 업무가 여럿) — 있으면 답 대신 선택지를 보낸다(v2.134)
     # 목록 답이었나 {total, names} — 화면이 근거 카드(1건 역추적) 위에 "목록 n건에서 답함"을 붙인다(10/23: 카드 1건 vs 답 36줄이 어긋나 보였다)
     list_answer: Optional[dict] = None
+    refs: Optional[ref_search.RefResult] = None   # 참고표·문서 개요(v0 #12, 설정 policy_ref_chat이 켜졌을 때만)
 
 
 def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: float) -> bool:
@@ -157,7 +160,7 @@ def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: fl
     if min_score is None:
         return False
     return (signals.get("adopted", 0) == 0 and signals.get("codes", 0) == 0 and signals.get("columns", 0) == 0
-            and signals.get("category_items", 0) == 0
+            and signals.get("category_items", 0) == 0 and signals.get("refs", 0) == 0
             and signals.get("max_param_rank", 0.0) <= min_param_rank
             and signals.get("top_narrative", 0.0) < min_score)
 
@@ -234,6 +237,8 @@ async def build_chat_context(
             logger.warning("정책 검색 실패(채팅 흐름은 계속 진행): %s", e)
 
     lq = list_question or search_question
+    # 참고표 되묻기에서 고른 값("ref:…")은 분류 목록 범위가 아니다 — 목록 찾기엔 넘기지 않는다(고른 값은 질문 글에 붙어 온다)
+    cat_scope = None if (clarify_scope or "").startswith(ref_search.REF_SCOPE) else clarify_scope
     # 탐색형("○○ 관련 정책 다 보여줘")·주제 전체("재고 정책 좀")는 검색(상위 몇 개)으로는 분류 전체가 안 온다 — 그 분류의 정책 목록을
     # DB에서 그대로(service/policy/category_list.py, 실측 포함률 42%→91%). 못 찾으면 지금처럼 검색 결과만. category_lists=False는 측정 비교용
     category = None
@@ -244,7 +249,7 @@ async def build_chat_context(
                 # (2026-10-12 실측: "주문 > 장바구니" 다음 "주문 정책 전부"가 장바구니 10개만). 검색 재현율용 보강은 위 검색에만.
                 lvec = query_vec if lq == search_question else await embedding_service.embed(lq)
                 category = await category_list.find_category_list(
-                    policy_ns_ids, lq, lvec, keyword_nav=looks_like_navigation_query(lq), scope=clarify_scope)
+                    policy_ns_ids, lq, lvec, keyword_nav=looks_like_navigation_query(lq), scope=cat_scope)
         except Exception as e:
             logger.warning("분류 목록 조회 실패(검색 결과만으로 진행): %s", e)
 
@@ -276,13 +281,25 @@ async def build_chat_context(
     # 재질문에서 범위를 고른 경우(clarify_scope)도 목록 답이다. 인용 카드·근거 판정(signals)은 원래 검색 결과 그대로.
     ctx_policy = policy_result
     list_answer = None
-    if category and category.item_ids and (category.is_listing or clarify_scope):
+    if category and category.item_ids and (category.is_listing or cat_scope):
         # shown = 문맥에 실린 줄 수(목록 상한 40) — 화면이 "n건 중 m건으로 답함"을 알 수 있게(리뷰 L3)
         list_answer = {"total": category.total, "names": list(category.names), "shown": min(category.total, len(category.lines))}
         ctx_policy = policy_search.PolicySearchResult(
             params=list_scoped(policy_result.params, set(category.item_ids)),
             narratives=list_scoped(policy_result.narratives, set(category.item_ids)))
     llm_context = _build_rrf_context(results, ctx_policy, common_codes, db_columns, parent_expansions)
+    # 참고표·문서 개요(v0 #12) — 요약 벡터로 찾아 표 압축본·개요 본문을 문맥 끝에. 붙이는 규칙·하한은 ref_search 모듈 설명(10/26 측정)
+    refs = None
+    if settings.policy_ref_chat and policy_available:
+        try:
+            refs = await ref_search.search_refs(
+                policy_ns_ids, query_vec, lq, top_narrative=max((n.score for n in policy_result.narratives), default=0.0),
+                allow_clarify=not clarify_scope)
+            block = ref_search.context_block(refs)
+            if block:
+                llm_context = f"{llm_context}\n\n{block}" if llm_context.strip() else block
+        except Exception as e:
+            logger.warning("참고표·개요 검색 실패(없이 진행): %s", e)
     # 조건 한정 질문("X에만 따로 …")의 답 구조(v2.138) — 근거가 문맥에 있는데도 "X 전용 규정"이 안 보이면 통째로 거절하거나
     # (조건형 18문항 중 거절 최대 6) 일반 규정을 X 전용처럼 섞어 답했다. 있는 것·없는 것·공통을 나눠 답하게 한다.
     if llm_context.strip() and looks_like_condition_query(lq):
@@ -301,6 +318,7 @@ async def build_chat_context(
         "top_narrative": max((n.score for n in policy_result.narratives), default=0.0),
         "category_items": category.total if category else 0,
         "scope_missed": bool(category and category.scope_missed),
+        "refs": len(refs.tables) + len(refs.overviews) if refs else 0,
     }
     return ChatContext(
         results=results, policy_result=policy_result, common_codes=common_codes, db_columns=db_columns,
@@ -308,9 +326,18 @@ async def build_chat_context(
         term_matches=term_matches, signals=signals,
         abstain=should_abstain(signals, settings.policy_abstain_min_score, settings.policy_abstain_min_param_rank),
         # 재질문 선택에서 온 질문(clarify_scope 있음)엔 다시 묻지 않는다 — 대화가 같은 질문으로 맴돌지 않게
-        clarify=None if clarify_scope else category_list.clarify_for(category, list_question or search_question),
-        list_answer=list_answer,
+        clarify=None if clarify_scope else (category_list.clarify_for(category, list_question or search_question) or (refs.clarify if refs and not list_answer else None)),
+        list_answer=list_answer, refs=refs,
     )
+
+
+async def _suggestion(namespace: str, question: str, query_vec: list[float], results: list, **kw) -> Optional[dict]:
+    """다른 컬렉션에서 찾아보기 제안(C2, 기본 꺼짐 — collection_suggest.enabled). 실패해도 답엔 영향 없음(로그만)."""
+    try:
+        return await collection_suggest.find(namespace, question, query_vec, results, **kw)
+    except Exception:   # noqa: BLE001
+        logger.warning("컬렉션 제안 계산 실패(답엔 영향 없음)", exc_info=True)
+        return None
 
 
 async def _record_clarify(conversation_id: int, msg_id: int, clarify: dict, user: dict) -> None:
@@ -366,6 +393,7 @@ class KnowledgeRagAgent(AgentBase):
         user_credentials: Optional[dict] = context.get("user_credentials")
         inhouse_conv_id: Optional[str] = context.get("inhouse_conv_id")
         clarify_scope: Optional[str] = context.get("clarify_scope")
+        suggest_of: Optional[int] = context.get("suggest_of")
 
         full_answer = ""
         token_count = 0
@@ -376,6 +404,8 @@ class KnowledgeRagAgent(AgentBase):
 
         try:
             await _close_open_clarify(conversation_id, clarify_scope, user)
+            if suggest_of:   # "다른 컬렉션에서 찾아보기"를 눌러 온 질문 — 제안 줄을 "누름"으로(C2)
+                await collection_suggest.picked(message_id=suggest_of, user_id=user.get("id"))
             yield {"type": "status", "step": "embedding", "message": "질문 임베딩 생성 중..."}
 
             # ── 멀티턴 검색 보강: 직전 턴과 관련 있을 때만 결합 ──
@@ -412,7 +442,11 @@ class KnowledgeRagAgent(AgentBase):
                         cached.get("mapped_term"), json.dumps(cached.get("results", []), ensure_ascii=False), msg_id,
                     )
                 cached_list = cached.get("list_answer")   # 목록 답 표시도 캐시에서(리뷰 L1) — 옛 캐시 항목엔 없음
-                cached_meta = {k: v for k, v in (("policy_citations", cached_citations), ("list_answer", cached_list)) if v}
+                # 다른 컬렉션 제안은 캐시하지 않는다(설정·다른 컬렉션 지식이 그 사이 바뀜) — 캐시 답에도 지금 기준으로 계산(검색만, C2)
+                cached_sug = None if suggest_of else await _suggestion(namespace, search_question, query_vec, None,
+                                                                         w_vector=w_vector, w_keyword=w_keyword, top_k=top_k)
+                cached_meta = {k: v for k, v in (("policy_citations", cached_citations), ("list_answer", cached_list),
+                                                 ("collection_suggest", cached_sug)) if v}
                 await update_assistant_message(msg_id, cached["answer"], "completed", metadata=cached_meta or None)
                 final_saved = True
                 yield {
@@ -423,6 +457,10 @@ class KnowledgeRagAgent(AgentBase):
                     "list_answer": cached_list,
                 }
                 yield {"type": "token", "data": cached["answer"]}
+                if cached_sug:
+                    await collection_suggest.record(conversation_id=conversation_id, message_id=msg_id, suggestion=cached_sug,
+                                                    user_id=user.get("id"))
+                    yield {"type": "suggest", **cached_sug}
                 # 근거 유무는 캐시 저장 시점 값으로 — 예전엔 results(지식)만 봐서 정책·공통코드만으로 답한 캐시 응답이
                 # 공백으로 잘못 세졌다(2026-10-02 실측: 정책 답변 3건). 옛 캐시 항목엔 값이 없어 지식·정책 근거로 대신 판단.
                 had_context = cached.get("had_context", bool(cached.get("results") or cached_citations))
@@ -449,10 +487,12 @@ class KnowledgeRagAgent(AgentBase):
                     mapped_term, results_to_json(results), msg_id,
                 )
 
+            # 제안 버튼으로 다른 컬렉션에서 다시 물은 답 — 답한 컬렉션을 남겨 "답변 틀림"이 그 컬렉션 건으로 가게(보는 컬렉션 아님, 리뷰 M1)
+            answered_ns = {"answered_namespace": namespace} if suggest_of else {}
             yield {
                 "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
                 "mapped_term": mapped_term, "results": results_to_payload(results),
-                "policy_citations": policy_citations,
+                "policy_citations": policy_citations, **answered_ns,
             }
 
             # 근거 없음 즉시 판정(v2.128, 설정으로 켬) — LLM을 안 불러 지어낼 기회도, 게이트웨이 대기(100초+)도 없다.
@@ -469,9 +509,16 @@ class KnowledgeRagAgent(AgentBase):
                 return
 
             if cc.abstain:
-                await update_assistant_message(msg_id, NO_KNOWLEDGE_MARKER, "completed")
+                suggestion = None if (suggest_of or clarify_scope) else await _suggestion(
+                    namespace, search_question, query_vec, results, w_vector=w_vector, w_keyword=w_keyword, top_k=top_k)
+                abstain_meta = {**({"collection_suggest": suggestion} if suggestion else {}), **answered_ns}
+                await update_assistant_message(msg_id, NO_KNOWLEDGE_MARKER, "completed", metadata=abstain_meta or None)
                 final_saved = True
                 yield {"type": "token", "data": NO_KNOWLEDGE_MARKER}
+                if suggestion:
+                    await collection_suggest.record(conversation_id=conversation_id, message_id=msg_id, suggestion=suggestion,
+                                                    user_id=user.get("id"))
+                    yield {"type": "suggest", **suggestion}
                 await create_query_log(namespace, query, NO_KNOWLEDGE_MARKER, mapped_term, msg_id,
                                        user_id=user.get("id"), had_context=False)
                 yield {"type": "done", "message_id": msg_id, "status": "completed"}
@@ -548,8 +595,18 @@ class KnowledgeRagAgent(AgentBase):
                 meta_out["list_answer"] = cc.list_answer
             if degraded:
                 meta_out["degraded"] = True
+            # 다른 컬렉션에서 찾아보기(C2, 기본 꺼짐) — 답은 그대로, 더 맞는 컬렉션이 보이면 버튼으로만. 실패해도 답엔 영향 없음(로그만)
+            suggestion = None if (degraded or suggest_of or clarify_scope) else await _suggestion(
+                namespace, search_question, query_vec, results, w_vector=w_vector, w_keyword=w_keyword, top_k=top_k)
+            if suggestion:
+                meta_out["collection_suggest"] = suggestion
+            meta_out.update(answered_ns)
             await update_assistant_message(msg_id, final_answer, msg_status, metadata=meta_out or None)
             final_saved = True
+            if suggestion:
+                await collection_suggest.record(conversation_id=conversation_id, message_id=msg_id, suggestion=suggestion,
+                                                user_id=user.get("id"))
+                yield {"type": "suggest", **suggestion}
             if policy_citations or degraded or meta_out.get("list_answer"):
                 yield {
                     "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,

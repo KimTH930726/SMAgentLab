@@ -4,16 +4,17 @@ import { FormModal } from '../../ui/FormModal';
 import { usePolicyProposal } from './usePolicyProposal';
 
 /** AI 수정 제안(10/21) — 한 줄 요청 → AI가 수정안을 써서 정정 요청에 올린다. 승인해야 반영. */
-export function PolicyAiSuggestModal({ isOpen, namespace, policy, onClose, onDone }: {
+export function PolicyAiSuggestModal({ isOpen, namespace, policy, onClose, onDone, sourceCheckId }: {
   isOpen: boolean;
   namespace: string;
   policy: PolicyDetail;
   onClose: () => void;
   onDone: () => void;
+  sourceCheckId?: number | null;
 }) {
   const [text, setText] = useState('');
   const { save, error, setError } = usePolicyProposal({
-    namespace, itemId: policy.item_id, source: 'policy_ai', onDone,
+    namespace, itemId: policy.item_id, source: 'policy_ai', onDone, sourceCheckId,
     done: (r) => (r.ai_failed
       ? { message: `정정 #${r.id}로 올렸지만 AI가 수정안을 만들지 못했어요 — 정정 요청에서 [AI 초안 만들기]나 [직접 수정]으로 이어 가세요.`, tone: 'warning' }
       : { message: `정정 #${r.id}로 올렸어요 — 품질 › 정정 요청에서 AI 수정안을 확인하고 승인하세요.`, tone: 'success' }),

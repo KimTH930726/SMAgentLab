@@ -103,6 +103,8 @@ class TestListChecks:
     @pytest.mark.asyncio
     async def test_shape_and_open_filter(self):
         async def fetch(sql, *args):
+            if "WHERE source_check_id = ANY" in sql:   # 카드에서 올린 정정 제안(C3) — 70번 카드에 검토 중 #80
+                return [{"id": 80, "status": "pending", "source_check_id": 70}]
             if "FROM ops_improvement_item" in sql:
                 return [_check_row(), _check_row(id=71, target_type="ref_table", target_id=3, status="approved",
                                                  original=json.dumps({"type": "ref_error", "policies": [], "ref_tables": [3]}),
@@ -130,6 +132,7 @@ class TestListChecks:
         assert a["policies"] == [{"logical_id": 11, "policy_name": "가", "category_path": ["1. 가"]},
                                  {"logical_id": 12, "policy_name": None, "category_path": []}]
         assert b["status"] == "resolved" and b["note"] == "원본 고침" and b["ref_tables"] == [{"logical_id": 3, "id": 30, "title": "표"}]
+        assert a["correction"] == {"id": 80, "status": "pending"} and b["correction"] is None
         assert out["links"] == [{"id": 5, "status": "suggested", "relation": "refers",
                                  "policy": {"logical_id": 11, "policy_name": "가", "category_path": ["1. 가"]},
                                  "target": {"type": "section", "namespace": "POS", "path": ["5. 결제", "5-1. 가"]}}]
@@ -146,22 +149,52 @@ class TestListChecks:
 
 class TestDecide:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("resolution, status", [("resolved", "approved"), ("dismissed", "rejected")])
-    async def test_marks_with_note_only_pending_source_check(self, resolution, status):
-        c = _conn()
-        with patch.object(source_check, "get_conn", return_value=c):
-            out = await source_check.decide_check(70, USER, resolution, " 메모 ")
-        sql, *args = c.execute.await_args.args
+    async def test_resolve_marks_with_note_only_pending_source_check(self):
+        c = _conn(fetchrow={"source": "golden_set", "original": {"type": "conflict"}})
+        rec, fin = AsyncMock(return_value=502), AsyncMock(return_value=True)
+        ledger = MagicMock(record=rec, finalize=fin)
+        with patch.object(source_check, "get_conn", return_value=c),              patch.dict(sys.modules, {"service.decision": MagicMock(ledger=ledger), "service.decision.ledger": ledger}):
+            out = await source_check.decide_check(70, USER, "resolved", " 메모 ")
+        # 해결도 원장에 — 검사기가 맞게 짚은 것(바뀌지 않음, 오탐률 분모 — 리뷰 L1)
+        assert fin.await_args.kwargs["final_value"] == {"issue": True, "resolution": "resolved"} and fin.await_args.kwargs["changed"] is False
+        sql, *args = c.fetchrow.await_args.args
         assert "status = 'pending'" in sql and "kind = $5" in sql and args[4] == "source_check"
-        assert args[1] == status and args[2] == 9
-        assert json.loads(args[3]) == {"resolution": resolution, "note": "메모", "by": 9, "by_name": "담당"}
-        assert out == {"id": 70, "status": resolution}
+        assert args[1] == "approved" and args[2] == 9
+        assert json.loads(args[3]) == {"resolution": "resolved", "note": "메모", "by": 9, "by_name": "담당"}
+        assert out == {"id": 70, "status": "resolved"}
+
+    @pytest.mark.asyncio
+    async def test_no_issue_needs_reason_and_goes_to_ai_ledger(self):
+        """C3(10/26) — [문제 없음] = 사유 4개 중 하나(기타는 메모 필수) + AI 판단 원장 한 줄(검사기가 짚었는데 사람이 문제 없다 — 오탐률)."""
+        c = _conn(fetchrow={"source": "v0_load_check", "original": {"type": "question"}})
+        rec, fin = AsyncMock(return_value=501), AsyncMock(return_value=True)
+        ledger = MagicMock(record=rec, finalize=fin)
+        with patch.object(source_check, "get_conn", return_value=c), \
+             patch.dict(sys.modules, {"service.decision": MagicMock(ledger=ledger), "service.decision.ledger": ledger}):
+            out = await source_check.decide_check(70, USER, "dismissed", " 원문 그대로 ", reason="source_ok")
+        _, *args = c.fetchrow.await_args.args
+        assert args[1] == "rejected"
+        assert json.loads(args[3]) == {"resolution": "dismissed", "note": "원문이 맞음 — 원문 그대로", "by": 9, "by_name": "담당",
+                                       "reason": "source_ok"}
+        assert rec.await_args.args[1] == "source_check" and rec.await_args.kwargs["ai_value"] == {"issue": True, "type": "question",
+                                                                                                    "source": "v0_load_check"}
+        assert fin.await_args.kwargs["final_value"] == {"issue": False, "reason": "source_ok"} and fin.await_args.kwargs["changed"] is True
+        assert out == {"id": 70, "status": "dismissed"}
+
+    def test_no_issue_note_rules(self):
+        assert source_check.no_issue_note("duplicate", "  ") == "중복"
+        assert source_check.no_issue_note("other", "검사 기준이 옛 문서") == "기타 — 검사 기준이 옛 문서"
+        for bad, msg in ((None, "골라"), ("closed", "골라"), ("other", "적어")):
+            with pytest.raises(ValueError, match=msg):
+                source_check.no_issue_note(bad, "" if bad == "other" else "x")
 
     @pytest.mark.asyncio
     async def test_note_required_and_already_done(self):
-        with pytest.raises(ValueError, match="이유"):
+        with pytest.raises(ValueError, match="골라"):
             await source_check.decide_check(70, USER, "dismissed", "  ")
-        c = _conn(execute="UPDATE 0")
+        with pytest.raises(ValueError, match="메모"):
+            await source_check.decide_check(70, USER, "resolved", "  ")
+        c = _conn(fetchrow=None)
         with patch.object(source_check, "get_conn", return_value=c), pytest.raises(ValueError, match="이미 처리"):
             await source_check.decide_check(70, USER, "resolved", "x")
 
@@ -214,8 +247,8 @@ class TestSourceCheckRouter:
         with patch.object(prouter.source_check, "check_namespace", AsyncMock(return_value="회원")), \
              patch.object(prouter, "check_namespace_ownership", AsyncMock()), \
              patch.object(prouter.source_check, "decide_check", AsyncMock(return_value={"id": 70})) as decide:
-            await prouter.dismiss_source_check(70, prouter.SourceCheckDecision(note="중복"), user=USER)
-        assert decide.await_args.args == (70, USER, "dismissed", "중복")
+            await prouter.dismiss_source_check(70, prouter.SourceCheckDecision(note="", reason="duplicate"), user=USER)
+        assert decide.await_args.args == (70, USER, "dismissed", "") and decide.await_args.kwargs == {"reason": "duplicate"}
         with patch.object(prouter.source_check, "link_namespace", AsyncMock(return_value="POS")), \
              patch.object(prouter, "check_namespace_ownership", AsyncMock()) as owner, \
              patch.object(prouter.source_check, "decide_link", AsyncMock(return_value={"id": 5})) as dl:
@@ -224,9 +257,11 @@ class TestSourceCheckRouter:
         assert owner.await_args.args == ("POS", USER)
         assert [c.args for c in dl.await_args_list] == [(5, USER, True), (5, USER, False)]
 
-    def test_note_required_by_schema(self):
+    def test_reason_must_be_one_of_four(self):
+        """[문제 없음] 사유는 4개 중 하나만(메모 필수 여부는 서비스가 — 기타만 필수, C3)."""
+        assert prouter.SourceCheckDecision(note="", reason="already_fixed").reason == "already_fixed"
         with pytest.raises(Exception):
-            prouter.SourceCheckDecision(note="")
+            prouter.SourceCheckDecision(note="x", reason="closed")
 
 
 # ── 정정 요청에서 원문 확인 빼기 ─────────────────────────────────────────────

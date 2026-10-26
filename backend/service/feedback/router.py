@@ -23,9 +23,7 @@ async def submit_feedback(body: FeedbackCreate, user: dict = Depends(get_current
         ns_id = await resolve_namespace_id(conn, body.namespace)
         if ns_id is None:
             raise HTTPException(status_code=404, detail="namespace를 찾을 수 없습니다.")
-        owned = await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM ops_message m JOIN ops_conversation c ON c.id = m.conversation_id "
-            "WHERE m.id = $1 AND c.user_id = $2 AND c.namespace_id = $3)", body.message_id, user.get("id"), ns_id)
+        owned = await conn.fetchval(improvement.OWNED_MESSAGE_SQL, body.message_id, user.get("id"), ns_id)
     if owned is True:
         # 원장 1건이 이 신고의 유일한 기록(ops_feedback 제거) — 저장이 실패했는데 201을 주면 사용자는 접수된 줄 안다
         if await improvement.record_answer_signal(ns_id, body.message_id, user.get("id")) is None:

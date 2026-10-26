@@ -28,6 +28,9 @@ SOURCES = ("v0_load_check", "golden_set")
 TYPES = ("question", "conflict", "ref_error")
 LINK_SOURCE = "v0_rule"          # 적재기의 제안 연결 출처(scripts/load_policy_v0.py add_suggested_links)
 _RESOLUTION_STATUS = {"resolved": "approved", "dismissed": "rejected"}
+# [문제 없음] 사유(사용자 10/26 결정 4개) — 기타만 직접 입력 필수. AI 판단 원장(kind source_check)에 남겨 검사기 오탐률로 본다
+NO_ISSUE_REASONS = {"source_ok": "원문이 맞음", "already_fixed": "이미 고쳐짐", "duplicate": "중복", "other": "기타"}
+LEDGER_KIND = "source_check"
 
 
 # ── 씨앗(적재 스크립트가 쓰는 순수 함수) ─────────────────────────────────────────
@@ -94,6 +97,13 @@ async def list_checks(namespace: str, status: Optional[str] = None) -> dict:
         tabs = {r["logical_id"]: r for r in await conn.fetch(
             "SELECT id, logical_id, title FROM ref_table WHERE namespace_id = $1 AND status = 'active' AND logical_id = ANY($2::int[])",
             ns_id, tab_ids)} if tab_ids else {}
+        # 카드에서 올린 정정 제안(#92) — 가장 최근 것 하나: 검토 중이면 "정정 요청 중 #n", 반려됐으면 카드는 처리 전 그대로 + "정정 #n 반려됨"
+        ids = [r["id"] for r in rows]
+        linked: dict = {}
+        for c in (await conn.fetch(
+                "SELECT id, status, source_check_id FROM ops_improvement_item WHERE source_check_id = ANY($1::int[]) ORDER BY id DESC",
+                ids) if ids else []):
+            linked.setdefault(c["source_check_id"], {"id": c["id"], "status": c["status"]})
 
         link_status = {"open": ["suggested"], "done": ["active", "rejected"]}.get(status or "", ["suggested", "active", "rejected"])
         links = await conn.fetch(
@@ -123,6 +133,8 @@ async def list_checks(namespace: str, status: Optional[str] = None) -> dict:
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "decided_at": r["decided_at"].isoformat() if r["decided_at"] else None,
             "decided_by": r["decided_by"],
+            "correction": linked.get(r["id"]),
+            "reason": verdict.get("reason"),
         })
     out_links = []
     for l in links:
@@ -146,22 +158,51 @@ async def check_namespace(item_id: int) -> Optional[str]:
             "WHERE i.id = $1 AND i.kind = $2", item_id, KIND)
 
 
-async def decide_check(item_id: int, user: dict, resolution: str, note: str) -> dict:
-    """[해결](resolved) / [닫기](dismissed) — 메모 필수. 처리 전 건만(두 번 눌러도 한 번)."""
+def no_issue_note(reason: Optional[str], note: str) -> str:
+    """[문제 없음] 저장 메모 — 고른 사유 이름(+ 덧붙인 말). 기타는 직접 입력 필수. 순수 함수(테스트)."""
+    if reason not in NO_ISSUE_REASONS:
+        raise ValueError("문제 없는 이유를 골라 주세요.")
+    note = (note or "").strip()
+    if reason == "other" and not note:
+        raise ValueError("기타 — 이유를 적어 주세요.")
+    return f"{NO_ISSUE_REASONS[reason]} — {note}" if note else NO_ISSUE_REASONS[reason]
+
+
+async def decide_check(item_id: int, user: dict, resolution: str, note: str, reason: Optional[str] = None) -> dict:
+    """[해결](resolved, 메모 필수) / [문제 없음](dismissed, 사유 4개 중 하나 — 기타는 메모 필수). 처리 전 건만(두 번 눌러도 한 번).
+    문제 없음은 AI 판단 원장에도 한 줄(검사기가 짚었는데 사람이 문제 없다고 함 — 사유별로 검사기 오탐률을 본다, 사용자 10/26)."""
     if resolution not in _RESOLUTION_STATUS:
         raise ValueError("알 수 없는 처리입니다.")
-    note = (note or "").strip()
-    if not note:
-        raise ValueError("메모를 적어 주세요." if resolution == "resolved" else "닫는 이유를 적어 주세요.")
-    verdict = {"resolution": resolution, "note": note, "by": user.get("id"), "by_name": user.get("username")}
+    if resolution == "dismissed":
+        note = no_issue_note(reason, note)
+    else:
+        note = (note or "").strip()
+        if not note:
+            raise ValueError("메모를 적어 주세요.")
+    verdict = {"resolution": resolution, "note": note, "by": user.get("id"), "by_name": user.get("username"),
+               **({"reason": reason} if resolution == "dismissed" else {})}
     async with get_conn() as conn:
-        res = await conn.execute(
-            "UPDATE ops_improvement_item SET status = $2, decided_by = $3, decided_at = NOW(), ai_verdict = $4::jsonb "
-            "WHERE id = $1 AND kind = $5 AND status = 'pending'",
-            item_id, _RESOLUTION_STATUS[resolution], user.get("id"), json.dumps(verdict, ensure_ascii=False), KIND)
-    if res.endswith(" 0"):
-        raise ValueError("이미 처리됐거나 없는 항목이에요 — 새로고침하세요.")
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "UPDATE ops_improvement_item SET status = $2, decided_by = $3, decided_at = NOW(), ai_verdict = $4::jsonb "
+                "WHERE id = $1 AND kind = $5 AND status = 'pending' RETURNING source, original",
+                item_id, _RESOLUTION_STATUS[resolution], user.get("id"), json.dumps(verdict, ensure_ascii=False), KIND)
+            if row is None:
+                raise ValueError("이미 처리됐거나 없는 항목이에요 — 새로고침하세요.")
+            await ledger_outcome(conn, item_id, row["source"], row["original"], user_id=user.get("id"),
+                                 final={"issue": False, "reason": reason} if resolution == "dismissed" else {"issue": True, "resolution": "resolved"})
     return {"id": item_id, "status": resolution}
+
+
+async def ledger_outcome(conn, item_id: int, source: str, original, *, user_id: Optional[int], final: dict) -> None:
+    """AI 판단 원장 한 줄 — 검사기가 "문제 있음"이라 짚은 카드의 사람 결론. 문제 없음 = 바뀜(changed), 해결·정정 승인 = 맞게 짚음.
+    둘 다 남겨야 사유별 오탐률의 분모가 생긴다(리뷰 L1). 호출 쪽 트랜잭션 안에서."""
+    from service.decision import ledger
+    o = _json(original) or {}
+    did = await ledger.record(conn, LEDGER_KIND, ai_value={"issue": True, "type": o.get("type"), "source": source},
+                              confident=False, signals={"item_id": item_id}, user_id=user_id,
+                              prompt_version=f"source-check:{source}", target_type="source_check", target_ids=[item_id])
+    await ledger.finalize(conn, did, kind=LEDGER_KIND, final_value=final, changed=not final.get("issue"), user_id=user_id)
 
 
 async def link_namespace(link_id: int) -> Optional[str]:

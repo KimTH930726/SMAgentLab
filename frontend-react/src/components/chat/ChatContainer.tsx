@@ -12,7 +12,7 @@ import { getMessages } from '../../api/conversations';
 import { MessageItem } from './MessageItem';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { createCorrection, getMyCorrections, markCorrectionsSeen } from '../../api/corrections';
-import type { ChatMessage, ClarifyOption, ClarifyPrompt, PolicyCitation, ListAnswer } from '../../types';
+import type { ChatMessage, ClarifyOption, ClarifyPrompt, CollectionSuggest, PolicyCitation, ListAnswer } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
 import { showError } from '../../store/useDialogStore';
 
@@ -114,7 +114,7 @@ function PipelineStepsToggle({ steps, answering = false }: { steps: PipelineStep
   );
 }
 
-function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null; clarify?: ClarifyPrompt | null; degraded?: boolean; list_answer?: ListAnswer | null } | null }[]): ChatMessage[] {
+function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null; clarify?: ClarifyPrompt | null; degraded?: boolean; list_answer?: ListAnswer | null; collection_suggest?: CollectionSuggest | null; answered_namespace?: string | null } | null }[]): ChatMessage[] {
   // Fix out-of-order pairs from old data (parallel saves could put assistant before user)
   // Check pairs at step=2: (0,1), (2,3), ... and swap reversed pairs
   const ordered = [...msgs];
@@ -147,6 +147,8 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
         results: (m.results ?? []) as ChatMessage['results'],
         policyCitations: m.metadata?.policy_citations ?? [],
         listAnswer: m.metadata?.list_answer ?? null,
+        collectionSuggest: m.metadata?.collection_suggest ?? null,
+        answeredNamespace: m.metadata?.answered_namespace ?? null,
         question: lastQuestion,
         has_feedback: m.has_feedback ?? false,
         messageId: m.id,
@@ -457,19 +459,25 @@ export function ChatContainer() {
     void sendQuestion(opt.query, opt.scope);
   };
   const handleClarifyOther = () => textareaRef.current?.focus();
+  // 다른 컬렉션에서 찾아보기(C2) — 같은 질문을 그 컬렉션에서 한 번 더(보는 컬렉션·사이드바는 그대로, 이 대화 안에서)
+  const handleSuggest = (msg: ChatMessage) => (s: CollectionSuggest) => {
+    if (streamActive || !msg.question) return;
+    void sendQuestion(msg.question, null, { namespace: s.namespace, suggestOf: msg.messageId ?? null });
+  };
 
   // 두 번 나가지 않게 — 재질문 버튼·Enter를 연달아 눌러도(재리뷰 2026-10-12)
   const sendingRef = useRef(false);
-  const sendQuestion = async (question: string, clarifyScope: string | null = null) => {
+  const sendQuestion = async (question: string, clarifyScope: string | null = null,
+    over?: { namespace: string; suggestOf: number | null }) => {
     if (!namespace || sendingRef.current) return;
     sendingRef.current = true;
     try {
-      await sendQuestionInner(question, clarifyScope);
+      await sendQuestionInner(question, clarifyScope, over);
     } finally {
       sendingRef.current = false;
     }
   };
-  const sendQuestionInner = async (question: string, clarifyScope: string | null) => {
+  const sendQuestionInner = async (question: string, clarifyScope: string | null, over?: { namespace: string; suggestOf: number | null }) => {
     userScrolledUpRef.current = false;
 
     // Increment epoch to invalidate any in-flight getMessages from previous stream completion
@@ -477,13 +485,14 @@ export function ChatContainer() {
 
     const startConvId = conversationId;
     startChatStream({
-      namespace,
+      namespace: over?.namespace ?? namespace,
       question,
       wVector: searchConfig.wVector,
       wKeyword: searchConfig.wKeyword,
       topK: searchConfig.topK,
       conversationId,
       clarifyScope,
+      suggestOf: over?.suggestOf ?? null,
       agentType: selectedAgent ?? 'knowledge_rag',
       onConversationCreated: (id) => {
         // Guard: if stream was already stopped/cleared, don't navigate
@@ -547,7 +556,8 @@ export function ChatContainer() {
         {displayMessages.map((msg, i) => (
           <MessageItem key={`${conversationId ?? 'new'}-${i}`} message={msg} namespace={namespace}
             {...(i === displayMessages.length - 1 && msg.clarify && !isLoading
-              ? { onClarify: handleClarify, onClarifyOther: handleClarifyOther } : {})} />
+              ? { onClarify: handleClarify, onClarifyOther: handleClarifyOther } : {})}
+            {...(i === displayMessages.length - 1 && msg.collectionSuggest && !isLoading ? { onSuggest: handleSuggest(msg) } : {})} />
         ))}
 
         {/* Pipeline steps — inline below last message */}

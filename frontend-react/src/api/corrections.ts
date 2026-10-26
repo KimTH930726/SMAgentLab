@@ -113,10 +113,12 @@ export function correctionSourceLabel(source: string | null | undefined, kind?: 
 export async function createPolicyProposal(
   namespace: string, itemId: number, source: PolicyProposalSource,
   body: { proposed?: { raw_body: string; remark: string }; user_input?: string },
+  sourceCheckId?: number | null,
 ): Promise<PolicyProposalCreated> {
   return apiFetch('/corrections', {
     method: 'POST',
-    body: JSON.stringify({ namespace, target_type: 'policy_narrative', target_id: itemId, source, ...body }),
+    // 원문 확인 카드에서 연 정책이면 그 카드 번호 — 제안이 승인되면 카드도 해결(C3)
+    body: JSON.stringify({ namespace, target_type: 'policy_narrative', target_id: itemId, source, ...body, source_check_id: sourceCheckId ?? null }),
   });
 }
 

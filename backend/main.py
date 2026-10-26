@@ -1500,6 +1500,15 @@ async def _migrate_eval_gate_run(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_gate_run_at ON eval_gate_run (run_at DESC)")
 
 
+async def _migrate_source_check_link(conn) -> None:
+    """#92(10/26, C3) 원문 확인 카드 ↔ 그 카드에서 올린 정정 제안 — 제안이 승인되면 카드 자동 해결, 반려되면 카드는 처리 전 그대로.
+    같은 원장 표 안의 자기 참조(원문 확인도 kind='source_check'로 같은 표). 카드가 지워지면 연결만 비운다. 멱등."""
+    await conn.execute("""ALTER TABLE ops_improvement_item ADD COLUMN IF NOT EXISTS source_check_id INT
+                          REFERENCES ops_improvement_item(id) ON DELETE SET NULL""")
+    await conn.execute("""CREATE INDEX IF NOT EXISTS idx_improvement_source_check ON ops_improvement_item (source_check_id)
+                          WHERE source_check_id IS NOT NULL""")
+
+
 async def _migrate_eval_improvement(conn) -> None:
     """자가 개선 루프 (2026-10-23, #87 — eval-gate-redesign §10). 멱등.
     eval_improvement_run = 판정 기록 하나를 진단한 결과(원인별 qid·가설 묶음), eval_candidate = 원인마다 개선 후보 + 사람 검수 상태.
@@ -2175,6 +2184,7 @@ async def _run_migrations() -> None:
         await _migrate_ai_decision_ledger(conn)        # #85
         await _migrate_eval_gate_run(conn)             # #86
         await _migrate_eval_improvement(conn)          # #87
+        await _migrate_source_check_link(conn)         # #92
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { streamChat } from '../api/chat';
-import type { ChatMessage, KnowledgeResult, PolicyCitation, SSESqlEvent, SSETableEvent, SSEChartEvent, ClarifyPrompt, ListAnswer } from '../types';
+import type { ChatMessage, KnowledgeResult, PolicyCitation, SSESqlEvent, SSETableEvent, SSEChartEvent, ClarifyPrompt, ListAnswer, CollectionSuggest } from '../types';
 
 // Module-level (non-reactive, not in Zustand state)
 let _controller: AbortController | null = null;
@@ -55,6 +55,7 @@ export function startChatStream(params: {
   topK: number;
   conversationId: number | null;
   clarifyScope?: string | null;
+  suggestOf?: number | null;
   onConversationCreated: (id: number) => void;
 }) {
   // Abort any existing stream & detach controller so old _runStream can't mutate state
@@ -130,6 +131,7 @@ async function _runStream(
     topK: number;
     conversationId: number | null;
     clarifyScope?: string | null;
+    suggestOf?: number | null;
     onConversationCreated: (id: number) => void;
   },
   controller: AbortController,
@@ -157,6 +159,7 @@ async function _runStream(
       topK: params.topK,
       conversationId: params.conversationId,
       clarifyScope: params.clarifyScope ?? null,
+      suggestOf: params.suggestOf ?? null,
       signal: controller.signal,
     });
 
@@ -179,6 +182,7 @@ async function _runStream(
           policy_citations?: PolicyCitation[];
           degraded?: boolean;
           list_answer?: ListAnswer | null;
+          answered_namespace?: string | null;
         };
         if (meta.conversation_id) {
           set({ convId: meta.conversation_id });
@@ -196,7 +200,12 @@ async function _runStream(
           policyCitations: meta.policy_citations ?? m.policyCitations ?? [],
           degraded: meta.degraded ?? m.degraded,
           listAnswer: meta.list_answer ?? m.listAnswer ?? null,
+          answeredNamespace: meta.answered_namespace ?? m.answeredNamespace ?? null,
         }));
+      } else if ((event as { type: string }).type === 'suggest') {
+        // 다른 컬렉션에서 찾아보기(C2) — 답 뒤에 온다, 답은 그대로
+        const s = event as unknown as CollectionSuggest;
+        updateLastMessage((m) => ({ ...m, collectionSuggest: { namespace: s.namespace, score: s.score, here: s.here, here_adopted: s.here_adopted } }));
       } else if ((event as { type: string }).type === 'clarify') {
         // 재질문(v2.134) — 답 대신 범위 선택지. 글은 뒤따르는 token으로 온다
         const c = event as unknown as ClarifyPrompt;

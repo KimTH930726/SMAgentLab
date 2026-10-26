@@ -257,6 +257,14 @@ async def _write_item(conn, values: tuple, signal_id: Optional[int]) -> int:
         """, *values)
 
 
+# 본인 대화의 이 컬렉션 답인가 — 대화를 연 컬렉션이거나, "다른 컬렉션에서 찾아보기"로 그 컬렉션에서 답한 메시지(metadata.answered_namespace, C2).
+# 채팅 신고(feedback)와 정정 접수가 같은 규칙을 쓴다($1 메시지 id · $2 사용자 id · $3 컬렉션 id)
+OWNED_MESSAGE_SQL = (
+    "SELECT EXISTS (SELECT 1 FROM ops_message m JOIN ops_conversation c ON c.id = m.conversation_id "
+    "WHERE m.id = $1 AND c.user_id = $2 AND (c.namespace_id = $3 "
+    "OR m.metadata->>'answered_namespace' = (SELECT name FROM ops_namespace WHERE id = $3)))")
+
+
 async def create_item(namespace: str, user: dict, *, target_type: str, target_id: Optional[int],
                       target_sub_id: Optional[int], message_id: Optional[int], user_input: str) -> dict:
     """신고 접수. 직접 지정(근거 카드)이면 원장 저장 → AI 초안. 자동(auto, "답변 틀림")이면 판정+초안을 한 번에
@@ -275,9 +283,7 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
         # message_id는 클라이언트 입력 — 본인 대화의 이 네임스페이스 메시지만 허용. 안 그러면 "빠진 내용"
         # 신고 응답(original)에 남의 대화 질문·답변이 실려 id만 바꿔가며 열람할 수 있다(/code-review 지적).
         if message_id is not None:
-            owned = await conn.fetchval(
-                "SELECT EXISTS (SELECT 1 FROM ops_message m JOIN ops_conversation c ON c.id = m.conversation_id "
-                "WHERE m.id = $1 AND c.user_id = $2 AND c.namespace_id = $3)", message_id, user.get("id"), ns_id)
+            owned = await conn.fetchval(OWNED_MESSAGE_SQL, message_id, user.get("id"), ns_id)
             if owned is not True:
                 raise ValueError("이 답변에 대해서는 신고할 수 없습니다.")
         # 후보는 담당자 대상 변경용으로 직접 지정 신고에도 저장한다
@@ -427,7 +433,7 @@ def _park_on_existing(verdict: Optional[dict], existing_id: int) -> dict:
 
 
 async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mode: str,
-                                 proposed: Optional[dict], user_input: Optional[str]) -> dict:
+                                 proposed: Optional[dict], user_input: Optional[str], source_check_id: Optional[int] = None) -> dict:
     """정책서 화면의 수정 제안 → 원장에 1건(정책 테이블은 그대로 — 승인 때만 새 버전). 대상 = 그 정책의 서술 조각(v0는 조각 1개 = 원문).
     직접 수정(mode=policy_direct)은 받은 원문·비고를 그대로 수정안으로(AI 호출 없음), AI 제안(policy_ai)은 한 줄 요청으로 AI 초안.
     같은 정책에 대기 중 정정이 있으면(채팅 신고 포함) 만들지 않고 ConflictError(existing_id) — 한 정책에 안이 둘이면 승인 때 하나가
@@ -452,6 +458,14 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
         if row["chunk_id"] is None:
             raise ValueError("이 정책엔 검색 조각이 없어 수정 제안을 만들 수 없어요.")
         chunk_id = row["chunk_id"]
+        if source_check_id is not None:   # 원문 확인 카드에서 연 정책 — 같은 영역·처리 전·그 정책을 짚은 카드만(무관한 카드가 자동 해결되지 않게, 리뷰 L2)
+            ok = await conn.fetchval(
+                "SELECT 1 FROM ops_improvement_item WHERE id = $1 AND kind = 'source_check' AND status = 'pending' AND namespace_id = $2 "
+                "AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(coalesce(original->'policies', '[]'::jsonb)) p "
+                "WHERE p = (SELECT logical_id::text FROM policy_item WHERE id = $3))",
+                source_check_id, ns_id, item_id)
+            if not ok:
+                raise ValueError("연결할 원문 확인 카드가 없거나 이미 처리됐어요 — 새로고침하세요.")
         original = await _load_original(conn, ns_id, "policy_narrative", item_id, chunk_id, None)
     whole = row["pipeline_version"] == PIPELINE_WHOLE
     stored = None
@@ -479,6 +493,8 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
                     new_id = await _write_item(conn, values, None)
                 except asyncpg.UniqueViolationError:   # 같은 사람의 같은 대상 대기 건(유니크 인덱스) — 위 확인과 같은 뜻
                     existing = await _pending_policy_correction(conn, item_id)
+                if new_id is not None and source_check_id is not None:   # 원문 확인 카드 ↔ 이 제안(#92) — 승인되면 카드 자동 해결
+                    await conn.execute("UPDATE ops_improvement_item SET source_check_id = $2 WHERE id = $1", new_id, source_check_id)
     if gone:
         raise ValueError("고칠 정책을 찾을 수 없거나 그 사이 바뀌었어요 — 새로고침하세요.")
     if new_id is None:
@@ -1131,6 +1147,17 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
                 WHERE id = $1
             """, item_id, json.dumps(proposed, ensure_ascii=False), new_id, approver.get("id"))
             superseded = await _close_superseded(conn, item, approver)
+            if item.get("source_check_id"):   # 원문 확인 카드에서 올린 제안 — 승인되면 그 카드도 해결(같은 트랜잭션, C3). 이미 처리된 카드는 그대로
+                card = await conn.fetchrow(
+                    "UPDATE ops_improvement_item SET status = 'approved', decided_by = $2, decided_at = NOW(), ai_verdict = $3::jsonb "
+                    "WHERE id = $1 AND kind = 'source_check' AND status = 'pending' RETURNING source, original",
+                    item["source_check_id"], approver.get("id"),
+                    json.dumps({"resolution": "resolved", "note": f"정정 #{item_id} 승인", "by": approver.get("id"),
+                                "by_name": approver.get("username"), "auto": True, "correction_id": item_id}, ensure_ascii=False))
+                if card:   # 검사기가 맞게 짚은 것 — AI 판단 원장에도(오탐률 분모, 리뷰 L1)
+                    from service.policy.source_check import ledger_outcome
+                    await ledger_outcome(conn, item["source_check_id"], card["source"], card["original"], user_id=approver.get("id"),
+                                         final={"issue": True, "resolution": "resolved", "correction_id": item_id})
             ns_name = await conn.fetchval("SELECT name FROM ops_namespace WHERE id = $1", ns_id)
             # 고친 지식이 하위 영역 것이면 그 영역 캐시도(상위 신고로 하위 근거를 고칠 수 있다, 리뷰 M1·M2)
             row_ns_name = None

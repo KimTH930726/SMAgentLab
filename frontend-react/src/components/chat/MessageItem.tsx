@@ -15,7 +15,7 @@ import { useThemeStore } from '../../store/useThemeStore';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { CorrectionAnalysis } from './CorrectionAnalysis';
 import { getCorrectionStatus } from '../../api/corrections';
-import type { ChatMessage, ClarifyOption } from '../../types';
+import type { ChatMessage, ClarifyOption, CollectionSuggest } from '../../types';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -24,6 +24,22 @@ interface MessageItemProps {
   onClarify?: (opt: ClarifyOption) => void;
   /** "기타" — 입력창으로 */
   onClarifyOther?: () => void;
+  /** 다른 컬렉션에서 찾아보기(C2) — 마지막 답변에만. 없으면 버튼을 비활성으로(지난 대화) */
+  onSuggest?: (s: CollectionSuggest) => void;
+}
+
+/** 답 아래 한 줄 — 다른 컬렉션 지식이 더 맞아 보일 때(답은 그대로, 누르면 같은 질문을 그 컬렉션에서 한 번 더) */
+function SuggestLine({ s, onSuggest }: { s: CollectionSuggest; onSuggest?: (s: CollectionSuggest) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 px-1" data-testid="collection-suggest">
+      <span>{s.namespace} 지식에 더 맞는 내용이 있어요</span>
+      <button type="button" disabled={!onSuggest} onClick={() => onSuggest?.(s)}
+        className="px-2 py-0.5 rounded-md border border-indigo-300 dark:border-indigo-500/50 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 disabled:opacity-50 disabled:cursor-default">
+        {s.namespace}에서 찾아보기
+      </button>
+      <span className="text-slate-500" title={`관련도 ${s.namespace} ${s.score} · 지금 컬렉션 ${s.here}${s.here_adopted ? '' : '(근거로 쓸 만한 지식 없음)'} — 보는 컬렉션은 바뀌지 않아요`}>ⓘ</span>
+    </div>
+  );
 }
 
 const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥'];
@@ -319,7 +335,7 @@ function CorrectionReceipt({ messageId }: { messageId: number }) {
   );
 }
 
-export function MessageItem({ message, namespace, onClarify, onClarifyOther }: MessageItemProps) {
+export function MessageItem({ message, namespace, onClarify, onClarifyOther, onSuggest }: MessageItemProps) {
   const isUser = message.role === 'user';
   const knowledgeIds = (message.results ?? []).map((r) => r.id);
   const showDegraded = !!message.degraded && !message.isStreaming;   // AI가 답을 못 낸 답 — 경고 모양(근거만 보여 주기)
@@ -481,6 +497,11 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther }: M
             </div>
           )}
 
+          {message.collectionSuggest && !message.isStreaming && <SuggestLine s={message.collectionSuggest} onSuggest={onSuggest} />}
+          {message.answeredNamespace && message.answeredNamespace !== namespace && (
+            <p className="text-xs text-slate-500 px-1" data-testid="answered-namespace">{message.answeredNamespace} 지식으로 답함</p>
+          )}
+
           {/* Chart — after summary text */}
           {message.chartResult && message.tableResult && (
             <SimpleBarChart
@@ -494,7 +515,7 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther }: M
           {/* 재질문은 답이 아니라 "답변 틀림" 대상이 아니다 */}
           {!message.isStreaming && message.content && namespace && message.status !== 'failed' && !message.clarify && (
             <FeedbackSection
-              namespace={namespace}
+              namespace={message.answeredNamespace ?? namespace}
               question={message.question ?? ''}
               answer={message.content}
               knowledgeId={message.results?.[0]?.id ?? null}

@@ -42,7 +42,7 @@ function highlight(text: string, params: PolicyParamRow[]): ReactNode {
  * 이 정책에 검토 중 정정이 있으면 새 제안을 막고 그 정정으로 안내한다(한 정책에 안이 둘이면 승인 때 하나가 다른 하나를 덮는다).
  */
 export function PolicyDetailModal({
-  namespace, logicalId, order, onNavigate, onClose, onOpenCorrection,
+  namespace, logicalId, order, onNavigate, onClose, onOpenCorrection, sourceCheckId,
 }: {
   namespace: string;
   logicalId: number;
@@ -50,6 +50,8 @@ export function PolicyDetailModal({
   onNavigate: (logicalId: number) => void;
   onClose: () => void;
   onOpenCorrection: (id: number) => void;
+  /** 원문 확인 카드에서 열었으면 그 카드 번호 — 여기서 올린 제안이 승인되면 카드도 해결(C3) */
+  sourceCheckId?: number | null;
 }) {
   const qc = useQueryClient();
   const { canModifyNs } = useNamespaceAccess();
@@ -109,9 +111,9 @@ export function PolicyDetailModal({
       {data && (
         <>
           <PolicyEditModal isOpen={editing === 'direct'} namespace={namespace} policy={data}
-            onClose={() => setEditing(null)} onDone={afterSubmit} />
+            onClose={() => setEditing(null)} onDone={afterSubmit} sourceCheckId={sourceCheckId} />
           <PolicyAiSuggestModal isOpen={editing === 'ai'} namespace={namespace} policy={data}
-            onClose={() => setEditing(null)} onDone={afterSubmit} />
+            onClose={() => setEditing(null)} onDone={afterSubmit} sourceCheckId={sourceCheckId} />
         </>
       )}
     </>

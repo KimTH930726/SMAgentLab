@@ -157,7 +157,19 @@ export interface SourceCheck {
   created_at: string | null;
   decided_at: string | null;
   decided_by: string | null;
+  /** 이 카드에서 올린 가장 최근 정정 제안(C3) — pending이면 "정정 요청 중", rejected면 카드는 처리 전 그대로 */
+  correction: { id: number; status: string } | null;
+  /** [문제 없음]으로 닫았으면 고른 사유 */
+  reason: NoIssueReason | null;
 }
+
+export type NoIssueReason = 'source_ok' | 'already_fixed' | 'duplicate' | 'other';
+export const NO_ISSUE_REASONS: { key: NoIssueReason; label: string }[] = [
+  { key: 'source_ok', label: '원문이 맞음' },
+  { key: 'already_fixed', label: '이미 고쳐짐' },
+  { key: 'duplicate', label: '중복' },
+  { key: 'other', label: '기타(직접 입력)' },
+];
 
 export interface SuggestedLink {
   id: number;
@@ -172,8 +184,8 @@ export async function listSourceChecks(namespace: string, status: 'open' | 'done
   return apiFetch(`/policy/source-checks?namespace=${encodeURIComponent(namespace)}&status=${status}`);
 }
 
-export async function decideSourceCheck(id: number, action: 'resolve' | 'dismiss', note: string): Promise<{ id: number; status: string }> {
-  return apiFetch(`/policy/source-checks/${id}/${action}`, { method: 'POST', body: JSON.stringify({ note }) });
+export async function decideSourceCheck(id: number, action: 'resolve' | 'dismiss', note: string, reason?: NoIssueReason | null): Promise<{ id: number; status: string }> {
+  return apiFetch(`/policy/source-checks/${id}/${action}`, { method: 'POST', body: JSON.stringify({ note, reason: reason ?? null }) });
 }
 
 export async function decideLink(id: number, action: 'confirm' | 'reject'): Promise<{ id: number; status: string }> {
@@ -232,86 +244,3 @@ export async function applyPolicyJson(
   });
 }
 
-// ─── Track 2 저장소 전략 실험실 ─────────────────────────────────────────────
-
-export interface Track2TypeResult {
-  type: string;
-  n: number;
-  a_hit_rate: number;
-  b_hit_rate: number;
-  a_precision: number;
-  b_precision: number;
-  b_hit_rdb_only: number;
-  b_hit_vector_only: number;
-  b_hit_both: number;
-  // Top-1 Accuracy(v2.74) — B는 RDB/벡터 두 채널로 나뉘어 "진짜 하나의 순위"가 원래
-  // 없어서(아키텍처 자체의 특징) 채널별로 따로 잰다. reranker_enabled=True면 채널별
-  // 재정렬 결과의 1위가 자연히 반영된다.
-  a_top1_accuracy: number;
-  b_top1_param_accuracy: number;
-  b_top1_narrative_accuracy: number;
-}
-
-export interface Track2Result {
-  total_n: number;
-  a_hit_rate: number;
-  b_hit_rate: number;
-  a_precision: number;
-  b_precision: number;
-  b_hit_rdb_only: number;
-  b_hit_vector_only: number;
-  b_hit_both: number;
-  by_type: Track2TypeResult[];
-  golden_set_file: string;
-  top_k: number;
-  duration_seconds: number;
-  a_top1_accuracy: number;
-  b_top1_param_accuracy: number;
-  b_top1_narrative_accuracy: number;
-}
-
-// 실행 이력 스냅샷(v2.74) — POST /track2/run 호출마다 자동 저장됨. 모니터링 뷰(실험실
-// 게이트 작업3)의 추이 차트 재료.
-export interface Track2RunHistory extends Track2Result {
-  id: number;
-  run_at: string;
-  triggered_by: number | null;
-}
-
-export async function runTrack2(topK = 10, axis = 'policy'): Promise<Track2Result> {
-  return apiFetch<Track2Result>(`/policy/track2/run?top_k=${topK}&axis=${encodeURIComponent(axis)}`, { method: 'POST' });
-}
-
-/** 최종 답변 정확도 실행 이력(집계만) — scripts/eval_answers.py report --save */
-export interface AnswerEvalRun {
-  id: number;
-  run_at: string;
-  label: string;
-  variant: string;
-  total_n: number;
-  counts: Record<string, number>;
-  by_type: Record<string, Record<string, number>>;
-  retrieval_ok_but_wrong: number;
-  retrieval_ok: number;
-  judge_model: string | null;
-  notes: string | null;
-}
-
-export async function getAnswerEvalHistory(limit = 30): Promise<AnswerEvalRun[]> {
-  return apiFetch<AnswerEvalRun[]>(`/policy/answer-eval/history?limit=${limit}`);
-}
-
-export async function getTrack2History(limit = 50): Promise<Track2RunHistory[]> {
-  return apiFetch<Track2RunHistory[]>(`/policy/track2/history?limit=${limit}`);
-}
-
-// 비교 가능한 데이터 축 목록(2026-09-16, 엔진 파라미터화) — 지금은 "정책서" 하나뿐이지만
-// 새 축(CMDB 등)이 백엔드 track2.AXIS_REGISTRY에 등록되면 이 목록도 자동으로 늘어난다.
-export interface Track2Axis {
-  key: string;
-  label: string;
-}
-
-export async function getTrack2Axes(): Promise<Track2Axis[]> {
-  return apiFetch<Track2Axis[]>('/policy/track2/axes');
-}
