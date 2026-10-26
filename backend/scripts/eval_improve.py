@@ -96,7 +96,7 @@ async def main() -> int:
 
     from core.database import close_pool, get_conn, init_pool
     from agents.knowledge_rag.agent import should_abstain
-    from service.eval.improve import MEASURES, abstain_replay, build_candidates, carry_decision, split_locked
+    from service.eval.improve import MEASURES, abstain_replay, build_candidates, carry_decision, ingest_candidates, split_locked
     from service.eval.techniques import BY_KEY
 
     await init_pool()
@@ -145,6 +145,15 @@ async def main() -> int:
                     prior.setdefault(h["cause"], {}).setdefault(h["status"], []).append(h["name"])
         hyps, model = (await cluster_reasons(judged, diag["causes"], prior)) if a.reasons else ([], "")
         cands = build_candidates(diag, types=types, mapped=mapped, abstain=abst, hypotheses=hyps)
+        # 적재 검수(가장 최근 기록)에서 어긋난 것 → 같은 후보 흐름으로(scripts/check_ingest.py --save)
+        async with get_conn() as conn:
+            ing_row = await conn.fetchrow("SELECT results, gate_run_id FROM ingest_check_run ORDER BY created_at DESC, id DESC LIMIT 1")
+        if ing_row:
+            ing = ing_row["results"]
+            if ing_row["gate_run_id"] != run["id"]:   # 적재 검수의 정답률·영향 문항이 다른 측정 기준 — 숫자를 섞어 보이지 않게 알린다(리뷰 L7)
+                print(f"⚠ 적재 검수는 측정 #{ing_row['gate_run_id']} 기준(이 진단은 #{run['id']}) — 같은 측정으로 맞추려면 "
+                      f"check_ingest.py --save를 다시 실행")
+            cands += ingest_candidates(json.loads(ing) if isinstance(ing, str) else ing, locked)
 
         print(f"판정 #{run['id']} \"{run['label']}\" — {diag['n']}문항 중 틀림 {diag['n_failed']} · 잠근 문항 {len(locked)}개는 진단에서 뺌")
         for k, name, where in CAUSES:
@@ -189,7 +198,7 @@ async def main() -> int:
                         prev["status"] if prev else None, prev["review_reason"] if prev else None,
                         prev["reviewed_by_user_id"] if prev else None, prev["reviewed_at"] if prev else None, prev["id"] if prev else None,
                         # 측정 연결도 이어받는다 — 다시 진단하면 단계 막대가 "실험"으로 돌아가던 것(10/26 리뷰 M2)
-                        list(prev["measured_gate_run_ids"] or []) if prev else None)
+                        list(last["measured_gate_run_ids"] or []) if last else None)   # 측정은 결정과 별개인 증거 — 제안 상태여도 이어받는다(10/26)
         print(f"진단 #{rid} 저장 · 후보 {len(cands)}개" + (f"(이전 결정 이어받음 {carried})" if carried else ""))
         return 0
     finally:

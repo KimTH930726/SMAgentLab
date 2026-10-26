@@ -116,6 +116,8 @@
 | 87 | `eval_improvement_run`, `eval_candidate` | `CREATE TABLE IF NOT EXISTS eval_improvement_run`(gate_run_id FK·diagnosis·hypotheses jsonb·model) + `eval_candidate`(run_id FK·key·cause·technique·title·action·measure CHECK(replay·retrieval·answers)·n_target·qids·recommend CHECK(try·reject·review)·why·replay·hypotheses·status CHECK(proposed·approved·held·rejected·adopted)·review_reason·reviewed_by/at·carried_from_id·adopted_gate_run_id FK, UNIQUE(run_id,key), CHECK 채택이면 판정 연결) | 자가 개선 루프(eval-gate-redesign §10) — 진단·후보는 `scripts/eval_improve.py --save`만, 상태는 관리자 검수 API만. 원문 없음. `_migrate_eval_improvement` (v2.170) |
 | 88 | `eval_candidate` | `ADD COLUMN measured_gate_run_ids BIGINT[]` | 후보를 잰 판정 기록(`eval_gate.py --save … --candidate N`) — [개선] 진행 단계 "측정"·문항 상세의 "이 후보로 이 문항이 어떻게 됐나". `_migrate_eval_improvement` (v2.171) |
 | 89 | `eval_question_candidate` | `CREATE TABLE`(improvement_item_id UNIQUE FK·namespace_id·question·gold jsonb·status CHECK(proposed·added·dismissed)·decided_by/at) | 실사용 문항 — 정정 승인된 채팅 질문 = 시험지 후보, 넣으면 골든 측정 "실사용" 층(잠근 시험지). 질문은 질의 기록의 사용자 질문 그대로. `_migrate_eval_improvement` (v2.171) |
+| 90 | `ingest_check_run` | `CREATE TABLE`(created_by·gate_run_id FK·results jsonb·n_bad) | 적재 검수 기록 — `scripts/check_ingest.py --save`. 검사마다 어긋남/전체·근거·영향 qid·정답률(원문 없음). 틀린 문항 리포트·다음 진단 후보가 읽음. `_migrate_eval_improvement` (v2.172) |
+| 91 | `eval_question_candidate` | FK `improvement_item_id` → `ON DELETE CASCADE`(confdeltype 확인 후 한 번만) | 정정 원장 줄이 지워지면(컬렉션 삭제 등) 시험지 후보도 같이 — 기본(NO ACTION)이면 정정 승인 때 자동으로 생긴 후보가 컬렉션 삭제를 막았다(v2.172 E2E로 발견). `_migrate_eval_improvement` (v2.172) |
 
 **데이터 마이그레이션**:
 - `ops_query_log.answer`가 NULL인 레코드에 대해 `ops_message`에서 매칭되는 답변을 역보충(backfill)한다.

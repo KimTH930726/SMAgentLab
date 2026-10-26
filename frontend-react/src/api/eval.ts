@@ -80,17 +80,9 @@ export async function listGateRuns(limit = 50): Promise<GateRunListItem[]> {
   return apiFetch<GateRunListItem[]>(`/eval/gate-runs?limit=${limit}`);
 }
 
-export async function getGateRun(id: number): Promise<GateRunDetail> {
-  return apiFetch<GateRunDetail>(`/eval/gate-runs/${id}`);
-}
-
 /** 현재 기준선(없으면 null) — 목록 범위와 무관하게 */
 export async function getBaselineRun(): Promise<GateRunDetail | null> {
   return apiFetch<GateRunDetail | null>('/eval/gate-runs/baseline');
-}
-
-export async function setGateBaseline(id: number): Promise<{ id: number; is_baseline: boolean }> {
-  return apiFetch(`/eval/gate-runs/${id}/baseline`, { method: 'POST' });
 }
 
 /** 자가 개선 루프(#87) — 진단(원인별 qid) + 개선 후보 + 사람 검수. 만들기는 scripts/eval_improve.py --save */
@@ -139,8 +131,8 @@ export interface Improvement {
   candidates: Candidate[];
 }
 
-export async function getLatestImprovement(): Promise<Improvement | null> {
-  return apiFetch<Improvement | null>('/eval/improvements/latest');
+export async function getLatestImprovement(runId?: number): Promise<Improvement | null> {
+  return apiFetch<Improvement | null>(`/eval/improvements/latest${runId != null ? `?run_id=${runId}` : ''}`);
 }
 
 export async function reviewCandidate(id: number, status: Exclude<CandidateStatus, 'adopted'>, reason = ''): Promise<{ id: number; status: string }> {
@@ -163,32 +155,6 @@ export async function listTechniques(): Promise<Technique[]> {
   return apiFetch<Technique[]>('/eval/techniques');
 }
 
-/** AI 판단 원장 집계(관리자) — 종류별 사람 확정·변경·틀림 + 되묻기 고른 분포 + 개선 후보 검수 */
-export interface DecisionKindSummary {
-  total: number; confident: number; decided: number; changed: number; wrong: number; auto_wrong: number;
-  context_changed: number; unknown: number; wrong_rate: number | null; reasons: Record<string, number>;
-}
-
-export interface DecisionsReport {
-  days: number;
-  kinds: Record<string, DecisionKindSummary>;
-  clarify_picks: Record<string, number>;
-  candidates: { total: number; by_status: Record<string, number>; agree: number; disagree: number };
-  changed: ChangedDecision[];
-}
-
-/** 사람이 AI 값을 바꾼 판단 한 건 — AI 이유·사람 선택·"AI가 틀렸나요?" 답 */
-export interface ChangedDecision {
-  id: number; kind: string; at: string; changed_by: string | null; target: string | null;
-  ai: { collection: string | null; doc_type: string | null; reason: string | null };
-  human: { collection: string | null; choice: string | null };
-  verdict: 'wrong' | 'context_changed' | 'unknown' | null; verdict_reason: string | null;
-}
-
-export async function getDecisionsReport(days = 90): Promise<DecisionsReport> {
-  return apiFetch<DecisionsReport>(`/eval/decisions?days=${days}`);
-}
-
 /** 문항 상세(관리자) — 질문·답·채점 이유는 서버가 결과 파일에서 읽어 줌(DB 저장 없음) */
 export interface QuestionAnswer { rep: number; answer: string; label: string | null; reason: string; abstained: boolean; error: string | null; clarified: boolean }
 
@@ -200,6 +166,7 @@ export interface QuestionDetail {
   moved: 'up' | 'down' | 'same' | null;
   cause: { key: string; name: string; where: string } | null;
   hypotheses: { name: string; hint: string; n: number }[];
+  storage: { gold: ReportRow['gold']; tags: string[] } | null;
   candidates: {
     id: number; title: string; status: CandidateStatus; action: string; measure: Candidate['measure']; technique_name: string;
     measurements: { id: number; label: string; verdict: 'pass' | 'fail' | null; this_question: 'up' | 'down' | 'same' }[];
@@ -214,17 +181,42 @@ export async function markHypothesis(improvementId: number, cause: string, name:
   return apiFetch(`/eval/improvements/${improvementId}/hypotheses`, { method: 'POST', body: JSON.stringify({ cause, name, status }) });
 }
 
-/** 실사용 문항 후보(관리자) — 정정 요청이 승인된 채팅 질문. 넣으면 골든 측정의 "실사용" 층(잠근 시험지) */
-export interface QuestionCandidate {
-  id: number; qid: string; created_at: string; status: 'proposed' | 'added' | 'dismissed'; question: string; namespace: string | null;
-  gold: { target_type?: string; kind?: 'policy' | 'knowledge'; logical_id?: number; source_key?: string | null; id?: number };
-  improvement_item_id: number; report: string | null; decided_by: string | null; decided_at: string | null; measurable: boolean;
+/** 틀린 문항 리포트(관리자) — AI가 낸 답을 관리자가 리포트로 받고 개선을 승인하는 화면(10/26) */
+export interface ReportTechnique {
+  id: number; key: string; technique: string; title: string; status: CandidateStatus; recommend: Candidate['recommend'];
+  technique_name: string; action: string; measure: Candidate['measure']; why: string; review_reason: string | null; reviewed_at: string | null;
+  n_failed: number;
+  effect: {
+    gate_run_id: number; verdict: 'pass' | 'fail' | null; label: string; total_diff: number | null;
+    locked: { n: number; before: number; after: number; down: boolean } | null; retrieval_up: number; retrieval_down: number;
+  } | null;
 }
 
-export async function listQuestionCandidates(status?: string): Promise<QuestionCandidate[]> {
-  return apiFetch<QuestionCandidate[]>(`/eval/question-candidates${status ? `?status=${status}` : ''}`);
+export interface ReportRow {
+  qid: string; type: string | null; locked: boolean; question: string; labels: (string | null)[];
+  cause: string | null; cause_name: string | null; storage: string[]; real_status: 'proposed' | 'added' | 'dismissed' | null;
+  gold: { kind: string; name: string | null; path?: string; params?: number; table?: boolean; rows?: number | null; missing?: boolean }[];
+  techniques: { id: number; title: string; status: CandidateStatus; technique_name: string }[];
 }
 
-export async function decideQuestionCandidate(id: number, status: QuestionCandidate['status']) {
+export interface GateReport {
+  gate_run_id: number; gate_label: string; improvement_id: number; diagnosed_at: string;
+  score: { total: number | null; locked: number | null; locked_n: number; retrieval: number | null; n: number };
+  failed: ReportRow[]; techniques: ReportTechnique[];
+  unmeasured: { store: string; n: number; total: number; ref: string; qids: string[] }[];
+  diagnosed_gate_run_id: number; files_missing: string[];
+}
+
+export async function getGateReport(): Promise<GateReport | null> {
+  return apiFetch<GateReport | null>('/eval/report');
+}
+
+/** 실사용 문항을 시험지에서 빼기·다시 넣기(관리자) — 다음 측정부터 반영. 정정 승인 때 자동으로 들어간다(10/26) */
+export async function setRealQuestion(id: number, status: 'added' | 'dismissed') {
   return apiFetch(`/eval/question-candidates/${id}`, { method: 'POST', body: JSON.stringify({ status }) });
+}
+
+/** 판정 하나의 층별 검색 놓침·답 틀림 문항 번호(관리자) — [검색]·[답] 층 줄을 누르면 연다 */
+export async function getLayerQuestions(runId: number): Promise<{ missed: Record<string, string[]>; wrong: Record<string, string[]>; files_missing: string[] }> {
+  return apiFetch(`/eval/gate-runs/${runId}/layers`);
 }

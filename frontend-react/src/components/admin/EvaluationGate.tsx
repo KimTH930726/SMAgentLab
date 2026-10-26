@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import { FlaskConical, Search, CheckCircle2, History, Inbox, Lightbulb } from 'lucide-react';
+import { FlaskConical, Search, CheckCircle2, FileText } from 'lucide-react';
 import { UnifiedAdhocSearch } from './UnifiedAdhocSearch';
-import { AnswerTab, HistoryTab, RetrievalTab } from './GateRuns';
-import { ImprovementTab } from './GateImprove';
-import { RealQuestionsTab } from './RealQuestions';
+import { AnswerTab, RetrievalTab } from './GateRuns';
+import { ReportTab } from './GateReport';
 
 /**
  * "파이프라인 디버그"(즉석 질의 — 아무 질문이나 넣고 점수분해 확인)와 "정책 저장소
@@ -31,21 +30,19 @@ import { RealQuestionsTab } from './RealQuestions';
  * 골든셋 문항 → 즉석질의 드릴다운은 여전히 없음 — Track2가 문항별 결과가 아니라 유형별
  * 집계만 반환해서(백엔드 확장 필요) 이번 범위 밖.
  */
-type GateMode = 'retrieval' | 'answers' | 'improve' | 'history' | 'real' | 'adhoc';
+type GateMode = 'report' | 'retrieval' | 'answers' | 'adhoc';
 
-// 탭 = [검색] [답] [판정 이력] [즉석 질의] (v2.169, eval-gate-redesign §4-1 — 10/23 목업 검수). 옛 "골든셋 실행"(v1 Track2)·
-// "답변 정확도"(v1 eval_answer_run)는 v0 숫자를 못 보여 줘 판정 기록(eval_gate_run) 읽기로 바꿨다 — 옛 화면·테이블 정리는 5단계(대상별 승인)
+// 탭 = [리포트] [검색] [답] [즉석 질의] (v2.172, 사용자 10/26 "틀린 문항 리포트 하나로") — 옛 [개선]·[적재 검수]·[판정 이력]·[실사용 문항]은
+// 리포트 안으로 합쳤다(후보 결정 = 리포트의 고칠 방법, 적재 검수 = 저장 상태·측정도 안 되는 문항, 실사용 = 문항 라벨, 기준선 = 운영 반영 때 자동)
 const TABS: { mode: GateMode; label: string; icon: typeof Search; hint: string }[] = [
-  { mode: 'retrieval', label: '검색', icon: FlaskConical, hint: '현재 기준선의 검색 성적 — 정답 정책이 AI에게 넘기는 문맥에 들어갔나(골든셋, scripts/eval_golden_v0.py)' },
-  { mode: 'answers', label: '답', icon: CheckCircle2, hint: '현재 기준선의 답 성적 — 실제 채팅 경로로 답하고 정책 원문과 대조해 채점(scripts/eval_answers.py)' },
-  { mode: 'improve', label: '개선', icon: Lightbulb, hint: '왜 틀렸나(흐름의 첫 실패) → 원인마다 개선 후보 → 사람 검수 → 통과한 판정과 연결해 채택(scripts/eval_improve.py --reasons --save)' },
-  { mode: 'history', label: '판정 이력', icon: History, hint: '바꾸기 전/후를 같은 문항으로 비교한 판정 — 검색 나빠짐 0 · 답 의미 있는 하락 없음이면 통과(scripts/eval_gate.py --save)' },
-  { mode: 'real', label: '실사용 문항', icon: Inbox, hint: '정정 요청이 승인된 실제 채팅 질문 — 시험지에 넣으면 다음 측정부터 "실사용" 층(잠근 시험지)으로 잰다' },
+  { mode: 'report', label: '리포트', icon: FileText, hint: '틀린 문항마다 질문 · AI 답 · 왜 틀렸나 · 정답 데이터 저장 모양 · 고칠 기법과 실제 효과 — 사람이 보고 승인' },
+  { mode: 'retrieval', label: '검색', icon: FlaskConical, hint: '지금 점수의 검색 성적 — 정답 정책이 AI에게 넘기는 문맥에 들어갔나' },
+  { mode: 'answers', label: '답', icon: CheckCircle2, hint: '지금 점수의 답 성적 — 실제 채팅 경로로 답하고 정책 원문과 대조해 채점' },
   { mode: 'adhoc', label: '즉석 질의', icon: Search, hint: '질문 하나를 넣어 검색 방식(유사도 점수)을 직접 확인합니다' },
 ];
 
 export function EvaluationGate() {
-  const [mode, setMode] = useState<GateMode>('retrieval');
+  const [mode, setMode] = useState<GateMode>('report');
   const hint = TABS.find((t) => t.mode === mode)?.hint;
 
   return (
@@ -72,11 +69,9 @@ export function EvaluationGate() {
 
       <p className="text-xs text-slate-500 leading-relaxed -mt-2">{hint}</p>
 
+      {mode === 'report' && <ReportTab />}
       {mode === 'retrieval' && <RetrievalTab />}
       {mode === 'answers' && <AnswerTab />}
-      {mode === 'improve' && <ImprovementTab />}
-      {mode === 'history' && <HistoryTab />}
-      {mode === 'real' && <RealQuestionsTab />}
       {mode === 'adhoc' && <UnifiedAdhocSearch />}
     </div>
   );

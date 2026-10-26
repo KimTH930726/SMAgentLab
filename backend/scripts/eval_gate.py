@@ -174,7 +174,8 @@ async def save(rec: dict, a: argparse.Namespace) -> int:
     summary = {"retrieval": rec.get("summary_retrieval"), "answers": rec.get("summary_answers"),
                "inputs": {k: Path(v).name for k, v in (("answers_before", a.answers_before), ("answers_after", a.answers_after),
                                                         ("retrieval_before", a.retrieval_before), ("retrieval_after", a.retrieval_after)) if v},
-               "golden_before": rec.get("golden_before")}
+               "golden_before": rec.get("golden_before"),
+               "mode": a.mode}   # 검색 비교에 쓴 용어 방식 — 화면의 층별 문항(/layers)이 같은 줄로 센다(리뷰)
     verdict = None if rec["kind"] == "baseline" else ("pass" if rec["ok"] else "fail")
     make_baseline = rec["kind"] == "baseline" or (verdict == "pass" and not a.keep_baseline)
     run_at = datetime.fromisoformat(a.run_at) if a.run_at else None

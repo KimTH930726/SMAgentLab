@@ -1,20 +1,18 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronDown, ChevronRight, Lightbulb } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import {
-  adoptCandidate, getLatestImprovement, listGateRuns, markHypothesis, reviewCandidate,
-  type Candidate, type CandidateStatus, type Hypothesis, type Improvement,
+  adoptCandidate, getBaselineRun, listGateRuns, markHypothesis, reviewCandidate,
+  type Candidate, type CandidateStatus, type Hypothesis,
 } from '../../api/eval';
-import { useAuthStore } from '../../store/useAuthStore';
 import { showError } from '../../store/useDialogStore';
 import { FormModal } from '../ui/FormModal';
-import { QidList, useQuestionPicker } from './GateRuns';
+import { QidList } from './GateRuns';
 import { lockedMove } from '../../utils/evalLayers';
 
 /**
- * 평가 게이트 [개선] (v2.171, 사용자 10/26 "버튼이 각 뭔지 모르겠다" — 이름을 할 일로, 진행 단계를 한 줄로).
- * 위에서 아래로: 지금 정답률 → 왜 틀렸나(흐름의 첫 실패) → 무엇을 바꾸나(후보, 단계: 제안 → 실험 → 측정 → 운영 반영).
- * 진단·후보·숫자는 scripts/eval_improve.py 기록을 읽기만. 문항 번호를 누르면 질문·답·이유(관리자, 결과 파일에서).
+ * 개선 후보 카드(v2.171 [개선] 탭 → v2.172 틀린 문항 리포트의 "고칠 방법"을 펼치면 보인다). 버튼 = 누르면 무슨 일(실험해 보기 / 나중에 / 안 하기 /
+ * 운영에 반영했어요), 진행 단계 막대(제안 → 실험 → 측정 → 운영 반영). 진단·후보·숫자는 scripts/eval_improve.py 기록을 읽기만.
  * AI 묶음은 사람이 [맞아요]/[다시 묶기] — 맞아요 한 이름은 다음 진단이 그대로 쓴다(C1).
  */
 
@@ -36,9 +34,8 @@ const STEPS = ['제안', '실험', '측정', '운영 반영'] as const;
 
 function stepOf(c: Candidate): number {
   if (c.status === 'adopted') return 3;
-  if (c.measurements.length) return 2;
-  if (c.status === 'approved') return 1;
-  return 0;
+  if (c.status === 'approved') return c.measurements.length ? 2 : 1;
+  return 0;   // 제안·나중에·안 하기 — 예전 측정이 있어도 지금 실험 중은 아님(리뷰 L6, 측정은 막대 옆에 따로)
 }
 
 const pct = (x: number | null | undefined) => (x == null ? '-' : `${(x * 100).toFixed(1)}%`);
@@ -55,7 +52,7 @@ function Stepper({ c }: { c: Candidate }) {
         <span key={s} className="flex items-center gap-2">
           <span className={i <= at && !side ? 'text-indigo-600 dark:text-indigo-400 font-medium' : 'text-slate-500'}>
             {i <= at && !side ? '●' : '○'} {s}
-            {i === 2 && last && (
+            {i === 2 && last && at >= 2 && (
               <span className={last.verdict === 'pass' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
                 {' '}#{last.id} {last.verdict === 'pass' ? '통과' : '실패'}{last.diff != null ? ` ${pp(last.diff)}` : ''}
               </span>
@@ -65,6 +62,11 @@ function Stepper({ c }: { c: Candidate }) {
         </span>
       ))}
       {side && <span className="ml-2 text-amber-600 dark:text-amber-400">· {side}</span>}
+      {at < 2 && last && (
+        <span className="ml-2 text-slate-500" title="이 후보를 잰 예전 판정 — 지금 실험 중이라는 뜻은 아님">
+          · 예전 측정 #{last.id} {last.verdict === 'pass' ? '통과' : '실패'}
+        </span>
+      )}
     </div>
   );
 }
@@ -148,7 +150,7 @@ function ReplayTable({ c }: { c: Candidate }) {
   );
 }
 
-function CandidateCard({ c, improvementId, isAdmin, onPick }: {
+export function CandidateCard({ c, improvementId, isAdmin, onPick }: {
   c: Candidate; improvementId: number; isAdmin: boolean; onPick?: (qids: string[], i: number) => void;
 }) {
   const qc = useQueryClient();
@@ -159,6 +161,8 @@ function CandidateCard({ c, improvementId, isAdmin, onPick }: {
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['eval-improvement'] });
     qc.invalidateQueries({ queryKey: ['eval-techniques'] });   // 답 기법 화면의 "걸린 후보" 상태도(10/26 리뷰 L5)
+    qc.invalidateQueries({ queryKey: ['eval-report'] });       // 틀린 문항 리포트의 기법 상태·지금 점수(반영하면 기준선이 옮겨짐)
+    qc.invalidateQueries({ queryKey: ['eval-gate-baseline'] });
   };
   const review = useMutation({
     mutationFn: ({ status, why }: { status: Action; why?: string }) => reviewCandidate(c.id, status, why),
@@ -172,9 +176,14 @@ function CandidateCard({ c, improvementId, isAdmin, onPick }: {
   });
   // 운영 반영에 연결할 측정 — 실험 시작(승인) 뒤에 잰 통과 판정만(서버 adopt_error와 같은 조건)
   const runs = useQuery({ queryKey: ['eval-gate-runs'], queryFn: () => listGateRuns(50), enabled: modal === 'adopt' });
-  // 서버 adopt_error와 같은 조건 — 통과 · 실험 시작 뒤 · 잠근 시험지에서 내려가지 않음(10/26 리뷰 L4)
-  const eligible = (runs.data ?? []).filter((r) => r.kind === 'gate' && r.verdict === 'pass' && !!c.reviewed_at
-    && new Date(r.run_at) >= new Date(c.reviewed_at) && !lockedMove(r.answers_groups)?.down);
+  const base = useQuery({ queryKey: ['eval-gate-baseline'], queryFn: getBaselineRun, enabled: modal === 'adopt' });
+  // 서버 adopt_error와 같은 조건 — 이 후보를 잰 측정 · 통과 · 실험 시작 뒤 · 지금 점수보다 예전 아님 · 잠근 시험지에서 내려가지 않음
+  // (반영하면 그 측정이 지금 점수가 된다 — 남의 측정·옛 측정으로 되돌아가지 않게, v2.172 리뷰 M3)
+  const measured = new Set(c.measurements.map((m) => m.id));
+  const baseAt = base.data && base.data.id ? new Date(base.data.run_at) : null;
+  const eligible = (runs.data ?? []).filter((r) => measured.has(r.id) && r.kind === 'gate' && r.verdict === 'pass' && !!c.reviewed_at
+    && new Date(r.run_at) >= new Date(c.reviewed_at) && (!baseAt || r.is_baseline || new Date(r.run_at) >= baseAt)
+    && !lockedMove(r.answers_groups)?.down);
   const rec = RECOMMEND[c.recommend];
   const m = MEASURE[c.measure];
   const open = (x: 'rejected' | 'held' | 'adopt') => { setErr(null); setReason(''); setGateId(null); setModal(x); };
@@ -261,8 +270,9 @@ function CandidateCard({ c, improvementId, isAdmin, onPick }: {
         submitDisabled={gateId == null}
         error={err}
       >
-        <p className="text-xs text-slate-400">실험을 시작한 뒤에 잰 측정 중 통과한 것만 고를 수 있어요. 운영 설정·프롬프트는 이 버튼이 바꾸지 않습니다 — 바꾼 뒤 눌러 주세요.</p>
-        {runs.isLoading ? <p className="text-xs text-slate-500">불러오는 중…</p> : eligible.length === 0 ? (
+        <p className="text-xs text-slate-400">이 후보를 실험 시작 뒤에 잰 측정 중 통과한 것만 고를 수 있어요. 고른 측정이 <b>지금 점수</b>가 됩니다.
+          운영 설정·프롬프트는 이 버튼이 바꾸지 않습니다 — 바꾼 뒤 눌러 주세요.</p>
+        {runs.isLoading || base.isLoading ? <p className="text-xs text-slate-500">불러오는 중…</p> : eligible.length === 0 ? (
           <p className="text-xs text-slate-500">연결할 측정이 없습니다 — 먼저 재고 <code>eval_gate.py --save … --candidate {c.id}</code>.</p>
         ) : (
           <div className="space-y-1">
@@ -275,83 +285,6 @@ function CandidateCard({ c, improvementId, isAdmin, onPick }: {
           </div>
         )}
       </FormModal>
-    </div>
-  );
-}
-
-function CauseRows({ data, onPick }: { data: Improvement; onPick?: (qids: string[], i: number) => void }) {
-  const { diagnosis } = data.run;
-  const max = Math.max(1, ...Object.values(diagnosis.causes).map((v) => v.length));
-  return (
-    <div className="space-y-2">
-      {data.causes.filter((c) => (diagnosis.causes[c.key] ?? []).length > 0).map((c) => {
-        const qs = diagnosis.causes[c.key] ?? [];
-        return (
-          <div key={c.key} className="text-sm space-y-0.5" data-testid={`cause-${c.key}`}>
-            <div className="flex items-center gap-3">
-              <span className="w-36 shrink-0 text-slate-200">{c.name}</span>
-              <div className="flex-1 h-2.5 rounded-full bg-slate-700 overflow-hidden">
-                <div className="h-full bg-indigo-500 dark:bg-indigo-400" style={{ width: `${(qs.length / max) * 100}%` }} />
-              </div>
-              <span className="w-10 text-right text-slate-300">{qs.length}</span>
-            </div>
-            <p className="pl-[9.75rem] text-xs text-slate-500">볼 곳: {c.where}</p>
-            <div className="pl-[9.75rem]"><QidList title="문항 보기" qids={qs} hint="눌러서 질문·답·채점 이유 보기" onPick={onPick} /></div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-export function ImprovementTab() {
-  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
-  const { picker, modal } = useQuestionPicker();
-  const { data, isLoading, error } = useQuery({ queryKey: ['eval-improvement'], queryFn: getLatestImprovement, staleTime: 30_000 });
-  if (isLoading) return <p className="text-sm text-slate-500">불러오는 중…</p>;
-  if (error) return <p className="text-sm text-rose-600 dark:text-rose-400">진단을 불러오지 못했습니다: {(error as Error).message}</p>;
-  if (!data) {
-    return (
-      <p className="text-sm text-slate-500">
-        아직 진단이 없습니다 — <code className="text-xs">backend/scripts/eval_improve.py --reasons --save</code>로 비교 기준을 진단하면 여기에 나옵니다.
-      </p>
-    );
-  }
-  const { run } = data;
-  const d = run.diagnosis;
-  const onPick = picker(run.gate_run_id);
-  return (
-    <div className="space-y-5">
-      <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 space-y-3">
-        <p className="text-xs text-slate-400">
-          <Lightbulb className="inline w-3.5 h-3.5 mr-1 text-amber-500 dark:text-amber-400" />
-          판정 #{run.gate_run_id} "{run.gate_label}"{run.gate_is_baseline ? ' (비교 기준)' : ''} 진단 · {fmtDate(run.created_at)}
-        </p>
-        <p className="text-lg font-semibold text-slate-100">
-          틀린 문항 {d.n_failed} / {d.n}
-          <span className="ml-2 text-sm font-normal text-slate-400" title="전체 정답률은 잠근 문항까지 포함한 판정 숫자, 틀린 문항은 잠근 문항을 뺀 진단 숫자">
-            전체 정답률 {pct(run.accuracy)} ⓘ
-          </span>
-        </p>
-        {d.locked_n != null && d.locked_n > 0 && (
-          <p className="text-xs text-slate-400" title="사람이 쓴 질문·실사용 질문은 고칠 때 보지 않는다 — 판정 때만 봐서, 고친 것이 처음 보는 질문에도 통하는지 확인">
-            잠근 문항 {d.locked_n}개(사람·실사용 질문)는 진단에서 뺐어요 — 판정 때만 봅니다 ⓘ
-          </p>
-        )}
-        <p className="text-xs text-slate-400" title="흐름(검색 → 근거 판정 → 답 모양 → 생성)에서 처음 실패한 단계 한 칸에 넣었다 — 앞 단계가 실패하면 뒤 단계는 보지 않는다">
-          왜 틀렸나 — 처음 실패한 단계 기준 ⓘ
-        </p>
-        <CauseRows data={data} onPick={onPick} />
-      </div>
-      <div className="space-y-3">
-        <p className="text-sm font-medium text-slate-200">무엇을 바꾸나 — 개선 후보 {data.candidates.length}개
-          <span className="ml-2 text-xs font-normal text-slate-500" title="실험해 보기 → 측정(통과해야) → 운영에 반영했어요. 설정·프롬프트는 이 화면이 자동으로 바꾸지 않습니다">
-            제안 → 실험 → 측정 → 운영 반영 ⓘ
-          </span>
-        </p>
-        {data.candidates.map((c) => <CandidateCard key={c.id} c={c} improvementId={run.id} isAdmin={isAdmin} onPick={onPick} />)}
-      </div>
-      {modal}
     </div>
   );
 }

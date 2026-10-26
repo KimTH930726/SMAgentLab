@@ -45,6 +45,7 @@
 - `npx tsc --noEmit` 통과 확인
 - 백엔드 테스트: `docker exec -w /app ops-backend python -m pytest -q tests libs/trustkit/tests`
 - 백엔드 재시작 전: `docker exec -w /app ops-backend python -c "import main"` — 단위 테스트는 앱 모듈을 가짜로 바꿔 두고 돌아 import 누락(NameError)을 못 잡는다(10/20 재시작 실패)
+- 적재(정책·지식·참고표)를 바꿨으면 `scripts/check_ingest.py`(설계 완료 기준 + 채팅 쓰임 검사, LLM 0) — 어긋남이 늘면 원인부터
 - 검색·답 생성을 바꿨으면 정확도 게이트: 전/후 측정 → `scripts/eval_gate.py`(검색 나빠짐 0 · 답 의미 있는 하락 없음, 같은 날 채점끼리)
 - 마이그레이션(main.py)에서 칸을 지우거나 이름을 바꿨으면: 백업 복사본 DB에 `scripts/check_migrations_twice.py`(두 번 연속 기동해도 안 깨지는지)
 - `docker compose build` 성공 확인

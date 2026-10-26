@@ -31,6 +31,19 @@ async def get_gate_run(run_id: int, user: dict = Depends(get_current_user)):
     return r
 
 
+@router.get("/gate-runs/{run_id}/layers")
+async def get_layer_questions(run_id: int, admin: dict = Depends(get_current_admin)):
+    """층별 검색 놓침·답 틀림 문항 번호 — [검색]·[답] 층 줄을 누르면 그 문항들(관리자)."""
+    from service.eval.files import ResultFileError
+    try:
+        r = await service.layer_questions(run_id)
+    except ResultFileError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if r is None:
+        raise HTTPException(status_code=404, detail="판정 기록이 없습니다.")
+    return r
+
+
 @router.get("/gate-runs/{run_id}/questions/{qid}")
 async def get_question_detail(run_id: int, qid: str, admin: dict = Depends(get_current_admin)):
     """문항 상세(관리자) — 질문·답·채점 이유는 결과 파일에서 읽기만(DB 저장 없음). 정책 내용이 담겨 관리자만."""
@@ -75,9 +88,9 @@ class HypothesisBody(BaseModel):
 
 
 @router.get("/improvements/latest")
-async def get_latest_improvement(user: dict = Depends(get_current_user)):
-    """최근 진단(원인별 qid·가설) + 개선 후보 — 평가 게이트 [개선] 탭. 만들기는 scripts/eval_improve.py --save."""
-    return await service.latest_improvement()
+async def get_latest_improvement(run_id: Optional[int] = None, user: dict = Depends(get_current_user)):
+    """최근 진단(원인별 qid·가설) + 개선 후보 — run_id를 주면 그 진단(틀린 문항 리포트). 만들기는 scripts/eval_improve.py --save."""
+    return await service.latest_improvement(run_id)
 
 
 @router.post("/candidates/{cand_id}/review")
@@ -151,3 +164,22 @@ async def decide_question_candidate(cand_id: int, body: QuestionDecision, admin:
     if not r:
         raise HTTPException(status_code=404, detail="후보가 없습니다.")
     return r
+
+
+@router.get("/ingest-checks/latest")
+async def get_latest_ingest_check(user: dict = Depends(get_current_user)):
+    """최근 적재 검수(설계 완료 기준 검사 + 쓰임 검사) — 평가 게이트 [적재 검수]. 만들기는 scripts/check_ingest.py --save."""
+    return await service.latest_ingest_check()
+
+
+@router.get("/report")
+async def get_report(admin: dict = Depends(get_current_admin)):
+    """틀린 문항 리포트(관리자) — 지금 점수 · 틀린 문항(질문·왜·저장 구조·적용해 볼 기법) · 기법별 실제 효과(잠근 시험지).
+    질문 글은 결과 파일에서 읽기만(정책 내용이 담겨 관리자만)."""
+    from service.eval.files import ResultFileError
+    from service.eval.report import build_report
+    try:
+        return await build_report()
+    except ResultFileError as e:   # 같은 이름 결과 파일이 여러 곳 등 — 500 대신 이유(리뷰 L1)
+        raise HTTPException(status_code=409, detail=str(e))
+

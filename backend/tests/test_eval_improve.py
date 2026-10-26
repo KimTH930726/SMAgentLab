@@ -146,3 +146,53 @@ def test_adopt_blocked_when_locked_layer_drops():
     bad = {**ok, "answers": {"groups": {"전체": {"diff": 0.01}, "human": {"diff": -0.0125}}}}   # 10/23 #11과 같은 모양
     assert "잠근 문항" in improve.adopt_error("approved", bad, t0)
     assert improve.adopt_error("approved", {**ok, "answers": None}, t0) is None   # 잠근 층이 없던 옛 측정은 막지 않음
+
+
+# ── 10/26 적재 검수 → 후보 ─────────────────────────────────────────────────────────────
+
+def test_ingest_candidates_only_failed_and_point_at_registry():
+    results = [
+        {"key": "policy_param_derived", "store": "정책", "name": "파라미터 파생", "ref": "v0 #9", "bad": 981, "total": 981,
+         "qids": ["Q1", "Q2"], "accuracy": {"n": 2, "acc": 0.5}},
+        {"key": "policy_body", "store": "정책", "name": "원문", "ref": "§5-3", "bad": 0, "total": 981},       # 통과 — 후보 없음
+        {"key": "new_unknown_check", "store": "지식", "name": "새 검사", "ref": "x", "bad": 3, "total": 10},   # 대응표 없음 — 일반 후보
+    ]
+    c = improve.ingest_candidates(results)
+    assert [x["key"] for x in c] == ["ingest_policy_param_derived", "ingest_new_unknown_check"]
+    assert all(x["cause"] == "ingest" and x["technique"] in techniques.BY_KEY for x in c)
+    assert c[0]["qids"] == ["Q1", "Q2"] and "50.0%" in c[0]["why"] and c[1]["technique"] == "ingest_contract"
+    assert improve.ingest_candidates([]) == []
+
+
+def test_ingest_remedy_points_at_registry():
+    for key, (tech, title, action, measure) in improve.INGEST_REMEDY.items():
+        assert tech in techniques.BY_KEY and measure in improve.MEASURES and title and action, key
+
+
+def test_ingest_check_list_shape():
+    spec = importlib.util.spec_from_file_location("check_ingest_t", ROOT / "scripts" / "check_ingest.py")
+    src = (ROOT / "scripts" / "check_ingest.py").read_text(encoding="utf-8")
+    # 스크립트는 컨테이너 경로를 sys.path에 넣고 앱을 import하므로 불러오지 않고 목록 모양만 소스에서 확인
+    assert spec is not None and "CHECKS: list[" in src
+    keys = __import__("re").findall(r'^\s+\("([a-z_]+)", "(?:정책|참고표|지식|용어)"', src, __import__("re").M)
+    assert len(keys) == len(set(keys)) >= 10   # 키 중복 없음 — 후보 키(ingest_<키>)가 겹치지 않게
+
+
+def test_adopt_only_this_candidates_measurement_not_older_than_baseline():
+    """v2.172 리뷰 M3 — 운영 반영 = 그 측정이 지금 점수가 되므로: 이 후보를 잰 측정만, 지금 점수보다 예전 측정은 안 됨."""
+    t0 = datetime(2026, 10, 26, 9, tzinfo=timezone.utc)
+    g = {"id": 13, "kind": "gate", "verdict": "pass", "run_at": t0 + timedelta(hours=2)}
+    assert improve.adopt_error("approved", g, t0, measured_ids=[13], baseline_run_at=t0 + timedelta(hours=1)) is None
+    assert "잰 측정이 아닙니다" in improve.adopt_error("approved", g, t0, measured_ids=[11, 12])
+    assert "잰 측정이 아닙니다" in improve.adopt_error("approved", g, t0, measured_ids=[])
+    assert "예전 측정" in improve.adopt_error("approved", g, t0, measured_ids=[13], baseline_run_at=t0 + timedelta(hours=3))
+
+
+def test_ingest_candidates_drop_locked_questions():
+    """v2.172 리뷰 M1 — 적재 검수 후보가 겨냥할 문항에 잠근 시험지(사람·실사용)가 들어가지 않는다."""
+    results = [{"key": "policy_param_derived", "store": "정책", "name": "파라미터 파생", "ref": "v0 #9", "bad": 3, "total": 3,
+                "qids": ["Q1", "H1", "REAL-2"]}]
+    c = improve.ingest_candidates(results, locked=["H1", "REAL-2"])
+    assert c[0]["qids"] == ["Q1"]
+    assert improve.ingest_candidates(results)[0]["qids"] == ["H1", "Q1", "REAL-2"]   # locked를 안 주면 그대로(옛 호출)
+

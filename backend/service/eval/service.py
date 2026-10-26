@@ -71,9 +71,14 @@ async def set_baseline(run_id: int) -> Optional[dict]:
             if r["verdict"] == "fail":
                 raise ValueError("실패한 판정은 기준선으로 지정할 수 없습니다.")
             if not r["is_baseline"]:
-                await conn.execute("UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline")
-                await conn.execute("UPDATE eval_gate_run SET is_baseline = TRUE WHERE id = $1", run_id)
+                await _move_baseline(conn, run_id)
     return {"id": run_id, "is_baseline": True}
+
+
+async def _move_baseline(conn, run_id: int) -> None:
+    """옛 기준선을 내리고 run_id를 올린다 — 호출 쪽 트랜잭션 안에서, 판정 통과 확인은 호출 쪽이."""
+    await conn.execute("UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline AND id <> $1", run_id)
+    await conn.execute("UPDATE eval_gate_run SET is_baseline = TRUE WHERE id = $1", run_id)
 
 
 # ── 자가 개선 루프(#87 — eval-gate-redesign §10): 진단·후보 읽기 + 사람 검수 ─────────────────────────────
@@ -90,13 +95,14 @@ def _cand(r) -> dict:
     return d
 
 
-async def latest_improvement() -> Optional[dict]:
-    """가장 최근 진단 + 그 후보(흐름 순서 = 저장 순서). 없으면 None."""
+async def latest_improvement(run_id: Optional[int] = None) -> Optional[dict]:
+    """가장 최근 진단(run_id를 주면 그 진단 — 틀린 문항 리포트가 고른 진단과 같은 후보를 보이게) + 그 후보(흐름 순서 = 저장 순서). 없으면 None."""
     async with get_conn() as conn:
         run = await conn.fetchrow(
             """SELECT i.id, i.created_at, i.created_by, i.gate_run_id, i.diagnosis, i.hypotheses, i.model, g.label AS gate_label,
                       g.is_baseline AS gate_is_baseline
-               FROM eval_improvement_run i JOIN eval_gate_run g ON g.id = i.gate_run_id ORDER BY i.created_at DESC, i.id DESC LIMIT 1""")
+               FROM eval_improvement_run i JOIN eval_gate_run g ON g.id = i.gate_run_id WHERE $1::int IS NULL OR i.id = $1
+               ORDER BY i.created_at DESC, i.id DESC LIMIT 1""", run_id)
         if not run:
             return None
         cands = await conn.fetch(
@@ -144,21 +150,25 @@ async def review_candidate(cand_id: int, *, status: str, reason: str, user_id: i
 
 
 async def adopt_candidate(cand_id: int, *, gate_run_id: int, user_id: int) -> Optional[dict]:
-    """채택 = 시도 승인된 후보 + 통과한 판정 기록(승인 뒤에 잰 것, adopt_error). 게이트를 거치지 않은 채택은 없다(§10-5)."""
+    """채택 = 시도 승인된 후보 + 통과한 판정 기록(승인 뒤에 잰 것, adopt_error). 게이트를 거치지 않은 채택은 없다(§10-5).
+    운영에 반영한 측정이 곧 "지금 점수"라 그 판정을 기준선으로 같이 옮긴다(10/26 사용자 — 화면에서 기준선 고르기를 없앰)."""
     async with get_conn() as conn:
         async with conn.transaction():
-            c = await conn.fetchrow("SELECT status, reviewed_at FROM eval_candidate WHERE id = $1 FOR UPDATE", cand_id)
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", BASELINE_LOCK)   # set_baseline과 같은 잠금 — 동시에 옮기면 고유 인덱스 충돌
+            c = await conn.fetchrow("SELECT status, reviewed_at, measured_gate_run_ids FROM eval_candidate WHERE id = $1 FOR UPDATE", cand_id)
             if not c:
                 return None
-            g = await conn.fetchrow("SELECT verdict, kind, run_at, answers FROM eval_gate_run WHERE id = $1", gate_run_id)
+            g = await conn.fetchrow("SELECT id, verdict, kind, run_at, answers FROM eval_gate_run WHERE id = $1", gate_run_id)
             gd = {**dict(g), "answers": _j(g["answers"])} if g else None
-            err = adopt_error(c["status"], gd, c["reviewed_at"])
+            base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND id <> $1", gate_run_id)
+            err = adopt_error(c["status"], gd, c["reviewed_at"], measured_ids=c["measured_gate_run_ids"] or [], baseline_run_at=base_at)
             if err:
                 raise ValueError(err)
             await conn.execute(
                 """UPDATE eval_candidate SET status = 'adopted', adopted_gate_run_id = $2, reviewed_by_user_id = $3, reviewed_at = NOW()
                    WHERE id = $1""", cand_id, gate_run_id, user_id)
-    return {"id": cand_id, "status": "adopted", "gate_run_id": gate_run_id}
+            await _move_baseline(conn, gate_run_id)
+    return {"id": cand_id, "status": "adopted", "gate_run_id": gate_run_id, "baseline": gate_run_id}
 
 
 from service.eval.improve import adopt_error, agreement  # noqa: E402 — 순수 규칙(테스트가 같은 함수를 검사)
@@ -224,6 +234,26 @@ def _j(v):
     return json.loads(v) if isinstance(v, str) else v
 
 
+async def layer_questions(run_id: int) -> Optional[dict]:
+    """판정 하나의 층별 놓친·틀린 문항 번호(관리자) — [검색]·[답] 층 줄을 누르면 연다. 결과 파일에서 읽기만."""
+    from service.eval import files
+    from service.eval.report import layer_qids
+    run = await get_run(run_id)
+    if not run:
+        return None
+    inputs = (run.get("summary") or {}).get("inputs") or {}
+
+    missing: list[str] = []
+
+    def _read(name):
+        p = files.find_result(name)
+        if name and not p:
+            missing.append(name)   # 파일이 없으면 "놓침 0"으로 조용히 보이지 않게(리뷰 L1)
+        return files.rows_by_qid(p) if p else None
+    ans, retr = [await asyncio.to_thread(_read, inputs.get(k)) for k in ("answers_after", "retrieval_after")]
+    return {**layer_qids(ans, retr, (run.get("summary") or {}).get("mode") or "lexical"), "files_missing": missing}
+
+
 async def question_detail(run_id: int, qid: str) -> Optional[dict]:
     """문항 하나의 흐름 — 질문 → 정답 → 검색 → 답(회차별) → 왜(채점 이유·진단 칸·AI 묶음) → 후보 → 고치는 법·측정 결과.
     질문·답·채점 이유는 결과 파일에서 읽어 돌려주기만 한다(DB에 저장 안 함, service/eval/files.py). 관리자만(라우터).
@@ -266,7 +296,7 @@ async def question_detail(run_id: int, qid: str) -> Optional[dict]:
         "moved": ("up" if qid in ((run.get("answers") or {}).get("up_qids") or []) else
                   "down" if qid in ((run.get("answers") or {}).get("down_qids") or []) else
                   ("same" if run.get("answers") else None)),
-        "cause": None, "hypotheses": [], "candidates": [],
+        "cause": None, "hypotheses": [], "candidates": [], "storage": None,
     }
     # 왜·후보 — 이 판정을 진단한 가장 최근 기록에서
     async with get_conn() as conn:
@@ -298,6 +328,10 @@ async def question_detail(run_id: int, qid: str) -> Optional[dict]:
                        "this_question": "up" if qid in (a.get("up_qids") or []) else "down" if qid in (a.get("down_qids") or []) else "same"})
         out["candidates"].append({"id": c["id"], "title": c["title"], "status": c["status"], "action": c["action"], "measure": c["measure"],
                                   "technique_name": BY_KEY.get(c["technique"], {}).get("name", c["technique"]), "measurements": ms})
+    # ④ 저장 구조 — 정답 데이터가 어떤 모양으로 저장돼 있나(리포트와 같은 규칙, service/eval/report.py)
+    from service.eval.report import storage_for, storage_inputs
+    mapped, gic = storage_inputs(after, retr)   # 리포트와 같은 값으로(리뷰 L3)
+    out["storage"] = await storage_for(qid, mapped=mapped, gold_in_context=gic, question=out["question"])
     return out
 
 
@@ -328,3 +362,13 @@ async def mark_hypothesis(improvement_id: int, *, cause: str, name: str, status:
                             h["status"] = status
                     await conn.execute("UPDATE eval_candidate SET hypotheses = $2::jsonb WHERE id = $1", c["id"], json.dumps(ch, ensure_ascii=False))
     return {"cause": cause, "name": name, "status": status}
+
+
+async def latest_ingest_check() -> Optional[dict]:
+    async with get_conn() as conn:
+        r = await conn.fetchrow("SELECT id, created_at, gate_run_id, results, n_bad FROM ingest_check_run ORDER BY created_at DESC, id DESC LIMIT 1")
+    if not r:
+        return None
+    d = dict(r)
+    d["results"] = _j(d["results"]) or []
+    return d

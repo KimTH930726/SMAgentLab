@@ -7,6 +7,7 @@ import { Modal } from '../ui/Modal';
 
 /**
  * 문항 상세(v2.171, 사용자 10/26 "어떤 질문이었고 어떻게 답했고 왜 그랬고 어떤 후보가 됐고 어떻게 고치나") — 한 문항의 흐름을 위에서 아래로.
+ * ⑥ 저장 구조(v2.172) — 정답 데이터의 저장 모양(원문만·파라미터 수·표)과 리포트와 같은 꼬리표(service/eval/report.py storage_for).
  * 질문·답·채점 이유는 서버가 결과 파일에서 읽어 준다(DB 저장 없음, 관리자만). [이전]/[다음]은 연 목록 안에서 이동.
  */
 
@@ -120,7 +121,27 @@ export function QuestionDetailModal({ runId, qids, start, onClose }: { runId: nu
                 <p key={h.name} className="text-xs text-slate-400">AI 묶음: {h.name} ({h.n}문항){h.hint && <span className="text-slate-500"> — {h.hint}</span>}</p>
               ))}
             </Step>
-            <Step n={6} title="개선 후보 · 고치는 법 · 측정 결과">
+            <Step n={6} title="저장 구조 — 정답 데이터가 어떤 모양으로 저장돼 있나">
+              {!d.storage || d.storage.gold.length === 0 ? <p className="text-sm text-slate-400">정답 데이터 없음(답 없는 질문이거나 연결 안 됨)</p> : (
+                <div className="space-y-1">
+                  {d.storage.gold.map((g, k) => (
+                    <p key={k} className="text-sm text-slate-200">
+                      <span className="text-xs text-slate-500">{g.kind} </span>{g.name ?? '-'}
+                      {g.path && <span className="text-xs text-slate-500"> · {g.path}</span>}
+                      <span className="text-xs text-slate-400">
+                        {g.missing ? ' · 현행에 없음' : ''}{g.params != null ? ` · 파라미터 ${g.params}개` : ''}{g.table ? ' · 표 있음' : ''}{g.rows != null ? ` · ${g.rows}행` : ''}
+                      </span>
+                    </p>
+                  ))}
+                  {d.storage.tags.length > 0 && (
+                    <p className="flex flex-wrap gap-1">
+                      {d.storage.tags.map((t) => <span key={t} className="rounded px-1.5 py-0.5 text-xs bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">{t}</span>)}
+                    </p>
+                  )}
+                </div>
+              )}
+            </Step>
+            <Step n={7} title="개선 후보 · 고치는 법 · 측정 결과">
               {d.candidates.length === 0 ? <p className="text-sm text-slate-400">이 문항을 겨냥한 후보 없음</p> : d.candidates.map((c) => (
                 <div key={c.id} className="space-y-1">
                   <p className="text-sm text-slate-100">{c.title} <span className="text-xs text-slate-500">· {STATUS_NAME[c.status] ?? c.status} · {c.technique_name}</span></p>

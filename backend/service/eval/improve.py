@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Callable, Mapping, Optional
+from typing import Callable, Iterable, Mapping, Optional
 
 from service.eval.techniques import BY_KEY
 
@@ -62,15 +62,22 @@ def carry_decision(prev: Optional[Mapping], recommend: str) -> Optional[Mapping]
     return prev
 
 
-def adopt_error(status: str, gate: Optional[Mapping], approved_at) -> Optional[str]:
+def adopt_error(status: str, gate: Optional[Mapping], approved_at, *, measured_ids: Optional[Iterable[int]] = None,
+                baseline_run_at=None) -> Optional[str]:
     """채택할 수 없는 이유(되면 None) — 시도 승인된 후보 + **승인 뒤에** 잰 통과 게이트만(§10-5: 승인 → 적용 → 측정 → 판정).
-    기준 시각은 승인 시각(이어받은 승인이면 원래 승인 시각) — 진단을 다시 돌려도 측정한 판정을 그대로 연결할 수 있게(재리뷰)."""
+    기준 시각은 승인 시각(이어받은 승인이면 원래 승인 시각) — 진단을 다시 돌려도 측정한 판정을 그대로 연결할 수 있게(재리뷰).
+    measured_ids(주면) = 이 후보를 잰 판정(eval_gate.py --candidate)만 · baseline_run_at(주면) = 지금 점수보다 예전 측정은 안 됨 —
+    운영 반영이 그 측정을 지금 점수로 옮기므로, 남의 측정·옛 측정으로 지금 점수가 되돌아가지 않게(v2.172 리뷰 M3)."""
     if status != "approved":
         return "시도 승인된 후보만 채택할 수 있습니다."
     if not gate or gate.get("kind") != "gate" or gate.get("verdict") != "pass":
         return "통과한 게이트 판정만 연결할 수 있습니다."
     if approved_at is None or gate["run_at"] < approved_at:
         return "시도 승인보다 먼저 잰 판정입니다 — 이 후보를 적용한 뒤 잰 판정을 연결해 주세요."
+    if measured_ids is not None and gate.get("id") not in set(measured_ids):
+        return "이 후보를 잰 측정이 아닙니다 — eval_gate.py --save … --candidate <후보 번호>로 잰 측정을 연결해 주세요."
+    if baseline_run_at is not None and gate["run_at"] < baseline_run_at:
+        return "지금 점수보다 예전 측정입니다 — 반영하면 지금 점수가 예전으로 돌아갑니다. 지금 상태에서 다시 재 주세요."
     groups = (gate.get("answers") or {}).get("groups") or {}
     worse = [t for t in LOCKED_TYPES if (groups.get(t) or {}).get("diff", 0) < 0]
     if worse:   # 잠근 시험지에서 내려가면 운영 반영 안 함 — 오차 안이라도(고칠 때 안 본 문항에서 나빠졌다는 신호)
@@ -91,6 +98,39 @@ def agreement(rows) -> dict:
         elif (rec == "try" and st == "rejected") or (rec == "reject" and st in ("approved", "adopted")):
             disagree += n
     return {"agree": agree, "disagree": disagree}
+
+
+# 적재 검사 → 개선 후보(10/26 사용자 "적재가 잘 됐는지 스스로 검수하는 개선 루프"). 처리 기법 후보와 같은 흐름으로 사람이 승인.
+INGEST_REMEDY: dict[str, tuple[str, str, str, str]] = {   # 검사 키 → (기법 키, 제목, 바꿀 것, 잴 방법)
+    "policy_param_derived": ("param_derive", "파라미터 파생 단계 실행(v0 설계 #9)",
+                             "derive_policy_params.py extract → 사본 DB에 load → 같은 문항으로 측정(값은 원문에 있는 것만)", "answers"),
+    "usage_ref_table": ("ref_table_chat", "참고표를 채팅 문맥에 연결(v0 설계 #12)", "참고표 표 단위 검색 + 결정 조건이 빠지면 되묻기", "answers"),
+    "usage_overview": ("ref_table_chat", "개요를 채팅 문맥에 연결(v0 설계 #12)", "개요 문서 검색 채널 추가", "answers"),
+    "knowledge_dup": ("knowledge_dedupe", "같은 지식 조각 정리", "중복 쌍 중 하나 은퇴(원문 페이지 확인은 로컬 LLM)", "retrieval"),
+}
+
+
+def ingest_candidates(results: list[dict], locked: Iterable[str] = ()) -> list[dict]:
+    """어긋난 적재 검사(bad > 0) → 후보. 대응표에 없는 검사는 "적재 계약 다시 확인" 한 줄. cause = "ingest"(진단 칸과 별개 — 흐름 단계가 아니라 데이터).
+    locked = 잠근 시험지 qid — 후보가 겨냥할 문항에서 뺀다(옛 적재 검수 기록엔 잠근 문항이 섞여 있을 수 있어서, 리뷰 M1)."""
+    locked = set(locked)
+    out = []
+    for r in results:
+        if not r.get("bad"):
+            continue
+        tech, title, action, measure = INGEST_REMEDY.get(
+            r["key"], ("ingest_contract", f"적재 다시 확인 — {r['name']}", "적재 스크립트·설계 완료 기준 대조", "retrieval"))
+        acc = r.get("accuracy") or {}
+        why = f"{r['store']} · {r['name']}: {r['bad']} / {r['total']} 어긋남 — 근거 {r['ref']}"
+        if acc.get("acc") is not None:
+            why += f" · 영향 문항 {acc['n']}개 정답률 {acc['acc'] * 100:.1f}%"
+            why += (f"(나머지 {acc['rest_n']}개 {acc['rest_acc'] * 100:.1f}%)" if acc.get("rest_n")
+                    else "(나머지 없음 — 비교 불가, 정답률 차이로 효과를 말할 수 없음)")
+        if not r.get("qids") and r["key"].startswith("knowledge_"):
+            why += " · 골든 문항과 연결 안 되는 데이터(지식 골든 별도)"
+        out.append(_cand(f"ingest_{r['key']}", "ingest", tech, title, action, measure,
+                         [q for q in r.get("qids") or [] if q not in locked], why=why))
+    return out
 
 
 def build_candidates(diag: dict, *, types: Mapping[str, str], mapped: Mapping[str, Optional[str]],

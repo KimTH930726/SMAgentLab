@@ -1544,12 +1544,22 @@ async def _migrate_eval_improvement(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_improvement_created ON eval_improvement_run (created_at DESC)")
     # #88(10/26) 후보를 잰 판정 기록 — 화면의 진행 단계 "측정(#11 통과)"·문항 상세의 "이 후보로 이 문항이 어떻게 됐나"
     await conn.execute("ALTER TABLE eval_candidate ADD COLUMN IF NOT EXISTS measured_gate_run_ids BIGINT[] NOT NULL DEFAULT '{}'")
+    # #90(10/26) 적재 검수 기록 — scripts/check_ingest.py --save. 검사마다 어긋난 수·전체·근거·영향 문항(qid)·정답률. 원문 없음
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ingest_check_run (
+            id BIGSERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_by TEXT NOT NULL DEFAULT '',
+            gate_run_id BIGINT REFERENCES eval_gate_run(id),
+            results JSONB NOT NULL DEFAULT '[]'::jsonb,
+            n_bad INT NOT NULL DEFAULT 0
+        )""")
     # #89(10/26) 실사용 문항 — 정정 승인된 채팅 질문 = 시험지 후보(정답 = 고친 정책). 관리자가 넣으면 골든 측정의 "실사용" 층(잠근 시험지)
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS eval_question_candidate (
             id BIGSERIAL PRIMARY KEY,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            improvement_item_id BIGINT NOT NULL UNIQUE REFERENCES ops_improvement_item(id),
+            improvement_item_id BIGINT NOT NULL UNIQUE REFERENCES ops_improvement_item(id) ON DELETE CASCADE,
             namespace_id INT,
             question TEXT NOT NULL,
             gold JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -1557,6 +1567,15 @@ async def _migrate_eval_improvement(conn) -> None:
             decided_by_user_id INT,
             decided_at TIMESTAMPTZ
         )""")
+    # #91(10/26) 정정 원장 줄이 지워지면(컬렉션 삭제 등) 시험지 후보도 같이 — 기본(NO ACTION)이면 정정 승인 때 자동으로 생긴 후보가
+    # 컬렉션 삭제를 막았다(v2.172 E2E로 발견). 이미 CASCADE면 건너뜀(멱등)
+    deltype = await conn.fetchval("""SELECT confdeltype FROM pg_constraint
+                                     WHERE conrelid = 'eval_question_candidate'::regclass AND conname = 'eval_question_candidate_improvement_item_id_fkey'""")
+    if deltype is not None and deltype != "c":
+        async with conn.transaction():
+            await conn.execute("ALTER TABLE eval_question_candidate DROP CONSTRAINT eval_question_candidate_improvement_item_id_fkey")
+            await conn.execute("""ALTER TABLE eval_question_candidate ADD CONSTRAINT eval_question_candidate_improvement_item_id_fkey
+                                  FOREIGN KEY (improvement_item_id) REFERENCES ops_improvement_item(id) ON DELETE CASCADE""")
 
 
 async def _migrate_policy_v0_revisions(conn) -> None:

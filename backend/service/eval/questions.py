@@ -40,8 +40,9 @@ async def from_correction(item: dict, applied_target_id: Optional[int]) -> Optio
                 gold.update(kind="knowledge", id=applied_target_id)
             import json
             return await conn.fetchval(
-                """INSERT INTO eval_question_candidate (improvement_item_id, namespace_id, question, gold)
-                   VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (improvement_item_id) DO NOTHING RETURNING id""",
+                # 정정 승인 자체가 사람 검수 — 바로 시험지에(added). 이상한 질문만 리포트에서 뺀다(사용자 10/26 "실사용 문항을 따로 관리 안 함")
+                """INSERT INTO eval_question_candidate (improvement_item_id, namespace_id, question, gold, status, decided_at)
+                   VALUES ($1, $2, $3, $4::jsonb, 'added', NOW()) ON CONFLICT (improvement_item_id) DO NOTHING RETURNING id""",
                 item["id"], q["namespace_id"] or item.get("namespace_id"), q["question"].strip(), json.dumps(gold, ensure_ascii=False))
     except Exception:
         logger.warning("정정 승인 → 시험지 후보 만들기 실패(item=%s) — 승인은 반영됨", item.get("id"), exc_info=True)
