@@ -69,7 +69,7 @@ V0_GOLDEN_DIR = Path("/app/eval_out/golden_v0/reviewed")
 _V0_TYPE = {"list": "navigation"}   # 목록형은 기존 목록형 채점(빠짐없는가)을 그대로 쓴다
 
 
-async def load_v0_golden(conn) -> tuple[list[dict], dict, dict]:
+async def load_v0_golden(conn, extra: Optional[list[dict]] = None) -> tuple[list[dict], dict, dict]:
     """정책서 v0 골든셋(10/21, 옛 정책 평가 자산 폐기 후 재출발) — 확정 문항만, 정답 = 원천 키 → 현행 정책 id.
     참고표·개요 정답 문항은 채팅에 아직 연결 안 돼(계획 #12) 빼고 개수를 돌려준다(조용히 빼지 않게). 답 없는 질문은 type "abstain"."""
     # 반려(rejected)도 포함 — 빼 두면 정답에서 조용히 사라진다. 반려 정답은 아래 collect의 refs 조회가 걸러 gold_inactive로 남는다
@@ -84,8 +84,17 @@ async def load_v0_golden(conn) -> tuple[list[dict], dict, dict]:
     for r in cur:
         by_key.setdefault(r["source_key"], r)
     golden, raw, skipped = [], {}, collections.Counter()
-    for f in sorted(V0_GOLDEN_DIR.glob("*.jsonl")):
-        for g in (json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()):
+    if extra is None:   # 시험지에 넣은 실사용 문항(정정 승인된 채팅 질문, 10/26) — 파일 줄과 같은 모양, 측정은 "실사용" 층
+        from service.eval.questions import real_golden
+        extra = await real_golden(conn)
+    sources = [[json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()] for f in sorted(V0_GOLDEN_DIR.glob("*.jsonl"))]
+    # 실사용 문항은 확정 골든 줄(거르기 전)과 같은 질문이면 뺀다 — eval_golden_v0와 같은 규칙(재리뷰 L5)
+    file_queries = {g["query"] for rows in sources for g in rows if g.get("verdict") == "approved"}
+    kept = [g for g in extra or [] if g["query"] not in file_queries]
+    skipped["real_dup"] += len(extra or []) - len(kept)   # 실사용끼리 같은 질문은 아래 루프에서 센다
+    extra = kept
+    for rows in sources + [extra]:
+        for g in rows:
             if g.get("verdict") != "approved":
                 continue
             if {x["kind"] for x in g.get("gold", [])} - {"policy"}:
@@ -96,6 +105,9 @@ async def load_v0_golden(conn) -> tuple[list[dict], dict, dict]:
                 or next((by_key[k]["ns"] for k in keys if k in by_key), None)
             if not ns:
                 skipped["no_namespace"] += 1
+                continue
+            if g["query"] in raw and g.get("layer") == "real":   # 실사용 문항이 골든과 같은 질문 — 건너뛰고 센다(측정을 멈추지 않게, 10/26 리뷰 M1)
+                skipped["real_dup"] += 1
                 continue
             if g["query"] in raw:   # 문항 번호·이어 쓰기가 질문 글자로 묶여 있어 같은 질문 둘이면 하나가 조용히 빠진다(리뷰 L7)
                 raise SystemExit(f"골든셋에 같은 질문이 두 번 있습니다: {g['qid']} / {raw[g['query']]['qid']} — 하나를 고친 뒤 다시 실행")

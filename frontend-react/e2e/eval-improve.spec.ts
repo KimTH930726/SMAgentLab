@@ -11,7 +11,7 @@ import { API, adminToken, loginAdmin } from './auth';
 const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'psql', '-U', 'ops', '-d', 'opsdb', '-tA', '-c', sql],
   { encoding: 'utf-8' }).trim();
 
-test('개선 탭 — 진단 숫자 = DB, 보류·되돌리기가 DB 상태를 바꿈, 기각은 이유 필수', async ({ page }) => {
+test('개선 탭 — 진단 숫자 = DB, 나중에·결정 취소가 DB 상태를 바꿈, 안 하기는 이유 필수, 단계 막대', async ({ page }) => {
   test.setTimeout(90_000);
   const runId = psql('SELECT id FROM eval_improvement_run ORDER BY created_at DESC, id DESC LIMIT 1');
   test.skip(!runId, '진단 없음');
@@ -32,19 +32,23 @@ test('개선 탭 — 진단 숫자 = DB, 보류·되돌리기가 DB 상태를 �
     const [cid, key] = target.split('|');
     const card = page.getByTestId(`candidate-${key}`);
     try {
-      // 기각은 이유 없이 못 한다(버튼 꺼짐) — 다음 진단이 이어받을 때 이유가 보여야 해서
-      await card.getByRole('button', { name: '기각…' }).click();
-      await expect(page.getByRole('button', { name: '기각', exact: true })).toBeDisabled();
+      // 단계 막대 — 제안 단계, 버튼은 할 일 이름(실험해 보기·나중에·안 하기)(사용자 10/26)
+      await expect(card.getByLabel('진행 단계')).toContainText('제안');
+      await expect(card.getByRole('button', { name: '실험해 보기' })).toBeVisible();
+      // 안 하기는 이유 없이 못 한다(버튼 꺼짐) — 다음 진단이 이어받을 때 이유가 보여야 해서
+      await card.getByRole('button', { name: '안 하기…' }).click();
+      await expect(page.getByRole('button', { name: '안 하기', exact: true })).toBeDisabled();
       await page.keyboard.press('Escape');
-      // 보류 → DB held, 화면 상태 글자 보류
-      await card.getByRole('button', { name: '보류…' }).click();
-      await page.getByRole('button', { name: '보류', exact: true }).click();
+      // 나중에 → DB held, 단계 막대 옆 "나중에 보기로 함"
+      await card.getByRole('button', { name: '나중에…' }).click();
+      await page.getByRole('button', { name: '나중에', exact: true }).click();
       await expect.poll(() => psql(`SELECT status FROM eval_candidate WHERE id = ${cid}`)).toBe('held');
-      await expect(card.getByText('보류', { exact: true })).toBeVisible();
-      // 되돌리기 → proposed
-      await card.getByRole('button', { name: '되돌리기' }).click();
+      await expect(card.getByText('나중에 보기로 함', { exact: false })).toBeVisible();
+      // 결정 취소 → proposed(검수 흔적도 비움)
+      await card.getByRole('button', { name: '결정 취소' }).click();
       await expect.poll(() => psql(`SELECT status FROM eval_candidate WHERE id = ${cid}`)).toBe('proposed');
-      await expect(card.getByText('제안', { exact: true })).toBeVisible();
+      await expect(card.getByRole('button', { name: '실험해 보기' })).toBeVisible();
+      expect(psql(`SELECT reviewed_at IS NULL FROM eval_candidate WHERE id = ${cid}`)).toBe('t');
     } finally {
       if (psql(`SELECT status FROM eval_candidate WHERE id = ${cid}`) !== 'proposed') {
         const t = await adminToken();
@@ -57,6 +61,36 @@ test('개선 탭 — 진단 숫자 = DB, 보류·되돌리기가 DB 상태를 �
   }
 });
 
+test('AI 묶음 [맞아요] → 진단 기록에 확인 표시 → 취소', async ({ page }) => {
+  const runId = psql('SELECT id FROM eval_improvement_run ORDER BY created_at DESC, id DESC LIMIT 1');
+  test.skip(!runId, '진단 없음');
+  // 사람이 아직 결정하지 않은 묶음만 — 이미 [맞아요]·[다시 묶기] 한 묶음을 건드리면 그 결정을 지운다(재리뷰 M)
+  const row = psql(`SELECT c.key || '|' || (h->>'name') || '|' || c.cause FROM eval_candidate c, jsonb_array_elements(c.hypotheses) h
+                    WHERE c.run_id = ${runId} AND coalesce(h->>'status', 'open') = 'open' ORDER BY c.id LIMIT 1`);
+  test.skip(!row, '결정 전 묶음 있는 후보 없음');
+  const [key, name, cause] = row.split('|');
+  const status = () => psql(`SELECT h->>'status' FROM eval_improvement_run r, jsonb_array_elements(r.hypotheses) h
+                             WHERE r.id = ${runId} AND h->>'name' = ${"'" + name.replace(/'/g, "''") + "'"} AND h->>'cause' = '${cause}' LIMIT 1`);
+  await loginAdmin(page);
+  await goAdmin(page, '품질', '평가 게이트');
+  await page.getByRole('button', { name: '개선', exact: true }).click();
+  const line = page.getByTestId(`candidate-${key}`).locator('div.pl-3').filter({ hasText: name }).first();
+  try {
+    await line.getByRole('button', { name: '맞아요' }).click();
+    await expect.poll(status).toBe('confirmed');
+    await expect(line.getByText('맞음')).toBeVisible();
+    await line.getByRole('button', { name: '취소' }).click();
+    await expect.poll(status).toBe('open');
+  } finally {
+    if (!['open', ''].includes(status())) {
+      const t = await adminToken();
+      await fetch(`${API}/api/eval/improvements/${runId}/hypotheses`, {
+        method: 'POST', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ cause, name, status: 'open' }),
+      });
+    }
+  }
+});
+
 test('AI 판단·답 기법 — 원장 집계·대장 항목 수가 서버와 같음', async ({ page }) => {
   const t = await adminToken();
   const H = { Authorization: `Bearer ${t}` };
@@ -65,10 +99,39 @@ test('AI 판단·답 기법 — 원장 집계·대장 항목 수가 서버와 �
 
   await loginAdmin(page);
   await goAdmin(page, '품질', 'AI 판단');
-  if (locTotal !== '0') await expect(page.getByTestId('decision-knowledge_location')).toContainText(`판단${locTotal}`);
+  if (locTotal !== '0') await expect(page.getByTestId('decision-knowledge_location')).toContainText(`판단 ${locTotal}`);
+  // 사람이 바꾼 건마다 한 줄(AI → 사람 · AI 이유 · AI가 틀렸나요?) — 줄 수 = 원장(최근 90일, 최대 50)
+  const changed = Number(psql("SELECT LEAST(COUNT(*), 50) FROM ops_ai_decision WHERE human_changed AND created_at > NOW() - interval '90 days'"));
+  await expect(page.locator('[data-testid^="changed-"]')).toHaveCount(changed);
+  if (changed) await expect(page.locator('[data-testid^="changed-"]').first()).toContainText('AI 이유');
   await expect(page.getByTestId('decision-candidates')).toBeVisible();
 
+  // 답 기법 — 흐름 그림 + 기법 카드(왜 있나·효과·바꾸려면), 단계를 누르면 그 단계만
   await goAdmin(page, '품질', '답 기법');
-  await expect(page.locator('[data-testid^="technique-"]')).toHaveCount(techniques.length);
-  await expect(page.getByTestId('technique-abstain_prefilter')).toContainText('근거 없음 즉시 거절');
+  const cards = page.locator('[data-testid^="technique-"]');
+  await expect(cards).toHaveCount(techniques.length);
+  await expect(page.getByTestId('technique-abstain_prefilter')).toContainText('왜 있나');
+  await page.getByRole('button', { name: /^근거 판정/ }).click();
+  await expect(cards).toHaveCount(techniques.filter((t: { stage: string }) => t.stage === '근거 판정').length);
+});
+
+test('실사용 문항 — 목록 = DB, [시험지에 넣기]가 DB 상태를 바꿈(이 테스트가 만든 줄만 쓰고 지움)', async ({ page }) => {
+  // 승인된 채팅 신고가 없어도 화면·결정 흐름을 확인하게 — 아직 후보가 없는 정정 한 건에 테스트용 후보 줄을 만들고 끝에 지운다
+  const itemId = psql(`SELECT min(id) FROM ops_improvement_item WHERE id NOT IN (SELECT improvement_item_id FROM eval_question_candidate)`);
+  test.skip(!itemId, '정정 원장이 비어 있음');
+  const cid = psql(`INSERT INTO eval_question_candidate (improvement_item_id, question, gold)
+                    VALUES (${itemId}, 'E2E 실사용 문항 확인용 질문', '{"kind":"policy","source_key":null}') RETURNING id`).split(/\s+/)[0];   // psql -tA는 id 다음 줄에 "INSERT 0 1"
+  try {
+    const proposed = Number(psql("SELECT COUNT(*) FROM eval_question_candidate WHERE status = 'proposed'"));
+    await loginAdmin(page);
+    await goAdmin(page, '품질', '평가 게이트');
+    await page.getByRole('button', { name: '실사용 문항', exact: true }).click();
+    await expect(page.locator('[data-testid^="real-q-"]')).toHaveCount(Math.min(proposed, 200));
+    const card = page.getByTestId(`real-q-${cid}`);
+    await expect(card).toContainText('지금은 잴 수 없음');   // 원천 키 없는 정책 정답 — 측정에 못 들어감을 숨기지 않는다
+    await card.getByRole('button', { name: '시험지에 넣기' }).click();
+    await expect.poll(() => psql(`SELECT status FROM eval_question_candidate WHERE id = ${cid}`)).toBe('added');
+  } finally {
+    psql(`DELETE FROM eval_question_candidate WHERE id = ${cid} AND question = 'E2E 실사용 문항 확인용 질문'`);
+  }
 });

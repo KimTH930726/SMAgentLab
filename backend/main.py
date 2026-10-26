@@ -1542,6 +1542,21 @@ async def _migrate_eval_improvement(conn) -> None:
             CHECK (status <> 'adopted' OR adopted_gate_run_id IS NOT NULL)
         )""")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_improvement_created ON eval_improvement_run (created_at DESC)")
+    # #88(10/26) 후보를 잰 판정 기록 — 화면의 진행 단계 "측정(#11 통과)"·문항 상세의 "이 후보로 이 문항이 어떻게 됐나"
+    await conn.execute("ALTER TABLE eval_candidate ADD COLUMN IF NOT EXISTS measured_gate_run_ids BIGINT[] NOT NULL DEFAULT '{}'")
+    # #89(10/26) 실사용 문항 — 정정 승인된 채팅 질문 = 시험지 후보(정답 = 고친 정책). 관리자가 넣으면 골든 측정의 "실사용" 층(잠근 시험지)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS eval_question_candidate (
+            id BIGSERIAL PRIMARY KEY,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            improvement_item_id BIGINT NOT NULL UNIQUE REFERENCES ops_improvement_item(id),
+            namespace_id INT,
+            question TEXT NOT NULL,
+            gold JSONB NOT NULL DEFAULT '{}'::jsonb,
+            status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'added', 'dismissed')),
+            decided_by_user_id INT,
+            decided_at TIMESTAMPTZ
+        )""")
 
 
 async def _migrate_policy_v0_revisions(conn) -> None:

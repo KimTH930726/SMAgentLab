@@ -61,10 +61,14 @@ async def main() -> None:
         await retrieval.load_runtime_overrides_from_db(conn)   # 관리자 화면에서 바꾼 값 = 운영값
         cur = await conn.fetch("""SELECT i.source_key, i.logical_id, n.name AS ns FROM policy_item i JOIN ops_namespace n ON n.id = i.namespace_id
                                   WHERE i.status <> 'deprecated' AND i.source_key IS NOT NULL""")
+        from service.eval.questions import real_golden
+        real = await real_golden(conn)   # 시험지에 넣은 실사용 문항(정정 승인된 채팅 질문, 10/26)
     key_to_lid = {r["source_key"]: r["logical_id"] for r in cur}
     key_to_ns = {r["source_key"]: r["ns"] for r in cur}
     defaults = retrieval.get_search_defaults()
-    gold = load_golden()
+    files_gold = load_golden()
+    seen_q = {g["query"] for g in files_gold}
+    gold = files_gold + [g for g in real if g["query"] not in seen_q]   # 확정 골든 줄과 같은 실사용 질문은 뺀다(eval_answers와 같은 규칙)
 
     rows, unresolved = [], 0
     not_connected: dict[str, int] = defaultdict(int)

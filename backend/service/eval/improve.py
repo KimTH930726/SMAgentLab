@@ -12,6 +12,16 @@ from typing import Callable, Mapping, Optional
 
 from service.eval.techniques import BY_KEY
 
+# 잠근 시험지(hold-out, 10/26 사용자 승인) — 사람이 쓴 문항·실사용 문항. 진단·AI 묶음·후보를 만들 때 보지 않고 판정 때만 본다
+# (같은 문항을 보고 고치고 그 문항으로 채점하면 시험지에만 강해진다 — 10/23 2회차: 전체 +0.9%p인데 사람 문항 −1.2%p).
+LOCKED_TYPES = ("human", "real")
+
+
+def split_locked(rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """(진단에 쓸 행, 잠근 문항 qid) — 잠근 층 문항은 한 행도 남기지 않는다."""
+    locked = sorted({r["qid"] for r in rows if r.get("type") in LOCKED_TYPES})
+    return [r for r in rows if r.get("type") not in LOCKED_TYPES], locked
+
 MEASURES = {"replay": "LLM 0 리플레이(바로 잼)", "retrieval": "검색 재측정(LLM 0, 수 분)", "answers": "답 재측정(로컬 LLM ~1시간)"}
 
 # 근거 없음 하한 리플레이 격자 — 10/06 실측 범위(0.45~0.65) + 파라미터 하한 0/0.05
@@ -61,6 +71,10 @@ def adopt_error(status: str, gate: Optional[Mapping], approved_at) -> Optional[s
         return "통과한 게이트 판정만 연결할 수 있습니다."
     if approved_at is None or gate["run_at"] < approved_at:
         return "시도 승인보다 먼저 잰 판정입니다 — 이 후보를 적용한 뒤 잰 판정을 연결해 주세요."
+    groups = (gate.get("answers") or {}).get("groups") or {}
+    worse = [t for t in LOCKED_TYPES if (groups.get(t) or {}).get("diff", 0) < 0]
+    if worse:   # 잠근 시험지에서 내려가면 운영 반영 안 함 — 오차 안이라도(고칠 때 안 본 문항에서 나빠졌다는 신호)
+        return f"잠근 문항({', '.join(worse)})에서 정답률이 내려간 측정입니다 — 운영 반영 대신 다시 실험하세요."
     return None
 
 

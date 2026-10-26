@@ -9,7 +9,28 @@ export const LAYERS: { keys: string[]; name: string; hint: string }[] = [
   { keys: ['cross'], name: '영역 넘김', hint: '다른 업무 영역에서 물은 질문' },
   { keys: ['list', 'navigation'], name: '목록', hint: '한 분류를 다 보여 달라는 질문' },
   { keys: ['abstain'], name: '답 없음', hint: '정책서에 답이 없는 질문 — 거절이 정답' },
+  { keys: ['real'], name: '실사용', hint: '정정 요청이 승인된 실제 채팅 질문 — 정답 = 고친 정책' },
 ];
+
+/** 잠근 시험지(hold-out, 10/26) — 사람이 쓴 문항·실사용 문항. 고칠 때(진단·묶음·후보) 보지 않고 판정 때만 본다.
+ *  서버 backend/service/eval/improve.py LOCKED_TYPES와 같은 값 */
+export const LOCKED_TYPES = ['human', 'real'];
+
+/** 잠근 층들의 정답률(문항 수 가중) — 층이 없으면 null */
+export function lockedAccuracy(byType: Record<string, { n: number; accuracy: number }> | undefined): { n: number; accuracy: number } | null {
+  const xs = LOCKED_TYPES.map((t) => byType?.[t]).filter((x): x is { n: number; accuracy: number } => !!x && x.n > 0);
+  const n = xs.reduce((s, x) => s + x.n, 0);
+  return n ? { n, accuracy: xs.reduce((s, x) => s + x.accuracy * x.n, 0) / n } : null;
+}
+
+/** 판정의 잠근 층 전/후(문항 수 가중) — 층별 차이 중 하나라도 내려가면 down */
+export function lockedMove(groups: Record<string, { n: number; before: number; after: number; diff: number }> | null | undefined) {
+  const xs = LOCKED_TYPES.map((t) => groups?.[t]).filter((x): x is { n: number; before: number; after: number; diff: number } => !!x && x.n > 0);
+  const n = xs.reduce((s, x) => s + x.n, 0);
+  if (!n) return null;
+  const w = (k: 'before' | 'after') => xs.reduce((s, x) => s + x[k] * x.n, 0) / n;
+  return { n, before: w('before'), after: w('after'), down: xs.some((x) => x.diff < 0) };
+}
 
 export const layerOf = (t: string) => LAYERS.find((l) => l.keys.includes(t));
 

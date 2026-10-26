@@ -126,3 +126,23 @@ def test_agreement_counts_each_human_decision_once():
             {"recommend": "review", "status": "rejected", "carried_from_id": None, "n": 4},  # 검토 추천은 맞음/반대 없음
             {"recommend": "try", "status": "proposed", "carried_from_id": None, "n": 3}]
     assert improve.agreement(rows) == {"agree": 3, "disagree": 2}
+
+
+# ── 10/26 잠근 시험지 · 실사용 문항 ─────────────────────────────────────────────────────
+
+def test_split_locked_removes_every_locked_row():
+    rows = [{"qid": "A", "type": "fact"}, {"qid": "H", "type": "human", "rep": 0}, {"qid": "H", "type": "human", "rep": 1},
+            {"qid": "R", "type": "real"}, {"qid": "B", "type": None}]
+    open_rows, locked = improve.split_locked(rows)
+    assert locked == ["H", "R"] and [r["qid"] for r in open_rows] == ["A", "B"]
+    assert not {r["qid"] for r in open_rows} & set(locked)   # 잠근 문항은 진단에 한 행도 안 남는다
+
+
+def test_adopt_blocked_when_locked_layer_drops():
+    t0 = datetime(2026, 10, 26, 9, tzinfo=timezone.utc)
+    ok = {"kind": "gate", "verdict": "pass", "run_at": t0 + timedelta(hours=1),
+          "answers": {"groups": {"전체": {"diff": 0.01}, "human": {"diff": 0.0}, "real": {"diff": 0.02}}}}
+    assert improve.adopt_error("approved", ok, t0) is None
+    bad = {**ok, "answers": {"groups": {"전체": {"diff": 0.01}, "human": {"diff": -0.0125}}}}   # 10/23 #11과 같은 모양
+    assert "잠근 문항" in improve.adopt_error("approved", bad, t0)
+    assert improve.adopt_error("approved", {**ok, "answers": None}, t0) is None   # 잠근 층이 없던 옛 측정은 막지 않음

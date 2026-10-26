@@ -79,12 +79,16 @@ export function Modal({
             exit={{ opacity: 0, scale: 0.95, y: 8 }}
             transition={{ duration: 0.2 }}
             className={`relative bg-slate-800 rounded-xl shadow-2xl border border-slate-700 w-full ${maxWidth} z-10 flex flex-col max-h-[90vh]`}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
           >
             {title && (
               <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700 flex-shrink-0">
                 <h3 className="text-lg font-semibold text-slate-100">{title}</h3>
                 <button
                   onClick={onClose}
+                  aria-label="닫기"
                   className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors"
                 >
                   <X className="w-5 h-5" />

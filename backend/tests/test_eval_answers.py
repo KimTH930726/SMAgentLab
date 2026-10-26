@@ -57,6 +57,15 @@ def test_v0_golden_prefers_searchable_row_for_same_source_key(tmp_path, monkeypa
             # DB가 ORDER BY대로 검색 대상(현행)을 먼저 준다 — 뒤의 반려 행이 덮어쓰면 안 된다
             return [{"id": 11, "source_key": "pol_1", "ns": "정책"}, {"id": 12, "source_key": "pol_1", "ns": "정책"}]
 
-    golden, _raw, _skipped = asyncio.run(ea.load_v0_golden(Conn()))
+    golden, _raw, _skipped = asyncio.run(ea.load_v0_golden(Conn(), extra=[]))
     assert golden[0]["gold_ids"] == {11} and golden[0]["unresolved"] == 0
     assert "ORDER BY" in seen["sql"] and "status = 'active'" in seen["sql"]
+    # 시험지에 넣은 실사용 문항도 같은 규칙으로 — 층 "real"(잠근 시험지)
+    real = [{"qid": "REAL-1", "verdict": "approved", "layer": "real", "expect": "answer", "query": "실사용 질문?", "doc": "정책",
+             "gold": [{"kind": "policy", "source_key": "pol_1"}], "answer_facts": []}]
+    golden2, raw2, _ = asyncio.run(ea.load_v0_golden(Conn(), extra=real))
+    assert [g["type"] for g in golden2] == ["param", "real"] and raw2["실사용 질문?"]["qid"] == "REAL-1"
+    # 골든과 같은 실사용 질문은 건너뛰고 센다 — 예전 규칙대로 멈추면 [시험지에 넣기] 한 번에 답 측정 전체가 멈춘다(리뷰 M1)
+    same = [{**real[0], "qid": "REAL-2", "query": "반품 기한?"}]
+    golden3, _, skipped3 = asyncio.run(ea.load_v0_golden(Conn(), extra=same))
+    assert len(golden3) == 1 and skipped3.get("real_dup") == 1

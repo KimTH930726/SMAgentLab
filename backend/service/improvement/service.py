@@ -1155,6 +1155,12 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
             await invalidate_namespace_family(ns_name, row_ns_name)
         except Exception:
             logger.warning("정정 승인 후 시맨틱 캐시 무효화 실패 (item=%s)", item_id, exc_info=True)
+    # 채팅 신고가 승인되면 그 질문 = 실사용 시험지 후보(정답 = 고친 대상). 실패해도 승인은 그대로(로그만) — service/eval/questions.py
+    try:
+        from service.eval import questions as eval_questions
+        await eval_questions.from_correction(item, new_id)
+    except Exception:
+        logger.warning("정정 승인 후 실사용 문항 후보 만들기 실패 (item=%s)", item_id, exc_info=True)
     return {"id": item_id, "status": "approved", "applied_target_id": new_id, "superseded": superseded}
 
 

@@ -1,5 +1,7 @@
 """/api/eval — 평가 게이트 판정 기록(품질 › 평가 게이트 화면). 읽기는 로그인 사용자(옛 /policy/answer-eval/history와 같음),
 기준선 지정은 관리자. 판정 실행은 scripts/eval_gate.py(문항당 LLM 호출·채점이라 화면에서 안 돌림)."""
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
@@ -29,6 +31,19 @@ async def get_gate_run(run_id: int, user: dict = Depends(get_current_user)):
     return r
 
 
+@router.get("/gate-runs/{run_id}/questions/{qid}")
+async def get_question_detail(run_id: int, qid: str, admin: dict = Depends(get_current_admin)):
+    """문항 상세(관리자) — 질문·답·채점 이유는 결과 파일에서 읽기만(DB 저장 없음). 정책 내용이 담겨 관리자만."""
+    from service.eval.files import ResultFileError
+    try:
+        r = await service.question_detail(run_id, qid)
+    except ResultFileError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not r:
+        raise HTTPException(status_code=404, detail="판정 기록이 없습니다.")
+    return r
+
+
 @router.post("/gate-runs/{run_id}/baseline")
 async def set_gate_baseline(run_id: int, admin: dict = Depends(get_current_admin)):
     try:
@@ -47,6 +62,16 @@ class ReviewBody(BaseModel):
 
 class AdoptBody(BaseModel):
     gate_run_id: int
+
+
+class QuestionDecision(BaseModel):
+    status: str   # added(시험지에 넣기) / dismissed(빼기) / proposed(되돌리기)
+
+
+class HypothesisBody(BaseModel):
+    cause: str
+    name: str
+    status: str   # confirmed(맞아요) / rejected(다시 묶기) / open(되돌리기)
 
 
 @router.get("/improvements/latest")
@@ -81,10 +106,48 @@ async def adopt_candidate(cand_id: int, body: AdoptBody, admin: dict = Depends(g
 async def list_techniques(user: dict = Depends(get_current_user)):
     """답 기법 대장(읽기) — 기준값은 지금 서버의 운영값."""
     from service.eval.techniques import as_rows
-    return as_rows()
+    rows = as_rows()
+    # 지금 진단에서 이 기법을 가리키는 개선 후보 — "효과가 있었나·지금 무엇이 걸려 있나"(사용자 10/26)
+    latest = await service.latest_improvement()
+    by_tech: dict[str, list[dict]] = {}
+    for c in (latest or {}).get("candidates", []):
+        by_tech.setdefault(c["technique"], []).append({"id": c["id"], "title": c["title"], "status": c["status"],
+                                                       "recommend": c["recommend"], "n_target": c["n_target"]})
+    return [{**r, "candidates": by_tech.get(r["key"], [])} for r in rows]
 
 
 @router.get("/decisions")
 async def get_decisions_report(days: int = Query(default=90, ge=1, le=365), admin: dict = Depends(get_current_admin)):
     """AI 판단 원장 집계(품질 › AI 판단, 관리자) — AI가 정한 것을 사람이 얼마나 바꿨나·틀렸다고 했나."""
     return await service.decisions_report(days)
+
+
+@router.post("/improvements/{improvement_id}/hypotheses")
+async def mark_hypothesis(improvement_id: int, body: HypothesisBody, admin: dict = Depends(get_current_admin)):
+    """AI 묶음 확인 — 맞아요(이름 고정) / 다시 묶기(다음 진단이 새로 묶음) / 되돌리기."""
+    try:
+        r = await service.mark_hypothesis(improvement_id, cause=body.cause, name=body.name, status=body.status, user_id=admin["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not r:
+        raise HTTPException(status_code=404, detail="묶음이 없습니다.")
+    return r
+
+
+@router.get("/question-candidates")
+async def list_question_candidates(status: Optional[str] = Query(default=None), admin: dict = Depends(get_current_admin)):
+    """실사용 문항 후보(관리자) — 정정 승인된 채팅 질문. 질문은 사용자가 쓴 글 그대로라 관리자만."""
+    from service.eval import questions
+    return await questions.list_candidates(status)
+
+
+@router.post("/question-candidates/{cand_id}")
+async def decide_question_candidate(cand_id: int, body: QuestionDecision, admin: dict = Depends(get_current_admin)):
+    from service.eval import questions
+    try:
+        r = await questions.decide(cand_id, status=body.status, user_id=admin["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not r:
+        raise HTTPException(status_code=404, detail="후보가 없습니다.")
+    return r

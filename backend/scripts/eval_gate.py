@@ -187,6 +187,8 @@ async def save(rec: dict, a: argparse.Namespace) -> int:
                 await conn.execute("SELECT pg_advisory_xact_lock($1)", BASELINE_LOCK)
                 if make_baseline:
                     await conn.execute("UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline")
+                if a.candidate and not await conn.fetchval("SELECT 1 FROM eval_candidate WHERE id = $1", a.candidate):
+                    raise SystemExit(f"후보 #{a.candidate} 없음 — 저장 안 함")
                 rid = await conn.fetchval(
                     """INSERT INTO eval_gate_run (run_at, created_by, label, kind, golden_version, verdict, retrieval, answers, summary,
                                                   judge_meta, is_baseline, git_commit, notes)
@@ -194,6 +196,9 @@ async def save(rec: dict, a: argparse.Namespace) -> int:
                        RETURNING id""",
                     run_at, a.by, a.save, rec["kind"], rec["golden_version"], verdict, j(rec["retrieval"]), j(rec["answers"]),
                     j(summary), j(rec.get("judge_meta") or {}), make_baseline, _git_commit(a.commit), a.notes)
+                if a.candidate:   # 이 후보를 잰 판정 — 화면의 진행 단계·문항 상세가 읽는다(#88)
+                    await conn.execute("UPDATE eval_candidate SET measured_gate_run_ids = array_append(measured_gate_run_ids, $2) "
+                                       "WHERE id = $1", a.candidate, rid)
     finally:
         await close_pool()
     print(f"기록 #{rid} 저장{' · 기준선' if make_baseline else ''}")
@@ -214,6 +219,7 @@ def main() -> int:
     ap.add_argument("--notes")
     ap.add_argument("--by", default="script", help="기록한 사람")
     ap.add_argument("--run-at", help="측정 시각 ISO(옛 결과 파일을 다시 기록할 때만)")
+    ap.add_argument("--candidate", type=int, help="이 판정이 잰 개선 후보 id(평가 게이트 [개선]) — 진행 단계에 '측정'으로 붙는다")
     a = ap.parse_args()
     pairs = [(a.answers_before, a.answers_after), (a.retrieval_before, a.retrieval_after)]
     if a.baseline:
@@ -222,6 +228,9 @@ def main() -> int:
             return 2
     elif any(bool(x) != bool(y) for x, y in pairs) or not any(x and y for x, y in pairs):
         print("입력 오류: --answers-before/after 또는 --retrieval-before/after를 짝으로 주세요")
+        return 2
+    if a.candidate and not a.save:
+        print("입력 오류: --candidate는 --save와 같이(기록에 연결)")
         return 2
     if a.baseline and a.keep_baseline:
         print("입력 오류: --baseline(기준선으로 기록)과 --keep-baseline(기준선 그대로)은 함께 쓸 수 없습니다")

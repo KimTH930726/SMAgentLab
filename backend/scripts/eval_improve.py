@@ -52,7 +52,8 @@ def _find(dirpath: Path, name: str | None) -> Path | None:
     return hits[0] if hits else None
 
 
-async def cluster_reasons(judged: list[dict], causes: dict[str, list[str]]) -> tuple[list[dict], str]:
+async def cluster_reasons(judged: list[dict], causes: dict[str, list[str]],
+                          prior: dict[str, dict[str, list[str]]] | None = None) -> tuple[list[dict], str]:
     """원인 칸마다 채점 이유를 로컬 LLM으로 묶는다. 이유 원문은 이 프로세스 안에서만(로컬 LLM으로만 보냄)."""
     from scripts.eval_answers import local_llm
     from service.eval.improve import parse_groups
@@ -69,13 +70,18 @@ async def cluster_reasons(judged: list[dict], causes: dict[str, list[str]]) -> t
         if len(qs) < 3:   # 묶을 게 없다 — 문항 목록만으로 충분
             continue
         prompt = "\n".join(f"- {q}: {reasons[q]}" for q in qs)
+        keep = (prior or {}).get(cause, {})
+        if keep.get("confirmed"):   # 사람이 [맞아요] 한 묶음 — 이름을 그대로 쓰게(C1)
+            prompt = "확정된 묶음 이름(해당하는 문항은 이 이름을 그대로 쓴다): " + " / ".join(keep["confirmed"]) + "\n\n" + prompt
+        if keep.get("rejected"):    # 사람이 [다시 묶기] 한 묶음 — 이 이름으로 묶지 말 것
+            prompt = "쓰지 말 묶음(사람이 다시 묶으라고 함): " + " / ".join(keep["rejected"]) + "\n\n" + prompt
         try:
             text = await llm.generate_once(prompt, system=CLUSTER_SYSTEM, max_tokens=1500)
         except Exception as e:  # noqa: BLE001 — 묶기 실패는 진단을 막지 않는다(표시함)
             print(f"⚠ {cause} 묶기 실패: {type(e).__name__} — 가설 없이 진행")
             continue
         for g in parse_groups(text, set(qs)):
-            out.append({**g, "cause": cause})
+            out.append({**g, "cause": cause, **({"status": "confirmed"} if g["name"] in keep.get("confirmed", []) else {})})
     return out, model
 
 
@@ -90,7 +96,7 @@ async def main() -> int:
 
     from core.database import close_pool, get_conn, init_pool
     from agents.knowledge_rag.agent import should_abstain
-    from service.eval.improve import MEASURES, abstain_replay, build_candidates, carry_decision
+    from service.eval.improve import MEASURES, abstain_replay, build_candidates, carry_decision, split_locked
     from service.eval.techniques import BY_KEY
 
     await init_pool()
@@ -119,17 +125,28 @@ async def main() -> int:
             print("⚠ 검색 결과 파일 없음 — 답 측정의 gold_in_context로 대신, 근거 없음 리플레이는 못 함")
             hits = {r["qid"]: bool(r.get("gold_in_context")) for r in judged}
             negative = {r["qid"] for r in judged if r.get("type") == "abstain"}
+        # 잠근 시험지(사람·실사용 문항)는 진단·묶음·후보에서 뺀다 — 판정 때만 본다(LOCKED_TYPES)
+        rows, locked = split_locked(rows)
+        judged, _ = split_locked(judged)
         diag = diagnose(rows, hits=hits, negative=negative, list_types=LIST_TYPES)
+        diag["locked_n"] = len(locked)
         types = {r["qid"]: r.get("type") for r in rows}
         mapped = {r["qid"]: r.get("mapped") for r in retr}
         signals = {r["qid"]: r.get("signals") or {} for r in retr}
 
         cur, _ = per_question(rows)
         abst = abstain_replay(lambda fn: replay(cur, fn, negative), signals, should_abstain) if retr else None
-        hyps, model = (await cluster_reasons(judged, diag["causes"])) if a.reasons else ([], "")
+        prior: dict[str, dict[str, list[str]]] = {}
+        if a.reasons:   # 직전 진단에서 사람이 확인한 묶음(C1) — 맞아요는 이어 쓰고, 다시 묶기는 피한다
+            async with get_conn() as conn:
+                last = await conn.fetchval("SELECT hypotheses FROM eval_improvement_run ORDER BY created_at DESC, id DESC LIMIT 1")
+            for h in (json.loads(last) if isinstance(last, str) else last) or []:
+                if h.get("status") in ("confirmed", "rejected"):
+                    prior.setdefault(h["cause"], {}).setdefault(h["status"], []).append(h["name"])
+        hyps, model = (await cluster_reasons(judged, diag["causes"], prior)) if a.reasons else ([], "")
         cands = build_candidates(diag, types=types, mapped=mapped, abstain=abst, hypotheses=hyps)
 
-        print(f"판정 #{run['id']} \"{run['label']}\" — {diag['n']}문항 중 틀림 {diag['n_failed']}")
+        print(f"판정 #{run['id']} \"{run['label']}\" — {diag['n']}문항 중 틀림 {diag['n_failed']} · 잠근 문항 {len(locked)}개는 진단에서 뺌")
         for k, name, where in CAUSES:
             n = len(diag["causes"][k])
             if n:
@@ -155,21 +172,24 @@ async def main() -> int:
                     # 같은 기법·원인의 가장 최근 후보가 기각·보류·시도 승인이고 추천이 그대로면 이어받는다(carry_decision) — 매번 같은 걸 다시 묻지 않게.
                     # 최근 행만 본다: 사람이 되돌리거나 승인한 뒤의 옛 기각을 다시 살리지 않게(리뷰 M1)
                     last = await conn.fetchrow(
-                        """SELECT id, status, recommend, review_reason, reviewed_by_user_id, reviewed_at FROM eval_candidate
+                        """SELECT id, status, recommend, review_reason, reviewed_by_user_id, reviewed_at, measured_gate_run_ids FROM eval_candidate
                            WHERE key = $1 AND cause = $2 ORDER BY id DESC LIMIT 1""", c["key"], c["cause"])
                     prev = carry_decision(dict(last) if last else None, c["recommend"])
                     carried += bool(prev)
                     await conn.execute(
                         """INSERT INTO eval_candidate (run_id, key, cause, technique, title, action, measure, n_target, qids, recommend, why,
-                                                       replay, hypotheses, status, review_reason, reviewed_by_user_id, reviewed_at, carried_from_id)
+                                                       replay, hypotheses, status, review_reason, reviewed_by_user_id, reviewed_at, carried_from_id,
+                                                       measured_gate_run_ids)
                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb, $13::jsonb,
-                                   COALESCE($14, 'proposed'), $15, $16, $17, $18)""",
+                                   COALESCE($14, 'proposed'), $15, $16, $17, $18, COALESCE($19, '{}'::bigint[]))""",
                         rid, c["key"], c["cause"], c["technique"], c["title"], c["action"], c["measure"], c["n_target"],
                         json.dumps(c["qids"]), c["recommend"], c["why"],
                         json.dumps(c["replay"], ensure_ascii=False) if c["replay"] is not None else None,
                         json.dumps(c.get("hypotheses", []), ensure_ascii=False),
                         prev["status"] if prev else None, prev["review_reason"] if prev else None,
-                        prev["reviewed_by_user_id"] if prev else None, prev["reviewed_at"] if prev else None, prev["id"] if prev else None)
+                        prev["reviewed_by_user_id"] if prev else None, prev["reviewed_at"] if prev else None, prev["id"] if prev else None,
+                        # 측정 연결도 이어받는다 — 다시 진단하면 단계 막대가 "실험"으로 돌아가던 것(10/26 리뷰 M2)
+                        list(prev["measured_gate_run_ids"] or []) if prev else None)
         print(f"진단 #{rid} 저장 · 후보 {len(cands)}개" + (f"(이전 결정 이어받음 {carried})" if carried else ""))
         return 0
     finally:

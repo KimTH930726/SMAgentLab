@@ -20,7 +20,7 @@ TECHNIQUES: list[dict] = [
      "where": "agents/knowledge_rag/knowledge/retrieval.py:map_glossary_term"},
     {"key": "glossary_synonyms", "name": "v0 용어 동의어", "stage": "검색",
      "does": "정책서 용어 712개에 동의어 811건(Claude 생성 → 임베딩 유사도로 거름)",
-     "values": {}, "evidence": [("2026-10-21", "판정 #3 통과 — 검색 나빠짐 0, 답 +0.9%p [-0.9, +2.7]")],
+     "values": {}, "evidence": [("2026-10-21", "판정 #3 통과 — 검색 나빠짐 0, 답 +0.9%p [-0.9, +2.7]", 3)],
      "where": None},
     {"key": "keyword_rescue", "name": "키워드 구제", "stage": "검색",
      "does": "벡터가 놓친 키워드 상위 정책을 아래 자리 몇 개에 끼운다(맨 앞 순서는 그대로)",
@@ -43,7 +43,8 @@ TECHNIQUES: list[dict] = [
     {"key": "abstain_prefilter", "name": "근거 없음 즉시 거절", "stage": "근거 판정",
      "does": "지식·코드·분류 목록이 없고 정책 점수가 하한 미만이면 LLM을 부르지 않고 \"관련 지식을 찾지 못했습니다\"",
      "values": {"서술 하한": ("POLICY_ABSTAIN_MIN_SCORE", "꺼짐"), "파라미터 하한": ("POLICY_ABSTAIN_MIN_PARAM_RANK", "0.0")},
-     "evidence": [("2026-10-06", "(0.50, 0.05) 골든 88 거짓 거절 0 · 답 없음 35/60 차단 — 배포 후 다시 재서 켜기로(기본 꺼짐)")],
+     "evidence": [("2026-10-06", "(0.50, 0.05) 골든 88 거짓 거절 0 · 답 없음 35/60 차단 — 배포 후 다시 재서 켜기로(기본 꺼짐)"),
+                  ("2026-10-23", "골든 v0 리플레이 — 어느 하한에서도 고치는 문항 0, 0.60부터 맞던 답 깨짐 → 꺼 둠(10/26 결정)")],
      "where": "agents/knowledge_rag/agent.py:should_abstain"},
     {"key": "category_list", "name": "분류 목록 블록", "stage": "답 모양",
      "does": "목록 질문이면 고른 분류의 정책을 \"경로 > 정책명 — 요약\" 줄로 문맥에 넣는다",
@@ -60,7 +61,7 @@ TECHNIQUES: list[dict] = [
      "where": "agents/knowledge_rag/agent.py:list_scoped"},
     {"key": "list_line_format", "name": "목록 줄 형식 + 목록 질문 알아보기", "stage": "답 모양",
      "does": "목록 줄을 \"경로 > 정책명 — 요약\"으로, \"목록·리스트·정리해줘\"도 목록 질문으로",
-     "values": {}, "evidence": [("2026-10-21", "판정 #4 통과 — 목록 30.6→52.8%, 전체 +0.3%p")],
+     "values": {}, "evidence": [("2026-10-21", "판정 #4 통과 — 목록 30.6→52.8%, 전체 +0.3%p", 4)],
      "where": "service/policy/category_list.py:list_line_summary"},
     {"key": "condition_hint", "name": "조건 질문 지시", "stage": "생성",
      "does": "\"3만 원 넘을 때만\"처럼 조건이 붙은 질문에 해당 내용을 찾아 답하라는 지시를 문맥 앞에",
@@ -68,7 +69,9 @@ TECHNIQUES: list[dict] = [
      "where": "agents/knowledge_rag/agent.py:CONDITION_ANSWER_HINT"},
     {"key": "chat_prompt", "name": "채팅 답 지시(프롬프트)", "stage": "생성",
      "does": "답 생성 시스템 프롬프트 — 근거로만 답하기·형식·거절 문구",
-     "values": {}, "evidence": [("2026-10-21", "판정 #2 통과 — 컨테이너명 지시 → 코드 블록, -1.0%p 오차 안")],
+     "values": {}, "evidence": [("2026-10-21", "판정 #2 통과 — 컨테이너명 지시 → 코드 블록, -1.0%p 오차 안", 2),
+                                ("2026-10-23", "답 지시 3줄 후보 — 조건 질문 −8.7%p로 실패(판정 #10)", 10),
+                                ("2026-10-23", "답 지시 2줄 후보 — 통과 +0.9%p 오차 안, 반영 검토 중(판정 #11)", 11)],
      "where": None},
 ]
 
@@ -100,4 +103,5 @@ def as_rows() -> list[dict]:
     """화면용 — 근거는 [{date, note}], 기준값은 운영값으로."""
     return [{**{k: t[k] for k in ("key", "name", "stage", "does", "where")},
              "values": [{"label": k, "value": v, "setting": t["values"][k][0]} for k, v in current_values(t).items()],
-             "evidence": [{"date": d, "note": n} for d, n in t["evidence"]]} for t in TECHNIQUES]
+             "evidence": [{"date": e[0], "note": e[1], "gate_run_id": e[2] if len(e) > 2 else None} for e in t["evidence"]]}
+            for t in TECHNIQUES]
