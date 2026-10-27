@@ -70,6 +70,7 @@ CREATE TABLE policy_item (id INTEGER PRIMARY KEY, namespace_id INTEGER, status T
 CREATE TABLE policy_chunk (id INTEGER PRIMARY KEY, policy_item_id INTEGER, chunk_text TEXT, chunk_idx INTEGER DEFAULT 0);
 CREATE TABLE ops_message (id INTEGER PRIMARY KEY, results TEXT, metadata TEXT);
 CREATE TABLE ops_voc_cluster (id INTEGER PRIMARY KEY, namespace_id INTEGER);
+CREATE TABLE ops_improvement_item (id INTEGER PRIMARY KEY, namespace_id INTEGER, kind TEXT, status TEXT);
 """
 
 
@@ -508,6 +509,20 @@ class TestListDetail:
         assert by["제휴서비스"]["owner_part_id"] == 8 == db.mirror_of("제휴서비스")
         assert by["배달의민족"]["effective_owner_parts"] == by["제휴서비스"]["owner_parts"] and by["배달의민족"]["owner_inherited"]
         assert by["쿠팡이츠"]["effective_owner_parts"] == [{"id": 7, "name": "온라인서비스"}] and not by["쿠팡이츠"]["owner_inherited"]
+
+    @pytest.mark.asyncio
+    async def test_pending_counts_only_open_items_of_each_kind(self, db):
+        """고르는 창 칩(10/27) — 처리 전(pending)만, 원문 확인과 그 밖의 전부(= 정정 요청 탭·배지 기준 kind <> source_check)를 따로,
+        다른 컬렉션·처리 끝난 것은 안 센다."""
+        db.ns(20, "가"); db.ns(30, "나")
+        for ns, kind, st in [(20, "correction", "pending"), (20, "correction", "pending"), (20, "correction", "rejected"),
+                             (20, "source_check", "pending"), (20, "source_check", "approved"), (20, "answer_quality", "pending"),
+                             (30, "source_check", "pending")]:
+            db.db.execute("INSERT INTO ops_improvement_item (namespace_id, kind, status) VALUES (?,?,?)", (ns, kind, st))
+        with _patch_conn(admin_service, db):
+            by = {r["name"]: r for r in await admin_service.list_namespaces_detail()}
+        assert (by["가"]["pending_corrections"], by["가"]["pending_source_checks"]) == (3, 1)   # 정정 2 + 답변 품질 1
+        assert (by["나"]["pending_corrections"], by["나"]["pending_source_checks"]) == (0, 1)
 
 
 # ── 생성·수정 검사(400)·삭제 409 ──────────────────────────────────────────────

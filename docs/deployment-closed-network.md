@@ -471,6 +471,17 @@ v2.16 → v2.17 절차(LLM 자격증명 컬럼 교체·환경변수 변경)는 �
 4. 되돌리기: 이미지만 이전 판으로 바꾸면 된다(스키마 추가는 `ops_data_marker` 테이블 하나 — 옛 판은 안 씀). 조각 임베딩은 머리 붙은 채로
    남지만 옛 판에서도 그대로 검색된다(질문 임베딩 방식은 같음).
 
+### 3-7. v2.177 이상으로 올릴 때 — 옛 평가 기록 표 삭제 (반드시 백업 먼저)
+
+새 백엔드가 처음 뜰 때 #93이 옛 v1 평가 기록 표 `policy_track2_run`(실험실 실행 이력)·`eval_answer_run`(답변 정확도 이력)을 **DROP**한다
+(v2.176에서 화면·API를 없앴고 판정 기록은 `eval_gate_run` 한 곳). 운영에 쌓인 이 두 표가 필요하면 올리기 전에 따로 뜬다:
+
+```bash
+docker exec ops-postgres pg_dump -U ops -d opsdb -t policy_track2_run -t eval_answer_run > backups/v1_eval_tables_$(date +%Y%m%d).sql
+```
+
+되돌리기는 이 덤프 복원만. 새로 설치하는 DB는 처음부터 이 표를 만들지 않는다(init/08 삭제).
+
 ---
 
 ## 4. 운영 작업

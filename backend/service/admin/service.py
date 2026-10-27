@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 
 from core.database import ORG_KIND, ORG_NAME_PREFIX, OWNER_MIRROR_SYNC_SQL, get_conn, org_display_name
-from service.policy.visibility import searchable_sql
+from service.policy.visibility import KIND_SOURCE_CHECK, searchable_sql
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,9 @@ async def list_namespaces_detail() -> list[dict]:
                    u.username AS created_by_username,
                    COALESCE(k.cnt, 0) AS knowledge_count,
                    COALESCE(g.cnt, 0) AS glossary_count,
-                   COALESCE(pi.cnt, 0) AS policy_count
+                   COALESCE(pi.cnt, 0) AS policy_count,
+                   COALESCE(im.corrections, 0) AS pending_corrections,
+                   COALESCE(im.source_checks, 0) AS pending_source_checks
             FROM ops_namespace n
             LEFT JOIN ops_namespace pn ON pn.id = n.parent_id          -- 상위 영역(트리 깊이 1)
             LEFT JOIN ops_user u ON n.created_by_user_id = u.id
@@ -50,8 +52,13 @@ async def list_namespaces_detail() -> list[dict]:
             LEFT JOIN (   -- 지금 쓰이는 정책 — 채팅 검색 대상과 같은 기준(searchable_sql, v0 검토 대기 제외 10/21)
                 SELECT namespace_id, COUNT(*) AS cnt FROM policy_item WHERE {searchable_sql('policy_item')} GROUP BY namespace_id
             ) pi ON n.id = pi.namespace_id
+            LEFT JOIN (   -- 처리 전 정정 요청·원문 확인 — 고르는 창에서 "손볼 게 있는 컬렉션"을 보이게(10/27 사용자)
+                SELECT namespace_id, COUNT(*) FILTER (WHERE kind <> $1) AS corrections,   -- 정정 요청 탭·배지와 같은 기준(원문 확인만 뺀 전부, 리뷰 10/27)
+                       COUNT(*) FILTER (WHERE kind = $1) AS source_checks
+                FROM ops_improvement_item WHERE status = 'pending' GROUP BY namespace_id
+            ) im ON n.id = im.namespace_id
             ORDER BY COALESCE(pn.name, n.name), n.parent_id IS NOT NULL, n.name   -- 상위 바로 아래 하위(하위가 없으면 이름순 그대로)
-            """
+            """, KIND_SOURCE_CHECK,
         )
         owner_rows = await conn.fetch("""SELECT o.namespace_id, p.id, p.name FROM ops_namespace_owner o
                                          JOIN ops_part p ON p.id = o.part_id ORDER BY p.name, p.id""")

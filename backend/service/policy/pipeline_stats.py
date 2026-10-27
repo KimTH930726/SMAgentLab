@@ -1,7 +1,7 @@
 """정책 지식 파이프라인 축적 현황 — 실험실 게이트 작업3(2026-09-15) 모니터링 뷰 재료.
 
 "기준정보 축적 → 지식화 레이어 → 평가체계 축적 → retrieval 평가 현황"을 한 화면에서 보기
-위한 집계. 평가체계/retrieval 쪽은 이미 있는 track2.list_run_history()를 그대로 재사용하고,
+위한 집계. 평가체계/retrieval 쪽 추이는 판정 기록(eval_gate_run — 옛 track2 이력 표는 v2.177에서 삭제)이 맡고,
 이 모듈은 "기준정보 축적"(policy_item/param/chunk + ref_db_column/ref_common_code 건수)만
 새로 집계한다 — 지금까지 이 숫자들을 한 번에 보여주는 API가 없었다.
 

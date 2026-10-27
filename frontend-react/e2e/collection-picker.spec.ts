@@ -44,3 +44,22 @@ test('보는 컬렉션 — 테스트 컬렉션 숨김 · 고르면 칩 반영 ·
   })).toBe(target);
 
 });
+
+test('고르는 창 — 처리 전 정정 요청·원문 확인 건수 칩 = DB(처리 전만, 0이면 칩 없음)', async ({ page }) => {
+  const rows = psql(`SELECT n.name, COUNT(*) FILTER (WHERE i.kind <> 'source_check'), COUNT(*) FILTER (WHERE i.kind = 'source_check')
+                     FROM ops_namespace n JOIN ops_improvement_item i ON i.namespace_id = n.id AND i.status = 'pending'
+                     WHERE n.kind = 'domain' GROUP BY n.name`).split('\n').filter(Boolean).map((l) => l.split('|'));
+  const empty = psql(`SELECT n.name FROM ops_namespace n WHERE n.kind = 'domain' AND NOT EXISTS
+                      (SELECT 1 FROM ops_improvement_item i WHERE i.namespace_id = n.id AND i.status = 'pending'
+                       ) ORDER BY n.id LIMIT 1`);
+  await loginAdmin(page);
+  await domainSelect(page).click();
+  const title = page.getByRole('heading', { name: '어떤 컬렉션을 볼까요?' });
+  const dialog = page.locator('div').filter({ has: title }).filter({ has: page.getByRole('button', { name: /지식 \d+|비어 있음/ }) }).last();
+  for (const [name, corr, src] of rows) {
+    const card = dialog.getByRole('button', { name: new RegExp(`^${esc(name)}`) }).first();
+    if (Number(corr)) await expect(card).toContainText(`정정 대기 ${corr}`); else await expect(card).not.toContainText('정정 대기');
+    if (Number(src)) await expect(card).toContainText(`원문 확인 ${src}`); else await expect(card).not.toContainText('원문 확인');
+  }
+  if (empty) await expect(dialog.getByRole('button', { name: new RegExp(`^${esc(empty)}`) }).first().getByTestId('pending-chips')).toHaveCount(0);
+});

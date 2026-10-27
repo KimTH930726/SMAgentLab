@@ -13,7 +13,19 @@ import { isOrgCollection } from '../../utils/collections';
 export type Tier = 'mine' | 'team' | 'other';
 export const TIER_ORDER: Record<Tier, number> = { mine: 0, team: 1, other: 2 };
 
-export function TierCard({ tier, title, sub, empty, current, onClick, action }: {
+/** 처리 전 정정 요청·원문 확인 건수 칩(10/27 사용자 "정정 대기나 원문 확인 있으면 표시") — 0이면 안 그린다 */
+export function PendingChips({ corrections = 0, sourceChecks = 0 }: { corrections?: number; sourceChecks?: number }) {
+  if (!corrections && !sourceChecks) return null;
+  const chip = 'rounded px-1.5 py-0.5 text-[11px] font-normal bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300';
+  return (
+    <span className="ml-1.5 inline-flex gap-1 align-middle" data-testid="pending-chips">
+      {corrections > 0 && <span className={chip} title="처리 전 정정 요청 — 관리자 › 품질 › 정정 요청">정정 대기 {corrections}</span>}
+      {sourceChecks > 0 && <span className={chip} title="처리 전 정책서 원문 확인 — 정책 › 원문 확인">원문 확인 {sourceChecks}</span>}
+    </span>
+  );
+}
+
+export function TierCard({ tier, title, sub, empty, current, onClick, action, badges }: {
   tier: Tier;
   title: string;
   sub: ReactNode;
@@ -21,6 +33,7 @@ export function TierCard({ tier, title, sub, empty, current, onClick, action }: 
   current?: boolean;
   onClick?: () => void;
   action?: ReactNode;      // 카드 아래 버튼(관리 화면 [지식 등록 →]) — 있으면 카드 자체는 버튼이 아니다(버튼 안 버튼 금지)
+  badges?: ReactNode;      // 제목 옆 칩(처리 전 건수 등)
 }) {
   const cls = clsx(
     'text-left min-h-[56px] px-3 py-2 rounded-lg border transition-colors',
@@ -32,7 +45,7 @@ export function TierCard({ tier, title, sub, empty, current, onClick, action }: 
   const body = (
     <>
       <span className={clsx('block text-sm', tier === 'mine' ? 'font-semibold' : 'font-medium', empty ? 'text-slate-500' : 'text-slate-100')}>
-        {title}{current && <span className="ml-1 text-xs text-indigo-600 dark:text-indigo-300">· 지금</span>}
+        {title}{current && <span className="ml-1 text-xs text-indigo-600 dark:text-indigo-300">· 지금</span>}{badges}
       </span>
       <span className="block text-xs text-slate-500">{sub}</span>
     </>

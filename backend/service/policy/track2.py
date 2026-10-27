@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
@@ -374,51 +374,3 @@ async def run_comparison(
         b_top1_param_accuracy=_rate(all_rows, lambda r: r.b_top1_param),
         b_top1_narrative_accuracy=_rate(all_rows, lambda r: r.b_top1_narrative),
     )
-
-
-async def save_run(result: Track2Result, triggered_by: Optional[int] = None) -> int:
-    """Track2 실행 결과를 policy_track2_run에 스냅샷으로 저장 — 실험실 게이트 작업3
-    (모니터링 뷰)의 재료. by_type은 요약 없이 JSONB 통째로 넣어 나중에 지표가 늘어나도
-    (MRR·nDCG 등) 컬럼을 매번 안 늘려도 되게 한다."""
-    async with get_conn() as conn:
-        run_id = await conn.fetchval(
-            """
-            INSERT INTO policy_track2_run
-                (top_k, total_n, a_hit_rate, b_hit_rate, a_precision, b_precision,
-                 b_hit_rdb_only, b_hit_vector_only, b_hit_both,
-                 a_top1_accuracy, b_top1_param_accuracy, b_top1_narrative_accuracy,
-                 by_type, golden_set_file, duration_seconds, triggered_by)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-            RETURNING id
-            """,
-            result.top_k, result.total_n, result.a_hit_rate, result.b_hit_rate,
-            result.a_precision, result.b_precision,
-            result.b_hit_rdb_only, result.b_hit_vector_only, result.b_hit_both,
-            result.a_top1_accuracy, result.b_top1_param_accuracy, result.b_top1_narrative_accuracy,
-            json.dumps([asdict(t) for t in result.by_type], ensure_ascii=False),
-            result.golden_set_file, result.duration_seconds, triggered_by,
-        )
-    return run_id
-
-
-async def list_run_history(limit: int = 50) -> list[dict]:
-    """최근 Track2 실행 이력 — 모니터링 뷰의 추이 차트용. run_at 내림차순(최신 먼저)."""
-    async with get_conn() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, run_at, top_k, total_n, a_hit_rate, b_hit_rate, a_precision, b_precision,
-                   b_hit_rdb_only, b_hit_vector_only, b_hit_both,
-                   a_top1_accuracy, b_top1_param_accuracy, b_top1_narrative_accuracy,
-                   by_type, golden_set_file, duration_seconds, triggered_by
-            FROM policy_track2_run
-            ORDER BY run_at DESC
-            LIMIT $1
-            """,
-            limit,
-        )
-    results = []
-    for r in rows:
-        d = dict(r)
-        d["by_type"] = json.loads(d["by_type"]) if isinstance(d["by_type"], str) else d["by_type"]
-        results.append(d)
-    return results

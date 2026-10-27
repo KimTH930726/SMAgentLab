@@ -65,6 +65,8 @@ export interface NamespaceDetail extends Namespace {
   knowledge_count: number;
   glossary_count: number;
   policy_count?: number;     // 지금 쓰이는 정책
+  pending_corrections?: number;     // 처리 전 정정 요청(10/27 — 고르는 창 표시)
+  pending_source_checks?: number;   // 처리 전 정책서 원문 확인
   created_by_username?: string | null;
 }
 

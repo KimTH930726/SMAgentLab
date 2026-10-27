@@ -27,6 +27,8 @@ REF_MARGIN = 0.05          # 표 ≥ 서술 − 0.05
 CLARIFY_MARGIN = 0.0       # 되묻기는 표 ≥ 서술
 OVERVIEW_MIN_SIM = 0.5
 OVERVIEW_MARGIN = 0.05     # 개요 ≥ 서술 + 0.05
+# 표에 질문 조건에 맞는 줄이 없을 때 표의 다른 줄로 답을 지어내지 않게(10/26 측정: 답 없는 질문 2개에 표가 붙어 답해 버림)
+TABLE_HINT = "질문의 조건에 맞는 줄이 이 표에 없으면 표에서 찾을 수 없다고 답할 것"
 MAX_TABLE_CHARS = 8000     # 문맥에 넣을 표 글자 상한 — 넘으면 질문에 나온 조건값으로 행을 거르고, 그래도 넘으면 앞부분만(잘랐다고 표시)
 CLARIFY_MAX_OPTIONS = 6    # 선택지가 이보다 많은 열은 버튼으로 안 묻는다(문맥의 표로 LLM이 답하게)
 REF_SCOPE = "ref:"         # 되묻기에서 고른 값 — 분류 목록 범위(clarify_scope)와 섞이지 않게 앞에 붙인다
@@ -114,6 +116,7 @@ def table_block(title: str, columns: list[dict], rows: list[dict], question: str
         body = body[:max(0, len(out) - 2)]
         text = "\n".join(out)
     head = f"[참고표: {title}]" + (f" (결과를 정하는 조건: {', '.join(dec)})" if dec else "")
+    head += f" — {TABLE_HINT}"
     if truncated:
         head += f" — 표가 커서 앞 {len(body)}행만. 조건을 더 알려 주면 정확한 행을 볼 수 있음"
     return f"{head}\n{text}", dec, truncated, filtered, cols
@@ -135,7 +138,7 @@ def clarify_for_table(hit_title: str, dec: list[str], cols: list[str], rows: lis
 
 
 async def search_refs(ns_ids: Sequence[int], query_vec: list[float], question: str, *, top_narrative: float,
-                      allow_clarify: bool = True) -> RefResult:
+                      allow_clarify: bool = True, overviews: bool = False) -> RefResult:
     """참고표 1개·개요 1개까지(붙이는 규칙은 모듈 설명). 실패는 호출부가 로그로 남기고 없이 진행."""
     out = RefResult()
     if not ns_ids:
@@ -149,7 +152,7 @@ async def search_refs(ns_ids: Sequence[int], query_vec: list[float], question: s
         o = await conn.fetchrow(
             """SELECT id, title, body, 1 - (embedding <=> $1::vector) AS s FROM policy_doc_overview
                WHERE status = 'active' AND namespace_id = ANY($2::int[]) AND embedding IS NOT NULL
-               ORDER BY embedding <=> $1::vector LIMIT 1""", vec, list(ns_ids))
+               ORDER BY embedding <=> $1::vector LIMIT 1""", vec, list(ns_ids)) if overviews else None
         rows = None
         if t and float(t["s"]) >= REF_MIN_SIM and float(t["s"]) >= top_narrative - REF_MARGIN:
             rows = [r["cells"] if isinstance(r["cells"], dict) else json.loads(r["cells"])

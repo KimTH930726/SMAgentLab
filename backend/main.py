@@ -920,39 +920,6 @@ async def _migrate_ref_data_tables(conn) -> None:
     """)
 
 
-async def _migrate_policy_track2_history(conn) -> None:
-    """Track2 실행 이력 저장 (init/08-policy-track2-history.sql, v2.74).
-
-    지금까지 Track2는 매번 라이브로만 실행되고 결과가 어디에도 안 남았다 — "retrieval
-    평가가 시간에 따라 어떻게 변해왔는지" 추이를 볼 수 없었다(실험실 게이트 작업3,
-    모니터링 뷰의 재료). by_type은 요약 없이 JSONB로 스냅샷 통째 저장해 나중에 지표가
-    늘어나도(MRR·nDCG 등) 컬럼을 매번 안 늘려도 되게 한다.
-    """
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS policy_track2_run (
-            id                         SERIAL PRIMARY KEY,
-            run_at                     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            top_k                      INT NOT NULL,
-            total_n                    INT NOT NULL,
-            a_hit_rate                 DOUBLE PRECISION NOT NULL,
-            b_hit_rate                 DOUBLE PRECISION NOT NULL,
-            a_precision                DOUBLE PRECISION NOT NULL,
-            b_precision                DOUBLE PRECISION NOT NULL,
-            b_hit_rdb_only             DOUBLE PRECISION NOT NULL,
-            b_hit_vector_only          DOUBLE PRECISION NOT NULL,
-            b_hit_both                 DOUBLE PRECISION NOT NULL,
-            a_top1_accuracy            DOUBLE PRECISION NOT NULL,
-            b_top1_param_accuracy      DOUBLE PRECISION NOT NULL,
-            b_top1_narrative_accuracy  DOUBLE PRECISION NOT NULL,
-            by_type                    JSONB NOT NULL,
-            golden_set_file            VARCHAR(200) NOT NULL,
-            duration_seconds           DOUBLE PRECISION NOT NULL,
-            triggered_by               INT REFERENCES ops_user(id) ON DELETE SET NULL
-        )
-    """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_policy_track2_run_at ON policy_track2_run (run_at DESC)")
-
-
 async def _migrate_confluence_sync(conn) -> None:
     """Confluence 페이지 버전 추적 (v2.81) — 재임포트 시 안 바뀐 페이지 스킵.
 
@@ -1500,6 +1467,14 @@ async def _migrate_eval_gate_run(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_gate_run_at ON eval_gate_run (run_at DESC)")
 
 
+async def _migrate_drop_v1_eval_tables(conn) -> None:
+    """#93(10/27, 사용자 D 승인 "옛 표는 삭제 진행") 옛 v1 평가 이력 표 두 개 삭제 — 실험실(Track2) 실행 이력 policy_track2_run(8행)·
+    답변 정확도 이력 eval_answer_run(5행). 화면·API·쓰기 경로는 v2.176에서 이미 뺐고, 지우기 전 JSON 백업(eval_out/backup_v1).
+    판정·기록은 eval_gate_run 한 곳. 예전엔 기동 때 CREATE TABLE IF NOT EXISTS로 다시 생겼으니 그 마이그레이션도 함께 뺐다. 멱등."""
+    await conn.execute("DROP TABLE IF EXISTS policy_track2_run")
+    await conn.execute("DROP TABLE IF EXISTS eval_answer_run")
+
+
 async def _migrate_source_check_link(conn) -> None:
     """#92(10/26, C3) 원문 확인 카드 ↔ 그 카드에서 올린 정정 제안 — 제안이 승인되면 카드 자동 해결, 반려되면 카드는 처리 전 그대로.
     같은 원장 표 안의 자기 참조(원문 확인도 kind='source_check'로 같은 표). 카드가 지워지면 연결만 비운다. 멱등."""
@@ -1917,25 +1892,6 @@ async def _migrate_ingestion_quality(conn) -> None:
     await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS quality JSONB")
 
 
-async def _migrate_answer_eval_run(conn) -> None:
-    """최종 답변 정확도 실행 이력 (2026-10-07, #70) — scripts/eval_answers.py report --save가 집계만 저장, 평가 게이트 "답변 정확도" 탭이
-    읽는다. 질문·답 원문은 저장하지 않는다(라벨별·유형별 건수만). 멱등."""
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS eval_answer_run (
-            id SERIAL PRIMARY KEY,
-            run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            label VARCHAR(100) NOT NULL,
-            variant VARCHAR(30) NOT NULL,
-            total_n INTEGER NOT NULL,
-            counts JSONB NOT NULL,
-            by_type JSONB NOT NULL,
-            retrieval_ok_but_wrong INTEGER NOT NULL DEFAULT 0,
-            retrieval_ok INTEGER NOT NULL DEFAULT 0,
-            judge_model VARCHAR(100),
-            notes TEXT
-        )""")
-
-
 async def _migrate_glossary_synonym(conn) -> None:
     """용어집 동의어 (2026-10-06, #69, v2.128) — 질문에 나온 용어를 찾을 때 쓰는 다른 표현.
 
@@ -2147,7 +2103,6 @@ async def _run_migrations() -> None:
         await _migrate_email_voc_tables(conn)
         await _migrate_policy_tables(conn)
         await _migrate_ref_data_tables(conn)
-        await _migrate_policy_track2_history(conn)
         await _migrate_confluence_sync(conn)
         await _migrate_drop_unused_knowledge_fields(conn)
         await _migrate_remove_fewshot(conn)
@@ -2166,7 +2121,7 @@ async def _run_migrations() -> None:
         await _migrate_rename_opslens(conn)
         await _migrate_query_gateway_refusal(conn)
         await _migrate_glossary_synonym(conn)
-        await _migrate_answer_eval_run(conn)
+        await _migrate_drop_v1_eval_tables(conn)      # #93 (옛 #66·#70 표 — v2.177 삭제)
         await _migrate_ingestion_quality(conn)
         await _migrate_rename_unsorted_category(conn)
         await _migrate_source_document(conn)

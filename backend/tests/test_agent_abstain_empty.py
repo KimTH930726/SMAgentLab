@@ -491,3 +491,20 @@ async def test_suggested_follow_up_closes_ledger_and_marks_answered_namespace(mo
     assert not [e for e in events if e["type"] == "suggest"]
     assert upd.await_args.kwargs["metadata"]["answered_namespace"] == "제휴서비스"   # 신고가 답한 컬렉션으로(리뷰 M1)
     assert any(e.get("answered_namespace") == "제휴서비스" for e in events if e["type"] == "meta")
+
+
+@pytest.mark.asyncio
+async def test_slow_suggestion_is_skipped_not_delaying_answer(monkeypatch):
+    """부하 때 제안이 SUGGEST_TIMEOUT을 넘으면 제안 없이 답을 끝낸다(10/27 부하 측정)."""
+    import asyncio as _a
+    upd, *_ = _wire(monkeypatch, abstain=False, tokens=["정상 답변"])
+    fake = _fake_suggest(monkeypatch, None)
+
+    async def slow(*a, **k):
+        await _a.sleep(1)
+        return {"namespace": "x", "score": 0.9, "here": 0.1, "here_adopted": 0}
+    fake.find = slow
+    monkeypatch.setattr(agent, "SUGGEST_TIMEOUT", 0.05)
+    events = await _run()
+    assert not [e for e in events if e["type"] == "suggest"]
+    assert events[-1]["type"] == "done"

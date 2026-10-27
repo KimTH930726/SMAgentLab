@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle, Sparkles, RefreshCw, Pencil } from 'lucide-react';
+import { CheckCircle, ChevronLeft, ChevronRight, Sparkles, RefreshCw, Pencil } from 'lucide-react';
 import {
   correctionSourceLabel, listCorrections, approveCorrection, rejectCorrection, retargetCorrection, analyzeCorrection, redraftCorrection,
   updateCorrectionProposed, type CorrectionItem,
@@ -502,6 +502,26 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
     staleTime: 10_000,
   });
   const items = useMemo(() => (source === 'all' ? all : all.filter((i) => sourceGroup(i) === source)), [all, source]);
+  // 한 장씩 보기(기본, 사용자 10/27 "카드가 위아래로 붙어 가시성이 떨어짐") / 목록(한꺼번에 승인할 때)
+  const [view, setView] = useState<'one' | 'list'>('one');
+  const [idx, setIdx] = useState(0);
+  // 그리는 자리는 렌더 중에 범위 안으로 — 마지막 건을 처리하거나 거르기로 목록이 줄면 같은 자리 = 다음 카드(효과로 줄이면 한 번은 없는 칸을 그려 깨졌다, 리뷰 10/27)
+  const cur = Math.min(idx, Math.max(0, items.length - 1));
+  // 바로가기(focusId)는 그 카드로 한 번만 — 처리 뒤 목록을 다시 불러와도 바로가기 카드로 되돌아가지 않게(리뷰 10/27)
+  const focusDone = useRef<number | null>(null);
+  useEffect(() => {
+    if (focusId == null || focusDone.current === focusId) return;
+    const at = items.findIndex((i) => i.id === focusId);
+    if (at >= 0) { setIdx(at); focusDone.current = focusId; }
+  }, [focusId, items]);
+  // 상태·출처·컬렉션이 실제로 바뀔 때만 처음으로(첫 그리기에 돌면 바로가기 자리를 덮었다)
+  const filterKey = `${status}|${source}|${namespace}`;
+  const lastFilter = useRef(filterKey);
+  useEffect(() => {
+    if (lastFilter.current === filterKey) return;
+    lastFilter.current = filterKey;
+    setIdx(0);
+  }, [filterKey]);
   // 무엇을 다시 불러올지는 그 동작이 바꾼 것만(10/21 리뷰 5f — 예전엔 다시 쓰기·직접 수정에도 지식·정책 목록을 전부 다시 불렀다)
   const onDone = (effect?: DoneEffect) => {
     qc.invalidateQueries({ queryKey: ['corrections'] });
@@ -527,7 +547,7 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
     if (focusId == null || isLoading || scrolledFor.current === focusId) return;
     const el = document.getElementById(`correction-${focusId}`);
     if (el) { el.scrollIntoView({ block: 'center' }); scrolledFor.current = focusId; }
-  }, [focusId, isLoading, items]);
+  }, [focusId, isLoading, items, cur, view]);   // 한 건씩 보기는 그 카드로 넘긴 뒤에야 요소가 생긴다(재리뷰 10/27)
 
   const approvableItems = items.filter(approvable);
   const allChecked = approvableItems.length > 0 && approvableItems.every((i) => selected.has(i.id));
@@ -586,7 +606,16 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
             {SOURCE_FILTERS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
           </select>
         </label>
-        {status === 'pending' && approvableItems.length > 0 && (
+        <div className="flex rounded-lg border border-slate-700 overflow-hidden text-xs" role="group" aria-label="보기">
+          {(['one', 'list'] as const).map((v) => (
+            <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
+              className={view === v ? 'px-3 py-1 bg-slate-700 text-slate-100' : 'px-3 py-1 text-slate-400 hover:text-slate-200'}
+              title={v === 'one' ? '한 건씩 크게 — 처리하면 다음 건으로' : '전부 나열 — 골라서 한꺼번에 승인'}>
+              {v === 'one' ? '한 건씩' : '목록'}
+            </button>
+          ))}
+        </div>
+        {view === 'list' && status === 'pending' && approvableItems.length > 0 && (
           <div className="flex items-center gap-2 ml-auto">
             <label className="flex items-center gap-1.5 text-xs text-slate-400">
               <input type="checkbox" checked={allChecked} className="accent-indigo-600"
@@ -622,6 +651,21 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
         <div className="text-center py-12 text-slate-500 text-sm">
           <CheckCircle className="w-8 h-8 mx-auto mb-2 text-slate-600" />
           {status === 'pending' ? '검토할 정정 요청이 없습니다.' : '해당 상태의 요청이 없습니다.'}
+        </div>
+      ) : view === 'one' ? (
+        <div className="space-y-3" data-testid="correction-pager">
+          <CorrectionCard key={items[cur].id} item={items[cur]} onDone={onDone} focused={items[cur].id === focusId}
+            selected={selected.has(items[cur].id)}
+            onSelect={(on) => setSelected((s) => { const n = new Set(s); if (on) n.add(items[cur].id); else n.delete(items[cur].id); return n; })} />
+          <div className="flex items-center justify-center gap-4 text-sm text-slate-300">
+            <Button variant="secondary" size="sm" disabled={cur === 0} onClick={() => setIdx(cur - 1)} aria-label="이전 건">
+              <ChevronLeft className="w-4 h-4" /> 이전
+            </Button>
+            <span className="tabular-nums" data-testid="correction-position">{cur + 1} / {items.length}</span>
+            <Button variant="secondary" size="sm" disabled={cur >= items.length - 1} onClick={() => setIdx(cur + 1)} aria-label="다음 건">
+              다음 <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
       ) : (
         items.map((item) => (

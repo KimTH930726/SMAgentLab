@@ -150,8 +150,9 @@ function ReplayTable({ c }: { c: Candidate }) {
   );
 }
 
-export function CandidateCard({ c, improvementId, isAdmin, onPick }: {
+export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = false }: {
   c: Candidate; improvementId: number; isAdmin: boolean; onPick?: (qids: string[], i: number) => void;
+  hideQids?: boolean;   // 리포트는 옆에 겨냥 문항을 페이지로 따로 보여 준다(10/27)
 }) {
   const qc = useQueryClient();
   const [modal, setModal] = useState<null | 'rejected' | 'held' | 'adopt'>(null);
@@ -204,7 +205,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick }: {
         <p><span className="text-slate-500">바꿀 것 </span>{c.action}</p>
         <p><span className="text-slate-500">재는 법 </span>{m.label}</p>
       </div>
-      <QidList title="고치려는 문항" qids={c.qids} hint="이 후보가 겨냥한 틀린 문항 — 눌러서 질문·답·이유 보기" onPick={onPick} />
+      {!hideQids && <QidList title="고치려는 문항" qids={c.qids} hint="이 후보가 겨냥한 틀린 문항 — 눌러서 질문·답·이유 보기" onPick={onPick} />}
       <Hypotheses c={c} improvementId={improvementId} isAdmin={isAdmin} onPick={onPick} />
       <ReplayTable c={c} />
       {c.status === 'approved' && (

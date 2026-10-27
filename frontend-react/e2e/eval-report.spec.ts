@@ -14,18 +14,23 @@ const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 
 type Report = {
   gate_run_id: number; improvement_id: number; score: { locked: number | null; total: number | null };
-  failed: { qid: string; storage: string[] }[]; techniques: { id: number; status: string; n_failed: number }[];
+  failed: { qid: string; storage: string[]; techniques: { id: number }[] }[]; techniques: { id: number; status: string; n_failed: number }[];
   unmeasured: { n: number }[];
 };
 
+// 앞 시험 뒤 서버가 닫은 keep-alive 연결을 다시 집어 "other side closed"로 한 번씩 실패했다(10/27 두 번) — 연결 오류만 한 번 다시
+async function get(url: string, init: RequestInit) {
+  try { return await fetch(url, init); } catch (e) { if (!(e instanceof TypeError)) throw e; return fetch(url, init); }
+}
+
 async function report(): Promise<Report | null> {
   const t = await adminToken();
-  return (await fetch(`${API}/api/eval/report`, { headers: { Authorization: `Bearer ${t}` } })).json();
+  return (await get(`${API}/api/eval/report`, { headers: { Authorization: `Bearer ${t}` } })).json();
 }
 
 async function review(cid: string, status: string) {
   const t = await adminToken();
-  const res = await fetch(`${API}/api/eval/candidates/${cid}/review`, {
+  const res = await get(`${API}/api/eval/candidates/${cid}/review`, {
     method: 'POST', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
   });
   expect(res.ok, '후보 상태 바꾸기 실패').toBe(true);
@@ -39,19 +44,38 @@ test('리포트 — 지금 점수·틀린 문항 수 = 서버, 저장 상태 거
   await goAdmin(page, '품질', '평가 게이트');
   await expect(page.getByTestId('gate-report')).toBeVisible();   // 첫 탭 = 리포트
   if (d!.score.locked != null) await expect(page.getByTestId('report-locked')).toContainText(pct(d!.score.locked));
+  // 10/27 좌(고칠 방법 묶음)·우(문항 8개씩 페이지) — 목록 제목의 수 = 서버, 한 페이지 줄 수 = min(8, 수)
   const rows = page.locator('[data-testid^="report-row-"]');
-  await expect(rows).toHaveCount(d!.failed.length);
-  await expect(page.getByText(`틀린 문항 ${d!.failed.length}`, { exact: true })).toBeVisible();
+  const title = page.getByTestId('report-list-title');
+  await expect(page.getByTestId('report-failed-n')).toContainText(`틀린 문항 ${d!.failed.length}`);
+  await expect(title).toHaveText(`틀린 문항 전체 ${d!.failed.length}`);
+  await expect(rows).toHaveCount(Math.min(8, d!.failed.length));
+  if (d!.failed.length > 8) {
+    await expect(page.getByTestId('report-page')).toHaveText(`1 / ${Math.ceil(d!.failed.length / 8)}`);
+    await page.getByTestId('report-pager').getByRole('button', { name: '다음 ›' }).click();
+    await expect(page.getByTestId('report-page')).toHaveText(`2 / ${Math.ceil(d!.failed.length / 8)}`);
+    await expect(rows).toHaveCount(Math.min(8, d!.failed.length - 8));
+  }
 
-  // 저장 상태로 거르면 그 꼬리표가 붙은 문항만 — 줄 수 = 서버 꼬리표 수
+  // 저장 상태로 거르면 그 꼬리표가 붙은 문항만 — 수 = 서버 꼬리표 수
   const tag = d!.failed.flatMap((r) => r.storage)[0];
   if (tag) {
     const n = d!.failed.filter((r) => r.storage.includes(tag)).length;
     await page.getByLabel('저장 상태로 거르기').selectOption(tag);
-    await expect(rows).toHaveCount(n);
+    await expect(title).toHaveText(`틀린 문항 전체 ${n} / ${d!.failed.length}`);
     await page.getByLabel('저장 상태로 거르기').selectOption('');
-    await expect(rows).toHaveCount(d!.failed.length);
   }
+
+  // 고칠 방법을 고르면 그 방법이 겨냥한 문항만 — 수 = 서버 n_failed, 모든 방법 + "고칠 방법 없음" 수의 합 ≥ 전체(한 문항이 여러 방법에 걸릴 수 있음)
+  const t0 = d!.techniques.find((x) => x.n_failed > 0);
+  if (t0) {
+    await page.getByTestId(`report-tech-${t0.id}`).click();
+    await expect(title).toHaveText(`이 방법으로 고칠 문항 ${t0.n_failed}`);
+  }
+  const none = d!.failed.filter((r) => r.techniques.length === 0).length;
+  await page.getByTestId('report-nav-none').click();
+  await expect(title).toHaveText(`고칠 방법이 없는 문항 ${none}`);
+  await page.getByTestId('report-nav-all').click();
 
   // 문항을 누르면 질문·답·이유 + ⑥ 저장 구조(결과 파일이 서버에 있을 때)
   if (d!.failed.length) {
@@ -59,12 +83,16 @@ test('리포트 — 지금 점수·틀린 문항 수 = 서버, 저장 상태 거
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText(`문항 ${d!.failed[0].qid}`)).toBeVisible();
     await expect(dialog.getByTestId('question-detail')).toBeVisible({ timeout: 15_000 });
-    await expect(dialog.getByText(/^저장 구조/)).toBeVisible();
+    await expect(dialog.getByText(/저장 구조 —/)).toBeVisible();   // 10/27 ⑤ 번호가 앞에 붙음
     await page.keyboard.press('Escape');
   }
 
   const unmeasured = d!.unmeasured.reduce((a, u) => a + u.n, 0);
-  if (unmeasured) await expect(page.getByTestId('report-unmeasured')).toContainText(`측정도 안 되는 문항 ${unmeasured}`);
+  if (unmeasured) {
+    await page.getByTestId('report-unmeasured-open').click();
+    await expect(page.getByRole('dialog')).toContainText(`측정도 안 되는 문항 ${unmeasured}`);
+    await page.keyboard.press('Escape');
+  }
   await expect(page.locator('[data-testid^="report-tech-"]')).toHaveCount(d!.techniques.length);
 });
 
@@ -77,8 +105,8 @@ test('리포트 고칠 방법 — 나중에·결정 취소가 DB 상태를 바�
   const cid = String(target!.id);
   await loginAdmin(page);
   await goAdmin(page, '품질', '평가 게이트');
-  const row = page.getByTestId(`report-tech-${cid}`);
-  await row.getByRole('button').first().click();   // 펼치기
+  await page.getByTestId(`report-tech-${cid}`).click();   // 고르면 오른쪽에 결정 카드
+  const row = page.getByTestId('report-panel');
   try {
     await expect(row.getByLabel('진행 단계')).toContainText('제안');
     await expect(row.getByRole('button', { name: '실험해 보기' })).toBeVisible();
@@ -88,7 +116,7 @@ test('리포트 고칠 방법 — 나중에·결정 취소가 DB 상태를 바�
     await row.getByRole('button', { name: '나중에…' }).click();
     await page.getByRole('button', { name: '나중에', exact: true }).click();
     await expect.poll(() => psql(`SELECT status FROM eval_candidate WHERE id = ${cid}`)).toBe('held');
-    await expect(row).toContainText('나중에');
+    await expect(page.getByTestId(`report-tech-${cid}`)).toContainText('나중에');   // 왼쪽 목록의 상태 글자
     await row.getByRole('button', { name: '결정 취소' }).click();
     await expect.poll(() => psql(`SELECT status FROM eval_candidate WHERE id = ${cid}`)).toBe('proposed');
     expect(psql(`SELECT reviewed_at IS NULL FROM eval_candidate WHERE id = ${cid}`)).toBe('t');
@@ -122,8 +150,8 @@ test('[운영에 반영했어요] — 통과한 측정을 고르면 후보 = 운
     psql(`UPDATE eval_candidate SET measured_gate_run_ids = array_append(coalesce(measured_gate_run_ids, '{}'), ${gid}) WHERE id = ${cid}`);
     await loginAdmin(page);
     await goAdmin(page, '품질', '평가 게이트');
-    const row = page.getByTestId(`report-tech-${cid}`);
-    await row.getByRole('button').first().click();
+    await page.getByTestId(`report-tech-${cid}`).click();
+    const row = page.getByTestId('report-panel');
     await row.getByRole('button', { name: '운영에 반영했어요…' }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel(new RegExp(`#${gid} E2E 반영 확인용`)).check();

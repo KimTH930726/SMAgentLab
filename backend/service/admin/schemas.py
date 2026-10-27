@@ -54,6 +54,8 @@ class NamespaceInfo(BaseModel):
     knowledge_count: int
     glossary_count: int
     policy_count: int = 0      # 지금 쓰이는 정책(폐기·반려 제외)
+    pending_corrections: int = 0     # 처리 전 정정 요청(10/27 — 고르는 창 표시)
+    pending_source_checks: int = 0   # 처리 전 정책서 원문 확인
     created_by_user_id: Optional[int] = None
     created_by_username: Optional[str] = None
     created_at: str

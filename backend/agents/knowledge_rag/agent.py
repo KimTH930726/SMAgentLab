@@ -294,7 +294,7 @@ async def build_chat_context(
         try:
             refs = await ref_search.search_refs(
                 policy_ns_ids, query_vec, lq, top_narrative=max((n.score for n in policy_result.narratives), default=0.0),
-                allow_clarify=not clarify_scope)
+                allow_clarify=not clarify_scope, overviews=settings.policy_ref_overview)
             block = ref_search.context_block(refs)
             if block:
                 llm_context = f"{llm_context}\n\n{block}" if llm_context.strip() else block
@@ -331,10 +331,17 @@ async def build_chat_context(
     )
 
 
+SUGGEST_TIMEOUT = 2.0   # 초 — 다른 컬렉션 제안 계산 상한(넘으면 제안 생략)
+
+
 async def _suggestion(namespace: str, question: str, query_vec: list[float], results: list, **kw) -> Optional[dict]:
-    """다른 컬렉션에서 찾아보기 제안(C2, 기본 꺼짐 — collection_suggest.enabled). 실패해도 답엔 영향 없음(로그만)."""
+    """다른 컬렉션에서 찾아보기 제안(C2, 기본 꺼짐 — collection_suggest.enabled). 실패해도 답엔 영향 없음(로그만).
+    SUGGEST_TIMEOUT 안에 못 끝나면 제안 없이 — 답 완료를 늦추지 않는다(10/27 부하 측정: 동시 60건이면 제안이 최대 5초)."""
     try:
-        return await collection_suggest.find(namespace, question, query_vec, results, **kw)
+        return await asyncio.wait_for(collection_suggest.find(namespace, question, query_vec, results, **kw), SUGGEST_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.info("컬렉션 제안 %.1f초 초과 — 이번 답엔 제안 없음(부하)", SUGGEST_TIMEOUT)
+        return None
     except Exception:   # noqa: BLE001
         logger.warning("컬렉션 제안 계산 실패(답엔 영향 없음)", exc_info=True)
         return None

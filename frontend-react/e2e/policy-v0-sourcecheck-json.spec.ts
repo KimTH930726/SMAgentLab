@@ -45,6 +45,9 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(() => {
+  // 카드 결론이 남긴 AI 판단 원장 줄(원문 확인 오탐률 — v2.175)도 이 테스트 것만 지운다(실데이터 집계에 섞이지 않게)
+  psql(`DELETE FROM ops_ai_decision WHERE kind = 'source_check' AND target_ids && ARRAY(SELECT id::bigint FROM ops_improvement_item `
+    + `WHERE namespace_id = (SELECT id FROM ops_namespace WHERE name = '${NS}'))`);
   psql(`DELETE FROM ops_improvement_item WHERE namespace_id = (SELECT id FROM ops_namespace WHERE name = '${NS}')`);
   dropPolicyPart(NS);
 });
@@ -183,5 +186,4 @@ test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이
   expect((await request.post(`${API}/api/corrections/${r2}/approve`, { headers: H, data: { proposed } })).ok()).toBeTruthy();
   expect(psql(`SELECT status || '|' || (ai_verdict->>'note') || '|' || (ai_verdict->>'auto') FROM ops_improvement_item WHERE id = ${c3}`))
     .toBe(`approved|정정 #${r2} 승인|true`);
-  psql(`DELETE FROM ops_ai_decision WHERE kind = 'source_check' AND ${c2} = ANY(target_ids)`);   // 이 테스트가 남긴 원장 줄
 });

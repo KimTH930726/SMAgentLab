@@ -5,7 +5,7 @@ import type { NamespaceDetail, Part } from '../../types';
 import { byContentThenName, isPickableDomain } from '../../utils/selectedDomain';
 import { effectiveOwnerParts, ownerNames } from '../../utils/domainAccess';
 import { isOrgCollection } from '../../utils/collections';
-import { OrgCollectionSections, OrgTeamSections, TierCard, TierSection, orgSub, orgTeams, teamSub, type OrgTeam, type Tier } from './collectionCards';
+import { OrgCollectionSections, OrgTeamSections, PendingChips, TierCard, TierSection, orgSub, orgTeams, teamSub, type OrgTeam, type Tier } from './collectionCards';
 
 type Tab = 'business' | 'org';
 
@@ -76,6 +76,7 @@ export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose,
     const ownerName = ownerNames(effectiveOwnerParts(d));
     return (
       <TierCard key={d.name} tier={t} title={d.name} empty={empty} current={d.name === value} onClick={() => choose(d.name)}
+        badges={<PendingChips corrections={d.pending_corrections} sourceChecks={d.pending_source_checks} />}
         sub={withNote(d, <>{empty ? '아직 비어 있음' : `정책 ${d.policy_count ?? 0} · 지식 ${d.knowledge_count}`}{t === 'team' && ownerName && ` · ${ownerName}`}</>)} />
     );
   };
@@ -94,7 +95,8 @@ export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose,
     return (
       <OrgCollectionSections team={openTeam} userPart={userPart} onBack={() => setTeamKey(null)} card={(d, tier) => (
         <TierCard key={d.name} tier={tier} title={d.display_name ?? d.name} empty={d.knowledge_count + d.glossary_count === 0}
-          sub={withNote(d, orgSub(d))} current={d.name === value} onClick={() => choose(d.name)} />
+          sub={withNote(d, orgSub(d))} current={d.name === value} onClick={() => choose(d.name)}
+          badges={<PendingChips corrections={d.pending_corrections} sourceChecks={d.pending_source_checks} />} />
       )} />
     );
   };

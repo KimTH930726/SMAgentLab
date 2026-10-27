@@ -39,7 +39,7 @@ test('평가 게이트 [검색][답] — 카드 숫자 = DB, 층 합치기, 층�
   for (const [type, qs] of Object.entries(layers.missed as Record<string, string[]>)) {
     if (LIST.includes(type)) continue;   // 목록은 두 type을 합친 줄 — 아래 답 쪽에서 합으로 본다
     const name = { fact: '사실', condition: '조건', human: '사람 문항', cross: '영역 넘김', abstain: '답 없음', real: '실사용', ref: '참고표', ref_clarify: '참고표 되묻기', overview: '개요' }[type];
-    if (name) await expect(page.getByTestId(`layer-${name}`)).toContainText(`놓침 ${qs.length}`);
+    if (name) await expect(page.getByTestId(`layer-${name}`)).toContainText(`못 넘김 ${qs.length}`)   // 10/27 '놓침' → '못 넘김';
   }
 
   // [답] — 맨 위 = 잠근 시험지(사람·실사용 가중 평균), 전체 정답률, 라벨 분포, 층별 틀림 합 = 서버 틀린 문항 수

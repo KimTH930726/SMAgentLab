@@ -3,7 +3,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.dependencies import get_current_admin, get_current_user
 from service.eval import service
@@ -145,6 +145,23 @@ async def mark_hypothesis(improvement_id: int, body: HypothesisBody, admin: dict
     if not r:
         raise HTTPException(status_code=404, detail="묶음이 없습니다.")
     return r
+
+
+class VerdictBody(BaseModel):
+    verdict: str = Field(pattern="^(wrong|context_changed|unknown)$")
+    reason: str = Field(default="", max_length=200)   # 원장이 200자까지 남긴다(ledger.set_verdict) — 말없이 자르지 않게
+
+
+@router.post("/decisions/{decision_id}/verdict")
+async def set_decision_verdict(decision_id: int, body: VerdictBody, user: dict = Depends(get_current_user)):
+    """사람이 AI 값을 바꾼 판단에 "AI가 틀렸나요?" 답 — 틀림 / 상황이 바뀜 / 모르겠음. 바꾼 사람만(ledger.set_verdict — 관리자가 아니어도 자기가 바꾼 건 답함)."""
+    from service.decision import ledger
+    from core.database import get_conn
+    async with get_conn() as conn:
+        ok = await ledger.set_verdict(conn, decision_id, verdict=body.verdict, reason=body.reason.strip(), user_id=user["id"])
+    if not ok:
+        raise HTTPException(status_code=403, detail="이 판단을 바꾼 사람만 답할 수 있어요(또는 없는 판단).")
+    return {"id": decision_id, "verdict": body.verdict}
 
 
 @router.get("/question-candidates")

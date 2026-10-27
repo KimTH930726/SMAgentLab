@@ -195,7 +195,7 @@ export interface ReportTechnique {
 export interface ReportRow {
   qid: string; type: string | null; locked: boolean; question: string; labels: (string | null)[];
   cause: string | null; cause_name: string | null; storage: string[]; real_status: 'proposed' | 'added' | 'dismissed' | null;
-  gold: { kind: string; name: string | null; path?: string; params?: number; table?: boolean; rows?: number | null; missing?: boolean }[];
+  gold: { kind: string; name: string | null; path?: string; body_len?: number; params?: number; chunks?: number; table?: boolean; remark?: boolean; rows?: number | null; missing?: boolean }[];
   techniques: { id: number; title: string; status: CandidateStatus; technique_name: string }[];
 }
 
@@ -220,3 +220,37 @@ export async function setRealQuestion(id: number, status: 'added' | 'dismissed')
 export async function getLayerQuestions(runId: number): Promise<{ missed: Record<string, string[]>; wrong: Record<string, string[]>; files_missing: string[] }> {
   return apiFetch(`/eval/gate-runs/${runId}/layers`);
 }
+
+/** AI 판단 원장 집계(관리자, 품질 › AI 판단) — 종류별 사람 확정·변경·틀림 + 되묻기(정책 분류·참고표) + 원문 확인 결론 + 다른 컬렉션 제안 + 개선 후보 */
+export interface DecisionKindSummary {
+  total: number; confident: number; decided: number; changed: number; wrong: number; auto_wrong: number;
+  context_changed: number; unknown: number; wrong_rate: number | null; reasons: Record<string, number>;
+}
+
+/** 사람이 AI 값을 바꾼 판단 한 건 — AI 이유·사람 선택·"AI가 틀렸나요?" 답 */
+export interface ChangedDecision {
+  id: number; kind: string; at: string; changed_by: string | null; target: string | null;
+  ai: { collection: string | null; doc_type: string | null; reason: string | null };
+  human: { collection: string | null; choice: string | null };
+  verdict: 'wrong' | 'context_changed' | 'unknown' | null; verdict_reason: string | null;
+}
+
+export interface DecisionsReport {
+  days: number;
+  kinds: Record<string, DecisionKindSummary>;
+  clarify: { category: Record<string, number>; ref: Record<string, number>; open: number };
+  source_checks: { by_reason: Record<string, number>; by_source: Record<string, { resolved: number; no_issue: number }> };
+  collection_suggest: { total: number; picked: number; enabled: boolean };
+  candidates: { total: number; by_status: Record<string, number>; agree: number; disagree: number };
+  changed: ChangedDecision[];
+}
+
+export async function getDecisionsReport(days = 90): Promise<DecisionsReport> {
+  return apiFetch<DecisionsReport>(`/eval/decisions?days=${days}`);
+}
+
+/** "AI가 틀렸나요?" 답 — 바꾼 사람만(서버가 확인) */
+export async function setDecisionVerdict(id: number, verdict: string, reason = ''): Promise<{ id: number; verdict: string }> {
+  return apiFetch(`/eval/decisions/${id}/verdict`, { method: 'POST', body: JSON.stringify({ verdict, reason }) });
+}
+

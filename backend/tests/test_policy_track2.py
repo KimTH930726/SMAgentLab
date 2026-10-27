@@ -254,43 +254,6 @@ class TestRunComparison:
                    for r in caplog.records)
 
 
-class TestSaveRun:
-    """v2.74(2026-09-15) — 실험실 게이트 작업3: Track2 실행 이력 저장."""
-
-    @pytest.mark.asyncio
-    async def test_inserts_snapshot_row_and_returns_id(self, monkeypatch):
-        conn = MagicMock()
-        conn.__aenter__ = AsyncMock(return_value=conn)
-        conn.__aexit__ = AsyncMock(return_value=False)
-        conn.fetchval = AsyncMock(return_value=42)
-        monkeypatch.setattr(track2, "get_conn", MagicMock(return_value=conn))
-
-        result = track2.Track2Result(
-            total_n=89, a_hit_rate=0.8, b_hit_rate=0.9, a_precision=0.1, b_precision=0.1,
-            b_hit_rdb_only=0.1, b_hit_vector_only=0.5, b_hit_both=0.3,
-            by_type=[track2.Track2TypeResult(
-                type="param", n=23, a_hit_rate=0.9, b_hit_rate=0.95, a_precision=0.1, b_precision=0.1,
-                b_hit_rdb_only=0.3, b_hit_vector_only=0.3, b_hit_both=0.35,
-                a_top1_accuracy=0.8, b_top1_param_accuracy=0.7, b_top1_narrative_accuracy=0.6,
-            )],
-            golden_set_file="online_delivus_v1.jsonl", top_k=10, duration_seconds=78.6,
-            a_top1_accuracy=0.7, b_top1_param_accuracy=0.6, b_top1_narrative_accuracy=0.9,
-        )
-
-        run_id = await track2.save_run(result, triggered_by=1)
-
-        assert run_id == 42
-        conn.fetchval.assert_awaited_once()
-        call_args = conn.fetchval.call_args.args
-        assert "INSERT INTO policy_track2_run" in call_args[0]
-        assert call_args[-1] == 1  # triggered_by
-        # by_type이 JSON 문자열로 직렬화돼 넘어가는지(파라미터 순서상 golden_set_file 앞)
-        by_type_json = call_args[13]
-        parsed = json.loads(by_type_json)
-        assert parsed[0]["type"] == "param"
-        assert parsed[0]["a_top1_accuracy"] == 0.8
-
-
 class TestAxisRegistry:
     """축 선택 UI(PolicyLab.tsx 데이터 축 드롭다운, GET /track2/axes)가 읽는 레지스트리 —
     지금은 "policy" 하나지만, 이 레지스트리에 새 항목이 늘어나는 것만으로 화면 선택지도
@@ -390,30 +353,3 @@ class TestEngineParameterization:
         assert custom_b.await_count == 1
         assert result.a_hit_rate == 1.0
         assert result.b_hit_rate == 1.0
-
-
-class TestListRunHistory:
-    @pytest.mark.asyncio
-    async def test_parses_by_type_json_and_orders_by_run_at_desc(self, monkeypatch):
-        conn = MagicMock()
-        conn.__aenter__ = AsyncMock(return_value=conn)
-        conn.__aexit__ = AsyncMock(return_value=False)
-        conn.fetch = AsyncMock(return_value=[
-            {"id": 2, "run_at": "2026-09-15T10:00:00", "by_type": json.dumps([{"type": "param", "n": 23}]),
-             "top_k": 10, "total_n": 89, "a_hit_rate": 0.8, "b_hit_rate": 0.9, "a_precision": 0.1, "b_precision": 0.1,
-             "b_hit_rdb_only": 0.1, "b_hit_vector_only": 0.5, "b_hit_both": 0.3,
-             "a_top1_accuracy": 0.7, "b_top1_param_accuracy": 0.6, "b_top1_narrative_accuracy": 0.9,
-             "golden_set_file": "online_delivus_v1.jsonl", "duration_seconds": 78.6, "triggered_by": 1},
-        ])
-        monkeypatch.setattr(track2, "get_conn", MagicMock(return_value=conn))
-
-        rows = await track2.list_run_history(limit=10)
-
-        assert len(rows) == 1
-        assert rows[0]["id"] == 2
-        assert isinstance(rows[0]["by_type"], list)  # JSON 문자열이 파싱돼 리스트로
-        assert rows[0]["by_type"][0]["type"] == "param"
-
-        select_sql = conn.fetch.call_args.args[0]
-        assert "ORDER BY run_at DESC" in select_sql
-        assert conn.fetch.call_args.args[1] == 10

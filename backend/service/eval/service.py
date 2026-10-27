@@ -180,12 +180,26 @@ async def decisions_report(days: int) -> dict:
     from service.decision import ledger
     async with get_conn() as conn:
         rep = await ledger.report(conn, since_days=days)
+        # 되묻기 고른 분포 — 정책 분류 되묻기와 참고표 되묻기(선택지 범위가 "ref:"로 시작, v2.173)를 나눠 센다(10/27 감사: 섞여 셀 수 없었음)
         picks = await conn.fetch(
-            """SELECT CASE WHEN final_value ? 'typed' THEN 'typed' WHEN final_value->>'picked' = '*' THEN 'all'
+            """SELECT CASE WHEN ai_value->'options'->>0 LIKE 'ref:%' THEN 'ref' ELSE 'category' END AS src,
+                      CASE WHEN final_value ? 'typed' THEN 'typed' WHEN final_value->>'picked' = '*' THEN 'all'
                            WHEN final_value ? 'picked' THEN 'option' WHEN final_value ? 'superseded' THEN 'superseded' ELSE 'other' END AS how,
                       COUNT(*) AS n
                FROM ops_ai_decision WHERE kind = 'chat_clarify' AND final_value IS NOT NULL AND created_at > NOW() - make_interval(days => $1)
-               GROUP BY 1""", days)
+               GROUP BY 1, 2""", days)
+        open_clarify = await conn.fetchval(
+            "SELECT COUNT(*) FROM ops_ai_decision WHERE kind = 'chat_clarify' AND final_value IS NULL AND created_at > NOW() - make_interval(days => $1)", days)
+        # 원문 확인 검사 결론 — 사유별(문제 없음 = 오탐) · 검사 출처별(prompt_version = source-check:<출처>)
+        checks = await conn.fetch(
+            """SELECT COALESCE(final_value->>'reason', CASE WHEN (final_value->>'issue')::boolean THEN 'resolved' END) AS reason,
+                      replace(prompt_version, 'source-check:', '') AS src, COUNT(*) AS n
+               FROM ops_ai_decision WHERE kind = 'source_check' AND final_value IS NOT NULL AND created_at > NOW() - make_interval(days => $1)
+               GROUP BY 1, 2""", days)
+        suggest = await conn.fetchrow(
+            """SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE final_value->>'picked' = 'true') AS picked
+               FROM ops_ai_decision WHERE kind = 'collection_suggest' AND created_at > NOW() - make_interval(days => $1)""", days)
+        suggest_on = str(await conn.fetchval("SELECT value FROM ops_system_config WHERE key = 'chat.collection_suggest'") or "").lower() == "true"
         cands = await conn.fetch(
             """SELECT recommend, status, carried_from_id IS NOT NULL AS carried,
                       c.run_id = (SELECT id FROM eval_improvement_run ORDER BY created_at DESC, id DESC LIMIT 1) AS latest, COUNT(*) AS n
@@ -199,7 +213,17 @@ async def decisions_report(days: int) -> dict:
     for r in own:
         if r["carried_from_id"] is None and (r["status"] != "proposed" or r["latest"]):
             by_status[r["status"]] = by_status.get(r["status"], 0) + r["n"]
-    return {"days": days, "kinds": kinds, "clarify_picks": {r["how"]: r["n"] for r in picks},
+    clarify: dict = {"category": {}, "ref": {}}
+    for r in picks:
+        clarify[r["src"]][r["how"]] = r["n"]
+    source_checks: dict = {"by_reason": {}, "by_source": {}}
+    for r in checks:
+        source_checks["by_reason"][r["reason"] or "other"] = source_checks["by_reason"].get(r["reason"] or "other", 0) + r["n"]
+        s = source_checks["by_source"].setdefault(r["src"], {"resolved": 0, "no_issue": 0})
+        s["resolved" if r["reason"] == "resolved" else "no_issue"] += r["n"]
+    return {"days": days, "kinds": kinds,
+            "clarify": {**clarify, "open": open_clarify}, "source_checks": source_checks,
+            "collection_suggest": {"total": suggest["total"], "picked": suggest["picked"], "enabled": suggest_on},
             "candidates": {"total": sum(by_status.values()), "by_status": by_status, **agreement(own)},
             "changed": await changed_decisions(days)}
 

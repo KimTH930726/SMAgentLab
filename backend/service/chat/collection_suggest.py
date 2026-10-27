@@ -48,9 +48,39 @@ async def enabled(conn) -> bool:
     return _flag_cache[1]
 
 
+_COLL_TTL = 60.0
+_coll_cache: tuple[float, list, dict] = (0.0, [], {})
+_coll_lock = asyncio.Lock()   # 만료 순간 동시 요청이 다 같이 다시 세지 않게 — 한 요청만 세고 나머지는 그 결과를(리뷰 10/27)
+
+
+async def _collections(conn, policy_scope) -> tuple[list[str], dict]:
+    """제안 후보 = 검색되는 지식이 있는 업무 컬렉션(조직·테스트 제외, 측정과 같은 조건) + 컬렉션별 용어 범위. 60초 캐시 —
+    답마다 컬렉션 수만큼 범위 조회가 돌아 동시 답이 많으면 커넥션 풀을 채웠다(10/27 부하 측정)."""
+    global _coll_cache
+    if time.monotonic() - _coll_cache[0] < _COLL_TTL:
+        return _coll_cache[1], _coll_cache[2]
+    async with _coll_lock:
+        if time.monotonic() - _coll_cache[0] < _COLL_TTL:   # 기다리는 사이 다른 요청이 채움
+            return _coll_cache[1], _coll_cache[2]
+        _coll_cache = await _count_collections(conn, policy_scope)
+    return _coll_cache[1], _coll_cache[2]
+
+
+async def _count_collections(conn, policy_scope) -> tuple[float, list, dict]:
+    now = time.monotonic()
+    domains = [r["name"] for r in await conn.fetch("SELECT name FROM ops_namespace WHERE kind = 'domain' AND name NOT LIKE '%test%'")]
+    colls = [r["name"] for r in await conn.fetch(
+        """SELECT n.name FROM ops_namespace n WHERE n.kind = 'domain' AND n.name NOT LIKE '%test%'
+           AND EXISTS (SELECT 1 FROM rag_knowledge k WHERE k.namespace_id = n.id AND (k.status IS NULL OR k.status = 'active'))
+           ORDER BY n.name""")]
+    scope = {c: await policy_scope.policy_namespace_ids(conn, c) for c in domains}
+    return now, colls, scope
+
+
 async def find(namespace: str, question: str, query_vec: list[float], here_results: Optional[list], *,
                w_vector: float, w_keyword: float, top_k: int, force: bool = False) -> Optional[dict]:
-    """제안할 컬렉션 하나(가장 높은 곳) 또는 None. 꺼져 있거나(force = 측정용), 물은 곳이 업무 컬렉션이 아니면 None.
+    """제안할 컬렉션 하나(가장 높은 곳) 또는 None. 꺼져 있거나(force = 측정용), 물은 곳이 업무 컬렉션이 아니면 None
+    (이름에 test가 든 업무 컬렉션도 후보·물은 곳 모두에서 뺀다 — 10/27부터, 측정·E2E 임시 컬렉션에서 제안이 뜨지 않게).
     here_results = 이번 답의 지식 검색 결과. None이면(캐시 답 — 검색 결과 객체가 없음) 물은 곳도 같은 검색으로 다시 잰다."""
     from agents.knowledge_rag.knowledge import glossary_terms, retrieval
     from service.policy import scope as policy_scope
@@ -60,17 +90,12 @@ async def find(namespace: str, question: str, query_vec: list[float], here_resul
     async with get_conn() as conn:
         if not force and not await enabled(conn):
             return None
-        me = await conn.fetchrow("SELECT kind FROM ops_namespace WHERE name = $1", namespace)
-        if not me or me["kind"] != "domain":
-            return None
-        # 검색되는 지식이 있는 다른 업무 컬렉션(조직·테스트 제외) — 측정과 같은 조건
-        others = [r["name"] for r in await conn.fetch(
-            """SELECT n.name FROM ops_namespace n WHERE n.kind = 'domain' AND n.name <> $1 AND n.name NOT LIKE '%test%'
-               AND EXISTS (SELECT 1 FROM rag_knowledge k WHERE k.namespace_id = n.id AND (k.status IS NULL OR k.status = 'active'))
-               ORDER BY n.name""", namespace)]
-        if not others:
-            return None
-        term_scope = {c: await policy_scope.policy_namespace_ids(conn, c) for c in [*others, namespace]}
+        colls, term_scope = await _collections(conn, policy_scope)
+    if namespace not in term_scope:   # 물은 곳이 업무 컬렉션이 아님(조직 컬렉션 등)
+        return None
+    others = [c for c in colls if c != namespace]
+    if not others:
+        return None
     th = retrieval.get_thresholds()
 
     async def search(ns: str) -> list:
@@ -82,7 +107,8 @@ async def find(namespace: str, question: str, query_vec: list[float], here_resul
             return max((retrieval.relevance_score(r) for r in await search(ns)), default=0.0)
 
     if here_results is None:
-        here_results = await search(namespace)
+        async with _sem:
+            here_results = await search(namespace)
     here_best = max((retrieval.relevance_score(r) for r in here_results), default=0.0)
     here_adopted = sum(retrieval.is_adopted(r, th) for r in here_results)
     scores = dict(zip(others, await asyncio.gather(*(best(c) for c in others))))
