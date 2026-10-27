@@ -22,7 +22,8 @@ from core.database import get_conn, resolve_namespace_id, scope_ids_same_owner_s
 from shared.embedding import embedding_service
 from service.improvement import draft as draft_mod
 from service.policy.visibility import (
-    KIND_SOURCE_CHECK, PIPELINE_WHOLE, POLICY_TARGETS, SOURCE_JSON_IMPORT, is_searchable, open_correction_sql, searchable_sql,
+    KIND_SOURCE_CHECK, PIPELINE_WHOLE, POLICY_CHANGE_TARGETS, POLICY_OPEN_TARGETS, POLICY_TARGETS, SOURCE_JSON_IMPORT,
+    is_searchable, open_correction_sql, searchable_sql,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ KIND_BY_TARGET = {
     "missing": "missing_knowledge",
     "answer": "answer_quality",  # 근거는 맞는데 답변이 잘못 읽음 — 지식은 안 건드리고 답변 품질 신호로만
     "auto": "answer_signal",     # "답변 틀림"만 누르고 의견은 아직 없음 — 대상 미지정(담당자가 정하거나 한 줄이 오면 채움)
+    **{t: "correction" for t in POLICY_CHANGE_TARGETS},   # 정책 추가·폐기·옮기기 제안(C3 2단계) — 정정 요청에서 같이 승인
 }
 # 옛 리뷰 신호(rag_knowledge_review_flag)를 이 원장으로 합침(2026-10-02) — 같은 "답변 틀림" 한 번이 리뷰 신호(근거 전부)와
 # 정정 검토(AI가 고른 근거)로 두 번 쌓이던 중복을 없앤다. 평가 게이트 "이상해요"도 여기로(kind='search_noise').
@@ -57,7 +59,7 @@ _POLICY_TARGETS = POLICY_TARGETS   # 정책 화면(catalog)과 같은 목록(10/
 # (정책 화면 제안·채팅 신고·AI 추정·대상 변경)이 이 잠금 + _pending_policy_correction 확인을 거친다(10/21 리뷰 M1)
 # 잠금 순서는 어느 길이든 "자기 원장 행(FOR UPDATE) → 이 잠금" — 순서가 엇갈리면 교착(10/21 재리뷰 1).
 # 쓰는 advisory 키(겹치면 남의 잠금을 기다린다, 10/21 재리뷰 6): 7301 = 원문 원장(ingestion/source_ledger.py),
-# 7302 = 이것, 1개 인자 = 지식 단건 등록(knowledge/service.py, 네임스페이스 id)
+# 7302 = 이것, 7303 = 정책 추가·옮기기 승인의 자리(policy_change._lock_slot — 2개 인자; 적재기 load_policy_v0의 7303은 1개 인자라 다른 공간), 1개 인자 = 지식 단건 등록(knowledge/service.py, 네임스페이스 id)
 _POLICY_LOCK_KEY = 7302
 
 
@@ -388,7 +390,7 @@ async def _pending_policy_correction(conn, item_id: int, exclude_id: Optional[in
     exclude_id = 자기 자신(신호 건을 채우거나 대상을 바꾸는 그 건)은 빼고 본다."""
     return await conn.fetchval(
         open_correction_sql("$1", "$2", extra=" AND o.id IS DISTINCT FROM $3::int"),
-        item_id, list(_POLICY_TARGETS), exclude_id)
+        item_id, list(POLICY_OPEN_TARGETS), exclude_id)   # 폐기·옮기기 제안도 그 정책의 대기 건(C3 2단계)
 
 
 async def _claim_policy_slot(conn, target_type: Optional[str], target_id: Optional[int],
@@ -397,7 +399,7 @@ async def _claim_policy_slot(conn, target_type: Optional[str], target_id: Option
     트랜잭션 안에서 부르고 같은 트랜잭션에서 쓴다 — 잠금이 커밋까지 유지돼 확인과 쓰기 사이에 다른 길이 끼어들지 못한다.
     왜(10/21 리뷰 M1): 유니크 인덱스는 "같은 신고자" 단위라, 정책 화면 제안 #10이 있는데 채팅 신고 #11이 같은 정책에 생기면
     #11 승인 때 _close_superseded가 #10을 자동 종료했다(담당자가 쓴 수정안이 말없이 사라짐)."""
-    if target_type not in _POLICY_TARGETS or target_id is None:
+    if target_type not in POLICY_OPEN_TARGETS or target_id is None:
         return None
     await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", _POLICY_LOCK_KEY, target_id)
     return await _pending_policy_correction(conn, target_id, exclude_id)
@@ -686,6 +688,8 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
         item = await conn.fetchrow("SELECT * FROM ops_improvement_item WHERE id = $1", item_id)
         if not item or item["status"] != "pending":
             raise ValueError("대기 중인 신고가 아닙니다.")
+        if item.get("target_type") in POLICY_CHANGE_TARGETS:   # 추가·폐기·옮기기 제안은 대상이 정해진 변경 — 바꾸면 지식 등록 등으로 둔갑(리뷰 L2 10/27)
+            raise ValueError("정책 추가·폐기·옮기기 제안은 대상을 바꿀 수 없어요 — 승인하거나 반려하세요.")
         ns_id = item["namespace_id"]
         context = await _load_original(conn, ns_id, "missing", None, None, item["message_id"])
         if key in ("missing", "answer"):
@@ -829,7 +833,7 @@ async def pending_status(knowledge_ids: list[int], policy_item_ids: list[int]) -
             WHERE status = 'pending'
               AND ((kind = 'correction' AND target_type = 'knowledge' AND target_id = ANY($1::int[]))
                 OR (target_type = ANY($3::text[]) AND target_id = ANY($2::int[])))
-        """, knowledge_ids or [], policy_item_ids or [], list(_POLICY_TARGETS))
+        """, knowledge_ids or [], policy_item_ids or [], list(POLICY_OPEN_TARGETS))
     for r in rows:
         if r["target_type"] == "knowledge":
             out["knowledge"].append(r["target_id"])
@@ -1083,7 +1087,7 @@ async def _close_superseded(conn, item: dict, approver: dict) -> int:
     정책은 항목 버전이 통째로 바뀌므로 같은 항목의 다른 파라미터/서술 신고도 함께 종료(새 버전에서 다시 신고 가능)."""
     if item["target_type"] in ("missing", "answer"):
         return 0
-    types = ["knowledge"] if item["target_type"] == "knowledge" else ["policy_param", "policy_narrative"]
+    types = ["knowledge"] if item["target_type"] == "knowledge" else list(POLICY_OPEN_TARGETS)
     res = await conn.execute("""
         UPDATE ops_improvement_item
         SET status = 'rejected', decided_by = $4, decided_at = NOW(),
@@ -1103,6 +1107,9 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
         raise ValueError("대기 중인 신고가 아닙니다.")
     item = dict(item)
     stored = json.loads(item["proposed"]) if isinstance(item["proposed"], str) else item["proposed"]
+    if item["target_type"] in POLICY_CHANGE_TARGETS:   # 추가·폐기·옮기기 — 수정안 칸 검사·재임베딩 규칙이 달라 따로(C3 2단계)
+        from service.improvement.policy_change import approve as approve_change   # 지연 import — policy_change가 이 모듈을 import한다
+        return await approve_change(item, approver, expected, stored)
     if item["target_type"] == "answer":
         raise ValueError("답변 오류 판정은 반영할 지식이 없습니다 — 대상을 바꾸거나 반려(종료)하세요.")
     if item["target_type"] == "auto":

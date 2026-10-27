@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Search, StickyNote } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Search, StickyNote } from 'lucide-react';
 import { listPolicies, type PolicyRow } from '../../../api/policy';
 import { useNamespaceAccess } from '../../../utils/useNamespaceAccess';
 import { Badge } from '../../ui/Badge';
 import { PolicyDetailModal } from './PolicyDetailModal';
+import { PolicyAddModal } from './PolicyChangeModals';
 
-/** 정책 목록 — 문서 순서 그대로, 첫 단계 절(category_path[0])로 접었다 펼친다. 처음엔 모두 펼침(10/22 사용자), 검색 중엔 접은 것도 펼침. */
+/** 정책 목록 — 문서 순서 그대로, 첫 단계 절(category_path[0])로 접었다 펼친다. 처음엔 모두 펼침(10/22 사용자), 검색 중엔 접은 것도 펼침.
+ *  [+ 정책 추가 제안](맨 위 = 새 분류도, 절 줄 = 그 절에) — 정정 요청에서 승인해야 생긴다(C3 2단계, 10/27). */
 export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: number) => void }) {
-  const { selectedNs } = useNamespaceAccess();
+  const { selectedNs, canModifyNs } = useNamespaceAccess();
+  const [adding, setAdding] = useState<string[] | null>(null);   // 추가 제안 창(미리 채울 분류)
   const [text, setText] = useState('');
   const [q, setQ] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());   // 사람이 접은 절만 기억
@@ -59,6 +62,13 @@ export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: num
         <span className="text-xs text-slate-500">
           {rows.length}건{pendingCount > 0 && ` · 검토 중 ${pendingCount}건`}
         </span>
+        {canModifyNs && (
+          <button onClick={() => setAdding([])} data-testid="policy-add-open"
+            className="ml-auto inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+            title="새 정책을 제안 — 분류(대·중·소)도 새로 쓸 수 있어요. 정정 요청에서 승인하면 생겨요">
+            <Plus className="w-3.5 h-3.5" />정책 추가 제안
+          </button>
+        )}
       </div>
 
       {error && <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{(error as Error).message}</p>}
@@ -73,16 +83,24 @@ export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: num
             const groupPending = items.filter((r) => r.open_correction_id).length;
             return (
               <div key={g} className="rounded-lg border border-slate-700 overflow-hidden">
-                <button
-                  onClick={() => toggle(g)}
-                  aria-expanded={expanded}
-                  className="w-full flex items-center gap-2 px-3 py-2.5 bg-slate-800 hover:bg-slate-700/70 border-l-4 border-indigo-500 dark:border-indigo-400"
-                >
-                  {expanded ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
-                  <span className="text-[15px] font-semibold text-slate-100 text-left">{g}</span>
-                  <span className="text-xs text-slate-400 bg-slate-700 rounded-full px-2 py-0.5">{items.length}</span>
-                  {groupPending > 0 && <Badge color="amber" className="ml-auto">검토 중 {groupPending}</Badge>}
-                </button>
+                <div className="flex items-center bg-slate-800 border-l-4 border-indigo-500 dark:border-indigo-400">
+                  <button
+                    onClick={() => toggle(g)}
+                    aria-expanded={expanded}
+                    className="flex-1 min-w-0 flex items-center gap-2 px-3 py-2.5 hover:bg-slate-700/70"
+                  >
+                    {expanded ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
+                    <span className="text-[15px] font-semibold text-slate-100 text-left">{g}</span>
+                    <span className="text-xs text-slate-400 bg-slate-700 rounded-full px-2 py-0.5">{items.length}</span>
+                    {groupPending > 0 && <Badge color="amber" className="ml-auto">검토 중 {groupPending}</Badge>}
+                  </button>
+                  {canModifyNs && g !== '(절 없음)' && (
+                    <button onClick={() => setAdding([g])} aria-label={`정책 추가 제안 — ${g}`} title="이 분류에 정책 추가 제안"
+                      className="px-3 py-2.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-slate-700/70 inline-flex items-center gap-1">
+                      <Plus className="w-3.5 h-3.5" />추가
+                    </button>
+                  )}
+                </div>
                 {expanded && (
                   <ul className="border-t border-slate-700 divide-y divide-slate-700/60">
                     {items.map((r) => (
@@ -111,6 +129,7 @@ export function PolicyListTab({ onOpenCorrection }: { onOpenCorrection: (id: num
         </div>
       )}
 
+      <PolicyAddModal isOpen={adding !== null} namespace={selectedNs} initialPath={adding ?? []} onClose={() => setAdding(null)} />
       {current !== null && (
         <PolicyDetailModal
           namespace={selectedNs}

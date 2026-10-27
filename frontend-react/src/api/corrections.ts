@@ -1,9 +1,13 @@
 import { apiFetch } from './client';
 
 /** 근거 정정·지식 누락 신호(개선 원장, 2026-10-01). 사용자는 신호만 주고, 반영은 관리자 승인 후에만. */
-export type CorrectionTargetType = 'knowledge' | 'policy_param' | 'policy_narrative' | 'missing' | 'answer' | 'auto';
+export type CorrectionTargetType = 'knowledge' | 'policy_param' | 'policy_narrative' | 'missing' | 'answer' | 'auto'
+  | PolicyChangeTarget;
+/** 정책 추가·폐기·분류 옮기기 제안(C3 2단계, 10/27) — 내용 정정이 아니라 수정안 칸·AI 초안 없이 승인/반려만 */
+export type PolicyChangeTarget = 'policy_add' | 'policy_retire' | 'policy_move';
+export const POLICY_CHANGE_TARGETS: PolicyChangeTarget[] = ['policy_add', 'policy_retire', 'policy_move'];
 /** 신고 시 대상 — auto는 "답변 틀림"(대상 안 고름, 서버가 그 답변의 근거 중 틀린 것을 판정) */
-export type CorrectionRequestTarget = Exclude<CorrectionTargetType, 'answer'>;
+export type CorrectionRequestTarget = Exclude<CorrectionTargetType, 'answer' | PolicyChangeTarget>;
 
 /** AI 판정 — 어느 근거를 왜 골랐고 뭐가 틀렸는지(사용자·담당자 화면 공용) */
 export interface AiVerdict {
@@ -120,6 +124,21 @@ export async function createPolicyProposal(
     // 원문 확인 카드에서 연 정책이면 그 카드 번호 — 제안이 승인되면 카드도 해결(C3)
     body: JSON.stringify({ namespace, target_type: 'policy_narrative', target_id: itemId, source, ...body, source_check_id: sourceCheckId ?? null }),
   });
+}
+
+export type PolicyChange =
+  | { change: 'add'; policy_name: string; category_path: string[]; raw_body: string; remark?: string; reason?: string }
+  | { change: 'retire'; target_id: number; reason: string }
+  | { change: 'move'; target_id: number; category_path: string[]; reason?: string };
+
+/** 정책 추가·폐기·분류 옮기기 제안 — 정정 요청에 올라가고 승인해야 반영(C3 2단계) */
+export async function createPolicyChange(namespace: string, body: PolicyChange): Promise<{ id: number; target_type: PolicyChangeTarget }> {
+  return apiFetch('/corrections/policy-change', { method: 'POST', body: JSON.stringify({ namespace, ...body }) });
+}
+
+/** 폐기 제안 창 경고 — 이 정책을 정답으로 쓰는 평가 문항(checked=false면 서버에 평가 문항 파일이 없어 못 셈) */
+export async function getPolicyChangeUses(namespace: string, itemId: number): Promise<{ n: number; qids: string[]; checked: boolean }> {
+  return apiFetch(`/corrections/policy-change/uses?namespace=${encodeURIComponent(namespace)}&target_id=${itemId}`);
 }
 
 /** 정정 요청 카드의 [직접 수정] — 저장된 수정안을 바꾼다(반영은 [승인]에서) */

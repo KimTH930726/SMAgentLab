@@ -10,10 +10,10 @@ import json
 from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
-from service.policy.visibility import POLICY_TARGETS, open_correction_sql
+from service.policy.visibility import POLICY_APPLIED_TARGETS, POLICY_OPEN_TARGETS, open_correction_sql
 
 # 대상 종류·"검토 중 정정" 조건은 정정 원장(improvement/service._pending_policy_correction)과 같은 함수를 쓴다(10/21 리뷰 L10)
-_POLICY_TARGETS = list(POLICY_TARGETS)
+_POLICY_TARGETS = list(POLICY_OPEN_TARGETS)   # 폐기·옮기기 제안도 "정정 #N 검토 중"(C3 2단계)
 
 
 async def _ns_id(conn, namespace: str) -> int:
@@ -74,7 +74,7 @@ async def get_policy(namespace: str, logical_id: int) -> Optional[dict]:
             "(SELECT o.id FROM ops_improvement_item o WHERE o.status = 'approved' AND o.applied_target_id = i.id "
             " AND o.target_type = ANY($3::text[]) ORDER BY o.id LIMIT 1) AS correction_id "
             "FROM policy_item i WHERE i.namespace_id = $1 AND i.logical_id = $2 ORDER BY i.version DESC, i.id DESC",
-            ns_id, logical_id, _POLICY_TARGETS)
+            ns_id, logical_id, list(POLICY_APPLIED_TARGETS))
         open_row = await conn.fetchrow(
             open_correction_sql("$1", "$2", cols="o.id, o.source"), cur["item_id"], _POLICY_TARGETS)
     return {

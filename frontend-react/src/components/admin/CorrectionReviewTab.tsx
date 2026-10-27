@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle, ChevronLeft, ChevronRight, Sparkles, RefreshCw, Pencil } from 'lucide-react';
 import {
   correctionSourceLabel, listCorrections, approveCorrection, rejectCorrection, retargetCorrection, analyzeCorrection, redraftCorrection,
-  updateCorrectionProposed, type CorrectionItem,
+  updateCorrectionProposed, POLICY_CHANGE_TARGETS, type CorrectionItem,
 } from '../../api/corrections';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -13,6 +13,7 @@ import { FormModal } from '../ui/FormModal';
 import { showError } from '../../store/useDialogStore';
 import { lineDiff, type DiffOp } from '../../utils/lineDiff';
 import { useCollectionLabel } from '../../utils/useCollectionLabel';
+import { PolicyChangeCard } from './PolicyChangeCard';
 
 /**
  * 정정 요청(2026-10-01, 10-02 리뷰 신호를 합침) — 지식·정책을 고치자는 신호·제안이 모두 모이는 곳. 승인해야만 반영된다.
@@ -33,6 +34,7 @@ const TYPE_LABEL: Record<TargetType, string> = {
   missing: '빠진 내용',
   answer: '답변 오류',
   auto: '답변 틀림 · 의견 없음',
+  policy_add: '정책 추가', policy_retire: '정책 폐기', policy_move: '분류 옮기기',
 };
 
 function typeLabel(item: CorrectionItem): string {
@@ -58,6 +60,7 @@ const FIELDS: Record<TargetType, Field[]> = {
   ],
   answer: [],
   auto: [],
+  policy_add: [], policy_retire: [], policy_move: [],   // 정책 변경 제안은 PolicyChangeCard가 그린다(수정안 칸 없음)
 };
 
 const REVIEW_MARK = '【확인 필요';
@@ -485,6 +488,11 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
   );
 }
 
+/** 정책 추가·폐기·옮기기 제안은 전용 카드(C3 2단계) — 내용 정정 카드의 수정안·AI 다시 쓰기가 없다 */
+function AnyCard(props: Parameters<typeof CorrectionCard>[0]) {
+  return (POLICY_CHANGE_TARGETS as string[]).includes(props.item.target_type) ? <PolicyChangeCard {...props} /> : <CorrectionCard {...props} />;
+}
+
 type BulkResult = { id: number; ok: boolean; message?: string };
 /** 처리 뒤 다시 불러올 범위 — applied = 승인(지식·정책 내용이 바뀜), slot = 반려·대상 변경·AI 추정(정책 화면의 "정정 #N 검토 중"이
  *  바뀔 수 있음), 없음 = 다시 쓰기·직접 수정(수정안만 바뀜 — 정정 목록만) */
@@ -654,7 +662,7 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
         </div>
       ) : view === 'one' ? (
         <div className="space-y-3" data-testid="correction-pager">
-          <CorrectionCard key={items[cur].id} item={items[cur]} onDone={onDone} focused={items[cur].id === focusId}
+          <AnyCard key={items[cur].id} item={items[cur]} onDone={onDone} focused={items[cur].id === focusId}
             selected={selected.has(items[cur].id)}
             onSelect={(on) => setSelected((s) => { const n = new Set(s); if (on) n.add(items[cur].id); else n.delete(items[cur].id); return n; })} />
           <div className="flex items-center justify-center gap-4 text-sm text-slate-300">
@@ -669,7 +677,7 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
         </div>
       ) : (
         items.map((item) => (
-          <CorrectionCard key={item.id} item={item} onDone={onDone} focused={item.id === focusId}
+          <AnyCard key={item.id} item={item} onDone={onDone} focused={item.id === focusId}
             selected={selected.has(item.id)}
             onSelect={(on) => setSelected((s) => { const n = new Set(s); if (on) n.add(item.id); else n.delete(item.id); return n; })} />
         ))

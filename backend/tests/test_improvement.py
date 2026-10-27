@@ -441,11 +441,11 @@ class TestCloseSuperseded:
 
     @pytest.mark.asyncio
     async def test_policy_closes_all_sub_targets_of_item(self):
-        """정책은 항목 버전이 통째로 바뀌므로 같은 항목의 다른 파라미터/서술 신고도 종료."""
+        """정책은 항목 버전이 통째로 바뀌므로 같은 항목의 다른 파라미터/서술 신고도 종료 — 폐기·옮기기 제안도(C3 2단계, POLICY_OPEN_TARGETS)."""
         conn = _conn()
         conn.execute = AsyncMock(return_value="UPDATE 1")
         await svc._close_superseded(conn, {"id": 8, "target_type": "policy_param", "target_id": 10}, {"id": 9})
-        assert conn.execute.await_args.args[3] == ["policy_param", "policy_narrative"]
+        assert conn.execute.await_args.args[3] == ["policy_param", "policy_narrative", "policy_retire", "policy_move"]
 
     @pytest.mark.asyncio
     async def test_missing_has_nothing_to_close(self):
@@ -472,7 +472,7 @@ class TestPendingStatus:
     @pytest.mark.asyncio
     async def test_policy_badge_uses_same_rule_as_slot_lock(self):
         """10/21 리뷰 5a — 정책 배지는 "정책당 대기 정정 1건" 잠금(open_correction_sql)과 같은 기준: 종류 무관(AI 추정이 정책을 골라 둔
-        "답변 틀림" 신호도 검토 중), 대상 종류는 POLICY_TARGETS. 예전엔 kind='correction'만 봐서 배지는 없는데 제안은 409였다."""
+        "답변 틀림" 신호도 검토 중), 대상 종류는 POLICY_OPEN_TARGETS. 예전엔 kind='correction'만 봐서 배지는 없는데 제안은 409였다."""
         conn = _conn()
         conn.fetch = AsyncMock(return_value=[{"target_type": "policy_narrative", "target_id": 10, "target_sub_id": None}])
         with patch.object(svc, "get_conn", return_value=conn):
@@ -484,7 +484,7 @@ class TestPendingStatus:
         assert "kind" not in lock_sql
         policy_cond = sql.split("OR", 1)[1]
         assert "kind" not in policy_cond and "target_type = ANY($3::text[])" in policy_cond
-        assert args[2] == list(svc.POLICY_TARGETS)
+        assert args[2] == list(svc.POLICY_OPEN_TARGETS)   # 폐기·옮기기 제안도 검토 중(C3 2단계)
         assert "kind = 'correction' AND target_type = 'knowledge'" in sql   # 지식은 그대로(대상당 잠금 없음)
 
     @pytest.mark.asyncio

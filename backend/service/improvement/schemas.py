@@ -26,6 +26,19 @@ class CorrectionCreate(BaseModel):
     source_check_id: Optional[int] = None   # 원문 확인 카드에서 연 정책의 제안 — 승인되면 그 카드도 해결(C3, #92)
 
 
+class PolicyChangeBody(BaseModel):
+    """정책 추가·폐기·분류 옮기기 제안(C3 2단계, 10/27) — 정정 요청에 올라가고 승인해야 반영.
+    add: policy_name·category_path(대·중·소, 1~3)·raw_body 필수, remark 선택 / retire: target_id + reason(필수) / move: target_id + category_path."""
+    namespace: str
+    change: Literal["add", "retire", "move"]
+    target_id: Optional[int] = None          # policy_item.id(폐기·옮기기)
+    policy_name: Optional[str] = Field(default=None, max_length=300)
+    category_path: Optional[list[str]] = Field(default=None, max_length=3)
+    raw_body: Optional[str] = Field(default=None, max_length=20000)
+    remark: Optional[str] = Field(default=None, max_length=5000)
+    reason: Optional[str] = Field(default=None, max_length=1000)
+
+
 class ApproveBody(BaseModel):
     """승인할 때 화면에 보인 수정안(검증용) — 저장된 안과 다르면 409. 반영되는 건 늘 저장된 안(고치려면 먼저 PATCH …/proposed).
     필수(10/21 리뷰 5c) — 비워 보내면 검사를 건너뛰어 그 사이 남이 바꾼 안이 보지 못한 채 반영될 수 있었다(화면·시나리오는 늘 보냄)."""

@@ -110,7 +110,7 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
                         <button key={p.logical_id} onClick={() => openPolicy(p.logical_id, c.status === 'open' ? c.id : null)} disabled={!p.policy_name}
                           title={p.category_path.join(' › ')}
                           className="text-xs px-2 py-0.5 rounded-md border border-slate-600 text-slate-300 hover:border-indigo-500 dark:hover:border-indigo-400 disabled:opacity-50">
-                          {p.policy_name ?? `정책 ${p.logical_id}(지금 쓰이는 버전 없음)`}
+                          {p.policy_name ?? `폐기된 정책 #${p.logical_id}`}
                         </button>
                       ))}
                       {c.ref_tables.map((t) => (

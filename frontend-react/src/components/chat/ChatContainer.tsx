@@ -11,10 +11,12 @@ import {
 import { getMessages } from '../../api/conversations';
 import { MessageItem } from './MessageItem';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
-import { createCorrection, getMyCorrections, markCorrectionsSeen } from '../../api/corrections';
+import { createCorrection, getMyCorrections, markCorrectionsSeen, POLICY_CHANGE_TARGETS, type PolicyChangeTarget } from '../../api/corrections';
 import type { ChatMessage, ClarifyOption, ClarifyPrompt, CollectionSuggest, PolicyCitation, ListAnswer } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
 import { showError } from '../../store/useDialogStore';
+
+const CHANGE_LABEL: Record<PolicyChangeTarget, string> = { policy_add: '정책 추가', policy_retire: '정책 폐기', policy_move: '분류 옮기기' };
 
 /** 신고자 결과 알림 — 내가 낸 정정 신고가 처리되면(반영/반려 사유) 채팅 진입 시 한 번 보여준다. */
 function CorrectionResultsBanner() {
@@ -46,7 +48,10 @@ function CorrectionResultsBanner() {
               ? <span className="text-sky-600 dark:text-sky-400">확인됨</span>
               : <span className="text-rose-600 dark:text-rose-400">반려</span>}
           {' · '}
-          {i.user_input
+          {(POLICY_CHANGE_TARGETS as string[]).includes(i.target_type)   // 정책 추가·폐기·옮기기 제안(C3 2단계)은 질문이 없다
+            ? <>{CHANGE_LABEL[i.target_type as PolicyChangeTarget]} 제안 — {String((i.original as Record<string, unknown> | null)?.policy_name
+                ?? (i.proposed as Record<string, unknown> | null)?.policy_name ?? '')}{i.user_input ? ` (“${i.user_input}”)` : ''}</>
+            : i.user_input
             ? <>“{i.user_input}”</>
             : <>'답변 틀림' 신고 — {String((i.original as Record<string, unknown> | null)?.question ?? '질문 정보 없음').slice(0, 40)}</>}
           {i.status === 'rejected' && i.reject_reason && <> — {i.kind === 'answer_quality' ? '' : '사유: '}{i.reject_reason}</>}

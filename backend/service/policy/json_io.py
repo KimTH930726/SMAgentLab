@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from core.database import get_conn, resolve_namespace_id
-from service.policy.visibility import POLICY_TARGETS, SOURCE_JSON_IMPORT, open_correction_sql
+from service.policy.visibility import POLICY_OPEN_TARGETS, SOURCE_JSON_IMPORT, open_correction_sql
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ async def _current(conn, ns_id: int) -> list:
     return await conn.fetch(
         "SELECT i.id AS item_id, i.logical_id, i.source_key, i.policy_name, i.category_path, i.raw_body, i.remark, "
         f"({open_correction_sql('i.id', '$2')}) AS open_correction_id "
-        "FROM policy_item i WHERE i.namespace_id = $1 AND i.status = 'active' AND i.source_key IS NOT NULL", ns_id, list(POLICY_TARGETS))
+        "FROM policy_item i WHERE i.namespace_id = $1 AND i.status = 'active' AND i.source_key IS NOT NULL", ns_id, list(POLICY_OPEN_TARGETS))
 
 
 def classify(namespace: str, parsed: dict, current: list) -> dict:

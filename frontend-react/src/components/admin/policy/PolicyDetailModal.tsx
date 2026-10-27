@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Pencil, Sparkles } from 'lucide-react';
+import { Archive, ChevronLeft, ChevronRight, FolderInput, Pencil, Sparkles } from 'lucide-react';
 import { getPolicy, type PolicyDetail, type PolicyParamRow } from '../../../api/policy';
 import { correctionSourceLabel } from '../../../api/corrections';
 import { useNamespaceAccess } from '../../../utils/useNamespaceAccess';
@@ -9,6 +9,7 @@ import { Button } from '../../ui/Button';
 import { Badge } from '../../ui/Badge';
 import { PolicyEditModal } from './PolicyEditModal';
 import { PolicyAiSuggestModal } from './PolicyAiSuggestModal';
+import { PolicyMoveModal, PolicyRetireModal } from './PolicyChangeModals';
 
 const STATUS_LABEL: Record<string, string> = {
   active: '사용 중', deprecated: '이전 버전', rejected: '반려', pending_review: '검토 대기',
@@ -39,6 +40,7 @@ function highlight(text: string, params: PolicyParamRow[]): ReactNode {
 /**
  * 정책 상세(10/21) — 경로 · 이름 · 버전 · 원문 · 비고 · 용어 · (있으면) 값 · 버전 이력. [이전][다음]은 목록 순서대로.
  * 고치기는 [AI 수정 제안] / [직접 수정](담당 파트·관리자) — 둘 다 정정 요청에 제안으로 올라가고, 승인해야 새 버전이 된다.
+ * [분류 옮기기 제안]·[폐기 제안](C3 2단계, 10/27)도 같은 정정 요청으로 — 승인해야 반영.
  * 이 정책에 검토 중 정정이 있으면 새 제안을 막고 그 정정으로 안내한다(한 정책에 안이 둘이면 승인 때 하나가 다른 하나를 덮는다).
  */
 export function PolicyDetailModal({
@@ -55,7 +57,7 @@ export function PolicyDetailModal({
 }) {
   const qc = useQueryClient();
   const { canModifyNs } = useNamespaceAccess();
-  const [editing, setEditing] = useState<'direct' | 'ai' | null>(null);
+  const [editing, setEditing] = useState<'direct' | 'ai' | 'move' | 'retire' | null>(null);
   const { data, isLoading, error } = useQuery({
     queryKey: ['policy', namespace, logicalId],
     queryFn: () => getPolicy(namespace, logicalId),
@@ -104,6 +106,14 @@ export function PolicyDetailModal({
                 title={open ? `정정 #${open.id} 검토가 끝나야 새 제안을 올릴 수 있어요` : '원문·비고를 직접 고쳐 정정 요청에 올려요 — 승인하면 새 버전'}>
                 <Pencil className="w-3.5 h-3.5" />직접 수정
               </Button>
+              <Button variant="ghost" size="sm" disabled={!!open} onClick={() => setEditing('move')}
+                title={open ? `정정 #${open.id} 검토가 끝나야 새 제안을 올릴 수 있어요` : '다른 분류(대·중·소)로 옮기는 제안 — 새 분류도 쓸 수 있어요'}>
+                <FolderInput className="w-3.5 h-3.5" />분류 옮기기 제안
+              </Button>
+              <Button variant="ghost" size="sm" disabled={!!open} onClick={() => setEditing('retire')}
+                title={open ? `정정 #${open.id} 검토가 끝나야 새 제안을 올릴 수 있어요` : '승인하면 검색·답변에서 빠져요(지우지 않음)'}>
+                <Archive className="w-3.5 h-3.5" />폐기 제안
+              </Button>
             </div>
           )}
         </div>
@@ -114,6 +124,10 @@ export function PolicyDetailModal({
             onClose={() => setEditing(null)} onDone={afterSubmit} sourceCheckId={sourceCheckId} />
           <PolicyAiSuggestModal isOpen={editing === 'ai'} namespace={namespace} policy={data}
             onClose={() => setEditing(null)} onDone={afterSubmit} sourceCheckId={sourceCheckId} />
+          <PolicyMoveModal isOpen={editing === 'move'} namespace={namespace} itemId={data.item_id} name={data.policy_name}
+            currentPath={data.category_path} onClose={() => setEditing(null)} />
+          <PolicyRetireModal isOpen={editing === 'retire'} namespace={namespace} itemId={data.item_id} name={data.policy_name}
+            onClose={() => setEditing(null)} />
         </>
       )}
     </>

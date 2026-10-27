@@ -30,6 +30,13 @@ def is_searchable(status: str, pipeline_version: str | None) -> bool:
 # 정정 원장(improvement: 정책당 대기 정정 1건 막기)과 정책 화면(catalog: "정정 #N 검토 중")이 같은 기준을 써야 해서 한 곳에 둔다.
 # 두 곳에 같은 SQL·대상 목록이 복사돼 있어 한쪽만 바뀌면 화면엔 "검토 중"이 없는데 제안은 막히는 식으로 어긋날 수 있었다.
 POLICY_TARGETS = ("policy_param", "policy_narrative")
+# 정책 변경 제안(C3 2단계, 10/27 — docs/tech/policy-lifecycle-design.md): 추가(대상 없음)·폐기·분류 옮기기. 내용(원문·값) 정정이 아니라
+# 수정안 칸·AI 초안·대상 변경 같은 정정 경로는 안 탄다(service/improvement/policy_change.py). 폐기·옮기기는 그 정책을 겨누므로
+# "정책당 대기 정정 1건" 잠금·"정정 #N 검토 중" 표시엔 같이 든다 → POLICY_OPEN_TARGETS.
+POLICY_CHANGE_TARGETS = ("policy_add", "policy_retire", "policy_move")
+POLICY_OPEN_TARGETS = POLICY_TARGETS + ("policy_retire", "policy_move")
+# 승인되면 정책 버전을 만들거나 바꾸는 종류 전부 — 버전 이력의 "정정 #N"(catalog)이 쓴다(추가로 생긴 v1이 "적재"로 보이던 것, 리뷰 L3)
+POLICY_APPLIED_TARGETS = POLICY_TARGETS + POLICY_CHANGE_TARGETS
 
 # 정정 원장(ops_improvement_item)의 정책 쪽 값 — 정정 원장(improvement)·원문 확인(source_check)·JSON 가져오기(json_io)·관리자 통계가
 # 같은 문자열을 각자 적고 있었다(10/21 리뷰 C6). 잎 모듈이라 어디서 import해도 순환이 없다.

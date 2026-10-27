@@ -217,81 +217,7 @@
 
 ---
 
-## 2. 벡터 DB (pgvector) 동작 원리
-
-### 임베딩이란
-
-텍스트를 1024개의 숫자 배열(벡터, nlpai-lab/KURE-v1)로 변환한 것이다.
-의미가 비슷한 텍스트일수록 벡터 공간에서 가까운 위치에 배치된다.
-
-```
-"쿠폰 회수"     → [0.12, -0.34, 0.87, ...]  ─┐ 벡터 공간에서 가깝다
-"쿠폰 강제 반납" → [0.11, -0.31, 0.89, ...]  ─┘
-
-"배송 조회"     → [-0.54, 0.22, -0.11, ...]  ─ 위와 멀다
-```
-
-### 저장 구조
-
-```
-ops_knowledge 테이블
-┌────┬───────────┬─────────────────────────┬──────────────────────────────┐
-│ id │ namespace │ content                 │ embedding (VECTOR 1024)      │
-├────┼───────────┼─────────────────────────┼──────────────────────────────┤
-│  1 │ coupon    │ "쿠폰 강제 회수 처리..."  │ [0.12, -0.34, 0.87, ... 1024개] │
-│  2 │ coupon    │ "쿠폰 발급 오류 대응..."  │ [0.23,  0.11, 0.45, ... 1024개] │
-│  3 │ gift      │ "선물 발송 실패 처리..."  │ [-0.05, 0.67, 0.31, ... 1024개] │
-└────┴───────────┴─────────────────────────┴──────────────────────────────┘
-                                                         ▲
-                                                HNSW 인덱스로 빠른 검색
-```
-
-### HNSW 인덱스 (Hierarchical Navigable Small World)
-
-```
-전체 벡터 중 가장 유사한 것 찾기 = ANN(Approximate Nearest Neighbor)
-
-인덱스 없이:  모든 문서와 거리 계산 → O(N) → 문서 수 늘수록 느려짐
-HNSW 사용:    계층적 그래프 탐색    → O(log N) → 수십만 문서도 빠름
-
-인덱스 생성:
-CREATE INDEX ON ops_knowledge USING hnsw (embedding vector_cosine_ops);
-→ vector_cosine_ops: 코사인 거리 기준으로 인덱스 구성
-```
-
-### 코사인 유사도 계산
-
-```
-거리 = embedding <=> query_vector      (pgvector 연산자)
-점수 = 1 - 거리                         (유사도: 1에 가까울수록 비슷)
-
-normalize_embeddings=True 적용 시:
-  모든 벡터의 크기(norm) = 1
-  → 코사인 유사도 = 내적 = 1 - L2거리 (수학적으로 동일)
-  → 계산이 더 빠르고 안정적
-```
-
-### 지식 등록 시 임베딩 생성
-
-```
-관리자 지식 등록
-  │  content = "쿠폰 강제 회수 처리 방법은..."
-  ▼
-EmbeddingService.embed(content)
-  │  SentenceTransformer("nlpai-lab/KURE-v1")
-  │  → 모델이 텍스트를 1024차원 공간에 매핑
-  │  → normalize_embeddings=True 적용
-  ▼
-[0.12, -0.34, 0.87, 0.45, -0.22, ...] (1024개 float)
-  │
-  ▼
-INSERT INTO ops_knowledge (content, embedding, ...)
-  │
-  ▼
-HNSW 인덱스에 자동 반영 → 즉시 검색 가능
-```
-
----
+## 2. 벡터 DB 동작 원리 · 8. 점수 계산 SQL 상세 → `docs/archive/flow-background.md`(배경 설명, 10/27 경량화로 분리)
 
 ## 3. 용어집 등록 및 검색 반영 흐름
 
@@ -596,7 +522,7 @@ Teams 등록 폼은 내용이 확정되는 시점(파일 미리보기 성공·�
   → 결함 수정 뒤 "원문에서 다시 분할": 원장 원문 → 지금 코드로 파싱·분할 → 같으면 끝 / 다르면 원자적 교체(사람이 고친 청크 있으면 멈춤)
 ```
 
-## 5-1. 컨플루언스 벌크 등록 + 카테고리 자동화 흐름 (2026-09-22~24)
+## 5-1. 컨플루언스 벌크 등록 흐름 (2026-09-22~24 · 업무구분 자동 배정 단계는 10/22 폐지)
 
 여러 페이지를 한 번에 끌어올 때는 위 단건 흐름과 다르다 — 페이지마다 카테고리/문맥이
 달라질 수 있어 배치 전체에 값 하나를 강제하면 안 되기 때문(실측: 카테고리가 5개
@@ -742,6 +668,7 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
      └─ 답변 아래 "AI 분석" 카드(어느 근거·왜·틀린 부분·반영되면) / 근거 카드 "정정 검토 중" 배지
                                  ▼
   소유 파트 담당자·관리자: 품질 › 정정 요청 (대기 건수 배지: 메뉴) — 출처 거르기(채팅·정책 직접 수정·정책 AI 제안·JSON 가져오기·평가 게이트)
+     보기: 기본 = 한 건씩(이전/다음, 처리하면 같은 자리 = 다음 건) · [목록] = 전부 나열 + 일괄 승인(v2.177)
      (원문 확인 kind='source_check'는 여기 안 나옴 — 정책서 › 원문 확인, §6-1a)
      ├─ [승인](저장된 수정안) / [직접 수정](v2.150 되살림 — PATCH /{id}/proposed, 승인과 같은 검사, ai_verdict.edits에 누가·언제)
      │   / [AI 다시 쓰기](요청 한 줄 → AI가 다시 씀, POST /redraft) / 반려 — 대상 변경도 가능
@@ -751,6 +678,7 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
      │    (의견 없는 건은 대상을 골라도 초안을 만들지 않음 — 맞는 내용 정보가 없으므로)
      │    카드엔 근거 대상 건도 질문·당시 답변을 표시, AI 초안 프롬프트에도 질문·답변을 함께 넣음
      │    추정이 없는 의견 없음 건(이관된 옛 신고 등)은 [AI로 원인 추정]으로 바로 분석, 탭 건수는 현재 파트만
+     ├─ 정책 추가·폐기·분류 옮기기 제안(v2.178, §6-1a) = 전용 카드 — 무엇이 어떻게 바뀌나 + [승인]/[반려]만(수정안 칸·AI 다시 쓰기 없음)
      ├─ 답변 오류 = 승인 없음, 확인 후 종료(사유)
      ├─ 승인 = 버전 교체(한 트랜잭션, 원본이 현행인지 FOR UPDATE 확인)
      │    지식: 새 rag_knowledge(재임베딩, logical_document_id 승계, version+1, supersedes_id) + 원본 deprecated
@@ -776,13 +704,20 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
          경로 · 이름 · 버전 · 원문 · 비고 · 용어(ops_link policy —uses→ term, from_key = logical_id)
          · 값(있을 때만 — 원문에 칠함, 원문에 없는 값은 빨강) · 버전 이력(적재 / 정정 #N) · [이전][다음](목록 순서)
          담당 파트·관리자: [AI 수정 제안] [직접 수정] → POST /api/corrections(source) → §6-1 정정 요청에서 승인
-         검토 중 정정이 있으면 두 버튼 막힘 + "정정 요청에서 보기"(/admin/q.corrections?focus=N — 그 카드로)
+         [분류 옮기기 제안](기존 분류 고르기 / 대·중·소 직접 입력 = 새 분류) [폐기 제안](이유 필수, 그 정책을 정답으로 쓰는 평가 문항 수 경고)
+         → POST /api/corrections/policy-change {change: move|retire} (v2.178, C3 2단계 — service/improvement/policy_change.py)
+         검토 중 정정이 있으면 버튼 모두 막힘 + "정정 요청에서 보기"(/admin/q.corrections?focus=N — 그 카드로)
+         — 수정·폐기·옮기기는 "정책당 대기 1건" 잠금을 같이 쓴다(동시에 올리면 1건만)
+   목록 맨 위 [+ 정책 추가 제안](새 분류도) · 절 줄 [+ 추가](그 절이 채워짐) → POST …/policy-change {change: add}
+   승인 = 추가: 새 정책 v1(원천 키 sys:<logical_id>, 조각 1개 = 원문 + 임베딩) / 옮기기: 새 버전(분류만 다름, logical_id·원천 키 그대로,
+         조각 다시 임베딩 — 머리에 분류 경로) / 폐기: 상태만 deprecated(지우지 않음). 같은 분류에 같은 이름이면 제안·승인 모두 막음. 끝나면 정책 색인·답변 캐시 비움
 [참고표] GET /api/policy/ref-tables → GET /ref-tables/{id}: 열(결정 열 표시) + 행 {열: 값}, 머리 고정·가로 스크롤
 [문서 개요] GET /api/policy/overviews: 문서 서문(목적·적용 대상)
 [원문 확인] GET /api/policy/source-checks?namespace=&status=open|done   (v2.151 — 정정이 아니라 원문에 대한 질문·문제)
    ├─ 항목 = 정정 원장 kind='source_check'(새 테이블 없음): 담당자 질문(적재 점검) · 정책끼리 어긋남 · 참고표 오류(골든셋 작성)
    │     대상 = 정책 logical_id들 / 참고표 logical_id들(original), 설명 = user_input(원문 인용 없이)
-   │     [해결](메모) POST …/source-checks/{id}/resolve → approved · [닫기](사유) …/dismiss → rejected — 메모는 ai_verdict {resolution, note}
+   │     [해결](메모) POST …/source-checks/{id}/resolve → approved · [문제 없음](사유 4개 — 원문이 맞음·이미 고쳐짐·중복·기타, v2.175) …/dismiss → rejected
+   │     — 결론은 ai_verdict + AI 판단 원장(kind source_check, 오탐률). 카드에서 연 정책으로 올린 제안 = 카드 "정정 요청 중 #n" → 승인되면 카드 자동 해결
    │     고칠 게 정해지면 정책 상세의 수정 제안 → §6-1 정정 요청(여기선 정책이 안 바뀜)
    │     정정 요청 목록·배지·내 신고·정정 처리 API(/api/corrections/{id}/…)는 이 kind를 뺀다(처리 API는 404)
    └─ 제안 연결 = ops_link status='suggested'(source v0_rule, 적재기가 원문 절 번호 오류를 규칙으로 추정한 정책→절 참조)
@@ -792,7 +727,7 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
    ├─ GET /api/policy/json/export?namespace= → {schema: opslens/policy-v0/1, domain, exported_at, policies[source_key, category_path,
    │     policy_name, raw_body, remark, order, version]} (현행만, 원천 키 없는 정책은 빼고 로그)
    ├─ POST /api/policy/json/preview {namespace, content}: 얇은 형식 또는 팀원 policies.jsonl(v0_convert.build_policies로 같은 정리)
-   │     → 원천 키로 비교(원문·비고만): 같음 · 바뀜 · 파일에만(보고만 — 새 정책 추가 미지원) · DB에만(보고만, 지우지 않음)
+   │     → 원천 키로 비교(원문·비고만): 같음 · 바뀜 · 파일에만(보고만 — 새 정책은 화면의 추가 제안으로) · DB에만(보고만, 지우지 않음)
    │       · 검토 중이라 제외(대기 정정 있음) · 이름·경로 변경(가져오지 않음, 보고만) + doc_hash(파일) · plan_hash(바뀐 목록·지금 원문 해시)
    └─ POST /api/policy/json/apply {…, doc_hash, plan_hash}: 다시 계산해 다르면 409 → 바뀐 정책마다 정정 제안 1건
          (create_policy_proposal mode json_import — 직접 수정처럼 받은 원문·비고 그대로, AI 없음, 정책 테이블엔 안 씀)
@@ -867,37 +802,6 @@ POST /api/chat/stream              ── HTTP 핸들러 (동기) ──
 | `meta` | ① Early Meta (DB insert 직후, 0.02초) ② 검색 완료 후 | ①에서 conversation_id/message_id 수신, ②에서 결과 카드 렌더링 |
 | `token` | LLM 토큰마다 | 답변 영역에 토큰 누적 출력 |
 | `done` | 모든 처리 완료 (DB status=completed) | message_id 수신, 피드백 버튼 활성화 |
-
----
-
-## 8. 하이브리드 검색 점수 계산 상세 (SQL 레벨)
-
-```
-입력:
-  w_vector = 0.7   (벡터 비중, 사용자 슬라이더)
-  w_keyword = 0.3  (키워드 비중, 자동 보완)
-  base_weight = 1.0 (문서별 가중치 — v2.121부터 입력 없음, 전부 1.0 상수)
-
-벡터 점수 (v_score):
-  코사인 유사도 = 1 - cosine_distance
-  범위: 0.0 ~ 1.0
-  → 의미가 유사할수록 높음
-
-키워드 점수 (k_score):
-  ts_rank(FTS 벡터, 검색어)
-  범위: 0.0 ~ (이론상 무제한, 보통 0~0.1)
-  → 정확한 단어 매치일수록 높음
-
-최종 점수:
-  final_score = (0.7 × v_score + 0.3 × k_score) × (1 + base_weight)
-              = (0.7 × v_score + 0.3 × k_score) × 2.0  (base_weight 전부 1.0 → 순위엔 영향 없음)
-  채팅 채택 게이트는 이 값을 2로 나눈 원점수(relevance_score)로 knowledge_min_score와 비교
-
-필터 조건:
-  - v_score IS NOT NULL OR k_score IS NOT NULL
-  → 완전히 관련 없는 문서는 제외
-  → 벡터 또는 키워드 중 하나라도 매치된 경우만 반환
-```
 
 ---
 

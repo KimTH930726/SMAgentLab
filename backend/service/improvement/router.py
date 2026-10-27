@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from core.dependencies import check_namespace_ownership, get_current_user, reject_org_collection
 from service.improvement import service
 from service.improvement.schemas import (
-    ApproveBody, CorrectionCreate, ProposedBody, RejectBody, RetargetBody, SeenBody, RedraftBody,
+    ApproveBody, CorrectionCreate, PolicyChangeBody, ProposedBody, RejectBody, RetargetBody, SeenBody, RedraftBody,
 )
 
 router = APIRouter(prefix="/api/corrections", tags=["corrections"])
@@ -54,6 +54,28 @@ async def create_correction(body: CorrectionCreate, user: dict = Depends(get_cur
         )
     except service.ConflictError as e:
         raise _conflict(e)
+
+
+@router.post("/policy-change", status_code=201)
+async def create_policy_change(body: PolicyChangeBody, user: dict = Depends(get_current_user)):
+    """정책 추가·폐기·분류 옮기기 제안(C3 2단계) — 수정 제안과 같은 권한(그 업무 영역 담당 파트·관리자), 반영은 정정 요청 승인에서."""
+    from service.improvement import policy_change
+    await reject_org_collection(body.namespace, "정책")
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        return await policy_change.create(
+            body.namespace, user, change=body.change, target_id=body.target_id, policy_name=body.policy_name,
+            category_path=body.category_path, raw_body=body.raw_body, remark=body.remark, reason=body.reason)
+    except service.ConflictError as e:
+        raise _conflict(e)
+
+
+@router.get("/policy-change/uses")
+async def policy_change_uses(namespace: str, target_id: int, user: dict = Depends(get_current_user)):
+    """폐기 제안 창 경고 — 이 정책을 정답으로 쓰는 평가 문항 수·번호(질문 글 없음). 제안과 같은 권한."""
+    from service.improvement import policy_change
+    await check_namespace_ownership(namespace, user)
+    return await policy_change.uses_of(namespace, target_id)
 
 
 @router.get("/status")

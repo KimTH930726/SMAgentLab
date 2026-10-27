@@ -59,7 +59,7 @@ class TestListPolicies:
                         "policy_name": "p", "has_remark": True, "open_correction_id": 12}]
         sql, *args = conn.fetch.await_args.args
         assert "i.status = 'active'" in sql and sql.rstrip().endswith("ORDER BY i.source_file NULLS LAST, i.source_row NULLS LAST, i.id")
-        assert "o.status = 'pending'" in sql and args == [5, ["policy_param", "policy_narrative"]]
+        assert "o.status = 'pending'" in sql and args == [5, ["policy_param", "policy_narrative", "policy_retire", "policy_move"]]   # 폐기·옮기기 제안도 검토 중(C3 2단계)
 
     @pytest.mark.asyncio
     async def test_query_matches_name_or_body_literally(self):
@@ -99,6 +99,7 @@ class TestGetPolicy:
                 assert args == ("30",) and "l.relation = 'uses'" in sql   # from_key = 정책 logical_id(문자열)
                 return [{"id": 7, "term": "반품", "description": "돌려보냄"}]
             assert "logical_id = $2" in sql
+            assert "policy_add" in args[2] and "policy_narrative" in args[2]   # 추가로 생긴 v1도 "정정 #N"(POLICY_APPLIED_TARGETS, 재리뷰 10/27)
             return [{"item_id": 11, "version": 2, "status": "active", "created_at": at, "correction_id": 9},
                     {"item_id": 10, "version": 1, "status": "deprecated", "created_at": at, "correction_id": None}]
 
