@@ -122,6 +122,8 @@ test('한 건씩 보기 — 한 장만 보이고 다음·이전으로 넘김, �
 
 test('한 건씩 보기 — 마지막 건을 처리해도, 거르기로 목록이 줄어도 화면이 안 깨지고 범위 안 카드를 보여 줌(리뷰 10/27)', async ({ page, request }) => {
   test.setTimeout(180_000);
+  // 앞 시험이 일부러 남긴 대기 건(그 사이 바뀐 안 → 승인 409)이 마지막 카드가 되면 "마지막 건 승인"이 막힌다 — 이 시험 컬렉션의 대기 건을 비우고 시작(순서 의존 제거, 10/27)
+  psql(`DELETE FROM ops_improvement_item WHERE status = 'pending' AND namespace_id = (SELECT id FROM ops_namespace WHERE name = '${NS}')`);
   const tok = await adminToken();
   await propose(request, tok, 'E2E 일괄 E', 'E 정책: 반품은 14일 이내.');
   await propose(request, tok, 'E2E 일괄 F', 'F 정책: 포인트는 2년 뒤 소멸.');

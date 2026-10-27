@@ -13,19 +13,30 @@ import { isOrgCollection } from '../../utils/collections';
 export type Tier = 'mine' | 'team' | 'other';
 export const TIER_ORDER: Record<Tier, number> = { mine: 0, team: 1, other: 2 };
 
-/** 처리 전 정정 요청·원문 확인 건수 칩(10/27 사용자 "정정 대기나 원문 확인 있으면 표시") — 0이면 안 그린다 */
-export function PendingChips({ corrections = 0, sourceChecks = 0 }: { corrections?: number; sourceChecks?: number }) {
+export type PendingTarget = 'corrections' | 'checks';
+
+/** 카드 아래 "손볼 것" 한 줄(10/27 사용자 "정정 대기나 원문 확인 있으면 표시" → "투박하다, 누르면 그 화면으로") — 0이면 안 그린다.
+ *  onJump가 있으면 누르면 그 화면으로(보는 컬렉션 고르기에서만, 권한 있는 사람만), 없으면 숫자만. */
+export function PendingLine({ corrections = 0, sourceChecks = 0, onJump }: {
+  corrections?: number; sourceChecks?: number; onJump?: (to: PendingTarget) => void;
+}) {
   if (!corrections && !sourceChecks) return null;
-  const chip = 'rounded px-1.5 py-0.5 text-[11px] font-normal bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300';
+  const item = (to: PendingTarget, label: string, n: number, hint: string) => {
+    const inner = <><span className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400" aria-hidden />{label} {n}{onJump && <ChevronRight className="w-3 h-3" aria-hidden />}</>;
+    const cls = 'inline-flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300';
+    return onJump
+      ? <button key={to} type="button" onClick={() => onJump(to)} title={hint} className={clsx(cls, 'hover:underline')}>{inner}</button>
+      : <span key={to} title={hint} className={cls}>{inner}</span>;
+  };
   return (
-    <span className="ml-1.5 inline-flex gap-1 align-middle" data-testid="pending-chips">
-      {corrections > 0 && <span className={chip} title="처리 전 정정 요청 — 관리자 › 품질 › 정정 요청">정정 대기 {corrections}</span>}
-      {sourceChecks > 0 && <span className={chip} title="처리 전 정책서 원문 확인 — 정책 › 원문 확인">원문 확인 {sourceChecks}</span>}
-    </span>
+    <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-700/70 pt-1.5 mt-auto" data-testid="pending-chips">
+      {corrections > 0 && item('corrections', '정정 대기', corrections, '처리 전 정정 요청 — 품질 › 정정 요청')}
+      {sourceChecks > 0 && item('checks', '원문 확인', sourceChecks, '처리 전 정책서 원문 확인 — 정책서 › 원문 확인')}
+    </div>
   );
 }
 
-export function TierCard({ tier, title, sub, empty, current, onClick, action, badges }: {
+export function TierCard({ tier, title, sub, empty, current, onClick, action, pending, testid }: {
   tier: Tier;
   title: string;
   sub: ReactNode;
@@ -33,10 +44,16 @@ export function TierCard({ tier, title, sub, empty, current, onClick, action, ba
   current?: boolean;
   onClick?: () => void;
   action?: ReactNode;      // 카드 아래 버튼(관리 화면 [지식 등록 →]) — 있으면 카드 자체는 버튼이 아니다(버튼 안 버튼 금지)
-  badges?: ReactNode;      // 제목 옆 칩(처리 전 건수 등)
+  // 카드 맨 아래 "손볼 것" 줄 — 건수가 있을 때만. 바로가기(onJump)가 있으면 그 줄에 버튼이 생겨 카드 전체를 버튼으로 두지 않는다(버튼 안 버튼 금지),
+  // 없으면 줄은 카드 버튼 안의 글자(넣을 곳 고르기 — 카드 어디를 눌러도 선택되게, 리뷰 10/27)
+  pending?: { corrections?: number; sourceChecks?: number; onJump?: (to: PendingTarget) => void };
+  testid?: string;
 }) {
+  const hasPending = !!(pending && (pending.corrections || pending.sourceChecks));
+  const footer = hasPending ? <PendingLine {...pending} /> : null;
+  const jumpable = hasPending && !!pending?.onJump;
   const cls = clsx(
-    'text-left min-h-[56px] px-3 py-2 rounded-lg border transition-colors',
+    'text-left min-h-[56px] px-3 py-2 rounded-lg border transition-colors',   // 같은 줄 카드는 grid가 높이를 맞춘다(아래 줄은 mt-auto로 바닥에)
     tier === 'mine' ? 'bg-indigo-50 dark:bg-indigo-950/40' : 'bg-slate-900',
     onClick && !action && (tier === 'mine' ? 'hover:bg-indigo-100 dark:hover:bg-indigo-900/40' : 'hover:bg-slate-800'),
     current ? 'border-indigo-500 dark:border-indigo-400 ring-1 ring-indigo-500 dark:ring-indigo-400'
@@ -45,27 +62,30 @@ export function TierCard({ tier, title, sub, empty, current, onClick, action, ba
   const body = (
     <>
       <span className={clsx('block text-sm', tier === 'mine' ? 'font-semibold' : 'font-medium', empty ? 'text-slate-500' : 'text-slate-100')}>
-        {title}{current && <span className="ml-1 text-xs text-indigo-600 dark:text-indigo-300">· 지금</span>}{badges}
+        {title}{current && <span className="ml-1 text-xs text-indigo-600 dark:text-indigo-300">· 지금</span>}
       </span>
       <span className="block text-xs text-slate-500">{sub}</span>
     </>
   );
-  if (onClick && !action) {
+  if (onClick && !action && !jumpable) {
     return (
-      <button type="button" onClick={onClick} aria-current={current ? 'true' : undefined} className={cls}>{body}</button>
+      <button type="button" onClick={onClick} aria-current={current ? 'true' : undefined} className={clsx(cls, 'flex flex-col gap-1')} data-testid={testid}>
+        {body}{footer}
+      </button>
     );
   }
-  if (onClick && action) {
-    // 관리 화면 카드(10/23 사용자: 업무 표처럼 눌러서 고르기) — 제목·설명 부분만 버튼, 아래 링크는 따로(버튼 안 버튼 금지)
+  if (onClick) {
+    // 아래에 버튼이 있는 카드(관리 화면 [지식 등록 →], 손볼 것 바로가기) — 제목·설명 부분만 버튼, 아래는 따로(버튼 안 버튼 금지)
     return (
-      <div className={clsx(cls, 'flex flex-col gap-1')}>
+      <div className={clsx(cls, 'flex flex-col gap-1', !current && 'hover:border-slate-500')} data-testid={testid}>
         <button type="button" onClick={onClick} aria-current={current ? 'true' : undefined} title="이 컬렉션을 보는 컬렉션으로"
           className="text-left rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 dark:focus-visible:ring-indigo-400">{body}</button>
-        <div className="mt-1">{action}</div>
+        {action && <div className="mt-1">{action}</div>}
+        {footer}
       </div>
     );
   }
-  return <div className={clsx(cls, 'flex flex-col gap-1')}>{body}{action && <div className="mt-1">{action}</div>}</div>;
+  return <div className={clsx(cls, 'flex flex-col gap-1')} data-testid={testid}>{body}{action && <div className="mt-1">{action}</div>}{footer}</div>;
 }
 
 export function TierSection({ tier, title, children, count }: { tier: Tier; title: string; children: ReactNode; count: number }) {

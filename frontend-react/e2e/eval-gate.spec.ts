@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { goAdmin } from './admin-nav';
-import { API, adminToken, loginAdmin } from './auth';
+import { adminToken, API, apiFetch, loginAdmin } from './auth';
 
 // 이 테스트가 존재하는 이유(2026-10-23 v2.169 → 10/26 v2.172 카드·층별 막대): 평가 게이트 [검색][답]은 지금 점수(기준선 판정 기록)를 읽기만 한다 —
 // 카드 숫자가 DB에 저장된 판정과 같은지, 목록 층(list + navigation)이 한 줄로 합쳐지는지, 맨 위 숫자가 잠근 시험지(사람·실사용 문항)인지,
@@ -21,7 +21,7 @@ test('평가 게이트 [검색][답] — 카드 숫자 = DB, 층 합치기, 층�
   const s = JSON.parse(psql(`SELECT summary::text FROM eval_gate_run WHERE id = ${baseId}`));
   test.skip(!s.retrieval || !s.answers, '지금 점수에 검색·답 측정이 다 있어야 이 시나리오를 본다');
   const t = await adminToken();
-  const layers = await (await fetch(`${API}/api/eval/gate-runs/${baseId}/layers`, { headers: { Authorization: `Bearer ${t}` } })).json();
+  const layers = await (await apiFetch(`${API}/api/eval/gate-runs/${baseId}/layers`, { headers: { Authorization: `Bearer ${t}` } })).json();
   const sum = (m: Record<string, string[]>) => Object.values(m).reduce((a, v) => a + v.length, 0);
 
   await loginAdmin(page);

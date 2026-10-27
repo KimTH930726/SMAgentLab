@@ -1,5 +1,5 @@
 import type { FullConfig } from '@playwright/test';
-import { API, adminToken } from './auth';
+import { adminToken, API, apiFetch } from './auth';
 
 // E2E는 채팅·정정 시나리오에서 LLM을 실제로 부른다 — 기본은 사내 게이트웨이라 토큰을 쓴다(2026-10-20 실측 42회·약 9.9만 토큰).
 // 그래서 E2E 동안만 로컬 LLM(OpenAI 호환, 백엔드 OPENAI_COMPAT_BASE_URL)으로 전환하고 끝나면 원래 LLM으로 되돌린다.
@@ -9,12 +9,12 @@ import { API, adminToken } from './auth';
 // 있으면 그것도 지워지므로(자격증명은 다시 읽을 수 없다, 리뷰 10/20 M2) 그런 상태면 시작하지 않는다.
 
 async function resetToEnv(token: string) {
-  const r = await fetch(`${API}/api/llm/config`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+  const r = await apiFetch(`${API}/api/llm/config`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) throw new Error(`LLM 되돌리기 실패: ${r.status} ${await r.text()}`);
 }
 
 async function setProvider(token: string, provider: string) {
-  const r = await fetch(`${API}/api/llm/config`, {
+  const r = await apiFetch(`${API}/api/llm/config`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ provider }),
   });
@@ -25,7 +25,7 @@ async function setProvider(token: string, provider: string) {
 export default async function globalSetup(_config: FullConfig) {
   if (process.env.E2E_LLM === 'gateway') return;
   const token = await adminToken();
-  const before = await (await fetch(`${API}/api/llm/config`, { headers: { Authorization: `Bearer ${token}` } })).json();
+  const before = await (await apiFetch(`${API}/api/llm/config`, { headers: { Authorization: `Bearer ${token}` } })).json();
   if (!before.openai_compat?.enabled) {
     throw new Error('로컬 LLM(OPENAI_COMPAT_BASE_URL)이 설정되지 않음 — 게이트웨이로 돌리려면 E2E_LLM=gateway');
   }
@@ -43,7 +43,7 @@ export default async function globalSetup(_config: FullConfig) {
   // 기록용일 뿐이라 실패해도 준비를 막지 않는다 — 여기서 멈추면 되돌리기가 등록되지 않아 백엔드가 로컬 LLM에 남는다(리뷰 M2)
   try {
     const url = `${process.env.E2E_LOCAL_LLM_URL ?? 'http://10.21.37.34:8000/v1'}/models`;
-    const models = await (await fetch(url, { signal: AbortSignal.timeout(5000) })).json();
+    const models = await (await apiFetch(url, { signal: AbortSignal.timeout(5000) })).json();
     console.log(`[E2E] 로컬 LLM 모델: ${models?.data?.[0]?.id ?? '알 수 없음'}`);
   } catch {
     console.log('[E2E] 로컬 LLM 모델: 확인 못 함(기록만, 진행)');

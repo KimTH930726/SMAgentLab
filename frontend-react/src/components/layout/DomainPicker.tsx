@@ -1,12 +1,18 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ArrowLeftRight } from 'lucide-react';
 import type { NamespaceDetail, Part } from '../../types';
 import { collectionLabel } from '../../utils/collections';
+import { canEditDomain, effectiveOwnerParts } from '../../utils/domainAccess';
+import { useAuthStore } from '../../store/useAuthStore';
+import { adminPath } from '../../pages/adminMenu';
 import { CollectionPickerModal } from './CollectionPickerModal';
+import type { PendingTarget } from './collectionCards';
 
 /**
  * 보는 컬렉션 고르기(10/22, 컬렉션 설계 §15-11·§15-13) — 사이드바 칩 + 고르는 창(CollectionPickerModal, 지식 등록 넣을 곳 고르기와 같은 창).
  * 조직 컬렉션을 고르면 지식 문서·용어집·채팅이 그 컬렉션 하나(담을 수 없는 메뉴는 메뉴 노출 관리로 빠짐).
+ * 카드 아래 "정정 대기 n ›"·"원문 확인 n ›" = 그 컬렉션을 고른 채 품질 › 정정 요청 / 정책서 › 원문 확인으로(10/27 사용자). 관리자·담당 파트만.
  */
 export function DomainPicker({ value, onChange, details, parts, userPart }: {
   value: string;
@@ -16,6 +22,13 @@ export function DomainPicker({ value, onChange, details, parts, userPart }: {
   userPart?: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const user = useAuthStore((s) => s.user);
+  const canJump = (d: NamespaceDetail) => canEditDomain(user, effectiveOwnerParts(d));   // 정정 요청·정책서 화면 권한과 같은 함수(viewer 제외, 리뷰)
+  const jump = (name: string, to: PendingTarget) => {
+    onChange(name);
+    navigate(to === 'corrections' ? adminPath('q.corrections') : `${adminPath('k.policy')}?tab=checks`);
+  };
   return (
     <>
       <span id="sidebar-domain-label" className="text-xs font-medium text-slate-500 block mb-1.5">보는 컬렉션</span>
@@ -32,6 +45,7 @@ export function DomainPicker({ value, onChange, details, parts, userPart }: {
         <ArrowLeftRight className="w-3.5 h-3.5 flex-shrink-0 text-indigo-500 dark:text-indigo-300" aria-hidden="true" />
       </button>
       <CollectionPickerModal isOpen={open} onClose={() => setOpen(false)} title="어떤 컬렉션을 볼까요?" value={value} onChoose={onChange}
+        onJump={jump} canJump={canJump}
         details={details} parts={parts} userPart={userPart} />
     </>
   );

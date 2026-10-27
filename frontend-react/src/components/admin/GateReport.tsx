@@ -121,8 +121,10 @@ export function ReportTab() {
   const imp = useQuery({ queryKey: ['eval-improvement', impId], queryFn: () => getLatestImprovement(impId), enabled: impId != null });
   const techs = useQuery({ queryKey: ['eval-techniques'], queryFn: listTechniques, enabled: isAdmin, staleTime: 60_000 });
   const { picker, modal } = useQuestionPicker();
-  const [view, setView] = useState<'tech' | 'cause'>('tech');
+  // 기본 = 원인별(10/27 사용자 "원인별이 메인이고 거기서 고칠 방법으로") — 원인을 고르면 그 원인에 걸린 고칠 방법 카드 → 고르면 그 방법 문항만
+  const [view, setView] = useState<'tech' | 'cause'>('cause');
   const [picked0, setSel] = useState<Pick>({ kind: 'all' });
+  const [sub, setSub] = useState<number | 'none' | null>(null);   // 원인별 보기에서 고른 고칠 방법
   const [tag, setTag] = useState('');
   const [page, setPage] = useState(0);
   const [showUnmeasured, setShowUnmeasured] = useState(false);
@@ -153,24 +155,40 @@ export function ReportTab() {
   // 다시 진단해 후보 id·원인이 바뀌면 고른 것이 사라진다 — 그땐 전체로(리뷰 10/27: 빈 "이 방법으로 고칠 문항 0"이 남았다)
   const sel: Pick = (picked0.kind === 'tech' && !d.techniques.some((t) => t.id === picked0.id))
     || (picked0.kind === 'cause' && !causes.some(([c]) => c === picked0.name)) ? { kind: 'all' } : picked0;
-  const noTech = d.failed.filter((r) => r.techniques.length === 0);
-  const picked = sel.kind === 'all' ? d.failed
+  // 잠근 문항은 원래 진단하지 않는다(고칠 방법을 안 붙임) — "고칠 방법 없음 = 새 기법 아이디어 자리"에 섞지 않는다(리뷰 L4)
+  const noMethod = (r: ReportRow) => r.techniques.length === 0 && !r.locked;
+  const noTech = d.failed.filter(noMethod);
+  const inGroup = sel.kind === 'all' ? d.failed
     : sel.kind === 'tech' ? d.failed.filter((r) => r.techniques.some((t) => t.id === sel.id))
     : sel.kind === 'none' ? noTech
     : d.failed.filter((r) => causeOf(r) === sel.name);
+  // 원인별 보기: 이 원인 문항에 걸린 고칠 방법(이 원인 안 문항 수) + 고칠 방법 없는 문항
+  const methods = view === 'cause'
+    ? d.techniques.map((t) => ({ t, n: inGroup.filter((r) => r.techniques.some((x) => x.id === t.id)).length })).filter((m) => m.n > 0)
+      .sort((a, b) => b.n - a.n)
+    : [];
+  const noneInGroup = view === 'cause' ? inGroup.filter(noMethod).length : 0;
+  const subOn = view === 'cause' && (sub === 'none' ? noneInGroup > 0 : methods.some((m) => m.t.id === sub)) ? sub : null;
+  const picked = subOn === null ? inGroup
+    : subOn === 'none' ? inGroup.filter(noMethod)
+    : inGroup.filter((r) => r.techniques.some((x) => x.id === subOn));
   const tags = [...new Set(picked.flatMap((r) => r.storage))];
   const tagOn = tags.includes(tag) ? tag : '';   // 다시 진단해 그 꼬리표가 사라졌으면 거르기 해제(재리뷰 10/27)
   const rows = tagOn ? picked.filter((r) => r.storage.includes(tagOn)) : picked;
   const pages = Math.max(1, Math.ceil(rows.length / PAGE));
   const cur = Math.min(page, pages - 1);
   const shown = rows.slice(cur * PAGE, cur * PAGE + PAGE);
-  const choose = (p: Pick) => { setSel(p); setTag(''); setPage(0); };
+  const choose = (p: Pick) => { setSel(p); setSub(null); setTag(''); setPage(0); };
+  const chooseSub = (v: number | 'none') => { setSub(subOn === v ? null : v); setTag(''); setPage(0); };
   const pick = picker(d.gate_run_id);
-  const selTech = sel.kind === 'tech' ? d.techniques.find((t) => t.id === sel.id) : undefined;
+  const selTech = sel.kind === 'tech' ? d.techniques.find((t) => t.id === sel.id)
+    : typeof subOn === 'number' ? d.techniques.find((t) => t.id === subOn) : undefined;
   const cand = selTech ? imp.data?.candidates.find((c) => c.id === selTech.id) : undefined;
   const info = selTech ? techs.data?.find((t) => t.key === selTech.technique) : undefined;
   const unmeasuredN = d.unmeasured.reduce((s, u) => s + u.n, 0);
-  const title = sel.kind === 'all' ? '틀린 문항 전체' : sel.kind === 'none' ? '고칠 방법이 없는 문항' : sel.kind === 'cause' ? sel.name : '이 방법으로 고칠 문항';
+  const base = sel.kind === 'all' ? '틀린 문항 전체' : sel.kind === 'none' ? '고칠 방법이 없는 문항' : sel.kind === 'cause' ? sel.name : '이 방법으로 고칠 문항';
+  const title = subOn === null ? base : `${base} · ${subOn === 'none' ? '고칠 방법 없음' : selTech?.title ?? ''}`;
+  const maxCause = Math.max(1, ...causes.map(([, n]) => n));
   const selCls = 'bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500';
   const tab = (v: 'tech' | 'cause', label: string) => (
     <button onClick={() => { setView(v); choose({ kind: 'all' }); }} aria-pressed={view === v}
@@ -214,7 +232,7 @@ export function ReportTab() {
       <div className="grid grid-cols-1 md:grid-cols-[17rem_1fr] gap-4 items-start">
         <nav className="rounded-lg border border-slate-700 bg-slate-800 p-2 space-y-2" aria-label="문항 묶음">
           <div className="flex gap-1 p-0.5 rounded-md bg-slate-900 w-fit" role="group" aria-label="묶는 기준">
-            {tab('tech', '고칠 방법별')}{tab('cause', '원인별')}
+            {tab('cause', '원인별')}{tab('tech', '고칠 방법별')}
           </div>
           <NavItem active={sel.kind === 'all'} onClick={() => choose({ kind: 'all' })} label="틀린 문항 전체" n={d.failed.length} testid="report-nav-all" />
           {view === 'tech' ? (
@@ -235,11 +253,39 @@ export function ReportTab() {
               </div>
             </>
           ) : causes.map(([c, n]) => (
-            <NavItem key={c} active={sel.kind === 'cause' && sel.name === c} onClick={() => choose({ kind: 'cause', name: c })} label={c} n={n} />
+            <NavItem key={c} active={sel.kind === 'cause' && sel.name === c} onClick={() => choose({ kind: 'cause', name: c })} label={c} n={n}
+              testid={`report-cause-${c}`}
+              sub={<span className="mt-1 block h-1.5 rounded-full bg-slate-700 overflow-hidden" aria-hidden>
+                <span className="block h-full bg-rose-500 dark:bg-rose-400" style={{ width: `${(n / maxCause) * 100}%` }} /></span>} />
           ))}
         </nav>
 
         <section className="space-y-3 min-w-0" data-testid="report-panel">
+          {view === 'cause' && (methods.length > 0 || noneInGroup > 0) && (
+            <div className="space-y-1.5" data-testid="report-methods">
+              <p className="text-xs text-slate-400">해 볼 고칠 방법 <span className="text-slate-500">· 누르면 그 방법 문항만, 다시 누르면 전체</span></p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+                {methods.map(({ t, n }) => (
+                  <button key={t.id} onClick={() => chooseSub(t.id)} aria-pressed={subOn === t.id} data-testid={`report-method-${t.id}`}
+                    className={clsx('rounded-lg border px-3 py-2 text-left space-y-0.5 min-w-0',
+                      subOn === t.id ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500 dark:border-indigo-400 dark:bg-indigo-500/10 dark:ring-indigo-400'
+                        : 'border-slate-700 bg-slate-800 hover:border-slate-500')}>
+                    <span className="block text-sm text-slate-100 truncate" title={t.title}>{t.title}</span>
+                    <span className="block text-xs"><b className="text-slate-200 tabular-nums">{n}문항</b>
+                      <span className={clsx('ml-2', STATUS[t.status]?.cls)}>{STATUS[t.status]?.label ?? t.status}</span></span>
+                  </button>
+                ))}
+                {noneInGroup > 0 && (
+                  <button onClick={() => chooseSub('none')} aria-pressed={subOn === 'none'} data-testid="report-method-none"
+                    className={clsx('rounded-lg border border-dashed px-3 py-2 text-left space-y-0.5',
+                      subOn === 'none' ? 'border-indigo-500 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-500/10' : 'border-slate-600 hover:border-slate-500')}>
+                    <span className="block text-sm text-slate-300">고칠 방법 없음</span>
+                    <span className="block text-xs"><b className="text-slate-200 tabular-nums">{noneInGroup}문항</b><span className="ml-2 text-slate-500">새 기법 아이디어 자리</span></span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           {selTech && (
             <div className="space-y-2">
               <p className="text-xs"><span className="text-slate-500">최근 측정 </span><Effect t={selTech} /></p>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { List, Table2, BookOpen, FileQuestion, FileJson } from 'lucide-react';
 import { useAuthStore } from '../../../store/useAuthStore';
@@ -28,9 +28,12 @@ export function PolicyPanel({ onOpenCorrection, onOpenCorrections }: {
   onOpenCorrection: (id: number) => void;
   onOpenCorrections: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>('policies');
+  // 탭 = 주소의 ?tab(10/27) — 고르는 창의 "원문 확인 n ›"가 그 탭으로 바로 오고, 탭을 누르면 주소도 바뀐다(state로 두면 이미 떠 있을 때 안 따라갔다, 리뷰)
+  const [params, setParams] = useSearchParams();
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const tabs = TABS.filter((t) => t.id !== 'json' || isAdmin);
+  const tab: Tab = tabs.find((t) => t.id === params.get('tab'))?.id ?? 'policies';
+  const setTab = (t: Tab) => setParams((p) => { const n = new URLSearchParams(p); if (t === 'policies') n.delete('tab'); else n.set('tab', t); return n; }, { replace: true });
   return (
     <div className="space-y-4">
       <div className="border-b border-slate-700">

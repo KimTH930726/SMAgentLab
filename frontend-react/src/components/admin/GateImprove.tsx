@@ -198,7 +198,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
           <p className="text-xs"><span className={rec.cls} title={rec.hint}>{rec.label} ⓘ</span>
             {c.why && <span className="text-slate-400"> — {c.why}</span>}</p>
         </div>
-        <span className="text-xs text-slate-500" title="품질 › 답 기법의 항목">{c.technique_name}</span>
+        <span className="text-xs text-slate-500" title="품질 › RAG 파이프라인의 항목">{c.technique_name}</span>
       </div>
       <Stepper c={c} />
       <div className="grid gap-1 text-xs text-slate-300">

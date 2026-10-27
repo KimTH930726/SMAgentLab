@@ -20,9 +20,20 @@ export async function loginAdmin(page: Page, { openAdmin = true }: { openAdmin?:
   if (openAdmin) await page.getByRole('link', { name: 'Admin' }).click();
 }
 
+/** 전역 fetch + 연결 오류면 한 번 다시 — node fetch가 서버(uvicorn keep-alive 5초)가 이미 닫은 연결을 다시 집어 "other side closed"로
+ *  한 번씩 실패했다(10/27 세 번, eval-report·policy-change). 응답을 받은 실패(4xx·5xx)는 다시 하지 않는다. */
+export async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    if (!(e instanceof TypeError)) throw e;
+    return fetch(url, init);
+  }
+}
+
 /** API용 관리자 토큰 — 전역 fetch라 테스트(request 컨텍스트 없이도)·globalSetup 어디서나 같은 코드. */
 export async function adminToken(): Promise<string> {
-  const r = await fetch(`${API}/api/auth/login`, {
+  const r = await apiFetch(`${API}/api/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: ADMIN_USER, password: ADMIN_PASS }),
   });

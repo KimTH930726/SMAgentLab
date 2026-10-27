@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { goAdmin } from './admin-nav';
-import { API, adminToken, loginAdmin } from './auth';
+import { API, adminToken, apiFetch, loginAdmin } from './auth';
 
 // 이 테스트가 존재하는 이유(2026-10-23 v2.170 자가 개선 루프 → 10/26 v2.172 틀린 문항 리포트): 리포트는 진단·후보·적재 검수 기록을 읽기만 하고,
 // 사람 결정(나중에·안 하기·결정 취소·운영에 반영했어요)만 상태를 바꾼다. 화면 숫자·줄 수가 서버 리포트와 같은지, 거르기가 서버 꼬리표대로 줄을 줄이는지,
@@ -14,23 +14,18 @@ const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 
 type Report = {
   gate_run_id: number; improvement_id: number; score: { locked: number | null; total: number | null };
-  failed: { qid: string; storage: string[]; techniques: { id: number }[] }[]; techniques: { id: number; status: string; n_failed: number }[];
+  failed: { qid: string; storage: string[]; techniques: { id: number }[]; cause_name: string | null; locked: boolean }[]; techniques: { id: number; status: string; n_failed: number }[];
   unmeasured: { n: number }[];
 };
 
-// 앞 시험 뒤 서버가 닫은 keep-alive 연결을 다시 집어 "other side closed"로 한 번씩 실패했다(10/27 두 번) — 연결 오류만 한 번 다시
-async function get(url: string, init: RequestInit) {
-  try { return await fetch(url, init); } catch (e) { if (!(e instanceof TypeError)) throw e; return fetch(url, init); }
-}
-
 async function report(): Promise<Report | null> {
   const t = await adminToken();
-  return (await get(`${API}/api/eval/report`, { headers: { Authorization: `Bearer ${t}` } })).json();
+  return (await apiFetch(`${API}/api/eval/report`, { headers: { Authorization: `Bearer ${t}` } })).json();
 }
 
 async function review(cid: string, status: string) {
   const t = await adminToken();
-  const res = await get(`${API}/api/eval/candidates/${cid}/review`, {
+  const res = await apiFetch(`${API}/api/eval/candidates/${cid}/review`, {
     method: 'POST', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
   });
   expect(res.ok, '후보 상태 바꾸기 실패').toBe(true);
@@ -69,10 +64,11 @@ test('리포트 — 지금 점수·틀린 문항 수 = 서버, 저장 상태 거
   // 고칠 방법을 고르면 그 방법이 겨냥한 문항만 — 수 = 서버 n_failed, 모든 방법 + "고칠 방법 없음" 수의 합 ≥ 전체(한 문항이 여러 방법에 걸릴 수 있음)
   const t0 = d!.techniques.find((x) => x.n_failed > 0);
   if (t0) {
+    await page.getByRole('group', { name: '묶는 기준' }).getByRole('button', { name: '고칠 방법별' }).click();
     await page.getByTestId(`report-tech-${t0.id}`).click();
     await expect(title).toHaveText(`이 방법으로 고칠 문항 ${t0.n_failed}`);
   }
-  const none = d!.failed.filter((r) => r.techniques.length === 0).length;
+  const none = d!.failed.filter((r) => r.techniques.length === 0 && !r.locked).length;   // 잠근 문항은 진단 안 함 — "고칠 방법 없음"에 안 섞음
   await page.getByTestId('report-nav-none').click();
   await expect(title).toHaveText(`고칠 방법이 없는 문항 ${none}`);
   await page.getByTestId('report-nav-all').click();
@@ -94,6 +90,25 @@ test('리포트 — 지금 점수·틀린 문항 수 = 서버, 저장 상태 거
     await page.keyboard.press('Escape');
   }
   await expect(page.locator('[data-testid^="report-tech-"]')).toHaveCount(d!.techniques.length);
+
+  // 원인별(기본, 10/27) — 원인을 고르면 수 = 그 원인 문항, 그 원인에 걸린 고칠 방법 카드의 수 = 그 원인 안에서 그 방법이 겨냥한 문항
+  await page.getByRole('group', { name: '묶는 기준' }).getByRole('button', { name: '원인별' }).click();
+  const byCause = new Map<string, Report['failed']>();
+  for (const r of d!.failed) byCause.set(r.cause_name ?? (r.locked ? '잠근 문항(진단 안 함)' : '원인 없음'), [...(byCause.get(r.cause_name ?? (r.locked ? '잠근 문항(진단 안 함)' : '원인 없음')) ?? []), r]);
+  const [cname, crows] = [...byCause.entries()].sort((a, b) => b[1].length - a[1].length)[0] ?? [];
+  if (cname) {
+    await page.getByTestId(`report-cause-${cname}`).click();
+    await expect(title).toHaveText(`${cname} ${crows!.length}`);
+    const tid = crows!.flatMap((r) => r.techniques.map((t) => t.id))[0];
+    if (tid) {
+      const n = crows!.filter((r) => r.techniques.some((t) => t.id === tid)).length;
+      await expect(page.getByTestId(`report-method-${tid}`)).toContainText(`${n}문항`);
+      await page.getByTestId(`report-method-${tid}`).click();
+      await expect(title).toContainText(`${cname} · `);
+      await expect(title).toContainText(`${n}`);
+      await expect(page.getByTestId('report-panel').locator('[data-testid^="candidate-"]')).toHaveCount(1);   // 그 방법의 결정 카드
+    }
+  }
 });
 
 test('리포트 고칠 방법 — 나중에·결정 취소가 DB 상태를 바꿈, 안 하기는 이유 필수, 기법 설명이 펼쳐짐', async ({ page }) => {
@@ -105,6 +120,7 @@ test('리포트 고칠 방법 — 나중에·결정 취소가 DB 상태를 바�
   const cid = String(target!.id);
   await loginAdmin(page);
   await goAdmin(page, '품질', '평가 게이트');
+  await page.getByRole('group', { name: '묶는 기준' }).getByRole('button', { name: '고칠 방법별' }).click();
   await page.getByTestId(`report-tech-${cid}`).click();   // 고르면 오른쪽에 결정 카드
   const row = page.getByTestId('report-panel');
   try {
@@ -150,6 +166,7 @@ test('[운영에 반영했어요] — 통과한 측정을 고르면 후보 = 운
     psql(`UPDATE eval_candidate SET measured_gate_run_ids = array_append(coalesce(measured_gate_run_ids, '{}'), ${gid}) WHERE id = ${cid}`);
     await loginAdmin(page);
     await goAdmin(page, '품질', '평가 게이트');
+    await page.getByRole('group', { name: '묶는 기준' }).getByRole('button', { name: '고칠 방법별' }).click();
     await page.getByTestId(`report-tech-${cid}`).click();
     const row = page.getByTestId('report-panel');
     await row.getByRole('button', { name: '운영에 반영했어요…' }).click();

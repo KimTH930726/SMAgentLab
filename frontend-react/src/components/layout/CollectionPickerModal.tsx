@@ -5,7 +5,7 @@ import type { NamespaceDetail, Part } from '../../types';
 import { byContentThenName, isPickableDomain } from '../../utils/selectedDomain';
 import { effectiveOwnerParts, ownerNames } from '../../utils/domainAccess';
 import { isOrgCollection } from '../../utils/collections';
-import { OrgCollectionSections, OrgTeamSections, PendingChips, TierCard, TierSection, orgSub, orgTeams, teamSub, type OrgTeam, type Tier } from './collectionCards';
+import { OrgCollectionSections, OrgTeamSections, TierCard, TierSection, orgSub, orgTeams, teamSub, type OrgTeam, type PendingTarget, type Tier } from './collectionCards';
 
 type Tab = 'business' | 'org';
 
@@ -14,8 +14,9 @@ type Tab = 'business' | 'org';
  * 같은 창을 쓴다 — 정렬·모양을 한 곳에서. 타이핑 없이 누르기만.
  * 업무 탭: 내 파트 담당 > 우리 팀(다른 파트) 담당 > 다른 팀·담당 없음. 조직 탭: 팀 카드(내 팀 먼저) → 그 팀의 팀 공통 + 파트(내 파트 먼저).
  * note: 카드 설명 뒤에 붙일 한 마디(넣을 곳 고르기의 "승인 요청" 등). 테스트용 컬렉션은 안 보인다.
+ * onJump: 카드 아래 "정정 대기 n ›"·"원문 확인 n ›"를 누르면 그 화면으로(보는 컬렉션 고르기만 넘김, 권한은 canJump). 없으면 숫자만(넣을 곳 고르기).
  */
-export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose, details, parts, userPart, note }: {
+export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose, details, parts, userPart, note, onJump, canJump }: {
   isOpen: boolean;
   onClose: () => void;
   title: string;
@@ -25,6 +26,8 @@ export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose,
   parts: Part[];
   userPart?: string | null;
   note?: (d: NamespaceDetail) => string | undefined;
+  onJump?: (name: string, to: PendingTarget) => void;
+  canJump?: (d: NamespaceDetail) => boolean;
 }) {
   const [tab, setTab] = useState<Tab>('business');
   const [teamKey, setTeamKey] = useState<string | null>(null);   // 조직 탭 2단계에서 연 팀(null = 1단계 팀 카드)
@@ -71,12 +74,16 @@ export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose,
     return n ? <>{base} · <span className="text-amber-700 dark:text-amber-300">{n}</span></> : base;
   };
 
+  const pending = (d: NamespaceDetail) => ({
+    corrections: d.pending_corrections, sourceChecks: d.pending_source_checks,
+    onJump: onJump && (canJump?.(d) ?? true) ? (to: PendingTarget) => { onClose(); onJump(d.name, to); } : undefined,
+  });
   const businessCard = (d: NamespaceDetail, t: Tier) => {
     const empty = (d.policy_count ?? 0) + d.knowledge_count === 0;
     const ownerName = ownerNames(effectiveOwnerParts(d));
     return (
       <TierCard key={d.name} tier={t} title={d.name} empty={empty} current={d.name === value} onClick={() => choose(d.name)}
-        badges={<PendingChips corrections={d.pending_corrections} sourceChecks={d.pending_source_checks} />}
+        testid={`collection-card-${d.name}`} pending={pending(d)}
         sub={withNote(d, <>{empty ? '아직 비어 있음' : `정책 ${d.policy_count ?? 0} · 지식 ${d.knowledge_count}`}{t === 'team' && ownerName && ` · ${ownerName}`}</>)} />
     );
   };
@@ -96,7 +103,7 @@ export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose,
       <OrgCollectionSections team={openTeam} userPart={userPart} onBack={() => setTeamKey(null)} card={(d, tier) => (
         <TierCard key={d.name} tier={tier} title={d.display_name ?? d.name} empty={d.knowledge_count + d.glossary_count === 0}
           sub={withNote(d, orgSub(d))} current={d.name === value} onClick={() => choose(d.name)}
-          badges={<PendingChips corrections={d.pending_corrections} sourceChecks={d.pending_source_checks} />} />
+          testid={`collection-card-${d.name}`} pending={pending(d)} />
       )} />
     );
   };

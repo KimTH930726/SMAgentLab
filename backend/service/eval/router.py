@@ -135,6 +135,15 @@ async def get_decisions_report(days: int = Query(default=90, ge=1, le=365), admi
     return await service.decisions_report(days)
 
 
+@router.get("/decisions/log")
+async def get_decision_log(days: int = Query(default=30, ge=1, le=365), kind: Optional[str] = Query(default=None, max_length=40),
+                           changed_only: bool = False, limit: int = Query(default=50, ge=1, le=200), before: Optional[int] = None,
+                           admin: dict = Depends(get_current_admin)):
+    """AI 감사 로그(관리자) — 원장 시간순 한 줄씩(최신 먼저, before = 다음 페이지). 원문 없음."""
+    from service.eval.decision_log import decision_log
+    return await decision_log(days=days, kind=kind, changed_only=changed_only, limit=limit, before_id=before)
+
+
 @router.post("/improvements/{improvement_id}/hypotheses")
 async def mark_hypothesis(improvement_id: int, body: HypothesisBody, admin: dict = Depends(get_current_admin)):
     """AI 묶음 확인 — 맞아요(이름 고정) / 다시 묶기(다음 진단이 새로 묶음) / 되돌리기."""

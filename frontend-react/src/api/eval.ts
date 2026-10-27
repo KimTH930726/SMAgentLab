@@ -249,6 +249,22 @@ export async function getDecisionsReport(days = 90): Promise<DecisionsReport> {
   return apiFetch<DecisionsReport>(`/eval/decisions?days=${days}`);
 }
 
+/** AI 감사 로그 한 줄(10/27) — 원장 시간순. ai/human = 서버가 만든 한 줄 설명(원문 없음), open = 아직 사람·사용자 확정 전 */
+export interface DecisionLogItem {
+  id: number; kind: string; kind_name: string; at: string; decided_at: string | null; confident: boolean; changed: boolean; open: boolean;
+  ai: string; ai_reason: string | null; human: string | null; asked_by: string | null; changed_by: string | null; rule: string | null;
+  verdict: ChangedDecision['verdict']; verdict_reason: string | null;
+}
+
+export async function getDecisionLog(q: { days: number; kind?: string; changedOnly?: boolean; before?: number | null; limit?: number }):
+  Promise<{ items: DecisionLogItem[]; next_before: number | null }> {
+  const p = new URLSearchParams({ days: String(q.days), limit: String(q.limit ?? 50) });
+  if (q.kind) p.set('kind', q.kind);
+  if (q.changedOnly) p.set('changed_only', 'true');
+  if (q.before) p.set('before', String(q.before));
+  return apiFetch(`/eval/decisions/log?${p.toString()}`);
+}
+
 /** "AI가 틀렸나요?" 답 — 바꾼 사람만(서버가 확인) */
 export async function setDecisionVerdict(id: number, verdict: string, reason = ''): Promise<{ id: number; verdict: string }> {
   return apiFetch(`/eval/decisions/${id}/verdict`, { method: 'POST', body: JSON.stringify({ verdict, reason }) });
