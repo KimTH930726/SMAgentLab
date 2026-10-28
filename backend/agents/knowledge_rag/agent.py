@@ -150,6 +150,32 @@ class ChatContext:
     # 목록 답이었나 {total, names} — 화면이 근거 카드(1건 역추적) 위에 "목록 n건에서 답함"을 붙인다(10/23: 카드 1건 vs 답 36줄이 어긋나 보였다)
     list_answer: Optional[dict] = None
     refs: Optional[ref_search.RefResult] = None   # 참고표·문서 개요(v0 #12, 설정 policy_ref_chat이 켜졌을 때만)
+    context_policy: Optional[policy_search.PolicySearchResult] = None   # 실제로 LLM 문맥에 실린 정책(목록 답이면 거른 것) — 운영 기록용(10/28)
+    adopted_ids: set = field(default_factory=set)      # 채택돼 문맥에 실린 지식 id(문맥을 만든 그 판정 그대로 — 기록이 다시 계산하지 않게, 리뷰 L2)
+    parent_ids: list = field(default_factory=list)     # 부모 섹션 보충으로 문맥에 붙은 지식 id(리뷰 M2)
+    list_ids: list = field(default_factory=list)       # 분류 목록으로 문맥에 실린 정책 항목 id(리뷰 M2)
+
+
+TRACE_VERSION = 1
+
+
+def retrieval_trace(cc: "ChatContext") -> dict:
+    """운영 질의 기록(10/28, 사용자 "실사용 질의가 검색에서 맞는 걸 찾았나·답을 잘 만들었나를 알아야"): 이 답에 AI에게 넘긴 근거의
+    종류·id·순위·점수 + 근거 판정 신호 + 용어. **원문·검색어 글자는 안 남긴다**(번호·숫자만) — 나중에 id로 다시 꺼내 표본 채점·진단한다.
+    순수 함수(테스트). 종류: pp 정책 파라미터 · pn 정책 서술 · kn 지식(a = 채택돼 문맥에 실림) · rt 참고표 · ov 개요."""
+    pol = cc.context_policy or cc.policy_result
+    ctx: list[dict] = []
+    ctx += [{"t": "pp", "id": p.item_id, "lid": p.logical_id, "r": i + 1, "s": round(p.score, 4)} for i, p in enumerate(pol.params)]
+    ctx += [{"t": "pn", "id": n.item_id, "lid": n.logical_id, "r": i + 1, "s": round(n.score, 4)} for i, n in enumerate(pol.narratives)]
+    ctx += [{"t": "kn", "id": r.id, "r": i + 1, "s": round(retrieval.relevance_score(r), 4), "a": r.id in cc.adopted_ids}
+            for i, r in enumerate(cc.results)]
+    ctx += [{"t": "px", "id": i} for i in cc.parent_ids]   # 부모 섹션 보충(순위 없이 문맥 끝에)
+    if cc.refs:
+        ctx += [{"t": "rt", "id": t.id, "s": round(t.score, 4)} for t in cc.refs.tables]
+        ctx += [{"t": "ov", "id": o.id, "s": round(o.score, 4)} for o in cc.refs.overviews]
+    return {"v": TRACE_VERSION, "terms": [m.term for m in cc.term_matches], "signals": cc.signals, "abstain": cc.abstain,
+            "clarify": bool(cc.clarify), "list": (cc.list_answer or {}).get("total"), "list_ids": list(cc.list_ids), "codes": len(cc.common_codes),
+            "columns": len(cc.db_columns), "ctx": ctx}
 
 
 def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: float) -> bool:
@@ -327,7 +353,10 @@ async def build_chat_context(
         abstain=should_abstain(signals, settings.policy_abstain_min_score, settings.policy_abstain_min_param_rank),
         # 재질문 선택에서 온 질문(clarify_scope 있음)엔 다시 묻지 않는다 — 대화가 같은 질문으로 맴돌지 않게
         clarify=None if clarify_scope else (category_list.clarify_for(category, list_question or search_question) or (refs.clarify if refs and not list_answer else None)),
-        list_answer=list_answer, refs=refs,
+        list_answer=list_answer, refs=refs, context_policy=ctx_policy,
+        adopted_ids={r.id for r in adopted}, parent_ids=[e["id"] for e in parent_expansions],
+        # 분류 목록 블록이 문맥에 붙었으면 그 항목(목록 답이 아니어도 블록은 붙는다)
+        list_ids=list(category.item_ids) if category and category.item_ids else [],
     )
 
 
@@ -408,6 +437,7 @@ class KnowledgeRagAgent(AgentBase):
         llm_failed = False
         final_saved = False   # 답을 최종 저장했나 — 그 뒤 오류(질의 기록·캐시 등)로 이미 나간 답을 실패로 덮지 않게(리뷰 L2)
         msg_status = "completed"   # 저장한 상태 — 저장 뒤 오류에도 끝 신호를 이 값으로(거부도 failed, 재리뷰 D3)
+        trace: Optional[dict] = None   # 운영 질의 기록 — 검색 뒤에 채운다(오류 경로도 남기게)
 
         try:
             await _close_open_clarify(conversation_id, clarify_scope, user)
@@ -454,7 +484,9 @@ class KnowledgeRagAgent(AgentBase):
                                                                          w_vector=w_vector, w_keyword=w_keyword, top_k=top_k)
                 cached_meta = {k: v for k, v in (("policy_citations", cached_citations), ("list_answer", cached_list),
                                                  ("collection_suggest", cached_sug)) if v}
-                await update_assistant_message(msg_id, cached["answer"], "completed", metadata=cached_meta or None)
+                # 캐시 답 — 이번엔 검색을 안 돌림. 근거는 처음 답한 메시지 기록(src)에(옛 캐시 항목엔 없음)
+                cached_meta["trace"] = {"v": TRACE_VERSION, "cached": True, "src": cached.get("message_id")}
+                await update_assistant_message(msg_id, cached["answer"], "completed", metadata=cached_meta)
                 final_saved = True
                 yield {
                     "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
@@ -484,14 +516,21 @@ class KnowledgeRagAgent(AgentBase):
                 memory.build_context_history(conversation_id, query_vec),
             )
             results, policy_result, llm_context, mapped_term = cc.results, cc.policy_result, cc.llm_context, cc.mapped_term
+            # 운영 질의 기록(10/28) — 넘긴 근거 id·순위·점수·판정 신호. 되묻기·근거 없음·답 모두 메시지 metadata["trace"]에(원문 없음)
+            try:
+                trace = retrieval_trace(cc)
+            except Exception:   # 진단용 보조 기록 — 실패해도 답은 계속(로그만, 리뷰 L1)
+                logger.warning("운영 질의 기록 만들기 실패 msg=%s", msg_id, exc_info=True)
+                trace = {"v": TRACE_VERSION, "error": True}
             if cc.signals.get("scope_missed"):
                 yield {"type": "status", "step": "context", "message": "고른 범위를 찾지 못해 질문 내용으로 다시 찾았습니다"}
             policy_citations: list[dict] = []
 
             async with get_conn() as conn:
+                # 기록(trace)을 여기서 먼저 — 이후 오류·사용자 중단으로 끝나도 남는다(최종 저장은 trace를 다시 넣어 덮음, 리뷰 M1)
                 await conn.execute(
-                    "UPDATE ops_message SET mapped_term = $1, results = $2::jsonb WHERE id = $3",
-                    mapped_term, results_to_json(results), msg_id,
+                    "UPDATE ops_message SET mapped_term = $1, results = $2::jsonb, metadata = jsonb_build_object('trace', $4::jsonb) WHERE id = $3",
+                    mapped_term, results_to_json(results), msg_id, json.dumps(trace, ensure_ascii=False),
                 )
 
             # 제안 버튼으로 다른 컬렉션에서 다시 물은 답 — 답한 컬렉션을 남겨 "답변 틀림"이 그 컬렉션 건으로 가게(보는 컬렉션 아님, 리뷰 M1)
@@ -507,7 +546,7 @@ class KnowledgeRagAgent(AgentBase):
             # 재질문(v2.134): 목록이 너무 넓거나 같은 이름이 여러 업무에 있으면 답 대신 선택지 — LLM 호출 없음. 같은 대화에 남아 다음 선택이
             # 그대로 이어진다(메시지 metadata에 선택지 저장 → 다시 열어도 버튼). 질의 기록·캐시엔 안 남긴다(선택한 다음 질문이 남음)
             if cc.clarify:
-                await update_assistant_message(msg_id, cc.clarify["message"], "completed", metadata={"clarify": cc.clarify})
+                await update_assistant_message(msg_id, cc.clarify["message"], "completed", metadata={"clarify": cc.clarify, "trace": trace})
                 final_saved = True
                 await _record_clarify(conversation_id, msg_id, cc.clarify, user)
                 yield {"type": "clarify", **cc.clarify}
@@ -518,8 +557,8 @@ class KnowledgeRagAgent(AgentBase):
             if cc.abstain:
                 suggestion = None if (suggest_of or clarify_scope) else await _suggestion(
                     namespace, search_question, query_vec, results, w_vector=w_vector, w_keyword=w_keyword, top_k=top_k)
-                abstain_meta = {**({"collection_suggest": suggestion} if suggestion else {}), **answered_ns}
-                await update_assistant_message(msg_id, NO_KNOWLEDGE_MARKER, "completed", metadata=abstain_meta or None)
+                abstain_meta = {**({"collection_suggest": suggestion} if suggestion else {}), **answered_ns, "trace": trace}
+                await update_assistant_message(msg_id, NO_KNOWLEDGE_MARKER, "completed", metadata=abstain_meta)
                 final_saved = True
                 yield {"type": "token", "data": NO_KNOWLEDGE_MARKER}
                 if suggestion:
@@ -608,7 +647,8 @@ class KnowledgeRagAgent(AgentBase):
             if suggestion:
                 meta_out["collection_suggest"] = suggestion
             meta_out.update(answered_ns)
-            await update_assistant_message(msg_id, final_answer, msg_status, metadata=meta_out or None)
+            meta_out["trace"] = trace
+            await update_assistant_message(msg_id, final_answer, msg_status, metadata=meta_out)
             final_saved = True
             if suggestion:
                 await collection_suggest.record(conversation_id=conversation_id, message_id=msg_id, suggestion=suggestion,
@@ -631,6 +671,7 @@ class KnowledgeRagAgent(AgentBase):
             if not is_llm_failure(final_answer) and not clarify_scope and not contextual:
                 await sem_cache.set_cached(namespace, "knowledge_rag", cache_vec, {
                     "answer": final_answer,
+                    "message_id": msg_id,   # 캐시 답의 운영 기록이 처음 답한 메시지(근거 기록)를 가리키게(리뷰 L3)
                     "mapped_term": mapped_term,
                     "results": results_to_payload(results),
                     "policy_citations": policy_citations,
@@ -652,7 +693,9 @@ class KnowledgeRagAgent(AgentBase):
             if not answered:
                 full_answer = SYSTEM_ERROR_MSG
             try:
-                await update_assistant_message(msg_id, full_answer, "failed", metadata={"degraded": True} if answered else None)
+                # 검색 뒤 오류면 그때 기록(trace)을 지키고 표시만 더한다(None이면 검색 전 오류 — 기록 없음)
+                fail_meta = {**({"trace": trace} if trace else {}), **({"degraded": True} if answered else {})}
+                await update_assistant_message(msg_id, full_answer, "failed", metadata=fail_meta or None)
                 await create_query_log(namespace, query, SYSTEM_ERROR_MSG, mapped_term, msg_id,
                                        user_id=user.get("id"), had_context=False)
             except Exception as e2:

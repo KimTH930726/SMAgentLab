@@ -255,3 +255,52 @@ class TestPolicyRemarkInContext:
         )])
         text = agent._build_rrf_context([], policy_result)
         assert "60% 이상 사용 시 전액 환불" in text and "비고: 10월 31일부터 적용" in text
+
+
+class TestRetrievalTrace:
+    """운영 질의 기록(10/28) — 넘긴 근거의 종류·id·순위·점수만(원문 없음). 불변식: 기록된 근거 수 = 문맥에 실린 정책 + 지식 + 참고표·개요(빠짐·중복 없음),
+    목록 답이면 거른 정책(context_policy) 기준."""
+
+    def _cc(self, **kw):
+        from types import SimpleNamespace as NS
+        p = [ParamHit(item_id=1, logical_id=11, policy_name="a", category_path=[], status="active", param_name="x", condition=None, value="1", unit=None, score=0.3)]
+        n = [NarrativeHit(item_id=2, logical_id=12, policy_name="b", category_path=[], status="active", chunk_text="c", score=0.6)]
+        base = dict(policy_result=PolicySearchResult(params=p, narratives=n), context_policy=None,
+                    results=[RetrievalResult(id=7, namespace="ns", content="본문 원문", base_weight=1.0, final_score=1.0, v_score=0.5, k_score=0.5)],
+                    refs=NS(tables=[NS(id=3, score=0.5)], overviews=[]), term_matches=[NS(term="배송비")], signals={"adopted": 1},
+                    abstain=False, clarify=None, list_answer=None, common_codes=[], db_columns=[],
+                    adopted_ids={7}, parent_ids=[8], list_ids=[])
+        base.update(kw)
+        return NS(**base)
+
+    def test_ids_ranks_scores_no_text(self, monkeypatch):
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        t = agent.retrieval_trace(self._cc())
+        assert [(c["t"], c["id"]) for c in t["ctx"]] == [("pp", 1), ("pn", 2), ("kn", 7), ("px", 8), ("rt", 3)]   # 부모 보충도(리뷰 M2)
+        assert t["ctx"][2]["a"] is True and t["ctx"][0]["r"] == 1 and t["terms"] == ["배송비"]
+        assert "본문 원문" not in repr(t) and "c" not in [v for c in t["ctx"] for v in c.values() if isinstance(v, str) and v != c["t"]]
+
+    def test_list_answer_uses_filtered_context(self, monkeypatch):
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        t = agent.retrieval_trace(self._cc(context_policy=PolicySearchResult(), list_answer={"total": 30}, list_ids=[21, 22], parent_ids=[]))
+        assert [c["t"] for c in t["ctx"]] == ["kn", "rt"] and t["list"] == 30 and t["list_ids"] == [21, 22]   # 목록 항목 id도(리뷰 M2)
+
+
+class TestTraceMatchesContext:
+    """리뷰 M2가 지적한 테스트 공백 — 가짜 입력만 보지 말고 실제 문맥 조립(_build_rrf_context)에 실린 지식 id = 기록의 지식 id(채택 + 부모 보충)."""
+
+    def test_knowledge_ids_in_context_equal_trace(self, monkeypatch):
+        import re
+        from types import SimpleNamespace as NS
+        monkeypatch.setattr(agent.retrieval, "get_thresholds", lambda: _THRESHOLDS)
+        rs = [RetrievalResult(id=i, namespace="ns", content=f"내용{i}", base_weight=0.0, final_score=s, v_score=s, k_score=s)
+              for i, s in ((1, 0.9), (2, 0.01))]   # 1은 채택, 2는 기준 미달
+        parents = [{"id": 9, "content": "부모", "heading_path": ["가"]}]
+        ctx = agent._build_rrf_context(rs, PolicySearchResult(), [], [], parents)
+        in_ctx = {int(x) for x in re.findall(r"문서 #(\d+)", ctx)}
+        adopted = {r.id for r in rs if agent.retrieval.is_adopted(r, _THRESHOLDS)}
+        cc = NS(policy_result=PolicySearchResult(), context_policy=None, results=rs, refs=None, term_matches=[], signals={},
+                abstain=False, clarify=None, list_answer=None, common_codes=[], db_columns=[], adopted_ids=adopted, parent_ids=[9], list_ids=[])
+        t = agent.retrieval_trace(cc)
+        traced = {c["id"] for c in t["ctx"] if c["t"] == "px" or (c["t"] == "kn" and c["a"])}
+        assert in_ctx == traced == {1, 9}
