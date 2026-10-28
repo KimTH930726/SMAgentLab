@@ -4,6 +4,7 @@ import { clsx } from 'clsx';
 import { getHistory, listTechniques, type HistoryItem, type Technique } from '../../api/eval';
 import { Modal } from '../ui/Modal';
 import { TechniqueCard } from './TechniqueCard';
+import { STAGES, type Stage } from './GateFlow';
 
 /**
  * 평가 게이트 › 적용 이력(10/27 밤) — 무엇을 언제 어떤 측정으로 바꿨나 · 효과 · 결과를 날짜순(Langfuse 버전 이력 자리).
@@ -17,25 +18,25 @@ const RESULT_TONE: Record<string, string> = {
 };
 // 꺼짐·안 함이 값에 적힌 항목만 표시 — 나머지는 '쓰는 중'이라 단정하지 않는다(옛 RAG 파이프라인 화면과 같은 규칙)
 const isOff = (t: Technique) => t.values.some((v) => v.value === '꺼짐' || v.value.includes('기본 꺼짐') || v.value.startsWith('안 함'));
-const STAGE_ORDER = ['적재', '검색', '근거 판정', '답 모양', '생성'];
+const STAGE_ORDER: string[] = STAGES.map((s) => s.key);
 const ROW = 'grid grid-cols-[4.5rem_5rem_minmax(0,1fr)_7rem_6rem] items-center gap-x-3';
 
-export function GateHistory() {
+/** stage = 평가 게이트 단계 흐름에서 고른 단계(공통 필터, 10/28) — 이력·항목 전체 둘 다 그 단계만 */
+export function GateHistory({ stage = null }: { stage?: Stage | null }) {
   const q = useQuery({ queryKey: ['eval-history'], queryFn: () => getHistory(), staleTime: 60_000 });
   const techs = useQuery({ queryKey: ['eval-techniques'], queryFn: listTechniques, staleTime: 60_000 });
-  const [stage, setStage] = useState('');
   const [open, setOpen] = useState<Technique | null>(null);
   const [view, setView] = useState<'log' | 'all'>('log');
   if (q.isLoading) return <p className="text-sm text-slate-500">불러오는 중…</p>;
   if (q.error) return <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p>;
   const items = (q.data ?? []).filter((x) => !stage || x.stage === stage);
-  const stages = [...new Set((q.data ?? []).map((x) => x.stage))];
+  const staged = (techs.data ?? []).filter((t) => !stage || t.stage === stage);   // 항목 전체도 같은 단계로
   const pick = (it: HistoryItem) => { const t = techs.data?.find((x) => x.key === it.technique); if (t) setOpen(t); };
   const viewBtn = (v: 'log' | 'all', label: string) => (
     <button onClick={() => setView(v)} aria-pressed={view === v}
       className={clsx('rounded-md px-3 py-1 text-xs', view === v ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700')}>{label}</button>
   );
-  const switcher = <div className="inline-flex rounded-lg border border-slate-700 p-0.5">{viewBtn('log', '이력')}{viewBtn('all', `항목 전체 ${techs.data?.length ?? ''}`)}</div>;
+  const switcher = <div className="inline-flex rounded-lg border border-slate-700 p-0.5">{viewBtn('log', '이력')}{viewBtn('all', techs.data ? `항목 전체 ${staged.length}` : '항목 전체')}</div>;
   const modal = (
     <Modal isOpen={open !== null} onClose={() => setOpen(null)} title={open?.name ?? ''} maxWidth="max-w-2xl">
       {open && <TechniqueCard t={open} showName={false} />}
@@ -43,7 +44,7 @@ export function GateHistory() {
   );
   if (view === 'all') {
     // 옛 RAG 파이프라인의 단계별 항목 목록 — 근거가 아직 없는 항목도 빠지지 않게
-    const all = techs.data ?? [];
+    const all = staged;
     const order = (s: string) => STAGE_ORDER.indexOf(s) + 1 || 99;
     const byStage = [...new Set(all.map((t) => t.stage))].sort((a, b) => order(a) - order(b));
     return (
@@ -74,19 +75,11 @@ export function GateHistory() {
   return (
     <div className="space-y-3" data-testid="gate-history">
       {switcher}
-      <div className="flex flex-wrap items-center gap-1" role="group" aria-label="단계">
-        <button onClick={() => setStage('')} aria-pressed={!stage}
-          className={clsx('rounded-full border px-2.5 py-0.5 text-xs', !stage ? 'border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-300' : 'border-slate-600 text-slate-300')}>전체 {q.data?.length ?? 0}</button>
-        {stages.map((s) => (
-          <button key={s} onClick={() => setStage(stage === s ? '' : s)} aria-pressed={stage === s}
-            className={clsx('rounded-full border px-2.5 py-0.5 text-xs', stage === s ? 'border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-300' : 'border-slate-600 text-slate-300')}>{s}</button>
-        ))}
-      </div>
       <div className="rounded-xl border border-slate-700 overflow-x-auto">
         <div className={clsx(ROW, 'px-4 py-1.5 text-[11px] text-slate-500 bg-slate-900/60 min-w-[720px]')}>
           <span>날짜</span><span>단계</span><span>바꾼 것 · 효과</span><span>측정</span><span>결과</span>
         </div>
-        {items.length === 0 && <p className="px-4 py-3 text-sm text-slate-500">기록이 없어요.</p>}
+        {items.length === 0 && <p className="px-4 py-3 text-sm text-slate-500">{stage ? `${stage} 단계 기록이 없어요` : '기록이 없어요.'}</p>}
         {items.map((it, i) => {
           // 결과 = 사람 결정(개선 후보). 측정 기록 줄엔 결정이 없어 그 기법의 지금 상태만 옅게("지금 꺼짐") — 그 측정의 결과로 읽히지 않게
           return (

@@ -57,12 +57,12 @@ test('AI 감사 로그 — 기록만: 번복과 이유가 보이고, 묻는 버�
   await expect(log.getByTestId(`log-${kept}`)).not.toContainText('· 번복');
 });
 
-test('평가 게이트 — 단계 흐름을 누르면 리포트가 그 단계로, 적용 이력 줄 수 = API, 항목 전체 = 대장(옛 RAG 파이프라인 흡수)', async ({ page }) => {
+test('평가 게이트 — 단계 = 공통 필터(탭 유지·이력·항목·성적이 그 단계로), 적용 이력 줄 수 = API, 항목 전체 = 대장(옛 RAG 파이프라인 흡수)', async ({ page }) => {
   test.setTimeout(90_000);
   const t = await adminToken();
   const h = { headers: { Authorization: `Bearer ${t}` } };
   const techs: { key: string; stage: string }[] = await (await apiFetch(`${API}/api/eval/techniques`, h)).json();
-  const history: unknown[] = await (await apiFetch(`${API}/api/eval/history`, h)).json();
+  const history: { stage: string }[] = await (await apiFetch(`${API}/api/eval/history`, h)).json();
   await loginAdmin(page);
   const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
   await nav.waitFor();
@@ -70,11 +70,23 @@ test('평가 게이트 — 단계 흐름을 누르면 리포트가 그 단계로
   await goAdmin(page, '품질', '평가 게이트');
 
   for (const s of ['적재', '검색', '근거 판정', '답 모양', '생성']) await expect(page.getByTestId(`flow-${s}`)).toBeVisible();
+  // 단계 = 공통 필터(10/28) — 고른 단계가 탭을 바꿔도 유지되고, 단계를 눌러도 보던 탭에 머문다
   await page.getByTestId('flow-검색').click();
   await expect(page.getByTestId('flow-검색')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('report-stage')).toContainText('검색 단계');
-  await page.getByTestId('report-stage').getByRole('button', { name: '전체 보기' }).click();
-  await expect(page.getByTestId('report-stage')).toHaveCount(0);
+  await expect(page.getByTestId('stage-filter')).toContainText('검색 단계');
+  await page.getByRole('button', { name: '적용 이력' }).click();
+  await expect(page.getByTestId('gate-history')).toBeVisible();
+  const nHist = history.filter((x) => x.stage === '검색').length;
+  expect(nHist).toBeGreaterThan(0);   // 0건이면 거르기를 못 본다(대장 근거에 검색 단계 기록이 늘 있음)
+  await expect(page.getByTestId('history-row')).toHaveCount(nHist);
+  await page.getByRole('button', { name: /^항목 전체/ }).click();
+  await expect(page.locator('[data-testid^="technique-row-"]')).toHaveCount(techs.filter((x) => x.stage === '검색').length);
+  await page.getByRole('button', { name: '성적', exact: true }).click();
+  await expect(page.getByTestId('gate-scores')).toHaveAttribute('data-which', 'retrieval');   // 검색 단계 = 검색 성적(측정 데이터와 무관한 표지)
+  await page.getByTestId('flow-생성').click();
+  await expect(page.getByTestId('gate-scores')).toHaveAttribute('data-which', 'answers');   // 단계를 눌러도 성적 탭 그대로, 생성 = 답 성적
+  await page.getByTestId('stage-filter').getByRole('button', { name: '전체 단계' }).click();
+  await expect(page.getByTestId('stage-filter')).toHaveCount(0);
 
   await page.getByRole('button', { name: '적용 이력' }).click();
   await expect(page.getByTestId('history-row')).toHaveCount(history.length);

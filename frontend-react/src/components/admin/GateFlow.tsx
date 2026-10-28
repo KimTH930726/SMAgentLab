@@ -6,7 +6,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 
 /**
  * 평가 게이트 맨 위 — 질문이 답이 되는 단계 흐름 요약(10/27 밤, 옛 RAG 파이프라인 메뉴를 흡수). 단계마다 "틀림 n"(시험지 — 틀린 문항의 원인을 단계로)과
- * "번복 n"(운영 — AI 감사 로그의 번복을 단계로). 누르면 아래 리포트가 그 단계로 걸러진다. 어디를 손볼지 고르는 지도.
+ * "번복 n"(운영 — AI 감사 로그의 번복을 단계로). 누르면 아래 탭(틀린 문항·성적·적용 이력)이 모두 그 단계로 걸러진다(공통 필터, 탭은 그대로 — 10/28). 어디를 손볼지 고르는 지도.
  */
 
 export const STAGES = [
@@ -44,7 +44,7 @@ export function GateFlow({ stage, onStage }: { stage: Stage | null; onStage: (s:
   if (rep.error || ov.error) return <p className="text-xs text-rose-600 dark:text-rose-400">단계 흐름을 불러오지 못했습니다: {((rep.error ?? ov.error) as Error).message}</p>;
   return (
     <div className="space-y-1">
-      <div className="flex flex-wrap items-stretch gap-1" role="group" aria-label="단계 흐름 — 누르면 리포트를 그 단계로">
+      <div className="flex flex-wrap items-stretch gap-1" role="group" aria-label="단계 흐름 — 누르면 아래 탭을 그 단계로">
         {STAGES.map((s, i) => {
           const active = stage === s.key;
           const f = s.key === '적재' ? ingestBad : failed[s.key] ?? 0;
@@ -68,7 +68,7 @@ export function GateFlow({ stage, onStage }: { stage: Stage | null; onStage: (s:
           );
         })}
       </div>
-      <p className="text-[11px] text-slate-500">단계를 누르면 아래 리포트가 그 단계로 걸러져요 · 틀림 = 시험지, 번복 = 운영(AI 감사 로그)</p>
+      <p className="text-[11px] text-slate-500">단계를 누르면 아래 탭이 모두 그 단계로 걸러져요(다시 누르면 전체) · 틀림 = 시험지, 번복 = 운영(AI 감사 로그)</p>
     </div>
   );
 }

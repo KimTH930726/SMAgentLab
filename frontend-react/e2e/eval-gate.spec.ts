@@ -13,7 +13,7 @@ const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'p
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 const LIST = ['list', 'navigation'];
 
-test('평가 게이트 [검색][답] — 카드 숫자 = DB, 층 합치기, 층별 놓침·틀림 = 서버, 층을 누르면 문항', async ({ page }) => {
+test('평가 게이트 [성적] 검색 성적·답 성적 — 카드 숫자 = DB, 층 합치기, 층별 놓침·틀림 = 서버, 층을 누르면 문항', async ({ page }) => {
   test.setTimeout(120_000);
   const baseRaw = psql('SELECT id FROM eval_gate_run WHERE is_baseline');
   test.skip(!baseRaw, '기준선 없음');
@@ -28,7 +28,8 @@ test('평가 게이트 [검색][답] — 카드 숫자 = DB, 층 합치기, 층�
   await goAdmin(page, '품질', '평가 게이트');
 
   // [검색] — 카드 3장 = 저장된 Recall·Top-1·놓친 수, 층별 놓침 합 = 놓친 수(서버 규칙이 판정 숫자와 같다)
-  await page.getByRole('button', { name: '검색', exact: true }).click();
+  await page.getByRole('button', { name: '성적', exact: true }).click();   // 10/28 [검색]·[답] 탭 → [성적] 하나(답 성적 | 검색 성적)
+  await page.getByRole('button', { name: '검색 성적', exact: true }).click();
   const r = s.retrieval;
   await expect(page.getByTestId('stat-recall')).toContainText(`${pct(r.recall)}${r.hit}/${r.n}`);
   await expect(page.getByTestId('stat-top1')).toContainText(`${pct(r.top1_rate)}${r.top1}/${r.n}`);
@@ -43,7 +44,7 @@ test('평가 게이트 [검색][답] — 카드 숫자 = DB, 층 합치기, 층�
   }
 
   // [답] — 맨 위 = 잠근 시험지(사람·실사용 가중 평균), 전체 정답률, 라벨 분포, 층별 틀림 합 = 서버 틀린 문항 수
-  await page.getByRole('button', { name: '답', exact: true }).click();
+  await page.getByRole('button', { name: '답 성적', exact: true }).click();
   const locked = ['human', 'real'].map((k) => s.answers.by_type[k]).filter(Boolean);
   if (locked.length) {
     const n = locked.reduce((a: number, x: { n: number }) => a + x.n, 0);
