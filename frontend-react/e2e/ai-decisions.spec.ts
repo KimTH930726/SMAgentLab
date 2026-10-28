@@ -70,6 +70,17 @@ test('평가 게이트 — 단계 = 공통 필터(탭 유지·이력·항목·�
   await goAdmin(page, '품질', '평가 게이트');
 
   for (const s of ['적재', '검색', '근거 판정', '답 모양', '생성']) await expect(page.getByTestId(`flow-${s}`)).toBeVisible();
+  // 적재 칸 = 적재 검수 후보가 걸린 틀린 문항 수(다른 칸과 같은 단위) — 누르면 [틀린 문항] 목록 수와 같다(10/28)
+  const rep: { failed: { techniques: { id: number }[] }[]; techniques: { id: number; cause: string }[] } | null =
+    await (await apiFetch(`${API}/api/eval/report`, h)).json();
+  if (rep) {
+    const ing = new Set(rep.techniques.filter((x) => x.cause === 'ingest').map((x) => x.id));
+    const n = rep.failed.filter((r) => r.techniques.some((x) => ing.has(x.id))).length;
+    await expect(page.getByTestId('flow-적재')).toContainText(`틀림 ${n}`);
+    await page.getByTestId('flow-적재').click();
+    await expect(page.getByTestId('report-list-title')).toHaveText(new RegExp(`^틀린 문항 전체 ${n}(\D|$)`));
+    await page.getByTestId('flow-적재').click();   // 다시 누르면 전체
+  }
   // 단계 = 공통 필터(10/28) — 고른 단계가 탭을 바꿔도 유지되고, 단계를 눌러도 보던 탭에 머문다
   await page.getByTestId('flow-검색').click();
   await expect(page.getByTestId('flow-검색')).toHaveAttribute('aria-pressed', 'true');

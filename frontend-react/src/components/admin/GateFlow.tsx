@@ -33,8 +33,10 @@ export function GateFlow({ stage, onStage }: { stage: Stage | null; onStage: (s:
     const s = r.cause ? CAUSE_STAGE[r.cause] : undefined;
     if (s) failed[s] = (failed[s] ?? 0) + 1;
   }
-  // 적재는 시험지 원인이 아니라 적재 검수(어긋난 검사로 만든 후보)로 — 저장이 설계와 다른 곳
-  const ingestBad = (rep.data?.techniques ?? []).filter((t) => t.cause === 'ingest').length;
+  // 적재 = 적재 검수 후보(저장이 설계와 다른 곳)가 걸린 틀린 문항 수 — 다른 단계와 같은 단위(문항), 누르면 [틀린 문항]에 같은 수가 보인다
+  // (10/28 사용자: 예전엔 후보 개수 4를 "어긋남"으로 보여 다른 칸의 문항 수와 단위가 달랐다). ReportTab의 적재 거르기와 같은 규칙
+  const ingestIds = new Set((rep.data?.techniques ?? []).filter((t) => t.cause === 'ingest').map((t) => t.id));
+  const ingestBad = (rep.data?.failed ?? []).filter((r) => r.techniques.some((t) => ingestIds.has(t.id))).length;
   const over: Partial<Record<Stage, number>> = {};
   for (const k of ov.data?.kinds ?? []) {
     const s = KIND_STAGE[k.kind];
@@ -58,8 +60,8 @@ export function GateFlow({ stage, onStage }: { stage: Stage | null; onStage: (s:
                 <span className="block text-sm font-semibold text-slate-100">{s.key}</span>
                 <span className="block text-xs mt-0.5">
                   <span className={f ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}
-                    title={s.key === '적재' ? '적재 검수에서 어긋난 검사(설계 완료 기준과 다른 저장)' : '이 단계에서 처음 실패한 틀린 문항(시험지)'}>
-                    {s.key === '적재' ? '어긋남' : '틀림'} {f}</span>
+                    title={s.key === '적재' ? `적재 문제(설계와 다르게 저장 — 적재 검수 후보 ${ingestIds.size}개)가 걸린 틀린 문항` : '이 단계에서 처음 실패한 틀린 문항(시험지)'}>
+                    틀림 {f}</span>
                   {(over[s.key] ?? 0) > 0 && <span className="text-amber-700 dark:text-amber-300" title="AI 감사 로그 — 사람이 AI 추천을 번복한 수(최근 30일, 진단은 90일)"> · 번복 {over[s.key]}</span>}
                 </span>
               </button>
