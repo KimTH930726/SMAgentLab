@@ -12,6 +12,7 @@ import logging
 from datetime import date, datetime, time, timezone
 from typing import Optional
 
+from agents.knowledge_rag.knowledge import api as knowledge_api
 from core.database import get_conn, resolve_namespace_id
 from service.email_voc import delegated_auth, graph_client, pattern_detection, routing_service, teams_notify
 from service.email_voc.service import _strip_forwarded_chain, analyze_email, check_relevance
@@ -442,18 +443,4 @@ async def get_knowledge_refs(namespace: str, knowledge_ids: list[int]) -> list[d
     지식이 섞여 나오지 않도록 한다(id는 분석 당시 값이라 신뢰할 수 있지만,
     조회 시점엔 삭제/네임스페이스 이전됐을 가능성을 배제하기 위한 방어적 필터).
     """
-    if not knowledge_ids:
-        return []
-    async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-        if ns_id is None:
-            return []
-        rows = await conn.fetch(
-            """
-            SELECT id, content
-            FROM rag_knowledge
-            WHERE namespace_id = $1 AND id = ANY($2::int[])
-            """,
-            ns_id, knowledge_ids,
-        )
-    return [dict(r) for r in rows]
+    return await knowledge_api.contents(namespace, knowledge_ids)   # 지식은 코어 API로만(10/28 VOC 레이어 분리)

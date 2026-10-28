@@ -61,13 +61,12 @@ from typing import Optional
 
 import numpy as np
 
-from core.database import get_conn, resolve_namespace_id, scope_ids_subquery
+from agents.knowledge_rag.knowledge import api as knowledge_api   # 지식은 코어 API로만(10/28 VOC 레이어 분리)
+from core.database import get_conn, resolve_namespace_id
 from service.llm.factory import get_llm_provider
 from shared.json_utils import parse_json_object
 
 # VOC 커버리지(해결방안 지식) 찾는 범위 = 클러스터 영역 + 직계 하위 — 채팅 지식 검색(namespace_scope_ids)과 같은 규칙
-_VOC_SCOPE = scope_ids_subquery("c.namespace_id")
-
 logger = logging.getLogger(__name__)
 
 _REPLY_PREFIX_RE = re.compile(r"^\s*(re|fwd?|회신|답장|전달)\s*[:：]\s*", re.IGNORECASE)
@@ -303,6 +302,10 @@ async def _verify_coverage_with_llm(voc_subject: str, knowledge_content: str) ->
         return False
 
 
+# 매칭 지식이 없을 때(영역에 사용 중 지식 0) — 옛 LEFT JOIN LATERAL이 NULL을 주던 것과 같게
+_NO_MATCH = {"knowledge_id": None, "similarity": None, "snippet": None, "content": None}
+
+
 async def _resolve_coverage(conn, cluster_id: int, row) -> dict:
     """코사인 유사도 사전필터 + LLM 검증 캐시를 함께 적용해 최종 커버리지를 판정한다.
 
@@ -346,30 +349,16 @@ async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
     바로 보여주고 없으면 명시적으로 "없다"고 알린다.
     """
     async with get_conn() as conn:
-        row = await conn.fetchrow(
-            f"""
-            SELECT c.representative_subject, c.coverage_knowledge_id, c.coverage_verified,
-                   best.knowledge_id, best.similarity, best.snippet, best.content
-            FROM ops_voc_cluster c
-            LEFT JOIN LATERAL (
-                SELECT k.id AS knowledge_id,
-                       1 - (k.embedding <=> c.representative_embedding) AS similarity,
-                       LEFT(k.content, 200) AS snippet, k.content
-                FROM rag_knowledge k
-                -- 클러스터 영역 + 직계 하위 영역(트리, category-removal-design §2-6 — 채팅 지식 검색과 같은 규칙 scope_ids_subquery)
-                WHERE k.namespace_id IN ({_VOC_SCOPE})
-                  AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
-                  -- 업무구분 DB/공통코드 제외 조건은 10/22 업무구분 폐지로 삭제(해당 활성 지식 0건 — 후보 동일)
-                ORDER BY k.embedding <=> c.representative_embedding
-                LIMIT 1
-            ) best ON true
-            WHERE c.id = $1 AND c.namespace_id = $2
-            """,
+        c = await conn.fetchrow(
+            """SELECT c.representative_subject, c.coverage_knowledge_id, c.coverage_verified, c.representative_embedding::text AS emb
+               FROM ops_voc_cluster c WHERE c.id = $1 AND c.namespace_id = $2""",
             cluster_id, ns_id,
         )
-        if row is None:
+        if c is None:
             return {"covered": False, "snippet": None}
-        result = await _resolve_coverage(conn, cluster_id, row)
+        # 가장 가까운 사용 중 지식(클러스터 영역 + 직계 하위 — 채팅 지식 검색과 같은 범위)은 코어 API가
+        best = (await knowledge_api.nearest(conn, [(cluster_id, ns_id, c["emb"])], snippet_len=200)).get(cluster_id) or {}
+        result = await _resolve_coverage(conn, cluster_id, {**dict(c), **_NO_MATCH, **best})
     return {"covered": result["covered"], "snippet": result["snippet"]}
 
 
@@ -397,23 +386,10 @@ async def list_clusters(namespace: str) -> list[dict]:
             f"""
             SELECT c.id, c.representative_subject, c.member_count,
                    c.first_seen_at, c.last_seen_at, c.notified_at,
-                   c.coverage_knowledge_id, c.coverage_verified,
-                   best.knowledge_id, best.similarity, best.snippet, best.content,
+                   c.coverage_knowledge_id, c.coverage_verified, c.namespace_id, c.representative_embedding::text AS emb,
                    cat.primary_category, cat.breakdown AS category_breakdown,
                    sev.primary_severity
             FROM ops_voc_cluster c
-            LEFT JOIN LATERAL (
-                SELECT k.id AS knowledge_id,
-                       1 - (k.embedding <=> c.representative_embedding) AS similarity,
-                       LEFT(k.content, 100) AS snippet, k.content
-                FROM rag_knowledge k
-                -- 클러스터 영역 + 직계 하위 영역(트리, category-removal-design §2-6 — 채팅 지식 검색과 같은 규칙 scope_ids_subquery)
-                WHERE k.namespace_id IN ({_VOC_SCOPE})
-                  AND (k.status IS NULL OR k.status = 'active') AND k.embedding IS NOT NULL
-                  -- 업무구분 DB/공통코드 제외 조건은 10/22 삭제(get_cluster_coverage()와 같음)
-                ORDER BY k.embedding <=> c.representative_embedding
-                LIMIT 1
-            ) best ON true
             -- 같은 반복 유형인데도 LLM이 건마다 다른 category로 분류하면 분류
             -- 일관성 문제를 의심할 신호다 — 다수결(primary)은 필터링용, 전체
             -- 분포(breakdown)는 관리자가 그 불일치를 직접 확인할 근거로 노출한다.
@@ -444,8 +420,11 @@ async def list_clusters(namespace: str) -> list[dict]:
         # 클러스터 하나씩 순차 처리한다 — 같은 커넥션으로 동시 쿼리를 던질 수 없어서다.
         # 최초 1회(캐시가 비어 있을 때)만 클러스터 수만큼 LLM을 호출하고, 이후 조회는
         # 대부분 캐시 히트라 빠르다.
+        # 가장 가까운 사용 중 지식은 코어 API로 한 번에(클러스터 수만큼 쿼리하지 않게)
+        best_of = await knowledge_api.nearest(conn, [(r["id"], r["namespace_id"], r["emb"]) for r in rows], snippet_len=100)
         clusters = []
-        for r in rows:
+        for r0 in rows:
+            r = {**dict(r0), **_NO_MATCH, **best_of.get(r0["id"], {})}
             coverage = await _resolve_coverage(conn, r["id"], r)
             clusters.append({
                 "id": r["id"], "representative_subject": r["representative_subject"],

@@ -84,38 +84,14 @@ class TestExistingMessageIds:
 
 
 class TestGetKnowledgeRefs:
-    @pytest.mark.asyncio
-    async def test_empty_ids_skips_db_call(self, patch_db):
-        conn, resolve_mock = patch_db
-        result = await pipeline.get_knowledge_refs("ns", [])
-        assert result == []
-        conn.fetch.assert_not_called()
-        resolve_mock.assert_not_awaited()
+    """근거 지식 조회는 코어 API(knowledge.api.contents)로만(10/28 VOC 레이어 분리) — 영역 거르기·빈 id는 API 쪽 몫."""
 
     @pytest.mark.asyncio
-    async def test_unknown_namespace_returns_empty(self, patch_db):
-        conn, resolve_mock = patch_db
-        resolve_mock.return_value = None
-        result = await pipeline.get_knowledge_refs("no-such-ns", [1, 2])
-        assert result == []
-        conn.fetch.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_returns_matched_rows_scoped_to_namespace(self, patch_db):
-        conn, resolve_mock = patch_db
-        resolve_mock.return_value = 42
-        conn.fetch.return_value = [
-            {"id": 1, "content": "내용1", "category": "DB"},
-            {"id": 2, "content": "내용2", "category": None},
-        ]
-        result = await pipeline.get_knowledge_refs("딜리버스", [1, 2, 999])
-        assert result == [
-            {"id": 1, "content": "내용1", "category": "DB"},
-            {"id": 2, "content": "내용2", "category": None},
-        ]
-        args = conn.fetch.call_args.args
-        assert args[1] == 42  # namespace_id로 스코핑됐는지
-        assert args[2] == [1, 2, 999]
+    async def test_delegates_to_knowledge_api(self, patch_db, monkeypatch):
+        got = AsyncMock(return_value=[{"id": 1, "content": "내용1"}])
+        monkeypatch.setattr(pipeline, "knowledge_api", SimpleNamespace(contents=got))
+        assert await pipeline.get_knowledge_refs("딜리버스", [1, 999]) == [{"id": 1, "content": "내용1"}]
+        got.assert_awaited_once_with("딜리버스", [1, 999])
 
 
 def _stub_routing_row(**overrides) -> dict:

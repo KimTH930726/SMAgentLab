@@ -8,6 +8,7 @@ import importlib.util as _ilu
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -37,6 +38,18 @@ def patch_db(monkeypatch):
     monkeypatch.setattr(pattern_detection, "get_conn", MagicMock(return_value=conn))
     resolve_mock = AsyncMock(return_value=1)
     monkeypatch.setattr(pattern_detection, "resolve_namespace_id", resolve_mock)
+    # 가장 가까운 지식은 코어 API(knowledge.api.nearest, 10/28 VOC 레이어 분리) — 경계에서 가짜로: 시험 데이터의 지식 칸을 그대로 돌려준다
+    # (클러스터 줄 = fetchrow/fetch가 돌려준 값에 knowledge_id·similarity·snippet·content가 같이 들어 있는 옛 시험 모양 그대로)
+    kf = ("knowledge_id", "similarity", "snippet", "content")
+
+    async def fake_nearest(_conn, items, snippet_len):
+        rows = conn.fetch.return_value if isinstance(conn.fetch.return_value, list) and conn.fetch.return_value             else ([dict(conn.fetchrow.return_value, id=items[0][0])] if conn.fetchrow.return_value and items else [])
+        by = {r.get("id"): {k: r.get(k) for k in kf} for r in rows if r and r.get("knowledge_id") is not None}
+        fake_nearest.calls.append((items, snippet_len))
+        return {k: by[k] for k, _, _ in items if k in by}
+    fake_nearest.calls = []
+    monkeypatch.setattr(pattern_detection, "knowledge_api", SimpleNamespace(nearest=fake_nearest))
+    conn.fake_nearest = fake_nearest
     return conn, resolve_mock
 
 
@@ -252,7 +265,7 @@ class TestGetClusterCoverage:
     async def test_covered_when_llm_confirms_relevance(self, patch_db, monkeypatch):
         conn, _ = patch_db
         conn.fetchrow.return_value = {
-            "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": None, "coverage_verified": None,
+            "emb": None, "namespace_id": 1, "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": None, "coverage_verified": None,
             "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차...", "content": "재배송 처리 절차 전문...",
         }
         llm_mock = AsyncMock(return_value=True)
@@ -260,6 +273,7 @@ class TestGetClusterCoverage:
         result = await pattern_detection.get_cluster_coverage(1, 55)
         assert result == {"covered": True, "snippet": "재배송 처리 절차..."}
         llm_mock.assert_awaited_once_with("배달완료 제품 못받음", "재배송 처리 절차 전문...")
+        assert conn.fake_nearest.calls == [([(55, 1, None)], 200)]   # (클러스터, 영역, 벡터) 짝 · 알림 카드 snippet 200자(코어 API 경계)
         # 검증 결과를 캐시에 써야 다음 호출에서 LLM을 재호출하지 않는다
         cache_write = [c.args for c in conn.execute.call_args_list if "coverage_knowledge_id" in c.args[0]]
         assert cache_write and cache_write[0][1:] == (55, 42, True)
@@ -270,7 +284,7 @@ class TestGetClusterCoverage:
         다른 주제(무관한 CS 보일러플레이트 문구만 겹침)라 LLM이 false로 판단하는 경우."""
         conn, _ = patch_db
         conn.fetchrow.return_value = {
-            "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": None, "coverage_verified": None,
+            "emb": None, "namespace_id": 1, "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": None, "coverage_verified": None,
             "knowledge_id": 19, "similarity": 0.73, "snippet": "사이렌오더 결제 취소...", "content": "사이렌오더 결제 취소 전문...",
         }
         monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", AsyncMock(return_value=False))
@@ -294,7 +308,7 @@ class TestGetClusterCoverage:
     async def test_not_covered_when_similarity_below_threshold_skips_llm(self, patch_db, monkeypatch):
         conn, _ = patch_db
         conn.fetchrow.return_value = {
-            "representative_subject": "배달 지연", "coverage_knowledge_id": None, "coverage_verified": None,
+            "emb": None, "namespace_id": 1, "representative_subject": "배달 지연", "coverage_knowledge_id": None, "coverage_verified": None,
             "knowledge_id": 9, "similarity": 0.4, "snippet": "무관한 문서", "content": "무관한 문서 전문",
         }
         llm_mock = AsyncMock()
@@ -317,7 +331,7 @@ class TestGetClusterCoverage:
     async def test_cache_hit_skips_llm_when_same_knowledge_id_already_verified(self, patch_db, monkeypatch):
         conn, _ = patch_db
         conn.fetchrow.return_value = {
-            "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": 42, "coverage_verified": True,
+            "emb": None, "namespace_id": 1, "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": 42, "coverage_verified": True,
             "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차...", "content": "재배송 처리 절차 전문...",
         }
         llm_mock = AsyncMock()
@@ -333,7 +347,7 @@ class TestGetClusterCoverage:
         '이 답이 아직도 지금 매칭에 대한 답인가'를 실제로 되묻는 조건이라는 게 다르다."""
         conn, _ = patch_db
         conn.fetchrow.return_value = {
-            "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": 19, "coverage_verified": False,
+            "emb": None, "namespace_id": 1, "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": 19, "coverage_verified": False,
             "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차...", "content": "재배송 처리 절차 전문...",
         }
         llm_mock = AsyncMock(return_value=True)
@@ -368,7 +382,7 @@ class TestListClusters:
         conn, _ = patch_db
         conn.fetch.return_value = [
             {
-                "id": 1, "representative_subject": "배달 오배송 불만", "member_count": 5,
+                "emb": None, "namespace_id": 1, "id": 1, "representative_subject": "배달 오배송 불만", "member_count": 5,
                 "first_seen_at": _NOW, "last_seen_at": _NOW, "notified_at": _NOW,
                 "coverage_knowledge_id": 42, "coverage_verified": True,  # 캐시 히트 — LLM 재호출 없음
                 "knowledge_id": 42, "similarity": 0.81, "snippet": "오배송 처리 절차...", "content": "오배송 처리 절차 전문...",
@@ -376,7 +390,7 @@ class TestListClusters:
                 "category_breakdown": '[{"category": "system_error", "count": 5}]',
             },
             {
-                "id": 2, "representative_subject": "음료 쏟아짐", "member_count": 3,
+                "emb": None, "namespace_id": 1, "id": 2, "representative_subject": "음료 쏟아짐", "member_count": 3,
                 "first_seen_at": _NOW, "last_seen_at": _NOW, "notified_at": None,
                 "coverage_knowledge_id": None, "coverage_verified": None,
                 "knowledge_id": None, "similarity": None, "snippet": None, "content": None,
@@ -387,6 +401,7 @@ class TestListClusters:
         llm_mock = AsyncMock()
         monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
         result = await pattern_detection.list_clusters("ns")
+        assert conn.fake_nearest.calls == [([(1, 1, None), (2, 1, None)], 100)]   # 클러스터 전부 한 번에 · 목록 snippet 100자
         assert result[0]["has_knowledge_coverage"] is True
         assert result[0]["matched_knowledge_id"] == 42
         assert result[0]["primary_category"] == "system_error"
@@ -401,7 +416,7 @@ class TestListClusters:
         conn, _ = patch_db
         conn.fetch.return_value = [
             {
-                "id": 3, "representative_subject": "배달완료 제품 못받음", "member_count": 21,
+                "emb": None, "namespace_id": 1, "id": 3, "representative_subject": "배달완료 제품 못받음", "member_count": 21,
                 "first_seen_at": _NOW, "last_seen_at": _NOW, "notified_at": _NOW,
                 "coverage_knowledge_id": None, "coverage_verified": None,
                 "knowledge_id": 19, "similarity": 0.73, "snippet": "사이렌오더...", "content": "사이렌오더 결제 취소 전문...",

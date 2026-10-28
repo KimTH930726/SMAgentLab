@@ -648,15 +648,17 @@ class TestCreateUpdateDelete:
 # ── VOC 커버리지 범위(리뷰 L5: SQL 실행) ─────────────────────────────────────
 
 class TestVocCoverageScope:
-    """VOC 반복 유형 커버리지는 search_knowledge가 아니라 자체 LATERAL SQL이다(설계 문서의 "자동으로 따라감" 전제와 다름).
+    """VOC 반복 유형 커버리지는 search_knowledge가 아니라 LATERAL SQL이다 — 10/28 VOC 레이어 분리로 지식 코어 API(knowledge/api.py nearest)로 옮김.
     본문 SQL은 pgvector(<=>)·array_agg(...)[1]·json_build_object라 sqlite로 통째 실행이 안 된다 — 그래서 ① 두 SQL이 범위 조각을
     정확히 그 모양으로 품고 있는지 보고 ② 그 조각을 같은 상관 조건(c.namespace_id)으로 sqlite에서 실제로 돌린다."""
 
     def test_both_coverage_sqls_use_shared_scope_fragment(self):
+        # 두 커버리지(알림·목록) 모두 api.nearest 한 곳 — 그 SQL이 공용 범위 조각을 품는다(VOC 쪽엔 지식 SQL 없음: test_voc_boundary)
         pd_src = (ROOT / "service" / "email_voc" / "pattern_detection.py").read_text(encoding="utf-8")
-        assert "k.namespace_id = c.namespace_id" not in pd_src
-        assert pd_src.count("WHERE k.namespace_id IN ({_VOC_SCOPE})") == 2
-        assert '_VOC_SCOPE = scope_ids_subquery("c.namespace_id")' in pd_src
+        api_src = (ROOT / "agents" / "knowledge_rag" / "knowledge" / "api.py").read_text(encoding="utf-8")
+        assert pd_src.count("knowledge_api.nearest(") == 2
+        assert "k.namespace_id = c.namespace_id" not in api_src
+        assert 'WHERE k.namespace_id IN ({scope_ids_subquery("c.namespace_id")})' in api_src
 
     @pytest.mark.asyncio
     async def test_fragment_correlated_on_cluster(self, db):

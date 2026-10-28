@@ -16,8 +16,9 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from agents.knowledge_rag.knowledge import retrieval, glossary_terms
-from agents.knowledge_rag.knowledge.retrieval import RetrievalResult
+# 지식은 코어 API로만(10/28 VOC 레이어 분리 — 검색 내부·지식 표를 직접 만지지 않는다, tests/test_voc_boundary.py)
+from agents.knowledge_rag.knowledge import api as knowledge_api
+from agents.knowledge_rag.knowledge.api import RetrievalResult
 from service.llm.base import neutralize_structural_labels
 from service.llm.factory import get_llm_provider
 from service.prompt.loader import get_prompt
@@ -232,13 +233,10 @@ async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceC
     # 짧아 embed()로 충분).
     query_vec = await embedding_service.embed_long(query_text)
 
-    # 용어집 방식은 채팅과 같은 설정(GLOSSARY_MATCH_MODE)을 따른다(v2.128)
-    _, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(namespace, query_text, query_vec)
-
-    defaults = retrieval.get_search_defaults()
-    w_vector, w_keyword = defaults["default_w_vector"], defaults["default_w_keyword"]
-    results = await retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, int(defaults["default_top_k"]))
-    context = retrieval.build_context(results)
+    # 용어집 방식·가중치·top_k는 채팅 지식 검색과 같은 설정(v2.128) — 코어 API가 정한다
+    found = await knowledge_api.search(namespace, query_text, query_vec)
+    mapped_term, results, context = found.mapped_term, found.results, found.context
+    w_vector, w_keyword = found.w_vector, found.w_keyword
 
     # r.final_score는 검색 순위용으로 (1 + base_weight)가 곱해져 있다(retrieval.py) —
     # base_weight 기본값이 1.0이라 사실상 거의 모든 지식의 점수가 2배로 부풀려짐.
@@ -285,7 +283,7 @@ async def analyze_email(
     results = check.results
     context = check.context
 
-    min_score = retrieval.get_thresholds()["knowledge_min_score"]
+    min_score = knowledge_api.min_score()
     matched = sorted((r for r in results if r.final_score >= min_score), key=lambda r: r.final_score, reverse=True)
     knowledge_ref_ids = [r.id for r in matched]
     knowledge_refs = [

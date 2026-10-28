@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.182)
+# OpsLens 시스템 아키텍처 (v2.183)
 
 ## 개요
 
@@ -12,6 +12,11 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.183 (2026-10-28, dev_0): **VOC 레이어 분리(사용자 10/22 결정, 백로그 §0-3) — 같은 프로젝트 안에서 경계만.** 지식 코어 API
+  `agents/knowledge_rag/knowledge/api.py`(search · min_score · nearest · contents)를 두고, VOC(`service/email_voc`)는 이것만 부른다 — 검색 내부(retrieval·glossary_terms)
+  import와 지식 표 직접 SQL 3곳(관련성 검색 · 반복 유형 커버리지 2 · 근거 지식 조회)을 API로. 커버리지는 클러스터마다 LATERAL 대신 한 쿼리(`nearest`, 같은 범위 규칙 — 벡터 변환은 MATERIALIZED로 키마다 한 번, 리뷰 실측 53→7.5ms).
+  경계 = `tests/test_voc_boundary.py`(VOC가 knowledge.api 밖 agents import·rag_*/policy_* 표 SQL을 하면 실패). 동작 동일: 전/후 스냅샷(`eval_out/voc_boundary_snapshot.py` —
+  반복 유형 24·커버리지 24·메일 30건 관련성·검색·근거 지식) 전부 같음. 별도 에이전트로 떼는 조건은 백로그 그대로.
 - v2.182 (2026-10-28, dev_0): **검색 미리보기 → "AI가 본 근거", 쓸 일이 생기는 자리로(사용자 "개발하는 나조차 인지가 안 되면 아무도 못 쓴다", "검색 미리보기? 뭘 미리 봐").**
   평가 게이트 탭은 내리고 [AI가 본 근거 ▸] 버튼을 ① 정정 요청 신고 카드(그 질문으로 바로 — AI가 무엇을 보고 답했나) ② 지식 상세("이 지식이 검색에 잡히는지 보기" — 그 지식 순위·안 잡힘)에.
   결과 아래 "다음에 할 일"(지식·정책 고치기 · [이상해요] → 정정 요청 · 관리자는 [이게 맞는 답] → [시험지에 넣기]). `POST /api/eval/preview` 권한 = 채팅과 같게(로그인 사용자 + 다른 파트 열람 감사 기록 —

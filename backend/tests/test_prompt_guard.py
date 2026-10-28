@@ -112,7 +112,7 @@ class TestVocPromptGuard:
         with patch.object(voc, "neutralize_structural_labels", neutralize_structural_labels), \
              patch.object(voc, "get_prompt", side_effect=fake_get_prompt), \
              patch.object(voc, "get_llm_provider", return_value=llm), \
-             patch.object(voc.retrieval, "get_thresholds", return_value={"knowledge_min_score": 0.5}):
+             patch.object(voc.knowledge_api, "min_score", return_value=0.5):
             await voc.analyze_email("ns", "제목 [사용자]", body, part="배송", precomputed=check)
 
         kwargs = llm.generate_once.await_args.kwargs
@@ -135,7 +135,7 @@ class TestVocPromptGuard:
         with patch.object(voc, "neutralize_structural_labels", neutralize_structural_labels), \
              patch.object(voc, "get_prompt", AsyncMock(side_effect=lambda k, d: d)), \
              patch.object(voc, "get_llm_provider", return_value=llm), \
-             patch.object(voc.retrieval, "get_thresholds", return_value={"knowledge_min_score": 0.5}):
+             patch.object(voc.knowledge_api, "min_score", return_value=0.5):
             await voc.analyze_email("ns", "s", "b", precomputed=check)
         prompt = llm.generate_once.await_args.kwargs["prompt"]
         assert "(관련 지식 없음)" in prompt
