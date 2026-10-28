@@ -152,7 +152,7 @@ export interface GlossaryItem {
   namespace: string;
   term: string;
   description: string;
-  source?: string | null;   // policy_doc = 정책서 최종본
+  source?: string | null;   // policy_doc = 정책서 최종본 · auto_extract = 지식 등록 때 AI 자동 추출(10/28~) · null = 사람 등록
   created_by_user_id?: number | null;
   created_by_username?: string | null;
   created_at: string;

@@ -121,6 +121,7 @@
 | 93 | `policy_track2_run`, `eval_answer_run` | `DROP TABLE IF EXISTS` 둘(옛 CREATE 마이그레이션 `_migrate_policy_track2_history`·`_migrate_answer_eval_run`도 뺌 — 남기면 다시 만든다) | 옛 v1 평가 기록(v2.176에서 화면·API 정리) — 사용자 10/27 삭제 승인, 백업 `eval_out/backup_v1/*.json`. `_migrate_drop_v1_eval_tables` (v2.177) |
 | 94 | `eval_question_candidate` | `ALTER COLUMN improvement_item_id DROP NOT NULL`, `ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'correction'` | 평가 게이트 › 검색 미리보기의 [시험지에 추가] — 정정 원장 없이 사람이 정답 정책을 골라 넣는 실사용 문항(source='preview'). UNIQUE 그대로(NULL 여럿 허용), 칸 삭제·이름 변경 없음. `_migrate_eval_improvement` 안 (v2.180) |
 | 95 | `ops_system_config` | `chat_retention_days` '0' → '365'(값이 '0'일 때만, 표지 `migration_95_chat_retention`으로 한 번만) | 채팅 대화 보관 1년(사용자 10/28). 보관 주기 전체는 `service/retention.py` — 판단 원장 확정 180일·지운 지식 180일·질의 기록 1년 (v2.185) |
+| (값만) | `rag_glossary.source` | 스키마 변경 없음 — 새 값 `auto_extract`(지식 등록 때 LLM 자동 추출, 10/28~). 기존 값: `policy_doc`(정책서), NULL(사람 등록·옛 자동 추출) | 자동 추출 용어 효과를 따로 재려고(`docs/tech/glossary-curation-design.md`) (v2.186) |
 | 91 | `eval_question_candidate` | FK `improvement_item_id` → `ON DELETE CASCADE`(confdeltype 확인 후 한 번만) | 정정 원장 줄이 지워지면(컬렉션 삭제 등) 시험지 후보도 같이 — 기본(NO ACTION)이면 정정 승인 때 자동으로 생긴 후보가 컬렉션 삭제를 막았다(v2.172 E2E로 발견). `_migrate_eval_improvement` (v2.172) |
 
 **데이터 마이그레이션**:

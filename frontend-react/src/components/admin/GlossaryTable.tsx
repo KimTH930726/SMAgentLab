@@ -328,6 +328,8 @@ export function GlossaryTable() {
                       )}
                       {item.source === 'policy_doc' ? (
                         <span className="text-[11px] text-slate-500" title="정책서 최종본에서 가져온 용어">정책서</span>
+                      ) : item.source === 'auto_extract' ? (
+                        <span className="text-[11px] text-slate-500" title={`지식 등록 때 AI가 본문에서 뽑은 용어${item.created_by_username ? ` — 등록 ${item.created_by_username}` : ''}(효과 측정 전)`}>자동 추출</span>
                       ) : item.created_by_username && (
                         <span className="text-[11px] text-slate-500">{item.created_by_username}</span>
                       )}

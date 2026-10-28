@@ -143,7 +143,7 @@ C = {
     ("rag_ingestion_job", "analyzer_result"): "LLM 문서 분석 결과 JSON", ("rag_ingestion_job", "chunk_strategy"): "청킹 전략 — 현재 0건",
     ("rag_knowledge_duplicate_match", "similarity"): "코사인 유사도", ("rag_knowledge_history", "replaced_by_knowledge_id"): "병합으로 덮어쓴 새 지식",
     ("rag_knowledge_review_flag", "reason"): "리뷰 사유", ("rag_conv_summary", "turn_start"): "요약 구간 시작 턴",
-    ("rag_glossary", "source"): "출처(policy_doc = 정책서 최종본, NULL = 사람·AI 등록)",
+    ("rag_glossary", "source"): "출처(policy_doc = 정책서 최종본, auto_extract = 지식 등록 때 LLM 자동 추출(10/28~), NULL = 사람 등록·옛 자동 추출)",
     ("policy_item", "system_key"): "네임스페이스 안의 하위 시스템 구분", ("policy_item", "category_path"): "분류 경로 배열(팀마다 깊이가 달라 가변)",
     ("policy_item", "raw_body"): "정책 원문(조건/상세 셀)", ("policy_item", "remark"): "비고 — 0건",
     ("policy_item", "source_file"): "원본 엑셀 파일명", ("policy_item", "source_row"): "원본 행 번호(골든셋 정답 위치)",

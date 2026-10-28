@@ -131,7 +131,7 @@ class GlossaryOut(BaseModel):
     namespace: str
     term: str
     description: str
-    source: Optional[str] = None            # 출처: policy_doc(정책서 최종본) / NULL(사람·AI 등록 — 등록자 표시)
+    source: Optional[str] = None            # 출처: policy_doc(정책서 최종본) / auto_extract(지식 등록 때 LLM 자동 추출, 10/28~) / NULL(사람 등록 — 옛 자동 추출도 섞임)
     created_by_user_id: Optional[int] = None
     created_by_username: Optional[str] = None
     synonyms: list[GlossarySynonymOut] = []

@@ -90,6 +90,7 @@ async def locate_knowledge(body: _LocateBody, user: dict = Depends(get_current_u
 
 
 _LOCATION_CHOICES = {"accept", "option", "other", "preset"}   # "잘 모르겠어요"(unsure)는 10/23 뺐다 — 옛 값이 와도 accept로
+AUTO_EXTRACT_SOURCE = "auto_extract"   # 지식 등록 때 LLM이 뽑은 용어의 출처 표시(rag_glossary.source) — 효과를 따로 재려고(10/28)
 SUGGEST_MAX_ITEMS = 200   # 담당이 아닌 곳에 한 번에 올릴 수 있는 조각 수(리뷰 L1) — 컨플루언스 일괄 미리보기 상한과 같은 수
 
 
@@ -657,7 +658,7 @@ async def _run_auto_glossary(namespace: str, raw_text: str, user: dict, *, max_c
             try:
                 await service.create_glossary(
                     namespace, term_data["term"], term_data.get("description", ""),
-                    created_by_user_id=user["id"],
+                    created_by_user_id=user["id"], source=AUTO_EXTRACT_SOURCE,   # 사람 등록과 구분(효과 측정용, 10/28)
                 )
                 count += 1
             except Exception:

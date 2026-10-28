@@ -551,8 +551,9 @@ async def resolve_duplicate(
 
 async def create_glossary(
     namespace: str, term: str, description: str,
-    *, created_by_user_id: Optional[int] = None,
+    *, created_by_user_id: Optional[int] = None, source: Optional[str] = None,
 ) -> dict:
+    """source = 출처 표시(None = 사람 등록, 'auto_extract' = 지식 등록 때 LLM 자동 추출 — 10/28 효과 측정용으로 구분, glossary-curation-design)."""
     async with get_conn() as conn:
         ns_id = await resolve_namespace_id(conn, namespace)
         if ns_id is None:
@@ -568,11 +569,11 @@ async def create_glossary(
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO rag_glossary (namespace_id, term, description, embedding, created_by_user_id)
-            VALUES ($1, $2, $3, $4::vector, $5)
+            INSERT INTO rag_glossary (namespace_id, term, description, embedding, created_by_user_id, source)
+            VALUES ($1, $2, $3, $4::vector, $5, $6)
             RETURNING id, namespace_id, term, description, source, created_by_user_id
             """,
-            ns_id, term, description, str(embedding), created_by_user_id,
+            ns_id, term, description, str(embedding), created_by_user_id, source,
         )
         result = dict(row)
         result["namespace"] = namespace

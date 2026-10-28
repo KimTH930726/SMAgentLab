@@ -66,3 +66,23 @@ class TestAutoGlossaryWiredIntoLiveRoutes:
             assert await hook() == 1
             combined_text = mock_glossary.await_args.args[1]
             assert "첫 번째 청크" in combined_text and "두 번째 청크" in combined_text
+
+
+class TestAutoGlossarySource:
+    @pytest.mark.asyncio
+    async def test_extracted_terms_saved_as_auto_extract(self):
+        """10/28 — 자동 추출 용어는 출처 'auto_extract'로 저장(사람 등록과 구분해 효과를 따로 재려고, glossary-curation-design §3-1)."""
+        from agents.knowledge_rag.knowledge import router as kr
+        conn = MagicMock(fetch=AsyncMock(return_value=[]))
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+        create = AsyncMock(return_value={})
+        with patch("core.database.get_conn", MagicMock(return_value=conn)), \
+             patch("core.database.resolve_namespace_id", AsyncMock(return_value=1)), \
+             patch("service.llm.factory.get_llm_provider", MagicMock()), \
+             patch("core.security.get_user_llm_credentials", MagicMock(return_value=None)), \
+             patch("agents.knowledge_rag.ingestion.tagger.extract_glossary_terms",
+                   AsyncMock(return_value=[{"term": "재배차", "description": "배차를 다시 요청"}])), \
+             patch.object(kr.service, "create_glossary", create):
+            assert await kr._run_auto_glossary("딜리버스", "본문", _FAKE_USER) == 1
+        assert create.await_args.kwargs["source"] == kr.AUTO_EXTRACT_SOURCE == "auto_extract"
