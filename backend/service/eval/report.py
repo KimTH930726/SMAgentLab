@@ -210,7 +210,7 @@ async def build_report() -> Optional[dict]:
                      "storage": tags, "gold": items, "real_status": real_status.get(q),
                      "techniques": [{"id": c["id"], "title": c["title"], "status": c["status"],
                                      "technique_name": BY_KEY.get(c["technique"], {}).get("name", c["technique"])} for c in by_q.get(q, [])]})
-    techniques = [{"id": c["id"], "key": c["key"], "technique": c["technique"], "title": c["title"], "status": c["status"], "recommend": c["recommend"],
+    techniques = [{"id": c["id"], "key": c["key"], "cause": c["cause"], "technique": c["technique"], "title": c["title"], "status": c["status"], "recommend": c["recommend"],
                    "technique_name": BY_KEY.get(c["technique"], {}).get("name", c["technique"]), "action": c["action"],
                    "measure": c["measure"], "why": c["why"], "review_reason": c["review_reason"], "reviewed_at": c["reviewed_at"],
                    "n_failed": sum(1 for q in (_j(c["qids"]) or []) if q in acc and acc[q] < 0.5), "effect": effect(c)}

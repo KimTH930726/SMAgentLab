@@ -1560,6 +1560,10 @@ async def _migrate_eval_improvement(conn) -> None:
             await conn.execute("ALTER TABLE eval_question_candidate DROP CONSTRAINT eval_question_candidate_improvement_item_id_fkey")
             await conn.execute("""ALTER TABLE eval_question_candidate ADD CONSTRAINT eval_question_candidate_improvement_item_id_fkey
                                   FOREIGN KEY (improvement_item_id) REFERENCES ops_improvement_item(id) ON DELETE CASCADE""")
+    # #94(10/27) 검색 미리보기의 [시험지에 추가] — 정정 원장 없이 사람이 정답 정책을 골라 넣는 문항(improvement_item_id 없음, source='preview').
+    # UNIQUE는 그대로(NULL은 여럿 허용). 칸을 지우거나 이름을 바꾸지 않음 — 두 번 돌려도 같다(DROP NOT NULL·ADD IF NOT EXISTS)
+    await conn.execute("ALTER TABLE eval_question_candidate ALTER COLUMN improvement_item_id DROP NOT NULL")
+    await conn.execute("ALTER TABLE eval_question_candidate ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'correction'")
 
 
 async def _migrate_policy_v0_revisions(conn) -> None:

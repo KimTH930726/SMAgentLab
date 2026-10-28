@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { chooseLocation, goAdmin, selectDomain } from './admin-nav';
 import { loginAdmin } from './auth';
+import { psql } from './v0-fixture';
 
 // 이 테스트가 존재하는 이유(2026-09-24): 지식 등록 흐름이 미리보기+검토 2단계로
 // 재설계되면서, LLM 자동 태깅/용어 자동추출 호출이 화면 어디서도 안 불리게 조용히
@@ -10,8 +11,20 @@ import { loginAdmin } from './auth';
 
 const NAMESPACE = '딜리버스';
 
+// 이 시험이 등록하며 남긴 위치 판정(AI 판단 원장) 줄은 끝에 지운다 — 실제 컬렉션에 등록하므로 안 지우면 AI 감사 로그·운영 번복 진단에
+// 시험 데이터가 섞였다(10/27 밤 발견: 원장의 위치 판정 67건이 전부 E2E). 판정 응답의 decision_id를 모아 둔다.
+const decisions: number[] = [];
+
 test.beforeEach(async ({ page }) => {
+  page.on('response', async (r) => {
+    if (!r.url().endsWith('/api/knowledge/locate') || !r.ok()) return;
+    try { const id = (await r.json()).decision_id; if (typeof id === 'number') decisions.push(id); } catch { /* 본문 없음 */ }
+  });
   await loginAdmin(page, { openAdmin: false });
+});
+
+test.afterEach(() => {
+  if (decisions.length) psql(`DELETE FROM ops_ai_decision WHERE id IN (${decisions.splice(0).join(',')}) AND kind = 'knowledge_location'`);
 });
 
 test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까지 된다', async ({ page }) => {
@@ -41,11 +54,19 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
   await page.locator('textarea:visible').first().fill(content);
   await page.getByRole('button', { name: '넣을 곳 확인' }).click();   // E2: 넣을 곳 카드 → 고르고 등록
   await chooseLocation(page, NAMESPACE);
+  // 운영 번복(10/27) — AI 추천과 다른 곳을 고르면 그 자리에서 이유를 고를 수 있고(감사 로그는 묻지 않음), 원장에 남는다.
+  // AI가 이미 딜리버스를 추천했으면 번복이 아니라 이유 줄이 없어야 한다 — 두 갈래 다 원장 값으로 확인
+  const overriding = await page.getByTestId('override-reason').isVisible().catch(() => false);
+  if (overriding) await page.getByRole('group', { name: '번복 이유' }).getByRole('button', { name: 'AI가 틀림' }).click();
   await page.getByRole('button', { name: '등록', exact: true }).click();
 
   const response = await createResponse;
   expect(response.ok()).toBeTruthy();
   const created = await response.json();
+  const decisionId = decisions[decisions.length - 1];
+  expect(decisionId).toBeTruthy();
+  await expect.poll(() => psql(`SELECT coalesce(final_value->>'override_reason', '-') || '|' || coalesce(ai_verdict, '-') FROM ops_ai_decision WHERE id = ${decisionId}`))
+    .toBe(overriding ? 'wrong|wrong' : '-|-');
   // 업무구분은 보내지도 돌려받지도 않는다(10/22 폐지 — 서버는 category NULL로 저장)
   expect(response.request().postDataJSON().category).toBeUndefined();
   expect(created.category).toBeUndefined();

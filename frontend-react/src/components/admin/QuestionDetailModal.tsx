@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { getQuestionDetail, listTechniques, type QuestionAnswer, type Technique } from '../../api/eval';
 import { layerOf } from '../../utils/evalLayers';
 import { Modal } from '../ui/Modal';
+import { CAUSE_STAGE } from './GateFlow';
 
 /**
  * 문항 상세(v2.171, 사용자 10/26 "어떤 질문이었고 어떻게 답했고 왜 그랬고 어떤 후보가 됐고 어떻게 고치나") — 한 문항의 흐름을 위에서 아래로.
@@ -90,47 +91,44 @@ const tagInfo = (t: string) => TAG_INFO.find((x) => x.match(t));
 
 const KIND_CHIP: Record<string, string> = { 정책: '정책', 참고표: '참고표', 개요: '개요' };
 
-/** 저장 구조 — 정답 데이터마다 카드(종류·이름·경로 + 저장 사실 칩), 문제 꼬리표마다 왜 문제인가 + 해 볼 기법 */
+/** 저장 구조(10/27 가독성 목업 ⑤) — 한 줄 요약(종류별 수 · 원문 글자 · 파라미터 · 표) + 꼬리표 배지, 정답 데이터 이름·경로, 꼬리표마다 왜 문제 → 해 볼 기법 */
 function StorageView({ storage, techs }: { storage: NonNullable<Awaited<ReturnType<typeof getQuestionDetail>>['storage']>; techs: Technique[] }) {
   const name = (k: string) => techs.find((t) => t.key === k)?.name ?? k;
+  const kinds = [...new Set(storage.gold.map((g) => g.kind))].map((k) => `${KIND_CHIP[k] ?? k} ${storage.gold.filter((g) => g.kind === k).length}`);
+  const sum = (f: (g: typeof storage.gold[number]) => number | null | undefined) => {
+    const v = storage.gold.map(f).filter((x): x is number => x != null);
+    return v.length ? v.reduce((a, b) => a + b, 0) : null;
+  };
+  const body = sum((g) => g.body_len), params = sum((g) => g.params);
+  const table = storage.gold.some((g) => g.table) ? '표 있음' : storage.gold.some((g) => g.table === false) ? '표 없음' : null;
+  const facts = [...kinds, body != null ? `원문 ${body.toLocaleString()}자` : null, params != null ? `파라미터 ${params}` : null, table].filter(Boolean);
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+    <div className="space-y-2">
+      <p className="flex flex-wrap items-center gap-2 text-sm text-slate-200" data-testid="storage-line">
+        <span>{facts.join(' · ')}</span>
+        {storage.gold.some((g) => g.missing) && <span className="rounded px-1.5 py-0.5 text-xs bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">현행에 없음</span>}
+        {storage.tags.map((t) => <span key={t} className="rounded px-1.5 py-0.5 text-xs bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">⚠ {t}</span>)}
+      </p>
+      <ul className="space-y-0.5">
         {storage.gold.map((g, k) => (
-          <div key={k} className="rounded-lg border border-slate-700 bg-slate-800 p-3 space-y-1.5 min-w-0">
-            <p className="text-sm text-slate-100 min-w-0">
-              <span className="mr-1.5 rounded px-1.5 py-0.5 text-xs bg-slate-700 text-slate-300">{KIND_CHIP[g.kind] ?? g.kind}</span>
-              {g.name ?? '-'}
-            </p>
-            {g.path && <p className="text-xs text-slate-500 break-words">{g.path}</p>}
-            <p className="flex flex-wrap gap-1.5 text-xs">
-              {g.missing && <span className="rounded px-1.5 py-0.5 bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">현행에 없음</span>}
-              {g.body_len != null && <span className="rounded px-1.5 py-0.5 border border-slate-600 text-slate-300">원문 {g.body_len}자</span>}
-              {g.params != null && (
-                <span className={`rounded px-1.5 py-0.5 border ${g.params ? 'border-slate-600 text-slate-300' : 'border-amber-300 text-amber-700 dark:border-amber-500/40 dark:text-amber-300'}`}>파라미터 {g.params}개</span>
-              )}
-              {g.table != null && <span className="rounded px-1.5 py-0.5 border border-slate-600 text-slate-300">{g.table ? '표 있음' : '표 없음'}</span>}
-              {g.rows != null && <span className="rounded px-1.5 py-0.5 border border-slate-600 text-slate-300">{g.rows}행</span>}
-            </p>
-          </div>
+          <li key={k} className="text-xs min-w-0">
+            <span className="text-slate-100">{g.name ?? '-'}</span>
+            {g.path && <span className="text-slate-500"> · {g.path}</span>}
+            {g.rows != null && <span className="text-slate-500"> · {g.rows}행</span>}
+          </li>
         ))}
-      </div>
-      {storage.tags.length > 0 && (
-        <ul className="space-y-1.5">
-          {storage.tags.map((t) => {
-            const info = tagInfo(t);
-            return (
-              <li key={t} className="rounded-md border-l-4 border-amber-400 dark:border-amber-500 bg-amber-50/60 dark:bg-amber-500/5 px-3 py-2 space-y-0.5">
-                <p className="text-sm text-amber-800 dark:text-amber-300 font-medium">{t}</p>
-                {info && <p className="text-xs text-slate-300">{info.why}</p>}
-                {info && info.techs.length > 0 && (
-                  <p className="text-xs text-slate-400">해 볼 기법: {info.techs.map((k) => <span key={k} className="ml-1 rounded px-1.5 py-0.5 bg-slate-800 border border-slate-600 text-slate-200">{name(k)}</span>)}</p>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      </ul>
+      {storage.tags.map((t) => {
+        const info = tagInfo(t);
+        if (!info) return null;
+        return (
+          <p key={t} className="flex flex-wrap items-center gap-1.5 rounded-md border-l-4 border-amber-400 dark:border-amber-500 bg-amber-50/60 dark:bg-amber-500/5 px-3 py-1.5 text-xs">
+            <span className="text-slate-300">{info.why}</span>
+            {info.techs.length > 0 && <><span className="text-slate-500">→ 해 볼 기법</span>
+              {info.techs.map((k) => <span key={k} className="rounded px-1.5 py-0.5 bg-slate-800 border border-slate-600 text-slate-200">{name(k)}</span>)}</>}
+          </p>
+        );
+      })}
     </div>
   );
 }
@@ -225,12 +223,26 @@ export function QuestionDetailModal({ runId, qids, start, onClose, listTitle }: 
             </Section>
 
             <Section n={4} title="왜 — 처음 실패한 단계 · AI가 묶은 패턴">
-              {d.cause ? (
-                <p className="text-sm text-slate-200">{d.cause.name} <span className="text-xs text-slate-500">→ 볼 곳: {d.cause.where}</span></p>
+              {d.cause || d.hypotheses.length ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 min-w-0" data-testid="why-stage">
+                    <p className="text-[11px] text-slate-500">처음 실패한 단계</p>
+                    {d.cause ? <>
+                      <p className="text-base font-semibold text-slate-100">{CAUSE_STAGE[d.cause.key] ?? '—'}</p>
+                      <p className="text-xs text-slate-300">{d.cause.name} <span className="text-slate-500" title="볼 곳">· {d.cause.where}</span></p>
+                    </> : <p className="text-sm text-slate-400">이 판정의 진단에서 틀린 문항이 아님</p>}
+                  </div>
+                  <div className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 min-w-0">
+                    <p className="text-[11px] text-slate-500">AI가 묶은 패턴</p>
+                    {d.hypotheses.length === 0 ? <p className="text-sm text-slate-400">묶음 없음</p> : d.hypotheses.map((h) => (
+                      <div key={h.name}>
+                        <p className="text-sm font-medium text-slate-100">{h.name} <span className="text-xs font-normal text-slate-500">· {h.n}문항</span></p>
+                        {h.hint && <p className="text-xs text-slate-400">{h.hint}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               ) : <p className="text-sm text-slate-400">이 판정의 진단에서 틀린 문항이 아님</p>}
-              {d.hypotheses.map((h) => (
-                <p key={h.name} className="text-xs text-slate-400">AI 묶음: {h.name} ({h.n}문항){h.hint && <span className="text-slate-500"> — {h.hint}</span>}</p>
-              ))}
             </Section>
 
             <Section n={5} title="저장 구조 — 정답 데이터가 어떤 모양으로 저장돼 있나">
@@ -243,28 +255,32 @@ export function QuestionDetailModal({ runId, qids, start, onClose, listTitle }: 
               {d.candidates.length === 0 ? (
                 <p className="text-sm text-slate-400">이 문항을 겨냥한 후보 없음{d.storage?.tags.length ? ' — 위 저장 구조의 "해 볼 기법"을 보세요' : ''}</p>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {d.candidates.map((c) => {
-                    const last = c.measurements[c.measurements.length - 1];
-                    return (
-                      <div key={c.id} className="rounded-lg border border-slate-700 bg-slate-800 p-3 space-y-1.5 min-w-0">
-                        <p className="flex items-center gap-2 text-sm text-slate-100 min-w-0">
-                          <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${CAND_TONE[c.status] ?? CAND_TONE.proposed}`}>{STATUS_NAME[c.status] ?? c.status}</span>
-                          <span className="truncate" title={c.title}>{c.title}</span>
-                        </p>
-                        <p className="text-xs text-slate-400"><span className="text-slate-500">기법 </span>{c.technique_name}</p>
-                        <p className="text-xs text-slate-300"><span className="text-slate-500">바꿀 것 </span>{c.action}</p>
-                        {last ? (
-                          <p className="text-xs">
-                            <span className={last.verdict === 'pass' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{last.verdict === 'pass' ? '✔ 통과' : '✖ 실패'}</span>
-                            <span className="text-slate-400"> 측정 #{last.id} — 이 문항 </span>
-                            <span className={MOVE[last.this_question].cls}>{MOVE[last.this_question].label}</span>
-                            {c.measurements.length > 1 && <span className="text-slate-500"> (측정 {c.measurements.length}번)</span>}
-                          </p>
-                        ) : <p className="text-xs text-slate-500">아직 안 재 봄</p>}
-                      </div>
-                    );
-                  })}
+                <div className="rounded-lg border border-slate-700 overflow-x-auto" data-testid="question-candidates">
+                  <table className="w-full min-w-[560px] text-xs">
+                    <thead className="bg-slate-900/60 text-slate-500">
+                      <tr><th className="px-3 py-1.5 text-left font-medium">상태</th><th className="px-3 py-1.5 text-left font-medium">방법</th>
+                        <th className="px-3 py-1.5 text-left font-medium">기법</th><th className="px-3 py-1.5 text-left font-medium">최근 측정 · 이 문항</th></tr>
+                    </thead>
+                    <tbody>
+                      {d.candidates.map((c) => {
+                        const last = c.measurements[c.measurements.length - 1];
+                        return (
+                          <tr key={c.id} className="border-t border-slate-700/70 align-top">
+                            <td className="px-3 py-2"><span className={`rounded px-1.5 py-0.5 whitespace-nowrap ${CAND_TONE[c.status] ?? CAND_TONE.proposed}`}>{STATUS_NAME[c.status] ?? c.status}</span></td>
+                            <td className="px-3 py-2 text-slate-100" title={c.action}>{c.title}</td>
+                            <td className="px-3 py-2 text-slate-400">{c.technique_name}</td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              {last ? <>
+                                <span className={last.verdict === 'pass' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>#{last.id} {last.verdict === 'pass' ? '통과' : '실패'}</span>
+                                <span className="text-slate-500"> · </span><span className={MOVE[last.this_question].cls}>{MOVE[last.this_question].label}</span>
+                                {c.measurements.length > 1 && <span className="text-slate-500"> ({c.measurements.length}번)</span>}
+                              </> : <span className="text-slate-500">안 재 봄</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </Section>

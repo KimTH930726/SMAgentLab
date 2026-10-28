@@ -119,6 +119,7 @@
 | 90 | `ingest_check_run` | `CREATE TABLE`(created_by·gate_run_id FK·results jsonb·n_bad) | 적재 검수 기록 — `scripts/check_ingest.py --save`. 검사마다 어긋남/전체·근거·영향 qid·정답률(원문 없음). 틀린 문항 리포트·다음 진단 후보가 읽음. `_migrate_eval_improvement` (v2.172) |
 | 92 | `ops_improvement_item` | `ADD COLUMN source_check_id INT REFERENCES ops_improvement_item(id) ON DELETE SET NULL` + 부분 인덱스 | 원문 확인 카드 ↔ 그 카드에서 올린 정정 제안 — 제안 승인 = 카드 자동 해결, 반려 = 카드 처리 전 그대로(C3). `_migrate_source_check_link` (v2.175) |
 | 93 | `policy_track2_run`, `eval_answer_run` | `DROP TABLE IF EXISTS` 둘(옛 CREATE 마이그레이션 `_migrate_policy_track2_history`·`_migrate_answer_eval_run`도 뺌 — 남기면 다시 만든다) | 옛 v1 평가 기록(v2.176에서 화면·API 정리) — 사용자 10/27 삭제 승인, 백업 `eval_out/backup_v1/*.json`. `_migrate_drop_v1_eval_tables` (v2.177) |
+| 94 | `eval_question_candidate` | `ALTER COLUMN improvement_item_id DROP NOT NULL`, `ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'correction'` | 평가 게이트 › 검색 미리보기의 [시험지에 추가] — 정정 원장 없이 사람이 정답 정책을 골라 넣는 실사용 문항(source='preview'). UNIQUE 그대로(NULL 여럿 허용), 칸 삭제·이름 변경 없음. `_migrate_eval_improvement` 안 (v2.180) |
 | 91 | `eval_question_candidate` | FK `improvement_item_id` → `ON DELETE CASCADE`(confdeltype 확인 후 한 번만) | 정정 원장 줄이 지워지면(컬렉션 삭제 등) 시험지 후보도 같이 — 기본(NO ACTION)이면 정정 승인 때 자동으로 생긴 후보가 컬렉션 삭제를 막았다(v2.172 E2E로 발견). `_migrate_eval_improvement` (v2.172) |
 
 **데이터 마이그레이션**:

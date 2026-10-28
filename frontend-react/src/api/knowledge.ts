@@ -10,6 +10,7 @@ import type {
   GlossaryUpdatePayload,
   LocateResult,
   LocationChoice,
+  OverrideReason,
 } from '../types';
 
 // Knowledge CRUD
@@ -191,12 +192,13 @@ export async function bulkCreateKnowledge(
   sourceFile?: string,
   sourceType = 'manual',
   confirmReplace = false,
-  location?: { decisionId: number | null; choice: LocationChoice } | null,
+  location?: { decisionId: number | null; choice: LocationChoice; overrideReason?: OverrideReason | null } | null,
 ): Promise<{ created: number; job_id: number; status: string; unlinked_sources?: number[] }> {
   return apiFetch('/knowledge/bulk', {
     method: 'POST',
     body: JSON.stringify({ namespace, items, source_file: sourceFile, source_type: sourceType, confirm_replace: confirmReplace,
-      decision_id: location?.decisionId ?? null, location_choice: location?.choice ?? null }),
+      decision_id: location?.decisionId ?? null, location_choice: location?.choice ?? null,
+      override_reason: location?.overrideReason ?? null }),
   });
 }
 

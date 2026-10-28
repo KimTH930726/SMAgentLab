@@ -8,6 +8,7 @@ import { CandidateCard } from './GateImprove';
 import { TechniqueCard } from './TechniqueCard';
 import { useQuestionPicker } from './GateRuns';
 import { Modal } from '../ui/Modal';
+import { CAUSE_STAGE, type Stage } from './GateFlow';
 
 /**
  * 평가 게이트 [리포트] — 틀린 문항 리포트(v2.172, 사용자 10/26 "AI가 내리는 답을 관리자가 리포트 받고 개선할 수 있게").
@@ -114,7 +115,8 @@ function QRow({ r, onClick }: { r: ReportRow; onClick: () => void }) {
   );
 }
 
-export function ReportTab() {
+/** stage = 평가 게이트 단계 흐름에서 고른 단계(GateFlow) — 그 단계에서 처음 실패한 문항만(적재 = 적재 검수 후보가 걸린 문항) */
+export function ReportTab({ stage = null }: { stage?: Stage | null }) {
   const isAdmin = useAuthStore((st) => st.user?.role === 'admin');
   const rep = useQuery({ queryKey: ['eval-report'], queryFn: getGateReport, enabled: isAdmin, staleTime: 30_000 });
   const impId = rep.data?.improvement_id;
@@ -129,7 +131,13 @@ export function ReportTab() {
   const [page, setPage] = useState(0);
   const [showUnmeasured, setShowUnmeasured] = useState(false);
 
-  const d = rep.data;
+  const d = useMemo(() => {
+    const r = rep.data;
+    if (!r || !stage) return r;
+    const ingest = new Set(r.techniques.filter((t) => t.cause === 'ingest').map((t) => t.id));
+    return { ...r, failed: r.failed.filter((x) => stage === '적재' ? x.techniques.some((t) => ingest.has(t.id))
+      : (x.cause ? CAUSE_STAGE[x.cause] : undefined) === stage) };
+  }, [rep.data, stage]);
   const groups = useMemo(() => {
     const stageOf = (key: string) => techs.data?.find((t) => t.key === key)?.stage ?? '기타';
     const byStage = new Map<string, ReportTechnique[]>();
@@ -292,9 +300,11 @@ export function ReportTab() {
               {cand ? <CandidateCard c={cand} improvementId={d.improvement_id} isAdmin={isAdmin} onPick={pick} hideQids />
                 : <p className="text-xs text-slate-500">{imp.isLoading ? '불러오는 중…' : '후보 정보를 못 불러왔어요'}</p>}
               {info && (
-                <details className="text-xs">
-                  <summary className="cursor-pointer text-slate-400">이 기법은 무엇인가 · 지금 값 · 왜 있나</summary>
-                  <div className="pt-2"><TechniqueCard t={info} /></div>
+                <details className="text-xs" data-testid="report-technique">
+                  <summary className="cursor-pointer text-slate-400">
+                    이 기법: <span className="text-slate-200">{info.name}</span> — 측정 기록 {info.evidence.length} · 걸린 후보 {info.candidates.length}
+                  </summary>
+                  <div className="mt-2 rounded-lg border border-slate-700 bg-slate-800 p-4"><TechniqueCard t={info} /></div>
                 </details>
               )}
             </div>

@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.179)
+# OpsLens 시스템 아키텍처 (v2.180)
 
 ## 개요
 
@@ -12,6 +12,14 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.180 (2026-10-27 밤, dev_0): **자가 개선 루프 재구성(사용자 "평가 게이트·감사 로그는 자가 개선을 위한 과정", 설계 `docs/tech/self-improvement-loop-design.md`).**
+  ① **번복은 기능 자리에서**: 지식 등록 넣을 곳 카드에서 AI 추천(확신 없으면 후보)과 다른 곳을 고르면 이유 칩(AI가 틀림·둘 다 맞음·상황이 바뀜, 선택·비차단) →
+  원장 final_value.override_reason(+ 틀림·상황이 바뀜은 ai_verdict). 번복 판정은 저장 칸이 아니라 값으로(`service/eval/override.py` is_override = OVERRIDE_SQL).
+  ② **진단에 운영 번복**: 종류별 번복률·이유·패턴 + 위치 판정 제안 규칙 LLM 없는 리플레이 → `eval_improve.py --save` 후보(원인 `override_location`). `GET /api/eval/overrides`.
+  ③ **AI 감사 로그 = 기록만**: "AI가 틀렸나요?" 버튼 제거, 요약 3칸 + 형식적 승인 경고 + 번복만(기본) 한 줄 표(번복 이유 · 이어진 개선 후보).
+  ④ **RAG 파이프라인 메뉴 내림 → 평가 게이트**: 맨 위 단계 흐름(단계별 틀림·번복, 누르면 리포트가 그 단계로) + [적용 이력] 탭(`GET /api/eval/history` — 기법 대장 근거 + 후보 결정 날짜순, 항목 전체 보기).
+  ⑤ **즉석 질의 → 검색 미리보기**: `POST /api/eval/preview`(채팅과 같은 build_chat_context, LLM 0 — 채팅이 할 일·용어·문맥 후보) + [시험지에 추가] `POST /api/eval/preview/questions`(실사용 층, #94).
+  ⑥ 가독성: 결정 카드(상태 배지·세 칸·패턴 표·결정 사유 상자), 문항 상세 ④⑤⑥(두 상자·저장 한 줄·고칠 방법 표), 기법 창(값 상자·측정 타임라인).
 - v2.179 (2026-10-27, dev_0): **품질 화면 이름·구조(사용자 "AI 업계 용어로", "원인별이 메인", "감사 로그 쪽이니까") + 고르는 창 다듬기.**
   ① 틀린 문항 리포트 기본 = **원인별** — 원인(막대) → 그 원인에 걸린 고칠 방법 카드(원인 안 문항 수) → 누르면 그 방법 문항 + 결정 카드(고칠 방법별은 두 번째 보기).
   ② 품질 › 답 기법 → **RAG 파이프라인** — 단계 박스(Ingestion → Retrieval → Grounding → Response → Generation)를 화살표로 잇고 박스마다 대표 숫자

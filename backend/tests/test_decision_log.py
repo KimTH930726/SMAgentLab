@@ -5,6 +5,10 @@ from pathlib import Path
 
 import pytest
 
+_ov_spec = _ilu.spec_from_file_location("service.eval.override", str(Path(__file__).resolve().parent.parent / "service" / "eval" / "override.py"))
+_ov = _ilu.module_from_spec(_ov_spec)
+sys.modules["service.eval.override"] = _ov   # conftest가 service 패키지를 가짜로 둔다 — decision_log가 가져오는 번복 규칙은 진짜로
+_ov_spec.loader.exec_module(_ov)
 _p = Path(__file__).resolve().parent.parent / "service" / "eval" / "decision_log.py"
 _spec = _ilu.spec_from_file_location("decision_log_under_test", str(_p))
 dl = _ilu.module_from_spec(_spec)

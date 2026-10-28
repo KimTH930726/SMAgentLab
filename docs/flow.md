@@ -487,7 +487,9 @@ LLM에 전달되는 messages:
      담당이면 평소대로(중복 의심만 승인 대기) · 내 원문 초안을 고른 곳으로 옮김
      담당 아님 + 내 확정 전 판정 줄 → 제안: 전부 승인 대기(그 담당이 승인), 원문·컨플루언스 페이지 연결 뗌
      담당 아님 + 판정 없음 → 403
-④ 원장 같은 줄 확정: final_value {namespace_id, choice, suggested}, 고른 곳 ≠ AI → human_changed(오답 신호)
+④ 원장 같은 줄 확정: final_value {namespace_id, choice, suggested}, 고른 곳 ≠ AI 추천(확신 없으면 후보) → 번복
+     번복이면 카드에서 고른 이유 override_reason(AI가 틀림·둘 다 맞음·상황이 바뀜, 선택) — 틀림·상황이 바뀜은 ai_verdict에도(v2.180)
+⑤ 자가 개선: scripts/eval_improve.py가 원장 번복을 읽어(service/eval/override.py) 후보로 → 평가 게이트 리포트 · AI 감사 로그는 기록만
 ```
 
 카테고리 필드는 원래 `RequiredCategoryField`로 항상 필수 선택이었는데, 2026-09-24부로

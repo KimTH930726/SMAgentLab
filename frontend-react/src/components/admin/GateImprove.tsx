@@ -32,6 +32,15 @@ const MEASURE: Record<Candidate['measure'], { label: string; next: string }> = {
 
 const STEPS = ['제안', '실험', '측정', '운영 반영'] as const;
 
+// 카드 머리 배지 — 지금 결정 상태(10/27 가독성 목업 ①: 제목 옆에 한눈에)
+const STATUS_BADGE: Record<CandidateStatus, { label: string; cls: string }> = {
+  proposed: { label: '결정 전', cls: 'bg-slate-700 text-slate-300' },
+  approved: { label: '실험 중', cls: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300' },
+  held: { label: '나중에', cls: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300' },
+  rejected: { label: '안 하기로 함', cls: 'bg-slate-700 text-slate-400' },
+  adopted: { label: '운영 반영', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300' },
+};
+
 function stepOf(c: Candidate): number {
   if (c.status === 'adopted') return 3;
   if (c.status === 'approved') return c.measurements.length ? 2 : 1;
@@ -82,12 +91,13 @@ function Hypotheses({ c, improvementId, isAdmin, onPick }: {
   });
   if (!c.hypotheses.length) return null;
   return (
-    <div className="text-xs space-y-1">
-      <p className="text-slate-400" title="틀린 문항의 채점 이유를 로컬 LLM이 패턴별로 묶은 것 — 맞으면 [맞아요](다음 진단도 이 이름으로), 아니면 [다시 묶기]">
+    <div className="text-xs">
+      <p className="text-slate-400 mb-1" title="틀린 문항의 채점 이유를 로컬 LLM이 패턴별로 묶은 것 — 맞으면 [맞아요](다음 진단도 이 이름으로), 아니면 [다시 묶기]">
         왜 틀렸나 — AI가 묶은 패턴 ⓘ
       </p>
+      <div className="rounded-lg border border-slate-700 divide-y divide-slate-700/70">
       {c.hypotheses.map((h) => (
-        <div key={h.name} className="pl-3 flex flex-wrap items-start gap-2">
+        <div key={h.name} className="px-3 py-1.5 flex flex-wrap items-start gap-2">
           <div className="min-w-0 flex-1"><QidList title={h.name} qids={h.qids} hint={h.hint || h.name} onPick={onPick} /></div>
           {h.status === 'confirmed' && <span className="text-emerald-600 dark:text-emerald-400"><Check className="inline w-3 h-3" /> 맞음</span>}
           {h.status === 'rejected' && <span className="text-amber-600 dark:text-amber-400">다음 진단에서 다시 묶음</span>}
@@ -108,6 +118,7 @@ function Hypotheses({ c, improvementId, isAdmin, onPick }: {
           )}
         </div>
       ))}
+      </div>
     </div>
   );
 }
@@ -191,19 +202,29 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
   const btn = 'text-xs hover:underline disabled:opacity-50';
 
   return (
-    <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 space-y-2" data-testid={`candidate-${c.key}`}>
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-slate-100">{c.title}</p>
-          <p className="text-xs"><span className={rec.cls} title={rec.hint}>{rec.label} ⓘ</span>
-            {c.why && <span className="text-slate-400"> — {c.why}</span>}</p>
+    <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 space-y-3" data-testid={`candidate-${c.key}`}>
+      <div className="space-y-0.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm font-semibold text-slate-100 min-w-0">{c.title}</p>
+          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${STATUS_BADGE[c.status].cls}`} data-testid="cand-status">{STATUS_BADGE[c.status].label}</span>
         </div>
-        <span className="text-xs text-slate-500" title="품질 › RAG 파이프라인의 항목">{c.technique_name}</span>
+        <p className="text-xs text-slate-500" title="평가 게이트 › 적용 이력 › 항목 전체의 항목">{c.technique_name}</p>
       </div>
       <Stepper c={c} />
-      <div className="grid gap-1 text-xs text-slate-300">
-        <p><span className="text-slate-500">바꿀 것 </span>{c.action}</p>
-        <p><span className="text-slate-500">재는 법 </span>{m.label}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+        <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 min-w-0">
+          <p className="text-[11px] text-slate-500">AI 추천</p>
+          <p className={`font-medium ${rec.cls}`} title={rec.hint}>{rec.label.replace('AI 추천: ', '')}</p>
+          {c.why && <p className="text-slate-400 break-words">{c.why}</p>}
+        </div>
+        <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 min-w-0">
+          <p className="text-[11px] text-slate-500">바꿀 것</p>
+          <p className="text-slate-200 break-words">{c.action}</p>
+        </div>
+        <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 min-w-0">
+          <p className="text-[11px] text-slate-500">재는 법</p>
+          <p className="text-slate-200">{m.label}</p>
+        </div>
       </div>
       {!hideQids && <QidList title="고치려는 문항" qids={c.qids} hint="이 후보가 겨냥한 틀린 문항 — 눌러서 질문·답·이유 보기" onPick={onPick} />}
       <Hypotheses c={c} improvementId={improvementId} isAdmin={isAdmin} onPick={onPick} />
@@ -213,11 +234,14 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
       )}
       {c.status === 'adopted' && <p className="text-xs text-emerald-600 dark:text-emerald-400">판정 #{c.adopted_gate_run_id} "{c.adopted_gate_label}"로 운영 반영 완료</p>}
       {c.review_reason && c.status !== 'adopted' && (
-        <p className="text-xs text-slate-500">사유: {c.review_reason}{c.carried_from_id ? ' (이전 진단의 결정 이어받음)' : ''}</p>
+        <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs" data-testid="cand-reason">
+          <p className="text-[11px] text-slate-500">결정 사유{c.reviewed_at ? ` · ${fmtDate(c.reviewed_at)}` : ''}{c.carried_from_id ? ' · 이전 진단의 결정 이어받음' : ''}</p>
+          <p className="text-slate-200 break-words">{c.review_reason}</p>
+        </div>
       )}
 
       {isAdmin && c.status !== 'adopted' && (
-        <div className="flex flex-wrap gap-4 pt-1">
+        <div className="flex flex-wrap gap-4 pt-2 border-t border-slate-700">
           {(c.status === 'proposed' || c.status === 'held') && (
             <button className={`${btn} text-indigo-600 dark:text-indigo-400 font-medium`} disabled={review.isPending}
               title="이 후보를 측정해 볼 대상으로 올립니다 — 운영은 아직 안 바뀝니다. 다음에 돌릴 명령이 보여요"

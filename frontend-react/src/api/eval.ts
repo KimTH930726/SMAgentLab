@@ -185,7 +185,7 @@ export async function markHypothesis(improvementId: number, cause: string, name:
 export interface ReportTechnique {
   id: number; key: string; technique: string; title: string; status: CandidateStatus; recommend: Candidate['recommend'];
   technique_name: string; action: string; measure: Candidate['measure']; why: string; review_reason: string | null; reviewed_at: string | null;
-  n_failed: number;
+  n_failed: number; cause: string;
   effect: {
     gate_run_id: number; verdict: 'pass' | 'fail' | null; label: string; total_diff: number | null;
     locked: { n: number; before: number; after: number; down: boolean } | null; retrieval_up: number; retrieval_down: number;
@@ -249,11 +249,40 @@ export async function getDecisionsReport(days = 90): Promise<DecisionsReport> {
   return apiFetch<DecisionsReport>(`/eval/decisions?days=${days}`);
 }
 
+/** 운영 번복 요약(10/27, 감사 로그 위 요약·자가 개선 입력) — 종류별 판단·번복·이유·패턴 + 위치 판정 리플레이 + 번복으로 만든 후보 */
+export interface OverrideKind {
+  kind: string; kind_name: string; decided: number; overrides: number; rate: number | null;
+  reasons: Record<string, number>; patterns: { pattern: string; n: number }[]; rubber_stamp: boolean;
+}
+export interface OverrideReport {
+  days: number; kinds: OverrideKind[];
+  location_replay: { rules: { rule: string; hit: number; n: number; auto_wrong: number; fixed: number[]; broken: number[] }[]; best: { rule: string } | null };
+  candidates: { id: number; title: string; status: CandidateStatus; qids: string[] }[];
+}
+
+/** 평가 게이트 › 적용 이력(10/27) — 기법 대장 근거(측정 기록) + 개선 후보 사람 결정, 날짜 내림차순 */
+export interface HistoryItem {
+  date: string; stage: string; technique: string; technique_name: string; what: string;
+  gate_run_id: number | null; gate: { id: number; label: string; verdict: 'pass' | 'fail' | null } | null;
+  result: '운영 반영' | '안 함' | '나중에' | '실험 중' | null; now?: '안 함' | '꺼짐' | null;
+  reason?: string | null; candidate_id?: number; source: 'registry' | 'decision';
+}
+
+export async function getHistory(limit = 200): Promise<HistoryItem[]> {
+  return apiFetch<HistoryItem[]>(`/eval/history?limit=${limit}`);
+}
+
+export async function getOverrides(days = 30): Promise<OverrideReport> {
+  return apiFetch<OverrideReport>(`/eval/overrides?days=${days}`);
+}
+
 /** AI 감사 로그 한 줄(10/27) — 원장 시간순. ai/human = 서버가 만든 한 줄 설명(원문 없음), open = 아직 사람·사용자 확정 전 */
 export interface DecisionLogItem {
   id: number; kind: string; kind_name: string; at: string; decided_at: string | null; confident: boolean; changed: boolean; open: boolean;
   ai: string; ai_reason: string | null; human: string | null; asked_by: string | null; changed_by: string | null; rule: string | null;
   verdict: ChangedDecision['verdict']; verdict_reason: string | null;
+  override_reason: 'wrong' | 'both_ok' | 'context_changed' | null;   // 번복 순간에 고른 이유(지식 등록, 선택)
+  candidate: { id: number; title: string; status: CandidateStatus } | null;   // 이 번복으로 만든 개선 후보
 }
 
 export async function getDecisionLog(q: { days: number; kind?: string; changedOnly?: boolean; before?: number | null; limit?: number }):
@@ -265,8 +294,21 @@ export async function getDecisionLog(q: { days: number; kind?: string; changedOn
   return apiFetch(`/eval/decisions/log?${p.toString()}`);
 }
 
-/** "AI가 틀렸나요?" 답 — 바꾼 사람만(서버가 확인) */
-export async function setDecisionVerdict(id: number, verdict: string, reason = ''): Promise<{ id: number; verdict: string }> {
-  return apiFetch(`/eval/decisions/${id}/verdict`, { method: 'POST', body: JSON.stringify({ verdict, reason }) });
+/** 검색 미리보기(관리자, 10/27) — 채팅과 같은 검색(LLM 0). 정책 줄의 logical_id로 [시험지에 추가] */
+export interface PreviewItem {
+  kind: 'policy' | 'knowledge' | 'refdata' | 'ref'; how: string; rank?: number; name: string; path: string; score: number | null;
+  label: string | null; logical_id?: number; id?: number; adopted?: boolean;
+}
+export interface PreviewResult {
+  namespace: string; question: string;
+  verdict: { key: 'clarify' | 'abstain' | 'list' | 'empty' | 'answer'; name: string; detail: string | null; options: string[] };
+  terms: string[]; mapped_term: string | null; signals: Record<string, number | boolean>; context_chars: number; items: PreviewItem[];
 }
 
+export async function previewSearch(namespace: string, question: string): Promise<PreviewResult> {
+  return apiFetch<PreviewResult>('/eval/preview', { method: 'POST', body: JSON.stringify({ namespace, question }) });
+}
+
+export async function addPreviewQuestion(namespace: string, question: string, logicalId: number): Promise<{ id: number; qid: string; created: boolean }> {
+  return apiFetch('/eval/preview/questions', { method: 'POST', body: JSON.stringify({ namespace, question, logical_id: logicalId }) });
+}

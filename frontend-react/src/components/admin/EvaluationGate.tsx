@@ -1,36 +1,21 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import { FlaskConical, Search, CheckCircle2, FileText } from 'lucide-react';
-import { UnifiedAdhocSearch } from './UnifiedAdhocSearch';
+import { FlaskConical, Search, CheckCircle2, FileText, History } from 'lucide-react';
+import { SearchPreview } from './SearchPreview';
 import { AnswerTab, RetrievalTab } from './GateRuns';
 import { ReportTab } from './GateReport';
+import { GateFlow, type Stage } from './GateFlow';
+import { GateHistory } from './GateHistory';
+import { useAuthStore } from '../../store/useAuthStore';
 
 /**
- * "파이프라인 디버그"(즉석 질의 — 아무 질문이나 넣고 점수분해 확인)와 "정책 저장소
- * 실험실"(골든셋 실행 — 고정 문항셋 일괄 실행, 집계 지표)을 하나의 최상위 탭으로
- * 통합(2026-09-18) — 둘 다 "질의 → 검색결과 → 유사도 점수"를 보는 같은 축이라는 지적.
- *
- * 이름을 "실험실"에서 "평가 게이트"로 올림(2026-09-18) — 다만 지금은 여전히 수동
- * 측정 도구고 아무것도 자동으로 막지 않는다. "게이트"라는 이름은 향후 여기서 측정한
- * 지표를 기준으로 루프 엔지니어링(임계치 미달 시 자동 재시도/차단 등)을 붙일 계획이라는
- * 것에 근거한 선제적 명명 — 오늘 다른 곳(Track2 docstring, 발표자료)에서 "게이트/축
- * 완성" 같은 과장된 라벨을 실제 증거 수준으로 낮춘 것과 원칙적으로는 반대 방향이라,
- * 실제 차단 로직이 붙기 전까지는 이 docstring에 그 사실을 명시해 혼동을 막는다.
- *
- * 골든셋 실행 쪽 축 선택 UI는 안 만듦 — 일반지식 골든셋(query_log_review 라벨링 필요)이
- * 아직 없어서 선택지가 정책 하나뿐인 토글은 의미가 없음.
- *
- * 즉석 질의 쪽은 "일반지식/정책 중 하나 선택" 토글 → "두 패널을 나란히" → 최종적으로
- * **하나의 통합 리스트(UnifiedAdhocSearch)**로 3번 바뀜(2026-09-18). 두 패널로 나란히
- * 보여주는 것도 "정책이 뭔가 대단한 별도 축"처럼 보인다는 지적 — chat처럼 질문 하나
- * 기준으로 top-K 하나를 보는 구조를 원함. 점수 스케일이 안 맞는 문제(코사인 vs RDB
- * ts_rank)는 Reciprocal Rank Fusion(RRF)으로 해결 — OpenSearch/Azure AI Search 등이
- * 실제 쓰는 표준 기법, 정규화 없이 각 목록 안 순위만으로 합침. 상세는 UnifiedAdhocSearch.tsx.
- *
- * 골든셋 문항 → 즉석질의 드릴다운은 여전히 없음 — Track2가 문항별 결과가 아니라 유형별
- * 집계만 반환해서(백엔드 확장 필요) 이번 범위 밖.
+ * 품질 › 평가 게이트 — 자가 개선 루프의 측정 쪽(10/27 밤 재구성, docs/tech/self-improvement-loop-design.md).
+ * 맨 위 = 단계 흐름 요약(GateFlow: 적재 → 검색 → 근거 판정 → 답 모양 → 생성, 단계별 틀림·번복) — 누르면 리포트가 그 단계로.
+ * 탭 = [리포트] [검색] [답] [적용 이력] [검색 미리보기].
+ * 검색 미리보기 = 옛 즉석 질의(지식·정책·참조데이터 따로 검색해 화면에서 합침 — 채팅과 달랐다)를 채팅과 같은 검색으로(Dify·RAGFlow 검색 테스트 자리).
+ * 옛 품질 › RAG 파이프라인(답 기법) 메뉴는 여기로 흡수: 단계 흐름 = 흐름 그림, 적용 이력 = 무엇을 언제 어떤 측정으로 바꿨나 + 항목 전체(설명 창).
  */
-type GateMode = 'report' | 'retrieval' | 'answers' | 'adhoc';
+type GateMode = 'report' | 'retrieval' | 'answers' | 'history' | 'adhoc';
 
 // 탭 = [리포트] [검색] [답] [즉석 질의] (v2.172, 사용자 10/26 "틀린 문항 리포트 하나로") — 옛 [개선]·[적재 검수]·[판정 이력]·[실사용 문항]은
 // 리포트 안으로 합쳤다(후보 결정 = 리포트의 고칠 방법, 적재 검수 = 저장 상태·측정도 안 되는 문항, 실사용 = 문항 라벨, 기준선 = 운영 반영 때 자동)
@@ -38,18 +23,24 @@ const TABS: { mode: GateMode; label: string; icon: typeof Search; hint: string }
   { mode: 'report', label: '리포트', icon: FileText, hint: '틀린 문항마다 질문 · AI 답 · 왜 틀렸나 · 정답 데이터 저장 모양 · 고칠 기법과 실제 효과 — 사람이 보고 승인' },
   { mode: 'retrieval', label: '검색', icon: FlaskConical, hint: '지금 점수의 검색 성적 — 정답 정책이 AI에게 넘기는 문맥에 들어갔나' },
   { mode: 'answers', label: '답', icon: CheckCircle2, hint: '지금 점수의 답 성적 — 실제 채팅 경로로 답하고 정책 원문과 대조해 채점' },
-  { mode: 'adhoc', label: '즉석 질의', icon: Search, hint: '질문 하나를 넣어 검색 방식(유사도 점수)을 직접 확인합니다' },
+  { mode: 'history', label: '적용 이력', icon: History, hint: '무엇을 언제 어떤 측정으로 바꿨나 · 결과(운영 반영·안 함·나중에) — 줄을 누르면 그 항목 설명' },
+  { mode: 'adhoc', label: '검색 미리보기', icon: Search, hint: '질문 하나를 채팅과 같은 검색으로(LLM 0) — 채팅이 할 일 · 찾은 근거 · 정답 정책을 골라 시험지에 추가' },
 ];
 
 export function EvaluationGate() {
+  const isAdmin = useAuthStore((st) => st.user?.role === 'admin');
+  const tabs = TABS.filter((t) => isAdmin || t.mode !== 'adhoc');   // 검색 미리보기 = 관리자 전용 API
   const [mode, setMode] = useState<GateMode>('report');
-  const hint = TABS.find((t) => t.mode === mode)?.hint;
+  const [stage, setStage] = useState<Stage | null>(null);
+  const onStage = (s: Stage | null) => { setStage(s); setMode('report'); };
+  const hint = tabs.find((t) => t.mode === mode)?.hint;
 
   return (
     <div className="space-y-4">
+      <GateFlow stage={stage} onStage={onStage} />
       <div className="border-b border-slate-700">
         <div className="flex gap-1">
-          {TABS.map(({ mode: m, label, icon: Icon }) => (
+          {tabs.map(({ mode: m, label, icon: Icon }) => (
             <button
               key={m}
               onClick={() => setMode(m)}
@@ -69,10 +60,16 @@ export function EvaluationGate() {
 
       <p className="text-xs text-slate-500 leading-relaxed -mt-2">{hint}</p>
 
-      {mode === 'report' && <ReportTab />}
+      {mode === 'report' && stage && (
+        <p className="text-xs text-indigo-600 dark:text-indigo-300" data-testid="report-stage">
+          {stage} 단계 문항만 보는 중 · <button onClick={() => setStage(null)} className="underline">전체 보기</button>
+        </p>
+      )}
+      {mode === 'report' && <ReportTab key={stage ?? 'all'} stage={stage} />}
+      {mode === 'history' && <GateHistory />}
       {mode === 'retrieval' && <RetrievalTab />}
       {mode === 'answers' && <AnswerTab />}
-      {mode === 'adhoc' && <UnifiedAdhocSearch />}
+      {mode === 'adhoc' && isAdmin && <SearchPreview />}
     </div>
   );
 }

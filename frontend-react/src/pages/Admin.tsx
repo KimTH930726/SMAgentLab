@@ -7,7 +7,6 @@ import { GlossaryTable } from '../components/admin/GlossaryTable';
 import { StatsPanel } from '../components/admin/StatsPanel';
 import { EvaluationGate } from '../components/admin/EvaluationGate';
 import { AiDecisions } from '../components/admin/AiDecisions';
-import { AnswerTechniques } from '../components/admin/AnswerTechniques';
 import { LLMSettings } from '../components/admin/LLMSettings';
 import { OrgAccessPanel } from '../components/admin/OrgAccessPanel';
 import { CachePanel } from '../components/admin/CachePanel';
@@ -100,7 +99,6 @@ export default function Admin() {
           {current === 'q.corrections' && <CorrectionsPanel />}
           {current === 'q.eval'        && <EvaluationGate />}
           {current === 'q.decisions'   && isAdmin && <AiDecisions />}
-          {current === 'q.techniques'  && <AnswerTechniques />}
           {current === 'voc'           && <VocEmailPanel />}
           {current === 'sys.settings'  && <LLMSettings />}
           {current === 'sys.cache'     && isAdmin && <CachePanel />}

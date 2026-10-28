@@ -1,5 +1,5 @@
 import { streamSSE, apiFetch } from './client';
-import type { SSEEvent, ChatRequest, DebugSearchRequest, DebugSearchResponse } from '../types';
+import type { SSEEvent, ChatRequest } from '../types';
 
 export function streamChat(params: ChatRequest): AsyncGenerator<SSEEvent> {
   const body: Record<string, unknown> = {
@@ -16,20 +16,3 @@ export function streamChat(params: ChatRequest): AsyncGenerator<SSEEvent> {
   return streamSSE('/chat/stream', body, params.signal);
 }
 
-export async function debugSearch(params: DebugSearchRequest): Promise<DebugSearchResponse> {
-  try {
-    return await apiFetch<DebugSearchResponse>('/chat/debug', {
-      method: 'POST',
-      body: JSON.stringify({
-        namespace: params.namespace,
-        question: params.question,
-        w_vector: params.w_vector,
-        w_keyword: params.w_keyword,
-        top_k: params.top_k,
-      }),
-    });
-  } catch (err) {
-    console.error('debugSearch error:', err);
-    throw err;
-  }
-}

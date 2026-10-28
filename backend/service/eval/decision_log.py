@@ -10,6 +10,7 @@ import json
 from typing import Optional
 
 from core.database import get_conn
+from service.eval.override import OVERRIDE_SQL
 
 KIND_NAME = {"knowledge_location": "등록 위치", "chat_clarify": "되묻기", "source_check": "원문 확인", "collection_suggest": "다른 컬렉션 제안"}
 _NO_ISSUE = {"source_ok": "원문이 맞음", "already_fixed": "이미 고쳐짐", "duplicate": "중복", "other": "기타"}
@@ -65,30 +66,42 @@ def describe(kind: str, ai: Optional[dict], final: Optional[dict], signals: Opti
 
 
 async def decision_log(*, days: int, kind: Optional[str], changed_only: bool, limit: int = 50, before_id: Optional[int] = None) -> dict:
-    """최신순 한 페이지 — before_id보다 작은 것부터(다음 페이지). changed_only = 사람이 AI 값을 바꾼 것만."""
+    """최신순 한 페이지 — before_id보다 작은 것부터(다음 페이지). changed_only = 번복만(override.is_override와 같은 규칙 — 저장 칸이 아니라 값으로)."""
     async with get_conn() as conn:
         rows = await conn.fetch(
-            """SELECT d.id, d.kind, d.created_at, d.changed_at, d.confident, d.human_changed, d.ai_value, d.final_value, d.signals,
+            f"""SELECT d.id, d.kind, d.created_at, d.changed_at, d.confident, {OVERRIDE_SQL} AS overridden, d.ai_value, d.final_value, d.signals,
                       d.signals->>'reason' AS ai_reason, d.ai_verdict, d.verdict_reason, d.prompt_version,
                       cu.username AS created_by, hu.username AS changed_by
                FROM ops_ai_decision d
                LEFT JOIN ops_user cu ON cu.id = d.created_by_user_id
                LEFT JOIN ops_user hu ON hu.id = d.changed_by_user_id
                WHERE d.created_at > NOW() - make_interval(days => $1)
-                 AND ($2::text IS NULL OR d.kind = $2) AND (NOT $3 OR d.human_changed) AND ($5::bigint IS NULL OR d.id < $5)
+                 AND ($2::text IS NULL OR d.kind = $2) AND (NOT $3 OR {OVERRIDE_SQL}) AND ($5::bigint IS NULL OR d.id < $5)
                ORDER BY d.id DESC LIMIT $4""", days, kind, changed_only, limit + 1, before_id)   # 하나 더 — 다음 페이지가 있는지(리뷰 L3)
         more = len(rows) > limit
         rows = rows[:limit]
         ids = sorted({v for r in rows for v in ((_j(r["ai_value"]) or {}).get("namespace_id"), (_j(r["final_value"]) or {}).get("namespace_id"),
                                                 (_j(r["signals"]) or {}).get("proposed_id")) if isinstance(v, int)})
         names = {r["id"]: r["name"] for r in await conn.fetch("SELECT id, name FROM ops_namespace WHERE id = ANY($1::int[])", ids)} if ids else {}
+        # 이 번복으로 만든 개선 후보(가장 최근 진단) — 후보 대상 = 번복한 판정 D-<id>(service/eval/override.candidates)
+        cand_of: dict[int, dict] = {}
+        for c in await conn.fetch("SELECT id, title, status, qids FROM eval_candidate WHERE cause = 'override_location' "
+                                  "AND run_id = (SELECT max(id) FROM eval_improvement_run)"):
+            for q in _j(c["qids"]) or []:
+                if isinstance(q, str) and q.startswith("D-") and q[2:].isdigit():
+                    cand_of[int(q[2:])] = {"id": c["id"], "title": c["title"], "status": c["status"]}
     items = []
     for r in rows:
         final = _j(r["final_value"])
-        d = describe(r["kind"], _j(r["ai_value"]), final, _j(r["signals"]), names, changed=bool(r["human_changed"]))
+        d = describe(r["kind"], _j(r["ai_value"]), final, _j(r["signals"]), names, changed=bool(r["overridden"]))
         items.append({"id": r["id"], "kind": r["kind"], "kind_name": KIND_NAME.get(r["kind"], r["kind"]),
                       "at": r["created_at"].isoformat(), "decided_at": r["changed_at"].isoformat() if r["changed_at"] else None,
-                      "confident": r["confident"], "changed": r["human_changed"], "open": final is None,
+                      "confident": r["confident"], "changed": bool(r["overridden"]), "open": final is None,
                       "ai": d["ai"], "ai_reason": r["ai_reason"], "human": d["human"], "asked_by": r["created_by"], "changed_by": r["changed_by"],
-                      "rule": r["prompt_version"] or None, "verdict": r["ai_verdict"], "verdict_reason": r["verdict_reason"]})
+                      "rule": r["prompt_version"] or None, "verdict": r["ai_verdict"], "verdict_reason": r["verdict_reason"],
+                      # 번복 순간에 사람이 고른 이유(지식 등록, 선택) — 감사 로그는 묻지 않고 보여 주기만(10/27)
+                      # 옛 줄은 감사 로그에서 받은 답(ai_verdict)으로 — override.summarize와 같은 규칙(리뷰 L2)
+                      "override_reason": ((final or {}).get("override_reason")
+                                          or (r["ai_verdict"] if r["ai_verdict"] in ("wrong", "context_changed") else None)) if r["overridden"] else None,
+                      "candidate": cand_of.get(r["id"])})
     return {"items": items, "next_before": items[-1]["id"] if more and items else None}

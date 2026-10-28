@@ -113,8 +113,9 @@ async def _ingest_gate(namespace: str, user: dict, decision_id: Optional[int]) -
 
 
 async def _finalize_location(decision_id: Optional[int], namespace: str, user: dict, choice: Optional[str], *,
-                             suggested: bool, target_type: str, target_ids: list[int]) -> None:
-    """등록이 성공한 뒤 위치 판정 줄을 확정 — 고른 곳 ≠ AI가 고른 곳이면 changed(오답 신호). 실패해도 등록은 그대로(로그)."""
+                             suggested: bool, target_type: str, target_ids: list[int], reason: Optional[str] = None) -> None:
+    """등록이 성공한 뒤 위치 판정 줄을 확정 — 고른 곳 ≠ AI 추천(확신 없으면 후보)이면 번복(changed). 번복 이유(선택)는 final_value에,
+    "AI가 틀림"·"상황이 바뀜"이면 원장 ai_verdict에도. 실패해도 등록은 그대로(로그)."""
     if decision_id is None:
         return
     from core.database import get_conn, resolve_namespace_id
@@ -122,15 +123,18 @@ async def _finalize_location(decision_id: Optional[int], namespace: str, user: d
     try:
         async with get_conn() as conn:
             ns_id = await resolve_namespace_id(conn, namespace)
-            ai = await conn.fetchval("SELECT ai_value->>'namespace_id' FROM ops_ai_decision WHERE id = $1", decision_id)
-            # AI가 아무 곳도 못 골랐으면(판단 실패·애매) "AI가 틀림"이 아니다 — 고른 곳과 비교할 값이 없다(리뷰 L4)
-            ok = await ledger.finalize(conn, decision_id, kind="knowledge_location",
-                                       final_value={"namespace_id": ns_id, "choice": choice if choice in _LOCATION_CHOICES else "accept",
-                                                    "suggested": suggested},
-                                       changed=ai is not None and str(ns_id) != ai, user_id=user["id"],
-                                       target_type=target_type, target_ids=target_ids)
+            row = await conn.fetchrow("SELECT ai_value->>'namespace_id' AS ai, signals->>'proposed_id' AS proposed, "
+                                      "signals->>'preset_id' AS preset FROM ops_ai_decision WHERE id = $1", decision_id)
+            changed, why = ledger.location_outcome(row and row["ai"], row and row["proposed"], ns_id, reason, preset_ns=row and row["preset"])
+            final = {"namespace_id": ns_id, "choice": choice if choice in _LOCATION_CHOICES else "accept", "suggested": suggested}
+            if why:
+                final["override_reason"] = why
+            ok = await ledger.finalize(conn, decision_id, kind="knowledge_location", final_value=final,
+                                       changed=changed, user_id=user["id"], target_type=target_type, target_ids=target_ids)
             if not ok:
                 logger.warning("위치 판정 원장 확정 안 됨(이미 확정·남의 줄) decision=%s user=%s", decision_id, user.get("id"))
+            elif why in ("wrong", "context_changed"):   # 원장의 "AI가 틀렸나" 칸 — 번복 순간에 받은 답(감사 로그 화면에선 묻지 않는다)
+                await ledger.set_verdict(conn, decision_id, verdict=why, user_id=user["id"])
     except Exception:   # noqa: BLE001
         logger.warning("위치 판정 원장 확정 실패(등록은 됨) decision=%s", decision_id, exc_info=True)
 
@@ -146,7 +150,7 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
     )
     if body.decision_id is not None:
         await _finalize_location(body.decision_id, body.namespace, user, body.location_choice, suggested=suggested,
-                                 target_type="knowledge", target_ids=[row["id"]])
+                                 target_type="knowledge", target_ids=[row["id"]], reason=body.override_reason)
     # 용어 자동 추출 복원(2026-09-24) — 미리보기+검토 2단계 흐름으로 전환되며 끊겼던
     # _run_auto_glossary()를 모든 등록 경로 공통으로 되살림. 사람이 체크박스를 켜야
     # 했던 예전 opt-in 방식 대신, 이 세션 내내 적용한 "사람 개입 최소화" 원칙대로
@@ -382,7 +386,7 @@ async def bulk_create(body: BulkCreateRequest, user: dict = Depends(get_current_
         )
         if body.decision_id is not None:
             await _finalize_location(body.decision_id, body.namespace, user, body.location_choice, suggested=suggested,
-                                     target_type="ingestion_job", target_ids=[result["job_id"]])
+                                     target_type="ingestion_job", target_ids=[result["job_id"]], reason=body.override_reason)
         return result
     except service.ReplaceConfirmRequired as e:
         # 화면은 등록 전에 /bulk/replace-check로 먼저 묻는다 — 여기는 확인 없이 들어온 요청을 막는 두 번째 벽

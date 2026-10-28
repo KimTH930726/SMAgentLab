@@ -98,7 +98,11 @@ export interface KnowledgeCreatePayload {
   content: string;
   decision_id?: number | null;      // E2: 위치 판정 원장 줄(POST /knowledge/locate)
   location_choice?: LocationChoice | null;
+  override_reason?: OverrideReason | null;   // AI 추천과 다른 곳을 고른 이유(선택, 10/27)
 }
+
+/** AI 추천을 번복한 이유(10/27, 선택) — wrong: AI가 틀림 · both_ok: 둘 다 맞는데 이쪽이 더 맞음 · context_changed: 상황이 바뀜 */
+export type OverrideReason = 'wrong' | 'both_ok' | 'context_changed';
 
 /** 넣을 곳을 어떻게 정했나(E2) — accept: AI 제안 그대로 · option: 다른 선택지 · other: 창에서 직접 · preset: 컬렉션 화면에서 넘어옴
  *  ("잘 모르겠어요"는 10/23 뺐다 — AI가 추천하고 사람이 고른다) */
@@ -135,6 +139,7 @@ export interface ChosenLocation {
   writable: boolean;
   decisionId: number | null;
   choice: LocationChoice;
+  overrideReason?: OverrideReason | null;
 }
 
 export interface KnowledgeUpdatePayload {

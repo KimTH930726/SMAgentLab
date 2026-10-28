@@ -1,5 +1,5 @@
 """지식/용어집 도메인 — Pydantic 스키마."""
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -14,6 +14,9 @@ class KnowledgeCreate(BaseModel):
     # E2(10/23) 위치 판정 원장 줄(POST /locate가 준 id)과 고른 방법 — 있으면 등록 뒤 같은 줄에 확정(다른 곳을 고르면 AI 오답 신호)
     decision_id: Optional[int] = None
     location_choice: Optional[str] = None   # accept | option | other | preset
+    # AI 추천과 다른 곳을 골랐을 때 사람이 고른 이유(10/27, 선택) — wrong: AI가 틀림 · both_ok: 둘 다 맞는데 이쪽이 더 맞음 · context_changed: 상황이 바뀜.
+    # 자가 개선 진단이 번복 묶음으로 읽는다(service/eval/override.py)
+    override_reason: Optional[Literal["wrong", "both_ok", "context_changed"]] = None
     # 업무구분(category) 입력은 10/22 업무구분 폐지로 제거 — 옛 화면이 보내도 무시된다
 
 
@@ -77,6 +80,7 @@ class BulkCreateRequest(BaseModel):
     confirm_replace: bool = False
     decision_id: Optional[int] = None        # KnowledgeCreate와 같음(E2)
     location_choice: Optional[str] = None
+    override_reason: Optional[Literal["wrong", "both_ok", "context_changed"]] = None
 
 
 class IngestionJobOut(BaseModel):

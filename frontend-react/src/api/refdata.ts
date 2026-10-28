@@ -28,10 +28,3 @@ export interface RefDataSearchResult {
   db_columns: DbColumnHit[];
 }
 
-export async function searchRefdata(
-  namespace: string, q: string, opts?: { topK?: number },
-): Promise<RefDataSearchResult> {
-  const params = new URLSearchParams({ namespace, q });
-  if (opts?.topK) params.set('top_k', String(opts.topK));
-  return apiFetch<RefDataSearchResult>(`/refdata/search?${params.toString()}`);
-}

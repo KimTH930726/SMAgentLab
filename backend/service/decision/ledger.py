@@ -67,6 +67,17 @@ async def clarify_answered(conn, *, conversation_id: int, picked_scope: Optional
     return await finalize(conn, rows[0]["id"], kind=CLARIFY_KIND, final_value=value, changed=False, user_id=user_id)
 
 
+def location_outcome(ai_ns: Optional[str], proposed_ns: Optional[str], final_ns: int, reason: Optional[str],
+                     preset_ns: Optional[str] = None) -> tuple[bool, Optional[str]]:
+    """(번복인가, 남길 번복 이유) — 순수 함수(테스트). AI 추천 = 화면이 미리 골라 둔 곳(locator.decide의 proposed — 이웃 4/5면 이웃, 아니면 AI)
+    → 사람이 그것과 다른 곳에 넣으면 번복(10/27 사용자 "AI가 자동 추천한 걸 사람이 번복했을 때의 로그"). proposed가 없는 옛 줄만 AI 값으로.
+    컬렉션 화면에서 넘어온 곳(preset)은 사람이 정한 곳이라 AI 추천이 아니다 — 번복 아님(화면도 이유를 묻지 않는다, 리뷰 10/27 M1).
+    추천이 아예 없으면(판단 실패) 번복이 아니다. 이유는 번복일 때만 남긴다. 같은 규칙: service/eval/override.is_override·OVERRIDE_SQL."""
+    rec = None if preset_ns is not None else (proposed_ns or ai_ns)
+    changed = rec is not None and str(final_ns) != str(rec)
+    return changed, (reason if changed else None)
+
+
 async def set_verdict(conn, decision_id: int, *, verdict: str, reason: str = "", user_id: Optional[int]) -> bool:
     """사람이 AI 값을 바꾼 줄에 "AI가 틀렸나요?" 답 — wrong / context_changed / unknown."""
     if verdict not in VERDICTS:

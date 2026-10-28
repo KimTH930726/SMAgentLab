@@ -154,6 +154,14 @@ async def main() -> int:
                 print(f"⚠ 적재 검수는 측정 #{ing_row['gate_run_id']} 기준(이 진단은 #{run['id']}) — 같은 측정으로 맞추려면 "
                       f"check_ingest.py --save를 다시 실행")
             cands += ingest_candidates(json.loads(ing) if isinstance(ing, str) else ing, locked)
+        # 운영 번복(AI 감사 로그) — 기능을 쓰다 사람이 AI 추천을 번복한 기록 → 같은 후보 흐름으로(10/27, self-improvement-loop-design §3-2)
+        from service.eval import override as override_mod
+        async with get_conn() as conn:
+            ov = await override_mod.report(conn, 90)
+        for k in ov["kinds"]:
+            if k["overrides"]:
+                print(f"  운영 번복 · {k['kind_name']} {k['overrides']}/{k['decided']}" + (" · 형식적 승인 의심" if k["rubber_stamp"] else ""))
+        cands += override_mod.candidates(ov)
 
         print(f"판정 #{run['id']} \"{run['label']}\" — {diag['n']}문항 중 틀림 {diag['n_failed']} · 잠근 문항 {len(locked)}개는 진단에서 뺌")
         for k, name, where in CAUSES:

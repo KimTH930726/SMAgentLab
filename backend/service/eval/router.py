@@ -1,5 +1,6 @@
 """/api/eval — 평가 게이트 판정 기록(품질 › 평가 게이트 화면). 읽기는 로그인 사용자(옛 /policy/answer-eval/history와 같음),
 기준선 지정은 관리자. 판정 실행은 scripts/eval_gate.py(문항당 LLM 호출·채점이라 화면에서 안 돌림)."""
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -135,6 +136,32 @@ async def get_decisions_report(days: int = Query(default=90, ge=1, le=365), admi
     return await service.decisions_report(days)
 
 
+@router.get("/history")
+async def get_history(limit: int = Query(default=200, ge=1, le=500), user: dict = Depends(get_current_user)):
+    """평가 게이트 › 적용 이력 — 기법 대장 근거 + 개선 후보 결정을 날짜순(무엇을 언제 어떤 측정으로 바꿨나 · 효과 · 결과). 원문 없음."""
+    from service.eval.history import history
+    return await history(limit)
+
+
+@router.get("/overrides")
+async def get_overrides(days: int = Query(default=30, ge=1, le=365), admin: dict = Depends(get_current_admin)):
+    """운영 번복 요약(관리자, AI 감사 로그 위 요약) — 종류별 판단·번복·번복률·이유·패턴, 형식적 승인 의심, 위치 판정 리플레이. 원문 없음."""
+    from core.database import get_conn
+    from service.eval import override as override_mod
+    async with get_conn() as conn:
+        rep = await override_mod.report(conn, days)
+    async with get_conn() as conn:   # 번복으로 만든 개선 후보(가장 최근 진단) — 감사 로그 "번복으로 만든 후보 n →"
+        cands = [dict(r) for r in await conn.fetch(
+            "SELECT c.id, c.title, c.status, c.qids FROM eval_candidate c WHERE c.cause = 'override_location' "
+            "AND c.run_id = (SELECT max(id) FROM eval_improvement_run) ORDER BY c.id")]
+    for c in cands:
+        c["qids"] = json.loads(c["qids"]) if isinstance(c["qids"], str) else (c["qids"] or [])
+    rep["candidates"] = cands
+    for k in rep["kinds"]:
+        k.pop("override_ids", None)
+    return rep
+
+
 @router.get("/decisions/log")
 async def get_decision_log(days: int = Query(default=30, ge=1, le=365), kind: Optional[str] = Query(default=None, max_length=40),
                            changed_only: bool = False, limit: int = Query(default=50, ge=1, le=200), before: Optional[int] = None,
@@ -209,3 +236,29 @@ async def get_report(admin: dict = Depends(get_current_admin)):
     except ResultFileError as e:   # 같은 이름 결과 파일이 여러 곳 등 — 500 대신 이유(리뷰 L1)
         raise HTTPException(status_code=409, detail=str(e))
 
+
+
+class PreviewRequest(BaseModel):
+    namespace: str = Field(min_length=1, max_length=200)
+    question: str = Field(min_length=1, max_length=1000)
+
+
+class PreviewAddRequest(PreviewRequest):
+    logical_id: int
+
+
+@router.post("/preview")
+async def post_preview(body: PreviewRequest, admin: dict = Depends(get_current_admin)):
+    """평가 게이트 › 검색 미리보기(관리자) — 채팅과 같은 검색(build_chat_context)을 돌려 판정·문맥 후보를 보여 준다. LLM 0, 기록 없음."""
+    from service.eval.preview import preview
+    return await preview(body.namespace, body.question.strip())
+
+
+@router.post("/preview/questions")
+async def post_preview_question(body: PreviewAddRequest, admin: dict = Depends(get_current_admin)):
+    """[시험지에 추가] — 정답 = 고른 정책. 실사용 층에 바로(다음 측정부터). 같은 질문이 이미 있으면 그 줄을 돌려준다."""
+    from service.eval.preview import add_question
+    try:
+        return await add_question(namespace=body.namespace, question=body.question, logical_id=body.logical_id, user_id=admin["id"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

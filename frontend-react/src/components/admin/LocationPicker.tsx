@@ -6,7 +6,11 @@ import { getParts } from '../../api/auth';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { canEditDomain, effectiveOwnerParts } from '../../utils/domainAccess';
 import { CollectionPickerModal } from '../layout/CollectionPickerModal';
-import type { ChosenLocation, LocateCollection, LocateResult, LocationChoice } from '../../types';
+import type { ChosenLocation, LocateCollection, LocateResult, LocationChoice, OverrideReason } from '../../types';
+
+const REASONS: { key: OverrideReason; label: string }[] = [
+  { key: 'wrong', label: 'AI가 틀림' }, { key: 'both_ok', label: '둘 다 맞는데 이쪽이 더 맞음' }, { key: 'context_changed', label: '상황이 바뀜' },
+];
 
 /**
  * 지식 등록 — 넣을 곳 카드(E2, 10/23 목업 승인). 내용을 보고 AI가 넣을 곳을 제안하고(위치 판정 POST /knowledge/locate),
@@ -16,6 +20,8 @@ import type { ChosenLocation, LocateCollection, LocateResult, LocationChoice } f
  * - preset(컬렉션 화면의 [지식 등록 →]) = 넣을 곳 확정, AI는 검사만 — 두 신호가 다른 곳으로 확신할 때만 "옮길까요?" 한 번
  * - 담당이 아닌 곳을 고르면 그 담당의 승인 대기로 간다(제안) — 미리 알린다
  * - AI 판단 실패·비교할 지식 없음 = 노란 줄(대체 처리를 보이게)
+ * - AI 추천(확신 없으면 후보)과 다른 곳을 고르면 = 번복 — 이유를 한 번 고를 수 있게(선택, 안 골라도 저장, 10/27 사용자
+ *   "기능을 쓰다 AI 추천을 번복했을 때의 로그를 쌓아 자가 개선"). 감사 로그·자가 개선 진단이 읽는다.
  */
 export function LocationPicker({ text, preset, onChange }: {
   text: string;
@@ -45,6 +51,10 @@ export function LocationPicker({ text, preset, onChange }: {
   const writableOf = useMemo(() => new Map(all.map((c) => [c.name, c.writable])), [all]);
 
   const [picked, setPicked] = useState<{ c: LocateCollection; choice: LocationChoice } | null>(null);
+  const [reason, setReason] = useState<OverrideReason | null>(null);
+  const recommended = r && !r.preset ? r.proposed : null;   // AI 추천 = 화면이 미리 골라 둔 곳(서버 ledger.location_outcome과 같은 규칙)
+  const overriding = !!recommended && !!picked && picked.c.name !== recommended.name;
+  useEffect(() => { if (!overriding) setReason(null); }, [overriding]);
   // 판정이 오면 기본값 = preset 또는 AI 제안
   useEffect(() => {
     if (!r) { setPicked(null); return; }
@@ -54,8 +64,8 @@ export function LocationPicker({ text, preset, onChange }: {
   const blocked = !r && !!picked && !picked.c.writable;   // 판정 없이 담당 아닌 곳 — 승인 요청에 판정 줄이 필요하다
   useEffect(() => {
     onChange(picked && !blocked ? { namespace: picked.c.name, label: picked.c.label, writable: picked.c.writable,
-                                    decisionId: r?.decision_id ?? null, choice: picked.choice } : null);
-  }, [picked, r, blocked, onChange]);
+                                    decisionId: r?.decision_id ?? null, choice: picked.choice, overrideReason: overriding ? reason : null } : null);
+  }, [picked, r, blocked, onChange, overriding, reason]);
 
   if (!head.trim()) return null;
   if (isLoading) {
@@ -139,6 +149,22 @@ export function LocationPicker({ text, preset, onChange }: {
         </div>
       )}
       <Reasons r={r} />
+      {overriding && (
+        <div data-testid="override-reason" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 dark:border-amber-700/50 dark:bg-amber-900/20">
+          <span className="text-xs text-amber-800 dark:text-amber-300">AI 추천('{recommended!.label}')과 다른 곳이에요 — 이유를 고르면 AI가 배워요</span>
+          <span className="text-[11px] text-slate-500">(선택 · 안 골라도 저장돼요)</span>
+          <span className="ml-auto flex flex-wrap gap-1.5" role="group" aria-label="번복 이유">
+            {REASONS.map((x) => (
+              <button key={x.key} type="button" aria-pressed={reason === x.key} onClick={() => setReason(reason === x.key ? null : x.key)}
+                className={clsx('text-xs px-2 py-0.5 rounded-md border',
+                  reason === x.key ? 'border-amber-500 bg-amber-100 text-amber-900 dark:border-amber-400 dark:bg-amber-500/20 dark:text-amber-200'
+                    : 'border-slate-600 text-slate-300 hover:border-amber-500 dark:hover:border-amber-400')}>
+                {x.label}
+              </button>
+            ))}
+          </span>
+        </div>
+      )}
 
       {picked && !picked.c.writable && (
         <p className="text-xs text-amber-700 dark:text-amber-300">

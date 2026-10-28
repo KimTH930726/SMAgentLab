@@ -32,14 +32,6 @@ export interface PolicySearchResult {
   narratives: NarrativeHit[];
 }
 
-export async function searchPolicy(
-  namespace: string, q: string, opts?: { category?: string; topK?: number },
-): Promise<PolicySearchResult> {
-  const params = new URLSearchParams({ namespace, q });
-  if (opts?.category) params.set('category', opts.category);
-  if (opts?.topK) params.set('top_k', String(opts.topK));
-  return apiFetch<PolicySearchResult>(`/policy/search?${params.toString()}`);
-}
 
 // ─── 정책서 화면(v0, 2026-10-21 재구축 2단계) — 읽기 전용. 내용 변경은 정정 원장의 제안(api/corrections)으로만 ───
 

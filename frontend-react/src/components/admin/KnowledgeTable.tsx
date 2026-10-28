@@ -122,7 +122,7 @@ async function bulkCreateConfirmed(namespace: string, items: BulkItems, sourceFi
     }
   }
   const result = await bulkCreateKnowledge(target, items, sourceFile, sourceType, confirmReplace,
-    loc ? { decisionId: loc.decisionId, choice: loc.choice } : null);
+    loc ? { decisionId: loc.decisionId, choice: loc.choice, overrideReason: loc.overrideReason ?? null } : null);
   if (result.unlinked_sources?.length) {
     void showAlert('미리보기 뒤에 원문이 바뀌어(다른 등록으로 교체 등) 이번 조각은 원문에 연결하지 않았습니다.\n'
       + '등록은 진행되지만 "다시 분할"은 쓸 수 없습니다 — 필요하면 다시 미리보기 후 등록하세요.', { title: '원문 연결 안 됨' });
@@ -1582,6 +1582,7 @@ function ManualForm({ namespace, preset, onSuccess, onCancel }: {
         content: form.content,
         decision_id: loc?.decisionId ?? null,
         location_choice: loc?.choice ?? null,
+        override_reason: loc?.overrideReason ?? null,
       }),
     onSuccess: (created) => {
       const target = loc?.namespace ?? namespace;
