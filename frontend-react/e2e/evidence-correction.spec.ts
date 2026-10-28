@@ -55,6 +55,10 @@ async function openCorrectionCard(page: Page, userInput: string) {
   await goAdmin(page, '품질', '정정 요청');   // 정정 요청은 품질 메뉴로(10/21)
   const card = page.locator('div.rounded-xl').filter({ hasText: userInput }).first();
   await expect(card).toBeVisible({ timeout: 10_000 });
+  // 신고 카드의 [AI가 본 근거] — 그 질문으로 바로 열려 AI가 무엇을 보고 답했나(10/28, 옛 검색 미리보기). 답은 안 만든다(LLM 0)
+  await card.getByTestId('evidence-open').click();
+  await expect(page.getByRole('dialog').getByTestId('preview-verdict')).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press('Escape');
   return card;
 }
 

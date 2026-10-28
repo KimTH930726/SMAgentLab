@@ -14,6 +14,7 @@ import { showError } from '../../store/useDialogStore';
 import { lineDiff, type DiffOp } from '../../utils/lineDiff';
 import { useCollectionLabel } from '../../utils/useCollectionLabel';
 import { PolicyChangeCard } from './PolicyChangeCard';
+import { EvidenceButton } from './Evidence';
 
 /**
  * 정정 요청(2026-10-01, 10-02 리뷰 신호를 합침) — 지식·정책을 고치자는 신호·제안이 모두 모이는 곳. 승인해야만 반영된다.
@@ -285,7 +286,8 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
 
       {item.question_text && canFix && (
         <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs space-y-1">
-          <p><span className="text-slate-500 mr-1">질문</span><span className="text-slate-200">{item.question_text}</span></p>
+          <p className="flex flex-wrap items-baseline gap-x-2"><span><span className="text-slate-500 mr-1">질문</span><span className="text-slate-200">{item.question_text}</span></span>
+            <EvidenceButton namespace={item.namespace} question={item.question_text} canFlag /></p>
           {item.answer_text && (
             <p className="text-slate-400 line-clamp-3" title={item.answer_text}>
               <span className="text-slate-500 mr-1">당시 답변</span>{item.answer_text}

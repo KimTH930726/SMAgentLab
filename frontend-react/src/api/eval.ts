@@ -294,7 +294,7 @@ export async function getDecisionLog(q: { days: number; kind?: string; changedOn
   return apiFetch(`/eval/decisions/log?${p.toString()}`);
 }
 
-/** 검색 미리보기(관리자, 10/27) — 채팅과 같은 검색(LLM 0). 정책 줄의 logical_id로 [시험지에 추가] */
+/** AI가 본 근거(10/28, 옛 검색 미리보기) — 채팅과 같은 검색(LLM 0, 로그인 사용자). 정책 줄의 logical_id로 [시험지에 넣기](관리자) */
 export interface PreviewItem {
   kind: 'policy' | 'knowledge' | 'refdata' | 'ref'; how: string; rank?: number; name: string; path: string; score: number | null;
   label: string | null; logical_id?: number; id?: number; adopted?: boolean;

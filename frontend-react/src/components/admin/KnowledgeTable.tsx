@@ -41,6 +41,7 @@ import type { KnowledgeItem, DuplicateMatch, ChosenLocation } from '../../types'
 import { LocationPicker } from './LocationPicker';
 import { showAlert, showConfirm } from '../../store/useDialogStore';
 import { KnowledgeStructurePanel } from './KnowledgeStructurePanel';
+import { EvidenceButton } from './Evidence';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
 
@@ -520,6 +521,8 @@ export function KnowledgeTable() {
           </div>
           {/* 원문 위치는 부차 정보 — 내용 아래, 접힌 한 줄(사용자 피드백 2026-10-07) */}
           {editingId !== null && <KnowledgeStructurePanel knowledgeId={editingId} canModify={canModifyNs} />}
+          {/* 이 지식이 검색에 잡히나 — 질문 하나로 AI가 보는 근거와 이 지식의 순위(10/28 AI가 본 근거) */}
+          {editingId !== null && selectedNs && <EvidenceButton namespace={selectedNs} highlightId={editingId} label="이 지식이 검색에 잡히는지 보기" canFlag={canModifyNs} />}
           {updateMutation.error && <p className="text-xs text-rose-600 dark:text-rose-400">{String(updateMutation.error)}</p>}
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="ghost" size="sm" onClick={() => { setShowEdit(false); setEditingId(null); }}>

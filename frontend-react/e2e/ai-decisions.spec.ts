@@ -107,35 +107,51 @@ test('평가 게이트 — 단계 = 공통 필터(탭 유지·이력·항목·�
   await expect(page.getByRole('dialog')).toContainText('하는 일');
 });
 
-test('검색 미리보기 — 화면의 판정 = API(채팅과 같은 검색), 정답 정책을 골라 시험지에 추가하면 실사용 층 한 줄', async ({ page }) => {
-  test.setTimeout(120_000);
+test('AI가 본 근거(지식 상세) — 이 지식의 순위 표시 · 화면 판정 = API(채팅과 같은 검색) · 맞는 답 표시 → 시험지에 넣기 = 실사용 층 한 줄', async ({ page }) => {
+  test.setTimeout(150_000);
   const NS = '딜리버스';
   const t = await adminToken();
-  const api = await (await apiFetch(`${API}/api/eval/preview`, {
-    method: 'POST', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ namespace: NS, question: PREVIEW_Q }),
-  })).json();
-  await loginAdmin(page);
-  await goAdmin(page, '품질', '평가 게이트');
-  await selectDomain(page, NS);
-  await page.getByRole('button', { name: '검색 미리보기' }).click();
-  await page.getByLabel('질문').fill(PREVIEW_Q);
-  await page.getByRole('button', { name: '채팅처럼 검색' }).click();
-  await expect(page.getByTestId('preview-verdict')).toContainText(api.verdict.name);
-  const policies = page.getByTestId('preview-item-policy');
-  await expect(policies).toHaveCount(api.items.filter((x: { kind: string }) => x.kind === 'policy').length);
-  test.skip(api.items.every((x: { kind: string }) => x.kind !== 'policy'), '정책이 안 걸리는 데이터 — 추가는 확인 못 함');
+  const H = { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' };
+  // 이미 있는 사용 중 지식 하나(새로 만들면 중복 판정으로 승인 대기가 되거나 자동 용어 추출이 용어집에 시험 용어를 남긴다 — 10/28 리뷰)
+  const [kid, head] = psql(`SELECT id || '|' || left(regexp_replace(content, '\s+', ' ', 'g'), 12) FROM rag_knowledge
+    WHERE status = 'active' AND namespace_id = (SELECT id FROM ops_namespace WHERE name = '${NS}') ORDER BY id LIMIT 1`).split('|');
+  test.skip(!kid, '딜리버스에 사용 중 지식 없음');
+  const created = { id: Number(kid) };
+  {
+    const api = await (await apiFetch(`${API}/api/eval/preview`, { method: 'POST', headers: H, body: JSON.stringify({ namespace: NS, question: PREVIEW_Q }) })).json();
+    expect(api.verdict).toBeTruthy();
+    await loginAdmin(page);
+    await nav(page, NS);
+    await page.getByPlaceholder(/검색/).fill(head);
+    await page.getByText(head).first().click();
+    await page.getByTestId('evidence-open').click();
+    const dlg = page.getByRole('dialog').last();
+    await dlg.getByLabel('질문').fill(PREVIEW_Q);
+    await dlg.getByRole('button', { name: '근거 보기' }).click();
+    await expect(dlg.getByTestId('preview-verdict')).toContainText(api.verdict.name);
+    const mine = api.items.find((x: { kind: string; id?: number }) => x.kind === 'knowledge' && x.id === created.id);
+    await expect(dlg.getByTestId('evidence-mine')).toContainText(mine ? `지식 ${mine.rank}위` : '안 잡혀요');
+    const policies = dlg.getByTestId('preview-item-policy');
+    await expect(policies).toHaveCount(api.items.filter((x: { kind: string }) => x.kind === 'policy').length);
+    test.skip(api.items.every((x: { kind: string }) => x.kind !== 'policy'), '정책이 안 걸리는 데이터 — 시험지 넣기는 확인 못 함');
 
-  const before = Number(psql(`SELECT count(*) FROM eval_question_candidate WHERE question = '${PREVIEW_Q}'`));
-  await policies.first().getByLabel('정답').check();
-  await page.getByTestId('preview-add').click();
-  await expect(page.getByTestId('app-dialog')).toContainText('시험지에 넣었어요');
-  await page.getByTestId('app-dialog-ok').click();
-  const want = api.items.find((x: { kind: string }) => x.kind === 'policy').logical_id;
-  expect(psql(`SELECT count(*) || '|' || max(status) || '|' || max(source) || '|' || max(gold->>'logical_id') FROM eval_question_candidate WHERE question = '${PREVIEW_Q}'`))
-    .toBe(`${before + 1}|added|preview|${want}`);
-  // 두 번 눌러도 한 줄(같은 컬렉션·같은 질문)
-  await page.getByTestId('preview-add').click();
-  await expect(page.getByTestId('app-dialog')).toContainText('이미 시험지에');
-  await page.getByTestId('app-dialog-ok').click();
-  expect(psql(`SELECT count(*) FROM eval_question_candidate WHERE question = '${PREVIEW_Q}'`)).toBe(String(before + 1));
+    const before = Number(psql(`SELECT count(*) FROM eval_question_candidate WHERE question = '${PREVIEW_Q}'`));
+    await policies.first().getByLabel('이게 맞는 답').check();
+    await dlg.getByTestId('preview-add').click();
+    await expect(page.getByTestId('app-dialog')).toContainText('시험지에 넣었어요');
+    await page.getByTestId('app-dialog-ok').click();
+    const want = api.items.find((x: { kind: string }) => x.kind === 'policy').logical_id;
+    expect(psql(`SELECT count(*) || '|' || max(status) || '|' || max(source) || '|' || max(gold->>'logical_id') FROM eval_question_candidate WHERE question = '${PREVIEW_Q}'`))
+      .toBe(`${before + 1}|added|preview|${want}`);
+    await dlg.getByTestId('preview-add').click();   // 두 번 눌러도 한 줄
+    await expect(page.getByTestId('app-dialog')).toContainText('이미 시험지에');
+    await page.getByTestId('app-dialog-ok').click();
+    expect(psql(`SELECT count(*) FROM eval_question_candidate WHERE question = '${PREVIEW_Q}'`)).toBe(String(before + 1));
+  }
 });
+
+/** 지식 문서 화면으로 — 보는 컬렉션을 고른 뒤 */
+async function nav(page: import('@playwright/test').Page, ns: string) {
+  await goAdmin(page, '지식', '지식 문서');
+  await selectDomain(page, ns);
+}

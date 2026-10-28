@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from core.dependencies import get_current_admin, get_current_user
+from core.dependencies import get_current_admin, get_current_user, log_cross_part_namespace_read
 from service.eval import service
 
 router = APIRouter(prefix="/api/eval", tags=["eval"])
@@ -248,9 +248,12 @@ class PreviewAddRequest(PreviewRequest):
 
 
 @router.post("/preview")
-async def post_preview(body: PreviewRequest, admin: dict = Depends(get_current_admin)):
-    """평가 게이트 › 검색 미리보기(관리자) — 채팅과 같은 검색(build_chat_context)을 돌려 판정·문맥 후보를 보여 준다. LLM 0, 기록 없음."""
+async def post_preview(body: PreviewRequest, user: dict = Depends(get_current_user)):
+    """AI가 본 근거(정정 요청 신고 카드·지식 상세) — 채팅과 같은 검색(build_chat_context)을 돌려 판정·문맥 후보를 보여 준다. LLM 0, 답 없음.
+    권한 = 채팅과 같다(로그인 사용자, 다른 파트 컬렉션을 보면 감사 기록) — 채팅으로 볼 수 있는 근거를 보여 줄 뿐이라(10/28 신고 처리 담당이 관리자가 아님).
+    시험지에 넣기는 관리자만(아래)."""
     from service.eval.preview import preview
+    await log_cross_part_namespace_read(body.namespace, user)
     return await preview(body.namespace, body.question.strip())
 
 
