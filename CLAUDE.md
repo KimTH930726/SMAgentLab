@@ -25,6 +25,7 @@
 ## 핵심 디렉토리
 - `backend/service/llm/` — LLM 프로바이더 (ollama/inhouse)
 - `backend/agents/knowledge_rag/knowledge/retrieval.py` — 하이브리드 검색(Glossary Mapping + Vector/Keyword)
+- `backend/agents/knowledge_rag/knowledge/api.py` — 지식 코어 API: VOC 등 바깥 창구는 이것만(내부 import·지식 표 SQL 금지, `tests/test_voc_boundary.py`)
 - `backend/service/chat/memory.py` — 대화 요약 + 시맨틱 리콜
 - `backend/service/policy/` — 정책서 적재·검색(v0 최종본 통째: docs/tech/policy-v0-design.md, 옛 v1 엑셀 분해: docs/archive/policy-doc-pipeline-plan.md)
 - `backend/libs/trustkit/` — **신뢰도 레이어**(이식 가능한 팀 자산: 적재 품질·검색 기법·문맥/답 다듬기·평가). 표준 라이브러리만,
