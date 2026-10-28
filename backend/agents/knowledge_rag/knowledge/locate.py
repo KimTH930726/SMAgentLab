@@ -52,6 +52,7 @@ async def locate_for_user(text: str, user: dict, *, preset_namespace: Optional[s
         for row in await conn.fetch(f"SELECT namespace_id, part_id FROM {OWNER_ROWS_SQL} o WHERE namespace_id = ANY($1::int[])",
                                     list(by_id)):
             owners.setdefault(row["namespace_id"], []).append(row["part_id"])
+        await ledger.purge_stale_open(conn, locator.DECISION_KIND)   # 확정 안 된 채 하루 넘은 판단 정리(중간 이력 — 10/28)
         decision_id = await ledger.record(
             conn, locator.DECISION_KIND,
             ai_value={"namespace_id": r.ai_id, "doc_type": r.doc_type},

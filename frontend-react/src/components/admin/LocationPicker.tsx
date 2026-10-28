@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { locateKnowledge } from '../../api/knowledge';
 import { getParts } from '../../api/auth';
@@ -23,6 +23,34 @@ const REASONS: { key: OverrideReason; label: string }[] = [
  * - AI 추천(확신 없으면 후보)과 다른 곳을 고르면 = 번복 — 이유를 한 번 고를 수 있게(선택, 안 골라도 저장, 10/27 사용자
  *   "기능을 쓰다 AI 추천을 번복했을 때의 로그를 쌓아 자가 개선"). 감사 로그·자가 개선 진단이 읽는다.
  */
+const HEAD = 2500;          // 판정은 앞 2500자만 본다 — 같은 앞부분이면 다시 묻지 않는다
+const PREFETCH_MS = 2000;  // 타이핑을 멈추고 이만큼 지나면 미리 판단(사내 LLM 토큰 — 쓰다 잠깐 멈출 때마다 부르지 않게, 10/28 리뷰)
+const PREFETCH_MIN = 30;   // 너무 짧은 글(쓰는 중)은 미리 판단하지 않는다
+
+const locateQuery = (head: string, preset?: string | null) => ({
+  queryKey: ['locate', head, preset ?? null] as const,
+  queryFn: () => locateKnowledge(head, preset),
+  staleTime: Infinity,
+  gcTime: 10 * 60_000,
+  retry: false,
+});
+
+/**
+ * 넣을 곳 판단을 미리 시작(10/28 사용자 "6.7초면 꽤 길다") — 내용을 쓰다 멈추면(1.5초) 뒤에서 판단해 캐시에 둔다.
+ * [넣을 곳 확인]을 누르면 LocationPicker가 같은 키로 읽어 바로 보인다. 정확도·판단 방법은 그대로, 기다림만 숨긴다.
+ * 내용을 고쳐 버린 판단은 등록 때 지운다(api/knowledge takeDiscards). enabled=false면(이미 카드를 연 뒤) 안 한다.
+ */
+export function usePrefetchLocate(text: string, preset: string | null | undefined, enabled: boolean) {
+  const qc = useQueryClient();
+  const head = text.slice(0, HEAD);
+  useEffect(() => {
+    if (!enabled || head.trim().length < PREFETCH_MIN) return;
+    // 미리 판단은 한 번에 하나만 — 앞 판단이 아직 도는 중이면 이번 멈춤은 건너뛴다(확인을 누르면 그때 지금 내용으로 부름)
+    const t = setTimeout(() => { if (!qc.isFetching({ queryKey: ['locate'] })) void qc.prefetchQuery(locateQuery(head, preset)); }, PREFETCH_MS);
+    return () => clearTimeout(t);
+  }, [qc, head, preset, enabled]);
+}
+
 export function LocationPicker({ text, preset, onChange }: {
   text: string;
   preset?: string | null;
@@ -31,15 +59,8 @@ export function LocationPicker({ text, preset, onChange }: {
   const { nsDetails, user } = useNamespaceAccess();
   const { data: parts = [] } = useQuery({ queryKey: ['parts-public'], queryFn: getParts, staleTime: 300_000 });
   const [pickerOpen, setPickerOpen] = useState(false);
-  const head = text.slice(0, 2500);   // 판정은 앞 2500자만 본다 — 같은 앞부분이면 다시 묻지 않는다
-  const { data: r, isLoading, isError, error } = useQuery({
-    queryKey: ['locate', head, preset ?? null],
-    queryFn: () => locateKnowledge(head, preset),
-    enabled: head.trim().length > 0,
-    staleTime: Infinity,
-    gcTime: 10 * 60_000,
-    retry: false,
-  });
+  const head = text.slice(0, HEAD);
+  const { data: r, isLoading, isError, error } = useQuery({ ...locateQuery(head, preset), enabled: head.trim().length > 0 });
 
   // 창에서 직접 고르기용 — 쓸 수 있는지는 지식 문서 화면과 같은 규칙
   const all: LocateCollection[] = useMemo(() => nsDetails

@@ -113,7 +113,8 @@ async def _ingest_gate(namespace: str, user: dict, decision_id: Optional[int]) -
 
 
 async def _finalize_location(decision_id: Optional[int], namespace: str, user: dict, choice: Optional[str], *,
-                             suggested: bool, target_type: str, target_ids: list[int], reason: Optional[str] = None) -> None:
+                             suggested: bool, target_type: str, target_ids: list[int], reason: Optional[str] = None,
+                             discard: Optional[list[int]] = None) -> None:
     """등록이 성공한 뒤 위치 판정 줄을 확정 — 고른 곳 ≠ AI 추천(확신 없으면 후보)이면 번복(changed). 번복 이유(선택)는 final_value에,
     "AI가 틀림"·"상황이 바뀜"이면 원장 ai_verdict에도. 실패해도 등록은 그대로(로그)."""
     if decision_id is None:
@@ -133,7 +134,10 @@ async def _finalize_location(decision_id: Optional[int], namespace: str, user: d
                                        changed=changed, user_id=user["id"], target_type=target_type, target_ids=target_ids)
             if not ok:
                 logger.warning("위치 판정 원장 확정 안 됨(이미 확정·남의 줄) decision=%s user=%s", decision_id, user.get("id"))
-            elif why in ("wrong", "context_changed"):   # 원장의 "AI가 틀렸나" 칸 — 번복 순간에 받은 답(감사 로그 화면에선 묻지 않는다)
+            # 쓰다 버린 판단(미리 시작한 판단 중 이번에 안 쓴 것) — 최종 판단만 남긴다(10/28)
+            if discard:
+                await ledger.discard_open(conn, "knowledge_location", discard, user_id=user["id"], keep=decision_id)
+            if ok and why in ("wrong", "context_changed"):   # 원장의 "AI가 틀렸나" 칸 — 번복 순간에 받은 답(감사 로그 화면에선 묻지 않는다)
                 await ledger.set_verdict(conn, decision_id, verdict=why, user_id=user["id"])
     except Exception:   # noqa: BLE001
         logger.warning("위치 판정 원장 확정 실패(등록은 됨) decision=%s", decision_id, exc_info=True)
@@ -150,7 +154,8 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
     )
     if body.decision_id is not None:
         await _finalize_location(body.decision_id, body.namespace, user, body.location_choice, suggested=suggested,
-                                 target_type="knowledge", target_ids=[row["id"]], reason=body.override_reason)
+                                 target_type="knowledge", target_ids=[row["id"]], reason=body.override_reason,
+                                 discard=body.discard_decision_ids)
     # 용어 자동 추출 복원(2026-09-24) — 미리보기+검토 2단계 흐름으로 전환되며 끊겼던
     # _run_auto_glossary()를 모든 등록 경로 공통으로 되살림. 사람이 체크박스를 켜야
     # 했던 예전 opt-in 방식 대신, 이 세션 내내 적용한 "사람 개입 최소화" 원칙대로
@@ -386,7 +391,8 @@ async def bulk_create(body: BulkCreateRequest, user: dict = Depends(get_current_
         )
         if body.decision_id is not None:
             await _finalize_location(body.decision_id, body.namespace, user, body.location_choice, suggested=suggested,
-                                     target_type="ingestion_job", target_ids=[result["job_id"]], reason=body.override_reason)
+                                     target_type="ingestion_job", target_ids=[result["job_id"]], reason=body.override_reason,
+                                     discard=body.discard_decision_ids)
         return result
     except service.ReplaceConfirmRequired as e:
         # 화면은 등록 전에 /bulk/replace-check로 먼저 묻는다 — 여기는 확인 없이 들어온 요청을 막는 두 번째 벽

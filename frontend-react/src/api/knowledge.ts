@@ -70,19 +70,37 @@ export async function flagKnowledgeForReview(
 }
 
 /** 넣을 곳·종류 판정(E2) — AI 판단 원장에 한 줄 남기고 decision_id를 준다. 저장은 하지 않는다. */
+// 이 화면에서 받은 위치 판단 id — 등록 화면이 판단을 미리 시작하면(10/28) 내용을 고칠 때마다 하나씩 생긴다.
+// 등록할 때 이번에 안 쓴 것을 보내 원장에서 지운다(최종 판단만 남김, 서버는 확정 전·내 것만 지움). 못 보낸 것은 서버가 하루 뒤 정리.
+const openDecisions = new Set<number>();
+/** 보낼 목록(지우지 않음) — 판단 없이 등록하면(통계·VOC 화면의 등록) 서버가 지우지 않으니 보내지도 않는다 */
+function discardsFor(keep: number | null | undefined): number[] {
+  return keep == null ? [] : [...openDecisions].filter((id) => id !== keep).slice(-50);
+}
+/** 등록이 성공한 뒤에만 잊는다 — 실패하면 다시 시도할 때 또 보낸다(10/28 리뷰 L1) */
+function forget(ids: number[], keep: number | null | undefined) {
+  for (const id of ids) openDecisions.delete(id);
+  if (keep != null) openDecisions.delete(keep);
+}
+
 export async function locateKnowledge(text: string, presetNamespace?: string | null): Promise<LocateResult> {
-  return apiFetch<LocateResult>('/knowledge/locate', {
+  const r = await apiFetch<LocateResult>('/knowledge/locate', {
     method: 'POST',
     body: JSON.stringify({ text, preset_namespace: presetNamespace ?? null }),
   });
+  if (typeof r.decision_id === 'number') openDecisions.add(r.decision_id);
+  return r;
 }
 
 export async function createKnowledge(payload: KnowledgeCreatePayload): Promise<KnowledgeItem> {
   try {
-    return await apiFetch<KnowledgeItem>('/knowledge', {
+    const discards = discardsFor(payload.decision_id);
+    const created = await apiFetch<KnowledgeItem>('/knowledge', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, discard_decision_ids: discards }),
     });
+    forget(discards, payload.decision_id);
+    return created;
   } catch (err) {
     console.error('createKnowledge error:', err);
     throw err;
@@ -194,12 +212,15 @@ export async function bulkCreateKnowledge(
   confirmReplace = false,
   location?: { decisionId: number | null; choice: LocationChoice; overrideReason?: OverrideReason | null } | null,
 ): Promise<{ created: number; job_id: number; status: string; unlinked_sources?: number[] }> {
-  return apiFetch('/knowledge/bulk', {
+  const discards = discardsFor(location?.decisionId);
+  const res = await apiFetch<{ created: number; job_id: number; status: string; unlinked_sources?: number[] }>('/knowledge/bulk', {
     method: 'POST',
     body: JSON.stringify({ namespace, items, source_file: sourceFile, source_type: sourceType, confirm_replace: confirmReplace,
       decision_id: location?.decisionId ?? null, location_choice: location?.choice ?? null,
-      override_reason: location?.overrideReason ?? null }),
+      override_reason: location?.overrideReason ?? null, discard_decision_ids: discards }),
   });
+  forget(discards, location?.decisionId);
+  return res;
 }
 
 /** 같은 원본 재등록 확인(A안 2026-10-12) — 교체될 기존 조각에 사람이 손댄 흔적. */

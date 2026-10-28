@@ -17,6 +17,8 @@ class KnowledgeCreate(BaseModel):
     # AI 추천과 다른 곳을 골랐을 때 사람이 고른 이유(10/27, 선택) — wrong: AI가 틀림 · both_ok: 둘 다 맞는데 이쪽이 더 맞음 · context_changed: 상황이 바뀜.
     # 자가 개선 진단이 번복 묶음으로 읽는다(service/eval/override.py)
     override_reason: Optional[Literal["wrong", "both_ok", "context_changed"]] = None
+    # 등록 화면이 미리 시작했다가 내용을 고쳐 버린 위치 판단들(10/28) — 등록하면서 원장에서 지운다(최종 판단만 남김)
+    discard_decision_ids: list[int] = Field(default_factory=list, max_length=50)
     # 업무구분(category) 입력은 10/22 업무구분 폐지로 제거 — 옛 화면이 보내도 무시된다
 
 
@@ -81,6 +83,8 @@ class BulkCreateRequest(BaseModel):
     decision_id: Optional[int] = None        # KnowledgeCreate와 같음(E2)
     location_choice: Optional[str] = None
     override_reason: Optional[Literal["wrong", "both_ok", "context_changed"]] = None
+    # 등록 화면이 미리 시작했다가 내용을 고쳐 버린 위치 판단들(10/28) — 등록하면서 원장에서 지운다(최종 판단만 남김)
+    discard_decision_ids: list[int] = Field(default_factory=list, max_length=50)
 
 
 class IngestionJobOut(BaseModel):

@@ -155,6 +155,26 @@ async def main() -> int:
             chk("조각 전부 넣을 곳 + 원문 연결", all(x["namespace_id"] == ns_b_id and x["source_document_id"] == doc for x in ks) and len(ks) > 0, True)
             chk("원장: 고른 곳·제안 아님·choice", (fin3["namespace_id"], fin3["suggested"], fin3["choice"]), (ns_b_id, False, "other"))
             chk("원장: AI와 다르면 changed", ch3, str(ns_b_id) != (ai3 or ""))
+
+            print("4) 미리 시작한 판단(10/28) — 쓰다 버린 판단은 등록 때 지우고, 쓴 판단 하나만 확정 · 남의 미확정 판단은 그대로")
+            drafts = []
+            for i in range(2):   # 관리자가 내용을 두 번 고쳐 판단 두 개를 받았다고 치고, 세 번째로 등록
+                d = (await h.post("/api/knowledge/locate", json={"text": f"{text} 고침{i}"}, headers=A)).json()["decision_id"]
+                drafts.append(d)
+                made_d.append(d)
+            used = (await h.post("/api/knowledge/locate", json={"text": f"{text} 최종"}, headers=A)).json()["decision_id"]
+            other = (await h.post("/api/knowledge/locate", json={"text": f"{text} 남의 것"}, headers=U2)).json()["decision_id"]
+            made_d += [used, other]
+            r = await h.post("/api/knowledge", headers=A, json={"namespace": ns_b, "content": f"{text} 최종", "decision_id": used,
+                                                               "location_choice": "other", "discard_decision_ids": drafts + [used, other]})
+            made_k.append(r.json()["id"])
+            async with get_conn() as c:
+                left_d = await c.fetchval("SELECT count(*) FROM ops_ai_decision WHERE id = ANY($1::bigint[])", drafts)
+                used_fin = await c.fetchval("SELECT final_value IS NOT NULL FROM ops_ai_decision WHERE id = $1", used)
+                other_open = await c.fetchval("SELECT final_value IS NULL FROM ops_ai_decision WHERE id = $1", other)
+            chk("버린 판단 2개 → 0줄", left_d, 0)
+            chk("쓴 판단은 확정(keep는 안 지움)", used_fin, True)
+            chk("남의 미확정 판단은 그대로(보내도 못 지움)", other_open, True)
     finally:
         async with get_conn() as c:
             await c.execute("DELETE FROM rag_knowledge WHERE id = ANY($1::bigint[])", made_k)

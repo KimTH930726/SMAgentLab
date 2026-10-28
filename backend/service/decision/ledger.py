@@ -35,6 +35,29 @@ async def finalize(conn, decision_id: int, *, kind: str, final_value: Any, chang
     return r.endswith(" 1")
 
 
+# 확정 안 된 판단(중간 이력)을 얼마나 두나 — 등록 화면이 판단을 미리 시작하면(10/28) 내용을 고칠 때마다 판단이 하나씩 생긴다.
+# 원장은 "최종 판단"이 쓰임새라(감사 로그·자가 개선 진단), 확정 안 된 줄은 등록 때 버린 것을 바로 지우고 남은 것은 이 시간 뒤 지운다.
+OPEN_TTL_HOURS = 24
+
+
+async def discard_open(conn, kind: str, ids: list[int], *, user_id: Optional[int], keep: Optional[int] = None) -> int:
+    """등록 화면이 쓰다 버린 판단(같은 사람 · 확정 전 · 그 종류만)을 지운다 — 남의 줄·확정된 줄은 못 지운다. 지운 수."""
+    ids = [i for i in ids if i != keep]
+    if not ids:
+        return 0
+    r = await conn.execute(
+        "DELETE FROM ops_ai_decision WHERE id = ANY($1::bigint[]) AND kind = $2 AND final_value IS NULL "
+        "AND created_by_user_id IS NOT DISTINCT FROM $3", ids, kind, user_id)
+    return int(r.split()[-1])
+
+
+async def purge_stale_open(conn, kind: str, hours: int = OPEN_TTL_HOURS) -> int:
+    """확정 안 된 채 오래된 판단을 지운다(창을 닫고 떠난 등록 등) — 판단을 새로 낼 때 같이(따로 스케줄러 없이). 지운 수."""
+    r = await conn.execute(
+        "DELETE FROM ops_ai_decision WHERE kind = $1 AND final_value IS NULL AND created_at < NOW() - make_interval(hours => $2)", kind, hours)
+    return int(r.split()[-1])
+
+
 CLARIFY_KIND = "chat_clarify"
 
 

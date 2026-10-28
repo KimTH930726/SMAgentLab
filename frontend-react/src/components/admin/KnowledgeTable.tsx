@@ -38,7 +38,7 @@ import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
 import type { KnowledgeItem, DuplicateMatch, ChosenLocation } from '../../types';
-import { LocationPicker } from './LocationPicker';
+import { LocationPicker, usePrefetchLocate } from './LocationPicker';
 import { showAlert, showConfirm } from '../../store/useDialogStore';
 import { KnowledgeStructurePanel } from './KnowledgeStructurePanel';
 import { EvidenceButton } from './Evidence';
@@ -1577,6 +1577,7 @@ function ManualForm({ namespace, preset, onSuccess, onCancel }: {
   // 두 단계(E2): 내용을 쓰고 [넣을 곳 확인] → 카드에서 고르고 [등록]. 내용을 고치면 다시 1단계(판정은 앞부분이 같으면 다시 안 부름)
   const [locating, setLocating] = useState(false);
   const [loc, setLoc] = useState<ChosenLocation | null>(null);
+  usePrefetchLocate(form.content, preset, !locating);   // 쓰다 멈추면 넣을 곳 판단을 미리(10/28 — 확인 누르면 바로)
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -1601,8 +1602,12 @@ function ManualForm({ namespace, preset, onSuccess, onCancel }: {
       setDonePending(!!created.pending_review);
       setForm(defaultForm);
       setLocating(false);
+      // 쓴·버린 판단은 이제 원장에서 확정·삭제됐다 — 캐시에 남기면 같은 내용을 다시 붙여넣을 때 지워진 판단을 다시 쓴다(10/28 리뷰 M1)
+      qc.removeQueries({ queryKey: ['locate'] });
       onSuccess({ pendingReview: !!created.pending_review, target: loc });
     },
+    // 실패(특히 403 — 판단이 지워졌거나 오래됨)면 판단을 버리고 다시 받게 — 안 그러면 내용을 바꿀 때까지 같은 판단으로 계속 막힌다(M1·L3)
+    onError: () => { qc.removeQueries({ queryKey: ['locate'] }); setLocating(false); },
   });
 
   return (

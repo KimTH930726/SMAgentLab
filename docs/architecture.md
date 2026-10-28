@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.183)
+# OpsLens 시스템 아키텍처 (v2.184)
 
 ## 개요
 
@@ -12,6 +12,10 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.184 (2026-10-28, dev_0): **지식 등록 넣을 곳 판단을 미리(사용자 "6.7초면 꽤 길다") + 중간 판단 정리(사용자 "최종 판단만 중요, 중간 이력은 필터링").**
+  직접 입력 폼은 쓰다 2초 멈추면(30자 이상, 한 번에 하나) 뒤에서 판단 → [넣을 곳 확인]이 캐시로 바로. 정확도·판단 방법 그대로(10/22 실측: LLM이 이웃만 대비 자동 틀림 2/60 → 0/51).
+  쓰다 버린 판단은 등록 때 지움(`discard_decision_ids` → `ledger.discard_open`: 내 것·확정 전만), 떠나서 남은 미확정은 24시간 뒤(`purge_stale_open`, 판단 낼 때 같이).
+  등록 성공·실패 때 판단 캐시를 비움(지워진 판단 재사용 방지 — 리뷰 M1). 시나리오 `registration_location.py` 4) 추가(24/24). 컨플루언스 현행화 리서치: `docs/tech/confluence-sync-research.md`.
 - v2.183 (2026-10-28, dev_0): **VOC 레이어 분리(사용자 10/22 결정, 백로그 §0-3) — 같은 프로젝트 안에서 경계만.** 지식 코어 API
   `agents/knowledge_rag/knowledge/api.py`(search · min_score · nearest · contents)를 두고, VOC(`service/email_voc`)는 이것만 부른다 — 검색 내부(retrieval·glossary_terms)
   import와 지식 표 직접 SQL 3곳(관련성 검색 · 반복 유형 커버리지 2 · 근거 지식 조회)을 API로. 커버리지는 클러스터마다 LATERAL 대신 한 쿼리(`nearest`, 같은 범위 규칙 — 벡터 변환은 MATERIALIZED로 키마다 한 번, 리뷰 실측 53→7.5ms).
