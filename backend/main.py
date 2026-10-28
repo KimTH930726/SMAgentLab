@@ -339,8 +339,8 @@ async def _migrate_system_tables(conn) -> None:
         ('cache_ttl', '1800')
         ON CONFLICT (key) DO NOTHING
     """)
-    # 채팅 보존정책(거버넌스 선제 설계 검토 §3-3) — 보존일수는 거버넌스팀 확정 전이라
-    # '0'(비활성) 기본값으로 시드. 실제 숫자가 정해지면
+    # 채팅 보존정책(거버넌스 선제 설계 검토 §3-3) — 처음엔 확정 전이라 '0'(비활성)으로 시드, 10/28 사용자가 1년으로 정함(아래 #95).
+    # 바꾸려면
     # `UPDATE ops_system_config SET value = '<일수>' WHERE key = 'chat_retention_days'`로
     # 활성화(전용 관리 UI는 아직 없음 — 최소 스캐폴딩 범위, 실 요청 시 추가).
     await conn.execute("""
@@ -348,6 +348,12 @@ async def _migrate_system_tables(conn) -> None:
         ('chat_retention_days', '0')
         ON CONFLICT (key) DO NOTHING
     """)
+    # #95(10/28 사용자 결정) 채팅 대화 보관 1년 — 아직 '0'(영구)이면 한 번만 365로(이미 누가 다른 값으로 바꿨으면 안 건드림, 다시 0으로 돌려도 되살리지 않음).
+    # 보관 주기 전체는 service/retention.py
+    if not await conn.fetchval("SELECT 1 FROM ops_system_config WHERE key = 'migration_95_chat_retention'"):
+        async with conn.transaction():
+            await conn.execute("UPDATE ops_system_config SET value = '365' WHERE key = 'chat_retention_days' AND value = '0'")
+            await conn.execute("INSERT INTO ops_system_config (key, value) VALUES ('migration_95_chat_retention', 'done') ON CONFLICT (key) DO NOTHING")
 
     # ── 프롬프트 관리 테이블 ──────────────────────────────────────────
     await conn.execute("""
@@ -2214,10 +2220,13 @@ async def lifespan(_app: FastAPI):
 
     start_scheduler()
     glossary_mining.start()   # 질문 기록 → 용어 동의어(하루 1회, v2.128)
+    from service import retention
+    retention.start()          # 보관 주기 정리(하루 1회, 10/28 — 판단 원장 180일·지운 지식 180일·질의 기록 1년)
 
     yield
     await stop_scheduler()
     await glossary_mining.stop()
+    await retention.stop()
     await close_http_client()
     await close_pool()
 
