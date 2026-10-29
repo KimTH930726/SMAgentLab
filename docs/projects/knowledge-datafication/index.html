@@ -1,0 +1,386 @@
+<title>지식 데이터화 현황</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* 프로젝트 산출물(저장소 docs/projects/knowledge-datafication/index.html) — 갱신할 때마다 맨 아래 갱신 이력에 한 줄.
+     한 열 보고서: 한눈에 → 유형별 → 팀·파트·영역 → 컨플(CSP) 파트별 → 레이어 설계 → 개선 → 평가 게이트 → PoC 전략 → 계획 → 이력 */
+  :root {
+    --bg: #F6F7FB; --surface: #FFFFFF; --ink: #141A2E; --muted: #5B647A; --line: #E2E5EE;
+    --accent: #4F46E5; --accent-soft: #EEF0FE; --good: #0F8A5F; --good-soft: #E6F6EF; --warn: #A15C00; --warn-soft: #FFF4E0; --bad: #B4232C; --bad-soft: #FDECEC;
+    --f-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+    --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0E1324; --surface: #161D33; --ink: #E6E9F2; --muted: #9AA3BA; --line: #2A3352;
+      --accent: #8B87FF; --accent-soft: rgba(124,118,255,.14); --good: #46C996; --good-soft: rgba(70,201,150,.12); --warn: #F2B35B; --warn-soft: rgba(242,179,91,.12); --bad: #FF7B83; --bad-soft: rgba(255,123,131,.12);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0E1324; --surface: #161D33; --ink: #E6E9F2; --muted: #9AA3BA; --line: #2A3352;
+    --accent: #8B87FF; --accent-soft: rgba(124,118,255,.14); --good: #46C996; --good-soft: rgba(70,201,150,.12); --warn: #F2B35B; --warn-soft: rgba(242,179,91,.12); --bad: #FF7B83; --bad-soft: rgba(255,123,131,.12);
+    color-scheme: dark;
+  }
+  body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.65; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding-block: 40px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+  header { display: grid; gap: 10px; }
+  .eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0; text-wrap: balance; }
+  h2 { font-size: 20px; margin: 0; text-wrap: balance; }
+  h3 { font-size: 16px; margin: 0; }
+  .lead { margin: 0; font-size: 16px; max-width: 72ch; }
+  section { display: grid; gap: 14px; min-width: 0; }
+  p { margin: 0; max-width: 74ch; }
+  .muted { color: var(--muted); font-size: 13.5px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 4px; align-content: start; }
+  .tile .k { font-size: 12.5px; color: var(--muted); }
+  .tile .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tile .v small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 4px; }
+  .tile .d { font-size: 13px; color: var(--muted); }
+  .bar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
+  .tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: color-mix(in srgb, var(--surface) 55%, var(--bg)); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td.n { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+  .done { color: var(--good); background: var(--good-soft); }
+  .doing { color: var(--accent); background: var(--accent-soft); }
+  .todo { color: var(--muted); background: color-mix(in srgb, var(--line) 55%, transparent); }
+  .skip { color: var(--bad); background: var(--bad-soft); }
+  .hold { color: var(--warn); background: var(--warn-soft); }
+  .up { color: var(--good); font-weight: 600; }
+  .note { background: var(--accent-soft); border-radius: 10px; padding: 14px 16px; font-size: 14px; display: grid; gap: 6px; }
+  .warnbox { background: var(--warn-soft); border-radius: 10px; padding: 14px 16px; font-size: 14px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+  ol, ul { margin: 0; padding-left: 20px; display: grid; gap: 5px; }
+  code { font-family: var(--f-mono); font-size: 12.5px; }
+  pre.mermaid { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; }
+  footer { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; display: grid; gap: 6px; }
+  @media (max-width: 520px) { h1 { font-size: 25px; } }
+  .tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; padding-block: 8px;
+          background: var(--bg); border-bottom: 1px solid var(--line); }
+  .tabs a { font-size: 14px; font-weight: 600; color: var(--muted); text-decoration: none; padding: 7px 12px; border-radius: 8px; white-space: nowrap; }
+  .tabs a:hover { color: var(--ink); background: var(--surface); }
+  .tabs a[aria-selected="true"] { color: var(--accent); background: var(--accent-soft); }
+  .tabs a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .panel { display: grid; gap: 40px; }
+  .panel[hidden] { display: none !important; }
+  .history { display: grid; gap: 8px; font-size: 14px; }
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">OpsLens · 프로젝트 산출물 · 기준 2026-10-29 · 개발(로컬 실험실) 환경</span>
+    <h1>지식 데이터화 현황 — 정책서 · 컨플루언스</h1>
+    <p class="lead">사내 지식을 OpsLens가 검색·답에 쓸 수 있는 데이터로 바꾸는 일의 진행 현황. 정책서는 수집을 마쳤고 품질 개선 중, 컨플루언스는 스타벅스 CSP팀부터 팀 단위로 시작했다. 숫자는 모두 DB·측정 스크립트에서 센 값이고, 컨플 페이지 내용은 싣지 않았다.</p>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="현황판 탭">
+    <a role="tab" href="#summary" data-tab="summary" aria-selected="false">요약</a>
+    <a role="tab" href="#data" data-tab="data" aria-selected="false">데이터 현황</a>
+    <a role="tab" href="#confluence" data-tab="confluence" aria-selected="false">컨플루언스(CSP)</a>
+    <a role="tab" href="#layer" data-tab="layer" aria-selected="false">적재 레이어</a>
+    <a role="tab" href="#improve" data-tab="improve" aria-selected="false">개선</a>
+    <a role="tab" href="#gate" data-tab="gate" aria-selected="false">평가 게이트</a>
+    <a role="tab" href="#poc" data-tab="poc" aria-selected="false">PoC·팀 요청</a>
+    <a role="tab" href="#plan" data-tab="plan" aria-selected="false">계획·결정</a>
+    <a role="tab" href="#history" data-tab="history" aria-selected="false">이력</a>
+  </nav>
+
+  <div class="panel" id="panel-summary" data-panel="summary" role="tabpanel">
+  <section>
+    <div class="note"><b>보고 요약 — 팀장 확인이 필요한 3가지</b>
+      <span>1. <b>CSP팀 협조 요청</b>: 실제 질문 30개(질문 + 정답 페이지 링크, 그림 관련 5개 포함) · 온라인스토어 공간 적재 범위와 공개 범위 확인 · 파트별 오너 1명(주당 검수 가능 건수)</span>
+      <span>2. <b>운영 반입 시점</b>: 지금 숫자는 모두 개발 환경 기준이다. 운영 서버는 v2.119라 실사용 질의 기록·감시가 아직 없다 — 반입해야 실제 질문이 들어오기 시작한다</span>
+      <span>3. <b>다음 팀 순서</b>: 담당 파트가 정해진 영역은 14개 중 4개 — 다음 팀은 파트·영역 담당 지정부터</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>한눈에</h2>
+    <div class="tiles">
+      <div class="tile"><span class="k">정책서</span><span class="v">100<small>% 수집</small></span><div class="bar"><span style="width:100%"></span></div><span class="d">사용 중 정책 981건 · 14개 업무 영역 · 참고표 7 · 개요 14</span></div>
+      <div class="tile"><span class="k">컨플루언스 — 팀</span><span class="v">1<small>/ 7팀 착수</small></span><div class="bar"><span style="width:14%"></span></div><span class="d">CSP팀 2개 파트 공간 진단 · 온라인서비스 파트 적재 완료</span></div>
+      <div class="tile"><span class="k">정책서 정확도 (기준선 #12)</span><span class="v">89.8<small>% 답</small></span><span class="d">검색 98.4% · 사람이 쓴 질문 78.8% · 목록 52.8%</span></div>
+      <div class="tile"><span class="k">컨플 정확도 (CSP 온라인서비스 · 파일럿 58문항)</span><span class="v">82.7<small>% 답</small></span><span class="d">그림 글 추출 전 21.2% · 검색 93.1% · AI가 만든 문항 기준(기준선 아님). 지식 축 기준선 #34는 106문항 답 82.1%(게이트웨이 거부 11건 빼고, 넣으면 73.6%)</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>접근 방식 — 컨플루언스</h2>
+    <div class="tbl"><table>
+      <thead><tr><th></th><th>처음 안</th><th>지금 안 (10/29~)</th></tr></thead>
+      <tbody>
+        <tr><td>팀이 하는 일</td><td>작성 가이드대로 페이지를 다시 정리</td><td><b>지금 컨플 그대로 두고</b> 확인·검수만(질문 · 적재 범위 · 유효 여부 · 오너)</td></tr>
+        <tr><td>적재 대상</td><td>가이드대로 정리된 페이지만</td><td>공간 전체 → 레이어가 진단해 제외 후보를 고름</td></tr>
+        <tr><td>품질은 어디서</td><td>작성 규칙</td><td>적재 레이어(그림 글 · 진단 · 정제 초안) + 평가 게이트</td></tr>
+        <tr><td>초안은 누가</td><td>팀이 처음부터 작성</td><td><b>우리가 초안을 만들어 팀에 준다</b> — 업무 묶음별 정제 지식(문장마다 출처 · 원문에 없는 값 빨강 · 충돌은 양쪽 표시) → 팀은 4문항으로 틀린 것만 고침</td></tr>
+        <tr><td>초안의 구조</td><td>가이드에 적힌 일반 규칙</td><td><b>우리 정확도에 맞춰 안에서 최적화한 모양</b> — 한 섹션 한 주제 · 조건·예외는 규칙 바로 아래 · 채널·대상별로 나눔 · 그림 속 흐름은 글로. 어떤 모양이 나은지는 평가 게이트로 재서 정하고, 팀은 구조가 아니라 내용만 확인</td></tr>
+        <tr><td>작성 가이드</td><td>먼저 배포</td><td>측정으로 효과가 확인된 규칙만 "손볼 목록"으로(사내 SPM 지표는 따랐을 때 숫자가 좋아지면 차용)</td></tr>
+        <tr><td>파일럿</td><td>—</td><td>스타벅스 CSP팀(온라인서비스 · 온라인스토어 파트 공간)</td></tr>
+      </tbody>
+    </table></div>
+    <p class="muted">바꾼 이유: 팀에 "처음부터 정리해 달라"는 요청은 실제로 잘 안 된다 — AI가 먼저 정리·초안을 만들고 사람은 틀린 것만 고치는 쪽이 현실적(업계도 같은 방식: 원문은 두고 초안 층 + 사람 검토).</p>
+  </section>
+  </div>
+  <div class="panel" id="panel-data" data-panel="data" role="tabpanel">
+  <section>
+    <h2>데이터 유형별 — 무엇을 어떤 값으로 저장하나</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>유형</th><th>원천</th><th>저장 단위 · 값</th><th>적재량</th><th>정확도</th><th>상태</th></tr></thead>
+      <tbody>
+        <tr><td><b>정책서 v0</b></td><td>파트별 정책서 문서</td><td>정책 하나 = 원문 통째 한 조각(+ 정책 이름 머리 임베딩) · 원천 키 · 버전</td><td class="n">981건 (옛 v1 412건 보관)</td><td>검색 98.4% · 답 89.8%</td><td><span class="pill done">수집 완료</span></td></tr>
+        <tr><td>&nbsp;&nbsp;참고표</td><td>정책서 안 조건 → 결과 표</td><td>원표 + 압축본 + 요약 · 행 단위</td><td class="n">7표 · 2,015행</td><td>—</td><td><span class="pill hold">채팅 연결 전</span></td></tr>
+        <tr><td>&nbsp;&nbsp;문서 개요</td><td>정책서 머리말</td><td>문서마다 적용 대상·범위</td><td class="n">14건</td><td>—</td><td><span class="pill hold">채팅 연결 전</span></td></tr>
+        <tr><td>&nbsp;&nbsp;파라미터</td><td>정책 원문의 숫자 값</td><td>(파생 안 함)</td><td class="n">0</td><td>—</td><td><span class="pill skip">실험 후 안 함</span></td></tr>
+        <tr><td><b>컨플루언스</b></td><td>팀별 공간</td><td>헤딩 섹션 = 조각 · 원문 원장(storage HTML) · draw.io 글 · 그림 자리 표시 · 페이지 정보</td><td class="n">조각 86 + 승인 대기 9</td><td>검색 93.1~95.3% · 답 82.1~82.7%</td><td><span class="pill doing">CSP팀 진행</span></td></tr>
+        <tr><td><b>용어집</b></td><td>정책서 · 직접 등록 · 적재 때 자동 추출</td><td>용어 · 설명 · 동의어 · 출처 표시</td><td class="n">1,005 (정책서 712 · 직접 200 · 자동 93)</td><td>자동 용어 효과는 재적재 때 측정</td><td><span class="pill doing">운영 중</span></td></tr>
+        <tr><td>직접 입력·붙여넣기</td><td>등록 화면</td><td>조각 · 넣을 곳 AI 판단</td><td class="n">17</td><td>—</td><td><span class="pill done">운영 중</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="muted">파라미터 파생은 10/26 실험(#18 카드 10장 · #19 카드 3장)에서 목표 숫자인 사람이 쓴 질문 정답률이 오르지 않아(±0, −5.0%p) 채택하지 않았다. 참고표·개요는 적재는 끝났고, 정답이 참고표·개요인 문항 30·14개가 아직 채팅 문맥에 쓰이지 않는다(정책서 v0 #12).</p>
+  </section>
+
+  <section>
+    <h2>팀 · 파트 · 업무 영역별</h2>
+    <p>업무 영역(컬렉션) 14개 중 담당 파트가 정해진 곳은 4개. 옛 "업무구분"은 10/22에 없애고 업무 영역 트리로 바꿨다 — 아래 영역이 그 기준이다.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>팀</th><th>파트</th><th>업무 영역</th><th>정책</th><th>컨플 조각(사용 중)</th><th>직접 입력</th><th>승인 대기(모든 출처)</th><th>용어</th><th>컨플 진척</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="3">스타벅스 CSP팀</td><td rowspan="2">온라인서비스 파트</td><td>딜리버스</td><td class="n">58</td><td class="n">23</td><td class="n">16</td><td class="n">7</td><td class="n">167</td><td><span class="pill done">적재 완료</span></td></tr>
+        <tr><td>제휴서비스</td><td class="n">68</td><td class="n">63</td><td class="n">0</td><td class="n">2</td><td class="n">84</td><td><span class="pill done">적재 완료</span></td></tr>
+        <tr><td>온라인스토어 파트</td><td>온라인스토어</td><td class="n">202</td><td class="n">0</td><td class="n">0</td><td class="n">0</td><td class="n">250</td><td><span class="pill doing">진단 완료 · 적재 전</span></td></tr>
+        <tr><td>스타벅스 CX팀</td><td>웹앱</td><td>회원</td><td class="n">67</td><td class="n">0</td><td class="n">0</td><td class="n">0</td><td class="n">22</td><td><span class="pill todo">시작 전</span></td></tr>
+        <tr><td colspan="2" class="muted">담당 미지정</td><td>영업시스템 · 영업연계시스템 · POS · 주문 서비스 · 챌린지 · 스타벅스카드 · 리워드 · 쿠폰 · 제휴 주문 서비스 · 멤버십 서비스</td><td class="n">586</td><td class="n">0</td><td class="n">0</td><td class="n">0</td><td class="n">473</td><td><span class="pill todo">시작 전</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="muted">팀 목록: CSP · CX · DevOps · ERP · CDP · POS · AIOps(7팀). 파트가 등록된 팀은 CSP(2) · CX(2)뿐 — 나머지 팀은 파트·영역 담당 지정부터 필요.</p>
+  </section>
+  </div>
+  <div class="panel" id="panel-confluence" data-panel="confluence" role="tabpanel">
+  <section>
+    <h2>컨플루언스 — CSP팀 파트별</h2>
+    <h3>온라인서비스 파트 공간 (62페이지 · 내용 29)</h3>
+    <div class="tbl"><table>
+      <thead><tr><th>묶음</th><th>페이지 · 내용</th><th>글자</th><th>그림</th><th>넣은 영역</th><th>넣을 곳 AI 판단</th><th>적재</th><th>정확도</th></tr></thead>
+      <tbody id="first-rows">
+        <tr><td>딜리버스 서비스(주문·상태·결제 흐름)</td><td class="n">32 · 16</td><td class="n">7,317</td><td>draw.io 18</td><td>딜리버스</td><td data-part="514559336">AI 딜리버스 12/16 · 확신 12 — <span class="up">넣은 곳과 일치</span></td><td><span class="pill done">16p → 21조각</span> 대기 5</td><td rowspan="3">파일럿 58문항<br>검색 93.1% · 답 82.7%</td></tr>
+        <tr><td>배치·정기 작업</td><td class="n">4 · 3</td><td class="n">2,624</td><td>draw.io 3</td><td>제휴서비스</td><td data-part="540372695">AI 딜리버스 3/3 · 확신 0 — <b>넣은 곳(제휴서비스)과 다름</b>, 팀 확인</td><td><span class="pill done">3p</span></td></tr>
+        <tr><td>캠페인</td><td class="n">3 · 1</td><td class="n">4,593</td><td>—</td><td>제휴서비스</td><td data-part="552524749">AI 딜리버스 1/1 · 확신 0 — <b>넣은 곳과 다름</b>, 팀 확인</td><td><span class="pill done">1p</span></td></tr>
+        <tr><td>외부 서비스 연동(배민·쿠팡이츠·기타 파트너)</td><td class="n">19 · 9</td><td class="n">15,019</td><td>이미지 9</td><td>제휴서비스</td><td data-part="524389336">AI 딜리버스 3 · 제휴 주문 서비스 3 · 제휴서비스 2 / 9 · 확신 2 — 갈림</td><td><span class="pill done">9p</span></td><td>합성 106문항<br>검색 95.3% · 답 82.1%</td></tr>
+        <tr><td class="muted">목차·근태·빈 페이지</td><td class="n">4 · 0</td><td class="n">36</td><td>—</td><td colspan="4" class="muted">적재 대상 아님</td></tr>
+      </tbody>
+    </table></div>
+    <p class="muted">진척: 내용 29페이지 전부 적재(100% — 기존 배민·쿠팡이츠 7페이지 + 이번 22페이지). 이번 22페이지는 조각 37개 중 승인 대기 7(딜리버스 5 · 제휴서비스 2 — 기존 지식과 비슷, 담당 확인). "넣은 영역"은 트리 위치로 정한 것이고, 같은 페이지를 넣을 곳 AI 판단에도 돌려 맞는지 확인한다. 그림 글 효과 측정(끔 → 켬)은 이 22페이지로 했다.</p>
+
+    <h3>온라인스토어 파트 공간 GIFT (592페이지 · 최상위 묶음 10)</h3>
+    <div class="tbl"><table>
+      <thead><tr><th>묶음</th><th>페이지 · 내용</th><th>글자</th><th>2년+ / 1년 안</th><th>이미지</th><th>헤딩 없음</th><th>중복</th><th>넣을 곳 AI 판단</th><th>제안</th></tr></thead>
+      <tbody id="gift-rows">
+        <tr><td>통합커머스 업무 정리(현행 운영)</td><td class="n">236 · 200</td><td class="n">401,262</td><td class="n">14 / 104</td><td class="n">245</td><td class="n">140</td><td class="n">25</td><td data-part="344822428">AI 온라인스토어 27/55 · 판단 못 함 12 · 확신 0</td><td><span class="pill doing">적재</span></td></tr>
+        <tr><td>개인 공간(학습 노트)</td><td class="n">147 · 121</td><td class="n">318,654</td><td class="n">12 / 118</td><td class="n">93</td><td class="n">44</td><td class="n">1</td><td data-part="344821997">판단 못 함 8/17 · 온라인스토어 6 · 확신 0</td><td><span class="pill skip">제외 후보</span></td></tr>
+        <tr><td>구 시스템 업무 정리</td><td class="n">97 · 85</td><td class="n">247,227</td><td class="n">83 / 4</td><td class="n">32</td><td class="n">72</td><td class="n">0</td><td data-part="95799825">AI 온라인스토어 8/12 · 확신 0</td><td><span class="pill hold">적재 + "옛 기준" 표시</span></td></tr>
+        <tr><td>통합커머스 CP(운영 플랫폼)</td><td class="n">51 · 39</td><td class="n">58,039</td><td class="n">0 / 51</td><td class="n">68</td><td class="n">25</td><td class="n">24</td><td data-part="514260910">AI 온라인스토어 7/12 · 판단 못 함 4 · 확신 0</td><td><span class="pill doing">적재 · 중복 정리</span></td></tr>
+        <tr><td>공간 홈(결제·정산 보정 등)</td><td class="n">15 · 11</td><td class="n">66,488</td><td class="n">0 / 6</td><td class="n">3</td><td class="n">10</td><td class="n">0</td><td data-part="95799837">AI 온라인스토어 2/3 · 확신 0</td><td><span class="pill doing">적재</span></td></tr>
+        <tr><td>ASIS(업무 목록·비업무)</td><td class="n">15 · 12</td><td class="n">290,844</td><td class="n">8 / 0</td><td class="n">2</td><td class="n">12</td><td class="n">0</td><td data-part="412478955">AI 온라인스토어 4/5 · 확신 0</td><td><span class="pill skip">제외 후보</span></td></tr>
+        <tr><td>일정·정기 업무</td><td class="n">12 · 12</td><td class="n">27,052</td><td class="n">0 / 9</td><td class="n">5</td><td class="n">6</td><td class="n">0</td><td data-part="394475210">AI 온라인스토어 6/8 · 확신 0</td><td><span class="pill hold">일정 캘린더 빼고 적재</span></td></tr>
+        <tr><td>장애 이슈·대응 이력</td><td class="n">10 · 9</td><td class="n">28,348</td><td class="n">0 / 9</td><td class="n">12</td><td class="n">8</td><td class="n">0</td><td data-part="399352181">AI 온라인스토어 5/8 · 확신 0</td><td><span class="pill doing">적재</span></td></tr>
+        <tr><td>기타(소규모 2묶음)</td><td class="n">9 · 7</td><td class="n">7,449</td><td class="n">0 / 6</td><td class="n">25</td><td class="n">5</td><td class="n">0</td><td data-part="340095220,514572894">판단 못 함 4/7 · 회원 2 · 온라인스토어 1</td><td><span class="pill todo">팀 확인</span></td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><b>넣을 곳 AI 판단 실측(10/29) — 새 팀 첫 적재에서 판단이 틀어진다</b>
+      <span>넣을 곳 판단은 LLM 판단과 이웃 다수결(가장 비슷한 기존 지식 5개)이 맞아야 "확신"이다. 그런데 지금 지식 조각이 있는 영역은 딜리버스(39)·제휴서비스(63)뿐이라,
+      GIFT 127페이지의 이웃 1위가 전부 이 둘 — LLM은 온라인스토어 66 · 판단 못 함 37인데 이웃과 맞은 건 <b>0/127, 확신 0</b>. 그대로 등록 화면에 올리면 전부 "되묻기"가 되고, 제안값 절반이 엉뚱한 딜리버스다.</span>
+      <span>첫 공간은 이미 적재한 뒤에 판단해 이웃에 자기 조각이 섞였다(일치율이 실제보다 높게 나온 쪽). 배치·캠페인 묶음은 AI가 딜리버스로 봐 트리로 넣은 제휴서비스와 다르다 — 팀 확인.</span>
+      <span><b>개선 후보</b>: 공간 담당 파트의 영역(온라인스토어 파트 → 온라인스토어)을 첫 적재 기본값으로, 이웃 다수결은 그 영역에 지식이 쌓인 뒤부터. LLM이 "판단 못 함"인 29%는 사람이 묶음 단위로 한 번에.</span>
+    </div>
+    <div class="warnbox"><b>GIFT 적재 전에 정할 것</b> — 개인 공간·ASIS는 글자 수로 공간의 42%(약 61만 / 144만 자)지만 팀 공통 운영 지식이 아니다. 그대로 넣으면 검색 후보를 흐린다. 공간을 통째로 넣기 전에 <b>공개 범위(개인 공간 포함)</b>를 확인한다 — 페이지 읽기 제한은 0건이었지만 공간 단위 권한은 이 검사로 안 잡힌다. 구 시스템 묶음은 85페이지 중 83이 2년 넘어 지금 가이드와 충돌할 수 있다 — 빼지 않고 넣되 "옛 기준"으로 표시한다(10/29 결정, 표시를 검색·답에서 어떻게 쓸지는 아래 결정 필요). 2년 넘음 ≠ 무효. 진척: 진단 100% · 적재 0%.</div>
+  </section>
+  </div>
+  <div class="panel" id="panel-layer" data-panel="layer" role="tabpanel">
+  <section>
+    <h2>컨플 적재 레이어 — 설계와 단계별 상태</h2>
+    <p>에이전트나 별도 시스템이 아니라 컨플 수집기에 붙는 한 레이어. 원문은 원장에 그대로 두고(원문 = 기준), 조각·정제 지식은 언제든 다시 만드는 파생물. AI는 후보·초안만, 확정은 사람.</p>
+    <pre class="mermaid">
+flowchart LR
+  A[컨플 공간] --> B["① 수집기 보강<br/>그림 글·제한 페이지·페이지 정보"]
+  B --> C[원문 원장]
+  C --> D["조각<br/>(지금 검색)"]
+  C --> E["② 팀 진단<br/>노후·중복·묶음·제외 후보"]
+  E --> F["③ AI 정제 초안<br/>실패 질문 표적"]
+  F --> G["④ 사람 검수<br/>4문항"]
+  G --> D
+  D --> H["⑤ 평가 게이트<br/>전/후 · 나빠짐 0"]
+    </pre>
+    <div class="tbl"><table>
+      <thead><tr><th>단계</th><th>하는 일</th><th>상태</th><th>근거 숫자</th></tr></thead>
+      <tbody>
+        <tr><td>① 수집기 보강</td><td>draw.io 원본 XML에서 도형·연결 글 추출(LLM 없음, 기본 켬) · 일반 그림 자리 표시(효과 측정 전이라 기본 끔) · 읽기 제한 페이지는 건너뛰고 기록 · 적재 LLM 로컬 · 페이지 주소·수정일 저장</td><td><span class="pill done">개발·측정 완료</span> v2.190 (커밋 대기)</td><td>같은 22페이지 끔 → 켬: 검색 51.7 → 93.1% · 답 21.2 → 82.7% · 나빠짐 0. 단 문항을 그림 글에서 만들어 "글이 들어오고 검색된다"까지만 증명 — 추출 글이 원본과 맞는지(그림 10개 팀 확인)·실제 질문 효과는 남음</td></tr>
+        <tr><td>② 팀 진단</td><td>인벤토리(노후·그림·헤딩·중복) · 업무 묶음 제안 · 적재 제외 후보 · 넣을 곳 판단 · 팀 손볼 목록</td><td><span class="pill doing">CSP 2개 공간 수동 1회</span></td><td>온라인서비스 62p · 온라인스토어 592p</td></tr>
+        <tr><td>③ AI 정제 초안</td><td>실패한 질문이 걸린 묶음만 — 문장마다 출처, 원문에 없는 값 빨강, 충돌은 합치지 않고 양쪽 표시. 구조는 우리 정확도에 맞춘 모양</td><td><span class="pill todo">예정</span></td><td>대상은 실패 질문으로 고른다 — 구/신 충돌로 틀린 문항이 확인되면 그 묶음부터</td></tr>
+        <tr><td>④ 사람 검수</td><td>틀린 사실 · 빠진 것 · 지울 것 · 오너 — 정정 요청 검토 화면 재사용, 검수 시간 기록</td><td><span class="pill todo">예정</span></td><td>—</td></tr>
+        <tr><td>⑤ 평가 게이트</td><td>지식 축 기준선과 전/후 · 나빠짐 0 아니면 채택 안 함</td><td><span class="pill done">운영 중</span></td><td>지식 축 기준선 #34</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+  </div>
+  <div class="panel" id="panel-improve" data-panel="improve" role="tabpanel">
+  <section>
+    <h2>개선 — 끝남 · 하는 중 · 할 것 · 안 하기로 함</h2>
+    <div class="cols">
+      <div class="card"><h3><span class="pill done">끝남</span></h3><ul>
+        <li>draw.io 그림 속 글 살리기 — 답 21.2 → 82.7%</li>
+        <li>평가 게이트 지식 축 · 답 못 낸 문항 따로 세기(게이트웨이 거부 11건 = 정책서 조각 오탐)</li>
+        <li>팀 간 용어 참고 한 줄(다른 팀이 다른 뜻으로 쓸 때만)</li>
+        <li>읽기 제한 페이지 기록 · 적재 LLM 로컬 · 옛 등록 API 4개 정리</li>
+        <li>문서 구조 정리(도메인별 폴더 + 문서 지도)</li>
+      </ul></div>
+      <div class="card"><h3><span class="pill doing">하는 중</span></h3><ul>
+        <li>CSP 페이지 넣을 곳 AI 판단 실측 — 끝(첫 공간 확신 14/29 · GIFT 0/127, 원인 = 새 영역에 이웃 지식 없음)</li>
+        <li>지식 데이터화 현황판(이 문서)</li>
+      </ul></div>
+      <div class="card"><h3><span class="pill todo">할 것</span></h3><ul>
+        <li>GIFT 적재 범위 확정 → 적재 · "옛 기준" 표시 · 일반 그림 자리 표시 효과 측정</li>
+        <li>넣을 곳 판단 첫 적재 보정 — 공간 담당 파트 영역을 기본값으로(GIFT 확신 0/127 실측)</li>
+        <li>지식 중복 10 / 102조각 정리</li>
+        <li>정책서 참고표·개요 채팅 연결(문항 30·14개가 아직 문맥에 안 들어감)</li>
+        <li>적재 검수에서 파라미터 검사 정리(안 하기로 한 일이 "어긋남 981"로 보임)</li>
+        <li>운영 질의 감시 ②~④ · 팀 실제 질문으로 잠근 골든셋</li>
+        <li>정제 초안(③④) · 컨플 현행화(MCP 게이트웨이 도구 목록 대기)</li>
+      </ul></div>
+      <div class="card"><h3><span class="pill skip">안 하기로 함</span></h3><ul>
+        <li>정책 파라미터 파생 — 사람 문항 효과 없음(10/26)</li>
+        <li>PDF·웹 그림 처리 — 등록 사례가 거의 없음(PDF 1·웹 1). 실패 질문이 보이면</li>
+        <li>지식 유형 2번째 분류 축 · 새 저장소(Qdrant 등)</li>
+        <li>그림을 AI가 보고 해석(비전 모델) — 연결 지어내기 위험. 실패 질문에 걸린 것만 나중에</li>
+      </ul></div>
+    </div>
+  </section>
+  </div>
+  <div class="panel" id="panel-gate" data-panel="gate" role="tabpanel">
+  <section>
+    <h2>평가 게이트 · 운영 질의 감시</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>단계</th><th>상태</th><th>내용</th></tr></thead>
+      <tbody>
+        <tr><td>① 운영 질의 기록(trace)</td><td><span class="pill done">완료</span></td><td>답마다 넘긴 근거 id·순위·점수·판정 신호(원문 없음)</td></tr>
+        <tr><td>⑤ 지식(컨플) 축</td><td><span class="pill done">완료</span></td><td>정책서 #12 · 지식 #34 기준선을 따로 · 새로 답 못 낸 문항이 생기면 게이트 실패</td></tr>
+        <tr><td>② 질의별 진단 + 운영 숫자</td><td><span class="pill todo">예정</span></td><td>근거 약함·근거 없음·되묻기·재질문·신고 — 컬렉션별 주 단위</td></tr>
+        <tr><td>③ 표본 채점</td><td><span class="pill todo">예정</span></td><td>주 30건 로컬 LLM 채점, 보정 30건(LLM 라벨 · 다른 모델) + 사람 채점 20건으로 LLM 채점 일치율</td></tr>
+        <tr><td>④ [운영 질의] 탭 + [골든셋에 추가]</td><td><span class="pill todo">예정</span></td><td>문제 질의를 골라 골든셋으로 — 정제 초안이 고칠 "실패 질문"의 공급원</td></tr>
+      </tbody>
+    </table></div>
+    <div class="warnbox">②~④는 <b>운영 서버에 실사용 질의가 쌓여야</b> 돈다. 운영은 아직 v2.119(질의 기록 없음) — 반입 전까지 실패 질문 공급원은 팀이 주는 질문뿐이다.</div>
+    <p class="muted">정책서 층별 답 정답률(#12): 조건 97.1 · 사실 93.8 · 영역 넘김 87.5 · 답 없음 86.7 · 사람이 쓴 질문 78.8 · 목록 52.8%.</p>
+  </section>
+  </div>
+  <div class="panel" id="panel-poc" data-panel="poc" role="tabpanel">
+  <section>
+    <h2>PoC 전략 — CSP팀</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>가설</th><th>어떻게 증명</th><th>성공 기준</th><th>상태</th></tr></thead>
+      <tbody>
+        <tr><td>H1 그림 속 글을 살리면 정확도가 오른다</td><td>같은 페이지 끔/켬 전후 · 게이트</td><td>나빠짐 0 · 의미 있게 좋아짐</td><td><span class="pill done">검증</span> 답 +61.5%p</td></tr>
+        <tr><td>H2 적재 범위를 고르면(개인·비업무 빼기) 검색이 덜 흐려진다</td><td>팀 실제 질문으로 전부 넣은 것 vs 범위 고른 것(AI 문항은 범위 쪽에 유리해 안 씀)</td><td>업무 질문 정답률 같거나 오름 · 정책서 축 나빠짐 0</td><td><span class="pill hold">팀 질문 받은 뒤</span></td></tr>
+        <tr><td>H3 "옛 기준" 표시로 구/신 시스템 충돌 오답이 준다</td><td>먼저 충돌로 틀리는 문항이 실제로 있는지 확인 → 표시 전후</td><td>충돌 질문 오답 감소</td><td><span class="pill todo">GIFT 적재 때</span></td></tr>
+        <tr><td>H6 일반 그림 자리 표시가 도움이 된다</td><td>GIFT(스크린샷 466장)에서 끔/켬</td><td>나빠짐 0 · 그림에 있는 답을 "원문 확인"으로 안내</td><td><span class="pill todo">GIFT 적재 때</span></td></tr>
+        <tr><td>H4 실패 질문 표적 정제 초안이 정답률을 올린다</td><td>정제 전/후 · 검수 시간</td><td>실패 질문 정답률 ↑ · 검수 건당 시간이 감당할 만함</td><td><span class="pill todo">③④ 뒤</span></td></tr>
+        <tr><td>H5 팀 실제 질문으로도 숫자가 버틴다</td><td>잠근 골든셋(개선 30 · 평가 20)</td><td>합성 문항 숫자와 큰 차이 없음</td><td><span class="pill hold">질문 받기 전</span></td></tr>
+      </tbody>
+    </table></div>
+    <div class="cols">
+      <div class="card"><h3>팀에 부탁할 것 (수고 적고 효과 큰 순)</h3><ol>
+        <li><b>실제 질문 30개</b> — 질문 + 정답 페이지 링크(필수), 그림 관련 5개 포함. 지금 숫자는 AI가 만든 문항이라 진짜 성적이 아님</li>
+        <li><b>GIFT 적재 범위 · 공개 범위 확인</b> — 제외 후보 3묶음(개인 공간 · ASIS · 일정 캘린더) 넣을지 뺄지 + 공간에 일부만 보는 페이지가 있는지, 10분</li>
+        <li><b>그림 10개 추출 글 확인</b> — 원본 그림과 "구성·흐름" 글을 나란히, 틀린 연결 표시, 30분</li>
+        <li><b>파트별 오너 1명</b> — 정제 초안 검수 · 승인 대기 처리, 주당 검수 가능 건수와 기한</li>
+        <li><b>구/신 시스템 충돌 후보 확인</b> — AI가 뽑은 충돌 쌍마다 "맞다/아니다"만(85페이지를 다 보는 대신)</li>
+        <li>(효과 확인 뒤) 헤딩 없는 페이지 손보기 — 온라인스토어 내용 페이지 322개 중 많이 쓰이는 것부터</li>
+      </ol></div>
+      <div class="card"><h3>개선 사이클 (팀 하나마다)</h3><ol>
+        <li>진단 — 인벤토리·묶음·제외 후보·넣을 곳 판단</li>
+        <li>적재 — 범위 확정 후 · 그림 처리 켬</li>
+        <li>측정 — 합성 + 팀 실제 질문 · 게이트 기준선</li>
+        <li>실패 원인 나누기 — 검색 / 생성 / 데이터(원문 문제)</li>
+        <li>우리 몫(시스템)은 개선 → 게이트 · 팀 몫(원문)은 근거 숫자와 함께 요청</li>
+        <li>재측정 → 이 현황판 갱신</li>
+      </ol></div>
+    </div>
+  </section>
+  </div>
+  <div class="panel" id="panel-plan" data-panel="plan" role="tabpanel">
+  <section>
+    <h2>계획</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>순서</th><th>할 일</th><th>누가</th><th>언제</th></tr></thead>
+      <tbody>
+        <tr><td class="n">1</td><td>CSP팀 요청 — 질문 30 · 적재·공개 범위 · 그림 10개 확인 · 오너</td><td>태훈 → CSP팀</td><td>바로</td></tr>
+        <tr><td class="n">2</td><td>정책서 참고표·개요 채팅 연결(#12 — 정답이 참고표·개요인 문항 44개(30+14)가 아직 채팅 문맥에 안 들어감, 목록 52.8%가 가장 약한 층) · 적재 검수 정리 · 지식 중복 정리</td><td>개발</td><td>팀 회신 기다리는 동안</td></tr>
+        <tr><td class="n">3</td><td>GIFT 적재(범위 반영 · 옛 기준 표시) → 넣을 곳 판단 · <b>정책서·지식 두 축 게이트</b> · 일반 그림 자리 표시 끔/켬</td><td>개발</td><td>범위·공개 범위 회신 후</td></tr>
+        <tr><td class="n">4</td><td>팀 질문으로 잠근 골든셋 · 기준선 다시(지식 축) · 그림 글 효과 재확인</td><td>개발</td><td>질문 회신 후</td></tr>
+        <tr><td class="n">5</td><td>운영 반입(질의 기록·감시 포함) → 운영 질의 감시 ②~④</td><td>태훈(반입 결정) · 개발</td><td>결정 필요 1</td></tr>
+        <tr><td class="n">6</td><td>실패 질문 표적 정제 초안 20~30건 → 오너 4문항 검수 → 게이트</td><td>개발 → CSP 오너</td><td>실패 질문이 모인 뒤</td></tr>
+        <tr><td class="n">7</td><td>CSP 결과로 다음 팀 — 파트·영역 담당 지정부터</td><td>태훈 · 개발</td><td>CSP 1사이클 뒤</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><b>결정 필요</b>
+      <span>1. 운영 반입 시점 — 실사용 질의가 들어와야 감시·정제 초안이 실제 질문으로 돈다</span>
+      <span>2. GIFT 제외 후보 3묶음 — 팀 확인 전까지 넣지 않음으로 둘지</span>
+      <span>3. "옛 기준" 표시를 어떻게 쓸지 — 답에 "옛 기준일 수 있음" 표시 / 순위 낮춤 / 근거 카드에만(권장: 순위는 그대로, 답·근거 카드에 표시 — 게이트로 확인)</span>
+      <span>4. 컨플 원문이 지나는 LLM — 채팅 답도 로컬로 바꿀지, 지금처럼 게이트웨이(사내)로 둘지</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>위험</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>위험</th><th>영향</th><th>대응</th></tr></thead>
+      <tbody>
+        <tr><td><b>실제 질문이 안 들어옴</b></td><td>모든 개선이 AI가 만든 문항 위에서만 돌아 실제 효과를 모름</td><td>팀 질문 30개 요청 · 운영 반입(질의 기록·감시) 시점 결정 · 못 받으면 VOC·정정 요청 질문으로 대신</td></tr>
+        <tr><td><b>권한</b></td><td>개인 토큰으로 가져온 내용을 로그인한 누구나 봄 — 공간 단위 비공개는 지금 검사로 안 잡힘</td><td>GIFT 적재 전 공개 범위 확인(팀 요청 2) · 페이지 읽기 제한은 건너뛰고 기록(v2.190)</td></tr>
+        <tr><td><b>정책서 정확도 하락</b></td><td>온라인스토어 영역에 정책 202건 — 컨플 144만 자가 같은 검색에 들어감</td><td>GIFT 적재 전후 <b>정책서 · 지식 두 축 모두 게이트</b>(나빠짐 0이 아니면 범위 줄이기)</td></tr>
+        <tr><td>검수 지루함(그냥 승인)</td><td>초안이 틀려도 통과</td><td>4문항 · 원문에 없는 값 빨강 · 검수 시간 기록 · 건수 상한</td></tr>
+        <tr><td>한 시점 스냅샷</td><td>컨플이 바뀌어도 모름(현행화는 MCP 게이트웨이 대기)</td><td>현행화 전까지 다시 가져올 주기(예: 월 1회) 정하기</td></tr>
+        <tr><td>컨플 원문이 지나는 LLM 기준이 둘</td><td>채팅 답은 게이트웨이, 적재·채점은 로컬</td><td>결정 필요 4</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+  </div>
+
+  <div class="panel" id="panel-history" data-panel="history" role="tabpanel">
+  <section>
+    <h2>갱신 이력</h2>
+    <div class="history">
+    <span>2026-10-29 — 첫 판. 정책서 수집 완료 · CSP 온라인서비스 파트 적재(그림 글 추출 v2.190) · 온라인스토어 파트 진단 · PoC 전략·팀 요청.</span>
+    <span>2026-10-29 (같은 날) — 넣을 곳 AI 판단 실측(156페이지, 원장 기록 없는 시험) · 독립 검토 반영: 위험 칸 · 보고 요약 · 정책서 축 동시 게이트 · 일반 그림 자리 표시 기본 끔 · 팀 요청 조정(질문 30 + 정답 링크, 그림 10개 확인, 공개 범위) · 숫자 정정(42% · 헤딩 없음 322).</span>
+    <span>근거: 설계 <code>docs/domains/knowledge/sources/confluence/confluence-curation-layer-design.md</code> · 평가 게이트 <code>docs/domains/quality/</code> · 정책서 <code>docs/domains/policy/policy-v0-design.md</code>. 컨플 원문 파생물은 git 제외 폴더에만.</span>
+    </div>
+  </section>
+  </div>
+</div>
+<script>
+(() => {
+  const tabs = [...document.querySelectorAll('.tabs a')];
+  const names = tabs.map(a => a.dataset.tab);
+  function show(name) {
+    if (!names.includes(name)) name = 'summary';
+    document.querySelectorAll('.panel').forEach(p => { p.hidden = p.dataset.panel !== name; });
+    tabs.forEach(a => a.setAttribute('aria-selected', a.dataset.tab === name ? 'true' : 'false'));
+  }
+  tabs.forEach(a => a.addEventListener('click', e => {
+    e.preventDefault();
+    show(a.dataset.tab);
+    try { history.replaceState(null, '', '#' + a.dataset.tab); } catch (_) {}
+    window.scrollTo({ top: 0 });
+  }));
+  window.addEventListener('hashchange', () => show(location.hash.slice(1)));
+  show(location.hash.slice(1));
+})();
+</script>

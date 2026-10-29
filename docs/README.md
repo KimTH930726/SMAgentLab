@@ -11,6 +11,11 @@
 | [table-definition.md](table-definition.md) | 마이그레이션 이력(전체 칼럼 스펙은 실 DB) |
 | [backlog.md](backlog.md) | 남은 일 목록(리뷰 낮음·보류 항목 포함) |
 
+## projects — 프로젝트 산출물 (진행하며 갱신 · 갱신 이력은 문서 안)
+| 문서 | 내용 |
+|---|---|
+| [knowledge-datafication/index.html](projects/knowledge-datafication/index.html) | 지식 데이터화 현황 — 정책서 · 컨플루언스(팀·파트·영역별 진척, 적재 레이어, 개선, PoC 전략, 계획) |
+
 ## domains/knowledge — 지식 코어 (`backend/agents/knowledge_rag`)
 | 문서 | 상태 | 내용 |
 |---|---|---|

@@ -1,6 +1,6 @@
 # 컨플루언스 정제 레이어 — 수집기 보강 → 팀 진단 → AI 초안·사람 검수 (설계 검토, 2026-10-29)
 
-> 상태: **설계 검토(개발 전)**. 입력 = 사용자 질문 2개(이미지 처리, "최상단 URL을 주면 AI가 훑어 초안 → 팀 검수") + 외부 설계안
+> 상태: **① 수집기 보강 개발·측정 완료(v2.190)** · ② 팀 진단 CSP 2개 공간 수동 1회 · ③~⑤ 예정. 진행 현황은 `docs/projects/knowledge-datafication/index.html`. 입력 = 사용자 질문 2개(이미지 처리, "최상단 URL을 주면 AI가 훑어 초안 → 팀 검수") + 외부 설계안
 > "Confluence Knowledge Optimization PoC v1.0"(GPT·Claude 대화로 작성). 이 문서는 그 설계안을 **지금 OpsLens 구조에 맞춰** 다시 짠 것.
 > 사용자 판단: "PoC나 하나의 에이전트라기보다 컨플 적재 수집기의 한 레이어" — **동의**(§2). 개발은 사용자가 말할 때.
 
@@ -32,7 +32,7 @@
 - 정책서 v0가 이미 같은 모양이다: 원문 통째(`policy_item.raw_body`) + 파생값(파라미터) + 사람 승인 + 원문에 없는 값 빨강. 정제 지식은 **지식 쪽의 같은 패턴**.
 - 단계는 하나의 작업 흐름(스크립트·배치 + 검수 화면)으로 — 설계안 원칙 6 "멀티 에이전트 대신 단일 오케스트레이터"와 같다.
 
-## 3. 업계 조사 요지 (출처는 §9)
+## 3. 업계 조사 요지 (출처는 §12)
 - **이미지**: 큰 제품도 페이지 안 이미지를 거의 못 읽는다(Rovo는 페이지 이미지 미지원 — 기능 요청 열림, MS Graph 컨플 커넥터는 첨부 미색인).
   Rovo 권장 대안 = "핵심은 글로 적어 두라". draw.io는 첨부 원본 XML(`X.drawio`)에서 도형·연결 글자를 **환각 없이** 뽑을 수 있다.
   VLM 다이어그램 해석은 결정 노드 오독·없는 연결 지어내기가 흔하다(논문 다수) → **감지·안내는 전부, 추출은 결정적인 것부터, VLM은 꼬리표 달고 마지막.**
@@ -155,7 +155,7 @@
 | 그림 | XML에서 바로 | 스크린샷 → 자리 표시 + 원본 링크, OCR은 실패 질문에 걸린 것만 |
 → 설계의 ①~⑤ 순서는 그대로 두되, **팀마다 진단 숫자로 어느 단계가 이득인지 고른다**(진단이 그 판단을 하는 단계).
 
-## 9. 출처
+## 12. 출처
 - Rovo 페이지 이미지 미지원: https://jira.atlassian.com/browse/ROVO-388 · Rovo 다이어그램 한계: https://community.atlassian.com/forums/Rovo-articles/Can-Rovo-Analyze-Images-in-Confluence-Champion-Slack-Insider/ba-p/3211091
 - MS Graph 컨플 커넥터(첨부 미색인): https://learn.microsoft.com/en-us/microsoftsearch/confluence-onpremises-connector
 - 저장 형식 `<ac:image>`: https://confluence.atlassian.com/spaces/CONF59/pages/792498992/Confluence+Storage+Format · draw.io 첨부 XML: https://www.drawio.com/doc/faq/recover-moved-diagram-confluence-cloud
@@ -166,3 +166,5 @@
 - Contextual retrieval: https://www.anthropic.com/news/contextual-retrieval · 생성 확장이 강한 검색기엔 해: https://aclanthology.org/2024.findings-eacl.134 · Doc2Query--: https://arxiv.org/abs/2301.03266
 - 컨플 비활성 페이지 자동화·함정: https://community.atlassian.com/forums/Confluence-questions/Automated-stale-page-review-workflow-for-Confluence/qaq-p/3204360 · https://jira.atlassian.com/browse/CONFCLOUD-83329
 - 우리 문서: `confluence-sync-research.md`(현행화·MCP 게이트웨이), `source-ledger-plan.md`(원문=기준), `collection-design.md`(넣을 곳·AI 판단 원장), `policy-v0-design.md`(원문 통째 + 파생 + 승인), `ops-query-monitoring-design.md`(실패 질문), `confluence-writing-guide.md`(작성 규칙 6)
+
+
