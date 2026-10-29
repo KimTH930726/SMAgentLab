@@ -68,9 +68,9 @@ test('평가 게이트 [성적] 검색 성적·답 성적 — 카드 숫자 = DB
   if (okWrong) await expect(page.getByRole('button', { name: /검색은 맞았는데 답이 틀림/ })).toContainText(`검색은 맞았는데 답이 틀림 ${okWrong}문항`);
 });
 
-// 10/29 지식(컨플) 축(#96) — 맨 위 [정책서 | 지식(컨플)]. 지식 축은 그 축 기준선의 숫자를 보이고(정책서 기준선과 섞이지 않음),
+// 10/29 업무지식 축(#96) — 맨 위 [정책서 | 업무지식]. 지식 축은 그 축 기준선의 숫자를 보이고(정책서 기준선과 섞이지 않음),
 // 답을 못 낸 문항(게이트웨이 거부 등)은 정답률에서 빼고 따로 보인다. 단계 흐름·틀린 문항·적용 이력은 정책서 축에만.
-test('평가 게이트 지식(컨플) 축 — 카드 = 지식 기준선, 답 못 냄 따로, 정책서 전용 칸 숨김, 정책서로 돌아오면 정책서 숫자', async ({ page }) => {
+test('평가 게이트 업무지식 축 — 카드 = 지식 기준선, 답 못 냄 따로, 정책서 전용 칸 숨김, 정책서로 돌아오면 정책서 숫자', async ({ page }) => {
   test.setTimeout(90_000);
   const kid = psql(`SELECT id FROM eval_gate_run WHERE is_baseline AND axis = 'knowledge'`);
   const pid = psql(`SELECT id FROM eval_gate_run WHERE is_baseline AND axis = 'policy'`);

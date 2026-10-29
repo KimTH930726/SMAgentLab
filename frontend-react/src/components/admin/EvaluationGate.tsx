@@ -14,18 +14,18 @@ import type { GateAxis } from '../../api/eval';
  *   아래 = 무엇을 볼까 — [틀린 문항] [성적] [적용 이력].
  * 옛 [검색]·[답] 탭은 [성적] 하나로(같은 "검색"이 단계 이름과 탭 이름 두 뜻이던 것). 옛 품질 › RAG 파이프라인은 단계 흐름 + 적용 이력으로 흡수.
  * 옛 [검색 미리보기] 탭은 내림(10/28) — "AI가 본 근거"(Evidence.tsx)로 이름을 바꿔 정정 요청 신고 카드·지식 상세에 붙였다(쓸 일이 생기는 자리).
- * 맨 위 축(10/29, 운영 질의 감시 설계 §3-5): [정책서 | 지식(컨플)] — 판정 기록·기준선이 축마다 따로(#96). 단계 흐름·틀린 문항·적용 이력은
+ * 맨 위 축(10/29, 운영 질의 감시 설계 §3-5): [정책서 | 업무지식] — 판정 기록·기준선이 축마다 따로(#96). 단계 흐름·틀린 문항·적용 이력은
  * 정책서 문항으로 진단한 자가 개선 루프라 정책서 축에만, 지식 축은 [성적]만(진단은 운영 질의 감시 다음 단계).
  */
 type GateMode = 'report' | 'scores' | 'history';
 
 const AXES: { axis: GateAxis; label: string; hint: string }[] = [
   { axis: 'policy', label: '정책서', hint: '정책서 골든셋 — 팀원 문항·실사용 문항 포함' },
-  { axis: 'knowledge', label: '지식(컨플)', hint: '컨플루언스 지식 골든셋 — 지식 조각마다 로컬 LLM이 만든 질문' },
+  { axis: 'knowledge', label: '업무지식', hint: '업무지식 골든셋(컨플루언스 등) — 조각마다 로컬 LLM이 만든 질문' },
 ];
 
 /** 지식 축은 [성적]만 — 그 탭 설명(정책서 문구를 글자 바꾸기로 돌려쓰지 않는다, 리뷰 L6) */
-const KNOWLEDGE_SCORES_HINT = '지금 점수 — 검색 성적(정답 지식을 AI에게 넘겼나) · 답 성적(실제 채팅 경로로 답하고 지식 원문과 대조해 채점)';
+const KNOWLEDGE_SCORES_HINT = '지금 점수 — 검색 성적(정답 업무지식을 AI에게 넘겼나) · 답 성적(실제 채팅 경로로 답하고 업무지식 원문과 대조해 채점)';
 
 const TABS: { mode: GateMode; label: string; icon: typeof FileText; hint: string; staged: boolean }[] = [
   { mode: 'report', label: '틀린 문항', icon: FileText, staged: true, hint: '틀린 문항마다 질문 · AI 답 · 왜 틀렸나 · 정답 데이터 저장 모양 · 고칠 기법과 실제 효과 — 사람이 보고 승인' },

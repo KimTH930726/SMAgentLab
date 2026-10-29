@@ -8,7 +8,7 @@ from core.database import get_conn
 
 BASELINE_LOCK = 86_001   # scripts/eval_gate.py와 같은 값 — 기준선을 옮기는 두 길이 한 번에 하나만(리뷰 M1)
 _JSON = ("retrieval", "answers", "summary", "judge_meta")
-AXES = ("policy", "knowledge")   # 판정 기록 축(#96) — 정책서·지식(컨플). 기준선은 축마다 한 줄
+AXES = ("policy", "knowledge")   # 판정 기록 축(#96) — 정책서·업무지식. 기준선은 축마다 한 줄
 
 
 def _row(r) -> dict:

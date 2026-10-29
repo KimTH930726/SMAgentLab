@@ -176,7 +176,7 @@ def evaluate(a: argparse.Namespace) -> dict:
     return rec
 
 
-AXIS_NAMES = {"policy": "정책서", "knowledge": "지식"}   # main.py #96 CHECK와 같은 값
+AXIS_NAMES = {"policy": "정책서", "knowledge": "업무지식"}   # main.py #96 CHECK와 같은 값
 BASELINE_LOCK = 86_001   # service/eval/service.py와 같은 값 — 기준선을 옮기는 두 길(스크립트·API)이 같은 잠금을 잡는다
 
 

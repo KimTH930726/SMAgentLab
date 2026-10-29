@@ -48,7 +48,7 @@ export interface JudgeMeta {
   same_day_rubric?: boolean;
 }
 
-/** 판정 기록 축(#96, 10/29) — 정책서·지식(컨플). 기준선은 축마다 한 줄 */
+/** 판정 기록 축(#96, 10/29) — 정책서·업무지식. 기준선은 축마다 한 줄 */
 export type GateAxis = 'policy' | 'knowledge';
 
 export interface GateRunListItem {

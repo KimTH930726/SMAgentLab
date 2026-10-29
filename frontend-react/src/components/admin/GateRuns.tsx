@@ -25,7 +25,7 @@ const pct = (x: number | null | undefined, d = 1) => (x == null ? '-' : `${(x * 
 const fmtDate = (s: string) => new Date(s).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 /** 기준선은 목록(최신 50)에서 찾지 않고 따로 받는다 — 기준선 뒤 판정이 50건 넘거나 기준선이 아직 없을 때 "불러오는 중"에 멈췄다(리뷰 M1).
- *  축(#96)마다 기준선이 따로 — 정책서·지식(컨플) */
+ *  축(#96)마다 기준선이 따로 — 정책서·업무지식 */
 function useBaseline(axis: GateAxis) {
   return useQuery({ queryKey: ['eval-gate-baseline', axis], queryFn: () => getBaselineRun(axis), staleTime: 30_000 });
 }
@@ -33,7 +33,7 @@ function useBaseline(axis: GateAxis) {
 /** 축마다 다른 말 — 정답이 무엇인가 · AI에게 주는 근거 수(정책서 POLICY_CONTEXT_TOP_K=10, 지식 default_top_k=3) */
 const AXIS_TEXT: Record<GateAxis, { gold: string; ctx: number }> = {
   policy: { gold: '정답 정책', ctx: 10 },
-  knowledge: { gold: '정답 지식', ctx: 3 },
+  knowledge: { gold: '정답 업무지식', ctx: 3 },
 };
 
 function NoBaseline() {
