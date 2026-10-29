@@ -116,7 +116,7 @@ def ingest_candidates(results: list[dict], locked: Iterable[str] = ()) -> list[d
     locked = set(locked)
     out = []
     for r in results:
-        if not r.get("bad"):
+        if not r.get("bad") or r.get("decided"):   # 결정으로 꺼 둔 항목(파라미터 파생·참고표 채팅 등, 10/29)은 후보로 다시 띄우지 않는다
             continue
         tech, title, action, measure = INGEST_REMEDY.get(
             r["key"], ("ingest_contract", f"적재 다시 확인 — {r['name']}", "적재 스크립트·설계 완료 기준 대조", "retrieval"))

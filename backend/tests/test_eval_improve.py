@@ -196,3 +196,12 @@ def test_ingest_candidates_drop_locked_questions():
     assert c[0]["qids"] == ["Q1"]
     assert improve.ingest_candidates(results)[0]["qids"] == ["H1", "Q1", "REAL-2"]   # locked를 안 주면 그대로(옛 호출)
 
+
+
+def test_ingest_candidates_skip_decided_off_checks():
+    """결정으로 안 하기로 했거나 꺼 둔 검사(10/29 — 파라미터 파생 · 참고표 채팅)는 어긋난 수가 있어도 후보로 다시 띄우지 않는다."""
+    results = [{"key": "policy_param_derived", "store": "정책", "name": "파라미터", "ref": "r", "bad": 981, "total": 981,
+                "decided": "안 함 — 10/26 실험"},
+               {"key": "knowledge_dup", "store": "지식", "name": "중복", "ref": "r", "bad": 10, "total": 102}]
+    keys = [c["key"] for c in improve.ingest_candidates(results)]
+    assert keys == ["ingest_knowledge_dup"]
