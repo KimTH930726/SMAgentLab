@@ -12,7 +12,7 @@ import { getMessages } from '../../api/conversations';
 import { MessageItem } from './MessageItem';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { createCorrection, getMyCorrections, markCorrectionsSeen, POLICY_CHANGE_TARGETS, type PolicyChangeTarget } from '../../api/corrections';
-import type { ChatMessage, ClarifyOption, ClarifyPrompt, CollectionSuggest, PolicyCitation, ListAnswer } from '../../types';
+import type { ChatMessage, ClarifyOption, ClarifyPrompt, CollectionSuggest, PolicyCitation, ListAnswer, TermNote } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
 import { showError } from '../../store/useDialogStore';
 
@@ -119,7 +119,7 @@ function PipelineStepsToggle({ steps, answering = false }: { steps: PipelineStep
   );
 }
 
-function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null; clarify?: ClarifyPrompt | null; degraded?: boolean; list_answer?: ListAnswer | null; collection_suggest?: CollectionSuggest | null; answered_namespace?: string | null } | null }[]): ChatMessage[] {
+function convertMessages(msgs: { id: number; role: string; content: string; mapped_term?: string | null; results?: unknown[] | null; status?: string; has_feedback?: boolean; metadata?: { sql_result?: { sql: string; reasoning: string; cached: boolean } | null; table_result?: { columns: string[]; rows: Record<string, unknown>[]; row_count: number; truncated: boolean } | null; chart_result?: { type: string; x: string; y: string; title: string } | null; policy_citations?: PolicyCitation[] | null; clarify?: ClarifyPrompt | null; degraded?: boolean; list_answer?: ListAnswer | null; collection_suggest?: CollectionSuggest | null; answered_namespace?: string | null; term_notes?: TermNote[] | null } | null }[]): ChatMessage[] {
   // Fix out-of-order pairs from old data (parallel saves could put assistant before user)
   // Check pairs at step=2: (0,1), (2,3), ... and swap reversed pairs
   const ordered = [...msgs];
@@ -153,6 +153,7 @@ function convertMessages(msgs: { id: number; role: string; content: string; mapp
         policyCitations: m.metadata?.policy_citations ?? [],
         listAnswer: m.metadata?.list_answer ?? null,
         collectionSuggest: m.metadata?.collection_suggest ?? null,
+        termNotes: m.metadata?.term_notes ?? null,
         answeredNamespace: m.metadata?.answered_namespace ?? null,
         question: lastQuestion,
         has_feedback: m.has_feedback ?? false,

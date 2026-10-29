@@ -273,6 +273,14 @@ export interface ChatMessage {
   collectionSuggest?: CollectionSuggest | null;
   /** 제안 버튼으로 다른 컬렉션에서 다시 물은 답이면 그 컬렉션 — "답변 틀림"을 그 컬렉션 건으로(C2 리뷰 M1) */
   answeredNamespace?: string | null;
+  /** 팀 간 용어 참고(10/29) — 질문에 나온 용어를 다른 팀이 다른 뜻으로 쓸 때만. 답·근거와 무관한 참고 */
+  termNotes?: TermNote[] | null;
+}
+
+export interface TermNote {
+  term: string;
+  others: { area: string; description: string }[];
+  more: number;
 }
 
 export interface CollectionSuggest {

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from agents.base import AgentBase
-from core.database import get_conn, org_space_scope_extra_ids
+from core.database import get_conn, namespace_scope_ids, org_space_scope_extra_ids
 from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
@@ -361,6 +361,25 @@ async def build_chat_context(
 
 
 SUGGEST_TIMEOUT = 2.0   # 초 — 다른 컬렉션 제안 계산 상한(넘으면 제안 생략)
+TERM_NOTES_TIMEOUT = 1.0   # 초 — 팀 간 용어 참고 상한(용어집 조회 한 번, 평소 ms 단위)
+
+
+async def _term_notes(namespace: str, matches: list) -> list[dict]:
+    """팀 간 용어 참고(10/29) — 질문에 나온 용어가 다른 영역 용어집에 다른 뜻으로 있으면. 답엔 영향 없음, 실패하면 없이(로그만)."""
+    if not matches:
+        return []
+
+    async def run() -> list[dict]:
+        async with get_conn() as conn:
+            return await glossary_terms.other_meanings(conn, matches, await namespace_scope_ids(conn, namespace))
+    try:   # 답 완료(done)를 늦추지 않게 상한 — DB가 붐비면 참고 없이(리뷰 L3)
+        return await asyncio.wait_for(run(), TERM_NOTES_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.info("팀 간 용어 참고 %.1f초 초과 — 이번 답엔 참고 없음(부하)", TERM_NOTES_TIMEOUT)
+        return []
+    except Exception:   # noqa: BLE001
+        logger.warning("팀 간 용어 참고 계산 실패(답엔 영향 없음)", exc_info=True)
+        return []
 
 
 async def _suggestion(namespace: str, question: str, query_vec: list[float], results: list, **kw) -> Optional[dict]:
@@ -482,8 +501,9 @@ class KnowledgeRagAgent(AgentBase):
                 # 다른 컬렉션 제안은 캐시하지 않는다(설정·다른 컬렉션 지식이 그 사이 바뀜) — 캐시 답에도 지금 기준으로 계산(검색만, C2)
                 cached_sug = None if suggest_of else await _suggestion(namespace, search_question, query_vec, None,
                                                                          w_vector=w_vector, w_keyword=w_keyword, top_k=top_k)
+                cached_notes = cached.get("term_notes")   # 팀 간 용어 참고 — 캐시 답은 용어를 다시 안 찾으니 처음 답의 것(옛 캐시 항목엔 없음)
                 cached_meta = {k: v for k, v in (("policy_citations", cached_citations), ("list_answer", cached_list),
-                                                 ("collection_suggest", cached_sug)) if v}
+                                                 ("collection_suggest", cached_sug), ("term_notes", cached_notes)) if v}
                 # 캐시 답 — 이번엔 검색을 안 돌림. 근거는 처음 답한 메시지 기록(src)에(옛 캐시 항목엔 없음)
                 cached_meta["trace"] = {"v": TRACE_VERSION, "cached": True, "src": cached.get("message_id")}
                 await update_assistant_message(msg_id, cached["answer"], "completed", metadata=cached_meta)
@@ -500,6 +520,8 @@ class KnowledgeRagAgent(AgentBase):
                     await collection_suggest.record(conversation_id=conversation_id, message_id=msg_id, suggestion=cached_sug,
                                                     user_id=user.get("id"))
                     yield {"type": "suggest", **cached_sug}
+                if cached_notes:
+                    yield {"type": "term_notes", "items": cached_notes}
                 # 근거 유무는 캐시 저장 시점 값으로 — 예전엔 results(지식)만 봐서 정책·공통코드만으로 답한 캐시 응답이
                 # 공백으로 잘못 세졌다(2026-10-02 실측: 정책 답변 3건). 옛 캐시 항목엔 값이 없어 지식·정책 근거로 대신 판단.
                 had_context = cached.get("had_context", bool(cached.get("results") or cached_citations))
@@ -646,6 +668,9 @@ class KnowledgeRagAgent(AgentBase):
                 namespace, search_question, query_vec, results, w_vector=w_vector, w_keyword=w_keyword, top_k=top_k)
             if suggestion:
                 meta_out["collection_suggest"] = suggestion
+            term_notes = [] if degraded else await _term_notes(namespace, cc.term_matches)
+            if term_notes:
+                meta_out["term_notes"] = term_notes
             meta_out.update(answered_ns)
             meta_out["trace"] = trace
             await update_assistant_message(msg_id, final_answer, msg_status, metadata=meta_out)
@@ -654,6 +679,8 @@ class KnowledgeRagAgent(AgentBase):
                 await collection_suggest.record(conversation_id=conversation_id, message_id=msg_id, suggestion=suggestion,
                                                 user_id=user.get("id"))
                 yield {"type": "suggest", **suggestion}
+            if term_notes:
+                yield {"type": "term_notes", "items": term_notes}
             if policy_citations or degraded or meta_out.get("list_answer"):
                 yield {
                     "type": "meta", "conversation_id": conversation_id, "message_id": msg_id,
@@ -676,6 +703,7 @@ class KnowledgeRagAgent(AgentBase):
                     "results": results_to_payload(results),
                     "policy_citations": policy_citations,
                     "list_answer": meta_out.get("list_answer"),
+                    "term_notes": term_notes,
                     "query": query,
                     "had_context": had_context,
                 })

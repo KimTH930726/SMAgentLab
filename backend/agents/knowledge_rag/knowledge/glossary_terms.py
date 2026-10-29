@@ -145,6 +145,51 @@ def definitions_block(matches: list[TermMatch]) -> str:
     return "[용어 설명 — 질문에 나온 사내 용어의 뜻. 답의 근거는 아래 문서로]\n" + "\n".join(lines)
 
 
+# ── 팀 간 용어 참고(10/29 사용자 "정확도는 훼손하지 않되 정보는 전달 — 중복되는 게 있을 때만 간단하게 참고") ─────────────────────
+# 질문에 나온 용어가 다른 영역 용어집에도 있고 뜻(설명)이 다르면 답 아래 한 줄. 답·근거·검색엔 안 넣는다(LLM 0, 용어집 조회만).
+# 업계: 용어를 업무 영역(도메인) 안에 두고 영역끼리 같은 말이 다른 뜻이면 나란히 보여 준다(Purview 거버넌스 도메인 용어집) — 목업 검수 10/29.
+TERM_NOTE_LIMIT = 2   # 용어마다 다른 팀 뜻 최대 2개, 나머지는 "n개 더"
+TERM_NOTE_DESC_MAX = 120   # 뜻 글자 상한 — 넘으면 "…"(잘린 걸 보이게)
+
+
+def other_meanings_from(matches: list[TermMatch], rows: Sequence[dict]) -> list[dict]:
+    """matches(이 답에 쓴 뜻) × rows(다른 영역 용어 {term, description, area}) → [{term, others: [{area, description}], more}].
+    같은 용어(정규화)이고 설명이 다른 것만 — 설명이 같거나 비었으면 안 붙인다. 이 답에 쓴 뜻이 다른 파트 것이면(m.part) 그 파트는 뺀다."""
+    out: list[dict] = []
+    seen_terms: set[str] = set()
+    for m in matches:
+        key = norm(m.term)
+        if not key or key in seen_terms:
+            continue
+        seen_terms.add(key)
+        mine = norm(m.description)
+        others: list[dict] = []
+        areas: set[str] = set()
+        for r in rows:
+            d = (r.get("description") or "").strip()
+            if norm(r.get("term") or "") != key or not d or norm(d) == mine or r["area"] == m.part or r["area"] in areas:
+                continue
+            areas.add(r["area"])
+            others.append({"area": r["area"], "description": d if len(d) <= TERM_NOTE_DESC_MAX else d[:TERM_NOTE_DESC_MAX] + "…"})
+        if others:
+            out.append({"term": m.term, "others": others[:TERM_NOTE_LIMIT], "more": max(0, len(others) - TERM_NOTE_LIMIT)})
+    return out
+
+
+async def other_meanings(conn, matches: list[TermMatch], exclude_ns_ids: Sequence[int]) -> list[dict]:
+    """다른 영역(exclude_ns_ids = 고른 영역 + 하위, 이 답의 범위) 용어집에서 같은 용어·다른 뜻. 같은 용어 판정은 norm() 하나로 —
+    SQL 정규식은 DB 로케일·기호(가운뎃점 등)에서 norm()과 갈라져 조용히 놓친다. 다른 영역 용어 전부(지금 ~900개)라 한 번 읽고 거른다.
+    업무 영역(kind domain)만 — 조직 컬렉션(org_space)은 이름이 내부 키(org:part:id)라 화면에 그대로 뜨고, 질문자 자기 조직이 "다른 팀"으로 나올 수 있다(리뷰 M1).
+    시험용 영역(policy_test)도 빠진다. 닫힌·비공개 영역이 생기면 여기에도 같은 접근 규칙을 건다(지금은 로그인 사용자 누구나 읽기)."""
+    if not any(norm(m.term) for m in matches):
+        return []
+    rows = await conn.fetch(
+        "SELECT g.term, g.description, n.name AS area FROM rag_glossary g JOIN ops_namespace n ON n.id = g.namespace_id "
+        "WHERE g.namespace_id <> ALL($1::int[]) AND n.kind = 'domain' AND coalesce(g.description, '') <> '' ORDER BY n.name, g.id",
+        list(exclude_ns_ids))
+    return other_meanings_from(matches, [dict(r) for r in rows])
+
+
 async def resolve_query_terms(namespace: str, question: str, query_vec, *, mode: Optional[str] = None,
                               entries: Optional[list[GlossaryEntry]] = None,
                               extra_ns_ids: Sequence[int] = ()) -> tuple[list[TermMatch], Optional[str], str]:

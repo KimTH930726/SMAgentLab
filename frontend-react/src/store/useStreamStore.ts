@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { streamChat } from '../api/chat';
-import type { ChatMessage, KnowledgeResult, PolicyCitation, SSESqlEvent, SSETableEvent, SSEChartEvent, ClarifyPrompt, ListAnswer, CollectionSuggest } from '../types';
+import type { ChatMessage, KnowledgeResult, PolicyCitation, SSESqlEvent, SSETableEvent, SSEChartEvent, ClarifyPrompt, ListAnswer, CollectionSuggest, TermNote } from '../types';
 
 // Module-level (non-reactive, not in Zustand state)
 let _controller: AbortController | null = null;
@@ -206,6 +206,10 @@ async function _runStream(
         // 다른 컬렉션에서 찾아보기(C2) — 답 뒤에 온다, 답은 그대로
         const s = event as unknown as CollectionSuggest;
         updateLastMessage((m) => ({ ...m, collectionSuggest: { namespace: s.namespace, score: s.score, here: s.here, here_adopted: s.here_adopted } }));
+      } else if ((event as { type: string }).type === 'term_notes') {
+        // 팀 간 용어 참고(10/29) — 답 뒤에 온다, 답은 그대로
+        const items = (event as unknown as { items: TermNote[] }).items;
+        updateLastMessage((m) => ({ ...m, termNotes: items }));
       } else if ((event as { type: string }).type === 'clarify') {
         // 재질문(v2.134) — 답 대신 범위 선택지. 글은 뒤따르는 token으로 온다
         const c = event as unknown as ClarifyPrompt;

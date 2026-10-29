@@ -15,7 +15,7 @@ import { useThemeStore } from '../../store/useThemeStore';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { CorrectionAnalysis } from './CorrectionAnalysis';
 import { getCorrectionStatus } from '../../api/corrections';
-import type { ChatMessage, ClarifyOption, CollectionSuggest } from '../../types';
+import type { ChatMessage, ClarifyOption, CollectionSuggest, TermNote } from '../../types';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -38,6 +38,26 @@ function SuggestLine({ s, onSuggest }: { s: CollectionSuggest; onSuggest?: (s: C
         {s.namespace}에서 찾아보기
       </button>
       <span className="text-slate-500" title={`관련도 ${s.namespace} ${s.score} · 지금 컬렉션 ${s.here}${s.here_adopted ? '' : '(근거로 쓸 만한 지식 없음)'} — 보는 컬렉션은 바뀌지 않아요`}>ⓘ</span>
+    </div>
+  );
+}
+
+/** 팀 간 용어 참고(10/29 목업 검수) — 다른 팀이 같은 용어를 다른 뜻으로 쓸 때만, 답 아래 짧게. 답·근거는 그대로(용어집 조회만) */
+function TermNoteLines({ notes }: { notes: TermNote[] }) {
+  return (
+    <div className="space-y-1.5 px-1" data-testid="term-notes">
+      {notes.map((n) => (
+        <div key={n.term} className="border-l-2 border-slate-600 bg-slate-800/60 rounded-r-md px-2.5 py-1.5 text-xs text-slate-400 space-y-0.5">
+          <p className="text-slate-200 font-medium">다른 팀에서는 '{n.term}'을(를) 다른 뜻으로 써요</p>
+          {n.others.map((o) => (
+            <p key={o.area}>
+              <span className="mr-1.5 inline-block rounded-full border border-slate-600 px-1.5 text-[11px] text-slate-300">{o.area}</span>
+              {o.description}
+            </p>
+          ))}
+          {n.more > 0 && <p className="text-slate-500">{n.more}개 팀 더</p>}
+        </div>
+      ))}
     </div>
   );
 }
@@ -497,6 +517,7 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
             </div>
           )}
 
+          {!!message.termNotes?.length && !message.isStreaming && <TermNoteLines notes={message.termNotes} />}
           {message.collectionSuggest && !message.isStreaming && <SuggestLine s={message.collectionSuggest} onSuggest={onSuggest} />}
           {message.answeredNamespace && message.answeredNamespace !== namespace && (
             <p className="text-xs text-slate-500 px-1" data-testid="answered-namespace">{message.answeredNamespace} 지식으로 답함</p>
