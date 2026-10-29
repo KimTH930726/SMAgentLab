@@ -158,7 +158,7 @@
 
 ## 5. 관련 문서
 
-- `docs/tech/data-storage-philosophy.md` — 데이터 모델링 철학(이 문서의 보존정책 논의와 연결)
+- `docs/platform/data-storage-philosophy.md` — 데이터 모델링 철학(이 문서의 보존정책 논의와 연결)
 - `backend/service/email_voc/retention.py`, `scheduler.py` — 재사용 대상 보존정책 패턴 원본
 - `backend/core/dependencies.py` — 현재 파트 기반 권한 체크 구현
 - `D:\MD자료\work-os\TODO.md` — 이 문서를 만들게 한 원 태스크(09-18 등록)

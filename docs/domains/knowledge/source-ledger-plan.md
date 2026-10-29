@@ -1,7 +1,7 @@
 # 지식 원문 원장 — 계획 (2026-10-08, 업계 표준 방식 확정 후 MVP)
 
 > 결정: 원문 = 기준(SoT), 청크·임베딩 = 언제든 다시 만드는 파생물(사용자 10/07). 배경: 장애 보고서
-> `docs/incident/2026-10-07-knowledge-chunking-defect.md` §7. 업계: AWS Bedrock KB·Azure AI Search(원문은 저장소, 청크는 동기화 때
+> `docs/operations/incidents/2026-10-07-knowledge-chunking-defect.md` §7. 업계: AWS Bedrock KB·Azure AI Search(원문은 저장소, 청크는 동기화 때
 > 재생성), LangChain Record Manager·LlamaIndex `ref_doc_id`(청크마다 원문 ID·해시), 메달리온 Bronze 층.
 
 ## 1. 지금 실제로 막힌 일

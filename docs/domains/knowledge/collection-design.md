@@ -2,8 +2,8 @@
 
 > 상태(10/26): **§1~§17 구현 완료(v2.156~v2.166)** · §18 다른 컬렉션 찾아보기는 측정·목업까지(구현 대기, 하한 0.45 결정).
 > 이 문서가 모으는 것: 10/22까지 흩어져 있던 결정 — 용어·판정 기준·하위 원칙·세분화 장치·선택기·AI 초안 등록·선순환.
-> 이어받는 문서: [org-space-design.md](org-space-design.md)(조직 공간 데이터 모양·등록 창구·사이드바 2안, 10/22 검수 완료),
-> [category-removal-design.md](category-removal-design.md)(업무구분 폐지·합치기·트리, 10/22 검수 완료), admin-ia-design.md §5-1~5-3.
+> 이어받는 문서: [org-space-design.md](../org/org-space-design.md)(조직 공간 데이터 모양·등록 창구·사이드바 2안, 10/22 검수 완료),
+> [category-removal-design.md](../../archive/category-removal-design.md)(업무구분 폐지·합치기·트리, 10/22 검수 완료), admin-ia-design.md §5-1~5-3.
 > **둘과 다른 점은 §10에 모았다**(이 문서가 나중 결정이라 이 문서가 우선).
 > 수치는 2026-10-22 dev DB 실측(그날 SELECT·`backend/eval_out/scope_compare.py`). 원문은 인용하지 않는다 — 개수·구조만.
 

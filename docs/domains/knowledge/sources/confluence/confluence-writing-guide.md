@@ -58,4 +58,4 @@
   이 방식으로 여러 섹션을 함께 봐야 하는 질문의 답변 완결성이 78% → 90%로 올랐다.
 - 이 개선은 **섹션이 헤딩으로 나뉘어 있을 때만** 제대로 작동한다. 당시 데이터의 33%는 헤딩 없이 작성돼
   페이지 전체가 한 단위로 묶였다.
-- 상세: `docs/architecture.md` v2.116, `docs/tech/confluence-chunking-spec.md`
+- 상세: `docs/architecture.md` v2.116, `docs/domains/knowledge/sources/confluence/confluence-chunking-spec.md`
