@@ -365,3 +365,23 @@ def test_activate_supersedes_only_active_documents():
     # 같은 페이지의 읽기 제한 기록은 적재되면 내린다(10/29 리뷰 L2) — restricted 줄만, 확정한 원문과 같은 위치만
     rel = [(s, a) for s, a in sqls if "'restricted'" in s]
     assert len(rel) == 1 and "r.source_ref = d.source_ref" in rel[0][0] and rel[0][1][0] == [5]
+
+
+def test_draft_reuse_owner_only_for_team_import():
+    """재리뷰 10/29: 팀 적재는 만든 사람 초안만 옮기므로, 남이 만든 같은 내용 초안을 받으면 확정 때 실패했다 — owner_only면 그 사람 초안만 재사용."""
+    import asyncio
+    seen = {}
+
+    class C:
+        async def fetchrow(self, sql, *a):
+            seen["sql"], seen["args"] = sql, a
+            return None
+
+        async def fetchval(self, sql, *a):
+            return 7
+    asyncio.run(L.save_draft(C(), ns_id=1, source_type="confluence", source_ref="9", title="t", parent_title=None,
+                             raw_format="html", raw_content="<p>x</p>", chunk_strategy="auto", user_id=5, owner_only=True))
+    assert "created_by_user_id IS NOT DISTINCT FROM $8" in seen["sql"] and seen["args"][6:] == (True, 5)
+    asyncio.run(L.save_draft(C(), ns_id=1, source_type="confluence", source_ref="9", title="t", parent_title=None,
+                             raw_format="html", raw_content="<p>x</p>", chunk_strategy="auto", user_id=5))
+    assert seen["args"][6] is False                                  # 기본(지식 문서 화면)은 예전처럼 누구 초안이든

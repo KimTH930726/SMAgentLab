@@ -31,11 +31,13 @@ def content_hash(raw: str) -> str:
 
 async def save_draft(conn, *, ns_id: int, source_type: str, source_ref: Optional[str], title: Optional[str],
                      parent_title: Optional[str], raw_format: str, raw_content: str, chunk_strategy: Optional[str],
-                     source_version: Optional[int] = None, user_id: Optional[int] = None, media: Optional[dict] = None) -> int:
+                     source_version: Optional[int] = None, user_id: Optional[int] = None, media: Optional[dict] = None,
+                     owner_only: bool = False) -> int:
     """미리보기 원문을 초안으로 저장. 같은 파트·종류·위치·내용·분할 방식의 **초안**이 있으면 그 id.
 
     분할 방식도 같아야 재사용(리뷰 M3 2026-10-12): 예전엔 같은 원문을 다른 방식으로 다시 미리보면 초안의 방식을 덮어,
-    먼저 본 미리보기로 확정하면 원장의 방식과 실제 조각이 어긋났다(다시 분할이 바뀐 것 없는데 "바뀜"으로 교체)."""
+    먼저 본 미리보기로 확정하면 원장의 방식과 실제 조각이 어긋났다(다시 분할이 바뀐 것 없는데 "바뀜"으로 교체).
+    owner_only = 그 사람이 만든 초안만 재사용(팀 적재 — 적재 때 만든 사람 초안만 옮기므로, 남의 초안을 받으면 확정 때 실패했다, 재리뷰 10/29)."""
     import json
     raw_content = (raw_content or "").replace("\x00", "")   # 청크 저장과 같게(PostgreSQL이 NUL을 거부)
     h = content_hash(raw_content)
@@ -44,8 +46,9 @@ async def save_draft(conn, *, ns_id: int, source_type: str, source_ref: Optional
     row = await conn.fetchrow(
         "SELECT id FROM rag_source_document WHERE namespace_id = $1 AND status = 'draft' AND source_type = $2 "
         "AND source_ref IS NOT DISTINCT FROM $3 AND content_hash = $4 AND chunk_strategy IS NOT DISTINCT FROM $5 "
-        "AND media IS NOT DISTINCT FROM $6::jsonb ORDER BY id DESC LIMIT 1",
-        ns_id, source_type, source_ref, h, chunk_strategy, mj)
+        "AND media IS NOT DISTINCT FROM $6::jsonb AND (NOT $7::boolean OR created_by_user_id IS NOT DISTINCT FROM $8) "
+        "ORDER BY id DESC LIMIT 1",
+        ns_id, source_type, source_ref, h, chunk_strategy, mj, owner_only, user_id)
     if row:
         # 제목·상위 제목·원본 판은 최신 미리보기 값으로(리뷰 L3 — 내용이 같아도 페이지 이름·판이 바뀔 수 있다)
         await conn.execute("UPDATE rag_source_document SET title = COALESCE($2, title), parent_title = $3, "
@@ -62,7 +65,7 @@ async def save_draft(conn, *, ns_id: int, source_type: str, source_ref: Optional
 
 
 async def save_draft_for_parsed(conn, ns_id: int, doc: ParsedDocument, *, chunk_strategy: Optional[str],
-                                user_id: Optional[int], source_ref: Optional[str] = None) -> Optional[int]:
+                                user_id: Optional[int], source_ref: Optional[str] = None, owner_only: bool = False) -> Optional[int]:
     """파서 결과(ParsedDocument)에서 원문을 골라 초안 저장. 원문이 없는 형식(xlsx·csv — 행 자체가 지식)은 None."""
     raw_html = doc.metadata.get("raw_html")
     if doc.source_type in ("confluence", "web") and raw_html:
@@ -77,7 +80,8 @@ async def save_draft_for_parsed(conn, ns_id: int, doc: ParsedDocument, *, chunk_
     return await save_draft(conn, ns_id=ns_id, source_type=doc.source_type, source_ref=str(ref) if ref else None,
                             title=doc.metadata.get("title") or doc.source_name, parent_title=doc.metadata.get("parent_title"),
                             raw_format=fmt, raw_content=raw, chunk_strategy=chunk_strategy,
-                            source_version=doc.metadata.get("version"), user_id=user_id, media=doc.metadata.get("media"))
+                            source_version=doc.metadata.get("version"), user_id=user_id, media=doc.metadata.get("media"),
+                            owner_only=owner_only)
 
 
 async def record_restricted(conn, *, ns_id: int, page_id: str, title: Optional[str], parent_title: Optional[str],

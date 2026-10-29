@@ -32,7 +32,7 @@
 - 정책서 v0가 이미 같은 모양이다: 원문 통째(`policy_item.raw_body`) + 파생값(파라미터) + 사람 승인 + 원문에 없는 값 빨강. 정제 지식은 **지식 쪽의 같은 패턴**.
 - 단계는 하나의 작업 흐름(스크립트·배치 + 검수 화면)으로 — 설계안 원칙 6 "멀티 에이전트 대신 단일 오케스트레이터"와 같다.
 
-## 3. 업계 조사 요지 (출처는 §12)
+## 3. 업계 조사 요지 (출처는 §13)
 - **이미지**: 큰 제품도 페이지 안 이미지를 거의 못 읽는다(Rovo는 페이지 이미지 미지원 — 기능 요청 열림, MS Graph 컨플 커넥터는 첨부 미색인).
   Rovo 권장 대안 = "핵심은 글로 적어 두라". draw.io는 첨부 원본 XML(`X.drawio`)에서 도형·연결 글자를 **환각 없이** 뽑을 수 있다.
   VLM 다이어그램 해석은 결정 노드 오독·없는 연결 지어내기가 흔하다(논문 다수) → **감지·안내는 전부, 추출은 결정적인 것부터, VLM은 꼬리표 달고 마지막.**
@@ -155,7 +155,76 @@
 | 그림 | XML에서 바로 | 스크린샷 → 자리 표시 + 원본 링크, OCR은 실패 질문에 걸린 것만 |
 → 설계의 ①~⑤ 순서는 그대로 두되, **팀마다 진단 숫자로 어느 단계가 이득인지 고른다**(진단이 그 판단을 하는 단계).
 
-## 12. 출처
+## 12. 첫 적재 배정 — 팀 적재 마법사 (2026-10-29 태훈 결정, 목업 검수 중)
+배경: 팀 컨플을 통째로 넣을 때 페이지마다 "어디에 둘지"를 사람이 정할 수 없고, 위치 판정기(locator)는 후보가 전체 업무 컬렉션이라
+첫 적재(이웃 지식 0)에서 다른 팀 영역으로 샜다(GIFT: 이웃 업무지식만 확신 0/127, 정책 조각 이웃 23/127 중 영업시스템 34로 샘 — §11).
+
+**원칙** (10/22 판정 기준 그대로 — collection-design §4, locator `LOCATE_SYSTEM`)
+- 저장 위치는 둘: 업무 컬렉션(기본) / 조직 컬렉션(팀 공통 · 파트). **업무가 기본, 조직은 "이름 바꿔 넣기" 시험을 통과할 때만, 애매하면 업무.**
+  조직은 개편되면 데이터 관리가 어려워서.
+- 업무 지식엔 파트를 저장하지 않는다 — 영역 담당 매핑(`owner_part_id`)으로 따라온다(조직 개편 = 매핑만 수정).
+- **후보는 등록하는 사람의 팀 안으로만**: 업무 = 그 팀 파트들이 맡은 업무 컬렉션, 조직 = 그 팀 공통 + 그 팀 파트. (지금 판정기는 조직만 팀으로 좁힌다 — 업무도 좁히는 게 할 일.)
+
+**시작점에 따라 확정되는 것**
+| 넣는 곳 | 확정 | AI가 판단 |
+|---|---|---|
+| 팀 최상단 | 팀 | 업무/조직 → 파트 → 파트가 맡은 업무 중 하나 (조직이면 팀 공통/파트) |
+| 파트 공간 (예: GIFT) | 팀 · 파트 | 업무/조직만 (맡은 업무 1개면 업무는 자동) |
+
+**화면 = 한 번 분석 → 초안 → 확인 필요만** (태훈 10/29 "AI가 한 번 최적으로 분석하고 그 초안으로만 보여주는 게 맞다"):
+주소 입력 → AI가 아래 판단을 한 번에 전부 → 초안 한 화면(배치 초안 + 확인 필요 N건) → [초안대로 적재] → 결과·게이트. 단계별로 사람에게 묻지 않는다.
+**정확도가 먼저, 자율성이 목적이 아님** (태훈 10/29): AI는 정확한 적재까지의 길을 줄여 줄 뿐. 자동 배치는 LLM + 이웃 5중 4 일치일 때만(10/22 실측 51건 중 틀림 0),
+나머지는 전부 "사람이 채울 칸"(늘어도 됨, 필수 — 안 채우면 보류) · 사람만 아는 정보(담당 파트 없는 업무의 담당 등)도 사람이 채움 · AI 확정분도 사람이 검수·옮기기 가능(원장에 남아 판정 개선) · 적재분은 게이트 통과 후 사용 시작, 나빠지면 그 적재분만 되돌림.
+
+**AI가 내부에서 하는 판단 순서** (목업: claude.ai artifact Qnt3dJ5agwBhczty75h6Nc)
+1. 시작점 + **이 팀이 맡은 업무 확인** — 담당 없는 업무 컬렉션(지금 9개)이 있으면 담당 지정 먼저 또는 "적재 중 보이면 묻기".
+2. 진단(코드로 셈) · 3. 적재 범위(묶음 넣기/빼기)
+4. **묶음마다 업무/조직 판정 + 파트** — 묶음 안 페이지 판정 다수가 **70% 이상이면 묶음 기본값, 미만이면 페이지별로 내림**(70%는 첫 적재 뒤 조정).
+5. **파트가 맡은 업무 중 배정** — 묶음 기본값과 다르게 강하게 가리키는 페이지만 개별 확인. 맡은 업무에 없는 업무(담당 없음)를 가리키면
+   "이 팀 업무인가?" 한 번 묻기(예 → 담당 지정 후 넣기 / 아니오 → 묶음 기본값 / 보류).
+6. 적재 · 검증 — 두 축 게이트 + **조직 컬렉션 채팅 포함(`chat.org_space_scope`, 지금 꺼짐) 끔/켬 측정 → 나빠짐 0이면 켬**.
+   지금은 조직 컬렉션 지식이 0이라 잴 게 없다 — 첫 적재에서 조직으로 간 지식이 생긴 뒤 잰다(그 전엔 조직으로 간 지식은 채팅에 안 쓰임).
+
+**용어 (10/29, 화면·코드 공통 — 업계 용어 기준)**
+| 용어 | 뜻 | 업계 대응 |
+|---|---|---|
+| 수집 대상 | 넣은 컨플 주소(팀 최상단 / 파트 공간) | — |
+| 분류 미리보기 | 적재 전 분류 결과 화면 — 확정 전까지 아무것도 적재 안 됨 | Purview 자동 라벨 **simulation mode** |
+| 자동 분류 | 자동 분류 기준(LLM + 이웃 5중 4 일치)을 넘은 페이지 | auto-labeling / auto-accept |
+| 검토 필요 | 기준을 못 넘었거나 시스템에 없는 정보가 필요한 페이지 — 분류하거나 보류해야 확정 가능 | A2I·Document AI HITL **review queue** |
+| 사유 | 검토 필요의 이유 코드: `신뢰도 낮음` · `묶음 혼재`(묶음 다수 70% 미만) · `담당 미지정`(담당 파트 없는 업무) | low-confidence routing |
+| 표본 검토 | 자동 분류에서 컬렉션마다 무작위 10건을 사람이 확인 — 정정이 나오면 그 컬렉션 표본을 늘림. **팀 첫 적재는 게시 전 필수**, 정정 0이면 그 팀 다음부터 선택(경고), 정정 나오면 계속 필수(태훈 10/29 B안 — 게이트 문항이 적재 위치로 만들어져 위치 오류를 못 잡음) | A2I **random sampling** audit |
+| 분류 변경 / 정정 | 사람이 분류를 바꿈 → AI 판단 원장에 오답 신호로 남음 | DataHub proposal accept/reject log |
+| 제외 / 포함으로 변경 | 운영 지식이 아닌 묶음 — 적재 범위 밖 | scope |
+| 보류 | 이번 배치에 안 넣기로 한 것(나중에 다시) | — |
+| 적재 배치 | 한 번 확정해 적재한 묶음 — 게이트·롤백의 단위 | batch |
+| 게시 / 롤백 | 게이트 통과 → 채팅에 쓰이기 시작 / 나빠지면 그 배치만 되돌림 | publish / rollback |
+쓰지 않는 말: "사람이 채울 칸"·"확인 필요"·"AI 확정"·"넣지 않음"(10/29 목업 초안 — 체계 없음).
+
+**업계 조사에서 차용 / 안 함 (10/29)**
+- 차용 ① **미리보기 먼저(simulation)** — Purview는 자동 라벨을 바로 켜지 않고 시뮬레이션 결과(일치 건수·오탐)를 본 뒤 켠다, 범위도 사이트 하나부터 넓힌다
+  → 분류 미리보기 + 첫 팀(CSP) 하나부터.
+- 차용 ② **기준 미달은 사람에게 + 자동 통과분도 무작위 표본 감사** — Amazon A2I는 "신뢰도 기준"과 "무작위 표본 %" 두 조건으로 사람 검토를 건다(표본 = 정기 감사)
+  → 검토 필요 + 표본 검토. 자동 분류 기준(51건 중 틀림 0)은 10/22 73건 측정이라, 새 팀마다 표본으로 다시 확인하는 게 정확도 우선에 맞다.
+- 차용 ③ **제안 수락·반려 기록** — DataHub는 AI 용어 제안을 담당자 inbox로 보내고 수락/반려 이력을 남긴다 → 정정은 AI 판단 원장(이미 있음)에.
+- 차용 ④ **대표 샘플로 먼저 시험** — SharePoint autofill은 프롬프트를 파일 몇 개에 시험해 보고 적용(커뮤니티: 대표 20개) → 판정기 변경은 기존 판정 예시·골든셋으로 먼저.
+- 안 함: Purview의 "7일 안 고치면 자동으로 켜기"(사람 확정 없는 게시 — 정확도 우선과 반대), AI가 AI 판정을 채점하는 Simulation Grader(근거 부족, 표본 검토로 충분할 때까지 보류).
+- 출처: §13 하단(10/29 추가).
+
+**구현 (v2.191, 10/29 dev_0)** — 메뉴 지식 › 팀 적재, `ingestion/team_import.py` · `knowledge/team_import_router.py` · #98. 화면은 목업 3단계 그대로
+(수집 대상 → 분류 미리보기 → 게이트 · 게시). 목업과 달라진 점 — 실측으로 정함:
+- **묶음 단위 자동 분류 없음**: "묶음 다수 의견(70%+)과 LLM이 같으면 자동" 규칙을 첫 공간 정답 페이지로 재 봄 → 13건 중 틀림 3(지금 기준 10건 중 0) → 기각.
+  70% 규칙은 화면의 "묶음 혼재" 사유로도 쓰지 않는다(근거 없음). 묶음은 제외·포함 단위로만.
+- **검토 필요 묶음에 넣을 곳을 미리 골라 두지 않음**: 이웃 우선 제안은 첫 적재에서 지식이 많은 컬렉션으로 쏠림(GIFT: LLM 온라인스토어 209 · 이웃 제안 딜리버스 165),
+  "LLM 고른 곳에 지식이 적으면 LLM" 규칙은 정답 9건 중 5→3으로 나빠짐 → 둘 다 기각. 묶음은 LLM이 고른 곳별(참고), 넣을 곳은 사람이 묶음마다 한 번.
+- **실데이터(GIFT 공간, 500페이지 상한)**: 자동 3 · 검토 필요 427(신뢰도 낮음 315 · 담당 미지정 107 · 실패 5) · 내용 없음 70 · 읽기 제한 0. 첫 적재는 이웃이 없어
+  거의 사람 몫 — 사람 분류가 쌓이면 다음 적재부터 자동이 는다(재측정 백로그 0-11).
+- **게시 시점**: 지금은 적재 즉시 채팅에 쓰임 → 게이트에서 나빠지면 배치 롤백. 운영 반입 전 "게이트 통과 뒤 게시"(백로그 0-11).
+측정 스크립트: `eval_out/confl_diag/bundle_rule_probe.py`, `suggest_probe.py`(LLM 0, 숫자만).
+
+**안 하는 것**: 적재 때 하위 컬렉션 만들기(10/22 결정 — 정기 점검만), 사람이 처음부터 위치 고르기(AI 제안 → 확정·바로잡기만), 업무 꼬리표 0..N.
+
+## 13. 출처
 - Rovo 페이지 이미지 미지원: https://jira.atlassian.com/browse/ROVO-388 · Rovo 다이어그램 한계: https://community.atlassian.com/forums/Rovo-articles/Can-Rovo-Analyze-Images-in-Confluence-Champion-Slack-Insider/ba-p/3211091
 - MS Graph 컨플 커넥터(첨부 미색인): https://learn.microsoft.com/en-us/microsoftsearch/confluence-onpremises-connector
 - 저장 형식 `<ac:image>`: https://confluence.atlassian.com/spaces/CONF59/pages/792498992/Confluence+Storage+Format · draw.io 첨부 XML: https://www.drawio.com/doc/faq/recover-moved-diagram-confluence-cloud
@@ -167,4 +236,9 @@
 - 컨플 비활성 페이지 자동화·함정: https://community.atlassian.com/forums/Confluence-questions/Automated-stale-page-review-workflow-for-Confluence/qaq-p/3204360 · https://jira.atlassian.com/browse/CONFCLOUD-83329
 - 우리 문서: `confluence-sync-research.md`(현행화·MCP 게이트웨이), `source-ledger-plan.md`(원문=기준), `collection-design.md`(넣을 곳·AI 판단 원장), `policy-v0-design.md`(원문 통째 + 파생 + 승인), `ops-query-monitoring-design.md`(실패 질문), `confluence-writing-guide.md`(작성 규칙 6)
 
-
+- 10/29 수집기 분류 흐름: Microsoft Purview auto-labeling simulation — https://learn.microsoft.com/en-gb/purview/apply-retention-labels-automatically ,
+  https://m365admin.handsontek.net/microsoft-purview-information-protection-auto-labeling-simulation-evaluation/ ·
+  Amazon A2I (신뢰도 기준·무작위 표본) — https://aws.amazon.com/augmented-ai/features/ , https://docs.aws.amazon.com/rekognition/latest/dg/a2i-rekognition.html ·
+  Google Document AI HITL — https://docs.cloud.google.com/document-ai/hitl ·
+  DataHub AI term suggestion · approval workflows — https://docs.datahub.com/docs/automations/ai-term-suggestion , https://archive.docs.datahub.com/docs/1.0.0/managed-datahub/approval-workflows ·
+  SharePoint autofill — https://learn.microsoft.com/microsoft-365/syntex/autofill-overview

@@ -22,6 +22,7 @@ from service.llm.factory import get_llm_provider
 from service.auth.router import router as auth_router
 from service.chat.router import router as chat_router
 from agents.knowledge_rag.knowledge.router import router as knowledge_router
+from agents.knowledge_rag.knowledge.team_import_router import router as team_import_router
 from service.feedback.router import router as feedback_router
 from service.admin.router import router as admin_router
 from service.prompt.router import router as prompt_router
@@ -48,7 +49,7 @@ for _noisy in ("httpx", "httpcore", "urllib3", "sentence_transformers", "transfo
 logger = logging.getLogger(__name__)
 
 _ROUTERS = [
-    auth_router, chat_router, knowledge_router,
+    auth_router, chat_router, team_import_router, knowledge_router,
     feedback_router, admin_router,
     prompt_router,
     email_voc_router,
@@ -1494,6 +1495,66 @@ async def _migrate_source_media(conn) -> None:
     await conn.execute("ALTER TABLE rag_source_document ADD COLUMN IF NOT EXISTS media JSONB")
 
 
+async def _migrate_team_import(conn) -> None:
+    """#98(10/29, 컨플 수집기 — 사용자 "목업대로 진행") 팀 적재 배치·배치 안 페이지. 배치 = 한 번 확정해 적재한 묶음(게이트·롤백 단위),
+    페이지 = 분류 미리보기 한 줄(AI 분류 결과 + 사람 분류·표본 검토). 원문은 원장(rag_source_document)에만 — 여기엔 제목·id·컬렉션 id만.
+    설계: confluence-curation-layer-design §12. 멱등."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rag_import_batch (
+            id SERIAL PRIMARY KEY,
+            team_id INT NOT NULL,
+            root_url TEXT NOT NULL,
+            root_title TEXT,
+            status TEXT NOT NULL DEFAULT 'previewing'
+                CHECK (status IN ('previewing', 'preview', 'failed', 'loading', 'loaded', 'rolled_back')),
+            sampling_required BOOLEAN NOT NULL DEFAULT TRUE,
+            total_pages INT NOT NULL DEFAULT 0,
+            done_pages INT NOT NULL DEFAULT 0,
+            truncated BOOLEAN NOT NULL DEFAULT FALSE,
+            error TEXT,
+            job_ids INT[] NOT NULL DEFAULT '{}',
+            created_by_user_id INT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            loaded_at TIMESTAMPTZ,
+            rolled_back_at TIMESTAMPTZ
+        )""")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rag_import_page (
+            id BIGSERIAL PRIMARY KEY,
+            batch_id INT NOT NULL REFERENCES rag_import_batch(id) ON DELETE CASCADE,
+            page_id TEXT NOT NULL,
+            title TEXT,
+            bundle TEXT,
+            depth INT NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'queued'
+                CHECK (status IN ('queued', 'auto', 'review', 'existing', 'excluded', 'held', 'restricted', 'empty', 'failed', 'loaded')),
+            prev_status TEXT,
+            reason TEXT,
+            source_document_id INT,
+            chunk_count INT NOT NULL DEFAULT 0,
+            ai_namespace_id INT,
+            proposed_namespace_id INT,
+            confident BOOLEAN NOT NULL DEFAULT FALSE,
+            signals JSONB NOT NULL DEFAULT '{}'::jsonb,
+            final_namespace_id INT,
+            decided_by_user_id INT,
+            sample_state TEXT CHECK (sample_state IN ('pending', 'ok', 'wrong')),
+            job_id INT,
+            UNIQUE (batch_id, page_id)
+        )""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_import_page_batch ON rag_import_page (batch_id, status)")
+    # 적재 진행률·롤백할 자동 용어 범위(리뷰 10/29) — 표를 먼저 만든 dev DB에도 붙게 따로
+    for col, typ in (("load_total", "INT NOT NULL DEFAULT 0"), ("load_done", "INT NOT NULL DEFAULT 0"), ("loaded_by_user_id", "INT"),
+                     ("glossary_from_id", "INT"), ("glossary_to_id", "INT"), ("glossary_source", "TEXT")):
+        await conn.execute(f"ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS {col} {typ}")
+    # 기동 = 이전 프로세스의 분류·적재는 멈춤 — 고유 인덱스보다 먼저 닫는다(같은 팀 진행 중 행이 둘이면 인덱스가 실패해 기동이 막혔다, 재리뷰 10/29)
+    from agents.knowledge_rag.ingestion.team_import import close_interrupted
+    await close_interrupted(conn)
+    # 팀마다 진행 중(분류 중·적재 중) 배치는 하나 — 동시 시작 두 번을 DB가 막는다(리뷰 10/29)
+    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_import_batch_busy ON rag_import_batch (team_id) "
+                       "WHERE status IN ('previewing', 'loading')")
+
+
 async def _migrate_drop_v1_eval_tables(conn) -> None:
     """#93(10/27, 사용자 D 승인 "옛 표는 삭제 진행") 옛 v1 평가 이력 표 두 개 삭제 — 실험실(Track2) 실행 이력 policy_track2_run(8행)·
     답변 정확도 이력 eval_answer_run(5행). 화면·API·쓰기 경로는 v2.176에서 이미 뺐고, 지우기 전 JSON 백업(eval_out/backup_v1).
@@ -2173,6 +2234,7 @@ async def _run_migrations() -> None:
         await _migrate_eval_gate_axis(conn)            # #96 — #86 바로 뒤(표가 있어야)
         await _migrate_eval_improvement(conn)          # #87
         await _migrate_source_check_link(conn)         # #92
+        await _migrate_team_import(conn)               # #98 — 원장·조직 표 뒤
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 
