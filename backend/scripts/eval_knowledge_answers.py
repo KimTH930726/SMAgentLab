@@ -81,7 +81,7 @@ async def judge(client, model, question, ref, answer) -> dict:
         obj = {}
     if obj.get("label") in ("정답", "부분", "오답", "거절"):
         return obj
-    return {"label": "채점실패", "reason": ""}   # 응답은 왔는데 형식이 깨짐 — 분모에 남김(eval_answers와 같음)
+    return {"label": "채점실패", "reason": ""}   # 응답은 왔는데 형식이 깨짐 — 장애로 따로 셈(정답률에서 뺌, eval_answers와 같음)
 
 
 def _read_rows(path: Path) -> list[dict]:
@@ -123,8 +123,9 @@ async def main() -> int:
     embedding_service.load()
     async with get_conn() as conn:
         await retrieval.load_runtime_overrides_from_db(conn)
-    items = [json.loads(l) for l in Path(a.set).read_text(encoding="utf-8").splitlines() if l.strip()]
+    from knowledge_eval_set import load_items   # scripts/가 실행 경로
     async with get_conn() as conn:
+        items = await load_items(conn, a.set)
         refs = {r["id"]: r["content"] for r in await conn.fetch(
             "SELECT id, content FROM rag_knowledge WHERE id = ANY($1::int[]) AND status = 'active'",
             sorted({i for it in items for i in it["gold_ids"]}))}
@@ -187,7 +188,9 @@ async def main() -> int:
         print(f"⚠ 채점 기준·날짜가 다른 행이 섞임 {dict(rub)} — 같은 날 한 번에 채점한 파일끼리 비교할 것")
     c = collections.Counter(r["judge"]["label"] for r in rows)
     print(f"지식 답 {len(rows)}개({len(items)}문항×{a.repeat}): " + " · ".join(f"{k} {v}" for k, v in c.most_common()))
-    scored = [r for r in rows if r["judge"]["label"] != "판정불가"]
+    from trustkit.eval.summary import failure_qids, scored_rows
+    scored = scored_rows(rows)   # 판정불가·장애(게이트웨이 거부 등) 문항 제외 — 평가 게이트와 같은 규칙(10/29)
+    n_fail = len(failure_qids(rows))
     per: dict = collections.defaultdict(list)
     for r in scored:
         per[r["qid"]].append(1.0 if r["judge"]["label"] == "정답" else 0.0)
@@ -196,7 +199,8 @@ async def main() -> int:
     if qs:
         e = estimate([sum(per[q]) / len(per[q]) for q in qs], [cl[q] for q in qs])
         ci = f"{e['lo']:.0%}–{e['hi']:.0%}" if e["lo"] is not None else "계산 불가"
-        print(f"  정답률 {e['mean']:.1%} (95% 구간 {ci}, 원문 묶음 {len(set(cl.values()))}개, 판정불가 {len(rows) - len(scored)} 제외)")
+        print(f"  정답률 {e['mean']:.1%} (95% 구간 {ci}, 원문 묶음 {len(set(cl.values()))}개, 판정불가·장애 {len(rows) - len(scored)}줄 제외"
+              f" — 답 못 냄 {n_fail}문항)")
     gic = [r for r in scored if r["gold_in_context"]]
     nog = [r for r in scored if not r["gold_in_context"]]
     print(f"  정답 조각이 문맥에 있음 {len(gic)}: 오답·부분·거절 {sum(r['judge']['label'] in ('오답', '부분', '거절') for r in gic)} "

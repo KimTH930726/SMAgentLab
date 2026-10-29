@@ -1450,7 +1450,7 @@ async def _migrate_ai_decision_ledger(conn) -> None:
 async def _migrate_eval_gate_run(conn) -> None:
     """평가 게이트 판정 기록 (2026-10-23, #86, 평가 게이트 개편 1단계 — eval-gate-redesign §4-2). 멱등.
     scripts/eval_gate.py --save가 한 줄씩 쓰고 화면은 읽기만(재계산 없음). 질문·답 원문은 넣지 않는다 — qid·라벨·숫자만.
-    기준선은 한 행만(부분 고유 인덱스) — 옮길 때는 옛 줄을 먼저 내리는 트랜잭션."""
+    기준선은 축마다 한 행(#96 부분 고유 인덱스) — 옮길 때는 옛 줄을 먼저 내리는 트랜잭션."""
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS eval_gate_run (
             id BIGSERIAL PRIMARY KEY,
@@ -1469,8 +1469,22 @@ async def _migrate_eval_gate_run(conn) -> None:
             notes TEXT,
             CHECK (kind <> 'baseline' OR verdict IS NULL)
         )""")
-    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_gate_one_baseline ON eval_gate_run (is_baseline) WHERE is_baseline")
+    # 기준선 고유 인덱스는 #96(축마다 한 줄)이 만든다 — 여기서 옛 "전체 한 줄" 인덱스를 만들면 기동마다 #96이 다시 지워야 한다
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_gate_run_at ON eval_gate_run (run_at DESC)")
+
+
+async def _migrate_eval_gate_axis(conn) -> None:
+    """#96(10/29, 운영 질의 감시 설계 §3-5 — 사용자 "개발 시작") 판정 기록에 축 칸 — 정책서(policy)·지식(knowledge, 컨플 합성 문항 등).
+    기준선은 축마다 한 줄: 예전 "전체 한 줄" 인덱스로는 지식 기준선을 넣으면 정책서 기준선이 밀려났다. 기존 행은 전부 정책서 측정. 멱등."""
+    await conn.execute("ALTER TABLE eval_gate_run ADD COLUMN IF NOT EXISTS axis TEXT NOT NULL DEFAULT 'policy'")
+    await conn.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'eval_gate_run_axis_check') THEN
+                ALTER TABLE eval_gate_run ADD CONSTRAINT eval_gate_run_axis_check CHECK (axis IN ('policy', 'knowledge'));
+            END IF;
+        END $$""")
+    await conn.execute("DROP INDEX IF EXISTS uq_eval_gate_one_baseline")
+    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_gate_baseline_per_axis ON eval_gate_run (axis) WHERE is_baseline")
 
 
 async def _migrate_drop_v1_eval_tables(conn) -> None:
@@ -2148,6 +2162,7 @@ async def _run_migrations() -> None:
         await _migrate_drop_knowledge_category(conn)   # #84 — 옛 칸·표를 쓰는 마이그레이션들(#60·#72 등)보다 뒤
         await _migrate_ai_decision_ledger(conn)        # #85
         await _migrate_eval_gate_run(conn)             # #86
+        await _migrate_eval_gate_axis(conn)            # #96 — #86 바로 뒤(표가 있어야)
         await _migrate_eval_improvement(conn)          # #87
         await _migrate_source_check_link(conn)         # #92
         await _cleanup_stale_generating_messages(conn)

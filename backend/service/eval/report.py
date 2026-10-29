@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.database import get_conn
+from trustkit.eval.summary import scored_rows
 
 GOLDEN_DIR = Path("/app/eval_out/golden_v0/reviewed")
 _TABLE = re.compile(r"\|.*\||\t|~\s*\d|이상.*미만|구간")
@@ -124,7 +125,7 @@ async def build_report() -> Optional[dict]:
     from trustkit.eval.gate import per_question
 
     async with get_conn() as conn:
-        base = await conn.fetchrow("SELECT * FROM eval_gate_run WHERE is_baseline")
+        base = await conn.fetchrow("SELECT * FROM eval_gate_run WHERE is_baseline AND axis = 'policy'")   # 진단·개선 후보는 정책서 축만(#96)
         if not base:
             return None
         base = _row(base)
@@ -158,8 +159,8 @@ async def build_report() -> Optional[dict]:
                 missing.append(name)
             return files.rows_by_qid(p) if p else {}
         ans_rows, retr_rows = await asyncio.to_thread(_read, inputs.get("answers_after")), await asyncio.to_thread(_read, inputs.get("retrieval_after"))
-        flat = [{"qid": r["qid"], "label": (r.get("judge") or {}).get("label"), "type": r.get("type"), "rep": r.get("rep", 0)}
-                for rs in ans_rows.values() for r in rs if (r.get("judge") or {}).get("label") not in (None, "판정불가")]
+        flat = [{"qid": r["qid"], "label": r["judge"]["label"], "type": r.get("type"), "rep": r.get("rep", 0)}
+                for r in scored_rows(r for rs in ans_rows.values() for r in rs)]   # 판정 기록 숫자와 같은 규칙(eval_gate)
         acc, meta = per_question(flat)
         from service.eval.improve import LOCKED_TYPES
         failed = sorted(q for q, a in acc.items() if a < 0.5)
@@ -252,9 +253,8 @@ def layer_qids(answers: Optional[dict], retrieval: Optional[dict], mode: str = "
         r = rs_mode[-1]
         if not r.get("hit"):
             missed.setdefault(r.get("type") or "-", []).append(q)
-    rows = [{"qid": q, "label": (x.get("judge") or {}).get("label"), "type": x.get("type")}
-            for q, xs in (answers or {}).items() for x in xs
-            if (x.get("judge") or {}).get("label") and (x.get("judge") or {}).get("label") != "판정불가"]
+    rows = [{"qid": x["qid"], "label": x["judge"]["label"], "type": x.get("type")}
+            for x in scored_rows({**x, "qid": q} for q, xs in (answers or {}).items() for x in xs)]   # 판정 기록 숫자와 같은 규칙(eval_gate)
     acc, meta = per_question(rows)
     wrong: dict = {}
     for q, a in acc.items():

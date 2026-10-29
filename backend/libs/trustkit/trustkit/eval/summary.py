@@ -13,6 +13,28 @@ from typing import Iterable, Mapping
 from trustkit.eval.gate import per_question
 from trustkit.eval.stats import estimate
 
+# 정답률 분모에서 빼는 라벨. 판정불가 = 정답 데이터가 모두 꺼짐. 오류·채점실패 = 답 생성(게이트웨이 거부·연결 실패)이나 채점이 안 된 장애 —
+# 답 품질과 섞지 않고 따로 센다(10/29 사용자: 지식 기준선 82.1% = 거부 빼고 · 거부 11건 따로). 화면·게이트·리포트가 같은 규칙.
+FAILURE_LABELS = ("오류", "채점실패")
+NOT_SCORED = ("판정불가", *FAILURE_LABELS)
+
+
+def _label(r: Mapping):
+    return (r.get("judge") or {}).get("label") if "judge" in r else r.get("label")
+
+
+def failure_qids(rows: Iterable[Mapping]) -> set:
+    """답을 못 낸 문항 — 회차 하나라도 장애면 그 문항 전체(회차 일부만 빼면 정답률과 "답 못 냄" 양쪽에 다 잡힌다, 리뷰 10/29 L1).
+    행 = 결과 파일 줄({qid, judge: {label}}) 또는 {qid, label}."""
+    return {r["qid"] for r in rows if r.get("qid") and _label(r) in FAILURE_LABELS}
+
+
+def scored_rows(rows: Iterable[Mapping]) -> list:
+    """정답률에 넣는 줄 — 라벨이 있고 판정불가가 아니며, 장애 문항(failure_qids)이 아닌 것. 불변식: 채점된 문항 + 장애 문항 + 판정불가뿐인 문항 = 세트."""
+    rows = list(rows)
+    bad = failure_qids(rows)
+    return [r for r in rows if _label(r) and _label(r) not in NOT_SCORED and r.get("qid") not in bad]
+
 
 def golden_version(qids: Iterable[str]) -> str:
     """"문항 수:sha1 앞 12자" — 순서·중복과 무관(집합)."""

@@ -202,7 +202,9 @@ async def test_clarify_returns_options_without_llm_log_or_cache(monkeypatch):
     assert calls == []
     assert {"type": "clarify", **cf} in events
     assert [e["data"] for e in events if e["type"] == "token"] == ["어느 부분을 볼까요?"]
-    assert upd.await_args.kwargs["metadata"] == {"clarify": cf}
+    md = upd.await_args.kwargs["metadata"]
+    assert set(md) == {"clarify", "trace"} and md["clarify"] == cf   # v2.187 질의 기록(trace)도 같이 — 되묻기 답에도 남는다
+    assert md["trace"]["clarify"] is True
     log.assert_not_awaited()
     set_cached.assert_not_awaited()
 
@@ -429,7 +431,8 @@ async def test_partial_answer_then_error_marks_degraded_without_clearing_sources
     events = await _run()
     last_meta = [e for e in events if e["type"] == "meta"][-1]
     assert last_meta.get("degraded") is True and "results" not in last_meta and "policy_citations" not in last_meta   # 근거 카드 유지(재리뷰 D1)
-    assert upd.await_args.args[2] == "failed" and upd.await_args.kwargs["metadata"] == {"degraded": True}
+    md = upd.await_args.kwargs["metadata"]
+    assert upd.await_args.args[2] == "failed" and set(md) == {"degraded", "trace"} and md["degraded"] is True   # 실패 답도 기록 유지(v2.187)
     assert not [e for e in events if e["type"] == "token" and e["data"] == "[처리 오류]"]   # 받은 답 뒤에 오류 문구를 붙이지 않음
     assert events[-1]["status"] == "failed"
 

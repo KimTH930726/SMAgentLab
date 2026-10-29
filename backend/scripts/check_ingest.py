@@ -168,7 +168,7 @@ async def main() -> int:
     await init_pool()
     try:
         async with get_conn() as conn:
-            run = await conn.fetchrow("SELECT id, label, summary FROM eval_gate_run WHERE " + ("id = $1" if a.run else "is_baseline"),
+            run = await conn.fetchrow("SELECT id, label, summary FROM eval_gate_run WHERE " + ("id = $1" if a.run else "is_baseline AND axis = 'policy'"),   # 기준선은 정책서 축(#96)
                                       *([a.run] if a.run else []))
             results = []
             for key, store, name, ref, bad_sql, total_sql in CHECKS:
@@ -189,8 +189,9 @@ async def main() -> int:
             summary = json.loads(run["summary"]) if isinstance(run["summary"], str) else run["summary"]
             ans_p = files.find_result((summary.get("inputs") or {}).get("answers_after"))
             if ans_p:
+                from trustkit.eval.summary import scored_rows   # 판정불가·장애(게이트웨이 거부 등) 제외 — 평가 게이트와 같은 규칙(10/29)
                 ans = [{"qid": r["qid"], "label": r["judge"]["label"], "type": r.get("type"), "rep": r.get("rep", 0)}
-                       for r in _rows(ans_p) if (r.get("judge") or {}).get("label") not in (None, "판정불가")]
+                       for r in scored_rows(_rows(ans_p))]
                 # 잠근 시험지(사람·실사용)는 빼고 — 이 정답률·영향 문항이 개선 후보를 만든다(고칠 때 잠근 문항을 보지 않는 원칙, 리뷰 M1)
                 from service.eval.improve import split_locked
                 ans, _ = split_locked(ans)

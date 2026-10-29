@@ -102,10 +102,13 @@ async def main() -> int:
     await init_pool()
     try:
         async with get_conn() as conn:
-            run = await conn.fetchrow("SELECT id, label, summary FROM eval_gate_run WHERE " + ("id = $1" if a.run else "is_baseline"),
+            run = await conn.fetchrow("SELECT id, label, summary, axis FROM eval_gate_run WHERE " + ("id = $1" if a.run else "is_baseline AND axis = 'policy'"),   # 기준선은 정책서 축(#96)
                                       *([a.run] if a.run else []))
         if not run:
             print("판정 기록 없음" + ("" if a.run else "(기준선 없음)"))
+            return 2
+        if run["axis"] != "policy":   # 진단·후보는 정책서 문항으로만 — 지식 판정으로 만든 후보는 운영 반영이 막혀 쓸 수 없다(리뷰 10/29 L3)
+            print(f"판정 #{run['id']}은 지식 축 — 진단·개선 후보는 정책서 축 판정만")
             return 2
         summary = json.loads(run["summary"]) if isinstance(run["summary"], str) else run["summary"]
         inputs = summary.get("inputs") or {}
@@ -115,8 +118,10 @@ async def main() -> int:
             print(f"답 결과 파일을 못 찾음: {inputs.get('answers_after')} — --dir 확인")
             return 2
         judged = _rows(ans_p)
+        # "오류"(답 생성 실패)는 일부러 남긴다 — 진단의 LLM 오류 칸(llm_error)이 이걸로 "답 품질 문제가 아님"을 가른다. 채점실패(채점기 출력 깨짐)는
+        # 답이 맞는지 모르는 줄이라 뺀다(오답으로 세면 후보가 생긴다, 리뷰 10/29 M3)
         rows = [{"qid": r["qid"], "label": r["judge"]["label"], "type": r.get("type"), "error": bool(r.get("error")), "rep": r.get("rep", 0)}
-                for r in judged if (r.get("judge") or {}).get("label") and r["judge"]["label"] != "판정불가"]
+                for r in judged if (r.get("judge") or {}).get("label") and r["judge"]["label"] not in ("판정불가", "채점실패")]
         retr = _rows(ret_p) if ret_p else []
         if retr:
             hits = {r["qid"]: bool(r["hit"]) for r in retr if r.get("set") != "negative"}

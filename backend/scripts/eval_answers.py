@@ -450,7 +450,7 @@ async def _judge_one(client, model: str, r: dict) -> dict:
         from shared.json_utils import parse_json_object
         obj = parse_json_object(resp.json()["choices"][0]["message"]["content"])
         if not isinstance(obj, dict) or obj.get("label") not in LABELS:
-            return {"label": "채점실패", "reason": "채점기 출력이 잘렸거나 형식이 깨짐 — 정답으로 세지 않음(분모 포함)"}
+            return {"label": "채점실패", "reason": "채점기 출력이 잘렸거나 형식이 깨짐 — 장애로 따로 셈(정답률에서 뺌)"}
         # 답 없는 질문에서 "거절"은 올바른 답 — 정해진 문구가 아닌 다른 말로 거절해 채점기가 거절이라 붙여도 정답으로(리뷰 M2 10/21)
         label = "정답" if obj["label"] == "거절" else obj["label"]
         return {"label": label, "reason": str(obj.get("reason") or "")[:200]}
@@ -462,7 +462,7 @@ async def _judge_one(client, model: str, r: dict) -> dict:
         from shared.json_utils import parse_json_object
         obj = parse_json_object(resp.json()["choices"][0]["message"]["content"])
         if not isinstance(obj, dict) or obj.get("label") not in LABELS:
-            return {"label": "채점실패", "reason": "채점기 출력이 잘렸거나 형식이 깨짐 — 정답으로 세지 않음(분모 포함)"}
+            return {"label": "채점실패", "reason": "채점기 출력이 잘렸거나 형식이 깨짐 — 장애로 따로 셈(정답률에서 뺌)"}
         return {"label": obj["label"], "reason": str(obj.get("reason") or "")[:200]}
     nav = _is_nav(r)
     resp = await client.post(f"{JUDGE_URL}/chat/completions", json={
@@ -473,7 +473,7 @@ async def _judge_one(client, model: str, r: dict) -> dict:
     from shared.json_utils import parse_json_object
     obj = parse_json_object(resp.json()["choices"][0]["message"]["content"])
     if not isinstance(obj, dict) or obj.get("label") not in LABELS:
-        return {"label": "채점실패", "reason": "채점기 출력이 잘렸거나 형식이 깨짐 — 정답으로 세지 않음(분모 포함)"}
+        return {"label": "채점실패", "reason": "채점기 출력이 잘렸거나 형식이 깨짐 — 장애로 따로 셈(정답률에서 뺌)"}
     if nav:
         label, reason, missing, extra = _nav_reconcile(obj, len(r["ref_names"]), r["answer"])
         label = label if label in LABELS else "판정불가"
@@ -581,8 +581,10 @@ def paired_line(rows: list[dict], other: dict) -> str:
 
 
 def _scored(rows: list[dict]) -> list[dict]:
-    """정확도 분모 — 판정불가(정답 정책이 전부 반려·폐기돼 채점 기준이 없음)만 뺀다. 채점실패(채점기 출력 깨짐)는 분모에 남긴다(정답 아님)."""
-    return [r for r in rows if r["judge"]["label"] != "판정불가"]
+    """정확도 분모 — 판정불가(정답 정책이 전부 반려·폐기돼 채점 기준이 없음)와 장애 문항(오류·채점실패 — 게이트웨이 거부·연결·채점기 출력 깨짐,
+    회차 하나라도면 그 문항 전체)을 뺀다. 평가 게이트·화면과 같은 규칙(trustkit scored_rows, 10/29)."""
+    from trustkit.eval.summary import scored_rows
+    return scored_rows(rows)
 
 
 def first_rep(rows: list[dict]) -> list[dict]:
@@ -597,12 +599,16 @@ def first_rep(rows: list[dict]) -> list[dict]:
 
 def _summary(rows: list[dict]) -> str:
     reps = max((r.get("rep", 0) for r in rows), default=0) + 1
-    rows = first_rep(rows) if reps > 1 else rows
-    out = collections.Counter(r["judge"]["label"] for r in rows if r["judge"]["label"] == "판정불가")
+    from trustkit.eval.summary import failure_qids
+    bad = failure_qids(rows)   # 전 회차 기준 — 2회차 이후에만 장애가 난 문항도 빠지게(회차 고르기 전에, 재리뷰 L2)
+    out = collections.Counter(r["judge"]["label"] for r in (first_rep(rows) if reps > 1 else rows) if r["judge"]["label"] == "판정불가")
+    if bad:
+        out["장애(답 못 냄·채점 실패)"] = len(bad)
     rows = _scored(rows)
+    rows = first_rep(rows) if reps > 1 else rows
     n = len(rows) or 1
     c = collections.Counter(r["judge"]["label"] for r in rows)
-    lines = [("(라벨 분포는 1회차 기준 — 정답률·구간은 아래 전 회차 평균)\n" if reps > 1 else "") + f"전체 {len(rows)}문항: " + " · ".join(f"{k} {c.get(k, 0)}({c.get(k, 0) / n * 100:.0f}%)" for k in (*LABELS, "오류", "채점실패") if c.get(k))
+    lines = [("(라벨 분포는 1회차 기준 — 정답률·구간은 아래 전 회차 평균)\n" if reps > 1 else "") + f"전체 {len(rows)}문항: " + " · ".join(f"{k} {c.get(k, 0)}({c.get(k, 0) / n * 100:.0f}%)" for k in LABELS if c.get(k))
              + (" (" + " · ".join(f"{k} {v}" for k, v in sorted(out.items())) + " — 분모 제외)" if out else "")]
     by_type: dict = collections.defaultdict(collections.Counter)
     for r in rows:
@@ -623,7 +629,7 @@ def _summary(rows: list[dict]) -> str:
 
 
 def _aggregate(rows: list[dict]) -> dict:
-    rows = _scored(first_rep(rows))
+    rows = first_rep(_scored(rows))
     counts = dict(collections.Counter(r["judge"]["label"] for r in rows))
     by_type: dict = {}
     for r in rows:

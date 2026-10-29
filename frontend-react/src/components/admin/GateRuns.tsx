@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { getBaselineRun, getLayerQuestions, type GateRunDetail } from '../../api/eval';
+import { getBaselineRun, getLayerQuestions, type GateAxis, type GateRunDetail } from '../../api/eval';
 import { layerOf, lockedAccuracy, mergeLayers } from '../../utils/evalLayers';
 import { useAuthStore } from '../../store/useAuthStore';
 import { QuestionDetailModal } from './QuestionDetailModal';
@@ -24,10 +24,17 @@ const LABELS = [
 const pct = (x: number | null | undefined, d = 1) => (x == null ? '-' : `${(x * 100).toFixed(d)}%`);
 const fmtDate = (s: string) => new Date(s).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-/** 기준선은 목록(최신 50)에서 찾지 않고 따로 받는다 — 기준선 뒤 판정이 50건 넘거나 기준선이 아직 없을 때 "불러오는 중"에 멈췄다(리뷰 M1) */
-function useBaseline() {
-  return useQuery({ queryKey: ['eval-gate-baseline'], queryFn: getBaselineRun, staleTime: 30_000 });
+/** 기준선은 목록(최신 50)에서 찾지 않고 따로 받는다 — 기준선 뒤 판정이 50건 넘거나 기준선이 아직 없을 때 "불러오는 중"에 멈췄다(리뷰 M1).
+ *  축(#96)마다 기준선이 따로 — 정책서·지식(컨플) */
+function useBaseline(axis: GateAxis) {
+  return useQuery({ queryKey: ['eval-gate-baseline', axis], queryFn: () => getBaselineRun(axis), staleTime: 30_000 });
 }
+
+/** 축마다 다른 말 — 정답이 무엇인가 · AI에게 주는 근거 수(정책서 POLICY_CONTEXT_TOP_K=10, 지식 default_top_k=3) */
+const AXIS_TEXT: Record<GateAxis, { gold: string; ctx: number }> = {
+  policy: { gold: '정답 정책', ctx: 10 },
+  knowledge: { gold: '정답 지식', ctx: 3 },
+};
 
 function NoBaseline() {
   return (
@@ -167,9 +174,10 @@ function useLayerQids(runId: number | undefined) {
   return useQuery({ queryKey: ['eval-gate-layers', runId], queryFn: () => getLayerQuestions(runId!), enabled: isAdmin && runId != null, staleTime: 60_000 });
 }
 
-export function RetrievalTab() {
+export function RetrievalTab({ axis = 'policy' }: { axis?: GateAxis }) {
   const [info, setInfo] = useState<'recall' | 'top1' | null>(null);
-  const base = useBaseline();
+  const base = useBaseline(axis);
+  const { gold, ctx } = AXIS_TEXT[axis];
   const { picker, modal } = useQuestionPicker();
   const layers = useLayerQids(base.data?.id);
   if (base.isLoading || base.error) return <Loading error={base.error} />;
@@ -188,16 +196,16 @@ export function RetrievalTab() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Stat id="recall" label="정답을 AI에게 넘김" value={pct(s.recall)} sub={`${s.hit}/${s.n}`} cta="무엇인가요?" onClick={() => setInfo('recall')} />
         <Stat id="top1" label="정답이 1순위" value={pct(s.top1_rate)} sub={`${s.top1}/${s.n}`} cta="무엇인가요?" onClick={() => setInfo('top1')} />
-        <Stat id="missed" label="정답을 못 넘긴 문항" value={String(s.n - s.hit)} sub="문항" hint="정답 정책이 AI에게 주는 근거 10개 안에 못 들어간 문항 — AI가 답을 알 수 없어 틀리기 쉬움"
+        <Stat id="missed" label="정답을 못 넘긴 문항" value={String(s.n - s.hit)} sub="문항" hint={`${gold}이 AI에게 주는 근거 ${ctx}개 안에 못 들어간 문항 — AI가 답을 알 수 없어 틀리기 쉬움`}
           tone={s.n - s.hit > 0 ? 'bad' : undefined} onClick={openMissed} />
       </div>
-      <MetricInfo open={info === 'recall'} onClose={() => setInfo(null)} title="정답을 AI에게 넘김 (Recall@10)"
-        what="문항마다 사람이 확인한 정답 정책이 있습니다. 실제 채팅과 같은 검색으로 그 질문을 찾았을 때, 정답 정책이 AI에게 주는 근거 10개 안에 들어갔는지를 봅니다. 못 들어가면 AI는 답을 알 수 없습니다."
+      <MetricInfo open={info === 'recall'} onClose={() => setInfo(null)} title={`정답을 AI에게 넘김 (Recall@${ctx})`}
+        what={`문항마다 정답(${gold})이 정해져 있습니다. 실제 채팅과 같은 검색으로 그 질문을 찾았을 때, ${gold}이 AI에게 주는 근거 ${ctx}개 안에 들어갔는지를 봅니다. 못 들어가면 AI는 답을 알 수 없습니다.`}
         calc={`넘긴 문항 ${s.hit} ÷ 정답 있는 문항 ${s.n} = ${pct(s.recall)} · 답 없는 질문은 찾을 정답이 없어 뺌`}
         rows={rows.map(({ name, v }) => ({ name, v: v.hit / v.n, n: v.n }))}
         action={openMissed ? { label: `못 넘긴 ${allMissed.length}문항 보기`, onClick: openMissed } : undefined} />
       <MetricInfo open={info === 'top1'} onClose={() => setInfo(null)} title="정답이 1순위 (Top-1)"
-        what="근거 10개 중 정답 정책이 맨 첫 자리였는지를 봅니다. 넘기기만 하면 AI가 답할 수는 있지만, 1순위일수록 화면의 근거 카드와 답이 정확해지기 쉽습니다. 예: 정답이 3순위면 '넘김'은 성공, '1순위'는 실패."
+        what={`근거 ${ctx}개 중 ${gold}이 맨 첫 자리였는지를 봅니다. 넘기기만 하면 AI가 답할 수는 있지만, 1순위일수록 화면의 근거 카드와 답이 정확해지기 쉽습니다. 예: 정답이 3순위면 '넘김'은 성공, '1순위'는 실패.`}
         calc={`1순위 문항 ${s.top1} ÷ 정답 있는 문항 ${s.n} = ${pct(s.top1_rate)}`}
         rows={rows.map(({ name, v }) => ({ name, v: v.top1 / v.n, n: v.n }))} />
       <FilesMissing names={layers.data?.files_missing} error={layers.error} />
@@ -255,9 +263,10 @@ const LABEL_BAR: Record<string, string> = {
   정답: 'bg-emerald-500 dark:bg-emerald-400', 부분: 'bg-amber-500 dark:bg-amber-400', 오답: 'bg-rose-500 dark:bg-rose-400', 거절: 'bg-slate-500',
 };
 
-export function AnswerTab() {
+export function AnswerTab({ axis = 'policy' }: { axis?: GateAxis }) {
   const [info, setInfo] = useState<'locked' | 'total' | null>(null);
-  const base = useBaseline();
+  const base = useBaseline(axis);
+  const { gold } = AXIS_TEXT[axis];
   const { picker, modal } = useQuestionPicker();
   const layers = useLayerQids(base.data?.id);
   if (base.isLoading || base.error) return <Loading error={base.error} />;
@@ -272,6 +281,7 @@ export function AnswerTab() {
   const lk = lockedAccuracy(s.by_type);
   const totalLabels = LABELS.reduce((t, l) => t + (s.labels[l.key] ?? 0), 0);
   const okWrong = s.retrieval_ok_answer_wrong ?? [];
+  const failures = s.failures ?? [];
   const pick = picker(base.data.id);
   return (
     <div className="space-y-4">
@@ -303,7 +313,7 @@ export function AnswerTab() {
         calc={lk ? `문항마다 ${s.reps}회 답한 정답 비율의 평균 · ${lk.n}문항 → ${pct(lk.accuracy)}` : '-'}
         rows={rows.filter((r) => ['사람 문항', '실사용'].includes(r.name)).map(({ name, v }) => ({ name, v: v.accuracy, n: v.n }))} />
       <MetricInfo open={info === 'total'} onClose={() => setInfo(null)} title="전체 정답률"
-        what="실제 채팅과 같은 경로로 답한 뒤 채점기가 정답 정책 원문과 대조해 정답·부분·오답·거절을 매깁니다. 대괄호는 95% 구간 — 같은 원문에서 나온 문항끼리는 묶어서 계산해 너무 좁게 잡히지 않게 했습니다."
+        what={`실제 채팅과 같은 경로로 답한 뒤 채점기가 ${gold} 원문과 대조해 정답·부분·오답·거절을 매깁니다. 대괄호는 95% 구간 — 같은 원문에서 나온 문항끼리는 묶어서 계산해 너무 좁게 잡히지 않게 했습니다. 답을 못 낸 문항(게이트웨이 거부·연결 실패)은 답 품질이 아니라 장애라 빼고 따로 셉니다.`}
         calc={`문항마다 ${s.reps}회 답의 정답 비율 → ${s.n}문항 평균 ${pct(s.accuracy)}${s.lo != null ? ` (95% 구간 ${pct(s.lo)}–${pct(s.hi)})` : ''}`}
         rows={rows.map(({ name, v }) => ({ name, v: v.accuracy, n: v.n }))} />
       <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 space-y-2">
@@ -320,9 +330,17 @@ export function AnswerTab() {
           {!!jm.answer_model?.length && <> · 답 생성 {jm.answer_model.join(', ')}</>}
         </p>
       </div>
+      {failures.length > 0 && (
+        <button className="w-full rounded-lg border border-slate-700 bg-slate-800 p-3 text-left disabled:cursor-default" data-testid="answer-failures"
+          disabled={!pick} onClick={() => pick?.(failures, 0, '답을 못 낸 문항')}
+          title="게이트웨이 거부·연결 실패·채점 실패로 답이 없는 문항 — 답 품질과 섞지 않으려고 정답률에서 뺐습니다(장애). 문항을 열면 거부 사유가 보입니다">
+          <span className="text-sm text-slate-300">답을 못 냄 <b>{failures.length}</b>문항 <span className="text-xs text-slate-500">· 정답률에서 뺌 ⓘ</span></span>
+          {pick && <span className="ml-2 text-xs text-indigo-600 dark:text-indigo-400">문항 보기 →</span>}
+        </button>
+      )}
       {okWrong.length > 0 && (
         <button className="w-full rounded-lg border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 p-3 text-left disabled:cursor-default"
-          disabled={!pick} onClick={() => pick?.(okWrong, 0, '검색은 맞았는데 답이 틀린 문항')} title="정답 정책이 문맥에 들어갔는데 회차 과반이 틀린 문항 — 답 생성·문맥 다듬기 쪽 문제">
+          disabled={!pick} onClick={() => pick?.(okWrong, 0, '검색은 맞았는데 답이 틀린 문항')} title={`${gold}이 문맥에 들어갔는데 회차 과반이 틀린 문항 — 답 생성·문맥 다듬기 쪽 문제`}>
           <span className="text-sm text-amber-800 dark:text-amber-300">검색은 맞았는데 답이 틀림 <b>{okWrong.length}</b>문항</span>
           {pick && <span className="ml-2 text-xs text-indigo-600 dark:text-indigo-400">문항 보기 →</span>}
         </button>

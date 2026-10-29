@@ -163,7 +163,7 @@
 | answers | jsonb — `answer_gate` 출력 그대로(유형별 전/후·차이·구간·up/down 수·failed) + 나빠진 qid 목록 |
 | summary | jsonb — 후보(after) 쪽 헤드라인: Recall·Top-1·정답률·구간·라벨 분포·층별·검색 맞고 답 틀림 |
 | judge_meta | jsonb — 채점 모델·채점일·채점 기준(rubric)·반복 수·답 생성 모델(지금 결과 파일에 없음 → collect에 기록 추가) |
-| is_baseline | 현재 기준선 표시(한 행만) |
+| is_baseline | 현재 기준선 표시 — 축(axis, #96 v2.188: 정책서·지식)마다 한 행 |
 | git_commit, notes | |
 
 - 쓰기: `eval_gate.py --save "라벨"`(판정과 동시에), `eval_gate.py --baseline --save`(단독 측정 → 기준선). 계산은 지금 `trustkit.eval.gate` 그대로 —

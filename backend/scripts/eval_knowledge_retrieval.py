@@ -35,7 +35,9 @@ async def main() -> None:
         await retrieval.load_runtime_overrides_from_db(conn)
     d, th = retrieval.get_search_defaults(), retrieval.get_thresholds()
     top_k = int(d["default_top_k"])
-    items = [json.loads(l) for l in Path(a.set).read_text(encoding="utf-8").splitlines() if l.strip()]
+    from knowledge_eval_set import load_items   # scripts/가 실행 경로
+    async with get_conn() as conn:
+        items = await load_items(conn, a.set)
     rows = []
     for it in items:
         vec = await embedding_service.embed(it["question"])
@@ -49,7 +51,8 @@ async def main() -> None:
                                                 keyword_rescue=retrieval.KEYWORD_RESCUE)
         ctx = [r.id for r in chat if retrieval.is_adopted(r, th)]
         rows.append({"set": "knowledge", "qid": it["qid"], "type": "knowledge", "cluster": it.get("cluster"),
-                     "hit": bool(gold & set(ctx)), "at10": rank is not None, "rank": rank,
+                     "hit": bool(gold & set(ctx)), "top1": bool(ctx) and ctx[0] in gold,   # top1 = 문맥 첫 자리가 정답(판정 기록 Top-1)
+                     "at10": rank is not None, "rank": rank,
                      "in_topk_not_adopted": bool(rank and rank <= top_k and not (gold & set(ctx)))})
     n = len(rows) or 1
     ranks = [r["rank"] for r in rows if r["rank"]]

@@ -6,6 +6,9 @@
 
 - 답 파일: eval_answers judge 결과(같은 날 채점한 것끼리 — 채점기가 날마다 흔들림). 회차(rep)는 문항별 평균.
 - 검색 파일: eval_golden_v0 --details 결과(정답 세트 줄만, qid로 짝).
+- --axis: 정책서(기본)·지식 — 기준선은 축마다 한 줄. 지식 = scripts/eval_knowledge_retrieval·eval_knowledge_answers 결과.
+- 답을 못 낸 문항(오류·채점실패 — 게이트웨이 거부 등)은 정답률에서 빼고 따로 센다. 새로 못 낸 문항이 생기면 게이트 실패(비교에서 빠져 하락을 못 봄).
+- 결과 파일이 지식 측정(type/set = knowledge)인데 --axis가 다르면 입력 오류 — 축을 빠뜨려 다른 축 기준선을 덮지 않게.
 - --save: 판정 기록(eval_gate_run, 2026-10-23 평가 게이트 개편 1단계)에 한 줄 — 품질 › 평가 게이트 화면이 이것을 읽기만 한다.
   DB를 쓰므로 컨테이너 안에서. 통과한 판정은 기준선이 된다(--keep-baseline이면 그대로), --baseline은 판정 없이 기준선만.
 출력은 숫자만(질문·답 원문 없음, 기록도 qid·라벨·숫자만). 종료 코드: 통과 0, 실패 1, 입력 오류 2 — 자동 실행에 그대로 쓸 수 있게.
@@ -23,20 +26,29 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "libs" / "trustkit"))   # 호스트에서도(표준 라이브러리만)
 from trustkit.eval.gate import answer_gate, per_question, retrieval_gate  # noqa: E402
-from trustkit.eval.summary import answer_summary, golden_version, retrieval_ok_answer_wrong, retrieval_summary  # noqa: E402
+from trustkit.eval.summary import (answer_summary, failure_qids, golden_version,  # noqa: E402
+                                   retrieval_ok_answer_wrong, retrieval_summary, scored_rows)
 
 
 def _rows(path: str) -> list[dict]:
     return [json.loads(l) for l in Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
+def _failures(rows: list[dict]) -> list[str]:
+    """답을 못 낸 문항(회차 하나라도 오류·채점실패 — 게이트웨이 거부 등) — 정답률엔 안 넣고 따로 보인다(trustkit failure_qids)."""
+    return sorted(failure_qids(rows))
+
+
 def _answer_rows(rows: list[dict]) -> list[dict]:
-    out = []
-    for r in rows:
-        lab = (r.get("judge") or {}).get("label")
-        if lab and lab != "판정불가":   # 판정불가(정답 정책이 모두 비활성)만 분모에서 뺀다 — eval_answers와 같은 규칙
-            out.append({"qid": r["qid"], "label": lab, "type": r.get("type"), "cluster": r.get("cluster"), "rep": r.get("rep", 0)})
-    return out
+    # 판정불가(정답 데이터가 모두 꺼짐)·장애 문항(회차 하나라도 오류·채점실패면 그 문항 전체)은 분모에서 뺀다 — 리포트·층별 문항과 같은 규칙
+    return [{"qid": r["qid"], "label": r["judge"]["label"], "type": r.get("type"), "cluster": r.get("cluster"), "rep": r.get("rep", 0)}
+            for r in scored_rows(rows)]
+
+
+def _axis_of(rows: list[dict]) -> str | None:
+    """결과 파일이 어느 축의 측정인가 — 지식 측정(eval_knowledge_*)은 줄마다 type/set = knowledge. 섞였거나 비면 None(판단 안 함)."""
+    kinds = {"knowledge" if (r.get("type") == "knowledge" or r.get("set") == "knowledge") else "policy" for r in rows if r.get("qid")}
+    return kinds.pop() if len(kinds) == 1 else None
 
 
 def _judge_meta(rows: list[dict]) -> dict:
@@ -113,6 +125,7 @@ def evaluate(a: argparse.Namespace) -> dict:
         if hits is None:   # 검색 파일이 없으면 답 측정이 기록한 "정답 정책이 문맥에 있었나"로
             hits = {r["qid"]: bool(r.get("gold_in_context")) for r in raw_a}
         s["retrieval_ok_answer_wrong"] = retrieval_ok_answer_wrong(hits, ans_a)
+        s["failures"] = _failures(raw_a)
         rec["summary_answers"] = s
         if a.answers_before:
             raw_b = _rows(a.answers_before)
@@ -126,7 +139,17 @@ def evaluate(a: argparse.Namespace) -> dict:
                 say(f"⚠ 채점 기준·날짜가 다름 {sorted(pb)} vs {sorted(pa)} — 기준 답을 같은 날 다시 채점해서 비교할 것")
             v = answer_gate(ans_b, ans_a)
             up, down = _moved(ans_b, ans_a)
-            rec["answers"] = {**v, "up_qids": up, "down_qids": down}
+            fb, fa = _failures(raw_b), s["failures"]
+            new_fail = sorted((set(fa) - set(fb)) & before_qids)   # 전 측정에 있던 문항만 — 골든셋에 새로 넣은 문항은 "전엔 답하던" 게 아니다(재리뷰 L4, 세트 차이는 따로 경고)
+            # 새로 답을 못 낸 문항은 정답률 비교에서 빠진다(짝이 없음) — 그대로 두면 "전엔 맞던 문항이 거부되는 변경"이 통과하고 기준선까지 옮겨진다
+            # (리뷰 10/29 M1). 정확도 하락 금지 원칙대로 실패로 — 연결 오류 탓이면 다시 재면 된다(잘못 통과보다 잘못 실패가 안전)
+            if new_fail:
+                v = {**v, "pass": False, "failed": [*v["failed"], "새로 답 못 냄"]}
+            rec["answers"] = {**v, "up_qids": up, "down_qids": down, "failures_before": len(fb), "failures_after": len(fa),
+                              "failures_new": new_fail}
+            if fa or fb:
+                say(f"{'⚠ ' if new_fail else ''}[장애] 답 못 냄 {len(fb)} → {len(fa)}문항(정답률에서 뺌)"
+                    + (f" — 새로 못 냄 {new_fail}: 게이트웨이 거부·연결 오류인지 확인하고 다시 잴 것" if new_fail else ""))
             rec["ok"] &= v["pass"]
             say(f"[답]   {'통과' if v['pass'] else '실패 — ' + ', '.join(v['failed'])}")
             for g, x in v["groups"].items():
@@ -141,7 +164,8 @@ def evaluate(a: argparse.Namespace) -> dict:
             say("[답]   채점된 문항 없음 — 파일 확인")
         else:
             ci = f"[{s['lo'] * 100:.1f}, {s['hi'] * 100:.1f}]" if s["lo"] is not None else "[계산불가]"
-            say(f"[답]   정답률 {s['accuracy'] * 100:.1f}% {ci} · {s['n']}문항 × {s['reps']}회")
+            say(f"[답]   정답률 {s['accuracy'] * 100:.1f}% {ci} · {s['n']}문항 × {s['reps']}회"
+                + (f" · 답 못 냄 {len(s['failures'])}문항(정답률에서 뺌)" if s["failures"] else ""))
 
     rec["golden_version"] = golden_version(after_qids)
     if before_qids and golden_version(before_qids) != rec["golden_version"]:
@@ -152,6 +176,7 @@ def evaluate(a: argparse.Namespace) -> dict:
     return rec
 
 
+AXIS_NAMES = {"policy": "정책서", "knowledge": "지식"}   # main.py #96 CHECK와 같은 값
 BASELINE_LOCK = 86_001   # service/eval/service.py와 같은 값 — 기준선을 옮기는 두 길(스크립트·API)이 같은 잠금을 잡는다
 
 
@@ -186,23 +211,23 @@ async def save(rec: dict, a: argparse.Namespace) -> int:
             async with conn.transaction():
                 # 기준선 옮기기는 한 번에 하나(API 기준선 지정과 같은 잠금) — 동시에 옮기면 둘째가 고유 인덱스에 부딪혀 기록을 잃었다(리뷰 M1)
                 await conn.execute("SELECT pg_advisory_xact_lock($1)", BASELINE_LOCK)
-                if make_baseline:
-                    await conn.execute("UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline")
+                if make_baseline:   # 기준선은 축마다 한 줄(#96) — 다른 축의 기준선은 건드리지 않는다
+                    await conn.execute("UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline AND axis = $1", a.axis)
                 if a.candidate and not await conn.fetchval("SELECT 1 FROM eval_candidate WHERE id = $1", a.candidate):
                     raise SystemExit(f"후보 #{a.candidate} 없음 — 저장 안 함")
                 rid = await conn.fetchval(
                     """INSERT INTO eval_gate_run (run_at, created_by, label, kind, golden_version, verdict, retrieval, answers, summary,
-                                                  judge_meta, is_baseline, git_commit, notes)
-                       VALUES (COALESCE($1, NOW()), $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13)
+                                                  judge_meta, is_baseline, git_commit, notes, axis)
+                       VALUES (COALESCE($1, NOW()), $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13, $14)
                        RETURNING id""",
                     run_at, a.by, a.save, rec["kind"], rec["golden_version"], verdict, j(rec["retrieval"]), j(rec["answers"]),
-                    j(summary), j(rec.get("judge_meta") or {}), make_baseline, _git_commit(a.commit), a.notes)
+                    j(summary), j(rec.get("judge_meta") or {}), make_baseline, _git_commit(a.commit), a.notes, a.axis)
                 if a.candidate:   # 이 후보를 잰 판정 — 화면의 진행 단계·문항 상세가 읽는다(#88)
                     await conn.execute("UPDATE eval_candidate SET measured_gate_run_ids = array_append(measured_gate_run_ids, $2) "
                                        "WHERE id = $1", a.candidate, rid)
     finally:
         await close_pool()
-    print(f"기록 #{rid} 저장{' · 기준선' if make_baseline else ''}")
+    print(f"기록 #{rid} 저장({AXIS_NAMES[a.axis]}){' · 기준선' if make_baseline else ''}")
     return rid
 
 
@@ -220,6 +245,8 @@ def main() -> int:
     ap.add_argument("--notes")
     ap.add_argument("--by", default="script", help="기록한 사람")
     ap.add_argument("--run-at", help="측정 시각 ISO(옛 결과 파일을 다시 기록할 때만)")
+    ap.add_argument("--axis", choices=sorted(AXIS_NAMES), default="policy",
+                    help="어느 축의 측정인가 — 정책서(policy, 기본)·지식(knowledge, 컨플 합성 문항 등). 기준선은 축마다 한 줄(#96)")
     ap.add_argument("--candidate", type=int, help="이 판정이 잰 개선 후보 id(평가 게이트 [개선]) — 진행 단계에 '측정'으로 붙는다")
     a = ap.parse_args()
     pairs = [(a.answers_before, a.answers_after), (a.retrieval_before, a.retrieval_after)]
@@ -229,6 +256,9 @@ def main() -> int:
             return 2
     elif any(bool(x) != bool(y) for x, y in pairs) or not any(x and y for x, y in pairs):
         print("입력 오류: --answers-before/after 또는 --retrieval-before/after를 짝으로 주세요")
+        return 2
+    if a.candidate and a.axis != "policy":
+        print("입력 오류: 개선 후보(--candidate)는 정책서 축만 — 자가 개선 루프는 아직 정책서 문항으로만 돈다")
         return 2
     if a.candidate and not a.save:
         print("입력 오류: --candidate는 --save와 같이(기록에 연결)")
@@ -243,6 +273,11 @@ def main() -> int:
             ok_tz = False
         if not ok_tz:   # 시간대 없는 값은 DB가 어떻게 해석할지 모른다(리뷰 L5)
             print("입력 오류: --run-at은 시간대까지 쓴 ISO 시각(예: 2026-10-21T22:44+09:00)")
+            return 2
+    for path in (a.answers_after, a.answers_before, a.retrieval_after, a.retrieval_before):
+        found = _axis_of(_rows(path)) if path else None
+        if found and found != a.axis:   # --axis를 빠뜨리면 지식 측정이 정책서 기준선을 덮는다(리뷰 10/29 M2)
+            print(f"입력 오류: {Path(path).name}은 {AXIS_NAMES[found]} 측정인데 --axis {a.axis} — --axis {found}로")
             return 2
     rec = evaluate(a)
     print("\n".join(rec["lines"]))

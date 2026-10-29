@@ -13,6 +13,7 @@ export const LAYERS: { keys: string[]; name: string; hint: string }[] = [
   { keys: ['ref_clarify'], name: '참고표 되묻기', hint: '참고표의 결과를 정하는 조건 하나를 말하지 않은 질문 — 되묻는 게 정답' },
   { keys: ['overview'], name: '개요', hint: '정책서가 무엇을 다루나·적용 대상(문서 개요) 질문' },
   { keys: ['real'], name: '실사용', hint: '정정 요청이 승인된 실제 채팅 질문 — 정답 = 고친 정책' },
+  { keys: ['knowledge'], name: '컨플 지식', hint: '컨플루언스 지식 조각마다 로컬 LLM이 만든 질문(합성) — 정답 = 그 조각' },
 ];
 
 /** 잠근 시험지(hold-out, 10/26) — 사람이 쓴 문항·실사용 문항. 고칠 때(진단·묶음·후보) 보지 않고 판정 때만 본다.

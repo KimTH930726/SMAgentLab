@@ -187,8 +187,9 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
     onError: (e) => setErr((e as Error).message),
   });
   // 운영 반영에 연결할 측정 — 실험 시작(승인) 뒤에 잰 통과 판정만(서버 adopt_error와 같은 조건)
-  const runs = useQuery({ queryKey: ['eval-gate-runs'], queryFn: () => listGateRuns(50), enabled: modal === 'adopt' });
-  const base = useQuery({ queryKey: ['eval-gate-baseline'], queryFn: getBaselineRun, enabled: modal === 'adopt' });
+  // 개선 후보는 정책서 문항으로 진단한 것 — 운영 반영도 정책서 축 측정·기준선만(#96, 서버도 막음)
+  const runs = useQuery({ queryKey: ['eval-gate-runs', 'policy'], queryFn: () => listGateRuns(50, 'policy'), enabled: modal === 'adopt' });
+  const base = useQuery({ queryKey: ['eval-gate-baseline', 'policy'], queryFn: () => getBaselineRun('policy'), enabled: modal === 'adopt' });
   // 서버 adopt_error와 같은 조건 — 이 후보를 잰 측정 · 통과 · 실험 시작 뒤 · 지금 점수보다 예전 아님 · 잠근 시험지에서 내려가지 않음
   // (반영하면 그 측정이 지금 점수가 된다 — 남의 측정·옛 측정으로 되돌아가지 않게, v2.172 리뷰 M3)
   const measured = new Set(c.measurements.map((m) => m.id));

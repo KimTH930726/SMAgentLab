@@ -12,16 +12,20 @@ from service.eval import service
 router = APIRouter(prefix="/api/eval", tags=["eval"])
 
 
+AXIS_PATTERN = "^(" + "|".join(service.AXES) + ")$"
+
+
 @router.get("/gate-runs")
-async def list_gate_runs(limit: int = Query(default=30, ge=1, le=200), user: dict = Depends(get_current_user)):
-    """판정 이력(최신순) — 헤드라인 숫자만. 나빠진 qid 등 문항 목록은 상세."""
-    return await service.list_runs(limit)
+async def list_gate_runs(limit: int = Query(default=30, ge=1, le=200), axis: Optional[str] = Query(default=None, pattern=AXIS_PATTERN),
+                         user: dict = Depends(get_current_user)):
+    """판정 이력(최신순) — 헤드라인 숫자만. 나빠진 qid 등 문항 목록은 상세. axis = 정책서(policy)·지식(knowledge), 없으면 전부."""
+    return await service.list_runs(limit, axis)
 
 
 @router.get("/gate-runs/baseline")
-async def get_gate_baseline(user: dict = Depends(get_current_user)):
-    """현재 기준선(없으면 null) — /{run_id}보다 먼저(경로 순서)."""
-    return await service.get_baseline()
+async def get_gate_baseline(axis: str = Query(default="policy", pattern=AXIS_PATTERN), user: dict = Depends(get_current_user)):
+    """그 축의 현재 기준선(없으면 null) — /{run_id}보다 먼저(경로 순서)."""
+    return await service.get_baseline(axis)
 
 
 @router.get("/gate-runs/{run_id}")

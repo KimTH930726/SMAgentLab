@@ -15,7 +15,7 @@ const LIST = ['list', 'navigation'];
 
 test('평가 게이트 [성적] 검색 성적·답 성적 — 카드 숫자 = DB, 층 합치기, 층별 놓침·틀림 = 서버, 층을 누르면 문항', async ({ page }) => {
   test.setTimeout(120_000);
-  const baseRaw = psql('SELECT id FROM eval_gate_run WHERE is_baseline');
+  const baseRaw = psql(`SELECT id FROM eval_gate_run WHERE is_baseline AND axis = 'policy'`);   // 정책서 축(#96 — 축마다 기준선)
   test.skip(!baseRaw, '기준선 없음');
   const baseId = Number(baseRaw);
   const s = JSON.parse(psql(`SELECT summary::text FROM eval_gate_run WHERE id = ${baseId}`));
@@ -66,4 +66,37 @@ test('평가 게이트 [성적] 검색 성적·답 성적 — 카드 숫자 = DB
   }
   const okWrong = s.answers.retrieval_ok_answer_wrong.length;
   if (okWrong) await expect(page.getByRole('button', { name: /검색은 맞았는데 답이 틀림/ })).toContainText(`검색은 맞았는데 답이 틀림 ${okWrong}문항`);
+});
+
+// 10/29 지식(컨플) 축(#96) — 맨 위 [정책서 | 지식(컨플)]. 지식 축은 그 축 기준선의 숫자를 보이고(정책서 기준선과 섞이지 않음),
+// 답을 못 낸 문항(게이트웨이 거부 등)은 정답률에서 빼고 따로 보인다. 단계 흐름·틀린 문항·적용 이력은 정책서 축에만.
+test('평가 게이트 지식(컨플) 축 — 카드 = 지식 기준선, 답 못 냄 따로, 정책서 전용 칸 숨김, 정책서로 돌아오면 정책서 숫자', async ({ page }) => {
+  test.setTimeout(90_000);
+  const kid = psql(`SELECT id FROM eval_gate_run WHERE is_baseline AND axis = 'knowledge'`);
+  const pid = psql(`SELECT id FROM eval_gate_run WHERE is_baseline AND axis = 'policy'`);
+  test.skip(!kid || !pid, '두 축 기준선이 다 있어야 이 시나리오를 본다');
+  const ks = JSON.parse(psql(`SELECT summary::text FROM eval_gate_run WHERE id = ${kid}`));
+  const ps = JSON.parse(psql(`SELECT summary::text FROM eval_gate_run WHERE id = ${pid}`));
+  test.skip(!ks.retrieval || !ks.answers, '지식 기준선에 검색·답 측정이 다 있어야');
+
+  await loginAdmin(page);
+  await goAdmin(page, '품질', '평가 게이트');
+  await expect(page.getByTestId('flow-검색')).toBeVisible();   // 정책서 축 = 단계 흐름 있음
+  await page.getByTestId('axis-knowledge').click();
+  await expect(page.getByTestId('flow-검색')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '틀린 문항', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '적용 이력', exact: true })).toHaveCount(0);
+
+  await expect(page.getByText(`측정 #${kid}`)).toBeVisible();
+  await expect(page.getByText(pct(ks.answers.accuracy), { exact: false }).first()).toBeVisible();
+  const fails: string[] = ks.answers.failures ?? [];
+  if (fails.length) await expect(page.getByTestId('answer-failures')).toContainText(`답을 못 냄 ${fails.length}문항`);
+  await page.getByRole('button', { name: '검색 성적', exact: true }).click();
+  const r = ks.retrieval;
+  await expect(page.getByTestId('stat-recall')).toContainText(`${pct(r.recall)}${r.hit}/${r.n}`);
+
+  await page.getByTestId('axis-policy').click();   // 돌아오면 정책서 기준선 숫자(캐시가 축끼리 섞이지 않음)
+  await page.getByRole('button', { name: '성적', exact: true }).click();
+  await page.getByRole('button', { name: '검색 성적', exact: true }).click();
+  await expect(page.getByTestId('stat-recall')).toContainText(`${pct(ps.retrieval.recall)}${ps.retrieval.hit}/${ps.retrieval.n}`);
 });

@@ -152,8 +152,9 @@ test('[운영에 반영했어요] — 통과한 측정을 고르면 후보 = 운
   test.skip(!d, '진단 없음');
   const target = d!.techniques.find((x) => x.status === 'proposed');
   test.skip(!target, '결정 전 후보 없음');
-  const baseId = psql('SELECT id FROM eval_gate_run WHERE is_baseline');
+  const baseId = psql(`SELECT id FROM eval_gate_run WHERE is_baseline AND axis = 'policy'`);
   test.skip(!baseId, '기준선 없음');
+  const otherAxis = psql(`SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM eval_gate_run WHERE is_baseline AND axis <> 'policy'`);   // #96 — 다른 축 기준선은 그대로여야
   const cid = String(target!.id);
   let gid = '';
   try {
@@ -175,15 +176,16 @@ test('[운영에 반영했어요] — 통과한 측정을 고르면 후보 = 운
     await dialog.getByRole('button', { name: '반영 완료로 기록' }).click();
     await expect.poll(() => psql(`SELECT status FROM eval_candidate WHERE id = ${cid}`)).toBe('adopted');
     expect(psql(`SELECT adopted_gate_run_id FROM eval_candidate WHERE id = ${cid}`)).toBe(gid);
-    expect(psql('SELECT id FROM eval_gate_run WHERE is_baseline')).toBe(gid);   // 반영한 측정 = 지금 점수
-    expect(psql('SELECT COUNT(*) FROM eval_gate_run WHERE is_baseline')).toBe('1');
+    expect(psql(`SELECT id FROM eval_gate_run WHERE is_baseline AND axis = 'policy'`)).toBe(gid);   // 반영한 측정 = 지금 점수
+    expect(psql(`SELECT COUNT(*) FROM eval_gate_run WHERE is_baseline AND axis = 'policy'`)).toBe('1');
+    expect(psql(`SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM eval_gate_run WHERE is_baseline AND axis <> 'policy'`)).toBe(otherAxis);
   } finally {
     // 운영 반영은 화면에서 되돌릴 수 없어(판정 기록과 묶임) 테스트가 만든 상태만 직접 되돌린다 — 후보 → 결정 전, 기준선 → 원래, 테스트 측정 줄 삭제
     psql(`UPDATE eval_candidate SET status = 'proposed', review_reason = NULL, reviewed_by_user_id = NULL, reviewed_at = NULL,
           adopted_gate_run_id = NULL${gid ? `, measured_gate_run_ids = array_remove(measured_gate_run_ids, ${gid})` : ''} WHERE id = ${cid}`);
-    psql('UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline');   // 부분 고유 인덱스 — 내리고 올리기를 따로
+    psql(`UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline AND axis = 'policy'`);   // 축마다 부분 고유 인덱스(#96) — 내리고 올리기를 따로, 다른 축은 건드리지 않음
     psql(`UPDATE eval_gate_run SET is_baseline = TRUE WHERE id = ${baseId}`);
     if (gid) psql(`DELETE FROM eval_gate_run WHERE id = ${gid} AND label = 'E2E 반영 확인용'`);
   }
-  expect(psql('SELECT id FROM eval_gate_run WHERE is_baseline')).toBe(baseId);
+  expect(psql(`SELECT id FROM eval_gate_run WHERE is_baseline AND axis = 'policy'`)).toBe(baseId);
 });

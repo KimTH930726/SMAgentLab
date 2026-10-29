@@ -71,7 +71,8 @@ def test_clarify_rows_are_scored_not_excluded():
     """재질문 문항은 "전부 보기" 답으로 채점 — 분모에서 빼지 않는다(빼면 재질문 규칙이 넓어질수록 수치가 부푼다, 리뷰 2026-10-12)."""
     assert E._judge_rule({"clarified": True, "answer": "답", "n_refs_total": 3}) is None
     rows = [{"qid": "a", "type": "t", "judge": {"label": "정답"}}, {"qid": "b", "type": "t", "judge": {"label": "채점실패"}}]
-    assert E._aggregate(rows)["total_n"] == 2 and "채점실패 1" in E._summary(rows)   # 채점기 출력 깨짐은 분모에 남는다
+    # 채점기 출력 깨짐(채점실패)은 장애로 따로 — 10/29부터 분모에서 뺀다(평가 게이트·화면과 같은 규칙, trustkit scored_rows). 개수는 그대로 보인다
+    assert E._aggregate(rows)["total_n"] == 1 and "장애(답 못 냄·채점 실패) 1 — 분모 제외" in E._summary(rows)
 
 
 def test_answer_items_multi_table_and_bullet_headings():

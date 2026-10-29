@@ -418,6 +418,10 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-re
 > 동작하지 않는다. 이 경우 업데이트 직전 백업으로 DB 복원(§4-2) 후 이미지를 되돌린다.
 > 운영 서버에는 직전 버전 이미지 1개를 남겨둔다(정리했다면 그 tar.gz을 다시 `docker load`).
 
+> ⚠️ **v2.188(평가 게이트 축, #96) 이후를 v2.187 이하로 되돌릴 때**: 옛 이미지는 기동 때 기준선 "전체 한 줄" 인덱스를 다시 만들어, 정책서·지식 기준선이
+> 둘 다 있으면 고유 위반으로 **백엔드가 뜨지 않는다**. 되돌리기 전에 지식 기준선을 내린다:
+> `UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline AND axis = 'knowledge';`
+
 ### 3-4. v2.17 → v2.119 업그레이드 시 추가 작업 (1회)
 
 자동 마이그레이션이 못 하는 일회성 작업 두 가지. 순서대로, §3-2 직후에 실행한다.

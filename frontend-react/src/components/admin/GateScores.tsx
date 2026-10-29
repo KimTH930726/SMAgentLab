@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { clsx } from 'clsx';
 import { AnswerTab, RetrievalTab } from './GateRuns';
 import type { Stage } from './GateFlow';
+import type { GateAxis } from '../../api/eval';
 
 /**
  * 평가 게이트 › [성적](10/28, 옛 [검색]·[답] 탭을 합침 — 사용자 "위 단계와 아래 탭이 관계가 안 맞는다"). 단계 흐름에서 고른 단계의 성적을 보여 준다.
@@ -15,7 +16,7 @@ const ANSWER_LAYER_HINT: Partial<Record<Stage, string>> = {
   '답 모양': '답 모양만 따로 잰 숫자는 없어요 — 아래 층별 정답률의 "목록"·"참고표 되묻기" 층이 이 단계 성적입니다',
 };
 
-export function GateScores({ stage }: { stage: Stage | null }) {
+export function GateScores({ stage, axis = 'policy' }: { stage: Stage | null; axis?: GateAxis }) {
   const [pick, setPick] = useState<Which>('answers');
   if (stage === '적재') {
     return (
@@ -33,7 +34,7 @@ export function GateScores({ stage }: { stage: Stage | null }) {
     <div className="space-y-3" data-testid="gate-scores" data-which={which}>
       {!stage && <div className="inline-flex rounded-lg border border-slate-700 p-0.5">{btn('answers', '답 성적')}{btn('retrieval', '검색 성적')}</div>}
       {stage && ANSWER_LAYER_HINT[stage] && <p className="text-xs text-slate-400">{ANSWER_LAYER_HINT[stage]}</p>}
-      {which === 'retrieval' ? <RetrievalTab /> : <AnswerTab />}
+      {which === 'retrieval' ? <RetrievalTab axis={axis} /> : <AnswerTab axis={axis} />}
     </div>
   );
 }

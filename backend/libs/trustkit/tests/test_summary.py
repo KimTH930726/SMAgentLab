@@ -52,3 +52,17 @@ def test_retrieval_ok_answer_wrong_only_hits_with_majority_wrong():
             {"qid": "C", "label": "오답"},                                       # 검색부터 못 찾음 — 답 문제 아님
             {"qid": "E", "label": "오답"}]                                       # 검색 결과에 없음
     assert retrieval_ok_answer_wrong(hits, rows) == ["A"]
+
+
+def test_scored_rows_drops_failure_questions_whole():
+    """장애 문항(오류·채점실패)은 회차 하나라도면 문항 전체를 정답률에서 뺀다 · 판정불가 줄도 뺀다 · 결과 파일 줄과 {qid, label} 둘 다.
+    불변식: 남은 문항 ∪ 장애 문항 ∪ 판정불가뿐인 문항 = 세트, 서로 겹치지 않음."""
+    from trustkit.eval.summary import failure_qids, scored_rows
+    raw = [{"qid": "A", "judge": {"label": "정답"}}, {"qid": "A", "judge": {"label": "채점실패"}},
+           {"qid": "B", "judge": {"label": "오답"}}, {"qid": "C", "judge": {"label": "판정불가"}}, {"qid": "D", "judge": {}}]
+    assert failure_qids(raw) == {"A"}
+    kept = {r["qid"] for r in scored_rows(raw)}
+    assert kept == {"B"} and not kept & failure_qids(raw)
+    flat = [{"qid": "X", "label": "오류"}, {"qid": "Y", "label": "정답"}]
+    assert [r["qid"] for r in scored_rows(flat)] == ["Y"] and failure_qids(flat) == {"X"}
+

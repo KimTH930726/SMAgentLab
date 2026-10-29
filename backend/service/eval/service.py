@@ -8,6 +8,7 @@ from core.database import get_conn
 
 BASELINE_LOCK = 86_001   # scripts/eval_gate.py와 같은 값 — 기준선을 옮기는 두 길이 한 번에 하나만(리뷰 M1)
 _JSON = ("retrieval", "answers", "summary", "judge_meta")
+AXES = ("policy", "knowledge")   # 판정 기록 축(#96) — 정책서·지식(컨플). 기준선은 축마다 한 줄
 
 
 def _row(r) -> dict:
@@ -18,11 +19,11 @@ def _row(r) -> dict:
     return d
 
 
-async def list_runs(limit: int) -> list[dict]:
-    """이력 — 목록에 필요한 헤드라인만(문항별 qid 목록은 상세에서). 최신순."""
+async def list_runs(limit: int, axis: Optional[str] = None) -> list[dict]:
+    """이력 — 목록에 필요한 헤드라인만(문항별 qid 목록은 상세에서). 최신순. axis를 주면 그 축만."""
     async with get_conn() as conn:
         rows = await conn.fetch(
-            """SELECT id, run_at, created_by, label, kind, golden_version, verdict, is_baseline, git_commit, notes, judge_meta,
+            """SELECT id, run_at, created_by, label, kind, golden_version, verdict, is_baseline, git_commit, notes, judge_meta, axis,
                       summary - 'inputs' AS summary,
                       retrieval IS NOT NULL AS has_retrieval_gate,   -- 검색 후 파일만 있으면 비교 없이 0/0으로 보였다(재리뷰)
                       jsonb_array_length(COALESCE(retrieval->'down', '[]'::jsonb)) AS retrieval_down,
@@ -30,7 +31,7 @@ async def list_runs(limit: int) -> list[dict]:
                       answers->'failed' AS answers_failed,
                       answers->'groups'->'전체' AS answers_total,
                       answers->'groups' AS answers_groups
-               FROM eval_gate_run ORDER BY run_at DESC, id DESC LIMIT $1""", limit)
+               FROM eval_gate_run WHERE $2::text IS NULL OR axis = $2 ORDER BY run_at DESC, id DESC LIMIT $1""", limit, axis)
     out = []
     for r in rows:
         d = _row(r)
@@ -51,10 +52,10 @@ async def get_run(run_id: int) -> Optional[dict]:
     return _row(r) if r else None
 
 
-async def get_baseline() -> Optional[dict]:
-    """현재 기준선 상세(없으면 None) — 화면 [검색]·[답]은 목록 범위(최신 n)와 무관하게 이걸 읽는다(리뷰 M1)."""
+async def get_baseline(axis: str = "policy") -> Optional[dict]:
+    """그 축의 현재 기준선 상세(없으면 None) — 화면 [검색]·[답]은 목록 범위(최신 n)와 무관하게 이걸 읽는다(리뷰 M1)."""
     async with get_conn() as conn:
-        r = await conn.fetchrow("SELECT * FROM eval_gate_run WHERE is_baseline")
+        r = await conn.fetchrow("SELECT * FROM eval_gate_run WHERE is_baseline AND axis = $1", axis)
     return _row(r) if r else None
 
 
@@ -65,7 +66,7 @@ async def set_baseline(run_id: int) -> Optional[dict]:
         async with conn.transaction():
             # 행 잠금만으론 부족 — 두 요청이 서로 다른 행을 올리면 둘째가 고유 인덱스에 부딪혀 500(리뷰 M1)
             await conn.execute("SELECT pg_advisory_xact_lock($1)", BASELINE_LOCK)
-            r = await conn.fetchrow("SELECT id, verdict, is_baseline FROM eval_gate_run WHERE id = $1", run_id)
+            r = await conn.fetchrow("SELECT id, verdict, is_baseline FROM eval_gate_run WHERE id = $1", run_id)   # 축은 그 줄의 축(_move_baseline)
             if not r:
                 return None
             if r["verdict"] == "fail":
@@ -76,8 +77,9 @@ async def set_baseline(run_id: int) -> Optional[dict]:
 
 
 async def _move_baseline(conn, run_id: int) -> None:
-    """옛 기준선을 내리고 run_id를 올린다 — 호출 쪽 트랜잭션 안에서, 판정 통과 확인은 호출 쪽이."""
-    await conn.execute("UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline AND id <> $1", run_id)
+    """같은 축의 옛 기준선을 내리고 run_id를 올린다(#96 축마다 한 줄 — 다른 축 기준선은 그대로). 호출 쪽 트랜잭션 안에서, 판정 통과 확인은 호출 쪽이."""
+    await conn.execute("""UPDATE eval_gate_run SET is_baseline = FALSE
+                          WHERE is_baseline AND id <> $1 AND axis = (SELECT axis FROM eval_gate_run WHERE id = $1)""", run_id)
     await conn.execute("UPDATE eval_gate_run SET is_baseline = TRUE WHERE id = $1", run_id)
 
 
@@ -158,9 +160,11 @@ async def adopt_candidate(cand_id: int, *, gate_run_id: int, user_id: int) -> Op
             c = await conn.fetchrow("SELECT status, reviewed_at, measured_gate_run_ids FROM eval_candidate WHERE id = $1 FOR UPDATE", cand_id)
             if not c:
                 return None
-            g = await conn.fetchrow("SELECT id, verdict, kind, run_at, answers FROM eval_gate_run WHERE id = $1", gate_run_id)
+            g = await conn.fetchrow("SELECT id, verdict, kind, run_at, answers, axis FROM eval_gate_run WHERE id = $1", gate_run_id)
+            if g and g["axis"] != "policy":   # 개선 후보는 정책서 문항으로 진단한 것 — 다른 축 측정으로 채택하면 정책서 기준선 대신 지식 기준선이 옮겨진다
+                raise ValueError("개선 후보는 정책서 측정으로만 운영에 반영합니다(이 판정은 지식 축).")
             gd = {**dict(g), "answers": _j(g["answers"])} if g else None
-            base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND id <> $1", gate_run_id)
+            base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = 'policy' AND id <> $1", gate_run_id)
             err = adopt_error(c["status"], gd, c["reviewed_at"], measured_ids=c["measured_gate_run_ids"] or [], baseline_run_at=base_at)
             if err:
                 raise ValueError(err)

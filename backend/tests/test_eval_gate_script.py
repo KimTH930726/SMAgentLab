@@ -94,6 +94,57 @@ def test_input_errors_exit_2(tmp_path, monkeypatch):
     for argv in (["--answers-after", f], ["--baseline", "--answers-before", f, "--answers-after", f], ["--baseline"],
                  ["--baseline", "--answers-after", f, "--run-at", "어제"],
                  ["--baseline", "--answers-after", f, "--run-at", "2026-10-21T22:44"],        # 시간대 없음(리뷰 L5)
-                 ["--baseline", "--keep-baseline", "--answers-after", f]):                    # 서로 반대(리뷰 L3)
+                 ["--baseline", "--keep-baseline", "--answers-after", f],                     # 서로 반대(리뷰 L3)
+                 ["--answers-before", f, "--answers-after", f, "--save", "x", "--candidate", "1", "--axis", "knowledge"],  # 개선 후보는 정책서 축만(#96)
+                 ["--baseline", "--answers-after", f, "--axis", "voc"]):                      # 없는 축
+        monkeypatch.setattr("sys.argv", ["eval_gate.py", *argv])
+        try:
+            assert eg.main() == 2
+        except SystemExit as e:   # argparse choices 위반은 SystemExit(2)
+            assert e.code == 2
+
+
+def test_failures_are_counted_apart_from_accuracy(tmp_path):
+    """10/29 — 답을 못 낸 문항(오류·채점실패 = 게이트웨이 거부·연결 실패)은 정답률 분모에서 빼고 따로 센다.
+    불변식: 채점된 문항 + 못 낸 문항 = 세트 전부(회차가 여러 개여도 — 한 회차라도 못 냈으면 그 문항 전체를 뺀다, 리뷰 L1)."""
+    aa = _write(tmp_path / "aa.jsonl", [_judged("A", "정답"), _judged("B", "오류"), _judged("C", "오답"), _judged("D", "채점실패")])
+    base = eg.evaluate(_ns(baseline=True, answers_after=aa))
+    s = base["summary_answers"]
+    assert s["failures"] == ["B", "D"] and s["n"] == 2 and s["accuracy"] == 0.5      # 거부를 오답으로 세면 25%
+    assert s["n"] + len(s["failures"]) == 4 and base["golden_version"].startswith("4:")   # 세트는 그대로(못 낸 문항도 세트의 문항)
+    assert "답 못 냄 2문항" in base["lines"][-1]
+    multi = _write(tmp_path / "multi.jsonl", [_judged("A", "정답", rep=0), _judged("A", "오류", rep=1), _judged("A", "정답", rep=2),
+                                              _judged("B", "오답", rep=0), _judged("B", "정답", rep=1), _judged("B", "정답", rep=2)])
+    m = eg.evaluate(_ns(baseline=True, answers_after=multi))["summary_answers"]
+    assert m["failures"] == ["A"] and m["n"] == 1                    # A는 정답률에 안 들어감(양쪽에 다 잡히지 않음)
+    assert m["n"] + len(m["failures"]) == 2
+
+
+def test_new_failures_fail_the_gate(tmp_path):
+    """전엔 맞던 문항이 거부되면 짝이 없어져 비교에서 빠진다 — 그대로면 통과하고 기준선까지 옮겨졌다(리뷰 10/29 M1). 새로 못 낸 문항 = 실패.
+    같은 문항이 계속 못 내는 건(전/후 같음) 실패 아님, 개수가 같아도 다른 문항이 새로 못 내면 실패(리뷰 L2)."""
+    ab = _write(tmp_path / "ab.jsonl", [_judged("A", "정답"), _judged("B", "정답"), _judged("C", "오류")])
+    aa = _write(tmp_path / "aa.jsonl", [_judged("A", "정답"), _judged("B", "오류"), _judged("C", "오류")])
+    rec = eg.evaluate(_ns(answers_before=ab, answers_after=aa))
+    assert rec["ok"] is False and "새로 답 못 냄" in rec["answers"]["failed"] and rec["answers"]["failures_new"] == ["B"]
+    assert any(l.startswith("⚠ [장애] 답 못 냄 1 → 2") for l in rec["lines"])
+    same = eg.evaluate(_ns(answers_before=aa, answers_after=aa))
+    assert same["ok"] is True and same["answers"]["failures_new"] == []
+    assert any(l.startswith("[장애] 답 못 냄 2 → 2") for l in same["lines"])
+    swap_b = _write(tmp_path / "sb.jsonl", [_judged("A", "정답"), _judged("B", "오류"), _judged("C", "정답")])
+    swap_a = _write(tmp_path / "sa.jsonl", [_judged("A", "정답"), _judged("B", "정답"), _judged("C", "오류")])
+    sw = eg.evaluate(_ns(answers_before=swap_b, answers_after=swap_a))
+    assert sw["ok"] is False and sw["answers"]["failures_new"] == ["C"]   # 1 → 1이어도 C가 새로 못 냄
+
+
+def test_axis_must_match_result_files(tmp_path, monkeypatch):
+    """지식 측정 파일(type/set = knowledge)을 --axis 없이 저장하면 정책서 기준선을 덮었다(리뷰 10/29 M2) — 입력 오류로."""
+    k = _write(tmp_path / "k.jsonl", [{**_judged("k1-0", "정답"), "type": "knowledge"}])
+    kr = _write(tmp_path / "kr.jsonl", [{"set": "knowledge", "qid": "k1-0", "hit": True, "type": "knowledge"}])
+    monkeypatch.setattr(eg, "save", lambda *_: (_ for _ in ()).throw(AssertionError("저장하면 안 됨")))
+    for argv in (["--baseline", "--answers-after", k, "--save", "x"], ["--baseline", "--retrieval-after", kr, "--save", "x"],
+                 ["--baseline", "--answers-after", _write(tmp_path / "p.jsonl", [_judged("A", "정답")]), "--axis", "knowledge", "--save", "x"]):
         monkeypatch.setattr("sys.argv", ["eval_gate.py", *argv])
         assert eg.main() == 2
+    monkeypatch.setattr("sys.argv", ["eval_gate.py", "--baseline", "--answers-after", k, "--axis", "knowledge"])   # 맞게 주면 통과(저장 없이)
+    assert eg.main() == 0

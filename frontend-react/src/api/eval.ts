@@ -21,6 +21,7 @@ export interface AnswerSummary {
   by_type: Record<string, { n: number; accuracy: number }>;
   retrieval_ok_answer_wrong?: string[];      // 상세에만
   retrieval_ok_answer_wrong_n?: number | null; // 목록에만
+  failures?: string[];   // 답을 못 낸 문항(게이트웨이 거부·연결 실패·채점 실패) — 정답률에서 뺌(10/29)
 }
 
 export interface AnswerGroup {
@@ -47,8 +48,12 @@ export interface JudgeMeta {
   same_day_rubric?: boolean;
 }
 
+/** 판정 기록 축(#96, 10/29) — 정책서·지식(컨플). 기준선은 축마다 한 줄 */
+export type GateAxis = 'policy' | 'knowledge';
+
 export interface GateRunListItem {
   id: number;
+  axis: GateAxis;
   run_at: string;
   created_by: string;
   label: string;
@@ -76,13 +81,13 @@ export interface GateRunDetail extends Omit<GateRunListItem, 'has_retrieval_gate
   answers: { pass: boolean; failed: string[]; groups: Record<string, AnswerGroup>; up_qids: string[]; down_qids: string[] } | null;
 }
 
-export async function listGateRuns(limit = 50): Promise<GateRunListItem[]> {
-  return apiFetch<GateRunListItem[]>(`/eval/gate-runs?limit=${limit}`);
+export async function listGateRuns(limit = 50, axis?: GateAxis): Promise<GateRunListItem[]> {
+  return apiFetch<GateRunListItem[]>(`/eval/gate-runs?limit=${limit}${axis ? `&axis=${axis}` : ''}`);
 }
 
-/** 현재 기준선(없으면 null) — 목록 범위와 무관하게 */
-export async function getBaselineRun(): Promise<GateRunDetail | null> {
-  return apiFetch<GateRunDetail | null>('/eval/gate-runs/baseline');
+/** 그 축의 현재 기준선(없으면 null) — 목록 범위와 무관하게 */
+export async function getBaselineRun(axis: GateAxis = 'policy'): Promise<GateRunDetail | null> {
+  return apiFetch<GateRunDetail | null>(`/eval/gate-runs/baseline?axis=${axis}`);
 }
 
 /** 자가 개선 루프(#87) — 진단(원인별 qid) + 개선 후보 + 사람 검수. 만들기는 scripts/eval_improve.py --save */
