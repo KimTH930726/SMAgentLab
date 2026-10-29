@@ -333,6 +333,10 @@ async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Opt
             raise ValueError("원문을 찾을 수 없습니다.")
         if doc["status"] != "active":
             raise ValueError("사용 중인 원문만 다시 분할할 수 있습니다(교체됐거나 등록 전 초안).")
+        if doc["source_type"] == "confluence" and doc["source_ref"]:
+            from agents.knowledge_rag.ingestion.source_ledger import restricted_pages
+            if await restricted_pages(conn, doc["namespace_id"], [doc["source_ref"]]):   # 재리뷰 M-b — 보류한 제한 내용을 되살리지 않게
+                raise ValueError("읽기 제한으로 기록된 페이지라 다시 분할하지 않습니다 — 제한이 풀리면 다시 등록하세요.")
         current = await conn.fetch(
             "SELECT id, content, heading_path, source_type, source_file FROM rag_knowledge "
             "WHERE source_document_id = $1 AND status IN ('active', 'pending_review') ORDER BY source_chunk_idx NULLS LAST, id", doc_id)
@@ -467,8 +471,13 @@ async def resolve_duplicate(
 
     async with get_conn() as conn:
         pending = await conn.fetchrow(
-            "SELECT id, content, status, namespace_id FROM rag_knowledge WHERE id = $1", knowledge_id
+            "SELECT id, content, status, namespace_id, confluence_page_id FROM rag_knowledge WHERE id = $1", knowledge_id
         )
+        if pending and action != "reject" and pending["confluence_page_id"]:
+            from agents.knowledge_rag.ingestion.source_ledger import restricted_pages
+            if await restricted_pages(conn, pending["namespace_id"], [pending["confluence_page_id"]]):
+                # 재리뷰 L-b — 읽기 제한으로 보류한 조각을 승인하면 바로 다시 누구나 본다. 반려는 된다
+                raise ValueError("읽기 제한으로 기록된 컨플 페이지의 조각입니다 — 제한이 풀린 뒤 다시 등록하세요(반려는 가능).")
     if not pending:
         raise ValueError("지식을 찾을 수 없습니다.")
 

@@ -442,9 +442,9 @@ async def refresh_term_synonyms(glossary_ids: list[int], llm=None) -> int:
     """용어 등록·수정 뒤 — 그 용어들의 LLM 생성 동의어를 다시 만든다(설명이 바뀌었을 수 있음). 질문 기록에서 온 동의어는 유지.
     LLM이 실패한 용어는 기존 동의어를 지우지 않는다(일시 장애로 동의어가 사라지지 않게)."""
     from core.database import get_conn
-    if llm is None:
-        from service.llm.factory import get_llm_provider
-        llm = get_llm_provider()
+    if llm is None:   # 용어 설명은 적재 원문에서 온 것 — 적재 LLM 설정을 따른다(10/29, ingest_llm)
+        from service.llm.factory import get_ingest_llm
+        llm, _ = get_ingest_llm()
     async with get_conn() as conn:
         rows = await conn.fetch("SELECT id, term, description FROM rag_glossary WHERE id = ANY($1::int[])", glossary_ids)
     if not rows:

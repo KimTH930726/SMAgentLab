@@ -21,7 +21,7 @@ from agents.knowledge_rag.ingestion.adapters import ParsedDocument, extract_head
 
 logger = logging.getLogger(__name__)
 
-PARSER_VERSION = "v2.130"   # 파싱·분할 코드 판 — 결함 난 판으로 만든 원문·청크를 찾을 때(분할 코드를 고치면 올린다)
+PARSER_VERSION = "v2.190"   # 파싱·분할 코드 판 — 결함 난 판으로 만든 원문·청크를 찾을 때(분할 코드를 고치면 올린다)
 STABLE_REF_TYPES = ("confluence", "web")   # 위치만으로 같은 원본이라 볼 수 있는 종류
 
 
@@ -31,18 +31,21 @@ def content_hash(raw: str) -> str:
 
 async def save_draft(conn, *, ns_id: int, source_type: str, source_ref: Optional[str], title: Optional[str],
                      parent_title: Optional[str], raw_format: str, raw_content: str, chunk_strategy: Optional[str],
-                     source_version: Optional[int] = None, user_id: Optional[int] = None) -> int:
+                     source_version: Optional[int] = None, user_id: Optional[int] = None, media: Optional[dict] = None) -> int:
     """미리보기 원문을 초안으로 저장. 같은 파트·종류·위치·내용·분할 방식의 **초안**이 있으면 그 id.
 
     분할 방식도 같아야 재사용(리뷰 M3 2026-10-12): 예전엔 같은 원문을 다른 방식으로 다시 미리보면 초안의 방식을 덮어,
     먼저 본 미리보기로 확정하면 원장의 방식과 실제 조각이 어긋났다(다시 분할이 바뀐 것 없는데 "바뀜"으로 교체)."""
+    import json
     raw_content = (raw_content or "").replace("\x00", "")   # 청크 저장과 같게(PostgreSQL이 NUL을 거부)
     h = content_hash(raw_content)
+    mj = json.dumps(media, ensure_ascii=False, sort_keys=True) if media else None
+    # 그림 글(media)도 같아야 재사용 — 같은 원문을 그림 처리 켜고/끄고 미리보면 조각이 다르다(분할 방식과 같은 이유, 리뷰 M3 2026-10-12)
     row = await conn.fetchrow(
         "SELECT id FROM rag_source_document WHERE namespace_id = $1 AND status = 'draft' AND source_type = $2 "
         "AND source_ref IS NOT DISTINCT FROM $3 AND content_hash = $4 AND chunk_strategy IS NOT DISTINCT FROM $5 "
-        "ORDER BY id DESC LIMIT 1",
-        ns_id, source_type, source_ref, h, chunk_strategy)
+        "AND media IS NOT DISTINCT FROM $6::jsonb ORDER BY id DESC LIMIT 1",
+        ns_id, source_type, source_ref, h, chunk_strategy, mj)
     if row:
         # 제목·상위 제목·원본 판은 최신 미리보기 값으로(리뷰 L3 — 내용이 같아도 페이지 이름·판이 바뀔 수 있다)
         await conn.execute("UPDATE rag_source_document SET title = COALESCE($2, title), parent_title = $3, "
@@ -52,10 +55,10 @@ async def save_draft(conn, *, ns_id: int, source_type: str, source_ref: Optional
     return await conn.fetchval("""
         INSERT INTO rag_source_document
             (namespace_id, source_type, source_ref, title, parent_title, raw_format, raw_content, content_hash,
-             source_version, chunk_strategy, parser_version, status, created_by_user_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'draft', $12) RETURNING id
+             source_version, chunk_strategy, parser_version, status, created_by_user_id, media)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'draft', $12, $13::jsonb) RETURNING id
     """, ns_id, source_type, source_ref, title, parent_title, raw_format, raw_content, h, source_version, chunk_strategy,
-        PARSER_VERSION, user_id)
+        PARSER_VERSION, user_id, mj)
 
 
 async def save_draft_for_parsed(conn, ns_id: int, doc: ParsedDocument, *, chunk_strategy: Optional[str],
@@ -74,7 +77,50 @@ async def save_draft_for_parsed(conn, ns_id: int, doc: ParsedDocument, *, chunk_
     return await save_draft(conn, ns_id=ns_id, source_type=doc.source_type, source_ref=str(ref) if ref else None,
                             title=doc.metadata.get("title") or doc.source_name, parent_title=doc.metadata.get("parent_title"),
                             raw_format=fmt, raw_content=raw, chunk_strategy=chunk_strategy,
-                            source_version=doc.metadata.get("version"), user_id=user_id)
+                            source_version=doc.metadata.get("version"), user_id=user_id, media=doc.metadata.get("media"))
+
+
+async def record_restricted(conn, *, ns_id: int, page_id: str, title: Optional[str], parent_title: Optional[str],
+                            level: str, meta: Optional[dict], user_id: Optional[int]) -> int:
+    """읽기 제한이라 적재하지 않은 컨플 페이지 기록(10/29) — 본문은 남기지 않고 위치·제목·주소만(status 'restricted').
+    지식 공백 감지가 "답이 없던 질문이 사실은 제한 페이지에 있었나"를 볼 수 있게. 같은 파트·페이지는 한 줄(다시 보면 갱신)."""
+    import json
+    media = json.dumps({"restricted": level, "page": meta or {}}, ensure_ascii=False, sort_keys=True)
+    row = await conn.fetchval("SELECT id FROM rag_source_document WHERE namespace_id = $1 AND source_type = 'confluence' "
+                              "AND source_ref = $2 AND status = 'restricted' ORDER BY id DESC LIMIT 1", ns_id, page_id)
+    if row:
+        await conn.execute("UPDATE rag_source_document SET title = $2, parent_title = $3, media = $4::jsonb WHERE id = $1",
+                           row, title, parent_title, media)
+        return row
+    return await conn.fetchval("""
+        INSERT INTO rag_source_document (namespace_id, source_type, source_ref, title, parent_title, raw_format, raw_content,
+                                         content_hash, parser_version, status, created_by_user_id, media)
+        VALUES ($1, 'confluence', $2, $3, $4, 'html', '', $5, $6, 'restricted', $7, $8::jsonb) RETURNING id
+    """, ns_id, page_id, title, parent_title, content_hash(""), PARSER_VERSION, user_id, media)
+
+
+async def hold_restricted_chunks(conn, ns_id: int, page_id: str) -> tuple[int, int]:
+    """이미 적재된 페이지가 나중에 읽기 제한되면(리뷰 M3) 그 페이지의 사용 중 조각을 승인 대기로 내린다 — 로그인 사용자 누구나 보던 것을
+    멈추고 담당이 확인하게(지우지 않음). **이 파트 안에서만**(재리뷰 M-a: 페이지 번호·컨플 주소는 사용자가 넣는 값이라 다른 파트 조각을
+    내리게 두면 안 됨) — 다른 파트에 같은 페이지 조각이 있으면 개수만 돌려주고 로그. → (내린 수, 다른 파트에 남은 수)"""
+    rows = await conn.fetch("UPDATE rag_knowledge SET status = 'pending_review' WHERE confluence_page_id = $1 AND status = 'active' "
+                            "AND namespace_id = $2 RETURNING id", str(page_id), ns_id)
+    others = await conn.fetchval("SELECT count(*) FROM rag_knowledge WHERE confluence_page_id = $1 AND status = 'active' "
+                                 "AND namespace_id <> $2", str(page_id), ns_id)
+    if rows:
+        logger.warning("읽기 제한된 페이지(page %s)의 사용 중 조각 %d개를 승인 대기로 내림(파트 %s)", page_id, len(rows), ns_id)
+    if others:
+        logger.warning("읽기 제한된 페이지(page %s) 조각 %d개가 다른 파트에 사용 중 — 그 담당 확인 필요(바꾸지 않음)", page_id, others)
+    return len(rows), int(others or 0)
+
+
+async def restricted_pages(conn, ns_id: int, page_ids: list[str]) -> set[str]:
+    """이 파트에서 읽기 제한으로 기록된 페이지(10/29 재리뷰 M-b·L-b) — 다시 분할·승인이 제한 내용을 되살리지 않게."""
+    if not page_ids:
+        return set()
+    rows = await conn.fetch("SELECT DISTINCT source_ref FROM rag_source_document WHERE namespace_id = $1 AND source_type = 'confluence' "
+                            "AND status = 'restricted' AND source_ref = ANY($2::text[])", ns_id, [str(p) for p in page_ids])
+    return {r["source_ref"] for r in rows}
 
 
 async def valid_documents(conn, ns_id: int, doc_ids: list[int]) -> list[int]:
@@ -170,6 +216,10 @@ async def activate(conn, ns_id: int, doc_ids: list[int], replaced: list[int], pa
     await conn.execute("UPDATE rag_source_document SET status = 'active', activated_at = NOW(), "
                        "registered_partial = (id = ANY($3::int[])) WHERE id = ANY($1::int[]) AND namespace_id = $2",
                        doc_ids, ns_id, partial_ids)
+    # 같은 페이지의 "읽기 제한" 기록은 이제 적재됐으니 내린다 — 남기면 지식 공백 감지가 풀린 제한을 계속 센다(리뷰 L2)
+    await conn.execute("""UPDATE rag_source_document r SET status = 'superseded' FROM rag_source_document d
+                          WHERE d.id = ANY($1::int[]) AND r.status = 'restricted' AND r.namespace_id = d.namespace_id
+                            AND r.source_type = d.source_type AND r.source_ref = d.source_ref""", doc_ids)
     old = [d for d in replaced if d not in doc_ids]
     if old:
         # 사용 중이던 것만 — 같은 원본의 다른 초안은 다른 등록이 아직 쓰는 중일 수 있다(동시 확정 시 그 등록의 조각이 원문 연결 없이
@@ -183,13 +233,20 @@ def rebuild_parsed(doc_row) -> ParsedDocument:
     st, raw = doc_row["source_type"], doc_row["raw_content"] or ""
     title = doc_row["title"] or ""
     if st == "confluence":
+        import json
         from bs4 import BeautifulSoup
+        from agents.knowledge_rag.ingestion import confluence_media as cm
         from agents.knowledge_rag.ingestion import web_crawler as w
-        soup = BeautifulSoup(w.prepare_storage_html(raw), "lxml")
+        media = doc_row.get("media") if hasattr(doc_row, "get") else None
+        media = json.loads(media) if isinstance(media, str) else (media or {})
+        # 미리보기 때와 같은 그림 글로(원장 media) — 옛 원장(media 없음)은 예전처럼 그림 버림(다시 분할이 바뀌지 않게)
+        parsed_raw = cm.apply_media(raw, media.get("diagrams"), diagram_text_on=bool(media.get("diagram_text")),
+                                    image_marks=bool(media.get("image_marks")))
+        soup = BeautifulSoup(w.prepare_storage_html(parsed_raw), "lxml")
         return ParsedDocument(source_type=st, source_name=title, raw_text=w._extract_text(soup),
                               sections=w._extract_heading_sections(soup),
                               metadata={"title": title, "parent_title": doc_row["parent_title"], "page_id": doc_row["source_ref"],
-                                        "version": doc_row["source_version"], "raw_html": raw})
+                                        "version": doc_row["source_version"], "raw_html": raw, "media": media or None})
     if st == "web":
         from agents.knowledge_rag.ingestion.web_crawler import parse_web_html
         return parse_web_html(raw, doc_row["source_ref"] or "")

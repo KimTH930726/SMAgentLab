@@ -1,7 +1,5 @@
 """지식 베이스 및 용어집 CRUD — 네임스페이스 소유 파트 기반 권한."""
 import asyncio
-import csv
-import io
 import json
 from typing import Optional
 
@@ -436,103 +434,7 @@ async def bulk_replace_check(body: _ReplaceCheckBody, user: dict = Depends(get_c
         return await replace_check(conn, ns_id, body.source_document_ids, body.confluence_page_ids)
 
 
-@router.post("/import/csv", status_code=201)
-async def import_csv(
-    file: UploadFile = File(...),
-    namespace: str = Form(...),
-    column_mapping: str = Form(...),
-    user: dict = Depends(get_current_user),
-):
-    """CSV 파일 업로드 → 파싱 → 벌크 등록.
-
-    column_mapping: JSON 문자열 {"content": "csv_col_name"} (업무구분 열 매핑은 10/22 폐지)
-    """
-    await check_namespace_ownership(namespace, user)
-
-    # CSV 파싱 — UTF-8-BOM → UTF-8 → EUC-KR(CP949) 순으로 디코딩 시도
-    try:
-        raw = await file.read()
-        text = None
-        for enc in ("utf-8-sig", "utf-8", "cp949"):
-            try:
-                text = raw.decode(enc)
-                break
-            except (UnicodeDecodeError, LookupError):
-                continue
-        if text is None:
-            raise HTTPException(
-                status_code=400,
-                detail="CSV 인코딩을 인식할 수 없습니다. UTF-8 또는 EUC-KR(한글 Windows)로 저장된 파일만 지원합니다.",
-            )
-        reader = csv.DictReader(io.StringIO(text))
-        rows = list(reader)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"CSV 파싱 실패: {e}")
-
-    if not rows:
-        raise HTTPException(status_code=400, detail="CSV에 데이터가 없습니다.")
-
-    # 컬럼 매핑
-    try:
-        mapping = json.loads(column_mapping)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="column_mapping이 유효한 JSON이 아닙니다.")
-
-    content_col = mapping.get("content")
-    if not content_col:
-        raise HTTPException(status_code=400, detail="content 컬럼 매핑이 필요합니다.")
-
-    # 매핑 적용
-    items = []
-    for row in rows:
-        content = row.get(content_col, "").strip()
-        if not content:
-            continue
-        items.append({"content": content})
-
-    if not items:
-        raise HTTPException(status_code=400, detail="유효한 데이터가 없습니다.")
-
-    result = await service.bulk_create_knowledge(
-        namespace=namespace,
-        items=items,
-        source_file=file.filename,
-        source_type="csv_import",
-        created_by_user_id=user["id"],
-    )
-    return result
-
-
 from pydantic import BaseModel as _BM
-
-
-class _TextSplitBody(_BM):
-    namespace: str
-    raw_text: str
-    strategy: str = "auto"
-
-
-@router.post("/import/text-split", status_code=201)
-async def import_text_split(body: _TextSplitBody, user: dict = Depends(get_current_user)):
-    """대량 텍스트 → 자동 분할 → 벌크 등록."""
-    await check_namespace_ownership(body.namespace, user)
-
-    split = service.split_text_to_items(body.raw_text, body.strategy)
-    if not split:
-        raise HTTPException(status_code=400, detail="분할된 청크가 없습니다.")
-    chunks = [x["content"] for x in split]
-
-    items = [{"content": x["content"], "heading_path": x["heading_path"] or None} for x in split]
-    result = await service.bulk_create_knowledge(
-        namespace=body.namespace,
-        items=items,
-        source_file="텍스트 직접입력",
-        source_type="paste_split",
-        created_by_user_id=user["id"],
-    )
-    return {**result, "chunks": len(chunks)}
 
 
 class _TextSplitPreviewBody(_BM):
@@ -552,6 +454,45 @@ async def _ledger_ns_id(namespace: Optional[str], user: dict) -> Optional[int]:
     # 담당 아닌 곳에 넣는 제안이면 연결을 떼서 초안은 확정 전으로 남는다(검색·다시 분할에 안 쓰임)
     async with get_conn() as conn:
         return await resolve_namespace_id(conn, namespace)
+
+
+RESTRICTED_MSG = {"page": "읽기 제한 페이지 — 적재하지 않음(기록만)", "ancestor": "상위 페이지 읽기 제한 — 적재하지 않음(기록만)",
+                  "unknown": "읽기 제한을 확인하지 못해 적재하지 않음(기록만)"}
+
+
+async def _record_restricted(ns_id: Optional[int], namespace: Optional[str], doc, level: str, user: dict) -> tuple[int, int]:
+    """제한 페이지 기록 + 이미 적재된 조각 보류(리뷰 M3) → (내린 수, 다른 파트에 남은 수). 실패해도 건너뛰기는 그대로(로그).
+    보류는 이 파트 담당이고 제한이 확실할 때만(재리뷰 M-a) — 제한을 "모름"이면 기록만(서버 문제로 멀쩡한 조각을 내리지 않게)."""
+    from core.database import get_conn
+    from agents.knowledge_rag.ingestion.source_ledger import hold_restricted_chunks, record_restricted
+    page_id = str(doc.metadata.get("page_id"))
+    if ns_id is None:
+        logger.warning("읽기 제한 페이지 기록 못 함 — 파트를 못 찾음(page %s)", page_id)
+        return 0, 0
+    try:
+        await check_namespace_ownership(namespace, user)
+        owner = True
+    except HTTPException:
+        owner = False
+    try:
+        async with get_conn() as conn:
+            async with conn.transaction():
+                await record_restricted(conn, ns_id=ns_id, page_id=page_id, title=doc.source_name,
+                                        parent_title=doc.metadata.get("parent_title"), level=level,
+                                        meta=(doc.metadata.get("media") or {}).get("page"), user_id=user.get("id"))
+                held, others = await hold_restricted_chunks(conn, ns_id, page_id) if owner and level in ("page", "ancestor") else (0, 0)
+        if held:   # 제한 조각이 든 캐시 답이 수명 동안 나가지 않게(재리뷰 L-a)
+            from shared.cache import invalidate_namespace_family
+            await invalidate_namespace_family(namespace)
+        return held, others
+    except Exception:   # 기록 실패가 미리보기를 막지 않게(건너뛰기는 그대로) — 로그로 추적
+        logger.warning("읽기 제한 페이지 기록 실패(page %s)", page_id, exc_info=True)
+        return 0, 0
+
+
+def _restricted_note(level: str, held: int, others: int = 0) -> str:
+    return (RESTRICTED_MSG.get(level, RESTRICTED_MSG["unknown"]) + (f" · 이미 적재된 조각 {held}개는 승인 대기로 내림" if held else "")
+            + (f" · 다른 컬렉션에 같은 페이지 조각 {others}개 — 그 담당 확인 필요" if others else ""))
 
 
 async def _save_ledger_draft(ns_id: Optional[int], doc, strategy: Optional[str], user: dict,
@@ -589,10 +530,10 @@ async def preview_text_split(body: _TextSplitPreviewBody, user: dict = Depends(g
     if strategy == "auto":
         try:
             from agents.knowledge_rag.ingestion.analyzer import analyze_document
-            from service.llm.factory import get_llm_provider
+            from service.llm.factory import get_ingest_llm
             from core.security import get_user_llm_credentials
-            llm = get_llm_provider()
-            analysis = await analyze_document(body.raw_text, llm, user_credentials=get_user_llm_credentials(user))
+            llm, system = get_ingest_llm()   # 적재 원문 분석도 적재 LLM 설정(10/29 리뷰 L1)
+            analysis = await analyze_document(body.raw_text, llm, user_credentials=get_user_llm_credentials(user) if system else None)
             detected_strategy = analysis.get("chunk_strategy", "auto")
             strategy = detected_strategy
         except Exception as e:
@@ -642,7 +583,7 @@ async def _run_auto_glossary(namespace: str, raw_text: str, user: dict, *, max_c
     count = 0
     try:
         from agents.knowledge_rag.ingestion.tagger import extract_glossary_terms
-        from service.llm.factory import get_llm_provider
+        from service.llm.factory import get_ingest_llm
         from core.security import get_user_llm_credentials
         from core.database import get_conn, resolve_namespace_id
 
@@ -651,9 +592,10 @@ async def _run_auto_glossary(namespace: str, raw_text: str, user: dict, *, max_c
             existing = await conn.fetch("SELECT term FROM rag_glossary WHERE namespace_id = $1", ns_id)
         existing_terms = [r["term"] for r in existing]
 
-        llm = get_llm_provider()
+        llm, system = get_ingest_llm()   # 적재 원문(컨플 등)은 로컬 LLM으로(10/29, 설정 ingest_llm)
         text = raw_text[:max_chars] if max_chars else raw_text
-        terms = await extract_glossary_terms(text, existing_terms, llm, user_credentials=get_user_llm_credentials(user))
+        terms = await extract_glossary_terms(text, existing_terms, llm,
+                                             user_credentials=get_user_llm_credentials(user) if system else None)
         for term_data in terms:
             try:
                 await service.create_glossary(
@@ -667,91 +609,6 @@ async def _run_auto_glossary(namespace: str, raw_text: str, user: dict, *, max_c
     except Exception as e:
         logger.warning("용어 추출 실패 (무시하고 계속): %s", e)
     return count
-
-
-@router.post("/import/file", status_code=201)
-async def import_file(
-    file: UploadFile = File(...),
-    namespace: str = Form(...),
-    chunk_strategy: str = Form(default="auto"),
-    auto_analyze: bool = Form(default=False),
-    auto_glossary: bool = Form(default=False),
-    user: dict = Depends(get_current_user),
-):
-    """파일 업로드 → 파싱 → 청킹 → 벌크 등록.
-
-    지원 포맷: .txt, .md, .pdf, .xlsx, .xlsm, .csv
-    chunk_strategy: auto, section, paragraph, fixed
-    auto_analyze: True이면 LLM Analyzer Agent로 전략/메타데이터 자동 결정
-    auto_glossary: True이면 LLM으로 용어 자동 추출
-    """
-    await check_namespace_ownership(namespace, user)
-
-    # 파일 파싱
-    from agents.knowledge_rag.ingestion.adapters import parse_file
-    from agents.knowledge_rag.ingestion.chunker import chunk_document
-
-    try:
-        raw = await file.read()
-        doc = parse_file(raw, file.filename or "unknown")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"파일 파싱 실패: {e}")
-
-    # Analyzer Agent (선택적) — 청킹 전에 문서 분석
-    analyzer_result = None
-    if auto_analyze:
-        try:
-            from agents.knowledge_rag.ingestion.analyzer import analyze_document
-            from service.llm.factory import get_llm_provider
-            from core.security import get_user_llm_credentials
-
-            llm = get_llm_provider()
-            analyzer_result = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
-
-            # 분석 결과로 전략 오버라이드
-            chunk_strategy = analyzer_result.get("chunk_strategy", chunk_strategy)
-        except Exception as e:
-            logger.warning("Analyzer 실패 (기존 전략 사용): %s", e)
-
-    # 청킹
-    chunks = chunk_document(doc, strategy=chunk_strategy)
-    if not chunks:
-        raise HTTPException(status_code=400, detail="분할된 청크가 없습니다.")
-
-    # items 구성
-    items = [{"content": c.text} for c in chunks]
-
-    # 벌크 등록
-    result = await service.bulk_create_knowledge(
-        namespace=namespace,
-        items=items,
-        source_file=file.filename,
-        source_type="file_upload",
-        created_by_user_id=user["id"],
-        # 용어 추출은 job 성공 후에만(개수는 job 행에 기록) — 예전엔 여기서 바로 실행했다
-        after_activation=_glossary_after_activation(namespace, doc.raw_text, user) if auto_glossary else None,
-    )
-
-    # 분석 결과 기록 — 예전엔 용어 수 갱신과 한 UPDATE로 묶여 있어 추출된 용어가 0건이면
-    # analyzer_result도 같이 버려졌다(조건이 glossary_count > 0). 이제 독립적으로 남긴다.
-    if result.get("job_id") and analyzer_result:
-        try:
-            from core.database import get_conn
-            async with get_conn() as conn:
-                await conn.execute(
-                    "UPDATE rag_ingestion_job SET analyzer_result = $1 WHERE id = $2",
-                    json.dumps(analyzer_result, ensure_ascii=False), result["job_id"],
-                )
-        except Exception:
-            logger.warning("분석 결과 기록 실패 (job_id=%s)", result.get("job_id"), exc_info=True)
-
-    return {
-        **result,
-        "chunks": len(chunks),
-        "analyzer": analyzer_result,
-        "source_name": doc.source_name,
-        "page_count": doc.metadata.get("page_count"),
-    }
 
 
 @router.post("/import/file/preview")
@@ -780,10 +637,10 @@ async def preview_file_upload(
         detected_strategy = "auto"
         try:
             from agents.knowledge_rag.ingestion.analyzer import analyze_document
-            from service.llm.factory import get_llm_provider
+            from service.llm.factory import get_ingest_llm
             from core.security import get_user_llm_credentials
-            llm = get_llm_provider()
-            analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
+            llm, system = get_ingest_llm()   # 적재 원문 분석도 적재 LLM 설정(10/29 리뷰 L1)
+            analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user) if system else None)
             detected_strategy = analysis.get("chunk_strategy", "auto")
             strategy = detected_strategy
         except Exception as e:
@@ -817,50 +674,11 @@ class _UrlImportBody(_BM):
     auto_glossary: bool = False
 
 
-@router.post("/import/url", status_code=201)
-async def import_from_url(body: _UrlImportBody, user: dict = Depends(get_current_user)):
-    """URL(일반 웹 or Confluence) → 텍스트 추출 → 청킹 → 벌크 등록."""
-    await check_namespace_ownership(body.namespace, user)
-
-    from agents.knowledge_rag.ingestion.web_crawler import fetch_url
-    from agents.knowledge_rag.ingestion.chunker import chunk_document
-    from core.security import get_user_confluence_pat
-
-    confluence_token = body.confluence_token or get_user_confluence_pat(user)
-    try:
-        doc = await fetch_url(body.url, confluence_token=confluence_token)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"URL 수집 실패: {e}")
-
-    chunks = chunk_document(doc, strategy=body.chunk_strategy)
-    if not chunks:
-        raise HTTPException(status_code=400, detail="수집된 콘텐츠가 없습니다.")
-
-    items = [{"content": c.text} for c in chunks]
-
-    result = await service.bulk_create_knowledge(
-        namespace=body.namespace,
-        items=items,
-        source_file=body.url,
-        source_type=doc.source_type,
-        created_by_user_id=user["id"],
-        after_activation=_glossary_after_activation(body.namespace, doc.raw_text, user) if body.auto_glossary else None,
-    )
-
-    return {
-        **result,
-        "chunks": len(chunks),
-        "source_name": doc.source_name,
-        "source_type": doc.source_type,
-        "url": body.url,
-    }
-
-
 @router.post("/import/url/preview")
 async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_user)):
     """URL 수집 미리보기 — LLM Analyzer로 전략 자동 결정 후 청킹 결과 반환."""
+    if user["role"] == "viewer":   # 일괄 미리보기와 같게(재리뷰 M-a — 제한 기록·보류가 조회 전용 계정으로 일어나지 않게)
+        raise HTTPException(status_code=403, detail="조회 전용 계정은 지식을 등록할 수 없습니다.")
     from agents.knowledge_rag.ingestion.web_crawler import fetch_url
     from agents.knowledge_rag.ingestion.chunker import chunk_document
     from core.security import get_user_confluence_pat
@@ -872,15 +690,19 @@ async def preview_url(body: _UrlImportBody, user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"URL 수집 실패: {e}")
+    level = doc.metadata.get("restricted") if doc.source_type == "confluence" else None
+    if level:   # 일괄 등록과 같은 규칙(리뷰 M1) — 적재하지 않고 기록만
+        held, others = await _record_restricted(await _ledger_ns_id(body.namespace, user), body.namespace, doc, level, user)
+        raise HTTPException(status_code=400, detail=_restricted_note(level, held, others))
 
     strategy = "auto"
     detected_strategy = "auto"
     try:
         from agents.knowledge_rag.ingestion.analyzer import analyze_document
-        from service.llm.factory import get_llm_provider
+        from service.llm.factory import get_ingest_llm
         from core.security import get_user_llm_credentials
-        llm = get_llm_provider()
-        analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user))
+        llm, system = get_ingest_llm()   # 적재 원문 분석도 적재 LLM 설정(10/29 리뷰 L1)
+        analysis = await analyze_document(doc.raw_text, llm, user_credentials=get_user_llm_credentials(user) if system else None)
         detected_strategy = analysis.get("chunk_strategy", "auto")
         strategy = detected_strategy
     except Exception as e:
@@ -957,6 +779,9 @@ class _BulkPagesBody(BaseModel):
     confluence_token: Optional[str] = None
     chunk_strategy: str = "auto"
     auto_glossary: bool = False
+    diagram_text: bool = True           # draw.io 원본의 도형·연결 글을 매크로 자리에(10/29, confluence_media)
+    image_marks: bool = False           # 그림 자리에 "[이미지: 파일명 — 원문 페이지에서 확인]" — 효과를 재기 전이라 기본 끔(독립 검토 10/29,
+                                        # 설계 §7-4 "게이트로 재고 결정"). 스크린샷 많은 공간(GIFT)에서 끔/켬을 재서 정한다
 
 
 # 컨플루언스 "상위 페이지 제목 → 업무구분 자동 생성"(_resolve_confluence_page_category)은 10/22 업무구분 폐지로 삭제 —
@@ -991,6 +816,9 @@ def _enrich_heading_path(doc, in_page_heading_path: Optional[list[str]], page_ti
     return base
 
 
+BULK_FETCH_CONCURRENCY = 8   # 일괄 미리보기 동시 페이지 수 — 페이지마다 본문 + 첨부 목록 + 다이어그램을 받아 컨플 부하가 늘었다(리뷰 L4)
+
+
 @router.post("/import/url/bulk-pages/preview")
 async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get_current_user)):
     """선택된 페이지들을 fetch + 청킹만 수행 (DB 등록 X). 청크 리뷰용."""
@@ -1013,9 +841,16 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
 
     import asyncio
 
+    sem = asyncio.Semaphore(BULK_FETCH_CONCURRENCY)
+
     async def _fetch_and_chunk(p):
+        async with sem:
+            return await _fetch_and_chunk_one(p)
+
+    async def _fetch_and_chunk_one(p):
         try:
-            doc = await fetch_confluence_by_id(body.base_url, p.page_id, token)
+            doc = await fetch_confluence_by_id(body.base_url, p.page_id, token, diagram_text=body.diagram_text,
+                                               image_marks=body.image_marks)
             chunks = chunk_document(doc, strategy=body.chunk_strategy)
             return {"page_id": p.page_id, "title": doc.source_name, "doc": doc, "chunks": chunks, "error": None}
         except Exception as e:
@@ -1034,6 +869,12 @@ async def preview_confluence_bulk(body: _BulkPagesBody, user: dict = Depends(get
     for f in fetched:
         if f["error"]:
             failed.append({"page_id": f["page_id"], "title": f["title"], "error": f["error"]})
+            continue
+        level = f["doc"].metadata.get("restricted")
+        if level:   # 읽기 제한 — 적재하지 않고 어떤 페이지였는지만 원장에(지식 공백 감지용, 10/29). 화면엔 실패 목록에 이유와 함께
+            held, others = await _record_restricted(ns_id, body.namespace, f["doc"], level, user)
+            failed.append({"page_id": f["page_id"], "title": f["title"], "restricted": level, "held_chunks": held,
+                           "error": _restricted_note(level, held, others)})
             continue
         page_start = idx
         page_doc_id = await _save_ledger_draft(ns_id, f["doc"], body.chunk_strategy, user, source_ref=str(f["page_id"]))

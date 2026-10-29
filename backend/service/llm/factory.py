@@ -1,4 +1,6 @@
 """LLM Provider 팩토리 — 싱글톤 + 런타임 전환."""
+import logging
+
 from core.config import settings
 from service.llm.base import LLMProvider
 from service.llm.inhouse import InHouseLLMProvider
@@ -45,6 +47,22 @@ def reset_provider() -> LLMProvider:
     _runtime_config = None
     _provider = _create_provider()
     return _provider
+
+
+_ingest_local = None
+
+
+def get_ingest_llm() -> tuple[LLMProvider, bool]:
+    """적재 단계 LLM(용어 추출·동의어) → (LLM, 시스템 LLM인가 — 사용자 자격 증명을 쓸지). 설정 ingest_llm=local이고 로컬 주소가 있으면 로컬.
+    로컬로 정했는데 주소가 없으면 시스템 LLM으로 대신하고 경고(대체 처리를 보이게)."""
+    global _ingest_local
+    if settings.ingest_llm == "local":
+        if settings.openai_compat_base_url:
+            if _ingest_local is None:
+                _ingest_local = OpenAICompatProvider()
+            return _ingest_local, False
+        logging.getLogger(__name__).warning("ingest_llm=local인데 로컬 LLM 주소(OPENAI_COMPAT_BASE_URL)가 없음 — 적재 LLM 작업을 시스템 LLM으로")
+    return get_llm_provider(), True
 
 
 def get_runtime_config() -> dict:

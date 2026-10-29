@@ -566,6 +566,11 @@ Teams 등록 폼은 내용이 확정되는 시점(파일 미리보기 성공·�
 │  │ 1. fetch_confluence_by_id()                        │    │
 │  │    REST expand에 ancestors 포함                     │    │
 │  │    → doc.metadata["parent_title"] = 직계 상위 페이지  │    │
+│  │ 1-1. 그림(v2.190, confluence_media) — draw.io는     │    │
+│  │    같은 페이지 첨부 원본 XML → "구성·흐름(A → B)" 글을 │    │
+│  │    매크로 자리에, 일반 그림은 "[이미지: 파일명 —      │    │
+│  │    원문 페이지에서 확인]". 원본 못 받으면 "원문에서   │    │
+│  │    확인" 표시. 뽑은 글·페이지 정보는 원장 media(#97)  │    │
 │  │ 2. chunk_document() — 청킹                          │    │
 │  │ 3. (업무구분 배정 단계는 10/22 폐지, v2.158 —       │    │
 │  │    parent_title은 아래 heading_path에만 쓴다)        │    │

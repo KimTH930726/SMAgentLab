@@ -2,6 +2,7 @@
 import logging
 import re
 import socket
+from typing import Optional
 from urllib.parse import urlparse, parse_qs, urljoin
 
 import httpx
@@ -141,6 +142,9 @@ async def _fetch_confluence(url: str, token: str) -> ParsedDocument:
         raise _translate_httpx_error(e) from e
 
     page = pages[0]
+    # 페이지 ID가 정해지면 일괄 등록과 같은 함수로 — 읽기 제한 검사·그림 처리·페이지 정보가 단건 URL 경로에서 빠지던 것(리뷰 M1)
+    if page.get("id"):
+        return await fetch_confluence_by_id(base_url, str(page_id or page.get("id")), token)
     page_title = page.get("title", "Confluence Page")
     storage_html = page.get("body", {}).get("storage", {}).get("value", "")
     space_name = page.get("space", {}).get("name", "")
@@ -501,9 +505,42 @@ def _build_page_url(base_url: str, page_id: str, page_data: dict) -> str:
 
 # ── Confluence 단일 페이지 (page_id 기반, bulk 인제스천용) ──────────────────
 
-async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> ParsedDocument:
-    """page_id 기반 단일 페이지 fetch — 트리 선택 후 bulk 인제스천에서 호출."""
+def read_restriction(page: dict) -> str | None:
+    """읽기 제한(10/29 사용자 "건너뛰되 어떤 페이지였는지는 알게") — 페이지 자신(page) 또는 상위 페이지(ancestor)에 사용자·그룹 읽기 제한이
+    있으면 그 수준, 없으면 None. 컨플은 상위 제한을 하위가 물려받는다. 적재한 지식은 로그인 사용자 누구나 보므로 제한 페이지는 넣지 않는다."""
+    def restricted(p: dict) -> Optional[bool]:
+        read = (p.get("restrictions") or {}).get("read")
+        if not isinstance(read, dict) or "restrictions" not in read:
+            return None   # 제한 정보가 안 옴(서버가 expand를 무시 등) — 모른다
+        r = read.get("restrictions") or {}
+        return bool((r.get("user") or {}).get("results") or (r.get("group") or {}).get("results"))
+    own = restricted(page)
+    ups = [restricted(a) for a in page.get("ancestors") or []]
+    if own:
+        return "page"
+    if any(ups):
+        return "ancestor"
+    if own is None or None in ups:
+        # 모르면 넣지 않는다(리뷰 M2) — 제한 페이지가 조용히 적재되는 것보다 건너뛰고 기록하는 게 안전. 화면엔 "제한 확인 안 됨"
+        logger.warning("읽기 제한 정보를 못 받음(page %s) — 제한으로 보고 적재하지 않음", page.get("id"))
+        return "unknown"
+    return None
+
+
+def page_meta(page: dict, page_url: str) -> dict:
+    """원장에 남기는 페이지 정보(10/29 정제 레이어 ①) — 원본 안내·노후 판단용. 예전엔 page_id·판·제목만 남아 원문 링크도 수정 시각도 몰랐다."""
+    v = page.get("version") or {}
+    return {"url": page_url, "space_key": (page.get("space") or {}).get("key"), "modified_at": v.get("when"),
+            "author": ((v.get("by") or {}).get("displayName")),
+            "labels": [x.get("name") for x in ((page.get("metadata") or {}).get("labels") or {}).get("results", []) if x.get("name")]}
+
+
+async def fetch_confluence_by_id(base_url: str, page_id: str, token: str, *, diagram_text: bool = True,
+                                 image_marks: bool = False) -> ParsedDocument:
+    """page_id 기반 단일 페이지 fetch — 트리 선택 후 bulk 인제스천에서 호출.
+    그림(10/29): draw.io는 첨부 원본에서 글로(diagram_text), 일반 그림은 자리 표시(image_marks) — confluence_media. 둘 다 끄면 예전처럼 버림."""
     from bs4 import BeautifulSoup
+    from agents.knowledge_rag.ingestion import confluence_media as cm
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     base = base_url.rstrip("/")
@@ -513,15 +550,20 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
             r = await client.get(
                 f"{base}/rest/api/content/{page_id}",
                 headers=headers,
-                params={"expand": "body.storage,title,space,version,_links,ancestors"},
+                params={"expand": "body.storage,title,space,version,_links,ancestors,metadata.labels,"
+                                  "restrictions.read.restrictions.user,restrictions.read.restrictions.group,"
+                                  "ancestors.restrictions.read.restrictions.user,ancestors.restrictions.read.restrictions.group"},
             )
             r.raise_for_status()
             page = r.json()
+            storage_html = page.get("body", {}).get("storage", {}).get("value", "")
+            restricted = read_restriction(page)
+            names = cm.find_diagrams(storage_html) if diagram_text and not restricted else []   # 제한 페이지는 첨부도 안 받는다
+            diagrams = await cm.fetch_diagrams(client, base, page_id, names, headers)
     except (httpx.HTTPStatusError, httpx.RequestError) as e:
         raise _translate_httpx_error(e) from e
 
     page_title = page.get("title", f"Page {page_id}")
-    storage_html = page.get("body", {}).get("storage", {}).get("value", "")
     space_name = page.get("space", {}).get("name", "")
     page_url = _build_page_url(base, page_id, page)
     page_version = page.get("version", {}).get("number")
@@ -531,7 +573,10 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
     ancestors = page.get("ancestors") or []
     parent_title = ancestors[-1].get("title") if ancestors else None
 
-    soup = BeautifulSoup(prepare_storage_html(storage_html), "lxml")
+    media = {"diagram_text": diagram_text, "image_marks": image_marks, "diagrams": diagrams,
+             "diagram_names": names, "page": page_meta(page, page_url)}
+    soup = BeautifulSoup(prepare_storage_html(cm.apply_media(storage_html, diagrams, diagram_text_on=diagram_text,
+                                                             image_marks=image_marks)), "lxml")
     raw_text = _extract_text(soup)
     sections = _extract_heading_sections(soup)
 
@@ -547,6 +592,8 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str) -> Par
             "title": page_title,
             "version": page_version,
             "parent_title": parent_title,
-            "raw_html": storage_html,   # 원문 원장용(2026-10-08)
+            "raw_html": storage_html,   # 원문 원장용(2026-10-08) — 그림 자리 글은 넣지 않은 원본 그대로
+            "media": media,             # 원장 media(#97) — 다시 분할이 같은 그림 글로(네트워크 없이)
+            "restricted": restricted,   # 읽기 제한 수준(page/ancestor) — 미리보기가 조각을 만들지 않고 기록만
         },
     )

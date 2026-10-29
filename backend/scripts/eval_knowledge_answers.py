@@ -154,7 +154,8 @@ async def main() -> int:
                     cc = await build_chat_context(it["ns"], it["question"], vec, clarify_scope="*", list_question=it["question"], **kw)
                 ctx_ids = {int(x) for x in _CTX_DOC.findall(cc.llm_context)}   # 실제로 LLM 문맥에 들어간 지식(채택·부모 확장 포함)
                 gic = bool(ctx_ids & set(it["gold_ids"]))
-                ref = "\n\n".join(refs.get(i, "") for i in it["gold_ids"])
+                # 문항에 정답 원문(ref)이 실려 있으면 그것으로 — 정답이 페이지인 문항(gold_pages)은 전/후 조각이 달라도 같은 기준으로 채점해야 한다
+                ref = it.get("ref") or "\n\n".join(refs.get(i, "") for i in it["gold_ids"])
                 n_active = sum(1 for i in it["gold_ids"] if i in refs)   # 일부만 남으면 기준이 줄어 부분·오답이 부풀 수 있다 — 기록
                 for k in range(a.repeat):
                     if (it["qid"], k) in done:

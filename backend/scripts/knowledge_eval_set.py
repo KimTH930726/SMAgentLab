@@ -11,6 +11,19 @@ from pathlib import Path
 
 async def load_items(conn, path: str) -> list[dict]:
     items = [json.loads(l) for l in Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+    # 정답이 페이지인 문항(gold_pages, 10/29 그림 처리 전/후 측정) — 다시 적재하면 조각 id가 바뀌므로 그 페이지의 **지금** 활성 조각을 정답으로
+    pages = sorted({p for it in items for p in it.get("gold_pages") or []})
+    if pages:
+        by_page: dict = {}
+        for r in await conn.fetch("SELECT id, confluence_page_id FROM rag_knowledge WHERE status = 'active' "
+                                  "AND confluence_page_id = ANY($1::text[]) ORDER BY id", pages):
+            by_page.setdefault(r["confluence_page_id"], []).append(r["id"])
+        for it in items:
+            if it.get("gold_pages"):
+                it["gold_ids"] = [i for p in it["gold_pages"] for i in by_page.get(p, [])]
+        none = sum(1 for it in items if it.get("gold_pages") and not it["gold_ids"])
+        if none:
+            print(f"⚠ 정답 페이지에 활성 조각이 없는 문항 {none}개(승인 대기·미적재) — 검색 놓침으로 센다")
     gold = sorted({i for it in items for i in it["gold_ids"]})
     now = {r["id"]: r["name"] for r in await conn.fetch(
         "SELECT k.id, n.name FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id "

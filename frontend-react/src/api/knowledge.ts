@@ -239,29 +239,6 @@ export async function checkBulkReplace(namespace: string, sourceDocumentIds: num
   });
 }
 
-export async function importCsv(
-  file: File,
-  namespace: string,
-  columnMapping: Record<string, string>,
-): Promise<{ created: number; job_id: number | null }> {
-  const form = new FormData();
-  form.append('file', file);
-  form.append('namespace', namespace);
-  form.append('column_mapping', JSON.stringify(columnMapping));
-  return apiFetch('/knowledge/import/csv', { method: 'POST', body: form });
-}
-
-export async function importTextSplit(
-  namespace: string,
-  rawText: string,
-  strategy = 'auto',
-): Promise<{ created: number; job_id: number | null; chunks: number }> {
-  return apiFetch('/knowledge/import/text-split', {
-    method: 'POST',
-    body: JSON.stringify({ namespace, raw_text: rawText, strategy }),
-  });
-}
-
 // 지식의 문서 안 위치(2026-10-07) — 분할 방식별(섹션 구조/문서 순서/단건)
 export interface KnowledgeBrief { id: number; title: string; preview: string; truncated?: boolean; heading_path: string[] }
 export interface KnowledgeStructure {
@@ -371,20 +348,6 @@ export interface FileUploadResult {
   page_count: number | null;
 }
 
-export async function importFile(
-  file: File,
-  namespace: string,
-  opts?: { chunkStrategy?: string; autoAnalyze?: boolean; autoGlossary?: boolean },
-): Promise<FileUploadResult> {
-  const form = new FormData();
-  form.append('file', file);
-  form.append('namespace', namespace);
-  form.append('chunk_strategy', opts?.chunkStrategy ?? 'auto');
-  if (opts?.autoAnalyze) form.append('auto_analyze', 'true');
-  if (opts?.autoGlossary) form.append('auto_glossary', 'true');
-  return apiFetch('/knowledge/import/file', { method: 'POST', body: form });
-}
-
 export interface FilePreviewResult {
   source_name: string;
   source_type: string;
@@ -433,23 +396,6 @@ export interface UrlPreviewResult {
   confluence_page_id: string | null;
   confluence_version: number | null;
   structure: { heading_sections: number; structured: boolean };
-}
-
-export async function importFromUrl(
-  namespace: string,
-  url: string,
-  opts?: { confluenceToken?: string; chunkStrategy?: string; autoGlossary?: boolean },
-): Promise<UrlImportResult> {
-  return apiFetch('/knowledge/import/url', {
-    method: 'POST',
-    body: JSON.stringify({
-      namespace,
-      url,
-      confluence_token: opts?.confluenceToken || null,
-      chunk_strategy: opts?.chunkStrategy ?? 'auto',
-      auto_glossary: opts?.autoGlossary ?? false,
-    }),
-  });
 }
 
 export async function previewUrl(
@@ -517,7 +463,7 @@ export interface ConfluenceBulkPreviewResult {
     /** 헤딩(h1~h4)으로 나뉜 섹션 수 — 2개 미만이면 구조 없음(섹션 경계·부모 확장이 약해짐) */
     heading_sections: number; structured: boolean;
   }>;
-  failed_pages: Array<{ page_id: string; title: string; error: string }>;
+  failed_pages: Array<{ page_id: string; title: string; error: string; restricted?: 'page' | 'ancestor' | 'unknown'; held_chunks?: number }>;   // restricted = 읽기 제한이라 건너뜀(기록만)
 }
 
 export async function previewConfluenceBulk(

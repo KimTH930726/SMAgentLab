@@ -359,6 +359,9 @@ def test_activate_supersedes_only_active_documents():
         async def execute(self, sql, *a):
             sqls.append((sql, a))
     asyncio.run(L.activate(C(), 1, [5], [4, 5, 6], []))
-    sup = [s for s, a in sqls if "superseded" in s]
-    assert len(sup) == 1 and "status = 'active'" in sup[0]
-    assert [a for s, a in sqls if "superseded" in s][0][0] == [4, 6]
+    sup = [(s, a) for s, a in sqls if "superseded" in s and "'restricted'" not in s]
+    assert len(sup) == 1 and "status = 'active'" in sup[0][0]
+    assert sup[0][1][0] == [4, 6]
+    # 같은 페이지의 읽기 제한 기록은 적재되면 내린다(10/29 리뷰 L2) — restricted 줄만, 확정한 원문과 같은 위치만
+    rel = [(s, a) for s, a in sqls if "'restricted'" in s]
+    assert len(rel) == 1 and "r.source_ref = d.source_ref" in rel[0][0] and rel[0][1][0] == [5]

@@ -1724,10 +1724,13 @@ function UrlForm({ namespace, preset, onSuccess, onCancel }: {
       const result = await previewConfluenceBulk(namespace, baseUrl, pages, { chunkStrategy: 'auto' });
 
       if (result.chunks.length === 0) {
-        const failMsg = result.failed_pages.length > 0
-          ? ` (실패: ${result.failed_pages.map(p => p.title).join(', ')})`
-          : '';
-        setError(`청크가 생성되지 않았습니다.${failMsg}`);
+        const r = result.failed_pages.filter(p => p.restricted);
+        const f = result.failed_pages.filter(p => !p.restricted);
+        const parts = [
+          f.length > 0 ? `실패: ${f.map(p => p.title).join(', ')}` : '',
+          r.length > 0 ? `읽기 제한이라 건너뜀(기록만): ${r.map(p => p.title).join(', ')}` : '',
+        ].filter(Boolean);
+        setError(`청크가 생성되지 않았습니다.${parts.length ? ` (${parts.join(' · ')})` : ''}`);
         return;
       }
 
@@ -1750,9 +1753,14 @@ function UrlForm({ namespace, preset, onSuccess, onCancel }: {
       setShowTreeModal(false);
       setShowReview(true);
 
-      if (result.failed_pages.length > 0) {
-        setError(`일부 페이지 fetch 실패: ${result.failed_pages.map(p => p.title).join(', ')}`);
-      }
+      // 읽기 제한 페이지는 실패가 아니라 일부러 건너뜀(기록만, 10/29) — 같은 문구로 섞으면 다시 시도할 일로 보인다
+      const restricted = result.failed_pages.filter(p => p.restricted);
+      const failed = result.failed_pages.filter(p => !p.restricted);
+      const msgs = [
+        failed.length > 0 ? `일부 페이지를 못 가져왔어요: ${failed.map(p => p.title).join(', ')}` : '',
+        restricted.length > 0 ? `읽기 제한이라 건너뜀(기록만): ${restricted.map(p => p.title).join(', ')}` : '',
+      ].filter(Boolean);
+      if (msgs.length > 0) setError(msgs.join(' · '));
     } catch (e: any) { setError(e.message || '청크 미리보기 실패'); }
     finally { setLoading(false); }
   };

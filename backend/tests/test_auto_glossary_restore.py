@@ -79,7 +79,7 @@ class TestAutoGlossarySource:
         create = AsyncMock(return_value={})
         with patch("core.database.get_conn", MagicMock(return_value=conn)), \
              patch("core.database.resolve_namespace_id", AsyncMock(return_value=1)), \
-             patch("service.llm.factory.get_llm_provider", MagicMock()), \
+             patch("service.llm.factory.get_ingest_llm", MagicMock(return_value=(MagicMock(), True))), \
              patch("core.security.get_user_llm_credentials", MagicMock(return_value=None)), \
              patch("agents.knowledge_rag.ingestion.tagger.extract_glossary_terms",
                    AsyncMock(return_value=[{"term": "재배차", "description": "배차를 다시 요청"}])), \

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # 지식 등록 위치 판정 LLM(E, 10/23 사용자 "일단 로컬로 — 팀에서 논의"): local = 위 OpenAI 호환 주소(없으면 시스템 LLM), system = 시스템 LLM.
     # 게이트웨이는 보안 필터가 컨플루언스 문서를 거부한다(문서 26 중 3, 조각 74 중 44) — 등록 글은 사용자 입력이라 바꿔 보내지 않는다
     locator_llm: str = "local"
+    # 적재 때 원문을 읽는 LLM 작업(용어 자동 추출·용어 동의어) — local이면 로컬 주소(openai_compat_base_url), 없으면 시스템 LLM(로그로 보임).
+    # 10/29 사용자 "컨플 원문은 로컬에서는 로컬 LLM으로 1차 적재" — 넣을 곳 판단(locator_llm)과 같은 방식. 채팅 답은 그대로 시스템 LLM
+    ingest_llm: str = "local"
 
     # InHouse DevX LLM — OAuth2 Client Credentials 인증
     # base_url 이하 /api/v1/auth/token, /api/v1/agent/chat 사용

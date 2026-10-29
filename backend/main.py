@@ -1487,6 +1487,13 @@ async def _migrate_eval_gate_axis(conn) -> None:
     await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_gate_baseline_per_axis ON eval_gate_run (axis) WHERE is_baseline")
 
 
+async def _migrate_source_media(conn) -> None:
+    """#97(10/29, 컨플 정제 레이어 ① — 사용자 "개발 시작") 원장에 그림 글·페이지 정보 칸. media = {diagram_text, image_marks,
+    diagrams: {이름: draw.io에서 뽑은 글}, diagram_names, page: {url, space_key, modified_at, author, labels}}. 다시 분할이 네트워크 없이
+    미리보기와 같은 그림 글을 쓰게, 원본 안내·노후 판단에. 원문(raw_content)은 그대로. 옛 행은 NULL(그림 버림 = 예전 동작). 멱등."""
+    await conn.execute("ALTER TABLE rag_source_document ADD COLUMN IF NOT EXISTS media JSONB")
+
+
 async def _migrate_drop_v1_eval_tables(conn) -> None:
     """#93(10/27, 사용자 D 승인 "옛 표는 삭제 진행") 옛 v1 평가 이력 표 두 개 삭제 — 실험실(Track2) 실행 이력 policy_track2_run(8행)·
     답변 정확도 이력 eval_answer_run(5행). 화면·API·쓰기 경로는 v2.176에서 이미 뺐고, 지우기 전 JSON 백업(eval_out/backup_v1).
@@ -2149,6 +2156,7 @@ async def _run_migrations() -> None:
         await _migrate_ingestion_quality(conn)
         await _migrate_rename_unsorted_category(conn)
         await _migrate_source_document(conn)
+        await _migrate_source_media(conn)              # #97 — 원장 그림 글·페이지 정보(원장 표 바로 뒤)
         await _migrate_llm_usage(conn)
         await _migrate_prompt_cleanup(conn)
         await _migrate_data_marker(conn)
