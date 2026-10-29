@@ -1545,8 +1545,12 @@ async def _migrate_team_import(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_import_page_batch ON rag_import_page (batch_id, status)")
     # 적재 진행률·롤백할 자동 용어 범위(리뷰 10/29) — 표를 먼저 만든 dev DB에도 붙게 따로
     for col, typ in (("load_total", "INT NOT NULL DEFAULT 0"), ("load_done", "INT NOT NULL DEFAULT 0"), ("loaded_by_user_id", "INT"),
-                     ("glossary_from_id", "INT"), ("glossary_to_id", "INT"), ("glossary_source", "TEXT")):
+                     ("glossary_from_id", "INT"), ("glossary_to_id", "INT"), ("glossary_source", "TEXT"),
+                     ("default_namespace_id", "INT")):   # 공간 기본 위치(10/29 — 사람이 "이 공간은 온라인스토어"를 한 번)
         await conn.execute(f"ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS {col} {typ}")
+    # 누가 정한 위치인가(ai·space_default) + 표본 묶음 기준 컬렉션(정해질 때 값 — 사람이 분류를 바꿔도 표본은 원래 판단을 검사)
+    for col, typ in (("assigned_by", "TEXT"), ("sample_ns", "INT")):
+        await conn.execute(f"ALTER TABLE rag_import_page ADD COLUMN IF NOT EXISTS {col} {typ}")
     # 기동 = 이전 프로세스의 분류·적재는 멈춤 — 고유 인덱스보다 먼저 닫는다(같은 팀 진행 중 행이 둘이면 인덱스가 실패해 기동이 막혔다, 재리뷰 10/29)
     from agents.knowledge_rag.ingestion.team_import import close_interrupted
     await close_interrupted(conn)

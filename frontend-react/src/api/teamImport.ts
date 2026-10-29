@@ -4,7 +4,7 @@ import { apiFetch } from './client';
 
 export type BatchStatus = 'previewing' | 'preview' | 'failed' | 'loading' | 'loaded' | 'rolled_back';
 export type PageStatus = 'queued' | 'auto' | 'review' | 'existing' | 'excluded' | 'held' | 'restricted' | 'empty' | 'failed' | 'loaded';
-export type ReviewReason = 'low_confidence' | 'unowned' | 'not_writable' | 'ai_failed';
+export type ReviewReason = 'low_confidence' | 'unowned' | 'not_writable' | 'ai_failed' | 'org_like' | 'default_conflict';
 
 export interface ImportBatchRow {
   id: number;
@@ -26,6 +26,7 @@ export interface ImportBatch extends ImportBatchRow {
   created_by_user_id: number | null;
   load_total: number;
   load_done: number;
+  default_namespace_id: number | null;   // 공간 기본 위치(사람이 한 번) — 없으면 AI가 페이지마다
 }
 
 export interface ImportPage {
@@ -42,6 +43,8 @@ export interface ImportPage {
   proposed_namespace_id: number | null;
   confident: boolean;
   final_namespace_id: number | null;
+  assigned_by: 'ai' | 'space_default' | null;   // 자동으로 정해진 곳을 누가 정했나 — 공간 기본값은 사람 결정
+  sample_ns: number | null;
   sample_state: 'pending' | 'ok' | 'wrong' | null;
   job_id: number | null;
   signals: { neighbors: Record<string, number>; reason?: string; fallback?: string; error?: string; restricted?: string; doc_type?: string };
@@ -61,7 +64,7 @@ export interface ImportBatchDetail {
   pages: ImportPage[];
   collections: ImportCollection[];
   blockers: string[];
-  sample_targets: Record<string, number>;   // 컬렉션(AI가 고른 곳)별 표본 목표 — 정정이 나오면 2배
+  sample_targets: Record<string, number>;   // 표본 묶음("ai:<id>" · "space_default:<id>")별 목표 — 정정이 나오면 2배
   sample_size: number;
   reasons: Record<ReviewReason, string>;
 }
@@ -70,8 +73,17 @@ const BASE = '/knowledge/team-import';
 
 export const listImportBatches = () => apiFetch<ImportBatchRow[]>(BASE);
 export const getImportBatch = (id: number) => apiFetch<ImportBatchDetail>(`${BASE}/${id}`);
-export const startImport = (url: string, teamId?: number | null) =>
-  apiFetch<{ id: number }>(BASE, { method: 'POST', body: JSON.stringify({ url, team_id: teamId ?? null }) });
+export const startImport = (url: string, teamId?: number | null, defaultNs?: number | null) =>
+  apiFetch<{ id: number }>(BASE, { method: 'POST', body: JSON.stringify({ url, team_id: teamId ?? null, default_namespace_id: defaultNs ?? null }) });
+export const getImportCollections = (teamId?: number | null) =>
+  apiFetch<ImportCollection[]>(`${BASE}/collections${teamId ? `?team_id=${teamId}` : ''}`);
+export const setImportDefault = (id: number, namespaceId: number | null) =>
+  apiFetch<Record<string, number>>(`${BASE}/${id}/default`, { method: 'POST', body: JSON.stringify({ namespace_id: namespaceId }) });
+/** 표본 묶음 키 — 서버 team_import.sample_key와 같은 규칙 */
+export const sampleKey = (p: ImportPage) => {
+  const ns = p.sample_ns ?? p.ai_namespace_id;
+  return ns == null ? null : `${p.assigned_by ?? 'ai'}:${ns}`;
+};
 export const updateImportPages = (id: number, ids: number[], action: 'classify' | 'hold' | 'exclude' | 'include', namespaceId?: number) =>
   apiFetch<{ updated: number }>(`${BASE}/${id}/pages`, { method: 'POST', body: JSON.stringify({ ids, action, namespace_id: namespaceId ?? null }) });
 export const reviewImportSample = (id: number, pageRowId: number, ok: boolean, namespaceId?: number | null) =>

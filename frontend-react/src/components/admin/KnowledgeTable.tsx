@@ -42,6 +42,7 @@ import { LocationPicker, usePrefetchLocate } from './LocationPicker';
 import { showAlert, showConfirm } from '../../store/useDialogStore';
 import { KnowledgeStructurePanel } from './KnowledgeStructurePanel';
 import { EvidenceButton } from './Evidence';
+import { ImportBatches, SpaceImportStart } from './TeamImportPanel';   // 컨플 공간·하위 전체 넣기 — 등록 창구는 하나(10/29)
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
 
@@ -931,6 +932,7 @@ function IngestTab({ namespace, preset, jobs, onSuccess, onGoToList, onGoToRevie
   const [progressJobId, setProgressJobId] = useState<number | null>(null);
   const [autoNavigate, setAutoNavigate] = useState(false);
   const [suggestTarget, setSuggestTarget] = useState<ChosenLocation | null>(null);   // 담당 아닌 곳에 올린 묶음 — 끝나면 결과 안내
+  const [openBatch, setOpenBatch] = useState<number | null>(null);   // 공간·하위 전체 넣기 배치 — 시작하면 아래 적재 배치에서 연다
   const [jobPage, setJobPage] = useState(1);
   const [jobPageSize, setJobPageSize] = useState(30);
   const { totalPages: jobTotalPages, totalItems: jobTotalItems, slice: sliceJobs } = useClientPaging(jobs, jobPageSize);
@@ -1040,9 +1042,12 @@ function IngestTab({ namespace, preset, jobs, onSuccess, onGoToList, onGoToRevie
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'url' && (
-        <UrlForm namespace={namespace} preset={preset}
+        <UrlForm namespace={namespace} preset={preset} onImportStarted={setOpenBatch}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
+
+      {/* 공간·하위 전체 넣기 배치 — 분류 미리보기 · 게이트 · 롤백(배치가 하나라도 있으면) */}
+      <ImportBatches openId={openBatch} onOpen={setOpenBatch} />
 
       {/* 인제스천 작업 이력 */}
       {jobs.length > 0 && (
@@ -1647,10 +1652,11 @@ function ManualForm({ namespace, preset, onSuccess, onCancel }: {
 
 // ── URL / Confluence 인라인 폼 ────────────────────────────────────────────────
 
-function UrlForm({ namespace, preset, onSuccess, onCancel }: {
+function UrlForm({ namespace, preset, onSuccess, onCancel, onImportStarted }: {
   namespace: string;      // 미리보기(원문 초안)를 둘 곳 = 지금 보는 컬렉션. 실제로 넣는 곳은 청크 검토의 넣을 곳 카드(E2)
   preset?: string | null;
   onSuccess: (outcome?: IngestOutcome) => void; onCancel: () => void;
+  onImportStarted: (batchId: number) => void;   // 공간·하위 전체 넣기 시작 → 등록 탭 아래 적재 배치에서 연다
 }) {
   const { user, updateUser } = useAuthStore();
   const [url, setUrl] = useState('');
@@ -1664,7 +1670,9 @@ function UrlForm({ namespace, preset, onSuccess, onCancel }: {
   const [done, setDone] = useState('');
 
   // 트리 선택 (Confluence 하위 페이지)
-  const [includeChildren, setIncludeChildren] = useState(false);
+  // 컨플 넣는 방식 — 이 페이지만 / 하위 골라 넣기(트리 체크, 한 곳) / 공간·하위 전체(분류 미리보기 → 페이지마다 분류, 배치 롤백)
+  const [confMode, setConfMode] = useState<'page' | 'pick' | 'space'>('page');
+  const includeChildren = confMode === 'pick';
   const [showTreeModal, setShowTreeModal] = useState(false);
   const [tree, setTree] = useState<ConfluenceTreeResponse | null>(null);
   const [selectedPageIds, setSelectedPageIds] = useState<Set<string>>(new Set());
@@ -1866,30 +1874,35 @@ function UrlForm({ namespace, preset, onSuccess, onCancel }: {
       )}
 
       {isConfluence && hasPat && (
-        <div className="flex items-center gap-2 p-2.5 bg-slate-900/60 rounded-lg border border-slate-700">
-          <input
-            type="checkbox"
-            id="includeChildren"
-            checked={includeChildren}
-            onChange={(e) => setIncludeChildren(e.target.checked)}
-            className="w-3.5 h-3.5 accent-indigo-500"
-          />
-          <label htmlFor="includeChildren" className="text-xs text-slate-300 cursor-pointer flex-1">
-            하위 페이지 포함 — 입력 URL을 최상단으로 자손 페이지 트리에서 선택 등록
-          </label>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2" role="radiogroup" aria-label="컨플 넣는 방식">
+          {([
+            ['page', '이 페이지만', '입력한 페이지 하나 — 청크 검토 후 등록'],
+            ['pick', '하위 골라 넣기', '트리에서 체크(최대 200) — 한 곳에 등록'],
+            ['space', '공간·하위 전체 넣기', '페이지마다 분류 미리보기 → 표본 → 적재 · 배치 롤백'],
+          ] as const).map(([v, title, desc]) => (
+            <button key={v} role="radio" aria-checked={confMode === v} onClick={() => setConfMode(v)}
+              className={`text-left p-2.5 rounded-lg border ${confMode === v ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40' : 'border-slate-700 bg-slate-900/60 hover:border-slate-500'}`}>
+              <div className="text-xs font-semibold text-slate-200">{title}</div>
+              <div className="text-[11px] text-slate-500">{desc}</div>
+            </button>
+          ))}
         </div>
       )}
 
       {done && <p className="text-sm text-emerald-600 dark:text-emerald-400 font-medium">{done}</p>}
       {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
 
-      <div className="flex gap-2 justify-end pt-1">
-        <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
-        <Button variant="primary" size="sm" onClick={handleOpenReview}
-          disabled={!url.trim() || previewing || treeLoading}>
-          {treeLoading ? '트리 조회 중...' : previewing ? '수집 중...' : (isConfluence && includeChildren ? '하위 페이지 선택' : '수집 & 청크 검토')}
-        </Button>
-      </div>
+      {isConfluence && hasPat && confMode === 'space' ? (
+        <SpaceImportStart url={url} onStarted={onImportStarted} onCancel={onCancel} />
+      ) : (
+        <div className="flex gap-2 justify-end pt-1">
+          <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
+          <Button variant="primary" size="sm" onClick={handleOpenReview}
+            disabled={!url.trim() || previewing || treeLoading}>
+            {treeLoading ? '트리 조회 중...' : previewing ? '수집 중...' : (isConfluence && includeChildren ? '하위 페이지 선택' : '수집 & 청크 검토')}
+          </Button>
+        </div>
+      )}
 
       <ChunkReviewModal
         isOpen={showReview}

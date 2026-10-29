@@ -2,31 +2,33 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getTeams } from '../../api/auth';
 import {
-  confirmImport, confluencePageUrl, getImportBatch, listImportBatches, reviewImportSample, rollbackImport, startImport, updateImportPages,
+  confirmImport, confluencePageUrl, getImportBatch, getImportCollections, listImportBatches, reviewImportSample, rollbackImport, sampleKey,
+  setImportDefault, startImport, updateImportPages,
   type ImportBatchDetail, type ImportCollection, type ImportPage,
 } from '../../api/teamImport';
 import { useAuthStore } from '../../store/useAuthStore';
 import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
 
 /**
- * 지식 › 팀 적재(컨플 수집기, 10/29 목업 Qnt3dJ5agwBhczty75h6Nc · confluence-curation-layer-design §12).
- * 수집 대상(주소) → 분류 미리보기(자동 분류 · 검토 필요 · 표본 검토 · 제외 — 확정 전엔 아무것도 적재 안 됨) → 분류 확정·적재 → 게이트 · 롤백.
- * 정확도 우선: 자동 분류는 확신 기준을 넘은 것만, 나머지는 사람이 AI 제안별로 묶어 분류. 팀 첫 적재는 표본 검토가 게시 전 필수.
+ * 컨플 공간·하위 전체 넣기(팀 적재, 10/29 목업 Qnt3dJ5agwBhczty75h6Nc v8 · confluence-curation-layer-design §12) — 지식 문서 › 등록 › URL/Confluence 안.
+ * 등록 창구는 하나(10/20 결정) — 따로 메뉴를 두지 않는다. 시작(SpaceImportStart)은 URL 폼 안, 배치(ImportBatches)는 등록 탭 아래.
+ * 수집 대상 → 분류 미리보기(확정 전엔 적재 안 됨) → 분류 확정·적재 → 게이트 · 롤백. 공간 기본 위치 = 사람이 "이 공간은 X"를 한 번 —
+ * 업무 페이지는 거기로, AI는 예외(조직 지식·확신하는 다른 곳)만 묻는다. 팀 첫 적재는 표본 검토가 게시 전 필수.
  */
-export function TeamImportPanel() {
+export function ImportBatches({ openId, onOpen }: { openId: number | null; onOpen: (id: number) => void }) {
   const { data: batches = [] } = useQuery({
     queryKey: ['team-import'], queryFn: listImportBatches,
     refetchInterval: (q) => ((q.state.data ?? []).some((b) => b.status === 'previewing' || b.status === 'loading') ? 5000 : false),
   });
-  const [openId, setOpenId] = useState<number | null>(null);
   const current = openId ?? batches[0]?.id ?? null;
+  if (batches.length === 0) return null;
   return (
-    <div className="space-y-5" data-testid="team-import">
-      <StartForm onStarted={setOpenId} />
-      {batches.length > 0 && (
+    <div className="space-y-4" data-testid="team-import">
+      <h3 className="text-sm font-medium text-slate-400" title="공간·하위 전체 넣기로 만든 배치 — 분류 미리보기 · 게이트 · 롤백">적재 배치</h3>
+      {(
         <div className="flex flex-wrap gap-2 text-xs">
           {batches.map((b) => (
-            <button key={b.id} onClick={() => setOpenId(b.id)}
+            <button key={b.id} onClick={() => onOpen(b.id)}
               className={`px-3 py-1.5 rounded-lg border ${b.id === current ? 'border-indigo-500 dark:border-indigo-400 text-slate-100 bg-indigo-50 dark:bg-indigo-500/10' : 'border-slate-700 text-slate-400 hover:text-slate-200'}`}
               title={b.root_url}>
               #{b.id} {b.team_name ?? ''} · {b.root_title ?? b.root_url} · {STATUS_TEXT[b.status]}
@@ -43,37 +45,88 @@ const STATUS_TEXT: Record<string, string> = {
   previewing: '분류 중', preview: '분류 미리보기', failed: '실패', loading: '적재 중', loaded: '적재됨', rolled_back: '롤백됨',
 };
 
-function StartForm({ onStarted }: { onStarted: (id: number) => void }) {
+/** URL 폼 안 "공간·하위 전체 넣기" — 팀(관리자만) · 이 공간 기본 위치 · [분류 미리보기 만들기]. */
+export function SpaceImportStart({ url, onStarted, onCancel }: { url: string; onStarted: (id: number) => void; onCancel: () => void }) {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
   const { data: teams = [] } = useQuery({ queryKey: ['teams'], queryFn: getTeams, enabled: isAdmin, staleTime: 300_000 });
-  const [url, setUrl] = useState('');
   const [teamId, setTeamId] = useState<number | null>(null);
+  const [defaultNs, setDefaultNs] = useState<number | null>(null);
+  const { data: cols = [] } = useQuery({
+    queryKey: ['team-import-collections', teamId], queryFn: () => getImportCollections(teamId),
+    enabled: !isAdmin || teamId != null, staleTime: 60_000,
+  });
   const qc = useQueryClient();
   const start = useMutation({
-    mutationFn: () => startImport(url.trim(), isAdmin ? teamId : null),
-    onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['team-import'] }); onStarted(r.id); setUrl(''); },
+    mutationFn: () => startImport(url.trim(), isAdmin ? teamId : null, defaultNs),
+    onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['team-import'] }); onStarted(r.id); },
     onError: (e) => showError(e),
   });
+  const biz = cols.filter((c) => c.kind === 'domain' && c.writable && !c.unowned);
   return (
-    <div className="rounded-xl border border-slate-700 bg-slate-800 p-4 space-y-3">
-      <div className="text-sm font-semibold text-slate-100">수집 대상</div>
-      <div className="flex flex-wrap gap-2">
-        {isAdmin && (
-          <select value={teamId ?? ''} onChange={(e) => setTeamId(e.target.value ? Number(e.target.value) : null)}
-            className="text-sm bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-slate-200" aria-label="팀">
-            <option value="">팀 고르기</option>
-            {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+    <div className="space-y-3">
+      <div className="rounded-lg border border-dashed border-indigo-300 dark:border-indigo-500/50 p-3 space-y-2">
+        <div className="text-xs font-semibold text-slate-200">이 공간 기본 위치</div>
+        <div className="flex flex-wrap gap-2 items-center">
+          {isAdmin && (
+            <select value={teamId ?? ''} onChange={(e) => { setTeamId(e.target.value ? Number(e.target.value) : null); setDefaultNs(null); }}
+              className="text-sm bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200" aria-label="팀">
+              <option value="">팀 고르기</option>
+              {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          )}
+          <select value={defaultNs ?? ''} onChange={(e) => setDefaultNs(e.target.value ? Number(e.target.value) : null)}
+            className="text-sm bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200" aria-label="기본 위치">
+            <option value="">— 비워 둠: AI가 페이지마다 분류 —</option>
+            {biz.map((c) => <option key={c.id} value={c.id}>{c.label}{c.parts.length ? ` · ${c.parts.join(', ')}` : ''}</option>)}
           </select>
-        )}
-        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="컨플 주소 — 팀·파트 공간(/display/KEY) 또는 최상위 페이지"
-          className="flex-1 min-w-[260px] text-sm bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200" aria-label="컨플 주소" />
+        </div>
+        <p className="text-[11px] text-slate-500" title="업무가 여럿 섞인 공간(예: 온라인서비스 = 딜리버스 + 제휴서비스)은 비워 둔다">
+          공간 전체가 한 업무면 고른다 — 업무 페이지는 여기로, AI는 예외(조직 지식 · 확신하는 다른 곳)만 묻는다
+        </p>
+      </div>
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-400 hover:text-slate-200">취소</button>
         <button disabled={!url.trim() || (isAdmin && !teamId) || start.isPending} onClick={() => start.mutate()}
           className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40"
           title="페이지를 받아 AI가 분류만 한다 — 확정 전엔 아무것도 적재되지 않음">
           분류 미리보기 만들기
         </button>
       </div>
+    </div>
+  );
+}
+
+function DefaultControl({ data, onChange }: { data: ImportBatchDetail; onChange: () => void }) {
+  const b = data.batch;
+  const names = useNames(data.collections);
+  const [ns, setNs] = useState<number | null>(b.default_namespace_id);
+  const biz = data.collections.filter((c) => c.kind === 'domain' && c.writable && !c.unowned);
+  const apply = useMutation({
+    mutationFn: (v: number | null) => setImportDefault(b.id, v),
+    onSuccess: (r) => {
+      onChange();
+      const n = (k: string) => r[k] ?? 0;
+      void showAlert(`기본 위치로 ${n('space_default')} · AI 확신 ${n('ai')} · 검토 필요 ${Object.entries(r).filter(([k]) => k !== 'space_default' && k !== 'ai').reduce((a, [, v]) => a + v, 0)}`,
+        { title: '다시 분류했어요' });
+    },
+    onError: (e) => showError(e),
+  });
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-indigo-300 dark:border-indigo-500/50 px-3 py-2"
+      title="사람이 아직 손대지 않은 페이지를 저장된 AI 판정으로 다시 분류(LLM 다시 안 부름). 직접 분류·표본 판정한 페이지는 그대로">
+      <span className="text-xs font-semibold text-slate-200">이 공간 기본 위치</span>
+      <select value={ns ?? ''} onChange={(e) => setNs(e.target.value ? Number(e.target.value) : null)}
+        className="text-sm bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200" aria-label="기본 위치">
+        <option value="">— 비워 둠: AI가 페이지마다 분류 —</option>
+        {biz.map((c) => <option key={c.id} value={c.id}>{c.label}{c.parts.length ? ` · ${c.parts.join(', ')}` : ''}</option>)}
+      </select>
+      <button disabled={ns === b.default_namespace_id || apply.isPending}
+        onClick={async () => {
+          if (await showConfirm('사람이 아직 손대지 않은 페이지를 이 기준으로 다시 분류해요. 아직 안 본 표본은 다시 뽑아요(직접 분류·판정한 것은 그대로).')) apply.mutate(ns);
+        }}
+        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600 text-white disabled:opacity-40">기본 위치로 분류</button>
+      {b.default_namespace_id != null && <span className="text-xs text-slate-400">지금: {names.get(b.default_namespace_id)?.label ?? `#${b.default_namespace_id}(목록에 없음)`}</span>}
     </div>
   );
 }
@@ -158,6 +211,7 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
   const names = useNames(collections);
   const editable = b.status === 'preview';
   const auto = pages.filter((p) => p.status === 'auto');
+  const byDefault = auto.filter((p) => p.assigned_by === 'space_default').length;
   const review = pages.filter((p) => p.status === 'review');
   const samples = auto.filter((p) => p.sample_state);
   const sampleDone = samples.filter((p) => p.sample_state !== 'pending').length;
@@ -172,7 +226,8 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
     <div className="space-y-6">
       <div className="text-xs text-slate-400" title="예외: 읽기 제한으로 바뀐 페이지가 이미 적재돼 있으면 그 조각만 승인 대기로 내림">#{b.id} {b.root_title} · 분류 미리보기 — 확정 전까지 적재되지 않음</div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat k="자동 분류" v={auto.length} sub={`업무 ${auto.filter((p) => names.get(p.final_namespace_id ?? -1)?.kind === 'domain').length} · 조직 ${auto.filter((p) => names.get(p.final_namespace_id ?? -1)?.kind === 'org_space').length}`} />
+        <Stat k={b.default_namespace_id != null ? '기본 위치 · AI 확신' : '자동 분류'} v={auto.length}
+          sub={b.default_namespace_id != null ? `기본 위치 ${byDefault} · AI 확신 ${auto.length - byDefault}` : `업무 ${auto.filter((p) => names.get(p.final_namespace_id ?? -1)?.kind === 'domain').length} · 조직 ${auto.filter((p) => names.get(p.final_namespace_id ?? -1)?.kind === 'org_space').length}`} />
         <Stat k="검토 필요" v={review.filter((p) => p.final_namespace_id == null).length} sub={`전체 ${review.length}건 중 미분류`} hot={review.some((p) => p.final_namespace_id == null)} />
         <Stat k="표본 검토" v={`${sampleDone} / ${sampleTarget}`} sub={`정정 ${wrong}${b.sampling_required ? ' · 게시 전 필수' : ' · 선택'}`} hot={b.sampling_required && sampleDone < sampleTarget} />
         <Stat k="제외 · 보류" v={out.length} />
@@ -181,6 +236,7 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
         이미 적재됨 {other('existing')} · 읽기 제한 {other('restricted')}(지식 공백 기록) · 내용 없음 {other('empty')} · 실패 {other('failed')}
       </p>
 
+      {editable && <DefaultControl key={b.default_namespace_id ?? 'none'} data={data} onChange={onChange} />}
       <Bundles pages={pages} batchId={b.id} editable={editable} onChange={onChange} />
       <ReviewSection data={data} review={review} editable={editable} onChange={onChange} />
       <AutoSection data={data} auto={auto} editable={editable} onChange={onChange} />
@@ -352,12 +408,17 @@ function PageRows({ data, pages, editable, onChange }: { data: ImportBatchDetail
 
 function AutoSection({ data, auto, editable, onChange }: { data: ImportBatchDetail; auto: ImportPage[]; editable: boolean; onChange: () => void }) {
   const names = useNames(data.collections);
+  // 표본 묶음(누가 정했나 × 정해진 곳)별 — 서버 sample_key와 같다. 공간 기본값과 AI 확신은 같은 컬렉션이어도 따로 검사
   const byNs = useMemo(() => {
-    const m = new Map<number, ImportPage[]>();
-    for (const p of auto) m.set(p.ai_namespace_id ?? -1, [...(m.get(p.ai_namespace_id ?? -1) ?? []), p]);
+    const m = new Map<string, ImportPage[]>();
+    for (const p of auto) { const k = sampleKey(p) ?? 'none'; m.set(k, [...(m.get(k) ?? []), p]); }
     return [...m.entries()].sort((a, b) => b[1].length - a[1].length);
   }, [auto]);
-  const [open, setOpen] = useState<{ ns: number; mode: 'sample' | 'all' } | null>(null);
+  const label = (k: string) => {
+    const [by, id] = k.split(':');
+    return `${names.get(Number(id))?.label ?? id} · ${by === 'space_default' ? '기본 위치' : 'AI 확신'}`;
+  };
+  const [open, setOpen] = useState<{ ns: string; mode: 'sample' | 'all' } | null>(null);
   if (auto.length === 0) {
     return <p className="text-xs text-slate-400" title="첫 적재는 비슷한 지식(이웃)이 없어 자동 분류가 거의 없다 — 정확도 우선(10/29 실측)">자동 분류 0 — 이 팀 업무지식이 아직 없어 AI가 확신하지 못했어요. 검토 필요에서 분류해 주세요.</p>;
   }
@@ -375,10 +436,10 @@ function AutoSection({ data, auto, editable, onChange }: { data: ImportBatchDeta
               const wrong = s.filter((p) => p.sample_state === 'wrong').length;
               return (
                 <tr key={ns} className="border-t border-slate-700">
-                  <td className="px-3 py-2 text-slate-200">{names.get(ns)?.label ?? ns} <span className="text-xs text-slate-400">{names.get(ns)?.parts.join(', ')}</span></td>
+                  <td className="px-3 py-2 text-slate-200">{label(ns)}</td>
                   <td className="px-3 text-right tabular-nums text-slate-300">{ps.length}</td>
                   <td className="px-3 text-xs">
-                    <span className={done === s.length ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400'}>{done} / {s.length}</span>
+                    <span className={done >= (data.sample_targets[ns] ?? 0) ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400'}>{done} / {data.sample_targets[ns] ?? s.length}</span>
                     {wrong > 0 && <span className="ml-2 text-rose-600 dark:text-rose-400">정정 {wrong}</span>}
                   </td>
                   <td className="px-3 text-right whitespace-nowrap">
@@ -396,7 +457,7 @@ function AutoSection({ data, auto, editable, onChange }: { data: ImportBatchDeta
         return (
           <div className="rounded-lg border border-slate-700">
             <div className="flex items-center justify-between px-3 py-2 text-sm text-slate-200">
-              <span>{names.get(open.ns)?.label} · {open.mode === 'sample' ? '표본 검토' : '전체'} {ps.length}</span>
+              <span>{label(open.ns)} · {open.mode === 'sample' ? '표본 검토' : '전체'} {ps.length}</span>
               <button className="text-xs text-slate-400" onClick={() => setOpen(null)}>닫기</button>
             </div>
             {open.mode === 'sample'

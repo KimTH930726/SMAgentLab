@@ -1,8 +1,20 @@
 """팀 적재(컨플 수집기, #98) — 순수 규칙: 팀 범위 후보 · 분류(자동/검토 필요 사유) · 묶음 · 표본 뽑기 · 확정 막는 것.
 설계 confluence-curation-layer-design §12. 정확도 우선: 자동 분류는 지금 확신 기준만(묶음 다수 규칙은 10/29 실측 13건 중 틀림 3으로 기각)."""
+import importlib.util as _ilu
 import random
+import sys
+from pathlib import Path
 
 from agents.knowledge_rag.ingestion import team_import as ti
+
+# conftest가 service 패키지를 가짜로 둔다 — 원장 번복 규칙(ledger.location_outcome·override.is_override)은 진짜로(test_decision_log와 같은 방식)
+_b = Path(__file__).resolve().parent.parent
+for _name, _rel in (("service.decision.ledger", "service/decision/ledger.py"), ("service.eval.override", "service/eval/override.py")):
+    if not hasattr(sys.modules.get(_name), "__file__"):
+        _sp = _ilu.spec_from_file_location(_name, str(_b / _rel))
+        _m = _ilu.module_from_spec(_sp)
+        sys.modules[_name] = _m
+        _sp.loader.exec_module(_m)
 from agents.knowledge_rag.ingestion.locator import Candidate
 
 BIZ = [Candidate(1, "딜리버스", "딜리버스", "domain"), Candidate(2, "온라인스토어", "온라인스토어", "domain"),
@@ -197,3 +209,113 @@ class TestClassifyNotWritable:
         """재리뷰 10/29 #1: 같은 팀 다른 파트 담당 업무로 확신 분류되면 넣는 사람이 확정할 수 없다(403) — 자동이 아니라 검토 필요."""
         assert ti.classify(1, True, "", set(), frozenset({1})) == ("review", "not_writable", None)
         assert ti.classify(2, True, "", set(), frozenset({1})) == ("auto", None, 2)
+
+
+class TestClassifyDefault:
+    """공간 기본 위치(10/29): 업무 페이지는 기본 위치로(사람 결정), AI는 예외만 — 조직으로 보임 · 확신하는데 다른 곳."""
+    ORG = {10, 11}
+    D = 2
+
+    def c(self, ai, conf=False, fail="", denied=frozenset()):
+        return ti.classify_default(ai, conf, fail, {3}, denied, self.D, self.ORG)
+
+    def test_business_pages_go_to_default_as_human_decision(self):
+        assert self.c(None) == ("auto", None, 2, "space_default")       # 판단 못 함
+        assert self.c(3) == ("auto", None, 2, "space_default")          # 담당 없는 업무를 골랐어도
+        assert self.c(1) == ("auto", None, 2, "space_default")          # 다른 업무(확신 아님)
+        assert self.c(1, fail="error") == ("auto", None, 2, "space_default")
+
+    def test_exceptions_go_to_review(self):
+        assert self.c(10) == ("review", "org_like", None, None)        # 조직 지식으로 보임
+        assert self.c(1, conf=True) == ("review", "default_conflict", None, None)
+        assert self.c(10, conf=True, denied=frozenset({10})) == ("review", "not_writable", None, None)
+
+    def test_confident_same_or_org_is_ai_auto(self):
+        assert self.c(2, conf=True) == ("auto", None, 2, "ai")
+        assert self.c(10, conf=True) == ("auto", None, 10, "ai")
+
+    def test_no_default_is_plain_classify(self):
+        assert ti.classify_default(1, True, "", set(), frozenset(), None, self.ORG) == ("auto", None, 1, "ai")
+        assert ti.classify_default(1, False, "", set(), frozenset(), None, self.ORG) == ("review", "low_confidence", None, None)
+
+    def test_property_auto_target_is_default_or_ai_confident(self):
+        rnd = random.Random(9)
+        for _ in range(1000):
+            ai = rnd.choice([None, 1, 2, 3, 10, 11])
+            conf, fail = rnd.random() < 0.4, rnd.choice(["", "", "error"])
+            denied = frozenset(x for x in (1, 10) if rnd.random() < 0.3)
+            st, reason, final, by = ti.classify_default(ai, conf, fail, {3}, denied, self.D, self.ORG)
+            if st == "auto":
+                assert (by == "space_default" and final == self.D) or (by == "ai" and conf and not fail and final == ai and ai not in denied)
+                assert final not in denied
+            else:
+                assert reason in ti.REASONS and final is None
+
+
+class TestSampleKey:
+    def test_default_and_ai_sampled_separately(self):
+        pages = [{"status": "auto", "sample_state": None, "ai_namespace_id": 7, "assigned_by": "space_default", "sample_ns": 2}
+                 for _ in range(30)] + [{"status": "auto", "sample_state": None, "ai_namespace_id": 2, "assigned_by": "ai", "sample_ns": 2}]
+        counts, _, _ = ti._sample_view(pages)
+        assert counts == {"space_default:2": 30, "ai:2": 1}
+        assert ti.sample_targets(counts, set()) == {"space_default:2": 10, "ai:2": 1}
+
+
+class TestLedgerView:
+    """리뷰 10/29 M1·L1: 공간 기본값은 사람 결정 — 원장 preset으로 남아 번복·수락 통계에서 빠진다. 사람이 옮기면 주체는 사람."""
+
+    def test_space_default_is_preset_not_override(self):
+        # 기본 위치 2, AI 제안 7 → 예전엔 "AI 틀림(번복)"으로 셌다
+        assert ti.ledger_view("space_default", False, 2, 2, 7, 7) == ("space_default", 2, False)
+        assert ti.ledger_view("space_default", True, 2, 2, 7, 7) == ("space_default", 2, False)   # 표본 "맞음"도 그대로
+
+    def test_override_rule_treats_space_default_as_preset(self):
+        from service.eval.override import is_override
+        by, preset, changed = ti.ledger_view("space_default", False, 2, 2, 7, 7)
+        row = {"kind": "knowledge_location", "signals": {"preset_id": preset, "proposed_id": 7},
+               "ai": {"namespace_id": 7}, "final": {"namespace_id": 2}}
+        assert not is_override(row)
+        assert is_override({**row, "signals": {"proposed_id": 7}})   # preset이 없으면(예전) 번복으로 셌다
+
+    def test_human_moved_auto_page_counts_against_ai(self):
+        assert ti.ledger_view("ai", True, 3, 2, 2, 2) == ("human", None, True)
+        assert ti.ledger_view("space_default", True, 3, 2, 7, 7) == ("human", None, True)
+
+    def test_ai_auto_kept_is_accept(self):
+        assert ti.ledger_view("ai", False, 2, 2, 2, 2) == ("ai", None, False)
+
+    def test_review_page_classified_by_human(self):
+        assert ti.ledger_view(None, True, 4, None, 7, 7) == ("human", None, True)
+        assert ti.ledger_view(None, True, 7, None, 7, 7) == ("human", None, False)
+
+
+class TestBlockersMixedGroups:
+    def test_property_mixed_default_and_ai_groups(self):
+        """불변식(리뷰 10/29 빠진 테스트 2): 공간 기본값·AI 묶음이 섞이고 표본을 '틀림 → 다른 곳'으로 옮겨도, 막는 것이 없으면
+        묶음마다 목표만큼 판정됐다. 옮긴 표본은 원래 묶음에 남는다(sample_ns)."""
+        rnd = random.Random(21)
+        for _ in range(1500):
+            pages = []
+            for _ in range(rnd.randint(1, 40)):
+                by = rnd.choice(["ai", "space_default"])
+                sns = rnd.choice([1, 2])
+                st = rnd.choice(["auto", "auto", "auto", "held", "review"])
+                sample = rnd.choice([None, None, "pending", "ok", "wrong"]) if st != "review" else None
+                final = (rnd.choice([sns, 3]) if sample == "wrong" else sns) if st == "auto" else (rnd.choice([None, 1]) if st == "review" else None)
+                pages.append({"status": st, "final_namespace_id": final, "sample_state": sample, "ai_namespace_id": rnd.choice([1, 2, 9]),
+                              "assigned_by": by if st == "auto" else None, "sample_ns": sns if st == "auto" else None})
+            if ti.blockers(pages, True):
+                continue
+            counts, wrong, states = ti._sample_view(pages)
+            for key, target in ti.sample_targets(counts, wrong).items():
+                assert states.get(key, {}).get("ok", 0) + states.get(key, {}).get("wrong", 0) >= target
+            for p in pages:
+                if p["status"] == "auto":
+                    assert ti.sample_key(p) == f"{p['assigned_by']}:{p['sample_ns']}"
+
+
+class TestLedgerViewOldRows:
+    def test_old_auto_row_without_assigned_by_is_ai(self):
+        """재리뷰 N3: v2.192 전 배치의 자동 분류(assigned_by 비어 있음)는 사람이 손대지 않았으면 AI."""
+        assert ti.ledger_view(None, False, 2, None, 2, 2, was_auto=True) == ("ai", None, False)
+        assert ti.ledger_view(None, True, 2, None, 2, 2, was_auto=True) == ("human", None, False)

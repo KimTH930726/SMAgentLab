@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 SAMPLE_SIZE = 10
 MAX_PAGES = 500                 # 한 배치 수집 상한(web_crawler.TREE_HARD_MAX_PAGES와 같음) — 넘으면 truncated
 CONCURRENCY = 4                 # 페이지 동시 처리(본문 받기 + 로컬 LLM 판정) — 로컬 LLM에 한꺼번에 몰리지 않게
-REASONS = {"low_confidence": "신뢰도 낮음", "unowned": "담당 미지정", "not_writable": "담당 아님", "ai_failed": "AI 판정 실패"}
+REASONS = {"low_confidence": "신뢰도 낮음", "unowned": "담당 미지정", "not_writable": "담당 아님", "ai_failed": "AI 판정 실패",
+           "org_like": "조직 지식으로 보임", "default_conflict": "기본 위치와 다름"}
 DECIDABLE = ("auto", "review")  # 사람이 분류를 바꿀 수 있는 상태
 LOADABLE = ("auto", "review")
 ACTIVE_KNOWLEDGE = ("active", "pending_review")
@@ -66,6 +67,43 @@ def classify(ai_id: Optional[int], confident: bool, llm_fail: str, unowned: set[
     return "review", "low_confidence", None
 
 
+def classify_default(ai_id: Optional[int], confident: bool, llm_fail: str, unowned: set[int], denied: frozenset,
+                     default_ns: Optional[int], org_ids: set[int]) -> tuple[str, Optional[str], Optional[int], Optional[str]]:
+    """공간 기본 위치(사람이 "이 공간 = 온라인스토어"를 한 번 정함, 10/29)가 있을 때 → (상태, 사유, 최종 위치, 누가 정함).
+    업무 페이지는 기본 위치로(사람 결정 — 표본 검토로 확인), AI는 예외만: 조직 지식으로 보이면 검토 필요, 확신하는데 기본 위치와
+    다른 곳이면 검토 필요. 확신 + 기본 위치와 같음 / 확신 + 쓸 수 있는 조직 = AI 자동(지금 기준 그대로). 기본 위치가 없으면 classify."""
+    if default_ns is None:
+        st, reason, final = classify(ai_id, confident, llm_fail, unowned, denied)
+        return st, reason, final, ("ai" if st == "auto" else None)
+    if not llm_fail and confident and ai_id is not None:
+        if ai_id == default_ns:
+            return "auto", None, ai_id, "ai"
+        if ai_id in denied:
+            return "review", "not_writable", None, None
+        if ai_id in org_ids:
+            return "auto", None, ai_id, "ai"
+        return "review", "default_conflict", None, None
+    if not llm_fail and ai_id is not None and ai_id in org_ids:
+        return "review", "org_like", None, None
+    return "auto", None, default_ns, "space_default"
+
+
+def ledger_view(assigned_by: Optional[str], decided: bool, final: int, sample_ns: Optional[int],
+                ai_ns: Optional[int], proposed_ns: Optional[int], was_auto: bool = False) -> tuple[str, Optional[int], bool]:
+    """적재 때 원장 한 줄 → (누가 정했나, preset_id, 번복인가). 공간 기본값은 사람 결정이라 preset으로 남겨 번복·수락 통계에서 뺀다
+    (ledger.location_outcome·override.is_override가 preset이면 AI 추천이 없다고 본다 — 리뷰 10/29 M1). 사람이 자동 분류를 다른 곳으로
+    옮겼으면(최종 ≠ 정해질 때 곳) 주체는 사람(L1) — 그땐 AI 추천과 비교해 번복을 센다."""
+    from service.decision.ledger import location_outcome
+    moved = decided and sample_ns is not None and final != sample_ns
+    if assigned_by is None and was_auto and not decided:
+        assigned_by = "ai"   # v2.192 전에 만든 배치의 자동 분류(칸이 비어 있음) — 사람이 손대지 않았으면 AI(재리뷰 N3)
+    by = "human" if (assigned_by is None or moved) else assigned_by
+    preset = final if by == "space_default" else None
+    changed, _ = location_outcome(None if ai_ns is None else str(ai_ns), None if proposed_ns is None else str(proposed_ns), final, None,
+                                  preset_ns=None if preset is None else str(preset))
+    return by, preset, changed
+
+
 def bundles_of(tree: list[dict], root_id: str) -> dict[str, tuple[str, int]]:
     """페이지 → (묶음 = 수집 대상 바로 아래 페이지 제목, 깊이). 수집 대상 자신은 "(최상위)"."""
     by_id = {t["page_id"]: t for t in tree}
@@ -97,13 +135,14 @@ def space_tree(pages: list[dict]) -> list[dict]:
     return out
 
 
-def sample_targets(auto_counts: dict[int, int], wrong_ns: set[int]) -> dict[int, int]:
-    """컬렉션마다 표본 목표 — SAMPLE_SIZE, 정정이 나온 컬렉션은 2배. 자동 분류 수보다 많을 수 없다."""
+def sample_targets(auto_counts: dict[str, int], wrong_ns: set[str]) -> dict[str, int]:
+    """표본 묶음(sample_key)마다 목표 — SAMPLE_SIZE, 정정이 나온 묶음은 2배. 자동 분류 수보다 많을 수 없다."""
     return {ns: min(n, SAMPLE_SIZE * (2 if ns in wrong_ns else 1)) for ns, n in auto_counts.items()}
 
 
-def pick_samples(auto_by_ns: dict[int, list[int]], already: dict[int, set[int]], k, seed: int) -> list[int]:
-    """컬렉션마다 아직 안 뽑힌 자동 분류 페이지에서 무작위 k건(k = 숫자 또는 컬렉션별 dict). 배치 id 기반 시드라 다시 불러도 같은 표본."""
+def pick_samples(auto_by_ns: dict, already: dict, k, seed: int) -> list[int]:
+    """묶음마다 아직 안 뽑힌 자동 분류 페이지에서 무작위 k건(k = 숫자 또는 묶음별 dict, 묶음 키 = sample_key 또는 컬렉션 id).
+    배치 id 기반 시드라 다시 불러도 같은 표본."""
     rnd = random.Random(seed)
     out: list[int] = []
     for ns in sorted(auto_by_ns):
@@ -113,13 +152,20 @@ def pick_samples(auto_by_ns: dict[int, list[int]], already: dict[int, set[int]],
     return out
 
 
-def _sample_view(pages: list[dict]) -> tuple[dict[int, int], set[int], dict[int, dict[str, int]]]:
-    """(컬렉션별 자동 분류 수, 정정이 나온 컬렉션, 컬렉션별 표본 상태 수). 컬렉션 = AI가 고른 곳(표본은 AI 판단을 검사한다)."""
-    counts: dict[int, int] = {}
-    states: dict[int, dict[str, int]] = {}
-    wrong: set[int] = set()
+def sample_key(p: dict) -> Optional[str]:
+    """표본 묶음 — (누가 정했나, 정해진 곳). AI 자동과 공간 기본값은 따로 검사한다(같은 컬렉션이어도 검사하는 판단이 다르다).
+    정해진 곳은 정해질 때 값(sample_ns) — 사람이 표본을 "틀림 → 다른 곳"으로 바꿔도 그 표본은 원래 판단 묶음에 남는다."""
+    ns = p.get("sample_ns") or p.get("ai_namespace_id")
+    return None if ns is None else f"{p.get('assigned_by') or 'ai'}:{ns}"
+
+
+def _sample_view(pages: list[dict]) -> tuple[dict[str, int], set[str], dict[str, dict[str, int]]]:
+    """(표본 묶음별 자동 분류 수, 정정이 나온 묶음, 묶음별 표본 상태 수). 묶음 = sample_key."""
+    counts: dict[str, int] = {}
+    states: dict[str, dict[str, int]] = {}
+    wrong: set[str] = set()
     for p in pages:
-        ns = p.get("ai_namespace_id")
+        ns = sample_key(p)
         if p["sample_state"] == "wrong" and ns is not None:
             wrong.add(ns)
         if p["status"] != "auto" or ns is None:
@@ -174,6 +220,13 @@ async def team_context(conn, team_id: int, *, profiles: bool = False) -> dict:
     draft_ns = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1 AND kind = 'org_space'", org_team_key(team_id))
     return {"cands": scoped, "unowned": unowned, "draft_ns": draft_ns, "owners": owners, "team_parts": team_parts,
             "profiles": await locator.load_profiles(conn, [c.id for c in scoped]) if profiles else {}}
+
+
+def user_limits(ctx: dict, user: dict) -> tuple[frozenset, set[int]]:
+    """(이 사람이 쓸 수 없는 곳, 조직 컬렉션) — 분류 미리보기·기본 위치 다시 분류 공통."""
+    from core.dependencies import edit_denied_reason
+    denied = frozenset(c.id for c in ctx["cands"] if edit_denied_reason(ctx["owners"].get(c.id, set()), user) is not None)
+    return denied, {c.id for c in ctx["cands"] if c.kind == "org_space"}
 
 
 def allowed_ids(ctx: dict, team_id: int) -> set[int]:
@@ -241,7 +294,7 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
     from agents.knowledge_rag.knowledge.locate import _locator_llm
 
     async with get_conn() as conn:
-        b = await conn.fetchrow("SELECT team_id, root_url FROM rag_import_batch WHERE id = $1", batch_id)
+        b = await conn.fetchrow("SELECT team_id, root_url, default_namespace_id FROM rag_import_batch WHERE id = $1", batch_id)
         ctx = await team_context(conn, b["team_id"], profiles=True)
     if ctx["draft_ns"] is None:   # 초안·제한 기록을 둘 곳이 없으면 확정 때 전부 실패한다 — 처음에 실패로 보이게(리뷰 10/29)
         raise ValueError("이 팀의 팀 공통 조직 컬렉션이 없어 원문 초안을 둘 곳이 없어요 — 조직·권한에서 팀을 확인해 주세요.")
@@ -268,7 +321,7 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
     creds = get_user_llm_credentials(user) if uses_creds else None
     sem = asyncio.Semaphore(CONCURRENCY)
     team_id = b["team_id"]
-    denied = frozenset(c.id for c in ctx["cands"] if edit_denied_reason(ctx["owners"].get(c.id, set()), user) is not None)
+    denied, org_ids = user_limits(ctx, user)
 
     async def one(row) -> None:
         async with sem:
@@ -327,9 +380,11 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
         emb = await locator.embed_head(text)
         async with get_conn() as conn:
             r = await locator.finish(conn, ctx["cands"], llm_out, emb, user_team_id=team_id, text=text)
-            status, reason, final = classify(r.ai_id, r.confident, r.llm_fail, ctx["unowned"], denied)
+            status, reason, final, by = classify_default(r.ai_id, r.confident, r.llm_fail, ctx["unowned"], denied,
+                                                         b["default_namespace_id"], org_ids)
             await _set_page(conn, row_id, status=status, reason=reason, source_document_id=doc_id, chunk_count=len(chunks),
                             ai_namespace_id=r.ai_id, proposed_namespace_id=r.proposed_id, confident=r.confident, final_namespace_id=final,
+                            assigned_by=by, sample_ns=final if status == "auto" else None,
                             signals={"neighbors": r.neighbors, "vote": [r.vote_top, r.vote_n], "reason": r.reason, "doc_type": r.doc_type,
                                      "llm_fail": r.llm_fail, "fallback": r.fallback, "model": model_tag})
 
@@ -343,23 +398,47 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
 async def top_up_samples(conn, batch_id: int) -> int:
     """컬렉션마다 표본을 목표(sample_targets)까지 채운다 — 처음 뽑기, 정정 뒤(목표 2배), 표본이 보류·제외로 빠진 뒤 공통. 뽑은 수."""
     pages = [dict(r) for r in await conn.fetch(
-        "SELECT id, status, ai_namespace_id, sample_state FROM rag_import_page WHERE batch_id = $1", batch_id)]
+        "SELECT id, status, ai_namespace_id, sample_state, sample_ns, assigned_by FROM rag_import_page WHERE batch_id = $1", batch_id)]
     counts, wrong, _ = _sample_view(pages)
     targets = sample_targets(counts, wrong)
-    auto: dict[int, list[int]] = {}
-    already: dict[int, set[int]] = {}
+    auto: dict[str, list[int]] = {}
+    already: dict[str, set[int]] = {}
     for p in pages:
-        if p["status"] != "auto" or p["ai_namespace_id"] is None:
+        key = sample_key(p)
+        if p["status"] != "auto" or key is None:
             continue
-        auto.setdefault(p["ai_namespace_id"], []).append(p["id"])
+        auto.setdefault(key, []).append(p["id"])
         if p["sample_state"]:
-            already.setdefault(p["ai_namespace_id"], set()).add(p["id"])
+            already.setdefault(key, set()).add(p["id"])
     need = {ns: targets[ns] - len(already.get(ns, set())) for ns in targets}
     seed = batch_id * 1000 + sum(len(v) for v in already.values())   # 다시 뽑기는 다른 표본(같은 상태면 같은 표본)
     ids = pick_samples(auto, already, need, seed)
     if ids:
         await conn.execute("UPDATE rag_import_page SET sample_state = 'pending' WHERE id = ANY($1::bigint[])", ids)
     return len(ids)
+
+
+async def apply_default(conn, batch_id: int, user: dict, default_ns: Optional[int]) -> dict:
+    """미리보기 중 공간 기본 위치를 정하거나 바꾼다 — 사람이 아직 손대지 않은 자동 분류·검토 필요 페이지를 다시 분류(저장된 AI 판정으로,
+    LLM 다시 안 부름). 사람이 분류·표본 판정한 페이지는 그대로. 아직 안 본 표본은 내리고 묶음에 맞게 다시 뽑는다. → 상태별 수."""
+    b = await conn.fetchrow("SELECT team_id FROM rag_import_batch WHERE id = $1", batch_id)
+    ctx = await team_context(conn, b["team_id"])
+    denied, org_ids = user_limits(ctx, user)
+    rows = await conn.fetch("SELECT id, ai_namespace_id, confident, signals->>'llm_fail' AS llm_fail FROM rag_import_page "
+                            "WHERE batch_id = $1 AND status = ANY($2::text[]) AND decided_by_user_id IS NULL", batch_id, list(DECIDABLE))
+    out: dict[str, int] = {}
+    updates = []
+    for r in rows:
+        st, reason, final, by = classify_default(r["ai_namespace_id"], r["confident"], r["llm_fail"] or "", ctx["unowned"], denied,
+                                                 default_ns, org_ids)
+        updates.append((r["id"], st, reason, final, by, final if st == "auto" else None))
+        key = by if st == "auto" else reason
+        out[key] = out.get(key, 0) + 1
+    await conn.executemany("UPDATE rag_import_page SET status = $2, reason = $3, final_namespace_id = $4, assigned_by = $5, sample_ns = $6, "
+                           "sample_state = NULL WHERE id = $1", updates)
+    await conn.execute("UPDATE rag_import_batch SET default_namespace_id = $2 WHERE id = $1", batch_id, default_ns)
+    await top_up_samples(conn, batch_id)
+    return out
 
 
 # ─── 분류 확정 · 적재 · 롤백 ───────────────────────────────────────────────────
@@ -405,7 +484,8 @@ async def _load_batch(batch_id: int, user: dict) -> None:
         creator = await conn.fetchval("SELECT created_by_user_id FROM rag_import_batch WHERE id = $1", batch_id)
         pages = await conn.fetch(
             """SELECT p.id, p.page_id, p.title, p.final_namespace_id ns, n.name ns_name, p.source_document_id, p.ai_namespace_id,
-                      p.proposed_namespace_id, p.confident, p.signals, p.reason, p.sample_state
+                      p.proposed_namespace_id, p.confident, p.signals, p.reason, p.sample_state, p.assigned_by, p.sample_ns,
+                      p.decided_by_user_id, p.status
                FROM rag_import_page p JOIN ops_namespace n ON n.id = p.final_namespace_id
                WHERE p.batch_id = $1 AND p.status = ANY($2::text[]) ORDER BY p.final_namespace_id, p.id""", batch_id, list(LOADABLE))
         await conn.execute("UPDATE rag_import_batch SET load_total = $2, load_done = 0 WHERE id = $1", batch_id, len(pages))
@@ -447,6 +527,8 @@ async def _load_batch(batch_id: int, user: dict) -> None:
         if not ok:
             continue
         texts.setdefault(p["ns_name"], []).append("\n".join(it["content"] for it in items))
+        by, preset, changed = ledger_view(p["assigned_by"], p["decided_by_user_id"] is not None, p["ns"], p["sample_ns"],
+                                          p["ai_namespace_id"], p["proposed_namespace_id"], was_auto=p["status"] == "auto")
         try:   # 위치 판단 원장 — 실패해도 적재는 그대로(감사 기록만 빠짐, 로그)
             async with get_conn() as conn:
                 did = await ledger.record(conn, locator.DECISION_KIND, ai_value={"namespace_id": p["ai_namespace_id"], "doc_type": sig.get("doc_type")},
@@ -454,10 +536,12 @@ async def _load_batch(batch_id: int, user: dict) -> None:
                                           prompt_version=locator.PROMPT_VERSION,
                                           signals={"team_import_batch": batch_id, "neighbors": sig.get("neighbors"), "vote": sig.get("vote"),
                                                    "proposed_id": p["proposed_namespace_id"], "reason": sig.get("reason"),
-                                                   "review_reason": p["reason"], "sample": p["sample_state"]})
+                                                   "review_reason": p["reason"], "sample": p["sample_state"],
+                                                   # 공간 기본값 = 사람 결정 — preset으로 남겨 번복·수락 통계에서 뺀다(ledger_view)
+                                                   "assigned_by": by, "preset_id": preset})
                 await ledger.finalize(conn, did, kind=locator.DECISION_KIND, user_id=user.get("id"),
                                       final_value={"namespace_id": p["ns"], "choice": "team_import"},
-                                      changed=p["ai_namespace_id"] != p["ns"], target_type="ingestion_job", target_ids=[res["job_id"]])
+                                      changed=changed, target_type="ingestion_job", target_ids=[res["job_id"]])
         except Exception:   # noqa: BLE001
             logger.warning("팀 적재: 위치 판단 원장 기록 실패 batch=%s page=%s", batch_id, p["page_id"], exc_info=True)
     async with get_conn() as conn:

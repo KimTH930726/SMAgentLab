@@ -3,7 +3,6 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
 import { OrgCollectionManager } from '../components/admin/OrgCollectionManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
-import { TeamImportPanel } from '../components/admin/TeamImportPanel';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
 import { StatsPanel } from '../components/admin/StatsPanel';
 import { EvaluationGate } from '../components/admin/EvaluationGate';
@@ -93,7 +92,6 @@ export default function Admin() {
           {current === 'org.collections' && <OrgCollectionManager onRegister={toDocs} />}
           {current === 'k.policy'      && <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} onOpenCorrections={() => go('q.corrections')} />}
           {current === 'k.docs'        && <KnowledgeTable />}
-          {current === 'k.import'      && <TeamImportPanel />}
           {current === 'k.glossary'    && <GlossaryTable />}
           {current === 'k.system'      && <NotReady what="시스템 정보(DB 칼럼·공통코드)" />}
           {current === 'org'           && isAdmin && <OrgAccessPanel />}
