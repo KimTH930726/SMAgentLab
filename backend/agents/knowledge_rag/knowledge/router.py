@@ -973,7 +973,7 @@ def _structure_summary(doc) -> dict:
 
 def _enrich_heading_path(doc, in_page_heading_path: Optional[list[str]], page_title: Optional[str] = None) -> list[str]:
     """페이지 조상(직계 상위 페이지 제목)을 청크의 페이지 내 헤딩 조상 앞에 붙인다
-    (2026-09-22, `docs/tech/knowledge-category-automation.md` §8). `heading_path`(v2.98)는
+    (2026-09-22, `docs/archive/architecture-history-v2.0-v2.99.md(업무구분 자동화 — 10/22 폐지, 문서는 정리됨)` §8). `heading_path`(v2.98)는
     지금까지 페이지 **안**의 h1~h4 조상만 담았는데, 페이지 자체에 구분되는 제목이 없는
     문서(표만 있는 페이지 등)는 여전히 빈 값이었다. 직계 상위 페이지 제목은 이미 카테고리
     자동화에서 실측된 신호("외부서비스" 아래 배달의민족/쿠팡이츠처럼 실제로 구분됨)라 그대로

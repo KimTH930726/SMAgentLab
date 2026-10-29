@@ -1,4 +1,4 @@
-"""평가 게이트 › 적용 이력(10/27 밤, docs/tech/self-improvement-loop-design.md §3-4) — 무엇을 언제 어떤 측정으로 바꿨나 · 효과 · 결과를 날짜순.
+"""평가 게이트 › 적용 이력(10/27 밤, docs/domains/quality/self-improvement-loop-design.md §3-4) — 무엇을 언제 어떤 측정으로 바꿨나 · 효과 · 결과를 날짜순.
 
 Langfuse 버전 이력·실험 비교의 자리(바꾼 것의 이력과 그 효과). 새 표 없이 이미 있는 기록 두 곳에서 만든다:
 ① 기법 대장 근거(service/eval/techniques.py의 evidence — 날짜·측정 번호·효과 한 줄, 채택·보류 결정의 근거)

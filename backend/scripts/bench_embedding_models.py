@@ -1,5 +1,5 @@
 """임베딩 모델 후보 비교 벤치마크 — 실제 골든셋(89문항, tests/fixtures/golden_set)과
-실제 policy_item 데이터로 Track2(docs/policy-doc-pipeline-plan.md §4)의 Track A(지식-only
+실제 policy_item 데이터로 Track2(docs/archive/policy-doc-pipeline-plan.md §4)의 Track A(지식-only
 벡터검색) 방식을 그대로 재현하되, 임베딩 모델만 바꿔가며 hit@K를 비교한다.
 
 실행 전제: huggingface.co 접근이 가능해야 후보 모델(BGE-M3/KURE-v1 등)을 내려받을 수 있다.

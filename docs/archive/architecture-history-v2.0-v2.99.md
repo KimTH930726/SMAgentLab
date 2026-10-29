@@ -127,7 +127,7 @@
   `status='deprecated'`로 문제없이 보장되고 있어 이건 조사 설계가 더 필요한 항목으로
   재분류(B축, 무조건 이득 아님).
 - v2.94: **보존정책 — `ops_conversation`/`ops_message` 나이 기반 삭제 스캐폴딩(기본 비활성)**
-  — 거버넌스 선제 설계 검토(`docs/tech/governance-design-review.md` §3-3). 기존엔 이 두
+  — 거버넌스 선제 설계 검토(`docs/domains/org/governance-design-review.md` §3-3). 기존엔 이 두
   테이블에 시간 기준 보존정책이 전혀 없었고(§2-3), `cleanup_old_messages()`의
   네임스페이스당 100건 캡만 있었음. `ops_system_config`에 `chat_retention_days` 키
   추가(기본값 `'0'` = 비활성 — 보존일수는 거버넌스팀이 아직 확정 안 해서 임의로 실
@@ -145,7 +145,7 @@
   숫자가 정해지면 `UPDATE ops_system_config SET value = '<일수>' WHERE key =
   'chat_retention_days'`로 활성화(전용 관리 UI는 아직 없음, 최소 스캐폴딩 범위).
 - v2.93: **접근권한 세분화 — `viewer` 역할 최소 스캐폴딩** — 거버넌스 선제 설계 검토
-  (`docs/tech/governance-design-review.md` §3-2 A안). 기존엔 역할이 `admin`/`user`
+  (`docs/domains/org/governance-design-review.md` §3-2 A안). 기존엔 역할이 `admin`/`user`
   2단계뿐이고 쓰기 권한은 오직 파트 일치 여부로만 갈렸음(같은 파트면 전원 쓰기 가능,
   `owner_part_id`가 NULL인 공통 네임스페이스는 로그인만 하면 전원 쓰기 가능) — 파트
   내부에서 "이 사람은 조회만" 같은 세분화가 불가능했음. `core/dependencies.py`의
@@ -159,7 +159,7 @@
   `role='viewer'`로 설정한 뒤 실제 로그인 토큰으로 PATCH(네임스페이스 rename) 시도 →
   403 확인, 같은 토큰으로 GET(네임스페이스 목록) → 200 확인.
 - v2.92: **질의응답 감사로그 — `ops_query_log.user_id` 추가** — 거버넌스 선제 설계 검토
-  (`docs/tech/governance-design-review.md` §3-1 A안)의 첫 단계. 기존엔 `ops_query_log`에
+  (`docs/domains/org/governance-design-review.md` §3-1 A안)의 첫 단계. 기존엔 `ops_query_log`에
   `user_id`가 없어 "누가 언제 뭘 물었고 뭘 근거로 답했는지"를 재구성할 조인 경로 자체가
   끊겨 있었음. `create_query_log()`에 `user_id` 인자 추가, 호출부 3곳(`agent.py`의
   시맨틱 캐시 히트/일반 스트리밍 경로, `router.py`의 비스트리밍 `/api/chat`) 모두 이미
@@ -295,7 +295,7 @@
   (매크로 잔재 텍스트 유출, 짧은 상위 섹션 소개글이 자식 서브섹션과 분리되며 유실).
 - v2.80: **정책서 미분류(unresolved) 리포트에 첫 쓰기 액션 추가** — "조회만 있고 승인/
   수정/재분류 할 방법이 없다"는 실사용 지적(2026-09-16)으로 착수. 완전한 검토 UI
-  (`docs/policy-doc-pipeline-plan.md` §6, 여전히 미착수)의 대체가 아니라 "완전 방치"를
+  (`docs/archive/policy-doc-pipeline-plan.md` §6, 여전히 미착수)의 대체가 아니라 "완전 방치"를
   벗어나는 최소 액션 하나만 추가 — **"서술로 편입"**: unresolved segment 원문을 그대로
   `policy_chunk`에 넣어 최소한 벡터 검색은 되게 만든다(정밀한 param 필드 추출은 아님).
   신규 `unresolved_report.promote_segment_to_narrative()`, `POST /api/policy/unresolved/
@@ -433,7 +433,7 @@
      이 분기 자체가 관리자가 켜기 전까진 항상 비활성(실측: Track2 재검증 결과 82.0%→88.8%→
      **88.8%로 동일**, 회귀 없음 확인). 활성화 여부는 추후 별도 판단.
 - v2.72: **임베딩 모델 교체 — mpnet(768차원) → KURE-v1(1024차원), 벡터 컬럼 전량 재색인** —
-  `docs/tech/embedding-reranker-upgrade-plan.md`(2026-09-07 작성, huggingface.co 사내망
+  `docs/archive/architecture-history-v2.0-v2.99.md(임베딩·리랭커 교체 v2.72 — 계획 문서는 정리됨)`(2026-09-07 작성, huggingface.co 사내망
   접근 제한으로 실측 보류돼 있던 조사)를 2026-09-11 사내망 접근이 열려 실행. 89문항 골든셋
   실측: 현재 모델 hit@10 55.1% vs 후보 3종(BGE-M3 77.5% / dragonkue-BGE-m3-ko 80.9% /
   **KURE-v1 82.0%**, 전 유형 개선) — MTEB-ko-retrieval 공개 벤치마크 1위 순위와 실측 순위가
@@ -499,7 +499,7 @@
   후보군 잡음도 A보다 적다는 게 새로 확인됨(특히 navigation 유형에서 격차 큼, 5.4%→11.1%).
   기존 `test_policy_track2.py` 테스트에 precision 검증 assertion 추가(신규 테스트 함수는
   아님 — 전체 343개 그대로 통과).
-- v2.68: **지식 생명주기 관리 — "할 수 있는 것" 실행분** (`docs/tech/knowledge-lifecycle-design.md`
+- v2.68: **지식 생명주기 관리 — "할 수 있는 것" 실행분** (`docs/domains/knowledge/knowledge-lifecycle-design.md`
   §6, 2026-08-28 분석 문서의 실측 기반 우선순위 1~3위 + 대화 중 새로 나온 4번째 항목).
   ① **병합 이력 보존**: `resolve_duplicate()`의 merge 처리가 대상 지식을 그 자리에서 덮어써
   이전 내용이 어디에도 안 남던 문제 — 덮어쓰기 전 신규 테이블 `rag_knowledge_history`에
@@ -619,7 +619,7 @@
   condition_filter 4종). query는 LLM으로 원문과 다른 자연어로 재구성, expected_answer는 실제
   DB 값 그대로. 1차 96건 중 파라미터 추출 품질이 낮았던/조건이 너무 일반적인 7건은 사람이
   검토해 제거. `backend/tests/fixtures/golden_set/online_delivus_v1.jsonl`(git 커밋 금지).
-  `docs/policy-doc-pipeline-plan.md` §6 참고. 다음 액션은 Track 2 비교군 A/B 실행.
+  `docs/archive/policy-doc-pipeline-plan.md` §6 참고. 다음 액션은 Track 2 비교군 A/B 실행.
 - v2.59: **정책 항목 브라우저** — `GET /api/policy/items`(`service/policy/browse.py`) 신규:
   item 단위 목록 조회, 각 item에 실제로 달린 param(RDB)/narrative(벡터) 자식까지 함께 반환.
   `/search`(질의 기반 히트 리스트)와 달리 쿼리 없이도 전체를 훑어볼 수 있고 item→param/chunk
@@ -680,7 +680,7 @@
   훑어볼 수 있는 읽기 전용 화면만 우선 추가(사용자 피드백: 집계 API만으론 결국 사람이 봐야
   하므로 GUI 없인 루프가 안 닫힘). 승인·재분류 등 쓰기 동작이 있는 "검토 UI"는 여전히 별도
   범위(§6 미착수) — 이 화면은 근거 자료를 보여주기만 함.
-- v2.52: **정책서 데이터화 파이프라인 v1** — `service/policy/` 신규(`docs/policy-doc-pipeline-plan.md`).
+- v2.52: **정책서 데이터화 파이프라인 v1** — `service/policy/` 신규(`docs/archive/policy-doc-pipeline-plan.md`).
   엑셀 정책서 한 row를 `policy_item`(원문+메타)/`policy_param`(파라미터 팩트)/`policy_chunk`(서술
   청크) 3층으로 분해해 적재. 팀마다 대분류/중분류/소분류 깊이가 달라(실측: 3단 vs 2단) 고정 컬럼
   대신 `category_path TEXT[]` 채택, 헤더는 정확 매칭이 아니라 퍼지매핑 + "정책명 앞 컬럼 전부"
@@ -735,7 +735,7 @@
   실제 로그인 흐름(OIDC Authorization Code Flow, ID 토큰 검증, JIT 프로비저닝)은 Azure AD
   앱 등록 승인 이후 구현 — 요청 준비 문서: `docs/tech/sso-login-request.md`(이미 검증된
   mail-agent 앱 등록 사례의 함정들을 반영해 작성).
-- v2.49: 3건 개선 — ① **VOC 반복 클러스터링용 정규화 임베딩(`issue_signature`)**: 실측 중 "앱 로그인이 안 돼요"/"로그인 오류 문의드립니다"/"로그인 시 500에러 발생"처럼 같은 이슈의 다른 표현이 원문 임베딩으로는 0.85 임계값을 못 넘어 클러스터링에 실패하는 사례가 확인됨. `analyze_email()`의 LLM 응답에 정규화된 짧은 이슈 요약(`issue_signature`, 예: "로그인 500 에러")을 추가로 출력시키고, `pipeline.py`가 반복 패턴 비교(`detect_and_update_cluster`)에는 이 정규화 임베딩을 쓰고 지식 검색(RAG)에는 기존 원문 임베딩(`relevance.query_vec`)을 그대로 쓰도록 분리 — "정밀 매칭(장애 원인 분석)엔 문맥을 보존한 원문이, 표현 차이를 넘어선 그룹핑(반복 유형 탐지)엔 정규화가 유리하다"는 판단 기준에 따른 용도별 임베딩 이원화(`issue_signature`가 없으면 원문 임베딩으로 폴백). 실 데이터로 3개 패러프레이즈가 모두 동일 클러스터로 묶이는 것을 확인. ② **임베딩 서비스 동시성 버그 수정**: 5-way 동시 실행 전체 재분석 중 234건 중 4건이 이력 없이 조용히 유실되는 문제가 발견됨 — `RuntimeError: Already borrowed`(HuggingFace fast tokenizer가 GIL을 놓는 Rust 구현이라, `embed_long()`의 메인 이벤트루프 `tokenizer.encode()` 호출과 `embed()`/`embed_batch()`의 executor 스레드 `model.encode()` 호출이 동시에 같은 토크나이저/모델 인스턴스를 건드리며 발생)가 원인. `EmbeddingService`에 `asyncio.Lock` 1개를 추가해 세 메서드의 실제 모델/토크나이저 접근을 전부 그 락으로 감싸 해결(`embed_long()`은 락 재획득으로 인한 교착을 피하려 `embed()`/`embed_batch()`를 내부 호출하지 않고 `run_in_executor`를 직접 호출). 50콜 동시성 스트레스 테스트로 검증. ③ **`rag_knowledge` 카테고리 기반 검색 라우팅**: `category IN ('DB','공통코드')`가 전체 지식의 88%를 차지하는데, 이 카테고리는 코드표를 그대로 덤프한 구조화 데이터라 코사인 유사도로 비교하면 어휘만 겹쳐도 오탐이 나는 것이 실측 확인됨(VOC 커버리지 판정에서 무관한 배송 클러스터가 "사이렌오더 결제 취소" 공통코드 문서와 매칭). 질의 의도를 분류하는 게 아니라 **이미 등록된 지식 행의 category 값**으로 판단 — `retrieval.py`에 `_KEYWORD_ONLY_CATEGORIES=("DB","공통코드")` 상수 추가, `search_knowledge()`의 `final_score` 산식을 해당 카테고리는 벡터 점수를 0으로 만들고 키워드(RDB 텍스트) 점수만으로 랭킹하도록 CASE 분기(admin 설정으로 노출하지 않고 모듈 상수로 하드코딩 — 등록 시점 고정값이라 런타임 조정 필요성이 낮고, 기존 few-shot 승인 큐처럼 안 쓰이는 admin 설정 표면을 늘리지 않으려는 판단). `pattern_detection.py`의 `get_cluster_coverage()`/`list_clusters()`도 동일 카테고리를 후보에서 제외(NULL 카테고리는 실수로 함께 제외되지 않도록 `category IS NULL OR category != ALL(...)`로 처리). 실 데이터로 검증: DB/공통코드 카테고리 행은 벡터 유사도가 높아도(`v_score` 0.65+) `final_score`가 키워드 점수만 반영해 낮게(0.10대) 나오는 것을 확인. 상세 설계 논의: `docs/tech/knowledge-lifecycle-design.md`. (2026-09-04: 이 "구조화=키워드/서술=벡터" 원칙이 정책서 파이프라인(v2.52)에서 독립적으로 재발견돼, 재사용 가능한 패턴으로 `docs/tech/retrieval-routing-pattern.md`에 별도 정리함)
+- v2.49: 3건 개선 — ① **VOC 반복 클러스터링용 정규화 임베딩(`issue_signature`)**: 실측 중 "앱 로그인이 안 돼요"/"로그인 오류 문의드립니다"/"로그인 시 500에러 발생"처럼 같은 이슈의 다른 표현이 원문 임베딩으로는 0.85 임계값을 못 넘어 클러스터링에 실패하는 사례가 확인됨. `analyze_email()`의 LLM 응답에 정규화된 짧은 이슈 요약(`issue_signature`, 예: "로그인 500 에러")을 추가로 출력시키고, `pipeline.py`가 반복 패턴 비교(`detect_and_update_cluster`)에는 이 정규화 임베딩을 쓰고 지식 검색(RAG)에는 기존 원문 임베딩(`relevance.query_vec`)을 그대로 쓰도록 분리 — "정밀 매칭(장애 원인 분석)엔 문맥을 보존한 원문이, 표현 차이를 넘어선 그룹핑(반복 유형 탐지)엔 정규화가 유리하다"는 판단 기준에 따른 용도별 임베딩 이원화(`issue_signature`가 없으면 원문 임베딩으로 폴백). 실 데이터로 3개 패러프레이즈가 모두 동일 클러스터로 묶이는 것을 확인. ② **임베딩 서비스 동시성 버그 수정**: 5-way 동시 실행 전체 재분석 중 234건 중 4건이 이력 없이 조용히 유실되는 문제가 발견됨 — `RuntimeError: Already borrowed`(HuggingFace fast tokenizer가 GIL을 놓는 Rust 구현이라, `embed_long()`의 메인 이벤트루프 `tokenizer.encode()` 호출과 `embed()`/`embed_batch()`의 executor 스레드 `model.encode()` 호출이 동시에 같은 토크나이저/모델 인스턴스를 건드리며 발생)가 원인. `EmbeddingService`에 `asyncio.Lock` 1개를 추가해 세 메서드의 실제 모델/토크나이저 접근을 전부 그 락으로 감싸 해결(`embed_long()`은 락 재획득으로 인한 교착을 피하려 `embed()`/`embed_batch()`를 내부 호출하지 않고 `run_in_executor`를 직접 호출). 50콜 동시성 스트레스 테스트로 검증. ③ **`rag_knowledge` 카테고리 기반 검색 라우팅**: `category IN ('DB','공통코드')`가 전체 지식의 88%를 차지하는데, 이 카테고리는 코드표를 그대로 덤프한 구조화 데이터라 코사인 유사도로 비교하면 어휘만 겹쳐도 오탐이 나는 것이 실측 확인됨(VOC 커버리지 판정에서 무관한 배송 클러스터가 "사이렌오더 결제 취소" 공통코드 문서와 매칭). 질의 의도를 분류하는 게 아니라 **이미 등록된 지식 행의 category 값**으로 판단 — `retrieval.py`에 `_KEYWORD_ONLY_CATEGORIES=("DB","공통코드")` 상수 추가, `search_knowledge()`의 `final_score` 산식을 해당 카테고리는 벡터 점수를 0으로 만들고 키워드(RDB 텍스트) 점수만으로 랭킹하도록 CASE 분기(admin 설정으로 노출하지 않고 모듈 상수로 하드코딩 — 등록 시점 고정값이라 런타임 조정 필요성이 낮고, 기존 few-shot 승인 큐처럼 안 쓰이는 admin 설정 표면을 늘리지 않으려는 판단). `pattern_detection.py`의 `get_cluster_coverage()`/`list_clusters()`도 동일 카테고리를 후보에서 제외(NULL 카테고리는 실수로 함께 제외되지 않도록 `category IS NULL OR category != ALL(...)`로 처리). 실 데이터로 검증: DB/공통코드 카테고리 행은 벡터 유사도가 높아도(`v_score` 0.65+) `final_score`가 키워드 점수만 반영해 낮게(0.10대) 나오는 것을 확인. 상세 설계 논의: `docs/domains/knowledge/knowledge-lifecycle-design.md`. (2026-09-04: 이 "구조화=키워드/서술=벡터" 원칙이 정책서 파이프라인(v2.52)에서 독립적으로 재발견돼, 재사용 가능한 패턴으로 `docs/domains/knowledge/retrieval-routing-pattern.md`에 별도 정리함)
 - v2.48: VOC Teams 발송 게이트 통합 — 명시적 피드백("게이트가 나뉘어져있으면 안 된다, 반복 게이트일 때만 팀즈를 보내고 형식은 기존 개별 VOC 카드에 반복 정보를 얹어라")에 따라 발송 여부 판단 지점을 "반복 패턴 확정" 하나로 완전히 합쳤다. v2.40부터 유지되던 "관련지식 임계치+not_it_related만 넘으면 카테고리·심각도 무관하게 항상 발송"(§10) 원칙이 폐기됨 — 이제 클러스터가 없는(반복이 아닌) 단독 VOC는 발송하지 않고, 클러스터가 있어도 `email_pattern_min_count` 채우기 전엔 발송 안 함, 채운 뒤로는 그 배수(3/6/9건째 등)에서만 발송한다(건마다 계속 보내던 v2.47 방식은 노이즈가 컸음). `pattern_info`에 `min_count`/`nth_detection`(몇 번째 배수 감지인지)을 추가해 "🔁 반복 패턴 — N건째 발생 (M건마다 감지 · K번째 감지)" 형태로 카드에 표시. 카드 포맷 자체는 새로 안 만들고 기존 `build_teams_message()`를 그대로 재사용(반복 정보는 그 안의 한 줄일 뿐). 부수적으로 `pattern_detection.detect_and_update_cluster()`가 이제 아무도 안 읽는 `pattern_info`(대표/샘플 제목) 계산을 위해 매 건마다 불필요한 DB 쿼리를 날리고 있던 게 자체 점검 중 발견돼 제거(성능 개선). 실 프로덕션 메일함으로 재현 검증 완료(최근 90건 분석기록을 초기화 후 재수집 → 클러스터 48건이 원래 17개 클러스터로 정확히 복원, 카테고리 게이트로 걸러지지 않은 단독 VOC 1건만 옛 로직으로 발송된 것을 확인 후 이번 변경으로 그 케이스도 막힘 확인).
 - v2.47: VOC 반복 패턴 탐지 + 통계 대시보드 신규 — `service/email_voc/pattern_detection.py` 추가. `service.check_relevance()`가 이미 계산하는 임베딩(`RelevanceCheck.query_vec`)을 그대로 저장·재사용해(`ops_email_analysis.embedding`), 지식 베이스 비교(기존)와 별개로 **과거 VOC와의 비교**를 pgvector 코사인 연산만으로 수행 — 추가 LLM 호출 없이 반복 유형을 감지한다. 새 VOC는 클러스터의 개별 멤버가 아니라 **centroid(대표 임베딩, 점증 가중평균 갱신)**와 비교해 합류 여부를 판단(단일 링크 클러스터링의 사슬형 오분류 방지). 유사 건이 `email_pattern_window_days`(7일) 내 `email_pattern_min_count`(3건) 이상 쌓이면, 별도 Teams 메시지를 만들지 않고 이미 발송 중인 개별 VOC 카드에 "🔁 반복 패턴" 한 줄 + 해결방안(있으면)을 얹는다(min_count를 넘긴 이후 모든 건에 매번 표시 — 최초 1건만 표시하면 후속 발생에서 반복 맥락이 안 보이는 문제가 실사용 중 발견돼 변경). 해결방안 존재 여부(`get_cluster_coverage`)는 `rag_knowledge`와의 코사인 유사도 1차 필터(`_COVERAGE_MIN_SIMILARITY=0.70`) 통과 후 **LLM 재검증**까지 거친다 — 순수 코사인 유사도는 무관한 문서가 CS 보일러플레이트 문구만으로 임계치를 넘는 오탐을 못 막는다는 게 실측으로 확인돼(같은 유사도 대역에 몰려 있어 임계치 조정만으로는 해결 불가), 크로스인코더 리랭커(huggingface.co 접근 제한으로 보류 중) 대신 기존 LLM 프로바이더로 "이 문서가 실제로 이 VOC 유형의 해결책이 맞는지" 1회 확인한다. 검증 결과는 `ops_voc_cluster.coverage_knowledge_id`/`coverage_verified`에 캐싱해 매칭된 지식이 바뀔 때만 재호출. 관리자 화면에 "VOC 통계" 탭 신규 — 유형/심각도 분포 도넛차트(클릭 시 클러스터 목록 필터링), 반복 클러스터 목록(페이징, 클러스터 내 category 불일치 경고), 클러스터에서 바로 지식 등록. 상세: `docs/tech/voc-email-handoff.md`.
 - v2.46: VOC 이메일 — 인하우스 LLM 게이트웨이가 프롬프트에 IP·이메일·전화번호가 섞이면 "민감 정보 포함"으로 응답을 통째로 거부하는 정책이 실사용 중 확인됨(호스트 IP·CC 목록·서명란 연락처가 거의 모든 실 메일에 있어, 사실상 대부분의 메일이 분석되지 못하던 상태). `service.py`에 `_mask_pii()` 추가 — LLM 프롬프트에 넣기 직전에만 IP/이메일/전화번호를 마스킹(DB 저장·Teams 알림은 원본 유지). 아울러 관련성 게이트 개선안으로 `shared/reranker.py`(기존 chat 전용 CrossEncoder 리랭커)에 점수 노출용 `score()`/`is_available()`을 추가해뒀으나, 이 개발 환경은 huggingface.co 접속이 막혀 모델을 못 받아 게이트 연동·실측은 보류(상세: `docs/tech/voc-email-handoff.md` §7-11, §7-12, git 비추적).

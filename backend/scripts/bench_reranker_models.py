@@ -2,7 +2,7 @@
 하이브리드 검색(search.py:search_policy(), RDB param + 벡터 narrative)이 반환하는
 상위 후보를 CrossEncoder 후보들로 재정렬했을 때 hit@1이 얼마나 개선되는지 비교한다.
 
-docs/tech/embedding-reranker-upgrade-plan.md §3의 조사된 후보:
+docs/archive/architecture-history-v2.0-v2.99.md(임베딩·리랭커 교체 v2.72 — 계획 문서는 정리됨) §3의 조사된 후보:
 - cross-encoder/ms-marco-MiniLM-L-6-v2 (현재 기본값, 영어 전용 — 한국어엔 원래 안 맞는 선택)
 - dragonkue/bge-reranker-v2-m3-ko (임베딩 KURE-v1과 같은 BGE-M3 계열 한국어 파인튜닝)
 - BAAI/bge-reranker-v2-m3 (다국어 원본)

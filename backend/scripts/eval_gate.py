@@ -12,7 +12,7 @@
 - --save: 판정 기록(eval_gate_run, 2026-10-23 평가 게이트 개편 1단계)에 한 줄 — 품질 › 평가 게이트 화면이 이것을 읽기만 한다.
   DB를 쓰므로 컨테이너 안에서. 통과한 판정은 기준선이 된다(--keep-baseline이면 그대로), --baseline은 판정 없이 기준선만.
 출력은 숫자만(질문·답 원문 없음, 기록도 qid·라벨·숫자만). 종료 코드: 통과 0, 실패 1, 입력 오류 2 — 자동 실행에 그대로 쓸 수 있게.
-절차 전체: docs/tech/trustkit-design.md §5 · docs/tech/eval-gate-redesign.md §4.
+절차 전체: docs/domains/quality/trustkit-design.md §5 · docs/domains/quality/eval-gate-redesign.md §4.
 """
 from __future__ import annotations
 

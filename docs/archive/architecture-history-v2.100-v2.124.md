@@ -72,7 +72,7 @@
   헤딩(h1~h4) 정적 파싱에 의존하는데(LLM 미사용), 당시 데이터의 33%가 헤딩 없이 작성돼 페이지 전체가 한
   단위로 묶였다. 미리보기 응답(트리 일괄 `pages[]`, 단일 URL `structure`)에 헤딩 섹션 수·구조화 여부
   (`_structure_summary`, 섹션 2개 이상)를 싣고, 청크 검토 창 상단에 "헤딩 없는 페이지 n개 — 섹션 구분 안 됨"
-  경고(목록·조치는 툴팁). 팀 대상 `docs/tech/confluence-writing-guide.md`(규칙 6가지: 헤딩 스타일, 한 섹션
+  경고(목록·조치는 툴팁). 팀 대상 `docs/domains/knowledge/sources/confluence/confluence-writing-guide.md`(규칙 6가지: 헤딩 스타일, 한 섹션
   한 주제·제목에 구분어, 예외는 규칙 바로 아래, 상위 페이지=업무 단위, 표만 있는 페이지 지양, 매크로 밖에
   핵심 내용). **기각한 실험**: 부모 확장에서 같은 섹션 먼저 + 다른 섹션은 '참고용' 표시 — 단일 질문 모순
   3→3(감소 없음), 통합형 핵심항목 재현율 90%→86%로 하락(통합형은 다른 섹션 내용이 필요한데 '참고용'으로
@@ -103,7 +103,7 @@
   보류 — 이번 건은 그 선행 조건(원본 추적)만.
   덤: 골든셋 로더가 매핑 실패·정답 없음 문항을 조용히 버리던 것을 사유별 경고로(재정제로 파일명·행이
   바뀌면 분모가 줄어든 점수를 정확도 상승으로 오독할 수 있음). 재정제 시 절차는
-  `docs/tech/golden-set-procedure.md` 신규.
+  `docs/domains/quality/golden-set-procedure.md` 신규.
 - v2.114: **정책서 재처리 경로** (data-storage-philosophy.md §9-① "다른 모든 재구조화의 선행 조건").
   원본 content_hash만 보고 스킵해서 파서·분해 프롬프트를 개선해도 같은 파일 재업로드 시 반영될 길이
   없었다. `policy_item.pipeline_version`(= `r{PIPELINE_REVISION}-{분해 프롬프트 해시}`) 기록 — 스킵은
@@ -213,7 +213,7 @@
   `SOURCE_TYPE_LABEL` 정리. 데스크톱 헬퍼: `scripts/teams_desktop_login.py`,
   `OpsNavHelper.spec`, `opsnav_helper_entry.py`, `install_url_handler.py`,
   `dist/OpsNavHelper.exe`, `build_exe.cmd` 삭제, `docker-compose.yml`의 `helper_assets`
-  볼륨 마운트 제거. `docs/deployment-closed-network.md`/`scripts/README.md` 동기화.
+  볼륨 마운트 제거. `docs/operations/deployment-closed-network.md`/`scripts/README.md` 동기화.
 - v2.106: **정책 검토 UI 후속 — 반려 항목 수정→재검토 + RDB 편입 LLM 프리필.** v2.105
   실사용 피드백 두 가지: (1) "반려하면 그냥 데이터를 버리는데?" — 리서치로 확인해보니
   `policy_param`/`policy_chunk`는 프로젝트 전체에서 한 번도 UPDATE/DELETE된 적 없는
@@ -231,7 +231,7 @@
   자동으로 호출해 프리필(사람은 확인 후 저장만 누르거나 틀린 부분만 수정). 실 데이터로
   반려→편집→재검토대기→재승인 전 과정과 LLM 프리필을 curl+실제 화면 클릭으로 검증. 백엔드
   테스트 23건 신규(459→482), `npx tsc --noEmit` 통과.
-- v2.105: **정책 검토 UI — 승인/반려 + 미분류 RDB 편입 (docs/policy-doc-pipeline-plan.md
+- v2.105: **정책 검토 UI — 승인/반려 + 미분류 RDB 편입 (docs/archive/policy-doc-pipeline-plan.md
   §6 "검토 UI" 미착수 항목 착수).** 사용자 지적 두 가지: (1) "pending 필터링이 없다" —
   실제 원인은 필터 부재가 아니라 정책 임포트 이후 `status='pending_review'`를 바꾸는
   코드가 프로젝트 전체에 없었던 것(재업로드로 대체된 옛 버전을 `deprecated`로 바꾸는
@@ -301,7 +301,7 @@
   실 DB 시나리오로 "카테고리 0개인 새 네임스페이스에서도 사람 개입 없이 실제 페이지
   구조 그대로 분화되는지" 확인 + 회귀 테스트 6건(`test_confluence_category_resolution.py`)
   + 전체 회귀 439건 통과.
-- v2.101: **컨플루언스 벌크 등록 카테고리 자동화** (`docs/tech/knowledge-category-automation.md`
+- v2.101: **컨플루언스 벌크 등록 카테고리 자동화** (`docs/archive/architecture-history-v2.0-v2.99.md(업무구분 자동화 — 10/22 폐지, 문서는 정리됨)`
   설계 구현). 실측 배경: 등록 폼이 필수 드롭다운이었는데도 페이지가 최대 200개씩 배치로
   묶여 폼에서 고른 값 하나가 전체에 도장 찍히는 구조라, namespace 1의 카테고리 5개 중
   4개가 0건으로 수렴해 있었음(강제해도 소용없는 사례 — UX 문제가 아니라 배치 구조 문제).

@@ -50,7 +50,7 @@
   관리자, `ops_system_config.menu_visibility` = {"hidden": {"kind:<종류>": [메뉴 id]}} — 나중 권한별은 `role:<역할>` 같은 모양). 왼쪽 메뉴·본문이 `useAdminMenu` 하나로,
   숨긴 메뉴 주소로 오면 기존 바로잡기가 지식 문서로(옛 "조직 컬렉션엔 없음" 흐린 안내 삭제). API `GET/PUT /api/admin/menu-visibility`(읽기 = 로그인 전부, 쓰기 = 관리자).
   조직 컬렉션 카드 본문을 누르면 보는 컬렉션이 바뀐다(업무 컬렉션 표의 줄과 같게, "· 지금" 표시). 마이그레이션 없음.
-- v2.163 (2026-10-23, dev_0): **E1 — AI 판단 원장 + 등록 위치 판정(백엔드만, 등록 동작은 그대로).** 설계 `docs/tech/collection-design.md` §16·§17.
+- v2.163 (2026-10-23, dev_0): **E1 — AI 판단 원장 + 등록 위치 판정(백엔드만, 등록 동작은 그대로).** 설계 `docs/domains/knowledge/collection-design.md` §16·§17.
   원장 `ops_ai_decision`(#85): 판단 1건 = 1줄(AI 값·확신·근거 신호·모델/프롬프트 버전), 사람이 확정·변경하면 같은 줄에 최종 값·"AI가 틀렸나요?" 답. 원문 안 남김.
   계산은 `trustkit.decision.ledger`(확신 = AI 값 = 이웃 5중 4 · 종류별 집계), DB는 `service/decision/ledger.py`(판단하는 쪽은 이 함수만).
   위치 판정 `ingestion/locator.py` + `POST /api/knowledge/locate`: LLM(§4 기준 프롬프트 `knowledge_locate_system`, 후보 = 업무 전부 + **넣는 사람 팀의** 조직,
@@ -64,6 +64,6 @@
   담당 파트 지정은 시스템·권한 › 조직·권한 › 담당 업무 한 곳(프론트 `setNamespaceOwners` 삭제, 백엔드 `PATCH /namespaces/{name}/settings`는 API·시나리오용으로 유지).
   운영 반입 1회성 `scripts/move_team_common_to_org.py`(업무 "팀 공통" → 조직 팀 공통, 미리보기 기본 · `--apply` · `--rollback`, 정책·VOC·참조·정책 정정·하위·진행 중 적재 있으면 멈춤,
   지식 updated_at 보존). 마이그레이션 없음.
-- v2.161 (2026-10-23, dev_0): **업무구분 칸·표 삭제(C6, 마이그레이션 #84).** 설계 `docs/tech/category-removal-design.md`. `ops_prompt(category_suggest)` 줄 삭제 · `DROP TABLE rag_knowledge_category` · `ALTER TABLE rag_knowledge DROP COLUMN category`(모두 IF EXISTS — 새 설치는 init이 만들고 #84가 지움).
+- v2.161 (2026-10-23, dev_0): **업무구분 칸·표 삭제(C6, 마이그레이션 #84).** 설계 `docs/archive/category-removal-design.md`. `ops_prompt(category_suggest)` 줄 삭제 · `DROP TABLE rag_knowledge_category` · `ALTER TABLE rag_knowledge DROP COLUMN category`(모두 IF EXISTS — 새 설치는 init이 만들고 #84가 지움).
   매 기동 도는 앞 마이그레이션도 맞춤: #60 스냅샷에서 category 뺌 · 영역 id 이관 표 목록에서 `rag_knowledge_category` 뺌 · #72는 칸이 없으면 건너뜀. 백업: 표 `*_backup_20261023` 3개 + 전체 덤프(10/23).
   검증: 복사본 DB 두 번 기동 통과 · 검색 게이트 질문별 동일(106·441) · 시나리오 4종 · E2E.

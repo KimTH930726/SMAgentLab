@@ -8,7 +8,7 @@ import { showAlert } from '../../../store/useDialogStore';
 import { FormModal } from '../../ui/FormModal';
 
 /**
- * 정책 추가·폐기·분류 옮기기 제안 창(C3 2단계, 10/27 — docs/tech/policy-lifecycle-design.md §4 목업 F).
+ * 정책 추가·폐기·분류 옮기기 제안 창(C3 2단계, 10/27 — docs/domains/policy/policy-lifecycle-design.md §4 목업 F).
  * 모두 정정 요청에 제안으로 올라가고, 승인해야 반영된다. 분류는 기존 것에서 고르거나 대·중·소를 직접 써서 새로 만든다.
  */
 

@@ -32,7 +32,7 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
   근거 판정 신호, 용어, 되묻기·근거 없음·목록 답 여부, 부모 섹션 보충 id·분류 목록 항목 id — **원문·검색어 글자 없음**(약 0.5~1KB). 목록 답이면 실제로 문맥에 실린(거른) 정책 기준.
   검색 직후 먼저 저장해 오류·사용자 중단으로 끝난 답에도 남는다(실측: 답 도중 끊은 메시지에 근거 13개 기록). 캐시 답은 `{"cached": true, "src": 처음 답한 메시지}`. 기록 실패는 답을 막지 않음(로그).
   2단계(LLM 없는 질의별 진단)·3단계(표본 채점: 질문 모호/검색/생성/정상, 로컬 LLM)·문제 질의 → 시험지는 다음(화면은 목업부터). 업계: 운영 기록 → 검토 큐 → 데이터셋(LangSmith 등).
-- v2.186 (2026-10-28, dev_0): **용어 자동 추출 출처 표시(용어집 업계식 재구성 1단계, 설계 `docs/tech/glossary-curation-design.md`).** 지식 등록 때 LLM이 뽑은 용어는
+- v2.186 (2026-10-28, dev_0): **용어 자동 추출 출처 표시(용어집 업계식 재구성 1단계, 설계 `docs/domains/knowledge/glossary/glossary-curation-design.md`).** 지식 등록 때 LLM이 뽑은 용어는
   `rag_glossary.source = 'auto_extract'`, 용어집 화면 "자동 추출" 표시 — 동작은 그대로, 재적재 날 자동 용어 포함/제외를 검색·답 둘 다 재서 결정(떨어뜨리면 끔 · 섞이면 후보 → 근거 → 자동 승격).
   실측: 두 문장 지식 1건에 용어 6개(시험 표지·버튼 이름 포함) + 동의어 LLM 6회. 컨플루언스 리서치에 MCP 게이트웨이 전환 메모.
 - v2.185 (2026-10-28, dev_0): **데이터 보관 주기(사용자 "쌓이는 데이터 삭제 주기", "90은 짧다 — 180일") — `service/retention.py`, 하루 1회(기동 10분 뒤 첫 실행).**
@@ -43,7 +43,7 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 - v2.184 (2026-10-28, dev_0): **지식 등록 넣을 곳 판단을 미리(사용자 "6.7초면 꽤 길다") + 중간 판단 정리(사용자 "최종 판단만 중요, 중간 이력은 필터링").**
   직접 입력 폼은 쓰다 2초 멈추면(30자 이상, 한 번에 하나) 뒤에서 판단 → [넣을 곳 확인]이 캐시로 바로. 정확도·판단 방법 그대로(10/22 실측: LLM이 이웃만 대비 자동 틀림 2/60 → 0/51).
   쓰다 버린 판단은 등록 때 지움(`discard_decision_ids` → `ledger.discard_open`: 내 것·확정 전만), 떠나서 남은 미확정은 24시간 뒤(`purge_stale_open`, 판단 낼 때 같이).
-  등록 성공·실패 때 판단 캐시를 비움(지워진 판단 재사용 방지 — 리뷰 M1). 시나리오 `registration_location.py` 4) 추가(24/24). 컨플루언스 현행화 리서치: `docs/tech/confluence-sync-research.md`.
+  등록 성공·실패 때 판단 캐시를 비움(지워진 판단 재사용 방지 — 리뷰 M1). 시나리오 `registration_location.py` 4) 추가(24/24). 컨플루언스 현행화 리서치: `docs/domains/knowledge/sources/confluence/confluence-sync-research.md`.
 - v2.183 (2026-10-28, dev_0): **VOC 레이어 분리(사용자 10/22 결정, 백로그 §0-3) — 같은 프로젝트 안에서 경계만.** 지식 코어 API
   `agents/knowledge_rag/knowledge/api.py`(search · min_score · nearest · contents)를 두고, VOC(`service/email_voc`)는 이것만 부른다 — 검색 내부(retrieval·glossary_terms)
   import와 지식 표 직접 SQL 3곳(관련성 검색 · 반복 유형 커버리지 2 · 근거 지식 조회)을 API로. 커버리지는 클러스터마다 LATERAL 대신 한 쿼리(`nearest`, 같은 범위 규칙 — 벡터 변환은 MATERIALIZED로 키마다 한 번, 리뷰 실측 53→7.5ms).
@@ -57,7 +57,7 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
   위 단계 흐름 = 공통 필터(고르면 탭은 그대로, [틀린 문항]·[성적]·[적용 이력]이 모두 그 단계로 — 적용 이력 안의 따로 놀던 단계 칩 제거),
   아래 탭 = 무엇을 볼까 [틀린 문항] [성적] [적용 이력] [검색 미리보기](v2.182에서 탭은 내림). 옛 [검색]·[답] 탭 → [성적] 하나(단계 검색 = 검색 성적, 생성·근거 판정·답 모양 = 답 성적과 해당 층 안내,
   적재 = 적재 검수 안내, 단계 안 고르면 답 성적 | 검색 성적) — "검색"이 단계 이름·탭 이름 두 뜻이던 것.
-- v2.180 (2026-10-27 밤, dev_0): **자가 개선 루프 재구성(사용자 "평가 게이트·감사 로그는 자가 개선을 위한 과정", 설계 `docs/tech/self-improvement-loop-design.md`).**
+- v2.180 (2026-10-27 밤, dev_0): **자가 개선 루프 재구성(사용자 "평가 게이트·감사 로그는 자가 개선을 위한 과정", 설계 `docs/domains/quality/self-improvement-loop-design.md`).**
   ① **번복은 기능 자리에서**: 지식 등록 넣을 곳 카드에서 AI 추천(확신 없으면 후보)과 다른 곳을 고르면 이유 칩(AI가 틀림·둘 다 맞음·상황이 바뀜, 선택·비차단) →
   원장 final_value.override_reason(+ 틀림·상황이 바뀜은 ai_verdict). 번복 판정은 저장 칸이 아니라 값으로(`service/eval/override.py` is_override = OVERRIDE_SQL).
   ② **진단에 운영 번복**: 종류별 번복률·이유·패턴 + 위치 판정 제안 규칙 LLM 없는 리플레이 → `eval_improve.py --save` 후보(원인 `override_location`). `GET /api/eval/overrides`.
@@ -161,7 +161,7 @@ backend/
 │   │   ├── retention.py       #   30일 고정 보관정책 자동 정리
 │   │   ├── schemas.py         #   Pydantic 스키마
 │   │   └── router.py          #   /api/email-voc/* 엔드포인트
-│   └── policy/           #   정책서(v0 원문 통째, docs/tech/policy-v0-design.md) — 옛 엑셀 분해 파이프라인은 v2.150에서 삭제(docs/archive/policy-doc-pipeline-plan.md)
+│   └── policy/           #   정책서(v0 원문 통째, docs/domains/policy/policy-v0-design.md) — 옛 엑셀 분해 파이프라인은 v2.150에서 삭제(docs/archive/policy-doc-pipeline-plan.md)
 │       ├── v0_convert.py      #   팀원 구조화 데이터 → 저장 단위 변환(LLM 없음·결정적, 적재는 scripts/load_policy_v0.py)
 │       ├── service.py         #   서술 조각 머리 붙인 임베딩(chunk_embed_text) + 기동 때 재임베딩
 │       ├── visibility.py      #   검색 대상 조건(searchable_sql) + 정책을 겨눈 대기 중 정정 조회(open_correction_sql) — 잎 모듈

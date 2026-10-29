@@ -1,6 +1,6 @@
 """④ 업무구분 폐지 1·2단계(10/22 사용자 승인) — 백업 테이블 + 외부서비스를 제휴서비스로 합치기.
 
-설계: docs/tech/category-removal-design.md §3 "마이그레이션 순서" 1·2, 승인 목록 #1·#2, 롤백 R1.
+설계: docs/archive/category-removal-design.md §3 "마이그레이션 순서" 1·2, 승인 목록 #1·#2, 롤백 R1.
 합치기 본체는 restructure_domains.py의 ns_tables·counts·merge를 그대로 쓴다(10/20 딜리버스 DB 합치기와 같은 검증된 경로).
 
 하는 일(멱등 — 다시 돌려도 같은 결과):

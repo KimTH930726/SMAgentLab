@@ -9,7 +9,7 @@ import { adminPath } from '../../pages/adminMenu';
 import { Modal } from '../ui/Modal';
 
 /**
- * 품질 › AI 감사 로그 (10/27 밤 개편, docs/tech/self-improvement-loop-design.md) — 기능을 쓰다 사람이 AI 추천을 번복한 기록 = 자가 개선 루프의 입력.
+ * 품질 › AI 감사 로그 (10/27 밤 개편, docs/domains/quality/self-improvement-loop-design.md) — 기능을 쓰다 사람이 AI 추천을 번복한 기록 = 자가 개선 루프의 입력.
  * 사용자 10/27: "그 위치에서 AI가 틀림 어쩌구 하는 게 아니라 … 번복했을 때의 로그를 쌓는 것, 그걸 기준으로 자가 개선". 그래서 이 화면은 기록만
  * ("AI가 틀렸나요?"는 번복하는 그 순간 기능 안에서 — 지식 등록 넣을 곳 카드).
  * 위: 요약 세 칸(번복 · AI가 틀렸다고 한 것 · 번복으로 만든 개선 후보) + 형식적 승인 의심. 아래: 종류 거르기([기준] = 지금 기준·분포 창) + 번복만 +

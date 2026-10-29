@@ -1,4 +1,4 @@
-"""지식 코어 API — 바깥 창구(VOC 메일 등)가 지식을 쓰는 유일한 길(10/28 VOC 레이어 분리, docs/tech/post-demo-backlog.md §0-3).
+"""지식 코어 API — 바깥 창구(VOC 메일 등)가 지식을 쓰는 유일한 길(10/28 VOC 레이어 분리, docs/backlog.md §0-3).
 
 막힌 일: VOC(`service/email_voc`)가 지식 검색 내부(retrieval·glossary_terms)를 직접 import하고 지식 표(rag_knowledge)에 SQL을 직접 날렸다 —
 코어(검색·저장·신뢰도)를 바꾸면 VOC가 조용히 깨지고, VOC를 별도 에이전트로 떼려면 어디가 엮였는지부터 찾아야 했다.

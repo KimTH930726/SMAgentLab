@@ -1,4 +1,4 @@
-"""정책서 v0 변환기 — 팀원이 DOCX 14개를 구조화한 데이터를 우리 저장 단위로 옮긴다(docs/tech/policy-v0-design.md §4~5).
+"""정책서 v0 변환기 — 팀원이 DOCX 14개를 구조화한 데이터를 우리 저장 단위로 옮긴다(docs/domains/policy/policy-v0-design.md §4~5).
 
 LLM 없음, 결정적. DB도 안 만진다(적재는 scripts/load_policy_v0.py) — 그래서 원천과 결과를 나란히 놓고 불변식으로 검사할 수 있다.
   정책 → 정책 1건 = 저장 1건(본문 통째, 비고는 따로). 같은 절·같은 제목이면 "제목 — 본문 첫 줄".

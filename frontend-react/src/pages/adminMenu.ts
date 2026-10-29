@@ -1,5 +1,5 @@
 /**
- * 관리자 메뉴 — 도메인 경계(DDD)대로 5묶음. 설계·검수: docs/tech/admin-ia-design.md (2026-10-21), 컬렉션 개편 docs/tech/collection-design.md §15 (10/22).
+ * 관리자 메뉴 — 도메인 경계(DDD)대로 5묶음. 설계·검수: docs/platform/admin-ia-design.md (2026-10-21), 컬렉션 개편 docs/domains/knowledge/collection-design.md §15 (10/22).
  * 사이드바(AdminNav, 왼쪽 아코디언)와 본문(Admin.tsx)이 이 한 목록을 같이 쓴다 — 주소 /admin/<id>.
  */
 import type { User } from '../types';

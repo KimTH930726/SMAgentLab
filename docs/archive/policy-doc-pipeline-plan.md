@@ -1,4 +1,4 @@
-> **보관(2026-10-20)**: v1 엑셀 분해(서술/파라미터) 파이프라인 설계. 정책서는 v0(최종본 통째 적재)로 대체 — `docs/tech/policy-v0-design.md`.
+> **보관(2026-10-20)**: v1 엑셀 분해(서술/파라미터) 파이프라인 설계. 정책서는 v0(최종본 통째 적재)로 대체 — `docs/domains/policy/policy-v0-design.md`.
 > 코드(`backend/service/policy/`)의 엑셀·붙여넣기 경로는 v0 정책서가 없는 업무 영역에서만 쓰인다.
 
 # 정책서 데이터화 파이프라인 + 저장소 전략 실험실 — 설계 브리프
@@ -28,7 +28,7 @@
 > §7 미확정 항목(외부 SoR API 스펙, 정책서 원문 완료 시점, condition 표현 방식, effective_from/to
 > 필요 여부, 상태전이 전용 구조 필요 여부)은 v1 범위 밖(Phase 2+) 또는 데이터가 더 쌓인 뒤 재검토.
 > 목적: 엑셀로 된 비즈니스 정책서를 운영에서 활용 가능한 데이터로 전환하는 **파이프라인(Track 1)** 과, 그 결과를 어떤 저장소 전략으로 관리할지 **수치로 판정하는 실험실(Track 2)** 을 설계한다.
-> 관련: `D:\MD자료\work-os\WBS\smagent.md`, `docs/tech/knowledge-lifecycle-design.md`(경로 정정),
+> 관련: `D:\MD자료\work-os\WBS\smagent.md`, `docs/domains/knowledge/knowledge-lifecycle-design.md`(경로 정정),
 > `docs/archive/knowledge-refresh-automation-plan.md`
 > (`docs/rag-improvement-strategy.md`는 2026-09-03 삭제 — 2026-06-30 시점 로드맵으로 실 코드
 > 참조 없었고, 그 안의 "골든셋+Recall@K 평가 프레임워크" 제안은 이후 실측 검토 결과 지금 시스템
@@ -112,7 +112,7 @@ policy_chunk  -- rag_knowledge 재사용 시: policy_item_id를 source_ref로 �
   id, policy_item_id(FK), chunk_text, embedding, chunk_idx
 ```
 
-**왜 3층인가**: 파라미터 팩트를 벡터화하면 어휘만 겹쳐도 오탐이 난다 — `docs/tech/knowledge-lifecycle-design.md`의 "rag_knowledge 88% 표형식 오염" 및 v2.49의 `_KEYWORD_ONLY_CATEGORIES`(코드표는 벡터 점수 0, 키워드 매칭만)와 정확히 같은 문제. 파라미터는 구조화해서 정확 조회, 서술은 벡터로 의미 검색, 카테고리는 RDB로 네비게이션. 이 원칙 자체는 `docs/tech/retrieval-routing-pattern.md`에 재사용 가능한 패턴으로 별도 정리했다(2026-09-04) — 다음 데이터 축을 편입할 때 이 문서보다 그쪽을 먼저 참고할 것.
+**왜 3층인가**: 파라미터 팩트를 벡터화하면 어휘만 겹쳐도 오탐이 난다 — `docs/domains/knowledge/knowledge-lifecycle-design.md`의 "rag_knowledge 88% 표형식 오염" 및 v2.49의 `_KEYWORD_ONLY_CATEGORIES`(코드표는 벡터 점수 0, 키워드 매칭만)와 정확히 같은 문제. 파라미터는 구조화해서 정확 조회, 서술은 벡터로 의미 검색, 카테고리는 RDB로 네비게이션. 이 원칙 자체는 `docs/domains/knowledge/retrieval-routing-pattern.md`에 재사용 가능한 패턴으로 별도 정리했다(2026-09-04) — 다음 데이터 축을 편입할 때 이 문서보다 그쪽을 먼저 참고할 것.
 
 **§1의 4가지 콘텐츠 유형이 저장소 3층에 매핑되는 방식**: (a)서술→`policy_chunk`, (b)파라미터→`policy_param`(그대로), (c)코드 열거형→`policy_param`(name=코드체계명, condition=코드, value=설명 — 구조적으로 (b)와 동일하게 수용 가능). **(d)상태 전이 규칙은 `policy_param`의 name/condition/value/unit에 억지로 안 맞는다** — Phase 1에서는 자동 분류하지 않고 `unresolved`로 캡처만 한다(§2-3). 실제로 상태 전이 조회 질문이 얼마나 나오는지 확인되면 Phase 2 이후 전용 구조(예: `policy_transition` 테이블)를 검토한다 — 한 번 본 사례로 스키마를 미리 늘리지 않는다.
 

@@ -1,6 +1,6 @@
 """DB 스키마 사전 / 공통코드 마크다운 표 파서 — 결정론적, LLM 사용 안 함.
 
-`docs/tech/data-storage-philosophy.md` §3 "포맷 결정 → 결정론 파서 → LLM은 의미만" 원칙 —
+`docs/platform/data-storage-philosophy.md` §3 "포맷 결정 → 결정론 파서 → LLM은 의미만" 원칙 —
 이 데이터는 애초에 의미 판단이 필요 없는 순수 구조화 표(코드값 조회용)라 LLM 자체가
 불필요하다.
 

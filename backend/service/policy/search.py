@@ -1,4 +1,4 @@
-"""정책 데이터 검색 — docs/policy-doc-pipeline-plan.md §4 쿼리 유형 4종 중
+"""정책 데이터 검색 — docs/archive/policy-doc-pipeline-plan.md §4 쿼리 유형 4종 중
 파라미터 조회(RDB 정확 조회)와 서술 Q&A(벡터 검색)를 하나의 엔드포인트로 묶는다.
 
 Track 2(저장 전략 실험실, §4) 실행 결과(2026-09-04) — 벡터 폴백 보완 후 하이브리드 스키마(B)가

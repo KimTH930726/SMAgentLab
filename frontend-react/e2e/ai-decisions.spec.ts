@@ -3,7 +3,7 @@ import { goAdmin, selectDomain } from './admin-nav';
 import { adminToken, API, apiFetch, loginAdmin } from './auth';
 import { psql } from './v0-fixture';
 
-// 이 테스트가 존재하는 이유(10/27 밤 자가 개선 루프 재구성, docs/tech/self-improvement-loop-design.md):
+// 이 테스트가 존재하는 이유(10/27 밤 자가 개선 루프 재구성, docs/domains/quality/self-improvement-loop-design.md):
 // ① AI 감사 로그는 기록만 — "AI가 틀렸나요?"를 묻지 않고, 번복(사람이 AI 추천을 바꿈)과 그 순간 고른 이유를 보여 준다(사용자 10/27).
 // ② 옛 품질 › RAG 파이프라인 메뉴는 평가 게이트로 흡수 — 단계 흐름 요약(누르면 리포트가 그 단계로) + [적용 이력](이력·항목 전체).
 // ③ 즉석 질의 → 검색 미리보기 — 채팅과 같은 검색(API와 화면이 같은 판정), [시험지에 추가]가 실사용 층 한 줄로 DB에 남는다.

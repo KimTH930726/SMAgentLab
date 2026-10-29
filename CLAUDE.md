@@ -4,9 +4,9 @@
 - 개발: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`
   - dev override는 `./backend:/app` 소스 마운트 추가 (코드 수정 → `restart backend`만으로 반영)
 - 운영(폐쇄망): `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build`
-  - 사전 `docker load` 로 이미지 반입 필요. 자세한 절차는 `docs/deployment-closed-network.md`
+  - 사전 `docker load` 로 이미지 반입 필요. 자세한 절차는 `docs/operations/deployment-closed-network.md`
 - 특정 서비스만 빌드: `docker compose build backend frontend`
-- 이미지 버전 태그: `.env`의 `IMAGE_TAG` (현재 운영 반입 `v2.119`, 2026-10-02) — compose가 자동 참조. 반입·업그레이드 절차는 `docs/deployment-closed-network.md`
+- 이미지 버전 태그: `.env`의 `IMAGE_TAG` (현재 운영 반입 `v2.119`, 2026-10-02) — compose가 자동 참조. 반입·업그레이드 절차는 `docs/operations/deployment-closed-network.md`
 - Backend: FastAPI (port 8000), Frontend: React+nginx (port 8501)
 - DB: PostgreSQL + pgvector (ops-postgres 컨테이너)
 - Ollama: 호스트에서 별도 실행 (`ollama serve`)
@@ -27,11 +27,11 @@
 - `backend/agents/knowledge_rag/knowledge/retrieval.py` — 하이브리드 검색(Glossary Mapping + Vector/Keyword)
 - `backend/agents/knowledge_rag/knowledge/api.py` — 지식 코어 API: VOC 등 바깥 창구는 이것만(내부 import·지식 표 SQL 금지, `tests/test_voc_boundary.py`)
 - `backend/service/chat/memory.py` — 대화 요약 + 시맨틱 리콜
-- `backend/service/policy/` — 정책서 적재·검색(v0 최종본 통째: docs/tech/policy-v0-design.md, 옛 v1 엑셀 분해: docs/archive/policy-doc-pipeline-plan.md)
+- `backend/service/policy/` — 정책서 적재·검색(v0 최종본 통째: docs/domains/policy/policy-v0-design.md, 옛 v1 엑셀 분해: docs/archive/policy-doc-pipeline-plan.md)
 - `backend/libs/trustkit/` — **신뢰도 레이어**(이식 가능한 팀 자산: 적재 품질·검색 기법·문맥/답 다듬기·평가). 표준 라이브러리만,
-  앱 코드(core/service/shared/agents) import 금지. 기법 본체는 여기, 앱 쪽은 DB 어댑터만. 설계: docs/tech/trustkit-design.md
+  앱 코드(core/service/shared/agents) import 금지. 기법 본체는 여기, 앱 쪽은 DB 어댑터만. 설계: docs/domains/quality/trustkit-design.md
 - `frontend-react/src/components/` — React UI 컴포넌트
-- `docs/` — architecture.md(버전별 변경이력 — v2.160 이전은 `docs/archive/`로 분리, 옛 발표 자료·일회성 계획·배포 기록도 archive/), flow.md(처리 흐름), table-definition.md(마이그레이션
+- `docs/` — **문서 지도 `docs/README.md`**(도메인별 폴더: domains/knowledge·policy·quality·org, platform, operations, archive — 새 문서는 해당 도메인 폴더 + 지도에 한 줄). architecture.md(버전별 변경이력 — v2.160 이전은 `docs/archive/`로 분리, 옛 발표 자료·일회성 계획·배포 기록도 archive/), flow.md(처리 흐름), table-definition.md(마이그레이션
   이력만 — 전체 컬럼 스펙은 실 DB가 항상 정확, 2026-09-16 경량화) — 변경 시 동기화. API
   스펙은 FastAPI 자동 문서(`/docs`)로 대체(손 유지보수 안 함)
 
@@ -54,7 +54,7 @@
 
 ## 개발 규율 (이 프로젝트 특화)
 공통 개발 규율(검증 원칙, 커밋 워크플로우, YAGNI 등)은 `~/.claude/CLAUDE.md`에 있음. 여기는
-이 저장소에만 해당하는 것만. 실 사고 사례를 포함한 전체 상세는 `docs/development-conventions.md`.
+이 저장소에만 해당하는 것만. 실 사고 사례를 포함한 전체 상세는 `docs/operations/development-conventions.md`.
 
 - **과설계·과개발 지양, 업계 조사 + 메타인지** (§3-1a): 새 기능·구조는 업계 방식을 먼저 조사(출처 남김)하고 우리 규모·지향점
   ("실질적으로 도움이 되는 기능")에 맞춰 덜어낸다. 계획엔 ① 지금 실제로 막힌 일 ② 하는 것(MVP) ③ 안 하는 것 + 다시 볼 조건을

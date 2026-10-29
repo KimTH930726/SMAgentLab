@@ -159,7 +159,7 @@ async def cleanup_old_messages(namespace: str) -> int:
 async def cleanup_old_conversations() -> int:
     """`chat_retention_days`(ops_system_config)보다 오래 활동이 없는 대화를 삭제.
 
-    거버넌스 선제 설계 검토(docs/tech/governance-design-review.md §3-3) — 지금까지
+    거버넌스 선제 설계 검토(docs/domains/org/governance-design-review.md §3-3) — 지금까지
     ops_message/ops_conversation은 시간 기준 보존정책이 전혀 없었고(§2-3), 오직
     cleanup_old_messages()의 네임스페이스당 100건 캡만 있었다. 실제 보존일수는
     거버넌스팀이 아직 확정하지 않아, 기본값 '0'(비활성)일 땐 아무것도 지우지 않는다 —

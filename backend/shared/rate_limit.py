@@ -1,6 +1,6 @@
 """로그인 브루트포스 방어 — 실패 횟수 제한(Redis, 없으면 프로세스 메모리).
 
-Redis가 없어도 로그인 자체는 막히면 안 된다(폐쇄망 배포 — docs/deployment-closed-network.md). 예전엔 그 경우 제한 없이
+Redis가 없어도 로그인 자체는 막히면 안 된다(폐쇄망 배포 — docs/operations/deployment-closed-network.md). 예전엔 그 경우 제한 없이
 통과시켰는데, 그러면 Redis 장애 동안 무차별 대입 방어가 통째로 꺼진다(인증 통제의 fail-open — 2026-10-20 대체 처리 전수 점검).
 그래서 Redis를 못 쓰면 프로세스 메모리로 같은 규칙을 센다(백엔드는 uvicorn 프로세스 하나). 메모리 쪽은 재시작하면 초기화된다.
 """

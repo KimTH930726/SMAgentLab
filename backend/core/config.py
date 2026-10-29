@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     llm_provider: str = "inhouse"
     ollama_base_url: str = "http://host.docker.internal:11434"
     # OpenAI 호환(로컬 vLLM Qwen 등) — 주소는 .env에서만(코드에 주소 없음). 비어 있으면 시스템 LLM으로 고를 수 없다.
-    # v2.163부터 지식 등록 위치 판정(locator_llm=local)이 이 주소를 쓴다 — 운영도 쓰려면 .env에 넣는다(docs/deployment-closed-network.md)
+    # v2.163부터 지식 등록 위치 판정(locator_llm=local)이 이 주소를 쓴다 — 운영도 쓰려면 .env에 넣는다(docs/operations/deployment-closed-network.md)
     openai_compat_base_url: str = ""
     openai_compat_model: str = ""          # 비우면 서버의 첫 모델
     openai_compat_timeout: int = 300

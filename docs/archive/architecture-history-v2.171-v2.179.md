@@ -11,7 +11,7 @@
   `service/eval/decision_log.describe`, 원문 없음). ④ 컬렉션 고르는 창 카드: 손볼 것은 카드 아래 한 줄("● 정정 대기 n ›"), 누르면 그 컬렉션을 고른 채
   품질 › 정정 요청 / 정책서 › 원문 확인 탭(권한 = canEditDomain, 넣을 곳 고르기는 숫자만). 정책서 탭은 주소의 `?tab`.
   ⑤ E2E: 공용 `apiFetch`(연결 오류 한 번 다시 — node fetch가 닫힌 keep-alive 연결을 집어 "other side closed"로 실패하던 것).
-- v2.178 (2026-10-27, dev_0): **정책 추가·폐기·분류 옮기기 제안(C3 2단계, 설계 `docs/tech/policy-lifecycle-design.md`).** 모두 정정 요청에 제안으로 올라가고
+- v2.178 (2026-10-27, dev_0): **정책 추가·폐기·분류 옮기기 제안(C3 2단계, 설계 `docs/domains/policy/policy-lifecycle-design.md`).** 모두 정정 요청에 제안으로 올라가고
   승인해야 반영(`service/improvement/policy_change.py`, `POST /api/corrections/policy-change`, 폐기 창 경고 `GET …/policy-change/uses`). 정책서 목록 [+ 정책 추가 제안]
   (새 분류 = 대·중·소 직접 입력)·절 줄 [+ 추가] · 정책 상세 [분류 옮기기 제안]·[폐기 제안](이유 필수, 그 정책을 정답으로 쓰는 평가 문항 수 경고) · 정정 요청 전용 카드(무엇이 바뀌나 + 승인/반려).
   승인: 추가 = 새 정책 v1·원천 키 `sys:<logical_id>`·조각 1개 / 옮기기 = 새 버전(분류만, logical_id·원천 키 유지, 조각 다시 임베딩) / 폐기 = 상태만 deprecated.

@@ -456,7 +456,7 @@ async def _migrate_duplicate_review(conn) -> None:
 
 
 async def _migrate_knowledge_lifecycle(conn) -> None:
-    """지식 생명주기 관리 — docs/tech/knowledge-lifecycle-design.md의 "지금 할 수 있는 것" 실행분.
+    """지식 생명주기 관리 — docs/domains/knowledge/knowledge-lifecycle-design.md의 "지금 할 수 있는 것" 실행분.
 
     - Phase 0: 미래 대비 스키마 선추가(로직은 최소화 — 지금 3천여 건일 때가 제일 싸고,
       10만+건 쌓인 뒤 도입하면 전체 백필이 필요해 훨씬 비싸짐).
@@ -511,7 +511,7 @@ async def _migrate_query_log_user(conn) -> None:
     """질의응답 감사로그 — 누가 물었는지 연결.
 
     이 컬럼이 없으면 "누가 언제 뭘 물었고 뭘 근거로 답했는지"를 재구성할 방법이 없다
-    (거버넌스 선제 설계 검토, docs/tech/governance-design-review.md §2-1). 기존 행은
+    (거버넌스 선제 설계 검토, docs/domains/org/governance-design-review.md §2-1). 기존 행은
     당시 누가 물었는지 알 길이 없어 NULL로 남긴다(ops_conversation.user_id처럼 admin으로
     소급 귀속하지 않음 — 감사로그를 사실과 다르게 채우면 안 됨).
     """
@@ -756,7 +756,7 @@ Always respond with valid JSON only.""",
 
 
 async def _migrate_policy_tables(conn) -> None:
-    """정책서 데이터화 파이프라인 스키마 (docs/policy-doc-pipeline-plan.md §2, 2026-09-03).
+    """정책서 데이터화 파이프라인 스키마 (docs/archive/policy-doc-pipeline-plan.md §2, 2026-09-03).
 
     한 엑셀 row를 3층으로 분해한다: policy_item(원문+메타) → policy_param(추출된 파라미터
     팩트, 정확 조회용) / policy_chunk(서술 규칙, 벡터 검색용). 용어집 시트는 별도 테이블을
@@ -1633,7 +1633,7 @@ async def _migrate_data_marker(conn) -> None:
 
 
 async def _migrate_policy_v0(conn) -> None:
-    """정책서 v0 적재 스키마 (2026-10-20, #77, docs/tech/policy-v0-design.md §4). 멱등.
+    """정책서 v0 적재 스키마 (2026-10-20, #77, docs/domains/policy/policy-v0-design.md §4). 멱등.
     - ops_namespace.kind: 정책(정책서 영역 파트) / 업무(기존). 채팅 범위 확장이 종류를 본다.
     - policy_item.source_key: 원천의 고정 id(팀원 데이터 pol_…) — 골든셋 정답이 우리 id·엑셀 행 대신 이걸 가리킨다.
     - ref_table / ref_table_row: 참고표(결정표) 원표. 압축본·표 요약은 원표에서 계산하는 파생물이라 원표만 기준으로 저장.
@@ -1851,7 +1851,7 @@ async def _migrate_llm_usage(conn) -> None:
 
 async def _migrate_source_document(conn) -> None:
     """지식 원문 원장 (2026-10-08, #73) — 원문 = SoT, 청크·임베딩 = 다시 만들 수 있는 파생물(업계 표준, 사용자 결정 10/07).
-    docs/tech/source-ledger-plan.md. 미리보기 때 초안 → 확정 때 사용 중 → 같은 원본 위치 재등록 시 교체됨. 멱등."""
+    docs/domains/knowledge/source-ledger-plan.md. 미리보기 때 초안 → 확정 때 사용 중 → 같은 원본 위치 재등록 시 교체됨. 멱등."""
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS rag_source_document (
             id SERIAL PRIMARY KEY,

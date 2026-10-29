@@ -12,7 +12,7 @@ import type { NamespaceDetail, Part } from '../../types';
 import { directOwnerParts } from '../../utils/domainAccess';
 
 /**
- * 담당 업무 — 파트(사람 조직)가 어느 업무 컬렉션을 맡는지(2026-10-21, 관리자 화면 설계안 docs/tech/admin-ia-design.md ①).
+ * 담당 업무 — 파트(사람 조직)가 어느 업무 컬렉션을 맡는지(2026-10-21, 관리자 화면 설계안 docs/platform/admin-ia-design.md ①).
  * 파트 하나가 여러 영역, 영역 하나에 담당 파트 여럿(N:N, 10/22 — 주 담당 없음). 담당 파트 중 어느 파트 사람이든 그 영역의 지식·정책·용어를
  * 수정하고, 담당 없는 영역은 관리자만. 체크 = 이 파트를 담당에 더함(다른 파트 담당은 그대로), 체크 해제 = 이 파트만 뺌.
  * 저장 전에 무엇이 바뀌는지 확인받는다(고르는 순간 저장하던 칸으로 사고 — 10/20).

@@ -1,4 +1,4 @@
-"""운영 번복 — 기능을 쓰다 사람이 AI 추천을 번복한 기록(AI 판단 원장)을 자가 개선 진단의 입력으로(10/27, docs/tech/self-improvement-loop-design.md).
+"""운영 번복 — 기능을 쓰다 사람이 AI 추천을 번복한 기록(AI 판단 원장)을 자가 개선 진단의 입력으로(10/27, docs/domains/quality/self-improvement-loop-design.md).
 
 업계 override monitoring 관례: 결정 종류별 번복률·이유 코드·패턴을 보고, 기대보다 높으면 기준(임계·가중)을 의심한다.
 위치 판정은 원장에 남은 신호(AI 값·가까운 이웃)로 제안 규칙을 LLM 없이 다시 계산해 "맞은 제안 · 확신인데 틀림"을 비교한다 —

@@ -1,5 +1,5 @@
 """규칙 기반 한국어 조사/어미 제거가 RDB(param) 검색 hit@K를 실제로 올리는지 비교하는
-일회성 실험 스크립트 — docs/tech/embedding-reranker-upgrade-plan.md 논의(2026-09-10)에서
+일회성 실험 스크립트 — docs/archive/architecture-history-v2.0-v2.99.md(임베딩·리랭커 교체 v2.72 — 계획 문서는 정리됨) 논의(2026-09-10)에서
 "mecab/Kiwi 붙이기 전에 저비용 규칙 기반부터 실측해보자"는 결론에 따라 작성.
 
 같은 골든셋(89문항)·같은 policy_param 데이터로 Track2의 RDB(param) 검색 부분만 떼어내

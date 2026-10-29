@@ -646,7 +646,7 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
 
 ---
 
-## 6-0. 자가 개선 루프 (v2.180~183, 2026-10-27~28 — 설계 `docs/tech/self-improvement-loop-design.md`)
+## 6-0. 자가 개선 루프 (v2.180~183, 2026-10-27~28 — 설계 `docs/domains/quality/self-improvement-loop-design.md`)
 
 ```
 기능 사용 중 사람이 AI 추천을 바꿈(번복) — 지식 등록 넣을 곳(이유 칩, 선택) · 되묻기 · 원문 확인

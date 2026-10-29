@@ -10,4 +10,4 @@
 | `backup-db.sh` | DB 백업 |
 | `restore-db.sh` | DB 복원 |
 
-자세한 배포 절차는 `docs/deployment-closed-network.md` 참고.
+자세한 배포 절차는 `docs/operations/deployment-closed-network.md` 참고.

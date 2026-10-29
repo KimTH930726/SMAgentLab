@@ -1,6 +1,6 @@
 """임베딩 모델 교체 마이그레이션 — mpnet(768차원) → KURE-v1(1024차원), v2.72.
 
-docs/tech/embedding-reranker-upgrade-plan.md 실측(89문항 골든셋, 2026-09-11) 결과
+docs/archive/architecture-history-v2.0-v2.99.md(임베딩·리랭커 교체 v2.72 — 계획 문서는 정리됨) 실측(89문항 골든셋, 2026-09-11) 결과
 KURE-v1이 전체 hit@10 82.0%(현재 모델 55.1% 대비 +26.9%p, 전 유형 개선)로 1위 —
 공개 벤치마크(MTEB-ko-retrieval) 순위와도 일치해 팀 확정. 이 스크립트는 그 확정에
 따른 전체 재색인이다.

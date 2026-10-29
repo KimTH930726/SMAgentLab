@@ -1177,7 +1177,7 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
         # 정책은 채팅이 여러 업무 영역에 걸쳐 찾는다(scope.py) — 고친 영역만 비우면 다른 영역 답에 옛 정책이 남는다(10/21).
         # 정책 색인(키워드·분류)도 함께(리뷰 10/13).
         # 일괄 승인은 건마다 이 승인을 부르므로 Redis 전체 훑기가 건수만큼 돈다(10/21 리뷰 L8) — 지금 규모(대기 수십 건)에선 감수,
-        # 한 번만 비우게 바꿀 조건은 docs/tech/post-demo-backlog.md §4
+        # 한 번만 비우게 바꿀 조건은 docs/backlog.md §4
         try:
             from service.policy.caches import invalidate_policy_caches
             await invalidate_policy_caches()

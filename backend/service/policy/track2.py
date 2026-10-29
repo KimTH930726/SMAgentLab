@@ -1,6 +1,6 @@
 """Track 2 — 저장소 전략 비교 실행을 API로 승격(2026-09-04).
 
-docs/policy-doc-pipeline-plan.md §4 실험을 매번 일회성 스크립트로 짜지 않고, 관리자 화면에서
+docs/archive/policy-doc-pipeline-plan.md §4 실험을 매번 일회성 스크립트로 짜지 않고, 관리자 화면에서
 버튼 하나로 재실행할 수 있게 한다. 로직은 최초 실측 때 쓴 스크립트와 동일 — A그룹(rag_knowledge
 지식-only, 격리된 임시 네임스페이스에 전체 policy_item을 원문 그대로 얹음)과 B그룹(지금
 하이브리드 스키마, search.search_policy() 그대로 재사용)에 골든셋을 동일하게 질의해 item-id
@@ -249,7 +249,7 @@ async def _load_golden_set(golden_set_path: Path, real_ns_ids: dict[str, int]) -
     if any(dropped.values()):
         logger.warning(
             "[골든셋] %d문항 중 %d문항만 채점 대상 — 제외 사유: %s. 원본 파일명(_FILE_TO_NAMESPACE)이나 "
-            "시트/행 번호가 바뀌었는지 확인하세요(docs/tech/golden-set-procedure.md).",
+            "시트/행 번호가 바뀌었는지 확인하세요(docs/domains/quality/golden-set-procedure.md).",
             len(raw), len(entries), dropped,
         )
     return entries

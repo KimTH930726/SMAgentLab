@@ -8,7 +8,7 @@ import { GateScores } from './GateScores';
 import type { GateAxis } from '../../api/eval';
 
 /**
- * 품질 › 평가 게이트 — 자가 개선 루프의 측정 쪽(10/27 밤 재구성, docs/tech/self-improvement-loop-design.md).
+ * 품질 › 평가 게이트 — 자가 개선 루프의 측정 쪽(10/27 밤 재구성, docs/domains/quality/self-improvement-loop-design.md).
  * 두 축(10/28, 사용자 "위 단계를 누르면 계속 리포트로 돌아가고 아래 탭이랑 관계가 안 맞는다"):
  *   위 = 어느 단계(GateFlow: 적재 → 검색 → 근거 판정 → 답 모양 → 생성) — 고르면 아래 모든 탭이 그 단계로 걸러지는 공통 필터, 탭은 그대로.
  *   아래 = 무엇을 볼까 — [틀린 문항] [성적] [적용 이력].

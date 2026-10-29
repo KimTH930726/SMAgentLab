@@ -287,7 +287,7 @@ _VECTOR_CANDIDATE_LIMIT = 300  # top_k/reranker_candidates(기본 20)보다 넉�
 # **기본 꺼짐**: 컨플루언스 합성 106문항 게이트 실패 — 문맥 3자리 중 1자리를 넘기면 4·6위 정답 3개를 건지지만 3위 정답 2개를 밀어냄
 # (순증 +1, p=1.0, "검색 나빠짐 0" 규칙 위반). 데이터 재적재로 문서가 늘면 KNOWLEDGE_KEYWORD_RESCUE=1로 같은 게이트를 다시 돌려 판단.
 # 맥락 머리 임베딩도 지식에선 손해라 안 씀(Recall@3 95.3→94.3%, 같은 페이지 조각끼리 유사도 중앙 0.51→0.65·중복 판정 0.88 넘는 쌍
-# 13→30 — 조각이 길고 본문에 제목 줄이 이미 있어 같은 페이지명 머리가 구분력을 깎음). 근거: docs/tech/trustkit-design.md §7.
+# 13→30 — 조각이 길고 본문에 제목 줄이 이미 있어 같은 페이지명 머리가 구분력을 깎음). 근거: docs/domains/quality/trustkit-design.md §7.
 KEYWORD_RESCUE = os.environ.get("KNOWLEDGE_KEYWORD_RESCUE", "0") == "1"
 # 리랭커를 같이 켜면 구제는 리랭커 후보 수(reranker_candidates) 기준 자리로 잡힌 뒤 리랭커가 다시 정렬한다 — 게이트로 잰 "문맥 3자리 중
 # 1자리"와 다른 조합이라 둘 다 켤 땐 게이트를 그 조합으로 다시 돌린다(리뷰 10/19). 비스트리밍·디버그 검색(service/chat/router.py)은 구제 없음.

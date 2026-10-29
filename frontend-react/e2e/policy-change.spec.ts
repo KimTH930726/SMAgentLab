@@ -3,7 +3,7 @@ import { goAdmin, selectDomain } from './admin-nav';
 import { createPolicyPart, dropPolicyPart, psql } from './v0-fixture';
 import { API, adminToken, loginAdmin } from './auth';
 
-// 정책 추가·분류 옮기기·폐기 제안(C3 2단계, 2026-10-27 — docs/tech/policy-lifecycle-design.md).
+// 정책 추가·분류 옮기기·폐기 제안(C3 2단계, 2026-10-27 — docs/domains/policy/policy-lifecycle-design.md).
 // 핵심 약속: 제안은 정책 테이블을 건드리지 않고 정정 요청에 1건만 만든다 → 승인해야 반영. 화면 문구가 아니라 DB 값·검색 API로 전/후를 본다.
 // - 추가: 새 분류(대·중·소 직접 입력)도 됨 → 승인하면 새 정책(v1, 원천 키 sys:<logical_id>, 조각 1개 + 임베딩), 검색에 나옴
 // - 옮기기: 새 버전(분류만 다름, 원천 키·logical_id 그대로 — 골든 정답 유지), 옛 버전 deprecated, 조각 다시 임베딩
