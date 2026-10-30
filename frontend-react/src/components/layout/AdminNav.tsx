@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useImportTodo } from '../admin/TeamImportPanel';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
@@ -44,7 +45,8 @@ export function AdminNav() {
     enabled: !!selectedNs && canModifyNs,
     staleTime: 30_000,
   });
-  const badge = (id: AdminMenuId) => (id === 'q.corrections' ? correctionCount?.by_namespace[selectedNs] ?? 0 : 0);
+  const importTodo = useImportTodo();   // 연결할 묶음 수(데이터 소스)
+  const badge = (id: AdminMenuId) => (id === 'q.corrections' ? correctionCount?.by_namespace[selectedNs] ?? 0 : id === 'k.sources' ? importTodo : 0);
 
   const toggle = (gid: string) => setOpen((prev) => {
     const next = prev.includes(gid) ? prev.filter((x) => x !== gid) : [...prev, gid];

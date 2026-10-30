@@ -30,9 +30,8 @@ test('팀 적재 분류 미리보기 — 묶음 위치로 확정 · 줄 보류 �
 
     await loginAdmin(page);
     // 따로 메뉴(팀 적재)는 없다 — 지식 문서 › [적재 검토] 탭(할 일 수 = 분류 안 한 검토 필요 + 안 본 표본)
-    await goAdmin(page, '지식', '지식 문서');
     await expect(page.getByRole('navigation', { name: '관리자 메뉴' }).getByRole('button', { name: '팀 적재' })).toHaveCount(0);
-    await page.getByTestId('subtab-import').click();
+    await goAdmin(page, '지식', '데이터 소스');   // 10/30 지식 문서 [적재 검토] 탭 → 지식 › 데이터 소스
     await expect(page.getByLabel('배치')).toBeVisible();
     await expect(page.getByLabel('배치').locator(`option[value="${bid}"]`)).toHaveText(/할 일 1/);   // 연결할 묶음 수(10/30 묶음 단위 연결) — 모두 묶음A
     await page.getByLabel('배치').selectOption(String(bid));   // 배치가 여럿이면 선택 상자(10/30)
@@ -106,7 +105,7 @@ test('공간 기본 위치 — 등록 창구 세 갈래 · 기본 위치로 분�
       await expect(page.getByRole('button', { name: '분류 미리보기 만들기' })).toBeVisible();   // 누르지 않는다(컨플을 받는다)
     }
 
-    await page.getByTestId('subtab-import').click();
+    await goAdmin(page, '지식', '데이터 소스');
     await page.getByLabel('배치').selectOption(String(bid));   // 배치가 여럿이면 선택 상자(10/30)
     await page.getByTestId('preview-more').click();   // 상세는 [자세히] 아래(10/30 최종 검수)
     const ctl = page.locator('div', { has: page.getByRole('button', { name: '기본 위치로 분류' }) }).last();
@@ -190,14 +189,18 @@ test('묶음 연결 — 묶음 줄·하위 예외 미리 채움, 연결하면 �
     ins('b1', 'B', 2, 'B', 'review', null);                          // 미분류 — 묶음 값으로 따라감
     await loginAdmin(page);
     await goAdmin(page, '지식', '지식 문서');
-    await page.getByTestId('subtab-import').click();
+    await goAdmin(page, '지식', '데이터 소스');
     await page.getByLabel('배치').selectOption(String(bid));
     const bc = page.getByTestId('bundle-connect');
     await expect(bc.getByTestId('bundle-row')).toHaveCount(2);
     await expect(bc).not.toContainText('표본');
-    await expect(bc.getByTestId('bundle-group')).toHaveCount(1);       // A-도구(팀 공통 3/3) — 묶음 A(업무)와 다름
+    await expect(bc.getByTestId('bundle-group')).toHaveCount(1);       // A-도구: AI가 3/3 다르게 봄(> 40%, 3쪽 이상) — 갈래 예외 후보
+    await expect(bc.getByTestId('bundle-group')).toContainText('AI가 다르게 본 갈래');
     await expect(bc.getByLabel('A 컬렉션')).toHaveValue(String(biz));
-    await expect(bc.getByLabel('A-도구 컬렉션')).toHaveValue(String(common));
+    await expect(bc.getByLabel('A-도구 컬렉션')).toHaveValue(String(biz));   // AI 값이 아니라 묶음 값으로 채움(AI "다른 곳" 31%만 맞음)
+    await bc.getByLabel('A-도구 컬렉션').selectOption(String(common));   // 사람이 갈래만 바꿈
+    await bc.getByTestId('bundle-detail-toggle').first().click();
+    await expect(bc.getByTestId('bundle-detail')).toContainText('대표 페이지');
     await expect(bc.getByLabel('B 컬렉션')).toHaveValue(String(biz));
     // 적재 요청은 가로채 실제 적재(원장·판단 기록)를 돌리지 않는다 — 연결(규칙·페이지 값)만 DB로 확인
     let confirmed = false;
@@ -210,8 +213,13 @@ test('묶음 연결 — 묶음 줄·하위 예외 미리 채움, 연결하면 �
     for (const pid of ['A', 'a1', 'a2', 'a3', 'B', 'b1']) expect(st(pid).split('|')[1]).toBe(String(biz));
     for (const pid of ['A-도구', 't1', 't2']) expect(st(pid).split('|')[1]).toBe(String(common));
     expect(psql(`SELECT count(*) FROM rag_import_rule WHERE team_id = ${team} AND root_url LIKE '%pageId=4'`)).toBe('3');   // 묶음 2 + 예외 1
+    // 연결하면 동기화 대상(연결된 공간)이 한 줄 — 담당 = 연결한 사람(10/30 동기화)
+    expect(psql(`SELECT count(*) || '|' || max(status) FROM rag_source_connection WHERE team_id = ${team} AND root_url LIKE '%pageId=4'`)).toBe('1|ok');
+    await page.reload();
+    await expect(page.getByTestId('source-connections').getByTestId('connection-row').filter({ hasText: 'E2E 묶음 연결' })).toContainText('아직 안 돎');
   } finally {
     psql(`DELETE FROM rag_import_rule WHERE team_id = ${team} AND root_url LIKE '%pageId=4'`);
+    psql(`DELETE FROM rag_source_connection WHERE team_id = ${team} AND root_url LIKE '%pageId=4'`);
     psql(`DELETE FROM rag_import_batch WHERE id = ${bid}`);
   }
 });

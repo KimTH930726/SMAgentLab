@@ -104,3 +104,20 @@ export const confluencePageUrl = (rootUrl: string, pageId: string) => {
     return null;
   }
 };
+
+/** 연결된 공간(10/30 컨플 동기화) — 하루 1회 증분 · 주 1회 전체 대조. 담당 = 토큰 주인 */
+export interface SourceConnection {
+  id: number; team_id: number; team_name: string | null; root_url: string; title: string | null;
+  status: 'ok' | 'running' | 'error' | 'stopped'; error: string | null; owner: string | null;
+  last_incremental_at: string | null; last_full_at: string | null; last_run_at: string | null;
+  last_result: {
+    mode: 'incremental' | 'full'; changed: number; updated: number; added: number; unchanged: number; restricted: number; held: number;
+    conflict: number; no_rule: number; excluded: number; missing: number; failed: number; incomplete: boolean;
+    elsewhere: number; denied: number; too_many_missing: boolean;
+  } | null;
+  /** 다음 동기화에 다시 시도할 페이지 — 충돌(사람이 고친 조각)·실패 */
+  retry_pages: { page_id: string; title: string | null; why: 'conflict' | 'failed' }[];
+}
+export const listConnections = () => apiFetch<SourceConnection[]>(`${BASE}/connections`);
+export const syncConnection = (id: number, mode: 'incremental' | 'full') =>
+  apiFetch<{ status: string }>(`${BASE}/connections/${id}/sync`, { method: 'POST', body: JSON.stringify({ mode }) });

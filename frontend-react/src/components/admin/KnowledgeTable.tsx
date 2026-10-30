@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { adminPath } from '../../pages/adminMenu';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, X, FileText, Upload, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -43,7 +44,7 @@ import { showAlert, showConfirm } from '../../store/useDialogStore';
 import { KnowledgeStructurePanel } from './KnowledgeStructurePanel';
 import { EvidenceButton } from './Evidence';
 // 컨플 공간·하위 전체 넣기 — 시작은 등록 창구(하나, 10/29), 분류 검토는 [적재 검토] 탭(검토는 등록이 아니라서, 10/29 사용자)
-import { ImportBatches, SpaceImportStart, useImportTodo } from './TeamImportPanel';
+import { SpaceImportStart } from './TeamImportPanel';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
 
@@ -139,6 +140,7 @@ type IngestMethod = 'file' | 'text' | 'manual' | 'url' | null;
 
 export function KnowledgeTable() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { selectedNs, canModifyNs } = useNamespaceAccess();
   // 업무 컬렉션이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -151,9 +153,7 @@ export function KnowledgeTable() {
   const dropInto = () => setSearchParams((p) => { const n = new URLSearchParams(p); n.delete('into'); return n; }, { replace: true });
   useEffect(() => { if (into && selectedNs && into !== selectedNs) dropInto(); },   // eslint-disable-line react-hooks/exhaustive-deps
     [selectedNs]);
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'import' | 'review'>(() => (searchParams.get('tab') === 'ingest' ? 'ingest' : 'list'));   // 정정 요청은 품질 메뉴로(10/21)
-  const [openBatch, setOpenBatch] = useState<number | null>(null);   // [적재 검토]에서 열 배치 — 공간·하위 전체 넣기를 시작하면 그 배치
-  const importTodo = useImportTodo();
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>(() => (searchParams.get('tab') === 'ingest' ? 'ingest' : 'list'));   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<KnowledgeFormData>(defaultForm);
@@ -330,22 +330,6 @@ export function KnowledgeTable() {
           지식 등록
         </button>
         <button
-          onClick={() => setSubTab('import')}
-          data-testid="subtab-import"
-          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
-            subTab === 'import'
-              ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-          title="컨플 공간·하위 전체 넣기 배치 — 넣기 전에 페이지마다 넣을 곳을 확인(검토 필요 · 표본 검토) · 게이트 · 롤백"
-        >
-          <Search className="w-4 h-4" />
-          적재 검토
-          {importTodo > 0 && (
-            <span className="ml-1 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-400 px-1.5 py-0.5 rounded-full">{importTodo}</span>
-          )}
-        </button>
-        <button
           onClick={() => setSubTab('review')}
           className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
             subTab === 'review'
@@ -501,12 +485,11 @@ export function KnowledgeTable() {
           onSuccess={onIngestSuccess}
           onGoToList={() => setSubTab('list')}
           onGoToReview={() => setSubTab('review')}
-          onImportStarted={(id) => { setOpenBatch(id); setSubTab('import'); }}
+          onImportStarted={(id) => navigate(`${adminPath('k.sources')}?batch=${id}`)}   // 데이터 소스에서 그 배치를 연다(10/30)
         />
       )}
 
       {/* ── 서브탭: 적재 검토(공간·하위 전체 넣기 배치) ── */}
-      {subTab === 'import' && <ImportBatches openId={openBatch} onOpen={setOpenBatch} />}
 
       {/* ── 서브탭 3: 승인 대기 ── */}
       {subTab === 'review' && (

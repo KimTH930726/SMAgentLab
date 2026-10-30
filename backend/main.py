@@ -1530,6 +1530,25 @@ async def _migrate_experiment_runner(conn) -> None:
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""")
     await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_import_rule ON rag_import_rule (team_id, root_url, bundle, (coalesce(grp, '')))")
+    # #101(10/30 컨플 동기화) — 연결한 공간 하나 = 한 줄: 담당(토큰 주인) · 마지막 증분/전체 대조 · 상태 · 결과(화면이 읽음)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rag_source_connection (
+            id SERIAL PRIMARY KEY,
+            team_id INT NOT NULL,
+            root_url TEXT NOT NULL,
+            title TEXT,
+            owner_user_id INT,
+            status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'running', 'error', 'stopped')),
+            error TEXT,
+            last_incremental_at TIMESTAMPTZ,
+            last_full_at TIMESTAMPTZ,
+            last_run_at TIMESTAMPTZ,
+            last_result JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (team_id, root_url)
+        )""")
+    # 다시 시도할 페이지(실패·충돌) — 결과(last_result)는 매번 덮이므로 따로. 실패는 5회까지, 충돌은 풀릴 때까지(리뷰 M2)
+    await conn.execute("ALTER TABLE rag_source_connection ADD COLUMN IF NOT EXISTS retry_pages JSONB NOT NULL DEFAULT '[]'::jsonb")
     # 처음 만든 표(SET NULL)도 CASCADE로 — 컬렉션이 지워지면 규칙도(NULL = 제외로 바뀌던 것, 리뷰 L2). 멱등
     await conn.execute("ALTER TABLE rag_import_rule DROP CONSTRAINT IF EXISTS rag_import_rule_namespace_id_fkey")
     await conn.execute("ALTER TABLE rag_import_rule ADD CONSTRAINT rag_import_rule_namespace_id_fkey "
@@ -2357,12 +2376,15 @@ async def lifespan(_app: FastAPI):
     retention.start()          # 보관 주기 정리(하루 1회, 10/28 — 판단 원장 180일·지운 지식 180일·질의 기록 1년)
     from service.eval import experiment
     await experiment.start()   # 개선 후보 실험 대기열(10/30) — 이전 프로세스가 돌리던 작업은 실패로 닫음
+    from agents.knowledge_rag.ingestion import confluence_sync
+    await confluence_sync.start()   # 컨플 공간 동기화(10/30) — 설정 confluence_sync가 켜졌을 때만 자동(기본 꺼짐)
 
     yield
     await stop_scheduler()
     await glossary_mining.stop()
     await retention.stop()
     await experiment.stop()
+    await confluence_sync.stop()
     await close_http_client()
     await close_pool()
 

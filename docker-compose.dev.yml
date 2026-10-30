@@ -12,5 +12,8 @@
 # ─────────────────────────────────────────────────────────────────
 services:
   backend:
+    environment:
+      # 컨플 공간 자동 동기화 — dev에서만 켬(개인 PAT를 서버가 정기적으로 씀, 운영 반입 전 보안 확인 필요 · 10/30)
+      CONFLUENCE_SYNC: "true"
     volumes:
       - ./backend:/app

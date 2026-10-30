@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     # 참고표·문서 개요를 채팅 문맥에(v0 #12, service/policy/ref_search.py) — 10/29 켬(태훈): 게이트 통과(답 82.3→85.8%, 참고표 문항 12.5→75.0%,
     # 검색 나빠짐 0). 남은 부작용 챌린지-018 하나(표에 없는 '탈퇴'에 표가 붙어 되물음) — 감수하고 켬, 백로그 0-12
     policy_ref_chat: bool = True
+    # 컨플 공간 자동 동기화(10/30, 하루 1회 증분 · 주 1회 전체 대조) — 연결한 사람의 개인 PAT를 서버가 정기적으로 쓴다.
+    # 운영 반입 전 보안 확인 필요(사내 API/MCP 게이트웨이로 바뀌면 공급자 교체) → 기본 꺼짐, dev .env에서만 켠다. 수동 [지금 동기화]는 늘 됨
+    confluence_sync: bool = False
     # 문서 개요도 붙일지(policy_ref_chat이 켜졌을 때만) — 사용자 10/27 "개요는 별 필요 없을 것" → 기본 꺼짐, 참고표만
     policy_ref_overview: bool = False
     # 반복된 지식 공백 → 용어 동의어 확인 주기(시간, 0이면 끔) — agents/knowledge_rag/knowledge/glossary_mining.py

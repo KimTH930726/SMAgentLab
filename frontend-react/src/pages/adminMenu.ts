@@ -6,7 +6,7 @@ import type { User } from '../types';
 
 export type AdminMenuId =
   | 'domains' | 'org.collections'
-  | 'k.policy' | 'k.docs' | 'k.glossary' | 'k.system'
+  | 'k.policy' | 'k.docs' | 'k.sources' | 'k.glossary' | 'k.system'
   | 'org'
   | 'q.stats' | 'q.corrections' | 'q.eval' | 'q.decisions'
   | 'voc'
@@ -46,6 +46,7 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
   { id: 'knowledge', label: '지식', items: [
     { id: 'k.policy', label: '정책서', scoped: true, kinds: ['domain'] },
     { id: 'k.docs', label: '지식 문서', hint: '컨플루언스 등에서 가져온 업무 지식', scoped: true, required: true },
+    { id: 'k.sources', label: '데이터 소스', hint: '컨플 공간 연결 — 묶음 연결 · 동기화 · 적재 이력(팀 단위, 보는 컬렉션과 무관)' },
     { id: 'k.glossary', label: '용어집', scoped: true },
     { id: 'k.system', label: '시스템 정보', hint: 'DB 칼럼·공통코드 — 준비 중', scoped: true, kinds: ['domain'] },
   ] },

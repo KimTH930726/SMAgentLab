@@ -133,6 +133,28 @@ async def list_collections(team_id: Optional[int] = None, user: dict = Depends(g
         return await _collections(conn, await _user_team(conn, user, team_id), user)
 
 
+@router.get("/connections")
+async def list_connections(user: dict = Depends(get_current_user)):
+    """연결된 공간(동기화) — 배치 목록과 같은 범위(관리자 전체, 그 밖엔 내 팀)."""
+    async with get_conn() as conn:
+        team = None if user["role"] == "admin" else (await _my_team(conn, user) or -1)
+        rows = await conn.fetch(
+            """SELECT c.id, c.team_id, t.name team_name, c.root_url, c.title, c.status, c.error, c.last_incremental_at::text,
+                      c.last_full_at::text, c.last_run_at::text, c.last_result, c.retry_pages, u.username owner
+               FROM rag_source_connection c LEFT JOIN ops_team t ON t.id = c.team_id LEFT JOIN ops_user u ON u.id = c.owner_user_id
+               WHERE $1::int IS NULL OR c.team_id = $1 ORDER BY c.id""", team)
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k in ("last_result", "retry_pages"):
+            if isinstance(d.get(k), str):
+                d[k] = json.loads(d[k])
+        # 화면엔 제목·이유만(조상 목록은 서버 재시도용)
+        d["retry_pages"] = [{"page_id": p["page_id"], "title": p.get("title"), "why": p.get("why")} for p in d.get("retry_pages") or []]
+        out.append(d)
+    return out
+
+
 @router.get("/{batch_id}")
 async def get_batch(batch_id: int, user: dict = Depends(get_current_user)):
     """배치 + 페이지 + 고를 수 있는 컬렉션(이 팀 범위, 넣을 수 있나) + 확정을 막는 것."""
@@ -352,8 +374,40 @@ async def connect(batch_id: int, body: _ConnectBody, user: dict = Depends(get_cu
                            ON CONFLICT (team_id, root_url, bundle, (coalesce(grp, ''))) DO UPDATE
                            SET namespace_id = EXCLUDED.namespace_id, created_by_user_id = EXCLUDED.created_by_user_id, updated_at = NOW()""",
                         b["team_id"], b["root_url"], x.bundle, g, ns, user["id"])
+        # 연결 기록(동기화 대상) — 담당 = 연결한 사람(그 사람 토큰으로 읽음), 증분 시작점 = 미리보기 때
+        from agents.knowledge_rag.ingestion.confluence_sync import ensure_connection
+        await ensure_connection(conn, b["team_id"], b["root_url"], b.get("root_title"), user["id"], b.get("created_at"))
     # 적재는 화면이 이어서 /confirm으로(같은 검사·백그라운드 적재) — 연결만 따로 다시 눌러도 같은 결과(멱등)
     return {"status": "preview", "pages": sum(len(v) for v in to_ns.values()), "excluded": len(excluded)}
+
+
+class _SyncBody(BaseModel):
+    mode: Literal["incremental", "full"] = "incremental"
+
+
+@router.post("/connections/{conn_id}/sync", status_code=202)
+async def sync_now(conn_id: int, body: _SyncBody, user: dict = Depends(get_current_user)):
+    """[지금 동기화] — 백그라운드. 누른 사람이 이 팀 담당이면 그 사람을 새 담당(토큰 주인)으로 — 토큰 만료로 멈춘 연결을 다시 잇는 길."""
+    from agents.knowledge_rag.ingestion.confluence_sync import blocked_reason, sync_connection
+    from core.security import get_user_confluence_pat
+    async with get_conn() as conn:
+        c = await conn.fetchrow("SELECT * FROM rag_source_connection WHERE id = $1", conn_id)
+        if c is None:
+            raise HTTPException(status_code=404, detail="연결이 없습니다.")
+        if user["role"] != "admin" and await _my_team(conn, user) != c["team_id"]:
+            raise HTTPException(status_code=403, detail="이 팀의 연결이 아닙니다.")
+        if user["role"] == "viewer":
+            raise HTTPException(status_code=403, detail="조회 전용 계정은 동기화할 수 없습니다.")
+        if c["status"] == "running":
+            raise HTTPException(status_code=409, detail="이미 동기화 중입니다.")
+        why = await blocked_reason(conn, c)
+        if why:
+            raise HTTPException(status_code=409, detail=why)
+        # 토큰이 있는 사람이 누르면 그 사람이 담당 — 쓰기는 그 사람의 컬렉션 권한 안에서만(동기화가 페이지마다 검사)
+        if get_user_confluence_pat(user):
+            await conn.execute("UPDATE rag_source_connection SET owner_user_id = $2 WHERE id = $1", conn_id, user["id"])
+    _spawn(sync_connection(conn_id, body.mode))
+    return {"status": "running"}
 
 
 @router.post("/{batch_id}/confirm", status_code=202)
@@ -398,11 +452,18 @@ async def confirm(batch_id: int, user: dict = Depends(get_current_user)):
 async def rollback(batch_id: int, user: dict = Depends(get_current_user)):
     """이번 배치만 되돌림 — 게이트에서 나빠졌을 때. 배치가 만든 조각·자동 용어를 지우고 원문은 교체됨으로."""
     async with get_conn() as conn:
-        await _batch_for(conn, batch_id, user, write=True)
+        b0 = await _batch_for(conn, batch_id, user, write=True)
+        if await conn.fetchval("SELECT 1 FROM rag_source_connection WHERE team_id = $1 AND root_url = $2 AND status = 'running'",
+                               b0["team_id"], b0["root_url"]):   # 동기화가 넣는 중인 조각이 롤백을 비켜 가지 않게(재리뷰 M1)
+            raise HTTPException(status_code=409, detail="이 공간을 동기화하는 중입니다 — 끝난 뒤 다시 되돌려 주세요.")
         names = [r["name"] for r in await conn.fetch(
             "SELECT DISTINCT n.name FROM rag_import_page p JOIN ops_namespace n ON n.id = p.final_namespace_id "
             "WHERE p.batch_id = $1 AND p.status = 'loaded'", batch_id)]
         out = await ti.rollback_batch(conn, batch_id)
+        if out is not None:   # 남은 적재가 없으면 동기화도 멈춤(되돌린 페이지를 다시 넣지 않게)
+            from agents.knowledge_rag.ingestion.confluence_sync import stop_after_rollback
+            b = await conn.fetchrow("SELECT team_id, root_url FROM rag_import_batch WHERE id = $1", batch_id)
+            await stop_after_rollback(conn, b["team_id"], b["root_url"])
     if out is None:
         raise HTTPException(status_code=409, detail="적재가 끝난 배치만 되돌릴 수 있습니다(이미 되돌렸거나 진행 중).")
     from shared.cache import invalidate_namespace_family

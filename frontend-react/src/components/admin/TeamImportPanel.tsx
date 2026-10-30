@@ -2,10 +2,11 @@ import { Fragment, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getTeams } from '../../api/auth';
 import {
-  confirmImport, confluencePageUrl, connectImport, getImportBatch, getImportCollections, listImportBatches, reviewImportSample, rollbackImport, sampleKey,
+  confirmImport, confluencePageUrl, connectImport, getImportBatch, listConnections, syncConnection, getImportCollections, listImportBatches, reviewImportSample, rollbackImport, sampleKey,
   setImportDefault, startImport, updateImportPages,
-  type ImportBatchDetail, type ImportCollection, type ImportPage,
+  type ImportBatchDetail, type ImportCollection, type ImportPage, type SourceConnection,
 } from '../../api/teamImport';
+import { useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../store/useAuthStore';
 import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
 
@@ -26,8 +27,106 @@ export function useImportTodo() {
   return data.reduce((a, b) => a + (b.todo ?? 0), 0);
 }
 
+/** 지식 › 데이터 소스(10/30) — 팀 단위(보는 컬렉션과 무관). 일반 사용자는 서버가 자기 팀 배치만 준다, 관리자는 팀을 고른다. 주소 ?batch=id로 바로 연다 */
+export function DataSources() {
+  const [params, setParams] = useSearchParams();
+  const openId = params.get('batch') ? Number(params.get('batch')) : null;
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-slate-100">데이터 소스</h2>
+        <p className="text-xs text-slate-400" title="컨플 공간을 묶음(상위 페이지) 단위로 컬렉션에 연결 — 연결 규칙은 다음 동기화가 새 페이지에도 씀. 새 공간 연결은 지식 문서 › 지식 등록 › URL/Confluence › 공간·하위 전체 넣기">
+          팀 단위 · 보는 컬렉션과 무관 · 새 공간은 [지식 등록 › 공간·하위 전체 넣기]로 시작</p>
+      </div>
+      <Connections />
+      <ImportBatches openId={openId} onOpen={(id) => setParams({ batch: String(id) })} />
+    </div>
+  );
+}
+
+const fmtTime = (s: string | null) => (s ? new Date(s).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—');
+const CONN_STATUS: Record<SourceConnection['status'], { label: string; cls: string }> = {
+  ok: { label: '정상', cls: 'text-emerald-700 dark:text-emerald-300' },
+  running: { label: '동기화 중', cls: 'text-indigo-600 dark:text-indigo-300' },
+  error: { label: '오류', cls: 'text-amber-700 dark:text-amber-300' },
+  stopped: { label: '중단', cls: 'text-rose-600 dark:text-rose-400' },
+};
+
+/** 연결된 공간 — 묶음 연결을 한 공간마다 한 줄. 하루 1회 바뀐 페이지만 같은 규칙으로 다시 넣고, 주 1회 목록 전체를 대조해 사라진·제한된 페이지를 내린다.
+ * 담당(토큰 주인)이 볼 수 있는 범위만 보인다 — 토큰이 만료되면 "중단"으로 보이고, 토큰이 있는 사람이 [지금 동기화]를 누르면 그 사람이 담당이 된다 */
+function Connections() {
+  const qc = useQueryClient();
+  const [kicked, setKicked] = useState(0);
+  const { data: rows = [] } = useQuery({
+    queryKey: ['source-connections'], queryFn: listConnections,
+    // 누른 직후엔 백그라운드가 아직 '동기화 중'으로 안 바꿨을 수 있어 10초는 계속 본다
+    refetchInterval: (q) => ((q.state.data ?? []).some((c) => c.status === 'running') || Date.now() - kicked < 10000 ? 3000 : false),
+  });
+  const go = useMutation({
+    mutationFn: ({ id, mode }: { id: number; mode: 'incremental' | 'full' }) => syncConnection(id, mode),
+    onSuccess: () => { setKicked(Date.now()); qc.invalidateQueries({ queryKey: ['source-connections'] }); },
+    onError: (e) => showError(e),
+  });
+  if (rows.length === 0) return null;
+  const summary = (r: SourceConnection['last_result']) => {
+    if (!r) return '아직 안 돎';
+    if (r.mode === 'full') {
+      if (r.incomplete) return '전체 대조 — 목록을 끝까지 못 받아 판단 안 함';
+      if (r.too_many_missing) return `전체 대조 — 사라짐 ${r.missing}건이 너무 많아 내리지 않음(담당자 권한 확인)`;
+      return `전체 대조 — 사라짐 ${r.missing} · 내림 ${r.held}`;
+    }
+    const parts = [`바뀜 ${r.changed}`, r.updated && `수정 ${r.updated}`, r.added && `새로 ${r.added}`, r.held && `내림 ${r.held}`,
+      r.no_rule && `규칙 없는 새 묶음 ${r.no_rule}`, r.denied && `권한 없음 ${r.denied}`, r.elsewhere && `다른 경로 ${r.elsewhere}`,
+      r.failed && `실패 ${r.failed}`].filter(Boolean);
+    return parts.join(' · ');
+  };
+  return (
+    <section className="rounded-xl border border-slate-700 bg-slate-800/60 overflow-x-auto" data-testid="source-connections">
+      <div className="px-4 py-3 border-b border-slate-700">
+        <p className="text-sm font-semibold text-slate-100">연결된 공간 <span className="font-normal text-slate-400">{rows.length}</span></p>
+        <p className="text-xs text-slate-400" title="증분 = 마지막 동기화 뒤 수정된 페이지만 · 전체 대조 = 목록 전체를 받아 사라진 페이지 확인(끝까지 받았을 때만). 사람이 고친 조각은 덮지 않고 '확인 필요'">
+          하루 1회 바뀐 페이지 반영 · 주 1회 전체 대조 · 담당자 권한으로 읽음</p>
+      </div>
+      <table className="w-full text-sm min-w-[720px]">
+        <thead className="text-xs text-slate-400"><tr>
+          <th className="text-left px-4 py-2">공간</th><th className="text-left px-3">담당</th><th className="text-left px-3">마지막 동기화</th>
+          <th className="text-left px-3">결과</th><th className="text-left px-3">상태</th><th /></tr></thead>
+        <tbody>
+          {rows.map((c) => (
+            <tr key={c.id} className="border-t border-slate-700/60 align-top" data-testid="connection-row">
+              <td className="px-4 py-2 text-slate-100" title={c.root_url}>{c.title ?? c.root_url}<span className="block text-[11px] text-slate-500">{c.team_name}</span></td>
+              <td className="px-3 py-2 text-xs text-slate-300">{c.owner ?? '—'}</td>
+              <td className="px-3 py-2 text-xs text-slate-300">{c.last_run_at ? <>증분 {fmtTime(c.last_incremental_at)}<span className="block text-slate-500">전체 {fmtTime(c.last_full_at)}</span></> : '—'}</td>
+              <td className="px-3 py-2 text-xs text-slate-300">{summary(c.last_result)}
+                {c.retry_pages.some((p) => p.why === 'conflict') && (
+                  <span className="block text-amber-700 dark:text-amber-300" data-testid="connection-conflicts"
+                    title="우리 쪽에서 사람이 고친 조각이 있어 덮지 않은 페이지 — 지식 문서에서 해당 페이지를 확인해 주세요. 다음 동기화 때 다시 시도">
+                    확인 필요 {c.retry_pages.filter((p) => p.why === 'conflict').length}: {c.retry_pages.filter((p) => p.why === 'conflict').slice(0, 3).map((p) => p.title ?? p.page_id).join(', ')}
+                  </span>
+                )}
+              </td>
+              <td className="px-3 py-2 text-xs"><span className={CONN_STATUS[c.status].cls}>{CONN_STATUS[c.status].label}</span>
+                {c.error && <span className="block text-slate-400 max-w-[16rem]">{c.error}</span>}</td>
+              <td className="px-3 py-2 text-right whitespace-nowrap">
+                <button disabled={go.isPending || c.status === 'running'} onClick={() => go.mutate({ id: c.id, mode: 'incremental' })}
+                  className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-40">지금 동기화</button>
+                <button disabled={go.isPending || c.status === 'running'} onClick={() => go.mutate({ id: c.id, mode: 'full' })}
+                  className="ml-3 text-xs text-slate-400 hover:text-slate-200 disabled:opacity-40" title="목록 전체를 받아 사라진·제한된 페이지 확인(오래 걸림)">전체 대조</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
 export function ImportBatches({ openId, onOpen }: { openId: number | null; onOpen: (id: number) => void }) {
-  const { data: batches = [] } = useImportBatchList();
+  const { data: all = [] } = useImportBatchList();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const teams = useMemo(() => [...new Map(all.map((b) => [b.team_id, b.team_name ?? `팀 #${b.team_id}`])).entries()], [all]);
+  const [team, setTeam] = useState<number | 'all'>('all');
+  const batches = team === 'all' ? all : all.filter((b) => b.team_id === team);
   const current = openId ?? batches[0]?.id ?? null;
   if (batches.length === 0) {
     return <p className="text-sm text-slate-400 py-6">적재 배치가 없어요 — [지식 등록] › URL/Confluence › <b>공간·하위 전체 넣기</b>로 시작하면 여기서 넣을 곳을 확인해요.</p>;
@@ -37,7 +136,14 @@ export function ImportBatches({ openId, onOpen }: { openId: number | null; onOpe
   return (
     <div className="space-y-4" data-testid="team-import">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-xs text-slate-500" title="공간·하위 전체 넣기로 만든 적재 배치 — 검수 · 적재 · 게이트 · 롤백 단위">배치</span>
+        {isAdmin && teams.length > 1 && (
+          <select value={team} onChange={(e) => setTeam(e.target.value === 'all' ? 'all' : Number(e.target.value))} aria-label="팀"
+            className="text-sm bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200">
+            <option value="all">팀: 전체</option>
+            {teams.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+          </select>
+        )}
+        <span className="text-xs text-slate-500" title="공간·하위 전체 넣기로 만든 적재 배치 — 연결 · 적재 · 게이트 · 롤백 단위">배치</span>
         <select value={current ?? ''} onChange={(e) => onOpen(Number(e.target.value))} aria-label="배치" title={cur?.root_url}
           className="text-sm bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200 max-w-full">
           {batches.map((b) => <option key={b.id} value={b.id}>{name(b)}</option>)}
@@ -266,6 +372,27 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
 
 const SEP = ' › ';
 const EXCLUDE = -1;   // 선택 상자 값 = 제외
+const GROUP_TAU = 0.4;   // 갈래 예외 기준 — AI가 묶음 값과 다르게 본 비율(10/30 실측 split_probe)
+const GROUP_MIN = 3;
+
+/** AI 판단 분포 막대 + 숫자 — 같음 / 다른 업무 / 조직 / 판단 못 함 */
+function AiBar({ v }: { v: { same: number; otherBiz: number; otherOrg: number; none: number } }) {
+  const total = Math.max(1, v.same + v.otherBiz + v.otherOrg + v.none);
+  const seg = [
+    { n: v.same, cls: 'bg-emerald-500 dark:bg-emerald-400', t: '같음' },
+    { n: v.otherBiz, cls: 'bg-amber-500 dark:bg-amber-400', t: '다른 업무' },
+    { n: v.otherOrg, cls: 'bg-sky-500 dark:bg-sky-400', t: '조직' },
+    { n: v.none, cls: 'bg-slate-500', t: '판단 못 함' },
+  ];
+  return (
+    <span className="inline-flex flex-col gap-0.5 min-w-[12rem]">
+      <span className="flex h-1.5 rounded-full overflow-hidden bg-slate-700" aria-hidden>
+        {seg.map((x) => x.n > 0 && <span key={x.t} className={x.cls} style={{ width: `${(x.n / total) * 100}%` }} />)}
+      </span>
+      <span className="text-[11px] text-slate-400">{seg.filter((x) => x.n > 0).map((x) => `${x.t} ${x.n}`).join(' · ')}</span>
+    </span>
+  );
+}
 
 function ConnectSelect({ cols, value, onPick, aria, disabled }: {
   cols: ImportCollection[]; value: number | null; onPick: (v: number) => void; aria: string; disabled: boolean;
@@ -305,6 +432,20 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
   const names = useNames(data.collections);
   const label = (id: number | null) => (id == null || id === EXCLUDE ? '제외' : names.get(id)?.label ?? `#${id}`);
   const writable = (id: number) => !!names.get(id)?.writable;
+  // AI 판단 분포(묶음 값과 같음 / 다른 업무 / 조직 / 판단 못 함) — 기본값과 섞지 않고 AI가 내용만 보고 고른 곳
+  const aiView = (ps: ImportPage[], base: number | null) => {
+    const judged = ps.filter((p) => p.ai_namespace_id != null);
+    const other = judged.filter((p) => p.ai_namespace_id !== base);
+    const top = majority(other.map((p) => ({ ...p, final_namespace_id: null })), () => true).ns;
+    return {
+      same: judged.length - other.length,
+      otherBiz: other.filter((p) => names.get(p.ai_namespace_id!)?.kind === 'domain').length,
+      otherOrg: other.filter((p) => names.get(p.ai_namespace_id!)?.kind === 'org_space').length,
+      none: ps.length - judged.length,
+      disagree: judged.length ? other.length / judged.length : 0,
+      aiTop: top,
+    };
+  };
   const rows = useMemo(() => {
     const live = pages.filter((p) => p.status === 'auto' || p.status === 'review');
     const by = new Map<string, ImportPage[]>();
@@ -314,10 +455,10 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
       const m = majority(ps, writable);
       const gs = new Map<string, ImportPage[]>();
       for (const p of ps) { const g = groupOf(p); if (g) gs.set(g, [...(gs.get(g) ?? []), p]); }
-      const groups = [...gs.entries()].map(([name, gp]) => ({ name, n: gp.length, ...majority(gp, writable) }))
-        .filter((g) => g.n >= 2 && g.ns != null && g.ns !== m.ns && g.share >= 0.6);
-      const aiSame = ps.filter((p) => p.ai_namespace_id != null && p.ai_namespace_id === m.ns).length;
-      return { bundle, n: ps.length, suggest: m.ns, share: m.share, aiSame, groups };
+      const groups = [...gs.entries()].map(([name, gp]) => ({ name, n: gp.length, pages: gp, ...aiView(gp, m.ns) }))
+        .filter((g) => g.n >= GROUP_MIN && g.disagree > GROUP_TAU)
+        .sort((x, y) => y.n - x.n);
+      return { bundle, n: ps.length, suggest: m.ns, share: m.share, pages: ps, ...aiView(ps, m.ns), groups };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pages, names]);
@@ -325,7 +466,9 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
   const [gpick, setGpick] = useState<Record<string, number>>({});
   const nsOf = (r: (typeof rows)[number]) => pick[r.bundle] ?? r.suggest ?? null;
   const gKey = (bundle: string, name: string) => JSON.stringify([bundle, name]);
-  const gOf = (r: (typeof rows)[number], g: (typeof rows)[number]['groups'][number]) => gpick[gKey(r.bundle, g.name)] ?? g.ns;
+  // 갈래는 손대지 않으면 묶음 값을 따라간다(AI 값으로 미리 채우지 않음)
+  const gOf = (r: (typeof rows)[number], g: (typeof rows)[number]['groups'][number]) => gpick[gKey(r.bundle, g.name)] ?? nsOf(r);
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const blank = rows.filter((r) => nsOf(r) == null).length;
   const total = rows.reduce((a, r) => a + r.n, 0);
   const go = useMutation({
@@ -333,7 +476,8 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
       await connectImport(b.id, rows.map((r) => {
         const ns = nsOf(r);
         return { bundle: r.bundle, namespace_id: ns === EXCLUDE ? null : ns,
-          groups: r.groups.map((g) => { const v = gOf(r, g); return { name: g.name, namespace_id: v === EXCLUDE ? null : v }; }) };
+          // 묶음 값과 다르게 정한 갈래만 규칙으로(같으면 묶음 규칙이 덮음)
+          groups: r.groups.filter((g) => gOf(r, g) !== ns).map((g) => { const v = gOf(r, g); return { name: g.name, namespace_id: v === EXCLUDE ? null : v }; }) };
       }));
       await confirmImport(b.id);
     },
@@ -364,21 +508,47 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
           {rows.map((r) => (
             <Fragment key={r.bundle}>
               <tr className="border-t border-slate-700/60 align-top" data-testid="bundle-row">
-                <td className="px-4 py-2 text-slate-100">{r.bundle || '(최상위)'}</td>
+                <td className="px-4 py-2 text-slate-100">{r.bundle || '(최상위)'}
+                  <button className="ml-2 text-[11px] text-slate-400 hover:text-slate-200" onClick={() => setOpenKey(openKey === r.bundle ? null : r.bundle)}
+                    aria-expanded={openKey === r.bundle} data-testid="bundle-detail-toggle">{openKey === r.bundle ? '내용 ▾' : '내용 ▸'}</button>
+                </td>
                 <td className="px-2 py-2 text-right tabular-nums text-slate-300">{r.n}</td>
-                <td className="px-3 py-2 text-xs text-slate-400">
-                  {r.suggest != null ? <><b className="text-slate-200">{label(r.suggest)}</b> — {Math.round(r.share * 100)}% · AI 같음 {r.aiSame}/{r.n}</> : '판단 근거 없음'}
+                <td className="px-3 py-2 text-xs text-slate-400 space-y-1">
+                  <span className="block">{r.suggest != null ? <><b className="text-slate-200">{label(r.suggest)}</b> — 정해진 값 {Math.round(r.share * 100)}%</> : '판단 근거 없음'}</span>
+                  <span className="block" title="AI가 내용만 보고 고른 곳(기본 위치와 섞지 않음). AI의 '다른 곳' 판단은 사람이 본 39건 중 31%만 맞았음(10/30)"><AiBar v={r} /></span>
                 </td>
                 <td className="px-3 py-2"><Select value={nsOf(r)} onPick={(v) => setPick({ ...pick, [r.bundle]: v })} aria={`${r.bundle || '(최상위)'} 컬렉션`} /></td>
               </tr>
-              {r.groups.map((g) => (
-                <tr key={g.name} className="align-top" data-testid="bundle-group">
-                  <td className="pl-8 pr-4 pb-2 text-xs text-amber-700 dark:text-amber-300">└ 하위 예외 · {g.name}</td>
-                  <td className="px-2 pb-2 text-right tabular-nums text-xs text-slate-400">{g.n}</td>
-                  <td className="px-3 pb-2 text-xs text-slate-400"><b className="text-slate-300">{label(g.ns)}</b> — {Math.round(g.share * 100)}% (묶음과 다름)</td>
-                  <td className="px-3 pb-2"><Select value={gOf(r, g)} onPick={(v) => setGpick({ ...gpick, [gKey(r.bundle, g.name)]: v })} aria={`${g.name} 컬렉션`} /></td>
-                </tr>
-              ))}
+              {openKey === r.bundle && (
+                <tr data-testid="bundle-detail"><td colSpan={4} className="px-8 pb-3 text-xs text-slate-400">
+                  <p className="text-slate-500 mb-1">대표 페이지</p>
+                  <ul className="space-y-0.5">{r.pages.slice(0, 5).map((p) => <li key={p.id}><PageLink rootUrl={b.root_url} p={p} />{p.path && <span className="ml-2 text-[11px] text-slate-500">{p.path}</span>}</li>)}</ul>
+                </td></tr>
+              )}
+              {r.groups.map((g) => {
+                const gk = gKey(r.bundle, g.name);
+                return (
+                  <Fragment key={g.name}>
+                    <tr className="align-top" data-testid="bundle-group">
+                      <td className="pl-8 pr-4 pb-2 text-xs text-amber-700 dark:text-amber-300" title="갈래 안에서 AI가 묶음 값과 다르게 본 비율이 40%를 넘는 곳 — 값은 묶음 값으로 채워 둠, 다르면 바꾸기">
+                        └ AI가 다르게 본 갈래 · {g.name}
+                        <button className="ml-2 text-[11px] text-slate-400 hover:text-slate-200" onClick={() => setOpenKey(openKey === gk ? null : gk)} aria-expanded={openKey === gk}>{openKey === gk ? '내용 ▾' : '내용 ▸'}</button>
+                      </td>
+                      <td className="px-2 pb-2 text-right tabular-nums text-xs text-slate-400">{g.n}</td>
+                      <td className="px-3 pb-2 text-xs text-slate-400 space-y-1">
+                        <span className="block">AI 다수: <b className="text-slate-300">{label(g.aiTop)}</b> — 다르게 봄 {Math.round(g.disagree * 100)}%</span>
+                        <span className="block"><AiBar v={g} /></span>
+                      </td>
+                      <td className="px-3 pb-2"><Select value={gOf(r, g)} onPick={(v) => setGpick({ ...gpick, [gk]: v })} aria={`${g.name} 컬렉션`} /></td>
+                    </tr>
+                    {openKey === gk && (
+                      <tr><td colSpan={4} className="px-12 pb-3 text-xs text-slate-400">
+                        <ul className="space-y-0.5">{g.pages.slice(0, 5).map((p) => <li key={p.id}><PageLink rootUrl={b.root_url} p={p} /></li>)}</ul>
+                      </td></tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </Fragment>
           ))}
         </tbody>
