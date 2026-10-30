@@ -354,7 +354,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
               title="지금 설정과 바꾼 설정을 골든셋으로 재고 게이트로 판정합니다(자동 실험이 되는 후보) — 운영은 안 바뀝니다"
               onClick={() => review.mutate({ status: 'approved' })}>실험해 보기</button>
           )}
-          {c.status === 'approved' && (
+          {c.status === 'approved' && c.adopt_check?.ok !== false && (   /* 서버가 반영 불가로 본 측정뿐이면 숨김(결과 칸에 이유) — 눌러도 고를 측정이 없었다 */
             <button className={`${btn} text-emerald-600 dark:text-emerald-400 font-medium`}
               title="설정·프롬프트를 운영에 실제로 바꾼 뒤, 통과한 측정과 연결해 '반영 완료'로 남깁니다"
               onClick={() => open('adopt')}>운영에 반영했어요…</button>
