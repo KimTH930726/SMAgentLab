@@ -121,6 +121,24 @@ def bundles_of(tree: list[dict], root_id: str) -> dict[str, tuple[str, int]]:
     return out
 
 
+PATH_SEP = " › "
+
+
+def paths_of(tree: list[dict], root_id: str) -> dict[str, str]:
+    """페이지 → 경로(수집 대상 아래 ~ 바로 위 페이지 제목, " › "로). 자기 자신·수집 대상은 넣지 않는다 — 수집 대상 바로 아래는 "".
+    화면에서 사람이 판단하고 같은 상위끼리 묶어 보는 데만 쓴다. AI 입력엔 안 넣음(10/29 실측 path_probe: GIFT 자동인데 틀림 1→10)."""
+    by_id = {t["page_id"]: t for t in tree}
+    out: dict[str, str] = {}
+    for t in tree:
+        chain, cur, guard = [], t, 0
+        while cur.get("parent_id") not in (None, root_id) and cur.get("parent_id") in by_id and guard < 50:
+            cur = by_id[cur["parent_id"]]
+            chain.append(cur.get("title") or cur["page_id"])
+            guard += 1
+        out[t["page_id"]] = PATH_SEP.join(reversed(chain))
+    return out
+
+
 SPACE_ROOT = "__space__"   # 공간 주소(최상위 페이지가 여럿)일 때 트리의 가상 뿌리 — 최상위 페이지 하나하나가 묶음
 
 
@@ -304,17 +322,20 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
         root_title, pages_tree = t["root"].get("title"), t["tree"]
         truncated = bool(t.get("truncated") or t.get("max_depth_reached"))
         bundle = bundles_of(pages_tree, t["root"]["page_id"])
+        path = paths_of(pages_tree, t["root"]["page_id"])
     else:                       # 공간 주소 — 공간 전체(최상위 페이지가 여럿일 수 있다)
         root_title, pages_tree, truncated = await fetch_space_pages(base_url, space_key, token)
         bundle = bundles_of(pages_tree, SPACE_ROOT)
+        path = paths_of(pages_tree, SPACE_ROOT)
     async with get_conn() as conn:
         async with conn.transaction():
             await conn.execute("UPDATE rag_import_batch SET root_title = $2, total_pages = $3, truncated = $4 WHERE id = $1",
                                batch_id, root_title, len(pages_tree), truncated)
             await conn.executemany(
-                "INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth) VALUES ($1, $2, $3, $4, $5) "
+                "INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, path) VALUES ($1, $2, $3, $4, $5, $6) "
                 "ON CONFLICT (batch_id, page_id) DO NOTHING",
-                [(batch_id, t["page_id"], t.get("title"), bundle[t["page_id"]][0], bundle[t["page_id"]][1]) for t in pages_tree])
+                [(batch_id, t["page_id"], t.get("title"), bundle[t["page_id"]][0], bundle[t["page_id"]][1], path[t["page_id"]])
+                 for t in pages_tree])
         rows = await conn.fetch("SELECT id, page_id FROM rag_import_page WHERE batch_id = $1 AND status = 'queued'", batch_id)
 
     llm, model_tag, uses_creds = _locator_llm()

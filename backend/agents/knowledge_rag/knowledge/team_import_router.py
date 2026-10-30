@@ -85,7 +85,11 @@ async def list_batches(user: dict = Depends(get_current_user)):
     async with get_conn() as conn:
         team = None if user["role"] == "admin" else (await _my_team(conn, user) or -1)
         rows = await conn.fetch(
-            """SELECT b.id, b.team_id, t.name team_name, b.root_url, b.root_title, b.status, b.total_pages, b.done_pages, b.created_at::text
+            # todo = 사람이 할 일(미리보기 중: 분류 안 한 검토 필요 + 안 본 표본) — 지식 문서 [적재 검토] 탭 숫자
+            """SELECT b.id, b.team_id, t.name team_name, b.root_url, b.root_title, b.status, b.total_pages, b.done_pages, b.created_at::text,
+                      CASE WHEN b.status = 'preview' THEN (SELECT count(*) FROM rag_import_page p WHERE p.batch_id = b.id AND
+                           ((p.status = 'review' AND p.final_namespace_id IS NULL) OR (p.status = 'auto' AND p.sample_state = 'pending')))
+                           ELSE 0 END::int AS todo
                FROM rag_import_batch b LEFT JOIN ops_team t ON t.id = b.team_id
                WHERE $1::int IS NULL OR b.team_id = $1 ORDER BY b.id DESC LIMIT 50""", team)
     return [dict(r) for r in rows]
@@ -116,7 +120,7 @@ async def _allowed(conn, b: dict, user: dict, namespace_id: Optional[int], *, do
         raise HTTPException(status_code=403, detail=reason)
 
 
-_PAGE_COLS = ("id, page_id, title, bundle, depth, status, prev_status, reason, chunk_count, ai_namespace_id, proposed_namespace_id, "
+_PAGE_COLS = ("id, page_id, title, bundle, path, depth, status, prev_status, reason, chunk_count, ai_namespace_id, proposed_namespace_id, "
               "assigned_by, sample_ns, "
               "confident, signals, final_namespace_id, sample_state, job_id")
 

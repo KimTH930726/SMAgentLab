@@ -83,6 +83,35 @@ class TestBundles:
     def test_every_page_gets_a_bundle(self):
         assert set(ti.bundles_of(self.TREE, "r")) == {t["page_id"] for t in self.TREE}
 
+    def test_paths_invariants(self):
+        """경로 = 수집 대상 아래 ~ 부모 제목. 모든 페이지에 하나 · 자식 경로 = 부모 경로 + 부모 제목 · 수집 대상과 그 바로 아래는 "" ·
+        자기 제목·수집 대상 제목은 안 들어감(무작위 트리로)."""
+        import random
+        rnd = random.Random(7)
+        for _ in range(50):
+            tree = [{"page_id": "r", "title": "ROOT", "depth": 0, "parent_id": None}]
+            for i in range(rnd.randint(1, 40)):
+                par = rnd.choice(tree)
+                tree.append({"page_id": f"p{i}", "title": f"T{i}", "depth": par["depth"] + 1, "parent_id": par["page_id"]})
+            paths = ti.paths_of(tree, "r")
+            by = {t["page_id"]: t for t in tree}
+            assert set(paths) == set(by)
+            for t in tree:
+                p = paths[t["page_id"]]
+                parts = p.split(ti.PATH_SEP) if p else []
+                assert len(parts) == max(t["depth"] - 1, 0)
+                assert "ROOT" not in parts and t["title"] not in parts
+                if t["depth"] >= 2:
+                    par = by[t["parent_id"]]
+                    assert p == ti.PATH_SEP.join([x for x in [paths[par["page_id"]], par["title"]] if x])
+
+    def test_paths_space_mode(self):
+        """공간 주소(가상 뿌리) — 최상위 페이지는 "", 그 아래는 최상위 제목부터."""
+        tree = ti.space_tree([{"id": "a", "title": "A", "ancestors": []},
+                              {"id": "b", "title": "B", "ancestors": [{"id": "a"}]},
+                              {"id": "c", "title": "C", "ancestors": [{"id": "a"}, {"id": "b"}]}])
+        assert ti.paths_of(tree, ti.SPACE_ROOT) == {"a": "", "b": "A", "c": "A › B"}
+
 
 class TestSamples:
     def test_k_per_collection_no_repeat_reproducible(self):

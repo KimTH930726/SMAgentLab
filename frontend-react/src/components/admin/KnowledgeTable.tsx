@@ -42,7 +42,8 @@ import { LocationPicker, usePrefetchLocate } from './LocationPicker';
 import { showAlert, showConfirm } from '../../store/useDialogStore';
 import { KnowledgeStructurePanel } from './KnowledgeStructurePanel';
 import { EvidenceButton } from './Evidence';
-import { ImportBatches, SpaceImportStart } from './TeamImportPanel';   // 컨플 공간·하위 전체 넣기 — 등록 창구는 하나(10/29)
+// 컨플 공간·하위 전체 넣기 — 시작은 등록 창구(하나, 10/29), 분류 검토는 [적재 검토] 탭(검토는 등록이 아니라서, 10/29 사용자)
+import { ImportBatches, SpaceImportStart, useImportTodo } from './TeamImportPanel';
 
 // ── 공통 타입 ─────────────────────────────────────────────────────────────────
 
@@ -150,7 +151,9 @@ export function KnowledgeTable() {
   const dropInto = () => setSearchParams((p) => { const n = new URLSearchParams(p); n.delete('into'); return n; }, { replace: true });
   useEffect(() => { if (into && selectedNs && into !== selectedNs) dropInto(); },   // eslint-disable-line react-hooks/exhaustive-deps
     [selectedNs]);
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>(() => (searchParams.get('tab') === 'ingest' ? 'ingest' : 'list'));   // 정정 요청은 품질 메뉴로(10/21)
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'import' | 'review'>(() => (searchParams.get('tab') === 'ingest' ? 'ingest' : 'list'));   // 정정 요청은 품질 메뉴로(10/21)
+  const [openBatch, setOpenBatch] = useState<number | null>(null);   // [적재 검토]에서 열 배치 — 공간·하위 전체 넣기를 시작하면 그 배치
+  const importTodo = useImportTodo();
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<KnowledgeFormData>(defaultForm);
@@ -327,6 +330,22 @@ export function KnowledgeTable() {
           지식 등록
         </button>
         <button
+          onClick={() => setSubTab('import')}
+          data-testid="subtab-import"
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
+            subTab === 'import'
+              ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+          title="컨플 공간·하위 전체 넣기 배치 — 넣기 전에 페이지마다 넣을 곳을 확인(검토 필요 · 표본 검토) · 게이트 · 롤백"
+        >
+          <Search className="w-4 h-4" />
+          적재 검토
+          {importTodo > 0 && (
+            <span className="ml-1 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-400 px-1.5 py-0.5 rounded-full">{importTodo}</span>
+          )}
+        </button>
+        <button
           onClick={() => setSubTab('review')}
           className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
             subTab === 'review'
@@ -482,8 +501,12 @@ export function KnowledgeTable() {
           onSuccess={onIngestSuccess}
           onGoToList={() => setSubTab('list')}
           onGoToReview={() => setSubTab('review')}
+          onImportStarted={(id) => { setOpenBatch(id); setSubTab('import'); }}
         />
       )}
+
+      {/* ── 서브탭: 적재 검토(공간·하위 전체 넣기 배치) ── */}
+      {subTab === 'import' && <ImportBatches openId={openBatch} onOpen={setOpenBatch} />}
 
       {/* ── 서브탭 3: 승인 대기 ── */}
       {subTab === 'review' && (
@@ -918,13 +941,14 @@ function doneText(n: number, loc: ChosenLocation | null | undefined): string {
   return `${n}건 등록을 시작했습니다${loc ? ` — 넣는 곳 '${loc.label}'` : ''} · 진행 상황은 아래 등록 이력에서 확인하세요.`;
 }
 
-function IngestTab({ namespace, preset, jobs, onSuccess, onGoToList, onGoToReview }: {
+function IngestTab({ namespace, preset, jobs, onSuccess, onGoToList, onGoToReview, onImportStarted }: {
   namespace: string;          // 지금 보는 컬렉션(미리보기 원문 초안·등록 이력 기준)
   preset?: string | null;     // 컬렉션 화면의 [지식 등록 →]이 정한 넣을 곳(?into=) — 없으면 AI가 정한다(E2)
   jobs: IngestionJob[];
   onSuccess: () => void;
   onGoToList: () => void;
   onGoToReview: () => void;
+  onImportStarted: (batchId: number) => void;   // 공간·하위 전체 넣기 시작 → [적재 검토] 탭에서 그 배치를 연다
 }) {
   const isViewer = useAuthStore((s) => s.user?.role === 'viewer');
   const { setSelectedNs } = useNamespaceAccess();
@@ -932,7 +956,6 @@ function IngestTab({ namespace, preset, jobs, onSuccess, onGoToList, onGoToRevie
   const [progressJobId, setProgressJobId] = useState<number | null>(null);
   const [autoNavigate, setAutoNavigate] = useState(false);
   const [suggestTarget, setSuggestTarget] = useState<ChosenLocation | null>(null);   // 담당 아닌 곳에 올린 묶음 — 끝나면 결과 안내
-  const [openBatch, setOpenBatch] = useState<number | null>(null);   // 공간·하위 전체 넣기 배치 — 시작하면 아래 적재 배치에서 연다
   const [jobPage, setJobPage] = useState(1);
   const [jobPageSize, setJobPageSize] = useState(30);
   const { totalPages: jobTotalPages, totalItems: jobTotalItems, slice: sliceJobs } = useClientPaging(jobs, jobPageSize);
@@ -1042,12 +1065,10 @@ function IngestTab({ namespace, preset, jobs, onSuccess, onGoToList, onGoToRevie
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
       {activeMethod === 'url' && (
-        <UrlForm namespace={namespace} preset={preset} onImportStarted={setOpenBatch}
+        <UrlForm namespace={namespace} preset={preset} onImportStarted={onImportStarted}
           onSuccess={(outcome) => { onSuccess(); handleFormOutcome(outcome); }} onCancel={() => setActiveMethod(null)} />
       )}
 
-      {/* 공간·하위 전체 넣기 배치 — 분류 미리보기 · 게이트 · 롤백(배치가 하나라도 있으면) */}
-      <ImportBatches openId={openBatch} onOpen={setOpenBatch} />
 
       {/* 인제스천 작업 이력 */}
       {jobs.length > 0 && (
@@ -1656,7 +1677,7 @@ function UrlForm({ namespace, preset, onSuccess, onCancel, onImportStarted }: {
   namespace: string;      // 미리보기(원문 초안)를 둘 곳 = 지금 보는 컬렉션. 실제로 넣는 곳은 청크 검토의 넣을 곳 카드(E2)
   preset?: string | null;
   onSuccess: (outcome?: IngestOutcome) => void; onCancel: () => void;
-  onImportStarted: (batchId: number) => void;   // 공간·하위 전체 넣기 시작 → 등록 탭 아래 적재 배치에서 연다
+  onImportStarted: (batchId: number) => void;   // 공간·하위 전체 넣기 시작 → [적재 검토] 탭에서 연다
 }) {
   const { user, updateUser } = useAuthStore();
   const [url, setUrl] = useState('');

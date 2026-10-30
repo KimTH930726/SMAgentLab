@@ -16,6 +16,7 @@ export interface ImportBatchRow {
   total_pages: number;
   done_pages: number;
   created_at: string;
+  todo: number;           // 사람이 할 일(미리보기 중: 분류 안 한 검토 필요 + 안 본 표본)
 }
 
 export interface ImportBatch extends ImportBatchRow {
@@ -34,6 +35,7 @@ export interface ImportPage {
   page_id: string;
   title: string | null;
   bundle: string | null;
+  path: string | null;    // 수집 대상 아래 상위 페이지 제목들(" › ") — 화면 판단용, AI 입력엔 안 씀
   depth: number;
   status: PageStatus;
   prev_status: PageStatus | null;
