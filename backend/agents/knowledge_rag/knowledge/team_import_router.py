@@ -85,10 +85,10 @@ async def list_batches(user: dict = Depends(get_current_user)):
     async with get_conn() as conn:
         team = None if user["role"] == "admin" else (await _my_team(conn, user) or -1)
         rows = await conn.fetch(
-            # todo = 사람이 할 일(미리보기 중: 분류 안 한 검토 필요 + 안 본 표본) — 지식 문서 [적재 검토] 탭 숫자
+            # todo = 사람이 할 일 = 연결할 묶음 수(미리보기 중, 10/30 묶음 단위 연결) — 지식 문서 [적재 검토] 탭 숫자
             """SELECT b.id, b.team_id, t.name team_name, b.root_url, b.root_title, b.status, b.total_pages, b.done_pages, b.created_at::text,
-                      CASE WHEN b.status = 'preview' THEN (SELECT count(*) FROM rag_import_page p WHERE p.batch_id = b.id AND
-                           ((p.status = 'review' AND p.final_namespace_id IS NULL) OR (p.status = 'auto' AND p.sample_state = 'pending')))
+                      CASE WHEN b.status = 'preview' THEN (SELECT count(DISTINCT coalesce(p.bundle, '')) FROM rag_import_page p
+                           WHERE p.batch_id = b.id AND p.status IN ('auto', 'review'))
                            ELSE 0 END::int AS todo
                FROM rag_import_batch b LEFT JOIN ops_team t ON t.id = b.team_id
                WHERE $1::int IS NULL OR b.team_id = $1 ORDER BY b.id DESC LIMIT 50""", team)
@@ -287,6 +287,73 @@ async def review_sample(batch_id: int, body: _SampleBody, user: dict = Depends(g
             await conn.execute("UPDATE rag_import_batch SET sampling_required = TRUE WHERE id = $1", batch_id)
             added = await ti.top_up_samples(conn, batch_id)
     return {"added": added}
+
+
+class _ConnectGroup(BaseModel):
+    name: str
+    namespace_id: Optional[int] = None   # None = 제외
+
+
+class _ConnectBundle(BaseModel):
+    bundle: str
+    namespace_id: Optional[int] = None   # None = 제외
+    groups: list[_ConnectGroup] = Field(default_factory=list, max_length=200)
+
+
+class _ConnectBody(BaseModel):
+    bundles: list[_ConnectBundle] = Field(min_length=1, max_length=500)
+
+
+@router.post("/{batch_id}/connect")
+async def connect(batch_id: int, body: _ConnectBody, user: dict = Depends(get_current_user)):
+    """묶음 단위 연결(10/30 사용자 "길을 잃은 것 같다 → 업계 수집기처럼"): 묶음(1단계 상위 페이지)마다 컬렉션 하나 + 하위 갈래 예외.
+    분류 검수(페이지 단위 검토·표본) 없이 규칙대로 전 페이지를 정한다(적재는 이어서 /confirm) — 품질은 적재 뒤 평가 게이트·롤백으로.
+    규칙은 rag_import_rule에 남긴다(다음 동기화가 새 페이지에 같은 규칙을 쓴다). 사람 결정이라 페이지 주체는 rule."""
+    async with get_conn() as conn:
+        b = await _batch_for(conn, batch_id, user, write=True)
+        if b["status"] != "preview":
+            raise HTTPException(status_code=409, detail="분류 미리보기 상태에서만 연결할 수 있습니다.")
+        names = {x.namespace_id for x in body.bundles if x.namespace_id is not None} | {
+            g.namespace_id for x in body.bundles for g in x.groups if g.namespace_id is not None}
+        for ns in names:
+            await _allowed(conn, b, user, ns)
+        rules = {x.bundle: {"ns": x.namespace_id, "groups": {g.name: g.namespace_id for g in x.groups}} for x in body.bundles}
+        async with conn.transaction():
+            if not await conn.fetchval("SELECT 1 FROM rag_import_batch WHERE id = $1 AND status = 'preview' FOR NO KEY UPDATE", batch_id):
+                raise HTTPException(status_code=409, detail="분류 미리보기 상태에서만 연결할 수 있습니다(그사이 적재가 시작됨).")   # 리뷰 M1
+            pages = [dict(r) for r in await conn.fetch(
+                "SELECT id, status, bundle, depth, path, title, page_id FROM rag_import_page WHERE batch_id = $1 AND status = ANY($2::text[])",
+                batch_id, list(ti.DECIDABLE))]
+            missing = sorted({p["bundle"] or "" for p in pages} - set(rules))
+            if missing:
+                raise HTTPException(status_code=400, detail=f"정하지 않은 묶음이 {len(missing)}개 있어요: {', '.join(missing[:5])}")
+            to_ns: dict[int, list[int]] = {}
+            excluded: list[int] = []
+            for p in pages:
+                _, ns = ti.connect_target(p, rules)
+                (excluded.append(p["id"]) if ns is None else to_ns.setdefault(ns, []).append(p["id"]))
+            for ns, ids in to_ns.items():
+                await conn.execute("UPDATE rag_import_page SET final_namespace_id = $3, assigned_by = 'rule', decided_by_user_id = $4 "
+                                   f"WHERE batch_id = $1 AND id = ANY($2::bigint[]) AND {_IN_PREVIEW}", batch_id, ids, ns, user["id"])
+            if excluded:
+                await conn.execute("UPDATE rag_import_page SET prev_status = status, status = 'excluded', decided_by_user_id = $3 "
+                                   f"WHERE batch_id = $1 AND id = ANY($2::bigint[]) AND {_IN_PREVIEW}", batch_id, excluded, user["id"])
+            # 묶음 연결은 사람이 전부 정한 것 — 표본(AI 자동 분류 검증)은 쓰지 않는다
+            await conn.execute("UPDATE rag_import_batch SET sampling_required = FALSE WHERE id = $1", batch_id)
+            await conn.execute("UPDATE rag_import_page SET sample_state = NULL WHERE batch_id = $1 AND sample_state = 'pending'", batch_id)
+            for x in body.bundles:
+                # 이번에 안 보낸 하위 예외는 지운다 — 묶음 값을 바꿔 예외가 사라졌는데 옛 규칙이 남던 것(리뷰 L2)
+                await conn.execute("DELETE FROM rag_import_rule WHERE team_id = $1 AND root_url = $2 AND bundle = $3 AND grp IS NOT NULL "
+                                   "AND NOT (grp = ANY($4::text[]))", b["team_id"], b["root_url"], x.bundle, [gg.name for gg in x.groups])
+                for g, ns in [(None, x.namespace_id)] + [(gg.name, gg.namespace_id) for gg in x.groups]:
+                    await conn.execute(
+                        """INSERT INTO rag_import_rule (team_id, root_url, bundle, grp, namespace_id, created_by_user_id)
+                           VALUES ($1, $2, $3, $4, $5, $6)
+                           ON CONFLICT (team_id, root_url, bundle, (coalesce(grp, ''))) DO UPDATE
+                           SET namespace_id = EXCLUDED.namespace_id, created_by_user_id = EXCLUDED.created_by_user_id, updated_at = NOW()""",
+                        b["team_id"], b["root_url"], x.bundle, g, ns, user["id"])
+    # 적재는 화면이 이어서 /confirm으로(같은 검사·백그라운드 적재) — 연결만 따로 다시 눌러도 같은 결과(멱등)
+    return {"status": "preview", "pages": sum(len(v) for v in to_ns.values()), "excluded": len(excluded)}
 
 
 @router.post("/{batch_id}/confirm", status_code=202)

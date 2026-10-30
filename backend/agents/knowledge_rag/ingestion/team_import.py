@@ -97,8 +97,9 @@ def ledger_view(assigned_by: Optional[str], decided: bool, final: int, sample_ns
     moved = decided and sample_ns is not None and final != sample_ns
     if assigned_by is None and was_auto and not decided:
         assigned_by = "ai"   # v2.192 전에 만든 배치의 자동 분류(칸이 비어 있음) — 사람이 손대지 않았으면 AI(재리뷰 N3)
-    by = "human" if (assigned_by is None or moved) else assigned_by
-    preset = final if by == "space_default" else None
+    # 묶음 규칙(10/30 연결)은 묶음 하나에 한 번 정한 사람 결정 — 공간 기본값과 같이 preset, 페이지마다 옮긴 게 아니라 사람 번복으로 세지 않는다(리뷰 M2)
+    by = "rule" if assigned_by == "rule" else "human" if (assigned_by is None or moved) else assigned_by
+    preset = final if by in ("space_default", "rule") else None
     changed, _ = location_outcome(None if ai_ns is None else str(ai_ns), None if proposed_ns is None else str(proposed_ns), final, None,
                                   preset_ns=None if preset is None else str(preset))
     return by, preset, changed
@@ -122,6 +123,29 @@ def bundles_of(tree: list[dict], root_id: str) -> dict[str, tuple[str, int]]:
 
 
 PATH_SEP = " › "
+
+
+def group_of(page: dict) -> Optional[str]:
+    """묶음 안 하위 갈래 이름(2단계 상위 페이지 제목) — 묶음(1단계) 자신은 None. 경로(path) = 수집 대상 아래 조상 제목들(자기 제외).
+    2단계 페이지는 자기 제목이 갈래, 3단계 이상은 경로의 둘째 칸."""
+    depth = int(page.get("depth") or 0)
+    if depth <= 1:
+        return None
+    parts = (page.get("path") or "").split(PATH_SEP) if page.get("path") else []
+    return parts[1] if len(parts) >= 2 else (page.get("title") or page.get("page_id"))
+
+
+def connect_target(page: dict, rules: dict[str, dict]) -> tuple[bool, Optional[int]]:
+    """연결 규칙 적용(10/30 묶음 단위 연결) — rules = 묶음 이름 → {"ns": id|None, "groups": {갈래: id|None}}.
+    돌려줌 (규칙이 있나, 넣을 곳 — None이면 제외). 갈래 예외가 묶음 값보다 우선. 묶음 규칙이 없으면 (False, None) = 건드리지 않음."""
+    r = rules.get(page.get("bundle") or "")
+    if r is None:
+        return False, None
+    g = group_of(page)
+    groups = r.get("groups") or {}
+    if g is not None and g in groups:
+        return True, groups[g]
+    return True, r.get("ns")
 
 
 def paths_of(tree: list[dict], root_id: str) -> dict[str, str]:

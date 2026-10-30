@@ -91,6 +91,9 @@ export const updateImportPages = (id: number, ids: number[], action: 'classify' 
 export const reviewImportSample = (id: number, pageRowId: number, ok: boolean, namespaceId?: number | null) =>
   apiFetch<{ added: number }>(`${BASE}/${id}/samples`, { method: 'POST', body: JSON.stringify({ id: pageRowId, ok, namespace_id: namespaceId ?? null }) });
 export const confirmImport = (id: number) => apiFetch<{ status: string }>(`${BASE}/${id}/confirm`, { method: 'POST' });
+/** 묶음 단위 연결(10/30) — 묶음마다 컬렉션(null = 제외) + 하위 갈래 예외. 규칙 저장 + 전 페이지 정함(적재는 이어서 confirmImport) */
+export const connectImport = (id: number, bundles: { bundle: string; namespace_id: number | null; groups: { name: string; namespace_id: number | null }[] }[]) =>
+  apiFetch<{ status: string; pages: number; excluded: number }>(`${BASE}/${id}/connect`, { method: 'POST', body: JSON.stringify({ bundles }) });
 export const rollbackImport = (id: number) => apiFetch<{ chunks: number; documents: number; terms: number }>(`${BASE}/${id}/rollback`, { method: 'POST' });
 
 /** 원본 페이지 주소 — 수집 대상 주소의 호스트 + pageId(검토할 때 원문을 바로 연다). */

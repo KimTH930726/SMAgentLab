@@ -348,3 +348,44 @@ class TestLedgerViewOldRows:
         """재리뷰 N3: v2.192 전 배치의 자동 분류(assigned_by 비어 있음)는 사람이 손대지 않았으면 AI."""
         assert ti.ledger_view(None, False, 2, None, 2, 2, was_auto=True) == ("ai", None, False)
         assert ti.ledger_view(None, True, 2, None, 2, 2, was_auto=True) == ("human", None, False)
+
+
+def test_connect_rules_assign_every_page_once_by_bundle_and_group():
+    """묶음 단위 연결(10/30) 불변식: 규칙이 있는 묶음의 모든 페이지는 정확히 한 곳(또는 제외)으로 — 하위 갈래 예외가 묶음 값보다 우선,
+    갈래 예외는 그 갈래 페이지에만(다른 갈래·묶음 자신은 묶음 값). 무작위 트리로."""
+    rnd = random.Random(7)
+    for _ in range(30):
+        bundles = [f"B{i}" for i in range(rnd.randint(1, 5))]
+        pages = []
+        for b in bundles:
+            pages.append({"bundle": b, "depth": 1, "path": "", "title": b, "page_id": b})
+            for g in range(rnd.randint(0, 4)):
+                gname = f"{b}-G{g}"
+                pages.append({"bundle": b, "depth": 2, "path": b, "title": gname, "page_id": gname})
+                for k in range(rnd.randint(0, 5)):
+                    d = rnd.randint(3, 5)
+                    mid = [f"{gname}-m{j}" for j in range(d - 3)]
+                    pages.append({"bundle": b, "depth": d, "path": ti.PATH_SEP.join([b, gname, *mid]), "title": f"{gname}-p{k}",
+                                  "page_id": f"{gname}-p{k}-{d}"})
+        rules = {}
+        for b in bundles:
+            groups = {g: rnd.choice([None, 11, 12]) for g in {ti.group_of(p) for p in pages if p["bundle"] == b} - {None} if rnd.random() < 0.4}
+            rules[b] = {"ns": rnd.choice([None, 10]), "groups": groups}
+        for p in pages:
+            has, ns = ti.connect_target(p, rules)
+            assert has
+            g = ti.group_of(p)
+            r = rules[p["bundle"]]
+            if p["depth"] == 1:
+                assert g is None and ns == r["ns"]                     # 묶음 자신은 묶음 값
+            else:
+                assert g == (p["title"] if p["depth"] == 2 else p["path"].split(ti.PATH_SEP)[1])
+                assert ns == (r["groups"][g] if g in r["groups"] else r["ns"])
+    assert ti.connect_target({"bundle": "없음", "depth": 1}, {}) == (False, None)   # 규칙 없는 묶음은 건드리지 않음
+
+
+
+def test_ledger_view_rule_is_preset_not_override():
+    """묶음 규칙으로 정한 페이지는 preset — AI 추천과 달라도 번복으로 안 센다(공간 기본값과 같은 규칙, 리뷰 10/30 M2)."""
+    assert ti.ledger_view("rule", True, 2, 7, 7, 7) == ("rule", 2, False)     # AI는 7, 규칙은 2 — 번복 아님
+    assert ti.ledger_view("rule", True, 7, 2, 7, 7) == ("rule", 7, False)     # sample_ns와 달라도 사람 번복으로 바뀌지 않음

@@ -33,9 +33,10 @@ test('팀 적재 분류 미리보기 — 묶음 위치로 확정 · 줄 보류 �
     await goAdmin(page, '지식', '지식 문서');
     await expect(page.getByRole('navigation', { name: '관리자 메뉴' }).getByRole('button', { name: '팀 적재' })).toHaveCount(0);
     await page.getByTestId('subtab-import').click();
-    await expect(page.getByText('적재 배치')).toBeVisible();
-    await expect(page.getByRole('button', { name: new RegExp(`^#${bid} .*할 일 7`) })).toBeVisible();   // 검토 필요 5 + 표본 2
-    await page.getByRole('button', { name: new RegExp(`^#${bid} `) }).click();
+    await expect(page.getByLabel('배치')).toBeVisible();
+    await expect(page.getByLabel('배치').locator(`option[value="${bid}"]`)).toHaveText(/할 일 1/);   // 연결할 묶음 수(10/30 묶음 단위 연결) — 모두 묶음A
+    await page.getByLabel('배치').selectOption(String(bid));   // 배치가 여럿이면 선택 상자(10/30)
+    await page.getByTestId('preview-more').click();   // 상세는 [자세히] 아래(10/30 최종 검수)
     const confirmBtn = page.getByRole('button', { name: '분류 확정 · 적재' });
     await expect(confirmBtn).toBeDisabled();
     await expect(page.getByText('검토 필요 5건 — 분류하거나 보류')).toBeVisible();
@@ -106,7 +107,8 @@ test('공간 기본 위치 — 등록 창구 세 갈래 · 기본 위치로 분�
     }
 
     await page.getByTestId('subtab-import').click();
-    await page.getByRole('button', { name: new RegExp(`^#${bid} `) }).click();
+    await page.getByLabel('배치').selectOption(String(bid));   // 배치가 여럿이면 선택 상자(10/30)
+    await page.getByTestId('preview-more').click();   // 상세는 [자세히] 아래(10/30 최종 검수)
     const ctl = page.locator('div', { has: page.getByRole('button', { name: '기본 위치로 분류' }) }).last();
     await ctl.getByRole('combobox').selectOption(String(biz));
     await ctl.getByRole('button', { name: '기본 위치로 분류' }).click();
@@ -126,8 +128,8 @@ test('공간 기본 위치 — 등록 창구 세 갈래 · 기본 위치로 분�
     const o1 = group.getByTestId('review-row').filter({ hasText: 'E2E o1' });
     const h1 = group.getByTestId('review-row').filter({ hasText: 'E2E h1' });
     await group.getByTestId('group-toggle').click();
-    await expect(o1.getByText('기본값', { exact: true })).toBeVisible();
-    await expect(h1.getByText('분류됨', { exact: true })).toBeVisible();
+    await expect(o1.getByText('기본값 · 확정 전', { exact: true })).toBeVisible();
+    await expect(h1.getByText('저장됨', { exact: true })).toBeVisible();
     await expect(group.getByTestId('group-confirm')).toHaveText('이 묶음 1건 확정');
     // 줄마다 다르면 묶음 위치는 "줄마다 다름"(빈 값) — 고르면 모든 줄이 따라간다(저장된 h1도), 되돌리면 다시 h1은 분류됨
     const groupSel = group.getByTestId('group-ns').getByRole('combobox');
@@ -137,24 +139,79 @@ test('공간 기본 위치 — 등록 창구 세 갈래 · 기본 위치로 분�
     await expect(o1.locator(`option[value="${common}"]`)).toContainText('AI 판단');   // 펼친 목록에 AI가 처음 고른 곳 표시
     await expect(o1.locator(`option[value="${biz}"]`)).not.toContainText('AI 판단');
     await groupSel.selectOption(String(biz));
-    await expect(h1.getByText('바꿈', { exact: true })).toBeVisible();
+    await expect(h1.getByText('확정 전', { exact: true })).toBeVisible();
     await expect(group.getByTestId('group-confirm')).toHaveText('이 묶음 2건 확정');
     // [AI 판단으로] → 두 줄 다 AI가 고른 팀 공통(h1은 저장값과 같아 분류됨) → 확정 1건(o1) → o1 = 팀 공통, h1 그대로
     await group.getByTestId('group-to-ai').click();
     await expect(group.getByTestId('group-to-ai')).toBeDisabled();   // 이미 AI 판단 그대로
     await expect(groupSel).toHaveValue(String(common));
-    await expect(h1.getByText('분류됨', { exact: true })).toBeVisible();
-    await expect(o1.getByText('바꿈', { exact: true })).toBeVisible();
+    await expect(h1.getByText('저장됨', { exact: true })).toBeVisible();
+    await expect(o1.getByText('확정 전', { exact: true })).toBeVisible();
     await expect(group.getByTestId('group-confirm')).toHaveText('이 묶음 1건 확정');
     await group.getByTestId('group-confirm').click();
     // 확정 뒤 새 값이 올 때까지 기본값으로 되돌아 보이거나 다시 눌리지 않는다(리뷰 10/30 M1)
-    await expect(o1.getByText('분류됨', { exact: true })).toBeVisible();
+    await expect(o1.getByText('저장됨', { exact: true })).toBeVisible();
     await expect(o1.getByRole('combobox')).toHaveValue(String(common));
     await expect(group.getByTestId('group-confirm')).toHaveText('이 묶음 0건 확정');
     await expect(group.getByTestId('group-confirm')).toBeDisabled();
     await expect.poll(() => st('o1')).toBe(`review|org_like|${common}|`);
     expect(st('h1')).toBe(`review|low_confidence|${common}|`);
   } finally {
+    psql(`DELETE FROM rag_import_batch WHERE id = ${bid}`);
+  }
+});
+
+
+// 묶음 단위 연결(10/30 사용자 "업계 수집기처럼 — 사람은 가장 단순한 화면에서 단순한 검수만"): 묶음(1단계 상위 페이지)마다 컬렉션 하나,
+// 성격이 다른 하위 갈래는 예외 줄. [연결 · 적재] = 규칙 저장 + 전 페이지 정함 + 적재(표본·페이지 검토 없음). 적재가 실제로 돌지 않게 응답만 확인하고 끝에 지운다.
+test('묶음 연결 — 묶음 줄·하위 예외 미리 채움, 연결하면 규칙대로 전 페이지가 정해지고 적재 시작', async ({ page }) => {
+  test.setTimeout(120_000);
+  const row = psql(`SELECT t.id || '|' || c.id || '|' || d.id FROM ops_team t
+      JOIN ops_namespace c ON c.kind = 'org_space' AND c.name = 'org:team:' || t.id
+      JOIN ops_part p ON p.team_id = t.id JOIN ops_namespace_owner o ON o.part_id = p.id JOIN ops_namespace d ON d.id = o.namespace_id AND d.kind = 'domain'
+      ORDER BY t.id DESC LIMIT 1`);
+  test.skip(!row, '담당 업무가 있는 팀이 없음');
+  const [team, common, biz] = row.split('|').map(Number);
+  test.skip(psql(`SELECT count(*) FROM rag_import_batch WHERE team_id = ${team} AND status IN ('previewing','loading')`) !== '0', '진행 중 배치 있음');
+  const bid = Number(psql(`INSERT INTO rag_import_batch (team_id, root_url, root_title, status, sampling_required, total_pages, done_pages, created_by_user_id, default_namespace_id)
+    VALUES (${team}, 'https://confl.example/pages/viewpage.action?pageId=4', 'E2E 묶음 연결', 'preview', TRUE, 9, 9, (SELECT id FROM ops_user WHERE username = 'admin'), ${biz})
+    RETURNING id`).split(/\s+/)[0]);
+  // 묶음 A: 업무 4 + 하위 갈래 "A-도구"(팀 공통 3) → 예외 / 묶음 B: 업무 2
+  const ins = (pid: string, bundle: string, depth: number, path: string, status: string, fin: number | null) => psql(
+    `INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, path, status, chunk_count, final_namespace_id, ai_namespace_id, reason)
+     VALUES (${bid}, '${pid}', '${pid}', '${bundle}', ${depth}, '${path}', '${status}', 1, ${fin ?? 'NULL'}, ${fin ?? 'NULL'}, ${status === 'review' ? "'org_like'" : 'NULL'})`);
+  const st = (pid: string) => psql(`SELECT status || '|' || coalesce(final_namespace_id::text,'') FROM rag_import_page WHERE batch_id = ${bid} AND page_id = '${pid}'`);
+  try {
+    ins('A', 'A', 1, '', 'auto', biz);
+    for (const i of [1, 2, 3]) ins(`a${i}`, 'A', 2, 'A', 'auto', biz);
+    ins('A-도구', 'A', 2, 'A', 'review', common);
+    for (const i of [1, 2]) ins(`t${i}`, 'A', 3, 'A › A-도구', 'review', common);
+    ins('B', 'B', 1, '', 'auto', biz);
+    ins('b1', 'B', 2, 'B', 'review', null);                          // 미분류 — 묶음 값으로 따라감
+    await loginAdmin(page);
+    await goAdmin(page, '지식', '지식 문서');
+    await page.getByTestId('subtab-import').click();
+    await page.getByLabel('배치').selectOption(String(bid));
+    const bc = page.getByTestId('bundle-connect');
+    await expect(bc.getByTestId('bundle-row')).toHaveCount(2);
+    await expect(bc).not.toContainText('표본');
+    await expect(bc.getByTestId('bundle-group')).toHaveCount(1);       // A-도구(팀 공통 3/3) — 묶음 A(업무)와 다름
+    await expect(bc.getByLabel('A 컬렉션')).toHaveValue(String(biz));
+    await expect(bc.getByLabel('A-도구 컬렉션')).toHaveValue(String(common));
+    await expect(bc.getByLabel('B 컬렉션')).toHaveValue(String(biz));
+    // 적재 요청은 가로채 실제 적재(원장·판단 기록)를 돌리지 않는다 — 연결(규칙·페이지 값)만 DB로 확인
+    let confirmed = false;
+    await page.route(`**/api/knowledge/team-import/${bid}/confirm`, (r) => { confirmed = true; return r.fulfill({ status: 202, contentType: 'application/json', body: '{"status":"loading"}' }); });
+    const res = page.waitForResponse((r) => r.url().includes(`/api/knowledge/team-import/${bid}/connect`));
+    await bc.getByTestId('connect-submit').click();
+    await page.getByRole('button', { name: '확인' }).click();
+    expect((await res).status()).toBe(200);
+    await expect.poll(() => confirmed).toBe(true);                    // 버튼 한 번 = 연결 → 적재
+    for (const pid of ['A', 'a1', 'a2', 'a3', 'B', 'b1']) expect(st(pid).split('|')[1]).toBe(String(biz));
+    for (const pid of ['A-도구', 't1', 't2']) expect(st(pid).split('|')[1]).toBe(String(common));
+    expect(psql(`SELECT count(*) FROM rag_import_rule WHERE team_id = ${team} AND root_url LIKE '%pageId=4'`)).toBe('3');   // 묶음 2 + 예외 1
+  } finally {
+    psql(`DELETE FROM rag_import_rule WHERE team_id = ${team} AND root_url LIKE '%pageId=4'`);
     psql(`DELETE FROM rag_import_batch WHERE id = ${bid}`);
   }
 });
