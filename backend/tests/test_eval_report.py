@@ -25,6 +25,12 @@ POL = {"k1": {"name": "무료배송 기준", "path": "배송", "body": "온라�
 REF = {"r1": {"name": "지역별 배송비", "rows": 12}}
 
 
+def test_policy_storage_only_on_policy_axis():
+    """저장 꼬리표·측정 안 됨은 정책서 골든셋 기준 — 업무지식 축엔 안 붙인다(붙이면 모든 문항이 "정답 데이터 없음"으로 찍힘)."""
+    assert rp.uses_policy_storage("policy") is True
+    assert rp.uses_policy_storage("knowledge") is False
+
+
 def test_tags_reflect_storage_facts():
     items, tags = rp.storage_tags("온라인 무료배송 기준 금액?", [{"kind": "policy", "source_key": "k1"}], POL, REF,
                                   mapped="무료배송", gold_in_context=True, unused_qid=False)

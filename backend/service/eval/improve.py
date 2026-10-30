@@ -104,19 +104,60 @@ def agreement(rows) -> dict:
 INGEST_REMEDY: dict[str, tuple[str, str, str, str]] = {   # 검사 키 → (기법 키, 제목, 바꿀 것, 잴 방법)
     "policy_param_derived": ("param_derive", "파라미터 파생 단계 실행(v0 설계 #9)",
                              "derive_policy_params.py extract → 사본 DB에 load → 같은 문항으로 측정(값은 원문에 있는 것만)", "answers"),
-    "usage_ref_table": ("ref_table_chat", "참고표를 채팅 문맥에 연결(v0 설계 #12)", "참고표 표 단위 검색 + 결정 조건이 빠지면 되묻기", "answers"),
+    # 10/29부터 켬(policy_ref_chat) — 남은 어긋남 = 켰는데도 표가 문맥에 안 들어간 문항
+    "usage_ref_table": ("ref_table_chat", "참고표가 문맥에 안 들어간 문항(v0 설계 #12)", "참고표 표 단위 검색 순위 · 결정 조건이 빠지면 되묻기", "answers"),
     "usage_overview": ("ref_table_chat", "개요를 채팅 문맥에 연결(v0 설계 #12)", "개요 문서 검색 채널 추가", "answers"),
     "knowledge_dup": ("knowledge_dedupe", "같은 지식 조각 정리", "중복 쌍 중 하나 은퇴(원문 페이지 확인은 로컬 LLM)", "retrieval"),
 }
 
 
-def ingest_candidates(results: list[dict], locked: Iterable[str] = ()) -> list[dict]:
+# 적재 검사를 "꺼 둠(결정)"으로 — 결정은 그 검사 후보에 사람이 내린 기각·보류(사유 포함, 다음 진단이 이어받음)에서만 온다.
+# 10/29 전엔 결정을 check_ingest.py 코드에 적어 둬서, 화면 후보는 계속 "결정 전"이고 진단을 다시 안 돌리면 옛 후보가 남았다(사용자 지적).
+LATEST_INGEST_DECISIONS_SQL = ("SELECT DISTINCT ON (key) key, status, review_reason FROM eval_candidate "
+                               "WHERE key LIKE 'ingest\\_%' ORDER BY key, id DESC")
+DECIDED_OFF = {"rejected": "안 함"}   # 보류(나중에)는 끄지 않는다 — 후보로 남아 이어받음(꺼 두면 화면에서 사라져 되돌릴 길이 없었다, 재리뷰 10/29)
+# 번복(위치 판정) 후보를 만드는 진단 = 업무지식 축의 가장 최근 진단
+LATEST_KNOWLEDGE_RUN_SQL = "(SELECT i.id FROM eval_improvement_run i JOIN eval_gate_run g ON g.id = i.gate_run_id WHERE g.axis = 'knowledge' ORDER BY i.created_at DESC, i.id DESC LIMIT 1)"
+# 후보 → 진단한 평가 축(eval_gate --candidate · 채택 · 이어받기 공통)
+CANDIDATE_AXIS_SQL = ("SELECT g.axis FROM eval_candidate c JOIN eval_improvement_run i ON i.id = c.run_id "
+                      "JOIN eval_gate_run g ON g.id = i.gate_run_id WHERE c.id = $1")
+# 적재 검사가 보는 기능 설정 — 켜져 있으면 옛 "안 함" 결정이 있어도 다시 센다(결정이 바뀐 것)
+FEATURE_SETTINGS = {"usage_ref_table": "policy_ref_chat", "usage_overview": "policy_ref_overview"}
+
+
+def feature_on(check_key: str, settings) -> bool:
+    attr = FEATURE_SETTINGS.get(check_key)
+    return bool(attr and getattr(settings, attr, False))
+
+
+def carry_allowed(cand_key: str, settings) -> bool:
+    """이전 결정을 이어받아도 되나 — 기능을 켠 적재 검사 후보는 안 된다(옛 기각이 켠 뒤의 새 후보를 묻지도 않고 기각하던 것, 리뷰 10/29)."""
+    return not (cand_key.startswith("ingest_") and feature_on(cand_key[len("ingest_"):], settings))
+
+
+def decided_off(check_key: str, decisions: Mapping[str, Mapping], *, feature_on: bool = False) -> Optional[str]:
+    """적재 검사 키 → "안 함 — 사유" / None. decisions = 후보 key → 가장 최근 행(status·review_reason).
+    기능이 지금 켜져 있으면(설정을 켬 = 결정이 바뀜) None — 다시 어긋남으로 센다."""
+    d = decisions.get(f"ingest_{check_key}")
+    if feature_on or not d or d.get("status") not in DECIDED_OFF:
+        return None
+    return f"{DECIDED_OFF[d['status']]} — {d.get('review_reason') or '사유 없음'}"
+
+
+def ingest_axis(check_key: str) -> str:
+    """적재 검사가 어느 평가 축 것인가 — 지식 조각 검사는 업무지식, 나머지(정책·참고표·개요·용어)는 정책서."""
+    return "knowledge" if check_key.startswith("knowledge_") else "policy"
+
+
+def ingest_candidates(results: list[dict], locked: Iterable[str] = (), *, axis: Optional[str] = None) -> list[dict]:
     """어긋난 적재 검사(bad > 0) → 후보. 대응표에 없는 검사는 "적재 계약 다시 확인" 한 줄. cause = "ingest"(진단 칸과 별개 — 흐름 단계가 아니라 데이터).
     locked = 잠근 시험지 qid — 후보가 겨냥할 문항에서 뺀다(옛 적재 검수 기록엔 잠근 문항이 섞여 있을 수 있어서, 리뷰 M1)."""
     locked = set(locked)
     out = []
     for r in results:
         if not r.get("bad") or r.get("decided"):   # 결정으로 꺼 둔 항목(파라미터 파생·참고표 채팅 등, 10/29)은 후보로 다시 띄우지 않는다
+            continue
+        if axis is not None and ingest_axis(r["key"]) != axis:   # 축마다 자기 데이터 검사만(10/29 업무지식도 같은 루프)
             continue
         tech, title, action, measure = INGEST_REMEDY.get(
             r["key"], ("ingest_contract", f"적재 다시 확인 — {r['name']}", "적재 스크립트·설계 완료 기준 대조", "retrieval"))
@@ -134,11 +175,12 @@ def ingest_candidates(results: list[dict], locked: Iterable[str] = ()) -> list[d
 
 
 def build_candidates(diag: dict, *, types: Mapping[str, str], mapped: Mapping[str, Optional[str]],
-                     abstain: Optional[dict] = None, hypotheses: Optional[list[dict]] = None) -> list[dict]:
+                     abstain: Optional[dict] = None, hypotheses: Optional[list[dict]] = None, axis: str = "policy") -> list[dict]:
     """진단 → 후보 목록(원인 흐름 순서). types = qid → 층, mapped = qid → 용어 매핑(없으면 None), abstain = abstain_replay 결과,
     hypotheses = 로컬 LLM 묶음 [{name, hint, qids}](문맥 있는데 틀림·목록 덜 나옴 등, 사람 확인 전)."""
     c = diag["causes"]
     out: list[dict] = []
+    src = "업무지식" if axis == "knowledge" else "정책"   # 후보 문구의 정답 종류
 
     q = c.get("answered_no_answer", [])
     if q:
@@ -161,6 +203,12 @@ def build_candidates(diag: dict, *, types: Mapping[str, str], mapped: Mapping[st
                              why="하한으로 못 거르는 문항 — 생성 단계에서 거절해야 함"))
 
     q = c.get("retrieval_miss", [])
+    if q and axis == "knowledge":
+        # 업무지식 검색 측정엔 용어 매핑 칸이 없다 — 정책서식 갈래(매핑 있음/없음·키워드 구제 슬롯)를 나누면 근거 없는 후보가 된다(10/29)
+        out.append(_cand("knowledge_retrieval", "retrieval_miss", "chunk_header", "업무지식 검색 실패 — 조각 머리글·질문 표현",
+                         "놓친 문항의 정답 조각: 머리글(제목 경로)·용어집 동의어 점검 → 검색 재측정", "retrieval", q,
+                         why="정답 업무지식 조각이 문맥에 없음"))
+        q = []
     if q:
         cross = [x for x in q if types.get(x) == "cross"]
         rest = [x for x in q if x not in cross]
@@ -182,7 +230,7 @@ def build_candidates(diag: dict, *, types: Mapping[str, str], mapped: Mapping[st
     q = c.get("refused_with_context", [])
     if q:
         out.append(_cand("answer_when_grounded", "refused_with_context", "chat_prompt", "근거 있으면 답하기 지시",
-                         "채팅 프롬프트: 문맥에 해당 정책이 있으면 거절하지 말기", "answers", q, why="정답 정책이 문맥에 있는데 거절"))
+                         f"채팅 프롬프트: 문맥에 해당 {src}이 있으면 거절하지 말기", "answers", q, why=f"정답 {src}이 문맥에 있는데 거절"))
 
     q = c.get("list_incomplete", [])
     if q:
@@ -198,7 +246,7 @@ def build_candidates(diag: dict, *, types: Mapping[str, str], mapped: Mapping[st
                              "조건 질문 지시 문구", "answers", cond, why="조건 질문에서 문맥 있는데 틀림"))
         out.append(_cand("grounded_answer", "wrong_with_context", "chat_prompt", "문맥 있는데 틀림 — 묶음별 답 지시",
                          "묶음 가설(사람 확인 후)마다 프롬프트 한 줄", "answers", [x for x in q if x not in cond] or q,
-                         why="정답 정책이 문맥에 있는데 답이 틀림 — 생성 단계"))
+                         why=f"정답 {src}이 문맥에 있는데 답이 틀림 — 생성 단계"))
 
     for h in hypotheses or []:
         h_q = sorted(set(h.get("qids") or []))

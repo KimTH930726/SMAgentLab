@@ -87,7 +87,8 @@ async def cluster_reasons(judged: list[dict], causes: dict[str, list[str]],
 
 async def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--run", type=int, help="판정 기록 id(기본: 현재 기준선)")
+    ap.add_argument("--run", type=int, help="판정 기록 id(기본: --axis 축의 현재 기준선)")
+    ap.add_argument("--axis", default="policy", choices=("policy", "knowledge"), help="평가 축(정책서·업무지식) — 같은 진단·후보 루프(10/29)")
     ap.add_argument("--dir", default="/app/eval_out", help="결과 파일을 찾을 폴더(하위 폴더까지)")
     ap.add_argument("--reasons", action="store_true", help="채점 이유를 로컬 LLM으로 묶어 가설로(LLM 호출 = 원인 칸 수)")
     ap.add_argument("--save", action="store_true")
@@ -96,20 +97,21 @@ async def main() -> int:
 
     from core.database import close_pool, get_conn, init_pool
     from agents.knowledge_rag.agent import should_abstain
-    from service.eval.improve import MEASURES, abstain_replay, build_candidates, carry_decision, ingest_candidates, split_locked
+    from core.config import settings
+    from service.eval.improve import MEASURES, abstain_replay, build_candidates, carry_allowed, carry_decision, ingest_candidates, split_locked
     from service.eval.techniques import BY_KEY
 
     await init_pool()
     try:
         async with get_conn() as conn:
-            run = await conn.fetchrow("SELECT id, label, summary, axis FROM eval_gate_run WHERE " + ("id = $1" if a.run else "is_baseline AND axis = 'policy'"),   # 기준선은 정책서 축(#96)
-                                      *([a.run] if a.run else []))
+            run = await conn.fetchrow("SELECT id, label, summary, axis FROM eval_gate_run WHERE " + ("id = $1" if a.run else "is_baseline AND axis = $1"),   # 축마다 기준선(#96)
+                                      a.run or a.axis)
         if not run:
             print("판정 기록 없음" + ("" if a.run else "(기준선 없음)"))
             return 2
-        if run["axis"] != "policy":   # 진단·후보는 정책서 문항으로만 — 지식 판정으로 만든 후보는 운영 반영이 막혀 쓸 수 없다(리뷰 10/29 L3)
-            print(f"판정 #{run['id']}은 지식 축 — 진단·개선 후보는 정책서 축 판정만")
-            return 2
+        axis = run["axis"]   # 업무지식도 같은 닫힌 개선 루프(10/29 사용자) — 후보·이어받기·채택은 축마다 따로
+        if a.run and axis != a.axis and "--axis" in sys.argv:
+            print(f"⚠ 판정 #{run['id']}은 {axis} 축 — --axis {a.axis}는 무시하고 판정의 축으로 진단")
         summary = json.loads(run["summary"]) if isinstance(run["summary"], str) else run["summary"]
         inputs = summary.get("inputs") or {}
         d = Path(a.dir)
@@ -144,21 +146,22 @@ async def main() -> int:
         prior: dict[str, dict[str, list[str]]] = {}
         if a.reasons:   # 직전 진단에서 사람이 확인한 묶음(C1) — 맞아요는 이어 쓰고, 다시 묶기는 피한다
             async with get_conn() as conn:
-                last = await conn.fetchval("SELECT hypotheses FROM eval_improvement_run ORDER BY created_at DESC, id DESC LIMIT 1")
+                last = await conn.fetchval("SELECT i.hypotheses FROM eval_improvement_run i JOIN eval_gate_run g ON g.id = i.gate_run_id "
+                                           "WHERE g.axis = $1 ORDER BY i.created_at DESC, i.id DESC LIMIT 1", axis)
             for h in (json.loads(last) if isinstance(last, str) else last) or []:
                 if h.get("status") in ("confirmed", "rejected"):
                     prior.setdefault(h["cause"], {}).setdefault(h["status"], []).append(h["name"])
         hyps, model = (await cluster_reasons(judged, diag["causes"], prior)) if a.reasons else ([], "")
-        cands = build_candidates(diag, types=types, mapped=mapped, abstain=abst, hypotheses=hyps)
+        cands = build_candidates(diag, types=types, mapped=mapped, abstain=abst, hypotheses=hyps, axis=axis)
         # 적재 검수(가장 최근 기록)에서 어긋난 것 → 같은 후보 흐름으로(scripts/check_ingest.py --save)
         async with get_conn() as conn:
             ing_row = await conn.fetchrow("SELECT results, gate_run_id FROM ingest_check_run ORDER BY created_at DESC, id DESC LIMIT 1")
         if ing_row:
             ing = ing_row["results"]
-            if ing_row["gate_run_id"] != run["id"]:   # 적재 검수의 정답률·영향 문항이 다른 측정 기준 — 숫자를 섞어 보이지 않게 알린다(리뷰 L7)
+            if axis == "policy" and ing_row["gate_run_id"] != run["id"]:   # 적재 검수의 정답률·영향 문항이 다른 측정 기준 — 숫자를 섞어 보이지 않게 알린다(리뷰 L7)
                 print(f"⚠ 적재 검수는 측정 #{ing_row['gate_run_id']} 기준(이 진단은 #{run['id']}) — 같은 측정으로 맞추려면 "
                       f"check_ingest.py --save를 다시 실행")
-            cands += ingest_candidates(json.loads(ing) if isinstance(ing, str) else ing, locked)
+            cands += ingest_candidates(json.loads(ing) if isinstance(ing, str) else ing, locked, axis=axis)
         # 운영 번복(AI 감사 로그) — 기능을 쓰다 사람이 AI 추천을 번복한 기록 → 같은 후보 흐름으로(10/27, self-improvement-loop-design §3-2)
         from service.eval import override as override_mod
         async with get_conn() as conn:
@@ -166,7 +169,8 @@ async def main() -> int:
         for k in ov["kinds"]:
             if k["overrides"]:
                 print(f"  운영 번복 · {k['kind_name']} {k['overrides']}/{k['decided']}" + (" · 형식적 승인 의심" if k["rubber_stamp"] else ""))
-        cands += override_mod.candidates(ov)
+        if axis == "knowledge":   # 운영 번복 = 지식 등록 위치 판정 — 업무지식 축의 적재 단계 몫
+            cands += override_mod.candidates(ov)
 
         print(f"판정 #{run['id']} \"{run['label']}\" — {diag['n']}문항 중 틀림 {diag['n_failed']} · 잠근 문항 {len(locked)}개는 진단에서 뺌")
         for k, name, where in CAUSES:
@@ -193,10 +197,12 @@ async def main() -> int:
                 for c in cands:
                     # 같은 기법·원인의 가장 최근 후보가 기각·보류·시도 승인이고 추천이 그대로면 이어받는다(carry_decision) — 매번 같은 걸 다시 묻지 않게.
                     # 최근 행만 본다: 사람이 되돌리거나 승인한 뒤의 옛 기각을 다시 살리지 않게(리뷰 M1)
-                    last = await conn.fetchrow(
-                        """SELECT id, status, recommend, review_reason, reviewed_by_user_id, reviewed_at, measured_gate_run_ids FROM eval_candidate
-                           WHERE key = $1 AND cause = $2 ORDER BY id DESC LIMIT 1""", c["key"], c["cause"])
-                    prev = carry_decision(dict(last) if last else None, c["recommend"])
+                    last = await conn.fetchrow(   # 같은 축의 후보만 — 정책서 결정이 업무지식 후보로 넘어가지 않게
+                        """SELECT c.id, c.status, c.recommend, c.review_reason, c.reviewed_by_user_id, c.reviewed_at, c.measured_gate_run_ids
+                           FROM eval_candidate c JOIN eval_improvement_run i ON i.id = c.run_id JOIN eval_gate_run g ON g.id = i.gate_run_id
+                           WHERE c.key = $1 AND c.cause = $2 AND (g.axis = $3 OR c.cause = 'override_location')
+                           ORDER BY c.id DESC LIMIT 1""", c["key"], c["cause"], axis)   # 번복 후보는 10/29 전 정책서 진단에서 만들었다 — 그 결정을 이어받게
+                    prev = carry_decision(dict(last) if last else None, c["recommend"]) if carry_allowed(c["key"], settings) else None
                     carried += bool(prev)
                     await conn.execute(
                         """INSERT INTO eval_candidate (run_id, key, cause, technique, title, action, measure, n_target, qids, recommend, why,

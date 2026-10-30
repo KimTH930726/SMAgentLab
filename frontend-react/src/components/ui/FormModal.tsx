@@ -9,7 +9,7 @@ import { Button } from './Button';
  */
 export function FormModal({
   isOpen, title, onClose, onSubmit, submitLabel = '저장', submitting = false, submitDisabled = false,
-  error, danger = false, maxWidth = 'max-w-md', children,
+  error, danger = false, maxWidth = 'max-w-md', zClass, children,
 }: {
   isOpen: boolean;
   title: string;
@@ -21,10 +21,11 @@ export function FormModal({
   error?: string | null;
   danger?: boolean;
   maxWidth?: string;
+  zClass?: string;   // 다른 모달 안에서 열 때 위로
   children: ReactNode;
 }) {
   return (
-    <Modal isOpen={isOpen} onClose={() => { if (!submitting) onClose(); }} title={title} maxWidth={maxWidth}>
+    <Modal isOpen={isOpen} onClose={() => { if (!submitting) onClose(); }} title={title} maxWidth={maxWidth} zClass={zClass}>
       <form
         className="space-y-4"
         onSubmit={(e) => { e.preventDefault(); if (!submitting && !submitDisabled) onSubmit(); }}

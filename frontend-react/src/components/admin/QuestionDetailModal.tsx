@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { getQuestionDetail, listTechniques, type QuestionAnswer, type Technique } from '../../api/eval';
+import { getLatestImprovement, getQuestionDetail, listTechniques, type GateAxis, type QuestionAnswer, type Technique } from '../../api/eval';
+import { useAuthStore } from '../../store/useAuthStore';
+import { CandidateModal as CandidateView } from './GateImprove';
 import { layerOf } from '../../utils/evalLayers';
 import { Modal } from '../ui/Modal';
 import { CAUSE_STAGE } from './GateFlow';
@@ -42,6 +44,55 @@ function Answers({ rows, title }: { rows: QuestionAnswer[]; title?: string }) {
           {a.reason && <p className="text-xs text-slate-400"><span className="text-slate-500">채점 이유 </span>{a.reason}</p>}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** 회차 요약 — "2회 모두 오답" / "1회 정답 · 2회 오답" */
+function repsLine(rows: QuestionAnswer[]): string {
+  const labs = rows.map((a) => a.label ?? '채점 없음');
+  return new Set(labs).size === 1 ? `${rows.length}회 모두` : labs.map((l, i) => `${i + 1}회 ${l}`).join(' · ');
+}
+
+/** AI 답 — 대표(1회)만 펼치고 나머지는 한 줄(같은 답이면 "같은 답"), 눌러서 보기. 긴 답은 6줄까지 + [더 보기] */
+function MainAnswer({ rows }: { rows: QuestionAnswer[] }) {
+  const [more, setMore] = useState(false);
+  const [rest, setRest] = useState(false);
+  const [a, ...others] = rows;
+  // [더 보기]는 실제로 잘렸을 때만 — 글자 수로 짐작하면 한 문단 200~300자 답이 잘린 채 버튼이 없었다(재리뷰 10/30 M1)
+  const body = useRef<HTMLParagraphElement>(null);
+  const [clamped, setClamped] = useState(false);
+  useLayoutEffect(() => {
+    const el = body.current;
+    if (!el || more) return;
+    const check = () => setClamped(el.scrollHeight > el.clientHeight + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [a.answer, more]);
+  return (
+    <div className="space-y-2">
+      <div className="rounded-md border border-slate-700 bg-slate-900/40 p-2 space-y-1">
+        <p className="text-xs">
+          <span className="text-slate-500">AI 답 {rows.length > 1 ? '(1회) ' : ''}· </span>
+          <span className={`font-medium ${LABEL_CLS[a.label ?? ''] ?? 'text-slate-400'}`}>{a.label ?? '채점 없음'}</span>
+          {a.abstained && <span className="text-slate-500"> · 근거 없음으로 거절</span>}
+          {a.clarified && <span className="text-slate-500" title="정책이 많아 되물었고, 측정은 '전부 보기'를 고른 답으로 채점"> · 되물음 ⓘ</span>}
+          {a.error && <span className="text-rose-600 dark:text-rose-400"> · 오류 {a.error}</span>}
+        </p>
+        <p ref={body} className={`text-sm text-slate-200 whitespace-pre-wrap break-words ${more ? '' : 'line-clamp-6'}`} data-testid="main-answer">{a.answer || '(빈 답)'}</p>
+        {(clamped || more) && <button className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline" onClick={() => setMore(!more)}>{more ? '접기' : '더 보기'}</button>}
+        {a.reason && <p className="text-xs rounded bg-slate-800/80 px-2 py-1 text-slate-300"><span className="text-slate-500">채점 이유 </span>{a.reason}</p>}
+      </div>
+      {others.length > 0 && (
+        <div className="text-xs text-slate-400">
+          <button className="hover:text-slate-200" onClick={() => setRest(!rest)} aria-expanded={rest}>
+            {rest ? '▾' : '▸'} {others.map((o) => `${o.rep + 1}회 ${o.label ?? '채점 없음'}${o.answer === a.answer ? '(같은 답)' : ''}`).join(' · ')} — 보기
+          </button>
+          {rest && <div className="mt-1"><Answers rows={others} /></div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -156,6 +207,7 @@ export function QuestionDetailModal({ runId, qids, start, onClose, listTitle }: 
   const layer = d?.type ? layerOf(d.type)?.name ?? d.type : '';
   const verdict = d ? verdictOf(d.answers) : null;
   const { data: techs = [] } = useQuery({ queryKey: ['eval-techniques'], queryFn: listTechniques, staleTime: 60_000 });
+  const [candId, setCandId] = useState<number | null>(null);   // 고칠 방법 줄을 누르면 그 후보 카드(10/30 사용자: 제안에서 바로 가게)
 
   return (
     <Modal isOpen={!!qid} onClose={onClose} title={`문항 ${qid ?? ''}`} maxWidth="max-w-4xl">
@@ -182,13 +234,13 @@ export function QuestionDetailModal({ runId, qids, start, onClose, listTitle }: 
         {error && <p className="text-sm text-rose-600 dark:text-rose-400">{(error as Error).message}</p>}
         {d && (
           <div className="space-y-3" data-testid="question-detail">
-            {/* 결론 한 줄 — 무엇이 틀렸고 왜·어떻게 저장돼 있나를 맨 위에 */}
+            {/* 4칸(10/30 사용자 "꼭 필요한 정보만, 가시성"): 결론 한 줄 → ① 질문 → ② 정답 vs AI 답(대표 1회) → ③ 왜 틀렸나(검색·단계·패턴·저장 한 칸) → ④ 고칠 방법.
+                원인·저장 꼬리표를 맨 위와 칸 안에 두 번 쓰던 것, 거의 같은 답 2회를 다 펼치던 것을 없앴다 */}
             <div className={`rounded-lg border px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm ${VERDICT_BOX[verdict ?? ''] ?? 'border-slate-700 text-slate-300'}`}
               data-testid="question-verdict">
               <b>{verdict ? (verdict === '정답' ? '✔ 정답' : verdict === '오답' ? '✖ 오답' : verdict) : '답 측정 없음'}</b>
-              {d.answers.length > 1 && <span className="text-xs opacity-80">{d.answers.map((a) => a.label ?? '-').join(' · ')}</span>}
-              {d.cause && <span>원인: {d.cause.name}</span>}
-              {d.storage?.tags.map((t) => <span key={t} className="rounded px-1.5 py-0.5 text-xs bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">{t}</span>)}
+              {d.answers.length > 1 && <span className="text-xs opacity-80">{repsLine(d.answers)}</span>}
+              {d.cause && <span>· 처음 실패: {CAUSE_STAGE[d.cause.key] ?? d.cause.name}</span>}
             </div>
 
             <Section n={1} title="질문">
@@ -196,7 +248,7 @@ export function QuestionDetailModal({ runId, qids, start, onClose, listTitle }: 
             </Section>
 
             <Section n={2} title="정답 / AI 답">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3">
                 <div className="space-y-1 min-w-0">
                   <p className="text-xs text-slate-500">정답(기대 답 · 정답 정책)</p>
                   <p className="text-sm text-slate-200 whitespace-pre-wrap">
@@ -205,53 +257,40 @@ export function QuestionDetailModal({ runId, qids, start, onClose, listTitle }: 
                   {d.gold_policies.length > 0 && <p className="text-xs text-slate-500">{d.gold_policies.join(' · ')}</p>}
                 </div>
                 <div className="min-w-0">
-                  {d.answers.length ? <Answers rows={d.answers} /> : <p className="text-sm text-slate-400">이 판정은 검색만 쟀어요 — 답 측정 없음</p>}
+                  {d.answers.length ? <MainAnswer key={qid} rows={d.answers} /> : <p className="text-sm text-slate-400">이 판정은 검색만 쟀어요 — 답 측정 없음</p>}
                   {d.before && <details className="text-xs text-slate-400 mt-1"><summary className="cursor-pointer">바꾸기 전 답 보기</summary><Answers rows={d.before} /></details>}
                 </div>
               </div>
             </Section>
 
-            <Section n={3} title="검색 — 정답 정책을 AI에게 넘겼나">
-              <p className="text-sm text-slate-200">
-                {d.retrieval.gold_in_context
-                  ? <span className="text-emerald-600 dark:text-emerald-400">✔ 넘김</span>
-                  : <span className="text-rose-600 dark:text-rose-400">✖ 못 넘김</span>}
-                {d.retrieval.top1 != null && <span className="text-slate-400"> · {d.retrieval.top1 ? '1순위' : '1순위는 아님'}</span>}
-                {d.retrieval.mapped_term && <span className="text-slate-400"> · 용어 "{d.retrieval.mapped_term}"</span>}
-                {d.retrieval.clarify && <span className="text-slate-400"> · 되물음</span>}
-              </p>
+            <Section n={3} title="왜 틀렸나">
+              <dl className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm" data-testid="question-why">
+                <dt className="text-xs text-slate-500 pt-0.5">검색</dt>
+                <dd className="text-slate-200">
+                  {d.retrieval.gold_in_context
+                    ? <span className="text-emerald-600 dark:text-emerald-400">✔ 정답 정책을 AI에게 넘김</span>
+                    : <span className="text-rose-600 dark:text-rose-400">✖ 정답 정책을 못 넘김</span>}
+                  {d.retrieval.top1 != null && <span className="text-slate-400"> · {d.retrieval.top1 ? '1순위' : '1순위는 아님'}</span>}
+                  {d.retrieval.mapped_term && <span className="text-slate-400"> · 용어 "{d.retrieval.mapped_term}"</span>}
+                  {d.retrieval.clarify && <span className="text-slate-400"> · 되물음</span>}
+                </dd>
+                {d.cause && <>
+                  <dt className="text-xs text-slate-500 pt-0.5">원인</dt>
+                  <dd className="text-slate-200" data-testid="why-stage">{d.cause.name} <span className="text-xs text-slate-500" title="볼 곳">· {d.cause.where}</span></dd>
+                </>}
+                {d.hypotheses.length > 0 && <>
+                  <dt className="text-xs text-slate-500 pt-0.5" title="틀린 문항의 채점 이유를 로컬 LLM이 패턴별로 묶은 것">패턴</dt>
+                  <dd className="space-y-0.5">{d.hypotheses.map((h) => (
+                    <p key={h.name} className="text-slate-200" title={h.hint || undefined}>{h.name} <span className="text-xs text-slate-500">· {h.n}문항</span></p>
+                  ))}</dd>
+                </>}
+                <dt className="text-xs text-slate-500 pt-0.5">저장</dt>
+                <dd className="min-w-0">{!d.storage ? <span className="text-slate-400">정답 데이터 없음(답 없는 질문이거나 연결 안 됨)</span>
+                  : <StorageView storage={d.storage} techs={techs} />}</dd>
+              </dl>
             </Section>
 
-            <Section n={4} title="왜 — 처음 실패한 단계 · AI가 묶은 패턴">
-              {d.cause || d.hypotheses.length ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <div className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 min-w-0" data-testid="why-stage">
-                    <p className="text-[11px] text-slate-500">처음 실패한 단계</p>
-                    {d.cause ? <>
-                      <p className="text-base font-semibold text-slate-100">{CAUSE_STAGE[d.cause.key] ?? '—'}</p>
-                      <p className="text-xs text-slate-300">{d.cause.name} <span className="text-slate-500" title="볼 곳">· {d.cause.where}</span></p>
-                    </> : <p className="text-sm text-slate-400">이 판정의 진단에서 틀린 문항이 아님</p>}
-                  </div>
-                  <div className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 min-w-0">
-                    <p className="text-[11px] text-slate-500">AI가 묶은 패턴</p>
-                    {d.hypotheses.length === 0 ? <p className="text-sm text-slate-400">묶음 없음</p> : d.hypotheses.map((h) => (
-                      <div key={h.name}>
-                        <p className="text-sm font-medium text-slate-100">{h.name} <span className="text-xs font-normal text-slate-500">· {h.n}문항</span></p>
-                        {h.hint && <p className="text-xs text-slate-400">{h.hint}</p>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : <p className="text-sm text-slate-400">이 판정의 진단에서 틀린 문항이 아님</p>}
-            </Section>
-
-            <Section n={5} title="저장 구조 — 정답 데이터가 어떤 모양으로 저장돼 있나">
-              {!d.storage || d.storage.gold.length === 0
-                ? <p className="text-sm text-slate-400">정답 데이터 없음(답 없는 질문이거나 연결 안 됨)</p>
-                : <StorageView storage={d.storage} techs={techs} />}
-            </Section>
-
-            <Section n={6} title="고칠 방법 · 측정 결과">
+            <Section n={4} title="고칠 방법 — 누르면 후보 카드">
               {d.candidates.length === 0 ? (
                 <p className="text-sm text-slate-400">이 문항을 겨냥한 후보 없음{d.storage?.tags.length ? ' — 위 저장 구조의 "해 볼 기법"을 보세요' : ''}</p>
               ) : (
@@ -267,7 +306,10 @@ export function QuestionDetailModal({ runId, qids, start, onClose, listTitle }: 
                         return (
                           <tr key={c.id} className="border-t border-slate-700/70 align-top">
                             <td className="px-3 py-2"><span className={`rounded px-1.5 py-0.5 whitespace-nowrap ${CAND_TONE[c.status] ?? CAND_TONE.proposed}`}>{STATUS_NAME[c.status] ?? c.status}</span></td>
-                            <td className="px-3 py-2 text-slate-100" title={c.action}>{c.title}</td>
+                            <td className="px-3 py-2">
+                              <button className="text-left text-indigo-600 dark:text-indigo-400 hover:underline" title={`${c.action} — 눌러서 후보 카드(실험·결정)`}
+                                onClick={() => setCandId(c.id)} data-testid={`question-cand-${c.id}`}>{c.title} ›</button>
+                            </td>
                             <td className="px-3 py-2 text-slate-400">{c.technique_name}</td>
                             <td className="px-3 py-2 whitespace-nowrap">
                               {last ? <>
@@ -287,6 +329,34 @@ export function QuestionDetailModal({ runId, qids, start, onClose, listTitle }: 
           </div>
         )}
       </div>
+      {candId != null && <CandidateModal id={candId} onClose={() => setCandId(null)} />}
+    </Modal>
+  );
+}
+
+/** 문항 상세 위에 뜨는 후보 카드 — 두 축의 최근 진단에서 찾는다(평가 게이트 ②·①과 같은 카드). 옛 진단 후보면 안내만 */
+function CandidateModal({ id, onClose }: { id: number; onClose: () => void }) {
+  const isAdmin = useAuthStore((st) => st.user?.role === 'admin');
+  const axes: GateAxis[] = ['policy', 'knowledge'];
+  const q = useQuery({
+    queryKey: ['eval-improvement', 'by-candidate', id],
+    queryFn: async () => {   // 두 축을 함께 — 한쪽이 실패해도 다른 쪽에 있으면 보인다(재리뷰 L4). 둘 다 실패면 오류
+      const got = await Promise.allSettled(axes.map((axis) => getLatestImprovement(undefined, axis)));
+      for (const [k, r] of got.entries()) {
+        const c = r.status === 'fulfilled' ? r.value?.candidates.find((x) => x.id === id) : undefined;
+        if (c && r.status === 'fulfilled' && r.value) return { imp: r.value, c, axis: axes[k] };
+      }
+      if (got.every((r) => r.status === 'rejected')) throw (got[0] as PromiseRejectedResult).reason;
+      return null;
+    },
+  });
+  const hit = q.data;
+  if (hit) return <CandidateView isOpen onClose={onClose} c={hit.c} improvementId={hit.imp.run.id} isAdmin={isAdmin} axis={hit.axis} zClass="z-[55]" />;
+  return (
+    <Modal isOpen onClose={onClose} title={`후보 #${id}`} maxWidth="max-w-3xl" zClass="z-[55]">
+      {q.isLoading ? <p className="text-sm text-slate-400">불러오는 중…</p>
+        : q.error ? <p className="text-sm text-rose-600 dark:text-rose-400">후보를 불러오지 못했어요: {(q.error as Error).message}</p>
+          : <p className="text-sm text-slate-400">예전 진단의 후보예요 — 평가 게이트의 최근 진단에서 같은 이름의 후보를 보세요</p>}
     </Modal>
   );
 }

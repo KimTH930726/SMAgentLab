@@ -1,90 +1,133 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { BarChart3, FileText, History } from 'lucide-react';
-import { ReportTab } from './GateReport';
+import { getBaselineRun, getGateReport, getLatestImprovement, type GateAxis } from '../../api/eval';
+import { useAuthStore } from '../../store/useAuthStore';
+import { lockedAccuracy } from '../../utils/evalLayers';
+import { Modal } from '../ui/Modal';
 import { GateFlow, type Stage } from './GateFlow';
 import { GateHistory } from './GateHistory';
-import { GateScores } from './GateScores';
-import type { GateAxis } from '../../api/eval';
+import { ImproveAreas, InProgress, isOpen } from './GateReport';
+import { AnswerTab, RetrievalTab } from './GateRuns';
 
 /**
- * 품질 › 평가 게이트 — 자가 개선 루프의 측정 쪽(10/27 밤 재구성, docs/domains/quality/self-improvement-loop-design.md).
- * 두 축(10/28, 사용자 "위 단계를 누르면 계속 리포트로 돌아가고 아래 탭이랑 관계가 안 맞는다"):
- *   위 = 어느 단계(GateFlow: 적재 → 검색 → 근거 판정 → 답 모양 → 생성) — 고르면 아래 모든 탭이 그 단계로 걸러지는 공통 필터, 탭은 그대로.
- *   아래 = 무엇을 볼까 — [틀린 문항] [성적] [적용 이력].
- * 옛 [검색]·[답] 탭은 [성적] 하나로(같은 "검색"이 단계 이름과 탭 이름 두 뜻이던 것). 옛 품질 › RAG 파이프라인은 단계 흐름 + 적용 이력으로 흡수.
- * 옛 [검색 미리보기] 탭은 내림(10/28) — "AI가 본 근거"(Evidence.tsx)로 이름을 바꿔 정정 요청 신고 카드·지식 상세에 붙였다(쓸 일이 생기는 자리).
- * 맨 위 축(10/29, 운영 질의 감시 설계 §3-5): [정책서 | 업무지식] — 판정 기록·기준선이 축마다 따로(#96). 단계 흐름·틀린 문항·적용 이력은
- * 정책서 문항으로 진단한 자가 개선 루프라 정책서 축에만, 지식 축은 [성적]만(진단은 운영 질의 감시 다음 단계).
+ * 품질 › 평가 게이트 — 한 템플릿(10/29 사용자 "정책이든 업무지식이든 유형은 구분값으로만", "전체 정확도를 메인으로 보고 개선점 → 도출할 수 있는 것").
+ * 축 [정책서 | 업무지식]은 데이터만 바꾼다 — 화면은 같다(업계: 데이터셋 선택기 + 같은 실험 화면, LangSmith·Braintrust).
+ * 맨 위 = 큰 숫자 카드(전체 정답률 · 검색 · 사람이 쓴 질문(잠근 골든셋이 있는 축만) · 결정할 후보) + [자세히](옛 [성적] 탭 내용).
+ * 단계 줄(적재 → … → 생성, 틀린 문항 수) → ① 개선할 곳(원인별, 그 안에 후보·문항) → ② 진행 중인 개선(사람이 정할 후보) → ③ 적용 이력(최근 5줄).
+ * 옛 구성(10/28: 단계 필터 + [틀린 문항][성적][적용 이력] 탭, 업무지식은 [성적]만)은 같은 숫자가 세 곳에 다른 기준으로 나와 없앴다(독립 UX 검수 10/29).
  */
-type GateMode = 'report' | 'scores' | 'history';
 
 const AXES: { axis: GateAxis; label: string; hint: string }[] = [
   { axis: 'policy', label: '정책서', hint: '정책서 골든셋 — 팀원 문항·실사용 문항 포함' },
   { axis: 'knowledge', label: '업무지식', hint: '업무지식 골든셋(컨플루언스 등) — 조각마다 로컬 LLM이 만든 질문' },
 ];
 
-/** 지식 축은 [성적]만 — 그 탭 설명(정책서 문구를 글자 바꾸기로 돌려쓰지 않는다, 리뷰 L6) */
-const KNOWLEDGE_SCORES_HINT = '지금 점수 — 검색 성적(정답 업무지식을 AI에게 넘겼나) · 답 성적(실제 채팅 경로로 답하고 업무지식 원문과 대조해 채점)';
+const pct = (x: number | null | undefined) => (x == null ? '-' : `${(x * 100).toFixed(1)}%`);
 
-const TABS: { mode: GateMode; label: string; icon: typeof FileText; hint: string; staged: boolean }[] = [
-  { mode: 'report', label: '틀린 문항', icon: FileText, staged: true, hint: '틀린 문항마다 질문 · AI 답 · 왜 틀렸나 · 정답 데이터 저장 모양 · 고칠 기법과 실제 효과 — 사람이 보고 승인' },
-  { mode: 'scores', label: '성적', icon: BarChart3, staged: true, hint: '지금 점수 — 검색 성적(정답 정책을 AI에게 넘겼나) · 답 성적(실제 채팅 경로로 답하고 정책 원문과 대조해 채점)' },
-  { mode: 'history', label: '적용 이력', icon: History, staged: true, hint: '무엇을 언제 어떤 측정으로 바꿨나 · 결과(운영 반영·안 함·나중에) — 줄을 누르면 그 항목 설명' },
-];
+function Card({ label, value, sub, hint, cta, onClick, tone, testid }: {
+  label: string; value: string; sub?: string; hint?: string; cta?: string; onClick?: () => void; tone?: 'warn'; testid: string;
+}) {
+  return (
+    <div className={clsx('rounded-xl border bg-slate-800 p-4 space-y-1 min-w-0', tone === 'warn' ? 'border-amber-400 dark:border-amber-500/60' : 'border-slate-700')}
+      data-testid={testid}>
+      <p className="text-xs text-slate-400" title={hint}>{label}{hint ? ' ⓘ' : ''}</p>
+      <p className={clsx('text-3xl font-semibold tabular-nums', tone === 'warn' ? 'text-amber-600 dark:text-amber-300' : 'text-slate-100')}>{value}</p>
+      {sub && <p className="text-xs text-slate-500 tabular-nums">{sub}</p>}
+      {onClick && cta && <button className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline" onClick={onClick}>{cta}</button>}
+    </div>
+  );
+}
+
+function AxisGate({ axis }: { axis: GateAxis }) {
+  const isAdmin = useAuthStore((st) => st.user?.role === 'admin');
+  const base = useQuery({ queryKey: ['eval-gate-baseline', axis], queryFn: () => getBaselineRun(axis), staleTime: 30_000 });
+  const rep = useQuery({ queryKey: ['eval-report', axis], queryFn: () => getGateReport(axis), enabled: isAdmin, staleTime: 30_000 });
+  const imp = useQuery({ queryKey: ['eval-improvement', axis, rep.data?.improvement_id ?? null],
+    queryFn: () => getLatestImprovement(rep.data?.improvement_id, axis), enabled: !isAdmin || !rep.isLoading });
+  const [stage, setStage] = useState<Stage | null>(null);
+  const [detail, setDetail] = useState<null | 'answers' | 'retrieval'>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  const a = base.data?.summary.answers;
+  const r = base.data?.summary.retrieval;
+  const lk = lockedAccuracy(a?.by_type);
+  const openN = (imp.data?.candidates ?? []).filter(isOpen).length;
+  const failedN = a?.failures?.length ?? 0;
+  // 내려간 곳을 잠깐 테두리로 강조 — 스크롤만 하면 어디를 가리킨 건지 안 보였다(10/30 사용자)
+  const toProgress = () => {
+    const el = document.getElementById('gate-in-progress');
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.dataset.flash = '1';
+    window.setTimeout(() => { delete el.dataset.flash; }, 1800);
+  };
+
+  return (
+    <div className="space-y-5" data-testid={`gate-axis-${axis}`}>
+      {base.error ? <p className="text-sm text-rose-600 dark:text-rose-400">지금 점수를 불러오지 못했습니다: {(base.error as Error).message}</p>
+        : base.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p>
+          : !base.data ? <p className="text-sm text-slate-500" title="통과한 측정을 eval_gate.py --save로 기록하거나 [운영에 반영했어요]를 누르면 그 측정이 지금 점수가 됩니다">지금 점수 없음 — 측정 전 ⓘ</p>
+            : (
+              <div className={clsx('grid grid-cols-1 sm:grid-cols-2 gap-3', lk ? 'xl:grid-cols-4' : 'xl:grid-cols-3')} data-testid="gate-summary">
+                <Card testid="card-total" label="전체 정답률" value={pct(a?.accuracy)}
+                  sub={a ? `[${pct(a.lo)} – ${pct(a.hi)}] · ${a.n}문항${failedN ? ` · 답 못 냄 ${failedN}(뺌)` : ''}` : '답 측정 없음'}
+                  hint={`지금 점수(기준선 #${base.data.id} "${base.data.label}") — 실제 채팅 경로로 답하고 원문과 대조해 채점. 대괄호 = 95% 신뢰구간. 답을 못 낸 문항(게이트웨이 거부 등)은 정답률에서 빼고 따로 셈`}
+                  cta="자세히 →" onClick={a ? () => setDetail('answers') : undefined} />
+                <Card testid="card-retrieval" label="검색 성적" value={pct(r?.recall)} sub={r ? `정답을 AI에게 넘김 ${r.hit}/${r.n}` : '검색 측정 없음'}
+                  hint="정답 데이터를 AI에게 주는 근거 안에 넣었나(Recall)" cta="자세히 →" onClick={r ? () => setDetail('retrieval') : undefined} />
+                {lk && (
+                  <Card testid="card-locked" label="사람이 쓴 질문" value={pct(lk.accuracy)} sub={`${lk.n}문항 · 목표 숫자`}
+                    hint="잠근 골든셋 — 팀원이 쓴 질문·실사용 질문. 고칠 때(진단)는 안 보고 잴 때만 봐서 '골든셋에만 강해지는' 착시를 막는다"
+                    cta="자세히 →" onClick={() => setDetail('answers')} />
+                )}
+                <Card testid="card-open" label="결정할 후보" value={imp.data ? String(openN) : '-'} tone={openN > 0 ? 'warn' : undefined}
+                  sub={imp.data ? '실험 · 반영을 사람이 정함' : '진단 전'} hint="② 진행 중인 개선 — 결정 전(AI가 해 볼 만·재 봐야 앎) + 실험 중"
+                  cta={openN > 0 ? '보기 ↓' : undefined} onClick={openN > 0 ? toProgress : undefined} />
+              </div>
+            )}
+
+      {!isAdmin ? <p className="text-sm text-slate-500">개선할 곳·후보는 관리자만 볼 수 있어요(질문·답 원문이 들어 있음).</p>
+        : rep.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p>
+          : rep.error ? <p className="text-sm text-rose-600 dark:text-rose-400">{(rep.error as Error).message}</p>
+            : (
+              <>
+                <GateFlow report={rep.data} stage={stage} onStage={setStage} axis={axis} />
+                {rep.data ? <ImproveAreas rep={rep.data} imp={imp.data} axis={axis} stage={stage} isAdmin={isAdmin} />
+                  : <section className="space-y-1" data-testid="gate-report"><h3 className="text-sm font-semibold text-slate-100">① 개선할 곳</h3>
+                      <p className="text-sm text-slate-500" data-testid="gate-no-diagnosis">진단 전 — scripts/eval_improve.py --axis {axis} --save로 만든 뒤 여기 보여요</p></section>}
+                <InProgress imp={imp.data} axis={axis} isAdmin={isAdmin} />
+              </>
+            )}
+
+      <section className="space-y-2" data-testid="gate-history-section">
+        <button className="text-sm font-semibold text-slate-100" onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>
+          {historyOpen ? '▾' : '▸'} ③ 적용 이력</button>
+        {historyOpen && <GateHistory recent={5} />}
+      </section>
+
+      <Modal isOpen={detail !== null} onClose={() => setDetail(null)} title={detail === 'retrieval' ? '검색 성적' : '답 성적'} maxWidth="max-w-5xl">
+        <div data-testid="gate-scores" data-which={detail ?? ''}>
+          {detail === 'retrieval' ? <RetrievalTab axis={axis} /> : detail === 'answers' ? <AnswerTab axis={axis} /> : null}
+        </div>
+      </Modal>
+    </div>
+  );
+}
 
 export function EvaluationGate() {
   const [axis, setAxis] = useState<GateAxis>('policy');
-  const tabs = axis === 'policy' ? TABS : TABS.filter((t) => t.mode === 'scores');
-  const [policyMode, setMode] = useState<GateMode>('report');
-  const mode: GateMode = axis === 'policy' ? policyMode : 'scores';
-  const [stage, setStage] = useState<Stage | null>(null);   // 탭을 바꿔도 유지 — 단계를 눌러도 탭은 그대로
-  const cur = tabs.find((t) => t.mode === mode);
-
   return (
     <div className="space-y-4">
       <div className="inline-flex rounded-lg border border-slate-700 p-0.5" role="group" aria-label="평가 축">
-        {AXES.map((a) => (
-          <button key={a.axis} onClick={() => setAxis(a.axis)} aria-pressed={axis === a.axis} title={a.hint} data-testid={`axis-${a.axis}`}
-            className={clsx('rounded-md px-4 py-1.5 text-sm font-medium', axis === a.axis ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700')}>
-            {a.label}
+        {AXES.map((x) => (
+          <button key={x.axis} onClick={() => setAxis(x.axis)} aria-pressed={axis === x.axis} title={x.hint} data-testid={`axis-${x.axis}`}
+            className={clsx('rounded-md px-4 py-1.5 text-sm font-medium', axis === x.axis ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700')}>
+            {x.label}
           </button>
         ))}
       </div>
-      {axis === 'policy' && <GateFlow stage={stage} onStage={setStage} />}
-      <div className="border-b border-slate-700">
-        <div className="flex gap-1">
-          {tabs.map(({ mode: m, label, icon: Icon }) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={clsx(
-                'flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
-                mode === m
-                  ? 'text-indigo-400 border-indigo-500'
-                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600',
-              )}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <p className="text-xs text-slate-500 leading-relaxed -mt-2">
-        {axis === 'knowledge' ? KNOWLEDGE_SCORES_HINT : cur?.hint}
-        {axis === 'knowledge' && <span title="틀린 문항 진단·개선 후보·적용 이력은 정책서 축만 — 지식은 운영 질의 감시(실사용 질의) 다음 단계에서"> · 진단·개선은 정책서만 ⓘ</span>}
-      </p>
-
-      {axis === 'policy' && stage && cur?.staged && (
-        <p className="text-xs text-indigo-600 dark:text-indigo-300" data-testid="stage-filter">
-          {stage} 단계만 보는 중 · <button onClick={() => setStage(null)} className="underline">전체 단계</button>
-        </p>
-      )}
-      {mode === 'report' && <ReportTab key={stage ?? 'all'} stage={stage} />}
-      {mode === 'scores' && <GateScores key={axis} stage={axis === 'policy' ? stage : null} axis={axis} />}
-      {mode === 'history' && <GateHistory stage={stage} />}
+      <AxisGate key={axis} axis={axis} />
     </div>
   );
 }

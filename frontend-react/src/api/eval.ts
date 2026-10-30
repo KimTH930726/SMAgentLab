@@ -136,8 +136,8 @@ export interface Improvement {
   candidates: Candidate[];
 }
 
-export async function getLatestImprovement(runId?: number): Promise<Improvement | null> {
-  return apiFetch<Improvement | null>(`/eval/improvements/latest${runId != null ? `?run_id=${runId}` : ''}`);
+export async function getLatestImprovement(runId?: number, axis: GateAxis = 'policy'): Promise<Improvement | null> {
+  return apiFetch<Improvement | null>(`/eval/improvements/latest?axis=${axis}${runId != null ? `&run_id=${runId}` : ''}`);
 }
 
 export async function reviewCandidate(id: number, status: Exclude<CandidateStatus, 'adopted'>, reason = ''): Promise<{ id: number; status: string }> {
@@ -153,6 +153,9 @@ export interface Technique {
   key: string; name: string; stage: string; does: string; where: string | null;
   values: { label: string; value: string; setting: string | null }[];
   evidence: { date: string; note: string; gate_run_id: number | null }[];
+  /** 설명 화면용(있는 것만) — 가장 짧은 예시 한 장면(가상 문장) + 규칙 3줄(기준값은 지금 값으로 채워 옴) */
+  example?: { where: string; lines: [string, string][]; chips: string[] } | null;
+  rules?: string[];
   candidates: { id: number; title: string; status: CandidateStatus; recommend: Candidate['recommend']; n_target: number }[];
 }
 
@@ -205,6 +208,7 @@ export interface ReportRow {
 }
 
 export interface GateReport {
+  axis?: GateAxis;
   gate_run_id: number; gate_label: string; improvement_id: number; diagnosed_at: string;
   score: { total: number | null; locked: number | null; locked_n: number; retrieval: number | null; n: number };
   failed: ReportRow[]; techniques: ReportTechnique[];
@@ -212,8 +216,9 @@ export interface GateReport {
   diagnosed_gate_run_id: number; files_missing: string[];
 }
 
-export async function getGateReport(): Promise<GateReport | null> {
-  return apiFetch<GateReport | null>('/eval/report');
+/** 축(정책서·업무지식)마다 같은 모양 — 평가 게이트 한 템플릿(10/29) */
+export async function getGateReport(axis: GateAxis = 'policy'): Promise<GateReport | null> {
+  return apiFetch<GateReport | null>(`/eval/report?axis=${axis}`);
 }
 
 /** 실사용 문항을 시험지에서 빼기·다시 넣기(관리자) — 다음 측정부터 반영. 정정 승인 때 자동으로 들어간다(10/26) */

@@ -85,8 +85,9 @@ async def decision_log(*, days: int, kind: Optional[str], changed_only: bool, li
         names = {r["id"]: r["name"] for r in await conn.fetch("SELECT id, name FROM ops_namespace WHERE id = ANY($1::int[])", ids)} if ids else {}
         # 이 번복으로 만든 개선 후보(가장 최근 진단) — 후보 대상 = 번복한 판정 D-<id>(service/eval/override.candidates)
         cand_of: dict[int, dict] = {}
+        from service.eval.improve import LATEST_KNOWLEDGE_RUN_SQL   # 번복 후보는 업무지식 축 진단에서(10/29) — 정책서 진단 뒤에도 그대로
         for c in await conn.fetch("SELECT id, title, status, qids FROM eval_candidate WHERE cause = 'override_location' "
-                                  "AND run_id = (SELECT max(id) FROM eval_improvement_run)"):
+                                  "AND run_id = " + LATEST_KNOWLEDGE_RUN_SQL):
             for q in _j(c["qids"]) or []:
                 if isinstance(q, str) and q.startswith("D-") and q[2:].isdigit():
                     cand_of[int(q[2:])] = {"id": c["id"], "title": c["title"], "status": c["status"]}

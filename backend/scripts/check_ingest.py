@@ -27,17 +27,6 @@ from trustkit.eval.gate import per_question  # noqa: E402
 GOLDEN_DIR = Path("/app/eval_out/golden_v0/reviewed")
 NUM = re.compile(r"\d")
 
-# 결정으로 안 하기로 했거나 꺼 둔 항목(10/29) — 어긋남으로 세지 않고 "꺼 둠(결정)"으로 보인다. 안 그러면 평가 게이트 적재 칸·개선 후보가
-# 이미 내린 결정을 문제로 계속 띄운다(파라미터 981/981 · 참고표 30/30). 결정이 바뀌면(설정을 켜면) 다시 검사로 센다
-def decided_off(key: str) -> str | None:
-    from core.config import settings
-    if key == "policy_param_derived":
-        return "안 함 — 10/26 실험 #18·#19에서 사람 문항 효과 없음(±0 · −5.0%p)"
-    if key == "usage_ref_table" and not settings.policy_ref_chat:
-        return "꺼 둠 — 10/27 측정 참고표 73.3→80.0%지만 답 없음 −2 부작용(설정 policy_ref_chat)"
-    if key == "usage_overview" and not settings.policy_ref_overview:
-        return "꺼 둠 — 10/27 사용자 '개요는 별 필요 없을 것'(설정 policy_ref_overview)"
-    return None
 
 
 # (키, 저장소, 이름, 설계 근거, SQL — 어긋난 행의 (id, source_key 또는 NULL)과 전체 수를 돌려줌)
@@ -214,12 +203,16 @@ async def main() -> int:
             for g in _rows(f):
                 if g.get("verdict") == "approved":
                     gold_keys[g["qid"]] = {x.get("source_key") for x in g.get("gold", [])}
+        from core.config import settings
+        from service.eval.improve import LATEST_INGEST_DECISIONS_SQL, decided_off, feature_on
+        async with get_conn() as conn:   # 꺼 둔 결정 = 개선 후보의 사람 결정(기각·보류) — 코드에 적지 않는다(10/29 사용자 "하드코딩이니?")
+            decisions = {r["key"]: dict(r) for r in await conn.fetch(LATEST_INGEST_DECISIONS_SQL)}
         print(f"적재 검수 — 정답률은 판정 #{run['id'] if run else '-'} 기준 · 검사 {len(results)}개(적재 {len(CHECKS)} + 쓰임)")
         for r in results:
             if "error" in r:
                 print(f"  [건너뜀] {r['store']} · {r['name']} — {r['error']}")
                 continue
-            dec = decided_off(r["key"])
+            dec = decided_off(r["key"], decisions, feature_on=feature_on(r["key"], settings))
             if dec and r["bad"]:
                 r["decided"] = dec   # 저장에도 남겨 개선 후보·화면이 어긋남으로 세지 않게
             ok = "통과" if r["bad"] == 0 else ("꺼 둠(결정)" if dec else "어긋남")

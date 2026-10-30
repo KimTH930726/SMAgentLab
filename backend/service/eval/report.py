@@ -116,8 +116,14 @@ def _locked_effect(answers: Optional[dict], locked: Optional[tuple] = None) -> O
     return {"n": n, "before": before, "after": after, "down": any(x["diff"] < 0 for x in xs)}
 
 
-async def build_report() -> Optional[dict]:
-    """지금 점수(기준 판정) + 그 판정을 진단한 가장 최근 기록 → 틀린 문항 목록·기법 요약. 진단이 없으면 None."""
+def uses_policy_storage(axis: str) -> bool:
+    """저장 꼬리표·측정 안 됨(쓰임 검사)은 정책서 골든셋·정책 저장소 기준 — 업무지식 축엔 붙이지 않는다(골든셋이 달라 "정답 데이터 없음"으로 잘못 찍힘)."""
+    return axis == "policy"
+
+
+async def build_report(axis: str = "policy") -> Optional[dict]:
+    """지금 점수(그 축 기준 판정) + 그 판정을 진단한 가장 최근 기록 → 틀린 문항 목록·기법 요약. 진단이 없으면 None.
+    축(정책서·업무지식)마다 같은 모양 — 화면 한 템플릿(10/29 사용자 "유형은 구분값으로만")."""
     from service.eval import files
     from service.eval.service import _row
     from service.eval.techniques import BY_KEY
@@ -125,14 +131,15 @@ async def build_report() -> Optional[dict]:
     from trustkit.eval.gate import per_question
 
     async with get_conn() as conn:
-        base = await conn.fetchrow("SELECT * FROM eval_gate_run WHERE is_baseline AND axis = 'policy'")   # 진단·개선 후보는 정책서 축만(#96)
+        base = await conn.fetchrow("SELECT * FROM eval_gate_run WHERE is_baseline AND axis = $1", axis)   # 축마다 기준선(#96)
         if not base:
             return None
         base = _row(base)
         imp = await conn.fetchrow("SELECT id, created_at, diagnosis, gate_run_id FROM eval_improvement_run WHERE gate_run_id = $1 "
                                   "ORDER BY created_at DESC, id DESC LIMIT 1", base["id"])
-        imp = await conn.fetchrow("SELECT id, created_at, diagnosis, gate_run_id FROM eval_improvement_run ORDER BY created_at DESC, id DESC LIMIT 1") \
-            if not imp else imp
+        imp = await conn.fetchrow("SELECT i.id, i.created_at, i.diagnosis, i.gate_run_id FROM eval_improvement_run i "
+                                  "JOIN eval_gate_run g ON g.id = i.gate_run_id WHERE g.axis = $1 "
+                                  "ORDER BY i.created_at DESC, i.id DESC LIMIT 1", axis) if not imp else imp   # 다른 축 진단을 섞지 않는다
         if not imp:
             return None
         cands = [dict(r) for r in await conn.fetch(
@@ -172,7 +179,7 @@ async def build_report() -> Optional[dict]:
 
     unused = set()
     unmeasured = []   # 정답 데이터를 채팅이 못 써서 측정에서도 빠진 문항(쓰임 검사) — 틀린 문항 목록에 안 잡히니 따로 보인다
-    for r in (_j(ing) or []):
+    for r in (_j(ing) or []) if uses_policy_storage(axis) else []:
         if r.get("key", "").startswith("usage_"):
             unused |= set(r.get("qids") or [])
             if r.get("bad"):
@@ -203,7 +210,7 @@ async def build_report() -> Optional[dict]:
         g = golden.get(q) or {}
         mapped, gic = storage_inputs(ans_rows.get(q), (retr_rows.get(q) or [None])[0])
         items, tags = storage_tags(first.get("question") or g.get("query") or "", g.get("gold") or [], pol, refs,
-                                   mapped=mapped, gold_in_context=gic, unused_qid=q in unused)
+                                   mapped=mapped, gold_in_context=gic, unused_qid=q in unused) if uses_policy_storage(axis) else ([], [])
         locked = meta[q][0] in LOCKED_TYPES
         rows.append({"qid": q, "type": meta[q][0], "locked": locked, "question": first.get("question") or "",
                      "labels": [((r.get("judge") or {}).get("label")) for r in rs],
@@ -220,7 +227,7 @@ async def build_report() -> Optional[dict]:
     bt = s.get("by_type") or {}
     lk = [bt[t] for t in LOCKED_TYPES if bt.get(t)]
     ln = sum(x["n"] for x in lk)
-    return {"gate_run_id": base["id"], "gate_label": base["label"], "improvement_id": imp["id"], "diagnosed_at": imp["created_at"],
+    return {"axis": axis, "gate_run_id": base["id"], "gate_label": base["label"], "improvement_id": imp["id"], "diagnosed_at": imp["created_at"],
             "score": {"total": s.get("accuracy"), "locked": (sum(x["accuracy"] * x["n"] for x in lk) / ln) if ln else None, "locked_n": ln,
                       "retrieval": ((base.get("summary") or {}).get("retrieval") or {}).get("recall"), "n": len(acc)},
             "failed": rows, "techniques": techniques, "unmeasured": unmeasured,

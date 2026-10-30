@@ -93,9 +93,10 @@ class HypothesisBody(BaseModel):
 
 
 @router.get("/improvements/latest")
-async def get_latest_improvement(run_id: Optional[int] = None, user: dict = Depends(get_current_user)):
+async def get_latest_improvement(run_id: Optional[int] = None, axis: str = Query(default="policy", pattern=AXIS_PATTERN),
+                                 user: dict = Depends(get_current_user)):
     """최근 진단(원인별 qid·가설) + 개선 후보 — run_id를 주면 그 진단(틀린 문항 리포트). 만들기는 scripts/eval_improve.py --save."""
-    return await service.latest_improvement(run_id)
+    return await service.latest_improvement(run_id, axis)
 
 
 @router.post("/candidates/{cand_id}/review")
@@ -126,9 +127,9 @@ async def list_techniques(user: dict = Depends(get_current_user)):
     from service.eval.techniques import as_rows
     rows = as_rows()
     # 지금 진단에서 이 기법을 가리키는 개선 후보 — "효과가 있었나·지금 무엇이 걸려 있나"(사용자 10/26)
-    latest = await service.latest_improvement()
     by_tech: dict[str, list[dict]] = {}
-    for c in (latest or {}).get("candidates", []):
+    latest = [await service.latest_improvement(axis=ax) for ax in ("policy", "knowledge")]   # 축마다 가장 최근 진단(10/29 업무지식도 루프)
+    for c in [c for x in latest for c in (x or {}).get("candidates", [])]:
         by_tech.setdefault(c["technique"], []).append({"id": c["id"], "title": c["title"], "status": c["status"],
                                                        "recommend": c["recommend"], "n_target": c["n_target"]})
     return [{**r, "candidates": by_tech.get(r["key"], [])} for r in rows]
@@ -152,12 +153,13 @@ async def get_overrides(days: int = Query(default=30, ge=1, le=365), admin: dict
     """운영 번복 요약(관리자, AI 감사 로그 위 요약) — 종류별 판단·번복·번복률·이유·패턴, 형식적 승인 의심, 위치 판정 리플레이. 원문 없음."""
     from core.database import get_conn
     from service.eval import override as override_mod
+    from service.eval.improve import LATEST_KNOWLEDGE_RUN_SQL
     async with get_conn() as conn:
         rep = await override_mod.report(conn, days)
     async with get_conn() as conn:   # 번복으로 만든 개선 후보(가장 최근 진단) — 감사 로그 "번복으로 만든 후보 n →"
         cands = [dict(r) for r in await conn.fetch(
             "SELECT c.id, c.title, c.status, c.qids FROM eval_candidate c WHERE c.cause = 'override_location' "
-            "AND c.run_id = (SELECT max(id) FROM eval_improvement_run) ORDER BY c.id")]
+            "AND c.run_id = " + LATEST_KNOWLEDGE_RUN_SQL + " ORDER BY c.id")]   # 업무지식 축 진단에서 만든다(10/29)
     for c in cands:
         c["qids"] = json.loads(c["qids"]) if isinstance(c["qids"], str) else (c["qids"] or [])
     rep["candidates"] = cands
@@ -230,13 +232,13 @@ async def get_latest_ingest_check(user: dict = Depends(get_current_user)):
 
 
 @router.get("/report")
-async def get_report(admin: dict = Depends(get_current_admin)):
+async def get_report(axis: str = Query(default="policy", pattern=AXIS_PATTERN), admin: dict = Depends(get_current_admin)):
     """틀린 문항 리포트(관리자) — 지금 점수 · 틀린 문항(질문·왜·저장 구조·적용해 볼 기법) · 기법별 실제 효과(잠근 시험지).
     질문 글은 결과 파일에서 읽기만(정책 내용이 담겨 관리자만)."""
     from service.eval.files import ResultFileError
     from service.eval.report import build_report
     try:
-        return await build_report()
+        return await build_report(axis)
     except ResultFileError as e:   # 같은 이름 결과 파일이 여러 곳 등 — 500 대신 이유(리뷰 L1)
         raise HTTPException(status_code=409, detail=str(e))
 

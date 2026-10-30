@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   adoptCandidate, getBaselineRun, listGateRuns, markHypothesis, reviewCandidate,
-  type Candidate, type CandidateStatus, type Hypothesis,
+  type Candidate, type CandidateStatus, type GateAxis, type Hypothesis,
 } from '../../api/eval';
 import { showError } from '../../store/useDialogStore';
 import { FormModal } from '../ui/FormModal';
+import { Modal } from '../ui/Modal';
 import { QidList } from './GateRuns';
 import { lockedMove } from '../../utils/evalLayers';
 
@@ -24,16 +25,16 @@ const RECOMMEND: Record<Candidate['recommend'], { label: string; cls: string; hi
   review: { label: 'AI 추천: 재 봐야 앎', cls: 'text-slate-400', hint: '측정해 봐야 아는 후보 — 실험할지 사람이 정함' },
 };
 
-const MEASURE: Record<Candidate['measure'], { label: string; next: string }> = {
-  replay: { label: '이미 계산함(LLM 없음)', next: '설정을 바꾼 뒤 검색·답을 다시 재서 판정 기록에 --candidate로 연결' },
-  retrieval: { label: '검색만 다시 재면 됨(몇 분)', next: 'eval_golden_v0.py --details … → eval_gate.py --save "…" --candidate <번호>' },
-  answers: { label: '답을 다시 재야 함(로컬 LLM ~1시간)', next: 'eval_answers.py collect … → judge → eval_gate.py --save "…" --candidate <번호>' },
+const MEASURE: Record<Candidate['measure'], { label: string; pass: string; next: string }> = {
+  replay: { label: '이미 계산함(LLM 없음)', pass: '고침 > 0 · 망가짐 0이면 해 볼 만함', next: '설정을 바꾼 뒤 검색·답을 다시 재서 판정 기록에 --candidate로 연결' },
+  retrieval: { label: '검색만 다시 재기(몇 분)', pass: '검색 나빠짐 0이면 통과', next: 'eval_golden_v0.py --details … → eval_gate.py --save "…" --candidate <번호>' },
+  answers: { label: '답을 다시 재기(로컬 LLM ~1시간)', pass: '답이 의미 있게 떨어지지 않으면 통과', next: 'eval_answers.py collect … → judge → eval_gate.py --save "…" --candidate <번호>' },
 };
 
 const STEPS = ['제안', '실험', '측정', '운영 반영'] as const;
 
 // 카드 머리 배지 — 지금 결정 상태(10/27 가독성 목업 ①: 제목 옆에 한눈에)
-const STATUS_BADGE: Record<CandidateStatus, { label: string; cls: string }> = {
+export const STATUS_BADGE: Record<CandidateStatus, { label: string; cls: string }> = {
   proposed: { label: '결정 전', cls: 'bg-slate-700 text-slate-300' },
   approved: { label: '실험 중', cls: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300' },
   held: { label: '나중에', cls: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300' },
@@ -161,8 +162,10 @@ function ReplayTable({ c }: { c: Candidate }) {
   );
 }
 
-export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = false }: {
+export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = false, axis = 'policy', hideTitle = false }: {
   c: Candidate; improvementId: number; isAdmin: boolean; onPick?: (qids: string[], i: number) => void;
+  hideTitle?: boolean;  // 모달 제목에 이미 후보 이름이 있을 때
+  axis?: GateAxis;     // 후보를 진단한 축 — 운영 반영도 그 축 측정·기준선만(서버도 막음, 10/29 업무지식도 같은 루프)
   hideQids?: boolean;   // 리포트는 옆에 겨냥 문항을 페이지로 따로 보여 준다(10/27)
 }) {
   const qc = useQueryClient();
@@ -175,6 +178,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
     qc.invalidateQueries({ queryKey: ['eval-techniques'] });   // 답 기법 화면의 "걸린 후보" 상태도(10/26 리뷰 L5)
     qc.invalidateQueries({ queryKey: ['eval-report'] });       // 틀린 문항 리포트의 기법 상태·지금 점수(반영하면 기준선이 옮겨짐)
     qc.invalidateQueries({ queryKey: ['eval-gate-baseline'] });
+    qc.invalidateQueries({ queryKey: ['eval-question'] });     // 문항 상세의 고칠 방법 상태 칩(재리뷰 10/30 L2)
   };
   const review = useMutation({
     mutationFn: ({ status, why }: { status: Action; why?: string }) => reviewCandidate(c.id, status, why),
@@ -187,9 +191,8 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
     onError: (e) => setErr((e as Error).message),
   });
   // 운영 반영에 연결할 측정 — 실험 시작(승인) 뒤에 잰 통과 판정만(서버 adopt_error와 같은 조건)
-  // 개선 후보는 정책서 문항으로 진단한 것 — 운영 반영도 정책서 축 측정·기준선만(#96, 서버도 막음)
-  const runs = useQuery({ queryKey: ['eval-gate-runs', 'policy'], queryFn: () => listGateRuns(50, 'policy'), enabled: modal === 'adopt' });
-  const base = useQuery({ queryKey: ['eval-gate-baseline', 'policy'], queryFn: () => getBaselineRun('policy'), enabled: modal === 'adopt' });
+  const runs = useQuery({ queryKey: ['eval-gate-runs', axis], queryFn: () => listGateRuns(50, axis), enabled: modal === 'adopt' });
+  const base = useQuery({ queryKey: ['eval-gate-baseline', axis], queryFn: () => getBaselineRun(axis), enabled: modal === 'adopt' });
   // 서버 adopt_error와 같은 조건 — 이 후보를 잰 측정 · 통과 · 실험 시작 뒤 · 지금 점수보다 예전 아님 · 잠근 시험지에서 내려가지 않음
   // (반영하면 그 측정이 지금 점수가 된다 — 남의 측정·옛 측정으로 되돌아가지 않게, v2.172 리뷰 M3)
   const measured = new Set(c.measurements.map((m) => m.id));
@@ -204,30 +207,25 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 space-y-3" data-testid={`candidate-${c.key}`}>
-      <div className="space-y-0.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm font-semibold text-slate-100 min-w-0">{c.title}</p>
-          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${STATUS_BADGE[c.status].cls}`} data-testid="cand-status">{STATUS_BADGE[c.status].label}</span>
-        </div>
-        <p className="text-xs text-slate-500" title="평가 게이트 › 적용 이력 › 항목 전체의 항목">{c.technique_name}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${STATUS_BADGE[c.status].cls}`} data-testid="cand-status">{STATUS_BADGE[c.status].label}</span>
+        {!hideTitle && <p className="text-sm font-semibold text-slate-100 min-w-0">{c.title}</p>}
+        <span className="text-xs text-slate-500" title="평가 게이트 › 적용 이력의 항목">{c.technique_name}</span>
       </div>
-      <Stepper c={c} />
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-        <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 min-w-0">
-          <p className="text-[11px] text-slate-500">AI 추천</p>
-          <p className={`font-medium ${rec.cls}`} title={rec.hint}>{rec.label.replace('AI 추천: ', '')}</p>
-          {c.why && <p className="text-slate-400 break-words">{c.why}</p>}
-        </div>
-        <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 min-w-0">
-          <p className="text-[11px] text-slate-500">바꿀 것</p>
-          <p className="text-slate-200 break-words">{c.action}</p>
-        </div>
-        <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 min-w-0">
-          <p className="text-[11px] text-slate-500">재는 법</p>
-          <p className="text-slate-200">{m.label}</p>
-        </div>
-      </div>
-      {!hideQids && <QidList title="고치려는 문항" qids={c.qids} hint="이 후보가 겨냥한 틀린 문항 — 눌러서 질문·답·이유 보기" onPick={onPick} />}
+      {/* 항목 줄 — 무엇을 바꿔(맨 위·크게) · 왜 · 어떻게 재고 · AI는 어떻게 보나(10/30 사용자: 같은 크기 세 칸은 무엇을 실험하라는지 안 들어옴) */}
+      <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-4 gap-y-2.5 border-y border-slate-700 py-3" data-testid="cand-rows">
+        <dt className="text-xs text-slate-500 pt-0.5">무엇을 바꾸나</dt>
+        <dd className="text-base font-semibold text-slate-100 break-words">{c.action}</dd>
+        <dt className="text-xs text-slate-500 pt-0.5">왜</dt>
+        <dd className="text-sm text-slate-200 break-words">
+          틀린 {c.n_target}문항{c.why ? <> — {c.why}</> : null}
+          {!hideQids && <div className="mt-1"><QidList title="문항 보기" qids={c.qids} hint="이 후보가 겨냥한 틀린 문항 — 눌러서 질문·답·이유 보기" onPick={onPick} /></div>}
+        </dd>
+        <dt className="text-xs text-slate-500 pt-0.5">어떻게 재나</dt>
+        <dd className="text-sm text-slate-200">{m.label} <span className="text-slate-400">→ {m.pass}</span></dd>
+        <dt className="text-xs text-slate-500 pt-0.5">AI 추천</dt>
+        <dd className="text-sm"><span className={`font-medium ${rec.cls}`}>{rec.label.replace('AI 추천: ', '')}</span> <span className="text-xs text-slate-500">{rec.hint}</span></dd>
+      </dl>
       <Hypotheses c={c} improvementId={improvementId} isAdmin={isAdmin} onPick={onPick} />
       <ReplayTable c={c} />
       {c.status === 'approved' && (
@@ -241,8 +239,9 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
         </div>
       )}
 
+      <Stepper c={c} />
       {isAdmin && c.status !== 'adopted' && (
-        <div className="flex flex-wrap gap-4 pt-2 border-t border-slate-700">
+        <div className="flex flex-wrap gap-4">
           {(c.status === 'proposed' || c.status === 'held') && (
             <button className={`${btn} text-indigo-600 dark:text-indigo-400 font-medium`} disabled={review.isPending}
               title="이 후보를 측정해 볼 대상으로 올립니다 — 운영은 아직 안 바뀝니다. 다음에 돌릴 명령이 보여요"
@@ -268,7 +267,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
         </div>
       )}
 
-      <FormModal
+      <FormModal zClass="z-[60]"
         isOpen={modal === 'rejected' || modal === 'held'}
         title={modal === 'rejected' ? '안 하기' : '나중에'}
         onClose={() => setModal(null)}
@@ -286,7 +285,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y" />
       </FormModal>
 
-      <FormModal
+      <FormModal zClass="z-[60]"
         isOpen={modal === 'adopt'}
         title="운영에 반영했어요 — 통과한 측정 연결"
         onClose={() => setModal(null)}
@@ -312,5 +311,18 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
         )}
       </FormModal>
     </div>
+  );
+}
+
+/** 후보 모달 — 후보를 여는 곳(② 진행 중인 개선 · ① 원인 안 개선 · 문항 상세 고칠 방법)이 모두 이 한 모양(10/30 사용자: 모달·포맷 통일).
+ * 제목 = 후보 이름, 본문 = 후보 카드(항목 줄 → 단계 → 결정). zClass는 연 자리 모달보다 한 칸 위로 */
+export function CandidateModal({ isOpen, onClose, c, improvementId, axis, isAdmin, onPick, zClass = 'z-40' }: {
+  isOpen: boolean; onClose: () => void; c: Candidate; improvementId: number; axis: GateAxis; isAdmin: boolean;
+  onPick?: (qids: string[], i: number) => void; zClass?: string;
+}) {
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={c.title} maxWidth="max-w-3xl" zClass={zClass}>
+      <CandidateCard c={c} improvementId={improvementId} isAdmin={isAdmin} axis={axis} onPick={onPick} hideTitle />
+    </Modal>
   );
 }

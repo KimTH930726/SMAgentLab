@@ -97,14 +97,15 @@ def _cand(r) -> dict:
     return d
 
 
-async def latest_improvement(run_id: Optional[int] = None) -> Optional[dict]:
+async def latest_improvement(run_id: Optional[int] = None, axis: str = "policy") -> Optional[dict]:
     """가장 최근 진단(run_id를 주면 그 진단 — 틀린 문항 리포트가 고른 진단과 같은 후보를 보이게) + 그 후보(흐름 순서 = 저장 순서). 없으면 None."""
     async with get_conn() as conn:
         run = await conn.fetchrow(
             """SELECT i.id, i.created_at, i.created_by, i.gate_run_id, i.diagnosis, i.hypotheses, i.model, g.label AS gate_label,
                       g.is_baseline AS gate_is_baseline
-               FROM eval_improvement_run i JOIN eval_gate_run g ON g.id = i.gate_run_id WHERE $1::int IS NULL OR i.id = $1
-               ORDER BY i.created_at DESC, i.id DESC LIMIT 1""", run_id)
+               FROM eval_improvement_run i JOIN eval_gate_run g ON g.id = i.gate_run_id
+               WHERE ($1::int IS NULL OR i.id = $1) AND ($1::int IS NOT NULL OR g.axis = $2)
+               ORDER BY i.created_at DESC, i.id DESC LIMIT 1""", run_id, axis)
         if not run:
             return None
         cands = await conn.fetch(
@@ -161,10 +162,12 @@ async def adopt_candidate(cand_id: int, *, gate_run_id: int, user_id: int) -> Op
             if not c:
                 return None
             g = await conn.fetchrow("SELECT id, verdict, kind, run_at, answers, axis FROM eval_gate_run WHERE id = $1", gate_run_id)
-            if g and g["axis"] != "policy":   # 개선 후보는 정책서 문항으로 진단한 것 — 다른 축 측정으로 채택하면 정책서 기준선 대신 지식 기준선이 옮겨진다
-                raise ValueError("개선 후보는 정책서 측정으로만 운영에 반영합니다(이 판정은 지식 축).")
+            from service.eval.improve import CANDIDATE_AXIS_SQL
+            cand_axis = await conn.fetchval(CANDIDATE_AXIS_SQL, cand_id)
+            if g and g["axis"] != cand_axis:   # 후보를 진단한 축의 측정으로만 — 다른 축 측정으로 채택하면 엉뚱한 축 기준선이 옮겨진다
+                raise ValueError("이 후보를 진단한 축의 측정으로만 운영에 반영합니다(정책서 ↔ 업무지식).")
             gd = {**dict(g), "answers": _j(g["answers"])} if g else None
-            base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = 'policy' AND id <> $1", gate_run_id)
+            base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = $2 AND id <> $1", gate_run_id, cand_axis)
             err = adopt_error(c["status"], gd, c["reviewed_at"], measured_ids=c["measured_gate_run_ids"] or [], baseline_run_at=base_at)
             if err:
                 raise ValueError(err)
@@ -206,7 +209,8 @@ async def decisions_report(days: int) -> dict:
         suggest_on = str(await conn.fetchval("SELECT value FROM ops_system_config WHERE key = 'chat.collection_suggest'") or "").lower() == "true"
         cands = await conn.fetch(
             """SELECT recommend, status, carried_from_id IS NOT NULL AS carried,
-                      c.run_id = (SELECT id FROM eval_improvement_run ORDER BY created_at DESC, id DESC LIMIT 1) AS latest, COUNT(*) AS n
+                      c.run_id IN (SELECT DISTINCT ON (g.axis) i2.id FROM eval_improvement_run i2 JOIN eval_gate_run g ON g.id = i2.gate_run_id
+                                   ORDER BY g.axis, i2.created_at DESC, i2.id DESC) AS latest, COUNT(*) AS n
                FROM eval_candidate c JOIN eval_improvement_run i ON i.id = c.run_id
                WHERE i.created_at > NOW() - make_interval(days => $1) GROUP BY 1, 2, 3, 4""", days)
     kinds = {k: {kk: vv for kk, vv in v.items() if kk != "directions"} for k, v in rep.items()}
@@ -357,9 +361,11 @@ async def question_detail(run_id: int, qid: str) -> Optional[dict]:
         out["candidates"].append({"id": c["id"], "title": c["title"], "status": c["status"], "action": c["action"], "measure": c["measure"],
                                   "technique_name": BY_KEY.get(c["technique"], {}).get("name", c["technique"]), "measurements": ms})
     # ④ 저장 구조 — 정답 데이터가 어떤 모양으로 저장돼 있나(리포트와 같은 규칙, service/eval/report.py)
-    from service.eval.report import storage_for, storage_inputs
+    from service.eval.report import storage_for, storage_inputs, uses_policy_storage
     mapped, gic = storage_inputs(after, retr)   # 리포트와 같은 값으로(리뷰 L3)
-    out["storage"] = await storage_for(qid, mapped=mapped, gold_in_context=gic, question=out["question"])
+    # 업무지식 축엔 정책서 골든셋 기준 꼬리표를 붙이지 않는다 — 목록(리포트)과 같은 규칙(10/29 재리뷰: 상세에만 "정답 데이터 없음")
+    out["storage"] = (await storage_for(qid, mapped=mapped, gold_in_context=gic, question=out["question"])
+                      if uses_policy_storage(run.get("axis") or "policy") else None)
     return out
 
 

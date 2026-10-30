@@ -5,7 +5,7 @@ import { psql } from './v0-fixture';
 
 // 이 테스트가 존재하는 이유(10/27 밤 자가 개선 루프 재구성, docs/domains/quality/self-improvement-loop-design.md):
 // ① AI 감사 로그는 기록만 — "AI가 틀렸나요?"를 묻지 않고, 번복(사람이 AI 추천을 바꿈)과 그 순간 고른 이유를 보여 준다(사용자 10/27).
-// ② 옛 품질 › RAG 파이프라인 메뉴는 평가 게이트로 흡수 — 단계 흐름 요약(누르면 리포트가 그 단계로) + [적용 이력](이력·항목 전체).
+// ② 옛 품질 › RAG 파이프라인 메뉴는 평가 게이트로 흡수 — 단계 줄(누르면 ① 개선할 곳이 그 단계로) + ③ 적용 이력(이력·항목 전체).
 // ③ 즉석 질의 → 검색 미리보기 — 채팅과 같은 검색(API와 화면이 같은 판정), [시험지에 추가]가 실사용 층 한 줄로 DB에 남는다.
 // 실 dev 스택 그대로. 테스트가 넣은 원장 줄·시험지 줄은 끝에 지운다.
 
@@ -38,9 +38,13 @@ test('AI 감사 로그 — 기록만: 번복과 이유가 보이고, 묻는 버�
 
   // 종류 ⓘ = 지금 기준 창(대장의 되묻기 항목 이름)
   const t = await adminToken();
-  const techs: { key: string; name: string }[] = await (await apiFetch(`${API}/api/eval/techniques`, { headers: { Authorization: `Bearer ${t}` } })).json();
+  const techs: { key: string; name: string; rules?: string[] }[] = await (await apiFetch(`${API}/api/eval/techniques`, { headers: { Authorization: `Bearer ${t}` } })).json();
   await page.getByTestId('decision-detail-clarify').click();
-  await expect(page.getByRole('dialog').getByTestId('decision-criteria')).toContainText(techs.find((x) => x.key === 'clarify')!.name);
+  const crit = page.getByRole('dialog').getByTestId('decision-criteria');
+  await expect(crit).toContainText(techs.find((x) => x.key === 'clarify')!.name);
+  // 예시 한 장면 + 규칙 3줄(10/30) — 규칙은 서버가 지금 기준값으로 채운 문장 그대로
+  await expect(crit.getByTestId('criteria-example').first()).toBeVisible();
+  for (const r of techs.find((x) => x.key === 'clarify')!.rules!) await expect(crit).toContainText(r);
   await page.keyboard.press('Escape');
 
   const log = page.getByTestId('audit-log');
@@ -57,7 +61,7 @@ test('AI 감사 로그 — 기록만: 번복과 이유가 보이고, 묻는 버�
   await expect(log.getByTestId(`log-${kept}`)).not.toContainText('· 번복');
 });
 
-test('평가 게이트 — 단계 = 공통 필터(탭 유지·이력·항목·성적이 그 단계로), 적용 이력 줄 수 = API, 항목 전체 = 대장(옛 RAG 파이프라인 흡수)', async ({ page }) => {
+test('평가 게이트 — 단계 줄 = 원인 수(누르면 그 단계 원인만), 적용 이력 최근 5줄·전체 = API, 항목 전체 = 대장(옛 RAG 파이프라인 흡수)', async ({ page }) => {
   test.setTimeout(90_000);
   const t = await adminToken();
   const h = { headers: { Authorization: `Bearer ${t}` } };
@@ -70,39 +74,37 @@ test('평가 게이트 — 단계 = 공통 필터(탭 유지·이력·항목·�
   await goAdmin(page, '품질', '평가 게이트');
 
   for (const s of ['적재', '검색', '근거 판정', '답 모양', '생성']) await expect(page.getByTestId(`flow-${s}`)).toBeVisible();
-  // 적재 칸 = 적재 검수 후보가 걸린 틀린 문항 수(다른 칸과 같은 단위) — 누르면 [틀린 문항] 목록 수와 같다(10/28)
-  const rep: { failed: { techniques: { id: number }[] }[]; techniques: { id: number; cause: string }[] } | null =
+  // 적재 칸 = 적재 검사 후보가 걸린 틀린 문항 수(다른 칸과 겹칠 수 있어 "겹침") — 누르면 ① 개선할 곳의 적재 검사 줄과 같은 수(10/29)
+  const rep: { failed: { cause: string | null; techniques: { id: number }[] }[]; techniques: { id: number; cause: string }[] } | null =
     await (await apiFetch(`${API}/api/eval/report`, h)).json();
   if (rep) {
     const ing = new Set(rep.techniques.filter((x) => x.cause === 'ingest').map((x) => x.id));
     const n = rep.failed.filter((r) => r.techniques.some((x) => ing.has(x.id))).length;
-    await expect(page.getByTestId('flow-적재')).toContainText(`틀림 ${n}`);
+    await expect(page.getByTestId('flow-적재')).toContainText(new RegExp(`적재\\s*${n}`));
     await page.getByTestId('flow-적재').click();
-    await expect(page.getByTestId('report-list-title')).toHaveText(new RegExp(`^틀린 문항 전체 ${n}(\D|$)`));
+    await expect(page.getByTestId('stage-filter')).toContainText('적재 단계만');
+    if (ing.size) await expect(page.getByTestId('report-cause-ingest').locator('> button')).toContainText(String(n));
     await page.getByTestId('flow-적재').click();   // 다시 누르면 전체
+    const nRetr = rep.failed.filter((r) => r.cause === 'retrieval_miss').length;   // 검색 칸 = 검색 실패 원인 문항 수
+    await expect(page.getByTestId('flow-검색')).toContainText(new RegExp(`검색\\s*${nRetr}`));
   }
-  // 단계 = 공통 필터(10/28) — 고른 단계가 탭을 바꿔도 유지되고, 단계를 눌러도 보던 탭에 머문다
   await page.getByTestId('flow-검색').click();
   await expect(page.getByTestId('flow-검색')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('stage-filter')).toContainText('검색 단계');
-  await page.getByRole('button', { name: '적용 이력' }).click();
-  await expect(page.getByTestId('gate-history')).toBeVisible();
-  const nHist = history.filter((x) => x.stage === '검색').length;
-  expect(nHist).toBeGreaterThan(0);   // 0건이면 거르기를 못 본다(대장 근거에 검색 단계 기록이 늘 있음)
-  await expect(page.getByTestId('history-row')).toHaveCount(nHist);
-  await page.getByRole('button', { name: /^항목 전체/ }).click();
-  await expect(page.locator('[data-testid^="technique-row-"]')).toHaveCount(techs.filter((x) => x.stage === '검색').length);
-  await page.getByRole('button', { name: '성적', exact: true }).click();
-  await expect(page.getByTestId('gate-scores')).toHaveAttribute('data-which', 'retrieval');   // 검색 단계 = 검색 성적(측정 데이터와 무관한 표지)
-  await page.getByTestId('flow-생성').click();
-  await expect(page.getByTestId('gate-scores')).toHaveAttribute('data-which', 'answers');   // 단계를 눌러도 성적 탭 그대로, 생성 = 답 성적
-  await page.getByTestId('stage-filter').getByRole('button', { name: '전체 단계' }).click();
+  await expect(page.getByTestId('stage-filter')).toContainText('검색 단계만');
+  await expect(page.locator('[data-testid="report-cause-wrong_with_context"]')).toHaveCount(0);   // 다른 단계 원인은 숨김
+  await page.getByTestId('flow-검색').click();
   await expect(page.getByTestId('stage-filter')).toHaveCount(0);
 
-  await page.getByRole('button', { name: '적용 이력' }).click();
-  await expect(page.getByTestId('history-row')).toHaveCount(history.length);
+  // ③ 적용 이력 — 접혀 있고, 펼치면 최근 5줄 + [전체 n줄 보기] = API 줄 수, 항목 전체 = 대장(단계 밖으로 빠진 항목 0)
+  await page.getByTestId('gate-history-section').getByRole('button', { name: /적용 이력/ }).click();
+  await expect(page.getByTestId('gate-history')).toBeVisible();
+  await expect(page.getByTestId('history-row')).toHaveCount(Math.min(5, history.length));
+  if (history.length > 5) {
+    await page.getByTestId('history-more').click();
+    await expect(page.getByTestId('history-row')).toHaveCount(history.length);
+  }
   await page.getByRole('button', { name: /^항목 전체/ }).click();
-  await expect(page.locator('[data-testid^="technique-row-"]')).toHaveCount(techs.length);   // 단계 밖으로 빠진 항목 0
+  await expect(page.locator('[data-testid^="technique-row-"]')).toHaveCount(techs.length);
   await page.locator('[data-testid^="technique-row-"]').first().click();
   await expect(page.getByRole('dialog')).toContainText('하는 일');
 });

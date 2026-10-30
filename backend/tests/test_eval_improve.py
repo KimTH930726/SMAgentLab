@@ -40,6 +40,23 @@ def test_registry_points_at_real_code():
     assert [r["key"] for r in rows] == keys and all(isinstance(r["evidence"], list) for r in rows)
 
 
+def test_explain_rules_fill_every_value_name():
+    """설명 규칙의 {기준값 이름}은 전부 그 기법의 기준값이어야 한다 — 이름을 바꾸면 화면에 "{…}"가 그대로 보였을 것(10/30).
+    AI 감사 로그 [기준] 모달에 나오는 판단은 예시·규칙 3줄을 갖는다."""
+    import re
+    for t in techniques.TECHNIQUES:
+        for r in t.get("rules", []):
+            for name in re.findall(r"\{([^}]+)\}", r):
+                assert name in t["values"], (t["key"], name)
+    rows = {r["key"]: r for r in techniques.as_rows()}
+    for key in ("knowledge_location", "clarify", "ref_clarify", "source_check", "collection_suggest", "improve_recommend"):
+        r = rows[key]
+        assert r["example"] and r["example"]["lines"] and len(r["rules"]) == 3, key
+        assert not any("{" in x for x in r["rules"]), key
+    clar = next(t for t in techniques.TECHNIQUES if t["key"] == "clarify")   # 지금 기준값으로 채움(설정이 가짜여도 같은 값을 쓰는지)
+    assert f"정책 {techniques.current_values(clar)['묻는 기준(정책 수 초과)']}개" in rows["clarify"]["rules"][0]
+
+
 def _diag(seed):
     rng = random.Random(seed)
     causes = {k: [f"{k}-{i}" for i in range(rng.randint(0, 6))] for k in CAUSE_KEYS}
@@ -198,6 +215,21 @@ def test_ingest_candidates_drop_locked_questions():
 
 
 
+def test_decided_off_comes_from_human_decision_not_code():
+    """꺼 둠은 사람 결정(기각·보류)에서만 — 결정 없음·제안·시도 승인·채택은 꺼 둠이 아니고, 기능을 켜면 옛 결정이 있어도 다시 센다(10/29)."""
+    dec = {"ingest_policy_param_derived": {"status": "rejected", "review_reason": "실험 #18·#19 효과 없음"},
+           "ingest_usage_overview": {"status": "held", "review_reason": None},
+           "ingest_usage_ref_table": {"status": "rejected", "review_reason": "부작용"},
+           "ingest_knowledge_dup": {"status": "proposed", "review_reason": None}}
+    assert improve.decided_off("policy_param_derived", dec) == "안 함 — 실험 #18·#19 효과 없음"
+    assert improve.decided_off("usage_overview", dec) is None   # 보류(나중에)는 꺼 두지 않음 — 후보로 남아 이어받는다
+    assert improve.decided_off("usage_ref_table", dec, feature_on=True) is None
+    assert improve.decided_off("knowledge_dup", dec) is None
+    assert improve.decided_off("policy_unique", dec) is None
+    for st in ("approved", "adopted", "proposed", "held"):
+        assert improve.decided_off("x", {"ingest_x": {"status": st, "review_reason": "r"}}) is None
+
+
 def test_ingest_candidates_skip_decided_off_checks():
     """결정으로 안 하기로 했거나 꺼 둔 검사(10/29 — 파라미터 파생 · 참고표 채팅)는 어긋난 수가 있어도 후보로 다시 띄우지 않는다."""
     results = [{"key": "policy_param_derived", "store": "정책", "name": "파라미터", "ref": "r", "bad": 981, "total": 981,
@@ -205,3 +237,37 @@ def test_ingest_candidates_skip_decided_off_checks():
                {"key": "knowledge_dup", "store": "지식", "name": "중복", "ref": "r", "bad": 10, "total": 102}]
     keys = [c["key"] for c in improve.ingest_candidates(results)]
     assert keys == ["ingest_knowledge_dup"]
+
+
+def test_ingest_candidates_split_by_axis():
+    """적재 검사 후보는 축마다 자기 데이터만 — 지식 조각 검사 = 업무지식, 정책·참고표·개요 = 정책서. 축을 안 주면 전부(옛 호출). 합 = 전부(유실·중복 0)."""
+    results = [{"key": k, "store": "s", "name": k, "ref": "r", "bad": 1, "total": 2}
+               for k in ("knowledge_dup", "usage_ref_table", "policy_unique", "knowledge_heading")]
+    pol = {c["key"] for c in improve.ingest_candidates(results, axis="policy")}
+    kno = {c["key"] for c in improve.ingest_candidates(results, axis="knowledge")}
+    every = {c["key"] for c in improve.ingest_candidates(results)}
+    assert kno == {"ingest_knowledge_dup", "ingest_knowledge_heading"}
+    assert pol == {"ingest_usage_ref_table", "ingest_policy_unique"}
+    assert pol | kno == every and not pol & kno
+
+
+def test_knowledge_axis_retrieval_miss_one_candidate_without_mapping_split():
+    """업무지식 검색 측정엔 용어 매핑 칸이 없다 — 정책서식 갈래(용어·동의어 / 키워드 구제)를 만들지 않고 한 후보로. 문항은 그대로 다 덮는다."""
+    d = {"causes": {"retrieval_miss": ["K1", "K2", "K3"]}}
+    c = improve.build_candidates(d, types={}, mapped={}, axis="knowledge")
+    assert [x["key"] for x in c] == ["knowledge_retrieval"]
+    assert c[0]["qids"] == ["K1", "K2", "K3"]
+    pol = improve.build_candidates(d, types={}, mapped={})
+    assert "knowledge_retrieval" not in {x["key"] for x in pol}
+
+
+def test_carry_not_allowed_when_feature_turned_on():
+    """기능을 켠 적재 검사 후보는 옛 결정을 이어받지 않는다 — 켠 뒤 새로 어긋난 것을 사람에게 다시 묻는다(리뷰 10/29 M1). 다른 후보는 그대로 이어받음."""
+    class S:
+        policy_ref_chat = True
+        policy_ref_overview = False
+    assert improve.carry_allowed("ingest_usage_ref_table", S) is False
+    assert improve.carry_allowed("ingest_usage_overview", S) is True
+    assert improve.carry_allowed("ingest_policy_param_derived", S) is True
+    assert improve.carry_allowed("synonyms", S) is True
+    assert improve.feature_on("usage_ref_table", S) and not improve.feature_on("usage_overview", S)

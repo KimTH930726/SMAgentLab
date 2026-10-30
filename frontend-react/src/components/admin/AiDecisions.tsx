@@ -31,28 +31,61 @@ const CRITERIA: Record<CardKey, string[]> = {
   suggest: ['collection_suggest'], candidates: ['improve_recommend'],
 };
 
+/** 판단 기준 — 가장 짧은 예시 한 장면 + "이렇게 판단해요" 규칙 3줄 + 근거 한 줄(10/30 사용자: 줄글·값 칩은 안 읽힘) */
 function Criteria({ items }: { items: Technique[] }) {
   if (!items.length) return null;
   return (
-    <section className="rounded-lg border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/50 dark:bg-indigo-500/5 p-3 space-y-2" data-testid="decision-criteria">
-      <h4 className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">지금 기준</h4>
-      {items.map((t) => (
-        <div key={t.key} className="space-y-1">
-          <p className="text-sm text-slate-100">{t.name}</p>
-          <p className="text-xs text-slate-300 leading-relaxed">{t.does}</p>
-          {t.values.length > 0 && (
-            <p className="flex flex-wrap gap-1.5">
-              {t.values.map((v) => (
-                <span key={v.label} className="rounded px-1.5 py-0.5 text-xs bg-slate-800 border border-slate-600 text-slate-200"
-                  title={v.setting ? `설정 ${v.setting}` : '코드에 정한 값'}>{v.label} <b>{v.value}</b></span>
-              ))}
-            </p>
-          )}
-          {t.evidence.length > 0 && <p className="text-xs text-slate-500">근거: {t.evidence[t.evidence.length - 1].date} · {t.evidence[t.evidence.length - 1].note}</p>}
+    <section className="space-y-4" data-testid="decision-criteria">
+      {items.map((t) => {
+        const last = t.evidence[t.evidence.length - 1];
+        return (
+          <div key={t.key} className="rounded-lg border border-slate-700 bg-slate-800/60 p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <h4 className="text-sm font-semibold text-slate-100">{t.name}</h4>
+              <span className="rounded bg-slate-700/60 px-1.5 py-0.5 text-[11px] text-slate-400">{t.stage}</span>
+            </div>
+            {t.example && <Example ex={t.example} />}
+            {t.rules?.length ? (
+              <div>
+                <p className="text-[11px] text-slate-500 mb-1">이렇게 판단해요</p>
+                <ol className="space-y-1">
+                  {t.rules.map((r, i) => (
+                    <li key={i} className="flex gap-2 text-sm text-slate-200">
+                      <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300 text-[11px] flex items-center justify-center">{i + 1}</span>
+                      <span className="leading-relaxed">{r}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            ) : <p className="text-sm text-slate-300 leading-relaxed">{t.does}</p>}
+            {last && <p className="text-xs text-slate-500" title={t.evidence.map((e) => `${e.date} ${e.note}`).join(' / ')}>근거 {last.date} · {last.note}</p>}
+          </div>
+        );
+      })}
+      <p className="text-xs text-slate-500">값을 바꾸려면 평가 게이트 › 개선할 곳에서 실험·측정 후 — 전체 목록은 평가 게이트 › 적용 이력</p>
+    </section>
+  );
+}
+
+/** 예시 한 장면 — 가상 문장(실제 정책 문구 아님). 첫 줄이 사람(사용자·새 지식·후보), 나머지는 시스템 쪽 */
+function Example({ ex }: { ex: NonNullable<Technique['example']> }) {
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-3 space-y-2" data-testid="criteria-example">
+      <p className="text-[11px] text-slate-500">예시 — {ex.where}</p>
+      {ex.lines.map(([who, text], i) => (
+        <div key={i} className={clsx('flex', i === 0 && ex.where === '채팅' ? 'justify-end' : 'justify-start')}>
+          <div className={clsx('max-w-[85%] rounded-xl px-3 py-1.5 text-sm',
+            i === 0 ? 'bg-indigo-600 text-white' : 'bg-slate-700/70 text-slate-100')}>
+            <span className={clsx('block text-[10px]', i === 0 ? 'text-indigo-200' : 'text-slate-400')}>{who}</span>{text}
+          </div>
         </div>
       ))}
-      <p className="text-xs text-slate-500">값을 바꾸려면 평가 게이트 리포트의 고칠 방법에서 실험·측정 후 — 전체 목록은 평가 게이트 › 적용 이력</p>
-    </section>
+      {ex.chips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pl-1">
+          {ex.chips.map((c) => <span key={c} className="rounded-full border border-indigo-300 dark:border-indigo-500/50 px-2.5 py-0.5 text-xs text-indigo-700 dark:text-indigo-300">{c}</span>)}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -43,12 +43,22 @@ TECHNIQUES: list[dict] = [
      "evidence": [("2026-10-23", "합성: 하한 0.45 거짓 제안 0/106 · 맞게 92%"),
                   ("2026-10-26", "실사용 174문항: 0.45면 맞음 8·틀림 2 → 0.48로 올려 맞음 8·틀림 0(합성 84%)"),
                   ("2026-10-27", "부하 300명 가정(동시 60): 다른 검색 지연 늘지 않음, 제안 최대 5초 → 2초 상한")],
-     "where": "service/chat/collection_suggest.py:find"},
+     "where": "service/chat/collection_suggest.py:find",
+     "example": {"where": "채팅", "lines": [["사용자", "배송 지연되면 보상 기준이 뭐야?"], ["답", "(답 본문) … 다른 컬렉션에 더 맞는 지식이 있어요"]],
+                 "chips": ["배송 컬렉션에서 보기"]},
+     "rules": ["답한 뒤 다른 업무 컬렉션에서 같은 질문으로 한 번 더 찾는다",
+               "점수 {하한} 이상인 지식이 있으면 버튼으로만 제안 — 답에는 안 섞는다",
+               "2초 넘게 걸리면 제안을 건너뛴다"]},
     {"key": "knowledge_location", "name": "지식 등록 위치 판정", "stage": "적재",
      "does": "새 지식이 어느 컬렉션인지 — LLM \"바꿔 넣기 시험\" + 가장 가까운 지식 5건의 컬렉션 다수결, 둘이 맞으면 확신(자동 후보), 아니면 사람에게 물음",
      "values": {"이웃": (None, "5건 중 4건")},
      "evidence": [("2026-10-22", "실측 73건: AI만 자동 71 중 틀림 15 / AI 일치 + 이웃 5중 4 → 자동 51 중 틀림 0")],
-     "where": "agents/knowledge_rag/ingestion/locator.py:def decide"},
+     "where": "agents/knowledge_rag/ingestion/locator.py:def decide",
+     "example": {"where": "지식 등록", "lines": [["새 지식", "주문 취소 후 환불 처리 절차"], ["AI", "넣을 곳: 주문 컬렉션 — 확신(AI·이웃 일치)"]],
+                 "chips": ["이대로", "다른 곳…"]},
+     "rules": ["AI가 글을 읽고 고른 곳과, 가장 비슷한 기존 지식 5건이 많이 있는 곳을 비교한다",
+               "둘이 같고 이웃 {이웃}이 그곳이면 확신 — 자동으로 후보에 둔다",
+               "다르면 사람에게 묻는다(사람이 바꾸면 번복으로 기록)"]},
     {"key": "abstain_prefilter", "name": "근거 없음 즉시 거절", "stage": "근거 판정",
      "does": "지식·코드·분류 목록이 없고 정책 점수가 하한 미만이면 LLM을 부르지 않고 \"관련 지식을 찾지 못했습니다\"",
      "values": {"서술 하한": ("POLICY_ABSTAIN_MIN_SCORE", "꺼짐"), "파라미터 하한": ("POLICY_ABSTAIN_MIN_PARAM_RANK", "0.0")},
@@ -63,23 +73,43 @@ TECHNIQUES: list[dict] = [
      "does": "목록이 크면 \"어느 부분을 볼까요?\" — 선택지 최대 3 + 전부 보기(\"전부·모든\"이면 묻지 않음)",
      "values": {"묻는 기준(정책 수 초과)": ("CATEGORY_CLARIFY_MAX_ITEMS", "20"), "하위 분류 덮는 비율": (None, "0.8"), "선택지": (None, "3")},
      "evidence": [("2026-10-12", "v2.134 도입"), ("2026-10-23", "v2.167 \"목록\"은 \"전부\"가 아님 — 441문항 문맥·검색 차이 0")],
-     "where": "service/policy/category_list.py:clarify_for"},
+     "where": "service/policy/category_list.py:clarify_for",
+     "example": {"where": "채팅", "lines": [["사용자", "쿠폰 정책 알려줘"], ["답", "어느 부분을 볼까요?"]],
+                 "chips": ["발급 조건", "사용 제한", "환불", "전부 보기"]},
+     "rules": ["목록이 정책 {묻는 기준(정책 수 초과)}개를 넘으면 되묻는다",
+               "선택지는 최대 {선택지}개 + [전부 보기]",
+               "질문에 \"전부·모든\"이 있으면 묻지 않고 다 보여 준다"]},
     {"key": "ref_clarify", "name": "참고표 되묻기", "stage": "답 모양",
      "does": "붙은 참고표의 결과를 정하는 조건(결정 열) 값이 질문에 하나도 없으면 그 열을 되묻는다 — 선택지 = 그 열 값, 고르면 \"질문 (열: 값)\"으로 다시. 표가 정책 서술보다 강할 때만, 목록 답이면 안 물음",
      "values": {"선택지 수": (None, "2~6개(넘으면 안 묻고 표로 답)"), "묻는 조건": (None, "표 점수 ≥ 정책 서술 최고점")},
      "evidence": [("2026-10-26", "붙이는 규칙 측정: 되묻기 여유 0 → 참고표 15/30 · 정책 질문에 엉뚱하게 1/455"),
                   ("2026-10-27", "Claude 채점: 결정 조건 빠진 질문 되묻기 73~83%")],
-     "where": "service/policy/ref_search.py:def clarify_for_table"},
+     "where": "service/policy/ref_search.py:def clarify_for_table",
+     "example": {"where": "채팅", "lines": [["사용자", "적립률이 얼마야?"], ["답", "어느 등급 기준으로 볼까요?"]],
+                 "chips": ["일반", "골드", "VIP"]},
+     "rules": ["참고표의 답을 정하는 조건(결정 열) 값이 질문에 없으면 그 열을 되묻는다",
+               "선택지 = 그 열의 값 {선택지 수}",
+               "표가 정책 서술보다 질문에 더 맞을 때만 — 목록 답이면 안 묻는다"]},
     {"key": "source_check", "name": "원문 확인 검사", "stage": "적재",
      "does": "정책서 원문 자체의 문제(정책끼리 어긋남·참고표 오류·담당자 질문)를 적재 점검·골든셋 작성 때 짚어 원문 확인 카드로 — 사람이 해결 또는 [문제 없음](사유)",
      "values": {"짚는 곳": (None, "적재 점검 · 골든셋 작성"), "문제 없음 사유": (None, "원문이 맞음 · 이미 고쳐짐 · 중복 · 기타")},
      "evidence": [("2026-10-21", "v0 적재 점검 담당자 질문 4 · 골든셋 작성 어긋남 쌍"), ("2026-10-26", "C3 1단계 — 결론을 AI 판단 원장에(오탐률)")],
-     "where": "service/policy/source_check.py:def decide_check"},
+     "where": "service/policy/source_check.py:def decide_check",
+     "example": {"where": "정책서 원문 확인", "lines": [["AI", "정책 A와 정책 B의 적립 한도가 서로 달라요"]],
+                 "chips": ["해결", "문제 없음…"]},
+     "rules": ["적재 점검·골든셋 작성 때 정책서 원문 자체의 문제를 짚는다",
+               "정책끼리 어긋남 · 참고표 오류 · 담당자에게 물을 것",
+               "사람이 [해결] 또는 [문제 없음](사유: {문제 없음 사유})"]},
     {"key": "improve_recommend", "name": "개선 후보 AI 추천", "stage": "생성",
      "does": "틀린 문항의 원인마다 고칠 후보를 만들고, LLM 없이 다시 계산(리플레이)해 고치는 문항이 있고 망가지는 문항이 0이면 \"해 볼 만함\", 고침 0·망가짐 있으면 \"안 하는 게 좋음\", 재 봐야 알면 \"재 봐야 앎\"",
      "values": {"해 볼 만함": (None, "고침 > 0 · 망가짐 0"), "안 하는 게 좋음": (None, "고침 0 또는 망가짐 > 0")},
      "evidence": [("2026-10-23", "근거 없음 하한: 어느 하한도 망가짐 없이 고치는 문항 0 → 안 하는 게 좋음(사람도 기각)")],
-     "where": "service/eval/improve.py:def abstain_replay"},
+     "where": "service/eval/improve.py:def abstain_replay",
+     "example": {"where": "평가 게이트", "lines": [["후보", "근거 없음 하한 0.5로 올리기"], ["AI 추천", "안 하는 게 좋음 — 고침 0 · 망가짐 3"]],
+                 "chips": ["실험해 보기", "안 하기…"]},
+     "rules": ["후보마다 LLM 없이 다시 계산(리플레이)해 고치는 문항과 망가지는 문항을 센다",
+               "고침 있고 망가짐 0이면 \"해 볼 만함\", 고침 0이거나 망가짐 있으면 \"안 하는 게 좋음\"",
+               "다시 계산으로 모르면 \"재 봐야 앎\" — 정하는 건 사람"]},
     {"key": "list_context_filter", "name": "목록 답 문맥 거르기", "stage": "답 모양",
      "does": "목록 답이면 목록 안 정책 + 그보다 순위 높은 정책만 남긴다(엉뚱한 정책 섞임 방지)",
      "values": {}, "evidence": [("2026-10-13", "v2.138 — 탐색형만 의미 있게 좋아짐")],
@@ -146,9 +176,23 @@ def current_values(t: dict) -> dict[str, str]:
     return out
 
 
+def rules_of(t: dict, values: dict[str, str]) -> list[str]:
+    """규칙 문장의 {기준값 이름}을 지금 값으로 — 값을 바꾸면 설명도 같이 바뀐다(문장에 숫자를 따로 적어 두면 어긋남)."""
+    out = []
+    for r in t.get("rules", []):
+        for k, v in values.items():
+            r = r.replace("{" + k + "}", v)
+        out.append(r)
+    return out
+
+
 def as_rows() -> list[dict]:
-    """화면용 — 근거는 [{date, note}], 기준값은 운영값으로."""
-    return [{**{k: t[k] for k in ("key", "name", "stage", "does", "where")},
-             "values": [{"label": k, "value": v, "setting": t["values"][k][0]} for k, v in current_values(t).items()],
-             "evidence": [{"date": e[0], "note": e[1], "gate_run_id": e[2] if len(e) > 2 else None} for e in t["evidence"]]}
-            for t in TECHNIQUES]
+    """화면용 — 근거는 [{date, note}], 기준값은 운영값으로, 설명(예시·규칙)은 있을 때만."""
+    rows = []
+    for t in TECHNIQUES:
+        vals = current_values(t)
+        rows.append({**{k: t[k] for k in ("key", "name", "stage", "does", "where")},
+                     "values": [{"label": k, "value": v, "setting": t["values"][k][0]} for k, v in vals.items()],
+                     "evidence": [{"date": e[0], "note": e[1], "gate_run_id": e[2] if len(e) > 2 else None} for e in t["evidence"]],
+                     "example": t.get("example"), "rules": rules_of(t, vals)})
+    return rows

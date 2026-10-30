@@ -213,8 +213,13 @@ async def save(rec: dict, a: argparse.Namespace) -> int:
                 await conn.execute("SELECT pg_advisory_xact_lock($1)", BASELINE_LOCK)
                 if make_baseline:   # 기준선은 축마다 한 줄(#96) — 다른 축의 기준선은 건드리지 않는다
                     await conn.execute("UPDATE eval_gate_run SET is_baseline = FALSE WHERE is_baseline AND axis = $1", a.axis)
-                if a.candidate and not await conn.fetchval("SELECT 1 FROM eval_candidate WHERE id = $1", a.candidate):
-                    raise SystemExit(f"후보 #{a.candidate} 없음 — 저장 안 함")
+                from service.eval.improve import CANDIDATE_AXIS_SQL   # 후보 → 진단한 축(채택·이어받기와 같은 규칙)
+                if a.candidate:   # 후보를 진단한 축의 측정만 연결(10/29 업무지식도 같은 루프 — 축이 다르면 채택 때 엉뚱한 기준선)
+                    cand_axis = await conn.fetchval(CANDIDATE_AXIS_SQL, a.candidate)
+                    if cand_axis is None:
+                        raise SystemExit(f"후보 #{a.candidate} 없음 — 저장 안 함")
+                    if cand_axis != a.axis:
+                        raise SystemExit(f"후보 #{a.candidate}는 {AXIS_NAMES.get(cand_axis, cand_axis)} 축 후보 — --axis {cand_axis}로 재 주세요(저장 안 함)")
                 rid = await conn.fetchval(
                     """INSERT INTO eval_gate_run (run_at, created_by, label, kind, golden_version, verdict, retrieval, answers, summary,
                                                   judge_meta, is_baseline, git_commit, notes, axis)
@@ -256,9 +261,6 @@ def main() -> int:
             return 2
     elif any(bool(x) != bool(y) for x, y in pairs) or not any(x and y for x, y in pairs):
         print("입력 오류: --answers-before/after 또는 --retrieval-before/after를 짝으로 주세요")
-        return 2
-    if a.candidate and a.axis != "policy":
-        print("입력 오류: 개선 후보(--candidate)는 정책서 축만 — 자가 개선 루프는 아직 정책서 문항으로만 돈다")
         return 2
     if a.candidate and not a.save:
         print("입력 오류: --candidate는 --save와 같이(기록에 연결)")

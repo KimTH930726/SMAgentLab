@@ -22,14 +22,16 @@ const STAGE_ORDER: string[] = STAGES.map((s) => s.key);
 const ROW = 'grid grid-cols-[4.5rem_5rem_minmax(0,1fr)_7rem_6rem] items-center gap-x-3';
 
 /** stage = 평가 게이트 단계 흐름에서 고른 단계(공통 필터, 10/28) — 이력·항목 전체 둘 다 그 단계만 */
-export function GateHistory({ stage = null }: { stage?: Stage | null }) {
+export function GateHistory({ stage = null, recent }: { stage?: Stage | null; recent?: number }) {
   const q = useQuery({ queryKey: ['eval-history'], queryFn: () => getHistory(), staleTime: 60_000 });
   const techs = useQuery({ queryKey: ['eval-techniques'], queryFn: listTechniques, staleTime: 60_000 });
   const [open, setOpen] = useState<Technique | null>(null);
   const [view, setView] = useState<'log' | 'all'>('log');
+  const [more, setMore] = useState(false);   // recent를 주면 최근 n줄만, [전체]로 펼침
   if (q.isLoading) return <p className="text-sm text-slate-500">불러오는 중…</p>;
   if (q.error) return <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p>;
-  const items = (q.data ?? []).filter((x) => !stage || x.stage === stage);
+  const allItems = (q.data ?? []).filter((x) => !stage || x.stage === stage);
+  const items = recent && !more ? allItems.slice(0, recent) : allItems;
   const staged = (techs.data ?? []).filter((t) => !stage || t.stage === stage);   // 항목 전체도 같은 단계로
   const pick = (it: HistoryItem) => { const t = techs.data?.find((x) => x.key === it.technique); if (t) setOpen(t); };
   const viewBtn = (v: 'log' | 'all', label: string) => (
@@ -98,7 +100,11 @@ export function GateHistory({ stage = null }: { stage?: Stage | null }) {
           );
         })}
       </div>
-      <p className="text-[11px] text-slate-500">측정 기록(기법 대장 근거)과 사람 결정(개선 후보)을 날짜순으로 · 줄을 누르면 그 항목의 하는 일·지금 값·왜 있나</p>
+      {recent && allItems.length > recent && (
+        <button className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline" onClick={() => setMore(!more)} data-testid="history-more">
+          {more ? '최근만 보기' : `전체 ${allItems.length}줄 보기`}</button>
+      )}
+      <p className="text-[11px] text-slate-500" title="측정 기록(기법 대장 근거)과 사람 결정(개선 후보)을 날짜순으로 · 줄을 누르면 그 항목의 하는 일·지금 값·왜 있나">두 축 공통 기록 ⓘ</p>
       {modal}
     </div>
   );
