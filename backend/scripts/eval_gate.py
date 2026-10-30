@@ -1,4 +1,6 @@
 """정확도 게이트 — 전/후 측정 파일을 받아 trustkit.eval.gate로 통과/실패를 판정한다(검색 나빠짐 0 · 답 의미 있는 하락 없음).
+답이 떨어져도 맞바꿈(10/30 사람 결정 "틀린 단정보다 모른다가 낫다")이면 통과: 단정 오답 감소 ≥ 잃은 정답 × --tradeoff-ratio(3)
+· 전체 정답률 ≥ --floor(업무지식 0.80 · 정책서 0.85). 단정 오답 비율은 늘 찍는다(오픈 기준 ≤ 10%, backlog 0-0).
 
     python scripts/eval_gate.py --answers-before eval_out/judged_A.jsonl --answers-after eval_out/judged_B.jsonl \
         [--retrieval-before eval_out/retr_A.jsonl --retrieval-after eval_out/retr_B.jsonl] [--save "무엇을 바꿨나"]
@@ -17,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import asyncio
 import json
 import subprocess
@@ -25,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "libs" / "trustkit"))   # 호스트에서도(표준 라이브러리만)
-from trustkit.eval.gate import answer_gate, per_question, retrieval_gate  # noqa: E402
+from trustkit.eval.gate import abstain_tradeoff, answer_gate, label_rates, per_question, retrieval_gate  # noqa: E402
 from trustkit.eval.summary import (answer_summary, failure_qids, golden_version,  # noqa: E402
                                    retrieval_ok_answer_wrong, retrieval_summary, scored_rows)
 
@@ -138,6 +141,43 @@ def evaluate(a: argparse.Namespace) -> dict:
             if not same:
                 say(f"⚠ 채점 기준·날짜가 다름 {sorted(pb)} vs {sorted(pa)} — 기준 답을 같은 날 다시 채점해서 비교할 것")
             v = answer_gate(ans_b, ans_a)
+            # 맞바꿈(B안, 10/30 사람 결정) — 정답률이 "의미 있게" 내려가도 단정 오답이 잃은 정답의 ratio배 넘게 줄고 하한을 지키면 통과.
+            # 떨어진 묶음마다 따로 본다(전체만 보면 한 유형이 크게 나빠진 걸 가림). 하한은 늘 전체 정답률로 — 한 유형만 떨어져도
+            # (전체는 오차 안) 하한을 안 보면 기준선이 하한 아래로 옮겨졌다(리뷰 10/30 M1)
+            if not v["pass"] and v.get("groups"):
+                floor = getattr(a, "floor", None)
+                floor = floor if floor is not None else TRADEOFF_FLOOR.get(getattr(a, "axis", "policy"))
+                ratio = getattr(a, "tradeoff_ratio", 3.0)
+                kind = {r["qid"]: r.get("type") or "-" for r in ans_a}
+                checks = {}
+                for g in v["failed"]:
+                    qs = {q for q in kind if g == "전체" or kind[q] == g}
+                    checks[g] = abstain_tradeoff([r for r in ans_b if r["qid"] in qs], [r for r in ans_a if r["qid"] in qs],
+                                                 ratio=ratio, floor=floor if g == "전체" else None)
+                if "전체" not in checks and floor is not None:
+                    acc = v["groups"]["전체"]["after"]
+                    checks["전체 하한"] = {"pass": acc >= floor, "accuracy_after": acc, "floor": floor,
+                                         "reason": f"전체 정답률 {acc * 100:.1f}% {'≥' if acc >= floor else '<'} 하한 {floor * 100:.0f}%"}
+                if checks and all(c["pass"] for c in checks.values()):
+                    v = {**v, "pass": True, "failed": [], "tradeoff": checks}
+                    say("[답]   맞바꿈 통과 — " + " · ".join(f"{g}: {c['reason']}" for g, c in checks.items()))
+                    down_locked = [g for g in LOCKED_TYPES if v["groups"].get(g, {}).get("diff", 0) < 0]
+                    if down_locked:   # 운영 반영(adopt_error)은 잠근 층 하락을 막는다 — 판정은 통과여도 후보 채택은 안 된다는 걸 미리(리뷰 L1)
+                        say(f"⚠ 잠근 문항({', '.join(down_locked)}) 정답률이 내려감 — 이 측정으로는 개선 후보를 운영 반영할 수 없음")
+                elif checks:
+                    v = {**v, "tradeoff": checks}
+                    say("[답]   맞바꿈 안 됨 — " + " · ".join(f"{g}: {c['reason']}" for g, c in checks.items() if not c["pass"]))
+            wb, wa = label_rates(ans_b, WRONG), label_rates(ans_a, WRONG)
+            paired = [q for q in wa if q in wb]
+            reps = lambda rows: min(collections.Counter(r["qid"] for r in rows).values(), default=0)   # noqa: E731 — 문항마다 최소(재리뷰 L7)
+            # 운영 반영 조건(B안, 10/30): 단정 오답이 늘었으면 반영 불가 · 2회 측정 — adopt_error가 이 값을 읽는다
+            rb_, ra_ = label_rates(ans_b, REFUSED), label_rates(ans_a, REFUSED)
+            mean = lambda m: sum(m[q] for q in paired) / len(paired) if paired else None   # noqa: E731
+            cw = {"before": mean(wb), "after": mean(wa), "refused_before": mean(rb_), "refused_after": mean(ra_),   # 거절은 실험 결과 칸 표시용
+                  "n": len(paired), "reps_before": reps(ans_b), "reps_after": reps(ans_a)}
+            if paired:
+                say(f"[답]   단정 오답 {sum(wb[q] for q in paired) / len(paired) * 100:.1f}% → {sum(wa[q] for q in paired) / len(paired) * 100:.1f}%"
+                    f" (오픈 기준 ≤ {OPEN_WRONG_MAX * 100:.0f}%)")
             up, down = _moved(ans_b, ans_a)
             fb, fa = _failures(raw_b), s["failures"]
             new_fail = sorted((set(fa) - set(fb)) & before_qids)   # 전 측정에 있던 문항만 — 골든셋에 새로 넣은 문항은 "전엔 답하던" 게 아니다(재리뷰 L4, 세트 차이는 따로 경고)
@@ -145,7 +185,7 @@ def evaluate(a: argparse.Namespace) -> dict:
             # (리뷰 10/29 M1). 정확도 하락 금지 원칙대로 실패로 — 연결 오류 탓이면 다시 재면 된다(잘못 통과보다 잘못 실패가 안전)
             if new_fail:
                 v = {**v, "pass": False, "failed": [*v["failed"], "새로 답 못 냄"]}
-            rec["answers"] = {**v, "up_qids": up, "down_qids": down, "failures_before": len(fb), "failures_after": len(fa),
+            rec["answers"] = {**v, "confident_wrong": cw, "up_qids": up, "down_qids": down, "failures_before": len(fb), "failures_after": len(fa),
                               "failures_new": new_fail}
             if fa or fb:
                 say(f"{'⚠ ' if new_fail else ''}[장애] 답 못 냄 {len(fb)} → {len(fa)}문항(정답률에서 뺌)"
@@ -156,6 +196,8 @@ def evaluate(a: argparse.Namespace) -> dict:
                 ci = f"[{_pct(x['lo'])}, {_pct(x['hi'])}]" if x["lo"] is not None else "[계산불가]"
                 tag = " 의미 있게 좋아짐" if x["significant"] and x["diff"] > 0 else (
                     " 판정 불가(오차를 못 잼 + 나빠진 문항 있음)" if x["undecidable"] else " 의미 있게 나빠짐" if x["worse"] else "")
+                if x["worse"] and v["pass"] and v.get("tradeoff"):
+                    tag += "(맞바꿈 통과)"   # 통과 줄 아래 같은 묶음이 "나빠짐"으로만 보이면 모순처럼 읽혔다(리뷰 L2)
                 tag += " ※묶음 1개 — 문항 독립 가정 구간" if x["iid_fallback"] else ""
                 say(f"       {g:16s} {x['n']:3d}문항 {x['before'] * 100:5.1f}% → {x['after'] * 100:5.1f}%  "
                     f"차이 {_pct(x['diff'])}%p {ci}  좋아짐 {x['up']} 나빠짐 {x['down']}{tag}")
@@ -176,6 +218,11 @@ def evaluate(a: argparse.Namespace) -> dict:
     return rec
 
 
+WRONG = "오답"   # 단정 오답 = 채점 "오답"(거절·부분은 아님 — 부분 = 틀린 내용 없이 핵심 일부 빠짐, 10/30 결정)
+REFUSED = "거절"
+OPEN_WRONG_MAX = 0.10   # 오픈 최소 기준(10/30 사람 결정, backlog 0-0) — 표시만, 게이트 판정은 맞바꿈 규칙
+TRADEOFF_FLOOR = {"knowledge": 0.80, "policy": 0.85}
+LOCKED_TYPES = ("human", "real")   # 잠근 골든셋 층(service/eval — 운영 반영이 하락을 막는 층)   # 맞바꿈으로도 내려가지 못하는 정답률(오픈 기준 · 정책서는 지금 수준)
 AXIS_NAMES = {"policy": "정책서", "knowledge": "업무지식"}   # main.py #96 CHECK와 같은 값
 BASELINE_LOCK = 86_001   # service/eval/service.py와 같은 값 — 기준선을 옮기는 두 길(스크립트·API)이 같은 잠금을 잡는다
 
@@ -252,6 +299,8 @@ def main() -> int:
     ap.add_argument("--run-at", help="측정 시각 ISO(옛 결과 파일을 다시 기록할 때만)")
     ap.add_argument("--axis", choices=sorted(AXIS_NAMES), default="policy",
                     help="어느 축의 측정인가 — 정책서(policy, 기본)·지식(knowledge, 컨플 합성 문항 등). 기준선은 축마다 한 줄(#96)")
+    ap.add_argument("--tradeoff-ratio", type=float, default=3.0, help="맞바꿈: 단정 오답 감소 ≥ 잃은 정답 × 이 값(기본 3, 10/30 결정)")
+    ap.add_argument("--floor", type=float, help="맞바꿈 정답률 하한(기본: 업무지식 0.80 · 정책서 0.85)")
     ap.add_argument("--candidate", type=int, help="이 판정이 잰 개선 후보 id(평가 게이트 [개선]) — 진행 단계에 '측정'으로 붙는다")
     a = ap.parse_args()
     pairs = [(a.answers_before, a.answers_after), (a.retrieval_before, a.retrieval_after)]

@@ -2,6 +2,7 @@
 화면·API는 저장된 결과를 읽기만 한다(통계 재계산 없음). 기준선 지정만 관리자가 바꾼다."""
 import asyncio
 import json
+from datetime import datetime
 from typing import Optional
 
 from core.database import get_conn
@@ -30,12 +31,13 @@ async def list_runs(limit: int, axis: Optional[str] = None) -> list[dict]:
                       jsonb_array_length(COALESCE(retrieval->'up', '[]'::jsonb)) AS retrieval_up,
                       answers->'failed' AS answers_failed,
                       answers->'groups'->'전체' AS answers_total,
-                      answers->'groups' AS answers_groups
+                      answers->'groups' AS answers_groups,
+                      answers->'confident_wrong' AS answers_confident_wrong
                FROM eval_gate_run WHERE $2::text IS NULL OR axis = $2 ORDER BY run_at DESC, id DESC LIMIT $1""", limit, axis)
     out = []
     for r in rows:
         d = _row(r)
-        for k in ("answers_failed", "answers_total", "answers_groups"):
+        for k in ("answers_failed", "answers_total", "answers_groups", "answers_confident_wrong"):
             if isinstance(d.get(k), str):
                 d[k] = json.loads(d[k])
         # 목록에선 qid 목록을 뺀다(상세에서) — 문항 수만큼 커진다
@@ -85,7 +87,7 @@ async def _move_baseline(conn, run_id: int) -> None:
 
 # ── 자가 개선 루프(#87 — eval-gate-redesign §10): 진단·후보 읽기 + 사람 검수 ─────────────────────────────
 
-_CAND_JSON = ("qids", "replay", "hypotheses", "measurements")
+_CAND_JSON = ("qids", "replay", "hypotheses", "measurements", "change")
 REVIEW_STATUSES = ("proposed", "approved", "held", "rejected")
 
 
@@ -102,7 +104,7 @@ async def latest_improvement(run_id: Optional[int] = None, axis: str = "policy")
     async with get_conn() as conn:
         run = await conn.fetchrow(
             """SELECT i.id, i.created_at, i.created_by, i.gate_run_id, i.diagnosis, i.hypotheses, i.model, g.label AS gate_label,
-                      g.is_baseline AS gate_is_baseline
+                      g.is_baseline AS gate_is_baseline, g.axis AS gate_axis
                FROM eval_improvement_run i JOIN eval_gate_run g ON g.id = i.gate_run_id
                WHERE ($1::int IS NULL OR i.id = $1) AND ($1::int IS NOT NULL OR g.axis = $2)
                ORDER BY i.created_at DESC, i.id DESC LIMIT 1""", run_id, axis)
@@ -111,12 +113,22 @@ async def latest_improvement(run_id: Optional[int] = None, axis: str = "policy")
         cands = await conn.fetch(
             """SELECT c.*, g.label AS adopted_gate_label,
                       COALESCE((SELECT jsonb_agg(jsonb_build_object('id', m.id, 'label', m.label, 'verdict', m.verdict, 'run_at', m.run_at,
-                                                             'diff', m.answers->'groups'->'전체'->'diff') ORDER BY m.id)
+                                                             'kind', m.kind, 'diff', m.answers->'groups'->'전체'->'diff',
+                                                             -- 실험 결과 칸(10/30): 정답률 전/후 · 단정 오답·거절 · 잠근 층 · 검색
+                                                             'has_answers', m.answers IS NOT NULL, 'groups', m.answers->'groups',
+                                                             'confident_wrong', m.answers->'confident_wrong',
+                                                             'retrieval', CASE WHEN m.retrieval IS NULL THEN NULL ELSE jsonb_build_object(
+                                                                 'n', m.retrieval->'n', 'before', m.retrieval->'before', 'after', m.retrieval->'after',
+                                                                 'down', jsonb_array_length(COALESCE(m.retrieval->'down', '[]'::jsonb))) END) ORDER BY m.id)
                                 FROM eval_gate_run m WHERE m.id = ANY(c.measured_gate_run_ids)), '[]'::jsonb) AS measurements
                FROM eval_candidate c LEFT JOIN eval_gate_run g ON g.id = c.adopted_gate_run_id
                WHERE c.run_id = $1 ORDER BY c.id""", run["id"])
         accuracy = await conn.fetchval("SELECT (summary->'answers'->>'accuracy')::float FROM eval_gate_run WHERE id = $1",
                                        run["gate_run_id"])
+        base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = $1", run["gate_axis"])
+        jobs = {r["candidate_id"]: dict(r) for r in await conn.fetch(   # 후보마다 가장 최근 실험 작업(10/30 실험 실행기)
+            """SELECT DISTINCT ON (candidate_id) candidate_id, id, status, stage, done, total, error, gate_run_id, created_at, finished_at
+               FROM eval_experiment_job WHERE candidate_id = ANY($1::bigint[]) ORDER BY candidate_id, id DESC""", [c["id"] for c in cands])}
     d = dict(run)
     for k in ("diagnosis", "hypotheses"):
         if isinstance(d.get(k), str):
@@ -125,8 +137,47 @@ async def latest_improvement(run_id: Optional[int] = None, axis: str = "policy")
     from trustkit.eval.diagnose import CAUSES
     # 원인 이름·볼 곳·기법 이름은 서버가 붙인다 — 화면이 표를 따로 들고 있으면 대장과 어긋난다
     d["accuracy"] = accuracy
-    return {"run": d, "causes": [{"key": k, "name": n, "where": w} for k, n, w in CAUSES],
-            "candidates": [{**_cand(c), "technique_name": BY_KEY.get(c["technique"], {}).get("name", c["technique"])} for c in cands]}
+    out = []
+    for c in cands:
+        cd = {**_cand(c), "technique_name": BY_KEY.get(c["technique"], {}).get("name", c["technique"])}
+        cd["adopt_check"] = _adopt_check(cd, base_at)
+        from service.eval.experiment import runnable
+        cd["auto"] = {"ok": (why := runnable(cd, run["gate_axis"])) is None, "reason": why}   # 자동 실험 되나(안 되면 이유)
+        job = jobs.get(c["id"])
+        cd["experiment"] = {k: v for k, v in job.items() if k != "candidate_id"} if job else None
+        out.append(cd)
+    return {"run": d, "causes": [{"key": k, "name": n, "where": w} for k, n, w in CAUSES], "candidates": out}
+
+
+def _adopt_check(c: dict, base_at) -> Optional[dict]:
+    """가장 최근 측정을 운영에 반영할 수 있나 — 반영 버튼(adopt_candidate)과 같은 규칙(adopt_error)을 미리 돌려 화면에 보인다.
+    측정이 없으면 None. 반영할 수 없는 측정을 골랐다가 막히지 않게(10/30 실험 결과 칸)."""
+    ms = c.get("measurements") or []
+    if not ms:
+        return None
+    m = ms[-1]
+    run_at = datetime.fromisoformat(m["run_at"]) if isinstance(m.get("run_at"), str) else m.get("run_at")
+    gate = {"id": m["id"], "kind": m.get("kind"), "verdict": m.get("verdict"), "run_at": run_at,
+            "answers": {"groups": m.get("groups") or {}, "confident_wrong": m.get("confident_wrong")} if m.get("has_answers") else None}
+    err = adopt_error(c["status"], gate, c.get("reviewed_at"), measured_ids=c.get("measured_gate_run_ids") or [], baseline_run_at=base_at)
+    return {"gate_run_id": m["id"], "ok": err is None, "reason": err}
+
+
+async def start_experiment(cand_id: int, *, user_id: int) -> dict:
+    """[실험해 보기] / [다시 돌리기] — 실험 중(approved) 후보 + 기계로 적용할 변경이 있을 때만 대기열에. 안 되면 사람이 읽을 이유(ValueError)."""
+    from service.eval.experiment import enqueue, runnable
+    from service.eval.improve import CANDIDATE_AXIS_SQL
+    async with get_conn() as conn:
+        c = await conn.fetchrow("SELECT id, status, measure, change FROM eval_candidate WHERE id = $1", cand_id)
+        if not c:
+            raise LookupError
+        axis = await conn.fetchval(CANDIDATE_AXIS_SQL, cand_id)
+    if c["status"] != "approved":
+        raise ValueError("실험 중(실험해 보기)인 후보만 돌릴 수 있습니다.")
+    why = runnable(_cand(c), axis)
+    if why:
+        raise ValueError(why)
+    return await enqueue(cand_id, user_id)
 
 
 async def review_candidate(cand_id: int, *, status: str, reason: str, user_id: int) -> Optional[dict]:

@@ -115,10 +115,25 @@ async def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--llm", choices=["system", "local"], default="system", help="local = 이 측정에서만 로컬 LLM으로 답 생성(서버 설정은 그대로)")
+    ap.add_argument("--prompt-file", default="", help="후보 시스템 프롬프트 파일(운영 DB 프롬프트 대신 — eval_answers와 같은 옵션)")
+    # 문맥 좁히기 실험(10/30) — 업무지식 문맥이 지식 3조각 + 상위 섹션 보충 평균 30 + 정책 서술 10(평균 1.8만 자)이라 섞임·지어냄 의심
+    ap.add_argument("--policy-top-k", type=int, default=None, help="문맥에 붙일 정책 서술 수(기본: 운영값 10)")
+    ap.add_argument("--no-expand", action="store_true", help="상위 섹션 보충(부모 확장)을 끈다 — 이 측정에서만")
     a = ap.parse_args()
+    variant = ",".join(x for x in (f"policy_top_k={a.policy_top_k}" if a.policy_top_k is not None else "", "no_expand" if a.no_expand else "") if x) or None
+    if a.no_expand:   # 에이전트가 모듈 속성으로 부르므로 여기서 바꾸면 이 프로세스(측정)만 바뀐다
+        async def _no_expand(*_a, **_k):
+            return []
+        retrieval.expand_parent_sections = _no_expand
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    done = {(r["qid"], r["rep"]) for r in _read_rows(out)} if out.exists() else set()
+    prev = _read_rows(out) if out.exists() else []
+    done = {(r["qid"], r["rep"]) for r in prev}
+    prompt_name = Path(a.prompt_file).name if a.prompt_file else None   # 이름만(eval_answers의 "prompt"와 같은 키·모양, 로컬 경로는 안 남김)
+    mixed = {r.get("prompt") for r in prev} - {prompt_name} | ({r.get("variant") for r in prev} - {variant})
+    if mixed:   # 이어 하기에서 다른 프롬프트 답이 섞이면 비교가 무의미 — 막는다(리뷰 10/30 L3)
+        print(f"입력 오류: {out.name}에 다른 프롬프트로 만든 답이 있음({sorted(map(str, mixed))}) — 새 --out 파일로")
+        return 2
     await init_pool()
     embedding_service.load()
     async with get_conn() as conn:
@@ -130,7 +145,7 @@ async def main() -> int:
             "SELECT id, content FROM rag_knowledge WHERE id = ANY($1::int[]) AND status = 'active'",
             sorted({i for it in items for i in it["gold_ids"]}))}
     d = retrieval.get_search_defaults()
-    sp = await resolve_system_prompt()
+    sp = Path(a.prompt_file).read_text(encoding="utf-8") if a.prompt_file else await resolve_system_prompt()
     if a.llm == "local":
         from eval_answers import local_llm   # scripts/가 실행 경로라 바로 import된다
         llm = await local_llm()
@@ -148,6 +163,8 @@ async def main() -> int:
             for n, it in enumerate(todo, 1):
                 vec = await embedding_service.embed(it["question"])
                 kw = dict(top_k=int(d["default_top_k"]), w_vector=d["default_w_vector"], w_keyword=d["default_w_keyword"])
+                if a.policy_top_k is not None:
+                    kw["policy_top_k"] = a.policy_top_k
                 cc = await build_chat_context(it["ns"], it["question"], vec, **kw)
                 clarified = bool(cc.clarify)
                 if clarified:   # 운영 채팅은 재질문 → "전부 보기"(scope "*")로 다시 들어온다 — 그 문맥으로(eval_answers와 같음)
@@ -174,7 +191,7 @@ async def main() -> int:
                     row = {"qid": it["qid"], "rep": k, "type": "knowledge", "cluster": it.get("cluster"), "question": it["question"],
                            "answer": ans, "error": err, "abstained": cc.abstain, "clarified": clarified, "gold_in_context": gic,
                            "n_gold": len(it["gold_ids"]), "n_gold_active": n_active, "judge": j, "judge_rubric": RUBRIC, "judged_on": today,
-                           "answer_llm": a.llm}   # 이어 하기에서 답 모델이 섞이지 않았는지 볼 수 있게(리뷰 L8)
+                           "answer_llm": a.llm, "prompt": prompt_name, "variant": variant}   # 이어 하기에서 답 모델이 섞이지 않았는지 볼 수 있게(리뷰 L8)
                     with out.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 if n % 20 == 0:

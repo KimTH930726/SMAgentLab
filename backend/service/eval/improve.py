@@ -29,11 +29,12 @@ ABSTAIN_GRID = [(c, p) for c in (0.45, 0.50, 0.55, 0.60, 0.65) for p in (0.0, 0.
 
 
 def _cand(key: str, cause: str, technique: str, title: str, action: str, measure: str, qids: list[str], *,
-          recommend: str = "review", why: str = "", replay: Optional[dict] = None) -> dict:
+          recommend: str = "review", why: str = "", replay: Optional[dict] = None, change: Optional[dict] = None) -> dict:
+    """change = 기계로 적용할 변경(있으면 [실험해 보기]가 실제로 잰다 — service/eval/experiment.py). 없으면 글(action)뿐 → 개발 작업."""
     assert technique in BY_KEY, technique   # 대장에 없는 기법을 가리키지 않는다(테스트도 확인)
     assert measure in MEASURES and recommend in ("try", "reject", "review")
     return {"key": key, "cause": cause, "technique": technique, "title": title, "action": action, "measure": measure,
-            "n_target": len(qids), "qids": sorted(qids), "recommend": recommend, "why": why, "replay": replay}
+            "n_target": len(qids), "qids": sorted(qids), "recommend": recommend, "why": why, "replay": replay, "change": change}
 
 
 def abstain_replay(replay_fn: Callable[[Callable[[str], bool]], dict], signals: Mapping[str, dict],
@@ -82,6 +83,22 @@ def adopt_error(status: str, gate: Optional[Mapping], approved_at, *, measured_i
     worse = [t for t in LOCKED_TYPES if (groups.get(t) or {}).get("diff", 0) < 0]
     if worse:   # 잠근 시험지에서 내려가면 운영 반영 안 함 — 오차 안이라도(고칠 때 안 본 문항에서 나빠졌다는 신호)
         return f"잠근 문항({', '.join(worse)})에서 정답률이 내려간 측정입니다 — 운영 반영 대신 다시 실험하세요."
+    return confident_wrong_error(gate.get("answers"))
+
+
+def confident_wrong_error(answers: Optional[Mapping]) -> Optional[str]:
+    """운영 반영 조건 B안(10/30 사람 결정 "틀린 단정보다 모른다가 낫다") — 답을 잰 측정이면 단정 오답(채점 "오답")이 늘지 않아야 하고
+    2회 이상 재야 한다(1회는 같은 지시문으로도 17.9%↔19.8%로 흔들렸다). 게이트 통과(나빠지지 않았나)와 따로 — 반영은 실제로 나아졌을 때만.
+    답을 안 잰 측정(검색만)은 해당 없음. 이 칸이 없는 옛 측정은 다시 재게 한다."""
+    if not answers:
+        return None
+    cw = answers.get("confident_wrong")
+    if not cw or cw.get("before") is None:
+        return "단정 오답을 재지 않은 옛 측정입니다 — 지금 eval_gate.py로 다시 판정해 주세요."
+    if min(cw.get("reps_before") or 0, cw.get("reps_after") or 0) < 2:
+        return "답을 1회만 잰 측정입니다 — 흔들림이 커서 2회 이상(--repeat 2) 잰 측정만 운영 반영할 수 있어요."
+    if cw["after"] > cw["before"]:
+        return f"단정 오답이 늘었습니다({cw['before'] * 100:.1f}% → {cw['after'] * 100:.1f}%) — 틀린 답 단정이 늘면 운영 반영하지 않습니다."
     return None
 
 
@@ -224,13 +241,14 @@ def build_candidates(diag: dict, *, types: Mapping[str, str], mapped: Mapping[st
         mapped_miss = [x for x in rest if mapped.get(x)]
         if mapped_miss:
             out.append(_cand("keyword_rescue", "retrieval_miss", "keyword_rescue", "키워드 구제 슬롯·문맥 정책 수",
-                             "POLICY_KEYWORD_RESCUE_SLOTS 3→4~5 또는 문맥 정책 수 10→12", "retrieval", mapped_miss,
-                             why="용어는 붙었는데 정답 정책이 상위 밖"))
+                             "POLICY_KEYWORD_RESCUE_SLOTS 3→5 (실험은 5로)", "retrieval", mapped_miss,
+                             why="용어는 붙었는데 정답 정책이 상위 밖", change={"env": {"POLICY_KEYWORD_RESCUE_SLOTS": "5"}}))
 
     q = c.get("refused_with_context", [])
     if q:
         out.append(_cand("answer_when_grounded", "refused_with_context", "chat_prompt", "근거 있으면 답하기 지시",
-                         f"채팅 프롬프트: 문맥에 해당 {src}이 있으면 거절하지 말기", "answers", q, why=f"정답 {src}이 문맥에 있는데 거절"))
+                         f"채팅 프롬프트: 문맥에 해당 {src}이 있으면 거절하지 말기", "answers", q, why=f"정답 {src}이 문맥에 있는데 거절",
+                         change={"prompt_append": "- [참고 문서]에 질문이 묻는 그 내용이 있으면 \"관련 지식을 찾지 못했습니다\"라고 하지 말고 그 내용으로 답한다."}))
 
     q = c.get("list_incomplete", [])
     if q:
@@ -247,6 +265,12 @@ def build_candidates(diag: dict, *, types: Mapping[str, str], mapped: Mapping[st
         out.append(_cand("grounded_answer", "wrong_with_context", "chat_prompt", "문맥 있는데 틀림 — 묶음별 답 지시",
                          "묶음 가설(사람 확인 후)마다 프롬프트 한 줄", "answers", [x for x in q if x not in cond] or q,
                          why=f"정답 {src}이 문맥에 있는데 답이 틀림 — 생성 단계"))
+        if axis == "knowledge":
+            # 10/30 실측: 업무지식 문맥 = 지식 3조각 + 상위 섹션 보충 평균 30 + 정책 서술 10(1.8만 자), 틀린 14건 = 지어냄 7·섞음 6 —
+            # 보충·정책 서술을 빼고 지식 조각 위주로(측정 프로세스에서만, 운영은 그대로)
+            out.append(_cand("knowledge_context_narrow", "wrong_with_context", "parent_expansion", "문맥 좁히기 — 보충·정책 빼기",
+                             "업무지식 질문 문맥에서 상위 섹션 보충을 끄고 정책(파라미터·서술)을 0개로", "answers", q,
+                             why="문맥이 길고 다른 내용이 섞여 지어냄·섞음", change={"policy_top_k": 0, "no_expand": True}))
 
     for h in hypotheses or []:
         h_q = sorted(set(h.get("qids") or []))

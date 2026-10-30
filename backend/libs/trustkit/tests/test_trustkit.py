@@ -217,3 +217,28 @@ def test_list_line_summary_invariants():
     assert list_line_summary("x", "가나다라마바사", limit=0) == "…"                              # 상한 0 이하도 지킴
     assert list_line_summary("a", "(2023) 개정 반영") == "(2023) 개정 반영"                      # 연도 괄호는 기호 아님
 
+
+
+def test_abstain_tradeoff():
+    """맞바꿈(10/30 사람 결정 "틀린 단정보다 모른다가 낫다") — 단정 오답 감소 ≥ 잃은 정답 × ratio · 하한 이상이면 통과."""
+    from trustkit.eval.gate import abstain_tradeoff, label_rates
+
+    def rows(labels):
+        return [{"qid": f"q{i}", "label": l} for i, l in enumerate(labels)]
+    before = rows(["정답"] * 78 + ["오답"] * 17)
+    # 브리핑 예시: 정답 76 · 오답 7 · 거절 12 — 맞던 2건이 거절로, 오답 10건이 거절로
+    after = rows(["정답"] * 76 + ["거절"] * 2 + ["거절"] * 10 + ["오답"] * 7)
+    t = abstain_tradeoff(before, after, ratio=3.0, floor=0.80)
+    assert t["pass"] and t["wrong_drop"] == 10 and t["lost_correct"] == 2 and abs(t["accuracy_after"] - 76 / 95) < 1e-9
+    assert not abstain_tradeoff(before, after, ratio=6.0, floor=0.80)["pass"]            # 10 < 2 × 6
+    assert not abstain_tradeoff(before, after, ratio=3.0, floor=0.81)["pass"]            # 80.0% < 81%
+    # 다 거절로 — 단정 오답 0이지만 정답을 다 잃음 → 실패
+    assert not abstain_tradeoff(before, rows(["거절"] * 95), ratio=3.0)["pass"]
+    # 맞던 답이 오답으로 바뀐 것도 잃은 정답 — 단정 오답 감소를 깎는다
+    worse = rows(["정답"] * 70 + ["오답"] * 8 + ["거절"] * 17)
+    tw = abstain_tradeoff(before, worse, ratio=3.0)
+    assert tw["lost_correct"] == 8 and tw["wrong_drop"] == 9 and not tw["pass"]
+    assert not abstain_tradeoff(before, before)["pass"]                                    # 줄지 않음
+    assert abstain_tradeoff([], after)["reason"] == "짝지은 문항 없음"
+    # 회차 평균 단위 — 2회 중 1회 오답 → 0.5
+    assert label_rates([{"qid": "a", "label": "오답"}, {"qid": "a", "label": "정답"}], "오답") == {"a": 0.5}

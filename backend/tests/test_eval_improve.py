@@ -134,6 +134,20 @@ def test_adopt_requires_approved_and_passing_gate_after_approval():
     assert improve.adopt_error("approved", ok_gate, None)               # 승인 시각이 없으면(데이터 이상) 막는다
 
 
+
+def test_adopt_requires_confident_wrong_not_up_and_two_reps():
+    """운영 반영 B안(10/30): 답을 잰 측정이면 단정 오답이 늘지 않아야 하고 2회 이상 — 검색만 잰 측정은 해당 없음."""
+    t0 = datetime(2026, 10, 30, 12, tzinfo=timezone.utc)
+    g = lambda cw: {"kind": "gate", "verdict": "pass", "run_at": t0 + timedelta(minutes=5), "answers": {"groups": {}, "confident_wrong": cw}}  # noqa: E731
+    ok = {"before": 0.20, "after": 0.12, "n": 95, "reps_before": 2, "reps_after": 2}
+    assert improve.adopt_error("approved", g(ok), t0) is None
+    assert improve.adopt_error("approved", g({**ok, "after": 0.20}), t0) is None                 # 같으면 됨(검색 개선 등)
+    assert "늘었습니다" in improve.adopt_error("approved", g({**ok, "after": 0.24}), t0)
+    assert "1회만" in improve.adopt_error("approved", g({**ok, "reps_after": 1}), t0)
+    assert "옛 측정" in improve.adopt_error("approved", g(None), t0)
+    assert improve.adopt_error("approved", {**g(ok), "answers": None}, t0) is None              # 검색만 잰 측정
+
+
 def test_agreement_counts_each_human_decision_once():
     rows = [{"recommend": "try", "status": "approved", "carried_from_id": None, "n": 2},
             {"recommend": "reject", "status": "rejected", "carried_from_id": None, "n": 1},
@@ -155,12 +169,15 @@ def test_split_locked_removes_every_locked_row():
     assert not {r["qid"] for r in open_rows} & set(locked)   # 잠근 문항은 진단에 한 행도 안 남는다
 
 
+CW_OK = {"before": 0.1, "after": 0.1, "n": 10, "reps_before": 2, "reps_after": 2}   # 단정 오답 조건(10/30)은 통과하는 값
+
+
 def test_adopt_blocked_when_locked_layer_drops():
     t0 = datetime(2026, 10, 26, 9, tzinfo=timezone.utc)
     ok = {"kind": "gate", "verdict": "pass", "run_at": t0 + timedelta(hours=1),
-          "answers": {"groups": {"전체": {"diff": 0.01}, "human": {"diff": 0.0}, "real": {"diff": 0.02}}}}
+          "answers": {"groups": {"전체": {"diff": 0.01}, "human": {"diff": 0.0}, "real": {"diff": 0.02}}, "confident_wrong": CW_OK}}
     assert improve.adopt_error("approved", ok, t0) is None
-    bad = {**ok, "answers": {"groups": {"전체": {"diff": 0.01}, "human": {"diff": -0.0125}}}}   # 10/23 #11과 같은 모양
+    bad = {**ok, "answers": {"groups": {"전체": {"diff": 0.01}, "human": {"diff": -0.0125}}, "confident_wrong": CW_OK}}   # 10/23 #11과 같은 모양
     assert "잠근 문항" in improve.adopt_error("approved", bad, t0)
     assert improve.adopt_error("approved", {**ok, "answers": None}, t0) is None   # 잠근 층이 없던 옛 측정은 막지 않음
 

@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import {
-  adoptCandidate, getBaselineRun, listGateRuns, markHypothesis, reviewCandidate,
-  type Candidate, type CandidateStatus, type GateAxis, type Hypothesis,
+  adoptCandidate, getBaselineRun, listGateRuns, markHypothesis, reviewCandidate, startExperiment,
+  type Candidate, type CandidateStatus, type GateAxis, type GateRunListItem, type Hypothesis,
 } from '../../api/eval';
 import { showError } from '../../store/useDialogStore';
 import { FormModal } from '../ui/FormModal';
@@ -48,6 +48,14 @@ function stepOf(c: Candidate): number {
   return 0;   // 제안·나중에·안 하기 — 예전 측정이 있어도 지금 실험 중은 아님(리뷰 L6, 측정은 막대 옆에 따로)
 }
 
+/** 서버 confident_wrong_error와 같은 조건 — 답을 잰 측정이면 단정 오답이 안 늘고 2회 이상 잰 것만(10/30 B안). 검색만 잰 측정은 해당 없음 */
+function confidentWrongBlocked(r: { answers_groups: unknown; answers_confident_wrong?: GateRunListItem['answers_confident_wrong'] }): boolean {
+  if (r.answers_groups == null) return false;
+  const cw = r.answers_confident_wrong;
+  if (!cw || cw.before == null || cw.after == null) return true;
+  return Math.min(cw.reps_before, cw.reps_after) < 2 || cw.after > cw.before;
+}
+
 const pct = (x: number | null | undefined) => (x == null ? '-' : `${(x * 100).toFixed(1)}%`);
 const pp = (x: number | null | undefined) => (x == null ? '' : `${x > 0 ? '+' : ''}${(x * 100).toFixed(1)}%p`);
 const fmtDate = (s: string) => new Date(s).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -76,6 +84,101 @@ function Stepper({ c }: { c: Candidate }) {
         <span className="ml-2 text-slate-500" title="이 후보를 잰 예전 판정 — 지금 실험 중이라는 뜻은 아님">
           · 예전 측정 #{last.id} {last.verdict === 'pass' ? '통과' : '실패'}
         </span>
+      )}
+    </div>
+  );
+}
+
+/** 실험 상태 한 줄 — 도는 중(단계·진행) / 실패(이유 + 다시 돌리기) / 자동 실험 불가(이유 + 손으로 할 일). 운영은 안 바뀐다 */
+function ExperimentStatus({ c, next, isAdmin, onRetry, retrying }: {
+  c: Candidate; next: string; isAdmin: boolean; onRetry: () => void; retrying: boolean;
+}) {
+  const j = c.experiment;
+  if (j && (j.status === 'queued' || j.status === 'running')) {
+    return (
+      <div className="rounded-lg border border-indigo-300 dark:border-indigo-500/40 bg-indigo-50/60 dark:bg-indigo-500/10 px-3 py-2 text-xs" data-testid="cand-exp-running">
+        <p className="text-indigo-700 dark:text-indigo-300 font-medium">
+          {j.status === 'queued' ? '실험 대기 중 — 앞 실험이 끝나면 시작' : `실험 돌리는 중 — ${j.stage ?? ''}`}
+          {j.status === 'running' && j.total > 0 && <span className="tabular-nums"> {j.done}/{j.total}</span>}
+        </p>
+        <p className="text-slate-500 mt-0.5">지금 설정과 바꾼 설정을 같은 골든셋으로 재고 게이트로 판정해요 — 운영은 그대로. 끝나면 아래에 결과가 붙어요</p>
+        {j.status === 'running' && j.total > 0 && (
+          <span className="mt-1.5 block h-1.5 rounded-full bg-slate-700 overflow-hidden" aria-hidden>
+            <span className="block h-full bg-indigo-500 dark:bg-indigo-400" style={{ width: `${(j.done / j.total) * 100}%` }} />
+          </span>
+        )}
+      </div>
+    );
+  }
+  if (j && j.status === 'failed' && c.status === 'approved') {
+    return (
+      <div className="rounded-lg border border-rose-300 dark:border-rose-500/40 bg-rose-50/60 dark:bg-rose-500/10 px-3 py-2 text-xs space-y-1" data-testid="cand-exp-failed">
+        <p className="text-rose-700 dark:text-rose-300 font-medium">실험 실패 #{j.id}</p>
+        <p className="text-slate-400 break-words">{j.error}</p>
+        {isAdmin && c.auto?.ok && <button className="text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50" disabled={retrying} onClick={onRetry}>다시 실행</button>}
+      </div>
+    );
+  }
+  // 승인됐는데 작업이 없거나(옛 승인·이어받은 승인) 끝난 뒤 다시 재고 싶을 때 — 시작 버튼(리뷰 10/30 M2)
+  if (c.status === 'approved' && c.auto?.ok && isAdmin && (!j || j.status === 'done')) {
+    return (
+      <p className="text-xs text-slate-400" data-testid="cand-exp-start">
+        {j ? `실험 #${j.id} 완료` : '실험 대기 전'}
+        <button className="ml-2 text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50" disabled={retrying} onClick={onRetry}>
+          {j ? '다시 실행' : '실험 실행'}</button>
+      </p>
+    );
+  }
+  if (c.status === 'approved' && !c.measurements.length && c.auto && !c.auto.ok) {
+    return <p className="text-xs text-amber-700 dark:text-amber-300" data-testid="cand-exp-manual" title={next}>자동 실험 불가 — {c.auto.reason} · 손으로 할 일: {next}</p>;
+  }
+  return null;
+}
+
+/** 실험 결과(10/30 사용자 "측정 결과를 사람이 보고 운영 반영할지 정해야") — 가장 최근 측정의 전/후 한 표 + 운영 반영 가능 여부(서버 판정).
+ * 업계 실험 비교 화면처럼 정답률·단정 오답·거절·잠근 문항·검색을 나란히. 측정 전이면 무엇을 기다리는지 한 줄 */
+function ExperimentResult({ c }: { c: Candidate }) {
+  const last = c.measurements[c.measurements.length - 1];
+  if (!last) return null;
+  const t = last.groups?.['전체'];
+  const cw = last.confident_wrong;
+  const lockedRows = ['human', 'real'].map((k) => [k, last.groups?.[k]] as const).filter(([, g]) => g);
+  const row = (name: string, b: number | null | undefined, a: number | null | undefined, goodWhenUp: boolean) => {
+    if (b == null || a == null) return null;
+    const d = a - b;
+    const tone = Math.abs(d) < 0.0005 ? 'text-slate-400' : (d > 0) === goodWhenUp ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400';
+    return (
+      <tr key={name} className="border-t border-slate-700/60">
+        <td className="py-1 pr-4 text-slate-400">{name}</td>
+        <td className="py-1 pr-3 text-right tabular-nums text-slate-300">{pct(b)}</td>
+        <td className="py-1 pr-3 text-slate-500">→</td>
+        <td className="py-1 pr-4 text-right tabular-nums text-slate-100 font-medium">{pct(a)}</td>
+        <td className={`py-1 text-right tabular-nums ${tone}`}>{pp(d) || '±0'}</td>
+      </tr>
+    );
+  };
+  const chk = c.adopt_check;
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3 space-y-2" data-testid="cand-result">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <p className="text-xs font-semibold text-slate-200">실험 결과</p>
+        <span className="text-xs text-slate-500" title={last.label}>측정 #{last.id} · {fmtDate(last.run_at)}{cw ? ` · 답 ${cw.reps_after}회` : ''}</span>
+        <span className={`ml-auto text-xs font-medium ${last.verdict === 'pass' ? 'text-emerald-600 dark:text-emerald-400' : last.verdict === 'fail' ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400'}`}>
+          {last.verdict === 'pass' ? '게이트 통과' : last.verdict === 'fail' ? '게이트 실패' : '판정 없음'}</span>
+      </div>
+      <table className="text-xs w-full max-w-md">
+        <tbody>
+          {row('정답률', t?.before, t?.after, true)}
+          {row('단정 오답', cw?.before, cw?.after, false)}
+          {row('거절', cw?.refused_before, cw?.refused_after, false)}
+          {lockedRows.map(([k, g]) => row(k === 'human' ? '사람이 쓴 질문' : '실사용 질문', g!.before, g!.after, true))}
+          {last.retrieval && row('검색(정답 정책을 문맥에)', last.retrieval.before / Math.max(1, last.retrieval.n), last.retrieval.after / Math.max(1, last.retrieval.n), true)}
+        </tbody>
+      </table>
+      {!last.has_answers && <p className="text-[11px] text-slate-500">검색만 잰 측정 — 답은 안 쟀어요</p>}
+      {c.status === 'approved' && chk && (
+        <p className={`text-xs ${chk.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-300'}`} data-testid="cand-adopt-check">
+          {chk.ok ? '→ 운영 반영 가능 — 운영 설정을 바꾼 뒤 [운영에 반영했어요]' : `→ 운영 반영 불가: ${chk.reason}`}</p>
       )}
     </div>
   );
@@ -185,6 +288,11 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
     onSuccess: () => { setModal(null); setReason(''); refresh(); },
     onError: (e) => (modal ? setErr((e as Error).message) : showError(e, '결정을 저장하지 못했습니다')),
   });
+  const retry = useMutation({
+    mutationFn: () => startExperiment(c.id),
+    onSuccess: () => refresh(),
+    onError: (e) => showError(e, '실험을 다시 돌리지 못했습니다'),
+  });
   const adopt = useMutation({
     mutationFn: (id: number) => adoptCandidate(c.id, id),
     onSuccess: () => { setModal(null); refresh(); },
@@ -199,7 +307,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
   const baseAt = base.data && base.data.id ? new Date(base.data.run_at) : null;
   const eligible = (runs.data ?? []).filter((r) => measured.has(r.id) && r.kind === 'gate' && r.verdict === 'pass' && !!c.reviewed_at
     && new Date(r.run_at) >= new Date(c.reviewed_at) && (!baseAt || r.is_baseline || new Date(r.run_at) >= baseAt)
-    && !lockedMove(r.answers_groups)?.down);
+    && !lockedMove(r.answers_groups)?.down && !confidentWrongBlocked(r));
   const rec = RECOMMEND[c.recommend];
   const m = MEASURE[c.measure];
   const open = (x: 'rejected' | 'held' | 'adopt') => { setErr(null); setReason(''); setGateId(null); setModal(x); };
@@ -228,9 +336,8 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
       </dl>
       <Hypotheses c={c} improvementId={improvementId} isAdmin={isAdmin} onPick={onPick} />
       <ReplayTable c={c} />
-      {c.status === 'approved' && (
-        <p className="text-xs text-indigo-600 dark:text-indigo-400" title={m.next}>다음 할 일: {m.next}</p>
-      )}
+      <ExperimentStatus c={c} next={m.next} isAdmin={isAdmin} onRetry={() => retry.mutate()} retrying={retry.isPending} />
+      <ExperimentResult c={c} />
       {c.status === 'adopted' && <p className="text-xs text-emerald-600 dark:text-emerald-400">판정 #{c.adopted_gate_run_id} "{c.adopted_gate_label}"로 운영 반영 완료</p>}
       {c.review_reason && c.status !== 'adopted' && (
         <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs" data-testid="cand-reason">
@@ -244,7 +351,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
         <div className="flex flex-wrap gap-4">
           {(c.status === 'proposed' || c.status === 'held') && (
             <button className={`${btn} text-indigo-600 dark:text-indigo-400 font-medium`} disabled={review.isPending}
-              title="이 후보를 측정해 볼 대상으로 올립니다 — 운영은 아직 안 바뀝니다. 다음에 돌릴 명령이 보여요"
+              title="지금 설정과 바꾼 설정을 골든셋으로 재고 게이트로 판정합니다(자동 실험이 되는 후보) — 운영은 안 바뀝니다"
               onClick={() => review.mutate({ status: 'approved' })}>실험해 보기</button>
           )}
           {c.status === 'approved' && (
@@ -295,7 +402,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
         submitDisabled={gateId == null}
         error={err}
       >
-        <p className="text-xs text-slate-400">이 후보를 실험 시작 뒤에 잰 측정 중 통과한 것만 고를 수 있어요. 고른 측정이 <b>지금 점수</b>가 됩니다.
+        <p className="text-xs text-slate-400">이 후보를 실험 시작 뒤에 잰 측정 중 통과한 것만 고를 수 있어요(답을 쟀으면 2회 이상 · 단정 오답이 안 늘어난 것). 고른 측정이 <b>지금 점수</b>가 됩니다.
           운영 설정·프롬프트는 이 버튼이 바꾸지 않습니다 — 바꾼 뒤 눌러 주세요.</p>
         {runs.isLoading || base.isLoading ? <p className="text-xs text-slate-500">불러오는 중…</p> : eligible.length === 0 ? (
           <p className="text-xs text-slate-500">연결할 측정이 없습니다 — 먼저 재고 <code>eval_gate.py --save … --candidate {c.id}</code>.</p>

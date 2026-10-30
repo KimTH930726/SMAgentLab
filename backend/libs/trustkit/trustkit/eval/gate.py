@@ -58,6 +58,39 @@ def answer_gate(before: Iterable[Mapping], after: Iterable[Mapping], correct: st
     return {"pass": not failed, "failed": failed, "groups": out}
 
 
+def label_rates(rows: Iterable[Mapping], label: str) -> dict:
+    """문항 → 그 라벨을 받은 회차 비율(회차 평균) — 단정 오답·거절을 정답과 같은 단위(문항)로 센다."""
+    acc: dict = collections.defaultdict(list)
+    for r in rows:
+        acc[r["qid"]].append(1.0 if r["label"] == label else 0.0)
+    return {q: sum(v) / len(v) for q, v in acc.items()}
+
+
+def abstain_tradeoff(before: Iterable[Mapping], after: Iterable[Mapping], *, ratio: float = 3.0, floor: Optional[float] = None,
+                     correct: str = "정답", wrong: str = "오답") -> dict:
+    """맞바꿈 판정 — "틀린 답을 단정하느니 모른다가 낫다"(사람 결정 2026-10-30). 정답률이 내려가도
+    단정 오답이 줄어든 양 ≥ 맞던 답을 잃은 양 × ratio 이고, 바꾼 뒤 정답률 ≥ floor 이면 통과.
+    단위는 문항(회차 평균), 짝지은 문항만. 잃은 양 = 문항마다 정답 비율이 줄어든 만큼의 합(어디로 갔든 — 오답으로 갔으면 단정 오답도 늘어 손해가 커진다)."""
+    before, after = list(before), list(after)
+    cb, ca = label_rates(before, correct), label_rates(after, correct)
+    wb, wa = label_rates(before, wrong), label_rates(after, wrong)
+    qs = [q for q in ca if q in cb]
+    if not qs:
+        return {"pass": False, "reason": "짝지은 문항 없음"}
+    wrong_drop = sum(wb[q] - wa[q] for q in qs)
+    lost = sum(max(0.0, cb[q] - ca[q]) for q in qs)
+    acc_after = sum(ca[q] for q in qs) / len(qs)
+    out = {"n": len(qs), "wrong_before": sum(wb[q] for q in qs) / len(qs), "wrong_after": sum(wa[q] for q in qs) / len(qs),
+           "wrong_drop": wrong_drop, "lost_correct": lost, "ratio": ratio, "accuracy_after": acc_after, "floor": floor}
+    if wrong_drop <= 0:
+        return {**out, "pass": False, "reason": "단정 오답이 줄지 않음"}
+    if wrong_drop < lost * ratio:
+        return {**out, "pass": False, "reason": f"단정 오답 감소 {wrong_drop:.1f} < 잃은 정답 {lost:.1f} × {ratio:g}"}
+    if floor is not None and acc_after < floor:
+        return {**out, "pass": False, "reason": f"정답률 {acc_after * 100:.1f}% < 하한 {floor * 100:.0f}%"}
+    return {**out, "pass": True, "reason": f"단정 오답 감소 {wrong_drop:.1f} ≥ 잃은 정답 {lost:.1f} × {ratio:g}"}
+
+
 def mcnemar_p(up: int, down: int) -> float:
     """정확 검정 양측 p — 엇갈린 문항 n = up + down 중 작은 쪽이 k 이하일 확률 × 2."""
     n, k = up + down, min(up, down)

@@ -11,6 +11,8 @@ import { API, adminToken, apiFetch, loginAdmin } from './auth';
 const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'psql', '-U', 'ops', '-d', 'opsdb', '-tA', '-c', sql],
   { encoding: 'utf-8' }).trim();
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+// 자동 실험이 안 되는 후보(바꿀 것이 글뿐)만 — 실험해 보기(승인)가 진짜 측정(답이면 몇 시간)을 시작하지 않게(10/30 실험 실행기)
+const manualOnly = (id: number) => psql(`SELECT change IS NULL FROM eval_candidate WHERE id = ${id}`) === 't';
 
 type Report = {
   gate_run_id: number; improvement_id: number; score: { locked: number | null; total: number | null };
@@ -170,7 +172,7 @@ test('[운영에 반영했어요] — 통과한 측정을 고르면 후보 = 운
   test.setTimeout(90_000);
   const d = await report();
   test.skip(!d, '진단 없음');
-  const target = d!.techniques.find((x) => x.status === 'proposed');
+  const target = d!.techniques.find((x) => x.status === 'proposed' && manualOnly(x.id));
   test.skip(!target, '결정 전 후보 없음');
   const baseId = psql(`SELECT id FROM eval_gate_run WHERE is_baseline AND axis = 'policy'`);
   test.skip(!baseId, '기준선 없음');
@@ -181,7 +183,9 @@ test('[운영에 반영했어요] — 통과한 측정을 고르면 후보 = 운
     await review(cid, 'approved');   // 실험 시작 — 반영할 측정은 이 뒤에 잰 것이어야 한다
     // 테스트용 통과 측정 한 줄(지금 점수를 그대로 복사, 실험 시작 뒤 시각) — 끝에 지운다
     gid = psql(`INSERT INTO eval_gate_run (created_by, label, kind, golden_version, verdict, retrieval, answers, summary, judge_meta)
-                SELECT 'e2e', 'E2E 반영 확인용', 'gate', golden_version, 'pass', retrieval, answers, summary, judge_meta
+                SELECT 'e2e', 'E2E 반영 확인용', 'gate', golden_version, 'pass', retrieval,
+                       CASE WHEN answers IS NULL THEN NULL ELSE answers || '{"confident_wrong": {"before": 0.1, "after": 0.1, "n": 1, "reps_before": 2, "reps_after": 2}}'::jsonb END,
+                       summary, judge_meta
                 FROM eval_gate_run WHERE id = ${baseId} RETURNING id`).split(/\s+/)[0];
     // 이 후보를 잰 측정으로 연결(eval_gate.py --candidate와 같은 칸) — 남의 측정은 반영할 수 없다(리뷰 M3)
     psql(`UPDATE eval_candidate SET measured_gate_run_ids = array_append(coalesce(measured_gate_run_ids, '{}'), ${gid}) WHERE id = ${cid}`);
@@ -189,6 +193,10 @@ test('[운영에 반영했어요] — 통과한 측정을 고르면 후보 = 운
     await goAdmin(page, '품질', '평가 게이트');
     await page.getByTestId('gate-in-progress').getByTestId(`inprogress-${target!.key}`).click();   // 실험 중 = ② — 줄 → 카드 모달
     const row = page.getByRole('dialog').getByTestId(`candidate-${target!.key}`);
+    // 실험 결과 칸(10/30) — 연결한 측정의 전/후와 서버의 운영 반영 판정(반영 버튼과 같은 규칙)
+    await expect(row.getByTestId('cand-result')).toContainText(`측정 #${gid}`);
+    await expect(row.getByTestId('cand-result')).toContainText('단정 오답');
+    await expect(row.getByTestId('cand-adopt-check')).toContainText('운영 반영 가능');
     await row.getByRole('button', { name: '운영에 반영했어요…' }).click();
     const dialog = page.getByRole('dialog').filter({ hasText: '반영 완료로 기록' });
     await dialog.getByLabel(new RegExp(`#${gid} E2E 반영 확인용`)).check();

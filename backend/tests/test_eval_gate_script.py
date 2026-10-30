@@ -148,3 +148,55 @@ def test_axis_must_match_result_files(tmp_path, monkeypatch):
         assert eg.main() == 2
     monkeypatch.setattr("sys.argv", ["eval_gate.py", "--baseline", "--answers-after", k, "--axis", "knowledge"])   # 맞게 주면 통과(저장 없이)
     assert eg.main() == 0
+
+
+def test_tradeoff_passes_gate_when_confident_wrong_drops_more(tmp_path):
+    """B안(10/30): 정답이 의미 있게 줄어도(맞던 답 → 거절) 단정 오답이 3배 넘게 줄고 하한(업무지식 80%)이면 통과,
+    하한 아래·배수 미달이면 그대로 실패. 단정 오답 줄은 항상 찍힌다."""
+    n_ok, n_wrong = 40, 10
+    before = [_judged(f"Q{i}", "정답" if i < n_ok else "오답", typ="knowledge") for i in range(n_ok + n_wrong)]
+    # 맞던 4건 → 거절, 오답 10건 → 거절 → 정답 36/50 = 72%(하한 80% 미달)
+    after = [_judged(f"Q{i}", "거절" if (36 <= i < n_ok or i >= n_ok) else "정답", typ="knowledge") for i in range(n_ok + n_wrong)]
+    ab, aa = _write(tmp_path / "ab.jsonl", before), _write(tmp_path / "aa.jsonl", after)
+    rec = eg.evaluate(_ns(answers_before=ab, answers_after=aa, axis="knowledge"))   # 기본 3배: 10 < 4 × 3 → 실패
+    assert rec["answers"]["groups"]["전체"]["worse"]   # 전제: 정답률 게이트가 먼저 떨어뜨린 경우다(구간 방법이 바뀌면 이 테스트 전제가 깨짐을 알림)
+    assert rec["ok"] is False and "잃은 정답" in rec["answers"]["tradeoff"]["전체"]["reason"]
+    assert any(l.startswith("[답]   단정 오답 20.0% → 0.0%") for l in rec["lines"])
+    rec2 = eg.evaluate(_ns(answers_before=ab, answers_after=aa, axis="knowledge", tradeoff_ratio=2.0))   # 배수는 넘지만 72% < 하한 80%
+    assert rec2["ok"] is False and "정답률 72.0% < 하한 80%" in rec2["answers"]["tradeoff"]["전체"]["reason"]
+    rec3 = eg.evaluate(_ns(answers_before=ab, answers_after=aa, axis="knowledge", floor=0.70, tradeoff_ratio=2.0))
+    assert rec3["ok"] is True and rec3["answers"]["pass"] and rec3["lines"][-1] == "게이트: 통과"
+    assert any("맞바꿈 통과" in l for l in rec3["lines"])
+
+
+def test_tradeoff_floor_checked_even_when_only_one_type_fails(tmp_path):
+    """한 유형만 의미 있게 떨어지고 전체는 오차 안일 때도 전체 하한을 본다(리뷰 10/30 M1) — 하한 아래면 실패, 위면 통과."""
+    # fact 200: 190 정답 · 10 오답 → 정답 10개 오답으로, 오답 10개 정답으로(오르내림이 상쇄 — 전체 구간을 넓혀 "전체"는 안 떨어짐)
+    fb = ["정답"] * 190 + ["오답"] * 10
+    fa = ["오답"] * 10 + ["정답"] * 180 + ["정답"] * 10
+    # cross 50: 20 정답 · 30 오답 → 맞던 6이 거절, 오답 20이 거절(단정 오답 감소 20 ≥ 6 × 3)
+    xb = ["정답"] * 20 + ["오답"] * 30
+    xa = ["정답"] * 14 + ["거절"] * 6 + ["거절"] * 20 + ["오답"] * 10
+    before = [_judged(f"F{i}", l, typ="fact") for i, l in enumerate(fb)] + [_judged(f"X{i}", l, typ="cross") for i, l in enumerate(xb)]
+    after = [_judged(f"F{i}", l, typ="fact") for i, l in enumerate(fa)] + [_judged(f"X{i}", l, typ="cross") for i, l in enumerate(xa)]
+    ab, aa = _write(tmp_path / "ab.jsonl", before), _write(tmp_path / "aa.jsonl", after)
+    rec = eg.evaluate(_ns(answers_before=ab, answers_after=aa, axis="policy"))   # 정책서 하한 85% · 전체 204/250 = 81.6%
+    g_ = rec["answers"]["groups"]
+    assert g_["cross"]["worse"] and not g_["전체"]["worse"] and not g_["fact"]["worse"]   # 전제: cross만 떨어짐
+    assert rec["ok"] is False and rec["answers"]["tradeoff"]["cross"]["pass"]           # cross 맞바꿈은 되지만
+    assert rec["answers"]["tradeoff"]["전체 하한"]["pass"] is False                       # 전체 하한에서 막힘
+    rec2 = eg.evaluate(_ns(answers_before=ab, answers_after=aa, axis="policy", floor=0.80))
+    assert rec2["ok"] is True and any("맞바꿈 통과" in l for l in rec2["lines"])
+    assert any("(맞바꿈 통과)" in l for l in rec2["lines"] if l.lstrip().startswith("cross"))
+
+
+def test_tradeoff_does_not_override_new_failures(tmp_path):
+    """맞바꿈이 통과해도 "새로 답 못 냄"(전엔 답하던 문항이 장애)은 그대로 실패."""
+    # 60문항: 맞던 6 → 거절(의미 있게 떨어짐), 오답 19 → 거절(19 ≥ 6 × 3), Q59는 새로 장애
+    before = [_judged(f"Q{i}", "정답" if i < 40 else "오답", typ="knowledge") for i in range(60)]
+    after = [_judged(f"Q{i}", "거절" if i >= 34 else "정답", typ="knowledge") for i in range(59)]
+    after.append({**_judged("Q59", "오류", typ="knowledge"), "error": "llm_failure"})
+    ab, aa = _write(tmp_path / "ab.jsonl", before), _write(tmp_path / "aa.jsonl", after)
+    rec = eg.evaluate(_ns(answers_before=ab, answers_after=aa, axis="knowledge", floor=0.50))
+    assert any("맞바꿈 통과" in l for l in rec["lines"])
+    assert rec["ok"] is False and "새로 답 못 냄" in rec["answers"]["failed"]

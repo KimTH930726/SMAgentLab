@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { getBaselineRun, getGateReport, getLatestImprovement, type GateAxis } from '../../api/eval';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -44,7 +44,21 @@ function AxisGate({ axis }: { axis: GateAxis }) {
   const base = useQuery({ queryKey: ['eval-gate-baseline', axis], queryFn: () => getBaselineRun(axis), staleTime: 30_000 });
   const rep = useQuery({ queryKey: ['eval-report', axis], queryFn: () => getGateReport(axis), enabled: isAdmin, staleTime: 30_000 });
   const imp = useQuery({ queryKey: ['eval-improvement', axis, rep.data?.improvement_id ?? null],
-    queryFn: () => getLatestImprovement(rep.data?.improvement_id, axis), enabled: !isAdmin || !rep.isLoading });
+    queryFn: () => getLatestImprovement(rep.data?.improvement_id, axis), enabled: !isAdmin || !rep.isLoading,
+    // 실험이 도는 동안엔 진행이 보이게 다시 불러온다(10/30 실험 실행기) — 끝나면 멈춤
+    refetchInterval: (q) => (q.state.data?.candidates.some((c) => c.experiment && ['queued', 'running'].includes(c.experiment.status)) ? 5000 : false) });
+  // 실험이 끝나면(진행 중 → 없음) 리포트·측정 목록도 새로 — 결과 칸·운영 반영 목록이 늦게 따라오지 않게(리뷰 10/30 L6)
+  const running = (imp.data?.candidates ?? []).filter((c) => c.experiment && ['queued', 'running'].includes(c.experiment.status)).length;
+  const qc = useQueryClient();
+  const prevRunning = useRef(running);
+  useEffect(() => {
+    if (prevRunning.current > running) {
+      qc.invalidateQueries({ queryKey: ['eval-report'] });
+      qc.invalidateQueries({ queryKey: ['eval-gate-runs'] });
+      qc.invalidateQueries({ queryKey: ['eval-gate-baseline'] });
+    }
+    prevRunning.current = running;
+  }, [running, qc]);
   const [stage, setStage] = useState<Stage | null>(null);
   const [detail, setDetail] = useState<null | 'answers' | 'retrieval'>(null);
   const [historyOpen, setHistoryOpen] = useState(false);

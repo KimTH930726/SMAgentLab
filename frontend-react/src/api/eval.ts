@@ -71,9 +71,11 @@ export interface GateRunListItem {
   answers_failed: string[] | null;
   answers_total: AnswerGroup | null;
   answers_groups: Record<string, AnswerGroup> | null;
+  /** 단정 오답(채점 "오답") 전/후 — 운영 반영 조건(10/30 B안, 서버 improve.confident_wrong_error) */
+  answers_confident_wrong?: { before: number | null; after: number | null; n: number; reps_before: number; reps_after: number } | null;
 }
 
-export interface GateRunDetail extends Omit<GateRunListItem, 'has_retrieval_gate' | 'retrieval_down' | 'retrieval_up' | 'answers_failed' | 'answers_total' | 'answers_groups'> {
+export interface GateRunDetail extends Omit<GateRunListItem, 'has_retrieval_gate' | 'retrieval_down' | 'retrieval_up' | 'answers_failed' | 'answers_total' | 'answers_groups' | 'answers_confident_wrong'> {
   retrieval: {
     pass: boolean; n: number; before: number; after: number; up: string[]; down: string[]; p: number; significant: boolean; error?: string;
     by_type: Record<string, { n: number; before: number; after: number }>;
@@ -100,7 +102,14 @@ export interface ReplayRow {
 export interface Hypothesis { name: string; hint: string; qids: string[]; cause?: string; status?: 'confirmed' | 'rejected' | 'open' }
 
 /** 후보를 잰 판정(#88) — 진행 단계의 "측정" */
-export interface Measurement { id: number; label: string; verdict: 'pass' | 'fail' | null; run_at: string; diff: number | null }
+export interface Measurement {
+  id: number; label: string; verdict: 'pass' | 'fail' | null; run_at: string; diff: number | null;
+  // 실험 결과 칸(10/30) — 정답률 전/후(묶음별) · 단정 오답·거절 · 검색
+  kind?: string; has_answers?: boolean; groups?: Record<string, AnswerGroup> | null;
+  confident_wrong?: { before: number | null; after: number | null; refused_before?: number | null; refused_after?: number | null;
+    n: number; reps_before: number; reps_after: number } | null;
+  retrieval?: { n: number; before: number; after: number; down: number } | null;
+}
 
 export interface Candidate {
   id: number;
@@ -124,6 +133,21 @@ export interface Candidate {
   adopted_gate_run_id: number | null;
   adopted_gate_label: string | null;
   measurements: Measurement[];
+  /** 가장 최근 측정을 운영에 반영할 수 있나 — 서버가 반영 버튼과 같은 규칙(adopt_error)으로 미리 판정 */
+  adopt_check?: { gate_run_id: number; ok: boolean; reason: string | null } | null;
+  /** 자동 실험 되나(10/30 실험 실행기) — 안 되면 이유(바꿀 것이 글뿐 등) */
+  auto?: { ok: boolean; reason: string | null };
+  /** 가장 최근 실험 작업 — 대기·진행·끝·실패 */
+  experiment?: ExperimentJob | null;
+}
+
+export interface ExperimentJob {
+  id: number; status: 'queued' | 'running' | 'done' | 'failed'; stage: string | null; done: number; total: number;
+  error: string | null; gate_run_id: number | null; created_at: string; finished_at: string | null;
+}
+
+export async function startExperiment(id: number): Promise<{ id: number; status: string }> {
+  return apiFetch(`/eval/candidates/${id}/experiment`, { method: 'POST' });
 }
 
 export interface Improvement {
@@ -140,7 +164,7 @@ export async function getLatestImprovement(runId?: number, axis: GateAxis = 'pol
   return apiFetch<Improvement | null>(`/eval/improvements/latest?axis=${axis}${runId != null ? `&run_id=${runId}` : ''}`);
 }
 
-export async function reviewCandidate(id: number, status: Exclude<CandidateStatus, 'adopted'>, reason = ''): Promise<{ id: number; status: string }> {
+export async function reviewCandidate(id: number, status: Exclude<CandidateStatus, 'adopted'>, reason = ''): Promise<{ id: number; status: string; experiment?: { id: number; status: string } | null; experiment_note?: string }> {
   return apiFetch(`/eval/candidates/${id}/review`, { method: 'POST', body: JSON.stringify({ status, reason }) });
 }
 

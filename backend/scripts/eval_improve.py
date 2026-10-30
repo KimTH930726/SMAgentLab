@@ -204,12 +204,12 @@ async def main() -> int:
                            ORDER BY c.id DESC LIMIT 1""", c["key"], c["cause"], axis)   # 번복 후보는 10/29 전 정책서 진단에서 만들었다 — 그 결정을 이어받게
                     prev = carry_decision(dict(last) if last else None, c["recommend"]) if carry_allowed(c["key"], settings) else None
                     carried += bool(prev)
-                    await conn.execute(
+                    new_id = await conn.fetchval(
                         """INSERT INTO eval_candidate (run_id, key, cause, technique, title, action, measure, n_target, qids, recommend, why,
                                                        replay, hypotheses, status, review_reason, reviewed_by_user_id, reviewed_at, carried_from_id,
-                                                       measured_gate_run_ids)
+                                                       measured_gate_run_ids, change)
                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb, $13::jsonb,
-                                   COALESCE($14, 'proposed'), $15, $16, $17, $18, COALESCE($19, '{}'::bigint[]))""",
+                                   COALESCE($14, 'proposed'), $15, $16, $17, $18, COALESCE($19, '{}'::bigint[]), $20::jsonb) RETURNING id""",
                         rid, c["key"], c["cause"], c["technique"], c["title"], c["action"], c["measure"], c["n_target"],
                         json.dumps(c["qids"]), c["recommend"], c["why"],
                         json.dumps(c["replay"], ensure_ascii=False) if c["replay"] is not None else None,
@@ -217,7 +217,10 @@ async def main() -> int:
                         prev["status"] if prev else None, prev["review_reason"] if prev else None,
                         prev["reviewed_by_user_id"] if prev else None, prev["reviewed_at"] if prev else None, prev["id"] if prev else None,
                         # 측정 연결도 이어받는다 — 다시 진단하면 단계 막대가 "실험"으로 돌아가던 것(10/26 리뷰 M2)
-                        list(last["measured_gate_run_ids"] or []) if last else None)   # 측정은 결정과 별개인 증거 — 제안 상태여도 이어받는다(10/26)
+                        list(last["measured_gate_run_ids"] or []) if last else None,   # 측정은 결정과 별개인 증거 — 제안 상태여도 이어받는다(10/26)
+                        json.dumps(c["change"], ensure_ascii=False) if c.get("change") else None)   # 자동 실험할 변경(10/30, experiment.py)
+                    if last and prev:   # 결정을 이어받은 새 후보 줄로만 작업을 옮긴다 — 진행 중 작업이 화면에서 사라지던 것(리뷰 M1), 안 이어받은 줄로 옮기면 멈춤(재리뷰 L6)
+                        await conn.execute("UPDATE eval_experiment_job SET candidate_id = $1 WHERE candidate_id = $2", new_id, last["id"])
         print(f"진단 #{rid} 저장 · 후보 {len(cands)}개" + (f"(이전 결정 이어받음 {carried})" if carried else ""))
         return 0
     finally:

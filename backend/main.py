@@ -1495,6 +1495,48 @@ async def _migrate_source_media(conn) -> None:
     await conn.execute("ALTER TABLE rag_source_document ADD COLUMN IF NOT EXISTS media JSONB")
 
 
+async def _migrate_experiment_runner(conn) -> None:
+    """#99(10/30, 사용자 "실험해 보기를 누르면 실제로 돌리고 측정까지") — 후보가 들고 다니는 기계 적용 변경(change)과 실험 작업 대기열.
+    작업 = 지금 설정·바꾼 설정을 같은 날 재고 게이트 판정을 후보에 연결(service/eval/experiment.py). 후보당 진행 중 작업 1개(부분 고유). 멱등."""
+    await conn.execute("ALTER TABLE eval_candidate ADD COLUMN IF NOT EXISTS change JSONB")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS eval_experiment_job (
+            id BIGSERIAL PRIMARY KEY,
+            candidate_id BIGINT NOT NULL REFERENCES eval_candidate(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed')),
+            stage TEXT,
+            done INT NOT NULL DEFAULT 0,
+            total INT NOT NULL DEFAULT 0,
+            gate_run_id BIGINT REFERENCES eval_gate_run(id),
+            error TEXT,
+            created_by_user_id INT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            started_at TIMESTAMPTZ,
+            finished_at TIMESTAMPTZ
+        )""")
+    await conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_experiment_active ON eval_experiment_job (candidate_id)
+                          WHERE status IN ('queued', 'running')""")
+    # #100(10/30 묶음 단위 연결) — 묶음(1단계 상위 페이지) · 하위 갈래(2단계) → 컬렉션 규칙(None = 제외). 다음 동기화가 새 페이지에 같은 규칙을 쓴다
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS rag_import_rule (
+            id SERIAL PRIMARY KEY,
+            team_id INT NOT NULL,
+            root_url TEXT NOT NULL,
+            bundle TEXT NOT NULL,
+            grp TEXT,
+            namespace_id INT REFERENCES ops_namespace(id) ON DELETE CASCADE,   -- NULL = 제외. 컬렉션이 지워지면 규칙도(SET NULL이면 제외로 바뀌었다)
+            created_by_user_id INT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""")
+    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_import_rule ON rag_import_rule (team_id, root_url, bundle, (coalesce(grp, '')))")
+    # 처음 만든 표(SET NULL)도 CASCADE로 — 컬렉션이 지워지면 규칙도(NULL = 제외로 바뀌던 것, 리뷰 L2). 멱등
+    await conn.execute("ALTER TABLE rag_import_rule DROP CONSTRAINT IF EXISTS rag_import_rule_namespace_id_fkey")
+    await conn.execute("ALTER TABLE rag_import_rule ADD CONSTRAINT rag_import_rule_namespace_id_fkey "
+                       "FOREIGN KEY (namespace_id) REFERENCES ops_namespace(id) ON DELETE CASCADE")
+
+
+
 async def _migrate_team_import(conn) -> None:
     """#98(10/29, 컨플 수집기 — 사용자 "목업대로 진행") 팀 적재 배치·배치 안 페이지. 배치 = 한 번 확정해 적재한 묶음(게이트·롤백 단위),
     페이지 = 분류 미리보기 한 줄(AI 분류 결과 + 사람 분류·표본 검토). 원문은 원장(rag_source_document)에만 — 여기엔 제목·id·컬렉션 id만.
@@ -2240,6 +2282,7 @@ async def _run_migrations() -> None:
         await _migrate_eval_improvement(conn)          # #87
         await _migrate_source_check_link(conn)         # #92
         await _migrate_team_import(conn)               # #98 — 원장·조직 표 뒤
+        await _migrate_experiment_runner(conn)         # #99 — 후보·판정 표 뒤
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 
@@ -2312,11 +2355,14 @@ async def lifespan(_app: FastAPI):
     glossary_mining.start()   # 질문 기록 → 용어 동의어(하루 1회, v2.128)
     from service import retention
     retention.start()          # 보관 주기 정리(하루 1회, 10/28 — 판단 원장 180일·지운 지식 180일·질의 기록 1년)
+    from service.eval import experiment
+    await experiment.start()   # 개선 후보 실험 대기열(10/30) — 이전 프로세스가 돌리던 작업은 실패로 닫음
 
     yield
     await stop_scheduler()
     await glossary_mining.stop()
     await retention.stop()
+    await experiment.stop()
     await close_http_client()
     await close_pool()
 

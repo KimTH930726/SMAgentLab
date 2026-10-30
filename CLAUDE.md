@@ -47,7 +47,7 @@
 - 백엔드 테스트: `docker exec -w /app ops-backend python -m pytest -q tests libs/trustkit/tests`
 - 백엔드 재시작 전: `docker exec -w /app ops-backend python -c "import main"` — 단위 테스트는 앱 모듈을 가짜로 바꿔 두고 돌아 import 누락(NameError)을 못 잡는다(10/20 재시작 실패)
 - 적재(정책·지식·참고표)를 바꿨으면 `scripts/check_ingest.py`(설계 완료 기준 + 채팅 쓰임 검사, LLM 0) — 어긋남이 늘면 원인부터
-- 검색·답 생성을 바꿨으면 정확도 게이트: 전/후 측정 → `scripts/eval_gate.py`(검색 나빠짐 0 · 답 의미 있는 하락 없음, 같은 날 채점끼리)
+- 검색·답 생성을 바꿨으면 정확도 게이트: 전/후 측정 → `scripts/eval_gate.py`(검색 나빠짐 0 · 답 의미 있는 하락 없음, 같은 날 채점끼리 — 단, 단정 오답 감소 ≥ 잃은 정답 × 3이고 하한(업무지식 80%·정책서 85%) 이상이면 맞바꿈 통과, 10/30)
 - 마이그레이션(main.py)에서 칸을 지우거나 이름을 바꿨으면: 백업 복사본 DB에 `scripts/check_migrations_twice.py`(두 번 연속 기동해도 안 깨지는지)
 - `docker compose build` 성공 확인
 - 아키텍처 변경 시 docs/ 3개 파일(architecture.md/flow.md/table-definition.md 마이그레이션 이력) 동기화 — API 스펙은 `/docs` 자동 생성이라 손 동기화 불필요
@@ -71,7 +71,7 @@
 - **`useMutation`은 항상 `onError`를 갖는다** — 폼 컨텍스트가 있으면 기존 에러 상태 슬롯
   재사용, 없으면 `showError(err)`(앱 모달, `store/useDialogStore`). 브라우저 기본 `alert`/`confirm`은 쓰지 않음 —
   안내는 `showAlert`, 확인은 `await showConfirm(...)`(2026-10-07).
-- 관리자 화면 문구는 짧고 직관적으로 — 배경 설명은 `title` 툴팁으로.
+- 관리자 화면 문구는 짧고 직관적으로 — 배경 설명은 `title` 툴팁으로. 이름·버튼·필터는 **업계 표준 용어**로(채널·승인·제외·검수 완료·골든셋 — 자연어 말투 금지, 사용자 지침 맨 위).
 
 ## work-os 요청서 처리 (2026-10-19)
 work-os(총괄 세션)가 넘기는 요청은 `D:\MD자료\AIOps\전달\`에 있고 원장은 같은 폴더 `INDEX.md`.

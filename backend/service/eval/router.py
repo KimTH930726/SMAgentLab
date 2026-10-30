@@ -107,7 +107,23 @@ async def review_candidate(cand_id: int, body: ReviewBody, admin: dict = Depends
         raise HTTPException(status_code=400, detail=str(e))
     if not r:
         raise HTTPException(status_code=404, detail="후보가 없습니다.")
+    if body.status == "approved":   # [실험해 보기] = 실제로 잰다(10/30) — 자동 실험이 안 되는 후보는 이유만 돌려준다(결정은 저장됨)
+        try:
+            r = {**r, "experiment": await service.start_experiment(cand_id, user_id=admin["id"])}
+        except ValueError as e:
+            r = {**r, "experiment": None, "experiment_note": str(e)}
     return r
+
+
+@router.post("/candidates/{cand_id}/experiment")
+async def start_experiment(cand_id: int, admin: dict = Depends(get_current_admin)):
+    """[다시 돌리기] — 실패했거나 다시 재고 싶을 때. 진행 중인 작업이 있으면 그것을 돌려준다(하나만)."""
+    try:
+        return await service.start_experiment(cand_id, user_id=admin["id"])
+    except LookupError:
+        raise HTTPException(status_code=404, detail="후보가 없습니다.")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.post("/candidates/{cand_id}/adopt")
