@@ -32,8 +32,10 @@ function savePersonalConfig(cfg: SearchConfig) {
 export type AgentType = 'knowledge_rag';
 
 interface AppState {
-  selectedAgent: AgentType | null;
-  setSelectedAgent: (agent: AgentType | null) => void;
+  /** 에이전트는 지식 Q&A 하나(10/30 선택 화면·변경 버튼 걷어냄) — API의 agent_type 값으로만 쓴다 */
+  selectedAgent: AgentType;
+  /** 로그아웃 때 — 다른 사람이 같은 탭으로 들어와 앞사람 대화를 이어 열지 않게 */
+  resetSession: () => void;
   namespace: string;
   setNamespace: (ns: string) => void;
   conversationId: number | null;
@@ -50,8 +52,8 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  selectedAgent: null,
-  setSelectedAgent: (selectedAgent) => set({ selectedAgent, conversationId: null, conversations: [] }),
+  selectedAgent: 'knowledge_rag',
+  resetSession: () => set({ conversationId: null, conversations: [] }),
   namespace: '',
   setNamespace: (namespace) => set({ namespace, conversationId: null, conversations: [] }),
   conversationId: null,

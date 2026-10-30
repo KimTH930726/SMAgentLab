@@ -28,12 +28,9 @@ export async function chooseLocation(page: Page, namespace: string) {
   await page.locator('#picker-panel-business').waitFor({ state: 'detached' });
 }
 
-/** 주소로 바로 들어가기 — 새로고침이면 에이전트 선택 화면이 먼저 나와 "선택하기"를 누른다(10/23, 메뉴 바로잡기 확인용) */
+/** 주소로 바로 들어가기(10/23, 메뉴 바로잡기 확인용) — 에이전트 선택 화면이 없어져(10/30) 새로고침해도 그 주소로 */
 export async function gotoAdminUrl(page: Page, path: string) {
   await page.goto(path);
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  await agentHeading.or(page.locator('#sidebar-domain')).first().waitFor();
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
   await page.locator('#sidebar-domain').waitFor();
 }
 
@@ -48,9 +45,5 @@ export async function selectDomain(page: Page, name: string, label: string = nam
     localStorage.setItem(`opslens.namespace:${auth.user?.username}`, ns);
   }, name);
   await page.reload();
-  // 새로고침하면 에이전트 선택이 비어 선택 화면이 먼저 뜬다(App.tsx) — 고르면 주소(지금 메뉴)는 그대로라 원래 화면으로 돌아온다
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  await agentHeading.or(page.locator('#sidebar-domain')).first().waitFor();   // or() — 진 쪽 대기가 남지 않게(리뷰)
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
   await page.locator('#sidebar-domain', { hasText: label }).waitFor();
 }

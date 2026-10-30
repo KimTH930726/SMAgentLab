@@ -64,16 +64,16 @@ export function CorrectionAnalysis({ verdict, audience }: { verdict: AiVerdict; 
       )}
 
       <div className="space-y-1">
-        {verdict.user_claim && <Row label="이렇게 이해했어요">{verdict.user_claim}</Row>}
-        {verdict.reason && <Row label="판단 이유">{verdict.reason}</Row>}
+        {verdict.user_claim && <Row label="요청 요지">{verdict.user_claim}</Row>}
+        {verdict.reason && <Row label="판단 근거">{verdict.reason}</Row>}
         {verdict.wrong_part && (
-          <Row label={verdict.verdict === 'answer_error' ? '답변의 틀린 부분' : '틀린 부분'}>
+          <Row label={verdict.verdict === 'answer_error' ? '답변 불일치 항목' : '불일치 항목'}>
             <mark className="bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200 rounded px-1">
               {verdict.wrong_part}
             </mark>
           </Row>
         )}
-        {verdict.fix_summary && <Row label="반영되면">{verdict.fix_summary}</Row>}
+        {verdict.fix_summary && <Row label="반영 결과">{verdict.fix_summary}</Row>}
         {verdict.verdict === 'answer_error' && (
           <Row label="지식은">그대로 둬요 — 답변 품질 신호로 담당자에게 전달돼요.</Row>
         )}

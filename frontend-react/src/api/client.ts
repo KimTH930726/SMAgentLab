@@ -1,3 +1,4 @@
+import { useAppStore } from '../store/useAppStore';
 import type { SSEEvent } from '../types';
 import { useAuthStore } from '../store/useAuthStore';
 
@@ -55,7 +56,7 @@ async function tryRefreshToken(): Promise<boolean> {
     });
     if (!resp.ok) {
       // 갱신 토큰이 거절된 것(401/403)만 로그인 만료 — 서버 재시작 중 nginx 502·504는 로그인을 유지(10/21 리뷰)
-      if (resp.status === 401 || resp.status === 403) logout();
+      if (resp.status === 401 || resp.status === 403) { useAppStore.getState().resetSession(); logout(); }
       return false;
     }
     const data = await resp.json();

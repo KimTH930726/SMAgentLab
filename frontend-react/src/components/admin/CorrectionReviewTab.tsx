@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle, ChevronLeft, ChevronRight, Sparkles, RefreshCw, Pencil } from 'lucide-react';
 import {
   correctionSourceLabel, listCorrections, approveCorrection, rejectCorrection, retargetCorrection, analyzeCorrection, redraftCorrection,
@@ -7,7 +7,6 @@ import {
 } from '../../api/corrections';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
-import { TabGuide } from './TabGuide';
 import { CorrectionAnalysis } from '../chat/CorrectionAnalysis';
 import { FormModal } from '../ui/FormModal';
 import { showError } from '../../store/useDialogStore';
@@ -133,9 +132,9 @@ type SourceGroup = 'all' | 'chat' | 'policy_direct' | 'policy_ai' | 'json_import
 const SOURCE_FILTERS: { id: SourceGroup; label: string }[] = [
   { id: 'all', label: '전체' },
   { id: 'chat', label: '채팅' },
-  { id: 'policy_direct', label: '정책 직접 수정' },
-  { id: 'policy_ai', label: '정책 AI 제안' },
-  { id: 'json_import', label: 'JSON 가져오기' },
+  { id: 'policy_direct', label: '정책 수정' },
+  { id: 'policy_ai', label: 'AI 제안' },
+  { id: 'json_import', label: '파일 업로드' },
   { id: 'eval_gate', label: '평가 게이트' },
 ];
 
@@ -282,6 +281,39 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
         <span className="text-slate-500" title={new Date(item.created_at).toLocaleString('ko-KR')}>
           · {pending ? `대기 ${elapsed(item.created_at, null)}` : `처리 ${elapsed(item.created_at, item.decided_at)} 소요${item.decided_by ? ` (${item.decided_by})` : ''}`}
         </span>
+        {/* 처리 버튼은 카드 머리 오른쪽 — 맨 아래면 스크롤해야 보였다(10/30 사용자 정리안) */}
+        {pending && <div className="ml-auto flex items-center gap-2 flex-wrap" data-testid="correction-actions">
+          <Button variant="ghost" size="sm" onClick={() => openModal('reject')} disabled={busy}>
+            {canFix && item.kind !== 'search_noise' ? '반려…' : '종료…'}
+          </Button>
+          {/* 의견이 없으면 "검토 초안"(값은 그대로, 의심 부분 표시) — 예전엔 초안을 안 만들어 눌러도 아무 일이 없었다(2026-10-07, 99번) */}
+          {canFix && !item.proposed && item.kind !== 'search_noise' && (
+            <Button variant="ghost" size="sm" loading={retarget.isPending} disabled={busy} onClick={() => retarget.mutate(key)}
+              title={item.user_input ? '신고 의견대로 고친 수정안을 AI가 만듭니다'
+                : '의견이 없어 맞는 값은 모릅니다 — AI가 질문과 견줘 의심되는 부분에 【확인 필요】를 달아 둡니다(값은 안 바꿈)'}>
+              <Sparkles className="w-3.5 h-3.5" />{item.user_input ? 'AI 초안 만들기' : 'AI 검토 초안'}
+            </Button>
+          )}
+          {canFix && (item.proposed || item.kind === 'search_noise') && (
+            <Button variant="secondary" size="sm" disabled={busy} onClick={() => openModal('redraft')}
+              title="어떻게 고치면 될지 한 줄로 알려 주면 AI가 수정안을 다시 씁니다">
+              <RefreshCw className="w-3.5 h-3.5" />AI 다시 쓰기
+            </Button>
+          )}
+          {canFix && (
+            <Button variant="secondary" size="sm" disabled={busy} onClick={openEdit}
+              title="수정안을 직접 고쳐 저장합니다 — 반영은 [승인]에서">
+              <Pencil className="w-3.5 h-3.5" />직접 수정
+            </Button>
+          )}
+          {canFix && item.proposed && !proposedMarked && (
+            <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy}
+              title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
+              onClick={() => item.proposed && approve.mutate(item.proposed)}>
+              승인
+            </Button>
+          )}
+        </div>}
       </div>
 
       {item.question_text && canFix && (
@@ -289,9 +321,10 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
           <p className="flex flex-wrap items-baseline gap-x-2"><span><span className="text-slate-500 mr-1">질문</span><span className="text-slate-200">{item.question_text}</span></span>
             <EvidenceButton namespace={item.namespace} question={item.question_text} canFlag /></p>
           {item.answer_text && (
-            <p className="text-slate-400 line-clamp-3" title={item.answer_text}>
-              <span className="text-slate-500 mr-1">당시 답변</span>{item.answer_text}
-            </p>
+            <details className="text-slate-400">
+              <summary className="cursor-pointer text-slate-500">당시 답변</summary>
+              <p className="mt-1 whitespace-pre-wrap">{item.answer_text}</p>
+            </details>
           )}
         </div>
       )}
@@ -404,38 +437,8 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
           {isAnswer && (
             <span className="text-xs text-slate-500 mr-auto">지식은 정상 — 반영할 내용이 없어요. 확인했으면 종료하세요.</span>
           )}
-          <Button variant="ghost" size="sm" onClick={() => openModal('reject')} disabled={busy}>
-            {canFix && item.kind !== 'search_noise' ? '반려…' : '종료…'}
-          </Button>
-          {/* 의견이 없으면 "검토 초안"(값은 그대로, 의심 부분 표시) — 예전엔 초안을 안 만들어 눌러도 아무 일이 없었다(2026-10-07, 99번) */}
-          {canFix && !item.proposed && item.kind !== 'search_noise' && (
-            <Button variant="ghost" size="sm" loading={retarget.isPending} disabled={busy} onClick={() => retarget.mutate(key)}
-              title={item.user_input ? '신고 의견대로 고친 수정안을 AI가 만듭니다'
-                : '의견이 없어 맞는 값은 모릅니다 — AI가 질문과 견줘 의심되는 부분에 【확인 필요】를 달아 둡니다(값은 안 바꿈)'}>
-              <Sparkles className="w-3.5 h-3.5" />{item.user_input ? 'AI 초안 만들기' : 'AI 검토 초안'}
-            </Button>
-          )}
-          {canFix && (item.proposed || item.kind === 'search_noise') && (
-            <Button variant="secondary" size="sm" disabled={busy} onClick={() => openModal('redraft')}
-              title="어떻게 고치면 될지 한 줄로 알려 주면 AI가 수정안을 다시 씁니다">
-              <RefreshCw className="w-3.5 h-3.5" />AI 다시 쓰기
-            </Button>
-          )}
-          {canFix && (
-            <Button variant="secondary" size="sm" disabled={busy} onClick={openEdit}
-              title="수정안을 직접 고쳐 저장합니다 — 반영은 [승인]에서">
-              <Pencil className="w-3.5 h-3.5" />직접 수정
-            </Button>
-          )}
           {canFix && item.proposed && proposedMarks > 0 && (
             <span className="text-xs text-amber-600 dark:text-amber-400">【확인 필요】 {proposedMarks}곳 — [직접 수정]하거나 [AI 다시 쓰기]로 맞는 내용을 알려 주세요</span>
-          )}
-          {canFix && item.proposed && !proposedMarked && (
-            <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy}
-              title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
-              onClick={() => item.proposed && approve.mutate(item.proposed)}>
-              승인
-            </Button>
           )}
 
           <FormModal
@@ -512,6 +515,16 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
     staleTime: 10_000,
   });
   const items = useMemo(() => (source === 'all' ? all : all.filter((i) => sourceGroup(i) === source)), [all, source]);
+  // 채널별 건수(지금 상태 안) · 상태별 건수(탭) — 0건 채널은 칩을 숨긴다(10/30)
+  const byChannel = useMemo(() => all.reduce<Record<string, number>>((m, i) => { const g = sourceGroup(i); m[g] = (m[g] ?? 0) + 1; return m; }, {}), [all]);
+  const statusCounts = useQueries({
+    queries: (['pending', 'approved', 'rejected'] as const).map((st) => ({
+      queryKey: ['corrections', namespace, st], queryFn: () => listCorrections(namespace || null, st), staleTime: 10_000,
+    })),
+  });
+  // 고른 채널이 0건이 되면(처리·상태 바꿈) 칩이 숨으니 전체로 — 안 보이는 칩이 선택된 채 목록이 비지 않게(리뷰 L6)
+  useEffect(() => { if (source !== 'all' && !(byChannel[source] > 0) && !isLoading) setSource('all'); }, [source, byChannel, isLoading]);
+  const counts: Record<string, number | undefined> = { pending: statusCounts[0].data?.length, approved: statusCounts[1].data?.length, rejected: statusCounts[2].data?.length };
   // 한 장씩 보기(기본, 사용자 10/27 "카드가 위아래로 붙어 가시성이 떨어짐") / 목록(한꺼번에 승인할 때)
   const [view, setView] = useState<'one' | 'list'>('one');
   const [idx, setIdx] = useState(0);
@@ -591,12 +604,6 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
 
   return (
     <div className="space-y-3">
-      <TabGuide
-        what="지식·정책을 고치자는 신호·제안이 모두 모이는 곳 — 승인해야 반영돼요"
-        when="채팅 '답변 틀림' · 평가 게이트 '이상해요' · 정책서 화면의 직접 수정·AI 수정 제안"
-        todo="승인 / 직접 수정 / AI 다시 쓰기(요청 한 줄) / 반려. 대기 건은 골라서 한꺼번에 승인할 수 있어요"
-        detail="승인 전엔 검색·답변에 전혀 반영되지 않습니다. 승인하면 기존 내용은 이력으로 남고 새 버전이 쓰이며, 반려 사유는 신고자(제안자)에게 보여집니다. 처리는 그 업무 컬렉션 담당 파트와 관리자가 할 수 있습니다."
-      />
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex gap-1">
           {(['pending', 'approved', 'rejected'] as const).map((s) => (
@@ -606,16 +613,25 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
               className={`px-3 py-1 text-xs rounded-lg border ${status === s ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-slate-700 text-slate-400 hover:text-slate-200'}`}
             >
               {s === 'pending' ? '대기' : s === 'approved' ? '반영됨' : '반려'}
+              {counts[s] != null && <span className="ml-1 tabular-nums opacity-70">{counts[s]! >= 200 ? '200+' : counts[s]}</span>}
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-1.5 text-xs text-slate-500">
-          출처
-          <select value={source} onChange={(e) => setSource(e.target.value as SourceGroup)} aria-label="출처"
-            className="bg-slate-800 border border-slate-600 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
-            {SOURCE_FILTERS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
-          </select>
-        </label>
+        <button type="button" className="text-xs text-slate-500 cursor-help" data-testid="correction-guide" aria-label="정정 요청 안내"
+          title={[
+            '지식·정책을 고치자는 신호·제안이 모이는 곳 — 승인 전엔 검색·답변에 반영되지 않음.',
+            '처리: 승인 · 직접 수정 · AI 다시 쓰기(요청 한 줄) · 반려. [목록]에서 골라 일괄 승인.',
+            '승인하면 기존 내용은 이력으로 남고 새 버전이 쓰임. 처리 권한: 그 업무 컬렉션 담당 파트 · 관리자.',
+          ].join(' ')}>ⓘ</button>
+        <div className="flex items-center gap-1.5 flex-wrap text-xs" role="group" aria-label="채널" data-testid="correction-channels">
+          <span className="text-slate-500" title="정정 요청이 들어온 경로 — 채팅 신고 · 정책 화면 직접 수정 · 원문 확인 AI 제안 · 정책 파일 업로드 · 평가 게이트">채널</span>
+          {SOURCE_FILTERS.filter((f) => f.id === 'all' || (byChannel[f.id] ?? 0) > 0).map((f) => (
+            <button key={f.id} onClick={() => setSource(f.id)} aria-pressed={source === f.id}
+              className={`px-2.5 py-0.5 rounded-full border ${source === f.id ? 'border-indigo-500 dark:border-indigo-400 bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}`}>
+              {f.label} <span className="tabular-nums opacity-70">{f.id === 'all' ? all.length : byChannel[f.id]}</span>
+            </button>
+          ))}
+        </div>
         <div className="flex rounded-lg border border-slate-700 overflow-hidden text-xs" role="group" aria-label="보기">
           {(['one', 'list'] as const).map((v) => (
             <button key={v} onClick={() => setView(v)} aria-pressed={view === v}

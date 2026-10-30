@@ -28,8 +28,8 @@ test.afterEach(() => {
 });
 
 test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까지 된다', async ({ page }) => {
-  // page.goto('/admin')는 풀 리로드라 selectedAgent(비영속 Zustand 상태)가 초기화돼
-  // 다시 에이전트 선택 화면으로 튕긴다 — 사이드바 링크 클릭(클라이언트 라우팅)으로 이동.
+  // 관리 화면은 사이드바 링크로(클라이언트 라우팅)
+
   await page.getByRole('link', { name: 'Admin' }).click();
   await goAdmin(page, '지식', '지식 문서');
 

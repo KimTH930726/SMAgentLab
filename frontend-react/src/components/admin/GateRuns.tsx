@@ -290,7 +290,7 @@ export function AnswerTab({ axis = 'policy' }: { axis?: GateAxis }) {
         {lk && (
           <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 space-y-1">
             <p className="text-xs text-slate-400"
-              title="잠근 시험지 — 팀원이 직접 쓴 질문·실사용 질문. 고칠 때(진단·후보)는 안 보고 결과를 잴 때만 봐서 '시험지에만 강해지는' 착시를 막는다. 목표 숫자">
+              title="잠근 골든셋(holdout) — 팀원이 직접 쓴 질문·실사용 질문. 고칠 때(진단·후보)는 안 보고 결과를 잴 때만 봐서 과적합 착시를 막는다. 목표 숫자">
               사람이 쓴 질문 ⓘ</p>
             <p className="text-3xl font-semibold text-slate-100" data-testid="locked-accuracy">
               {pct(lk.accuracy)}<span className="ml-1.5 text-sm font-normal text-slate-400">{lk.n}문항</span>
@@ -308,8 +308,8 @@ export function AnswerTab({ axis = 'policy' }: { axis?: GateAxis }) {
           <button className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline" onClick={() => setInfo('total')}>무엇인가요? →</button>
         </div>
       </div>
-      <MetricInfo open={info === 'locked'} onClose={() => setInfo(null)} title="사람이 쓴 질문 (잠근 시험지)"
-        what="팀원이 직접 쓴 질문과, 정정 요청이 승인돼 정답이 생긴 실제 채팅 질문입니다. 고칠 방법을 찾을 때는 이 문항을 보지 않고 결과를 잴 때만 봅니다 — 같은 문항으로 고치고 채점하면 '시험지에만 강해지는' 착시가 생겨서. 그래서 이 숫자가 목표 숫자입니다."
+      <MetricInfo open={info === 'locked'} onClose={() => setInfo(null)} title="사람이 쓴 질문 (잠근 골든셋)"
+        what="팀원이 직접 쓴 질문과, 정정 요청이 승인돼 정답이 생긴 실제 채팅 질문입니다. 고칠 방법을 찾을 때는 이 문항을 보지 않고 결과를 잴 때만 봅니다 — 같은 문항으로 고치고 채점하면 골든셋에만 강해지는 과적합 착시가 생겨서. 그래서 이 숫자가 목표 숫자입니다."
         calc={lk ? `문항마다 ${s.reps}회 답한 정답 비율의 평균 · ${lk.n}문항 → ${pct(lk.accuracy)}` : '-'}
         rows={rows.filter((r) => ['사람 문항', '실사용'].includes(r.name)).map(({ name, v }) => ({ name, v: v.accuracy, n: v.n }))} />
       <MetricInfo open={info === 'total'} onClose={() => setInfo(null)} title="전체 정답률"

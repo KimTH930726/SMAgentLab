@@ -140,13 +140,13 @@ test('AI가 본 근거(지식 상세) — 이 지식의 순위 표시 · 화면 
     const before = Number(psql(`SELECT count(*) FROM eval_question_candidate WHERE question = '${PREVIEW_Q}'`));
     await policies.first().getByLabel('이게 맞는 답').check();
     await dlg.getByTestId('preview-add').click();
-    await expect(page.getByTestId('app-dialog')).toContainText('시험지에 넣었어요');
+    await expect(page.getByTestId('app-dialog')).toContainText('골든셋에 추가했어요');
     await page.getByTestId('app-dialog-ok').click();
     const want = api.items.find((x: { kind: string }) => x.kind === 'policy').logical_id;
     expect(psql(`SELECT count(*) || '|' || max(status) || '|' || max(source) || '|' || max(gold->>'logical_id') FROM eval_question_candidate WHERE question = '${PREVIEW_Q}'`))
       .toBe(`${before + 1}|added|preview|${want}`);
     await dlg.getByTestId('preview-add').click();   // 두 번 눌러도 한 줄
-    await expect(page.getByTestId('app-dialog')).toContainText('이미 시험지에');
+    await expect(page.getByTestId('app-dialog')).toContainText('이미 골든셋에');
     await page.getByTestId('app-dialog-ok').click();
     expect(psql(`SELECT count(*) FROM eval_question_candidate WHERE question = '${PREVIEW_Q}'`)).toBe(String(before + 1));
   }

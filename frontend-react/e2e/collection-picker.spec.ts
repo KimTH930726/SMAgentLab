@@ -34,9 +34,6 @@ test('보는 컬렉션 — 테스트 컬렉션 숨김 · 고르면 칩 반영 ·
   await expect(chip).toContainText(target);
 
   await page.reload();                                                                                 // ③ 새로고침 유지
-  const agentHeading = page.getByRole('heading', { name: '에이전트 선택' });
-  await expect(agentHeading.or(chip)).toBeVisible();
-  if (await agentHeading.isVisible().catch(() => false)) await page.getByText('선택하기').first().click();
   await expect(chip).toContainText(target);
   expect(await page.evaluate(() => {
     const u = JSON.parse(localStorage.getItem('ops_auth') || '{}').user?.username;

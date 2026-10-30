@@ -30,7 +30,7 @@ async function openList(page: Page) {
 }
 
 async function approveCard(page: Page, id: number) {
-  // 앱 안에서 이동 — 주소로 새로 열면 에이전트 선택부터 다시 나온다. 한 건씩 보기 대신 [목록]으로 그 카드를 찾는다
+  // 앱 안에서 이동 — 한 건씩 보기 대신 [목록]으로 그 카드를 찾는다
   if (await page.getByRole('dialog').count()) await page.keyboard.press('Escape');   // 정책 상세가 열려 있으면 닫고
   await goAdmin(page, '품질', '정정 요청');
   await page.getByRole('group', { name: '보기' }).getByRole('button', { name: '목록' }).click();

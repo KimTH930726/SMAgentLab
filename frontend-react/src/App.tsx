@@ -12,7 +12,6 @@ import Chat from './pages/Chat';
 import Admin from './pages/Admin';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import AgentSelect from './pages/AgentSelect';
 
 // export — 컴포넌트 밖(store)에서 캐시를 갱신할 때 쓰도록 열어 둠(옛 useTrack2Store는 v2.176에서 화면과 함께 지움)
 export const queryClient = new QueryClient({
@@ -74,7 +73,6 @@ function AppContent() {
   const location = useLocation();
   const isAdmin = location.pathname.startsWith('/admin');
   const bumpChatRefresh = useAppStore((s) => s.bumpChatRefresh);
-  const selectedAgent = useAppStore((s) => s.selectedAgent);
 
   // admin → chat 전환 시 메시지 재로드 트리거
   const prevAdminRef = useRef(isAdmin);
@@ -85,11 +83,6 @@ function AppContent() {
       bumpChatRefresh();
     }
   }, [isAdmin, bumpChatRefresh]);
-
-  // 에이전트 미선택 시 에이전트 선택 화면
-  if (!selectedAgent) {
-    return <AgentSelect />;
-  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-900">

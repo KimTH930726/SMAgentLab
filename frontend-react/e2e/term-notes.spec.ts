@@ -44,6 +44,13 @@ test('다른 팀이 다른 뜻으로 쓰는 용어 → 답 아래 참고(팀 이
   const note = page.getByTestId('term-notes').last();
   await expect(note).toBeVisible({ timeout: 180_000 });
   await expect(note).toContainText(`다른 팀에서는 '${TERM}'`);
+  // 근거 카드는 평소 접힘(10/30) — "근거 N건 ▸"를 눌러야 펼쳐진다
+  const toggle = page.getByTestId('evidence-toggle').last();
+  if (await toggle.count()) {
+    await expect(page.getByText(/검색된 문서 \d+건|정책 근거 \d+건/)).toHaveCount(0);
+    await toggle.click();
+    await expect(page.getByText(/검색된 문서 \d+건|정책 근거 \d+건/).first()).toBeVisible();
+  }
   // 화면 = 서버가 저장한 참고(메시지 metadata) — 서버 규칙(하위 영역·정규화 비교·정책 파트 제외)을 시험에서 다시 짜지 않는다(리뷰 L4)
   const saved = JSON.parse(psql(`SELECT coalesce(m.metadata->'term_notes', '[]')::text FROM ops_message m JOIN ops_conversation c ON c.id = m.conversation_id
     WHERE c.id > ${before} AND m.role = 'assistant' ORDER BY m.id DESC LIMIT 1`)) as { term: string; others: { area: string }[] }[];
@@ -54,7 +61,6 @@ test('다른 팀이 다른 뜻으로 쓰는 용어 → 답 아래 참고(팀 이
 
   // 대화 기록(메시지 metadata.term_notes)으로 다시 그려도 그대로 — 새로고침하면 빈 채팅이라 사이드바에서 그 대화를 다시 연다
   await page.reload();
-  await page.getByText('선택하기').first().click();   // 새로고침하면 에이전트 선택부터
   await selectDomain(page, NS);
   await page.getByText(Q, { exact: false }).first().click();
   await expect(page.getByTestId('term-notes').last()).toContainText(`다른 팀에서는 '${TERM}'`, { timeout: 30_000 });

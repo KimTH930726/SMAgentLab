@@ -38,7 +38,7 @@ async function openQueue(page: Page) {
   await loginAdmin(page);
   await selectDomain(page, NS);
   await goAdmin(page, '품질', '정정 요청');
-  await page.getByLabel('출처').selectOption({ label: '정책 직접 수정' });
+  await page.getByTestId('correction-channels').getByRole('button', { name: /^정책 수정/ }).click();   // 채널 칩(10/30, 옛 출처 선택 상자)
 }
 
 // 한꺼번에 승인은 [목록] 보기에서만(기본은 한 건씩, 10/27)
@@ -137,10 +137,10 @@ test('한 건씩 보기 — 마지막 건을 처리해도, 거르기로 목록�
   await expect.poll(() => corrStatus(Number(last!.slice('correction-'.length)))).toBe('approved');
   if (total > 1) await expect(pos).toHaveText(`${total - 1} / ${total - 1}`);   // 같은 자리 = 이제 마지막 카드
   // 출처 전체에서 뒤쪽으로 간 뒤 좁은 출처로 바꿔도 깨지지 않음
-  await page.getByLabel('출처').selectOption({ label: '전체' });
+  await page.getByTestId('correction-channels').getByRole('button', { name: /^전체/ }).click();
   const all = Number((await pos.textContent())!.split('/')[1].trim());
   for (let i = 1; i < all; i++) await page.getByRole('button', { name: '다음 건' }).click();
-  await page.getByLabel('출처').selectOption({ label: '정책 직접 수정' });
+  await page.getByTestId('correction-channels').getByRole('button', { name: /^정책 수정/ }).click();   // 채널 칩(10/30, 옛 출처 선택 상자)
   await expect(pos).toHaveText(/^1 \/ \d+$/);
   await expect(page.getByTestId('correction-pager').locator('[id^="correction-"]')).toHaveCount(1);
 });

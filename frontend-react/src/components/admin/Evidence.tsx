@@ -12,7 +12,7 @@ import { Modal } from '../ui/Modal';
  * AI가 본 근거(10/28, 옛 평가 게이트 › 검색 미리보기를 바꿈 — 사용자 "개발하는 나조차 인지가 안 되면 아무도 못 쓴다", "검색 미리보기? 뭘 미리 봐").
  * 이 질문에 AI가 무엇을 보고 답하는지 — 채팅과 같은 검색(서버 build_chat_context, LLM 0). 독립 탭이 아니라 쓸 일이 생기는 자리에 붙는다:
  *   정정 요청 신고 카드(그 질문으로 바로 — 왜 그렇게 답했나) · 지식 상세(이 지식이 검색에 잡히나 — 몇 위인지 표시).
- * 결과 아래 "다음에 할 일" = 맞는 답 표시 → 시험지에 넣기(관리자) · 이상한 지식 → 정정 요청.
+ * 결과 아래 "다음에 할 일" = 맞는 답 표시 → 골든셋에 추가(관리자) · 이상한 지식 → 정정 요청.
  */
 
 const VERDICT_TONE: Record<string, string> = {
@@ -46,8 +46,8 @@ export function EvidenceView({ namespace, initialQuestion = '', highlightId, can
   const add = useMutation({
     mutationFn: () => addPreviewQuestion(res!.namespace, res!.question, gold!),
     onSuccess: (r) => showAlert(r.created
-      ? `시험지에 넣었어요(${r.qid}) — 다음 측정부터 이 질문이 맞는지 채점합니다(잠근 칸: 고칠 방법을 만들 땐 안 봄)`
-      : `이미 시험지에 있는 질문이에요(${r.qid})`),
+      ? `골든셋에 추가했어요(${r.qid}) — 다음 측정부터 이 질문이 맞는지 채점합니다(잠근 칸: 고칠 방법을 만들 땐 안 봄)`
+      : `이미 골든셋에 있는 질문이에요(${r.qid})`),
     onError: (e) => showError(e),
   });
   const flag = useMutation({
@@ -100,7 +100,7 @@ export function EvidenceView({ namespace, initialQuestion = '', highlightId, can
             <div className={clsx(ROW, 'px-4 py-1.5 text-[11px] text-slate-500 bg-slate-900/60 min-w-[680px]')}>
               <span>순위</span><span>어떻게 찾았나</span><span>AI가 본 것</span><span>점수</span><span />
             </div>
-            {res.items.length === 0 && <p className="px-4 py-3 text-sm text-slate-500">AI가 본 근거가 없어요.</p>}
+            {res.items.length === 0 && <p className="px-4 py-3 text-sm text-slate-500">AI가 본 근거가 없어요(검색 결과 0).</p>}
             {res.items.map((it, i) => <Row key={i} it={it} gold={gold} setGold={setGold} canPick={isAdmin} canFlag={canFlag} mine={it.kind === 'knowledge' && it.id === highlightId}
               flagged={it.id != null && flagged.has(it.id)} onFlag={(id) => flag.mutate(id)}
               pickable={it.kind === 'policy' && res.items.findIndex((x) => x.kind === 'policy' && x.logical_id === it.logical_id) === i} />)}
@@ -111,15 +111,15 @@ export function EvidenceView({ namespace, initialQuestion = '', highlightId, can
             <ul className="text-xs text-slate-400 space-y-1 list-disc pl-4">
               <li>맞는 근거가 아래쪽에 있거나 없으면 — 지식·정책 내용에 질문에 쓰는 말이 있는지 보고 고치기(지식 문서 · 정책서)</li>
               {canFlag && <li>엉뚱한 지식이 위에 있으면 — 그 줄의 [이상해요] → 정정 요청으로</li>}
-              {isAdmin && <li>이 질문을 계속 지켜보려면 — 맞는 정책에 [이게 맞는 답] 표시 → [시험지에 넣기](다음 측정부터 이 질문이 맞는지 채점)</li>}
+              {isAdmin && <li>이 질문을 계속 지켜보려면 — 맞는 정책에 [이게 맞는 답] 표시 → [골든셋에 추가](다음 측정부터 이 질문이 맞는지 채점)</li>}
             </ul>
             {isAdmin && (
               <div className="flex flex-wrap items-center gap-3 pt-1">
                 <span className="text-sm text-slate-300 min-w-0 flex-1">
-                  {goldName ? <>맞는 답: <b className="text-slate-100">{goldName}</b></> : policies.length ? '맞는 답인 정책을 표시하면 넣을 수 있어요' : '정책이 안 잡혀서 시험지에 넣을 수 없어요'}
+                  {goldName ? <>맞는 답: <b className="text-slate-100">{goldName}</b></> : policies.length ? '맞는 답인 정책을 표시하면 넣을 수 있어요' : '정책이 안 잡혀서 골든셋에 추가할 수 없어요'}
                 </span>
                 <button onClick={() => add.mutate()} disabled={gold == null || add.isPending} data-testid="preview-add"
-                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 disabled:opacity-50">시험지에 넣기</button>
+                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 disabled:opacity-50">골든셋에 추가</button>
               </div>
             )}
           </div>
@@ -150,7 +150,7 @@ function Row({ it, gold, setGold, flagged, onFlag, pickable, canPick, canFlag, m
       </span>
       <span>
         {canPick && pickable && it.logical_id != null && (
-          <label className="inline-flex items-center gap-1 text-xs text-slate-300 cursor-pointer" title="이 질문의 맞는 답이 이 정책 — 시험지에 넣을 때 정답으로">
+          <label className="inline-flex items-center gap-1 text-xs text-slate-300 cursor-pointer" title="이 질문의 맞는 답이 이 정책 — 골든셋에 추가할 때 정답으로">
             <input type="radio" name="preview-gold" checked={gold === it.logical_id} onChange={() => setGold(it.logical_id!)} />이게 맞는 답
           </label>
         )}
@@ -166,7 +166,7 @@ function Row({ it, gold, setGold, flagged, onFlag, pickable, canPick, canFlag, m
 }
 
 /** [AI가 본 근거 ▸] 버튼 + 창 — 신고 카드·지식 상세에 붙는다 */
-export function EvidenceButton({ namespace, question = '', highlightId, label = 'AI가 본 근거', canFlag = false }: {
+export function EvidenceButton({ namespace, question = '', highlightId, label = 'AI 분석', canFlag = false }: {
   namespace: string; question?: string; highlightId?: number; label?: string; canFlag?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -177,7 +177,7 @@ export function EvidenceButton({ namespace, question = '', highlightId, label = 
         className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:underline dark:text-indigo-400">
         <ScanSearch className="w-3.5 h-3.5" />{label} ▸
       </button>
-      <Modal isOpen={open} onClose={() => setOpen(false)} title={question ? `AI가 본 근거 — ${question}` : 'AI가 본 근거'} maxWidth="max-w-4xl">
+      <Modal isOpen={open} onClose={() => setOpen(false)} title={question ? `AI 분석 — ${question}` : 'AI 분석'} maxWidth="max-w-4xl">
         {open && <EvidenceView namespace={namespace} initialQuestion={question} highlightId={highlightId} canFlag={canFlag} />}
       </Modal>
     </>

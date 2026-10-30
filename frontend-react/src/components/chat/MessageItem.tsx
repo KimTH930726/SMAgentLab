@@ -359,6 +359,9 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
   const isUser = message.role === 'user';
   const knowledgeIds = (message.results ?? []).map((r) => r.id);
   const showDegraded = !!message.degraded && !message.isStreaming;   // AI가 답을 못 낸 답 — 경고 모양(근거만 보여 주기)
+  const nEvidence = (message.results?.length ?? 0) + (message.policyCitations?.length ?? 0);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const showEvidence = evidenceOpen || showDegraded;
   const policyItemIds = [...new Set((message.policyCitations ?? []).map((c) => c.item_id).filter((v): v is number => v != null))];
   // "정정 검토 중" 배지 — 같은 근거가 다른 답변에 나와도 표시되도록 근거 id 기준으로 조회
   const { data: underReview } = useQuery({
@@ -367,6 +370,12 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
     enabled: !isUser && !message.isStreaming && (knowledgeIds.length > 0 || policyItemIds.length > 0),
     staleTime: 30_000,
   });
+  // 근거 중 정정 검토 중인 것 수 — 카드의 underReview 판정과 같은 규칙(정책은 항목 단위)
+  const nReviewing = (message.results ?? []).filter((r) => underReview?.knowledge.includes(r.id)).length
+    + (message.policyCitations ?? []).filter((c) => (underReview?.policy_item
+      ? c.item_id != null && underReview.policy_item.includes(c.item_id)
+      : c.kind === 'param' ? c.param_id != null && !!underReview?.policy_param.includes(c.param_id)
+        : c.chunk_id != null && !!underReview?.policy_narrative.includes(c.chunk_id))).length;
   // 근거 카드의 "이 근거 틀림"은 2026-10-06 제거 — 신고는 "답변 틀림" 하나로(틀린 근거는 AI가 찾고 담당자가 바꿀 수 있음).
   // 실사용 0건이었고 버튼이 둘이라 차이를 헷갈렸다. 카드엔 "정정 검토 중" 배지만 남긴다.
 
@@ -403,8 +412,15 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
             </div>
           )}
 
+          {nEvidence > 0 && !showDegraded && (
+            <button type="button" onClick={() => setEvidenceOpen(!evidenceOpen)} aria-expanded={evidenceOpen} data-testid="evidence-toggle"
+              className="text-xs text-slate-500 hover:text-slate-300">
+              {evidenceOpen ? '▾' : '▸'} 근거 {nEvidence}건
+              {!evidenceOpen && nReviewing > 0 && <span className="ml-1.5 text-amber-600 dark:text-amber-400">· 정정 검토 중</span>}
+            </button>
+          )}
           {/* Search results */}
-          {message.results && message.results.length > 0 && (
+          {showEvidence && message.results && message.results.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-xs text-slate-500 font-medium">
                 검색된 문서 {message.results.length}건
@@ -424,13 +440,13 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
           {/* Policy citations — rag_knowledge 검색결과(results)와 별개 출처이므로 분리된 섹션으로 표시 */}
           {message.listAnswer && message.listAnswer.total > 0 && (
             <p data-testid="list-answer-note" className="text-xs text-violet-600 dark:text-violet-400 font-medium"
-              title="답이 분류 목록에서 나왔어요 — 아래 근거 카드는 그중 답에 가장 가까운 정책이에요">
+              title="답이 분류 목록에서 나왔어요 — 근거 카드([근거 ▸])는 그중 답에 가장 가까운 정책이에요">
               📑 목록 답 · {(message.listAnswer.names ?? []).join(', ')} 정책 {message.listAnswer.total}건
               {message.listAnswer.shown != null && message.listAnswer.shown < message.listAnswer.total
                 ? ` 중 ${message.listAnswer.shown}건으로 답함` : '에서'}
             </p>
           )}
-          {message.policyCitations && message.policyCitations.length > 0 && (
+          {showEvidence && message.policyCitations && message.policyCitations.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-xs text-violet-600 dark:text-violet-400 font-medium">
                 📋 정책 근거 {message.policyCitations.length}건{message.listAnswer ? ' · 답에 가장 가까운 것' : ''}

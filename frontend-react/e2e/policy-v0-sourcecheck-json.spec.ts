@@ -167,8 +167,6 @@ test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이
   await expect(page.getByTestId(`source-check-correction-${c2}`)).toContainText(`정정 요청 중 #${r1}`);
   expect((await request.post(`${API}/api/corrections/${r1}/reject`, { headers: H, data: { reason: 'E2E 반려' } })).ok()).toBeTruthy();
   await page.reload();
-  const agent = page.getByText('선택하기');   // 새로고침하면 에이전트 선택 화면부터
-  if (await agent.first().isVisible({ timeout: 5_000 }).catch(() => false)) await agent.first().click();
   await openPolicyTab(page, '원문 확인');
   await expect(page.getByTestId(`source-check-${c2}`)).toContainText(`정정 #${r1} 반려됨`);
   expect(psql(`SELECT status FROM ops_improvement_item WHERE id = ${c2}`)).toBe('pending');   // 카드는 처리 전 그대로
