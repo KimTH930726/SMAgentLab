@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { goAdmin } from './admin-nav';
+import { domainSelect, goAdmin, selectDomain } from './admin-nav';
 import { createSystem, dropSystem, psql } from './v0-fixture';
 import { loginAdmin } from './auth';
 
@@ -12,7 +12,7 @@ const SYS = 'E2E영역수정시스템';
 const ownersOf = (ns: string) => psql(`SELECT coalesce(string_agg(p.name, ',' ORDER BY p.name), '') FROM ops_namespace n
   JOIN ops_namespace_owner o ON o.namespace_id = n.id JOIN ops_part p ON p.id = o.part_id WHERE n.name = '${ns}'`);
 const cleanup = () => psql(`DELETE FROM ops_namespace WHERE name IN ('${NS}', '${NS2}')`);
-const selectedNs = (page: import('@playwright/test').Page) => page.evaluate(() => localStorage.getItem('opslens.namespace:admin'));
+const selectedNs = (page: import('@playwright/test').Page) => page.evaluate(() => (v => { try { return v && v.startsWith('{') ? JSON.parse(v).name : v; } catch { return v; } })(localStorage.getItem('opslens.namespace:admin')));   // 저장 값 = {id, name}(키 전환 2단계)
 // 운영 지식 화면의 서브탭(지식 조회 · 지식 등록 · 승인 대기) — 고른 탭만 indigo 밑줄
 const docsTab = (page: import('@playwright/test').Page, name: string) => page.getByRole('button', { name, exact: true });
 
@@ -71,4 +71,17 @@ test('시스템 컬렉션 줄 — [지식 등록 →]·[보기 →] 둘 다, [�
   } finally {
     dropSystem(SYS);
   }
+});
+
+test('고른 컬렉션 기억은 id로 — 이름이 바뀌어도 새로고침 뒤 같은 컬렉션(키 전환 2단계, 옛 이름 값도 읽음)', async ({ page }) => {
+  cleanup();
+  psql(`INSERT INTO ops_namespace (name, description, kind) VALUES ('${NS}', 'e2e', 'policy_test')`);
+  const id = Number(psql(`SELECT id FROM ops_namespace WHERE name = '${NS}'`).trim());
+  await loginAdmin(page);
+  await selectDomain(page, NS);   // 옛 형식(이름 글자)으로 넣는다 → 앱이 {id, name}으로 다시 쓴다
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('opslens.namespace:admin'))).toBe(JSON.stringify({ id, name: NS }));
+  psql(`UPDATE ops_namespace SET name = '${NS2}' WHERE id = ${id}`);   // 다른 곳(다른 관리자·스크립트)에서 이름을 바꿈
+  await page.reload();
+  await expect(domainSelect(page)).toContainText(NS2);
+  await expect.poll(() => selectedNs(page)).toBe(NS2);
 });

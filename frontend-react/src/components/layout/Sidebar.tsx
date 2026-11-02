@@ -113,7 +113,7 @@ export function Sidebar() {
     const ordered = nsDetails.filter((n) => isPickableDomain(n) && !isSystemCollection(n)).sort(byContentThenName);   // 고르는 창 정책 탭과 같은 순서
     const pickable = nsDetailsMissing ? valid : ordered.map((n) => n.name);   // 처음 선택은 정책 컬렉션(시스템은 기억한 값일 때만)
     const mine = user?.part ? ordered.filter(isMine).map((n) => n.name) : [];
-    const next = initialDomain({ stored: loadSelectedDomain(user?.username), valid, pickable, mine });
+    const next = initialDomain({ stored: loadSelectedDomain(user?.username, nsDetails), valid, pickable, mine });
     pendingNsRef.current = next && next !== namespace ? next : null;
     if (pendingNsRef.current) setNamespace(pendingNsRef.current);
   }, [namespace, namespaces, nsDetails, nsDetailsMissing, user?.username, user?.part, setNamespace]);
@@ -122,8 +122,11 @@ export function Sidebar() {
     if (!namespace || initedUserRef.current !== (user?.username ?? null)) return;
     if (pendingNsRef.current && pendingNsRef.current !== namespace) return;
     pendingNsRef.current = null;
-    saveSelectedDomain(user?.username, namespace);
-  }, [namespace, user?.username]);
+    const id = nsDetails.find((n) => n.name === namespace)?.id;
+    // 담당 정보가 있는데 그 이름이 없으면 = 다른 곳에서 막 이름을 바꿔 목록이 잠깐 어긋남 — id 없는 값으로 덮지 않는다(리뷰 L2)
+    if (id === undefined && nsDetails.length > 0) return;
+    saveSelectedDomain(user?.username, namespace, id);   // 담당 정보가 늦게 오면 그때 id까지 다시 씀
+  }, [namespace, nsDetails, user?.username]);
 
   // Load conversations when namespace changes (only on chat page)
   const refreshConversations = useCallback(async () => {

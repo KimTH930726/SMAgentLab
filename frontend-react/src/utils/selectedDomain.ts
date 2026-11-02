@@ -7,19 +7,35 @@ import type { NamespaceDetail } from '../types';
  */
 export const domainStorageKey = (username: string) => `opslens.namespace:${username}`;
 
-export function loadSelectedDomain(username: string | undefined): string | null {
+/** 저장 값 = {"id":2568,"name":"홈페이지 시스템"}(11/02 키 전환 2단계) — 이름을 바꿔도 id로 다시 찾는다. 옛 값(이름 글자)도 읽는다. */
+export function parseStoredDomain(raw: string | null): { id?: number; name: string } | null {
+  if (!raw) return null;
+  if (raw.startsWith('{')) {
+    try {
+      const v = JSON.parse(raw) as { id?: unknown; name?: unknown };
+      if (typeof v.name === 'string') return { id: typeof v.id === 'number' ? v.id : undefined, name: v.name };
+    } catch {
+      // 깨진 값 — 이름 글자로 본다(아래)
+    }
+  }
+  return { name: raw };
+}
+
+export function loadSelectedDomain(username: string | undefined, details: Pick<NamespaceDetail, 'id' | 'name'>[] = []): string | null {
   if (!username) return null;
   try {
-    return localStorage.getItem(domainStorageKey(username));
+    const v = parseStoredDomain(localStorage.getItem(domainStorageKey(username)));
+    if (!v) return null;
+    return (v.id !== undefined && details.find((d) => d.id === v.id)?.name) || v.name;
   } catch {
     return null;
   }
 }
 
-export function saveSelectedDomain(username: string | undefined, name: string): void {
+export function saveSelectedDomain(username: string | undefined, name: string, id?: number): void {
   if (!username || !name) return;
   try {
-    localStorage.setItem(domainStorageKey(username), name);
+    localStorage.setItem(domainStorageKey(username), JSON.stringify(id !== undefined ? { id, name } : { name }));
   } catch {
     // 저장 못 해도 이번 화면에선 고른 값이 그대로 쓰인다 — 다음 새로고침 때 기본값으로 돌아갈 뿐
   }

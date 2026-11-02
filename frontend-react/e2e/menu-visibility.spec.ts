@@ -45,7 +45,7 @@ test('메뉴 노출 — 시스템 컬렉션에서 통계 끄기 → 시스템을
   await goAdmin(page, '컬렉션', '시스템 컬렉션');
   const row = page.getByTestId('system-collections').getByRole('row').filter({ hasText: SYS });
   await row.getByText(SYS, { exact: true }).click();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('opslens.namespace:admin'))).toBe(SYS);
+  await expect.poll(() => page.evaluate(() => (v => { try { return v && v.startsWith('{') ? JSON.parse(v).name : v; } catch { return v; } })(localStorage.getItem('opslens.namespace:admin')))).toBe(SYS);
   await expect(row).toHaveAttribute('aria-current', 'true');
   await gotoAdminUrl(page, '/admin/q.stats');
   await expect(page).toHaveURL(/\/admin\/k\.docs$/);

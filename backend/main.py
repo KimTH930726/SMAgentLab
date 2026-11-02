@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from core.collection_ref import CollectionRefMiddleware
 from core.config import settings
 from core.database import init_pool, close_pool, get_conn
 from core.security import hash_password
@@ -2494,6 +2495,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# 컬렉션 키 전환 1단계 — 이름·업무 코드·id를 모두 받는다(core/collection_ref.py)
+app.add_middleware(CollectionRefMiddleware)
 
 for r in _ROUTERS:
     app.include_router(r)

@@ -37,7 +37,7 @@ test('보는 컬렉션 — 테스트 컬렉션 숨김 · 고르면 칩 반영 ·
   await expect(chip).toContainText(target);
   expect(await page.evaluate(() => {
     const u = JSON.parse(localStorage.getItem('ops_auth') || '{}').user?.username;
-    return localStorage.getItem(`opslens.namespace:${u}`);
+    return (v => { try { return v && v.startsWith('{') ? JSON.parse(v).name : v; } catch { return v; } })(localStorage.getItem(`opslens.namespace:${u}`));   // 저장 값 = {id, name}(키 전환 2단계)
   })).toBe(target);
 
 });

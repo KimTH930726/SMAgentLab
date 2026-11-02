@@ -64,7 +64,7 @@ test('시스템 컬렉션 — 추가 · 관련 정책 저장 · 고르는 창 [�
   await expect(domainSelect(page)).toContainText(SYS);
   expect(await page.evaluate(() => {
     const u = JSON.parse(localStorage.getItem('ops_auth') || '{}').user?.username;
-    return localStorage.getItem(`opslens.namespace:${u}`);
+    return (v => { try { return v && v.startsWith('{') ? JSON.parse(v).name : v; } catch { return v; } })(localStorage.getItem(`opslens.namespace:${u}`));   // 저장 값 = {id, name}(키 전환 2단계)
   })).toBe(SYS_KEY);
   // 다시 열면 지금 고른 시스템이 있는 [시스템] 탭으로
   await domainSelect(page).click();
