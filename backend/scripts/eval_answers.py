@@ -163,7 +163,7 @@ async def load_v0_golden(conn, extra: Optional[list[dict]] = None) -> tuple[list
 
 async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reuse: str = "", repeat: int = 1,
                   golden_set: str = "v0", llm_choice: str = "system", concurrency: int = 1, only_ns: str = "",
-                  scope: str = "") -> None:
+                  scope: str = "", context_budget: Optional[int] = None) -> None:
     from core.database import init_pool, get_conn
     from shared.embedding import embedding_service
     from agents.knowledge_rag.agent import build_chat_context
@@ -227,7 +227,7 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
         cc = await build_chat_context(
             g["namespace_name"], g["query"], vec, top_k=int(d["default_top_k"]), w_vector=d["default_w_vector"],
             w_keyword=d["default_w_keyword"], glossary_mode="embedding" if variant == "before" else None,
-            knowledge_scope=scope or None)
+            knowledge_scope=scope or None, context_budget=context_budget)
         t0 = time.time()
         abstained = cc.abstain and variant != "before"
         has_list = "[분류 목록:" in cc.llm_context
@@ -240,7 +240,7 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
             cc = await build_chat_context(
                 g["namespace_name"], g["query"], vec, top_k=int(d["default_top_k"]), w_vector=d["default_w_vector"],
                 w_keyword=d["default_w_keyword"], glossary_mode="embedding" if variant == "before" else None,
-                clarify_scope="*", list_question=g["query"], knowledge_scope=scope or None)
+                clarify_scope="*", list_question=g["query"], knowledge_scope=scope or None, context_budget=context_budget)
             abstained = cc.abstain and variant != "before"
             has_list = "[분류 목록:" in cc.llm_context
             h = ctx_hash(variant=variant, system_prompt=system_prompt, context=cc.llm_context, question=g["query"], model=model_id)
@@ -823,6 +823,7 @@ def main() -> None:
     c.add_argument("--concurrency", type=int, default=1, help="문항 동시 처리 수(로컬 LLM 측정은 4 권장 — 게이트웨이는 한도 때문에 1)")
     c.add_argument("--golden", choices=["v1", "v0"], default="v0", help="v0 = 정책서 v0 골든셋(eval_out/golden_v0, 10/21 재출발 — 기본값 10/23), v1 = 옛 엑셀 골든셋")
     c.add_argument("--llm", choices=["system", "local"], default="local", help="기본 local = 로컬 LLM(11/02 — 토큰 절약). system = 사내 게이트웨이, 사람 허락 뒤에만")
+    c.add_argument("--context-budget", type=int, default=None, help="문맥 예산(글자) — 한 줄 순위 위에서부터 이만큼만(11/02 측정 옵션)")
     c.add_argument("--scope", choices=["linked", "similar"], default=None, help="지식 검색 범위 실험(11/02) — linked: +받침 연결(업무↔시스템), similar: +질문과 가까운 업무 2개")
     c.add_argument("--ns", default="", help="쉼표로 구분한 영역 이름 — 그 영역에서 묻는 문항만(영향권 전후 측정)")
     c.add_argument("--reuse", default="", help="이전 answers 파일 — LLM 입력(질문·문맥·프롬프트·모델) 해시가 같고 오류가 아니던 문항만 그 답을 그대로(게이트웨이 호출 절약)")
@@ -838,7 +839,7 @@ def main() -> None:
     # 옛 --save(eval_answer_run 이력)는 v2.176에서 뺐다 — 판정·기록은 scripts/eval_gate.py --save(판정 기록 eval_gate_run) 한 곳
     a = ap.parse_args()
     if a.cmd == "collect":
-        asyncio.run(collect(a.variant, a.out, a.limit, a.prompt_file, a.reuse, a.repeat, a.golden, a.llm, a.concurrency, a.ns, a.scope or ""))
+        asyncio.run(collect(a.variant, a.out, a.limit, a.prompt_file, a.reuse, a.repeat, a.golden, a.llm, a.concurrency, a.ns, a.scope or "", a.context_budget))
     elif a.cmd == "judge":
         asyncio.run(judge(a.inp, a.out, a.votes, a.concurrency))
     elif a.cmd == "review-html":

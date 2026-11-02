@@ -8,7 +8,7 @@
 
     python scripts/confluence_synth_questions.py --out eval_out/confluence_synth.jsonl [--per-chunk 2] [--min-chars 80]
     # 한 컬렉션 조각만 표본으로, 질문은 다른 컬렉션에서 묻게(검색 범위 실험 — 11/02 조직 컬렉션 확장):
-    python scripts/confluence_synth_questions.py --out eval_out/cx_synth.jsonl --ns org:part:902 --sample 100 --per-chunk 1 --ask-ns 회원
+    python scripts/confluence_synth_questions.py --out eval_out/cx_synth.jsonl --ns "홈페이지 시스템" --sample 100 --per-chunk 1 --ask-ns 회원
 """
 from __future__ import annotations
 
