@@ -20,6 +20,8 @@
 | 문서 | 상태 | 내용 |
 |---|---|---|
 | [collection-design.md](domains/knowledge/collection-design.md) | 현행 | 컬렉션(업무 영역 트리) · 넣을 곳 AI 판단 · AI 판단 원장 |
+| [taxonomy-standard.md](domains/knowledge/taxonomy-standard.md) | 현행 | 지식 분류 표준 — 업무 영역 · 시스템 2종, 조직은 담당 연결만(11/02, #105) |
+| [collection-key-plan.md](domains/knowledge/collection-key-plan.md) | 계획 | 컬렉션 키 정리 — 이름 → id·업무 코드(POL-·SYS-) 전수검사·전환 단계(11/02) |
 | [source-ledger-plan.md](domains/knowledge/source-ledger-plan.md) | 현행 | 원문 원장 — 원문 = 기준, 조각 = 파생물, 다시 분할 |
 | [knowledge-lifecycle-design.md](domains/knowledge/knowledge-lifecycle-design.md) | 참고 | 지식 생명주기(중복·버전·삭제) 현황 분석·장기 설계 |
 | [retrieval-routing-pattern.md](domains/knowledge/retrieval-routing-pattern.md) | 참고 | 검색 전략 라우팅 원칙 |
