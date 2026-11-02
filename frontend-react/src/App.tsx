@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { DialogHost } from './components/ui/DialogHost';
+import { FeedbackHost } from './components/feedback/UserFeedback';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Sidebar } from './components/layout/Sidebar';
 import { useAppStore } from './store/useAppStore';
@@ -87,6 +88,7 @@ function AppContent() {
   return (
     <div className="flex h-screen overflow-hidden bg-slate-900">
       <Sidebar />
+      <FeedbackHost />
       <main className="flex-1 overflow-hidden">
         <div className={isAdmin ? 'hidden' : 'h-full'}>
           <Chat />

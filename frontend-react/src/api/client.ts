@@ -10,6 +10,8 @@ export class ApiError extends Error {
     message: string,
     /** 서버가 구조화된 detail(예: 정책서 업로드의 {message, problems})을 줬을 때 원본 그대로 — 화면이 표로 보여 줌 */
     public detail?: unknown,
+    /** 어느 요청이었나("POST /api/chat") — 오류 창 [오류 신고]가 문맥으로 붙인다(11/02) */
+    public path?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -19,13 +21,16 @@ export class ApiError extends Error {
 /** 서버에 아예 닿지 못함(서버 재시작·네트워크 끊김) — 브라우저 원문 "Failed to fetch" 대신 한국어 안내(10/21, 사용자가 본 그대로 노출됐다) */
 export const NETWORK_ERROR_MSG = '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.';
 
+// 쿼리는 뺀다 — 검색어 등 사용자 입력이 오류 문맥·개발 요청서로 새지 않게(리뷰 L4)
+const reqLabel = (url: string, init?: RequestInit) => `${(init?.method ?? 'GET').toUpperCase()} ${url.split('?')[0]}`;
+
 async function fetchOrNetworkError(url: string, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') throw err;   // 사용자가 멈춘 것은 그대로
     console.warn('네트워크 오류', url, err);
-    throw new ApiError(0, NETWORK_ERROR_MSG);
+    throw new ApiError(0, NETWORK_ERROR_MSG, undefined, reqLabel(url, init));
   }
 }
 
@@ -117,7 +122,7 @@ export async function apiFetch<T>(
     } catch {
       // ignore parse error
     }
-    throw new ApiError(response.status, message, rawDetail);
+    throw new ApiError(response.status, message, rawDetail, reqLabel(url, options));
   }
 
   // Handle 204 No Content
@@ -126,6 +131,15 @@ export async function apiFetch<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+/** 인증이 필요한 파일(첨부 이미지 등)을 Blob으로 — <img src>는 Authorization 헤더를 못 붙여서(11/02 피드백 첨부) */
+export async function apiFetchBlob(path: string): Promise<Blob> {
+  const url = `${BASE_URL}${path}`;
+  let response = await fetchOrNetworkError(url, { headers: getAuthHeaders() });
+  if (response.status === 401 && (await tryRefreshToken())) response = await fetchOrNetworkError(url, { headers: getAuthHeaders() });
+  if (!response.ok) throw new ApiError(response.status, gatewayDownMessage(response.status), undefined, reqLabel(url));
+  return response.blob();
 }
 
 export async function* streamSSE(

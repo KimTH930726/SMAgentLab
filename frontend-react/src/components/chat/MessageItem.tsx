@@ -11,6 +11,7 @@ import { Badge } from '../ui/Badge';
 import { SearchResultCard } from './SearchResultCard';
 import { PolicyCitationCard } from './PolicyCitationCard';
 import { FeedbackSection } from './FeedbackSection';
+import { ChatFailureReport, isChatFailure } from '../feedback/UserFeedback';
 import { useThemeStore } from '../../store/useThemeStore';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { CorrectionAnalysis } from './CorrectionAnalysis';
@@ -550,7 +551,11 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
 
           {/* Feedback — 피드백을 이미 보낸 답변도 의견이 아직 없으면 "의견 덧붙이기"를 남긴다(의견까지 접수했으면 숨김) */}
           {/* 재질문은 답이 아니라 "답변 틀림" 대상이 아니다 */}
-          {!message.isStreaming && message.content && namespace && message.status !== 'failed' && !message.clarify && (
+          {/* 장애 문구(LLM 연결 실패 등)는 답이 아니라 [정정 요청] 대신 [오류 신고](11/02) — 답 문구가 오류 문맥으로 붙는다 */}
+          {!message.isStreaming && isChatFailure(message.content) && (
+            <div className="mt-2"><ChatFailureReport content={message.content} /></div>
+          )}
+          {!message.isStreaming && message.content && namespace && message.status !== 'failed' && !message.clarify && !isChatFailure(message.content) && (
             <FeedbackSection
               namespace={message.answeredNamespace ?? namespace}
               question={message.question ?? ''}

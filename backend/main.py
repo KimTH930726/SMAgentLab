@@ -1557,7 +1557,7 @@ async def _migrate_experiment_runner(conn) -> None:
             page TEXT,
             conversation_id INT,
             reporter_user_id INT REFERENCES ops_user(id) ON DELETE SET NULL,
-            status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'planned', 'done', 'duplicate', 'declined')),
+            status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'planned', 'in_progress', 'done', 'duplicate', 'declined')),
             admin_note TEXT,
             duplicate_of INT REFERENCES ops_user_feedback(id) ON DELETE SET NULL,
             decided_by_user_id INT REFERENCES ops_user(id) ON DELETE SET NULL,
@@ -1566,6 +1566,22 @@ async def _migrate_experiment_runner(conn) -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_feedback_status ON ops_user_feedback (status, id DESC)")
+    # #104(11/02) 진행 중(선정 → 진행 중 → 완료, 진행 중일 때만 개발 요청서) · 오류 문맥(오류 창 [오류 신고]가 자동으로 붙임: 문구·요청 경로·상태 코드)
+    # · 첨부 이미지(화면 캡처 붙여넣기 — 관리자가 무슨 오류인지 보고 판단). 이미지는 DB에(폐쇄망에 저장 폴더를 따로 안 만들게), 보낸 사람·관리자만 봄
+    await conn.execute("ALTER TABLE ops_user_feedback DROP CONSTRAINT IF EXISTS ops_user_feedback_status_check")
+    await conn.execute("ALTER TABLE ops_user_feedback ADD CONSTRAINT ops_user_feedback_status_check "
+                       "CHECK (status IN ('new', 'planned', 'in_progress', 'done', 'duplicate', 'declined'))")
+    await conn.execute("ALTER TABLE ops_user_feedback ADD COLUMN IF NOT EXISTS context JSONB")
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_user_feedback_file (
+            id SERIAL PRIMARY KEY,
+            feedback_id INT NOT NULL REFERENCES ops_user_feedback(id) ON DELETE CASCADE,
+            mime TEXT NOT NULL,
+            size INT NOT NULL,
+            data BYTEA NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_feedback_file ON ops_user_feedback_file (feedback_id)")
     # 다시 시도할 페이지(실패·충돌) — 결과(last_result)는 매번 덮이므로 따로. 실패는 5회까지, 충돌은 풀릴 때까지(리뷰 M2)
     await conn.execute("ALTER TABLE rag_source_connection ADD COLUMN IF NOT EXISTS retry_pages JSONB NOT NULL DEFAULT '[]'::jsonb")
     # 처음 만든 표(SET NULL)도 CASCADE로 — 컬렉션이 지워지면 규칙도(NULL = 제외로 바뀌던 것, 리뷰 L2). 멱등
