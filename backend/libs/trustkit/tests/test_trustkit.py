@@ -242,3 +242,17 @@ def test_abstain_tradeoff():
     assert abstain_tradeoff([], after)["reason"] == "짝지은 문항 없음"
     # 회차 평균 단위 — 2회 중 1회 오답 → 0.5
     assert label_rates([{"qid": "a", "label": "오답"}, {"qid": "a", "label": "정답"}], "오답") == {"a": 0.5}
+
+
+def test_grounding_apply_verdict():
+    """답 뒤 근거 확인 해석 — 근거 없음은 '못 찾음', 일부는 고친 답, 해석 실패·빈 고친 답은 초안 그대로(대체를 표시)."""
+    from trustkit.answer.grounding import apply_verdict, verify_question
+    nf = "관련 지식을 찾지 못했습니다"
+    assert apply_verdict('{"verdict":"supported","answer":"x"}', "초안", nf).answer == "초안"
+    assert apply_verdict('앞말 {"verdict":"partial","answer":"고친 답"} 뒷말', "초안", nf) == ("partial", "고친 답")
+    assert apply_verdict('{"verdict":"partial","answer":""}', "초안", nf) == ("partial_empty", "초안")
+    assert apply_verdict('{"verdict":"unsupported","answer":""}', "초안", nf) == ("unsupported", nf)
+    for bad in ("", "JSON 아님", '{"verdict":"maybe"}', '{"verdict":'):
+        assert apply_verdict(bad, "초안", nf) == ("unparsed", "초안")
+    p = verify_question("질문", "답")
+    assert p.index("[질문]") < p.index("[초안 답변]") and "[참고 문서]" not in p   # 문서는 문맥 자리로

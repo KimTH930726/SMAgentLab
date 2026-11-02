@@ -154,6 +154,11 @@ TECHNIQUES: list[dict] = [
                                 ("2026-10-23", "답 지시 3줄 후보 — 조건 질문 −8.7%p로 실패(판정 #10)", 10),
                                 ("2026-10-23", "답 지시 2줄 후보 — 통과 +0.9%p 오차 안, 반영 검토 중(판정 #11)", 11)],
      "where": None},
+    {"key": "grounding_check", "name": "답 뒤 근거 확인", "stage": "생성",
+     "does": "답을 만든 뒤 같은 모델이 주장마다 문맥 근거를 확인 — 없는 주장은 빼고 핵심이 없으면 '못 찾음'(질문마다 LLM 1회 추가)",
+     "values": {}, "evidence": [("2026-10-30", "착수 — 업무지식 단정 오답 17.9%, 답 단계 오답 14건 중 지어냄 7·섞음 6. 지시문·문맥은 답 생성과 같은 통로로"
+                                               "(한 덩어리로 보내면 게이트웨이 거부 2/5)")],
+     "where": "libs/trustkit/trustkit/answer/grounding.py:def apply_verdict"},
 ]
 
 BY_KEY = {t["key"]: t for t in TECHNIQUES}

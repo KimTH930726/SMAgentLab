@@ -84,6 +84,20 @@ async def judge(client, model, question, ref, answer) -> dict:
     return {"label": "채점실패", "reason": ""}   # 응답은 왔는데 형식이 깨짐 — 장애로 따로 셈(정답률에서 뺌, eval_answers와 같음)
 
 
+async def _verify(llm, context: str, question: str, draft: str) -> tuple[str, str]:
+    """답 뒤 근거 확인 1회 — (최종 답, 판정). 확인 호출이 실패하면 초안 그대로 'error'(답 장애와 섞지 않음, 건수는 요약에)."""
+    from service.chat.helpers import is_llm_failure
+    from trustkit.answer.grounding import VERIFY_SYSTEM_KO, apply_verdict, verify_question
+    try:   # 답 생성과 같은 통로(문맥 자리 = 참고 문서) — generate_once로 한 덩어리 보내면 게이트웨이 거부가 났다
+        raw, _ = await llm.generate(context, verify_question(question, draft), None, system_prompt=VERIFY_SYSTEM_KO)
+    except Exception:  # noqa: BLE001
+        return draft, "error"
+    if is_llm_failure(raw):
+        return draft, "error"
+    v = apply_verdict(raw, draft, NO_KNOWLEDGE)
+    return v.answer, v.verdict
+
+
 def _read_rows(path: Path) -> list[dict]:
     """행 단위 저장 파일 읽기 — 중단(Ctrl+C)으로 쓰다 만 마지막 줄은 건너뛴다(그 행은 다음 실행에서 다시 만든다)."""
     rows, broken = [], 0
@@ -119,8 +133,11 @@ async def main() -> int:
     # 문맥 좁히기 실험(10/30) — 업무지식 문맥이 지식 3조각 + 상위 섹션 보충 평균 30 + 정책 서술 10(평균 1.8만 자)이라 섞임·지어냄 의심
     ap.add_argument("--policy-top-k", type=int, default=None, help="문맥에 붙일 정책 서술 수(기본: 운영값 10)")
     ap.add_argument("--no-expand", action="store_true", help="상위 섹션 보충(부모 확장)을 끈다 — 이 측정에서만")
+    # 답 뒤 근거 확인 실험(10/30) — 단정 오답 겨냥(지어냄 7·섞음 6/14). 질문마다 같은 답 모델로 1회 더(trustkit.answer.grounding)
+    ap.add_argument("--verify", action="store_true", help="답 뒤 근거 확인 — 초안의 주장이 문맥에 없으면 빼거나 '못 찾음'으로")
     a = ap.parse_args()
-    variant = ",".join(x for x in (f"policy_top_k={a.policy_top_k}" if a.policy_top_k is not None else "", "no_expand" if a.no_expand else "") if x) or None
+    variant = ",".join(x for x in (f"policy_top_k={a.policy_top_k}" if a.policy_top_k is not None else "", "no_expand" if a.no_expand else "",
+                                   "verify" if a.verify else "") if x) or None
     if a.no_expand:   # 에이전트가 모듈 속성으로 부르므로 여기서 바꾸면 이 프로세스(측정)만 바뀐다
         async def _no_expand(*_a, **_k):
             return []
@@ -178,6 +195,7 @@ async def main() -> int:
                     if (it["qid"], k) in done:
                         continue
                     err = None
+                    verdict = None
                     if cc.abstain:
                         ans = NO_KNOWLEDGE
                     else:
@@ -187,11 +205,13 @@ async def main() -> int:
                                 err = "llm_failure"
                         except Exception as e:  # noqa: BLE001
                             ans, err = "", type(e).__name__
+                        if a.verify and not err and NO_KNOWLEDGE not in ans:
+                            ans, verdict = await _verify(llm, cc.llm_context, it["question"], ans)
                     j = rule_label(err, ans, ref) or await judge(client, model, it["question"], ref, ans)
                     row = {"qid": it["qid"], "rep": k, "type": "knowledge", "cluster": it.get("cluster"), "question": it["question"],
                            "answer": ans, "error": err, "abstained": cc.abstain, "clarified": clarified, "gold_in_context": gic,
                            "n_gold": len(it["gold_ids"]), "n_gold_active": n_active, "judge": j, "judge_rubric": RUBRIC, "judged_on": today,
-                           "answer_llm": a.llm, "prompt": prompt_name, "variant": variant}   # 이어 하기에서 답 모델이 섞이지 않았는지 볼 수 있게(리뷰 L8)
+                           "answer_llm": a.llm, "prompt": prompt_name, "variant": variant, "verify": verdict}   # 이어 하기에서 답 모델이 섞이지 않았는지 볼 수 있게(리뷰 L8)
                     with out.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 if n % 20 == 0:
@@ -226,6 +246,9 @@ async def main() -> int:
     print(f"  정답 조각이 문맥에 없음 {len(nog)}: 그래도 정답 {sum(r['judge']['label'] == '정답' for r in nog)} — 다른 문서로 답함")
     print(f"  근거 없음 즉시 판정(LLM 안 부름) {sum(r['abstained'] for r in rows)} · 생성 오류 {sum(bool(r['error']) for r in rows)} · "
           f"재질문 문항 {sum(r.get('clarified', False) for r in rows)}")
+    vc = collections.Counter(r.get("verify") for r in rows if r.get("verify"))
+    if vc:   # 근거 확인 결과 — 해석 실패·확인 장애(unparsed·error)는 초안 그대로 둔 것(대체 처리 표시)
+        print("  근거 확인: " + " · ".join(f"{k} {v}" for k, v in vc.most_common()))
     partial = sum(1 for r in rows if 0 < r.get("n_gold_active", 1) < r.get("n_gold", 1))
     if partial:
         print(f"  정답 조각 일부만 활성인 행 {partial} — 기준이 줄어 부분·오답이 부풀 수 있음")

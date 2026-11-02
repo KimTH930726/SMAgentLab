@@ -42,8 +42,8 @@ def runnable(c: dict, axis: str) -> Optional[str]:
         return "바꿀 것이 글로만 있어 자동 실험 불가 — 개발 작업 필요"
     if c.get("measure") not in ("retrieval", "answers"):
         return "이미 다시 계산한 후보(LLM 없음) — 실험 없이 결과가 위에 있어요"
-    if (ch.get("policy_top_k") is not None or ch.get("no_expand")) and axis != "knowledge":
-        return "문맥 옵션 실험은 업무지식 축만"
+    if (ch.get("policy_top_k") is not None or ch.get("no_expand") or ch.get("verify")) and axis != "knowledge":
+        return "문맥 옵션·근거 확인 실험은 업무지식 축만"
     return None
 
 
@@ -102,6 +102,8 @@ def plan(job_id: int, cand: dict, axis: str, *, label: str, by: str, prompt_file
             after += ["--policy-top-k", str(int(ch["policy_top_k"]))]
         if ch.get("no_expand"):
             after += ["--no-expand"]
+        if ch.get("verify"):
+            after += ["--verify"]
         steps.append({"stage": "바꾼 설정 답·채점", "argv": after, "env": env})
         gate += ["--answers-before", f"{d}_ans_before.jsonl", "--answers-after", f"{d}_ans_after.jsonl"]
     steps.append({"stage": "게이트 판정", "argv": gate, "env": {}})

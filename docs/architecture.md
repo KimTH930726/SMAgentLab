@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.194)
+# OpsLens 시스템 아키텍처 (v2.195)
 
 ## 개요
 
@@ -12,6 +12,10 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.195 (2026-10-30 밤, dev_0): **개선 후보 상태값·한 목록 · 사용자 피드백 채널 · 답 뒤 근거 확인 실험.**
+  ⑤ **답 뒤 근거 확인**(trustkit `answer/grounding.py`, 기법 `grounding_check`): 초안 답의 주장이 문맥에 있나 같은 모델이 한 번 더 — 없으면 빼고 핵심이 없으면 "못 찾음"
+  (RAGAS faithfulness·Azure groundedness·CoVe 계열). 측정 옵션 `eval_knowledge_answers.py --verify` · 실험 change `{"verify": true}` · 후보 `answer_verify`.
+  지시문은 시스템 자리, 문서는 답 생성과 같은 문맥 자리로(한 덩어리로 보내면 사내 게이트웨이 거부 2/5). **실험 #11 결과 실패**(단정 오답 17.2→21.9% · 정답 79.7→77.1% · unsupported 판정 0건) → 채팅 반영 안 함, 후보 #128 자동 종결.
 - v2.194 (2026-10-30, dev_0): **오픈 기준 = 단정 오답 · 개선 후보 실험을 실제로 돌린다.**
   오픈 최소 기준 합의(백로그 0-0: 업무지식 정답 ≥80% · 단정 오답 ≤10% · 거절 ≤10%, 정책서는 현재 유지 — "틀린 단정보다 모른다가 낫다").
   ① 게이트 **맞바꿈**: 정답률이 떨어져도 단정 오답 감소 ≥ 잃은 정답 × 3 · 전체 정답률 ≥ 하한(80%·85%)이면 통과(`eval_gate.py --tradeoff-ratio --floor`, trustkit `abstain_tradeoff`),

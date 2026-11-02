@@ -271,6 +271,10 @@ def build_candidates(diag: dict, *, types: Mapping[str, str], mapped: Mapping[st
             out.append(_cand("knowledge_context_narrow", "wrong_with_context", "parent_expansion", "문맥 좁히기 — 보충·정책 빼기",
                              "업무지식 질문 문맥에서 상위 섹션 보충을 끄고 정책(파라미터·서술)을 0개로", "answers", q,
                              why="문맥이 길고 다른 내용이 섞여 지어냄·섞음", change={"policy_top_k": 0, "no_expand": True}))
+            # 답 뒤 근거 확인(10/30) — 초안의 주장이 문맥에 없으면 빼거나 "못 찾음"(trustkit.answer.grounding). 질문마다 LLM 1회 추가
+            out.append(_cand("answer_verify", "wrong_with_context", "grounding_check", "답 뒤 근거 확인",
+                             "답을 만든 뒤 같은 모델이 주장마다 문맥 근거를 확인 — 없는 주장은 빼고 핵심이 없으면 '못 찾음'", "answers", q,
+                             why="검색은 맞는데 답에서 지어냄·섞음 — 틀린 단정", change={"verify": True}))
 
     for h in hypotheses or []:
         h_q = sorted(set(h.get("qids") or []))
