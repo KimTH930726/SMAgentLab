@@ -51,7 +51,31 @@ def abstain_replay(replay_fn: Callable[[Callable[[str], bool]], dict], signals: 
     return {"grid": rows, "best": best}
 
 
-CARRY_STATUSES = ("rejected", "held", "approved")
+CARRY_STATUSES = ("rejected", "held", "approved", "failed")   # 실패(10/30)도 — 같은 변경을 다시 묻지 않게([다시 실행]은 남음)
+
+# 화면 단계(10/30 사용자 "실험 끝났는데 '실험 중'?") — 상태 + 마지막 실험 작업 + 운영 반영 판정으로 서버가 정한다(화면이 따로 계산하면 어긋남)
+PHASES = ("proposed", "running", "error", "review", "adopted", "failed", "rejected", "held")
+
+
+def measurement_fresh(run_at, approved_at, baseline_run_at) -> bool:
+    """이 측정으로 지금 결정할 수 있나 — 시도 승인 뒤에, 지금 점수(기준선) 뒤에 잰 것. 아니면 실패가 아니라 다시 재야 하는 측정
+    (예전 진단에서 넘어온 측정 · 다른 후보 반영으로 기준선이 옮겨짐, 재리뷰 10/30 M1)."""
+    return approved_at is not None and run_at >= approved_at and (baseline_run_at is None or run_at >= baseline_run_at)
+
+
+def phase_of(status: str, job: Optional[Mapping], adopt_check: Optional[Mapping]) -> str:
+    """제안 · 실험 중 · 실험 오류 · 검토 대기(통과, 반영할지 사람이) · 반영 · 실패 · 기각 · 보류.
+    approved(시도 승인): 작업이 돌면 실험 중 → **새 측정**(승인·기준선 뒤)이 반영 가능이면 검토 대기 / 불가면 실패(자동 종결 전 잠깐)
+    → 새 측정 없이 작업이 실패면 실험 오류 → 그 밖(측정 전 · 예전 측정뿐 · 개발 작업)은 실험 중."""
+    if status != "approved":
+        return {"proposed": "proposed", "adopted": "adopted", "failed": "failed", "rejected": "rejected", "held": "held"}[status]
+    if job and job.get("status") in ("queued", "running"):
+        return "running"
+    if adopt_check and adopt_check.get("fresh"):
+        return "review" if adopt_check.get("ok") else "failed"
+    if job and job.get("status") == "failed":
+        return "error"
+    return "running"
 
 
 def carry_decision(prev: Optional[Mapping], recommend: str) -> Optional[Mapping]:
@@ -110,9 +134,10 @@ def agreement(rows) -> dict:
         if r.get("carried_from_id") is not None:
             continue
         rec, st, n = r["recommend"], r["status"], r.get("n", 1)
-        if (rec == "try" and st in ("approved", "adopted")) or (rec == "reject" and st == "rejected"):
+        # 실패(자동 종결)는 사람이 '해 보자'고 정한 뒤의 결과 — 사람 결정은 시도 승인으로 센다
+        if (rec == "try" and st in ("approved", "adopted", "failed")) or (rec == "reject" and st == "rejected"):
             agree += n
-        elif (rec == "try" and st == "rejected") or (rec == "reject" and st in ("approved", "adopted")):
+        elif (rec == "try" and st == "rejected") or (rec == "reject" and st in ("approved", "adopted", "failed")):
             disagree += n
     return {"agree": agree, "disagree": disagree}
 

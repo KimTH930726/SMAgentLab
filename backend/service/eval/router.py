@@ -99,6 +99,12 @@ async def get_latest_improvement(run_id: Optional[int] = None, axis: str = Query
     return await service.latest_improvement(run_id, axis)
 
 
+@router.get("/improvements/board")
+async def get_candidate_board(axis: str = Query(default="policy", pattern=AXIS_PATTERN), user: dict = Depends(get_current_user)):
+    """평가 게이트 › 개선 후보(한 목록 + 상태 필터, 10/30) — 최근 진단 후보 + 그 전 진단에서 종결된 반영·실패·기각. 줄마다 화면 단계(phase)."""
+    return await service.candidate_board(axis)
+
+
 @router.post("/candidates/{cand_id}/review")
 async def review_candidate(cand_id: int, body: ReviewBody, admin: dict = Depends(get_current_admin)):
     try:
@@ -148,7 +154,19 @@ async def list_techniques(user: dict = Depends(get_current_user)):
     for c in [c for x in latest for c in (x or {}).get("candidates", [])]:
         by_tech.setdefault(c["technique"], []).append({"id": c["id"], "title": c["title"], "status": c["status"],
                                                        "recommend": c["recommend"], "n_target": c["n_target"]})
-    return [{**r, "candidates": by_tech.get(r["key"], [])} for r in rows]
+    # 근거 자동(10/30): 코드에 적은 근거 + 개선 후보의 반영·실패(날짜·측정 번호) — 반영할 때마다 손으로 근거 줄을 적지 않게
+    from core.database import get_conn
+    from service.eval.history import from_decisions
+    async with get_conn() as conn:
+        dec = [dict(r) for r in await conn.fetch(
+            """SELECT id, key, technique, title, status, reviewed_at, review_reason, measured_gate_run_ids, adopted_gate_run_id
+               FROM eval_candidate WHERE status IN ('adopted', 'failed') AND reviewed_at IS NOT NULL""")]
+    auto: dict[str, list[dict]] = {}
+    for d in from_decisions(dec, {}, {}):
+        auto.setdefault(d["technique"], []).append({"date": d["date"], "note": f"{d['result']} — {d['what']}", "gate_run_id": d["gate_run_id"],
+                                                    "auto": True})
+    return [{**r, "evidence": sorted(r["evidence"] + auto.get(r["key"], []), key=lambda e: e["date"]),
+             "candidates": by_tech.get(r["key"], [])} for r in rows]
 
 
 @router.get("/decisions")

@@ -12,7 +12,7 @@ from typing import Optional
 
 from core.database import get_conn
 
-RESULT_NAME = {"adopted": "운영 반영", "rejected": "안 함", "held": "나중에", "approved": "실험 중"}
+RESULT_NAME = {"adopted": "반영", "rejected": "기각", "held": "보류", "approved": "실험 중", "failed": "실패"}   # 개선 후보 상태 이름과 같게(10/30)
 
 
 def _j(v):

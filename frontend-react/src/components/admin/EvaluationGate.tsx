@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { getBaselineRun, getGateReport, getLatestImprovement, type GateAxis } from '../../api/eval';
+import { getBaselineRun, getCandidateBoard, getGateReport, getLatestImprovement, type GateAxis } from '../../api/eval';
 import { useAuthStore } from '../../store/useAuthStore';
 import { lockedAccuracy } from '../../utils/evalLayers';
 import { Modal } from '../ui/Modal';
@@ -14,7 +14,7 @@ import { AnswerTab, RetrievalTab } from './GateRuns';
  * 품질 › 평가 게이트 — 한 템플릿(10/29 사용자 "정책이든 업무지식이든 유형은 구분값으로만", "전체 정확도를 메인으로 보고 개선점 → 도출할 수 있는 것").
  * 축 [정책서 | 업무지식]은 데이터만 바꾼다 — 화면은 같다(업계: 데이터셋 선택기 + 같은 실험 화면, LangSmith·Braintrust).
  * 맨 위 = 큰 숫자 카드(전체 정답률 · 검색 · 사람이 쓴 질문(잠근 골든셋이 있는 축만) · 결정할 후보) + [자세히](옛 [성적] 탭 내용).
- * 단계 줄(적재 → … → 생성, 틀린 문항 수) → ① 개선할 곳(원인별, 그 안에 후보·문항) → ② 진행 중인 개선(사람이 정할 후보) → ③ 적용 이력(최근 5줄).
+ * 단계 줄(적재 → … → 생성, 틀린 문항 수) → ① 개선할 곳(원인별, 그 안에 후보·문항) → ② 개선 후보(한 목록 + 상태 필터, 10/30) → ③ 기법 대장.
  * 옛 구성(10/28: 단계 필터 + [틀린 문항][성적][적용 이력] 탭, 업무지식은 [성적]만)은 같은 숫자가 세 곳에 다른 기준으로 나와 없앴다(독립 UX 검수 10/29).
  */
 
@@ -66,7 +66,9 @@ function AxisGate({ axis }: { axis: GateAxis }) {
   const a = base.data?.summary.answers;
   const r = base.data?.summary.retrieval;
   const lk = lockedAccuracy(a?.by_type);
-  const openN = (imp.data?.candidates ?? []).filter(isOpen).length;
+  // 결정할 후보 = ② 개선 후보 기본 [진행 중]과 같은 목록(같은 쿼리 키 — 예전 진단의 시도 승인 줄도 포함, 재리뷰 M2)
+  const board = useQuery({ queryKey: ['eval-board', axis, imp.data?.run.id ?? null], queryFn: () => getCandidateBoard(axis), enabled: !!imp.data });
+  const openN = (board.data?.candidates ?? []).filter(isOpen).length;
   const failedN = a?.failures?.length ?? 0;
   // 내려간 곳을 잠깐 테두리로 강조 — 스크롤만 하면 어디를 가리킨 건지 안 보였다(10/30 사용자)
   const toProgress = () => {
@@ -96,7 +98,7 @@ function AxisGate({ axis }: { axis: GateAxis }) {
                     cta="자세히 →" onClick={() => setDetail('answers')} />
                 )}
                 <Card testid="card-open" label="결정할 후보" value={imp.data ? String(openN) : '-'} tone={openN > 0 ? 'warn' : undefined}
-                  sub={imp.data ? '실험 · 반영을 사람이 정함' : '진단 전'} hint="② 진행 중인 개선 — 결정 전(AI가 해 볼 만·재 봐야 앎) + 실험 중"
+                  sub={imp.data ? '제안 · 검토 대기 · 실험 중' : '진단 전'} hint="② 개선 후보 — 제안(AI가 해 볼 만·재 봐야 앎) + 실험 중·실험 오류 + 검토 대기(게이트 통과, 반영할지 정함)"
                   cta={openN > 0 ? '보기 ↓' : undefined} onClick={openN > 0 ? toProgress : undefined} />
               </div>
             )}
@@ -116,8 +118,9 @@ function AxisGate({ axis }: { axis: GateAxis }) {
 
       <section className="space-y-2" data-testid="gate-history-section">
         <button className="text-sm font-semibold text-slate-100" onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>
-          {historyOpen ? '▾' : '▸'} ③ 적용 이력</button>
-        {historyOpen && <GateHistory recent={5} />}
+          {historyOpen ? '▾' : '▸'} ③ 기법 대장</button>
+        {/* 후보 결정(반영·실패·기각)은 ② 개선 후보의 필터로 — 여기는 기법마다 기준값·근거(반영·실패 측정은 자동으로 근거에, 10/30) */}
+        {historyOpen && <GateHistory recent={5} initial="all" />}
       </section>
 
       <Modal isOpen={detail !== null} onClose={() => setDetail(null)} title={detail === 'retrieval' ? '검색 성적' : '답 성적'} maxWidth="max-w-5xl">

@@ -76,7 +76,7 @@ test('① 개선할 곳 — 원인 줄 수 = 서버, 펼치면 그 원인 후보
     // 고칠 방법은 원인 안에만(고칠 방법별 보기는 없앰) — 열린 후보 줄 수 = 그 원인의 안 끝난 후보, [문항만 보기] = 그 후보 문항
     await expect(page.getByRole('button', { name: '고칠 방법별' })).toHaveCount(0);
     const techs = d!.techniques.filter((t) => t.cause === ckey);
-    const openT = techs.filter((t) => t.status !== 'rejected' && t.status !== 'adopted');
+    const openT = techs.filter((t) => !['rejected', 'adopted', 'failed'].includes(t.status));   // 종결(실패 포함)은 숨김
     await expect(block.locator('[data-testid^="report-method-"]')).toHaveCount(openT.length);
     const t0 = openT.find((t) => t.n_failed > 0);
     if (t0) {
@@ -120,8 +120,10 @@ test('① 개선할 곳 — 원인 줄 수 = 서버, 펼치면 그 원인 후보
     await expect(page.getByRole('dialog')).toContainText(`측정도 안 되는 문항 ${unmeasured}`);
     await page.keyboard.press('Escape');
   }
-  // ② = 사람이 정할 후보(결정 전 중 AI 기각 추천 빼고 + 실험 중) — 맨 위 "결정할 후보" 숫자와 같다
-  const open = d!.techniques.filter((t) => t.status === 'approved' || (t.status === 'proposed' && t.recommend !== 'reject'));
+  // ② 개선 후보 기본 [진행 중] = 사람이 정할 후보(제안 중 AI 기각 추천 빼고 + 실험 중·실험 오류·검토 대기) — 맨 위 "결정할 후보" 숫자와 같다(10/30 phase)
+  const board = await (await apiFetch(`${API}/api/eval/improvements/board?axis=policy`, { headers: { Authorization: `Bearer ${await adminToken()}` } })).json();
+  const open = (board.candidates as { phase: string; recommend: string }[]).filter((t) => ['running', 'error', 'review'].includes(t.phase)
+    || (t.phase === 'proposed' && t.recommend !== 'reject'));
   await expect(page.getByTestId('gate-in-progress').locator('[data-testid^="inprogress-"]')).toHaveCount(open.length);
   await expect(page.getByTestId('card-open')).toContainText(String(open.length));
 });
@@ -152,7 +154,7 @@ test('② 진행 중인 개선 — 나중에·결정 취소가 DB 상태를 바�
     await page.getByTestId(`report-cause-${target!.cause}`).locator('> button').click();
     const cause = page.getByTestId(`report-cause-modal-${target!.cause}`);
     const mrow = cause.getByTestId(`report-method-${cid}`);
-    await expect(mrow).toContainText('나중에');
+    await expect(mrow).toContainText('보류');
     await mrow.getByTestId(`method-open-${cid}`).click();   // 원인 모달 안 개선 → 같은 후보 모달(10/30 통일)
     const card = page.getByRole('dialog').getByTestId(`candidate-${target!.key}`);
     await expect(card.getByTestId('cand-rows')).toBeVisible();

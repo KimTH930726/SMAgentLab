@@ -93,7 +93,9 @@ export async function getBaselineRun(axis: GateAxis = 'policy'): Promise<GateRun
 }
 
 /** 자가 개선 루프(#87) — 진단(원인별 qid) + 개선 후보 + 사람 검수. 만들기는 scripts/eval_improve.py --save */
-export type CandidateStatus = 'proposed' | 'approved' | 'held' | 'rejected' | 'adopted';
+export type CandidateStatus = 'proposed' | 'approved' | 'held' | 'rejected' | 'adopted' | 'failed';
+/** 화면 단계(서버 phase_of) — 제안 · 실험 중 · 실험 오류 · 검토 대기 · 반영 · 실패 · 기각 · 보류 */
+export type CandidatePhase = 'proposed' | 'running' | 'error' | 'review' | 'adopted' | 'failed' | 'rejected' | 'held';
 
 export interface ReplayRow {
   min_score: number; min_param_rank: number; refused: number; fixed: number; broken: number; before: number; after: number;
@@ -127,6 +129,9 @@ export interface Candidate {
   replay: { grid: ReplayRow[]; best: ReplayRow | null } | null;
   hypotheses: Hypothesis[];
   status: CandidateStatus;
+  phase?: CandidatePhase;
+  /** 이 후보를 만든 진단 — 개선 후보 목록은 여러 진단의 줄을 섞어 보이므로 모달은 줄마다 이 진단으로 연다 */
+  run_id: number;
   review_reason: string | null;
   reviewed_at: string | null;
   carried_from_id: number | null;
@@ -144,6 +149,11 @@ export interface Candidate {
 export interface ExperimentJob {
   id: number; status: 'queued' | 'running' | 'done' | 'failed'; stage: string | null; done: number; total: number;
   error: string | null; gate_run_id: number | null; created_at: string; finished_at: string | null;
+}
+
+/** 평가 게이트 › 개선 후보(10/30) — 최근 진단 후보 + 그 전 진단에서 종결된 반영·실패·기각(줄마다 phase) */
+export async function getCandidateBoard(axis: GateAxis): Promise<{ run_id: number | null; candidates: Candidate[] }> {
+  return apiFetch(`/eval/improvements/board?axis=${axis}`);
 }
 
 export async function startExperiment(id: number): Promise<{ id: number; status: string }> {
@@ -298,7 +308,7 @@ export interface OverrideReport {
 export interface HistoryItem {
   date: string; stage: string; technique: string; technique_name: string; what: string;
   gate_run_id: number | null; gate: { id: number; label: string; verdict: 'pass' | 'fail' | null } | null;
-  result: '운영 반영' | '안 함' | '나중에' | '실험 중' | null; now?: '안 함' | '꺼짐' | null;
+  result: '반영' | '기각' | '보류' | '실험 중' | '실패' | null; now?: '안 함' | '꺼짐' | null;   // 서버 history.RESULT_NAME(10/30)
   reason?: string | null; candidate_id?: number; source: 'registry' | 'decision';
 }
 

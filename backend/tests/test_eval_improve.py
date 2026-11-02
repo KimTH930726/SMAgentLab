@@ -288,3 +288,65 @@ def test_carry_not_allowed_when_feature_turned_on():
     assert improve.carry_allowed("ingest_policy_param_derived", S) is True
     assert improve.carry_allowed("synonyms", S) is True
     assert improve.feature_on("usage_ref_table", S) and not improve.feature_on("usage_overview", S)
+
+
+def test_phase_of_covers_every_state():
+    """화면 단계(10/30) — 실험이 끝났는데 '실험 중'으로 남지 않는다: 작업 진행 → 실험 중, 작업 실패 → 실험 오류,
+    측정이 반영 가능 → 검토 대기 / 불가 → 실패. 종결 상태는 그대로. 모든 결과가 PHASES 안."""
+    run, fail, done = {"status": "running"}, {"status": "failed"}, {"status": "done"}
+    ok, bad = {"ok": True, "fresh": True}, {"ok": False, "fresh": True}
+    p = improve.phase_of
+    assert p("approved", run, ok) == "running"            # 다시 실행 중엔 예전 측정이 있어도 실험 중
+    assert p("approved", {"status": "queued"}, None) == "running"
+    assert p("approved", fail, None) == "error"
+    assert p("approved", fail, ok) == "review"            # 예전 측정이 통과했으면 그걸로 결정 가능
+    assert p("approved", done, ok) == "review" and p("approved", done, bad) == "failed"
+    assert p("approved", None, None) == "running"         # 자동 실험이 안 되는 후보(개발 작업)
+    for st in ("proposed", "adopted", "failed", "rejected", "held"):
+        assert p(st, done, ok) == st
+    for st in ("proposed", "approved", "adopted", "failed", "rejected", "held"):
+        for j in (None, run, fail, done):
+            for a in (None, ok, bad):
+                assert p(st, j, a) in improve.PHASES
+
+
+def test_failed_is_carried_and_counts_as_human_try():
+    """실패(자동 종결)도 다음 진단이 이어받고([다시 실행]은 남음), 추천 일치 통계에선 사람의 '해 보자'로 센다."""
+    prev = {"id": 9, "status": "failed", "recommend": "try"}
+    assert improve.carry_decision(prev, "try") == prev
+    assert improve.carry_decision(prev, "review") is None
+    assert improve.agreement([{"recommend": "try", "status": "failed"}, {"recommend": "reject", "status": "failed"}]) == {"agree": 1, "disagree": 1}
+
+
+def test_stale_measurement_is_not_failure():
+    """예전 측정(승인 전 · 지금 점수보다 예전)은 반영 불가라도 '실패'가 아니다 — 다시 재면 되는 것(재리뷰 M1).
+    새 측정만 검토 대기·실패를 가른다. 다시 실행이 장애로 멈추면 예전 측정이 있어도 실험 오류."""
+    import datetime as dt
+    t = lambda d: dt.datetime(2026, 10, d, tzinfo=dt.timezone.utc)   # noqa: E731
+    f = improve.measurement_fresh
+    assert f(t(20), t(19), t(18)) and f(t(20), t(20), None)
+    assert not f(t(18), t(19), None)            # 승인보다 먼저 잰 측정(예전 진단에서 넘어옴)
+    assert not f(t(20), t(19), t(21))           # 그 뒤 다른 후보 반영으로 기준선이 옮겨짐
+    assert not f(t(20), None, None)
+    stale_bad = {"ok": False, "fresh": False}
+    assert improve.phase_of("approved", None, stale_bad) == "running"
+    assert improve.phase_of("approved", {"status": "failed"}, stale_bad) == "error"
+    assert improve.phase_of("approved", {"status": "done"}, {"ok": False, "fresh": True}) == "failed"
+    assert improve.phase_of("approved", {"status": "done"}, {"ok": True, "fresh": False}) == "running"
+
+
+def test_adopt_check_reads_json_run_at_with_offset():
+    """서버 경로 — 측정 run_at은 jsonb에서 '+09:00' 오프셋이 붙은 글자로 온다. 시간대 있는 승인·기준선 시각과 비교가 되고(TypeError 없음)
+    fresh·ok가 맞게 나온다(재리뷰 L2)."""
+    import datetime as dt
+    import importlib.util as ilu
+    spec = ilu.spec_from_file_location("eval_service_under_test", ROOT / "service" / "eval" / "service.py")
+    svc = ilu.module_from_spec(spec)
+    spec.loader.exec_module(svc)
+    kst = dt.timezone(dt.timedelta(hours=9))
+    c = {"status": "approved", "reviewed_at": dt.datetime(2026, 10, 30, 9, 0, tzinfo=kst), "measured_gate_run_ids": [5],
+         "measurements": [{"id": 5, "run_at": "2026-10-30T10:00:00.123456+09:00", "kind": "gate", "verdict": "fail", "has_answers": False}]}
+    chk = svc._adopt_check(c, dt.datetime(2026, 10, 29, tzinfo=dt.timezone.utc))
+    assert chk["fresh"] is True and chk["ok"] is False and chk["gate_run_id"] == 5
+    chk = svc._adopt_check({**c, "reviewed_at": dt.datetime(2026, 10, 30, 11, 0, tzinfo=kst)}, None)
+    assert chk["fresh"] is False                     # 승인보다 먼저 잰 측정 — 실패 아님

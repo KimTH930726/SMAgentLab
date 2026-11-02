@@ -25,7 +25,7 @@ const MOVE: Record<string, { label: string; cls: string }> = {
   down: { label: '나빠짐', cls: 'text-rose-600 dark:text-rose-400' },
   same: { label: '같음', cls: 'text-slate-400' },
 };
-const STATUS_NAME: Record<string, string> = { proposed: '제안', approved: '실험 중', held: '나중에', rejected: '안 하기', adopted: '운영 반영' };
+const STATUS_NAME: Record<string, string> = { proposed: '제안', approved: '실험 중', held: '보류', rejected: '기각', adopted: '반영', failed: '실패' };   // 개선 후보 상태 이름(10/30)
 
 function Answers({ rows, title }: { rows: QuestionAnswer[]; title?: string }) {
   return (

@@ -238,6 +238,8 @@ async def run_job(job_id: int) -> None:
             if saved is not None:
                 await _set(job_id, status="done", gate_run_id=saved, finished_at=_now(), stage=None)
                 await _link_to_current(job_id, saved)
+                from service.eval.service import close_failed
+                await close_failed([saved])   # 반영 불가(게이트 실패 등)면 사람이 [안 하기]를 또 누르지 않게 실패로 종결(10/30)
                 return
         if code != 0 or last_step:
             await _set(job_id, status="failed", finished_at=_now(), error=f"{step['stage']} 실패(종료 코드 {code}){error_kind(tail)}")
@@ -306,6 +308,13 @@ async def start() -> None:
                                   WHERE status = 'running'""")
         if n and "UPDATE 0" not in n:
             logger.warning("[실험] 재시작으로 중단된 작업 정리: %s", n)
+    from service.eval.service import close_failed
+    try:   # 실패 자동 종결이 생기기 전에 끝난 실험(10/30 이전) — 반영 불가인 채 '실험 중'으로 남은 후보를 한 번 정리
+        closed = await close_failed()
+        if closed:
+            logger.warning("[실험] 반영 불가 후보 %s건을 실패로 종결", closed)
+    except Exception as e:  # noqa: BLE001 — 정리 실패로 실행기가 안 뜨면 안 된다
+        logger.warning("[실험] 실패 종결 정리 실패: %s", e)
     if _task is None or _task.done():
         _task = asyncio.get_running_loop().create_task(_loop())
 

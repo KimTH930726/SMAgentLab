@@ -110,8 +110,21 @@ async def latest_improvement(run_id: Optional[int] = None, axis: str = "policy")
                ORDER BY i.created_at DESC, i.id DESC LIMIT 1""", run_id, axis)
         if not run:
             return None
-        cands = await conn.fetch(
-            """SELECT c.*, g.label AS adopted_gate_label,
+        cands = await conn.fetch(_CAND_SELECT + " WHERE c.run_id = $1 ORDER BY c.id", run["id"])
+        accuracy = await conn.fetchval("SELECT (summary->'answers'->>'accuracy')::float FROM eval_gate_run WHERE id = $1",
+                                       run["gate_run_id"])
+        out = await _decorate(conn, cands, run["gate_axis"])
+    d = dict(run)
+    for k in ("diagnosis", "hypotheses"):
+        if isinstance(d.get(k), str):
+            d[k] = json.loads(d[k])
+    from trustkit.eval.diagnose import CAUSES
+    # 원인 이름·볼 곳·기법 이름은 서버가 붙인다 — 화면이 표를 따로 들고 있으면 대장과 어긋난다
+    d["accuracy"] = accuracy
+    return {"run": d, "causes": [{"key": k, "name": n, "where": w} for k, n, w in CAUSES], "candidates": out}
+
+
+_CAND_SELECT = """SELECT c.*, g.label AS adopted_gate_label,
                       COALESCE((SELECT jsonb_agg(jsonb_build_object('id', m.id, 'label', m.label, 'verdict', m.verdict, 'run_at', m.run_at,
                                                              'kind', m.kind, 'diff', m.answers->'groups'->'전체'->'diff',
                                                              -- 실험 결과 칸(10/30): 정답률 전/후 · 단정 오답·거절 · 잠근 층 · 검색
@@ -121,32 +134,78 @@ async def latest_improvement(run_id: Optional[int] = None, axis: str = "policy")
                                                                  'n', m.retrieval->'n', 'before', m.retrieval->'before', 'after', m.retrieval->'after',
                                                                  'down', jsonb_array_length(COALESCE(m.retrieval->'down', '[]'::jsonb))) END) ORDER BY m.id)
                                 FROM eval_gate_run m WHERE m.id = ANY(c.measured_gate_run_ids)), '[]'::jsonb) AS measurements
-               FROM eval_candidate c LEFT JOIN eval_gate_run g ON g.id = c.adopted_gate_run_id
-               WHERE c.run_id = $1 ORDER BY c.id""", run["id"])
-        accuracy = await conn.fetchval("SELECT (summary->'answers'->>'accuracy')::float FROM eval_gate_run WHERE id = $1",
-                                       run["gate_run_id"])
-        base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = $1", run["gate_axis"])
-        jobs = {r["candidate_id"]: dict(r) for r in await conn.fetch(   # 후보마다 가장 최근 실험 작업(10/30 실험 실행기)
-            """SELECT DISTINCT ON (candidate_id) candidate_id, id, status, stage, done, total, error, gate_run_id, created_at, finished_at
-               FROM eval_experiment_job WHERE candidate_id = ANY($1::bigint[]) ORDER BY candidate_id, id DESC""", [c["id"] for c in cands])}
-    d = dict(run)
-    for k in ("diagnosis", "hypotheses"):
-        if isinstance(d.get(k), str):
-            d[k] = json.loads(d[k])
+               FROM eval_candidate c LEFT JOIN eval_gate_run g ON g.id = c.adopted_gate_run_id"""
+
+
+async def _decorate(conn, cands, axis: str) -> list[dict]:
+    """후보 줄 → 화면 줄: 기법 이름 · 운영 반영 판정 · 자동 실험 되나 · 마지막 실험 작업 · 화면 단계(phase)."""
+    from service.eval.experiment import runnable
+    from service.eval.improve import phase_of
     from service.eval.techniques import BY_KEY
-    from trustkit.eval.diagnose import CAUSES
-    # 원인 이름·볼 곳·기법 이름은 서버가 붙인다 — 화면이 표를 따로 들고 있으면 대장과 어긋난다
-    d["accuracy"] = accuracy
+    base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = $1", axis)
+    jobs = {r["candidate_id"]: dict(r) for r in await conn.fetch(   # 후보마다 가장 최근 실험 작업(10/30 실험 실행기)
+        """SELECT DISTINCT ON (candidate_id) candidate_id, id, status, stage, done, total, error, gate_run_id, created_at, finished_at
+           FROM eval_experiment_job WHERE candidate_id = ANY($1::bigint[]) ORDER BY candidate_id, id DESC""", [c["id"] for c in cands])}
     out = []
     for c in cands:
         cd = {**_cand(c), "technique_name": BY_KEY.get(c["technique"], {}).get("name", c["technique"])}
         cd["adopt_check"] = _adopt_check(cd, base_at)
-        from service.eval.experiment import runnable
-        cd["auto"] = {"ok": (why := runnable(cd, run["gate_axis"])) is None, "reason": why}   # 자동 실험 되나(안 되면 이유)
+        cd["auto"] = {"ok": (why := runnable(cd, axis)) is None, "reason": why}   # 자동 실험 되나(안 되면 이유)
         job = jobs.get(c["id"])
         cd["experiment"] = {k: v for k, v in job.items() if k != "candidate_id"} if job else None
+        cd["phase"] = phase_of(cd["status"], cd["experiment"], cd["adopt_check"] if cd["status"] == "approved" else None)
         out.append(cd)
-    return {"run": d, "causes": [{"key": k, "name": n, "where": w} for k, n, w in CAUSES], "candidates": out}
+    return out
+
+
+async def candidate_board(axis: str) -> dict:
+    """평가 게이트 › 개선 후보(10/30 한 목록 + 상태 필터) — 가장 최근 진단의 후보 전부 + 그 전 진단의 결정된 후보(반영·실패·기각·시도 승인·보류 —
+    예전 진단 줄을 [다시 실행]·보류해도 목록에서 사라지지 않게, 재리뷰 M2). 예전 진단의 제안(결정 전)은 넣지 않는다(지금 진단에 없는 문제).
+    같은 후보 키는 최근 진단 줄이 이긴다. 단 운영 반영은 이력의 핵심이라 늘 남긴다(적용 이력과 같은 규칙). 각 줄의 run_id로 모달을 연다."""
+    async with get_conn() as conn:
+        latest = await conn.fetchval(
+            """SELECT i.id FROM eval_improvement_run i JOIN eval_gate_run g ON g.id = i.gate_run_id WHERE g.axis = $1
+               ORDER BY i.created_at DESC, i.id DESC LIMIT 1""", axis)
+        if latest is None:
+            return {"run_id": None, "candidates": []}
+        rows = await conn.fetch(_CAND_SELECT + """ JOIN eval_improvement_run i ON i.id = c.run_id JOIN eval_gate_run gr ON gr.id = i.gate_run_id
+                                 WHERE gr.axis = $1 AND (c.run_id = $2 OR c.status IN ('adopted', 'failed', 'rejected', 'approved', 'held'))
+                                 ORDER BY c.id DESC""", axis, latest)
+        keep, seen = [], set()
+        latest_keys = {r["key"] for r in rows if r["run_id"] == latest}
+        for r in rows:   # 최신 id부터 — (키, 반영 여부)마다 첫 줄
+            if r["run_id"] != latest and r["key"] in latest_keys and r["status"] != "adopted":
+                continue
+            k = (r["key"], r["status"] == "adopted", r["run_id"] == latest)
+            if r["run_id"] != latest and k in seen:
+                continue
+            seen.add(k)
+            keep.append(r)
+        out = await _decorate(conn, keep, axis)
+    return {"run_id": latest, "candidates": out}
+
+
+async def close_failed(gate_run_ids: Optional[list[int]] = None) -> int:
+    """실험이 끝났는데 운영 반영이 안 되는 시도 승인 후보 → 실패로 자동 종결(사유 = 반영 판정 이유, 결정자 없음). 닫은 수.
+    gate_run_ids를 주면 그 측정이 붙은 후보만(실험 실행기), 없으면 전부(기동 때 정리). 작업이 아직 도는 후보는 건드리지 않는다."""
+    from service.eval.improve import CANDIDATE_AXIS_SQL
+    n = 0
+    async with get_conn() as conn:
+        rows = await conn.fetch(_CAND_SELECT + """ WHERE c.status = 'approved' AND cardinality(c.measured_gate_run_ids) > 0
+                                 AND ($1::bigint[] IS NULL OR c.measured_gate_run_ids && $1::bigint[])
+                                 AND NOT EXISTS (SELECT 1 FROM eval_experiment_job j WHERE j.candidate_id = c.id AND j.status IN ('queued', 'running'))""",
+                                gate_run_ids)
+        for r in rows:
+            axis = await conn.fetchval(CANDIDATE_AXIS_SQL, r["id"])
+            base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = $1", axis)
+            chk = _adopt_check(_cand(r), base_at)
+            if not chk or chk["ok"] or not chk["fresh"]:   # 예전 측정뿐이면 닫지 않는다 — 다시 재면 됨
+                continue
+            reason = f"자동 종결 — 측정 #{chk['gate_run_id']}: {chk['reason']}"[:300]
+            done = await conn.execute("UPDATE eval_candidate SET status = 'failed', review_reason = $2, reviewed_by_user_id = NULL, "
+                                      "reviewed_at = NOW() WHERE id = $1 AND status = 'approved'", r["id"], reason)
+            n += done.split()[-1] == "1"
+    return n
 
 
 def _adopt_check(c: dict, base_at) -> Optional[dict]:
@@ -160,7 +219,10 @@ def _adopt_check(c: dict, base_at) -> Optional[dict]:
     gate = {"id": m["id"], "kind": m.get("kind"), "verdict": m.get("verdict"), "run_at": run_at,
             "answers": {"groups": m.get("groups") or {}, "confident_wrong": m.get("confident_wrong")} if m.get("has_answers") else None}
     err = adopt_error(c["status"], gate, c.get("reviewed_at"), measured_ids=c.get("measured_gate_run_ids") or [], baseline_run_at=base_at)
-    return {"gate_run_id": m["id"], "ok": err is None, "reason": err}
+    from service.eval.improve import measurement_fresh
+    # fresh = 승인·기준선 뒤에 잰 측정 — 아니면 '실패'가 아니라 다시 재야 하는 것(화면 단계·자동 종결이 이걸로 가른다, 재리뷰 M1)
+    return {"gate_run_id": m["id"], "ok": err is None, "reason": err,
+            "fresh": measurement_fresh(run_at, c.get("reviewed_at"), base_at)}
 
 
 async def start_experiment(cand_id: int, *, user_id: int) -> dict:
@@ -172,11 +234,15 @@ async def start_experiment(cand_id: int, *, user_id: int) -> dict:
         if not c:
             raise LookupError
         axis = await conn.fetchval(CANDIDATE_AXIS_SQL, cand_id)
-    if c["status"] != "approved":
-        raise ValueError("실험 중(실험해 보기)인 후보만 돌릴 수 있습니다.")
+    if c["status"] not in ("approved", "failed"):
+        raise ValueError("실험 중·실패한 후보만 다시 돌릴 수 있습니다.")
     why = runnable(_cand(c), axis)
     if why:
         raise ValueError(why)
+    if c["status"] == "failed":   # [다시 실행] — 실패 종결을 풀고 다시 시도 승인으로(실행기는 시도 승인 후보만 돈다)
+        async with get_conn() as conn:
+            await conn.execute("UPDATE eval_candidate SET status = 'approved', review_reason = NULL, reviewed_by_user_id = $2, reviewed_at = NOW() "
+                               "WHERE id = $1 AND status = 'failed'", cand_id, user_id)
     return await enqueue(cand_id, user_id)
 
 

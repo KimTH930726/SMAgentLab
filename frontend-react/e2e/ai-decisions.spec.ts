@@ -5,7 +5,7 @@ import { psql } from './v0-fixture';
 
 // 이 테스트가 존재하는 이유(10/27 밤 자가 개선 루프 재구성, docs/domains/quality/self-improvement-loop-design.md):
 // ① AI 감사 로그는 기록만 — "AI가 틀렸나요?"를 묻지 않고, 번복(사람이 AI 추천을 바꿈)과 그 순간 고른 이유를 보여 준다(사용자 10/27).
-// ② 옛 품질 › RAG 파이프라인 메뉴는 평가 게이트로 흡수 — 단계 줄(누르면 ① 개선할 곳이 그 단계로) + ③ 적용 이력(이력·항목 전체).
+// ② 옛 품질 › RAG 파이프라인 메뉴는 평가 게이트로 흡수 — 단계 줄(누르면 ① 개선할 곳이 그 단계로) + ③ 기법 대장(항목 전체·이력).
 // ③ 즉석 질의 → 검색 미리보기 — 채팅과 같은 검색(API와 화면이 같은 판정), [시험지에 추가]가 실사용 층 한 줄로 DB에 남는다.
 // 실 dev 스택 그대로. 테스트가 넣은 원장 줄·시험지 줄은 끝에 지운다.
 
@@ -95,8 +95,10 @@ test('평가 게이트 — 단계 줄 = 원인 수(누르면 그 단계 원인�
   await page.getByTestId('flow-검색').click();
   await expect(page.getByTestId('stage-filter')).toHaveCount(0);
 
-  // ③ 적용 이력 — 접혀 있고, 펼치면 최근 5줄 + [전체 n줄 보기] = API 줄 수, 항목 전체 = 대장(단계 밖으로 빠진 항목 0)
-  await page.getByTestId('gate-history-section').getByRole('button', { name: /적용 이력/ }).click();
+  // ③ 기법 대장(10/30 — 후보 결정은 ② 개선 후보 필터로) — 접혀 있고, 펼치면 항목 전체 = 대장(단계 밖으로 빠진 항목 0), [이력] = 최근 5줄 + 전체 = API
+  await page.getByTestId('gate-history-section').getByRole('button', { name: /기법 대장/ }).click();
+  await expect(page.locator('[data-testid^="technique-row-"]')).toHaveCount(techs.length);
+  await page.getByRole('button', { name: '이력', exact: true }).click();
   await expect(page.getByTestId('gate-history')).toBeVisible();
   await expect(page.getByTestId('history-row')).toHaveCount(Math.min(5, history.length));
   if (history.length > 5) {
@@ -104,7 +106,6 @@ test('평가 게이트 — 단계 줄 = 원인 수(누르면 그 단계 원인�
     await expect(page.getByTestId('history-row')).toHaveCount(history.length);
   }
   await page.getByRole('button', { name: /^항목 전체/ }).click();
-  await expect(page.locator('[data-testid^="technique-row-"]')).toHaveCount(techs.length);
   await page.locator('[data-testid^="technique-row-"]').first().click();
   await expect(page.getByRole('dialog')).toContainText('하는 일');
 });

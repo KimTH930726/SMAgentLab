@@ -21,7 +21,7 @@ def test_latest_per_key_but_adopted_kept():
             _r(3, "b", "adopted", 21), _r(4, "b", "rejected", 25),         # 반영 뒤 안 함 → 둘 다
             _r(5, "c", "proposed", 26)]                                   # 결정 아님
     out = hs.from_decisions(rows, {"t": "검색"}, {"t": "기법"})
-    assert sorted((x["candidate_id"], x["result"]) for x in out) == [(2, "안 함"), (3, "운영 반영"), (4, "안 함")]
+    assert sorted((x["candidate_id"], x["result"]) for x in out) == [(2, "기각"), (3, "반영"), (4, "기각")]
 
 
 def test_registry_now_state():

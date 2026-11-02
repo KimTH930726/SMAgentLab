@@ -12,8 +12,8 @@ import { STAGES, type Stage } from './GateFlow';
  */
 
 const RESULT_TONE: Record<string, string> = {
-  '운영 반영': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
-  '안 함': 'bg-slate-700 text-slate-300', '나중에': 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300',
+  '반영': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300', '실패': 'bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300',
+  '기각': 'bg-slate-700 text-slate-300', '보류': 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300',
   '실험 중': 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300', '꺼짐': 'bg-slate-700 text-slate-300',
 };
 // 꺼짐·안 함이 값에 적힌 항목만 표시 — 나머지는 '쓰는 중'이라 단정하지 않는다(옛 RAG 파이프라인 화면과 같은 규칙)
@@ -22,11 +22,11 @@ const STAGE_ORDER: string[] = STAGES.map((s) => s.key);
 const ROW = 'grid grid-cols-[4.5rem_5rem_minmax(0,1fr)_7rem_6rem] items-center gap-x-3';
 
 /** stage = 평가 게이트 단계 흐름에서 고른 단계(공통 필터, 10/28) — 이력·항목 전체 둘 다 그 단계만 */
-export function GateHistory({ stage = null, recent }: { stage?: Stage | null; recent?: number }) {
+export function GateHistory({ stage = null, recent, initial = 'log' }: { stage?: Stage | null; recent?: number; initial?: 'log' | 'all' }) {
   const q = useQuery({ queryKey: ['eval-history'], queryFn: () => getHistory(), staleTime: 60_000 });
   const techs = useQuery({ queryKey: ['eval-techniques'], queryFn: listTechniques, staleTime: 60_000 });
   const [open, setOpen] = useState<Technique | null>(null);
-  const [view, setView] = useState<'log' | 'all'>('log');
+  const [view, setView] = useState<'log' | 'all'>(initial);
   const [more, setMore] = useState(false);   // recent를 주면 최근 n줄만, [전체]로 펼침
   if (q.isLoading) return <p className="text-sm text-slate-500">불러오는 중…</p>;
   if (q.error) return <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p>;

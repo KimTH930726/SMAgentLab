@@ -1670,7 +1670,7 @@ async def _migrate_eval_improvement(conn) -> None:
             why TEXT NOT NULL DEFAULT '',
             replay JSONB,
             hypotheses JSONB NOT NULL DEFAULT '[]'::jsonb,
-            status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'approved', 'held', 'rejected', 'adopted')),
+            status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'approved', 'held', 'rejected', 'adopted', 'failed')),
             review_reason TEXT,
             reviewed_by_user_id INT,
             reviewed_at TIMESTAMPTZ,
@@ -1682,6 +1682,10 @@ async def _migrate_eval_improvement(conn) -> None:
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_improvement_created ON eval_improvement_run (created_at DESC)")
     # #88(10/26) 후보를 잰 판정 기록 — 화면의 진행 단계 "측정(#11 통과)"·문항 상세의 "이 후보로 이 문항이 어떻게 됐나"
     await conn.execute("ALTER TABLE eval_candidate ADD COLUMN IF NOT EXISTS measured_gate_run_ids BIGINT[] NOT NULL DEFAULT '{}'")
+    # #102(10/30) 상태 'failed' = 실험이 끝났는데 운영 반영 불가(게이트 실패 등) — 실험 실행기가 자동 종결(사유 자동, 결정자 없음). 멱등
+    await conn.execute("ALTER TABLE eval_candidate DROP CONSTRAINT IF EXISTS eval_candidate_status_check")
+    await conn.execute("ALTER TABLE eval_candidate ADD CONSTRAINT eval_candidate_status_check "
+                       "CHECK (status IN ('proposed', 'approved', 'held', 'rejected', 'adopted', 'failed'))")
     # #90(10/26) 적재 검수 기록 — scripts/check_ingest.py --save. 검사마다 어긋난 수·전체·근거·영향 문항(qid)·정답률. 원문 없음
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS ingest_check_run (

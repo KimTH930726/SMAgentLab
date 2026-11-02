@@ -10,9 +10,10 @@ import type { Technique } from '../../api/eval';
 const CAND_STATUS: Record<string, { label: string; cls: string }> = {
   proposed: { label: '제안', cls: 'bg-slate-700 text-slate-300' },
   approved: { label: '실험 중', cls: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300' },
-  held: { label: '나중에', cls: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300' },
-  rejected: { label: '안 하기', cls: 'bg-slate-700 text-slate-400' },
-  adopted: { label: '운영 반영', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300' },
+  held: { label: '보류', cls: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300' },   // 개선 후보 상태 이름과 같게(10/30)
+  rejected: { label: '기각', cls: 'bg-slate-700 text-slate-400' },
+  adopted: { label: '반영', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300' },
+  failed: { label: '실패', cls: 'bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300' },
 };
 // 꺼짐·안 함이 값에 적힌 항목만 — 나머지는 '쓰는 중'이라 단정하지 않는다(적용 이력 항목 전체와 같은 규칙)
 const offOf = (t: Technique) => t.values.some((v) => v.value === '꺼짐' || v.value.includes('기본 꺼짐') || v.value.startsWith('안 함'));

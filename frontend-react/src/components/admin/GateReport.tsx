@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { ChevronRight } from 'lucide-react';
-import { setRealQuestion, type Candidate, type GateAxis, type GateReport, type Improvement, type ReportRow, type ReportTechnique } from '../../api/eval';
+import { getCandidateBoard, setRealQuestion, type Candidate, type CandidatePhase, type GateAxis, type GateReport, type Improvement, type ReportRow, type ReportTechnique } from '../../api/eval';
 import { showConfirm, showError } from '../../store/useDialogStore';
-import { CandidateModal, STATUS_BADGE } from './GateImprove';
+import { CandidateModal, PHASE_BADGE, phaseOf } from './GateImprove';
 import { useQuestionPicker } from './GateRuns';
 import { Modal } from '../ui/Modal';
 import { CAUSE_STAGE, ingestQids, STAGES, type Stage } from './GateFlow';
@@ -18,18 +18,20 @@ import { CAUSE_STAGE, ingestQids, STAGES, type Stage } from './GateFlow';
  */
 
 const STATUS: Record<string, { label: string; cls: string }> = {
-  proposed: { label: '결정 전', cls: 'text-slate-400' },
+  proposed: { label: '제안', cls: 'text-slate-400' },   // 개선 후보 상태 이름과 같게(10/30)
   approved: { label: '실험 중', cls: 'text-indigo-600 dark:text-indigo-400' },
-  held: { label: '나중에', cls: 'text-amber-600 dark:text-amber-400' },
-  rejected: { label: '안 하기', cls: 'text-slate-500' },
-  adopted: { label: '운영 반영', cls: 'text-emerald-600 dark:text-emerald-400' },
+  held: { label: '보류', cls: 'text-amber-600 dark:text-amber-400' },
+  rejected: { label: '기각', cls: 'text-slate-500' },
+  adopted: { label: '반영', cls: 'text-emerald-600 dark:text-emerald-400' },
+  failed: { label: '실패', cls: 'text-rose-600 dark:text-rose-400' },
 };
 const REC: Record<string, string> = { try: 'AI: 해 볼 만함', review: 'AI: 재 봐야 앎', reject: 'AI: 안 하는 게 좋음' };
 
 /** 사람이 지금 정할 후보 — 맨 위 "결정할 후보" 숫자와 ② 목록이 같은 규칙 */
-export const isOpen = (c: { status: string; recommend: string }) =>
-  c.status === 'approved' || (c.status === 'proposed' && c.recommend !== 'reject');
-const isClosed = (c: { status: string }) => c.status === 'rejected' || c.status === 'adopted';
+export const isOpen = (c: { status: string; recommend: string; phase?: CandidatePhase }) =>
+  c.phase ? (c.phase === 'running' || c.phase === 'error' || c.phase === 'review' || (c.phase === 'proposed' && c.recommend !== 'reject'))
+    : c.status === 'approved' || (c.status === 'proposed' && c.recommend !== 'reject');
+const isClosed = (c: { status: string }) => c.status === 'rejected' || c.status === 'adopted' || c.status === 'failed';
 
 const pct = (x: number | null | undefined) => (x == null ? '-' : `${(x * 100).toFixed(1)}%`);
 const fmtDate = (s: string) => new Date(s).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -152,7 +154,9 @@ function MethodRow({ t, cand, imp, axis, isAdmin, onPick, only, onOnly }: {
           <span className="text-sm text-slate-100 break-words hover:underline">{t.title}</span>
           <ChevronRight className="w-3.5 h-3.5 shrink-0 text-slate-400" />
         </button>
-        <span className={clsx('text-xs', STATUS[t.status]?.cls)}>{STATUS[t.status]?.label ?? t.status}</span>
+        {/* 후보 정보가 있으면 화면 단계(② 개선 후보와 같은 이름 — 실험 끝났는데 '실험 중'으로 남지 않게, 재리뷰 L1) */}
+        {cand ? <span className={clsx('shrink-0 rounded-full px-2 py-0.5 text-[11px]', PHASE_BADGE[phaseOf(cand)].cls)} title={PHASE_BADGE[phaseOf(cand)].hint}>{PHASE_BADGE[phaseOf(cand)].label}</span>
+          : <span className={clsx('text-xs', STATUS[t.status]?.cls)}>{STATUS[t.status]?.label ?? t.status}</span>}
         <span className="text-xs text-slate-500">{REC[t.recommend]}</span>
         {t.effect && <span className="text-xs"><Effect t={t} /></span>}{/* 사람이 쓴 질문 기준 효과 — 후보 카드엔 없는 정보라 줄에 둔다 */}
         <span className="ml-auto text-xs text-slate-300 tabular-nums">{t.n_failed}문항</span>
@@ -300,44 +304,112 @@ export function ImproveAreas({ rep, imp, axis, stage, isAdmin }: {
   );
 }
 
-/** ② 진행 중인 개선 — 사람이 지금 정할 후보(isOpen). 결정 끝난 것·나중에는 ①의 원인 안에서만 */
+/** ② 개선 후보(10/30 한 목록 + 상태 필터 — 업계 실험 관리: 실험 → 결과 → 반영/기각). 예전 ② 진행 중인 개선 + ③ 적용 이력의 후보 결정을 합침.
+ * 기본 [진행 중] = 맨 위 "결정할 후보"와 같은 범위(isOpen: 검토 대기 · 실험 오류 · 실험 중 · 제안(AI 기각 추천 빼고)) — 검토 대기가 맨 위.
+ * [검토 대기]는 사람이 정할 것만 좁혀 보기(있으면 칩 강조). 종결(반영·실패·기각·보류)은 한 줄 요약(측정 번호·전/후·날짜). 0건 칩은 숨김 */
+type Filter = 'open' | CandidatePhase | 'all';
+const FILTERS: { key: Filter; label: string; hint: string; match: (c: Candidate) => boolean }[] = [
+  { key: 'open', label: '진행 중', hint: '검토 대기 · 실험 오류 · 실험 중 · 제안(AI가 해 볼 만·재 봐야 앎) — 맨 위 "결정할 후보"와 같은 수', match: isOpen },
+  ...(['review', 'adopted', 'failed', 'rejected', 'held'] as CandidatePhase[]).map((ph) => ({
+    key: ph as Filter, label: PHASE_BADGE[ph].label, hint: PHASE_BADGE[ph].hint, match: (c: Candidate) => phaseOf(c) === ph })),
+  { key: 'all', label: '전체', hint: '이 축의 후보 전부(AI 기각 추천 제안 포함)', match: () => true },
+];
+const OPEN_ORDER: CandidatePhase[] = ['proposed', 'running', 'error', 'review'];   // 뒤로 갈수록 위(검토 대기 먼저)
+
 export function InProgress({ imp, axis, isAdmin }: { imp?: Improvement | null; axis: GateAxis; isAdmin: boolean }) {
   const { picker, modal } = useQuestionPicker();
-  const open = (imp?.candidates ?? []).filter(isOpen)
-    .sort((a, b) => Number(b.status === 'approved') - Number(a.status === 'approved') || b.n_target - a.n_target);
-  const pick = imp ? picker(imp.run.gate_run_id) : undefined;
+  const board = useQuery({ queryKey: ['eval-board', axis, imp?.run.id ?? null], queryFn: () => getCandidateBoard(axis), enabled: !!imp,
+    refetchInterval: (q) => ((q.state.data?.candidates ?? []).some((c) => c.experiment && ['queued', 'running'].includes(c.experiment.status)) ? 5000 : false) });
+  const rows = board.data?.candidates ?? [];
+  const count = (f: (typeof FILTERS)[number]) => rows.filter(f.match).length;
+  const [filter, setFilter] = useState<Filter>('open');
+  const cur = FILTERS.find((f) => f.key === filter)!;
+  const shown = rows.filter(cur.match)
+    .sort((a, b) => OPEN_ORDER.indexOf(phaseOf(b)) - OPEN_ORDER.indexOf(phaseOf(a)) || Number(a.recommend === 'reject') - Number(b.recommend === 'reject')
+      || (b.reviewed_at ?? '').localeCompare(a.reviewed_at ?? '') || b.n_target - a.n_target);
   return (
     <section id="gate-in-progress" data-testid="gate-in-progress"
       className="space-y-2 rounded-lg transition-shadow duration-500 data-[flash]:ring-2 data-[flash]:ring-indigo-500 data-[flash]:ring-offset-4 data-[flash]:ring-offset-slate-900">
-      <div className="flex items-baseline gap-3">
-        <h3 className="text-sm font-semibold text-slate-100">② 진행 중인 개선</h3>
-        <span className="text-xs text-slate-400" title="결정 전(AI가 해 볼 만·재 봐야 앎) + 실험 중. 실험 → 다시 재기 → 운영 반영">사람이 정할 후보 {open.length}</span>
-      </div>
+      <h3 className="text-sm font-semibold text-slate-100">② 개선 후보</h3>
       {!imp ? <p className="text-sm text-slate-500">진단 전 — scripts/eval_improve.py --axis {axis} --save로 만든 뒤 여기 보여요</p>
-        : open.length === 0 ? <p className="text-sm text-slate-500">지금 정할 후보가 없어요</p>
-          : <div className="space-y-1.5">{open.map((c) => <InProgressRow key={c.id} c={c} improvementId={imp.run.id} isAdmin={isAdmin} axis={axis}
-              onPick={pick ? (q, i) => pick(q, i, c.title) : undefined} />)}</div>}
+        : board.error ? <p className="text-sm text-rose-600 dark:text-rose-400">후보를 불러오지 못했습니다: {(board.error as Error).message}</p>
+          : board.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p> : (
+            <>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="상태" data-testid="board-filters">
+                {FILTERS.map((f) => {
+                  const n = count(f);
+                  if (n === 0 && f.key !== 'open' && f.key !== filter) return null;
+                  const on = filter === f.key;
+                  const warn = f.key === 'review' && n > 0;
+                  return (
+                    <button key={f.key} onClick={() => setFilter(f.key)} aria-pressed={on} data-testid={`board-filter-${f.key}`}
+                      title={f.hint}
+                      className={clsx('rounded-full px-3 py-1 text-xs border', on ? 'bg-indigo-600 border-indigo-600 text-white'
+                        : warn ? 'border-amber-400 text-amber-700 dark:border-amber-500/60 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10'
+                          : 'border-slate-600 text-slate-300 hover:bg-slate-800')}>
+                      {f.label} <span className="tabular-nums">{n}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {shown.length === 0 ? <p className="text-sm text-slate-500">{filter === 'open' ? '진행 중인 후보가 없어요' : '해당하는 후보가 없어요'}</p>
+                : <div className="space-y-1.5">{shown.map((c) => {
+                    // 문항 상세는 그 후보를 만든 진단의 판정 기록으로 — 최근 진단 줄만(예전 진단 줄은 문항 목록만)
+                    const pick = c.run_id === imp.run.id ? picker(imp.run.gate_run_id) : undefined;
+                    return <BoardRow key={c.id} c={c} isAdmin={isAdmin} axis={axis} onPick={pick ? (q, i) => pick(q, i, c.title) : undefined} />;
+                  })}</div>}
+            </>
+          )}
       {modal}
     </section>
   );
 }
 
-/** ② 한 줄 — 제목·상태·AI 추천·겨냥 문항 수, 누르면 후보 카드 모달(10/30 사용자 "진행 중인 개선도 모달로") */
-function InProgressRow({ c, improvementId, isAdmin, axis, onPick }: {
-  c: Candidate; improvementId: number; isAdmin: boolean; axis: GateAxis; onPick?: (qids: string[], i: number) => void;
-}) {
+/** 측정 한 줄 요약 — 답이면 정답률 차이 · 단정 오답 전/후, 검색이면 전/후 % · 나빠진 문항 */
+function measureLine(c: Candidate): string | null {
+  const m = c.measurements[c.measurements.length - 1];
+  if (!m) return null;
+  const parts = [`측정 #${m.id}`];
+  if (m.has_answers && m.diff != null) parts.push(`답 ${m.diff > 0 ? '+' : ''}${(m.diff * 100).toFixed(1)}%p`);
+  const cw = m.confident_wrong;
+  if (cw && cw.before != null && cw.after != null) parts.push(`단정 오답 ${pct(cw.before)}→${pct(cw.after)}`);
+  if (m.retrieval && m.retrieval.n) {
+    parts.push(`검색 ${pct(m.retrieval.before / m.retrieval.n)}→${pct(m.retrieval.after / m.retrieval.n)}${m.retrieval.down ? ` (${m.retrieval.down}문항 나빠짐)` : ''}`);
+  }
+  return parts.join(' · ');
+}
+
+/** ② 한 줄 — 단계 배지 · 제목 · (열린 것) AI 추천·진행 / (종결) 측정 요약·날짜. 누르면 후보 모달(그 후보를 만든 진단으로) */
+function BoardRow({ c, isAdmin, axis, onPick }: { c: Candidate; isAdmin: boolean; axis: GateAxis; onPick?: (qids: string[], i: number) => void }) {
   const [open, setOpen] = useState(false);
+  const ph = phaseOf(c);
+  const closed = ph === 'adopted' || ph === 'failed' || ph === 'rejected' || ph === 'held';
+  const j = c.experiment;
+  const line = measureLine(c);
   return (
     <>
-      <button onClick={() => setOpen(true)} aria-haspopup="dialog" data-testid={`inprogress-${c.key}`}
+      <button onClick={() => setOpen(true)} aria-haspopup="dialog" data-testid={`inprogress-${c.key}`} data-phase={ph}
         className="w-full flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2.5 text-left hover:bg-slate-800">
+        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${PHASE_BADGE[ph].cls}`} title={PHASE_BADGE[ph].hint}>{PHASE_BADGE[ph].label}</span>
         <span className="text-sm text-slate-100 min-w-0 flex-1 truncate" title={c.title}>{c.title}</span>
-        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${STATUS_BADGE[c.status].cls}`}>{STATUS_BADGE[c.status].label}</span>
-        <span className="text-xs text-slate-500">{REC[c.recommend]}</span>
-        <span className="text-xs text-slate-300 tabular-nums">{c.n_target}문항</span>
+        {closed ? (
+          <>
+            {line && <span className="text-xs text-slate-400 tabular-nums">{line}</span>}
+            {c.reviewed_at && <span className="text-xs text-slate-500 tabular-nums">{fmtDate(c.reviewed_at)}</span>}
+          </>
+        ) : ph === 'running' && j && (j.status === 'queued' || j.status === 'running') ? (
+          <span className="text-xs text-indigo-600 dark:text-indigo-300 tabular-nums">실험 #{j.id} · {j.status === 'queued' ? '대기' : j.stage ?? ''}</span>
+        ) : ph === 'review' ? (
+          <span className="text-xs text-amber-700 dark:text-amber-300">{line ?? '게이트 통과'} · 반영할지 정해요</span>
+        ) : ph === 'error' ? (
+          <span className="text-xs text-rose-600 dark:text-rose-400">실험 #{j?.id} 멈춤 — 다시 실행</span>
+        ) : (
+          <span className="text-xs text-slate-500">{REC[c.recommend]}</span>
+        )}
+        {!closed && <span className="text-xs text-slate-300 tabular-nums">{c.n_target}문항</span>}
         <ChevronRight className="w-4 h-4 text-slate-400" />
       </button>
-      <CandidateModal isOpen={open} onClose={() => setOpen(false)} c={c} improvementId={improvementId} isAdmin={isAdmin} axis={axis} onPick={onPick} />
+      <CandidateModal isOpen={open} onClose={() => setOpen(false)} c={c} improvementId={c.run_id} isAdmin={isAdmin} axis={axis} onPick={onPick} />
     </>
   );
 }

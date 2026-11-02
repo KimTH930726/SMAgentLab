@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   adoptCandidate, getBaselineRun, listGateRuns, markHypothesis, reviewCandidate, startExperiment,
-  type Candidate, type CandidateStatus, type GateAxis, type GateRunListItem, type Hypothesis,
+  type Candidate, type CandidatePhase, type CandidateStatus, type GateAxis, type GateRunListItem, type Hypothesis,
 } from '../../api/eval';
 import { showError } from '../../store/useDialogStore';
 import { FormModal } from '../ui/FormModal';
@@ -33,18 +33,25 @@ const MEASURE: Record<Candidate['measure'], { label: string; pass: string; next:
 
 const STEPS = ['제안', '실험', '측정', '운영 반영'] as const;
 
-// 카드 머리 배지 — 지금 결정 상태(10/27 가독성 목업 ①: 제목 옆에 한눈에)
-export const STATUS_BADGE: Record<CandidateStatus, { label: string; cls: string }> = {
-  proposed: { label: '결정 전', cls: 'bg-slate-700 text-slate-300' },
-  approved: { label: '실험 중', cls: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300' },
-  held: { label: '나중에', cls: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300' },
-  rejected: { label: '안 하기로 함', cls: 'bg-slate-700 text-slate-400' },
-  adopted: { label: '운영 반영', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300' },
+// 카드 머리 배지 — 화면 단계(10/30: 상태 + 마지막 실험 + 반영 판정으로 서버가 정함 — "실험 끝났는데 '실험 중'?" 사용자)
+export const PHASE_BADGE: Record<CandidatePhase, { label: string; cls: string; hint: string }> = {
+  proposed: { label: '제안', cls: 'bg-slate-700 text-slate-300', hint: '진단이 만든 후보 — 실험할지 정해요' },
+  running: { label: '실험 중', cls: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300', hint: '전/후 측정이 돌고 있거나(자동 실험) 개발 작업 중' },
+  error: { label: '실험 오류', cls: 'bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300', hint: '측정이 중간에 멈춤(게이트웨이 장애 등) — [다시 실행]' },
+  review: { label: '검토 대기', cls: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300', hint: '게이트 통과 — 운영에 반영할지 정해요' },
+  adopted: { label: '반영', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300', hint: '운영에 바꿈 — 그 측정이 지금 점수' },
+  failed: { label: '실패', cls: 'bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300', hint: '운영 반영 불가(게이트 실패 등)로 자동 종결 — [다시 실행]은 가능' },
+  rejected: { label: '기각', cls: 'bg-slate-700 text-slate-400', hint: '사람이 안 하기로 함 — 다음 진단이 이어받음' },
+  held: { label: '보류', cls: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300', hint: '나중에 보기로 함 — 다음 진단에도 이어짐' },
 };
+const STATUS_PHASE: Record<CandidateStatus, CandidatePhase> = {
+  proposed: 'proposed', approved: 'running', held: 'held', rejected: 'rejected', adopted: 'adopted', failed: 'failed',
+};
+export const phaseOf = (c: Candidate): CandidatePhase => c.phase ?? STATUS_PHASE[c.status];
 
 function stepOf(c: Candidate): number {
   if (c.status === 'adopted') return 3;
-  if (c.status === 'approved') return c.measurements.length ? 2 : 1;
+  if (c.status === 'approved' || c.status === 'failed') return c.measurements.length ? 2 : 1;
   return 0;   // 제안·나중에·안 하기 — 예전 측정이 있어도 지금 실험 중은 아님(리뷰 L6, 측정은 막대 옆에 따로)
 }
 
@@ -63,7 +70,7 @@ const fmtDate = (s: string) => new Date(s).toLocaleString('ko-KR', { month: 'num
 function Stepper({ c }: { c: Candidate }) {
   const at = stepOf(c);
   const last = c.measurements[c.measurements.length - 1];
-  const side = c.status === 'rejected' ? '안 하기로 함' : c.status === 'held' ? '나중에 보기로 함' : null;
+  const side = c.status === 'rejected' ? '기각' : c.status === 'held' ? '보류' : null;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" aria-label="진행 단계">
       {STEPS.map((s, i) => (
@@ -109,6 +116,12 @@ function ExperimentStatus({ c, next, isAdmin, onRetry, retrying }: {
         )}
       </div>
     );
+  }
+  if (c.status === 'failed') {   // 반영 불가로 자동 종결(10/30) — 사유는 아래 결정 사유 칸, 여기는 다시 실행만
+    return isAdmin && c.auto?.ok ? (
+      <p className="text-xs text-slate-400" data-testid="cand-exp-rerun">값·조건을 바꾸지 않고 다시 재 보려면
+        <button className="ml-1 text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50" disabled={retrying} onClick={onRetry}>다시 실행</button></p>
+    ) : null;
   }
   if (j && j.status === 'failed' && c.status === 'approved') {
     return (
@@ -190,7 +203,7 @@ function Hypotheses({ c, improvementId, isAdmin, onPick }: {
   const qc = useQueryClient();
   const mark = useMutation({
     mutationFn: ({ h, status }: { h: Hypothesis; status: 'confirmed' | 'rejected' | 'open' }) => markHypothesis(improvementId, c.cause, h.name, status),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['eval-improvement'] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['eval-improvement'] }); qc.invalidateQueries({ queryKey: ['eval-board'] }); },
     onError: (e) => showError(e, '묶음 확인을 저장하지 못했습니다'),
   });
   if (!c.hypotheses.length) return null;
@@ -278,6 +291,8 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
   const [err, setErr] = useState<string | null>(null);
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['eval-improvement'] });
+    qc.invalidateQueries({ queryKey: ['eval-board'] });         // ② 개선 후보 목록(10/30)
+    qc.invalidateQueries({ queryKey: ['eval-history'] });
     qc.invalidateQueries({ queryKey: ['eval-techniques'] });   // 답 기법 화면의 "걸린 후보" 상태도(10/26 리뷰 L5)
     qc.invalidateQueries({ queryKey: ['eval-report'] });       // 틀린 문항 리포트의 기법 상태·지금 점수(반영하면 기준선이 옮겨짐)
     qc.invalidateQueries({ queryKey: ['eval-gate-baseline'] });
@@ -316,7 +331,8 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-800 p-4 space-y-3" data-testid={`candidate-${c.key}`}>
       <div className="flex flex-wrap items-center gap-2">
-        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${STATUS_BADGE[c.status].cls}`} data-testid="cand-status">{STATUS_BADGE[c.status].label}</span>
+        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${PHASE_BADGE[phaseOf(c)].cls}`} data-testid="cand-status"
+          title={PHASE_BADGE[phaseOf(c)].hint}>{PHASE_BADGE[phaseOf(c)].label}</span>
         {!hideTitle && <p className="text-sm font-semibold text-slate-100 min-w-0">{c.title}</p>}
         <span className="text-xs text-slate-500" title="평가 게이트 › 적용 이력의 항목">{c.technique_name}</span>
       </div>
@@ -341,7 +357,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
       {c.status === 'adopted' && <p className="text-xs text-emerald-600 dark:text-emerald-400">판정 #{c.adopted_gate_run_id} "{c.adopted_gate_label}"로 운영 반영 완료</p>}
       {c.review_reason && c.status !== 'adopted' && (
         <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs" data-testid="cand-reason">
-          <p className="text-[11px] text-slate-500">결정 사유{c.reviewed_at ? ` · ${fmtDate(c.reviewed_at)}` : ''}{c.carried_from_id ? ' · 이전 진단의 결정 이어받음' : ''}</p>
+          <p className="text-[11px] text-slate-500">{c.status === 'failed' ? '종결 사유(자동)' : '결정 사유'}{c.reviewed_at ? ` · ${fmtDate(c.reviewed_at)}` : ''}{c.carried_from_id ? ' · 이전 진단의 결정 이어받음' : ''}</p>
           <p className="text-slate-200 break-words">{c.review_reason}</p>
         </div>
       )}
@@ -354,16 +370,16 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
               title="지금 설정과 바꾼 설정을 골든셋으로 재고 게이트로 판정합니다(자동 실험이 되는 후보) — 운영은 안 바뀝니다"
               onClick={() => review.mutate({ status: 'approved' })}>실험해 보기</button>
           )}
-          {c.status === 'approved' && c.adopt_check?.ok !== false && (   /* 서버가 반영 불가로 본 측정뿐이면 숨김(결과 칸에 이유) — 눌러도 고를 측정이 없었다 */
+          {c.status === 'approved' && phaseOf(c) !== 'failed' && c.adopt_check?.ok !== false && (   /* 서버가 반영 불가로 본 측정뿐이면 숨김(결과 칸에 이유) — 눌러도 고를 측정이 없었다 */
             <button className={`${btn} text-emerald-600 dark:text-emerald-400 font-medium`}
               title="설정·프롬프트를 운영에 실제로 바꾼 뒤, 통과한 측정과 연결해 '반영 완료'로 남깁니다"
               onClick={() => open('adopt')}>운영에 반영했어요…</button>
           )}
-          {c.status !== 'held' && c.status !== 'rejected' && (
+          {c.status !== 'held' && c.status !== 'rejected' && c.status !== 'failed' && (   /* 실패는 이미 종결 — 사람 손 안 씀 */
             <button className={`${btn} text-amber-600 dark:text-amber-400`} title="목록에 두되 지금은 안 합니다 — 다음 진단에도 '나중에'로 이어집니다"
               onClick={() => open('held')}>나중에…</button>
           )}
-          {c.status !== 'rejected' && (
+          {c.status !== 'rejected' && c.status !== 'failed' && (
             <button className={`${btn} text-rose-600 dark:text-rose-400`} title="하지 않습니다(이유 필수) — 다음 진단이 같은 후보를 다시 묻지 않습니다"
               onClick={() => open('rejected')}>안 하기…</button>
           )}
