@@ -35,6 +35,11 @@ ACTIVE_KNOWLEDGE = ("active", "pending_review")
 
 # ─── 순수 함수(테스트 대상) ────────────────────────────────────────────────────
 
+def _err_text(e: BaseException) -> str:
+    """페이지 실패 사유 — 메시지 없는 예외(시간 초과 등)도 종류는 남긴다(11/02 #85 실패 1건이 빈 사유로 저장됨)."""
+    return (f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)[:300]
+
+
 def team_scope(cands: list[Candidate], owners: dict[int, set[int]], team_parts: set[int]) -> tuple[list[Candidate], set[int]]:
     """팀 적재 후보 — 업무 = 그 팀 파트가 담당하는 업무 + 담당 없는 업무(→ 담당 미지정), 다른 팀만 담당하는 업무는 뺀다.
     조직 컬렉션은 그대로 넘긴다(locator가 넣는 사람 팀으로 거른다). → (후보, 담당 없는 업무 id)."""
@@ -375,7 +380,7 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
             except Exception as e:   # noqa: BLE001 — 한 페이지 실패가 배치를 멈추지 않게(화면에 실패로)
                 logger.warning("팀 적재: 페이지 처리 실패 batch=%s page=%s: %s", batch_id, row["page_id"], e)
                 async with get_conn() as conn:
-                    await _set_page(conn, row["id"], status="failed", reason=None, signals={"error": str(e)[:300]})
+                    await _set_page(conn, row["id"], status="failed", reason=None, signals={"error": _err_text(e)})
             async with get_conn() as conn:
                 await conn.execute("UPDATE rag_import_batch SET done_pages = done_pages + 1 WHERE id = $1", batch_id)
 
@@ -559,7 +564,7 @@ async def _load_batch(batch_id: int, user: dict) -> None:
         except Exception as e:   # noqa: BLE001 — 한 페이지 실패는 그 페이지만(화면에 실패로)
             logger.warning("팀 적재: 등록 실패 batch=%s page=%s: %s", batch_id, p["page_id"], e)
             async with get_conn() as conn:
-                await _set_page(conn, p["id"], status="failed", signals={**sig, "error": str(e)[:300]})
+                await _set_page(conn, p["id"], status="failed", signals={**sig, "error": _err_text(e)})
                 await conn.execute("UPDATE rag_import_batch SET load_done = load_done + 1 WHERE id = $1", batch_id)
             continue
         ok = res.get("status") == "completed"

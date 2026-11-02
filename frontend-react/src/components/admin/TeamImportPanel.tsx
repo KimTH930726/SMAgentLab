@@ -375,21 +375,25 @@ const EXCLUDE = -1;   // 선택 상자 값 = 제외
 const GROUP_TAU = 0.4;   // 갈래 예외 기준 — AI가 묶음 값과 다르게 본 비율(10/30 실측 split_probe)
 const GROUP_MIN = 3;
 
-/** AI 판단 분포 막대 + 숫자 — 같음 / 다른 업무 / 조직 / 판단 못 함 */
-function AiBar({ v }: { v: { same: number; otherBiz: number; otherOrg: number; none: number } }) {
+/** AI 판단 분포 막대 + 숫자 — 이 줄 컬렉션과 같음 / 다른 업무 컬렉션 / 다른 조직 컬렉션 / 미판정 */
+function AiBar({ v }: { v: { same: number; otherBiz: number; otherOrg: number; none: number; grounded: number } }) {
   const total = Math.max(1, v.same + v.otherBiz + v.otherOrg + v.none);
   const seg = [
-    { n: v.same, cls: 'bg-emerald-500 dark:bg-emerald-400', t: '같음' },
-    { n: v.otherBiz, cls: 'bg-amber-500 dark:bg-amber-400', t: '다른 업무' },
-    { n: v.otherOrg, cls: 'bg-sky-500 dark:bg-sky-400', t: '조직' },
-    { n: v.none, cls: 'bg-slate-500', t: '판단 못 함' },
+    { n: v.same, cls: 'bg-emerald-500 dark:bg-emerald-400', t: '제안과 같음' },
+    { n: v.otherBiz, cls: 'bg-amber-500 dark:bg-amber-400', t: '다른 업무 컬렉션' },
+    { n: v.otherOrg, cls: 'bg-sky-500 dark:bg-sky-400', t: '다른 조직 컬렉션' },
+    { n: v.none, cls: 'bg-slate-500', t: 'AI 미판정' },
   ];
+  const judged = v.same + v.otherBiz + v.otherOrg;
   return (
     <span className="inline-flex flex-col gap-0.5 min-w-[12rem]">
       <span className="flex h-1.5 rounded-full overflow-hidden bg-slate-700" aria-hidden>
         {seg.map((x) => x.n > 0 && <span key={x.t} className={x.cls} style={{ width: `${(x.n / total) * 100}%` }} />)}
       </span>
-      <span className="text-[11px] text-slate-400">{seg.filter((x) => x.n > 0).map((x) => `${x.t} ${x.n}`).join(' · ')}</span>
+      <span className="text-[11px] text-slate-400">{seg.filter((x) => x.n > 0).map((x) => `${x.t} ${x.n}`).join(' · ')}
+        {judged > 0 && v.grounded === 0 && (
+          <span className="ml-1 text-amber-700 dark:text-amber-300" title="이 컬렉션들에 아직 지식이 없어 비슷한 지식과 비교하지 못함 — AI가 내용만 보고 고른 값이라 참고만(첫 적재)">· 비교 근거 없음</span>)}
+      </span>
     </span>
   );
 }
@@ -432,17 +436,20 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
   const names = useNames(data.collections);
   const label = (id: number | null) => (id == null || id === EXCLUDE ? '제외' : names.get(id)?.label ?? `#${id}`);
   const writable = (id: number) => !!names.get(id)?.writable;
-  // AI 판단 분포(묶음 값과 같음 / 다른 업무 / 조직 / 판단 못 함) — 기본값과 섞지 않고 AI가 내용만 보고 고른 곳
+  // AI 판단 분포(묶음 값과 같음 / 다른 업무 / 다른 조직 / 미판정) — 기본값과 섞지 않고 AI가 내용만 보고 고른 곳
+  // 이견 비율은 이웃 비교가 있던 판단만으로 센다 — 첫 적재처럼 비교할 지식이 없으면 LLM 혼자 고른 값이라 예외 후보로 띄우지 않음(11/02 #85: 420건 전부 비교 없음)
   const aiView = (ps: ImportPage[], base: number | null) => {
     const judged = ps.filter((p) => p.ai_namespace_id != null);
     const other = judged.filter((p) => p.ai_namespace_id !== base);
+    const grounded = judged.filter((p) => Object.keys(p.signals?.neighbors ?? {}).length > 0);
     const top = majority(other.map((p) => ({ ...p, final_namespace_id: null })), () => true).ns;
     return {
       same: judged.length - other.length,
       otherBiz: other.filter((p) => names.get(p.ai_namespace_id!)?.kind === 'domain').length,
       otherOrg: other.filter((p) => names.get(p.ai_namespace_id!)?.kind === 'org_space').length,
       none: ps.length - judged.length,
-      disagree: judged.length ? other.length / judged.length : 0,
+      grounded: grounded.length,
+      disagree: grounded.length ? grounded.filter((p) => p.ai_namespace_id !== base).length / grounded.length : 0,
       aiTop: top,
     };
   };
@@ -456,9 +463,11 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
       const gs = new Map<string, ImportPage[]>();
       for (const p of ps) { const g = groupOf(p); if (g) gs.set(g, [...(gs.get(g) ?? []), p]); }
       const groups = [...gs.entries()].map(([name, gp]) => ({ name, n: gp.length, pages: gp, ...aiView(gp, m.ns) }))
-        .filter((g) => g.n >= GROUP_MIN && g.disagree > GROUP_TAU)
+        .filter((g) => g.grounded >= GROUP_MIN && g.disagree > GROUP_TAU)
         .sort((x, y) => y.n - x.n);
-      return { bundle, n: ps.length, suggest: m.ns, share: m.share, pages: ps, ...aiView(ps, m.ns), groups };
+      // 정해진 값(공간 기본 위치·사람 결정)이 하나도 없으면 제안 = AI 다수 — 화면에 '정해진 값'으로 보이지 않게(11/02 #85: 정해진 값 0/420)
+      const fixed = ps.some((p) => p.final_namespace_id != null);
+      return { bundle, n: ps.length, suggest: m.ns, share: m.share, fixed, pages: ps, ...aiView(ps, m.ns), groups };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pages, names]);
@@ -469,6 +478,7 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
   // 갈래는 손대지 않으면 묶음 값을 따라간다(AI 값으로 미리 채우지 않음)
   const gOf = (r: (typeof rows)[number], g: (typeof rows)[number]['groups'][number]) => gpick[gKey(r.bundle, g.name)] ?? nsOf(r);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [groupsOpen, setGroupsOpen] = useState<Record<string, boolean>>({});
   const blank = rows.filter((r) => nsOf(r) == null).length;
   const total = rows.reduce((a, r) => a + r.n, 0);
   const go = useMutation({
@@ -514,7 +524,7 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
                 </td>
                 <td className="px-2 py-2 text-right tabular-nums text-slate-300">{r.n}</td>
                 <td className="px-3 py-2 text-xs text-slate-400 space-y-1">
-                  <span className="block">{r.suggest != null ? <><b className="text-slate-200">{label(r.suggest)}</b> — 정해진 값 {Math.round(r.share * 100)}%</> : '판단 근거 없음'}</span>
+                  <span className="block">{r.suggest != null ? <><b className="text-slate-200">{label(r.suggest)}</b> — {r.fixed ? '정해진 값' : 'AI 다수'} {Math.round(r.share * 100)}%</> : '판단 근거 없음'}</span>
                   <span className="block" title="AI가 내용만 보고 고른 곳(기본 위치와 섞지 않음). AI의 '다른 곳' 판단은 사람이 본 39건 중 31%만 맞았음(10/30)"><AiBar v={r} /></span>
                 </td>
                 <td className="px-3 py-2"><Select value={nsOf(r)} onPick={(v) => setPick({ ...pick, [r.bundle]: v })} aria={`${r.bundle || '(최상위)'} 컬렉션`} /></td>
@@ -525,30 +535,44 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
                   <ul className="space-y-0.5">{r.pages.slice(0, 5).map((p) => <li key={p.id}><PageLink rootUrl={b.root_url} p={p} />{p.path && <span className="ml-2 text-[11px] text-slate-500">{p.path}</span>}</li>)}</ul>
                 </td></tr>
               )}
-              {r.groups.map((g) => {
-                const gk = gKey(r.bundle, g.name);
-                return (
-                  <Fragment key={g.name}>
-                    <tr className="align-top" data-testid="bundle-group">
-                      <td className="pl-8 pr-4 pb-2 text-xs text-amber-700 dark:text-amber-300" title="갈래 안에서 AI가 묶음 값과 다르게 본 비율이 40%를 넘는 곳 — 값은 묶음 값으로 채워 둠, 다르면 바꾸기">
-                        └ AI가 다르게 본 갈래 · {g.name}
-                        <button className="ml-2 text-[11px] text-slate-400 hover:text-slate-200" onClick={() => setOpenKey(openKey === gk ? null : gk)} aria-expanded={openKey === gk}>{openKey === gk ? '내용 ▾' : '내용 ▸'}</button>
-                      </td>
-                      <td className="px-2 pb-2 text-right tabular-nums text-xs text-slate-400">{g.n}</td>
-                      <td className="px-3 pb-2 text-xs text-slate-400 space-y-1">
-                        <span className="block">AI 다수: <b className="text-slate-300">{label(g.aiTop)}</b> — 다르게 봄 {Math.round(g.disagree * 100)}%</span>
-                        <span className="block"><AiBar v={g} /></span>
-                      </td>
-                      <td className="px-3 pb-2"><Select value={gOf(r, g)} onPick={(v) => setGpick({ ...gpick, [gk]: v })} aria={`${g.name} 컬렉션`} /></td>
-                    </tr>
-                    {openKey === gk && (
-                      <tr><td colSpan={4} className="px-12 pb-3 text-xs text-slate-400">
-                        <ul className="space-y-0.5">{g.pages.slice(0, 5).map((p) => <li key={p.id}><PageLink rootUrl={b.root_url} p={p} /></li>)}</ul>
-                      </td></tr>
-                    )}
-                  </Fragment>
-                );
-              })}
+              {r.groups.length > 0 && (
+                <tr><td colSpan={4} className="px-4 pb-2">
+                  <button className="text-xs text-amber-700 dark:text-amber-300 hover:underline" data-testid="bundle-groups-toggle"
+                    aria-expanded={!!groupsOpen[r.bundle]} onClick={() => setGroupsOpen({ ...groupsOpen, [r.bundle]: !groupsOpen[r.bundle] })}
+                    title="이 묶음 안에서 AI가 묶음 값과 다르게 본 폴더(이웃 비교가 있는 판단 40% 초과) — 따로 넣을 곳을 정할 수 있음">
+                    ⚠ AI 이견 폴더 {r.groups.length}{(() => { const n = r.groups.filter((g) => gOf(r, g) !== nsOf(r)).length; return n ? ` · 예외 지정 ${n}` : ''; })()} {groupsOpen[r.bundle] ? '▾' : '▸'}</button>
+                  {groupsOpen[r.bundle] && (
+                    <div className="mt-2 rounded-lg border border-amber-300 dark:border-amber-500/40 bg-slate-900/40" data-testid="bundle-groups">
+                      <p className="px-3 py-1.5 text-xs text-slate-400 border-b border-slate-700/60">예외 지정(선택) — 기본은 묶음 값, 다르게 넣을 폴더만 바꾸기</p>
+                      <table className="w-full text-sm"><tbody>
+                        {r.groups.map((g) => {
+                          const gk = gKey(r.bundle, g.name);
+                          return (
+                            <Fragment key={g.name}>
+                              <tr className="align-top border-t border-slate-700/40 first:border-t-0" data-testid="bundle-group">
+                                <td className="px-3 py-2 text-xs text-slate-200">{g.name}
+                                  <button className="ml-2 text-[11px] text-slate-400 hover:text-slate-200" onClick={() => setOpenKey(openKey === gk ? null : gk)} aria-expanded={openKey === gk}>{openKey === gk ? '내용 ▾' : '내용 ▸'}</button>
+                                </td>
+                                <td className="px-2 py-2 text-right tabular-nums text-xs text-slate-400">{g.n}</td>
+                                <td className="px-3 py-2 text-xs text-slate-400 space-y-1">
+                                  <span className="block">AI 다수: <b className="text-slate-300">{label(g.aiTop)}</b> — 비교 근거 {g.grounded}건 중 다르게 봄 {Math.round(g.disagree * 100)}%</span>
+                                  <span className="block"><AiBar v={g} /></span>
+                                </td>
+                                <td className="px-3 py-2"><Select value={gOf(r, g)} onPick={(v) => setGpick({ ...gpick, [gk]: v })} aria={`${g.name} 컬렉션`} /></td>
+                              </tr>
+                              {openKey === gk && (
+                                <tr><td colSpan={4} className="px-6 pb-3 text-xs text-slate-400">
+                                  <ul className="space-y-0.5">{g.pages.slice(0, 5).map((p) => <li key={p.id}><PageLink rootUrl={b.root_url} p={p} /></li>)}</ul>
+                                </td></tr>
+                              )}
+                            </Fragment>
+                          );
+                        })}
+                      </tbody></table>
+                    </div>
+                  )}
+                </td></tr>
+              )}
             </Fragment>
           ))}
         </tbody>

@@ -389,3 +389,11 @@ def test_ledger_view_rule_is_preset_not_override():
     """묶음 규칙으로 정한 페이지는 preset — AI 추천과 달라도 번복으로 안 센다(공간 기본값과 같은 규칙, 리뷰 10/30 M2)."""
     assert ti.ledger_view("rule", True, 2, 7, 7, 7) == ("rule", 2, False)     # AI는 7, 규칙은 2 — 번복 아님
     assert ti.ledger_view("rule", True, 7, 2, 7, 7) == ("rule", 7, False)     # sample_ns와 달라도 사람 번복으로 바뀌지 않음
+
+
+def test_err_text_keeps_type_when_message_empty():
+    # 11/02 #85: 메시지 없는 예외가 빈 사유("")로 저장돼 실패 원인을 알 수 없었다
+    import asyncio
+    assert ti._err_text(asyncio.TimeoutError()) == "TimeoutError"
+    assert ti._err_text(ValueError("bad page")) == "ValueError: bad page"
+    assert len(ti._err_text(RuntimeError("x" * 1000))) == 300

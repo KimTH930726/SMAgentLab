@@ -173,32 +173,45 @@ test('묶음 연결 — 묶음 줄·하위 예외 미리 채움, 연결하면 �
   const [team, common, biz] = row.split('|').map(Number);
   test.skip(psql(`SELECT count(*) FROM rag_import_batch WHERE team_id = ${team} AND status IN ('previewing','loading')`) !== '0', '진행 중 배치 있음');
   const bid = Number(psql(`INSERT INTO rag_import_batch (team_id, root_url, root_title, status, sampling_required, total_pages, done_pages, created_by_user_id, default_namespace_id)
-    VALUES (${team}, 'https://confl.example/pages/viewpage.action?pageId=4', 'E2E 묶음 연결', 'preview', TRUE, 9, 9, (SELECT id FROM ops_user WHERE username = 'admin'), ${biz})
+    VALUES (${team}, 'https://confl.example/pages/viewpage.action?pageId=4', 'E2E 묶음 연결', 'preview', TRUE, 16, 16, (SELECT id FROM ops_user WHERE username = 'admin'), ${biz})
     RETURNING id`).split(/\s+/)[0]);
-  // 묶음 A: 업무 4 + 하위 갈래 "A-도구"(팀 공통 3) → 예외 / 묶음 B: 업무 2
-  const ins = (pid: string, bundle: string, depth: number, path: string, status: string, fin: number | null) => psql(
-    `INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, path, status, chunk_count, final_namespace_id, ai_namespace_id, reason)
-     VALUES (${bid}, '${pid}', '${pid}', '${bundle}', ${depth}, '${path}', '${status}', 1, ${fin ?? 'NULL'}, ${fin ?? 'NULL'}, ${status === 'review' ? "'org_like'" : 'NULL'})`);
+  // 묶음 A: 업무 4 + 하위 갈래 "A-도구"(팀 공통 3, 이웃 비교 있음) → 예외 / 묶음 B: 업무 2
+  // 묶음 C: 업무 4 + 갈래 "C-이력"(AI만 팀 공통 3, 이웃 비교 없음 — 첫 적재처럼) → 예외로 띄우지 않음(11/02)
+  const ins = (pid: string, bundle: string, depth: number, path: string, status: string, fin: number | null, ai: number | null = fin, nb = false) => psql(
+    `INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, path, status, chunk_count, final_namespace_id, ai_namespace_id, reason, signals)
+     VALUES (${bid}, '${pid}', '${pid}', '${bundle}', ${depth}, '${path}', '${status}', 1, ${fin ?? 'NULL'}, ${ai ?? 'NULL'}, ${status === 'review' ? "'org_like'" : 'NULL'},
+             ${nb ? `'{"neighbors": [[${ai}, 0.8]]}'` : "'{}'"})`);
   const st = (pid: string) => psql(`SELECT status || '|' || coalesce(final_namespace_id::text,'') FROM rag_import_page WHERE batch_id = ${bid} AND page_id = '${pid}'`);
   try {
     ins('A', 'A', 1, '', 'auto', biz);
     for (const i of [1, 2, 3]) ins(`a${i}`, 'A', 2, 'A', 'auto', biz);
-    ins('A-도구', 'A', 2, 'A', 'review', common);
-    for (const i of [1, 2]) ins(`t${i}`, 'A', 3, 'A › A-도구', 'review', common);
+    ins('A-도구', 'A', 2, 'A', 'review', common, common, true);
+    for (const i of [1, 2]) ins(`t${i}`, 'A', 3, 'A › A-도구', 'review', common, common, true);
     ins('B', 'B', 1, '', 'auto', biz);
     ins('b1', 'B', 2, 'B', 'review', null);                          // 미분류 — 묶음 값으로 따라감
+    for (const i of [1, 2, 3, 4]) ins(`c${i}`, 'C', i === 1 ? 1 : 2, i === 1 ? '' : 'C', 'auto', biz);
+    ins('C-이력', 'C', 2, 'C', 'review', null, common);
+    for (const i of [1, 2]) ins(`h${i}`, 'C', 3, 'C › C-이력', 'review', null, common);
     await loginAdmin(page);
     await goAdmin(page, '지식', '지식 문서');
     await goAdmin(page, '지식', '데이터 소스');
     await page.getByLabel('배치').selectOption(String(bid));
     const bc = page.getByTestId('bundle-connect');
-    await expect(bc.getByTestId('bundle-row')).toHaveCount(2);
+    await expect(bc.getByTestId('bundle-row')).toHaveCount(3);
     await expect(bc).not.toContainText('표본');
+    // 이견 폴더는 접혀 있다(하위 메뉴처럼 보이지 않게, 11/02) — A만 있음: C-이력은 이웃 비교 없는 AI 판단뿐이라 띄우지 않음
+    await expect(bc.getByTestId('bundle-group')).toHaveCount(0);
+    await expect(bc.getByTestId('bundle-groups-toggle')).toHaveCount(1);
+    await expect(bc.getByTestId('bundle-groups-toggle')).toContainText('AI 이견 폴더 1');
+    await bc.getByTestId('bundle-groups-toggle').click();
     await expect(bc.getByTestId('bundle-group')).toHaveCount(1);       // A-도구: AI가 3/3 다르게 봄(> 40%, 3쪽 이상) — 갈래 예외 후보
-    await expect(bc.getByTestId('bundle-group')).toContainText('AI가 다르게 본 갈래');
+    await expect(bc.getByTestId('bundle-group')).toContainText('A-도구');
+    await expect(bc.getByTestId('bundle-groups')).toContainText('예외 지정(선택)');
     await expect(bc.getByLabel('A 컬렉션')).toHaveValue(String(biz));
     await expect(bc.getByLabel('A-도구 컬렉션')).toHaveValue(String(biz));   // AI 값이 아니라 묶음 값으로 채움(AI "다른 곳" 31%만 맞음)
     await bc.getByLabel('A-도구 컬렉션').selectOption(String(common));   // 사람이 갈래만 바꿈
+    await bc.getByTestId('bundle-groups-toggle').click();              // 접어도 지정한 예외가 보인다(리뷰 L2)
+    await expect(bc.getByTestId('bundle-groups-toggle')).toContainText('예외 지정 1');
     await bc.getByTestId('bundle-detail-toggle').first().click();
     await expect(bc.getByTestId('bundle-detail')).toContainText('대표 페이지');
     await expect(bc.getByLabel('B 컬렉션')).toHaveValue(String(biz));
@@ -210,9 +223,9 @@ test('묶음 연결 — 묶음 줄·하위 예외 미리 채움, 연결하면 �
     await page.getByRole('button', { name: '확인' }).click();
     expect((await res).status()).toBe(200);
     await expect.poll(() => confirmed).toBe(true);                    // 버튼 한 번 = 연결 → 적재
-    for (const pid of ['A', 'a1', 'a2', 'a3', 'B', 'b1']) expect(st(pid).split('|')[1]).toBe(String(biz));
+    for (const pid of ['A', 'a1', 'a2', 'a3', 'B', 'b1', 'c1', 'C-이력', 'h1', 'h2']) expect(st(pid).split('|')[1]).toBe(String(biz));
     for (const pid of ['A-도구', 't1', 't2']) expect(st(pid).split('|')[1]).toBe(String(common));
-    expect(psql(`SELECT count(*) FROM rag_import_rule WHERE team_id = ${team} AND root_url LIKE '%pageId=4'`)).toBe('3');   // 묶음 2 + 예외 1
+    expect(psql(`SELECT count(*) FROM rag_import_rule WHERE team_id = ${team} AND root_url LIKE '%pageId=4'`)).toBe('4');   // 묶음 3 + 예외 1
     // 연결하면 동기화 대상(연결된 공간)이 한 줄 — 담당 = 연결한 사람(10/30 동기화)
     expect(psql(`SELECT count(*) || '|' || max(status) FROM rag_source_connection WHERE team_id = ${team} AND root_url LIKE '%pageId=4'`)).toBe('1|ok');
     await page.reload();
