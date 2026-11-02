@@ -9,7 +9,8 @@ import { psql } from './v0-fixture';
 // 하고 폼을 채우고 제출해서 화면에 결과가 뜨는지까지 확인해야 이런 종류의 회귀를
 // 잡는다 — 그래서 이 스펙은 API를 목킹하지 않고 떠 있는 실 dev 스택 그대로 사용한다.
 
-const NAMESPACE = '딜리버스';
+const NAMESPACE = '딜리버스 시스템';   // 운영 지식은 시스템 컬렉션에만(11/02)
+const LABEL = '딜리버스';   // 칩·카드에 보이는 화면 이름
 
 // 이 시험이 등록하며 남긴 위치 판정(AI 판단 원장) 줄은 끝에 지운다 — 실제 컬렉션에 등록하므로 안 지우면 AI 감사 로그·운영 번복 진단에
 // 시험 데이터가 섞였다(10/27 밤 발견: 원장의 위치 판정 67건이 전부 E2E). 판정 응답의 decision_id를 모아 둔다.
@@ -33,7 +34,7 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
   await page.getByRole('link', { name: 'Admin' }).click();
   await goAdmin(page, '지식', '운영 지식');
 
-  await selectDomain(page, NAMESPACE);
+  await selectDomain(page, NAMESPACE, LABEL);
 
   await page.getByRole('button', { name: '지식 등록', exact: true }).click();
   await page.getByText('직접 입력').click();
@@ -137,7 +138,7 @@ test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아
   try {
     await page.getByRole('link', { name: 'Admin' }).click();
     await goAdmin(page, '지식', '운영 지식');
-    await selectDomain(page, NAMESPACE);
+    await selectDomain(page, NAMESPACE, LABEL);
     await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     await page.getByText('직접 입력').click();
     const createResponse = page.waitForResponse((r) => r.url().endsWith('/api/knowledge') && r.request().method() === 'POST')   // 판정(/locate)은 빼고 등록만;
@@ -192,7 +193,7 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
 
     await page.getByRole('link', { name: 'Admin' }).click();
     await goAdmin(page, '지식', '운영 지식');
-    await selectDomain(page, NAMESPACE);
+    await selectDomain(page, NAMESPACE, LABEL);
     await page.getByPlaceholder(/검색/).fill('구조 테스트 B');
     await page.getByText('구조 테스트 B').first().click();
     const panel = page.getByTestId('knowledge-structure');
@@ -244,7 +245,7 @@ test('같은 원본 다시 등록 — 사람이 고친 조각이 있으면 사�
 
     await page.getByRole('link', { name: 'Admin' }).click();
     await goAdmin(page, '지식', '운영 지식');
-    await selectDomain(page, NAMESPACE);
+    await selectDomain(page, NAMESPACE, LABEL);
     await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     await page.getByText('대량 텍스트', { exact: true }).first().click();
     await page.locator('textarea:visible').first().fill(text);
