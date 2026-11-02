@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.196)
+# OpsLens 시스템 아키텍처 (v2.197)
 
 ## 개요
 
@@ -12,6 +12,16 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.197 (2026-11-02 밤, dev_0): **정책 / 시스템 컬렉션 — 조직 컬렉션 폐지 · 관련 정책 · 업무 코드 · 운영 지식은 시스템에만.** 기준: domains/knowledge/taxonomy-standard.md.
+  ① #105 `ops_namespace.area`(policy | system — 시스템은 최상위만) · `code`(POL-xxx / SYS-xxx, 불변·유일) · 팀 적재 원문 초안 보관 자리 `stage:import`(kind staging, 목록·검색·쓰기 안 됨).
+  시스템 ↔ 관련 정책 N:N(ops_link `supports`, `PUT /api/namespaces/{시스템}/supports`). 시스템 화면 이름은 키에서 " 시스템"을 뗀 것.
+  ② #106 조직 컬렉션(kind org_space) 폐지 — 기동 백필(#83) 제거, 내용 없는 행 삭제(있으면 남기고 경고 + 쓰기 막음, 팀 삭제는 409), 담당은 파트 → 컬렉션 연결만(팀 공통 담당 없음).
+  ③ 위치 판단 v3: 후보 = 시스템 컬렉션만, 종류 "대상 아님"(IT 운영 지식 아님 → 소스 연결이 묶음 제외 제안). 정책은 정책 컬렉션에만(시스템엔 400).
+  ④ 화면: 채팅 [정책 | 시스템], 컬렉션 › 정책 컬렉션 · 시스템 컬렉션(관련 정책 · 코드 · 이름 수정·삭제 공용 창), 정책 줄 "관련 시스템 없음" 경고·[지식 등록 →] 없음,
+  용어 지식 문서 → 운영 지식 · 데이터 소스 → 소스 연결 · 담당 업무 → 담당 컬렉션.
+  ⑤ 측정 옵션(채팅 기본값 그대로): `knowledge_scope` linked(관련 정책 연결 양방향) · `context_budget`(한 줄 순위 + 문맥 예산), 측정 스크립트 기본 `--llm local`.
+  CX 질문 93개(회원에서 묻기) 답 0 → 83.3%(게이트 #67), 업무지식 106 검색 A = linked 95.3%, 지식 질문에서 정책 빼기 #65 통과(정답 77.6→83.3%).
+  안 하는 것: 새 kind 추가(시스템은 domain의 구분값) · "공통" 구분 · 자동 컬렉션 생성 · 검색 범위 similar(효과 없음). 키 이름 → id·코드 전환은 domains/knowledge/collection-key-plan.md.
 - v2.196 (2026-11-02, dev_0): **사용자 피드백 — 이미지 첨부 · 오류 창에서 바로 신고 · 진행 중 + 개발 요청서.**
   ① 첨부 이미지(#104 `ops_user_feedback_file`, DB bytea — 폐쇄망에 저장 폴더 따로 안 둠): Ctrl+V 화면 캡처 붙여넣기 · 끌어 놓기 · 파일 선택, 최대 3장·장당 5MB,
   이미지 판정은 앞 바이트(PNG·JPEG·GIF·WEBP)로, 보기는 보낸 사람·관리자만(`GET /api/user-feedback/{id}/files/{file_id}`, nosniff). 제출은 multipart(글+이미지 한 트랜잭션).

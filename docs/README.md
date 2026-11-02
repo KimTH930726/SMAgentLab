@@ -20,7 +20,7 @@
 | 문서 | 상태 | 내용 |
 |---|---|---|
 | [collection-design.md](domains/knowledge/collection-design.md) | 현행 | 컬렉션(업무 영역 트리) · 넣을 곳 AI 판단 · AI 판단 원장 |
-| [taxonomy-standard.md](domains/knowledge/taxonomy-standard.md) | 현행 | 지식 분류 표준 — 업무 영역 · 시스템 2종, 조직은 담당 연결만(11/02, #105) |
+| [taxonomy-standard.md](domains/knowledge/taxonomy-standard.md) | 현행 | 지식 분류 표준 — 정책 / 시스템 컬렉션, 운영 지식은 시스템에만, 조직은 담당 연결만(11/02, #105·#106) |
 | [collection-key-plan.md](domains/knowledge/collection-key-plan.md) | 계획 | 컬렉션 키 정리 — 이름 → id·업무 코드(POL-·SYS-) 전수검사·전환 단계(11/02) |
 | [source-ledger-plan.md](domains/knowledge/source-ledger-plan.md) | 현행 | 원문 원장 — 원문 = 기준, 조각 = 파생물, 다시 분할 |
 | [knowledge-lifecycle-design.md](domains/knowledge/knowledge-lifecycle-design.md) | 참고 | 지식 생명주기(중복·버전·삭제) 현황 분석·장기 설계 |
@@ -50,7 +50,7 @@
 ## domains/org — 조직·권한
 | 문서 | 상태 | 내용 |
 |---|---|---|
-| [org-space-design.md](domains/org/org-space-design.md) | 현행 | 조직 공간 · 등록 창구 · 영역 선택기 |
+| [org-space-design.md](archive/org-space-design.md) | 이력(폐지 11/02) | 조직 공간 · 등록 창구 · 영역 선택기 |
 | [governance-design-review.md](domains/org/governance-design-review.md) | 참고 | 감사로그 · 접근권한 · 보존 정책 선제 검토 |
 | [internal-sso-request.md](domains/org/internal-sso-request.md) | 참고 | 사내 IdP(SSO) 연동 확인 체크리스트 |
 
