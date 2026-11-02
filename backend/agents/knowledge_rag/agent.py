@@ -41,6 +41,27 @@ DEGRADED_POLICY_SOURCES = 3   # AI가 답을 못 냈을 때 보여 줄 정책 �
 # 컨텍스트가 길어져도 "정답 있는데 거절"은 5→5건으로 늘지 않음. 평가 스크립트도 이 상수를 참조해
 # 운영과 측정 조건이 어긋나지 않게 한다.
 POLICY_CONTEXT_TOP_K = 10
+# 채팅 기본(11/02 게이트 #71 업무지식·#72 정책서 — 정책 컬렉션 안 운영 지식을 시스템으로 옮긴 것과 한 묶음):
+# 지식 범위 = 고른 컬렉션 + 관련 정책 연결(시스템 ↔ 정책, 양방향) · 문맥 = 한 줄 순위 위에서부터 1만 2천 자.
+# 옮긴 뒤 linked 없이 정책에서 물으면 운영 지식 검색 0%(측정) — 둘 중 하나만 끄지 말 것.
+CHAT_KNOWLEDGE_SCOPE = "linked"
+CHAT_CONTEXT_BUDGET = 12000
+
+
+def scope_overrides(scope: Optional[str], budget: Optional[int]) -> dict:
+    """측정 스크립트 플래그 → build_chat_context 인자. 안 주면 채팅 기본 그대로, scope "none"·budget 0 = 끔."""
+    out: dict = {}
+    if scope:
+        out["knowledge_scope"] = None if scope == "none" else scope
+    if budget is not None:
+        out["context_budget"] = budget or None
+    return out
+
+
+def effective_scope_label(scope: Optional[str], budget: Optional[int]) -> str:
+    """측정 줄에 남길 실제 설정 — 플래그가 아니라 쓴 값(플래그 없음 = 채팅 기본이 바뀌어도 옛 파일과 섞이지 않게, 리뷰 M1)."""
+    eff = {"knowledge_scope": CHAT_KNOWLEDGE_SCOPE, "context_budget": CHAT_CONTEXT_BUDGET, **scope_overrides(scope, budget)}
+    return f"scope={eff['knowledge_scope'] or 'none'},budget={eff['context_budget'] or 0}"
 
 
 async def _safe_post_save(conv_id: int, namespace: str) -> None:
@@ -223,7 +244,7 @@ async def build_chat_context(
     glossary_mode: Optional[str] = None, glossary_entries: Optional[list] = None,
     policy_top_k: int = POLICY_CONTEXT_TOP_K, category_lists: bool = True, clarify_scope: Optional[str] = None,
     list_question: Optional[str] = None,
-    knowledge_scope: Optional[str] = None, context_budget: Optional[int] = None,
+    knowledge_scope: Optional[str] = CHAT_KNOWLEDGE_SCOPE, context_budget: Optional[int] = CHAT_CONTEXT_BUDGET,
 ) -> ChatContext:
     """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB)."""
     # 정책서 범위(2026-10-20, 사용자 결정): 지식은 고른 파트만, 정책서(정책·용어)는 정책 파트까지 — service/policy/scope.py.
@@ -236,7 +257,7 @@ async def build_chat_context(
         policy_ns_ids = []
     policy_available = bool(policy_ns_ids)
     extra_ns: list[int] = []
-    # 검색 범위 실험(11/02, 측정 옵션만 — 채팅은 넘기지 않음): linked = 받침 연결(업무↔시스템), similar = linked + 질문과 가까운 업무 2개
+    # 지식 검색 범위(11/02): linked = 관련 정책 연결(채팅 기본), similar = linked + 질문과 가까운 컬렉션 2개(측정만), None = 고른 컬렉션만
     if knowledge_scope:
         async with get_conn() as conn:
             extra_ns = list(dict.fromkeys(await knowledge_scope_extra_ids(conn, namespace, knowledge_scope, query_vec)))

@@ -238,6 +238,7 @@ class TestAnswerShaping:
         monkeypatch.setattr(agent.policy_search, "search_policy", AsyncMock(return_value=pr))
         monkeypatch.setattr(agent.refdata_search, "has_refdata", AsyncMock(return_value=False))
         monkeypatch.setattr(agent, "get_conn", lambda: _ConnCtx())
+        monkeypatch.setattr(agent, "knowledge_scope_extra_ids", AsyncMock(return_value=[]))   # 채팅 기본 범위 linked(11/02) — 연결 없음
         cat = MagicMock(item_ids=list(item_ids), explicit_all=explicit_all,
                         is_listing=explicit_all if is_listing is None else is_listing, total=len(item_ids),
                         scope_missed=False, names=["교환"], lines=["-"] * len(item_ids))
@@ -286,16 +287,28 @@ class TestAnswerShaping:
 
     @pytest.mark.asyncio
     async def test_knowledge_scope_option_adds_collections_without_duplicates(self, monkeypatch):
-        """검색 범위 실험 옵션(11/02, 측정 전용) — 주지 않으면 호출하지 않고 범위 인자도 없다(채팅 그대로), 주면 그 컬렉션을 겹침 없이 더한다."""
+        """지식 검색 범위(11/02 게이트 #71·#72) — 채팅 기본 = linked(관련 정책 연결), 더한 컬렉션은 겹침 없이. None이면 부르지 않음(고른 컬렉션만)."""
         self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[])
         scope = AsyncMock(return_value=[200, 300, 200])
         monkeypatch.setattr(agent, "knowledge_scope_extra_ids", scope)
         await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3)
+        assert agent.CHAT_KNOWLEDGE_SCOPE == "linked" and scope.await_args.args[1:3] == ("ns", "linked")
+        assert agent.retrieval.search_knowledge.await_args.kwargs["extra_ns_ids"] == [200, 300]
+        scope.reset_mock()
+        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, knowledge_scope=None)
         assert scope.await_count == 0
         assert "extra_ns_ids" not in agent.retrieval.search_knowledge.await_args.kwargs
-        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, knowledge_scope="linked")
-        assert scope.await_args.args[1:3] == ("ns", "linked")
-        assert agent.retrieval.search_knowledge.await_args.kwargs["extra_ns_ids"] == [200, 300]
+
+    def test_scope_overrides_flags(self):
+        """측정 스크립트 플래그 — 안 주면 채팅 기본(덮어쓰기 없음), none·0 = 끔."""
+        assert agent.scope_overrides(None, None) == {} and agent.scope_overrides("", None) == {}
+        assert agent.scope_overrides("none", 0) == {"knowledge_scope": None, "context_budget": None}
+        assert agent.scope_overrides("similar", 6000) == {"knowledge_scope": "similar", "context_budget": 6000}
+        assert agent.CHAT_CONTEXT_BUDGET == 12000
+        # 측정 줄 라벨은 실제 쓴 값 — 플래그 없음도 채팅 기본으로 적혀 옛 "끔" 파일(None)과 섞이지 않는다(리뷰 M1)
+        assert agent.effective_scope_label(None, None) == "scope=linked,budget=12000"
+        assert agent.effective_scope_label("none", 0) == "scope=none,budget=0"
+        assert agent.effective_scope_label("similar", None) == "scope=similar,budget=12000"
 
     @pytest.mark.asyncio
     async def test_topic_question_keeps_search_results(self, monkeypatch):

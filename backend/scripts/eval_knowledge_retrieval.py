@@ -28,8 +28,10 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", required=True)
     ap.add_argument("--details")
-    ap.add_argument("--scope", choices=["linked", "similar"], default=None, help="지식 검색 범위 실험(11/02) — agent.build_chat_context와 같은 추가 컬렉션")
+    ap.add_argument("--scope", choices=["linked", "similar", "none"], default=None, help="지식 검색 범위 — 안 주면 채팅 기본(agent.CHAT_KNOWLEDGE_SCOPE), none: 고른 컬렉션만")
     a = ap.parse_args()
+    from agents.knowledge_rag.agent import CHAT_KNOWLEDGE_SCOPE
+    scope = CHAT_KNOWLEDGE_SCOPE if a.scope is None else (None if a.scope == "none" else a.scope)
     await init_pool()
     embedding_service.load()
     async with get_conn() as conn:
@@ -44,10 +46,10 @@ async def main() -> None:
         vec = await embedding_service.embed(it["question"])
         _, _, enriched = await glossary_terms.resolve_query_terms(it["ns"], it["question"], vec)
         extra = {}
-        if a.scope:
+        if scope:
             from core.database import get_conn as _gc, knowledge_scope_extra_ids
             async with _gc() as c2:
-                extra = {"extra_ns_ids": await knowledge_scope_extra_ids(c2, it["ns"], a.scope, vec)}
+                extra = {"extra_ns_ids": await knowledge_scope_extra_ids(c2, it["ns"], scope, vec)}
         res = await retrieval.search_knowledge(it["ns"], vec, enriched, d["default_w_vector"], d["default_w_keyword"], DEEP, **extra)
         ids = [r.id for r in res]
         gold = set(it["gold_ids"])

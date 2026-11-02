@@ -25,7 +25,7 @@ logging.disable(logging.INFO)
 
 from core.database import init_pool, get_conn  # noqa: E402
 from shared.embedding import embedding_service  # noqa: E402
-from agents.knowledge_rag.agent import build_chat_context, should_abstain  # noqa: E402
+from agents.knowledge_rag.agent import build_chat_context, scope_overrides, should_abstain  # noqa: E402
 from agents.knowledge_rag.agent import POLICY_CONTEXT_TOP_K  # noqa: E402
 from agents.knowledge_rag.knowledge import retrieval  # noqa: E402
 
@@ -53,7 +53,10 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--details", help="문항별 상세 JSONL 경로(eval_gate 입력)")
     ap.add_argument("--label", default="", help="이 측정의 이름(출력에만)")
+    ap.add_argument("--scope", choices=["linked", "similar", "none"], default=None, help="지식 검색 범위 — 안 주면 채팅 기본(linked, 11/02), none: 고른 컬렉션만")
+    ap.add_argument("--context-budget", type=int, default=None, help="문맥 예산(글자) — 안 주면 채팅 기본(1만 2천), 0 = 끔")
     args = ap.parse_args()
+    ov = scope_overrides(args.scope, args.context_budget)
 
     await init_pool()
     embedding_service.load()
@@ -84,7 +87,7 @@ async def main() -> None:
             want = {ref_keys.get(x["source_key"]) for x in g["gold"]} - {None}
             vec = await embedding_service.embed(g["query"])
             cc = await build_chat_context(g["doc"], g["query"], vec, top_k=int(defaults["default_top_k"]),
-                                          w_vector=defaults["default_w_vector"], w_keyword=defaults["default_w_keyword"])
+                                          w_vector=defaults["default_w_vector"], w_keyword=defaults["default_w_keyword"], **ov)
             got = ref_hits(cc)
             r = {"qid": g["qid"], "type": g["layer"], "expect": g["expect"], "ns": g["doc"], "hit": bool(want & got), "top1": bool(want & got),
                  "coverage": len(want & got) / len(want) if want else 0.0, "signals": cc.signals, "n_policies": 0, "mapped": cc.mapped_term,
@@ -116,7 +119,7 @@ async def main() -> None:
         vec = await embedding_service.embed(g["query"])
         cc = await build_chat_context(
             ns, g["query"], vec, top_k=int(defaults["default_top_k"]), w_vector=defaults["default_w_vector"],
-            w_keyword=defaults["default_w_keyword"])   # 용어 방식·용어 목록은 채팅과 같이 설정값·DB 그대로
+            w_keyword=defaults["default_w_keyword"], **ov)   # 용어 방식·용어 목록은 채팅과 같이 설정값·DB 그대로
         pr = cc.policy_result
         got = [h.logical_id for h in pr.params] + [h.logical_id for h in pr.narratives]
         first = {h.logical_id for h in (pr.params[:1] + pr.narratives[:1])}
