@@ -13,8 +13,8 @@ normalize = _mod.normalize
 
 
 def test_normalize_sorts_and_dedups():
-    assert normalize({"kind:org_space": ["q.stats", "k.docs", "q.stats"], "kind:domain": []}) == \
-        {"kind:org_space": ["k.docs", "q.stats"], "kind:domain": []}
+    assert normalize({"kind:policy_test": ["q.stats", "k.docs", "q.stats"], "kind:domain": []}) == \
+        {"kind:policy_test": ["k.docs", "q.stats"], "kind:domain": []}
 
 
 def test_role_scope_allowed_for_later():
@@ -22,13 +22,13 @@ def test_role_scope_allowed_for_later():
 
 
 @pytest.mark.parametrize("bad", [
-    {"org_space": ["k.docs"]},                 # 범위 접두사 없음
+    {"policy_test": ["k.docs"]},                 # 범위 접두사 없음
     {"kind:Org": ["k.docs"]},                  # 대문자
-    {"kind:org_space": "k.docs"},              # 목록 아님
-    {"kind:org_space": ["k.docs;drop"]},       # 메뉴 id 모양 아님
-    {"kind:org_space": [1]},
-    {"kind:org_space": ["k.docs"] * 51},       # 너무 많음
-    ["kind:org_space"],
+    {"kind:policy_test": "k.docs"},              # 목록 아님
+    {"kind:policy_test": ["k.docs;drop"]},       # 메뉴 id 모양 아님
+    {"kind:policy_test": [1]},
+    {"kind:policy_test": ["k.docs"] * 51},       # 너무 많음
+    ["kind:policy_test"],
 ])
 def test_normalize_rejects_bad_shapes(bad):
     with pytest.raises(ValueError):
@@ -42,5 +42,5 @@ def test_broken_stored_value_hides_nothing(raw):
 
 
 def test_stored_value_roundtrip():
-    assert _mod.parse_stored('{"hidden": {"kind:org_space": ["q.stats"]}}') == {"kind:org_space": ["q.stats"]}
+    assert _mod.parse_stored('{"hidden": {"kind:policy_test": ["q.stats"]}}') == {"kind:policy_test": ["q.stats"]}
     assert _mod.parse_stored(None) == {}

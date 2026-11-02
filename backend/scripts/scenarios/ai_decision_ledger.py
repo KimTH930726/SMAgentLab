@@ -41,14 +41,10 @@ async def main() -> int:
         u1 = await c.fetchval("INSERT INTO ops_user (username, hashed_password, role) VALUES ($1, 'x', 'user') RETURNING id", P + "u1")
         u2 = await c.fetchval("INSERT INTO ops_user (username, hashed_password, role) VALUES ($1, 'x', 'user') RETURNING id", P + "u2")
         uv = await c.fetchval("INSERT INTO ops_user (username, hashed_password, role) VALUES ($1, 'x', 'viewer') RETURNING id", P + "v")
-        # 일반 사용자(팀에 든 파트 소속) — 조직 후보·이웃이 내 팀으로만 좁혀지는지
-        part = await c.fetchrow("SELECT p.id, p.team_id FROM ops_part p JOIN ops_namespace n ON n.name = 'org:team:' || p.team_id "
-                                "WHERE p.team_id IS NOT NULL ORDER BY p.id LIMIT 1")
+        # 일반 사용자(팀에 든 파트 소속) — 판정·쓸 수 있는지 표시
+        part = await c.fetchrow("SELECT p.id, p.team_id FROM ops_part p WHERE p.team_id IS NOT NULL ORDER BY p.id LIMIT 1")
         up = await c.fetchval("INSERT INTO ops_user (username, hashed_password, role, part_id) VALUES ($1, 'x', 'user', $2) RETURNING id",
                               P + "p", part["id"] if part else None)
-        other_team_org = {r["name"] for r in await c.fetch(
-            "SELECT n.name FROM ops_namespace n LEFT JOIN ops_part p ON p.id = n.owner_part_id "
-            "WHERE n.kind = 'org_space' AND COALESCE(n.owner_team_id, p.team_id) IS DISTINCT FROM $1", part["team_id"] if part else None)}
     try:
         print("1) 위치 판정 엔드포인트(실서버)")
         async with httpx.AsyncClient(base_url=API, timeout=180) as h:
@@ -68,8 +64,8 @@ async def main() -> int:
                 chk("일반 사용자 판정 → 200", r.status_code, 200)
                 pb = r.json()
                 made.append(pb["decision_id"])
-                shown = {x["name"] for x in pb["options"] + pb["neighbors"] + ([pb["proposed"]] if pb["proposed"] else [])}
-                chk("다른 팀 조직 컬렉션이 제안·선택지·이웃에 없음", sorted(shown & other_team_org), [])
+                shown = [x for x in pb["options"] + pb["neighbors"] + ([pb["proposed"]] if pb["proposed"] else [])]
+                chk("제안·선택지·이웃이 모두 시스템 컬렉션", all(x.get("kind") == "domain" for x in shown), True)
                 chk("쓸 수 있는지 표시가 있음", all("writable" in x for x in pb["options"]), True)
         async with get_conn() as c:
             row = await c.fetchrow("SELECT * FROM ops_ai_decision WHERE id = $1", body["decision_id"])

@@ -15,7 +15,14 @@ from service.policy.visibility import searchable_sql
 
 # 정책이 "있다" = 검색에 보이는 정책(10/21 — v0 검토 대기만 있는 영역은 범위에 안 넣는다)
 _SQL = f"""
-WITH me AS (SELECT id, kind FROM ops_namespace WHERE name = $1),
+WITH me AS (SELECT id, kind, area FROM ops_namespace WHERE name = $1),
+-- 시스템 컬렉션(#105)을 고르면 정책 = 그 시스템의 관련 정책만(ops_link 'supports'), 없으면 정책 없음 — "연결 없으면 정책 전부"를 타면
+-- 운영 질문에 정책 서술 10개가 늘 섞였다(11/02 측정: 지식 질문에서 정책을 빼면 정답 77.6→83.3%, #65)
+sys_linked AS (
+    SELECT n.id FROM ops_link l, me, ops_namespace n
+    WHERE me.area = 'system' AND l.relation = 'supports' AND l.status = 'active' AND l.from_type = 'domain' AND l.to_type = 'domain'
+      AND l.from_key = me.id::text AND n.id::text = l.to_key
+),
 linked AS (
     SELECT n.id FROM ops_link l, me, ops_namespace n
     WHERE l.relation = 'same_work' AND l.status = 'active' AND l.from_type = 'domain' AND l.to_type = 'domain'
@@ -23,16 +30,19 @@ linked AS (
       AND ((l.from_key = me.id::text AND n.id::text = l.to_key) OR (l.to_key = me.id::text AND n.id::text = l.from_key))
 ),
 cand AS (
-    SELECT me.id, 0 AS ord FROM me
+    SELECT id, 1 AS ord FROM sys_linked
+    UNION ALL
+    SELECT me.id, 0 AS ord FROM me WHERE me.area <> 'system'
     UNION ALL
     -- 직계 하위 = 고른 영역의 일부라 자신과 같은 순위. 테스트용 하위는 고른 영역도 테스트용일 때만(위 M1과 같은 이유)
     SELECT c.id, 0 FROM ops_namespace c, me
     WHERE c.parent_id = me.id AND (c.kind <> 'policy_test' OR me.kind = 'policy_test')
     UNION ALL
-    SELECT id, 1 FROM linked WHERE (SELECT kind FROM me) <> 'policy_test'
+    SELECT id, 1 FROM linked WHERE (SELECT kind FROM me) <> 'policy_test' AND (SELECT area FROM me) <> 'system'
     UNION ALL
     SELECT n.id, 2 FROM ops_namespace n
-    WHERE n.kind <> 'policy_test' AND (SELECT kind FROM me) <> 'policy_test' AND NOT EXISTS (SELECT 1 FROM linked)
+    WHERE n.kind <> 'policy_test' AND (SELECT kind FROM me) <> 'policy_test' AND (SELECT area FROM me) <> 'system'
+      AND NOT EXISTS (SELECT 1 FROM linked)
 )
 SELECT c.id FROM cand c
 WHERE EXISTS (SELECT 1 FROM policy_item i WHERE i.namespace_id = c.id AND {searchable_sql('i')})

@@ -43,7 +43,7 @@ export function NamespaceManager({ onNavigate, onRegister }: NamespaceManagerPro
     staleTime: 10_000,
     refetchOnMount: 'always',
   });
-  // 정책 컬렉션만 — 시스템 컬렉션은 컬렉션 › 시스템 컬렉션 화면(11/02), 폐지된 조직 컬렉션은 숨김
+  // 정책 컬렉션만 — 시스템 컬렉션은 컬렉션 › 시스템 컬렉션 화면(11/02)
   const namespaces = allCollections.filter(isBusinessCollection);
   // 시스템의 관련 정책을 거꾸로 — 정책마다 연결된 시스템(없으면 경고)
   const systemsOf = new Map<string, string[]>();

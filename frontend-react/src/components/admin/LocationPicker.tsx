@@ -5,7 +5,7 @@ import { locateKnowledge } from '../../api/knowledge';
 import { getParts } from '../../api/auth';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { canEditDomain, effectiveOwnerParts } from '../../utils/domainAccess';
-import { isOrgCollection, isSystemCollection } from '../../utils/collections';
+import { isSystemCollection } from '../../utils/collections';
 import { CollectionPickerModal } from '../layout/CollectionPickerModal';
 import type { ChosenLocation, LocateCollection, LocateResult, LocationChoice, OverrideReason } from '../../types';
 
@@ -65,7 +65,7 @@ export function LocationPicker({ text, preset, onChange }: {
 
   // 창에서 직접 고르기용 — 운영 지식은 시스템 컬렉션에만(11/02, 정책서는 정책서 가져오기로). 쓸 수 있는지는 운영 지식 화면과 같은 규칙
   const all: LocateCollection[] = useMemo(() => nsDetails
-    .filter((d) => isSystemCollection(d) && !isOrgCollection(d))
+    .filter(isSystemCollection)
     .map((d) => ({
       name: d.name, label: d.display_name || d.name, kind: 'domain', area: 'system',
       writable: canEditDomain(user, effectiveOwnerParts(d)),

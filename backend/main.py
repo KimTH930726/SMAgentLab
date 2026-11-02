@@ -1930,54 +1930,76 @@ async def _migrate_namespace_owners(conn) -> None:
     logger.info("[migrate #82] 업무 컬렉션 담당 복사(1회): %s", r)
 
 
-async def _migrate_org_collections(conn) -> None:
-    """조직 컬렉션 (2026-10-22, #83, collection-design §2·§15-13, org-space-design §3). 멱등 — 칸·제약 더하기 + 새 행 넣기만(기존 데이터 안 바꿈).
-    - ops_namespace.owner_team_id: 팀 공통 조직 컬렉션의 팀. 담당 = 그 팀의 모든 파트(core/database.py OWNER_ROWS_SQL — 담당 표 줄 없음).
-      파트 조직 컬렉션은 owner_team_id 없이 담당 표(ops_namespace_owner)에 그 파트 한 줄.
-    - 이름 = id 기반 키(org:team:<id> / org:part:<id>) — 팀·파트 이름은 데이터에 넣지 않고 화면 이름은 조회 때 만든다.
-    - 팀·파트마다 하나씩 채워 넣기(ON CONFLICT DO NOTHING) — 앞으로는 팀·파트를 만드는 트랜잭션이 같이 만든다(auth/service.py).
-    - CHECK ops_namespace_org_shape: 조직 컬렉션 ⇔ 이름이 org:로 시작 · 팀 칸은 조직 컬렉션만(이름 = org:team:<그 팀>) ·
-      팀 칸 없는 조직 컬렉션은 이름 = org:part:<숫자> · 조직 컬렉션은 상위 없음.
-      파트 컬렉션의 담당 한 줄(그 파트만)은 담당 표 트리거로 막는다(CHECK는 다른 표를 못 본다)."""
-    await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS owner_team_id INT REFERENCES ops_team(id)")
-    async with conn.transaction():
-        await conn.execute("""INSERT INTO ops_namespace (name, description, kind, owner_team_id)
-                              SELECT 'org:team:' || t.id, '', 'org_space', t.id FROM ops_team t ORDER BY t.id
-                              ON CONFLICT (name) DO NOTHING""")
-        await conn.execute("""INSERT INTO ops_namespace (name, description, kind, owner_part_id)
-                              SELECT 'org:part:' || p.id, '', 'org_space', p.id FROM ops_part p ORDER BY p.id
-                              ON CONFLICT (name) DO NOTHING""")
-        await conn.execute("""INSERT INTO ops_namespace_owner (namespace_id, part_id)
-                              SELECT n.id, p.id FROM ops_part p JOIN ops_namespace n ON n.name = 'org:part:' || p.id AND n.kind = 'org_space'
-                              ON CONFLICT DO NOTHING""")
-    shape = ("(kind = 'org_space') = (name LIKE 'org:%') "
-             "AND (owner_team_id IS NULL OR (kind = 'org_space' AND name = 'org:team:' || owner_team_id)) "
-             "AND (kind <> 'org_space' OR owner_team_id IS NOT NULL OR name ~ '^org:part:[0-9]+$') "
-             "AND (kind <> 'org_space' OR parent_id IS NULL)")
-    if not await conn.fetchval("SELECT 1 FROM pg_constraint WHERE conname = 'ops_namespace_org_shape'"):
-        bad = await conn.fetch(f"SELECT name FROM ops_namespace WHERE NOT ({shape}) ORDER BY name LIMIT 5")
-        if bad:
-            logger.warning("[migrate #83] 조직 컬렉션 모양에 안 맞는 행 %s — CHECK 보류(정리 후 재기동하면 만들어짐)", [r["name"] for r in bad])
+# #83(조직 컬렉션, 10/22)은 11/02 폐지로 기동 코드에서 뺐다 — 팀·파트마다 org:team:<id> / org:part:<id> 컬렉션을 매 기동 다시 채워 넣던
+# 단계(사람이 옮기고 지운 org:part:902를 되살렸다)와 그 CHECK·담당 표 트리거·owner_team_id 칸. 이미 그 단계를 거친 DB는 #106이 걷어 낸다.
+# 새 DB는 처음부터 아무것도 안 만든다.
+
+# FK 없이 컬렉션 id를 든 칸 — 지우는 조직 컬렉션을 가리키면 NULL로(지운 id를 가리키지 않게 — 같은 칸: scripts/move_org_to_system.LOOSE_REFS)
+_RETIRED_ORG_LOOSE_REFS = (("rag_import_page", "final_namespace_id"), ("rag_import_page", "ai_namespace_id"),
+                           ("rag_import_page", "proposed_namespace_id"), ("rag_import_page", "sample_ns"),
+                           ("rag_import_batch", "default_namespace_id"), ("eval_question_candidate", "namespace_id"))
+
+
+async def _migrate_retire_org_collections(conn) -> None:
+    """#106(11/02, 사용자 "조직 컬렉션 완전히 없애기 — 팀·파트는 로그인·권한·담당만") 조직 컬렉션(kind='org_space') 걷어 내기. 멱등.
+    - 담당 표 트리거(trg_namespace_owner_org_guard)·CHECK(ops_namespace_org_shape) 삭제 — 조직 컬렉션 전용.
+    - 조직 컬렉션 행마다: ops_namespace를 FK로 가리키는 **모든** 표(카탈로그에서 찾음 — 담당 표 ops_namespace_owner만 뺌)에 그 행을 가리키는 줄이
+      하나도 없을 때만 지운다(지식은 상태 무관 — 지운 지식도 내용). 내용이 있으면 지우지 않고 경고만(사람이 옮길 곳을 정함 —
+      scripts/move_org_to_system.py). 남은 행은 화면·담당 목록에 안 나온다(core/database.HIDDEN_KINDS).
+      지울 때 같이: FK 없는 id 칸(_RETIRED_ORG_LOOSE_REFS)은 NULL, 연결 표(ops_link)의 그 컬렉션 줄·용어 수집 상태 설정 줄 삭제.
+    - 옛 팀 적재 사유 'org_like'(조직 지식으로 보임) → 'low_confidence'(사유 목록에서 뺌 — 화면에 빈 칸이 뜨지 않게).
+    - 설정 chat.org_space_scope(조직 컬렉션 채팅 범위, 기본 꺼짐) 줄 삭제.
+    - owner_team_id 칸: 쓰는 행이 없을 때만 삭제(팀 공통 조직 컬렉션이 내용 때문에 남았으면 칸도 남기고 경고)."""
+    await conn.execute("DROP TRIGGER IF EXISTS trg_namespace_owner_org_guard ON ops_namespace_owner")
+    await conn.execute("DROP FUNCTION IF EXISTS ops_namespace_owner_org_guard()")
+    await conn.execute("ALTER TABLE ops_namespace DROP CONSTRAINT IF EXISTS ops_namespace_org_shape")
+    await conn.execute("UPDATE rag_import_page SET reason = 'low_confidence' WHERE reason = 'org_like'")
+    await conn.execute("DELETE FROM ops_system_config WHERE key = 'chat.org_space_scope'")
+    orgs = await conn.fetch("SELECT id, name FROM ops_namespace WHERE kind = 'org_space' ORDER BY id")
+    if orgs:
+        # 표·칸 이름은 카탈로그 값(quote_ident) — 사용자 입력 아님. ops_namespace.parent_id(하위 컬렉션)도 내용으로 센다
+        fks = [(r["tbl"], r["col"]) for r in await conn.fetch(
+            """SELECT DISTINCT c.conrelid::regclass::text AS tbl, quote_ident(a.attname) AS col FROM pg_constraint c
+               JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+               WHERE c.contype = 'f' AND c.confrelid = 'ops_namespace'::regclass AND c.conrelid <> 'ops_namespace_owner'::regclass
+               ORDER BY 1, 2""")]
+        loose = [(t, c) for t, c in _RETIRED_ORG_LOOSE_REFS if await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2", t, c)]
+        deleted, kept = [], []
+        for o in orgs:
+            async with conn.transaction():
+                # 행을 잠가 확인~삭제 사이 끼는 쓰기(FK가 KEY SHARE로 그 행을 잡는다)와 순서를 맞춘다
+                if await conn.fetchval("SELECT id FROM ops_namespace WHERE id = $1 AND kind = 'org_space' FOR UPDATE", o["id"]) is None:
+                    continue
+                held = [f"{t}.{c}" for t, c in fks
+                        if await conn.fetchval(f"SELECT EXISTS (SELECT 1 FROM {t} WHERE {c} = $1)", o["id"])]
+                if held:
+                    kept.append((o["name"], held))
+                    continue
+                if ("rag_import_page", "final_namespace_id") in loose:   # 넣을 곳이 비는 자동 줄 → 검토(조용히 적재에서 빠지지 않게, 리뷰 L2)
+                    await conn.execute("UPDATE rag_import_page SET status = 'review', reason = 'low_confidence', decided_by_user_id = NULL "
+                                       "WHERE final_namespace_id = $1 AND status IN ('auto', 'review')", o["id"])
+                for t, c in loose:
+                    await conn.execute(f"UPDATE {t} SET {c} = NULL WHERE {c} = $1", o["id"])
+                await conn.execute("""DELETE FROM ops_link WHERE (from_type = 'domain' AND from_key = $1) OR (to_type = 'domain' AND to_key = $1)
+                                      OR (from_type = 'section' AND from_key LIKE $1 || '|%') OR (to_type = 'section' AND to_key LIKE $1 || '|%')""",
+                                   str(o["id"]))
+                await conn.execute("DELETE FROM ops_system_config WHERE key = ANY($1::text[])",
+                                   [f"glossary_mining_last_id:{o['id']}", f"glossary_gap_done:{o['id']}"])
+                await conn.execute("DELETE FROM ops_namespace WHERE id = $1 AND kind = 'org_space'", o["id"])   # 담당 줄은 CASCADE
+                deleted.append(o["name"])
+        if deleted:
+            logger.info("[migrate #106] 빈 조직 컬렉션 %s개 삭제: %s", len(deleted), deleted)
+        for name, held in kept:
+            logger.warning("[migrate #106] 조직 컬렉션 %s에 내용이 있어 남김(%s) — 옮길 곳을 정한 뒤 scripts/move_org_to_system.py", name, held)
+    if await conn.fetchval("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+                           "AND table_name = 'ops_namespace' AND column_name = 'owner_team_id'"):
+        n = await conn.fetchval("SELECT count(*) FROM ops_namespace WHERE owner_team_id IS NOT NULL")
+        if n:
+            logger.warning("[migrate #106] owner_team_id를 쓰는 행 %s개(내용이 남은 팀 공통 조직 컬렉션) — 칸을 남김", n)
         else:
-            await conn.execute(f"ALTER TABLE ops_namespace ADD CONSTRAINT ops_namespace_org_shape CHECK ({shape})")
-    # 담당 표 트리거: 팀 공통 컬렉션엔 담당 줄 금지(담당 = 그 팀 파트 전부), 파트 컬렉션엔 그 파트 한 줄만(이름 키의 파트)
-    await conn.execute("""
-        CREATE OR REPLACE FUNCTION ops_namespace_owner_org_guard() RETURNS trigger AS $$
-        DECLARE k TEXT; nm TEXT; t INT;
-        BEGIN
-            SELECT kind, name, owner_team_id INTO k, nm, t FROM ops_namespace WHERE id = NEW.namespace_id;
-            IF k = 'org_space' AND (t IS NOT NULL OR nm <> 'org:part:' || NEW.part_id) THEN
-                RAISE EXCEPTION '조직 컬렉션(%)의 담당은 팀·파트에서 정해져 바꿀 수 없습니다', nm USING ERRCODE = 'check_violation';
-            END IF;
-            RETURN NEW;
-        END $$ LANGUAGE plpgsql""")
-    async with conn.transaction():
-        await conn.execute("DROP TRIGGER IF EXISTS trg_namespace_owner_org_guard ON ops_namespace_owner")
-        await conn.execute("""CREATE TRIGGER trg_namespace_owner_org_guard BEFORE INSERT OR UPDATE ON ops_namespace_owner
-                              FOR EACH ROW EXECUTE FUNCTION ops_namespace_owner_org_guard()""")
-    n_team, n_part = await conn.fetchval("SELECT count(*) FROM ops_namespace WHERE kind = 'org_space' AND owner_team_id IS NOT NULL"), \
-        await conn.fetchval("SELECT count(*) FROM ops_namespace WHERE kind = 'org_space' AND owner_team_id IS NULL")
-    logger.info("[migrate #83] 조직 컬렉션: 팀 공통 %s · 파트 %s", n_team, n_part)
+            await conn.execute("ALTER TABLE ops_namespace DROP COLUMN owner_team_id")
+            logger.info("[migrate #106] ops_namespace.owner_team_id 칸 삭제(조직 컬렉션 전용)")
 
 
 async def _migrate_org_domain(conn) -> None:
@@ -2366,7 +2388,6 @@ async def _run_migrations() -> None:
         await _migrate_voc_signature_prompt(conn)
         await _migrate_policy_v0_revisions(conn)
         await _migrate_namespace_owners(conn)
-        await _migrate_org_collections(conn)
         await _migrate_drop_knowledge_category(conn)   # #84 — 옛 칸·표를 쓰는 마이그레이션들(#60·#72 등)보다 뒤
         await _migrate_ai_decision_ledger(conn)        # #85
         await _migrate_eval_gate_run(conn)             # #86
@@ -2376,6 +2397,7 @@ async def _run_migrations() -> None:
         await _migrate_team_import(conn)               # #98 — 원장·조직 표 뒤
         await _migrate_experiment_runner(conn)         # #99 — 후보·판정 표 뒤
         await _migrate_system_area(conn)               # #105 — 컬렉션 구분값(업무 / 시스템)
+        await _migrate_retire_org_collections(conn)    # #106 — 조직 컬렉션 걷어 내기(#105가 초안을 보관 자리로 옮긴 뒤)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

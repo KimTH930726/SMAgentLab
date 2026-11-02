@@ -47,7 +47,7 @@ export interface OwnerPart {
 
 export interface NamespaceDetail extends Namespace {
   id: number;
-  kind?: string;                           // domain(업무·시스템) | policy_test(E2E 임시) | org_space(폐지 11/02 — 화면엔 안 보임)
+  kind?: string;                           // domain(정책·시스템) | policy_test(E2E 임시)
   area?: 'policy' | 'system';            // domain 안 구분(11/02 taxonomy-standard) — 없으면 policy(옛 서버)
   supports?: string[];                     // 시스템이 관련된 정책 컬렉션 이름들(업무면 [])
   code?: string | null;                    // 업무 코드(불변·유일, POL-MBR · SYS-HP — 11/02). 이름은 화면용

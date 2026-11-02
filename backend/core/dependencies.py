@@ -9,7 +9,7 @@ from typing import Iterable, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from core.database import EFFECTIVE_OWNERS_SQL, ORG_KIND, get_conn
+from core.database import EFFECTIVE_OWNERS_SQL, HIDDEN_KINDS, get_conn
 from core.security import decode_token
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,6 @@ _user_cache: dict[int, tuple[float, dict]] = {}
 # 실효 담당 파트들 — 담당은 N개(ops_namespace_owner, 10/22 #82). 하위 영역은 자기 담당이 없으면 상위 담당 전부를 물려받는다
 # (트리 깊이 1단, category-removal-design §2-6). SQL은 core/database.py 한 곳(EFFECTIVE_OWNERS_SQL·effective_owner_ns_sql) —
 # 수정·조회·읽기 기록 3곳과 여러 영역을 한 번에 보는 질의 기록 일괄 삭제(admin/router.py)가 같이 쓴다.
-# 조직 컬렉션(#83)도 같은 SQL — 파트 컬렉션 = 그 파트, 팀 공통 = 그 팀의 모든 파트(OWNER_ROWS_SQL). 규칙(edit_denied_reason)은 그대로 하나.
 
 
 async def _effective_owner_ids(namespace: str) -> list[int]:
@@ -97,6 +96,10 @@ async def check_namespace_ownership(namespace: str, user: dict) -> None:
     관리자는 통과, 조회 전용은 403, 담당 파트 중 하나에 속하면 통과(담당 N개, 주 담당 없음 — 10/22). 담당이 정해지지 않은 영역은
     관리자만(2026-10-20 사용자 결정 — 예전엔 "공통"이라 누구나 고칠 수 있었다. 정책서 영역 대부분이 아직 담당 미지정이라 아무나 고치면 안 된다).
     """
+    async with get_conn() as conn:
+        kind = await conn.fetchval("SELECT kind FROM ops_namespace WHERE name = $1", namespace)
+    if kind in HIDDEN_KINDS:   # 팀 적재 보관·폐지된 조직 컬렉션 남은 행 — 내용이 늘면 #106이 영영 못 지운다(리뷰 L3)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이 자리엔 쓸 수 없어요 — 정책·시스템 컬렉션을 골라 주세요.")
     owner_part_ids = await _effective_owner_ids(namespace)   # 하위 영역은 상위 담당 상속
     reason = edit_denied_reason(owner_part_ids, user)
     if reason:
@@ -118,16 +121,15 @@ def edit_denied_reason(owner_part_ids: Iterable[int], user: dict) -> Optional[st
     return None
 
 
-async def reject_org_collection(namespace: str, what: str) -> None:
-    """조직 컬렉션엔 지식 문서·용어만 둔다(collection-design §2, #83) — 정책·시스템 정보(참조데이터) 쓰기 경로가 부른다. 조직 컬렉션이면 400.
+async def reject_policy_outside_policy_collection(namespace: str) -> None:
+    """정책은 정책 컬렉션에만(#105 시스템 축) — 정책 쓰기 경로(정책 가져오기·정책 정정)가 부른다. 시스템 컬렉션이면 400
+    (시스템 컬렉션은 운영·개발 지식과 시스템 정보). 화면에 안 나오는 자리(팀 적재 보관·폐지된 조직 컬렉션 남은 행)도 400.
     없는 이름은 그냥 지나간다(그 뒤 검사가 404 등으로 다룬다)."""
     async with get_conn() as conn:
         row = await conn.fetchrow("SELECT kind, area FROM ops_namespace WHERE name = $1", namespace)
-    if row and row["kind"] == ORG_KIND:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"조직 컬렉션엔 {what}을(를) 둘 수 없어요 — 정책·시스템 정보는 업무 컬렉션에 둡니다.")
-    # 정책은 업무 컬렉션에만(#105 시스템 축) — 시스템 컬렉션은 운영·개발 지식과 시스템 정보(참조데이터)
-    if row and row["area"] == "system" and what == "정책":
+    if row and row["kind"] in HIDDEN_KINDS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이 자리엔 정책을 둘 수 없어요 — 정책은 정책 컬렉션에 둡니다.")
+    if row and row["area"] == "system":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="시스템 컬렉션엔 정책을 둘 수 없어요 — 정책은 정책 컬렉션에 둡니다.")
 

@@ -4,7 +4,7 @@ import { apiFetch } from './client';
 
 export type BatchStatus = 'previewing' | 'preview' | 'failed' | 'loading' | 'loaded' | 'rolled_back';
 export type PageStatus = 'queued' | 'auto' | 'review' | 'existing' | 'excluded' | 'held' | 'restricted' | 'empty' | 'failed' | 'loaded';
-export type ReviewReason = 'low_confidence' | 'unowned' | 'not_writable' | 'ai_failed' | 'org_like' | 'default_conflict';
+export type ReviewReason = 'low_confidence' | 'unowned' | 'not_writable' | 'ai_failed' | 'default_conflict';
 
 export interface ImportBatchRow {
   id: number;
@@ -55,7 +55,7 @@ export interface ImportPage {
 export interface ImportCollection {
   id: number;
   label: string;
-  kind: string;                    // domain(업무·시스템) — 옛 서버는 org_space(폐지 11/02)도 준다 → 화면에서 거른다
+  kind: string;                    // domain(정책·시스템)
   area?: 'policy' | 'system';    // 없으면 policy(옛 서버)
   unowned: boolean;
   writable: boolean;     // 이 사람이 넣을 수 있나(담당 규칙) — 확정 때 서버가 다시 본다

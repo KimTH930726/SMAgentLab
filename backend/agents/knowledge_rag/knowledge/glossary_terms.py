@@ -179,8 +179,7 @@ def other_meanings_from(matches: list[TermMatch], rows: Sequence[dict]) -> list[
 async def other_meanings(conn, matches: list[TermMatch], exclude_ns_ids: Sequence[int]) -> list[dict]:
     """다른 영역(exclude_ns_ids = 고른 영역 + 하위, 이 답의 범위) 용어집에서 같은 용어·다른 뜻. 같은 용어 판정은 norm() 하나로 —
     SQL 정규식은 DB 로케일·기호(가운뎃점 등)에서 norm()과 갈라져 조용히 놓친다. 다른 영역 용어 전부(지금 ~900개)라 한 번 읽고 거른다.
-    업무 영역(kind domain)만 — 조직 컬렉션(org_space)은 이름이 내부 키(org:part:id)라 화면에 그대로 뜨고, 질문자 자기 조직이 "다른 팀"으로 나올 수 있다(리뷰 M1).
-    시험용 영역(policy_test)도 빠진다. 닫힌·비공개 영역이 생기면 여기에도 같은 접근 규칙을 건다(지금은 로그인 사용자 누구나 읽기)."""
+    정책·시스템 컬렉션(kind domain)만 — 내부 자리(팀 적재 보관 등)는 이름이 내부 키라 화면에 그대로 뜬다(리뷰 M1). 시험용 영역(policy_test)도 빠진다. 닫힌·비공개 영역이 생기면 여기에도 같은 접근 규칙을 건다(지금은 로그인 사용자 누구나 읽기)."""
     if not any(norm(m.term) for m in matches):
         return []
     rows = await conn.fetch(

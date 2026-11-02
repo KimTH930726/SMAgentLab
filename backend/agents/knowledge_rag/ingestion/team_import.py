@@ -27,7 +27,7 @@ SAMPLE_SIZE = 10
 MAX_PAGES = 500                 # 한 배치 수집 상한(web_crawler.TREE_HARD_MAX_PAGES와 같음) — 넘으면 truncated
 CONCURRENCY = 4                 # 페이지 동시 처리(본문 받기 + 로컬 LLM 판정) — 로컬 LLM에 한꺼번에 몰리지 않게
 REASONS = {"low_confidence": "신뢰도 낮음", "unowned": "담당 미지정", "not_writable": "담당 아님", "ai_failed": "AI 판정 실패",
-           "org_like": "조직 지식으로 보임", "default_conflict": "기본 위치와 다름"}
+           "default_conflict": "기본 위치와 다름"}   # 옛 'org_like'(조직 지식으로 보임)는 조직 컬렉션 폐지로 없앰 — 남은 줄은 #106이 low_confidence로
 DECIDABLE = ("auto", "review")  # 사람이 분류를 바꿀 수 있는 상태
 LOADABLE = ("auto", "review")
 ACTIVE_KNOWLEDGE = ("active", "pending_review")
@@ -41,13 +41,10 @@ def _err_text(e: BaseException) -> str:
 
 
 def team_scope(cands: list[Candidate], owners: dict[int, set[int]], team_parts: set[int]) -> tuple[list[Candidate], set[int]]:
-    """팀 적재 후보 — 업무 = 그 팀 파트가 담당하는 업무 + 담당 없는 업무(→ 담당 미지정), 다른 팀만 담당하는 업무는 뺀다.
-    조직 컬렉션은 그대로 넘긴다(locator가 넣는 사람 팀으로 거른다). → (후보, 담당 없는 업무 id)."""
+    """팀 적재 후보 — 그 팀 파트가 담당하는 컬렉션 + 담당 없는 컬렉션(→ 담당 미지정), 다른 팀만 담당하는 곳은 뺀다.
+    → (후보, 담당 없는 컬렉션 id)."""
     out, unowned = [], set()
     for c in cands:
-        if c.kind != "domain":
-            out.append(c)
-            continue
         o = owners.get(c.id) or set()
         if not o:
             out.append(c)
@@ -73,10 +70,10 @@ def classify(ai_id: Optional[int], confident: bool, llm_fail: str, unowned: set[
 
 
 def classify_default(ai_id: Optional[int], confident: bool, llm_fail: str, unowned: set[int], denied: frozenset,
-                     default_ns: Optional[int], org_ids: set[int]) -> tuple[str, Optional[str], Optional[int], Optional[str]]:
+                     default_ns: Optional[int]) -> tuple[str, Optional[str], Optional[int], Optional[str]]:
     """공간 기본 위치(사람이 "이 공간 = 온라인스토어"를 한 번 정함, 10/29)가 있을 때 → (상태, 사유, 최종 위치, 누가 정함).
-    업무 페이지는 기본 위치로(사람 결정 — 표본 검토로 확인), AI는 예외만: 조직 지식으로 보이면 검토 필요, 확신하는데 기본 위치와
-    다른 곳이면 검토 필요. 확신 + 기본 위치와 같음 / 확신 + 쓸 수 있는 조직 = AI 자동(지금 기준 그대로). 기본 위치가 없으면 classify."""
+    페이지는 기본 위치로(사람 결정 — 표본 검토로 확인), AI는 예외만: 확신하는데 기본 위치와 다른 곳이면 검토 필요.
+    확신 + 기본 위치와 같음 = AI 자동. 기본 위치가 없으면 classify."""
     if default_ns is None:
         st, reason, final = classify(ai_id, confident, llm_fail, unowned, denied)
         return st, reason, final, ("ai" if st == "auto" else None)
@@ -85,11 +82,7 @@ def classify_default(ai_id: Optional[int], confident: bool, llm_fail: str, unown
             return "auto", None, ai_id, "ai"
         if ai_id in denied:
             return "review", "not_writable", None, None
-        if ai_id in org_ids:
-            return "auto", None, ai_id, "ai"
         return "review", "default_conflict", None, None
-    if not llm_fail and ai_id is not None and ai_id in org_ids:
-        return "review", "org_like", None, None
     return "auto", None, default_ns, "space_default"
 
 
@@ -256,7 +249,7 @@ async def sampling_required_for(conn, team_id: int, exclude_batch: Optional[int]
 
 
 async def team_context(conn, team_id: int, *, profiles: bool = False) -> dict:
-    """후보·담당·초안을 둘 곳(팀 공통 조직 컬렉션). profiles = 대표 용어(LLM 판정에만 — 화면 폴링에선 안 읽음)."""
+    """후보·담당·초안을 둘 곳(숨긴 보관 자리, #105). profiles = 대표 용어(LLM 판정에만 — 화면 폴링에선 안 읽음)."""
     from core.database import OWNER_ROWS_SQL, STAGING_NAME
     cands = await locator.load_candidates(conn)
     owners: dict[int, set[int]] = {}
@@ -264,22 +257,21 @@ async def team_context(conn, team_id: int, *, profiles: bool = False) -> dict:
         owners.setdefault(r["namespace_id"], set()).add(r["part_id"])
     team_parts = {r["id"] for r in await conn.fetch("SELECT id FROM ops_part WHERE team_id = $1", team_id)}
     scoped, unowned = team_scope(cands, owners, team_parts)
-    # 원문 초안·읽기 제한 기록은 숨긴 보관 자리에(#105) — 예전엔 팀 공통 조직 컬렉션(조직 컬렉션 폐지)
+    # 원문 초안·읽기 제한 기록은 숨긴 보관 자리에(#105)
     draft_ns = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", STAGING_NAME)
     return {"cands": scoped, "unowned": unowned, "draft_ns": draft_ns, "owners": owners, "team_parts": team_parts,
             "profiles": await locator.load_profiles(conn, [c.id for c in scoped]) if profiles else {}}
 
 
-def user_limits(ctx: dict, user: dict) -> tuple[frozenset, set[int]]:
-    """(이 사람이 쓸 수 없는 곳, 조직 컬렉션) — 분류 미리보기·기본 위치 다시 분류 공통."""
+def denied_ids(ctx: dict, user: dict) -> frozenset:
+    """이 사람이 쓸 수 없는 곳 — 분류 미리보기·기본 위치 다시 분류 공통."""
     from core.dependencies import edit_denied_reason
-    denied = frozenset(c.id for c in ctx["cands"] if edit_denied_reason(ctx["owners"].get(c.id, set()), user) is not None)
-    return denied, {c.id for c in ctx["cands"] if c.kind == "org_space"}
+    return frozenset(c.id for c in ctx["cands"] if edit_denied_reason(ctx["owners"].get(c.id, set()), user) is not None)
 
 
-def allowed_ids(ctx: dict, team_id: int) -> set[int]:
-    """이 팀 배치가 분류해 넣을 수 있는 곳 — 팀 범위 업무 + 그 팀 조직 컬렉션."""
-    return {c.id for c in ctx["cands"] if c.kind == "domain" or c.team_id == team_id}
+def allowed_ids(ctx: dict) -> set[int]:
+    """이 팀 배치가 분류해 넣을 수 있는 곳 — 팀 범위 후보(team_scope)."""
+    return {c.id for c in ctx["cands"]}
 
 
 async def _set_page(conn, row_id: int, **cols) -> None:
@@ -372,7 +364,7 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
     creds = get_user_llm_credentials(user) if uses_creds else None
     sem = asyncio.Semaphore(CONCURRENCY)
     team_id = b["team_id"]
-    denied, org_ids = user_limits(ctx, user)
+    denied = denied_ids(ctx, user)
 
     async def one(row) -> None:
         async with sem:
@@ -427,12 +419,12 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
             doc_id = await save_draft_for_parsed(conn, ctx["draft_ns"], doc, chunk_strategy="auto", user_id=user.get("id"),
                                                  source_ref=str(page_id), owner_only=True)
         text = (doc.source_name or "") + "\n" + (doc.raw_text or "")
-        llm_out = await locator.judge_llm(ctx["cands"], text, llm, user_credentials=creds, profiles=ctx["profiles"], user_team_id=team_id)
+        llm_out = await locator.judge_llm(ctx["cands"], text, llm, user_credentials=creds, profiles=ctx["profiles"])
         emb = await locator.embed_head(text)
         async with get_conn() as conn:
-            r = await locator.finish(conn, ctx["cands"], llm_out, emb, user_team_id=team_id, text=text)
+            r = await locator.finish(conn, ctx["cands"], llm_out, emb, text=text)
             status, reason, final, by = classify_default(r.ai_id, r.confident, r.llm_fail, ctx["unowned"], denied,
-                                                         b["default_namespace_id"], org_ids)
+                                                         b["default_namespace_id"])
             await _set_page(conn, row_id, status=status, reason=reason, source_document_id=doc_id, chunk_count=len(chunks),
                             ai_namespace_id=r.ai_id, proposed_namespace_id=r.proposed_id, confident=r.confident, final_namespace_id=final,
                             assigned_by=by, sample_ns=final if status == "auto" else None,
@@ -474,14 +466,14 @@ async def apply_default(conn, batch_id: int, user: dict, default_ns: Optional[in
     LLM 다시 안 부름). 사람이 분류·표본 판정한 페이지는 그대로. 아직 안 본 표본은 내리고 묶음에 맞게 다시 뽑는다. → 상태별 수."""
     b = await conn.fetchrow("SELECT team_id FROM rag_import_batch WHERE id = $1", batch_id)
     ctx = await team_context(conn, b["team_id"])
-    denied, org_ids = user_limits(ctx, user)
+    denied = denied_ids(ctx, user)
     rows = await conn.fetch("SELECT id, ai_namespace_id, confident, signals->>'llm_fail' AS llm_fail FROM rag_import_page "
                             "WHERE batch_id = $1 AND status = ANY($2::text[]) AND decided_by_user_id IS NULL", batch_id, list(DECIDABLE))
     out: dict[str, int] = {}
     updates = []
     for r in rows:
         st, reason, final, by = classify_default(r["ai_namespace_id"], r["confident"], r["llm_fail"] or "", ctx["unowned"], denied,
-                                                 default_ns, org_ids)
+                                                 default_ns)
         updates.append((r["id"], st, reason, final, by, final if st == "auto" else None))
         key = by if st == "auto" else reason
         out[key] = out.get(key, 0) + 1

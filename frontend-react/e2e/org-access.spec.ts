@@ -8,9 +8,6 @@ import { loginAdmin } from './auth';
 const TEAM = 'E2E팀';
 const PART = 'E2E팀파트';
 const cleanup = () => {
-  // 옛 조직 컬렉션(v2.160, 11/02 폐지 — DB에서 지워지기 전 서버가 아직 만들 수 있음)을 먼저 — 남으면 팀이 FK(owner_team_id)로 안 지워진다
-  psql(`DELETE FROM ops_namespace WHERE kind = 'org_space' AND (name IN (SELECT 'org:part:' || id FROM ops_part WHERE name = '${PART}')
-        OR owner_team_id IN (SELECT id FROM ops_team WHERE name = '${TEAM}'))`);
   psql(`DELETE FROM ops_part WHERE name = '${PART}'`);
   psql(`DELETE FROM ops_team WHERE name = '${TEAM}'`);
 };
@@ -46,7 +43,9 @@ test('조직·권한 — 팀 만들기 · 팀 아래 파트 · 파트 있는 팀
   expect(psql(`SELECT count(*) FROM ops_team WHERE name = '${TEAM}'`)).toBe('1');
   expect(psql(`SELECT count(*) FROM ops_part p JOIN ops_team t ON t.id = p.team_id WHERE p.name = '${PART}' AND t.name = '${TEAM}'`)).toBe('1');
 
-  // ③-1 조직 컬렉션 폐지(11/02) — 팀·파트를 만들어도 고르는 창엔 [업무 | 시스템]뿐, 방금 만든 팀이 컬렉션으로 안 보인다
+  // ③-1 조직 컬렉션 폐지(11/02) — 팀·파트를 만들어도 컬렉션이 안 생기고(DB), 고르는 창엔 [정책 | 시스템]뿐
+  // 이 테스트가 만든 팀·파트를 가리키는 컬렉션이 없다(전역 0건은 #106이 내용 때문에 남긴 행에 깨진다, 리뷰 L4)
+  expect(psql(`SELECT count(*) FROM ops_namespace_owner o JOIN ops_part p ON p.id = o.part_id WHERE p.name = '${PART}'`)).toBe('0');
   await page.locator('#sidebar-domain').click();
   await expect(page.getByRole('tab', { name: '시스템' })).toBeVisible();
   await expect(page.getByRole('tab', { name: '조직' })).toHaveCount(0);

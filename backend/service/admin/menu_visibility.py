@@ -1,9 +1,9 @@
 """관리자 메뉴 노출 설정(2026-10-23, 사용자: "영역별 메뉴 노출을 관리 — 나중엔 권한별도") — 범위마다 숨길 메뉴 id 목록.
 
-저장 = ops_system_config 한 줄(`menu_visibility`): {"hidden": {"kind:domain": [...], "kind:org_space": [...]}}.
+저장 = ops_system_config 한 줄(`menu_visibility`): {"hidden": {"kind:domain": [...], "kind:policy_test": [...]}}.
 범위 키는 `kind:<컬렉션 종류>` — 나중에 권한별 노출은 `role:<역할>`을 같은 모양으로 더한다(지금은 화면·검사 없음).
-여기엔 "숨길 것"만 있다 — 그 종류가 담을 수 없는 메뉴(조직 컬렉션의 정책서 등)는 화면 코드(adminMenu.ts `kinds`)가 늘 숨기고,
-설정으로 켤 수 없다(서버도 그 종류엔 정책 가져오기·VOC·참조데이터를 400으로 막는다). 메뉴 id 목록은 화면 것이라 서버는 모양만 본다.
+여기엔 "숨길 것"만 있다 — 그 종류·구분이 담을 수 없는 메뉴는 화면 코드(adminMenu.ts)가 늘 숨기고 설정으로 켤 수 없다
+(서버도 시스템 컬렉션엔 정책 가져오기를 400으로 막는다). 메뉴 id 목록은 화면 것이라 서버는 모양만 본다.
 """
 import json
 import logging

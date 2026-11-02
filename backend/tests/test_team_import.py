@@ -19,15 +19,14 @@ from agents.knowledge_rag.ingestion.locator import Candidate
 
 BIZ = [Candidate(1, "딜리버스", "딜리버스", "domain"), Candidate(2, "온라인스토어", "온라인스토어", "domain"),
        Candidate(3, "쿠폰", "쿠폰", "domain"), Candidate(4, "회원", "회원", "domain")]
-ORG = [Candidate(10, "org:team:1", "팀 공통 · CSP", "org_space", team_id=1, is_team_common=True, short="팀 공통")]
 OWNERS = {1: {774}, 2: {775}, 4: {902}}        # 1·2 = CSP 파트, 4 = 다른 팀 파트, 3 = 담당 없음
 CSP_PARTS = {774, 775}
 
 
 class TestTeamScope:
     def test_other_team_areas_excluded_unowned_kept(self):
-        scoped, unowned = ti.team_scope(BIZ + ORG, OWNERS, CSP_PARTS)
-        assert [c.id for c in scoped] == [1, 2, 3, 10]   # 회원(다른 팀 담당)은 후보에서 빠진다
+        scoped, unowned = ti.team_scope(BIZ, OWNERS, CSP_PARTS)
+        assert [c.id for c in scoped] == [1, 2, 3]       # 회원(다른 팀 담당)은 후보에서 빠진다
         assert unowned == {3}
 
     def test_shared_area_with_other_team_kept(self):
@@ -241,12 +240,11 @@ class TestClassifyNotWritable:
 
 
 class TestClassifyDefault:
-    """공간 기본 위치(10/29): 업무 페이지는 기본 위치로(사람 결정), AI는 예외만 — 조직으로 보임 · 확신하는데 다른 곳."""
-    ORG = {10, 11}
+    """공간 기본 위치(10/29): 페이지는 기본 위치로(사람 결정), AI는 예외만 — 확신하는데 다른 곳."""
     D = 2
 
     def c(self, ai, conf=False, fail="", denied=frozenset()):
-        return ti.classify_default(ai, conf, fail, {3}, denied, self.D, self.ORG)
+        return ti.classify_default(ai, conf, fail, {3}, denied, self.D)
 
     def test_business_pages_go_to_default_as_human_decision(self):
         assert self.c(None) == ("auto", None, 2, "space_default")       # 판단 못 함
@@ -255,25 +253,27 @@ class TestClassifyDefault:
         assert self.c(1, fail="error") == ("auto", None, 2, "space_default")
 
     def test_exceptions_go_to_review(self):
-        assert self.c(10) == ("review", "org_like", None, None)        # 조직 지식으로 보임
         assert self.c(1, conf=True) == ("review", "default_conflict", None, None)
-        assert self.c(10, conf=True, denied=frozenset({10})) == ("review", "not_writable", None, None)
+        assert self.c(1, conf=True, denied=frozenset({1})) == ("review", "not_writable", None, None)
 
-    def test_confident_same_or_org_is_ai_auto(self):
+    def test_confident_same_is_ai_auto(self):
         assert self.c(2, conf=True) == ("auto", None, 2, "ai")
-        assert self.c(10, conf=True) == ("auto", None, 10, "ai")
+
+    def test_no_org_like_reason(self):
+        """조직 컬렉션 폐지(11/02) — '조직 지식으로 보임' 사유는 없다(옛 줄은 #106이 low_confidence로)."""
+        assert "org_like" not in ti.REASONS
 
     def test_no_default_is_plain_classify(self):
-        assert ti.classify_default(1, True, "", set(), frozenset(), None, self.ORG) == ("auto", None, 1, "ai")
-        assert ti.classify_default(1, False, "", set(), frozenset(), None, self.ORG) == ("review", "low_confidence", None, None)
+        assert ti.classify_default(1, True, "", set(), frozenset(), None) == ("auto", None, 1, "ai")
+        assert ti.classify_default(1, False, "", set(), frozenset(), None) == ("review", "low_confidence", None, None)
 
     def test_property_auto_target_is_default_or_ai_confident(self):
         rnd = random.Random(9)
         for _ in range(1000):
-            ai = rnd.choice([None, 1, 2, 3, 10, 11])
+            ai = rnd.choice([None, 1, 2, 3, 4])
             conf, fail = rnd.random() < 0.4, rnd.choice(["", "", "error"])
-            denied = frozenset(x for x in (1, 10) if rnd.random() < 0.3)
-            st, reason, final, by = ti.classify_default(ai, conf, fail, {3}, denied, self.D, self.ORG)
+            denied = frozenset(x for x in (1, 4) if rnd.random() < 0.3)
+            st, reason, final, by = ti.classify_default(ai, conf, fail, {3}, denied, self.D)
             if st == "auto":
                 assert (by == "space_default" and final == self.D) or (by == "ai" and conf and not fail and final == ai and ai not in denied)
                 assert final not in denied

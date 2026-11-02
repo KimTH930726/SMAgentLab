@@ -1,10 +1,11 @@
 """시스템 축 개편(11/02, 사용자 "조직은 로그인·권한 뼈대만, 컬렉션은 시스템 축으로") — 조직 컬렉션(org:part:<id> / org:team:<id>)의
-내용을 시스템 컬렉션(업무 영역, area='system', #105)으로 옮긴다.
+내용을 시스템 컬렉션(업무 영역, area='system', #105)으로 옮긴다. 조직 컬렉션은 폐지(#106이 빈 행을 지움) — 내용이 남아 #106이
+남겨 둔 행(기동 로그 "[migrate #106] … 내용이 있어 남김")을 사람이 옮길 곳을 정한 뒤 이걸로 옮긴다.
 
 합치기 본체는 restructure_domains.merge(표마다 namespace_id 옮김 · 연결 키 · 용어 수집 상태 · 남은 행 0 확인 · 원래 행 삭제)를 그대로 쓴다.
 더해서 FK가 없는 컬렉션 id 칸(팀 적재 페이지의 넣은 곳 · 배치 기본 위치)도 옮긴다 — 안 옮기면 배치 롤백이 지운 컬렉션 이름으로 캐시를 비운다.
 담당: 원래 담당 줄은 지운다(받는 시스템의 담당은 사람이 정한 값 그대로 — 겹치면 기본키 충돌).
-지식 updated_at: 옮기는 동안 트리거를 끈다(move_team_common_to_org와 같은 이유 — 원문 재등록 확인이 거짓으로 뜬다).
+지식 updated_at: 옮기는 동안 트리거를 끈다(안 끄면 옮긴 지식 전부가 "방금 바뀜"이 되어 원문 재등록 확인이 거짓으로 뜬다).
 
 멈추는 경우(아무것도 안 바꿈): 받는 쪽이 시스템이 아님 · 보내는 쪽이 조직 컬렉션이 아님 · 진행 중인 적재 작업·팀 적재 배치 ·
   조직 컬렉션이 못 담는 것(정책·VOC·참조데이터)이 들어 있음.
@@ -19,8 +20,22 @@ import sys
 
 sys.path.insert(0, "/app")
 
-from move_team_common_to_org import JOB_DONE, NOT_FOR_ORG, invalidate_all_cache  # noqa: E402
 from restructure_domains import counts, merge, ns_tables  # noqa: E402
+
+# 조직 컬렉션이 못 담던 것(정책·VOC·참조데이터) — 들어 있으면 멈춘다(시스템 컬렉션으로 옮기면 안 되는 내용)
+NOT_FOR_ORG = ("policy_item", "policy_doc_overview", "policy_review_log",
+               "ops_voc_routing", "ops_email_analysis", "ops_voc_cluster",
+               "ref_table", "ref_db_column", "ref_common_code")
+JOB_DONE = ["completed", "failed", "cancelled"]
+
+async def invalidate_all_cache() -> None:
+    # 트랜잭션 밖, 실패해도 TTL로 사라진다(로그로 남김)
+    try:
+        from shared import cache as sem_cache
+        print("답변 캐시 비움:", await sem_cache.invalidate_all(), "건")
+    except Exception as e:   # noqa: BLE001
+        print("캐시 비우기 실패(백엔드 재시작 또는 TTL로 해소):", e)
+
 
 # FK 없이 컬렉션 id를 들고 있는 칸 — (표, 칸)
 LOOSE_REFS = (("rag_import_page", "final_namespace_id"), ("rag_import_page", "ai_namespace_id"),

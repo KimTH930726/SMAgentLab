@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from core.dependencies import check_namespace_ownership, get_current_user, reject_org_collection
+from core.dependencies import check_namespace_ownership, get_current_user, reject_policy_outside_policy_collection
 from service.improvement import service
 from service.improvement.schemas import (
     ApproveBody, CorrectionCreate, PolicyChangeBody, ProposedBody, RejectBody, RetargetBody, SeenBody, RedraftBody,
@@ -33,7 +33,7 @@ def _ids(csv: Optional[str]) -> list[int]:
 async def create_correction(body: CorrectionCreate, user: dict = Depends(get_current_user)):
     """채팅 신고(로그인 사용자 누구나 — 신호일 뿐) 또는 정책서 화면의 수정 제안(source 있음 — 그 업무 영역 담당 파트·관리자만)."""
     if body.source is not None:
-        await reject_org_collection(body.namespace, "정책")   # 정책 수정 제안 — 조직 컬렉션엔 정책이 없다(#83)
+        await reject_policy_outside_policy_collection(body.namespace)   # 정책 수정 제안 — 정책은 정책 컬렉션에만
         await check_namespace_ownership(body.namespace, user)
         if body.target_type != "policy_narrative" or body.target_id is None:
             raise HTTPException(status_code=400, detail="정책 수정 제안은 정책 항목을 지정해야 합니다.")
@@ -60,7 +60,7 @@ async def create_correction(body: CorrectionCreate, user: dict = Depends(get_cur
 async def create_policy_change(body: PolicyChangeBody, user: dict = Depends(get_current_user)):
     """정책 추가·폐기·분류 옮기기 제안(C3 2단계) — 수정 제안과 같은 권한(그 업무 영역 담당 파트·관리자), 반영은 정정 요청 승인에서."""
     from service.improvement import policy_change
-    await reject_org_collection(body.namespace, "정책")
+    await reject_policy_outside_policy_collection(body.namespace)
     await check_namespace_ownership(body.namespace, user)
     try:
         return await policy_change.create(

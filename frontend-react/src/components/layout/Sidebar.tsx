@@ -28,7 +28,7 @@ import { stopChatStream, clearStreamState, useStreamStore } from '../../store/us
 import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { byContentThenName, initialDomain, isPickableDomain, loadSelectedDomain, saveSelectedDomain } from '../../utils/selectedDomain';
 import { DomainPicker } from './DomainPicker';
-import { isOrgName, isSystemCollection } from '../../utils/collections';
+import { isSystemCollection } from '../../utils/collections';
 import { effectiveOwnerParts } from '../../utils/domainAccess';
 import type { NamespaceDetail } from '../../types';
 import { getConversations, deleteConversation } from '../../api/conversations';
@@ -106,8 +106,7 @@ export function Sidebar() {
   useEffect(() => {
     if (namespaces.length === 0 || (nsDetails.length === 0 && !nsDetailsMissing)) return;   // 담당 정보까지 와야 "내 담당"을 안다
     const uname = user?.username ?? null;
-    // 폐지된 조직 컬렉션(11/02)은 고를 수 없다 — 기억한 값·지금 값이 조직이면 다시 정한다(DB에서 지워지기 전까지)
-    const valid = namespaces.filter((n) => !isOrgName(n));
+    const valid = namespaces;
     if (initedUserRef.current === uname && namespace && valid.includes(namespace)) { pendingNsRef.current = null; return; }   // 다른 곳이 먼저 바꿨으면 대기 값 버림(리뷰)
     initedUserRef.current = uname;
     const isMine = (n: NamespaceDetail) => effectiveOwnerParts(n).some((o) => o.name === user?.part);   // 고르는 창(DomainPicker)과 같은 기준(담당 N개)

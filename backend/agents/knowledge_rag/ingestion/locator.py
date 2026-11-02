@@ -39,12 +39,9 @@ LOCATE_SYSTEM = """너는 사내 IT 운영 지식을 어느 시스템 컬렉션�
 @dataclass
 class Candidate:
     id: int
-    name: str            # 컬렉션 키(업무 = 이름, 조직 = org:team:<id> / org:part:<id>)
+    name: str            # 컬렉션 이름(키)
     label: str           # LLM·화면에 보이는 이름(유일)
-    kind: str            # domain | org_space
-    team_id: Optional[int] = None    # 조직 컬렉션의 팀(팀 공통 = 그 팀, 파트 = 파트의 팀)
-    is_team_common: bool = False
-    short: str = ""                  # 조직 컬렉션을 팀 안에서 부르는 이름("팀 공통" / 파트 이름) — LLM 후보·응답 대조용
+    kind: str            # domain
     area: str = "policy"             # 컬렉션 구분(#105) — policy(정책) | system(시스템 — 운영 지식)
 
 
@@ -67,30 +64,15 @@ class LocateResult:
 
 
 CANDIDATES_SQL = """
-SELECT n.id, n.name, n.kind, n.area, n.owner_team_id, t.name AS team_name, p.name AS part_name, p.team_id AS part_team_id, pt.name AS part_team_name
+SELECT n.id, n.name, n.kind, n.area
 FROM ops_namespace n
-LEFT JOIN ops_team t ON t.id = n.owner_team_id
-LEFT JOIN ops_part p ON n.kind = 'org_space' AND n.owner_team_id IS NULL AND p.id = n.owner_part_id
-LEFT JOIN ops_team pt ON pt.id = p.team_id
-WHERE n.kind = 'domain' AND n.area = 'system' AND n.parent_id IS NULL   -- 운영 지식은 시스템 컬렉션에만(11/02 — 정책서는 정책 컬렉션, 조직 컬렉션은 후보 아님)
-ORDER BY n.kind, n.id"""
+WHERE n.kind = 'domain' AND n.area = 'system' AND n.parent_id IS NULL   -- 운영 지식은 시스템 컬렉션에만(11/02 — 정책서는 정책 컬렉션)
+ORDER BY n.id"""
 
 
 async def load_candidates(conn) -> list[Candidate]:
-    """넣을 수 있는 곳 — 업무 컬렉션(최상위, kind='domain'이라 테스트 종류 policy_test는 안 들어옴) + 조직 컬렉션(팀 공통·파트).
-    파트 이름이 팀끼리 겹칠 수 있어 화면 이름(label)엔 팀 이름을 붙인다."""
-    out: list[Candidate] = []
-    for r in await conn.fetch(CANDIDATES_SQL):
-        if r["kind"] == "domain":
-            out.append(Candidate(r["id"], r["name"], r["name"], "domain", area=r["area"]))
-        elif r["owner_team_id"] is not None:
-            out.append(Candidate(r["id"], r["name"], f"팀 공통 · {r['team_name'] or '(이름 없는 팀)'}", "org_space",
-                                 team_id=r["owner_team_id"], is_team_common=True, short="팀 공통"))
-        else:
-            label = r["part_name"] or "(이름 없는 파트)"
-            out.append(Candidate(r["id"], r["name"], f"{label}({r['part_team_name']})" if r["part_team_name"] else label,
-                                 "org_space", team_id=r["part_team_id"], short=label))
-    return out
+    """넣을 수 있는 곳 — 시스템 컬렉션(최상위, kind='domain'이라 테스트 종류 policy_test는 안 들어옴)."""
+    return [Candidate(r["id"], r["name"], r["name"], r["kind"], area=r["area"]) for r in await conn.fetch(CANDIDATES_SQL)]
 
 
 PROFILE_TERMS = 10
@@ -123,13 +105,7 @@ async def load_profiles(conn, cand_ids: list[int]) -> dict[int, list[str]]:
     return data
 
 
-def _team_org(cands: list[Candidate], user_team_id: Optional[int]) -> list[Candidate]:
-    # 조직 후보 = 넣는 사람 팀의 팀 공통 + 그 팀 파트(10/23 실측: 팀이 셋이 되자 "어느 팀 공통"을 못 골라 애매가 늘었다 — 11/20)
-    return [c for c in cands if c.kind == "org_space" and user_team_id is not None and c.team_id == user_team_id]
-
-
-def _user_msg(cands: list[Candidate], text: str, profiles: Optional[dict[int, list[str]]] = None,
-              user_team_id: Optional[int] = None) -> str:
+def _user_msg(cands: list[Candidate], text: str, profiles: Optional[dict[int, list[str]]] = None) -> str:
     def line(c: Candidate, name: str) -> str:
         terms = (profiles or {}).get(c.id) or []
         return f"- {name}" + (f" (자주 나오는 용어: {', '.join(terms)})" if terms else "")
@@ -146,9 +122,8 @@ class ShapeError(ValueError):
     """답 모양이 프롬프트와 어긋남(kind 없음·목록에 없는 이름) — 조용한 "애매"가 아니라 실패로 보이게."""
 
 
-def parse_llm(raw: str, cands: list[Candidate], user_team_id: Optional[int] = None) -> tuple[Optional[int], str, str]:
-    """LLM 응답 → (컬렉션 id 또는 None, 종류, 이유). 목록에 없는 이름은 None(지어낸 이름을 받지 않는다).
-    조직은 넣는 사람 팀 안에서만 대조한다(다른 팀 파트 이름이 같아도 받지 않음)."""
+def parse_llm(raw: str, cands: list[Candidate]) -> tuple[Optional[int], str, str]:
+    """LLM 응답 → (컬렉션 id 또는 None, 종류, 이유). 목록에 없는 이름은 ShapeError(지어낸 이름을 받지 않는다)."""
     raw = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.S)
     try:
         j = parse_json_object(raw) or {}
@@ -191,13 +166,13 @@ async def nearest_collections(conn, embedding: list[float], cand_ids: list[int],
     return sorted(out, key=lambda x: -x[1])
 
 
-def neighbor_scope(cands: list[Candidate], user_team_id: Optional[int]) -> list[int]:
-    """이웃을 찾는 곳 = 업무 전부 + 넣는 사람 팀의 조직(다른 팀 파트가 제안·선택지로 미리 골라지지 않게, 리뷰 10/23)."""
-    return [c.id for c in cands if c.kind == "domain"] + [c.id for c in _team_org(cands, user_team_id)]
+def neighbor_scope(cands: list[Candidate]) -> list[int]:
+    """이웃을 찾는 곳 = 후보 컬렉션 전부."""
+    return [c.id for c in cands if c.kind == "domain"]
 
 
 def decide(cands: list[Candidate], ai_id: Optional[int], neighbors: list[tuple[int, float]], *,
-           preset_id: Optional[int], user_team_id: Optional[int], llm_fail: str = "", preset_missing: bool = False,
+           preset_id: Optional[int], llm_fail: str = "", preset_missing: bool = False,
            ai_named: bool = False) -> dict:
     """두 신호 → 확신·제안 위치·묻기·선택지. 순수 함수(테스트 대상). llm_fail = "" | refusal | error | shape."""
     nb_ids = [n for n, _ in neighbors]
@@ -211,7 +186,6 @@ def decide(cands: list[Candidate], ai_id: Optional[int], neighbors: list[tuple[i
     if not neighbors:
         notes.append("비교할 지식이 없어요")
     fallback = " · ".join(notes)
-    team_common = next((c.id for c in cands if c.is_team_common and c.team_id == user_team_id), None)
     if preset_id is not None:
         # 컬렉션 화면에서 넘어옴 = 위치 확정 — AI는 검사만, 두 신호가 다른 곳으로 확신할 때만 한 번 제안
         return {"confident": confident, "proposed_id": preset_id, "ask": False, "options": [],
@@ -224,27 +198,26 @@ def decide(cands: list[Candidate], ai_id: Optional[int], neighbors: list[tuple[i
         proposed = ai_id
     else:
         proposed = top if (top is not None and n >= NEIGHBOR_NEED) else (ai_id if ai_id is not None else top)
-    options = list(dict.fromkeys(x for x in (proposed, ai_id, top, team_common) if x is not None))[:3]
+    options = list(dict.fromkeys(x for x in (proposed, ai_id, top) if x is not None))[:3]
     return {"confident": confident, "proposed_id": proposed, "ask": not confident, "options": options,
             "suggest_move": False, "vote_top": top, "vote_n": n, "fallback": fallback}
 
 
 async def judge_llm(cands: list[Candidate], text: str, llm, *, user_credentials: Optional[dict] = None,
-                    system_prompt: Optional[str] = None, profiles: Optional[dict[int, list[str]]] = None,
-                    user_team_id: Optional[int] = None) -> tuple[Optional[int], str, str, str]:
+                    system_prompt: Optional[str] = None, profiles: Optional[dict[int, list[str]]] = None) -> tuple[Optional[int], str, str, str]:
     """신호 ① — (컬렉션 id 또는 None, 종류, 이유, 실패 종류 ""|refusal|error|shape). DB 연결을 잡지 않는다(대표 용어는 미리 읽어 넘긴다)."""
     from service.chat.helpers import is_gateway_refusal
     if system_prompt is None:
         from service.prompt.loader import get_prompt
         system_prompt = await get_prompt(PROMPT_KEY, LOCATE_SYSTEM)
     try:
-        raw = await llm.generate_once(prompt=_user_msg(cands, text, profiles, user_team_id), system=system_prompt, max_tokens=400,
+        raw = await llm.generate_once(prompt=_user_msg(cands, text, profiles), system=system_prompt, max_tokens=400,
                                       user_credentials=user_credentials)
         if is_gateway_refusal(raw):
             # 게이트웨이 민감정보 필터 거부 — 본문을 바꿔 보내지 않는다(등록 글 = 사용자 입력, DLP 우회 금지). 이웃만으로 + 노란 줄
             logger.info("위치 판정: 게이트웨이 보안 필터 거부 — 이웃만 사용")
             return None, "지식 문서", "", FAIL_REFUSAL
-        ai_id, doc_type, reason = parse_llm(raw, cands, user_team_id)
+        ai_id, doc_type, reason = parse_llm(raw, cands)
         return ai_id, doc_type, reason, ""
     except ShapeError as e:
         logger.warning("위치 판정 답 모양 오류(이웃만 사용): %s", e)
@@ -260,19 +233,19 @@ async def embed_head(text: str) -> list[float]:
 
 
 def names_ai_collection(cands: list[Candidate], ai_id: Optional[int], text: str) -> bool:
-    """AI가 고른 업무 컬렉션 이름이 본문에 그대로 나오나(조직 컬렉션은 이름이 본문에 나올 일이 드물어 업무만)."""
+    """AI가 고른 컬렉션 이름이 본문에 그대로 나오나."""
     c = next((x for x in cands if x.id == ai_id), None)
     # 3글자 미만 이름("공통" 등)은 거의 모든 글에 나와 신호가 아니다(리뷰 L5)
     return bool(c and c.kind == "domain" and len(c.label) >= 3 and c.label in text[:TEXT_LIMIT])
 
 
 async def finish(conn, cands: list[Candidate], llm_out: tuple, embedding: list[float], *, preset_id: Optional[int] = None,
-                 user_team_id: Optional[int] = None, exclude_ids: tuple[int, ...] = (), preset_missing: bool = False,
+                 exclude_ids: tuple[int, ...] = (), preset_missing: bool = False,
                  text: str = "") -> LocateResult:
     """신호 ②(이웃) + 결정. 임베딩은 부르는 쪽이 연결 밖에서 만든다. 원장 기록도 부르는 쪽 — 측정 스크립트는 기록 없이 부른다."""
     ai_id, doc_type, reason, llm_fail = llm_out
-    neighbors = await nearest_collections(conn, embedding, neighbor_scope(cands, user_team_id), exclude_ids=exclude_ids)
-    d = decide(cands, ai_id, neighbors, preset_id=preset_id, user_team_id=user_team_id, llm_fail=llm_fail,
+    neighbors = await nearest_collections(conn, embedding, neighbor_scope(cands), exclude_ids=exclude_ids)
+    d = decide(cands, ai_id, neighbors, preset_id=preset_id, llm_fail=llm_fail,
                preset_missing=preset_missing, ai_named=names_ai_collection(cands, ai_id, text))
     return LocateResult(doc_type=doc_type, ai_id=ai_id, reason=reason, neighbors=neighbors, preset_id=preset_id,
                         llm_fail=llm_fail, **d)

@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from core.dependencies import get_current_user, get_current_admin, check_knowledge_read, check_namespace_ownership, reject_org_collection
+from core.dependencies import get_current_user, get_current_admin, check_knowledge_read, check_namespace_ownership, reject_policy_outside_policy_collection
 from service.policy import catalog, search as search_service, pipeline_stats
 from service.policy import json_io, source_check
 from service.policy.schemas import PolicySearchOut, PipelineStatsOut
@@ -137,14 +137,14 @@ async def export_policy_json(namespace: str = Query(...), user: dict = Depends(g
 @router.post("/json/preview")
 async def preview_policy_json(body: JsonImportBody, user: dict = Depends(get_current_admin)):
     """파일과 지금 정책 비교 — 같음·바뀜·파일에만·DB에만·검토 중이라 막힘. 아무것도 안 쓴다."""
-    await reject_org_collection(body.namespace, "정책")   # 조직 컬렉션엔 지식 문서·용어만(#83)
+    await reject_policy_outside_policy_collection(body.namespace)   # 정책은 정책 컬렉션에만(#105)
     return await json_io.preview(body.namespace, body.content)
 
 
 @router.post("/json/apply")
 async def apply_policy_json(body: JsonApplyBody, user: dict = Depends(get_current_admin)):
     """바뀐 정책마다 정정 제안 1건(출처 json_import). 미리보기 뒤 파일·정책이 바뀌었으면 409."""
-    await reject_org_collection(body.namespace, "정책")
+    await reject_policy_outside_policy_collection(body.namespace)
     try:
         return await json_io.apply(body.namespace, user, body.content, body.doc_hash, body.plan_hash, body.filename)
     except json_io.ImportConflict as e:

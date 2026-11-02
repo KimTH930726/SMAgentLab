@@ -316,7 +316,7 @@ async def search_knowledge(
 ) -> list[RetrievalResult]:
     async with get_conn() as conn:
         # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6). 하위가 없으면 [자신] — 예전과 같은 행 집합.
-        # 조직 컬렉션을 고르면 [그 컬렉션](하위 없음). extra_ns_ids = 질문자의 조직 컬렉션(설정 chat.org_space_scope, 기본 꺼짐 → 빈 값)
+        # extra_ns_ids = 검색 범위 실험 옵션(knowledge_scope — linked·similar, 측정 전용)으로 더하는 컬렉션. 채팅은 빈 값
         ns_ids = await namespace_scope_ids(conn, namespace)
         if not ns_ids:
             return []

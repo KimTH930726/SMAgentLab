@@ -42,14 +42,11 @@ class NamespaceInfo(BaseModel):
     id: int
     name: str
     description: str
-    kind: str = "domain"                  # domain | org_space(조직 컬렉션, #83) | policy_test(E2E 임시)
+    kind: str = "domain"                  # domain | policy_test(E2E 임시) — 내부 자리(staging 등)는 목록에 안 나온다
     area: str = "policy"                  # policy(정책 컬렉션) | system(시스템 컬렉션, #105) — kind domain을 둘로 묶는 값
     supports: list[str] = []              # 시스템의 관련 정책 이름(ops_link 'supports') — 정책 컬렉션은 []
     code: Optional[str] = None            # 업무 코드(#105, 불변·유일 — POL-MBR · SYS-HP). 이름은 화면용
-    display_name: str = ""                # 화면 이름 — 업무 = name, 조직 = "팀 공통 · <팀>" / "<파트>"(조회 때 만듦 — name은 id 키)
-    owner_team_id: Optional[int] = None   # 팀 공통 조직 컬렉션의 팀
-    team_id: Optional[int] = None         # 조직 컬렉션이 속한 팀(묶기용 — 팀 공통은 그 팀, 파트는 그 파트의 팀). 업무 컬렉션은 None
-    team: Optional[str] = None            # 그 팀 이름(고르는 창 1단계 팀 카드 제목)
+    display_name: str = ""                # 화면 이름 — 정책 = name, 시스템 = 끝의 " 시스템"을 뺀 이름
     owner_parts: list[OwnerPart] = []             # 이 영역에 직접 지정된 담당들(N개, 10/22 — 수정 창·파트별 담당 지정이 읽고 쓰는 값). 비교는 id로
     effective_owner_parts: list[OwnerPart] = []   # 실효 담당들 — 하위 영역에 자기 담당이 없으면 상위 담당 전부(수정 권한 규칙과 같음, 권한 판단용)
     # 옛 단일 칸(호환용 — 담당 중 id가 가장 작은 하나). 새 화면은 위 목록을 쓴다

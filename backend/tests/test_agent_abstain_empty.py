@@ -247,7 +247,7 @@ class TestAnswerShaping:
         monkeypatch.setattr(agent, "should_abstain", lambda *a: False)
         seen = {}
 
-        def build(results, policy_result, *a):
+        def build(results, policy_result, *a, **_kw):
             seen["ids"] = [n.item_id for n in policy_result.narratives]
             return "ctx"
         monkeypatch.setattr(agent, "_build_rrf_context", build)
@@ -285,31 +285,17 @@ class TestAnswerShaping:
         assert seen["ids"] == [1] and cc.list_answer["total"] == 1
 
     @pytest.mark.asyncio
-    async def test_org_space_scope_off_keeps_search_call_identical(self, monkeypatch):
-        """조직 컬렉션 자동 포함(chat.org_space_scope, #83)이 꺼져 있으면 지식 검색 호출이 예전과 똑같다(범위 인자 없음) —
-        켜져서 질문자 조직 컬렉션이 오면 그 id만 더해 넘긴다."""
-        self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[])
-        extra = AsyncMock(return_value=[])
-        monkeypatch.setattr(agent, "org_space_scope_extra_ids", extra)
-        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, asker_part_id=7)
-        assert extra.await_args.args[1:] == ("ns", 7)
-        assert "extra_ns_ids" not in agent.retrieval.search_knowledge.await_args.kwargs
-        extra.return_value = [100, 200]
-        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, asker_part_id=7)
-        assert agent.retrieval.search_knowledge.await_args.kwargs["extra_ns_ids"] == [100, 200]
-
-    @pytest.mark.asyncio
     async def test_knowledge_scope_option_adds_collections_without_duplicates(self, monkeypatch):
-        """검색 범위 실험 옵션(11/02, 측정 전용) — 주지 않으면 호출하지 않고(채팅 그대로), 주면 그 컬렉션을 더하되 질문자 조직과 겹치지 않게."""
+        """검색 범위 실험 옵션(11/02, 측정 전용) — 주지 않으면 호출하지 않고 범위 인자도 없다(채팅 그대로), 주면 그 컬렉션을 겹침 없이 더한다."""
         self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[])
-        scope = AsyncMock(return_value=[200, 300])
+        scope = AsyncMock(return_value=[200, 300, 200])
         monkeypatch.setattr(agent, "knowledge_scope_extra_ids", scope)
-        monkeypatch.setattr(agent, "org_space_scope_extra_ids", AsyncMock(return_value=[100, 200]))
-        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, asker_part_id=7)
+        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3)
         assert scope.await_count == 0
-        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, asker_part_id=7, knowledge_scope="linked")
+        assert "extra_ns_ids" not in agent.retrieval.search_knowledge.await_args.kwargs
+        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, knowledge_scope="linked")
         assert scope.await_args.args[1:3] == ("ns", "linked")
-        assert agent.retrieval.search_knowledge.await_args.kwargs["extra_ns_ids"] == [100, 200, 300]
+        assert agent.retrieval.search_knowledge.await_args.kwargs["extra_ns_ids"] == [200, 300]
 
     @pytest.mark.asyncio
     async def test_topic_question_keeps_search_results(self, monkeypatch):
@@ -524,3 +510,22 @@ async def test_slow_suggestion_is_skipped_not_delaying_answer(monkeypatch):
     events = await _run()
     assert not [e for e in events if e["type"] == "suggest"]
     assert events[-1]["type"] == "done"
+
+
+def test_context_budget_keeps_top_ranked_blocks_within_budget():
+    """문맥 예산(11/02 측정 옵션) — 한 줄 순위 위에서부터 예산 안만, 첫 블록은 늘, 보충은 남은 예산 안에서만. 예산 없으면 지금처럼 전부."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    r = [SimpleNamespace(id=i, content="가" * 400, heading_path=None) for i in (1, 2, 3)]
+    pol = SimpleNamespace(params=[], narratives=[])
+    exp = [{"id": 9, "content": "나" * 400}]
+    th = {"knowledge_high_score": 0.7, "knowledge_mid_score": 0.5}
+    with patch.object(agent.retrieval, "get_thresholds", return_value=th), \
+         patch.object(agent.retrieval, "is_adopted", return_value=True), \
+         patch.object(agent.retrieval, "relevance_score", return_value=0.8):
+        full = agent._build_rrf_context(r, pol, parent_expansions=exp)
+        assert full.count("--- 문서 #") == 4
+        small = agent._build_rrf_context(r, pol, parent_expansions=exp, budget=1000)
+        assert small.count("--- 문서 #") == 2 and "#1 " in small and "#9 " not in small   # 위에서부터 2개, 보충은 예산 밖
+        tiny = agent._build_rrf_context(r, pol, parent_expansions=exp, budget=10)
+        assert tiny.count("--- 문서 #") == 1                                              # 첫 블록은 늘

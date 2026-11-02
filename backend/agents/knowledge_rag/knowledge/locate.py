@@ -36,17 +36,16 @@ async def locate_for_user(text: str, user: dict, *, preset_namespace: Optional[s
     async with get_conn() as conn:
         cands = await locator.load_candidates(conn)
         profiles = await locator.load_profiles(conn, [c.id for c in cands])
-        team_id = await conn.fetchval("SELECT team_id FROM ops_part WHERE id = $1", user["part_id"]) if user.get("part_id") else None
     by_id = {c.id: c for c in cands}
     preset = next((c for c in cands if c.name == preset_namespace), None) if preset_namespace else None
     preset_missing = bool(preset_namespace) and preset is None   # 없는 이름·하위 컬렉션 — AI 판정으로 바뀐 걸 노란 줄로
     # LLM은 연결을 잡지 않은 채 — 판정이 수십 초 걸려도 연결 풀을 막지 않는다
     llm, model_tag, uses_creds = _locator_llm()
     llm_out = await locator.judge_llm(cands, text, llm, user_credentials=get_user_llm_credentials(user) if uses_creds else None,
-                                      profiles=profiles, user_team_id=team_id)
+                                      profiles=profiles)
     embedding = await locator.embed_head(text)
     async with get_conn() as conn:
-        r = await locator.finish(conn, cands, llm_out, embedding, preset_id=preset.id if preset else None, user_team_id=team_id,
+        r = await locator.finish(conn, cands, llm_out, embedding, preset_id=preset.id if preset else None,
                                  preset_missing=preset_missing, text=text)
         owners: dict[int, list[int]] = {}
         for row in await conn.fetch(f"SELECT namespace_id, part_id FROM {OWNER_ROWS_SQL} o WHERE namespace_id = ANY($1::int[])",

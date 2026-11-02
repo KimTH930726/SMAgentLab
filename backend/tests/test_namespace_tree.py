@@ -55,7 +55,7 @@ CREATE TABLE ops_namespace (
     id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, description TEXT DEFAULT '', kind TEXT NOT NULL DEFAULT 'domain',
     owner_part_id INTEGER REFERENCES ops_part(id) ON DELETE SET NULL,
     parent_id INTEGER REFERENCES ops_namespace(id) ON DELETE SET NULL,
-    owner_team_id INTEGER REFERENCES ops_team(id), area TEXT NOT NULL DEFAULT 'policy', code TEXT UNIQUE,
+    area TEXT NOT NULL DEFAULT 'policy', code TEXT UNIQUE,
     created_by_user_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE ops_namespace_owner (
     namespace_id INTEGER NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
@@ -290,6 +290,21 @@ class TestPolicyScope:
         db.db.execute("INSERT INTO ops_link (relation, status, from_type, from_key, to_type, to_key) "
                       "VALUES ('same_work', 'active', 'domain', '20', 'domain', '50')")
         assert await scope.policy_namespace_ids(db, "제휴서비스") == [20, 50]
+
+    @pytest.mark.asyncio
+    async def test_system_policy_scope_is_related_policies_only(self, db):
+        """시스템 컬렉션(#105)을 고르면 정책 = 관련 정책만(supports), 없으면 정책 없음 — "연결 없으면 전부"를 타지 않는다(11/02, #65 측정).
+        정책 컬렉션은 예전 규칙 그대로(연결 없으면 전부)."""
+        db.ns(20, "회원")
+        db.ns(40, "딜리버스")
+        db.db.execute("INSERT INTO ops_namespace (id, name, area) VALUES (70, '홈페이지 시스템', 'system'), (71, '앱 시스템', 'system')")
+        self._policy(db, 20, 1)
+        self._policy(db, 40, 2)
+        db.db.execute("INSERT INTO ops_link (relation, status, from_type, from_key, to_type, to_key) "
+                      "VALUES ('supports', 'active', 'domain', '70', 'domain', '20')")
+        assert await scope.policy_namespace_ids(db, "홈페이지 시스템") == [20]
+        assert await scope.policy_namespace_ids(db, "앱 시스템") == []
+        assert await scope.policy_namespace_ids(db, "딜리버스") == [40, 20]
 
     @pytest.mark.asyncio
     async def test_no_children_unchanged(self, db):

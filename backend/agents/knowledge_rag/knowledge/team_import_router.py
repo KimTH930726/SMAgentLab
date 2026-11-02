@@ -108,10 +108,10 @@ async def _batch_for(conn, batch_id: int, user: dict, *, write: bool = False) ->
 
 
 async def _allowed(conn, b: dict, user: dict, namespace_id: Optional[int], *, domain_only: bool = False) -> None:
-    """분류해 넣을 곳 검사 — 이 팀 범위이고 이 사람이 넣을 수 있는 곳(담당 규칙). 확정 때 다시 본다. domain_only = 업무 컬렉션만(공간 기본 위치)."""
+    """분류해 넣을 곳 검사 — 이 팀 범위이고 이 사람이 넣을 수 있는 곳(담당 규칙). 확정 때 다시 본다.
+    domain_only = 공간 기본 위치(후보가 모두 kind domain이라 범위 검사는 같고, 담당 없는 곳만 더 막는다)."""
     ctx = await ti.team_context(conn, b["team_id"])
-    if namespace_id not in ti.allowed_ids(ctx, b["team_id"]) or (
-            domain_only and namespace_id not in {c.id for c in ctx["cands"] if c.kind == "domain"}):
+    if namespace_id not in ti.allowed_ids(ctx):
         raise HTTPException(status_code=400, detail="이 팀이 넣을 수 있는 컬렉션이 아닙니다.")
     if domain_only and namespace_id in ctx["unowned"]:   # 담당은 AI도 기본값도 정할 수 없는 정보 — 관리자여도(리뷰 10/29 L2)
         raise HTTPException(status_code=400, detail="담당 파트가 없는 업무는 기본 위치로 둘 수 없어요 — 조직·권한에서 담당을 먼저 정해 주세요.")
@@ -180,11 +180,11 @@ async def get_batch(batch_id: int, user: dict = Depends(get_current_user)):
 
 
 async def _collections(conn, team_id: int, user: dict) -> list[dict]:
-    """이 팀 배치가 넣을 수 있는 곳 — 업무(팀 범위) + 그 팀 조직, 담당 파트 이름 · 이 사람이 넣을 수 있나(writable)."""
+    """이 팀 배치가 넣을 수 있는 곳 — 팀 범위 후보, 담당 파트 이름 · 이 사람이 넣을 수 있나(writable)."""
     ctx = await ti.team_context(conn, team_id)
     part_names = {r["id"]: r["name"] for r in await conn.fetch("SELECT id, name FROM ops_part WHERE id = ANY($1::int[])",
                                                                 sorted({p for s in ctx["owners"].values() for p in s}))}
-    allowed = ti.allowed_ids(ctx, team_id)
+    allowed = ti.allowed_ids(ctx)
     return [{"id": c.id, "label": c.label, "kind": c.kind, "area": c.area, "unowned": c.id in ctx["unowned"],
              "writable": edit_denied_reason(ctx["owners"].get(c.id, set()), user) is None,
              "parts": [part_names.get(x) for x in sorted(ctx["owners"].get(c.id, set()) & ctx["team_parts"])]}

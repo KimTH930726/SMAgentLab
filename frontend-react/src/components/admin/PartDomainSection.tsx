@@ -6,15 +6,14 @@ import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { getAllParts, setPartDomains } from '../../api/auth';
 import { getNamespacesDetail } from '../../api/namespaces';
-import { isOrgCollection, isSystemCollection } from '../../utils/collections';
+import { isSystemCollection } from '../../utils/collections';
 import { showConfirm, showError } from '../../store/useDialogStore';
 import type { NamespaceDetail, Part } from '../../types';
 import { directOwnerParts } from '../../utils/domainAccess';
 
-/** 담당을 줄 수 있는 컬렉션 — 업무 먼저, 그다음 시스템(조직 제외) */
+/** 담당을 줄 수 있는 컬렉션 — 정책 먼저, 그다음 시스템 */
 function assignable(list: NamespaceDetail[]): NamespaceDetail[] {
-  const ok = list.filter((d) => !isOrgCollection(d));
-  return [...ok.filter((d) => !isSystemCollection(d)), ...ok.filter(isSystemCollection)];
+  return [...list.filter((d) => !isSystemCollection(d)), ...list.filter(isSystemCollection)];
 }
 
 /**
@@ -28,7 +27,7 @@ export function PartDomainSection() {
   // 파트 이름·팀은 파트 목록에서, 누가 무엇을 맡았는지는 정책 컬렉션 목록(owner_parts) 하나에서 — 출처가 둘이면 이름 바꾼 직후 어긋났다(리뷰 M1)
   const { data: parts = [], isLoading: partsLoading } = useQuery({ queryKey: ['parts-all'], queryFn: getAllParts });
   const { data: allCollections = [], isLoading: nsLoading } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail });
-  // 담당 매핑 = 정책 컬렉션 + 시스템 컬렉션(11/02 — 같은 담당 연결). 폐지된 조직 컬렉션은 뺀다. 업무 먼저, 시스템은 뒤에 따로 묶는다
+  // 담당 매핑 = 정책 컬렉션 + 시스템 컬렉션(11/02 — 같은 담당 연결). 정책 먼저, 시스템은 뒤에 따로 묶는다
   const domains = useMemo(() => assignable(allCollections), [allCollections]);
   const [editing, setEditing] = useState<Part | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());

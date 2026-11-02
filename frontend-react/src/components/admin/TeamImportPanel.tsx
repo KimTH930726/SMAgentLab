@@ -279,7 +279,7 @@ function useNames(cols: ImportCollection[]) {
   return useMemo(() => new Map(cols.map((c) => [c.id, c])), [cols]);
 }
 
-/** 정책 컬렉션 / 시스템 컬렉션(11/02) — 둘 다 kind='domain', area로 가른다. 조직(org_space, 폐지)은 어느 쪽도 아니다 */
+/** 정책 컬렉션 / 시스템 컬렉션(11/02) — 둘 다 kind='domain', area로 가른다 */
 const isSystemCol = (c: ImportCollection | undefined) => !!c && c.kind === 'domain' && c.area === 'system';
 const isBizCol = (c: ImportCollection | undefined) => !!c && c.kind === 'domain' && c.area !== 'system';
 

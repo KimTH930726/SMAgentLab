@@ -74,7 +74,7 @@ def test_term_notes_never_break_the_answer(monkeypatch):
 
 
 def test_only_business_areas_are_read():
-    """조직 컬렉션(org_space — 이름이 내부 키)·시험 영역은 '다른 팀'으로 안 보인다(리뷰 M1): SQL이 kind domain만."""
+    """내부 자리(팀 적재 보관 등 — 이름이 내부 키)·시험 영역은 '다른 팀'으로 안 보인다(리뷰 M1): SQL이 kind domain만."""
     import asyncio
     seen = {}
 
