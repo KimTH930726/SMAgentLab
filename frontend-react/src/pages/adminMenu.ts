@@ -8,7 +8,7 @@ export type AdminMenuId =
   | 'domains' | 'org.collections'
   | 'k.policy' | 'k.docs' | 'k.sources' | 'k.glossary' | 'k.system'
   | 'org'
-  | 'q.stats' | 'q.corrections' | 'q.eval' | 'q.decisions'
+  | 'q.stats' | 'q.corrections' | 'q.feedback' | 'q.eval' | 'q.decisions'
   | 'voc'
   | 'sys.settings' | 'sys.cache';
 
@@ -59,6 +59,7 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
     { id: 'q.corrections', label: '정정 요청', hint: '채팅 "답변 틀림"·평가 게이트 "이상해요"·정책서 수정 제안이 모이는 곳 — 승인해야 검색에 반영', scoped: true },
     { id: 'q.eval', label: '평가 게이트', hint: '정답률 → 왜 틀렸나 → 개선 후보 → 사람 검수' },
     { id: 'q.decisions', label: 'AI 감사 로그', adminOnly: true, hint: 'AI가 정한 것(등록 위치·되묻기·원문 검사·컬렉션 제안·개선 추천)을 사람이 그대로 뒀나·바꿨나' },
+    { id: 'q.feedback', label: '사용자 피드백', adminOnly: true, hint: '오류 신고 · 기능 제안([피드백 보내기]) + 자동 감지(채팅 장애) — 선정·완료·중복·기각' },
   ] },
   { id: 'voc', label: 'VOC 이메일', items: [
     { id: 'voc', label: 'VOC 이메일', scoped: true, kinds: ['domain'] },

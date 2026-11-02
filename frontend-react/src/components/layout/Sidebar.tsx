@@ -36,6 +36,7 @@ import { healthCheck } from '../../api/client';
 import { changePassword, updateLLMCredentials, deleteLLMCredentials, updateConfluencePAT, deleteConfluencePAT, getParts } from '../../api/auth';
 import { getLLMConfig } from '../../api/llm';
 import { Modal } from '../ui/Modal';
+import { FeedbackButton } from '../feedback/UserFeedback';
 import { Button } from '../ui/Button';
 import { useThemeStore } from '../../store/useThemeStore';
 import logoSvg from '../../assets/logo.svg';
@@ -462,6 +463,7 @@ function UserSection() {
             <p className="text-xs font-medium text-slate-200 truncate">{user.username}</p>
             <p className="text-[10px] text-slate-500 truncate">{user.part ?? '소속 없음'}</p>
           </div>
+          <FeedbackButton />
           <button
             onClick={() => setShowSettings(true)}
             className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-700 transition-colors"

@@ -24,6 +24,7 @@ from service.chat.router import router as chat_router
 from agents.knowledge_rag.knowledge.router import router as knowledge_router
 from agents.knowledge_rag.knowledge.team_import_router import router as team_import_router
 from service.feedback.router import router as feedback_router
+from service.user_feedback.router import router as user_feedback_router
 from service.admin.router import router as admin_router
 from service.prompt.router import router as prompt_router
 from service.email_voc.router import router as email_voc_router
@@ -50,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 _ROUTERS = [
     auth_router, chat_router, team_import_router, knowledge_router,
-    feedback_router, admin_router,
+    feedback_router, user_feedback_router, admin_router,
     prompt_router,
     email_voc_router,
     policy_router,
@@ -1547,6 +1548,24 @@ async def _migrate_experiment_runner(conn) -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (team_id, root_url)
         )""")
+    # #103(10/30) 사용자 피드백 — 오류 신고·기능 제안(답 내용 오류는 정정 요청). 관리자 분류: 신규 → 선정·완료·중복·기각, 보낸 사람이 결과를 본다
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_user_feedback (
+            id SERIAL PRIMARY KEY,
+            kind TEXT NOT NULL CHECK (kind IN ('bug', 'idea')),
+            body TEXT NOT NULL,
+            page TEXT,
+            conversation_id INT,
+            reporter_user_id INT REFERENCES ops_user(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'planned', 'done', 'duplicate', 'declined')),
+            admin_note TEXT,
+            duplicate_of INT REFERENCES ops_user_feedback(id) ON DELETE SET NULL,
+            decided_by_user_id INT REFERENCES ops_user(id) ON DELETE SET NULL,
+            decided_at TIMESTAMPTZ,
+            reporter_seen_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_feedback_status ON ops_user_feedback (status, id DESC)")
     # 다시 시도할 페이지(실패·충돌) — 결과(last_result)는 매번 덮이므로 따로. 실패는 5회까지, 충돌은 풀릴 때까지(리뷰 M2)
     await conn.execute("ALTER TABLE rag_source_connection ADD COLUMN IF NOT EXISTS retry_pages JSONB NOT NULL DEFAULT '[]'::jsonb")
     # 처음 만든 표(SET NULL)도 CASCADE로 — 컬렉션이 지워지면 규칙도(NULL = 제외로 바뀌던 것, 리뷰 L2). 멱등

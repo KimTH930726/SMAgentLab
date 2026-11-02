@@ -14,6 +14,7 @@ import { CachePanel } from '../components/admin/CachePanel';
 import { VocEmailPanel } from '../components/admin/VocEmailPanel';
 import { PolicyPanel } from '../components/admin/policy/PolicyPanel';
 import { CorrectionReviewTab } from '../components/admin/CorrectionReviewTab';
+import { UserFeedbackPanel } from '../components/feedback/UserFeedback';
 import { useAuthStore } from '../store/useAuthStore';
 import { useNamespaceAccess } from '../utils/useNamespaceAccess';
 import { AdminCrumb } from '../components/layout/AdminCrumb';
@@ -99,6 +100,7 @@ export default function Admin() {
           {current === 'org'           && isAdmin && <OrgAccessPanel />}
           {current === 'q.stats'       && <StatsPanel onOpenCorrections={() => go('q.corrections')} />}
           {current === 'q.corrections' && <CorrectionsPanel />}
+          {current === 'q.feedback'    && <UserFeedbackPanel />}
           {current === 'q.eval'        && <EvaluationGate />}
           {current === 'q.decisions'   && isAdmin && <AiDecisions />}
           {current === 'voc'           && <VocEmailPanel />}
