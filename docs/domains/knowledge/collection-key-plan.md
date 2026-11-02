@@ -21,8 +21,8 @@
 | — | 정상 | `policy_item.source_key/system_key`, `rag_knowledge.confluence_page_id`, `rag_import_page.page_id`, `ops_prompt.func_key`, `eval_candidate.key` | 외부 시스템 id이거나 안정된 코드라 글자가 맞다 | — |
 
 ## 3. 이름 → id·코드 전환 단계 (승인 뒤)
-1. **API가 둘 다 받기**: `namespace` 인자에 이름·코드·id를 모두 받는다(`resolve_collection()` 한 곳에서 풀기). 화면·외부 호출이 깨지지 않는다.
-2. **화면을 id로**: 선택 상태(localStorage)와 API 호출을 id로 바꾼다. 옛 이름 값은 읽을 때 id로 바꿔 저장한다.
+1. ✅(11/02, v2.198 `core/collection_ref.py`) **API가 둘 다 받기**: `namespace` 인자에 이름·코드·id를 모두 받는다(`resolve_collection()` 한 곳에서 풀기). 화면·외부 호출이 깨지지 않는다.
+2. ✅(11/02, 선택 상태만) **화면을 id로**: 선택 상태(localStorage)를 {id, name}으로 — 옛 이름 값은 읽고 다시 쓸 때 바꾼다. API 호출을 id로 바꾸는 건 3단계와 같이(서버가 아직 이름 키라 지금 보내도 이득 없음).
 3. **캐시·기록을 id로**: 답변 캐시 키를 이름에서 id로 바꾼다. 질의 기록은 이미 정수 FK다.
 4. **골든셋을 코드로**: 29개 파일의 `ns`를 코드로 바꾸고, 읽을 때 이름도 허용한다(옛 파일 호환).
 5. **FK 보강**: §2-2·3·4.

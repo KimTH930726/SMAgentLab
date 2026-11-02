@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.197)
+# OpsLens 시스템 아키텍처 (v2.198)
 
 ## 개요
 
@@ -12,6 +12,13 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.198 (2026-11-02 밤, dev_0): **운영 지식은 시스템에만(D 이동) · 채팅 검색 범위 linked + 문맥 예산 1만 2천 자 · 컬렉션 키 전환 1~2단계.**
+  ① 정책 컬렉션 안 운영 지식 → 시스템(`scripts/move_knowledge_to_system.py`, 되돌리기 기록): 딜리버스 → 딜리버스 시스템(활성 39) · 제휴서비스 → 외부서비스 시스템(63) ·
+  온라인스토어(적재 페이지 넣은 곳 302 · 배치 기본 위치 1). 원문·조각 같은 컬렉션, 행 수 보존.
+  ② 채팅 기본: `agent.CHAT_KNOWLEDGE_SCOPE="linked"` · `CHAT_CONTEXT_BUDGET=12000` — 게이트 #71(업무지식 73.6→77.4%, 단정 오답 26.4→18.9%) · #72(정책서 84.9→86.0%, 12.0→11.5%).
+  ①과 한 묶음(옮긴 뒤 linked 없이 정책에서 물으면 운영 지식 검색 0%). 측정 스크립트는 플래그 없음 = 채팅과 같음(`--scope none` · `--context-budget 0` = 끔).
+  ③ 키 전환(domains/knowledge/collection-key-plan.md): 1단계 `core/collection_ref.py` 미들웨어 — API가 이름·업무 코드·id 모두 받음(쿼리·경로·JSON 본문의 namespace, 이름은 DB 안 봄).
+  2단계 고른 컬렉션 기억 = {id, name}(이름이 바뀌어도 따라감, 옛 값 읽음). 화면 API 호출을 id로 바꾸는 건 3단계(캐시 키)와 함께.
 - v2.197 (2026-11-02 밤, dev_0): **정책 / 시스템 컬렉션 — 조직 컬렉션 폐지 · 관련 정책 · 업무 코드 · 운영 지식은 시스템에만.** 기준: domains/knowledge/taxonomy-standard.md.
   ① #105 `ops_namespace.area`(policy | system — 시스템은 최상위만) · `code`(POL-xxx / SYS-xxx, 불변·유일) · 팀 적재 원문 초안 보관 자리 `stage:import`(kind staging, 목록·검색·쓰기 안 됨).
   시스템 ↔ 관련 정책 N:N(ops_link `supports`, `PUT /api/namespaces/{시스템}/supports`). 시스템 화면 이름은 키에서 " 시스템"을 뗀 것.
