@@ -20,7 +20,8 @@ export async function getNamespacesDetail(): Promise<NamespaceDetail[]> {
   }
 }
 
-export async function createNamespace(payload: { name: string; description: string }): Promise<void> {
+/** area: 'system' = 시스템 컬렉션(최상위만 — 상위 없음, 11/02). 없으면 정책 컬렉션 */
+export async function createNamespace(payload: { name: string; description: string; area?: 'system'; code?: string }): Promise<void> {
   try {
     return await apiFetch<void>('/namespaces', {
       method: 'POST',
@@ -46,6 +47,14 @@ export async function deleteNamespace(name: string): Promise<void> {
     console.error('deleteNamespace error:', err);
     throw err;
   }
+}
+
+/** 시스템이 관련된 정책 컬렉션 — 통째로 바꾼다(관리자만, 모르는 이름·시스템 이름이면 400, 11/02) */
+export async function setNamespaceSupports(name: string, policies: string[]): Promise<unknown> {
+  return apiFetch<unknown>(`/namespaces/${encodeURIComponent(name)}/supports`, {
+    method: 'PUT',
+    body: JSON.stringify({ policies }),
+  });
 }
 
 // 업무구분 CRUD·AI 추천 API는 10/22 업무구분 폐지로 삭제

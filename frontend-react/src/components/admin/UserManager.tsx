@@ -34,7 +34,7 @@ export function PartSection() {
     qc.invalidateQueries({ queryKey: ['teams'] });
     qc.invalidateQueries({ queryKey: ['parts-all'] });
     qc.invalidateQueries({ queryKey: ['parts-public'] });   // 사이드바 고르는 창의 "우리 팀" 묶음
-    // 팀·파트마다 조직 컬렉션이 따라 생기고·지워지고·이름이 바뀐다(#83) — 고르는 창·컬렉션 목록·권한 판단이 옛 값으로 남지 않게(리뷰)
+    // 컬렉션 목록의 담당 파트 이름·권한 판단이 옛 값으로 남지 않게(파트 이름 변경·삭제)
     qc.invalidateQueries({ queryKey: ['namespaces'] });
     qc.invalidateQueries({ queryKey: ['namespaces-detail'] });
   };
@@ -62,7 +62,7 @@ export function PartSection() {
   const askMove = async (p: Part, teamId: number) => {
     const to = teams.find((t) => t.id === teamId);
     if (!to || teamId === p.team_id || moveMutation.isPending) return;
-    if (!(await showConfirm(`'${p.name}'을(를) '${to.name}'(으)로 옮길까요? 사람·담당 업무는 그대로 따라가요.`, { confirmLabel: '옮기기', title: '파트 옮기기' }))) return;
+    if (!(await showConfirm(`'${p.name}'을(를) '${to.name}'(으)로 옮길까요? 사람·담당 컬렉션은 그대로 따라가요.`, { confirmLabel: '옮기기', title: '파트 옮기기' }))) return;
     moveMutation.mutate({ part: p, teamId });
   };
 
@@ -109,7 +109,7 @@ export function PartSection() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['parts-all'] });
       qc.invalidateQueries({ queryKey: ['users'] });
-      invalidateOrg();   // 팀별 파트 수 · 지워진 파트의 조직 컬렉션(#83)
+      invalidateOrg();   // 팀별 파트 수 · 지워진 파트의 담당
       setDeleteTarget(null);
       setDeleteError('');
     },
@@ -129,7 +129,7 @@ export function PartSection() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-200" title="팀 아래에 파트 — 파트를 누르면 사람·담당 업무 현황">팀 › 파트</h2>
+        <h2 className="text-lg font-semibold text-slate-200" title="팀 아래에 파트 — 파트를 누르면 사람·담당 컬렉션 현황">팀 › 파트</h2>
         <Button variant="primary" size="sm" onClick={() => { setTeamModal({ mode: 'create' }); setTeamName(''); setTeamError(''); }}>
           <Plus className="w-4 h-4" />
           팀
@@ -154,7 +154,7 @@ export function PartSection() {
                 <div className="flex-1 min-w-0">
                   {/* 이름 = 현황 트리 모달, 연필 = 이름 바꾸기 모달(10/21 — 그 자리에서 고치던 칸은 포커스가 빠지면 저장됐다) */}
                   <span className="flex items-center gap-1.5 group">
-                    <button onClick={() => setTreePart(p)} title="사람·담당 업무 현황 보기"
+                    <button onClick={() => setTreePart(p)} title="사람·담당 컬렉션 현황 보기"
                       className="font-semibold text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-300 hover:underline">
                       {p.name}
                     </button>
@@ -267,7 +267,7 @@ export function PartSection() {
         submitDisabled={!editingName.trim()}
         error={renameError}
       >
-        <label htmlFor="part-rename" className="block text-xs text-slate-400">새 이름 — 사람·담당 업무 연결은 그대로 유지돼요</label>
+        <label htmlFor="part-rename" className="block text-xs text-slate-400">새 이름 — 사람·담당 컬렉션 연결은 그대로 유지돼요</label>
         <input id="part-rename" autoFocus value={editingName} onChange={(e) => setEditingName(e.target.value)}
           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
       </FormModal>
@@ -392,14 +392,14 @@ export function UserSection() {
   const handleToggleRole = async (u: User) => {
     const toAdmin = u.role !== 'admin';
     const msg = toAdmin
-      ? `'${u.username}'을(를) 슈퍼어드민으로 바꿀까요? 모든 업무 컬렉션·사용자·시스템 설정을 바꿀 수 있게 됩니다.`
+      ? `'${u.username}'을(를) 슈퍼어드민으로 바꿀까요? 모든 정책 컬렉션·사용자·시스템 설정을 바꿀 수 있게 됩니다.`
       : `'${u.username}'의 슈퍼어드민 권한을 해제하고 일반 사용자로 바꿀까요?`;
     if (!(await showConfirm(msg, { tone: toAdmin ? 'danger' : 'warning', confirmLabel: '변경' }))) return;
     updateMutation.mutate({ id: u.id, payload: { role: toAdmin ? 'admin' : 'user' } });
   };
 
   const handleApprove = async (u: User) => {
-    if (!(await showConfirm(`'${u.username}'을(를) 일반 사용자로 승인할까요? 소속 파트가 담당하는 업무 컬렉션을 수정할 수 있게 됩니다.`, { confirmLabel: '승인' }))) return;
+    if (!(await showConfirm(`'${u.username}'을(를) 일반 사용자로 승인할까요? 소속 파트가 담당하는 정책·시스템 컬렉션을 수정할 수 있게 됩니다.`, { confirmLabel: '승인' }))) return;
     updateMutation.mutate({ id: u.id, payload: { role: 'user' } });
   };
 
@@ -522,7 +522,7 @@ export function UserSection() {
                     // 같은 토글을 쓰면 클릭 한 번에 관리자로 승격되는 사고가 날 수 있다.
                     <span className="inline-flex items-center gap-1.5">
                       <Badge color="slate">승인 대기</Badge>
-                      <button onClick={() => void handleApprove(u)} title="일반 사용자로 승인 — 소속 파트 담당 업무를 수정할 수 있게 됨"
+                      <button onClick={() => void handleApprove(u)} title="일반 사용자로 승인 — 소속 파트 담당 컬렉션을 수정할 수 있게 됨"
                         className="text-xs px-2 py-0.5 rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50 dark:border-indigo-500/50 dark:text-indigo-300 dark:hover:bg-indigo-900/30">
                         승인
                       </button>
@@ -602,7 +602,7 @@ export function UserSection() {
             {!editForm.part && <option value="" disabled>소속 없음</option>}
             {parts.map((p) => <option key={p.id} value={p.name}>{p.team ? `${p.team} · ${p.name}` : p.name}</option>)}
           </select>
-          <p className="text-xs text-slate-500 mt-1">소속 파트가 맡은 업무 컬렉션을 수정할 수 있게 돼요.</p>
+          <p className="text-xs text-slate-500 mt-1">소속 파트가 맡은 정책·시스템 컬렉션을 수정할 수 있게 돼요.</p>
         </div>
         {editUser?.id !== currentUser?.id && <label htmlFor="user-edit-active" className="flex items-center gap-2 text-sm text-slate-300">
           <input id="user-edit-active" type="checkbox" checked={editForm.is_active}

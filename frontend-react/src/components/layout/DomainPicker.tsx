@@ -11,7 +11,7 @@ import type { PendingTarget } from './collectionCards';
 
 /**
  * 보는 컬렉션 고르기(10/22, 컬렉션 설계 §15-11·§15-13) — 사이드바 칩 + 고르는 창(CollectionPickerModal, 지식 등록 넣을 곳 고르기와 같은 창).
- * 조직 컬렉션을 고르면 지식 문서·용어집·채팅이 그 컬렉션 하나(담을 수 없는 메뉴는 메뉴 노출 관리로 빠짐).
+ * 시스템 컬렉션을 고르면 운영 지식·용어집·채팅이 그 컬렉션 하나(담을 수 없는 메뉴는 메뉴 노출 관리로 빠짐, 11/02).
  * 카드 아래 "정정 대기 n ›"·"원문 확인 n ›" = 그 컬렉션을 고른 채 품질 › 정정 요청 / 정책서 › 원문 확인으로(10/27 사용자). 관리자·담당 파트만.
  */
 export function DomainPicker({ value, onChange, details, parts, userPart }: {

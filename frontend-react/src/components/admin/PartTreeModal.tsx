@@ -1,26 +1,28 @@
 import { useQuery } from '@tanstack/react-query';
-import { Building2, Layers, User as UserIcon } from 'lucide-react';
+import { Building2, Layers, Server, User as UserIcon } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
 import { getUsers } from '../../api/auth';
 import { getNamespacesDetail } from '../../api/namespaces';
-import { isBusinessCollection } from '../../utils/collections';
+import { isOrgCollection, isSystemCollection } from '../../utils/collections';
 import type { Part } from '../../types';
 import { directOwnerParts } from '../../utils/domainAccess';
 
 /**
- * 파트 현황 트리(10/21, 사용자 요청 — 조직은 트리가 직관적): 팀 › 파트 › 사람 · 담당 업무를 한눈에. 보기 전용 —
- * 사람 이동·승인은 조직·권한 › 사용자, 담당 변경은 조직·권한 › 담당 업무에서.
+ * 파트 현황 트리(10/21, 사용자 요청 — 조직은 트리가 직관적): 팀 › 파트 › 사람 · 담당 컬렉션을 한눈에. 보기 전용 —
+ * 사람 이동·승인은 조직·권한 › 사용자, 담당 변경은 조직·권한 › 담당 컬렉션에서.
  */
 export function PartTreeModal({ part, onClose }: { part: Part | null; onClose: () => void }) {
   const usersQ = useQuery({ queryKey: ['users'], queryFn: getUsers, enabled: !!part });
   const domainsQ = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, enabled: !!part });
   const users = usersQ.data ?? [];
-  const domains = (domainsQ.data ?? []).filter(isBusinessCollection);   // 담당 업무 = 업무 컬렉션만(자기 파트 조직 컬렉션은 빼고, #83)
+  const domains = (domainsQ.data ?? []).filter((d) => !isOrgCollection(d));   // 담당 = 업무 + 시스템 컬렉션(폐지된 조직 컬렉션은 빼고, 11/02)
   if (!part) return <Modal isOpen={false} onClose={onClose}>{null}</Modal>;
   const members = users.filter((u) => u.part === part.name);
   const pending = members.filter((u) => u.role === 'viewer').length;
-  const owned = domains.filter((d) => directOwnerParts(d).some((o) => o.id === part.id)).map((d) => d.name);   // 담당 N개(10/22) — 함께 담당도 포함
+  const ownedAll = domains.filter((d) => directOwnerParts(d).some((o) => o.id === part.id));   // 담당 N개(10/22) — 함께 담당도 포함
+  const owned = ownedAll.filter((d) => !isSystemCollection(d)).map((d) => d.name);
+  const ownedSystems = ownedAll.filter(isSystemCollection).map((d) => d.name);
 
   return (
     <Modal isOpen onClose={onClose} title={`${part.name} 현황`} maxWidth="max-w-lg">
@@ -55,12 +57,20 @@ export function PartTreeModal({ part, onClose }: { part: Part | null; onClose: (
             </div>
             <div>
               <div className="flex items-center gap-2 text-xs text-slate-400 mb-1">
-                <Layers className="w-3.5 h-3.5" />담당 업무 {owned.length}개
+                <Layers className="w-3.5 h-3.5" />담당 컬렉션 {owned.length}개
               </div>
               {owned.length ? (
                 <div className="flex flex-wrap gap-1">{owned.map((d) => <Badge key={d} color="emerald">{d}</Badge>)}</div>
-              ) : <p className="text-xs text-slate-500">없음 — 조직·권한 › 담당 업무에서 지정해요</p>}
+              ) : <p className="text-xs text-slate-500">없음 — 조직·권한 › 담당 컬렉션에서 지정해요</p>}
             </div>
+            {ownedSystems.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 text-xs text-slate-400 mb-1">
+                  <Server className="w-3.5 h-3.5" />담당 시스템 {ownedSystems.length}개
+                </div>
+                <div className="flex flex-wrap gap-1">{ownedSystems.map((d) => <Badge key={d} color="indigo">{d}</Badge>)}</div>
+              </div>
+            )}
           </div>
         </div>
       </div>

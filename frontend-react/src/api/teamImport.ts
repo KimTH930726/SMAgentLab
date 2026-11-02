@@ -55,7 +55,8 @@ export interface ImportPage {
 export interface ImportCollection {
   id: number;
   label: string;
-  kind: 'domain' | 'org_space';
+  kind: string;                    // domain(업무·시스템) — 옛 서버는 org_space(폐지 11/02)도 준다 → 화면에서 거른다
+  area?: 'policy' | 'system';    // 없으면 policy(옛 서버)
   unowned: boolean;
   writable: boolean;     // 이 사람이 넣을 수 있나(담당 규칙) — 확정 때 서버가 다시 본다
   parts: (string | null)[];

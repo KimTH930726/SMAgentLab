@@ -205,7 +205,7 @@ export function VocStatsPanel({ namespace }: { namespace: string }) {
   const inconsistentCount = meaningfulClusters.filter((c) => c.category_breakdown.length > 1).length;
 
   if (!namespace) {
-    return <div className="text-center py-10 text-slate-500">업무 컬렉션을 선택하세요.</div>;
+    return <div className="text-center py-10 text-slate-500">정책 컬렉션을 선택하세요.</div>;
   }
 
   return (

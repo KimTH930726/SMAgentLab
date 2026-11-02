@@ -94,7 +94,7 @@ export async function createPart(name: string, teamId?: number): Promise<Part> {
   });
 }
 
-/** 파트를 다른 팀으로(관리자) — 사람·담당 업무는 파트에 붙어 같이 간다 */
+/** 파트를 다른 팀으로(관리자) — 사람·담당 컬렉션은 파트에 붙어 같이 간다 */
 export async function setPartTeam(partId: number, teamId: number): Promise<Part> {
   return apiFetch<Part>(`/auth/parts/${partId}/team`, { method: 'PUT', body: JSON.stringify({ team_id: teamId }) });
 }
@@ -128,7 +128,7 @@ export async function deletePart(partId: number): Promise<void> {
   return apiFetch<void>(`/auth/parts/${partId}`, { method: 'DELETE' });
 }
 
-/** 파트의 담당 업무를 통째로 저장(관리자) — 한 트랜잭션, 없는 영역이 하나라도 있으면 아무것도 안 바뀜 */
+/** 파트의 담당 컬렉션을 통째로 저장(관리자) — 한 트랜잭션, 없는 영역이 하나라도 있으면 아무것도 안 바뀜 */
 export async function setPartDomains(partId: number, domains: string[]): Promise<{ part_id: number; domains: string[] }> {
   return apiFetch(`/auth/parts/${partId}/domains`, { method: 'PUT', body: JSON.stringify({ domains }) });
 }

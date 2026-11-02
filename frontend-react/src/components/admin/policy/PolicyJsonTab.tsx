@@ -17,7 +17,7 @@ export function PolicyJsonTab({ onOpenCorrections }: { onOpenCorrections: () => 
   const { selectedNs } = useNamespaceAccess();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
-  // ns = 그 파일을 비교한 업무 컬렉션 — 비교 중에 영역을 바꾸면 늦게 온 결과를 버린다(10/21 리뷰 L3)
+  // ns = 그 파일을 비교한 정책 컬렉션 — 비교 중에 영역을 바꾸면 늦게 온 결과를 버린다(10/21 리뷰 L3)
   const [file, setFile] = useState<{ name: string; content: string; ns: string } | null>(null);
   const [preview, setPreview] = useState<PolicyJsonPreview | null>(null);
   const [result, setResult] = useState<PolicyJsonApplyResult | null>(null);
@@ -85,7 +85,7 @@ export function PolicyJsonTab({ onOpenCorrections }: { onOpenCorrections: () => 
     }
   };
 
-  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 업무 컬렉션을 고르세요.</p>;
+  if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 정책 컬렉션을 고르세요.</p>;
 
   return (
     <div className="space-y-4 max-w-3xl">

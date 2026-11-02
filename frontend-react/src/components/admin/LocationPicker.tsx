@@ -5,6 +5,7 @@ import { locateKnowledge } from '../../api/knowledge';
 import { getParts } from '../../api/auth';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { canEditDomain, effectiveOwnerParts } from '../../utils/domainAccess';
+import { isOrgCollection, isSystemCollection } from '../../utils/collections';
 import { CollectionPickerModal } from '../layout/CollectionPickerModal';
 import type { ChosenLocation, LocateCollection, LocateResult, LocationChoice, OverrideReason } from '../../types';
 
@@ -62,13 +63,18 @@ export function LocationPicker({ text, preset, onChange }: {
   const head = text.slice(0, HEAD);
   const { data: r, isLoading, isError, error } = useQuery({ ...locateQuery(head, preset), enabled: head.trim().length > 0 });
 
-  // 창에서 직접 고르기용 — 쓸 수 있는지는 지식 문서 화면과 같은 규칙
+  // 창에서 직접 고르기용 — 운영 지식은 시스템 컬렉션에만(11/02, 정책서는 정책서 가져오기로). 쓸 수 있는지는 운영 지식 화면과 같은 규칙
   const all: LocateCollection[] = useMemo(() => nsDetails
-    .filter((d) => d.kind !== 'policy_test')
+    .filter((d) => isSystemCollection(d) && !isOrgCollection(d))
     .map((d) => ({
-      name: d.name, label: d.display_name || d.name, kind: d.kind === 'org_space' ? 'org_space' : 'domain',
+      name: d.name, label: d.display_name || d.name, kind: 'domain', area: 'system',
       writable: canEditDomain(user, effectiveOwnerParts(d)),
     })), [nsDetails, user]);
+  // 시스템인지 — 판정 결과(서버)에 area가 없어도 컬렉션 목록으로 안다(11/02)
+  const systemNames = useMemo(() => new Set(nsDetails.filter(isSystemCollection).map((d) => d.name)), [nsDetails]);
+  const disp = useMemo(() => new Map(nsDetails.map((d) => [d.name, d.display_name || d.name])), [nsDetails]);
+  const label = (c: Pick<LocateCollection, 'name' | 'label' | 'area'>) =>
+    (c.area === 'system' || systemNames.has(c.name) ? `시스템 · ${disp.get(c.name) ?? c.label}` : c.label);
   const writableOf = useMemo(() => new Map(all.map((c) => [c.name, c.writable])), [all]);
 
   const [picked, setPicked] = useState<{ c: LocateCollection; choice: LocationChoice } | null>(null);
@@ -100,7 +106,7 @@ export function LocationPicker({ text, preset, onChange }: {
         다른 곳…
       </button>
       <CollectionPickerModal isOpen={pickerOpen} onClose={() => setPickerOpen(false)} title="어디에 넣을까요?" value={picked?.c.name ?? ''}
-        details={nsDetails} parts={parts} userPart={user?.part}
+        details={nsDetails} parts={parts} userPart={user?.part} only="system"
         note={(d) => (writableOf.get(d.name) === false ? '승인 요청' : undefined)}
         onChoose={(name) => {
           const c = all.find((x) => x.name === name);
@@ -116,7 +122,7 @@ export function LocationPicker({ text, preset, onChange }: {
         <Warn>넣을 곳을 AI가 보지 못했어요{error ? ` — ${(error as Error).message}` : ''}. 직접 골라 주세요.</Warn>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-slate-400">넣을 곳</span>
-          {picked ? <Chip c={picked.c} selected /> : <span className="text-xs text-slate-500">없음</span>}
+          {picked ? <Chip c={picked.c} label={label} selected /> : <span className="text-xs text-slate-500">없음</span>}
           {select}
         </div>
         {blocked && <p className="text-xs text-amber-700 dark:text-amber-300">AI 판정 없이는 담당 파트인 곳에만 넣을 수 있어요.</p>}
@@ -131,14 +137,14 @@ export function LocationPicker({ text, preset, onChange }: {
       {r.fallback && <Warn>{r.fallback}</Warn>}
       {r.doc_type !== '지식 문서' && (
         <p className="text-xs text-slate-400" title="정책서는 정책서 메뉴의 가져오기, 시스템 정보는 아직 등록 경로가 없어요">
-          {r.doc_type}처럼 보여요 — 그래도 지식 문서로 넣을 수 있어요.
+          {r.doc_type}처럼 보여요 — 그래도 운영 지식으로 넣을 수 있어요.
         </p>
       )}
 
       {r.preset ? (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-slate-400">넣을 곳</span>
-          <Chip c={picked?.c ?? r.preset} selected />
+          <Chip c={picked?.c ?? r.preset} label={label} selected />
           {r.suggest_move && r.ai && !isPicked(r.ai) && (
             <button type="button" onClick={() => setPicked({ c: r.ai!, choice: 'option' })}
               className="text-xs text-indigo-600 hover:text-indigo-500 dark:text-indigo-300 dark:hover:text-indigo-200">
@@ -154,14 +160,14 @@ export function LocationPicker({ text, preset, onChange }: {
             {r.ask ? (
               <>
                 {r.options.map((c) => (
-                  <Chip key={c.name} c={c} selected={isPicked(c)}
+                  <Chip key={c.name} c={c} label={label} selected={isPicked(c)}
                     onClick={() => setPicked({ c, choice: c.name === r.proposed?.name ? 'accept' : 'option' })} />
                 ))}
-                {picked && !r.options.some(isPicked) && <Chip c={picked.c} selected />}
+                {picked && !r.options.some(isPicked) && <Chip c={picked.c} label={label} selected />}
               </>
             ) : (
               <>
-                {picked && <Chip c={picked.c} selected />}
+                {picked && <Chip c={picked.c} label={label} selected />}
                 {r.confident && picked?.choice === 'accept' && <span className="text-[11px] text-emerald-600 dark:text-emerald-400">AI 확신</span>}
               </>
             )}
@@ -169,7 +175,7 @@ export function LocationPicker({ text, preset, onChange }: {
           </div>
         </div>
       )}
-      <Reasons r={r} />
+      <Reasons r={r} label={label} />
       {overriding && (
         <div data-testid="override-reason" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 dark:border-amber-700/50 dark:bg-amber-900/20">
           <span className="text-xs text-amber-800 dark:text-amber-300">AI 추천('{recommended!.label}')과 다른 곳이에요 — 이유를 고르면 AI가 배워요</span>
@@ -197,9 +203,9 @@ export function LocationPicker({ text, preset, onChange }: {
 }
 
 /** 추천 이유 — 왜 그곳인지 보이게(10/23 사용자: 다른 곳을 고를 때 판단 근거 · 틀렸을 때 자체 개선 재료). 두 신호를 따로 보여 준다. */
-function Reasons({ r }: { r: LocateResult }) {
+function Reasons({ r, label }: { r: LocateResult; label: (c: LocateCollection) => string }) {
   const top = r.neighbors[0];
-  const nb = r.neighbors.length ? r.neighbors.map((n) => `${n.kind === 'org_space' ? `조직 · ${n.label}` : n.label} ${n.n}`).join(' · ') : '없음';
+  const nb = r.neighbors.length ? r.neighbors.map((n) => `${label(n)} ${n.n}`).join(' · ') : '없음';
   const verdict = r.preset
     ? (r.suggest_move ? 'AI와 비슷한 지식이 모두 다른 곳을 가리켜요 — 옮길지 골라 주세요' : '컬렉션 화면에서 정한 곳이에요 — AI는 검사만 했어요')
     : r.confident ? 'AI 판단과 비슷한 지식이 같은 곳을 가리켜 확신해요'
@@ -207,7 +213,7 @@ function Reasons({ r }: { r: LocateResult }) {
         : '근거가 약해요 — 맞는 곳을 골라 주세요';
   return (
     <div data-testid="location-reasons" className="rounded-md bg-slate-800/60 px-2.5 py-1.5 text-[11px] text-slate-400 space-y-0.5">
-      <p><span className="text-slate-500">AI 판단</span> · {r.ai ? <b className="font-medium text-slate-300">{r.ai.kind === 'org_space' ? `조직 · ${r.ai.label}` : r.ai.label}</b> : '고르지 못함'}{r.reason && ` — ${r.reason}`}</p>
+      <p><span className="text-slate-500">AI 판단</span> · {r.ai ? <b className="font-medium text-slate-300">{label(r.ai)}</b> : '고르지 못함'}{r.reason && ` — ${r.reason}`}</p>
       <p><span className="text-slate-500">비슷한 지식 {r.neighbor_total}건</span> · {nb}</p>
       <p className={r.confident ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-300'}>{verdict}</p>
     </div>
@@ -226,11 +232,11 @@ function Warn({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Chip({ c, selected, onClick }: { c: LocateCollection; selected?: boolean; onClick?: () => void }) {
+function Chip({ c, label: labelOf, selected, onClick }: { c: LocateCollection; label: (c: LocateCollection) => string; selected?: boolean; onClick?: () => void }) {
   const cls = clsx('text-xs px-2 py-0.5 rounded-md border',
     selected ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:border-indigo-400 dark:bg-indigo-950/40 dark:text-indigo-300'
       : 'border-slate-600 text-slate-300 hover:border-indigo-500 dark:hover:border-indigo-400');
-  const label = c.kind === 'org_space' ? `조직 · ${c.label}` : c.label;
+  const label = labelOf(c);
   if (!onClick) return <span className={cls}>{label}</span>;
   return <button type="button" onClick={onClick} aria-pressed={!!selected} className={cls}>{label}</button>;
 }

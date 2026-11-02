@@ -109,7 +109,7 @@ export function EvidenceView({ namespace, initialQuestion = '', highlightId, can
           <div className="rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 space-y-2" data-testid="evidence-next">
             <p className="text-xs font-semibold text-slate-300">다음에 할 일</p>
             <ul className="text-xs text-slate-400 space-y-1 list-disc pl-4">
-              <li>맞는 근거가 아래쪽에 있거나 없으면 — 지식·정책 내용에 질문에 쓰는 말이 있는지 보고 고치기(지식 문서 · 정책서)</li>
+              <li>맞는 근거가 아래쪽에 있거나 없으면 — 지식·정책 내용에 질문에 쓰는 말이 있는지 보고 고치기(운영 지식 · 정책서)</li>
               {canFlag && <li>엉뚱한 지식이 위에 있으면 — 그 줄의 [이상해요] → 정정 요청으로</li>}
               {isAdmin && <li>이 질문을 계속 지켜보려면 — 맞는 정책에 [이게 맞는 답] 표시 → [골든셋에 추가](다음 측정부터 이 질문이 맞는지 채점)</li>}
             </ul>

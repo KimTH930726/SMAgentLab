@@ -153,8 +153,8 @@ test('AI가 본 근거(지식 상세) — 이 지식의 순위 표시 · 화면 
   }
 });
 
-/** 지식 문서 화면으로 — 보는 컬렉션을 고른 뒤 */
+/** 운영 지식 화면으로 — 보는 컬렉션을 고른 뒤 */
 async function nav(page: import('@playwright/test').Page, ns: string) {
-  await goAdmin(page, '지식', '지식 문서');
+  await goAdmin(page, '지식', '운영 지식');
   await selectDomain(page, ns);
 }

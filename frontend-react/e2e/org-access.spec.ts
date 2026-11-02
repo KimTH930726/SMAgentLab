@@ -3,12 +3,12 @@ import { goAdmin } from './admin-nav';
 import { psql } from './v0-fixture';
 import { loginAdmin } from './auth';
 
-// 시스템·권한 › 조직·권한(10/22) — 서브탭 [사용자|팀·파트|담당 업무], 팀 › 파트 트리에서 팀 만들기 → 그 팀 아래 파트 → 파트가 있는 팀은 삭제가 막힌다.
+// 시스템·권한 › 조직·권한(10/22) — 서브탭 [사용자|팀·파트|담당 컬렉션], 팀 › 파트 트리에서 팀 만들기 → 그 팀 아래 파트 → 파트가 있는 팀은 삭제가 막힌다.
 // 화면 문구가 아니라 DB 값으로 전/후를 본다. 임시 팀·파트는 E2E 접두사로 만들고 끝나면 지운다.
 const TEAM = 'E2E팀';
 const PART = 'E2E팀파트';
 const cleanup = () => {
-  // 팀·파트의 조직 컬렉션(v2.160)을 먼저 — 파트만 지우면 컬렉션이 담당 없이 남고, 팀은 FK(owner_team_id)로 안 지워진다
+  // 옛 조직 컬렉션(v2.160, 11/02 폐지 — DB에서 지워지기 전 서버가 아직 만들 수 있음)을 먼저 — 남으면 팀이 FK(owner_team_id)로 안 지워진다
   psql(`DELETE FROM ops_namespace WHERE kind = 'org_space' AND (name IN (SELECT 'org:part:' || id FROM ops_part WHERE name = '${PART}')
         OR owner_team_id IN (SELECT id FROM ops_team WHERE name = '${TEAM}'))`);
   psql(`DELETE FROM ops_part WHERE name = '${PART}'`);
@@ -17,7 +17,7 @@ const cleanup = () => {
 
 test.afterEach(cleanup);
 
-test('조직·권한 — 팀 만들기 · 팀 아래 파트 · 파트 있는 팀 삭제 막힘 · 담당 업무 트리', async ({ page }) => {
+test('조직·권한 — 팀 만들기 · 팀 아래 파트 · 파트 있는 팀 삭제 막힘 · 담당 컬렉션 트리', async ({ page }) => {
   cleanup();
   await loginAdmin(page);
   await goAdmin(page, '시스템·권한', '조직·권한');
@@ -46,22 +46,23 @@ test('조직·권한 — 팀 만들기 · 팀 아래 파트 · 파트 있는 팀
   expect(psql(`SELECT count(*) FROM ops_team WHERE name = '${TEAM}'`)).toBe('1');
   expect(psql(`SELECT count(*) FROM ops_part p JOIN ops_team t ON t.id = p.team_id WHERE p.name = '${PART}' AND t.name = '${TEAM}'`)).toBe('1');
 
-  // ③-1 같은 화면 그대로(새로고침 없이) 고르는 창 [조직] 탭에 방금 만든 팀이 보인다 — 저장 뒤 컬렉션 목록 갱신(리뷰 10/22: 예전엔 안 보였다)
+  // ③-1 조직 컬렉션 폐지(11/02) — 팀·파트를 만들어도 고르는 창엔 [업무 | 시스템]뿐, 방금 만든 팀이 컬렉션으로 안 보인다
   await page.locator('#sidebar-domain').click();
-  await page.getByRole('tab', { name: '조직' }).click();
-  // 모달은 dialog 역할이 없어 뒤 화면 버튼(E2E팀 이름 바꾸기 등)도 잡힌다 — 조직 탭 패널 안으로 좁혀야 실제로 검증된다(재리뷰)
-  await expect(page.locator('#picker-panel-org').getByRole('button', { name: new RegExp(`^${TEAM}`) })).toBeVisible();
+  await expect(page.getByRole('tab', { name: '시스템' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: '조직' })).toHaveCount(0);
+  await page.getByRole('tab', { name: '시스템' }).click();
+  await expect(page.locator('#picker-panel-system').getByRole('button', { name: new RegExp(`^(팀 공통 · )?${TEAM}`) })).toHaveCount(0);
   await page.keyboard.press('Escape');
 
-  // ④ 담당 업무 탭 — 팀 줄 아래 파트(트리)
-  await page.getByRole('tab', { name: '담당 업무' }).click();
+  // ④ 담당 컬렉션 탭 — 팀 줄 아래 파트(트리)
+  await page.getByRole('tab', { name: '담당 컬렉션' }).click();
   await expect(page.getByRole('cell', { name: TEAM, exact: true })).toBeVisible();
   await expect(page.getByRole('cell', { name: PART, exact: true })).toBeVisible();
 });
 
 test('관리자 메뉴 — 지금 화면이 든 묶음도 접힌다', async ({ page }) => {
   await loginAdmin(page);
-  await goAdmin(page, '지식', '지식 문서');
+  await goAdmin(page, '지식', '운영 지식');
   const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
   const header = nav.getByRole('button', { name: '지식', exact: true });
   await expect(header).toHaveAttribute('aria-expanded', 'true');

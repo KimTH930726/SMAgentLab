@@ -19,7 +19,7 @@ test('보는 컬렉션 — 테스트 컬렉션 숨김 · 고르면 칩 반영 ·
   const chip = domainSelect(page);
   // 지금 고른 값과 다른 일반 업무를 고른다 — 같으면 바뀐 게 안 보이고, 경로 표시줄 버튼과 이름이 겹친다(리뷰)
   const current = (await chip.innerText()).trim().replace(/'/g, "''");
-  const target = psql(`SELECT name FROM ops_namespace WHERE kind = 'domain' AND name <> '${current}' ORDER BY id LIMIT 1`);
+  const target = psql(`SELECT name FROM ops_namespace WHERE kind = 'domain' AND area = 'policy' AND name <> '${current}' ORDER BY id LIMIT 1`);   // 정책 탭 카드(시스템은 [시스템] 탭)
   expect(target).not.toBe('');
 
   await chip.click();
@@ -46,8 +46,8 @@ test('고르는 창 — 카드 아래 "정정 대기 n"·"원문 확인 n" = DB(
   test.setTimeout(90_000);   // 컬렉션 14개를 하나씩 대조
   const rows = psql(`SELECT n.name, COUNT(*) FILTER (WHERE i.kind <> 'source_check'), COUNT(*) FILTER (WHERE i.kind = 'source_check')
                      FROM ops_namespace n JOIN ops_improvement_item i ON i.namespace_id = n.id AND i.status = 'pending'
-                     WHERE n.kind = 'domain' GROUP BY n.name`).split('\n').filter(Boolean).map((l) => l.split('|'));
-  const empty = psql(`SELECT n.name FROM ops_namespace n WHERE n.kind = 'domain' AND NOT EXISTS
+                     WHERE n.kind = 'domain' AND n.area = 'policy' GROUP BY n.name`).split('\n').filter(Boolean).map((l) => l.split('|'));
+  const empty = psql(`SELECT n.name FROM ops_namespace n WHERE n.kind = 'domain' AND n.area = 'policy' AND NOT EXISTS
                       (SELECT 1 FROM ops_improvement_item i WHERE i.namespace_id = n.id AND i.status = 'pending'
                        ) ORDER BY n.id LIMIT 1`);
   await loginAdmin(page);
@@ -64,10 +64,10 @@ test('고르는 창 — 카드 아래 "정정 대기 n"·"원문 확인 n" = DB(
 test('고르는 창 — "정정 대기 n ›"를 누르면 그 컬렉션을 고른 채 정정 요청, "원문 확인 n ›"는 정책서 원문 확인 탭', async ({ page }) => {
   test.setTimeout(90_000);
   const corrNs = psql(`SELECT n.name FROM ops_namespace n JOIN ops_improvement_item i ON i.namespace_id = n.id AND i.status = 'pending'
-                       AND i.kind <> 'source_check' WHERE n.kind = 'domain' ORDER BY n.id LIMIT 1`);
+                       AND i.kind <> 'source_check' WHERE n.kind = 'domain' AND n.area = 'policy' ORDER BY n.id LIMIT 1`);
   const srcNs = psql(`SELECT n.name FROM ops_namespace n JOIN ops_improvement_item i ON i.namespace_id = n.id AND i.status = 'pending'
-                      AND i.kind = 'source_check' WHERE n.kind = 'domain' ORDER BY n.id LIMIT 1`);
-  test.skip(!corrNs && !srcNs, '처리 전 건이 있는 업무 컬렉션 없음');
+                      AND i.kind = 'source_check' WHERE n.kind = 'domain' AND n.area = 'policy' ORDER BY n.id LIMIT 1`);
+  test.skip(!corrNs && !srcNs, '처리 전 건이 있는 정책 컬렉션 없음');
   await loginAdmin(page);
   const chip = domainSelect(page);
   if (corrNs) {

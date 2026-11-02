@@ -9,6 +9,19 @@ export function psql(sql: string): string {
     { encoding: 'utf-8' }).trim();
 }
 
+/** 임시 시스템 컬렉션(11/02 — 정책 컬렉션과 같은 kind='domain', area='system', 최상위만). 지울 땐 dropSystem. */
+export function createSystem(name: string): number {
+  dropSystem(name);
+  return Number(psql(`INSERT INTO ops_namespace (name, description, kind, area) VALUES ('${name}', 'e2e', 'domain', 'system') RETURNING id`).split(/\s+/)[0]);
+}
+
+/** 임시 시스템 컬렉션 + 받침 연결(ops_link 'supports') 지우기 */
+export function dropSystem(name: string) {
+  psql(`DELETE FROM ops_link WHERE relation = 'supports' AND from_type = 'domain'
+        AND from_key IN (SELECT id::text FROM ops_namespace WHERE name = '${name}')`);
+  psql(`DELETE FROM ops_namespace WHERE name = '${name}'`);
+}
+
 export interface FixturePolicy { name: string; path: string[]; body: string; remark?: string }
 
 // 적재기(scripts/load_policy_v0.py)와 같은 규칙으로 넣는다 — 머리 붙인 임베딩(chunk_embed_text), pipeline_version v0_whole

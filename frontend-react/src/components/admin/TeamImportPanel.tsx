@@ -11,7 +11,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
 
 /**
- * 컨플 공간·하위 전체 넣기(팀 적재, 10/29 목업 Qnt3dJ5agwBhczty75h6Nc v8 · confluence-curation-layer-design §12) — 지식 문서 › 등록 › URL/Confluence 안.
+ * 컨플 공간·하위 전체 넣기(팀 적재, 10/29 목업 Qnt3dJ5agwBhczty75h6Nc v8 · confluence-curation-layer-design §12) — 운영 지식 › 등록 › URL/Confluence 안.
  * 등록 창구는 하나(10/20 결정) — 따로 메뉴를 두지 않는다. 시작(SpaceImportStart)은 URL 폼 안, 배치(ImportBatches)는 등록 탭 아래.
  * 수집 대상 → 분류 미리보기(확정 전엔 적재 안 됨) → **묶음 연결**(10/30: 묶음마다 컬렉션 하나 + 하위 예외, [연결 · 적재] 한 번) → 게이트 · 롤백.
  * 페이지 단위 검토·표본은 [자세히] 아래에만 남음(묶음 연결은 표본을 쓰지 않는다 — 품질은 적재 뒤 평가 게이트로).
@@ -27,15 +27,15 @@ export function useImportTodo() {
   return data.reduce((a, b) => a + (b.todo ?? 0), 0);
 }
 
-/** 지식 › 데이터 소스(10/30) — 팀 단위(보는 컬렉션과 무관). 일반 사용자는 서버가 자기 팀 배치만 준다, 관리자는 팀을 고른다. 주소 ?batch=id로 바로 연다 */
+/** 지식 › 소스 연결(10/30) — 팀 단위(보는 컬렉션과 무관). 일반 사용자는 서버가 자기 팀 배치만 준다, 관리자는 팀을 고른다. 주소 ?batch=id로 바로 연다 */
 export function DataSources() {
   const [params, setParams] = useSearchParams();
   const openId = params.get('batch') ? Number(params.get('batch')) : null;
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-lg font-semibold text-slate-100">데이터 소스</h2>
-        <p className="text-xs text-slate-400" title="컨플 공간을 묶음(상위 페이지) 단위로 컬렉션에 연결 — 연결 규칙은 다음 동기화가 새 페이지에도 씀. 새 공간 연결은 지식 문서 › 지식 등록 › URL/Confluence › 공간·하위 전체 넣기">
+        <h2 className="text-lg font-semibold text-slate-100">소스 연결</h2>
+        <p className="text-xs text-slate-400" title="컨플 공간을 묶음(상위 페이지) 단위로 컬렉션에 연결 — 연결 규칙은 다음 동기화가 새 페이지에도 씀. 새 공간 연결은 운영 지식 › 지식 등록 › URL/Confluence › 공간·하위 전체 넣기">
           팀 단위 · 보는 컬렉션과 무관 · 새 공간은 [지식 등록 › 공간·하위 전체 넣기]로 시작</p>
       </div>
       <Connections />
@@ -100,7 +100,7 @@ function Connections() {
               <td className="px-3 py-2 text-xs text-slate-300">{summary(c.last_result)}
                 {c.retry_pages.some((p) => p.why === 'conflict') && (
                   <span className="block text-amber-700 dark:text-amber-300" data-testid="connection-conflicts"
-                    title="우리 쪽에서 사람이 고친 조각이 있어 덮지 않은 페이지 — 지식 문서에서 해당 페이지를 확인해 주세요. 다음 동기화 때 다시 시도">
+                    title="우리 쪽에서 사람이 고친 조각이 있어 덮지 않은 페이지 — 운영 지식에서 해당 페이지를 확인해 주세요. 다음 동기화 때 다시 시도">
                     확인 필요 {c.retry_pages.filter((p) => p.why === 'conflict').length}: {c.retry_pages.filter((p) => p.why === 'conflict').slice(0, 3).map((p) => p.title ?? p.page_id).join(', ')}
                   </span>
                 )}
@@ -195,7 +195,7 @@ export function SpaceImportStart({ url, onStarted, onCancel }: { url: string; on
           </select>
         </div>
         <p className="text-[11px] text-slate-500" title="업무가 여럿 섞인 공간(예: 온라인서비스 = 딜리버스 + 제휴서비스)은 비워 둔다">
-          공간 전체가 한 업무면 고른다 — 업무 페이지는 여기로, AI는 예외(조직 지식 · 확신하는 다른 곳)만 묻는다
+          공간 전체가 한 시스템이면 고른다 — 페이지는 여기로, AI는 예외(확신하는 다른 시스템)만 묻는다
         </p>
       </div>
       <div className="flex justify-end gap-2">
@@ -279,6 +279,10 @@ function useNames(cols: ImportCollection[]) {
   return useMemo(() => new Map(cols.map((c) => [c.id, c])), [cols]);
 }
 
+/** 정책 컬렉션 / 시스템 컬렉션(11/02) — 둘 다 kind='domain', area로 가른다. 조직(org_space, 폐지)은 어느 쪽도 아니다 */
+const isSystemCol = (c: ImportCollection | undefined) => !!c && c.kind === 'domain' && c.area === 'system';
+const isBizCol = (c: ImportCollection | undefined) => !!c && c.kind === 'domain' && c.area !== 'system';
+
 function CollectionSelect({ cols, value, onChange, placeholder = '분류할 곳', disabled, emptyText, noEmpty, aiId }: {
   cols: ImportCollection[]; value: number | null; onChange: (id: number | null) => void; placeholder?: string; disabled?: boolean;
   emptyText?: string;   // 빈 값 보기 글자(기본 "— 분류할 곳 —") — 묶음 위치에서 줄마다 다를 때 "줄마다 다름"
@@ -286,17 +290,19 @@ function CollectionSelect({ cols, value, onChange, placeholder = '분류할 곳'
   aiId?: number | null; // AI가 처음 고른 곳 — 목록에서 표시(10/30 사용자: 펼쳤을 때 AI 선택이 보이게)
 }) {
   const ai = (id: number) => (aiId === id ? '  ◀ AI 판단' : '');
-  const biz = cols.filter((c) => c.kind === 'domain');
-  const org = cols.filter((c) => c.kind === 'org_space');
+  const biz = cols.filter(isBizCol);
+  const sys = cols.filter(isSystemCol);
   return (
     <select value={value ?? ''} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} disabled={disabled}
       className="text-sm bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200 disabled:opacity-50" aria-label={placeholder}>
       <option value="" disabled={noEmpty}>— {emptyText ?? placeholder} —</option>
-      <optgroup label="업무 컬렉션">
-        {biz.map((c) => <option key={c.id} value={c.id} disabled={!c.writable}>{c.label}{c.unowned ? ' (담당 없음)' : c.parts.length ? ` · ${c.parts.join(', ')}` : ''}{c.writable ? '' : ' — 담당 아님'}{ai(c.id)}</option>)}
-      </optgroup>
-      <optgroup label="조직 컬렉션">
-        {org.map((c) => <option key={c.id} value={c.id} disabled={!c.writable}>{c.label}{c.writable ? '' : ' — 담당 아님'}{ai(c.id)}</option>)}
+      {biz.length > 0 && (   // 운영 지식은 시스템에만(11/02) — 서버가 정책 컬렉션을 주지 않으면(지금) 빈 묶음을 안 그린다
+        <optgroup label="정책 컬렉션">
+          {biz.map((c) => <option key={c.id} value={c.id} disabled={!c.writable}>{c.label}{c.unowned ? ' (담당 없음)' : c.parts.length ? ` · ${c.parts.join(', ')}` : ''}{c.writable ? '' : ' — 담당 아님'}{ai(c.id)}</option>)}
+        </optgroup>
+      )}
+      <optgroup label="시스템">
+        {sys.map((c) => <option key={c.id} value={c.id} disabled={!c.writable}>{c.label}{c.writable ? '' : ' — 담당 아님'}{ai(c.id)}</option>)}
       </optgroup>
     </select>
   );
@@ -341,7 +347,7 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
       <div className="text-xs text-slate-400" title="예외: 읽기 제한으로 바뀐 페이지가 이미 적재돼 있으면 그 조각만 승인 대기로 내림">#{b.id} {b.root_title} · 분류 미리보기 — 확정 전까지 적재되지 않음</div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat k={b.default_namespace_id != null ? '기본 위치 · AI 확신' : '자동 분류'} v={auto.length}
-          sub={b.default_namespace_id != null ? `기본 위치 ${byDefault} · AI 확신 ${auto.length - byDefault}` : `업무 ${auto.filter((p) => names.get(p.final_namespace_id ?? -1)?.kind === 'domain').length} · 조직 ${auto.filter((p) => names.get(p.final_namespace_id ?? -1)?.kind === 'org_space').length}`} />
+          sub={b.default_namespace_id != null ? `기본 위치 ${byDefault} · AI 확신 ${auto.length - byDefault}` : `업무 ${auto.filter((p) => isBizCol(names.get(p.final_namespace_id ?? -1))).length} · 시스템 ${auto.filter((p) => isSystemCol(names.get(p.final_namespace_id ?? -1))).length}`} />
         <Stat k="검토 필요" v={review.filter((p) => p.final_namespace_id == null).length} sub={`전체 ${review.length}건 중 미분류`} hot={review.some((p) => p.final_namespace_id == null)} />
         <Stat k="표본 검토" v={`${sampleDone} / ${sampleTarget}`} sub={`정정 ${wrong}${b.sampling_required ? ' · 게시 전 필수' : ' · 선택'}`} hot={b.sampling_required && sampleDone < sampleTarget} />
         <Stat k="제외 · 보류" v={out.length} />
@@ -372,19 +378,20 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
 
 const SEP = ' › ';
 const EXCLUDE = -1;   // 선택 상자 값 = 제외
+const OUT_OF_SCOPE = '대상 아님';   // 위치 판정 종류 — IT 운영 지식이 아님(locator.DOC_TYPES)
 const GROUP_TAU = 0.4;   // 갈래 예외 기준 — AI가 묶음 값과 다르게 본 비율(10/30 실측 split_probe)
 const GROUP_MIN = 3;
 
-/** AI 판단 분포 막대 + 숫자 — 이 줄 컬렉션과 같음 / 다른 업무 컬렉션 / 다른 조직 컬렉션 / 미판정 */
-function AiBar({ v }: { v: { same: number; otherBiz: number; otherOrg: number; none: number; grounded: number } }) {
-  const total = Math.max(1, v.same + v.otherBiz + v.otherOrg + v.none);
+/** AI 판단 분포 막대 + 숫자 — 이 줄 컬렉션과 같음 / 다른 정책 컬렉션 / 다른 시스템 / 미판정 */
+function AiBar({ v }: { v: { same: number; otherBiz: number; otherSys: number; none: number; grounded: number } }) {
+  const total = Math.max(1, v.same + v.otherBiz + v.otherSys + v.none);
   const seg = [
     { n: v.same, cls: 'bg-emerald-500 dark:bg-emerald-400', t: '제안과 같음' },
-    { n: v.otherBiz, cls: 'bg-amber-500 dark:bg-amber-400', t: '다른 업무 컬렉션' },
-    { n: v.otherOrg, cls: 'bg-sky-500 dark:bg-sky-400', t: '다른 조직 컬렉션' },
+    { n: v.otherBiz, cls: 'bg-amber-500 dark:bg-amber-400', t: '다른 정책 컬렉션' },
+    { n: v.otherSys, cls: 'bg-sky-500 dark:bg-sky-400', t: '다른 시스템' },
     { n: v.none, cls: 'bg-slate-500', t: 'AI 미판정' },
   ];
-  const judged = v.same + v.otherBiz + v.otherOrg;
+  const judged = v.same + v.otherBiz + v.otherSys;
   return (
     <span className="inline-flex flex-col gap-0.5 min-w-[12rem]">
       <span className="flex h-1.5 rounded-full overflow-hidden bg-slate-700" aria-hidden>
@@ -405,7 +412,7 @@ function ConnectSelect({ cols, value, onPick, aria, disabled }: {
     <select value={value ?? ''} onChange={(e) => onPick(Number(e.target.value))} aria-label={aria} disabled={disabled}
       className="text-sm bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200 disabled:opacity-50">
       <option value="" disabled>— 컬렉션 —</option>
-      {cols.map((c) => <option key={c.id} value={c.id} disabled={!c.writable}>{c.label}{c.writable ? '' : ' — 담당 아님'}</option>)}
+      {cols.filter((c) => c.kind === 'domain').map((c) => <option key={c.id} value={c.id} disabled={!c.writable}>{c.label}{c.writable ? '' : ' — 담당 아님'}</option>)}
       <option value={EXCLUDE}>제외(적재 안 함)</option>
     </select>
   );
@@ -436,7 +443,7 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
   const names = useNames(data.collections);
   const label = (id: number | null) => (id == null || id === EXCLUDE ? '제외' : names.get(id)?.label ?? `#${id}`);
   const writable = (id: number) => !!names.get(id)?.writable;
-  // AI 판단 분포(묶음 값과 같음 / 다른 업무 / 다른 조직 / 미판정) — 기본값과 섞지 않고 AI가 내용만 보고 고른 곳
+  // AI 판단 분포(묶음 값과 같음 / 다른 업무 / 다른 시스템 / 미판정) — 기본값과 섞지 않고 AI가 내용만 보고 고른 곳
   // 이견 비율은 이웃 비교가 있던 판단만으로 센다 — 첫 적재처럼 비교할 지식이 없으면 LLM 혼자 고른 값이라 예외 후보로 띄우지 않음(11/02 #85: 420건 전부 비교 없음)
   const aiView = (ps: ImportPage[], base: number | null) => {
     const judged = ps.filter((p) => p.ai_namespace_id != null);
@@ -445,8 +452,8 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
     const top = majority(other.map((p) => ({ ...p, final_namespace_id: null })), () => true).ns;
     return {
       same: judged.length - other.length,
-      otherBiz: other.filter((p) => names.get(p.ai_namespace_id!)?.kind === 'domain').length,
-      otherOrg: other.filter((p) => names.get(p.ai_namespace_id!)?.kind === 'org_space').length,
+      otherBiz: other.filter((p) => isBizCol(names.get(p.ai_namespace_id!))).length,
+      otherSys: other.filter((p) => isSystemCol(names.get(p.ai_namespace_id!))).length,
       none: ps.length - judged.length,
       grounded: grounded.length,
       disagree: grounded.length ? grounded.filter((p) => p.ai_namespace_id !== base).length / grounded.length : 0,
@@ -466,8 +473,11 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
         .filter((g) => g.grounded >= GROUP_MIN && g.disagree > GROUP_TAU)
         .sort((x, y) => y.n - x.n);
       // 정해진 값(공간 기본 위치·사람 결정)이 하나도 없으면 제안 = AI 다수 — 화면에 '정해진 값'으로 보이지 않게(11/02 #85: 정해진 값 0/420)
-      const fixed = ps.some((p) => p.final_namespace_id != null);
-      return { bundle, n: ps.length, suggest: m.ns, share: m.share, fixed, pages: ps, ...aiView(ps, m.ns), groups };
+      const fixed = ps.some((p) => p.final_namespace_id != null && p.assigned_by !== 'ai');   // 정해진 값 = 공간 기본값·사람 결정(AI 확신 자동은 아님, 리뷰 2차 L3)
+      // AI가 "IT 운영 지식 아님"(행정·친목·개인)으로 본 페이지가 절반 이상이면 제외를 제안(11/02 — OpsLens는 운영 지식만, 확정은 사람)
+      const outOfScope = ps.filter((p) => p.signals?.doc_type === OUT_OF_SCOPE).length;
+      const exclude = !fixed && outOfScope * 2 >= ps.length;
+      return { bundle, n: ps.length, suggest: exclude ? EXCLUDE : m.ns, share: m.share, fixed, outOfScope, exclude, pages: ps, ...aiView(ps, m.ns), groups };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pages, names]);
@@ -524,7 +534,9 @@ function BundleConnect({ data, onChange }: { data: ImportBatchDetail; onChange: 
                 </td>
                 <td className="px-2 py-2 text-right tabular-nums text-slate-300">{r.n}</td>
                 <td className="px-3 py-2 text-xs text-slate-400 space-y-1">
-                  <span className="block">{r.suggest != null ? <><b className="text-slate-200">{label(r.suggest)}</b> — {r.fixed ? '정해진 값' : 'AI 다수'} {Math.round(r.share * 100)}%</> : '판단 근거 없음'}</span>
+                  <span className="block">{r.exclude
+                    ? <b className="text-amber-700 dark:text-amber-300" title="AI가 IT 운영 지식이 아니라고 본 페이지(행정·친목·개인 기록) — 넣으려면 컬렉션을 고르기">제외 제안 — 운영 지식 아님 {r.outOfScope}/{r.n}</b>
+                    : r.suggest != null ? <><b className="text-slate-200">{label(r.suggest)}</b> — {r.fixed ? '정해진 값' : 'AI 다수'} {Math.round(r.share * 100)}%</> : '판단 근거 없음'}</span>
                   <span className="block" title="AI가 내용만 보고 고른 곳(기본 위치와 섞지 않음). AI의 '다른 곳' 판단은 사람이 본 39건 중 31%만 맞았음(10/30)"><AiBar v={r} /></span>
                 </td>
                 <td className="px-3 py-2"><Select value={nsOf(r)} onPick={(v) => setPick({ ...pick, [r.bundle]: v })} aria={`${r.bundle || '(최상위)'} 컬렉션`} /></td>

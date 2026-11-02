@@ -1,24 +1,30 @@
 import type { NamespaceDetail } from '../types';
 
 /**
- * 업무 컬렉션 / 조직 컬렉션 구분(10/22, 컬렉션 설계 §2·§15-13, 백엔드 #83).
- * 조직 컬렉션 이름은 id 키(org:team:1 · org:part:774)라 화면엔 늘 display_name("팀 공통 · ○○팀" / "○○ 파트")을 쓴다.
- * 이름 접두사 org:는 DB CHECK로 종류(kind='org_space')와 같다 — 상세 목록이 아직 없을 때도 이름만으로 알 수 있다.
+ * 컬렉션 구분(11/02, docs/domains/knowledge/taxonomy-standard.md) — 정책 컬렉션(area=policy) / 시스템 컬렉션(area=system).
+ * 둘 다 kind='domain'이고 area로만 갈린다(옛 서버는 area가 없다 → 업무). 검색·권한·담당은 같게 동작한다.
+ * 조직 컬렉션(kind='org_space', 이름 org:team:N · org:part:N)은 폐지 — DB에서 지워지기 전까지 화면 어디에도 안 보이게 걸러 내는 용도로만 남긴다.
  */
-export const ORG_PREFIX = 'org:';
+const ORG_PREFIX = 'org:';
 
+/** 폐지된 조직 컬렉션(화면에서 숨김) — 상세 목록이 아직 없을 때도 이름 접두사로 안다(DB CHECK로 kind와 같음) */
 export const isOrgCollection = (d: Pick<NamespaceDetail, 'kind' | 'name'> | null | undefined) =>
   !!d && (d.kind === 'org_space' || d.name.startsWith(ORG_PREFIX));
 
 export const isOrgName = (name: string | null | undefined) => !!name && name.startsWith(ORG_PREFIX);
 
-/** 업무 컬렉션만(테스트용 포함) — 업무 컬렉션 관리·담당 업무 매핑 화면용 */
-export const isBusinessCollection = (d: Pick<NamespaceDetail, 'kind' | 'name'>) => !isOrgCollection(d);
+/** 시스템 컬렉션(IT 시스템, 최상위만) */
+export const isSystemCollection = (d: Pick<NamespaceDetail, 'kind' | 'area'> | null | undefined) =>
+  !!d && (d.kind ?? 'domain') === 'domain' && d.area === 'system';
 
-/** 화면에 보일 컬렉션 이름 — 조직이면 display_name, 목록을 아직 못 받았으면 이름 그대로(조직 키면 "조직 컬렉션") */
+/** 정책 컬렉션만(테스트용 policy_test 포함 — E2E가 정책 컬렉션 화면에서 다룬다) — 조직·시스템 제외 */
+export const isBusinessCollection = (d: Pick<NamespaceDetail, 'kind' | 'name' | 'area'>) => !isOrgCollection(d) && !isSystemCollection(d);
+
+/** 화면에 보일 컬렉션 이름 — display_name이 있으면 그것, 없으면 이름 그대로 */
 export function collectionLabel(name: string | null | undefined, details: NamespaceDetail[]): string {
   if (!name) return '';
   const d = details.find((x) => x.name === name);
-  if (d?.display_name) return d.display_name;
-  return isOrgName(name) ? '조직 컬렉션' : name;
+  // 시스템 화면 이름은 " 시스템"을 뗀 것(11/02) — 정책 컬렉션과 섞여 보이는 곳(칩·경로)에선 "시스템 · 딜리버스"로 구분
+  if (d && isSystemCollection(d)) return `시스템 · ${d.display_name || d.name}`;
+  return d?.display_name || name;
 }

@@ -11,7 +11,7 @@ const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'p
 
 test('제안으로 받은 답의 "답변 틀림" = 답한 컬렉션 건으로 접수(조용히 버려지지 않음)', async ({ request }) => {
   const [a, b] = psql(`SELECT name FROM ops_namespace WHERE kind = 'domain' AND name NOT LIKE '%test%' AND name NOT LIKE 'zz%' ORDER BY id LIMIT 2`).split('\n');
-  test.skip(!a || !b, '업무 컬렉션이 둘 이상 있어야 함');
+  test.skip(!a || !b, '정책 컬렉션이 둘 이상 있어야 함');
   const uid = psql(`SELECT id FROM ops_user WHERE username = 'admin'`);
   const conv = psql(`INSERT INTO ops_conversation (namespace_id, title, user_id, agent_type) SELECT id, 'E2E 제안 신고', ${uid}, 'knowledge_rag' `
     + `FROM ops_namespace WHERE name = '${a}' RETURNING id`).split('\n')[0];

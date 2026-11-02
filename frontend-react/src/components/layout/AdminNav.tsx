@@ -39,7 +39,7 @@ export function AdminNav() {
   const [closedCurrent, setClosedCurrent] = useState<string | null>(null);   // 지금 화면이 든 묶음을 사람이 접었으면 그 묶음 id — 화면을 옮기면 풀린다
   useEffect(() => { setClosedCurrent(null); }, [current]);
 
-  // 정정 요청 대기 건수(지금 고른 업무 컬렉션, 처리 권한이 있을 때) — 지식 탭 안에 있던 배지를 옮겨 옴(방치 방지)
+  // 정정 요청 대기 건수(지금 고른 정책 컬렉션, 처리 권한이 있을 때) — 지식 탭 안에 있던 배지를 옮겨 옴(방치 방지)
   const { selectedNs, canModifyNs } = useNamespaceAccess();
   const { data: correctionCount } = useQuery({
     queryKey: ['corrections-pending-count', selectedNs],
@@ -47,7 +47,7 @@ export function AdminNav() {
     enabled: !!selectedNs && canModifyNs,
     staleTime: 30_000,
   });
-  const importTodo = useImportTodo();   // 연결할 묶음 수(데이터 소스)
+  const importTodo = useImportTodo();   // 연결할 묶음 수(소스 연결)
   const feedbackNew = useFeedbackNewCount(useAuthStore((st) => st.user?.role === 'admin'));   // 신규 사용자 피드백(관리자만)
   const badge = (id: AdminMenuId) => (id === 'q.corrections' ? correctionCount?.by_namespace[selectedNs] ?? 0 : id === 'k.sources' ? importTodo
     : id === 'q.feedback' ? feedbackNew : 0);

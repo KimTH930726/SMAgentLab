@@ -16,16 +16,16 @@ export async function goAdmin(page: Page, group: string, item: string) {
 export const domainSelect = (page: Page) => page.locator('#sidebar-domain');
 
 /** 지식 등록 — 넣을 곳 카드에서 컬렉션을 직접 고른다(E2). AI 제안에 맡기면 테스트 문장마다 결과가 달라 "다른 곳…"으로 고정.
- *  [다른 곳…] = 보는 컬렉션 고르기와 같은 창(10/23 A안) — 업무 탭에서 그 이름 카드를 누른다 */
+ *  [다른 곳…] = 보는 컬렉션 고르기와 같은 창(10/23 A안) — 정책 탭에서 그 이름 카드를 누른다 */
 export async function chooseLocation(page: Page, namespace: string) {
   const other = page.getByRole('button', { name: '다른 곳…' });
   await other.waitFor({ timeout: 60_000 });   // 판정(로컬 LLM) 대기
   await other.click();
-  // 창은 지금 고른 곳(AI 제안)이 조직이면 조직 탭으로 열린다 — 업무 탭부터 누르고, 이름이 정확히 같은 카드만(재리뷰 F1)
-  await page.locator('#picker-tab-business').click();
+  // 창은 지금 고른 곳(AI 제안)이 시스템이면 시스템 탭으로 열린다 — 정책 탭부터 누르고, 이름이 정확히 같은 카드만(재리뷰 F1)
+  await page.locator('#picker-tab-policy').click();
   const esc = namespace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  await page.locator('#picker-panel-business').getByRole('button', { name: new RegExp(`^${esc}(\\s|·|$)`) }).first().click();
-  await page.locator('#picker-panel-business').waitFor({ state: 'detached' });
+  await page.locator('#picker-panel-policy').getByRole('button', { name: new RegExp(`^${esc}(\\s|·|$)`) }).first().click();
+  await page.locator('#picker-panel-policy').waitFor({ state: 'detached' });
 }
 
 /** 주소로 바로 들어가기(10/23, 메뉴 바로잡기 확인용) — 에이전트 선택 화면이 없어져(10/30) 새로고침해도 그 주소로 */
@@ -37,7 +37,7 @@ export async function gotoAdminUrl(page: Page, path: string) {
 /**
  * 보는 컬렉션 고르기 — 테스트 컬렉션(policy_test)은 고르는 창에 안 보이므로(S6), 앱이 기억하는 값(src/utils/selectedDomain.ts의
  * `opslens.namespace:<사용자>`)을 바꾸고 새로고침한다. 지금 주소(관리 메뉴)는 그대로 남는다.
- * 조직 컬렉션(org:part:N 같은 id 키)은 칩에 화면 이름이 보이므로 label(칩에 보일 글자)을 같이 넘긴다(10/22 #83).
+ * 칩에 이름과 다른 글자가 보이는 컬렉션이면 label(칩에 보일 글자)을 같이 넘긴다.
  */
 export async function selectDomain(page: Page, name: string, label: string = name) {
   await page.evaluate((ns) => {

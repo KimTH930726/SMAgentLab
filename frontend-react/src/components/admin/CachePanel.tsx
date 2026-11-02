@@ -19,7 +19,7 @@ function formatTtl(seconds: number): string {
 
 export function CachePanel() {
   const queryClient = useQueryClient();
-  const namespace = useAppStore((s) => s.namespace);   // 업무 컬렉션은 앱 공용 값 하나(사이드바와 같음, 10/21)
+  const namespace = useAppStore((s) => s.namespace);   // 정책 컬렉션은 앱 공용 값 하나(사이드바와 같음, 10/21)
   const [confirmClear, setConfirmClear] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);

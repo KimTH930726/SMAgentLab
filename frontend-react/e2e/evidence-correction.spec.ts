@@ -114,7 +114,7 @@ async function approveInAdmin(page: Page, userInput: string, targetLabel?: strin
   await page.getByRole('link', { name: 'Chat' }).click();
 }
 
-// 근거 카드 "이 근거 틀림" 버튼은 2026-10-06 제거 — 신고는 "답변 틀림" 하나, 틀린 근거(여기선 지식 문서)는 AI가 찾는다
+// 근거 카드 "이 근거 틀림" 버튼은 2026-10-06 제거 — 신고는 "답변 틀림" 하나, 틀린 근거(여기선 운영 지식)는 AI가 찾는다
 test('지식 — "답변 틀림" 한 줄 → AI가 틀린 지식 근거 지목 → 승인 전 원본 유지 + 검토중 → 승인 후 수정 답변', async ({ page }) => {
   await login(page);
   const Q = 'VPN 비밀번호 변경 주기가 어떻게 돼?';

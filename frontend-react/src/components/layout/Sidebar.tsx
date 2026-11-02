@@ -28,7 +28,7 @@ import { stopChatStream, clearStreamState, useStreamStore } from '../../store/us
 import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { byContentThenName, initialDomain, isPickableDomain, loadSelectedDomain, saveSelectedDomain } from '../../utils/selectedDomain';
 import { DomainPicker } from './DomainPicker';
-import { isOrgName } from '../../utils/collections';
+import { isOrgName, isSystemCollection } from '../../utils/collections';
 import { effectiveOwnerParts } from '../../utils/domainAccess';
 import type { NamespaceDetail } from '../../types';
 import { getConversations, deleteConversation } from '../../api/conversations';
@@ -106,13 +106,15 @@ export function Sidebar() {
   useEffect(() => {
     if (namespaces.length === 0 || (nsDetails.length === 0 && !nsDetailsMissing)) return;   // 담당 정보까지 와야 "내 담당"을 안다
     const uname = user?.username ?? null;
-    if (initedUserRef.current === uname && namespace && namespaces.includes(namespace)) { pendingNsRef.current = null; return; }   // 다른 곳이 먼저 바꿨으면 대기 값 버림(리뷰)
+    // 폐지된 조직 컬렉션(11/02)은 고를 수 없다 — 기억한 값·지금 값이 조직이면 다시 정한다(DB에서 지워지기 전까지)
+    const valid = namespaces.filter((n) => !isOrgName(n));
+    if (initedUserRef.current === uname && namespace && valid.includes(namespace)) { pendingNsRef.current = null; return; }   // 다른 곳이 먼저 바꿨으면 대기 값 버림(리뷰)
     initedUserRef.current = uname;
     const isMine = (n: NamespaceDetail) => effectiveOwnerParts(n).some((o) => o.name === user?.part);   // 고르는 창(DomainPicker)과 같은 기준(담당 N개)
-    const ordered = nsDetails.filter(isPickableDomain).sort(byContentThenName);   // 고르는 창과 같은 순서
-    const pickable = nsDetailsMissing ? namespaces.filter((n) => !isOrgName(n)) : ordered.map((n) => n.name);   // 처음 선택은 업무 컬렉션(조직은 기억한 값일 때만)
+    const ordered = nsDetails.filter((n) => isPickableDomain(n) && !isSystemCollection(n)).sort(byContentThenName);   // 고르는 창 정책 탭과 같은 순서
+    const pickable = nsDetailsMissing ? valid : ordered.map((n) => n.name);   // 처음 선택은 정책 컬렉션(시스템은 기억한 값일 때만)
     const mine = user?.part ? ordered.filter(isMine).map((n) => n.name) : [];
-    const next = initialDomain({ stored: loadSelectedDomain(user?.username), valid: namespaces, pickable, mine });
+    const next = initialDomain({ stored: loadSelectedDomain(user?.username), valid, pickable, mine });
     pendingNsRef.current = next && next !== namespace ? next : null;
     if (pendingNsRef.current) setNamespace(pendingNsRef.current);
   }, [namespace, namespaces, nsDetails, nsDetailsMissing, user?.username, user?.part, setNamespace]);
@@ -264,7 +266,7 @@ export function Sidebar() {
       {/* 보는 컬렉션 — 채팅·관리 화면 공통(관리 화면의 지식 화면들이 이 값을 같이 씀). 칩 + 고르는 창(10/22) */}
       <div className="px-3 py-3 border-b border-slate-700">
         {namespaces.length === 0 ? (
-          <div className="text-xs text-slate-500 px-1">업무 컬렉션 없음</div>
+          <div className="text-xs text-slate-500 px-1">정책 컬렉션 없음</div>
         ) : (
           <DomainPicker value={namespace} onChange={setNamespace} details={nsDetails} parts={parts} userPart={user?.part} />
         )}

@@ -5,9 +5,9 @@ import { collectionLabel } from '../../utils/collections';
 import { findAdminItem, type AdminMenuId } from '../../pages/adminMenu';
 
 /**
- * 관리 본문 맨 위 경로 표시줄(10/21) — 모든 화면 같은 자리에 "업무 컬렉션 › 묶음 › 화면" + 담당 파트.
- * 화면마다 따로 붙이던 "업무 컬렉션: ○○" 배지는 위치·모양이 들쭉날쭉해 잘 안 보였다(사용자 지적) — 이 줄 하나로.
- * 업무 컬렉션과 상관없는 화면(업무 컬렉션 목록·조직·시스템 설정)은 메뉴 위치만.
+ * 관리 본문 맨 위 경로 표시줄(10/21) — 모든 화면 같은 자리에 "정책 컬렉션 › 묶음 › 화면" + 담당 파트.
+ * 화면마다 따로 붙이던 "정책 컬렉션: ○○" 배지는 위치·모양이 들쭉날쭉해 잘 안 보였다(사용자 지적) — 이 줄 하나로.
+ * 정책 컬렉션과 상관없는 화면(컬렉션 목록·조직·권한·설정)은 메뉴 위치만.
  */
 export function AdminCrumb({ current }: { current: AdminMenuId }) {
   const found = findAdminItem(current);
@@ -39,7 +39,7 @@ export function AdminCrumb({ current }: { current: AdminMenuId }) {
         <span className="text-slate-200 font-medium">{item.label}</span>
       </nav>
       {scoped && (
-        <span className="ml-auto text-xs text-slate-400 whitespace-nowrap" title="이 컬렉션을 수정할 수 있는 파트(없으면 관리자만) — 팀 공통은 그 팀의 모든 파트">
+        <span className="ml-auto text-xs text-slate-400 whitespace-nowrap" title="이 컬렉션을 수정할 수 있는 파트(없으면 관리자만)">
           담당: <span className="text-slate-300">{owner ?? '없음(관리자만)'}</span>
         </span>
       )}

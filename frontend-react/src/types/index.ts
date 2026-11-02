@@ -30,7 +30,7 @@ export interface Part {
   team?: string | null;   // 조직: 팀 > 파트
   team_id?: number | null;
   user_count?: number;
-  domains?: string[];      // 담당 업무(관리자 목록에서만)
+  domains?: string[];      // 담당 컬렉션(관리자 목록에서만)
 }
 
 // Namespace types
@@ -47,11 +47,11 @@ export interface OwnerPart {
 
 export interface NamespaceDetail extends Namespace {
   id: number;
-  kind?: string;                           // domain(업무) | org_space(조직, 10/22 #83) | policy_test(E2E 임시)
-  display_name?: string;                   // 화면 이름 — 업무 = name, 조직 = "팀 공통 · <팀>" / "<파트>"(조직 name은 id 키 org:team:1)
-  owner_team_id?: number | null;           // 팀 공통 조직 컬렉션의 팀
-  team_id?: number | null;                 // 조직 컬렉션이 속한 팀(팀 공통 = 그 팀, 파트 = 그 파트의 팀)
-  team?: string | null;                    // 그 팀 이름
+  kind?: string;                           // domain(업무·시스템) | policy_test(E2E 임시) | org_space(폐지 11/02 — 화면엔 안 보임)
+  area?: 'policy' | 'system';            // domain 안 구분(11/02 taxonomy-standard) — 없으면 policy(옛 서버)
+  supports?: string[];                     // 시스템이 관련된 정책 컬렉션 이름들(업무면 [])
+  code?: string | null;                    // 업무 코드(불변·유일, POL-MBR · SYS-HP — 11/02). 이름은 화면용
+  display_name?: string;                   // 화면 이름(업무·시스템 = name)
   owner_parts?: OwnerPart[];               // 직접 지정된 담당들(N개, 10/22 — 수정 창·파트별 담당 지정이 읽고 쓰는 값)
   effective_owner_parts?: OwnerPart[];     // 실효 담당들(하위 영역에 자기 담당이 없으면 상위 것 전부) — 권한 판단은 이것으로(effectiveOwnerParts)
   // 옛 단일 칸(서버 호환용 — 담당 중 id가 가장 작은 하나). 화면 로직은 위 목록을 쓴다
@@ -112,7 +112,8 @@ export type LocationChoice = 'accept' | 'option' | 'other' | 'preset';
 export interface LocateCollection {
   name: string;
   label: string;
-  kind: 'domain' | 'org_space';
+  kind: string;                  // domain(업무·시스템) — 시스템 구분은 area(없으면 컬렉션 목록에서 찾는다)
+  area?: 'policy' | 'system';
   writable: boolean;
 }
 

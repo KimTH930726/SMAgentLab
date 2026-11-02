@@ -33,7 +33,7 @@ export function initialDomain(opts: {
   stored: string | null;
   valid: string[];          // API가 준 전체 이름(테스트용 포함)
   pickable: string[];       // 고르는 창에 보이는 이름(내 담당 먼저 정렬됨)
-  mine: string[];           // 내 파트 담당 업무
+  mine: string[];           // 내 파트 담당 컬렉션
 }): string | undefined {
   const { stored, valid } = opts;
   // 목록(valid)과 담당 정보(pickable·mine)는 따로 받아 와 잠깐 어긋날 수 있다(이름 변경 직후) — 목록에 없는 이름은 고르지 않는다

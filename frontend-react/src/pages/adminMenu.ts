@@ -5,7 +5,7 @@
 import type { User } from '../types';
 
 export type AdminMenuId =
-  | 'domains' | 'org.collections'
+  | 'domains' | 'systems'
   | 'k.policy' | 'k.docs' | 'k.sources' | 'k.glossary' | 'k.system'
   | 'org'
   | 'q.stats' | 'q.corrections' | 'q.feedback' | 'q.eval' | 'q.decisions'
@@ -18,18 +18,19 @@ export interface AdminMenuItem {
   adminOnly?: boolean;
   viewerOk?: boolean;      // 조회 전용(가입 후 승인 대기)에게도 보임 — 나머지는 서버가 403이라 숨긴다
   hint?: string;           // title 툴팁
-  scoped?: boolean;        // 고른 업무 컬렉션에 따라 내용이 바뀌는 화면 — 본문 위 경로 표시줄에 업무 컬렉션을 보여 준다
+  scoped?: boolean;        // 고른 정책 컬렉션에 따라 내용이 바뀌는 화면 — 본문 위 경로 표시줄에 정책 컬렉션을 보여 준다
   /** 이 메뉴가 담을 수 있는 컬렉션 종류(scoped만) — 없으면 둘 다. 서버도 그 종류엔 그 데이터를 400으로 막는다(정책 가져오기·VOC·참조데이터).
    *  설정(메뉴 노출)은 이 안에서 숨기기만 한다 — 담을 수 없는 종류에 켤 수는 없다(10/23). */
   kinds?: CollectionKind[];
-  /** 메뉴 노출 설정으로 끌 수 없음 — 지식 문서는 숨긴 메뉴 주소의 도착지이자 [지식 등록 →]·[보기 →] 링크가 가는 곳(리뷰 10/23) */
+  /** 메뉴 노출 설정으로 끌 수 없음 — 운영 지식은 숨긴 메뉴 주소의 도착지이자 [지식 등록 →]·[보기 →] 링크가 가는 곳(리뷰 10/23) */
   required?: boolean;
 }
 
-export type CollectionKind = 'domain' | 'org_space';
+/** 보는 컬렉션 종류 — 업무(area=policy) / 시스템(area=system). 둘 다 kind='domain'이라 종류는 상세 목록의 area로 안다(11/02) */
+export type CollectionKind = 'domain' | 'system';
 export const COLLECTION_KINDS: { kind: CollectionKind; label: string }[] = [
-  { kind: 'domain', label: '업무 컬렉션' },
-  { kind: 'org_space', label: '조직 컬렉션' },
+  { kind: 'domain', label: '정책 컬렉션' },
+  { kind: 'system', label: '시스템 컬렉션' },
 ];
 /** 메뉴 노출 설정의 범위 키 — 나중에 권한별은 role:<역할>로 같은 모양(api/menu.ts) */
 export const kindScope = (kind: CollectionKind) => `kind:${kind}`;
@@ -40,19 +41,19 @@ export interface AdminMenuGroup {
   items: AdminMenuItem[];  // 하나면 묶음 이름을 누르면 바로 그 화면(아코디언 없음)
 }
 
-// 10/22 컬렉션 개편: 지식 → 컬렉션 → 품질 → VOC → 시스템. 사람·권한(옛 "조직" 묶음)은 시스템 아래로 — 컬렉션 › 조직(팀·파트 노하우)과
-// 이름이 겹쳐 헷갈렸다(사용자). 주소(id)는 그대로 둬 옛 링크가 안 깨진다.
+// 10/22 컬렉션 개편: 지식 → 컬렉션 → 품질 → VOC → 시스템. 사람·권한(옛 "조직" 묶음)은 시스템 아래로. 주소(id)는 그대로 둬 옛 링크가 안 깨진다.
+// 11/02 조직 컬렉션 폐지 → 컬렉션 › 시스템 컬렉션(옛 주소 org.collections는 systems로).
 export const ADMIN_MENU: AdminMenuGroup[] = [
   { id: 'knowledge', label: '지식', items: [
     { id: 'k.policy', label: '정책서', scoped: true, kinds: ['domain'] },
-    { id: 'k.docs', label: '지식 문서', hint: '컨플루언스 등에서 가져온 업무 지식', scoped: true, required: true },
-    { id: 'k.sources', label: '데이터 소스', hint: '컨플 공간 연결 — 묶음 연결 · 동기화 · 적재 이력(팀 단위, 보는 컬렉션과 무관)' },
+    { id: 'k.docs', label: '운영 지식', hint: '시스템 운영·개발 지식 — 컨플·매뉴얼·장애 대응(정책서는 따로)', scoped: true, required: true },
+    { id: 'k.sources', label: '소스 연결', hint: '컨플 공간 연결 — 묶음 연결 · 동기화 · 적재 이력(팀 단위, 보는 컬렉션과 무관)' },
     { id: 'k.glossary', label: '용어집', scoped: true },
-    { id: 'k.system', label: '시스템 정보', hint: 'DB 칼럼·공통코드 — 준비 중', scoped: true, kinds: ['domain'] },
+    { id: 'k.system', label: '시스템 정보', hint: 'DB 칼럼·공통코드 — 준비 중', scoped: true },
   ] },
   { id: 'collections', label: '컬렉션', items: [
-    { id: 'domains', label: '업무 컬렉션', hint: '업무별 지식을 두는 곳 — 담당 파트·건수' },
-    { id: 'org.collections', label: '조직 컬렉션', hint: '팀 공통 · 파트 노하우 — 팀·파트를 만들면 생긴다(지식 문서·용어만)' },
+    { id: 'domains', label: '정책 컬렉션', hint: '업무별 지식을 두는 곳 — 담당 파트·건수' },
+    { id: 'systems', label: '시스템 컬렉션', hint: 'IT 시스템별 지식(운영·장애·연동) — 담당 파트 · 관련 정책' },
   ] },
   { id: 'quality', label: '품질', items: [
     { id: 'q.stats', label: '통계', scoped: true },
@@ -65,7 +66,7 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
     { id: 'voc', label: 'VOC 이메일', scoped: true, kinds: ['domain'] },
   ] },
   { id: 'system', label: '시스템·권한', items: [
-    { id: 'org', label: '조직·권한', adminOnly: true, hint: '사용자 · 팀 › 파트 · 담당 업무(서브탭)' },
+    { id: 'org', label: '조직·권한', adminOnly: true, hint: '사용자 · 팀 › 파트 · 담당 컬렉션(서브탭)' },
     { id: 'sys.settings', label: '설정', viewerOk: true, hint: 'LLM · 프롬프트 · 검색 기준값' },
     { id: 'sys.cache', label: '캐시', adminOnly: true, scoped: true },
   ] },
@@ -88,9 +89,10 @@ export function visibleAdminMenu(user: Pick<User, 'role'> | null | undefined,
 
 /** 주소에서 메뉴 id — 없거나 볼 수 없는 메뉴면 첫 메뉴. */
 export function resolveAdminMenu(pathname: string, groups: AdminMenuGroup[]): AdminMenuId {
-  const want = decodeURIComponent(pathname.replace(/^\/admin\/?/, '').split('/')[0] || '');
+  const raw = decodeURIComponent(pathname.replace(/^\/admin\/?/, '').split('/')[0] || '');
+  const want = raw === 'org.collections' ? 'systems' : raw;   // 옛 조직 컬렉션 주소(11/02 폐지)
   const all = groups.flatMap((g) => g.items.map((it) => it.id));
-  // 주소 없이 들어오면 지식 문서, 못 보면 보이는 첫 메뉴
+  // 주소 없이 들어오면 운영 지식, 못 보면 보이는 첫 메뉴
   const home = all.includes('k.docs') ? 'k.docs' : all[0];
   return (all.find((id) => id === want) ?? home ?? 'sys.settings') as AdminMenuId;
 }

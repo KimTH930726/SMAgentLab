@@ -41,7 +41,7 @@ export function MenuVisibilitySettings() {
   return (
     <div className="space-y-4" data-testid="menu-visibility">
       <p className="text-xs text-slate-500"
-        title="보는 컬렉션 종류에 따라 왼쪽 메뉴에서 빠진다. 끈 메뉴로 가는 화면 안 링크(예: 통계 → 정정 요청)도 지식 문서로 간다. '—'는 그 종류엔 그 데이터를 둘 수 없어 늘 숨김, 지식 문서는 늘 보임">
+        title="보는 컬렉션 종류에 따라 왼쪽 메뉴에서 빠진다. 끈 메뉴로 가는 화면 안 링크(예: 통계 → 정정 요청)도 운영 지식으로 간다. '—'는 그 종류엔 그 데이터를 둘 수 없어 늘 숨김, 운영 지식은 늘 보임">
         보는 컬렉션 종류마다 왼쪽 메뉴에 보일지 정해요.
       </p>
       <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-x-auto">

@@ -1,7 +1,7 @@
 import { Component, useEffect, type ReactNode } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { NamespaceManager } from '../components/admin/NamespaceManager';
-import { OrgCollectionManager } from '../components/admin/OrgCollectionManager';
+import { SystemCollectionManager } from '../components/admin/SystemCollectionManager';
 import { KnowledgeTable } from '../components/admin/KnowledgeTable';
 import { DataSources } from '../components/admin/TeamImportPanel';
 import { GlossaryTable } from '../components/admin/GlossaryTable';
@@ -45,14 +45,14 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
   }
 }
 
-// 정정 요청(품질) — 지식·정책 공통이라 지식 탭에서 뺐다(10/21). 처리는 그 업무 컬렉션 담당 파트 + 관리자
+// 정정 요청(품질) — 지식·정책 공통이라 지식 탭에서 뺐다(10/21). 처리는 그 정책 컬렉션 담당 파트 + 관리자
 // ?focus=N — 정책서 화면의 "정정 #N 검토 중 → 정정 요청에서 보기"가 그 카드로 바로 오게(10/21)
 function CorrectionsPanel() {
   const { selectedNs, canModifyNs } = useNamespaceAccess();
   const [params] = useSearchParams();
   const focus = Number(params.get('focus')) || null;
   if (!canModifyNs) {
-    return <p className="text-sm text-slate-400 py-6 text-center">이 업무 컬렉션의 정정 요청은 담당 파트와 관리자만 처리할 수 있어요.</p>;
+    return <p className="text-sm text-slate-400 py-6 text-center">이 정책 컬렉션의 정정 요청은 담당 파트와 관리자만 처리할 수 있어요.</p>;
   }
   return <CorrectionReviewTab namespace={selectedNs} focusId={focus} />;
 }
@@ -66,11 +66,11 @@ export default function Admin() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
-  // 보는 컬렉션이 조직이면 정책서·시스템 정보·VOC는 메뉴에서 빠지고(담을 수 없음), 그 주소로 오면 아래 바로잡기가 지식 문서로 옮긴다(10/23)
+  // 보는 컬렉션이 시스템이면 정책서·VOC는 메뉴에서 빠지고(담을 수 없음), 그 주소로 오면 아래 바로잡기가 운영 지식으로 옮긴다(10/23, 11/02)
   const { groups } = useAdminMenu();
   const current = resolveAdminMenu(location.pathname, groups);
   const go = (id: AdminMenuId) => navigate(adminPath(id));
-  // 컬렉션 현황 화면(업무·조직)의 [지식 등록 →]·[보기 →] — 컬렉션은 링크가 먼저 골라 둔다.
+  // 컬렉션 현황 화면(업무·시스템)의 [지식 등록 →]·[보기 →] — 컬렉션은 링크가 먼저 골라 둔다.
   // 등록은 넣을 곳을 그 컬렉션으로 정해 둔다(?into= — AI는 검사만, E2 collection-design §15-6)
   const toDocs = (tab: 'ingest' | 'list', into?: string) =>
     navigate(tab === 'ingest' ? `${adminPath('k.docs')}?tab=ingest${into ? `&into=${encodeURIComponent(into)}` : ''}` : adminPath('k.docs'));
@@ -83,7 +83,7 @@ export default function Admin() {
     <div className="flex flex-col h-full overflow-hidden">
       {user?.role === 'viewer' && (
         <div className="flex-shrink-0 px-6 py-2 text-xs bg-amber-50 text-amber-800 border-b border-amber-200 dark:bg-amber-900/30 dark:text-amber-200 dark:border-amber-700/40"
-          title="사용자 관리에서 관리자가 승인하면 소속 파트가 담당하는 업무 컬렉션의 관리 화면을 쓸 수 있습니다.">
+          title="사용자 관리에서 관리자가 승인하면 소속 파트가 담당하는 정책 컬렉션의 관리 화면을 쓸 수 있습니다.">
           승인 대기 중이에요 — 관리자가 승인하면 관리 화면을 쓸 수 있어요. 채팅은 지금도 쓸 수 있어요.
         </div>
       )}
@@ -91,7 +91,7 @@ export default function Admin() {
       <div className="flex-1 overflow-y-auto p-6">
         <TabErrorBoundary key={current}>
           {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} onRegister={toDocs} />}
-          {current === 'org.collections' && <OrgCollectionManager onRegister={toDocs} />}
+          {current === 'systems'       && <SystemCollectionManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : 'k.docs')} onRegister={toDocs} />}
           {current === 'k.policy'      && <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} onOpenCorrections={() => go('q.corrections')} />}
           {current === 'k.docs'        && <KnowledgeTable />}
           {current === 'k.sources'     && <DataSources />}

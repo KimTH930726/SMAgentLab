@@ -171,7 +171,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
   onSelect: (on: boolean) => void;
   focused: boolean;
 }) {
-  const label = useCollectionLabel();   // 조직 컬렉션은 id 키 대신 화면 이름(#83)
+  const label = useCollectionLabel();   // 컬렉션 화면 이름(display_name)
   const fields = shownFields(item);
   // 반려 사유 / 다시 쓰기 요청 / 직접 수정은 모달로 받는다(10/21 — 수정·입력은 모달)
   const [modal, setModal] = useState<'reject' | 'redraft' | 'edit' | null>(null);
@@ -621,7 +621,7 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
           title={[
             '지식·정책을 고치자는 신호·제안이 모이는 곳 — 승인 전엔 검색·답변에 반영되지 않음.',
             '처리: 승인 · 직접 수정 · AI 다시 쓰기(요청 한 줄) · 반려. [목록]에서 골라 일괄 승인.',
-            '승인하면 기존 내용은 이력으로 남고 새 버전이 쓰임. 처리 권한: 그 업무 컬렉션 담당 파트 · 관리자.',
+            '승인하면 기존 내용은 이력으로 남고 새 버전이 쓰임. 처리 권한: 그 정책 컬렉션 담당 파트 · 관리자.',
           ].join(' ')}>ⓘ</button>
         <div className="flex items-center gap-1.5 flex-wrap text-xs" role="group" aria-label="채널" data-testid="correction-channels">
           <span className="text-slate-500" title="정정 요청이 들어온 경로 — 채팅 신고 · 정책 화면 직접 수정 · 원문 확인 AI 제안 · 정책 파일 업로드 · 평가 게이트">채널</span>

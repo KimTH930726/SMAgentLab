@@ -78,7 +78,7 @@ function KnowledgeContentView({ content }: { content: string }) {
 }
 
 // 가중치(문서 우선순위) 입력·표시는 2026-10-02 제거 — 쓰인 적 없고 틀린 검색은 내용·용어집을 고친다(정정 흐름)
-// 업무구분(선택·AI 자동분석·필터·배지·일괄 변경)은 10/22 업무구분 폐지로 삭제 — 지식은 업무 컬렉션에 바로 붙는다
+// 업무구분(선택·AI 자동분석·필터·배지·일괄 변경)은 10/22 업무구분 폐지로 삭제 — 지식은 정책 컬렉션에 바로 붙는다
 interface KnowledgeFormData {
   content: string;
 }
@@ -142,7 +142,7 @@ export function KnowledgeTable() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { selectedNs, canModifyNs } = useNamespaceAccess();
-  // 업무 컬렉션이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
+  // 정책 컬렉션이 바뀌면(사이드바 포함) 이 화면의 필터·선택을 비운다 — 예전엔 화면 안 선택기로 바꿀 때만 했다(10/21)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setPage(1); setSelectedIds(new Set()); }, [selectedNs]);   // 체크 남으면 앞 영역 것이 일괄 삭제됐다(리뷰 M1)
 
@@ -301,7 +301,7 @@ export function KnowledgeTable() {
       {/* 헤더 + 네임스페이스 */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-200">
-          지식 문서
+          운영 지식
         </h2>
       </div>
 
@@ -424,7 +424,7 @@ export function KnowledgeTable() {
             </div>
           )}
 
-          {!selectedNs && <div className="text-center py-16 text-slate-500">업무 컬렉션을 선택하세요.</div>}
+          {!selectedNs && <div className="text-center py-16 text-slate-500">정책 컬렉션을 선택하세요.</div>}
           {selectedNs && isLoading && <div className="text-center py-16 text-slate-500 animate-pulse">로딩 중...</div>}
           {selectedNs && error && <div className="text-center py-16 text-rose-400">오류가 발생했습니다.</div>}
 
@@ -485,7 +485,7 @@ export function KnowledgeTable() {
           onSuccess={onIngestSuccess}
           onGoToList={() => setSubTab('list')}
           onGoToReview={() => setSubTab('review')}
-          onImportStarted={(id) => navigate(`${adminPath('k.sources')}?batch=${id}`)}   // 데이터 소스에서 그 배치를 연다(10/30)
+          onImportStarted={(id) => navigate(`${adminPath('k.sources')}?batch=${id}`)}   // 소스 연결에서 그 배치를 연다(10/30)
         />
       )}
 
@@ -1307,7 +1307,7 @@ function ReviewTab({ items, canModify, onResolved }: {
                 </Button>
               </div>
             ) : (
-              <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 업무 컬렉션의 승인 권한이 없습니다.</p>
+              <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 정책 컬렉션의 승인 권한이 없습니다.</p>
             )}
           </div>
         )}
