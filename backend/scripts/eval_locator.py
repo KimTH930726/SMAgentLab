@@ -24,7 +24,7 @@ OUT_DIR = Path("/app/eval_out")
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--concurrency", type=int, default=3)
-    ap.add_argument("--llm", choices=["system", "local"], default="system",
+    ap.add_argument("--llm", choices=["system", "local"], default="local",
                     help="system = 지금 시스템 LLM(게이트웨이 등), local = 로컬 OpenAI 호환(OPENAI_COMPAT_BASE_URL) — 판정 LLM 비교용")
     ap.add_argument("--team", type=int, default=1, help="넣는 사람의 팀 id(조직 후보) — 조직 컬렉션 지식은 그 팀, 업무 지식은 이 값")
     ap.add_argument("--unit", choices=["doc", "chunk"], default="doc", help="doc = 실제 등록 단위(문서), chunk = 조각 하나씩")

@@ -128,16 +128,17 @@ async def main() -> int:
     ap.add_argument("--set", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--repeat", type=int, default=1)
-    ap.add_argument("--llm", choices=["system", "local"], default="system", help="local = 이 측정에서만 로컬 LLM으로 답 생성(서버 설정은 그대로)")
+    ap.add_argument("--llm", choices=["system", "local"], default="local", help="기본 local = 로컬 LLM(11/02 — 토큰 절약). system = 사내 게이트웨이, 사람 허락 뒤에만")
     ap.add_argument("--prompt-file", default="", help="후보 시스템 프롬프트 파일(운영 DB 프롬프트 대신 — eval_answers와 같은 옵션)")
     # 문맥 좁히기 실험(10/30) — 업무지식 문맥이 지식 3조각 + 상위 섹션 보충 평균 30 + 정책 서술 10(평균 1.8만 자)이라 섞임·지어냄 의심
     ap.add_argument("--policy-top-k", type=int, default=None, help="문맥에 붙일 정책 서술 수(기본: 운영값 10)")
     ap.add_argument("--no-expand", action="store_true", help="상위 섹션 보충(부모 확장)을 끈다 — 이 측정에서만")
     # 답 뒤 근거 확인 실험(10/30) — 단정 오답 겨냥(지어냄 7·섞음 6/14). 질문마다 같은 답 모델로 1회 더(trustkit.answer.grounding)
+    ap.add_argument("--scope", choices=["linked", "similar"], default=None, help="지식 검색 범위 실험 — linked: +받침 연결(업무↔시스템), similar: +질문과 가까운 업무 2개")
     ap.add_argument("--verify", action="store_true", help="답 뒤 근거 확인 — 초안의 주장이 문맥에 없으면 빼거나 '못 찾음'으로")
     a = ap.parse_args()
     variant = ",".join(x for x in (f"policy_top_k={a.policy_top_k}" if a.policy_top_k is not None else "", "no_expand" if a.no_expand else "",
-                                   "verify" if a.verify else "") if x) or None
+                                   "verify" if a.verify else "", f"scope={a.scope}" if a.scope else "") if x) or None
     if a.no_expand:   # 에이전트가 모듈 속성으로 부르므로 여기서 바꾸면 이 프로세스(측정)만 바뀐다
         async def _no_expand(*_a, **_k):
             return []
@@ -179,7 +180,7 @@ async def main() -> int:
                 raise JudgeUnavailable(f"채점 모델 목록 조회 실패({type(e).__name__})") from e
             for n, it in enumerate(todo, 1):
                 vec = await embedding_service.embed(it["question"])
-                kw = dict(top_k=int(d["default_top_k"]), w_vector=d["default_w_vector"], w_keyword=d["default_w_keyword"])
+                kw = dict(top_k=int(d["default_top_k"]), w_vector=d["default_w_vector"], w_keyword=d["default_w_keyword"], knowledge_scope=a.scope)
                 if a.policy_top_k is not None:
                     kw["policy_top_k"] = a.policy_top_k
                 cc = await build_chat_context(it["ns"], it["question"], vec, **kw)

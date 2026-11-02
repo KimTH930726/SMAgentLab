@@ -28,6 +28,7 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", required=True)
     ap.add_argument("--details")
+    ap.add_argument("--scope", choices=["linked", "similar"], default=None, help="지식 검색 범위 실험(11/02) — agent.build_chat_context와 같은 추가 컬렉션")
     a = ap.parse_args()
     await init_pool()
     embedding_service.load()
@@ -42,13 +43,18 @@ async def main() -> None:
     for it in items:
         vec = await embedding_service.embed(it["question"])
         _, _, enriched = await glossary_terms.resolve_query_terms(it["ns"], it["question"], vec)
-        res = await retrieval.search_knowledge(it["ns"], vec, enriched, d["default_w_vector"], d["default_w_keyword"], DEEP)
+        extra = {}
+        if a.scope:
+            from core.database import get_conn as _gc, knowledge_scope_extra_ids
+            async with _gc() as c2:
+                extra = {"extra_ns_ids": await knowledge_scope_extra_ids(c2, it["ns"], a.scope, vec)}
+        res = await retrieval.search_knowledge(it["ns"], vec, enriched, d["default_w_vector"], d["default_w_keyword"], DEEP, **extra)
         ids = [r.id for r in res]
         gold = set(it["gold_ids"])
         rank = next((i + 1 for i, x in enumerate(ids) if x in gold), None)   # 순위 진단은 하이브리드 원순위(구제 전)
         # 문맥은 채팅과 같은 호출로(top_k + 키워드 구제 설정) — agent.build_chat_context와 같은 인자
         chat = await retrieval.search_knowledge(it["ns"], vec, enriched, d["default_w_vector"], d["default_w_keyword"], top_k,
-                                                keyword_rescue=retrieval.KEYWORD_RESCUE)
+                                                keyword_rescue=retrieval.KEYWORD_RESCUE, **extra)
         ctx = [r.id for r in chat if retrieval.is_adopted(r, th)]
         rows.append({"set": "knowledge", "qid": it["qid"], "type": "knowledge", "cluster": it.get("cluster"),
                      "hit": bool(gold & set(ctx)), "top1": bool(ctx) and ctx[0] in gold,   # top1 = 문맥 첫 자리가 정답(판정 기록 Top-1)

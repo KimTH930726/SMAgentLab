@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 APP = Path(__file__).resolve().parents[2]          # /app (backend)
 OUT = APP / "eval_out" / "exp"                      # git 제외 — 원문 파생물
 REPEAT = 2                                          # 운영 반영 조건(2회 이상, improve.confident_wrong_error)과 같게
+ANSWER_LLM = "local"                                # 답 생성 LLM(11/02 사용자 "기본 로컬, 사내 LLM은 허락 뒤") — 전/후 같은 모델끼리 비교
 KNOWLEDGE_SET = "eval_out/confluence_synth.jsonl"
 _PROGRESS = re.compile(r"^\s*(\d+)/(\d+)\s*$")
 _SAVED = re.compile(r"기록 #(\d+) 저장")
@@ -79,7 +80,7 @@ def plan(job_id: int, cand: dict, axis: str, *, label: str, by: str, prompt_file
     elif axis == "policy":
         for side, e in (("before", {}), ("after", env)):
             name = "지금 설정" if side == "before" else "바꾼 설정"
-            collect = [py, "scripts/eval_answers.py", "collect", "--out", f"{d}_ans_{side}.jsonl", "--repeat", str(REPEAT)]
+            collect = [py, "scripts/eval_answers.py", "collect", "--out", f"{d}_ans_{side}.jsonl", "--repeat", str(REPEAT), "--llm", ANSWER_LLM]
             if side == "after" and prompt_file:
                 collect += ["--prompt-file", prompt_file]
             steps.append({"stage": f"{name} 답", "argv": collect, "env": e})
@@ -93,7 +94,7 @@ def plan(job_id: int, cand: dict, axis: str, *, label: str, by: str, prompt_file
                                                      "--details", f"{d}_retr_after.jsonl"], "env": env})
         gate += ["--retrieval-before", f"{d}_retr_before.jsonl", "--retrieval-after", f"{d}_retr_after.jsonl"]
     else:                                  # 업무지식 답(답 생성 + 채점이 한 스크립트)
-        base = [py, "scripts/eval_knowledge_answers.py", "--set", KNOWLEDGE_SET, "--repeat", str(REPEAT)]
+        base = [py, "scripts/eval_knowledge_answers.py", "--set", KNOWLEDGE_SET, "--repeat", str(REPEAT), "--llm", ANSWER_LLM]
         steps.append({"stage": "지금 설정 답·채점", "argv": base + ["--out", f"{d}_ans_before.jsonl"], "env": {}})
         after = base + ["--out", f"{d}_ans_after.jsonl"]
         if prompt_file:

@@ -33,7 +33,8 @@ async def load_items(conn, path: str) -> list[dict]:
         areas = [now[i] for i in it["gold_ids"] if i in now]
         cur = areas[0] if areas else None
         split += len(set(areas)) > 1   # 정답이 여러 영역에 흩어짐 — 첫 정답의 영역으로만 묻는다(나머지는 범위 밖일 수 있음, 리뷰 L6)
-        if cur and cur != it["ns"]:
+        # ask_fixed = 일부러 다른 컬렉션에서 묻는 문항(검색 범위 실험, 11/02) — 정답 위치로 옮기지 않는다
+        if cur and cur != it["ns"] and not it.get("ask_fixed"):
             it["ns"] = cur
             moved += 1
     if moved:

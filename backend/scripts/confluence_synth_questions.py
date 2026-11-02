@@ -7,6 +7,8 @@
 프롬프트로 바꿔 말하기를 요구하고, 질문과 원문의 단어 겹침(중앙값)을 같이 기록해 해석에 쓴다. 사람 검수 전까지는 "검색 회귀 감지용".
 
     python scripts/confluence_synth_questions.py --out eval_out/confluence_synth.jsonl [--per-chunk 2] [--min-chars 80]
+    # 한 컬렉션 조각만 표본으로, 질문은 다른 컬렉션에서 묻게(검색 범위 실험 — 11/02 조직 컬렉션 확장):
+    python scripts/confluence_synth_questions.py --out eval_out/cx_synth.jsonl --ns org:part:902 --sample 100 --per-chunk 1 --ask-ns 회원
 """
 from __future__ import annotations
 
@@ -48,6 +50,9 @@ async def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--per-chunk", type=int, default=2)
     ap.add_argument("--min-chars", type=int, default=80)
+    ap.add_argument("--ns", action="append", help="이 컬렉션(이름) 조각만 — 여러 번 가능")
+    ap.add_argument("--sample", type=int, default=0, help="조각을 이 개수만 무작위로(고정 시드)")
+    ap.add_argument("--ask-ns", help="질문을 이 컬렉션에서 묻는 것으로 기록(기본 = 정답 조각의 컬렉션)")
     a = ap.parse_args()
     await init_pool()
     async with get_conn() as conn:
@@ -55,7 +60,10 @@ async def main() -> None:
             "SELECT k.id, n.name AS ns, k.content, k.source_document_id, k.source_file FROM rag_knowledge k "
             "JOIN ops_namespace n ON n.id = k.namespace_id "
             "WHERE k.source_type LIKE 'confluence%' AND k.status = 'active' ORDER BY k.id")
-    rows = [r for r in rows if len((r["content"] or "").strip()) >= a.min_chars]
+    rows = [r for r in rows if len((r["content"] or "").strip()) >= a.min_chars and (not a.ns or r["ns"] in a.ns)]
+    if a.sample and len(rows) > a.sample:
+        import random
+        rows = sorted(random.Random(1102).sample(rows, a.sample), key=lambda r: r["id"])
     out, fails, overlaps = [], 0, []
     async with httpx.AsyncClient(timeout=180) as client:
         model = MODEL or (await client.get(f"{URL}/models")).json()["data"][0]["id"]
@@ -73,7 +81,8 @@ async def main() -> None:
                 continue
             for j, q in enumerate(qs):
                 overlaps.append(_overlap(q, r["content"]))
-                out.append({"qid": f"k{r['id']}-{j}", "ns": r["ns"], "gold_ids": [r["id"]], "question": q,
+                out.append({"qid": f"k{r['id']}-{j}", "ns": a.ask_ns or r["ns"], "gold_ns": r["ns"], **({"ask_fixed": True} if a.ask_ns else {}),
+                            "gold_ids": [r["id"]], "question": q,
                             "cluster": f"doc{r['source_document_id'] or r['source_file'] or r['id']}"})
     Path(a.out).write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in out), encoding="utf-8")
     print(f"조각 {len(rows)}개 → 문항 {len(out)}개 (실패 {fails}) · 파트 {len({x['ns'] for x in out})}개 · 원문 묶음 {len({x['cluster'] for x in out})}개")
