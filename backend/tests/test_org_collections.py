@@ -278,3 +278,21 @@ class TestKindAndScope:
     def test_display_name(self):
         assert database.org_display_name(1, "스타벅스CSP팀", None) == "팀 공통 · 스타벅스CSP팀"
         assert database.org_display_name(None, None, "온라인서비스 파트") == "온라인서비스 파트"
+
+
+def _real_database():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("_real_db_scope", Path(__file__).resolve().parent.parent / "core" / "database.py")
+    real = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(real)
+    return real
+
+
+@pytest.mark.asyncio
+async def test_knowledge_scope_extra_ids_off_and_unknown():
+    """검색 범위 실험(11/02): 범위를 안 주면 DB를 보지 않고 빈 값(채팅 그대로), 모르는 값은 조용히 넘기지 않고 거절."""
+    real = _real_database()
+    assert await real.knowledge_scope_extra_ids(None, "회원", None, [0.1]) == []
+    with pytest.raises(ValueError):
+        await real.knowledge_scope_extra_ids(None, "회원", "all", [0.1])

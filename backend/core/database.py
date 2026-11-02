@@ -1,6 +1,6 @@
 import re
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncIterator, Sequence
 
 import asyncpg
 
@@ -93,6 +93,10 @@ ORG_KIND = "org_space"
 ORG_TEAM_PREFIX = "org:team:"   # 조직 컬렉션 이름 = id 기반 키(org:team:<팀 id> / org:part:<파트 id>) — 데이터에 팀·파트 이름을 넣지 않는다
 ORG_PART_PREFIX = "org:part:"
 ORG_NAME_PREFIX = "org:"        # 업무 컬렉션 이름은 이 글자로 시작할 수 없다(DB CHECK ops_namespace_org_shape)
+# 팀 적재 원문 초안·읽기 제한 기록 보관 자리(#105, 11/02) — 화면 목록·검색·넣을 곳 후보에 안 나온다(kind가 domain이 아님)
+STAGING_KIND = "staging"
+STAGING_NAME = "stage:import"
+STAGING_NAME_PREFIX = "stage:"   # 예약 — 사람이 이 이름으로 컬렉션을 만들 수 없다
 
 # 실효 담당 계산의 원천 줄(namespace_id, part_id) — 직접 담당 + 팀 공통 조직 컬렉션의 그 팀 파트들
 OWNER_ROWS_SQL = ("(SELECT ow.namespace_id, ow.part_id FROM ops_namespace_owner ow "
@@ -218,3 +222,49 @@ async def org_space_scope_extra_ids(conn: asyncpg.Connection, namespace: str, pa
               AND EXISTS (SELECT 1 FROM ops_namespace me WHERE me.name = $1 AND me.kind <> '{ORG_KIND}')
             ORDER BY o.id""", namespace, part_id)
     return [r["id"] for r in rows]
+
+
+# ── 검색 범위 실험(11/02 시스템 축 — "보관은 한 곳, 찾는 곳은 연결된 묶음". 평가 게이트 전엔 측정 옵션만, 채팅 기본값은 그대로) ───────
+# linked  = 받침 연결(ops_link 'supports', #105)로 이어진 컬렉션 — 업무를 고르면 그 업무를 받치는 시스템들(하위 업무는 상위의 연결도),
+#           시스템을 고르면 그 시스템이 받치는 업무들. 조직과 무관(개편에 안 흔들림), 질문자와 무관(누가 물어도 같은 범위)
+# similar = linked + 질문과 가까운 다른 업무 컬렉션 상위 n개(쿼리 라우팅: 활성 지식 조각의 최고 유사도로 컬렉션 순위)
+KNOWLEDGE_SCOPES = ("linked", "similar")
+
+
+async def linked_scope_ids(conn: asyncpg.Connection, namespace: str) -> list[int]:
+    rows = await conn.fetch(
+        """SELECT DISTINCT o.id FROM ops_namespace me
+           JOIN ops_link l ON l.relation = 'supports' AND l.status = 'active' AND l.from_type = 'domain' AND l.to_type = 'domain'
+                AND (l.to_key IN (me.id::text, me.parent_id::text) OR l.from_key = me.id::text)
+           JOIN ops_namespace o ON o.id::text = CASE WHEN l.from_key = me.id::text THEN l.to_key ELSE l.from_key END
+           WHERE me.name = $1 AND o.id <> me.id
+           ORDER BY o.id""", namespace)
+    return [r["id"] for r in rows]
+
+
+async def similar_domain_scope_ids(conn: asyncpg.Connection, namespace: str, query_vec: Sequence[float], n: int = 2,
+                                   pool: int = 30) -> list[int]:
+    # 이미 검색 범위인 곳(자신 + 직계 하위)은 빼고 고른다 — 안 빼면 하위가 자리를 차지해 실제로 늘어나는 업무가 줄었다(리뷰 11/02 M2)
+    in_scope = await namespace_scope_ids(conn, namespace)
+    rows = await conn.fetch(
+        """SELECT namespace_id, max(s) AS s FROM (
+               SELECT k.namespace_id, 1 - (k.embedding <=> $1::vector) AS s FROM rag_knowledge k
+               JOIN ops_namespace n ON n.id = k.namespace_id
+               WHERE k.status = 'active' AND n.kind = 'domain' AND n.id <> ALL($2::int[])
+               ORDER BY k.embedding <=> $1::vector LIMIT $3) t
+           GROUP BY namespace_id ORDER BY s DESC LIMIT $4""",
+        "[" + ",".join(str(float(x)) for x in query_vec) + "]", in_scope, pool, n)
+    return [r["namespace_id"] for r in rows]
+
+
+async def knowledge_scope_extra_ids(conn: asyncpg.Connection, namespace: str, scope: str | None,
+                                    query_vec: Sequence[float]) -> list[int]:
+    """검색 범위 실험 옵션의 추가 컬렉션 id — scope 없음이면 [](지금과 같음)."""
+    if not scope:
+        return []
+    if scope not in KNOWLEDGE_SCOPES:
+        raise ValueError(f"알 수 없는 검색 범위: {scope}")
+    ids = await linked_scope_ids(conn, namespace)
+    if scope == "similar":
+        ids += [i for i in await similar_domain_scope_ids(conn, namespace, query_vec) if i not in ids]
+    return ids

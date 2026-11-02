@@ -1447,6 +1447,11 @@ async def _migrate_ai_decision_ledger(conn) -> None:
                            PROMPT_KEY, LOCATE_SYSTEM)
     if r != "UPDATE 0":
         logger.info("[migrate #85] 위치 판정 프롬프트 v1 → v2(답 모양 kind·collection·org)")
+    # v2 → v3(11/02 조직 컬렉션 폐지 — 정책 / 시스템 컬렉션). v2 답 모양("org": …)이 그대로인 것만 — 관리자가 고친 프롬프트는 건드리지 않는다
+    r = await conn.execute("UPDATE ops_prompt SET content = $2 WHERE func_key = $1 AND content LIKE $3",
+                           PROMPT_KEY, LOCATE_SYSTEM, '%"org":"팀 공통|파트 이름|null"%')
+    if r != "UPDATE 0":
+        logger.info("[migrate #85] 위치 판정 프롬프트 v2 → v3(정책 / 시스템 컬렉션)")
 
 
 async def _migrate_eval_gate_run(conn) -> None:
@@ -1589,6 +1594,35 @@ async def _migrate_experiment_runner(conn) -> None:
     await conn.execute("ALTER TABLE rag_import_rule ADD CONSTRAINT rag_import_rule_namespace_id_fkey "
                        "FOREIGN KEY (namespace_id) REFERENCES ops_namespace(id) ON DELETE CASCADE")
 
+
+
+async def _migrate_system_area(conn) -> None:
+    """#105(11/02, 사용자 "시스템 축으로 개편 — 조직은 로그인·권한 뼈대만") 컬렉션 구분값. 업무 영역(kind='domain')을 둘로:
+    policy = 정책 컬렉션(정책서 장 기준 — 회원·쿠폰 …), system = 시스템 컬렉션(홈페이지 시스템 … — 운영 지식 전부).
+    검색·권한·담당·용어는 둘이 같다(같은 kind) — 다른 건 화면 묶기와 "받침" 연결(ops_link relation='supports', 시스템 → 업무)뿐.
+    시스템은 최상위만(하위 없음). 설계: docs/domains/knowledge/taxonomy-standard.md. 멱등."""
+    from core.database import STAGING_KIND, STAGING_NAME
+    await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS area TEXT NOT NULL DEFAULT 'policy'")
+    await conn.execute("ALTER TABLE ops_namespace ALTER COLUMN area SET DEFAULT 'policy'")
+    await conn.execute("ALTER TABLE ops_namespace DROP CONSTRAINT IF EXISTS ops_namespace_area_check")
+    # 처음 판(11/02 낮)은 'business'(업무) — 같은 날 밤 사용자 "업무가 아니라 정책" 으로 이름을 바꿨다(멱등)
+    await conn.execute("UPDATE ops_namespace SET area = 'policy' WHERE area = 'business'")
+    await conn.execute("ALTER TABLE ops_namespace ADD CONSTRAINT ops_namespace_area_check "
+                       "CHECK (area IN ('policy', 'system') AND (area = 'policy' OR (kind = 'domain' AND parent_id IS NULL)))")
+    # 업무 코드(11/02 사용자 "키는 사람이 보기 좋은 기능별 코드로") — 바뀌지 않는 유일한 키(POL-MBR · SYS-HP). 이름은 화면용이라 바뀔 수 있다.
+    # 정책·시스템 컬렉션(kind domain)만 갖는다(테스트용·보관 자리는 없음). 이름 키 → id·코드 전환은 docs/domains/knowledge/collection-key-plan.md
+    await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS code TEXT")
+    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ops_namespace_code_key ON ops_namespace (code) WHERE code IS NOT NULL")
+    await conn.execute("ALTER TABLE ops_namespace DROP CONSTRAINT IF EXISTS ops_namespace_code_check")
+    await conn.execute("ALTER TABLE ops_namespace ADD CONSTRAINT ops_namespace_code_check "
+                       "CHECK (code IS NULL OR code ~ '^(POL|SYS)-[A-Z]{2,5}$')")
+    # 팀 적재 원문 초안·읽기 제한 기록의 보관 자리(화면·검색에 안 나옴) — 예전엔 팀 공통 조직 컬렉션에 두었다(조직 컬렉션 폐지 전 옮김).
+    # 초안은 확정 때 넣을 곳으로 옮겨지고, 남은 초안·제한 기록만 여기 머문다. 컬렉션을 지우면 FK로 초안이 같이 지워지므로 조직 컬렉션보다 먼저.
+    await conn.execute("INSERT INTO ops_namespace (name, description, kind) VALUES ($1, '팀 적재 원문 초안 보관(화면·검색에 안 나옴)', $2) "
+                       "ON CONFLICT (name) DO NOTHING", STAGING_NAME, STAGING_KIND)
+    await conn.execute("UPDATE rag_source_document SET namespace_id = (SELECT id FROM ops_namespace WHERE name = $1) "
+                       "WHERE status IN ('draft', 'restricted') AND namespace_id IN (SELECT id FROM ops_namespace WHERE kind = 'org_space')",
+                       STAGING_NAME)
 
 
 async def _migrate_team_import(conn) -> None:
@@ -2341,6 +2375,7 @@ async def _run_migrations() -> None:
         await _migrate_source_check_link(conn)         # #92
         await _migrate_team_import(conn)               # #98 — 원장·조직 표 뒤
         await _migrate_experiment_runner(conn)         # #99 — 후보·판정 표 뒤
+        await _migrate_system_area(conn)               # #105 — 컬렉션 구분값(업무 / 시스템)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

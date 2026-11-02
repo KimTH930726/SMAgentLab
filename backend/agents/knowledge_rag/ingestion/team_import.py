@@ -257,14 +257,15 @@ async def sampling_required_for(conn, team_id: int, exclude_batch: Optional[int]
 
 async def team_context(conn, team_id: int, *, profiles: bool = False) -> dict:
     """후보·담당·초안을 둘 곳(팀 공통 조직 컬렉션). profiles = 대표 용어(LLM 판정에만 — 화면 폴링에선 안 읽음)."""
-    from core.database import OWNER_ROWS_SQL, org_team_key
+    from core.database import OWNER_ROWS_SQL, STAGING_NAME
     cands = await locator.load_candidates(conn)
     owners: dict[int, set[int]] = {}
     for r in await conn.fetch(f"SELECT namespace_id, part_id FROM {OWNER_ROWS_SQL} o"):
         owners.setdefault(r["namespace_id"], set()).add(r["part_id"])
     team_parts = {r["id"] for r in await conn.fetch("SELECT id FROM ops_part WHERE team_id = $1", team_id)}
     scoped, unowned = team_scope(cands, owners, team_parts)
-    draft_ns = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1 AND kind = 'org_space'", org_team_key(team_id))
+    # 원문 초안·읽기 제한 기록은 숨긴 보관 자리에(#105) — 예전엔 팀 공통 조직 컬렉션(조직 컬렉션 폐지)
+    draft_ns = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", STAGING_NAME)
     return {"cands": scoped, "unowned": unowned, "draft_ns": draft_ns, "owners": owners, "team_parts": team_parts,
             "profiles": await locator.load_profiles(conn, [c.id for c in scoped]) if profiles else {}}
 
@@ -344,7 +345,7 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
         b = await conn.fetchrow("SELECT team_id, root_url, default_namespace_id FROM rag_import_batch WHERE id = $1", batch_id)
         ctx = await team_context(conn, b["team_id"], profiles=True)
     if ctx["draft_ns"] is None:   # 초안·제한 기록을 둘 곳이 없으면 확정 때 전부 실패한다 — 처음에 실패로 보이게(리뷰 10/29)
-        raise ValueError("이 팀의 팀 공통 조직 컬렉션이 없어 원문 초안을 둘 곳이 없어요 — 조직·권한에서 팀을 확인해 주세요.")
+        raise ValueError("원문 초안 보관 자리(stage:import)가 없어요 — 백엔드를 재시작하면 기동 마이그레이션이 만듭니다.")
     _, page_id, space_key, title_hint = _parse_confluence_url(b["root_url"])
     if page_id or title_hint:   # 페이지 주소 — 그 페이지 아래 트리
         t = await fetch_confluence_tree(b["root_url"], token, max_depth=10, max_pages=MAX_PAGES)

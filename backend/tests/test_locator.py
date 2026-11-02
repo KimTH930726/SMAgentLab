@@ -82,10 +82,9 @@ def test_decide_properties_random():
 
 @pytest.mark.parametrize("raw,team,want", [
     ('{"kind":"업무","collection":"딜리버스","org":null,"doc_type":"지식 문서","reason":"r"}', 1, (1, "지식 문서")),
-    ('<think>...</think>{"kind":"조직","collection":null,"org":"팀 공통","doc_type":"정책서"}', 1, (10, "정책서")),
-    ('{"kind":"조직","org":"팀 공통","doc_type":"지식 문서"}', 2, (20, "지식 문서")),       # 팀 공통 = 넣는 사람의 팀
-    ('{"kind":"조직","org":"온라인 파트","doc_type":"지식 문서"}', 2, (21, "지식 문서")),   # 파트 이름이 같아도 내 팀 것
+    ('<think>...</think>{"kind":"컬렉션","collection":"POS","doc_type":"정책서"}', 1, (2, "정책서")),   # v3 답 모양(11/02)
     ('{"kind":"애매","doc_type":"이상한 값"}', 1, (None, "지식 문서")),
+    ('{"kind":"애매","doc_type":"대상 아님"}', 1, (None, "대상 아님")),   # IT 운영 지식 아님(11/02) — 소스 연결이 제외 제안
 ])
 def test_parse_llm(raw, team, want):
     ai, dt, _ = parse_llm(raw, C, team)
@@ -95,8 +94,8 @@ def test_parse_llm(raw, team, want):
 @pytest.mark.parametrize("raw,team", [
     ('{"kind":"업무","collection":"없는 업무","doc_type":"지식 문서"}', 1),   # 지어낸 이름 — 애매가 아니라 모양 오류
     ('{"kind":"업무","collection":null}', 1),
-    ('{"kind":"조직","org":"온라인 파트"}', None),                          # 소속 팀 없는데 조직 이름
-    ('{"kind":"조직","org":"없는 파트"}', 1),
+    ('{"kind":"조직","org":"팀 공통","doc_type":"지식 문서"}', 1),          # 조직 컬렉션 폐지(11/02) — 조직 답은 모양 오류
+    ('{"kind":"컬렉션","collection":"org:team:1"}', 1),                    # 조직 키를 이름으로 대도 후보가 아님
 ])
 def test_parse_llm_invented_name_is_shape_error(raw, team):
     from agents.knowledge_rag.ingestion.locator import ShapeError

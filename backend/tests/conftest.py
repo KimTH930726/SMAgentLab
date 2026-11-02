@@ -62,7 +62,7 @@ _db_mod.OWNER_MIRROR_SYNC_SQL = _real_db.OWNER_MIRROR_SYNC_SQL
 # 조직 컬렉션(#83) 상수·순수 함수·연결을 받는 함수도 실제 것 — 가짜 연결(_fake_conn)에서도 그대로 돈다(설정 꺼짐 → 빈 범위)
 for _n in ("OWNER_ROWS_SQL", "ORG_KIND", "ORG_NAME_PREFIX", "ORG_TEAM_PREFIX", "ORG_PART_PREFIX", "ORG_CONTENT_SQL", "ORG_SPACE_SCOPE_KEY",
            "org_team_key", "org_part_key", "org_display_name", "create_org_collection", "delete_org_collection",
-           "org_space_scope_extra_ids"):
+           "org_space_scope_extra_ids", "STAGING_KIND", "STAGING_NAME", "STAGING_NAME_PREFIX"):
     setattr(_db_mod, _n, getattr(_real_db, _n))
 sys.modules["core.database"] = _db_mod
 

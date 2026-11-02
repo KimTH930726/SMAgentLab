@@ -122,10 +122,14 @@ async def reject_org_collection(namespace: str, what: str) -> None:
     """조직 컬렉션엔 지식 문서·용어만 둔다(collection-design §2, #83) — 정책·시스템 정보(참조데이터) 쓰기 경로가 부른다. 조직 컬렉션이면 400.
     없는 이름은 그냥 지나간다(그 뒤 검사가 404 등으로 다룬다)."""
     async with get_conn() as conn:
-        kind = await conn.fetchval("SELECT kind FROM ops_namespace WHERE name = $1", namespace)
-    if kind == ORG_KIND:
+        row = await conn.fetchrow("SELECT kind, area FROM ops_namespace WHERE name = $1", namespace)
+    if row and row["kind"] == ORG_KIND:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"조직 컬렉션엔 {what}을(를) 둘 수 없어요 — 정책·시스템 정보는 업무 컬렉션에 둡니다.")
+    # 정책은 업무 컬렉션에만(#105 시스템 축) — 시스템 컬렉션은 운영·개발 지식과 시스템 정보(참조데이터)
+    if row and row["area"] == "system" and what == "정책":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="시스템 컬렉션엔 정책을 둘 수 없어요 — 정책은 정책 컬렉션에 둡니다.")
 
 
 async def check_knowledge_read(namespace: str, user: dict) -> None:

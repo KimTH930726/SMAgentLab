@@ -185,7 +185,7 @@ async def _collections(conn, team_id: int, user: dict) -> list[dict]:
     part_names = {r["id"]: r["name"] for r in await conn.fetch("SELECT id, name FROM ops_part WHERE id = ANY($1::int[])",
                                                                 sorted({p for s in ctx["owners"].values() for p in s}))}
     allowed = ti.allowed_ids(ctx, team_id)
-    return [{"id": c.id, "label": c.label, "kind": c.kind, "unowned": c.id in ctx["unowned"],
+    return [{"id": c.id, "label": c.label, "kind": c.kind, "area": c.area, "unowned": c.id in ctx["unowned"],
              "writable": edit_denied_reason(ctx["owners"].get(c.id, set()), user) is None,
              "parts": [part_names.get(x) for x in sorted(ctx["owners"].get(c.id, set()) & ctx["team_parts"])]}
             for c in ctx["cands"] if c.id in allowed]

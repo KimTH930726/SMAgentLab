@@ -299,6 +299,19 @@ class TestAnswerShaping:
         assert agent.retrieval.search_knowledge.await_args.kwargs["extra_ns_ids"] == [100, 200]
 
     @pytest.mark.asyncio
+    async def test_knowledge_scope_option_adds_collections_without_duplicates(self, monkeypatch):
+        """검색 범위 실험 옵션(11/02, 측정 전용) — 주지 않으면 호출하지 않고(채팅 그대로), 주면 그 컬렉션을 더하되 질문자 조직과 겹치지 않게."""
+        self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[])
+        scope = AsyncMock(return_value=[200, 300])
+        monkeypatch.setattr(agent, "knowledge_scope_extra_ids", scope)
+        monkeypatch.setattr(agent, "org_space_scope_extra_ids", AsyncMock(return_value=[100, 200]))
+        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, asker_part_id=7)
+        assert scope.await_count == 0
+        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, asker_part_id=7, knowledge_scope="linked")
+        assert scope.await_args.args[1:3] == ("ns", "linked")
+        assert agent.retrieval.search_knowledge.await_args.kwargs["extra_ns_ids"] == [100, 200, 300]
+
+    @pytest.mark.asyncio
     async def test_topic_question_keeps_search_results(self, monkeypatch):
         _, seen = self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[1])
         await self._run("교환 정책 좀")                               # 전부·목록 신호 없음 → 거르지 않음

@@ -290,7 +290,7 @@ async def set_part_domains(part_id: int, names: list[str]) -> Optional[dict]:
             return None
         # 바뀔 수 있는 영역 행을 id 순으로 잠근다(영역 수정 창 update_namespace_settings도 영역 행을 먼저 잡는다 — 담당 표 바꾸기가 엇갈리지 않게)
         rows = await conn.fetch(
-            """SELECT id, name FROM ops_namespace WHERE kind <> 'org_space' AND (name = ANY($1::text[])
+            """SELECT id, name FROM ops_namespace WHERE kind NOT IN ('org_space', 'staging') AND (name = ANY($1::text[])
                OR id IN (SELECT namespace_id FROM ops_namespace_owner WHERE part_id = $2)) ORDER BY id FOR UPDATE""", wanted, part_id)
         found = {r["name"] for r in rows}
         missing = [n for n in wanted if n not in found]

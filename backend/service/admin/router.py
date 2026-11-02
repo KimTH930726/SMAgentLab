@@ -9,7 +9,7 @@ from core.config import settings
 from core.database import OWNER_ROWS_SQL, effective_owner_ns_sql, get_conn, resolve_namespace_id
 from core.dependencies import get_current_user, get_current_admin, check_namespace_ownership, edit_denied_reason, check_namespace_read
 from service.admin.schemas import (
-    NamespaceCreate, NamespaceInfo, NamespaceRename, NamespaceSettings,
+    NamespaceCreate, NamespaceInfo, NamespaceRename, NamespaceSettings, SupportsUpdate,
     TermStat, NamespaceDetailStats,
     LLMConfigUpdate, LLMTestRequest, ThresholdUpdate, SearchDefaultsUpdate,
 )
@@ -81,7 +81,7 @@ async def create_namespace_endpoint(body: NamespaceCreate, user: dict = Depends(
     # 업무 영역 트리는 관리자만 만든다(2026-10-20 — 예전엔 조회 전용 계정도 만들 수 있었고, 같은 이름이면 설명을 덮어썼다).
     # 담당 파트는 업무 영역 관리에서 따로 지정. 상위 영역(선택) 검사 위반은 ValueError → 400(main.py 공통 처리)
     created = await service.create_namespace(body.name, body.description, owner_part=None, created_by_user_id=user["id"],
-                                             parent_id=body.parent_id)
+                                             parent_id=body.parent_id, area=body.area, code=body.code)
     if created is None:
         raise HTTPException(status_code=409, detail=service.NAME_TAKEN)
     return created
@@ -102,6 +102,15 @@ async def update_namespace_settings(name: str, body: NamespaceSettings, user: di
     try:
         return await service.update_namespace_settings(name, body)
     except service.NamespaceNotFound as e:   # 전역 LookupError 처리는 KeyError(버그)까지 404로 바꿔 숨겨서 쓰지 않는다
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.put("/api/namespaces/{name}/supports", response_model=list[str])
+async def update_supports(name: str, body: SupportsUpdate, user: dict = Depends(get_current_admin)):
+    """시스템의 관련 정책(#105, 관리자) — 통째 교체. 검색 범위 넓히기(관련 정책 ↔ 시스템)의 근거라 시스템·정책 컬렉션이 아니면 400."""
+    try:
+        return await service.set_supports(name, body.policies)
+    except service.NamespaceNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 

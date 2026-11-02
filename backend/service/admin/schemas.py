@@ -1,5 +1,5 @@
 """관리 도메인 — Pydantic 스키마 (namespace, stats, llm)."""
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 from service.validation import Name
@@ -11,6 +11,12 @@ class NamespaceCreate(BaseModel):
     name: Name
     description: str = Field(default="", max_length=1000)
     parent_id: Optional[int] = Field(default=None, ge=1, le=2_147_483_647)   # 상위 영역(선택, 최상위만 — 트리 깊이 1)
+    area: Literal["policy", "system"] = "policy"   # 정책(정책서) / 시스템(운영 지식, #105 — 최상위만)
+    code: Optional[str] = Field(default=None, pattern=r"^(POL|SYS)-[A-Z]{2,5}$")   # 업무 코드(불변·유일, 예: POL-MBR · SYS-HP)
+
+
+class SupportsUpdate(BaseModel):
+    policies: list[Name] = Field(default_factory=list, max_length=50)   # 이 시스템의 관련 정책 컬렉션 이름(통째 교체)
 
 
 class NamespaceRename(BaseModel):
@@ -37,6 +43,9 @@ class NamespaceInfo(BaseModel):
     name: str
     description: str
     kind: str = "domain"                  # domain | org_space(조직 컬렉션, #83) | policy_test(E2E 임시)
+    area: str = "policy"                  # policy(정책 컬렉션) | system(시스템 컬렉션, #105) — kind domain을 둘로 묶는 값
+    supports: list[str] = []              # 시스템의 관련 정책 이름(ops_link 'supports') — 정책 컬렉션은 []
+    code: Optional[str] = None            # 업무 코드(#105, 불변·유일 — POL-MBR · SYS-HP). 이름은 화면용
     display_name: str = ""                # 화면 이름 — 업무 = name, 조직 = "팀 공통 · <팀>" / "<파트>"(조회 때 만듦 — name은 id 키)
     owner_team_id: Optional[int] = None   # 팀 공통 조직 컬렉션의 팀
     team_id: Optional[int] = None         # 조직 컬렉션이 속한 팀(묶기용 — 팀 공통은 그 팀, 파트는 그 파트의 팀). 업무 컬렉션은 None

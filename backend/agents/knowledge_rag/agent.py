@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from agents.base import AgentBase
-from core.database import get_conn, namespace_scope_ids, org_space_scope_extra_ids
+from core.database import get_conn, knowledge_scope_extra_ids, namespace_scope_ids, org_space_scope_extra_ids
 from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
@@ -207,6 +207,7 @@ async def build_chat_context(
     glossary_mode: Optional[str] = None, glossary_entries: Optional[list] = None,
     policy_top_k: int = POLICY_CONTEXT_TOP_K, category_lists: bool = True, clarify_scope: Optional[str] = None,
     list_question: Optional[str] = None, asker_part_id: Optional[int] = None,
+    knowledge_scope: Optional[str] = None,
 ) -> ChatContext:
     """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB).
     asker_part_id = 질문한 사람의 파트 — 설정 chat.org_space_scope가 켜졌을 때만 그 사람의 조직 컬렉션을 지식 검색에 더한다(기본 꺼짐, #83)."""
@@ -228,6 +229,10 @@ async def build_chat_context(
                 org_extra = await org_space_scope_extra_ids(conn, namespace, asker_part_id)
         except Exception as e:
             logger.warning("조직 컬렉션 범위 계산 실패(고른 컬렉션만 검색): %s", e)
+    # 검색 범위 실험(11/02, 측정 옵션만 — 채팅은 넘기지 않음): linked = 받침 연결(업무↔시스템), similar = linked + 질문과 가까운 업무 2개
+    if knowledge_scope:
+        async with get_conn() as conn:
+            org_extra += [i for i in await knowledge_scope_extra_ids(conn, namespace, knowledge_scope, query_vec) if i not in org_extra]
     term_matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(
         namespace, search_question, query_vec, mode=glossary_mode, entries=glossary_entries, extra_ns_ids=policy_ns_ids)
 

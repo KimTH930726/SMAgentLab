@@ -55,13 +55,13 @@ CREATE TABLE ops_namespace (
     id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, description TEXT DEFAULT '', kind TEXT NOT NULL DEFAULT 'domain',
     owner_part_id INTEGER REFERENCES ops_part(id) ON DELETE SET NULL,
     parent_id INTEGER REFERENCES ops_namespace(id) ON DELETE SET NULL,
-    owner_team_id INTEGER REFERENCES ops_team(id),
+    owner_team_id INTEGER REFERENCES ops_team(id), area TEXT NOT NULL DEFAULT 'policy', code TEXT UNIQUE,
     created_by_user_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE ops_namespace_owner (
     namespace_id INTEGER NOT NULL REFERENCES ops_namespace(id) ON DELETE CASCADE,
     part_id INTEGER NOT NULL REFERENCES ops_part(id) ON DELETE CASCADE,
     PRIMARY KEY (namespace_id, part_id));
-CREATE TABLE ops_link (id INTEGER PRIMARY KEY, relation TEXT, status TEXT, from_type TEXT, from_key TEXT, to_type TEXT, to_key TEXT);
+CREATE TABLE ops_link (id INTEGER PRIMARY KEY, relation TEXT, status TEXT DEFAULT 'active', from_type TEXT, from_key TEXT, to_type TEXT, to_key TEXT, source TEXT);
 CREATE TABLE ops_query_log (id INTEGER PRIMARY KEY, namespace_id INTEGER REFERENCES ops_namespace(id) ON DELETE CASCADE);
 CREATE TABLE rag_knowledge (id INTEGER PRIMARY KEY, namespace_id INTEGER, status TEXT, content TEXT, heading_path TEXT);
 CREATE TABLE rag_glossary (id INTEGER PRIMARY KEY, namespace_id INTEGER);
@@ -534,6 +534,76 @@ def _settings(**kw):
 
 
 class TestCreateUpdateDelete:
+    @pytest.mark.asyncio
+    async def test_system_collection_top_level_only(self, db):
+        """시스템 컬렉션(#105, 11/02 시스템 축) — 최상위만: 상위를 둘 수도, 하위의 상위가 될 수도 없다. 내부 보관 이름(stage:)은 예약."""
+        db.ns(20, "제휴서비스")
+        with _patch_conn(admin_service, db):
+            out = await admin_service.create_namespace("홈페이지 시스템", area="system", code="SYS-HP")
+            assert out["area"] == "system" and out["code"] == "SYS-HP"
+            with pytest.raises(ValueError, match="이미 쓰는 코드"):
+                await admin_service.create_namespace("홈페이지2", area="system", code="SYS-HP")
+            with pytest.raises(ValueError, match="앞자리"):
+                await admin_service.create_namespace("쿠폰", code="SYS-CPN")
+            sys_id = db.db.execute("SELECT id FROM ops_namespace WHERE name = '홈페이지 시스템'").fetchone()[0]
+            with pytest.raises(ValueError, match="최상위만"):
+                await admin_service.create_namespace("앱 시스템", area="system", parent_id=20)
+            with pytest.raises(ValueError, match="시스템 컬렉션은 상위 영역이 될 수 없습니다"):
+                await admin_service.create_namespace("배달", parent_id=sys_id)
+            with pytest.raises(ValueError, match="내부 보관용"):
+                await admin_service.create_namespace("stage:x")
+        assert db.db.execute("SELECT COUNT(*) FROM ops_namespace WHERE name IN ('앱 시스템', '배달', 'stage:x')").fetchone()[0] == 0
+
+    @pytest.mark.asyncio
+    async def test_system_supports_many_business(self, db):
+        """받침 연결(#105) — 시스템 하나가 업무 여럿(N:N), 통째 교체. 시스템이 아닌 쪽·업무가 아닌 대상은 거절하고 아무것도 안 바꾼다."""
+        db.ns(20, "회원")
+        db.ns(21, "리워드")
+        db.db.execute("INSERT INTO ops_namespace (id, name, area) VALUES (30, '홈페이지 시스템', 'system'), (31, '앱 시스템', 'system')")
+        with _patch_conn(admin_service, db):
+            assert await admin_service.set_supports("홈페이지 시스템", ["회원", "리워드", "회원"]) == ["리워드", "회원"]
+            assert await admin_service.set_supports("앱 시스템", ["회원"]) == ["회원"]          # 업무 하나를 시스템 여럿이 받칠 수도
+            got = {d["name"]: d["supports"] for d in await admin_service.list_namespaces_detail()}
+            assert got["홈페이지 시스템"] == ["리워드", "회원"] and got["앱 시스템"] == ["회원"] and got["회원"] == []
+            disp = {d["name"]: d["display_name"] for d in await admin_service.list_namespaces_detail()}
+            assert disp["홈페이지 시스템"] == "홈페이지" and disp["회원"] == "회원"   # 시스템 탭 아래라 " 시스템"을 뗀 화면 이름(11/02)
+            assert await admin_service.set_supports("홈페이지 시스템", ["리워드"]) == ["리워드"]   # 통째 교체
+            with pytest.raises(ValueError, match="시스템 컬렉션에만"):
+                await admin_service.set_supports("회원", ["리워드"])
+            with pytest.raises(ValueError, match="정책 컬렉션이 아닙니다"):
+                await admin_service.set_supports("홈페이지 시스템", ["앱 시스템", "없는 업무"])
+            got = {d["name"]: d["supports"] for d in await admin_service.list_namespaces_detail()}
+        assert got["홈페이지 시스템"] == ["리워드"]   # 거절된 요청은 안 바꿈
+
+    @pytest.mark.asyncio
+    async def test_linked_scope_follows_supports_both_ways(self, db):
+        """검색 범위 linked(11/02): 업무 → 받치는 시스템들, 하위 업무 → 상위의 시스템도, 시스템 → 받치는 업무들. 연결 없으면 []."""
+        import importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location("_real_db_linked", Path(__file__).resolve().parent.parent / "core" / "database.py")
+        real = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(real)
+        db.ns(20, "회원")
+        db.ns(21, "회원등급", parent=20)
+        db.ns(22, "쿠폰")
+        db.db.execute("INSERT INTO ops_namespace (id, name, area) VALUES (30, '홈페이지 시스템', 'system'), (31, '앱 시스템', 'system')")
+        with _patch_conn(admin_service, db):
+            await admin_service.set_supports("홈페이지 시스템", ["회원", "쿠폰"])
+            await admin_service.set_supports("앱 시스템", ["회원"])
+        assert await real.linked_scope_ids(db, "회원") == [30, 31]
+        assert await real.linked_scope_ids(db, "회원등급") == [30, 31]
+        assert await real.linked_scope_ids(db, "홈페이지 시스템") == [20, 22]
+        assert await real.linked_scope_ids(db, "앱 시스템") == [20]
+        assert await real.linked_scope_ids(db, "회원등급") and await real.linked_scope_ids(db, "없는 곳") == []
+
+    @pytest.mark.asyncio
+    async def test_list_hides_staging(self, db):
+        db.ns(20, "제휴서비스")
+        db.db.execute("INSERT INTO ops_namespace (id, name, kind) VALUES (99, 'stage:import', 'staging')")
+        with _patch_conn(admin_service, db):
+            names = [d["name"] for d in await admin_service.list_namespaces_detail()]
+        assert "stage:import" not in names and "제휴서비스" in names
+
     @pytest.mark.asyncio
     async def test_create_child_under_top_level(self, db):
         db.ns(20, "제휴서비스")
