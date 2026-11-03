@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { CheckCircle2, Lock, TriangleAlert } from 'lucide-react';
@@ -56,6 +56,10 @@ export function TechniqueFlow() {
   const f = FLOWS.find((x) => x.key === flow)!;
   const inFlow = useMemo(() => techs.filter((t) => t.flow === flow), [techs, flow]);
   const sel = inFlow.find((t) => t.key === selKey) ?? null;
+  // 닫히는 동안(0.2초 애니메이션) 마지막 기법을 그대로 그린다 — 바로 비우면 빈 상자가 줄어들었다(리뷰 L3)
+  const lastSel = useRef<Technique | null>(null);
+  if (sel) lastSel.current = sel;
+  const shown = sel ?? lastSel.current;
   if (isLoading) return <p className="text-sm text-slate-500">불러오는 중…</p>;
   if (error) return <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(error as Error).message}</p>;
   const count = (s: Technique['state']) => inFlow.filter((t) => t.state === s).length;
@@ -136,33 +140,33 @@ export function TechniqueFlow() {
       </div>
 
       {inFlow.length === 0 && <p className="text-sm text-slate-500">이 흐름엔 기법이 없어요.</p>}
-      <Modal isOpen={!!sel} onClose={() => setSelKey(null)} title={sel?.name} maxWidth="max-w-xl">
-        {sel && (
+      <Modal isOpen={!!sel} onClose={() => setSelKey(null)} title={shown?.name} maxWidth="max-w-xl">
+        {shown && (
           <div className="space-y-3 max-h-[70vh] overflow-y-auto" data-testid="technique-flow-panel">
               <div className="flex flex-wrap items-center gap-2">
-                <span className={clsx('rounded-full px-2 py-0.5 text-[11px] font-semibold', STATE[sel.state].cls)}>{STATE[sel.state].label}</span>
+                <span className={clsx('rounded-full px-2 py-0.5 text-[11px] font-semibold', STATE[shown.state].cls)}>{STATE[shown.state].label}</span>
               </div>
-              {sel.state === 'required' && <p className="text-xs text-slate-400"><Lock className="inline h-3 w-3" /> 필수 — 항상 적용돼요. 바꿀 수 없어요(서버가 막음).</p>}
-              {sel.switchable && sel.baseline_on !== null && (
-                <p className={clsx('text-[11px]', (sel.state === 'on') === sel.baseline_on ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300')}>
-                  {(sel.state === 'on') === sel.baseline_on ? `최적 값(${sel.baseline_on ? '켜짐' : '꺼짐'}) 그대로` : `최적 값은 ${sel.baseline_on ? '켜짐' : '꺼짐'} — 지금 벗어나 있어요`}
+              {shown.state === 'required' && <p className="text-xs text-slate-400"><Lock className="inline h-3 w-3" /> 필수 — 항상 적용돼요. 바꿀 수 없어요(서버가 막음).</p>}
+              {shown.switchable && shown.baseline_on !== null && (
+                <p className={clsx('text-[11px]', (shown.state === 'on') === shown.baseline_on ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300')}>
+                  {(shown.state === 'on') === shown.baseline_on ? `최적 값(${shown.baseline_on ? '켜짐' : '꺼짐'}) 그대로` : `최적 값은 ${shown.baseline_on ? '켜짐' : '꺼짐'} — 지금 벗어나 있어요`}
                 </p>
               )}
-              {sel.off_reason && <p className="text-xs text-amber-700 dark:text-amber-300">미적용 사유: {sel.off_reason}</p>}
-              {sel.switchable && (
+              {shown.off_reason && <p className="text-xs text-amber-700 dark:text-amber-300">미적용 사유: {shown.off_reason}</p>}
+              {shown.switchable && (
                 <div className="flex flex-wrap items-center gap-2">
                   {isAdmin ? (
-                    <button onClick={() => void onToggle(sel)} disabled={toggle.isPending} data-testid="technique-switch"
+                    <button onClick={() => void onToggle(shown)} disabled={toggle.isPending} data-testid="technique-switch"
                       className={clsx('rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-40',
-                        sel.state === 'on' ? 'border border-slate-600 text-slate-200 hover:bg-slate-700' : 'bg-indigo-600 text-white hover:bg-indigo-500')}>
-                      {sel.state === 'on' ? '끄기' : '켜기'}
+                        shown.state === 'on' ? 'border border-slate-600 text-slate-200 hover:bg-slate-700' : 'bg-indigo-600 text-white hover:bg-indigo-500')}>
+                      {shown.state === 'on' ? '끄기' : '켜기'}
                     </button>
                   ) : <span className="text-[11px] text-slate-500">켜고 끄기는 관리자만</span>}
-                  {sel.changed?.at && <span className="text-[11px] text-slate-500">최근 변경 {sel.changed.by ?? ''} · {new Date(sel.changed.at).toLocaleString('ko-KR')}</span>}
+                  {shown.changed?.at && <span className="text-[11px] text-slate-500">최근 변경 {shown.changed.by ?? ''} · {new Date(shown.changed.at).toLocaleString('ko-KR')}</span>}
                 </div>
               )}
-              {!sel.switchable && sel.state === 'on' && <p className="text-[11px] text-slate-500" title="코드에 고정 — 바꾸려면 개선 후보·평가 게이트로">적용 중 · 스위치 없음</p>}
-              <TechniqueCard t={sel} showName={false} />
+              {!shown.switchable && shown.state === 'on' && <p className="text-[11px] text-slate-500" title="코드에 고정 — 바꾸려면 개선 후보·평가 게이트로">적용 중 · 스위치 없음</p>}
+              <TechniqueCard t={shown} showName={false} />
           </div>
         )}
       </Modal>
