@@ -213,7 +213,11 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
     await expect(page.getByTestId('app-dialog-message')).toContainText('바뀐 것이 없습니다');
     await page.getByTestId('app-dialog-ok').click();
   } finally {
-    for (const id of ids) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
+    // 승인 대기로 간 조각도 표시 글자로 찾아 지운다 — 사용 중만 지우면 중간 실패 때 남은 조각이 다음 실행을 "유사 지식"으로 막았다(11/03)
+    const pend = await page.request.get(`/api/knowledge?namespace=${encodeURIComponent(NAMESPACE)}&status=pending_review`, { headers: authHeader })
+      .then((r) => r.json()).catch(() => []);
+    const left = (Array.isArray(pend) ? pend as Array<{ id: number; content: string }> : []).filter((k) => k.content.includes('구조 테스트')).map((k) => k.id);
+    for (const id of new Set(ids.concat(left))) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
   }
 });
 
