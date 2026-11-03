@@ -65,7 +65,7 @@ export default function Admin() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
   // 보는 컬렉션이 시스템이면 정책서·VOC는 메뉴에서 빠지고(담을 수 없음), 그 주소로 오면 아래 바로잡기가 운영 지식으로 옮긴다(10/23, 11/02)
-  const { groups } = useAdminMenu();
+  const { groups, kindKnown } = useAdminMenu();
   const current = resolveAdminMenu(location.pathname, groups);
   const go = (id: AdminMenuId) => navigate(adminPath(id));
   // 컬렉션 현황 화면(업무·시스템)의 [지식 등록 →]·[보기 →] — 컬렉션은 링크가 먼저 골라 둔다.
@@ -75,11 +75,12 @@ export default function Admin() {
   // 없는 메뉴·볼 수 없는 메뉴 주소로 들어오면 실제로 보여 주는 메뉴 주소로 바로잡는다(주소창과 화면이 어긋나지 않게)
   // 옛 캐시 주소(/admin/sys.cache)는 설정 › 캐시 탭으로(11/03 캐시를 설정 안으로)
   useEffect(() => {
+    if (!kindKnown) return;   // 컬렉션 종류를 확인하기 전엔 그대로(시스템에만 있는 메뉴 주소가 홈으로 튕기지 않게 — 리뷰 M1)
     const tab = aliasTab(location.pathname);
     // 관리자 전용(플랫폼 관리) 화면 주소로 온 비관리자 — 조용히 바꾸지 않고 알린 뒤 컬렉션 관리 홈으로(리뷰 11/03)
     if (blockedPlatform(location.pathname, groups)) void showAlert('플랫폼 관리(관리자 전용) 화면이에요. 볼 수 있는 화면으로 이동합니다.', { title: '접근 권한 없음' });   // 조회 전용은 홈이 없어 설정으로 간다(재리뷰 L2)
     if (location.pathname !== adminPath(current)) navigate(tab ? `${adminPath(current)}?tab=${tab}` : adminPath(current), { replace: true });
-  }, [location.pathname, current, navigate, groups]);
+  }, [location.pathname, current, navigate, groups, kindKnown]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">

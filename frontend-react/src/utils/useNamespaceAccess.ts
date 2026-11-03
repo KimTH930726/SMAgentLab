@@ -20,7 +20,7 @@ export function useNamespaceAccess() {
     staleTime: 30_000,
   });
 
-  const { data: namespaces = [] } = useQuery({
+  const { data: namespaces = [], isFetched: namespacesFetched } = useQuery({
     queryKey: ['namespaces'],
     queryFn: getNamespaces,
     staleTime: 30_000,
@@ -31,5 +31,5 @@ export function useNamespaceAccess() {
   const nsOwners = effectiveOwnerParts(nsDetails.find((n) => n.name === selectedNs));
   const canModifyNs = canEditDomain(user, nsOwners);
 
-  return { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, namespaces, nsDetails, nsLoading, nsError, user };
+  return { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, namespaces, namespacesFetched, nsDetails, nsLoading, nsError, user };
 }

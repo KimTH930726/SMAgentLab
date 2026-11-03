@@ -30,6 +30,8 @@ test('최적 상태 표시 → 스위치로 벗어나면 경고·주황 띠 → 
     await expect(flow.getByTestId('technique-off-baseline')).toContainText('다른 컬렉션');
     expect(psql(`SELECT value FROM ops_system_config WHERE key = 'chat.collection_suggest'`)).toBe('true');
 
+    await page.keyboard.press('Escape');   // 상세는 모달 — 닫고 띠의 [최적으로 되돌리기]
+    await expect(page.getByTestId('technique-flow-panel')).toBeHidden();
     await flow.getByTestId('technique-restore').click();
     await page.getByTestId('app-dialog-ok').click();
     await expect(flow.getByTestId('technique-optimal')).toBeVisible();

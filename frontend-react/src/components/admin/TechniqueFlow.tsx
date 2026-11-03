@@ -6,10 +6,11 @@ import { getTechniqueBaseline, listTechniques, restoreTechniqueBaseline, switchT
 import { useAuthStore } from '../../store/useAuthStore';
 import { showConfirm, showError } from '../../store/useDialogStore';
 import { TechniqueCard } from './TechniqueCard';
+import { Modal } from '../ui/Modal';
 
 /**
  * 기법 대장 흐름도(11/03, 태훈 "흐름도상 어떤 단계에서 쓰이는 기법인지 · 필수는 필수 · 끄고 켤 수 있는 건 끄고 켜게 · 적용 중/미적용이 보이게").
- * 흐름(채팅·적재·평가) 탭 → 단계 칸마다 기법 카드(필수 🔒 / 적용 중 / 미적용) → 누르면 오른쪽에 하는 일·기준값·근거(TechniqueCard) + 스위치.
+ * 흐름(채팅·적재·평가) 탭 → 단계 칸마다 기법 카드(필수 🔒 / 적용 중 / 미적용) → 누르면 상세 창(모달, 11/03 태훈 — 옆 칸이 단계 칸을 가려서)에 하는 일·기준값·근거(TechniqueCard) + 스위치.
  * 단계 순서는 서버 techniques.FLOWS와 같다. 스위치는 관리자만, 바꾸면 바로 적용되고 답변 캐시를 비운다(서버).
  */
 
@@ -54,7 +55,7 @@ export function TechniqueFlow() {
   const restore = useMutation({ mutationFn: restoreTechniqueBaseline, onSuccess: refresh, onError: (e: Error) => void showError(e, '최적으로 되돌리기 실패') });
   const f = FLOWS.find((x) => x.key === flow)!;
   const inFlow = useMemo(() => techs.filter((t) => t.flow === flow), [techs, flow]);
-  const sel = inFlow.find((t) => t.key === selKey) ?? inFlow[0] ?? null;
+  const sel = inFlow.find((t) => t.key === selKey) ?? null;
   if (isLoading) return <p className="text-sm text-slate-500">불러오는 중…</p>;
   if (error) return <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(error as Error).message}</p>;
   const count = (s: Technique['state']) => inFlow.filter((t) => t.state === s).length;
@@ -110,37 +111,36 @@ export function TechniqueFlow() {
         </div>
       ))}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-3">
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {f.steps.map((step, i) => (
-            <section key={step} aria-label={`${step} 단계`} className="flex min-w-[160px] flex-1 flex-col gap-2 rounded-xl border border-slate-700 bg-slate-800/60 p-2">
-              <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
-                <span className="grid h-5 w-5 place-items-center rounded-full bg-indigo-100 text-[11px] text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">{i + 1}</span>{step}
-              </h4>
-              {inFlow.filter((t) => t.step === step).map((t) => (
-                <button key={t.key} onClick={() => setSelKey(t.key)} data-testid={`flow-tech-${t.key}`} data-state={t.state}
-                  aria-pressed={sel?.key === t.key} title={t.switchable ? '켜고 끄기는 오른쪽 상세에서' : undefined}
-                  className={clsx('flex flex-col gap-1 rounded-lg border px-2.5 py-2 text-left',
-                    sel?.key === t.key ? 'border-indigo-500 ring-1 ring-indigo-500' : 'border-slate-700 hover:border-slate-500',
-                    t.state === 'off' ? 'bg-slate-900/40 opacity-75' : 'bg-slate-900')}>
-                  <span className="flex items-start justify-between gap-2">
-                    <span className={clsx('text-xs font-medium text-slate-100', t.state === 'off' && 'line-through decoration-slate-500')}>{t.name}</span>
-                    {t.state === 'required' ? <Lock className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-label="필수" /> : t.switchable ? <Switch on={t.state === 'on'} /> : null}
-                  </span>
-                  <span className={clsx('w-fit rounded-full px-1.5 py-0.5 text-[10px] font-semibold', STATE[t.state].cls)}>{STATE[t.state].label}</span>
-                </button>
-              ))}
-              {inFlow.every((t) => t.step !== step) && <p className="text-[11px] text-slate-500">없음</p>}
-            </section>
-          ))}
-        </div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {f.steps.map((step, i) => (
+          <section key={step} aria-label={`${step} 단계`} className="flex min-w-[160px] flex-1 flex-col gap-2 rounded-xl border border-slate-700 bg-slate-800/60 p-2">
+            <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+              <span className="grid h-5 w-5 place-items-center rounded-full bg-indigo-100 text-[11px] text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">{i + 1}</span>{step}
+            </h4>
+            {inFlow.filter((t) => t.step === step).map((t) => (
+              <button key={t.key} onClick={() => setSelKey(t.key)} data-testid={`flow-tech-${t.key}`} data-state={t.state}
+                aria-pressed={sel?.key === t.key} title={t.switchable ? '눌러서 상세 · 켜고 끄기' : '눌러서 상세'}
+                className={clsx('flex flex-col gap-1 rounded-lg border px-2.5 py-2 text-left',
+                  sel?.key === t.key ? 'border-indigo-500 ring-1 ring-indigo-500' : 'border-slate-700 hover:border-slate-500',
+                  t.state === 'off' ? 'bg-slate-900/40 opacity-75' : 'bg-slate-900')}>
+                <span className="flex items-start justify-between gap-2">
+                  <span className={clsx('text-xs font-medium text-slate-100', t.state === 'off' && 'line-through decoration-slate-500')}>{t.name}</span>
+                  {t.state === 'required' ? <Lock className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-label="필수" /> : t.switchable ? <Switch on={t.state === 'on'} /> : null}
+                </span>
+                <span className={clsx('w-fit rounded-full px-1.5 py-0.5 text-[10px] font-semibold', STATE[t.state].cls)}>{STATE[t.state].label}</span>
+              </button>
+            ))}
+            {inFlow.every((t) => t.step !== step) && <p className="text-[11px] text-slate-500">없음</p>}
+          </section>
+        ))}
+      </div>
 
-        <aside className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 min-w-0 space-y-3" data-testid="technique-flow-panel">
-          {sel ? (
-            <>
+      {inFlow.length === 0 && <p className="text-sm text-slate-500">이 흐름엔 기법이 없어요.</p>}
+      <Modal isOpen={!!sel} onClose={() => setSelKey(null)} title={sel?.name} maxWidth="max-w-xl">
+        {sel && (
+          <div className="space-y-3 max-h-[70vh] overflow-y-auto" data-testid="technique-flow-panel">
               <div className="flex flex-wrap items-center gap-2">
                 <span className={clsx('rounded-full px-2 py-0.5 text-[11px] font-semibold', STATE[sel.state].cls)}>{STATE[sel.state].label}</span>
-                <span className="text-sm font-semibold text-slate-100">{sel.name}</span>
               </div>
               {sel.state === 'required' && <p className="text-xs text-slate-400"><Lock className="inline h-3 w-3" /> 필수 — 항상 적용돼요. 바꿀 수 없어요(서버가 막음).</p>}
               {sel.switchable && sel.baseline_on !== null && (
@@ -163,10 +163,9 @@ export function TechniqueFlow() {
               )}
               {!sel.switchable && sel.state === 'on' && <p className="text-[11px] text-slate-500" title="코드에 고정 — 바꾸려면 개선 후보·평가 게이트로">적용 중 · 스위치 없음</p>}
               <TechniqueCard t={sel} showName={false} />
-            </>
-          ) : <p className="text-sm text-slate-500">이 흐름엔 기법이 없어요.</p>}
-        </aside>
-      </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

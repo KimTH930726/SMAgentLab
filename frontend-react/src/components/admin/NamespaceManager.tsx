@@ -18,7 +18,7 @@ import { CollectionLinks } from './CollectionLinks';
 
 interface NamespaceManagerProps {
   onNavigate?: (to: 'policy' | 'knowledge' | 'glossary') => void;
-  /** [지식 등록 →]·[보기 →] — 그 컬렉션을 고른 채 운영 지식(등록 탭 / 목록)으로. 넣는 곳은 [지식 등록] 한 곳(§15-9) */
+  /** 있으면 [보기 →] 칸을 보인다 — 정책 컬렉션은 그 컬렉션을 고른 채 정책서로(11/03, 운영 지식은 시스템에만). 넣는 곳은 [지식 등록] 한 곳(§15-9) */
   onRegister?: (tab: 'ingest' | 'list', into?: string) => void;
 }
 
@@ -145,12 +145,12 @@ export function NamespaceManager({ onNavigate, onRegister }: NamespaceManagerPro
                         ) : <span className="text-xs text-slate-500" title="담당 지정: 플랫폼 관리 › 조직·권한 › 담당 컬렉션">없음(관리자만)</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right">{count(ns.policy_count, 'policy', '정책')}</td>
-                      <td className="px-3 py-2.5 text-right">{count(ns.knowledge_count, 'knowledge', '운영 지식')}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-400" title="운영 지식은 시스템 컬렉션에만 — 정책 컬렉션엔 운영 지식 메뉴가 없다(11/03)">{ns.knowledge_count ?? 0}</td>
                       <td className="px-3 py-2.5 text-right">{count(ns.glossary_count, 'glossary', '용어')}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         {onRegister && (
-                          <CollectionLinks editable={canModifyNs(effectiveOwnerParts(ns))} ingest={false}   // 운영 지식은 시스템 컬렉션에만(11/02)
-                            onGo={(tab) => { setNamespace(ns.name); onRegister(tab, ns.name); }} />
+                          <CollectionLinks editable={canModifyNs(effectiveOwnerParts(ns))} ingest={false} viewTo="정책서로"   // 운영 지식은 시스템 컬렉션에만(11/02)
+                            onGo={() => { setNamespace(ns.name); onNavigate?.('policy'); }} />   // [보기 →] = 정책서(운영 지식 메뉴 없음, 11/03)
                         )}
                       </td>
                       <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>

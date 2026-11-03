@@ -51,7 +51,8 @@ export interface AdminMenuGroup {
 const one = (scope: AdminScope, it: AdminMenuItem): AdminMenuGroup => ({ id: it.id, label: it.label, scope, items: [it] });
 export const ADMIN_MENU: AdminMenuGroup[] = [
   one('collection', { id: 'home', label: '홈', hint: '보는 컬렉션의 할 일 — 정정 요청 · 승인 대기 · 적재 검토 · 지식 공백', scoped: true, required: true }),
-  one('collection', { id: 'k.docs', label: '운영 지식', hint: '시스템 운영·개발 지식 — 컨플·매뉴얼·장애 대응(정책서는 따로)', scoped: true, required: true }),
+  // 운영 지식은 시스템 컬렉션에만(11/02 D) — 정책 컬렉션에선 메뉴를 안 보인다(빈 목록 막다른 길, 11/03 태훈·기능 리뷰 #4)
+  one('collection', { id: 'k.docs', label: '운영 지식', hint: '시스템 운영·개발 지식 — 컨플·매뉴얼·장애 대응(정책서는 따로)', scoped: true, required: true, kinds: ['system'] }),
   one('collection', { id: 'k.policy', label: '정책서', scoped: true, kinds: ['domain'] }),
   one('collection', { id: 'q.corrections', label: '정정 요청', hint: '채팅 "답변 틀림"·평가 게이트 "이상해요"·정책서 수정 제안이 모이는 곳 — 승인해야 검색에 반영', scoped: true }),
   one('collection', { id: 'k.glossary', label: '용어집', scoped: true }),
@@ -104,7 +105,8 @@ export function resolveAdminMenu(pathname: string, groups: AdminMenuGroup[]): Ad
   // 컬렉션 목록(플랫폼 관리)을 못 보는 사람의 옛 주소 → 컬렉션 관리 › 컬렉션 정보(읽기) — 막힘 안내보다 먼저(같은 내용을 읽기로 볼 수 있다, 재리뷰 L1)
   if ((want === 'domains' || want === 'systems') && all.includes('c.info')) return 'c.info';
   if (blockedPlatform(pathname, groups) && all.includes('home')) return 'home';
-  return all.includes('k.docs') ? 'k.docs' : first;
+  // 숨긴 메뉴의 도착지 = 운영 지식, 정책 컬렉션이라 운영 지식이 없으면 홈
+  return all.includes('k.docs') ? 'k.docs' : all.includes('home') ? 'home' : first;
 }
 
 /** 이 주소가 플랫폼 관리 화면인데 이 사람에게 안 보이나(비관리자의 깊은 링크) */

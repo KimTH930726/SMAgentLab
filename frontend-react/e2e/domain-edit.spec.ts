@@ -44,13 +44,13 @@ test('정책 컬렉션 — 이름만 수정(담당은 그대로) · [보기 →]
   expect(psql(`SELECT count(*) FROM ops_namespace WHERE name = '${NS}'`)).toBe('0');
   expect(ownersOf(NS2)).toBe(pname);
 
-  // ② [보기 →] — 그 컬렉션을 고르고 운영 지식 목록으로
+  // ② [보기 →] — 그 컬렉션을 고르고 정책서로(정책 컬렉션엔 운영 지식 메뉴가 없다, 11/03)
   const row2 = page.getByRole('row').filter({ hasText: NS2 });
   await expect(row2).toContainText(pname);
   await row2.getByRole('button', { name: '보기 →' }).click();
-  await expect(page).toHaveURL(/\/admin\/k\.docs$/);
+  await expect(page).toHaveURL(/\/admin\/k\.policy$/);
   await expect.poll(() => selectedNs(page)).toBe(NS2);   // Sidebar effect가 쓴다 — 한 번 읽기는 가끔 이름(리뷰 L3)
-  await expect(docsTab(page, '지식 조회')).toHaveClass(/border-indigo-500/);
+  await expect(page.getByRole('navigation', { name: '관리자 메뉴' }).getByRole('button', { name: '운영 지식', exact: true })).toHaveCount(0);
 
   // ③ 정책 컬렉션 줄엔 [지식 등록 →]이 없다(11/02 — 운영 지식은 시스템 컬렉션에만, 정책서는 정책서 가져오기로)
   await goAdmin(page, '정책 컬렉션');

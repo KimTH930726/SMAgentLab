@@ -15,7 +15,7 @@ test('범위 전환 — 컬렉션 관리 홈 ↔ 플랫폼 관리 홈, 범위마
   await selectDomain(page, '딜리버스');   // 정책 컬렉션 — 정책서 검토 대기 카드 · VOC 메뉴가 보이는 종류
   await expect(pressed(page, '컬렉션 관리')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('collection-home')).toBeVisible();
-  for (const it of ['운영 지식', '정정 요청', '용어집', '소스 연결', '컬렉션 정보']) {
+  for (const it of ['정책서', '정정 요청', '용어집', '소스 연결', '컬렉션 정보']) {
     await expect(nav(page).getByRole('button', { name: it, exact: true })).toBeVisible();
   }
   await expect(nav(page).getByRole('button', { name: '평가 게이트', exact: true })).toHaveCount(0);
@@ -23,14 +23,25 @@ test('범위 전환 — 컬렉션 관리 홈 ↔ 플랫폼 관리 홈, 범위마
   // 카드 = 큰 숫자 + [자세히] — 승인 대기는 운영 지식 › 승인 대기 탭으로
   const cards = page.getByTestId('collection-home-cards');
   await expect(cards.getByTestId('card-checks')).toBeVisible();
-  await expect(cards.getByTestId('card-pending-value')).toHaveText(/^\d+/);
+  // 정책 컬렉션엔 운영 지식 메뉴·승인 대기 카드가 없다(운영 지식은 시스템에만, 11/03)
+  await expect(nav(page).getByRole('button', { name: '운영 지식', exact: true })).toHaveCount(0);
+  await expect(cards.getByTestId('card-pending')).toHaveCount(0);
   // 지식 공백 = 통계 API의 no_knowledge(서버가 이미 미해결만 센다 — 해결 건을 또 빼지 않는다, 리뷰 11/03)
   const tok = await adminToken();
   const st = await (await apiFetch(`${API}/api/stats/namespace/${encodeURIComponent('딜리버스')}`, { headers: { Authorization: `Bearer ${tok}` } })).json();
   await expect(cards.getByTestId('card-gap-value')).toHaveText(String(st.no_knowledge));
   await expect(cards.getByTestId('card-gap')).toContainText(`미해결 ${st.no_knowledge} · 해결 ${st.filled}`);
+  // 시스템 컬렉션 — 운영 지식 메뉴 · 승인 대기 카드가 있고, 카드는 운영 지식 › 승인 대기 탭으로
+  await selectDomain(page, '딜리버스 시스템', '딜리버스');
+  await expect(nav(page).getByRole('button', { name: '운영 지식', exact: true })).toBeVisible();
+  await expect(cards.getByTestId('card-pending-value')).toHaveText(/^\d+/);
   await cards.getByRole('button', { name: '승인 대기 자세히' }).click();
   await expect(page).toHaveURL(/\/admin\/k\.docs\?tab=review$/);
+  // 새로고침해도 그대로 — 컬렉션 종류를 확인하기 전에 홈으로 튕기지 않는다(리뷰 M1 11/03)
+  await page.reload();
+  await expect(page.getByRole('button', { name: '승인 대기', exact: true }).first()).toBeVisible();
+  await expect(page).toHaveURL(/\/admin\/k\.docs\?tab=review$/);
+  await selectDomain(page, '딜리버스');   // VOC 이메일은 정책 컬렉션을 볼 때만 메뉴에 있다
 
   await switchScope(page, '플랫폼 관리');
   await expect(page).toHaveURL(/\/admin\/p\.home$/);
@@ -71,8 +82,9 @@ test('옛 주소 — 그 화면이 든 범위에서 열림 · 캐시는 설정 �
   await expect(page.getByRole('button', { name: '캐시', exact: true })).toBeVisible();
   await expect(page.getByText('Semantic Cache', { exact: false }).first()).toBeVisible();
 
+  // 정책 컬렉션을 보는 중이면 운영 지식이 없어 홈으로, 시스템 컬렉션이면 운영 지식으로(11/03)
   await gotoAdminUrl(page, '/admin/k.system');
-  await expect(page).toHaveURL(/\/admin\/k\.docs$/);
+  await expect(page).toHaveURL(/\/admin\/(k\.docs|home)$/);
 
   // 메뉴로 가도 같은 화면(goAdmin이 범위를 바꿔 준다)
   await goAdmin(page, '사용자 피드백');

@@ -93,7 +93,7 @@ export function CollectionHome({ onGo }: { onGo: (to: string) => void }) {
   const pending = useQuery({   // 운영 지식 › 승인 대기와 같은 쿼리
     queryKey: ['knowledge', selectedNs, 'pending_review'],
     queryFn: () => getKnowledge(selectedNs, 'pending_review'),
-    enabled: !!selectedNs,
+    enabled: !!selectedNs && shown('k.docs'),   // 정책 컬렉션엔 카드가 없다 — 부르지 않는다(리뷰 L1)
     staleTime: 10_000,
   });
   const stats = useQuery({ queryKey: ['stats-ns', selectedNs], queryFn: () => getNamespaceStats(selectedNs), enabled: !!selectedNs, staleTime: 10_000 });
@@ -121,10 +121,12 @@ export function CollectionHome({ onGo }: { onGo: (to: string) => void }) {
             tip="채팅 [답변 틀림]·평가 게이트·정책서 수정 제안 중 처리 전인 것 — 승인해야 검색에 반영"
             to={adminPath('q.corrections')} onGo={onGo} />
         )}
-        <Card testid="card-pending" title="승인 대기" value={pending.data?.length} tone={(pending.data?.length ?? 0) > 0 ? 'warn' : 'ok'}
-          loading={pending.isLoading} error={pending.isError && !pending.data} sub="유사 지식 · 담당 아닌 사람이 등록"
-          tip="기존 지식과 많이 겹치거나 담당이 아닌 사람이 넣어 아직 검색에 안 쓰이는 지식 — 승인 · 병합 · 반려"
-          to={`${adminPath('k.docs')}?tab=review`} onGo={onGo} />
+        {shown('k.docs') && (   // 운영 지식 메뉴가 없는 정책 컬렉션엔 안 보인다(11/03)
+          <Card testid="card-pending" title="승인 대기" value={pending.data?.length} tone={(pending.data?.length ?? 0) > 0 ? 'warn' : 'ok'}
+            loading={pending.isLoading} error={pending.isError && !pending.data} sub="유사 지식 · 담당 아닌 사람이 등록"
+            tip="기존 지식과 많이 겹치거나 담당이 아닌 사람이 넣어 아직 검색에 안 쓰이는 지식 — 승인 · 병합 · 반려"
+            to={`${adminPath('k.docs')}?tab=review`} onGo={onGo} />
+        )}
         {shown('k.sources') && (
           <Card testid="card-import" title="적재 검토" value={imp.n} tone={imp.n > 0 ? 'warn' : 'ok'} sub="팀 단위 · 연결할 묶음"
             loading={imp.isLoading} error={imp.isError}

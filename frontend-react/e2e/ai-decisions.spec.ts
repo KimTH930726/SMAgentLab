@@ -111,6 +111,8 @@ test('평가 게이트 — 단계 줄 = 원인 수(누르면 그 단계 원인�
   }
   await flowEl.getByTestId('flow-tech-chat_prompt').click();
   await expect(page.getByTestId('technique-flow-panel')).toContainText('필수');
+  await page.keyboard.press('Escape');   // 상세는 모달(11/03) — 닫아야 아래를 누를 수 있다
+  await expect(page.getByTestId('technique-flow-panel')).toBeHidden();
   await expect(page.getByTestId('gate-history')).toBeVisible();
   await expect(page.getByTestId('history-row')).toHaveCount(Math.min(5, history.length));
   if (history.length > 5) {

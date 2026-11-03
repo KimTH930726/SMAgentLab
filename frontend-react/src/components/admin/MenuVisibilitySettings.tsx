@@ -63,7 +63,7 @@ export function MenuVisibilitySettings() {
                     <td key={k.kind} className="px-4 py-2.5 text-center">
                       {supportsKind(it, k.kind) ? (
                         <input id={id} type="checkbox" aria-label={`${k.label}에서 ${it.label} 보이기`} className="accent-indigo-500"
-                          title={it.required ? '늘 보임 — 숨긴 메뉴와 등록·보기 링크가 가는 곳' : undefined}
+                          title={it.required ? '늘 보임 — 끌 수 없는 기본 화면' : undefined}
                           checked={it.required || isShown(scope, it.id)} disabled={it.required || save.isPending}
                           onChange={() => toggle(scope, it.id)} />
                       ) : (
