@@ -43,18 +43,23 @@ test('피드백 — 이미지 첨부 보내기 → 관리자 분류(기각 사�
     const panel = page.getByTestId('user-feedback-panel');
     await expect(panel.getByTestId('feedback-auto-signals')).toContainText('최근 14일 채팅 장애');
     const row = panel.getByTestId(`feedback-${id}`);
-    await expect(row).toContainText(BODY);
-    const thumb = row.getByTestId(`feedback-images-${id}`).locator('img');
+    await expect(row).toContainText(BODY.slice(0, 20));
+    await expect(row.getByTestId(`feedback-${id}-status`)).toHaveText('신규');   // 목록 = 상태만, 처리는 상세 창(11/03)
+    await row.click();
+    const det = page.getByTestId(`feedback-detail-${id}`);
+    await expect(det).toContainText(BODY);
+    const pick = det.getByTestId(`feedback-${id}-status-pick`);
+    const thumb = det.getByTestId(`feedback-images-${id}`).locator('img');
     await expect(thumb).toHaveCount(1);
     await expect.poll(() => thumb.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(1);   // 인증 붙여 받은 실제 이미지
-    await row.getByRole('button', { name: '기각…' }).click();
+    await pick.getByRole('button', { name: '기각…' }).click();
     await expect(page.getByRole('button', { name: '기각', exact: true })).toBeDisabled();   // 사유 없이 못 함
     await page.keyboard.press('Escape');
 
     // 오류 창 [오류 신고] — 서버 장애를 한 번만 흉내 내(이 요청만 500) 실제 오류 창 → 신고 창에 요청·상태 코드가 붙는지
     await page.route(`**/api/user-feedback/${id}`, (r) => (r.request().method() === 'PATCH'
       ? r.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: FAIL_MSG }) }) : r.fallback()), { times: 1 });
-    await row.getByRole('button', { name: '선정' }).click();
+    await pick.getByRole('button', { name: '선정' }).click();
     await expect(page.getByTestId('app-dialog')).toContainText(FAIL_MSG);
     await page.getByTestId('app-dialog-report').click();
     await expect(m.getByTestId('feedback-context')).toContainText(`PATCH /api/user-feedback/${id} → 500`);
@@ -65,21 +70,22 @@ test('피드백 — 이미지 첨부 보내기 → 관리자 분류(기각 사�
       .toBe(`bug|500|PATCH /api/user-feedback/${id}|`);
     expect(psql(`SELECT status FROM ops_user_feedback WHERE id = ${id}`)).toBe('new');   // 막힌 요청은 상태를 안 바꿈
 
-    await row.getByRole('button', { name: '선정' }).click();
+    // 오류 신고 창을 보내고 나면 상세 창이 닫혀 있을 수 있다 — 다시 연다
+    if (!(await det.isVisible())) await row.click();
+    await pick.getByRole('button', { name: '선정' }).click();
     await expect.poll(() => psql(`SELECT status FROM ops_user_feedback WHERE id = ${id}`)).toBe('planned');
-    await expect(row).toHaveCount(0);                     // [신규] 필터에서 빠짐
-    await panel.getByTestId('feedback-filters').getByRole('button', { name: /^선정/ }).click();
-    await expect(panel.getByTestId(`feedback-${id}-handoff`)).toHaveCount(0);           // 개발 요청서는 진행 중일 때만
-    await panel.getByTestId(`feedback-${id}`).getByRole('button', { name: '진행 중' }).click();
+    await expect(row).toHaveCount(0);                     // [신규] 필터에서 빠짐 — 상세 창은 열린 채 상태만 바뀜
+    await expect(pick.getByRole('button', { name: '선정' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(det.getByTestId(`feedback-${id}-handoff`)).toHaveCount(0);           // 개발 요청서는 진행 중일 때만
+    await pick.getByRole('button', { name: '진행 중' }).click();
     await expect.poll(() => psql(`SELECT status FROM ops_user_feedback WHERE id = ${id}`)).toBe('in_progress');
-    await panel.getByTestId('feedback-filters').getByRole('button', { name: /^진행 중/ }).click();
-    await panel.getByTestId(`feedback-${id}-handoff`).click();
+    await det.getByTestId(`feedback-${id}-handoff`).click();
     const text = page.getByTestId(`handoff-${id}-text`);
     await expect(text).toHaveValue(new RegExp(`사용자 피드백 #${id} — 오류 신고`));
     await expect(text).toHaveValue(/첨부 이미지: 1장 — 운영 화면에서 확인/);
     await expect(text).toHaveValue(new RegExp(BODY.slice(0, 20)));
-    await page.keyboard.press('Escape');
-    await panel.getByTestId(`feedback-${id}`).getByRole('button', { name: '완료…' }).click();
+    await page.keyboard.press('Escape');   // 요청서 창만 닫힘(맨 위 하나)
+    await pick.getByRole('button', { name: '완료…' }).click();
     await page.locator(`#fb-note-${id}`).fill('새로고침 뒤에도 대화가 남도록 고쳤어요');
     await page.getByRole('button', { name: '완료로', exact: true }).click();
     await expect.poll(() => psql(`SELECT status FROM ops_user_feedback WHERE id = ${id}`)).toBe('done');

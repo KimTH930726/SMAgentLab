@@ -8,7 +8,8 @@ import {
   type FeedbackContext, type FeedbackItem, type FeedbackKind, type FeedbackStatus,
 } from '../../api/userFeedback';
 import { useAppStore } from '../../store/useAppStore';
-import { showAlert, showError } from '../../store/useDialogStore';
+import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { openFeedback, useFeedbackStore } from '../../store/useFeedbackStore';
 import { Modal } from '../ui/Modal';
 import { FormModal } from '../ui/FormModal';
@@ -227,7 +228,7 @@ function FeedbackImages({ fid, files, small }: { fid: number; files: number[]; s
   return (
     <div className="flex flex-wrap gap-2" data-testid={`feedback-images-${fid}`}>
       {files.map((id, i) => <Thumb key={id} fid={fid} fileId={id} n={i + 1} small={small} onOpen={setBig} />)}
-      <Modal isOpen={big !== null} onClose={() => setBig(null)} title="첨부 이미지" maxWidth="max-w-5xl">
+      <Modal isOpen={big !== null} onClose={() => setBig(null)} title="첨부 이미지" maxWidth="max-w-5xl" zClass="z-[60]">
         {big && <img src={big} alt="첨부 이미지 크게" className="max-h-[75vh] w-auto mx-auto rounded-md" />}
       </Modal>
     </div>
@@ -289,6 +290,8 @@ export function useFeedbackNewCount(enabled: boolean): number {
 
 export function UserFeedbackPanel() {
   const [filter, setFilter] = useState<Filter>('new');
+  // 고른 피드백 — 목록 값이 있으면 그것(최신), 처리로 지금 필터에서 빠져도 창은 열린 채 고른 순간 값 + 바뀐 상태로(11/03 상세 모달)
+  const [sel, setSel] = useState<FeedbackItem | null>(null);
   const q = useQuery({ queryKey: ['user-feedback', filter], queryFn: () => listFeedback(filter === 'all' ? undefined : filter) });
   const counts = q.data?.counts;
   const total = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0;
@@ -311,8 +314,11 @@ export function UserFeedbackPanel() {
         {q.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p>
           : q.error ? <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p>
             : (q.data?.items ?? []).length === 0 ? <p className="text-sm text-slate-500">{filter === 'new' ? '새 피드백이 없어요' : '해당하는 피드백이 없어요'}</p>
-              : <div className="space-y-2">{q.data!.items.map((f) => <FeedbackRow key={f.id} f={f} />)}</div>}
+              : <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
+                  {q.data!.items.map((f) => <FeedbackRow key={f.id} f={f} onOpen={() => setSel(f)} />)}</div>}
       </section>
+      {sel && <FeedbackDetail f={q.data?.items.find((x) => x.id === sel.id) ?? sel} onClose={() => setSel(null)}
+        onChanged={(patch) => setSel((x) => (x ? { ...x, ...patch } : x))} />}
     </div>
   );
 }
@@ -334,8 +340,38 @@ export function handoffText(f: FeedbackItem): string {
   return lines.join('\n');
 }
 
-function FeedbackRow({ f }: { f: FeedbackItem }) {
+/** 목록 한 줄 — 상태가 먼저 보이게(번호 · 상태 · 종류 · 내용 한 줄 · 첨부 · 보낸 사람 · 시간). 누르면 상세 창(11/03 태훈 "목록은 상태만, 처리는 모달에서") */
+function FeedbackRow({ f, onOpen }: { f: FeedbackItem; onOpen: () => void }) {
+  const ctx = contextLine(f.context);
+  return (
+    <button onClick={onOpen} data-testid={`feedback-${f.id}`}
+      className="w-full text-left px-3 py-2.5 flex items-center gap-2 text-xs hover:bg-slate-800/60 transition-colors">
+      <span className="w-10 shrink-0 text-slate-500 tabular-nums">#{f.id}</span>
+      <span className={`w-14 shrink-0 text-center rounded-full px-2 py-0.5 text-[11px] ${FB_STATUS[f.status].cls}`} title={FB_STATUS[f.status].hint}
+        data-testid={`feedback-${f.id}-status`}>{FB_STATUS[f.status].label}</span>
+      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${KIND[f.kind].cls}`}>{KIND[f.kind].label}</span>
+      <span className="min-w-0 flex-1 truncate text-sm text-slate-200">{f.body || ctx || '(내용 없음 — 오류 문맥만)'}</span>
+      {f.files.length > 0 && <span className="shrink-0 text-slate-500" title="첨부 이미지">이미지 {f.files.length}</span>}
+      <span className="hidden sm:inline shrink-0 text-slate-400 max-w-[8rem] truncate">{f.reporter ?? '탈퇴한 사용자'}</span>
+      <span className="shrink-0 text-slate-500 tabular-nums">{fmt(f.created_at)}</span>
+    </button>
+  );
+}
+
+// 상태 고르기 — 바로 바뀌는 것(신규·선정·진행 중)과 사유·번호를 묻는 것(완료·중복·기각)
+const STATUS_PICK: { s: FeedbackStatus; form?: 'done' | 'duplicate' | 'declined'; title: string }[] = [
+  { s: 'new', title: '결정을 지우고 신규로' },
+  { s: 'planned', title: "고치기로 함 — 보낸 사람에게 '선정'으로 보임" },
+  { s: 'in_progress', title: "고치기 시작 — 보낸 사람에게 '진행 중'으로 보이고, [개발 요청서]가 열려요" },
+  { s: 'done', form: 'done', title: "반영함 — 보낸 사람에게 '완료'와 한 줄 답변이 보임" },
+  { s: 'duplicate', form: 'duplicate', title: '같은 내용의 피드백 번호로 묶음' },
+  { s: 'declined', form: 'declined', title: '하지 않음(사유 필수 — 보낸 사람이 봄)' },
+];
+
+/** 상세 창 — 내용·오류 문맥·첨부·메모 + 상태 고르기 + (진행 중이면) 개발 요청서 */
+function FeedbackDetail({ f, onClose, onChanged }: { f: FeedbackItem; onClose: () => void; onChanged: (p: Partial<FeedbackItem>) => void }) {
   const qc = useQueryClient();
+  const me = useAuthStore((s) => s.user?.username ?? null);
   const [modal, setModal] = useState<null | 'declined' | 'duplicate' | 'done'>(null);
   const [handoff, setHandoff] = useState(false);
   const [note, setNote] = useState('');
@@ -343,57 +379,60 @@ function FeedbackRow({ f }: { f: FeedbackItem }) {
   const [err, setErr] = useState<string | null>(null);
   const act = useMutation({
     mutationFn: (b: { status: FeedbackStatus; note?: string; duplicate_of?: number | null }) => triageFeedback(f.id, b),
-    onSuccess: () => { setModal(null); qc.invalidateQueries({ queryKey: ['user-feedback'] }); },
+    onSuccess: (_r, b) => {
+      setModal(null);
+      // 처리자·시각도 같이 — 목록에서 빠진 건은 다시 안 읽혀 옛 처리자가 남았다(리뷰 L3)
+      const undo = b.status === 'new';
+      onChanged({ status: b.status, admin_note: undo ? null : (b.note?.trim() || null), duplicate_of: b.status === 'duplicate' ? b.duplicate_of ?? null : null,
+        decided_by: undo ? null : me, decided_at: undo ? null : new Date().toISOString() });
+      qc.invalidateQueries({ queryKey: ['user-feedback'] });
+    },
     onError: (e) => (modal ? setErr(e instanceof Error ? e.message : '저장하지 못했습니다') : showError(e, '저장하지 못했습니다')),
   });
   const openModal = (m: 'declined' | 'duplicate' | 'done') => { setErr(null); setNote(''); setDup(''); setModal(m); };
-  const btn = 'text-xs hover:underline disabled:opacity-50';
   const ctx = contextLine(f.context);
   return (
-    <div className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2.5 space-y-1.5" data-testid={`feedback-${f.id}`}>
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-slate-500 tabular-nums">#{f.id}</span>
-        <span className={`rounded-full px-2 py-0.5 text-[11px] ${KIND[f.kind].cls}`}>{KIND[f.kind].label}</span>
-        <span className={`rounded-full px-2 py-0.5 text-[11px] ${FB_STATUS[f.status].cls}`} title={FB_STATUS[f.status].hint}>{FB_STATUS[f.status].label}</span>
-        <span className="text-slate-400">{f.reporter ?? '탈퇴한 사용자'}{f.reporter_part ? ` · ${f.reporter_part}` : ''}</span>
-        <span className="text-slate-500 tabular-nums">{fmt(f.created_at)}</span>
-        {f.page && <span className="text-slate-500" title="보낸 화면">{f.page}{f.conversation_id ? ` · 대화 #${f.conversation_id}` : ''}</span>}
-      </div>
-      {f.body && <p className="text-sm text-slate-100 whitespace-pre-wrap break-words">{f.body}</p>}
-      {ctx && <p className="text-xs text-rose-700 dark:text-rose-300 break-words" data-testid={`feedback-${f.id}-context`}>{ctx}</p>}
-      {f.files.length > 0 && <FeedbackImages fid={f.id} files={f.files} />}
-      {(f.admin_note || f.duplicate_of) && (
-        <p className="text-xs text-slate-400 break-words">{f.duplicate_of ? `#${f.duplicate_of}와 같음` : ''}{f.duplicate_of && f.admin_note ? ' · ' : ''}{f.admin_note ?? ''}
-          {f.decided_by ? <span className="text-slate-500"> — {f.decided_by}{f.decided_at ? ` · ${fmt(f.decided_at)}` : ''}</span> : null}</p>
-      )}
-      <div className="flex flex-wrap gap-4">
-        {(f.status === 'new' || f.status === 'duplicate' || f.status === 'declined') && (
-          <button className={`${btn} text-amber-600 dark:text-amber-400 font-medium`} disabled={act.isPending} title="고치기로 함 — 보낸 사람에게 '선정'으로 보임"
-            onClick={() => act.mutate({ status: 'planned' })}>선정</button>
+    <Modal isOpen onClose={onClose} title={`피드백 #${f.id}`} maxWidth="max-w-2xl">
+      <div className="space-y-3" data-testid={`feedback-detail-${f.id}`}>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className={`rounded-full px-2 py-0.5 text-[11px] ${KIND[f.kind].cls}`}>{KIND[f.kind].label}</span>
+          <span className="text-slate-400">{f.reporter ?? '탈퇴한 사용자'}{f.reporter_part ? ` · ${f.reporter_part}` : ''}</span>
+          <span className="text-slate-500 tabular-nums">{fmt(f.created_at)}</span>
+          {f.page && <span className="text-slate-500" title="보낸 화면">{f.page}{f.conversation_id ? ` · 대화 #${f.conversation_id}` : ''}</span>}
+        </div>
+        {f.body && <p className="text-sm text-slate-100 whitespace-pre-wrap break-words">{f.body}</p>}
+        {ctx && <p className="text-xs text-rose-700 dark:text-rose-300 break-words" data-testid={`feedback-${f.id}-context`}>{ctx}</p>}
+        {f.files.length > 0 && <FeedbackImages fid={f.id} files={f.files} />}
+        {(f.admin_note || f.duplicate_of) && (
+          <p className="text-xs text-slate-400 break-words">{f.duplicate_of ? `#${f.duplicate_of}와 같음` : ''}{f.duplicate_of && f.admin_note ? ' · ' : ''}{f.admin_note ?? ''}
+            {f.decided_by ? <span className="text-slate-500"> — {f.decided_by}{f.decided_at ? ` · ${fmt(f.decided_at)}` : ''}</span> : null}</p>
         )}
-        {(f.status === 'new' || f.status === 'planned') && (
-          <button className={`${btn} text-violet-600 dark:text-violet-400 font-medium`} disabled={act.isPending}
-            title="고치기 시작 — 보낸 사람에게 '진행 중'으로 보이고, [개발 요청서]가 열려요" onClick={() => act.mutate({ status: 'in_progress' })}>진행 중</button>
-        )}
-        {f.status === 'in_progress' && (
-          <button className={`${btn} text-indigo-600 dark:text-indigo-400 font-medium`} data-testid={`feedback-${f.id}-handoff`}
-            title="로컬 개발 환경(CLI)에 붙여 넣을 요청서 — 이미지·고객 정보는 담지 않아요" onClick={() => setHandoff(true)}>개발 요청서</button>
-        )}
-        {f.status !== 'done' && (
-          <button className={`${btn} text-emerald-600 dark:text-emerald-400`} title="반영함 — 보낸 사람에게 '완료'와 한 줄 답변이 보임" onClick={() => openModal('done')}>완료…</button>
-        )}
-        {f.status === 'new' && (
-          <>
-            <button className={`${btn} text-slate-300`} title="같은 내용의 피드백 번호로 묶음" onClick={() => openModal('duplicate')}>중복…</button>
-            <button className={`${btn} text-rose-600 dark:text-rose-400`} title="하지 않음(사유 필수 — 보낸 사람이 봄)" onClick={() => openModal('declined')}>기각…</button>
-          </>
-        )}
-        {f.status !== 'new' && (
-          <button className={`${btn} text-slate-400`} disabled={act.isPending} title="결정을 지우고 신규로" onClick={() => act.mutate({ status: 'new' })}>결정 취소</button>
-        )}
+        <div className="border-t border-slate-700 pt-3 space-y-2">
+          <p className="text-xs text-slate-400">상태</p>
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="상태" data-testid={`feedback-${f.id}-status-pick`}>
+            {STATUS_PICK.map((x) => {
+              const cur = f.status === x.s;
+              return (
+                <button key={x.s} disabled={cur || act.isPending} aria-pressed={cur} title={x.title}
+                  onClick={async () => {
+                    // 완료에서 벗어나면 보낸 사람이 보던 완료 답변이 지워진다 — 확인 뒤에(리뷰 L4)
+                    if (f.status === 'done' && !(await showConfirm('완료 답변이 지워지고 보낸 사람에게 바뀐 상태가 보여요.', { title: '완료 취소', confirmLabel: '바꾸기', tone: 'warning' }))) return;
+                    if (x.form) openModal(x.form); else act.mutate({ status: x.s });
+                  }}
+                  className={clsx('rounded-full border px-3 py-1 text-xs', cur ? `${FB_STATUS[x.s].cls} border-transparent font-semibold` : 'border-slate-600 text-slate-300 hover:bg-slate-800 disabled:opacity-50')}>
+                  {FB_STATUS[x.s].label}{x.form && !cur ? '…' : ''}
+                </button>
+              );
+            })}
+            {f.status === 'in_progress' && (
+              <button className="ml-auto rounded-lg bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-500" data-testid={`feedback-${f.id}-handoff`}
+                title="로컬 개발 환경(CLI)에 붙여 넣을 요청서 — 이미지·고객 정보는 담지 않아요" onClick={() => setHandoff(true)}>개발 요청서</button>
+            )}
+          </div>
+        </div>
       </div>
       <HandoffModal isOpen={handoff} onClose={() => setHandoff(false)} text={handoffText(f)} id={f.id} />
-      <FormModal isOpen={modal !== null} onClose={() => setModal(null)}
+      <FormModal isOpen={modal !== null} onClose={() => setModal(null)} zClass="z-[60]"
         title={modal === 'declined' ? '기각' : modal === 'duplicate' ? '중복' : '완료'}
         submitLabel={modal === 'declined' ? '기각' : modal === 'duplicate' ? '중복으로' : '완료로'} danger={modal === 'declined'}
         submitting={act.isPending} error={err}
@@ -411,7 +450,7 @@ function FeedbackRow({ f }: { f: FeedbackItem }) {
         <textarea id={`fb-note-${f.id}`} rows={3} value={note} onChange={(e) => setNote(e.target.value)} maxLength={500}
           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-y" />
       </FormModal>
-    </div>
+    </Modal>
   );
 }
 
@@ -430,7 +469,7 @@ function HandoffModal({ isOpen, onClose, text, id }: { isOpen: boolean; onClose:
     }
   };
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`개발 요청서 — 피드백 #${id}`} maxWidth="max-w-2xl">
+    <Modal isOpen={isOpen} onClose={onClose} title={`개발 요청서 — 피드백 #${id}`} maxWidth="max-w-2xl" zClass="z-[60]">
       <div className="space-y-3" data-testid={`handoff-${id}`}>
         <p className="text-xs text-slate-400">로컬 개발 환경(CLI)에 그대로 붙여 넣으세요. 이미지는 담지 않아요 — 사용자 글에 고객 정보가 있으면 지우고 가져가세요.</p>
         <textarea ref={ref} readOnly value={text} rows={Math.min(14, text.split('\n').length + 1)} data-testid={`handoff-${id}-text`}
