@@ -26,7 +26,7 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
   const systemErrors = q("status = 'system_error'");
 
   await loginAdmin(page);
-  await goAdmin(page, '품질', '통계');
+  await goAdmin(page, '통계');
   await selectDomain(page, NAMESPACE);
 
   // 본문(main) 안에서만 — 사이드바 메뉴에도 "정정 요청" 버튼이 있다(10/21 메뉴 재배치)

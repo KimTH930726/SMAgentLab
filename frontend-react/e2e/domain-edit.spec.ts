@@ -28,14 +28,14 @@ test('정책 컬렉션 — 이름만 수정(담당은 그대로) · [보기 →]
   expect(ownersOf(NS)).toBe(pname);
 
   await loginAdmin(page);
-  await goAdmin(page, '컬렉션', '정책 컬렉션');
+  await goAdmin(page, '정책 컬렉션');
 
   // ① 수정 창 = 이름만(담당 칸 없음). 안 바꾸면 저장 꺼짐 → 이름 바꿔 저장 → DB 이름 바뀜 · 담당 그대로
   const row = page.getByRole('row').filter({ hasText: NS });
   await row.getByTitle('이름 수정').click();
   const form = page.locator('form').filter({ has: page.locator('#ns-rename') });   // FormModal = <form>(공용 Modal엔 dialog 역할 없음)
   await expect(form.locator('[id^="ns-owner"]')).toHaveCount(0);
-  await expect(form).toContainText('시스템·권한 › 조직·권한 › 담당 컬렉션');
+  await expect(form).toContainText('플랫폼 관리 › 조직·권한 › 담당 컬렉션');
   await expect(form.getByRole('button', { name: '저장' })).toBeDisabled();
   await form.locator('#ns-rename').fill(NS2);
   await form.getByRole('button', { name: '저장' }).click();
@@ -53,7 +53,7 @@ test('정책 컬렉션 — 이름만 수정(담당은 그대로) · [보기 →]
   await expect(docsTab(page, '지식 조회')).toHaveClass(/border-indigo-500/);
 
   // ③ 정책 컬렉션 줄엔 [지식 등록 →]이 없다(11/02 — 운영 지식은 시스템 컬렉션에만, 정책서는 정책서 가져오기로)
-  await goAdmin(page, '컬렉션', '정책 컬렉션');
+  await goAdmin(page, '정책 컬렉션');
   await expect(page.getByRole('row').filter({ hasText: NS2 }).getByRole('button', { name: '지식 등록 →' })).toHaveCount(0);
 });
 
@@ -61,7 +61,7 @@ test('시스템 컬렉션 줄 — [지식 등록 →]·[보기 →] 둘 다, [�
   createSystem(SYS);
   try {
     await loginAdmin(page);
-    await goAdmin(page, '컬렉션', '시스템 컬렉션');
+    await goAdmin(page, '시스템 컬렉션');
     const row = page.getByTestId('system-collections').getByRole('row').filter({ hasText: SYS });
     await expect(row.getByRole('button', { name: '지식 등록 →' })).toBeVisible();   // 관리자 = 쓰기 가능
     await row.getByRole('button', { name: '보기 →' }).click();

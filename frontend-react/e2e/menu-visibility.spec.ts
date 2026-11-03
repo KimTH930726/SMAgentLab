@@ -24,13 +24,14 @@ test('메뉴 노출 — 시스템 컬렉션에서 통계 끄기 → 시스템을
   const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
 
   await loginAdmin(page);
-  await goAdmin(page, '시스템·권한', '설정');
+  await goAdmin(page, '설정');
   await page.getByRole('button', { name: '메뉴 노출' }).click();
   const box = page.getByTestId('menu-visibility');
   await expect(box.locator('#mv-domain-k\\.policy')).toBeChecked();
   await expect(box.locator('#mv-system-k\\.policy')).toHaveCount(0);          // 시스템엔 정책서 칸 없음("—")
   await expect(box.locator('#mv-system-voc')).toHaveCount(0);                   // VOC도
-  await expect(box.locator('#mv-system-k\\.system')).toBeChecked();           // 시스템 정보는 둘 다
+  await expect(box.locator('#mv-system-k\\.glossary')).toBeChecked();         // 용어집은 둘 다
+  await expect(box.locator('#mv-domain-home')).toHaveCount(0);                  // 홈은 늘 보임 — 설정 목록에 없음
   await box.locator('#mv-system-q\\.stats').uncheck();
   await box.getByRole('button', { name: '저장' }).click();
   await expect(box).toContainText('저장했어요');
@@ -38,11 +39,11 @@ test('메뉴 노출 — 시스템 컬렉션에서 통계 끄기 → 시스템을
 
   // 정책 컬렉션을 볼 땐 통계가 그대로
   await selectDomain(page, '딜리버스');
-  await goAdmin(page, '품질', '통계');
+  await goAdmin(page, '통계');
   await expect(page).toHaveURL(/\/admin\/q\.stats$/);
 
   // 시스템 컬렉션 표에서 줄을 눌러 보는 컬렉션을 바꾼다 → 통계·정책서가 메뉴에서 빠지고 지금 화면(통계)은 운영 지식으로
-  await goAdmin(page, '컬렉션', '시스템 컬렉션');
+  await goAdmin(page, '시스템 컬렉션');
   const row = page.getByTestId('system-collections').getByRole('row').filter({ hasText: SYS });
   await row.getByText(SYS, { exact: true }).click();
   await expect.poll(() => page.evaluate(() => (v => { try { return v && v.startsWith('{') ? JSON.parse(v).name : v; } catch { return v; } })(localStorage.getItem('opslens.namespace:admin')))).toBe(SYS);
@@ -50,8 +51,6 @@ test('메뉴 노출 — 시스템 컬렉션에서 통계 끄기 → 시스템을
   await gotoAdminUrl(page, '/admin/q.stats');
   await expect(page).toHaveURL(/\/admin\/k\.docs$/);
   await expect(nav.getByRole('button', { name: '정책서', exact: true })).toHaveCount(0);
-  const quality = nav.getByRole('button', { name: '품질', exact: true });
-  if ((await quality.getAttribute('aria-expanded')) === 'false') await quality.click();
   await expect(nav.getByRole('button', { name: '통계', exact: true })).toHaveCount(0);
   await expect(nav.getByRole('button', { name: '정정 요청', exact: true })).toBeVisible();
 });

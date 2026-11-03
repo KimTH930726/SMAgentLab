@@ -11,7 +11,7 @@ const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'p
 test('시스템 설정 — 사내 LLM 사용량이 기록과 같은 호출 수로 보인다', async ({ page }) => {
   const calls = psql("SELECT count(*) FROM ops_llm_usage WHERE created_at > NOW() - interval '7 days'");
   await loginAdmin(page);
-  await goAdmin(page, '시스템·권한', '설정');
+  await goAdmin(page, '설정');
   await page.getByRole('button', { name: 'LLM 프로바이더' }).click();   // 사용량은 LLM 프로바이더 영역 안
   const panel = page.getByTestId('llm-usage');
   await expect(panel).toBeVisible();

@@ -5,16 +5,20 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
-import { BarChart2, BookOpen, ChevronDown, ChevronUp, Layers, Mail, Settings, Users, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, BarChart2, BookMarked, BookOpen, ChevronDown, ChevronUp, ClipboardCheck, FileText, Gauge, Home, Info, Layers, Link2, Mail, MessageSquare, ScrollText, Settings, Users, type LucideIcon } from 'lucide-react';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { getCorrectionPendingCount } from '../../api/corrections';
-import { adminPath, resolveAdminMenu, type AdminMenuId } from '../../pages/adminMenu';
+import { ADMIN_SCOPES, adminPath, resolveAdminMenu, type AdminMenuId } from '../../pages/adminMenu';
 import { useAdminMenu } from '../../utils/useAdminMenu';
 
 const OPEN_KEY = 'opslens.adminNav.open';
 
-// 최상위 메뉴 아이콘 — 6개가 같은 왼쪽 선에서 시작해 같은 급으로 보이게(사용자 10/21: 화살표가 앞에 있으면 하위처럼 보인다)
-const GROUP_ICON: Record<string, LucideIcon> = { collections: Layers, knowledge: BookOpen, quality: BarChart2, voc: Mail, system: Settings };
+// 최상위 메뉴 아이콘 — 같은 왼쪽 선에서 시작해 같은 급으로 보이게(사용자 10/21: 화살표가 앞에 있으면 하위처럼 보인다)
+const GROUP_ICON: Record<string, LucideIcon> = {
+  home: Home, 'k.docs': BookOpen, 'k.policy': FileText, 'q.corrections': AlertTriangle, 'k.glossary': BookMarked, 'q.stats': BarChart2,
+  'k.sources': Link2, 'c.info': Info, 'p.home': Gauge, 'q.eval': ClipboardCheck, 'q.decisions': ScrollText, 'q.feedback': MessageSquare,
+  collections: Layers, org: Users, voc: Mail, 'sys.settings': Settings,
+};
 
 function loadOpen(): string[] | null {
   try {
@@ -33,8 +37,12 @@ export function AdminNav() {
   const location = useLocation();
   const navigate = useNavigate();
   // 보는 컬렉션 종류(업무/조직)에 따라 담을 수 없는 메뉴·설정에서 숨긴 메뉴는 빠진다(10/23)
-  const { groups } = useAdminMenu();
-  const current = resolveAdminMenu(location.pathname, groups);
+  const { groups: all } = useAdminMenu();
+  const current = resolveAdminMenu(location.pathname, all);
+  // 범위 전환(11/03) — 지금 화면이 든 범위의 메뉴만. 관리자가 아니면 범위가 하나라 전환이 없다(visibleAdminMenu가 다 컬렉션 관리로 묶음)
+  const scope = all.find((g) => g.items.some((it) => it.id === current))?.scope ?? 'collection';
+  const scopes = ADMIN_SCOPES.filter((s) => all.some((g) => g.scope === s.scope));
+  const groups = all.filter((g) => g.scope === scope);
   const [open, setOpen] = useState<string[]>(() => loadOpen() ?? []);
   const [closedCurrent, setClosedCurrent] = useState<string | null>(null);   // 지금 화면이 든 묶음을 사람이 접었으면 그 묶음 id — 화면을 옮기면 풀린다
   useEffect(() => { setClosedCurrent(null); }, [current]);
@@ -60,6 +68,18 @@ export function AdminNav() {
 
   return (
     <nav aria-label="관리자 메뉴" className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5 text-sm">
+      {scopes.length > 1 && (
+        <div role="group" aria-label="관리 범위" className="grid grid-cols-2 gap-1 p-1 mb-2 rounded-lg bg-slate-900 border border-slate-700">
+          {scopes.map((s) => (
+            <button key={s.scope} onClick={() => { if (s.scope !== scope) navigate(adminPath(s.home)); }} title={s.hint}
+              aria-pressed={s.scope === scope}
+              className={clsx('px-2 py-1.5 rounded-md text-xs font-semibold transition-colors',
+                s.scope === scope ? 'bg-slate-700 text-slate-100' : 'text-slate-400 hover:text-slate-200')}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
       {groups.map((g) => {
         const single = g.items.length === 1;
         const containsCurrent = g.items.some((it) => it.id === current);
@@ -67,12 +87,15 @@ export function AdminNav() {
         if (single) {
           const it = g.items[0];
           return (
-            <button key={g.id} onClick={() => navigate(adminPath(it.id))} title={it.hint}
+            <button key={g.id} onClick={() => navigate(adminPath(it.id))} title={badge(it.id) > 0 ? `${it.hint ?? it.label} — 대기 ${badge(it.id)}건` : it.hint}
               aria-current={it.id === current ? 'page' : undefined}
               className={clsx('w-full flex items-center gap-2.5 px-3 py-2 rounded-lg font-medium transition-colors text-left',
                 it.id === current ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-700')}>
               <Icon className="w-4 h-4 flex-shrink-0" />
               <span className="flex-1">{g.label}</span>
+              {badge(it.id) > 0 && (
+                <span aria-hidden="true" className="text-[10px] bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-400 px-1.5 py-0.5 rounded-full">{badge(it.id)}</span>
+              )}
             </button>
           );
         }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Network, Users, Briefcase } from 'lucide-react';
 import { UserSection, PartSection } from './UserManager';
 import { PartDomainSection } from './PartDomainSection';
@@ -6,11 +6,15 @@ import { PartDomainSection } from './PartDomainSection';
 type SubTab = 'users' | 'teams' | 'domains';
 
 /**
- * 시스템·권한 › 조직·권한(10/22, 사용자: "사용자·팀파트·담당 컬렉션을 하나로 묶어 서브탭으로 — 설정처럼").
+ * 플랫폼 관리 › 조직·권한(10/22, 사용자: "사용자·팀파트·담당 컬렉션을 하나로 묶어 서브탭으로 — 설정처럼").
  * 사용자 / 팀 › 파트(트리, 팀 추가·옮기기) / 담당 컬렉션(팀 › 파트 › 담당 컬렉션). 서브탭 모양은 설정(LLMSettings)과 같게.
  */
 export function OrgAccessPanel() {
-  const [subTab, setSubTab] = useState<SubTab>('users');
+  // 탭 = 주소의 ?tab(11/03) — 플랫폼 관리 › 홈 [담당 없는 컬렉션] 카드가 담당 컬렉션 탭으로 바로 온다
+  const [params, setParams] = useSearchParams();
+  const want = params.get('tab');
+  const subTab: SubTab = want === 'teams' || want === 'domains' ? want : 'users';
+  const setSubTab = (t: SubTab) => setParams((p) => { const n = new URLSearchParams(p); if (t === 'users') n.delete('tab'); else n.set('tab', t); return n; }, { replace: true });
   const tab = (id: SubTab, label: string, Icon: typeof Users) => (
     <button
       type="button"

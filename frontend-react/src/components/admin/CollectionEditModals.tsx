@@ -70,7 +70,7 @@ export function useCollectionEdit(kindLabel: string, suffix = ''): {
           <input id="ns-rename" autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
             className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
           <p className="text-xs text-slate-500 mt-1">안의 정책·지식·용어는 그대로 따라가요{editing?.code ? ` · 코드 ${editing.code}는 바뀌지 않아요` : ''}</p>
-          <p className="text-xs text-slate-500 mt-1">담당 파트: 시스템·권한 › 조직·권한 › 담당 컬렉션</p>
+          <p className="text-xs text-slate-500 mt-1">담당 파트: 플랫폼 관리 › 조직·권한 › 담당 컬렉션</p>
         </div>
       </FormModal>
 

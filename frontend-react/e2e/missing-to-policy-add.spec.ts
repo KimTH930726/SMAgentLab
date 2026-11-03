@@ -29,7 +29,7 @@ test('정책 컬렉션 "빠진 내용" → [정책 추가 제안으로] → 추�
 
   await loginAdmin(page);
   await selectDomain(page, NS);
-  await goAdmin(page, '품질', '정정 요청');
+  await goAdmin(page, '정정 요청');
   const card = page.locator(`#correction-${id}`);
   await expect(card.getByRole('button', { name: '승인', exact: true })).toHaveCount(0);   // 운영 지식으로 승인하는 길은 없다
   await card.getByRole('button', { name: '정책 추가 제안으로' }).click();

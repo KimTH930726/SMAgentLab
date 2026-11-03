@@ -32,7 +32,7 @@ test('실험 상태 — 자동 실험 불가 이유 · 도는 중(단계·n/m) �
     expect((await call(`/eval/candidates/${c.id}/experiment`, {})).status).toBe(409);   // 다시 돌리기도 같은 이유로 막힘
 
     await loginAdmin(page);
-    await goAdmin(page, '품질', '평가 게이트');
+    await goAdmin(page, '평가 게이트');
     const open = async () => {
       await page.getByTestId('gate-in-progress').getByTestId(`inprogress-${c.key}`).click();
       return page.getByRole('dialog').getByTestId(`candidate-${c.key}`);
@@ -45,7 +45,7 @@ test('실험 상태 — 자동 실험 불가 이유 · 도는 중(단계·n/m) �
                       VALUES (${c.id}, 'running', '2/3 바꾼 설정 검색', 40, 88, NOW()) RETURNING id`).split(/\s+/)[0];
     await page.keyboard.press('Escape');
     await page.reload();
-    await goAdmin(page, '품질', '평가 게이트');
+    await goAdmin(page, '평가 게이트');
     card = await open();
     await expect(card.getByTestId('cand-exp-running')).toContainText('실험 돌리는 중 — 2/3 바꾼 설정 검색');
     await expect(card.getByTestId('cand-exp-running')).toContainText('40/88');

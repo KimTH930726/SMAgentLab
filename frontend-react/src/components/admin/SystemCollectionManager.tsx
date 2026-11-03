@@ -126,7 +126,7 @@ export function SystemCollectionManager({ onNavigate, onRegister }: {
                         <div className="flex flex-wrap gap-1">
                           {owners.map((o) => <Badge key={o.id} color={editable ? 'emerald' : 'slate'}>{o.name}</Badge>)}
                         </div>
-                      ) : <span className="text-xs text-slate-500" title="담당 지정: 시스템·권한 › 조직·권한 › 담당 컬렉션">없음(관리자만)</span>}
+                      ) : <span className="text-xs text-slate-500" title="담당 지정: 플랫폼 관리 › 조직·권한 › 담당 컬렉션">없음(관리자만)</span>}
                     </td>
                     <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                       <div className="flex flex-wrap items-center gap-1">
@@ -190,7 +190,7 @@ export function SystemCollectionManager({ onNavigate, onRegister }: {
           <label htmlFor="sys-desc" className="block text-xs text-slate-400 mb-1">설명</label>
           <input id="sys-desc" value={newDesc} onChange={(e) => setNewDesc(e.target.value)}
             className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
-          <p className="text-xs text-slate-500 mt-1">담당 파트: 시스템·권한 › 조직·권한 › 담당 컬렉션</p>
+          <p className="text-xs text-slate-500 mt-1">담당 파트: 플랫폼 관리 › 조직·권한 › 담당 컬렉션</p>
         </div>
       </FormModal>
 

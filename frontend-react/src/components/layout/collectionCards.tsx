@@ -28,7 +28,7 @@ export function PendingLine({ corrections = 0, sourceChecks = 0, onJump }: {
   };
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-700/70 pt-1.5 mt-auto" data-testid="pending-chips">
-      {corrections > 0 && item('corrections', '정정 대기', corrections, '처리 전 정정 요청 — 품질 › 정정 요청')}
+      {corrections > 0 && item('corrections', '정정 대기', corrections, '처리 전 정정 요청 — 컬렉션 관리 › 정정 요청')}
       {sourceChecks > 0 && item('checks', '원문 확인', sourceChecks, '처리 전 정책서 원문 확인 — 정책서 › 원문 확인')}
     </div>
   );

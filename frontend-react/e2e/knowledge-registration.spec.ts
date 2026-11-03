@@ -32,7 +32,7 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
   // 관리 화면은 사이드바 링크로(클라이언트 라우팅)
 
   await page.getByRole('link', { name: 'Admin' }).click();
-  await goAdmin(page, '지식', '운영 지식');
+  await goAdmin(page, '운영 지식');
 
   await selectDomain(page, NAMESPACE, LABEL);
 
@@ -137,7 +137,7 @@ test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아
 
   try {
     await page.getByRole('link', { name: 'Admin' }).click();
-    await goAdmin(page, '지식', '운영 지식');
+    await goAdmin(page, '운영 지식');
     await selectDomain(page, NAMESPACE, LABEL);
     await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     await page.getByText('직접 입력').click();
@@ -192,7 +192,7 @@ test('번호 제목 붙여넣기 → 섹션별로 저장 → 지식 상세 "문�
     expect(ids.length).toBe(prev.count);
 
     await page.getByRole('link', { name: 'Admin' }).click();
-    await goAdmin(page, '지식', '운영 지식');
+    await goAdmin(page, '운영 지식');
     await selectDomain(page, NAMESPACE, LABEL);
     await page.getByPlaceholder(/검색/).fill('구조 테스트 B');
     await page.getByText('구조 테스트 B').first().click();
@@ -244,7 +244,7 @@ test('같은 원본 다시 등록 — 사람이 고친 조각이 있으면 사�
       data: { content: `${marker} 사람이 고친 둘째 조각 — 재등록 확인 테스트` } })).ok()).toBeTruthy();
 
     await page.getByRole('link', { name: 'Admin' }).click();
-    await goAdmin(page, '지식', '운영 지식');
+    await goAdmin(page, '운영 지식');
     await selectDomain(page, NAMESPACE, LABEL);
     await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     await page.getByText('대량 텍스트', { exact: true }).first().click();

@@ -33,7 +33,7 @@ test('개선 후보 — 칩 숫자 = 보이는 줄 = API, [진행 중] = 결정�
   let gid = '';
   try {
     await loginAdmin(page);
-    await goAdmin(page, '품질', '평가 게이트');
+    await goAdmin(page, '평가 게이트');
     const sec = page.getByTestId('gate-in-progress');
     const open = board.candidates.filter(isOpen);
     await expect(sec.getByTestId('board-filter-open')).toContainText(String(open.length));
@@ -54,7 +54,7 @@ test('개선 후보 — 칩 숫자 = 보이는 줄 = API, [진행 중] = 결정�
     psql(`UPDATE eval_candidate SET status = 'failed', review_reason = '자동 종결 — E2E', reviewed_by_user_id = NULL, reviewed_at = NOW() WHERE id = ${c!.id}`);
 
     await page.reload();
-    await goAdmin(page, '품질', '평가 게이트');
+    await goAdmin(page, '평가 게이트');
     await expect(sec.getByTestId(`inprogress-${c!.key}`)).toHaveCount(0);           // 기본 [진행 중]에서 빠짐
     await sec.getByTestId('board-filter-failed').click();
     const line = sec.getByTestId(`inprogress-${c!.key}`);

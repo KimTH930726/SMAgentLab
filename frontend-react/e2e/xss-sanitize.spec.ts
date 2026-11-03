@@ -21,7 +21,7 @@ test('지식 본문의 스크립트·이벤트 속성은 실행되지 않고, �
   page.on('pageerror', (e) => errors.push(e.message));
   await loginAdmin(page, { openAdmin: false });
   await page.getByRole('link', { name: 'Admin' }).click();
-  await goAdmin(page, '지식', '운영 지식');
+  await goAdmin(page, '운영 지식');
   await selectDomain(page, NS, NS.replace(/ 시스템$/, ''));
   // 본문을 마크다운으로 그리는 곳 = 승인 대기 줄을 누르면 뜨는 유사 지식 검토 창
   const dialog = page.getByRole('dialog', { name: '유사 지식 검토' });

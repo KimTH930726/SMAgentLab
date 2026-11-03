@@ -17,7 +17,7 @@ test('최적 상태 표시 → 스위치로 벗어나면 경고·주황 띠 → 
     expect((await request.put(`${API}/api/eval/techniques/chat_prompt/switch`, { ...auth, data: { on: false } })).status()).toBe(403);
 
     await loginAdmin(page);
-    await goAdmin(page, '품질', '평가 게이트');
+    await goAdmin(page, '평가 게이트');
     await page.getByTestId('gate-history-section').getByRole('button', { name: /기법 대장/ }).click();
     const flow = page.getByTestId('technique-flow');
     await expect(flow.getByTestId('technique-optimal')).toBeVisible();

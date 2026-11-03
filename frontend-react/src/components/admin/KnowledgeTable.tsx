@@ -153,7 +153,10 @@ export function KnowledgeTable() {
   const dropInto = () => setSearchParams((p) => { const n = new URLSearchParams(p); n.delete('into'); return n; }, { replace: true });
   useEffect(() => { if (into && selectedNs && into !== selectedNs) dropInto(); },   // eslint-disable-line react-hooks/exhaustive-deps
     [selectedNs]);
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>(() => (searchParams.get('tab') === 'ingest' ? 'ingest' : 'list'));   // 정정 요청은 품질 메뉴로(10/21)
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>(() => {
+    const t = searchParams.get('tab');   // ?tab=review — 컬렉션 관리 › 홈 [승인 대기] 카드(11/03)
+    return t === 'ingest' || t === 'review' ? t : 'list';
+  });   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<KnowledgeFormData>(defaultForm);

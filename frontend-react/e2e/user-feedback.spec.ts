@@ -39,7 +39,7 @@ test('피드백 — 이미지 첨부 보내기 → 관리자 분류(기각 사�
     expect(psql(`SELECT mime || '|' || size FROM ops_user_feedback_file WHERE feedback_id = ${id}`)).toBe(`image/png|${PNG.length}`);
 
     await page.goto('/admin');
-    await goAdmin(page, '품질', '사용자 피드백');
+    await goAdmin(page, '사용자 피드백');
     const panel = page.getByTestId('user-feedback-panel');
     await expect(panel.getByTestId('feedback-auto-signals')).toContainText('최근 14일 채팅 장애');
     const row = panel.getByTestId(`feedback-${id}`);

@@ -11,7 +11,7 @@ const LABEL = '딜리버스';   // 화면 이름
 test('[지식 등록 →]으로 오면 넣을 곳 = 그 컬렉션 · 등록하면 그곳에 저장 + 원장 확정(preset)', async ({ page }) => {
   const marker = `E2E넣을곳_${Date.now()}`;
   await loginAdmin(page);
-  await goAdmin(page, '컬렉션', '시스템 컬렉션');
+  await goAdmin(page, '시스템 컬렉션');
   await page.getByTestId('system-collections').getByRole('row').filter({ hasText: LABEL }).first().getByRole('button', { name: '지식 등록 →' }).click();
   await expect(page).toHaveURL((u) => u.searchParams.get('into') === NS);
 
@@ -44,7 +44,7 @@ test('[지식 등록 →]으로 오면 넣을 곳 = 그 컬렉션 · 등록하�
 
 test('청크 검토 위 [다른 곳…] 창 — Esc는 맨 위 창만 닫는다(청크 검토는 그대로) · 창은 "어디에 넣을까요?"', async ({ page }) => {
   await loginAdmin(page);
-  await goAdmin(page, '지식', '운영 지식');
+  await goAdmin(page, '운영 지식');
   await page.getByRole('button', { name: '지식 등록', exact: true }).click();
   await page.getByText('대량 텍스트', { exact: true }).first().click();
   await page.locator('textarea:visible').first().fill(`# E2E창겹침_${Date.now()}\n\n가상의 절차 설명 첫 단락입니다.\n\n## 둘째\n\n가상의 절차 설명 둘째 단락입니다.`);

@@ -34,7 +34,7 @@ test('팀 적재 분류 미리보기 — 묶음 위치로 확정 · 줄 보류 �
     await loginAdmin(page);
     // 따로 메뉴(팀 적재)는 없다 — 운영 지식 › [적재 검토] 탭(할 일 수 = 분류 안 한 검토 필요 + 안 본 표본)
     await expect(page.getByRole('navigation', { name: '관리자 메뉴' }).getByRole('button', { name: '팀 적재' })).toHaveCount(0);
-    await goAdmin(page, '지식', '소스 연결');   // 10/30 운영 지식 [적재 검토] 탭 → 지식 › 소스 연결
+    await goAdmin(page, '소스 연결');   // 10/30 운영 지식 [적재 검토] 탭 → 지식 › 소스 연결
     await expect(page.getByLabel('배치')).toBeVisible();
     await expect(page.getByLabel('배치').locator(`option[value="${bid}"]`)).toHaveText(/할 일 1/);   // 연결할 묶음 수(10/30 묶음 단위 연결) — 모두 묶음A
     await page.getByLabel('배치').selectOption(String(bid));   // 배치가 여럿이면 선택 상자(10/30)
@@ -99,7 +99,7 @@ test('공간 기본 위치 — 등록 창구 세 갈래 · 기본 위치로 분�
     ins('h1', 'reason, ai_namespace_id, final_namespace_id, decided_by_user_id', `'low_confidence', ${common}, ${common}, (SELECT id FROM ops_user WHERE username = 'admin')`);   // 사람이 이미 분류
 
     await loginAdmin(page);
-    await goAdmin(page, '지식', '운영 지식');
+    await goAdmin(page, '운영 지식');
     await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     // 등록 창구 세 갈래 — PAT가 있으면 보인다
     await page.getByText('URL / Confluence', { exact: true }).click();
@@ -111,7 +111,7 @@ test('공간 기본 위치 — 등록 창구 세 갈래 · 기본 위치로 분�
       await expect(page.getByRole('button', { name: '분류 미리보기 만들기' })).toBeVisible();   // 누르지 않는다(컨플을 받는다)
     }
 
-    await goAdmin(page, '지식', '소스 연결');
+    await goAdmin(page, '소스 연결');
     await page.getByLabel('배치').selectOption(String(bid));   // 배치가 여럿이면 선택 상자(10/30)
     await page.getByTestId('preview-more').click();   // 상세는 [자세히] 아래(10/30 최종 검수)
     const ctl = page.locator('div', { has: page.getByRole('button', { name: '기본 위치로 분류' }) }).last();
@@ -204,8 +204,8 @@ test('묶음 연결 — 묶음 줄·하위 예외 미리 채움, 연결하면 �
     for (const i of [1, 2]) psql(`INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, path, status, chunk_count, reason, signals)
       VALUES (${bid}, 'd${i}', 'd${i}', 'D', ${i}, '${i === 1 ? '' : 'D'}', 'review', 1, 'low_confidence', '{"doc_type": "대상 아님"}')`);
     await loginAdmin(page);
-    await goAdmin(page, '지식', '운영 지식');
-    await goAdmin(page, '지식', '소스 연결');
+    await goAdmin(page, '운영 지식');
+    await goAdmin(page, '소스 연결');
     await page.getByLabel('배치').selectOption(String(bid));
     const bc = page.getByTestId('bundle-connect');
     await expect(bc.getByTestId('bundle-row')).toHaveCount(4);

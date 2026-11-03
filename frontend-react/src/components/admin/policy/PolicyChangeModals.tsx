@@ -31,7 +31,7 @@ function useChange(namespace: string, onDone: () => void, forwardFrom?: number) 
       qc.invalidateQueries({ queryKey: ['corrections'] });
       qc.invalidateQueries({ queryKey: ['corrections-pending-count'] });
       onDone();
-      void showAlert(`정정 #${r.id}로 올렸어요 — 품질 › 정정 요청에서 승인하면 반영돼요.`, { tone: 'success' });
+      void showAlert(`정정 #${r.id}로 올렸어요 — 컬렉션 관리 › 정정 요청에서 승인하면 반영돼요.`, { tone: 'success' });
     },
     onError: (e: Error) => {
       setError(e.message || '올리지 못했어요.');

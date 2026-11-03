@@ -32,7 +32,7 @@ test('AI 감사 로그 — 기록만: 번복과 이유가 보이고, 묻는 버�
   const kept = row(`jsonb_build_object('namespace_id', (SELECT min(id) FROM ops_namespace WHERE kind = 'domain'), 'choice', 'accept')`);
 
   await loginAdmin(page);
-  await goAdmin(page, '품질', 'AI 감사 로그');
+  await goAdmin(page, 'AI 감사 로그');
   await expect(page.getByTestId('override-summary')).toBeVisible();
   for (const k of ['location', 'clarify', 'source', 'suggest']) await expect(page.getByTestId(`decision-card-${k}`)).toBeVisible();
 
@@ -71,7 +71,7 @@ test('평가 게이트 — 단계 줄 = 원인 수(누르면 그 단계 원인�
   const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
   await nav.waitFor();
   await expect(nav.getByRole('button', { name: 'RAG 파이프라인', exact: true })).toHaveCount(0);   // 메뉴는 내렸다
-  await goAdmin(page, '품질', '평가 게이트');
+  await goAdmin(page, '평가 게이트');
 
   for (const s of ['적재', '검색', '근거 판정', '답 모양', '생성']) await expect(page.getByTestId(`flow-${s}`)).toBeVisible();
   // 적재 칸 = 적재 검사 후보가 걸린 틀린 문항 수(다른 칸과 겹칠 수 있어 "겹침") — 누르면 ① 개선할 곳의 적재 검사 줄과 같은 수(10/29)
@@ -167,6 +167,6 @@ test('AI가 본 근거(지식 상세) — 이 지식의 순위 표시 · 화면 
 
 /** 운영 지식 화면으로 — 보는 컬렉션을 고른 뒤 */
 async function nav(page: import('@playwright/test').Page, ns: string) {
-  await goAdmin(page, '지식', '운영 지식');
+  await goAdmin(page, '운영 지식');
   await selectDomain(page, ns);
 }

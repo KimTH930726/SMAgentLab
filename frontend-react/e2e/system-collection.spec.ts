@@ -20,7 +20,7 @@ test('시스템 컬렉션 — 추가 · 관련 정책 저장 · 고르는 창 [�
   test.skip(!biz, '정책 컬렉션이 없음');
 
   await loginAdmin(page);
-  await goAdmin(page, '컬렉션', '시스템 컬렉션');
+  await goAdmin(page, '시스템 컬렉션');
   const panel = page.getByTestId('system-collections');
 
   // ① 시스템 추가 → DB: 업무 영역과 같은 kind, 구분값 system, 상위 없음
@@ -46,7 +46,7 @@ test('시스템 컬렉션 — 추가 · 관련 정책 저장 · 고르는 창 [�
   await expect(row).toContainText(biz);
 
   // ③ 정책 컬렉션 표엔 시스템 줄이 없다 — 관련 정책으로 이은 정책 줄엔 "시스템 · …"이 붙고(11/02), 연결 없는 정책엔 "관련 시스템 없음"
-  await goAdmin(page, '컬렉션', '정책 컬렉션');
+  await goAdmin(page, '정책 컬렉션');
   await expect(page.locator('tbody tr td:first-child div.font-medium').filter({ hasText: new RegExp(`^${SYS}`) })).toHaveCount(0);
   const bizRow = page.getByRole('row').filter({ has: page.locator('div.font-medium', { hasText: new RegExp(`^${biz}(POL-|$)`) }) });
   await expect(bizRow).toContainText(new RegExp(`시스템 · (.+ · )?${SYS}`));   // 여러 시스템이면 " · "로 이어 붙음
@@ -71,13 +71,14 @@ test('시스템 컬렉션 — 추가 · 관련 정책 저장 · 고르는 창 [�
   await expect(page.getByRole('tab', { name: '시스템' })).toHaveAttribute('aria-selected', 'true');
   await page.keyboard.press('Escape');
 
-  // ⑤ 시스템을 보는 중엔 정책서·VOC가 왼쪽 메뉴에 없다(시스템 정보는 있음) — 주소로 와도 운영 지식으로
+  // ⑤ 시스템을 보는 중엔 정책서(컬렉션 관리)·VOC(플랫폼 관리)가 왼쪽 메뉴에 없다(용어집은 있음) — 주소로 와도 운영 지식으로
   const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
-  await goAdmin(page, '지식', '운영 지식');
-  await expect(nav.getByRole('button', { name: '시스템 정보', exact: true })).toBeVisible();
-  for (const hidden of ['정책서', 'VOC 이메일']) {
-    await expect(nav.getByRole('button', { name: hidden, exact: true })).toHaveCount(0);
-  }
+  await goAdmin(page, '운영 지식');
+  await expect(nav.getByRole('button', { name: '용어집', exact: true })).toBeVisible();
+  await expect(nav.getByRole('button', { name: '정책서', exact: true })).toHaveCount(0);
+  await goAdmin(page, '설정');
+  await expect(nav.getByRole('button', { name: '조직·권한', exact: true })).toBeVisible();
+  await expect(nav.getByRole('button', { name: 'VOC 이메일', exact: true })).toHaveCount(0);
   await gotoAdminUrl(page, '/admin/k.policy');
   await expect(page).toHaveURL(/\/admin\/k\.docs$/);
   await expect(page.getByTestId('admin-crumb')).toContainText(SYS);
@@ -93,7 +94,7 @@ test('시스템 컬렉션 — 이름 수정(화면 이름으로 고치면 키 �
   dropSystem(key);
   psql(`INSERT INTO ops_namespace (name, description, area, code) VALUES ('${key}', 'e2e', 'system', 'SYS-ZQ')`);
   await loginAdmin(page);
-  await goAdmin(page, '컬렉션', '시스템 컬렉션');
+  await goAdmin(page, '시스템 컬렉션');
   const panel = page.getByTestId('system-collections');
   await expect(panel.getByRole('row').filter({ hasText: SYS2 })).toContainText('SYS-ZQ');
   // 이름 수정 — 창엔 화면 이름(뗀 것), 저장은 키로

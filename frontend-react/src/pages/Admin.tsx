@@ -10,7 +10,6 @@ import { EvaluationGate } from '../components/admin/EvaluationGate';
 import { AiDecisions } from '../components/admin/AiDecisions';
 import { LLMSettings } from '../components/admin/LLMSettings';
 import { OrgAccessPanel } from '../components/admin/OrgAccessPanel';
-import { CachePanel } from '../components/admin/CachePanel';
 import { VocEmailPanel } from '../components/admin/VocEmailPanel';
 import { PolicyPanel } from '../components/admin/policy/PolicyPanel';
 import { CorrectionReviewTab } from '../components/admin/CorrectionReviewTab';
@@ -18,7 +17,9 @@ import { UserFeedbackPanel } from '../components/feedback/UserFeedback';
 import { useAuthStore } from '../store/useAuthStore';
 import { useNamespaceAccess } from '../utils/useNamespaceAccess';
 import { AdminCrumb } from '../components/layout/AdminCrumb';
-import { adminPath, resolveAdminMenu, type AdminMenuId } from './adminMenu';
+import { adminPath, aliasTab, blockedPlatform, resolveAdminMenu, type AdminMenuId } from './adminMenu';
+import { CollectionHome, CollectionInfo, PlatformHome } from '../components/admin/AdminHome';
+import { showAlert } from '../store/useDialogStore';
 import { useAdminMenu } from '../utils/useAdminMenu';
 
 // ── ErrorBoundary ─────────────────────────────────────────────────────────────
@@ -57,9 +58,6 @@ function CorrectionsPanel() {
   return <CorrectionReviewTab namespace={selectedNs} focusId={focus} />;
 }
 
-function NotReady({ what }: { what: string }) {
-  return <p className="text-sm text-slate-400 py-10 text-center">{what} 화면은 준비 중이에요.</p>;
-}
 
 export default function Admin() {
   const location = useLocation();
@@ -75,9 +73,13 @@ export default function Admin() {
   const toDocs = (tab: 'ingest' | 'list', into?: string) =>
     navigate(tab === 'ingest' ? `${adminPath('k.docs')}?tab=ingest${into ? `&into=${encodeURIComponent(into)}` : ''}` : adminPath('k.docs'));
   // 없는 메뉴·볼 수 없는 메뉴 주소로 들어오면 실제로 보여 주는 메뉴 주소로 바로잡는다(주소창과 화면이 어긋나지 않게)
+  // 옛 캐시 주소(/admin/sys.cache)는 설정 › 캐시 탭으로(11/03 캐시를 설정 안으로)
   useEffect(() => {
-    if (location.pathname !== adminPath(current)) navigate(adminPath(current), { replace: true });
-  }, [location.pathname, current, navigate]);
+    const tab = aliasTab(location.pathname);
+    // 관리자 전용(플랫폼 관리) 화면 주소로 온 비관리자 — 조용히 바꾸지 않고 알린 뒤 컬렉션 관리 홈으로(리뷰 11/03)
+    if (blockedPlatform(location.pathname, groups)) void showAlert('플랫폼 관리(관리자 전용) 화면이에요. 볼 수 있는 화면으로 이동합니다.', { title: '접근 권한 없음' });   // 조회 전용은 홈이 없어 설정으로 간다(재리뷰 L2)
+    if (location.pathname !== adminPath(current)) navigate(tab ? `${adminPath(current)}?tab=${tab}` : adminPath(current), { replace: true });
+  }, [location.pathname, current, navigate, groups]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -90,13 +92,15 @@ export default function Admin() {
       <AdminCrumb current={current} />
       <div className="flex-1 overflow-y-auto p-6">
         <TabErrorBoundary key={current}>
+          {current === 'home'          && <CollectionHome onGo={(to) => navigate(to)} />}
+          {current === 'p.home'        && isAdmin && <PlatformHome onGo={(to) => navigate(to)} />}
+          {current === 'c.info'        && <CollectionInfo onGo={(to) => navigate(to)} />}
           {current === 'domains'       && <NamespaceManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : to === 'policy' ? 'k.policy' : 'k.docs')} onRegister={toDocs} />}
           {current === 'systems'       && <SystemCollectionManager onNavigate={(to) => go(to === 'glossary' ? 'k.glossary' : 'k.docs')} onRegister={toDocs} />}
           {current === 'k.policy'      && <PolicyPanel onOpenCorrection={(id) => navigate(`${adminPath('q.corrections')}?focus=${id}`)} onOpenCorrections={() => go('q.corrections')} />}
           {current === 'k.docs'        && <KnowledgeTable />}
           {current === 'k.sources'     && <DataSources />}
           {current === 'k.glossary'    && <GlossaryTable />}
-          {current === 'k.system'      && <NotReady what="시스템 정보(DB 칼럼·공통코드)" />}
           {current === 'org'           && isAdmin && <OrgAccessPanel />}
           {current === 'q.stats'       && <StatsPanel onOpenCorrections={() => go('q.corrections')} />}
           {current === 'q.corrections' && <CorrectionsPanel />}
@@ -105,7 +109,6 @@ export default function Admin() {
           {current === 'q.decisions'   && isAdmin && <AiDecisions />}
           {current === 'voc'           && <VocEmailPanel />}
           {current === 'sys.settings'  && <LLMSettings />}
-          {current === 'sys.cache'     && isAdmin && <CachePanel />}
         </TabErrorBoundary>
       </div>
     </div>

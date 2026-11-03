@@ -31,7 +31,7 @@ test('검수 대기 배치 — 카드(조각·중복 의심) → [게시] → �
   psql(`INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, status, chunk_count, final_namespace_id) VALUES (${bid}, 'e2e-p1', 'E2E 페이지', '묶음', 1, 'loaded', 3, ${ns})`);
   try {
     await loginAdmin(page);
-    await goAdmin(page, '지식', '소스 연결');
+    await goAdmin(page, '소스 연결');
     await page.getByLabel('배치').selectOption(bid);
     const review = page.getByTestId('publish-review');
     await expect(review).toBeVisible();

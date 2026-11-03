@@ -14,7 +14,7 @@ export function useNamespaceAccess() {
   const setSelectedNs = useAppStore((s) => s.setNamespace);
   const user = useAuthStore((s) => s.user);
 
-  const { data: nsDetails = [] } = useQuery({
+  const { data: nsDetails = [], isLoading: nsLoading, isError: nsError } = useQuery({
     queryKey: ['namespaces-detail'],
     queryFn: getNamespacesDetail,
     staleTime: 30_000,
@@ -31,5 +31,5 @@ export function useNamespaceAccess() {
   const nsOwners = effectiveOwnerParts(nsDetails.find((n) => n.name === selectedNs));
   const canModifyNs = canEditDomain(user, nsOwners);
 
-  return { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, namespaces, nsDetails, user };
+  return { selectedNs, setSelectedNs, canModifyNs, sortedNamespaces, namespaces, nsDetails, nsLoading, nsError, user };
 }

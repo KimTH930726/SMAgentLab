@@ -26,7 +26,7 @@ async function login(page: Page) {
 async function openPolicy(page: Page) {
   await page.getByRole('link', { name: 'Admin' }).click();
   await selectDomain(page, NS);
-  await goAdmin(page, '지식', '정책서');
+  await goAdmin(page, '정책서');
   const group = page.getByRole('button', { name: /^테스트/ });
   await expect(group).toHaveAttribute('aria-expanded', 'true');   // 처음엔 모든 절이 펼쳐져 있다(10/22)
   await page.getByRole('button', { name: new RegExp(NAME) }).click();

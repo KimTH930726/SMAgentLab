@@ -2,7 +2,8 @@ import { ChevronRight } from 'lucide-react';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { effectiveOwnerParts, ownerNames } from '../../utils/domainAccess';
 import { collectionLabel } from '../../utils/collections';
-import { findAdminItem, type AdminMenuId } from '../../pages/adminMenu';
+import { ADMIN_SCOPES, findAdminItem, type AdminMenuId } from '../../pages/adminMenu';
+import { useAdminMenu } from '../../utils/useAdminMenu';
 
 /**
  * 관리 본문 맨 위 경로 표시줄(10/21) — 모든 화면 같은 자리에 "정책 컬렉션 › 묶음 › 화면" + 담당 파트.
@@ -12,7 +13,10 @@ import { findAdminItem, type AdminMenuId } from '../../pages/adminMenu';
 export function AdminCrumb({ current }: { current: AdminMenuId }) {
   const found = findAdminItem(current);
   const { selectedNs, nsDetails } = useNamespaceAccess();
+  const { groups } = useAdminMenu();   // 범위는 보이는 메뉴 기준(관리자가 아니면 설정도 컬렉션 관리 안)
   if (!found) return null;
+  const scope = groups.find((g) => g.items.some((it) => it.id === current))?.scope ?? found.group.scope;
+  const scopeLabel = ADMIN_SCOPES.find((s) => s.scope === scope)?.label;
   const { group, item } = found;
   const scoped = !!item.scoped && !!selectedNs;
   const owner = ownerNames(effectiveOwnerParts(nsDetails.find((n) => n.name === selectedNs))) || null;   // 고르는 창과 같은 기준(물려받은 담당 포함, "A · B")
@@ -21,6 +25,12 @@ export function AdminCrumb({ current }: { current: AdminMenuId }) {
   return (
     <div className="flex-shrink-0 flex items-center gap-3 px-6 py-3 border-b border-slate-700 bg-slate-800/60" data-testid="admin-crumb">
       <nav aria-label="현재 위치" className="flex items-center gap-1.5 text-sm min-w-0">
+        {(!scoped || scope === 'platform') && scopeLabel && (
+          <>
+            <span className="text-slate-400">{scopeLabel}</span>
+            <ChevronRight className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+          </>
+        )}
         {scoped && (
           <>
             <button onClick={focusPicker} title="보는 컬렉션 바꾸기"

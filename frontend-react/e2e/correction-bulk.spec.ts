@@ -37,7 +37,7 @@ async function propose(request: APIRequestContext, tok: string, name: string, ra
 async function openQueue(page: Page) {
   await loginAdmin(page);
   await selectDomain(page, NS);
-  await goAdmin(page, '품질', '정정 요청');
+  await goAdmin(page, '정정 요청');
   await page.getByTestId('correction-channels').getByRole('button', { name: /^정책 수정/ }).click();   // 채널 칩(10/30, 옛 출처 선택 상자)
 }
 

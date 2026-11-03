@@ -1,15 +1,32 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
-/** 관리자 왼쪽 아코디언 메뉴로 이동(10/21) — 하위 항목이 안 보이면 묶음을 펼친 뒤 누른다(펼친 묶음을 다시 누르면 접히므로 무조건 누르지 않는다). */
-export async function goAdmin(page: Page, group: string, item: string) {
+export type AdminScope = '컬렉션 관리' | '플랫폼 관리';
+/** 플랫폼 관리 메뉴(11/03 범위 나누기) — 나머지는 컬렉션 관리. 화면 이름이 겹치는 '홈'은 scope를 넘긴다 */
+const PLATFORM_ITEMS = new Set(['평가 게이트', 'AI 감사 로그', '사용자 피드백', '정책 컬렉션', '시스템 컬렉션', '조직·권한', 'VOC 이메일', '설정']);
+/** 묶음(아코디언) 안에 든 항목 → 묶음 이름. 나머지는 한 줄 메뉴 */
+const IN_GROUP: Record<string, string> = { '정책 컬렉션': '컬렉션', '시스템 컬렉션': '컬렉션' };
+
+/** 관리 범위 전환 [컬렉션 관리 | 플랫폼 관리](관리자만 보임) — 이미 그 범위면 누르지 않는다 */
+export async function switchScope(page: Page, scope: AdminScope) {
+  const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
+  await nav.waitFor();
+  const btn = nav.getByRole('group', { name: '관리 범위' }).getByRole('button', { name: scope, exact: true });
+  if ((await btn.getAttribute('aria-pressed')) !== 'true') await btn.click();
+  await expect(btn).toHaveAttribute('aria-pressed', 'true');
+}
+
+/** 관리자 왼쪽 메뉴로 이동(10/21 아코디언 → 11/03 두 범위) — 그 항목의 범위로 바꾼 뒤, 묶음 안 항목이면 묶음을 펼쳐서 누른다
+ *  (펼친 묶음을 다시 누르면 접히므로 무조건 누르지 않는다). 관리자가 아니면 범위 전환이 없다 — scope: null. */
+export async function goAdmin(page: Page, item: string, scope: AdminScope | null = PLATFORM_ITEMS.has(item) ? '플랫폼 관리' : '컬렉션 관리') {
   const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
   await nav.waitFor();   // 새로고침 직후 아직 안 그려진 메뉴를 "접혀 있음"으로 오인하지 않게
-  const target = nav.getByRole('button', { name: item, exact: true });
-  if (group !== item) {
+  if (scope) await switchScope(page, scope);
+  const group = IN_GROUP[item];
+  if (group) {
     const header = nav.getByRole('button', { name: group, exact: true });
     if ((await header.getAttribute('aria-expanded')) === 'false') await header.click();
   }
-  await target.click();
+  await nav.getByRole('button', { name: item, exact: true }).click();
 }
 
 /** 보는 컬렉션 칩(사이드바, 채팅·관리 화면 공통) — 10/22부터 select가 아니라 버튼 + 고르는 창 */

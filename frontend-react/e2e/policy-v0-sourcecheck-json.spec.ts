@@ -27,7 +27,7 @@ async function login(page: Page) {
 async function openPolicyTab(page: Page, tab: string) {
   await page.getByRole('link', { name: 'Admin' }).click();
   await selectDomain(page, NS);
-  await goAdmin(page, '지식', '정책서');
+  await goAdmin(page, '정책서');
   await page.getByRole('tab', { name: tab }).click();
 }
 
@@ -119,7 +119,7 @@ test('JSON 내려받기 → 하나 고침 → 미리보기 바뀜 1 → 정정 �
     .toBe(`correction|json_import|pending|${NEW_BODY}`);
 
   // 정정 요청: 출처 "JSON 가져오기" → 승인
-  await goAdmin(page, '품질', '정정 요청');   // 주소로 바로 가면 새로고침돼 고른 업무 영역이 첫 영역으로 돌아간다(10/21)
+  await goAdmin(page, '정정 요청');   // 주소로 바로 가면 새로고침돼 고른 업무 영역이 첫 영역으로 돌아간다(10/21)
   const card = page.locator(`#correction-${corrId}`);
   await expect(card).toContainText('JSON 가져오기');
   await expect(card).toContainText('14일');

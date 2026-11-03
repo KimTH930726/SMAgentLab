@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Cpu, CheckCircle2, XCircle, AlertTriangle, RefreshCw, Save, FlaskConical, SlidersHorizontal, KeyRound, ChevronDown, MessageSquareText, PanelLeft } from 'lucide-react';
+import { Cpu, CheckCircle2, XCircle, AlertTriangle, RefreshCw, Save, FlaskConical, SlidersHorizontal, KeyRound, ChevronDown, MessageSquareText, PanelLeft, Database } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { CachePanel } from './CachePanel';
 import { getLLMConfig, updateLLMConfig, testLLMConnection, getSearchThresholds, updateSearchThresholds, getSearchDefaults, updateSearchDefaults } from '../../api/llm';
 import { getCacheConfig, setCacheConfig } from '../../api/cache';
 import type { CacheConfig } from '../../api/cache';
@@ -135,15 +137,22 @@ function CollapsibleSection({ title, defaultOpen = true, children }: { title: st
   );
 }
 
-type SubTab = 'provider' | 'thresholds' | 'prompts' | 'menu';
+type SubTab = 'provider' | 'thresholds' | 'prompts' | 'menu' | 'cache';
+const SUB_TABS: SubTab[] = ['provider', 'thresholds', 'prompts', 'menu', 'cache'];
+const ADMIN_TABS: SubTab[] = ['menu', 'cache'];   // 관리자만(서버도 관리자만)
 
 export function LLMSettings() {
-  const [subTab, setSubTab] = useState<SubTab>('thresholds');
   const selectedAgent = useAppStore((s) => s.selectedAgent);
-  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');   // 메뉴 노출은 관리자만 바꾼다(서버도 관리자만)
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  // 탭 = 주소의 ?tab(11/03) — 옛 캐시 주소(/admin/sys.cache)가 설정 › 캐시로 오고, 탭을 누르면 주소도 바뀐다.
+  // 볼 수 없는 탭(비관리자의 cache·menu)이나 모르는 값이면 검색 설정
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get('tab') as SubTab | null;
+  const subTab: SubTab = tabParam && SUB_TABS.includes(tabParam) && (isAdmin || !ADMIN_TABS.includes(tabParam)) ? tabParam : 'thresholds';
+  const setSubTab = (t: SubTab) => setParams((p) => { const n = new URLSearchParams(p); if (t === 'thresholds') n.delete('tab'); else n.set('tab', t); return n; }, { replace: true });
 
   return (
-    <div className={subTab === 'prompts' ? 'max-w-5xl' : 'max-w-2xl'}>
+    <div className={subTab === 'prompts' || subTab === 'cache' ? 'max-w-5xl' : 'max-w-2xl'}>
       {/* Sub-tab bar */}
       <div className="flex gap-1 mb-6 border-b border-slate-700">
         <button
@@ -192,10 +201,25 @@ export function LLMSettings() {
             메뉴 노출
           </button>
         )}
+        {isAdmin && (
+          <button
+            onClick={() => setSubTab('cache')}
+            title="Semantic Cache — 보는 컬렉션의 캐시 항목 · 비우기"
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              subTab === 'cache'
+                ? 'text-indigo-400 border-indigo-500'
+                : 'text-slate-400 border-transparent hover:text-slate-200 hover:border-slate-600'
+            }`}
+          >
+            <Database className="w-3.5 h-3.5" />
+            캐시
+          </button>
+        )}
       </div>
 
       {subTab === 'provider' && <ProviderSettings />}
       {subTab === 'menu' && isAdmin && <MenuVisibilitySettings />}
+      {subTab === 'cache' && isAdmin && <CachePanel />}
       {subTab === 'prompts' && <PromptManager agentType={selectedAgent} />}
       {subTab === 'thresholds' && (
         <div className="space-y-4">

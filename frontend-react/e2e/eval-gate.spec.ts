@@ -25,7 +25,7 @@ test('평가 게이트 카드 [자세히] 검색 성적·답 성적 — 카드 �
   const sum = (m: Record<string, string[]>) => Object.values(m).reduce((a, v) => a + v.length, 0);
 
   await loginAdmin(page);
-  await goAdmin(page, '품질', '평가 게이트');
+  await goAdmin(page, '평가 게이트');
 
   // 맨 위 카드(10/29 한 템플릿) = 지금 점수 — [자세히]가 옛 [성적] 탭 내용(검색 성적·답 성적)을 연다
   await expect(page.getByTestId('card-total')).toContainText(pct(s.answers.accuracy));
@@ -87,7 +87,7 @@ test('평가 게이트 두 축 같은 템플릿 — 카드 = 그 축 기준선, 
   const SECTIONS = ['gate-summary', 'gate-flow', 'gate-report', 'gate-in-progress', 'gate-history-section'];
 
   await loginAdmin(page);
-  await goAdmin(page, '품질', '평가 게이트');
+  await goAdmin(page, '평가 게이트');
   for (const id of SECTIONS) await expect(page.getByTestId(id)).toBeVisible();
   await page.getByTestId('axis-knowledge').click();
   await expect(page.getByTestId('gate-axis-knowledge')).toBeVisible();

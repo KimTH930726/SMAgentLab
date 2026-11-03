@@ -17,7 +17,7 @@ test.afterEach(cleanup);
 test('조직·권한 — 팀 만들기 · 팀 아래 파트 · 파트 있는 팀 삭제 막힘 · 담당 컬렉션 트리', async ({ page }) => {
   cleanup();
   await loginAdmin(page);
-  await goAdmin(page, '시스템·권한', '조직·권한');
+  await goAdmin(page, '조직·권한');
   await page.getByRole('tab', { name: '팀·파트' }).click();
 
   // ① 팀 만들기
@@ -61,13 +61,13 @@ test('조직·권한 — 팀 만들기 · 팀 아래 파트 · 파트 있는 팀
 
 test('관리자 메뉴 — 지금 화면이 든 묶음도 접힌다', async ({ page }) => {
   await loginAdmin(page);
-  await goAdmin(page, '지식', '운영 지식');
+  await goAdmin(page, '시스템 컬렉션');   // 11/03 범위 나누기 뒤 묶음(아코디언)은 플랫폼 관리 › 컬렉션 하나
   const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
-  const header = nav.getByRole('button', { name: '지식', exact: true });
+  const header = nav.getByRole('button', { name: '컬렉션', exact: true });
   await expect(header).toHaveAttribute('aria-expanded', 'true');
   await header.click();
   await expect(header).toHaveAttribute('aria-expanded', 'false');
-  await expect(nav.getByRole('button', { name: '정책서', exact: true })).toHaveCount(0);
+  await expect(nav.getByRole('button', { name: '정책 컬렉션', exact: true })).toHaveCount(0);
   await header.click();
   await expect(header).toHaveAttribute('aria-expanded', 'true');
 });

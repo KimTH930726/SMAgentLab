@@ -23,8 +23,13 @@ const useImportBatchList = () => useQuery({
 
 /** [적재 검토] 탭 숫자 — 미리보기 중인 배치의 사람이 할 일 = 연결할 묶음 수(10/30) */
 export function useImportTodo() {
-  const { data = [] } = useImportBatchList();
-  return data.reduce((a, b) => a + (b.todo ?? 0), 0);
+  return useImportTodoState().n;
+}
+
+/** 같은 숫자 + 읽는 중·실패(홈 카드가 0으로 오해되지 않게, 11/03 리뷰) */
+export function useImportTodoState(): { n: number; isLoading: boolean; isError: boolean } {
+  const q = useImportBatchList();
+  return { n: (q.data ?? []).reduce((a, b) => a + (b.todo ?? 0), 0), isLoading: q.isLoading, isError: q.isError };
 }
 
 /** 지식 › 소스 연결(10/30) — 팀 단위(보는 컬렉션과 무관). 일반 사용자는 서버가 자기 팀 배치만 준다, 관리자는 팀을 고른다. 주소 ?batch=id로 바로 연다 */

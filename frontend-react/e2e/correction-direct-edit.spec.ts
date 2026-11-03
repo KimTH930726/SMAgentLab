@@ -38,7 +38,7 @@ test('카드에서 직접 수정 → 저장(미반영) → 승인 → 고친 안
 
   await loginAdmin(page);
   await selectDomain(page, NS);
-  await goAdmin(page, '품질', '정정 요청');
+  await goAdmin(page, '정정 요청');
 
   const card = page.locator(`#correction-${id}`);
   await expect(card).toContainText('60일');

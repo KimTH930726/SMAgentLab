@@ -6,7 +6,7 @@ import { ADMIN_MENU, COLLECTION_KINDS, kindScope, supportsKind } from '../../pag
 import { Button } from '../ui/Button';
 
 /**
- * 시스템·권한 › 설정 › 메뉴 노출(10/23 사용자 "영역별로 필요 없는 메뉴는 미노출 — 나중엔 권한별도").
+ * 플랫폼 관리 › 설정 › 메뉴 노출(10/23 사용자 "영역별로 필요 없는 메뉴는 미노출 — 나중엔 권한별도").
  * 보는 컬렉션에 따라 바뀌는 메뉴(scoped)만 — 종류마다 켜고 끈다. 그 종류가 담을 수 없는 칸은 "—"(설정으로 켤 수 없음).
  * 저장 값은 숨길 것만(범위 kind:<종류>) — 관리자만 바꾼다.
  */
@@ -16,7 +16,7 @@ export function MenuVisibilitySettings() {
   const [hidden, setHidden] = useState<Record<string, string[]>>({});
   useEffect(() => { if (data) setHidden(data.hidden); }, [data]);
 
-  const items = ADMIN_MENU.flatMap((g) => g.items.filter((it) => it.scoped).map((it) => ({ group: g.label, it })));
+  const items = ADMIN_MENU.flatMap((g) => g.items.filter((it) => it.scoped && it.id !== 'home').map((it) => ({ group: g.label, it })));
   const isShown = (scope: string, id: string) => !(hidden[scope] ?? []).includes(id);
   const toggle = (scope: string, id: string) => setHidden((prev) => {
     const cur = new Set(prev[scope] ?? []);

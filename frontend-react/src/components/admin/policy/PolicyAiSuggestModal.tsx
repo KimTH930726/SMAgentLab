@@ -17,7 +17,7 @@ export function PolicyAiSuggestModal({ isOpen, namespace, policy, onClose, onDon
     namespace, itemId: policy.item_id, source: 'policy_ai', onDone, sourceCheckId,
     done: (r) => (r.ai_failed
       ? { message: `정정 #${r.id}로 올렸지만 AI가 수정안을 만들지 못했어요 — 정정 요청에서 [AI 초안 만들기]나 [직접 수정]으로 이어 가세요.`, tone: 'warning' }
-      : { message: `정정 #${r.id}로 올렸어요 — 품질 › 정정 요청에서 AI 수정안을 확인하고 승인하세요.`, tone: 'success' }),
+      : { message: `정정 #${r.id}로 올렸어요 — 컬렉션 관리 › 정정 요청에서 AI 수정안을 확인하고 승인하세요.`, tone: 'success' }),
   });
   useEffect(() => { if (isOpen) { setText(''); setError(''); } }, [isOpen, policy.item_id, setError]);
 

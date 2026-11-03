@@ -39,7 +39,7 @@ test('① 개선할 곳 — 원인 줄 수 = 서버, 펼치면 그 원인 후보
   const d = await report();
   test.skip(!d, '진단 없음');
   await loginAdmin(page);
-  await goAdmin(page, '품질', '평가 게이트');
+  await goAdmin(page, '평가 게이트');
   await expect(page.getByTestId('gate-report')).toBeVisible();
   await expect(page.getByTestId('report-locked')).toHaveCount(0);   // 머리 숫자 줄은 없앰(맨 위 카드와 중복, 10/29)
   const diagnosed = d!.failed.filter((r) => r.cause);
@@ -136,7 +136,7 @@ test('② 진행 중인 개선 — 나중에·결정 취소가 DB 상태를 바�
   test.skip(!target, '② 진행 중인 개선에 결정 전 후보 없음');
   const cid = String(target!.id);
   await loginAdmin(page);
-  await goAdmin(page, '품질', '평가 게이트');
+  await goAdmin(page, '평가 게이트');
   const line = page.getByTestId('gate-in-progress').getByTestId(`inprogress-${target!.key}`);   // ② 사람이 정할 후보 — 줄을 누르면 카드 모달(10/30)
   const row = page.getByRole('dialog').getByTestId(`candidate-${target!.key}`);
   try {
@@ -192,7 +192,7 @@ test('[운영에 반영했어요] — 통과한 측정을 고르면 후보 = 운
     // 이 후보를 잰 측정으로 연결(eval_gate.py --candidate와 같은 칸) — 남의 측정은 반영할 수 없다(리뷰 M3)
     psql(`UPDATE eval_candidate SET measured_gate_run_ids = array_append(coalesce(measured_gate_run_ids, '{}'), ${gid}) WHERE id = ${cid}`);
     await loginAdmin(page);
-    await goAdmin(page, '품질', '평가 게이트');
+    await goAdmin(page, '평가 게이트');
     await page.getByTestId('gate-in-progress').getByTestId(`inprogress-${target!.key}`).click();   // 실험 중 = ② — 줄 → 카드 모달
     const row = page.getByRole('dialog').getByTestId(`candidate-${target!.key}`);
     // 실험 결과 칸(10/30) — 연결한 측정의 전/후와 서버의 운영 반영 판정(반영 버튼과 같은 규칙)

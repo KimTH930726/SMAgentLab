@@ -18,7 +18,7 @@ export function PolicyEditModal({ isOpen, namespace, policy, onClose, onDone, so
   const [remark, setRemark] = useState(policy.remark ?? '');
   const { save, error, setError } = usePolicyProposal({
     namespace, itemId: policy.item_id, source: 'policy_direct', onDone, sourceCheckId,
-    done: (r) => ({ message: `정정 #${r.id}로 올렸어요 — 품질 › 정정 요청에서 승인하면 새 버전으로 반영돼요.`, tone: 'success' }),
+    done: (r) => ({ message: `정정 #${r.id}로 올렸어요 — 컬렉션 관리 › 정정 요청에서 승인하면 새 버전으로 반영돼요.`, tone: 'success' }),
   });
   useEffect(() => {   // 열 때마다 지금 버전으로 채운다(다음 정책으로 넘긴 뒤 다시 열어도)
     if (isOpen) { setBody(policy.raw_body); setRemark(policy.remark ?? ''); setError(''); }

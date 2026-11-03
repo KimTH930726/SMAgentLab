@@ -34,7 +34,7 @@ export function NamespaceManager({ onNavigate, onRegister }: NamespaceManagerPro
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
-  // 이름 수정·삭제 창 — 시스템 컬렉션 화면과 같이 씀(11/02). 담당 파트는 시스템·권한 › 조직·권한 › 담당 컬렉션 한 곳에서
+  // 이름 수정·삭제 창 — 시스템 컬렉션 화면과 같이 씀(11/02). 담당 파트는 플랫폼 관리 › 조직·권한 › 담당 컬렉션 한 곳에서
   const edit = useCollectionEdit('정책 컬렉션');
 
   const { data: allCollections = [], isLoading, error } = useQuery({
@@ -142,7 +142,7 @@ export function NamespaceManager({ onNavigate, onRegister }: NamespaceManagerPro
                           <span className="text-xs text-slate-400" title="이 컬렉션엔 담당이 없어 상위 컬렉션 담당을 물려받아요">
                             상위: {ownerNames(effectiveOwnerParts(ns))}
                           </span>
-                        ) : <span className="text-xs text-slate-500" title="담당 지정: 시스템·권한 › 조직·권한 › 담당 컬렉션">없음(관리자만)</span>}
+                        ) : <span className="text-xs text-slate-500" title="담당 지정: 플랫폼 관리 › 조직·권한 › 담당 컬렉션">없음(관리자만)</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right">{count(ns.policy_count, 'policy', '정책')}</td>
                       <td className="px-3 py-2.5 text-right">{count(ns.knowledge_count, 'knowledge', '운영 지식')}</td>
