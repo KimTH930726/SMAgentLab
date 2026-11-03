@@ -1,0 +1,216 @@
+"""쓰기 경로 실 DB 시험(11/03 표준 확대) — 가짜 연결 테스트가 못 보는 SQL 의미(조건·연결 방향·제약)를 실제 Postgres에서 불변식으로.
+
+각 시험은 트랜잭션 안에서 만들고 되돌린다(tests/realdb.py). DB가 없으면 건너뛴다.
+"""
+import json
+import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))   # tests/ 공용 장치
+from realdb import knowledge, load, ns, run  # noqa: E402
+
+database = load("_rdb_real_database", "core/database.py")
+cache = load("_rdb_real_cache", "shared/cache.py")
+ksvc = load("_rdb_real_knowledge_service", "agents/knowledge_rag/knowledge/service.py")
+move = load("_rdb_real_move", "scripts/move_knowledge_to_system.py")
+
+
+# ── 지식 삭제 ─────────────────────────────────────────────────────────────
+
+def test_delete_reopens_gap_and_is_soft():
+    """지식 삭제 = 상태만 deleted(행은 남음) · 그 지식으로 메운 공백은 다시 공백 · 다른 공백은 그대로."""
+    async def scenario(conn):
+        s = await ns(conn, "시험_삭제 시스템")
+        k, other = await knowledge(conn, s), await knowledge(conn, s, "다른 지식")
+        gap = await conn.fetchval("INSERT INTO ops_query_log (namespace_id, question, status, resolved_knowledge_id, resolved_at) "
+                                  "VALUES ($1, '질문', 'no_knowledge', $2, NOW()) RETURNING id", s, k)
+        keep = await conn.fetchval("INSERT INTO ops_query_log (namespace_id, question, status, resolved_knowledge_id, resolved_at) "
+                                   "VALUES ($1, '다른 질문', 'no_knowledge', $2, NOW()) RETURNING id", s, other)
+        assert await ksvc.delete_knowledge(k) is True
+        assert await ksvc.delete_knowledge(k) is False            # 두 번째는 바뀐 것 없음
+        return (await conn.fetchval("SELECT status FROM rag_knowledge WHERE id = $1", k),
+                await conn.fetchval("SELECT resolved_knowledge_id FROM ops_query_log WHERE id = $1", gap),
+                await conn.fetchval("SELECT resolved_knowledge_id FROM ops_query_log WHERE id = $1", keep), other)
+    st, gap_ref, keep_ref, other = run(scenario, [ksvc])
+    assert st == "deleted" and gap_ref is None and keep_ref == other
+
+
+def test_bulk_delete_counts_only_changed():
+    async def scenario(conn):
+        s = await ns(conn, "시험_묶음삭제 시스템")
+        ids = [await knowledge(conn, s, f"지식 {i}") for i in range(3)]
+        await conn.execute("UPDATE rag_knowledge SET status = 'deleted' WHERE id = $1", ids[0])
+        n = await ksvc.bulk_delete_knowledge(ids)
+        left = await conn.fetchval("SELECT count(*) FROM rag_knowledge WHERE id = ANY($1::int[]) AND status <> 'deleted'", ids)
+        return n, left
+    assert run(scenario, [ksvc]) == (2, 0)
+
+
+# ── 운영 지식 → 시스템 이동 스크립트 ────────────────────────────────────────
+
+def test_move_and_revert_conserve_rows():
+    """옮기기 = 받는 쪽 후 = 전 + 옮긴 수 · 보내는 쪽 0 · 되돌리기 = 원래 자리, 원문·조각이 갈리지 않음(유실·중복 0)."""
+    import tempfile
+
+    async def scenario(conn):
+        p = await ns(conn, "시험_이동 정책", "policy")
+        s = await ns(conn, "시험_이동 시스템", "system")
+        doc = await conn.fetchval("INSERT INTO rag_source_document (namespace_id, source_type, title, raw_content, raw_format, content_hash, status) "
+                                  "VALUES ($1, 'paste', '원문', '본문', 'text', md5('본문'), 'active') RETURNING id", p)
+        ks = [await knowledge(conn, p, f"조각 {i}", source_document_id=doc) for i in range(3)]
+        before_dst = await conn.fetchval("SELECT count(*) FROM rag_knowledge WHERE namespace_id = $1", s)
+        moving = await move.ids_of(conn, p)
+        await move.set_ns(conn, moving, s)
+        after = (await conn.fetchval("SELECT count(*) FROM rag_knowledge WHERE namespace_id = $1", s),
+                 await conn.fetchval("SELECT count(*) FROM rag_knowledge WHERE namespace_id = $1", p),
+                 await conn.fetchval("SELECT namespace_id FROM rag_source_document WHERE id = $1", doc))
+        log = {"src": "시험_이동 정책", "src_id": p, "dst": "시험_이동 시스템", "dst_id": s, "moved": moving}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+            json.dump(log, f)
+        await move.revert(conn, f.name)
+        back = (await conn.fetchval("SELECT count(*) FROM rag_knowledge WHERE namespace_id = $1 AND id = ANY($2::int[])", p, ks),
+                await conn.fetchval("SELECT namespace_id FROM rag_source_document WHERE id = $1", doc))
+        return before_dst, after, back, p, s
+    before_dst, after, back, p, s = run(scenario)   # 이동 함수는 연결을 인자로 받는다
+    assert after == (before_dst + 3, 0, s)
+    assert back == (3, p)
+
+
+# ── 컬렉션 삭제 빈 자리 정리 ───────────────────────────────────────────────
+
+def test_release_refs_nulls_and_requeues_import_rows():
+    """컬렉션 삭제 직전 정리: 넣을 곳이 이 컬렉션인 자동 줄은 검토로 · FK 없는 id 칸 NULL · 연결 줄 삭제 · 다른 컬렉션 줄은 그대로."""
+    async def scenario(conn):
+        s = await ns(conn, "시험_정리 시스템")
+        other = await ns(conn, "시험_정리 다른 시스템")
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        b = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, status, sampling_required, total_pages, done_pages, default_namespace_id) "
+                                "VALUES ($1, 'https://confl.sinc.co.kr/display/X', 'preview', FALSE, 2, 2, $2) RETURNING id", team, s)
+        pg = await conn.fetchval("INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, status, final_namespace_id, ai_namespace_id) "
+                                 "VALUES ($1, 'p1', 't', 'b', 1, 'auto', $2, $2) RETURNING id", b, s)
+        keep = await conn.fetchval("INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, status, final_namespace_id) "
+                                   "VALUES ($1, 'p2', 't', 'b', 1, 'auto', $2) RETURNING id", b, other)
+        await conn.execute("INSERT INTO ops_link (from_type, from_key, relation, to_type, to_key, source) VALUES ('domain', $1, 'supports', 'domain', $2, 'manual')",
+                           str(s), str(other))
+        await database.release_namespace_refs(conn, s)
+        r = dict(await conn.fetchrow("SELECT status, final_namespace_id, ai_namespace_id FROM rag_import_page WHERE id = $1", pg))
+        k = dict(await conn.fetchrow("SELECT status, final_namespace_id FROM rag_import_page WHERE id = $1", keep))
+        return (r, k, await conn.fetchval("SELECT default_namespace_id FROM rag_import_batch WHERE id = $1", b),
+                await conn.fetchval("SELECT count(*) FROM ops_link WHERE from_key = $1 OR to_key = $1", str(s)), other)
+    r, k, default, links, other = run(scenario)
+    assert r == {"status": "review", "final_namespace_id": None, "ai_namespace_id": None}
+    assert k == {"status": "auto", "final_namespace_id": other}
+    assert default is None and links == 0
+
+
+# ── 답변 캐시: 연결된 컬렉션 이름 ──────────────────────────────────────────
+
+def test_cache_linked_names_both_directions_and_children():
+    """캐시 비우기 대상 = 관련 정책 연결 양방향 + 연결된 정책의 하위(채팅 linked 범위와 같게) · 꺼진 연결은 빼고."""
+    async def scenario(conn):
+        p = await ns(conn, "시험_캐시 정책", "policy")
+        pc = await ns(conn, "시험_캐시 정책 하위", "policy", p)
+        s = await ns(conn, "시험_캐시 시스템", "system")
+        s2 = await ns(conn, "시험_캐시 꺼진 시스템", "system")
+        await conn.execute("INSERT INTO ops_link (from_type, from_key, relation, to_type, to_key, source) VALUES ('domain', $1, 'supports', 'domain', $2, 'manual')",
+                           str(s), str(p))
+        await conn.execute("INSERT INTO ops_link (from_type, from_key, relation, to_type, to_key, source, status) VALUES ('domain', $1, 'supports', 'domain', $2, 'manual', 'inactive')",
+                           str(s2), str(p))
+        from_sys = sorted(r["name"] for r in await conn.fetch(cache._LINKED_NAMES_SQL, ["시험_캐시 시스템"]))
+        from_child = sorted(r["name"] for r in await conn.fetch(cache._LINKED_NAMES_SQL, ["시험_캐시 정책 하위"]))
+        return from_sys, from_child
+    from_sys, from_child = run(scenario)
+    assert from_sys == ["시험_캐시 정책", "시험_캐시 정책 하위"]   # 정책 + 그 하위(하위에서 물은 답에도 이 시스템 지식이 든다)
+    assert from_child == ["시험_캐시 시스템"]                       # 하위 정책은 상위의 연결을 물려받는다 · 꺼진 연결 제외
+
+
+# ── 기법 스위치 저장·읽기 ──────────────────────────────────────────────────
+
+def test_technique_switch_roundtrip_in_db():
+    """스위치를 쓰면 같은 줄이 DB에 남고(updated_at 갱신), 새 프로세스처럼 비운 뒤 읽어도 같은 값 · 다른 컬렉션 제안은 옛 줄이 기준."""
+    flags = load("_rdb_real_flags", "core/technique_flags.py")
+
+    async def scenario(conn):
+        await flags.set_switch(conn, "context_budget", False, "시험")
+        await flags.set_switch(conn, "collection_suggest", True, "시험")
+        await conn.execute("UPDATE ops_system_config SET value = 'false' WHERE key = 'chat.collection_suggest'")   # SQL로 옛 줄만 바꿈
+        flags._state.clear()
+        await flags.load(conn)
+        row = await conn.fetchrow("SELECT value, updated_at > NOW() - interval '1 minute' AS fresh FROM ops_system_config "
+                                  "WHERE key = 'technique.context_budget'")
+        return flags.is_on("context_budget"), flags.is_on("collection_suggest"), json.loads(row["value"])["by"], row["fresh"]
+    out = run(scenario)
+    flags._state.clear()
+    assert out == (False, False, "시험", True)
+
+
+# ── 정책 컬렉션 지식 거부(서비스 길목) ─────────────────────────────────────
+
+def test_create_knowledge_rejects_policy_and_accepts_system():
+    """등록 길목: 정책 컬렉션은 ValueError(행 0) · 시스템은 active 1행."""
+    async def scenario(conn):
+        p = await ns(conn, "시험_등록 정책", "policy")
+        s = await ns(conn, "시험_등록 시스템", "system")
+        with patch.object(ksvc, "resolve_knowledge_namespace_id", database.resolve_knowledge_namespace_id), \
+                patch.object(ksvc, "_EMBEDDING_MODEL_NAME", "kure-test"), \
+                patch.object(ksvc.embedding_service, "embed", AsyncMock(return_value=[0.0] * 1024)), \
+                patch.object(ksvc, "find_similar_active_knowledge", AsyncMock(return_value=[])):
+            with pytest.raises(ValueError, match="정책 컬렉션엔 운영 지식"):
+                await ksvc.create_knowledge("시험_등록 정책", "정책에 넣으려는 운영 지식")
+            row = await ksvc.create_knowledge("시험_등록 시스템", "시스템에 넣는 운영 지식")
+        return (await conn.fetchval("SELECT count(*) FROM rag_knowledge WHERE namespace_id = $1", p),
+                await conn.fetchval("SELECT status FROM rag_knowledge WHERE id = $1", row["id"]))
+    assert run(scenario, [ksvc]) == (0, "active")
+
+
+# ── 팀 적재 롤백(게시 전·후 공통) ─────────────────────────────────────────
+
+def test_rollback_batch_removes_held_and_active_chunks_and_reopens_gaps():
+    """배치 롤백: 게시된 조각·검수 대기 조각 모두 deleted · 보류 작업 cancelled · 그 조각으로 메운 공백은 다시 공백 · 게시 중이면 거부."""
+    ti = load("_rdb_real_team_import", "agents/knowledge_rag/ingestion/team_import.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_롤백 시스템")
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        done = await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks) VALUES ($1,'confluence','completed',1) RETURNING id", s)
+        held = await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks, held_plan) VALUES ($1,'confluence','held',1,'{}'::jsonb) RETURNING id", s)
+        k_active = await knowledge(conn, s, "게시된 조각", ingestion_job_id=done)
+        k_held = await knowledge(conn, s, "검수 대기 조각", status="staging", ingestion_job_id=held)
+        gap = await conn.fetchval("INSERT INTO ops_query_log (namespace_id, question, status, resolved_knowledge_id, resolved_at) "
+                                  "VALUES ($1, 'q', 'no_knowledge', $2, NOW()) RETURNING id", s, k_active)
+        b = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, status, sampling_required, total_pages, done_pages, job_ids, loaded_at, publishing_at) "
+                                "VALUES ($1, 'https://confl.sinc.co.kr/display/R', 'loaded', FALSE, 1, 1, $2::int[], NOW(), NOW()) RETURNING id", team, [done, held])
+        blocked = await ti.rollback_batch(conn, b)                          # 게시 중 → None(거부)
+        await conn.execute("UPDATE rag_import_batch SET publishing_at = NULL WHERE id = $1", b)
+        out = await ti.rollback_batch(conn, b)
+        st = {r["id"]: r["status"] for r in await conn.fetch("SELECT id, status FROM rag_knowledge WHERE id = ANY($1::int[])", [k_active, k_held])}
+        return (blocked, out["chunks"], st[k_active], st[k_held],
+                await conn.fetchval("SELECT status FROM rag_ingestion_job WHERE id = $1", held),
+                await conn.fetchval("SELECT resolved_knowledge_id FROM ops_query_log WHERE id = $1", gap),
+                await conn.fetchval("SELECT status FROM rag_import_batch WHERE id = $1", b))
+    assert run(scenario) == (None, 2, "deleted", "deleted", "cancelled", None, "rolled_back")
+
+
+# ── 관련 정책 연결 저장 ────────────────────────────────────────────────────
+
+def test_set_supports_replaces_links_and_rejects_wrong_kinds():
+    """시스템의 관련 정책 = 통째 교체(중복 제거) · 정책 컬렉션에는 못 정함 · 대상이 시스템이면 거부 · 아무것도 안 바뀜."""
+    admin = load("_rdb_real_admin_service", "service/admin/service.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_연결 시스템")
+        p1, p2 = await ns(conn, "시험_연결 정책1", "policy"), await ns(conn, "시험_연결 정책2", "policy")
+        other_sys = await ns(conn, "시험_연결 다른 시스템")
+        with patch.object(admin, "_forget_cached_answers", AsyncMock()):
+            assert await admin.set_supports("시험_연결 시스템", ["시험_연결 정책1", "시험_연결 정책1", "시험_연결 정책2"]) == ["시험_연결 정책1", "시험_연결 정책2"]
+            assert await admin.set_supports("시험_연결 시스템", ["시험_연결 정책2"]) == ["시험_연결 정책2"]
+            with pytest.raises(ValueError, match="시스템 컬렉션에만"):
+                await admin.set_supports("시험_연결 정책1", ["시험_연결 정책2"])
+            with pytest.raises(ValueError, match="정책 컬렉션이 아닙니다"):
+                await admin.set_supports("시험_연결 시스템", ["시험_연결 다른 시스템"])
+        rows = await conn.fetch("SELECT to_key FROM ops_link WHERE relation = 'supports' AND from_key = $1", str(s))
+        return sorted(int(r["to_key"]) for r in rows), p2, other_sys
+    links, p2, _ = run(scenario, [admin])
+    assert links == [p2]
