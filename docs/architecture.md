@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.200)
+# OpsLens 시스템 아키텍처 (v2.201)
 
 ## 개요
 
@@ -12,6 +12,11 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.201 (2026-11-03, dev_0): **정책 컬렉션의 공백·빠진 내용 = 정책 추가 제안**(태훈 "정책은 운영 지식과 성향이 달라 정책 등록·정정으로").
+  통계 › 지식 공백(정책 컬렉션): [지식 등록] 대신 [정책 추가 제안](질문이 정책 이름에, 올리면 그 공백은 메움 — `ops_query_log.resolved_correction_id` #111, 반려되면 다시 공백).
+  정정 요청 › 빠진 내용(정책 컬렉션): [승인] 대신 [정책 추가 제안으로] — `POST /api/corrections/{id}/to-policy-add`(`policy_change.forward_missing`, 한 트랜잭션:
+  추가 제안 1건 + 원래 신고 처리됨·`ai_verdict.forwarded_to`, 원래 질문 이어받음). 일괄 승인에서 빠짐, 신고자 배너·카드 "정책 추가 제안 #N으로 넘김".
+  시스템 컬렉션은 그대로(운영 지식 등록·승인).
 - v2.200 (2026-11-03, dev_0): **운영 전 필수(외부 컨설팅 관점 리뷰) — 보안 4 · 성능 3 · 설계 2 · 시스템 먼저.**
   보안: 운영 프로필(`APP_ENV=production`)에서 기본·짧은 JWT 시크릿·관리자/DB 비밀번호면 기동 중단, /docs 닫음, prod `IMAGE_TAG` 필수 ·
   마크다운 rehype-raw 뒤 rehype-sanitize(`utils/markdown.ts`) + nginx CSP·nosniff·referrer · 수집 클라이언트는 전부 `web_crawler.guarded_client`
