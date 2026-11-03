@@ -232,3 +232,75 @@ def test_delete_collection_with_content_is_blocked():
     assert counts == {"운영 지식": 1}
     assert still == {}   # 지운 지식은 이력 — 막지 않는다(재리뷰 M1: 세면 한 번이라도 쓴 컬렉션은 화면에서 영영 못 지웠다)
     assert empty == {}
+
+
+def _policy_change():
+    """policy_change는 service.improvement.service에서 가져온다 — 이 파일의 실제 사본을 그 이름으로 걸고 읽는다."""
+    saved = sys.modules.get("service.improvement.service")
+    sys.modules["service.improvement.service"] = svc
+    try:
+        return _load("_routing_real_policy_change", "service/improvement/policy_change.py")
+    finally:   # 원래 없었으면 지운다 — 뒤 테스트가 이 사본을 가짜 대신 집지 않게(리뷰)
+        if saved is not None:
+            sys.modules["service.improvement.service"] = saved
+        else:
+            del sys.modules["service.improvement.service"]
+
+
+def test_forward_missing_in_policy_collection_to_policy_add():
+    """정책 컬렉션 "빠진 내용" → 정책 추가 제안(11/03): 새 제안 1건(대기) + 원래 신고 처리됨(forwarded_to). 시스템 컬렉션 건은 거부."""
+    import json as _json
+    from contextlib import asynccontextmanager
+    from unittest.mock import patch
+    pc = _policy_change()
+
+    async def scenario(conn, ids):
+        async def missing(ns):
+            return await conn.fetchval("INSERT INTO ops_improvement_item (kind, source, namespace_id, target_type, user_input, original) "
+                                       "VALUES ('missing_knowledge', 'auto', $1, 'missing', '픽업 취소 기한이 없어요', '{}'::jsonb) RETURNING id", ns)
+        a, b = await missing(ids["P"]), await missing(ids["S"])
+
+        @asynccontextmanager
+        async def get_conn():
+            yield conn
+        with patch.object(pc, "get_conn", get_conn):
+            out = await pc.forward_missing(a, {"id": None}, policy_name="픽업 취소 기한", category_path=["주문", "취소"],
+                                           raw_body="픽업 주문은 준비 전까지 취소할 수 있다.", remark=None)
+            with pytest.raises(ValueError, match="정책 컬렉션의 신고만"):
+                await pc.forward_missing(b, {"id": None}, policy_name="x", category_path=["x"], raw_body="x", remark=None)
+            with pytest.raises(ValueError, match="대기 중인"):   # 이미 넘긴 건은 다시 못 넘긴다
+                await pc.forward_missing(a, {"id": None}, policy_name="y", category_path=["y"], raw_body="y", remark=None)
+        src = await conn.fetchrow("SELECT status, ai_verdict FROM ops_improvement_item WHERE id = $1", a)
+        new = await conn.fetchrow("SELECT status, target_type, namespace_id, proposed FROM ops_improvement_item WHERE id = $1", out["forwarded_to"])
+        return dict(src), dict(new), ids   # 되돌리므로 시험 신고·제안은 남지 않는다
+    src, new, ids = _run(scenario)
+    verdict = _json.loads(src["ai_verdict"]) if isinstance(src["ai_verdict"], str) else src["ai_verdict"]
+    assert src["status"] == "approved" and verdict["forwarded_to"]
+    assert (new["status"], new["target_type"], new["namespace_id"]) == ("pending", "policy_add", ids["P"])
+    proposed = _json.loads(new["proposed"]) if isinstance(new["proposed"], str) else new["proposed"]
+    assert proposed["policy_name"] == "픽업 취소 기한" and proposed["category_path"] == ["주문", "취소"]
+
+
+def test_gap_filled_by_policy_add_and_reopened_on_reject():
+    """정책 컬렉션 지식 공백 → 정책 추가 제안(query_log_id) → 그 공백은 메움, 제안 반려 → 다시 공백(11/03 리뷰 M)."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import patch
+    pc = _policy_change()
+
+    async def scenario(conn, ids):
+        log = await conn.fetchval("INSERT INTO ops_query_log (namespace_id, question, status) VALUES ($1, '픽업 취소 기한?', 'no_knowledge') "
+                                  "RETURNING id", ids["P"])
+
+        @asynccontextmanager
+        async def get_conn():
+            yield conn
+        with patch.object(pc, "get_conn", get_conn), patch.object(svc, "get_conn", get_conn),                 patch.object(pc, "resolve_namespace_id", real_db.resolve_namespace_id):   # conftest 가짜는 늘 1을 준다
+            out = await pc.create("시험_정책P", {"id": None}, change="add", target_id=None, policy_name="픽업 취소 기한",
+                                  category_path=["주문"], raw_body="준비 전까지 취소 가능", remark=None, reason=None, query_log_id=log)
+            after_add = await conn.fetchval("SELECT resolved_correction_id FROM ops_query_log WHERE id = $1", log)
+            await svc.reject(out["id"], {"id": None}, "정책 아님")
+        after_reject = await conn.fetchrow("SELECT resolved_correction_id, resolved_at FROM ops_query_log WHERE id = $1", log)
+        return out["id"], after_add, dict(after_reject)
+    new_id, after_add, after_reject = _run(scenario)
+    assert after_add == new_id
+    assert after_reject == {"resolved_correction_id": None, "resolved_at": None}

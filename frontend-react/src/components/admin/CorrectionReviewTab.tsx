@@ -14,6 +14,7 @@ import { lineDiff, type DiffOp } from '../../utils/lineDiff';
 import { useCollectionLabel } from '../../utils/useCollectionLabel';
 import { PolicyChangeCard } from './PolicyChangeCard';
 import { EvidenceButton } from './Evidence';
+import { PolicyAddModal } from './policy/PolicyChangeModals';
 
 /**
  * 정정 요청(2026-10-01, 10-02 리뷰 신호를 합침) — 지식·정책을 고치자는 신호·제안이 모두 모이는 곳. 승인해야만 반영된다.
@@ -147,7 +148,9 @@ function sourceGroup(item: CorrectionItem): Exclude<SourceGroup, 'all'> {
 const isMarked = (item: CorrectionItem) => !!item.proposed && Object.values(item.proposed).some((v) => String(v ?? '').includes(REVIEW_MARK));
 const canFixItem = (item: CorrectionItem) => item.target_type !== 'answer' && item.target_type !== 'auto';
 /** 일괄 승인 대상 — 카드의 [승인]이 보이는 건과 같은 조건 */
-const approvable = (item: CorrectionItem) => item.status === 'pending' && canFixItem(item) && !!item.proposed && !isMarked(item);
+// 정책 컬렉션의 "빠진 내용"은 승인 대상이 아니다 — [정책 추가 제안으로] 넘긴다(일괄 승인에서도 빠짐, 11/03)
+const approvable = (item: CorrectionItem) => item.status === 'pending' && canFixItem(item) && !!item.proposed && !isMarked(item)
+  && !(item.target_type === 'missing' && item.namespace_area === 'policy');
 
 function DiffPane({ ops, side }: { ops: DiffOp[]; side: 'before' | 'after' }) {
   const shown = ops.filter((o) => o.kind === 'same' || o.kind === (side === 'before' ? 'del' : 'add'));
@@ -180,6 +183,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
   const [modalError, setModalError] = useState('');
   const [error, setError] = useState('');
   const openModal = (m: 'reject' | 'redraft') => { setModal(m); setText(''); setModalError(''); };
+  const [forwardOpen, setForwardOpen] = useState(false);
   const openEdit = () => {   // 지금 수정안으로 채운다(없으면 기존 내용)
     setEdit(Object.fromEntries(fields.map((f) => [f.key, item.proposed ? proposedValue(item, f.key) : originalValue(item, f.key)])));
     setModalError('');
@@ -243,6 +247,8 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
   const edits = item.ai_verdict?.edits ?? [];
   const lastEdit = edits.length ? edits[edits.length - 1] : null;
   const isPolicySource = item.source === 'policy_direct' || item.source === 'policy_ai' || item.source === 'json_import';
+  // 정책 컬렉션의 "빠진 내용" — 운영 지식으로 승인하지 않고 정책 추가 제안으로 넘긴다(11/03 태훈 "정책은 운영 지식과 성향이 다르다")
+  const forwardToPolicy = item.target_type === 'missing' && item.namespace_area === 'policy';
   // 기존 vs 수정안 줄 비교 — 고칠 원문이 있는 대상만(빠진 내용·답변 오류는 질문·답변이 왼쪽)
   const hasOriginal = item.target_type === 'knowledge' || item.target_type === 'policy_param' || item.target_type === 'policy_narrative';
   const ops = useMemo(
@@ -273,7 +279,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
         <Badge color={isAnswer ? 'cyan' : noTarget || item.kind === 'search_noise' ? 'amber' : item.target_type === 'missing' ? 'amber' : 'rose'}>
           {typeLabel(item)}
         </Badge>
-        {item.status === 'approved' && <Badge color="emerald">반영됨</Badge>}
+        {item.status === 'approved' && <Badge color="emerald">{item.ai_verdict?.forwarded_to ? `정책 추가 제안 #${item.ai_verdict.forwarded_to}으로 넘김` : '반영됨'}</Badge>}
         {item.status === 'rejected' && <Badge color="slate">반려</Badge>}
         <span className="text-slate-500">{label(item.namespace)}</span>
         <span className="text-slate-500">· {correctionSourceLabel(item.source, item.kind)}</span>
@@ -306,7 +312,13 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
               <Pencil className="w-3.5 h-3.5" />직접 수정
             </Button>
           )}
-          {canFix && item.proposed && !proposedMarked && (
+          {forwardToPolicy && (
+            <Button variant="primary" size="sm" disabled={busy} onClick={() => setForwardOpen(true)}
+              title="정책 컬렉션엔 운영 지식을 넣지 않아요 — 정책 추가 제안을 만들고 이 신고는 처리됨으로 닫습니다">
+              정책 추가 제안으로
+            </Button>
+          )}
+          {canFix && item.proposed && !proposedMarked && !forwardToPolicy && (
             <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy}
               title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
               onClick={() => item.proposed && approve.mutate(item.proposed)}>
@@ -315,6 +327,13 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
           )}
         </div>}
       </div>
+
+      {forwardOpen && (
+        <PolicyAddModal isOpen={forwardOpen} namespace={item.namespace} initialPath={[]} forwardFrom={item.id}
+          initialName={(item.question_text ?? '').slice(0, 80)} initialBody={proposedMarked ? '' : String(item.proposed?.content ?? '')}
+          note={`정정 #${item.id}(빠진 내용)을 이 제안으로 넘겨요 — 신고는 처리됨으로 닫히고, 제안은 정정 요청에서 승인하면 정책이 돼요.`}
+          onClose={() => { setForwardOpen(false); onDone('slot'); }} />
+      )}
 
       {item.question_text && canFix && (
         <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs space-y-1">

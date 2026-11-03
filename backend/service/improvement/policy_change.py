@@ -137,7 +137,8 @@ async def _draft(conn, ns_id: int, target_type: str, target_id: Optional[int], *
 
 
 async def create(namespace: str, user: dict, *, change: str, target_id: Optional[int], policy_name: Optional[str],
-                 category_path: Optional[list], raw_body: Optional[str], remark: Optional[str], reason: Optional[str]) -> dict:
+                 category_path: Optional[list], raw_body: Optional[str], remark: Optional[str], reason: Optional[str],
+                 query_log_id: Optional[int] = None) -> dict:
     """제안 1건을 정정 원장에 — 정책 테이블은 그대로(승인 때만 바뀜). 폐기·옮기기는 그 정책에 대기 정정이 있으면 ConflictError."""
     target_type = CHANGES.get(change)
     if target_type is None:
@@ -165,6 +166,11 @@ async def create(namespace: str, user: dict, *, change: str, target_id: Optional
                     new_id = await _write_item(conn, values, None)
                 except asyncpg.UniqueViolationError:   # 같은 사람의 같은 대상 대기 건(유니크 인덱스)
                     existing = await _pending_policy_correction(conn, item_id) if item_id is not None else None
+            if new_id is not None and query_log_id is not None and target_type == ADD:
+                # 지식 공백에서 올린 제안 — 그 공백(같은 컬렉션·아직 안 메운 것만)을 이 제안으로 메운 것으로. 반려되면 reject가 비운다
+                await conn.execute("UPDATE ops_query_log SET resolved_correction_id = $2, resolved_at = NOW() WHERE id = $1 "
+                                   "AND namespace_id = $3 AND status = 'no_knowledge' AND resolved_knowledge_id IS NULL "
+                                   "AND resolved_correction_id IS NULL", query_log_id, new_id, ns_id)
     if new_id is None:
         if existing is None:
             raise ConflictError("이미 같은 제안이 검토 중이에요 — 정정 요청에서 확인하세요.")
@@ -292,3 +298,30 @@ async def _apply_move(conn, ns_id: int, item_id: int, path: list[str], approver:
         "INSERT INTO policy_chunk (policy_item_id, chunk_text, embedding, chunk_idx) VALUES ($1, $2, $3::vector, $4)",
         [(new_id, prepared[c["id"]][0], str(prepared[c["id"]][1]), c["chunk_idx"]) for c in chunks])
     return new_id
+
+
+async def forward_missing(item_id: int, user: dict, *, policy_name: Optional[str], category_path: Optional[list],
+                          raw_body: Optional[str], remark: Optional[str]) -> dict:
+    """정책 컬렉션의 "빠진 내용" 신고 → 정책 추가 제안으로 넘긴다(11/03 태훈 "정책은 운영 지식과 성향이 달라 정책 등록·정정으로").
+    한 트랜잭션: 추가 제안 1건을 만들고 원래 신고는 처리됨(approved) + ai_verdict.forwarded_to(신고자 화면은 "정책 추가 제안 #N으로 넘김").
+    정책 컬렉션엔 운영 지식을 넣지 않으므로(_apply_missing이 막음) 이 길이 정책 컬렉션 빠진 내용의 처리 경로다."""
+    async with get_conn() as conn:
+        async with conn.transaction():
+            item = await conn.fetchrow(
+                "SELECT i.id, i.status, i.target_type, i.namespace_id, i.message_id, i.ai_verdict, n.kind AS ns_kind, n.area FROM ops_improvement_item i "
+                "JOIN ops_namespace n ON n.id = i.namespace_id WHERE i.id = $1 FOR UPDATE OF i", item_id)
+            if not item or item["status"] != "pending" or item["target_type"] != "missing":
+                raise ValueError("대기 중인 '빠진 내용' 신고가 아니에요 — 새로고침하세요.")
+            if not (item["area"] == "policy" and item["ns_kind"] in ("domain", "policy_test")):   # 시험용 정책 컬렉션도 정책(화면 namespace_area와 같은 기준)
+                raise ValueError("정책 컬렉션의 신고만 정책 추가 제안으로 넘길 수 있어요 — 시스템 컬렉션은 [승인]으로 운영 지식에 넣어요.")
+            _, original, proposed = await _draft(conn, item["namespace_id"], ADD, None, policy_name=policy_name,
+                                                 category_path=category_path, raw_body=raw_body, remark=remark)
+            values = ("correction", SOURCE, item["namespace_id"], item["message_id"], user.get("id"), ADD, None, None,   # 원래 질문·답변을 승인자가 보게
+                      f"정정 #{item_id}(빠진 내용)에서 넘김", json.dumps(original, ensure_ascii=False),
+                      json.dumps(proposed, ensure_ascii=False), "[]", None)
+            new_id = await _write_item(conn, values, None)
+            verdict = item["ai_verdict"]
+            verdict = (json.loads(verdict) if isinstance(verdict, str) else dict(verdict or {})) | {"forwarded_to": new_id}
+            await conn.execute("UPDATE ops_improvement_item SET status = 'approved', decided_by = $2, decided_at = NOW(), "
+                               "ai_verdict = $3::jsonb WHERE id = $1", item_id, user.get("id"), json.dumps(verdict, ensure_ascii=False))
+    return {"id": item_id, "status": "approved", "forwarded_to": new_id}

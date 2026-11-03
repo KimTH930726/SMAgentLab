@@ -2266,6 +2266,9 @@ async def _migrate_improvement_ledger(conn) -> None:
     # 정책에서 물어 시스템 지식이 틀린 신고는 그 시스템으로 간다. 후보·맥락을 다시 읽을 땐 물은 곳 기준(연결 범위). 옛 줄은 둘이 같다
     await conn.execute("ALTER TABLE ops_improvement_item ADD COLUMN IF NOT EXISTS asked_namespace_id INT "
                        "REFERENCES ops_namespace(id) ON DELETE SET NULL")
+    # #111(11/03): 정책 컬렉션의 지식 공백은 운영 지식이 아니라 정책 추가 제안으로 메운다 — 그 제안 번호. 제안이 반려되면 비워 공백으로 돌아간다
+    await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS resolved_correction_id BIGINT "
+                       "REFERENCES ops_improvement_item(id) ON DELETE SET NULL")
 
 
 async def _migrate_drop_dead_schema_2026_09_22(conn) -> None:

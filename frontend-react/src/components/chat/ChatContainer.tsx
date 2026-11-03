@@ -42,7 +42,9 @@ function CorrectionResultsBanner() {
       </div>
       {items.map((i) => (
         <p key={i.id} className="text-slate-400">
-          {i.status === 'approved'
+          {i.status === 'approved' && i.ai_verdict?.forwarded_to
+            ? <span className="text-emerald-600 dark:text-emerald-400">정책 추가 제안 #{i.ai_verdict.forwarded_to}으로 넘김</span>
+            : i.status === 'approved'
             ? <span className="text-emerald-600 dark:text-emerald-400">반영됨</span>
             : i.kind === 'answer_quality' || i.target_type === 'answer' || i.kind === 'answer_signal'
               ? <span className="text-sky-600 dark:text-sky-400">확인됨</span>

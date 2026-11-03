@@ -131,8 +131,9 @@ async def delete_namespace_endpoint(name: str, purge: bool = QueryParam(default=
 # 질의 상태는 "답변(pending)"과 "지식 공백(no_knowledge)" 둘뿐(2026-10-02, #61) — 좋아요/싫어요 기반 해결·미해결은
 # 없앴고, 틀린 답은 정정 요청(개선 원장 pending)으로 센다. 공백을 지식 등록으로 메우면 상태는 그대로, 연결 지식만 채운다.
 # {a} = 테이블 별칭 자리(빈 문자열이면 별칭 없음) — 같은 조건을 집계·목록·용어 분포에서 같이 쓴다
-_OPEN_GAP = "{a}status = 'no_knowledge' AND {a}resolved_knowledge_id IS NULL"
-_FILLED_GAP = "{a}status = 'no_knowledge' AND {a}resolved_knowledge_id IS NOT NULL"
+# 메움 = 지식을 등록해 연결했거나(시스템), 정책 추가 제안을 올렸다(정책 컬렉션 — 반려되면 다시 공백, 11/03)
+_OPEN_GAP = "{a}status = 'no_knowledge' AND {a}resolved_knowledge_id IS NULL AND {a}resolved_correction_id IS NULL"
+_FILLED_GAP = "{a}status = 'no_knowledge' AND ({a}resolved_knowledge_id IS NOT NULL OR {a}resolved_correction_id IS NOT NULL)"
 # 목록 필터 — 화면의 카드 하나 = 필터 하나
 _QUERY_FILTERS = {"pending": "q.status = 'pending'", "no_knowledge": _OPEN_GAP.format(a="q."),
                   "filled": _FILLED_GAP.format(a="q.")}
@@ -207,7 +208,7 @@ async def get_namespace_queries(
             f"""
             SELECT q.id, q.question, COALESCE(k.content, q.answer) AS answer,
                    q.mapped_term, q.status, q.created_at::text, q.resolved_at::text,
-                   q.resolved_knowledge_id, (k.id IS NOT NULL) AS knowledge_active
+                   q.resolved_knowledge_id, q.resolved_correction_id, (k.id IS NOT NULL) AS knowledge_active
             FROM ops_query_log q
             LEFT JOIN rag_knowledge k ON k.id = q.resolved_knowledge_id AND k.status = 'active'
             WHERE {where}

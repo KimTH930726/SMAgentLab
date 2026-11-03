@@ -65,7 +65,23 @@ async def create_policy_change(body: PolicyChangeBody, user: dict = Depends(get_
     try:
         return await policy_change.create(
             body.namespace, user, change=body.change, target_id=body.target_id, policy_name=body.policy_name,
-            category_path=body.category_path, raw_body=body.raw_body, remark=body.remark, reason=body.reason)
+            category_path=body.category_path, raw_body=body.raw_body, remark=body.remark, reason=body.reason,
+            query_log_id=body.query_log_id)
+    except service.ConflictError as e:
+        raise _conflict(e)
+
+
+@router.post("/{item_id}/to-policy-add", status_code=201)
+async def forward_to_policy_add(item_id: int, body: PolicyChangeBody, user: dict = Depends(get_current_user)):
+    """정책 컬렉션의 "빠진 내용" 신고 → 정책 추가 제안(11/03). 처리 권한 + 정책 추가 제안 권한(그 컬렉션 담당·관리자)."""
+    from service.improvement import policy_change
+    if body.change != "add":
+        raise HTTPException(status_code=400, detail="빠진 내용은 정책 추가 제안으로만 넘길 수 있어요.")
+    await _require_item_owner(item_id, user)
+    await check_namespace_ownership(await service.item_namespace(item_id), user)
+    try:
+        return await policy_change.forward_missing(item_id, user, policy_name=body.policy_name, category_path=body.category_path,
+                                                   raw_body=body.raw_body, remark=body.remark)
     except service.ConflictError as e:
         raise _conflict(e)
 

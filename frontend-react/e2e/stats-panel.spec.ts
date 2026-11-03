@@ -42,12 +42,19 @@ test('통계 — 답변/정정 요청/지식 공백/공백 메움 카드가 DB �
     await expect(page.getByText(gone, { exact: true })).toHaveCount(0);
   }
 
-  // 지식 공백 카드 → 공백 목록(펼치면 "지식 등록"), 정정 요청 카드 → 품질 › 정정 요청(같은 업무 영역) 정정 검토로 이동
+  // 지식 공백 카드 → 공백 목록. 정책 컬렉션(온라인스토어)의 공백은 운영 지식이 아니라 [정책 추가 제안](11/03) — 질문이 정책 이름 칸에 채워진다.
+  // 정정 요청 카드 → 품질 › 정정 요청(같은 업무 영역) 정정 검토로 이동
   await card('지식 공백').click();
   await expect(page.getByText(`지식 공백 질의 (${expected['지식 공백']}건)`)).toBeVisible();
   if (expected['지식 공백'] !== '0') {
-    await page.locator('.max-h-\\[60vh\\] > div').first().locator('button').first().click();
-    await expect(page.getByRole('button', { name: '지식 등록', exact: true })).toBeVisible();
+    const row = page.locator('.max-h-\\[60vh\\] > div').first();
+    const question = (await row.locator('p').first().innerText()).trim();
+    await row.locator('button').first().click();
+    await expect(page.getByRole('button', { name: '지식 등록', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '정책 추가 제안', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '정책 추가 제안' })).toBeVisible();
+    await expect(page.locator('#padd-name')).toHaveValue(question.slice(0, 80));
+    await page.getByRole('button', { name: '취소' }).last().click();   // 올리지 않고 닫는다(시험 데이터를 만들지 않음) — 맨 위 창(추가 제안)의 취소
   }
   await page.keyboard.press('Escape');
   await card('정정 요청').click();

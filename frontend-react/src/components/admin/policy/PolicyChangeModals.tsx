@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle } from 'lucide-react';
 import { ApiError } from '../../../api/client';
-import { createPolicyChange, getPolicyChangeUses, type PolicyChange } from '../../../api/corrections';
+import { createPolicyChange, forwardMissingToPolicyAdd, getPolicyChangeUses, type PolicyChange } from '../../../api/corrections';
 import { listPolicies } from '../../../api/policy';
 import { showAlert } from '../../../store/useDialogStore';
 import { FormModal } from '../../ui/FormModal';
@@ -17,11 +17,14 @@ const AREA = `${INPUT} resize-y`;
 const LEVELS = ['대분류', '중분류', '소분류'] as const;
 const pathKey = (p: string[]) => p.join(' › ');
 
-function useChange(namespace: string, onDone: () => void) {
+function useChange(namespace: string, onDone: () => void, forwardFrom?: number) {
   const qc = useQueryClient();
   const [error, setError] = useState('');
   const save = useMutation({
-    mutationFn: (body: PolicyChange) => createPolicyChange(namespace, body),
+    // forwardFrom = 정정 요청의 "빠진 내용" 신고 번호 — 그 신고를 닫고 추가 제안으로 넘긴다(한 트랜잭션, 11/03)
+    mutationFn: (body: PolicyChange) => (forwardFrom && body.change === 'add'
+      ? forwardMissingToPolicyAdd(forwardFrom, namespace, body).then((r) => ({ id: r.forwarded_to }))
+      : createPolicyChange(namespace, body)),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ['policies', namespace] });
       qc.invalidateQueries({ queryKey: ['policy', namespace] });
@@ -78,23 +81,33 @@ function PathPicker({ namespace, value, onChange, idPrefix }: {
 
 const cleanPath = (p: string[]) => p.map((v) => v.trim()).filter(Boolean);
 
-export function PolicyAddModal({ isOpen, namespace, initialPath, onClose }: {
+export function PolicyAddModal({ isOpen, namespace, initialPath, onClose, initialName = '', initialBody = '', forwardFrom, note, queryLogId, onSaved }: {
   isOpen: boolean; namespace: string; initialPath: string[]; onClose: () => void;
+  /** 처음 채울 값 — 지식 공백(질문)·정정 "빠진 내용"(AI 초안)에서 열 때 */
+  initialName?: string; initialBody?: string;
+  /** 정정 "빠진 내용" 신고 번호 — 주면 그 신고를 이 제안으로 넘긴다 */
+  forwardFrom?: number;
+  note?: string;
+  /** 통계 › 지식 공백 줄 — 올리면 그 공백을 이 제안으로 메운 것으로 기록 */
+  queryLogId?: number;
+  onSaved?: () => void;
 }) {
   const [path, setPath] = useState<string[]>(initialPath);
   const [name, setName] = useState('');
   const [body, setBody] = useState('');
   const [remark, setRemark] = useState('');
-  const { save, error, setError } = useChange(namespace, onClose);
+  const { save, error, setError } = useChange(namespace, () => { onSaved?.(); onClose(); }, forwardFrom);
   useEffect(() => {
-    if (isOpen) { setPath(initialPath); setName(''); setBody(''); setRemark(''); setError(''); }
+    if (isOpen) { setPath(initialPath); setName(initialName); setBody(initialBody); setRemark(''); setError(''); }
   }, [isOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <FormModal isOpen={isOpen} title="정책 추가 제안" onClose={onClose} maxWidth="max-w-3xl"
-      onSubmit={() => save.mutate({ change: 'add', policy_name: name.trim(), category_path: cleanPath(path), raw_body: body, remark })}
+      onSubmit={() => save.mutate({ change: 'add', policy_name: name.trim(), category_path: cleanPath(path), raw_body: body, remark,
+        ...(queryLogId ? { query_log_id: queryLogId } : {}) })}
       submitLabel="정정 요청에 올리기" submitting={save.isPending} error={error}
       submitDisabled={!name.trim() || !body.trim() || cleanPath(path).length === 0}>
       <p className="text-xs text-slate-400" title="승인 전엔 검색·답변에 나오지 않아요">저장하면 정정 요청에 올라가고, 승인해야 새 정책이 생겨요.</p>
+      {note && <p className="text-xs text-slate-300" data-testid="policy-add-note">{note}</p>}
       <PathPicker namespace={namespace} value={path} onChange={setPath} idPrefix="padd" />
       <div className="space-y-1">
         <label htmlFor="padd-name" className="block text-xs text-slate-400">정책 이름</label>

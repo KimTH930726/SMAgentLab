@@ -397,6 +397,8 @@ export interface QueryLog {
   resolved_at: string | null;
   answer: string | null;
   resolved_knowledge_id: number | null;
+  /** 정책 컬렉션 공백을 메운 정책 추가 제안 번호(11/03) */
+  resolved_correction_id?: number | null;
   /** 연결 지식이 지금 검색에 쓰이는(active) 상태라 answer가 그 지식 내용인지 */
   knowledge_active?: boolean;
 }

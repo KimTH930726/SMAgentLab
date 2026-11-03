@@ -876,7 +876,7 @@ async def pending_status(knowledge_ids: list[int], policy_item_ids: list[int]) -
 
 
 _LIST_SQL = """
-    SELECT i.id, i.kind, n.name AS namespace, i.message_id, i.target_type, i.target_id, i.target_sub_id,
+    SELECT i.id, i.kind, n.name AS namespace, n.area AS namespace_area, i.message_id, i.target_type, i.target_id, i.target_sub_id,
            i.user_input, i.original, i.proposed, i.status, i.reject_reason, i.applied_target_id,
            i.created_at, i.decided_at, i.reporter_seen_at, i.source, i.candidates, i.ai_verdict,
            ru.username AS reporter, du.username AS decided_by,
@@ -995,8 +995,8 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
 
 async def _apply_missing(conn, ns_id: int, content: str, embedding: list[float], approver: dict) -> int:
     # 운영 지식은 시스템에만(11/02 D) — 정책 컬렉션에서 접수된 "빠진 내용"은 여기서 막는다(11/03 재리뷰 M1, 길목을 안 거치는 INSERT)
-    if await conn.fetchval("SELECT kind = 'domain' AND area = 'policy' FROM ops_namespace WHERE id = $1", ns_id):
-        raise ValueError("정책 컬렉션엔 운영 지식을 넣을 수 없어요 — 정책이 빠졌으면 정책서에서 추가하고, 운영 지식이면 시스템 컬렉션에서 등록하세요.")
+    if await conn.fetchval("SELECT area = 'policy' AND kind IN ('domain', 'policy_test') FROM ops_namespace WHERE id = $1", ns_id):
+        raise ValueError("정책 컬렉션엔 운영 지식을 넣을 수 없어요 — [정책 추가 제안으로]를 쓰세요(운영 지식이면 시스템 컬렉션에서 등록).")
     return await conn.fetchval("""
         INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight,
                                    created_by_user_id, source_type, status, embedding_model, reviewed_at, owner)
@@ -1242,6 +1242,8 @@ async def reject(item_id: int, approver: dict, reason: str) -> dict:
             SET status = 'rejected', reject_reason = $2, decided_by = $3, decided_at = NOW()
             WHERE id = $1 AND status = 'pending'
         """, item_id, reason, approver.get("id"))
+        if not res.endswith(" 0"):   # 지식 공백에서 올린 정책 추가 제안이 반려되면 그 공백은 다시 공백(11/03)
+            await conn.execute("UPDATE ops_query_log SET resolved_correction_id = NULL, resolved_at = NULL WHERE resolved_correction_id = $1", item_id)
     if res.endswith(" 0"):
         raise ValueError("대기 중인 신고가 아닙니다.")
     return {"id": item_id, "status": "rejected"}

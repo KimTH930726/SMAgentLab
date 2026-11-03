@@ -37,6 +37,7 @@ class PolicyChangeBody(BaseModel):
     raw_body: Optional[str] = Field(default=None, max_length=20000)
     remark: Optional[str] = Field(default=None, max_length=5000)
     reason: Optional[str] = Field(default=None, max_length=1000)
+    query_log_id: Optional[int] = None       # 통계 › 지식 공백에서 올린 추가 제안 — 그 공백을 이 제안으로 메운 것으로 기록(11/03)
 
 
 class ApproveBody(BaseModel):

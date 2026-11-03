@@ -7,6 +7,8 @@ import { canEditDomain, effectiveOwnerParts } from '../../utils/domainAccess';
 import { getNamespaceStats, deleteQueryLog, getQueryLogs, bulkDeleteQueryLogs, fillKnowledgeGap } from '../../api/stats';
 import { createKnowledge } from '../../api/knowledge';
 import { getNamespacesDetail } from '../../api/namespaces';
+import { isSystemCollection } from '../../utils/collections';
+import { PolicyAddModal } from './policy/PolicyChangeModals';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
@@ -125,16 +127,20 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
 // 틀린 답은 정정 요청(개선 원장)으로 센다. 공백 = 답변에 "관련 지식을 찾지 못했습니다"가 뜬 것. 지식을 등록해 메우면 "메움".
 type ModalType = 'total' | QueryFilter;
 
-const isFilled = (log: QueryLog) => log.status === 'no_knowledge' && log.resolved_knowledge_id != null;
+// 메움 = 지식 등록(시스템) 또는 정책 추가 제안(정책 컬렉션, 11/03 — 반려되면 다시 공백)
+const isFilled = (log: QueryLog) => log.status === 'no_knowledge' && (log.resolved_knowledge_id != null || log.resolved_correction_id != null);
 
 function QueryLogModal({
-  open, onClose, modalType, namespace, qc, canModify,
+  open, onClose, modalType, namespace, qc, canModify, isPolicy,
 }: {
   open: boolean; onClose: () => void; modalType: ModalType | null;
   namespace: string; qc: ReturnType<typeof useQueryClient>; canModify: boolean;
+  /** 정책 컬렉션 — 공백은 운영 지식이 아니라 정책 추가 제안으로 메운다(11/03) */
+  isPolicy: boolean;
 }) {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [registerLog, setRegisterLog] = useState<QueryLog | null>(null);
+  const [policyLog, setPolicyLog] = useState<QueryLog | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   const statusParam: QueryFilter | undefined = modalType === 'total' || modalType === null ? undefined : modalType;
@@ -306,11 +312,16 @@ function QueryLogModal({
                       {actionError && <p className="text-xs text-rose-600 dark:text-rose-400">{actionError}</p>}
                       {canModify ? (
                         <div className="flex gap-2">
-                          {log.status === 'no_knowledge' && (
+                          {log.status === 'no_knowledge' && (isPolicy ? (
+                            <Button variant="primary" size="sm" onClick={() => setPolicyLog(log)}
+                              title="정책 컬렉션엔 운영 지식을 넣지 않아요 — 빠진 정책을 정책 추가 제안으로 올리면 정정 요청에서 승인 후 반영돼요">
+                              <FileText className="w-3.5 h-3.5" />정책 추가 제안
+                            </Button>
+                          ) : (
                             <Button variant="primary" size="sm" onClick={() => setRegisterLog(log)}>
                               <FileText className="w-3.5 h-3.5" />지식 등록
                             </Button>
-                          )}
+                          ))}
                           <Button variant="danger" size="sm"
                             loading={deleteMutation.isPending && deleteMutation.variables === log.id}
                             onClick={() => deleteMutation.mutate(log.id)}>
@@ -328,6 +339,14 @@ function QueryLogModal({
           ))}
         </div>
       </Modal>
+
+      {policyLog && (
+        <PolicyAddModal isOpen={policyLog !== null} namespace={namespace} initialPath={[]}
+          initialName={policyLog.question.slice(0, 80)}
+          note={`질문 "${policyLog.question.slice(0, 60)}"에서 찾을 정책이 없었어요 — 빠진 정책을 적어 올리면 이 공백은 "메움"(제안이 반려되면 다시 공백).`}
+          queryLogId={policyLog.id} onSaved={() => { invalidateAll(); setExpandedId(null); }}
+          onClose={() => setPolicyLog(null)} />
+      )}
 
       {/* 지식 등록 모달 */}
       <KnowledgeRegisterModal
@@ -355,8 +374,10 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
 
   const { data: nsDetails = [] } = useQuery({ queryKey: ['namespaces-detail'], queryFn: getNamespacesDetail, staleTime: 30_000 });
 
-  const nsOwners = effectiveOwnerParts(nsDetails.find((n) => n.name === selectedNs));
+  const selectedDetail = nsDetails.find((n) => n.name === selectedNs);
+  const nsOwners = effectiveOwnerParts(selectedDetail);
   const canModifyNs = canEditDomain(user, nsOwners);
+  const isPolicyNs = !!selectedDetail && !isSystemCollection(selectedDetail);   // 정책 컬렉션 — 공백은 정책 추가 제안으로
   const { data: stats, isLoading, error, refetch } = useQuery({
     queryKey: ['stats-ns', selectedNs],
     queryFn: () => getNamespaceStats(selectedNs),
@@ -513,6 +534,7 @@ export function StatsPanel({ onOpenCorrections }: { onOpenCorrections?: () => vo
         namespace={selectedNs}
         qc={qc}
         canModify={canModifyNs}
+        isPolicy={isPolicyNs}
       />
     </div>
   );

@@ -22,6 +22,8 @@ export interface AiVerdict {
   label?: string;
   preview?: string;
   retargeted?: { from: string; to: string; by: number | null };
+  /** 정책 컬렉션 "빠진 내용"을 넘긴 정책 추가 제안 번호(11/03) */
+  forwarded_to?: number;
   /** 정정 요청의 [직접 수정] 기록(누가·언제) */
   edits?: { by: number | null; by_name?: string | null; at: string }[];
 }
@@ -54,6 +56,8 @@ export interface CorrectionItem {
   answer_text: string | null;
   ai_verdict: AiVerdict | null;
   namespace: string;
+  /** 처리할 컬렉션의 구분 — 정책 컬렉션의 "빠진 내용"은 운영 지식이 아니라 정책 추가 제안으로 넘긴다(11/03) */
+  namespace_area?: 'policy' | 'system';
   message_id: number | null;
   target_type: CorrectionTargetType;
   target_id: number | null;
@@ -127,13 +131,19 @@ export async function createPolicyProposal(
 }
 
 export type PolicyChange =
-  | { change: 'add'; policy_name: string; category_path: string[]; raw_body: string; remark?: string; reason?: string }
+  | { change: 'add'; policy_name: string; category_path: string[]; raw_body: string; remark?: string; reason?: string; query_log_id?: number }
   | { change: 'retire'; target_id: number; reason: string }
   | { change: 'move'; target_id: number; category_path: string[]; reason?: string };
 
 /** 정책 추가·폐기·분류 옮기기 제안 — 정정 요청에 올라가고 승인해야 반영(C3 2단계) */
 export async function createPolicyChange(namespace: string, body: PolicyChange): Promise<{ id: number; target_type: PolicyChangeTarget }> {
   return apiFetch('/corrections/policy-change', { method: 'POST', body: JSON.stringify({ namespace, ...body }) });
+}
+
+/** 정책 컬렉션의 "빠진 내용" 신고 → 정책 추가 제안(11/03). 원래 신고는 처리됨(넘긴 제안 번호가 ai_verdict.forwarded_to) */
+export async function forwardMissingToPolicyAdd(itemId: number, namespace: string,
+  body: { policy_name: string; category_path: string[]; raw_body: string; remark?: string }): Promise<{ id: number; forwarded_to: number }> {
+  return apiFetch(`/corrections/${itemId}/to-policy-add`, { method: 'POST', body: JSON.stringify({ namespace, change: 'add', ...body }) });
 }
 
 /** 폐기 제안 창 경고 — 이 정책을 정답으로 쓰는 평가 문항(checked=false면 서버에 평가 문항 파일이 없어 못 셈) */
