@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from core.database import HIDDEN_KINDS, HIDDEN_KINDS_SQL, OWNER_MIRROR_SYNC_SQL, STAGING_NAME_PREFIX, get_conn
+from core.database import HIDDEN_KINDS, HIDDEN_KINDS_SQL, OWNER_MIRROR_SYNC_SQL, STAGING_NAME_PREFIX, get_conn, release_namespace_refs
 from service.policy.visibility import KIND_SOURCE_CHECK, searchable_sql
 
 logger = logging.getLogger(__name__)
@@ -103,10 +103,15 @@ async def set_supports(name: str, policies: list[str]) -> list[str]:
             bad = sorted(set(want) - {r["name"] for r in rows if r["kind"] == "domain" and r["area"] == "policy"})
             if bad:
                 raise ValueError(f"정책 컬렉션이 아닙니다: {', '.join(bad)}")
+            before = [r["name"] for r in await conn.fetch(
+                "SELECT b.name FROM ops_link l JOIN ops_namespace b ON b.id::text = l.to_key WHERE l.relation = 'supports' "
+                "AND l.from_type = 'domain' AND l.to_type = 'domain' AND l.from_key = $1", str(me["id"]))]
             await conn.execute("DELETE FROM ops_link WHERE relation = 'supports' AND from_type = 'domain' AND from_key = $1", str(me["id"]))
             for r in rows:   # 시스템 하나에 업무 몇 개 — 한 줄씩
                 await conn.execute("INSERT INTO ops_link (from_type, from_key, relation, to_type, to_key, source) "
                                    "VALUES ('domain', $1, 'supports', 'domain', $2, 'manual')", str(me["id"]), str(r["id"]))
+    # 검색 범위가 바뀐다(linked) — 이 시스템과 빠진·더한 정책에서 물은 옛 답을 비운다(캐시 키가 컬렉션 이름, 11/03 리뷰 L2)
+    await _forget_cached_answers(name, *sorted(set(before) | set(want)))
     return want
 
 
@@ -262,10 +267,9 @@ async def delete_namespace(name: str) -> tuple[int, str]:
             children = await conn.fetchval("SELECT COUNT(*) FROM ops_namespace WHERE parent_id = $1", row["id"])
             if children:
                 return 409, f"하위 영역 {children}개를 먼저 옮기거나 지우세요."
-            # 연결 표는 영역을 글자 키로 가리켜 FK로 같이 안 지워진다 — 남으면 정책 범위가 조용히 "전부"로 바뀐다(리뷰 L6)
-            await conn.execute("""DELETE FROM ops_link WHERE (from_type = 'domain' AND from_key = $1) OR (to_type = 'domain' AND to_key = $1)
-                                  OR (from_type = 'section' AND from_key LIKE $1 || '|%') OR (to_type = 'section' AND to_key LIKE $1 || '|%')""",
-                               str(row["id"]))
+            # FK 없이 가리키는 것 — 연결 표(글자 키, 남으면 정책 범위가 조용히 "전부"로, 리뷰 L6) · 적재 기록·배치 기본 위치·골든셋 후보의
+            # id 칸(지운 id를 가리키던 것 161건 발견, 11/03 키 정리 5단계) · 용어 수집 상태 설정 줄
+            await release_namespace_refs(conn, row["id"])
             # 나머지는 ON DELETE CASCADE로 자식 테이블 자동 삭제
             await conn.execute("DELETE FROM ops_namespace WHERE id = $1", row["id"])
     await _forget_cached_answers(name, row["parent"])

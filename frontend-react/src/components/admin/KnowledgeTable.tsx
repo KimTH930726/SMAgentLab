@@ -78,7 +78,7 @@ function KnowledgeContentView({ content }: { content: string }) {
 }
 
 // 가중치(문서 우선순위) 입력·표시는 2026-10-02 제거 — 쓰인 적 없고 틀린 검색은 내용·용어집을 고친다(정정 흐름)
-// 업무구분(선택·AI 자동분석·필터·배지·일괄 변경)은 10/22 업무구분 폐지로 삭제 — 지식은 정책 컬렉션에 바로 붙는다
+// 업무구분(선택·AI 자동분석·필터·배지·일괄 변경)은 10/22 업무구분 폐지로 삭제 — 운영 지식은 시스템 컬렉션에 바로 붙는다(11/02)
 interface KnowledgeFormData {
   content: string;
 }
@@ -424,7 +424,7 @@ export function KnowledgeTable() {
             </div>
           )}
 
-          {!selectedNs && <div className="text-center py-16 text-slate-500">정책 컬렉션을 선택하세요.</div>}
+          {!selectedNs && <div className="text-center py-16 text-slate-500">시스템 컬렉션을 선택하세요.</div>}
           {selectedNs && isLoading && <div className="text-center py-16 text-slate-500 animate-pulse">로딩 중...</div>}
           {selectedNs && error && <div className="text-center py-16 text-rose-400">오류가 발생했습니다.</div>}
 
@@ -1307,7 +1307,7 @@ function ReviewTab({ items, canModify, onResolved }: {
                 </Button>
               </div>
             ) : (
-              <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 정책 컬렉션의 승인 권한이 없습니다.</p>
+              <p className="text-xs text-slate-500 pt-2 border-t border-slate-700">이 컬렉션의 승인 권한이 없습니다.</p>
             )}
           </div>
         )}

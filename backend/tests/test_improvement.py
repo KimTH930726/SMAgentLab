@@ -25,6 +25,14 @@ sys.modules["service.improvement"].draft = draft
 svc = _load("service.improvement.service", "service/improvement/service.py")
 
 
+@pytest.fixture(autouse=True)
+def _home_is_asked():
+    """처리할 곳(_home_ns, 11/03 M2) = 물은 곳으로 고정 — 이 파일의 가짜 연결은 DB 호출 순서를 흉내 내므로 조회 1번이 끼면 어긋난다.
+    근거가 연결된 다른 컬렉션 것일 때 처리할 곳이 바뀌는 건 test_correction_routing.py가 실제 SQL로 본다."""
+    with patch.object(svc, "_home_ns", AsyncMock(side_effect=lambda _c, _t, _i, asked: asked)):
+        yield
+
+
 class TestParseDraft:
     def test_knowledge_ok(self):
         assert draft.parse_draft("knowledge", '{"content": "새 본문"}') == {"content": "새 본문"}
@@ -55,6 +63,7 @@ def _conn():
     c.__aenter__ = AsyncMock(return_value=c)
     c.__aexit__ = AsyncMock(return_value=False)
     c.transaction = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)))
+    c.fetch = AsyncMock(return_value=[])   # 승인 뒤 캐시 비울 연결 컬렉션 이름(11/03 M2 L1) 등 — 기본은 없음
     return c
 
 
@@ -162,7 +171,7 @@ class TestLoadCandidates:
                                               {"kind": "narrative", "policy_name": "옛 인용"}]},
         })
 
-        async def load(_c, _ns, tt, tid, sub, _m):
+        async def load(_c, _ns, tt, tid, sub, _m, **_kw):
             if tid == 2:
                 raise ValueError("이미 바뀜")
             return {"content": "c"} if tt == "knowledge" else {"policy_name": "기한", "param": {"name": "기한"}}

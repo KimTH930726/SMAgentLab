@@ -58,12 +58,15 @@ def _no_cache():
 @pytest.mark.asyncio
 async def test_delete_removes_text_key_links_too():
     conn = _Conn(fetchrow=[{"id": 7, "kind": "domain", "parent": None}], fetchval=[0])   # 하위 영역 0개
-    with _patch(admin_service, conn):
+    order = []
+    conn.execute.side_effect = lambda sql, *a: order.append(sql)
+    release = AsyncMock(side_effect=lambda c, ns_id: order.append(f"release:{ns_id}"))
+    with _patch(admin_service, conn), patch.object(admin_service, "release_namespace_refs", release):
         status, _ = await admin_service.delete_namespace("x")
-    sqls = [c.args[0] for c in conn.execute.await_args_list]
     assert status == 204
-    assert any("DELETE FROM ops_link" in s for s in sqls)                     # 글자 키 연결 정리
-    assert sqls.index(next(s for s in sqls if "ops_link" in s)) < sqls.index(next(s for s in sqls if "DELETE FROM ops_namespace" in s))
+    # 글자 키 연결·FK 없는 id 칸 정리(release_namespace_refs, 본문은 test_knowledge_system_only.py)가 같은 연결로, 행 삭제 전에
+    release.assert_awaited_once_with(conn, 7)
+    assert order.index("release:7") < order.index(next(s for s in order if "DELETE FROM ops_namespace" in s))
 
 
 @pytest.mark.asyncio

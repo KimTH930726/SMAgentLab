@@ -83,14 +83,35 @@ def _fallback_chunk_text(policy_name: str, category_path: list[str], raw_body: s
 # 범위 밖(무관한 다른 영역) 행은 여전히 거부. $2 = 신고한 영역 id.
 _IN_SCOPE_2 = f"IN ({scope_ids_same_owner_subquery('$2')})"
 
+# 답변 근거로 찾을 수 있는 곳 = 위 범위 + 관련 정책 연결(ops_link 'supports', 채팅 linked — 하위 정책은 상위의 연결도). 정책에서 물어 연결된
+# 시스템 지식으로 답했으면 그 지식도 정정 대상이다(11/03 리뷰 M2 — 빠지면 [답변 틀림]이 조용히 후보에서 뺐다). $2 = 물은 컬렉션 id
+_LINKED_2 = ("SELECT (CASE WHEN l.from_key = me.id::text THEN l.to_key ELSE l.from_key END)::int FROM ops_namespace me "
+             "JOIN ops_link l ON l.relation = 'supports' AND l.status = 'active' AND l.from_type = 'domain' AND l.to_type = 'domain' "
+             "AND (l.to_key IN (me.id::text, me.parent_id::text) OR l.from_key = me.id::text) WHERE me.id = $2")
+_IN_REACH_2 = f"IN ({scope_ids_same_owner_subquery('$2')} UNION {_LINKED_2})"
+
+
+async def _home_ns(conn, target_type: str, target_id: Optional[int], asked_ns: int) -> int:
+    """신고를 처리할 컬렉션 = 근거가 속한 컬렉션(그 담당이 검토·승인 — 업계: 콘텐츠 주인에게 라우팅, 11/03 M2 결정). 물은 컬렉션 범위
+    (자신 + 같은 담당 하위) 안의 근거면 물은 곳 그대로(예전과 같음), 연결로 찾은 근거면 그 근거의 컬렉션. 근거 없는 신고(빠진 내용·답변)는 물은 곳."""
+    if target_id is None or target_type not in ("knowledge", "policy_param", "policy_narrative"):
+        return asked_ns
+    table = "rag_knowledge" if target_type == "knowledge" else "policy_item"
+    row = await conn.fetchrow(f"SELECT namespace_id, namespace_id {_IN_SCOPE_2} AS own FROM {table} WHERE id = $1", target_id, asked_ns)
+    if row is None or row["own"]:
+        return asked_ns
+    return row["namespace_id"]
+
 
 async def _load_original(conn, ns_id: int, target_type: str, target_id: Optional[int],
-                         target_sub_id: Optional[int], message_id: Optional[int]) -> dict:
-    """신고 대상의 현재 원문 스냅샷. 대상이 이 네임스페이스(+ 직계 하위)의 현행 데이터가 아니면 ValueError."""
+                         target_sub_id: Optional[int], message_id: Optional[int], *, reach: bool = False) -> dict:
+    """신고 대상의 현재 원문 스냅샷. 대상이 이 네임스페이스(+ 직계 하위)의 현행 데이터가 아니면 ValueError.
+    reach = 답변 근거에서 고른 대상(ns_id = 물은 컬렉션) — 관련 정책 연결로 찾은 컬렉션 것도 받는다(_IN_REACH_2)."""
+    in_ns = _IN_REACH_2 if reach else _IN_SCOPE_2
     if target_type == "knowledge":
         r = await conn.fetchrow(
             "SELECT id, content, heading_path FROM rag_knowledge "
-            f"WHERE id = $1 AND namespace_id {_IN_SCOPE_2} AND status = 'active'", target_id, ns_id)
+            f"WHERE id = $1 AND namespace_id {in_ns} AND status = 'active'", target_id, ns_id)
         if not r:
             raise ValueError("정정 대상 지식을 찾을 수 없거나 이미 바뀌었습니다.")
         # 업무구분(category)은 10/22 폐지로 스냅샷에서 뺐다(이미 저장된 옛 스냅샷의 category 키는 그대로 둔다)
@@ -99,7 +120,7 @@ async def _load_original(conn, ns_id: int, target_type: str, target_id: Optional
     if target_type in ("policy_param", "policy_narrative"):
         item = await conn.fetchrow(
             "SELECT id, policy_name, category_path, raw_body, remark FROM policy_item "
-            f"WHERE id = $1 AND namespace_id {_IN_SCOPE_2} AND {searchable_sql('policy_item')}", target_id, ns_id)   # 검색 대상과 같은 기준 — v0 검토 대기 버전은 정정 대상이 못 된다(10/21)
+            f"WHERE id = $1 AND namespace_id {in_ns} AND {searchable_sql('policy_item')}", target_id, ns_id)   # 검색 대상과 같은 기준 — v0 검토 대기 버전은 정정 대상이 못 된다(10/21)
         if not item:
             raise ValueError("정정 대상 정책을 찾을 수 없거나 이미 바뀌었습니다.")
         base = {"policy_name": item["policy_name"], "category_path": list(item["category_path"] or []),
@@ -178,7 +199,7 @@ async def _load_candidates(conn, ns_id: int, message_id: int) -> list[dict]:
             continue
         seen.add(key)
         try:
-            original = await _load_original(conn, ns_id, target_type, target_id, sub_id, None)
+            original = await _load_original(conn, ns_id, target_type, target_id, sub_id, None, reach=True)
         except ValueError:
             continue
         label = f"문서 #{target_id}" if target_type == "knowledge" else f"정책 · {original['policy_name']}"
@@ -238,23 +259,26 @@ async def _identify(candidates: list[dict], context: dict, user_input: str) -> t
     return "answer", None, None, context, None, meta
 
 
-async def _write_item(conn, values: tuple, signal_id: Optional[int]) -> int:
+async def _write_item(conn, values: tuple, signal_id: Optional[int], *, asked: Optional[int] = None) -> int:
     """신고 저장 — 신호 건이 있으면 그 건을 채우고, 없으면 새로 만든다. savepoint 안에서 실행해 중복(유니크 위반)이
-    나도 바깥 트랜잭션은 이어갈 수 있게 한다."""
+    나도 바깥 트랜잭션은 이어갈 수 있게 한다.
+    asked = 물은 컬렉션(asked_namespace_id) — 없으면 처리할 곳(values[2])과 같다(정책 화면 제안·정책 변경처럼 답변이 없는 길)."""
+    values = (*values, values[2] if asked is None else asked)
     async with conn.transaction():
         if signal_id is not None:
             return await conn.fetchval("""
                 UPDATE ops_improvement_item
                 SET kind = $1, source = $2, namespace_id = $3, message_id = $4, reporter_user_id = $5,
                     target_type = $6, target_id = $7, target_sub_id = $8, user_input = $9,
-                    original = $10::jsonb, proposed = $11::jsonb, candidates = $12::jsonb, ai_verdict = $13::jsonb
-                WHERE id = $14 RETURNING id
+                    original = $10::jsonb, proposed = $11::jsonb, candidates = $12::jsonb, ai_verdict = $13::jsonb,
+                    asked_namespace_id = $14
+                WHERE id = $15 RETURNING id
             """, *values, signal_id)
         return await conn.fetchval("""
             INSERT INTO ops_improvement_item
                 (kind, source, namespace_id, message_id, reporter_user_id, target_type, target_id,
-                 target_sub_id, user_input, original, proposed, candidates, ai_verdict)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb)
+                 target_sub_id, user_input, original, proposed, candidates, ai_verdict, asked_namespace_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14)
             RETURNING id
         """, *values)
 
@@ -291,15 +315,16 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
         # 후보는 담당자 대상 변경용으로 직접 지정 신고에도 저장한다
         candidates = await _load_candidates(conn, ns_id, message_id) if message_id is not None else []
         context = await _load_original(conn, ns_id, "missing", None, None, message_id)
-        original = None if auto else await _load_original(conn, ns_id, target_type, target_id, target_sub_id, message_id)
+        original = None if auto else await _load_original(conn, ns_id, target_type, target_id, target_sub_id, message_id,
+                                                          reach=message_id is not None)   # 답변 근거 카드에서 고른 대상
 
     proposed, verdict = None, None
     if auto:
         target_type, target_id, target_sub_id, original, proposed, verdict = await _identify(candidates, context, user_input)
     stored_candidates = _stored_candidates(candidates)
 
-    def _values() -> tuple:
-        return (KIND_BY_TARGET[target_type], SOURCE_AUTO if auto else SOURCE_DIRECT, ns_id, message_id,
+    def _values(home: int) -> tuple:   # home = 처리할 곳(_home_ns) — 물은 곳은 _write_item(asked=)
+        return (KIND_BY_TARGET[target_type], SOURCE_AUTO if auto else SOURCE_DIRECT, home, message_id,
                 user.get("id"), target_type, target_id, target_sub_id, user_input,
                 json.dumps(original, ensure_ascii=False),
                 json.dumps(proposed, ensure_ascii=False) if proposed is not None else None,
@@ -328,7 +353,7 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
                     verdict = _park_on_existing(verdict, existing)
                     target_type, target_id, target_sub_id, original, proposed = "auto", None, None, context, None
                 try:
-                    item_id = await _write_item(conn, _values(), signal_id)
+                    item_id = await _write_item(conn, _values(await _home_ns(conn, target_type, target_id, ns_id)), signal_id, asked=ns_id)
                 except asyncpg.UniqueViolationError:
                     # 같은 근거로 이미 대기 중인 신고가 있다 — 방금 생긴 신호 건은 그 신고와 중복이라 지운다(데이터 손실 없음)
                     conflict = True
@@ -572,8 +597,8 @@ async def record_answer_signal(ns_id: int, message_id: int, reporter_id: Optiona
             stored = _stored_candidates(candidates)
             item_id = await conn.fetchval("""
                 INSERT INTO ops_improvement_item
-                    (kind, source, namespace_id, message_id, reporter_user_id, target_type, original, candidates)
-                VALUES ('answer_signal', $1, $2, $3, $4, 'auto', $5::jsonb, $6::jsonb) RETURNING id
+                    (kind, source, namespace_id, message_id, reporter_user_id, target_type, original, candidates, asked_namespace_id)
+                VALUES ('answer_signal', $1, $2, $3, $4, 'auto', $5::jsonb, $6::jsonb, $2) RETURNING id
             """, SOURCE_SIGNAL, ns_id, message_id, reporter_id, json.dumps(context, ensure_ascii=False),
                 json.dumps(stored, ensure_ascii=False))
     except Exception:
@@ -592,7 +617,8 @@ _BACKGROUND: set = set()  # 백그라운드 분석 태스크 참조 유지(가�
 
 async def analyze_signal(item_id: int, ns_id: int, message_id: int) -> bool:
     """의견 없는 "답변 틀림" — AI가 질문·답변·근거의 어긋남으로 원인을 추정해 대상을 미리 골라 둔다(사실은 모르므로
-    "추정"으로 표시, 수정안은 확실할 때만). 아직 의견이 없을 때만 갱신 — 그 사이 사용자 한 줄이 오면 손대지 않는다."""
+    "추정"으로 표시, 수정안은 확실할 때만). 아직 의견이 없을 때만 갱신 — 그 사이 사용자 한 줄이 오면 손대지 않는다.
+    ns_id = 물은 컬렉션. 고른 근거가 연결된 컬렉션 것이면 신고는 그 컬렉션으로 간다(_home_ns)."""
     try:
         async with get_conn() as conn:
             candidates = await _load_candidates(conn, ns_id, message_id)
@@ -628,11 +654,11 @@ async def analyze_signal(item_id: int, ns_id: int, message_id: int) -> bool:
                 res = await conn.execute("""
                     UPDATE ops_improvement_item
                     SET kind = 'answer_signal', target_type = $2, target_id = $3, target_sub_id = $4, original = $5::jsonb,
-                        proposed = $6::jsonb, ai_verdict = $7::jsonb
+                        proposed = $6::jsonb, ai_verdict = $7::jsonb, namespace_id = $8
                     WHERE id = $1 AND status = 'pending' AND user_input IS NULL AND ai_verdict IS NULL
                 """, item_id, target_type, target_id, sub_id, json.dumps(original, ensure_ascii=False),
                     json.dumps(proposed, ensure_ascii=False) if proposed else None,
-                    json.dumps(meta, ensure_ascii=False))
+                    json.dumps(meta, ensure_ascii=False), await _home_ns(conn, target_type, target_id, ns_id))
         return res.endswith(" 1")
     except Exception:
         logger.warning("의견 없는 답변 틀림 추정 실패 (item=%s)", item_id, exc_info=True)
@@ -643,14 +669,15 @@ async def analyze_item(item_id: int) -> bool:
     """담당자가 "AI로 원인 추정"을 누름 — 이관된 옛 신호처럼 클릭 시점 분석을 못 받은 의견 없는 건용."""
     async with get_conn() as conn:
         item = await conn.fetchrow(
-            "SELECT namespace_id, message_id, user_input, status FROM ops_improvement_item WHERE id = $1", item_id)
+            "SELECT COALESCE(asked_namespace_id, namespace_id) AS asked, message_id, user_input, status "
+            "FROM ops_improvement_item WHERE id = $1", item_id)
     if not item or item["status"] != "pending":
         raise ValueError("대기 중인 신고가 아닙니다.")
     if item["user_input"]:
         raise ValueError("사용자 의견이 있는 신고는 이미 그 의견으로 판정돼 있습니다.")
     if item["message_id"] is None:
         raise ValueError("어느 답변의 신고인지 알 수 없어 추정할 수 없습니다(대화가 삭제됨).")
-    return await analyze_signal(item_id, item["namespace_id"], item["message_id"])
+    return await analyze_signal(item_id, item["asked"], item["message_id"])
 
 
 async def record_search_noise(namespace: str, knowledge_id: int, reporter_id: Optional[int],
@@ -691,6 +718,7 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
         if item.get("target_type") in POLICY_CHANGE_TARGETS:   # 추가·폐기·옮기기 제안은 대상이 정해진 변경 — 바꾸면 지식 등록 등으로 둔갑(리뷰 L2 10/27)
             raise ValueError("정책 추가·폐기·옮기기 제안은 대상을 바꿀 수 없어요 — 승인하거나 반려하세요.")
         ns_id = item["namespace_id"]
+        asked = item.get("asked_namespace_id") or ns_id   # 근거 후보는 물은 곳 기준(연결 범위) — 처리할 곳(ns_id)이 바뀌었어도
         context = await _load_original(conn, ns_id, "missing", None, None, item["message_id"])
         if key in ("missing", "answer"):
             target_type, target_id, sub_id, original = key, None, None, context
@@ -698,13 +726,13 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
               and key == _key(item["target_type"], item.get("target_id"), item.get("target_sub_id"))):
             # 같은 대상으로 초안만 다시(정책 화면 제안처럼 답변 근거 후보가 없는 건도 [AI 초안 만들기]가 되게, 10/21)
             target_type, target_id, sub_id = item["target_type"], item["target_id"], item["target_sub_id"]
-            original = await _load_original(conn, ns_id, target_type, target_id, sub_id, None)
+            original = await _load_original(conn, asked, target_type, target_id, sub_id, None, reach=True)
         else:
             c = next((c for c in (_json(item["candidates"]) or []) if c["key"] == key), None)
             if c is None:
                 raise ValueError("이 답변의 근거가 아닙니다.")
             target_type, target_id, sub_id = c["target_type"], c["target_id"], c["target_sub_id"]
-            original = await _load_original(conn, ns_id, target_type, target_id, sub_id, None)
+            original = await _load_original(conn, asked, target_type, target_id, sub_id, None, reach=True)
         # 다른 정책으로 옮길 때만 "정책당 대기 정정 1건" 확인(10/21 리뷰 M1) — 같은 정책 안(초안 다시·파라미터↔서술)은 이미 이 건이 그 자리.
         # AI 초안(수십 초)을 쓰기 전에 먼저 한 번 보고, 실제 저장 때 잠금 안에서 다시 본다.
         moves_policy = target_type in _POLICY_TARGETS and not (
@@ -745,15 +773,17 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
                 if not stale and moves_policy:
                     busy = await _claim_policy_slot(conn, target_type, target_id, item_id)
                 if not stale and busy is None:
+                    # 대상이 바뀌면 처리할 곳도 그 근거의 컬렉션으로(빠진 내용·답변이면 물은 곳) — 승인은 그 담당이
                     res = await conn.execute(f"""
                         UPDATE ops_improvement_item
                         SET kind = $2, target_type = $3, target_id = $4, target_sub_id = $5, original = $6::jsonb,
-                            proposed = $7::jsonb, ai_verdict = $8::jsonb
+                            proposed = $7::jsonb, ai_verdict = $8::jsonb, namespace_id = $12
                         WHERE id = $1 AND status = 'pending' AND {_same_target_sql(9)}
                     """, item_id, KIND_BY_TARGET[target_type], target_type, target_id, sub_id,
                         json.dumps(original, ensure_ascii=False),
                         json.dumps(proposed, ensure_ascii=False) if proposed is not None else None,
-                        json.dumps(verdict, ensure_ascii=False) if verdict else None, *read_target)
+                        json.dumps(verdict, ensure_ascii=False) if verdict else None, *read_target,
+                        await _home_ns(conn, target_type, target_id, asked))
                     stale = res.endswith(" 0")
         except asyncpg.UniqueViolationError:
             raise ConflictError("같은 신고자의 같은 근거 신고가 이미 대기 중입니다.")
@@ -964,6 +994,9 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
 
 
 async def _apply_missing(conn, ns_id: int, content: str, embedding: list[float], approver: dict) -> int:
+    # 운영 지식은 시스템에만(11/02 D) — 정책 컬렉션에서 접수된 "빠진 내용"은 여기서 막는다(11/03 재리뷰 M1, 길목을 안 거치는 INSERT)
+    if await conn.fetchval("SELECT kind = 'domain' AND area = 'policy' FROM ops_namespace WHERE id = $1", ns_id):
+        raise ValueError("정책 컬렉션엔 운영 지식을 넣을 수 없어요 — 정책이 빠졌으면 정책서에서 추가하고, 운영 지식이면 시스템 컬렉션에서 등록하세요.")
     return await conn.fetchval("""
         INSERT INTO rag_knowledge (namespace_id, content, embedding, base_weight,
                                    created_by_user_id, source_type, status, embedding_model, reviewed_at, owner)
@@ -1168,9 +1201,13 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
             ns_name = await conn.fetchval("SELECT name FROM ops_namespace WHERE id = $1", ns_id)
             # 고친 지식이 하위 영역 것이면 그 영역 캐시도(상위 신고로 하위 근거를 고칠 수 있다, 리뷰 M1·M2)
             row_ns_name = None
+            linked_names: list[str] = []
             if item["target_type"] in ("knowledge", "missing"):
                 row_ns_name = await conn.fetchval(
                     "SELECT n.name FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id WHERE k.id = $1", new_id)
+                # 시스템 지식은 관련 정책에서 물은 답에도 든다(채팅 linked) — 물은 곳·연결된 컬렉션 캐시도(11/03 M2 리뷰 L1)
+                linked_names = [r["name"] for r in await conn.fetch(
+                    f"SELECT name FROM ops_namespace WHERE id IN ({_LINKED_2}) OR id = $1", item.get("asked_namespace_id"), ns_id)]
 
     # 승인 반영 후 시맨틱 캐시엔 옛 답이 TTL 동안 남아 있다 — 캐시를 비운다(best-effort)
     if item["target_type"] in ("policy_param", "policy_narrative"):
@@ -1186,7 +1223,7 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
     else:
         try:
             from shared.cache import invalidate_namespace_family   # 자신 + 상위 이름(트리 — 상위 검색 범위에 하위 지식이 든다)
-            await invalidate_namespace_family(ns_name, row_ns_name)
+            await invalidate_namespace_family(ns_name, row_ns_name, *linked_names)
         except Exception:
             logger.warning("정정 승인 후 시맨틱 캐시 무효화 실패 (item=%s)", item_id, exc_info=True)
     # 채팅 신고가 승인되면 그 질문 = 실사용 시험지 후보(정답 = 고친 대상). 실패해도 승인은 그대로(로그만) — service/eval/questions.py

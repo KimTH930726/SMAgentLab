@@ -31,6 +31,14 @@ def _load(name, rel):
 draft = _load("service.improvement.draft", "service/improvement/draft.py")
 sys.modules["service.improvement"].draft = draft
 svc = _load("service.improvement.service", "service/improvement/service.py")
+
+
+@pytest.fixture(autouse=True)
+def _home_is_asked():
+    """처리할 곳(_home_ns, 11/03 M2) = 물은 곳으로 고정 — 이 파일의 가짜 연결은 DB 호출 순서를 흉내 내므로 조회 1번이 끼면 어긋난다.
+    근거가 연결된 다른 컬렉션 것일 때 처리할 곳이 바뀌는 건 test_correction_routing.py가 실제 SQL로 본다."""
+    with patch.object(svc, "_home_ns", AsyncMock(side_effect=lambda _c, _t, _i, asked: asked)):
+        yield
 _load("service.improvement.schemas", "service/improvement/schemas.py")
 sys.modules["service.improvement"].service = svc
 router = _load("service.improvement.router", "service/improvement/router.py")
@@ -387,7 +395,7 @@ class TestRetargetSameTargetWithoutCandidates:
         c.fetchrow = AsyncMock(return_value={"status": "pending", "namespace_id": 1, "message_id": None, "candidates": "[]",
                                              "user_input": "기한은 14일", "ai_verdict": None, "target_type": "policy_narrative",
                                              "target_id": 10, "target_sub_id": 200})
-        loaded = AsyncMock(side_effect=lambda conn, ns, t, tid, sub, msg: {"raw_body": "7일"} if t == "policy_narrative" else {})
+        loaded = AsyncMock(side_effect=lambda conn, ns, t, tid, sub, msg, **_kw: {"raw_body": "7일"} if t == "policy_narrative" else {})
         drafted = AsyncMock(return_value={"chunk_text": "14일", "raw_body": "14일"})
         with patch.object(svc, "get_conn", return_value=c), patch.object(svc, "_load_original", loaded), \
              patch.object(svc.draft_mod, "draft_correction", drafted):
@@ -558,7 +566,7 @@ class _Ledger:
         raise AssertionError(sql)
 
 
-def _orig(_c, _ns, tt, tid, sub, _m):
+def _orig(_c, _ns, tt, tid, sub, _m, **_kw):
     if tt in svc._POLICY_TARGETS:
         return {"policy_name": str(tid), "category_path": [], "raw_body": "x", "remark": None, "chunk_text": "x"}
     if tt == "knowledge":

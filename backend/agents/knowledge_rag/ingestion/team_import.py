@@ -522,11 +522,12 @@ async def _load_batch(batch_id: int, user: dict) -> None:
     from agents.knowledge_rag.knowledge import service
     from agents.knowledge_rag.knowledge.router import AUTO_EXTRACT_SOURCE, _run_auto_glossary
     from service.decision import ledger
+    from core.database import POLICY_COLLECTION_KNOWLEDGE_MSG
 
     async with get_conn() as conn:
         creator = await conn.fetchval("SELECT created_by_user_id FROM rag_import_batch WHERE id = $1", batch_id)
         pages = await conn.fetch(
-            """SELECT p.id, p.page_id, p.title, p.final_namespace_id ns, n.name ns_name, p.source_document_id, p.ai_namespace_id,
+            """SELECT p.id, p.page_id, p.title, p.final_namespace_id ns, n.name ns_name, n.kind ns_kind, n.area ns_area, p.source_document_id, p.ai_namespace_id,
                       p.proposed_namespace_id, p.confident, p.signals, p.reason, p.sample_state, p.assigned_by, p.sample_ns,
                       p.decided_by_user_id, p.status
                FROM rag_import_page p JOIN ops_namespace n ON n.id = p.final_namespace_id
@@ -540,6 +541,11 @@ async def _load_batch(batch_id: int, user: dict) -> None:
             existing = await _existing_ns(conn, str(p["page_id"]))
             if existing is not None:
                 await _set_page(conn, p["id"], status="existing", final_namespace_id=existing)
+                await conn.execute("UPDATE rag_import_batch SET load_done = load_done + 1 WHERE id = $1", batch_id)
+                continue
+            # 운영 지식은 시스템에만(11/02 D) — 11/02 전 배치의 넣을 곳이 정책이면 초안을 옮기기 전에 멈춘다(옮긴 뒤 등록이 막히면 초안만 정책에 남는다)
+            if p["ns_kind"] == "domain" and p["ns_area"] == "policy":
+                await _set_page(conn, p["id"], status="failed", signals={**sig, "error": POLICY_COLLECTION_KNOWLEDGE_MSG})
                 await conn.execute("UPDATE rag_import_batch SET load_done = load_done + 1 WHERE id = $1", batch_id)
                 continue
             # 이 배치를 만든 사람의 초안만 옮긴다(같은 내용이면 남의 초안이 재사용됐을 수 있다)

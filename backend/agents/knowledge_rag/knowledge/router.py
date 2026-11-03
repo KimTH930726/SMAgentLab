@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from pydantic import BaseModel
 from shared.embedding import embedding_service
 
-from core.dependencies import get_current_user, check_namespace_ownership
+from core.dependencies import get_current_user, check_namespace_ownership, reject_knowledge_outside_system
 from agents.knowledge_rag.knowledge.schemas import (
     GlossaryCreate, GlossaryOut, GlossaryUpdate,
     KnowledgeCreate, KnowledgeOut, KnowledgeUpdate,
@@ -94,7 +94,9 @@ SUGGEST_MAX_ITEMS = 200   # 담당이 아닌 곳에 한 번에 올릴 수 있는
 
 async def _ingest_gate(namespace: str, user: dict, decision_id: Optional[int]) -> bool:
     """등록 권한 — 담당이면 그대로(False). 담당이 아니어도 위치 판정(E2)을 거친 등록이면 그 담당의 승인 대기로(True = 제안).
-    판정 줄은 이 사람의 것이고 아직 확정 전이어야 한다(남의 판단 id·재사용으로 승인 대기를 남발하지 못하게). 조회 전용은 늘 403."""
+    판정 줄은 이 사람의 것이고 아직 확정 전이어야 한다(남의 판단 id·재사용으로 승인 대기를 남발하지 못하게). 조회 전용은 늘 403.
+    정책 컬렉션이면 권한과 상관없이 400(운영 지식은 시스템에만)."""
+    await reject_knowledge_outside_system(namespace)
     try:
         await check_namespace_ownership(namespace, user)
         return False

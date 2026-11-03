@@ -9,7 +9,7 @@ from typing import Awaitable, Callable, Optional
 import numpy as np
 
 from core.config import settings
-from core.database import get_conn, resolve_namespace_id
+from core.database import get_conn, resolve_knowledge_namespace_id, resolve_namespace_id
 from shared.embedding import embedding_service
 from agents.knowledge_rag.knowledge.retrieval import find_similar_active_knowledge, get_thresholds
 from agents.knowledge_rag.knowledge import glossary_terms
@@ -42,7 +42,7 @@ async def create_knowledge(
     force_pending: bool = False,
 ) -> dict:
     async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
+        ns_id = await resolve_knowledge_namespace_id(conn, namespace)   # 정책 컬렉션이면 ValueError(운영 지식은 시스템에만)
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
 
@@ -782,7 +782,7 @@ async def bulk_create_knowledge(
         {"created": int, "job_id": int, "status": "completed"|"failed"|"cancelled"} (background=False)
     """
     async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
+        ns_id = await resolve_knowledge_namespace_id(conn, namespace)   # 정책 컬렉션이면 ValueError(운영 지식은 시스템에만)
         if ns_id is None:
             raise ValueError(f"Namespace '{namespace}' not found")
 

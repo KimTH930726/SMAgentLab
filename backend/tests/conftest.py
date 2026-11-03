@@ -47,6 +47,8 @@ _fake_conn.execute = AsyncMock()
 _db_mod = MagicMock()
 _db_mod.get_conn = MagicMock(return_value=_fake_conn)
 _db_mod.resolve_namespace_id = AsyncMock(return_value=1)
+_db_mod.resolve_knowledge_namespace_id = AsyncMock(return_value=1)   # 정책 컬렉션 거부는 test_knowledge_system_only.py가 실제 함수로
+_db_mod.release_namespace_refs = AsyncMock(return_value=None)
 _db_mod.namespace_scope_ids = AsyncMock(return_value=[1])   # 검색 범위(자신 + 직계 하위) — 기본은 하위 없음
 # 범위 규칙 SQL 조각은 순수 함수 — 가짜로 두면 모듈 상수 SQL(improvement·VOC)에 MagicMock 글자가 박힌다. 실제 파일에서 가져온다.
 import importlib.util as _ilu_db
@@ -60,13 +62,15 @@ _db_mod.effective_owner_ns_sql = _real_db.effective_owner_ns_sql
 _db_mod.EFFECTIVE_OWNERS_SQL = _real_db.EFFECTIVE_OWNERS_SQL
 _db_mod.OWNER_MIRROR_SYNC_SQL = _real_db.OWNER_MIRROR_SYNC_SQL
 # 담당 원천 줄·내부 자리 종류 상수도 실제 값 — 가짜면 SQL에 MagicMock 글자가 박힌다
-for _n in ("OWNER_ROWS_SQL", "STAGING_KIND", "STAGING_NAME", "STAGING_NAME_PREFIX", "RETIRED_ORG_KIND", "HIDDEN_KINDS", "HIDDEN_KINDS_SQL"):
+for _n in ("OWNER_ROWS_SQL", "STAGING_KIND", "STAGING_NAME", "STAGING_NAME_PREFIX", "RETIRED_ORG_KIND", "HIDDEN_KINDS", "HIDDEN_KINDS_SQL",
+           "LOOSE_NAMESPACE_REFS", "POLICY_COLLECTION_KNOWLEDGE_MSG"):
     setattr(_db_mod, _n, getattr(_real_db, _n))
 sys.modules["core.database"] = _db_mod
 
 sys.modules["core.dependencies"] = MagicMock()
 # 정책은 정책 컬렉션에만(#105) — 기본은 통과. 거부 자체는 test_team_part_collections.py가 실제 함수로 본다
 sys.modules["core.dependencies"].reject_policy_outside_policy_collection = AsyncMock(return_value=None)
+sys.modules["core.dependencies"].reject_knowledge_outside_system = AsyncMock(return_value=None)
 sys.modules["core.security"] = MagicMock()
 
 # shared

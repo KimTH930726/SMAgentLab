@@ -9,7 +9,7 @@ from typing import Iterable, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from core.database import EFFECTIVE_OWNERS_SQL, HIDDEN_KINDS, get_conn
+from core.database import EFFECTIVE_OWNERS_SQL, HIDDEN_KINDS, POLICY_COLLECTION_KNOWLEDGE_MSG, get_conn
 from core.security import decode_token
 
 logger = logging.getLogger(__name__)
@@ -132,6 +132,15 @@ async def reject_policy_outside_policy_collection(namespace: str) -> None:
     if row and row["area"] == "system":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="시스템 컬렉션엔 정책을 둘 수 없어요 — 정책은 정책 컬렉션에 둡니다.")
+
+
+async def reject_knowledge_outside_system(namespace: str) -> None:
+    """운영 지식은 시스템 컬렉션에만(11/02 D) — 지식 등록 라우터가 맨 앞에서 부른다(400 + 안내). 서비스 길목
+    (core/database.resolve_knowledge_namespace_id)도 같은 규칙으로 막아, 라우터를 안 거치는 동기화·적재도 못 쓴다."""
+    async with get_conn() as conn:
+        row = await conn.fetchrow("SELECT kind, area FROM ops_namespace WHERE name = $1", namespace)
+    if row and row["kind"] == "domain" and row["area"] == "policy":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=POLICY_COLLECTION_KNOWLEDGE_MSG)
 
 
 async def check_knowledge_read(namespace: str, user: dict) -> None:

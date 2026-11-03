@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from core.dependencies import get_current_user, get_current_admin, check_knowledge_read, check_namespace_ownership, reject_policy_outside_policy_collection
-from service.policy import catalog, search as search_service, pipeline_stats
+from service.policy import catalog, search as search_service
 from service.policy import json_io, source_check
-from service.policy.schemas import PolicySearchOut, PipelineStatsOut
+from service.policy.schemas import PolicySearchOut
 
 logger = logging.getLogger(__name__)
 
@@ -175,12 +175,4 @@ async def search_policy(
     )
 
 
-@router.get("/pipeline-stats", response_model=PipelineStatsOut)
-async def get_pipeline_stats(
-    namespace: str = Query(...),
-    user: dict = Depends(get_current_user),
-):
-    """기준정보 축적 현황 — 모니터링 뷰(실험실 게이트 작업3)의 "①기준정보 축적" 섹션."""
-    await check_knowledge_read(namespace, user)
-    stats = await pipeline_stats.get_pipeline_stats(namespace)
-    return PipelineStatsOut(**stats)
+# /pipeline-stats(옛 실험실 모니터링 집계)는 11/03 삭제 — 그 화면은 001aa4c에서 내렸고 API만 남아 있었다(안 쓰는 기능 정리)

@@ -38,6 +38,44 @@ async def resolve_namespace_id(conn: asyncpg.Connection, namespace: str) -> int 
     return await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace)
 
 
+POLICY_COLLECTION_KNOWLEDGE_MSG = "정책 컬렉션엔 운영 지식을 넣을 수 없어요 — 시스템 컬렉션에 넣어 주세요(정책서는 정책 컬렉션)."
+
+
+async def resolve_knowledge_namespace_id(conn: asyncpg.Connection, namespace: str) -> int | None:
+    """지식을 넣을 컬렉션 name → id(없으면 None). 정책 컬렉션이면 ValueError — 운영 지식은 시스템에만(11/02 D, taxonomy-standard.md).
+    지식 등록·적재·동기화가 모두 지나는 길목(knowledge/service.create_knowledge·bulk_create_knowledge)이 부른다 — 화면·라우터 검사만으론
+    API·옛 소스 연결·적재 규칙이 그대로 정책 컬렉션에 썼다(11/03 독립 리뷰 M1, E2E 잔재 6건으로 재현)."""
+    row = await conn.fetchrow("SELECT id, kind, area FROM ops_namespace WHERE name = $1", namespace)
+    if row is None:
+        return None
+    if row["kind"] == "domain" and row["area"] == "policy":
+        raise ValueError(POLICY_COLLECTION_KNOWLEDGE_MSG)
+    return row["id"]
+
+
+# FK 없이 컬렉션 id를 든 칸 — 컬렉션을 지우면 NULL로(지운 id를 가리키지 않게, 키 정리 5단계 collection-key-plan.md §2-2)
+LOOSE_NAMESPACE_REFS = (("rag_import_page", "final_namespace_id"), ("rag_import_page", "ai_namespace_id"),
+                        ("rag_import_page", "proposed_namespace_id"), ("rag_import_page", "sample_ns"),
+                        ("rag_import_batch", "default_namespace_id"), ("eval_question_candidate", "namespace_id"))
+
+
+async def release_namespace_refs(conn: asyncpg.Connection, ns_id: int,
+                                 loose: Sequence[tuple[str, str]] = LOOSE_NAMESPACE_REFS) -> None:
+    """지울 컬렉션을 FK 없이 가리키는 것 정리(트랜잭션 안에서, 컬렉션 행 삭제 직전) — 컬렉션 삭제·#106 공용.
+    넣을 곳이 비는 자동·검토 줄은 검토로(조용히 적재에서 빠지지 않게) · FK 없는 id 칸 NULL · 연결 표(글자 키) 줄 · 용어 수집 상태 설정 줄.
+    loose = 실제로 있는 칸만(기동 중 마이그레이션은 칸이 없을 수 있다). 표·칸 이름은 코드 상수."""
+    if ("rag_import_page", "final_namespace_id") in loose:
+        await conn.execute("UPDATE rag_import_page SET status = 'review', reason = 'low_confidence', decided_by_user_id = NULL "
+                           "WHERE final_namespace_id = $1 AND status IN ('auto', 'review')", ns_id)
+    for t, c in loose:
+        await conn.execute(f"UPDATE {t} SET {c} = NULL WHERE {c} = $1", ns_id)
+    await conn.execute("""DELETE FROM ops_link WHERE (from_type = 'domain' AND from_key = $1) OR (to_type = 'domain' AND to_key = $1)
+                          OR (from_type = 'section' AND from_key LIKE $1 || '|%') OR (to_type = 'section' AND to_key LIKE $1 || '|%')""",
+                       str(ns_id))
+    await conn.execute("DELETE FROM ops_system_config WHERE key = ANY($1::text[])",
+                       [f"glossary_mining_last_id:{ns_id}", f"glossary_gap_done:{ns_id}"])
+
+
 # 범위 조각에 끼울 수 있는 "영역 id 하나" SQL 식 — 자리표시($n)나 아래 코드 상수만. f-string으로 SQL에 들어가므로 값·사용자 입력이
 # 섞이지 않게 함수 안에서 막는다(리뷰 L-b).
 _ME_ID_PARAM = re.compile(r"^\$\d+$")

@@ -141,7 +141,7 @@ class TestBulkCreateKnowledge:
         fake_conn.fetchval = AsyncMock(return_value=None)  # resolve_namespace_id → None
 
         with patch("agents.knowledge_rag.knowledge.service.get_conn", return_value=fake_conn), \
-             patch("agents.knowledge_rag.knowledge.service.resolve_namespace_id", AsyncMock(return_value=None)):
+             patch("agents.knowledge_rag.knowledge.service.resolve_knowledge_namespace_id", AsyncMock(return_value=None)):
             from agents.knowledge_rag.knowledge.service import bulk_create_knowledge
             with pytest.raises(ValueError, match="not found"):
                 await bulk_create_knowledge("nonexistent", [{"content": "test", "category": "공통지식"}])

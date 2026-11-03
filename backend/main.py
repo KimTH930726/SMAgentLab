@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from core.collection_ref import CollectionRefMiddleware
 from core.config import settings
-from core.database import init_pool, close_pool, get_conn
+from core.database import LOOSE_NAMESPACE_REFS, init_pool, close_pool, get_conn, release_namespace_refs
 from core.security import hash_password
 from service.chat.helpers import NO_KNOWLEDGE_MARKER
 from service.llm.base import CHAT_SYSTEM_PROMPT
@@ -1935,19 +1935,13 @@ async def _migrate_namespace_owners(conn) -> None:
 # 단계(사람이 옮기고 지운 org:part:902를 되살렸다)와 그 CHECK·담당 표 트리거·owner_team_id 칸. 이미 그 단계를 거친 DB는 #106이 걷어 낸다.
 # 새 DB는 처음부터 아무것도 안 만든다.
 
-# FK 없이 컬렉션 id를 든 칸 — 지우는 조직 컬렉션을 가리키면 NULL로(지운 id를 가리키지 않게 — 같은 칸: scripts/move_org_to_system.LOOSE_REFS)
-_RETIRED_ORG_LOOSE_REFS = (("rag_import_page", "final_namespace_id"), ("rag_import_page", "ai_namespace_id"),
-                           ("rag_import_page", "proposed_namespace_id"), ("rag_import_page", "sample_ns"),
-                           ("rag_import_batch", "default_namespace_id"), ("eval_question_candidate", "namespace_id"))
-
-
 async def _migrate_retire_org_collections(conn) -> None:
     """#106(11/02, 사용자 "조직 컬렉션 완전히 없애기 — 팀·파트는 로그인·권한·담당만") 조직 컬렉션(kind='org_space') 걷어 내기. 멱등.
     - 담당 표 트리거(trg_namespace_owner_org_guard)·CHECK(ops_namespace_org_shape) 삭제 — 조직 컬렉션 전용.
     - 조직 컬렉션 행마다: ops_namespace를 FK로 가리키는 **모든** 표(카탈로그에서 찾음 — 담당 표 ops_namespace_owner만 뺌)에 그 행을 가리키는 줄이
       하나도 없을 때만 지운다(지식은 상태 무관 — 지운 지식도 내용). 내용이 있으면 지우지 않고 경고만(사람이 옮길 곳을 정함 —
       scripts/move_org_to_system.py). 남은 행은 화면·담당 목록에 안 나온다(core/database.HIDDEN_KINDS).
-      지울 때 같이: FK 없는 id 칸(_RETIRED_ORG_LOOSE_REFS)은 NULL, 연결 표(ops_link)의 그 컬렉션 줄·용어 수집 상태 설정 줄 삭제.
+      지울 때 같이: core/database.release_namespace_refs(FK 없는 id 칸 NULL · 연결 표 줄 · 용어 수집 상태 설정 줄 — 컬렉션 삭제와 공용).
     - 옛 팀 적재 사유 'org_like'(조직 지식으로 보임) → 'low_confidence'(사유 목록에서 뺌 — 화면에 빈 칸이 뜨지 않게).
     - 설정 chat.org_space_scope(조직 컬렉션 채팅 범위, 기본 꺼짐) 줄 삭제.
     - owner_team_id 칸: 쓰는 행이 없을 때만 삭제(팀 공통 조직 컬렉션이 내용 때문에 남았으면 칸도 남기고 경고)."""
@@ -1964,7 +1958,7 @@ async def _migrate_retire_org_collections(conn) -> None:
                JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
                WHERE c.contype = 'f' AND c.confrelid = 'ops_namespace'::regclass AND c.conrelid <> 'ops_namespace_owner'::regclass
                ORDER BY 1, 2""")]
-        loose = [(t, c) for t, c in _RETIRED_ORG_LOOSE_REFS if await conn.fetchval(
+        loose = [(t, c) for t, c in LOOSE_NAMESPACE_REFS if await conn.fetchval(
             "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2", t, c)]
         deleted, kept = [], []
         for o in orgs:
@@ -1977,16 +1971,7 @@ async def _migrate_retire_org_collections(conn) -> None:
                 if held:
                     kept.append((o["name"], held))
                     continue
-                if ("rag_import_page", "final_namespace_id") in loose:   # 넣을 곳이 비는 자동 줄 → 검토(조용히 적재에서 빠지지 않게, 리뷰 L2)
-                    await conn.execute("UPDATE rag_import_page SET status = 'review', reason = 'low_confidence', decided_by_user_id = NULL "
-                                       "WHERE final_namespace_id = $1 AND status IN ('auto', 'review')", o["id"])
-                for t, c in loose:
-                    await conn.execute(f"UPDATE {t} SET {c} = NULL WHERE {c} = $1", o["id"])
-                await conn.execute("""DELETE FROM ops_link WHERE (from_type = 'domain' AND from_key = $1) OR (to_type = 'domain' AND to_key = $1)
-                                      OR (from_type = 'section' AND from_key LIKE $1 || '|%') OR (to_type = 'section' AND to_key LIKE $1 || '|%')""",
-                                   str(o["id"]))
-                await conn.execute("DELETE FROM ops_system_config WHERE key = ANY($1::text[])",
-                                   [f"glossary_mining_last_id:{o['id']}", f"glossary_gap_done:{o['id']}"])
+                await release_namespace_refs(conn, o["id"], loose)
                 await conn.execute("DELETE FROM ops_namespace WHERE id = $1 AND kind = 'org_space'", o["id"])   # 담당 줄은 CASCADE
                 deleted.append(o["name"])
         if deleted:
@@ -2001,6 +1986,23 @@ async def _migrate_retire_org_collections(conn) -> None:
         else:
             await conn.execute("ALTER TABLE ops_namespace DROP COLUMN owner_team_id")
             logger.info("[migrate #106] ops_namespace.owner_team_id 칸 삭제(조직 컬렉션 전용)")
+
+
+async def _migrate_loose_namespace_orphans(conn) -> None:
+    """#107(11/03, 키 정리 5단계) FK 없는 컬렉션 id 칸(core/database.LOOSE_NAMESPACE_REFS)이 이미 지운 컬렉션을 가리키면 NULL. 멱등.
+    예전 컬렉션 삭제는 연결 표만 지우고 이 칸들은 남겼다(dev 161건: 적재 기록의 AI 판단·제안 칸). 이제 삭제가 같이 정리한다
+    (release_namespace_refs). 넣을 곳이 비는 자동·검토 줄은 검토로 — 조용히 적재에서 빠지지 않게."""
+    for t, c in LOOSE_NAMESPACE_REFS:
+        if not await conn.fetchval("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+                                   "AND table_name = $1 AND column_name = $2", t, c):
+            continue
+        orphan = f"{c} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ops_namespace n WHERE n.id = {t}.{c})"   # 표·칸 이름은 코드 상수
+        if (t, c) == ("rag_import_page", "final_namespace_id"):
+            await conn.execute(f"UPDATE {t} SET status = 'review', reason = 'low_confidence', decided_by_user_id = NULL "
+                               f"WHERE {orphan} AND status IN ('auto', 'review')")
+        n = await conn.execute(f"UPDATE {t} SET {c} = NULL WHERE {orphan}")
+        if n != "UPDATE 0":
+            logger.info("[migrate #107] %s.%s 지운 컬렉션 id → NULL: %s", t, c, n)
 
 
 async def _migrate_org_domain(conn) -> None:
@@ -2250,6 +2252,10 @@ async def _migrate_improvement_ledger(conn) -> None:
         ON ops_improvement_item(reporter_user_id, target_type, target_id, COALESCE(target_sub_id, 0))
         WHERE status = 'pending' AND kind = 'correction'
     """)
+    # #108(11/03 M2): 물은 컬렉션 — namespace_id는 "처리할 곳"(근거가 속한 컬렉션 담당에게, 업계: 콘텐츠 주인에게 라우팅)으로 바뀌어
+    # 정책에서 물어 시스템 지식이 틀린 신고는 그 시스템으로 간다. 후보·맥락을 다시 읽을 땐 물은 곳 기준(연결 범위). 옛 줄은 둘이 같다
+    await conn.execute("ALTER TABLE ops_improvement_item ADD COLUMN IF NOT EXISTS asked_namespace_id INT "
+                       "REFERENCES ops_namespace(id) ON DELETE SET NULL")
 
 
 async def _migrate_drop_dead_schema_2026_09_22(conn) -> None:
@@ -2399,6 +2405,7 @@ async def _run_migrations() -> None:
         await _migrate_experiment_runner(conn)         # #99 — 후보·판정 표 뒤
         await _migrate_system_area(conn)               # #105 — 컬렉션 구분값(업무 / 시스템)
         await _migrate_retire_org_collections(conn)    # #106 — 조직 컬렉션 걷어 내기(#105가 초안을 보관 자리로 옮긴 뒤)
+        await _migrate_loose_namespace_orphans(conn)   # #107 — 지운 컬렉션을 가리키는 FK 없는 id 칸 NULL(#106 뒤)
         await _cleanup_stale_generating_messages(conn)
         await _cleanup_orphaned_ingestion_jobs(conn)
 

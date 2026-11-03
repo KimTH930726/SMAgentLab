@@ -244,6 +244,12 @@ async def _reingest(src, c, ch: dict, rules: dict, owner: dict, out: dict) -> Op
                 out["excluded"] += 1
                 return None
         denied = await _write_denied(conn, ns_id, owner)
+        target = await conn.fetchrow("SELECT kind, area FROM ops_namespace WHERE id = $1", ns_id)
+    # 운영 지식은 시스템에만(11/02 D) — 옛 규칙·옛 등록이 정책을 가리키면 페이지를 받기 전에 건너뛴다(본문 내려받기·초안 없음)
+    if target is None or (target["kind"] == "domain" and target["area"] == "policy"):
+        logger.warning("소스 연결 동기화: 넣을 곳이 정책 컬렉션이거나 없음 — 건너뜀(page %s, ns %s) · 적재 규칙을 시스템 컬렉션으로", pid, ns_id)
+        out["failed"] += 1
+        return "failed"
     if denied:
         out["denied"] += 1
         return None

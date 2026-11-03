@@ -259,8 +259,12 @@ async def build_chat_context(
     extra_ns: list[int] = []
     # 지식 검색 범위(11/02): linked = 관련 정책 연결(채팅 기본), similar = linked + 질문과 가까운 컬렉션 2개(측정만), None = 고른 컬렉션만
     if knowledge_scope:
-        async with get_conn() as conn:
-            extra_ns = list(dict.fromkeys(await knowledge_scope_extra_ids(conn, namespace, knowledge_scope, query_vec)))
+        try:   # 위 정책 범위와 같이 — 연결 조회가 실패해도 고른 컬렉션만으로 답한다(채팅 전체를 죽이지 않게, 11/03 리뷰 L1)
+            async with get_conn() as conn:
+                extra_ns = list(dict.fromkeys(await knowledge_scope_extra_ids(conn, namespace, knowledge_scope, query_vec)))
+        except Exception as e:   # noqa: BLE001
+            logger.warning("지식 검색 범위(%s) 계산 실패(고른 컬렉션만): %s", knowledge_scope, e)
+            extra_ns = []
     term_matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(
         namespace, search_question, query_vec, mode=glossary_mode, entries=glossary_entries, extra_ns_ids=policy_ns_ids)
 
