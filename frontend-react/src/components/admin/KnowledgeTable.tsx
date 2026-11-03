@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Trash2, X, FileText, Upload, List, PenLine, CheckCircle, Clock, AlertCircle, Globe, ChevronDown, ChevronUp, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
+import { safeRehypePlugins } from '../../utils/markdown';
 import {
   getKnowledge,
   createKnowledge,
@@ -66,7 +66,7 @@ function KnowledgeContentView({ content }: { content: string }) {
   if (looksLikeMarkdown(content)) {
     return (
       <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-800 prose-pre:border prose-pre:border-slate-700 prose-code:text-indigo-300 prose-th:text-slate-300 prose-td:text-slate-400">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={safeRehypePlugins}>
           {content}
         </ReactMarkdown>
       </div>

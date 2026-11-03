@@ -137,7 +137,7 @@ try:
     check("교체된 원문 되살아나지 않음", sql(f"SELECT status FROM rag_source_document WHERE id = {d9}") == "superseded"
           and doc_chunks(d9) == "0")
 finally:
-    s, _ = call("DELETE", f"/api/namespaces/{NS}", tok=tok)
+    s, _ = call("DELETE", f"/api/namespaces/{NS}?purge=true", tok=tok)   # 시험 컬렉션 — 내용째(살아 있는 내용이 있으면 409, 11/03)
     left = sql(f"SELECT (SELECT count(*) FROM ops_namespace WHERE name = '{NS}') || ',' || "
                f"(SELECT count(*) FROM rag_source_document d WHERE NOT EXISTS (SELECT 1 FROM ops_namespace n WHERE n.id = d.namespace_id))")
     print("cleanup", s, "남은 파트,고아 원문 =", left)

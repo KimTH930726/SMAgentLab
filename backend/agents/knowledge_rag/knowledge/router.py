@@ -4,7 +4,7 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from shared.embedding import embedding_service
 
 from core.dependencies import get_current_user, check_namespace_ownership, reject_knowledge_outside_system
@@ -23,6 +23,17 @@ router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
 
 # ─── ops_knowledge ─────────────────────────────────────────────────────────────
+
+async def _forget_answers(*namespaces: Optional[str]) -> None:
+    """지식을 바꾼 컬렉션(+ 상위 + 관련 정책 연결)의 답변 캐시를 비운다 — 안 비우면 고치거나 지운 지식의 옛 답이 TTL(30분) 동안 나갔다
+    (11/03 성능 리뷰 #2: 단건 등록·수정·삭제·중복 처리·묶음 삭제는 비우지 않았다. 벌크 적재·동기화·정정 승인만 비웠다).
+    실패해도 쓰기는 끝났으므로 요청은 성공 — 로그만(TTL로 사라진다)."""
+    try:
+        from shared.cache import invalidate_namespace_family
+        await invalidate_namespace_family(*[n for n in namespaces if n])
+    except Exception:
+        logger.warning("지식 변경 후 답변 캐시 비우기 실패: %s", namespaces, exc_info=True)
+
 
 async def _require_resource_namespace(namespace: Optional[str], user: dict, not_found_detail: str) -> str:
     """단건 리소스의 namespace를 찾아 소유권을 검증. namespace가 없으면(리소스 미존재) 404."""
@@ -167,6 +178,7 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
         # 제안(담당 아닌 곳)은 승인 전 — 담당 용어집에 바로 쓰지 않는다(리뷰 H1 10/23: 승인 대기 지식에서 뽑은 용어가 활성으로 들어갔다).
         # 묶음은 같은 이유로 전부 승인 대기면 후속 추출을 건너뛴다(service pending_total)
         _spawn(_run_auto_glossary(body.namespace, body.content, user, max_chars=20000))
+    await _forget_answers(body.namespace)
     return row
 
 
@@ -182,6 +194,7 @@ async def modify_knowledge(knowledge_id: int, body: KnowledgeUpdate, user: dict 
     )
     if not row:
         raise HTTPException(status_code=404, detail="Knowledge not found")
+    await _forget_answers(ns)
     return row
 
 
@@ -193,6 +206,7 @@ async def remove_knowledge(knowledge_id: int, user: dict = Depends(get_current_u
     deleted = await service.delete_knowledge(knowledge_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Knowledge not found")
+    await _forget_answers(ns)
 
 
 @router.get("/{knowledge_id}/duplicate-matches")
@@ -213,12 +227,14 @@ async def resolve_duplicate(knowledge_id: int, body: ResolveDuplicateRequest, us
     ns = await service.get_knowledge_namespace(knowledge_id)
     await _require_resource_namespace(ns, user, "Knowledge not found")
     try:
-        return await service.resolve_duplicate(
+        out = await service.resolve_duplicate(
             knowledge_id, body.action, body.target_id, body.content,
             reviewer_username=user["username"],
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    await _forget_answers(ns)   # 승인·병합·반려 모두 검색에 나오는 지식이 바뀐다
+    return out
 
 
 class FlagForReviewRequest(BaseModel):
@@ -252,16 +268,18 @@ class BulkUpdateRequest(BaseModel):
 class VectorSearchRequest(BaseModel):
     namespace: str
     query: str
-    top_k: int = 30
+    top_k: int = Field(default=30, ge=1, le=50)   # 상한 — 큰 값으로 컬렉션 통째 덤프·부하(11/03 보안 리뷰 #11)
 
 
 @router.post("/bulk-delete", status_code=200)
 async def bulk_remove_knowledge(body: BulkDeleteRequest, user: dict = Depends(get_current_user)):
     # 권한 검사(2026-10-02) — 예전엔 없어서 조회 전용·다른 파트 사용자도 아무 지식이나 지울 수 있었다.
     # 단건 삭제·bulk-update와 같은 기준: 대상 지식이 속한 파트마다 소유권 확인
-    for ns in await service.get_knowledge_namespaces(body.ids):
+    namespaces = await service.get_knowledge_namespaces(body.ids)
+    for ns in namespaces:
         await check_namespace_ownership(ns, user)
     deleted = await service.bulk_delete_knowledge(body.ids)
+    await _forget_answers(*namespaces)
     return {"deleted": deleted}
 
 

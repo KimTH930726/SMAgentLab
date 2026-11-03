@@ -61,7 +61,7 @@ BEGIN
     END IF;
     RETURN word;
 END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+$$ LANGUAGE plpgsql IMMUTABLE SET search_path = public;
 
 CREATE OR REPLACE FUNCTION policy_strip_ko(input text) RETURNS text AS $$
 DECLARE
@@ -76,6 +76,6 @@ BEGIN
     END LOOP;
     RETURN array_to_string(result, ' ');
 END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+$$ LANGUAGE plpgsql IMMUTABLE SET search_path = public;
 
 COMMIT;

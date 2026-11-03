@@ -40,7 +40,12 @@ class Settings(BaseSettings):
     inhouse_llm_client_id: str = ""        # OAuth client_id (시스템 공통)
     inhouse_llm_client_secret: str = ""    # OAuth client_secret (시스템 공통)
 
+    # 실행 환경 — "production"(docker-compose.prod.yml)이면 기본 시크릿·짧은 키·기본 비밀번호로는 기동하지 않고 /docs를 닫는다(11/03 보안 리뷰 #1)
+    app_env: str = "development"
     jwt_secret_key: str = "change-this-secret-key-in-production"
+    # URL·컨플 가져오기가 접속해도 되는 호스트(쉼표). 이 목록 밖은 막는다 — 서버가 대신 사내 내부 주소를 읽어 돌려주는 SSRF·
+    # 남이 정한 호스트로 PAT가 나가는 것 방지(11/03 보안 리뷰 #3·#4). 사내 위키를 더 쓰면 운영 .env에 더한다
+    url_import_allowed_hosts: str = "confl.sinc.co.kr"
     fernet_secret_key: str = ""
     admin_default_password: str = "1111"
 

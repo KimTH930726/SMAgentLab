@@ -1,6 +1,8 @@
 """OpsLens(구 Ops-Navigator) FastAPI 진입점 — DDD 구조."""
 import asyncpg
 import asyncio
+import json
+import os
 import logging
 from contextlib import asynccontextmanager
 
@@ -1041,7 +1043,7 @@ async def _migrate_ensure_ko_text_search_helpers(conn) -> None:
             END IF;
             RETURN word;
         END;
-        $BODY$ LANGUAGE plpgsql IMMUTABLE
+        $BODY$ LANGUAGE plpgsql IMMUTABLE SET search_path = public
     """)
     await conn.execute("""
         CREATE OR REPLACE FUNCTION policy_strip_ko(input text) RETURNS text AS $BODY$
@@ -1057,8 +1059,16 @@ async def _migrate_ensure_ko_text_search_helpers(conn) -> None:
             END LOOP;
             RETURN array_to_string(result, ' ');
         END;
-        $BODY$ LANGUAGE plpgsql IMMUTABLE
+        $BODY$ LANGUAGE plpgsql IMMUTABLE SET search_path = public
     """)
+    # #109(11/03 성능 리뷰 #1): 키워드 검색이 질문마다 행마다 policy_strip_ko를 다시 계산했다(홈페이지 시스템 1,425건에 2.5초 — 기존
+    # GIN은 원문 content에 걸려 이 식엔 안 쓰였다). 계산 결과를 생성 칸에 저장하고 GIN — 1.7ms. 함수 규칙(조사 목록)을 바꾸면
+    # 생성 칸은 저절로 다시 계산되지 않는다 → 그땐 `UPDATE rag_knowledge SET content = content`로 다시 채운다(같은 날 테스트가 일치 검사).
+    # 두 함수에 `SET search_path = public`을 고정한 이유: pg_dump 출력은 search_path를 비우고 COPY하는데, 생성 칸이 그때 함수를 다시
+    # 계산하며 안쪽 policy_strip_ko_word를 못 찾아 rag_knowledge 복원만 조용히 실패했다(11/03 리뷰 H1 — 백업→복원 한 바퀴로 확인).
+    await conn.execute("""ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS content_tsv tsvector
+                          GENERATED ALWAYS AS (to_tsvector('simple', policy_strip_ko(content))) STORED""")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_tsv_ko ON rag_knowledge USING gin (content_tsv)")
 
 
 async def _migrate_knowledge_heading_path(conn) -> None:
@@ -2349,73 +2359,128 @@ async def _cleanup_orphaned_ingestion_jobs(conn) -> None:
         logger.info("[Startup] 중단된 수집 작업의 스테이징 행 폐기: %s", staged)
 
 
+# 기동 마이그레이션 — 이 목록 순서대로 돈다(번호가 아니라 목록 순서, 의존은 주석). 단계마다 멱등.
+_MIGRATIONS = (
+    _migrate_core_tables,
+    _migrate_namespace_ids,
+    _migrate_system_tables,
+    _migrate_knowledge_ingestion,
+    _migrate_duplicate_review,
+    _migrate_knowledge_lifecycle,
+    _migrate_query_log_resolution,
+    _migrate_query_log_user,
+    _migrate_email_voc_tables,
+    _migrate_policy_tables,
+    _migrate_ref_data_tables,
+    _migrate_confluence_sync,
+    _migrate_drop_unused_knowledge_fields,
+    _migrate_remove_fewshot,
+    _migrate_ensure_ko_text_search_helpers,
+    _migrate_knowledge_heading_path,
+    _migrate_drop_dead_schema_2026_09_22,
+    _migrate_improvement_ledger,
+    _migrate_policy_risk_review,
+    _migrate_review_flags_to_ledger,
+    _migrate_query_status_without_feedback,
+    _migrate_drop_feedback_tables,
+    _migrate_reset_knowledge_weight,
+    _migrate_query_system_error,
+    _migrate_drop_orphans_2026_10_06,
+    _migrate_policy_source_missing,
+    _migrate_rename_opslens,
+    _migrate_query_gateway_refusal,
+    _migrate_glossary_synonym,
+    _migrate_drop_v1_eval_tables,            # #93 (옛 #66·#70 표 — v2.177 삭제)
+    _migrate_ingestion_quality,
+    _migrate_rename_unsorted_category,
+    _migrate_source_document,
+    _migrate_source_media,                   # #97 — 원장 그림 글·페이지 정보(원장 표 바로 뒤)
+    _migrate_llm_usage,
+    _migrate_prompt_cleanup,
+    _migrate_data_marker,
+    _migrate_policy_v0,
+    _migrate_org_domain,
+    _migrate_prompt_voc_type,
+    _migrate_voc_signature_prompt,
+    _migrate_policy_v0_revisions,
+    _migrate_namespace_owners,
+    _migrate_drop_knowledge_category,        # #84 — 옛 칸·표를 쓰는 마이그레이션들(#60·#72 등)보다 뒤
+    _migrate_ai_decision_ledger,             # #85
+    _migrate_eval_gate_run,                  # #86
+    _migrate_eval_gate_axis,                 # #96 — #86 바로 뒤(표가 있어야)
+    _migrate_eval_improvement,               # #87
+    _migrate_source_check_link,              # #92
+    _migrate_team_import,                    # #98 — 원장·조직 표 뒤
+    _migrate_experiment_runner,              # #99 — 후보·판정 표 뒤
+    _migrate_system_area,                    # #105 — 컬렉션 구분값(업무 / 시스템)
+    _migrate_retire_org_collections,         # #106 — 조직 컬렉션 걷어 내기(#105가 초안을 보관 자리로 옮긴 뒤)
+    _migrate_loose_namespace_orphans,        # #107 — 지운 컬렉션을 가리키는 FK 없는 id 칸 NULL(#106 뒤)
+    _cleanup_stale_generating_messages,
+    _cleanup_orphaned_ingestion_jobs,
+)
+_MIGRATION_LOCK = (7310, 0)   # advisory 키 두 개짜리 — 한 개짜리 공간은 지식 등록이 컬렉션 id로 쓴다(id 7310과 겹치지 않게, 재리뷰 L2)
+
+
 async def _run_migrations() -> None:
-    """기존 DB 호환용 스키마 마이그레이션 (멱등)."""
+    """기존 DB 호환용 스키마 마이그레이션 (멱등). 11/03 설계 리뷰 #3:
+    - 기동이 둘이면(재시작이 겹침·복제) 동시에 돌지 않게 advisory lock.
+    - 기동마다 원장 `schema_migration_run`에 한 줄 — 단계별 소요(ms)·실패한 단계·오류. 반입(v2.119 → v2.199처럼 수십 단계를 한 번에)이
+      중간에 멈췄을 때 어디서 멈췄는지 로그를 뒤지지 않고 표로 본다. 실패하면 기록 후 그대로 기동 중단(예전과 같음).
+    - 이미 돈 단계를 건너뛰지는 않는다: 일부 단계(함수 보장·정리)는 매번 다시 도는 게 전제다. 다시 볼 조건 — 기동 시간이 문제 되거나
+      1회성 데이터 변경 단계가 늘 때(그땐 원장에 "1회 완료" 표시를 두고 그 단계만 건너뛴다)."""
+    import time as _t
     async with get_conn() as conn:
-        await _migrate_core_tables(conn)
-        await _migrate_namespace_ids(conn)
-        await _migrate_system_tables(conn)
-        await _migrate_knowledge_ingestion(conn)
-        await _migrate_duplicate_review(conn)
-        await _migrate_knowledge_lifecycle(conn)
-        await _migrate_query_log_resolution(conn)
-        await _migrate_query_log_user(conn)
-        await _migrate_email_voc_tables(conn)
-        await _migrate_policy_tables(conn)
-        await _migrate_ref_data_tables(conn)
-        await _migrate_confluence_sync(conn)
-        await _migrate_drop_unused_knowledge_fields(conn)
-        await _migrate_remove_fewshot(conn)
-        await _migrate_ensure_ko_text_search_helpers(conn)
-        await _migrate_knowledge_heading_path(conn)
-        await _migrate_drop_dead_schema_2026_09_22(conn)
-        await _migrate_improvement_ledger(conn)
-        await _migrate_policy_risk_review(conn)
-        await _migrate_review_flags_to_ledger(conn)
-        await _migrate_query_status_without_feedback(conn)
-        await _migrate_drop_feedback_tables(conn)
-        await _migrate_reset_knowledge_weight(conn)
-        await _migrate_query_system_error(conn)
-        await _migrate_drop_orphans_2026_10_06(conn)
-        await _migrate_policy_source_missing(conn)
-        await _migrate_rename_opslens(conn)
-        await _migrate_query_gateway_refusal(conn)
-        await _migrate_glossary_synonym(conn)
-        await _migrate_drop_v1_eval_tables(conn)      # #93 (옛 #66·#70 표 — v2.177 삭제)
-        await _migrate_ingestion_quality(conn)
-        await _migrate_rename_unsorted_category(conn)
-        await _migrate_source_document(conn)
-        await _migrate_source_media(conn)              # #97 — 원장 그림 글·페이지 정보(원장 표 바로 뒤)
-        await _migrate_llm_usage(conn)
-        await _migrate_prompt_cleanup(conn)
-        await _migrate_data_marker(conn)
-        await _migrate_policy_v0(conn)
-        await _migrate_org_domain(conn)
-        await _migrate_prompt_voc_type(conn)
-        await _migrate_voc_signature_prompt(conn)
-        await _migrate_policy_v0_revisions(conn)
-        await _migrate_namespace_owners(conn)
-        await _migrate_drop_knowledge_category(conn)   # #84 — 옛 칸·표를 쓰는 마이그레이션들(#60·#72 등)보다 뒤
-        await _migrate_ai_decision_ledger(conn)        # #85
-        await _migrate_eval_gate_run(conn)             # #86
-        await _migrate_eval_gate_axis(conn)            # #96 — #86 바로 뒤(표가 있어야)
-        await _migrate_eval_improvement(conn)          # #87
-        await _migrate_source_check_link(conn)         # #92
-        await _migrate_team_import(conn)               # #98 — 원장·조직 표 뒤
-        await _migrate_experiment_runner(conn)         # #99 — 후보·판정 표 뒤
-        await _migrate_system_area(conn)               # #105 — 컬렉션 구분값(업무 / 시스템)
-        await _migrate_retire_org_collections(conn)    # #106 — 조직 컬렉션 걷어 내기(#105가 초안을 보관 자리로 옮긴 뒤)
-        await _migrate_loose_namespace_orphans(conn)   # #107 — 지운 컬렉션을 가리키는 FK 없는 id 칸 NULL(#106 뒤)
-        await _cleanup_stale_generating_messages(conn)
-        await _cleanup_orphaned_ingestion_jobs(conn)
+        await conn.execute("SELECT pg_advisory_lock($1, $2)", *_MIGRATION_LOCK)
+        try:
+            await conn.execute("""CREATE TABLE IF NOT EXISTS schema_migration_run (
+                id BIGSERIAL PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), app_version TEXT,
+                ok BOOLEAN, failed_step TEXT, error TEXT, steps JSONB, duration_ms INT)""")
+            run_id = await conn.fetchval("INSERT INTO schema_migration_run (app_version) VALUES ($1) RETURNING id",
+                                         os.environ.get("IMAGE_TAG") or None)
+            t_all, steps = _t.monotonic(), {}
+            for fn in _MIGRATIONS:
+                t0 = _t.monotonic()
+                try:
+                    await fn(conn)
+                except Exception as e:
+                    await conn.execute("UPDATE schema_migration_run SET ok = false, failed_step = $2, error = $3, steps = $4::jsonb, "
+                                       "duration_ms = $5 WHERE id = $1", run_id, fn.__name__, str(e)[:2000], json.dumps(steps),
+                                       int((_t.monotonic() - t_all) * 1000))
+                    logger.error("[migrate] %s에서 실패 — 기동 중단(원장 schema_migration_run #%s)", fn.__name__, run_id)
+                    raise
+                steps[fn.__name__] = int((_t.monotonic() - t0) * 1000)
+            await conn.execute("UPDATE schema_migration_run SET ok = true, steps = $2::jsonb, duration_ms = $3 WHERE id = $1",
+                               run_id, json.dumps(steps), int((_t.monotonic() - t_all) * 1000))
+            await conn.execute("DELETE FROM schema_migration_run WHERE id < $1 - 500", run_id)   # 최근 500번만
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock($1, $2)", *_MIGRATION_LOCK)
+
+
+_DEFAULT_JWT = "change-this-secret-key-in-production"
+
+
+def insecure_settings_reasons(s=settings) -> list[str]:
+    """운영에서 쓰면 안 되는 설정 — 기동 검사·테스트 공용. 값 자체는 돌려주지 않는다(로그·응답에 시크릿 노출 금지)."""
+    why = []
+    if s.jwt_secret_key == _DEFAULT_JWT or len(s.jwt_secret_key) < 32:
+        why.append("JWT_SECRET_KEY가 기본값이거나 32자 미만")
+    if s.admin_default_password == "1111" or len(s.admin_default_password) < 8:
+        why.append("ADMIN_DEFAULT_PASSWORD가 기본값이거나 8자 미만")
+    if ":ops1234@" in s.database_url:
+        why.append("DB 비밀번호(POSTGRES_PASSWORD)가 기본값")
+    return why
 
 
 def _warn_if_insecure_defaults() -> None:
-    """JWT 시크릿/관리자 기본 비밀번호가 플레이스홀더 그대로면 배포마다 매번 눈에 띄게
-    경고한다. 하드 실패(startup 중단)로는 안 만든다 — 지금 이 값 그대로 운영 중인
-    배포가 실제로 있어(2026-09-03 확인), 강제 종료하면 그 배포부터 멈춰버린다.
-    팀 규모 SSO 인프라 점검 중 발견 — 실제로 시크릿을 교체하는 건 활성 로그인 세션이
-    전부 무효화되고 관리자 비밀번호가 바뀌는 파급이 있어 별도로 조율해서 진행한다."""
+    """JWT 시크릿/관리자 기본 비밀번호가 플레이스홀더 그대로면 경고한다.
+    운영(APP_ENV=production, docker-compose.prod.yml)이면 기동을 멈춘다(11/03 보안 리뷰 #1 — 공개된 기본 키로 관리자 토큰을 위조할 수 있다).
+    예전엔 "이 값 그대로 운영 중인 배포가 있어(2026-09-03) 강제 종료하면 멈춘다"는 이유로 경고만 했다 — 그 전제는 지금도 맞으므로
+    개발 환경은 경고 그대로 두고, 운영 반입 절차(deployment-closed-network.md)에 시크릿 교체를 필수 단계로 넣었다.
+    시크릿을 바꾸면 로그인 세션이 한 번 모두 끊긴다(재로그인)."""
+    if settings.app_env == "production":
+        why = insecure_settings_reasons()
+        if why:
+            raise RuntimeError("[보안] 운영 기동 중단 — " + " · ".join(why) + " · 운영 .env에서 교체하세요(docs/operations/deployment-closed-network.md)")
     if settings.jwt_secret_key == "change-this-secret-key-in-production":
         logger.warning(
             "[보안] JWT_SECRET_KEY가 기본 플레이스홀더입니다 — 이 값을 아는 사람은 "
@@ -2493,7 +2558,10 @@ async def lifespan(_app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="OpsLens API", version="2.0.0", lifespan=lifespan)
+# 운영에선 API 문서(/docs·/redoc·/openapi.json)를 닫는다 — 공격 지도가 된다(11/03 보안 리뷰 #5)
+_PROD = settings.app_env == "production"
+app = FastAPI(title="OpsLens API", version="2.0.0", lifespan=lifespan,
+              docs_url=None if _PROD else "/docs", redoc_url=None if _PROD else "/redoc", openapi_url=None if _PROD else "/openapi.json")
 
 app.add_middleware(
     CORSMiddleware,
@@ -2567,13 +2635,44 @@ async def db_fk_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=409, content={"detail": "연결된 항목이 그 사이 바뀌거나 지워졌습니다. 새로고침 후 다시 시도하세요."})
 
 
+_HEALTH_LLM_TTL = 60.0                       # LLM 상태는 1분에 한 번만 실제로 확인(탭마다 30초 호출 — 사용자 수에 비례해 게이트웨이를 두드렸다)
+_health_llm: dict = {"at": 0.0, "ok": None}
+_health_lock = asyncio.Lock()   # 캐시가 만료된 순간 몰린 요청이 다 같이 LLM을 두드리지 않게
+
+
 @app.get("/health")
 async def health():
-    llm_ok = await get_llm_provider().health_check()
-    return {
-        "status": "ok",
-        "llm_provider": settings.llm_provider,
-        "llm": "connected" if llm_ok else "unavailable",
-    }
+    """생존·준비 확인 — DB(SELECT 1, 2초)와 LLM(1분 캐시, 2.5초 상한). 화면은 응답 ok만 보고 3초에 끊는다(api/client.ts).
+    예전엔 DB가 죽어도 ok였고 LLM 확인이 매번 게이트웨이 토큰을 새로 받았다(11/03 성능 리뷰 #3). DB가 안 되면 503."""
+    import time as _t
+
+    async def db_check() -> bool:
+        try:
+            async with get_conn() as conn:
+                await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=2.0)
+            return True
+        except Exception as e:   # noqa: BLE001
+            logger.warning("/health DB 확인 실패: %s", e)
+            return False
+
+    async def llm_check() -> None:
+        # LLM 상태 = 토큰을 받을 수 있나(캐시된 토큰이 살아 있으면 그것으로 "연결됨") — 실제 답 생성 장애는 질의 기록·LLM 사용량이 본다
+        if _t.monotonic() - _health_llm["at"] <= _HEALTH_LLM_TTL or _health_lock.locked():
+            return
+        async with _health_lock:
+            try:
+                _health_llm["ok"] = await asyncio.wait_for(get_llm_provider().health_check(), timeout=2.0)
+            except Exception as e:   # noqa: BLE001 — 시간 초과도 "연결 안 됨"
+                logger.warning("/health LLM 확인 실패: %s", e)
+                _health_llm["ok"] = False
+            _health_llm["at"] = _t.monotonic()
+
+    db_ok, _ = await asyncio.gather(db_check(), llm_check())   # 둘을 나란히 — 화면은 3초에 끊는다
+    body = {"status": "ok" if db_ok else "degraded", "db": "connected" if db_ok else "unavailable",
+            "llm_provider": settings.llm_provider, "llm": "connected" if _health_llm["ok"] else "unavailable"}
+    if not db_ok:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(body, status_code=503)
+    return body
 # TC test
 # main version

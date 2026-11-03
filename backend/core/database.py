@@ -59,6 +59,29 @@ LOOSE_NAMESPACE_REFS = (("rag_import_page", "final_namespace_id"), ("rag_import_
                         ("rag_import_batch", "default_namespace_id"), ("eval_question_candidate", "namespace_id"))
 
 
+# 컬렉션을 지우면 FK CASCADE로 같이 사라지는 "살아 있는 내용" — 하나라도 있으면 삭제를 막는다(11/03 설계 리뷰 #1: 관리자 한 번 클릭에
+# 원문·정책·용어가 복구 불가로 지워졌다). 이력(지운·폐기된 지식, 대화·질의 기록, 끝난 정정, VOC)은 막지 않는다 — 세면 한 번이라도 쓴
+# 컬렉션은 화면에서 영영 못 지웠다(재리뷰 M1: 질의 기록·대화는 지울 화면도 없다). (표, 화면 이름, 살아 있는 줄 조건) — 코드 상수
+NAMESPACE_CONTENT_TABLES = (
+    ("rag_knowledge", "운영 지식", "status IN ('active', 'pending_review')"),
+    ("rag_source_document", "원문", "status IN ('active', 'draft')"),
+    ("policy_item", "정책", "status <> 'deprecated' AND status <> 'rejected'"),
+    ("policy_doc_overview", "정책서 개요", "TRUE"), ("ref_table", "참고표", "TRUE"), ("ref_common_code", "공통코드", "TRUE"),
+    ("ref_db_column", "DB 컬럼", "TRUE"), ("rag_glossary", "용어", "TRUE"),
+    ("ops_improvement_item", "검토 중 정정", "status = 'pending'"),
+)
+
+
+async def namespace_content_counts(conn: asyncpg.Connection, ns_id: int) -> dict[str, int]:
+    """이 컬렉션의 살아 있는 내용 {화면 이름: 행 수}(0인 것 빼고) — 컬렉션 삭제 409 판정."""
+    out = {}
+    for t, label, live in NAMESPACE_CONTENT_TABLES:
+        n = await conn.fetchval(f"SELECT count(*) FROM {t} WHERE namespace_id = $1 AND {live}", ns_id)
+        if n:
+            out[label] = n
+    return out
+
+
 async def release_namespace_refs(conn: asyncpg.Connection, ns_id: int,
                                  loose: Sequence[tuple[str, str]] = LOOSE_NAMESPACE_REFS) -> None:
     """지울 컬렉션을 FK 없이 가리키는 것 정리(트랜잭션 안에서, 컬렉션 행 삭제 직전) — 컬렉션 삭제·#106 공용.

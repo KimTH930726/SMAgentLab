@@ -49,6 +49,7 @@ _db_mod.get_conn = MagicMock(return_value=_fake_conn)
 _db_mod.resolve_namespace_id = AsyncMock(return_value=1)
 _db_mod.resolve_knowledge_namespace_id = AsyncMock(return_value=1)   # 정책 컬렉션 거부는 test_knowledge_system_only.py가 실제 함수로
 _db_mod.release_namespace_refs = AsyncMock(return_value=None)
+_db_mod.namespace_content_counts = AsyncMock(return_value={})   # 내용 있으면 삭제 409 — 실제 SQL은 test_correction_routing.py
 _db_mod.namespace_scope_ids = AsyncMock(return_value=[1])   # 검색 범위(자신 + 직계 하위) — 기본은 하위 없음
 # 범위 규칙 SQL 조각은 순수 함수 — 가짜로 두면 모듈 상수 SQL(improvement·VOC)에 MagicMock 글자가 박힌다. 실제 파일에서 가져온다.
 import importlib.util as _ilu_db

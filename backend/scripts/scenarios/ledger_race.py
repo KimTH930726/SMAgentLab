@@ -81,6 +81,6 @@ try:
         ok += good
         print("PASS" if good else "FAIL", rnd, st, docs, "살아있는 조각의 원문 =", live, [e[:40] for e in errs])
 finally:
-    s, _ = call("DELETE", f"/api/namespaces/{NS}", tok=tok)
+    s, _ = call("DELETE", f"/api/namespaces/{NS}?purge=true", tok=tok)   # 시험 컬렉션 — 내용째(살아 있는 내용이 있으면 409, 11/03)
     print("cleanup", s, sql(f"SELECT count(*) FROM ops_namespace WHERE name = '{NS}'"))
 print(f"{ok}/3 PASS")

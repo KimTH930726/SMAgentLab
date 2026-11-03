@@ -71,8 +71,8 @@ class RestPatSource:
         if self.root_id or not self.title_hint:
             return
         import httpx
-        from agents.knowledge_rag.ingestion.web_crawler import FETCH_TIMEOUT
-        async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as cl:
+        from agents.knowledge_rag.ingestion.web_crawler import guarded_client
+        async with guarded_client(verify=False) as cl:
             r = await cl.get(f"{self.base_url}/rest/api/content", headers=self._h(),
                              params={"spaceKey": self.space_key, "title": self.title_hint, "type": "page", "limit": 1})
             r.raise_for_status()
@@ -83,10 +83,10 @@ class RestPatSource:
 
     async def changed_since(self, since: datetime) -> list[dict]:
         import httpx
-        from agents.knowledge_rag.ingestion.web_crawler import FETCH_TIMEOUT
+        from agents.knowledge_rag.ingestion.web_crawler import guarded_client
         out: list[dict] = []
         start = 0
-        async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as cl:
+        async with guarded_client(verify=False) as cl:
             while True:
                 r = await cl.get(f"{self.base_url}/rest/api/content/search", headers=self._h(),
                                  params={"cql": cql_changed(self.space_key, self.root_id, since), "limit": 100, "start": start,

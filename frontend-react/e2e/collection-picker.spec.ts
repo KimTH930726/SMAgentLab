@@ -11,6 +11,24 @@ const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 test.afterEach(cleanup);
 
+test('고르는 창은 시스템 탭이 먼저 · 정책 컬렉션을 보고 있을 때만 정책 탭으로 열린다', async ({ page }) => {
+  // 11/03 태훈 "메인은 시스템 — 거의 시스템에서 묻고, 그때 관련 정책까지 같이". 탭 순서 [시스템 | 정책]
+  await loginAdmin(page);
+  const chip = domainSelect(page);
+  const sys = psql(`SELECT name FROM ops_namespace WHERE kind = 'domain' AND area = 'system' ORDER BY id LIMIT 1`);
+  const pol = psql(`SELECT name FROM ops_namespace WHERE kind = 'domain' AND area = 'policy' ORDER BY id LIMIT 1`);
+  await chip.click();
+  await expect(page.getByRole('tab').first()).toHaveText('시스템');
+  await page.locator('#picker-tab-policy').click();
+  await page.getByTestId(`collection-card-${pol}`).click();
+  await chip.click();
+  await expect(page.locator('#picker-tab-policy')).toHaveAttribute('aria-selected', 'true');   // 정책을 보고 있으면 정책 탭
+  await page.locator('#picker-tab-system').click();
+  await page.getByTestId(`collection-card-${sys}`).click();
+  await chip.click();
+  await expect(page.locator('#picker-tab-system')).toHaveAttribute('aria-selected', 'true');
+});
+
 test('보는 컬렉션 — 테스트 컬렉션 숨김 · 고르면 칩 반영 · 새로고침 유지', async ({ page }) => {
   cleanup();
   psql(`INSERT INTO ops_namespace (name, description, kind) VALUES ('${HIDDEN}', 'e2e', 'policy_test')`);
@@ -25,6 +43,7 @@ test('보는 컬렉션 — 테스트 컬렉션 숨김 · 고르면 칩 반영 ·
   await chip.click();
   const title = page.getByRole('heading', { name: '어떤 컬렉션을 볼까요?' });
   await expect(title).toBeVisible();
+  await page.locator('#picker-tab-policy').click();   // 창은 시스템 탭으로 열린다(11/03 메인은 시스템) — 정책 카드를 보려면 정책 탭
   // 공용 Modal엔 dialog 역할이 없다 — 제목과 카드를 함께 품은 가장 안쪽 상자로 좁힌다
   const dialog = page.locator('div').filter({ has: title }).filter({ has: page.getByRole('button', { name: /지식 \d+|비어 있음/ }) }).last();
   await expect(dialog.getByRole('button', { name: new RegExp(`^${esc(HIDDEN)}`) })).toHaveCount(0);   // ① 숨김
@@ -53,6 +72,7 @@ test('고르는 창 — 카드 아래 "정정 대기 n"·"원문 확인 n" = DB(
   await loginAdmin(page);
   await domainSelect(page).click();
   await expect(page.getByRole('heading', { name: '어떤 컬렉션을 볼까요?' })).toBeVisible();
+  await page.locator('#picker-tab-policy').click();   // 창은 시스템 탭으로 열린다(11/03 메인은 시스템) — 정책 카드를 보려면 정책 탭
   for (const [name, corr, src] of rows) {
     const line = page.getByTestId(`collection-card-${name}`).getByTestId('pending-chips');
     if (Number(corr)) await expect(line).toContainText(`정정 대기 ${corr}`); else await expect(line).not.toContainText('정정 대기');
@@ -72,6 +92,7 @@ test('고르는 창 — "정정 대기 n ›"를 누르면 그 컬렉션을 고�
   const chip = domainSelect(page);
   if (corrNs) {
     await chip.click();
+  await page.locator('#picker-tab-policy').click();   // 창은 시스템 탭으로 열린다(11/03 메인은 시스템) — 정책 카드를 보려면 정책 탭
     await page.getByTestId(`collection-card-${corrNs}`).getByRole('button', { name: /정정 대기 \d+/ }).click();
     await expect(page).toHaveURL(/\/admin\/q\.corrections/);
     await expect(chip).toContainText(corrNs);
@@ -79,6 +100,7 @@ test('고르는 창 — "정정 대기 n ›"를 누르면 그 컬렉션을 고�
   }
   if (srcNs) {
     await chip.click();
+  await page.locator('#picker-tab-policy').click();   // 창은 시스템 탭으로 열린다(11/03 메인은 시스템) — 정책 카드를 보려면 정책 탭
     await page.getByTestId(`collection-card-${srcNs}`).getByRole('button', { name: /원문 확인 \d+/ }).click();
     await expect(page).toHaveURL(/\/admin\/k\.policy\?tab=checks/);
     await expect(chip).toContainText(srcNs);

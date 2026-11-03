@@ -28,6 +28,7 @@ import { stopChatStream, clearStreamState, useStreamStore } from '../../store/us
 import { getNamespaces, getNamespacesDetail } from '../../api/namespaces';
 import { byContentThenName, initialDomain, isPickableDomain, loadSelectedDomain, saveSelectedDomain } from '../../utils/selectedDomain';
 import { DomainPicker } from './DomainPicker';
+import { sortSystems } from './collectionCards';
 import { isSystemCollection } from '../../utils/collections';
 import { effectiveOwnerParts } from '../../utils/domainAccess';
 import type { NamespaceDetail } from '../../types';
@@ -97,7 +98,7 @@ export function Sidebar() {
     return () => clearInterval(interval);
   }, []);
 
-  // 보는 컬렉션 정하기(10/22, 컬렉션 설계 S4·S5) — 사용자마다 한 번: 기억한 값(아직 있으면) → 내 담당 첫 업무 → 고를 수 있는 첫 업무.
+  // 보는 컬렉션 정하기(10/22, 컬렉션 설계 S4·S5) — 사용자마다 한 번: 기억한 값(아직 있으면) → 내 담당 첫 컬렉션(시스템 먼저) → 첫 시스템.
   // 예전엔 저장이 없어 새로고침마다 내 담당으로 덮였다(직접 고른 값 유실). 고른 값이 사라지면(이름 변경·삭제) 다시 정한다.
   const initedUserRef = useRef<string | null | undefined>(undefined);
   const pendingNsRef = useRef<string | null>(null);   // 처음 선택으로 바꾸는 중인 값 — 반영되기 전 렌더에선 저장하지 않는다
@@ -110,8 +111,10 @@ export function Sidebar() {
     if (initedUserRef.current === uname && namespace && valid.includes(namespace)) { pendingNsRef.current = null; return; }   // 다른 곳이 먼저 바꿨으면 대기 값 버림(리뷰)
     initedUserRef.current = uname;
     const isMine = (n: NamespaceDetail) => effectiveOwnerParts(n).some((o) => o.name === user?.part);   // 고르는 창(DomainPicker)과 같은 기준(담당 N개)
-    const ordered = nsDetails.filter((n) => isPickableDomain(n) && !isSystemCollection(n)).sort(byContentThenName);   // 고르는 창 정책 탭과 같은 순서
-    const pickable = nsDetailsMissing ? valid : ordered.map((n) => n.name);   // 처음 선택은 정책 컬렉션(시스템은 기억한 값일 때만)
+    // 처음 선택은 시스템 먼저(11/03 태훈 "메인은 시스템 — 거의 시스템에서 묻고, 그때 관련 정책까지 같이"), 그다음 정책. 고르는 창과 같은 순서
+    const ordered = [...sortSystems(nsDetails.filter(isSystemCollection), user?.part),
+                     ...nsDetails.filter((n) => isPickableDomain(n) && !isSystemCollection(n)).sort(byContentThenName)];
+    const pickable = nsDetailsMissing ? valid : ordered.map((n) => n.name);
     const mine = user?.part ? ordered.filter(isMine).map((n) => n.name) : [];
     const next = initialDomain({ stored: loadSelectedDomain(user?.username, nsDetails), valid, pickable, mine });
     pendingNsRef.current = next && next !== namespace ? next : null;

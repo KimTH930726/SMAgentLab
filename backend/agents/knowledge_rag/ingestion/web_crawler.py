@@ -17,6 +17,34 @@ _CONFLUENCE_PATTERNS = re.compile(
 )
 
 FETCH_TIMEOUT = 30.0
+MAX_FETCH_BYTES = 20 * 1024 * 1024   # 한 응답 상한 — 큰 파일·끝없는 응답으로 메모리가 차지 않게
+
+
+def allowed_hosts() -> set[str]:
+    from core.config import settings
+    return {h.strip().lower() for h in (settings.url_import_allowed_hosts or "").split(",") if h.strip()}
+
+
+def check_fetch_url(url: str) -> None:
+    """가져오기 주소 검사 — http(s)이고 허용 호스트(url_import_allowed_hosts)일 때만. 아니면 ValueError(→ 400).
+    사설 IP를 막는 방식은 쓰지 않는다: 컨플이 사내 IP라 같이 막힌다. 대신 이름으로 허용(11/03 보안 리뷰 #3)."""
+    u = urlparse(url)
+    host = (u.hostname or "").lower()
+    if u.scheme not in ("http", "https") or not host:
+        raise ValueError("http(s) 주소만 가져올 수 있어요.")
+    if host not in allowed_hosts():
+        raise ValueError(f"허용되지 않은 주소예요({host}) — 가져올 수 있는 곳: {', '.join(sorted(allowed_hosts())) or '없음'} · 관리자가 설정에서 추가")
+
+
+async def _guard_request(request: httpx.Request) -> None:
+    check_fetch_url(str(request.url))   # 리다이렉트로 옮겨 가는 요청도 매번 다시 본다
+
+
+def guarded_client(**kw) -> httpx.AsyncClient:
+    """바깥 주소를 읽는 모든 곳이 쓰는 클라이언트 — 요청마다(리다이렉트 포함) 허용 호스트 검사. verify=False는 사내 인증서 때문에 그대로."""
+    kw.setdefault("follow_redirects", True)
+    kw.setdefault("timeout", FETCH_TIMEOUT)
+    return httpx.AsyncClient(event_hooks={"request": [_guard_request]}, **kw)
 
 # 트리 탐색 안전장치 (Confluence space 폭주 방지)
 TREE_DEFAULT_DEPTH = 3
@@ -88,14 +116,18 @@ async def _fetch_web(url: str) -> ParsedDocument:
     """일반 웹 페이지 → BeautifulSoup 텍스트 추출."""
     from bs4 import BeautifulSoup
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT) as client:
-        resp = client.build_request("GET", url, headers={"User-Agent": "SMAgentLab/1.0"})
+    async with guarded_client() as client:
         try:
-            r = await client.send(resp)
-            r.raise_for_status()
+            async with client.stream("GET", url, headers={"User-Agent": "SMAgentLab/1.0"}) as r:
+                r.raise_for_status()
+                body = bytearray()
+                async for part in r.aiter_bytes():   # 크기 상한을 넘으면 그 자리에서 멈춘다(다 받은 뒤 보지 않는다)
+                    body += part
+                    if len(body) > MAX_FETCH_BYTES:
+                        raise ValueError(f"페이지가 너무 커요(최대 {MAX_FETCH_BYTES // (1024 * 1024)}MB).")
+                html = body.decode(r.encoding or "utf-8", errors="replace")
         except (httpx.HTTPStatusError, httpx.RequestError) as e:
             raise _translate_httpx_error(e, service="웹") from e
-        html = r.text
 
     parsed = parse_web_html(html, url)
     logger.info("웹 크롤링 완료: %s (%d자)", url, len(parsed.raw_text))
@@ -116,7 +148,7 @@ async def _fetch_confluence(url: str, token: str) -> ParsedDocument:
     }
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
+        async with guarded_client(verify=False) as client:
             if page_id:
                 api_url = f"{base_url}/rest/api/content/{page_id}?expand=body.storage,title,space,version"
                 r = await client.get(api_url, headers=headers)
@@ -388,7 +420,7 @@ async def fetch_confluence_tree(
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
+        async with guarded_client(verify=False) as client:
             # 1) root page_id 확정
             if not page_id:
                 r = await client.get(
@@ -546,7 +578,7 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str, *, dia
     base = base_url.rstrip("/")
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as client:
+        async with guarded_client(verify=False) as client:
             r = await client.get(
                 f"{base}/rest/api/content/{page_id}",
                 headers=headers,

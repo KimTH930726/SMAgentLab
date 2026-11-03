@@ -218,3 +218,17 @@ def test_retarget_to_linked_evidence_moves_home_keeps_asked():
         return dict(row), ids
     row, ids = _run(scenario)
     assert row == {"namespace_id": ids["S"], "asked_namespace_id": ids["P"], "target_id": ids["kS"]}
+
+
+def test_delete_collection_with_content_is_blocked():
+    """살아 있는 내용이 있는 컬렉션은 지울 수 없다(11/03 설계 리뷰 #1 — CASCADE로 원문·정책·용어까지 사라졌다). 지운 지식·기록만 남았으면 지운다."""
+    async def scenario(conn, ids):
+        counts = await real_db.namespace_content_counts(conn, ids["S"])
+        await conn.execute("UPDATE rag_knowledge SET status = 'deleted' WHERE namespace_id = $1", ids["S"])
+        still = await real_db.namespace_content_counts(conn, ids["S"])
+        empty = await conn.fetchval("INSERT INTO ops_namespace (name, kind, area) VALUES ('시험_빈 시스템', 'domain', 'system') RETURNING id")
+        return counts, still, await real_db.namespace_content_counts(conn, empty)
+    counts, still, empty = _run(scenario)
+    assert counts == {"운영 지식": 1}
+    assert still == {}   # 지운 지식은 이력 — 막지 않는다(재리뷰 M1: 세면 한 번이라도 쓴 컬렉션은 화면에서 영영 못 지웠다)
+    assert empty == {}

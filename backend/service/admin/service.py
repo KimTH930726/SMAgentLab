@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from core.database import HIDDEN_KINDS, HIDDEN_KINDS_SQL, OWNER_MIRROR_SYNC_SQL, STAGING_NAME_PREFIX, get_conn, release_namespace_refs
+from core.database import HIDDEN_KINDS, HIDDEN_KINDS_SQL, OWNER_MIRROR_SYNC_SQL, STAGING_NAME_PREFIX, get_conn, namespace_content_counts, release_namespace_refs
 from service.policy.visibility import KIND_SOURCE_CHECK, searchable_sql
 
 logger = logging.getLogger(__name__)
@@ -251,8 +251,9 @@ async def rename_namespace(old_name: str, new_name: str) -> tuple[int, str]:
     return 200, ""
 
 
-async def delete_namespace(name: str) -> tuple[int, str]:
-    """(상태, 사유). 연결 표의 글자 키 연결도 같이 지운다."""
+async def delete_namespace(name: str, *, purge: bool = False) -> tuple[int, str]:
+    """(상태, 사유). 연결 표의 글자 키 연결도 같이 지운다.
+    purge = 살아 있는 내용이 있어도 지운다(관리자 API 전용 — 시험 시나리오 정리용, 화면엔 없음). 이력은 늘 같이 지워진다."""
     async with get_conn() as conn:
         async with conn.transaction():
             # 상위 이름은 캐시 비우기용 — 지운 뒤엔 DB에서 못 찾는다
@@ -267,6 +268,10 @@ async def delete_namespace(name: str) -> tuple[int, str]:
             children = await conn.fetchval("SELECT COUNT(*) FROM ops_namespace WHERE parent_id = $1", row["id"])
             if children:
                 return 409, f"하위 영역 {children}개를 먼저 옮기거나 지우세요."
+            # 내용이 있으면 막는다 — FK CASCADE라 지우면 원문·대화·정정 이력까지 복구 불가로 사라졌다(11/03 설계 리뷰 #1, 팀 삭제와 같은 규칙)
+            held = {} if purge else await namespace_content_counts(conn, row["id"])
+            if held:
+                return 409, "내용이 있어 지울 수 없어요 — " + " · ".join(f"{k} {v:,}" for k, v in held.items()) + " · 먼저 옮기거나 지우세요."
             # FK 없이 가리키는 것 — 연결 표(글자 키, 남으면 정책 범위가 조용히 "전부"로, 리뷰 L6) · 적재 기록·배치 기본 위치·골든셋 후보의
             # id 칸(지운 id를 가리키던 것 161건 발견, 11/03 키 정리 5단계) · 용어 수집 상태 설정 줄
             await release_namespace_refs(conn, row["id"])

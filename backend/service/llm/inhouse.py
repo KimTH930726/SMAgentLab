@@ -435,9 +435,10 @@ class InHouseLLMProvider(LLMProvider):
                        duration_ms=int((time.monotonic() - t0) * 1000), ok=ok)
 
     async def health_check(self) -> bool:
-        """시스템 자격증명으로 토큰 발급 시도. 4xx 응답도 게이트웨이 도달 가능 의미로 간주."""
+        """시스템 자격증명으로 토큰을 받아 본다(캐시된 토큰이 있으면 그것 — 11/03 성능 리뷰 #3: 화면이 30초마다 /health를 불러
+        매번 새로 발급했다, 로그 5,299회). 4xx 응답도 게이트웨이 도달 가능 의미로 간주."""
         try:
-            await self._fetch_access_token(self._sys_client_id, self._sys_client_secret)
+            await self._get_access_token(self._sys_client_id, self._sys_client_secret)
             return True
         except httpx.HTTPStatusError as e:
             logger.warning("health_check 토큰 발급 4xx: %s", e.response.status_code)

@@ -126,6 +126,6 @@ try:
           sql(f"SELECT string_agg(status, ',' ORDER BY id) FROM rag_source_document WHERE id IN ({d1},{d2})") ==
           ("superseded,active" if d1 != d2 else "active"))
 finally:
-    s, _ = call("DELETE", f"/api/namespaces/{NS}", tok=tok)
+    s, _ = call("DELETE", f"/api/namespaces/{NS}?purge=true", tok=tok)   # 시험 컬렉션 — 내용째(살아 있는 내용이 있으면 409, 11/03)
     print("cleanup", s, "남은 파트 =", sql(f"SELECT count(*) FROM ops_namespace WHERE name = '{NS}'"))
 print(f"{sum(results)}/{len(results)} PASS")

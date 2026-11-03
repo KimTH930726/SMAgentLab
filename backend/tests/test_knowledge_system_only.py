@@ -100,3 +100,46 @@ async def test_release_refs_only_existing_columns():
     await database.release_namespace_refs(conn, 7, [("rag_import_batch", "default_namespace_id")])
     sqls = " ".join(c.args[0] for c in conn.execute.await_args_list)
     assert "rag_import_page" not in sqls and "default_namespace_id = NULL" in sqls
+
+
+# ── URL 가져오기 허용 호스트(11/03 보안 리뷰 #3 SSRF · #4 PAT 유출) ──────────────────────────────────────────
+crawler = _load("_sysonly_real_crawler", "agents/knowledge_rag/ingestion/web_crawler.py")
+
+
+@pytest.mark.parametrize("url", [
+    "http://backend:8000/docs", "http://127.0.0.1:5432", "http://host.docker.internal:11434/api/tags",
+    "http://169.254.169.254/latest/meta-data", "file:///etc/passwd", "ftp://confl.sinc.co.kr/x",
+    "http://공격서버/display/X", "https://confl.sinc.co.kr.evil.com/display/X", "https://user@evil.com/display/X",
+])
+def test_fetch_url_blocks_outside_allowlist(url):
+    with patch.object(crawler, "allowed_hosts", return_value={"confl.sinc.co.kr"}), pytest.raises(ValueError):
+        crawler.check_fetch_url(url)
+
+
+@pytest.mark.parametrize("url", ["https://confl.sinc.co.kr/display/app", "http://CONFL.sinc.co.kr/pages/viewpage.action?pageId=1"])
+def test_fetch_url_allows_listed_host(url):
+    with patch.object(crawler, "allowed_hosts", return_value={"confl.sinc.co.kr"}):
+        crawler.check_fetch_url(url)
+
+
+@pytest.mark.asyncio
+async def test_redirect_to_internal_host_is_blocked():
+    """허용 호스트가 내부 주소로 리다이렉트해도 다음 요청에서 막힌다(요청마다 검사)."""
+    import httpx
+
+    def handler(request):
+        if request.url.host == "confl.sinc.co.kr":
+            return httpx.Response(302, headers={"location": "http://backend:8000/docs"})
+        return httpx.Response(200, text="내부 문서")
+    with patch.object(crawler, "allowed_hosts", return_value={"confl.sinc.co.kr"}):
+        async with crawler.guarded_client(transport=httpx.MockTransport(handler)) as c:
+            with pytest.raises(ValueError, match="허용되지 않은"):
+                await c.get("https://confl.sinc.co.kr/display/app")
+
+
+def test_every_fetch_client_is_guarded():
+    """수집 코드에서 httpx.AsyncClient를 직접 만들지 않는다 — guarded_client만(새 경로가 검사를 빠뜨리지 않게)."""
+    for rel in ("agents/knowledge_rag/ingestion/web_crawler.py", "agents/knowledge_rag/ingestion/confluence_sync.py",
+                "agents/knowledge_rag/ingestion/team_import.py"):
+        src = (ROOT / rel).read_text(encoding="utf-8")
+        assert src.count("httpx.AsyncClient(") == (1 if rel.endswith("web_crawler.py") else 0), rel

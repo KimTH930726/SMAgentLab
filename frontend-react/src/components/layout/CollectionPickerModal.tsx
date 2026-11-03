@@ -31,7 +31,7 @@ export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose,
   /** 'system' = 시스템 탭만(운영 지식 넣을 곳 고르기 — 정책 컬렉션엔 넣지 않는다) */
   only?: 'system';
 }) {
-  const [tab, setTab] = useState<Tab>('policy');
+  const [tab, setTab] = useState<Tab>('system');   // 메인은 시스템(11/03) — 정책 컬렉션을 보고 있을 때만 정책 탭으로 연다
   const { groups, myTeam } = useMemo(() => {
     const teamOf = new Map(parts.map((p) => [p.name, p.team ?? null]));
     const myTeam = userPart ? teamOf.get(userPart) ?? null : null;
@@ -56,10 +56,11 @@ export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose,
   const systems = useMemo(() => sortSystems(details.filter(isSystemCollection), userPart), [details, userPart]);
   const isMineSystem = (d: NamespaceDetail) => !!userPart && effectiveOwnerParts(d).some((o) => o.name === userPart);
 
-  // 열 때: 지금 고른 게 시스템이면 시스템 탭으로
+  // 열 때: 지금 고른 게 정책 컬렉션일 때만 정책 탭, 그 밖엔 시스템 탭
   useEffect(() => {
     if (!isOpen) return;
-    setTab(only === 'system' || isSystemCollection(details.find((d) => d.name === value)) ? 'system' : 'policy');
+    const current = details.find((d) => d.name === value);
+    setTab(only === 'system' || !current || isSystemCollection(current) ? 'system' : 'policy');
   }, [isOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const choose = (name: string) => {
@@ -117,8 +118,8 @@ export function CollectionPickerModal({ isOpen, onClose, title, value, onChoose,
       <div className="space-y-4">
         {!only && (
           <div role="tablist" aria-label="컬렉션 종류" className="flex gap-1 border-b border-slate-700">
-            {tabBtn('policy', '정책')}
             {tabBtn('system', '시스템')}
+            {tabBtn('policy', '정책')}
           </div>
         )}
         {tab === 'policy' ? (

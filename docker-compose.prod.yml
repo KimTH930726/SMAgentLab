@@ -17,9 +17,11 @@
 # ─────────────────────────────────────────────────────────────────
 services:
   backend:
-    image: smagentlab-backend:${IMAGE_TAG:-latest}
+    image: smagentlab-backend:${IMAGE_TAG:?운영 .env에 IMAGE_TAG(반입한 버전)를 적으세요}
     pull_policy: never
+    environment:
+      APP_ENV: production   # 기본 시크릿·비밀번호면 기동 중단 · /docs 닫힘(backend/main.py _warn_if_insecure_defaults)
 
   frontend:
-    image: smagentlab-frontend:${IMAGE_TAG:-latest}
+    image: smagentlab-frontend:${IMAGE_TAG:?운영 .env에 IMAGE_TAG(반입한 버전)를 적으세요}
     pull_policy: never

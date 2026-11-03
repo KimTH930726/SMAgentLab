@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import { Bot, User, ChevronDown, ChevronUp, CheckCircle, Database, BarChart2, Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
+import { safeRehypePlugins } from '../../utils/markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Badge } from '../ui/Badge';
@@ -519,7 +519,7 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
                     message.isStreaming && 'typing-cursor',
                   )}
                 >
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={safeRehypePlugins}>
                     {message.content}
                   </ReactMarkdown>
                   {message.clarify && !message.isStreaming && (

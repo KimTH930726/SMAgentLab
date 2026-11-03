@@ -116,9 +116,9 @@ async def update_supports(name: str, body: SupportsUpdate, user: dict = Depends(
 
 
 @router.delete("/api/namespaces/{name}", status_code=204)
-async def delete_namespace_endpoint(name: str, user: dict = Depends(get_current_admin)):
+async def delete_namespace_endpoint(name: str, purge: bool = QueryParam(default=False), user: dict = Depends(get_current_admin)):
     # 업무 영역 삭제는 관리자만 — 하위 데이터(지식·정책·용어…)가 통째로 지워진다
-    status_, detail = await service.delete_namespace(name)
+    status_, detail = await service.delete_namespace(name, purge=purge)   # purge = 내용째 지우기(시험 정리용)
     if status_ != 204:
         raise HTTPException(status_code=status_, detail=detail)
 

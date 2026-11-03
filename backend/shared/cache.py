@@ -205,17 +205,32 @@ async def invalidate_namespace(namespace: str) -> int:
         return 0
 
 
+# 관련 정책 연결(ops_link 'supports', 채팅 linked)로 이어진 컬렉션 이름 — 시스템 지식은 관련 정책에서 물은 답에도, 정책은 그 시스템에서
+# 물은 답에도 든다. core/database.linked_scope_ids와 같은 연결(양방향, 하위 정책은 상위의 연결도). $1 = 이름 목록
+_LINKED_NAMES_SQL = """
+    WITH linked AS (
+        SELECT DISTINCT o.id, o.name FROM ops_namespace me
+        JOIN ops_link l ON l.relation = 'supports' AND l.status = 'active' AND l.from_type = 'domain' AND l.to_type = 'domain'
+             AND (l.to_key IN (me.id::text, me.parent_id::text) OR l.from_key = me.id::text)
+        JOIN ops_namespace o ON o.id::text = CASE WHEN l.from_key = me.id::text THEN l.to_key ELSE l.from_key END
+        WHERE me.name = ANY($1::text[]))
+    -- 하위 정책은 상위의 연결을 물려받아 검색한다(linked_scope_ids) — 그 하위에서 물은 답도 비운다(재리뷰 M2)
+    SELECT name FROM linked UNION SELECT c.name FROM ops_namespace c JOIN linked l ON c.parent_id = l.id"""
+
+
 async def invalidate_namespace_family(*names: str) -> int:
-    """쓰기 경로 공용 — 받은 영역 + 그 상위 영역 이름의 캐시를 비운다(트리, category-removal-design §2-6).
+    """쓰기 경로 공용 — 받은 영역 + 그 상위 영역 + 관련 정책으로 연결된 컬렉션 이름의 캐시를 비운다(트리 category-removal-design §2-6,
+    연결 11/03 — 채팅 기본 범위가 linked라 시스템 지식을 고치면 관련 정책에서 물은 옛 답이 남았다, 성능 리뷰 #2).
     캐시 키는 고른 영역 이름이고 상위를 고르면 하위 지식까지 검색하므로, 하위에 쓰면 상위 이름 캐시도 옛 답이 된다.
-    상위를 못 찾으면(DB 오류) 받은 이름만이라도 비운다 — 로그는 남긴다."""
+    상위·연결을 못 찾으면(DB 오류) 받은 이름만이라도 비운다 — 로그는 남긴다."""
     from core.database import get_conn, namespace_names_with_parents
     targets = [n for n in names if n]
     try:
         async with get_conn() as conn:
-            targets = await namespace_names_with_parents(conn, targets)
+            linked = [r["name"] for r in await conn.fetch(_LINKED_NAMES_SQL, targets)]
+            targets = await namespace_names_with_parents(conn, list(dict.fromkeys(targets + linked)))
     except Exception as e:
-        logger.warning("[Cache] 상위 영역 조회 실패 — 받은 이름만 비움: %s", e)
+        logger.warning("[Cache] 상위·연결 영역 조회 실패 — 받은 이름만 비움: %s", e)
     total = 0
     for n in targets:
         total += await invalidate_namespace(n)

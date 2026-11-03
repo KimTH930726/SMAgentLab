@@ -304,11 +304,11 @@ async def fetch_space_pages(base_url: str, space_key: str, token: str, max_pages
     """공간 주소(/display/KEY) — 공간의 모든 페이지(조상 포함). (공간 이름, 트리, 잘림 여부). GIFT처럼 최상위가 여럿인 공간용.
     다음 쪽은 응답의 _links.next로 넘긴다(서버가 한 쪽 크기를 더 작게 잘라도 조용히 끊기지 않게, 리뷰 10/29)."""
     import httpx
-    from agents.knowledge_rag.ingestion.web_crawler import FETCH_TIMEOUT
+    from agents.knowledge_rag.ingestion.web_crawler import guarded_client
     h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     pages: list[dict] = []
     start = 0
-    async with httpx.AsyncClient(follow_redirects=True, timeout=FETCH_TIMEOUT, verify=False) as cl:
+    async with guarded_client(verify=False) as cl:
         sp = await cl.get(f"{base_url}/rest/api/space/{space_key}", headers=h)
         sp.raise_for_status()
         while len(pages) <= max_pages:

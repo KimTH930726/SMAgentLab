@@ -345,7 +345,7 @@ async def search_knowledge(
                 -- 검색에 이미 같은 함수로 적용해 검증된 패턴(89문항 실측 hit@10 75.3%→79.8%,
                 -- init/06-policy-strip-ko.sql) 재사용 — 함수 자체는 정책 전용이 아닌 범용
                 -- 조사 제거기라 그대로 쓸 수 있다.
-                SELECT k.id, ts_rank(to_tsvector('simple', policy_strip_ko(k.content)), q.tsq) AS k_score
+                SELECT k.id, ts_rank(k.content_tsv, q.tsq) AS k_score   -- content_tsv = to_tsvector('simple', policy_strip_ko(content)) 저장 칸(#109)
                 FROM rag_knowledge k
                 CROSS JOIN LATERAL (
                     -- quote_literal로 각 lexeme를 감싸야 한다 — 감싸지 않으면 lexeme
@@ -359,7 +359,7 @@ async def search_knowledge(
                 ) q
                 WHERE k.namespace_id = ANY($2::int[])
                   AND (k.status IS NULL OR k.status = 'active')
-                  AND to_tsvector('simple', policy_strip_ko(k.content)) @@ q.tsq
+                  AND k.content_tsv @@ q.tsq
             )
             SELECT k.id, n.name AS namespace,
                    k.content, k.base_weight, k.heading_path,

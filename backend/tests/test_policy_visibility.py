@@ -210,5 +210,6 @@ def test_migration_skips_unique_index_when_duplicates(caplog):
 
 def test_migration_registered_after_79():
     src = (_b / "main.py").read_text(encoding="utf-8")
-    run = src[src.index("async def _run_migrations"):]
-    assert run.index("_migrate_prompt_voc_type(conn)") < run.index("_migrate_policy_v0_revisions(conn)")
+    run = src[src.index("_MIGRATIONS = ("):]   # 기동 순서 = 이 목록 순서(11/03)
+    run = run[:run.index("\n)")]
+    assert run.index("_migrate_prompt_voc_type,") < run.index("_migrate_policy_v0_revisions,")
