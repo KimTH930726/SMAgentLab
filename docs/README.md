@@ -67,6 +67,7 @@
 |---|---|
 | [deployment-closed-network.md](operations/deployment-closed-network.md) | 폐쇄망 배포·업그레이드·롤백 |
 | [development-conventions.md](operations/development-conventions.md) | 개발 규율(실사고 사례 포함) |
+| [open-token-budget.md](operations/open-token-budget.md) | 오픈 토큰 예산 — 채팅 1건 입력 6.2k·출력 0.2k 토큰(예산 뒤), 하루 사용량 표(추정, 11/03) |
 | [incidents/](operations/incidents/) | 장애 보고서 |
 
 ## archive — 끝난 것(이력)

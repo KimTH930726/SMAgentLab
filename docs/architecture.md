@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.205)
+# OpsLens 시스템 아키텍처 (v2.206)
 
 ## 개요
 
@@ -12,6 +12,15 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.206 (2026-11-03 밤, dev_0): **관리 화면 가시성 — 감사 로그 카드 · 피드백 상세 창 · 정책 컬렉션 메뉴 정리 + 중복 의심 판단 기록**.
+  정책 컬렉션은 운영 지식 메뉴·승인 대기 카드 없음([보기 →] = 정책서), 컬렉션 종류 확인 전엔 주소를 바로잡지 않음. 기법 대장 상세 = 모달.
+  AI 감사 로그: 종류별 카드(판단 · 번복 · 비율, 누르면 거르기) + 개선 후보 추천 카드 + 날짜별 카드(KST, `GET /api/eval/overrides` daily ·
+  `decisions/log?day=`) + 종류 드롭다운. 새 판단 종류 `duplicate_check` — 승인 대기 처리(그대로 저장 = 번복 · 덮어쓰기 · 반려)를
+  `ops_ai_decision`에 한 줄(매칭 없는 대기·이미 처리한 건은 안 남김, 실패는 저장점으로 처리 안 막음) · 기법 `duplicate_review`.
+  승인 대기 목록 API에 `max_similarity`(높은 순). 사용자 피드백: 목록은 상태만, 누르면 상세 창에서 상태 고르기. 정책서 메뉴·원문 확인 탭에 처리 전 수.
+  trustkit `answer/citation.py`(인용 강제 — 번호 없는 본문 줄 기계적 제거, LLM 0) + 측정 옵션 `eval_knowledge_answers --cite`·`--rejudge`.
+  설계: 청크 구조화 + 중복 판정 2단 + 완전 일치 거부(docs/domains/knowledge/chunk-structure-dedupe-design.md, 구현은 승인 뒤).
+  승인 대기 좌우 차이 화면은 별도 브랜치 `review-diff-ui`(모양 검수 대기). DB 칸 변경 없음.
 - v2.205 (2026-11-03, dev_0): **관리자 화면을 보는 사람별로 — 컬렉션 관리(시니어) / 플랫폼 관리(관리자)** (설계 docs/platform/admin-audience-split-design.md 2·3단계).
   메뉴 왼쪽 위 범위 전환(플랫폼 관리는 관리자만). 컬렉션 관리: 홈 · 운영 지식 · 정책서 · 정정 요청 · 용어집 · 통계 · 소스 연결 · 컬렉션 정보(보는 컬렉션 한 줄, 읽기).
   플랫폼 관리: 홈 · 평가 게이트 · AI 감사 로그 · 사용자 피드백 · 컬렉션 · 조직·권한 · VOC 이메일 · 설정(캐시는 설정 탭). 화면 내용은 그대로 자리만, 옛 주소 `/admin/<id>` 유지,
