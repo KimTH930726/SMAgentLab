@@ -137,12 +137,19 @@ async def main() -> int:
     ap.add_argument("--scope", choices=["linked", "similar", "none"], default=None, help="지식 검색 범위 — 안 주면 채팅 기본(linked, 11/02), none: 고른 컬렉션만, similar: +질문과 가까운 컬렉션 2개")
     ap.add_argument("--context-budget", type=int, default=None, help="문맥 예산(글자) — 안 주면 채팅 기본(1만 2천, 11/02), 0 = 끔")
     ap.add_argument("--verify", action="store_true", help="답 뒤 근거 확인 — 초안의 주장이 문맥에 없으면 빼거나 '못 찾음'으로")
+    # 인용 강제 실험(11/03 work-os 2회차) — 프롬프트에 [#번호] 규칙 + 번호 없는 본문 줄 기계적 제거(추가 LLM 호출 없음, trustkit.answer.citation)
+    ap.add_argument("--cite", action="store_true", help="인용 강제 — 문장마다 [#문서번호], 번호 없는 본문 줄은 뺀다(LLM 추가 호출 없음)")
+    # 채점 흔들림(11/03) — 같은 답 파일을 같은 채점기로 한 번 더(답 생성은 안 함). 문항·정답 기준은 --set에서 다시 읽는다
+    ap.add_argument("--rejudge", default="", help="이 답 파일의 답을 다시 채점만 해서 --out에 쓴다(채점 흔들림 측정)")
     a = ap.parse_args()
+    if a.cite and a.verify:   # 둘 다 verify 칸을 쓴다 — 같이 쓰면 한쪽 결과가 사라진다(리뷰 L4)
+        print("입력 오류: --cite와 --verify는 같이 쓰지 않는다")
+        return 2
     from agents.knowledge_rag.agent import effective_scope_label
     await init_pool()   # 먼저 — 기법 스위치를 읽어야 아래 범위·예산 라벨이 실제 채팅 설정이 된다(11/03)
     # 범위·예산은 실제 쓴 값으로 항상 — 채팅 기본이 바뀌면(11/02 linked·1만2천) 옛 파일(None)과 이어 하기가 막힌다(리뷰 M1)
     variant = ",".join(x for x in (f"policy_top_k={a.policy_top_k}" if a.policy_top_k is not None else "", "no_expand" if a.no_expand else "",
-                                   "verify" if a.verify else "", effective_scope_label(a.scope, a.context_budget)) if x)
+                                   "verify" if a.verify else "", "cite" if a.cite else "", effective_scope_label(a.scope, a.context_budget)) if x)
     if a.no_expand:   # 에이전트가 모듈 속성으로 부르므로 여기서 바꾸면 이 프로세스(측정)만 바뀐다
         async def _no_expand(*_a, **_k):
             return []
@@ -152,6 +159,13 @@ async def main() -> int:
     prev = _read_rows(out) if out.exists() else []
     done = {(r["qid"], r["rep"]) for r in prev}
     prompt_name = Path(a.prompt_file).name if a.prompt_file else None   # 이름만(eval_answers의 "prompt"와 같은 키·모양, 로컬 경로는 안 남김)
+    if a.rejudge:   # 다시 채점은 원본 줄의 프롬프트·변형을 그대로 갖는다 — 기준을 원본 파일로(이어 하기가 막히던 것, 리뷰 M1)
+        _src = _read_rows(Path(a.rejudge))
+        prompt_name = next(iter({r.get("prompt") for r in _src}), None)
+        variant = next(iter({r.get("variant") for r in _src}), variant)
+        if len({(r.get("prompt"), r.get("variant")) for r in _src}) > 1:
+            print(f"입력 오류: {Path(a.rejudge).name} 안에 프롬프트·변형이 섞여 있음 — 다시 채점 비교가 무의미")
+            return 2
     mixed = {r.get("prompt") for r in prev} - {prompt_name} | ({r.get("variant") for r in prev} - {variant})
     if mixed:   # 이어 하기에서 다른 프롬프트 답이 섞이면 비교가 무의미 — 막는다(리뷰 10/30 L3)
         print(f"입력 오류: {out.name}에 다른 프롬프트로 만든 답이 있음({sorted(map(str, mixed))}) — 새 --out 파일로")
@@ -167,13 +181,16 @@ async def main() -> int:
             sorted({i for it in items for i in it["gold_ids"]}))}
     d = retrieval.get_search_defaults()
     sp = Path(a.prompt_file).read_text(encoding="utf-8") if a.prompt_file else await resolve_system_prompt()
+    if a.cite:
+        from trustkit.answer.citation import CITE_RULE_KO, strip_uncited
+        sp = sp.rstrip() + "\n" + CITE_RULE_KO
     if a.llm == "local":
         from eval_answers import local_llm   # scripts/가 실행 경로라 바로 import된다
         llm = await local_llm()
     else:
         llm = get_llm_provider()
     today = datetime.date.today().isoformat()
-    todo = [it for it in items if any((it["qid"], k) not in done for k in range(a.repeat))]
+    todo = [] if a.rejudge else [it for it in items if any((it["qid"], k) not in done for k in range(a.repeat))]
     print(f"문항 {len(items)}개 중 남은 {len(todo)}개 (이어하기 {len(done)}행)", flush=True)
     try:
         async with httpx.AsyncClient(timeout=180) as client:
@@ -181,6 +198,21 @@ async def main() -> int:
                 model = os.environ.get("JUDGE_LLM_MODEL") or (await client.get(f"{URL}/models")).json()["data"][0]["id"]
             except Exception as e:  # noqa: BLE001
                 raise JudgeUnavailable(f"채점 모델 목록 조회 실패({type(e).__name__})") from e
+            if a.rejudge:   # 답은 그대로, 채점만 다시 — 규칙 판정(거절·오류·판정불가)은 같은 규칙으로
+                by_qid = {it["qid"]: it for it in items}
+                src = [r for r in _src if (r["qid"], r["rep"]) not in done]
+                missing = sum(1 for r in src if r["qid"] not in by_qid)
+                print(f"다시 채점 {len(src)}줄" + (f" · ⚠ 세트에 없는 문항 {missing}줄(판정불가로 빠짐 — --set 확인)" if missing else ""), flush=True)
+                # 기준(ref)은 지금 DB의 활성 조각 — 원본 채점 뒤 재적재가 있었으면 흔들림에 기준 변화가 섞인다(비교는 양쪽 다 채점된 줄로, 리뷰 L1)
+                for n, r in enumerate(src, 1):
+                    it = by_qid.get(r["qid"])
+                    ref = (it.get("ref") or "\n\n".join(refs.get(i, "") for i in it["gold_ids"])) if it else ""
+                    j = rule_label(r.get("error"), r.get("answer") or "", ref) or await judge(client, model, r["question"], ref, r.get("answer") or "")
+                    with out.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps({**r, "judge": j, "judge_rubric": RUBRIC, "judged_on": today, "judge_model": model,
+                                            "rejudged_from": Path(a.rejudge).name}, ensure_ascii=False) + "\n")
+                    if n % 40 == 0:
+                        print(f"  {n}/{len(src)}", flush=True)
             for n, it in enumerate(todo, 1):
                 vec = await embedding_service.embed(it["question"])
                 kw = dict(top_k=int(d["default_top_k"]), w_vector=d["default_w_vector"], w_keyword=d["default_w_keyword"], **scope_overrides(a.scope, a.context_budget))
@@ -211,6 +243,9 @@ async def main() -> int:
                             ans, err = "", type(e).__name__
                         if a.verify and not err and NO_KNOWLEDGE not in ans:
                             ans, verdict = await _verify(llm, cc.llm_context, it["question"], ans)
+                        if a.cite and not err and NO_KNOWLEDGE not in ans:
+                            st = strip_uncited(ans)
+                            ans, verdict = st.answer, f"cite:{st.status}:{st.removed}"
                     j = rule_label(err, ans, ref) or await judge(client, model, it["question"], ref, ans)
                     row = {"qid": it["qid"], "rep": k, "type": "knowledge", "cluster": it.get("cluster"), "question": it["question"],
                            "answer": ans, "error": err, "abstained": cc.abstain, "clarified": clarified, "gold_in_context": gic,
@@ -250,7 +285,11 @@ async def main() -> int:
     print(f"  정답 조각이 문맥에 없음 {len(nog)}: 그래도 정답 {sum(r['judge']['label'] == '정답' for r in nog)} — 다른 문서로 답함")
     print(f"  근거 없음 즉시 판정(LLM 안 부름) {sum(r['abstained'] for r in rows)} · 생성 오류 {sum(bool(r['error']) for r in rows)} · "
           f"재질문 문항 {sum(r.get('clarified', False) for r in rows)}")
-    vc = collections.Counter(r.get("verify") for r in rows if r.get("verify"))
+    cc_ = collections.Counter((r.get("verify") or "").split(":")[1] for r in rows if (r.get("verify") or "").startswith("cite:"))
+    if cc_:   # 인용 강제 — 모델이 형식을 지켰나(no_citations = 번호를 하나도 안 닮), 몇 줄을 뺐나
+        removed = sum(int(r["verify"].split(":")[2]) for r in rows if (r.get("verify") or "").startswith("cite:"))
+        print(f"  인용 강제: " + " · ".join(f"{k} {v}" for k, v in cc_.most_common()) + f" · 뺀 본문 줄 {removed}")
+    vc = collections.Counter(r.get("verify") for r in rows if r.get("verify") and not str(r.get("verify")).startswith("cite:"))
     if vc:   # 근거 확인 결과 — 해석 실패·확인 장애(unparsed·error)는 초안 그대로 둔 것(대체 처리 표시)
         print("  근거 확인: " + " · ".join(f"{k} {v}" for k, v in vc.most_common()))
     partial = sum(1 for r in rows if 0 < r.get("n_gold_active", 1) < r.get("n_gold", 1))
