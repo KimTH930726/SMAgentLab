@@ -321,6 +321,8 @@ export interface OverrideReport {
   days: number; kinds: OverrideKind[];
   location_replay: { rules: { rule: string; hit: number; n: number; auto_wrong: number; fixed: number[]; broken: number[] }[]; best: { rule: string } | null };
   candidates: { id: number; title: string; status: CandidateStatus; qids: string[] }[];
+  /** 날짜별(최신 먼저) — 그날 AI 판단 수 · 그중 번복(11/03 날짜 카드) */
+  daily: { day: string; n: number; overrides: number }[];
 }
 
 /** 평가 게이트 › 적용 이력(10/27) — 기법 대장 근거(측정 기록) + 개선 후보 사람 결정, 날짜 내림차순 */
@@ -348,12 +350,13 @@ export interface DecisionLogItem {
   candidate: { id: number; title: string; status: CandidateStatus } | null;   // 이 번복으로 만든 개선 후보
 }
 
-export async function getDecisionLog(q: { days: number; kind?: string; changedOnly?: boolean; before?: number | null; limit?: number }):
+export async function getDecisionLog(q: { days: number; kind?: string; changedOnly?: boolean; before?: number | null; limit?: number; day?: string | null }):
   Promise<{ items: DecisionLogItem[]; next_before: number | null }> {
   const p = new URLSearchParams({ days: String(q.days), limit: String(q.limit ?? 50) });
   if (q.kind) p.set('kind', q.kind);
   if (q.changedOnly) p.set('changed_only', 'true');
   if (q.before) p.set('before', String(q.before));
+  if (q.day) p.set('day', q.day);
   return apiFetch(`/eval/decisions/log?${p.toString()}`);
 }
 

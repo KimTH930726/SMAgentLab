@@ -50,6 +50,8 @@ class KnowledgeOut(BaseModel):
     # 문서 안 위치(2026-10-07) — 상위 경로와 등록 묶음. 구조 화면은 GET /{id}/structure
     heading_path: Optional[list[str]] = None
     ingestion_job_id: Optional[int] = None
+    # 승인 대기 목록만 — 가장 비슷한 기존 지식의 유사도(0~1, 목록은 이 값 높은 순, 11/03)
+    max_similarity: Optional[float] = None
 
 
 # ─── Bulk / Ingestion ──────────────────────────────────────────────────────

@@ -7,12 +7,12 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Optional
 
 from core.database import get_conn
-from service.eval.override import OVERRIDE_SQL
+from service.eval.override import KIND_NAME, OVERRIDE_SQL
 
-KIND_NAME = {"knowledge_location": "등록 위치", "chat_clarify": "되묻기", "source_check": "원문 확인", "collection_suggest": "다른 컬렉션 제안"}
 _NO_ISSUE = {"source_ok": "원문이 맞음", "already_fixed": "이미 고쳐짐", "duplicate": "중복", "other": "기타"}
 
 
@@ -62,10 +62,20 @@ def describe(kind: str, ai: Optional[dict], final: Optional[dict], signals: Opti
     if kind == "collection_suggest":
         did = f"{ai.get('namespace') or '?'}에서 찾아보기 제안" + (f" (관련도 {signals['score']})" if signals.get("score") is not None else "")
         return {"ai": did, "human": "눌러서 다시 물음" if final and final.get("picked") else None}
+    if kind == "duplicate_check":
+        sim = ai.get("similarity")
+        did = f"기존 #{ai.get('duplicate_of') or '?'}와 중복 의심" + (f" (유사도 {sim * 100:.1f}%)" if isinstance(sim, (int, float)) else "")
+        if final is None:
+            return {"ai": did, "human": None}
+        act = final.get("action")
+        human = {"approve": "그대로 저장(중복 아님)", "reject": "반려(중복 맞음)"}.get(act) or (
+            f"#{final.get('target_id')}에 덮어쓰기" if act == "merge" else str(act))
+        return {"ai": did, "human": human}
     return {"ai": KIND_NAME.get(kind, kind), "human": None if final is None else "확정"}
 
 
-async def decision_log(*, days: int, kind: Optional[str], changed_only: bool, limit: int = 50, before_id: Optional[int] = None) -> dict:
+async def decision_log(*, days: int, kind: Optional[str], changed_only: bool, limit: int = 50, before_id: Optional[int] = None,
+                       day: Optional[date] = None) -> dict:
     """최신순 한 페이지 — before_id보다 작은 것부터(다음 페이지). changed_only = 번복만(override.is_override와 같은 규칙 — 저장 칸이 아니라 값으로)."""
     async with get_conn() as conn:
         rows = await conn.fetch(
@@ -77,7 +87,8 @@ async def decision_log(*, days: int, kind: Optional[str], changed_only: bool, li
                LEFT JOIN ops_user hu ON hu.id = d.changed_by_user_id
                WHERE d.created_at > NOW() - make_interval(days => $1)
                  AND ($2::text IS NULL OR d.kind = $2) AND (NOT $3 OR {OVERRIDE_SQL}) AND ($5::bigint IS NULL OR d.id < $5)
-               ORDER BY d.id DESC LIMIT $4""", days, kind, changed_only, limit + 1, before_id)   # 하나 더 — 다음 페이지가 있는지(리뷰 L3)
+                 AND ($6::date IS NULL OR (d.created_at AT TIME ZONE 'Asia/Seoul')::date = $6)   -- 화면 날짜(KST)와 같게(리뷰 M1)
+               ORDER BY d.id DESC LIMIT $4""", days, kind, changed_only, limit + 1, before_id, day)   # 하나 더 — 다음 페이지가 있는지(리뷰 L3)
         more = len(rows) > limit
         rows = rows[:limit]
         ids = sorted({v for r in rows for v in ((_j(r["ai_value"]) or {}).get("namespace_id"), (_j(r["final_value"]) or {}).get("namespace_id"),

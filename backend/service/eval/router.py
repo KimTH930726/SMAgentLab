@@ -1,6 +1,7 @@
 """/api/eval — 평가 게이트 판정 기록(품질 › 평가 게이트 화면). 읽기는 로그인 사용자(옛 /policy/answer-eval/history와 같음),
 기준선 지정은 관리자. 판정 실행은 scripts/eval_gate.py(문항당 LLM 호출·채점이라 화면에서 안 돌림)."""
 import json
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -253,9 +254,15 @@ async def get_overrides(days: int = Query(default=30, ge=1, le=365), admin: dict
         cands = [dict(r) for r in await conn.fetch(
             "SELECT c.id, c.title, c.status, c.qids FROM eval_candidate c WHERE c.cause = 'override_location' "
             "AND c.run_id = " + LATEST_KNOWLEDGE_RUN_SQL + " ORDER BY c.id")]   # 업무지식 축 진단에서 만든다(10/29)
+        # 날짜별 — 감사 로그 위 날짜 카드(11/03 태훈 "건수·날짜별 카드로"): 그날 AI 판단 수 · 그중 번복 수
+        daily = [{"day": r["day"].isoformat(), "n": r["n"], "overrides": r["ov"]} for r in await conn.fetch(
+            f"""SELECT (d.created_at AT TIME ZONE 'Asia/Seoul')::date AS day, count(*)::int AS n, count(*) FILTER (WHERE {override_mod.OVERRIDE_SQL})::int AS ov
+                FROM ops_ai_decision d WHERE d.created_at > NOW() - make_interval(days => $1) AND NOT (COALESCE(d.final_value, '{{}}') ? 'superseded')
+                GROUP BY 1 ORDER BY 1 DESC""", days)]
     for c in cands:
         c["qids"] = json.loads(c["qids"]) if isinstance(c["qids"], str) else (c["qids"] or [])
     rep["candidates"] = cands
+    rep["daily"] = daily
     for k in rep["kinds"]:
         k.pop("override_ids", None)
     return rep
@@ -264,10 +271,10 @@ async def get_overrides(days: int = Query(default=30, ge=1, le=365), admin: dict
 @router.get("/decisions/log")
 async def get_decision_log(days: int = Query(default=30, ge=1, le=365), kind: Optional[str] = Query(default=None, max_length=40),
                            changed_only: bool = False, limit: int = Query(default=50, ge=1, le=200), before: Optional[int] = None,
-                           admin: dict = Depends(get_current_admin)):
+                           day: Optional[date] = None, admin: dict = Depends(get_current_admin)):
     """AI 감사 로그(관리자) — 원장 시간순 한 줄씩(최신 먼저, before = 다음 페이지). 원문 없음."""
     from service.eval.decision_log import decision_log
-    return await decision_log(days=days, kind=kind, changed_only=changed_only, limit=limit, before_id=before)
+    return await decision_log(days=days, kind=kind, changed_only=changed_only, limit=limit, before_id=before, day=day)
 
 
 @router.post("/improvements/{improvement_id}/hypotheses")

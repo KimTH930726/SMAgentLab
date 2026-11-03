@@ -91,6 +91,8 @@ export interface KnowledgeItem {
   updated_at: string;
   pending_review?: boolean;
   duplicate_matches?: DuplicateMatch[];
+  /** 승인 대기 목록만 — 가장 비슷한 기존 지식의 유사도(0~1, 서버가 높은 순으로 줌) */
+  max_similarity?: number | null;
 }
 
 export interface KnowledgeCreatePayload {

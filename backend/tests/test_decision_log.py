@@ -51,3 +51,13 @@ def test_location_changed_never_says_kept():
     """리뷰 L1 — choice는 옛 값·빈 값이 accept로 저장된다. 원장이 바뀜(human_changed)이라고 하면 "AI 후보 그대로"를 붙이지 않는다."""
     d = dl.describe("knowledge_location", {"namespace_id": 1}, {"namespace_id": 2, "choice": "accept"}, {}, NAMES, changed=True)
     assert d["human"] == "제휴서비스에 등록"
+
+
+def test_duplicate_check():
+    """중복 의심(11/03) — AI = 가장 비슷한 기존 지식·유사도, 사람 = 처리(그대로 저장·덮어쓰기·반려), 확정 전이면 None."""
+    ai = {"duplicate_of": 12, "similarity": 0.962}
+    assert dl.describe("duplicate_check", ai, None, {}, {}) == {"ai": "기존 #12와 중복 의심 (유사도 96.2%)", "human": None}
+    assert dl.describe("duplicate_check", ai, {"action": "approve"}, {}, {})["human"] == "그대로 저장(중복 아님)"
+    assert dl.describe("duplicate_check", ai, {"action": "reject"}, {}, {})["human"] == "반려(중복 맞음)"
+    assert dl.describe("duplicate_check", ai, {"action": "merge", "target_id": 12}, {}, {})["human"] == "#12에 덮어쓰기"
+    assert dl.describe("duplicate_check", {"duplicate_of": None, "similarity": None}, None, {}, {})["ai"] == "기존 #?와 중복 의심"

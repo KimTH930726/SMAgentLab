@@ -386,6 +386,11 @@ async def list_knowledge(namespace: Optional[str] = None, status: Optional[str] 
     승인 대기(pending_review)/반려(rejected) 항목은 명시적으로 status를 넘겨야 보임
     (메인 목록에 검토 대상이 섞여 헷갈리지 않도록)."""
     status_filter = status or "active"
+    # 승인 대기는 가장 비슷한 기존 지식의 유사도(max_similarity)를 붙이고 높은 순으로 — 거의 같은 글부터 판단(11/03 태훈)
+    review = status_filter == "pending_review"
+    sim_col = (", (SELECT max(m.similarity) FROM rag_knowledge_duplicate_match m WHERE m.new_knowledge_id = k.id) AS max_similarity"
+               if review else "")
+    sim_order = "max_similarity DESC NULLS LAST, " if review else ""
     async with get_conn() as conn:
         if namespace:
             ns_id = await resolve_namespace_id(conn, namespace)
@@ -393,24 +398,24 @@ async def list_knowledge(namespace: Optional[str] = None, status: Optional[str] 
                 return []
             rows = await conn.fetch(
                 f"""
-                SELECT {_KNOWLEDGE_COLS}
+                SELECT {_KNOWLEDGE_COLS}{sim_col}
                 FROM rag_knowledge k
                 JOIN ops_namespace n ON k.namespace_id = n.id
                 LEFT JOIN ops_user u ON k.created_by_user_id = u.id
                 WHERE k.namespace_id = $1 AND k.status = $2
-                ORDER BY k.created_at DESC
+                ORDER BY {sim_order}k.created_at DESC, k.id
                 """,
                 ns_id, status_filter,
             )
         else:
             rows = await conn.fetch(
                 f"""
-                SELECT {_KNOWLEDGE_COLS}
+                SELECT {_KNOWLEDGE_COLS}{sim_col}
                 FROM rag_knowledge k
                 JOIN ops_namespace n ON k.namespace_id = n.id
                 LEFT JOIN ops_user u ON k.created_by_user_id = u.id
                 WHERE k.status = $1
-                ORDER BY n.name, k.created_at DESC
+                ORDER BY n.name, {sim_order}k.created_at DESC, k.id
                 """,
                 status_filter,
             )
@@ -431,6 +436,29 @@ async def get_knowledge_namespace(knowledge_id: int) -> Optional[str]:
 # 중복 의심 매칭은 검토 대기 화면·병합 대상 선택에서만 읽는다 — 검토가 끝나면(승인·반려·병합) 지운다(2026-10-06).
 # 안 지우면 끝난 건의 매칭이 계속 쌓였다(55건 중 49건).
 _DELETE_DUP_MATCHES = "DELETE FROM rag_knowledge_duplicate_match WHERE new_knowledge_id = $1"
+
+
+async def _log_duplicate_decision(conn, knowledge_id: int, action: str, target_id: Optional[int], reviewer_username: Optional[str]) -> None:
+    """중복 의심 처리를 AI 판단 원장에 한 줄(AI 감사 로그 '중복 의심', 11/03) — AI 값 = 가장 비슷한 기존 지식·유사도, 사람 값 = 처리.
+    매칭을 지우기 전에 부른다. 원장 쓰기가 실패해도 처리는 막지 않는다(저장점으로 감싸 트랜잭션은 살림, 로그는 남김)."""
+    try:
+        from service.decision import ledger   # 가져오기 실패도 처리를 막지 않게 try 안(리뷰 L11)
+        async with conn.transaction():
+            top = await conn.fetchrow(
+                "SELECT matched_knowledge_id, similarity, count(*) OVER () AS n FROM rag_knowledge_duplicate_match "
+                "WHERE new_knowledge_id = $1 ORDER BY similarity DESC LIMIT 1", knowledge_id)
+            if top is None:   # 매칭이 없는 승인 대기(읽기 제한 보류 등)는 AI가 중복이라 한 적이 없다 — 기록 안 함(리뷰 M2)
+                return
+            uid = await conn.fetchval("SELECT id FROM ops_user WHERE username = $1", reviewer_username) if reviewer_username else None
+            sim = round(float(top["similarity"]), 4)
+            did = await ledger.record(
+                conn, "duplicate_check", ai_value={"duplicate_of": top["matched_knowledge_id"], "similarity": sim},
+                confident=sim >= 0.98, signals={"n_matches": int(top["n"])},
+                user_id=uid, target_type="knowledge", target_ids=[knowledge_id])
+            await ledger.finalize(conn, did, kind="duplicate_check", final_value={"action": action, "target_id": target_id},
+                                  changed=action == "approve", user_id=uid)
+    except Exception as e:   # noqa: BLE001 — 감사 줄 실패로 검토 처리를 되돌리지 않는다
+        logger.warning("중복 의심 처리 원장 기록 실패(knowledge_id=%s, action=%s): %s", knowledge_id, action, e)
 
 
 async def get_duplicate_matches(knowledge_id: int) -> list[dict]:
@@ -480,6 +508,9 @@ async def resolve_duplicate(
                 raise ValueError("읽기 제한으로 기록된 컨플 페이지의 조각입니다 — 제한이 풀린 뒤 다시 등록하세요(반려는 가능).")
     if not pending:
         raise ValueError("지식을 찾을 수 없습니다.")
+    # 이미 처리된 건을 다시 처리하지 않는다 — 재시도·두 탭에서 같은 건을 누르면 감사 로그에 판단이 한 줄 더 남았다(리뷰 M2 11/03)
+    if pending["status"] != "pending_review":
+        raise ValueError("이미 처리된 지식입니다 — 목록을 새로고침하세요.")
 
     if action == "approve":
         async with get_conn() as conn:
@@ -488,6 +519,7 @@ async def resolve_duplicate(
                     "UPDATE rag_knowledge SET status = 'active', reviewed_at = NOW(), owner = $2 WHERE id = $1",
                     knowledge_id, reviewer_username,
                 )
+                await _log_duplicate_decision(conn, knowledge_id, "approve", None, reviewer_username)
                 await conn.execute(_DELETE_DUP_MATCHES, knowledge_id)
         return {"id": knowledge_id, "status": "active"}
 
@@ -503,6 +535,7 @@ async def resolve_duplicate(
                 "UPDATE ops_query_log SET resolved_knowledge_id = NULL, resolved_at = NULL WHERE resolved_knowledge_id = $1",
                 knowledge_id,
             )
+            await _log_duplicate_decision(conn, knowledge_id, "reject", None, reviewer_username)
             await conn.execute(_DELETE_DUP_MATCHES, knowledge_id)
         return {"id": knowledge_id, "status": "rejected"}
 
@@ -546,6 +579,7 @@ async def resolve_duplicate(
                 "UPDATE rag_knowledge SET status = 'rejected', reviewed_at = NOW(), owner = $2 WHERE id = $1",
                 knowledge_id, reviewer_username,
             )
+            await _log_duplicate_decision(conn, knowledge_id, "merge", target_id, reviewer_username)
             await conn.execute(_DELETE_DUP_MATCHES, knowledge_id)
         # 반려되는 pending 지식이 이미 어떤 질의를 "해결"한 상태였다면, 실제 내용이 옮겨간
         # target으로 연결을 옮겨줘야 통계 화면이 계속 유효한 내용을 보여준다

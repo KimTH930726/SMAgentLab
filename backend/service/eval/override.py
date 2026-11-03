@@ -12,7 +12,9 @@ from typing import Optional
 from trustkit.decision.ledger import is_confident, vote
 
 LOCATION = "knowledge_location"
-KIND_NAME = {LOCATION: "등록 위치", "chat_clarify": "되묻기", "source_check": "원문 확인", "collection_suggest": "다른 컬렉션 제안"}
+DUPLICATE = "duplicate_check"   # 지식 등록 때 중복 의심(유사도) → 사람이 승인 대기에서 그대로 저장·덮어쓰기·반려(11/03)
+KIND_NAME = {LOCATION: "등록 위치", "chat_clarify": "되묻기", "source_check": "원문 확인", "collection_suggest": "다른 컬렉션 제안",
+             DUPLICATE: "중복 의심"}
 REASON_NAME = {"wrong": "AI가 틀림", "both_ok": "둘 다 맞음", "context_changed": "상황이 바뀜"}
 # 형식적 승인 의심(업계: 수락이 지나치게 높으면 사람이 실제로 안 보고 있을 수 있다) — 표본이 충분할 때만
 RUBBER_MIN_N, RUBBER_RATE = 20, 0.95
@@ -69,7 +71,7 @@ def replay_location(rows: list[dict]) -> dict:
 
 
 # 사람이 실제로 검토해 고르는 종류만 형식적 승인을 본다(되묻기·제안은 사용자 선택이라 수락률이 높아도 문제 아님)
-REVIEWED_KINDS = (LOCATION, "source_check")
+REVIEWED_KINDS = (LOCATION, "source_check", DUPLICATE)
 
 
 # is_override와 같은 규칙의 SQL(별칭 d = ops_ai_decision) — 감사 로그의 "번복만" 거르기·표시가 같은 기준을 쓴다(테스트가 둘을 맞춘다)
@@ -80,6 +82,7 @@ OVERRIDE_SQL = """(d.final_value IS NOT NULL AND CASE d.kind
          AND d.final_value->>'namespace_id' <> COALESCE(d.signals->>'proposed_id', d.ai_value->>'namespace_id')
     WHEN 'chat_clarify' THEN COALESCE((d.final_value->>'typed')::boolean, false) OR d.final_value->>'picked' = '*'
     WHEN 'source_check' THEN (d.final_value->>'issue') = 'false'
+    WHEN 'duplicate_check' THEN d.final_value->>'action' = 'approve'
     ELSE false END)"""
 
 
@@ -104,6 +107,8 @@ def is_override(r: dict) -> bool:
         return bool(final.get("typed")) or final.get("picked") == "*"
     if r["kind"] == "source_check":
         return final.get("issue") is False
+    if r["kind"] == DUPLICATE:   # AI는 "중복"이라 했는데 사람이 그대로 저장 = 중복 아님
+        return final.get("action") == "approve"
     return False
 
 
@@ -123,6 +128,8 @@ def summarize(rows: list[dict], names: dict[int, str]) -> dict:
             label = "직접 다시 물음" if final.get("typed") else "전부 보기"
         elif r["kind"] == "source_check":
             label = f"문제 없음 · {final.get('reason') or '?'}"
+        elif r["kind"] == DUPLICATE:
+            label = "중복 아님(그대로 저장)"
         else:
             # 옛 줄(10/27 이전)은 감사 로그에서 받은 답(ai_verdict)이 이유 — 틀림·상황이 바뀜 둘 다(리뷰 L2)
             why = final.get("override_reason") or (r["verdict"] if r["verdict"] in ("wrong", "context_changed") else None)

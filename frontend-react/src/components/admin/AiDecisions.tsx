@@ -23,12 +23,12 @@ const REASON_NAME: Record<string, string> = {
   resolved: '맞게 짚음(해결)', source_ok: '원문이 맞음', already_fixed: '이미 고쳐짐', duplicate: '중복', other: '기타',
 };
 
-type CardKey = 'location' | 'clarify' | 'source' | 'suggest' | 'candidates';
+type CardKey = 'location' | 'clarify' | 'source' | 'suggest' | 'duplicate' | 'candidates';
 
 /** 카드마다 그 판단의 기준(답 기법 대장 항목) — 사용자 10/27 "어떤 기준으로 되묻는지, 판단 기준이 같이 있어야 개선 아이디어가 나온다" */
 const CRITERIA: Record<CardKey, string[]> = {
   location: ['knowledge_location'], clarify: ['clarify', 'ref_clarify'], source: ['source_check'],
-  suggest: ['collection_suggest'], candidates: ['improve_recommend'],
+  suggest: ['collection_suggest'], duplicate: ['duplicate_review'], candidates: ['improve_recommend'],
 };
 
 /** 판단 기준 — 가장 짧은 예시 한 장면 + "이렇게 판단해요" 규칙 3줄 + 근거 한 줄(10/30 사용자: 줄글·값 칩은 안 읽힘) */
@@ -89,27 +89,32 @@ function Example({ ex }: { ex: NonNullable<Technique['example']> }) {
   );
 }
 
-const LOG_KIND: Partial<Record<CardKey, string>> = { location: 'knowledge_location', clarify: 'chat_clarify', source: 'source_check', suggest: 'collection_suggest' };
+const LOG_KIND: Partial<Record<CardKey, string>> = {
+  location: 'knowledge_location', clarify: 'chat_clarify', source: 'source_check', suggest: 'collection_suggest', duplicate: 'duplicate_check',
+};
 const OVERRIDE_REASON: Record<string, { label: string; cls: string }> = {
   wrong: { label: 'AI가 틀림', cls: 'text-rose-600 dark:text-rose-400' },
   both_ok: { label: '둘 다 맞음', cls: 'text-slate-300' },
   context_changed: { label: '상황이 바뀜', cls: 'text-amber-700 dark:text-amber-300' },
 };
 const ROW = 'grid grid-cols-[3.25rem_6rem_minmax(0,1.25fr)_1.25rem_minmax(0,1fr)_minmax(0,0.9fr)_4.5rem] items-center gap-x-2';
-const KIND_LABEL: Record<string, string> = { knowledge_location: '등록 위치', chat_clarify: '되묻기', source_check: '원문 확인', collection_suggest: '다른 컬렉션 제안' };
+const KIND_LABEL: Record<string, string> = {
+  knowledge_location: '등록 위치', chat_clarify: '되묻기', source_check: '원문 확인', collection_suggest: '다른 컬렉션 제안', duplicate_check: '중복 의심',
+};
 const dayOf = (s: string) => new Date(s).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
 const timeOf = (s: string) => new Date(s).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 /** 감사 로그 — 날짜별, 같은 날 같은 판단(종류·AI·결과가 같은 줄)이 이어지면 "같은 판단 n건"으로 접는다 */
-function AuditLog({ kind, setKind, onCriteria, days, setDays }: {
-  kind: CardKey | null; setKind: (k: CardKey | null) => void; onCriteria: (k: CardKey) => void; days: number; setDays: (d: number) => void;
+function AuditLog({ kind, setKind, days, setDays, day, setDay }: {
+  kind: CardKey | null; setKind: (k: CardKey | null) => void; days: number; setDays: (d: number) => void;
+  day: string | null; setDay: (d: string | null) => void;
 }) {
   const [changedOnly, setChangedOnly] = useState(true);   // 기본 = 번복만(감사 로그의 핵심 증거, 그대로 둔 판단은 끄면 보임)
   const [openRuns, setOpenRuns] = useState<Set<number>>(new Set());
   const logKind = kind ? LOG_KIND[kind] : undefined;
   const q = useInfiniteQuery({
-    queryKey: ['ai-decision-log', days, logKind ?? '', changedOnly],
-    queryFn: ({ pageParam }) => getDecisionLog({ days, kind: logKind, changedOnly, before: pageParam }),
+    queryKey: ['ai-decision-log', days, logKind ?? '', changedOnly, day ?? ''],
+    queryFn: ({ pageParam }) => getDecisionLog({ days, kind: logKind, changedOnly, before: pageParam, day }),
     initialPageParam: null as number | null,
     getNextPageParam: (last) => last.next_before,
     staleTime: 30_000,
@@ -133,19 +138,16 @@ function AuditLog({ kind, setKind, onCriteria, days, setDays }: {
     <section className="space-y-3" data-testid="audit-log">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-semibold text-slate-100 mr-2">감사 로그</h3>
-        <div className="flex flex-wrap gap-1" role="group" aria-label="종류">
-          <button onClick={() => setKind(null)} aria-pressed={kind === null}
-            className={clsx('rounded-full border px-2.5 py-0.5 text-xs', kind === null ? 'border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-300' : 'border-slate-600 text-slate-300')}>전체</button>
-          {(Object.keys(LOG_KIND) as CardKey[]).map((k) => (
-            <span key={k} className={clsx('inline-flex items-center rounded-full border text-xs',
-              kind === k ? 'border-indigo-500 text-indigo-600 dark:border-indigo-400 dark:text-indigo-300' : 'border-slate-600 text-slate-300')}>
-              <button onClick={() => setKind(kind === k ? null : k)} aria-pressed={kind === k} data-testid={`decision-card-${k}`} className="pl-2.5 pr-1.5 py-0.5">
-                {KIND_LABEL[LOG_KIND[k]!]}</button>
-              <button onClick={() => onCriteria(k)} data-testid={`decision-detail-${k}`} title="이 판단의 지금 기준·분포" aria-label={`${KIND_LABEL[LOG_KIND[k]!]} 기준`}
-                className="pr-2 py-0.5 text-slate-500 hover:text-slate-200">ⓘ</button>
-            </span>
-          ))}
-        </div>
+        {/* 종류는 드롭다운 — 판단 종류가 늘어도 한 줄(11/03 태훈). 기준(ⓘ)은 위 종류 카드에서 */}
+        <select className={sel} value={kind ?? ''} onChange={(e) => setKind((e.target.value || null) as CardKey | null)} aria-label="종류" data-testid="audit-kind">
+          <option value="">종류 전체</option>
+          {(Object.keys(LOG_KIND) as CardKey[]).map((k) => <option key={k} value={k}>{KIND_LABEL[LOG_KIND[k]!]}</option>)}
+        </select>
+        {day && (
+          <button onClick={() => setDay(null)} data-testid="audit-day-chip" title="날짜 거르기 풀기"
+            className="rounded-full border border-indigo-500 px-2.5 py-0.5 text-xs text-indigo-600 dark:border-indigo-400 dark:text-indigo-300">
+            {dayOf(day)} ✕</button>
+        )}
         <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-300">
           <input type="checkbox" checked={changedOnly} onChange={(e) => setChangedOnly(e.target.checked)} className="accent-indigo-600" />번복만
         </label>
@@ -309,12 +311,83 @@ function DetailBody({ open, d }: { open: CardKey; d: DecisionsReport }) {
       </div>
     );
   }
+  if (open === 'duplicate') {
+    return (
+      <p className="text-xs text-slate-400 leading-relaxed">운영 지식 › 승인 대기에서 사람이 처리한 것 — 덮어쓰기·반려는 AI 판단(중복)대로, [그대로 저장]은 "중복 아님" = 번복.
+        번복이 많으면 유사도 하한이 낮은 것, 0.98 넘는 건이 많으면 등록 때 완전 일치 거부·청크 구조화 대상(11/03 설계).</p>
+    );
+  }
   const c = d.candidates;
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-400">평가 게이트 리포트의 "고칠 방법" — AI 추천(해 볼 만함·안 하는 게 좋음)을 사람이 따랐나. 반대가 많으면 추천 규칙이 사람 판단과 어긋난다는 신호.</p>
       <Bars rows={[{ name: '추천대로 결정', n: c.agree }, { name: '추천과 반대', n: c.disagree, warn: true }, { name: '아직 결정 전', n: c.by_status.proposed ?? 0 }]} />
     </div>
+  );
+}
+
+/** 종류별 카드(11/03 태훈 "건수 별 카드로 — 나열은 많아지면 어렵다") — 큰 숫자 = 판단 수, 아래 = 번복 수·비율. 누르면 감사 로그를 그 종류로, ⓘ = 기준.
+ * 마지막 카드 = 개선 후보 AI 추천(평가 게이트 "고칠 방법")을 사람이 따랐나 — 예전엔 맨 아래 작은 링크라 아무도 못 봤다 */
+function KindCards({ kinds, days, candidates, filter, onFilter, onCriteria }: {
+  kinds: { kind: string; decided: number; overrides: number; rate: number | null }[]; days: number;
+  candidates: DecisionsReport['candidates']; filter: CardKey | null; onFilter: (k: CardKey) => void; onCriteria: (k: CardKey) => void;
+}) {
+  const byKind = new Map(kinds.map((k) => [k.kind, k]));
+  const decided = candidates.agree + candidates.disagree;
+  return (
+    <section className="space-y-1.5" aria-label="종류별">
+      <h3 className="text-xs font-medium text-slate-400" title="사람·사용자가 확정한 판단 수 — 번복 = AI 추천과 다르게 한 것">종류별 · 최근 {days}일 <span className="text-slate-500">(확정된 판단 · 누르면 아래 로그를 그 종류로)</span></h3>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2" data-testid="kind-cards">
+        {(Object.keys(LOG_KIND) as CardKey[]).map((k) => {
+          const st = byKind.get(LOG_KIND[k]!);
+          const n = st?.decided ?? 0, ov = st?.overrides ?? 0;
+          return (
+            <div key={k} className={clsx('relative rounded-xl border bg-slate-800 p-3', filter === k ? 'border-indigo-500 ring-1 ring-indigo-500 dark:border-indigo-400 dark:ring-indigo-400' : 'border-slate-700')}>
+              <button onClick={() => onFilter(k)} aria-pressed={filter === k} data-testid={`decision-card-${k}`} className="block w-full text-left">
+                <p className="text-xs text-slate-400 pr-5">{KIND_LABEL[LOG_KIND[k]!]}</p>
+                <p className="text-2xl font-semibold tabular-nums text-slate-100" data-testid={`decision-card-${k}-value`}>{n}<span className="text-sm font-normal text-slate-500">건</span></p>
+                <p className={clsx('text-xs', ov ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500')}>번복 {ov}{n ? ` · ${pct(ov, n)}` : ''}</p>
+              </button>
+              <button onClick={() => onCriteria(k)} data-testid={`decision-detail-${k}`} title="이 판단의 지금 기준·분포" aria-label={`${KIND_LABEL[LOG_KIND[k]!]} 기준`}
+                className="absolute right-2 top-2 text-slate-500 hover:text-slate-200">ⓘ</button>
+            </div>
+          );
+        })}
+        <button onClick={() => onCriteria('candidates')} data-testid="decision-card-candidates"
+          title="평가 게이트 리포트의 '고칠 방법' — AI가 '해 볼 만함·안 하는 게 좋음'으로 추천한 개선 후보를 사람이 그대로 따랐나. 반대가 많으면 추천 규칙이 사람 판단과 어긋난다는 신호(최근 90일)"
+          className="rounded-xl border border-slate-700 bg-slate-800 p-3 text-left hover:border-indigo-500 dark:hover:border-indigo-400">
+          <p className="text-xs text-slate-400">개선 후보 추천 ⓘ</p>
+          <p className="text-2xl font-semibold tabular-nums text-slate-100">{decided}<span className="text-sm font-normal text-slate-500">건 결정</span></p>
+          <p className={clsx('text-xs', candidates.disagree ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500')}>
+            추천과 반대 {candidates.disagree} · 결정 전 {candidates.by_status.proposed ?? 0}</p>
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** 날짜별 카드 — 그날 AI 판단 · 번복. 누르면 그날만(다시 누르면 풀림). 많아지면 가로로 넘긴다 */
+function DayCards({ daily, day, onDay, loading }: { daily: { day: string; n: number; overrides: number }[]; day: string | null; onDay: (d: string) => void; loading: boolean }) {
+  if (loading || daily.length === 0) return null;
+  const max = Math.max(1, ...daily.map((x) => x.n));
+  return (
+    <section className="space-y-1.5" aria-label="날짜별">
+      <h3 className="text-xs font-medium text-slate-400" title="그날(한국 시간) AI가 낸 판단 수 — 아직 사람이 확정하지 않은 판단도 포함, 종류 카드는 확정된 것만 센다">
+        날짜별 <span className="text-slate-500">(누르면 그날만 · 확정 전 포함 ⓘ)</span></h3>
+      <div className="flex gap-2 overflow-x-auto pb-1" data-testid="day-cards">
+        {daily.map((x) => (
+          <button key={x.day} onClick={() => onDay(x.day)} aria-pressed={day === x.day} data-testid={`day-card-${x.day}`}
+            className={clsx('w-28 shrink-0 rounded-xl border bg-slate-800 p-2.5 text-left', day === x.day ? 'border-indigo-500 ring-1 ring-indigo-500 dark:border-indigo-400 dark:ring-indigo-400' : 'border-slate-700 hover:border-slate-500')}>
+            <p className="text-[11px] text-slate-400">{dayOf(x.day)}</p>
+            <p className="text-lg font-semibold tabular-nums text-slate-100">{x.n}<span className="text-xs font-normal text-slate-500">건</span></p>
+            <span className="mt-1 block h-1.5 rounded-full bg-slate-700 overflow-hidden" aria-hidden>
+              <span className="block h-full bg-indigo-500 dark:bg-indigo-400" style={{ width: `${(x.n / max) * 100}%` }} />
+            </span>
+            <p className={clsx('mt-1 text-[11px]', x.overrides ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500')}>번복 {x.overrides}</p>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -325,12 +398,14 @@ export function AiDecisions() {
   const ov = useQuery({ queryKey: ['ai-overrides', days], queryFn: () => getOverrides(days), staleTime: 30_000 });
   const [open, setOpen] = useState<CardKey | null>(null);
   const [filter, setFilter] = useState<CardKey | null>(null);
+  const [day, setDay] = useState<string | null>(null);
   const { data: techs = [] } = useQuery({ queryKey: ['eval-techniques'], queryFn: listTechniques, staleTime: 60_000 });
   if (isLoading) return <p className="text-sm text-slate-500">불러오는 중…</p>;
   if (error) return <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(error as Error).message}</p>;
   if (!d) return null;
   const titles: Record<CardKey, string> = {
-    location: '지식 등록 위치', clarify: '채팅 되묻기', source: '원문 확인 검사', suggest: '다른 컬렉션 제안', candidates: '개선 후보 — AI 추천',
+    location: '지식 등록 위치', clarify: '채팅 되묻기', source: '원문 확인 검사', suggest: '다른 컬렉션 제안', duplicate: '등록 중복 의심',
+    candidates: '개선 후보 — AI 추천',
   };
   const kinds = ov.data?.kinds ?? [];
   const nOv = kinds.reduce((a, k) => a + k.overrides, 0);
@@ -366,8 +441,10 @@ export function AiDecisions() {
         <p className="text-xs text-amber-700 dark:text-amber-300" title="업계 관례: 번복이 거의 없거나 수락이 95%를 넘으면 사람이 실제로 안 보고 있을 수 있다(표본 20건 이상일 때만)">
           형식적 승인 의심: {stamped.map((k) => `${k.kind_name} 수락 ${Math.round((1 - (k.rate ?? 0)) * 100)}%`).join(' · ')} ⓘ</p>
       )}
-      <AuditLog kind={filter} setKind={setFilter} onCriteria={(k) => setOpen(k)} days={days} setDays={setDays} />
-      <button onClick={() => setOpen('candidates')} className="text-xs text-slate-400 hover:text-slate-200">개선 후보 AI 추천을 사람이 따랐나 ›</button>
+      <KindCards kinds={kinds} days={days} candidates={d.candidates} filter={filter}
+        onFilter={(k) => setFilter(filter === k ? null : k)} onCriteria={setOpen} />
+      <DayCards daily={ov.data?.daily ?? []} day={day} onDay={(x) => setDay(day === x ? null : x)} loading={ov.isLoading} />
+      <AuditLog kind={filter} setKind={setFilter} days={days} setDays={(x) => { setDays(x); setDay(null); }} day={day} setDay={setDay} />
       <Modal isOpen={open !== null} onClose={() => setOpen(null)} title={open ? titles[open] : ''} maxWidth="max-w-2xl">
         {open && <Detail open={open} d={d} techs={techs} /> as ReactNode}
       </Modal>

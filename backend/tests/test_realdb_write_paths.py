@@ -214,3 +214,65 @@ def test_set_supports_replaces_links_and_rejects_wrong_kinds():
         return sorted(int(r["to_key"]) for r in rows), p2, other_sys
     links, p2, _ = run(scenario, [admin])
     assert links == [p2]
+
+
+# ── 중복 의심 처리 → AI 판단 원장(11/03) ─────────────────────────────────────
+
+def test_duplicate_resolution_writes_one_ledger_row_per_action():
+    """승인 대기 처리마다 원장 한 줄: AI 값 = 가장 비슷한 기존 지식·유사도, 사람 값 = 처리 · 그대로 저장만 번복 · 매칭은 지워짐."""
+    import sys
+    from types import SimpleNamespace
+    real_ledger = load("_rdb_real_ledger", "service/decision/ledger.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_중복 시스템")
+        old = await knowledge(conn, s, "기존 지식")
+        news = [await knowledge(conn, s, f"새 지식 {i}", status="pending_review") for i in range(2)]
+        for n, sim in zip(news, (0.962, 0.991)):
+            await conn.execute("INSERT INTO rag_knowledge_duplicate_match (new_knowledge_id, matched_knowledge_id, similarity) VALUES ($1, $2, $3)",
+                               n, old, sim)
+        before = await conn.fetchval("SELECT count(*) FROM ops_ai_decision WHERE kind = 'duplicate_check'")
+        with __import__("unittest.mock").mock.patch.dict(sys.modules, {"service.decision": SimpleNamespace(ledger=real_ledger)}):
+            await ksvc.resolve_duplicate(news[0], "approve", reviewer_username="admin")
+            await ksvc.resolve_duplicate(news[1], "reject", reviewer_username="admin")
+        rows = await conn.fetch("SELECT ai_value, final_value, human_changed, confident, target_ids FROM ops_ai_decision "
+                                "WHERE kind = 'duplicate_check' ORDER BY id DESC LIMIT 2")
+        left = await conn.fetchval("SELECT count(*) FROM rag_knowledge_duplicate_match WHERE new_knowledge_id = ANY($1::int[])", news)
+        after = await conn.fetchval("SELECT count(*) FROM ops_ai_decision WHERE kind = 'duplicate_check'")
+        return before, after, rows, left, news, old
+    before, after, rows, left, news, old = run(scenario, [ksvc])
+    import json
+    rej, app = rows   # 최신 먼저
+    assert after - before == 2 and left == 0
+    assert json.loads(app["ai_value"]) == {"duplicate_of": old, "similarity": 0.962} and json.loads(app["final_value"])["action"] == "approve"
+    assert app["human_changed"] is True and app["confident"] is False and list(app["target_ids"]) == [news[0]]
+    assert json.loads(rej["final_value"])["action"] == "reject" and rej["human_changed"] is False and rej["confident"] is True
+
+
+def test_duplicate_resolution_skips_unmatched_and_refuses_twice():
+    """매칭 없는 승인 대기(읽기 제한 보류 등)는 원장에 안 남김 · 이미 처리한 건을 다시 처리하면 거부(줄이 더 안 생김) — 리뷰 M2."""
+    import sys
+    from types import SimpleNamespace
+    real_ledger = load("_rdb_real_ledger2", "service/decision/ledger.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_중복2 시스템")
+        old = await knowledge(conn, s, "기존 지식")
+        lone = await knowledge(conn, s, "매칭 없는 대기", status="pending_review")
+        dup = await knowledge(conn, s, "매칭 있는 대기", status="pending_review")
+        await conn.execute("INSERT INTO rag_knowledge_duplicate_match (new_knowledge_id, matched_knowledge_id, similarity) VALUES ($1, $2, 0.95)", dup, old)
+        before = await conn.fetchval("SELECT count(*) FROM ops_ai_decision WHERE kind = 'duplicate_check'")
+        twice = None
+        with __import__("unittest.mock").mock.patch.dict(sys.modules, {"service.decision": SimpleNamespace(ledger=real_ledger)}):
+            await ksvc.resolve_duplicate(lone, "reject", reviewer_username="admin")
+            await ksvc.resolve_duplicate(dup, "approve", reviewer_username="admin")
+            try:
+                await ksvc.resolve_duplicate(dup, "approve", reviewer_username="admin")
+            except ValueError as e:
+                twice = str(e)
+        after = await conn.fetchval("SELECT count(*) FROM ops_ai_decision WHERE kind = 'duplicate_check'")
+        return after - before, twice, await conn.fetchval("SELECT status FROM rag_knowledge WHERE id = $1", lone)
+    added, twice, lone_status = run(scenario, [ksvc])
+    assert added == 1                      # 매칭 있는 처리 한 번만
+    assert twice and "이미 처리" in twice
+    assert lone_status == "rejected"       # 기록은 안 해도 처리는 됨

@@ -57,6 +57,10 @@ class TestSummarize:
         assert ov.is_override(_row(4, kind="chat_clarify", final={"typed": True})) is True
         assert ov.is_override(_row(5, kind="source_check", final={"issue": False, "reason": "source_ok"})) is True
         assert ov.is_override(_row(6, kind="source_check", final={"issue": True})) is False
+        # 중복 의심(11/03) — AI = 중복, 사람이 그대로 저장 = 중복 아님(번복) · 반려·덮어쓰기 = AI대로
+        assert ov.is_override(_row(7, kind="duplicate_check", final={"action": "approve"})) is True
+        assert ov.is_override(_row(8, kind="duplicate_check", final={"action": "reject"})) is False
+        assert ov.is_override(_row(9, kind="duplicate_check", final={"action": "merge", "target_id": 3})) is False
         s = ov.summarize([_row(i, kind="chat_clarify", final={"picked": "a"}) for i in range(30)], {})
         assert s["kinds"][0]["rubber_stamp"] is False   # 되묻기는 사용자 선택이라 형식적 승인 대상 아님
 
@@ -126,7 +130,9 @@ def test_override_sql_matches_python():
     rows = [_row(i, ai=a, sig=s, final=f) for i, (a, s, f, _) in enumerate(CASES)]
     rows += [_row(100, kind="chat_clarify", final={"picked": "*"}), _row(101, kind="chat_clarify", final={"typed": True}),
              _row(102, kind="chat_clarify", final={"picked": "배송"}), _row(103, kind="source_check", final={"issue": False}),
-             _row(104, kind="source_check", final={"issue": True}), _row(105, kind="collection_suggest", final={"picked": True})]
+             _row(104, kind="source_check", final={"issue": True}), _row(105, kind="collection_suggest", final={"picked": True}),
+             _row(106, kind="duplicate_check", final={"action": "approve"}), _row(107, kind="duplicate_check", final={"action": "reject"}),
+             _row(108, kind="duplicate_check", final={"action": "merge", "target_id": 3})]
 
     async def run():
         conn = await asyncpg.connect(url)
