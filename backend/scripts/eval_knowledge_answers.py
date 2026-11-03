@@ -139,17 +139,21 @@ async def main() -> int:
     ap.add_argument("--verify", action="store_true", help="답 뒤 근거 확인 — 초안의 주장이 문맥에 없으면 빼거나 '못 찾음'으로")
     # 인용 강제 실험(11/03 work-os 2회차) — 프롬프트에 [#번호] 규칙 + 번호 없는 본문 줄 기계적 제거(추가 LLM 호출 없음, trustkit.answer.citation)
     ap.add_argument("--cite", action="store_true", help="인용 강제 — 문장마다 [#문서번호], 번호 없는 본문 줄은 뺀다(LLM 추가 호출 없음)")
+    ap.add_argument("--cite-keep", action="store_true", help="인용 규칙 프롬프트만 — 줄은 안 빼고 뺄 뻔한 줄 수만 센다(빼기 효과를 따로 재기, 11/03)")
     # 채점 흔들림(11/03) — 같은 답 파일을 같은 채점기로 한 번 더(답 생성은 안 함). 문항·정답 기준은 --set에서 다시 읽는다
     ap.add_argument("--rejudge", default="", help="이 답 파일의 답을 다시 채점만 해서 --out에 쓴다(채점 흔들림 측정)")
     a = ap.parse_args()
-    if a.cite and a.verify:   # 둘 다 verify 칸을 쓴다 — 같이 쓰면 한쪽 결과가 사라진다(리뷰 L4)
-        print("입력 오류: --cite와 --verify는 같이 쓰지 않는다")
+    if a.cite and a.cite_keep:
+        print("입력 오류: --cite와 --cite-keep 중 하나만")
+        return 2
+    if (a.cite or a.cite_keep) and a.verify:   # 둘 다 verify 칸을 쓴다 — 같이 쓰면 한쪽 결과가 사라진다(리뷰 L4)
+        print("입력 오류: --cite·--cite-keep과 --verify는 같이 쓰지 않는다")
         return 2
     from agents.knowledge_rag.agent import effective_scope_label
     await init_pool()   # 먼저 — 기법 스위치를 읽어야 아래 범위·예산 라벨이 실제 채팅 설정이 된다(11/03)
     # 범위·예산은 실제 쓴 값으로 항상 — 채팅 기본이 바뀌면(11/02 linked·1만2천) 옛 파일(None)과 이어 하기가 막힌다(리뷰 M1)
     variant = ",".join(x for x in (f"policy_top_k={a.policy_top_k}" if a.policy_top_k is not None else "", "no_expand" if a.no_expand else "",
-                                   "verify" if a.verify else "", "cite" if a.cite else "", effective_scope_label(a.scope, a.context_budget)) if x)
+                                   "verify" if a.verify else "", "cite" if a.cite else "", "cite_keep" if a.cite_keep else "", effective_scope_label(a.scope, a.context_budget)) if x)
     if a.no_expand:   # 에이전트가 모듈 속성으로 부르므로 여기서 바꾸면 이 프로세스(측정)만 바뀐다
         async def _no_expand(*_a, **_k):
             return []
@@ -181,7 +185,7 @@ async def main() -> int:
             sorted({i for it in items for i in it["gold_ids"]}))}
     d = retrieval.get_search_defaults()
     sp = Path(a.prompt_file).read_text(encoding="utf-8") if a.prompt_file else await resolve_system_prompt()
-    if a.cite:
+    if a.cite or a.cite_keep:
         from trustkit.answer.citation import CITE_RULE_KO, strip_uncited
         sp = sp.rstrip() + "\n" + CITE_RULE_KO
     if a.llm == "local":
@@ -246,6 +250,9 @@ async def main() -> int:
                         if a.cite and not err and NO_KNOWLEDGE not in ans:
                             st = strip_uncited(ans)
                             ans, verdict = st.answer, f"cite:{st.status}:{st.removed}"
+                        if a.cite_keep and not err and NO_KNOWLEDGE not in ans:   # 답은 그대로, 뺄 뻔한 줄만 기록
+                            st = strip_uncited(ans)
+                            verdict = f"citekeep:{st.status}:{st.removed}"
                     j = rule_label(err, ans, ref) or await judge(client, model, it["question"], ref, ans)
                     row = {"qid": it["qid"], "rep": k, "type": "knowledge", "cluster": it.get("cluster"), "question": it["question"],
                            "answer": ans, "error": err, "abstained": cc.abstain, "clarified": clarified, "gold_in_context": gic,
@@ -289,7 +296,11 @@ async def main() -> int:
     if cc_:   # 인용 강제 — 모델이 형식을 지켰나(no_citations = 번호를 하나도 안 닮), 몇 줄을 뺐나
         removed = sum(int(r["verify"].split(":")[2]) for r in rows if (r.get("verify") or "").startswith("cite:"))
         print(f"  인용 강제: " + " · ".join(f"{k} {v}" for k, v in cc_.most_common()) + f" · 뺀 본문 줄 {removed}")
-    vc = collections.Counter(r.get("verify") for r in rows if r.get("verify") and not str(r.get("verify")).startswith("cite:"))
+    ck = collections.Counter((r.get("verify") or "").split(":")[1] for r in rows if (r.get("verify") or "").startswith("citekeep:"))
+    if ck:   # 프롬프트만 — 줄은 그대로 두고, 빼기를 했으면 몇 줄이었나
+        would = sum(int(r["verify"].split(":")[2]) for r in rows if (r.get("verify") or "").startswith("citekeep:"))
+        print(f"  인용 프롬프트만(안 뺌): " + " · ".join(f"{k} {v}" for k, v in ck.most_common()) + f" · 뺄 뻔한 줄 {would}")
+    vc = collections.Counter(r.get("verify") for r in rows if r.get("verify") and not str(r.get("verify")).startswith(("cite:", "citekeep:")))
     if vc:   # 근거 확인 결과 — 해석 실패·확인 장애(unparsed·error)는 초안 그대로 둔 것(대체 처리 표시)
         print("  근거 확인: " + " · ".join(f"{k} {v}" for k, v in vc.most_common()))
     partial = sum(1 for r in rows if 0 < r.get("n_gold_active", 1) < r.get("n_gold", 1))
