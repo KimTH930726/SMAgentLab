@@ -300,7 +300,8 @@ async def run_preview(batch_id: int, user: dict, token: str, base_url: str) -> N
     except Exception as e:   # noqa: BLE001 — 배치를 실패로 남겨 화면이 멈춘 채 돌지 않게
         logger.exception("팀 적재 미리보기 실패 batch=%s", batch_id)
         async with get_conn() as conn:
-            await conn.execute("UPDATE rag_import_batch SET status = 'failed', error = $2 WHERE id = $1", batch_id, str(e)[:500])
+            # 메시지 없는 예외(시간 초과 등)도 종류는 남긴다 — 11/03 앱 공간 미리보기가 빈 사유로 실패해 화면에 이유가 안 보였다
+            await conn.execute("UPDATE rag_import_batch SET status = 'failed', error = $2 WHERE id = $1", batch_id, _err_text(e))
 
 
 async def fetch_space_pages(base_url: str, space_key: str, token: str, max_pages: int = MAX_PAGES) -> tuple[str, list[dict], bool]:
@@ -311,12 +312,13 @@ async def fetch_space_pages(base_url: str, space_key: str, token: str, max_pages
     h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     pages: list[dict] = []
     start = 0
-    async with guarded_client(verify=False) as cl:
+    # 공간 목록은 쪽마다 조상까지 펼쳐 느리다(11/03 앱 공간: 30초 안에 첫 쪽이 안 옴) — 쪽 크기를 줄이고 읽기 대기를 늘린다
+    async with guarded_client(verify=False, timeout=httpx.Timeout(30.0, read=180.0)) as cl:
         sp = await cl.get(f"{base_url}/rest/api/space/{space_key}", headers=h)
         sp.raise_for_status()
         while len(pages) <= max_pages:
             r = await cl.get(f"{base_url}/rest/api/content", headers=h,
-                             params={"spaceKey": space_key, "type": "page", "limit": 200, "start": start, "expand": "ancestors"})
+                             params={"spaceKey": space_key, "type": "page", "limit": 100, "start": start, "expand": "ancestors"})
             r.raise_for_status()
             j = r.json()
             res = j.get("results", [])
