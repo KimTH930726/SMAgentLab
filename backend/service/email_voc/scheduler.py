@@ -150,7 +150,9 @@ async def run_cycle_now(settings: Optional[dict] = None) -> None:
                     agg["total_skipped_not_it"] += m["skipped_not_it"]
                     if m["ok"]:
                         agg["mailboxes_ok"] += 1
-                        summary_parts.append(f"{m['mailbox_upn']}(fetched={m['fetched']},analyzed={m['analyzed']},notified={m['notified']})")
+                        # 같은 문제 확인(LLM) 실패로 묶지 않은 건수도 요약 줄에 — 사이클 표엔 칸이 없어 로그로만 보였다(11/03 밤 VOC 실경로 확인)
+                        summary_parts.append(f"{m['mailbox_upn']}(fetched={m['fetched']},analyzed={m['analyzed']},notified={m['notified']}"
+                                             f",confirm_failed={m.get('skipped_confirm_failed', 0)})")
                     else:
                         agg["mailboxes_failed"] += 1
                         summary_parts.append(f"{m['mailbox_upn']}(에러: {m['error']})")
