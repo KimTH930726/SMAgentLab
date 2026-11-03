@@ -28,7 +28,23 @@ export interface ImportBatch extends ImportBatchRow {
   load_total: number;
   load_done: number;
   default_namespace_id: number | null;   // 공간 기본 위치(사람이 한 번) — 없으면 AI가 페이지마다
+  /** 게시 시각 — 비어 있고 적재됨이면 "검수 대기"(채팅에 아직 안 나옴, 11/03) */
+  published_at?: string | null;
+  publish_check?: PublishCheck | null;
 }
+
+/** 게시 전 검색 확인 결과(로컬 LLM 질문 → 벡터 상위 3에 그 페이지가 드나) */
+export interface PublishCheck {
+  checked_at: string;
+  skipped?: string;
+  asked?: number;
+  found?: number;
+  failed?: number;
+  misses?: { question: string; title: string | null }[];
+}
+
+/** 검수 대기 카드 — 보류 작업 · 조각 · 중복 의심 · 품질 경고(종류별 작업 수) */
+export interface HeldSummary { jobs: number; chunks: number; dup: number; warnings: Record<string, number> }
 
 export interface ImportPage {
   id: number;
@@ -64,6 +80,7 @@ export interface ImportCollection {
 
 export interface ImportBatchDetail {
   batch: ImportBatch;
+  held: HeldSummary | null;
   pages: ImportPage[];
   collections: ImportCollection[];
   blockers: string[];
@@ -95,6 +112,9 @@ export const confirmImport = (id: number) => apiFetch<{ status: string }>(`${BAS
 /** 묶음 단위 연결(10/30) — 묶음마다 컬렉션(null = 제외) + 하위 갈래 예외. 규칙 저장 + 전 페이지 정함(적재는 이어서 confirmImport) */
 export const connectImport = (id: number, bundles: { bundle: string; namespace_id: number | null; groups: { name: string; namespace_id: number | null }[] }[]) =>
   apiFetch<{ status: string; pages: number; excluded: number }>(`${BASE}/${id}/connect`, { method: 'POST', body: JSON.stringify({ bundles }) });
+export const publishCheckImport = (id: number) => apiFetch<PublishCheck>(`${BASE}/${id}/publish-check`, { method: 'POST' });
+export const publishImport = (id: number) =>
+  apiFetch<{ published: number; failed: { job_id: number; error: string }[] }>(`${BASE}/${id}/publish`, { method: 'POST' });
 export const rollbackImport = (id: number) => apiFetch<{ chunks: number; documents: number; terms: number }>(`${BASE}/${id}/rollback`, { method: 'POST' });
 
 /** 원본 페이지 주소 — 수집 대상 주소의 호스트 + pageId(검토할 때 원문을 바로 연다). */

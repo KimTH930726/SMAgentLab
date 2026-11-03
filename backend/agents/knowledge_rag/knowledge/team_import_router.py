@@ -162,6 +162,7 @@ async def get_batch(batch_id: int, user: dict = Depends(get_current_user)):
         b = await _batch_for(conn, batch_id, user)
         pages = [dict(r) for r in await conn.fetch(f"SELECT {_PAGE_COLS} FROM rag_import_page WHERE batch_id = $1 ORDER BY id", batch_id)]
         collections = await _collections(conn, b["team_id"], user)
+        held = await ti.held_summary(conn, batch_id) if b["status"] == "loaded" and b.get("published_at") is None else None
     blockers = ti.blockers(pages, b["sampling_required"])
     counts, wrong, _ = ti._sample_view(pages)
     for p in pages:
@@ -173,7 +174,10 @@ async def get_batch(batch_id: int, user: dict = Depends(get_current_user)):
             nb[ns] = nb.get(ns, 0) + 1
         p["signals"] = {"neighbors": nb, "reason": s.get("reason"), "fallback": s.get("fallback"), "error": s.get("error"),
                         "restricted": s.get("restricted"), "doc_type": s.get("doc_type")}
-    return {"batch": {k: (str(v) if k.endswith("_at") and v is not None else v) for k, v in b.items()},
+    batch = {k: (str(v) if k.endswith("_at") and v is not None else v) for k, v in b.items()}
+    if isinstance(batch.get("publish_check"), str):
+        batch["publish_check"] = json.loads(batch["publish_check"])
+    return {"batch": batch, "held": held,   # held = 게시 전 검수 카드(게시 전 배치만)
             "pages": pages, "collections": collections, "blockers": blockers,
             "sample_targets": ti.sample_targets(counts, wrong),
             "sample_size": ti.SAMPLE_SIZE, "reasons": ti.REASONS}
@@ -448,6 +452,35 @@ async def confirm(batch_id: int, user: dict = Depends(get_current_user)):
     return {"status": "loading"}
 
 
+@router.post("/{batch_id}/publish-check")
+async def publish_check(batch_id: int, user: dict = Depends(get_current_user)):
+    """게시 전 검색 확인(로컬 LLM으로 질문 10개 → 벡터 상위 3에 그 페이지가 드나) — 결과는 배치에 남는다. 적재 끝·게시 전만."""
+    async with get_conn() as conn:
+        b = await _batch_for(conn, batch_id, user, write=True)
+    if b["status"] != "loaded" or b.get("published_at") is not None:
+        raise HTTPException(status_code=409, detail="게시 전 배치만 확인할 수 있습니다.")
+    return await ti.publish_check(batch_id)
+
+
+@router.post("/{batch_id}/publish")
+async def publish(batch_id: int, user: dict = Depends(get_current_user)):
+    """검수 후 게시(11/03 결정 가) — 보류 조각을 채팅에 내놓는다(옛 버전 내림·원문 확정·캐시 비움·자동 용어 추출이 이때).
+    넣을 곳 담당 검사는 적재 확정 때와 같이 다시 본다(그사이 담당이 바뀌었을 수 있다)."""
+    async with get_conn() as conn:
+        b = await _batch_for(conn, batch_id, user, write=True)
+        names = [r["name"] for r in await conn.fetch(
+            "SELECT DISTINCT n.name FROM rag_import_page p JOIN ops_namespace n ON n.id = p.final_namespace_id "
+            "WHERE p.batch_id = $1 AND p.status = 'loaded'", batch_id)]
+    for name in names:
+        await check_namespace_ownership(name, user)
+    if b["status"] != "loaded" or b.get("published_at") is not None:
+        raise HTTPException(status_code=409, detail="게시 전 배치만 게시할 수 있습니다(이미 게시했거나 되돌림).")
+    try:
+        return await ti.publish_batch(batch_id, user)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
 @router.post("/{batch_id}/rollback")
 async def rollback(batch_id: int, user: dict = Depends(get_current_user)):
     """이번 배치만 되돌림 — 게이트에서 나빠졌을 때. 배치가 만든 조각·자동 용어를 지우고 원문은 교체됨으로."""
@@ -465,7 +498,7 @@ async def rollback(batch_id: int, user: dict = Depends(get_current_user)):
             b = await conn.fetchrow("SELECT team_id, root_url FROM rag_import_batch WHERE id = $1", batch_id)
             await stop_after_rollback(conn, b["team_id"], b["root_url"])
     if out is None:
-        raise HTTPException(status_code=409, detail="적재가 끝난 배치만 되돌릴 수 있습니다(이미 되돌렸거나 진행 중).")
+        raise HTTPException(status_code=409, detail="적재가 끝난 배치만 되돌릴 수 있습니다(이미 되돌렸거나 진행 중·게시 중이면 끝난 뒤).")
     from shared.cache import invalidate_namespace_family
     for name in names:   # 지운 조각이 든 캐시 답이 나가지 않게
         await invalidate_namespace_family(name)

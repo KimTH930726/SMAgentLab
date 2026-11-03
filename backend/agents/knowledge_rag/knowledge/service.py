@@ -760,8 +760,12 @@ async def bulk_create_knowledge(
     confirm_replace: bool = False,
     strict_source: bool = False,
     force_pending: bool = False,
+    hold: bool = False,
 ) -> dict:
     """여러 지식을 배치 단위로 등록 — 기본적으로 백그라운드에서 실행.
+
+    hold: 조각을 만들기만 하고 검색에 안 내놓는다(작업 상태 'held', 조각 'staging') — 팀 적재 배치의 "검수 후 게시"(11/03 결정 가).
+    옛 버전 내리기·원문 확정·활성화는 publish_held_job이 게시 때 같은 코드(_switch_staged)로 한다. 그 전까진 옛 버전이 그대로 검색된다.
 
     force_pending: 넣는 사람이 그 컬렉션 담당이 아님(E2) — 전부 승인 대기. 원문 원장·컨플루언스 페이지 연결은 부르는 쪽이 떼고 온다
     (담당의 기존 조각을 "같은 원본 교체"로 폐기하지 않게).
@@ -823,7 +827,7 @@ async def bulk_create_knowledge(
         after_activation=after_activation,
         source_file=source_file, source_type=source_type,
         created_by_user_id=created_by_user_id,
-        strict_source=strict_source, confirm_replace=confirm_replace, force_pending=force_pending,
+        strict_source=strict_source, confirm_replace=confirm_replace, force_pending=force_pending, hold=hold,
     )
     if background:
         task = asyncio.create_task(coro)
@@ -846,6 +850,7 @@ async def _run_bulk_ingestion(
     strict_source: bool = False,
     confirm_replace: bool = False,
     force_pending: bool = False,
+    hold: bool = False,
 ) -> dict:
     """배치 단위 임베딩+INSERT. 배치마다 진행률 갱신 + 취소 요청 확인.
 
@@ -1034,6 +1039,27 @@ async def _run_bulk_ingestion(
     # 후속 작업이 있으면 job은 그게 끝날 때까지 'processing'으로 둔다 — 화면이 processing 동안만
     # 폴링해서, 먼저 completed로 바꾸면 뒤늦게 기록되는 용어 수가 새로고침 전엔 안 보였다
     # (/code-review 지적). 행 전환 자체는 이 트랜잭션에서 끝나므로 검색 반영은 지연되지 않는다.
+    if hold:
+        # 검수 후 게시(11/03) — 조각은 staging 그대로, 작업은 'held'. 게시 때 쓸 값(원문·교체 대상)을 작업에 남긴다
+        plan = {"source_doc_ids": source_doc_ids, "partial_doc_ids": partial_doc_ids, "replacing_pages": replacing_pages,
+                "replacing_docs": replacing_docs, "confirm_replace": confirm_replace, "force_pending": force_pending}
+        async with get_conn() as conn:
+            held = await conn.fetchval("""
+                UPDATE rag_ingestion_job SET status = 'held', created_chunks = $1, pending_chunks = $2, completed_at = NOW(),
+                       held_plan = $4::jsonb
+                WHERE id = $3 AND cancel_requested = FALSE RETURNING id
+            """, created, pending_total, job_id, json.dumps(plan))
+            if held:
+                try:
+                    from agents.knowledge_rag.ingestion.quality import record_job_quality
+                    await record_job_quality(conn, job_id)   # 게시 전 검수 화면에 품질 경고
+                except Exception:
+                    logger.warning("보류 작업 품질 검사 실패 (job_id=%s)", job_id, exc_info=True)
+        if not held:
+            await _discard_staged_job(job_id, "cancelled")
+            return {"created": 0, "job_id": job_id, "status": "cancelled"}
+        return {"created": created, "job_id": job_id, "status": "held", "pending": pending_total}
+
     try:
         async with get_conn() as conn:
             async with conn.transaction():
@@ -1045,52 +1071,10 @@ async def _run_bulk_ingestion(
                     WHERE id = $3 AND cancel_requested = FALSE
                     RETURNING id
                 """, created, pending_total, job_id, run_follow_up)
-                if activated and (source_doc_ids or replacing_pages):
-                    # 등록 시작(사전 확인·중복 비교)~전환 사이에 같은 원본이 바뀌었을 수 있다 — 잠그고 지금 기준으로 다시 본다.
-                    # 실패면 이 트랜잭션이 롤백돼 기존 조각은 그대로, job은 실패 사유와 함께 등록 이력에 남는다(조용히 덮지 않는다).
-                    await _ledger.lock_sources(conn, ns_id, source_doc_ids, replacing_pages)
-                    still = await _ledger.valid_documents(conn, ns_id, source_doc_ids)
-                    gone = sorted(set(source_doc_ids) - set(still))
-                    if gone:
-                        # 연결만 끊고 활성화하면 새 버전 옆에 옛 내용이 원문 없이 중복으로 남는다 — 실패로 알린다(등록 이력에 사유)
-                        raise ValueError(f"원문이 등록 중에 다른 등록으로 교체됐습니다(원문 {gone}) — 다시 미리보기 후 등록하세요.")
-                    source_doc_ids = still
-                    partial_doc_ids = [d for d in partial_doc_ids if d in still]
-                    now_replacing = await _ledger.replacing_documents(conn, ns_id, source_doc_ids, replacing_pages)
-                    newcomers = sorted(set(now_replacing) - set(replacing_docs))
-                    if newcomers and await conn.fetchval(
-                            "SELECT count(*) FROM rag_source_document WHERE id = ANY($1::int[]) AND status = 'active'", newcomers):
-                        # 같은 원본이 그사이 다른 등록으로 확정됨 — 중복 비교가 그 조각을 옛 버전으로 빼지 않은 채 끝나, 그대로 교체하면
-                        # 이 등록의 조각이 "중복 의심"(승인 대기)으로 남고 옛 조각만 폐기돼 내용이 검색에서 사라진다(리뷰 L1)
-                        raise ValueError("같은 원본이 등록 중에 다른 등록으로 먼저 확정됐습니다 — 다시 미리보기 후 등록하세요.")
-                    if not confirm_replace:
-                        # 사전 확인 뒤(임베딩 동안) 기존 조각이 수정·삭제됐으면 확인 없이 덮지 않는다(리뷰 2026-10-12)
-                        if _ledger.has_touch(await _ledger.touched_reasons(conn, ns_id, now_replacing, replacing_pages)):
-                            raise ValueError("등록하는 동안 기존 조각이 수정·삭제됐습니다 — 다시 등록하면 확인 후 교체할 수 있습니다.")
-                    replacing_docs = now_replacing
                 if activated:
-                    if replacing_pages:
-                        # 새 행은 아직 staging이라 이 조건에 안 걸린다 — 옛 버전만 내림. 옛 버전의 승인 대기 행도 같이
-                        # (2026-10-07 감사: active만 내려 옛 pending이 큐에 남았다가 승인되면 옛 내용이 다시 active가 됐다)
-                        await conn.execute("""
-                            UPDATE rag_knowledge SET status = 'deprecated'
-                            WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[])
-                              AND status IN ('active', 'pending_review')
-                        """, ns_id, replacing_pages)
-                    if replacing_docs:
-                        # 같은 원문(재등록·다시 분할)의 옛 청크 폐기 — 새 청크는 아직 staging이라 안 걸린다
-                        await conn.execute("""
-                            UPDATE rag_knowledge SET status = 'deprecated'
-                            WHERE namespace_id = $1 AND source_document_id = ANY($2::int[])
-                              AND status IN ('active', 'pending_review') AND ingestion_job_id IS DISTINCT FROM $3
-                        """, ns_id, replacing_docs, job_id)
-                    if source_doc_ids:
-                        await _ledger.activate(conn, ns_id, source_doc_ids, replacing_docs, partial_doc_ids)
-                    await conn.execute("""
-                        UPDATE rag_knowledge
-                        SET status = CASE WHEN $2 THEN 'pending_review' WHEN status = 'staging' THEN 'active' ELSE 'pending_review' END
-                        WHERE ingestion_job_id = $1 AND status IN ('staging', 'staging_review')
-                    """, job_id, force_pending)
+                    await _switch_staged(conn, job_id=job_id, ns_id=ns_id, source_doc_ids=source_doc_ids,
+                                         partial_doc_ids=partial_doc_ids, replacing_pages=replacing_pages,
+                                         replacing_docs=replacing_docs, confirm_replace=confirm_replace, force_pending=force_pending)
         if not activated:
             await _discard_staged_job(job_id, "cancelled")
             return {"created": 0, "job_id": job_id, "status": "cancelled"}
@@ -1139,6 +1123,93 @@ async def _run_bulk_ingestion(
                     glossary_count, job_id,
                 )
     return result
+
+
+
+async def publish_held_job(job_id: int) -> dict:
+    """보류(held) 작업 게시 — 등록 끝에 하던 전환을 지금 한다(같은 검사·같은 코드). 원문이 그사이 바뀌었으면 ValueError(작업은 보류 그대로).
+    {namespace, created}. 이미 게시됐거나 보류가 아니면 ValueError."""
+    async with get_conn() as conn:
+        async with conn.transaction():
+            job = await conn.fetchrow("SELECT j.id, j.namespace_id, j.held_plan, j.created_chunks, n.name FROM rag_ingestion_job j "
+                                      "JOIN ops_namespace n ON n.id = j.namespace_id WHERE j.id = $1 AND j.status = 'held' FOR UPDATE OF j", job_id)
+            if job is None:
+                raise ValueError(f"게시할 수 있는 보류 작업이 아닙니다(#{job_id})")
+            plan = job["held_plan"]
+            plan = json.loads(plan) if isinstance(plan, str) else dict(plan or {})
+            if not await conn.fetchval("SELECT 1 FROM rag_knowledge WHERE ingestion_job_id = $1 AND status IN ('staging', 'staging_review') LIMIT 1",
+                                       job_id):
+                # 조각 없이 전환하면 옛 버전만 내려 그 페이지가 검색에서 통째로 빠진다(재리뷰 H) — 게시하지 않는다
+                raise ValueError(f"게시할 조각이 없습니다(#{job_id}) — 롤백 뒤 다시 적재하세요.")
+            await _switch_staged(conn, job_id=job_id, ns_id=job["namespace_id"], source_doc_ids=list(plan.get("source_doc_ids") or []),
+                                 partial_doc_ids=list(plan.get("partial_doc_ids") or []),
+                                 replacing_pages=list(plan.get("replacing_pages") or []), replacing_docs=list(plan.get("replacing_docs") or []),
+                                 confirm_replace=bool(plan.get("confirm_replace")), force_pending=bool(plan.get("force_pending")))
+            await conn.execute("UPDATE rag_ingestion_job SET status = 'completed', completed_at = NOW() WHERE id = $1", job_id)
+    try:
+        from shared.cache import invalidate_namespace_family
+        await invalidate_namespace_family(job["name"])
+    except Exception:
+        logger.warning("게시 후 답변 캐시 비우기 실패 (job_id=%s)", job_id, exc_info=True)
+    try:
+        from agents.knowledge_rag.ingestion.quality import record_job_quality
+        async with get_conn() as qconn:
+            await record_job_quality(qconn, job_id)
+    except Exception:
+        logger.warning("게시 후 품질 검사 실패 (job_id=%s)", job_id, exc_info=True)
+    return {"namespace": job["name"], "created": job["created_chunks"]}
+
+
+async def _switch_staged(conn, *, job_id: int, ns_id: int, source_doc_ids: list[int], partial_doc_ids: list[int],
+                         replacing_pages: list[str], replacing_docs: list[int], confirm_replace: bool, force_pending: bool) -> None:
+    """조각 일괄 전환(트랜잭션 안에서) — 원문 다시 확인·잠금, 옛 버전 내림, 원문 확정, staging → active/pending_review.
+    등록 끝(바로 활성화)과 팀 적재 게시(publish_held_job)가 같이 쓴다 — 게시가 며칠 뒤여도 같은 검사를 그때 기준으로 다시 한다."""
+    from agents.knowledge_rag.ingestion import source_ledger as _ledger
+    if source_doc_ids or replacing_pages:
+        # 등록 시작(사전 확인·중복 비교)~전환 사이에 같은 원본이 바뀌었을 수 있다 — 잠그고 지금 기준으로 다시 본다.
+        # 실패면 이 트랜잭션이 롤백돼 기존 조각은 그대로, job은 실패 사유와 함께 등록 이력에 남는다(조용히 덮지 않는다).
+        await _ledger.lock_sources(conn, ns_id, source_doc_ids, replacing_pages)
+        still = await _ledger.valid_documents(conn, ns_id, source_doc_ids)
+        gone = sorted(set(source_doc_ids) - set(still))
+        if gone:
+            # 연결만 끊고 활성화하면 새 버전 옆에 옛 내용이 원문 없이 중복으로 남는다 — 실패로 알린다(등록 이력에 사유)
+            raise ValueError(f"원문이 등록 중에 다른 등록으로 교체됐습니다(원문 {gone}) — 다시 미리보기 후 등록하세요.")
+        source_doc_ids = still
+        partial_doc_ids = [d for d in partial_doc_ids if d in still]
+        now_replacing = await _ledger.replacing_documents(conn, ns_id, source_doc_ids, replacing_pages)
+        newcomers = sorted(set(now_replacing) - set(replacing_docs))
+        if newcomers and await conn.fetchval(
+                "SELECT count(*) FROM rag_source_document WHERE id = ANY($1::int[]) AND status = 'active'", newcomers):
+            # 같은 원본이 그사이 다른 등록으로 확정됨 — 중복 비교가 그 조각을 옛 버전으로 빼지 않은 채 끝나, 그대로 교체하면
+            # 이 등록의 조각이 "중복 의심"(승인 대기)으로 남고 옛 조각만 폐기돼 내용이 검색에서 사라진다(리뷰 L1)
+            raise ValueError("같은 원본이 등록 중에 다른 등록으로 먼저 확정됐습니다 — 다시 미리보기 후 등록하세요.")
+        if not confirm_replace:
+            # 사전 확인 뒤(임베딩 동안) 기존 조각이 수정·삭제됐으면 확인 없이 덮지 않는다(리뷰 2026-10-12)
+            if _ledger.has_touch(await _ledger.touched_reasons(conn, ns_id, now_replacing, replacing_pages)):
+                raise ValueError("등록하는 동안 기존 조각이 수정·삭제됐습니다 — 다시 등록하면 확인 후 교체할 수 있습니다.")
+        replacing_docs = now_replacing
+    if replacing_pages:
+        # 새 행은 아직 staging이라 이 조건에 안 걸린다 — 옛 버전만 내림. 옛 버전의 승인 대기 행도 같이
+        # (2026-10-07 감사: active만 내려 옛 pending이 큐에 남았다가 승인되면 옛 내용이 다시 active가 됐다)
+        await conn.execute("""
+            UPDATE rag_knowledge SET status = 'deprecated'
+            WHERE namespace_id = $1 AND confluence_page_id = ANY($2::text[])
+              AND status IN ('active', 'pending_review')
+        """, ns_id, replacing_pages)
+    if replacing_docs:
+        # 같은 원문(재등록·다시 분할)의 옛 청크 폐기 — 새 청크는 아직 staging이라 안 걸린다
+        await conn.execute("""
+            UPDATE rag_knowledge SET status = 'deprecated'
+            WHERE namespace_id = $1 AND source_document_id = ANY($2::int[])
+              AND status IN ('active', 'pending_review') AND ingestion_job_id IS DISTINCT FROM $3
+        """, ns_id, replacing_docs, job_id)
+    if source_doc_ids:
+        await _ledger.activate(conn, ns_id, source_doc_ids, replacing_docs, partial_doc_ids)
+    await conn.execute("""
+        UPDATE rag_knowledge
+        SET status = CASE WHEN $2 THEN 'pending_review' WHEN status = 'staging' THEN 'active' ELSE 'pending_review' END
+        WHERE ingestion_job_id = $1 AND status IN ('staging', 'staging_review')
+    """, job_id, force_pending)
 
 
 async def _discard_staged_job(job_id: int, status: str, *, error_message: Optional[str] = None) -> None:

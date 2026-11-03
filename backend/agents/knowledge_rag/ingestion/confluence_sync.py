@@ -169,6 +169,10 @@ async def blocked_reason(conn, c) -> Optional[str]:
         return "적재가 끝난 뒤부터 동기화해요"
     if await conn.fetchval("SELECT 1 FROM rag_import_batch WHERE team_id = $1 AND status = 'loading'", c["team_id"]):
         return "적재 중이라 끝난 뒤에 동기화해요"
+    if await conn.fetchval("SELECT 1 FROM rag_import_batch WHERE team_id = $1 AND root_url = $2 AND status = 'loaded' AND published_at IS NULL",
+                           c["team_id"], c["root_url"]):
+        # 검수 대기 중에 동기화가 같은 페이지를 바로 게시하면 검수를 건너뛰고, 그 배치 게시가 "같은 원본 먼저 확정"으로 영영 실패한다(재리뷰 M)
+        return "검수 대기 배치가 있어요 — 게시하거나 롤백한 뒤에 동기화해요"
     if await conn.fetchval("SELECT 1 FROM eval_experiment_job WHERE status = 'running'"):
         return "개선 후보 실험 중이라 끝난 뒤에 동기화해요"
     return None

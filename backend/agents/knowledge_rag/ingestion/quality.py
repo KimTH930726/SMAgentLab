@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 async def record_job_quality(conn, job_id: int) -> dict:
     rows = await conn.fetch(
         "SELECT content, heading_path FROM rag_knowledge WHERE ingestion_job_id = $1 "
-        "AND status IN ('active', 'pending_review') ORDER BY source_chunk_idx NULLS LAST, id", job_id)
+        "AND status IN ('active', 'pending_review', 'staging', 'staging_review') ORDER BY source_chunk_idx NULLS LAST, id", job_id)   # 보류(게시 전) 작업도 검수용으로
     q = assess((r["content"], r["heading_path"]) for r in rows)
     await conn.execute("UPDATE rag_ingestion_job SET quality = $1::jsonb WHERE id = $2", json.dumps(q, ensure_ascii=False), job_id)
     if q["warnings"]:

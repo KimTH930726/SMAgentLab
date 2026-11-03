@@ -1693,6 +1693,19 @@ async def _migrate_team_import(conn) -> None:
     # path = 수집 대상 아래 상위 페이지 제목들(화면 판단·같은 상위끼리 묶기, 10/29 사용자 "경로를 보면 유추에 도움")
     for col, typ in (("assigned_by", "TEXT"), ("sample_ns", "INT"), ("path", "TEXT")):
         await conn.execute(f"ALTER TABLE rag_import_page ADD COLUMN IF NOT EXISTS {col} {typ}")
+    # #112(11/03, 결정 가 "검수 후 게시") — close_interrupted가 publishing_at을 쓰므로 그보다 먼저: 팀 적재 배치는 적재해도 바로 채팅에 안 나온다 — 작업 'held' + 게시 때 쓸 값(held_plan),
+    # 배치 게시 시각·게시 전 확인 결과. 이미 적재된 옛 배치는 적재 시각 = 게시 시각(바로 반영되던 때라 이미 채팅에 나온다)
+    await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS held_plan JSONB")
+    await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ")
+    await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS publish_check JSONB")
+    # 게시 중 표시(두 번 누름·게시 중 롤백 막기) · 게시한 사람(자동 용어를 이 사람이 만든다 — 롤백이 그 용어를 찾는 기준)
+    await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS publishing_at TIMESTAMPTZ")
+    await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS published_by_user_id INT")
+    # 옛 흐름(적재 때 용어 추출 → glossary_to_id가 적재 때 채워짐)만 — 새 흐름에서 게시 도중(용어 추출 중) 재시작된 배치는 게시 전으로 남겨
+    # 다시 [게시]하면 용어까지 마무리된다(조용히 "게시됨"으로 바꾸지 않는다, 재리뷰 L2)
+    await conn.execute("UPDATE rag_import_batch b SET published_at = b.loaded_at WHERE b.status = 'loaded' AND b.published_at IS NULL "
+                       "AND b.glossary_to_id IS NOT NULL AND b.published_by_user_id IS NULL "
+                       "AND NOT EXISTS (SELECT 1 FROM rag_ingestion_job j WHERE j.id = ANY(b.job_ids) AND j.status = 'held')")
     # 기동 = 이전 프로세스의 분류·적재는 멈춤 — 고유 인덱스보다 먼저 닫는다(같은 팀 진행 중 행이 둘이면 인덱스가 실패해 기동이 막혔다, 재리뷰 10/29)
     from agents.knowledge_rag.ingestion.team_import import close_interrupted
     await close_interrupted(conn)
@@ -2353,10 +2366,13 @@ async def _cleanup_orphaned_ingestion_jobs(conn) -> None:
     if result and "UPDATE 0" not in result:
         logger.info("[Startup] 이전 프로세스에서 멈춘 수집 작업(processing) 정리: %s", result)
     # 벌크 수집은 끝까지 성공해야만 스테이징 행을 일괄 전환한다(2026-09-28) — 기동 시점에
-    # 남아있는 스테이징 행은 전부 위에서 정리한 고아 job의 부분 결과라 폐기한다(한 번도
+    # 남아있는 스테이징 행은 위에서 정리한 고아 job의 부분 결과라 폐기한다(한 번도
     # 검색에 노출된 적 없는 행이라 지워도 사용자에게 보이던 게 사라지진 않는다).
+    # 단 검수 대기(held) 작업의 조각은 남긴다 — 11/03 "검수 후 게시"로 staging이 "게시를 기다리는 정상 조각"도 뜻하게 됐다
+    # (예전 전제 "staging = 죽은 작업의 찌꺼기"가 깨짐, 재리뷰 H: 재시작하면 검수 대기 조각이 다 지워졌다)
     staged = await conn.execute(
-        "DELETE FROM rag_knowledge WHERE status IN ('staging', 'staging_review')"
+        "DELETE FROM rag_knowledge k WHERE k.status IN ('staging', 'staging_review') AND NOT EXISTS "
+        "(SELECT 1 FROM rag_ingestion_job j WHERE j.id = k.ingestion_job_id AND j.status = 'held')"
     )
     if staged and "DELETE 0" not in staged:
         logger.info("[Startup] 중단된 수집 작업의 스테이징 행 폐기: %s", staged)

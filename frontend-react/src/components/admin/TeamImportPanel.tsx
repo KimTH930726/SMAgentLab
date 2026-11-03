@@ -2,7 +2,7 @@ import { Fragment, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getTeams } from '../../api/auth';
 import {
-  confirmImport, confluencePageUrl, connectImport, getImportBatch, listConnections, syncConnection, getImportCollections, listImportBatches, reviewImportSample, rollbackImport, sampleKey,
+  confirmImport, confluencePageUrl, connectImport, getImportBatch, listConnections, syncConnection, getImportCollections, listImportBatches, reviewImportSample, rollbackImport, publishCheckImport, publishImport, sampleKey,
   setImportDefault, startImport, updateImportPages,
   type ImportBatchDetail, type ImportCollection, type ImportPage, type SourceConnection,
 } from '../../api/teamImport';
@@ -156,6 +156,7 @@ export function ImportBatches({ openId, onOpen }: { openId: number | null; onOpe
 
 const STATUS_TEXT: Record<string, string> = {
   previewing: '분류 중', preview: '분류 미리보기', failed: '실패', loading: '적재 중', loaded: '적재됨', rolled_back: '롤백됨',
+  // 적재됨인데 게시 전 = 검수 대기(채팅에 아직 안 나옴) — 상태 칸은 statusText(b)로
 };
 
 /** URL 폼 안 "공간·하위 전체 넣기" — 팀(관리자만) · 이 공간 기본 위치 · [분류 미리보기 만들기]. */
@@ -365,7 +366,7 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-700 pt-4">
           {data.blockers.length > 0 && <span className="text-xs text-amber-700 dark:text-amber-300">{data.blockers.join(' · ')}</span>}
           <button disabled={data.blockers.length > 0 || confirm.isPending}
-            onClick={async () => { if (await showConfirm('분류를 확정하고 적재할까요? 적재 뒤 평가 게이트에서 나빠지면 이번 배치만 롤백할 수 있어요.')) confirm.mutate(); }}
+            onClick={async () => { if (await showConfirm('분류를 확정하고 적재할까요? 적재한 내용은 검수 대기로 남고, [게시]해야 채팅에 나와요.')) confirm.mutate(); }}
             className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40">
             분류 확정 · 적재
           </button>
@@ -975,9 +976,22 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
   const b = data.batch;
   const loaded = data.pages.filter((p) => p.status === 'loaded').length;
   const failed = data.pages.filter((p) => p.status === 'failed').length;
+  const held = b.status === 'loaded' && !b.published_at ? data.held : null;   // 검수 대기(게시 전)
+  const check = b.publish_check ?? null;
   const rollback = useMutation({
     mutationFn: () => rollbackImport(b.id), onSuccess: onChange, onError: (e) => showError(e),
   });
+  const runCheck = useMutation({ mutationFn: () => publishCheckImport(b.id), onSuccess: onChange, onError: (e) => showError(e) });
+  const publish = useMutation({
+    mutationFn: () => publishImport(b.id),
+    onSuccess: (r) => {
+      onChange();
+      void showAlert(r.failed.length ? `게시 ${r.published}건 · 실패 ${r.failed.length}건 — 실패한 작업은 검수 대기로 남았어요(사유는 위 오류 줄).`
+        : `게시했어요 — 이제 채팅에 나와요(같은 페이지 옛 버전은 내렸어요).`, { tone: r.failed.length ? 'warning' : 'success' });
+    },
+    onError: (e) => showError(e),
+  });
+  const warnCount = held ? Object.values(held.warnings).reduce((a, n) => a + n, 0) : 0;
   if (b.status === 'preview') return <p className="text-sm text-slate-400">분류를 확정해 적재하면 여기서 게이트 결과를 보고 롤백할 수 있어요.</p>;
   return (
     <div className="space-y-4">
@@ -991,12 +1005,44 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat k="이번 적재 배치" v={loaded} sub="페이지" />
         <Stat k="실패" v={failed} hot={failed > 0} />
-        <Stat k="상태" v={STATUS_TEXT[b.status]} />
+        <Stat k="상태" v={held ? '검수 대기' : b.status === 'loaded' && b.published_at ? '게시됨' : STATUS_TEXT[b.status]} hot={!!held} />
       </div>
-      <div className="rounded-lg border border-indigo-200 bg-indigo-50 dark:border-indigo-500/40 dark:bg-indigo-500/10 p-3 text-sm text-slate-200">
-        적재 뒤 평가 게이트(정책서 · 업무지식 두 축)를 돌려 나빠짐 0을 확인해 주세요 — 품질 › 평가 게이트. 하나라도 나빠지면 이번 배치만 롤백.
-        <div className="mt-1 text-xs text-slate-400">지금은 적재하면 바로 채팅에 쓰여요(로컬 — 실사용자 없음). 운영 반입 전에 "게이트 통과 뒤 게시"로 바꿀 예정.</div>
-      </div>
+      {held && (
+        <div className="space-y-3" data-testid="publish-review">
+          <p className="text-sm text-slate-300" title="게시하면 같은 페이지 옛 버전을 내리고 새 조각을 채팅에 내놓아요. 그 전까지는 옛 버전이 그대로 답에 쓰여요">
+            검수 대기 — 아직 채팅에 안 나와요. 확인하고 [게시]하면 반영돼요.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Stat k="게시할 조각" v={held.chunks} sub={`작업 ${held.jobs}`} />
+            <Stat k="중복 의심" v={held.dup} hot={held.dup > 0} sub="게시하면 승인 대기로" />
+            <Stat k="품질 경고" v={warnCount} hot={warnCount > 0} sub={Object.entries(held.warnings).map(([k, n]) => `${k} ${n}`).join(' · ') || '없음'} />
+            <Stat k="검색 확인" v={check?.asked ? `${check.found}/${check.asked}` : check?.skipped ? '건너뜀' : '—'}
+              hot={!!check?.asked && (check.found ?? 0) < (check.asked ?? 0)}
+              sub={check?.skipped ?? (check?.asked ? '찾은 질문 / 만든 질문' : '아직 안 함')} />
+          </div>
+          {check?.misses && check.misses.length > 0 && (
+            <details className="text-xs text-slate-400">
+              <summary className="cursor-pointer">못 찾은 질문 {check.misses.length}개</summary>
+              <ul className="mt-1 space-y-0.5 list-disc pl-5">{check.misses.map((m, i) => <li key={i}>{m.question}{m.title ? ` — ${m.title}` : ''}</li>)}</ul>
+            </details>
+          )}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button disabled={runCheck.isPending || publish.isPending} onClick={() => runCheck.mutate()}
+              title="이 배치 조각 10개로 로컬 LLM이 질문을 만들고, 그 질문으로 이 페이지가 검색 상위 3에 드는지 봐요(벡터만 — 실제 채팅보다 보수적)"
+              className="text-sm px-4 py-2 rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800 disabled:opacity-40">
+              {runCheck.isPending ? '검색 확인 중…' : check ? '검색 확인 다시' : '검색 확인'}
+            </button>
+            <button disabled={publish.isPending || runCheck.isPending}
+              onClick={async () => { if (await showConfirm(`조각 ${held.chunks}개를 채팅에 내놓아요. 같은 페이지 옛 버전은 내려가요.`, { title: '게시', confirmLabel: '게시' })) publish.mutate(); }}
+              className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40">게시</button>
+          </div>
+        </div>
+      )}
+      {!held && b.status === 'loaded' && (
+        <p className="text-xs text-slate-500" title="문제가 보이면 이번 배치만 롤백 — 평가 게이트(정책서 · 업무지식 두 축) 결과로 판단">
+          게시됨 — 채팅에 쓰이는 중이에요. 문제가 보이면 이번 배치만 롤백하세요.
+        </p>
+      )}
       {b.status === 'loaded' && (
         <div className="flex justify-end">
           <button disabled={rollback.isPending}
