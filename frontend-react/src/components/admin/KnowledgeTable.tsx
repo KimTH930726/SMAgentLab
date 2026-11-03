@@ -1211,13 +1211,19 @@ function ReviewTab({ items, canModify, onResolved }: {
   // 가장 비슷한 것부터(서버도 그 순서로 주지만 화면에서 한 번 더 — 값 없는 건 맨 뒤)
   const sortedItems = useMemo(() => [...items].sort((a, b) => (b.max_similarity ?? -1) - (a.max_similarity ?? -1)), [items]);
 
-  const { data: matches = [], isLoading: matchesLoading } = useQuery({
+  const { data: matches = [], isLoading: matchesLoading, isError: matchesError } = useQuery({
     queryKey: ['knowledge-duplicate-matches', selectedItem?.id],
     queryFn: () => getDuplicateMatches(selectedItem!.id),
     enabled: selectedItem !== null,
   });
   // 유사도 높은 순 정렬 — 백엔드가 이미 정렬해 오지만 방어적으로 한번 더 보장
   const sortedMatches = [...matches].sort((a, b) => b.similarity - a.similarity);
+  // 비교할 기존 지식이 없으면(읽기 제한 보류 등) 차이 대신 원문 — 빈 차이 화면이면 무엇을 승인하는지 못 본다(11/03 E2E)
+  // 조회 실패는 "매칭 없음"이 아니다 — 중복이 없다고 믿고 승인하지 않게 오류로 따로 보인다(리뷰)
+  const noMatch = !matchesLoading && !matchesError && sortedMatches.length === 0;
+  const shown = noMatch ? 'side' : view;
+  // 차이 비교 대상 — 첫 대상이 채워지기 전 한 프레임에 "비교할 기존 지식이 없어요"가 비치지 않게 파생값으로(리뷰)
+  const diffTargetId = mergeTargetId ?? sortedMatches[0]?.id ?? null;
 
   useEffect(() => {
     setMergeTargetId(null);
@@ -1289,13 +1295,14 @@ function ReviewTab({ items, canModify, onResolved }: {
             <div className="flex flex-wrap items-center gap-2">
               <div role="group" aria-label="보기" className="flex gap-1">
                 {([['diff', '차이'], ['side', '원문']] as const).map(([k, label]) => (
-                  <button key={k} aria-pressed={view === k} onClick={() => setView(k)}
-                    className={`rounded-full border px-3 py-1 text-xs ${view === k ? 'border-indigo-600 bg-indigo-600 text-white dark:border-indigo-500 dark:bg-indigo-500' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}>
+                  <button key={k} aria-pressed={shown === k} onClick={() => setView(k)} disabled={k === 'diff' && noMatch}
+                    title={k === 'diff' && noMatch ? '비교할 기존 지식이 없어요 — 중복 매칭 없이 대기에 온 항목' : undefined}
+                    className={`rounded-full border px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${shown === k ? 'border-indigo-600 bg-indigo-600 text-white dark:border-indigo-500 dark:bg-indigo-500' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}>
                     {label}
                   </button>
                 ))}
               </div>
-              {view === 'diff' && !matchesLoading && sortedMatches.length > 0 && (
+              {shown === 'diff' && !matchesLoading && sortedMatches.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5" data-testid="review-diff-targets">
                   <span className="text-[11px] text-slate-500">비교 대상(병합 대상)</span>
                   {sortedMatches.map((m) => (
@@ -1307,8 +1314,10 @@ function ReviewTab({ items, canModify, onResolved }: {
                 </div>
               )}
             </div>
-            {view === 'diff' ? (
-              <ReviewDiff before={sortedMatches.find((m) => m.id === mergeTargetId)?.content ?? null} after={selectedItem.content} loading={matchesLoading} />
+            {shown === 'diff' ? (
+              matchesError
+                ? <p className="text-sm text-rose-600 dark:text-rose-400 py-4 text-center">비슷한 기존 지식을 불러오지 못했어요 — 창을 닫았다 다시 열거나 [원문]으로 보세요.</p>
+                : <ReviewDiff before={sortedMatches.find((m) => m.id === diffTargetId)?.content ?? null} after={selectedItem.content} loading={matchesLoading} />
             ) : (
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -1323,6 +1332,8 @@ function ReviewTab({ items, canModify, onResolved }: {
                 </p>
                 {matchesLoading ? (
                   <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
+                ) : matchesError ? (
+                  <p className="text-sm text-rose-600 dark:text-rose-400 py-4 text-center">비슷한 기존 지식을 불러오지 못했어요 — 창을 닫았다 다시 열어 주세요.</p>
                 ) : (
                   <div className="space-y-1.5 h-[28rem] overflow-y-auto">
                     {sortedMatches.map((m: DuplicateMatch) => {
