@@ -65,7 +65,7 @@ test('평가 게이트 — 단계 줄 = 원인 수(누르면 그 단계 원인�
   test.setTimeout(90_000);
   const t = await adminToken();
   const h = { headers: { Authorization: `Bearer ${t}` } };
-  const techs: { key: string; stage: string }[] = await (await apiFetch(`${API}/api/eval/techniques`, h)).json();
+  const techs: { key: string; stage: string; flow: string; state: string }[] = await (await apiFetch(`${API}/api/eval/techniques`, h)).json();
   const history: { stage: string }[] = await (await apiFetch(`${API}/api/eval/history`, h)).json();
   await loginAdmin(page);
   const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
@@ -95,10 +95,22 @@ test('평가 게이트 — 단계 줄 = 원인 수(누르면 그 단계 원인�
   await page.getByTestId('flow-검색').click();
   await expect(page.getByTestId('stage-filter')).toHaveCount(0);
 
-  // ③ 기법 대장(10/30 — 후보 결정은 ② 개선 후보 필터로) — 접혀 있고, 펼치면 항목 전체 = 대장(단계 밖으로 빠진 항목 0), [이력] = 최근 5줄 + 전체 = API
+  // ③ 기법 대장(11/03 흐름도) — 펼치면 흐름도: 세 흐름(채팅·적재·평가) 칸을 다 합치면 대장 전체(빠진 기법 0), 칸 상태 = API 상태.
+  // 그 아래 [이력] = 최근 5줄 + 전체 = API
   await page.getByTestId('gate-history-section').getByRole('button', { name: /기법 대장/ }).click();
-  await expect(page.locator('[data-testid^="technique-row-"]')).toHaveCount(techs.length);
-  await page.getByRole('button', { name: '이력', exact: true }).click();
+  const flowEl = page.getByTestId('technique-flow');
+  let seen = 0;
+  for (const tab of ['채팅 흐름', '적재 흐름', '평가·개선']) {
+    await flowEl.getByRole('tab', { name: tab }).click();
+    seen += await flowEl.locator('[data-testid^="flow-tech-"]').count();
+  }
+  expect(seen).toBe(techs.length);
+  await flowEl.getByRole('tab', { name: '채팅 흐름' }).click();
+  for (const t of techs.filter((x: { flow: string }) => x.flow === 'chat')) {
+    await expect(flowEl.getByTestId(`flow-tech-${t.key}`)).toHaveAttribute('data-state', t.state);
+  }
+  await flowEl.getByTestId('flow-tech-chat_prompt').click();
+  await expect(page.getByTestId('technique-flow-panel')).toContainText('필수');
   await expect(page.getByTestId('gate-history')).toBeVisible();
   await expect(page.getByTestId('history-row')).toHaveCount(Math.min(5, history.length));
   if (history.length > 5) {

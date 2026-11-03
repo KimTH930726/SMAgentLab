@@ -191,10 +191,29 @@ export interface Technique {
   example?: { where: string; lines: [string, string][]; chips: string[] } | null;
   rules?: string[];
   candidates: { id: number; title: string; status: CandidateStatus; recommend: Candidate['recommend']; n_target: number }[];
+  /** 흐름도(11/03) — 어느 흐름·단계에서 쓰이나, 필수/적용 중/미적용, 실행 중 켜고 끌 수 있나 */
+  flow: 'chat' | 'ingest' | 'eval';
+  step: string;
+  state: 'required' | 'on' | 'off';
+  switchable: boolean;
+  off_reason: string | null;
+  changed: { by: string | null; at: string | null } | null;
+  /** 검증된 최적 값(스위치만) — 지금 값이 이것과 다르면 "최적에서 벗어남" */
+  baseline_on: boolean | null;
+  baseline_warn: string | null;
 }
+
+export interface TechniqueBaseline { optimal: boolean; off: string[]; evidence: string }
+export const getTechniqueBaseline = () => apiFetch<TechniqueBaseline>('/eval/techniques/baseline');
+export const restoreTechniqueBaseline = () => apiFetch<{ restored: string[]; optimal: boolean }>('/eval/techniques/baseline/restore', { method: 'POST' });
 
 export async function listTechniques(): Promise<Technique[]> {
   return apiFetch<Technique[]>('/eval/techniques');
+}
+
+/** 기법 켜고 끄기(관리자) — 바로 적용, 답변 캐시 비움 */
+export async function switchTechnique(key: string, on: boolean): Promise<{ key: string; on: boolean; by: string | null; at: string }> {
+  return apiFetch(`/eval/techniques/${key}/switch`, { method: 'PUT', body: JSON.stringify({ on }) });
 }
 
 /** 문항 상세(관리자) — 질문·답·채점 이유는 서버가 결과 파일에서 읽어 줌(DB 저장 없음) */

@@ -7,6 +7,7 @@ import { lockedAccuracy } from '../../utils/evalLayers';
 import { Modal } from '../ui/Modal';
 import { GateFlow, type Stage } from './GateFlow';
 import { GateHistory } from './GateHistory';
+import { TechniqueFlow } from './TechniqueFlow';
 import { ImproveAreas, InProgress, isOpen } from './GateReport';
 import { AnswerTab, RetrievalTab } from './GateRuns';
 
@@ -120,7 +121,8 @@ function AxisGate({ axis }: { axis: GateAxis }) {
         <button className="text-sm font-semibold text-slate-100" onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>
           {historyOpen ? '▾' : '▸'} ③ 기법 대장</button>
         {/* 후보 결정(반영·실패·기각)은 ② 개선 후보의 필터로 — 여기는 기법마다 기준값·근거(반영·실패 측정은 자동으로 근거에, 10/30) */}
-        {historyOpen && <GateHistory recent={5} initial="all" />}
+        {/* 흐름도(11/03) — 단계마다 쓰이는 기법·필수/적용 중/미적용·켜고 끄기. 날짜순 이력은 그 아래 */}
+        {historyOpen && <><TechniqueFlow /><GateHistory recent={5} initial="log" /></>}
       </section>
 
       <Modal isOpen={detail !== null} onClose={() => setDetail(null)} title={detail === 'retrieval' ? '검색 성적' : '답 성적'} maxWidth="max-w-5xl">

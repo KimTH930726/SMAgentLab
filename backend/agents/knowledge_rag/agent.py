@@ -46,6 +46,16 @@ POLICY_CONTEXT_TOP_K = 10
 # 옮긴 뒤 linked 없이 정책에서 물으면 운영 지식 검색 0%(측정) — 둘 중 하나만 끄지 말 것.
 CHAT_KNOWLEDGE_SCOPE = "linked"
 CHAT_CONTEXT_BUDGET = 12000
+# 인자를 안 주면(채팅·플래그 없는 측정) = 채팅 기본 — 기법 대장 스위치(core/technique_flags, 11/03)가 끄면 그 기법만 빠진다.
+# 측정 스크립트가 --scope/--context-budget로 직접 준 값은 스위치와 무관하게 그대로(측정이 화면 스위치에 흔들리지 않게)
+CHAT_DEFAULT = "__chat_default__"
+
+
+def chat_defaults() -> dict:
+    """지금 채팅이 쓰는 범위·예산 — 스위치가 꺼지면 None(그 기법 끔)."""
+    from core import technique_flags
+    return {"knowledge_scope": CHAT_KNOWLEDGE_SCOPE if technique_flags.is_on("linked_scope") else None,
+            "context_budget": CHAT_CONTEXT_BUDGET if technique_flags.is_on("context_budget") else None}
 
 
 def scope_overrides(scope: Optional[str], budget: Optional[int]) -> dict:
@@ -60,7 +70,7 @@ def scope_overrides(scope: Optional[str], budget: Optional[int]) -> dict:
 
 def effective_scope_label(scope: Optional[str], budget: Optional[int]) -> str:
     """측정 줄에 남길 실제 설정 — 플래그가 아니라 쓴 값(플래그 없음 = 채팅 기본이 바뀌어도 옛 파일과 섞이지 않게, 리뷰 M1)."""
-    eff = {"knowledge_scope": CHAT_KNOWLEDGE_SCOPE, "context_budget": CHAT_CONTEXT_BUDGET, **scope_overrides(scope, budget)}
+    eff = {**chat_defaults(), **scope_overrides(scope, budget)}
     return f"scope={eff['knowledge_scope'] or 'none'},budget={eff['context_budget'] or 0}"
 
 
@@ -244,9 +254,13 @@ async def build_chat_context(
     glossary_mode: Optional[str] = None, glossary_entries: Optional[list] = None,
     policy_top_k: int = POLICY_CONTEXT_TOP_K, category_lists: bool = True, clarify_scope: Optional[str] = None,
     list_question: Optional[str] = None,
-    knowledge_scope: Optional[str] = CHAT_KNOWLEDGE_SCOPE, context_budget: Optional[int] = CHAT_CONTEXT_BUDGET,
+    knowledge_scope: Optional[str] = CHAT_DEFAULT, context_budget=CHAT_DEFAULT,
 ) -> ChatContext:
     """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB)."""
+    if knowledge_scope == CHAT_DEFAULT or context_budget == CHAT_DEFAULT:
+        d = chat_defaults()
+        knowledge_scope = d["knowledge_scope"] if knowledge_scope == CHAT_DEFAULT else knowledge_scope
+        context_budget = d["context_budget"] if context_budget == CHAT_DEFAULT else context_budget
     # 정책서 범위(2026-10-20, 사용자 결정): 지식은 고른 파트만, 정책서(정책·용어)는 정책 파트까지 — service/policy/scope.py.
     # 정책 데이터가 있는 파트만 돌려주므로 비어 있으면 정책 검색·분류 목록을 건너뛴다(예전 has_policy_data와 같은 역할).
     try:
@@ -353,7 +367,8 @@ async def build_chat_context(
     llm_context = _build_rrf_context(results, ctx_policy, common_codes, db_columns, parent_expansions, budget=context_budget)
     # 참고표·문서 개요(v0 #12) — 요약 벡터로 찾아 표 압축본·개요 본문을 문맥 끝에. 붙이는 규칙·하한은 ref_search 모듈 설명(10/26 측정)
     refs = None
-    if settings.policy_ref_chat and policy_available:
+    from core import technique_flags
+    if technique_flags.is_on("ref_table_chat") and policy_available:   # 기본 = 설정 policy_ref_chat, 기법 대장 스위치로 끔/켬
         try:
             refs = await ref_search.search_refs(
                 policy_ns_ids, query_vec, lq, top_narrative=max((n.score for n in policy_result.narratives), default=0.0),

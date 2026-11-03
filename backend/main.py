@@ -2540,7 +2540,7 @@ async def lifespan(_app: FastAPI):
     await _run_migrations()
     async with get_conn() as conn:
         await sem_cache.load_config_from_db(conn)
-        await load_runtime_overrides_from_db(conn)
+        await load_runtime_overrides_from_db(conn)   # 기법 스위치는 init_pool이 읽는다(측정 스크립트와 같은 길)
         await _warn_if_embedding_model_stale(conn)
     embedding_service.load()
     from agents.knowledge_rag.knowledge.retrieval import KEYWORD_RESCUE as _kr

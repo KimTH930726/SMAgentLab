@@ -542,3 +542,19 @@ def test_context_budget_keeps_top_ranked_blocks_within_budget():
         assert small.count("--- 문서 #") == 2 and "#1 " in small and "#9 " not in small   # 위에서부터 2개, 보충은 예산 밖
         tiny = agent._build_rrf_context(r, pol, parent_expansions=exp, budget=10)
         assert tiny.count("--- 문서 #") == 1                                              # 첫 블록은 늘
+
+
+def test_switch_off_changes_chat_defaults_but_not_explicit_flags():
+    """기법 스위치를 끈 경로(11/03 리뷰 M3) — 실제 스위치 모듈(conftest가 건 core.technique_flags)로 linked·예산을 끄면 채팅 기본이 None,
+    측정이 직접 준 값은 그대로."""
+    flags = sys.modules["core.technique_flags"]
+    flags._state.clear()
+    try:
+        assert agent.chat_defaults() == {"knowledge_scope": "linked", "context_budget": 12000}
+        flags._state["linked_scope"] = {"on": False, "by": "t", "at": "t"}
+        flags._state["context_budget"] = {"on": False, "by": "t", "at": "t"}
+        assert agent.chat_defaults() == {"knowledge_scope": None, "context_budget": None}
+        assert agent.effective_scope_label(None, None) == "scope=none,budget=0"            # 라벨도 실제 쓴 값
+        assert agent.effective_scope_label("linked", 12000) == "scope=linked,budget=12000"  # 직접 준 값은 스위치와 무관
+    finally:
+        flags._state.clear()

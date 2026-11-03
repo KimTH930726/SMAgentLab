@@ -17,6 +17,10 @@ async def init_pool() -> None:
         max_size=settings.db_pool_max_size,
         command_timeout=60,
     )
+    # 기법 스위치(11/03) — 서버만 읽으면 측정 스크립트(별도 프로세스)가 코드 기본값으로 재서 "바꾼 뒤 게이트"가 실제 채팅과 다른 설정을 쟀다(리뷰 M1)
+    from core import technique_flags
+    async with get_conn() as conn:
+        await technique_flags.load(conn)
 
 
 async def close_pool() -> None:

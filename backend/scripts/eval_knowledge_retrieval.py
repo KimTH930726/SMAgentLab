@@ -30,8 +30,8 @@ async def main() -> None:
     ap.add_argument("--details")
     ap.add_argument("--scope", choices=["linked", "similar", "none"], default=None, help="지식 검색 범위 — 안 주면 채팅 기본(agent.CHAT_KNOWLEDGE_SCOPE), none: 고른 컬렉션만")
     a = ap.parse_args()
-    from agents.knowledge_rag.agent import CHAT_KNOWLEDGE_SCOPE
-    scope = CHAT_KNOWLEDGE_SCOPE if a.scope is None else (None if a.scope == "none" else a.scope)
+    from agents.knowledge_rag.agent import chat_defaults
+    scope = chat_defaults()["knowledge_scope"] if a.scope is None else (None if a.scope == "none" else a.scope)   # 안 주면 지금 채팅(스위치 반영)
     await init_pool()
     embedding_service.load()
     async with get_conn() as conn:

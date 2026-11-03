@@ -169,6 +169,9 @@ FEATURE_SETTINGS = {"usage_ref_table": "policy_ref_chat", "usage_overview": "pol
 
 def feature_on(check_key: str, settings) -> bool:
     attr = FEATURE_SETTINGS.get(check_key)
+    if attr == "policy_ref_chat":   # 기법 대장 스위치가 기준(11/03 — 꺼 둔 기능을 대상으로 후보가 생기지 않게)
+        from core import technique_flags
+        return bool(technique_flags.is_on("ref_table_chat"))
     return bool(attr and getattr(settings, attr, False))
 
 

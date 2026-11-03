@@ -139,6 +139,7 @@ async def main() -> int:
     ap.add_argument("--verify", action="store_true", help="답 뒤 근거 확인 — 초안의 주장이 문맥에 없으면 빼거나 '못 찾음'으로")
     a = ap.parse_args()
     from agents.knowledge_rag.agent import effective_scope_label
+    await init_pool()   # 먼저 — 기법 스위치를 읽어야 아래 범위·예산 라벨이 실제 채팅 설정이 된다(11/03)
     # 범위·예산은 실제 쓴 값으로 항상 — 채팅 기본이 바뀌면(11/02 linked·1만2천) 옛 파일(None)과 이어 하기가 막힌다(리뷰 M1)
     variant = ",".join(x for x in (f"policy_top_k={a.policy_top_k}" if a.policy_top_k is not None else "", "no_expand" if a.no_expand else "",
                                    "verify" if a.verify else "", effective_scope_label(a.scope, a.context_budget)) if x)
@@ -155,7 +156,6 @@ async def main() -> int:
     if mixed:   # 이어 하기에서 다른 프롬프트 답이 섞이면 비교가 무의미 — 막는다(리뷰 10/30 L3)
         print(f"입력 오류: {out.name}에 다른 프롬프트로 만든 답이 있음({sorted(map(str, mixed))}) — 새 --out 파일로")
         return 2
-    await init_pool()
     embedding_service.load()
     async with get_conn() as conn:
         await retrieval.load_runtime_overrides_from_db(conn)

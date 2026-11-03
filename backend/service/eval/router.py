@@ -143,6 +143,65 @@ async def adopt_candidate(cand_id: int, body: AdoptBody, admin: dict = Depends(g
     return r
 
 
+class SwitchBody(BaseModel):
+    on: bool
+
+
+@router.put("/techniques/{key}/switch")
+async def switch_technique(key: str, body: SwitchBody, admin: dict = Depends(get_current_admin)):
+    """기법 켜고 끄기(관리자, 11/03 기법 대장 흐름도) — 바로 적용. 스위치가 있는 기법만(core/technique_flags.SWITCHES), 나머지는 404.
+    바꾸면 답변 캐시를 비운다(옛 설정으로 만든 답이 TTL 동안 나가지 않게). 정확도에 영향이 있어 화면이 마지막 게이트와 다시 재기를 안내한다."""
+    from core import technique_flags
+    from core.database import get_conn
+    from service.eval.techniques import FLOW_OF
+    if FLOW_OF.get(key, (None, None, None, None))[2] == "required":   # 필수는 강제로 막는다(11/03 태훈 "아예 못 바꾸게")
+        raise HTTPException(status_code=403, detail="필수 기법은 바꿀 수 없어요 — 끄면 기본 동작이 깨져요.")
+    if key not in technique_flags.SWITCHES:
+        raise HTTPException(status_code=404, detail="끄고 켤 수 있는 기법이 아닙니다.")
+    async with get_conn() as conn:
+        row = await technique_flags.set_switch(conn, key, body.on, admin.get("username"))
+    if key == "collection_suggest":   # 그 기능의 30초 설정 캐시도 비운다 — 안 그러면 30초 동안 옛 값
+        from service.chat import collection_suggest
+        collection_suggest._flag_cache = (0.0, False)
+    try:
+        from shared import cache as sem_cache
+        await sem_cache.invalidate_all()
+    except Exception:   # noqa: BLE001 — 스위치는 이미 바뀜(캐시는 TTL로 사라진다)
+        import logging
+        logging.getLogger(__name__).warning("기법 스위치 뒤 답변 캐시 비우기 실패", exc_info=True)
+    return {"key": key, **row}
+
+
+@router.get("/techniques/baseline")
+async def technique_baseline(user: dict = Depends(get_current_user)):
+    """검증된 최적 상태 — 지금 최적인지, 벗어난 스위치, 근거(게이트)."""
+    from core import technique_flags
+    return {"optimal": not technique_flags.off_baseline(), "off": technique_flags.off_baseline(),
+            "evidence": technique_flags.BASELINE_EVIDENCE}
+
+
+@router.post("/techniques/baseline/restore")
+async def restore_technique_baseline(admin: dict = Depends(get_current_admin)):
+    """[최적으로 되돌리기] — 벗어난 스위치만 최적 값으로(바꾼 기록 남김) + 답변 캐시 비움."""
+    from core import technique_flags
+    from core.database import get_conn
+    off = technique_flags.off_baseline()
+    async with get_conn() as conn:
+        for key in off:
+            await technique_flags.set_switch(conn, key, technique_flags.BASELINE[key], admin.get("username"))
+    if "collection_suggest" in off:
+        from service.chat import collection_suggest
+        collection_suggest._flag_cache = (0.0, False)
+    if off:
+        try:
+            from shared import cache as sem_cache
+            await sem_cache.invalidate_all()
+        except Exception:   # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning("최적 되돌리기 뒤 답변 캐시 비우기 실패", exc_info=True)
+    return {"restored": off, "optimal": True}
+
+
 @router.get("/techniques")
 async def list_techniques(user: dict = Depends(get_current_user)):
     """답 기법 대장(읽기) — 기준값은 지금 서버의 운영값."""

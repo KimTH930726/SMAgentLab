@@ -67,6 +67,12 @@ for _n in ("OWNER_ROWS_SQL", "STAGING_KIND", "STAGING_NAME", "STAGING_NAME_PREFI
            "LOOSE_NAMESPACE_REFS", "POLICY_COLLECTION_KNOWLEDGE_MSG"):
     setattr(_db_mod, _n, getattr(_real_db, _n))
 sys.modules["core.database"] = _db_mod
+# 기법 스위치(11/03)는 표준 라이브러리만 쓰는 작은 모듈 — 가짜로 두면 is_on이 MagicMock(참)이라 끈 경로를 못 본다. 실제 파일을 건다(상태는 비어 있음 = 기본값)
+_tf_spec = _ilu_db.spec_from_file_location("core.technique_flags", str(Path(backend_dir) / "core" / "technique_flags.py"))
+_tf = _ilu_db.module_from_spec(_tf_spec)
+_tf_spec.loader.exec_module(_tf)
+sys.modules["core.technique_flags"] = _tf
+sys.modules["core"].technique_flags = _tf   # `from core import technique_flags`는 패키지 속성을 본다
 
 sys.modules["core.dependencies"] = MagicMock()
 # 정책은 정책 컬렉션에만(#105) — 기본은 통과. 거부 자체는 test_team_part_collections.py가 실제 함수로 본다

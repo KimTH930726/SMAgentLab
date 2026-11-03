@@ -167,7 +167,6 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
     from core.database import init_pool, get_conn
     from shared.embedding import embedding_service
     from agents.knowledge_rag.agent import build_chat_context, effective_scope_label, scope_overrides
-    scope_label = effective_scope_label(scope, context_budget)   # 줄마다 실제 범위·예산(리뷰 L3 — 옛 파일과 비교할 때 확인용)
     from agents.knowledge_rag.knowledge import retrieval, glossary_terms
     from service.chat.helpers import is_llm_failure
     from service.llm.base import resolve_system_prompt
@@ -176,6 +175,7 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
     from service.policy.visibility import searchable_sql
 
     await init_pool()
+    scope_label = effective_scope_label(scope, context_budget)   # 줄마다 실제 범위·예산 — 풀을 연 뒤(기법 스위치를 읽은 뒤, 11/03)
     embedding_service.load()
     async with get_conn() as conn:
         await retrieval.load_runtime_overrides_from_db(conn)

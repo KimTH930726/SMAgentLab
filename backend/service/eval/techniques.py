@@ -161,6 +161,64 @@ TECHNIQUES: list[dict] = [
      "where": "libs/trustkit/trustkit/answer/grounding.py:def apply_verdict"},
 ]
 
+TECHNIQUES += [
+    {"key": "linked_scope", "name": "관련 정책 연결 검색", "stage": "검색",
+     "does": "고른 컬렉션 + 관련 정책으로 연결된 시스템·정책까지 지식을 찾는다(채팅 기본)",
+     "values": {"범위": (None, "linked")},
+     "evidence": [("2026-11-02", "운영 지식 시스템 이동과 한 묶음 — #71 업무지식 73.6→77.4% · #75 정책서 84.9→86.0%, 끄면 정책에서 물은 운영 지식 0%")],
+     "where": "agents/knowledge_rag/agent.py:CHAT_KNOWLEDGE_SCOPE"},
+    {"key": "context_budget", "name": "문맥 예산", "stage": "검색",
+     "does": "정책·지식 후보를 한 줄 순위로 세워 위에서부터 예산까지만 AI에게 넘긴다",
+     "values": {"예산": (None, "1만 2천 자")},
+     "evidence": [("2026-11-02", "#68 업무지식 73.6→76.4% · #70 정책서 84.9→85.8%, 단정 오답 26.4→20.3%")],
+     "where": "agents/knowledge_rag/agent.py:CHAT_CONTEXT_BUDGET"},
+    {"key": "url_guard", "name": "허용 호스트 검사", "stage": "적재",
+     "does": "URL·컨플 가져오기는 허용 호스트만 — 리다이렉트마다 다시 보고 응답은 20MB까지",
+     "values": {"허용": ("URL_IMPORT_ALLOWED_HOSTS", "confl.sinc.co.kr")},
+     "evidence": [("2026-11-03", "운영 전 보안 리뷰 #3 — 사내 내부 주소를 서버가 대신 읽던 것(SSRF)·PAT 유출 차단")],
+     "where": "agents/knowledge_rag/ingestion/web_crawler.py:def guarded_client"},
+    {"key": "batch_publish", "name": "검수 후 게시", "stage": "적재",
+     "does": "팀 적재 배치는 검수 대기로 두고 [게시] 뒤에만 채팅에 — 게시 전엔 같은 페이지 옛 버전이 그대로",
+     "values": {}, "evidence": [("2026-11-03", "결정 (가) — 적재 즉시 답에 섞이던 것")],
+     "where": "agents/knowledge_rag/ingestion/team_import.py:def publish_batch"},
+]
+
+# 흐름도(11/03 태훈 "흐름도상 어떤 단계에서 쓰이는지 + 필수는 필수, 끄고 켤 수 있는 건 끄고 켜게") — 기법마다 (흐름, 단계, 모드, 미적용 사유)
+# 모드: required = 필수(끄면 기본 동작이 깨짐) · on = 적용 중(코드에 고정, 스위치 없음) · off = 미적용(사유) · switch = 실행 중 켜고 끔(core/technique_flags)
+FLOWS = {"chat": ("질문 이해", "검색", "근거 판정", "문맥 구성", "답 모양", "생성", "답 뒤"),
+         "ingest": ("수집", "넣을 곳", "분할·저장", "점검", "게시"),
+         "eval": ("측정", "원인·개선")}
+FLOW_OF: dict[str, tuple[str, str, str, Optional[str]]] = {
+    "glossary_match": ("chat", "질문 이해", "required", None),
+    "glossary_synonyms": ("chat", "질문 이해", "on", None),
+    "linked_scope": ("chat", "검색", "switch", None),
+    "policy_rrf": ("chat", "검색", "required", None),
+    "keyword_rescue": ("chat", "검색", "on", None),
+    "ref_table_chat": ("chat", "검색", "switch", None),
+    "abstain_prefilter": ("chat", "근거 판정", "off", "서술 하한이 비어 있어 안 씀 — 하한 재보정(게이트) 뒤 값으로 켠다"),
+    "context_budget": ("chat", "문맥 구성", "switch", None),
+    "policy_top_k": ("chat", "문맥 구성", "required", None),
+    "parent_expansion": ("chat", "문맥 구성", "on", None),
+    "list_context_filter": ("chat", "문맥 구성", "on", None),
+    "category_list": ("chat", "답 모양", "on", None),
+    "list_line_format": ("chat", "답 모양", "required", None),
+    "clarify": ("chat", "답 모양", "on", None),
+    "ref_clarify": ("chat", "답 모양", "on", None),
+    "condition_hint": ("chat", "답 모양", "on", None),
+    "chat_prompt": ("chat", "생성", "required", None),
+    "grounding_check": ("chat", "답 뒤", "off", "실험만 — 10/30 #11에서 단정 오답 17.2→21.9%로 나빠져 채팅에 연결하지 않음"),
+    "collection_suggest": ("chat", "답 뒤", "switch", None),
+    "url_guard": ("ingest", "수집", "required", None),
+    "knowledge_location": ("ingest", "넣을 곳", "required", None),
+    "chunk_header": ("ingest", "분할·저장", "required", None),
+    "knowledge_dedupe": ("ingest", "분할·저장", "required", None),
+    "param_derive": ("ingest", "분할·저장", "off", "실험만 — 사람 문항에 효과 없음(적재에 안 씀)"),
+    "ingest_contract": ("ingest", "점검", "required", None),
+    "source_check": ("ingest", "점검", "required", None),
+    "batch_publish": ("ingest", "게시", "required", None),
+    "improve_recommend": ("eval", "원인·개선", "on", None),
+}
+
 BY_KEY = {t["key"]: t for t in TECHNIQUES}
 
 
@@ -204,5 +262,21 @@ def as_rows() -> list[dict]:
         rows.append({**{k: t[k] for k in ("key", "name", "stage", "does", "where")},
                      "values": [{"label": k, "value": v, "setting": t["values"][k][0]} for k, v in vals.items()],
                      "evidence": [{"date": e[0], "note": e[1], "gate_run_id": e[2] if len(e) > 2 else None} for e in t["evidence"]],
-                     "example": t.get("example"), "rules": rules_of(t, vals)})
+                     "example": t.get("example"), "rules": rules_of(t, vals), **flow_view(t["key"])})
     return rows
+
+
+def flow_view(key: str) -> dict:
+    """흐름도 칸 — 흐름·단계·상태(required/on/off)·스위치 여부·미적용 사유·마지막 변경. 스위치는 지금 값(core/technique_flags)."""
+    from core import technique_flags
+    flow, step, mode, why = FLOW_OF.get(key, ("chat", "검색", "on", None))
+    if mode == "switch":
+        state = "on" if technique_flags.is_on(key) else "off"
+    else:
+        state = {"required": "required", "off": "off"}.get(mode, "on")
+    sw = mode == "switch"
+    return {"flow": flow, "step": step, "state": state, "switchable": sw, "off_reason": why,
+            "changed": technique_flags.changed(key) if sw else None,
+            # 검증된 최적 값(켜짐/꺼짐)과 벗어나면 잃는 것 — 화면이 "최적 상태" 표시·경고에 쓴다
+            "baseline_on": technique_flags.BASELINE.get(key) if sw else None,
+            "baseline_warn": technique_flags.BASELINE_WARN.get(key) if sw else None}
