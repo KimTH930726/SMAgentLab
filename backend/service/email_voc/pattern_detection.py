@@ -1,4 +1,5 @@
-"""반복 VOC 패턴 탐지 — 임베딩 유사도 + 시간창 + 임계치, LLM 호출 없음.
+"""반복 VOC 패턴 탐지 — 임베딩으로 후보 찾기 + 시간창 + 임계치, 합류는 LLM 같은 문제 확인(11/03부터, 메일당 최대 2회).
+아래 8/25~8/27 문단은 "LLM 호출 없음" 시절 이력이다 — 지금 규칙은 맨 아래 "대표 고정 + LLM 확인".
 
 배경: "IT와 상관없는 배달/음료 자체 불만까지 너무 많이 온다"는 피드백 이후,
 "그럼 반복되는 유형인지는 알려줄 수 없냐"는 요구로 이어짐. 매 건마다 LLM을
@@ -50,9 +51,18 @@ A~B, B~C, C~D처럼 사슬로 이어지면 A와 D가 실제로는 안 닮았는�
 클러스터에 묶이는 문제가 실 데이터에서 확인됐다(단일 링크 클러스터링의 전형적
 결함 — "배달 오배송 불만" 클러스터가 37건까지 불어나며 category가 뒤섞임).
 이제는 새 VOC를 "클러스터 전체의 대표(centroid)"와 비교해서 합류 여부를
-판단하고, 합류할 때마다 centroid를 점증 갱신(가중 평균 후 재정규화)한다 —
-클러스터가 커질수록 그 유형의 "평균적 의미"에서 벗어난 건 자연히 안 붙는다.
+판단하고, 합류할 때마다 centroid를 점증 갱신(가중 평균 후 재정규화)했다 —
+클러스터가 커질수록 그 유형의 "평균적 의미"에서 벗어난 건 자연히 안 붙는다는 가정(→ 11/03 폐기, 아래).
+
+대표 고정 + LLM 확인(2026-11-03): 위 점증 갱신이 오히려 끌림을 만들었다 — 실측(10/22 이후 묶음 28개·멤버 425건) 멤버-대표 유사도는
+전원 ≥0.80인데 멤버끼리는 45.5%가 <0.80, 묶음 안 같은 문제 쌍 26.7%(20건 이상 묶음 15.6%), 최대 130건. 합류할 때마다 대표가 새
+멤버 쪽으로 움직여 사슬처럼 묶인 것. 코사인 구분력도 AUC 0.60(≥0.9 쌍도 같은 문제 30%)이라 임계치·멤버 최소 유사도 같은 임베딩
+규칙으로는 못 고친다(재생 비교: 정밀도 18~29%, 그대로거나 나빠짐). 그래서 대표는 묶음을 만들 때 한 번 정하고 고정, 임베딩은 후보
+찾기만, 합류는 LLM이 기준 건(첫 멤버)과 "같은 문제"라고 할 때만. 저장된 임베딩 재생(로컬 Qwen, 같은 쌍 기준): 묶음 안 같은 문제
+쌍 28.6→76.3%, 20건 이상 묶음 15.6→75%, 최대 묶음 133→28건, 팀즈 발송 135→36건 — 대신 같은 문제로 라벨된 27쌍 중 같이 남는
+비율 89→56%(덜 묶는다, 잘못 묶는 것보다 안전한 쪽). 확인 프롬프트의 "확실하지 않으면 false"는 뺐다(넣으면 같은 문제 통과 63%).
 """
+import asyncio
 import json
 import logging
 import re
@@ -129,13 +139,14 @@ def _normalize_subject(subject: str) -> str:
 
 def _parse_vec(pgvector_text: str) -> np.ndarray:
     """asyncpg가 pgvector 컬럼을 파이썬 list가 아니라 텍스트('[0.1,0.2,...]')로
-    반환하므로(코덱 미등록, 실측 확인) centroid 갱신처럼 파이썬에서 직접 벡터
+    반환하므로(코덱 미등록, 실측 확인) 새 묶음 대표 계산처럼 파이썬에서 직접 벡터
     연산을 해야 할 때 파싱이 필요하다."""
     return np.array([float(x) for x in pgvector_text.strip("[]").split(",")], dtype=np.float32)
 
 
 def _weighted_average_normalize(existing: np.ndarray, existing_weight: int, new_vec: list[float]) -> list[float]:
-    """클러스터 대표 임베딩(centroid)을 멤버가 늘 때마다 점증적으로 갱신한다.
+    """가중 평균 후 재정규화. 지금 운영은 새 묶음 대표(두 건의 중점, existing_weight=1)에만 쓴다 — 합류 때마다 대표를
+    갱신하던 용도는 11/03 폐기(모듈 docstring "대표 고정 + LLM 확인"). 아래는 그 시절 점증 갱신 근사 설명.
 
     existing은 이미 정규화(단위벡터)된 이전 centroid — 원래 합(sum)을 따로
     저장해두지 않으므로, "정규화 전 평균 크기가 대략 1"이라고 근사해
@@ -151,18 +162,58 @@ def _weighted_average_normalize(existing: np.ndarray, existing_weight: int, new_
     return mean.tolist()
 
 
+def issue_text(subject: str, body: str) -> str:
+    """같은 문제 확인(LLM)에 넘기는 문의 한 건 — 제목 + 본문 앞부분(토큰 상한)."""
+    return ((subject or "") + "\n" + (body or ""))[:900]
+
+
+def build_same_issue_prompt(new_text: str, member_text: str) -> str:
+    return (
+        "아래 [새 문의]가 [기존 문의]와 같은 문제의 반복인지 판정하세요.\n"
+        "같은 문제 = 같은 시스템·기능(화면)에서 같은 증상, 또는 같은 요청.\n"
+        "같은 분야(예: 둘 다 배송·결제·쿠폰)라도 대상 기능이나 증상이 다르면 다른 문제입니다.\n\n"
+        f"[기존 문의]\n{member_text}\n\n[새 문의]\n{new_text}\n\n"
+        '답은 JSON 한 줄만: {"same_issue": true} 또는 {"same_issue": false}'
+    )
+
+
+async def _confirm_same_issue(new_text: str, member_text: str) -> Optional[bool]:
+    """임베딩이 고른 후보가 정말 같은 문제인지 LLM으로 확인. None = 실패·애매 — 호출부는 합류하지 않는다(잘못 묶는 게 놓치는 것보다
+    위험). False와 나누는 건 LLM 장애로 반복 감지가 통째로 꺼진 것을 "반복 없음"과 구분해 보이게 하려고(수집 결과 skipped_confirm_failed)."""
+    try:
+        raw = await get_llm_provider().generate_once(prompt=build_same_issue_prompt(new_text, member_text), max_tokens=30)
+        verdict = parse_json_object(raw).get("same_issue")
+    except Exception as e:
+        logger.warning("같은 문제 확인(LLM) 실패 — 합류하지 않음: %s", e)
+        return None
+    if not isinstance(verdict, bool):
+        logger.warning("같은 문제 확인(LLM) 응답 형식 이상 — 합류하지 않음")
+        return None
+    return verdict
+
+
+# 같은 영역 메일은 한 번에 하나씩 묶는다 — 파이프라인은 메일 5건을 동시에 처리하는데, 확인(LLM) 동안 다른 건이 같은 단독 메일로
+# 묶음을 또 만들면 한 메일이 두 묶음에 걸린다(조회→갱신 사이 경합이 LLM 대기만큼 길어짐). 한 프로세스 안에서만 막는다(재처리 스크립트는 따로 돌 때만).
+_cluster_locks: dict[int, asyncio.Lock] = {}
+# 같은 문제 확인(LLM)이 실패해 묶지 못함 — "반복 없음"(None)과 구분해 호출부가 따로 센다
+_CONFIRM_FAILED = {"cluster_id": None, "member_count": 0, "confirm_failed": True}
+
+
 async def detect_and_update_cluster(
     ns_id: int, analysis_id: int, subject: str, embedding: list[float],
-    occurred_at: datetime, settings: dict,
+    occurred_at: datetime, settings: dict, body: str = "",
 ) -> Optional[dict]:
     """이 VOC를 기존 반복 클러스터에 합류시키거나, 조건이 맞으면 새 클러스터를 만든다.
 
-    합류 여부는 클러스터의 centroid(representative_embedding)와 비교해서
-    판단한다(모듈 docstring의 "체이닝 방지" 참고) — 개별 멤버가 아니라 클러스터
-    전체의 평균 의미와 비교해야 사슬처럼 안 닮은 것까지 묶이는 걸 막을 수 있다.
+    후보 묶음은 대표(representative_embedding, 만들 때 고정)와 비교해 찾고, 합류는 LLM이 "같은 문제"라고 확인할 때만
+    (email_pattern_llm_confirm, 모듈 docstring "대표 고정 + LLM 확인"). 확인 상대는 첫 멤버(기준 건) — 최근 멤버와 비교하면 사슬처럼
+    끌려간다. 묶음이 아니라고 나오면 단독 메일 후보 1건을 한 번 더 확인한다(건당 최대 2회). 2위 묶음은 보지 않는다(호출 예산 —
+    같은 주제 묶음이 둘로 갈리면 놓침으로 남는다). 묶음 쪽 확인이 실패하면 단독 후보도 보지 않는다 — 일시 장애 한 번으로 같은 문제
+    묶음이 하나 더 생기지 않게.
 
     Returns:
         None — 반복 신호 없음(유사한 클러스터/과거 VOC가 없거나 같은 스레드 답장뿐).
+        {"cluster_id": None, "member_count": 0, "confirm_failed": True} — 후보는 있었는데 같은 문제 확인(LLM)이 실패해 묶지 못함.
         {"cluster_id", "member_count"} — 호출부(pipeline.py)가 이 member_count를
         min_count와 직접 비교해 "발송할지, 몇 번째 배수 감지인지"를 스스로 판단한다
         (2026-08-27 — 매 건 알림이 노이즈였다는 실사용 피드백으로 "min_count 채우기
@@ -173,11 +224,22 @@ async def detect_and_update_cluster(
         계속 날리고 있던 게 발견돼(2026-08-27) 제거함 — 아무도 안 읽는 값을 위해
         매번 DB 왕복을 하고 있던 순수 낭비였다.
     """
+    lock = _cluster_locks.setdefault(ns_id, asyncio.Lock())
+    async with lock:
+        return await _detect_and_update_cluster(ns_id, analysis_id, subject, embedding, occurred_at, settings, body)
+
+
+async def _detect_and_update_cluster(
+    ns_id: int, analysis_id: int, subject: str, embedding: list[float],
+    occurred_at: datetime, settings: dict, body: str,
+) -> Optional[dict]:
     threshold = settings["email_pattern_similarity_threshold"]
     window_days = settings["email_pattern_window_days"]
     min_count = settings["email_pattern_min_count"]
     norm_subject = _normalize_subject(subject)
     window_start = occurred_at - timedelta(days=window_days)
+    confirm = settings.get("email_pattern_llm_confirm", True)
+    new_text = issue_text(subject, body)
 
     async with get_conn() as conn:
         # 요약 방식이 바뀐 경계(main.py #81이 기록) 이전 묶음·단독 메일과는 묶지 않는다 — 옛 요약 벡터와 새 요약 벡터를 섞어 비교하면
@@ -186,7 +248,7 @@ async def detect_and_update_cluster(
         signature_since = settings.get("email_pattern_signature_since", "")   # 단독 메일은 벡터를 쓴 시각(updated_at)으로 — 재처리가 옛 행에 새 벡터를 씀
         best_cluster = await conn.fetchrow(
             """
-            SELECT id, member_count, representative_embedding
+            SELECT id, member_count
             FROM ops_voc_cluster
             WHERE namespace_id = $1 AND last_seen_at >= $2 AND id > $5
               AND 1 - (representative_embedding <=> $3::vector) >= $4
@@ -198,22 +260,27 @@ async def detect_and_update_cluster(
 
         if best_cluster is not None:
             member_rows = await conn.fetch(
-                "SELECT subject FROM ops_email_analysis WHERE voc_cluster_id = $1", best_cluster["id"],
+                "SELECT id, subject FROM ops_email_analysis WHERE voc_cluster_id = $1 ORDER BY id", best_cluster["id"],
             )
             if any(_normalize_subject(r["subject"]) == norm_subject for r in member_rows):
                 return None  # 같은 스레드 답장 — 반복 발생으로 세지 않음
+            if confirm:
+                same = await _confirm_same_issue(new_text, await _member_text(conn, member_rows[0]["id"] if member_rows else None))
+                if same is None:
+                    return {**_CONFIRM_FAILED}   # 확인 실패 — 단독 후보로 새 묶음을 만들면 같은 문제 묶음이 둘로 갈린다
+                if not same:
+                    best_cluster = None   # 같은 문제 아님 — 단독 메일 후보로 넘어간다
 
-            new_centroid = _weighted_average_normalize(
-                _parse_vec(best_cluster["representative_embedding"]), best_cluster["member_count"], embedding,
-            )
+        if best_cluster is not None:
+            # 대표(representative_embedding)는 만들 때 고정 — 합류마다 옮기면 대표가 끌려가 사슬처럼 묶인다(모듈 docstring 11/03)
             cluster = await conn.fetchrow(
                 """
                 UPDATE ops_voc_cluster
-                SET member_count = member_count + 1, last_seen_at = GREATEST(last_seen_at, $2), representative_embedding = $3::vector
+                SET member_count = member_count + 1, last_seen_at = GREATEST(last_seen_at, $2)
                 WHERE id = $1
                 RETURNING id, member_count, notified_at, representative_subject
                 """,
-                best_cluster["id"], occurred_at, str(new_centroid),
+                best_cluster["id"], occurred_at,
             )
             await conn.execute(
                 "UPDATE ops_email_analysis SET voc_cluster_id = $1 WHERE id = $2", cluster["id"], analysis_id,
@@ -236,6 +303,10 @@ async def detect_and_update_cluster(
                 return None
 
             best = candidates[0]
+            if confirm:
+                same = await _confirm_same_issue(new_text, await _member_text(conn, best["id"]))
+                if not same:
+                    return {**_CONFIRM_FAILED} if same is None else None
             new_centroid = _weighted_average_normalize(_parse_vec(best["embedding"]), 1, embedding)
             cluster = await conn.fetchrow(
                 """
@@ -261,6 +332,13 @@ async def detect_and_update_cluster(
             await conn.execute("UPDATE ops_voc_cluster SET notified_at = NOW() WHERE id = $1", cluster["id"])
 
     return {"cluster_id": cluster["id"], "member_count": cluster["member_count"]}
+
+
+async def _member_text(conn, analysis_id: Optional[int]) -> str:
+    if analysis_id is None:
+        return ""
+    row = await conn.fetchrow("SELECT subject, body FROM ops_email_analysis WHERE id = $1", analysis_id)
+    return issue_text(row["subject"], row["body"]) if row else ""
 
 
 async def _verify_coverage_with_llm(voc_subject: str, knowledge_content: str) -> bool:

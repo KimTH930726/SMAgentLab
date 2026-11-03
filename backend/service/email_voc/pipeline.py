@@ -153,7 +153,7 @@ async def cluster_and_notify(ns_id: int, routing: dict, msg: dict, analysis_id: 
     occurred_at = datetime.fromisoformat(msg["received_at"].replace("Z", "+00:00")) \
         if msg.get("received_at") else datetime.now(timezone.utc)
     pattern = await pattern_detection.detect_and_update_cluster(
-        ns_id, analysis_id, msg["subject"], pattern_embedding, occurred_at, settings,
+        ns_id, analysis_id, msg["subject"], pattern_embedding, occurred_at, settings, body=msg.get("body") or "",
     )
 
     # "IT 무관" 판정은 더 이상 발송을 막지 않는다(10/22 사용자: 반복되면 일단 팀즈) — 카드의 분류 표시로만 남는다.
@@ -171,6 +171,8 @@ async def cluster_and_notify(ns_id: int, routing: dict, msg: dict, analysis_id: 
     # 반복 정보를 그 안에 얹는다 — 형식 자체를 새로 안 만든다.
     if not pattern:
         return "skipped_no_pattern"
+    if pattern.get("confirm_failed"):   # LLM 장애로 묶지 못함 — "반복 없음"과 따로 세어 보이게(11/03 리뷰)
+        return "skipped_confirm_failed"
     min_count = settings["email_pattern_min_count"]
     member_count = pattern["member_count"]
     if member_count < min_count:
@@ -194,6 +196,8 @@ async def notify_cluster(ns_id: int, routing: dict, msg: dict, analysis_id: int,
         "nth_detection": member_count // min_count,
         "coverage": await pattern_detection.get_cluster_coverage(ns_id, cluster_id),
         "knowledge_found": knowledge_found,
+        # 묶음이 기준보다 크면 다른 문제가 섞였을 가능성이 크다(11/03 실측: 20건 이상 묶음은 같은 문제 쌍 15.6%) — 발송은 그대로, 카드에 표시
+        "needs_review": 0 < settings.get("email_pattern_review_size", 20) < member_count,
     }
     if not routing.get("teams_webhook_url"):
         return "analyzed"
@@ -262,6 +266,7 @@ async def run_manual_collection(
             # 관련도·IT 무관으로 건너뛰는 일은 10/22부터 없다 — 두 칸은 수집 이력 표·DB 칸(옛 기록)과 모양을 맞추려 0으로 남긴다
             "skipped_duplicate": 0, "skipped_low_relevance": 0, "skipped_not_it": 0,
             "skipped_no_pattern": 0, "skipped_pattern_building": 0, "skipped_pattern_repeat": 0,
+            "skipped_confirm_failed": 0,
             "notified": 0, "notify_failed": 0,
         }
 
@@ -333,6 +338,9 @@ async def run_manual_collection(
             elif outcome == "skipped_pattern_repeat":
                 result["analyzed"] += 1
                 result["skipped_pattern_repeat"] += 1
+            elif outcome == "skipped_confirm_failed":
+                result["analyzed"] += 1
+                result["skipped_confirm_failed"] += 1
             elif outcome == "notified":
                 result["analyzed"] += 1
                 result["notified"] += 1

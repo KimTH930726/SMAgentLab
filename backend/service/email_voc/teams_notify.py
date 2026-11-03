@@ -127,6 +127,8 @@ def build_teams_message(
             f'유사한 VOC {pattern_info["member_count"]}건째 발생 '
             f'({pattern_info["min_count"]}건마다 감지 · {pattern_info["nth_detection"]}번째 감지)'
         )
+        if pattern_info.get("needs_review"):
+            detail_items.append("⚠️ 확인 필요 — 묶음 건수가 많아 다른 문제가 섞였을 수 있습니다")
         if pattern_info.get("knowledge_found") is False and not pattern_info.get("coverage", {}).get("covered"):
             # 반복되는데 업무 지식에 관련 내용이 없음 = 지식 공백 후보(10/22) — 담당자가 지식을 만들 차례라는 신호
             detail_items.append("📭 관련 지식 없음 — 지식 공백 후보(이 유형의 답을 지식으로 등록해 주세요)")

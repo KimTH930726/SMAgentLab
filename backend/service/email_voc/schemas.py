@@ -39,6 +39,8 @@ class EmailCollectionSettingsOut(BaseModel):
     email_pattern_similarity_threshold: float
     email_pattern_window_days: int
     email_pattern_min_count: int
+    email_pattern_llm_confirm: bool
+    email_pattern_review_size: int
 
 
 class EmailCollectionSettingsUpdate(BaseModel):
@@ -49,6 +51,8 @@ class EmailCollectionSettingsUpdate(BaseModel):
     email_pattern_similarity_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     email_pattern_window_days: Optional[int] = Field(default=None, ge=1)
     email_pattern_min_count: Optional[int] = Field(default=None, ge=2)
+    email_pattern_llm_confirm: Optional[bool] = None
+    email_pattern_review_size: Optional[int] = Field(default=None, ge=0)
 
 
 class VocRoutingCreate(BaseModel):
@@ -139,6 +143,7 @@ class MailboxCollectionResult(BaseModel):
     skipped_no_pattern: int = 0
     skipped_pattern_building: int = 0
     skipped_pattern_repeat: int = 0
+    skipped_confirm_failed: int = 0   # 같은 문제 확인(LLM) 실패로 묶지 못함(11/03)
     notified: int = 0
     notify_failed: int = 0
 

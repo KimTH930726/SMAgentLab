@@ -37,17 +37,18 @@ def _cos(a, b) -> float:
 
 
 def preview_clusters(items: list[dict], threshold: float) -> tuple[list[list[int]], int]:
-    """pattern_detection과 같은 규칙을 메모리에서: 묶음 중심과 유사도 ≥ 기준이면 합류(같은 제목 = 같은 스레드는 안 셈),
-    아니면 단독끼리 기준을 넘는 둘이 새 묶음. 기존 DB 묶음·이전 분석 메일은 미리보기에 넣지 않는다(근사)."""
+    """pattern_detection의 임베딩 규칙을 메모리에서: 묶음 대표(만들 때 고정)와 유사도 ≥ 기준이면 합류(같은 제목 = 같은 스레드는 안 셈),
+    아니면 단독끼리 기준을 넘는 둘이 새 묶음. 기존 DB 묶음·이전 분석 메일은 미리보기에 넣지 않는다(근사).
+    같은 문제 확인(LLM, 11/03)은 넣지 않는다 — 실제(--send)보다 많이 묶인다(출력에 표시)."""
     from service.email_voc.pattern_detection import _weighted_average_normalize
-    clusters, singles = [], []   # clusters: {"c": 중심, "m": [i], "s": {제목}}
+    clusters, singles = [], []   # clusters: {"c": 대표, "m": [i], "s": {제목}}
     for i, it in enumerate(items):
         best = max(((_cos(cl["c"], it["vec"]), cl) for cl in clusters), key=lambda x: x[0], default=(0.0, None))
         if best[1] is not None and best[0] >= threshold:
             cl = best[1]
             if it["subj"] in cl["s"]:
+                singles.append(i)   # 운영과 같게: 묶이지 않은 채 남아 이후 단독 후보가 된다
                 continue
-            cl["c"] = _weighted_average_normalize(np.asarray(cl["c"], dtype=np.float32), len(cl["m"]), it["vec"])
             cl["m"].append(i)
             cl["s"].add(it["subj"])
             continue
@@ -82,7 +83,7 @@ async def main() -> int:
 
     from core.database import get_conn, init_pool, resolve_namespace_id
     from shared.embedding import embedding_service
-    from service.email_voc import pipeline, routing_service, service as voc_service
+    from service.email_voc import pattern_detection, pipeline, routing_service, service as voc_service
     from service.email_voc.pattern_detection import _normalize_subject
     from service.llm.factory import get_llm_provider
     await init_pool()
@@ -91,6 +92,7 @@ async def main() -> int:
         from eval_answers import local_llm
         llm = await local_llm()
         voc_service.get_llm_provider = lambda: llm   # 분석도 이 프로세스에서만 로컬 LLM
+        pattern_detection.get_llm_provider = lambda: llm   # 묶기의 같은 문제 확인·커버리지 확인도(모듈마다 따로 import — 리뷰 M1)
     else:
         llm = get_llm_provider()
     settings = await routing_service.get_settings()
@@ -137,6 +139,8 @@ async def main() -> int:
             sends = len(g) // min_count
             print(f"  묶음 {len(g)}건 · 주제: {topic} · 팀즈 {sends}건 · 관련 지식 없음 {sum(not items[i]['kn'] for i in g)}")
         print(f"  단독(안 묶임) {n_single}건 — 미리보기, 바뀐 것 없음(--send로 실제 처리)")
+        if settings.get("email_pattern_llm_confirm", True):
+            print("  ※ 미리보기는 같은 문제 확인(LLM)을 안 거친다 — 실제(--send)는 이보다 덜 묶이고 팀즈도 적다")
         return 0
 
     # 받은 순서대로 저장·묶기만 하고(발송 안 함), 다 묶은 뒤 묶음마다 최종 건수로 팀즈 1건 — 밀린 메일에 "3·6·9건째"를 그대로 쓰면
