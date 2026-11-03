@@ -7,6 +7,7 @@ import { RefTableTab } from './RefTableTab';
 import { OverviewTab } from './OverviewTab';
 import { SourceCheckTab } from './SourceCheckTab';
 import { PolicyJsonTab } from './PolicyJsonTab';
+import { useNamespaceAccess } from '../../../utils/useNamespaceAccess';
 
 /**
  * 지식 › 정책서(v0 재구축 2단계, 2026-10-21) — 정책 · 참고표 · 문서 개요. 고른 정책 컬렉션 기준.
@@ -31,6 +32,9 @@ export function PolicyPanel({ onOpenCorrection, onOpenCorrections }: {
   // 탭 = 주소의 ?tab(10/27) — 고르는 창의 "원문 확인 n ›"가 그 탭으로 바로 오고, 탭을 누르면 주소도 바뀐다(state로 두면 이미 떠 있을 때 안 따라갔다, 리뷰)
   const [params, setParams] = useSearchParams();
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  // 원문 확인 탭 숫자 = 처리 전 원문 확인(정정 요청·승인 대기 탭처럼, 11/03 태훈)
+  const { selectedNs, nsDetails } = useNamespaceAccess();
+  const checks = nsDetails.find((d) => d.name === selectedNs)?.pending_source_checks ?? 0;
   const tabs = TABS.filter((t) => t.id !== 'json' || isAdmin);
   const tab: Tab = tabs.find((t) => t.id === params.get('tab'))?.id ?? 'policies';
   const setTab = (t: Tab) => setParams((p) => { const n = new URLSearchParams(p); if (t === 'policies') n.delete('tab'); else n.set('tab', t); return n; }, { replace: true });
@@ -54,6 +58,9 @@ export function PolicyPanel({ onOpenCorrection, onOpenCorrections }: {
             >
               {t.icon}
               {t.label}
+              {t.id === 'checks' && checks > 0 && (
+                <span className="ml-1 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-400 px-1.5 py-0.5 rounded-full" data-testid="checks-tab-count">{checks}</span>
+              )}
             </button>
           ))}
         </div>

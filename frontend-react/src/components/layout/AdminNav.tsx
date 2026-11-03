@@ -48,7 +48,9 @@ export function AdminNav() {
   useEffect(() => { setClosedCurrent(null); }, [current]);
 
   // 정정 요청 대기 건수(지금 고른 정책 컬렉션, 처리 권한이 있을 때) — 지식 탭 안에 있던 배지를 옮겨 옴(방치 방지)
-  const { selectedNs, canModifyNs } = useNamespaceAccess();
+  const { selectedNs, canModifyNs, nsDetails } = useNamespaceAccess();
+  // 정책서 = 처리 전 원문 확인 수(정정 요청처럼 숫자로, 11/03 태훈) — 컬렉션 목록 값
+  const sourceChecks = nsDetails.find((d) => d.name === selectedNs)?.pending_source_checks ?? 0;
   const { data: correctionCount } = useQuery({
     queryKey: ['corrections-pending-count', selectedNs],
     queryFn: () => getCorrectionPendingCount(selectedNs),
@@ -58,7 +60,7 @@ export function AdminNav() {
   const importTodo = useImportTodo();   // 연결할 묶음 수(소스 연결)
   const feedbackNew = useFeedbackNewCount(useAuthStore((st) => st.user?.role === 'admin'));   // 신규 사용자 피드백(관리자만)
   const badge = (id: AdminMenuId) => (id === 'q.corrections' ? correctionCount?.by_namespace[selectedNs] ?? 0 : id === 'k.sources' ? importTodo
-    : id === 'q.feedback' ? feedbackNew : 0);
+    : id === 'q.feedback' ? feedbackNew : id === 'k.policy' ? sourceChecks : 0);
 
   const toggle = (gid: string) => setOpen((prev) => {
     const next = prev.includes(gid) ? prev.filter((x) => x !== gid) : [...prev, gid];

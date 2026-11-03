@@ -45,7 +45,10 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
     enabled: !!selectedNs,
     staleTime: 15_000,
   });
-  const refresh = () => qc.invalidateQueries({ queryKey: ['source-checks', selectedNs] });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['source-checks', selectedNs] });
+    qc.invalidateQueries({ queryKey: ['namespaces-detail'] });   // 탭·메뉴 숫자(pending_source_checks)도 같이
+  };
 
   const decide = useMutation({
     mutationFn: () => decideSourceCheck(pending!.check.id, pending!.action, note.trim(), pending!.action === 'dismiss' ? reason : null),
