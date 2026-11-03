@@ -93,9 +93,23 @@ class TestGetSettings:
             "email_pattern_similarity_threshold": 0.8,   # 10/22 "대상 기능 + 증상" 요약 기준(#81)
             "email_pattern_window_days": 3,
             "email_pattern_min_count": 3,
+            "email_pattern_llm_confirm": True,            # 합류 전 LLM 같은 문제 확인(11/03)
+            "email_pattern_review_size": 20,              # 20건 넘으면 카드에 확인 필요(11/03 결정)
             "email_pattern_cluster_min_id": 0,           # 요약 방식 경계 없음
             "email_pattern_signature_since": "",
         }
+
+    @pytest.mark.asyncio
+    async def test_review_size_must_be_non_negative(self, patch_db):
+        with pytest.raises(ValueError):
+            await routing_service.update_settings({"email_pattern_review_size": -1})
+
+    @pytest.mark.asyncio
+    async def test_llm_confirm_saved_as_lowercase_bool(self, patch_db):
+        conn, _ = patch_db
+        await routing_service.update_settings({"email_pattern_llm_confirm": False, "email_pattern_review_size": 20})
+        saved = {c.args[1]: c.args[2] for c in conn.execute.call_args_list}
+        assert saved == {"email_pattern_llm_confirm": "false", "email_pattern_review_size": "20"}
 
     @pytest.mark.asyncio
     async def test_boundary_keys_read_but_not_updatable(self, patch_db):

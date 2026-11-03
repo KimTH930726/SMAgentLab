@@ -36,6 +36,8 @@ def _make_fake_conn():
 def patch_db(monkeypatch):
     conn = _make_fake_conn()
     monkeypatch.setattr(pattern_detection, "get_conn", MagicMock(return_value=conn))
+    # 영역별 묶기 잠금은 모듈 전역 — asyncio.Lock은 처음 경합한 이벤트 루프에 묶이므로 시험마다 새로(리뷰 6)
+    monkeypatch.setattr(pattern_detection, "_cluster_locks", {})
     resolve_mock = AsyncMock(return_value=1)
     monkeypatch.setattr(pattern_detection, "resolve_namespace_id", resolve_mock)
     # 가장 가까운 지식은 코어 API(knowledge.api.nearest, 10/28 VOC 레이어 분리) — 경계에서 가짜로: 시험 데이터의 지식 칸을 그대로 돌려준다
@@ -53,7 +55,9 @@ def patch_db(monkeypatch):
     return conn, resolve_mock
 
 
-_SETTINGS = {"email_pattern_similarity_threshold": 0.85, "email_pattern_window_days": 7, "email_pattern_min_count": 3}
+# 옛 시험은 임베딩 규칙만 본다 — 같은 문제 확인(LLM, 11/03)은 TestSameIssueConfirm이 따로
+_SETTINGS = {"email_pattern_similarity_threshold": 0.85, "email_pattern_window_days": 7, "email_pattern_min_count": 3,
+             "email_pattern_llm_confirm": False}
 _NOW = datetime(2026, 8, 25, tzinfo=timezone.utc)
 
 
@@ -165,7 +169,8 @@ class TestDetectAndUpdateCluster:
         assert any(args[1:] == (55, 100) for args in update_calls)
 
     @pytest.mark.asyncio
-    async def test_joins_existing_cluster_and_updates_centroid(self, patch_db):
+    async def test_joins_existing_cluster_keeps_representative_fixed(self, patch_db):
+        """11/03: 대표는 만들 때 고정 — 합류마다 옮기면 대표가 끌려가 사슬처럼 묶인다(실측 최대 130건 묶음)."""
         conn, _ = patch_db
         conn.fetchrow.side_effect = [
             {"id": 55, "member_count": 2, "representative_embedding": "[1.0,0.0]"},  # 클러스터 조회
@@ -179,7 +184,8 @@ class TestDetectAndUpdateCluster:
         update_sql = conn.fetchrow.call_args_list[1].args[0]
         assert "UPDATE ops_voc_cluster" in update_sql
         assert "member_count = member_count + 1" in update_sql
-        assert "representative_embedding = $3::vector" in update_sql
+        assert "representative_embedding" not in update_sql
+        assert conn.fetchrow.call_args_list[1].args[1:] == (55, _NOW)
 
     @pytest.mark.asyncio
     async def test_notified_at_set_when_min_count_first_crossed(self, patch_db):
@@ -216,6 +222,132 @@ class TestDetectAndUpdateCluster:
         # 스레드 체크 1번만 fetch — 샘플 조회(구 pattern_info)는 더 이상 하지 않는다
         # (2026-08-27: pipeline.py가 그 값을 안 쓰는데도 매번 DB 왕복하던 낭비 제거).
         assert conn.fetch.await_count == 1
+
+
+def _llm_says(monkeypatch, *answers):
+    """LLM 답을 차례로 돌려준다(Exception이면 그 호출에서 실패). 받은 프롬프트는 provider.prompts에."""
+    provider = MagicMock()
+    provider.prompts = []
+
+    async def gen(prompt, system="", max_tokens=2000):
+        provider.prompts.append(prompt)
+        a = answers[len(provider.prompts) - 1]
+        if isinstance(a, Exception):
+            raise a
+        return a
+    provider.generate_once = gen
+    monkeypatch.setattr(pattern_detection, "get_llm_provider", MagicMock(return_value=provider))
+    return provider
+
+
+class TestSameIssueConfirm:
+    """11/03: 임베딩은 후보 찾기만, 합류는 LLM이 같은 문제라고 할 때만 — 실패·애매하면 합류 안 함."""
+    _ON = {**_SETTINGS, "email_pattern_llm_confirm": True}
+    _CLUSTER = {"id": 55, "member_count": 2, "representative_embedding": "[1.0,0.0]"}
+    _MEMBERS = [{"id": 7, "subject": "기준 건 제목"}, {"id": 9, "subject": "둘째 건 제목"}]
+
+    @pytest.mark.asyncio
+    async def test_joins_cluster_only_when_llm_confirms(self, patch_db, monkeypatch):
+        conn, _ = patch_db
+        provider = _llm_says(monkeypatch, '{"same_issue": true}')
+        conn.fetchrow.side_effect = [
+            self._CLUSTER,
+            {"subject": "기준 건 제목", "body": "기준 건 본문"},   # 비교 대상 = 첫 멤버(id 가장 작은 건)
+            {"id": 55, "member_count": 3, "notified_at": None, "representative_subject": "r"},
+        ]
+        conn.fetch.return_value = self._MEMBERS
+        result = await pattern_detection.detect_and_update_cluster(1, 100, "새 제목", [0.0, 1.0], _NOW, self._ON, body="새 본문")
+        assert result == {"cluster_id": 55, "member_count": 3}
+        assert conn.fetchrow.call_args_list[1].args[1] == 7
+        assert "기준 건 본문" in provider.prompts[0] and "새 본문" in provider.prompts[0]
+        assert "ORDER BY id" in conn.fetch.call_args_list[0].args[0]
+
+    @pytest.mark.asyncio
+    async def test_rejected_cluster_falls_back_to_single_candidate(self, patch_db, monkeypatch):
+        """묶음과 다른 문제면 합류하지 않고, 단독 메일 후보를 한 번 더 확인해 같으면 새 묶음(건당 최대 2회)."""
+        conn, _ = patch_db
+        provider = _llm_says(monkeypatch, '{"same_issue": false}', '{"same_issue": true}')
+        conn.fetchrow.side_effect = [
+            self._CLUSTER,
+            {"subject": "기준 건", "body": "다른 문제"},
+            {"subject": "단독 건", "body": "같은 문제"},
+            {"id": 56, "member_count": 2, "notified_at": None, "representative_subject": "단독 건"},
+        ]
+        conn.fetch.side_effect = [self._MEMBERS, [{"id": 3, "subject": "단독 건", "embedding": "[0.0,1.0]"}]]
+        result = await pattern_detection.detect_and_update_cluster(1, 100, "새 제목", [0.0, 1.0], _NOW, self._ON)
+        assert result == {"cluster_id": 56, "member_count": 2}
+        assert len(provider.prompts) == 2
+        sqls = [c.args[0] for c in conn.fetchrow.call_args_list]
+        assert not any("UPDATE ops_voc_cluster" in q for q in sqls)   # 기존 묶음은 안 건드림
+        assert "INSERT INTO ops_voc_cluster" in sqls[3]
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_or_bad_answer_never_joins(self, patch_db, monkeypatch):
+        for answers in ((RuntimeError("timeout"), RuntimeError("timeout")), ("모르겠음", '{"same_issue": "yes"}')):
+            conn, _ = patch_db
+            conn.fetchrow.reset_mock()
+            conn.execute.reset_mock()
+            provider = _llm_says(monkeypatch, *answers)
+            conn.fetchrow.side_effect = [self._CLUSTER, {"subject": "a", "body": "b"}, {"subject": "c", "body": "d"}]
+            conn.fetch.side_effect = [self._MEMBERS, [{"id": 3, "subject": "단독 건", "embedding": "[0.0,1.0]"}]]
+            result = await pattern_detection.detect_and_update_cluster(1, 100, "새 제목", [0.0, 1.0], _NOW, self._ON)
+            # "반복 없음"(None)과 구분 — LLM 장애로 반복 감지가 꺼진 걸 수집 결과에서 보이게(리뷰 1)
+            assert result == {"cluster_id": None, "member_count": 0, "confirm_failed": True}
+            assert conn.execute.await_count == 0   # 어느 메일에도 묶음 번호를 쓰지 않음
+            # 묶음 확인이 실패하면 단독 후보로 새 묶음을 만들지 않는다 — 장애 한 번으로 같은 문제 묶음이 둘로 갈리지 않게(최종 리뷰 L6)
+            assert len(provider.prompts) == 1
+
+    @pytest.mark.asyncio
+    async def test_single_candidate_failure_is_counted(self, patch_db, monkeypatch):
+        """묶음 후보 없이 단독 후보 확인만 실패해도 실패로 센다."""
+        conn, _ = patch_db
+        _llm_says(monkeypatch, RuntimeError("timeout"))
+        conn.fetchrow.side_effect = [None, {"subject": "c", "body": "d"}]
+        conn.fetch.return_value = [{"id": 3, "subject": "단독 건", "embedding": "[0.0,1.0]"}]
+        result = await pattern_detection.detect_and_update_cluster(1, 100, "새 제목", [0.0, 1.0], _NOW, self._ON)
+        assert result["confirm_failed"] is True and conn.execute.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_plain_no_is_not_a_failure(self, patch_db, monkeypatch):
+        """둘 다 "다른 문제"면 정상적인 반복 없음(None) — 실패로 세지 않는다. 묶음 확인이 실패하면(단독 후보 유무와 무관) 실패."""
+        conn, _ = patch_db
+        _llm_says(monkeypatch, '{"same_issue": false}', '{"same_issue": false}')
+        conn.fetchrow.side_effect = [self._CLUSTER, {"subject": "a", "body": "b"}, {"subject": "c", "body": "d"}]
+        conn.fetch.side_effect = [self._MEMBERS, [{"id": 3, "subject": "단독 건", "embedding": "[0.0,1.0]"}]]
+        assert await pattern_detection.detect_and_update_cluster(1, 100, "새 제목", [0.0, 1.0], _NOW, self._ON) is None
+
+        conn.fetchrow.side_effect = [self._CLUSTER, {"subject": "a", "body": "b"}]
+        conn.fetch.side_effect = [self._MEMBERS, []]
+        _llm_says(monkeypatch, RuntimeError("timeout"))
+        result = await pattern_detection.detect_and_update_cluster(1, 100, "새 제목", [0.0, 1.0], _NOW, self._ON)
+        assert result["confirm_failed"] is True
+
+    @pytest.mark.asyncio
+    async def test_thread_reply_skips_llm(self, patch_db, monkeypatch):
+        conn, _ = patch_db
+        provider = _llm_says(monkeypatch)
+        conn.fetchrow.return_value = self._CLUSTER
+        conn.fetch.return_value = [{"id": 7, "subject": "RE: 새 제목"}]
+        assert await pattern_detection.detect_and_update_cluster(1, 100, "새 제목", [0.0, 1.0], _NOW, self._ON) is None
+        assert provider.prompts == []
+
+    @pytest.mark.asyncio
+    async def test_same_namespace_runs_one_at_a_time(self, patch_db, monkeypatch):
+        """파이프라인은 메일을 동시에 처리한다 — 확인(LLM)을 기다리는 동안 같은 영역의 다른 건이 끼어들면 한 단독 메일이 두 묶음에 걸린다."""
+        import asyncio
+        active, peak = 0, 0
+
+        async def fake(*a, **k):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+        monkeypatch.setattr(pattern_detection, "_detect_and_update_cluster", fake)
+        await asyncio.gather(*(pattern_detection.detect_and_update_cluster(1, i, "s", [0.1], _NOW, self._ON) for i in range(3)))
+        assert peak == 1
+        await asyncio.gather(*(pattern_detection.detect_and_update_cluster(ns, 1, "s", [0.1], _NOW, self._ON) for ns in (2, 3)))
+        assert peak == 2   # 다른 영역끼리는 막지 않는다
 
 
 class TestVerifyCoverageWithLlm:

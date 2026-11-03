@@ -256,6 +256,19 @@ class TestPatternInfoInTeamsMessage:
         assert "6건째" in text
         assert "3건마다 감지 · 2번째 감지" in text
 
+    def test_needs_review_line_only_when_flagged(self):
+        """11/03: 묶음이 기준 건수를 넘으면 "확인 필요" — 발송은 그대로, 다른 문제가 섞였을 수 있다는 표시만."""
+        def card(flag):
+            pi = {"member_count": 30, "window_days": 3, "min_count": 3, "nth_detection": 10,
+                  "coverage": {"covered": False, "snippet": None}}
+            if flag is not None:
+                pi["needs_review"] = flag
+            return teams_notify.build_teams_message(subject="s", sender="s@example.com", part="p",
+                                                    analysis=_base_analysis(), pattern_info=pi)["text"]
+        assert "확인 필요" in card(True)
+        assert "확인 필요" not in card(False)
+        assert "확인 필요" not in card(None)
+
     def test_no_pattern_bullet_when_not_triggered(self):
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="p", analysis=_base_analysis(),

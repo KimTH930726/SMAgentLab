@@ -361,7 +361,26 @@ class TestRunManualCollectionCategoryGate:
         assert build_kwargs["pattern_info"]["member_count"] == 6
         assert build_kwargs["pattern_info"]["min_count"] == 3
         assert build_kwargs["pattern_info"]["nth_detection"] == 2
+        assert build_kwargs["pattern_info"]["needs_review"] is False   # 6건은 기준(기본 20) 이하
         pipeline.pattern_detection.get_cluster_coverage.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_needs_review_when_cluster_exceeds_review_size(self, monkeypatch):
+        """11/03: 묶음 건수가 기준(email_pattern_review_size)을 넘을 때만 카드에 확인 필요 — 같으면 아직 아님, 0이면 끔."""
+        monkeypatch.setattr(pipeline.pattern_detection, "get_cluster_coverage", AsyncMock(return_value={"covered": False, "snippet": None}))
+        monkeypatch.setattr(pipeline.teams_notify, "build_teams_message", MagicMock(return_value={"text": "x"}))
+        monkeypatch.setattr(pipeline.teams_notify, "send_teams_notification", AsyncMock(return_value=(True, None)))
+        monkeypatch.setattr(pipeline, "mark_notify_result", AsyncMock())
+        monkeypatch.setattr(pipeline, "_strip_forwarded_chain", lambda b: b)
+        base = {"email_pattern_min_count": 3, "email_pattern_window_days": 3}
+
+        async def flag(member_count, review_size):
+            await pipeline.notify_cluster(1, _stub_routing_row(), _stub_message(), 9, {}, 55, member_count, True,
+                                          {**base, "email_pattern_review_size": review_size})
+            return pipeline.teams_notify.build_teams_message.call_args.kwargs["pattern_info"]["needs_review"]
+        assert await flag(21, 20) is True
+        assert await flag(20, 20) is False
+        assert await flag(130, 0) is False
 
     @pytest.mark.asyncio
     async def test_solo_voc_with_no_cluster_is_not_sent(self, patch_db, monkeypatch):
@@ -382,6 +401,23 @@ class TestRunManualCollectionCategoryGate:
         assert result["mailboxes"][0]["skipped_no_pattern"] == 1
         pipeline.teams_notify.send_teams_notification.assert_not_called()
         pipeline.pattern_detection.get_cluster_coverage.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_confirm_failure_counted_separately(self, patch_db, monkeypatch):
+        """11/03 리뷰: 같은 문제 확인(LLM)이 실패해 못 묶은 건은 "반복 없음"과 따로 센다 — 장애로 반복 감지가 꺼진 걸 보이게."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        self._patch_common(monkeypatch, category="system_error")
+        monkeypatch.setattr(pipeline.pattern_detection, "detect_and_update_cluster",
+                            AsyncMock(return_value={"cluster_id": None, "member_count": 0, "confirm_failed": True}))
+
+        result = await pipeline.run_manual_collection(
+            "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
+        )
+
+        box = result["mailboxes"][0]
+        assert box["skipped_confirm_failed"] == 1 and box["skipped_no_pattern"] == 0 and box["analyzed"] == 1
+        pipeline.teams_notify.send_teams_notification.assert_not_called()
 
 
 class TestPatternEmbeddingSource:
@@ -440,6 +476,8 @@ class TestPatternEmbeddingSource:
         # detect_and_update_cluster에도 같은 값이 전달돼야 한다.
         cluster_call_args = pipeline.pattern_detection.detect_and_update_cluster.call_args.args
         assert cluster_call_args[3] == [0.1, 0.2]
+        # 같은 문제 확인(LLM)에 본문도 넘긴다(11/03)
+        assert pipeline.pattern_detection.detect_and_update_cluster.call_args.kwargs["body"] == "배달이 너무 늦게 와서 불만입니다"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_query_vec_when_signature_missing(self, patch_db, monkeypatch):

@@ -12,6 +12,11 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- (브랜치 voc-cluster-fix, 2026-11-03, 병합 시 버전 부여): **VOC 반복 묶음 — 대표 고정 + LLM 같은 문제 확인 · 확인 필요 표시.**
+  ① 묶음 대표(`ops_voc_cluster.representative_embedding`)는 만들 때 고정 — 합류마다 옮기던 점증 갱신이 대표를 끌어 사슬 묶음(최대 130건)을 만들었다.
+  ② 임베딩은 후보 찾기만, 합류는 LLM이 기준 건(첫 멤버)과 같은 문제라고 할 때만(`email_pattern_llm_confirm`, 기본 켬, 건당 최대 2회·실패 = 합류 안 함).
+  ③ `email_pattern_review_size`(기본 20, 0 = 끔): 묶음이 N건 넘으면 팀즈 카드에 "확인 필요". ④ 같은 영역 묶기는 한 번에 하나씩(프로세스 안 잠금).
+  재생 비교(로컬 Qwen, DB 쓰기 없음): 묶음 안 같은 문제 쌍 28.6→76.3% · 최대 묶음 133→28 · 발송 135→36 · 같은 문제 27쌍 같이 남음 89→56%. 칸 변경 없음.
 - v2.199 (2026-11-03, dev_0): **운영 지식 쓰기 서버 막기 · 정정은 근거 주인에게(M2) · 컬렉션 삭제 빈 자리 정리 · pipeline-stats 삭제.**
   ① 정책 컬렉션엔 운영 지식 금지를 서버에서: 등록 API 400(`core/dependencies.reject_knowledge_outside_system`), 서비스 길목
   (`core/database.resolve_knowledge_namespace_id` — create·bulk), 소스 연결 동기화·팀 적재는 초안 전에 건너뜀, 정정 "빠진 내용" 승인 막음.
@@ -268,7 +273,7 @@ backend/
 │   ├── email_voc/       #   VOC 이메일 분석 채널 (v2.40 신규)
 │   │   ├── graph_client.py    #   Microsoft Graph API 클라이언트 (msal 토큰 발급, 메일 조회, 페이지네이션/재시도)
 │   │   ├── service.py         #   check_relevance()(관련지식 사전 필터, v2.41) + analyze_email() — 기존 RAG 파이프라인 재사용 분류/심각도/오배치 판정 + issue_signature(정규화 이슈요약) 출력 (v2.49)
-│   │   ├── pattern_detection.py #   반복 VOC 클러스터링(centroid 기반, issue_signature 임베딩 비교, LLM 호출 없음) + 커버리지 LLM 검증 게이트(DB/공통코드 카테고리 제외, v2.49) (v2.47 신규)
+│   │   ├── pattern_detection.py #   반복 VOC 클러스터링(issue_signature 임베딩으로 후보 → 대표 고정 · LLM 같은 문제 확인 후 합류, 11/03) + 커버리지 LLM 검증 게이트(DB/공통코드 카테고리 제외, v2.49) (v2.47 신규)
 │   │   ├── pipeline.py        #   수집→관련지식필터→분석→반복패턴탐지→중복제거→알림 오케스트레이션, 이력 조회
 │   │   ├── routing_service.py #   파트별 메일함 라우팅 CRUD, 폴링 설정(관련지식 임계치 포함), Graph 자격증명(Fernet 암호화) CRUD
 │   │   ├── delegated_auth.py  #   Delegated Permission 로그인 상태 관리 (Authorization Code Flow/PKCE, v2.41 신규·v2.42 인증방식 교체)
@@ -399,7 +404,7 @@ ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 �
 ops_voc_routing       -- 파트별 담당 메일함 ↔ Teams 웹훅 ↔ 온콜 연락처 매핑
 ops_email_analysis    -- 이메일 건별 분석 결과 (source_message_id UNIQUE로 중복 수집 방지, 30일 보관, v2.47: embedding/voc_cluster_id FK 추가 — 벡터는 1024차원)
 ops_email_poll_cycle  -- 폴링 사이클(스케줄러 실행 회차)별 성공/실패 이력 (30일 보관)
-ops_voc_cluster       -- 반복 VOC 클러스터 (representative_embedding=centroid, member_count, coverage_knowledge_id/coverage_verified — 해결방안 LLM 검증 캐시) (v2.47 신규)
+ops_voc_cluster       -- 반복 VOC 클러스터 (representative_embedding=대표(만들 때 고정, 11/03), member_count, coverage_knowledge_id/coverage_verified — 해결방안 LLM 검증 캐시) (v2.47 신규)
 
 -- KnowledgeRAG 전용 (rag_* prefix, v2.8에서 ops_*→rag_* 변경)
 rag_knowledge         -- 지식 베이스 (HNSW + GIN FTS, base_weight(v2.121부터 입력 없음·전부 1.0), source_file/chunk_idx 추적,

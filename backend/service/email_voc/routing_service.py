@@ -12,6 +12,7 @@ _SETTINGS_KEYS = (
     "email_collection_enabled", "email_polling_interval_minutes", "email_lookback_days",
     "email_relevance_min_score",
     "email_pattern_similarity_threshold", "email_pattern_window_days", "email_pattern_min_count",
+    "email_pattern_llm_confirm", "email_pattern_review_size",
 )
 # 요약 방식이 바뀐 경계(main.py #81이 기록) — 화면에서 고치는 값이 아니라 읽기만(update_settings 대상 아님)
 _BOUNDARY_KEYS = ("email_pattern_cluster_min_id", "email_pattern_signature_since")
@@ -35,6 +36,10 @@ async def get_settings() -> dict:
         "email_pattern_similarity_threshold": float(values.get("email_pattern_similarity_threshold", 0.8)),
         "email_pattern_window_days": int(values.get("email_pattern_window_days", 3)),
         "email_pattern_min_count": int(values.get("email_pattern_min_count", 3)),
+        # 합류 전 LLM 같은 문제 확인(11/03 — 코사인만으론 같은/다른 문제 구분력 AUC 0.60), 묶음이 N건 넘으면 카드에 "확인 필요"(0 = 끔).
+        # N 기본 20(11/03 태훈 결정): 현행 20건 이상 묶음은 같은 문제 쌍 15.6% — 새 방식에선 20건 넘는 묶음이 재생 기준 1개뿐인 안전장치
+        "email_pattern_llm_confirm": values.get("email_pattern_llm_confirm", "true").lower() == "true",
+        "email_pattern_review_size": int(values.get("email_pattern_review_size", 20)),
         "email_pattern_cluster_min_id": int(values.get("email_pattern_cluster_min_id", 0)),
         "email_pattern_signature_since": values.get("email_pattern_signature_since", ""),   # '' = 경계 없음
     }
@@ -60,6 +65,9 @@ async def update_settings(updates: dict) -> dict:
     pattern_min_count = updates.get("email_pattern_min_count")
     if pattern_min_count is not None and pattern_min_count < 2:
         raise ValueError("반복 패턴 최소 건수는 2건 이상이어야 합니다.")
+    review_size = updates.get("email_pattern_review_size")
+    if review_size is not None and review_size < 0:
+        raise ValueError("확인 필요 기준 건수는 0(끔) 이상이어야 합니다.")
 
     async with get_conn() as conn:
         for key in _SETTINGS_KEYS:
