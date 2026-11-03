@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.198)
+# OpsLens 시스템 아키텍처 (v2.199)
 
 ## 개요
 
@@ -12,6 +12,14 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.199 (2026-11-03, dev_0): **운영 지식 쓰기 서버 막기 · 정정은 근거 주인에게(M2) · 컬렉션 삭제 빈 자리 정리 · pipeline-stats 삭제.**
+  ① 정책 컬렉션엔 운영 지식 금지를 서버에서: 등록 API 400(`core/dependencies.reject_knowledge_outside_system`), 서비스 길목
+  (`core/database.resolve_knowledge_namespace_id` — create·bulk), 소스 연결 동기화·팀 적재는 초안 전에 건너뜀, 정정 "빠진 내용" 승인 막음.
+  예전엔 화면·위치 판단만 막아 API·동기화로 들어갔다(E2E 잔재 6건 정리). ② 정정 라우팅: 답변 근거가 관련 정책 연결로 찾은 다른 컬렉션 것이어도 후보로
+  받고(`_IN_REACH_2`), 신고는 그 근거의 컬렉션 담당에게(`namespace_id` = 처리할 곳, `asked_namespace_id` = 물은 곳, #108). 승인은 처리할 곳 범위로.
+  ③ 키 정리 5단계만: 컬렉션 삭제가 FK 없는 id 칸·연결·설정 줄을 같이 정리(`release_namespace_refs`), 기존 161건 #107. 3(캐시)·4(골든셋)·6(같은 이름)은 이득 없어 안 함.
+  ④ 관련 정책 변경 시 답변 캐시 비움 · 연결 조회 실패해도 채팅은 고른 컬렉션만으로 · `/api/policy/pipeline-stats`(화면 없음) 삭제.
+  테스트: 실 Postgres 경우의 수(`tests/test_correction_routing.py`, 트랜잭션 → 되돌림), 정책 컬렉션 거부·직접 INSERT 경로 고정(`test_knowledge_system_only.py`).
 - v2.198 (2026-11-02 밤, dev_0): **운영 지식은 시스템에만(D 이동) · 채팅 검색 범위 linked + 문맥 예산 1만 2천 자 · 컬렉션 키 전환 1~2단계.**
   ① 정책 컬렉션 안 운영 지식 → 시스템(`scripts/move_knowledge_to_system.py`, 되돌리기 기록): 딜리버스 → 딜리버스 시스템(활성 39) · 제휴서비스 → 외부서비스 시스템(63) ·
   온라인스토어(적재 페이지 넣은 곳 302 · 배치 기본 위치 1). 원문·조각 같은 컬렉션, 행 수 보존.
@@ -278,7 +286,7 @@ backend/
 │       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터·BM25 RRF) 검색 — 채팅(agent.py)과 /api/policy/search가 같이 사용
 │       ├── keyword_index.py · category_list.py · scope.py  #   키워드 색인(BM25) · 탐색형 분류 목록 · 채팅의 정책 범위(영역 넘어 찾기)
 │       ├── query_type.py · korean_text.py  #   navigation형 질문 판별 · 한국어 조사/어미 제거
-│       ├── track2.py · answer_eval.py · pipeline_stats.py  #   검색 비교 실행 · 답변 정확도 이력 · 축적 현황 집계
+│       ├── track2.py · answer_eval.py  #   검색 비교 실행 · 답변 정확도 이력
 │       ├── schemas.py         #   Pydantic 스키마
 │       └── router.py          #   GET /api/policy/policies(/{logical_id}), /ref-tables(/{id}), /overviews, /search, /track2/*, /answer-eval/history, /pipeline-stats
 ├── core/

@@ -59,6 +59,7 @@
 |---|---|---|
 | [data-storage-philosophy.md](platform/data-storage-philosophy.md) | 현행 | 데이터 저장 철학(표준화 · 테이블 설계 · 적재 검증) |
 | [admin-ia-design.md](platform/admin-ia-design.md) | 현행 | 관리자 화면 구조(도메인 경계대로 메뉴) |
+| [admin-audience-split-design.md](platform/admin-audience-split-design.md) | 설계안 | 관리자 화면을 보는 사람별로 — 컬렉션 관리(시니어) / 플랫폼 관리(관리자), 11/03 |
 
 ## operations — 배포·운영·규율
 | 문서 | 내용 |
