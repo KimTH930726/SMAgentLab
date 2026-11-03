@@ -257,8 +257,7 @@ docker info               # Server 섹션 보이면 OK
 
 **Rocky/RHEL (firewalld):**
 ```bash
-sudo firewall-cmd --permanent --add-port=8501/tcp   # 웹 UI (외부 노출)
-sudo firewall-cmd --permanent --add-port=8000/tcp   # API (사내망 한정 권장)
+sudo firewall-cmd --permanent --add-port=8501/tcp   # 웹 UI (외부 노출) — API·DB는 v2.199부터 이 서버 안에서만 열린다(8000·5432 열지 않음)
 sudo firewall-cmd --reload
 sudo firewall-cmd --list-ports
 ```
@@ -266,7 +265,6 @@ sudo firewall-cmd --list-ports
 **Ubuntu (ufw):**
 ```bash
 sudo ufw allow 8501/tcp comment 'SMAgentLab Web'
-sudo ufw allow 8000/tcp comment 'SMAgentLab API'
 sudo ufw status
 ```
 
@@ -355,10 +353,10 @@ bash scripts/import-and-run.sh smagentlab-images-<TAG>.tar.gz
 | 서비스 | URL |
 |---|---|
 | 웹 UI | `http://<서버IP>:8501` |
-| API 문서 | `http://<서버IP>:8000/docs` |
-| 헬스체크 | `http://<서버IP>:8000/health` |
+| 헬스체크 | `http://<서버IP>:8501/health` (DB까지 확인 — DB가 안 되면 503) |
+| API 문서 | 운영(`APP_ENV=production`)에선 닫힘 — 개발 환경에서만 `http://localhost:8000/docs` |
 
-> 외부 PC에서 접속하려면 방화벽에서 8501, 8000 포트를 열어야 합니다.
+> 외부 PC에서는 8501만 엽니다. 8000(API)·5432(DB)는 v2.199부터 `127.0.0.1`에만 묶인다(화면은 내부망으로 API에 붙는다).
 
 ### 2-5. 초기 어드민 작업
 
@@ -487,6 +485,23 @@ docker exec ops-postgres pg_dump -U ops -d opsdb -t policy_track2_run -t eval_an
 되돌리기는 이 덤프 복원만. 새로 설치하는 DB는 처음부터 이 표를 만들지 않는다(init/08 삭제).
 
 ---
+
+### 3-8. v2.199 이상으로 올릴 때 — 운영 기동 조건 (11/03 운영 전 리뷰)
+
+운영 compose(`docker-compose.prod.yml`)는 `APP_ENV=production`으로 띄운다. 아래가 하나라도 안 맞으면 **백엔드가 기동하지 않는다**(로그에
+`[보안] 운영 기동 중단 — …`). 운영 `.env`에서 먼저 바꾼다.
+
+| 칸 | 조건 | 바꾸면 생기는 일 |
+|---|---|---|
+| `JWT_SECRET_KEY` | 기본값 아님 · 32자 이상 (`openssl rand -hex 32`) | 로그인 세션이 한 번 모두 끊긴다(다시 로그인) |
+| `ADMIN_DEFAULT_PASSWORD` | 기본값(1111) 아님 · 8자 이상 | admin 계정을 새로 만들 때만 쓰인다(이미 있으면 영향 없음) |
+| `POSTGRES_PASSWORD` | 기본값(ops1234) 아님 | **기존 DB 볼륨은 비밀번호가 이미 정해져 있다** — 바꾸려면 DB 안에서 `ALTER USER ops PASSWORD '…'` 후 .env를 같이 바꾼다 |
+| `IMAGE_TAG` | 반드시 적는다(반입한 버전) | 없으면 compose가 시작하지 않는다(예전엔 조용히 latest) |
+| `URL_IMPORT_ALLOWED_HOSTS` | URL·컨플 가져오기를 허용할 호스트(쉼표). 기본 `confl.sinc.co.kr` | 목록 밖 주소는 가져오기가 막힌다 |
+
+기동 기록: 기동마다 `schema_migration_run`에 한 줄(단계별 ms·실패한 단계·오류). 반입 뒤 확인:
+`docker exec ops-postgres psql -U ops -d opsdb -c "SELECT id, ok, failed_step, duration_ms FROM schema_migration_run ORDER BY id DESC LIMIT 3"`.
+첫 기동은 `rag_knowledge.content_tsv`(키워드 검색 저장 칸, #109) 계산으로 지식 수에 비례해 수 초 더 걸린다.
 
 ## 4. 운영 작업
 

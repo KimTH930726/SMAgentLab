@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.199)
+# OpsLens 시스템 아키텍처 (v2.200)
 
 ## 개요
 
@@ -12,6 +12,16 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 > `docs/archive/architecture-history-v2.0-v2.99.md` v2.67 항목).
 
 **주요 이력 요약** (스키마 변경 상세는 `table-definition.md` §20 마이그레이션 이력 참조)
+- v2.200 (2026-11-03, dev_0): **운영 전 필수(외부 컨설팅 관점 리뷰) — 보안 4 · 성능 3 · 설계 2 · 시스템 먼저.**
+  보안: 운영 프로필(`APP_ENV=production`)에서 기본·짧은 JWT 시크릿·관리자/DB 비밀번호면 기동 중단, /docs 닫음, prod `IMAGE_TAG` 필수 ·
+  마크다운 rehype-raw 뒤 rehype-sanitize(`utils/markdown.ts`) + nginx CSP·nosniff·referrer · 수집 클라이언트는 전부 `web_crawler.guarded_client`
+  (요청·리다이렉트마다 허용 호스트 `URL_IMPORT_ALLOWED_HOSTS`, 응답 20MB 상한 — SSRF·PAT 유출) · 5432·8000은 127.0.0.1에만.
+  성능: 키워드 검색 저장 칸 `content_tsv` + GIN(#109, 2.5초 → 1.7ms, 검색 101/106 그대로) · 답변 캐시 비우기가 관련 정책 연결(+하위)까지,
+  단건 등록·수정·삭제·중복 처리·묶음 삭제도 비움 · /health = DB 확인(안 되면 503) + LLM 1분 캐시·토큰 재사용(토큰 발급 5,299회 → 기동 1회) ·
+  compose 헬스체크·로그 회전 · gzip(번들 2MB → 0.7MB) · 검색 top_k ≤ 50.
+  설계: 살아 있는 내용(운영 지식·원문·정책·참고표·용어·검토 중 정정)이 있으면 컬렉션 삭제 409(이력은 막지 않음, 관리자 `?purge=true`는 시험 정리용) ·
+  마이그레이션 목록 `_MIGRATIONS` + advisory lock + 기동 원장 `schema_migration_run`(#110). 백업→복원 한 바퀴 확인(지식 3,262 그대로).
+  화면: 컬렉션 고르는 창 [시스템 | 정책], 기본 시스템 탭, 처음 기본 컬렉션 = 내 담당 시스템. 반입 조건: `docs/operations/deployment-closed-network.md` §3-8.
 - v2.199 (2026-11-03, dev_0): **운영 지식 쓰기 서버 막기 · 정정은 근거 주인에게(M2) · 컬렉션 삭제 빈 자리 정리 · pipeline-stats 삭제.**
   ① 정책 컬렉션엔 운영 지식 금지를 서버에서: 등록 API 400(`core/dependencies.reject_knowledge_outside_system`), 서비스 길목
   (`core/database.resolve_knowledge_namespace_id` — create·bulk), 소스 연결 동기화·팀 적재는 초안 전에 건너뜀, 정정 "빠진 내용" 승인 막음.
