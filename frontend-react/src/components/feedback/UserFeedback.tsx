@@ -7,6 +7,7 @@ import {
   getAutoSignals, getFeedbackFile, listFeedback, MAX_FILE_BYTES, MAX_FILES, myFeedback, myUnseen, sendFeedback, triageFeedback,
   type FeedbackContext, type FeedbackItem, type FeedbackKind, type FeedbackStatus,
 } from '../../api/userFeedback';
+import { ApiError } from '../../api/client';
 import { useAppStore } from '../../store/useAppStore';
 import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -368,6 +369,20 @@ const STATUS_PICK: { s: FeedbackStatus; form?: 'done' | 'duplicate' | 'declined'
   { s: 'declined', form: 'declined', title: '하지 않음(사유 필수 — 보낸 사람이 봄)' },
 ];
 
+// 단계 이동(11/04 태훈 "전후 관계를 따져 단계별로만") — 다음 단계와 한 단계 되돌리기만. 서버(user_feedback/router.py NEXT)와 같게
+const FB_NEXT: Record<FeedbackStatus, FeedbackStatus[]> = {
+  new: ['planned', 'duplicate', 'declined'],
+  planned: ['in_progress', 'declined', 'new'],
+  in_progress: ['done', 'planned'],
+  done: ['in_progress'],
+  duplicate: ['new'],
+  declined: ['new'],
+};
+const FB_ORDER: FeedbackStatus[] = ['new', 'planned', 'in_progress', 'done'];
+/** 되돌리기(흐름상 앞 단계로 · 중복·기각을 다시 열기) */
+const isBack = (from: FeedbackStatus, to: FeedbackStatus) =>
+  to === 'new' || (FB_ORDER.includes(from) && FB_ORDER.indexOf(to) < FB_ORDER.indexOf(from));
+
 /** 상세 창 — 내용·오류 문맥·첨부·메모 + 상태 고르기 + (진행 중이면) 개발 요청서 */
 function FeedbackDetail({ f, onClose, onChanged }: { f: FeedbackItem; onClose: () => void; onChanged: (p: Partial<FeedbackItem>) => void }) {
   const qc = useQueryClient();
@@ -387,7 +402,16 @@ function FeedbackDetail({ f, onClose, onChanged }: { f: FeedbackItem; onClose: (
         decided_by: undo ? null : me, decided_at: undo ? null : new Date().toISOString() });
       qc.invalidateQueries({ queryKey: ['user-feedback'] });
     },
-    onError: (e) => (modal ? setErr(e instanceof Error ? e.message : '저장하지 못했습니다') : showError(e, '저장하지 못했습니다')),
+    onError: (e) => {
+      // 409 = 그 사이 다른 관리자가 단계를 바꿈 — 목록을 다시 읽고 창을 닫아, 다시 열면 지금 단계의 버튼이 보이게(리뷰)
+      if (e instanceof ApiError && e.status === 409) {
+        qc.invalidateQueries({ queryKey: ['user-feedback'] });
+        setModal(null);
+        void showError(e, '저장하지 못했습니다').then(onClose);
+        return;
+      }
+      if (modal) setErr(e instanceof Error ? e.message : '저장하지 못했습니다'); else void showError(e, '저장하지 못했습니다');
+    },
   });
   const openModal = (m: 'declined' | 'duplicate' | 'done') => { setErr(null); setNote(''); setDup(''); setModal(m); };
   const ctx = contextLine(f.context);
@@ -410,17 +434,19 @@ function FeedbackDetail({ f, onClose, onChanged }: { f: FeedbackItem; onClose: (
         <div className="border-t border-slate-700 pt-3 space-y-2">
           <p className="text-xs text-slate-400">상태</p>
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="상태" data-testid={`feedback-${f.id}-status-pick`}>
-            {STATUS_PICK.map((x) => {
+            {STATUS_PICK.filter((x) => x.s === f.status || FB_NEXT[f.status].includes(x.s)).map((x) => {
               const cur = f.status === x.s;
+              const back = !cur && isBack(f.status, x.s);
               return (
-                <button key={x.s} disabled={cur || act.isPending} aria-pressed={cur} title={x.title}
+                <button key={x.s} disabled={cur || act.isPending} aria-pressed={cur} data-back={back || undefined}
+                  title={back ? `이전 단계로 — ${x.title}` : x.title}
                   onClick={async () => {
                     // 완료에서 벗어나면 보낸 사람이 보던 완료 답변이 지워진다 — 확인 뒤에(리뷰 L4)
                     if (f.status === 'done' && !(await showConfirm('완료 답변이 지워지고 보낸 사람에게 바뀐 상태가 보여요.', { title: '완료 취소', confirmLabel: '바꾸기', tone: 'warning' }))) return;
                     if (x.form) openModal(x.form); else act.mutate({ status: x.s });
                   }}
                   className={clsx('rounded-full border px-3 py-1 text-xs', cur ? `${FB_STATUS[x.s].cls} border-transparent font-semibold` : 'border-slate-600 text-slate-300 hover:bg-slate-800 disabled:opacity-50')}>
-                  {FB_STATUS[x.s].label}{x.form && !cur ? '…' : ''}
+                  {back ? '↩ ' : ''}{FB_STATUS[x.s].label}{x.form && !cur ? '…' : ''}
                 </button>
               );
             })}

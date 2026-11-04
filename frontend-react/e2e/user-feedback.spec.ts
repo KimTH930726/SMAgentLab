@@ -52,6 +52,9 @@ test('피드백 — 이미지 첨부 보내기 → 관리자 분류(기각 사�
     const thumb = det.getByTestId(`feedback-images-${id}`).locator('img');
     await expect(thumb).toHaveCount(1);
     await expect.poll(() => thumb.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(1);   // 인증 붙여 받은 실제 이미지
+    // 단계 이동(11/04) — 신규에선 선정·중복·기각만(진행 중·완료로 건너뛰지 못함)
+    await expect(pick.getByRole('button', { name: /진행 중/ })).toHaveCount(0);
+    await expect(pick.getByRole('button', { name: /완료/ })).toHaveCount(0);
     await pick.getByRole('button', { name: '기각…' }).click();
     await expect(page.getByRole('button', { name: '기각', exact: true })).toBeDisabled();   // 사유 없이 못 함
     await page.keyboard.press('Escape');
@@ -77,6 +80,8 @@ test('피드백 — 이미지 첨부 보내기 → 관리자 분류(기각 사�
     await expect(row).toHaveCount(0);                     // [신규] 필터에서 빠짐 — 상세 창은 열린 채 상태만 바뀜
     await expect(pick.getByRole('button', { name: '선정' })).toHaveAttribute('aria-pressed', 'true');
     await expect(det.getByTestId(`feedback-${id}-handoff`)).toHaveCount(0);           // 개발 요청서는 진행 중일 때만
+    await expect(pick.getByRole('button', { name: /완료/ })).toHaveCount(0);           // 선정에선 완료로 건너뛰지 못함
+    await expect(pick.getByRole('button', { name: '↩ 신규' })).toBeVisible();          // 한 단계 되돌리기
     await pick.getByRole('button', { name: '진행 중' }).click();
     await expect.poll(() => psql(`SELECT status FROM ops_user_feedback WHERE id = ${id}`)).toBe('in_progress');
     await det.getByTestId(`feedback-${id}-handoff`).click();

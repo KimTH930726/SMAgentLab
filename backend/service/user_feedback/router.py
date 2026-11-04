@@ -24,6 +24,16 @@ router = APIRouter(prefix="/api/user-feedback", tags=["user-feedback"])
 
 KINDS = ("bug", "idea")
 STATUSES = ("new", "planned", "in_progress", "done", "duplicate", "declined")
+# 단계 이동(11/04 태훈 "전후 관계를 따져 단계별로만") — 업무 흐름(Jira 워크플로)처럼 다음 단계·한 단계 되돌리기만. 화면(FB_NEXT)과 같게
+NEXT = {
+    "new": ("planned", "duplicate", "declined"),
+    "planned": ("in_progress", "declined", "new"),
+    "in_progress": ("done", "planned"),
+    "done": ("in_progress",),          # 다시 열기
+    "duplicate": ("new",),
+    "declined": ("new",),
+}
+STATUS_KO = {"new": "신규", "planned": "선정", "in_progress": "진행 중", "done": "완료", "duplicate": "중복", "declined": "기각"}
 MAX_FILES = 3
 MAX_FILE_BYTES = 5 * 1024 * 1024
 
@@ -182,14 +192,20 @@ async def triage(fid: int, body: TriageIn, admin: dict = Depends(get_current_adm
         if body.status == "duplicate" and not await conn.fetchval("SELECT 1 FROM ops_user_feedback WHERE id = $1", body.duplicate_of):
             raise HTTPException(status_code=400, detail="원래 피드백 번호가 없습니다.")
         undo = body.status == "new"
+        allowed_from = [s for s, nxt in NEXT.items() if body.status in nxt]
+        # 지금 단계에서 갈 수 있을 때만 바꾼다 — 조회 뒤 바꾸면 그 사이 다른 관리자가 바꾼 단계를 건너뛸 수 있어 조건을 UPDATE에(원자적)
         r = await conn.fetchrow(
             """UPDATE ops_user_feedback SET status = $2, admin_note = NULLIF($3, ''), duplicate_of = $4,
                       decided_by_user_id = $5, decided_at = CASE WHEN $6 THEN NULL ELSE NOW() END
-               WHERE id = $1 RETURNING id, status""",
+               WHERE id = $1 AND status = ANY($7::text[]) RETURNING id, status""",
             fid, body.status, "" if undo else body.note.strip(), body.duplicate_of if body.status == "duplicate" else None,
-            None if undo else admin["id"], undo)
+            None if undo else admin["id"], undo, allowed_from)
+        if r is None:
+            cur = await conn.fetchval("SELECT status FROM ops_user_feedback WHERE id = $1", fid)
     if r is None:
-        raise HTTPException(status_code=404, detail="피드백이 없습니다.")
+        if cur is None:
+            raise HTTPException(status_code=404, detail="피드백이 없습니다.")
+        raise HTTPException(status_code=409, detail=f"지금 단계({STATUS_KO[cur]})에서 바로 '{STATUS_KO[body.status]}'(으)로 갈 수 없어요 — 단계를 차례로 바꿔 주세요.")
     return dict(r)
 
 

@@ -276,3 +276,56 @@ def test_duplicate_resolution_skips_unmatched_and_refuses_twice():
     assert added == 1                      # 매칭 있는 처리 한 번만
     assert twice and "이미 처리" in twice
     assert lone_status == "rejected"       # 기록은 안 해도 처리는 됨
+
+
+# ── 사용자 피드백 단계 이동(11/04) ─────────────────────────────────────────
+
+def test_feedback_status_moves_step_by_step():
+    """다음 단계·한 단계 되돌리기만 — 건너뛰면 409이고 상태는 그대로(조건이 UPDATE 안이라 원자적)."""
+    from fastapi import HTTPException
+    from typing import Literal, Optional
+    fb = load("_rdb_real_user_feedback", "service/user_feedback/router.py")
+    fb.TriageIn.model_rebuild(_types_namespace={"Literal": Literal, "Optional": Optional})   # 경로로 읽은 모듈이라 타입 이름을 직접 넘김
+
+    async def scenario(conn):
+        admin = await conn.fetchval("SELECT id FROM ops_user ORDER BY id LIMIT 1")
+        fid = await conn.fetchval("INSERT INTO ops_user_feedback (kind, body) VALUES ('idea', '단계 시험') RETURNING id")
+        st = lambda: conn.fetchval("SELECT status FROM ops_user_feedback WHERE id = $1", fid)   # noqa: E731
+        seen = []
+
+        async def go(to, **kw):
+            try:
+                await fb.triage(fid, fb.TriageIn(status=to, **kw), {"id": admin})
+                seen.append((to, "ok", await st()))
+            except HTTPException as e:
+                seen.append((to, e.status_code, await st()))
+        await go("in_progress")               # 신규 → 진행 중: 선정 건너뜀
+        await go("done", note="x")            # 신규 → 완료: 건너뜀
+        await go("planned")
+        await go("done", note="x")            # 선정 → 완료: 진행 중 건너뜀
+        await go("in_progress")
+        await go("planned")                   # 한 단계 되돌리기
+        await go("in_progress")
+        await go("done", note="반영")
+        await go("new")                       # 완료 → 신규: 안 됨(다시 열기는 진행 중으로)
+        await go("in_progress")               # 다시 열기
+        return seen
+    assert run(scenario, [fb]) == [
+        ("in_progress", 409, "new"), ("done", 409, "new"), ("planned", "ok", "planned"), ("done", 409, "planned"),
+        ("in_progress", "ok", "in_progress"), ("planned", "ok", "planned"), ("in_progress", "ok", "in_progress"),
+        ("done", "ok", "done"), ("new", 409, "done"), ("in_progress", "ok", "in_progress")]
+
+
+def test_feedback_next_same_in_screen_and_server():
+    """화면(FB_NEXT)과 서버(NEXT)의 단계 이동 표가 같다 — 한쪽만 바뀌면 버튼은 보이는데 409가 난다. 두 소스를 글로 읽어 비교(호스트에서 돈다)."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    ts = root / "frontend-react/src/components/feedback/UserFeedback.tsx"
+    if not ts.exists():
+        pytest.skip("프론트 소스 없음(컨테이너)")
+    py_body = re.search(r"^NEXT = \{(.*?)^\}", (root / "backend/service/user_feedback/router.py").read_text(encoding="utf-8"), re.S | re.M).group(1)
+    server = {k: tuple(re.findall(r'"(\w+)"', v)) for k, v in re.findall(r'"(\w+)": \(([^)]*)\)', py_body)}
+    ts_body = re.search(r"const FB_NEXT[^{]*\{(.*?)\n\};", ts.read_text(encoding="utf-8"), re.S).group(1)
+    screen = {k: tuple(re.findall(r"'(\w+)'", v)) for k, v in re.findall(r"(\w+): \[([^\]]*)\]", ts_body)}
+    assert server and screen == server
