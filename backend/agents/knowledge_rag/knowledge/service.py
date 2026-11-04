@@ -58,7 +58,16 @@ async def create_knowledge(
             await conn.execute("SELECT pg_advisory_xact_lock($1)", ns_id)
 
             matches = await find_similar_active_knowledge(ns_id, embedding)
-            is_duplicate = bool(matches) and matches[0]["similarity"] >= get_thresholds()["duplicate_min_similarity"]
+            # 중복 판정 2단(11/04) — 일괄 등록과 같은 규칙: ② 공백만 다른 같은 글은 거부 ③ 의미만 비슷하고 글이 다르면 정상 등록
+            from trustkit.ingest.dedupe import norm_text, similar_at_least
+            same = next((m["id"] for m in matches if norm_text(m["content"]) == norm_text(content)), None)
+            if same is not None:
+                raise ValueError(f"같은 글이 이미 있어요(#{same}) — 공백만 다른 같은 지식은 다시 등록하지 않아요.")
+            close = [m for m in matches if m["similarity"] >= get_thresholds()["duplicate_min_similarity"]]
+            if close:
+                tmpl = await _collection_template_lines(ns_id, [{"content": content}], [], [])
+                matches = [m for m in close if similar_at_least(content, m["content"], settings.duplicate_min_text_similarity, tmpl)]
+            is_duplicate = bool(close) and bool(matches)
             # force_pending = 넣는 사람이 그 컬렉션 담당이 아님(E2, 위치 판정으로 고른 곳) — 담당이 승인해야 검색에 나온다
             status = "pending_review" if (is_duplicate or force_pending) else "active"
 
@@ -229,6 +238,49 @@ async def vector_search_knowledge(namespace: str, query_vec: list[float], top_k:
     return [dict(r) for r in rows]
 
 
+async def explore_knowledge(namespace: str, query: str, top_k: int = 30) -> dict:
+    """지식 검색 화면(11/04 태훈 "검색해서 무슨 지식이 있나 보고 고치게") — **채팅과 같은 검색**: 용어 범위(정책 파트 용어 포함)와 지식 검색
+    범위(채팅 기본 linked — 연결된 컬렉션까지)를 채팅(agent.build_chat_context)과 같게 정한다(독립 리뷰: 디버그 검색에서 고쳤던 차이 재발 방지).
+    카드 칸: 관련도(가중치 뺀 점수)·문서 위치·채널·수정일·채팅 노출 횟수(최근 90일 채팅 검색 결과에 든 횟수 — 답 근거 채택 여부와 별개)."""
+    from agents.knowledge_rag.agent import chat_defaults
+    from agents.knowledge_rag.knowledge import glossary_terms as _gt
+    from agents.knowledge_rag.knowledge.retrieval import get_search_defaults, relevance_score, search_knowledge, KEYWORD_RESCUE
+    from core.database import knowledge_scope_extra_ids
+    from service.policy import scope as policy_scope
+    vec = await embedding_service.embed(query)
+    scope = chat_defaults()["knowledge_scope"]
+    try:   # 채팅과 같이 — 범위 계산이 실패해도 고른 컬렉션만으로 계속
+        async with get_conn() as conn:
+            policy_ns_ids = await policy_scope.policy_namespace_ids(conn, namespace)
+            extra_ns = list(dict.fromkeys(await knowledge_scope_extra_ids(conn, namespace, scope, vec))) if scope else []
+    except Exception as e:  # noqa: BLE001
+        logger.warning("지식 검색 화면 범위 계산 실패(고른 컬렉션만): %s", e)
+        policy_ns_ids, extra_ns = [], []
+    _matches, mapped_term, enriched = await _gt.resolve_query_terms(namespace, query, vec, extra_ns_ids=policy_ns_ids)
+    d = get_search_defaults()
+    hits = await search_knowledge(namespace, vec, enriched, d["default_w_vector"], d["default_w_keyword"], top_k,
+                                  keyword_rescue=KEYWORD_RESCUE, **({"extra_ns_ids": extra_ns} if extra_ns else {}))
+    ids = [h.id for h in hits]
+    async with get_conn() as conn:
+        rows = {r["id"]: r for r in await conn.fetch(
+            "SELECT k.id, k.updated_at::text, k.created_at::text, u.username AS created_by_username, k.confluence_page_id "
+            "FROM rag_knowledge k LEFT JOIN ops_user u ON u.id = k.created_by_user_id WHERE k.id = ANY($1::int[])", ids)}
+        # 최근 90일만(부분 인덱스 idx_ops_message_assistant_created) — 메시지 전체를 매번 풀지 않게(독립 리뷰 성능)
+        used = {r["kid"]: r["n"] for r in await conn.fetch(
+            "SELECT (e->>'id')::int AS kid, count(DISTINCT m.id) AS n FROM ops_message m CROSS JOIN LATERAL jsonb_array_elements(m.results) e "
+            "WHERE m.role = 'assistant' AND m.created_at > NOW() - interval '90 days' AND jsonb_typeof(m.results) = 'array' "
+            "AND (e->>'id') ~ '^[0-9]+$' AND (e->>'id')::int = ANY($1::int[]) GROUP BY 1", ids)} if ids else {}
+    items = []
+    for h in hits:
+        r = rows.get(h.id)
+        items.append({"id": h.id, "namespace": h.namespace, "content": h.content, "heading_path": list(h.heading_path or []),
+                      "source_type": h.source_type, "source_file": h.source_file, "score": round(relevance_score(h), 4),
+                      "v_score": round(h.v_score, 4), "k_score": round(h.k_score, 4), "used_count": used.get(h.id, 0),
+                      "updated_at": r["updated_at"] if r else None, "created_at": r["created_at"] if r else None,
+                      "created_by_username": r["created_by_username"] if r else None})
+    return {"query": query, "mapped_term": mapped_term, "items": items}
+
+
 def _chunk_title(content: str) -> str:
     """청크 첫 줄(제목이면 # 떼고) — 구조 화면의 목록 표시용."""
     first = next((ln.strip() for ln in (content or "").split("\n") if ln.strip()), "")
@@ -346,7 +398,15 @@ async def rechunk_source_document(doc_id: int, *, force: bool = False, user: Opt
     items = rechunk_items(doc)
     if not items:
         raise ValueError("원문을 다시 나눈 결과가 비었습니다 — 원문 형식을 확인하세요(교체하지 않음).")
-    same = [(it["content"], list(it["heading_path"] or [])) for it in items] == \
+    # 같은 원문 안에서 공백만 다른 같은 조각은 등록 때 건너뛴다(11/04 ②) — 비교도 그렇게, 안 그러면 누를 때마다 "바뀜"으로 다시 임베딩(리뷰 L1)
+    from trustkit.ingest.dedupe import norm_text as _nt
+    seen: set[str] = set()
+    effective = []
+    for it in items:
+        if _nt(it["content"]) not in seen:
+            seen.add(_nt(it["content"]))
+            effective.append(it)
+    same = [(it["content"], list(it["heading_path"] or [])) for it in effective] == \
            [(r["content"], list(r["heading_path"] or [])) for r in current]
     if same:
         return {"changed": False, "old": len(current), "new": len(items)}
@@ -769,6 +829,24 @@ async def get_glossary_namespace(glossary_id: int) -> Optional[str]:
 # ─── 벌크 등록 (Ingestion) ──────────────────────────────────────────────────
 
 _INGEST_BATCH_SIZE = 50
+
+
+async def _collection_template_lines(ns_id: int, items: list[dict], replacing_pages: list[str], replacing_docs: list[int]) -> frozenset[str]:
+    """이 컬렉션의 양식 줄(여러 페이지에 똑같이 나오는 줄) — 사용 중 지식 + 이번 등록분에서 센다(팀·공간마다 달라 하드코딩하지 않음, 11/04).
+    곧 폐기될 옛 버전(교체되는 페이지·원문)은 빼고 이번 등록분으로 센다 — 같은 페이지가 두 번 세지지 않게."""
+    from trustkit.ingest.dedupe import template_lines
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            "SELECT content, coalesce('p:' || confluence_page_id, 'd:' || source_document_id::text, 'f:' || source_file, 'k:' || id::text) AS pk FROM rag_knowledge "
+            "WHERE namespace_id = $1 AND status = 'active' "
+            "AND NOT (confluence_page_id IS NOT NULL AND confluence_page_id = ANY($2::text[])) "
+            "AND NOT (source_document_id IS NOT NULL AND source_document_id = ANY($3::int[]))",
+            ns_id, replacing_pages or [], replacing_docs or [])
+    # 페이지 표시가 없는 등록(붙여넣기 한 건)은 한 문서 — 조각마다 따로 세면 한 문서 안 반복 줄이 양식으로 잡힌다
+    # 키는 종류 접두사로 — 페이지 id "123"과 원문 id 123이 같은 페이지로 세지지 않게(리뷰)
+    new = [(f"p:{it['confluence_page_id']}" if it.get("confluence_page_id") else f"d:{it['source_document_id']}" if it.get("source_document_id") else "new",
+            it["content"]) for it in items]
+    return template_lines([(r["pk"], r["content"]) for r in rows] + new)
 # 실제 임베딩 계산에 쓰이는 모델(core/config.py)과 반드시 같은 값이어야 한다 — v2.72에서
 # mpnet→KURE-v1로 실제 임베딩 모델을 교체했을 때 이 상수는 하드코딩된 옛 이름 그대로
 # 남아있어서, 그 이후 등록된 지식 18건이 실제로는 KURE-v1(1024차원)로 임베딩됐으면서도
@@ -930,6 +1008,30 @@ async def _run_bulk_ingestion(
                         it["source_document_id"] = None
             source_doc_ids = valid
             replacing_docs = await _ledger.replacing_documents(conn, ns_id, source_doc_ids, replacing_pages)
+    # 중복 판정 2단(11/04, 설계 chunk-structure-dedupe-design ②·③): ② 같은 원본(같은 페이지·원문) 안에서 공백만 다른 같은 글이 또 나오면
+    # 저장하지 않는다(건너뜀 수·기존 id를 작업에 남김 — 조용히 버리지 않음). **다른 원본**의 같은 글은 건너뛰지 않고 ③으로 승인 대기 —
+    # 건너뛰면 그 원본이 나중에 지워지거나(롤백·페이지 수정·삭제) 바뀔 때 내용이 영영 사라진다(독립 리뷰 H1, 11/04).
+    # ③ 의미 유사도가 높아도 양식 줄을 뺀 글자 유사도가 낮으면 같은 양식의 다른 페이지라 정상 등록.
+    from trustkit.ingest.dedupe import norm_text, similar_at_least
+    text_threshold = settings.duplicate_min_text_similarity
+    tmpl = await _collection_template_lines(ns_id, items, replacing_pages, replacing_docs)
+
+    def _source(it: dict) -> tuple:
+        if it.get("confluence_page_id"):
+            return ("p", str(it["confluence_page_id"]))
+        if it.get("source_document_id"):
+            return ("d", int(it["source_document_id"]))
+        return ("j", job_id)   # 원본 표시가 없는 등록(붙여넣기 등)은 이번 작업이 한 원본
+
+    def _same_source(it: dict, m: dict) -> bool:
+        kind, key = _source(it)
+        return ((kind == "p" and str(m.get("confluence_page_id") or "") == key) or (kind == "d" and m.get("source_document_id") == key)
+                or (kind == "j" and m.get("ingestion_job_id") == job_id))
+
+    seen_norm: dict[tuple, int] = {}     # (원본, 정규화한 글) → 조각 번호 — 같은 원본 안 완전 일치
+    skipped_exact: list[int] = []        # 건너뛴 조각과 같은 저장 조각 id(최대 50) — 같은 배치 안 앞 조각과 같으면 아직 id가 없어 수만 셈
+    skipped_total = 0
+    meaning_only = 0
     try:
         for start in range(0, len(items), _INGEST_BATCH_SIZE):
             batch = items[start:start + _INGEST_BATCH_SIZE]
@@ -942,8 +1044,28 @@ async def _run_bulk_ingestion(
                     replacing_documents=replacing_docs or None,
                 ) for emb in embeddings)
             )
+            # ② 같은 원본 안 완전 일치 — 같은 원본의 저장 조각(이번 작업 앞 배치)이나 앞 조각과 같으면 건너뜀
+            skip: set[int] = set()
+            for offset, (item, matches) in enumerate(zip(batch, match_results)):
+                n = norm_text(item["content"])
+                same = next((m["id"] for m in matches if norm_text(m["content"]) == n and _same_source(item, m)), None)
+                if same is not None or (_source(item), n) in seen_norm:
+                    skip.add(offset)
+                    skipped_total += 1
+                    if same is not None and len(skipped_exact) < 50:
+                        skipped_exact.append(same)
+                else:
+                    seen_norm[(_source(item), n)] = start + offset
+            # ③ 의미 유사도 ≥ 하한인 후보 중 글자도 비슷한 것만 중복 의심 — 의미만 비슷하면(형제 페이지) 후보에서 뺀다
+            for offset, item in enumerate(batch):
+                close = [m for m in match_results[offset] if m["similarity"] >= dup_threshold]
+                kept = [m for m in close if similar_at_least(item["content"], m["content"], text_threshold, tmpl)]
+                if close and not kept and offset not in skip:
+                    meaning_only += 1
+                if close:
+                    match_results[offset] = kept + [m for m in match_results[offset] if m["similarity"] < dup_threshold]
             db_is_duplicate = [
-                bool(m) and m[0]["similarity"] >= dup_threshold for m in match_results
+                offset not in skip and bool(m) and m[0]["similarity"] >= dup_threshold for offset, m in enumerate(match_results)
             ]
 
             # 배치 내 상호 중복 검사 — 같은 배치 안의 항목끼리는 아직 INSERT 전이라
@@ -956,22 +1078,25 @@ async def _run_bulk_ingestion(
                 emb_matrix = np.array(embeddings, dtype=np.float32)
                 sims = emb_matrix @ emb_matrix.T
                 for i in range(len(batch)):
-                    if db_is_duplicate[i]:
+                    if db_is_duplicate[i] or i in skip:
                         continue
                     best_j, best_sim = None, 0.0
                     for j in range(i):
-                        if db_is_duplicate[j] or j in local_match:
-                            continue  # j 자신도 결국 pending으로 빠질 항목이면 기준으로 안 삼음
+                        if db_is_duplicate[j] or j in local_match or j in skip:
+                            continue  # j 자신도 결국 pending으로 빠지거나 건너뛸 항목이면 기준으로 안 삼음
                         sim = float(sims[i, j])
-                        if sim > best_sim:
+                        # ③ 같은 배치 안도 같은 규칙 — 의미가 높아도 글자가 다르면(형제 페이지) 중복 의심 아님
+                        if sim > best_sim and sim >= dup_threshold and similar_at_least(batch[i]["content"], batch[j]["content"], text_threshold, tmpl):
                             best_j, best_sim = j, sim
-                    if best_j is not None and best_sim >= dup_threshold:
+                    if best_j is not None:
                         local_match[i] = (best_j, best_sim)
 
             rows = []
             pending_chunk_indices: dict[int, list[dict]] = {}  # source_chunk_idx → DB matches
             local_pending: dict[int, tuple[int, float]] = {}   # chunk_idx → (matched chunk_idx, similarity), 같은 배치 내 매칭
             for offset, (item, emb, matches) in enumerate(zip(batch, embeddings, match_results)):
+                if offset in skip:
+                    continue   # ② 완전 일치 — 저장 안 함(작업에 수·기존 id)
                 # PDF/XLSX 추출 텍스트에 null byte(\x00)가 포함되면 PostgreSQL이 거부함 → 제거
                 content = item["content"].replace("\x00", "")
                 chunk_idx = start + offset
@@ -1061,6 +1186,13 @@ async def _run_bulk_ingestion(
             # _cleanup_orphaned_ingestion_jobs가 processing job과 함께 정리한다.
             logger.exception("실패한 인제스천 작업 정리 실패 (job_id=%s)", job_id)
         return {"created": 0, "job_id": job_id, "status": "failed"}
+
+    if skipped_total or meaning_only:
+        # 대체 처리는 보이게 — 건너뜀은 등록 이력에 수·기존 id로, 의미만 비슷해 정상 등록한 수는 로그로(11/04)
+        logger.info("등록 중복 판정 (job_id=%s): 같은 글이 있어 건너뜀 %d건, 의미만 비슷해 정상 등록 %d건", job_id, skipped_total, meaning_only)
+        async with get_conn() as conn:
+            await conn.execute("UPDATE rag_ingestion_job SET skipped_exact_chunks = $2, skipped_exact_ids = $3::int[] WHERE id = $1",
+                               job_id, skipped_total, skipped_exact)
 
     # 후속 작업(자동 용어 추출)은 실제로 active가 된 행이 있을 때만 — 전부 승인 대기로 빠졌으면
     # 검토에서 반려될 수 있는 내용이라 용어를 미리 만들지 않는다(/code-review 지적, 2026-09-28).
@@ -1316,6 +1448,7 @@ async def list_ingestion_jobs(namespace: str) -> list[dict]:
         rows = await conn.fetch("""
             SELECT j.id, j.namespace_id, j.source_file, j.source_type, j.status,
                    j.total_chunks, j.created_chunks, j.pending_chunks, j.auto_glossary,
+                   j.skipped_exact_chunks, j.skipped_exact_ids,
                    j.chunk_strategy, j.error_message,
                    j.created_by_user_id, u.username AS created_by_username,
                    j.created_at::text, j.completed_at::text

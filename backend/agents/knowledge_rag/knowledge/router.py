@@ -302,6 +302,14 @@ async def vector_search_knowledge(body: VectorSearchRequest, user: dict = Depend
     return results
 
 
+@router.post("/explore")
+async def explore_knowledge(body: VectorSearchRequest, user: dict = Depends(get_current_user)):
+    """지식 검색 화면 — 채팅과 같은 검색(용어집 + 벡터·키워드). 빈 질문은 목록 화면이 맡는다."""
+    if not body.query.strip():
+        raise HTTPException(status_code=400, detail="검색어를 입력해 주세요.")
+    return await service.explore_knowledge(body.namespace, body.query.strip(), body.top_k)
+
+
 # ─── ops_glossary ──────────────────────────────────────────────────────────────
 
 @router.get("/glossary", response_model=list[GlossaryOut])

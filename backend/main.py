@@ -282,6 +282,8 @@ async def _migrate_core_tables(conn) -> None:
 
     # ── 성능 인덱스 (멱등) ──────────────────────────────────────────
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_message_conv_id ON ops_message (conversation_id, created_at)")
+    # 지식 검색 화면 "채팅 노출 N회"(최근 90일 답 메시지만 셈, 11/04) — 메시지 전체를 매번 훑지 않게
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ops_message_assistant_created ON ops_message (created_at) WHERE role = 'assistant'")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_user_id ON ops_conversation (user_id, created_at DESC)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_ns_user ON ops_conversation (namespace_id, user_id)")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_query_log_ns_status ON ops_query_log (namespace_id, status)")
@@ -435,6 +437,9 @@ async def _migrate_duplicate_review(conn) -> None:
     """지식 중복 등록 방지 — 청크 단위 유사도 검사 + 승인 대기(pending_review) 리뷰."""
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'")
     await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS pending_chunks INT NOT NULL DEFAULT 0")
+    # 완전 일치 건너뜀(11/04 중복 판정 2단 ②) — 같은 글이 이미 있어 저장하지 않은 조각 수와 그 기존 지식 id(최대 50)
+    await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS skipped_exact_chunks INT NOT NULL DEFAULT 0")
+    await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS skipped_exact_ids INT[] NOT NULL DEFAULT '{}'")
     # 원래 init/05-ingestion-job-progress.sql(수동 적용)에만 있던 컬럼 — 폐쇄망 배포 문서의
     # 전송 목록엔 init/01·02만 있어 누락될 수 있었다. 벌크 수집의 스테이징→일괄 전환이 이
     # 두 컬럼에 의존하므로(2026-09-28) 여기서도 멱등하게 보장한다.

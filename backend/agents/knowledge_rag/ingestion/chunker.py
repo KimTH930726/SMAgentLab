@@ -97,6 +97,8 @@ def chunk_document(
         # paste(붙여넣기)는 대부분 컨플루언스·문서 일부를 복사해 오는 경로라 같은 규칙(2026-10-07)
         always_split = doc.source_type in ("confluence", "web", "paste")
         chunks = _chunk_by_sections(doc, max_chars, min_chars, always_split=always_split)
+        if always_split:   # 섹션마다 나누는 모드에서만 생김(병합 모드는 짧은 섹션을 이미 앞 조각에 합친다) — 11/04 ①A
+            chunks = _merge_heading_only(chunks, max_chars)
     elif strategy == "paragraph":
         chunks = _chunk_by_paragraphs(doc.raw_text, max_chars, min_chars)
     elif strategy == "fixed":
@@ -133,6 +135,54 @@ def chunk_document(
 
 def _is_heading_line(line: str) -> bool:
     return line.lstrip().startswith("#")
+
+
+# 번호 제목 줄(`1.2.`, `05-2.1.3.`, `(참고) ○○`) — #이 없어 제목으로 안 잡히던 줄(11/04 설계 ①A). 60자 미만·문장 끝(. 다 요) 없음
+_NUM_HEADING_RE = re.compile(r"^(?:\(?\d+(?:[.\-]\d+)*[.)]|\(참고\)|\[참고\])\s*\S")
+
+
+def _is_heading_like(line: str) -> bool:
+    s = line.strip()
+    return _is_heading_line(s) or (len(s) < 60 and bool(_NUM_HEADING_RE.match(s)) and not s.endswith((".", "다", "요")))
+
+
+def _is_heading_only(text: str) -> bool:
+    """제목 같은 줄만 있고 본문 줄이 하나도 없는 조각. "짧은 본문"까지 넣으면 짧지만 진짜 문장인 섹션("매장 등록은 관리자 화면에서 한다.")이
+    이웃에 섞인다 — 10/07 "짧아도 본문이 있으면 남긴다" 가드의 전제(처음엔 30자 미만으로 짰다가 기존 테스트가 잡음, 11/04).
+    # 아닌 번호 줄은 **하나**까지만 — "1) 신분증 / 2) 통장 사본 / 3) 신청서" 같은 짧은 번호 목록은 진짜 본문이다(독립 리뷰 M2)."""
+    lines = [ln for ln in text.split("\n") if ln.strip()]
+    return all(_is_heading_like(ln) for ln in lines) and sum(not _is_heading_line(ln) for ln in lines) <= 1
+
+
+def _merge_heading_only(chunks: list[Chunk], max_chars: int) -> list[Chunk]:
+    """제목만 조각(본문이 번호 제목 줄 하나뿐 등)을 다음 조각 앞에, 마지막이면 앞 조각 뒤에 붙인다 — 혼자서는 검색에도 답에도 쓸모가 없고
+    중복 의심으로 승인 대기만 늘렸다(홈페이지 110조각, 11/03 실측). 내용은 그대로 옮길 뿐(유실·중복 0 — test_chunk_invariants).
+    다음 조각 heading_path는 붙인 조각 것으로 — 합친 조각의 첫 본문 줄이 그 섹션이라. 합치면 max_chars를 넘으면 그대로 둔다.
+    다음 조각이 같은 부모 아래(상위 경로가 제목만 조각의 경로로 시작)일 때만 앞에 붙인다 — 아니면 다음 섹션(B)이 제목만 조각의 부모(A) 아래로
+    잘못 분류돼 부모 확장·구조 화면이 B에 A의 형제를 붙였다(독립 리뷰 M1). 그럴 땐 앞 조각 뒤에."""
+    out: list[Chunk] = []
+    pending: Optional[Chunk] = None
+    for c in chunks:
+        if pending is not None:
+            under = list(c.heading_path[:len(pending.heading_path)]) == list(pending.heading_path)
+            if under and len(pending.text) + 1 + len(c.text) <= max_chars:
+                c = Chunk(text=f"{pending.text}\n{c.text}", idx=c.idx, section_title=pending.section_title or c.section_title,
+                          heading_path=list(pending.heading_path), metadata=c.metadata)
+            elif out and len(out[-1].text) + 1 + len(pending.text) <= max_chars:   # 다음이 너무 크면 앞 조각 뒤에
+                out[-1].text = f"{out[-1].text}\n{pending.text}"
+            else:
+                out.append(pending)
+            pending = None
+        if _is_heading_only(c.text):
+            pending = c
+            continue
+        out.append(c)
+    if pending is not None:
+        if out and len(out[-1].text) + 1 + len(pending.text) <= max_chars:
+            out[-1].text = f"{out[-1].text}\n{pending.text}"
+        else:
+            out.append(pending)
+    return out
 
 
 def _has_body(text: str) -> bool:

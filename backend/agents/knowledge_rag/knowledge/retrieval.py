@@ -214,7 +214,7 @@ async def find_similar_active_knowledge(
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""
-            SELECT id, content, 1 - (embedding <=> $2::vector) AS similarity
+            SELECT id, content, confluence_page_id, source_document_id, ingestion_job_id, 1 - (embedding <=> $2::vector) AS similarity
             FROM rag_knowledge
             WHERE namespace_id = $1 AND (status = 'active' {staging_clause}) {replace_clause}
               AND embedding IS NOT NULL
@@ -223,7 +223,9 @@ async def find_similar_active_knowledge(
             """,
             *args,
         )
-    return [{"id": r["id"], "content": r["content"], "similarity": float(r["similarity"])} for r in rows]
+    # 원본 칸(페이지·원문·작업)은 완전 일치 건너뜀이 "같은 원본 안"인지 가리는 데 쓴다(11/04)
+    return [{"id": r["id"], "content": r["content"], "similarity": float(r["similarity"]), "confluence_page_id": r["confluence_page_id"],
+             "source_document_id": r["source_document_id"], "ingestion_job_id": r["ingestion_job_id"]} for r in rows]
 
 
 # ── 부모 섹션 확장 (parent-child, 2026-10-01) ─────────────────────────────────

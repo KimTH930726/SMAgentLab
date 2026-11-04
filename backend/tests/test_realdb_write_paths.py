@@ -165,6 +165,35 @@ def test_create_knowledge_rejects_policy_and_accepts_system():
     assert run(scenario, [ksvc]) == (0, "active")
 
 
+def test_create_knowledge_dedupe_two_stage():
+    """단건 등록 중복 판정 2단(11/04): 공백만 다른 같은 글 = 거부(행 0) · 글자도 비슷 = 승인 대기 + 매칭 1행 · 의미만 비슷 = 사용 중, 매칭 0."""
+    base = "## 배치 점검\n재기동 전 상태 확인\n담당 운영팀"
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_중복2단 시스템")
+        k1 = await knowledge(conn, s, base)
+        near = lambda sim: AsyncMock(return_value=[{"id": k1, "content": base, "similarity": sim}])   # noqa: E731
+        out = {}
+        with patch.object(ksvc, "resolve_knowledge_namespace_id", database.resolve_knowledge_namespace_id), \
+                patch.object(ksvc, "_EMBEDDING_MODEL_NAME", "kure-test"), \
+                patch.object(ksvc.embedding_service, "embed", AsyncMock(return_value=[0.0] * 1024)):
+            with patch.object(ksvc, "find_similar_active_knowledge", near(0.9999)):
+                with pytest.raises(ValueError, match=f"같은 글이 이미 있어요\\(#{k1}\\)"):
+                    await ksvc.create_knowledge("시험_중복2단 시스템", "  ## 배치 점검\n\n재기동 전 상태 확인 \n담당 운영팀")
+            out["after_exact"] = await conn.fetchval("SELECT count(*) FROM rag_knowledge WHERE namespace_id = $1", s)
+            with patch.object(ksvc, "find_similar_active_knowledge", near(0.97)):
+                r = await ksvc.create_knowledge("시험_중복2단 시스템", "## 배치 점검\n재기동 전 상태 꼭 확인\n담당 운영팀")
+            out["near"] = (r["status"], r["pending_review"],
+                           await conn.fetchval("SELECT count(*) FROM rag_knowledge_duplicate_match WHERE new_knowledge_id = $1", r["id"]))
+            with patch.object(ksvc, "find_similar_active_knowledge", near(0.95)):
+                r = await ksvc.create_knowledge("시험_중복2단 시스템", "## 결제 대사\n매일 02시 정산 파일 비교\n담당 정산팀")
+            out["sibling"] = (r["status"], r["pending_review"],
+                              await conn.fetchval("SELECT count(*) FROM rag_knowledge_duplicate_match WHERE new_knowledge_id = $1", r["id"]))
+        return out
+    out = run(scenario, [ksvc])
+    assert out == {"after_exact": 1, "near": ("pending_review", True, 1), "sibling": ("active", False, 0)}
+
+
 # ── 팀 적재 롤백(게시 전·후 공통) ─────────────────────────────────────────
 
 def test_rollback_batch_removes_held_and_active_chunks_and_reopens_gaps():

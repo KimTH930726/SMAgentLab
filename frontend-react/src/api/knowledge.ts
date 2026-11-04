@@ -195,6 +195,29 @@ export async function vectorSearchKnowledge(namespace: string, query: string, to
   return apiFetch('/knowledge/search', { method: 'POST', body: JSON.stringify({ namespace, query, top_k: topK }) });
 }
 
+/** 지식 검색 화면(11/04) — 채팅과 같은 검색(용어집 + 벡터·키워드) 결과 카드 */
+export interface ExploreItem {
+  id: number;
+  namespace: string;
+  content: string;
+  heading_path: string[];
+  source_type: string | null;
+  source_file: string | null;
+  /** 관련도(가중치 뺀 벡터·키워드 결합 점수, 채팅의 근거 판정과 같은 값) */
+  score: number;
+  v_score: number;
+  k_score: number;
+  /** 채팅 답의 근거로 쓰인 횟수 */
+  used_count: number;
+  updated_at: string | null;
+  created_at: string | null;
+  created_by_username: string | null;
+}
+
+export async function exploreKnowledge(namespace: string, query: string, topK = 30): Promise<{ query: string; mapped_term: string | null; items: ExploreItem[] }> {
+  return apiFetch('/knowledge/explore', { method: 'POST', body: JSON.stringify({ namespace, query, top_k: topK }) });
+}
+
 export async function vectorSearchGlossary(namespace: string, query: string, topK = 30): Promise<(GlossaryItem & { similarity: number })[]> {
   return apiFetch('/knowledge/glossary/search', { method: 'POST', body: JSON.stringify({ namespace, query, top_k: topK }) });
 }
@@ -299,6 +322,9 @@ export interface IngestionJob {
   created_chunks: number;
   pending_chunks: number;
   auto_glossary: number;
+  /** 같은 글이 이미 있어 저장 안 한 조각 수 · 그 기존 지식 id(11/04) */
+  skipped_exact_chunks?: number;
+  skipped_exact_ids?: number[];
   chunk_strategy: string | null;
   error_message: string | null;
   created_by_user_id: number | null;

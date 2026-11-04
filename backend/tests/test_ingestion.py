@@ -239,6 +239,19 @@ class TestBulkCreateKnowledge:
         assert not hasattr(svc, "_require_category")
 
 
+def _fetch_dup_rows(q, *args):
+    """가짜 fetch — 양식 줄 계산(사용 중 지식 조회)은 빈 결과, 중복 매칭 역조회는 요청한 조각 번호를 그대로 돌려줌."""
+    if "source_chunk_idx = ANY" in q:
+        return [{"id": 100 + i, "source_chunk_idx": i} for i in args[1]]
+    return []
+
+
+def _near_duplicates():
+    """ITEMS 각각과 거의 같은 기존 글(의미 0.999 · 글자 ≥ 0.8) — 11/04부터 의미만 높고 글이 다르면 중복 의심이 아니다."""
+    return AsyncMock(side_effect=[[{"id": 99, "content": "지식1.", "similarity": 0.999}],
+                                  [{"id": 98, "content": "지식2.", "similarity": 0.999}]])
+
+
 class TestBulkIngestionStagedActivation:
     """WBS 1-2 수집 원자적 활성화(2026-09-28) — 예전엔 50건 배치마다 곧바로 status='active'로
     커밋돼 job 도중(실패 시엔 영구히) 반쪽짜리 문서가 챗 검색에 섞였다(2026-09-22 감사에서
@@ -346,10 +359,8 @@ class TestBulkIngestionStagedActivation:
         """중복 의심 행은 staging_review → 전환 시 pending_review(검토 큐에도 job 끝나야 뜬다)."""
         conn, emb, calls = self._make_conn()
         # 중복 매칭 기록용 역조회(SELECT id, source_chunk_idx ...) — 요청된 chunk_idx를 그대로 돌려줌
-        conn.fetch = AsyncMock(side_effect=lambda q, job_id, idxs: [
-            {"id": 100 + i, "source_chunk_idx": i} for i in idxs
-        ])
-        similar = AsyncMock(return_value=[{"id": 99, "content": "기존", "similarity": 0.999}])
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+        similar = _near_duplicates()
         result = await self._run(conn, emb, similar=similar)
 
         assert result["pending"] == 2
@@ -613,14 +624,82 @@ class TestBulkIngestionStagedActivation:
     async def test_glossary_hook_skipped_when_nothing_became_active(self):
         """/code-review 지적 — 전부 승인 대기로 빠지면(검토에서 반려될 수 있음) 용어를 만들지 않는다."""
         conn, emb, calls = self._make_conn()
-        conn.fetch = AsyncMock(side_effect=lambda q, job_id, idxs: [
-            {"id": 100 + i, "source_chunk_idx": i} for i in idxs
-        ])
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
         hook = AsyncMock(return_value=3)
-        similar = AsyncMock(return_value=[{"id": 99, "content": "기존", "similarity": 0.999}])
+        similar = _near_duplicates()
         result = await self._run(conn, emb, similar=similar, after_activation=hook)
         assert result["pending"] == 2 and result["status"] == "completed"
         hook.assert_not_awaited()
+
+    # ── 중복 판정 2단(11/04): ② 완전 일치는 저장 안 함(수·기존 id 기록) ③ 의미만 비슷하면 정상 등록 ──────────────
+    @staticmethod
+    def _inserted(calls):
+        return [r for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q for r in rows]
+
+    @pytest.mark.asyncio
+    async def test_exact_match_is_skipped_and_recorded(self):
+        """같은 원본(원본 표시 없는 등록 = 이번 작업) 안 앞 배치에 공백만 다른 같은 글이 있으면 건너뜀 + 기록."""
+        conn, emb, calls = self._make_conn()
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+        similar = AsyncMock(side_effect=[[{"id": 99, "content": " 지식1 \n", "similarity": 0.9999, "ingestion_job_id": 7}], []])
+        result = await self._run(conn, emb, similar=similar)
+        assert [r[1] for r in self._inserted(calls)] == ["지식2"]
+        assert result["created"] == 1 and result["pending"] == 0
+        rec = next(a for q, a in calls["execute"] if "skipped_exact_chunks" in q)
+        assert rec == (7, 1, [99])
+
+    @pytest.mark.asyncio
+    async def test_exact_match_from_other_source_is_kept_as_pending(self):
+        """독립 리뷰 H1: 다른 원본(다른 페이지)의 같은 글은 건너뛰지 않는다 — 그 원본이 나중에 지워지면 내용이 영영 사라짐. 저장 + 승인 대기."""
+        conn, emb, calls = self._make_conn()
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+        similar = AsyncMock(side_effect=[[{"id": 99, "content": "지식1", "similarity": 0.9999, "confluence_page_id": "P1"}], []])
+        self.ITEMS = [{"content": "지식1", "confluence_page_id": "P2"}, {"content": "지식2", "confluence_page_id": "P2"}]
+        result = await self._run(conn, emb, similar=similar)
+        rows = self._inserted(calls)
+        assert [r[1] for r in rows] == ["지식1", "지식2"] and rows[0][9] == "staging_review" and result["pending"] == 1
+        assert not any("skipped_exact_chunks" in q for q, _ in calls["execute"])
+
+    @pytest.mark.asyncio
+    async def test_meaning_only_match_registers_normally(self):
+        conn, emb, calls = self._make_conn()
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+        similar = AsyncMock(return_value=[{"id": 99, "content": "전혀 다른 형제 페이지 본문", "similarity": 0.95}])
+        result = await self._run(conn, emb, similar=similar)
+        assert result["pending"] == 0 and all(r[9] == "staging" for r in self._inserted(calls))
+        assert not any("duplicate_match" in q for q, _ in calls["executemany"])
+
+    @pytest.mark.asyncio
+    async def test_same_text_twice_in_one_job_keeps_first(self):
+        conn, emb, calls = self._make_conn()
+        self.ITEMS = [{"content": "같은 글"}, {"content": "같은  글\n"}, {"content": "다른 글"}]
+        result = await self._run(conn, emb)
+        assert [r[1] for r in self._inserted(calls)] == ["같은 글", "다른 글"] and result["created"] == 2
+        assert next(a for q, a in calls["execute"] if "skipped_exact_chunks" in q) == (7, 1, [])   # 같은 작업 안 — 기존 id 없음
+
+    @pytest.mark.asyncio
+    async def test_invariant_nothing_lost_random(self):
+        """성질: 모든 입력 조각은 저장되거나, **같은 원본 안** 앞 조각과 공백만 다른 같은 글이라 건너뛴 것뿐 — 유실 0 · 같은 원본 안 중복 저장 0.
+        다른 원본의 같은 글은 저장(승인 대기)된다 — 그 원본이 나중에 지워져도 내용이 남게(H1)."""
+        import random
+        from trustkit.ingest.dedupe import norm_text
+        rnd = random.Random(1104)
+        for _ in range(30):
+            existing = [f"기존 {i}" for i in range(rnd.randint(0, 3))]          # 다른 원본(다른 페이지)의 사용 중 지식
+            pool = existing + [f"새 글 {i}" for i in range(4)]
+            items = [{"content": rnd.choice(pool) + rnd.choice(["", " ", "\n"]), "confluence_page_id": rnd.choice(["P1", "P2"])}
+                     for _ in range(rnd.randint(1, 8))]
+            conn, emb, calls = self._make_conn()
+            conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+
+            async def similar(ns_id, e, **kw):
+                return [{"id": 500 + j, "content": c, "similarity": 0.99, "confluence_page_id": "OTHER"} for j, c in enumerate(existing)]
+            self.ITEMS = items
+            await self._run(conn, emb, similar=AsyncMock(side_effect=similar))
+            saved = [(r[11], norm_text(r[1])) for r in self._inserted(calls)]   # (페이지, 글)
+            assert len(saved) == len(set(saved))                                  # 같은 원본 안 중복 저장 0
+            for it in items:                                                      # 유실 0 — 그 페이지 몫으로 반드시 하나는 저장
+                assert (it["confluence_page_id"], norm_text(it["content"])) in saved
 
     @pytest.mark.asyncio
     async def test_cache_invalidation_failure_does_not_fail_job(self):

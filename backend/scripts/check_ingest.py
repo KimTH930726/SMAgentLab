@@ -73,10 +73,11 @@ CHECKS: list[tuple[str, str, str, str, str, str]] = [
     ("ref_embedding", "참고표", "참고표 임베딩", "policy-v0-design §8 #8",
      "SELECT id, source_key FROM ref_table WHERE status = 'active' AND embedding IS NULL",
      "SELECT count(*) FROM ref_table WHERE status = 'active'"),
-    ("knowledge_dup", "지식", "같은 내용 조각이 한 컬렉션에 두 번", "개발 규율 — 적재는 중복 0(10/07 실사고: 도입부가 두 조각에 15일)",
-     """SELECT k.id, NULL FROM rag_knowledge k JOIN (
-          SELECT namespace_id, md5(content) h FROM rag_knowledge WHERE coalesce(status, 'active') = 'active'
-          GROUP BY 1, 2 HAVING count(*) > 1) d ON d.namespace_id = k.namespace_id AND d.h = md5(k.content)
+    # 공백·줄바꿈만 다른 것도 같은 내용(11/04 중복 판정 2단 ② — 등록 때 거부하는 기준과 같게, trustkit.ingest.dedupe.norm_text)
+    ("knowledge_dup", "지식", "같은 내용 조각이 한 컬렉션에 두 번(공백만 다른 것 포함)", "개발 규율 — 적재는 중복 0(10/07 실사고: 도입부가 두 조각에 15일)",
+     r"""SELECT k.id, NULL FROM rag_knowledge k JOIN (
+          SELECT namespace_id, md5(btrim(regexp_replace(content, '[\s ]+', ' ', 'g'))) h FROM rag_knowledge WHERE coalesce(status, 'active') = 'active'
+          GROUP BY 1, 2 HAVING count(*) > 1) d ON d.namespace_id = k.namespace_id AND d.h = md5(btrim(regexp_replace(k.content, '[\s ]+', ' ', 'g')))
         WHERE coalesce(k.status, 'active') = 'active'""",
      "SELECT count(*) FROM rag_knowledge WHERE coalesce(status, 'active') = 'active'"),
     ("knowledge_current", "지식", "문서 조각마다 현행 하나", "원문 원장(source ledger) — 원문 = 기준, 조각 = 파생",
@@ -84,6 +85,15 @@ CHECKS: list[tuple[str, str, str, str, str, str]] = [
         AND (k.logical_document_id, coalesce(k.source_chunk_idx, -1)) IN (   -- 직접 입력은 조각 번호 NULL — NULL끼리도 같은 조각(리뷰 L4)
           SELECT logical_document_id, coalesce(source_chunk_idx, -1) FROM rag_knowledge WHERE coalesce(status, 'active') = 'active'
           AND logical_document_id IS NOT NULL GROUP BY 1, 2 HAVING count(*) > 1)""",
+     "SELECT count(*) FROM rag_knowledge WHERE coalesce(status, 'active') = 'active'"),
+    # 제목 같은 줄만 있고 본문 줄이 없는 조각(11/04 ①A) — 규칙은 chunker._is_heading_only와 같게: 모든 줄이 # 제목 또는 60자 미만 번호 제목
+    # (문장 끝 없음)이고 # 아닌 번호 줄은 하나까지. 줄 앞뒤 공백은 nbsp(컨플)까지 지운다 — Python strip과 같게(리뷰 L2)
+    ("knowledge_heading_only", "지식", "제목만 있는 조각 없음", "chunk-structure-dedupe-design ①A — 혼자선 검색·답에 쓸모없고 중복 의심만 늘림",
+     r"""WITH l AS (SELECT k.id, btrim(regexp_replace(ln, '[\s ]+', ' ', 'g')) t FROM rag_knowledge k
+                  CROSS JOIN LATERAL regexp_split_to_table(k.content, E'\n') ln WHERE coalesce(k.status, 'active') = 'active')
+        SELECT id, NULL FROM l WHERE t <> '' GROUP BY id
+        HAVING bool_and(t ~ '^#' OR (length(t) < 60 AND t ~ '^(\(?[0-9]+([.-][0-9]+)*[.)]|\(참고\)|\[참고\])\s*\S' AND t !~ '(\.|다|요)$'))
+           AND count(*) FILTER (WHERE t !~ '^#') <= 1""",
      "SELECT count(*) FROM rag_knowledge WHERE coalesce(status, 'active') = 'active'"),
     ("knowledge_embedding", "지식", "임베딩 있음·같은 모델", "임베딩 KURE-v1(1024) 한 모델",
      """SELECT id, NULL FROM rag_knowledge WHERE coalesce(status, 'active') = 'active'

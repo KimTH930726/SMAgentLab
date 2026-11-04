@@ -13,7 +13,7 @@ import {
   deleteKnowledge,
   bulkDeleteKnowledge,
   bulkUpdateKnowledge,
-  vectorSearchKnowledge,
+  exploreKnowledge,
   bulkCreateKnowledge,
   checkBulkReplace,
   previewTextSplit,
@@ -41,7 +41,8 @@ import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination
 import { diffLines, sameText, splitRows, wordDiff, type SplitRow } from '../../utils/textDiff';
 import type { KnowledgeItem, DuplicateMatch, ChosenLocation } from '../../types';
 import { LocationPicker, usePrefetchLocate } from './LocationPicker';
-import { showAlert, showConfirm } from '../../store/useDialogStore';
+import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
+import { KnowledgeSearchCards } from './KnowledgeSearchCards';
 import { KnowledgeStructurePanel } from './KnowledgeStructurePanel';
 import { EvidenceButton } from './Evidence';
 // 컨플 공간·하위 전체 넣기 — 시작은 등록 창구(하나, 10/29), 분류 검토는 [적재 검토] 탭(검토는 등록이 아니라서, 10/29 사용자)
@@ -164,7 +165,8 @@ export function KnowledgeTable() {
   const [showEdit, setShowEdit] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchMode, setSearchMode] = useState<'text' | 'vector'>('text');
+  // 기본 = 검색(채팅과 같은 검색, 카드) — 대부분 검색해서 쓴다(11/04 태훈). 목록 = 전체 훑기·글자 거르기·일괄 선택
+  const [searchMode, setSearchMode] = useState<'text' | 'vector'>('vector');
   const [vectorSearchInput, setVectorSearchInput] = useState('');
   const [vectorQuery, setVectorQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -206,9 +208,11 @@ export function KnowledgeTable() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['knowledge-vector-search', selectedNs] });   // 검색 카드도 고친 내용으로
       setEditingId(null);
       setShowEdit(false);
     },
+    // 실패는 수정 창 안 오류 칸(updateMutation.error)이 보인다 — 폼 슬롯 재사용(모달을 또 띄우지 않음)
   });
 
   const deleteMutation = useMutation({
@@ -216,14 +220,16 @@ export function KnowledgeTable() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
       qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['knowledge-vector-search', selectedNs] });   // 검색 카드도
       setDeleteTarget(null);
       setShowEdit(false);
     },
+    onError: (err) => showError(err),
   });
 
   const vectorSearchQuery = useQuery({
     queryKey: ['knowledge-vector-search', selectedNs, vectorQuery],
-    queryFn: () => vectorSearchKnowledge(selectedNs, vectorQuery),
+    queryFn: () => exploreKnowledge(selectedNs, vectorQuery),
     enabled: searchMode === 'vector' && !!vectorQuery && !!selectedNs,
     staleTime: 30_000,
   });
@@ -233,9 +239,11 @@ export function KnowledgeTable() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
       qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['knowledge-vector-search', selectedNs] });   // 검색 카드도
       setSelectedIds(new Set());
       setShowBulkConfirm(false);
     },
+    onError: (err) => showError(err),
   });
 
   const bulkUpdateMutation = useMutation({
@@ -245,10 +253,12 @@ export function KnowledgeTable() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['knowledge', selectedNs] });
       qc.invalidateQueries({ queryKey: ['stats-ns', selectedNs] });
+      qc.invalidateQueries({ queryKey: ['knowledge-vector-search', selectedNs] });   // 검색 카드도
       setSelectedIds(new Set());
       setShowBulkEdit(false);
       setBulkEditSourceType('');
     },
+    onError: (err) => showError(err),
   });
 
   const startEdit = (item: KnowledgeItem) => {
@@ -267,9 +277,8 @@ export function KnowledgeTable() {
     return true;
   });
   const filteredItems = textFilteredItems; // for count ref
-  const searchedItems = searchMode === 'vector' && vectorQuery
-    ? (vectorSearchQuery.data ?? [])
-    : textFilteredItems;
+  const showCards = searchMode === 'vector' && !!vectorQuery   // 검색어가 있으면 카드, 없으면 목록(훑기)
+  const searchedItems = textFilteredItems;
   const displayItems = searchedItems;
   const { totalPages, totalItems, slice } = useClientPaging(displayItems, pageSize);
   const pagedItems = slice(page);
@@ -356,15 +365,17 @@ export function KnowledgeTable() {
           {/* 필터 바 */}
           <div className="flex items-end gap-3 flex-wrap">
             {/* Search mode toggle */}
-            <div className="flex rounded-lg border border-slate-600 overflow-hidden text-xs font-medium flex-shrink-0">
-              <button
-                onClick={() => { setSearchMode('text'); setVectorQuery(''); }}
-                className={`px-3 py-2 transition-colors ${searchMode === 'text' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-              >문자열</button>
+            <div role="group" aria-label="보기 방식" className="flex rounded-lg border border-slate-600 overflow-hidden text-xs font-medium flex-shrink-0">
               <button
                 onClick={() => { setSearchMode('vector'); setSearchQuery(''); setPage(1); setSelectedIds(new Set()); }}
+                title="채팅과 같은 검색(용어집 + 뜻·키워드) — 이렇게 물으면 챗봇이 무엇을 찾는지 그대로 보여요"
                 className={`px-3 py-2 transition-colors ${searchMode === 'vector' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-              >벡터</button>
+              >검색</button>
+              <button
+                onClick={() => { setSearchMode('text'); setVectorQuery(''); }}
+                title="전체 목록 — 글자로 거르기·일괄 선택"
+                className={`px-3 py-2 transition-colors ${searchMode === 'text' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+              >목록</button>
             </div>
 
             {searchMode === 'text' ? (
@@ -384,7 +395,7 @@ export function KnowledgeTable() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                   <input
                     type="text"
-                    placeholder="유사 지식 검색 (Enter로 실행)..."
+                    placeholder="질문하듯 검색 (Enter) — 예: 배치 재기동 순서"
                     value={vectorSearchInput}
                     onChange={(e) => setVectorSearchInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') { setVectorQuery(vectorSearchInput); setPage(1); setSelectedIds(new Set()); } }}
@@ -401,7 +412,7 @@ export function KnowledgeTable() {
               </div>
             )}
 
-            {canModifyNs && (
+            {canModifyNs && !showCards && (
               <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer select-none pb-0.5">
                 <input
                   type="checkbox"
@@ -432,7 +443,22 @@ export function KnowledgeTable() {
           {selectedNs && isLoading && <div className="text-center py-16 text-slate-500 animate-pulse">로딩 중...</div>}
           {selectedNs && error && <div className="text-center py-16 text-rose-400">오류가 발생했습니다.</div>}
 
-          {selectedNs && !isLoading && (
+          {selectedNs && showCards && vectorSearchQuery.isError && (
+            <div className="text-center py-12 text-rose-600 dark:text-rose-400">검색하지 못했어요: {String((vectorSearchQuery.error as Error)?.message ?? '')}</div>
+          )}
+          {selectedNs && showCards && vectorSearchQuery.isFetching && !vectorSearchQuery.data && (
+            <div className="flex items-center justify-center gap-2 py-16 text-slate-400 text-sm">
+              <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+              검색 중...
+            </div>
+          )}
+          {selectedNs && showCards && vectorSearchQuery.data && (
+            <KnowledgeSearchCards key={vectorQuery} currentNs={selectedNs} query={vectorSearchQuery.data.query} mappedTerm={vectorSearchQuery.data.mapped_term}
+              items={vectorSearchQuery.data.items} canEdit={!!canModifyNs}
+              onEdit={(it) => startEdit({ id: it.id, content: it.content } as KnowledgeItem)} />
+          )}
+
+          {selectedNs && !isLoading && !showCards && (
             <div className="space-y-2">
               <PaginationInfo totalItems={totalItems} pageSize={pageSize} onPageSizeChange={setPageSize} />
               {pagedItems.map((item) => (
@@ -452,26 +478,15 @@ export function KnowledgeTable() {
                       <p className="text-xs text-slate-500 truncate">{item.content.slice(0, 100)}...</p>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0 text-[10px] text-slate-500">
-                      {searchMode === 'vector' && (item as KnowledgeItem & { similarity?: number }).similarity != null && (
-                        <span className="px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700/40 font-mono">
-                          {((item as KnowledgeItem & { similarity?: number }).similarity! * 100).toFixed(1)}%
-                        </span>
-                      )}
                       <span>{new Date(item.updated_at !== item.created_at ? item.updated_at : item.created_at).toISOString().slice(0, 10)}</span>
                       {item.created_by_username && <span>{item.created_by_username}</span>}
                     </div>
                   </div>
                 </div>
               ))}
-              {displayItems.length === 0 && !vectorSearchQuery.isFetching && (
+              {displayItems.length === 0 && (
                 <div className="text-center py-16 text-slate-500">
-                  {searchQuery || vectorQuery ? '검색 결과가 없습니다.' : '지식 항목이 없습니다.'}
-                </div>
-              )}
-              {vectorSearchQuery.isFetching && (
-                <div className="flex items-center justify-center gap-2 py-16 text-slate-400 text-sm">
-                  <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                  벡터 유사도 검색 중...
+                  {searchQuery ? '검색 결과가 없습니다.' : '지식 항목이 없습니다.'}
                 </div>
               )}
               <PaginationNav page={page} totalPages={totalPages} onPageChange={setPage} />
@@ -1098,6 +1113,12 @@ function IngestTab({ namespace, preset, jobs, onSuccess, onGoToList, onGoToRevie
                     >
                       승인 대기 {j.pending_chunks}건
                     </button>
+                  )}
+                  {(j.skipped_exact_chunks ?? 0) > 0 && (j.status === 'completed' || j.status === 'held') && (
+                    <span data-testid={`job-${j.id}-skipped`} className="flex-shrink-0 text-[10px] text-slate-400 bg-slate-700/60 px-1.5 py-0.5 rounded"
+                      title={`같은 페이지·문서 안에 공백만 다르고 똑같은 조각이 또 나와 한 번만 저장했어요(다른 페이지의 같은 글은 승인 대기로)${j.skipped_exact_ids?.length ? ` — 기존 #${j.skipped_exact_ids.join(', #')}` : ''}`}>
+                      완전 중복 건너뜀 {j.skipped_exact_chunks}건
+                    </span>
                   )}
                   {j.created_by_username && <span className="text-slate-500 flex-shrink-0">{j.created_by_username}</span>}
                   <span className="text-slate-600 flex-shrink-0">{new Date(j.created_at).toLocaleDateString('ko-KR')}</span>

@@ -99,6 +99,8 @@ class IngestionJobOut(BaseModel):
     created_chunks: int
     pending_chunks: int = 0
     auto_glossary: int
+    skipped_exact_chunks: int = 0          # 같은 글이 이미 있어 저장 안 한 조각(11/04)
+    skipped_exact_ids: list[int] = []      # 그 같은 기존 지식 id(최대 50)
     chunk_strategy: Optional[str]
     error_message: Optional[str]
     created_by_user_id: Optional[int] = None

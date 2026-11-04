@@ -22,6 +22,7 @@ _settings_mock.knowledge_min_score = 0.1
 _settings_mock.knowledge_high_score = 0.5
 _settings_mock.knowledge_mid_score = 0.3
 _settings_mock.duplicate_min_similarity = 0.88
+_settings_mock.duplicate_min_text_similarity = 0.8
 _settings_mock.default_top_k = 5
 _settings_mock.default_w_vector = 0.7
 _settings_mock.default_w_keyword = 0.3

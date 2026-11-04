@@ -32,10 +32,12 @@ def _gen_sections(rng: random.Random, n: int) -> list[dict]:
     for _ in range(n):
         level = max(1, min(4, level + rng.choice([-2, -1, 0, 0, 1, 1])))
         counter += 1
-        kind = rng.choice(["empty", "tiny", "short", "mid", "long"])
-        nlines = {"empty": 0, "tiny": 1, "short": 2, "mid": 4, "long": 30}[kind]
+        kind = rng.choice(["empty", "tiny", "short", "mid", "long", "numline"])
+        nlines = {"empty": 0, "tiny": 1, "short": 2, "mid": 4, "long": 30, "numline": 1}[kind]
         lines = []
-        for j in range(nlines):
+        if kind == "numline":   # 본문이 번호 제목 줄 하나뿐(홈페이지 모양, 11/04 ①A 제목만 조각 합치기)
+            lines.append(f"0{counter}-2.1.{counter}. 소제목{counter} 현황")
+        for j in range(nlines if kind != "numline" else 0):
             width = {"tiny": 8, "short": 30, "mid": 60, "long": 90}[kind]
             lines.append(f"본문{counter}-{j} " + "가" * width)
         secs.append({"title": f"{counter}. 제목{counter}", "content": "\n".join(lines), "level": level})
@@ -103,3 +105,84 @@ def test_long_section_without_blank_lines_splits_on_line_boundaries():
                      {"title": "B", "content": "짧은 본문입니다 충분히", "level": 2}])
     assert all(len(c.text) <= MAX for c in chunks)
     assert all(c.text.startswith("## A") for c in chunks if "줄" in c.text)   # 나뉜 조각마다 자기 제목
+
+
+# ── 11/04 ①A 제목만 조각 합치기 ──────────────────────────────────────────────
+@pytest.mark.parametrize("seed", range(200))
+def test_no_heading_only_chunk_when_neighbor_fits(seed):
+    """성질(I1~I5 그대로 + 하나 더): 섹션 분리 모드에서 제목만 조각은, 이웃과 합쳐 max를 넘는 경우 말고는 남지 않는다."""
+    from agents.knowledge_rag.ingestion.chunker import _is_heading_only
+    rng = random.Random(10_000 + seed)
+    chunks = _check(_gen_sections(rng, rng.randint(2, 18)))
+    for i, c in enumerate(chunks):
+        if _is_heading_only(c.text) and len(chunks) > 1:
+            nbrs = [chunks[j] for j in (i - 1, i + 1) if 0 <= j < len(chunks)]
+            assert all(len(n.text) + 1 + len(c.text) > MAX for n in nbrs), (i, c.text[:40])
+
+
+def test_numbered_title_chunk_goes_in_front_of_next():
+    secs = [
+        {"title": "개요", "content": "05-2.1.3. 결제 현황", "level": 2},
+        {"title": "결제 흐름", "content": "결제는 승인 → 매입 → 정산 순서로 처리한다. " + "가" * 40, "level": 2},
+        {"title": "취소", "content": "취소는 매입 전까지 전체 취소만 가능하다. " + "나" * 40, "level": 2},
+    ]
+    chunks = _check(secs)
+    assert len(chunks) == 2 and chunks[0].text.startswith("## 개요\n05-2.1.3. 결제 현황\n## 결제 흐름")
+
+
+def test_last_heading_only_goes_after_previous():
+    secs = [
+        {"title": "결제 흐름", "content": "결제는 승인 → 매입 → 정산 순서로 처리한다. " + "가" * 40, "level": 2},
+        {"title": "참고", "content": "(참고) 정산 일정표", "level": 2},
+    ]
+    chunks = _check(secs)
+    assert len(chunks) == 1 and chunks[0].text.endswith("## 참고\n(참고) 정산 일정표")
+
+
+def test_merge_respects_max_chars():
+    big = "\n".join(f"줄{i} " + "가" * 90 for i in range(21))[:1990]   # 제목만 조각을 붙이면 max를 넘는 길이
+    chunks = _check([{"title": "개요", "content": "1.2. 현황", "level": 2}, {"title": "본문", "content": big, "level": 2}])
+    assert all(len(c.text) <= MAX for c in chunks)
+
+
+def test_sentence_numbered_line_is_body():
+    """번호로 시작해도 문장(. 다 요로 끝남)이면 본문 — 제목 같은 줄로 보지 않는다."""
+    from agents.knowledge_rag.ingestion.chunker import _is_heading_like
+    assert _is_heading_like("05-2.1.3. 결제 현황") and _is_heading_like("(참고) 정산 일정표") and _is_heading_like("## 제목")
+    assert not _is_heading_like("1. 주문 취소 후 환불을 처리합니다.") and not _is_heading_like("2) 결과를 확인한다")
+
+
+def test_heading_only_not_glued_onto_other_parent():
+    """독립 리뷰 M1: A › A-1(번호 줄만) 다음이 다른 부모의 B면, A-1을 B 앞에 붙이지 않는다(B가 A 아래로 잘못 분류됨) — 앞 조각(A) 뒤에."""
+    secs = [
+        {"title": "A", "content": "A 본문 " + "가" * 80, "level": 1},
+        {"title": "A-1", "content": "1.2. 현황", "level": 2},
+        {"title": "B", "content": "B 본문 " + "나" * 80, "level": 1},
+    ]
+    chunks = _check(secs)
+    b = next(c for c in chunks if "B 본문" in c.text)
+    assert "A" not in b.heading_path and "1.2. 현황" not in b.text
+    assert any("A 본문" in c.text and c.text.endswith("1.2. 현황") for c in chunks)
+
+
+def test_short_numbered_list_is_body():
+    """독립 리뷰 M2: 짧은 번호 목록(문장 끝 없음)만 있는 섹션은 진짜 본문 — 이웃과 합치지 않는다."""
+    secs = [
+        {"title": "준비물", "content": "1) 신분증\n2) 통장 사본\n3) 신청서", "level": 2},
+        {"title": "환불", "content": "환불은 신청 후 3영업일 안에 처리한다. " + "다" * 40, "level": 2},
+    ]
+    chunks = _check(secs)
+    assert len(chunks) == 2 and chunks[0].text.startswith("## 준비물")
+
+
+def test_merge_mode_sources_untouched(monkeypatch):
+    """병합 모드(md 등)는 이 단계를 안 탄다 — 기존 동작 그대로."""
+    from agents.knowledge_rag.ingestion import chunker
+    secs = [{"title": "개요", "content": "1.2. 현황", "level": 2}, {"title": "본문", "content": "본문 " + "가" * 60, "level": 2}]
+    before = [c.text for c in chunk_document(_doc(secs, "md"), strategy="section")]
+
+    def boom(*a, **k):
+        raise AssertionError("병합 모드에서 호출되면 안 됨")
+    monkeypatch.setattr(chunker, "_merge_heading_only", boom)
+    assert [c.text for c in chunk_document(_doc(secs, "md"), strategy="section")] == before
+

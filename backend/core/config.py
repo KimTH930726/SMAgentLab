@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     knowledge_mid_score: float = 0.55
     # 지식 등록 시 중복 의심 판정 임계값 — 이 이상이면 즉시 반영하지 않고 승인 대기로 등록
     duplicate_min_similarity: float = 0.88
+    # 중복 판정 2단(11/04): 의미 유사도 ≥ 위 하한인 후보 중 양식 줄을 뺀 글자 유사도도 이 값 이상일 때만 승인 대기
+    duplicate_min_text_similarity: float = 0.8
 
     # 리랭커 (CrossEncoder)
     reranker_enabled: bool = False  # 폐쇄망: 모델 번들링 후 True로 전환
