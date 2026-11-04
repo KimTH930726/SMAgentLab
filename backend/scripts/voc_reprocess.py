@@ -92,7 +92,8 @@ async def main() -> int:
         from eval_answers import local_llm
         llm = await local_llm()
         voc_service.get_llm_provider = lambda: llm   # 분석도 이 프로세스에서만 로컬 LLM
-        pattern_detection.get_llm_provider = lambda: llm   # 묶기의 같은 문제 확인·커버리지 확인도(모듈마다 따로 import — 리뷰 M1)
+        pattern_detection.get_llm_provider = lambda: llm   # 묶기의 커버리지 확인도(모듈마다 따로 import — 리뷰 M1)
+        pattern_detection.get_local_llm = lambda: llm      # 같은 문제 확인은 11/04부터 get_local_llm — 같이 바꿔야 --llm이 이 단계에도 먹는다
     else:
         llm = get_llm_provider()
     settings = await routing_service.get_settings()

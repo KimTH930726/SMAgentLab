@@ -52,6 +52,18 @@ def reset_provider() -> LLMProvider:
 _ingest_local = None
 
 
+def get_local_llm() -> LLMProvider:
+    """로컬(폐쇄망) LLM — 원문(메일 등)이 그대로 들어가는 짧은 판정 호출용. 게이트웨이는 민감 정보 필터가 원문을 거부한다(11/04 VOC 같은 문제 확인).
+    로컬 주소(OPENAI_COMPAT_BASE_URL)가 없으면 시스템 LLM으로 대신하고 경고(대체 처리를 보이게)."""
+    global _ingest_local
+    if settings.openai_compat_base_url:
+        if _ingest_local is None:
+            _ingest_local = OpenAICompatProvider()
+        return _ingest_local
+    logging.getLogger(__name__).warning("로컬 LLM 주소(OPENAI_COMPAT_BASE_URL)가 없음 — 로컬 판정 호출을 시스템 LLM으로")
+    return get_llm_provider()
+
+
 def get_ingest_llm() -> tuple[LLMProvider, bool]:
     """적재 단계 LLM(용어 추출·동의어) → (LLM, 시스템 LLM인가 — 사용자 자격 증명을 쓸지). 설정 ingest_llm=local이고 로컬 주소가 있으면 로컬.
     로컬로 정했는데 주소가 없으면 시스템 LLM으로 대신하고 경고(대체 처리를 보이게)."""

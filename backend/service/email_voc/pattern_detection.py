@@ -77,7 +77,9 @@ import numpy as np
 
 from agents.knowledge_rag.knowledge import api as knowledge_api   # 지식은 코어 API로만(10/28 VOC 레이어 분리)
 from core.database import get_conn, resolve_namespace_id
-from service.llm.factory import get_llm_provider
+from service.chat.helpers import is_gateway_refusal
+from service.email_voc.service import _mask_pii   # 분석 단계와 같은 가림 규칙 — 한쪽만 바뀌지 않게(11/04)
+from service.llm.factory import get_llm_provider, get_local_llm
 from shared.json_utils import parse_json_object
 
 # VOC 커버리지(해결방안 지식) 찾는 범위 = 클러스터 영역 + 직계 하위 — 채팅 지식 검색(namespace_scope_ids)과 같은 규칙
@@ -166,9 +168,17 @@ def _weighted_average_normalize(existing: np.ndarray, existing_weight: int, new_
     return mean.tolist()
 
 
+# 메일 본문에 프롬프트 칸 이름([기존 문의] 등)이 있으면 괄호로 바꾼다 — 칸을 흉내 내 판정을 끌어가지 못하게(11/04)
+_ISSUE_LABEL_RE = re.compile(r"\[\s*(기존\s*문의|새\s*문의)\s*\]")
+
+
 def issue_text(subject: str, body: str) -> str:
-    """같은 문제 확인(LLM)에 넘기는 문의 한 건 — 제목 + 본문 앞부분(토큰 상한)."""
-    return ((subject or "") + "\n" + (body or ""))[:900]
+    """같은 문제 확인(LLM)에 넘기는 문의 한 건 — 제목 + 본문 앞부분(토큰 상한).
+    전화번호·이메일·IP·긴 숫자 ID는 가린다(분석 단계 _mask_pii와 같은 규칙). 계기: 게이트웨이로 보낼 때 "민감 정보 포함" 거부로 확인이 거의 전부
+    실패(11/04 실측 3일간 26번) → 확인은 로컬 LLM으로 바꿨고(get_local_llm), 가림은 사람 40쌍 일치를 31 → 35로 올려 그대로 둔다.
+    전달·회신 체인 떼기는 넣지 않음 — 40쌍 일치가 35 → 33(잘못 묶음 0 → 1)으로 나빠졌다. 가린 뒤 900자로 자른다(가림 표식이 잘리지 않게)."""
+    text = _mask_pii((subject or "") + "\n" + (body or ""))
+    return _ISSUE_LABEL_RE.sub(lambda m: f"({m.group(1)})", text)[:900]
 
 
 def build_same_issue_prompt(new_text: str, member_text: str) -> str:
@@ -192,7 +202,11 @@ async def _confirm_same_issue(new_text: str, member_text: str) -> Optional[bool]
     """임베딩이 고른 후보가 정말 같은 문제인지 LLM으로 확인. None = 실패·애매 — 호출부는 합류하지 않는다(잘못 묶는 게 놓치는 것보다
     위험). False와 나누는 건 LLM 장애로 반복 감지가 통째로 꺼진 것을 "반복 없음"과 구분해 보이게 하려고(수집 결과 skipped_confirm_failed)."""
     try:
-        raw = await get_llm_provider().generate_once(prompt=build_same_issue_prompt(new_text, member_text), max_tokens=30)
+        # 로컬 LLM으로(11/04 태훈) — 메일 원문이 들어가는 판정이라 게이트웨이는 민감 정보 필터에 걸린다. 사람 검수 40쌍 기준도 로컬로 잰 것
+        raw = await get_local_llm().generate_once(prompt=build_same_issue_prompt(new_text, member_text), max_tokens=30)
+        if is_gateway_refusal(raw):   # 거부 문구는 JSON이 아니라 "JSON 못 읽음"으로만 찍혀 원인을 몰랐다(11/04) — 따로 남긴다
+            logger.warning("같은 문제 확인(LLM) 실패 — 게이트웨이 거부(민감 정보 필터), 합류하지 않음")
+            return None
         verdict = parse_json_object(raw).get("same_issue")
     except Exception as e:
         logger.warning("같은 문제 확인(LLM) 실패 — 합류하지 않음: %s", e)
