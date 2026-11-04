@@ -80,12 +80,14 @@ async def _record_cycle(started_at: datetime, finished_at: datetime, agg: dict, 
             INSERT INTO ops_email_poll_cycle
                 (started_at, finished_at, namespaces_processed, mailboxes_ok, mailboxes_failed,
                  total_fetched, total_analyzed, total_notified, total_notify_failed,
-                 total_skipped_duplicate, total_skipped_low_relevance, total_skipped_not_it, error_summary)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                 total_skipped_duplicate, total_skipped_low_relevance, total_skipped_not_it, total_skipped_confirm_failed,
+                 error_summary)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
             """,
             started_at, finished_at, agg["namespaces_processed"], agg["mailboxes_ok"], agg["mailboxes_failed"],
             agg["total_fetched"], agg["total_analyzed"], agg["total_notified"], agg["total_notify_failed"],
             agg["total_skipped_duplicate"], agg["total_skipped_low_relevance"], agg["total_skipped_not_it"],
+            agg["total_skipped_confirm_failed"],
             ("\n".join(errors) if errors else None),
         )
 
@@ -111,6 +113,7 @@ async def run_cycle_now(settings: Optional[dict] = None) -> None:
         "total_fetched": 0, "total_analyzed": 0, "total_notified": 0,
         "total_notify_failed": 0, "total_skipped_duplicate": 0, "total_skipped_low_relevance": 0,
         "total_skipped_not_it": 0,
+        "total_skipped_confirm_failed": 0,
     }
     errors: list[str] = []
     try:
@@ -148,9 +151,10 @@ async def run_cycle_now(settings: Optional[dict] = None) -> None:
                     agg["total_skipped_duplicate"] += m["skipped_duplicate"]
                     agg["total_skipped_low_relevance"] += m["skipped_low_relevance"]
                     agg["total_skipped_not_it"] += m["skipped_not_it"]
+                    agg["total_skipped_confirm_failed"] += m.get("skipped_confirm_failed", 0)
                     if m["ok"]:
                         agg["mailboxes_ok"] += 1
-                        # 같은 문제 확인(LLM) 실패로 묶지 않은 건수도 요약 줄에 — 사이클 표엔 칸이 없어 로그로만 보였다(11/03 밤 VOC 실경로 확인)
+                        # 같은 문제 확인(LLM) 실패로 묶지 않은 건수 — 사이클 표(total_skipped_confirm_failed, 11/04)와 로그 요약 줄 둘 다
                         summary_parts.append(f"{m['mailbox_upn']}(fetched={m['fetched']},analyzed={m['analyzed']},notified={m['notified']}"
                                              f",confirm_failed={m.get('skipped_confirm_failed', 0)})")
                     else:

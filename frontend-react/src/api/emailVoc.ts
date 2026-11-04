@@ -288,6 +288,8 @@ export interface PollCycleItem {
   total_skipped_duplicate: number;
   total_skipped_low_relevance: number;
   total_skipped_not_it: number;
+  /** 같은 문제 확인(LLM) 실패로 반복 묶음을 못 한 건수(11/04) */
+  total_skipped_confirm_failed: number;
   error_summary: string | null;
 }
 

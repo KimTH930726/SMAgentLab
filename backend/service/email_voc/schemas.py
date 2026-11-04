@@ -201,6 +201,7 @@ class PollCycleItem(BaseModel):
     total_skipped_duplicate: int
     total_skipped_low_relevance: int
     total_skipped_not_it: int
+    total_skipped_confirm_failed: int = 0   # 같은 문제 확인(LLM) 실패로 반복 묶음을 못 함(11/04)
     error_summary: Optional[str] = None
 
 

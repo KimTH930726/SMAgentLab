@@ -616,6 +616,8 @@ async def _migrate_email_voc_tables(conn) -> None:
     # "IT와 무관한 불만이 너무 많이 온다"는 실사용 피드백으로 카테고리 기반 발송
     # 게이팅을 추가하며 신설. 기존 설치본 대응.
     await conn.execute("ALTER TABLE ops_email_poll_cycle ADD COLUMN IF NOT EXISTS total_skipped_not_it INT NOT NULL DEFAULT 0")
+    # 같은 문제 확인(LLM) 실패로 반복 묶음을 못 한 건수 — 로그 요약 줄에만 있던 것을 사이클 표에도(11/04 태훈, VOC 반복 묶음 실경로 확인 후속)
+    await conn.execute("ALTER TABLE ops_email_poll_cycle ADD COLUMN IF NOT EXISTS total_skipped_confirm_failed INT NOT NULL DEFAULT 0")
 
     # ── 반복 VOC 패턴 탐지(§ "IT와 무관한 불만도 너무 많이 온다" 피드백 이후,
     # "반복되는 유형인지 감지해서 알려달라" 요구) ──────────────────────────────

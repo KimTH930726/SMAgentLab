@@ -711,6 +711,12 @@ export function VocEmailPanel() {
                 <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> {schedulerStatus.last_cycle.error_summary}
               </p>
             )}
+            {schedulerStatus?.last_cycle && schedulerStatus.last_cycle.total_skipped_confirm_failed > 0 && (
+              <p data-testid="voc-confirm-failed" title="같은 문제인지 LLM 확인이 실패해 반복 VOC로 묶지 못했어요 — 이 메일은 반복 판정을 못 해 Teams 발송에서도 빠졌어요"
+                className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/20 mt-3 px-3 py-2 rounded-lg">
+                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> 같은 문제 확인 실패 {schedulerStatus.last_cycle.total_skipped_confirm_failed}건 — 반복 묶음·Teams 발송에서 빠짐(LLM 연결 확인)
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-3">
@@ -869,6 +875,7 @@ export function VocEmailPanel() {
                       <th className="text-left px-3 py-2 text-slate-400">namespace 수</th>
                       <th className="text-left px-3 py-2 text-slate-400">성공/실패 메일함</th>
                       <th className="text-left px-3 py-2 text-slate-400">분석/발송/관련지식부족/IT무관</th>
+                      <th className="text-left px-3 py-2 text-slate-400" title="같은 문제인지 LLM 확인이 실패해 반복 VOC로 묶지 못한 건수 — 0이 아니면 LLM 연결을 확인하세요">확인 실패</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -891,6 +898,11 @@ export function VocEmailPanel() {
                           )}
                         </td>
                         <td className="px-3 py-2 text-slate-400">{c.total_analyzed}건 / {c.total_notified}건 / {c.total_skipped_low_relevance}건 / {c.total_skipped_not_it}건</td>
+                        <td className="px-3 py-2" data-testid={`cycle-${c.id}-confirm-failed`}>
+                          {c.total_skipped_confirm_failed > 0
+                            ? <Badge color="amber">{c.total_skipped_confirm_failed}건</Badge>
+                            : <span className="text-slate-500">0</span>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
