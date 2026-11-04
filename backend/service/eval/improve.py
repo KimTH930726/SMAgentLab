@@ -110,6 +110,25 @@ def adopt_error(status: str, gate: Optional[Mapping], approved_at, *, measured_i
     return confident_wrong_error(gate.get("answers"))
 
 
+def ingest_fix_error(cand_key: str, ingest_run: Optional[Mapping], approved_at) -> Optional[str]:
+    """데이터 고치기 후보(적재 검사 후보 key ingest_*)의 추가 조건(11/04 태훈 4번 권장안) — 게이트 통과에 더해, 시도 승인 뒤에 다시 돌린
+    적재 검사(check_ingest.py --save)에서 그 검사 어긋남이 0이어야 운영 반영. 데이터 품질은 데이터에서 직접 잰다(정답률이 그대로여도
+    중복이 남았으면 고친 게 아니다). 다른 후보는 해당 없음. ingest_run = 가장 최근 ingest_check_run(created_at · results)."""
+    if not cand_key.startswith("ingest_"):
+        return None
+    check = cand_key[len("ingest_"):]
+    if not ingest_run or approved_at is None or ingest_run["created_at"] < approved_at:
+        return "데이터 고치기 후보입니다 — 시도 승인 뒤에 적재 검사(check_ingest.py --save)를 다시 돌려 어긋남 0을 확인해 주세요."
+    r = next((x for x in ingest_run.get("results") or [] if x.get("key") == check), None)
+    if r is None:
+        return f"최근 적재 검사에 이 검사({check})가 없습니다 — check_ingest.py --save를 다시 실행해 주세요."
+    if r.get("error") or r.get("bad") is None:   # 검사가 실패한 줄(check_ingest가 error만 남김)은 "어긋남 0"이 아니다(리뷰 M1)
+        return f"적재 검사가 이 검사({check})를 끝내지 못했습니다({r.get('error') or '결과 없음'}) — check_ingest.py --save를 다시 실행해 주세요."
+    if r.get("bad"):
+        return f"적재 검사 어긋남이 아직 {r['bad']}건입니다({r.get('name') or check}) — 0이 돼야 운영 반영합니다."
+    return None
+
+
 def confident_wrong_error(answers: Optional[Mapping]) -> Optional[str]:
     """운영 반영 조건 B안(10/30 사람 결정 "틀린 단정보다 모른다가 낫다") — 답을 잰 측정이면 단정 오답(채점 "오답")이 늘지 않아야 하고
     2회 이상 재야 한다(1회는 같은 지시문으로도 17.9%↔19.8%로 흔들렸다). 게이트 통과(나빠지지 않았나)와 따로 — 반영은 실제로 나아졌을 때만.

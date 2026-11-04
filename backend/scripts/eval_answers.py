@@ -166,7 +166,7 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
                   scope: str = "", context_budget: Optional[int] = None) -> None:
     from core.database import init_pool, get_conn
     from shared.embedding import embedding_service
-    from agents.knowledge_rag.agent import build_chat_context, effective_scope_label, scope_overrides
+    from agents.knowledge_rag.agent import build_chat_context, chat_prompt_for, effective_scope_label, scope_overrides
     from agents.knowledge_rag.knowledge import retrieval, glossary_terms
     from service.chat.helpers import is_llm_failure
     from service.llm.base import resolve_system_prompt
@@ -229,10 +229,12 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
             g["namespace_name"], g["query"], vec, top_k=int(d["default_top_k"]), w_vector=d["default_w_vector"],
             w_keyword=d["default_w_keyword"], glossary_mode="embedding" if variant == "before" else None,
             **scope_overrides(scope, context_budget))
+        # 채팅과 같은 프롬프트(문맥에 운영 지식이 실리면 근거 번호 프롬프트, 11/04 — agent.chat_prompt_for). 파일을 주면 그 파일
+        sp = system_prompt if prompt_file else await chat_prompt_for(bool(cc.adopted_ids))
         t0 = time.time()
         abstained = cc.abstain and variant != "before"
         has_list = "[분류 목록:" in cc.llm_context
-        h = ctx_hash(variant=variant, system_prompt=system_prompt, context=cc.llm_context, question=g["query"], model=model_id)
+        h = ctx_hash(variant=variant, system_prompt=sp, context=cc.llm_context, question=g["query"], model=model_id)
         # 재질문(v2.134) 문항도 "전부 보기"를 골랐을 때의 답으로 채점 — 분모에서 빼면 어려운 목록형이 빠져 수치가 부푼다(리뷰).
         # "전부 보기"(scope "*")로 다시 만든 문맥으로 답한다(아래).
         clarified = bool(cc.clarify)
@@ -242,9 +244,11 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
                 g["namespace_name"], g["query"], vec, top_k=int(d["default_top_k"]), w_vector=d["default_w_vector"],
                 w_keyword=d["default_w_keyword"], glossary_mode="embedding" if variant == "before" else None,
                 clarify_scope="*", list_question=g["query"], **scope_overrides(scope, context_budget))
+            # 운영의 "전부 보기"는 새 요청이라 새 문맥의 채택으로 프롬프트를 다시 고른다(agent.chat_prompt_for, 11/04 리뷰 M1)
+            sp = system_prompt if prompt_file else await chat_prompt_for(bool(cc.adopted_ids))
             abstained = cc.abstain and variant != "before"
             has_list = "[분류 목록:" in cc.llm_context
-            h = ctx_hash(variant=variant, system_prompt=system_prompt, context=cc.llm_context, question=g["query"], model=model_id)
+            h = ctx_hash(variant=variant, system_prompt=sp, context=cc.llm_context, question=g["query"], model=model_id)
         async with get_conn() as conn:
             # 정답 기준은 지금 검색 대상인 정책만 — 반려·폐기된 정책을 정답으로 세면 시스템이 맞게 뺀 것을 "누락"으로 채점한다
             # (2026-10-12 진단: q031의 "빠진" 정책은 반려 상태였다). 빠진 수는 gold_inactive로 남겨 골든셋 정리 대상으로 본다.
@@ -271,7 +275,7 @@ async def collect(variant: str, out: str, limit: int, prompt_file: str = "", reu
             answer, err = pk["answer"], None
           else:
             try:
-                answer, _ = await llm.generate(cc.llm_context, g["query"], None, system_prompt=system_prompt)
+                answer, _ = await llm.generate(cc.llm_context, g["query"], None, system_prompt=sp)
                 # 게이트웨이 거부·빈 응답은 운영 채팅과 같은 장애 판정으로 "오류"(답 품질과 섞지 않음 — 리뷰 10/19)
                 err = "llm_failure" if is_llm_failure(answer) else None
             except Exception as e:  # noqa: BLE001

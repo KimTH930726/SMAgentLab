@@ -143,13 +143,14 @@ async def _decorate(conn, cands, axis: str) -> list[dict]:
     from service.eval.improve import phase_of
     from service.eval.techniques import BY_KEY
     base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = $1", axis)
+    ingest_run = await _latest_ingest_run(conn)   # 데이터 고치기 후보의 어긋남 0 조건(11/04)
     jobs = {r["candidate_id"]: dict(r) for r in await conn.fetch(   # 후보마다 가장 최근 실험 작업(10/30 실험 실행기)
         """SELECT DISTINCT ON (candidate_id) candidate_id, id, status, stage, done, total, error, gate_run_id, created_at, finished_at
            FROM eval_experiment_job WHERE candidate_id = ANY($1::bigint[]) ORDER BY candidate_id, id DESC""", [c["id"] for c in cands])}
     out = []
     for c in cands:
         cd = {**_cand(c), "technique_name": BY_KEY.get(c["technique"], {}).get("name", c["technique"])}
-        cd["adopt_check"] = _adopt_check(cd, base_at)
+        cd["adopt_check"] = _adopt_check(cd, base_at, ingest_run=ingest_run, with_ingest=True)
         cd["auto"] = {"ok": (why := runnable(cd, axis)) is None, "reason": why}   # 자동 실험 되나(안 되면 이유)
         job = jobs.get(c["id"])
         cd["experiment"] = {k: v for k, v in job.items() if k != "candidate_id"} if job else None
@@ -198,7 +199,7 @@ async def close_failed(gate_run_ids: Optional[list[int]] = None) -> int:
         for r in rows:
             axis = await conn.fetchval(CANDIDATE_AXIS_SQL, r["id"])
             base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = $1", axis)
-            chk = _adopt_check(_cand(r), base_at)
+            chk = _adopt_check(_cand(r), base_at)   # 게이트만 — 데이터가 아직 안 고쳐진 건(어긋남 남음) 실패가 아니라 기다릴 일
             if not chk or chk["ok"] or not chk["fresh"]:   # 예전 측정뿐이면 닫지 않는다 — 다시 재면 됨
                 continue
             reason = f"자동 종결 — 측정 #{chk['gate_run_id']}: {chk['reason']}"[:300]
@@ -208,9 +209,15 @@ async def close_failed(gate_run_ids: Optional[list[int]] = None) -> int:
     return n
 
 
-def _adopt_check(c: dict, base_at) -> Optional[dict]:
+async def _latest_ingest_run(conn) -> Optional[dict]:
+    r = await conn.fetchrow("SELECT created_at, results FROM ingest_check_run ORDER BY created_at DESC, id DESC LIMIT 1")
+    return {"created_at": r["created_at"], "results": _j(r["results"])} if r else None
+
+
+def _adopt_check(c: dict, base_at, *, ingest_run: Optional[dict] = None, with_ingest: bool = False) -> Optional[dict]:
     """가장 최근 측정을 운영에 반영할 수 있나 — 반영 버튼(adopt_candidate)과 같은 규칙(adopt_error)을 미리 돌려 화면에 보인다.
-    측정이 없으면 None. 반영할 수 없는 측정을 골랐다가 막히지 않게(10/30 실험 결과 칸)."""
+    측정이 없으면 None. 반영할 수 없는 측정을 골랐다가 막히지 않게(10/30 실험 결과 칸).
+    with_ingest = 데이터 고치기 후보의 어긋남 0 조건(ingest_fix_error)도 — 화면·반영 버튼만(자동 종결은 게이트만 본다)."""
     ms = c.get("measurements") or []
     if not ms:
         return None
@@ -219,6 +226,8 @@ def _adopt_check(c: dict, base_at) -> Optional[dict]:
     gate = {"id": m["id"], "kind": m.get("kind"), "verdict": m.get("verdict"), "run_at": run_at,
             "answers": {"groups": m.get("groups") or {}, "confident_wrong": m.get("confident_wrong")} if m.get("has_answers") else None}
     err = adopt_error(c["status"], gate, c.get("reviewed_at"), measured_ids=c.get("measured_gate_run_ids") or [], baseline_run_at=base_at)
+    if err is None and with_ingest:
+        err = ingest_fix_error(c.get("key") or "", ingest_run, c.get("reviewed_at"))
     from service.eval.improve import measurement_fresh
     # fresh = 승인·기준선 뒤에 잰 측정 — 아니면 '실패'가 아니라 다시 재야 하는 것(화면 단계·자동 종결이 이걸로 가른다, 재리뷰 M1)
     return {"gate_run_id": m["id"], "ok": err is None, "reason": err,
@@ -275,7 +284,7 @@ async def adopt_candidate(cand_id: int, *, gate_run_id: int, user_id: int) -> Op
     async with get_conn() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock($1)", BASELINE_LOCK)   # set_baseline과 같은 잠금 — 동시에 옮기면 고유 인덱스 충돌
-            c = await conn.fetchrow("SELECT status, reviewed_at, measured_gate_run_ids FROM eval_candidate WHERE id = $1 FOR UPDATE", cand_id)
+            c = await conn.fetchrow("SELECT key, status, reviewed_at, measured_gate_run_ids FROM eval_candidate WHERE id = $1 FOR UPDATE", cand_id)
             if not c:
                 return None
             g = await conn.fetchrow("SELECT id, verdict, kind, run_at, answers, axis FROM eval_gate_run WHERE id = $1", gate_run_id)
@@ -285,7 +294,8 @@ async def adopt_candidate(cand_id: int, *, gate_run_id: int, user_id: int) -> Op
                 raise ValueError("이 후보를 진단한 축의 측정으로만 운영에 반영합니다(정책서 ↔ 업무지식).")
             gd = {**dict(g), "answers": _j(g["answers"])} if g else None
             base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = $2 AND id <> $1", gate_run_id, cand_axis)
-            err = adopt_error(c["status"], gd, c["reviewed_at"], measured_ids=c["measured_gate_run_ids"] or [], baseline_run_at=base_at)
+            err = (adopt_error(c["status"], gd, c["reviewed_at"], measured_ids=c["measured_gate_run_ids"] or [], baseline_run_at=base_at)
+                   or ingest_fix_error(c["key"], await _latest_ingest_run(conn), c["reviewed_at"]))
             if err:
                 raise ValueError(err)
             await conn.execute(
@@ -295,7 +305,7 @@ async def adopt_candidate(cand_id: int, *, gate_run_id: int, user_id: int) -> Op
     return {"id": cand_id, "status": "adopted", "gate_run_id": gate_run_id, "baseline": gate_run_id}
 
 
-from service.eval.improve import adopt_error, agreement  # noqa: E402 — 순수 규칙(테스트가 같은 함수를 검사)
+from service.eval.improve import adopt_error, agreement, ingest_fix_error  # noqa: E402 — 순수 규칙(테스트가 같은 함수를 검사)
 
 
 async def decisions_report(days: int) -> dict:

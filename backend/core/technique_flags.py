@@ -29,17 +29,19 @@ SWITCHES: dict[str, tuple] = {
     "context_budget": (lambda: True, "문맥을 한 줄 순위로 세워 예산(1만 2천 자)까지만"),
     "ref_table_chat": (_default_ref_chat, "참고표·개요를 찾아 문맥에"),
     "collection_suggest": (lambda: False, "답 뒤 다른 컬렉션에 더 맞는 지식이 있으면 버튼으로 제안"),
+    "cite_prompt": (lambda: True, "답 문맥에 운영 지식이 실리면 답 문장마다 근거 번호 [#n] 프롬프트(chat_system_knowledge)"),
 }
 
 # 검증된 최적(11/03 태훈 "지금이 최적 — 바꾸면 최적이 깨진다는 경고") — 게이트로 잰 조합은 이것 하나. 다른 조합은 정확도를 모른다.
 # 바꿀 땐 이 값과 근거를 같이 고친다(새 게이트 번호). 끄면 손실이 큰 기법은 경고 문장을 따로 둔다(화면 확인 창).
-BASELINE: dict[str, bool] = {"linked_scope": True, "context_budget": True, "ref_table_chat": True, "collection_suggest": False}
-BASELINE_EVIDENCE = "게이트 #71 업무지식 77.4% · #75 정책서 86.0% (11/02, 로컬 LLM)"
+BASELINE: dict[str, bool] = {"linked_scope": True, "context_budget": True, "ref_table_chat": True, "collection_suggest": False, "cite_prompt": True}
+BASELINE_EVIDENCE = "게이트 #71 업무지식 77.4% · #75 정책서 86.0% (11/02) · 근거 번호 프롬프트 업무지식 75.5→85.8% (11/04, 로컬 LLM)"
 BASELINE_WARN: dict[str, str] = {
     "linked_scope": "끄면 정책 컬렉션에서 물은 질문이 시스템의 운영 지식을 하나도 못 찾아요(측정 0%) — 운영 지식 시스템 이동과 한 묶음이에요.",
     "context_budget": "끄면 문맥이 길어져 단정 오답이 다시 늘 수 있어요(예산 켬: 업무지식 단정 오답 26.4→20.3%).",
     "ref_table_chat": "끄면 참고표·개요로 답하던 질문이 근거를 잃어요.",
     "collection_suggest": "켜면 답 뒤 다른 컬렉션 검색이 질문마다 한 번 더 돌아요(최대 2초) — 최적 조합에선 꺼짐.",
+    "cite_prompt": "끄면 운영 지식 답의 정답률이 내려가요(켬: 업무지식 75.5→85.8%, 단정 오답 19.8→14.2%).",
 }
 
 _state: dict[str, dict] = {}   # key → {"on", "by", "at"}

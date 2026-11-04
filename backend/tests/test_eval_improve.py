@@ -134,6 +134,24 @@ def test_adopt_requires_approved_and_passing_gate_after_approval():
     assert improve.adopt_error("approved", ok_gate, None)               # 승인 시각이 없으면(데이터 이상) 막는다
 
 
+def test_ingest_fix_error():
+    """데이터 고치기 후보(ingest_*) = 승인 뒤 적재 검사에서 그 검사 어긋남 0일 때만(11/04). 다른 후보는 해당 없음."""
+    from datetime import datetime, timedelta, timezone
+    t0 = datetime(2026, 11, 4, tzinfo=timezone.utc)
+    run = lambda at, bad: {"created_at": at, "results": [{"key": "knowledge_dup", "name": "중복", "bad": bad}, {"key": "x", "bad": 3}]}
+    assert improve.ingest_fix_error("retrieval_x", None, None) is None                      # 처리 기법 후보는 해당 없음
+    assert improve.ingest_fix_error("ingest_knowledge_dup", run(t0 + timedelta(hours=1), 0), t0) is None
+    assert "아직 10건" in improve.ingest_fix_error("ingest_knowledge_dup", run(t0 + timedelta(hours=1), 10), t0)
+    assert "승인 뒤" in improve.ingest_fix_error("ingest_knowledge_dup", run(t0 - timedelta(hours=1), 0), t0)   # 승인 전 검사는 안 됨
+    assert "승인 뒤" in improve.ingest_fix_error("ingest_knowledge_dup", None, t0)
+    assert "승인 뒤" in improve.ingest_fix_error("ingest_knowledge_dup", run(t0, 0), None)
+    assert "없습니다" in improve.ingest_fix_error("ingest_gone", run(t0 + timedelta(hours=1), 0), t0)
+    failed = {"created_at": t0 + timedelta(hours=1), "results": [{"key": "knowledge_dup", "error": "UndefinedTable"}]}
+    assert "끝내지 못했습니다" in improve.ingest_fix_error("ingest_knowledge_dup", failed, t0)   # 검사 실패 ≠ 어긋남 0(리뷰 M1)
+    nobad = {"created_at": t0 + timedelta(hours=1), "results": [{"key": "knowledge_dup"}]}
+    assert "끝내지 못했습니다" in improve.ingest_fix_error("ingest_knowledge_dup", nobad, t0)
+
+
 
 def test_adopt_requires_confident_wrong_not_up_and_two_reps():
     """운영 반영 B안(10/30): 답을 잰 측정이면 단정 오답이 늘지 않아야 하고 2회 이상 — 검색만 잰 측정은 해당 없음."""

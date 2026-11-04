@@ -304,3 +304,25 @@ class TestTraceMatchesContext:
         t = agent.retrieval_trace(cc)
         traced = {c["id"] for c in t["ctx"] if c["t"] == "px" or (c["t"] == "kn" and c["a"])}
         assert in_ctx == traced == {1, 9}
+
+
+# ── 채팅 프롬프트 고르기(11/04 근거 번호 프롬프트) ────────────────────────────
+class TestChatPromptFor:
+    """문맥에 운영 지식이 채택되면 chat_system_knowledge, 아니면 chat_system · 스위치 끄면 chat_system(11/04 (b)안)."""
+
+    @pytest.mark.parametrize("kn, on, want", [
+        (True, True, "DB:chat_system_knowledge"),   # 문맥에 운영 지식 채택 — 근거 번호
+        (False, True, "BASE"),                      # 정책·참고표만 — 기본
+        (True, False, "BASE"),                      # 스위치 끔
+    ])
+    def test_pick(self, monkeypatch, kn, on, want):
+        import asyncio
+        from types import SimpleNamespace
+        from core import technique_flags
+
+        async def load(key, fallback):
+            return f"DB:{key}"
+        monkeypatch.setitem(sys.modules, "service.llm.base", SimpleNamespace(CHAT_SYSTEM_PROMPT_KNOWLEDGE="K", _load_prompt=load))
+        monkeypatch.setattr(agent, "resolve_system_prompt", AsyncMock(return_value="BASE"))
+        monkeypatch.setattr(technique_flags, "is_on", lambda k: on if k == "cite_prompt" else True)
+        assert asyncio.run(agent.chat_prompt_for(kn)) == want

@@ -118,7 +118,7 @@ async def main() -> int:
     import httpx
     from core.database import init_pool, get_conn
     from shared.embedding import embedding_service
-    from agents.knowledge_rag.agent import build_chat_context, scope_overrides
+    from agents.knowledge_rag.agent import build_chat_context, chat_prompt_for, scope_overrides
     from agents.knowledge_rag.knowledge import retrieval
     from service.chat.helpers import is_llm_failure
     from service.llm.base import resolve_system_prompt
@@ -184,10 +184,11 @@ async def main() -> int:
             "SELECT id, content FROM rag_knowledge WHERE id = ANY($1::int[]) AND status = 'active'",
             sorted({i for it in items for i in it["gold_ids"]}))}
     d = retrieval.get_search_defaults()
-    sp = Path(a.prompt_file).read_text(encoding="utf-8") if a.prompt_file else await resolve_system_prompt()
-    if a.cite or a.cite_keep:
+    # 프롬프트 파일이 없으면 채팅과 같게 문항 컬렉션마다(agent.chat_prompt_for — 시스템 컬렉션은 근거 번호 프롬프트, 11/04)
+    sp = Path(a.prompt_file).read_text(encoding="utf-8") if a.prompt_file else None
+    if a.cite or a.cite_keep:   # 인용 규칙 덧붙이기 실험(11/03)은 옛 기본 프롬프트 위에 — 그때 잰 것과 같게
         from trustkit.answer.citation import CITE_RULE_KO, strip_uncited
-        sp = sp.rstrip() + "\n" + CITE_RULE_KO
+        sp = (sp or await resolve_system_prompt()).rstrip() + "\n" + CITE_RULE_KO
     if a.llm == "local":
         from eval_answers import local_llm   # scripts/가 실행 경로라 바로 import된다
         llm = await local_llm()
@@ -240,7 +241,8 @@ async def main() -> int:
                         ans = NO_KNOWLEDGE
                     else:
                         try:
-                            ans, _ = await llm.generate(cc.llm_context, it["question"], None, system_prompt=sp)
+                            ans, _ = await llm.generate(cc.llm_context, it["question"], None,
+                                                        system_prompt=sp if sp is not None else await chat_prompt_for(bool(cc.adopted_ids)))
                             if is_llm_failure(ans):   # 게이트웨이 거부·빈 응답 — 운영 채팅과 같은 장애 판정(품질과 섞지 않음)
                                 err = "llm_failure"
                         except Exception as e:  # noqa: BLE001

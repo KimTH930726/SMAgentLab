@@ -51,6 +51,17 @@ CHAT_CONTEXT_BUDGET = 12000
 CHAT_DEFAULT = "__chat_default__"
 
 
+async def chat_prompt_for(knowledge_in_context: bool) -> str:
+    """채팅 시스템 프롬프트 — 이 답의 문맥에 운영 지식이 채택돼 실렸으면(cc.adopted_ids) 근거 번호 프롬프트(chat_system_knowledge),
+    아니면 chat_system(11/04 태훈 "전체 정확도 쪽으로"). 컬렉션 종류로 고르면 정책 컬렉션에서 묻는 운영 지식 질문(측정 106문항 전부)이 빠진다.
+    측정 스크립트도 이걸 쓴다(측정 경로 = 실제 경로). 스위치 cite_prompt를 끄면 늘 chat_system."""
+    from core import technique_flags
+    from service.llm.base import CHAT_SYSTEM_PROMPT_KNOWLEDGE, _load_prompt
+    if knowledge_in_context and technique_flags.is_on("cite_prompt"):
+        return await _load_prompt("chat_system_knowledge", CHAT_SYSTEM_PROMPT_KNOWLEDGE)
+    return await resolve_system_prompt()
+
+
 def chat_defaults() -> dict:
     """지금 채팅이 쓰는 범위·예산 — 스위치가 꺼지면 None(그 기법 끔)."""
     from core import technique_flags
@@ -652,7 +663,7 @@ class KnowledgeRagAgent(AgentBase):
                 nonlocal new_inhouse_conv_id
                 new_inhouse_conv_id = cid
 
-            chat_prompt = await resolve_system_prompt()
+            chat_prompt = await chat_prompt_for(bool(cc.adopted_ids))
 
             try:
                 async for token in get_llm_provider().generate_stream(
