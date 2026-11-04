@@ -491,6 +491,8 @@ LLM에 전달되는 messages:
      → AI 판단 원장 한 줄(ops_ai_decision, kind knowledge_location) · decision_id
 ③ 등록 POST /api/knowledge(직접 입력) · /api/knowledge/bulk(묶음) { namespace=고른 곳, decision_id, location_choice }
      담당이면 평소대로(중복 의심만 승인 대기) · 내 원문 초안을 고른 곳으로 옮김
+     중복 판정 2단(11/04): 같은 원본 안 공백만 다른 반복 = 한 번만 저장(작업 skipped_exact_*) · 의미 ≥ 0.88 후보 중
+       양식 줄(컬렉션 데이터에서 3쪽·1% 이상) 뺀 글자 ≥ 0.8만 승인 대기(다른 원본의 같은 글 포함) · 의미만 비슷 = 사용 중 · 단건은 같은 글이면 400
      담당 아님 + 내 확정 전 판정 줄 → 제안: 전부 승인 대기(그 담당이 승인), 원문·컨플루언스 페이지 연결 뗌
      담당 아님 + 판정 없음 → 403
 ④ 원장 같은 줄 확정: final_value {namespace_id, choice, suggested}, 고른 곳 ≠ AI 추천(확신 없으면 후보) → 번복
@@ -687,7 +689,7 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
 VOC 메일은 지식을 코어 API(`agents/knowledge_rag/knowledge/api.py`)로만 쓴다 — 검색 내부 import·지식 표 SQL 금지(`tests/test_voc_boundary.py`, v2.183).
 
 VOC 반복 묶기(`service/email_voc/pattern_detection.py`, 11/03): 요약 임베딩 → 대표(고정)와 유사도 ≥ 기준인 최상위 묶음 1개 → 같은 스레드면 안 셈
-→ LLM 같은 문제 확인(첫 멤버와) → 같으면 합류 / 아니면 단독 메일 최상위 1건을 한 번 더 확인 → 같으면 새 묶음. 실패·애매 = 묶지 않음.
+→ LLM 같은 문제 확인(첫 멤버와 · 로컬 LLM, 메일은 PII 가림 — 11/04) → 같으면 합류 / 아니면 단독 메일 최상위 1건을 한 번 더 확인 → 같으면 새 묶음. 실패·애매 = 묶지 않음.
 발송은 그대로 3·6·9건째, 묶음이 `email_pattern_review_size`보다 크면 카드에 "확인 필요".
 
 ## 6-1. 근거 정정 흐름 (v2.118, 2026-10-01 · v2.150 정책 화면 제안·직접 수정·일괄 승인)
