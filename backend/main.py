@@ -16,7 +16,7 @@ from core.config import settings
 from core.database import LOOSE_NAMESPACE_REFS, init_pool, close_pool, get_conn, release_namespace_refs
 from core.security import hash_password
 from service.chat.helpers import NO_KNOWLEDGE_MARKER
-from service.llm.base import CHAT_SYSTEM_PROMPT
+from service.llm.base import CHAT_SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT_KNOWLEDGE
 from service.email_voc.service import ISSUE_SIGNATURE_LINE, VOC_PROMPT_MIGRATIONS
 from shared.embedding import embedding_service
 from shared import reranker as reranker_service
@@ -382,7 +382,8 @@ async def _migrate_system_tables(conn) -> None:
         INSERT INTO ops_prompt (func_key, func_name, content, description, agent_type) VALUES
         ('chat_system',         'RAG 채팅 시스템',         $1,  'RAG 기반 지식 검색 채팅의 시스템 프롬프트',                              'knowledge_rag'),
         ('glossary_suggest',    '용어 추천 시스템',         $2,  '미매핑 질문에서 업무 용어를 추출하는 시스템 프롬프트',                    'knowledge_rag'),
-        ('conv_summarize',      '대화 요약',               $3,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all')
+        ('conv_summarize',      '대화 요약',               $3,  '대화 기록을 요약하는 프롬프트. {dialogue} 플레이스홀더 유지 필수',          'all'),
+        ('chat_system_knowledge', 'RAG 채팅 시스템 — 운영 지식', $4, '답 문맥에 운영 지식이 실린 채팅 — 답 문장마다 근거 번호 [#n](11/04, 기법 대장 cite_prompt)', 'knowledge_rag')
         ON CONFLICT (func_key) DO NOTHING
     """,
         # chat_system — 코드 기본값과 같은 문구(service/llm/base.CHAT_SYSTEM_PROMPT, 2026-10-13 한 곳으로)
@@ -396,6 +397,7 @@ async def _migrate_system_tables(conn) -> None:
 {dialogue}
 
 요약:""",
+        CHAT_SYSTEM_PROMPT_KNOWLEDGE,
     )
     # 기존 rows에 agent_type 업데이트 (DEFAULT 'all'로 들어간 경우 보정)
     await conn.execute("""
@@ -2061,6 +2063,8 @@ async def _migrate_org_domain(conn) -> None:
         )""")
     await conn.execute("ALTER TABLE ops_part ADD COLUMN IF NOT EXISTS team_id INT REFERENCES ops_team(id) ON DELETE SET NULL")
     await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS parent_id INT REFERENCES ops_namespace(id) ON DELETE SET NULL")
+    # 검토 주기(11/04, agents/knowledge_rag/knowledge/review.py) — 일 수, NULL = 검토 안 함. 기존 컬렉션도 90일로 시작
+    await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS review_interval_days INT DEFAULT 90 CHECK (review_interval_days IS NULL OR review_interval_days > 0)")
     await conn.execute("ALTER TABLE ops_voc_routing ADD COLUMN IF NOT EXISTS part_id INT REFERENCES ops_part(id) ON DELETE SET NULL")
     if await _column_exists(conn, "ops_voc_routing", "part"):   # 아래에서 옛 글자 칸을 지운 뒤에도 재기동이 깨지지 않게(재리뷰 H1)
         await conn.execute("""
@@ -2299,6 +2303,9 @@ async def _migrate_improvement_ledger(conn) -> None:
     # 정책에서 물어 시스템 지식이 틀린 신고는 그 시스템으로 간다. 후보·맥락을 다시 읽을 땐 물은 곳 기준(연결 범위). 옛 줄은 둘이 같다
     await conn.execute("ALTER TABLE ops_improvement_item ADD COLUMN IF NOT EXISTS asked_namespace_id INT "
                        "REFERENCES ops_namespace(id) ON DELETE SET NULL")
+    # [답변 틀림] 사유 칩(11/04, 규격 피드백) — 사람이 고른 사유. 지식 문제(낡음·단계 빠짐)와 검색 문제(다른 시스템·근거 못 찾음)를 가른다
+    await conn.execute("ALTER TABLE ops_improvement_item ADD COLUMN IF NOT EXISTS user_reason TEXT "
+                       "CHECK (user_reason IS NULL OR user_reason IN ('stale', 'other_system', 'missing_step', 'not_found'))")
     # #111(11/03): 정책 컬렉션의 지식 공백은 운영 지식이 아니라 정책 추가 제안으로 메운다 — 그 제안 번호. 제안이 반려되면 비워 공백으로 돌아간다
     await conn.execute("ALTER TABLE ops_query_log ADD COLUMN IF NOT EXISTS resolved_correction_id BIGINT "
                        "REFERENCES ops_improvement_item(id) ON DELETE SET NULL")

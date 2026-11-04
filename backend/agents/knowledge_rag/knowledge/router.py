@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from pydantic import BaseModel, Field
 from shared.embedding import embedding_service
 
-from core.dependencies import get_current_user, check_namespace_ownership, reject_knowledge_outside_system
+from core.dependencies import get_current_admin, get_current_user, check_namespace_ownership, reject_knowledge_outside_system
 from agents.knowledge_rag.knowledge.schemas import (
     GlossaryCreate, GlossaryOut, GlossaryUpdate,
     KnowledgeCreate, KnowledgeOut, KnowledgeUpdate,
@@ -163,6 +163,7 @@ async def add_knowledge(body: KnowledgeCreate, user: dict = Depends(get_current_
         content=body.content,
         created_by_user_id=user["id"],
         force_pending=suggested,
+        keep_new=body.keep_new,
     )
     if body.decision_id is not None:
         await _finalize_location(body.decision_id, body.namespace, user, body.location_choice, suggested=suggested,
@@ -214,6 +215,23 @@ async def get_duplicate_matches(knowledge_id: int, user: dict = Depends(get_curr
     ns = await service.get_knowledge_namespace(knowledge_id)
     await _require_resource_namespace(ns, user, "Knowledge not found")
     return await service.get_duplicate_matches(knowledge_id)
+
+
+class PageUrlsRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=50)
+
+
+@router.post("/page-urls")
+async def post_page_urls(body: PageUrlsRequest, user: dict = Depends(get_current_user)):
+    """지식 id → 컨플 원문 페이지 주소(승인 대기 비교 창 [원문 ↗], 11/04). 주소만 — 내용은 안 준다(읽기는 누구나 열람 설계)."""
+    return {str(k): v for k, v in (await service.page_urls(body.ids)).items()}
+
+
+@router.post("/freshness")
+async def post_freshness(body: PageUrlsRequest, user: dict = Depends(get_current_user)):
+    """근거 최신성(11/04 채팅 근거 카드) — 지식 id → 마지막 검토·기한 지남·담당 파트. 날짜·이름만(내용 없음)."""
+    from agents.knowledge_rag.knowledge import review
+    return {str(k): v for k, v in (await review.knowledge_freshness(body.ids)).items()}
 
 
 class ResolveDuplicateRequest(BaseModel):
@@ -269,6 +287,110 @@ class VectorSearchRequest(BaseModel):
     namespace: str
     query: str
     top_k: int = Field(default=30, ge=1, le=50)   # 상한 — 큰 값으로 컬렉션 통째 덤프·부하(11/03 보안 리뷰 #11)
+
+
+class SimilarRequest(BaseModel):
+    namespace: str
+    content: str = Field(min_length=1, max_length=200_000)
+
+
+class SimilarBatchItem(BaseModel):
+    content: str = Field(min_length=1, max_length=200_000)
+    confluence_page_id: Optional[str] = None
+    source_document_id: Optional[int] = None
+
+
+class SimilarBatchRequest(BaseModel):
+    namespace: str
+    items: list[SimilarBatchItem] = Field(max_length=500)
+
+
+class SimilarDecisionRequest(BaseModel):
+    namespace: str
+    matched_id: int
+    similarity: float = Field(ge=0, le=1)
+    # 등록 안 함 · 기존 것에 합치기 · 새로 등록(조각 미리보기 — 직접 입력의 새로 등록은 등록 요청 keep_new가 남긴다)
+    action: str = Field(pattern="^(reject|merge|approve)$")
+    n_matches: int = Field(default=1, ge=1, le=100)
+
+
+@router.post("/similar")
+async def post_similar(body: SimilarRequest, user: dict = Depends(get_current_user)):
+    """등록 전 확인(11/04) — 저장 없이 중복 의심(등록과 같은 규칙) 상위 3개. 넣을 곳(컬렉션) 기준. 읽기라 조회 권한만."""
+    if user["role"] == "viewer":
+        raise HTTPException(status_code=403, detail="조회 전용 계정은 지식을 등록할 수 없어요.")
+    try:
+        return await service.check_similar(body.namespace, body.content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/similar/batch")
+async def post_similar_batch(body: SimilarBatchRequest, user: dict = Depends(get_current_user)):
+    """조각 미리보기(대량 텍스트·파일·URL) 확인(11/04) — 조각마다 중복 의심 상위 3. 같은 원본의 옛 조각은 비교에서 뺀다."""
+    if user["role"] == "viewer":
+        raise HTTPException(status_code=403, detail="조회 전용 계정은 지식을 등록할 수 없어요.")
+    try:
+        return await service.check_similar_batch(body.namespace, [i.model_dump() for i in body.items])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/similar/decision", status_code=204)
+async def post_similar_decision(body: SimilarDecisionRequest, user: dict = Depends(get_current_user)):
+    """등록 단계 사람 판단(등록 안 함 · 합치기)을 AI 감사 '중복 의심'에 — 합치기 자체는 기존 지식 수정(PUT)으로 따로 한다."""
+    if user["role"] == "viewer":
+        raise HTTPException(status_code=403, detail="조회 전용 계정은 지식을 등록할 수 없어요.")
+    if body.action == "merge":   # 합치기 = 기존 지식 수정 — 수정과 같은 권한(리뷰 L2)
+        await check_namespace_ownership(body.namespace, user)
+    from core.database import get_conn
+    async with get_conn() as conn:
+        ok = await conn.fetchval("SELECT 1 FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id WHERE k.id = $1 AND n.name = $2",
+                                 body.matched_id, body.namespace)
+        if not ok:
+            raise HTTPException(status_code=404, detail="그 컬렉션에 없는 지식입니다.")
+        await service.log_register_duplicate(conn, body.matched_id, body.similarity, body.action, user["id"], n_matches=body.n_matches)
+
+
+class ReviewDoneRequest(BaseModel):
+    namespace: str
+    ids: list[int] = Field(min_length=1, max_length=2000)
+
+
+class ReviewIntervalRequest(BaseModel):
+    namespace: str
+    days: Optional[int] = None   # None = 검토 안 함
+
+
+@router.get("/review/due")
+async def get_review_due(namespace: str = Query(...), user: dict = Depends(get_current_user)):
+    """검토 필요(11/04) — 검토 주기가 지난 원문 페이지, 채팅에 많이 쓰인 순. 읽기는 누구나(다른 파트는 읽기 전용 설계)."""
+    from agents.knowledge_rag.knowledge import review
+    try:
+        return await review.review_due(namespace)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/review/done")
+async def post_review_done(body: ReviewDoneRequest, user: dict = Depends(get_current_user)):
+    """[검토 완료] — 담당 파트·관리자만(수정과 같은 권한). 페이지의 조각 전체에 검토일·검토한 사람."""
+    from agents.knowledge_rag.knowledge import review
+    await check_namespace_ownership(body.namespace, user)
+    return {"reviewed": await review.mark_reviewed(body.namespace, body.ids, user["username"])}
+
+
+@router.put("/review/interval")   # /{knowledge_id} PUT과 겹치지 않게 두 칸 경로(한 칸이면 정수 변환 422)
+async def put_review_interval(body: ReviewIntervalRequest, admin: dict = Depends(get_current_admin)):
+    """컬렉션 검토 주기(관리자) — 30·90·180일 또는 안 함(None)."""
+    from agents.knowledge_rag.knowledge import review
+    try:
+        await review.set_interval(body.namespace, body.days)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:   # 30·90·180·안 함 밖(리뷰 L1 — 500이었다)
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"namespace": body.namespace, "interval_days": body.days}
 
 
 @router.post("/bulk-delete", status_code=200)

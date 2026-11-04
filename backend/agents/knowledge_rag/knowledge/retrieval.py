@@ -210,7 +210,9 @@ async def find_similar_active_knowledge(
     if replacing_documents:
         # 원문 원장(2026-10-08): 같은 원문의 옛 청크(재등록·다시 분할로 곧 폐기)는 비교에서 뺀다 — 컨플루언스 페이지 교체와 같은 이유
         args.append(list(replacing_documents))
-        replace_clause += f" AND NOT (status = 'active' AND source_document_id = ANY(${len(args)}::int[]))"
+        # IS NOT NULL 가드 — 없으면 원문 연결 없는 조각(직접 입력 등)이 NULL = ANY → NOT NULL = NULL로 후보에서 통째로 빠졌다
+        # (10/08~ 결함, 11/04 E2E 에이전트 발견: 사용 중 1,756 중 80이 일괄 등록·미리보기 중복 비교에서 안 보임 — 위 컨플 페이지 조건엔 가드가 있었다)
+        replace_clause += f" AND NOT (status = 'active' AND source_document_id IS NOT NULL AND source_document_id = ANY(${len(args)}::int[]))"
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""

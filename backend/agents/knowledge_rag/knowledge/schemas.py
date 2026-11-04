@@ -19,6 +19,8 @@ class KnowledgeCreate(BaseModel):
     override_reason: Optional[Literal["wrong", "both_ok", "context_changed"]] = None
     # 등록 화면이 미리 시작했다가 내용을 고쳐 버린 위치 판단들(10/28) — 등록하면서 원장에서 지운다(최종 판단만 남김)
     discard_decision_ids: list[int] = Field(default_factory=list, max_length=50)
+    # 등록 단계 "비슷한 지식이 이미 있어요"에서 [새로 등록](11/04) — 중복 의심이어도 승인 대기 대신 바로(담당 아닌 곳은 그대로 승인 대기)
+    keep_new: bool = False
     # 업무구분(category) 입력은 10/22 업무구분 폐지로 제거 — 옛 화면이 보내도 무시된다
 
 
@@ -73,6 +75,8 @@ class BulkKnowledgeItem(BaseModel):
     source_document_id: Optional[int] = None
     # 그 원문의 미리보기 조각 중 일부만 골라 등록했나 — 다시 분할이 뺀 조각을 되살리지 않게(리뷰 2026-10-08)
     source_document_partial: bool = False
+    # 조각 미리보기 비교 창에서 [새로 등록](11/04) — 중복 의심이어도 이 조각은 승인 대기로 보내지 않는다(담당 아닌 곳은 그대로)
+    keep_new: bool = False
 
 
 class BulkCreateRequest(BaseModel):

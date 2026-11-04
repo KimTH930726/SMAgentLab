@@ -40,7 +40,10 @@ async def create_knowledge(
     *,
     created_by_user_id: Optional[int] = None,
     force_pending: bool = False,
+    keep_new: bool = False,
 ) -> dict:
+    """keep_new = 등록 단계 "비슷한 지식이 이미 있어요"에서 사람이 [새로 등록]을 고름(11/04) — 중복 의심이어도 승인 대기로 보내지 않고
+    (담당이 아니면 그대로 승인 대기), 그 판단을 AI 감사 '중복 의심'의 번복으로 남긴다."""
     async with get_conn() as conn:
         ns_id = await resolve_knowledge_namespace_id(conn, namespace)   # 정책 컬렉션이면 ValueError(운영 지식은 시스템에만)
         if ns_id is None:
@@ -57,19 +60,13 @@ async def create_knowledge(
             # 막는다. 트랜잭션이 끝나면(커밋/롤백) 자동 해제.
             await conn.execute("SELECT pg_advisory_xact_lock($1)", ns_id)
 
-            matches = await find_similar_active_knowledge(ns_id, embedding)
-            # 중복 판정 2단(11/04) — 일괄 등록과 같은 규칙: ② 공백만 다른 같은 글은 거부 ③ 의미만 비슷하고 글이 다르면 정상 등록
-            from trustkit.ingest.dedupe import norm_text, similar_at_least
-            same = next((m["id"] for m in matches if norm_text(m["content"]) == norm_text(content)), None)
+            same, matches = await _duplicate_matches(conn, ns_id, content, embedding)
             if same is not None:
                 raise ValueError(f"같은 글이 이미 있어요(#{same}) — 공백만 다른 같은 지식은 다시 등록하지 않아요.")
-            close = [m for m in matches if m["similarity"] >= get_thresholds()["duplicate_min_similarity"]]
-            if close:
-                tmpl = await _collection_template_lines(ns_id, [{"content": content}], [], [])
-                matches = [m for m in close if similar_at_least(content, m["content"], settings.duplicate_min_text_similarity, tmpl)]
-            is_duplicate = bool(close) and bool(matches)
+            is_duplicate = bool(matches)
             # force_pending = 넣는 사람이 그 컬렉션 담당이 아님(E2, 위치 판정으로 고른 곳) — 담당이 승인해야 검색에 나온다
-            status = "pending_review" if (is_duplicate or force_pending) else "active"
+            # keep_new = 사람이 비교를 보고 "다른 내용"이라 정함 — 중복 의심만으로는 승인 대기로 보내지 않는다
+            status = "pending_review" if ((is_duplicate and not keep_new) or force_pending) else "active"
 
             row = await conn.fetchrow(
                 f"""
@@ -84,16 +81,19 @@ async def create_knowledge(
                 ns_id, content, str(embedding), 1.0,
                 created_by_user_id, status, _EMBEDDING_MODEL_NAME,
             )
-            if is_duplicate:
+            if is_duplicate and status == "pending_review":
                 await conn.executemany(
                     "INSERT INTO rag_knowledge_duplicate_match (new_knowledge_id, matched_knowledge_id, similarity) "
                     "VALUES ($1, $2, $3)",
                     [(row["id"], m["id"], m["similarity"]) for m in matches],
                 )
+            elif is_duplicate and keep_new:   # 바로 들어감 — 사람 판단(중복 아님)을 원장에(승인 대기를 안 거쳐 거기선 안 남는다)
+                await log_register_duplicate(conn, matches[0]["id"], matches[0]["similarity"], "approve", created_by_user_id,
+                                             n_matches=len(matches), target_ids=[row["id"]])
 
     result = dict(row)
     result["namespace"] = namespace
-    result["pending_review"] = is_duplicate or force_pending
+    result["pending_review"] = status == "pending_review"
     result["duplicate_matches"] = matches if is_duplicate else []
     return result
 
@@ -493,6 +493,94 @@ async def get_knowledge_namespace(knowledge_id: int) -> Optional[str]:
 
 # ─── 중복 승인 대기 리뷰 ─────────────────────────────────────────────────────
 
+async def _duplicate_matches(conn, ns_id: int, content: str, embedding) -> tuple[Optional[int], list[dict]]:
+    """중복 판정 2단(11/04) — 일괄 등록과 같은 규칙: ② 공백만 다른 같은 글 = same(거부) ③ 뜻이 비슷하고(임베딩) 글도 비슷해야(양식 줄 빼고)
+    중복 의심. 등록(create_knowledge)과 등록 전 확인(check_similar)이 이 함수 하나 — 확인에서 "없음"이었는데 등록에서 승인 대기로 가지 않게."""
+    from trustkit.ingest.dedupe import norm_text, similar_at_least
+    matches = await find_similar_active_knowledge(ns_id, embedding)
+    same = next((m["id"] for m in matches if norm_text(m["content"]) == norm_text(content)), None)
+    close = [m for m in matches if m["similarity"] >= get_thresholds()["duplicate_min_similarity"]]
+    if not close:
+        return same, []
+    tmpl = await _collection_template_lines(ns_id, [{"content": content}], [], [])
+    return same, [m for m in close if similar_at_least(content, m["content"], settings.duplicate_min_text_similarity, tmpl)]
+
+
+async def check_similar(namespace: str, content: str, *, limit: int = 3) -> dict:
+    """등록 전 확인(11/04 태훈 "등록할 때 시스템이 지원") — 저장하지 않고 같은 규칙으로 중복 의심만 돌려준다(유사도 높은 순 limit개).
+    same = 공백만 다른 같은 글(등록하면 거부됨)."""
+    async with get_conn() as conn:
+        ns_id = await resolve_knowledge_namespace_id(conn, namespace)
+        if ns_id is None:
+            raise ValueError(f"Namespace '{namespace}' not found")
+    embedding = await embedding_service.embed(content)
+    async with get_conn() as conn:
+        same, matches = await _duplicate_matches(conn, ns_id, content, embedding)
+    top = sorted(matches, key=lambda m: -m["similarity"])[:limit]
+    return {"same": same, "matches": [{"id": m["id"], "content": m["content"], "similarity": round(float(m["similarity"]), 4)} for m in top],
+            "n": len(matches)}
+
+
+async def check_similar_batch(namespace: str, items: list[dict], *, limit: int = 3) -> list[dict]:
+    """조각 미리보기 확인(11/04) — 조각마다 check_similar와 같은 판정. 같은 원본(컨플 페이지·원문 원장)의 기존 조각은 빼고 비교한다
+    (다시 등록하면 옛 버전이라 교체 대상 — 등록 때도 비교에서 뺀다, bulk_create replacing_*). items = {content, confluence_page_id?, source_document_id?}."""
+    async with get_conn() as conn:
+        ns_id = await resolve_knowledge_namespace_id(conn, namespace)
+        if ns_id is None:
+            raise ValueError(f"Namespace '{namespace}' not found")
+    from trustkit.ingest.dedupe import norm_text, similar_at_least
+    embeddings: list = []
+    for start in range(0, len(items), _INGEST_BATCH_SIZE):   # 등록과 같은 묶음 크기로 임베딩(한 요청이 너무 커지지 않게)
+        embeddings += await embedding_service.embed_batch([it["content"] for it in items[start:start + _INGEST_BATCH_SIZE]])
+    dup = get_thresholds()["duplicate_min_similarity"]
+    pages = sorted({str(it["confluence_page_id"]) for it in items if it.get("confluence_page_id")})
+    docs = sorted({int(it["source_document_id"]) for it in items if it.get("source_document_id")})
+    # 등록(bulk_create)과 같은 "옛 버전" — 이 페이지들의 기존 조각 + 같은 원본 위치의 이전 원문(source_ledger.replacing_documents)
+    from agents.knowledge_rag.ingestion import source_ledger as _ledger
+    replacing_docs: list[int] = []
+    if docs or pages:
+        async with get_conn() as conn:
+            # 초안·사용 중 원문만(아무 컬렉션) — 등록 때 넣을 곳으로 옮겨질 초안이라 컬렉션은 묻지 않는다(쓰기 없음)
+            live = [r["id"] for r in await conn.fetch(
+                "SELECT id FROM rag_source_document WHERE id = ANY($1::int[]) AND status IN ('draft', 'active')", docs)] if docs else []
+            replacing_docs = await _ledger.replacing_documents(conn, ns_id, live, pages, drafts_anywhere=True)
+    tmpl = await _collection_template_lines(ns_id, items, pages, replacing_docs)   # 등록과 같은 양식 줄(옛 버전 빼고 이번 조각으로)
+    out = []
+    # 등록과 같이 묶음 단위로 동시에(리뷰 L1 — 조각마다 순차 왕복이었다)
+    match_lists: list[list[dict]] = []
+    for start in range(0, len(embeddings), _INGEST_BATCH_SIZE):
+        match_lists += await asyncio.gather(*(find_similar_active_knowledge(
+            ns_id, emb, replacing_confluence_pages=pages or None, replacing_documents=replacing_docs or None)
+            for emb in embeddings[start:start + _INGEST_BATCH_SIZE]))
+    for it, ms in zip(items, match_lists):
+        same = next((m["id"] for m in ms if norm_text(m["content"]) == norm_text(it["content"])), None)
+        close = [m for m in ms if m["similarity"] >= dup and similar_at_least(it["content"], m["content"], settings.duplicate_min_text_similarity, tmpl)]
+        top = sorted(close, key=lambda m: -m["similarity"])[:limit]
+        out.append({"same": same, "n": len(close),
+                    "matches": [{"id": m["id"], "content": m["content"], "similarity": round(float(m["similarity"]), 4)} for m in top]})
+    return out
+
+
+async def log_register_duplicate(conn, matched_id: int, similarity: float, action: str, user_id: Optional[int], *,
+                                 n_matches: int = 1, target_ids: Optional[list[int]] = None) -> None:
+    """등록 단계 중복 의심 판단(11/04) — 승인 대기 처리(_log_duplicate_decision)와 같은 원장·같은 action 이름:
+    approve = 새로 등록(중복 아님 — 번복) · reject = 등록 안 함(중복 맞음) · merge = 기존 것에 합치기. signals.stage = register로 구분.
+    실패해도 등록은 막지 않는다(로그만)."""
+    try:
+        from service.decision import ledger
+        async with conn.transaction():
+            sim = round(float(similarity), 4)
+            did = await ledger.record(
+                conn, "duplicate_check", ai_value={"duplicate_of": matched_id, "similarity": sim},
+                confident=sim >= 0.98, signals={"n_matches": n_matches, "stage": "register"},
+                user_id=user_id, target_type="knowledge", target_ids=target_ids or [matched_id])
+            await ledger.finalize(conn, did, kind="duplicate_check",
+                                  final_value={"action": action, "target_id": matched_id if action == "merge" else None},
+                                  changed=action == "approve", user_id=user_id)
+    except Exception as e:   # noqa: BLE001
+        logger.warning("등록 단계 중복 판단 원장 기록 실패(matched=%s, action=%s): %s", matched_id, action, e)
+
+
 # 중복 의심 매칭은 검토 대기 화면·병합 대상 선택에서만 읽는다 — 검토가 끝나면(승인·반려·병합) 지운다(2026-10-06).
 # 안 지우면 끝난 건의 매칭이 계속 쌓였다(55건 중 49건).
 _DELETE_DUP_MATCHES = "DELETE FROM rag_knowledge_duplicate_match WHERE new_knowledge_id = $1"
@@ -519,6 +607,30 @@ async def _log_duplicate_decision(conn, knowledge_id: int, action: str, target_i
                                   changed=action == "approve", user_id=uid)
     except Exception as e:   # noqa: BLE001 — 감사 줄 실패로 검토 처리를 되돌리지 않는다
         logger.warning("중복 의심 처리 원장 기록 실패(knowledge_id=%s, action=%s): %s", knowledge_id, action, e)
+
+
+def confluence_page_url(root_url: Optional[str], page_id: Optional[str]) -> Optional[str]:
+    """원본 페이지 주소 — 수집 주소의 호스트 + pageId(프론트 teamImport.confluencePageUrl과 같은 모양). 모르면 None."""
+    import re
+    from urllib.parse import quote
+    m = re.match(r"^(https?://[^/]+)", root_url or "")
+    return f"{m.group(1)}/pages/viewpage.action?pageId={quote(str(page_id))}" if m and page_id else None
+
+
+async def page_urls(ids: list[int]) -> dict[int, str]:
+    """지식 id → 컨플 원문 페이지 주소(11/04 승인 대기 비교 창 [원문 ↗]). 호스트 = 가장 최근 컨플 적재 배치의 수집 주소
+    (공간 적재·동기화가 쓰는 주소 — 팀마다 같은 위키). 컨플 조각이 아니거나 주소를 모르면 빠진다."""
+    if not ids:
+        return {}
+    async with get_conn() as conn:
+        root = await conn.fetchval("SELECT root_url FROM rag_import_batch WHERE root_url ~ '^https?://' ORDER BY id DESC LIMIT 1")
+        rows = await conn.fetch("SELECT id, confluence_page_id FROM rag_knowledge WHERE id = ANY($1::int[]) AND confluence_page_id IS NOT NULL", ids)
+    out = {}
+    for r in rows:
+        url = confluence_page_url(root, r["confluence_page_id"])
+        if url:
+            out[r["id"]] = url
+    return out
 
 
 async def get_duplicate_matches(knowledge_id: int) -> list[dict]:
@@ -1065,8 +1177,9 @@ async def _run_bulk_ingestion(
                 if close:
                     match_results[offset] = kept + [m for m in match_results[offset] if m["similarity"] < dup_threshold]
             db_is_duplicate = [
-                offset not in skip and bool(m) and m[0]["similarity"] >= dup_threshold for offset, m in enumerate(match_results)
-            ]
+                offset not in skip and bool(m) and m[0]["similarity"] >= dup_threshold and not batch[offset].get("keep_new")
+                for offset, m in enumerate(match_results)
+            ]   # keep_new = 사람이 미리보기 비교 창에서 "다른 내용"이라 정한 조각(11/04)
 
             # 배치 내 상호 중복 검사 — 같은 배치 안의 항목끼리는 아직 INSERT 전이라
             # find_similar_active_knowledge(DB 조회)가 서로를 못 본다(둘 다 'active'로
@@ -1078,7 +1191,7 @@ async def _run_bulk_ingestion(
                 emb_matrix = np.array(embeddings, dtype=np.float32)
                 sims = emb_matrix @ emb_matrix.T
                 for i in range(len(batch)):
-                    if db_is_duplicate[i] or i in skip:
+                    if db_is_duplicate[i] or i in skip or batch[i].get("keep_new"):
                         continue
                     best_j, best_sim = None, 0.0
                     for j in range(i):

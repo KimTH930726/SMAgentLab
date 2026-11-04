@@ -44,7 +44,17 @@ export interface CorrectionCreatePayload {
   target_id?: number | null;
   target_sub_id?: number | null;
   user_input: string;
+  user_reason?: UserReason | null;
 }
+
+/** [답변 틀림] 사유 칩(11/04, 규격 피드백) — 지식 문제(낡음·단계 빠짐) / 검색 문제(다른 시스템·근거 못 찾음) */
+export type UserReason = 'stale' | 'other_system' | 'missing_step' | 'not_found';
+export const USER_REASONS: { key: UserReason; label: string; hint: string }[] = [
+  { key: 'stale', label: '내용이 낡음', hint: '예전 기준·옛 화면 — 지식을 고쳐야 해요' },
+  { key: 'other_system', label: '다른 시스템 얘기', hint: '묻는 시스템이 아닌 다른 곳 지식으로 답했어요 — 검색 범위 문제' },
+  { key: 'missing_step', label: '단계·조건 빠짐', hint: '답이 일부만 맞아요 — 빠진 단계나 조건이 있어요' },
+  { key: 'not_found', label: '근거를 못 찾음', hint: '맞는 지식이 있는데 못 찾았거나, 지식 자체가 없어요' },
+];
 
 export interface CorrectionItem {
   id: number;
@@ -64,6 +74,7 @@ export interface CorrectionItem {
   target_sub_id: number | null;
   /** 정책 화면 직접 수정은 없음(null) */
   user_input: string | null;
+  user_reason?: UserReason | null;
   original: Record<string, unknown> | null;
   proposed: Record<string, string | null> | null;
   status: 'pending' | 'approved' | 'rejected';

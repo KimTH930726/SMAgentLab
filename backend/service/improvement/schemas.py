@@ -24,6 +24,8 @@ class CorrectionCreate(BaseModel):
     source: Optional[PolicySource] = None
     proposed: Optional[dict] = None
     source_check_id: Optional[int] = None   # 원문 확인 카드에서 연 정책의 제안 — 승인되면 그 카드도 해결(C3, #92)
+    # 채팅 [답변 틀림] 사유 칩(11/04) — 내용이 낡음 · 다른 시스템 얘기 · 단계·조건 빠짐 · 근거를 못 찾음(선택)
+    user_reason: Optional[Literal["stale", "other_system", "missing_step", "not_found"]] = None
 
 
 class PolicyChangeBody(BaseModel):

@@ -121,7 +121,8 @@ test('수동 지식 등록 — 폼 제출 후 실제로 저장되고 삭제까�
   }
 });
 
-test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아니라 앱 모달로 뜨고, 확인하면 승인 대기 탭으로', async ({ page }) => {
+test('같은 글 다시 등록 — 등록 전에 앱 안 안내로 막고(브라우저 alert 아님), 저장 요청을 보내지 않는다', async ({ page }) => {
+  // 11/04: 등록 순간 비슷한 지식 확인 — 같은 글은 [등록] 전에 막힌다(비슷한 글의 세 갈래는 knowledge-similar-review.spec.ts)
   // 2026-10-07: 이 안내가 브라우저 기본 alert으로 떠서 디자인이 깨졌다 — 앱 모달(DialogHost)로 바꾼 회귀 방지.
   page.on('dialog', (d) => { throw new Error(`브라우저 기본 대화상자가 떴습니다(앱 모달이어야 함): ${d.message()}`); });
   const runId = `${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
@@ -134,6 +135,8 @@ test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아
   const first = await page.request.post('/api/knowledge', { headers: authHeader, data: { namespace: NAMESPACE, content } });
   expect(first.ok()).toBeTruthy();
   const ids: number[] = [(await first.json()).id];
+  // 이 문장은 실행마다 비슷해서(마커만 다름) 지난 실행 잔여물 때문에 첫 등록이 승인 대기로 갈 수 있다 — 같은 글 확인은 사용 중 지식과만 하므로 사용 중으로
+  psql(`UPDATE rag_knowledge SET status = 'active' WHERE id = ${ids[0]}`);
 
   try {
     await page.getByRole('link', { name: 'Admin' }).click();
@@ -141,22 +144,17 @@ test('유사 지식 등록 — 승인 대기 안내가 브라우저 alert이 아
     await selectDomain(page, NAMESPACE, LABEL);
     await page.getByRole('button', { name: '지식 등록', exact: true }).click();
     await page.getByText('직접 입력').click();
-    const createResponse = page.waitForResponse((r) => r.url().endsWith('/api/knowledge') && r.request().method() === 'POST')   // 판정(/locate)은 빼고 등록만;
+    let posted = 0;
+    page.on('request', (r) => { if (r.url().endsWith('/api/knowledge') && r.method() === 'POST') posted += 1; });
     await page.locator('textarea:visible').first().fill(content);
     await page.getByRole('button', { name: '넣을 곳 확인' }).click();
     await chooseLocation(page, NAMESPACE);
+    const checked = page.waitForResponse((r) => r.url().endsWith('/api/knowledge/similar') && r.request().method() === 'POST');
     await page.getByRole('button', { name: '등록', exact: true }).click();
-    const second = await (await createResponse).json();
-    ids.push(second.id);
-    expect(second.pending_review).toBeTruthy();
-
-    const dialog = page.getByTestId('app-dialog');
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('승인 대기');
-    await page.getByTestId('app-dialog-ok').click();
-    await expect(dialog).toHaveCount(0);
-    // 승인 대기 탭으로 이동해 방금 등록한 항목이 보인다(이 탭엔 검색창 없음)
-    await expect(page.getByText(marker).first()).toBeVisible({ timeout: 10_000 });
+    expect((await (await checked).json()).same).toBe(ids[0]);
+    await expect(page.getByTestId('similar-check-note')).toContainText(`같은 글이 이미 있어요(#${ids[0]})`);
+    expect(posted).toBe(0);   // 저장 요청 없음
+    expect(psql(`SELECT count(*) FROM rag_knowledge WHERE content LIKE '${marker}%'`)).toBe('1');
   } finally {
     for (const id of ids) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
     const g = await page.request.get(`/api/knowledge/glossary?namespace=${encodeURIComponent(NAMESPACE)}`, { headers: authHeader }).catch(() => null);

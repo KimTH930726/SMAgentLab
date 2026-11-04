@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { Bot, User, ChevronDown, ChevronUp, CheckCircle, Database, BarChart2, Copy, Check } from 'lucide-react';
@@ -17,6 +17,7 @@ import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { CorrectionAnalysis } from './CorrectionAnalysis';
 import { getCorrectionStatus } from '../../api/corrections';
 import type { ChatMessage, ClarifyOption, CollectionSuggest, TermNote } from '../../types';
+import { getFreshness } from '../../api/knowledge';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -420,22 +421,9 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
               {!evidenceOpen && nReviewing > 0 && <span className="ml-1.5 text-amber-600 dark:text-amber-400">· 정정 검토 중</span>}
             </button>
           )}
-          {/* Search results */}
+          {/* Search results — 최신성 배지는 펼쳤을 때만 받는다(EvidenceList, 11/04) */}
           {showEvidence && message.results && message.results.length > 0 && (
-            <div className="space-y-1.5">
-              <p className="text-xs text-slate-500 font-medium">
-                검색된 문서 {message.results.length}건
-              </p>
-              {message.results.map((result, idx) => (
-                <SearchResultCard
-                  key={result.id}
-                  result={result}
-                  defaultOpen={false}
-                  index={idx}
-                  underReview={underReview?.knowledge.includes(result.id)}
-                />
-              ))}
-            </div>
+            <EvidenceList results={message.results} underReview={underReview?.knowledge} />
           )}
 
           {/* Policy citations — rag_knowledge 검색결과(results)와 별개 출처이므로 분리된 섹션으로 표시 */}
@@ -568,6 +556,28 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
           {message.messageId != null && <CorrectionReceipt messageId={message.messageId} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+
+/** 근거 카드 목록 — 펼칠 때만 최신성(마지막 검토·기한 지남·담당)을 한 번에 받는다(11/04). 실패해도 카드는 그대로(배지만 없음, 로그) */
+function EvidenceList({ results, underReview }: { results: NonNullable<ChatMessage['results']>; underReview?: number[] }) {
+  const ids = results.map((r) => r.id);
+  const fresh = useQuery({
+    queryKey: ['freshness', ids.join(',')],
+    queryFn: () => getFreshness(ids.slice(0, 50)),
+    staleTime: 300_000,
+    retry: false,
+  });
+  useEffect(() => { if (fresh.isError) console.warn('근거 최신성 불러오기 실패', fresh.error); }, [fresh.isError, fresh.error]);
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs text-slate-500 font-medium">검색된 문서 {results.length}건</p>
+      {results.map((result, idx) => (
+        <SearchResultCard key={result.id} result={result} defaultOpen={false} index={idx}
+          underReview={underReview?.includes(result.id)} freshness={fresh.data?.[String(result.id)]} />
+      ))}
     </div>
   );
 }

@@ -34,6 +34,9 @@ import { updateConfluencePAT, deleteConfluencePAT } from '../../api/auth';
 import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { useAuthStore } from '../../store/useAuthStore';
 import { TabGuide } from './TabGuide';
+import { ReviewDueTab, useReviewDueCount } from './ReviewDueTab';
+import { SimilarKnowledgeStep } from './SimilarKnowledgeStep';
+import { checkSimilar, checkSimilarBatch, getPageUrls, recordSimilarDecision, type SimilarMatch, type SimilarResult } from '../../api/knowledge';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Badge } from '../ui/Badge';
@@ -155,10 +158,11 @@ export function KnowledgeTable() {
   const dropInto = () => setSearchParams((p) => { const n = new URLSearchParams(p); n.delete('into'); return n; }, { replace: true });
   useEffect(() => { if (into && selectedNs && into !== selectedNs) dropInto(); },   // eslint-disable-line react-hooks/exhaustive-deps
     [selectedNs]);
-  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review'>(() => {
-    const t = searchParams.get('tab');   // ?tab=review — 컬렉션 관리 › 홈 [승인 대기] 카드(11/03)
-    return t === 'ingest' || t === 'review' ? t : 'list';
-  });   // 정정 요청은 품질 메뉴로(10/21)
+  const [subTab, setSubTab] = useState<'list' | 'ingest' | 'review' | 'due'>(() => {
+    const t = searchParams.get('tab');   // ?tab=review — 컬렉션 관리 › 홈 [승인 대기] 카드(11/03) · ?tab=due — [검토 필요] 카드(11/04)
+    return t === 'ingest' || t === 'review' || t === 'due' ? t : 'list';
+  });
+  const due = useReviewDueCount(selectedNs, true);   // 정정 요청은 품질 메뉴로(10/21)
   // 조회 탭 state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<KnowledgeFormData>(defaultForm);
@@ -357,7 +361,24 @@ export function KnowledgeTable() {
             <span className="ml-1 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-400 px-1.5 py-0.5 rounded-full">{pendingItems.length}</span>
           )}
         </button>
+        <button
+          onClick={() => setSubTab('due')}
+          data-testid="tab-review-due"
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 -mb-px ${
+            subTab === 'due'
+              ? 'border-indigo-500 text-indigo-400 bg-slate-800/50'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+          title="검토 주기가 지난 원문 페이지 — 채팅에 많이 쓰인 순"
+        >
+          <Clock className="w-4 h-4" />
+          검토 필요
+          {(due.n ?? 0) > 0 && (
+            <span className="ml-1 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-400 px-1.5 py-0.5 rounded-full">{due.n}</span>
+          )}
+        </button>
       </div>
+      {subTab === 'due' && <ReviewDueTab />}
 
       {/* ── 서브탭 1: 조회 ── */}
       {subTab === 'list' && (
@@ -648,6 +669,10 @@ interface ReviewChunk {
    * 교체된다(예전엔 여기서 버려져 재등록마다 옛 버전과 새 버전이 함께 검색됐음). */
   confluencePageId?: string | null;
   confluenceVersion?: number | null;
+  /** 비교 창에서 [새로 등록](11/04) — 중복 의심이어도 승인 대기로 안 보냄 */
+  keepNew?: boolean;
+  /** 비교 창에서 정한 것(배지 표시용) */
+  decided?: 'skip' | 'merge' | 'new';
 }
 
 // analyzer.py의 chunk_strategy 어휘(section/paragraph/fixed/auto) — 파일 업로드와
@@ -663,7 +688,8 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   isOpen: boolean;
   onClose: () => void;
   chunks: ReviewChunk[];
-  onConfirm: (selected: ReviewChunk[], loc: ChosenLocation | null) => Promise<void>;
+  /** 등록이 실제로 됐으면 true — 비교 결정은 그때만 AI 감사 원장에(실패·교체 확인 취소면 안 남김) */
+  onConfirm: (selected: ReviewChunk[], loc: ChosenLocation | null) => Promise<boolean>;
   /** 컬렉션 화면에서 넘어온 넣을 곳(?into=) — 없으면 AI가 정한다(E2) */
   preset?: string | null;
   loading: boolean;
@@ -681,11 +707,63 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
   const [loc, setLoc] = useState<ChosenLocation | null>(null);
   // 넣을 곳 판정에 보내는 글 = 조각 앞부분(문서 단위 — 실측과 같은 단위). 선택을 바꿔도 다시 묻지 않는다
   const locateText = useMemo(() => chunks.map(c => c.text).join('\n\n').slice(0, 2500), [chunks]);
+  // 조각마다 비슷한 지식(11/04) — 넣을 곳이 정해지면 등록과 같은 규칙으로. 같은 원본의 옛 조각은 서버가 빼고 비교
+  const target = loc?.namespace ?? null;
+  const similar = useQuery({
+    queryKey: ['similar-batch', target, chunks.map(c => c.text.length + ':' + c.text.slice(0, 40)).join('|')],
+    queryFn: () => checkSimilarBatch(target!, chunks.map(c => ({ content: c.text, confluence_page_id: c.confluencePageId ?? null, source_document_id: c.sourceDocumentId ?? null }))),
+    enabled: isOpen && !!target && chunks.length > 0 && chunks.length <= 500,
+    staleTime: 60_000,
+  });
+  const simOf = (idx: number) => similar.data?.[chunks.findIndex(c => c.idx === idx)];
+  const [comparing, setComparing] = useState<number | null>(null);
+  const qc = useQueryClient();
 
   useEffect(() => {
     setRows(chunks.map(c => ({ ...c, selected: true })));
     setExpandedIdx(new Set());
   }, [chunks]);
+  // 같은 글 조각은 배지만 — 체크를 풀지 않는다. 서버가 같은 원본 안 반복은 건너뛰고 다른 원본의 같은 글은 승인 대기로 보낸다
+  // (그 원본이 지워지면 내용이 사라지므로, 독립 리뷰 H1·11/04 재리뷰). 화면이 기본으로 빼면 그 규칙을 뒤집는다
+  const decide = (idx: number, patch: Partial<ReviewChunk>) => setRows(prev => prev.map(r => r.idx === idx ? { ...r, ...patch } : r));
+  const cmp = comparing === null ? null : simOf(comparing);
+  const cmpRow = comparing === null ? null : rows.find(r => r.idx === comparing) ?? null;
+  // 등록 안 함 · 새로 등록은 고른 값만 조각에 두고, 원장(AI 감사)은 등록이 끝난 뒤에 — 창을 취소하거나 다시 체크하면 남지 않게(리뷰 L3)
+  const [pendingDecisions, setPendingDecisions] = useState<Record<number, { m: SimilarMatch; action: 'reject' | 'approve'; n: number }>>({});
+  // 창은 숨겼다 보였다만 해서(언마운트 안 됨) 새 미리보기·분할 방식 바꾸기·넣을 곳 바꾸기에 옛 결정이 남았다(리뷰 3차 M) — 조각 상태와 같이 비운다
+  useEffect(() => { setPendingDecisions({}); }, [chunks, target]);
+  const skipChunk = { isPending: false, mutate: ({ idx, m }: { idx: number; m: SimilarMatch }) => {
+    setPendingDecisions(p => ({ ...p, [idx]: { m, action: 'reject', n: cmp?.n ?? 1 } }));
+    decide(idx, { selected: false, keepNew: false, decided: 'skip' }); setComparing(null);
+  } };
+  const mergeChunk = useMutation({
+    mutationFn: async ({ m, text }: { idx: number; m: SimilarMatch; text: string }) => {
+      await updateKnowledge(m.id, { content: text });
+      await recordSimilarDecision(target!, m, 'merge', cmp?.n ?? 1).catch((e) => console.warn('합치기 감사 기록 실패', e));
+    },
+    onSuccess: (_r, v) => {
+      decide(v.idx, { selected: false, keepNew: false, decided: 'merge' }); setComparing(null);
+      qc.invalidateQueries({ queryKey: ['knowledge', target] });
+      qc.invalidateQueries({ queryKey: ['similar-batch', target] });
+    },
+    onError: (e) => showError(e),
+  });
+  const newChunk = { isPending: false, mutate: ({ idx, m }: { idx: number; m: SimilarMatch }) => {
+    setPendingDecisions(p => ({ ...p, [idx]: { m, action: 'approve', n: cmp?.n ?? 1 } }));
+    decide(idx, { selected: true, keepNew: true, decided: 'new' }); setComparing(null);
+  } };
+  const confirm = async () => {
+    const chosen = rows.filter(r => r.selected);
+    if (!(await onConfirm(chosen, loc))) return;   // 실패·취소 — 결정은 남겨 두고(다시 누르면 그때) 원장엔 안 씀
+    setPendingDecisions({});
+    // 등록이 끝난 뒤 — 실제로 그대로 둔 결정만(빼 둔 조각을 다시 체크했으면 '등록 안 함'은 버림, 새로 등록은 체크된 것만)
+    const sel = new Set(chosen.map(r => r.idx));
+    await Promise.all(Object.entries(pendingDecisions)
+      .filter(([idx, d]) => (d.action === 'approve') === sel.has(Number(idx)))
+      .map(([, d]) => recordSimilarDecision(target!, d.m, d.action, d.n).catch((e) => console.warn('비교 결정 감사 기록 실패', e))));
+  };
+  // [비교]로 정할 조각만 — '같은 글'은 배지만이라 세지 않는다(E2E 에이전트 결함 2)
+  const similarCount = rows.filter(r => simOf(r.idx)?.same == null && (simOf(r.idx)?.matches.length ?? 0) > 0 && !r.decided).length;
 
   const handleStrategyChange = async (value: string) => {
     if (!onRestrategize || value === (currentStrategy ?? 'auto')) return;
@@ -746,6 +824,14 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
           </div>
         )}
 
+        {target && similar.isLoading && <p className="text-xs text-slate-500">비슷한 기존 지식 확인 중…</p>}
+        {similar.isError && <p className="text-xs text-amber-700 dark:text-amber-400">비슷한 지식 확인을 못 했어요 — 그대로 등록하면 비슷한 조각은 승인 대기로 가요.</p>}
+        {similarCount > 0 && (
+          <div className="rounded-lg border px-3 py-2 text-xs bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/30 dark:border-amber-700/40 dark:text-amber-300"
+            data-testid="chunk-similar-summary" title="정하지 않은 조각은 등록하면 승인 대기로 가요(담당자가 비교해 정해요)">
+            비슷한 지식이 이미 있는 조각 {similarCount}개 — [비교]로 정하거나, 그대로 등록하면 승인 대기로 가요
+          </div>
+        )}
         {/* 전체 선택 / 카운터 */}
         <div className="flex items-center justify-between pb-2 border-b border-slate-700/60">
           <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none">
@@ -782,6 +868,24 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
                         </span>
                       )}
                       <span className="text-[10px] text-slate-600">{chunk.text.length}자</span>
+                      {(() => {
+                        const s = simOf(chunk.idx);
+                        if (chunk.decided) return (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-200" data-testid={`chunk-decided-${chunk.idx}`}>
+                            {chunk.decided === 'skip' ? '등록 안 함' : chunk.decided === 'merge' ? '기존 것에 합침' : '새로 등록'}</span>
+                        );
+                        if (s?.same != null) return (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300" data-testid={`chunk-same-${chunk.idx}`}
+                            title="공백만 다른 같은 글이 이미 있어요 — 필요 없으면 체크를 풀어 주세요. 그대로 등록하면 같은 원본 안 반복은 건너뛰고, 다른 원본이면 승인 대기로 가요">같은 글 #{s.same}</span>
+                        );
+                        if (!s?.matches.length) return null;
+                        return (
+                          <button type="button" onClick={() => setComparing(chunk.idx)} data-testid={`chunk-similar-${chunk.idx}`}
+                            title="비슷한 기존 지식과 비교해 등록 안 함 · 합치기 · 새로 등록을 골라요"
+                            className="text-[10px] px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-600/50 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50">
+                            비슷한 지식 #{s.matches[0].id} · {(s.matches[0].similarity * 100).toFixed(0)}% [비교]</button>
+                        );
+                      })()}
                     </div>
                     <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words">
                       {expanded ? chunk.text : preview}{!expanded && hasMore ? '...' : ''}
@@ -805,12 +909,18 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
           )}
         </div>
 
+        {cmp && cmpRow && cmp.matches.length > 0 && (
+          <SimilarKnowledgeStep content={cmpRow.text} matches={cmp.matches} n={cmp.n} canMerge={!!loc?.writable}
+            busy={skipChunk.isPending || mergeChunk.isPending || newChunk.isPending}
+            onSkip={(m) => skipChunk.mutate({ idx: cmpRow.idx, m })} onMerge={(m, text) => mergeChunk.mutate({ idx: cmpRow.idx, m, text })}
+            onNew={(m) => newChunk.mutate({ idx: cmpRow.idx, m })} onClose={() => setComparing(null)} />
+        )}
         <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={loading}>취소</Button>
           <Button variant="primary" size="sm" loading={loading}
             disabled={selectedCount === 0 || !loc}
             title={!loc ? '넣을 곳을 먼저 골라 주세요' : undefined}
-            onClick={() => onConfirm(rows.filter(r => r.selected), loc)}>
+            onClick={() => void confirm()}>
             <CheckCircle className="w-3.5 h-3.5" />{loc && !loc.writable ? `승인 요청 (${selectedCount}건)` : `선택 항목 등록 (${selectedCount}건)`}
           </Button>
         </div>
@@ -1237,6 +1347,12 @@ function ReviewTab({ items, canModify, onResolved }: {
     queryFn: () => getDuplicateMatches(selectedItem!.id),
     enabled: selectedItem !== null,
   });
+  const pageUrls = useQuery({   // 신규 + 비교 후보의 컨플 원문 주소(11/04)
+    queryKey: ['page-urls', selectedItem?.id, matches.map((m) => m.id).join(',')],
+    queryFn: () => getPageUrls([selectedItem!.id, ...matches.map((m) => m.id)].slice(0, 50)),
+    enabled: !!selectedItem,
+    staleTime: 300_000,
+  });
   // 유사도 높은 순 정렬 — 백엔드가 이미 정렬해 오지만 방어적으로 한번 더 보장
   const sortedMatches = [...matches].sort((a, b) => b.similarity - a.similarity);
   // 비교할 기존 지식이 없으면(읽기 제한 보류 등) 차이 대신 원문 — 빈 차이 화면이면 무엇을 승인하는지 못 본다(11/03 E2E)
@@ -1323,6 +1439,19 @@ function ReviewTab({ items, canModify, onResolved }: {
                   </button>
                 ))}
               </div>
+              {/* 컨플 원문 페이지(11/04) — 페이지끼리 겹치는 내용은 결국 원문에서 정리할 일이라 바로 열 수 있게 */}
+              {pageUrls.data && (pageUrls.data[String(selectedItem.id)] || (diffTargetId != null && pageUrls.data[String(diffTargetId)])) && (
+                <div className="flex items-center gap-2 text-xs" data-testid="review-page-links">
+                  {pageUrls.data[String(selectedItem.id)] && (
+                    <a href={pageUrls.data[String(selectedItem.id)]} target="_blank" rel="noreferrer" className="text-amber-700 hover:underline dark:text-amber-400"
+                      title="신규 등록 조각의 컨플 원문 페이지">신규 원문 ↗</a>
+                  )}
+                  {diffTargetId != null && pageUrls.data[String(diffTargetId)] && (
+                    <a href={pageUrls.data[String(diffTargetId)]} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline dark:text-indigo-400"
+                      title="비교 중인 기존 지식의 컨플 원문 페이지">기존 #{diffTargetId} 원문 ↗</a>
+                  )}
+                </div>
+              )}
               {shown === 'diff' && !matchesLoading && sortedMatches.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5" data-testid="review-diff-targets">
                   <span className="text-[11px] text-slate-500">비교 대상(병합 대상)</span>
@@ -1516,13 +1645,14 @@ function FileUploadForm({ namespace, preset, onSuccess, onCancel }: {
     try {
       const partial = partialSourceDocs(selected, reviewChunks);
       const items = selected.map(c => ({ content: c.text, heading_path: c.headingPath ?? null,
-        source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
+        source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId), keep_new: !!c.keepNew }));
       const result = await bulkCreateConfirmed(namespace, items, file!.name, 'file_upload', loc);
-      if (!result) return;
+      if (!result) return false;
       setDone(doneText(items.length, loc));
       setShowReview(false);
       onSuccess({ jobId: result.job_id, target: loc });
-    } catch (e: any) { setError(e.message || '오류 발생'); }
+      return true;
+    } catch (e: any) { setError(e.message || '오류 발생'); return false; }
     finally { setLoading(false); }
   };
 
@@ -1633,13 +1763,14 @@ function TextSplitForm({ namespace, preset, onSuccess, onCancel }: {
     try {
       const partial = partialSourceDocs(selected, reviewChunks);
       const items = selected.map(c => ({ content: c.text, heading_path: c.headingPath ?? null,
-        source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId) }));
+        source_document_id: c.sourceDocumentId ?? null, source_document_partial: !!c.sourceDocumentId && partial.has(c.sourceDocumentId), keep_new: !!c.keepNew }));
       const result = await bulkCreateConfirmed(namespace, items, '텍스트 직접입력', 'paste_split', loc);
-      if (!result) return;
+      if (!result) return false;
       setDone(doneText(items.length, loc));
       setShowReview(false);
       onSuccess({ jobId: result.job_id, target: loc });
-    } catch (e: any) { setError(e.message || '오류 발생'); }
+      return true;
+    } catch (e: any) { setError(e.message || '오류 발생'); return false; }
     finally { setLoading(false); }
   };
 
@@ -1706,14 +1837,20 @@ function ManualForm({ namespace, preset, onSuccess, onCancel }: {
   const [loc, setLoc] = useState<ChosenLocation | null>(null);
   usePrefetchLocate(form.content, preset, !locating);   // 쓰다 멈추면 넣을 곳 판단을 미리(10/28 — 확인 누르면 바로)
 
+  // 등록 전 확인(11/04) — 비슷한 게 있을 때만 비교 창, 없으면 바로 등록
+  const [similar, setSimilar] = useState<SimilarResult | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkErr, setCheckErr] = useState<string | null>(null);
+  const target = loc?.namespace ?? namespace;
   const createMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (keepNew: boolean = false) =>
       createKnowledge({
-        namespace: loc?.namespace ?? namespace,
+        namespace: target,
         content: form.content,
         decision_id: loc?.decisionId ?? null,
         location_choice: loc?.choice ?? null,
         override_reason: loc?.overrideReason ?? null,
+        keep_new: keepNew,
       }),
     onSuccess: (created) => {
       const target = loc?.namespace ?? namespace;
@@ -1729,13 +1866,53 @@ function ManualForm({ namespace, preset, onSuccess, onCancel }: {
       setDonePending(!!created.pending_review);
       setForm(defaultForm);
       setLocating(false);
+      setSimilar(null);
       // 쓴·버린 판단은 이제 원장에서 확정·삭제됐다 — 캐시에 남기면 같은 내용을 다시 붙여넣을 때 지워진 판단을 다시 쓴다(10/28 리뷰 M1)
       qc.removeQueries({ queryKey: ['locate'] });
       onSuccess({ pendingReview: !!created.pending_review, target: loc });
     },
     // 실패(특히 403 — 판단이 지워졌거나 오래됨)면 판단을 버리고 다시 받게 — 안 그러면 내용을 바꿀 때까지 같은 판단으로 계속 막힌다(M1·L3)
-    onError: () => { qc.removeQueries({ queryKey: ['locate'] }); setLocating(false); },
+    onError: () => { qc.removeQueries({ queryKey: ['locate'] }); setLocating(false); setSimilar(null); },
   });
+  const finish = (msg: string) => {
+    setDone(msg); setDonePending(false); setForm(defaultForm); setLocating(false); setSimilar(null);
+    qc.removeQueries({ queryKey: ['locate'] });   // 안 쓴 위치 판단은 서버가 하루 뒤 정리
+  };
+  const skip = useMutation({
+    mutationFn: (m: SimilarMatch) => recordSimilarDecision(target, m, 'reject', similar?.n ?? 1),
+    onSuccess: (_r, m) => finish(`등록하지 않았어요 — 같은 내용이 #${m.id}에 있어요.`),
+    onError: (e) => showError(e),
+  });
+  const merge = useMutation({
+    mutationFn: async ({ m, text }: { m: SimilarMatch; text: string }) => {
+      await updateKnowledge(m.id, { content: text });
+      // 합친 뒤 기록 — 실패해도 수정은 끝났으니 화면은 성공으로(감사 줄만 빠짐, 서버 로그)
+      await recordSimilarDecision(target, m, 'merge', similar?.n ?? 1).catch((e) => console.warn('합치기 감사 기록 실패', e));
+      return m;
+    },
+    onSuccess: (m) => {
+      qc.invalidateQueries({ queryKey: ['knowledge', target] });
+      qc.invalidateQueries({ queryKey: ['knowledge-vector-search', target] });
+      finish(`#${m.id}에 합쳤어요 — 새 조각은 만들지 않았어요.`);
+    },
+    onError: (e) => showError(e),
+  });
+  const register = async () => {
+    setDone(''); setCheckErr(null); setChecking(true);
+    try {
+      const r = await checkSimilar(target, form.content);
+      if (r.same != null) { setCheckErr(`같은 글이 이미 있어요(#${r.same}) — 공백만 다른 같은 지식은 다시 등록하지 않아요.`); return; }
+      if (r.matches.length === 0) { createMutation.mutate(false); return; }
+      setSimilar(r);
+    } catch (e) {
+      // 확인이 안 되면 등록은 막지 않는다 — 서버 등록이 같은 규칙으로 승인 대기로 보낸다(대체 처리는 보이게)
+      console.warn('등록 전 비슷한 지식 확인 실패 — 바로 등록', e);
+      setCheckErr('비슷한 지식 확인을 못 했어요 — 그대로 등록하고, 비슷한 게 있으면 승인 대기로 가요.');
+      createMutation.mutate(false);
+    } finally {
+      setChecking(false);
+    }
+  };
 
   return (
     <div className="bg-slate-800/60 rounded-xl border border-indigo-200 dark:border-indigo-800/40 p-5 space-y-3">
@@ -1750,7 +1927,14 @@ function ManualForm({ namespace, preset, onSuccess, onCancel }: {
       {locating && <LocationPicker text={form.content} preset={preset} onChange={setLoc} />}
 
       {done && <p className={`text-sm font-medium ${donePending ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>{done}</p>}
+      {checkErr && <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="similar-check-note">{checkErr}</p>}
       {createMutation.isError && <p className="text-xs text-rose-600 dark:text-rose-400">{String(createMutation.error)}</p>}
+      {similar && (
+        <SimilarKnowledgeStep content={form.content} matches={similar.matches} n={similar.n} canMerge={!!loc?.writable}
+          busy={createMutation.isPending || skip.isPending || merge.isPending}
+          onSkip={(m) => skip.mutate(m)} onMerge={(m, text) => merge.mutate({ m, text })} onNew={() => createMutation.mutate(true)}
+          onClose={() => setSimilar(null)} />
+      )}
 
       <div className="flex gap-2 justify-end pt-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>취소</Button>
@@ -1760,9 +1944,9 @@ function ManualForm({ namespace, preset, onSuccess, onCancel }: {
           </Button>
         ) : (
           <Button variant="primary" size="sm"
-            loading={createMutation.isPending}
-            onClick={() => createMutation.mutate()}
-            disabled={createMutation.isPending || !form.content.trim() || !loc}>
+            loading={createMutation.isPending || checking}
+            onClick={() => void register()}
+            disabled={createMutation.isPending || checking || !form.content.trim() || !loc}>
             {loc && !loc.writable ? '승인 요청' : '등록'}
           </Button>
         )}
@@ -1923,15 +2107,17 @@ function UrlForm({ namespace, preset, onSuccess, onCancel, onImportStarted }: {
         confluence_version: c.confluenceVersion ?? null,
         source_document_id: c.sourceDocumentId ?? null,
         source_document_partial: !!c.sourceDocumentId && partialUrl.has(c.sourceDocumentId),
+        keep_new: !!c.keepNew,
       }));
       const srcName = sourceMeta?.name ?? url;
       const srcType = sourceMeta?.type ?? (isConfluence ? 'confluence' : 'web');
       const result = await bulkCreateConfirmed(namespace, items, srcName, srcType, loc);
-      if (!result) return;
+      if (!result) return false;
       setDone(`"${srcName}" — ${doneText(items.length, loc)}`);
       setShowReview(false);
       onSuccess({ jobId: result.job_id, target: loc });
-    } catch (e: any) { setError(e.message || '오류 발생'); }
+      return true;
+    } catch (e: any) { setError(e.message || '오류 발생'); return false; }
     finally { setLoading(false); }
   };
 

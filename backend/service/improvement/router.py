@@ -11,6 +11,10 @@ from service.improvement.schemas import (
     ApproveBody, CorrectionCreate, PolicyChangeBody, ProposedBody, RejectBody, RetargetBody, SeenBody, RedraftBody,
 )
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/corrections", tags=["corrections"])
 
 
@@ -48,12 +52,19 @@ async def create_correction(body: CorrectionCreate, user: dict = Depends(get_cur
     if not user_input:
         raise HTTPException(status_code=400, detail="어디가 틀렸는지 한 줄 적어 주세요.")
     try:
-        return await service.create_item(
+        created = await service.create_item(
             body.namespace, user, target_type=body.target_type, target_id=body.target_id,
             target_sub_id=body.target_sub_id, message_id=body.message_id, user_input=user_input,
         )
     except service.ConflictError as e:
         raise _conflict(e)
+    if body.user_reason and created.get("id"):   # 사유 칩 — 신고 줄에 그대로(AI 판정과 별개, 사람 값)
+        try:
+            await service.set_user_reason(created["id"], body.user_reason)
+            created = {**created, "user_reason": body.user_reason}
+        except Exception as e:  # noqa: BLE001 — 신고는 이미 저장됨: 다시 보내면 "이미 검토 중"이 되므로 실패로 돌려주지 않는다(리뷰 L6)
+            logger.warning("신고 사유 저장 실패(item=%s): %s", created["id"], e)
+    return created
 
 
 @router.post("/policy-change", status_code=201)

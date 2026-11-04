@@ -11,7 +11,8 @@ import {
 import { getMessages } from '../../api/conversations';
 import { MessageItem } from './MessageItem';
 import { useCorrectionStore } from '../../store/useCorrectionStore';
-import { createCorrection, getMyCorrections, markCorrectionsSeen, POLICY_CHANGE_TARGETS, type PolicyChangeTarget } from '../../api/corrections';
+import { createCorrection, getMyCorrections, markCorrectionsSeen, POLICY_CHANGE_TARGETS, USER_REASONS, type PolicyChangeTarget, type UserReason } from '../../api/corrections';
+import { clsx } from 'clsx';
 import type { ChatMessage, ClarifyOption, ClarifyPrompt, CollectionSuggest, PolicyCitation, ListAnswer, TermNote } from '../../types';
 import type { PipelineStep } from '../../store/useStreamStore';
 import { showError } from '../../store/useDialogStore';
@@ -195,6 +196,8 @@ export function ChatContainer() {
   const cancelCorrection = useCorrectionStore((s) => s.cancel);
   const markSubmitted = useCorrectionStore((s) => s.markSubmitted);
   const [correctionText, setCorrectionText] = useState('');
+  const [correctionReason, setCorrectionReason] = useState<UserReason | null>(null);   // 사유 칩(11/04) — 고르면 한 줄은 선택
+  useEffect(() => { setCorrectionReason(null); }, [correction]);   // 다른 답변 신고·취소·접수 — 고른 칩을 남기지 않는다
   const [correctionError, setCorrectionError] = useState<string | null>(null);
   const [correctionNotice, setCorrectionNotice] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -428,13 +431,15 @@ export function ChatContainer() {
   // 접수 맥락은 변수로 넘긴다 — AI 판정에 몇 초 걸리는 사이 대화를 옮기면 정정 모드가 해제돼(active=null)
   // 완료 시점의 상태를 읽으면 접수 카드·배지 갱신이 깨진다(/code-review). 서버엔 이미 저장된 상태.
   const submitCorrection = useMutation({
-    mutationFn: ({ ctx, text }: { ctx: NonNullable<typeof correction>; text: string }) => createCorrection({
+    mutationFn: ({ ctx, text, reason }: { ctx: NonNullable<typeof correction>; text: string; reason: UserReason | null }) => createCorrection({
       namespace: ctx.namespace,
       message_id: ctx.messageId ?? null,
       target_type: ctx.selected.targetType,
       target_id: ctx.selected.targetId ?? null,
       target_sub_id: ctx.selected.subId ?? null,
-      user_input: text,
+      // 칩만 고르고 한 줄을 비우면 칩 이름이 한 줄 — AI 분석·담당자 카드가 같은 문장으로 읽는다
+      user_input: text || USER_REASONS.find((r) => r.key === reason)?.label || '',
+      user_reason: reason,
     }),
     onSuccess: (result, { ctx }) => {
       if (ctx.messageId != null) markSubmitted(ctx.messageId, result, ctx.selected);
@@ -442,6 +447,7 @@ export function ChatContainer() {
       if (useCorrectionStore.getState().active === ctx) {
         cancelCorrection();
         setCorrectionText('');
+        setCorrectionReason(null);
       }
       qc.invalidateQueries({ queryKey: ['correction-status'] });
       qc.invalidateQueries({ queryKey: ['corrections-pending-count'] });
@@ -513,12 +519,12 @@ export function ChatContainer() {
     });
   };
 
-  const canSubmitCorrection = !!correction && !!correctionText.trim() && !submitCorrection.isPending;
+  const canSubmitCorrection = !!correction && (!!correctionText.trim() || !!correctionReason) && !submitCorrection.isPending;
   const handleSend = () => {
     if (correction) {
       if (canSubmitCorrection && correction) {
         setCorrectionError(null);
-        submitCorrection.mutate({ ctx: correction, text: correctionText.trim() });
+        submitCorrection.mutate({ ctx: correction, text: correctionText.trim(), reason: correctionReason });
       }
       return;
     }
@@ -596,6 +602,20 @@ export function ChatContainer() {
                 <X className="w-3.5 h-3.5" />취소
               </button>
             </div>
+            {correction.selected.targetType === 'auto' && (
+              // 규격 사유(11/04 태훈 "정해진 규격을 주는 게 덜 귀찮고 정확") — 하나 고르면 한 줄은 안 써도 돼요
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5" role="group" aria-label="틀린 이유" data-testid="correction-reasons">
+                {USER_REASONS.map((r) => (
+                  <button key={r.key} type="button" aria-pressed={correctionReason === r.key} title={r.hint}
+                    onClick={() => setCorrectionReason(correctionReason === r.key ? null : r.key)} disabled={submitCorrection.isPending}
+                    className={clsx('rounded-full border px-2.5 py-0.5', correctionReason === r.key
+                      ? 'border-rose-600 bg-rose-600 text-white dark:border-rose-500 dark:bg-rose-500'
+                      : 'border-rose-300 text-rose-700 hover:bg-rose-100 dark:border-rose-700/60 dark:text-rose-300 dark:hover:bg-rose-900/40')}>
+                    {r.label}</button>
+                ))}
+                <span className="text-slate-500">고르면 한 줄은 선택</span>
+              </div>
+            )}
             {submitCorrection.isPending && (
               <p className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400 animate-pulse">
                 <Sparkles className="w-3.5 h-3.5" />

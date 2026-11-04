@@ -137,24 +137,26 @@ async def valid_documents(conn, ns_id: int, doc_ids: list[int]) -> list[int]:
     return sorted(r["id"] for r in rows)
 
 
-async def replacing_documents(conn, ns_id: int, doc_ids: list[int], page_ids: list[str] = ()) -> list[int]:
+async def replacing_documents(conn, ns_id: int, doc_ids: list[int], page_ids: list[str] = (), *, drafts_anywhere: bool = False) -> list[int]:
     """이 등록이 대체하는 원문(자기 자신 포함 — 다시 분할) — 그 원문들의 기존 청크는 옛 버전이라 중복 비교에서 빼고 전환 때 폐기.
 
     page_ids: 이 등록에 실린 컨플루언스 페이지 — 그 페이지의 사용 중 원문도 대체 대상(리뷰 2026-10-12: 요청의 원문 id가 무효로 끊겨도
-    페이지 교체는 그 페이지 조각을 전부 폐기하는데, 확인은 그 원문을 안 봐서 사람이 고친 조각이 확인 없이 사라질 수 있었다)."""
+    페이지 교체는 그 페이지 조각을 전부 폐기하는데, 확인은 그 원문을 안 봐서 사람이 고친 조각이 확인 없이 사라질 수 있었다).
+    drafts_anywhere(11/04, 조각 미리보기 확인 — 읽기만): 미리보기 초안은 미리보기한 컬렉션에 있고 등록 때(_move_my_drafts) 넣을 곳으로 옮겨진다 —
+    옮기기 전에 넣을 곳 기준 옛 버전을 미리 찾으려면 초안(n)의 컬렉션은 묻지 않는다(독립 리뷰 H: 다른 곳에 미리보기하면 옛 버전을 못 빼 같은 글로 오판)."""
     doc_ids, page_ids = list(doc_ids or []), list(page_ids or [])
     if not doc_ids and not page_ids:
         return []
     rows = await conn.fetch("""
         SELECT DISTINCT o.id FROM rag_source_document o JOIN rag_source_document n ON n.id = ANY($2::int[])
-        WHERE o.namespace_id = $1 AND n.namespace_id = $1 AND o.source_type = n.source_type AND (
+        WHERE o.namespace_id = $1 AND ($5 OR n.namespace_id = $1) AND o.source_type = n.source_type AND (
               o.id = n.id
            OR (n.source_type = ANY($3::text[]) AND o.source_ref IS NOT NULL AND o.source_ref = n.source_ref)
            OR (o.source_ref IS NOT DISTINCT FROM n.source_ref AND o.content_hash = n.content_hash))
         UNION
         SELECT id FROM rag_source_document WHERE namespace_id = $1 AND source_type = 'confluence' AND status = 'active'
           AND source_ref = ANY($4::text[])
-    """, ns_id, doc_ids, list(STABLE_REF_TYPES), page_ids)
+    """, ns_id, doc_ids, list(STABLE_REF_TYPES), page_ids, drafts_anywhere)
     return sorted(r["id"] for r in rows)
 
 

@@ -3,7 +3,7 @@ import { useQueries, useQuery, useMutation, useQueryClient } from '@tanstack/rea
 import { CheckCircle, ChevronLeft, ChevronRight, Sparkles, RefreshCw, Pencil } from 'lucide-react';
 import {
   correctionSourceLabel, listCorrections, approveCorrection, rejectCorrection, retargetCorrection, analyzeCorrection, redraftCorrection,
-  updateCorrectionProposed, POLICY_CHANGE_TARGETS, type CorrectionItem,
+  updateCorrectionProposed, POLICY_CHANGE_TARGETS, USER_REASONS, type CorrectionItem,
 } from '../../api/corrections';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
@@ -348,6 +348,13 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
         </div>
       )}
 
+      {item.user_reason && (
+        <p className="text-xs" data-testid={`correction-reason-${item.id}`}>
+          <span className="text-slate-500 mr-1">신고 사유</span>
+          <span className="rounded-full px-2 py-0.5 bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+            title={USER_REASONS.find((r) => r.key === item.user_reason)?.hint}>{USER_REASONS.find((r) => r.key === item.user_reason)?.label ?? item.user_reason}</span>
+        </p>
+      )}
       {item.user_input ? (
         <p className="text-sm text-slate-200">
           <span className="text-slate-500 text-xs mr-1">{item.kind === 'search_noise' ? '표시 내용' : item.source === 'policy_ai' ? 'AI에게 한 요청' : item.source === 'json_import' ? '가져온 파일' : '사용자 입력'}</span>“{item.user_input}”

@@ -37,6 +37,10 @@ export async function getDuplicateMatches(id: number): Promise<DuplicateMatch[]>
   }
 }
 
+/** 지식 id → 컨플 원문 페이지 주소(없으면 빠짐) — 승인 대기 비교 창 [원문 ↗](11/04) */
+export const getPageUrls = (ids: number[]) =>
+  apiFetch<Record<string, string>>('/knowledge/page-urls', { method: 'POST', body: JSON.stringify({ ids }) });
+
 export async function resolveDuplicate(
   id: number,
   action: 'approve' | 'reject' | 'merge',
@@ -229,6 +233,7 @@ export async function bulkCreateKnowledge(
   items: Array<{
     content: string; heading_path?: string[] | null; source_document_id?: number | null; source_document_partial?: boolean;
     confluence_page_id?: string | null; confluence_version?: number | null;
+    keep_new?: boolean;   // 조각 미리보기 비교 창 [새로 등록](11/04)
   }>,
   sourceFile?: string,
   sourceType = 'manual',
@@ -528,3 +533,44 @@ export async function applyGlossarySuggestion(namespace: string, term: string, d
     body: JSON.stringify({ namespace, term, description }),
   });
 }
+
+// ── 검토 필요(11/04) — 검토 주기가 지난 원문 페이지, 채팅에 많이 쓰인 순 ──
+export interface ReviewDueDoc {
+  key: string; title: string; ids: number[]; n: number;
+  last_reviewed_at: string | null; last_reviewed_by: string | null; created_at: string;
+  /** 기한 지난 일수 — 원문 바뀜만으로 올라온 페이지는 null */
+  overdue_days: number | null; used: number;
+  /** 컨플 원문이 바뀌었는데 사람이 고친 조각이 있어 동기화가 덮지 않음(11/04) */
+  source_changed: boolean;
+}
+export interface ReviewDue { namespace: string; interval_days: number | null; usage_days: number; total_docs: number; due: ReviewDueDoc[] }
+
+export const getReviewDue = (namespace: string) =>
+  apiFetch<ReviewDue>(`/knowledge/review/due?${new URLSearchParams({ namespace })}`);
+
+export const markReviewed = (namespace: string, ids: number[]) =>
+  apiFetch<{ reviewed: number }>('/knowledge/review/done', { method: 'POST', body: JSON.stringify({ namespace, ids }) });
+
+export const setReviewInterval = (namespace: string, days: number | null) =>
+  apiFetch<{ interval_days: number | null }>('/knowledge/review/interval', { method: 'PUT', body: JSON.stringify({ namespace, days }) });
+
+// ── 등록 전 확인(11/04) — 저장 없이 등록과 같은 규칙으로 중복 의심 상위 3개 ──
+export interface SimilarMatch { id: number; content: string; similarity: number }
+export interface SimilarResult { same: number | null; matches: SimilarMatch[]; n: number }
+
+export const checkSimilar = (namespace: string, content: string) =>
+  apiFetch<SimilarResult>('/knowledge/similar', { method: 'POST', body: JSON.stringify({ namespace, content }) });
+
+/** 등록 안 함 · 합치기를 AI 감사 '중복 의심'에(새로 등록은 등록 요청의 keep_new가 남긴다) */
+export const checkSimilarBatch = (namespace: string, items: { content: string; confluence_page_id?: string | null; source_document_id?: number | null }[]) =>
+  apiFetch<SimilarResult[]>('/knowledge/similar/batch', { method: 'POST', body: JSON.stringify({ namespace, items }) });
+
+export const recordSimilarDecision = (namespace: string, m: SimilarMatch, action: 'reject' | 'merge' | 'approve', n: number) =>
+  apiFetch<void>('/knowledge/similar/decision', {
+    method: 'POST', body: JSON.stringify({ namespace, matched_id: m.id, similarity: m.similarity, action, n_matches: Math.max(1, n) }),
+  });
+
+// ── 근거 최신성(11/04) — 채팅 근거 카드: 마지막 검토·기한 지남·담당(검토 필요 목록과 같은 규칙) ──
+export interface Freshness { last_at: string; reviewed: boolean; overdue: boolean; interval_days: number | null; owners: string[] }
+export const getFreshness = (ids: number[]) =>
+  apiFetch<Record<string, Freshness>>('/knowledge/freshness', { method: 'POST', body: JSON.stringify({ ids }) });

@@ -13,6 +13,7 @@ import { collectionLabel, isSystemCollection } from '../../utils/collections';
 import { effectiveOwnerParts, ownerNames } from '../../utils/domainAccess';
 import { adminPath, type AdminMenuId } from '../../pages/adminMenu';
 import { useImportTodoState } from './TeamImportPanel';
+import { useReviewDueCount } from './ReviewDueTab';
 import { useAuthStore } from '../../store/useAuthStore';
 
 /**
@@ -97,6 +98,7 @@ export function CollectionHome({ onGo }: { onGo: (to: string) => void }) {
     staleTime: 10_000,
   });
   const stats = useQuery({ queryKey: ['stats-ns', selectedNs], queryFn: () => getNamespaceStats(selectedNs), enabled: !!selectedNs, staleTime: 10_000 });
+  const due = useReviewDueCount(selectedNs, shown('k.docs'));   // 운영 지식 › 검토 필요와 같은 쿼리(11/04)
   // 서버 no_knowledge = 미해결 공백, filled = 해결된 공백 — 겹치지 않는다(service/admin/router.py _OPEN_GAP·_FILLED_GAP)
   const gap = stats.data ? stats.data.no_knowledge : null;
   const imp = useImportTodoState();
@@ -126,6 +128,12 @@ export function CollectionHome({ onGo }: { onGo: (to: string) => void }) {
             loading={pending.isLoading} error={pending.isError && !pending.data} sub="유사 지식 · 담당 아닌 사람이 등록"
             tip="기존 지식과 많이 겹치거나 담당이 아닌 사람이 넣어 아직 검색에 안 쓰이는 지식 — 승인 · 병합 · 반려"
             to={`${adminPath('k.docs')}?tab=review`} onGo={onGo} />
+        )}
+        {shown('k.docs') && due.interval !== null && (   // 검토 주기 '안 함'인 컬렉션엔 안 보인다
+          <Card testid="card-review-due" title="검토 필요" value={due.n} tone={(due.n ?? 0) > 0 ? 'warn' : 'ok'}
+            loading={due.isLoading} error={due.isError} sub="검토 주기 지난 원문 페이지"
+            tip="마지막 검토(없으면 등록·수정일) + 검토 주기가 지난 원문 — 채팅에 많이 쓰인 순으로 [검토 완료]"
+            to={`${adminPath('k.docs')}?tab=due`} onGo={onGo} />
         )}
         {shown('k.sources') && (
           <Card testid="card-import" title="적재 검토" value={imp.n} tone={imp.n > 0 ? 'warn' : 'ok'} sub="팀 단위 · 연결할 묶음"

@@ -5,7 +5,8 @@ import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { canEditDomain, effectiveOwnerParts } from '../../utils/domainAccess';
 import { getNamespaceStats, deleteQueryLog, getQueryLogs, bulkDeleteQueryLogs, fillKnowledgeGap } from '../../api/stats';
-import { createKnowledge } from '../../api/knowledge';
+import { checkSimilar, createKnowledge, recordSimilarDecision, updateKnowledge, type SimilarMatch, type SimilarResult } from '../../api/knowledge';
+import { SimilarKnowledgeStep } from './SimilarKnowledgeStep';
 import { getNamespacesDetail } from '../../api/namespaces';
 import { isSystemCollection } from '../../utils/collections';
 import { PolicyAddModal } from './policy/PolicyChangeModals';
@@ -51,27 +52,60 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
     }
   }, [open, log]);
 
+  // 등록 전 비슷한 지식 확인(11/04) — 공백인데 비슷한 지식이 있으면 "없는 게 아니라 못 찾은 것" — 새로 쓰기보다 기존 것 보완(합치기)이 맞다
+  const [similar, setSimilar] = useState<SimilarResult | null>(null);
   const handleSubmit = async () => {
     if (!log || !content.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      const created = await createKnowledge({
-        namespace,
-        content,
-      });
-      await fillKnowledgeGap(log.id, created.id);
-      if (created.pending_review) {
-        void showAlert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다.\n관리자 승인 후 검색에 반영됩니다.', { title: '승인 대기로 등록' });
+      let r: SimilarResult | null = null;
+      try {
+        r = await checkSimilar(namespace, content);
+      } catch (e) {
+        console.warn('공백 등록 — 비슷한 지식 확인 실패, 그대로 등록', e);   // 등록은 같은 규칙으로 승인 대기가 막아 준다
       }
-      onSuccess();
-      onClose();
+      if (r?.same != null) { setError(`같은 글이 이미 있어요(#${r.same}) — 검색에 안 걸렸다면 [기존 것에 합치기]로 질문 표현을 보태 주세요.`); return; }
+      if (r && r.matches.length > 0) { setSimilar(r); return; }
+      await register(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : '등록 실패');
     } finally {
       setSubmitting(false);
     }
   };
+  const register = async (keepNew: boolean) => {
+    if (!log) return;
+    const created = await createKnowledge({ namespace, content, keep_new: keepNew });
+    await fillKnowledgeGap(log.id, created.id);
+    if (created.pending_review) {
+      void showAlert('등록하신 지식이 기존 지식과 유사도가 높아 승인 대기 상태로 등록되었습니다.\n관리자 승인 후 검색에 반영됩니다.', { title: '승인 대기로 등록' });
+    }
+    onSuccess();
+    onClose();
+  };
+  const act = async (fn: () => Promise<void>) => {
+    setSubmitting(true); setError(null);
+    try { await fn(); setSimilar(null); } catch (err) { setError(err instanceof Error ? err.message : '처리 실패'); setSimilar(null); } finally { setSubmitting(false); }
+  };
+  const merge = (m: SimilarMatch, text: string) => act(async () => {
+    if (!log) return;
+    await updateKnowledge(m.id, { content: text });
+    await recordSimilarDecision(namespace, m, 'merge', similar?.n ?? 1).catch((e) => console.warn('합치기 감사 기록 실패', e));
+    try {
+      await fillKnowledgeGap(log.id, m.id);   // 기존 지식을 보완해 메움 — 공백 해결 실적은 그 지식으로
+    } catch (e) {
+      // 합치기는 끝났다 — 다시 누르면 같은 내용이 두 번 붙으니 창을 닫고 알린다(리뷰 L8)
+      onSuccess(); onClose();
+      void showAlert(`#${m.id}에 합쳤지만 이 공백 질의에 연결하지 못했어요 — 다시 합치지 말고 새로고침 뒤 확인해 주세요.\n(${e instanceof Error ? e.message : e})`, { title: '공백 연결 실패' });
+      return;
+    }
+    onSuccess(); onClose();
+  });
+  const skip = (m: SimilarMatch) => act(async () => {
+    await recordSimilarDecision(namespace, m, 'reject', similar?.n ?? 1);
+    setError(`등록하지 않았어요 — 같은 내용이 #${m.id}에 있어요. 검색에 안 걸렸다면 [기존 것에 합치기]로 질문 표현을 보태 주세요.`);
+  });
 
   return (
     <Modal
@@ -104,6 +138,10 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
         </div>
 
         {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
+        {similar && (
+          <SimilarKnowledgeStep content={content} matches={similar.matches} n={similar.n} canMerge busy={submitting}
+            onSkip={skip} onMerge={merge} onNew={() => act(() => register(true))} onClose={() => setSimilar(null)} />
+        )}
 
         <div className="flex gap-2 justify-end pt-1">
           <Button variant="ghost" size="sm" onClick={onClose}>취소</Button>

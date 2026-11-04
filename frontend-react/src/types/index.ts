@@ -101,6 +101,7 @@ export interface KnowledgeCreatePayload {
   decision_id?: number | null;      // E2: 위치 판정 원장 줄(POST /knowledge/locate)
   location_choice?: LocationChoice | null;
   override_reason?: OverrideReason | null;   // AI 추천과 다른 곳을 고른 이유(선택, 10/27)
+  keep_new?: boolean;   // 등록 단계 "비슷한 지식이 이미 있어요"에서 [새로 등록](11/04)
 }
 
 /** AI 추천을 번복한 이유(10/27, 선택) — wrong: AI가 틀림 · both_ok: 둘 다 맞는데 이쪽이 더 맞음 · context_changed: 상황이 바뀜 */

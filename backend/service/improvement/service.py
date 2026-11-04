@@ -877,7 +877,7 @@ async def pending_status(knowledge_ids: list[int], policy_item_ids: list[int]) -
 
 _LIST_SQL = """
     SELECT i.id, i.kind, n.name AS namespace, n.area AS namespace_area, i.message_id, i.target_type, i.target_id, i.target_sub_id,
-           i.user_input, i.original, i.proposed, i.status, i.reject_reason, i.applied_target_id,
+           i.user_input, i.user_reason, i.original, i.proposed, i.status, i.reject_reason, i.applied_target_id,
            i.created_at, i.decided_at, i.reporter_seen_at, i.source, i.candidates, i.ai_verdict,
            ru.username AS reporter, du.username AS decided_by,
            -- 근거를 대상으로 한 건도 어떤 질문·답변에서 나온 신고인지 카드에 보이도록(원문은 근거 스냅샷뿐이라)
@@ -901,6 +901,11 @@ def _row(r) -> dict:
         if d.get(k) is not None:
             d[k] = d[k].isoformat()
     return d
+
+
+async def set_user_reason(item_id: int, reason: str) -> None:
+    async with get_conn() as conn:
+        await conn.execute("UPDATE ops_improvement_item SET user_reason = $2 WHERE id = $1", item_id, reason)
 
 
 async def list_items(namespace: Optional[str], status: Optional[str], limit: int = 200) -> list[dict]:
