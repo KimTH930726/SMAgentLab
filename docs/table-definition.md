@@ -138,6 +138,8 @@
 | 110 | `schema_migration_run` | `CREATE TABLE IF NOT EXISTS` (id, started_at, app_version, ok, failed_step, error, steps JSONB, duration_ms) | 기동 마이그레이션 원장 — 기동마다 한 줄(단계별 ms·실패 단계), 최근 500줄. 기동은 advisory lock (7310, 0)으로 하나만. `_run_migrations` (v2.200) |
 | 111 | `ops_query_log` | `ADD COLUMN IF NOT EXISTS resolved_correction_id BIGINT REFERENCES ops_improvement_item(id) ON DELETE SET NULL` | 정책 컬렉션의 지식 공백을 정책 추가 제안으로 메운 기록(메움 집계 = 지식 연결 또는 이 칸). 제안이 반려되면 비워 다시 공백. `_migrate_improvement_ledger` 안 (v2.201) |
 | 112 | `rag_ingestion_job`, `rag_import_batch` | `held_plan JSONB`(게시 때 쓸 원문·교체 대상) · 배치 `published_at`·`published_by_user_id`·`publishing_at`(게시 중 표시)·`publish_check JSONB` · 옛 적재 배치는 `published_at = loaded_at` 채움 | 팀 적재 "검수 후 게시" — 적재 = 작업 'held' + 조각 staging(검색 제외), [게시] = `publish_held_job`(등록 끝과 같은 `_switch_staged`). 기동 정리는 held 조각을 지우지 않음. `_migrate_team_import` (v2.202) |
+| 113 | `ops_email_poll_cycle` | `ADD COLUMN IF NOT EXISTS total_skipped_confirm_failed INT NOT NULL DEFAULT 0` | VOC 같은 문제 확인(LLM) 실패로 반복 묶음·Teams 발송에서 빠진 건수 — 로그 요약 줄에만 있던 것을 사이클 표·실시간 상태에(11/04) |
+| 114 | `rag_import_batch` | `status` CHECK에 `cancelled` 추가(제약에 없을 때만, 지우고 붙이기를 한 트랜잭션으로) | 적재 안 한 미리보기 취소를 "실패"와 구분(11/04 #3 GIFT 취소) · 취소한 미리보기의 제외·보류 결정은 동기화에 적용 안 함 |
 | (값만) | `rag_glossary.source` | 스키마 변경 없음 — 새 값 `auto_extract`(지식 등록 때 LLM 자동 추출, 10/28~). 기존 값: `policy_doc`(정책서), NULL(사람 등록·옛 자동 추출) | 자동 추출 용어 효과를 따로 재려고(`docs/domains/knowledge/glossary/glossary-curation-design.md`) (v2.186) |
 | 91 | `eval_question_candidate` | FK `improvement_item_id` → `ON DELETE CASCADE`(confdeltype 확인 후 한 번만) | 정정 원장 줄이 지워지면(컬렉션 삭제 등) 시험지 후보도 같이 — 기본(NO ACTION)이면 정정 승인 때 자동으로 생긴 후보가 컬렉션 삭제를 막았다(v2.172 E2E로 발견). `_migrate_eval_improvement` (v2.172) |
 
