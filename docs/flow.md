@@ -495,6 +495,14 @@ LLM에 전달되는 messages:
        양식 줄(컬렉션 데이터에서 3쪽·1% 이상) 뺀 글자 ≥ 0.8만 승인 대기(다른 원본의 같은 글 포함) · 의미만 비슷 = 사용 중 · 단건은 같은 글이면 400
      담당 아님 + 내 확정 전 판정 줄 → 제안: 전부 승인 대기(그 담당이 승인), 원문·컨플루언스 페이지 연결 뗌
      담당 아님 + 판정 없음 → 403
+     등록 순간 확인(11/04, 직접 입력): [등록] → POST /api/knowledge/similar(저장 없음, 위 2단 판정과 같은 함수 _duplicate_matches)
+       같은 글 → 등록 전에 막음 · 없음 → 바로 등록 · 있음 → "비슷한 지식이 이미 있어요" 비교 창(줄 단위 달라진 줄 강조, 후보 상위 3)
+         등록 안 함 → 저장 없음, 원장 duplicate_check reject(stage register) · 기존 것에 합치기(담당만) → PUT 기존 지식, merge
+         새로 등록 → keep_new = 승인 대기 안 거침(담당 아니면 그대로 승인 대기), approve = AI 감사 '중복 의심' 번복
+     조각 미리보기(대량 텍스트·파일·URL): 넣을 곳이 정해지면 POST /similar/batch(같은 원본의 옛 버전은 replacing_documents로 비교에서 뺌 — 등록과 같음)
+       → 조각마다 "비슷한 지식 #id · %"[비교](같은 세 갈래, 새로 등록 = 조각 keep_new) · "같은 글 #id"는 처음부터 체크 해제 · 안 정한 조각은 등록 뒤 승인 대기
+     지식 공백 [지식 등록](통계): 같은 확인 — 합치기면 공백 해결 = 그 기존 지식
+     컨플 공간 일괄(팀 적재)은 사람이 조각마다 고르지 않음 → 승인 대기 비교 창(차이 강조 + 신규·기존 [원문 ↗], POST /page-urls)
 ④ 원장 같은 줄 확정: final_value {namespace_id, choice, suggested}, 고른 곳 ≠ AI 추천(확신 없으면 후보) → 번복
      번복이면 카드에서 고른 이유 override_reason(AI가 틀림·둘 다 맞음·상황이 바뀜, 선택) — 틀림·상황이 바뀜은 ai_verdict에도(v2.180)
 ⑤ 자가 개선: scripts/eval_improve.py가 원장 번복을 읽어(service/eval/override.py) 후보로 → 평가 게이트 리포트 · AI 감사 로그는 기록만
@@ -511,6 +519,19 @@ Teams 등록 폼은 내용이 확정되는 시점(파일 미리보기 성공·�
 검토할 수 있다(예전엔 여기서 등록 자체가 거부됐음).
 
 ---
+
+### 검토 기한 — 운영 지식 › 검토 필요 (v2.210, 11/04 · `agents/knowledge_rag/knowledge/review.py`)
+```
+컬렉션 검토 주기 ops_namespace.review_interval_days(30·90·180, NULL = 안 함, 기본 90 — 관리자가 탭 머리에서)
+원문 페이지 묶음(doc_key) = 컨플 페이지 번호 › 원문 원장 id › (적재 작업·파일 이름) › 조각 하나(직접 입력)
+마지막 검토 = 조각마다 reviewed_at(승인·[검토 완료]) › content_edited_at › created_at, 페이지는 가장 오래된 조각
+기한 지남 = 마지막 검토 + 주기 < 지금 → GET /api/knowledge/review/due, 최근 30일 채팅 답 근거 횟수 많은 순
+[검토 완료] → POST /review/done(담당 권한, 그 컬렉션 사용 중 조각만) → reviewed_at = 지금, owner = 누른 사람 → 목록에서 빠짐
+홈 [검토 필요] 카드(주기 '안 함'이면 숨김) · 자동 알림·AI 변경 판단은 안 함
+원문 바뀜: 컨플 동기화가 바뀐 페이지를 찾았는데 사람이 고친 조각이 있어 덮지 않은 페이지(rag_source_connection.retry_pages why=conflict) → 기한과 상관없이 맨 위
+마지막 검토 = 검토일·수정일 중 늦은 날(고친 것도 검토), 없으면 등록일
+채팅 근거 카드 배지(POST /api/knowledge/freshness, 같은 묶음·규칙): "검토 YYYY.M.D" · "수정 …" · "검토 기한 지남"(툴팁 = 주기·담당 파트)
+```
 
 ## 5-0. 문서 → 청크 공통 규칙 (v2.129, 2026-10-07)
 
