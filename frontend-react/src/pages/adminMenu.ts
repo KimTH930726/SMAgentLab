@@ -13,7 +13,7 @@ export type AdminMenuId =
 export type AdminScope = 'collection' | 'platform';
 export const ADMIN_SCOPES: { scope: AdminScope; label: string; home: AdminMenuId; hint: string }[] = [
   { scope: 'collection', label: '컬렉션 관리', home: 'home', hint: '보는 컬렉션의 지식·정정·통계 — 담당 파트가 처리' },
-  { scope: 'platform', label: '플랫폼 관리', home: 'p.home', hint: 'OpsLens 전체 — 평가 게이트·AI 감사 로그·조직·설정(관리자)' },
+  { scope: 'platform', label: '플랫폼 관리', home: 'p.home', hint: 'OpsLens 전체 — 평가 게이트·AI 감사·조직·설정(관리자)' },
 ];
 
 export interface AdminMenuItem {
@@ -61,7 +61,7 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
   one('collection', { id: 'c.info', label: '컬렉션 정보', hint: '담당 파트 · 관련 정책/시스템 · 코드(수정은 관리자 — 플랫폼 관리 › 컬렉션)', scoped: true }),
   one('platform', { id: 'p.home', label: '홈', adminOnly: true, hint: 'OpsLens 상태 — 정답률 · 단정 오답 · AI 판단 · LLM 호출 · 피드백 · 담당 없는 컬렉션' }),
   one('platform', { id: 'q.eval', label: '평가 게이트', adminOnly: true, hint: '정답률 → 왜 틀렸나 → 개선 후보 → 사람 검수' }),
-  one('platform', { id: 'q.decisions', label: 'AI 감사 로그', adminOnly: true, hint: 'AI가 정한 것(등록 위치·되묻기·원문 검사·컬렉션 제안·개선 추천)을 사람이 그대로 뒀나·바꿨나' }),
+  one('platform', { id: 'q.decisions', label: 'AI 감사', adminOnly: true, hint: 'AI 판단마다 사람 검토 결과(수용·번복) — 리포트 · 표본 감사 · 감사 로그' }),
   one('platform', { id: 'q.feedback', label: '사용자 피드백', adminOnly: true, hint: '오류 신고 · 기능 제안([피드백 보내기]) + 자동 감지(채팅 장애) — 선정·완료·중복·기각' }),
   { id: 'collections', label: '컬렉션', scope: 'platform', items: [
     { id: 'domains', label: '정책 컬렉션', adminOnly: true, hint: '업무별 지식을 두는 곳 — 담당 파트·건수' },

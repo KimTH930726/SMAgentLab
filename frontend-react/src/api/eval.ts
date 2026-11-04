@@ -329,8 +329,8 @@ export interface OverrideReport {
   days: number; kinds: OverrideKind[];
   location_replay: { rules: { rule: string; hit: number; n: number; auto_wrong: number; fixed: number[]; broken: number[] }[]; best: { rule: string } | null };
   candidates: { id: number; title: string; status: CandidateStatus; qids: string[] }[];
-  /** 날짜별(최신 먼저) — 그날 AI 판단 수 · 그중 번복(11/03 날짜 카드) */
-  daily: { day: string; n: number; overrides: number }[];
+  /** 날짜별(최신 먼저, 한국 시간) — 그날 AI 판단 수 · 번복 · 종류별 다섯 갈래(리포트와 같은 REVIEW_SQL, 11/04 날짜별 막대) */
+  daily: { day: string; n: number; overrides: number; kinds: Record<string, Partial<Record<ReviewStatus, number>>> }[];
 }
 
 /** 평가 게이트 › 적용 이력(10/27) — 기법 대장 근거(측정 기록) + 개선 후보 사람 결정, 날짜 내림차순 */

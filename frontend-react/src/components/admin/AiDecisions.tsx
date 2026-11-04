@@ -3,9 +3,9 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
-  getDecisionLog, getDecisionsReport, getOverrides, listTechniques, type DecisionLogItem, type DecisionsReport, type ReviewStatus, type Technique,
+  getDecisionLog, getDecisionsReport, getOverrides, listTechniques, type DecisionLogItem, type DecisionsReport, type OverrideReport, type ReviewStatus, type Technique,
 } from '../../api/eval';
-import { AuditReport, REVIEW_BADGE, REVIEW_HINT, REVIEW_LABEL } from './AuditReport';
+import { AuditReport, BAR, ORDER, REVIEW_BADGE, REVIEW_HINT, REVIEW_LABEL } from './AuditReport';
 import { adminPath } from '../../pages/adminMenu';
 import { Modal } from '../ui/Modal';
 
@@ -104,14 +104,17 @@ const REVIEW_FILTERS: (ReviewStatus | null)[] = [null, 'override', 'accept', 'au
 const KIND_LABEL: Record<string, string> = {
   knowledge_location: '등록 위치', chat_clarify: '되묻기', source_check: '원문 확인', collection_suggest: '다른 컬렉션 제안', duplicate_check: '중복 의심',
 };
-const dayOf = (s: string) => new Date(s).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
-const timeOf = (s: string) => new Date(s).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+// 한국 시간 고정 — 서버 날짜 거르기(KST)와 같은 날로 보이게(리뷰 L2: 'YYYY-MM-DD'는 UTC 자정이라 다른 시간대 브라우저에서 하루 밀림)
+const dayOf = (s: string) => new Date(s).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short', timeZone: 'Asia/Seoul' });
+const timeOf = (s: string) => new Date(s).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Seoul' });
 
 /** 감사 로그 — 날짜별, 같은 날 같은 판단(종류·AI·결과가 같은 줄)이 이어지면 "같은 판단 n건"으로 접는다 */
-function AuditLog({ kind, setKind, days, day, setDay, review, setReview, counts }: {
+function AuditLog({ kind, setKind, days, day, setDay, dayOptions, review, setReview, counts }: {
   kind: CardKey | null; setKind: (k: CardKey | null) => void; days: number;   // 기간은 위 리포트 드롭다운 하나로
   day: string | null; setDay: (d: string | null) => void;
-  /** 칩 건수(기간·종류 기준) — 날짜를 고르면 null(그날 건수는 날짜 카드에 — 목록과 다른 숫자가 나오지 않게, 리뷰 M2) */
+  /** 날짜 드롭다운 — 기간 안 판단이 있는 날(최신 먼저) */
+  dayOptions: string[];
+  /** 칩 건수 — 기간·종류(·날짜) 기준, 목록과 같은 집합(서버 REVIEW_SQL · superseded 제외, 리뷰 M2) */
   review: ReviewStatus | null; setReview: (r: ReviewStatus | null) => void; counts: Record<ReviewStatus, number> | null;
 }) {
   const [openRuns, setOpenRuns] = useState<Set<number>>(new Set());
@@ -147,11 +150,11 @@ function AuditLog({ kind, setKind, days, day, setDay, review, setReview, counts 
           <option value="">종류 전체</option>
           {(Object.keys(LOG_KIND) as CardKey[]).map((k) => <option key={k} value={k}>{KIND_LABEL[LOG_KIND[k]!]}</option>)}
         </select>
-        {day && (
-          <button onClick={() => setDay(null)} data-testid="audit-day-chip" title="날짜 거르기 풀기"
-            className="rounded-full border border-indigo-500 px-2.5 py-0.5 text-xs text-indigo-600 dark:border-indigo-400 dark:text-indigo-300">
-            {dayOf(day)} ✕</button>
-        )}
+        {/* 날짜도 드롭다운(11/04 — 날짜 카드는 가시성이 떨어져 위 막대 + 여기 고르기로) */}
+        <select className={sel} value={day ?? ''} onChange={(e) => setDay(e.target.value || null)} aria-label="날짜" data-testid="audit-day">
+          <option value="">날짜 전체</option>
+          {dayOptions.map((x) => <option key={x} value={x}>{dayOf(x)}</option>)}
+        </select>
         {/* 검토 결과 거르기(11/04) — 기본 = 번복(감사의 핵심 증거). 건수는 위 리포트와 같은 기간·기준 */}
         <div className="ml-auto flex flex-wrap gap-1" role="group" aria-label="검토 결과" data-testid="audit-review">
           {REVIEW_FILTERS.map((r) => (
@@ -163,6 +166,16 @@ function AuditLog({ kind, setKind, days, day, setDay, review, setReview, counts 
           ))}
         </div>
       </div>
+      {(kind || review || day) && (
+        // 걸린 거르기 — 위에서 눌러 들어오면 무엇이 걸려 목록이 비었는지 바로 보이게(11/04 "1건인데 로그엔 안 나온다": 기본 번복 + 지난 날짜가 남아 있었음)
+        <div className="flex flex-wrap items-center gap-1.5 text-xs" data-testid="audit-active-filters">
+          <span className="text-slate-500">거르기</span>
+          {kind && <FilterChip label={`종류: ${KIND_LABEL[LOG_KIND[kind]!]}`} onClear={() => setKind(null)} testid="audit-chip-kind" />}
+          {review && <FilterChip label={`검토: ${REVIEW_LABEL[review]}`} onClear={() => setReview(null)} testid="audit-chip-review" />}
+          {day && <FilterChip label={`날짜: ${dayOf(day)}`} onClear={() => setDay(null)} testid="audit-day-chip" />}
+          <button type="button" onClick={() => { setKind(null); setReview(null); setDay(null); }} className="text-slate-400 hover:text-slate-200 hover:underline">모두 풀기</button>
+        </div>
+      )}
       {q.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p>
         : q.error ? <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p>
         : items.length === 0 ? <p className="text-sm text-slate-500">기록이 없어요.</p> : (
@@ -338,26 +351,61 @@ function DetailBody({ open, d }: { open: CardKey; d: DecisionsReport }) {
   );
 }
 
-/** 날짜별 카드 — 그날 AI 판단 · 번복. 누르면 그날만(다시 누르면 풀림). 많아지면 가로로 넘긴다 */
-function DayCards({ daily, day, onDay, loading }: { daily: { day: string; n: number; overrides: number }[]; day: string | null; onDay: (d: string) => void; loading: boolean }) {
-  if (loading || daily.length === 0) return null;
-  const max = Math.max(1, ...daily.map((x) => x.n));
+function FilterChip({ label, onClear, testid }: { label: string; onClear: () => void; testid: string }) {
   return (
-    <section className="space-y-1.5" aria-label="날짜별">
-      <h3 className="text-xs font-medium text-slate-400" title="그날(한국 시간) AI가 낸 판단 수 — 아직 사람이 확정하지 않은 판단도 포함, 종류 카드는 확정된 것만 센다">
-        날짜별 <span className="text-slate-500">(누르면 그날만 · 확정 전 포함 ⓘ)</span></h3>
-      <div className="flex gap-2 overflow-x-auto pb-1" data-testid="day-cards">
-        {daily.map((x) => (
-          <button key={x.day} onClick={() => onDay(x.day)} aria-pressed={day === x.day} data-testid={`day-card-${x.day}`}
-            className={clsx('w-28 shrink-0 rounded-xl border bg-slate-800 p-2.5 text-left', day === x.day ? 'border-indigo-500 ring-1 ring-indigo-500 dark:border-indigo-400 dark:ring-indigo-400' : 'border-slate-700 hover:border-slate-500')}>
-            <p className="text-[11px] text-slate-400">{dayOf(x.day)}</p>
-            <p className="text-lg font-semibold tabular-nums text-slate-100">{x.n}<span className="text-xs font-normal text-slate-500">건</span></p>
-            <span className="mt-1 block h-1.5 rounded-full bg-slate-700 overflow-hidden" aria-hidden>
-              <span className="block h-full bg-indigo-500 dark:bg-indigo-400" style={{ width: `${(x.n / max) * 100}%` }} />
-            </span>
-            <p className={clsx('mt-1 text-[11px]', x.overrides ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500')}>번복 {x.overrides}</p>
+    <button type="button" onClick={onClear} data-testid={testid} title="이 거르기 풀기"
+      className="rounded-full border border-indigo-500 px-2.5 py-0.5 text-indigo-600 hover:bg-indigo-50 dark:border-indigo-400 dark:text-indigo-300 dark:hover:bg-indigo-500/10">
+      {label} ✕</button>
+  );
+}
+
+type Daily = OverrideReport['daily'];
+const KST_DAY = (t: number) => new Date(t + 9 * 3600_000).toISOString().slice(0, 10);
+/** 그날(·종류) 다섯 갈래 건수 — 막대와 감사 로그 칩이 같은 숫자 */
+const dayReview = (x: Daily[number] | undefined, kind: string | undefined) => {
+  const out = Object.fromEntries(ORDER.map((s) => [s, 0])) as Record<ReviewStatus, number>;
+  for (const [k, m] of Object.entries(x?.kinds ?? {})) if (!kind || k === kind) for (const s of ORDER) out[s] += m[s] ?? 0;
+  return out;
+};
+
+/** 날짜별 한 줄 막대(11/04 — 카드 대신) — 하루 = 세로 막대 하나, 리포트와 같은 다섯 갈래로 쌓음, 종류를 거르면 그 종류만.
+ *  누르면 그날만(다시 누르면 풀림). 판단 없는 날도 자리를 둬서 흐름이 보이게 */
+function DailyChart({ daily, days, kind, day, onDay }: { daily: Daily; days: number; kind: string | undefined; day: string | null; onDay: (d: string) => void }) {
+  const byDay = useMemo(() => new Map(daily.map((x) => [x.day, x])), [daily]);
+  const cols = useMemo(() => {
+    const now = Date.now();
+    // 서버 기간(created_at > 지금 − days)은 맨 앞날이 일부 걸쳐 days+1개 날짜 — 막대도 같은 범위(리뷰 L1: 합계가 리포트와 다르던 것)
+    return Array.from({ length: days + 1 }, (_, i) => KST_DAY(now - (days - i) * 86400_000))
+      .map((d) => ({ day: d, r: dayReview(byDay.get(d), kind) }))
+      .map((c) => ({ ...c, n: ORDER.reduce((a, s) => a + c.r[s], 0) }));
+  }, [byDay, days, kind]);
+  const max = Math.max(1, ...cols.map((c) => c.n));
+  const sum = cols.reduce((a, c) => a + c.n, 0);
+  return (
+    <section className="rounded-xl border border-slate-700 bg-slate-800 p-3 space-y-2" aria-label="날짜별" data-testid="daily-chart">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-xs font-medium text-slate-300" title="그날(한국 시간) AI가 낸 판단을 리포트와 같은 다섯 갈래로 — 막대를 누르면 아래 감사 로그가 그날만">
+          날짜별 판단 <span className="font-normal text-slate-500">{sum}건 · 막대를 누르면 그날만</span></h3>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400" aria-hidden>
+          {ORDER.map((s) => <span key={s} className="inline-flex items-center gap-1"><span className={clsx('h-2 w-2 rounded-sm', BAR[s])} />{REVIEW_LABEL[s]}</span>)}
+        </div>
+      </div>
+      <div className="flex h-16 items-end gap-px" role="group" aria-label="날짜별 막대">
+        {cols.map((c) => (
+          <button key={c.day} type="button" onClick={() => c.n && onDay(c.day)} disabled={!c.n} aria-pressed={day === c.day}
+            data-testid={`daily-bar-${c.day}`}
+            title={`${dayOf(c.day)} — ${c.n ? ORDER.filter((s) => c.r[s]).map((s) => `${REVIEW_LABEL[s]} ${c.r[s]}`).join(' · ') : '판단 없음'}`}
+            className={clsx('flex h-full min-w-0 flex-1 flex-col-reverse rounded-sm', day === c.day ? 'bg-indigo-500/20 ring-1 ring-indigo-500 dark:ring-indigo-400' : 'hover:bg-slate-700/60', !c.n && 'cursor-default')}>
+            {c.n > 0 && (
+              <span className="flex w-full flex-col-reverse overflow-hidden rounded-sm" style={{ height: `${Math.max(6, (c.n / max) * 100)}%` }}>
+                {ORDER.map((s) => c.r[s] ? <span key={s} className={clsx('w-full', BAR[s])} style={{ height: `${(c.r[s] / c.n) * 100}%` }} /> : null)}
+              </span>
+            )}
           </button>
         ))}
+      </div>
+      <div className="flex justify-between text-[10px] text-slate-500 tabular-nums" aria-hidden>
+        <span>{dayOf(cols[0].day)}</span><span>오늘</span>
       </div>
     </section>
   );
@@ -381,8 +429,11 @@ export function AiDecisions() {
   };
   const kinds = ov.data?.kinds ?? [];
   const cardOf = (kind: string): CardKey | null => kind === 'candidates' ? 'candidates' : (Object.keys(LOG_KIND) as CardKey[]).find((k) => LOG_KIND[k] === kind) ?? null;
-  const counts = Object.fromEntries((['accept', 'override', 'auto', 'rule', 'pending'] as ReviewStatus[]).map((r) =>
-    [r, kinds.filter((k) => !filter || k.kind === LOG_KIND[filter]).reduce((a, k) => a + (k.review?.[r] ?? 0), 0)])) as Record<ReviewStatus, number>;
+  const daily = ov.data?.daily ?? [];
+  const logKind = filter ? LOG_KIND[filter] : undefined;
+  // 칩 건수: 날짜를 고르면 그날 막대와 같은 숫자, 아니면 리포트(기간·종류) 숫자
+  const counts = day ? dayReview(daily.find((x) => x.day === day), logKind)
+    : Object.fromEntries(ORDER.map((r) => [r, kinds.filter((k) => !logKind || k.kind === logKind).reduce((a, k) => a + (k.review?.[r] ?? 0), 0)])) as Record<ReviewStatus, number>;
   const toLog = () => document.querySelector('[data-testid="audit-log"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   return (
     <div className="space-y-4">
@@ -397,13 +448,12 @@ export function AiDecisions() {
       {ov.error && <p className="text-xs text-rose-600 dark:text-rose-400">리포트를 불러오지 못했어요: {(ov.error as Error).message}</p>}
       {ov.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p> : (
         <AuditReport kinds={kinds} days={days} candidates={d.candidates}
-          onKind={(k) => { const c = cardOf(k); if (c && c !== 'candidates') setFilter(c); toLog(); }}
-          onReview={(r) => { setReview(r); toLog(); }}
+          onShow={(k, r) => { const c = k ? cardOf(k) : null; setFilter(c && c !== 'candidates' ? c : null); setReview(r); setDay(null); toLog(); }}
           canCriteria={(k) => !!cardOf(k)} onCriteria={(k) => { const c = cardOf(k); if (c) setOpen(c); }} />
       )}
-      <DayCards daily={ov.data?.daily ?? []} day={day} onDay={(x) => setDay(day === x ? null : x)} loading={ov.isLoading} />
-      <AuditLog kind={filter} setKind={setFilter} days={days} day={day} setDay={setDay}
-        review={review} setReview={setReview} counts={day ? null : counts} />
+      {!ov.isLoading && <DailyChart daily={daily} days={days} kind={logKind} day={day} onDay={(x) => setDay(day === x ? null : x)} />}
+      <AuditLog kind={filter} setKind={setFilter} days={days} day={day} setDay={setDay} dayOptions={daily.map((x) => x.day)}
+        review={review} setReview={setReview} counts={counts} />
       <Modal isOpen={open !== null} onClose={() => setOpen(null)} title={open ? titles[open] : ''} maxWidth="max-w-2xl">
         {open && <Detail open={open} d={d} techs={techs} /> as ReactNode}
       </Modal>

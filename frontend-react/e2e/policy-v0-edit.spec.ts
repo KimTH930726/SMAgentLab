@@ -50,10 +50,10 @@ test('직접 수정 → 정정 요청(정책 직접 수정) → 승인 → 옛 �
   await expect(page.getByText(OLD)).toBeVisible();
   await expect(page.getByText('옛 비고')).toBeVisible();
 
-  // [AI 수정 제안]과 [직접 수정]은 같은 모양으로 나란히
-  await expect(page.getByRole('button', { name: 'AI 수정 제안' })).toBeEnabled();
-  await page.getByRole('button', { name: '직접 수정' }).click();
+  // [수정 제안] 하나 — 창 안에 [AI 초안 받기](11/04, 옛 [AI 수정 제안]·[직접 수정] 합침)
+  await page.getByRole('button', { name: '수정 제안', exact: true }).click();
   const form = page.locator('form').filter({ has: page.locator('#policy-edit-body') });
+  await expect(page.getByTestId('policy-ai-draft')).toBeVisible();
   await expect(form.locator('#policy-edit-body')).toHaveValue(OLD);
   await expect(form.getByRole('button', { name: '정정 요청에 올리기' })).toBeDisabled();   // 안 바꾸면 못 올림
   await form.locator('#policy-edit-body').fill(NEW);
@@ -72,7 +72,7 @@ test('직접 수정 → 정정 요청(정책 직접 수정) → 승인 → 옛 �
 
   // 상세에 "정정 #N 검토 중" + 새 제안 막힘, 서버도 409(그 번호를 같이)
   await expect(page.getByText(`정정 #${corrId} 검토 중`).first()).toBeVisible();   // 상세 안내 + 뒤 목록 배지
-  await expect(page.getByRole('button', { name: '직접 수정' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '수정 제안', exact: true })).toBeDisabled();
   const tok = await adminToken();
   const itemId = Number(psql(`SELECT id FROM policy_item WHERE namespace_id = ${nsId()} AND status = 'active'`));
   const dup = await request.post(`${API}/api/corrections`, {
@@ -108,5 +108,5 @@ test('직접 수정 → 정정 요청(정책 직접 수정) → 승인 → 옛 �
   await openPolicy(page);
   await expect(page.getByText(NEW)).toBeVisible();
   await expect(page.getByText(`· 정정 #${corrId}`)).toBeVisible();
-  await expect(page.getByRole('button', { name: '직접 수정' })).toBeEnabled();   // 검토 중 정정이 끝났으니 다시 제안 가능
+  await expect(page.getByRole('button', { name: '수정 제안', exact: true })).toBeEnabled();   // 검토 중 정정이 끝났으니 다시 제안 가능
 });

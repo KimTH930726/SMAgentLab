@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ChevronLeft, ChevronRight, FolderInput, Pencil, Sparkles } from 'lucide-react';
+import { Archive, ChevronLeft, ChevronRight, FolderInput, MoreHorizontal, Pencil } from 'lucide-react';
 import { getPolicy, type PolicyDetail, type PolicyParamRow } from '../../../api/policy';
 import { correctionSourceLabel } from '../../../api/corrections';
 import { useNamespaceAccess } from '../../../utils/useNamespaceAccess';
@@ -39,12 +39,12 @@ function highlight(text: string, params: PolicyParamRow[]): ReactNode {
 
 /**
  * 정책 상세(10/21) — 경로 · 이름 · 버전 · 원문 · 비고 · 용어 · (있으면) 값 · 버전 이력. [이전][다음]은 목록 순서대로.
- * 고치기는 [AI 수정 제안] / [직접 수정](담당 파트·관리자) — 둘 다 정정 요청에 제안으로 올라가고, 승인해야 새 버전이 된다.
- * [분류 옮기기 제안]·[폐기 제안](C3 2단계, 10/27)도 같은 정정 요청으로 — 승인해야 반영.
+ * 고치기는 [수정 제안](담당 파트·관리자, 창 안에서 [AI 초안 받기]) — 정정 요청에 제안으로 올라가고, 승인해야 새 버전이 된다(11/04 두 버튼 합침).
+ * ⋯ 더보기의 [분류 옮기기 제안]·[폐기 제안](C3 2단계, 10/27)도 같은 정정 요청으로 — 승인해야 반영.
  * 이 정책에 검토 중 정정이 있으면 새 제안을 막고 그 정정으로 안내한다(한 정책에 안이 둘이면 승인 때 하나가 다른 하나를 덮는다).
  */
 export function PolicyDetailModal({
-  namespace, logicalId, order, onNavigate, onClose, onOpenCorrection, sourceCheckId,
+  namespace, logicalId, order, onNavigate, onClose, onOpenCorrection, sourceCheckId, initialEditing,
 }: {
   namespace: string;
   logicalId: number;
@@ -54,15 +54,27 @@ export function PolicyDetailModal({
   onOpenCorrection: (id: number) => void;
   /** 원문 확인 카드에서 열었으면 그 카드 번호 — 여기서 올린 제안이 승인되면 카드도 해결(C3) */
   sourceCheckId?: number | null;
+  /** 'direct' = 상세 대신 수정 제안 창부터(원문 확인 카드 [정정 요청], 11/04) */
+  initialEditing?: 'direct' | null;
 }) {
   const qc = useQueryClient();
   const { canModifyNs } = useNamespaceAccess();
-  const [editing, setEditing] = useState<'direct' | 'ai' | 'move' | 'retire' | null>(null);
+  const [editing, setEditing] = useState<'direct' | 'ai' | 'move' | 'retire' | null>(initialEditing ?? null);
+  const [more, setMore] = useState(false);   // ⋯ 더보기(분류 옮기기·폐기 — 드문 작업)
   const { data, isLoading, error } = useQuery({
     queryKey: ['policy', namespace, logicalId],
     queryFn: () => getPolicy(namespace, logicalId),
     staleTime: 10_000,
   });
+  // 바로 수정 창으로 열었는데 이 정책에 검토 중 정정이 이미 있으면 상세(그 정정 안내)로 — 다 쓰고 나서 409 나지 않게(리뷰 M2).
+  // 처음 불러왔을 때 한 번만(쓰는 도중 다시 불러와 창이 닫히지 않게)
+  const initialChecked = useRef(false);
+  useEffect(() => {
+    if (!data || initialChecked.current) return;
+    initialChecked.current = true;
+    if (initialEditing && data.open_correction) setEditing(null);
+  }, [data, initialEditing]);
+  const edit = (m: 'direct' | 'ai' | 'move' | 'retire' | null) => { setMore(false); setEditing(m); };
   const idx = order.indexOf(logicalId);
   const prev = idx > 0 ? order[idx - 1] : null;
   const next = idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null;
@@ -78,8 +90,9 @@ export function PolicyDetailModal({
   const open = data?.open_correction ?? null;
   return (
     <>
-      {/* 수정 모달이 떠 있는 동안 상세는 닫아 둔다 — 같이 열려 있으면 Esc 한 번에 둘 다 닫혔다 */}
-      <Modal isOpen={editing === null} onClose={onClose} title="정책" maxWidth="max-w-3xl">
+      {/* 수정 모달이 떠 있는 동안 상세는 닫아 둔다 — 같이 열려 있으면 Esc 한 번에 둘 다 닫혔다.
+          정책을 아직 못 불러왔으면(불러오는 중·오류) 수정 창이 뜰 수 없으니 상세에 그 상태를 보인다(리뷰 M3 — 빈 화면 금지) */}
+      <Modal isOpen={editing === null || !data} onClose={onClose} title="정책" maxWidth="max-w-3xl">
         {isLoading ? (
           <p className="text-xs text-slate-500">불러오는 중…</p>
         ) : error || !data ? (
@@ -96,23 +109,29 @@ export function PolicyDetailModal({
           </Button>
           {idx >= 0 && <span className="text-xs text-slate-500">{idx + 1} / {order.length}</span>}
           {canModifyNs && data && (
-            <div className="ml-auto flex gap-2">
-              {/* 둘은 같은 모양(주·부 없음, 10/21 사용자) */}
-              <Button variant="secondary" size="sm" disabled={!!open} onClick={() => setEditing('ai')}
-                title={open ? `정정 #${open.id} 검토가 끝나야 새 제안을 올릴 수 있어요` : '어떻게 고칠지 한 줄 → AI가 수정안을 써서 정정 요청에 올려요'}>
-                <Sparkles className="w-3.5 h-3.5" />AI 수정 제안
-              </Button>
-              <Button variant="secondary" size="sm" disabled={!!open} onClick={() => setEditing('direct')}
-                title={open ? `정정 #${open.id} 검토가 끝나야 새 제안을 올릴 수 있어요` : '원문·비고를 직접 고쳐 정정 요청에 올려요 — 승인하면 새 버전'}>
-                <Pencil className="w-3.5 h-3.5" />직접 수정
-              </Button>
-              <Button variant="ghost" size="sm" disabled={!!open} onClick={() => setEditing('move')}
-                title={open ? `정정 #${open.id} 검토가 끝나야 새 제안을 올릴 수 있어요` : '다른 분류(대·중·소)로 옮기는 제안 — 새 분류도 쓸 수 있어요'}>
-                <FolderInput className="w-3.5 h-3.5" />분류 옮기기 제안
-              </Button>
-              <Button variant="ghost" size="sm" disabled={!!open} onClick={() => setEditing('retire')}
-                title={open ? `정정 #${open.id} 검토가 끝나야 새 제안을 올릴 수 있어요` : '승인하면 검색·답변에서 빠져요(지우지 않음)'}>
-                <Archive className="w-3.5 h-3.5" />폐기 제안
+            // 자주 쓰는 하나만 주 버튼, 드문 것(분류 옮기기·폐기)은 ⋯ 더보기(11/04 태훈 "버튼이 너무 많다" — 업계 관례)
+            <div className="ml-auto flex items-center gap-2">
+              <div className="relative" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setMore(false); }}>
+                <Button variant="ghost" size="sm" disabled={!!open} onClick={() => setMore((v) => !v)} aria-haspopup="menu" aria-expanded={more}
+                  aria-label="더보기" title={open ? `정정 #${open.id} 검토가 끝나야 새 제안을 올릴 수 있어요` : '분류 옮기기 · 폐기 제안'}>
+                  <MoreHorizontal className="w-4 h-4" />
+                </Button>
+                {more && !open && (
+                  <div role="menu" className="absolute bottom-full right-0 mb-1 w-48 rounded-lg border border-slate-700 bg-slate-800 py-1 shadow-lg z-10">
+                    <button role="menuitem" type="button" onClick={() => edit('move')}
+                      title="다른 분류(대·중·소)로 옮기는 제안 — 새 분류도 쓸 수 있어요"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-200 hover:bg-slate-700">
+                      <FolderInput className="w-3.5 h-3.5" />분류 옮기기 제안</button>
+                    <button role="menuitem" type="button" onClick={() => edit('retire')}
+                      title="승인하면 검색·답변에서 빠져요(지우지 않음)"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-200 hover:bg-slate-700">
+                      <Archive className="w-3.5 h-3.5" />폐기 제안</button>
+                  </div>
+                )}
+              </div>
+              <Button size="sm" disabled={!!open} onClick={() => edit('direct')}
+                title={open ? `정정 #${open.id} 검토가 끝나야 새 제안을 올릴 수 있어요` : '원문·비고를 고쳐 정정 요청에 올려요(창 안에서 AI 초안도 받을 수 있어요) — 승인하면 새 버전'}>
+                <Pencil className="w-3.5 h-3.5" />수정 제안
               </Button>
             </div>
           )}
@@ -120,10 +139,13 @@ export function PolicyDetailModal({
       </Modal>
       {data && (
         <>
+          {/* 카드의 [정정 요청 ▶]으로 바로 연 수정 창은 닫으면 그대로 닫는다(상세가 대신 뜨면 "왜 이게 떴지" — 리뷰 L6).
+              [AI 초안 받기]로 간 창을 닫으면 수정 창으로 돌아온다 */}
           <PolicyEditModal isOpen={editing === 'direct'} namespace={namespace} policy={data}
-            onClose={() => setEditing(null)} onDone={afterSubmit} sourceCheckId={sourceCheckId} />
+            onClose={() => (initialEditing === 'direct' ? onClose() : setEditing(null))}
+            onDone={afterSubmit} sourceCheckId={sourceCheckId} onAiDraft={() => setEditing('ai')} />
           <PolicyAiSuggestModal isOpen={editing === 'ai'} namespace={namespace} policy={data}
-            onClose={() => setEditing(null)} onDone={afterSubmit} sourceCheckId={sourceCheckId} />
+            onClose={() => setEditing('direct')} onDone={afterSubmit} sourceCheckId={sourceCheckId} />
           <PolicyMoveModal isOpen={editing === 'move'} namespace={namespace} itemId={data.item_id} name={data.policy_name}
             currentPath={data.category_path} onClose={() => setEditing(null)} />
           <PolicyRetireModal isOpen={editing === 'retire'} namespace={namespace} itemId={data.item_id} name={data.policy_name}

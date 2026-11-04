@@ -68,7 +68,7 @@ export function GateFlow({ report, stage, onStage, axis }: {
               </span>
               <span className="block text-[11px] text-slate-500">
                 {s.key === '적재' ? '검사 걸림 · 겹침' : '틀림'}
-                {(over[s.key] ?? 0) > 0 && <span className="text-amber-700 dark:text-amber-300" title="AI 감사 로그 — 사람이 AI 추천을 번복한 수(최근 30일)"> · 번복 {over[s.key]}</span>}
+                {(over[s.key] ?? 0) > 0 && <span className="text-amber-700 dark:text-amber-300" title="AI 감사 — 사람이 AI 판단을 번복한 수(최근 30일)"> · 번복 {over[s.key]}</span>}
               </span>
             </button>
             {i < STAGES.length - 1 && <ChevronRight className="w-4 h-4 shrink-0 text-slate-600" aria-hidden />}

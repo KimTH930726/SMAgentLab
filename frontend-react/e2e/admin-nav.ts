@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 
 export type AdminScope = '컬렉션 관리' | '플랫폼 관리';
 /** 플랫폼 관리 메뉴(11/03 범위 나누기) — 나머지는 컬렉션 관리. 화면 이름이 겹치는 '홈'은 scope를 넘긴다 */
-const PLATFORM_ITEMS = new Set(['평가 게이트', 'AI 감사 로그', '사용자 피드백', '정책 컬렉션', '시스템 컬렉션', '조직·권한', 'VOC 이메일', '설정']);
+const PLATFORM_ITEMS = new Set(['평가 게이트', 'AI 감사', '사용자 피드백', '정책 컬렉션', '시스템 컬렉션', '조직·권한', 'VOC 이메일', '설정']);
 /** 묶음(아코디언) 안에 든 항목 → 묶음 이름. 나머지는 한 줄 메뉴 */
 const IN_GROUP: Record<string, string> = { '정책 컬렉션': '컬렉션', '시스템 컬렉션': '컬렉션' };
 

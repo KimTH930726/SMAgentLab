@@ -254,11 +254,18 @@ async def get_overrides(days: int = Query(default=30, ge=1, le=365), admin: dict
         cands = [dict(r) for r in await conn.fetch(
             "SELECT c.id, c.title, c.status, c.qids FROM eval_candidate c WHERE c.cause = 'override_location' "
             "AND c.run_id = " + LATEST_KNOWLEDGE_RUN_SQL + " ORDER BY c.id")]   # 업무지식 축 진단에서 만든다(10/29)
-        # 날짜별 — 감사 로그 위 날짜 카드(11/03 태훈 "건수·날짜별 카드로"): 그날 AI 판단 수 · 그중 번복 수
-        daily = [{"day": r["day"].isoformat(), "n": r["n"], "overrides": r["ov"]} for r in await conn.fetch(
-            f"""SELECT (d.created_at AT TIME ZONE 'Asia/Seoul')::date AS day, count(*)::int AS n, count(*) FILTER (WHERE {override_mod.OVERRIDE_SQL})::int AS ov
+        # 날짜별 막대(11/04 — 카드 대신 한 줄 막대): 그날(한국 시간) 판단을 리포트와 같은 다섯 갈래(REVIEW_SQL)로, 종류별로도.
+        # 옛 "번복"은 OVERRIDE_SQL만 세서 규칙 적용·자동 적용까지 번복으로 들어가 리포트 숫자와 달랐다
+        by_day: dict[str, dict] = {}
+        for r in await conn.fetch(
+            f"""SELECT (d.created_at AT TIME ZONE 'Asia/Seoul')::date AS day, d.kind, {override_mod.REVIEW_SQL} AS review, count(*)::int AS n
                 FROM ops_ai_decision d WHERE d.created_at > NOW() - make_interval(days => $1) AND NOT (COALESCE(d.final_value, '{{}}') ? 'superseded')
-                GROUP BY 1 ORDER BY 1 DESC""", days)]
+                GROUP BY 1, 2, 3""", days):
+            x = by_day.setdefault(r["day"].isoformat(), {"day": r["day"].isoformat(), "n": 0, "overrides": 0, "kinds": {}})
+            x["n"] += r["n"]
+            x["overrides"] += r["n"] if r["review"] == "override" else 0
+            x["kinds"].setdefault(r["kind"], {}).__setitem__(r["review"], r["n"])
+        daily = sorted(by_day.values(), key=lambda x: x["day"], reverse=True)
     for c in cands:
         c["qids"] = json.loads(c["qids"]) if isinstance(c["qids"], str) else (c["qids"] or [])
     rep["candidates"] = cands

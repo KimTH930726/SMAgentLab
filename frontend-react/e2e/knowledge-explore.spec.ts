@@ -53,8 +53,8 @@ test('지식 검색 — 카드(관련도·채팅 근거) · 필터 건수 · 수
   await expect(results.locator('article')).toHaveCount(1);
   await channel.getByRole('button', { name: /컨플루언스 1/ }).click();               // 다시 누르면 해제
 
-  // [수정] → 기존 수정 창
-  await first.getByRole('button', { name: '수정' }).click();
+  // 카드 전체 = 수정 창(11/04 — [수정] 버튼만 누를 수 있던 것)
+  await first.click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.keyboard.press('Escape');
 

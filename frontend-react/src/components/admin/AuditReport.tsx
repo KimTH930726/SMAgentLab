@@ -28,11 +28,11 @@ export const REVIEW_BADGE: Record<ReviewStatus, string> = {
   rule: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-500/15 dark:text-indigo-300',
   pending: 'border border-dashed border-slate-500 text-slate-400',
 };
-const BAR: Record<ReviewStatus, string> = {
+export const BAR: Record<ReviewStatus, string> = {
   accept: 'bg-emerald-500 dark:bg-emerald-400', override: 'bg-amber-500 dark:bg-amber-400', auto: 'bg-slate-500',
   rule: 'bg-indigo-400 dark:bg-indigo-500', pending: 'bg-slate-700',
 };
-const ORDER: ReviewStatus[] = ['accept', 'override', 'auto', 'rule', 'pending'];
+export const ORDER: ReviewStatus[] = ['accept', 'override', 'auto', 'rule', 'pending'];
 const SPOT_REASON: { key: 'wrong' | 'both_ok' | 'context_changed'; label: string }[] = [
   { key: 'wrong', label: 'AI 오류' }, { key: 'both_ok', label: '선호 차이' }, { key: 'context_changed', label: '맥락 변화' },
 ];
@@ -52,9 +52,10 @@ function StackBar({ k }: { k: OverrideKind }) {
   );
 }
 
-export function AuditReport({ kinds, days, candidates, onKind, onReview, onCriteria, canCriteria }: {
+export function AuditReport({ kinds, days, candidates, onShow, onCriteria, canCriteria }: {
   kinds: OverrideKind[]; days: number; candidates: DecisionsReport['candidates'];
-  onKind: (kind: string) => void; onReview: (r: ReviewStatus) => void; onCriteria: (kind: string) => void; canCriteria: (kind: string) => boolean;
+  /** 아래 감사 로그를 이 판단(·검토 결과)으로 — 날짜 거르기는 풀고 스크롤(11/04 "눌러도 뭔지 모르겠다": 이름 클릭 → [기록 보기 ›] 버튼) */
+  onShow: (kind: string | null, review: ReviewStatus | null) => void; onCriteria: (kind: string) => void; canCriteria: (kind: string) => boolean;
 }) {
   const [spotOpen, setSpotOpen] = useState(false);
   const sum = (s: ReviewStatus) => kinds.reduce((a, k) => a + (k.review?.[s] ?? 0), 0);
@@ -130,13 +131,14 @@ export function AuditReport({ kinds, days, candidates, onKind, onReview, onCrite
                 <th className="py-1.5 px-2 font-medium text-right" title="번복 ÷ (수용 + 번복)">번복률</th>
                 <th className="py-1.5 px-2 font-medium text-right" title="규칙 적용 · 자동 적용 · 검토 대기">미검토</th>
                 <th className="py-1.5 pl-2 font-medium">표본 수</th>
+                <th className="py-1.5 pl-2 font-medium"><span className="sr-only">감사 로그</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700/70">
               {kinds.map((k) => (
                 <tr key={k.kind} data-testid={`report-row-${k.kind}`}>
                   <td className="py-2.5 pr-2">
-                    <button type="button" onClick={() => onKind(k.kind)} className="font-medium text-slate-100 hover:underline" title="아래 감사 로그를 이 판단으로">{k.kind_name}</button>
+                    <span className="font-medium text-slate-100">{k.kind_name}</span>
                     {canCriteria(k.kind) && <button type="button" onClick={() => onCriteria(k.kind)} className="ml-1 text-slate-500 hover:text-slate-200" aria-label={`${k.kind_name} 판단 기준`}>ⓘ</button>}
                   </td>
                   <td className="py-2.5 px-2"><StackBar k={k} /></td>
@@ -146,6 +148,11 @@ export function AuditReport({ kinds, days, candidates, onKind, onReview, onCrite
                   <td className="py-2.5 px-2 text-right tabular-nums text-slate-300">{k.review.rule + k.review.auto + k.review.pending}</td>
                   <td className={clsx('py-2.5 pl-2 text-xs', k.decided < MIN_SAMPLE ? 'text-amber-700 dark:text-amber-300' : 'text-slate-400')}>
                     사람 검토 {k.decided}{k.decided < MIN_SAMPLE ? ' — 부족(참고)' : ''}{k.spot?.n ? ` · 표본 감사 ${k.spot.n}` : ''}
+                  </td>
+                  <td className="py-2.5 pl-2 text-right">
+                    <button type="button" onClick={() => onShow(k.kind, null)} data-testid={`report-show-${k.kind}`}
+                      title={`아래 감사 로그에 ${k.kind_name} 판단만 — 검토 결과 전체 · 날짜 전체`}
+                      className="whitespace-nowrap rounded-md border border-slate-600 px-2 py-0.5 text-xs text-slate-200 hover:bg-slate-700">기록 보기 ›</button>
                   </td>
                 </tr>
               ))}
@@ -167,6 +174,7 @@ export function AuditReport({ kinds, days, candidates, onKind, onReview, onCrite
                 <td className="py-2.5 px-2 text-right tabular-nums text-slate-400">{pct(candidates.disagree, candDecided)}</td>
                 <td className="py-2.5 px-2 text-right tabular-nums text-slate-300">{candidates.by_status.proposed ?? 0}</td>
                 <td className="py-2.5 pl-2 text-xs text-slate-400">사람 검토 {candDecided}</td>
+                <td className="py-2.5 pl-2" title="개선 후보 결정 기록은 평가 게이트 › 적용 이력에서" />
               </tr>
             </tbody>
           </table>
@@ -182,7 +190,7 @@ export function AuditReport({ kinds, days, candidates, onKind, onReview, onCrite
               <p className="text-xs text-slate-300">{Object.entries(k.reasons).map(([r, n]) => `${r} ${n}`).join(' · ') || '사유 기록 없음'}</p>
               {k.patterns.length > 0 && <p className="text-xs text-slate-400">{k.patterns.map((p) => `${p.pattern}${p.n > 1 ? ` ×${p.n}` : ''}`).join(' · ')}</p>}
               <div className="flex justify-end">
-                <button type="button" onClick={() => { onKind(k.kind); onReview('override'); }} className="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700">번복 기록 보기</button>
+                <button type="button" onClick={() => onShow(k.kind, 'override')} className="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700">번복 기록 보기</button>
               </div>
             </div>
           ))}
@@ -202,8 +210,8 @@ export function AuditReport({ kinds, days, candidates, onKind, onReview, onCrite
           <div className="rounded-lg border border-slate-700 p-3 flex flex-wrap items-center justify-between gap-2">
             <span className="text-sm text-slate-200">규칙 적용 <b className="tabular-nums">{asum('rule')}</b> · 검토 대기 <b className="tabular-nums">{asum('pending')}</b></span>
             <span className="flex gap-1.5">
-              <button type="button" onClick={() => onReview('rule')} className="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700">규칙 적용 보기</button>
-              <button type="button" onClick={() => onReview('pending')} className="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700">검토 대기 보기</button>
+              <button type="button" onClick={() => onShow(null, 'rule')} className="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700">규칙 적용 보기</button>
+              <button type="button" onClick={() => onShow(null, 'pending')} className="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700">검토 대기 보기</button>
             </span>
           </div>
         </section>

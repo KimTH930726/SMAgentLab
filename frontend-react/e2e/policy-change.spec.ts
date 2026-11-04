@@ -113,14 +113,15 @@ test('분류 옮기기 제안 → 다른 제안 409 → 승인 → 새 버전(�
   await loginAdmin(page, { openAdmin: false });
   await openList(page);
   await page.getByRole('button', { name: new RegExp(NAME) }).click();
-  await page.getByRole('button', { name: '분류 옮기기 제안' }).click();
+  await page.getByRole('button', { name: '더보기' }).click();   // 드문 작업은 ⋯ 더보기(11/04)
+  await page.getByRole('menuitem', { name: '분류 옮기기 제안' }).click();
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: /분류 옮기기 제안/ }) });
   await expect(dialog.getByRole('button', { name: '정정 요청에 올리기' })).toBeDisabled();   // 지금 분류 그대로면 못 올림
   await dialog.locator('#pmove-lv1').fill('반품·교환');
   const id = await submit(page, /분류 옮기기 제안/);
   expect(rowsOf(NAME)).toEqual(['1:active:테스트>반품']);   // 승인 전 그대로
   await expect(page.getByText(`정정 #${id} 검토 중`).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: '폐기 제안' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '더보기' })).toBeDisabled();   // 폐기 제안도 그 안
 
   const dup = await post(request, '/policy-change', { change: 'retire', target_id: Number(old[0]), reason: '중복' });
   expect(dup.status()).toBe(409);
@@ -139,7 +140,8 @@ test('폐기 제안(이유 필수) → 승인 → 상태만 deprecated(행 남�
   await loginAdmin(page, { openAdmin: false });
   await openList(page);
   await page.getByRole('button', { name: new RegExp(NAME) }).click();
-  await page.getByRole('button', { name: '폐기 제안' }).click();
+  await page.getByRole('button', { name: '더보기' }).click();
+  await page.getByRole('menuitem', { name: '폐기 제안' }).click();
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: /폐기 제안/ }) });
   await expect(dialog.getByRole('button', { name: '정정 요청에 올리기' })).toBeDisabled();   // 이유 없이 못 올림
   await dialog.locator('#pretire-reason').fill('E2E — 다른 정책으로 합침');

@@ -278,11 +278,11 @@ export function ChatFailureReport({ content }: { content: string }) {
 
 // ── 관리자: 품질 › 사용자 피드백 ────────────────────────────────────────────
 
-type Filter = FeedbackStatus | 'all';
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'new', label: '신규' }, { key: 'planned', label: '선정' }, { key: 'in_progress', label: '진행 중' }, { key: 'done', label: '완료' },
-  { key: 'duplicate', label: '중복' }, { key: 'declined', label: '기각' }, { key: 'all', label: '전체' },
-];
+// 칸반 보드(11/04 태훈 "카드로" — Jira 보드·Canny 로드맵 관례): 진행 단계 네 열 + 종료(중복·기각)는 접힌 줄
+const BOARD: FeedbackStatus[] = ['new', 'planned', 'in_progress', 'done'];
+const CLOSED: FeedbackStatus[] = ['duplicate', 'declined'];
+/** 완료 열은 최근 몇 건만 — 쌓이기만 하는 열이라([n건 더]로 펼침) */
+const DONE_SHOW = 5;
 
 export function useFeedbackNewCount(enabled: boolean): number {
   const q = useQuery({ queryKey: ['user-feedback', 'new'], queryFn: () => listFeedback('new'), enabled, staleTime: 60_000 });
@@ -290,35 +290,58 @@ export function useFeedbackNewCount(enabled: boolean): number {
 }
 
 export function UserFeedbackPanel() {
-  const [filter, setFilter] = useState<Filter>('new');
-  // 고른 피드백 — 목록 값이 있으면 그것(최신), 처리로 지금 필터에서 빠져도 창은 열린 채 고른 순간 값 + 바뀐 상태로(11/03 상세 모달)
+  // 고른 피드백 — 보드 값이 있으면 그것(최신), 없으면 고른 순간 값 + 바뀐 상태로(11/03 상세 모달)
   const [sel, setSel] = useState<FeedbackItem | null>(null);
-  const q = useQuery({ queryKey: ['user-feedback', filter], queryFn: () => listFeedback(filter === 'all' ? undefined : filter) });
+  const [allDone, setAllDone] = useState(false);
+  const [showClosed, setShowClosed] = useState(false);
+  const q = useQuery({ queryKey: ['user-feedback', 'all'], queryFn: () => listFeedback() });   // 최근 200건(서버) — 열 머리 건수는 전체(counts)
   const counts = q.data?.counts;
-  const total = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0;
+  const items = q.data?.items ?? [];
+  const by = (s: FeedbackStatus) => items.filter((f) => f.status === s);
+  const closed = items.filter((f) => CLOSED.includes(f.status));
   return (
     <div className="space-y-4" data-testid="user-feedback-panel">
       <AutoSignals />
-      <section className="space-y-2">
-        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="상태" data-testid="feedback-filters">
-          {FILTERS.map((f) => {
-            const n = f.key === 'all' ? total : counts?.[f.key] ?? 0;
-            if (n === 0 && f.key !== 'new' && f.key !== filter) return null;
-            return (
-              <button key={f.key} onClick={() => setFilter(f.key)} aria-pressed={filter === f.key}
-                title={f.key === 'all' ? undefined : FB_STATUS[f.key].hint}
-                className={clsx('rounded-full px-3 py-1 text-xs border', filter === f.key ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-600 text-slate-300 hover:bg-slate-800')}>
-                {f.label} <span className="tabular-nums">{n}</span></button>
-            );
-          })}
-        </div>
-        {q.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p>
-          : q.error ? <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p>
-            : (q.data?.items ?? []).length === 0 ? <p className="text-sm text-slate-500">{filter === 'new' ? '새 피드백이 없어요' : '해당하는 피드백이 없어요'}</p>
-              : <div className="rounded-xl border border-slate-700 divide-y divide-slate-700/60 overflow-hidden">
-                  {q.data!.items.map((f) => <FeedbackRow key={f.id} f={f} onOpen={() => setSel(f)} />)}</div>}
-      </section>
-      {sel && <FeedbackDetail f={q.data?.items.find((x) => x.id === sel.id) ?? sel} onClose={() => setSel(null)}
+      {q.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p>
+        : q.error ? <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p> : (
+          <section className="space-y-3">
+            <p className="text-xs text-slate-500" title="단계는 앞뒤 한 칸씩만 — 신규 → 선정 → 진행 중 → 완료. 카드를 누르면 상세 창에서 단계를 바꿔요">
+              카드를 누르면 상세 · 단계 이동 ⓘ</p>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" data-testid="feedback-board">
+              {BOARD.map((s) => {
+                const list = by(s);
+                const shown = s === 'done' && !allDone ? list.slice(0, DONE_SHOW) : list;
+                return (
+                  <div key={s} className="min-w-0 rounded-xl border border-slate-700 bg-slate-900/40 p-2 space-y-2" data-testid={`feedback-col-${s}`}>
+                    <h3 className="flex items-center justify-between px-1 text-xs font-medium text-slate-300" title={FB_STATUS[s].hint}>
+                      <span className="inline-flex items-center gap-1.5"><span className={`rounded-full px-2 py-0.5 text-[11px] ${FB_STATUS[s].cls}`}>{FB_STATUS[s].label}</span></span>
+                      <span className="tabular-nums text-slate-500">{counts?.[s] ?? list.length}</span>
+                    </h3>
+                    {list.length === 0 ? <p className="px-1 py-3 text-center text-xs text-slate-500">{s === 'new' ? '새 피드백이 없어요' : '없음'}</p>
+                      : shown.map((f) => <FeedbackCard key={f.id} f={f} onOpen={() => setSel(f)} />)}
+                    {s === 'done' && list.length > DONE_SHOW && (
+                      <button type="button" onClick={() => setAllDone((v) => !v)} className="w-full rounded-md py-1 text-xs text-slate-400 hover:bg-slate-800 hover:text-slate-200">
+                        {allDone ? '접기' : `${list.length - DONE_SHOW}건 더`}</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {closed.length > 0 && (
+              <div className="space-y-2" data-testid="feedback-closed">
+                <button type="button" onClick={() => setShowClosed((v) => !v)} aria-expanded={showClosed}
+                  className="text-xs text-slate-400 hover:text-slate-200" title="하지 않기로 했거나 다른 피드백으로 묶은 것 — 상세에서 다시 열 수 있어요">
+                  {showClosed ? '▾' : '▸'} 종료 — {CLOSED.map((s) => `${FB_STATUS[s].label} ${counts?.[s] ?? by(s).length}`).join(' · ')}</button>
+                {showClosed && (
+                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                    {closed.map((f) => <FeedbackCard key={f.id} f={f} onOpen={() => setSel(f)} />)}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+      {sel && <FeedbackDetail f={items.find((x) => x.id === sel.id) ?? sel} onClose={() => setSel(null)}
         onChanged={(patch) => setSel((x) => (x ? { ...x, ...patch } : x))} />}
     </div>
   );
@@ -341,20 +364,25 @@ export function handoffText(f: FeedbackItem): string {
   return lines.join('\n');
 }
 
-/** 목록 한 줄 — 상태가 먼저 보이게(번호 · 상태 · 종류 · 내용 한 줄 · 첨부 · 보낸 사람 · 시간). 누르면 상세 창(11/03 태훈 "목록은 상태만, 처리는 모달에서") */
-function FeedbackRow({ f, onOpen }: { f: FeedbackItem; onOpen: () => void }) {
+/** 보드 카드 — 번호 · 종류 · 내용 세 줄 · 첨부 수 · 보낸 사람 · 시간. 상태는 열이 말해 주고(종료 줄에선 배지로), 누르면 상세 창(처리는 거기서, 11/03) */
+function FeedbackCard({ f, onOpen }: { f: FeedbackItem; onOpen: () => void }) {
   const ctx = contextLine(f.context);
   return (
-    <button onClick={onOpen} data-testid={`feedback-${f.id}`}
-      className="w-full text-left px-3 py-2.5 flex items-center gap-2 text-xs hover:bg-slate-800/60 transition-colors">
-      <span className="w-10 shrink-0 text-slate-500 tabular-nums">#{f.id}</span>
-      <span className={`w-14 shrink-0 text-center rounded-full px-2 py-0.5 text-[11px] ${FB_STATUS[f.status].cls}`} title={FB_STATUS[f.status].hint}
-        data-testid={`feedback-${f.id}-status`}>{FB_STATUS[f.status].label}</span>
-      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${KIND[f.kind].cls}`}>{KIND[f.kind].label}</span>
-      <span className="min-w-0 flex-1 truncate text-sm text-slate-200">{f.body || ctx || '(내용 없음 — 오류 문맥만)'}</span>
-      {f.files.length > 0 && <span className="shrink-0 text-slate-500" title="첨부 이미지">이미지 {f.files.length}</span>}
-      <span className="hidden sm:inline shrink-0 text-slate-400 max-w-[8rem] truncate">{f.reporter ?? '탈퇴한 사용자'}</span>
-      <span className="shrink-0 text-slate-500 tabular-nums">{fmt(f.created_at)}</span>
+    <button type="button" onClick={onOpen} data-testid={`feedback-${f.id}`}
+      className="w-full rounded-lg border border-slate-700 bg-slate-800 p-2.5 text-left space-y-1.5 hover:border-slate-500 transition-colors">
+      <div className="flex items-center gap-1.5 text-[11px]">
+        <span className="tabular-nums text-slate-500">#{f.id}</span>
+        <span className={`rounded-full px-2 py-0.5 ${KIND[f.kind].cls}`}>{KIND[f.kind].label}</span>
+        <span className={clsx(`ml-auto rounded-full px-2 py-0.5 ${FB_STATUS[f.status].cls}`, BOARD.includes(f.status) && 'sr-only')} title={FB_STATUS[f.status].hint}
+          data-testid={`feedback-${f.id}-status`}>{FB_STATUS[f.status].label}</span>
+      </div>
+      <p className="line-clamp-3 break-words text-sm text-slate-200">{f.body || ctx || '(내용 없음 — 오류 문맥만)'}</p>
+      {f.body && ctx && <p className="truncate text-[11px] text-slate-500" title={ctx}>{ctx}</p>}
+      <div className="flex items-center gap-2 text-[11px] text-slate-500">
+        {f.files.length > 0 && <span title="첨부 이미지">이미지 {f.files.length}</span>}
+        <span className="min-w-0 truncate text-slate-400">{f.reporter ?? '탈퇴한 사용자'}</span>
+        <span className="ml-auto shrink-0 tabular-nums">{fmt(f.created_at)}</span>
+      </div>
     </button>
   );
 }

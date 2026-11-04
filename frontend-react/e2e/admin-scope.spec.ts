@@ -46,7 +46,7 @@ test('범위 전환 — 컬렉션 관리 홈 ↔ 플랫폼 관리 홈, 범위마
   await switchScope(page, '플랫폼 관리');
   await expect(page).toHaveURL(/\/admin\/p\.home$/);
   await expect(page.getByTestId('platform-home')).toBeVisible();
-  for (const it of ['평가 게이트', 'AI 감사 로그', '사용자 피드백', '컬렉션', '조직·권한', 'VOC 이메일', '설정']) {
+  for (const it of ['평가 게이트', 'AI 감사', '사용자 피드백', '컬렉션', '조직·권한', 'VOC 이메일', '설정']) {
     await expect(nav(page).getByRole('button', { name: it, exact: true })).toBeVisible();
   }
   await expect(nav(page).getByRole('button', { name: '운영 지식', exact: true })).toHaveCount(0);

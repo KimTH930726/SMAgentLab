@@ -44,7 +44,8 @@ test('피드백 — 이미지 첨부 보내기 → 관리자 분류(기각 사�
     await expect(panel.getByTestId('feedback-auto-signals')).toContainText('최근 14일 채팅 장애');
     const row = panel.getByTestId(`feedback-${id}`);
     await expect(row).toContainText(BODY.slice(0, 20));
-    await expect(row.getByTestId(`feedback-${id}-status`)).toHaveText('신규');   // 목록 = 상태만, 처리는 상세 창(11/03)
+    await expect(panel.getByTestId('feedback-col-new').getByTestId(`feedback-${id}`)).toBeVisible();   // 칸반 보드 — 신규 열(11/04)
+    await expect(row.getByTestId(`feedback-${id}-status`)).toHaveText('신규');   // 보드 = 상태만, 처리는 상세 창(11/03)
     await row.click();
     const det = page.getByTestId(`feedback-detail-${id}`);
     await expect(det).toContainText(BODY);
@@ -77,7 +78,8 @@ test('피드백 — 이미지 첨부 보내기 → 관리자 분류(기각 사�
     if (!(await det.isVisible())) await row.click();
     await pick.getByRole('button', { name: '선정' }).click();
     await expect.poll(() => psql(`SELECT status FROM ops_user_feedback WHERE id = ${id}`)).toBe('planned');
-    await expect(row).toHaveCount(0);                     // [신규] 필터에서 빠짐 — 상세 창은 열린 채 상태만 바뀜
+    await expect(panel.getByTestId('feedback-col-planned').getByTestId(`feedback-${id}`)).toHaveCount(1);   // 선정 열로 옮겨감 — 상세 창은 열린 채
+    await expect(panel.getByTestId('feedback-col-new').getByTestId(`feedback-${id}`)).toHaveCount(0);
     await expect(pick.getByRole('button', { name: '선정' })).toHaveAttribute('aria-pressed', 'true');
     await expect(det.getByTestId(`feedback-${id}-handoff`)).toHaveCount(0);           // 개발 요청서는 진행 중일 때만
     await expect(pick.getByRole('button', { name: /완료/ })).toHaveCount(0);           // 선정에선 완료로 건너뛰지 못함

@@ -52,7 +52,7 @@ test.afterAll(() => {
   dropPolicyPart(NS);
 });
 
-test('원문 확인 → [해결] 메모 → 원장 approved + 메모, 정정 요청 배지엔 안 셈', async ({ page, request }) => {
+test('원문 확인 → [처리 완료로 닫기] 메모 → 원장 approved + 메모, 정정 요청 배지엔 안 셈', async ({ page, request }) => {
   await login(page);
   // 원문 확인 항목은 정정 요청 건수에 안 들어간다
   const tok = await adminToken();
@@ -64,17 +64,17 @@ test('원문 확인 → [해결] 메모 → 원장 approved + 메모, 정정 요
   const card = page.getByTestId(`source-check-${checkId}`);
   await expect(card).toContainText('E2E 원문 확인');
   await expect(card).toContainText(P1.name);   // 대상 정책 이름
-  await card.getByRole('button', { name: '해결' }).click();
+  await card.getByRole('button', { name: '처리 완료로 닫기' }).click();
   const done = page.waitForResponse((r) => r.url().includes(`/api/policy/source-checks/${checkId}/resolve`));
-  await page.getByLabel('해결 메모').fill('담당자 확인 — 원문 수정 불필요');
-  await page.getByRole('button', { name: '해결로 표시' }).click();
+  await page.getByLabel('처리 메모').fill('담당자 확인 — 원문 수정 불필요');
+  await page.getByRole('dialog').getByRole('button', { name: '처리 완료로 닫기' }).click();
   expect((await done).ok()).toBeTruthy();
 
   expect(psql(`SELECT status || '|' || (ai_verdict->>'resolution') || '|' || (ai_verdict->>'note') FROM ops_improvement_item WHERE id = ${checkId}`))
     .toBe('approved|resolved|담당자 확인 — 원문 수정 불필요');
   await expect(card).toBeHidden();                       // "확인할 것"에서 빠짐
   await page.getByRole('button', { name: '처리됨' }).click();
-  await expect(page.getByTestId(`source-check-${checkId}`)).toContainText('해결');
+  await expect(page.getByTestId(`source-check-${checkId}`)).toContainText('처리 완료');
   // 정책 자체는 그대로
   expect(rows(P1.name)).toEqual([`1:active:${P1.body}`]);
 });
@@ -133,8 +133,8 @@ test('JSON 내려받기 → 하나 고침 → 미리보기 바뀜 1 → 정정 �
 });
 
 // C3(10/26) — 카드에서 연 정책으로 올린 제안 = 카드 "정정 요청 중 #n" → 반려되면 카드는 처리 전 그대로(반려됨 표시) →
-// [문제 없음](사유 고르기)이 원장 + AI 판단 원장에. 다른 카드: 제안 승인 = 카드 자동 해결(메모 "정정 #n 승인").
-test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이면 자동 해결 · [문제 없음] 사유가 AI 판단 원장에', async ({ page, request }) => {
+// [이슈 아님으로 닫기](사유 고르기)이 원장 + AI 판단 원장에. 다른 카드: 제안 승인 = 카드 자동 해결(메모 "정정 #n 승인").
+test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이면 자동 해결 · [이슈 아님으로 닫기] 사유가 AI 판단 원장에', async ({ page, request }) => {
   test.setTimeout(240_000);
   const lid = psql(`SELECT logical_id FROM policy_item WHERE namespace_id = ${nsId()} AND policy_name = '${P1.name}' AND status = 'active'`);
   const mk = (desc: string) => Number(psql(`INSERT INTO ops_improvement_item (kind, source, namespace_id, target_type, target_id, user_input, original) `
@@ -147,8 +147,7 @@ test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이
 
   async function proposeFrom(card: number, body: string): Promise<number> {
     const el = page.getByTestId(`source-check-${card}`);
-    await el.getByRole('button', { name: P1.name }).click();
-    await page.getByRole('button', { name: '직접 수정' }).click();
+    await el.getByTestId(`source-check-fix-${card}`).click();   // [정정 요청 ▶] = 수정 제안 창이 바로(11/04)
     const form = page.locator('form').filter({ has: page.locator('#policy-edit-body') });
     await form.locator('#policy-edit-body').fill(body);
     const created = page.waitForResponse((r) => r.url().endsWith('/api/corrections') && r.request().method() === 'POST');
@@ -170,9 +169,9 @@ test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이
   await openPolicyTab(page, '원문 확인');
   await expect(page.getByTestId(`source-check-${c2}`)).toContainText(`정정 #${r1} 반려됨`);
   expect(psql(`SELECT status FROM ops_improvement_item WHERE id = ${c2}`)).toBe('pending');   // 카드는 처리 전 그대로
-  // [문제 없음] — 사유 없이는 못 닫고, 고르면 원장 rejected + 사유, AI 판단 원장에 한 줄
-  await page.getByTestId(`source-check-${c2}`).getByRole('button', { name: '문제 없음' }).click();
-  const submit = page.getByRole('button', { name: '문제 없음으로 닫기' });
+  // [이슈 아님으로 닫기] — 사유 없이는 못 닫고, 고르면 원장 rejected + 사유, AI 판단 원장에 한 줄
+  await page.getByTestId(`source-check-${c2}`).getByRole('button', { name: '이슈 아님으로 닫기' }).click();
+  const submit = page.getByRole('dialog').getByRole('button', { name: '이슈 아님으로 닫기' });
   await expect(submit).toBeDisabled();
   await page.getByLabel('중복').check();
   await submit.click();

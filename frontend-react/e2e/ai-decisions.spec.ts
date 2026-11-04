@@ -34,7 +34,7 @@ test('AI 감사 리포트 — 사람 검토 결과(수용·번복·규칙 적용
   const h = { headers: { Authorization: `Bearer ${t}` } };
 
   await loginAdmin(page);
-  await goAdmin(page, 'AI 감사 로그');
+  await goAdmin(page, 'AI 감사');
   const report = page.getByTestId('audit-report');
   await expect(report).toBeVisible();
   // 화면 숫자 = API(사람 검토 = 수용 + 번복, 번복률 분모)
@@ -56,11 +56,20 @@ test('AI 감사 리포트 — 사람 검토 결과(수용·번복·규칙 적용
   for (const r of techs.find((x) => x.key === 'clarify')!.rules!) await expect(crit).toContainText(r);
   await page.keyboard.press('Escape');
 
-  // 감사 로그 — 기본 = 번복, 행마다 검토 결과 배지 · 번복 사유(업계 용어)
+  // 날짜별 막대(11/04 — 카드 대신)
+  await expect(page.getByTestId('daily-chart')).toBeVisible();
+  // 감사 로그 — 표의 [기록 보기 ›] = 그 종류 · 검토 결과 전체 · 날짜 전체, 걸린 거르기는 칩(✕)으로 보인다
   const log = page.getByTestId('audit-log');
-  await page.getByTestId('report-row-knowledge_location').getByRole('button', { name: '등록 위치', exact: true }).click();
   const chips = log.getByTestId('audit-review');
-  await expect(chips.getByRole('button', { name: /^번복/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(chips.getByRole('button', { name: /^번복/ })).toHaveAttribute('aria-pressed', 'true');   // 처음 = 번복
+  await page.getByTestId('report-show-knowledge_location').click();
+  await expect(chips.getByRole('button', { name: /^전체/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(log.getByTestId('audit-chip-kind')).toContainText('등록 위치');
+  await expect(log.getByTestId('audit-chip-review')).toHaveCount(0);
+  await expect(log.getByTestId(`log-${over}`)).toBeVisible();
+  await expect(log.getByTestId(`log-${kept}`)).toBeVisible();
+  await chips.getByRole('button', { name: /^번복/ }).click();
+  await expect(log.getByTestId('audit-chip-review')).toContainText('번복');
   await expect(log.getByTestId(`log-${over}-review`)).toHaveText('번복');
   await expect(log.getByTestId(`log-${over}`)).toContainText('맥락 변화');
   await expect(log.getByTestId(`log-${kept}`)).toHaveCount(0);
@@ -79,7 +88,7 @@ test('AI 감사 리포트 — 사람 검토 결과(수용·번복·규칙 적용
     body: JSON.stringify({ result: 'accepted' }) });
   expect(r2.status).toBe(404);   // 번복은 감사 대상 아님
   await page.reload();
-  await page.getByTestId('report-row-knowledge_location').getByRole('button', { name: '등록 위치', exact: true }).click();
+  await page.getByTestId('report-show-knowledge_location').click();
   await page.getByTestId('audit-log').getByTestId('audit-review').getByRole('button', { name: /^수용/ }).click();
   await expect(page.getByTestId('audit-log').getByTestId(`log-${kept}`)).toContainText('감사: 번복 · AI 오류');
 });
