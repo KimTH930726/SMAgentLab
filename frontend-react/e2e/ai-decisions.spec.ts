@@ -26,39 +26,62 @@ test.afterAll(() => {
   psql(`DELETE FROM eval_question_candidate WHERE question = '${PREVIEW_Q}' AND source = 'preview'`);
 });
 
-test('AI 감사 로그 — 기록만: 번복과 이유가 보이고, 묻는 버튼은 없고, 번복만(기본)을 끄면 그대로 둔 판단도 보인다', async ({ page }) => {
+test('AI 감사 리포트 — 사람 검토 결과(수용·번복·규칙 적용…)가 보이고, 번복률은 사람 검토로만, 로그는 검토 결과로 거르고, 표본 감사가 남는다', async ({ page }) => {
   test.setTimeout(90_000);
   const over = row(`jsonb_build_object('namespace_id', (SELECT max(id) FROM ops_namespace WHERE kind = 'domain'), 'override_reason', 'context_changed')`);
   const kept = row(`jsonb_build_object('namespace_id', (SELECT min(id) FROM ops_namespace WHERE kind = 'domain'), 'choice', 'accept')`);
+  const t = await adminToken();
+  const h = { headers: { Authorization: `Bearer ${t}` } };
 
   await loginAdmin(page);
   await goAdmin(page, 'AI 감사 로그');
-  await expect(page.getByTestId('override-summary')).toBeVisible();
-  for (const k of ['location', 'clarify', 'source', 'suggest']) await expect(page.getByTestId(`decision-card-${k}`)).toBeVisible();
+  const report = page.getByTestId('audit-report');
+  await expect(report).toBeVisible();
+  // 화면 숫자 = API(사람 검토 = 수용 + 번복, 번복률 분모)
+  const ov: { kinds: { kind: string; decided: number; overrides: number; review: Record<string, number>; admin_reviewed: boolean }[] } =
+    await (await apiFetch(`${API}/api/eval/overrides?days=30`, h)).json();
+  const admin = ov.kinds.filter((k) => k.admin_reviewed);   // 요약 = 관리자 검토 종류만(되묻기·제안은 사용자 선택)
+  const reviewed = admin.reduce((a, k) => a + k.review.accept + k.review.override, 0);
+  expect(reviewed).toBe(admin.reduce((a, k) => a + k.decided, 0));
+  await expect(page.getByTestId('report-reviewed')).toHaveText(String(reviewed));
+  for (const k of ['knowledge_location', 'chat_clarify', 'source_check']) await expect(page.getByTestId(`report-row-${k}`)).toBeVisible();
+  await expect(page.getByTestId('report-findings')).toBeVisible();
 
-  // 종류 ⓘ = 지금 기준 창(대장의 되묻기 항목 이름)
-  const t = await adminToken();
-  const techs: { key: string; name: string; rules?: string[] }[] = await (await apiFetch(`${API}/api/eval/techniques`, { headers: { Authorization: `Bearer ${t}` } })).json();
-  await page.getByTestId('decision-detail-clarify').click();
+  // 판단 기준(ⓘ) = 대장의 되묻기 항목
+  const techs: { key: string; name: string; rules?: string[] }[] = await (await apiFetch(`${API}/api/eval/techniques`, h)).json();
+  await page.getByRole('button', { name: '되묻기 판단 기준' }).click();
   const crit = page.getByRole('dialog').getByTestId('decision-criteria');
   await expect(crit).toContainText(techs.find((x) => x.key === 'clarify')!.name);
-  // 예시 한 장면 + 규칙 3줄(10/30) — 규칙은 서버가 지금 기준값으로 채운 문장 그대로
   await expect(crit.getByTestId('criteria-example').first()).toBeVisible();
   for (const r of techs.find((x) => x.key === 'clarify')!.rules!) await expect(crit).toContainText(r);
   await page.keyboard.press('Escape');
 
+  // 감사 로그 — 기본 = 번복, 행마다 검토 결과 배지 · 번복 사유(업계 용어)
   const log = page.getByTestId('audit-log');
-  await page.getByTestId('decision-card-location').click();
-  const checkbox = log.getByLabel('번복만');
-  await expect(checkbox).toBeChecked();   // 기본 = 번복만
-  const line = log.getByTestId(`log-${over}`);
-  await expect(line).toContainText('번복');
-  await expect(line).toContainText('상황이 바뀜');   // 번복 순간 고른 이유(지식 등록) — 감사 로그는 보여 주기만
-  await expect(log.getByTestId(`log-${kept}`)).toHaveCount(0);   // 추천 그대로 = 번복 아님
-  await expect(page.getByRole('button', { name: 'AI가 틀림' })).toHaveCount(0);   // "AI가 틀렸나요?" 묻는 버튼 없음
-  await checkbox.uncheck();
-  await expect(log.getByTestId(`log-${kept}`)).toBeVisible();
-  await expect(log.getByTestId(`log-${kept}`)).not.toContainText('· 번복');
+  await page.getByTestId('report-row-knowledge_location').getByRole('button', { name: '등록 위치', exact: true }).click();
+  const chips = log.getByTestId('audit-review');
+  await expect(chips.getByRole('button', { name: /^번복/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(log.getByTestId(`log-${over}-review`)).toHaveText('번복');
+  await expect(log.getByTestId(`log-${over}`)).toContainText('맥락 변화');
+  await expect(log.getByTestId(`log-${kept}`)).toHaveCount(0);
+  await chips.getByRole('button', { name: /^수용/ }).click();
+  await expect(log.getByTestId(`log-${kept}-review`)).toHaveText('수용');
+  await expect(log.getByTestId(`log-${over}`)).toHaveCount(0);
+
+  // 표본 감사 — 창이 열리고, 수용 판단에 매긴 결과가 로그에 남는다(실데이터를 건드리지 않게 테스트 줄만 API로)
+  await page.getByTestId('spot-open').click();
+  await expect(page.getByTestId('spot-modal')).toBeVisible();
+  await page.keyboard.press('Escape');
+  const r1 = await apiFetch(`${API}/api/eval/decisions/${kept}/spot-check`, { method: 'POST', headers: { ...h.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ result: 'overridden', reason: 'wrong' }) });
+  expect(r1.status).toBe(200);
+  const r2 = await apiFetch(`${API}/api/eval/decisions/${over}/spot-check`, { method: 'POST', headers: { ...h.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ result: 'accepted' }) });
+  expect(r2.status).toBe(404);   // 번복은 감사 대상 아님
+  await page.reload();
+  await page.getByTestId('report-row-knowledge_location').getByRole('button', { name: '등록 위치', exact: true }).click();
+  await page.getByTestId('audit-log').getByTestId('audit-review').getByRole('button', { name: /^수용/ }).click();
+  await expect(page.getByTestId('audit-log').getByTestId(`log-${kept}`)).toContainText('감사: 번복 · AI 오류');
 });
 
 test('평가 게이트 — 단계 줄 = 원인 수(누르면 그 단계 원인만), 적용 이력 최근 5줄·전체 = API, 항목 전체 = 대장(옛 RAG 파이프라인 흡수)', async ({ page }) => {

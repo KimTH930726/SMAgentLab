@@ -142,6 +142,7 @@
 | 114 | `rag_import_batch` | `status` CHECK에 `cancelled` 추가(제약에 없을 때만, 지우고 붙이기를 한 트랜잭션으로) | 적재 안 한 미리보기 취소를 "실패"와 구분(11/04 #3 GIFT 취소) · 취소한 미리보기의 제외·보류 결정은 동기화에 적용 안 함 |
 | 115 | `rag_ingestion_job` | `ADD COLUMN IF NOT EXISTS skipped_exact_chunks INT NOT NULL DEFAULT 0` · `skipped_exact_ids INT[] NOT NULL DEFAULT '{}'` | 같은 원본 안 공백만 다른 반복 조각을 한 번만 저장한 수·그 저장 조각 id(최대 50) — 등록 이력 "완전 중복 건너뜀 N건"(11/04) |
 | 116 | `ops_message` | `CREATE INDEX IF NOT EXISTS idx_ops_message_assistant_created ON ops_message (created_at) WHERE role = 'assistant'` | 지식 검색 화면 "채팅 노출 N회"(최근 90일)를 메시지 전체 훑기 없이(11/04) |
+| 117 | `ops_ai_decision` | `ADD COLUMN IF NOT EXISTS spot_result TEXT CHECK (accepted·overridden)` · `spot_reason TEXT CHECK (wrong·both_ok·context_changed)` · `spot_by_user_id INT` · `spot_at TIMESTAMPTZ` | 표본 감사(spot check) — 자동 적용·수용 판단을 사람이 다시 봐 매긴 결과(11/04). "AI가 틀렸나요?"(ai_verdict)와 따로 |
 | (값만) | `rag_glossary.source` | 스키마 변경 없음 — 새 값 `auto_extract`(지식 등록 때 LLM 자동 추출, 10/28~). 기존 값: `policy_doc`(정책서), NULL(사람 등록·옛 자동 추출) | 자동 추출 용어 효과를 따로 재려고(`docs/domains/knowledge/glossary/glossary-curation-design.md`) (v2.186) |
 | 91 | `eval_question_candidate` | FK `improvement_item_id` → `ON DELETE CASCADE`(confdeltype 확인 후 한 번만) | 정정 원장 줄이 지워지면(컬렉션 삭제 등) 시험지 후보도 같이 — 기본(NO ACTION)이면 정정 승인 때 자동으로 생긴 후보가 컬렉션 삭제를 막았다(v2.172 E2E로 발견). `_migrate_eval_improvement` (v2.172) |
 

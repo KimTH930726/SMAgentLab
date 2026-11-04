@@ -11,9 +11,9 @@ from datetime import date
 from typing import Optional
 
 from core.database import get_conn
-from service.eval.override import KIND_NAME, OVERRIDE_SQL
+from service.eval.override import AUTO_SQL, KIND_NAME, OVERRIDE_SQL, REVIEWED_KINDS, REVIEW_SQL
 
-_NO_ISSUE = {"source_ok": "원문이 맞음", "already_fixed": "이미 고쳐짐", "duplicate": "중복", "other": "기타"}
+_NO_ISSUE = {"source_ok": "원문 정상", "already_fixed": "이미 수정됨", "duplicate": "중복", "other": "기타"}   # 11/04 업계 용어
 
 
 def _j(v):
@@ -42,9 +42,9 @@ def describe(kind: str, ai: Optional[dict], final: Optional[dict], signals: Opti
         if final is None:
             return {"ai": did, "human": None}
         if final.get("superseded"):
-            human = "다음 되묻기로 넘어감"
+            human = "다음 되묻기로 대체"
         elif final.get("typed"):
-            human = "고르지 않고 직접 다시 물음"
+            human = "직접 재질문"
         elif final.get("picked") == "*":
             human = "전부 보기"
         elif final.get("picked"):
@@ -58,7 +58,7 @@ def describe(kind: str, ai: Optional[dict], final: Optional[dict], signals: Opti
             return {"ai": did, "human": None}
         if final.get("issue"):
             return {"ai": did, "human": f"해결(정정 #{final['correction_id']} 승인)" if final.get("correction_id") else "해결"}
-        return {"ai": did, "human": f"문제 없음: {_NO_ISSUE.get(final.get('reason'), final.get('reason') or '?')}"}
+        return {"ai": did, "human": f"오탐: {_NO_ISSUE.get(final.get('reason'), final.get('reason') or '?')}"}
     if kind == "collection_suggest":
         did = f"{ai.get('namespace') or '?'}에서 찾아보기 제안" + (f" (관련도 {signals['score']})" if signals.get("score") is not None else "")
         return {"ai": did, "human": "눌러서 다시 물음" if final and final.get("picked") else None}
@@ -75,20 +75,25 @@ def describe(kind: str, ai: Optional[dict], final: Optional[dict], signals: Opti
 
 
 async def decision_log(*, days: int, kind: Optional[str], changed_only: bool, limit: int = 50, before_id: Optional[int] = None,
-                       day: Optional[date] = None) -> dict:
+                       day: Optional[date] = None, review: Optional[str] = None, ids: Optional[list[int]] = None) -> dict:
     """최신순 한 페이지 — before_id보다 작은 것부터(다음 페이지). changed_only = 번복만(override.is_override와 같은 규칙 — 저장 칸이 아니라 값으로)."""
     async with get_conn() as conn:
         rows = await conn.fetch(
-            f"""SELECT d.id, d.kind, d.created_at, d.changed_at, d.confident, {OVERRIDE_SQL} AS overridden, d.ai_value, d.final_value, d.signals,
-                      d.signals->>'reason' AS ai_reason, d.ai_verdict, d.verdict_reason, d.prompt_version,
+            f"""SELECT d.id, d.kind, d.created_at, d.changed_at, d.confident, {OVERRIDE_SQL} AS overridden, {REVIEW_SQL} AS review,
+                      d.ai_value, d.final_value, d.signals, d.signals->>'reason' AS ai_reason, d.ai_verdict, d.verdict_reason, d.prompt_version,
+                      d.spot_result, d.spot_reason, d.spot_at, su.username AS spot_by,
                       cu.username AS created_by, hu.username AS changed_by
                FROM ops_ai_decision d
                LEFT JOIN ops_user cu ON cu.id = d.created_by_user_id
                LEFT JOIN ops_user hu ON hu.id = d.changed_by_user_id
+               LEFT JOIN ops_user su ON su.id = d.spot_by_user_id
                WHERE d.created_at > NOW() - make_interval(days => $1)
+                 -- 다음 되묻기로 대체된 줄(superseded)은 요약(override.load)처럼 뺀다 — 칩 건수와 목록이 같은 집합(리뷰 M2)
+                 AND NOT (COALESCE(d.final_value, '{{}}'::jsonb) ? 'superseded')
+                 AND ($7::text IS NULL OR {REVIEW_SQL} = $7) AND ($8::bigint[] IS NULL OR d.id = ANY($8::bigint[]))
                  AND ($2::text IS NULL OR d.kind = $2) AND (NOT $3 OR {OVERRIDE_SQL}) AND ($5::bigint IS NULL OR d.id < $5)
                  AND ($6::date IS NULL OR (d.created_at AT TIME ZONE 'Asia/Seoul')::date = $6)   -- 화면 날짜(KST)와 같게(리뷰 M1)
-               ORDER BY d.id DESC LIMIT $4""", days, kind, changed_only, limit + 1, before_id, day)   # 하나 더 — 다음 페이지가 있는지(리뷰 L3)
+               ORDER BY d.id DESC LIMIT $4""", days, kind, changed_only, limit + 1, before_id, day, review, ids)   # 하나 더 — 다음 페이지가 있는지(리뷰 L3)
         more = len(rows) > limit
         rows = rows[:limit]
         ids = sorted({v for r in rows for v in ((_j(r["ai_value"]) or {}).get("namespace_id"), (_j(r["final_value"]) or {}).get("namespace_id"),
@@ -115,5 +120,39 @@ async def decision_log(*, days: int, kind: Optional[str], changed_only: bool, li
                       # 옛 줄은 감사 로그에서 받은 답(ai_verdict)으로 — override.summarize와 같은 규칙(리뷰 L2)
                       "override_reason": ((final or {}).get("override_reason")
                                           or (r["ai_verdict"] if r["ai_verdict"] in ("wrong", "context_changed") else None)) if r["overridden"] else None,
-                      "candidate": cand_of.get(r["id"])})
+                      "candidate": cand_of.get(r["id"]),
+                      # 사람 검토 결과(수용·번복·자동 적용·규칙 적용·검토 대기, override.REVIEW_SQL) + 표본 감사(11/04)
+                      "review": r["review"], "spot": r["spot_result"], "spot_reason": r["spot_reason"], "spot_by": r["spot_by"],
+                      "spot_at": r["spot_at"].isoformat() if r["spot_at"] else None})
     return {"items": items, "next_before": items[-1]["id"] if more and items else None}
+
+
+# ── 표본 감사(spot check, 11/04) ───────────────────────────────────────────
+# 사람 손 없이 적용됐거나 수용된 판단을 다시 봐서 정확도·형식적 승인을 확인 — 관리자가 검토하는 종류만(되묻기·제안은 사용자 선택이라 제외)
+SPOT_SQL = ("(d.kind IN (" + ", ".join(f"'{k}'" for k in REVIEWED_KINDS) + f") AND (({AUTO_SQL}) OR {REVIEW_SQL} = 'accept'))")   # 모듈 상수만(입력 아님)
+
+
+async def spot_sample(*, days: int, kind: Optional[str], n: int) -> dict:
+    """아직 표본 감사를 안 한 자동 적용·수용 판단에서 무작위 n건 — 감사 로그 줄과 같은 모양 + 대상(지식이면 첫 줄)."""
+    async with get_conn() as conn:
+        picked = [r["id"] for r in await conn.fetch(
+            f"""SELECT d.id FROM ops_ai_decision d WHERE d.created_at > NOW() - make_interval(days => $1) AND d.spot_result IS NULL
+                  AND ($2::text IS NULL OR d.kind = $2) AND NOT (COALESCE(d.final_value, '{{}}'::jsonb) ? 'superseded') AND {SPOT_SQL}
+                ORDER BY random() LIMIT $3""", days, kind, n)]
+        left = await conn.fetchval(
+            f"""SELECT count(*) FROM ops_ai_decision d WHERE d.created_at > NOW() - make_interval(days => $1) AND d.spot_result IS NULL
+                  AND ($2::text IS NULL OR d.kind = $2) AND NOT (COALESCE(d.final_value, '{{}}'::jsonb) ? 'superseded') AND {SPOT_SQL}""", days, kind)
+    if not picked:
+        return {"items": [], "left": 0}
+    page = await decision_log(days=days, kind=kind, changed_only=False, limit=len(picked), ids=picked)
+    got = {it["id"]: it for it in page["items"]}
+    return {"items": [got[i] for i in picked if i in got], "left": int(left)}
+
+
+async def spot_mark(decision_id: int, *, result: str, reason: Optional[str], user_id: int) -> bool:
+    """표본 감사 결과 — 자동 적용·수용 판단에만(규칙 적용·대기·번복은 감사 대상 아님). 다시 매기면 덮어쓴다(마지막 검토자)."""
+    async with get_conn() as conn:
+        r = await conn.execute(
+            f"""UPDATE ops_ai_decision d SET spot_result = $2, spot_reason = $3, spot_by_user_id = $4, spot_at = NOW()
+                WHERE d.id = $1 AND {SPOT_SQL}""", decision_id, result, reason if result == "overridden" else None, user_id)
+    return r.endswith(" 1")

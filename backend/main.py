@@ -1449,6 +1449,11 @@ async def _migrate_ai_decision_ledger(conn) -> None:
             verdict_by_user_id INT
         )""")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_decision_kind_created ON ops_ai_decision (kind, created_at DESC)")
+    # 표본 감사(spot check, 11/04) — 자동 적용·수용된 판단을 사람이 다시 봐 수용/번복을 매긴다(정확도 추정·형식적 승인 확인). "AI가 틀렸나요?"(ai_verdict)와 따로
+    await conn.execute("ALTER TABLE ops_ai_decision ADD COLUMN IF NOT EXISTS spot_result TEXT CHECK (spot_result IN ('accepted', 'overridden'))")
+    await conn.execute("ALTER TABLE ops_ai_decision ADD COLUMN IF NOT EXISTS spot_reason TEXT CHECK (spot_reason IN ('wrong', 'both_ok', 'context_changed'))")
+    await conn.execute("ALTER TABLE ops_ai_decision ADD COLUMN IF NOT EXISTS spot_by_user_id INT")
+    await conn.execute("ALTER TABLE ops_ai_decision ADD COLUMN IF NOT EXISTS spot_at TIMESTAMPTZ")
     # 채팅 되묻기 닫기(질문마다 한 번) — 열린 줄만 대화 id로 찾는다
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_decision_open_conv ON ops_ai_decision "
                        "(kind, ((signals->>'conversation_id'))) WHERE final_value IS NULL")

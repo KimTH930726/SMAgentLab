@@ -29,8 +29,8 @@ def test_location(ai, final, signals, want_ai, want_human):
 
 
 @pytest.mark.parametrize("final, human", [
-    (None, None), ({"picked": "*"}, "전부 보기"), ({"picked": "배송 > 알림"}, "고름: 배송 > 알림"), ({"typed": True}, "고르지 않고 직접 다시 물음"),
-    ({"superseded": True}, "다음 되묻기로 넘어감"), ({"picked_unknown": True}, "선택지 밖 값"),
+    (None, None), ({"picked": "*"}, "전부 보기"), ({"picked": "배송 > 알림"}, "고름: 배송 > 알림"), ({"typed": True}, "직접 재질문"),
+    ({"superseded": True}, "다음 되묻기로 대체"), ({"picked_unknown": True}, "선택지 밖 값"),
 ])
 def test_clarify(final, human):
     d = dl.describe("chat_clarify", {"options": ["a", "b", "*"]}, final, {"n_options": 3}, NAMES)
@@ -39,7 +39,7 @@ def test_clarify(final, human):
 
 def test_source_check_and_suggest():
     ai = {"type": "conflict", "source": "load"}
-    assert dl.describe("source_check", ai, {"issue": False, "reason": "duplicate"}, {}, {})["human"] == "문제 없음: 중복"
+    assert dl.describe("source_check", ai, {"issue": False, "reason": "duplicate"}, {}, {})["human"] == "오탐: 중복"
     assert dl.describe("source_check", ai, {"issue": True, "correction_id": 7}, {}, {})["human"] == "해결(정정 #7 승인)"
     s = dl.describe("collection_suggest", {"namespace": "제휴서비스"}, None, {"score": 0.52}, {})
     assert s == {"ai": "제휴서비스에서 찾아보기 제안 (관련도 0.52)", "human": None}

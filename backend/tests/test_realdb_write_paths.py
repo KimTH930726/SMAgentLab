@@ -358,3 +358,48 @@ def test_feedback_next_same_in_screen_and_server():
     ts_body = re.search(r"const FB_NEXT[^{]*\{(.*?)\n\};", ts.read_text(encoding="utf-8"), re.S).group(1)
     screen = {k: tuple(re.findall(r"'(\w+)'", v)) for k, v in re.findall(r"(\w+): \[([^\]]*)\]", ts_body)}
     assert server and screen == server
+
+
+# ── AI 감사 리포트 — 사람 검토 결과 · 표본 감사(11/04) ─────────────────────
+
+def test_spot_check_only_auto_and_accepted(monkeypatch):
+    """표본 감사 대상 = 자동 적용·수용뿐(규칙 적용·검토 대기·번복 제외) · 다시 매기면 덮어씀 · 감사 로그 review 거르기가 같은 규칙."""
+    from types import SimpleNamespace
+    ovm = load("_rdb_real_override", "service/eval/override.py")
+    monkeypatch.setitem(sys.modules, "service.eval.override", ovm)
+    monkeypatch.setitem(sys.modules, "service.eval.improve", SimpleNamespace(LATEST_KNOWLEDGE_RUN_SQL="(SELECT NULL::int)"))
+    dl = load("_rdb_real_decision_log", "service/eval/decision_log.py")
+
+    async def scenario(conn):
+        admin = await conn.fetchval("SELECT id FROM ops_user ORDER BY id LIMIT 1")
+        k = "test_kind_1104"
+
+        async def add(final, sig):
+            return await conn.fetchval("INSERT INTO ops_ai_decision (kind, ai_value, signals, final_value) VALUES ('knowledge_location', $1::jsonb, $2::jsonb, $3::jsonb) "
+                                       "RETURNING id", json.dumps({"namespace_id": 1, "t": k}), json.dumps(sig), None if final is None else json.dumps(final))
+        ids = {"auto": await add({"namespace_id": 1, "choice": "team_import"}, {"assigned_by": "ai", "proposed_id": 1}),
+               "accept": await add({"namespace_id": 1, "choice": "accept"}, {"proposed_id": 1}),
+               "rule": await add({"namespace_id": 3, "choice": "team_import"}, {"preset_id": 3}),
+               "pending": await add(None, {"proposed_id": 1}),
+               "override": await add({"namespace_id": 2}, {"proposed_id": 1})}
+        clarify = await conn.fetchval("INSERT INTO ops_ai_decision (kind, ai_value, signals, final_value) VALUES ('chat_clarify', '{}'::jsonb, '{}'::jsonb, "
+                                      "'{\"picked\": \"a\"}'::jsonb) RETURNING id")   # 사용자 선택(수용) — 관리자 표본 감사 대상 아님
+        mine = set(ids.values())
+        all_sample = {it["id"] for it in (await dl.spot_sample(days=1, kind=None, n=30))["items"]}
+        clarify_mark = await dl.spot_mark(clarify, result="accepted", reason=None, user_id=admin)
+        sample = await dl.spot_sample(days=1, kind="knowledge_location", n=30)
+        sampled = {it["id"] for it in sample["items"]} & mine
+        marks = {name: await dl.spot_mark(i, result="overridden", reason="wrong", user_id=admin) for name, i in ids.items()}
+        again = await dl.spot_mark(ids["auto"], result="accepted", reason="wrong", user_id=admin)   # 덮어쓰기 · 수용이면 사유 비움
+        row = await conn.fetchrow("SELECT spot_result, spot_reason FROM ops_ai_decision WHERE id = $1", ids["auto"])
+        by_review = {}
+        for name in ids:
+            page = await dl.decision_log(days=1, kind="knowledge_location", changed_only=False, limit=200, review=name)
+            by_review[name] = {it["id"] for it in page["items"]} & mine
+        return ids, sampled, marks, again, dict(row), by_review, (clarify in all_sample, clarify_mark)
+    ids, sampled, marks, again, row, by_review, clar = run(scenario, [dl])
+    assert clar == (False, False)
+    assert sampled == {ids["auto"], ids["accept"]}
+    assert marks == {"auto": True, "accept": True, "rule": False, "pending": False, "override": False}
+    assert again and row == {"spot_result": "accepted", "spot_reason": None}
+    assert by_review == {name: {i} for name, i in ids.items()}   # 다섯 갈래 거르기 — 각자 자기 줄만

@@ -3,8 +3,9 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
-  getDecisionLog, getDecisionsReport, getOverrides, listTechniques, type DecisionLogItem, type DecisionsReport, type Technique,
+  getDecisionLog, getDecisionsReport, getOverrides, listTechniques, type DecisionLogItem, type DecisionsReport, type ReviewStatus, type Technique,
 } from '../../api/eval';
+import { AuditReport, REVIEW_BADGE, REVIEW_HINT, REVIEW_LABEL } from './AuditReport';
 import { adminPath } from '../../pages/adminMenu';
 import { Modal } from '../ui/Modal';
 
@@ -18,9 +19,9 @@ import { Modal } from '../ui/Modal';
 
 const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : '-');
 const fmtDate = (s: string) => new Date(s).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const PICK_NAME: Record<string, string> = { option: '선택지 고름', all: '전부 보기', typed: '직접 다시 물음', superseded: '다음 되묻기로 넘어감', other: '기타' };
+const PICK_NAME: Record<string, string> = { option: '선택지 고름', all: '전부 보기', typed: '직접 재질문', superseded: '다음 되묻기로 대체', other: '기타' };
 const REASON_NAME: Record<string, string> = {
-  resolved: '맞게 짚음(해결)', source_ok: '원문이 맞음', already_fixed: '이미 고쳐짐', duplicate: '중복', other: '기타',
+  resolved: '정탐(해결)', source_ok: '오탐 · 원문 정상', already_fixed: '오탐 · 이미 수정됨', duplicate: '중복', other: '기타',
 };
 
 type CardKey = 'location' | 'clarify' | 'source' | 'suggest' | 'duplicate' | 'candidates';
@@ -92,12 +93,14 @@ function Example({ ex }: { ex: NonNullable<Technique['example']> }) {
 const LOG_KIND: Partial<Record<CardKey, string>> = {
   location: 'knowledge_location', clarify: 'chat_clarify', source: 'source_check', suggest: 'collection_suggest', duplicate: 'duplicate_check',
 };
+// 번복 사유(업계 override reason code, 11/04 태훈 "업계 용어로")
 const OVERRIDE_REASON: Record<string, { label: string; cls: string }> = {
-  wrong: { label: 'AI가 틀림', cls: 'text-rose-600 dark:text-rose-400' },
-  both_ok: { label: '둘 다 맞음', cls: 'text-slate-300' },
-  context_changed: { label: '상황이 바뀜', cls: 'text-amber-700 dark:text-amber-300' },
+  wrong: { label: 'AI 오류', cls: 'text-rose-600 dark:text-rose-400' },
+  both_ok: { label: '선호 차이', cls: 'text-slate-300' },
+  context_changed: { label: '맥락 변화', cls: 'text-amber-700 dark:text-amber-300' },
 };
-const ROW = 'grid grid-cols-[3.25rem_6rem_minmax(0,1.25fr)_1.25rem_minmax(0,1fr)_minmax(0,0.9fr)_4.5rem] items-center gap-x-2';
+const ROW = 'grid grid-cols-[3.25rem_6rem_minmax(0,1.2fr)_1.25rem_minmax(0,1fr)_4.75rem_minmax(0,0.9fr)_4.5rem] items-center gap-x-2';
+const REVIEW_FILTERS: (ReviewStatus | null)[] = [null, 'override', 'accept', 'auto', 'rule', 'pending'];
 const KIND_LABEL: Record<string, string> = {
   knowledge_location: '등록 위치', chat_clarify: '되묻기', source_check: '원문 확인', collection_suggest: '다른 컬렉션 제안', duplicate_check: '중복 의심',
 };
@@ -105,16 +108,17 @@ const dayOf = (s: string) => new Date(s).toLocaleDateString('ko-KR', { month: 'l
 const timeOf = (s: string) => new Date(s).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 /** 감사 로그 — 날짜별, 같은 날 같은 판단(종류·AI·결과가 같은 줄)이 이어지면 "같은 판단 n건"으로 접는다 */
-function AuditLog({ kind, setKind, days, setDays, day, setDay }: {
-  kind: CardKey | null; setKind: (k: CardKey | null) => void; days: number; setDays: (d: number) => void;
+function AuditLog({ kind, setKind, days, day, setDay, review, setReview, counts }: {
+  kind: CardKey | null; setKind: (k: CardKey | null) => void; days: number;   // 기간은 위 리포트 드롭다운 하나로
   day: string | null; setDay: (d: string | null) => void;
+  /** 칩 건수(기간·종류 기준) — 날짜를 고르면 null(그날 건수는 날짜 카드에 — 목록과 다른 숫자가 나오지 않게, 리뷰 M2) */
+  review: ReviewStatus | null; setReview: (r: ReviewStatus | null) => void; counts: Record<ReviewStatus, number> | null;
 }) {
-  const [changedOnly, setChangedOnly] = useState(true);   // 기본 = 번복만(감사 로그의 핵심 증거, 그대로 둔 판단은 끄면 보임)
   const [openRuns, setOpenRuns] = useState<Set<number>>(new Set());
   const logKind = kind ? LOG_KIND[kind] : undefined;
   const q = useInfiniteQuery({
-    queryKey: ['ai-decision-log', days, logKind ?? '', changedOnly, day ?? ''],
-    queryFn: ({ pageParam }) => getDecisionLog({ days, kind: logKind, changedOnly, before: pageParam, day }),
+    queryKey: ['ai-decision-log', days, logKind ?? '', review ?? '', day ?? ''],
+    queryFn: ({ pageParam }) => getDecisionLog({ days, kind: logKind, review, before: pageParam, day }),
     initialPageParam: null as number | null,
     getNextPageParam: (last) => last.next_before,
     staleTime: 30_000,
@@ -137,7 +141,7 @@ function AuditLog({ kind, setKind, days, setDays, day, setDay }: {
   return (
     <section className="space-y-3" data-testid="audit-log">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-semibold text-slate-100 mr-2">감사 로그</h3>
+        <h3 className="text-sm font-semibold text-slate-100 mr-2">감사 로그 <span className="text-xs font-normal text-slate-500">근거 확인용</span></h3>
         {/* 종류는 드롭다운 — 판단 종류가 늘어도 한 줄(11/03 태훈). 기준(ⓘ)은 위 종류 카드에서 */}
         <select className={sel} value={kind ?? ''} onChange={(e) => setKind((e.target.value || null) as CardKey | null)} aria-label="종류" data-testid="audit-kind">
           <option value="">종류 전체</option>
@@ -148,19 +152,23 @@ function AuditLog({ kind, setKind, days, setDays, day, setDay }: {
             className="rounded-full border border-indigo-500 px-2.5 py-0.5 text-xs text-indigo-600 dark:border-indigo-400 dark:text-indigo-300">
             {dayOf(day)} ✕</button>
         )}
-        <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-300">
-          <input type="checkbox" checked={changedOnly} onChange={(e) => setChangedOnly(e.target.checked)} className="accent-indigo-600" />번복만
-        </label>
-        <select className={sel} value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="기간">
-          {[7, 30, 90].map((d) => <option key={d} value={d}>최근 {d}일</option>)}
-        </select>
+        {/* 검토 결과 거르기(11/04) — 기본 = 번복(감사의 핵심 증거). 건수는 위 리포트와 같은 기간·기준 */}
+        <div className="ml-auto flex flex-wrap gap-1" role="group" aria-label="검토 결과" data-testid="audit-review">
+          {REVIEW_FILTERS.map((r) => (
+            <button key={r ?? 'all'} type="button" aria-pressed={review === r} onClick={() => setReview(r)} title={r ? REVIEW_HINT[r] : '모든 판단'}
+              className={clsx('rounded-full border px-2.5 py-0.5 text-xs', review === r
+                ? 'border-indigo-600 bg-indigo-600 text-white dark:border-indigo-500 dark:bg-indigo-500' : 'border-slate-600 text-slate-300 hover:bg-slate-800')}>
+              {r ? REVIEW_LABEL[r] : '전체'}{counts && <span className="tabular-nums opacity-75"> {r ? counts[r] : Object.values(counts).reduce((a, n) => a + n, 0)}</span>}
+            </button>
+          ))}
+        </div>
       </div>
       {q.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p>
         : q.error ? <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p>
         : items.length === 0 ? <p className="text-sm text-slate-500">기록이 없어요.</p> : (
           <ol className="rounded-xl border border-slate-700 divide-y divide-slate-700/70 overflow-x-auto">
             <li className={clsx(ROW, 'px-4 py-1.5 text-[11px] text-slate-500 bg-slate-900/60 min-w-[760px]')} aria-hidden>
-              <span>시간</span><span>종류</span><span>AI 추천</span><span /><span>사람이 한 것</span><span>번복 이유 · 이어진 개선</span><span>누가</span>
+              <span>시간</span><span>종류</span><span>AI 판단</span><span /><span>최종 값</span><span>검토 결과</span><span>번복 사유 · 개선 후보</span><span>검토자</span>
             </li>
             {runs.map((r, i) => {
               const newDay = i === 0 || dayOf(runs[i - 1].head.at) !== dayOf(r.head.at);
@@ -206,11 +214,15 @@ function LogRow({ it }: { it: DecisionLogItem }) {
       </span>
       <span className="text-slate-500" aria-hidden>→</span>
       <span className={clsx('min-w-0 break-words text-xs', it.open ? 'text-slate-500' : it.changed ? 'text-amber-800 dark:text-amber-300' : 'text-slate-300')}>
-        {it.open ? '아직 결과 없음' : it.human}{it.changed && <b className="ml-1 font-medium">· 번복</b>}
+        {it.open ? '—' : it.human}
+      </span>
+      <span className="flex flex-col items-start gap-0.5">
+        <span className={clsx('rounded-full px-2 py-0.5 text-[11px]', REVIEW_BADGE[it.review])} title={REVIEW_HINT[it.review]} data-testid={`log-${it.id}-review`}>{REVIEW_LABEL[it.review]}</span>
+        {it.spot && <span className="text-[10px] text-slate-400" title={`표본 감사${it.spot_by ? ` · ${it.spot_by}` : ''}`}>감사: {it.spot === 'accepted' ? '수용' : `번복${it.spot_reason ? ` · ${OVERRIDE_REASON[it.spot_reason]?.label ?? ''}` : ''}`}</span>}
       </span>
       <span className="min-w-0 flex flex-col gap-0.5 text-xs">
         {why && <span className={why.cls}>{why.label}</span>}
-        {it.changed && !why && it.kind === 'knowledge_location' && <span className="text-slate-500">이유 안 남김</span>}
+        {it.changed && !why && it.kind === 'knowledge_location' && <span className="text-slate-500">사유 없음</span>}
         {it.candidate && (
           <button onClick={() => navigate(adminPath('q.eval'))} className="self-start text-indigo-600 dark:text-indigo-400 hover:underline"
             title={`${it.candidate.title} — 평가 게이트 리포트 › 고칠 방법`}>개선 후보 #{it.candidate.id} →</button>
@@ -255,16 +267,16 @@ function DetailBody({ open, d }: { open: CardKey; d: DecisionsReport }) {
     const s = d.kinds.knowledge_location;
     return (
       <div className="space-y-3">
-        {s && <p className="text-sm text-slate-300">확정 {s.decided}건 중 AI 그대로 {s.decided - s.changed} · 사람이 바꿈 {s.changed}
+        {s && <p className="text-sm text-slate-300">확정 {s.decided}건 중 수용 {s.decided - s.changed} · 번복 {s.changed}
           {s.auto_wrong > 0 && <span className="text-rose-600 dark:text-rose-400"> · 확신(자동 후보)인데 틀림 {s.auto_wrong} — 자동 반영 기준 점검</span>}</p>}
-        {rows.length === 0 ? <p className="text-sm text-slate-500">사람이 바꾼 건이 없어요.</p> : (
+        {rows.length === 0 ? <p className="text-sm text-slate-500">번복이 없어요.</p> : (
           <ul className="divide-y divide-slate-700">
             {rows.map((r) => (
               <li key={r.id} className="py-2.5 space-y-1" data-testid={`changed-${r.id}`}>
                 <p className="text-sm text-slate-200">AI <b>{r.ai.collection ?? '삭제된 컬렉션'}</b> <span className="text-slate-500">→</span> 사람 <b>{r.human.collection ?? '다른 곳'}</b></p>
                 <p className="text-xs text-slate-500">{fmtDate(r.at)}{r.changed_by ? ` · ${r.changed_by}` : ''}{r.target ? ` · ${r.target}` : ''}</p>
-                <p className="text-xs text-slate-400">AI 이유: {r.ai.reason ?? '(이유가 남지 않은 옛 기록)'}</p>
-                {r.verdict && <p className="text-xs text-rose-600 dark:text-rose-400">번복 이유: {r.verdict === 'wrong' ? 'AI가 틀림' : r.verdict === 'context_changed' ? '상황이 바뀜' : '모름'}</p>}
+                <p className="text-xs text-slate-400">AI 근거: {r.ai.reason ?? '(근거가 남지 않은 옛 기록)'}</p>
+                {r.verdict && <p className="text-xs text-rose-600 dark:text-rose-400">번복 사유: {r.verdict === 'wrong' ? 'AI 오류' : r.verdict === 'context_changed' ? '맥락 변화' : '모름'}</p>}
               </li>
             ))}
           </ul>
@@ -281,7 +293,7 @@ function DetailBody({ open, d }: { open: CardKey; d: DecisionsReport }) {
     );
     return (
       <div className="space-y-4">
-        <p className="text-xs text-slate-400 leading-relaxed">"전부 보기"가 많으면 괜히 물은 것, "직접 다시 물음"이 많으면 선택지가 안 맞은 것(노랑). 아직 답을 안 고른 되묻기 {d.clarify.open}건.</p>
+        <p className="text-xs text-slate-400 leading-relaxed">"전부 보기"가 많으면 괜히 물은 것, "직접 재질문"이 많으면 선택지가 안 맞은 것(노랑). 검토 대기 되묻기 {d.clarify.open}건.</p>
         {part('category', '정책 분류 되묻기 — 목록이 클 때 "어느 부분을 볼까요?"')}
         {part('ref', '참고표 되묻기 — 결과를 정하는 조건이 빠졌을 때(참고표 연결을 켰을 때만)')}
       </div>
@@ -296,7 +308,7 @@ function DetailBody({ open, d }: { open: CardKey; d: DecisionsReport }) {
         <section className="space-y-1">
           <h4 className="text-xs font-medium text-slate-400">검사 출처별</h4>
           {Object.entries(d.source_checks.by_source).map(([src, v]) => (
-            <p key={src} className="text-sm text-slate-300">{src === 'v0_load_check' ? '적재 점검' : src === 'golden_set' ? '골든셋 작성' : src} — 오탐 {pct(v.no_issue, v.no_issue + v.resolved)} ({v.no_issue}/{v.no_issue + v.resolved})</p>
+            <p key={src} className="text-sm text-slate-300">{src === 'v0_load_check' ? '적재 점검' : src === 'golden_set' ? '골든셋 작성' : src} — 오탐률 {pct(v.no_issue, v.no_issue + v.resolved)} ({v.no_issue}/{v.no_issue + v.resolved})</p>
           ))}
         </section>
       </div>
@@ -321,48 +333,8 @@ function DetailBody({ open, d }: { open: CardKey; d: DecisionsReport }) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-400">평가 게이트 리포트의 "고칠 방법" — AI 추천(해 볼 만함·안 하는 게 좋음)을 사람이 따랐나. 반대가 많으면 추천 규칙이 사람 판단과 어긋난다는 신호.</p>
-      <Bars rows={[{ name: '추천대로 결정', n: c.agree }, { name: '추천과 반대', n: c.disagree, warn: true }, { name: '아직 결정 전', n: c.by_status.proposed ?? 0 }]} />
+      <Bars rows={[{ name: '수용(추천대로)', n: c.agree }, { name: '번복(추천과 반대)', n: c.disagree, warn: true }, { name: '검토 대기', n: c.by_status.proposed ?? 0 }]} />
     </div>
-  );
-}
-
-/** 종류별 카드(11/03 태훈 "건수 별 카드로 — 나열은 많아지면 어렵다") — 큰 숫자 = 판단 수, 아래 = 번복 수·비율. 누르면 감사 로그를 그 종류로, ⓘ = 기준.
- * 마지막 카드 = 개선 후보 AI 추천(평가 게이트 "고칠 방법")을 사람이 따랐나 — 예전엔 맨 아래 작은 링크라 아무도 못 봤다 */
-function KindCards({ kinds, days, candidates, filter, onFilter, onCriteria }: {
-  kinds: { kind: string; decided: number; overrides: number; rate: number | null }[]; days: number;
-  candidates: DecisionsReport['candidates']; filter: CardKey | null; onFilter: (k: CardKey) => void; onCriteria: (k: CardKey) => void;
-}) {
-  const byKind = new Map(kinds.map((k) => [k.kind, k]));
-  const decided = candidates.agree + candidates.disagree;
-  return (
-    <section className="space-y-1.5" aria-label="종류별">
-      <h3 className="text-xs font-medium text-slate-400" title="사람·사용자가 확정한 판단 수 — 번복 = AI 추천과 다르게 한 것">종류별 · 최근 {days}일 <span className="text-slate-500">(확정된 판단 · 누르면 아래 로그를 그 종류로)</span></h3>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2" data-testid="kind-cards">
-        {(Object.keys(LOG_KIND) as CardKey[]).map((k) => {
-          const st = byKind.get(LOG_KIND[k]!);
-          const n = st?.decided ?? 0, ov = st?.overrides ?? 0;
-          return (
-            <div key={k} className={clsx('relative rounded-xl border bg-slate-800 p-3', filter === k ? 'border-indigo-500 ring-1 ring-indigo-500 dark:border-indigo-400 dark:ring-indigo-400' : 'border-slate-700')}>
-              <button onClick={() => onFilter(k)} aria-pressed={filter === k} data-testid={`decision-card-${k}`} className="block w-full text-left">
-                <p className="text-xs text-slate-400 pr-5">{KIND_LABEL[LOG_KIND[k]!]}</p>
-                <p className="text-2xl font-semibold tabular-nums text-slate-100" data-testid={`decision-card-${k}-value`}>{n}<span className="text-sm font-normal text-slate-500">건</span></p>
-                <p className={clsx('text-xs', ov ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500')}>번복 {ov}{n ? ` · ${pct(ov, n)}` : ''}</p>
-              </button>
-              <button onClick={() => onCriteria(k)} data-testid={`decision-detail-${k}`} title="이 판단의 지금 기준·분포" aria-label={`${KIND_LABEL[LOG_KIND[k]!]} 기준`}
-                className="absolute right-2 top-2 text-slate-500 hover:text-slate-200">ⓘ</button>
-            </div>
-          );
-        })}
-        <button onClick={() => onCriteria('candidates')} data-testid="decision-card-candidates"
-          title="평가 게이트 리포트의 '고칠 방법' — AI가 '해 볼 만함·안 하는 게 좋음'으로 추천한 개선 후보를 사람이 그대로 따랐나. 반대가 많으면 추천 규칙이 사람 판단과 어긋난다는 신호(최근 90일)"
-          className="rounded-xl border border-slate-700 bg-slate-800 p-3 text-left hover:border-indigo-500 dark:hover:border-indigo-400">
-          <p className="text-xs text-slate-400">개선 후보 추천 ⓘ</p>
-          <p className="text-2xl font-semibold tabular-nums text-slate-100">{decided}<span className="text-sm font-normal text-slate-500">건 결정</span></p>
-          <p className={clsx('text-xs', candidates.disagree ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500')}>
-            추천과 반대 {candidates.disagree} · 결정 전 {candidates.by_status.proposed ?? 0}</p>
-        </button>
-      </div>
-    </section>
   );
 }
 
@@ -392,13 +364,13 @@ function DayCards({ daily, day, onDay, loading }: { daily: { day: string; n: num
 }
 
 export function AiDecisions() {
-  const navigate = useNavigate();
   const [days, setDays] = useState(30);
   const { data: d, isLoading, error } = useQuery({ queryKey: ['ai-decisions', 90], queryFn: () => getDecisionsReport(90), staleTime: 30_000 });
   const ov = useQuery({ queryKey: ['ai-overrides', days], queryFn: () => getOverrides(days), staleTime: 30_000 });
   const [open, setOpen] = useState<CardKey | null>(null);
   const [filter, setFilter] = useState<CardKey | null>(null);
   const [day, setDay] = useState<string | null>(null);
+  const [review, setReview] = useState<ReviewStatus | null>('override');   // 기본 = 번복(감사의 핵심 증거)
   const { data: techs = [] } = useQuery({ queryKey: ['eval-techniques'], queryFn: listTechniques, staleTime: 60_000 });
   if (isLoading) return <p className="text-sm text-slate-500">불러오는 중…</p>;
   if (error) return <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(error as Error).message}</p>;
@@ -408,43 +380,30 @@ export function AiDecisions() {
     candidates: '개선 후보 — AI 추천',
   };
   const kinds = ov.data?.kinds ?? [];
-  const nOv = kinds.reduce((a, k) => a + k.overrides, 0);
-  const nWrong = kinds.reduce((a, k) => a + (k.reasons['AI가 틀림'] ?? 0), 0);
-  const nReason = kinds.filter((k) => k.kind === 'knowledge_location').reduce((a, k) => a + k.overrides - (k.reasons['이유 안 남김'] ?? 0), 0);
-  const ovCands = ov.data?.candidates ?? [];
-  const stamped = kinds.filter((k) => k.rubber_stamp);
+  const cardOf = (kind: string): CardKey | null => kind === 'candidates' ? 'candidates' : (Object.keys(LOG_KIND) as CardKey[]).find((k) => LOG_KIND[k] === kind) ?? null;
+  const counts = Object.fromEntries((['accept', 'override', 'auto', 'rule', 'pending'] as ReviewStatus[]).map((r) =>
+    [r, kinds.filter((k) => !filter || k.kind === LOG_KIND[filter]).reduce((a, k) => a + (k.review?.[r] ?? 0), 0)])) as Record<ReviewStatus, number>;
+  const toLog = () => document.querySelector('[data-testid="audit-log"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   return (
     <div className="space-y-4">
-      <p className="text-xs text-slate-500" title="AI 판단 원장(ops_ai_decision) — AI가 정한 것 한 건 = 한 줄, 사람이 확정·변경하면 같은 줄에 남는다. 번복 = 등록 위치는 AI 추천과 다른 곳, 되묻기는 전부 보기·직접 다시 물음, 원문 확인은 문제 없음">
-        기능을 쓰다 사람이 AI 추천을 번복한 기록 — 자가 개선 루프의 입력 ⓘ
-      </p>
-      {ov.error && <p className="text-xs text-rose-600 dark:text-rose-400">번복 요약을 불러오지 못했어요: {(ov.error as Error).message}</p>}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2" data-testid="override-summary">
-        <div className="rounded-xl border border-slate-700 bg-slate-800 p-3">
-          <p className="text-xs text-slate-400">최근 {days}일 번복</p>
-          <p className="text-2xl font-semibold tabular-nums text-slate-100">{nOv}<span className="text-sm font-normal text-slate-500">건</span></p>
-          <p className="text-xs text-slate-400">{kinds.filter((k) => k.overrides).map((k) => `${k.kind_name} ${k.overrides}/${k.decided}`).join(' · ') || '없음'}</p>
-        </div>
-        <div className="rounded-xl border border-slate-700 bg-slate-800 p-3">
-          <p className="text-xs text-slate-400" title="지식 등록에서 번복할 때 고른 이유(선택) — 되묻기·원문 확인은 고른 값이 곧 이유">AI가 틀렸다고 한 것</p>
-          <p className="text-2xl font-semibold tabular-nums text-slate-100">{nWrong}<span className="text-sm font-normal text-slate-500">건</span></p>
-          <p className="text-xs text-slate-400">등록 위치 번복 중 이유를 남긴 것 {nReason}건</p>
-        </div>
-        <button onClick={() => navigate(adminPath('q.eval'))} className="rounded-xl border border-slate-700 bg-slate-800 p-3 text-left hover:border-indigo-500 dark:hover:border-indigo-400"
-          data-testid="override-candidates">
-          <p className="text-xs text-slate-400">번복으로 만든 개선 후보</p>
-          <p className="text-2xl font-semibold tabular-nums text-indigo-600 dark:text-indigo-400">{ovCands.length}<span className="text-sm font-normal text-slate-500">건 →</span></p>
-          <p className="text-xs text-slate-400 truncate">{ovCands.map((c) => c.title).join(' · ') || '평가 게이트 리포트 › 고칠 방법'}</p>
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-slate-500" title="AI 판단 원장(ops_ai_decision) — AI가 정한 것 한 건 = 한 줄, 사람이 확정·변경하면 같은 줄에 남는다">
+          AI 판단마다 사람 검토 결과(수용·번복) — 번복률은 사람이 검토한 판단으로만 계산 ⓘ</p>
+        <select className="bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+          value={days} onChange={(e) => { setDays(Number(e.target.value)); setDay(null); }} aria-label="기간" data-testid="report-days">
+          {[7, 30, 90].map((x) => <option key={x} value={x}>최근 {x}일</option>)}
+        </select>
       </div>
-      {stamped.length > 0 && (
-        <p className="text-xs text-amber-700 dark:text-amber-300" title="업계 관례: 번복이 거의 없거나 수락이 95%를 넘으면 사람이 실제로 안 보고 있을 수 있다(표본 20건 이상일 때만)">
-          형식적 승인 의심: {stamped.map((k) => `${k.kind_name} 수락 ${Math.round((1 - (k.rate ?? 0)) * 100)}%`).join(' · ')} ⓘ</p>
+      {ov.error && <p className="text-xs text-rose-600 dark:text-rose-400">리포트를 불러오지 못했어요: {(ov.error as Error).message}</p>}
+      {ov.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p> : (
+        <AuditReport kinds={kinds} days={days} candidates={d.candidates}
+          onKind={(k) => { const c = cardOf(k); if (c && c !== 'candidates') setFilter(c); toLog(); }}
+          onReview={(r) => { setReview(r); toLog(); }}
+          canCriteria={(k) => !!cardOf(k)} onCriteria={(k) => { const c = cardOf(k); if (c) setOpen(c); }} />
       )}
-      <KindCards kinds={kinds} days={days} candidates={d.candidates} filter={filter}
-        onFilter={(k) => setFilter(filter === k ? null : k)} onCriteria={setOpen} />
       <DayCards daily={ov.data?.daily ?? []} day={day} onDay={(x) => setDay(day === x ? null : x)} loading={ov.isLoading} />
-      <AuditLog kind={filter} setKind={setFilter} days={days} setDays={(x) => { setDays(x); setDay(null); }} day={day} setDay={setDay} />
+      <AuditLog kind={filter} setKind={setFilter} days={days} day={day} setDay={setDay}
+        review={review} setReview={setReview} counts={day ? null : counts} />
       <Modal isOpen={open !== null} onClose={() => setOpen(null)} title={open ? titles[open] : ''} maxWidth="max-w-2xl">
         {open && <Detail open={open} d={d} techs={techs} /> as ReactNode}
       </Modal>

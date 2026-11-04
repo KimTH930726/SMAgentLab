@@ -15,7 +15,9 @@ LOCATION = "knowledge_location"
 DUPLICATE = "duplicate_check"   # 지식 등록 때 중복 의심(유사도) → 사람이 승인 대기에서 그대로 저장·덮어쓰기·반려(11/03)
 KIND_NAME = {LOCATION: "등록 위치", "chat_clarify": "되묻기", "source_check": "원문 확인", "collection_suggest": "다른 컬렉션 제안",
              DUPLICATE: "중복 의심"}
-REASON_NAME = {"wrong": "AI가 틀림", "both_ok": "둘 다 맞음", "context_changed": "상황이 바뀜"}
+# 번복 사유(업계 override reason code) — 11/04 태훈 "업계 용어로"
+REASON_NAME = {"wrong": "AI 오류", "both_ok": "선호 차이", "context_changed": "맥락 변화"}
+NO_REASON = "사유 없음"
 # 형식적 승인 의심(업계: 수락이 지나치게 높으면 사람이 실제로 안 보고 있을 수 있다) — 표본이 충분할 때만
 RUBBER_MIN_N, RUBBER_RATE = 20, 0.95
 K = 5
@@ -86,6 +88,28 @@ OVERRIDE_SQL = """(d.final_value IS NOT NULL AND CASE d.kind
     ELSE false END)"""
 
 
+# 사람 검토 결과(HITL, 11/04 태훈 "AI 판단에 대한 사람의 수용/번복이 보여야") — 판단 한 줄 = 다섯 중 하나:
+#   pending 검토 대기(확정 전) · rule 규칙 적용(사람이 정한 규칙·공간 기본값·미리 고른 곳 — AI 판단 미사용) ·
+#   auto 자동 적용(AI 분류를 사람 손 없이 적용) · override 번복 · accept 수용. 번복률 = 번복 / (수용 + 번복) — 사람이 본 것만으로.
+REVIEWS = ("accept", "override", "auto", "rule", "pending")
+RULE_SQL = "(d.kind = 'knowledge_location' AND d.signals->>'preset_id' IS NOT NULL)"
+AUTO_SQL = "(d.final_value->>'choice' = 'team_import' AND d.signals->>'assigned_by' = 'ai')"
+REVIEW_SQL = (f"(CASE WHEN d.final_value IS NULL THEN 'pending' WHEN {RULE_SQL} THEN 'rule' WHEN {AUTO_SQL} THEN 'auto' "
+              f"WHEN {OVERRIDE_SQL} THEN 'override' ELSE 'accept' END)")
+
+
+def review_status(r: dict) -> str:
+    """REVIEW_SQL과 같은 규칙(테스트가 둘을 맞춘다)."""
+    final, sig = r["final"], r["signals"] or {}
+    if final is None:
+        return "pending"
+    if r["kind"] == LOCATION and sig.get("preset_id") is not None:
+        return "rule"
+    if final.get("choice") == "team_import" and sig.get("assigned_by") == "ai":
+        return "auto"
+    return "override" if is_override(r) else "accept"
+
+
 def recommendation(r: dict):
     """등록 위치의 AI 추천 = 화면이 미리 골라 둔 곳(signals.proposed_id, 옛 줄은 AI 값). preset(컬렉션 화면에서 넘어온 곳)이면 None —
     사람이 정한 곳이라 번복 대상이 아니다(ledger.location_outcome과 같은 규칙, 리뷰 10/27 H1·M1)."""
@@ -113,27 +137,41 @@ def is_override(r: dict) -> bool:
 
 
 def summarize(rows: list[dict], names: dict[int, str]) -> dict:
-    """원장 줄 → 종류별 {판단, 번복, 번복률, 이유, 패턴 상위 5, 형식적 승인 의심}. rows = 확정된 줄(superseded 제외)."""
+    """원장 줄 → 종류별 {검토 결과 다섯 갈래 수, 사람 검토(수용+번복), 번복·번복률, 사유, 패턴 상위 5, 표본 감사, 형식적 승인 의심}.
+    rows = 원장 줄(확정 전 포함, superseded 제외). decided = 사람 검토 수(번복률 분모) — 규칙·자동 적용·대기는 분모에서 뺀다(11/04:
+    팀 적재 규칙 413건이 "수용"으로 섞여 번복률 1.1%로 보였다, 사람이 본 24건만 세면 21%)."""
     by: dict[str, dict] = {}
     for r in rows:
         k = by.setdefault(r["kind"], {"kind": r["kind"], "kind_name": KIND_NAME.get(r["kind"], r["kind"]), "decided": 0, "overrides": 0,
+                                       "review": {x: 0 for x in REVIEWS}, "spot": {"n": 0, "overridden": 0, "auto_n": 0, "auto_overridden": 0},
+                                       "admin_reviewed": r["kind"] in REVIEWED_KINDS,
                                        "reasons": {}, "patterns": {}, "override_ids": []})
+        st = review_status(r)
+        k["review"][st] += 1
+        if r.get("spot"):
+            k["spot"]["n"] += 1
+            k["spot"]["overridden"] += r["spot"] == "overridden"
+            if st == "auto":   # 자동 적용분만 따로 — 수용분 재감사와 섞지 않게(리뷰 L4)
+                k["spot"]["auto_n"] = k["spot"].get("auto_n", 0) + 1
+                k["spot"]["auto_overridden"] = k["spot"].get("auto_overridden", 0) + (r["spot"] == "overridden")
+        if st not in ("accept", "override"):
+            continue
         k["decided"] += 1
-        if not is_override(r):
+        if st != "override":
             continue
         k["overrides"] += 1
         k["override_ids"].append(r["id"])
         final = r["final"] or {}
         if r["kind"] == "chat_clarify":
-            label = "직접 다시 물음" if final.get("typed") else "전부 보기"
+            label = "직접 재질문" if final.get("typed") else "전부 보기"   # 채팅 버튼 이름 그대로
         elif r["kind"] == "source_check":
-            label = f"문제 없음 · {final.get('reason') or '?'}"
+            label = {"source_ok": "오탐 · 원문 정상", "already_fixed": "오탐 · 이미 수정됨"}.get(final.get("reason"), "오탐")
         elif r["kind"] == DUPLICATE:
-            label = "중복 아님(그대로 저장)"
+            label = "중복 아님(그대로 저장)"   # AI는 중복이라 했는데 사람이 저장
         else:
             # 옛 줄(10/27 이전)은 감사 로그에서 받은 답(ai_verdict)이 이유 — 틀림·상황이 바뀜 둘 다(리뷰 L2)
             why = final.get("override_reason") or (r["verdict"] if r["verdict"] in ("wrong", "context_changed") else None)
-            label = REASON_NAME.get(why, "이유 안 남김")
+            label = REASON_NAME.get(why, NO_REASON)
         k["reasons"][label] = k["reasons"].get(label, 0) + 1
         if r["kind"] == LOCATION:
             src = recommendation(r)
@@ -162,11 +200,11 @@ def location_rows(rows: list[dict]) -> list[dict]:
 
 async def load(conn, days: int) -> tuple[list[dict], dict[int, str]]:
     rows = [{"id": r["id"], "kind": r["kind"], "ai": _j(r["ai_value"]), "final": _j(r["final_value"]), "signals": _j(r["signals"]),
-             "changed": bool(r["human_changed"]), "verdict": r["ai_verdict"]}
+             "changed": bool(r["human_changed"]), "verdict": r["ai_verdict"], "spot": r["spot_result"]}
             for r in await conn.fetch(
-                """SELECT id, kind, ai_value, final_value, signals, human_changed, ai_verdict FROM ops_ai_decision
-                   WHERE final_value IS NOT NULL AND NOT (final_value ? 'superseded') AND created_at > NOW() - make_interval(days => $1)
-                   ORDER BY id""", days)]
+                """SELECT id, kind, ai_value, final_value, signals, human_changed, ai_verdict, spot_result FROM ops_ai_decision
+                   WHERE NOT (COALESCE(final_value, '{}'::jsonb) ? 'superseded') AND created_at > NOW() - make_interval(days => $1)
+                   ORDER BY id""", days)]   # 검토 대기(확정 전)도 센다 — 다섯 갈래 중 하나
     names = {r["id"]: r["name"] for r in await conn.fetch("SELECT id, name FROM ops_namespace")}
     return rows, names
 

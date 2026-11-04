@@ -271,10 +271,34 @@ async def get_overrides(days: int = Query(default=30, ge=1, le=365), admin: dict
 @router.get("/decisions/log")
 async def get_decision_log(days: int = Query(default=30, ge=1, le=365), kind: Optional[str] = Query(default=None, max_length=40),
                            changed_only: bool = False, limit: int = Query(default=50, ge=1, le=200), before: Optional[int] = None,
-                           day: Optional[date] = None, admin: dict = Depends(get_current_admin)):
-    """AI 감사 로그(관리자) — 원장 시간순 한 줄씩(최신 먼저, before = 다음 페이지). 원문 없음."""
+                           day: Optional[date] = None,
+                           review: Optional[str] = Query(default=None, pattern="^(accept|override|auto|rule|pending)$"),
+                           admin: dict = Depends(get_current_admin)):
+    """AI 감사 로그(관리자) — 원장 시간순 한 줄씩(최신 먼저, before = 다음 페이지). review = 사람 검토 결과로 거르기(11/04). 원문 없음."""
     from service.eval.decision_log import decision_log
-    return await decision_log(days=days, kind=kind, changed_only=changed_only, limit=limit, before_id=before, day=day)
+    return await decision_log(days=days, kind=kind, changed_only=changed_only, limit=limit, before_id=before, day=day, review=review)
+
+
+@router.get("/decisions/spot-check")
+async def get_spot_check(days: int = Query(default=30, ge=1, le=365), kind: Optional[str] = Query(default=None, max_length=40),
+                         n: int = Query(default=10, ge=1, le=30), admin: dict = Depends(get_current_admin)):
+    """표본 감사(spot check, 11/04) — 아직 안 본 자동 적용·수용 판단에서 무작위 n건. left = 남은 감사 대상 수."""
+    from service.eval.decision_log import spot_sample
+    return await spot_sample(days=days, kind=kind, n=n)
+
+
+class SpotBody(BaseModel):
+    result: str = Field(pattern="^(accepted|overridden)$")
+    reason: Optional[str] = Field(default=None, pattern="^(wrong|both_ok|context_changed)$")
+
+
+@router.post("/decisions/{decision_id}/spot-check")
+async def post_spot_check(decision_id: int, body: SpotBody, admin: dict = Depends(get_current_admin)):
+    """표본 감사 결과 — 수용 / 번복(사유: AI 오류·선호 차이·맥락 변화). 감사 대상(자동 적용·수용)이 아니면 404."""
+    from service.eval.decision_log import spot_mark
+    if not await spot_mark(decision_id, result=body.result, reason=body.reason, user_id=admin["id"]):
+        raise HTTPException(status_code=404, detail="표본 감사 대상이 아닌 판단입니다(규칙 적용·검토 대기·번복은 제외).")
+    return {"id": decision_id, "spot": body.result}
 
 
 @router.post("/improvements/{improvement_id}/hypotheses")

@@ -29,8 +29,12 @@ class TestLocationOutcome:
         assert led.location_outcome(None, None, 3, "wrong") == (False, None)  # 추천 없음(판단 실패) = 번복 아님
 
 
-def _row(i, kind="knowledge_location", ai=None, final=None, sig=None, changed=False, verdict=None):
-    return {"id": i, "kind": kind, "ai": ai or {}, "final": final or {}, "signals": sig or {}, "changed": changed, "verdict": verdict}
+_PENDING = object()   # 확정 전(final_value NULL)
+
+
+def _row(i, kind="knowledge_location", ai=None, final=None, sig=None, changed=False, verdict=None, spot=None):
+    return {"id": i, "kind": kind, "ai": ai or {}, "final": None if final is _PENDING else (final or {}), "signals": sig or {},
+            "changed": changed, "verdict": verdict, "spot": spot}
 
 
 class TestSummarize:
@@ -45,7 +49,7 @@ class TestSummarize:
         s = ov.summarize(rows, names)
         loc = next(k for k in s["kinds"] if k["kind"] == "knowledge_location")
         assert (loc["decided"], loc["overrides"], loc["rate"]) == (3, 2, round(2 / 3, 3))
-        assert loc["reasons"] == {"AI가 틀림": 1, "이유 안 남김": 1}
+        assert loc["reasons"] == {"AI 오류": 1, "사유 없음": 1}
         assert loc["patterns"] == [{"pattern": "제휴서비스 → 딜리버스", "n": 2}]
         assert loc["override_ids"] == [1, 2] and not loc["rubber_stamp"]
 
@@ -149,3 +153,66 @@ def test_override_sql_matches_python():
     except OSError:
         pytest.skip("DB 연결 안 됨")
     assert got == {r["id"] for r in rows if ov.is_override(r)}
+
+
+
+# ── 사람 검토 결과 다섯 갈래(11/04) ─────────────────────────────────────────
+REVIEW_CASES = [
+    # (row, 기대)
+    (_row(201, final=_PENDING), "pending"),
+    (_row(202, ai={"namespace_id": 1}, sig={"preset_id": 3}, final={"namespace_id": 3, "choice": "team_import"}), "rule"),
+    (_row(203, ai={"namespace_id": 1}, sig={"assigned_by": "ai", "proposed_id": 1}, final={"namespace_id": 1, "choice": "team_import"}), "auto"),
+    (_row(204, ai={"namespace_id": 1}, sig={"proposed_id": 1}, final={"namespace_id": 2}), "override"),
+    (_row(205, ai={"namespace_id": 1}, sig={"proposed_id": 1}, final={"namespace_id": 1, "choice": "accept"}), "accept"),
+    (_row(206, kind="chat_clarify", final=_PENDING), "pending"),
+    (_row(207, kind="source_check", final={"issue": False, "reason": "source_ok"}), "override"),
+    (_row(208, kind="duplicate_check", final={"action": "reject"}), "accept"),
+    (_row(209, ai={"namespace_id": 1}, sig={"assigned_by": "human", "proposed_id": 1}, final={"namespace_id": 1, "choice": "team_import"}), "accept"),
+]
+
+
+@pytest.mark.parametrize("row, want", REVIEW_CASES)
+def test_review_status(row, want):
+    assert ov.review_status(row) == want
+
+
+def test_override_rate_only_over_human_reviewed():
+    """번복률 분모 = 수용 + 번복(사람이 본 것) — 규칙 적용·자동 적용·검토 대기는 빼고 따로 센다(11/04: 규칙 413건이 섞여 1.1%로 보임)."""
+    rows = [_row(i, sig={"preset_id": 3}, final={"namespace_id": 3, "choice": "team_import"}) for i in range(10)]          # 규칙 10
+    rows += [_row(20 + i, ai={"namespace_id": 1}, sig={"proposed_id": 1}, final={"namespace_id": 1}) for i in range(3)]      # 수용 3
+    rows += [_row(30, ai={"namespace_id": 1}, sig={"proposed_id": 1}, final={"namespace_id": 2})]                            # 번복 1
+    rows += [_row(40, final=_PENDING), _row(41, sig={"assigned_by": "ai"}, final={"namespace_id": 1, "choice": "team_import"}, spot="overridden")]
+    loc = ov.summarize(rows, {})["kinds"][0]
+    assert loc["review"] == {"accept": 3, "override": 1, "auto": 1, "rule": 10, "pending": 1}
+    assert (loc["decided"], loc["overrides"], loc["rate"]) == (4, 1, 0.25)
+    assert loc["spot"] == {"n": 1, "overridden": 1, "auto_n": 1, "auto_overridden": 1} and loc["admin_reviewed"]
+    assert sum(loc["review"].values()) == len(rows)   # 다섯 갈래 = 전부(유실·중복 0)
+
+
+def test_review_sql_matches_python():
+    """REVIEW_SQL(감사 로그 거르기) = review_status(요약) — 실 DB에서 VALUES 표로(쓰기 없음). 확정 전은 SQL NULL로."""
+    import asyncio
+    import json
+    import os
+    asyncpg = pytest.importorskip("asyncpg")
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        pytest.skip("DATABASE_URL 없음")
+    rows = [r for r, _ in REVIEW_CASES] + [_row(300 + i, ai=a, sig=sg, final=f) for i, (a, sg, f, _) in enumerate(CASES)]
+
+    async def run():
+        conn = await asyncpg.connect(url)
+        try:
+            vals = ", ".join(f"(${5 * k + 1}::int, ${5 * k + 2}::text, ${5 * k + 3}::jsonb, ${5 * k + 4}::jsonb, ${5 * k + 5}::jsonb)"
+                             for k in range(len(rows)))
+            args = [x for r in rows for x in (r["id"], r["kind"], json.dumps(r["ai"]),
+                                              None if r["final"] is None else json.dumps(r["final"]), json.dumps(r["signals"]))]
+            got = await conn.fetch(f"SELECT d.id, {ov.REVIEW_SQL} AS review FROM (VALUES {vals}) AS d(id, kind, ai_value, final_value, signals)", *args)
+            return {r["id"]: r["review"] for r in got}
+        finally:
+            await conn.close()
+    try:
+        got = asyncio.run(run())
+    except OSError:
+        pytest.skip("DB 연결 안 됨")
+    assert got == {r["id"]: ov.review_status(r) for r in rows}

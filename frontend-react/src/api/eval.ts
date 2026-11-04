@@ -313,8 +313,16 @@ export async function getDecisionsReport(days = 90): Promise<DecisionsReport> {
 }
 
 /** 운영 번복 요약(10/27, 감사 로그 위 요약·자가 개선 입력) — 종류별 판단·번복·이유·패턴 + 위치 판정 리플레이 + 번복으로 만든 후보 */
+/** 사람 검토 결과(HITL, 11/04) — 수용 · 번복 · 자동 적용(사람 손 없이) · 규칙 적용(사람이 정한 규칙, AI 판단 미사용) · 검토 대기 */
+export type ReviewStatus = 'accept' | 'override' | 'auto' | 'rule' | 'pending';
 export interface OverrideKind {
+  /** decided = 사람 검토 수(수용 + 번복) — 번복률 분모 */
   kind: string; kind_name: string; decided: number; overrides: number; rate: number | null;
+  review: Record<ReviewStatus, number>;
+  /** 표본 감사(spot check) — 다시 본 수 · 그중 번복 */
+  spot: { n: number; overridden: number; auto_n: number; auto_overridden: number };
+  /** 관리자가 검토하는 종류(등록 위치·원문 확인·중복 의심) — 요약 번복률·검토 대기는 이것만(되묻기·제안은 사용자 선택) */
+  admin_reviewed: boolean;
   reasons: Record<string, number>; patterns: { pattern: string; n: number }[]; rubber_stamp: boolean;
 }
 export interface OverrideReport {
@@ -348,16 +356,30 @@ export interface DecisionLogItem {
   verdict: ChangedDecision['verdict']; verdict_reason: string | null;
   override_reason: 'wrong' | 'both_ok' | 'context_changed' | null;   // 번복 순간에 고른 이유(지식 등록, 선택)
   candidate: { id: number; title: string; status: CandidateStatus } | null;   // 이 번복으로 만든 개선 후보
+  review: ReviewStatus;
+  spot: 'accepted' | 'overridden' | null; spot_reason: 'wrong' | 'both_ok' | 'context_changed' | null; spot_by: string | null; spot_at: string | null;
 }
 
-export async function getDecisionLog(q: { days: number; kind?: string; changedOnly?: boolean; before?: number | null; limit?: number; day?: string | null }):
+export async function getDecisionLog(q: { days: number; kind?: string; changedOnly?: boolean; before?: number | null; limit?: number; day?: string | null; review?: ReviewStatus | null }):
   Promise<{ items: DecisionLogItem[]; next_before: number | null }> {
   const p = new URLSearchParams({ days: String(q.days), limit: String(q.limit ?? 50) });
   if (q.kind) p.set('kind', q.kind);
   if (q.changedOnly) p.set('changed_only', 'true');
   if (q.before) p.set('before', String(q.before));
   if (q.day) p.set('day', q.day);
+  if (q.review) p.set('review', q.review);
   return apiFetch(`/eval/decisions/log?${p.toString()}`);
+}
+
+/** 표본 감사(spot check, 11/04) — 아직 안 본 자동 적용·수용 판단 무작위 n건, left = 남은 대상 수 */
+export async function getSpotCheck(q: { days: number; kind?: string; n?: number }): Promise<{ items: DecisionLogItem[]; left: number }> {
+  const p = new URLSearchParams({ days: String(q.days), n: String(q.n ?? 10) });
+  if (q.kind) p.set('kind', q.kind);
+  return apiFetch(`/eval/decisions/spot-check?${p.toString()}`);
+}
+
+export async function markSpotCheck(id: number, result: 'accepted' | 'overridden', reason?: 'wrong' | 'both_ok' | 'context_changed' | null) {
+  return apiFetch<{ id: number; spot: string }>(`/eval/decisions/${id}/spot-check`, { method: 'POST', body: JSON.stringify({ result, reason: reason ?? null }) });
 }
 
 /** AI가 본 근거(10/28, 옛 검색 미리보기) — 채팅과 같은 검색(LLM 0, 로그인 사용자). 정책 줄의 logical_id로 [시험지에 넣기](관리자) */
