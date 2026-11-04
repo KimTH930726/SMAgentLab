@@ -160,7 +160,7 @@ export function ImportBatches({ openId, onOpen }: { openId: number | null; onOpe
 }
 
 const STATUS_TEXT: Record<string, string> = {
-  previewing: '분류 중', preview: '분류 미리보기', failed: '실패', loading: '적재 중', loaded: '적재됨', rolled_back: '롤백됨',
+  previewing: '분류 중', preview: '분류 미리보기', failed: '실패', loading: '적재 중', loaded: '적재됨', rolled_back: '롤백됨', cancelled: '취소됨',
   // 적재됨인데 게시 전 = 검수 대기(채팅에 아직 안 나옴) — 상태 칸은 statusText(b)로
 };
 
@@ -262,12 +262,14 @@ function BatchView({ id }: { id: number }) {
   if (error) return <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했어요: {String((error as Error).message)}</p>;
   if (!data) return <p className="text-sm text-slate-400">불러오는 중…</p>;
   const b = data.batch;
-  if (b.status === 'previewing' || b.status === 'failed') {
+  if (b.status === 'previewing' || b.status === 'failed' || b.status === 'cancelled') {
     return (
       <div className="rounded-xl border border-slate-700 bg-slate-800 p-4 space-y-2 text-sm">
         <div className="text-slate-100 font-semibold">#{b.id} {b.root_title ?? b.root_url}</div>
         {b.status === 'failed'
           ? <p className="text-rose-600 dark:text-rose-400">실패: {b.error}</p>
+          : b.status === 'cancelled'
+          ? <p className="text-slate-400" data-testid="batch-cancelled">취소됨 — 아무것도 적재되지 않음{b.error ? ` · ${b.error}` : ''}</p>
           : <>
               <p className="text-slate-300">분류 중 {b.done_pages} / {b.total_pages}페이지 — 아직 아무것도 적재되지 않음</p>
               <div className="h-2 rounded-full bg-slate-700 overflow-hidden"><div className="h-full bg-indigo-500" style={{ width: `${b.total_pages ? (100 * b.done_pages) / b.total_pages : 0}%` }} /></div>

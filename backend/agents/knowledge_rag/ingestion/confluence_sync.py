@@ -242,8 +242,9 @@ async def _reingest(src, c, ch: dict, rules: dict, owner: dict, out: dict) -> Op
             if batch_id is None:
                 return None
             # 이 공간의 어느 배치에서든 사람이 빼거나 보류·롤백(held)한 페이지 — 규칙보다 사람 결정(나중 배치만 롤백한 경우도, 재리뷰 M2)
+            # 취소한 미리보기(cancelled)의 결정은 버린 것 — 계속 적용하지 않는다(11/04 리뷰)
             if await conn.fetchval("SELECT 1 FROM rag_import_page ip JOIN rag_import_batch b ON b.id = ip.batch_id WHERE b.team_id = $1 "
-                                   "AND b.root_url = $2 AND ip.page_id = $3 AND ip.status IN ('excluded', 'held')",
+                                   "AND b.root_url = $2 AND ip.page_id = $3 AND ip.status IN ('excluded', 'held') AND b.status <> 'cancelled'",
                                    c["team_id"], c["root_url"], pid):
                 out["excluded"] += 1
                 return None

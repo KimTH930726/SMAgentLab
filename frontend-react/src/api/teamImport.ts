@@ -2,7 +2,7 @@ import { apiFetch } from './client';
 
 /** 팀 적재(컨플 수집기, #98) — 수집 대상 → 분류 미리보기 → 분류 확정·적재 → 롤백. 설계 confluence-curation-layer-design §12. */
 
-export type BatchStatus = 'previewing' | 'preview' | 'failed' | 'loading' | 'loaded' | 'rolled_back';
+export type BatchStatus = 'previewing' | 'preview' | 'failed' | 'loading' | 'loaded' | 'rolled_back' | 'cancelled';
 export type PageStatus = 'queued' | 'auto' | 'review' | 'existing' | 'excluded' | 'held' | 'restricted' | 'empty' | 'failed' | 'loaded';
 export type ReviewReason = 'low_confidence' | 'unowned' | 'not_writable' | 'ai_failed' | 'default_conflict';
 

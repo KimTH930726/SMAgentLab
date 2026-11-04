@@ -1649,7 +1649,7 @@ async def _migrate_team_import(conn) -> None:
             root_url TEXT NOT NULL,
             root_title TEXT,
             status TEXT NOT NULL DEFAULT 'previewing'
-                CHECK (status IN ('previewing', 'preview', 'failed', 'loading', 'loaded', 'rolled_back')),
+                CHECK (status IN ('previewing', 'preview', 'failed', 'loading', 'loaded', 'rolled_back', 'cancelled')),
             sampling_required BOOLEAN NOT NULL DEFAULT TRUE,
             total_pages INT NOT NULL DEFAULT 0,
             done_pages INT NOT NULL DEFAULT 0,
@@ -1700,6 +1700,14 @@ async def _migrate_team_import(conn) -> None:
     await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS held_plan JSONB")
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ")
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS publish_check JSONB")
+    # 미리보기 취소(cancelled, 11/04 태훈 — #3 GIFT를 청크 규칙 개선 뒤 다시): 적재 안 한 미리보기를 "실패"로 적지 않게 상태를 따로.
+    # 이미 바뀌었으면 건너뜀(기동마다 표 잠금·검사 안 하게) · 지우고 붙이기를 한 트랜잭션으로(중간 실패 시 제약 없는 채로 안 남게, 리뷰)
+    cdef = await conn.fetchval("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'rag_import_batch_status_check'")
+    if cdef is None or "cancelled" not in cdef:
+        async with conn.transaction():
+            await conn.execute("ALTER TABLE rag_import_batch DROP CONSTRAINT IF EXISTS rag_import_batch_status_check")
+            await conn.execute("ALTER TABLE rag_import_batch ADD CONSTRAINT rag_import_batch_status_check CHECK "
+                               "(status IN ('previewing', 'preview', 'failed', 'loading', 'loaded', 'rolled_back', 'cancelled'))")
     # 게시 중 표시(두 번 누름·게시 중 롤백 막기) · 게시한 사람(자동 용어를 이 사람이 만든다 — 롤백이 그 용어를 찾는 기준)
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS publishing_at TIMESTAMPTZ")
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS published_by_user_id INT")
