@@ -100,8 +100,23 @@ def test_invariant_every_chunk_once_random():
 
 
 def test_reason_marks_why_each_doc_is_listed():
-    """사유(11/05) — 원문 바뀜 > 쓰이는 중 > 미사용, 사유는 페이지마다 정확히 하나."""
-    rs = [row(1, days_ago=100, page="A"), row(2, days_ago=100, page="B"), row(3, days_ago=10, page="C"), row(4, days_ago=100, page="D")]
-    out = review.due_docs(rs, 90, NOW, {2: 3, 3: 1}, changed_pages=["C"])
-    assert {d["key"]: d["reason"] for d in out} == {"p:C": "source_changed", "p:B": "used", "p:A": "unused", "p:D": "unused"}
-    assert [d["reason"] for d in out][:2] == ["source_changed", "used"]
+    """사유(11/05 사건 기반) — 원문 바뀜 > 신고 > 많이 쓰임(USED_MIN회 이상) > quiet, 신고는 기한 전이어도 올라온다."""
+    rs = [row(1, days_ago=100, page="A"), row(2, days_ago=100, page="B"), row(3, days_ago=10, page="C"),
+          row(4, days_ago=100, page="D"), row(5, days_ago=10, page="E")]
+    out = review.due_docs(rs, 90, NOW, {2: review.USED_MIN, 4: review.USED_MIN - 1}, changed_pages=["C"], reported={5: 2})
+    assert {d["key"]: d["reason"] for d in out} == {"p:C": "source_changed", "p:E": "reported", "p:B": "used", "p:A": "quiet", "p:D": "quiet"}
+    assert [d["reason"] for d in out][:3] == ["source_changed", "reported", "used"]
+    assert next(d for d in out if d["key"] == "p:E")["reported"] == 2   # 신고 건수
+
+
+def test_pick_listed_caps_used_and_counts_the_rest():
+    """목록 = 원문 바뀜·신고 전부 + 많이 쓰임 위 USED_TOP개 — 올린 수 + 안 올린 수 = 전체(유실 0)."""
+    n = review.USED_TOP + 5
+    rs = [row(i, days_ago=100, page=f"P{i}") for i in range(1, n + 1)] + [row(900, days_ago=100, page="Q")]
+    used = {i: review.USED_MIN + i for i in range(1, n + 1)}
+    docs = review.due_docs(rs, 90, NOW, used, changed_pages=["P1"])
+    listed, quiet = review.pick_listed(docs)
+    assert len(listed) + quiet == len(docs)
+    assert listed[0]["reason"] == "source_changed" and sum(d["reason"] == "used" for d in listed) == review.USED_TOP
+    top_used = sorted((d["used"] for d in docs if d["reason"] == "used"), reverse=True)[:review.USED_TOP]
+    assert [d["used"] for d in listed if d["reason"] == "used"] == top_used   # 많이 쓰인 순 위에서부터

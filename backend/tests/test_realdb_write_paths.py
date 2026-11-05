@@ -428,3 +428,52 @@ def test_feedback_namespace_filter_partitions_rows():
     assert [i["namespace"] for i in none["items"]] == [None] and sum(none["counts"].values()) == 1
     assert len(new_a["items"]) == 2 and new_a["counts"]["new"] == 2   # 상태 + 컬렉션 같이
     assert sorted((x["namespace"] or "", x["n"]) for x in all_["namespaces"]) == [("", 1), ("시험_피드백 가", 2), ("시험_피드백 나", 1)]
+
+
+# ── 원문 페이지 제목(11/05) ─────────────────────────────────────────────────
+
+def test_review_and_page_urls_use_page_title_not_batch_name():
+    """공간 일괄 적재 조각은 source_file이 묶음 이름 — 검토 필요·승인 대기 원문 링크 제목은 적재 원장의 페이지 제목이어야 한다.
+    원장에 없는 페이지는 첫 제목 경로, 그것도 없으면 원본 이름."""
+    import datetime
+    _OLD = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)   # 기한 지남(기본 90일)
+    review = load("_rdb_real_review", "agents/knowledge_rag/knowledge/review.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_제목 시스템")
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        b = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, status, sampling_required, total_pages, done_pages) "
+                                "VALUES ($1, 'https://confl.sinc.co.kr/display/X', 'preview', FALSE, 1, 1) RETURNING id", team)
+        await conn.execute("INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, status) VALUES ($1, '시험p1', '송장 재발행 안내', 'b', 1, 'auto')", b)
+        batch_name = "Confluence 16개 페이지(파일럿 진단 · 그림 켬)"
+        k1 = await knowledge(conn, s, "조각 1", confluence_page_id="시험p1", source_file=batch_name, created_at=_OLD)
+        k2 = await knowledge(conn, s, "조각 2", confluence_page_id="시험p2", source_file=batch_name, heading_path=["배치 재기동"],
+                             created_at=_OLD)
+        for k in (k1, k2):   # 목록에 오르게 — 신고(내용이 낡음, 대기 중)는 기한과 상관없이 올라온다(11/05 사건 기반)
+            await conn.execute("INSERT INTO ops_improvement_item (kind, source, namespace_id, target_type, target_id, user_reason, status) "
+                               "VALUES ('correction', 'chat', $1, 'knowledge', $2, 'stale', 'pending')", s, k)
+        due = await review.review_due("시험_제목 시스템")
+        urls = await ksvc.page_urls([k1, k2])
+        return {d["key"]: d["title"] for d in due["due"]}, {i: u["title"] for i, u in urls.items()}, k1, k2
+
+    titles, url_titles, k1, k2 = run(scenario, modules=[review, ksvc])
+    assert titles == {"p:시험p1": "송장 재발행 안내", "p:시험p2": "배치 재기동"}   # 둘 다 신고로 올라옴
+    assert url_titles == {k1: "송장 재발행 안내", k2: "배치 재기동"}
+
+
+def test_reported_card_clears_after_review():
+    """신고 카드(리뷰 M1) — 신고 뒤 [검토 완료]하면 정정 요청이 대기 중이어도 목록에서 빠진다."""
+    review = load("_rdb_real_review2", "agents/knowledge_rag/knowledge/review.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_신고 시스템")
+        k = await knowledge(conn, s, "신고된 조각")
+        await conn.execute("INSERT INTO ops_improvement_item (kind, source, namespace_id, target_type, target_id, user_reason, status) "
+                           "VALUES ('correction', 'chat', $1, 'knowledge', $2, 'stale', 'pending')", s, k)
+        before = [d["reason"] for d in (await review.review_due("시험_신고 시스템"))["due"]]
+        await review.mark_reviewed("시험_신고 시스템", [k], "admin")
+        after = [d["reason"] for d in (await review.review_due("시험_신고 시스템"))["due"]]
+        return before, after
+
+    before, after = run(scenario, modules=[review])
+    assert before == ["reported"] and after == []

@@ -542,10 +542,16 @@ export interface ReviewDueDoc {
   overdue_days: number | null; used: number;
   /** 컨플 원문이 바뀌었는데 사람이 고친 조각이 있어 동기화가 덮지 않음(11/04) */
   source_changed: boolean;
-  /** 왜 올라왔나(11/05) — 원문 바뀜 · 쓰이는 중(기한 지남 + 최근 채팅 근거) · 미사용(기한만 지남, 기본 목록에서 뺌) */
-  reason: 'source_changed' | 'used' | 'unused';
+  /** 왜 올라왔나(11/05 사건 기반) — 원문 바뀜 · 신고(내용이 낡음 정정 대기) · 많이 쓰임(기한 지남 + 채팅 used_min회 이상, 위 used_top개). 목록엔 이 셋만 */
+  reason: 'source_changed' | 'reported' | 'used';
+  /** 이 페이지 조각을 짚은 '내용이 낡음' 신고 수 */
+  reported: number;
 }
-export interface ReviewDue { namespace: string; interval_days: number | null; usage_days: number; total_docs: number; due: ReviewDueDoc[] }
+export interface ReviewDue {
+  namespace: string; interval_days: number | null; usage_days: number; used_min: number; used_top: number; total_docs: number; due: ReviewDueDoc[];
+  /** 기한은 지났지만 목록에 안 올린 수(덜 쓰임·많이 쓰임 넘친 것) — 근거 카드 '기한 지남' 배지로만 */
+  quiet: number;
+}
 
 export const getReviewDue = (namespace: string) =>
   apiFetch<ReviewDue>(`/knowledge/review/due?${new URLSearchParams({ namespace })}`);

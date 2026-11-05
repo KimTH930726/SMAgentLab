@@ -77,6 +77,8 @@ export interface DuplicateMatch {
   id: number;
   content: string;
   similarity: number;
+  /** 지금 중복 기준보다 낮은 후보(옛 기록) — 참고 후보로 접음(11/05) */
+  below?: boolean;
 }
 
 export interface KnowledgeItem {

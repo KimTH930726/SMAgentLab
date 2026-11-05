@@ -35,7 +35,7 @@ import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { useAuthStore } from '../../store/useAuthStore';
 import { TabGuide } from './TabGuide';
 import { ReviewDueTab, useReviewDueCount } from './ReviewDueTab';
-import { SimilarKnowledgeStep } from './SimilarKnowledgeStep';
+import { SimilarKnowledgeStep, similarityLabel } from './SimilarKnowledgeStep';
 import { checkSimilar, checkSimilarBatch, getPageUrls, recordSimilarDecision, type SimilarMatch, type SimilarResult } from '../../api/knowledge';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -719,6 +719,8 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
     staleTime: 60_000,
   });
   const simOf = (idx: number) => similar.data?.[chunks.findIndex(c => c.idx === idx)];
+  // 확인이 끝나기 전엔 등록을 막고 자리를 미리 잡아 둔다 — 결과가 뒤늦게 끼어들어 화면이 밀리던 것(11/05 태훈)
+  const checking = !!target && similar.fetchStatus === 'fetching' && !similar.data;
   const [comparing, setComparing] = useState<number | null>(null);
   const qc = useQueryClient();
 
@@ -827,8 +829,17 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
           </div>
         )}
 
-        {target && similar.isLoading && <p className="text-xs text-slate-500">비슷한 기존 지식 확인 중…</p>}
-        {similar.isError && <p className="text-xs text-amber-700 dark:text-amber-400">비슷한 지식 확인을 못 했어요 — 그대로 등록하면 비슷한 조각은 승인 대기로 가요.</p>}
+        {/* 비슷한 지식 확인 줄 — 창을 열 때부터 같은 자리(넣을 곳 정하는 중 → 확인 중 → 결과) */}
+        {!similarCount && (
+          <p className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-400" data-testid="chunk-similar-status">
+            {checking && <span className="h-3 w-3 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" aria-hidden />}
+            {similar.isError ? <span className="text-amber-700 dark:text-amber-400">비슷한 지식 확인을 못 했어요 — 그대로 등록하면 비슷한 조각은 승인 대기로 가요.</span>
+              : !target ? '비슷한 기존 지식 — 넣을 곳이 정해지면 바로 확인해요'
+                : checking ? `비슷한 기존 지식 확인 중… (조각 ${chunks.length}개)`
+                  : chunks.length > 500 ? '조각이 500개가 넘어 미리 확인하지 않아요 — 비슷한 조각은 등록 뒤 승인 대기로 가요'
+                    : '비슷한 기존 지식 없음 ✓'}
+          </p>
+        )}
         {similarCount > 0 && (
           <div className="rounded-lg border px-3 py-2 text-xs bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-900/30 dark:border-amber-700/40 dark:text-amber-300"
             data-testid="chunk-similar-summary" title="정하지 않은 조각은 등록하면 승인 대기로 가요(담당자가 비교해 정해요)">
@@ -881,12 +892,13 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300" data-testid={`chunk-same-${chunk.idx}`}
                             title="공백만 다른 같은 글이 이미 있어요 — 필요 없으면 체크를 풀어 주세요. 그대로 등록하면 같은 원본 안 반복은 건너뛰고, 다른 원본이면 승인 대기로 가요">같은 글 #{s.same}</span>
                         );
+                        if (checking) return <span className="text-[10px] text-slate-500">확인 중…</span>;
                         if (!s?.matches.length) return null;
                         return (
                           <button type="button" onClick={() => setComparing(chunk.idx)} data-testid={`chunk-similar-${chunk.idx}`}
                             title="비슷한 기존 지식과 비교해 등록 안 함 · 합치기 · 새로 등록을 골라요"
                             className="text-[10px] px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-600/50 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50">
-                            비슷한 지식 #{s.matches[0].id} · {(s.matches[0].similarity * 100).toFixed(0)}% [비교]</button>
+                            비슷한 지식 #{s.matches[0].id} · {similarityLabel(s.matches[0].similarity, false)} [비교]</button>
                         );
                       })()}
                     </div>
@@ -922,8 +934,8 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
         <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={loading}>취소</Button>
           <Button variant="primary" size="sm" loading={loading}
-            disabled={selectedCount === 0 || !loc}
-            title={!loc ? '넣을 곳을 먼저 골라 주세요' : undefined}
+            disabled={selectedCount === 0 || !loc || checking}
+            title={!loc ? '넣을 곳을 먼저 골라 주세요' : checking ? '비슷한 지식 확인이 끝나면 등록할 수 있어요' : undefined}
             onClick={() => void confirm()}>
             <CheckCircle className="w-3.5 h-3.5" />{loc && !loc.writable ? `승인 요청 (${selectedCount}건)` : `선택 항목 등록 (${selectedCount}건)`}
           </Button>
@@ -1339,6 +1351,7 @@ function ReviewTab({ items, canModify, onResolved }: {
 }) {
   const [selectedItem, setSelectedItem] = useState<KnowledgeItem | null>(null);
   const [mergeTargetId, setMergeTargetId] = useState<number | null>(null);
+  const [showBelow, setShowBelow] = useState(false);   // 참고 후보(기준 미만) 펼치기
   const [actionError, setActionError] = useState('');
   const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | 'merge' | null>(null);
   // 차이(git diff처럼 줄 단위) / 나란히 — 기본은 차이(11/03 태훈 "diff를 가시적으로")
@@ -1359,6 +1372,9 @@ function ReviewTab({ items, canModify, onResolved }: {
   });
   // 유사도 높은 순 정렬 — 백엔드가 이미 정렬해 오지만 방어적으로 한번 더 보장
   const sortedMatches = [...matches].sort((a, b) => b.similarity - a.similarity);
+  // 참고 후보(기준 미만, 맨 위 후보 빼고)는 접어 둔다 — 차이 칩·나란히 보기 같은 목록(리뷰 L8)
+  const belowCount = sortedMatches.filter((m, i) => m.below && i > 0).length;
+  const shownMatches = showBelow ? sortedMatches : sortedMatches.filter((m, i) => !m.below || i === 0);
   // 비교할 기존 지식이 없으면(읽기 제한 보류 등) 차이 대신 원문 — 빈 차이 화면이면 무엇을 승인하는지 못 본다(11/03 E2E)
   // 조회 실패는 "매칭 없음"이 아니다 — 중복이 없다고 믿고 승인하지 않게 오류로 따로 보인다(리뷰)
   const noMatch = !matchesLoading && !matchesError && sortedMatches.length === 0;
@@ -1367,7 +1383,7 @@ function ReviewTab({ items, canModify, onResolved }: {
   const diffTargetId = mergeTargetId ?? sortedMatches[0]?.id ?? null;
 
   useEffect(() => {
-    setMergeTargetId(null);
+    setMergeTargetId(null); setShowBelow(false);
   }, [selectedItem?.id]);
 
   useEffect(() => {
@@ -1457,12 +1473,18 @@ function ReviewTab({ items, canModify, onResolved }: {
               {shown === 'diff' && !matchesLoading && sortedMatches.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5" data-testid="review-diff-targets">
                   <span className="text-[11px] text-slate-500">비교 대상(병합 대상)</span>
-                  {sortedMatches.map((m) => (
+                  {shownMatches.map((m) => (
                     <button key={m.id} type="button" onClick={() => setMergeTargetId(m.id)} aria-pressed={mergeTargetId === m.id}
                       className={`rounded-md border px-2 py-0.5 text-xs font-mono ${mergeTargetId === m.id ? 'border-indigo-500 text-indigo-700 dark:text-indigo-300' : 'border-slate-700 text-slate-400 hover:bg-slate-800'}`}>
-                      #{m.id} · {(m.similarity * 100).toFixed(1)}%
+                      #{m.id} · {(m.similarity * 100).toFixed(1)}%{m.below ? ' · 참고' : ''}
                     </button>
                   ))}
+                  {belowCount > 0 && (
+                    <button type="button" onClick={() => setShowBelow((v) => !v)} data-testid="review-below-toggle"
+                      title="지금 중복 기준보다 덜 비슷한 후보 — 옛 기준이나 같은 묶음 안 비교로 남은 기록이라 보통 볼 필요 없어요"
+                      className="text-[11px] text-slate-500 hover:text-slate-300">
+                      {showBelow ? '참고 후보 접기' : `참고 후보 ${belowCount}개 ▸`}</button>
+                  )}
                 </div>
               )}
             </div>
@@ -1480,7 +1502,7 @@ function ReviewTab({ items, canModify, onResolved }: {
               </div>
               <div>
                 <p className="text-xs font-medium text-indigo-400 mb-1.5">
-                  기존 지식{sortedMatches.length > 0 ? ` (${sortedMatches.length}건, 유사도순 — 클릭해서 펼치기/병합 대상 선택)` : ''}
+                  기존 지식{shownMatches.length > 0 ? ` (${shownMatches.length}건, 유사도순 — 클릭해서 펼치기/병합 대상 선택)` : ''}
                 </p>
                 {matchesLoading ? (
                   <div className="text-sm text-slate-500 py-4 text-center">불러오는 중...</div>
@@ -1488,7 +1510,7 @@ function ReviewTab({ items, canModify, onResolved }: {
                   <p className="text-sm text-rose-600 dark:text-rose-400 py-4 text-center">비슷한 기존 지식을 불러오지 못했어요 — 창을 닫았다 다시 열어 주세요.</p>
                 ) : (
                   <div className="space-y-1.5 h-[28rem] overflow-y-auto">
-                    {sortedMatches.map((m: DuplicateMatch) => {
+                    {shownMatches.map((m: DuplicateMatch) => {
                       const isSelected = mergeTargetId === m.id;
                       return (
                         <button

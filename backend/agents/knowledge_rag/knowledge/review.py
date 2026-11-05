@@ -6,8 +6,10 @@ content_edited_at(사람이 고친 때) 중 늦은 것, 둘 다 없으면 등록
 페이지는 가장 오래된 조각 기준(한 조각이라도 기한이 지나면 페이지가 검토 필요).
 원문 바뀜(11/04, Confluence "검증 해제" 관례): 컨플 동기화가 바뀐 페이지를 찾았는데 사람이 고친 조각이 있어 덮지 않은 페이지(충돌 —
 rag_source_connection.retry_pages why='conflict')는 기한과 상관없이 맨 위에 "원문 바뀜". 그 밖의 바뀐 페이지는 동기화가 이미 새 원문으로 바꿨다.
-기본 목록 = 원문 바뀜 + 기한 지났고 최근 채팅에 쓰인 것(11/05 — 컨플 400페이지를 한꺼번에 적재하면 90일 뒤 400개가 한 번에 올라온다).
-기한만 지나고 안 쓰인 것은 reason='unused'로 같이 돌려주고 화면이 [미사용] 칩 뒤로 둔다(업계: Guru 검증도 많이 보는 카드부터).
+11/05 태훈 "주기마다 전부 검수는 너무 큰 일 — 필수만": 기간만으로는 안 올린다(사건 기반 검증). 올라오는 것 =
+  ① 원문 바뀜(동기화 충돌) ② 신고(그 페이지 조각에 [답변 틀림 · 내용이 낡음] 정정 요청이 대기 중)
+  ③ 많이 쓰이는데 오래됨(기한 지남 + 최근 30일 채팅 근거 USED_MIN회 이상, 많이 쓰인 순 위 USED_TOP개).
+  나머지 기한 지남은 quiet 수만 — 채팅 근거 카드의 '기한 지남' 배지로만 보인다. (로컬 11/05: 기한 지남 18 → ③ 5개)
 안 하는 것: 자동 알림·독촉(쓰는지 먼저 본다) · 내용이 바뀌었는지 AI 판단(원문 원장 동기화의 일) · 조각 단위 검토.
 """
 from __future__ import annotations
@@ -20,6 +22,18 @@ from core.database import get_conn
 DEFAULT_INTERVAL_DAYS = 90
 INTERVAL_CHOICES = (30, 90, 180)   # + None(안 함)
 USAGE_DAYS = 30   # "많이 쓰인 순" — 최근 30일 채팅 답이 근거로 쓴 횟수
+USED_MIN = 3      # ③ 많이 쓰임 = 최근 30일 채팅 근거 3회 이상
+USED_TOP = 10     # ③은 위 10개까지(관리자가 한 번에 볼 만큼)
+
+# 원문 페이지 제목 — 컨플 조각은 적재 원장(rag_import_page)의 페이지 제목 › 첫 제목 경로 › 원본 이름.
+# 공간 일괄 적재는 source_file에 묶음 이름("Confluence 16개 페이지(…)")이 들어가 페이지 제목처럼 보이던 것(11/05 태훈).
+# 쓰는 쪽: FROM rag_knowledge k LEFT JOIN page_title pt ON pt.page_id = k.confluence_page_id (WITH절에 PAGE_TITLE_CTE)
+# 제목이 빈 최신 줄(실패·제한 재수집)이 옛 제목을 가리지 않게 빈 제목은 뺀다(리뷰 L5)
+PAGE_TITLE_CTE = ("page_title AS (SELECT DISTINCT ON (page_id) page_id, title FROM rag_import_page "
+                  "WHERE COALESCE(title, '') <> '' ORDER BY page_id, id DESC)")
+TITLE_SQL = "COALESCE(NULLIF(pt.title, ''), k.heading_path[1], k.source_file)"
+# 위가 다 없으면(직접 입력) 내용 첫 줄 — "지식 #18"만 보이던 것(11/05 UI 검수). 제목 기호(#)는 뗀다
+FIRST_LINE_SQL = "NULLIF(left(regexp_replace(split_part(btrim(k.content), E'\\n', 1), '^#+\\s*', ''), 60), '')"
 
 
 def doc_key(r: Mapping) -> str:
@@ -39,12 +53,12 @@ def last_touch(r: Mapping) -> datetime:
 
 
 def due_docs(rows: Iterable[Mapping], interval_days: Optional[int], now: datetime, used: Mapping[int, int],
-             changed_pages: Iterable[str] = ()) -> list[dict]:
+             changed_pages: Iterable[str] = (), reported: Mapping[int, int] = {}) -> list[dict]:
     """검토 필요 페이지 — 원문 바뀜(changed_pages = 동기화 충돌 페이지 번호) 먼저, 그다음 기한 지난 것(채팅에 많이 쓰인 순 → 오래 지난 순).
     interval_days None = 기한은 안 봄(원문 바뀜은 그래도 보인다).
     used = 조각 id → 최근 채팅 답 수(같은 답이 한 페이지 조각 여럿을 써도 페이지 합은 조각 합 — 화면은 "쓰인 횟수"로 충분)."""
     changed = {f"p:{p}" for p in changed_pages}
-    if not interval_days and not changed:
+    if not interval_days and not changed and not reported:
         return []
     groups: dict[str, list[Mapping]] = {}
     for r in rows:
@@ -54,7 +68,8 @@ def due_docs(rows: Iterable[Mapping], interval_days: Optional[int], now: datetim
         last = min(last_touch(r) for r in rs)
         overdue = (now - (last + timedelta(days=interval_days))).days if interval_days else None
         source_changed = key in changed
-        if not source_changed and (overdue is None or last + timedelta(days=interval_days) >= now):
+        n_reported = sum(reported.get(r["id"], 0) for r in rs)   # 신고 건수(조각 수 아님, 리뷰 L6)
+        if not source_changed and not n_reported and (overdue is None or last + timedelta(days=interval_days) >= now):
             continue
         reviewed = [r for r in rs if r["reviewed_at"]]
         latest = max(reviewed, key=lambda r: r["reviewed_at"]) if reviewed else None
@@ -65,12 +80,20 @@ def due_docs(rows: Iterable[Mapping], interval_days: Optional[int], now: datetim
             "last_reviewed_by": latest["owner"] if latest else None,
             "created_at": min(r["created_at"] for r in rs).isoformat(),
             "overdue_days": overdue if overdue is not None and overdue >= 0 else None, "source_changed": source_changed,
-            "used": (u := sum(used.get(r["id"], 0) for r in rs)),
-            # 왜 올라왔나(11/05 태훈 — 관리자에게 사유까지): 원문 바뀜 · 쓰이는 중(기한 지남 + 최근 채팅 근거) · 미사용(기한만 지남 — 기본 목록에서 뺀다)
-            "reason": "source_changed" if source_changed else ("used" if u else "unused"),
+            "used": (u := sum(used.get(r["id"], 0) for r in rs)), "reported": n_reported,
+            # 왜 올라왔나(11/05): 원문 바뀜 › 신고 › 많이 쓰임(기한 지남 + 채팅 USED_MIN회 이상) › quiet(기한만 — 목록엔 안 올림)
+            "reason": "source_changed" if source_changed else "reported" if n_reported else "used" if u >= USED_MIN else "quiet",
         })
-    out.sort(key=lambda d: (not d["source_changed"], -d["used"], -(d["overdue_days"] or 0), d["key"]))
+    rank = {"source_changed": 0, "reported": 1, "used": 2, "quiet": 3}
+    out.sort(key=lambda d: (rank[d["reason"]], -d["used"], -(d["overdue_days"] or 0), d["key"]))
     return out
+
+
+def pick_listed(docs: list[dict]) -> tuple[list[dict], int]:
+    """목록에 올릴 것 = 원문 바뀜·신고 전부 + 많이 쓰임 위 USED_TOP개. 나머지 수(quiet + 많이 쓰임 넘친 것)도 돌려준다."""
+    must = [d for d in docs if d["reason"] in ("source_changed", "reported")]
+    used = [d for d in docs if d["reason"] == "used"][:USED_TOP]
+    return must + used, len(docs) - len(must) - len(used)
 
 
 def freshness(rows: Iterable[Mapping], want: Iterable[int], intervals: Mapping[int, Optional[int]], owners: Mapping[int, list[str]],
@@ -128,9 +151,11 @@ async def review_due(namespace: str) -> dict:
         if ns is None:
             raise LookupError("컬렉션을 찾을 수 없습니다.")
         rows = await conn.fetch(
-            """SELECT id, confluence_page_id, source_document_id, ingestion_job_id, source_file,
-                      COALESCE(source_file, heading_path[1]) AS title, reviewed_at, content_edited_at, created_at, owner
-               FROM rag_knowledge WHERE namespace_id = $1 AND status = 'active'""", ns["id"])
+            f"""WITH {PAGE_TITLE_CTE}
+               SELECT k.id, k.confluence_page_id, k.source_document_id, k.ingestion_job_id, k.source_file,
+                      COALESCE({TITLE_SQL}, {FIRST_LINE_SQL}) AS title, k.reviewed_at, k.content_edited_at, k.created_at, k.owner
+               FROM rag_knowledge k LEFT JOIN page_title pt ON pt.page_id = k.confluence_page_id
+               WHERE k.namespace_id = $1 AND k.status = 'active'""", ns["id"])
         ids = [r["id"] for r in rows]
         # 지식 검색 화면 used_count와 같은 셈(부분 인덱스 idx_ops_message_assistant_created)
         used = {r["kid"]: r["n"] for r in await conn.fetch(
@@ -142,9 +167,17 @@ async def review_due(namespace: str) -> dict:
         changed = [r["pid"] for r in await conn.fetch(
             "SELECT DISTINCT x->>'page_id' AS pid FROM rag_source_connection c CROSS JOIN LATERAL jsonb_array_elements(COALESCE(c.retry_pages, '[]'::jsonb)) x "
             "WHERE x->>'why' = 'conflict'")]
-    docs = due_docs([dict(r) for r in rows], ns["review_interval_days"], now, used, changed)
+        # 신고 — 이 컬렉션 조각을 짚은 [답변 틀림 · 내용이 낡음] 정정 요청(대기 중). 신고 뒤에 그 조각을 검토했거나 고쳤으면 안 센다 —
+        # [검토 완료]·바로 고치기를 해도 카드가 안 빠지던 것(리뷰 M1). 정정 요청 자체는 정정 요청 화면에서 처리
+        reported = {r["target_id"]: r["n"] for r in await conn.fetch(
+            "SELECT i.target_id, count(*) AS n FROM ops_improvement_item i JOIN rag_knowledge k ON k.id = i.target_id "
+            "WHERE i.kind = 'correction' AND i.status = 'pending' AND i.target_type = 'knowledge' AND i.user_reason = 'stale' "
+            "AND i.target_id = ANY($1::int[]) AND i.created_at > COALESCE(GREATEST(k.reviewed_at, k.content_edited_at), '-infinity') "
+            "GROUP BY 1", ids)} if ids else {}
+    docs = due_docs([dict(r) for r in rows], ns["review_interval_days"], now, used, changed, reported)
+    listed, quiet = pick_listed(docs)
     return {"namespace": namespace, "interval_days": ns["review_interval_days"], "usage_days": USAGE_DAYS,
-            "total_docs": len({doc_key(dict(r)) for r in rows}), "due": docs}
+            "used_min": USED_MIN, "used_top": USED_TOP, "total_docs": len({doc_key(dict(r)) for r in rows}), "due": listed, "quiet": quiet}
 
 
 async def mark_reviewed(namespace: str, ids: list[int], username: str) -> int:

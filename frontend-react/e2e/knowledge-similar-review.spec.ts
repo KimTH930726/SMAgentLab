@@ -82,13 +82,38 @@ test('등록 순간 비슷한 지식 — 등록 안 함 · 합치기 · 새로 �
   psql(`UPDATE rag_knowledge SET created_at = NOW() - interval '100 days', reviewed_at = NULL, content_edited_at = NULL WHERE id = ${baseId}`);
   await page.getByTestId('tab-review-due').click();
   const due = page.getByTestId(`review-due-k:${baseId}`);
-  // 채팅에 안 쓰인 지식 = 미사용(11/05) — 기본 목록엔 없고 [미사용]에 사유와 함께
-  await expect(page.getByTestId('review-filter-due')).toBeVisible();
+  // 사건 기반(11/05) — 기한만 지나고 채팅에 안 쓰인 지식은 목록에 없고 '기한만 지남' 수에만
+  await expect(page.getByTestId('review-counts')).toBeVisible();
   await expect(due).toHaveCount(0);
-  await page.getByTestId('review-filter-unused').click();
-  await expect(due).toContainText('기한 10일 지남');
-  await expect(page.getByTestId(`review-reason-k:${baseId}`)).toContainText('미사용');
+  await expect(page.getByTestId('review-quiet')).toBeVisible();
+  // 채팅 답 3번(USED_MIN)에 근거로 쓰이면 '많이 쓰임'으로 올라온다
+  const conv = psql(`INSERT INTO ops_conversation (title) VALUES ('E2E 검토 필요') RETURNING id`).split(/\s+/)[0];
+  test.info().annotations.push({ type: 'cleanup', description: `conv ${conv}` });
+  try {
+  for (let i = 0; i < 3; i++) psql(`INSERT INTO ops_message (conversation_id, role, content, results) VALUES (${conv}, 'assistant', 'E2E 답', '[{"id": ${baseId}}]'::jsonb)`);
+  await page.reload();
+  await page.getByTestId('tab-review-due').click();
+  await expect(due).toContainText('10일 지남');
+  await expect(page.getByTestId(`review-reason-k:${baseId}`)).toContainText('많이 쓰임');
+  await expect(due).toContainText('채팅 3회');
   await page.getByTestId(`review-done-k:${baseId}`).click();
   await expect(due).toHaveCount(0);
   expect(psql(`SELECT (reviewed_at > NOW() - interval '1 minute') || '|' || owner FROM rag_knowledge WHERE id = ${baseId}`)).toBe('true|admin');
+
+  // ⑤ 카드 눌러 상세 → 조각을 그 자리에서 고침(11/05 — "지식 조회에서 찾아 고치라는 건 불친절") → 내용 바뀜 · 고친 것도 검토라 목록에서 빠짐
+  psql(`UPDATE rag_knowledge SET created_at = NOW() - interval '100 days', reviewed_at = NULL, content_edited_at = NULL WHERE id = ${baseId}`);
+  await page.reload();   // 목록을 새로(psql로 바꾼 날짜)
+  await page.getByTestId('tab-review-due').click();
+  await due.click();
+  const detail = page.getByTestId('review-detail');
+  await detail.getByTestId(`review-edit-${baseId}`).click();
+  await detail.getByLabel(`#${baseId} 내용`).fill('택배 송장 재발행은 하루 3회까지만 할 수 있다. (검토 화면에서 고침)');
+  await detail.getByTestId(`review-save-${baseId}`).click();
+  await expect(detail.getByTestId(`review-chunk-${baseId}`)).toContainText('검토 화면에서 고침');
+  expect(psql(`SELECT (content LIKE '%검토 화면에서 고침%') || '|' || (content_edited_at > NOW() - interval '1 minute') FROM rag_knowledge WHERE id = ${baseId}`)).toBe('true|true');
+  await page.keyboard.press('Escape');
+  await expect(due).toHaveCount(0);
+  } finally {
+    psql(`DELETE FROM ops_conversation WHERE id = ${conv}`);   // 중간에 실패해도 — 남으면 다른 사용량 집계를 오염(리뷰 L10), 메시지는 CASCADE
+  }
 });

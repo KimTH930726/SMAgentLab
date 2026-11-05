@@ -620,13 +620,15 @@ def confluence_page_url(root_url: Optional[str], page_id: Optional[str]) -> Opti
 async def page_urls(ids: list[int]) -> dict[int, dict]:
     """지식 id → 컨플 원문 페이지 {url, title}(11/04 승인 대기 비교 창 [원문 ↗], 11/05 제목도 — 어느 페이지인지 눌러 보기 전에).
     호스트 = 가장 최근 컨플 적재 배치의 수집 주소(공간 적재·동기화가 쓰는 주소 — 팀마다 같은 위키). 컨플 조각이 아니거나 주소를 모르면 빠진다.
-    제목 = 검토 필요 목록과 같은 셈(원본 이름 › 첫 제목 경로)."""
+    제목 = 검토 필요 목록과 같은 셈(review.TITLE_SQL — 페이지 제목 › 첫 제목 경로 › 원본 이름)."""
     if not ids:
         return {}
     async with get_conn() as conn:
         root = await conn.fetchval("SELECT root_url FROM rag_import_batch WHERE root_url ~ '^https?://' ORDER BY id DESC LIMIT 1")
-        rows = await conn.fetch("SELECT id, confluence_page_id, COALESCE(source_file, heading_path[1]) AS title FROM rag_knowledge "
-                                "WHERE id = ANY($1::int[]) AND confluence_page_id IS NOT NULL", ids)
+        from agents.knowledge_rag.knowledge.review import PAGE_TITLE_CTE, TITLE_SQL
+        rows = await conn.fetch(f"WITH {PAGE_TITLE_CTE} SELECT k.id, k.confluence_page_id, {TITLE_SQL} AS title FROM rag_knowledge k "
+                                "LEFT JOIN page_title pt ON pt.page_id = k.confluence_page_id "
+                                "WHERE k.id = ANY($1::int[]) AND k.confluence_page_id IS NOT NULL", ids)
     out = {}
     for r in rows:
         url = confluence_page_url(root, r["confluence_page_id"])
@@ -648,7 +650,9 @@ async def get_duplicate_matches(knowledge_id: int) -> list[dict]:
             """,
             knowledge_id,
         )
-    return [dict(r) for r in rows]
+    # below = 지금 중복 기준보다 낮은 후보(옛 기준·같은 묶음 안 비교로 남은 기록) — 화면은 "참고 후보"로 접는다(11/05 태훈 "비교 대상 3개?")
+    floor = get_thresholds()["duplicate_min_similarity"]
+    return [{**dict(r), "below": float(r["similarity"]) < floor} for r in rows]
 
 
 async def resolve_duplicate(
