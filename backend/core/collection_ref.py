@@ -1,4 +1,4 @@
-"""컬렉션 키 전환 1단계(docs/domains/knowledge/collection-key-plan.md §3-1) — API가 컬렉션을 이름·업무 코드·id로 모두 받는다.
+"""컬렉션 키 전환 1단계(docs/archive/collection-key-plan.md §3-1) — API가 컬렉션을 이름·업무 코드·id로 모두 받는다.
 
 라우터 수백 곳이 이름(`namespace: str`)으로 받으므로, 요청 입구 한 곳(ASGI 미들웨어)에서 코드(POL-MBR)·숫자 id를 이름으로 바꿔 넘긴다.
 이름은 DB를 보지 않고 그대로 통과(지금 화면·스크립트는 이름을 보낸다). 없는 코드·id도 그대로 — 뒤에서 "없는 컬렉션"으로 걸린다.

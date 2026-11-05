@@ -1,6 +1,6 @@
 /**
  * 관리자 메뉴 — 보는 사람별 두 범위(컬렉션 관리 / 플랫폼 관리, 11/03 docs/platform/admin-audience-split-design.md).
- * 앞선 구조: docs/platform/admin-ia-design.md(10/21 도메인 5묶음), 컬렉션 개편 docs/domains/knowledge/collection-design.md §15(10/22).
+ * 앞선 구조: docs/archive/admin-ia-design.md(10/21 도메인 5묶음), 컬렉션 개편 docs/domains/knowledge/collection-design.md §15(10/22).
  * 사이드바(AdminNav)와 본문(Admin.tsx)이 이 한 목록을 같이 쓴다 — 주소 /admin/<id>(옛 주소 그대로).
  */
 import type { User } from '../types';

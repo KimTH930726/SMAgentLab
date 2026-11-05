@@ -21,8 +21,7 @@
 |---|---|---|
 | [collection-design.md](domains/knowledge/collection-design.md) | 현행 | 컬렉션(업무 영역 트리) · 넣을 곳 AI 판단 · AI 판단 원장 |
 | [taxonomy-standard.md](domains/knowledge/taxonomy-standard.md) | 현행 | 지식 분류 표준 — 정책 / 시스템 컬렉션, 운영 지식은 시스템에만, 조직은 담당 연결만(11/02, #105·#106) |
-| [collection-key-plan.md](domains/knowledge/collection-key-plan.md) | 계획 | 컬렉션 키 정리 — 이름 → id·업무 코드(POL-·SYS-) 전수검사·전환 단계(11/02) |
-| [chunk-structure-dedupe-design.md](domains/knowledge/chunk-structure-dedupe-design.md) | 설계 | 청크 구조화(제목만 조각 합치기·묶음 양식 줄) + 중복 판정 2단 + 완전 일치 거부 — 홈페이지 승인 대기 457 실측(11/03) |
+| [chunk-structure-dedupe-design.md](domains/knowledge/chunk-structure-dedupe-design.md) | 현행 | 청크 구조화(제목만 조각 합치기·묶음 양식 줄) + 중복 판정 2단 + 완전 일치 거부 — 홈페이지 승인 대기 457 실측(11/03) |
 | [source-ledger-plan.md](domains/knowledge/source-ledger-plan.md) | 현행 | 원문 원장 — 원문 = 기준, 조각 = 파생물, 다시 분할 |
 | [knowledge-lifecycle-design.md](domains/knowledge/knowledge-lifecycle-design.md) | 참고 | 지식 생명주기(중복·버전·삭제) 현황 분석·장기 설계 |
 | [retrieval-routing-pattern.md](domains/knowledge/retrieval-routing-pattern.md) | 참고 | 검색 전략 라우팅 원칙 |
@@ -44,7 +43,6 @@
 | [eval-gate-redesign.md](domains/quality/eval-gate-redesign.md) | 현행 | 평가 게이트(판정 기록·기준선·화면) |
 | [self-improvement-loop-design.md](domains/quality/self-improvement-loop-design.md) | 현행 | 자가 개선 루프(게이트 · AI 감사 로그 · 적용 이력) |
 | [ops-query-monitoring-design.md](domains/quality/ops-query-monitoring-design.md) | 설계 | 운영 질의 감시(기록 → 진단 → 표본 채점 → 골든셋) — 1·5단계 구현 |
-| [golden-set-lifecycle-plan.md](domains/quality/golden-set-lifecycle-plan.md) | 현행 | 골든셋 관리 사이클 |
 | [golden-set-procedure.md](domains/quality/golden-set-procedure.md) | 현행 | 골든셋 재생성 절차(재정제 전후 같은 기준) |
 | [trustkit-design.md](domains/quality/trustkit-design.md) | 현행 | 신뢰도 레이어(이식 가능한 팀 자산) |
 
@@ -59,8 +57,7 @@
 | 문서 | 상태 | 내용 |
 |---|---|---|
 | [data-storage-philosophy.md](platform/data-storage-philosophy.md) | 현행 | 데이터 저장 철학(표준화 · 테이블 설계 · 적재 검증) |
-| [admin-ia-design.md](platform/admin-ia-design.md) | 현행 | 관리자 화면 구조(도메인 경계대로 메뉴) |
-| [admin-audience-split-design.md](platform/admin-audience-split-design.md) | 설계안 | 관리자 화면을 보는 사람별로 — 컬렉션 관리(시니어) / 플랫폼 관리(관리자), 11/03 |
+| [admin-audience-split-design.md](platform/admin-audience-split-design.md) | 현행 | 관리자 화면을 보는 사람별로 — 컬렉션 관리(시니어) / 플랫폼 관리(관리자), 11/03 |
 
 ## operations — 배포·운영·규율
 | 문서 | 내용 |
@@ -72,3 +69,4 @@
 
 ## archive — 끝난 것(이력)
 옛 변경 이력, 끝난 계획(업무구분 폐지 · v1 정책 파이프라인), 일회성 보고서(10/19 정확도 구조). 안의 옛 링크는 그 당시 기록이라 고치지 않는다.
+11/05 경량화로 옮김: `architecture-history-v2.180-v2.199.md` · `collection-key-plan.md`(6단계 결정 끝) · `golden-set-lifecycle-plan.md`(골든 v0·후보 원장으로 대체) · `admin-ia-design.md`(admin-audience-split로 대체).

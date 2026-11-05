@@ -1639,7 +1639,7 @@ async def _migrate_system_area(conn) -> None:
     await conn.execute("ALTER TABLE ops_namespace ADD CONSTRAINT ops_namespace_area_check "
                        "CHECK (area IN ('policy', 'system') AND (area = 'policy' OR (kind = 'domain' AND parent_id IS NULL)))")
     # 업무 코드(11/02 사용자 "키는 사람이 보기 좋은 기능별 코드로") — 바뀌지 않는 유일한 키(POL-MBR · SYS-HP). 이름은 화면용이라 바뀔 수 있다.
-    # 정책·시스템 컬렉션(kind domain)만 갖는다(테스트용·보관 자리는 없음). 이름 키 → id·코드 전환은 docs/domains/knowledge/collection-key-plan.md
+    # 정책·시스템 컬렉션(kind domain)만 갖는다(테스트용·보관 자리는 없음). 이름 키 → id·코드 전환은 docs/archive/collection-key-plan.md
     await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS code TEXT")
     await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ops_namespace_code_key ON ops_namespace (code) WHERE code IS NOT NULL")
     await conn.execute("ALTER TABLE ops_namespace DROP CONSTRAINT IF EXISTS ops_namespace_code_check")

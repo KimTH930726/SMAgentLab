@@ -208,7 +208,7 @@ rag_glossary    (ns 21, "응모기회", 설명…) + 동의어 "응모권, 추�
 **메뉴 구조(10/20 확정 — B안을 A안으로 갱신, 업무 영역 결정 반영)**
 업무 영역이 그릇이고 그 안에 정책·지식 문서(컨플루언스)·용어·시스템 정보가 같은 방식으로 담긴다(태훈 10/20).
 ```
-업무 영역 관리(관리자) — 영역 목록(P2: 하위 업무 트리) · 영역별 유형 개수 요약(누르면 유형 화면으로). 담당 매핑은 조직 관리 쪽 — 상세는 docs/platform/admin-ia-design.md
+업무 영역 관리(관리자) — 영역 목록(P2: 하위 업무 트리) · 영역별 유형 개수 요약(누르면 유형 화면으로). 담당 매핑은 조직 관리 쪽 — 상세는 docs/archive/admin-ia-design.md
 유형별 화면 — 정책서 [정책 | 참고표 | 개요 | 원문 확인] · 지식 문서 · 용어집 · 시스템 정보(DB·공통코드) — 공통 업무 영역 선택기(트리)
 조직 관리(관리자) — 팀 > 파트 > 사용자, 가입 승인(가입은 조회 전용으로 시작)
 ```
@@ -269,7 +269,7 @@ rag_glossary    (ns 21, "응모기회", 설명…) + 동의어 "응모권, 추�
 | 답 없음 | ~60 | 정책서에 없는 것 | **거절** |
 
 - 형식(JSONL): `qid, layer, query, expect(answer|list|clarify|abstain), gold[{kind: policy|ref_table|overview, source_key}], doc, scope, origin(human|claude|…), status(candidate|approved|rejected)`.
-  골든셋 관리 계획(`golden-set-lifecycle-plan.md` 문항 원장 `eval_item`)의 정답 근거 = 원문 위치 원칙과 같음.
+  골든셋 관리 계획(`archive/golden-set-lifecycle-plan.md` 문항 원장 `eval_item`)의 정답 근거 = 원문 위치 원칙과 같음.
 - 생성: **이번 주 Claude**(게이트웨이 0). 자동 거르기(결정적): 원문 글자 겹침 상한, 행 번호·"이 정책" 금지, 정답 정책만으로 답 가능한지
   확인. 채점기는 생성기와 **다른 모델**(로컬 Qwen, 사람 40으로 보정) — 같은 모델끼리 후한 채점 방지.
 - 사람(반나절): "애매함" 판정 · 무작위 표본 20 · 채점기 보정 40.

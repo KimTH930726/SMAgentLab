@@ -8,7 +8,7 @@
 | 질의 기록(ops_query_log) | 1년(실사용 시험 문항의 원천) | 여기 |
 | 채팅 대화 | 1년 — 설정 chat_retention_days(#95가 365로) | service/chat/helpers.cleanup_old_conversations |
 | VOC 분석·수집 기록·반복 유형 | 30일 | service/email_voc/retention.py |
-정정 원장·정책 변경 기록·측정 기록은 지우지 않는다(결정 근거). 각 줄이 실패해도 다음 줄은 돈다(로그). 설계: docs/architecture.md v2.185.
+정정 원장·정책 변경 기록·측정 기록은 지우지 않는다(결정 근거). 각 줄이 실패해도 다음 줄은 돈다(로그). 설계: docs/archive/architecture-history-v2.180-v2.199.md v2.185.
 """
 from __future__ import annotations
 

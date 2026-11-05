@@ -12,8 +12,8 @@
 > 2026-10-22. 상태: **설계만**(코드·DB 변경 없음). 관리자 "품질 › 평가 게이트"(`EvaluationGate.tsx`)는 v1 엑셀 정책 시절(9/15~10/8)에
 > 만든 화면이다. 정책서 v0 재출발(10/19~21) 뒤 실제 평가는 전부 스크립트(`eval_golden_v0.py` · `eval_answers.py` · `eval_gate.py`)로
 > 돌고 있어 화면과 끊겼다. 이 문서는 그 단절을 코드·DB로 확인한 사실과, 우리 규모에 맞춘 갱신안이다.
-> 골든셋 원문(질문·답)은 이 문서에 넣지 않는다 — 숫자·구조만. 관련: `golden-set-lifecycle-plan.md`, `trustkit-design.md` §5,
-> `policy-v0-design.md` §8-1, `admin-ia-design.md`, `post-demo-backlog.md` §2-2.
+> 골든셋 원문(질문·답)은 이 문서에 넣지 않는다 — 숫자·구조만. 관련: `archive/golden-set-lifecycle-plan.md`, `trustkit-design.md` §5,
+> `policy-v0-design.md` §8-1, `archive/admin-ia-design.md`, `backlog.md` §2-2.
 
 ## 1. 지금 화면 — 무엇을 보여 주고 무엇을 읽나 (코드·dev DB 확인, 10/22)
 
@@ -262,7 +262,7 @@
 - TruLens 버전별 리더보드·RAG 삼각: https://www.trulens.org/getting_started/quickstarts/batch_evaluation/ ,
   https://www.trulens.org/blog/2024/10/09/whats-new-in-trulens-11-dashboard-comparison-view-multi-app-support-metadata-editing-and-more/
 - RAGAS 지표: https://docs.ragas.io/en/v0.1.21/concepts/metrics/
-- (앞선 조사) 골든셋 수명주기 출처: `golden-set-lifecycle-plan.md` 참고 절
+- (앞선 조사) 골든셋 수명주기 출처: `archive/golden-set-lifecycle-plan.md` 참고 절
 
 ## 9. 사용자 추가 요구 (2026-10-22 밤, 컬렉션 설계 중)
 1. **검색 근거 정확도 / 답 정확도를 나눠 보는 리포트 화면** — 한 화면에 섞지 않고 분기(검색: 정답 근거를 찾았나·순위 / 답: 채점 라벨 정답·부분·오답·거절).
