@@ -52,6 +52,98 @@ function StackBar({ k }: { k: OverrideKind }) {
   );
 }
 
+const NO_REASON = '사유 없음';   // 서버 override.NO_REASON
+
+/**
+ * 옮김 표(11/05 태훈 "줄글이라 수천 건이면 못 본다") — 업계 라우팅 품질 점검의 이동 짝(from → to) 표: 줄 = AI 추천, 칸 = 사람이 고른 곳,
+ * 진할수록 자주 번복. 지운 컬렉션이 낀 짝은 표에서 빼고 한 줄 수로(정리 대상).
+ */
+function MoveMatrix({ pairs }: { pairs: NonNullable<OverrideKind['pairs']> }) {
+  const live = pairs.filter((p) => !p.deleted);
+  const gone = pairs.filter((p) => p.deleted).reduce((a, p) => a + p.n, 0);
+  const label = (v: string | null, side: 'from' | 'to') => v ?? (side === 'from' ? '추천 없음' : '미지정');
+  const rows = [...new Set(live.map((p) => label(p.from, 'from')))];
+  const cols = [...new Set(live.map((p) => label(p.to, 'to')))];
+  const max = Math.max(1, ...live.map((p) => p.n));
+  const cell = (r: string, c: string) => live.find((p) => label(p.from, 'from') === r && label(p.to, 'to') === c)?.n ?? 0;
+  return (
+    <div className="space-y-1.5" data-testid="move-matrix">
+      {live.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="text-xs border-collapse">
+            <thead>
+              <tr>
+                <th className="px-1.5 py-1 text-left font-normal text-slate-500">AI 추천 ↓ · 사람 →</th>
+                {cols.map((c) => <th key={c} className="px-1.5 py-1 text-left font-medium text-slate-300 whitespace-nowrap">{c}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r} className="border-t border-slate-700/60">
+                  <th className="px-1.5 py-1 text-left font-medium text-slate-300 whitespace-nowrap">{r}</th>
+                  {cols.map((c) => {
+                    const n = cell(r, c);
+                    return (
+                      <td key={c} className="p-0.5">
+                        <span className={clsx('flex h-7 min-w-[2.5rem] items-center justify-center rounded tabular-nums',
+                          n ? 'font-semibold text-amber-950 dark:text-amber-50' : 'text-slate-600')}
+                          style={n ? { backgroundColor: `rgb(245 158 11 / ${0.2 + 0.7 * (n / max)})` } : undefined}
+                          title={n ? `AI는 ${r}, 사람은 ${c} — ${n}건` : undefined}>{n || '·'}</span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {gone > 0 && <p className="text-[11px] text-slate-500" title="지운 컬렉션(시험용 등)이 추천이나 결정에 낀 번복 — 개선 근거로 쓰지 않아요">삭제된 컬렉션 관련 {gone}건 — 표에서 뺌</p>}
+    </div>
+  );
+}
+
+/** 번복 있는 판단 하나 — 큰 번복률(높을수록 진하게) · 사유 막대 · 사유 없는 번복 경고 · 잦은 번복 · [번복 기록 보기 ›] */
+function FindingCard({ k, onShow }: { k: OverrideKind; onShow: () => void }) {
+  const rate = k.decided ? k.overrides / k.decided : 0;
+  const reasons = Object.entries(k.reasons).sort((a, b) => b[1] - a[1]);
+  const max = reasons[0]?.[1] ?? 1;
+  const noReason = k.reasons[NO_REASON] ?? 0;
+  const tone = rate >= 0.3 ? 'text-rose-600 dark:text-rose-400' : rate >= 0.15 ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300';
+  return (
+    <article className="min-w-0 rounded-xl border border-slate-700 bg-slate-900/40 p-3 space-y-2.5" data-testid={`finding-${k.kind}`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <h4 className="min-w-0 break-words text-sm font-semibold text-slate-100">{k.kind_name}</h4>
+        <span className="text-[11px] text-slate-500 tabular-nums" title="번복 ÷ 사람 검토(수용 + 번복)">번복 {k.overrides} / 사람 검토 {k.decided}</span>
+      </div>
+      <p className={clsx('text-3xl font-semibold tabular-nums leading-none', tone)}>
+        {pct(k.overrides, k.decided)}<span className="ml-1.5 text-xs font-normal text-slate-500">번복률{k.decided < MIN_SAMPLE ? ' · 표본 부족(참고)' : ''}</span>
+      </p>
+      <ul className="space-y-1" aria-label="번복 사유">
+        {reasons.map(([r, n]) => (
+          <li key={r} className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)_auto] items-center gap-2 text-xs">
+            <span className={clsx('truncate', r === NO_REASON ? 'text-slate-500' : 'text-slate-300')} title={r}>{r}</span>
+            <span className="h-2 overflow-hidden rounded-full bg-slate-800">
+              <span className={clsx('block h-full rounded-full', r === NO_REASON ? 'bg-slate-500' : 'bg-amber-500 dark:bg-amber-400')} style={{ width: `${(n / max) * 100}%` }} />
+            </span>
+            <span className="tabular-nums text-slate-300">{n}</span>
+          </li>
+        ))}
+      </ul>
+      {noReason > 0 && noReason * 2 >= k.overrides && (
+        <p className="rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-900 dark:bg-amber-500/10 dark:text-amber-200" data-testid={`finding-noreason-${k.kind}`}
+          title="번복할 때 사유를 고르면 AI가 무엇을 틀리는지 알 수 있어요 — 자가 개선 후보의 근거">
+          ⚠ 사유 없는 번복 {pct(noReason, k.overrides)} — 무엇을 고칠지 알 수 없어요</p>
+      )}
+      {(() => {   // 잦은 번복 = 지운 컬렉션이 안 낀 짝 중 가장 많은 것(지운 시험 컬렉션이 1등으로 보이던 것)
+        const top = k.pairs?.find((p) => !p.deleted);
+        return top ? <p className="text-[11px] text-slate-400">잦은 번복 <b className="text-slate-200">{top.from ?? '추천 없음'} → {top.to ?? '미지정'}</b> {top.n}건</p> : null;
+      })()}
+      <button type="button" onClick={onShow} className="text-xs text-indigo-600 hover:underline dark:text-indigo-400">번복 기록 보기 ›</button>
+    </article>
+  );
+}
+
 export function AuditReport({ kinds, days, candidates, onShow, onCriteria, canCriteria }: {
   kinds: OverrideKind[]; days: number; candidates: DecisionsReport['candidates'];
   /** 아래 감사 로그를 이 판단(·검토 결과)으로 — 날짜 거르기는 풀고 스크롤(11/04 "눌러도 뭔지 모르겠다": 이름 클릭 → [기록 보기 ›] 버튼) */
@@ -70,16 +162,12 @@ export function AuditReport({ kinds, days, candidates, onShow, onCriteria, canCr
   const autoSpotN = kinds.reduce((a, k) => a + (k.spot?.auto_n ?? 0), 0);
   const autoSpotOv = kinds.reduce((a, k) => a + (k.spot?.auto_overridden ?? 0), 0);
   const withOv = [...kinds].filter((k) => k.overrides > 0).sort((a, b) => (b.rate ?? 0) - (a.rate ?? 0));
+  // 주요 발견(11/05 태훈 "가시성 있게") — 번복 있는 종류는 카드(FindingCard), 그 밖의 사실은 흐린 줄
   const findings: string[] = [];
-  for (const k of withOv.slice(0, 3)) {
-    const top = Object.entries(k.reasons).sort((a, b) => b[1] - a[1]).map(([r, n]) => `${r} ${n}`).join(' · ');
-    findings.push(`${k.kind_name} — 사람 검토 ${k.decided}건 중 번복 ${k.overrides}건(번복률 ${pct(k.overrides, k.decided)})${top ? ` · 사유: ${top}` : ''}`
-      + (k.patterns[0] ? ` · 잦은 번복 ${k.patterns[0].pattern}` : ''));
-  }
   if (sum('rule')) findings.push(`규칙 적용 ${sum('rule')}건 — 사람이 정한 규칙으로 들어가 AI 판단은 쓰지 않음(번복률 계산에서 제외)`);
   if (sum('auto')) findings.push(`자동 적용 ${sum('auto')}건 — 사람 검토 없음${autoSpotN ? ` · 표본 감사 ${autoSpotN}건 중 번복 ${autoSpotOv}건` : ' · 표본 감사로 정확도를 확인하세요'}`);
   for (const k of kinds.filter((x) => x.rubber_stamp)) findings.push(`형식적 승인 의심 — ${k.kind_name} 수용률 ${pct(k.decided - k.overrides, k.decided)}(사람이 실제로 안 보고 누를 수 있음, 표본 감사 권장)`);
-  if (!findings.length) findings.push('이 기간 번복 없음');
+  if (!withOv.length && !findings.length) findings.push('이 기간 번복 없음');
   const card = 'rounded-xl border border-slate-700 bg-slate-800 p-4 flex flex-col gap-1';
   const candDecided = candidates.agree + candidates.disagree;
   return (
@@ -110,7 +198,12 @@ export function AuditReport({ kinds, days, candidates, onShow, onCriteria, canCr
 
       <section className="rounded-xl border border-slate-700 bg-slate-800 p-4 space-y-2" aria-label="주요 발견" data-testid="report-findings">
         <h3 className="text-sm font-semibold text-slate-100">주요 발견</h3>
-        <ol className="list-decimal pl-5 space-y-1 text-sm text-slate-200">{findings.map((f) => <li key={f}>{f}</li>)}</ol>
+        {withOv.length > 0 && (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {withOv.slice(0, 3).map((k) => <FindingCard key={k.kind} k={k} onShow={() => onShow(k.kind, 'override')} />)}
+          </div>
+        )}
+        {findings.length > 0 && <ul className="space-y-0.5 text-xs text-slate-400">{findings.map((f) => <li key={f}>· {f}</li>)}</ul>}
       </section>
 
       <section className="rounded-xl border border-slate-700 bg-slate-800 p-4 space-y-3" aria-label="AI 판단 ↔ 사람 검토">
@@ -188,7 +281,7 @@ export function AuditReport({ kinds, days, candidates, onShow, onCriteria, canCr
             <div key={k.kind} className="rounded-lg border border-slate-700 p-3 space-y-1.5">
               <div className="flex justify-between gap-2 text-sm"><b className="text-slate-100">{k.kind_name}</b><span className="tabular-nums text-amber-700 dark:text-amber-300">번복 {k.overrides}</span></div>
               <p className="text-xs text-slate-300">{Object.entries(k.reasons).map(([r, n]) => `${r} ${n}`).join(' · ') || '사유 기록 없음'}</p>
-              {k.patterns.length > 0 && <p className="text-xs text-slate-400">{k.patterns.map((p) => `${p.pattern}${p.n > 1 ? ` ×${p.n}` : ''}`).join(' · ')}</p>}
+              {k.pairs && k.pairs.length > 0 && <MoveMatrix pairs={k.pairs} />}
               <div className="flex justify-end">
                 <button type="button" onClick={() => onShow(k.kind, 'override')} className="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700">번복 기록 보기</button>
               </div>

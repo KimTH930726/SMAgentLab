@@ -20,6 +20,11 @@ def _j(v):
     return json.loads(v) if isinstance(v, str) else v
 
 
+# 원문 확인 화면(SourceCheckTab)과 같은 이름 — 내부 코드(conflict · v0_load_check)가 로그에 그대로 보이던 것(11/05 UI 검수)
+_SC_TYPE = {"question": "담당자 질문", "conflict": "정책끼리 어긋남", "ref_error": "참고표 오류"}
+_SC_SOURCE = {"v0_load_check": "적재 점검", "golden_set": "골든셋 작성"}
+
+
 def describe(kind: str, ai: Optional[dict], final: Optional[dict], signals: Optional[dict], names: dict[int, str],
              changed: bool = False) -> dict:
     """(AI가 한 것, 사람·사용자가 한 것 또는 None(아직 확정 전)) 한 줄씩. names = 컬렉션 id → 이름, changed = 원장의 human_changed."""
@@ -32,7 +37,8 @@ def describe(kind: str, ai: Optional[dict], final: Optional[dict], signals: Opti
         where = where or cand
         if final is None:
             return {"ai": did, "human": None}
-        to = ns(final.get("namespace_id")) or "?"
+        fid = final.get("namespace_id")   # 지운 컬렉션이면 이름이 없다 — "?" 대신 그 사실을(11/05 UI 검수)
+        to = ns(fid) or ("삭제된 컬렉션" if isinstance(fid, int) else "미지정")
         # 같은 곳이어도 사람이 고른 방식이 다를 수 있다(원장 human_changed가 판정) — 결과만 적는다
         # choice는 옛 값·빈 값이 accept로 저장된다(router._finalize_location) — "그대로"는 원장이 바뀜이 아니라고 할 때만(리뷰 L1)
         return {"ai": did, "human": f"{to}에 등록" + (" (AI 후보 그대로)" if not changed and final.get("choice") == "accept" else "")}
@@ -53,7 +59,7 @@ def describe(kind: str, ai: Optional[dict], final: Optional[dict], signals: Opti
             human = "선택지 밖 값"
         return {"ai": did, "human": human}
     if kind == "source_check":
-        did = f"원문 문제 짚음({ai.get('type') or '?'} · {ai.get('source') or '?'})"
+        did = f"원문 문제 짚음 · {_SC_TYPE.get(ai.get('type'), ai.get('type') or '종류 모름')} · {_SC_SOURCE.get(ai.get('source'), ai.get('source') or '채널 모름')}"
         if final is None:
             return {"ai": did, "human": None}
         if final.get("issue"):

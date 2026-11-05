@@ -145,7 +145,7 @@ def summarize(rows: list[dict], names: dict[int, str]) -> dict:
         k = by.setdefault(r["kind"], {"kind": r["kind"], "kind_name": KIND_NAME.get(r["kind"], r["kind"]), "decided": 0, "overrides": 0,
                                        "review": {x: 0 for x in REVIEWS}, "spot": {"n": 0, "overridden": 0, "auto_n": 0, "auto_overridden": 0},
                                        "admin_reviewed": r["kind"] in REVIEWED_KINDS,
-                                       "reasons": {}, "patterns": {}, "override_ids": []})
+                                       "reasons": {}, "patterns": {}, "pairs": {}, "override_ids": []})
         st = review_status(r)
         k["review"][st] += 1
         if r.get("spot"):
@@ -180,9 +180,15 @@ def summarize(rows: list[dict], names: dict[int, str]) -> dict:
                 key = (f"{names.get(src, '삭제된 컬렉션') if src is not None else '추천 없음'} → "
                        f"{names.get(dst, '삭제된 컬렉션') if dst is not None else '미지정'}")
                 k["patterns"][key] = k["patterns"].get(key, 0) + 1
+                # 옮김 표(11/05 — 줄글 패턴 대신 AI 추천 × 사람 결정 표). 이름은 화면이, 지운 컬렉션은 deleted로 따로 센다
+                pk = (src, dst)
+                k["pairs"][pk] = k["pairs"].get(pk, 0) + 1
     for k in by.values():
         k["rate"] = round(k["overrides"] / k["decided"], 3) if k["decided"] else None
         k["patterns"] = sorted(({"pattern": p, "n": n} for p, n in k["patterns"].items()), key=lambda x: -x["n"])[:5]
+        k["pairs"] = sorted(({"from": names.get(a) if a is not None else None, "to": names.get(b) if b is not None else None,
+                              "deleted": (a is not None and a not in names) or (b is not None and b not in names), "n": n}
+                             for (a, b), n in k["pairs"].items()), key=lambda x: -x["n"])
         k["rubber_stamp"] = k["kind"] in REVIEWED_KINDS and k["decided"] >= RUBBER_MIN_N and (1 - (k["rate"] or 0)) > RUBBER_RATE
     return {"kinds": sorted(by.values(), key=lambda x: -x["overrides"])}
 

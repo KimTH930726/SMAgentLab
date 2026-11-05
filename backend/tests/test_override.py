@@ -51,6 +51,7 @@ class TestSummarize:
         assert (loc["decided"], loc["overrides"], loc["rate"]) == (3, 2, round(2 / 3, 3))
         assert loc["reasons"] == {"AI 오류": 1, "사유 없음": 1}
         assert loc["patterns"] == [{"pattern": "제휴서비스 → 딜리버스", "n": 2}]
+        assert loc["pairs"] == [{"from": "제휴서비스", "to": "딜리버스", "deleted": False, "n": 2}]
         assert loc["override_ids"] == [1, 2] and not loc["rubber_stamp"]
 
     def test_pattern_names_unknown_collections_instead_of_question_marks(self):
@@ -61,6 +62,9 @@ class TestSummarize:
         pats = {p["pattern"] for p in loc["patterns"]}
         assert pats == {"삭제된 컬렉션 → 딜리버스", "제휴서비스 → 삭제된 컬렉션"}
         assert not any("?" in p for p in pats) and sum(p["n"] for p in loc["patterns"]) == loc["overrides"]
+        # 옮김 표(11/05): 짝마다 건수, 지운 컬렉션이 낀 짝은 deleted — 합 = 번복 수
+        assert {(p["from"], p["to"], p["deleted"]) for p in loc["pairs"]} == {(None, "딜리버스", True), ("제휴서비스", None, True)}
+        assert sum(p["n"] for p in loc["pairs"]) == loc["overrides"]
 
     def test_override_from_values_not_stored_flag(self):
         """10/23 초기 줄처럼 같은 곳인데 changed=True여도 번복이 아니다 · 되묻기 = 전부 보기·직접 다시 물음 · 원문 확인 = 문제 없음."""

@@ -324,6 +324,8 @@ export interface OverrideKind {
   /** 관리자가 검토하는 종류(등록 위치·원문 확인·중복 의심) — 요약 번복률·검토 대기는 이것만(되묻기·제안은 사용자 선택) */
   admin_reviewed: boolean;
   reasons: Record<string, number>; patterns: { pattern: string; n: number }[]; rubber_stamp: boolean;
+  /** 등록 위치 옮김 표(11/05) — AI 추천(from) × 사람이 고른 곳(to), null = 추천 없음·미지정, deleted = 지운 컬렉션이 낀 짝 */
+  pairs?: { from: string | null; to: string | null; deleted: boolean; n: number }[];
 }
 export interface OverrideReport {
   days: number; kinds: OverrideKind[];

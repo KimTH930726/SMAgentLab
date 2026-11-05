@@ -38,7 +38,7 @@ test('AI 감사 리포트 — 사람 검토 결과(수용·번복·규칙 적용
   const report = page.getByTestId('audit-report');
   await expect(report).toBeVisible();
   // 화면 숫자 = API(사람 검토 = 수용 + 번복, 번복률 분모)
-  const ov: { kinds: { kind: string; decided: number; overrides: number; review: Record<string, number>; admin_reviewed: boolean }[] } =
+  const ov: { kinds: { kind: string; decided: number; overrides: number; rate: number | null; review: Record<string, number>; admin_reviewed: boolean }[] } =
     await (await apiFetch(`${API}/api/eval/overrides?days=30`, h)).json();
   const admin = ov.kinds.filter((k) => k.admin_reviewed);   // 요약 = 관리자 검토 종류만(되묻기·제안은 사용자 선택)
   const reviewed = admin.reduce((a, k) => a + k.review.accept + k.review.override, 0);
@@ -46,6 +46,9 @@ test('AI 감사 리포트 — 사람 검토 결과(수용·번복·규칙 적용
   await expect(page.getByTestId('report-reviewed')).toHaveText(String(reviewed));
   for (const k of ['knowledge_location', 'chat_clarify', 'source_check']) await expect(page.getByTestId(`report-row-${k}`)).toBeVisible();
   await expect(page.getByTestId('report-findings')).toBeVisible();
+  // 주요 발견 카드(11/05) — 번복 있는 종류 번복률 높은 순 3개, 카드 번복률 = API
+  const top = ov.kinds.filter((k) => k.overrides > 0).sort((a, b) => (b.rate ?? 0) - (a.rate ?? 0)).slice(0, 3);   // 화면과 같은 정렬(서버 rate)
+  for (const k of top) await expect(page.getByTestId(`finding-${k.kind}`)).toContainText(`${Math.round((k.overrides / k.decided) * 100)}%`);
 
   // 판단 기준(ⓘ) = 대장의 되묻기 항목
   const techs: { key: string; name: string; rules?: string[] }[] = await (await apiFetch(`${API}/api/eval/techniques`, h)).json();
