@@ -379,7 +379,9 @@ async def analyze_email(
     else:
         severity = parsed.get("severity") if parsed.get("severity") in _VALID_SEVERITIES else "low"
 
-    resolution_draft = parsed.get("resolution_draft") or None
+    # 초안은 system_error일 때만 — 출력이 자기 분류와 어긋나지 않게 하는 관계 규칙. 프롬프트는 관리자가 고칠 수 있어 코드가 지킨다
+    # (11/05 감사, 분류 무관하게 쓰게 하면 19건 중 12건 지어냄)
+    resolution_draft = (parsed.get("resolution_draft") or None) if category == "system_error" else None
     draft_grounded = await _draft_grounded(context, resolution_draft) if resolution_draft else None
 
     return {

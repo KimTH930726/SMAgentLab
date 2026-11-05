@@ -1,6 +1,7 @@
 """WBS 1-3 프롬프트 인젝션 최소 방어(2026-09-28) — 참고 문서/VOC 이메일 원문이 프롬프트 구조를
 흉내 내지 못하게 감싸는지, 챗 두 프로바이더 조립과 VOC 조립에 실제로 적용됐는지 검증."""
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -163,6 +164,25 @@ class TestVocPromptGuard:
                 out = await voc.analyze_email("ns", "s", "b", precomputed=check)
             assert out["draft_grounded"] is want
             assert [True for _ in calls] == judged and all(c == ("참고 문맥", "재시도 안내") for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_draft_only_for_system_error(self):
+        """관계 규칙(11/05 감사) — 초안은 자기 분류가 system_error일 때만 남는다. LLM이 다른 분류에 초안을 써도(관리자 프롬프트 수정 등) 버리고 판정도 안 부른다."""
+        voc = _voc
+        check = voc.RelevanceCheck(mapped_term=None, results=[], context="참고 문맥", top_score=0.9, query_vec=[])
+        for cat in ("system_error", "user_mistake", "not_it_related", "uncertain", "없는 분류", None):
+            llm = MagicMock(); llm.generate_once = AsyncMock(return_value=json.dumps({"category": cat, "resolution_draft": "재시도 안내"}))
+            judge = AsyncMock(return_value=True)
+            with (patch.object(voc, "neutralize_structural_labels", neutralize_structural_labels),
+                  patch.object(voc, "get_prompt", AsyncMock(side_effect=lambda k, d: d)),
+                  patch.object(voc, "get_llm_provider", return_value=llm),
+                  patch.object(voc, "_draft_grounded", judge),
+                  patch.object(voc.knowledge_api, "min_score", return_value=0.5)):
+                out = await voc.analyze_email("ns", "s", "b", precomputed=check)
+            keep = cat == "system_error"
+            assert (out["resolution_draft"] == "재시도 안내") is keep and (out["draft_grounded"] is True) is keep, cat
+            assert judge.await_count == (1 if keep else 0), cat
+            assert keep or out["resolution_draft"] is None
 
     @pytest.mark.asyncio
     async def test_no_context_keeps_placeholder_unfenced(self):

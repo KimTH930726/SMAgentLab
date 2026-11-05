@@ -204,6 +204,13 @@ class TestIssueSignaturePrompt:
             pytest.skip("frontend-react 소스 없음 — 호스트에서: py -m pytest tests/test_email_voc_service.py -k prefix")
         assert f"const LLM_FAILED_PREFIX = '{service.LLM_FAILED_PREFIX}';" in ui.read_text(encoding="utf-8")
 
+    def test_seed_uses_service_defaults(self):
+        """새 DB 시드는 service.py 기본값을 그대로 쓴다 — main.py에 베낀 문구가 있으면 기본값을 바꿔도 새 DB는 옛 문구로 시작한다(11/05 감사)."""
+        main_src = (_backend_dir / "main.py").read_text(encoding="utf-8")
+        assert "VOC_DEFAULT_SYSTEM, VOC_DEFAULT_PROMPT," in main_src
+        assert "You are a VOC(Voice of Customer) triage expert" not in main_src
+        assert "다음을 판단해 JSON으로만 답하세요" not in main_src
+
     def test_admin_edited_prompt_untouched(self):
         edited = service._DEFAULT_ANALYSIS_PROMPT.replace(service.ISSUE_SIGNATURE_LINE, "6. issue_signature: 관리자가 고친 지침")
         assert self._migrate(edited) == edited

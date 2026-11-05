@@ -18,6 +18,7 @@ from core.security import hash_password
 from service.chat.helpers import NO_KNOWLEDGE_MARKER
 from service.llm.base import CHAT_SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT_KNOWLEDGE
 from service.email_voc.service import ISSUE_SIGNATURE_LINE, VOC_PROMPT_MIGRATIONS
+from service.email_voc.service import _DEFAULT_ANALYSIS_PROMPT as VOC_DEFAULT_PROMPT, _DEFAULT_ANALYSIS_SYSTEM as VOC_DEFAULT_SYSTEM
 from shared.embedding import embedding_service
 from shared import reranker as reranker_service
 from service.llm.factory import get_llm_provider
@@ -714,58 +715,8 @@ async def _migrate_email_voc_tables(conn) -> None:
          'VOC 이메일 건별 분석 프롬프트. {subject}·{body}·{part}·{context} 플레이스홀더 필수', 'voc')
         ON CONFLICT (func_key) DO NOTHING
         """,
-        """You are a VOC(Voice of Customer) triage expert for an IT operations team.
-Given an internal support email and related knowledge base excerpts, classify the issue.
-Always respond with valid JSON only.""",
-        """아래는 사내 VOC(문의) 이메일과, 이와 관련해 검색된 참고 지식입니다.
-
-[이메일 제목]
-{subject}
-
-[이메일 본문]
-{body}
-
-[수신 메일함 담당 파트]
-{part}
-
-[참고 지식]
-{context}
-
-다음을 판단해 JSON으로만 답하세요:
-1. category: 다음 중 하나
-   - "system_error": 시스템이 실제로 오작동했다는 구체적 근거가 있는 경우(예: 처리 이력이 누락됨, 정상 흐름이라면 안 나와야 할 오류가 발생함)
-   - "user_mistake": 사용자가 절차를 잘못 따르거나 직접 조작을 잘못한 경우
-   - "not_it_related": IT 시스템/기술적 오류에 대한 언급이나 정황이 전혀 없는 경우 — 상품 품질(맛, 신선도 등), 배송/배달 자체(지연, 파손), 가격·취소정책에 대한 불만처럼 순수 CS성 문의. 시스템은 설계/정책대로 정상 동작했는데 그 결과(예: 취소 가능 시간이 지나 취소가 거절됨)에 대한 불만인 경우도 여기로 분류하세요. "시스템이 오작동했다"는 구체적 근거 없이 그냥 화가 났다는 이유만으로 system_error로 분류하지 마세요. 이메일에 시스템/기술 이슈 언급이 아예 없다면 uncertain이 아니라 이 항목을 우선 고려하세요
-   - "uncertain": system_error일 가능성이 있어 보이는데(오류·오작동 정황은 있지만) 정보가 부족해 확신할 수 없는 경우만 — "IT 업무와 무관해 보인다"는 이유로는 uncertain이 아니라 not_it_related를 쓰세요
-2. severity: "low" / "medium" / "high" / "urgent" 중 하나 — 업무 영향도와 긴급성 기준
-3. mismatch_flagged: 이메일 내용이 위 "수신 메일함 담당 파트"의 업무 영역과 명백히 다르면 true, 아니면 false
-4. resolution_draft: category가 system_error일 때 참고 지식 기반 해결 방안 초안(2~3문장), 아니면 null
-5. reasoning: 판단 근거 요약 (1문장)
-""" + ISSUE_SIGNATURE_LINE + """
-
-[판단 예시 — 실제로 헷갈렸던 경계 사례]
-예시 1:
-제목: 배달이요
-본문: 주문한 음료가 30분 넘게 늦게 배달됐습니다. 왜 이렇게 오래 걸리나요?
-판단: 시스템이 오작동했다는 구체적 근거 없이 배송 자체가 늦은 것에 대한 불만 → category: not_it_related (system_error 아님)
-
-예시 2:
-제목: 주문 취소가 시스템에 반영이 안돼요
-본문: 취소 버튼을 눌렀고 취소 완료 문자도 받았는데, 주문 내역에는 아직도 "배달 중"으로 뜨고 결제도 그대로 잡혀 있습니다.
-판단: 정상 흐름이면 안 나와야 할 처리 누락이 구체적으로 확인됨 → category: system_error
-
-예시 3:
-제목: 로그인이 안돼요
-본문: 비밀번호를 5번 연속 잘못 입력해서 계정이 잠겼습니다. 어떻게 풀 수 있나요?
-판단: 시스템 오류가 아니라 사용자 본인의 조작(비밀번호 오입력)이 원인 → category: user_mistake
-
-예시 4:
-제목: 주문이 이상해요
-본문: 결제는 됐는데 배송 정보가 계속 안 뜹니다. 시스템 오류인지 그냥 늦는 건지 모르겠어요.
-판단: system_error일 가능성이 있어 보이지만 오작동 여부를 판단할 정보가 부족함 → category: uncertain
-
-응답 형식 (JSON 객체만 반환):
-{{"category": "...", "severity": "...", "mismatch_flagged": false, "resolution_draft": "...", "reasoning": "...", "issue_signature": "..."}}""",
+        # 기본값은 service.py 한 곳 — 여기 따로 베껴 두면 기본값을 바꿀 때 새 DB만 옛 문구로 시작한다(11/05 감사 중복 정리)
+        VOC_DEFAULT_SYSTEM, VOC_DEFAULT_PROMPT,
     )
 
 
