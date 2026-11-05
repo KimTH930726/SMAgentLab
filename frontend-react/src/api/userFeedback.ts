@@ -39,6 +39,15 @@ export function sendFeedback(b: { kind: FeedbackKind; body: string; page?: strin
   for (const f of b.files ?? []) fd.append('files', f, f.name || 'capture.png');
   return apiFetch<{ id: number; status: FeedbackStatus; files: number }>(BASE, { method: 'POST', body: fd });
 }
+/** 피드백 대상 기본값(11/05) — 대화의 마지막 답 근거 컬렉션 › 보던 컬렉션 › 내 파트가 맡은 컬렉션(하나일 때) › null(시스템 전반) */
+export const getDefaultTarget = (conversationId: number | null, namespace: string) => {
+  const q = new URLSearchParams();
+  if (conversationId != null) q.set('conversation_id', String(conversationId));
+  if (namespace) q.set('namespace', namespace);
+  return apiFetch<{ namespace: string | null }>(`${BASE}/default-target${q.size ? `?${q}` : ''}`);
+};
+/** 선택칸 값 — 시스템 전반(컬렉션 없음) */
+export const GENERAL_TARGET = '-';
 export const myFeedback = () => apiFetch<MyFeedback[]>(`${BASE}/mine`);
 export const myUnseen = () => apiFetch<{ count: number }>(`${BASE}/mine/unseen`);
 /** namespace: 없음 = 전체, '-' = 미지정, 그 밖 = 컬렉션 이름(11/05 컬렉션 필터) */

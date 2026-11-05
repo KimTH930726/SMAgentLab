@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { ImagePlus, MessageSquarePlus, X } from 'lucide-react';
 import {
-  getAutoSignals, getFeedbackFile, listFeedback, MAX_FILE_BYTES, MAX_FILES, myFeedback, myUnseen, sendFeedback, triageFeedback,
+  getAutoSignals, getDefaultTarget, GENERAL_TARGET, getFeedbackFile, listFeedback, MAX_FILE_BYTES, MAX_FILES, myFeedback, myUnseen, sendFeedback, triageFeedback,
   type FeedbackContext, type FeedbackItem, type FeedbackKind, type FeedbackStatus,
 } from '../../api/userFeedback';
 import { ApiError } from '../../api/client';
@@ -13,6 +13,7 @@ import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { openFeedback, useFeedbackStore } from '../../store/useFeedbackStore';
 import { Modal } from '../ui/Modal';
+import { useNamespaceAccess } from '../../utils/useNamespaceAccess';
 import { FormModal } from '../ui/FormModal';
 
 /**
@@ -91,19 +92,30 @@ function FeedbackModal({ isOpen, seq, onClose, initialTab, initialKind, report }
   const dropAll = () => { filesRef.current.forEach((a) => URL.revokeObjectURL(a.url)); setFiles([]); };
   useEffect(() => {   // 열 때마다 처음부터(오류 신고로 열면 오류 신고 · 새 결과가 있으면 내 피드백)
     if (!isOpen) return;
-    setTab(initialTab); setKind(initialKind); setErr(null); setBody(''); dropAll();
+    setTab(initialTab); setKind(initialKind); setErr(null); setBody(''); dropAll(); setTarget(null);
   }, [isOpen, seq]);   // eslint-disable-line react-hooks/exhaustive-deps -- 열 때마다 한 번(열린 채로 다시 열어도)
   useEffect(() => () => filesRef.current.forEach((a) => URL.revokeObjectURL(a.url)), []);
   const fileInput = useRef<HTMLInputElement>(null);
   const loc = useLocation();
   const conversationId = useAppStore((s) => s.conversationId);
-  const namespace = useAppStore((s) => s.namespace);   // 보던 컬렉션 — 관리자 보드 컬렉션 필터(11/05)
+  const namespace = useAppStore((s) => s.namespace);   // 보던 컬렉션 — 대상 기본값의 한 단계(11/05)
+  const { sortedNamespaces, nsDetails } = useNamespaceAccess();
+  const areaOf = (n: string) => nsDetails.find((x) => x.name === n)?.area;
+  const convForTarget = !loc.pathname.startsWith('/admin') ? conversationId : null;
+  // 대상 — 시스템 하나에 대한 것인지, 시스템 전반인지(11/05 태훈). 기본값은 서버가 정하고 사람이 바꿀 수 있다
+  const [target, setTarget] = useState<string | null>(null);
+  const dflt = useQuery({ queryKey: ['feedback-default-target', convForTarget, namespace], queryFn: () => getDefaultTarget(convForTarget, namespace),
+    enabled: isOpen, staleTime: 0, retry: false });
+  // 기본값이 화면 목록(숨김 컬렉션 제외)에 없거나 못 받아 오면 시스템 전반 — 보이는 값과 보내는 값이 같게(리뷰 L3·L4)
+  const fallback = dflt.isError ? GENERAL_TARGET
+    : dflt.data ? (dflt.data.namespace && sortedNamespaces.includes(dflt.data.namespace) ? dflt.data.namespace : GENERAL_TARGET) : null;
+  const shownTarget = target ?? fallback;
   const qc = useQueryClient();
   const mine = useQuery({ queryKey: ['feedback-mine'], queryFn: myFeedback, enabled: isOpen && tab === 'mine' });
   const send = useMutation({
     mutationFn: () => sendFeedback({
       kind, body: body.trim(), page: loc.pathname, conversation_id: !loc.pathname.startsWith('/admin') ? conversationId : null,
-      context: kind === 'bug' ? report : null, files: files.map((a) => a.file), namespace: namespace || undefined,
+      context: kind === 'bug' ? report : null, files: files.map((a) => a.file), namespace: shownTarget ?? undefined,
     }),
     onSuccess: () => {
       setBody(''); dropAll();
@@ -152,7 +164,7 @@ function FeedbackModal({ isOpen, seq, onClose, initialTab, initialKind, report }
           if (tab !== 'send' || !e.dataTransfer.types.includes('Files')) return;
           e.preventDefault(); addFiles(Array.from(e.dataTransfer.files));
         }}>
-        <div className="inline-flex rounded-lg border border-slate-700 p-0.5">{tabBtn('send', '보내기')}{tabBtn('mine', '내 피드백')}</div>
+        <div className="inline-flex rounded-lg border border-slate-700 p-0.5">{tabBtn('send', '새 피드백')}{tabBtn('mine', '내 피드백')}</div>
         {tab === 'send' ? (
           <>
             <div className="flex gap-2" role="radiogroup" aria-label="유형">
@@ -162,6 +174,18 @@ function FeedbackModal({ isOpen, seq, onClose, initialTab, initialKind, report }
                   {KIND[k].label}</button>
               ))}
             </div>
+            <label className="flex flex-wrap items-center gap-2 text-xs text-slate-400">대상
+              <select aria-label="대상" data-testid="feedback-target" value={shownTarget ?? ''} disabled={shownTarget === null}
+                onChange={(e) => setTarget(e.target.value)} title="어느 시스템에 대한 피드백인지 — 기본값: 방금 답의 근거 시스템 › 보던 컬렉션 › 내 파트 담당"
+                className="min-w-0 max-w-full bg-slate-800 border border-slate-600 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+                {shownTarget === null && <option value="">불러오는 중…</option>}
+                <option value={GENERAL_TARGET}>시스템 전반 (OpsLens)</option>
+                {([['system', '시스템'], ['policy', '정책']] as const).map(([area, label]) => {
+                  const names = sortedNamespaces.filter((n) => (areaOf(n) ?? 'policy') === area);
+                  return names.length ? <optgroup key={area} label={label}>{names.map((n) => <option key={n} value={n}>{n}</option>)}</optgroup> : null;
+                })}
+              </select>
+            </label>
             {ctx && (
               <p className="rounded-lg border border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-700 dark:text-rose-300 break-words"
                 data-testid="feedback-context" title="오류 창에서 연 신고 — 이 내용이 함께 가요">{ctx}</p>
@@ -314,11 +338,11 @@ export function UserFeedbackPanel() {
                   className="bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
                   <option value="">전체 ({(q.data?.namespaces ?? []).reduce((a, x) => a + x.n, 0)})</option>
                   {(q.data?.namespaces ?? []).map((x) => (
-                    <option key={x.namespace ?? '-'} value={x.namespace ?? '-'}>{x.namespace ?? '미지정'} ({x.n})</option>
+                    <option key={x.namespace ?? '-'} value={x.namespace ?? '-'}>{x.namespace ?? '시스템 전반'} ({x.n})</option>
                   ))}
                 </select>
               </label>
-              <span className="text-slate-500" title="단계는 앞뒤 한 칸씩만 — 신규 → 선정 → 진행 중 → 완료. 카드를 누르면 상세 창에서 단계를 바꿔요. 컬렉션 = 보낸 사람이 보던 컬렉션(미지정 = 컬렉션 정보 없이 온 옛 피드백)">
+              <span className="text-slate-500" title="단계는 앞뒤 한 칸씩만 — 신규 → 선정 → 진행 중 → 완료. 카드를 누르면 상세 창에서 단계를 바꿔요. 컬렉션 = 피드백 대상(보낸 사람이 고름, 시스템 전반 = 특정 시스템이 아닌 것 · 11/05 전 피드백 포함)">
                 카드를 누르면 상세 · 단계 이동 ⓘ</span>
             </div>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" data-testid="feedback-board">
@@ -387,7 +411,7 @@ function FeedbackCard({ f, onOpen }: { f: FeedbackItem; onOpen: () => void }) {
       <div className="flex items-center gap-1.5 text-[11px]">
         <span className="tabular-nums text-slate-500">#{f.id}</span>
         <span className={`rounded-full px-2 py-0.5 ${KIND[f.kind].cls}`}>{KIND[f.kind].label}</span>
-        {f.namespace && <span className="min-w-0 truncate rounded bg-slate-700 px-1.5 py-0.5 text-slate-300" title="보낸 사람이 보던 컬렉션">{f.namespace}</span>}
+        <span className="min-w-0 truncate rounded bg-slate-700 px-1.5 py-0.5 text-slate-300" title="피드백 대상(보낸 사람이 고름)">{f.namespace ?? '시스템 전반'}</span>
         <span className={clsx(`ml-auto rounded-full px-2 py-0.5 ${FB_STATUS[f.status].cls}`, BOARD.includes(f.status) && 'sr-only')} title={FB_STATUS[f.status].hint}
           data-testid={`feedback-${f.id}-status`}>{FB_STATUS[f.status].label}</span>
       </div>

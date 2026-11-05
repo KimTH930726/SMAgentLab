@@ -22,6 +22,39 @@ from core.dependencies import get_current_admin, get_current_user
 
 router = APIRouter(prefix="/api/user-feedback", tags=["user-feedback"])
 
+GENERAL = "-"   # 피드백 대상 = 시스템 전반(컬렉션 없음, namespace_id NULL) — 화면 선택칸 값
+
+
+async def default_target(conn, user: dict, conversation_id: Optional[int], viewing: Optional[str]) -> Optional[int]:
+    """피드백 대상 기본값(11/05 태훈) — ① 이 대화의 마지막 답이 근거로 쓴 지식이 가장 많이 속한 컬렉션(답에 대한 피드백)
+    ② 보던 컬렉션 ③ 보낸 사람 파트가 맡은 컬렉션이 하나뿐이면 그것 ④ 없음(시스템 전반). 사람이 선택칸에서 바꿀 수 있다."""
+    if conversation_id is not None:
+        ns = await conn.fetchval(
+            """WITH last AS (SELECT m.results FROM ops_message m JOIN ops_conversation c ON c.id = m.conversation_id
+                             WHERE m.conversation_id = $1 AND c.user_id = $2 AND m.role = 'assistant' AND jsonb_typeof(m.results) = 'array'
+                               AND jsonb_array_length(m.results) > 0 ORDER BY m.id DESC LIMIT 1)
+               SELECT k.namespace_id FROM last CROSS JOIN LATERAL jsonb_array_elements(last.results) e
+               JOIN rag_knowledge k ON k.id = (e->>'id')::int WHERE (e->>'id') ~ '^[0-9]+$'
+               GROUP BY k.namespace_id ORDER BY count(*) DESC, k.namespace_id LIMIT 1""", conversation_id, user["id"])
+        if ns is not None:
+            return ns
+    if viewing:
+        ns = await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", viewing)
+        if ns is not None:
+            return ns
+    owned = await conn.fetch("SELECT o.namespace_id FROM ops_namespace_owner o JOIN ops_user u ON u.part_id = o.part_id WHERE u.id = $1", user["id"])
+    return owned[0]["namespace_id"] if len(owned) == 1 else None
+
+
+@router.get("/default-target")
+async def get_default_target(conversation_id: Optional[int] = Query(default=None), namespace: Optional[str] = Query(default=None, max_length=200),
+                             user: dict = Depends(get_current_user)):
+    """피드백 창 선택칸 기본값 — {namespace: 이름 | None(시스템 전반)}"""
+    async with get_conn() as conn:
+        ns_id = await default_target(conn, user, conversation_id, namespace)
+        name = await conn.fetchval("SELECT name FROM ops_namespace WHERE id = $1", ns_id) if ns_id is not None else None
+    return {"namespace": name}
+
 KINDS = ("bug", "idea")
 STATUSES = ("new", "planned", "in_progress", "done", "duplicate", "declined")
 # 단계 이동(11/04 태훈 "전후 관계를 따져 단계별로만") — 업무 흐름(Jira 워크플로)처럼 다음 단계·한 단계 되돌리기만. 화면(FB_NEXT)과 같게
@@ -112,8 +145,12 @@ async def submit(request: Request, kind: Optional[Literal["bug", "idea"]] = Form
             if conversation_id is not None:
                 c = await conn.fetchrow("SELECT id, namespace_id FROM ops_conversation WHERE id = $1 AND user_id = $2", conversation_id, user["id"])
                 conv, conv_ns = (c["id"], c["namespace_id"]) if c else (None, None)
-            # 보던 컬렉션(11/05 컬렉션 필터) — 이름이 없거나 모르는 이름이면 대화의 컬렉션, 그것도 없으면 미지정(신고는 받는다)
-            ns_id = (await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace) if namespace else None) or conv_ns
+            # 대상(11/05) — 선택칸 값: '-' = 시스템 전반, 이름 = 그 컬렉션(모르는 이름이면 기본값). 칸을 안 보낸 옛 화면은 기본값(default_target)
+            if namespace == GENERAL:
+                ns_id = None
+            else:
+                ns_id = (await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace) if namespace else None) \
+                    or await default_target(conn, user, conv, None) or conv_ns
             fid = await conn.fetchval(
                 """INSERT INTO ops_user_feedback (kind, body, page, conversation_id, reporter_user_id, context, namespace_id)
                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING id""",
