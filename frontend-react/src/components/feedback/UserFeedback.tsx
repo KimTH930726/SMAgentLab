@@ -97,12 +97,13 @@ function FeedbackModal({ isOpen, seq, onClose, initialTab, initialKind, report }
   const fileInput = useRef<HTMLInputElement>(null);
   const loc = useLocation();
   const conversationId = useAppStore((s) => s.conversationId);
+  const namespace = useAppStore((s) => s.namespace);   // 보던 컬렉션 — 관리자 보드 컬렉션 필터(11/05)
   const qc = useQueryClient();
   const mine = useQuery({ queryKey: ['feedback-mine'], queryFn: myFeedback, enabled: isOpen && tab === 'mine' });
   const send = useMutation({
     mutationFn: () => sendFeedback({
       kind, body: body.trim(), page: loc.pathname, conversation_id: !loc.pathname.startsWith('/admin') ? conversationId : null,
-      context: kind === 'bug' ? report : null, files: files.map((a) => a.file),
+      context: kind === 'bug' ? report : null, files: files.map((a) => a.file), namespace: namespace || undefined,
     }),
     onSuccess: () => {
       setBody(''); dropAll();
@@ -294,7 +295,9 @@ export function UserFeedbackPanel() {
   const [sel, setSel] = useState<FeedbackItem | null>(null);
   const [allDone, setAllDone] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
-  const q = useQuery({ queryKey: ['user-feedback', 'all'], queryFn: () => listFeedback() });   // 최근 200건(서버) — 열 머리 건수는 전체(counts)
+  const [ns, setNs] = useState('');   // 컬렉션 필터(11/05 태훈) — '' = 전체, '-' = 미지정
+  // 최근 200건(서버) — 열 머리 건수는 그 컬렉션 전체(counts). 'all' 키 앞부분은 단계 이동 후 무효화가 그대로 걸리게
+  const q = useQuery({ queryKey: ['user-feedback', 'all', ns], queryFn: () => listFeedback(undefined, ns || undefined), placeholderData: (prev) => prev });
   const counts = q.data?.counts;
   const items = q.data?.items ?? [];
   const by = (s: FeedbackStatus) => items.filter((f) => f.status === s);
@@ -305,8 +308,19 @@ export function UserFeedbackPanel() {
       {q.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p>
         : q.error ? <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p> : (
           <section className="space-y-3">
-            <p className="text-xs text-slate-500" title="단계는 앞뒤 한 칸씩만 — 신규 → 선정 → 진행 중 → 완료. 카드를 누르면 상세 창에서 단계를 바꿔요">
-              카드를 누르면 상세 · 단계 이동 ⓘ</p>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <label className="flex items-center gap-1.5 text-slate-400">컬렉션
+                <select aria-label="컬렉션" data-testid="feedback-ns-filter" value={ns} onChange={(e) => setNs(e.target.value)}
+                  className="bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+                  <option value="">전체 ({(q.data?.namespaces ?? []).reduce((a, x) => a + x.n, 0)})</option>
+                  {(q.data?.namespaces ?? []).map((x) => (
+                    <option key={x.namespace ?? '-'} value={x.namespace ?? '-'}>{x.namespace ?? '미지정'} ({x.n})</option>
+                  ))}
+                </select>
+              </label>
+              <span className="text-slate-500" title="단계는 앞뒤 한 칸씩만 — 신규 → 선정 → 진행 중 → 완료. 카드를 누르면 상세 창에서 단계를 바꿔요. 컬렉션 = 보낸 사람이 보던 컬렉션(미지정 = 컬렉션 정보 없이 온 옛 피드백)">
+                카드를 누르면 상세 · 단계 이동 ⓘ</span>
+            </div>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" data-testid="feedback-board">
               {BOARD.map((s) => {
                 const list = by(s);
@@ -373,6 +387,7 @@ function FeedbackCard({ f, onOpen }: { f: FeedbackItem; onOpen: () => void }) {
       <div className="flex items-center gap-1.5 text-[11px]">
         <span className="tabular-nums text-slate-500">#{f.id}</span>
         <span className={`rounded-full px-2 py-0.5 ${KIND[f.kind].cls}`}>{KIND[f.kind].label}</span>
+        {f.namespace && <span className="min-w-0 truncate rounded bg-slate-700 px-1.5 py-0.5 text-slate-300" title="보낸 사람이 보던 컬렉션">{f.namespace}</span>}
         <span className={clsx(`ml-auto rounded-full px-2 py-0.5 ${FB_STATUS[f.status].cls}`, BOARD.includes(f.status) && 'sr-only')} title={FB_STATUS[f.status].hint}
           data-testid={`feedback-${f.id}-status`}>{FB_STATUS[f.status].label}</span>
       </div>

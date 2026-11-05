@@ -1602,6 +1602,10 @@ async def _migrate_experiment_runner(conn) -> None:
     await conn.execute("ALTER TABLE ops_user_feedback ADD CONSTRAINT ops_user_feedback_status_check "
                        "CHECK (status IN ('new', 'planned', 'in_progress', 'done', 'duplicate', 'declined'))")
     await conn.execute("ALTER TABLE ops_user_feedback ADD COLUMN IF NOT EXISTS context JSONB")
+    # 11/05 태훈 "컬렉션별로 보게" — 보낸 사람이 보고 있던 컬렉션. 옛 줄은 붙은 대화의 컬렉션으로 채움(대화 없는 옛 줄 = 미지정)
+    await conn.execute("ALTER TABLE ops_user_feedback ADD COLUMN IF NOT EXISTS namespace_id INT REFERENCES ops_namespace(id) ON DELETE SET NULL")
+    await conn.execute("UPDATE ops_user_feedback f SET namespace_id = c.namespace_id FROM ops_conversation c "
+                       "WHERE f.namespace_id IS NULL AND f.conversation_id = c.id AND c.namespace_id IS NOT NULL")
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS ops_user_feedback_file (
             id SERIAL PRIMARY KEY,

@@ -145,6 +145,7 @@
 | 117 | `ops_ai_decision` | `ADD COLUMN IF NOT EXISTS spot_result TEXT CHECK (accepted·overridden)` · `spot_reason TEXT CHECK (wrong·both_ok·context_changed)` · `spot_by_user_id INT` · `spot_at TIMESTAMPTZ` | 표본 감사(spot check) — 자동 적용·수용 판단을 사람이 다시 봐 매긴 결과(11/04). "AI가 틀렸나요?"(ai_verdict)와 따로 |
 | 118 | `ops_namespace` | `ADD COLUMN IF NOT EXISTS review_interval_days INT DEFAULT 90 CHECK (NULL 또는 > 0)` | 검토 주기(일, NULL = 검토 안 함) — 운영 지식 › 검토 필요(11/04). 기존 컬렉션도 90일로 시작. 검토일은 기존 `rag_knowledge.reviewed_at`(승인 때 남던 사람 확인 시각)을 같은 뜻으로 씀 |
 | 119 | `ops_improvement_item` | `ADD COLUMN IF NOT EXISTS user_reason TEXT CHECK (NULL 또는 stale·other_system·missing_step·not_found)` | 채팅 [답변 틀림] 사유 칩(11/04, 규격 피드백) — 내용이 낡음·다른 시스템 얘기·단계·조건 빠짐·근거를 못 찾음. 사람이 고른 값(AI 판정 ai_verdict와 따로) |
+| 120 | `ops_user_feedback` | `ADD COLUMN IF NOT EXISTS namespace_id INT REFERENCES ops_namespace ON DELETE SET NULL` + 옛 줄은 붙은 대화의 컬렉션으로 채움 | 보낸 사람이 보던 컬렉션 — 사용자 피드백 보드 컬렉션 필터(11/05). 대화 없는 옛 줄 = 미지정 |
 | (값만) | `rag_glossary.source` | 스키마 변경 없음 — 새 값 `auto_extract`(지식 등록 때 LLM 자동 추출, 10/28~). 기존 값: `policy_doc`(정책서), NULL(사람 등록·옛 자동 추출) | 자동 추출 용어 효과를 따로 재려고(`docs/domains/knowledge/glossary/glossary-curation-design.md`) (v2.186) |
 | 91 | `eval_question_candidate` | FK `improvement_item_id` → `ON DELETE CASCADE`(confdeltype 확인 후 한 번만) | 정정 원장 줄이 지워지면(컬렉션 삭제 등) 시험지 후보도 같이 — 기본(NO ACTION)이면 정정 승인 때 자동으로 생긴 후보가 컬렉션 삭제를 막았다(v2.172 E2E로 발견). `_migrate_eval_improvement` (v2.172) |
 

@@ -83,6 +83,7 @@ class TriageIn(BaseModel):
 async def submit(request: Request, kind: Optional[Literal["bug", "idea"]] = Form(default=None), body: str = Form(default="", max_length=2000),
                  page: Optional[str] = Form(default=None, max_length=300), conversation_id: Optional[int] = Form(default=None),
                  context: Optional[str] = Form(default=None), files: list[UploadFile] = File(default=[]),
+                 namespace: Optional[str] = Form(default=None, max_length=200),
                  user: dict = Depends(get_current_user)):
     """[피드백 보내기] — 로그인한 누구나(조회 전용 포함). multipart: 글 + 이미지 최대 3장(장당 5MB, PNG·JPEG·GIF·WEBP).
     대화 번호는 본인 대화일 때만 남긴다(남의 대화가 붙지 않게). 오류 창에서 온 신고(오류 문구 있음)는 글이 비어도 받는다."""
@@ -107,13 +108,16 @@ async def submit(request: Request, kind: Optional[Literal["bug", "idea"]] = Form
         images.append((mime, data))
     async with get_conn() as conn:
         async with conn.transaction():   # 글과 이미지를 한 번에 — 이미지만 빠진 신고가 남지 않게
-            conv = None
+            conv = conv_ns = None
             if conversation_id is not None:
-                conv = await conn.fetchval("SELECT id FROM ops_conversation WHERE id = $1 AND user_id = $2", conversation_id, user["id"])
+                c = await conn.fetchrow("SELECT id, namespace_id FROM ops_conversation WHERE id = $1 AND user_id = $2", conversation_id, user["id"])
+                conv, conv_ns = (c["id"], c["namespace_id"]) if c else (None, None)
+            # 보던 컬렉션(11/05 컬렉션 필터) — 이름이 없거나 모르는 이름이면 대화의 컬렉션, 그것도 없으면 미지정(신고는 받는다)
+            ns_id = (await conn.fetchval("SELECT id FROM ops_namespace WHERE name = $1", namespace) if namespace else None) or conv_ns
             fid = await conn.fetchval(
-                """INSERT INTO ops_user_feedback (kind, body, page, conversation_id, reporter_user_id, context)
-                   VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id""",
-                kind, text, page, conv, user["id"], json.dumps(ctx, ensure_ascii=False) if ctx else None)
+                """INSERT INTO ops_user_feedback (kind, body, page, conversation_id, reporter_user_id, context, namespace_id)
+                   VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING id""",
+                kind, text, page, conv, user["id"], json.dumps(ctx, ensure_ascii=False) if ctx else None, ns_id)
             for mime, data in images:
                 await conn.execute("INSERT INTO ops_user_feedback_file (feedback_id, mime, size, data) VALUES ($1, $2, $3, $4)",
                                    fid, mime, len(data), data)
@@ -168,17 +172,28 @@ async def mine_unseen(user: dict = Depends(get_current_user)):
 
 @router.get("")
 async def list_all(status: Optional[str] = Query(default=None, pattern="^(new|planned|in_progress|done|duplicate|declined)$"),
+                   namespace: Optional[str] = Query(default=None, max_length=200),
                    admin: dict = Depends(get_current_admin)):
-    """관리자 목록 — 상태별 건수 + 목록(최근 200). 보낸 사람 이름·파트는 처리에 필요해 보인다(관리자만)."""
+    """관리자 목록 — 상태별 건수 + 목록(최근 200). 보낸 사람 이름·파트는 처리에 필요해 보인다(관리자만).
+    namespace(11/05) = 컬렉션 필터 — 이름, '-' = 미지정(컬렉션 없이 온 것), 없음 = 전체. 건수도 그 컬렉션 기준.
+    namespaces = 필터 고르기용 컬렉션별 건수(전체 기준)."""
+    # $2: NULL = 전체, '' = 미지정, 그 밖 = 그 컬렉션 이름
+    ns = None if namespace is None else ("" if namespace == "-" else namespace)
+    where_ns = "($2::text IS NULL OR ($2 = '' AND f.namespace_id IS NULL) OR n.name = $2)"
     async with get_conn() as conn:
-        counts = {r["status"]: r["n"] for r in await conn.fetch("SELECT status, count(*) n FROM ops_user_feedback GROUP BY status")}
+        counts = {r["status"]: r["n"] for r in await conn.fetch(
+            f"SELECT f.status, count(*) n FROM ops_user_feedback f LEFT JOIN ops_namespace n ON n.id = f.namespace_id "
+            f"WHERE {where_ns.replace('$2', '$1')} GROUP BY f.status", ns)}
         rows = await conn.fetch(
             f"""SELECT f.id, f.kind, f.body, f.page, f.conversation_id, f.status, f.admin_note, f.duplicate_of, f.created_at, f.decided_at,
-                      f.context, {_FILES_SQL}, u.username reporter, p.name reporter_part, d.username decided_by
+                      f.context, {_FILES_SQL}, u.username reporter, p.name reporter_part, d.username decided_by, n.name namespace
                FROM ops_user_feedback f LEFT JOIN ops_user u ON u.id = f.reporter_user_id LEFT JOIN ops_part p ON p.id = u.part_id
-               LEFT JOIN ops_user d ON d.id = f.decided_by_user_id
-               WHERE $1::text IS NULL OR f.status = $1 ORDER BY f.id DESC LIMIT 200""", status)
-    return {"counts": {s: counts.get(s, 0) for s in STATUSES}, "items": [_row(r) for r in rows]}
+               LEFT JOIN ops_user d ON d.id = f.decided_by_user_id LEFT JOIN ops_namespace n ON n.id = f.namespace_id
+               WHERE ($1::text IS NULL OR f.status = $1) AND {where_ns} ORDER BY f.id DESC LIMIT 200""", status, ns)
+        by_ns = [{"namespace": r["name"], "n": r["n"]} for r in await conn.fetch(
+            "SELECT n.name, count(*) n FROM ops_user_feedback f LEFT JOIN ops_namespace n ON n.id = f.namespace_id "
+            "GROUP BY n.name ORDER BY count(*) DESC, n.name NULLS LAST")]
+    return {"counts": {s: counts.get(s, 0) for s in STATUSES}, "items": [_row(r) for r in rows], "namespaces": by_ns}
 
 
 @router.patch("/{fid}")

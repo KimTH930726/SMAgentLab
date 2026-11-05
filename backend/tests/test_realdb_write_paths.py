@@ -403,3 +403,28 @@ def test_spot_check_only_auto_and_accepted(monkeypatch):
     assert marks == {"auto": True, "accept": True, "rule": False, "pending": False, "override": False}
     assert again and row == {"spot_result": "accepted", "spot_reason": None}
     assert by_review == {name: {i} for name, i in ids.items()}   # 다섯 갈래 거르기 — 각자 자기 줄만
+
+
+# ── 사용자 피드백 컬렉션 필터(11/05) ─────────────────────────────────────────
+
+def test_feedback_namespace_filter_partitions_rows():
+    """컬렉션 필터 — 이름 = 그 컬렉션만, '-' = 미지정만, 없음 = 전체. 세 갈래 합 = 전체, 건수(counts) = 그 필터의 줄 수."""
+    fb = load("_rdb_real_user_feedback", "service/user_feedback/router.py")
+
+    async def scenario(conn):
+        await conn.execute("DELETE FROM ops_user_feedback")   # 트랜잭션 안 — 끝나면 되돌린다
+        a, b = await ns(conn, "시험_피드백 가"), await ns(conn, "시험_피드백 나")
+        for n_id in (a, a, b, None):
+            await conn.execute("INSERT INTO ops_user_feedback (kind, body, namespace_id) VALUES ('idea', '시험', $1)", n_id)
+        all_ = await fb.list_all(status=None, namespace=None, admin={})
+        only_a = await fb.list_all(status=None, namespace="시험_피드백 가", admin={})
+        none = await fb.list_all(status=None, namespace="-", admin={})
+        new_a = await fb.list_all(status="new", namespace="시험_피드백 가", admin={})
+        return all_, only_a, none, new_a
+
+    all_, only_a, none, new_a = run(scenario, modules=[fb])
+    assert len(all_["items"]) == 4 and sum(all_["counts"].values()) == 4
+    assert [i["namespace"] for i in only_a["items"]] == ["시험_피드백 가"] * 2 and sum(only_a["counts"].values()) == 2
+    assert [i["namespace"] for i in none["items"]] == [None] and sum(none["counts"].values()) == 1
+    assert len(new_a["items"]) == 2 and new_a["counts"]["new"] == 2   # 상태 + 컬렉션 같이
+    assert sorted((x["namespace"] or "", x["n"]) for x in all_["namespaces"]) == [("", 1), ("시험_피드백 가", 2), ("시험_피드백 나", 1)]
