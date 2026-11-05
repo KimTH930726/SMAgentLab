@@ -373,6 +373,9 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
     staleTime: 30_000,
   });
   // 근거 중 정정 검토 중인 것 수 — 카드의 underReview 판정과 같은 규칙(정책은 항목 단위)
+  // 근거 최신성 — 펼치기 전에도 받아 [근거 ▸] 줄에 '기한 지난 근거 N'(11/05 태훈: 펼쳐야만 보여 안 보였다). 같은 키라 펼치면 다시 안 부름
+  const fresh = useFreshness(message.results ?? []);
+  const nOverdue = Object.values(fresh.data ?? {}).filter((f) => f.overdue).length;
   const nReviewing = (message.results ?? []).filter((r) => underReview?.knowledge.includes(r.id)).length
     + (message.policyCitations ?? []).filter((c) => (underReview?.policy_item
       ? c.item_id != null && underReview.policy_item.includes(c.item_id)
@@ -419,6 +422,8 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
               className="text-xs text-slate-500 hover:text-slate-300">
               {evidenceOpen ? '▾' : '▸'} 근거 {nEvidence}건
               {!evidenceOpen && nReviewing > 0 && <span className="ml-1.5 text-amber-600 dark:text-amber-400">· 정정 검토 중</span>}
+              {!evidenceOpen && nOverdue > 0 && <span className="ml-1.5 text-amber-600 dark:text-amber-400" data-testid="evidence-overdue"
+                title="검토 기한이 지난 운영 지식이 근거에 있어요 — 펼쳐서 어느 근거인지 보세요">· 기한 지난 근거 {nOverdue}</span>}
             </button>
           )}
           {/* Search results — 최신성 배지는 펼쳤을 때만 받는다(EvidenceList, 11/04) */}
@@ -561,16 +566,23 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
 }
 
 
-/** 근거 카드 목록 — 펼칠 때만 최신성(마지막 검토·기한 지남·담당)을 한 번에 받는다(11/04). 실패해도 카드는 그대로(배지만 없음, 로그) */
-function EvidenceList({ results, underReview }: { results: NonNullable<ChatMessage['results']>; underReview?: number[] }) {
+/** 근거 최신성(마지막 검토·기한 지남·담당)을 한 번에(11/04). 실패해도 카드는 그대로(배지만 없음, 로그) */
+function useFreshness(results: NonNullable<ChatMessage['results']>) {
   const ids = results.map((r) => r.id);
   const fresh = useQuery({
     queryKey: ['freshness', ids.join(',')],
     queryFn: () => getFreshness(ids.slice(0, 50)),
+    enabled: ids.length > 0,
     staleTime: 300_000,
     retry: false,
   });
   useEffect(() => { if (fresh.isError) console.warn('근거 최신성 불러오기 실패', fresh.error); }, [fresh.isError, fresh.error]);
+  return fresh;
+}
+
+/** 근거 카드 목록 */
+function EvidenceList({ results, underReview }: { results: NonNullable<ChatMessage['results']>; underReview?: number[] }) {
+  const fresh = useFreshness(results);
   return (
     <div className="space-y-1.5">
       <p className="text-xs text-slate-500 font-medium">검색된 문서 {results.length}건</p>

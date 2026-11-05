@@ -234,7 +234,7 @@ export function KnowledgeTable() {
   const vectorSearchQuery = useQuery({
     queryKey: ['knowledge-vector-search', selectedNs, vectorQuery],
     queryFn: () => exploreKnowledge(selectedNs, vectorQuery),
-    enabled: searchMode === 'vector' && !!vectorQuery && !!selectedNs,
+    enabled: !!vectorQuery && !!selectedNs,
     staleTime: 30_000,
   });
 
@@ -272,7 +272,7 @@ export function KnowledgeTable() {
   };
 
   const textFilteredItems = items.filter((item) => {
-    if (searchQuery.trim()) {
+    if (searchMode === 'text' && searchQuery.trim()) {   // 검색 모드에선 칸이 안 보이니 적용 안 함(값은 남겨 둠 — 11/05 리뷰 M2)
       const q = searchQuery.toLowerCase();
       const content = item.content.toLowerCase();
       const src = ((item as any).source_file ?? '').toLowerCase();
@@ -388,12 +388,12 @@ export function KnowledgeTable() {
             {/* Search mode toggle */}
             <div role="group" aria-label="보기 방식" className="flex rounded-lg border border-slate-600 overflow-hidden text-xs font-medium flex-shrink-0">
               <button
-                onClick={() => { setSearchMode('vector'); setSearchQuery(''); setPage(1); setSelectedIds(new Set()); }}
+                onClick={() => setSearchMode('vector')}   // 11/05 태훈: 검색↔목록을 오가도 각자 검색어·결과·필터 그대로(초기화 안 함)
                 title="채팅과 같은 검색(용어집 + 뜻·키워드) — 이렇게 물으면 챗봇이 무엇을 찾는지 그대로 보여요"
                 className={`px-3 py-2 transition-colors ${searchMode === 'vector' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
               >검색</button>
               <button
-                onClick={() => { setSearchMode('text'); setVectorQuery(''); }}
+                onClick={() => setSearchMode('text')}
                 title="전체 목록 — 글자로 거르기·일괄 선택"
                 className={`px-3 py-2 transition-colors ${searchMode === 'text' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}
               >목록</button>
@@ -447,7 +447,7 @@ export function KnowledgeTable() {
           </div>
 
           {/* Bulk action bar */}
-          {selectedIds.size > 0 && canModifyNs && (
+          {selectedIds.size > 0 && canModifyNs && !showCards && (
             <div className="flex items-center gap-3 px-4 py-2.5 bg-indigo-900/30 border border-indigo-700/40 rounded-xl">
               <span className="text-sm text-indigo-300 flex-1">{selectedIds.size}개 선택됨</span>
               <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>선택 해제</Button>
@@ -473,10 +473,13 @@ export function KnowledgeTable() {
               검색 중...
             </div>
           )}
-          {selectedNs && showCards && vectorSearchQuery.data && (
-            <KnowledgeSearchCards key={vectorQuery} currentNs={selectedNs} query={vectorSearchQuery.data.query} mappedTerm={vectorSearchQuery.data.mapped_term}
-              items={vectorSearchQuery.data.items} canEdit={!!canModifyNs}
-              onEdit={(it) => startEdit({ id: it.id, content: it.content } as KnowledgeItem)} />
+          {/* 목록으로 가도 내리지 않고 숨김만 — 돌아오면 카드 필터(채널·문서·기간)까지 그대로 */}
+          {selectedNs && vectorQuery && vectorSearchQuery.data && (
+            <div hidden={!showCards}>
+              <KnowledgeSearchCards key={vectorQuery} currentNs={selectedNs} query={vectorSearchQuery.data.query} mappedTerm={vectorSearchQuery.data.mapped_term}
+                items={vectorSearchQuery.data.items} canEdit={!!canModifyNs}
+                onEdit={(it) => startEdit({ id: it.id, content: it.content } as KnowledgeItem)} />
+            </div>
           )}
 
           {selectedNs && !isLoading && !showCards && (
@@ -913,7 +916,8 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
           <SimilarKnowledgeStep content={cmpRow.text} matches={cmp.matches} n={cmp.n} canMerge={!!loc?.writable}
             busy={skipChunk.isPending || mergeChunk.isPending || newChunk.isPending}
             onSkip={(m) => skipChunk.mutate({ idx: cmpRow.idx, m })} onMerge={(m, text) => mergeChunk.mutate({ idx: cmpRow.idx, m, text })}
-            onNew={(m) => newChunk.mutate({ idx: cmpRow.idx, m })} onClose={() => setComparing(null)} />
+            onNew={(m) => newChunk.mutate({ idx: cmpRow.idx, m })} onClose={() => setComparing(null)}
+            mergeMode="append" /* 조각은 기존 지식의 일부일 수 있어 — 교체면 나머지 줄이 사라진다(리뷰 M3) */ />
         )}
         <div className="flex gap-2 justify-end pt-2 border-t border-slate-700">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={loading}>취소</Button>
@@ -1441,15 +1445,13 @@ function ReviewTab({ items, canModify, onResolved }: {
               </div>
               {/* 컨플 원문 페이지(11/04) — 페이지끼리 겹치는 내용은 결국 원문에서 정리할 일이라 바로 열 수 있게 */}
               {pageUrls.data && (pageUrls.data[String(selectedItem.id)] || (diffTargetId != null && pageUrls.data[String(diffTargetId)])) && (
-                <div className="flex items-center gap-2 text-xs" data-testid="review-page-links">
-                  {pageUrls.data[String(selectedItem.id)] && (
-                    <a href={pageUrls.data[String(selectedItem.id)]} target="_blank" rel="noreferrer" className="text-amber-700 hover:underline dark:text-amber-400"
-                      title="신규 등록 조각의 컨플 원문 페이지">신규 원문 ↗</a>
-                  )}
-                  {diffTargetId != null && pageUrls.data[String(diffTargetId)] && (
-                    <a href={pageUrls.data[String(diffTargetId)]} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline dark:text-indigo-400"
-                      title="비교 중인 기존 지식의 컨플 원문 페이지">기존 #{diffTargetId} 원문 ↗</a>
-                  )}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" data-testid="review-page-links">
+                  {([[String(selectedItem.id), '신규 원문', 'text-amber-700 dark:text-amber-400', '신규 등록 조각의 컨플 원문 페이지'],
+                     [diffTargetId != null ? String(diffTargetId) : '', `기존 #${diffTargetId} 원문`, 'text-indigo-600 dark:text-indigo-400', '비교 중인 기존 지식의 컨플 원문 페이지']] as const)
+                    .map(([id, label, cls, tip]) => id && pageUrls.data[id] && (
+                      <a key={label} href={pageUrls.data[id].url} target="_blank" rel="noreferrer" title={tip} className={`min-w-0 max-w-full hover:underline ${cls}`}>
+                        {label}{pageUrls.data[id].title && <span className="font-semibold"> · {pageUrls.data[id].title}</span>} ↗</a>
+                    ))}
                 </div>
               )}
               {shown === 'diff' && !matchesLoading && sortedMatches.length > 0 && (

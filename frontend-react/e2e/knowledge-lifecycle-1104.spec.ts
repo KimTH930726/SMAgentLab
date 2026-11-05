@@ -253,11 +253,13 @@ test('채팅 근거 최신성 — [근거 ▸] 카드마다 배지(검토 기한
     expect([fr[k1].overdue, fr[k2].overdue, fr[k3].overdue]).toEqual([true, false, false]);
     expect([fr[k1].reviewed, fr[k2].reviewed, fr[k3].reviewed]).toEqual([false, true, false]);
     expect(fr[k1].interval_days).toBe(90);
-    const expected = (id: number) => (fr[id].overdue ? '검토 기한 지남' : `${fr[id].reviewed ? '검토' : '수정'} ${fmtDay(fr[id].last_at)}`);
+    const expected = (id: number) => (fr[id].overdue ? `⚠ 검토 기한 지남 · ${fmtDay(fr[id].last_at)}` : `${fr[id].reviewed ? '✓ 검토' : '수정'} ${fmtDay(fr[id].last_at)}`);
 
     await loginAdmin(page, { openAdmin: false });
     await selectDomain(page, NS, label(NS));
     await ask(page, '택배 송장 재발행은 어떻게 하고 제한은 뭐야?');
+    // 펼치기 전에도 [근거 ▸] 줄에 기한 지난 근거 수(11/05)
+    await expect(page.getByTestId('evidence-overdue').last()).toContainText('기한 지난 근거');
     await page.getByRole('button', { name: /근거 \d+건/ }).last().click();
     const badges = page.locator('[data-testid^="freshness-"]');
     await expect(badges.first()).toBeVisible({ timeout: 15_000 });
@@ -267,7 +269,7 @@ test('채팅 근거 최신성 — [근거 ▸] 카드마다 배지(검토 기한
       expect([k1, k2, k3]).toContain(id);   // 임시 컬렉션 밖 지식이 섞이지 않음
       await expect(page.getByTestId(`freshness-${id}`)).toHaveText(expected(id));
     }
-    await expect(page.getByTestId(`freshness-${k1}`)).toHaveText('검토 기한 지남');
+    await expect(page.getByTestId(`freshness-${k1}`)).toContainText('검토 기한 지남');
   } finally {
     cleanupNs(NS);
   }
@@ -339,7 +341,7 @@ test('통계 지식 공백 [지식 등록] — 비슷한 지식이 있으면 비
     const step = page.getByTestId('similar-step');
     await expect(step.getByTestId('similar-existing')).toContainText(`#${base}`, { timeout: 30_000 });
     await step.getByTestId('similar-merge-open').click();
-    await expect(page.getByLabel('합친 내용')).toHaveValue(/하루 3회까지만/);
+    await expect(page.getByLabel('병합한 내용')).toHaveValue(/하루 3회까지만/);
     await step.getByTestId('similar-merge-save').click();
     await expect(page.getByText('지식 공백 질의 (0건)')).toBeVisible({ timeout: 30_000 });   // 메운 공백은 목록에서 빠짐
 
@@ -381,8 +383,8 @@ test('승인 대기 비교 창 — 컨플 페이지가 있는 조각이면 [신�
     await page.getByTestId('review-row').filter({ hasText: '하루 3회까지만' }).click();
     const links = page.getByTestId('review-page-links');
     await expect(links).toBeVisible({ timeout: 15_000 });
-    await expect(links.getByRole('link', { name: '신규 원문 ↗' })).toHaveAttribute('href', `${host}/pages/viewpage.action?pageId=${P_NEW}`);
-    await expect(links.getByRole('link', { name: `기존 #${old} 원문 ↗` })).toHaveAttribute('href', `${host}/pages/viewpage.action?pageId=${P_OLD}`);
+    await expect(links.getByRole('link', { name: /^신규 원문/ })).toHaveAttribute('href', `${host}/pages/viewpage.action?pageId=${P_NEW}`);
+    await expect(links.getByRole('link', { name: new RegExp(`^기존 #${old} 원문`) })).toHaveAttribute('href', `${host}/pages/viewpage.action?pageId=${P_OLD}`);
     await expect(links.getByRole('link').first()).toHaveAttribute('target', '_blank');
 
     // 페이지 id가 없으면 링크 칸 자체가 없음

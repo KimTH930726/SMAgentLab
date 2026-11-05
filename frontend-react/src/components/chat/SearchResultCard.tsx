@@ -33,10 +33,11 @@ export function SearchResultCard({ result, defaultOpen = false, index, underRevi
       {freshness && (
         <span data-testid={`freshness-${result.id}`}
           title={`${freshness.reviewed ? '마지막 검토' : '마지막 수정·등록'} ${fmtDay(freshness.last_at)}${freshness.interval_days ? ` · 검토 주기 ${freshness.interval_days}일` : ''} · 담당 ${freshness.owners.join(', ') || '없음(관리자)'}`}
-          className={clsx('flex-shrink-0 rounded px-1.5 py-0.5 text-[10px]', freshness.overdue
-            ? 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
-            : 'bg-slate-800 text-slate-400')}>
-          {freshness.overdue ? '검토 기한 지남' : `${freshness.reviewed ? '검토' : '수정'} ${fmtDay(freshness.last_at)}`}
+          className={clsx('flex-shrink-0 rounded border px-1.5 py-0.5 text-[11px] font-medium', freshness.overdue
+            ? 'border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-300'
+            : freshness.reviewed ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-300'
+              : 'border-slate-600 bg-slate-800 text-slate-300')}>
+          {freshness.overdue ? `⚠ 검토 기한 지남 · ${fmtDay(freshness.last_at)}` : `${freshness.reviewed ? '✓ 검토' : '수정'} ${fmtDay(freshness.last_at)}`}
         </span>
       )}
       {/* 유사도 프로그레스 바 + 라벨 */}

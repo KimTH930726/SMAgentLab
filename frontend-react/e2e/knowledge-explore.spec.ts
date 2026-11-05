@@ -61,5 +61,8 @@ test('지식 검색 — 카드(관련도·채팅 근거) · 필터 건수 · 수
   // [목록] — 전체 훑기(일괄 선택)
   await mode.getByRole('button', { name: '목록', exact: true }).click();
   await expect(page.getByText('전체 선택')).toBeVisible();
-  await expect(results).toHaveCount(0);
+  await expect(results).toBeHidden();
+  // 11/05: [검색]으로 돌아오면 검색어·결과 그대로(다시 검색 안 해도 카드)
+  await mode.getByRole('button', { name: '검색', exact: true }).click();
+  await expect(results).toBeVisible();
 });

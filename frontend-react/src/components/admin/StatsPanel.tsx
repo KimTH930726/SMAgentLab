@@ -65,7 +65,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
       } catch (e) {
         console.warn('공백 등록 — 비슷한 지식 확인 실패, 그대로 등록', e);   // 등록은 같은 규칙으로 승인 대기가 막아 준다
       }
-      if (r?.same != null) { setError(`같은 글이 이미 있어요(#${r.same}) — 검색에 안 걸렸다면 [기존 것에 합치기]로 질문 표현을 보태 주세요.`); return; }
+      if (r?.same != null) { setError(`같은 글이 이미 있어요(#${r.same}) — 검색에 안 걸렸다면 [병합]으로 질문 표현을 보태 주세요.`); return; }
       if (r && r.matches.length > 0) { setSimilar(r); return; }
       await register(false);
     } catch (err) {
@@ -104,7 +104,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
   });
   const skip = (m: SimilarMatch) => act(async () => {
     await recordSimilarDecision(namespace, m, 'reject', similar?.n ?? 1);
-    setError(`등록하지 않았어요 — 같은 내용이 #${m.id}에 있어요. 검색에 안 걸렸다면 [기존 것에 합치기]로 질문 표현을 보태 주세요.`);
+    setError(`등록하지 않았어요 — 같은 내용이 #${m.id}에 있어요. 검색에 안 걸렸다면 [병합]으로 질문 표현을 보태 주세요.`);
   });
 
   return (
@@ -140,7 +140,7 @@ function KnowledgeRegisterModal({ open, onClose, log, namespace, onSuccess }: Kn
         {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
         {similar && (
           <SimilarKnowledgeStep content={content} matches={similar.matches} n={similar.n} canMerge busy={submitting}
-            onSkip={skip} onMerge={merge} onNew={() => act(() => register(true))} onClose={() => setSimilar(null)} />
+            onSkip={skip} onMerge={merge} onNew={() => act(() => register(true))} onClose={() => setSimilar(null)} mergeMode="append" />
         )}
 
         <div className="flex gap-2 justify-end pt-1">

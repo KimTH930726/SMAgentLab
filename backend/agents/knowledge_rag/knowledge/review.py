@@ -6,6 +6,8 @@ content_edited_at(사람이 고친 때) 중 늦은 것, 둘 다 없으면 등록
 페이지는 가장 오래된 조각 기준(한 조각이라도 기한이 지나면 페이지가 검토 필요).
 원문 바뀜(11/04, Confluence "검증 해제" 관례): 컨플 동기화가 바뀐 페이지를 찾았는데 사람이 고친 조각이 있어 덮지 않은 페이지(충돌 —
 rag_source_connection.retry_pages why='conflict')는 기한과 상관없이 맨 위에 "원문 바뀜". 그 밖의 바뀐 페이지는 동기화가 이미 새 원문으로 바꿨다.
+기본 목록 = 원문 바뀜 + 기한 지났고 최근 채팅에 쓰인 것(11/05 — 컨플 400페이지를 한꺼번에 적재하면 90일 뒤 400개가 한 번에 올라온다).
+기한만 지나고 안 쓰인 것은 reason='unused'로 같이 돌려주고 화면이 [미사용] 칩 뒤로 둔다(업계: Guru 검증도 많이 보는 카드부터).
 안 하는 것: 자동 알림·독촉(쓰는지 먼저 본다) · 내용이 바뀌었는지 AI 판단(원문 원장 동기화의 일) · 조각 단위 검토.
 """
 from __future__ import annotations
@@ -63,7 +65,9 @@ def due_docs(rows: Iterable[Mapping], interval_days: Optional[int], now: datetim
             "last_reviewed_by": latest["owner"] if latest else None,
             "created_at": min(r["created_at"] for r in rs).isoformat(),
             "overdue_days": overdue if overdue is not None and overdue >= 0 else None, "source_changed": source_changed,
-            "used": sum(used.get(r["id"], 0) for r in rs),
+            "used": (u := sum(used.get(r["id"], 0) for r in rs)),
+            # 왜 올라왔나(11/05 태훈 — 관리자에게 사유까지): 원문 바뀜 · 쓰이는 중(기한 지남 + 최근 채팅 근거) · 미사용(기한만 지남 — 기본 목록에서 뺀다)
+            "reason": "source_changed" if source_changed else ("used" if u else "unused"),
         })
     out.sort(key=lambda d: (not d["source_changed"], -d["used"], -(d["overdue_days"] or 0), d["key"]))
     return out

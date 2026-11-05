@@ -634,7 +634,9 @@ export function ChatContainer() {
             value={correction ? correctionText : input}
             onChange={(e) => (correction ? setCorrectionText(e.target.value) : setInput(e.target.value))}
             onKeyDown={handleKeyDown}
-            placeholder={correction ? '예) 90일이 아니라 60일이에요 (Ctrl+Enter로 접수)' : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
+            placeholder={correction
+              ? `${USER_REASONS.find((r) => r.key === correctionReason)?.example ?? '예) 90일이 아니라 60일이에요'} (Ctrl+Enter로 접수)`
+              : '질문을 입력하세요... (Ctrl+Enter로 전송)'}
             maxLength={correction ? 1000 : undefined}
             rows={2}
             disabled={!namespace || isLoading || submitCorrection.isPending}

@@ -37,9 +37,9 @@ export async function getDuplicateMatches(id: number): Promise<DuplicateMatch[]>
   }
 }
 
-/** 지식 id → 컨플 원문 페이지 주소(없으면 빠짐) — 승인 대기 비교 창 [원문 ↗](11/04) */
+/** 지식 id → 컨플 원문 페이지 주소·제목(없으면 빠짐) — 승인 대기 비교 창 [원문 ↗](11/04, 제목 11/05) */
 export const getPageUrls = (ids: number[]) =>
-  apiFetch<Record<string, string>>('/knowledge/page-urls', { method: 'POST', body: JSON.stringify({ ids }) });
+  apiFetch<Record<string, { url: string; title: string | null }>>('/knowledge/page-urls', { method: 'POST', body: JSON.stringify({ ids }) });
 
 export async function resolveDuplicate(
   id: number,
@@ -542,6 +542,8 @@ export interface ReviewDueDoc {
   overdue_days: number | null; used: number;
   /** 컨플 원문이 바뀌었는데 사람이 고친 조각이 있어 동기화가 덮지 않음(11/04) */
   source_changed: boolean;
+  /** 왜 올라왔나(11/05) — 원문 바뀜 · 쓰이는 중(기한 지남 + 최근 채팅 근거) · 미사용(기한만 지남, 기본 목록에서 뺌) */
+  reason: 'source_changed' | 'used' | 'unused';
 }
 export interface ReviewDue { namespace: string; interval_days: number | null; usage_days: number; total_docs: number; due: ReviewDueDoc[] }
 

@@ -97,3 +97,11 @@ def test_invariant_every_chunk_once_random():
         assert {d["key"] for d in out} == want
         for d in out:
             assert sorted(r["id"] for r in by_key[d["key"]]) == d["ids"]
+
+
+def test_reason_marks_why_each_doc_is_listed():
+    """사유(11/05) — 원문 바뀜 > 쓰이는 중 > 미사용, 사유는 페이지마다 정확히 하나."""
+    rs = [row(1, days_ago=100, page="A"), row(2, days_ago=100, page="B"), row(3, days_ago=10, page="C"), row(4, days_ago=100, page="D")]
+    out = review.due_docs(rs, 90, NOW, {2: 3, 3: 1}, changed_pages=["C"])
+    assert {d["key"]: d["reason"] for d in out} == {"p:C": "source_changed", "p:B": "used", "p:A": "unused", "p:D": "unused"}
+    assert [d["reason"] for d in out][:2] == ["source_changed", "used"]
