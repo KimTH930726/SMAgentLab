@@ -28,7 +28,7 @@ logging.disable(logging.INFO)
 
 CACHE_DIR = Path("/app/eval_out")
 # 분석 규칙이 바뀌면 올린다 — 옛 규칙으로 만든 캐시(예: 관련 지식 없는데 무관한 근거가 든 분석)를 다시 쓰지 않게(10/22 리뷰)
-CACHE_VERSION = 5   # 3: 요약 지침 "대상 기능 + 증상"(10/22 #81) · 4: 검색 = 채팅 경로 + 가까운 시스템(11/05, 옛 캐시는 지식 0건) · 5: 정책 서술 하한 0.60(11/05)
+CACHE_VERSION = 6   # 3: 요약 지침 "대상 기능 + 증상"(10/22 #81) · 4: 검색 = 채팅 경로 + 가까운 시스템(11/05, 옛 캐시는 지식 0건) · 5: 정책 서술 하한 0.60(11/05) · 6: 초안 근거 확인(draft_grounded, 11/05 — 옛 캐시엔 키가 없어 전부 미확인으로 나감)
 
 
 def _cos(a, b) -> float:
@@ -94,6 +94,7 @@ async def main() -> int:
         voc_service.get_llm_provider = lambda: llm   # 분석도 이 프로세스에서만 로컬 LLM
         pattern_detection.get_llm_provider = lambda: llm   # 묶기의 커버리지 확인도(모듈마다 따로 import — 리뷰 M1)
         pattern_detection.get_local_llm = lambda: llm      # 같은 문제 확인은 11/04부터 get_local_llm — 같이 바꿔야 --llm이 이 단계에도 먹는다
+        voc_service.get_local_llm = lambda: llm            # 초안 근거 확인(11/05)도 get_local_llm
     else:
         llm = get_llm_provider()
     settings = await routing_service.get_settings()

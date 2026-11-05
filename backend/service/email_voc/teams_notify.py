@@ -32,6 +32,10 @@ from shared.http_client import call_http
 # 깔려 분류로는 "분석 실패"와 "분류상 초안 없음"을 못 가른다(11/05 리뷰).
 LLM_FAILED_PREFIX = "⚠️ LLM 호출 실패"
 
+# 초안 제목(근거 확인 결과별, 11/05) — None(확인 실패·옛 캐시)은 "없음"으로 단정하지 않고 미확인으로(대체 처리는 보이게, 리뷰 L2).
+# 카드는 툴팁이 없어 뒤에 짧은 안내를 붙인다. 화면(VocEmailPanel DRAFT_LABEL)과 같은 이름.
+DRAFT_TITLES = {True: "해결 방안 · 근거 확인됨", False: "AI 제안 · 참고 지식에 없음 — 확인 필요", None: "AI 제안 · 근거 미확인 — 확인 필요"}
+
 logger = logging.getLogger(__name__)
 
 _URGENT_SEVERITIES = {"high", "urgent"}
@@ -170,7 +174,10 @@ def build_teams_message(
     )
     resolution_draft = analysis.get("resolution_draft")
     if resolution_draft:
-        sections.append(f"{_section_title('해결 방안')}<blockquote>{_esc(resolution_draft)}</blockquote>")
+        # 참고 지식 근거로 확인된 초안만 "해결 방안" — 아니면(근거 없음·확인 실패) AI 제안으로 구분해 단정하지 않는다(11/05, 팀장 확인 카드에서
+        # 참고 지식에 없는 "유관부서 협조·소급 적립"이 해결 방안으로 나감)
+        title = DRAFT_TITLES.get(analysis.get("draft_grounded"), DRAFT_TITLES[None])
+        sections.append(f"{_section_title(title)}<blockquote>{_esc(resolution_draft)}</blockquote>")
     elif pattern_snippet:
         sections.append(f"{_section_title('해결 방안(반복 유형 기등록 지식)')}<blockquote>{_esc(pattern_snippet)}</blockquote>")
     elif pattern_info and pattern_info.get("knowledge_found") is False:

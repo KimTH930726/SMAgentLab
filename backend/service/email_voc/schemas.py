@@ -26,6 +26,7 @@ class EmailAnalysisOut(BaseModel):
     mismatch_flagged: bool
     knowledge_ref_ids: list[int]
     resolution_draft: Optional[str] = None
+    draft_grounded: Optional[bool] = None   # 초안이 참고 지식 근거인가(11/05) — None = 초안 없음·확인 실패
     reasoning: Optional[str] = None
     mapped_term: Optional[str] = None
 

@@ -144,6 +144,27 @@ class TestVocPromptGuard:
         assert [r["system"] for r in out["knowledge_refs"]] == ["홈페이지 시스템", "딜리버스 시스템", "홈페이지 시스템"]
 
     @pytest.mark.asyncio
+    async def test_draft_grounded_wired_into_analysis(self):
+        """초안 근거 확인 연결(11/05, 리뷰 L4) — 초안이 있으면 문맥·초안으로 판정해 결과에 싣고, 없으면 판정 LLM을 부르지 않는다."""
+        voc = _voc
+        check = voc.RelevanceCheck(mapped_term=None, results=[], context="참고 문맥", top_score=0.9, query_vec=[])
+        for reply, judged, want in (('{"category": "system_error", "resolution_draft": "재시도 안내"}', [True], True),
+                                    ('{"category": "system_error", "resolution_draft": null}', [], None)):
+            llm = MagicMock(); llm.generate_once = AsyncMock(return_value=reply)
+            calls = []
+
+            async def fake_grounded(ctx, draft, _calls=calls):
+                _calls.append((ctx, draft)); return True
+            with (patch.object(voc, "neutralize_structural_labels", neutralize_structural_labels),
+                  patch.object(voc, "get_prompt", AsyncMock(side_effect=lambda k, d: d)),
+                  patch.object(voc, "get_llm_provider", return_value=llm),
+                  patch.object(voc, "_draft_grounded", fake_grounded),
+                  patch.object(voc.knowledge_api, "min_score", return_value=0.5)):
+                out = await voc.analyze_email("ns", "s", "b", precomputed=check)
+            assert out["draft_grounded"] is want
+            assert [True for _ in calls] == judged and all(c == ("참고 문맥", "재시도 안내") for c in calls)
+
+    @pytest.mark.asyncio
     async def test_no_context_keeps_placeholder_unfenced(self):
         voc = _voc
 

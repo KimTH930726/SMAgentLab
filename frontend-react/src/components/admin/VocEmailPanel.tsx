@@ -43,6 +43,10 @@ export const CATEGORY_LABEL: Record<string, string> = {
 // 판단 근거 맨 앞 표시로 가른다(11/05 리뷰 — 실패가 "판단 보류로 판단되어 생성하지 않음"으로 보였다).
 // 예외: 카드는 "관련 지식 없음"(knowledge_found False)을 먼저 보지만 이력 API엔 그 칸이 없어 화면은 이 규칙만 따른다.
 const LLM_FAILED_PREFIX = '⚠️ LLM 호출 실패';
+// 초안 이름 = 근거 확인 결과(카드 backend teams_notify DRAFT_TITLES와 같은 이름, 11/05). 이력엔 확인 결과를 저장하지 않아 미확인으로.
+const DRAFT_LABEL = { grounded: '해결 방안 · 근거 확인됨', ungrounded: 'AI 제안 · 참고 지식에 없음', unchecked: 'AI 제안 · 근거 미확인' };
+const draftLabel = (g?: boolean | null) => (g === true ? DRAFT_LABEL.grounded : g === false ? DRAFT_LABEL.ungrounded : DRAFT_LABEL.unchecked);
+const DRAFT_TIP = 'AI가 쓴 초안을 로컬 LLM이 참고 지식과 대조한 결과 — 근거 확인됨만 지식에 있는 절차. 나머지는 담당자가 확인 후 안내';
 const noDraftReason = (category?: string | null, reasoning?: string | null) =>
   category === 'system_error' || reasoning?.startsWith(LLM_FAILED_PREFIX)
     ? '분석이 불완전했을 수 있습니다'
@@ -962,7 +966,7 @@ export function VocEmailPanel() {
                   {testResult.mismatch_flagged && <Badge color="amber">오배치 의심</Badge>}
                 </div>
                 {testResult.resolution_draft ? (
-                  <p className="text-slate-300">해결 방안: {testResult.resolution_draft}</p>
+                  <p className="text-slate-300" title={DRAFT_TIP}>{draftLabel(testResult.draft_grounded)}: {testResult.resolution_draft}</p>
                 ) : (
                   <p className="text-slate-500 text-xs italic">
                     해결 방안 없음 — {noDraftReason(testResult.category, testResult.reasoning)}
@@ -1298,7 +1302,7 @@ export function VocEmailPanel() {
                     </Badge>
                   </div>
                   {h.resolution_draft ? (
-                    <p className="text-slate-300 text-xs">해결 방안: {h.resolution_draft}</p>
+                    <p className="text-slate-300 text-xs" title={DRAFT_TIP}>{draftLabel()}: {h.resolution_draft}</p>
                   ) : h.status !== 'skipped_relevance' && (
                     <p className="text-slate-500 text-xs italic">
                       해결 방안 없음 — {noDraftReason(h.category, h.reasoning)}
@@ -1352,7 +1356,9 @@ export function VocEmailPanel() {
                 </div>
 
                 <div>
-                  <p className="text-xs font-medium text-slate-400 mb-1">해결 방안</p>
+                  <p className="text-xs font-medium text-slate-400 mb-1" title={DRAFT_TIP}>
+                    {selectedHistoryItem.resolution_draft ? draftLabel() : '해결 방안'}
+                  </p>
                   {selectedHistoryItem.resolution_draft ? (
                     <p className="text-slate-300 bg-slate-900/50 border border-slate-700 rounded-lg p-3">{selectedHistoryItem.resolution_draft}</p>
                   ) : (

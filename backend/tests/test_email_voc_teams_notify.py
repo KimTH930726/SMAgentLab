@@ -35,8 +35,20 @@ class TestBuildTeamsMessage:
         assert ">제목</h3>" in text
         assert "결제 오류 문의" in text
         assert ">내용</h3>" in text
-        assert ">해결 방안</h3>" in text
+        assert f">{teams_notify.DRAFT_TITLES[None]}</h3>" in text   # 근거 확인 결과가 없으면(옛 캐시 등) 미확인 — "없음"으로 단정하지 않는다(11/05)
         assert "<blockquote>재시도 안내</blockquote>" in text
+
+    def test_draft_title_by_grounding(self):
+        """초안 제목 = 근거 확인 결과(11/05) — True만 "해결 방안", False = 지식에 없음, None(확인 실패) = 미확인(따로 보이게, 리뷰 L2)."""
+        seen = {}
+        for g in (True, False, None):
+            text = teams_notify.build_teams_message(
+                subject="s", sender="s@example.com", part="p",
+                analysis=_base_analysis(resolution_draft="재시도 안내", draft_grounded=g),
+            )["text"]
+            seen[g] = [t for t in teams_notify.DRAFT_TITLES.values() if f">{t}</h3>" in text]
+        assert seen == {g: [teams_notify.DRAFT_TITLES[g]] for g in (True, False, None)}
+        assert teams_notify.DRAFT_TITLES[True].startswith("해결 방안") and all(teams_notify.DRAFT_TITLES[g].startswith("AI 제안") for g in (False, None))
 
     def test_no_resolution_draft_shows_reason_for_non_system_error(self):
         # 해결방안이 왜 없는지 사람이 알 수 있어야 한다(실사용 중 헷갈린다는 피드백) —

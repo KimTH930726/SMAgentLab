@@ -135,7 +135,7 @@ async def analyze_message(namespace: str, part: Optional[str], msg: dict, releva
         relevance = dataclasses.replace(relevance, results=[], context="")
     analysis = await analyze_email(namespace, msg["subject"], msg["body"], part=part, precomputed=relevance)
     if not knowledge_found:
-        analysis = {**analysis, "knowledge_ref_ids": [], "knowledge_refs": [], "systems": [], "policy_refs": [], "resolution_draft": None}
+        analysis = {**analysis, "knowledge_ref_ids": [], "knowledge_refs": [], "systems": [], "policy_refs": [], "resolution_draft": None, "draft_grounded": None}
     elif relevance.top_score < relevance_min_score:
         # 정책 근거로만 "있음" — 기준 미달 지식은 카드 "참고 지식"·관련 시스템에 안 싣는다(위 M1과 같은 이유). 문맥은 채팅과 같이 그대로
         analysis = {**analysis, "knowledge_ref_ids": [], "knowledge_refs": [], "systems": []}

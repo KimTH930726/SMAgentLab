@@ -100,6 +100,7 @@ export interface EmailAnalysisResult {
   mismatch_flagged: boolean;
   knowledge_ref_ids: number[];
   resolution_draft: string | null;
+  draft_grounded?: boolean | null;   // 초안이 참고 지식 근거인가(11/05) — 시험 분석 응답에만(이력엔 저장 안 함)
   reasoning: string | null;
   mapped_term: string | null;
 }

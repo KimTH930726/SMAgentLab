@@ -213,3 +213,30 @@ class TestIssueSignaturePrompt:
         assert "{" not in service.ISSUE_SIGNATURE_LINE and "}" not in service.ISSUE_SIGNATURE_LINE
         out = service._DEFAULT_ANALYSIS_PROMPT.format(subject="s", body="b", part="p", context="c")
         assert service.ISSUE_SIGNATURE_LINE in out
+
+
+class TestDraftGrounded:
+    """초안 근거 확인(11/05) — 근거로 확인된 초안만 카드에서 "해결 방안", 판정 실패·이상한 답은 None(근거 미확인)."""
+
+    def _run(self, reply):
+        import asyncio
+        from unittest.mock import patch
+
+        class _Fake:
+            async def generate_once(self, prompt, system="", max_tokens=0, user_credentials=None):
+                if isinstance(reply, Exception):
+                    raise reply
+                return reply
+        with patch.object(service, "get_local_llm", lambda: _Fake()):
+            return asyncio.run(service._draft_grounded("참고 지식 본문", "초안"))
+
+    def test_judge_values(self):
+        assert self._run('{"grounded": true}') is True
+        assert self._run('{"grounded": false}') is False
+        assert self._run('{"grounded": "yes"}') is None      # 불리언이 아니면 확인 못 함
+        assert self._run("판정 불가") is None
+        assert self._run(RuntimeError("down")) is None       # 실패해도 분석은 계속(로그만)
+
+    def test_no_context_is_not_grounded(self):
+        import asyncio
+        assert asyncio.run(service._draft_grounded("", "초안")) is False
