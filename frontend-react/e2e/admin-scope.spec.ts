@@ -12,7 +12,7 @@ test('범위 전환 — 컬렉션 관리 홈 ↔ 플랫폼 관리 홈, 범위마
   await loginAdmin(page);
   // /admin(주소 없음) → 컬렉션 관리 › 홈
   await expect(page).toHaveURL(/\/admin\/home$/);
-  await selectDomain(page, '딜리버스');   // 정책 컬렉션 — 정책서 검토 대기 카드 · VOC 메뉴가 보이는 종류
+  await selectDomain(page, '딜리버스');   // 정책 컬렉션 — 정책서 검토 대기 카드가 보이는 종류
   await expect(pressed(page, '컬렉션 관리')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('collection-home')).toBeVisible();
   for (const it of ['정책서', '정정 요청', '용어집', '소스 연결', '컬렉션 정보']) {
@@ -41,7 +41,7 @@ test('범위 전환 — 컬렉션 관리 홈 ↔ 플랫폼 관리 홈, 범위마
   await page.reload();
   await expect(page.getByRole('button', { name: '승인 대기', exact: true }).first()).toBeVisible();
   await expect(page).toHaveURL(/\/admin\/k\.docs\?tab=review$/);
-  await selectDomain(page, '딜리버스');   // VOC 이메일은 정책 컬렉션을 볼 때만 메뉴에 있다
+  // VOC 이메일은 시스템 컬렉션을 볼 때만 메뉴에 있다(11/05 정책 → 시스템) — 지금 딜리버스 시스템을 보는 중
 
   await switchScope(page, '플랫폼 관리');
   await expect(page).toHaveURL(/\/admin\/p\.home$/);

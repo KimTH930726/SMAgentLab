@@ -111,6 +111,9 @@ def build_teams_message(
         f'심각도: <span style="color:{color}"><b>{_esc(_SEVERITY_LABEL.get(severity, severity))}</b></span>',
         f"발신자: {_esc(sender) or '-'}",
     ]
+    if analysis.get("systems"):
+        # 메일함 라우팅과 실제 문의 시스템이 다를 수 있어(11/05 실측 대부분 다름) — 근거 지식을 찾은 시스템을 보여준다
+        detail_items.append(f"관련 시스템: {_esc(' · '.join(analysis['systems']))}")
     if analysis.get("mismatch_flagged"):
         detail_items.append(
             '<span style="color:#DC2626"><b>⚠️ 오배치 의심</b></span> — 이 메일함 담당 업무와 내용이 다를 수 있습니다'
@@ -190,10 +193,18 @@ def build_teams_message(
     knowledge_refs = analysis.get("knowledge_refs") or []
     if knowledge_refs:
         ref_items = "".join(
-            f'<li><span style="color:#6B7280">(유사도 {r["score"]:.2f})</span> {_esc(r["snippet"])}</li>'
+            f'<li><span style="color:#6B7280">({_esc(r["system"]) + " · " if r.get("system") else ""}유사도 {r["score"]:.2f})</span> {_esc(r["snippet"])}</li>'
             for r in knowledge_refs
         )
         sections.append(f"{_section_title('참고 지식(근거)')}<ul>{ref_items}</ul>")
+    # 정책 근거(채팅과 같은 검색 경로, 11/05) — 지식 근거와 같은 이유로 노출
+    policy_refs = analysis.get("policy_refs") or []
+    if policy_refs:
+        ref_items = "".join(
+            f'<li><span style="color:#6B7280">({_esc(r["collection"]) + " · " if r.get("collection") else ""}{_esc(r["name"])})</span> {_esc(r["snippet"])}</li>'
+            for r in policy_refs
+        )
+        sections.append(f"{_section_title('참고 정책(근거)')}<ul>{ref_items}</ul>")
 
     return {"text": f"<br>{_DIVIDER}<br>".join(sections)}
 

@@ -743,7 +743,8 @@ class TestVocCoverageScope:
         api_src = (ROOT / "agents" / "knowledge_rag" / "knowledge" / "api.py").read_text(encoding="utf-8")
         assert pd_src.count("knowledge_api.nearest(") == 2
         assert "k.namespace_id = c.namespace_id" not in api_src
-        assert 'WHERE k.namespace_id IN ({scope_ids_subquery("c.namespace_id")})' in api_src
+        # 영역 범위 조각 그대로 + VOC는 시스템 컬렉션을 OR로 더한다(with_systems, 11/05 — 의미는 test_voc_system_scope가 실 DB로)
+        assert 'WHERE (k.namespace_id IN ({scope_ids_subquery("c.namespace_id")})/*systems*/)' in api_src
 
     @pytest.mark.asyncio
     async def test_fragment_correlated_on_cluster(self, db):

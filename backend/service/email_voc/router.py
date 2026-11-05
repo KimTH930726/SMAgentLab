@@ -34,10 +34,15 @@ async def test_analyze_email(body: EmailAnalyzeRequest, user: dict = Depends(get
     if not body.body.strip():
         raise HTTPException(status_code=400, detail="본문(body)을 입력해주세요.")
 
+    # 수집과 같은 정책서 범위 설정으로 검색 — 안 넘기면 시험 결과가 운영과 달라진다(리뷰 11/05 L1)
+    settings = await routing_service.get_settings()
+    check = await service.check_relevance(body.namespace, body.subject, body.body,
+                                          policy_collections=settings["email_voc_policy_collections"])
     result = await service.analyze_email(
         body.namespace, body.subject, body.body,
         part=body.part or "",
         user_credentials=get_user_llm_credentials(user),
+        precomputed=check,
     )
     return EmailAnalysisOut(**result)
 

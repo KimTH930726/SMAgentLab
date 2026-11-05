@@ -126,6 +126,24 @@ class TestVocPromptGuard:
         assert "파트:배송" in prompt  # 우리가 넣는 값(파트)은 감싸지 않음
 
     @pytest.mark.asyncio
+    async def test_systems_from_matched_refs_only(self):
+        """systems = 근거로 쓴 지식(min_score 이상)의 시스템, 근거 순·중복 없음 — 기준 미달 결과의 시스템은 안 넣는다(11/05)."""
+        from types import SimpleNamespace as R
+        voc = _voc
+        llm = MagicMock()
+        llm.generate_once = AsyncMock(return_value="{}")
+        results = [R(id=1, namespace="홈페이지 시스템", content="a", final_score=0.9), R(id=2, namespace="딜리버스 시스템", content="b", final_score=0.7),
+                   R(id=3, namespace="홈페이지 시스템", content="c", final_score=0.6), R(id=4, namespace="외부서비스 시스템", content="d", final_score=0.2)]
+        check = voc.RelevanceCheck(mapped_term=None, results=results, context="x", top_score=0.9, query_vec=[])
+        with (patch.object(voc, "neutralize_structural_labels", neutralize_structural_labels),
+              patch.object(voc, "get_prompt", AsyncMock(side_effect=lambda k, d: d)),
+              patch.object(voc, "get_llm_provider", return_value=llm),
+              patch.object(voc.knowledge_api, "min_score", return_value=0.5)):
+            out = await voc.analyze_email("ns", "s", "b", precomputed=check)
+        assert out["systems"] == ["홈페이지 시스템", "딜리버스 시스템"]
+        assert [r["system"] for r in out["knowledge_refs"]] == ["홈페이지 시스템", "딜리버스 시스템", "홈페이지 시스템"]
+
+    @pytest.mark.asyncio
     async def test_no_context_keeps_placeholder_unfenced(self):
         voc = _voc
 

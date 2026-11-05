@@ -86,12 +86,14 @@ def patch_db(monkeypatch):
     # (클러스터 줄 = fetchrow/fetch가 돌려준 값에 knowledge_id·similarity·snippet·content가 같이 들어 있는 옛 시험 모양 그대로)
     kf = ("knowledge_id", "similarity", "snippet", "content")
 
-    async def fake_nearest(_conn, items, snippet_len):
+    async def fake_nearest(_conn, items, snippet_len, *, with_systems=False):
         rows = conn.fetch.return_value if isinstance(conn.fetch.return_value, list) and conn.fetch.return_value             else ([dict(conn.fetchrow.return_value, id=items[0][0])] if conn.fetchrow.return_value and items else [])
         by = {r.get("id"): {k: r.get(k) for k in kf} for r in rows if r and r.get("knowledge_id") is not None}
         fake_nearest.calls.append((items, snippet_len))
+        fake_nearest.with_systems.append(with_systems)
         return {k: by[k] for k, _, _ in items if k in by}
     fake_nearest.calls = []
+    fake_nearest.with_systems = []
     monkeypatch.setattr(pattern_detection, "knowledge_api", SimpleNamespace(nearest=fake_nearest))
     conn.fake_nearest = fake_nearest
     return conn, resolve_mock
@@ -448,6 +450,7 @@ class TestGetClusterCoverage:
         assert result == {"covered": True, "snippet": "재배송 처리 절차..."}
         llm_mock.assert_awaited_once_with("배달완료 제품 못받음", "재배송 처리 절차 전문...")
         assert conn.fake_nearest.calls == [([(55, 1, None)], 200)]   # (클러스터, 영역, 벡터) 짝 · 알림 카드 snippet 200자(코어 API 경계)
+        assert conn.fake_nearest.with_systems == [True]   # 메일 분석과 같은 범위 — 시스템 컬렉션까지(11/05, 라우팅 영역엔 지식 0)
         # 검증 결과를 캐시에 써야 다음 호출에서 LLM을 재호출하지 않는다
         cache_write = [c.args for c in conn.execute.call_args_list if "coverage_knowledge_id" in c.args[0]]
         assert cache_write and cache_write[0][1:] == (55, 42, True)

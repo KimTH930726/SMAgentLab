@@ -41,6 +41,7 @@ class EmailCollectionSettingsOut(BaseModel):
     email_pattern_min_count: int
     email_pattern_llm_confirm: bool
     email_pattern_review_size: int
+    email_voc_policy_collections: Optional[list[str]] = None   # None = 채팅 규칙(받침 연결된 정책 컬렉션)
 
 
 class EmailCollectionSettingsUpdate(BaseModel):
@@ -53,6 +54,7 @@ class EmailCollectionSettingsUpdate(BaseModel):
     email_pattern_min_count: Optional[int] = Field(default=None, ge=2)
     email_pattern_llm_confirm: Optional[bool] = None
     email_pattern_review_size: Optional[int] = Field(default=None, ge=0)
+    email_voc_policy_collections: Optional[str] = None   # 정책 컬렉션 이름 쉼표 구분, "" = 비움(채팅 규칙)
 
 
 class VocRoutingCreate(BaseModel):

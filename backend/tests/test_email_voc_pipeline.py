@@ -91,7 +91,7 @@ class TestGetKnowledgeRefs:
         got = AsyncMock(return_value=[{"id": 1, "content": "내용1"}])
         monkeypatch.setattr(pipeline, "knowledge_api", SimpleNamespace(contents=got))
         assert await pipeline.get_knowledge_refs("딜리버스", [1, 999]) == [{"id": 1, "content": "내용1"}]
-        got.assert_awaited_once_with("딜리버스", [1, 999])
+        got.assert_awaited_once_with("딜리버스", [1, 999], with_systems=True)   # 분석 근거가 시스템 컬렉션 지식이라(11/05)
 
 
 def _stub_routing_row(**overrides) -> dict:
@@ -138,7 +138,7 @@ class TestRunManualCollectionCategoryGate:
         monkeypatch.setattr(
             pipeline, "check_relevance",
             AsyncMock(return_value=SimpleNamespace(
-                top_score=relevance_score, mapped_term=None, results=[], context="", query_vec=[0.1, 0.2],
+                top_score=relevance_score, mapped_term=None, results=[], context="", query_vec=[0.1, 0.2], policy_found=False, policy_refs=[],
             )),
         )
         # 기본값은 "반복 패턴이 방금 확정된 경우"(member_count == min_count == 3)로
@@ -199,7 +199,7 @@ class TestRunManualCollectionCategoryGate:
             "resolution_draft": "무관한 지식으로 만든 초안", "reasoning": "이벤트 스티커 지급 문의", "mapped_term": None,
         }
         pipeline.check_relevance.return_value = SimpleNamespace(   # 관련도는 미달인데 근거 목록은 찬 실제 모양(리뷰 M1)
-            top_score=0.1, mapped_term=None, results=["무관한 근거"], context="무관한 문맥", query_vec=[0.1, 0.2],
+            top_score=0.1, mapped_term=None, results=["무관한 근거"], context="무관한 문맥", query_vec=[0.1, 0.2], policy_found=False, policy_refs=[],
         )
         monkeypatch.setattr(pipeline.dataclasses, "replace", lambda obj, **kw: SimpleNamespace(**{**vars(obj), **kw}))
 
@@ -222,6 +222,33 @@ class TestRunManualCollectionCategoryGate:
         # 저장되는 분석에서도 비워져 있어야 한다(이력 화면이 무관한 지식을 근거처럼 보여 주지 않게) — INSERT 인자 확인
         args = conn.fetchrow.await_args.args
         assert args[12] == [] and args[13] is None   # knowledge_ref_ids, resolution_draft
+
+    @pytest.mark.asyncio
+    async def test_policy_only_evidence_keeps_draft_drops_weak_knowledge(self, patch_db, monkeypatch):
+        """정책 근거만 하한을 넘으면(11/05 채팅과 같은 경로) — 관련 지식 있음 · 초안·정책 근거·문맥은 그대로, 기준 미달 지식·시스템은 카드에서 뺀다."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        self._patch_common(monkeypatch, category="system_error", relevance_score=0.1)   # 지식은 기준 0.3 미만
+        pipeline.check_relevance.return_value = SimpleNamespace(
+            top_score=0.1, mapped_term=None, results=["약한 지식"], context="정책 문맥", query_vec=[0.1, 0.2],
+            policy_found=True, policy_refs=[{"name": "별 적립", "snippet": "기준", "score": 0.7, "collection": "리워드"}])
+        pipeline.analyze_email.return_value = {
+            "category": "system_error", "severity": "medium", "mismatch_flagged": False,
+            "knowledge_ref_ids": [7], "knowledge_refs": [{"id": 7, "snippet": "약한", "score": 0.4, "system": "홈페이지 시스템"}],
+            "systems": ["홈페이지 시스템"], "policy_refs": [{"name": "별 적립", "snippet": "기준", "score": 0.7, "collection": "리워드"}],
+            "resolution_draft": "정책 기준 안내", "reasoning": "r", "mapped_term": None,
+        }
+        await pipeline.run_manual_collection("ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True)
+        kw = pipeline.teams_notify.build_teams_message.call_args.kwargs
+        assert kw["pattern_info"]["knowledge_found"] is True
+        a = kw["analysis"]
+        assert a["resolution_draft"] == "정책 기준 안내" and a["policy_refs"] and a["knowledge_refs"] == [] and a["systems"] == []
+        assert pipeline.analyze_email.await_args.kwargs["precomputed"].context == "정책 문맥"   # 문맥은 채팅과 같이 그대로
+        assert pipeline.check_relevance.await_args.kwargs == {"policy_collections": None}   # 설정 없음 = 채팅 규칙
+        pipeline.routing_service.get_settings.return_value = {**pipeline.routing_service.get_settings.return_value,
+                                                              "email_voc_policy_collections": ["리워드"]}
+        await pipeline.run_manual_collection("ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True)
+        assert pipeline.check_relevance.await_args.kwargs == {"policy_collections": ["리워드"]}   # 설정값 그대로
 
     @pytest.mark.asyncio
     async def test_high_relevance_keeps_draft_and_marks_knowledge_found(self, patch_db, monkeypatch):
@@ -441,7 +468,7 @@ class TestPatternEmbeddingSource:
         monkeypatch.setattr(
             pipeline, "check_relevance",
             AsyncMock(return_value=SimpleNamespace(
-                top_score=0.9, mapped_term=None, results=[], context="", query_vec=[0.9, 0.9],
+                top_score=0.9, mapped_term=None, results=[], context="", query_vec=[0.9, 0.9], policy_found=False, policy_refs=[],
             )),
         )
         monkeypatch.setattr(pipeline.pattern_detection, "detect_and_update_cluster", AsyncMock(return_value=None))

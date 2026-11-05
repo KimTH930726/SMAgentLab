@@ -5,7 +5,7 @@ import { loginAdmin } from './auth';
 
 // 시스템 컬렉션(11/02, docs/domains/knowledge/taxonomy-standard.md — 옛 조직 컬렉션 자리) — 컬렉션 › 시스템 컬렉션에서 [시스템 추가]하면
 // DB에 kind='domain' · area='system' · 최상위로 생기고, 관련 정책을 고르면 ops_link 'supports'로 저장된다(200 OK ≠ 저장됨 — DB로 확인).
-// 고르는 창 [시스템] 탭에서 고르면 칩에 그 이름, 정책 탭·정책 컬렉션 표엔 안 보이고, 정책서·VOC 메뉴는 숨김(주소로 와도 운영 지식으로).
+// 고르는 창 [시스템] 탭에서 고르면 칩에 그 이름, 정책 탭·정책 컬렉션 표엔 안 보이고, 정책서 메뉴는 숨김(주소로 와도 운영 지식으로) · VOC 메뉴는 보임(11/05).
 const SYS = 'E2E시스템컬렉션';
 const SYS_KEY = `${SYS} 시스템`;   // 키 이름(만들 때 " 시스템"이 붙는다, 11/02)
 const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -13,7 +13,7 @@ const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SYS2 = 'E2E시스템컬렉션2';
 test.afterEach(() => { dropSystem(SYS); dropSystem(SYS_KEY); dropSystem(`${SYS2} 시스템`); });
 
-test('시스템 컬렉션 — 추가 · 관련 정책 저장 · 고르는 창 [시스템] 탭 · 정책서·VOC 메뉴 숨김', async ({ page }) => {
+test('시스템 컬렉션 — 추가 · 관련 정책 저장 · 고르는 창 [시스템] 탭 · 정책서 메뉴 숨김 · VOC 메뉴 보임', async ({ page }) => {
   dropSystem(SYS);
   dropSystem(SYS_KEY);
   const biz = psql(`SELECT name FROM ops_namespace WHERE kind = 'domain' AND area = 'policy' AND parent_id IS NULL ORDER BY id LIMIT 1`);
@@ -71,14 +71,14 @@ test('시스템 컬렉션 — 추가 · 관련 정책 저장 · 고르는 창 [�
   await expect(page.getByRole('tab', { name: '시스템' })).toHaveAttribute('aria-selected', 'true');
   await page.keyboard.press('Escape');
 
-  // ⑤ 시스템을 보는 중엔 정책서(컬렉션 관리)·VOC(플랫폼 관리)가 왼쪽 메뉴에 없다(용어집은 있음) — 주소로 와도 운영 지식으로
+  // ⑤ 시스템을 보는 중엔 정책서(컬렉션 관리)가 왼쪽 메뉴에 없다(용어집은 있음) — 주소로 와도 운영 지식으로. VOC(플랫폼 관리)는 시스템 쪽(11/05)
   const nav = page.getByRole('navigation', { name: '관리자 메뉴' });
   await goAdmin(page, '운영 지식');
   await expect(nav.getByRole('button', { name: '용어집', exact: true })).toBeVisible();
   await expect(nav.getByRole('button', { name: '정책서', exact: true })).toHaveCount(0);
   await goAdmin(page, '설정');
   await expect(nav.getByRole('button', { name: '조직·권한', exact: true })).toBeVisible();
-  await expect(nav.getByRole('button', { name: 'VOC 이메일', exact: true })).toHaveCount(0);
+  await expect(nav.getByRole('button', { name: 'VOC 이메일', exact: true })).toBeVisible();
   await gotoAdminUrl(page, '/admin/k.policy');
   await expect(page).toHaveURL(/\/admin\/k\.docs$/);
   await expect(page.getByTestId('admin-crumb')).toContainText(SYS);

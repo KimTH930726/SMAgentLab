@@ -286,6 +286,17 @@ class TestAnswerShaping:
         assert seen["ids"] == [1] and cc.list_answer["total"] == 1
 
     @pytest.mark.asyncio
+    async def test_policy_ns_override_skips_chat_policy_scope(self, monkeypatch):
+        """정책서 범위 덮어쓰기(11/05 VOC 임시 정책 범위) — 넘기면 채팅 규칙(policy_scope)을 안 부르고 그 범위로 정책 검색, 안 넘기면 채팅 규칙."""
+        self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[])
+        await agent.build_chat_context("ns", "q", [0.1], top_k=5, w_vector=0.7, w_keyword=0.3, policy_ns_ids=[77])
+        agent.policy_scope.policy_namespace_ids.assert_not_awaited()
+        assert agent.policy_search.search_policy.await_args.kwargs["ns_ids"] == [77]
+        await self._run("q")
+        agent.policy_scope.policy_namespace_ids.assert_awaited_once()
+        assert agent.policy_search.search_policy.await_args.kwargs["ns_ids"] == [1]
+
+    @pytest.mark.asyncio
     async def test_knowledge_scope_option_adds_collections_without_duplicates(self, monkeypatch):
         """지식 검색 범위(11/02 게이트 #71·#72) — 채팅 기본 = linked(관련 정책 연결), 더한 컬렉션은 겹침 없이. None이면 부르지 않음(고른 컬렉션만)."""
         self._wire_ctx(monkeypatch, explicit_all=False, item_ids=[])

@@ -214,7 +214,8 @@ async def namespace_names_with_parents(conn: asyncpg.Connection, names: list[str
 # linked  = 받침 연결(ops_link 'supports', #105)로 이어진 컬렉션 — 업무를 고르면 그 업무를 받치는 시스템들(하위 업무는 상위의 연결도),
 #           시스템을 고르면 그 시스템이 받치는 업무들. 조직과 무관(개편에 안 흔들림), 질문자와 무관(누가 물어도 같은 범위)
 # similar = linked + 질문과 가까운 다른 업무 컬렉션 상위 n개(쿼리 라우팅: 활성 지식 조각의 최고 유사도로 컬렉션 순위)
-KNOWLEDGE_SCOPES = ("linked", "similar")
+# nearest_system = linked + 질문과 가장 가까운 시스템 컬렉션(애매하면 2개, nearest_system_ids) — VOC(메일함 라우팅과 실제 문의 시스템이 다름, 11/05)
+KNOWLEDGE_SCOPES = ("linked", "similar", "nearest_system")
 
 
 async def linked_scope_ids(conn: asyncpg.Connection, namespace: str) -> list[int]:
@@ -243,6 +244,25 @@ async def similar_domain_scope_ids(conn: asyncpg.Connection, namespace: str, que
     return [r["namespace_id"] for r in rows]
 
 
+async def nearest_system_ids(conn: asyncpg.Connection, query_vec: Sequence[float], gap: float = 0.03, pool: int = 30) -> list[int]:
+    """질문과 가장 가까운 시스템 컬렉션(area='system') — 1위, 2위와 최고 유사도 차이가 gap 미만이면 2위까지(애매하면 둘 다 찾는다).
+    VOC 메일함은 시스템 하나에 라우팅돼도 실제 문의는 다른 시스템이 대부분이었다(11/05 실측: 딜리버스 메일함 300건 중 284건이 홈페이지 시스템).
+    순위 = 활성 지식 조각 최고 유사도(similar_domain_scope_ids와 같은 쿼리 라우팅). 시스템 지식이 없으면 []."""
+    rows = await conn.fetch(
+        """SELECT namespace_id, max(s) AS s FROM (
+               SELECT k.namespace_id, 1 - (k.embedding <=> $1::vector) AS s FROM rag_knowledge k
+               JOIN ops_namespace n ON n.id = k.namespace_id
+               WHERE k.status = 'active' AND n.kind = 'domain' AND n.area = 'system'
+               ORDER BY k.embedding <=> $1::vector LIMIT $2) t
+           GROUP BY namespace_id ORDER BY s DESC LIMIT 2""",
+        "[" + ",".join(str(float(x)) for x in query_vec) + "]", pool)
+    if not rows:
+        return []
+    if len(rows) > 1 and rows[0]["s"] - rows[1]["s"] < gap:
+        return [rows[0]["namespace_id"], rows[1]["namespace_id"]]
+    return [rows[0]["namespace_id"]]
+
+
 async def knowledge_scope_extra_ids(conn: asyncpg.Connection, namespace: str, scope: str | None,
                                     query_vec: Sequence[float]) -> list[int]:
     """검색 범위 실험 옵션의 추가 컬렉션 id — scope 없음이면 [](지금과 같음)."""
@@ -253,4 +273,6 @@ async def knowledge_scope_extra_ids(conn: asyncpg.Connection, namespace: str, sc
     ids = await linked_scope_ids(conn, namespace)
     if scope == "similar":
         ids += [i for i in await similar_domain_scope_ids(conn, namespace, query_vec) if i not in ids]
+    elif scope == "nearest_system":
+        ids += [i for i in await nearest_system_ids(conn, query_vec) if i not in ids]
     return ids

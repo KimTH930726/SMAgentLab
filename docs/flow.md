@@ -711,6 +711,10 @@ status 정의 (v2.121 — 좋아요/싫어요 기반 해결·미해결 폐지, �
 실사용 질의 기록(v2.187): 채팅 답마다 메시지 `metadata.trace` = 넘긴 근거 id·순위·점수 + 판정 신호(원문 없음) — 나중에 id로 다시 꺼내 질의별 진단·표본 채점(설계 중).
 
 VOC 메일은 지식을 코어 API(`agents/knowledge_rag/knowledge/api.py`)로만 쓴다 — 검색 내부 import·지식 표 SQL 금지(`tests/test_voc_boundary.py`, v2.183).
+VOC 검색 = 채팅과 같은 경로(11/05, `api.chat_context` → `agent.build_chat_context`): 지식 범위 `nearest_system` = 메일함 컬렉션 + 받침 연결 +
+메일과 가장 가까운 시스템 컬렉션(1·2위 최고 유사도 차이 < 0.03이면 2개, `core.database.nearest_system_ids`) · 정책 범위 = 채팅 규칙,
+설정 `email_voc_policy_collections`가 있으면 그 이름들(11/05 임시 "리워드" — 받침 연결이 비어 있어서). 근거 있음 = 지식 관련도 ≥ 기준 또는
+정책 근거(서술 ≥ 0.50 · 파라미터 > 0.05). 카드: 관련 시스템 · 참고 지식(시스템별) · 참고 정책. VOC는 시스템 컬렉션 메뉴(이력 이동 `scripts/move_voc_to_system.py`).
 
 VOC 반복 묶기(`service/email_voc/pattern_detection.py`, 11/03): 요약 임베딩 → 대표(고정)와 유사도 ≥ 기준인 최상위 묶음 1개 → 같은 스레드면 안 셈
 → LLM 같은 문제 확인(첫 멤버와 · 로컬 LLM, 메일은 PII 가림 — 11/04) → 같으면 합류 / 아니면 단독 메일 최상위 1건을 한 번 더 확인 → 같으면 새 묶음. 실패·애매 = 묶지 않음.

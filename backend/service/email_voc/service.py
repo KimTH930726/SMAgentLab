@@ -13,7 +13,7 @@ analyze_email()을 호출(이때 precomputed로 검색 결과를 넘겨 임베�
 """
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 # 지식은 코어 API로만(10/28 VOC 레이어 분리 — 검색 내부·지식 표를 직접 만지지 않는다, tests/test_voc_boundary.py)
@@ -37,6 +37,9 @@ class RelevanceCheck:
     # 반복 VOC 패턴 탐지(pattern_detection.py)가 지식 베이스 비교와 별개로 과거
     # VOC와도 비교할 때 재사용 — 이미 계산된 값을 그대로 넘겨 재임베딩하지 않는다.
     query_vec: list[float]
+    # 정책 근거(채팅과 같은 경로, 11/05) — [{name, snippet, score, collection}] · 하한을 넘었나
+    policy_refs: list[dict] = field(default_factory=list)
+    policy_found: bool = False
 
 # ops_prompt(func_key='email_voc_analysis_system'/'email_voc_analysis_prompt')로
 # 관리자가 "시스템 설정 > 프롬프트 관리"에서 동적으로 수정 가능 — 아래는 DB에 값이
@@ -219,7 +222,7 @@ def _mask_pii(text: str) -> str:
     return text
 
 
-async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceCheck:
+async def check_relevance(namespace: str, subject: str, body: str, *, policy_collections: Optional[list[str]] = None) -> RelevanceCheck:
     """이메일과 등록된 지식 간 최고 유사도를 구한다 — LLM 호출 전 저비용 사전 필터용.
 
     analyze_email()의 앞부분(임베딩+용어매핑+하이브리드검색)과 동일한 로직이다.
@@ -233,8 +236,12 @@ async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceC
     # 짧아 embed()로 충분).
     query_vec = await embedding_service.embed_long(query_text)
 
-    # 용어집 방식·가중치·top_k는 채팅 지식 검색과 같은 설정(v2.128) — 코어 API가 정한다
-    found = await knowledge_api.search(namespace, query_text, query_vec)
+    # 채팅과 같은 검색 경로(용어 → 지식·정책·참조데이터 → RRF 문맥, 11/05 — 나중엔 이 기능을 API로 제공) — 코어 API가 정한다.
+    # 지식 범위 nearest_system: 라우팅 영역 + 연결 + 메일과 가장 가까운 시스템 컬렉션(애매하면 2개) — 11/02 개편 뒤 지식이 시스템
+    # 컬렉션으로 옮겨져 라우팅 영역만 찾던 VOC는 11/03부터 지식 0건이었고, 메일함 문의도 대부분 라우팅과 다른 시스템이었다(11/05 실측).
+    # 정책 범위: policy_collections(설정 email_voc_policy_collections, 비면 채팅 규칙 — 시스템이면 받침 연결된 정책 컬렉션)
+    found = await knowledge_api.chat_context(namespace, query_text, query_vec, knowledge_scope="nearest_system",
+                                             policy_collections=policy_collections)
     mapped_term, results, context = found.mapped_term, found.results, found.context
     w_vector, w_keyword = found.w_vector, found.w_keyword
 
@@ -250,6 +257,7 @@ async def check_relevance(namespace: str, subject: str, body: str) -> RelevanceC
     top_score = max((w_vector * r.v_score + w_keyword * r.k_score for r in results), default=0.0)
     return RelevanceCheck(
         mapped_term=mapped_term, results=results, context=context, top_score=top_score, query_vec=query_vec,
+        policy_refs=found.policy_refs, policy_found=found.policy_found,
     )
 
 
@@ -279,6 +287,8 @@ async def analyze_email(
     발견됐다 — Teams 알림에 근거를 노출하면 이런 오탐을 사람이 바로 알아챌 수 있다.
     """
     check = precomputed if precomputed is not None else await check_relevance(namespace, subject, body)
+    policy_refs = ([{**r, "snippet": _snippet(r["snippet"]), "score": round(r["score"], 2)} for r in check.policy_refs[:_MAX_KNOWLEDGE_REFS_SHOWN]]
+                   if check.policy_found else [])
     mapped_term = check.mapped_term
     results = check.results
     context = check.context
@@ -287,7 +297,7 @@ async def analyze_email(
     matched = sorted((r for r in results if r.final_score >= min_score), key=lambda r: r.final_score, reverse=True)
     knowledge_ref_ids = [r.id for r in matched]
     knowledge_refs = [
-        {"id": r.id, "snippet": _snippet(r.content), "score": round(r.final_score, 2)}
+        {"id": r.id, "snippet": _snippet(r.content), "score": round(r.final_score, 2), "system": r.namespace}
         for r in matched[:_MAX_KNOWLEDGE_REFS_SHOWN]
     ]
 
@@ -342,6 +352,9 @@ async def analyze_email(
         "mismatch_flagged": bool(parsed.get("mismatch_flagged", False)),
         "knowledge_ref_ids": knowledge_ref_ids,
         "knowledge_refs": knowledge_refs,
+        # 근거로 쓴 지식이 있는 시스템(근거 순, 중복 없음) — 메일함 라우팅과 실제 문의 시스템이 달라 카드에 표시(11/05)
+        "systems": list(dict.fromkeys(r.namespace for r in matched)),
+        "policy_refs": policy_refs,   # 정책 근거(채팅과 같은 경로, 11/05) — 카드 "참고 정책(근거)"
         "resolution_draft": parsed.get("resolution_draft"),
         "reasoning": reasoning,
         "mapped_term": mapped_term,

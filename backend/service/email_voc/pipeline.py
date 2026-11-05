@@ -118,22 +118,27 @@ async def mark_notify_result(analysis_id: int, ok: bool, error: Optional[str]) -
         )
 
 
-async def analyze_message(namespace: str, part: Optional[str], msg: dict, relevance_min_score: float) -> tuple[dict, list[float], bool]:
+async def analyze_message(namespace: str, part: Optional[str], msg: dict, relevance_min_score: float,
+                          policy_collections: Optional[list[str]] = None) -> tuple[dict, list[float], bool]:
     """메일 1건 분석 — (분석 결과, 반복 묶기용 임베딩, 관련 지식 있음). 파이프라인과 재처리(scripts/voc_reprocess.py)가 같이 쓴다.
 
     순서(10/22 사용자): **VOC끼리 반복 묶기가 먼저**, 업무 지식은 해결책 찾기에만 쓴다. 예전엔 "이 메일함 업무 지식과 비슷한가"(관련도)를
     입구 필터로 써서, 업무 지식에 없는 주제(예: 이벤트 문의 20여 건)는 반복 묶기까지 가지도 못하고 버려졌다(9/22~10/22 팀즈 발송 0).
     이제 관련도는 "관련 지식 있음/없음" 표시 — 없으면 지식 공백 후보로 카드에 적고, 무관한 지식으로 만든 해결 방안 초안은 비운다.
     """
-    relevance = await check_relevance(namespace, msg["subject"], msg["body"])
-    knowledge_found = relevance.top_score >= relevance_min_score
+    relevance = await check_relevance(namespace, msg["subject"], msg["body"], policy_collections=policy_collections)
+    # 지식 관련도가 기준 이상이거나 정책 근거가 하한을 넘으면 "관련 지식 있음"(11/05 — 채팅처럼 정책도 근거)
+    knowledge_found = relevance.top_score >= relevance_min_score or relevance.policy_found
     if not knowledge_found:
         # 관련 지식이 없으면 LLM에도 빈 근거로 — 무관한 지식이 문맥·카드 "참고 지식"에 끼지 않게(리뷰 M1: 근거 고르는 점수는 부풀려져
         # 관련도 미달 메일도 근거 목록이 거의 늘 찼다) + 토큰 절약. 반복 묶기용 원문 벡터(query_vec)는 그대로 쓴다.
         relevance = dataclasses.replace(relevance, results=[], context="")
     analysis = await analyze_email(namespace, msg["subject"], msg["body"], part=part, precomputed=relevance)
     if not knowledge_found:
-        analysis = {**analysis, "knowledge_ref_ids": [], "knowledge_refs": [], "resolution_draft": None}
+        analysis = {**analysis, "knowledge_ref_ids": [], "knowledge_refs": [], "systems": [], "policy_refs": [], "resolution_draft": None}
+    elif relevance.top_score < relevance_min_score:
+        # 정책 근거로만 "있음" — 기준 미달 지식은 카드 "참고 지식"·관련 시스템에 안 싣는다(위 M1과 같은 이유). 문맥은 채팅과 같이 그대로
+        analysis = {**analysis, "knowledge_ref_ids": [], "knowledge_refs": [], "systems": []}
     # 반복 묶기는 원문 임베딩 대신 LLM이 뽑은 정규화 요약(issue_signature)을 임베딩해 쓴다(2026-08-27) — 같은 유형이어도 발신자마다
     # 표현이 달라 원문끼리는 기준을 못 넘는 게 실측 확인됐다("로그인이 안돼요" vs "앱 접속이 안됩니다"). 요약이 없으면(LLM 실패 등) 원문으로 폴백.
     issue_signature = analysis.get("issue_signature")
@@ -310,7 +315,7 @@ async def run_manual_collection(
         async def _process_one(msg: dict) -> str:
             async with semaphore:
                 analysis, pattern_embedding, knowledge_found = await analyze_message(
-                    namespace, routing["part"], msg, relevance_min_score)
+                    namespace, routing["part"], msg, relevance_min_score, settings.get("email_voc_policy_collections"))
 
                 saved = await record_analysis(
                     ns_id, routing["id"], msg["id"], routing["mailbox_upn"],
@@ -451,4 +456,5 @@ async def get_knowledge_refs(namespace: str, knowledge_ids: list[int]) -> list[d
     지식이 섞여 나오지 않도록 한다(id는 분석 당시 값이라 신뢰할 수 있지만,
     조회 시점엔 삭제/네임스페이스 이전됐을 가능성을 배제하기 위한 방어적 필터).
     """
-    return await knowledge_api.contents(namespace, knowledge_ids)   # 지식은 코어 API로만(10/28 VOC 레이어 분리)
+    # 시스템 컬렉션 것도 — 분석이 메일함 영역 밖 시스템 지식을 근거로 쓰기 때문(11/05). 지식은 코어 API로만(10/28 VOC 레이어 분리)
+    return await knowledge_api.contents(namespace, knowledge_ids, with_systems=True)

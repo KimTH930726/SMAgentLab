@@ -12,7 +12,7 @@ _SETTINGS_KEYS = (
     "email_collection_enabled", "email_polling_interval_minutes", "email_lookback_days",
     "email_relevance_min_score",
     "email_pattern_similarity_threshold", "email_pattern_window_days", "email_pattern_min_count",
-    "email_pattern_llm_confirm", "email_pattern_review_size",
+    "email_pattern_llm_confirm", "email_pattern_review_size", "email_voc_policy_collections",
 )
 # 요약 방식이 바뀐 경계(main.py #81이 기록) — 화면에서 고치는 값이 아니라 읽기만(update_settings 대상 아님)
 _BOUNDARY_KEYS = ("email_pattern_cluster_min_id", "email_pattern_signature_since")
@@ -40,6 +40,9 @@ async def get_settings() -> dict:
         # N 기본 20(11/03 태훈 결정): 현행 20건 이상 묶음은 같은 문제 쌍 15.6% — 새 방식에선 20건 넘는 묶음이 재생 기준 1개뿐인 안전장치
         "email_pattern_llm_confirm": values.get("email_pattern_llm_confirm", "true").lower() == "true",
         "email_pattern_review_size": int(values.get("email_pattern_review_size", 20)),
+        # VOC 정책서 범위(컬렉션 이름, 쉼표) — 비면 None = 채팅 규칙(시스템이면 받침 연결된 정책 컬렉션). 11/05 임시: 연결이 비어
+        # 메일함 문의 대부분(프리퀀시·별 적립)의 정책이 있는 "리워드"에 닿지 않아 리워드만(태훈). 받침 연결을 채우면 비운다
+        "email_voc_policy_collections": [n.strip() for n in values.get("email_voc_policy_collections", "").split(",") if n.strip()] or None,
         "email_pattern_cluster_min_id": int(values.get("email_pattern_cluster_min_id", 0)),
         "email_pattern_signature_since": values.get("email_pattern_signature_since", ""),   # '' = 경계 없음
     }

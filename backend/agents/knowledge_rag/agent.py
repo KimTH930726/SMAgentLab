@@ -266,20 +266,23 @@ async def build_chat_context(
     policy_top_k: int = POLICY_CONTEXT_TOP_K, category_lists: bool = True, clarify_scope: Optional[str] = None,
     list_question: Optional[str] = None,
     knowledge_scope: Optional[str] = CHAT_DEFAULT, context_budget=CHAT_DEFAULT,
+    policy_ns_ids: Optional[list[int]] = None,
 ) -> ChatContext:
-    """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB)."""
+    """용어 → 지식/정책/참조데이터 검색 → RRF 문맥 조립. glossary_mode·glossary_entries는 측정용 덮어쓰기(기본은 설정값·DB).
+    policy_ns_ids: 정책서 범위 덮어쓰기(None = 채팅 규칙 service/policy/scope.py) — VOC 임시 정책 범위(11/05, knowledge.api.chat_context)."""
     if knowledge_scope == CHAT_DEFAULT or context_budget == CHAT_DEFAULT:
         d = chat_defaults()
         knowledge_scope = d["knowledge_scope"] if knowledge_scope == CHAT_DEFAULT else knowledge_scope
         context_budget = d["context_budget"] if context_budget == CHAT_DEFAULT else context_budget
     # 정책서 범위(2026-10-20, 사용자 결정): 지식은 고른 파트만, 정책서(정책·용어)는 정책 파트까지 — service/policy/scope.py.
     # 정책 데이터가 있는 파트만 돌려주므로 비어 있으면 정책 검색·분류 목록을 건너뛴다(예전 has_policy_data와 같은 역할).
-    try:
-        async with get_conn() as conn:
-            policy_ns_ids = await policy_scope.policy_namespace_ids(conn, namespace)
-    except Exception as e:
-        logger.warning("정책서 범위 계산 실패(정책 없이 진행): %s", e)
-        policy_ns_ids = []
+    if policy_ns_ids is None:
+        try:
+            async with get_conn() as conn:
+                policy_ns_ids = await policy_scope.policy_namespace_ids(conn, namespace)
+        except Exception as e:
+            logger.warning("정책서 범위 계산 실패(정책 없이 진행): %s", e)
+            policy_ns_ids = []
     policy_available = bool(policy_ns_ids)
     extra_ns: list[int] = []
     # 지식 검색 범위(11/02): linked = 관련 정책 연결(채팅 기본), similar = linked + 질문과 가까운 컬렉션 2개(측정만), None = 고른 컬렉션만

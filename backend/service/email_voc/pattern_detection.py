@@ -459,8 +459,9 @@ async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
         )
         if c is None:
             return {"covered": False, "snippet": None}
-        # 가장 가까운 사용 중 지식(클러스터 영역 + 직계 하위 — 채팅 지식 검색과 같은 범위)은 코어 API가
-        best = (await knowledge_api.nearest(conn, [(cluster_id, ns_id, c["emb"])], snippet_len=200)).get(cluster_id) or {}
+        # 가장 가까운 사용 중 지식(클러스터 영역 + 직계 하위 + 시스템 컬렉션 전체, 11/05 — 메일 분석은 가까운 시스템 1~2개만 찾지만
+        # 가장 가까운 한 조각은 그 1위 시스템 안에 있어 결과가 같다. 다른 점: 분석은 받침 연결 컬렉션도 본다 — 지금 지식은 전부 시스템)은 코어 API가
+        best = (await knowledge_api.nearest(conn, [(cluster_id, ns_id, c["emb"])], snippet_len=200, with_systems=True)).get(cluster_id) or {}
         result = await _resolve_coverage(conn, cluster_id, {**dict(c), **_NO_MATCH, **best})
     return {"covered": result["covered"], "snippet": result["snippet"]}
 
@@ -524,7 +525,7 @@ async def list_clusters(namespace: str) -> list[dict]:
         # 최초 1회(캐시가 비어 있을 때)만 클러스터 수만큼 LLM을 호출하고, 이후 조회는
         # 대부분 캐시 히트라 빠르다.
         # 가장 가까운 사용 중 지식은 코어 API로 한 번에(클러스터 수만큼 쿼리하지 않게)
-        best_of = await knowledge_api.nearest(conn, [(r["id"], r["namespace_id"], r["emb"]) for r in rows], snippet_len=100)
+        best_of = await knowledge_api.nearest(conn, [(r["id"], r["namespace_id"], r["emb"]) for r in rows], snippet_len=100, with_systems=True)
         clusters = []
         for r0 in rows:
             r = {**dict(r0), **_NO_MATCH, **best_of.get(r0["id"], {})}

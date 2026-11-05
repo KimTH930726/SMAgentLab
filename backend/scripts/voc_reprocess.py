@@ -28,7 +28,7 @@ logging.disable(logging.INFO)
 
 CACHE_DIR = Path("/app/eval_out")
 # 분석 규칙이 바뀌면 올린다 — 옛 규칙으로 만든 캐시(예: 관련 지식 없는데 무관한 근거가 든 분석)를 다시 쓰지 않게(10/22 리뷰)
-CACHE_VERSION = 3   # 3: 요약 지침 "대상 기능 + 증상"(10/22 #81)
+CACHE_VERSION = 4   # 3: 요약 지침 "대상 기능 + 증상"(10/22 #81) · 4: 검색 = 채팅 경로 + 가까운 시스템(11/05, 옛 캐시는 지식 0건)
 
 
 def _cos(a, b) -> float:
@@ -116,7 +116,8 @@ async def main() -> int:
     # 캐시는 분석에 쓴 프롬프트까지 같아야 재사용 — 마이그레이션(#81) 전 미리보기 캐시의 옛 요약 벡터를 --send가 새 시각으로 저장하면
     # 요약 방식 경계를 통과해 새 묶음에 섞인다(리뷰 M1). 관리자가 화면에서 프롬프트를 고쳐도 같이 무효.
     prompt_text = await voc_service.get_prompt("email_voc_analysis_prompt", voc_service._DEFAULT_ANALYSIS_PROMPT)
-    cache_key = (CACHE_VERSION, hashlib.sha256(prompt_text.encode()).hexdigest())
+    # 정책서 범위 설정도 키에 — 설정을 바꾸고 다시 돌렸는데 옛 분석이 그대로 나오지 않게(리뷰 11/05 M2)
+    cache_key = (CACHE_VERSION, hashlib.sha256(prompt_text.encode()).hexdigest(), tuple(settings["email_voc_policy_collections"] or ()))
     saved = pickle.loads(cache_path.read_bytes()) if cache_path.exists() else {}
     cache = saved.get("items", {}) if isinstance(saved, dict) and saved.get("version") == cache_key else {}
     items = []
@@ -124,7 +125,8 @@ async def main() -> int:
         msg = {"subject": r["subject"], "sender": r["sender"], "body": r["body"] or "",
                "received_at": r["received_at"].isoformat() if r["received_at"] else None}
         if r["id"] not in cache:
-            analysis, vec, kn = await pipeline.analyze_message(a.namespace, routing["part"], msg, settings["email_relevance_min_score"])
+            analysis, vec, kn = await pipeline.analyze_message(a.namespace, routing["part"], msg, settings["email_relevance_min_score"],
+                                                                settings["email_voc_policy_collections"])
             cache[r["id"]] = {"analysis": analysis, "vec": list(vec), "kn": kn}
             cache_path.write_bytes(pickle.dumps({"version": cache_key, "items": cache}))   # 건마다 저장 — 중간에 끊겨도 이어서
         items.append({"id": r["id"], "msg": msg, "subj": _normalize_subject(r["subject"]), **cache[r["id"]]})

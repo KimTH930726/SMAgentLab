@@ -68,7 +68,8 @@ export const ADMIN_MENU: AdminMenuGroup[] = [
     { id: 'systems', label: '시스템 컬렉션', adminOnly: true, hint: 'IT 시스템별 지식(운영·장애·연동) — 담당 파트 · 관련 정책' },
   ] },
   one('platform', { id: 'org', label: '조직·권한', adminOnly: true, hint: '사용자 · 팀 › 파트 · 담당 컬렉션(서브탭)' }),
-  one('platform', { id: 'voc', label: 'VOC 이메일', adminOnly: true, scoped: true, kinds: ['domain'] }),
+  // VOC는 시스템 컬렉션(11/05 — 정책 컬렉션은 정책서만, 이력은 scripts/move_voc_to_system.py로 옮김)
+  one('platform', { id: 'voc', label: 'VOC 이메일', adminOnly: true, scoped: true, kinds: ['system'] }),
   one('platform', { id: 'sys.settings', label: '설정', viewerOk: true, hint: 'LLM · 프롬프트 · 검색 기준값 · 메뉴 노출 · 캐시' }),
 ];
 

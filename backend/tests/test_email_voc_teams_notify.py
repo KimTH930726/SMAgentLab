@@ -189,6 +189,32 @@ class TestBuildTeamsMessage:
         assert "유사도 0.42" in text
         assert "배달 중단 해제 처리 절차" in text
 
+    def test_systems_shown_in_header_and_refs(self):
+        """메일함 라우팅과 실제 문의 시스템이 달라서(11/05) — 근거 지식을 찾은 시스템을 헤더 한 줄 + 근거마다."""
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(systems=["홈페이지 시스템", "딜리버스 시스템"], knowledge_refs=[
+                {"id": 1, "snippet": "프리퀀시 적립 기준", "score": 0.51, "system": "홈페이지 시스템"},
+                {"id": 2, "snippet": "옛 근거(시스템 칸 없음)", "score": 0.40},
+            ]),
+        )
+        text = msg["text"]
+        assert "관련 시스템: 홈페이지 시스템 · 딜리버스 시스템" in text
+        assert "(홈페이지 시스템 · 유사도 0.51)" in text
+        assert "(유사도 0.40)" in text   # 옛 분석(시스템 칸 없음)도 그대로 그린다
+
+    def test_policy_refs_section(self):
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(policy_refs=[{"name": "별 적립 기준", "snippet": "결제 금액 기준 적립", "score": 0.6, "collection": "리워드"}]),
+        )
+        assert "참고 정책(근거)" in msg["text"] and "(리워드 · 별 적립 기준)" in msg["text"] and "결제 금액 기준 적립" in msg["text"]
+        assert "참고 정책(근거)" not in teams_notify.build_teams_message(subject="s", sender="s", part="p", analysis=_base_analysis())["text"]
+
+    def test_no_systems_line_without_knowledge(self):
+        msg = teams_notify.build_teams_message(subject="s", sender="s@example.com", part="p", analysis=_base_analysis(systems=[]))
+        assert "관련 시스템" not in msg["text"]
+
     def test_no_knowledge_refs_omits_section(self):
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="p", analysis=_base_analysis(),
