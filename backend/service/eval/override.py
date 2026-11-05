@@ -174,9 +174,12 @@ def summarize(rows: list[dict], names: dict[int, str]) -> dict:
             label = REASON_NAME.get(why, NO_REASON)
         k["reasons"][label] = k["reasons"].get(label, 0) + 1
         if r["kind"] == LOCATION:
-            src = recommendation(r)
-            key = f"{names.get(src, '?')} → {names.get((r['final'] or {}).get('namespace_id'), '?')}"
-            k["patterns"][key] = k["patterns"].get(key, 0) + 1
+            src, dst = recommendation(r), (r["final"] or {}).get("namespace_id")
+            # 추천이 없었거나(사람에게 물음) 지운 컬렉션이면 이름 대신 그 사실을 — 둘 다 모르면 패턴으로 안 셈("? → ?"가 보이던 것, 11/05)
+            if src is not None or dst is not None:
+                key = (f"{names.get(src, '삭제된 컬렉션') if src is not None else '추천 없음'} → "
+                       f"{names.get(dst, '삭제된 컬렉션') if dst is not None else '미지정'}")
+                k["patterns"][key] = k["patterns"].get(key, 0) + 1
     for k in by.values():
         k["rate"] = round(k["overrides"] / k["decided"], 3) if k["decided"] else None
         k["patterns"] = sorted(({"pattern": p, "n": n} for p, n in k["patterns"].items()), key=lambda x: -x["n"])[:5]

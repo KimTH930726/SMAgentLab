@@ -53,6 +53,15 @@ class TestSummarize:
         assert loc["patterns"] == [{"pattern": "제휴서비스 → 딜리버스", "n": 2}]
         assert loc["override_ids"] == [1, 2] and not loc["rubber_stamp"]
 
+    def test_pattern_names_unknown_collections_instead_of_question_marks(self):
+        """11/05: 지운 컬렉션·빈 최종 위치가 "? → ?"로 찍히던 것 — 이름 대신 사실(삭제된 컬렉션·미지정), 패턴 수 = 번복 수."""
+        rows = [_row(1, ai={"namespace_id": 99}, final={"namespace_id": 1}, changed=True),
+                _row(2, ai={"namespace_id": 2}, final={"namespace_id": 98}, changed=True)]
+        loc = next(k for k in ov.summarize(rows, {1: "딜리버스", 2: "제휴서비스"})["kinds"] if k["kind"] == "knowledge_location")
+        pats = {p["pattern"] for p in loc["patterns"]}
+        assert pats == {"삭제된 컬렉션 → 딜리버스", "제휴서비스 → 삭제된 컬렉션"}
+        assert not any("?" in p for p in pats) and sum(p["n"] for p in loc["patterns"]) == loc["overrides"]
+
     def test_override_from_values_not_stored_flag(self):
         """10/23 초기 줄처럼 같은 곳인데 changed=True여도 번복이 아니다 · 되묻기 = 전부 보기·직접 다시 물음 · 원문 확인 = 문제 없음."""
         assert ov.is_override(_row(1, sig={"proposed_id": 5}, final={"namespace_id": 5}, changed=True)) is False
