@@ -137,6 +137,9 @@ _DEFAULT_ANALYSIS_PROMPT = """아래는 사내 VOC(문의) 이메일과, 이와 
 응답 형식 (JSON 객체만 반환):
 {{"category": "...", "severity": "...", "mismatch_flagged": false, "resolution_draft": "...", "reasoning": "...", "issue_signature": "..."}}"""
 
+# 분석 실패 표시 — reasoning 맨 앞. 카드(teams_notify)·화면(VocEmailPanel)이 같은 문구로 "분석 실패"와 "분류상 초안 없음"을 가른다
+# (11/05 리뷰). 세 곳 일치는 tests/test_email_voc_service.py가 확인 — 테스트가 service 패키지를 가짜로 바꿔 둬서 import로 못 묶는다.
+LLM_FAILED_PREFIX = "⚠️ LLM 호출 실패"
 _VALID_CATEGORIES = {"system_error", "user_mistake", "uncertain", "not_it_related"}
 _VALID_SEVERITIES = {"low", "medium", "high", "urgent"}
 _KNOWLEDGE_SNIPPET_LEN = 60
@@ -342,7 +345,7 @@ async def analyze_email(
         # "판단을 못 함"이므로, 심각도를 낮음으로 깔아뭉개면 실제 장애가 조용히
         # 묻힐 위험이 있다. 사람이 반드시 확인하도록 medium 이상으로 올려둔다.
         severity = "medium"
-        reasoning = f"⚠️ LLM 호출 실패로 자동 분석을 완료하지 못했습니다({type(last_error).__name__}) — 수동 검토 필요"
+        reasoning = f"{LLM_FAILED_PREFIX}로 자동 분석을 완료하지 못했습니다({type(last_error).__name__}) — 수동 검토 필요"
     else:
         severity = parsed.get("severity") if parsed.get("severity") in _VALID_SEVERITIES else "low"
 

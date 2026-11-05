@@ -154,9 +154,9 @@ def test_chat_context_resolves_policy_names_in_order():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("narr,params,found", [((0.49,), (), False), ((0.50,), (), True), ((), (0.05,), False), ((), (0.06,), True)])
+@pytest.mark.parametrize("narr,params,found", [((0.59,), (), False), ((0.60,), (), True), ((), (0.05,), False), ((), (0.06,), True)])
 async def test_chat_context_policy_found_threshold(narr, params, found):
-    """정책 근거 있음 = 서술 최고 ≥ 0.50 또는 파라미터 > 0.05(채팅 근거 없음 판정의 실측 값) · 근거는 하한 넘은 것만, 파라미터 → 서술 순 dict."""
+    """정책 근거 있음 = 서술 최고 ≥ 0.60(VOC 메일 실측 11/05) 또는 파라미터 > 0.05(채팅 근거 없음 판정의 실측 값) · 근거는 하한 넘은 것만, 파라미터 → 서술 순 dict."""
     fake, _ = _fake_agent(_policy(narr, params))
     with (patch.dict(sys.modules, {"agents.knowledge_rag": SimpleNamespace(agent=fake), "agents.knowledge_rag.agent": fake}),
           patch.object(api, "retrieval", SimpleNamespace(get_search_defaults=lambda: {"default_w_vector": 0.7, "default_w_keyword": 0.3, "default_top_k": 5}))):
@@ -173,12 +173,12 @@ async def test_chat_context_policy_found_threshold(narr, params, found):
 @pytest.mark.asyncio
 async def test_chat_context_refs_only_passing_params_first():
     """약한 서술 4개 + 강한 파라미터 1개 → 근거는 파라미터 1개뿐(약한 서술이 앞을 차지해 판정 근거가 잘리지 않게, 리뷰 11/05 M1)."""
-    fake, _ = _fake_agent(_policy((0.42, 0.41, 0.40, 0.39, 0.55), (0.08, 0.01)))
+    fake, _ = _fake_agent(_policy((0.52, 0.51, 0.50, 0.49, 0.65), (0.08, 0.01)))
     with (patch.dict(sys.modules, {"agents.knowledge_rag": SimpleNamespace(agent=fake), "agents.knowledge_rag.agent": fake}),
           patch.object(api, "retrieval", SimpleNamespace(get_search_defaults=lambda: {"default_w_vector": 0.7, "default_w_keyword": 0.3, "default_top_k": 5}))):
         out = await api.chat_context("메일함", "q", [0.1], knowledge_scope=None)
     assert out.policy_found is True
-    assert [(r["name"], r["score"]) for r in out.policy_refs] == [("파라미터", 0.08), ("서술4", 0.55)]
+    assert [(r["name"], r["score"]) for r in out.policy_refs] == [("파라미터", 0.08), ("서술4", 0.65)]
 
 
 def test_scope_nearest_system_adds_picked_systems_to_linked():

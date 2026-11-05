@@ -39,8 +39,11 @@ async def search(namespace: str, query_text: str, query_vec: list[float]) -> Sea
     return Search(results=results, context=retrieval.build_context(results), mapped_term=mapped_term, w_vector=w_vector, w_keyword=w_keyword)
 
 
-# 정책 근거가 "있다" — 채팅 근거 없음 판정(agent.should_abstain)의 실측 값(10/06: 서술 0.50 · 파라미터 0.05에서 골든 거짓 거절 0)
-_POLICY_MIN_NARRATIVE = 0.50
+# 정책 근거가 "있다" — 파라미터는 채팅 근거 없음 판정(agent.should_abstain)의 실측 값(10/06: 0.05에서 골든 거짓 거절 0).
+# 서술은 VOC 메일용으로 0.60(11/05 로컬 LLM 관련 판정, 메일 100건 × 리워드 상위 3 = 300조각): 0.50 통과 114 중 관련 28% →
+# 0.60 통과 18 중 관련 61%(관련 조각 중 28%만 남음). 메일은 채팅 질문보다 길어 서술 유사도가 고르게 높게 나온다 — 틀린 근거를
+# 카드에 붙이는 것보다 덜 붙이는 쪽(단정 오답 경계). chat_context는 지금 VOC만 쓴다 — 채팅 판정 값(0.50)은 agent 쪽에 그대로.
+_POLICY_MIN_NARRATIVE = 0.60
 _POLICY_MIN_PARAM_RANK = 0.05
 
 

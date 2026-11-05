@@ -57,6 +57,15 @@ class TestBuildTeamsMessage:
         )
         assert ">해결 방안</h3>" in msg["text"]
 
+    def test_llm_failure_warns_instead_of_category_reason(self):
+        # LLM 호출 실패 → 분류가 uncertain으로 깔린다 — "판단 보류로 판단되어 생성하지 않음"이 아니라 분석 실패로 표시(리뷰 11/05)
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(category="uncertain", resolution_draft=None,
+                                    reasoning=f"{teams_notify.LLM_FAILED_PREFIX}로 자동 분석을 완료하지 못했습니다(HTTPError) — 수동 검토 필요"),
+        )
+        assert "분석이 불완전했을 수 있습니다" in msg["text"] and "해당 없음" not in msg["text"]
+
     def test_reasoning_shown_as_bold_summary_in_content_section(self):
         # 심각도만 있고 해결방안이 없으면(판단 보류 등) 뭔 내용인지 전혀 알 수 없다는
         # 실사용 피드백 — LLM 판단 근거(이미 계산돼 있음)를 내용 섹션에 굵게 보여준다.

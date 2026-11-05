@@ -12,6 +12,8 @@ import importlib.util as _ilu
 import sys
 from pathlib import Path
 
+import pytest
+
 _backend_dir = Path(__file__).resolve().parent.parent
 _spec = _ilu.spec_from_file_location(
     "email_voc_service_under_test", str(_backend_dir / "service" / "email_voc" / "service.py"),
@@ -190,6 +192,17 @@ class TestIssueSignaturePrompt:
         once = self._migrate(old_db.replace("\n", "\r\n").replace("\r\n", "\n"))
         assert once == service._DEFAULT_ANALYSIS_PROMPT
         assert self._migrate(once) == once
+
+    def test_llm_failure_reasoning_carries_card_prefix(self):
+        """카드·화면이 분석 실패를 가르는 표시 — 문구가 어긋나면 실패가 "지식에 답 없음"으로 나간다(리뷰 11/05)."""
+        import inspect
+        assert 'f"{LLM_FAILED_PREFIX}로 자동 분석을' in inspect.getsource(service.analyze_email)
+        tn = (_backend_dir / "service" / "email_voc" / "teams_notify.py").read_text(encoding="utf-8")
+        ui = (_backend_dir.parent / "frontend-react" / "src" / "components" / "admin" / "VocEmailPanel.tsx")
+        assert f'LLM_FAILED_PREFIX = "{service.LLM_FAILED_PREFIX}"' in tn
+        if not ui.exists():   # 컨테이너(./backend:/app)엔 프론트 소스가 없다 — 조용히 통과하지 않게 건너뜀으로 보인다(리뷰 11/05). 호스트에서 돌리면 검사됨
+            pytest.skip("frontend-react 소스 없음 — 호스트에서: py -m pytest tests/test_email_voc_service.py -k prefix")
+        assert f"const LLM_FAILED_PREFIX = '{service.LLM_FAILED_PREFIX}';" in ui.read_text(encoding="utf-8")
 
     def test_admin_edited_prompt_untouched(self):
         edited = service._DEFAULT_ANALYSIS_PROMPT.replace(service.ISSUE_SIGNATURE_LINE, "6. issue_signature: 관리자가 고친 지침")

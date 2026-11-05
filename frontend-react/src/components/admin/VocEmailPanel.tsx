@@ -39,6 +39,14 @@ const SEVERITY_COLOR: Record<string, 'slate' | 'cyan' | 'amber' | 'rose'> = {
 export const CATEGORY_LABEL: Record<string, string> = {
   system_error: '시스템 오류', user_mistake: '사용자 실수', uncertain: '판단 보류', not_it_related: 'IT 무관',
 };
+// 초안이 없는 이유(카드 문구와 같게, backend teams_notify). 분석 실패는 분류가 "판단 보류"로 깔려 분류로는 못 가르고,
+// 판단 근거 맨 앞 표시로 가른다(11/05 리뷰 — 실패가 "판단 보류로 판단되어 생성하지 않음"으로 보였다).
+// 예외: 카드는 "관련 지식 없음"(knowledge_found False)을 먼저 보지만 이력 API엔 그 칸이 없어 화면은 이 규칙만 따른다.
+const LLM_FAILED_PREFIX = '⚠️ LLM 호출 실패';
+const noDraftReason = (category?: string | null, reasoning?: string | null) =>
+  category === 'system_error' || reasoning?.startsWith(LLM_FAILED_PREFIX)
+    ? '분석이 불완전했을 수 있습니다'
+    : `"${CATEGORY_LABEL[category ?? ''] ?? category}"(으)로 판단되어 생성하지 않음`;
 
 type VocSubTab = 'auth' | 'routing' | 'collect' | 'history' | 'stats' | 'analyze';
 
@@ -957,9 +965,7 @@ export function VocEmailPanel() {
                   <p className="text-slate-300">해결 방안: {testResult.resolution_draft}</p>
                 ) : (
                   <p className="text-slate-500 text-xs italic">
-                    해결 방안 없음 — {testResult.category === 'system_error'
-                      ? '분석이 불완전했을 수 있습니다'
-                      : `"${CATEGORY_LABEL[testResult.category] ?? testResult.category}"(으)로 판단되어 생성하지 않음`}
+                    해결 방안 없음 — {noDraftReason(testResult.category, testResult.reasoning)}
                   </p>
                 )}
                 {testResult.reasoning && <p className="text-slate-500 text-xs">판단 근거: {testResult.reasoning}</p>}
@@ -1295,9 +1301,7 @@ export function VocEmailPanel() {
                     <p className="text-slate-300 text-xs">해결 방안: {h.resolution_draft}</p>
                   ) : h.status !== 'skipped_relevance' && (
                     <p className="text-slate-500 text-xs italic">
-                      해결 방안 없음 — {h.category === 'system_error'
-                        ? '분석이 불완전했을 수 있습니다'
-                        : `"${CATEGORY_LABEL[h.category ?? ''] ?? h.category}"(으)로 판단되어 생성하지 않음`}
+                      해결 방안 없음 — {noDraftReason(h.category, h.reasoning)}
                     </p>
                   )}
                   {h.reasoning && <p className="text-slate-500 text-xs">판단 근거: {h.reasoning}</p>}
@@ -1353,9 +1357,7 @@ export function VocEmailPanel() {
                     <p className="text-slate-300 bg-slate-900/50 border border-slate-700 rounded-lg p-3">{selectedHistoryItem.resolution_draft}</p>
                   ) : (
                     <p className="text-slate-500 italic">
-                      해당 없음 — {selectedHistoryItem.category === 'system_error'
-                        ? '분석이 불완전했을 수 있습니다'
-                        : `"${CATEGORY_LABEL[selectedHistoryItem.category ?? ''] ?? selectedHistoryItem.category}"(으)로 판단되어 생성하지 않음`}
+                      해당 없음 — {noDraftReason(selectedHistoryItem.category, selectedHistoryItem.reasoning)}
                     </p>
                   )}
                 </div>
