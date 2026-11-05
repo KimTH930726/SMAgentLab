@@ -8,6 +8,7 @@ import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { FormModal } from '../../ui/FormModal';
 import { PolicyDetailModal } from './PolicyDetailModal';
+import { RefTableModal } from './RefTableView';
 
 /**
  * 원문 확인(v0 재구축 3단계, 2026-10-21) — 정책서 원문에 대한 질문·문제(담당자에게 묻는 것)와 규칙으로 추정한 제안 연결.
@@ -38,7 +39,8 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
   const [policyOpen, setPolicyOpen] = useState<number | null>(null);
   const [fromCheck, setFromCheck] = useState<number | null>(null);   // 카드에서 연 정책이면 그 카드 — 여기서 올린 제안이 승인되면 카드도 해결
   const [editFirst, setEditFirst] = useState(false);   // [정정 요청] — 상세 대신 수정 제안 창부터(11/04)
-  useEffect(() => { setPolicyOpen(null); }, [selectedNs]);
+  const [refTable, setRefTable] = useState<number | null>(null);   // [참고표 보기] — 참고표 id(11/05 A안)
+  useEffect(() => { setPolicyOpen(null); setRefTable(null); }, [selectedNs]);
 
   const key = ['source-checks', selectedNs, view];
   const { data, isLoading, error: loadError } = useQuery({
@@ -115,22 +117,36 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
                   </div>
                   <p className="text-sm text-slate-200">{c.description}</p>
                   {(c.policies.length > 0 || c.ref_tables.length > 0) && (
-                    // 버튼이 아니라 "관련 정책" 링크 — 칩 모양이라 "그 정책으로 대체?"로 읽혔다(11/04 태훈)
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                      <span className="text-slate-500">관련 정책</span>
-                      {c.policies.map((p) => (
-                        <button key={p.logical_id} type="button" onClick={() => openPolicy(p.logical_id, c.status === 'open' ? c.id : null)} disabled={!p.policy_name}
-                          title={`${p.category_path.join(' › ')} — 정책 상세 보기`} data-testid={`source-check-policy-${c.id}-${p.logical_id}`}
-                          className="text-indigo-600 hover:underline dark:text-indigo-400 disabled:text-slate-500 disabled:no-underline">
-                          {p.policy_name ?? `폐기된 정책 #${p.logical_id}`} ↗
-                        </button>
-                      ))}
+                    // 관련 정책마다 한 줄 + [이 정책 정정 요청](11/05 태훈 — 정책이 둘이면 어느 정책 정정인지 불명확했다) · 참고표는 [참고표 보기](A안)
+                    <ul className="space-y-1 rounded-lg border border-slate-700 bg-slate-900/40 px-2.5 py-2 text-xs" aria-label="관련 정책·참고표">
+                      {c.policies.map((p) => {
+                        const fixable = c.status === 'open' && canModifyNs && !!p.policy_name && c.correction?.status !== 'pending';
+                        return (
+                          <li key={p.logical_id} className="flex flex-wrap items-center gap-x-2 gap-y-1" data-testid={`source-check-row-${c.id}-${p.logical_id}`}>
+                            <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[11px] text-slate-300">정책</span>
+                            <button type="button" onClick={() => openPolicy(p.logical_id, c.status === 'open' ? c.id : null)} disabled={!p.policy_name}
+                              title="정책 상세 보기" data-testid={`source-check-policy-${c.id}-${p.logical_id}`}
+                              className="min-w-0 break-words text-left font-medium text-indigo-600 hover:underline dark:text-indigo-400 disabled:text-slate-500 disabled:no-underline">
+                              {p.policy_name ?? `폐기된 정책 #${p.logical_id}`} ↗
+                            </button>
+                            {p.category_path.length > 0 && <span className="min-w-0 break-words text-slate-500">{p.category_path.join(' › ')}</span>}
+                            {fixable && (
+                              <Button size="sm" variant="secondary" className="ml-auto" onClick={() => openPolicy(p.logical_id, c.id, true)} data-testid={`source-check-fix-${c.id}-${p.logical_id}`}
+                                title={`${p.policy_name} 원문을 고쳐요 — 수정 제안 창이 바로 열리고, 승인되면 새 버전이 되며 이 카드도 저절로 닫혀요`}>이 정책 정정 요청 ▶</Button>
+                            )}
+                          </li>
+                        );
+                      })}
                       {c.ref_tables.map((t) => (
-                        <span key={t.logical_id} className="text-xs px-2 py-0.5 rounded-md border border-slate-600 text-slate-400" title="참고표 탭에서 원표 보기">
-                          참고표 · {t.title ?? t.logical_id}
-                        </span>
+                        <li key={t.logical_id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300">참고표</span>
+                          <span className="min-w-0 break-words font-medium text-slate-200">{t.title ?? `폐기된 참고표 #${t.logical_id}`}</span>
+                          <Button size="sm" variant="secondary" className="ml-auto" disabled={t.id == null} onClick={() => t.id != null && setRefTable(t.id)}
+                            data-testid={`source-check-table-${c.id}-${t.logical_id}`}
+                            title={t.id == null ? '지금 쓰는 버전이 없어요' : '원표를 창으로 열어요 — 표 자체 정정은 아직 없어요(관련 정책을 고치세요)'}>참고표 보기</Button>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   )}
                   {c.note && <p className="text-xs text-slate-400"><span className="text-slate-500 mr-1">{c.status === 'resolved' ? '처리 메모' : '이슈 아닌 이유'}</span>{c.note}</p>}
                   {c.status === 'open' && c.correction && (
@@ -149,11 +165,6 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
                         title="원문이 맞아 고칠 게 없어요 — 사유를 골라 닫으면 '처리됨'으로 가요(AI 감사에 원문 확인 오탐으로 쌓여요)">이슈 아님으로 닫기</Button>
                       <Button size="sm" variant="secondary" onClick={() => open(c, 'resolve')}
                         title="원문 수정 말고 다른 방법으로 이미 처리했어요 — 메모를 남기고 '처리됨'으로">처리 완료로 닫기</Button>
-                      {c.policies.some((p) => p.policy_name) && !(c.correction?.status === 'pending') && (
-                        <Button size="sm" onClick={() => openPolicy(c.policies.find((p) => p.policy_name)!.logical_id, c.id, true)}
-                          data-testid={`source-check-fix-${c.id}`}
-                          title={`원문을 고쳐요 — ${c.policies.find((p) => p.policy_name)!.policy_name} 수정 제안 창이 바로 열리고, 승인되면 새 버전이 되며 이 카드도 저절로 닫혀요${c.policies.filter((p) => p.policy_name).length > 1 ? ' (다른 관련 정책은 이름을 눌러 상세에서 [수정 제안])' : ''}`}>정정 요청 ▶</Button>
-                      )}
                     </div>
                   )}
                 </li>
@@ -227,6 +238,7 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
           initialEditing={editFirst ? 'direct' : null}
         />
       )}
+      {refTable !== null && <RefTableModal namespace={selectedNs} id={refTable} onClose={() => setRefTable(null)} />}
     </div>
   );
 }

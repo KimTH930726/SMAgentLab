@@ -109,12 +109,6 @@ function contextText(item: CorrectionItem): string {
   return `질문: ${o.question ?? ''}\n\n당시 답변:\n${o.answer ?? ''}`;
 }
 
-function policyHead(item: CorrectionItem): string {
-  const o = orig(item);
-  const path = Array.isArray(o.category_path) && o.category_path.length ? ` (${(o.category_path as string[]).join(' > ')})` : '';
-  return o.policy_name ? `${o.policy_name}${path}` : '';
-}
-
 /** 백엔드 service._key와 같은 대상 식별자 */
 function currentKey(item: CorrectionItem): string {
   if (item.target_type === 'knowledge') return `k-${item.target_id}`;
@@ -406,7 +400,17 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
         </div>
       )}
 
-      {hasOriginal && policyHead(item) && <p className="text-xs text-slate-400">{policyHead(item)}</p>}
+      {hasOriginal && !!orig(item).policy_name && (
+        // 어느 정책 정정인지 한눈에(11/05 태훈 — 원문 확인 카드에 정책이 둘일 때 불명확) — 이름·버전·분류 + 어느 원문 확인에서
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-slate-700 bg-slate-900/40 px-2.5 py-1.5 text-xs" data-testid={`correction-policy-${item.id}`}>
+          <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[11px] text-slate-300">대상 정책</span>
+          <b className="text-slate-100">{String(orig(item).policy_name)}</b>
+          {item.policy_version != null && <span className="text-slate-400">v{item.policy_version}</span>}
+          {Array.isArray(orig(item).category_path) && (orig(item).category_path as string[]).length > 0 && (
+            <span className="text-slate-500">{(orig(item).category_path as string[]).join(' › ')}</span>)}
+          {item.source_check_id != null && <span className="ml-auto text-slate-500" title="원문 확인 카드에서 올린 정정 — 승인되면 그 카드도 처리 완료로 닫혀요">원문 확인 #{item.source_check_id}에서</span>}
+        </p>
+      )}
 
       <div className={`grid grid-cols-1 gap-3 ${canFix ? 'lg:grid-cols-2' : ''}`}>
         <div className="space-y-1">

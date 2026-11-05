@@ -878,7 +878,9 @@ async def pending_status(knowledge_ids: list[int], policy_item_ids: list[int]) -
 _LIST_SQL = """
     SELECT i.id, i.kind, n.name AS namespace, n.area AS namespace_area, i.message_id, i.target_type, i.target_id, i.target_sub_id,
            i.user_input, i.user_reason, i.original, i.proposed, i.status, i.reject_reason, i.applied_target_id,
-           i.created_at, i.decided_at, i.reporter_seen_at, i.source, i.candidates, i.ai_verdict,
+           i.created_at, i.decided_at, i.reporter_seen_at, i.source, i.candidates, i.ai_verdict, i.source_check_id,
+           -- 정책 정정의 대상 버전(11/05 — 카드 머리 "대상 정책 vN")
+           CASE WHEN i.target_type IN ('policy_narrative', 'policy_param') THEN (SELECT pi.version FROM policy_item pi WHERE pi.id = i.target_id) END AS policy_version,
            ru.username AS reporter, du.username AS decided_by,
            -- 근거를 대상으로 한 건도 어떤 질문·답변에서 나온 신고인지 카드에 보이도록(원문은 근거 스냅샷뿐이라)
            m.content AS answer_text,

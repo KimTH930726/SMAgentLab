@@ -147,7 +147,7 @@ test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이
 
   async function proposeFrom(card: number, body: string): Promise<number> {
     const el = page.getByTestId(`source-check-${card}`);
-    await el.getByTestId(`source-check-fix-${card}`).click();   // [정정 요청 ▶] = 수정 제안 창이 바로(11/04)
+    await el.getByTestId(`source-check-fix-${card}-${lid}`).click();   // [이 정책 정정 요청 ▶] = 그 정책 수정 제안 창이 바로(11/04, 정책마다 11/05)
     const form = page.locator('form').filter({ has: page.locator('#policy-edit-body') });
     await form.locator('#policy-edit-body').fill(body);
     const created = page.waitForResponse((r) => r.url().endsWith('/api/corrections') && r.request().method() === 'POST');
@@ -183,4 +183,42 @@ test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이
   expect((await request.post(`${API}/api/corrections/${r2}/approve`, { headers: H, data: { proposed } })).ok()).toBeTruthy();
   expect(psql(`SELECT status || '|' || (ai_verdict->>'note') || '|' || (ai_verdict->>'auto') FROM ops_improvement_item WHERE id = ${c3}`))
     .toBe(`approved|정정 #${r2} 승인|true`);
+});
+
+test('참고표 오류 카드 — 정책마다 [이 정책 정정 요청] · [참고표 보기] 창(결정·결과 열, 표 안 검색) · 정정 카드 머리 = 대상 정책·원문 확인 번호', async ({ page, request }) => {
+  const lid = psql(`SELECT logical_id FROM policy_item WHERE namespace_id = ${nsId()} AND policy_name = '${P1.name}' AND status = 'active'`);
+  const cols = JSON.stringify([{ name: '지역', decisive: true }, { name: '무게' }, { name: '요금', role: 'result' }]);
+  const tid = Number(psql(`INSERT INTO ref_table (namespace_id, title, category_path, columns, content_hash) VALUES (${nsId()}, 'E2E 배송비 표', '{테스트,배송}', '${cols}'::jsonb, 'e2e-rt') RETURNING id`).split('\n')[0]);
+  psql(`UPDATE ref_table SET logical_id = id WHERE id = ${tid}`);
+  psql(`INSERT INTO ref_table_row (ref_table_id, row_no, cells) VALUES (${tid}, 1, '{"지역":"제주","무게":"~5kg","요금":"3000"}'), (${tid}, 2, '{"지역":"서울","무게":"~5kg","요금":"2500"}')`);
+  const card = Number(psql(`INSERT INTO ops_improvement_item (kind, source, namespace_id, target_type, target_id, user_input, original) `
+    + `VALUES ('source_check', 'golden_set', ${nsId()}, 'ref_table', ${tid}, 'E2E 참고표 오류', `
+    + `'{"type": "ref_error", "policies": [${lid}], "ref_tables": [${tid}], "hash": "e2e-rt"}'::jsonb) RETURNING id`).split('\n')[0]);
+
+  await login(page);
+  await openPolicyTab(page, '원문 확인');
+  const el = page.getByTestId(`source-check-${card}`);
+  await expect(el.getByTestId(`source-check-fix-${card}-${lid}`)).toBeVisible();   // 관련 정책 줄마다 정정 요청
+  await el.getByTestId(`source-check-table-${card}-${tid}`).click();
+  const view = page.getByTestId('ref-table-view');
+  await expect(view).toContainText('E2E 배송비 표');
+  await expect(view.locator('tbody tr')).toHaveCount(2);
+  await view.getByLabel('표 안 검색').fill('제주');
+  await expect(view.locator('tbody tr')).toHaveCount(1);
+  await expect(view).toContainText('1 / 2행');
+  await page.keyboard.press('Escape');
+
+  // 정정 요청 → 카드 머리에 대상 정책·원문 확인 번호
+  await el.getByTestId(`source-check-fix-${card}-${lid}`).click();
+  const form = page.locator('form').filter({ has: page.locator('#policy-edit-body') });
+  await form.locator('#policy-edit-body').fill('교환은 수령 후 14일 이내에 신청한다.');
+  const created = page.waitForResponse((r) => r.url().endsWith('/api/corrections') && r.request().method() === 'POST');
+  await form.getByRole('button', { name: '정정 요청에 올리기' }).click();
+  const cid = (await (await created).json()).id as number;
+  await page.getByTestId('app-dialog').getByRole('button', { name: '확인' }).click();
+  const H = { Authorization: `Bearer ${await adminToken()}` };
+  const list = await (await request.get(`${API}/api/corrections?status=pending&namespace=${NS}`, { headers: H })).json() as { id: number; source_check_id: number | null; policy_version: number | null }[];
+  const mine = list.find((x) => x.id === cid)!;
+  expect([mine.source_check_id, mine.policy_version != null]).toEqual([card, true]);
+  expect((await request.post(`${API}/api/corrections/${cid}/reject`, { headers: H, data: { reason: 'E2E 정리' } })).ok()).toBeTruthy();
 });

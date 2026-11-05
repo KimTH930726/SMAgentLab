@@ -76,6 +76,9 @@ export interface CorrectionItem {
   /** 정책 화면 직접 수정은 없음(null) */
   user_input: string | null;
   user_reason?: UserReason | null;
+  /** 원문 확인 카드에서 올린 정책 정정이면 그 카드 번호 · 정책 정정의 대상 버전(11/05 카드 머리) */
+  source_check_id?: number | null;
+  policy_version?: number | null;
   original: Record<string, unknown> | null;
   proposed: Record<string, string | null> | null;
   status: 'pending' | 'approved' | 'rejected';

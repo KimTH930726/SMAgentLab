@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { clsx } from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { listRefTables, getRefTable } from '../../../api/policy';
 import { useNamespaceAccess } from '../../../utils/useNamespaceAccess';
+import { RefTableView } from './RefTableView';
 
-/** 참고표(10/21) — 표 고르기 + 원표 그대로(머리 고정, 가로 스크롤). 결정 열(결과를 정하는 조건)은 머리에 표시. 읽기 전용. */
+/** 참고표(10/21) — 왼쪽 표 목록(검색) + 오른쪽 원표(RefTableView: 머리 고정·줄무늬·결정/결과 열 구분·표 안 검색, 11/05). 읽기 전용. */
 export function RefTableTab() {
   const { selectedNs } = useNamespaceAccess();
   const [tableId, setTableId] = useState<number | null>(null);
+  const [find, setFind] = useState('');
   const { data: tables = [], isLoading, error } = useQuery({
     queryKey: ['ref-tables', selectedNs],
     queryFn: () => listRefTables(selectedNs),
@@ -22,6 +25,10 @@ export function RefTableTab() {
     enabled: !!selectedNs && tableId !== null,
     staleTime: 60_000,
   });
+  const shown = useMemo(() => {
+    const f = find.trim().toLowerCase();
+    return f ? tables.filter((t) => `${t.title} ${t.category_path.join(' ')}`.toLowerCase().includes(f)) : tables;
+  }, [tables, find]);
 
   if (!selectedNs) return <p className="text-sm text-slate-400 py-6 text-center">왼쪽에서 정책 컬렉션을 고르세요.</p>;
   if (error) return <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{(error as Error).message}</p>;
@@ -29,54 +36,28 @@ export function RefTableTab() {
   if (tables.length === 0) return <p className="text-sm text-slate-500 py-10 text-center">이 정책 컬렉션엔 참고표가 없어요.</p>;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <label htmlFor="ref-table-pick" className="text-xs text-slate-500">표</label>
-        <select id="ref-table-pick" value={tableId ?? ''} onChange={(e) => setTableId(Number(e.target.value))}
-          className="bg-slate-800 border border-slate-600 rounded-lg px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 max-w-full">
-          {tables.map((t) => (
-            <option key={t.id} value={t.id}>{t.title} ({t.n_rows}행)</option>
+    <div className="grid gap-3 md:grid-cols-[16rem_minmax(0,1fr)]">
+      <aside className="min-w-0 space-y-2">
+        <input type="search" value={find} onChange={(e) => setFind(e.target.value)} placeholder={`표 이름 검색 (${tables.length}개)`} aria-label="표 이름 검색"
+          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
+        <ul className="max-h-[30vh] md:max-h-[65vh] overflow-y-auto space-y-1" aria-label="참고표">
+          {shown.map((t) => (
+            <li key={t.id}>
+              <button type="button" aria-current={t.id === tableId ? 'true' : undefined} onClick={() => setTableId(t.id)} data-testid={`ref-table-pick-${t.id}`}
+                className={clsx('w-full rounded-lg border px-2.5 py-1.5 text-left', t.id === tableId
+                  ? 'border-indigo-500 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-500/15' : 'border-slate-700 hover:bg-slate-800')}>
+                <span className="block text-sm text-slate-100 break-words">{t.title}</span>
+                <span className="block text-[11px] text-slate-500 break-words">{t.category_path.join(' › ') || '분류 없음'} · {t.n_rows}행</span>
+              </button>
+            </li>
           ))}
-        </select>
+          {shown.length === 0 && <li className="px-2 py-3 text-xs text-slate-500">"{find}"이(가) 든 표가 없어요.</li>}
+        </ul>
+      </aside>
+      <div className="min-w-0">
+        {tableError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{(tableError as Error).message}</p>}
+        {loadingTable || !table ? <p className="text-xs text-slate-500">표를 불러오는 중…</p> : <RefTableView key={table.id} table={table} />}
       </div>
-      {tableError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-400">{(tableError as Error).message}</p>}
-      {loadingTable || !table ? (
-        <p className="text-xs text-slate-500">표를 불러오는 중…</p>
-      ) : (
-        <>
-          {table.category_path.length > 0 && <p className="text-xs text-slate-500">{table.category_path.join(' › ')}</p>}
-          <div className="max-h-[65vh] overflow-auto rounded-lg border border-slate-700">
-            <table className="text-xs border-collapse min-w-full">
-              <thead>
-                <tr>
-                  <th className="sticky top-0 z-10 bg-slate-800 px-2 py-1.5 text-right font-normal text-slate-500 border-b border-slate-700">#</th>
-                  {table.columns.map((c) => (
-                    <th key={c.name} title={c.decisive ? '결정 열 — 결과를 정하는 조건' : c.role === 'result' ? '결과' : c.role === 'condition' ? '조건' : undefined}
-                      className="sticky top-0 z-10 bg-slate-800 px-2 py-1.5 text-left font-medium text-slate-300 whitespace-nowrap border-b border-slate-700">
-                      {c.name}
-                      {c.decisive && <span className="ml-1 text-indigo-600 dark:text-indigo-400">●</span>}
-                      {c.role === 'result' && <span className="ml-1 text-emerald-600 dark:text-emerald-400">→</span>}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {table.rows.map((r, i) => (
-                  <tr key={i} className="border-t border-slate-700/60 hover:bg-slate-800/40">
-                    <td className="px-2 py-1 text-right text-slate-500">{i + 1}</td>
-                    {table.columns.map((c) => (
-                      <td key={c.name} className="px-2 py-1 text-slate-300 align-top whitespace-pre-wrap min-w-[6rem]">{String(r[c.name] ?? '')}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-[11px] text-slate-500">
-            {table.rows.length}행 · <span className="text-indigo-600 dark:text-indigo-400">●</span> 결정 열 · <span className="text-emerald-600 dark:text-emerald-400">→</span> 결과
-          </p>
-        </>
-      )}
     </div>
   );
 }
