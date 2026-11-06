@@ -10,7 +10,7 @@ Track2 재검증에서 발견 — RDB 자기 전문 분야인 param 질의에서
 - RDB(param) 채널 단독: hit@10 34.8%→73.9%
 - 하이브리드(RDB+벡터) 전체: hit@10 75.3%→79.8%(+4.5pp), navigation +12.5pp
 
-**이 파일의 `_SUFFIXES`는 `init/06-policy-strip-ko.sql`의 SQL 함수 `policy_strip_ko_word()`와
+**이 파일의 `_SUFFIXES`는 `main.py` `_migrate_ensure_ko_text_search_helpers`의 SQL 함수 `policy_strip_ko_word()`와
 동작이 같아야 한다** — 하나는 오프라인 실험/재사용 스크립트용(이 파일), 다른 하나는
 `service/policy/search.py`가 실제 쿼리에서 쓰는 프로덕션 경로(SQL 함수, DB 안에서
 policy_param/policy_item 원문 컬럼에 바로 적용돼 저장 컬럼 추가 없이 실시간 변환)다.

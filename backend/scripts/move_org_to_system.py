@@ -23,7 +23,7 @@ sys.path.insert(0, "/app")
 from restructure_domains import counts, merge, ns_tables  # noqa: E402
 
 # 조직 컬렉션이 못 담던 것(정책·VOC·참조데이터) — 들어 있으면 멈춘다(시스템 컬렉션으로 옮기면 안 되는 내용)
-NOT_FOR_ORG = ("policy_item", "policy_doc_overview", "policy_review_log",
+NOT_FOR_ORG = ("policy_item", "policy_doc_overview",
                "ops_voc_routing", "ops_email_analysis", "ops_voc_cluster",
                "ref_table", "ref_db_column", "ref_common_code")
 JOB_DONE = ["completed", "failed", "cancelled"]

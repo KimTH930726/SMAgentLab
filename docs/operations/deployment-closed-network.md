@@ -389,10 +389,10 @@ bash scripts/export-images.sh <TAG>      # §1-3 Step 3의 모델 포함 확인�
 cd /opt/smagentlab
 # 1) 새 tar.gz 반입 + sha256 확인(§2-2), .env의 IMAGE_TAG=<TAG> 로 갱신
 # 2) init/ 디렉토리도 새 것으로 교체(빈 DB 재설치 대비 — 기존 DB엔 자동 적용 안 됨)
-bash scripts/update-images.sh smagentlab-images-<TAG>.tar.gz   # 백업 제안에 반드시 y
+bash scripts/update-images.sh smagentlab-images-<TAG>.tar.gz   # DB 백업 필수 — 실패하면 멈춘다
 ```
 
-**처리 내용:** (선택) DB 백업 → 이미지 로드 → `backend`·`frontend`만 재생성(postgres·redis 볼륨 유지) → (선택) 옛 이미지 정리.
+**처리 내용:** DB 백업(필수, v2.218부터 — 백업이 실패하거나 덤프 끝 표시가 없으면 업데이트를 멈춘다. 방금 따로 받았으면 `SKIP_BACKUP=1`) → 이미지 로드 → `backend`·`frontend`만 재생성(postgres·redis 볼륨 유지) → (선택) 옛 이미지 정리.
 
 **옛 이미지 정리**(2026-10-19 — 10-12 수동 정리 때 약 22GB가 옛 버전 이미지였다): 스크립트 마지막에 지울 후보를 보여 주고 y/N으로 묻는다.
 현재 `IMAGE_TAG`와 **직전 태그는 남긴다**(§3-3 롤백이 직전 태그로 되돌리므로). 기동 확인(`/health`) 뒤에만 y.
@@ -440,11 +440,7 @@ docker exec -it ops-backend python scripts/migrate_embedding_model.py
 > 같은 증상이면 `-e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0`을 붙여 재실행 — 폐쇄망에서 이 옵션은 외부 접속 시도로
 > 지연될 수 있으니 기본 실행이 먼저다.
 
-**(2) 업무구분 기본값 백필 (v2.28)** — 업무구분이 필수가 되면서 비어 있는 지식을 '공통지식'으로 채운다. 여러 번 실행해도 안전.
-
-```bash
-docker exec -i ops-postgres psql -U ops -d opsdb < init/04-category-required-backfill.sql
-```
+**(2) ~~업무구분 기본값 백필 (v2.28)~~** — 하지 않는다. 업무구분은 #84(v2.161)에서 폐지(칸·표 삭제)됐고 `init/04`도 v2.218에서 지웠다.
 
 `.env`에 새로 넣어야 하는 필수 변수는 없다(v2.17 이후 추가된 설정은 모두 기본값 있음 — 리랭커는 `RERANKER_ENABLED=true`로 켤 수 있음).
 v2.16 → v2.17 절차(LLM 자격증명 컬럼 교체·환경변수 변경)는 이 문서의 git 이력(커밋 `cbcaacf`) 참고.
@@ -502,6 +498,35 @@ docker exec ops-postgres pg_dump -U ops -d opsdb -t policy_track2_run -t eval_an
 기동 기록: 기동마다 `schema_migration_run`에 한 줄(단계별 ms·실패한 단계·오류). 반입 뒤 확인:
 `docker exec ops-postgres psql -U ops -d opsdb -c "SELECT id, ok, failed_step, duration_ms FROM schema_migration_run ORDER BY id DESC LIMIT 3"`.
 첫 기동은 `rag_knowledge.content_tsv`(키워드 검색 저장 칸, #109) 계산으로 지식 수에 비례해 수 초 더 걸린다.
+
+### 3-9. v2.119 → v2.218 이상으로 올릴 때 — 되돌릴 수 없는 변경 · 순서 (반드시 백업 먼저)
+
+v2.119(10/02 반입)에서 한 번에 올리면 첫 기동 때 아래 삭제가 자동으로 돈다. 되돌리기는 **업데이트 직전 백업 복원(§4-2)뿐** — 이미지만
+옛 판으로 바꾸면 옛 판이 지워진 표·칸을 찾다 실패한다. 전체 목록은 `docs/table-definition.md` 마이그레이션 이력.
+
+| # | 지우는 것 | 이유 |
+|---|---|---|
+| 62 | `ops_feedback`·`rag_knowledge_review_flag` | 옛 피드백(§3-5) |
+| 78 | `rag_knowledge`·`rag_glossary.created_by_part`, `ops_voc_routing.part` | 데이터에 파트 이름 글자를 두지 않음(조직 ↔ 업무 영역 분리) |
+| 84 | `rag_knowledge_category` 표·`rag_knowledge.category` 칸·업무구분 제안 프롬프트 | 업무구분 폐지 |
+| 93 | `policy_track2_run`·`eval_answer_run` | 옛 v1 평가 기록(§3-7) |
+| 106 | 조직 컬렉션(`org_space`)과 거기 걸린 줄 | 조직 컬렉션 폐지(팀·파트는 로그인·권한·담당만) |
+| 124 | 옛 백업 표 8개(`*_backup*`), `policy_review_log`, `policy_item.review_source·review_rule·review_sample·source_missing_at`, `rag_ingestion_job.analyzer_result`, 인덱스 3개 | 쓰는 코드 없음(반입 전 전수 검사) |
+
+**순서:**
+1. `bash scripts/update-images.sh …` — 백업(필수) → 이미지 로드 → 기동(마이그레이션 자동). `schema_migration_run` 마지막 줄 `ok = t` 확인(§3-8).
+2. `docker exec -it ops-backend python scripts/restructure_domains.py` — **미리보기**(바꾸지 않음). 영역 합치기·팀/파트 구성·옛 파트
+   (슈퍼어드민 등) 정리 계획과 표별 행 수 점검이 나온다. 그 전까지는 옛 '슈퍼어드민' 파트가 남아 있다.
+3. 미리보기가 맞으면 `… restructure_domains.py --apply` — 트랜잭션 하나, 점검(합칠 두 영역 행 수 합 = 합친 뒤 행 수)이 틀리면 전부 되돌린다.
+4. 백엔드 재기동(`docker compose -f docker-compose.yml -f docker-compose.prod.yml restart backend`) → 관리자 › 캐시 전체 비우기(§3-2 v2.167 주의).
+
+**AWS(ALB) 뒤에 둘 때 `.env`:** `REAL_IP_FROM=<ALB 서브넷 1 CIDR>`·`REAL_IP_FROM_2=<ALB 서브넷 2 CIDR>` — ALB는 가용 영역마다 서브넷이 있어(최소 2개)
+둘 다 넣는다(한 칸에 CIDR 하나 — 둘을 한 칸에 쓰면 frontend가 기동하지 않는다. 서브넷이 3개 이상이면 그 서브넷들만 덮는 상위 대역 하나로).
+이 대역에서 온 연결만 `X-Forwarded-For`로 실제 사용자 IP를 읽는다.
+안 넣으면 모든 요청이 ALB 주소로 보여 **한 사람이 로그인을 5번 틀리면 전원이 5분 잠긴다**. 사설 대역 전체(10.0.0.0/8 등)는 넣지 않는다 —
+사용자 PC도 사설 IP라 헤더로 IP를 꾸며 잠금을 피할 수 있다. ALB 유휴 시간은 기본 60초여도 된다(채팅 스트리밍이 15초마다 연결 유지 신호를 보냄).
+운영 스위치(`LOCATOR_LLM`·`INGEST_LLM`·`POLICY_REF_CHAT`·`POLICY_REF_OVERVIEW`·`CONFLUENCE_SYNC`·`RERANKER_ENABLED`)는 v2.218부터 `.env` 값이
+컨테이너로 들어간다(전엔 compose에 없어 조용히 코드 기본값).
 
 ## 4. 운영 작업
 
@@ -568,7 +593,9 @@ docker compose $COMPOSE down -v       # 컨테이너 + 볼륨 삭제 (데이터 
 
 ### 5-2. init/ SQL은 빈 DB 최초 1회만 — 스키마 변경은 백엔드 기동 시 자동
 
-PostgreSQL은 `pgdata` 볼륨이 **비어있을 때만** `init/*.sql`을 실행한다. 이후 스키마 변경은 백엔드가 기동하면서
+PostgreSQL은 `pgdata` 볼륨이 **비어있을 때만** `init/*.sql`을 실행한다. v2.218부터 `init/`에는 `01-init.sql`(확장 기능 vector·pg_trgm + 기본 표)
+하나만 있다 — 옛 02~07은 빈 DB에서 02부터 실패해 지웠고 하던 일은 모두 앱 마이그레이션에 있다(11/06 새 설치 리허설: 01 → 기동 두 번 → 개발 DB와 표·칸 같음).
+RDS처럼 init이 돌지 않는 DB면 `CREATE EXTENSION vector; CREATE EXTENSION pg_trgm;` 후 `01-init.sql`을 한 번 손으로 돌린다. 이후 스키마 변경은 백엔드가 기동하면서
 `main.py`의 멱등 마이그레이션으로 자동 적용되므로 업그레이드 때 SQL을 손으로 돌릴 필요가 없다 — **예외는 데이터
 재가공이 필요한 일회성 작업**뿐이고, 해당 버전 업그레이드 절차(§3-4)에 명시한다. 마이그레이션 이력은
 `docs/table-definition.md`.

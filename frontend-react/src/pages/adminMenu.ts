@@ -137,5 +137,3 @@ export function findAdminItem(id: AdminMenuId): { group: AdminMenuGroup; item: A
   return null;
 }
 
-/** 이 메뉴가 든 범위(메뉴 정의 기준) */
-export const scopeOf = (id: AdminMenuId): AdminScope => findAdminItem(id)?.group.scope ?? 'collection';

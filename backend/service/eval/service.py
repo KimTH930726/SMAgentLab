@@ -523,13 +523,3 @@ async def mark_hypothesis(improvement_id: int, *, cause: str, name: str, status:
                             h["status"] = status
                     await conn.execute("UPDATE eval_candidate SET hypotheses = $2::jsonb WHERE id = $1", c["id"], json.dumps(ch, ensure_ascii=False))
     return {"cause": cause, "name": name, "status": status}
-
-
-async def latest_ingest_check() -> Optional[dict]:
-    async with get_conn() as conn:
-        r = await conn.fetchrow("SELECT id, created_at, gate_run_id, results, n_bad FROM ingest_check_run ORDER BY created_at DESC, id DESC LIMIT 1")
-    if not r:
-        return None
-    d = dict(r)
-    d["results"] = _j(d["results"]) or []
-    return d

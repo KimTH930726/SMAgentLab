@@ -139,11 +139,6 @@ async def delete_my_confluence_pat(user: dict = Depends(get_current_user)):
     await service.delete_confluence_pat(user["id"])
 
 
-@router.get("/me/confluence-pat/status")
-async def get_confluence_pat_status(user: dict = Depends(get_current_user)):
-    return {"has_confluence_pat": bool(user.get("encrypted_confluence_pat"))}
-
-
 # ── Admin 전용 ───────────────────────────────────────────────────────────────
 
 @router.get("/users", response_model=list[UserOut])

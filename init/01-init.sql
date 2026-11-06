@@ -34,11 +34,10 @@ CREATE TABLE IF NOT EXISTS ops_user (
     role                    VARCHAR(20)  NOT NULL DEFAULT 'user',
     part_id                 INT          REFERENCES ops_part(id) ON DELETE SET NULL,
     is_active               BOOLEAN      NOT NULL DEFAULT TRUE,
-    encrypted_llm_api_key   TEXT,
+    encrypted_llm_credentials TEXT,
     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_user_username ON ops_user (username);
 
 -- ============================================================
 -- 용어집 테이블 (ops_glossary)
@@ -82,8 +81,6 @@ CREATE TABLE IF NOT EXISTS ops_knowledge (
 CREATE INDEX IF NOT EXISTS idx_knowledge_ns ON ops_knowledge (namespace_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_emb ON ops_knowledge
     USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX IF NOT EXISTS idx_knowledge_fts ON ops_knowledge
-    USING GIN (to_tsvector('simple', content));
 
 -- ============================================================
 -- 업무구분 테이블 (ops_knowledge_category)
@@ -161,7 +158,6 @@ CREATE TABLE IF NOT EXISTS ops_message (
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_message_conv ON ops_message (conversation_id);
 
 -- ============================================================
 -- 피드백 테이블 (ops_feedback)

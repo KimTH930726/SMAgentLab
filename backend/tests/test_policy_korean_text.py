@@ -1,6 +1,6 @@
 """Tests for service/policy/korean_text.py — 규칙 기반 한국어 조사/어미 제거.
 
-SQL 쪽 구현(init/06-policy-strip-ko.sql의 policy_strip_ko())과의 동작 일치는 2026-09-10
+SQL 쪽 구현(main.py `_migrate_ensure_ko_text_search_helpers`의 policy_strip_ko())과의 동작 일치는 2026-09-10
 수동 검증(docker exec ops-postgres psql로 동일 단어 세트 비교)으로 확인됨 — 이 프로젝트의
 DB 접근 테스트는 실 DB에 붙지 않고 목으로 처리하는 기존 컨벤션(test_policy_search.py 등)을
 따라, 여기서는 순수 함수 단위 테스트만 둔다.

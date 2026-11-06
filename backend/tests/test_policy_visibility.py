@@ -159,17 +159,11 @@ def _migration_fn():
     return ns["_migrate_policy_v0_revisions"]
 
 
-OLD_DEF = ("CHECK (((action)::text = ANY ((ARRAY['approved'::character varying, 'resubmitted'::character varying, "
-           "'rule_resumed'::character varying])::text[])))")
-
-
-def _mig_conn(*, constraint_def, existing_indexes=(), dups=None):
+def _mig_conn(*, existing_indexes=(), dups=None):
     c = _conn()
     dups = dups or {}
 
     async def fetch(sql, *args):
-        if "pg_constraint" in sql:
-            return [{"conname": "policy_review_log_action_check", "def": constraint_def}]
         key = "pending" if "pending_review" in sql else "active"
         return dups.get(key, [])
     c.fetch = AsyncMock(side_effect=fetch)
@@ -177,29 +171,26 @@ def _mig_conn(*, constraint_def, existing_indexes=(), dups=None):
     return c
 
 
-def test_migration_first_run_adds_submitted_and_indexes():
-    c = _mig_conn(constraint_def=OLD_DEF)
+def test_migration_first_run_adds_indexes():
+    c = _mig_conn()
     asyncio.run(_migration_fn()(c))
     sqls = [a.args[0] for a in c.execute.await_args_list]
-    assert any('DROP CONSTRAINT IF EXISTS "policy_review_log_action_check"' in s for s in sqls)
-    add = next(s for s in sqls if "ADD CONSTRAINT" in s)
-    assert "'submitted'" in add and "'resubmitted'" in add and "'rule_resumed'" in add   # 기존 값 유지 + 새 값
+    assert not any("policy_review_log" in s for s in sqls)   # 표는 #124에서 지움(11/06) — 다시 건드리면 새 설치·재기동이 깨진다
     one_pending = next(s for s in sqls if "uq_policy_one_pending_v0" in s)
     assert "UNIQUE INDEX IF NOT EXISTS" in one_pending and "pipeline_version = 'v0_whole'" in one_pending
     assert any("uq_policy_one_active" in s and "status = 'active'" in s for s in sqls)
 
 
 def test_migration_second_run_is_noop():
-    """이미 반영된 DB(제약에 'submitted', 인덱스 있음)엔 아무것도 바꾸지 않는다 — 'resubmitted'에 속지 않음."""
-    c = _mig_conn(constraint_def=OLD_DEF.replace("'rule_resumed'", "'submitted'::character varying, 'rule_resumed'"),
-                  existing_indexes=("uq_policy_one_pending_v0", "uq_policy_one_active"))
+    """이미 반영된 DB(인덱스 있음)엔 아무것도 바꾸지 않는다."""
+    c = _mig_conn(existing_indexes=("uq_policy_one_pending_v0", "uq_policy_one_active"))
     asyncio.run(_migration_fn()(c))
     c.execute.assert_not_awaited()
 
 
 def test_migration_skips_unique_index_when_duplicates(caplog):
     """이미 같은 정책에 active가 둘이면 인덱스를 건너뛰고 경고만(기동은 계속)."""
-    c = _mig_conn(constraint_def=OLD_DEF, dups={"active": [{"logical_id": 7, "n": 2}]})
+    c = _mig_conn(dups={"active": [{"logical_id": 7, "n": 2}]})
     with caplog.at_level(logging.WARNING):
         asyncio.run(_migration_fn()(c))
     sqls = [a.args[0] for a in c.execute.await_args_list]

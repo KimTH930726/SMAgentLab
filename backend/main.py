@@ -35,7 +35,6 @@ from service.email_voc.router import router as email_voc_router
 from service.email_voc.scheduler import start_scheduler, stop_scheduler
 from agents.knowledge_rag.knowledge import glossary_mining
 from service.policy.router import router as policy_router
-from service.refdata.router import router as refdata_router
 from service.improvement.router import router as improvement_router
 from service.eval.router import router as eval_router
 
@@ -59,7 +58,6 @@ _ROUTERS = [
     prompt_router,
     email_voc_router,
     policy_router,
-    refdata_router,
     improvement_router,
     eval_router,
 ]
@@ -106,7 +104,7 @@ async def _migrate_core_tables(conn) -> None:
             role                    VARCHAR(20) NOT NULL DEFAULT 'user',
             part                    VARCHAR(100),
             is_active               BOOLEAN NOT NULL DEFAULT TRUE,
-            encrypted_llm_api_key   TEXT,
+            encrypted_llm_credentials TEXT,
             created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
@@ -114,6 +112,9 @@ async def _migrate_core_tables(conn) -> None:
     # ── part_id 컬럼 추가 (integer FK) ──────────────────────────
     await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS part_id INT")
     await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS encrypted_confluence_pat TEXT")
+    # 옛 init/03(수동 적용)에만 있던 전환 — 빈 DB 새 설치에서 칸이 없어 로그인이 깨졌다(11/06 새 설치 리허설)
+    await conn.execute("ALTER TABLE ops_user ADD COLUMN IF NOT EXISTS encrypted_llm_credentials TEXT")
+    await conn.execute("ALTER TABLE ops_user DROP COLUMN IF EXISTS encrypted_llm_api_key")
     await conn.execute("""
         DO $$ BEGIN
             IF NOT EXISTS (
@@ -427,7 +428,6 @@ async def _migrate_knowledge_ingestion(conn) -> None:
             auto_glossary   INT DEFAULT 0,
             chunk_strategy  VARCHAR(50),
             embedding_model VARCHAR(200),
-            analyzer_result JSONB,
             error_message   TEXT,
             created_by_user_id INT,
             created_at      TIMESTAMPTZ DEFAULT NOW(),
@@ -1046,56 +1046,6 @@ async def _migrate_knowledge_heading_path(conn) -> None:
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS heading_path TEXT[]")
 
 
-async def _migrate_policy_risk_review(conn) -> None:
-    """정책 승인 대기 큐 위험도 분류 + 자동 통과 (2026-10-01, #59).
-
-    `review_source`로 사람 승인(human)과 규칙 자동 통과(auto_rule)를 구분한다 — `reviewed_by`는 사용자 FK라
-    자동 표시를 담을 수 없어 자동 통과는 NULL로 두고 이 컬럼으로 가린다. `review_sample`은 자동 통과 대상 중
-    사람 확인용으로 남긴 표본(반려가 나오면 그 규칙을 멈추는 근거).
-
-    `policy_review_log`는 append-only 결정 이력 — 승인·반려·자동 통과·되돌리기·규칙 정지를 결정 시점의
-    위험도·근거와 함께 남겨, 나중에 자동 승인 기준을 데이터로 조정한다. 기존엔 reviewed_by/at을 덮어쓰기만
-    해서(재제출 시 NULL로 지움) 이력이 남지 않았다. ops_improvement_item을 재사용하지 않은 이유: status CHECK에
-    자동 값이 없고, `_check_version`이 policy 대상 approved 행을 "정정 유지"로 읽어 재임포트를 막는다.
-    """
-    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS review_source VARCHAR(20)")
-    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS review_rule VARCHAR(40)")
-    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS review_sample BOOLEAN NOT NULL DEFAULT FALSE")
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS policy_review_log (
-            id              SERIAL PRIMARY KEY,
-            policy_item_id  INT REFERENCES policy_item(id) ON DELETE SET NULL,
-            logical_id      INT,
-            namespace_id    INT REFERENCES ops_namespace(id) ON DELETE CASCADE,
-            action          VARCHAR(20) NOT NULL CHECK (action IN (
-                                'approved', 'rejected', 'auto_approved', 'sampled', 'auto_reverted',
-                                'resubmitted', 'rule_paused', 'rule_resumed')),
-            actor_user_id   INT REFERENCES ops_user(id) ON DELETE SET NULL,
-            rule_key        VARCHAR(40),
-            risk_level      VARCHAR(10),
-            risk_reasons    JSONB,
-            run_id          VARCHAR(36),
-            note            TEXT,
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-    """)
-    await conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_policy_review_log_logical ON policy_review_log(logical_id, action)")
-    await conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_policy_review_log_run ON policy_review_log(run_id) WHERE run_id IS NOT NULL")
-    await conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_policy_review_log_ns ON policy_review_log(namespace_id, created_at DESC)")
-    # 이력 테이블 이전에 반려된 항목도 "이전에 반려된 항목"(위험 높음)으로 잡히도록 1회 채움 — 멱등(이미 있으면 건너뜀)
-    await conn.execute("""
-        INSERT INTO policy_review_log (policy_item_id, logical_id, namespace_id, action, actor_user_id, note, created_at)
-        SELECT p.id, p.logical_id, p.namespace_id, 'rejected', p.reviewed_by, '이력 도입 전 반려(백필)',
-               COALESCE(p.reviewed_at, p.updated_at)
-        FROM policy_item p
-        WHERE p.status = 'rejected'
-          AND NOT EXISTS (SELECT 1 FROM policy_review_log l WHERE l.policy_item_id = p.id AND l.action = 'rejected')
-    """)
-
-
 async def _migrate_review_flags_to_ledger(conn) -> None:
     """옛 리뷰 신호(rag_knowledge_review_flag) → 개선 원장(ops_improvement_item) 이관 (2026-10-02, #60).
 
@@ -1272,16 +1222,6 @@ async def _migrate_drop_orphans_2026_10_06(conn) -> None:
     for label, r in (("끝난 중복 매칭", dup), ("빈 VOC 클러스터", clusters)):
         if r and not r.endswith(" 0"):
             logger.info("[migrate #65] %s 삭제: %s", label, r)
-
-
-async def _migrate_policy_source_missing(conn) -> None:
-    """정책 버전 관리 1단계 (2026-10-06, #66) — 재임포트한 엑셀에서 사라진 정책 표시.
-
-    재임포트 때 같은 정책을 엑셀 위치가 아니라 식별키(분류 경로+정책명 → 본문)로 찾게 바꾸면서(`service/policy/service.py`
-    `_PolicyMatcher`), 새 파일의 같은 시트에 더는 없는 현행 항목을 자동 폐기하지 않고 이 시각을 남겨 검토 큐(위험 높음)로
-    올린다(사용자 결정). 승인 = 유지(표시 해제), 반려 = 폐기. 멱등.
-    """
-    await conn.execute("ALTER TABLE policy_item ADD COLUMN IF NOT EXISTS source_missing_at TIMESTAMPTZ")
 
 
 async def _migrate_rename_opslens(conn) -> None:
@@ -1802,25 +1742,10 @@ async def _migrate_eval_improvement(conn) -> None:
 
 async def _migrate_policy_v0_revisions(conn) -> None:
     """정책 v0 새 버전 흐름 (2026-10-21, #80, v0 재구축 1단계). 멱등.
-    - policy_review_log.action에 'submitted' 허용 — 1단계 설계(직접 수정 → 정책 테이블에 검토 대기 새 버전)용이었으나 2단계에서
-      수정은 전부 정정 원장(ops_improvement_item)의 제안으로 바뀌어 지금은 쓰는 코드가 없다. 옛 이력 해석·안전을 위해 남겨 둠(10/21 리뷰 L4).
     - 같은 정책(logical_id)에 v0 검토 대기 새 버전은 하나만(uq_policy_one_pending_v0) — 위와 같은 이유로 지금은 pending_review 행을
       만드는 길이 없어 쓰이지 않지만, 누가 다시 만들면 한쪽 수정이 조용히 사라지는 것을 막는 안전장치로 남김.
     - 같은 정책에 active는 하나만 — 정정 승인(improvement/service._apply_policy)이 옛 버전을 내리는 것을 DB가 보장. 이미 겹친 데이터가 있으면
       기동을 막지 않고 경고만 남기고 건너뛴다(데이터 정리 후 다음 기동 때 만들어짐)."""
-    defs = await conn.fetch(
-        "SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint "
-        "WHERE conrelid = 'policy_review_log'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%action%'")
-    # 'resubmitted'에도 submitted가 들어 있어 따옴표까지 붙여 찾는다
-    if not any("'submitted'" in d["def"] for d in defs):
-        async with conn.transaction():
-            for d in defs:
-                await conn.execute(f'ALTER TABLE policy_review_log DROP CONSTRAINT IF EXISTS "{d["conname"]}"')
-            await conn.execute(
-                "ALTER TABLE policy_review_log ADD CONSTRAINT policy_review_log_action_check CHECK (action IN ("
-                "'approved', 'rejected', 'auto_approved', 'sampled', 'auto_reverted', "
-                "'resubmitted', 'rule_paused', 'rule_resumed', 'submitted'))")
-        logger.info("[migrate #80] policy_review_log.action에 submitted 허용")
     for name, where, label in (
             ("uq_policy_one_pending_v0", "status = 'pending_review' AND pipeline_version = 'v0_whole'", "v0 검토 대기"),
             ("uq_policy_one_active", "status = 'active'", "active")):
@@ -2370,6 +2295,25 @@ async def _cleanup_orphaned_ingestion_jobs(conn) -> None:
         logger.info("[Startup] 중단된 수집 작업의 스테이징 행 폐기: %s", staged)
 
 
+async def _migrate_drop_unused_2026_11_06(conn) -> None:
+    """반입 전 전수 검사(11/06, #124) — 쓰는 코드가 없는 표·칸·인덱스 삭제. 멱등(IF EXISTS), 만들던 옛 단계(#59 위험도 자동 통과·#66 사라진 정책
+    표시·#80 submitted 허용)도 같이 걷어 내 재기동마다 다시 생기지 않는다.
+    - 옛 백업 표 8개(10/22~23 업무구분·컬렉션 합치기 때 사람이 만든 복사본, 앱 참조 0)
+    - policy_review_log · policy_item.review_source/review_rule/review_sample/source_missing_at — 옛 자동 통과·재임포트 기능의 흔적(v0 이후 안 씀)
+    - rag_ingestion_job.analyzer_result — 문서 분석기 제거 뒤 쓰는 곳 0
+    - 인덱스: idx_knowledge_fts(그 식으로 검색하는 코드 없음 — 검색은 content_tsv), idx_user_username(고유 키와 같음),
+      idx_message_conv(idx_message_conv_id의 앞부분)"""
+    for t in ("ns_merge_backup_20261022", "ns_merge_backup_ns_20261022", "ops_prompt_category_suggest_backup",
+              "ops_prompt_category_suggest_backup_20261023", "rag_knowledge_category_backup_20261022", "rag_knowledge_category_backup_20261023",
+              "rag_knowledge_category_value_backup", "rag_knowledge_category_value_backup_20261023", "policy_review_log"):
+        await conn.execute(f"DROP TABLE IF EXISTS {t}")
+    for c in ("review_source", "review_rule", "review_sample", "source_missing_at"):
+        await conn.execute(f"ALTER TABLE policy_item DROP COLUMN IF EXISTS {c}")
+    await conn.execute("ALTER TABLE rag_ingestion_job DROP COLUMN IF EXISTS analyzer_result")
+    for i in ("idx_knowledge_fts", "idx_user_username", "idx_message_conv"):
+        await conn.execute(f"DROP INDEX IF EXISTS {i}")
+
+
 # 기동 마이그레이션 — 이 목록 순서대로 돈다(번호가 아니라 목록 순서, 의존은 주석). 단계마다 멱등.
 _MIGRATIONS = (
     _migrate_core_tables,
@@ -2390,14 +2334,12 @@ _MIGRATIONS = (
     _migrate_knowledge_heading_path,
     _migrate_drop_dead_schema_2026_09_22,
     _migrate_improvement_ledger,
-    _migrate_policy_risk_review,
     _migrate_review_flags_to_ledger,
     _migrate_query_status_without_feedback,
     _migrate_drop_feedback_tables,
     _migrate_reset_knowledge_weight,
     _migrate_query_system_error,
     _migrate_drop_orphans_2026_10_06,
-    _migrate_policy_source_missing,
     _migrate_rename_opslens,
     _migrate_query_gateway_refusal,
     _migrate_glossary_synonym,
@@ -2426,6 +2368,7 @@ _MIGRATIONS = (
     _migrate_system_area,                    # #105 — 컬렉션 구분값(업무 / 시스템)
     _migrate_retire_org_collections,         # #106 — 조직 컬렉션 걷어 내기(#105가 초안을 보관 자리로 옮긴 뒤)
     _migrate_loose_namespace_orphans,        # #107 — 지운 컬렉션을 가리키는 FK 없는 id 칸 NULL(#106 뒤)
+    _migrate_drop_unused_2026_11_06,         # #124 — 반입 전 전수 검사, 표·칸을 만드는 단계들보다 뒤
     _cleanup_stale_generating_messages,
     _cleanup_orphaned_ingestion_jobs,
 )
@@ -2685,5 +2628,3 @@ async def health():
         from fastapi.responses import JSONResponse
         return JSONResponse(body, status_code=503)
     return body
-# TC test
-# main version

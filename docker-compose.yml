@@ -90,6 +90,13 @@ services:
       INHOUSE_LLM_TIMEOUT: ${INHOUSE_LLM_TIMEOUT:-180}
       # URL·컨플 가져오기 허용 호스트(쉼표, 11/03 보안 리뷰 #3) — 목록 밖 주소는 막는다
       URL_IMPORT_ALLOWED_HOSTS: ${URL_IMPORT_ALLOWED_HOSTS:-confl.sinc.co.kr}
+      # 운영 스위치(11/06 반입 전 검사 — 가이드가 .env로 바꾸라는데 여기 없어서 조용히 무시됐다). 기본값 = backend/core/config.py 기본값
+      LOCATOR_LLM: ${LOCATOR_LLM:-local}
+      INGEST_LLM: ${INGEST_LLM:-local}
+      POLICY_REF_CHAT: ${POLICY_REF_CHAT:-true}
+      POLICY_REF_OVERVIEW: ${POLICY_REF_OVERVIEW:-false}
+      CONFLUENCE_SYNC: ${CONFLUENCE_SYNC:-false}
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
       # 기동 기록(schema_migration_run.app_version)에 남길 버전
       IMAGE_TAG: ${IMAGE_TAG:-}
       # 나머지 설정은 backend/core/config.py 코드 기본값 사용
@@ -116,6 +123,10 @@ services:
     logging: *logging
     ports:
       - "${FRONTEND_PORT:-8501}:80"
+    environment:
+      # AWS ALB 서브넷(CIDR) — 여기서 온 연결만 X-Forwarded-For로 실제 사용자 IP를 읽는다(frontend-react/nginx.conf). 기본 = 꺼짐
+      REAL_IP_FROM: ${REAL_IP_FROM:-127.0.0.1/32}
+      REAL_IP_FROM_2: ${REAL_IP_FROM_2:-127.0.0.1/32}   # ALB 두 번째 가용 영역 서브넷(지시어 하나에 CIDR 하나)
     depends_on:
       - backend
 

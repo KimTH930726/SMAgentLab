@@ -55,3 +55,6 @@ smagentlab-images-*.tar.gz
 smagentlab-images-*.tar.gz.sha256
 # 측정 결과(질문·용어 등 사내 데이터 포함) — 로컬 전용
 backend/eval_out/
+
+# DB 백업 덤프(scripts/backup-db.sh) — 운영 데이터, 저장소에 올리지 않는다
+backups/

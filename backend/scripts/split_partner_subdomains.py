@@ -8,7 +8,7 @@
   2. 지식 이동: 업무구분 값이 그 제휴사와 **정확히 같은** 행 — 모든 상태(컨플 페이지 교체·중복 판정이 영역 단위라 옛 버전도 같이 간다).
      그 업무구분 행(rag_knowledge_category)도 같이.
   3. 정책 이동: 분류 경로 1단이 그 제휴사와 정확히 같은 정책의 **logical_id 전체**(옛 버전 deprecated 포함 — 버전 이력·원문 확인이
-     영역 + logical_id로 찾으므로 버전이 두 영역으로 갈라지면 안 된다, 리뷰 M2) + 그 정책의 검토 기록(policy_review_log)·정정 원장 항목.
+     영역 + logical_id로 찾으므로 버전이 두 영역으로 갈라지면 안 된다, 리뷰 M2) + 그 정책의 정정 원장 항목.
 점검: 하위별 사용 중 행 수 = 기대값(지식 전체 배민 44·쿠팡 41, 사용 중 정책 16·16 — 10/22 실측), 다르면 아무것도 안 바꾸고 멈춘다.
 
 실행(컨테이너): python scripts/split_partner_subdomains.py            # 미리보기
@@ -121,8 +121,6 @@ async def main() -> None:
                        AND category_path[1] = $2 AND logical_id IS NOT NULL""", pid, value)]
                 p = int((await conn.execute("UPDATE policy_item SET namespace_id = $1 WHERE namespace_id = $2 AND logical_id = ANY($3::int[])",
                                             sid, pid, lids)).split()[-1])
-                await conn.execute("UPDATE policy_review_log SET namespace_id = $1 WHERE namespace_id = $2 AND logical_id = ANY($3::int[])",
-                                   sid, pid, lids)
                 await conn.execute("""UPDATE ops_improvement_item SET namespace_id = $1 WHERE namespace_id = $2 AND (
                                           (target_type = 'policy' AND target_id = ANY($3::int[]))
                                        OR (target_type = ANY($4::text[]) AND target_id IN (SELECT id FROM policy_item WHERE logical_id = ANY($3::int[]))))""",

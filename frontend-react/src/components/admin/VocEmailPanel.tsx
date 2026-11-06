@@ -15,7 +15,6 @@ import {
   type DelegatedAuthStartResult, type MailFolder,
   type EmailAnalysisHistoryItem, type PollCycleItem,
 } from '../../api/emailVoc';
-import { getNamespaces } from '../../api/namespaces';
 import { VocStatsPanel } from './VocStatsPanel';
 import { getParts } from '../../api/auth';
 import { Button } from '../ui/Button';
@@ -167,7 +166,6 @@ export function VocEmailPanel() {
   const [error, setError] = useState('');
   const [subTab, setSubTab] = useState<VocSubTab>('collect');
 
-  const { data: namespaces = [] } = useQuery<string[]>({ queryKey: ['namespaces'], queryFn: getNamespaces });
   const selectedNs = namespace;   // 공용 값 그대로 — 경로 표시줄과 어긋나지 않게
   // 정책 컬렉션이 바뀌면 열린 메일함 담당 폼을 닫는다 — 앞 영역 id로 저장되지 않게(리뷰 L4)
   // eslint-disable-next-line react-hooks/exhaustive-deps

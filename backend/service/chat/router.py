@@ -1,5 +1,6 @@
-"""대화 엔드포인트 — SSE 스트리밍 + 단일 응답 + 디버그 + 대화방 CRUD."""
+"""대화 엔드포인트 — SSE 스트리밍 + 단일 응답 + 대화방 CRUD."""
 import asyncio
+import contextlib
 import json
 import logging
 from dataclasses import dataclass
@@ -14,7 +15,6 @@ from core.dependencies import get_current_user, log_cross_part_namespace_read
 from core.security import get_user_llm_credentials
 from service.chat.schemas import (
     ChatRequest, ChatResponse, KnowledgeResult,
-    DebugSearchResponse, GlossaryMatchInfo, DebugResult,
     ConversationCreate, ConversationResponse, MessageResponse,
 )
 from service.chat.helpers import (
@@ -26,7 +26,6 @@ from service.llm.factory import get_llm_provider
 from agents.knowledge_rag.knowledge import retrieval, glossary_terms
 from service.chat import memory
 from agents.knowledge_rag.knowledge.retrieval import GlossaryMatch, RetrievalResult
-from shared.embedding import embedding_service
 from agents.base import AgentRegistry
 
 logger = logging.getLogger(__name__)
@@ -37,7 +36,52 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-# ── 공통 파이프라인 (비스트리밍 chat / debug 전용) ────────────────────────────
+# 연결 유지 신호(11/06 반입 전 검사) — AWS ALB는 기본 60초 동안 바이트가 안 오면 끊는다. 검색·LLM 첫 글자까지 그보다 길 수 있어
+# 그 사이 SSE 주석 줄을 보낸다(화면 파서는 'data:' 줄만 읽어 무시). 15초 = ALB·nginx 기본 유휴 시간보다 충분히 짧게.
+_KEEPALIVE_SEC = 15
+_SSE_PING = ": ping\n\n"
+_STREAM_END = object()
+
+
+async def _with_keepalive(events, interval: float = _KEEPALIVE_SEC):
+    """`events`(비동기 이터레이터)를 그대로 넘기되, `interval`초 동안 다음 이벤트가 없으면 None(= 핑)을 낸다.
+    이벤트는 태스크 하나가 끝까지 읽어 큐로 넘긴다(제너레이터를 여러 태스크가 번갈아 돌리지 않게). 소비자가 그만두면(연결 끊김) 그 태스크를 취소한다."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def pump():
+        try:
+            async for ev in events:
+                await queue.put(ev)
+        except BaseException as e:   # noqa: BLE001 — 오류도 소비자 쪽에서 원래대로 다시 올린다
+            await queue.put(e)
+            return
+        await queue.put(_STREAM_END)
+
+    task = asyncio.create_task(pump())
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=interval)
+            except asyncio.TimeoutError:
+                yield None
+                continue
+            if item is _STREAM_END:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        if not task.done():
+            task.cancel()
+        # 안쪽(에이전트)이 취소 정리를 끝낼 때까지 기다린다 — 안 기다리면 바깥 안전장치(generating → completed)가 먼저 돌고,
+        # 늦게 커밋된 에이전트 UPDATE가 상태를 generating으로 되돌린다(v2.219 독립 리뷰 M1). 순서 보장은 aclose·취소 1회 경로만:
+        # 실제 연결 끊김(Starlette/anyio 취소 범위)은 취소를 거듭 보내 정리 await와 안전장치가 둘 다 끊긴다 — 예전(같은 태스크)과 같고,
+        # 남은 generating은 다음 요청의 _cleanup_ghost_messages가 정리(재리뷰 L1, 백로그 0-6).
+        with contextlib.suppress(BaseException):
+            await task
+
+
+# ── 공통 파이프라인 (비스트리밍 chat 전용) ────────────────────────────
 
 @dataclass
 class PipelineResult:
@@ -258,8 +302,10 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             "mapped_term": None, "results": [],
         })
         try:
-            async for event in agent.stream_chat(req.question, dict(user), conv_id, agent_context):
-                yield _sse(event)
+            # aclosing — 화면이 끊으면 안쪽 스트림 태스크까지 바로 멈춘다(GC를 기다리며 LLM이 계속 돌지 않게)
+            async with contextlib.aclosing(_with_keepalive(agent.stream_chat(req.question, dict(user), conv_id, agent_context))) as events:
+                async for event in events:
+                    yield _SSE_PING if event is None else _sse(event)
         except (asyncio.CancelledError, GeneratorExit):
             pass
         except Exception as e:
@@ -284,34 +330,6 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
         event_generator(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.post("/api/chat/debug", response_model=DebugSearchResponse)
-async def chat_debug(req: ChatRequest, user: dict = Depends(get_current_user)):
-    await log_cross_part_namespace_read(req.namespace, user)
-    query_vec = await embedding_service.embed(req.question)
-    pipe = await _run_pipeline(
-        req.namespace, req.question, query_vec, req.w_vector, req.w_keyword, req.top_k,
-    )
-    return DebugSearchResponse(
-        question=req.question, namespace=req.namespace,
-        enriched_query=pipe.enriched_query,
-        glossary_match=GlossaryMatchInfo(
-            term=pipe.glossary_match.term, description=pipe.glossary_match.description,
-            similarity=pipe.glossary_match.similarity,
-        ) if pipe.glossary_match else None,
-        w_vector=req.w_vector, w_keyword=req.w_keyword,
-        results=[
-            DebugResult(
-                id=r.id, content=r.content,
-                base_weight=r.base_weight,
-                v_score=r.v_score, k_score=r.k_score, final_score=r.final_score,
-                source_type=r.source_type, source_file=r.source_file, created_at=r.created_at,
-            )
-            for r in pipe.results
-        ],
-        context_preview=pipe.context[:1200] + "\n..." if len(pipe.context) > 1200 else pipe.context,
     )
 
 

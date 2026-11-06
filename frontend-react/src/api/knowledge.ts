@@ -197,10 +197,6 @@ export async function bulkDeleteGlossary(ids: number[]): Promise<{ deleted: numb
   return apiFetch('/knowledge/glossary/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
 }
 
-export async function vectorSearchKnowledge(namespace: string, query: string, topK = 30): Promise<(KnowledgeItem & { similarity: number })[]> {
-  return apiFetch('/knowledge/search', { method: 'POST', body: JSON.stringify({ namespace, query, top_k: topK }) });
-}
-
 /** 지식 검색 화면(11/04) — 채팅과 같은 검색(용어집 + 벡터·키워드) 결과 카드 */
 export interface ExploreItem {
   id: number;
@@ -372,15 +368,6 @@ export async function cancelIngestionJob(jobId: number): Promise<{ id: number; s
 
 // ─── File Upload (Tier 2) ───────────────────────────────────────────────────
 
-export interface FileUploadResult {
-  created: number;
-  job_id: number | null;
-  chunks: number;
-  analyzer: Record<string, unknown> | null;
-  source_name: string;
-  page_count: number | null;
-}
-
 export interface FilePreviewResult {
   source_name: string;
   source_type: string;
@@ -407,15 +394,6 @@ export async function previewFileUpload(
 }
 
 // ─── URL / Confluence 인제스천 ───────────────────────────────────────────────
-
-export interface UrlImportResult {
-  created: number;
-  job_id: number | null;
-  chunks: number;
-  source_name: string;
-  source_type: string;
-  url: string;
-}
 
 export interface UrlPreviewResult {
   source_name: string;

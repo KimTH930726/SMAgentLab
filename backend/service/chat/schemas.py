@@ -1,5 +1,4 @@
 """대화 도메인 — Pydantic 스키마."""
-from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -68,34 +67,3 @@ class MessageResponse(BaseModel):
     has_feedback: bool = False
     created_at: str
     metadata: Optional[dict] = None
-
-
-# ─── Debug ───────────────────────────────────────────────────────────────────
-
-class GlossaryMatchInfo(BaseModel):
-    term: str
-    description: str
-    similarity: float
-
-
-class DebugResult(BaseModel):
-    id: int
-    content: str
-    base_weight: float
-    v_score: float
-    k_score: float
-    final_score: float
-    source_type: Optional[str] = None
-    source_file: Optional[str] = None
-    created_at: Optional[datetime] = None
-
-
-class DebugSearchResponse(BaseModel):
-    question: str
-    namespace: str
-    enriched_query: str
-    glossary_match: Optional[GlossaryMatchInfo]
-    w_vector: float
-    w_keyword: float
-    results: list[DebugResult]
-    context_preview: str

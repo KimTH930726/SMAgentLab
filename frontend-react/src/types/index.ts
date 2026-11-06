@@ -299,18 +299,6 @@ export interface CollectionSuggest {
   here_adopted: number;
 }
 
-// Agent directory
-export interface AgentInfo {
-  agent_id: string;
-  display_name: string;
-  description: string;
-  icon: string;
-  color: string;
-  output_type: 'text' | 'table' | 'timeline';
-  welcome_message: string;
-  supports_debug: boolean;
-}
-
 // SSE Event types
 export interface SSEStatusEvent {
   type: 'status';
@@ -424,40 +412,3 @@ export interface NamespaceStats {
 }
 
 
-// Debug search types
-export interface DebugSearchRequest {
-  namespace: string;
-  question: string;
-  w_vector?: number;
-  w_keyword?: number;
-  top_k?: number;
-}
-
-export interface DebugSearchResult {
-  id: number;
-  content: string;
-  v_score: number;
-  k_score: number;
-  final_score: number;
-  base_weight: number;
-  source_type: string | null;
-  source_file: string | null;
-  created_at: string | null;
-}
-
-export interface DebugGlossaryMatch {
-  term: string;
-  description: string;
-  similarity: number;
-}
-
-export interface DebugSearchResponse {
-  question: string;
-  namespace: string;
-  enriched_query: string;
-  glossary_match: DebugGlossaryMatch | null;
-  w_vector: number;
-  w_keyword: number;
-  results: DebugSearchResult[];
-  context_preview: string;
-}

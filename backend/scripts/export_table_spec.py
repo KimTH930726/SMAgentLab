@@ -140,7 +140,7 @@ C = {
     ("rag_knowledge", "confluence_version"): "원본 페이지 버전", ("rag_knowledge", "heading_path"): "조상 헤딩 경로(검색 컨텍스트 보강)",
     ("rag_ingestion_job", "status"): "processing / completed / failed / cancelled", ("rag_ingestion_job", "pending_chunks"): "중복 의심으로 승인 대기가 된 수",
     ("rag_ingestion_job", "cancel_requested"): "취소 요청 플래그(배치 경계·완료 시 확인)", ("rag_ingestion_job", "auto_glossary"): "job 성공 후 자동 추출된 용어 수",
-    ("rag_ingestion_job", "analyzer_result"): "LLM 문서 분석 결과 JSON", ("rag_ingestion_job", "chunk_strategy"): "청킹 전략 — 현재 0건",
+    ("rag_ingestion_job", "chunk_strategy"): "청킹 전략 — 현재 0건",
     ("rag_knowledge_duplicate_match", "similarity"): "코사인 유사도", ("rag_knowledge_history", "replaced_by_knowledge_id"): "병합으로 덮어쓴 새 지식",
     ("rag_knowledge_review_flag", "reason"): "리뷰 사유", ("rag_conv_summary", "turn_start"): "요약 구간 시작 턴",
     ("rag_glossary", "source"): "출처(policy_doc = 정책서 최종본, auto_extract = 지식 등록 때 LLM 자동 추출(10/28~), NULL = 사람 등록·옛 자동 추출)",

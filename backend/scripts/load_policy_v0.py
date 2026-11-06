@@ -115,8 +115,8 @@ async def apply(plan) -> None:
                 row = await conn.fetchrow(
                     """INSERT INTO policy_item (namespace_id, system_key, category_path, policy_name, raw_body, remark,
                            source_file, source_row, content_hash, status, parse_status, pipeline_version, source_key,
-                           review_source, reviewed_at)
-                       VALUES ($1,'',$2,$3,$4,$5,$6,$7,$8,'active','parsed',$9,$10,'v0_system',NOW()) RETURNING id, logical_id""",
+                           reviewed_at)
+                       VALUES ($1,'',$2,$3,$4,$5,$6,$7,$8,'active','parsed',$9,$10,NOW()) RETURNING id, logical_id""",
                     ns[r.doc_id], r.category_path, r.policy_name, r.raw_body, r.remark, r.source_file, r.source_row,
                     _hash(r.category_path, r.policy_name, r.raw_body, r.remark), PIPELINE, r.source_key)
                 await conn.execute(

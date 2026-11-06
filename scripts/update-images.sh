@@ -35,11 +35,14 @@ echo " OpsLens 이미지 업데이트"
 echo " 새 태그(.env): ${IMAGE_TAG}"
 echo "=========================================="
 
-# 1. (선택) 자동 백업
+# 1. DB 백업(필수, 11/06) — 새 버전 기동 때 되돌릴 수 없는 마이그레이션(표·칸 삭제)이 돈다. 백업이 실패하면 멈춘다.
+#    방금 따로 받아 둔 백업이 있을 때만 SKIP_BACKUP=1 로 건너뛴다.
 echo ""
-read -p "[선택] 업데이트 전 DB 백업을 받으시겠습니까? (y/N): " backup_yn
-if [ "${backup_yn}" = "y" ] || [ "${backup_yn}" = "Y" ]; then
-  bash scripts/backup-db.sh || echo "백업 실패 — 계속 진행"
+if [ "${SKIP_BACKUP:-0}" = "1" ]; then
+  echo "[0/3] DB 백업 건너뜀(SKIP_BACKUP=1)"
+elif ! bash scripts/backup-db.sh; then
+  echo "오류: DB 백업 실패 — 업데이트를 멈춥니다(이미지·컨테이너는 그대로)."
+  exit 1
 fi
 
 # 2. 새 이미지 로드

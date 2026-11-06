@@ -145,7 +145,7 @@ class TestSearchPolicy:
     @pytest.mark.asyncio
     async def test_param_query_applies_korean_suffix_stripping(self, patch_db):
         """2026-09-10(v2.71) — 콘텐츠/쿼리 양쪽에 policy_strip_ko()를 적용해야 조사/어미가
-        달라도 매칭된다(init/06-policy-strip-ko.sql). 원문 쿼리 텍스트 자체는 그대로 $2로
+        달라도 매칭된다(main.py `_migrate_ensure_ko_text_search_helpers`). 원문 쿼리 텍스트 자체는 그대로 $2로
         넘기고(파이썬에서 미리 자르지 않음), SQL 함수가 콘텐츠·쿼리 양쪽을 동일하게 변환한다."""
         conn = patch_db()
         await search.search_policy("ns", "질문")

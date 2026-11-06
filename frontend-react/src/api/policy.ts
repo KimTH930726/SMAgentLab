@@ -27,11 +27,6 @@ export interface NarrativeHit {
   raw_body: string;
 }
 
-export interface PolicySearchResult {
-  params: ParamHit[];
-  narratives: NarrativeHit[];
-}
-
 
 // ─── 정책서 화면(v0, 2026-10-21 재구축 2단계) — 읽기 전용. 내용 변경은 정정 원장의 제안(api/corrections)으로만 ───
 
@@ -165,8 +160,6 @@ export const NO_ISSUE_REASONS: { key: NoIssueReason; label: string }[] = [
   { key: 'other', label: '기타' },
 ];
 export const noIssueLabel = (key: string) => NO_ISSUE_REASONS.find((r) => r.key === key)?.label ?? key;
-export const getNoIssueReasons = () => apiFetch<{ key: NoIssueReason; label: string }[]>('/policy/source-checks/reasons');
-
 export interface SuggestedLink {
   id: number;
   /** suggested(확인 전) | active(확정) | rejected(거절) */

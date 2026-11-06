@@ -216,28 +216,6 @@ async def bulk_update_knowledge(
     return int(result.split()[-1])
 
 
-async def vector_search_knowledge(namespace: str, query_vec: list[float], top_k: int = 30) -> list[dict]:
-    async with get_conn() as conn:
-        ns_id = await resolve_namespace_id(conn, namespace)
-        if ns_id is None:
-            return []
-        rows = await conn.fetch(
-            f"""
-            SELECT {_KNOWLEDGE_COLS},
-                   1 - (k.embedding <=> $2::vector) AS similarity
-            FROM rag_knowledge k
-            JOIN ops_namespace n ON k.namespace_id = n.id
-            LEFT JOIN ops_user u ON k.created_by_user_id = u.id
-            WHERE k.namespace_id = $1 AND k.embedding IS NOT NULL
-              AND (k.status IS NULL OR k.status = 'active')
-            ORDER BY k.embedding <=> $2::vector
-            LIMIT $3
-            """,
-            ns_id, str(query_vec), top_k,
-        )
-    return [dict(r) for r in rows]
-
-
 async def explore_knowledge(namespace: str, query: str, top_k: int = 30) -> dict:
     """지식 검색 화면(11/04 태훈 "검색해서 무슨 지식이 있나 보고 고치게") — **채팅과 같은 검색**: 용어 범위(정책 파트 용어 포함)와 지식 검색
     범위(채팅 기본 linked — 연결된 컬렉션까지)를 채팅(agent.build_chat_context)과 같게 정한다(독립 리뷰: 디버그 검색에서 고쳤던 차이 재발 방지).

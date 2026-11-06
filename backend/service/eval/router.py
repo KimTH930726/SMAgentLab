@@ -356,12 +356,6 @@ async def decide_question_candidate(cand_id: int, body: QuestionDecision, admin:
     return r
 
 
-@router.get("/ingest-checks/latest")
-async def get_latest_ingest_check(user: dict = Depends(get_current_user)):
-    """최근 적재 검수(설계 완료 기준 검사 + 쓰임 검사) — 평가 게이트 [적재 검수]. 만들기는 scripts/check_ingest.py --save."""
-    return await service.latest_ingest_check()
-
-
 @router.get("/report")
 async def get_report(axis: str = Query(default="policy", pattern=AXIS_PATTERN), admin: dict = Depends(get_current_admin)):
     """틀린 문항 리포트(관리자) — 지금 점수 · 틀린 문항(질문·왜·저장 구조·적용해 볼 기법) · 기법별 실제 효과(잠근 시험지).

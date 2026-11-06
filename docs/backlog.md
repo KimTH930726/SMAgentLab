@@ -57,7 +57,7 @@
 - [ ] (중간 · 이중 정의, 이미 어긋남) 원문 확인 사유 문구(source_ok·already_fixed) 다섯 곳 → 백엔드 사전 하나 + API 라벨
 - [ ] (중간 · 데이터 의존) 정책 질의 말투 어휘 세 목록(category_list _GENERIC·_ALL_WORDS, trustkit intent NAV_SIGNAL_RE) → trustkit 한 곳 + 운영 질의 로그 표본 재측정(지금 골든은 한 틀)
 - [ ] (중간 · 데이터 의존) 청크 경계 규칙(단·다만·예외·주의, 번호 제목, 매크로) — 목록 확장 대신 check_ingest에 공간별 구조 검사(제목만 조각·부모 없는 하위·처리 못 한 매크로 수) 경고
-- [ ] (중간 · 이중 구현) 조사 목록 Python(trustkit/text/ko.py) ↔ SQL(init/06-policy-strip-ko.sql) 동등성 자동 테스트
+- [ ] (중간 · 이중 구현) 조사 목록 Python(trustkit/text/ko.py) ↔ SQL(main.py `_migrate_ensure_ko_text_search_helpers`) 동등성 자동 테스트
 - [ ] (중간 · 구조) DB 편집 프롬프트에 출력 형식·자리표시자가 섞임 → 판단 기준만 DB, 형식·가드는 코드가 덧붙임(정확 치환 마이그레이션 더 늘리지 않기)
 - [ ] (낮음) 이중 정의 상수 공용화(BASELINE_LOCK·PIPELINE_WHOLE·PATH_SEP·VOC 시드), track2.py 정리, eval/report GOLDEN_DIR 설정화, trustkit 인용 정규식 라벨 인자화, 매크로 이름 목록 → "처리 못 한 매크로" 리포트, 검색·청크 기본값(top_k·0.7/0.3·50/2000/100자) 근거 기록 또는 재측정, 표본 작은 값(분류 0.58 24문항·동의어 0.65/0.85 26쌍) 재측정 일정
 - **VOC 세션에 넘김:** VOC 초안을 분류로 거르는 코드 가드(지금 프롬프트에만) · VOC few-shot 업종 예시 → 원칙 문장(+사람 블라인드 재측정) · VOC 프롬프트 두 벌(main 시드 ↔ service 기본값) 하나로 · VOC 정책 하한 상수 설정화·주석 정정
@@ -126,8 +126,8 @@
 ## 0-4. 컬렉션 현황 링크(v2.162)에서 남긴 것 (2026-10-23)
 - E2E에 일반 사용자(담당 아님) 경우가 없다 — [지식 등록 →]이 숨는지 확인 못 함(리뷰 L1). 일반 사용자 로그인 E2E 준비물이 없어 보류,
   권한 규칙 자체(`canEditDomain`)는 지식 문서 화면과 같은 함수·서버 시나리오(domain_permissions)가 막는다. 다시 볼 조건: 일반 사용자 E2E 준비물을 만들 때.
-- `init/04-category-required-backfill.sql`·`init/05-ingestion-job-progress.sql`은 initdb 단계에서 `rag_*` 이름을 쓴다(그땐 아직 `ops_*`) — 새로 설치하면 initdb가
-  실패할 수 있음(C6 리뷰가 찾은 기존 문제, 이번 변경과 무관). 다시 볼 조건: 새 설치 절차를 정리할 때.
+- ~~`init/04`·`init/05` 새 설치 실패~~ — 11/06 해결: 새 설치 리허설에서 02부터 실패 확인 → init은 01(확장 기능 + 기본 표)만 두고 02~07 삭제,
+  03이 하던 `encrypted_llm_credentials` 칸은 앱 마이그레이션으로. 남은 것(낮음): 새 설치 DB엔 01의 이름 없는 외래키와 앱 마이그레이션의 `fk_*`가 두 벌(동작 같음).
 
 ## 0-5. 정책은 이 시스템이 기준 — 추가·폐기·분류 옮기기 · 원문 확인 정리 (사용자 10/23)
 - 결정: 초기본만 문서(v0)로 적재, 이후 추가·수정·삭제는 시스템에서. 파일 업로드는 v1처럼 통째로 갈아엎을 때만(개정본을 파일로 돌리면 관리가 안 됨).
@@ -298,3 +298,9 @@
 - (v2.150 리뷰 L6) `utils/lineDiff.ts` 불변식 테스트(줄 유실·중복 0) — 프론트 단위 테스트 환경(vitest 등)을 들일 때 같이
 - (v2.150 리뷰 L9) `ops_improvement_item.applied_target_id` 인덱스 — 정책 상세 버전 이력이 원장을 훑음, 원장이 수만 건이 되면 추가
 - (v2.150 리뷰 L12) `CorrectionCard`(약 320줄) 나누기 — 다음에 이 카드를 크게 고칠 때
+
+## 0-6. 반입 전 전수 검사에서 남긴 것 (2026-11-06, v2.219)
+- (낮음) 앞부분이 겹치는 인덱스 5개 — `idx_conversation_user`·`idx_conversation_ns_id`·`idx_query_log_ns_id`·`idx_voc_routing_ns`·`idx_policy_item_ns`(다른 인덱스가 같은 앞 칸). 지금 표가 작아 이득 작음. 다시 볼 조건: 운영 데이터가 커져 쓰기 속도가 문제 될 때.
+- (낮음) `ingest_check_run`은 `scripts/check_ingest.py --save`만 쓰고 읽는 API가 없어졌다(`/eval/ingest-checks/latest` 제거, 화면 호출 0). 기록만 쌓임 — 다시 볼 조건: 적재 검수 이력 화면을 만들 때.
+- (낮음) `GET /policy/source-checks/reasons` — 화면은 상수(`NO_ISSUE_REASONS`)를 써서 프론트 함수를 지움. 서버 라우트는 남김(점검 스크립트 0건 판정).
+- (낮음) 채팅 연결이 끊기면(Starlette/anyio 취소 범위) 에이전트 정리 await와 event_generator 안전장치(generating → completed)가 둘 다 취소로 끊긴다 — v2.219 전과 같음, 남은 generating은 다음 요청 `_cleanup_ghost_messages`가 정리. 다시 볼 조건: 끊긴 답이 화면에 생성 중으로 남는 신고가 오면 — 안전장치를 `anyio.CancelScope(shield=True)`로.

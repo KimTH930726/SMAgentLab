@@ -137,7 +137,7 @@ async def search_policy(
         # (89문항 골든셋 실측 — RDB 자기 전문 분야인 param 질의에서조차 벡터가 RDB를 앞섬).
         # 규칙 기반 조사/어미 제거를 검증한 결과(backend/scripts/bench_suffix_stripping.py)
         # 하이브리드 전체 hit@10 75.3%→79.8%로 확인돼, 쿼리/콘텐츠 양쪽에 `policy_strip_ko()`
-        # (init/06-policy-strip-ko.sql)를 적용한다 — 저장 컬럼 추가 없이 조회 시점 변환이라
+        # (main.py `_migrate_ensure_ko_text_search_helpers`)를 적용한다 — 저장 컬럼 추가 없이 조회 시점 변환이라
         # policy_param/policy_item 데이터는 그대로 둔다(건수가 작아 성능 영향 없음).
         category_clause = "AND $4 = ANY(i.category_path)" if category else ""
         param_args = [ns_ids, query, fetch_k] + ([category] if category else [])

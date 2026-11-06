@@ -4,7 +4,6 @@ import { useAppStore } from '../../store/useAppStore';
 import { RefreshCw, Trash2, Database, BarChart2, AlertCircle } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getCacheStats, getCacheEntries, invalidateCache, deleteCacheEntry, getCacheConfig, setCacheConfig } from '../../api/cache';
-import { getNamespaces } from '../../api/namespaces';
 import { useCollectionLabel } from '../../utils/useCollectionLabel';
 import { Button } from '../ui/Button';
 import { PaginationInfo, PaginationNav, useClientPaging } from '../ui/Pagination';
@@ -23,12 +22,6 @@ export function CachePanel() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(30);
-
-  const { data: namespaces = [] } = useQuery<string[]>({
-    queryKey: ['namespaces'],
-    queryFn: getNamespaces,
-  });
-
 
   const label = useCollectionLabel();
   const selectedNs = namespace;   // 공용 값 그대로(비어 있으면 사이드바가 첫 영역을 채운다) — 경로 표시줄과 어긋나지 않게

@@ -361,7 +361,7 @@ async def search_knowledge(
                 -- 전혀 매칭이 안 되는 게 실측 확인됨("DS14가 뭐야?" 질문이 정확히 이 문제로
                 -- 키워드 전용 카테고리 문서를 못 찾음). policy/search.py의 정책 파라미터
                 -- 검색에 이미 같은 함수로 적용해 검증된 패턴(89문항 실측 hit@10 75.3%→79.8%,
-                -- init/06-policy-strip-ko.sql) 재사용 — 함수 자체는 정책 전용이 아닌 범용
+                -- main.py _migrate_ensure_ko_text_search_helpers) 재사용 — 함수 자체는 정책 전용이 아닌 범용
                 -- 조사 제거기라 그대로 쓸 수 있다.
                 SELECT k.id, ts_rank(k.content_tsv, q.tsq) AS k_score   -- content_tsv = to_tsvector('simple', policy_strip_ko(content)) 저장 칸(#109)
                 FROM rag_knowledge k

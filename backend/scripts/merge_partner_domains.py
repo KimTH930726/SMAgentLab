@@ -12,6 +12,7 @@
 실행(컨테이너): python scripts/merge_partner_domains.py            # 미리보기(바꾸지 않음)
                python scripts/merge_partner_domains.py --apply    # 백업 + 합치기, 트랜잭션 하나
 되돌리기(R1): python scripts/merge_partner_domains.py --rollback  # 백업의 이름·담당으로 영역을 다시 만들고 백업한 행만 되돌린다
+  ※ 11/06 #124가 이 백업 표들을 지웠다 — 롤백은 더는 안 된다(필요하면 11/04 덤프 SMAgentLab-backups/opsdb_1104_before_homepage_reload.dump에서 표 복원)
 """
 import argparse
 import asyncio

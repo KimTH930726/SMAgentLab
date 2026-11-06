@@ -454,13 +454,6 @@ async def bulk_update_knowledge_endpoint(body: BulkUpdateRequest, user: dict = D
     return {"updated": updated}
 
 
-@router.post("/search")
-async def vector_search_knowledge(body: VectorSearchRequest, user: dict = Depends(get_current_user)):
-    query_vec = await embedding_service.embed(body.query)
-    results = await service.vector_search_knowledge(body.namespace, query_vec, body.top_k)
-    return results
-
-
 @router.post("/explore")
 async def explore_knowledge(body: VectorSearchRequest, user: dict = Depends(get_current_user)):
     """지식 검색 화면 — 채팅과 같은 검색(용어집 + 벡터·키워드). 빈 질문은 목록 화면이 맡는다."""
