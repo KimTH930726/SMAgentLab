@@ -276,7 +276,7 @@ export function VocStatsPanel({ namespace }: { namespace: string }) {
       <div>
         <div className="flex items-center gap-2 mb-1 flex-wrap">
           <h3 className="text-sm font-semibold text-slate-300">반복 유형</h3>
-          {uncoveredCount > 0 && <Badge color="amber">해결방안 미등록 {uncoveredCount}건</Badge>}
+          {uncoveredCount > 0 && <Badge color="amber">관련 지식 없음 {uncoveredCount}건</Badge>}
           {inconsistentCount > 0 && (
             <Badge color="rose" className="flex items-center gap-1">
               <AlertTriangle className="w-3 h-3" />LLM 분류 불일치 {inconsistentCount}건
@@ -312,7 +312,7 @@ export function VocStatsPanel({ namespace }: { namespace: string }) {
                     <th className="text-left px-3 py-2 text-slate-400">건수</th>
                     <th className="text-left px-3 py-2 text-slate-400">주요 분류</th>
                     <th className="text-left px-3 py-2 text-slate-400">최근 발생</th>
-                    <th className="text-left px-3 py-2 text-slate-400">해결방안</th>
+                    <th className="text-left px-3 py-2 text-slate-400" title="가장 가까운 등록 지식 — 해결책이라는 보장은 없음(Teams 카드의 관련 지식 · 참고와 같은 판정)">관련 지식</th>
                     <th className="text-left px-3 py-2 text-slate-400"></th>
                   </tr>
                 </thead>
@@ -339,11 +339,11 @@ export function VocStatsPanel({ namespace }: { namespace: string }) {
                       <td className="px-3 py-2">
                         {c.has_knowledge_coverage ? (
                           <Badge color="emerald">
-                            <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />등록됨 (유사도 {c.matched_knowledge_similarity})</span>
+                            <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />있음 (유사도 {c.matched_knowledge_similarity})</span>
                           </Badge>
                         ) : (
                           <Badge color="amber">
-                            <span className="flex items-center gap-1"><AlertTriangle className="w-3 h-3" />등록 필요</span>
+                            <span className="flex items-center gap-1"><AlertTriangle className="w-3 h-3" />없음</span>
                           </Badge>
                         )}
                       </td>
