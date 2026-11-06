@@ -221,8 +221,12 @@ async def run_manual_collection(
     namespace: str, date_from: date, date_to: date, *,
     credentials: Optional[dict] = None, access_token: Optional[str] = None,
     skip_credential_resolution: bool = False,
+    progress: Optional[dict] = None,
 ) -> dict:
     """관리자가 지정한 기간(date_from~date_to)에 대해 등록된 모든 파트 메일함을 수집+분석+발송.
+
+    progress: 넘기면 진행을 그 dict에 적는다(phase fetch/analyze · mailbox/mailboxes · done/total) — [지금 실행] 진행 막대(manual_run.py, 11/06).
+    스케줄러는 안 넘긴다.
 
     credentials: 이미 복호화한 자격증명을 넘겨받으면 재조회하지 않는다 — 스케줄러가
     여러 namespace를 순회할 때(scheduler.run_cycle_now) 매 namespace마다 같은
@@ -264,7 +268,11 @@ async def run_manual_collection(
     received_before = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
 
     results = []
-    for routing in routing_rows:
+    if progress is not None:
+        progress["mailboxes"] = len(routing_rows)
+    for mailbox_no, routing in enumerate(routing_rows, 1):
+        if progress is not None:
+            progress.update(phase="fetch", mailbox=mailbox_no)
         result = {
             "mailbox_upn": routing["mailbox_upn"], "part": routing["part"],
             "ok": False, "error": None, "fetched": 0, "analyzed": 0,
@@ -309,23 +317,30 @@ async def run_manual_collection(
         already_processed = await _existing_message_ids(ns_id, [m["id"] for m in messages])
         result["skipped_duplicate"] = len(already_processed)
         messages = [m for m in messages if m["id"] not in already_processed]
+        if progress is not None:
+            progress["total"] += len(messages)   # 메일함마다 더해진다 — 전체 수는 마지막 메일함을 가져온 뒤에야 확정
+            progress["phase"] = "analyze"
 
         semaphore = asyncio.Semaphore(_MAX_CONCURRENT_MESSAGES)
 
         async def _process_one(msg: dict) -> str:
             async with semaphore:
-                analysis, pattern_embedding, knowledge_found = await analyze_message(
-                    namespace, routing["part"], msg, relevance_min_score, settings.get("email_voc_policy_collections"))
+                try:
+                    analysis, pattern_embedding, knowledge_found = await analyze_message(
+                        namespace, routing["part"], msg, relevance_min_score, settings.get("email_voc_policy_collections"))
 
-                saved = await record_analysis(
-                    ns_id, routing["id"], msg["id"], routing["mailbox_upn"],
-                    msg["subject"], msg["sender"], msg["received_at"], msg["body"], analysis,
-                    embedding=pattern_embedding,
-                )
-                if saved is None:
-                    return "skipped_duplicate"
+                    saved = await record_analysis(
+                        ns_id, routing["id"], msg["id"], routing["mailbox_upn"],
+                        msg["subject"], msg["sender"], msg["received_at"], msg["body"], analysis,
+                        embedding=pattern_embedding,
+                    )
+                    if saved is None:
+                        return "skipped_duplicate"
 
-                return await cluster_and_notify(ns_id, routing, msg, saved["id"], analysis, pattern_embedding, knowledge_found, settings)
+                    return await cluster_and_notify(ns_id, routing, msg, saved["id"], analysis, pattern_embedding, knowledge_found, settings)
+                finally:
+                    if progress is not None:
+                        progress["done"] += 1   # 실패한 메일도 끝난 것으로 센다 — 안 그러면 막대가 끝까지 안 찬다
 
         outcomes = await asyncio.gather(*(_process_one(m) for m in messages), return_exceptions=True)
         for outcome in outcomes:

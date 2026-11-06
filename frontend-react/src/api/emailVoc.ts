@@ -214,13 +214,35 @@ export interface ManualCollectionResult {
   mailboxes: MailboxCollectionResult[];
 }
 
+/** [지금 실행] 진행(11/06) — 서버가 뒤에서 돌리고 화면은 몇 초마다 읽는다. phase: fetch(메일 가져오는 중) / analyze(메일마다 LLM). */
+export interface ManualRunStatus {
+  running: boolean;
+  phase: 'fetch' | 'analyze';
+  mailbox: number;
+  mailboxes: number;
+  done: number;
+  total: number;
+  date_from: string;
+  date_to: string;
+  started_at: string;
+  finished_at: string | null;
+  result: ManualCollectionResult | null;
+  error: string | null;
+}
+
+/** 잡기만 하고 바로 돌아온다 — 같은 시스템이 도는 중이면 409 */
 export async function runManualCollection(
   namespace: string, dateFrom: string, dateTo: string,
-): Promise<ManualCollectionResult> {
-  return apiFetch<ManualCollectionResult>('/email-voc/collect/run', {
+): Promise<ManualRunStatus> {
+  return apiFetch<ManualRunStatus>('/email-voc/collect/run', {
     method: 'POST',
     body: JSON.stringify({ namespace, date_from: dateFrom, date_to: dateTo }),
   });
+}
+
+/** 마지막 실행 상태(끝난 뒤에도 결과) — 서버 재시작 뒤엔 null */
+export async function getManualCollectionStatus(namespace: string): Promise<ManualRunStatus | null> {
+  return apiFetch<ManualRunStatus | null>(`/email-voc/collect/run/status?namespace=${encodeURIComponent(namespace)}`);
 }
 
 // ─── 이력 조회 ──────────────────────────────────────────────────────────────

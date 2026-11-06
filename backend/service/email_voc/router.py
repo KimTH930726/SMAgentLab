@@ -12,13 +12,13 @@ from fastapi.responses import HTMLResponse
 from core.dependencies import get_current_user, check_namespace_ownership, check_namespace_read, get_current_admin
 from core.security import get_user_llm_credentials
 from service.email_voc import (
-    delegated_auth, service, teams_notify, routing_service, pipeline, scheduler, graph_client, pattern_detection,
+    delegated_auth, service, teams_notify, routing_service, pipeline, scheduler, graph_client, pattern_detection, manual_run,
 )
 from service.email_voc.schemas import (
     EmailAnalyzeRequest, EmailAnalysisOut, TeamsTestNotifyRequest,
     EmailCollectionSettingsOut, EmailCollectionSettingsUpdate,
     VocRoutingCreate, VocRoutingUpdate, VocRoutingOut, MailFolderOut,
-    ManualCollectionRequest, ManualCollectionResult,
+    ManualCollectionRequest, ManualRunStatus,
     GraphCredentialsStatus, GraphCredentialsUpdate,
     DelegatedAuthConfig, DelegatedAuthStatus, DelegatedAuthStartResult,
     EmailAnalysisHistoryItem, PollCycleItem, SchedulerStatus, KnowledgeRefOut,
@@ -200,17 +200,26 @@ async def delegated_auth_callback(request: Request):
 
 # ─── 1단계 수동 1회성 실행 (§9, §5 Phase 1) ──────────────────────────────────
 
-@router.post("/collect/run", response_model=ManualCollectionResult)
+@router.post("/collect/run", response_model=ManualRunStatus)
 async def run_manual_collection(body: ManualCollectionRequest, admin: dict = Depends(get_current_admin)):
-    """관리자가 기간(date_from~date_to)을 지정해 즉시 수집+분석+발송을 1회 실행한다.
+    """관리자가 기간(date_from~date_to)을 지정해 즉시 수집+분석+발송을 1회 실행한다 — 잡기만 하고 바로 응답, 실행은 뒤에서(11/06).
+    진행·결과는 GET /collect/run/status. 같은 namespace가 도는 중이면 409.
 
     Track B(Graph API 자격증명) 미설정 시에도 요청 자체는 받아들이되, 메일함별로
-    "자격증명 미설정" 에러를 결과에 담아 반환한다 — 전체 실패로 처리하지 않는다.
+    "자격증명 미설정" 에러를 결과에 담는다 — 전체 실패로 처리하지 않는다.
     """
     try:
-        return await pipeline.run_manual_collection(body.namespace, body.date_from, body.date_to)
+        return await manual_run.start(body.namespace, body.date_from, body.date_to)
+    except manual_run.AlreadyRunning:
+        raise HTTPException(status_code=409, detail="이미 실행 중입니다 — 진행 막대가 끝난 뒤 다시 실행하세요")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/collect/run/status", response_model=Optional[ManualRunStatus])
+async def get_manual_collection_status(namespace: str, admin: dict = Depends(get_current_admin)):
+    """[지금 실행] 진행 — 실행 중이 아니어도 마지막 결과를 돌려준다. 서버 재시작 뒤엔 None(진행은 메모리에만)."""
+    return manual_run.status(namespace)
 
 
 # ─── 이력 조회 ──────────────────────────────────────────────────────────────

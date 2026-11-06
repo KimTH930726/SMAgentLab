@@ -447,6 +447,41 @@ class TestRunManualCollectionCategoryGate:
         pipeline.teams_notify.send_teams_notification.assert_not_called()
 
 
+class TestManualRunProgress:
+    """[지금 실행] 진행 기록(11/06) — 끝났을 때 done = total = 메일함들의 새 메일 수 합(이미 처리한 메일은 빼고), 실패한 메일도 끝난 것으로 센다."""
+
+    @pytest.mark.asyncio
+    async def test_progress_counts_new_mails_across_mailboxes(self, patch_db, monkeypatch):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        TestRunManualCollectionCategoryGate()._patch_common(monkeypatch, category="system_error")
+        monkeypatch.setattr(pipeline.routing_service, "list_routing",
+                            AsyncMock(return_value=[_stub_routing_row(id=10), _stub_routing_row(id=11, mailbox_upn="b@example.com")]))
+        mails = {"voc@example.com": [_stub_message(id=f"a{i}") for i in range(3)], "b@example.com": [_stub_message(id=f"b{i}") for i in range(4)]}
+        monkeypatch.setattr(pipeline.graph_client, "fetch_messages", AsyncMock(side_effect=lambda upn, *a, **k: mails[upn]))
+        monkeypatch.setattr(pipeline, "_existing_message_ids", AsyncMock(side_effect=[{"a0"}, set()]))   # 첫 메일함 1건은 이미 처리
+        # 메일 하나는 분석 중 예외 — 그래도 끝난 것으로 세야 막대가 끝까지 찬다
+        ok = pipeline.analyze_email.return_value
+        monkeypatch.setattr(pipeline, "analyze_email", AsyncMock(side_effect=[RuntimeError("LLM 끊김")] + [ok] * 5))
+
+        progress = {"done": 0, "total": 0}
+        result = await pipeline.run_manual_collection("ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok",
+                                                      skip_credential_resolution=True, progress=progress)
+
+        assert progress["mailboxes"] == 2 and progress["mailbox"] == 2 and progress["phase"] == "analyze"
+        assert progress["total"] == 2 + 4 and progress["done"] == progress["total"]
+        assert sum(b["analyzed"] for b in result["mailboxes"]) == progress["total"] - 1   # 예외 1건은 결과 표에서 빠짐(예전과 같음)
+
+    @pytest.mark.asyncio
+    async def test_without_progress_unchanged(self, patch_db, monkeypatch):
+        """스케줄러처럼 progress를 안 넘기면 예전과 같다."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        TestRunManualCollectionCategoryGate()._patch_common(monkeypatch, category="system_error")
+        result = await pipeline.run_manual_collection("ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True)
+        assert result["mailboxes"][0]["analyzed"] == 1
+
+
 class TestPatternEmbeddingSource:
     """반복 패턴 비교에 원문 임베딩이 아니라 LLM이 뽑은 정규화 요약(issue_signature)의
     임베딩을 쓰는지 검증(2026-08-27) — 표현이 다른 같은 유형의 이슈가 원문끼리는

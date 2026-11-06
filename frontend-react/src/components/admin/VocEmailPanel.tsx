@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../store/useAppStore';
 import { Mail, Plus, Trash2, Pencil, X, Save, Send, FlaskConical, AlertCircle, Inbox, Route, PlayCircle, KeyRound, History as HistoryIcon, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react';
@@ -9,16 +9,17 @@ import {
   testAnalyzeEmail, testNotifyTeams, getMailFolders,
   getGraphCredentials, updateGraphCredentials,
   getDelegatedAuthStatus, updateDelegatedAuthConfig, startDelegatedAuth,
-  runManualCollection, getEmailHistory, getKnowledgeRefs,
+  runManualCollection, getManualCollectionStatus, getEmailHistory, getKnowledgeRefs,
   getSchedulerStatus, getPollCycles,
   type VocRouting, type VocRoutingPayload, type EmailAnalysisResult,
-  type ManualCollectionResult, type DelegatedAuthStartResult, type MailFolder,
+  type DelegatedAuthStartResult, type MailFolder,
   type EmailAnalysisHistoryItem, type PollCycleItem,
 } from '../../api/emailVoc';
 import { getNamespaces } from '../../api/namespaces';
 import { VocStatsPanel } from './VocStatsPanel';
 import { getParts } from '../../api/auth';
 import { Button } from '../ui/Button';
+import { ProgressBar } from '../ui/ProgressBar';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 import { ApiError } from '../../api/client';
@@ -366,7 +367,6 @@ export function VocEmailPanel() {
   // ── 폴링: 수동 1회성 실행 (§9, §5 Phase 1) ─────────────────────────────
   const [collectDateFrom, setCollectDateFrom] = useState(defaultDateFrom());
   const [collectDateTo, setCollectDateTo] = useState(defaultDateTo());
-  const [collectResult, setCollectResult] = useState<ManualCollectionResult | null>(null);
 
   const dateRangeError = (() => {
     if (!collectDateFrom || !collectDateTo) return '시작일과 종료일을 모두 입력해주세요.';
@@ -377,14 +377,35 @@ export function VocEmailPanel() {
     return null;
   })();
 
+  // 서버가 뒤에서 돌리고 화면은 2초마다 진행을 읽는다(11/06) — 새로고침해도 이어 보이고, 끝난 뒤엔 마지막 결과
+  const { data: runStatus } = useQuery({
+    queryKey: ['voc-manual-run', selectedNs],
+    queryFn: () => getManualCollectionStatus(selectedNs),
+    enabled: !!selectedNs,
+    refetchInterval: (q) => (q.state.data?.running ? 2000 : false),
+  });
+  const running = !!runStatus?.running;
+  const collectResult = running ? null : runStatus?.result ?? null;
+  // 끝난 순간 이력 새로고침 — 시스템을 바꾼 건 "끝남"이 아니다(리뷰 L3)
+  const lastRun = useRef<{ ns: string; running: boolean }>({ ns: '', running: false });
+  useEffect(() => {
+    const prev = lastRun.current;
+    if (prev.ns === selectedNs && prev.running && !running) queryClient.invalidateQueries({ queryKey: ['email-history', selectedNs] });
+    lastRun.current = { ns: selectedNs, running };
+  }, [running, selectedNs, queryClient]);
+
+  // 누른 시점의 시스템을 넘긴다 — 응답 전에 시스템을 바꾸면 다른 시스템 칸에 진행이 들어갔다(리뷰 L2)
   const collectMutation = useMutation({
-    mutationFn: () => runManualCollection(selectedNs, collectDateFrom, collectDateTo),
-    onSuccess: (result) => {
-      setCollectResult(result);
+    mutationFn: (ns: string) => runManualCollection(ns, collectDateFrom, collectDateTo),
+    onSuccess: (st, ns) => {
+      queryClient.setQueryData(['voc-manual-run', ns], st);
       setError('');
-      queryClient.invalidateQueries({ queryKey: ['email-history', selectedNs] });
     },
-    onError: (e) => setError(toErrorMessage(e)),
+    onError: (e, ns) => {
+      // 다른 탭·관리자가 이미 돌리는 중(409) — 오류 문구 대신 상태를 다시 읽어 진행 막대를 띄운다(리뷰 L1 · 재리뷰: 문구가 끝난 뒤에도 남음)
+      if (e instanceof ApiError && e.status === 409) queryClient.invalidateQueries({ queryKey: ['voc-manual-run', ns] });
+      else setError(toErrorMessage(e));
+    },
   });
 
   // ── 이력 ──────────────────────────────────────────────────────────────
@@ -822,14 +843,27 @@ export function VocEmailPanel() {
                   />
                 </label>
                 <Button
-                  size="sm" onClick={() => collectMutation.mutate()}
+                  size="sm" onClick={() => collectMutation.mutate(selectedNs)}
                   loading={collectMutation.isPending}
-                  disabled={!selectedNs || !!dateRangeError}
+                  disabled={!selectedNs || !!dateRangeError || running}
                 >
-                  지금 실행
+                  {running ? '실행 중' : '지금 실행'}
                 </Button>
               </div>
               {dateRangeError && <p className="text-xs text-rose-600 dark:text-rose-400">{dateRangeError}</p>}
+              {running && runStatus && (
+                <ProgressBar
+                  // 가져오는 중엔 전체 수가 아직 안 정해졌다(메일함마다 더해짐) — 움직이는 막대 + 지금까지 수만(리뷰 L4: 100%인데 "가져오는 중")
+                  label={runStatus.phase === 'fetch' ? '메일 가져오는 중' : '메일 분석 중'}
+                  done={runStatus.done} total={runStatus.phase === 'fetch' ? 0 : runStatus.total} unit="건" startedAt={runStatus.started_at}
+                  detail={[
+                    runStatus.mailboxes > 0 && `메일함 ${runStatus.mailbox}/${runStatus.mailboxes}`,
+                    runStatus.phase === 'fetch' && runStatus.total > 0 && `지금까지 ${runStatus.done}/${runStatus.total}건 분석`,
+                    '새 메일마다 LLM 분석 — 창을 닫아도 서버에서 계속 돌아요',
+                  ].filter(Boolean).join(' · ')}
+                />
+              )}
+              {!running && runStatus?.error && <p className="text-xs text-rose-600 dark:text-rose-400">실행 실패: {runStatus.error}</p>}
 
               {collectResult && (
                 <div className="mt-2 space-y-2">

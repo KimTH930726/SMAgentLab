@@ -157,6 +157,22 @@ class ManualCollectionResult(BaseModel):
     mailboxes: list[MailboxCollectionResult]
 
 
+class ManualRunStatus(BaseModel):
+    """[지금 실행] 진행(11/06) — 화면이 몇 초마다 읽는다. phase: fetch(메일 가져오는 중) / analyze(메일마다 LLM). 끝나면 result 또는 error."""
+    running: bool
+    phase: str
+    mailbox: int
+    mailboxes: int
+    done: int
+    total: int
+    date_from: date
+    date_to: date
+    started_at: str
+    finished_at: Optional[str] = None
+    result: Optional[ManualCollectionResult] = None
+    error: Optional[str] = None
+
+
 class GraphCredentialsStatus(BaseModel):
     """실제 client_secret은 절대 반환하지 않음 — 설정 여부와 tenant/client id만 표시."""
     configured: bool
