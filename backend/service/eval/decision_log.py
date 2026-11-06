@@ -13,7 +13,6 @@ from typing import Optional
 from core.database import get_conn
 from service.eval.override import AUTO_SQL, KIND_NAME, OVERRIDE_SQL, REVIEWED_KINDS, REVIEW_SQL
 
-_NO_ISSUE = {"source_ok": "원문 정상", "already_fixed": "이미 수정됨", "duplicate": "중복", "other": "기타"}   # 11/04 업계 용어
 
 
 def _j(v):
@@ -64,7 +63,8 @@ def describe(kind: str, ai: Optional[dict], final: Optional[dict], signals: Opti
             return {"ai": did, "human": None}
         if final.get("issue"):
             return {"ai": did, "human": f"해결(정정 #{final['correction_id']} 승인)" if final.get("correction_id") else "해결"}
-        return {"ai": did, "human": f"오탐: {_NO_ISSUE.get(final.get('reason'), final.get('reason') or '?')}"}
+        from service.policy.source_check import NO_ISSUE_REASONS   # 한 곳 정의(11/05) — 쓸 때 불러온다(시험의 가짜 모듈과 충돌 방지)
+        return {"ai": did, "human": f"오탐: {NO_ISSUE_REASONS.get(final.get('reason'), final.get('reason') or '사유 없음')}"}
     if kind == "collection_suggest":
         did = f"{ai.get('namespace') or '?'}에서 찾아보기 제안" + (f" (관련도 {signals['score']})" if signals.get("score") is not None else "")
         return {"ai": did, "human": "눌러서 다시 물음" if final and final.get("picked") else None}

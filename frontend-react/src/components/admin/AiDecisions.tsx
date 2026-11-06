@@ -7,6 +7,7 @@ import {
 } from '../../api/eval';
 import { AuditReport, BAR, ORDER, REVIEW_BADGE, REVIEW_HINT, REVIEW_LABEL } from './AuditReport';
 import { adminPath } from '../../pages/adminMenu';
+import { noIssueLabel } from '../../api/policy';
 import { Modal } from '../ui/Modal';
 
 /**
@@ -20,8 +21,9 @@ import { Modal } from '../ui/Modal';
 const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : '-');
 const fmtDate = (s: string) => new Date(s).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const PICK_NAME: Record<string, string> = { option: '선택지 고름', all: '전부 보기', typed: '직접 재질문', superseded: '다음 되묻기로 대체', other: '기타' };
-const REASON_NAME: Record<string, string> = {
-  resolved: '정탐(해결)', source_ok: '오탐 · 원문 정상', already_fixed: '오탐 · 이미 수정됨', duplicate: '중복', other: '기타',
+const REASON_NAME: Record<string, string> = {   // 원문 확인 사유는 api/policy NO_ISSUE_REASONS 한 곳에서(11/05)
+  resolved: '정탐(해결)', source_ok: `오탐 · ${noIssueLabel('source_ok')}`, already_fixed: `오탐 · ${noIssueLabel('already_fixed')}`,
+  duplicate: noIssueLabel('duplicate'), other: noIssueLabel('other'),
 };
 
 type CardKey = 'location' | 'clarify' | 'source' | 'suggest' | 'duplicate' | 'candidates';

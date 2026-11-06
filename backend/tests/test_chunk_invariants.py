@@ -186,3 +186,49 @@ def test_merge_mode_sources_untouched(monkeypatch):
     monkeypatch.setattr(chunker, "_merge_heading_only", boom)
     assert [c.text for c in chunk_document(_doc(secs, "md"), strategy="section")] == before
 
+
+
+def _heading_shape_ok(chunks):
+    """본문 있는 조각이 제목 줄로 끝나지 않고, 한 조각 안에 같은 제목 줄이 두 번 나오지 않는다."""
+    for c in chunks:
+        ls = [ln.strip() for ln in c.text.split("\n") if ln.strip()]
+        heads = [ln for ln in ls if ln.startswith("#")]
+        assert not (ls[-1].startswith("#") and len(heads) < len(ls)), c.text[:80]
+        assert len(heads) == len(set(heads)), c.text[:80]
+
+
+def test_line_longer_than_max_heading_not_dangling_or_doubled():
+    """빈 줄 없는 한 줄이 max보다 길면 고정 길이로 나누고 조각마다 제목을 다시 붙인다 — 그때 남는 제목만 조각을 앞 조각 끝에
+    매달거나(다음 조각에도 같은 제목) 다음 조각 앞에 또 붙이지 않는다(11/05 앱 공간 job 1954: 2,659자 한 줄 섹션).
+    고정 길이로 자른 줄은 I2b(잘린 줄) 대상이라 _check 대신 모양만 본다."""
+    huge = "긴 설명 " + "가나다라 " * 660   # 약 3,300자 한 줄
+    for secs in (
+        [{"title": "앞", "content": "앞 섹션 본문입니다 " + "마" * 40, "level": 2}, {"title": "긴 섹션", "content": huge, "level": 2},
+         {"title": "뒤", "content": "뒤 섹션 본문입니다 " + "바" * 40, "level": 2}],
+        [{"title": "긴 섹션", "content": huge, "level": 2}],
+    ):
+        chunks = chunk_document(_doc(secs), strategy="section")
+        _heading_shape_ok(chunks)
+        assert sum(c.text.count("긴 설명") for c in chunks) == 1   # 본문 첫머리는 한 번만(유실·중복 없음)
+
+
+def test_merge_drops_heading_only_already_leading_next():
+    """단위: 다음 조각이 이미 같은 제목으로 시작하면 제목만 조각은 버린다(붙일 자리와 크기에 상관없이)."""
+    from agents.knowledge_rag.ingestion.chunker import Chunk, _merge_heading_only
+    prev, head = Chunk(text="## 앞\n앞 본문", idx=0), Chunk(text="## 긴 섹션", idx=1)
+    for body in ("가" * 1990, "가" * 10):   # 합치면 max를 넘는 경우 / 안 넘는 경우
+        out = _merge_heading_only([prev, head, Chunk(text="## 긴 섹션\n" + body, idx=2)], 2000)
+        assert [c.text.count("## 긴 섹션") for c in out] == [0, 1]
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_no_dangling_heading_random_with_huge_lines(seed):
+    """성질(무작위): 빈 줄 없는 아주 긴 줄 섹션이 섞여도 본문 있는 조각이 제목 줄로 끝나지 않는다."""
+    rng = random.Random(seed)
+    secs = _gen_sections(rng, rng.randint(2, 12))
+    for n, s in enumerate(secs):
+        if rng.random() < 0.3:
+            s["content"] = f"긴줄{n} " + "가나다 " * rng.randint(300, 490)   # 한 줄이 max 이하(넘는 줄은 고정 길이로 잘려 I2b 대상 밖)
+    for c in _check(secs):
+        ls = [ln.strip() for ln in c.text.split("\n") if ln.strip()]
+        assert not (ls[-1].startswith("#") and any(not x.startswith("#") for x in ls)), c.text[:80]

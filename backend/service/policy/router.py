@@ -70,6 +70,13 @@ class SourceCheckDecision(BaseModel):
     reason: Optional[str] = Field(default=None, pattern="^(source_ok|already_fixed|duplicate|other)$")
 
 
+@router.get("/source-checks/reasons")
+async def get_no_issue_reasons(user: dict = Depends(get_current_user)):
+    """[이슈 아님] 사유 사전(11/05) — 화면 문구도 이 한 곳에서."""
+    from service.policy.source_check import NO_ISSUE_REASONS
+    return [{"key": k, "label": v} for k, v in NO_ISSUE_REASONS.items()]
+
+
 @router.get("/source-checks")
 async def list_source_checks(namespace: str = Query(...), status: Optional[str] = Query(default=None, pattern="^(open|done)$"),
                              user: dict = Depends(get_current_user)):

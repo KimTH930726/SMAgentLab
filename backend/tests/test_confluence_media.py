@@ -89,6 +89,35 @@ def test_ledger_rechunk_reproduces_media_without_network():
     assert "[다이어그램" not in old.raw_text and "[이미지" not in old.raw_text
 
 
+def test_image_counts_per_section_lose_none_and_leave_text_alone():
+    """그림 수(11/06): 절(제목 경로)마다 세고 · 원문의 그림·다이어그램 수와 합이 같다(유실·중복 0) · 그림 없는 절·원문·컨플 아님은 없음."""
+    import random
+    from agents.knowledge_rag.ingestion.source_ledger import chunk_image_counts, marked_text, rechunk_items
+    row = {"id": 1, "source_type": "confluence", "raw_content": STORAGE, "title": "t", "parent_title": None, "source_ref": "1",
+           "source_version": 3, "media": None, "chunk_strategy": None}
+    marked = marked_text(row)
+    counts, found = chunk_image_counts(marked, [x["content"] for x in rechunk_items(row)])
+    assert found and sum(counts) == len(cm._IMAGE_RE.findall(STORAGE)) + len(cm._MACRO_RE.findall(STORAGE)) == 3
+    assert marked_text({**row, "raw_content": "<h2>다음</h2><p>끝</p>"}) is None and marked_text({**row, "source_type": "web"}) is None
+    # 성질(무작위): 그림은 바로 앞 본문이 든 조각에 · 합 = 그림 수 · 맨 앞 그림은 첫 조각
+    rnd = random.Random(7)
+    for _ in range(200):
+        paras = [f"문단 {i} 내용입니다 {rnd.random():.6f}" for i in range(rnd.randint(1, 12))]
+        imgs = {i: rnd.randint(0, 2) for i in range(len(paras))}
+        head = rnd.randint(0, 2)
+        text = "\n".join(["[이미지: h.png — 원문 페이지에서 확인]"] * head
+                         + [ln for i, p in enumerate(paras) for ln in [p] + ["[이미지: x.png — 원문 페이지에서 확인]"] * imgs[i]])
+        cuts = sorted(rnd.sample(range(1, len(paras)), rnd.randint(0, len(paras) - 1))) if len(paras) > 1 else []
+        groups = [paras[a:b] for a, b in zip([0] + cuts, cuts + [len(paras)])]
+        got, ok = chunk_image_counts(text, ["\n".join(g) for g in groups])
+        want, idx = [], 0
+        for g in groups:
+            want.append(sum(imgs[idx + j] for j in range(len(g))))
+            idx += len(g)
+        want[0] += head
+        assert ok and got == want and sum(got) == head + sum(imgs.values())
+
+
 def test_read_restriction_page_and_inherited_from_ancestor():
     """읽기 제한(10/29) — 페이지 자신·상위 페이지(물려받음) 어느 쪽이든 제한이면 적재하지 않는다. 제한 없음은 None."""
     lim = {"read": {"restrictions": {"user": {"results": [{"username": "a"}]}, "group": {"results": []}}}}
@@ -146,3 +175,36 @@ def test_self_closing_diagram_macro_does_not_swallow_following_content():
     out = cm.apply_media(st, {}, diagram_text_on=True, image_marks=True)
     txt = _text(out)
     assert "접기 안 본문" in txt and "다음 본문" in txt   # 리뷰 L7 — 예전엔 바깥 닫는 태그까지 삼켜 본문이 사라졌다
+
+
+def test_restricted_page_included_only_when_admin_turned_it_on(monkeypatch):
+    """읽기 제한 포함(11/05, 관리자) — 켠 적재만 제한 페이지의 그림을 받고 원장 media에 restricted_included를 남긴다.
+    안 켜면 예전 그대로(그림 안 받음, 표시 없음). 제한 수준(restricted)은 어느 쪽이든 그대로 알린다."""
+    import asyncio
+    from contextlib import asynccontextmanager
+    lim = {"read": {"restrictions": {"user": {"results": [{"username": "a"}]}, "group": {"results": []}}}}
+    page = {"id": "7", "title": "앱 안내", "space": {"name": "앱"}, "version": {"number": 2}, "restrictions": lim, "ancestors": [],
+            "body": {"storage": {"value": '<p>본문</p><ac:structured-macro ac:name="drawio"><ac:parameter ac:name="diagramName">흐름</ac:parameter></ac:structured-macro>'}}}
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return page
+
+    class C:
+        async def get(self, *a, **k): return R()
+
+    @asynccontextmanager
+    async def client(**_):
+        yield C()
+
+    asked = []
+    async def fake_diagrams(_c, _b, _p, names, _h):
+        asked.append(list(names))
+        return {}
+    monkeypatch.setattr(w, "guarded_client", client)
+    monkeypatch.setattr(cm, "fetch_diagrams", fake_diagrams)
+    off = asyncio.run(w.fetch_confluence_by_id("https://c.example", "7", "t"))
+    on = asyncio.run(w.fetch_confluence_by_id("https://c.example", "7", "t", include_restricted=True))
+    assert off.metadata["restricted"] == on.metadata["restricted"] == "page"
+    assert "restricted_included" not in off.metadata["media"] and on.metadata["media"]["restricted_included"] == "page"
+    assert asked[0] == [] and asked[1] != []   # 안 켜면 그림을 아예 찾지 않는다

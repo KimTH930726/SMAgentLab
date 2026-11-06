@@ -24,6 +24,8 @@ INTERVAL_CHOICES = (30, 90, 180)   # + None(안 함)
 USAGE_DAYS = 30   # "많이 쓰인 순" — 최근 30일 채팅 답이 근거로 쓴 횟수
 USED_MIN = 3      # ③ 많이 쓰임 = 최근 30일 채팅 근거 3회 이상
 USED_TOP = 10     # ③은 위 10개까지(관리자가 한 번에 볼 만큼)
+SNOOZE_CHOICES = (30, 90)   # [미루기] — 일
+ARCHIVED = "archived"       # [보관](11/05, 업계 Guru archive) — 검색은 active만 보므로 자동으로 빠지고, 되살리면 active
 
 # 원문 페이지 제목 — 컨플 조각은 적재 원장(rag_import_page)의 페이지 제목 › 첫 제목 경로 › 원본 이름.
 # 공간 일괄 적재는 source_file에 묶음 이름("Confluence 16개 페이지(…)")이 들어가 페이지 제목처럼 보이던 것(11/05 태훈).
@@ -69,6 +71,9 @@ def due_docs(rows: Iterable[Mapping], interval_days: Optional[int], now: datetim
         overdue = (now - (last + timedelta(days=interval_days))).days if interval_days else None
         source_changed = key in changed
         n_reported = sum(reported.get(r["id"], 0) for r in rs)   # 신고 건수(조각 수 아님, 리뷰 L6)
+        # 미루기(11/05) — 원문 바뀜·신고는 미뤄도 보인다(채팅이 옛 내용으로 답하는 중 / 새 신호라서, 리뷰 M2)
+        if not source_changed and not n_reported and any((r.get("review_snoozed_until") or now) > now for r in rs):
+            continue
         if not source_changed and not n_reported and (overdue is None or last + timedelta(days=interval_days) >= now):
             continue
         reviewed = [r for r in rs if r["reviewed_at"]]
@@ -153,7 +158,8 @@ async def review_due(namespace: str) -> dict:
         rows = await conn.fetch(
             f"""WITH {PAGE_TITLE_CTE}
                SELECT k.id, k.confluence_page_id, k.source_document_id, k.ingestion_job_id, k.source_file,
-                      COALESCE({TITLE_SQL}, {FIRST_LINE_SQL}) AS title, k.reviewed_at, k.content_edited_at, k.created_at, k.owner
+                      COALESCE({TITLE_SQL}, {FIRST_LINE_SQL}) AS title, k.reviewed_at, k.content_edited_at, k.created_at, k.owner,
+                      k.review_snoozed_until
                FROM rag_knowledge k LEFT JOIN page_title pt ON pt.page_id = k.confluence_page_id
                WHERE k.namespace_id = $1 AND k.status = 'active'""", ns["id"])
         ids = [r["id"] for r in rows]
@@ -188,6 +194,56 @@ async def mark_reviewed(namespace: str, ids: list[int], username: str) -> int:
                WHERE n.name = $1 AND k.namespace_id = n.id AND k.id = ANY($2::int[]) AND k.status = 'active'""",
             namespace, ids, username)
     return int(done.split()[-1])
+
+
+async def snooze(namespace: str, ids: list[int], days: int) -> int:
+    """[미루기] — 그 컬렉션 사용 중 조각에 '이때까지 검토 필요에서 뺌'. 바꾼 수."""
+    if days not in SNOOZE_CHOICES:
+        raise ValueError(f"미루기는 {', '.join(map(str, SNOOZE_CHOICES))}일만 고를 수 있어요.")
+    async with get_conn() as conn:
+        done = await conn.execute(
+            """UPDATE rag_knowledge k SET review_snoozed_until = NOW() + make_interval(days => $3) FROM ops_namespace n
+               WHERE n.name = $1 AND k.namespace_id = n.id AND k.id = ANY($2::int[]) AND k.status = 'active'""", namespace, ids, days)
+    return int(done.split()[-1])
+
+
+async def set_archived(namespace: str, ids: list[int], archive: bool) -> int:
+    """[보관] / [되살리기] — 보관은 사용 중 → archived(검색에서 빠짐, 지우지 않음), 되살리기는 archived → active. 바꾼 수."""
+    async with get_conn() as conn:
+        async with conn.transaction():
+            if archive:   # 쓰는 조각 + 같은 페이지 승인 대기 조각(나중에 승인돼 일부만 돌아오지 않게, 리뷰 L4)
+                rows = await conn.fetch(
+                    """UPDATE rag_knowledge k SET status = $3, updated_at = NOW() FROM ops_namespace n
+                       WHERE n.name = $1 AND k.namespace_id = n.id AND k.id = ANY($2::int[]) AND k.status IN ('active', 'pending_review')
+                       RETURNING k.id""", namespace, ids, ARCHIVED)
+                # 보관 조각으로 메운 지식 공백은 다시 열린다(삭제와 같은 처리, 리뷰 L3)
+                await conn.execute("UPDATE ops_query_log SET resolved_knowledge_id = NULL, resolved_at = NULL "
+                                   "WHERE resolved_knowledge_id = ANY($1::int[])", [r["id"] for r in rows])
+            else:   # 같은 컬렉션·같은 페이지에 이미 쓰는 조각이 있으면(동기화·재등록으로 새 판) 되살리지 않는다 — 옛 판·새 판 중복(리뷰 M1)
+                rows = await conn.fetch(
+                    """UPDATE rag_knowledge k SET status = 'active', updated_at = NOW() FROM ops_namespace n
+                       WHERE n.name = $1 AND k.namespace_id = n.id AND k.id = ANY($2::int[]) AND k.status = $3
+                         AND NOT (k.confluence_page_id IS NOT NULL AND EXISTS (
+                           SELECT 1 FROM rag_knowledge a WHERE a.namespace_id = k.namespace_id AND a.confluence_page_id = k.confluence_page_id
+                           AND a.status = 'active'))
+                       RETURNING k.id""", namespace, ids, ARCHIVED)
+    return len(rows)
+
+
+async def archived_docs(namespace: str) -> list[dict]:
+    """보관된 페이지(되살리기용) — 검토 필요와 같은 묶음·제목."""
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            f"""WITH {PAGE_TITLE_CTE}
+               SELECT k.id, k.confluence_page_id, k.source_document_id, k.ingestion_job_id, k.source_file, k.updated_at,
+                      COALESCE({TITLE_SQL}, {FIRST_LINE_SQL}) AS title
+               FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id LEFT JOIN page_title pt ON pt.page_id = k.confluence_page_id
+               WHERE n.name = $1 AND k.status = '{ARCHIVED}' ORDER BY k.updated_at DESC LIMIT 500""", namespace)
+    groups: dict[str, list] = {}
+    for r in rows:
+        groups.setdefault(doc_key(dict(r)), []).append(r)
+    return [{"key": k, "title": next((r["title"] for r in rs if r["title"]), None) or f"지식 #{rs[0]['id']}", "ids": sorted(r["id"] for r in rs),
+             "n": len(rs), "archived_at": max(r["updated_at"] for r in rs).isoformat()} for k, rs in groups.items()]
 
 
 async def set_interval(namespace: str, days: Optional[int]) -> None:

@@ -3,16 +3,18 @@
 분류해 넣는 곳은 담당 규칙 그대로 — 화면은 넣을 수 있는 곳만 고르게 하고(writable), 확정 때 다시 검사한다."""
 import asyncio
 import json
+import logging
 from typing import Literal, Optional
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from core.database import get_conn
 from core.dependencies import check_namespace_ownership, edit_denied_reason, get_current_user
 from agents.knowledge_rag.ingestion import team_import as ti
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/knowledge/team-import", tags=["knowledge"])
 
 _tasks: set[asyncio.Task] = set()   # 백그라운드 태스크 강한 참조(GC 방지 — service._background_tasks와 같은 이유)
@@ -22,13 +24,26 @@ def _spawn(coro) -> None:
     t = asyncio.create_task(coro)
     _tasks.add(t)
     t.add_done_callback(_tasks.discard)
+    t.add_done_callback(_log_failure)
+
+
+def _log_failure(t: "asyncio.Task") -> None:
+    """뒤에서 도는 일이 예외로 끝나면 로그 — 없으면 GC 때 "never retrieved"만 남아 원인을 못 찾는다(리뷰 M1)."""
+    if not t.cancelled() and t.exception() is not None:
+        logger.error("팀 적재 뒤 작업 실패: %s", t.get_name(), exc_info=t.exception())
 
 
 class _StartBody(BaseModel):
     url: str
     team_id: Optional[int] = None       # 관리자(파트 없음)만 — 다른 사람은 자기 파트의 팀
     default_namespace_id: Optional[int] = None   # 공간 기본 위치(업무 컬렉션) — 공간 전체가 한 업무일 때
+    include_restricted: bool = False   # 읽기 제한 페이지도 적재(관리자만, 11/05) — OpsLens 사용자 누구나 검색하게 된다
     confluence_token: Optional[str] = None
+
+
+# 켠 사람·시각은 include_restricted일 때만(감사). $3를 두 번 써서 타입을 적어야 한다(text/integer 추론 충돌 — 11/05 실사용에서 500)
+INSERT_BATCH_SQL = ("INSERT INTO rag_import_batch (team_id, root_url, created_by_user_id, default_namespace_id, include_restricted_at, include_restricted_by) "
+                    "VALUES ($1, $2, $3::int, $4, CASE WHEN $5::boolean THEN NOW() END, CASE WHEN $5::boolean THEN $3::int END) RETURNING id")
 
 
 async def _my_team(conn, user: dict) -> Optional[int]:
@@ -63,6 +78,8 @@ async def start(body: _StartBody, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail=str(e))
     if not page_id and not space_key:
         raise HTTPException(status_code=400, detail="페이지 주소(pageId=…) 또는 공간 주소(/display/공간키)를 넣어 주세요.")
+    if body.include_restricted and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="읽기 제한 페이지 포함은 관리자만 켤 수 있어요.")
     token = body.confluence_token or get_user_confluence_pat(user)
     if not token:
         raise HTTPException(status_code=400, detail="Confluence PAT가 필요합니다 — 프로필에서 등록해 주세요.")
@@ -71,8 +88,9 @@ async def start(body: _StartBody, user: dict = Depends(get_current_user)):
         if body.default_namespace_id is not None:
             await _allowed(conn, {"team_id": team_id}, user, body.default_namespace_id, domain_only=True)
         try:   # 팀마다 진행 중 배치 하나 — 부분 유니크 인덱스가 동시 시작도 막는다
-            bid = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, created_by_user_id, default_namespace_id) "
-                                      "VALUES ($1, $2, $3, $4) RETURNING id", team_id, body.url.strip(), user["id"], body.default_namespace_id)
+            bid = await conn.fetchval(INSERT_BATCH_SQL, team_id, body.url.strip(), user["id"], body.default_namespace_id, body.include_restricted)
+            if body.include_restricted:   # 감사 — 원래 제한된 내용을 사용자 전체에 여는 결정
+                logger.warning("팀 적재 #%s: 읽기 제한 페이지 포함 — 켠 사람 %s, 주소 %s", bid, user.get("username"), body.url.strip())
         except asyncpg.UniqueViolationError:
             busy = await conn.fetchval("SELECT id FROM rag_import_batch WHERE team_id = $1 AND status IN ('previewing', 'loading')", team_id)
             raise HTTPException(status_code=409, detail=f"이 팀의 적재 배치 #{busy}가 진행 중입니다 — 끝난 뒤 다시.")
@@ -160,9 +178,12 @@ async def get_batch(batch_id: int, user: dict = Depends(get_current_user)):
     """배치 + 페이지 + 고를 수 있는 컬렉션(이 팀 범위, 넣을 수 있나) + 확정을 막는 것."""
     async with get_conn() as conn:
         b = await _batch_for(conn, batch_id, user)
+        if b.get("include_restricted_by"):   # 감사 — 화면에 켠 사람(리뷰 L6)
+            b = {**b, "include_restricted_name": await conn.fetchval("SELECT username FROM ops_user WHERE id = $1", b["include_restricted_by"])}
         pages = [dict(r) for r in await conn.fetch(f"SELECT {_PAGE_COLS} FROM rag_import_page WHERE batch_id = $1 ORDER BY id", batch_id)]
         collections = await _collections(conn, b["team_id"], user)
         held = await ti.held_summary(conn, batch_id) if b["status"] == "loaded" and b.get("published_at") is None else None
+        progress = await ti.publish_progress(conn, b)   # 게시 중일 때만 — 화면 진행 막대(11/05)
     blockers = ti.blockers(pages, b["sampling_required"])
     counts, wrong, _ = ti._sample_view(pages)
     for p in pages:
@@ -173,11 +194,12 @@ async def get_batch(batch_id: int, user: dict = Depends(get_current_user)):
         for ns, _sim in s.get("neighbors") or []:
             nb[ns] = nb.get(ns, 0) + 1
         p["signals"] = {"neighbors": nb, "reason": s.get("reason"), "fallback": s.get("fallback"), "error": s.get("error"),
-                        "restricted": s.get("restricted"), "doc_type": s.get("doc_type")}
+                        "restricted": s.get("restricted"), "doc_type": s.get("doc_type"),
+                        "restricted_included": s.get("restricted_included")}
     batch = {k: (str(v) if k.endswith("_at") and v is not None else v) for k, v in b.items()}
     if isinstance(batch.get("publish_check"), str):
         batch["publish_check"] = json.loads(batch["publish_check"])
-    return {"batch": batch, "held": held,   # held = 게시 전 검수 카드(게시 전 배치만)
+    return {"batch": batch, "held": held, "publish_progress": progress,   # held = 게시 전 검수 카드(게시 전 배치만)
             "pages": pages, "collections": collections, "blockers": blockers,
             "sample_targets": ti.sample_targets(counts, wrong),
             "sample_size": ti.SAMPLE_SIZE, "reasons": ti.REASONS}
@@ -389,6 +411,40 @@ class _SyncBody(BaseModel):
     mode: Literal["incremental", "full"] = "incremental"
 
 
+async def _visible_connection(conn, conn_id: int, user: dict):
+    """연결 하나 — 목록과 같은 범위(관리자 전체, 그 밖엔 내 팀)."""
+    c = await conn.fetchrow("SELECT * FROM rag_source_connection WHERE id = $1", conn_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="연결이 없습니다.")
+    if user["role"] != "admin" and await _my_team(conn, user) != c["team_id"]:
+        raise HTTPException(status_code=403, detail="이 팀의 연결이 아닙니다.")
+    c = dict(c)
+    if isinstance(c.get("retry_pages"), str):
+        c["retry_pages"] = json.loads(c["retry_pages"])
+    return c
+
+
+@router.get("/connections/{conn_id}/changes")
+async def connection_changes(conn_id: int, days: int = Query(default=30, ge=1, le=90), user: dict = Depends(get_current_user)):
+    """동기화로 바뀐 페이지(11/05) — 바뀐 줄 수 큰 순 · 채팅 근거 횟수 · 충돌(반영 안 함). 본문 없음(줄 수만)."""
+    from agents.knowledge_rag.ingestion.sync_changes import list_changes
+    async with get_conn() as conn:
+        c = await _visible_connection(conn, conn_id, user)
+    return await list_changes(c, days)
+
+
+@router.get("/connections/{conn_id}/changes/{new_id}")
+async def connection_change_detail(conn_id: int, new_id: int, user: dict = Depends(get_current_user)):
+    """한 페이지의 옛 판 ↔ 새 판(차이 보기)."""
+    from agents.knowledge_rag.ingestion.sync_changes import change_detail
+    async with get_conn() as conn:
+        c = await _visible_connection(conn, conn_id, user)
+    d = await change_detail(c, new_id)
+    if d is None:
+        raise HTTPException(status_code=404, detail="이 공간에서 바뀐 페이지가 아닙니다.")
+    return d
+
+
 @router.post("/connections/{conn_id}/sync", status_code=202)
 async def sync_now(conn_id: int, body: _SyncBody, user: dict = Depends(get_current_user)):
     """[지금 동기화] — 백그라운드. 누른 사람이 이 팀 담당이면 그 사람을 새 담당(토큰 주인)으로 — 토큰 만료로 멈춘 연결을 다시 잇는 길."""
@@ -459,7 +515,22 @@ async def publish_check(batch_id: int, user: dict = Depends(get_current_user)):
         b = await _batch_for(conn, batch_id, user, write=True)
     if b["status"] != "loaded" or b.get("published_at") is not None:
         raise HTTPException(status_code=409, detail="게시 전 배치만 확인할 수 있습니다.")
-    return await ti.publish_check(batch_id)
+    if ti.check_running(b):
+        raise HTTPException(status_code=409, detail="검색 확인이 이미 도는 중입니다 — 끝난 뒤 다시 눌러 주세요.")
+    # 뒤에서 — 질문 10개(로컬 LLM)라 1분 가까이 걸린다. 화면은 배치 publish_check.running·asked/total로 진행을 그린다(11/05 "멈춘 것처럼")
+    _spawn(ti.publish_check(batch_id))
+    return {"status": "running"}
+
+
+@router.get("/{batch_id}/overlap/{job_id}")
+async def overlap_detail(batch_id: int, job_id: int, user: dict = Depends(get_current_user)):
+    """품질 리포트 — 한 페이지의 이웃 겹침 상세(조각 번호 쌍 · 겹친 줄 · 원문/조각 등장 수)."""
+    async with get_conn() as conn:
+        await _batch_for(conn, batch_id, user)
+        out = await ti.overlap_detail(conn, batch_id, job_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="이 배치의 페이지가 아닙니다.")
+    return out
 
 
 @router.post("/{batch_id}/publish")
@@ -476,9 +547,12 @@ async def publish(batch_id: int, user: dict = Depends(get_current_user)):
     if b["status"] != "loaded" or b.get("published_at") is not None:
         raise HTTPException(status_code=409, detail="게시 전 배치만 게시할 수 있습니다(이미 게시했거나 되돌림).")
     try:
-        return await ti.publish_batch(batch_id, user)
+        async with get_conn() as conn:
+            job_ids = await ti.claim_publish(conn, batch_id)   # 잡기는 여기서(두 번 누름은 409) — 게시 본체는 뒤에서, 진행은 배치 상세 publish_progress
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    _spawn(ti.publish_batch(batch_id, user, job_ids))
+    return {"status": "publishing"}
 
 
 @router.post("/{batch_id}/rollback")

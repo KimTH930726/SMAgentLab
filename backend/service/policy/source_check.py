@@ -29,7 +29,9 @@ TYPES = ("question", "conflict", "ref_error")
 LINK_SOURCE = "v0_rule"          # 적재기의 제안 연결 출처(scripts/load_policy_v0.py add_suggested_links)
 _RESOLUTION_STATUS = {"resolved": "approved", "dismissed": "rejected"}
 # [문제 없음] 사유(사용자 10/26 결정 4개) — 기타만 직접 입력 필수. AI 판단 원장(kind source_check)에 남겨 검사기 오탐률로 본다
-NO_ISSUE_REASONS = {"source_ok": "원문이 맞음", "already_fixed": "이미 고쳐짐", "duplicate": "중복", "other": "기타"}
+# 이 사전이 유일한 정의(11/05 하드코딩 감사 — 다섯 곳에 따로 있어 화면마다 "원문이 맞음/원문 정상/오탐 · 원문 정상"으로 어긋났다).
+# AI 감사(decision_log·override)도 여기서 가져간다. 화면은 GET /policy/source-checks/reasons로 같은 값을 받는다
+NO_ISSUE_REASONS = {"source_ok": "원문 정상", "already_fixed": "이미 수정됨", "duplicate": "중복", "other": "기타"}
 LEDGER_KIND = "source_check"
 
 

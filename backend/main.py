@@ -1263,7 +1263,9 @@ async def _migrate_drop_orphans_2026_10_06(conn) -> None:
         await conn.execute("ALTER TABLE rag_knowledge DROP COLUMN IF EXISTS quality_score")
         dup = await conn.execute(
             "DELETE FROM rag_knowledge_duplicate_match d USING rag_knowledge k "
-            "WHERE k.id = d.new_knowledge_id AND k.status <> 'pending_review'")
+            # 게시 전 승인 대기(staging_review)도 아직 끝난 게 아니다 — 게시하면 pending_review가 되고 그때 이 비교가 필요하다
+            # (11/05 실사고: staging 상태가 생긴 뒤 조건을 안 고쳐 재시작마다 게시 전 비교 기록이 지워졌다 — 앱 공간 30건)
+            "WHERE k.id = d.new_knowledge_id AND k.status NOT IN ('pending_review', 'staging_review')")
         clusters = await conn.execute(
             "DELETE FROM ops_voc_cluster v WHERE last_seen_at < NOW() - INTERVAL '30 days' "
             "AND NOT EXISTS (SELECT 1 FROM ops_email_analysis e WHERE e.voc_cluster_id = v.id)")
@@ -1678,6 +1680,10 @@ async def _migrate_team_import(conn) -> None:
     # 게시 중 표시(두 번 누름·게시 중 롤백 막기) · 게시한 사람(자동 용어를 이 사람이 만든다 — 롤백이 그 용어를 찾는 기준)
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS publishing_at TIMESTAMPTZ")
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS published_by_user_id INT")
+    # 11/05 태훈 "앱 공간(맨 위 페이지 보기 제한 → 500페이지 전부 건너뜀)을 앱 시스템에 넣어야" — 관리자가 켜면 읽기 제한 페이지도 적재.
+    # 누가·언제 켰는지가 기록(감사). 같은 주소의 소스 연결 동기화도 이 묶음 결정을 따른다(제한이라고 다시 내리지 않음)
+    await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS include_restricted_at TIMESTAMPTZ")
+    await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS include_restricted_by INT REFERENCES ops_user(id) ON DELETE SET NULL")
     # 옛 흐름(적재 때 용어 추출 → glossary_to_id가 적재 때 채워짐)만 — 새 흐름에서 게시 도중(용어 추출 중) 재시작된 배치는 게시 전으로 남겨
     # 다시 [게시]하면 용어까지 마무리된다(조용히 "게시됨"으로 바꾸지 않는다, 재리뷰 L2)
     await conn.execute("UPDATE rag_import_batch b SET published_at = b.loaded_at WHERE b.status = 'loaded' AND b.published_at IS NULL "
@@ -2020,6 +2026,10 @@ async def _migrate_org_domain(conn) -> None:
     await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS parent_id INT REFERENCES ops_namespace(id) ON DELETE SET NULL")
     # 검토 주기(11/04, agents/knowledge_rag/knowledge/review.py) — 일 수, NULL = 검토 안 함. 기존 컬렉션도 90일로 시작
     await conn.execute("ALTER TABLE ops_namespace ADD COLUMN IF NOT EXISTS review_interval_days INT DEFAULT 90 CHECK (review_interval_days IS NULL OR review_interval_days > 0)")
+    # 검토 미루기(11/05, 업계 "defer review") — 이 시각까지 검토 필요 목록에서 뺀다(원문 바뀜은 그래도 보임)
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS review_snoozed_until TIMESTAMPTZ")
+    # 조각 근처 그림 수(11/06, source_ledger.refresh_image_counts) — 같은 절의 그림·다이어그램 수, 근거 카드 "그림 N · 원문 보기"용. NULL = 아직 안 셈
+    await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS image_count INT")
     await conn.execute("ALTER TABLE ops_voc_routing ADD COLUMN IF NOT EXISTS part_id INT REFERENCES ops_part(id) ON DELETE SET NULL")
     if await _column_exists(conn, "ops_voc_routing", "part"):   # 아래에서 옛 글자 칸을 지운 뒤에도 재기동이 깨지지 않게(재리뷰 H1)
         await conn.execute("""

@@ -101,9 +101,10 @@ class RestPatSource:
                 start += len(res)
         return out
 
-    async def page(self, page_id: str):
+    async def page(self, page_id: str, include_restricted: bool = False):
         from agents.knowledge_rag.ingestion.web_crawler import fetch_confluence_by_id
-        return await fetch_confluence_by_id(self.base_url, page_id, self.token, diagram_text=True, image_marks=False)
+        return await fetch_confluence_by_id(self.base_url, page_id, self.token, diagram_text=True, image_marks=False,
+                                            include_restricted=include_restricted)
 
     async def list_all(self) -> tuple[list[str], bool]:
         from agents.knowledge_rag.ingestion import team_import as ti
@@ -203,6 +204,13 @@ async def _known_pages(conn, c) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def include_restricted_for(conn, team_id: int, root_url: str) -> bool:
+    """이 주소를 관리자가 '읽기 제한 페이지도 넣기'로 적재했나(11/05) — 실제로 적재까지 간(loaded) 묶음의 결정만 따른다.
+    최신 묶음 기준이면 다른 사람의 미리보기(끔) 하나가 관리자 결정을 조용히 뒤집고, 확정 안 한 미리보기(켬)가 동기화를 켰다(리뷰 M1)."""
+    return bool(await conn.fetchval("SELECT 1 FROM rag_import_batch WHERE team_id = $1 AND root_url = $2 AND status = 'loaded' "
+                                    "AND include_restricted_at IS NOT NULL LIMIT 1", team_id, root_url))
+
+
 async def _write_denied(conn, ns_id: int, owner: dict) -> Optional[str]:
     """담당자가 그 컬렉션에 쓸 수 있나 — 화면 등록·적재 확정과 같은 규칙(edit_denied_reason)."""
     from core.dependencies import EFFECTIVE_OWNERS_SQL, edit_denied_reason
@@ -248,6 +256,12 @@ async def _reingest(src, c, ch: dict, rules: dict, owner: dict, out: dict) -> Op
                                    c["team_id"], c["root_url"], pid):
                 out["excluded"] += 1
                 return None
+        # 사람이 [보관]한 페이지(11/05) — 동기화가 새 판으로 되살리지 않는다(되살리기는 사람이). 보관 조각만 있고 쓰는 조각이 없을 때
+        if await conn.fetchval("SELECT 1 FROM rag_knowledge WHERE namespace_id = $1 AND confluence_page_id = $2 AND status = 'archived' "
+                               "AND NOT EXISTS (SELECT 1 FROM rag_knowledge WHERE namespace_id = $1 AND confluence_page_id = $2 "
+                               "AND status IN ('active', 'pending_review')) LIMIT 1", ns_id, pid):
+            out["archived"] += 1
+            return None
         denied = await _write_denied(conn, ns_id, owner)
         target = await conn.fetchrow("SELECT kind, area FROM ops_namespace WHERE id = $1", ns_id)
     # 운영 지식은 시스템에만(11/02 D) — 옛 규칙·옛 등록이 정책을 가리키면 페이지를 받기 전에 건너뛴다(본문 내려받기·초안 없음)
@@ -258,8 +272,12 @@ async def _reingest(src, c, ch: dict, rules: dict, owner: dict, out: dict) -> Op
     if denied:
         out["denied"] += 1
         return None
-    doc = await src.page(pid)
-    if doc.metadata.get("restricted"):
+    if "_include_restricted" not in out:   # 연결 단위로 한 번(리뷰 L4)
+        async with get_conn() as conn:
+            out["_include_restricted"] = await include_restricted_for(conn, c["team_id"], c["root_url"])
+    include = out["_include_restricted"]
+    doc = await src.page(pid, include_restricted=include)
+    if doc.metadata.get("restricted") and not include:
         async with get_conn() as conn:
             held, _ = await hold_restricted_chunks(conn, ns_id, pid)
         out["restricted"] += 1
@@ -320,7 +338,7 @@ async def _reingest(src, c, ch: dict, rules: dict, owner: dict, out: dict) -> Op
 
 def _empty_result(mode: str) -> dict:
     return {"mode": mode, "changed": 0, "updated": 0, "added": 0, "unchanged": 0, "restricted": 0, "held": 0, "conflict": 0,
-            "no_rule": 0, "excluded": 0, "elsewhere": 0, "denied": 0, "rolled_back": 0, "out_of_scope": 0, "empty": 0, "failed": 0, "missing": 0,
+            "no_rule": 0, "excluded": 0, "elsewhere": 0, "denied": 0, "rolled_back": 0, "out_of_scope": 0, "empty": 0, "failed": 0, "missing": 0, "archived": 0,
             "incomplete": False, "too_many_missing": False, "_touched": set()}
 
 

@@ -165,7 +165,9 @@ def summarize(rows: list[dict], names: dict[int, str]) -> dict:
         if r["kind"] == "chat_clarify":
             label = "직접 재질문" if final.get("typed") else "전부 보기"   # 채팅 버튼 이름 그대로
         elif r["kind"] == "source_check":
-            label = {"source_ok": "오탐 · 원문 정상", "already_fixed": "오탐 · 이미 수정됨"}.get(final.get("reason"), "오탐")
+            from service.policy.source_check import NO_ISSUE_REASONS   # 한 곳 정의(11/05) — 원문 정상·이미 수정됨만 "오탐"의 하위 사유
+            reason = final.get("reason")
+            label = f"오탐 · {NO_ISSUE_REASONS[reason]}" if reason in ("source_ok", "already_fixed") else "오탐"
         elif r["kind"] == DUPLICATE:
             label = "중복 아님(그대로 저장)"   # AI는 중복이라 했는데 사람이 저장
         else:

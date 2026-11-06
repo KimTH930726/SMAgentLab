@@ -67,7 +67,7 @@ LOOSE_NAMESPACE_REFS = (("rag_import_page", "final_namespace_id"), ("rag_import_
 # 원문·정책·용어가 복구 불가로 지워졌다). 이력(지운·폐기된 지식, 대화·질의 기록, 끝난 정정, VOC)은 막지 않는다 — 세면 한 번이라도 쓴
 # 컬렉션은 화면에서 영영 못 지웠다(재리뷰 M1: 질의 기록·대화는 지울 화면도 없다). (표, 화면 이름, 살아 있는 줄 조건) — 코드 상수
 NAMESPACE_CONTENT_TABLES = (
-    ("rag_knowledge", "운영 지식", "status IN ('active', 'pending_review')"),
+    ("rag_knowledge", "운영 지식", "status IN ('active', 'pending_review', 'archived')"),   # 보관도 살아 있는 내용(11/05)
     ("rag_source_document", "원문", "status IN ('active', 'draft')"),
     ("policy_item", "정책", "status <> 'deprecated' AND status <> 'rejected'"),
     ("policy_doc_overview", "정책서 개요", "TRUE"), ("ref_table", "참고표", "TRUE"), ("ref_common_code", "공통코드", "TRUE"),

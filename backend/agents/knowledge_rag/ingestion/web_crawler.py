@@ -567,7 +567,7 @@ def page_meta(page: dict, page_url: str) -> dict:
             "labels": [x.get("name") for x in ((page.get("metadata") or {}).get("labels") or {}).get("results", []) if x.get("name")]}
 
 
-async def fetch_confluence_by_id(base_url: str, page_id: str, token: str, *, diagram_text: bool = True,
+async def fetch_confluence_by_id(base_url: str, page_id: str, token: str, *, diagram_text: bool = True, include_restricted: bool = False,
                                  image_marks: bool = False) -> ParsedDocument:
     """page_id 기반 단일 페이지 fetch — 트리 선택 후 bulk 인제스천에서 호출.
     그림(10/29): draw.io는 첨부 원본에서 글로(diagram_text), 일반 그림은 자리 표시(image_marks) — confluence_media. 둘 다 끄면 예전처럼 버림."""
@@ -590,7 +590,8 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str, *, dia
             page = r.json()
             storage_html = page.get("body", {}).get("storage", {}).get("value", "")
             restricted = read_restriction(page)
-            names = cm.find_diagrams(storage_html) if diagram_text and not restricted else []   # 제한 페이지는 첨부도 안 받는다
+            # 제한 페이지는 첨부도 안 받는다 — 관리자가 제한 포함을 켠 적재(include_restricted, 11/05)만 받는다
+            names = cm.find_diagrams(storage_html) if diagram_text and (not restricted or include_restricted) else []
             diagrams = await cm.fetch_diagrams(client, base, page_id, names, headers)
     except (httpx.HTTPStatusError, httpx.RequestError) as e:
         raise _translate_httpx_error(e) from e
@@ -607,6 +608,8 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str, *, dia
 
     media = {"diagram_text": diagram_text, "image_marks": image_marks, "diagrams": diagrams,
              "diagram_names": names, "page": page_meta(page, page_url)}
+    if restricted and include_restricted:   # 원래 제한 — 원장에 남긴다(나중에 권한 연동하면 이걸로 골라낸다)
+        media["restricted_included"] = restricted
     soup = BeautifulSoup(prepare_storage_html(cm.apply_media(storage_html, diagrams, diagram_text_on=diagram_text,
                                                              image_marks=image_marks)), "lxml")
     raw_text = _extract_text(soup)

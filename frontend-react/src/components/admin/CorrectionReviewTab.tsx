@@ -6,6 +6,7 @@ import {
   updateCorrectionProposed, POLICY_CHANGE_TARGETS, USER_REASONS, type CorrectionItem,
 } from '../../api/corrections';
 import { Button } from '../ui/Button';
+import { ProgressBar } from '../ui/ProgressBar';
 import { Badge } from '../ui/Badge';
 import { CorrectionAnalysis } from '../chat/CorrectionAnalysis';
 import { FormModal } from '../ui/FormModal';
@@ -369,6 +370,20 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
         </p>
       )}
 
+      {item.ai_verdict?.draft_fallback && (
+        <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200"
+          data-testid={`correction-fallback-${item.id}`}>⚠ {item.ai_verdict.draft_fallback}</p>
+      )}
+      {item.ai_verdict?.draft_explain && (
+        // AI 초안이 어디를 왜 고쳤나(11/05) — 고칠 곳은 원문에 실제로 있는 인용일 때만 서버가 남긴다
+        <div className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs space-y-1" data-testid={`correction-explain-${item.id}`}>
+          {item.ai_verdict.draft_explain.wrong_part && <p><span className="mr-1.5 rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">고칠 곳</span>
+            <span className="text-slate-200">{item.ai_verdict.draft_explain.wrong_part}</span></p>}
+          {item.ai_verdict.draft_explain.fix_summary && <p><span className="mr-1.5 rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">고친 내용</span>
+            <span className="text-slate-200">{item.ai_verdict.draft_explain.fix_summary}</span></p>}
+        </div>
+      )}
+
       {item.ai_verdict?.verdict && (
         <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 dark:border-indigo-800/50 dark:bg-indigo-950/20 p-3">
           <CorrectionAnalysis verdict={item.ai_verdict} audience="admin" />
@@ -409,6 +424,8 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
           {Array.isArray(orig(item).category_path) && (orig(item).category_path as string[]).length > 0 && (
             <span className="text-slate-500">{(orig(item).category_path as string[]).join(' › ')}</span>)}
           {item.source_check_id != null && <span className="ml-auto text-slate-500" title="원문 확인 카드에서 올린 정정 — 승인되면 그 카드도 처리 완료로 닫혀요">원문 확인 #{item.source_check_id}에서</span>}
+          {item.source_check_reason && <span className="basis-full text-slate-300" data-testid={`correction-sc-reason-${item.id}`}>
+            <span className="mr-1 text-slate-500">카드 문제</span>{item.source_check_reason}</span>}
         </p>
       )}
 
@@ -539,6 +556,7 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
   const [source, setSource] = useState<SourceGroup>('all');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [results, setResults] = useState<BulkResult[] | null>(null);
+  const [bulkProg, setBulkProg] = useState<{ done: number; total: number; startedAt: string } | null>(null);   // 일괄 승인 진행(11/05 진행 표시)
   const { data: all = [], isLoading, error } = useQuery({
     queryKey: ['corrections', namespace, status],
     queryFn: () => listCorrections(namespace || null, status),
@@ -609,10 +627,12 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
   const bulk = useMutation({
     mutationFn: async (ids: number[]) => {
       const out: BulkResult[] = [];
+      setBulkProg({ done: 0, total: ids.length, startedAt: new Date().toISOString() });
       for (const id of ids) {
         const item = items.find((i) => i.id === id);
         if (!item || !approvable(item) || !item.proposed) {
           out.push({ id, ok: false, message: '승인할 수 없는 상태예요(수정안 없음·【확인 필요】).' });
+          setBulkProg((p) => (p ? { ...p, done: out.length } : p));   // 건너뛴 건도 센다(리뷰 L4)
           continue;
         }
         try {
@@ -621,9 +641,11 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
         } catch (e) {
           out.push({ id, ok: false, message: e instanceof Error ? e.message : String(e) });
         }
+        setBulkProg((p) => (p ? { ...p, done: out.length } : p));
       }
       return out;
     },
+    onSettled: () => setBulkProg(null),
     onSuccess: (out) => {
       setResults(out);
       setSelected(new Set(out.filter((r) => !r.ok).map((r) => r.id)));
@@ -687,6 +709,8 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
         )}
       </div>
 
+      {bulk.isPending && bulkProg && <ProgressBar label="일괄 승인 중" done={bulkProg.done} total={bulkProg.total} unit="건" startedAt={bulkProg.startedAt}
+        detail="건마다 차례로 승인해요 — 브라우저 창을 닫으면 남은 건은 승인되지 않아요" />}
       {results && (
         <div role="status" className="rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2 text-xs space-y-1">
           <p className="text-slate-200">

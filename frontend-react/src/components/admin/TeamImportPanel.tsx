@@ -1,13 +1,16 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getTeams } from '../../api/auth';
 import {
   confirmImport, confluencePageUrl, connectImport, getImportBatch, listConnections, syncConnection, getImportCollections, listImportBatches, reviewImportSample, rollbackImport, publishCheckImport, publishImport, sampleKey,
-  setImportDefault, startImport, updateImportPages,
-  type ImportBatchDetail, type ImportCollection, type ImportPage, type SourceConnection,
+  setImportDefault, startImport, updateImportPages, listSyncChanges, getSyncChange, getOverlapDetail, type SyncChange,
+  type HeldSummary, type OverlapDetail, type PublishCheck, type ImportBatchDetail, type ImportCollection, type ImportPage, type SourceConnection,
 } from '../../api/teamImport';
 import { useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../store/useAuthStore';
+import { ReviewDiff } from './ReviewDiff';
+import { Modal } from '../ui/Modal';
+import { ProgressBar } from '../ui/ProgressBar';
 import { showAlert, showConfirm, showError } from '../../store/useDialogStore';
 
 /**
@@ -62,6 +65,7 @@ const CONN_STATUS: Record<SourceConnection['status'], { label: string; cls: stri
 function Connections() {
   const qc = useQueryClient();
   const [kicked, setKicked] = useState(0);
+  const [openChanges, setOpenChanges] = useState<number | null>(null);   // 바뀐 페이지 펼친 연결(11/05)
   const { data: rows = [] } = useQuery({
     queryKey: ['source-connections'], queryFn: listConnections,
     // 누른 직후엔 백그라운드가 아직 '동기화 중'으로 안 바꿨을 수 있어 10초는 계속 본다
@@ -69,7 +73,7 @@ function Connections() {
   });
   const go = useMutation({
     mutationFn: ({ id, mode }: { id: number; mode: 'incremental' | 'full' }) => syncConnection(id, mode),
-    onSuccess: () => { setKicked(Date.now()); qc.invalidateQueries({ queryKey: ['source-connections'] }); },
+    onSuccess: () => { setKicked(Date.now()); qc.invalidateQueries({ queryKey: ['source-connections'] }); qc.invalidateQueries({ queryKey: ['sync-changes'] }); },
     onError: (e) => showError(e),
   });
   if (rows.length === 0) return null;
@@ -82,7 +86,7 @@ function Connections() {
     }
     const parts = [`바뀜 ${r.changed}`, r.updated && `수정 ${r.updated}`, r.added && `새로 ${r.added}`, r.held && `내림 ${r.held}`,
       r.no_rule && `규칙 없는 새 묶음 ${r.no_rule}`, r.denied && `권한 없음 ${r.denied}`, r.elsewhere && `다른 경로 ${r.elsewhere}`,
-      r.failed && `실패 ${r.failed}`].filter(Boolean);
+      r.archived && `보관이라 건너뜀 ${r.archived}`, r.failed && `실패 ${r.failed}`].filter(Boolean);
     return parts.join(' · ');
   };
   return (
@@ -117,12 +121,88 @@ function Connections() {
                   className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-40">지금 동기화</button>
                 <button disabled={go.isPending || c.status === 'running'} onClick={() => go.mutate({ id: c.id, mode: 'full' })}
                   className="ml-3 text-xs text-slate-400 hover:text-slate-200 disabled:opacity-40" title="목록 전체를 받아 사라진·제한된 페이지 확인(오래 걸림)">전체 대조</button>
+                <button onClick={() => setOpenChanges(openChanges === c.id ? null : c.id)} aria-expanded={openChanges === c.id} data-testid={`connection-changes-${c.id}`}
+                  className="ml-3 text-xs text-slate-300 hover:text-slate-100" title="최근 30일 동기화로 바뀐 페이지 — 원문 링크·차이 보기">
+                  바뀐 페이지 {openChanges === c.id ? '▾' : '▸'}</button>
               </td>
             </tr>
-          ))}
+          )).flatMap((row, i) => openChanges === rows[i].id
+            ? [row, <tr key={`ch-${rows[i].id}`} className="border-t border-slate-700/40"><td colSpan={6} className="px-4 py-3"><SyncChanges c={rows[i]} /></td></tr>]
+            : [row])}
         </tbody>
       </table>
     </section>
+  );
+}
+
+/**
+ * 동기화로 바뀐 페이지(11/05 태훈 "몇백 장이면 다 보기 힘들 것") — 바뀐 줄 수 큰 순, [채팅에 쓰인 것만], 충돌은 맨 위, 처음엔 20개.
+ * [원문 ↗] = 컨플 페이지, [차이 보기] = 옛 판 ↔ 새 판(승인 대기 비교와 같은 화면). 업계: Confluence 페이지 기록 '변경 사항 비교'.
+ */
+const CHANGES_SHOW = 20;
+function SyncChanges({ c }: { c: SourceConnection }) {
+  const q = useQuery({ queryKey: ['sync-changes', c.id], queryFn: () => listSyncChanges(c.id), staleTime: 60_000 });
+  const [usedOnly, setUsedOnly] = useState(false);
+  const [all, setAll] = useState(false);
+  const [view, setView] = useState<SyncChange | null>(null);
+  if (q.isLoading) return <p className="text-xs text-slate-500">불러오는 중…</p>;
+  if (q.error) return <p className="text-xs text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p>;
+  const d = q.data!;
+  const items = usedOnly ? d.items.filter((x) => x.used > 0) : d.items;
+  const shown = all ? items : items.slice(0, CHANGES_SHOW);
+  const pageUrl = (pid: string) => confluencePageUrl(c.root_url, pid);
+  return (
+    <div className="space-y-2" data-testid={`sync-changes-${c.id}`}>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <b className="text-slate-100">최근 {d.days}일 바뀐 페이지 {d.items.length}</b>
+        {d.capped && <span className="text-slate-500" title="한 번에 최근 반영 300개까지만 비교해요">(최근 300개까지)</span>}
+        {d.conflicts.length > 0 && <span className="rounded-md bg-amber-100 px-2 py-0.5 font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
+          title="우리 쪽에서 사람이 고친 조각이 있어 반영하지 않은 페이지 — 운영 지식 › 검토 필요에 '원문 바뀜'으로 떠요">반영 안 함 {d.conflicts.length}</span>}
+        <label className="ml-auto flex items-center gap-1.5 text-slate-300" title={`최근 ${d.usage_days}일 채팅 답의 근거로 쓰인 페이지만 — 실제 답에 영향이 가는 변경`}>
+          <input type="checkbox" checked={usedOnly} onChange={(e) => setUsedOnly(e.target.checked)} className="accent-indigo-500" data-testid="sync-changes-used" />
+          채팅에 쓰인 것만 ({d.items.filter((x) => x.used > 0).length})</label>
+      </div>
+      {d.conflicts.length > 0 && (
+        <ul className="space-y-0.5 text-xs">
+          {d.conflicts.slice(0, 5).map((p) => (
+            <li key={p.page_id} className="flex gap-2"><span className="text-amber-700 dark:text-amber-300">반영 안 함</span>
+              <span className="min-w-0 truncate text-slate-200">{p.title ?? p.page_id}</span>
+              {pageUrl(p.page_id) && <a href={pageUrl(p.page_id)!} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline dark:text-indigo-400">원문 ↗</a>}</li>
+          ))}
+        </ul>
+      )}
+      {items.length === 0 ? <p className="text-xs text-slate-500">{usedOnly ? '채팅에 쓰인 페이지 중 바뀐 것이 없어요.' : '이 기간에 바뀐 페이지가 없어요.'}</p> : (
+        <ul className="divide-y divide-slate-700/60 rounded-lg border border-slate-700">
+          {shown.map((x) => (
+            <li key={x.new_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 text-xs" data-testid={`sync-change-${x.new_id}`}>
+              <span className="w-24 shrink-0 tabular-nums font-semibold" title="바뀐 줄 수(더함 / 뺌)">
+                <span className="text-emerald-700 dark:text-emerald-300">+{x.added}</span> <span className="text-rose-700 dark:text-rose-300">−{x.removed}</span></span>
+              <span className="min-w-0 flex-1 truncate text-slate-100" title={x.title ?? x.page_id}>{x.title ?? x.page_id}</span>
+              {x.used > 0 && <span className="text-slate-400" title={`최근 ${d.usage_days}일 채팅 답 근거`}>채팅 {x.used}회</span>}
+              <span className="text-slate-500">{x.activated_at ? fmtTime(x.activated_at) : ''}</span>
+              {pageUrl(x.page_id) && <a href={pageUrl(x.page_id)!} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline dark:text-indigo-400">원문 ↗</a>}
+              <button type="button" onClick={() => setView(x)} className="text-slate-300 hover:text-slate-100" data-testid={`sync-change-diff-${x.new_id}`}>차이 보기</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {items.length > CHANGES_SHOW && (
+        <button type="button" onClick={() => setAll((v) => !v)} className="text-xs text-slate-400 hover:text-slate-200">
+          {all ? '접기' : `${items.length - CHANGES_SHOW}개 더`}</button>
+      )}
+      {view && <SyncChangeModal connId={c.id} item={view} onClose={() => setView(null)} />}
+    </div>
+  );
+}
+
+function SyncChangeModal({ connId, item, onClose }: { connId: number; item: SyncChange; onClose: () => void }) {
+  const q = useQuery({ queryKey: ['sync-change', connId, item.new_id], queryFn: () => getSyncChange(connId, item.new_id), staleTime: 300_000 });
+  return (
+    <Modal isOpen onClose={onClose} title={item.title ?? item.page_id} maxWidth="max-w-6xl">
+      {q.error ? <p className="text-sm text-rose-600 dark:text-rose-400">불러오지 못했습니다: {(q.error as Error).message}</p>
+        : <ReviewDiff before={q.data?.before ?? null} after={q.data?.after ?? ''} loading={q.isLoading}
+            leftLabel="옛 원문" rightLabel="새 원문" leftShort="옛 원문" rightShort="새 원문" emptyText="옛 원문이 없어요." />}
+    </Modal>
   );
 }
 
@@ -171,13 +251,14 @@ export function SpaceImportStart({ url, onStarted, onCancel }: { url: string; on
   const { data: teams = [] } = useQuery({ queryKey: ['teams'], queryFn: getTeams, enabled: isAdmin, staleTime: 300_000 });
   const [teamId, setTeamId] = useState<number | null>(null);
   const [defaultNs, setDefaultNs] = useState<number | null>(null);
+  const [withRestricted, setWithRestricted] = useState(false);   // 읽기 제한 페이지 포함(관리자만, 11/05)
   const { data: cols = [] } = useQuery({
     queryKey: ['team-import-collections', teamId], queryFn: () => getImportCollections(teamId),
     enabled: !isAdmin || teamId != null, staleTime: 60_000,
   });
   const qc = useQueryClient();
   const start = useMutation({
-    mutationFn: () => startImport(url.trim(), isAdmin ? teamId : null, defaultNs),
+    mutationFn: () => startImport(url.trim(), isAdmin ? teamId : null, defaultNs, isAdmin && withRestricted),
     onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['team-import'] }); onStarted(r.id); },
     onError: (e) => showError(e),
   });
@@ -204,6 +285,18 @@ export function SpaceImportStart({ url, onStarted, onCancel }: { url: string; on
           공간 전체가 한 시스템이면 고른다 — 페이지는 여기로, AI는 예외(확신하는 다른 시스템)만 묻는다
         </p>
       </div>
+      {isAdmin && (
+        <label className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200"
+          title="컨플에서 읽기 제한(특정 사람·그룹만)이 걸린 페이지와 그 하위도 넣어요. OpsLens 로그인 사용자 누구나 검색하게 되고, 누가 켰는지 남아요">
+          <input type="checkbox" checked={withRestricted} data-testid="import-include-restricted" className="mt-0.5 accent-amber-600"
+            onChange={async (e) => {
+              const on = e.target.checked;
+              if (on && !(await showConfirm('컨플에서 읽기 제한이 걸린 페이지도 넣어요.\nOpsLens 사용자 누구나 검색하게 되고, 켠 사람이 기록에 남아요. 계속할까요?'))) return;
+              setWithRestricted(on);
+            }} />
+          <span><b>읽기 제한 페이지도 넣기</b> (관리자) — 제한 페이지·그 하위까지</span>
+        </label>
+      )}
       <div className="flex justify-end gap-2">
         <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-400 hover:text-slate-200">취소</button>
         <button disabled={!url.trim() || (isAdmin && !teamId) || start.isPending} onClick={() => start.mutate()}
@@ -255,7 +348,12 @@ function BatchView({ id }: { id: number }) {
   const qc = useQueryClient();
   const { data, error } = useQuery({
     queryKey: ['team-import', id], queryFn: () => getImportBatch(id),
-    refetchInterval: (q) => (['previewing', 'loading'].includes(q.state.data?.batch.status ?? '') ? 3000 : false),
+    // 뒤에서 도는 일이 있으면 다시 읽는다 — 미리보기·적재 3초, 게시·검색 확인 2초(11/05 진행 막대)
+    refetchInterval: (q) => {
+      const b = q.state.data?.batch;
+      if (b?.publishing_at || b?.publish_check?.running) return 2000;
+      return ['previewing', 'loading'].includes(b?.status ?? '') ? 3000 : false;
+    },
   });
   // 다시 불러오기 끝을 돌려준다 — 확정 뒤 새 값이 오기 전까지 버튼을 잠가 두려고(리뷰 10/30: 그 틈에 기본값으로 보였다가 다시 눌리면 덮어씀)
   const refresh = () => qc.invalidateQueries({ queryKey: ['team-import'] });   // ['team-import', id]도 앞부분 일치로 포함
@@ -316,13 +414,235 @@ function CollectionSelect({ cols, value, onChange, placeholder = '분류할 곳'
   );
 }
 
-function Stat({ k, v, sub, hot }: { k: string; v: number | string; sub?: string; hot?: boolean }) {
+function Stat({ k, v, sub, hot, onOpen }: { k: string; v: number | string; sub?: string; hot?: boolean; onOpen?: () => void }) {
+  const Tag = onOpen ? 'button' : 'div';
   return (
-    <div className={`rounded-xl bg-slate-800 border p-4 ${hot ? 'border-amber-400 dark:border-amber-500/60' : 'border-slate-700'}`}>
+    <Tag type={onOpen ? 'button' : undefined} onClick={onOpen} title={onOpen ? '눌러서 자세히' : undefined}
+      className={`rounded-xl bg-slate-800 border p-4 text-left ${onOpen ? 'hover:border-indigo-400 cursor-pointer' : ''} ${hot ? 'border-amber-400 dark:border-amber-500/60' : 'border-slate-700'}`}>
       <div className="text-xs text-slate-400">{k}</div>
       <div className={`text-2xl font-bold tabular-nums ${hot ? 'text-amber-600 dark:text-amber-300' : 'text-slate-100'}`}>{v}</div>
       {sub && <div className="text-xs text-slate-400">{sub}</div>}
+      {onOpen && <div className="mt-1 text-[11px] text-indigo-600 dark:text-indigo-400">자세히 ›</div>}
+    </Tag>
+  );
+}
+
+/** 리포트 위 큰 숫자 칸 — 숫자 하나 + 이름(11/05 "가시적으로") */
+function Tile({ k, v, sub, tone = 'plain' }: { k: string; v: number | string; sub?: string; tone?: 'bad' | 'warn' | 'good' | 'plain' }) {
+  const color = tone === 'bad' ? 'text-rose-600 dark:text-rose-400' : tone === 'warn' ? 'text-amber-600 dark:text-amber-300' : tone === 'good' ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-100';
+  return (
+    <div className="rounded-xl border border-slate-700 bg-slate-800 p-3">
+      <div className="text-xs text-slate-400">{k}</div>
+      <div className={`text-2xl font-bold tabular-nums ${color}`}>{v}</div>
+      {sub && <div className="text-[11px] text-slate-500">{sub}</div>}
     </div>
+  );
+}
+
+/** 가로 막대 하나에 구간 여러 개 — 범례에 수 */
+function SplitBar({ parts }: { parts: { label: string; n: number; cls: string }[] }) {
+  const total = parts.reduce((a, p) => a + p.n, 0) || 1;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex h-3 overflow-hidden rounded-full bg-slate-700">
+        {parts.filter((p) => p.n > 0).map((p) => <div key={p.label} className={p.cls} style={{ width: `${(100 * p.n) / total}%` }} title={`${p.label} ${p.n}`} />)}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+        {parts.map((p) => <span key={p.label} className="inline-flex items-center gap-1.5"><span className={`h-2.5 w-2.5 rounded-sm ${p.cls}`} />{p.label} <b className="tabular-nums text-slate-200">{p.n}</b></span>)}
+      </div>
+    </div>
+  );
+}
+
+function SrcLink({ rootUrl, pageId }: { rootUrl: string; pageId: string | null }) {
+  const url = pageId ? confluencePageUrl(rootUrl, pageId) : null;
+  return url ? <a href={url} target="_blank" rel="noreferrer" className="shrink-0 text-indigo-600 hover:underline dark:text-indigo-400">원문 ↗</a> : null;
+}
+
+/** 검색 확인 리포트(11/05) — 위: 찾음 수 + 순위 분포 / 아래: 못 찾은 질문 먼저(대신 나온 것) · 찾은 질문은 접힘 */
+function SearchCheckReport({ check, rootUrl, onClose }: { check: PublishCheck; rootUrl: string; onClose: () => void }) {
+  const items = check.items ?? [];
+  const miss = items.filter((x) => !x.found);
+  const hit = items.filter((x) => x.found).sort((a, b) => (a.rank ?? 9) - (b.rank ?? 9));
+  const at = (r: number) => hit.filter((x) => x.rank === r).length;
+  return (
+    <Modal isOpen onClose={onClose} title="검색 확인 리포트" maxWidth="max-w-4xl">
+      <div className="space-y-4 text-sm" data-testid="search-check-report">
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4 rounded-xl border border-slate-700 bg-slate-800 p-4">
+          <div className="text-center" title="조각에서 질문을 만들고, 그 질문으로 이 컬렉션(게시된 지식 + 이번 조각)을 벡터로만 찾아 그 페이지가 상위 3에 드는지 봐요 — 키워드·다시 정렬이 없어 실제 채팅보다 엄격해요">
+            <div className={`text-4xl font-bold tabular-nums ${miss.length ? 'text-amber-600 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300'}`}>{check.found}/{check.asked ?? items.length}</div>
+            <div className="text-xs text-slate-400">찾음 ⓘ</div>
+          </div>
+          <SplitBar parts={[
+            { label: '1위', n: at(1), cls: 'bg-emerald-600 dark:bg-emerald-500' },
+            { label: '2위', n: at(2), cls: 'bg-emerald-400 dark:bg-emerald-700' },
+            { label: '3위', n: at(3), cls: 'bg-lime-400 dark:bg-lime-700' },
+            { label: '못 찾음', n: miss.length, cls: 'bg-rose-500 dark:bg-rose-400' },
+          ]} />
+        </div>
+        {!!check.failed && <p className="text-xs text-amber-700 dark:text-amber-300">질문 만들기 실패 {check.failed}개 — 위 수에서 빠짐</p>}
+
+        <section className="space-y-2">
+          <h4 className="font-semibold text-slate-100">못 찾음 <span className="text-xs font-normal text-slate-400">{miss.length}</span></h4>
+          {miss.length === 0 && <p className="text-xs text-emerald-700 dark:text-emerald-300">모든 질문에서 그 페이지가 상위 3에 들었어요 ✓</p>}
+          {miss.map((x, i) => (
+            <div key={i} className="space-y-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-xs dark:border-rose-500/40 dark:bg-rose-500/10">
+              <div className="text-sm text-slate-100">{x.question}</div>
+              <div className="flex items-center gap-2 text-slate-400"><span className="shrink-0">나와야 할 페이지</span>
+                <span className="min-w-0 truncate font-medium text-slate-200">{x.title ?? '—'}</span><SrcLink rootUrl={rootUrl} pageId={x.page_id} /></div>
+              {x.got ? (
+                <div className="space-y-1">
+                  <div className="text-slate-400">대신 나온 것</div>
+                  <ol className="space-y-0.5">
+                    {x.got.map((g, j) => (
+                      <li key={j} className="flex items-center gap-2">
+                        <span className="w-4 shrink-0 tabular-nums text-slate-500">{j + 1}</span>
+                        <span className="min-w-0 flex-1 truncate text-slate-200">{g.title ?? '—'}</span>
+                        <span className="shrink-0 tabular-nums text-slate-500" title="질문과 조각의 벡터 유사도">{g.sim.toFixed(2)}</span>
+                        <SrcLink rootUrl={rootUrl} pageId={g.page_id} />
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : <div className="text-slate-500">[검색 확인]을 다시 누르면 대신 나온 것이 보여요(예전 결과엔 없음)</div>}
+            </div>
+          ))}
+        </section>
+
+        <details className="rounded-lg border border-slate-700">
+          <summary className="cursor-pointer px-3 py-2 font-semibold text-slate-100">찾음 <span className="text-xs font-normal text-slate-400">{hit.length}</span></summary>
+          <ul className="divide-y divide-slate-700/60 border-t border-slate-700">
+            {hit.map((x, i) => (
+              <li key={i} className="grid grid-cols-[3rem_minmax(0,1fr)] gap-2 px-3 py-2 text-xs">
+                <span className="font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">{x.rank}위</span>
+                <span className="min-w-0 space-y-0.5">
+                  <span className="block text-slate-100">{x.question}</span>
+                  <span className="flex gap-2 text-slate-500"><span className="min-w-0 truncate">{x.title ?? '—'}</span><SrcLink rootUrl={rootUrl} pageId={x.page_id} /></span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      </div>
+    </Modal>
+  );
+}
+
+/** 페이지 한 줄을 펴면 — 겹친 줄마다 한 번(같은 줄이 여러 쌍에 나오면 묶음) · 표 행/문장 · 원문 몇 번 vs 조각 몇 번 · 어느 조각 쌍 */
+function OverlapPairs({ batchId, jobId, defectOnly }: { batchId: number; jobId: number; defectOnly: boolean }) {
+  const q = useQuery({ queryKey: ['team-import-overlap', batchId, jobId], queryFn: () => getOverlapDetail(batchId, jobId) });
+  if (q.isLoading) return <p className="px-3 py-2 text-xs text-slate-500">불러오는 중…</p>;
+  if (q.isError) return <p className="px-3 py-2 text-xs text-rose-600 dark:text-rose-400">상세를 못 불러왔어요 — {(q.error as Error).message}</p>;
+  const byLine = new Map<string, { ln: OverlapDetail['pairs'][number]['lines'][number]; pairs: string[] }>();
+  for (const p of q.data?.pairs ?? []) {
+    if (p.defect !== defectOnly) continue;
+    for (const ln of p.lines) {
+      const g = byLine.get(ln.h) ?? { ln, pairs: [] };
+      g.pairs.push(`${p.a}↔${p.b}`);
+      byLine.set(ln.h, g);
+    }
+  }
+  const groups = [...byLine.values()].sort((a, b) => Number(b.ln.extra) - Number(a.ln.extra) || b.pairs.length - a.pairs.length);
+  if (!groups.length) return <p className="px-3 py-2 text-xs text-slate-500">표시할 줄이 없어요(기록 뒤 조각이 바뀌었을 수 있어요)</p>;
+  return (
+    <div className="space-y-1.5 bg-slate-900/40 px-3 py-2">
+      <div className="text-[11px] text-slate-500">겹친 줄 {groups.length}종 · 이 페이지 조각 {q.data?.chunks}개</div>
+      {groups.map(({ ln, pairs }) => (
+        <div key={ln.h} className="grid grid-cols-[3.2rem_minmax(0,1fr)_auto] items-start gap-2 text-[11px]">
+          <span className="rounded bg-slate-700 px-1.5 py-0.5 text-center text-slate-300">{ln.t === 'table' ? '표 행' : '문장'}</span>
+          <span className="min-w-0 space-y-0.5">
+            <code className={`block truncate rounded px-1.5 py-0.5 ${ln.extra ? 'bg-rose-100 text-rose-800 dark:bg-rose-500/15 dark:text-rose-200' : 'bg-slate-800 text-slate-300'}`}
+              title={ln.text ?? ''}>{ln.text ?? '(조각이 바뀌어 줄을 못 찾음)'}</code>
+            <span className="block truncate text-slate-500" title={pairs.join(', ')}>조각 쌍 {pairs.length}곳 · {pairs.slice(0, 6).join(', ')}{pairs.length > 6 ? ' …' : ''}</span>
+          </span>
+          <span className={`shrink-0 tabular-nums ${ln.extra ? 'font-semibold text-rose-600 dark:text-rose-400' : 'text-slate-500'}`}
+            title="원문에 나온 수 / 이 페이지 조각 전체에 나온 수 — 조각 쪽이 많으면 나누면서 생긴 중복">
+            {ln.source == null ? `조각 ${ln.chunks}번 · 원문 대조 못 함` : `원문 ${ln.source}번 · 조각 ${ln.chunks}번`}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type OverlapItem = NonNullable<HeldSummary['overlap_items']>[number];
+
+/** 품질 경고 리포트(11/05 태훈 "분석적으로 한눈에") — 위: 결함 의심 / 원문 반복 / 다른 경고 + 겹친 줄 유형 / 아래: 문제 먼저, 펴면 근거 */
+function QualityReport({ held, batchId, rootUrl, onClose }: { held: HeldSummary; batchId: number; rootUrl: string; onClose: () => void }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const ov = held.overlap;
+  const ovItems = held.overlap_items ?? [];
+  // 이웃 겹침은 위 칸·목록이 따로 보여 준다 — 다른 경고(제목만·끝에 매달린 제목)만 아래 표로
+  const others = (held.warning_items ?? []).filter((x) => !ov || !x.kind.startsWith('이웃 청크'));
+  const otherKinds = [...new Set(others.map((x) => x.kind))];
+  const otherPlaces = others.reduce((a, x) => a + x.n, 0);
+  const defects = ovItems.filter((x) => x.defect > 0);
+  const repeats = ovItems.filter((x) => x.source_repeat > 0).sort((a, b) => b.source_repeat - a.source_repeat);
+  const row = (x: OverlapItem, defect: boolean) => {
+    const key = `${defect ? 'd' : 'r'}${x.job_id}`;
+    return (
+      <li key={key}>
+        <div className="flex items-center gap-3 px-3 py-1.5 text-xs hover:bg-slate-700/40">
+          <button type="button" onClick={() => setOpen(open === key ? null : key)} aria-expanded={open === key}
+            className="flex min-w-0 flex-1 items-center gap-3 text-left">
+            <span className="w-3 shrink-0 text-slate-500">{open === key ? '▾' : '▸'}</span>
+            <span className={`w-12 shrink-0 font-semibold tabular-nums ${defect ? 'text-rose-600 dark:text-rose-400' : 'text-slate-300'}`}>{defect ? x.defect : x.source_repeat}곳</span>
+            <span className="min-w-0 flex-1 truncate text-slate-200" title={x.title ?? ''}>{x.title ?? `작업 #${x.job_id}`}</span>
+            {!x.checked && <span className="shrink-0 text-amber-700 dark:text-amber-300" title="원문 연결이 없거나 다시 읽기에 실패해 예전 기준(원문 반복도 결함)으로 셌어요">원문 대조 못 함</span>}
+          </button>
+          <SrcLink rootUrl={rootUrl} pageId={x.page_id} />
+        </div>
+        {open === key && <OverlapPairs batchId={batchId} jobId={x.job_id} defectOnly={defect} />}
+      </li>
+    );
+  };
+  return (
+    <Modal isOpen onClose={onClose} title="품질 경고 리포트" maxWidth="max-w-4xl">
+      <div className="space-y-4 text-sm" data-testid="quality-report">
+        {ov ? (
+          <>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Tile k="결함 의심" v={`${ov.defect}곳`} tone={ov.defect ? 'bad' : 'good'} sub="원문보다 조각에 더 많이 나온 줄" />
+              <Tile k="원문 반복" v={`${ov.source_repeat}곳`} sub="원문이 원래 같은 줄을 여러 번 씀 — 문제 아님" />
+              <Tile k="다른 경고" v={`${otherPlaces}곳`} tone={otherPlaces ? 'warn' : 'good'} sub={otherKinds.join(' · ') || '없음'} />
+            </div>
+            {(ov.types.table ?? 0) + (ov.types.text ?? 0) > 0 && (
+              <div className="space-y-1"><div className="text-xs text-slate-400">이웃 조각에 같이 나온 줄 유형</div>
+                <SplitBar parts={[{ label: '표 행', n: ov.types.table ?? 0, cls: 'bg-indigo-500 dark:bg-indigo-400' }, { label: '문장', n: ov.types.text ?? 0, cls: 'bg-slate-400' }]} /></div>
+            )}
+            {ov.unchecked_jobs > 0 && <p className="text-xs text-amber-700 dark:text-amber-300">원문 대조 못 한 페이지 {ov.unchecked_jobs}개 — 예전 기준(원문 반복도 결함)으로 셌어요</p>}
+
+            <section className="space-y-1.5">
+              <h4 className="font-semibold text-slate-100">결함 의심 <span className="text-xs font-normal text-slate-400">페이지 {defects.length}</span></h4>
+              {defects.length ? <ul className="divide-y divide-slate-700/60 rounded-lg border border-rose-300 dark:border-rose-500/40">{defects.map((x) => row(x, true))}</ul>
+                : <p className="text-xs text-emerald-700 dark:text-emerald-300">나누면서 생긴 중복은 없어요 ✓</p>}
+            </section>
+            {repeats.length > 0 && (
+              <details className="rounded-lg border border-slate-700">
+                <summary className="cursor-pointer px-3 py-2 font-semibold text-slate-100" title="체크리스트 표처럼 원문이 같은 줄을 여러 번 쓰는 경우 — 원문 그대로라 고칠 것 없음">
+                  원문 반복 <span className="text-xs font-normal text-slate-400">페이지 {repeats.length} · 문제 아님</span></summary>
+                <ul className="divide-y divide-slate-700/60 border-t border-slate-700">{repeats.map((x) => row(x, false))}</ul>
+              </details>
+            )}
+          </>
+        ) : <p className="text-xs text-slate-400">예전 기록이라 겹침 분석이 없어요 — 아래는 경고 종류별 페이지예요.</p>}
+
+        {otherKinds.map((k) => (
+          <section key={k} className="space-y-1.5">
+            <h4 className="flex flex-wrap items-baseline gap-2 font-semibold text-slate-100">{k}
+              <span className="text-xs font-normal text-slate-400">페이지 {others.filter((x) => x.kind === k).length}</span></h4>
+            <ul className="divide-y divide-slate-700/60 rounded-lg border border-slate-700">
+              {others.filter((x) => x.kind === k).sort((a, b) => b.n - a.n).map((x) => (
+                <li key={`${x.job_id}-${k}`} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                  <span className="w-12 shrink-0 font-semibold tabular-nums text-amber-700 dark:text-amber-300">{x.n}곳</span>
+                  <span className="min-w-0 flex-1 truncate text-slate-200" title={x.title ?? ''}>{x.title ?? `작업 #${x.job_id}`}</span>
+                  <SrcLink rootUrl={rootUrl} pageId={x.page_id} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </Modal>
   );
 }
 
@@ -353,6 +673,11 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
       {more && <div className="space-y-6">
       {editable && b.default_namespace_id != null && <DefaultControl key={b.default_namespace_id} data={data} onChange={onChange} />}
       <div className="text-xs text-slate-400" title="예외: 읽기 제한으로 바뀐 페이지가 이미 적재돼 있으면 그 조각만 승인 대기로 내림">#{b.id} {b.root_title} · 분류 미리보기 — 확정 전까지 적재되지 않음</div>
+      {b.include_restricted_at && (
+        <div className="inline-flex rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300" data-testid="batch-include-restricted"
+          title="이 묶음은 읽기 제한 페이지도 넣어요 — OpsLens 사용자 누구나 검색하게 됩니다">
+          읽기 제한 포함 · {b.include_restricted_name ?? '관리자'} · {new Date(b.include_restricted_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</div>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat k={b.default_namespace_id != null ? '기본 위치 · AI 확신' : '자동 분류'} v={auto.length}
           sub={b.default_namespace_id != null ? `기본 위치 ${byDefault} · AI 확신 ${auto.length - byDefault}` : `업무 ${auto.filter((p) => isBizCol(names.get(p.final_namespace_id ?? -1))).length} · 시스템 ${auto.filter((p) => isSystemCol(names.get(p.final_namespace_id ?? -1))).length}`} />
@@ -988,32 +1313,49 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
   const rollback = useMutation({
     mutationFn: () => rollbackImport(b.id), onSuccess: onChange, onError: (e) => showError(e),
   });
+  const publishing = !!b.publishing_at;
+  const wasPublishing = useRef(publishing);
+  // 둘 다 뒤에서 돈다 — 누르면 바로 돌아오고, 진행은 배치 상세를 2초마다 다시 읽어 막대로(11/05 "멈춘 것처럼 보인다")
   const runCheck = useMutation({ mutationFn: () => publishCheckImport(b.id), onSuccess: onChange, onError: (e) => showError(e) });
-  const publish = useMutation({
-    mutationFn: () => publishImport(b.id),
-    onSuccess: (r) => {
-      onChange();
-      void showAlert(r.failed.length ? `게시 ${r.published}건 · 실패 ${r.failed.length}건 — 실패한 작업은 검수 대기로 남았어요(사유는 위 오류 줄).`
-        : `게시했어요 — 이제 채팅에 나와요(같은 페이지 옛 버전은 내렸어요).`, { tone: r.failed.length ? 'warning' : 'success' });
-    },
-    onError: (e) => showError(e),
-  });
+  // 게시 시작을 기억 — 첫 다시 읽기 전에 끝나 버리는 아주 빠른 게시도 끝 안내가 뜨게(리뷰 L3)
+  const publish = useMutation({ mutationFn: () => publishImport(b.id), onSuccess: () => { wasPublishing.current = true; onChange(); },
+    onError: (e) => showError(e) });
+  const checking = !!check?.running;
+  // 게시가 끝나는 순간(게시 중 → 아님) 결과 안내 — 성공이면 게시 시각, 실패면 배치 오류 칸
+  useEffect(() => {
+    if (wasPublishing.current && !publishing) {
+      void showAlert(b.published_at ? `게시했어요 — 이제 채팅에 나와요(같은 페이지 옛 버전은 내렸어요).${b.error ? ` 단, ${b.error}` : ''}`
+        : `게시가 끝나지 않았어요 — ${b.error ?? '사유를 모름(서버 로그 확인)'}. 남은 작업은 검수 대기로 있어요. 다시 [게시]할 수 있어요.`,
+        { tone: b.published_at && !b.error ? 'success' : 'warning' });
+    }
+    wasPublishing.current = publishing;
+  }, [publishing, b.published_at, b.error]);
+  const prog = data.publish_progress;
   const warnCount = held ? Object.values(held.warnings).reduce((a, n) => a + n, 0) : 0;
+  const [qualityOpen, setQualityOpen] = useState(false);   // 품질 경고 리포트 창(11/05)
+  const [checkOpen, setCheckOpen] = useState(false);       // 검색 확인 리포트 창(11/05)
   if (b.status === 'preview') return <p className="text-sm text-slate-400">분류를 확정해 적재하면 여기서 게이트 결과를 보고 롤백할 수 있어요.</p>;
   return (
     <div className="space-y-4">
-      {b.status === 'loading' && (
-        <div className="space-y-1 text-sm text-slate-300">
-          <p>적재 중 {b.load_done} / {b.load_total}페이지</p>
-          <div className="h-2 rounded-full bg-slate-700 overflow-hidden"><div className="h-full bg-indigo-500" style={{ width: `${b.load_total ? (100 * b.load_done) / b.load_total : 0}%` }} /></div>
-        </div>
-      )}
+      {b.status === 'loading' && <ProgressBar label="적재 중" done={b.load_done} total={b.load_total} unit="페이지" />}
+      {publishing && (prog?.phase === 'glossary'
+        ? <ProgressBar label="자동 용어 추출 중" startedAt={prog.started_at} detail="조각은 모두 게시됐어요 — 용어를 뽑는 마지막 단계예요(로컬 LLM)" />
+        : <ProgressBar label="게시 중" done={prog?.done ?? 0} total={prog?.total ?? 0} unit="페이지" startedAt={prog?.started_at ?? b.publishing_at}
+            detail="페이지마다 옛 버전 내림 · 원문 확정 · 활성화 — 끝나면 자동 용어 추출. 화면을 닫아도 계속돼요" />)}
+      {checking && <ProgressBar label="검색 확인 중" done={(check?.asked ?? 0) + (check?.failed ?? 0)} total={check?.total ?? 0} unit="표본" startedAt={check?.checked_at}
+        detail="질문은 로컬 LLM이 조각에서 만들어요 — 화면을 닫아도 계속돼요" />}
+      {check?.interrupted && !checking && <p className="text-xs text-amber-700 dark:text-amber-300">검색 확인이 서버 재시작으로 끊겼어요 — 다시 눌러 주세요.</p>}
+      {check?.error && !checking && <p className="text-xs text-amber-700 dark:text-amber-300">{check.error}</p>}
+      {!checking && !!check?.failed && <p className="text-xs text-amber-700 dark:text-amber-300" title="로컬 LLM이 조각에서 질문을 못 만든 표본 — 찾음 수에서 빠져요(로그)">
+        질문 만들기 실패 {check.failed}개{check.asked ? '' : ' — 로컬 LLM 상태를 확인해 주세요'}</p>}
       {b.error && <p className="text-sm text-rose-600 dark:text-rose-400">{b.error}</p>}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat k="이번 적재 배치" v={loaded} sub="페이지" />
         <Stat k="실패" v={failed} hot={failed > 0} />
         <Stat k="상태" v={held ? '검수 대기' : b.status === 'loaded' && b.published_at ? '게시됨' : STATUS_TEXT[b.status]} hot={!!held} />
       </div>
+      {held && qualityOpen && <QualityReport held={held} batchId={b.id} rootUrl={b.root_url} onClose={() => setQualityOpen(false)} />}
+      {held && checkOpen && check?.items && <SearchCheckReport check={check} rootUrl={b.root_url} onClose={() => setCheckOpen(false)} />}
       {held && (
         <div className="space-y-3" data-testid="publish-review">
           <p className="text-sm text-slate-300" title="게시하면 같은 페이지 옛 버전을 내리고 새 조각을 채팅에 내놓아요. 그 전까지는 옛 버전이 그대로 답에 쓰여요">
@@ -1022,8 +1364,9 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Stat k="게시할 조각" v={held.chunks} sub={`작업 ${held.jobs}`} />
             <Stat k="중복 의심" v={held.dup} hot={held.dup > 0} sub="게시하면 승인 대기로" />
-            <Stat k="품질 경고" v={warnCount} hot={warnCount > 0} sub={Object.entries(held.warnings).map(([k, n]) => `${k} ${n}`).join(' · ') || '없음'} />
-            <Stat k="검색 확인" v={check?.asked ? `${check.found}/${check.asked}` : check?.skipped ? '건너뜀' : '—'}
+            <Stat k="품질 경고" v={warnCount} hot={warnCount > 0} onOpen={warnCount > 0 || (held.overlap_items?.length ?? 0) > 0 ? () => setQualityOpen(true) : undefined}
+              sub={Object.entries(held.warnings).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}페이지`).join(' · ') || '없음'} />
+            <Stat k="검색 확인" v={checking ? '확인 중' : check?.asked ? `${check.found}/${check.asked}` : check?.skipped ? '건너뜀' : '—'} onOpen={!checking && check?.items?.length ? () => setCheckOpen(true) : undefined}
               hot={!!check?.asked && (check.found ?? 0) < (check.asked ?? 0)}
               sub={check?.skipped ?? (check?.asked ? '찾은 질문 / 만든 질문' : '아직 안 함')} />
           </div>
@@ -1034,14 +1377,14 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
             </details>
           )}
           <div className="flex flex-wrap justify-end gap-2">
-            <button disabled={runCheck.isPending || publish.isPending} onClick={() => runCheck.mutate()}
+            <button disabled={runCheck.isPending || publish.isPending || publishing || checking} onClick={() => runCheck.mutate()}
               title="이 배치 조각 10개로 로컬 LLM이 질문을 만들고, 그 질문으로 이 페이지가 검색 상위 3에 드는지 봐요(벡터만 — 실제 채팅보다 보수적)"
               className="text-sm px-4 py-2 rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800 disabled:opacity-40">
-              {runCheck.isPending ? '검색 확인 중…' : check ? '검색 확인 다시' : '검색 확인'}
+              {checking || runCheck.isPending ? '검색 확인 중…' : check ? '검색 확인 다시' : '검색 확인'}
             </button>
-            <button disabled={publish.isPending || runCheck.isPending}
+            <button disabled={publish.isPending || runCheck.isPending || publishing || checking}
               onClick={async () => { if (await showConfirm(`조각 ${held.chunks}개를 채팅에 내놓아요. 같은 페이지 옛 버전은 내려가요.`, { title: '게시', confirmLabel: '게시' })) publish.mutate(); }}
-              className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40">게시</button>
+              className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40">{publishing ? '게시 중…' : '게시'}</button>
           </div>
         </div>
       )}
@@ -1052,12 +1395,13 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
       )}
       {b.status === 'loaded' && (
         <div className="flex justify-end">
-          <button disabled={rollback.isPending}
+          <button disabled={rollback.isPending || publishing}
             onClick={async () => { if (await showConfirm(`이번 배치(${loaded}페이지)가 만든 조각을 지우고 원문을 교체됨으로 돌려요. 배치 뒤에 고친 조각도 같이 지워져요.`, { tone: 'danger' })) rollback.mutate(); }}
             className="text-sm font-semibold px-4 py-2 rounded-lg bg-rose-600 text-white hover:bg-rose-500 disabled:opacity-40">이번 배치 롤백</button>
         </div>
       )}
-      {rollback.data && <p className="text-xs text-slate-400">롤백: 조각 {rollback.data.chunks} · 원문 {rollback.data.documents} · 자동 용어 {rollback.data.terms}</p>}
+      {rollback.data && <p className="text-xs text-slate-400">롤백: 조각 {rollback.data.chunks} · 원문 {rollback.data.documents} · 자동 용어 {rollback.data.terms}
+        {rollback.data.released > 0 && <span title="되돌린 조각만 중복 상대로 가리키던 게시 전 승인 대기 — 중복 근거가 없어져 자동으로 풀림(게시 후 승인 대기는 사람이 처리)"> · 승인 대기 해제 {rollback.data.released}</span>}</p>}
     </div>
   );
 }

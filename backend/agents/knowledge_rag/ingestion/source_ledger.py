@@ -215,7 +215,7 @@ async def replace_check(conn, ns_id: int, doc_ids: list[int], page_ids: list[str
     return {**reasons, "needs_confirm": has_touch(reasons), "unlinked_sources": sorted(set(doc_ids or []) - set(valid))}
 
 
-async def activate(conn, ns_id: int, doc_ids: list[int], replaced: list[int], partial_ids: list[int]) -> None:
+async def activate(conn, ns_id: int, doc_ids: list[int], replaced: list[int], partial_ids: list[int], job_id: Optional[int] = None) -> None:
     """확정된 원문 → "사용 중", 대체된 이전 원문 → "교체됨". 등록 때 일부 조각만 고른 원문은 표시(다시 분할이 뺀 조각을 되살리지 않게)."""
     if not doc_ids:
         return
@@ -226,12 +226,98 @@ async def activate(conn, ns_id: int, doc_ids: list[int], replaced: list[int], pa
     await conn.execute("""UPDATE rag_source_document r SET status = 'superseded' FROM rag_source_document d
                           WHERE d.id = ANY($1::int[]) AND r.status = 'restricted' AND r.namespace_id = d.namespace_id
                             AND r.source_type = d.source_type AND r.source_ref = d.source_ref""", doc_ids)
+    await refresh_image_counts(conn, doc_ids, job_id)
     old = [d for d in replaced if d not in doc_ids]
     if old:
         # 사용 중이던 것만 — 같은 원본의 다른 초안은 다른 등록이 아직 쓰는 중일 수 있다(동시 확정 시 그 등록의 조각이 원문 연결 없이
         # 중복으로 살아남던 것, 실서버 동시 시나리오로 발견 2026-10-12). 그 등록이 끝나면 이 원문을 교체한다.
         await conn.execute("UPDATE rag_source_document SET status = 'superseded' WHERE id = ANY($1::int[]) AND namespace_id = $2 "
                            "AND status = 'active'", old, ns_id)
+
+
+_MEDIA_MARK_RE = r"\[(?:이미지|다이어그램): "
+_DOC_COLS = "id, source_type, source_ref, title, parent_title, raw_content, source_version, media, chunk_strategy"
+_ANCHOR_MIN = 8   # 조각 자리를 찾는 줄의 최소 길이 — 짧은 줄("확인", 번호)은 원문 여러 곳에 있다
+
+
+def marked_text(doc_row) -> Optional[str]:
+    """그림 자리 표시를 켠 원문 글(그림이 원문 어디에 있나 보려고, 11/06) — 컨플이 아니거나 그림이 없으면 None.
+    조각 본문·임베딩엔 안 넣는다(11/05 실험: 본문에 넣으면 검색 차이 0 · 자리 표시만 조각 11)."""
+    if doc_row["source_type"] != "confluence":
+        return None
+    from agents.knowledge_rag.ingestion import confluence_media as cm
+    raw = doc_row["raw_content"] or ""
+    if not (cm._IMAGE_RE.search(raw) or cm._MACRO_RE.search(raw)):
+        return None
+    import json
+    media = doc_row["media"]
+    media = json.loads(media) if isinstance(media, str) else dict(media or {})
+    return rebuild_parsed({**dict(doc_row), "media": {**media, "image_marks": True}}).raw_text
+
+
+def chunk_image_counts(marked: str, chunks: list[str]) -> tuple[list[int], bool]:
+    """조각마다 그 앞뒤 문맥의 그림 수(11/06 태훈 "그림 앞뒤 문맥 → 링크"). 원문(자리 표시 켬)에서 조각(원문 순서)의 첫 긴 줄이 놓인
+    자리로 구간을 나누고, 그림은 바로 앞 본문이 든 조각에 센다(맨 앞 그림은 첫 조각). 자리를 못 찾은 조각은 0(앞 조각 구간에 묶임).
+    합 = 원문 그림 수(유실·중복 0). (조각별 수, 자리를 하나라도 찾았나) — 하나도 못 찾으면 전부 0이고 부른 쪽이 로그."""
+    import bisect
+    import re
+    ws = lambda s: re.sub(r"\s+", " ", s)   # noqa: E731 — 고정 길이로 자른 긴 줄은 공백이 달라진다(실측 11건 중 1)
+    marked = ws(marked)
+    marks = [m.start() for m in re.finditer(_MEDIA_MARK_RE, marked)]
+    if len(chunks) == 1:   # 조각 하나 = 페이지 전체(그림만 있는 짧은 페이지는 본문 줄이 원문 글보다 길어 자리를 못 찾는다, 실측 11건 중 10)
+        return [len(marks)], True
+    starts: list[tuple[int, int]] = []   # (원문 자리, 조각 번호)
+    cur = 0
+    for i, text in enumerate(chunks):
+        for ln in (ws(x).strip() for x in text.split("\n")):
+            if len(ln) < _ANCHOR_MIN or re.search(_MEDIA_MARK_RE, ln):
+                continue
+            p = marked.find(ln, cur)
+            if p >= 0:
+                starts.append((p, i))
+                cur = p
+                break
+    out = [0] * len(chunks)
+    if not starts:
+        return out, False
+    pos = [p for p, _ in starts]
+    for m in marks:
+        k = max(bisect.bisect_right(pos, m) - 1, 0)
+        out[starts[k][1]] += 1
+    return out, True
+
+
+async def refresh_image_counts(conn, doc_ids: list[int], job_id: Optional[int] = None) -> int:
+    """원문의 조각마다 앞뒤 문맥의 그림 수(rag_knowledge.image_count) — 원문이 사용 중이 될 때. 보조 정보라 실패해도 활성화는 막지 않는다
+    (저장점으로 감싸고 로그). job_id = 지금 확정되는 작업(그 작업 조각만 — 같은 원문을 든 다른 보류 작업이 더 늦게 만들어졌을 수 있다,
+    재리뷰 낮음). 없으면(일괄 채우기) 사용 중 조각 중 가장 최근 작업. 바꾼 조각 수."""
+    import asyncio
+    n = 0
+    try:
+        async with conn.transaction():
+            for d in await conn.fetch(f"SELECT {_DOC_COLS} FROM rag_source_document WHERE id = ANY($1::int[]) AND source_type = 'confluence'",
+                                      doc_ids):
+                # 이 원문의 가장 최근 적재 작업 조각만 — 다시 분할·재등록은 같은 원문 행을 쓰므로 옛 조각과 섞으면 순서·합이 깨진다(리뷰 중간)
+                if job_id is not None:
+                    ks = await conn.fetch("SELECT id, content FROM rag_knowledge WHERE source_document_id = $1 AND ingestion_job_id = $2 "
+                                          "AND status <> 'deleted' ORDER BY source_chunk_idx NULLS LAST, id", d["id"], job_id)
+                else:
+                    ks = await conn.fetch(
+                        "SELECT id, content FROM rag_knowledge WHERE source_document_id = $1 AND status = ANY($2::text[]) "
+                        "AND ingestion_job_id IS NOT DISTINCT FROM (SELECT max(ingestion_job_id) FROM rag_knowledge "
+                        "WHERE source_document_id = $1 AND status = ANY($2::text[])) ORDER BY source_chunk_idx NULLS LAST, id",
+                        d["id"], ["active", "pending_review"])
+                marked = await asyncio.to_thread(marked_text, d)
+                counts, found = chunk_image_counts(marked, [k["content"] for k in ks]) if marked else ([0] * len(ks), True)
+                if not found:
+                    logger.warning("그림 수: 원문 #%s 조각 자리를 못 찾음 — 전부 0으로", d["id"])
+                await conn.executemany("UPDATE rag_knowledge SET image_count = $2 WHERE id = $1",
+                                       [(k["id"], c) for k, c in zip(ks, counts)])
+                n += len(ks)
+    except Exception as e:   # noqa: BLE001
+        logger.warning("그림 수 기록 실패(원문 %s건): %s", len(doc_ids), e)
+        return 0
+    return n
 
 
 def rebuild_parsed(doc_row) -> ParsedDocument:

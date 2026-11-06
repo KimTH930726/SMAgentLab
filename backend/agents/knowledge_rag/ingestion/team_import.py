@@ -14,6 +14,7 @@
 """
 import asyncio
 import json
+import re
 import logging
 import random
 from typing import Optional
@@ -339,7 +340,8 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
     from agents.knowledge_rag.knowledge.locate import _locator_llm
 
     async with get_conn() as conn:
-        b = await conn.fetchrow("SELECT team_id, root_url, default_namespace_id FROM rag_import_batch WHERE id = $1", batch_id)
+        b = await conn.fetchrow("SELECT team_id, root_url, default_namespace_id, include_restricted_at IS NOT NULL AS include_restricted "
+                                "FROM rag_import_batch WHERE id = $1", batch_id)
         ctx = await team_context(conn, b["team_id"], profiles=True)
     if ctx["draft_ns"] is None:   # 초안·제한 기록을 둘 곳이 없으면 확정 때 전부 실패한다 — 처음에 실패로 보이게(리뷰 10/29)
         raise ValueError("원문 초안 보관 자리(stage:import)가 없어요 — 백엔드를 재시작하면 기동 마이그레이션이 만듭니다.")
@@ -397,8 +399,17 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
         return held, names
 
     async def _preview_page(row_id: int, page_id: str) -> None:
-        doc = await fetch_confluence_by_id(base_url, page_id, token, diagram_text=True, image_marks=False)
+        doc = await fetch_confluence_by_id(base_url, page_id, token, diagram_text=True, image_marks=False,
+                                           include_restricted=b["include_restricted"])
         level = doc.metadata.get("restricted")
+        if level and b["include_restricted"]:   # 관리자가 제한 포함을 켬(11/05) — 보통 페이지처럼 분류, 신호에 원래 제한 표시
+            included = level
+            level = None
+            async with get_conn() as conn:   # 옛 "제한이라 안 넣음" 기록은 끝 — 공백 감지가 적재 안 된 제한 페이지로 세지 않게(리뷰 L3)
+                await conn.execute("UPDATE rag_source_document SET status = 'superseded' WHERE status = 'restricted' "
+                                   "AND source_type = 'confluence' AND source_ref = $1", str(page_id))
+        else:
+            included = None
         if level:   # 읽기 제한 — 적재하지 않고 어떤 페이지였는지 원장에(지식 공백 감지)
             async with get_conn() as conn:
                 async with conn.transaction():
@@ -434,7 +445,8 @@ async def _run_preview(batch_id: int, user: dict, token: str, base_url: str) -> 
                             ai_namespace_id=r.ai_id, proposed_namespace_id=r.proposed_id, confident=r.confident, final_namespace_id=final,
                             assigned_by=by, sample_ns=final if status == "auto" else None,
                             signals={"neighbors": r.neighbors, "vote": [r.vote_top, r.vote_n], "reason": r.reason, "doc_type": r.doc_type,
-                                     "llm_fail": r.llm_fail, "fallback": r.fallback, "model": model_tag})
+                                     "llm_fail": r.llm_fail, "fallback": r.fallback, "model": model_tag,
+                                     **({"restricted_included": included} if included else {})})
 
     await asyncio.gather(*(one(r) for r in rows))
     async with get_conn() as conn:
@@ -515,7 +527,13 @@ async def close_interrupted(conn) -> int:
     """기동 때 — 서버 재시작으로 멈춘 배치를 닫는다(안 그러면 그 팀이 새 적재를 영영 못 시작, 리뷰 10/29). 닫은 수."""
     n = int((await conn.execute("UPDATE rag_import_batch SET status = 'failed', error = '서버 재시작으로 분류가 중단됨 — 다시 시작해 주세요' "
                                 "WHERE status = 'previewing'")).split()[-1])
-    await conn.execute("UPDATE rag_import_batch SET publishing_at = NULL WHERE publishing_at IS NOT NULL")   # 게시 중 재시작 — 남은 보류 작업은 다시 게시
+    # 게시 중 재시작 — 남은 보류 작업은 다시 게시. 사유를 남긴다(화면이 "사유를 모름"으로 끝나지 않게, 리뷰 L2)
+    # 게시 시각을 쓴 직후(표시 풀기 전) 재시작이면 다 게시된 것 — 그땐 사유를 덮지 않는다(재리뷰 L3)
+    await conn.execute("UPDATE rag_import_batch SET publishing_at = NULL, error = CASE WHEN published_at IS NULL "
+                       "THEN '서버 재시작으로 게시가 중단됨 — 다시 [게시]하면 남은 것부터 이어서' ELSE error END WHERE publishing_at IS NOT NULL")
+    # 검색 확인 중 재시작 — 도는 중 표시를 내리고 끊겼다고 남긴다(화면이 "질문 3/10"에서 영영 멈춰 보이지 않게)
+    await conn.execute("UPDATE rag_import_batch SET publish_check = (publish_check - 'running') || '{\"interrupted\": true}'::jsonb "
+                       "WHERE publish_check->>'running' = 'true'")
     for r in await conn.fetch("SELECT id FROM rag_import_batch WHERE status = 'loading'"):
         await close_load(conn, r["id"], "서버 재시작으로 적재가 중단됨 — 일부만 들어갔으면 롤백 뒤 다시")
         n += 1
@@ -607,6 +625,18 @@ def _sig(p) -> dict:
     return json.loads(s) if isinstance(s, str) else dict(s or {})
 
 
+_WARN_NUM = re.compile(r"\s*(\d+)\s*(곳|개|건|줄)?")
+
+
+def warning_kind(text: str) -> tuple[str, int]:
+    """품질 경고 문장 → (종류, 수) — 문장 속 숫자를 떼어 종류로 묶는다("겹친 곳 1곳"·"겹친 곳 2곳"이 다른 종류로 세지던 것, 11/05 태훈).
+    숫자가 없으면 1. 문장 형식은 quality.py가 정하므로 형식이 아니라 "숫자를 뺀 나머지"로 묶는다(새 경고 문장도 그대로 묶임)."""
+    s = str(text).split("(")[0].split(":")[0].strip()
+    m = _WARN_NUM.search(s)
+    n = int(m.group(1)) if m else 1
+    return (_WARN_NUM.sub("", s).strip() or s)[:40], n
+
+
 async def held_summary(conn, batch_id: int) -> dict:
     """게시 전 검수 카드 — 보류 작업 수 · 조각 수 · 중복 의심(staging_review) · 품질 경고(작업별 quality.warnings 합)."""
     jobs = await conn.fetchval("SELECT job_ids FROM rag_import_batch WHERE id = $1", batch_id) or []
@@ -615,20 +645,76 @@ async def held_summary(conn, batch_id: int) -> dict:
         "count(k.id) FILTER (WHERE k.status = 'staging_review') AS dup FROM rag_ingestion_job j "
         "LEFT JOIN rag_knowledge k ON k.ingestion_job_id = j.id AND k.status = ANY($2::text[]) "
         "WHERE j.id = ANY($1::int[]) AND j.status = 'held'", list(jobs), list(HELD_KNOWLEDGE))
-    warns: dict[str, int] = {}
-    for r in await conn.fetch("SELECT quality FROM rag_ingestion_job WHERE id = ANY($1::int[]) AND status = 'held' AND quality IS NOT NULL",
-                              list(jobs)):
+    warns: dict[str, int] = {}       # 종류 → 페이지(작업) 수
+    places: dict[str, int] = {}      # 종류 → 모두 몇 곳
+    items: list[dict] = []           # 리포트 창 — 페이지별(종류 · 몇 곳 · 제목 · 페이지 번호)
+    # 이웃 겹침 — 결함 의심(원문보다 많이 나온 줄) / 원문 반복(원문이 원래 같은 줄을 여러 번) / 원문 대조 못 함(11/05 태훈 "분석적으로")
+    ov = {"defect": 0, "source_repeat": 0, "unchecked_jobs": 0, "types": {}}
+    ov_items: list[dict] = []
+    for r in await conn.fetch(
+            # 쌍 목록(overlap_pairs)은 펼칠 때만(overlap_detail) — 요약은 빼고 읽는다(리뷰 7)
+            "SELECT j.id, j.quality - 'overlap_pairs' AS quality, p.title, p.page_id FROM rag_ingestion_job j "
+            "LEFT JOIN rag_import_page p ON p.batch_id = $2 AND p.job_id = j.id "
+            "WHERE j.id = ANY($1::int[]) AND j.status = 'held' AND j.quality IS NOT NULL", list(jobs), batch_id):
         q = r["quality"]
         q = json.loads(q) if isinstance(q, str) else (q or {})
         for w in q.get("warnings") or []:
-            key = str(w).split("(")[0].split(":")[0].strip()[:40]   # "빈 조각 2개" 같은 문장 → 종류별로 묶어 센다
-            warns[key] = warns.get(key, 0) + 1
-    return {"jobs": row["jobs"], "chunks": row["chunks"], "dup": row["dup"], "warnings": warns}
+            kind, n = warning_kind(w)
+            warns[kind] = warns.get(kind, 0) + 1
+            places[kind] = places.get(kind, 0) + n
+            items.append({"kind": kind, "n": n, "title": r["title"], "page_id": r["page_id"], "job_id": r["id"]})
+        d, rep = int(q.get("adjacent_overlap") or 0), int(q.get("adjacent_source_repeat") or 0)
+        checked = bool(q.get("source_checked"))
+        ov["defect"] += d
+        ov["source_repeat"] += rep
+        ov["unchecked_jobs"] += (not checked) and d > 0
+        for t, n in (q.get("overlap_line_types") or {}).items():
+            ov["types"][t] = ov["types"].get(t, 0) + n
+        if d or rep:
+            ov_items.append({"job_id": r["id"], "title": r["title"], "page_id": r["page_id"], "defect": d, "source_repeat": rep, "checked": checked})
+    items.sort(key=lambda x: (x["kind"], -x["n"]))
+    ov_items.sort(key=lambda x: (-x["defect"], -x["source_repeat"]))
+    return {"jobs": row["jobs"], "chunks": row["chunks"], "dup": row["dup"], "warnings": warns, "warning_places": places,
+            "warning_items": items[:500], "overlap": ov, "overlap_items": ov_items[:500]}
+
+
+async def overlap_detail(conn, batch_id: int, job_id: int) -> Optional[dict]:
+    """한 페이지의 이웃 겹침 상세 — 조각 번호 쌍 · 줄 · 유형 · 원문/조각 등장 수. 품질 기록엔 줄 해시만 있으니(본문 비기록) 조각에서 다시 찾는다.
+    이 배치의 작업이 아니면 None."""
+    from trustkit.ingest.quality import line_hash, text_lines
+    from agents.knowledge_rag.ingestion.quality import JOB_CHUNKS_SQL
+    jobs = await conn.fetchval("SELECT job_ids FROM rag_import_batch WHERE id = $1", batch_id) or []
+    if job_id not in jobs:
+        return None
+    q = await conn.fetchval("SELECT quality FROM rag_ingestion_job WHERE id = $1", job_id)
+    q = json.loads(q) if isinstance(q, str) else (q or {})
+    rows = await conn.fetch(JOB_CHUNKS_SQL, job_id)
+    pos = {r["id"]: n for n, r in enumerate(rows)}
+    out, stale = [], 0
+    for p in q.get("overlap_pairs") or []:
+        ids = p.get("ids") or []
+        # 조각 id로 찾는다 — 기록 뒤 중간 조각이 빠져도(반려·삭제) 번호가 밀려 엉뚱한 쌍에 붙지 않게(리뷰 3). 없는 쌍은 "바뀜"으로 센다
+        if len(ids) != 2 or ids[0] not in pos or ids[1] not in pos:
+            stale += 1
+            continue
+        a = pos[ids[0]]
+        text = {line_hash(ln): ln for ln in text_lines(rows[a]["content"])}
+        out.append({"a": a + 1, "b": pos[ids[1]] + 1, "a_id": ids[0], "b_id": ids[1], "defect": p["defect"],
+                    "lines": [{**x, "text": text.get(x["h"])} for x in p["lines"]]})
+    return {"checked": bool(q.get("source_checked")), "chunks": len(rows), "pairs": out, "stale": stale,
+            "truncated": bool(q.get("overlap_pairs_truncated"))}
 
 
 CHECK_SAMPLES = 10
 _Q_SYSTEM = ("운영 문서 조각을 읽고, 이 조각이 답이 될 만한 짧은 질문 하나를 한국어로 만드세요. "
              "조각에 없는 내용은 묻지 마세요. 질문 한 줄만 출력하세요.")
+
+
+def check_running(batch: dict) -> bool:
+    """검색 확인이 도는 중인가(배치 publish_check.running) — 두 번 누름 막기. 재시작으로 끊긴 건 기동 때 close_interrupted가 내린다."""
+    pc = batch.get("publish_check")
+    pc = json.loads(pc) if isinstance(pc, str) else (pc or {})
+    return bool(pc.get("running"))
 
 
 async def publish_check(batch_id: int) -> dict:
@@ -646,12 +732,26 @@ async def publish_check(batch_id: int) -> dict:
         if system_llm:
             out = {"checked_at": now, "skipped": "로컬 LLM이 없어 검색 확인을 건너뜀(컨플 원문은 사내 LLM으로 보내지 않음)"}
         else:
+            # 제목 = 이 배치의 페이지 제목(source_file은 묶음 이름이라 페이지 구분이 안 됐다, 11/05)
             samples = await conn.fetch(
-                "SELECT k.id, k.content, k.namespace_id, k.confluence_page_id, k.source_file FROM rag_knowledge k "
+                "SELECT k.id, k.content, k.namespace_id, k.confluence_page_id, COALESCE(p.title, k.source_file) AS title FROM rag_knowledge k "
+                "LEFT JOIN rag_import_page p ON p.batch_id = $3 AND p.page_id = k.confluence_page_id "
                 "WHERE k.ingestion_job_id = ANY($1::int[]) AND k.status = 'staging' AND length(k.content) >= 40 "
-                "ORDER BY md5(k.id::text) LIMIT $2", jobs, CHECK_SAMPLES)
-            out = {"checked_at": now, "asked": 0, "found": 0, "failed": 0, "misses": []}
-    if not system_llm:
+                "ORDER BY md5(k.id::text) LIMIT $2", jobs, CHECK_SAMPLES, batch_id)
+            # items = 질문마다 결과(리포트 창, 11/05 태훈 "누르면 상세 리포트") — 질문·페이지·찾음·몇 위
+            out = {"checked_at": now, "asked": 0, "found": 0, "failed": 0, "misses": [], "items": []}
+    async def save(doc: dict) -> None:
+        async with get_conn() as conn:
+            await conn.execute("UPDATE rag_import_batch SET publish_check = $2::jsonb WHERE id = $1", batch_id, json.dumps(doc, ensure_ascii=False))
+
+    if system_llm:
+        await save(out)
+        return out
+    # 진행 기록(11/05 "멈춘 것처럼") — 화면이 running·total·asked로 "질문 3/10"을 그린다. 끝 저장(finally)이 running을 지운다 —
+    # 중간에 임베딩·DB 오류로 죽어도 "도는 중"이 남아 버튼이 잠기지 않게(리뷰 M1), 끊긴 사유는 error로
+    total = len(samples)
+    await save({**out, "running": True, "total": total})
+    try:
         for s in samples:
             try:
                 q = (await llm.generate_once(prompt=s["content"][:3000], system=_Q_SYSTEM, max_tokens=120)).strip().splitlines()[0][:200]
@@ -661,37 +761,69 @@ async def publish_check(batch_id: int) -> dict:
                 continue
             vec = await embedding_service.embed(q)
             async with get_conn() as conn:
+                # 제목 = 원장 원문 제목(페이지) — 못 찾았을 때 "대신 나온 것"을 보여 준다(11/05 리포트)
                 top = await conn.fetch(
-                    "SELECT k.id, k.confluence_page_id FROM rag_knowledge k WHERE k.namespace_id = $1 AND (k.status = 'active' "
+                    "SELECT k.id, k.confluence_page_id, COALESCE(d.title, k.source_file) AS title, 1 - (k.embedding <=> $2::vector) AS sim "
+                    "FROM rag_knowledge k LEFT JOIN rag_source_document d ON d.id = k.source_document_id "
+                    "WHERE k.namespace_id = $1 AND k.embedding IS NOT NULL AND (k.status = 'active' "   # 임베딩 없는 행은 sim이 NULL(리뷰 1)
                     "OR (k.status = 'staging' AND k.ingestion_job_id = ANY($3::int[]))) ORDER BY k.embedding <=> $2::vector LIMIT 3",
                     s["namespace_id"], str(vec), jobs)
-            hit = any(t["id"] == s["id"] or (s["confluence_page_id"] and t["confluence_page_id"] == s["confluence_page_id"]) for t in top)
+            same = [t["id"] == s["id"] or bool(s["confluence_page_id"] and t["confluence_page_id"] == s["confluence_page_id"]) for t in top]
+            rank = next((i for i, ok in enumerate(same, 1) if ok), None)
+            hit = rank is not None
             out["asked"] += 1
             out["found"] += hit
+            out["items"].append({"question": q, "title": s["title"], "page_id": s["confluence_page_id"], "found": hit, "rank": rank,
+                                 "got": [{"title": t["title"], "page_id": t["confluence_page_id"], "sim": round(float(t["sim"]), 3), "same": ok}
+                                         for t, ok in zip(top, same)]})
             if not hit:
-                out["misses"].append({"question": q, "title": s["source_file"]})
-    async with get_conn() as conn:
-        await conn.execute("UPDATE rag_import_batch SET publish_check = $2::jsonb WHERE id = $1", batch_id, json.dumps(out, ensure_ascii=False))
+                out["misses"].append({"question": q, "title": s["title"]})
+            await save({**out, "running": True, "total": total})
+    except Exception as e:   # noqa: BLE001 — 뒤에서 도는 일이라 화면은 이유를 모른다 — 센 데까지 + 사유를 남긴다(로그)
+        logger.warning("게시 전 검색 확인 중단 batch=%s", batch_id, exc_info=True)
+        out["error"] = f"검색 확인이 중간에 멈췄어요({type(e).__name__}) — 센 데까지만 · 다시 눌러 주세요"
+    finally:
+        await save(out)
     return out
 
 
-async def publish_batch(batch_id: int, user: dict) -> dict:
+async def claim_publish(conn, batch_id: int) -> list[int]:
+    """게시 잡기 — 게시 중 표시를 세우고 이 배치 작업 id를 돌려준다. 두 번 누름·게시 중 롤백이 엇갈리지 않게(재리뷰 M·L).
+    끝나면 publish_batch가 풀고, 기동 때 남은 표시는 close_interrupted가 푼다. 게시할 수 없으면 ValueError(화면 409)."""
+    b = await conn.fetchrow("UPDATE rag_import_batch SET publishing_at = NOW(), error = NULL WHERE id = $1 AND status = 'loaded' "
+                            "AND published_at IS NULL AND publishing_at IS NULL RETURNING job_ids", batch_id)
+    if b is None:
+        raise ValueError("게시할 수 있는 배치가 아닙니다(적재 끝·게시 전만, 이미 게시 중이면 끝난 뒤).")
+    return list(b["job_ids"] or [])
+
+
+async def publish_progress(conn, batch: dict) -> Optional[dict]:
+    """게시 중 진행 — 작업 단위(끝남/전체) · 단계(작업 게시 → 용어 추출). 게시 중이 아니면 None. 화면이 몇 초마다 읽는다(11/05 태훈
+    "멈춘 것처럼 보인다" — 413페이지 게시가 몇 분 걸리는데 아무 표시가 없었다)."""
+    if not batch.get("publishing_at"):
+        return None
+    r = await conn.fetchrow("SELECT count(*) FILTER (WHERE status = 'completed') AS done, "
+                            "count(*) FILTER (WHERE status IN ('held', 'completed')) AS total FROM rag_ingestion_job WHERE id = ANY($1::int[])",
+                            list(batch.get("job_ids") or []))
+    phase = "glossary" if r["total"] and r["done"] >= r["total"] else "jobs"
+    return {"done": r["done"], "total": r["total"], "phase": phase, "started_at": batch["publishing_at"].isoformat()}
+
+
+async def publish_batch(batch_id: int, user: dict, job_ids: Optional[list[int]] = None) -> dict:
     """검수 후 게시(11/03 결정 가) — 이 배치의 보류 작업을 하나씩 게시(옛 버전 내림·원문 확정·활성화가 이때), 다 되면 게시 시각 +
-    자동 용어 추출(컬렉션마다 한 번, 만든 용어 id 범위를 배치에 — 롤백 때 같이 지운다). 실패한 작업은 보류 그대로 남고 사유를 돌려준다."""
+    자동 용어 추출(컬렉션마다 한 번, 만든 용어 id 범위를 배치에 — 롤백 때 같이 지운다). 실패한 작업은 보류 그대로 남고 사유를 배치 오류 칸에.
+    화면 경로는 claim_publish로 먼저 잡고(job_ids) 뒤에서 이걸 돌린다 — 진행은 publish_progress."""
     from core.database import get_conn
     from agents.knowledge_rag.knowledge import service
     from agents.knowledge_rag.knowledge.router import AUTO_EXTRACT_SOURCE, _run_auto_glossary
-    async with get_conn() as conn:
-        # 배치를 잡는다(게시 중 표시) — 두 번 누름·게시 중 롤백이 엇갈리지 않게(재리뷰 M·L). 끝나면 풀고, 기동 때 남은 표시는 close_interrupted가 푼다
-        b = await conn.fetchrow("UPDATE rag_import_batch SET publishing_at = NOW() WHERE id = $1 AND status = 'loaded' AND published_at IS NULL "
-                                "AND publishing_at IS NULL RETURNING job_ids", batch_id)
-        if b is None:
-            raise ValueError("게시할 수 있는 배치가 아닙니다(적재 끝·게시 전만, 이미 게시 중이면 끝난 뒤).")
+    if job_ids is None:
+        async with get_conn() as conn:
+            job_ids = await claim_publish(conn, batch_id)
     done, failed = 0, []
     try:   # 잡은 직후부터 — 여기서 무엇이 실패해도 finally가 게시 중 표시를 푼다(재리뷰 L1)
         async with get_conn() as conn:
             jobs = [r["id"] for r in await conn.fetch(
-                "SELECT id FROM rag_ingestion_job WHERE id = ANY($1::int[]) AND status = 'held' ORDER BY id", list(b["job_ids"] or []))]
+                "SELECT id FROM rag_ingestion_job WHERE id = ANY($1::int[]) AND status = 'held' ORDER BY id", list(job_ids))]
         for job_id in jobs:
             try:
                 await service.publish_held_job(job_id)
@@ -708,14 +840,20 @@ async def publish_batch(batch_id: int, user: dict) -> dict:
         async with get_conn() as conn:
             texts: dict[str, list[str]] = {}
             for r in await conn.fetch("SELECT n.name, k.content FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id "
-                                      "WHERE k.ingestion_job_id = ANY($1::int[]) AND k.status = 'active' ORDER BY k.id", list(b["job_ids"] or [])):
+                                      "WHERE k.ingestion_job_id = ANY($1::int[]) AND k.status = 'active' ORDER BY k.id", list(job_ids)):
                 texts.setdefault(r["name"], []).append(r["content"])
             before = await conn.fetchval("SELECT COALESCE(max(id), 0) FROM rag_glossary")
         for ns_name, parts in texts.items():
-            await _run_auto_glossary(ns_name, "\n".join(parts), user, max_chars=20000)
+            try:
+                await _run_auto_glossary(ns_name, "\n".join(parts), user, max_chars=20000)
+            except Exception:   # noqa: BLE001 — 뒤에서 도는 게시라 여기서 죽으면 화면은 이유를 모른다 — 조각은 이미 게시됨, 용어만 빠짐을 표시
+                logger.warning("팀 적재 게시: 자동 용어 추출 실패 batch=%s ns=%s", batch_id, ns_name, exc_info=True)
+                async with get_conn() as conn:
+                    await conn.execute("UPDATE rag_import_batch SET error = $2 WHERE id = $1", batch_id,
+                                       f"자동 용어 추출 실패({ns_name}) — 조각은 게시됨, 용어는 다시 추출하세요")
         async with get_conn() as conn:
             after = await conn.fetchval("SELECT COALESCE(max(id), 0) FROM rag_glossary")
-            await conn.execute("UPDATE rag_import_batch SET published_at = NOW(), published_by_user_id = $5, error = NULL, glossary_from_id = $2, "
+            await conn.execute("UPDATE rag_import_batch SET published_at = NOW(), published_by_user_id = $5, glossary_from_id = $2, "
                                "glossary_to_id = $3, glossary_source = $4 WHERE id = $1 AND status = 'loaded'",
                                batch_id, before, after, AUTO_EXTRACT_SOURCE, user.get("id"))
         return {"published": done, "failed": []}
@@ -738,8 +876,9 @@ async def rollback_batch(conn, batch_id: int) -> Optional[dict]:
         jobs = list(b["job_ids"] or [])
         ids = [r["id"] for r in await conn.fetch(
             "UPDATE rag_knowledge SET status = 'deleted', updated_at = NOW() WHERE ingestion_job_id = ANY($1::int[]) "
-            "AND status = ANY($2::text[]) RETURNING id", jobs, list(ACTIVE_KNOWLEDGE + HELD_KNOWLEDGE))]   # 게시 전(보류) 조각도
+            "AND status = ANY($2::text[]) RETURNING id", jobs, list(ACTIVE_KNOWLEDGE + HELD_KNOWLEDGE) + ["archived"])]   # 게시 전(보류)·보관 조각도
         await conn.execute("UPDATE rag_ingestion_job SET status = 'cancelled' WHERE id = ANY($1::int[]) AND status = 'held'", jobs)
+        released = await _release_orphan_duplicates(conn, ids)
         # 지운 지식으로 메운 지식 공백은 다시 열린다(service.delete_knowledge와 같은 처리)
         await conn.execute("UPDATE ops_query_log SET resolved_knowledge_id = NULL, resolved_at = NULL "
                            "WHERE resolved_knowledge_id = ANY($1::int[])", ids)
@@ -752,4 +891,40 @@ async def rollback_batch(conn, batch_id: int) -> Optional[dict]:
                 "AND namespace_id IN (SELECT DISTINCT final_namespace_id FROM rag_import_page WHERE batch_id = $5 AND status = 'loaded')",
                 b["glossary_from_id"] or 0, b["glossary_to_id"], b["glossary_source"], b["glossary_by"], batch_id)).split()[-1])
         await conn.execute("UPDATE rag_import_page SET status = 'held', prev_status = NULL WHERE batch_id = $1 AND status = 'loaded'", batch_id)
-    return {"chunks": len(ids), "documents": int(docs.split()[-1]), "terms": terms}
+    return {"chunks": len(ids), "documents": int(docs.split()[-1]), "terms": terms, "released": released}
+
+
+async def _release_orphan_duplicates(conn, deleted_ids: list[int]) -> int:
+    """롤백으로 지운 조각만 중복 상대로 가리키던 게시 전 승인 대기(staging_review)는 중복 근거가 없어진다 — staging으로 풀고 비교를 지운다
+    (11/06 D4). 게시 때 담당 승인 필요(force_pending)는 다시 적용된다(service 게시 UPDATE).
+    승인 대기(pending_review)는 안 푼다 — 담당이 아닌 사람이 넣어 승인 대기인 것과 행으로 구분이 안 된다(리뷰 중간: 담당 승인 우회).
+    살아 있는 상대가 하나라도 남았거나 읽기 제한 페이지 조각이면 그대로. 푼 개수를 돌려준다."""
+    if not deleted_ids:
+        return 0
+    rows = await conn.fetch(
+        "SELECT DISTINCT k.id, k.status, k.namespace_id, k.confluence_page_id FROM rag_knowledge_duplicate_match m "
+        "JOIN rag_knowledge k ON k.id = m.new_knowledge_id "
+        "WHERE m.matched_knowledge_id = ANY($1::int[]) AND k.status = 'staging_review' "
+        "AND NOT EXISTS (SELECT 1 FROM rag_knowledge_duplicate_match o JOIN rag_knowledge t ON t.id = o.matched_knowledge_id "
+        "WHERE o.new_knowledge_id = k.id AND t.status = ANY($2::text[]))",
+        deleted_ids, list(ACTIVE_KNOWLEDGE + HELD_KNOWLEDGE))
+    if not rows:
+        return 0
+    from agents.knowledge_rag.ingestion.source_ledger import restricted_pages
+    blocked: set[int] = set()
+    by_ns: dict[int, list] = {}
+    for r in rows:
+        if r["confluence_page_id"]:
+            by_ns.setdefault(r["namespace_id"], []).append(r)
+    for ns_id, rs in by_ns.items():
+        hit = await restricted_pages(conn, ns_id, [r["confluence_page_id"] for r in rs])
+        blocked |= {r["id"] for r in rs if str(r["confluence_page_id"]) in hit}
+    ids = [r["id"] for r in rows if r["id"] not in blocked]
+    if not ids:
+        return 0
+    ids = [r["id"] for r in await conn.fetch(   # 상태 조건 — 그사이 다른 사람이 처리한 행은 건드리지 않는다(리뷰 낮음~중간)
+        "UPDATE rag_knowledge SET status = 'staging', updated_at = NOW() WHERE id = ANY($1::int[]) AND status = 'staging_review' "
+        "RETURNING id", ids)]
+    await conn.execute("DELETE FROM rag_knowledge_duplicate_match WHERE new_knowledge_id = ANY($1::int[])", ids)
+    logger.info("롤백: 중복 상대가 지워진 승인 대기 %d건 해제(%s)", len(ids), ids[:20])
+    return len(ids)

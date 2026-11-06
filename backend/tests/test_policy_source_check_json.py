@@ -174,7 +174,7 @@ class TestDecide:
             out = await source_check.decide_check(70, USER, "dismissed", " 원문 그대로 ", reason="source_ok")
         _, *args = c.fetchrow.await_args.args
         assert args[1] == "rejected"
-        assert json.loads(args[3]) == {"resolution": "dismissed", "note": "원문이 맞음 — 원문 그대로", "by": 9, "by_name": "담당",
+        assert json.loads(args[3]) == {"resolution": "dismissed", "note": "원문 정상 — 원문 그대로", "by": 9, "by_name": "담당",
                                        "reason": "source_ok"}
         assert rec.await_args.args[1] == "source_check" and rec.await_args.kwargs["ai_value"] == {"issue": True, "type": "question",
                                                                                                     "source": "v0_load_check"}
@@ -626,3 +626,4 @@ def teardown_module(module):
     for k, v in _saved.items():
         if v is not None:
             setattr(_pkg, k, v)
+

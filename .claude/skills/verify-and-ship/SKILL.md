@@ -30,6 +30,14 @@ description: "SMAgentLab에서 코드를 고치고 나서 '완료했다'고 보�
 둘 다 해당하는 변경이면 백엔드 먼저(재시작은 빠르니 문제 있으면 여기서 먼저 걸러진다),
 그다음 프론트 재빌드.
 
+**재시작 성공은 기동 줄로 직접 확인한다**(INC-2026-11-04-01): 재시작 뒤
+`docker logs ops-backend --since 2m | grep -E "startup complete|startup failed"`로 `Application startup complete.`
+줄이 있는지 본다. health 폴링·대기 루프가 시간 초과로 끝난 것을 성공으로 보지 않는다 — 11/04 NameError로 기동이
+실패했는데 대기 루프가 그냥 끝나 "재시작 완료"로 보고된 적이 있다. `startup failed`나 Traceback이 보이거나 성공 줄이
+없으면 검증을 시작하지 말고 원인부터. 재시작 전에는 `docker exec -w /app ops-backend python -c "import main"`
+(단위 테스트는 앱 모듈을 가짜로 바꿔 두고 돌아 import 누락을 못 잡는다).
+측정·E2E 스크립트가 ops-backend 안에서 도는 중이면 재시작하지 않는다(같이 죽는다).
+
 ## 2. 정적 검증
 - `cd frontend-react && npx tsc --noEmit` — 프론트 변경마다.
 - `docker compose -f docker-compose.yml -f docker-compose.dev.yml exec -T backend

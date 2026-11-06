@@ -397,6 +397,70 @@ def _clean_proposal(target_type: str, proposed: dict, *, whole: bool) -> dict:
     return out
 
 
+_SC_TYPE_LABEL = {"question": "담당자 질문", "conflict": "정책끼리 어긋남", "ref_error": "참고표 오류"}
+
+
+async def _source_check_context(conn, source_check_id: Optional[int], policy_item_id: Optional[int],
+                                context: Optional[dict] = None) -> Optional[dict]:
+    """원문 확인 카드에서 온 정정이면 카드 문맥을 초안에 같이(11/05) — 설명·종류·상대 정책 이름·참고표 제목만(원문·표 값은 안 줌, draft._CARD_RULE)."""
+    if source_check_id is None:
+        return context
+    card = await conn.fetchrow("SELECT user_input, original FROM ops_improvement_item WHERE id = $1 AND kind = $2",
+                               source_check_id, KIND_SOURCE_CHECK)
+    if card is None:
+        return context
+    orig = _json(card["original"]) or {}
+    me = await conn.fetchval("SELECT logical_id FROM policy_item WHERE id = $1", policy_item_id) if policy_item_id else None
+    others = [r["policy_name"] for r in await conn.fetch(
+        "SELECT DISTINCT ON (logical_id) policy_name FROM policy_item WHERE logical_id = ANY($1::int[]) AND logical_id IS DISTINCT FROM $2 "
+        "AND status = 'active' ORDER BY logical_id, version DESC", [int(x) for x in orig.get("policies") or []], me) if r["policy_name"]]
+    tables = [r["title"] for r in await conn.fetch(
+        "SELECT DISTINCT ON (logical_id) title FROM ref_table WHERE logical_id = ANY($1::int[]) AND status = 'active' ORDER BY logical_id, version DESC",
+        [int(x) for x in orig.get("ref_tables") or []])]
+    sc = {"type": orig.get("type"), "type_label": _SC_TYPE_LABEL.get(orig.get("type")), "description": card["user_input"],
+          "others": others, "ref_tables": tables}
+    return {**(context or {}), "source_check": sc}
+
+
+def _explain(ex: dict, original: dict) -> Optional[dict]:
+    """초안 설명(고칠 곳·이유) — 고칠 곳은 원문에 실제로 있는 글자일 때만 보인다(인용 지어냄 방지, 11/05 독립 검토)."""
+    if not ex:
+        return None
+    norm = lambda s: " ".join(str(s or "").split())   # noqa: E731
+    src = norm(original.get("raw_body")) + " " + norm(original.get("chunk_text"))
+    out = {"fix_summary": ex.get("fix_summary")} if ex.get("fix_summary") else {}
+    if ex.get("wrong_part") and norm(ex["wrong_part"]) in src:
+        out["wrong_part"] = ex["wrong_part"]
+    return out or None
+
+
+async def _card_draft(target_type: str, original: dict, user_input: Optional[str], context: Optional[dict],
+                      base: Optional[dict] = None) -> tuple[Optional[dict], dict]:
+    """원문 확인 카드에서 온 정책 정정의 초안 — 경로는 코드가 고른다(11/05 태훈 "프롬프팅이 많으면 하드코딩 같다", 업계 가드레일).
+    요청이 비었거나 카드 설명 그대로면 → 검토 초안(글자 그대로 + 【확인 필요】, draft가 코드로 보장).
+    요청이 있으면 → 정정 초안, 단 원문·요청에 없던 값(숫자·영문/코드)이 생기면 그 초안은 버리고 검토 초안으로 대체(대체는 verdict에 남겨 화면에 보임).
+    → (수정안, verdict에 더할 것 {draft_explain?, draft_fallback?})"""
+    sc = (context or {}).get("source_check") or {}
+    req = (user_input or "").strip()
+    if not req or " ".join(req.split()) == " ".join(str(sc.get("description") or "").split()):
+        return await draft_mod.draft_review_template(target_type, base or original, context), {}   # 다시 쓰기면 사람이 고친 안에 표시(리뷰 L6)
+    drafted, ex = draft_mod.pop_explain(await draft_mod.draft_correction(target_type, original, req, context, base))
+    if drafted is None:
+        return None, {}
+    allowed = [original.get("raw_body"), original.get("chunk_text"), req, *((base or {}).get(k) for k in ("raw_body", "chunk_text"))]
+    if target_type == "policy_param":
+        allowed += [str(v) for v in (original.get("param") or {}).values() if v is not None]
+    invented = draft_mod.new_values(" ".join(str(drafted.get(k) or "") for k in drafted), *allowed)
+    if invented:
+        logger.warning("카드 정정 초안에 원문·요청에 없는 값 %d개 — 검토 초안으로 대체", len(invented))
+        fb = await draft_mod.draft_review_template(target_type, base or original, context)
+        if fb is None:   # 대체 초안도 없으면 대체 표시도 남기지 않는다(리뷰 L5)
+            return None, {}
+        return fb, {"draft_fallback": f"AI 초안이 원문·요청에 없는 값({', '.join(invented[:5])})을 넣어 표시만 단 검토 초안으로 바꿨어요"}
+    explain = _explain(ex, base or original)
+    return drafted, ({"draft_explain": explain} if explain else {})
+
+
 def _clean_policy_draft(target_type: str, drafted: dict, ref_raw: Optional[str], *, whole: bool) -> dict:
     """AI 초안 → 저장할 수정안. 원문 통째(v0)에서 AI가 조각 쪽만 고쳤으면(원문 칸은 출발점 그대로) 그게 새 원문(_policy_new_raw와 같은 규칙).
     ref_raw = AI에게 준 출발점의 원문(처음 초안 = 원문, 다시 쓰기 = 현재 수정안). 정책 화면 AI 제안과 다시 쓰기가 같이 쓴다(10/21 리뷰 M2)."""
@@ -468,7 +532,7 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
     if mode not in _PROPOSAL_MODES:
         raise ValueError("알 수 없는 수정 방식입니다.")
     user_input = (user_input or "").strip() or None
-    if mode == SOURCE_POLICY_AI and not user_input:
+    if mode == SOURCE_POLICY_AI and not user_input and source_check_id is None:   # 카드에서 열면 카드 문제로 검토 초안(11/05)
         raise ValueError("AI에게 어떻게 고칠지 한 줄로 적어 주세요.")
     if mode in _AS_IS_MODES and not proposed:
         raise ValueError("수정한 원문이 없습니다.")
@@ -494,6 +558,7 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
             if not ok:
                 raise ValueError("연결할 원문 확인 카드가 없거나 이미 처리됐어요 — 새로고침하세요.")
         original = await _load_original(conn, ns_id, "policy_narrative", item_id, chunk_id, None)
+        card_ctx = await _source_check_context(conn, source_check_id, item_id)
     whole = row["pipeline_version"] == PIPELINE_WHOLE
     stored = None
     if mode in _AS_IS_MODES:
@@ -531,7 +596,14 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
 
     ai_failed = False
     if mode == SOURCE_POLICY_AI:
-        drafted = await draft_mod.draft_correction("policy_narrative", original, user_input, None)
+        extra: dict = {}
+        if source_check_id is not None:   # 카드에서 온 제안 — 경로·검사는 _card_draft
+            drafted, extra = await _card_draft("policy_narrative", original, user_input, card_ctx)
+        else:
+            drafted, ex = draft_mod.pop_explain(await draft_mod.draft_correction("policy_narrative", original, user_input, None))
+            if (e := _explain(ex, original)):
+                extra = {"draft_explain": e}
+        explain = extra or None
         if drafted is None:
             ai_failed = True   # 제안은 남긴다 — 정정 요청에서 [AI 초안 만들기]나 [직접 수정]으로 이어 간다(화면이 알림)
         else:
@@ -539,8 +611,10 @@ async def create_policy_proposal(namespace: str, user: dict, *, item_id: int, mo
             async with get_conn() as conn:
                 # AI가 쓰는 30초~2분 사이 담당자가 [직접 수정]·[AI 초안 만들기]로 안을 넣었으면 덮어쓰지 않는다(리뷰 M2 10/21)
                 res = await conn.execute(
-                    "UPDATE ops_improvement_item SET proposed = $1::jsonb WHERE id = $2 AND status = 'pending' AND proposed IS NULL",
-                    json.dumps(stored, ensure_ascii=False), new_id)
+                    "UPDATE ops_improvement_item SET proposed = $1::jsonb, "
+                    "ai_verdict = CASE WHEN $3::jsonb IS NULL THEN ai_verdict ELSE COALESCE(ai_verdict, '{}'::jsonb) || $3::jsonb END "
+                    "WHERE id = $2 AND status = 'pending' AND proposed IS NULL",
+                    json.dumps(stored, ensure_ascii=False), new_id, json.dumps(explain, ensure_ascii=False) if explain else None)
             if res.endswith(" 0"):
                 stored = None   # 화면엔 "이미 다른 안이 있음" — 정정 요청에서 확인
     return {"id": new_id, "status": "pending", "kind": "correction", "target_type": "policy_narrative", "source": mode,
@@ -735,19 +809,26 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
             original = await _load_original(conn, asked, target_type, target_id, sub_id, None, reach=True)
         # 다른 정책으로 옮길 때만 "정책당 대기 정정 1건" 확인(10/21 리뷰 M1) — 같은 정책 안(초안 다시·파라미터↔서술)은 이미 이 건이 그 자리.
         # AI 초안(수십 초)을 쓰기 전에 먼저 한 번 보고, 실제 저장 때 잠금 안에서 다시 본다.
+        if target_type in _POLICY_TARGETS:   # 원문 확인 카드에서 온 정정이면 카드 문맥도(11/05)
+            context = await _source_check_context(conn, item.get("source_check_id"), target_id, context)
         moves_policy = target_type in _POLICY_TARGETS and not (
             item.get("target_type") in _POLICY_TARGETS and item.get("target_id") == target_id)
         if moves_policy and (busy := await _pending_policy_correction(conn, target_id, item_id)) is not None:
             raise ConflictError(_duplicate_message(busy), existing_id=busy)
     # 사용자 의견이 없으면 맞는 내용 정보가 없다 — 값을 지어내지 않고 의심 구간에 【확인 필요】만 단 "검토 초안"을 만든다
     # (2026-10-07, 사용자 지적 "양식은 만들어줘야"). 표시가 남으면 승인이 막혀 확인 안 된 초안이 반영되지 않는다.
+    extra: dict = {}
     if target_type == "answer":
         proposed = None
+    elif target_type in _POLICY_TARGETS and (context or {}).get("source_check"):   # 원문 확인 카드에서 온 정정(11/05)
+        proposed, extra = await _card_draft(target_type, original, item["user_input"], context)
     elif not item["user_input"]:
         proposed = await draft_mod.draft_review_template(target_type, original, context)
     else:
-        proposed = await draft_mod.draft_correction(
-            target_type, original, item["user_input"], None if target_type == "missing" else context)
+        proposed, ex = draft_mod.pop_explain(await draft_mod.draft_correction(
+            target_type, original, item["user_input"], None if target_type == "missing" else context))
+        if target_type in _POLICY_TARGETS and (e := _explain(ex, original)):
+            extra = {"draft_explain": e}
     # 변경 이력은 AI 판정이 있던 신고에서 대상이 실제로 바뀔 때만 남긴다 — 같은 대상 재생성("초안 다시 만들기")을
     # 변경으로 세면 "담당자가 AI 판정을 뒤집은 비율" 측정이 부풀고, 직접 지정 신고엔 판정 자체가 없다(/code-review).
     verdict = dict(_json(item["ai_verdict"]) or {})
@@ -756,8 +837,10 @@ async def retarget(item_id: int, approver: dict, key: str) -> dict:
     if old_requests := verdict.pop("redrafts", None):
         verdict["redrafts_before_retarget"] = [*verdict.get("redrafts_before_retarget", []), *old_requests]
     old_key = _key(item["target_type"], item["target_id"], item["target_sub_id"])
-    if set(verdict) - {"redrafts_before_retarget", "edits"} and old_key != key:
+    if set(verdict) - {"redrafts_before_retarget", "edits", "draft_explain"} and old_key != key:
         verdict = dict(verdict) | {"retargeted": {"from": old_key, "to": key, "by": approver.get("id")}}
+    verdict.pop("draft_explain", None); verdict.pop("draft_fallback", None)   # 설명·대체 표시는 지금 초안 것만
+    verdict.update(extra)
     busy, stale = None, False
     read_target = (item["target_type"], item["target_id"], item["target_sub_id"])   # moves_policy·이력은 이 값 기준으로 계산했다
     async with get_conn() as conn:
@@ -808,6 +891,8 @@ async def redraft(item_id: int, approver: dict, feedback: str) -> dict:
         if item["target_type"] not in _REDRAFT_TARGETS:
             raise ValueError("고칠 대상(근거)이 정해진 신고만 다시 쓸 수 있어요 — 먼저 틀린 근거를 고르세요.")
         context = await _load_original(conn, item["namespace_id"], "missing", None, None, item["message_id"])
+        if item["target_type"] in _POLICY_TARGETS:   # 원문 확인 카드 문맥(11/05)
+            context = await _source_check_context(conn, item.get("source_check_id"), item["target_id"], context)
         whole = await _is_whole_policy(conn, item["target_type"], item["target_id"])
     target_type = item["target_type"]
     original = _json(item["original"]) or {}
@@ -822,8 +907,13 @@ async def redraft(item_id: int, approver: dict, feedback: str) -> dict:
     requests = [r["feedback"] for r in verdict.get("redrafts", []) if r.get("feedback")] + [feedback]
     combined = "\n\n".join([*([item["user_input"]] if item["user_input"] else []),
                               *(f"[담당자 요청 {i}] {r}" for i, r in enumerate(requests, 1))])
-    drafted = await draft_mod.draft_correction(target_type, original, combined,
-                                               None if target_type == "missing" else context, base)
+    if target_type in _POLICY_TARGETS and (context or {}).get("source_check"):   # 원문 확인 카드에서 온 정정 — 새 요청 기준으로 경로·검사(11/05)
+        # 카드 경로는 이번 요청(feedback)만 본다 — 앞선 요청은 이미 base(현재 수정안)에 반영돼 있다
+        drafted, extra = await _card_draft(target_type, original, feedback, context, base)
+    else:
+        drafted, ex = draft_mod.pop_explain(await draft_mod.draft_correction(target_type, original, combined,
+                                                                         None if target_type == "missing" else context, base))
+        extra = {"draft_explain": e} if target_type in _POLICY_TARGETS and (e := _explain(ex, base or original)) else {}
     if drafted is None:   # AI 실패는 숨기지 않는다 — 옛 수정안을 그대로 두고 알린다
         raise ValueError("AI가 수정안을 다시 쓰지 못했어요(사내 AI 응답 실패일 수 있음) — 잠시 후 다시 시도하세요.")
     ref_raw = (base or original).get("raw_body")
@@ -833,6 +923,8 @@ async def redraft(item_id: int, approver: dict, feedback: str) -> dict:
     # 덮어쓰기 전 안을 이력에 남긴다 — 다시 쓰기가 사람이 고친 안을 망쳐도 되돌릴 수 있게(직접 수정 이력 edits와 짝)
     verdict["redrafts"] = [*verdict.get("redrafts", []), {"by": approver.get("id"), "feedback": feedback,
                                                           "at": datetime.now(timezone.utc).isoformat(), "previous": stored}]
+    verdict.pop("draft_explain", None); verdict.pop("draft_fallback", None)
+    verdict.update(extra)
     async with get_conn() as conn:
         res = await conn.execute(f"""
             UPDATE ops_improvement_item SET proposed = $2::jsonb, ai_verdict = $3::jsonb
@@ -879,6 +971,7 @@ _LIST_SQL = """
     SELECT i.id, i.kind, n.name AS namespace, n.area AS namespace_area, i.message_id, i.target_type, i.target_id, i.target_sub_id,
            i.user_input, i.user_reason, i.original, i.proposed, i.status, i.reject_reason, i.applied_target_id,
            i.created_at, i.decided_at, i.reporter_seen_at, i.source, i.candidates, i.ai_verdict, i.source_check_id,
+           (SELECT sc.user_input FROM ops_improvement_item sc WHERE sc.id = i.source_check_id) AS source_check_reason,   -- 승인자도 AI와 같은 근거를(11/05)
            -- 정책 정정의 대상 버전(11/05 — 카드 머리 "대상 정책 vN")
            CASE WHEN i.target_type IN ('policy_narrative', 'policy_param') THEN (SELECT pi.version FROM policy_item pi WHERE pi.id = i.target_id) END AS policy_version,
            ru.username AS reporter, du.username AS decided_by,

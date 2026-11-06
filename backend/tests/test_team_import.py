@@ -397,3 +397,12 @@ def test_err_text_keeps_type_when_message_empty():
     assert ti._err_text(asyncio.TimeoutError()) == "TimeoutError"
     assert ti._err_text(ValueError("bad page")) == "ValueError: bad page"
     assert len(ti._err_text(RuntimeError("x" * 1000))) == 300
+
+
+def test_warning_kind_groups_by_text_without_numbers():
+    """품질 경고 문장 → (종류, 수) — 숫자만 다른 문장은 같은 종류(11/05: "겹친 곳 1곳"·"2곳"이 따로 세지던 것)."""
+    from agents.knowledge_rag.ingestion import team_import as ti
+    assert ti.warning_kind("이웃 청크와 같은 내용이 겹친 곳 1곳") == ("이웃 청크와 같은 내용이 겹친 곳", 1)
+    assert ti.warning_kind("이웃 청크와 같은 내용이 겹친 곳 13곳") == ("이웃 청크와 같은 내용이 겹친 곳", 13)
+    assert ti.warning_kind("다음 제목이 끝에 매달린 청크 1개") == ("다음 제목이 끝에 매달린 청크", 1)
+    assert ti.warning_kind("빈 조각(내용 없음)") == ("빈 조각", 1)

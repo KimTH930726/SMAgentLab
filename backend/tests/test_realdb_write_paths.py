@@ -222,6 +222,63 @@ def test_rollback_batch_removes_held_and_active_chunks_and_reopens_gaps():
     assert run(scenario) == (None, 2, "deleted", "deleted", "cancelled", None, "rolled_back")
 
 
+def test_rollback_releases_duplicates_whose_only_match_was_rolled_back():
+    """롤백(11/06 D4): 지운 조각만 상대로 가리키던 게시 전 승인 대기(staging_review)는 staging으로 풀린다(비교 지움).
+    승인 대기(pending_review)는 담당 승인 대기와 구분이 안 돼 그대로(리뷰 중간) · 살아 있는 상대가 남은 것 · 읽기 제한 · 상관없는 것도 그대로."""
+    ti = load("_rdb_real_team_import", "agents/knowledge_rag/ingestion/team_import.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_롤백해제 시스템")
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        job = await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks) VALUES ($1,'confluence','completed',1) RETURNING id", s)
+        gone = await knowledge(conn, s, "되돌릴 조각", ingestion_job_id=job)
+        alive = await knowledge(conn, s, "남는 기존 지식")
+        k = {name: await knowledge(conn, s, name, status=st, **extra) for name, st, extra in [
+            ("승인 대기", "pending_review", {}), ("게시 전 풀림", "staging_review", {}), ("상대 남음", "staging_review", {}),
+            ("읽기 제한", "staging_review", {"confluence_page_id": "RP1"}), ("상관없음", "staging_review", {})]}
+        await conn.execute("INSERT INTO rag_source_document (namespace_id, source_type, source_ref, title, raw_format, raw_content, content_hash, status) "
+                           "VALUES ($1, 'confluence', 'RP1', 'RP1', 'html', 'x', md5('x'), 'restricted')", s)
+        pairs = [(k["승인 대기"], gone), (k["게시 전 풀림"], gone), (k["상대 남음"], gone), (k["상대 남음"], alive),
+                 (k["읽기 제한"], gone), (k["상관없음"], alive)]
+        await conn.executemany("INSERT INTO rag_knowledge_duplicate_match (new_knowledge_id, matched_knowledge_id, similarity) VALUES ($1, $2, 0.9)", pairs)
+        b = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, status, sampling_required, total_pages, done_pages, job_ids, loaded_at) "
+                                "VALUES ($1, 'https://confl.sinc.co.kr/display/RR', 'loaded', FALSE, 1, 1, $2::int[], NOW()) RETURNING id", team, [job])
+        out = await ti.rollback_batch(conn, b)
+        st = {r["id"]: r["status"] for r in await conn.fetch("SELECT id, status FROM rag_knowledge WHERE id = ANY($1::int[])", list(k.values()))}
+        n = {r["new_knowledge_id"]: r["n"] for r in await conn.fetch(
+            "SELECT new_knowledge_id, count(*) AS n FROM rag_knowledge_duplicate_match WHERE new_knowledge_id = ANY($1::int[]) GROUP BY 1", list(k.values()))}
+        return out["released"], {name: (st[i], n.get(i, 0)) for name, i in k.items()}
+    released, after = run(scenario)
+    assert released == 1
+    assert after == {"승인 대기": ("pending_review", 1), "게시 전 풀림": ("staging", 0), "상대 남음": ("staging_review", 2),
+                     "읽기 제한": ("staging_review", 1), "상관없음": ("staging_review", 1)}
+
+
+def test_boot_cleanup_keeps_duplicate_matches_of_unfinished_chunks():
+    """재기동 정리(#65): 끝난 지식의 중복 비교만 지운다 — 승인 대기(pending_review)·게시 전 승인 대기(staging_review)는 남긴다
+    (11/05 실사고: staging 상태가 생긴 뒤 조건을 안 고쳐 재시작마다 게시 전 비교 30건이 지워졌다)."""
+    import ast
+    import logging
+    # main.py 통째 import는 다른 시험의 가짜 core와 부딪힌다 — 이 함수만 실제 소스에서 꺼내 실행(조건을 바꾸면 그대로 걸린다)
+    src = (__import__("pathlib").Path(__file__).parent.parent / "main.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.parse(src).body if getattr(n, "name", "") == "_migrate_drop_orphans_2026_10_06")
+    env = {"logger": logging.getLogger("test")}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "main.py", "exec"), env)
+    cleanup = env["_migrate_drop_orphans_2026_10_06"]
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_정리 시스템")
+        base = await knowledge(conn, s, "기존 지식")
+        by_status = {st: await knowledge(conn, s, f"{st} 조각", status=st) for st in ("pending_review", "staging_review", "active", "deleted")}
+        await conn.executemany("INSERT INTO rag_knowledge_duplicate_match (new_knowledge_id, matched_knowledge_id, similarity) VALUES ($1, $2, 0.9)",
+                               [(k, base) for k in by_status.values()])
+        await cleanup(conn)
+        left = {r["new_knowledge_id"] for r in await conn.fetch(
+            "SELECT new_knowledge_id FROM rag_knowledge_duplicate_match WHERE new_knowledge_id = ANY($1::int[])", list(by_status.values()))}
+        return {st for st, k in by_status.items() if k in left}
+    assert run(scenario) == {"pending_review", "staging_review"}
+
+
 # ── 관련 정책 연결 저장 ────────────────────────────────────────────────────
 
 def test_set_supports_replaces_links_and_rejects_wrong_kinds():
@@ -446,7 +503,7 @@ def test_review_and_page_urls_use_page_title_not_batch_name():
                                 "VALUES ($1, 'https://confl.sinc.co.kr/display/X', 'preview', FALSE, 1, 1) RETURNING id", team)
         await conn.execute("INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, status) VALUES ($1, '시험p1', '송장 재발행 안내', 'b', 1, 'auto')", b)
         batch_name = "Confluence 16개 페이지(파일럿 진단 · 그림 켬)"
-        k1 = await knowledge(conn, s, "조각 1", confluence_page_id="시험p1", source_file=batch_name, created_at=_OLD)
+        k1 = await knowledge(conn, s, "조각 1", confluence_page_id="시험p1", source_file=batch_name, created_at=_OLD, image_count=3)
         k2 = await knowledge(conn, s, "조각 2", confluence_page_id="시험p2", source_file=batch_name, heading_path=["배치 재기동"],
                              created_at=_OLD)
         for k in (k1, k2):   # 목록에 오르게 — 신고(내용이 낡음, 대기 중)는 기한과 상관없이 올라온다(11/05 사건 기반)
@@ -454,11 +511,44 @@ def test_review_and_page_urls_use_page_title_not_batch_name():
                                "VALUES ('correction', 'chat', $1, 'knowledge', $2, 'stale', 'pending')", s, k)
         due = await review.review_due("시험_제목 시스템")
         urls = await ksvc.page_urls([k1, k2])
-        return {d["key"]: d["title"] for d in due["due"]}, {i: u["title"] for i, u in urls.items()}, k1, k2
+        return {d["key"]: d["title"] for d in due["due"]}, {i: (u["title"], u["image_count"]) for i, u in urls.items()}, k1, k2
 
     titles, url_titles, k1, k2 = run(scenario, modules=[review, ksvc])
     assert titles == {"p:시험p1": "송장 재발행 안내", "p:시험p2": "배치 재기동"}   # 둘 다 신고로 올라옴
-    assert url_titles == {k1: "송장 재발행 안내", k2: "배치 재기동"}
+    assert url_titles == {k1: ("송장 재발행 안내", 3), k2: ("배치 재기동", 0)}   # 그림 수(11/06) — 안 셈(NULL)은 0
+
+
+def test_activate_records_image_count_per_chunk_section():
+    """원문 활성화(11/06): 조각마다 앞뒤 문맥 그림 수가 image_count로 — 그림 바로 앞 본문이 든 조각만 >0, 합 = 원문 그림 수,
+    컨플 아닌 조각은 안 셈(NULL)."""
+    sl = load("_rdb_real_ledger", "agents/knowledge_rag/ingestion/source_ledger.py")
+    raw = ("<h2>주문 흐름</h2><p>" + "가나다라 첫째 문단 " * 200 + "</p>" '<ac:image><ri:attachment ri:filename="a.png"/></ac:image>'
+           '<ac:image><ri:attachment ri:filename="b.png"/></ac:image>' "<h2>다음</h2><p>" + "마바사 둘째 문단 " * 200 + "</p>")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_그림 시스템")
+        doc = await conn.fetchval("INSERT INTO rag_source_document (namespace_id, source_type, source_ref, title, raw_format, raw_content, content_hash, status) "
+                                  "VALUES ($1, 'confluence', 'IMG1', '그림 문서', 'html', $2, md5($2), 'draft') RETURNING id", s, raw)
+        row = await conn.fetchrow(f"SELECT {sl._DOC_COLS} FROM rag_source_document WHERE id = $1", doc)
+        items = sl.rechunk_items(row)
+        old_job = await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks) VALUES ($1,'confluence','completed',1) RETURNING id", s)
+        new_job = await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks) VALUES ($1,'confluence','completed',1) RETURNING id", s)
+        # 같은 원문의 옛 등록(다른 분할) — 다시 분할하면 같은 원문 행에 옛 조각이 남아 있다(리뷰 중간: 섞여 세지 않게)
+        old = [await knowledge(conn, s, "첫째 문단 옛 조각 " * 30, source_document_id=doc, source_chunk_idx=0, ingestion_job_id=old_job)]
+        ks = [await knowledge(conn, s, x["content"], status="staging", source_document_id=doc, source_chunk_idx=i, ingestion_job_id=new_job)
+              for i, x in enumerate(items)]
+        later_job = await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks) VALUES ($1,'confluence','held',1) RETURNING id", s)
+        # 같은 원문을 든 더 늦은 보류 작업(재리뷰 낮음) — 확정되는 작업(new_job)이 max가 아니어도 그 작업 조각을 센다
+        later = [await knowledge(conn, s, items[0]["content"], status="staging", source_document_id=doc, source_chunk_idx=0, ingestion_job_id=later_job)]
+        paste = await knowledge(conn, s, "붙여넣기 조각")
+        await sl.activate(conn, s, [doc], [], [], job_id=new_job)
+        got = {r["id"]: r["image_count"] for r in await conn.fetch("SELECT id, image_count FROM rag_knowledge WHERE id = ANY($1::int[])", ks + old + later + [paste])}
+        return [got[k] for k in ks], [x["content"] for x in items], got[paste], (got[old[0]], got[later[0]])
+    per_chunk, texts, paste, old = run(scenario)   # 원장 함수는 연결을 인자로 받는다
+    assert len(per_chunk) >= 2 and sum(per_chunk) == 2
+    last_first = max(i for i, t in enumerate(texts) if "첫째" in t)      # 그림 바로 앞 본문(첫째 문단 끝)이 든 조각
+    assert per_chunk[last_first] == 2 and all(n == 0 for i, n in enumerate(per_chunk) if i != last_first)
+    assert paste is None and old == (None, None)   # 옛 등록·다른 보류 작업 조각은 안 셈(확정되는 작업 조각만)
 
 
 def test_reported_card_clears_after_review():
@@ -477,3 +567,266 @@ def test_reported_card_clears_after_review():
 
     before, after = run(scenario, modules=[review])
     assert before == ["reported"] and after == []
+
+
+
+# ── 읽기 제한 포함 적재(11/05) ─────────────────────────────────────────────
+
+def test_include_restricted_batch_records_who_and_sync_follows_only_loaded():
+    """묶음 만들기 SQL(실 DB — 파라미터 타입 충돌로 500이 났던 것) · 켠 사람·시각은 켰을 때만 ·
+    동기화는 같은 주소의 '적재 끝난' 제한 포함 묶음만 따른다(미리보기·다른 사람의 끈 묶음은 결정을 바꾸지 않음)."""
+    router = load("_rdb_real_team_import_router", "agents/knowledge_rag/knowledge/team_import_router.py")
+    sync = load("_rdb_real_confluence_sync", "agents/knowledge_rag/ingestion/confluence_sync.py")
+
+    async def scenario(conn):
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        admin = await conn.fetchval("SELECT id FROM ops_user ORDER BY id LIMIT 1")
+        url = "https://confl.sinc.co.kr/display/시험제한"
+        await conn.execute("UPDATE rag_import_batch SET status = 'cancelled' WHERE team_id = $1 AND status IN ('previewing', 'loading')", team)
+        on = await conn.fetchval(router.INSERT_BATCH_SQL, team, url, admin, None, True)
+        row_on = await conn.fetchrow("SELECT include_restricted_at IS NOT NULL a, include_restricted_by b FROM rag_import_batch WHERE id = $1", on)
+        before_load = await sync.include_restricted_for(conn, team, url)          # 미리보기(previewing)는 아직 안 따름
+        await conn.execute("UPDATE rag_import_batch SET status = 'loaded' WHERE id = $1", on)
+        off = await conn.fetchval(router.INSERT_BATCH_SQL, team, url, admin, None, False)   # 다른 사람이 끄고 새 미리보기
+        row_off = await conn.fetchrow("SELECT include_restricted_at IS NOT NULL a, include_restricted_by b FROM rag_import_batch WHERE id = $1", off)
+        after = await sync.include_restricted_for(conn, team, url)
+        return (row_on["a"], row_on["b"] == admin), (row_off["a"], row_off["b"]), before_load, after
+
+    (on_a, on_by), (off_a, off_by), before_load, after = run(scenario)
+    assert (on_a, on_by) == (True, True) and (off_a, off_by) == (False, None)
+    assert before_load is False and after is True
+
+
+# ── 동기화로 바뀐 페이지(11/05) ─────────────────────────────────────────────
+
+def test_sync_changes_scope_pairing_and_usage():
+    """범위 = 이 연결이 넣은 (페이지, 컬렉션)만 — 같은 페이지의 다른 컬렉션 판은 안 섞임 · 내용 같은 새 판은 빠짐 ·
+    처음 넣은 페이지(옛 판 없음)는 안 나옴 · 채팅 횟수는 옛 판 조각이 쓰인 것도 센다."""
+    sc = load("_rdb_real_sync_changes", "agents/knowledge_rag/ingestion/sync_changes.py")
+
+    async def scenario(conn):
+        a, other = await ns(conn, "시험_변경 가"), await ns(conn, "시험_변경 나")
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        url = "https://confl.sinc.co.kr/display/시험변경"
+        b = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, status, sampling_required, total_pages, done_pages) "
+                                "VALUES ($1, $2, 'loaded', FALSE, 3, 3) RETURNING id", team, url)
+        for pid in ("P1", "P2", "P3"):
+            await conn.execute("INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, status, final_namespace_id) "
+                               "VALUES ($1, $2, $2, 'b', 1, 'loaded', $3)", b, pid, a)
+
+        async def doc(nsid, pid, raw, status, ago):
+            return await conn.fetchval(
+                "INSERT INTO rag_source_document (namespace_id, source_type, source_ref, title, raw_format, raw_content, content_hash, status, activated_at) "
+                "VALUES ($1, 'confluence', $2, $2, 'html', $3, md5($3), $4, NOW() - make_interval(days => $5)) RETURNING id", nsid, pid, raw, status, ago)
+        await doc(a, "P1", "<p>가</p><p>나</p>", "superseded", 5)
+        new1 = await doc(a, "P1", "<p>가</p><p>나 고침</p><p>다</p>", "active", 1)          # 바뀜 +2 −1
+        await doc(a, "P2", "<p>같음</p>", "superseded", 5)
+        await doc(a, "P2", "<p>같음</p>", "active", 1)                                         # 내용 같음 → 빠짐
+        await doc(a, "P3", "<p>처음</p>", "active", 1)                                         # 옛 판 없음 → 안 나옴
+        await doc(other, "P1", "<p>남의 옛 판</p>", "superseded", 5)
+        await doc(other, "P1", "<p>남의 새 판</p><p>더</p>", "active", 1)                      # 다른 컬렉션 → 안 섞임
+        old_chunk = await knowledge(conn, a, "옛 판 조각", confluence_page_id="P1")
+        cv = await conn.fetchval("INSERT INTO ops_conversation (title) VALUES ('시험') RETURNING id")
+        await conn.execute("INSERT INTO ops_message (conversation_id, role, content, results) VALUES ($1, 'assistant', '답', $2::jsonb)",
+                           cv, f'[{{"id": {old_chunk}}}]')
+        c = {"team_id": team, "root_url": url, "retry_pages": []}
+        lst = await sc.list_changes(c, 30)
+        det = await sc.change_detail(c, new1)
+        return lst, det, new1
+
+    lst, det, new1 = run(scenario, modules=[sc])
+    assert [(x["page_id"], x["namespace"], x["added"], x["removed"]) for x in lst["items"]] == [("P1", "시험_변경 가", 2, 1)]
+    assert lst["items"][0]["new_id"] == new1 and lst["items"][0]["used"] == 1   # 옛 판 조각이 쓰인 것도 셈
+    assert det["before"] == "가\n나" and det["after"] == "가\n나 고침\n다"
+
+
+# ── 조사 떼기 Python ↔ SQL 동등성(11/05 하드코딩 감사 — 두 벌 구현이 09/10 수작업 확인 한 번뿐이었다) ───────────────
+
+def test_korean_suffix_strip_python_equals_sql():
+    """trustkit.text.ko.strip_suffix/strip_text 와 DB 함수 policy_strip_ko_word/policy_strip_ko가 같은 결과 —
+    조사 목록 전부 × 여러 어간 + 무작위 문장. 한쪽만 고치면 키워드 검색이 말없이 달라진다."""
+    import random
+    ko = load("_rdb_trustkit_ko", "libs/trustkit/trustkit/text/ko.py")
+    stems = ["배송", "교환", "쿠폰", "정산배치", "앱", "가", "환불기준", "B2C몰", "2차인증", "회원"]
+    words = [s + suf for s in stems for suf in ko.SUFFIXES] + stems + ["", "을", "에서", "에서도는"]
+    rnd = random.Random(1105)
+    texts = [" ".join(rnd.choice(words) for _ in range(rnd.randint(1, 8))) for _ in range(200)]
+
+    async def scenario(conn):
+        if not await conn.fetchval("SELECT 1 FROM pg_proc WHERE proname = 'policy_strip_ko_word'"):
+            pytest.skip("policy_strip_ko 함수 없음")
+        w = await conn.fetch("SELECT x, policy_strip_ko_word(x) AS y FROM unnest($1::text[]) AS x", words)
+        t = await conn.fetch("SELECT x, policy_strip_ko(x) AS y FROM unnest($1::text[]) AS x", texts)
+        return {r["x"]: r["y"] for r in w}, {r["x"]: r["y"] for r in t}
+
+    sql_w, sql_t = run(scenario)
+    bad_w = [x for x in words if (ko.strip_suffix(x) or "") != (sql_w[x] or "")]
+    bad_t = [x for x in texts if (ko.strip_text(x) or "") != (sql_t[x] or "")]
+    assert not bad_w, f"낱말 {len(bad_w)}개 다름: {bad_w[:5]}"
+    assert not bad_t, f"문장 {len(bad_t)}개 다름: {bad_t[:3]}"
+
+
+# ── 검토 필요 동작: 미루기 · 보관 · 되살리기(11/05, 리뷰 M3) ───────────────────────────
+
+def test_review_snooze_archive_unarchive_scenarios():
+    """미루기 → 목록에서 빠짐, 신고가 오면 다시 보임 · 보관 → 검색 대상 아님·공백 다시 열림·다른 컬렉션 id는 그대로 ·
+    같은 페이지에 새 판이 생기면 되살리기 거부(옛 판·새 판 중복 방지) · 보관 조각 있으면 컬렉션 삭제가 막힘."""
+    import datetime
+    review = load("_rdb_real_review3", "agents/knowledge_rag/knowledge/review.py")
+    old = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+
+    async def scenario(conn):
+        s, other = await ns(conn, "시험_보관 가"), await ns(conn, "시험_보관 나")
+        a = await knowledge(conn, s, "보관 조각", confluence_page_id="시험A", created_at=old)
+        b = await knowledge(conn, s, "미룰 조각", confluence_page_id="시험B", created_at=old)
+        o = await knowledge(conn, other, "남의 조각", confluence_page_id="시험A")
+        for k in (a, b):   # 두 페이지 다 신고로 목록에 오르게
+            await conn.execute("INSERT INTO ops_improvement_item (kind, source, namespace_id, target_type, target_id, user_reason, status, created_at) "
+                               "VALUES ('correction', 'chat', $1, 'knowledge', $2, 'stale', 'pending', NOW() - interval '1 day')", s, k)
+        gap = await conn.fetchval("INSERT INTO ops_query_log (namespace_id, question, status, resolved_knowledge_id, resolved_at) "
+                                  "VALUES ($1, '질문', 'no_knowledge', $2, NOW()) RETURNING id", s, a)
+        keys0 = {d["key"] for d in (await review.review_due("시험_보관 가"))["due"]}
+        # 미루기 — 신고가 있으면 미뤄도 보인다(리뷰 M2) → 신고를 정리한 뒤 미루면 빠진다
+        await conn.execute("UPDATE ops_improvement_item SET status = 'rejected' WHERE target_id = $1", b)
+        await conn.execute("UPDATE rag_knowledge SET reviewed_at = NULL WHERE id = $1", b)
+        n_sn = await review.snooze("시험_보관 가", [b], 30)
+        keys1 = {d["key"] for d in (await review.review_due("시험_보관 가"))["due"]}
+        await conn.execute("INSERT INTO ops_improvement_item (kind, source, namespace_id, target_type, target_id, user_reason, status) "
+                           "VALUES ('correction', 'chat', $1, 'knowledge', $2, 'stale', 'pending')", s, b)
+        keys2 = {d["key"] for d in (await review.review_due("시험_보관 가"))["due"]}
+        # 보관 — 다른 컬렉션 id가 섞여도 그 컬렉션 것만
+        n_ar = await review.set_archived("시험_보관 가", [a, o], True)
+        st = {r["id"]: r["status"] for r in await conn.fetch("SELECT id, status FROM rag_knowledge WHERE id = ANY($1::int[])", [a, o])}
+        gap_open = await conn.fetchval("SELECT resolved_knowledge_id IS NULL FROM ops_query_log WHERE id = $1", gap)
+        arch = await review.archived_docs("시험_보관 가")
+        blocked = await conn.fetchval("SELECT count(*) FROM rag_knowledge WHERE namespace_id = $1 AND status IN ('active', 'pending_review', 'archived')", s)
+        # 같은 페이지에 새 판(active)이 생기면 되살리기 거부
+        await knowledge(conn, s, "새 판", confluence_page_id="시험A")
+        n_un_block = await review.set_archived("시험_보관 가", [a], False)
+        await conn.execute("UPDATE rag_knowledge SET status = 'deleted' WHERE namespace_id = $1 AND content = '새 판'", s)
+        n_un = await review.set_archived("시험_보관 가", [a], False)
+        st_a = await conn.fetchval("SELECT status FROM rag_knowledge WHERE id = $1", a)
+        return keys0, n_sn, keys1, keys2, n_ar, st, gap_open, arch, blocked, n_un_block, n_un, st_a, a, o
+
+    keys0, n_sn, keys1, keys2, n_ar, st, gap_open, arch, blocked, n_un_block, n_un, st_a, a, o = run(scenario, modules=[review])
+    assert keys0 == {"p:시험A", "p:시험B"}
+    assert n_sn == 1 and keys1 == {"p:시험A"}                # 미루면 빠짐
+    assert keys2 == {"p:시험A", "p:시험B"}                   # 미뤄도 새 신고면 다시 보임
+    assert n_ar == 1 and st == {a: "archived", o: "active"}  # 다른 컬렉션은 그대로
+    assert gap_open is True and [d["key"] for d in arch] == ["p:시험A"]
+    assert blocked >= 1                                        # 보관도 살아 있는 내용 — 컬렉션 삭제 판정에 셈
+    assert n_un_block == 0 and n_un == 1 and st_a == "active"
+
+
+# ── 게시·검색 확인 진행(11/05 "멈춘 것처럼 보인다") ─────────────────────────────
+
+def test_publish_claim_progress_and_interrupted_check():
+    """게시 잡기: 한 번만(두 번째는 거부) · 진행 = 끝난 작업/전체, 다 끝나면 용어 추출 단계 · 기동 정리가 도는 중 검색 확인을 '끊김'으로."""
+    ti = load("_rdb_real_team_import_p", "agents/knowledge_rag/ingestion/team_import.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_게시진행 시스템")
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        jobs = [await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks, held_plan) "
+                                    "VALUES ($1,'confluence','held',1,'{}'::jsonb) RETURNING id", s) for _ in range(3)]
+        b = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, status, sampling_required, total_pages, done_pages, job_ids, loaded_at, "
+                                "publish_check) VALUES ($1, 'https://confl.sinc.co.kr/display/P', 'loaded', FALSE, 3, 3, $2::int[], NOW(), "
+                                "'{\"running\": true, \"asked\": 2, \"total\": 10}'::jsonb) RETURNING id", team, jobs)
+        got = await ti.claim_publish(conn, b)
+        try:
+            await ti.claim_publish(conn, b)
+            second = "통과"
+        except ValueError:
+            second = "거부"
+        row = dict(await conn.fetchrow("SELECT * FROM rag_import_batch WHERE id = $1", b))
+        before = await ti.publish_progress(conn, row)
+        await conn.execute("UPDATE rag_ingestion_job SET status = 'completed' WHERE id = $1", jobs[0])
+        mid = await ti.publish_progress(conn, row)
+        await conn.execute("UPDATE rag_ingestion_job SET status = 'completed' WHERE id = ANY($1::int[])", jobs)
+        end = await ti.publish_progress(conn, row)
+        running = ti.check_running(row)
+        await ti.close_interrupted(conn)
+        pc = json.loads(await conn.fetchval("SELECT publish_check::text FROM rag_import_batch WHERE id = $1", b))
+        idle = await ti.publish_progress(conn, dict(await conn.fetchrow("SELECT * FROM rag_import_batch WHERE id = $1", b)))
+        return (sorted(got) == sorted(jobs), second, (before["done"], before["total"], before["phase"]), (mid["done"], mid["phase"]),
+                end["phase"], running, pc.get("running"), pc.get("interrupted"), pc.get("asked"), idle)
+    assert run(scenario) == (True, "거부", (0, 3, "jobs"), (1, "jobs"), "glossary", True, None, True, 2, None)
+
+
+def test_overlap_detail_finds_pairs_by_chunk_id_after_middle_removed():
+    """겹침 상세는 조각 id로 쌍을 찾는다 — 기록 뒤 중간 조각이 빠져도 엉뚱한 쌍에 붙지 않고 '바뀜'으로 센다(리뷰 3).
+    원문 연결이 없는 조각이 있으면 원문 대조 없이(예전 기준) 기록 · 본문 미기록."""
+    ti = load("_rdb_real_team_import_o", "agents/knowledge_rag/ingestion/team_import.py")
+    qm = load("_rdb_real_quality", "agents/knowledge_rag/ingestion/quality.py")
+    row = "| 같은 행 | 값 | 비고 칸 |"
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_겹침 시스템")
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        j = await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks) VALUES ($1,'confluence','held',4) RETURNING id", s)
+        ks = [await knowledge(conn, s, c, status="staging", ingestion_job_id=j, source_chunk_idx=n)
+              for n, c in enumerate([f"가 본문\n{row}", f"{row}\n나 본문입니다", "다 본문입니다 길게", f"{row}\n라 본문입니다"])]
+        b = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, status, sampling_required, total_pages, done_pages, job_ids, loaded_at) "
+                                "VALUES ($1, 'https://confl.sinc.co.kr/display/O', 'loaded', FALSE, 1, 1, $2::int[], NOW()) RETURNING id", team, [j])
+        q = await qm.record_job_quality(conn, j)
+        first = await ti.overlap_detail(conn, b, j)
+        await conn.execute("UPDATE rag_knowledge SET status = 'deleted' WHERE id = $1", ks[0])   # 앞 쌍의 한쪽이 빠짐
+        after = await ti.overlap_detail(conn, b, j)
+        other = await ti.overlap_detail(conn, b, j + 999999)
+        stored = await conn.fetchval("SELECT quality::text FROM rag_ingestion_job WHERE id = $1", j)
+        return (q["source_checked"], q["adjacent_overlap"], [(p["a"], p["b"], p["a_id"] == ks[0]) for p in first["pairs"]],
+                after["stale"], len(after["pairs"]), other, "같은 행" in stored)
+    assert run(scenario) == (False, 1, [(1, 2, True)], 1, 0, None, False)
+
+
+def test_dedupe_sees_other_held_jobs_staging_chunks():
+    """중복 비교 대상: 사용 중 + 게시 전 검수(held) 작업의 비중복 조각 — 팀 적재는 페이지마다 작업이 따로이고 게시 전까지 staging이라
+    같은 배치의 다른 페이지끼리 못 봤다(11/05 앱 공간 84조각). 끝난·취소된 작업의 staging, 중복 의심(staging_review)은 대상 아님."""
+    from realdb import VEC
+    rmod = sys.modules[ksvc.find_similar_active_knowledge.__module__]
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_보류비교 시스템")
+        job = lambda st: conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks) "   # noqa: E731
+                                       "VALUES ($1,'confluence',$2,1) RETURNING id", s, st)
+        held, cancelled, mine = await job("held"), await job("cancelled"), await job("processing")
+        k_held = await knowledge(conn, s, "보류 페이지 조각", status="staging", ingestion_job_id=held)
+        k_review = await knowledge(conn, s, "보류 중복 의심 조각", status="staging_review", ingestion_job_id=held)
+        k_cancel = await knowledge(conn, s, "취소된 조각", status="staging", ingestion_job_id=cancelled)
+        k_mine = await knowledge(conn, s, "이 작업 앞 조각", status="staging", ingestion_job_id=mine)
+        k_active = await knowledge(conn, s, "사용 중 조각")
+        got = {m["id"] for m in await rmod.find_similar_active_knowledge(s, VEC, limit=10, staging_job_id=mine)}
+        return ({k_held, k_mine, k_active} <= got, k_review in got, k_cancel in got)
+    assert run(scenario, [rmod]) == (True, False, False)
+
+
+def test_publish_check_clears_running_when_it_dies_midway():
+    """검색 확인이 중간에 죽어도(임베딩 오류) '도는 중'이 내려가고 사유·센 데까지가 남는다 — 안 그러면 버튼이 재시작 전까지 잠긴다(리뷰 M1)."""
+    import types
+    from contextlib import asynccontextmanager
+    ti = load("_rdb_real_team_import_c", "agents/knowledge_rag/ingestion/team_import.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_검색확인 시스템")
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        j = await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, source_type, status, total_chunks) VALUES ($1,'confluence','held',2) RETURNING id", s)
+        for n in range(2):
+            await knowledge(conn, s, f"검색 확인 표본 조각 {n} — 길이를 사십 자 넘게 채우는 본문입니다 가나다라마바사", status="staging", ingestion_job_id=j)
+        b = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, status, sampling_required, total_pages, done_pages, job_ids, loaded_at) "
+                                "VALUES ($1, 'https://confl.sinc.co.kr/display/C', 'loaded', FALSE, 1, 1, $2::int[], NOW()) RETURNING id", team, [j])
+
+        @asynccontextmanager
+        async def get_conn():
+            yield conn
+        llm = MagicMock()
+        llm.generate_once = AsyncMock(return_value="질문 하나?")
+        emb = MagicMock()
+        emb.embed = AsyncMock(side_effect=RuntimeError("임베딩 서버 끊김"))
+        fakes = {"core.database": types.SimpleNamespace(get_conn=get_conn),
+                 "service.llm.factory": types.SimpleNamespace(get_ingest_llm=lambda: (llm, False)),
+                 "shared.embedding": types.SimpleNamespace(embedding_service=emb)}
+        with patch.dict(sys.modules, fakes):
+            out = await ti.publish_check(b)
+        pc = json.loads(await conn.fetchval("SELECT publish_check::text FROM rag_import_batch WHERE id = $1", b))
+        return ("running" in pc, "RuntimeError" in (pc.get("error") or ""), pc.get("asked"), out.get("asked"))
+    assert run(scenario) == (False, True, 0, 0)

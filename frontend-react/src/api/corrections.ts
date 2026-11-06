@@ -22,6 +22,10 @@ export interface AiVerdict {
   label?: string;
   preview?: string;
   retargeted?: { from: string; to: string; by: number | null };
+  /** 정책 초안 설명(11/05) — 고칠 곳(원문 인용, 원문에 있을 때만) · 무엇을 어떻게 */
+  draft_explain?: { wrong_part?: string; fix_summary?: string };
+  /** 카드 정정 초안이 원문·요청에 없는 값을 넣어 검토 초안으로 바꿨을 때 그 사실(대체 처리는 보이게) */
+  draft_fallback?: string;
   /** 정책 컬렉션 "빠진 내용"을 넘긴 정책 추가 제안 번호(11/03) */
   forwarded_to?: number;
   /** 정정 요청의 [직접 수정] 기록(누가·언제) */
@@ -78,6 +82,8 @@ export interface CorrectionItem {
   user_reason?: UserReason | null;
   /** 원문 확인 카드에서 올린 정책 정정이면 그 카드 번호 · 정책 정정의 대상 버전(11/05 카드 머리) */
   source_check_id?: number | null;
+  /** 그 원문 확인 카드의 문제 설명 */
+  source_check_reason?: string | null;
   policy_version?: number | null;
   original: Record<string, unknown> | null;
   proposed: Record<string, string | null> | null;

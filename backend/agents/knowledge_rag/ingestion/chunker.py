@@ -165,7 +165,14 @@ def _merge_heading_only(chunks: list[Chunk], max_chars: int) -> list[Chunk]:
     for c in chunks:
         if pending is not None:
             under = list(c.heading_path[:len(pending.heading_path)]) == list(pending.heading_path)
-            if under and len(pending.text) + 1 + len(c.text) <= max_chars:
+            head = [ln.strip() for ln in pending.text.split("\n") if ln.strip()]
+            body = [ln.strip() for ln in c.text.split("\n") if ln.strip()]
+            if under and body[:len(head)] == head:   # 같은 부모 아래일 때만 — 같은 제목이 다른 자리에 연달아 나오는 문서에서 줄을 잃지 않게
+                # 다음 조각이 이미 같은 제목 줄로 시작(긴 섹션을 나눌 때 이어지는 조각마다 제목을 다시 붙인다) — 제목만 조각은 버린다.
+                # 붙이면 같은 제목이 두 번(앞에 붙임) 또는 앞 조각 끝에 매달리고 다음 조각에도(뒤에 붙임) 남았다(11/05 앱 공간 job 1954).
+                # 유실 아님: 그 제목은 다음 조각 첫 줄에 그대로 있다
+                pending = None
+            elif under and len(pending.text) + 1 + len(c.text) <= max_chars:
                 c = Chunk(text=f"{pending.text}\n{c.text}", idx=c.idx, section_title=pending.section_title or c.section_title,
                           heading_path=list(pending.heading_path), metadata=c.metadata)
             elif out and len(out[-1].text) + 1 + len(pending.text) <= max_chars:   # 다음이 너무 크면 앞 조각 뒤에

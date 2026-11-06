@@ -125,6 +125,13 @@ class RetrievalResult:
     created_at: Optional[datetime.datetime] = field(default=None)
 
 
+def confidence_label(rel: float, th: Optional[dict] = None) -> str:
+    """신뢰도 높음/보통/낮음 — 관련성 점수(relevance_score) 기준, 이 함수 하나만(11/05 하드코딩 감사: LLM 문맥 두 곳 + 화면이
+    가중치 곱한 final_score 0.7/0.4로 따로 판정해 화면 "높음"이 문맥 라벨과 달랐다). 구간 = 설정 knowledge_high/mid_score."""
+    th = th or get_thresholds()
+    return "높음" if rel >= th["knowledge_high_score"] else "보통" if rel >= th["knowledge_mid_score"] else "낮음"
+
+
 def relevance_score(r: RetrievalResult) -> float:
     """base_weight(가중치 부스트)를 걷어낸 "진짜 관련성" 점수 (2026-09-18).
 
@@ -195,16 +202,22 @@ async def find_similar_active_knowledge(
     안 바뀐 청크가 옛 버전과 거의 같아 중복 판정(승인 대기)으로 빠지고, 뒤이어 옛 버전이
     폐기되면서 그 내용이 검색에서 통째로 사라진다.
     """
+    # 게시 전 검수(held) 작업의 비중복 조각도 본다(11/05) — 팀 적재는 페이지마다 작업이 따로이고 [게시] 전까지 전부 staging이라,
+    # active만 보면 같은 배치의 다른 페이지끼리 서로를 못 봤다(앱 공간 #345: 다른 페이지의 같은 글 84조각이 승인 대기 없이 게시됨).
+    # 위 staging_job_id 전제("앞 배치가 즉시 active")가 게시 전 검수(11/03)로 깨진 것 — 보류 작업 조각은 곧 active가 될 내용이다
+    held_clause = ("(status = 'staging' AND ingestion_job_id IN (SELECT j.id FROM rag_ingestion_job j "
+                   "WHERE j.namespace_id = $1 AND j.status = 'held'))")
     staging_clause = ""
     replace_clause = ""
     args: list = [ns_id, str(embedding), limit]
     if staging_job_id is not None:
         args.append(staging_job_id)
-        staging_clause = f"OR (status = 'staging' AND ingestion_job_id = ${len(args)})"
+        staging_clause = f" OR (status = 'staging' AND ingestion_job_id = ${len(args)})"
     if replacing_confluence_pages:
         args.append(list(replacing_confluence_pages))
+        # 보류 조각도 — 같은 페이지의 게시 전 초안을 "같은 원본 완전 일치"로 보고 새 조각을 건너뛰면, 그 보류 배치를 롤백할 때 내용이 사라진다(리뷰 M2)
         replace_clause = (
-            f"AND NOT (status = 'active' AND confluence_page_id IS NOT NULL "
+            f"AND NOT ((status = 'active' OR {held_clause}) AND confluence_page_id IS NOT NULL "
             f"AND confluence_page_id = ANY(${len(args)}::text[]))"
         )
     if replacing_documents:
@@ -212,13 +225,14 @@ async def find_similar_active_knowledge(
         args.append(list(replacing_documents))
         # IS NOT NULL 가드 — 없으면 원문 연결 없는 조각(직접 입력 등)이 NULL = ANY → NOT NULL = NULL로 후보에서 통째로 빠졌다
         # (10/08~ 결함, 11/04 E2E 에이전트 발견: 사용 중 1,756 중 80이 일괄 등록·미리보기 중복 비교에서 안 보임 — 위 컨플 페이지 조건엔 가드가 있었다)
-        replace_clause += f" AND NOT (status = 'active' AND source_document_id IS NOT NULL AND source_document_id = ANY(${len(args)}::int[]))"
+        replace_clause += (f" AND NOT ((status = 'active' OR {held_clause}) AND source_document_id IS NOT NULL "
+                           f"AND source_document_id = ANY(${len(args)}::int[]))")
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""
             SELECT id, content, confluence_page_id, source_document_id, ingestion_job_id, 1 - (embedding <=> $2::vector) AS similarity
             FROM rag_knowledge
-            WHERE namespace_id = $1 AND (status = 'active' {staging_clause}) {replace_clause}
+            WHERE namespace_id = $1 AND (status = 'active' OR {held_clause}{staging_clause}) {replace_clause}
               AND embedding IS NOT NULL
             ORDER BY embedding <=> $2::vector
             LIMIT $3
@@ -448,7 +462,7 @@ def build_context(results: list[RetrievalResult]) -> str:
     parts = []
     for i, r in enumerate(relevant, 1):
         rel = relevance_score(r)
-        confidence = "높음" if rel >= th["knowledge_high_score"] else "보통" if rel >= th["knowledge_mid_score"] else "낮음"
+        confidence = confidence_label(rel, th)
         part = [f"--- 문서 {i} (점수: {rel:.4f}, 신뢰도: {confidence}) ---"]
         if r.heading_path:
             part.append(f"상위 맥락: {' > '.join(r.heading_path)}")

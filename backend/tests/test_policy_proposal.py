@@ -549,7 +549,7 @@ class _Ledger:
                       ai_verdict=a[6])
             self.events.append(("write", a[0]))
             return "UPDATE 1"
-        if "SET proposed = $1::jsonb WHERE id = $2" in sql:
+        if "SET proposed = $1::jsonb WHERE id = $2" in sql or "SET proposed = $1::jsonb, ai_verdict = CASE" in sql:   # AI 제안 초안(+설명, 11/05)
             if a[1] in self.rows:
                 self.rows[a[1]]["proposed"] = a[0]
             return "UPDATE 1"

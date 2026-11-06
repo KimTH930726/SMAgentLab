@@ -156,12 +156,16 @@ export interface SourceCheck {
 }
 
 export type NoIssueReason = 'source_ok' | 'already_fixed' | 'duplicate' | 'other';
+/** [이슈 아님] 사유 — 서버 source_check.NO_ISSUE_REASONS와 같은 값(GET /policy/source-checks/reasons, 일치는 E2E·테스트가 본다).
+ *  AI 감사 화면 문구도 여기서 만든다(11/05 — 다섯 곳 정의가 어긋나 있었다) */
 export const NO_ISSUE_REASONS: { key: NoIssueReason; label: string }[] = [
-  { key: 'source_ok', label: '원문이 맞음' },
-  { key: 'already_fixed', label: '이미 고쳐짐' },
+  { key: 'source_ok', label: '원문 정상' },
+  { key: 'already_fixed', label: '이미 수정됨' },
   { key: 'duplicate', label: '중복' },
-  { key: 'other', label: '기타(직접 입력)' },
+  { key: 'other', label: '기타' },
 ];
+export const noIssueLabel = (key: string) => NO_ISSUE_REASONS.find((r) => r.key === key)?.label ?? key;
+export const getNoIssueReasons = () => apiFetch<{ key: NoIssueReason; label: string }[]>('/policy/source-checks/reasons');
 
 export interface SuggestedLink {
   id: number;

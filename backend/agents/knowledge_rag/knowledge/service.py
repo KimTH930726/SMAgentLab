@@ -626,14 +626,14 @@ async def page_urls(ids: list[int]) -> dict[int, dict]:
     async with get_conn() as conn:
         root = await conn.fetchval("SELECT root_url FROM rag_import_batch WHERE root_url ~ '^https?://' ORDER BY id DESC LIMIT 1")
         from agents.knowledge_rag.knowledge.review import PAGE_TITLE_CTE, TITLE_SQL
-        rows = await conn.fetch(f"WITH {PAGE_TITLE_CTE} SELECT k.id, k.confluence_page_id, {TITLE_SQL} AS title FROM rag_knowledge k "
+        rows = await conn.fetch(f"WITH {PAGE_TITLE_CTE} SELECT k.id, k.confluence_page_id, k.image_count, {TITLE_SQL} AS title FROM rag_knowledge k "
                                 "LEFT JOIN page_title pt ON pt.page_id = k.confluence_page_id "
                                 "WHERE k.id = ANY($1::int[]) AND k.confluence_page_id IS NOT NULL", ids)
     out = {}
     for r in rows:
         url = confluence_page_url(root, r["confluence_page_id"])
         if url:
-            out[r["id"]] = {"url": url, "title": r["title"]}
+            out[r["id"]] = {"url": url, "title": r["title"], "image_count": r["image_count"] or 0}   # 같은 절 그림 수(11/06 근거 카드 배지)
     return out
 
 
@@ -1489,7 +1489,7 @@ async def _switch_staged(conn, *, job_id: int, ns_id: int, source_doc_ids: list[
               AND status IN ('active', 'pending_review') AND ingestion_job_id IS DISTINCT FROM $3
         """, ns_id, replacing_docs, job_id)
     if source_doc_ids:
-        await _ledger.activate(conn, ns_id, source_doc_ids, replacing_docs, partial_doc_ids)
+        await _ledger.activate(conn, ns_id, source_doc_ids, replacing_docs, partial_doc_ids, job_id=job_id)
     await conn.execute("""
         UPDATE rag_knowledge
         SET status = CASE WHEN $2 THEN 'pending_review' WHEN status = 'staging' THEN 'active' ELSE 'pending_review' END

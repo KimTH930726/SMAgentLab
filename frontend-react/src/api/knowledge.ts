@@ -38,8 +38,10 @@ export async function getDuplicateMatches(id: number): Promise<DuplicateMatch[]>
 }
 
 /** 지식 id → 컨플 원문 페이지 주소·제목(없으면 빠짐) — 승인 대기 비교 창 [원문 ↗](11/04, 제목 11/05) */
+/** 원문 페이지 — image_count = 그 조각 앞뒤 문맥의 원문 그림·다이어그램 수(11/06, 안 셈 = 0) */
+export interface SourcePage { url: string; title: string | null; image_count: number }
 export const getPageUrls = (ids: number[]) =>
-  apiFetch<Record<string, { url: string; title: string | null }>>('/knowledge/page-urls', { method: 'POST', body: JSON.stringify({ ids }) });
+  apiFetch<Record<string, SourcePage>>('/knowledge/page-urls', { method: 'POST', body: JSON.stringify({ ids }) });
 
 export async function resolveDuplicate(
   id: number,
@@ -559,6 +561,14 @@ export const getReviewDue = (namespace: string) =>
 export const markReviewed = (namespace: string, ids: number[]) =>
   apiFetch<{ reviewed: number }>('/knowledge/review/done', { method: 'POST', body: JSON.stringify({ namespace, ids }) });
 
+/** [미루기 30·90일] · [보관]/[되살리기] · 보관된 페이지(11/05, 업계 Guru defer·archive) */
+export const snoozeReview = (namespace: string, ids: number[], days: 30 | 90) =>
+  apiFetch<{ snoozed: number }>('/knowledge/review/snooze', { method: 'POST', body: JSON.stringify({ namespace, ids, days }) });
+export const archiveReview = (namespace: string, ids: number[], archive: boolean) =>
+  apiFetch<{ changed: number }>('/knowledge/review/archive', { method: 'POST', body: JSON.stringify({ namespace, ids, archive }) });
+export interface ArchivedDoc { key: string; title: string; ids: number[]; n: number; archived_at: string }
+export const getArchivedReview = (namespace: string) =>
+  apiFetch<{ docs: ArchivedDoc[] }>(`/knowledge/review/archived?${new URLSearchParams({ namespace })}`);
 export const setReviewInterval = (namespace: string, days: number | null) =>
   apiFetch<{ interval_days: number | null }>('/knowledge/review/interval', { method: 'PUT', body: JSON.stringify({ namespace, days }) });
 

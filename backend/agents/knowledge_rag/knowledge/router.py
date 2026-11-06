@@ -380,6 +380,43 @@ async def post_review_done(body: ReviewDoneRequest, user: dict = Depends(get_cur
     return {"reviewed": await review.mark_reviewed(body.namespace, body.ids, user["username"])}
 
 
+class ReviewSnoozeRequest(ReviewDoneRequest):
+    days: int
+
+
+@router.post("/review/snooze")
+async def post_review_snooze(body: ReviewSnoozeRequest, user: dict = Depends(get_current_user)):
+    """[미루기 30·90일](11/05) — 검토 완료와 같은 권한. 원문 바뀜은 미뤄도 목록에 남는다."""
+    from agents.knowledge_rag.knowledge import review
+    await check_namespace_ownership(body.namespace, user)
+    try:
+        return {"snoozed": await review.snooze(body.namespace, body.ids, body.days)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class ReviewArchiveRequest(ReviewDoneRequest):
+    archive: bool = True
+
+
+@router.post("/review/archive")
+async def post_review_archive(body: ReviewArchiveRequest, user: dict = Depends(get_current_user)):
+    """[보관] / [되살리기](11/05) — 지우지 않고 검색에서만 뺀다(업계 Guru archive). 담당 파트·관리자. 캐시도 비운다(보관한 조각이 든 답이 나가지 않게)."""
+    from agents.knowledge_rag.knowledge import review
+    await check_namespace_ownership(body.namespace, user)
+    n = await review.set_archived(body.namespace, body.ids, body.archive)
+    if n:
+        await _forget_answers(body.namespace)   # 실패해도 보관은 끝남 — 로그만(리뷰 L3)
+    return {"changed": n, "skipped": len(set(body.ids)) - n}
+
+
+@router.get("/review/archived")
+async def get_review_archived(namespace: str, user: dict = Depends(get_current_user)):
+    """보관된 페이지 목록(되살리기용)."""
+    from agents.knowledge_rag.knowledge import review
+    return {"docs": await review.archived_docs(namespace)}
+
+
 @router.put("/review/interval")   # /{knowledge_id} PUT과 겹치지 않게 두 칸 경로(한 칸이면 정수 변환 422)
 async def put_review_interval(body: ReviewIntervalRequest, admin: dict = Depends(get_current_admin)):
     """컬렉션 검토 주기(관리자) — 30·90·180일 또는 안 함(None)."""

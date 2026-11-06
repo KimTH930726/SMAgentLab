@@ -136,11 +136,7 @@ def _build_rrf_context(
     items: list[tuple[float, str]] = []
     for i, r in enumerate(relevant):
         rel = retrieval.relevance_score(r)
-        confidence = (
-            "높음" if rel >= th["knowledge_high_score"]
-            else "보통" if rel >= th["knowledge_mid_score"]
-            else "낮음"
-        )
+        confidence = retrieval.confidence_label(rel, th)
         heading_str = f"\n상위 맥락: {' > '.join(r.heading_path)}" if r.heading_path else ""
         # 문서 식별자를 반드시 포함 — 없으면 시스템 프롬프트의 "📎 문서 N 참고" 지시를
         # 따를 근거가 컨텍스트에 없어, LLM이 옆에 보이는 점수(float)를 N으로 오인해

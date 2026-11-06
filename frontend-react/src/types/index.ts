@@ -231,6 +231,9 @@ export interface KnowledgeResult {
   id: number;
   content: string;
   final_score: number;
+  /** 가중치 뺀 관련성 · 신뢰도(서버가 채팅 문맥과 같은 판정으로, 11/05) — 옛 대화엔 없음 */
+  relevance?: number;
+  confidence?: '높음' | '보통' | '낮음';
   v_score?: number;
   k_score?: number;
 }

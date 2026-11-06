@@ -50,19 +50,19 @@ MAX_MESSAGES_PER_NS = 100
 CLEANUP_SAMPLE_RATE = 0.05
 
 
+def _result_dict(r: RetrievalResult) -> dict:
+    """근거 카드 한 장 — 화면은 relevance(가중치 뺀 관련성)·confidence(문맥과 같은 판정)를 그대로 쓴다(11/05, 판정 한 곳)."""
+    from agents.knowledge_rag.knowledge.retrieval import confidence_label, relevance_score
+    rel = relevance_score(r)
+    return {"id": r.id, "content": r.content, "final_score": r.final_score, "relevance": round(rel, 4), "confidence": confidence_label(rel)}
+
+
 def results_to_json(results: list[RetrievalResult]) -> str:
-    return json.dumps(
-        [{"id": r.id, "content": r.content, "final_score": r.final_score}
-         for r in results],
-        ensure_ascii=False,
-    )
+    return json.dumps([_result_dict(r) for r in results], ensure_ascii=False)
 
 
 def results_to_payload(results: list[RetrievalResult]) -> list[dict]:
-    return [
-        {"id": r.id, "content": r.content, "final_score": r.final_score}
-        for r in results
-    ]
+    return [_result_dict(r) for r in results]
 
 
 async def update_assistant_message(msg_id: int, content: str, status: str = "generating", metadata: dict | None = None) -> None:

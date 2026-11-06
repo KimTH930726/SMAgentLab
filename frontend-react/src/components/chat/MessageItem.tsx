@@ -17,7 +17,7 @@ import { useCorrectionStore } from '../../store/useCorrectionStore';
 import { CorrectionAnalysis } from './CorrectionAnalysis';
 import { getCorrectionStatus } from '../../api/corrections';
 import type { ChatMessage, ClarifyOption, CollectionSuggest, TermNote } from '../../types';
-import { getFreshness } from '../../api/knowledge';
+import { getFreshness, getPageUrls } from '../../api/knowledge';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -580,15 +580,31 @@ function useFreshness(results: NonNullable<ChatMessage['results']>) {
   return fresh;
 }
 
+/** 원문 페이지 주소 · 앞뒤 문맥 그림 수(11/06 "그림 N · 원문 보기"). 실패해도 카드는 그대로(배지만 없음, 로그) */
+function useSourcePages(results: NonNullable<ChatMessage['results']>) {
+  const ids = results.map((r) => r.id);
+  const pages = useQuery({
+    queryKey: ['page-urls', ids.join(',')],
+    queryFn: () => getPageUrls(ids.slice(0, 50)),
+    enabled: ids.length > 0,
+    staleTime: 300_000,
+    retry: false,
+  });
+  useEffect(() => { if (pages.isError) console.warn('원문 주소 불러오기 실패', pages.error); }, [pages.isError, pages.error]);
+  return pages;
+}
+
 /** 근거 카드 목록 */
 function EvidenceList({ results, underReview }: { results: NonNullable<ChatMessage['results']>; underReview?: number[] }) {
   const fresh = useFreshness(results);
+  const pages = useSourcePages(results);
   return (
     <div className="space-y-1.5">
       <p className="text-xs text-slate-500 font-medium">검색된 문서 {results.length}건</p>
       {results.map((result, idx) => (
         <SearchResultCard key={result.id} result={result} defaultOpen={false} index={idx}
-          underReview={underReview?.includes(result.id)} freshness={fresh.data?.[String(result.id)]} />
+          underReview={underReview?.includes(result.id)} freshness={fresh.data?.[String(result.id)]}
+          sourcePage={pages.data?.[String(result.id)]} />
       ))}
     </div>
   );
