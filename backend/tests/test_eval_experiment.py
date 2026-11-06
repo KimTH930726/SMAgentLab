@@ -72,3 +72,19 @@ def test_candidate_prompt_on_real_chat_prompt_changes_nothing_else():
     assert out.count(line) == 1 and out.replace("\n" + line, "", 1) == real
     assert out.index("[원칙]") < out.index(line) < out.index("[문맥 활용]")
     assert "- 반드시 제공된 [참고 문서]만 근거로 답변." in out
+
+
+def test_golden_ready_follows_files_on_this_server(tmp_path, monkeypatch):
+    """골든셋이 없는 서버(운영 이미지 — eval_out/ 안 넣음)면 실험 불가로 본다(11/06 C2). 있으면 그대로."""
+    monkeypatch.setattr(ex, "APP", tmp_path)
+    assert not ex.golden_ready("knowledge")
+    (tmp_path / "eval_out").mkdir()
+    (tmp_path / ex.KNOWLEDGE_SET).write_text("{}\n", encoding="utf-8")
+    assert ex.golden_ready("knowledge")
+    gdir = tmp_path / "golden"
+    monkeypatch.setitem(sys.modules, "service.eval.report", types.SimpleNamespace(GOLDEN_DIR=gdir))
+    assert not ex.golden_ready("policy")          # 폴더 없음
+    gdir.mkdir()
+    assert not ex.golden_ready("policy")          # 폴더만 있고 문항 파일 없음
+    (gdir / "a.jsonl").write_text("{}\n", encoding="utf-8")
+    assert ex.golden_ready("policy")

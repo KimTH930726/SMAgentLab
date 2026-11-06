@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { Mail, Plus, Trash2, Pencil, X, Save, Send, FlaskConical, AlertCircle, Inbox, Route, PlayCircle, KeyRound, History as HistoryIcon, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react';
 import { clsx } from 'clsx';
 import {
@@ -54,13 +55,14 @@ const noDraftReason = (category?: string | null, reasoning?: string | null) =>
 
 type VocSubTab = 'auth' | 'routing' | 'collect' | 'history' | 'stats' | 'analyze';
 
-const SUB_TABS: { id: VocSubTab; label: string; icon: React.ReactNode }[] = [
+// adminOnly = 관리자에게만 보이는 탭(11/06 C3 — 분석·알림 테스트는 LLM·Teams 발송이라 관리자 도구)
+const SUB_TABS: { id: VocSubTab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
   { id: 'auth', label: '1단계 · 로그인', icon: <KeyRound className="w-4 h-4" /> },
   { id: 'routing', label: '2단계 · 라우팅', icon: <Route className="w-4 h-4" /> },
   { id: 'collect', label: '3단계 · 폴링', icon: <Inbox className="w-4 h-4" /> },
   { id: 'history', label: '분석 이력', icon: <HistoryIcon className="w-4 h-4" /> },
   { id: 'stats', label: 'VOC 통계', icon: <BarChart3 className="w-4 h-4" /> },
-  { id: 'analyze', label: '분석·알림 테스트', icon: <FlaskConical className="w-4 h-4" /> },
+  { id: 'analyze', label: '분석·알림 테스트', icon: <FlaskConical className="w-4 h-4" />, adminOnly: true },
 ];
 
 const inputClass = 'bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500';
@@ -165,6 +167,7 @@ export function VocEmailPanel() {
   const namespace = useAppStore((s) => s.namespace);   // 정책 컬렉션은 앱 공용 값 하나(사이드바와 같음, 10/21)
   const [error, setError] = useState('');
   const [subTab, setSubTab] = useState<VocSubTab>('collect');
+  const isAdmin = useAuthStore((st) => st.user?.role === 'admin');
 
   const selectedNs = namespace;   // 공용 값 그대로 — 경로 표시줄과 어긋나지 않게
   // 정책 컬렉션이 바뀌면 열린 메일함 담당 폼을 닫는다 — 앞 영역 id로 저장되지 않게(리뷰 L4)
@@ -323,7 +326,7 @@ export function VocEmailPanel() {
     onError: (e) => setError(toErrorMessage(e)),
   });
 
-  // ── Delegated 권한 로그인 (Application 권한/Track B 승인 전 임시 경로) ─────
+  // ── Delegated 권한 로그인 (Application 권한이 없을 때의 경로) ─────
   // Authorization Code Flow(PKCE) — 로그인 링크를 열면 Microsoft가 이 서버의
   // 콜백으로 리다이렉트시키고, 그 콜백이 로그인을 완료시킨다. 관리자 화면은
   // 진행 중(pending)일 때만 짧은 주기로 상태를 폴링해 완료 여부를 감지한다.
@@ -520,7 +523,7 @@ export function VocEmailPanel() {
       {/* 서브 탭 */}
       <div className="border-b border-slate-700">
         <div className="flex gap-1">
-          {SUB_TABS.map((tab) => (
+          {SUB_TABS.filter((tab) => isAdmin || !tab.adminOnly).map((tab) => (
             <button
               key={tab.id}
               onClick={() => setSubTab(tab.id)}
@@ -583,10 +586,10 @@ export function VocEmailPanel() {
             </div>
           </div>
 
-          {/* 개인 계정 로그인 (Delegated) — Application 권한 승인 전 임시 경로 */}
+          {/* 개인 계정 로그인 (Delegated) — Application 권한이 없을 때 쓰는 경로 */}
           <div className="pt-2">
             <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2 mb-2">
-              <KeyRound className="w-4 h-4" /> 개인 계정 로그인 (Delegated, 임시)
+              <KeyRound className="w-4 h-4" /> 개인 계정 로그인 (Delegated)
               <Badge color={delegatedStatus?.logged_in ? 'emerald' : 'slate'}>
                 {delegatedStatus?.logged_in ? `로그인됨 · ${delegatedStatus.account}` : '로그인 필요'}
               </Badge>
@@ -598,7 +601,7 @@ export function VocEmailPanel() {
               className="text-xs text-slate-500 mb-2"
               title="Application 권한이 설정돼 있으면 그쪽이 우선 사용됩니다. 라우팅 탭의 메일함 UPN을 아래 로그인 계정과 동일하게 등록하세요."
             >
-              Application 권한 승인 전 임시 로그인 — 본인 메일함 기준으로 전체 플로우 테스트 가능
+              Application 권한이 없을 때 — 로그인한 계정의 메일함으로 수집
             </p>
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
               <div className="grid grid-cols-2 gap-3">
@@ -958,7 +961,7 @@ export function VocEmailPanel() {
       )}
 
       {/* ── 번외: 분석 테스트 ── */}
-      {subTab === 'analyze' && (
+      {subTab === 'analyze' && isAdmin && (
         <section className="space-y-3">
           <p className="text-xs text-slate-500">텍스트 직접 입력으로 분류/심각도/오배치 판정 테스트</p>
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 space-y-3">
@@ -1016,7 +1019,7 @@ export function VocEmailPanel() {
       )}
 
       {/* ── 번외: Teams 알림 발송 테스트 (분석 테스트와 같은 탭) ── */}
-      {subTab === 'analyze' && (
+      {subTab === 'analyze' && isAdmin && (
         <section className="space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">

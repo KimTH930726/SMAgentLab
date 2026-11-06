@@ -269,7 +269,8 @@ export function ImproveAreas({ rep, imp, axis, stage, isAdmin }: {
           )}
         </span>
       </div>
-      {rep.files_missing.length > 0 && (
+      {rep.files_missing.length > 0 && rep.result_files === false && <p className="text-xs text-slate-500" title="질문·답·채점 이유는 결과 파일(eval_out/)에만 있고 운영 이미지엔 넣지 않아요 — 숫자는 그대로 보입니다" data-testid="report-files-elsewhere">문항 원문은 측정한 개발 서버에서만 열려요</p>}
+      {rep.files_missing.length > 0 && rep.result_files !== false && (
         <p className="text-xs text-rose-600 dark:text-rose-400" data-testid="report-files-missing">
           결과 파일이 서버에 없어 틀린 문항을 다 못 보여요: {rep.files_missing.join(', ')} (eval_out/)
         </p>

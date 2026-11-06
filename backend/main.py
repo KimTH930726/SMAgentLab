@@ -2255,6 +2255,41 @@ async def _cleanup_stale_generating_messages(conn) -> None:
         logger.info("[Startup] 이전 프로세스에서 멈춘 'generating' 메시지 정리: %s", result)
 
 
+async def _migrate_backfill_superseded_by(conn) -> None:
+    """원문 원장 교체 연결(#125, 11/06 반입 전 검사 C5) — 교체된 원문(superseded)의 superseded_by가 전부 비어 있었다(칸만 있고 채우는
+    코드가 없었음, 1,092건). 앞으로는 activate가 채우고, 옛 줄은 같은 종류·위치에서 바로 다음에 만든 판(사용 중·교체됨) — 같은 컬렉션이
+    먼저, 없으면 다른 컬렉션(옮겨 다시 적재한 페이지 413건, 11/06 실측). 본문 없는 판(읽기 제한 기록)은 다음 판으로 치지 않는다(리뷰 L).
+    위치가 없는 원문(직접 입력)·다음 판이 없는 줄(롤백 등)은 비워 둔다.
+    빈 줄만 고쳐서 두 번 돌려도 같다."""
+    r = await conn.execute("""
+        UPDATE rag_source_document o SET superseded_by = (
+            SELECT n.id FROM rag_source_document n
+            WHERE n.source_type = o.source_type AND n.source_ref = o.source_ref AND n.id > o.id AND n.status IN ('active', 'superseded') AND n.raw_content <> ''
+            ORDER BY (n.namespace_id = o.namespace_id) DESC, n.id LIMIT 1)
+        WHERE o.status = 'superseded' AND o.superseded_by IS NULL AND o.source_ref IS NOT NULL
+          AND EXISTS (SELECT 1 FROM rag_source_document n WHERE n.source_type = o.source_type
+                        AND n.source_ref = o.source_ref AND n.id > o.id AND n.status IN ('active', 'superseded') AND n.raw_content <> '')""")
+    if r and r != "UPDATE 0":
+        logger.info("[Startup] 원문 원장 교체 연결 채움(#125): %s", r)
+
+
+# 미리보기 초안 보존 기간 — 확정 안 된 미리보기 원문(draft)은 이 날수가 지나면 정리(11/06 C5). 미리보기 후 이만큼 지나 [등록]하면
+# 원문 연결 없이 들어가므로(valid_documents가 거름) 넉넉히.
+SOURCE_DRAFT_RETENTION_DAYS = 7
+
+
+async def _cleanup_stale_source_drafts(conn) -> None:
+    """확정 안 된 미리보기 원문(draft) 정리(11/06 C5) — 보존 기간이 지났고 아무도 안 쓰는 것만: 연결된 지식이 없고(승인 대기 지식은
+    초안을 물고 있다) 팀 적재 페이지가 가리키지 않는 것(FK 없는 칸 — 제외 페이지도 다시 넣을 때 쓴다). 사용 중·교체됨은 건드리지 않는다."""
+    r = await conn.execute("""
+        DELETE FROM rag_source_document d
+        WHERE d.status = 'draft' AND d.created_at < NOW() - make_interval(days => $1)
+          AND NOT EXISTS (SELECT 1 FROM rag_knowledge k WHERE k.source_document_id = d.id)
+          AND NOT EXISTS (SELECT 1 FROM rag_import_page p WHERE p.source_document_id = d.id)""", SOURCE_DRAFT_RETENTION_DAYS)
+    if r and r != "DELETE 0":
+        logger.info("[Startup] 보존 기간(%d일) 지난 미리보기 원문 정리: %s", SOURCE_DRAFT_RETENTION_DAYS, r)
+
+
 async def _cleanup_orphaned_ingestion_jobs(conn) -> None:
     """`_cleanup_stale_generating_messages()`와 같은 논리 — 프로세스가 막 기동했으니
     'processing' 상태로 남은 수집 작업(rag_ingestion_job)은 전부 이전 프로세스가 죽으면서
@@ -2369,8 +2404,10 @@ _MIGRATIONS = (
     _migrate_retire_org_collections,         # #106 — 조직 컬렉션 걷어 내기(#105가 초안을 보관 자리로 옮긴 뒤)
     _migrate_loose_namespace_orphans,        # #107 — 지운 컬렉션을 가리키는 FK 없는 id 칸 NULL(#106 뒤)
     _migrate_drop_unused_2026_11_06,         # #124 — 반입 전 전수 검사, 표·칸을 만드는 단계들보다 뒤
+    _migrate_backfill_superseded_by,         # #125 — 원문 원장 교체 연결 채우기(옛 줄)
     _cleanup_stale_generating_messages,
     _cleanup_orphaned_ingestion_jobs,
+    _cleanup_stale_source_drafts,
 )
 _MIGRATION_LOCK = (7310, 0)   # advisory 키 두 개짜리 — 한 개짜리 공간은 지식 등록이 컬렉션 id로 쓴다(id 7310과 겹치지 않게, 재리뷰 L2)
 

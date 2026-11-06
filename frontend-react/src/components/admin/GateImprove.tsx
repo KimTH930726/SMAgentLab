@@ -365,7 +365,7 @@ export function CandidateCard({ c, improvementId, isAdmin, onPick, hideQids = fa
       <Stepper c={c} />
       {isAdmin && c.status !== 'adopted' && (
         <div className="flex flex-wrap gap-4">
-          {(c.status === 'proposed' || c.status === 'held') && (
+          {(c.status === 'proposed' || c.status === 'held') && c.auto?.golden !== false && (   /* 골든셋 없는 서버(운영)엔 숨김 — 실험은 개발 환경에서(11/06 C2) */
             <button className={`${btn} text-indigo-600 dark:text-indigo-400 font-medium`} disabled={review.isPending}
               title="지금 설정과 바꾼 설정을 골든셋으로 재고 게이트로 판정합니다(자동 실험이 되는 후보) — 운영은 안 바뀝니다"
               onClick={() => review.mutate({ status: 'approved' })}>실험해 보기</button>

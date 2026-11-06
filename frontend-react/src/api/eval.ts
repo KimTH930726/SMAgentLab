@@ -141,7 +141,7 @@ export interface Candidate {
   /** 가장 최근 측정을 운영에 반영할 수 있나 — 서버가 반영 버튼과 같은 규칙(adopt_error)으로 미리 판정 */
   adopt_check?: { gate_run_id: number; ok: boolean; reason: string | null } | null;
   /** 자동 실험 되나(10/30 실험 실행기) — 안 되면 이유(바꿀 것이 글뿐 등) */
-  auto?: { ok: boolean; reason: string | null };
+  auto?: { ok: boolean; reason: string | null; golden?: boolean };   // golden = 이 서버에 골든셋이 있나(운영 이미지엔 없음)
   /** 가장 최근 실험 작업 — 대기·진행·끝·실패 */
   experiment?: ExperimentJob | null;
 }
@@ -267,6 +267,7 @@ export interface GateReport {
   failed: ReportRow[]; techniques: ReportTechnique[];
   unmeasured: { store: string; n: number; total: number; ref: string; qids: string[] }[];
   diagnosed_gate_run_id: number; files_missing: string[];
+  result_files?: boolean;   // 이 서버에 결과 파일 폴더가 있나(운영 이미지엔 없음 — 문항 원문은 측정한 개발 서버에서만)
 }
 
 /** 축(정책서·업무지식)마다 같은 모양 — 평가 게이트 한 템플릿(10/29) */
@@ -280,7 +281,7 @@ export async function setRealQuestion(id: number, status: 'added' | 'dismissed')
 }
 
 /** 판정 하나의 층별 검색 놓침·답 틀림 문항 번호(관리자) — [검색]·[답] 층 줄을 누르면 연다 */
-export async function getLayerQuestions(runId: number): Promise<{ missed: Record<string, string[]>; wrong: Record<string, string[]>; files_missing: string[] }> {
+export async function getLayerQuestions(runId: number): Promise<{ missed: Record<string, string[]>; wrong: Record<string, string[]>; files_missing: string[]; result_files?: boolean }> {
   return apiFetch(`/eval/gate-runs/${runId}/layers`);
 }
 
@@ -319,8 +320,8 @@ export interface OverrideKind {
   /** decided = 사람 검토 수(수용 + 번복) — 번복률 분모 */
   kind: string; kind_name: string; decided: number; overrides: number; rate: number | null;
   review: Record<ReviewStatus, number>;
-  /** 표본 감사(spot check) — 다시 본 수 · 그중 번복 */
-  spot: { n: number; overridden: number; auto_n: number; auto_overridden: number };
+  /** 표본 감사(spot check) — 다시 본 수 · 그중 번복 · 번복 사유별 수 */
+  spot: { n: number; overridden: number; auto_n: number; auto_overridden: number; reasons?: Record<string, number> };
   /** 관리자가 검토하는 종류(등록 위치·원문 확인·중복 의심) — 요약 번복률·검토 대기는 이것만(되묻기·제안은 사용자 선택) */
   admin_reviewed: boolean;
   reasons: Record<string, number>; patterns: { pattern: string; n: number }[]; rubber_stamp: boolean;

@@ -232,7 +232,7 @@ async def build_report(axis: str = "policy") -> Optional[dict]:
                       "retrieval": ((base.get("summary") or {}).get("retrieval") or {}).get("recall"), "n": len(acc)},
             "failed": rows, "techniques": techniques, "unmeasured": unmeasured,
             # 진단이 지금 점수가 아닌 다른 측정 기준일 수 있다(운영 반영 직후 — 새 측정은 아직 진단 전) → 화면이 "진단은 #N 기준"(리뷰 L2)
-            "diagnosed_gate_run_id": imp["gate_run_id"], "files_missing": missing}
+            "diagnosed_gate_run_id": imp["gate_run_id"], "files_missing": missing, "result_files": files.available()}
 
 
 async def storage_for(qid: str, *, mapped: Optional[str], gold_in_context: Optional[bool], question: str) -> dict:

@@ -50,9 +50,11 @@ async def save_draft(conn, *, ns_id: int, source_type: str, source_ref: Optional
         "ORDER BY id DESC LIMIT 1",
         ns_id, source_type, source_ref, h, chunk_strategy, mj, owner_only, user_id)
     if row:
-        # 제목·상위 제목·원본 판은 최신 미리보기 값으로(리뷰 L3 — 내용이 같아도 페이지 이름·판이 바뀔 수 있다)
+        # 제목·상위 제목·원본 판은 최신 미리보기 값으로(리뷰 L3 — 내용이 같아도 페이지 이름·판이 바뀔 수 있다).
+        # created_at도 지금으로 — 초안의 보존 기간(main._cleanup_stale_source_drafts)은 마지막 미리보기부터(11/06 리뷰 M: 오래된 초안을
+        # 다시 미리보고 [등록] 전에 재기동되면 지워져 원문 연결 없이 등록됐다)
         await conn.execute("UPDATE rag_source_document SET title = COALESCE($2, title), parent_title = $3, "
-                           "source_version = COALESCE($4, source_version) WHERE id = $1",
+                           "source_version = COALESCE($4, source_version), created_at = NOW() WHERE id = $1",
                            row["id"], title, parent_title, source_version)
         return row["id"]
     return await conn.fetchval("""
@@ -223,7 +225,7 @@ async def activate(conn, ns_id: int, doc_ids: list[int], replaced: list[int], pa
                        "registered_partial = (id = ANY($3::int[])) WHERE id = ANY($1::int[]) AND namespace_id = $2",
                        doc_ids, ns_id, partial_ids)
     # 같은 페이지의 "읽기 제한" 기록은 이제 적재됐으니 내린다 — 남기면 지식 공백 감지가 풀린 제한을 계속 센다(리뷰 L2)
-    await conn.execute("""UPDATE rag_source_document r SET status = 'superseded' FROM rag_source_document d
+    await conn.execute("""UPDATE rag_source_document r SET status = 'superseded', superseded_by = d.id FROM rag_source_document d
                           WHERE d.id = ANY($1::int[]) AND r.status = 'restricted' AND r.namespace_id = d.namespace_id
                             AND r.source_type = d.source_type AND r.source_ref = d.source_ref""", doc_ids)
     await refresh_image_counts(conn, doc_ids, job_id)
@@ -231,8 +233,13 @@ async def activate(conn, ns_id: int, doc_ids: list[int], replaced: list[int], pa
     if old:
         # 사용 중이던 것만 — 같은 원본의 다른 초안은 다른 등록이 아직 쓰는 중일 수 있다(동시 확정 시 그 등록의 조각이 원문 연결 없이
         # 중복으로 살아남던 것, 실서버 동시 시나리오로 발견 2026-10-12). 그 등록이 끝나면 이 원문을 교체한다.
-        await conn.execute("UPDATE rag_source_document SET status = 'superseded' WHERE id = ANY($1::int[]) AND namespace_id = $2 "
-                           "AND status = 'active'", old, ns_id)
+        # 교체한 새 원문(superseded_by, 11/06 C5) — 같은 위치(페이지·파일), 위치 없는 원문은 같은 내용(replacing_documents와 같은 규칙 — 재리뷰 L). 못 정하면 비워 둔다(다른 페이지를 가리키지 않게 — 리뷰 L)
+        await conn.execute("""UPDATE rag_source_document o SET status = 'superseded', superseded_by = (
+                                  SELECT n.id FROM rag_source_document n WHERE n.id = ANY($3::int[]) AND n.source_type = o.source_type
+                                     AND (n.source_ref = o.source_ref
+                                          OR (n.source_ref IS NULL AND o.source_ref IS NULL AND n.content_hash = o.content_hash))
+                                   ORDER BY (n.source_ref = o.source_ref) DESC NULLS LAST, n.id DESC LIMIT 1)
+                              WHERE o.id = ANY($1::int[]) AND o.namespace_id = $2 AND o.status = 'active'""", old, ns_id, doc_ids)
 
 
 _MEDIA_MARK_RE = r"\[(?:이미지|다이어그램): "

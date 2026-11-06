@@ -161,6 +161,11 @@ export function AuditReport({ kinds, days, candidates, onShow, onCriteria, canCr
   const spotOv = kinds.reduce((a, k) => a + (k.spot?.overridden ?? 0), 0);
   const autoSpotN = kinds.reduce((a, k) => a + (k.spot?.auto_n ?? 0), 0);
   const autoSpotOv = kinds.reduce((a, k) => a + (k.spot?.auto_overridden ?? 0), 0);
+  // 표본 감사 번복 사유(11/06 C1 — 저장만 되고 안 보이던 것)
+  const spotReasons = Object.entries(kinds.reduce<Record<string, number>>((acc, k) => {
+    for (const [r, n] of Object.entries(k.spot?.reasons ?? {})) acc[r] = (acc[r] ?? 0) + n;
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]);
   const withOv = [...kinds].filter((k) => k.overrides > 0).sort((a, b) => (b.rate ?? 0) - (a.rate ?? 0));
   // 주요 발견(11/05 태훈 "가시성 있게") — 번복 있는 종류는 카드(FindingCard), 그 밖의 사실은 흐린 줄
   const findings: string[] = [];
@@ -295,6 +300,7 @@ export function AuditReport({ kinds, days, candidates, onShow, onCriteria, canCr
           <div className="rounded-lg border border-slate-700 p-3 space-y-1.5">
             <div className="flex justify-between gap-2 text-sm"><b className="text-slate-100">자동 적용 · 수용 다시 보기</b><span className="tabular-nums text-slate-300">감사 {spotN} · 번복 {spotOv}</span></div>
             <p className="text-xs text-slate-400">사람 손 없이 적용됐거나 수용된 판단에서 무작위로 뽑아 수용·번복을 매겨요 — 정확도 추정과 형식적 승인 확인</p>
+            {spotReasons.length > 0 && <p className="text-xs text-slate-300" data-testid="spot-reasons">번복 사유 {spotReasons.map(([r, n]) => `${r} ${n}`).join(' · ')}</p>}
             <div className="flex justify-end">
               <button type="button" onClick={() => setSpotOpen(true)} data-testid="spot-open"
                 className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500">표본 감사 10건</button>

@@ -32,9 +32,9 @@ class TestLocationOutcome:
 _PENDING = object()   # 확정 전(final_value NULL)
 
 
-def _row(i, kind="knowledge_location", ai=None, final=None, sig=None, changed=False, verdict=None, spot=None):
+def _row(i, kind="knowledge_location", ai=None, final=None, sig=None, changed=False, verdict=None, spot=None, spot_reason=None):
     return {"id": i, "kind": kind, "ai": ai or {}, "final": None if final is _PENDING else (final or {}), "signals": sig or {},
-            "changed": changed, "verdict": verdict, "spot": spot}
+            "changed": changed, "verdict": verdict, "spot": spot, "spot_reason": spot_reason}
 
 
 class TestSummarize:
@@ -198,7 +198,7 @@ def test_override_rate_only_over_human_reviewed():
     loc = ov.summarize(rows, {})["kinds"][0]
     assert loc["review"] == {"accept": 3, "override": 1, "auto": 1, "rule": 10, "pending": 1}
     assert (loc["decided"], loc["overrides"], loc["rate"]) == (4, 1, 0.25)
-    assert loc["spot"] == {"n": 1, "overridden": 1, "auto_n": 1, "auto_overridden": 1} and loc["admin_reviewed"]
+    assert loc["spot"] == {"n": 1, "overridden": 1, "auto_n": 1, "auto_overridden": 1, "reasons": {"사유 없음": 1}} and loc["admin_reviewed"]
     assert sum(loc["review"].values()) == len(rows)   # 다섯 갈래 = 전부(유실·중복 0)
 
 
@@ -229,3 +229,16 @@ def test_review_sql_matches_python():
     except OSError:
         pytest.skip("DB 연결 안 됨")
     assert got == {r["id"]: ov.review_status(r) for r in rows}
+
+
+def test_spot_override_reasons_reach_report():
+    """표본 감사에서 고른 번복 사유가 리포트 숫자로 나온다(11/06 C1 — 저장만 되고 집계가 안 읽던 것). 수용은 사유를 세지 않는다."""
+    acc = {"namespace_id": 1, "choice": "accept"}
+    rows = [_row(1, ai={"namespace_id": 1}, final=acc, spot="overridden", spot_reason="wrong"),
+            _row(2, ai={"namespace_id": 1}, final=acc, spot="overridden", spot_reason="wrong"),
+            _row(3, ai={"namespace_id": 1}, final=acc, spot="overridden", spot_reason="both_ok"),
+            _row(4, ai={"namespace_id": 1}, final=acc, spot="accepted")]
+    spot = ov.summarize(rows, {1: "A"})["kinds"][0]["spot"]
+    assert (spot["n"], spot["overridden"]) == (4, 3)
+    assert spot["reasons"] == {"AI 오류": 2, "선호 차이": 1}
+    assert sum(spot["reasons"].values()) == spot["overridden"]   # 번복 하나당 사유 한 칸(유실·중복 0)

@@ -33,13 +33,15 @@ ARG EMBEDDING_MODEL=nlpai-lab/KURE-v1
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')" \
     || echo "[build] 임베딩 모델 사전 다운로드 실패(네트워크?) — 런타임 캐시 볼륨에 의존"
 
-# 리랭커(CrossEncoder) 모델도 같은 이유로 빌드 시점에 번들링 — 폐쇄망에서
-# reranker_enabled=True로 전환하려면 이 레이어가 이미지에 들어있어야 한다
-# (core/config.py의 reranker_model 기본값과 동일 모델). 실패해도 빌드를 막지 않는
-# 이유는 위 임베딩 모델과 동일.
+# 리랭커(CrossEncoder) 모델은 기본으로 넣지 않는다(11/06 C4 — 기능이 꺼져 있어 2.3GB만 차지).
+# 폐쇄망에서 RERANKER_ENABLED=true로 켜려면 --build-arg BUNDLE_RERANKER=true로 빌드해 이 레이어를 넣는다
+# (core/config.py의 reranker_model 기본값과 동일 모델). 모델 없이 켜면 기동 로그에 "[Reranker] 모델 로드 실패"가 남고 원래 순서로 동작.
+ARG BUNDLE_RERANKER=false
 ARG RERANKER_MODEL=dragonkue/bge-reranker-v2-m3-ko
-RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL}')" \
-    || echo "[build] 리랭커 모델 사전 다운로드 실패(네트워크?) — 런타임 캐시 볼륨에 의존"
+RUN if [ "${BUNDLE_RERANKER}" = "true" ]; then \
+      python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL}')" \
+      || echo "[build] 리랭커 모델 사전 다운로드 실패(네트워크?) — 런타임 캐시 볼륨에 의존"; \
+    else echo "[build] 리랭커 모델 넣지 않음(BUNDLE_RERANKER=false)"; fi
 
 # 나머지 Python 의존성 설치 — 이 레이어가 바뀌어도 위 임베딩 모델 캐시는 그대로 재사용됨
 COPY requirements.txt .

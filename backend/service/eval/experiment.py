@@ -36,6 +36,17 @@ _SAVED = re.compile(r"기록 #(\d+) 저장")
 _POLL_SECONDS = 5
 
 
+def golden_ready(axis: str) -> bool:
+    """이 서버에 실험용 골든셋이 있나 — 운영 이미지엔 넣지 않는다(.dockerignore eval_out/). 없으면 [실험해 보기]를 숨긴다(11/06 C2)."""
+    if axis == "knowledge":
+        return (APP / KNOWLEDGE_SET).exists()
+    from service.eval.report import GOLDEN_DIR
+    return GOLDEN_DIR.exists() and any(GOLDEN_DIR.glob("*.jsonl"))
+
+
+NO_GOLDEN = "이 서버엔 골든셋이 없어 실험 불가 — 개발 환경에서 실험"
+
+
 def runnable(c: dict, axis: str) -> Optional[str]:
     """자동 실험이 되면 None, 안 되면 사람이 읽을 이유 — 화면이 그대로 보인다."""
     ch = c.get("change") or {}

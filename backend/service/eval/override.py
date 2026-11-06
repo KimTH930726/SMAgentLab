@@ -143,7 +143,7 @@ def summarize(rows: list[dict], names: dict[int, str]) -> dict:
     by: dict[str, dict] = {}
     for r in rows:
         k = by.setdefault(r["kind"], {"kind": r["kind"], "kind_name": KIND_NAME.get(r["kind"], r["kind"]), "decided": 0, "overrides": 0,
-                                       "review": {x: 0 for x in REVIEWS}, "spot": {"n": 0, "overridden": 0, "auto_n": 0, "auto_overridden": 0},
+                                       "review": {x: 0 for x in REVIEWS}, "spot": {"n": 0, "overridden": 0, "auto_n": 0, "auto_overridden": 0, "reasons": {}},
                                        "admin_reviewed": r["kind"] in REVIEWED_KINDS,
                                        "reasons": {}, "patterns": {}, "pairs": {}, "override_ids": []})
         st = review_status(r)
@@ -151,6 +151,9 @@ def summarize(rows: list[dict], names: dict[int, str]) -> dict:
         if r.get("spot"):
             k["spot"]["n"] += 1
             k["spot"]["overridden"] += r["spot"] == "overridden"
+            if r["spot"] == "overridden":   # 감사에서 고른 번복 사유 — 저장만 되고 리포트에 안 나오던 것(11/06 C1)
+                label = REASON_NAME.get(r.get("spot_reason"), NO_REASON)
+                k["spot"]["reasons"][label] = k["spot"]["reasons"].get(label, 0) + 1
             if st == "auto":   # 자동 적용분만 따로 — 수용분 재감사와 섞지 않게(리뷰 L4)
                 k["spot"]["auto_n"] = k["spot"].get("auto_n", 0) + 1
                 k["spot"]["auto_overridden"] = k["spot"].get("auto_overridden", 0) + (r["spot"] == "overridden")
@@ -211,9 +214,10 @@ def location_rows(rows: list[dict]) -> list[dict]:
 
 async def load(conn, days: int) -> tuple[list[dict], dict[int, str]]:
     rows = [{"id": r["id"], "kind": r["kind"], "ai": _j(r["ai_value"]), "final": _j(r["final_value"]), "signals": _j(r["signals"]),
-             "changed": bool(r["human_changed"]), "verdict": r["ai_verdict"], "spot": r["spot_result"]}
+             "changed": bool(r["human_changed"]), "verdict": r["ai_verdict"], "spot": r["spot_result"],
+             "spot_reason": r["spot_reason"]}
             for r in await conn.fetch(
-                """SELECT id, kind, ai_value, final_value, signals, human_changed, ai_verdict, spot_result FROM ops_ai_decision
+                """SELECT id, kind, ai_value, final_value, signals, human_changed, ai_verdict, spot_result, spot_reason FROM ops_ai_decision
                    WHERE NOT (COALESCE(final_value, '{}'::jsonb) ? 'superseded') AND created_at > NOW() - make_interval(days => $1)
                    ORDER BY id""", days)]   # 검토 대기(확정 전)도 센다 — 다섯 갈래 중 하나
     names = {r["id"]: r["name"] for r in await conn.fetch("SELECT id, name FROM ops_namespace")}

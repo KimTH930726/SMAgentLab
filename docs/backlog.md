@@ -304,3 +304,5 @@
 - (낮음) `ingest_check_run`은 `scripts/check_ingest.py --save`만 쓰고 읽는 API가 없어졌다(`/eval/ingest-checks/latest` 제거, 화면 호출 0). 기록만 쌓임 — 다시 볼 조건: 적재 검수 이력 화면을 만들 때.
 - (낮음) `GET /policy/source-checks/reasons` — 화면은 상수(`NO_ISSUE_REASONS`)를 써서 프론트 함수를 지움. 서버 라우트는 남김(점검 스크립트 0건 판정).
 - (낮음) 채팅 연결이 끊기면(Starlette/anyio 취소 범위) 에이전트 정리 await와 event_generator 안전장치(generating → completed)가 둘 다 취소로 끊긴다 — v2.219 전과 같음, 남은 generating은 다음 요청 `_cleanup_ghost_messages`가 정리. 다시 볼 조건: 끊긴 답이 화면에 생성 중으로 남는 신고가 오면 — 안전장치를 `anyio.CancelScope(shield=True)`로.
+- (낮음, v2.220 리뷰) 원문 원장 `superseded_by` — 팀 적재가 읽기 제한 기록을 내릴 때(`team_import.py` 제한 포함 켬)와 롤백 두 곳(`team_import` 묶음 롤백·`confluence_sync` 배치 롤백)은 새 판이 아직 없어 비워 두고, 기동 때 #125가 같은 위치의 다음 판으로 채운다 — 롤백된 판은 "교체"가 아니라 "그 뒤에 다시 넣은 판"을 가리킴. 지금 읽는 곳 0. 다시 볼 조건: superseded_by로 판 이력 화면을 만들 때 — 롤백은 따로 표시.
+- (낮음, v2.220 리뷰) #125 채우기는 매 기동 남은 빈 줄(지금 98)마다 `(source_type, source_ref)`로 찾는데 인덱스가 `namespace_id`로 시작 — 지금 3천 줄이라 무시할 만함. 다시 볼 조건: 원장이 수만 줄이 되면 `(source_type, source_ref, id)` 인덱스.

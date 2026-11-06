@@ -148,8 +148,9 @@ powershell -ExecutionPolicy Bypass -File scripts\export-images.ps1 -Tag <TAG>
 
 **처리 내용:**
 1. `docker compose build --no-cache` (백엔드/프론트엔드 빌드, 약 10~15분)
-   - 백엔드 빌드 시 임베딩 모델(`nlpai-lab/KURE-v1`, ~2.3GB)과 리랭커 모델(`dragonkue/bge-reranker-v2-m3-ko`, ~2.3GB,
-     기본 꺼짐 — 폐쇄망에서 켤 수 있게 번들) **이미지 안에 사전 다운로드**
+   - 백엔드 빌드 시 임베딩 모델(`nlpai-lab/KURE-v1`, ~2.3GB)을 **이미지 안에 사전 다운로드**
+   - 리랭커 모델(`dragonkue/bge-reranker-v2-m3-ko`, ~2.3GB)은 기본으로 안 넣는다(v2.220 — 기능 꺼짐). 켤 계획이면
+     `docker compose build --build-arg BUNDLE_RERANKER=true backend`로 빌드
    - ⚠️ 다운로드가 실패해도 빌드는 `[build] ... 사전 다운로드 실패` 로그만 남기고 계속된다 — 모델 없는 이미지는
      폐쇄망에서 임베딩이 안 된다. Step 3의 모델 포함 확인을 반드시 할 것
 2. `pgvector/pgvector:pg16`, `redis:7-alpine` pull
@@ -162,7 +163,7 @@ ls -lh smagentlab-images-<TAG>.tar.gz       # 약 4.4GB
 docker images | grep -E "smagentlab|pgvector|redis"
 # 4개 이미지가 모두 <TAG> 또는 pg16/7-alpine 태그로 있어야 함
 
-# 모델이 이미지에 들어갔는지 확인 — models--nlpai-lab--KURE-v1, models--dragonkue--bge-reranker-v2-m3-ko 둘 다 보여야 함(없으면 인터넷 확인 후 재빌드)
+# 모델이 이미지에 들어갔는지 확인 — models--nlpai-lab--KURE-v1이 보여야 함(없으면 인터넷 확인 후 재빌드). 리랭커는 BUNDLE_RERANKER=true로 빌드했을 때만
 docker run --rm --entrypoint sh smagentlab-backend:<TAG> -c 'ls /root/.cache/huggingface /root/.cache/huggingface/hub | grep -E "KURE|reranker"'
 ```
 
@@ -442,7 +443,7 @@ docker exec -it ops-backend python scripts/migrate_embedding_model.py
 
 **(2) ~~업무구분 기본값 백필 (v2.28)~~** — 하지 않는다. 업무구분은 #84(v2.161)에서 폐지(칸·표 삭제)됐고 `init/04`도 v2.218에서 지웠다.
 
-`.env`에 새로 넣어야 하는 필수 변수는 없다(v2.17 이후 추가된 설정은 모두 기본값 있음 — 리랭커는 `RERANKER_ENABLED=true`로 켤 수 있음).
+`.env`에 새로 넣어야 하는 필수 변수는 없다(v2.17 이후 추가된 설정은 모두 기본값 있음 — 리랭커는 `BUNDLE_RERANKER=true`로 빌드한 이미지에서 `RERANKER_ENABLED=true`로 켤 수 있음).
 v2.16 → v2.17 절차(LLM 자격증명 컬럼 교체·환경변수 변경)는 이 문서의 git 이력(커밋 `cbcaacf`) 참고.
 
 ### 3-5. v2.121 이상으로 올릴 때 — 되돌릴 수 없는 자동 변경 (반드시 백업 먼저)
@@ -512,6 +513,7 @@ v2.119(10/02 반입)에서 한 번에 올리면 첫 기동 때 아래 삭제가 
 | 93 | `policy_track2_run`·`eval_answer_run` | 옛 v1 평가 기록(§3-7) |
 | 106 | 조직 컬렉션(`org_space`)과 거기 걸린 줄 | 조직 컬렉션 폐지(팀·파트는 로그인·권한·담당만) |
 | 124 | 옛 백업 표 8개(`*_backup*`), `policy_review_log`, `policy_item.review_source·review_rule·review_sample·source_missing_at`, `rag_ingestion_job.analyzer_result`, 인덱스 3개 | 쓰는 코드 없음(반입 전 전수 검사) |
+| 125(기동 정리) | 7일 지난 미리보기 원문 초안(`rag_source_document.status='draft'`) 중 지식·팀 적재 페이지가 안 쓰는 것 — **매 기동마다** | 확정 안 된 미리보기 원문. 그사이 [등록]하면 원문 연결 없이 들어감(지식은 그대로) |
 
 **순서:**
 1. `bash scripts/update-images.sh …` — 백업(필수) → 이미지 로드 → 기동(마이그레이션 자동). `schema_migration_run` 마지막 줄 `ok = t` 확인(§3-8).

@@ -139,7 +139,7 @@ _CAND_SELECT = """SELECT c.*, g.label AS adopted_gate_label,
 
 async def _decorate(conn, cands, axis: str) -> list[dict]:
     """후보 줄 → 화면 줄: 기법 이름 · 운영 반영 판정 · 자동 실험 되나 · 마지막 실험 작업 · 화면 단계(phase)."""
-    from service.eval.experiment import runnable
+    from service.eval.experiment import NO_GOLDEN, golden_ready, runnable
     from service.eval.improve import phase_of
     from service.eval.techniques import BY_KEY
     base_at = await conn.fetchval("SELECT run_at FROM eval_gate_run WHERE is_baseline AND axis = $1", axis)
@@ -147,11 +147,13 @@ async def _decorate(conn, cands, axis: str) -> list[dict]:
     jobs = {r["candidate_id"]: dict(r) for r in await conn.fetch(   # 후보마다 가장 최근 실험 작업(10/30 실험 실행기)
         """SELECT DISTINCT ON (candidate_id) candidate_id, id, status, stage, done, total, error, gate_run_id, created_at, finished_at
            FROM eval_experiment_job WHERE candidate_id = ANY($1::bigint[]) ORDER BY candidate_id, id DESC""", [c["id"] for c in cands])}
+    golden = golden_ready(axis)
     out = []
     for c in cands:
         cd = {**_cand(c), "technique_name": BY_KEY.get(c["technique"], {}).get("name", c["technique"])}
         cd["adopt_check"] = _adopt_check(cd, base_at, ingest_run=ingest_run, with_ingest=True)
-        cd["auto"] = {"ok": (why := runnable(cd, axis)) is None, "reason": why}   # 자동 실험 되나(안 되면 이유)
+        why = runnable(cd, axis) or (None if golden else NO_GOLDEN)
+        cd["auto"] = {"ok": why is None, "reason": why, "golden": golden}   # 자동 실험 되나(안 되면 이유) · 이 서버에 골든셋이 있나
         job = jobs.get(c["id"])
         cd["experiment"] = {k: v for k, v in job.items() if k != "candidate_id"} if job else None
         cd["phase"] = phase_of(cd["status"], cd["experiment"], cd["adopt_check"] if cd["status"] == "approved" else None)
@@ -236,7 +238,7 @@ def _adopt_check(c: dict, base_at, *, ingest_run: Optional[dict] = None, with_in
 
 async def start_experiment(cand_id: int, *, user_id: int) -> dict:
     """[실험해 보기] / [다시 돌리기] — 실험 중(approved) 후보 + 기계로 적용할 변경이 있을 때만 대기열에. 안 되면 사람이 읽을 이유(ValueError)."""
-    from service.eval.experiment import enqueue, runnable
+    from service.eval.experiment import NO_GOLDEN, enqueue, golden_ready, runnable
     from service.eval.improve import CANDIDATE_AXIS_SQL
     async with get_conn() as conn:
         c = await conn.fetchrow("SELECT id, status, measure, change FROM eval_candidate WHERE id = $1", cand_id)
@@ -245,7 +247,7 @@ async def start_experiment(cand_id: int, *, user_id: int) -> dict:
         axis = await conn.fetchval(CANDIDATE_AXIS_SQL, cand_id)
     if c["status"] not in ("approved", "failed"):
         raise ValueError("실험 중·실패한 후보만 다시 돌릴 수 있습니다.")
-    why = runnable(_cand(c), axis)
+    why = runnable(_cand(c), axis) or (None if golden_ready(axis) else NO_GOLDEN)
     if why:
         raise ValueError(why)
     if c["status"] == "failed":   # [다시 실행] — 실패 종결을 풀고 다시 시도 승인으로(실행기는 시도 승인 후보만 돈다)
@@ -410,7 +412,7 @@ async def layer_questions(run_id: int) -> Optional[dict]:
             missing.append(name)   # 파일이 없으면 "놓침 0"으로 조용히 보이지 않게(리뷰 L1)
         return files.rows_by_qid(p) if p else None
     ans, retr = [await asyncio.to_thread(_read, inputs.get(k)) for k in ("answers_after", "retrieval_after")]
-    return {**layer_qids(ans, retr, (run.get("summary") or {}).get("mode") or "lexical"), "files_missing": missing}
+    return {**layer_qids(ans, retr, (run.get("summary") or {}).get("mode") or "lexical"), "files_missing": missing, "result_files": files.available()}
 
 
 async def question_detail(run_id: int, qid: str) -> Optional[dict]:

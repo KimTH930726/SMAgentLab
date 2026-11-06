@@ -17,6 +17,11 @@ _lock = threading.Lock()   # asyncio.to_thread로 동시에 불려도 캐시 넣
 _MAX_FILES = 12
 
 
+def available() -> bool:
+    """이 서버에 결과 파일 폴더가 있나 — 운영 이미지엔 넣지 않는다(.dockerignore eval_out/). 없으면 화면은 빨간 경고 대신 안내 한 줄(11/06 C2)."""
+    return EVAL_DIR.exists()
+
+
 class ResultFileError(Exception):
     """결과 파일을 찾을 수 없거나 여러 개 — 화면에 그대로 보인다."""
 

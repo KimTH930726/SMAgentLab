@@ -163,9 +163,10 @@ function byLayer(m: Record<string, string[]> | undefined): Record<string, string
 }
 
 /** 결과 파일이 서버에 없으면 층별 놓침·틀림이 0으로 보인다 — 숨기지 않고 알린다(리뷰 L1) */
-function FilesMissing({ names, error }: { names?: string[]; error?: unknown }) {
+function FilesMissing({ names, error, here }: { names?: string[]; error?: unknown; here?: boolean }) {
   if (error) return <p className="text-xs text-rose-600 dark:text-rose-400">층별 문항을 못 불러왔어요: {(error as Error).message}</p>;
   if (!names?.length) return null;
+  if (here === false) return <p className="text-xs text-slate-500" title="질문·답·채점 이유는 결과 파일(eval_out/)에만 있고 운영 이미지엔 넣지 않아요 — 숫자는 그대로 보입니다">문항 원문은 측정한 개발 서버에서만 열려요</p>;   /* 결과 파일 폴더가 없는 서버(운영) — 경고 대신 안내(11/06 C2) */
   return <p className="text-xs text-rose-600 dark:text-rose-400">결과 파일이 서버에 없어 층별 문항을 못 열어요: {names.join(', ')} (eval_out/)</p>;
 }
 
@@ -208,7 +209,7 @@ export function RetrievalTab({ axis = 'policy' }: { axis?: GateAxis }) {
         what={`근거 ${ctx}개 중 ${gold}이 맨 첫 자리였는지를 봅니다. 넘기기만 하면 AI가 답할 수는 있지만, 1순위일수록 화면의 근거 카드와 답이 정확해지기 쉽습니다. 예: 정답이 3순위면 '넘김'은 성공, '1순위'는 실패.`}
         calc={`1순위 문항 ${s.top1} ÷ 정답 있는 문항 ${s.n} = ${pct(s.top1_rate)}`}
         rows={rows.map(({ name, v }) => ({ name, v: v.top1 / v.n, n: v.n }))} />
-      <FilesMissing names={layers.data?.files_missing} error={layers.error} />
+      <FilesMissing names={layers.data?.files_missing} error={layers.error} here={layers.data?.result_files} />
       <div className="rounded-lg border border-slate-700 divide-y divide-slate-700">
         <p className="px-3 py-2 text-xs text-slate-500">층별 — 굵은 막대 = 정답을 넘김, 얇은 막대 = 정답이 1순위 · 줄을 누르면 그 층의 못 넘긴 문항</p>
         {rows.map(({ name, hint, v }) => (
@@ -345,7 +346,7 @@ export function AnswerTab({ axis = 'policy' }: { axis?: GateAxis }) {
           {pick && <span className="ml-2 text-xs text-indigo-600 dark:text-indigo-400">문항 보기 →</span>}
         </button>
       )}
-      <FilesMissing names={layers.data?.files_missing} error={layers.error} />
+      <FilesMissing names={layers.data?.files_missing} error={layers.error} here={layers.data?.result_files} />
       <div className="rounded-lg border border-slate-700 divide-y divide-slate-700">
         <p className="px-3 py-2 text-xs text-slate-500">층별 정답률 — 낮은 순 · 줄을 누르면 그 층의 틀린 문항</p>
         {rows.map(({ name, hint, v }) => (

@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api/email-voc", tags=["email-voc"])
 
 
 @router.post("/test-analyze", response_model=EmailAnalysisOut)
-async def test_analyze_email(body: EmailAnalyzeRequest, user: dict = Depends(get_current_user)):
+async def test_analyze_email(body: EmailAnalyzeRequest, user: dict = Depends(get_current_admin)):   # 화면 탭도 관리자만(11/06 C3)
     await check_namespace_ownership(body.namespace, user)
     if not body.body.strip():
         raise HTTPException(status_code=400, detail="본문(body)을 입력해주세요.")
