@@ -66,6 +66,11 @@ def _esc(value: Optional[str]) -> str:
     return html.escape(value or "", quote=False)
 
 
+def _multiline(value: str) -> str:
+    """원문 줄바꿈을 카드에서도 줄바꿈으로 — HTML이라 줄바꿈 글자는 공백 하나로 붙는다. 빈 줄은 뺀다."""
+    return "<br>".join(_esc(line.strip()) for line in value.splitlines() if line.strip())
+
+
 def _section_title(text: str) -> str:
     return f'<h3 style="font-size:17px">{text}</h3>'
 
@@ -168,10 +173,8 @@ def build_teams_message(
     # 자체에 대해 resolution_draft를 못 만든 경우(uncertain/user_mistake 등)에도
     # "이 반복 유형에 대한 답은 이미 있다"를 보여줄 수 있다 — resolution_draft보다는
     # 후순위(개별 LLM 판단이 이 VOC에 더 특화된 답이므로 우선), 없을 때만 대체한다.
-    pattern_snippet = (
-        pattern_info["coverage"]["snippet"]
-        if pattern_info and pattern_info.get("coverage", {}).get("covered") else None
-    )
+    coverage = (pattern_info or {}).get("coverage") or {}
+    pattern_snippet = coverage.get("snippet") if coverage.get("covered") else None
     resolution_draft = analysis.get("resolution_draft")
     if resolution_draft:
         # 참고 지식 근거로 확인된 초안만 "해결 방안" — 아니면(근거 없음·확인 실패) AI 제안으로 구분해 단정하지 않는다(11/05, 팀장 확인 카드에서
@@ -179,7 +182,10 @@ def build_teams_message(
         title = DRAFT_TITLES.get(analysis.get("draft_grounded"), DRAFT_TITLES[None])
         sections.append(f"{_section_title(title)}<blockquote>{_esc(resolution_draft)}</blockquote>")
     elif pattern_snippet:
-        sections.append(f"{_section_title('해결 방안(반복 유형 기등록 지식)')}<blockquote>{_esc(pattern_snippet)}</blockquote>")
+        # 제목은 "관련 지식 · 참고"(11/06) — 가장 가까운 지식이 해결책이라는 보장은 없다(같은 기능의 테스트 케이스 표가 "해결 방안"으로 나감).
+        # 원문 앞부분을 한 덩어리로 붙이면 읽기 어려웠다 — 어느 문서·절인지 먼저, 원문 줄바꿈은 살린다
+        source_html = f'<p>📄 <b>{_esc(coverage["source"])}</b></p>' if coverage.get("source") else ""
+        sections.append(f"{_section_title('관련 지식 · 참고')}{source_html}<blockquote>{_multiline(pattern_snippet)}</blockquote>")
     elif pattern_info and pattern_info.get("knowledge_found") is False:
         # 관련 지식이 없어 초안을 비운 경우 — 분류 탓("해당 없음")이나 분석 실패("생성되지 않음")로 설명하지 않는다(리뷰 L2)
         sections.append(f'{_section_title("해결 방안")}<blockquote>관련 지식 없음 — 이 유형의 답을 지식으로 등록하면 다음부터 함께 나갑니다.</blockquote>')

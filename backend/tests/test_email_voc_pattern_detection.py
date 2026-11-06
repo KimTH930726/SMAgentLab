@@ -84,7 +84,7 @@ def patch_db(monkeypatch):
     monkeypatch.setattr(pattern_detection, "resolve_namespace_id", resolve_mock)
     # 가장 가까운 지식은 코어 API(knowledge.api.nearest, 10/28 VOC 레이어 분리) — 경계에서 가짜로: 시험 데이터의 지식 칸을 그대로 돌려준다
     # (클러스터 줄 = fetchrow/fetch가 돌려준 값에 knowledge_id·similarity·snippet·content가 같이 들어 있는 옛 시험 모양 그대로)
-    kf = ("knowledge_id", "similarity", "snippet", "content")
+    kf = ("knowledge_id", "similarity", "snippet", "content", "source_file", "heading_path")
 
     async def fake_nearest(_conn, items, snippet_len, *, with_systems=False):
         rows = conn.fetch.return_value if isinstance(conn.fetch.return_value, list) and conn.fetch.return_value             else ([dict(conn.fetchrow.return_value, id=items[0][0])] if conn.fetchrow.return_value and items else [])
@@ -442,12 +442,12 @@ class TestGetClusterCoverage:
         conn, _ = patch_db
         conn.fetchrow.return_value = {
             "emb": None, "namespace_id": 1, "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": None, "coverage_verified": None,
-            "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차...", "content": "재배송 처리 절차 전문...",
+            "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차", "content": "재배송 처리 절차 전문...",
         }
         llm_mock = AsyncMock(return_value=True)
         monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
         result = await pattern_detection.get_cluster_coverage(1, 55)
-        assert result == {"covered": True, "snippet": "재배송 처리 절차..."}
+        assert result == {"covered": True, "snippet": "재배송 처리 절차…", "source": None}   # 원문이 더 길면 잘림 표시
         llm_mock.assert_awaited_once_with("배달완료 제품 못받음", "재배송 처리 절차 전문...")
         assert conn.fake_nearest.calls == [([(55, 1, None)], 200)]   # (클러스터, 영역, 벡터) 짝 · 알림 카드 snippet 200자(코어 API 경계)
         assert conn.fake_nearest.with_systems == [True]   # 메일 분석과 같은 범위 — 시스템 컬렉션까지(11/05, 라우팅 영역엔 지식 0)
@@ -466,7 +466,7 @@ class TestGetClusterCoverage:
         }
         monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", AsyncMock(return_value=False))
         result = await pattern_detection.get_cluster_coverage(1, 55)
-        assert result == {"covered": False, "snippet": None}
+        assert result == {"covered": False, "snippet": None, "source": None}
 
     @pytest.mark.asyncio
     async def test_candidate_query_no_category_filter(self, patch_db, monkeypatch):
@@ -491,7 +491,7 @@ class TestGetClusterCoverage:
         llm_mock = AsyncMock()
         monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
         result = await pattern_detection.get_cluster_coverage(1, 55)
-        assert result == {"covered": False, "snippet": None}
+        assert result == {"covered": False, "snippet": None, "source": None}
         llm_mock.assert_not_called()  # 1차 필터를 못 넘겼으니 LLM 비용을 쓸 이유가 없음
 
     @pytest.mark.asyncio
@@ -501,7 +501,7 @@ class TestGetClusterCoverage:
         llm_mock = AsyncMock()
         monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
         result = await pattern_detection.get_cluster_coverage(1, 55)
-        assert result == {"covered": False, "snippet": None}
+        assert result == {"covered": False, "snippet": None, "source": None}
         llm_mock.assert_not_called()
 
     @pytest.mark.asyncio
@@ -509,12 +509,12 @@ class TestGetClusterCoverage:
         conn, _ = patch_db
         conn.fetchrow.return_value = {
             "emb": None, "namespace_id": 1, "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": 42, "coverage_verified": True,
-            "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차...", "content": "재배송 처리 절차 전문...",
+            "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차", "content": "재배송 처리 절차 전문...",
         }
         llm_mock = AsyncMock()
         monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
         result = await pattern_detection.get_cluster_coverage(1, 55)
-        assert result == {"covered": True, "snippet": "재배송 처리 절차..."}
+        assert result == {"covered": True, "snippet": "재배송 처리 절차…", "source": None}   # 원문이 더 길면 잘림 표시
         llm_mock.assert_not_called()
 
     @pytest.mark.asyncio
@@ -525,13 +525,32 @@ class TestGetClusterCoverage:
         conn, _ = patch_db
         conn.fetchrow.return_value = {
             "emb": None, "namespace_id": 1, "representative_subject": "배달완료 제품 못받음", "coverage_knowledge_id": 19, "coverage_verified": False,
-            "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차...", "content": "재배송 처리 절차 전문...",
+            "knowledge_id": 42, "similarity": 0.81, "snippet": "재배송 처리 절차", "content": "재배송 처리 절차 전문...",
         }
         llm_mock = AsyncMock(return_value=True)
         monkeypatch.setattr(pattern_detection, "_verify_coverage_with_llm", llm_mock)
         result = await pattern_detection.get_cluster_coverage(1, 55)
-        assert result == {"covered": True, "snippet": "재배송 처리 절차..."}
+        assert result == {"covered": True, "snippet": "재배송 처리 절차…", "source": None}   # 원문이 더 길면 잘림 표시
         llm_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_card_source_and_whole_snippet(self, patch_db, monkeypatch):
+        """카드 가시성(11/06) — 어느 문서·절인지(절 경로) · 원문 전체가 들어갔으면 잘림 표시 없음."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {
+            "emb": None, "namespace_id": 1, "representative_subject": "s", "coverage_knowledge_id": 42, "coverage_verified": True,
+            "knowledge_id": 42, "similarity": 0.81, "snippet": "짧은 원문", "content": "짧은 원문",
+            "source_file": "적립 가이드", "heading_path": ["적립 가이드", "예외 케이스"],
+        }
+        result = await pattern_detection.get_cluster_coverage(1, 55)
+        assert result == {"covered": True, "snippet": "짧은 원문", "source": "적립 가이드 › 예외 케이스"}
+
+    def test_source_label(self):
+        label = pattern_detection._source_label
+        assert label([], "문서") == "문서"
+        assert label(["상위", "절"], "문서") == "상위 › 절"   # 경로가 있으면 경로 그대로 — 문서 이름을 덧붙이면 순서가 뒤집힐 수 있다
+        assert label(["문서", " "], "문서") == "문서"
+        assert label(None, None) is None
 
 
 class TestListClusters:

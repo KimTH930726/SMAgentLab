@@ -332,9 +332,23 @@ class TestPatternInfoInTeamsMessage:
             },
         )
         text = msg["text"]
-        assert "해결 방안(반복 유형 기등록 지식)" in text
+        assert "관련 지식 · 참고" in text and "해결 방안" not in text   # 가장 가까운 지식이 해결책이라는 보장은 없다(11/06 테스트 케이스 표가 걸림)
         assert "재배송 또는 환불 처리를 진행합니다." in text
         assert "해당 없음" not in text
+        assert "📄" not in text   # 출처가 없으면 출처 줄도 없다
+
+    def test_registered_resolution_keeps_lines_and_source(self):
+        """11/06 가시성 — 원문 줄바꿈은 <br>로(빈 줄 빼고), 어느 문서·절인지 먼저. 글자는 줄 단위로도 이스케이프."""
+        msg = teams_notify.build_teams_message(
+            subject="s", sender="s@example.com", part="p",
+            analysis=_base_analysis(category="uncertain", resolution_draft=None),
+            pattern_info={
+                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
+                "coverage": {"covered": True, "snippet": "첫 줄\n\n  둘째 <줄>\r\n셋째…", "source": "가이드 › 예외"},
+            },
+        )
+        text = msg["text"]
+        assert "<p>📄 <b>가이드 › 예외</b></p><blockquote>첫 줄<br>둘째 &lt;줄&gt;<br>셋째…</blockquote>" in text
 
     def test_llm_resolution_draft_takes_priority_over_pattern_coverage(self):
         msg = teams_notify.build_teams_message(

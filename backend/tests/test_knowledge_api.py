@@ -16,7 +16,7 @@ async def test_nearest_empty_skips_db():
 @pytest.mark.asyncio
 async def test_nearest_one_query_scope_and_pairs():
     conn = MagicMock(fetch=AsyncMock(return_value=[
-        {"key": 7, "knowledge_id": 42, "similarity": 0.8, "snippet": "s", "content": "c"},
+        {"key": 7, "knowledge_id": 42, "similarity": 0.8, "snippet": "s", "content": "c", "source_file": "문서", "heading_path": ["문서", "절"]},
         {"key": 9, "knowledge_id": None, "similarity": None, "snippet": None, "content": None}]))
     out = await api.nearest(conn, [(7, 1, "[0.1]"), (9, 2, None)], snippet_len=200)
     sql, keys, ns, embs, n = conn.fetch.call_args.args
@@ -25,6 +25,8 @@ async def test_nearest_one_query_scope_and_pairs():
     assert "s.parent_id = c.namespace_id" in sql and "status = 'active'" in sql and "LIMIT 1" in sql
     assert "AS MATERIALIZED" in sql and "<=> c.v" in sql and "c.emb::vector" not in sql   # 변환은 키마다 한 번(리뷰 실측 10배)
     assert out[7]["knowledge_id"] == 42 and out[9]["similarity"] is None
+    assert (out[7]["source_file"], out[7]["heading_path"]) == ("문서", ["문서", "절"]) and out[9]["heading_path"] == []   # 카드 출처 줄(11/06)
+    assert "k.source_file, k.heading_path" in sql
 
 
 def _patch_conn(monkeypatch, ns_id, rows):

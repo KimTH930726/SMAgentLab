@@ -406,7 +406,7 @@ async def _verify_coverage_with_llm(voc_subject: str, knowledge_content: str) ->
 
 
 # 매칭 지식이 없을 때(영역에 사용 중 지식 0) — 옛 LEFT JOIN LATERAL이 NULL을 주던 것과 같게
-_NO_MATCH = {"knowledge_id": None, "similarity": None, "snippet": None, "content": None}
+_NO_MATCH = {"knowledge_id": None, "similarity": None, "snippet": None, "content": None, "source_file": None, "heading_path": []}
 
 
 async def _resolve_coverage(conn, cluster_id: int, row) -> dict:
@@ -458,12 +458,27 @@ async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
             cluster_id, ns_id,
         )
         if c is None:
-            return {"covered": False, "snippet": None}
+            return {"covered": False, "snippet": None, "source": None}
         # 가장 가까운 사용 중 지식(클러스터 영역 + 직계 하위 + 시스템 컬렉션 전체, 11/05 — 메일 분석은 가까운 시스템 1~2개만 찾지만
         # 가장 가까운 한 조각은 그 1위 시스템 안에 있어 결과가 같다. 다른 점: 분석은 받침 연결 컬렉션도 본다 — 지금 지식은 전부 시스템)은 코어 API가
         best = (await knowledge_api.nearest(conn, [(cluster_id, ns_id, c["emb"])], snippet_len=200, with_systems=True)).get(cluster_id) or {}
         result = await _resolve_coverage(conn, cluster_id, {**dict(c), **_NO_MATCH, **best})
-    return {"covered": result["covered"], "snippet": result["snippet"]}
+    if not result["covered"]:
+        return {"covered": False, "snippet": None, "source": None}
+    # 카드 가시성(11/06): 앞 200자만 싣는데 잘린 표시·출처가 없어 무슨 내용인지 알기 어려웠다 — 잘렸으면 "…", 어느 문서·절인지 한 줄
+    snippet = result["snippet"] or ""
+    if len(best.get("content") or "") > len(snippet):
+        snippet = snippet.rstrip() + "…"
+    return {"covered": True, "snippet": snippet, "source": _source_label(best.get("heading_path"), best.get("source_file"))}
+
+
+def _source_label(heading_path: Optional[list], source_file: Optional[str]) -> Optional[str]:
+    """절 제목 경로(적재가 문서·상위 문서 제목부터 채움) → "문서 › 절". 경로가 없으면 문서 이름만 — 경로 앞에 문서 이름을 덧붙이지 않는다
+    (첫 칸이 상위 문서 제목인 조각에서 순서가 뒤집힌다, 리뷰 11/06)."""
+    parts = [p.strip() for p in (heading_path or []) if p and p.strip()]
+    if not parts and source_file and source_file.strip():
+        parts = [source_file.strip()]
+    return " › ".join(parts) or None
 
 
 async def list_clusters(namespace: str) -> list[dict]:

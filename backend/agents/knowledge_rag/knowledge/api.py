@@ -104,10 +104,10 @@ _NEAREST_SQL_TMPL = f"""
     WITH c AS MATERIALIZED (
         SELECT u.key, u.namespace_id, u.emb::vector AS v FROM unnest($1::bigint[], $2::int[], $3::text[]) AS u(key, namespace_id, emb)
     )
-    SELECT c.key, best.knowledge_id, best.similarity, best.snippet, best.content
+    SELECT c.key, best.knowledge_id, best.similarity, best.snippet, best.content, best.source_file, best.heading_path
     FROM c
     LEFT JOIN LATERAL (
-        SELECT k.id AS knowledge_id, 1 - (k.embedding <=> c.v) AS similarity, LEFT(k.content, $4) AS snippet, k.content
+        SELECT k.id AS knowledge_id, 1 - (k.embedding <=> c.v) AS similarity, LEFT(k.content, $4) AS snippet, k.content, k.source_file, k.heading_path
         FROM rag_knowledge k
         -- 영역 + 직계 하위 영역(채팅 지식 검색과 같은 범위 규칙)
         WHERE (k.namespace_id IN ({scope_ids_subquery("c.namespace_id")})/*systems*/)
@@ -121,13 +121,14 @@ _NEAREST_WITH_SYSTEMS_SQL = _NEAREST_SQL_TMPL.replace("/*systems*/", f" OR k.nam
 
 
 async def nearest(conn, items: list[tuple[int, int, str | None]], snippet_len: int, *, with_systems: bool = False) -> dict[int, dict]:
-    """(키, 영역 id, 벡터 글자 '[0.1,…]') 여러 개 → 키마다 가장 가까운 사용 중 지식 하나 {knowledge_id, similarity, snippet, content}.
+    """(키, 영역 id, 벡터 글자 '[0.1,…]') 여러 개 → 키마다 가장 가까운 사용 중 지식 하나 {knowledge_id, similarity, snippet, content, source_file, heading_path}.
     한 쿼리로(창구가 키 수만큼 부르지 않게). 벡터가 없으면 similarity None. conn = 창구가 쓰는 연결(같은 트랜잭션 안에서).
     with_systems: 영역에 더해 시스템 컬렉션 전체에서 — 가장 가까운 한 조각은 search(auto_system)가 고르는 1위 시스템 안에 있다."""
     if not items:
         return {}
     rows = await conn.fetch(_NEAREST_WITH_SYSTEMS_SQL if with_systems else _NEAREST_SQL, [k for k, _, _ in items], [n for _, n, _ in items], [e for _, _, e in items], snippet_len)
-    return {r["key"]: {"knowledge_id": r["knowledge_id"], "similarity": r["similarity"], "snippet": r["snippet"], "content": r["content"]}
+    return {r["key"]: {"knowledge_id": r["knowledge_id"], "similarity": r["similarity"], "snippet": r["snippet"], "content": r["content"],
+                       "source_file": r.get("source_file"), "heading_path": list(r.get("heading_path") or [])}
             for r in rows}
 
 
