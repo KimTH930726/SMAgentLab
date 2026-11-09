@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     @field_validator("policy_abstain_min_score", mode="before")
     @classmethod
     def _empty_as_off(cls, v):
-        # compose가 비어 있는 값을 ""로 넘긴다(POLICY_ABSTAIN_MIN_SCORE: ${...:-}) — 빈 값 = 꺼짐
+        # compose는 안 주면 0.50, 빈 값을 주면 ""를 넘긴다(POLICY_ABSTAIN_MIN_SCORE: ${...-0.50}, 11/09) — 빈 값 = 꺼짐
         return None if v is None or str(v).strip().lower() in ("", "off", "none", "false") else v
 
     # ── .env에서 주입 (인프라/시크릿) ─────────────────────────────
@@ -81,9 +81,11 @@ class Settings(BaseSettings):
     #   embedding — 예전 방식(질문 임베딩 ↔ 용어 설명 최근접 1개를 glossary_min_similarity 이상이면 검색어에 붙임)
     #   off       — 안 씀
     glossary_match_mode: Literal["lexical", "embedding", "off"] = "lexical"   # 오타면 기동 시 오류(조용히 꺼지지 않게)
-    # 근거 없음 즉시 판정(v2.128, 기본 꺼짐 — 10/8 이후 실측으로 값 확정): 지식 채택 0건·공통코드/DB 0건이고, 정책 서술 최고점이
-    # 이 값 미만이며 정책 파라미터 ts_rank 최고가 policy_abstain_min_param_rank 미만이면 LLM을 부르지 않고 "관련 지식을 찾지 못했습니다"
-    policy_abstain_min_score: Optional[float] = None
+    # 근거 없음 즉시 판정(v2.128): 지식 채택 0건·공통코드/DB 0건이고, 정책 서술 최고점이 이 값 미만이며 정책 파라미터 ts_rank 최고가
+    # policy_abstain_min_param_rank 미만이면 LLM을 부르지 않고 "관련 지식을 찾지 못했습니다". 10/20 v0 전환으로 껐다가 11/09 재보정 후 기본 켬
+    # (토큰 낭비 점검, LLM 없이 측정 eval_out/exp/abstain_ctx_1109.py): 0.50 → 골든 거짓 거절 정책 v0 0/485 · 업무지식 0/106,
+    # 답 없는 질문 25/60 차단. 0.52부터 정책 1문항 거짓 거절 — 올리지 말 것. 끄려면 .env에 POLICY_ABSTAIN_MIN_SCORE= (빈 값)
+    policy_abstain_min_score: Optional[float] = 0.50
     policy_abstain_min_param_rank: float = 0.0
     # 참고표·문서 개요를 채팅 문맥에(v0 #12, service/policy/ref_search.py) — 10/29 켬(태훈): 게이트 통과(답 82.3→85.8%, 참고표 문항 12.5→75.0%,
     # 검색 나빠짐 0). 남은 부작용 챌린지-018 하나(표에 없는 '탈퇴'에 표가 붙어 되물음) — 감수하고 켬, 백로그 0-12

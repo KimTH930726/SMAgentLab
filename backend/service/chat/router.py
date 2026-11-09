@@ -1,12 +1,10 @@
-"""대화 엔드포인트 — SSE 스트리밍 + 단일 응답 + 대화방 CRUD."""
+"""대화 엔드포인트 — SSE 스트리밍 + 대화방 CRUD. 옛 단일 응답 /api/chat은 11/09 삭제(화면은 스트림만, 캐시·문맥 예산·되묻기가 없는 LLM 경로)."""
 import asyncio
 import contextlib
 import json
 import logging
-from dataclasses import dataclass
 from typing import Optional
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
@@ -14,18 +12,11 @@ from core.database import get_conn, resolve_namespace_id
 from core.dependencies import get_current_user, log_cross_part_namespace_read
 from core.security import get_user_llm_credentials
 from service.chat.schemas import (
-    ChatRequest, ChatResponse, KnowledgeResult,
+    ChatRequest,
     ConversationCreate, ConversationResponse, MessageResponse,
 )
-from service.chat.helpers import (
-    LLM_UNAVAILABLE_MSG, results_to_json,
-    update_inhouse_conv_id, create_query_log, post_save_tasks,
-    update_assistant_message,
-)
-from service.llm.factory import get_llm_provider
-from agents.knowledge_rag.knowledge import retrieval, glossary_terms
-from service.chat import memory
-from agents.knowledge_rag.knowledge.retrieval import GlossaryMatch, RetrievalResult
+from service.chat.helpers import results_to_json, update_assistant_message
+from agents.knowledge_rag.knowledge.retrieval import RetrievalResult
 from agents.base import AgentRegistry
 
 logger = logging.getLogger(__name__)
@@ -81,45 +72,6 @@ async def _with_keepalive(events, interval: float = _KEEPALIVE_SEC):
             await task
 
 
-# ── 공통 파이프라인 (비스트리밍 chat 전용) ────────────────────────────
-
-@dataclass
-class PipelineResult:
-    query_vec: list[float]
-    glossary_match: Optional[GlossaryMatch]
-    mapped_term: Optional[str]
-    enriched_query: str
-    results: list[RetrievalResult]
-    context: str
-
-
-async def _run_pipeline(
-    namespace: str, question: str, query_vec: list[float],
-    w_vector: float, w_keyword: float, top_k: int,
-) -> PipelineResult:
-    # 용어집 방식은 채팅과 같은 설정(GLOSSARY_MATCH_MODE)을 따른다(v2.128) — 디버그 검색이 채팅과 달리 보이지 않게
-    from service.policy import scope as policy_scope   # 채팅과 같은 용어 범위(정책서 파트 용어 포함, 2026-10-20 리뷰 L3)
-    try:   # 채팅(agent.py)과 같이 — 범위 계산이 실패해도 디버그 검색은 정책 용어 없이 계속(재리뷰 10/20)
-        async with get_conn() as conn:
-            policy_ns_ids = await policy_scope.policy_namespace_ids(conn, namespace)
-    except Exception as e:
-        logger.warning("정책서 범위 계산 실패(디버그 검색은 정책 용어 없이 진행): %s", e)
-        policy_ns_ids = []
-    matches, mapped_term, enriched_query = await glossary_terms.resolve_query_terms(
-        namespace, question, query_vec, extra_ns_ids=policy_ns_ids)
-    glossary_match = (GlossaryMatch(term=matches[0].term, description=matches[0].description, similarity=1.0) if matches
-                      else (await retrieval.map_glossary_term(namespace, query_vec) if mapped_term else None))
-
-    results = await retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, top_k)
-    context = retrieval.build_context(results)
-
-    return PipelineResult(
-        query_vec=query_vec, glossary_match=glossary_match,
-        mapped_term=mapped_term, enriched_query=enriched_query,
-        results=results, context=context,
-    )
-
-
 def _resolve_user_credentials(user: dict) -> Optional[dict]:
     """사용자별 LLM 자격증명이 있으면 dict 반환, 없으면 None (시스템 .env fallback).
 
@@ -171,21 +123,6 @@ async def _save_user_message(conversation_id: int, question: str) -> int:
     return row["id"]
 
 
-async def _save_assistant_message(
-    conversation_id: int, answer: str,
-    mapped_term: Optional[str], results: list[RetrievalResult],
-) -> int:
-    async with get_conn() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO ops_message (conversation_id, role, content, mapped_term, results)
-            VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id
-            """,
-            conversation_id, "assistant", answer, mapped_term, results_to_json(results),
-        )
-    return row["id"]
-
-
 async def _pre_create_assistant_message(
     conversation_id: int, mapped_term: Optional[str], results: list[RetrievalResult],
 ) -> int:
@@ -208,63 +145,7 @@ async def _cleanup_ghost_messages(conversation_id: int) -> None:
         )
 
 
-async def _safe_generate(
-    context: str, question: str, history: list[dict] | None = None,
-    *, user_credentials: Optional[dict] = None, ext_conversation_id: Optional[str] = None,
-) -> tuple[str, Optional[str]]:
-    try:
-        return await get_llm_provider().generate(
-            context, question, history,
-            user_credentials=user_credentials,
-            ext_conversation_id=ext_conversation_id,
-        )
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
-        logger.warning("LLM 호출 실패: %s", e)
-        return LLM_UNAVAILABLE_MSG, None
-
-
 # ── Chat 엔드포인트 ──────────────────────────────────────────────────────────
-
-@router.post("/api/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
-    await log_cross_part_namespace_read(req.namespace, user)
-    user_creds = _resolve_user_credentials(user)
-    conv_id, inhouse_conv_id = await _get_or_create_conversation(req.namespace, req.question, req.conversation_id, user["id"], req.agent_type)
-
-    # ── 멀티턴 검색 보강: 직전 턴과 관련 있을 때만 결합 ──
-    search_question, query_vec = await memory.augment_query_for_search(conv_id, req.question)
-
-    pipe, history = await asyncio.gather(
-        _run_pipeline(req.namespace, search_question, query_vec, req.w_vector, req.w_keyword, req.top_k),
-        memory.build_context_history(conv_id, query_vec),
-    )
-
-    answer, new_inhouse_conv_id = await _safe_generate(
-        pipe.context, req.question, history,
-        user_credentials=user_creds, ext_conversation_id=inhouse_conv_id,
-    )
-    if new_inhouse_conv_id and new_inhouse_conv_id != inhouse_conv_id:
-        t = asyncio.create_task(update_inhouse_conv_id(conv_id, new_inhouse_conv_id))
-        t.add_done_callback(lambda f: logger.warning("update_inhouse_conv_id 실패: %s", f.exception()) if not f.cancelled() and f.exception() else None)
-
-    _, msg_id = await asyncio.gather(
-        _save_user_message(conv_id, req.question),
-        _save_assistant_message(conv_id, answer, pipe.mapped_term, pipe.results),
-    )
-    await create_query_log(req.namespace, req.question, answer, pipe.mapped_term, msg_id, user_id=user["id"],
-                           had_context=bool(pipe.context.strip()))
-    t2 = asyncio.create_task(post_save_tasks(conv_id, req.namespace))
-    t2.add_done_callback(lambda f: logger.warning("post_save_tasks 실패: %s", f.exception()) if not f.cancelled() and f.exception() else None)
-
-    return ChatResponse(
-        conversation_id=conv_id, question=req.question, mapped_term=pipe.mapped_term,
-        results=[
-            KnowledgeResult(id=r.id, content=r.content, final_score=r.final_score)
-            for r in pipe.results
-        ],
-        answer=answer,
-    )
-
 
 @router.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):

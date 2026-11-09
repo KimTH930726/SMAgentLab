@@ -26,8 +26,18 @@ def test_every_technique_has_flow_and_valid_step():
     assert keys == set(tech.FLOW_OF), keys ^ set(tech.FLOW_OF)
     for k, (flow, step, mode, why) in tech.FLOW_OF.items():
         assert step in tech.FLOWS[flow], (k, step)
-        assert mode in ("required", "on", "off", "switch"), k
-        assert (mode == "off") == bool(why), k   # 미적용엔 사유가 꼭 있다(화면에 보인다)
+        assert mode in ("required", "on", "off", "switch", "setting"), k
+        assert (mode in ("off", "setting")) == bool(why), k   # 미적용(될 수 있는 것)엔 사유가 꼭 있다(화면에 보인다)
+
+
+@pytest.mark.parametrize("value,state", [(0.50, "on"), (None, "off")])
+def test_abstain_state_follows_setting(monkeypatch, value, state):
+    """11/09 재리뷰 N1: 근거 없음 즉시 거절은 설정값으로 켜고 끈다 — 기법 대장이 고정 문구("미적용")로 실제와 반대로 말하지 않게."""
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "core.config", SimpleNamespace(settings=SimpleNamespace(policy_abstain_min_score=value)))
+    v = tech.flow_view("abstain_prefilter")
+    assert v["state"] == state and (v["off_reason"] is None) == (state == "on")
 
 
 def test_switch_mode_matches_flag_registry():

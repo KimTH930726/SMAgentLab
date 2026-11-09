@@ -402,10 +402,13 @@ class CacheConfigRequest(BaseModel):
 
 @router.get("/api/admin/llm-usage")
 async def get_llm_usage(days: int = 7, admin: dict = Depends(get_current_admin)):
-    """사내 LLM 사용량 — 기능별 호출 수·실패·토큰(없으면 글자)·평균 시간, 최근 N일(2026-10-12, 읽기 전용)."""
+    """시스템 LLM 사용량 — 기능별 호출 수·실패·토큰(없으면 글자)·평균 시간, 최근 N일(2026-10-12, 읽기 전용).
+    지금 시스템 LLM 종류의 기록만(11/09 — 적재·위치 판정용 로컬 LLM 기록이 섞이지 않게, 그 수치는 provider로 따로 조회)."""
+    from service.llm.factory import current_provider_type
     from service.llm.usage import summary
     days = max(1, min(days, 90))   # 기록은 90일만 보관 — 화면에도 실제 집계 기간을 돌려준다
-    return {"days": days, "features": await summary(days)}
+    provider = current_provider_type()
+    return {"days": days, "provider": provider, "features": await summary(days, provider)}
 
 
 @router.get("/api/admin/cache/config")

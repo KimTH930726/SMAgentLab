@@ -143,6 +143,18 @@ async def test_abstain_answers_without_llm_and_logs_gap(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("contextual,has_prev", [(True, True), (False, True)])
+async def test_followup_turn_is_not_abstained(monkeypatch, contextual, has_prev):
+    """독립 리뷰 M1(11/09): 즉시 거절은 검색 신호만 본다 — 후속 질문(이전 턴 있음, 검색 보강 여부 무관)은 거절하지 않고 LLM이 이력으로 답한다."""
+    upd, log, set_cached, llm_calls = _wire(monkeypatch, abstain=True, tokens=["이력 기반 답"], contextual=contextual, has_prev=has_prev)
+    events = await _run()
+    assert llm_calls == [1]
+    assert "".join(e["data"] for e in events if e["type"] == "token") == "이력 기반 답"
+    traces = [c.kwargs["metadata"]["trace"] for c in upd.await_args_list if (c.kwargs.get("metadata") or {}).get("trace")]
+    assert traces and all(t["abstain"] is False and t["abstain_followup"] is True for t in traces)   # 기록은 "거절"로 안 셈
+
+
+@pytest.mark.asyncio
 async def test_zero_tokens_shows_error_and_is_not_cached(monkeypatch):
     upd, log, set_cached, llm_calls = _wire(monkeypatch, abstain=False, tokens=[])
     events = await _run()

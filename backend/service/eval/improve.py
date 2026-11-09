@@ -251,13 +251,13 @@ def build_candidates(diag: dict, *, types: Mapping[str, str], mapped: Mapping[st
         best = (abstain or {}).get("best")
         if best:
             out.append(_cand("abstain_threshold", "answered_no_answer", "abstain_prefilter",
-                             f"근거 없음 하한 켜기 — 서술 {best['min_score']:.2f} · 파라미터 {best['min_param_rank']:.2f}",
+                             f"근거 없음 하한 조정 — 서술 {best['min_score']:.2f} · 파라미터 {best['min_param_rank']:.2f}",
                              "POLICY_ABSTAIN_MIN_SCORE / POLICY_ABSTAIN_MIN_PARAM_RANK 설정", "replay", q, recommend="try",
                              why=f"리플레이: 고침 {best['fixed']} · 망가짐 0 · 정답률 {best['before'] * 100:.1f}→{best['after'] * 100:.1f}%",
                              replay=abstain))
         else:
             fixed_any = max((x["fixed"] for x in (abstain or {}).get("grid", [])), default=0)
-            out.append(_cand("abstain_threshold", "answered_no_answer", "abstain_prefilter", "근거 없음 하한 켜기(정책 점수 하한)",
+            out.append(_cand("abstain_threshold", "answered_no_answer", "abstain_prefilter", "근거 없음 하한 조정(정책 점수 하한)",
                              "POLICY_ABSTAIN_MIN_SCORE 설정", "replay", q, recommend="reject",
                              why=("리플레이: 어느 하한에서도 망가짐 없이 고치는 문항 없음" if abstain else "검색 신호가 없어 못 잼")
                              + (f"(고침 최대 {fixed_any}건은 망가짐 동반)" if fixed_any else " — 이 문항들은 점수가 높아 하한으로 못 거름"),

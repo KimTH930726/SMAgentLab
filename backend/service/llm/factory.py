@@ -19,11 +19,13 @@ def get_llm_provider() -> LLMProvider:
     return _provider
 
 
+def current_provider_type() -> str:
+    """지금 시스템 LLM 종류(inhouse·openai_compat·ollama) — 런타임 전환이 있으면 그것. 사용량 화면이 이 종류 기록만 센다(11/09)."""
+    return (_runtime_config or {}).get("provider", settings.llm_provider)
+
+
 def _create_provider() -> LLMProvider:
-    if _runtime_config is not None:
-        provider_type = _runtime_config.get("provider", settings.llm_provider)
-    else:
-        provider_type = settings.llm_provider
+    provider_type = current_provider_type()
 
     if provider_type == "inhouse":
         return InHouseLLMProvider(_runtime_config)

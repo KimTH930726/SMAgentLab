@@ -105,3 +105,146 @@ async def test_health_check_keeps_configured_model(monkeypatch):
     p = oc.OpenAICompatProvider()
     await p.health_check()
     assert p.model == "fixed"                            # .env에 정한 모델은 바꾸지 않는다
+
+
+# ── 사용량 기록·출력 상한(11/09 토큰 낭비 점검) — Bedrock 기준 기능별 사용량을 재려면 로컬 호출도 기록 · 채팅 답은 상한(폭주 방지) ──
+import httpx  # noqa: E402
+
+_REAL_CLIENT = httpx.AsyncClient
+
+
+class _Usage:
+    def __init__(self, fail=False):
+        self.rows, self.fail = [], fail
+
+    def record(self, **kw):
+        if self.fail:
+            raise RuntimeError("기록 DB 다운")
+        self.rows.append(kw)
+
+    def caller_module(self):
+        return "agents.knowledge_rag.agent"
+
+
+def _transport(handler, seen):
+    def h(request):
+        import json as _j
+        seen.append(_j.loads(request.content or b"{}"))
+        return handler(request)
+    return lambda **kw: _REAL_CLIENT(transport=httpx.MockTransport(h), **kw)
+
+
+@pytest.mark.asyncio
+async def test_generate_records_usage_and_caps_output(monkeypatch):
+    monkeypatch.setattr(oc, "settings", SimpleNamespace(openai_compat_base_url="http://x/v1", openai_compat_model="m", openai_compat_timeout=30))
+    u, seen = _Usage(), []
+    monkeypatch.setattr(oc, "usage", u)
+    monkeypatch.setattr(oc.httpx, "AsyncClient", _transport(lambda r: httpx.Response(200, json={
+        "choices": [{"message": {"content": "답"}}], "usage": {"prompt_tokens": 120, "completion_tokens": 7}}), seen))
+    ans, _ = await oc.OpenAICompatProvider().generate("근거", "질문")
+    assert ans == "답" and seen[0]["max_tokens"] == oc.CHAT_MAX_OUTPUT_TOKENS
+    r = u.rows[0]
+    assert (r["provider"], r["method"], r["input_tokens"], r["output_tokens"], r["output_chars"], r["ok"]) == ("openai_compat", "generate", 120, 7, 1, True)
+    assert r["input_chars"] > 0
+
+
+@pytest.mark.asyncio
+async def test_stream_records_end_usage_and_caps_output(monkeypatch):
+    monkeypatch.setattr(oc, "settings", SimpleNamespace(openai_compat_base_url="http://x/v1", openai_compat_model="m", openai_compat_timeout=30))
+    u, seen = _Usage(), []
+    monkeypatch.setattr(oc, "usage", u)
+    sse = ('data: {"choices":[{"delta":{"content":"안녕"}}]}\n\n'
+           'data: {"choices":[{"delta":{"content":"하세요"}}]}\n\n'
+           'data: {"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":3}}\n\n'
+           'data: [DONE]\n\n')
+    monkeypatch.setattr(oc.httpx, "AsyncClient", _transport(lambda r: httpx.Response(200, text=sse), seen))
+    out = "".join([t async for t in oc.OpenAICompatProvider().generate_stream("근거", "질문")])
+    assert out == "안녕하세요"
+    assert seen[0]["max_tokens"] == oc.CHAT_MAX_OUTPUT_TOKENS and seen[0]["stream_options"] == {"include_usage": True}
+    r = u.rows[0]
+    assert (r["method"], r["input_tokens"], r["output_tokens"], r["output_chars"], r["ok"]) == ("stream", 50, 3, 5, True)
+
+
+@pytest.mark.asyncio
+async def test_usage_failure_does_not_break_call_and_once_keeps_its_cap(monkeypatch):
+    monkeypatch.setattr(oc, "settings", SimpleNamespace(openai_compat_base_url="http://x/v1", openai_compat_model="m", openai_compat_timeout=30))
+    seen = []
+    monkeypatch.setattr(oc, "usage", _Usage(fail=True))
+    monkeypatch.setattr(oc.httpx, "AsyncClient", _transport(lambda r: httpx.Response(200, json={"choices": [{"message": {"content": "네"}}]}), seen))
+    assert await oc.OpenAICompatProvider().generate_once("p", max_tokens=30) == "네"
+    assert seen[0]["max_tokens"] == 30   # 짧은 판정은 자기 상한 그대로
+
+
+@pytest.mark.asyncio
+async def test_failed_call_is_recorded_as_failure(monkeypatch):
+    monkeypatch.setattr(oc, "settings", SimpleNamespace(openai_compat_base_url="http://x/v1", openai_compat_model="m", openai_compat_timeout=30))
+    u, seen = _Usage(), []
+    monkeypatch.setattr(oc, "usage", u)
+    monkeypatch.setattr(oc.httpx, "AsyncClient", _transport(lambda r: httpx.Response(500, json={}), seen))
+    with pytest.raises(httpx.HTTPStatusError):
+        await oc.OpenAICompatProvider().generate_once("p")
+    assert u.rows[0]["ok"] is False and u.rows[0]["output_chars"] == 0
+
+
+def _sse(*events):
+    return "".join(f"data: {e}\n\n" for e in events) + "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_stream_closed_early_records_once_as_aborted(monkeypatch):
+    """소비자가 중간에 닫으면(사용자 중단) ok=None으로 한 번만 기록 — 실패로 세지 않는다(리뷰 지적: 이번 변경의 핵심 분기)."""
+    monkeypatch.setattr(oc, "settings", SimpleNamespace(openai_compat_base_url="http://x/v1", openai_compat_model="m", openai_compat_timeout=30))
+    u = _Usage()
+    monkeypatch.setattr(oc, "usage", u)
+    sse = _sse('{"choices":[{"delta":{"content":"하나"}}]}', '{"choices":[{"delta":{"content":"둘"}}]}')
+    monkeypatch.setattr(oc.httpx, "AsyncClient", _transport(lambda r: httpx.Response(200, text=sse), []))
+    gen = oc.OpenAICompatProvider().generate_stream("근거", "질문")
+    assert await gen.__anext__() == "하나"
+    await gen.aclose()
+    assert len(u.rows) == 1 and u.rows[0]["ok"] is None and u.rows[0]["output_chars"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_error_chunk_is_failure_and_missing_usage_is_none(monkeypatch):
+    monkeypatch.setattr(oc, "settings", SimpleNamespace(openai_compat_base_url="http://x/v1", openai_compat_model="m", openai_compat_timeout=30))
+    u = _Usage()
+    monkeypatch.setattr(oc, "usage", u)
+    sse = _sse('{"choices":[{"delta":{"content":"앞"}}]}', '{"error":{"message":"boom"}}')
+    monkeypatch.setattr(oc.httpx, "AsyncClient", _transport(lambda r: httpx.Response(200, text=sse), []))
+    with pytest.raises(RuntimeError):
+        _ = [t async for t in oc.OpenAICompatProvider().generate_stream("근거", "질문")]
+    r = u.rows[0]
+    assert r["ok"] is False and r["input_tokens"] is None and r["output_tokens"] is None
+
+
+@pytest.mark.asyncio
+async def test_400_retries_once_without_optional_fields(monkeypatch):
+    """리뷰 L3·L4: 서버가 출력 상한(문맥 한도 초과)·usage 요청을 400으로 거부하면 그 칸 없이 한 번 더 — 보조 기능 때문에 답이 깨지지 않게."""
+    monkeypatch.setattr(oc, "settings", SimpleNamespace(openai_compat_base_url="http://x/v1", openai_compat_model="m", openai_compat_timeout=30))
+    monkeypatch.setattr(oc, "usage", _Usage())
+    seen = []
+
+    def h(req):
+        body = seen[-1]
+        if "max_tokens" in body or "stream_options" in body:
+            return httpx.Response(400, json={"error": "too long"})
+        if body.get("stream"):
+            return httpx.Response(200, text=_sse('{"choices":[{"delta":{"content":"답"}}]}'))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "답"}}]})
+    monkeypatch.setattr(oc.httpx, "AsyncClient", _transport(h, seen))
+    p = oc.OpenAICompatProvider()
+    assert "".join([t async for t in p.generate_stream("근거", "질문")]) == "답"
+    assert (await p.generate("근거", "질문"))[0] == "답"
+    assert [("max_tokens" in b, "stream_options" in b) for b in seen] == [(True, True), (False, False), (True, False), (False, False)]
+
+
+@pytest.mark.asyncio
+async def test_once_never_drops_its_own_cap_on_400(monkeypatch):
+    """재요청은 채팅 출력 상한(generate·스트림)만 — 짧은 판정(once)의 자기 상한은 400이어도 풀지 않는다(값이 4096이어도, 재리뷰 낮음)."""
+    monkeypatch.setattr(oc, "settings", SimpleNamespace(openai_compat_base_url="http://x/v1", openai_compat_model="m", openai_compat_timeout=30))
+    monkeypatch.setattr(oc, "usage", _Usage())
+    seen = []
+    monkeypatch.setattr(oc.httpx, "AsyncClient", _transport(lambda r: httpx.Response(400, json={}), seen))
+    with pytest.raises(httpx.HTTPStatusError):
+        await oc.OpenAICompatProvider().generate_once("p", max_tokens=oc.CHAT_MAX_OUTPUT_TOKENS)
+    assert len(seen) == 1

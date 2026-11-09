@@ -236,7 +236,8 @@ def should_abstain(signals: dict, min_score: Optional[float], min_param_rank: fl
     """근거 없음 즉시 판정 — 지식 채택 0·공통코드/DB 0·정책 파라미터 약함·정책 서술 최고점 < 하한. min_score가 None이면 끔.
     실측(2026-10-06, 채팅 경로·새 용어 방식, 골든 88 vs 답 없는 질문 60): (서술 0.50, 파라미터 0.05)에서 골든 거짓 거절 0,
     답 없음 35/60 차단 — 점수만으론 다 못 거르므로(분포가 겹침) 나머지는 LLM 거절에 맡긴다. 정답 질문의 파라미터 rank도 대부분
-    0.05 미만이라 파라미터 하한은 사실상 "강하게 걸린 파라미터"만 근거로 친다. 배포 후 다시 재서 켠다(그래서 기본 꺼짐)."""
+    0.05 미만이라 파라미터 하한은 사실상 "강하게 걸린 파라미터"만 근거로 친다. 11/09 정책서 v0로 재보정해 기본 0.50으로 켬(core/config.py) —
+    후속 질문(이전 턴 있음)은 채팅이 이 판정을 쓰지 않는다(이력으로 답, stream_chat). 대량 적재 뒤엔 같은 측정으로 여유(0.52부터 거짓 거절)를 다시 본다."""
     if min_score is None:
         return False
     return (signals.get("adopted", 0) == 0 and signals.get("codes", 0) == 0 and signals.get("columns", 0) == 0
@@ -606,6 +607,8 @@ class KnowledgeRagAgent(AgentBase):
             except Exception:   # 진단용 보조 기록 — 실패해도 답은 계속(로그만, 리뷰 L1)
                 logger.warning("운영 질의 기록 만들기 실패 msg=%s", msg_id, exc_info=True)
                 trace = {"v": TRACE_VERSION, "error": True}
+            if cc.abstain and contextual:   # 후속 질문은 즉시 거절 안 함(아래) — 기록도 "거절"로 세지 않게 따로 표시(11/09 재리뷰)
+                trace = {**trace, "abstain": False, "abstain_followup": True}
             if cc.signals.get("scope_missed"):
                 yield {"type": "status", "step": "context", "message": "고른 범위를 찾지 못해 질문 내용으로 다시 찾았습니다"}
             policy_citations: list[dict] = []
@@ -638,7 +641,9 @@ class KnowledgeRagAgent(AgentBase):
                 yield {"type": "done", "message_id": msg_id, "status": "completed"}
                 return
 
-            if cc.abstain:
+            # 후속 질문(이전 턴이 있음)은 즉시 거절하지 않는다(11/09 독립 리뷰 M1) — 검색 신호만 보는 판정이라 "그럼 기간은?"처럼 짧은 후속
+            # 질문을 거절할 수 있는데, LLM은 대화 이력으로 답한다. 재보정 측정(골든 591)은 한 턴 질문뿐이라 여러 턴은 예전 동작 그대로 둔다
+            if cc.abstain and not contextual:
                 suggestion = None if (suggest_of or clarify_scope) else await _suggestion(
                     namespace, search_question, query_vec, results, w_vector=w_vector, w_keyword=w_keyword, top_k=top_k)
                 abstain_meta = {**({"collection_suggest": suggestion} if suggestion else {}), **answered_ns, "trace": trace}

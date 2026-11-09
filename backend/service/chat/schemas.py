@@ -27,20 +27,6 @@ class ChatRequest(BaseModel):
     suggest_of: Optional[int] = None
 
 
-class KnowledgeResult(BaseModel):
-    id: int
-    content: str
-    final_score: float
-
-
-class ChatResponse(BaseModel):
-    conversation_id: int
-    question: str
-    mapped_term: Optional[str]
-    results: list[KnowledgeResult]
-    answer: str
-
-
 class ConversationCreate(BaseModel):
     namespace: str
     title: str = ""

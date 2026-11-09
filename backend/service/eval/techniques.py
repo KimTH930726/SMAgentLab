@@ -68,9 +68,11 @@ TECHNIQUES: list[dict] = [
                "다르면 사람에게 묻는다(사람이 바꾸면 번복으로 기록)"]},
     {"key": "abstain_prefilter", "name": "근거 없음 즉시 거절", "stage": "근거 판정",
      "does": "지식·코드·분류 목록이 없고 정책 점수가 하한 미만이면 LLM을 부르지 않고 \"관련 지식을 찾지 못했습니다\"",
-     "values": {"서술 하한": ("POLICY_ABSTAIN_MIN_SCORE", "꺼짐"), "파라미터 하한": ("POLICY_ABSTAIN_MIN_PARAM_RANK", "0.0")},
+     "values": {"서술 하한": ("POLICY_ABSTAIN_MIN_SCORE", "0.50"), "파라미터 하한": ("POLICY_ABSTAIN_MIN_PARAM_RANK", "0.0")},
      "evidence": [("2026-10-06", "(0.50, 0.05) 골든 88 거짓 거절 0 · 답 없음 35/60 차단 — 배포 후 다시 재서 켜기로(기본 꺼짐)"),
-                  ("2026-10-23", "골든 v0 리플레이 — 어느 하한에서도 고치는 문항 0, 0.60부터 맞던 답 깨짐 → 꺼 둠(10/26 결정)")],
+                  ("2026-10-23", "골든 v0 리플레이 — 어느 하한에서도 고치는 문항 0, 0.60부터 맞던 답 깨짐 → 꺼 둠(10/26 결정)"),
+                  ("2026-11-09", "토큰 낭비 점검 재보정(LLM 없이) — 0.50: 골든 거짓 거절 정책 0/485 · 업무지식 0/106, 답 없는 첫 질문 25/60 LLM 없이 거절"
+                                 "(0.52부터 정책 1건 거짓 거절) → 기본 켬. 후속 질문(이전 턴 있음)은 거절 안 함(이력으로 답, 독립 리뷰 M1)")],
      "where": "agents/knowledge_rag/agent.py:should_abstain"},
     {"key": "category_list", "name": "분류 목록 블록", "stage": "답 모양",
      "does": "목록 질문이면 고른 분류의 정책을 \"경로 > 정책명 — 요약\" 줄로 문맥에 넣는다",
@@ -222,7 +224,7 @@ FLOW_OF: dict[str, tuple[str, str, str, Optional[str]]] = {
     "policy_rrf": ("chat", "검색", "required", None),
     "keyword_rescue": ("chat", "검색", "on", None),
     "ref_table_chat": ("chat", "검색", "switch", None),
-    "abstain_prefilter": ("chat", "근거 판정", "off", "서술 하한이 비어 있어 안 씀 — 하한 재보정(게이트) 뒤 값으로 켠다"),
+    "abstain_prefilter": ("chat", "근거 판정", "setting", "서술 하한(POLICY_ABSTAIN_MIN_SCORE)이 비어 있어 안 씀"),   # 상태 = 설정값(11/09 기본 켬)
     "context_budget": ("chat", "문맥 구성", "switch", None),
     "cite_prompt": ("chat", "생성", "switch", None),
     "policy_top_k": ("chat", "문맥 구성", "required", None),
@@ -297,16 +299,23 @@ def as_rows() -> list[dict]:
     return rows
 
 
+def _setting_on(key: str) -> bool:
+    from core.config import settings
+    return {"abstain_prefilter": lambda: settings.policy_abstain_min_score is not None}.get(key, lambda: True)()
+
+
 def flow_view(key: str) -> dict:
     """흐름도 칸 — 흐름·단계·상태(required/on/off)·스위치 여부·미적용 사유·마지막 변경. 스위치는 지금 값(core/technique_flags)."""
     from core import technique_flags
     flow, step, mode, why = FLOW_OF.get(key, ("chat", "검색", "on", None))
     if mode == "switch":
         state = "on" if technique_flags.is_on(key) else "off"
+    elif mode == "setting":   # 설정(.env)으로 켜고 끄는 기법 — 지금 값을 읽는다(고정 문구가 실제와 반대로 말하지 않게, 11/09 재리뷰 N1)
+        state = "on" if _setting_on(key) else "off"
     else:
         state = {"required": "required", "off": "off"}.get(mode, "on")
     sw = mode == "switch"
-    return {"flow": flow, "step": step, "state": state, "switchable": sw, "off_reason": why,
+    return {"flow": flow, "step": step, "state": state, "switchable": sw, "off_reason": why if state == "off" else None,
             "changed": technique_flags.changed(key) if sw else None,
             # 검증된 최적 값(켜짐/꺼짐)과 벗어나면 잃는 것 — 화면이 "최적 상태" 표시·경고에 쓴다
             "baseline_on": technique_flags.BASELINE.get(key) if sw else None,

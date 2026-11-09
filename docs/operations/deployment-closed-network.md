@@ -530,6 +530,12 @@ v2.119(10/02 반입)에서 한 번에 올리면 첫 기동 때 아래 삭제가 
 운영 스위치(`LOCATOR_LLM`·`INGEST_LLM`·`POLICY_REF_CHAT`·`POLICY_REF_OVERVIEW`·`CONFLUENCE_SYNC`·`RERANKER_ENABLED`)는 v2.218부터 `.env` 값이
 컨테이너로 들어간다(전엔 compose에 없어 조용히 코드 기본값).
 
+**v2.222부터 (토큰 낭비 점검):** 근거 없음 즉시 거절이 **기본 켜짐**(`POLICY_ABSTAIN_MIN_SCORE` 안 주면 0.50 — 정책서 v0로 재보정, 골든 거짓 거절 0/591).
+운영 `.env`에 `POLICY_ABSTAIN_MIN_SCORE=0.50`이 있으면 그대로 두고, **빈 값(`POLICY_ABSTAIN_MIN_SCORE=`)이 있으면 꺼진 채**이니 지운다.
+옛 단일 응답 채팅 API `POST /api/chat`은 삭제(화면은 `/api/chat/stream`만 씀) — 밖에서 직접 부르던 도구가 있으면 스트림으로 바꾼다.
+후속 질문(같은 대화의 2턴째부터)은 즉시 거절하지 않는다(이력으로 답). 컨플 일괄 적재·재정제 뒤엔 골든셋으로 거짓 거절 0인지 다시 확인한다(0.52부터 거짓 거절이 생기는 좁은 여유).
+관리자 › LLM 사용량은 지금 시스템 LLM 종류의 기록만 보여 준다(적재·위치 판정용 로컬 LLM 기록은 `ops_llm_usage.provider`로 따로 조회).
+
 ## 4. 운영 작업
 
 ### 4-1. DB 백업

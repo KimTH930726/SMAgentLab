@@ -90,8 +90,9 @@ def record(*, provider: str, method: str, module: str, input_chars: int, output_
     task.add_done_callback(_pending.discard)
 
 
-async def summary(days: int = 7) -> list[dict]:
-    """기능별 집계(최근 N일) — 호출 수·실패·입출력 토큰(없으면 글자)·평균 시간."""
+async def summary(days: int = 7, provider: Optional[str] = None) -> list[dict]:
+    """기능별 집계(최근 N일) — 호출 수·실패·입출력 토큰(없으면 글자)·평균 시간. provider를 주면 그 공급자 기록만(11/09 —
+    로컬 LLM 기록을 시작해 공급자를 섞으면 "사내 LLM 사용량" 화면에 적재용 로컬 호출·측정 스크립트가 비용처럼 합쳐진다, 리뷰 M2)."""
     from core.database import get_conn
     async with get_conn() as conn:
         rows = await conn.fetch("""
@@ -100,7 +101,7 @@ async def summary(days: int = 7) -> list[dict]:
                    count(*) FILTER (WHERE input_tokens IS NOT NULL) AS with_tokens,
                    sum(input_chars) AS input_chars, sum(output_chars) AS output_chars,
                    round(avg(duration_ms)) AS avg_ms, max(created_at)::text AS last_at
-            FROM ops_llm_usage WHERE created_at > NOW() - make_interval(days => $1)
+            FROM ops_llm_usage WHERE created_at > NOW() - make_interval(days => $1) AND ($2::text IS NULL OR provider = $2)
             GROUP BY feature ORDER BY sum(coalesce(input_tokens, 0) + coalesce(output_tokens, 0)) DESC, sum(input_chars) DESC
-        """, days)
+        """, days, provider)
     return [dict(r) for r in rows]

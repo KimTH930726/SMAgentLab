@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getLlmUsage, type LlmUsageFeature } from '../../api/llm';
 
 /**
- * 사내 LLM 사용량(2026-10-12) — 기능별 호출 수·토큰(게이트웨이가 주면 토큰, 아니면 글자)·평균 시간·실패, 읽기 전용.
+ * 시스템 LLM 사용량(2026-10-12, 11/09부터 지금 시스템 LLM 종류의 기록만) — 기능별 호출 수·토큰(게이트웨이가 주면 토큰, 아니면 글자)·평균 시간·실패, 읽기 전용.
  * 막힌 일: "토큰이 너무 많이 나간다"는데 어느 기능이 얼마나 쓰는지 숫자가 없어 무엇부터 줄일지 정할 수 없었다.
  */
 const fmt = (n: number | null | undefined) => (n == null ? '-' : Math.round(n).toLocaleString());
@@ -32,9 +32,9 @@ export function LlmUsagePanel() {
   return (
     <section data-testid="llm-usage" className="bg-slate-800 border border-slate-700 rounded-xl p-5 space-y-3">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h3 className="text-sm font-semibold text-slate-200">사내 LLM 사용량</h3>
+        <h3 className="text-sm font-semibold text-slate-200">LLM 사용량</h3>
         <span className="text-[11px] text-slate-500 tabular-nums"
-          title="호출 1건마다 기능·토큰(게이트웨이 metadata.usage)·시간을 기록합니다. 본문은 저장하지 않습니다(2026-10-12부터). 중단 = 사용자가 답변을 멈춘 호출(실패 아님).">
+          title="지금 시스템 LLM의 호출 1건마다 기능·토큰(LLM 응답의 usage)·시간을 기록합니다. 본문은 저장하지 않습니다(2026-10-12부터). 중단 = 사용자가 답변을 멈춘 호출(실패 아님).">
           최근 {days}일 · 호출 {fmt(sum.calls)} · 토큰 {fmt(sum.tokens)}{sum.failed ? ` · 실패 ${fmt(sum.failed)}` : ''}{sum.aborted ? ` · 중단 ${fmt(sum.aborted)}` : ''}
         </span>
         <select id="llm-usage-days" value={days} onChange={(e) => setDays(Number(e.target.value))}

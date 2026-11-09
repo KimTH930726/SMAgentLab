@@ -19,7 +19,7 @@
 
 | 탭 | 프론트 → API | 백엔드 | 읽는/쓰는 데이터 | 실행 |
 |---|---|---|---|---|
-| 즉석 질의(단건) `UnifiedAdhocSearch.tsx` | `debugSearch` → `POST /api/chat/debug` | `service/chat/router.py:291` `_run_pipeline` | `rag_knowledge`(지식 검색 + 용어 매핑) | 즉시 |
+| 즉석 질의(단건) `UnifiedAdhocSearch.tsx` | `debugSearch` → `POST /api/chat/debug`(v2.219 삭제) | 옛 `_run_pipeline`(v2.222 삭제) | `rag_knowledge`(지식 검색 + 용어 매핑) | 즉시 |
 | 〃 | `searchPolicy` → `GET /api/policy/search` | `service/policy/router.py:153` → `search_policy(namespace)` | `policy_item`·`policy_chunk`·`policy_param` — **고른 영역 하나만** | 즉시 |
 | 〃 | `searchRefdata` → `GET /api/refdata/search` | `service/refdata/router.py` | `ref_common_code`·`ref_db_column` | 즉시 |
 | 〃 "이상해요" | `flagKnowledgeForReview` → `POST /api/knowledge/{id}/flag-for-review` | `improvement.record_search_noise` | `ops_improvement_item`(kind=search_noise, source=eval_gate) 쓰기 | 즉시 |
