@@ -113,6 +113,16 @@ export function PolicyJsonTab({ onOpenCorrections }: { onOpenCorrections: () => 
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
             <span className="text-slate-300">같음 <b>{preview.unchanged}</b></span>
             <span className="text-indigo-600 dark:text-indigo-400">바뀜 <b>{preview.changed.length}</b></span>
+            {preview.stale.length > 0 && (
+              <span className="text-amber-600 dark:text-amber-400" title="내려받은 뒤 시스템에서 고친 정책 — 파일은 옛 내용이라 시스템 수정본을 그대로 둬요">
+                구버전 — 건너뜀 <b>{preview.stale.length}</b>
+              </span>
+            )}
+            {preview.conflicts.length > 0 && (
+              <span className="text-rose-600 dark:text-rose-400" title="파일과 시스템 양쪽에서 다르게 고친 정책 — 올리지 않아요. 시스템에서 직접 고쳐 주세요">
+                충돌 <b>{preview.conflicts.length}</b>
+              </span>
+            )}
             <span className="text-amber-600 dark:text-amber-400" title="이미 검토 중인 정정이 있어 올리지 않아요">검토 중이라 제외 <b>{preview.blocked.length}</b></span>
             <span className="text-slate-400" title="파일에만 있음 — 새 정책 추가는 아직 지원하지 않아요">파일에만 <b>{preview.added.length}</b></span>
             <span className="text-slate-400" title="지금 정책엔 있는데 파일엔 없음 — 지우지 않아요">파일에 없음 <b>{preview.missing.length}</b></span>
@@ -127,6 +137,11 @@ export function PolicyJsonTab({ onOpenCorrections }: { onOpenCorrections: () => 
                 </li>
               ))}
             </ul>
+          )}
+          {preview.conflicts.length > 0 && (
+            <p className="text-xs text-rose-600 dark:text-rose-400">
+              충돌: {preview.conflicts.map((c) => `${c.policy_name}(${c.file_version ? `파일 v${c.file_version} 기준 · ` : ''}지금 v${c.current_version})`).join(', ')} — 시스템에서 직접 고쳐 주세요
+            </p>
           )}
           {preview.blocked.length > 0 && (
             <p className="text-xs text-amber-600 dark:text-amber-400">
@@ -148,6 +163,11 @@ export function PolicyJsonTab({ onOpenCorrections }: { onOpenCorrections: () => 
         <div role="status" className="rounded-xl border border-slate-700 p-4 space-y-2 text-sm">
           <p className="text-slate-200">정정 요청에 {result.created.length}건 올렸어요.</p>
           {result.blocked.length > 0 && <p className="text-xs text-amber-600 dark:text-amber-400">검토 중이라 제외 {result.blocked.length}건</p>}
+          {(result.stale > 0 || result.conflicts > 0) && (
+            <p className="text-xs text-slate-500">
+              {[result.stale > 0 && `구버전 — 건너뜀 ${result.stale}건`, result.conflicts > 0 && `충돌 ${result.conflicts}건(올리지 않음)`].filter(Boolean).join(' · ')}
+            </p>
+          )}
           {result.failed.length > 0 && (
             <p className="text-xs text-rose-600 dark:text-rose-400">못 올림 {result.failed.length}건: {result.failed.map((f) => `${f.source_key} — ${f.reason}`).join('; ')}</p>
           )}

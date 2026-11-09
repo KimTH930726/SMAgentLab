@@ -12,6 +12,9 @@
 - 비교 단위 = 원천 키. 원문·비고만 비교·반영한다(정책명·절 경로 변경은 가져오지 않고 미리보기에 따로 보여 준다).
   unchanged(같음) · changed(원문/비고 다름) · added(파일에만 — 지금은 새 정책 제안 경로가 없어 보고만) · missing(DB에만 — 보고만, 지우지 않음)
   · blocked(이미 검토 중 정정이 있음 — 한 정책엔 대기 정정 하나).
+  · stale(구버전 — 파일은 옛 버전 그대로, 그 뒤 시스템에서 고침 → 건너뜀) · conflicts(충돌 — 파일·시스템 양쪽에서 고침 → 올리지 않음).
+  기준 버전 = 내려받기가 정책마다 적은 version(없으면 옛 버전들과 내용 대조). 정책은 시스템이 기준(10/23)이라 옛 파일 한 번으로
+  승인된 정정이 되돌아가지 않게(11/09 정책 관리 검수 후속).
 - 반영 가드: 미리보기의 doc_hash(파일 그대로의 해시)·plan_hash(바뀐 목록 + 각 정책의 지금 원문 해시)를 반영 때 다시 계산해
   다르면 409 — 미리보기 뒤 파일이나 정책이 바뀌었으면 보지 못한 안이 올라가지 않게.
 """
@@ -57,6 +60,11 @@ def _body_key(s) -> list[str]:
     """원문 "같음" 기준 — 정정 원장의 같음 판정(draft._unmarked_equal: 줄 안 띄어쓰기·빈 줄·앞뒤 공백 무시, 줄 구조는 비교)과 맞춘다.
     다르면 편집기가 줄 끝 공백만 지운 파일이 미리보기엔 "바뀜"인데 반영 땐 "바뀐 내용 없음"으로 전부 실패했다(10/21 리뷰 L1)."""
     return [re.sub(r"[ \t]+", "", ln) for ln in _body(s).strip().splitlines() if ln.strip()]
+
+
+def _version(v) -> Optional[int]:
+    """파일의 정책 버전(내려받기가 적어 둔 것) — 정수가 아니면 없음으로(손으로 고친 파일·팀원 파일)."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
 
 
 def content_hash(raw_body, remark) -> str:
@@ -113,7 +121,7 @@ def parse_import(content: str) -> dict:
             recs.append({"source_key": str(p["source_key"]).strip(), "raw_body": _body(p.get("raw_body")),
                          "remark": _remark(p.get("remark")), "has_remark": "remark" in p,
                          "policy_name": p.get("policy_name"), "category_path": p.get("category_path"),
-                         "doc_id": None, "part": None})
+                         "doc_id": None, "part": None, "version": _version(p.get("version"))})
         out = {"format": "thin", "domain": doc.get("domain"), "records": recs}
     else:
         out = {"format": "team", "domain": None, "records": _parse_team(content)}
@@ -150,7 +158,7 @@ def _parse_team(content: str) -> list[dict]:
     build_policies({"documents": [{"document_id": d, "source_file": ""} for d in docs], "policies": lines}, plan)
     part_of = {p["policy_id"]: part_name(p["domain"]) if p.get("domain") else None for p in lines}
     return [{"source_key": r.source_key, "raw_body": _body(r.raw_body), "remark": _remark(r.remark), "has_remark": True,
-             "policy_name": r.policy_name, "category_path": r.category_path, "doc_id": r.doc_id, "part": part_of.get(r.source_key)}
+             "policy_name": r.policy_name, "category_path": r.category_path, "doc_id": r.doc_id, "part": part_of.get(r.source_key), "version": None}
             for r in plan.policies]
 
 
@@ -158,14 +166,52 @@ def _parse_team(content: str) -> list[dict]:
 
 async def _current(conn, ns_id: int) -> list:
     return await conn.fetch(
-        "SELECT i.id AS item_id, i.logical_id, i.source_key, i.policy_name, i.category_path, i.raw_body, i.remark, "
+        "SELECT i.id AS item_id, i.logical_id, i.version, i.source_key, i.policy_name, i.category_path, i.raw_body, i.remark, "
         f"({open_correction_sql('i.id', '$2')}) AS open_correction_id "
         "FROM policy_item i WHERE i.namespace_id = $1 AND i.status = 'active' AND i.source_key IS NOT NULL", ns_id, list(POLICY_OPEN_TARGETS))
 
 
-def classify(namespace: str, parsed: dict, current: list) -> dict:
-    """DB 현행(current 행들)과 파일 비교 — 순수 함수(테스트가 바로 부른다). 바뀐 것의 새 원문·비고는 _apply용으로 함께 돌려준다."""
+async def _history(conn, logical_ids: list[int]) -> list:
+    """현행이었던 적이 있는 버전들(현행 + 정정 승인으로 내려간 것) — 파일이 어느 버전에서 나왔나(기준) 찾기용.
+    반려(rejected)·검토 대기 버전은 현행이었던 적이 없어 기준이 될 수 없다."""
+    return await conn.fetch(
+        "SELECT logical_id, version, raw_body, remark FROM policy_item "
+        "WHERE logical_id = ANY($1::int[]) AND status IN ('active', 'deprecated')", logical_ids)
+
+
+def _base_state(r: dict, c, versions: list) -> tuple[str, Optional[int]]:
+    """3-way 비교(기준 · 파일 · 지금) — "normal"(지금 = 기준: 파일에서만 고침) · "stale"(파일 = 옛 버전: 시스템에서만 고침 → 건너뜀)
+    · "conflict"(양쪽에서 고침 → 올리지 않음). 두 번째 값 = 파일의 기준 버전(모르면 None).
+    기준: 내려받은 파일은 정책마다 적힌 version. 그 버전이 없거나(팀원 파일·손으로 지움) 못 찾으면 — 파일이 옛 버전 중 하나와 같으면 그 버전이
+    기준(옛 파일), 처음 보는 내용인데 시스템에서 원문·비고를 고친 적이 있으면 충돌, 없으면 normal.
+    "시스템에서 고쳤나"는 버전 번호가 아니라 **내용**으로 — 분류 옮기기·파라미터만 정정은 원문·비고 그대로 버전만 올린다(리뷰 M1 11/09)."""
+    cur_ver = c.get("version") or 1
+    cur_hash = content_hash(c["raw_body"], c["remark"])
+
+    def same(v) -> bool:   # 파일에 비고 칸이 없으면 그 버전의 비고로 본다(바뀜 판정의 new_remark와 같은 규칙)
+        return content_hash(r["raw_body"], r["remark"] if r["has_remark"] else _remark(v["remark"])) == content_hash(v["raw_body"], v["remark"])
+
+    # 지금과 내용이 다른 옛 버전만 — 지금과 같은 내용의 옛 버전은 "시스템에서 고친 것"이 아니다
+    past = sorted((v for v in versions if v["version"] < cur_ver and content_hash(v["raw_body"], v["remark"]) != cur_hash),
+                  key=lambda v: -v["version"])
+    base = next((v for v in versions if v["version"] == r.get("version")), None) if r.get("version") else None
+    if base is not None:
+        if content_hash(base["raw_body"], base["remark"]) == cur_hash:
+            return "normal", base["version"]
+        return ("stale" if same(base) else "conflict"), base["version"]
+    hit = next((v for v in past if same(v)), None)
+    if hit is not None:
+        return "stale", hit["version"]
+    return ("conflict" if past else "normal"), None
+
+
+def classify(namespace: str, parsed: dict, current: list, history: Optional[list] = None) -> dict:
+    """DB 현행(current 행들)과 파일 비교 — 순수 함수(테스트가 바로 부른다). 바뀐 것의 새 원문·비고는 _apply용으로 함께 돌려준다.
+    history = 현행이었던 버전들(_history) — 파일이 나온 버전(기준)과 비교해 시스템 수정을 옛 파일로 되돌리지 않는다(11/09, 3-way)."""
     cur = {r["source_key"]: r for r in current}
+    versions: dict[int, list] = {}
+    for v in history or []:
+        versions.setdefault(v["logical_id"], []).append(v)
     recs = parsed["records"]
     other = 0
     if parsed["format"] == "thin":
@@ -179,7 +225,7 @@ def classify(namespace: str, parsed: dict, current: list) -> dict:
         recs = mine
         if not recs:
             raise ValueError(f"파일에 이 업무 영역({namespace})의 정책이 없어요.")
-    unchanged, changed, added, blocked, ignored = 0, [], [], [], []
+    unchanged, changed, added, blocked, ignored, stale, conflicts = 0, [], [], [], [], [], []
     seen = set()
     for r in recs:
         seen.add(r["source_key"])
@@ -197,6 +243,12 @@ def classify(namespace: str, parsed: dict, current: list) -> dict:
         if before == after:
             unchanged += 1
             continue
+        state, file_ver = _base_state(r, c, versions.get(c["logical_id"], []))
+        if state != "normal":
+            (stale if state == "stale" else conflicts).append(
+                {"source_key": r["source_key"], "logical_id": c["logical_id"], "policy_name": c["policy_name"],
+                 "file_version": file_ver, "current_version": c.get("version") or 1, "before_hash": before})
+            continue
         base = {"source_key": r["source_key"], "logical_id": c["logical_id"], "item_id": c["item_id"],
                 "policy_name": c["policy_name"], "before_hash": before, "after_hash": after}
         if c["open_correction_id"]:
@@ -208,10 +260,12 @@ def classify(namespace: str, parsed: dict, current: list) -> dict:
     missing = [{"source_key": k, "logical_id": c["logical_id"], "policy_name": c["policy_name"]}
                for k, c in cur.items() if k not in seen]
     plan_hash = _sha(json.dumps([[c["source_key"], c["before_hash"], c["after_hash"]] for c in changed]
-                                + [["blocked", b["source_key"], b["correction_id"]] for b in blocked], ensure_ascii=False))[:32]
+                                + [["blocked", b["source_key"], b["correction_id"]] for b in blocked]
+                                + [[k, x["source_key"], x["before_hash"]] for k, xs in (("stale", stale), ("conflict", conflicts)) for x in xs],
+                                ensure_ascii=False))[:32]
     return {"format": parsed["format"], "domain": namespace, "total": len(recs), "other_domain": other,
             "unchanged": unchanged, "changed": changed, "added": added, "missing": missing, "blocked": blocked,
-            "ignored_fields": ignored, "plan_hash": plan_hash}
+            "stale": stale, "conflicts": conflicts, "ignored_fields": ignored, "plan_hash": plan_hash}
 
 
 def _public(result: dict) -> dict:
@@ -225,7 +279,8 @@ async def _diff(namespace: str, content: str) -> dict:
         if ns_id is None:
             raise ValueError(f"업무 영역을 찾을 수 없습니다: {namespace}")
         current = await _current(conn, ns_id)
-    out = classify(namespace, parsed, current)
+        history = await _history(conn, [r["logical_id"] for r in current])
+    out = classify(namespace, parsed, current, history)
     out["doc_hash"] = _sha(content)
     return out
 
@@ -256,4 +311,5 @@ async def apply(namespace: str, user: dict, content: str, doc_hash: str, plan_ha
     if failed:
         logger.warning("[정책 JSON] %s: 제안 못 만든 정책 %d건", namespace, len(failed))
     return {"created": created, "blocked": result["blocked"] + blocked, "failed": failed,
-            "added_skipped": len(result["added"]), "missing": len(result["missing"]), "unchanged": result["unchanged"]}
+            "added_skipped": len(result["added"]), "missing": len(result["missing"]), "unchanged": result["unchanged"],
+            "stale": len(result["stale"]), "conflicts": len(result["conflicts"])}

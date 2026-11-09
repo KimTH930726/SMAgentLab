@@ -298,8 +298,8 @@ class TestCorrectionQueueExcludesSourceChecks:
 
 # ── JSON: 내려받기·읽기·비교 ────────────────────────────────────────────────
 
-def _cur(sk, lid, body, remark=None, open_id=None, name=None, path=("1. 가",)):
-    return {"item_id": lid * 10, "logical_id": lid, "source_key": sk, "policy_name": name or f"정책{lid}",
+def _cur(sk, lid, body, remark=None, open_id=None, name=None, path=("1. 가",), version=1):
+    return {"item_id": lid * 10, "logical_id": lid, "version": version, "source_key": sk, "policy_name": name or f"정책{lid}",
             "category_path": path, "raw_body": body, "remark": remark, "open_correction_id": open_id}
 
 
@@ -517,6 +517,94 @@ def _fake_improvement(side_effects):
     return m
 
 
+def _hist(lid, *bodies, remark=None):
+    """logical_id의 현행이었던 버전들 — bodies[i] = v(i+1) 원문(마지막이 현행)."""
+    return [{"logical_id": lid, "version": i + 1, "raw_body": b, "remark": remark} for i, b in enumerate(bodies)]
+
+
+class TestThreeWay:
+    """파일이 나온 버전(기준) · 파일 · 지금을 같이 본다(11/09) — 옛 파일로 시스템 수정을 되돌리지 않게."""
+
+    CUR = [_cur("pol_a", 1, "v3 원문", version=3)]
+    HIST = _hist(1, "v1 원문", "v2 원문", "v3 원문")
+
+    def _one(self, rec, cur=None, hist=None):
+        out = json_io.classify("ns", json_io.parse_import(_thin([{"source_key": "pol_a", "remark": None, **rec}])),
+                               cur or self.CUR, self.HIST if hist is None else hist)
+        for k, xs in (("changed", out["changed"]), ("stale", out["stale"]), ("conflict", out["conflicts"]), ("blocked", out["blocked"])):
+            if xs:
+                return k, xs[0]
+        return ("unchanged", None) if out["unchanged"] else ("other", None)
+
+    @pytest.mark.parametrize("rec, want, file_ver", [
+        ({"version": 3, "raw_body": "파일에서 고침"}, "changed", None),      # 지금 = 기준 → 파일에서만 고침
+        ({"version": 3, "raw_body": "v3 원문"}, "unchanged", None),
+        ({"version": 1, "raw_body": "v1 원문"}, "stale", 1),                 # 파일 = 기준(v1), 그 뒤 시스템에서 v3까지 → 건너뜀
+        ({"version": 1, "raw_body": "파일에서 고침"}, "conflict", 1),        # 양쪽에서 고침
+        ({"raw_body": "v2 원문"}, "stale", 2),                               # 버전 없음(팀원·손으로 지움) — 옛 버전과 같으면 구버전
+        ({"raw_body": "파일에서 고침"}, "conflict", None),                   # 버전 없음 + 시스템에서 고친 적 있음 → 충돌
+        ({"version": 99, "raw_body": "v1 원문"}, "stale", 1),                # 없는 버전 번호 → 내용 대조로
+        ({"version": True, "raw_body": "v1 원문"}, "stale", 1),              # 정수가 아닌 버전은 없음으로
+    ])
+    def test_cases(self, rec, want, file_ver):
+        kind, row = self._one(rec)
+        assert kind == want
+        if kind in ("stale", "conflict"):
+            assert row["file_version"] == file_ver and row["current_version"] == 3 and row["policy_name"] == "정책1"
+
+    def test_never_edited_policy_without_version_is_normal_change(self):
+        assert self._one({"raw_body": "새 원문"}, cur=[_cur("pol_a", 1, "원문")], hist=_hist(1, "원문"))[0] == "changed"
+
+    def test_remark_absent_compares_with_that_versions_remark(self):
+        hist = _hist(1, "v1 원문", "v2 원문", remark="비고")
+        cur = [_cur("pol_a", 1, "v2 원문", "비고", version=2)]
+        out = json_io.classify("ns", json_io.parse_import(_thin([{"source_key": "pol_a", "raw_body": "v1 원문", "version": 1}])), cur, hist)
+        assert [s["source_key"] for s in out["stale"]] == ["pol_a"] and not out["changed"]
+
+    def test_stale_and_conflict_are_not_blocked_and_move_plan_hash(self):
+        cur = [_cur("pol_a", 1, "v3 원문", open_id=55, version=3)]
+        kind, _ = self._one({"version": 1, "raw_body": "v1 원문"}, cur=cur)
+        assert kind == "stale"                                   # 검토 중이어도 옛 파일은 그냥 건너뜀
+        p = json_io.parse_import(_thin([{"source_key": "pol_a", "raw_body": "파일에서 고침", "version": 1}]))
+        h1 = json_io.classify("ns", p, self.CUR, self.HIST)["plan_hash"]
+        moved = [_cur("pol_a", 1, "v4 원문", version=4)]
+        assert json_io.classify("ns", p, moved, self.HIST + _hist(1, "", "", "", "v4 원문")[3:])["plan_hash"] != h1
+
+    def test_property_no_silent_revert_and_one_bucket_each(self):
+        """무작위 이력·파일 — ① 파일 항목은 정확히 한 칸 ② 기준 버전을 모르는 파일은 옛 버전 내용으로 되돌리는 정정을 만들지 않는다
+        ③ 기준 버전이 적힌 파일의 '바뀜'은 기준 내용 = 지금 내용일 때만 ④ 시스템에서 내용을 바꾼 적이 없으면(버전만 오름 — 옮기기·파라미터
+        정정) 구버전·충돌이 생기지 않는다(리뷰 M1 — 버전 번호로 판단하던 것을 못 잡았던 성질). 같은 글자 연속 버전이 자주 나오게 글자 3개."""
+        import random
+        rng = random.Random(11)
+        texts = ["가", "나", "다"]
+        for _ in range(1000):
+            n = rng.randint(1, 4)
+            bodies = [rng.choice(texts) for _ in range(n)]
+            cur = [_cur("pol_a", 1, bodies[-1], version=n)]
+            hist = _hist(1, *bodies)
+            rec = {"source_key": "pol_a", "raw_body": rng.choice(texts + ["새"]), "remark": None}
+            if rng.random() < 0.6:
+                rec["version"] = rng.randint(1, n + 1)
+            out = json_io.classify("ns", json_io.parse_import(_thin([rec])), cur, hist)
+            buckets = out["unchanged"] + len(out["changed"]) + len(out["stale"]) + len(out["conflicts"]) + len(out["blocked"])
+            assert buckets == 1
+            v = rec.get("version")
+            if out["changed"]:
+                if v is not None and v <= n:
+                    assert bodies[v - 1] == bodies[-1]
+                else:
+                    assert rec["raw_body"] not in set(bodies[:-1]) - {bodies[-1]}
+            if len(set(bodies)) == 1:
+                assert not out["stale"] and not out["conflicts"]
+
+    @pytest.mark.parametrize("rec", [{"version": 1, "raw_body": "파일에서 고침"}, {"raw_body": "파일에서 고침"}])
+    def test_version_bump_without_content_change_is_not_conflict(self, rec):
+        """분류 옮기기·파라미터만 정정 = 원문·비고 그대로 버전만 오름 → 파일에서 고친 건 정상 '바뀜'(리뷰 M1 재현)."""
+        hist = _hist(1, "원문", "원문")
+        assert self._one(rec, cur=[_cur("pol_a", 1, "원문", version=2)], hist=hist)[0] == "changed"
+
+
+
 class TestApply:
     def _content(self):
         recs = _export_of(CURRENT)
@@ -545,6 +633,7 @@ class TestApply:
         assert calls[0].kwargs["item_id"] == 10 and calls[0].kwargs["proposed"] == {"raw_body": "원문 A 개정", "remark": "비고 A"}
         assert calls[0].kwargs["user_input"] == "JSON 가져오기 — rev.json"
         assert out["created"] == [{"source_key": "pol_a", "logical_id": 1, "correction_id": 501}]
+        assert (out["stale"], out["conflicts"]) == (0, 0)
         assert {"source_key": "pol_b", "logical_id": 2, "correction_id": 77} in out["blocked"]
         # 정책 테이블엔 직접 안 쓴다 — 가져오기 모듈은 읽기만
         c.execute.assert_not_awaited()

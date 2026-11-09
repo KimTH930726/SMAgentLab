@@ -816,6 +816,8 @@ VOC 반복 묶기(`service/email_voc/pattern_detection.py`, 11/03): 요약 임�
    ├─ POST /api/policy/json/preview {namespace, content}: 얇은 형식 또는 팀원 policies.jsonl(v0_convert.build_policies로 같은 정리)
    │     → 원천 키로 비교(원문·비고만): 같음 · 바뀜 · 파일에만(보고만 — 새 정책은 화면의 추가 제안으로) · DB에만(보고만, 지우지 않음)
    │       · 검토 중이라 제외(대기 정정 있음) · 이름·경로 변경(가져오지 않음, 보고만) + doc_hash(파일) · plan_hash(바뀐 목록·지금 원문 해시)
+   │       · 3-way(v2.224): 기준 = 파일이 나온 버전(정책별 version, 없으면 현행이었던 옛 버전과 내용 대조) — 파일 = 기준·지금 다름
+   │         → 구버전(건너뜀) · 양쪽 다름 → 충돌(올리지 않음, 목록만) · 지금 = 기준 → 위 바뀜/검토 중
    └─ POST /api/policy/json/apply {…, doc_hash, plan_hash}: 다시 계산해 다르면 409 → 바뀐 정책마다 정정 제안 1건
          (create_policy_proposal mode json_import — 직접 수정처럼 받은 원문·비고 그대로, AI 없음, 정책 테이블엔 안 씀)
          → §6-1 정정 요청(출처 "JSON 가져오기")에서 승인(일괄 승인 포함) = 새 버전

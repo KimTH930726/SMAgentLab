@@ -191,6 +191,8 @@ export interface PolicyJsonExport {
 }
 
 interface ImportRef { source_key: string; logical_id: number; policy_name: string }
+/** file_version = 파일이 나온 버전(모르면 null) */
+type VersionRef = ImportRef & { file_version: number | null; current_version: number };
 
 export interface PolicyJsonPreview {
   format: 'thin' | 'team';
@@ -203,6 +205,10 @@ export interface PolicyJsonPreview {
   added: { source_key: string; policy_name: string | null }[];
   missing: ImportRef[];
   blocked: (ImportRef & { correction_id: number })[];
+  /** 구버전 — 파일은 옛 버전 그대로, 그 뒤 시스템에서 고침(건너뜀) */
+  stale: VersionRef[];
+  /** 충돌 — 파일·시스템 양쪽에서 고침(올리지 않음) */
+  conflicts: VersionRef[];
   ignored_fields: { source_key: string; logical_id: number; fields: string[] }[];
   doc_hash: string;
   plan_hash: string;
@@ -215,6 +221,8 @@ export interface PolicyJsonApplyResult {
   added_skipped: number;
   missing: number;
   unchanged: number;
+  stale: number;
+  conflicts: number;
 }
 
 export async function exportPolicyJson(namespace: string): Promise<PolicyJsonExport> {
