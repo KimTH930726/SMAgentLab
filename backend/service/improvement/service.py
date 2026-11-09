@@ -21,6 +21,7 @@ from core.config import settings
 from core.database import get_conn, resolve_namespace_id, scope_ids_same_owner_subquery
 from shared.embedding import embedding_service
 from service.improvement import draft as draft_mod
+from service.policy.param_derive import value_in_text
 from service.policy.visibility import (
     KIND_SOURCE_CHECK, PIPELINE_WHOLE, POLICY_CHANGE_TARGETS, POLICY_OPEN_TARGETS, POLICY_TARGETS, SOURCE_JSON_IMPORT,
     is_searchable, open_correction_sql, searchable_sql,
@@ -1193,12 +1194,22 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
         next_version, old["id"], old["parse_status"], old["unresolved_segments"],
         approver.get("id"), old["pipeline_version"], old.get("source_key"))   # 원천 키 유지 — 골든셋 정답·재적재 대조가 새 버전에서도 찾게(리뷰 M1)
 
+    stale = 0
     for p in await conn.fetch("SELECT * FROM policy_param WHERE policy_item_id = $1 ORDER BY id", old["id"]):
-        src = proposed if (item["target_type"] == "policy_param" and p["id"] == item["target_sub_id"]) else p
+        target = item["target_type"] == "policy_param" and p["id"] == item["target_sub_id"]
+        src = proposed if target else p
+        # 원문을 고치면 옛 값이 원문에서 사라질 수 있다 — 원문에 글자로 없는 파라미터는 새 버전에 안 옮긴다(파생 기준 = 값은 원문에 있음,
+        # param_derive). 원문이 그대로면 대조 안 함(옛 동작 그대로). 사람이 고친 정정 대상은 그대로. 새 값은 derive_policy_params.py
+        # extract → load를 다시 돌리면 채워진다(load는 이전 버전보다 적어진 정책에만 빠진 개수까지 없는 값을 더함, 11/09)
+        if not target and p["value"] and new_raw != old["raw_body"] and not value_in_text(p["value"], new_raw):
+            stale += 1
+            continue
         await conn.execute(
             "INSERT INTO policy_param (policy_item_id, name, condition, value, unit, external_source) "
             "VALUES ($1, $2, $3, $4, $5, $6)",
             new_id, src["name"] or "", src.get("condition"), src.get("value"), src.get("unit"), p["external_source"])
+    if stale:
+        logger.info("[정정 승인] 정책 %s v%s: 원문에 없어진 파라미터 %d건은 옮기지 않음", old["logical_id"], next_version, stale)
 
     for c in chunks:
         if c["id"] not in prepared:

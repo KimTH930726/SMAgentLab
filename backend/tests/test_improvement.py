@@ -23,6 +23,7 @@ def _load(name, rel):
 draft = _load("service.improvement.draft", "service/improvement/draft.py")
 sys.modules["service.improvement"].draft = draft
 svc = _load("service.improvement.service", "service/improvement/service.py")
+value_in_text = svc.value_in_text
 
 
 @pytest.fixture(autouse=True)
@@ -323,7 +324,7 @@ class TestApplyPolicy:
                     "source_row": 2, "content_hash": "h", "logical_id": 10, "version": 1, "parse_status": "parsed",
                     "unresolved_segments": None, "pipeline_version": "r1-x", "source_key": "pol_abc"}
         params = [{"id": 100, "name": "기한", "condition": None, "value": "7", "unit": "일", "external_source": None},
-                  {"id": 101, "name": "대상", "condition": None, "value": "전체", "unit": None, "external_source": None}]
+                  {"id": 101, "name": "기준", "condition": None, "value": "이내", "unit": None, "external_source": None}]
         chunks = [{"id": 200, "chunk_text": "기한 (반품): 7일 이내", "chunk_idx": 0}]
         conn.fetchrow = AsyncMock(return_value=old_item)
         # 첫 fetchval = 다음 버전 번호(MAX+1, 10/21), 둘째 = 새 버전 INSERT
@@ -346,10 +347,60 @@ class TestApplyPolicy:
         assert "source_key" in ins[0] and ins[-1] == "pol_abc"   # 새 버전도 원천 키 유지(리뷰 M1 — 골든셋 정답이 새 버전을 찾게)
         calls = [c.args for c in conn.execute.await_args_list]
         param_inserts = [c for c in calls if "INSERT INTO policy_param" in c[0]]
-        assert [c[4] for c in param_inserts] == ["14", "전체"]  # 대상만 교체
+        assert [c[4] for c in param_inserts] == ["14", "이내"]  # 대상만 교체
         chunk_insert = next(c for c in calls if "INSERT INTO policy_chunk" in c[0])
         assert chunk_insert[2] == "기한 (반품): 14일 이내"  # 폴백 청크 재생성
         assert any("status = 'deprecated'" in c[0] and c[1] == 10 for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_text_edit_drops_params_no_longer_in_text(self):
+        """원문만 고친 정정(서술) — 원문에서 사라진 값의 파라미터는 새 버전에 안 옮긴다(옛 값이 검색 근거로 남지 않게, 11/09).
+        성질: 옮긴 값은 모두 새 원문에 있다 · 옮긴 것 + 뺀 것 = 원래 파라미터."""
+        conn = _conn()
+        old_item = {"id": 10, "namespace_id": 1, "status": "active", "system_key": "", "category_path": ["배송"], "policy_name": "무료배송",
+                    "raw_body": "30,000원 이상 무료, 도서 2개 이상", "remark": None, "source_file": None, "source_sheet": None,
+                    "source_row": None, "content_hash": "h", "logical_id": 10, "version": 1, "parse_status": "parsed",
+                    "unresolved_segments": None, "pipeline_version": svc.PIPELINE_WHOLE, "source_key": "pol_x"}
+        params = [{"id": 100, "name": "무료배송 기준 금액", "condition": None, "value": "30,000", "unit": "원", "external_source": None},
+                  {"id": 101, "name": "도서 개수", "condition": "도서", "value": "2", "unit": "개", "external_source": None},
+                  {"id": 102, "name": "빈 값", "condition": None, "value": None, "unit": None, "external_source": None}]
+        chunks = [{"id": 200, "chunk_text": old_item["raw_body"], "chunk_idx": 0}]
+        conn.fetchrow = AsyncMock(return_value=old_item)
+        conn.fetchval = AsyncMock(side_effect=[2, 11])
+        conn.fetch = AsyncMock(side_effect=[chunks, params])
+        conn.execute = AsyncMock()
+        new_raw = "50,000원 이상 무료, 도서 2개 이상"
+        item = {"target_id": 10, "target_type": "policy_narrative", "target_sub_id": 200}
+        proposed = {"chunk_text": new_raw, "raw_body": new_raw}
+        rewrites = svc._policy_chunk_rewrites(old_item, chunks, item, proposed)
+        await svc._apply_policy(conn, 1, item, proposed, {"id": 1}, {c: (t, [0.1]) for c, t in rewrites.items()})
+        kept = [c.args for c in conn.execute.await_args_list if "INSERT INTO policy_param" in c.args[0]]
+        assert [c[4] for c in kept] == ["2", None]   # 30,000은 새 원문에 없음 → 뺌, 값 없는 항목은 대조 대상 아님
+        assert all(v is None or value_in_text(v, new_raw) for v in (c[4] for c in kept))
+        dropped = [p for p in params if p["value"] and not value_in_text(p["value"], new_raw)]
+        assert len(kept) + len(dropped) == len(params) and len(dropped) == 1
+
+    @pytest.mark.asyncio
+    async def test_unchanged_text_copies_all_params(self):
+        """원문이 그대로인 정정(비고만 등)은 원문에 글자로 없는 옛 파라미터도 그대로 옮긴다 — 대조는 원문이 바뀔 때만."""
+        conn = _conn()
+        raw = "7일 이내"
+        old_item = {"id": 10, "namespace_id": 1, "status": "active", "system_key": "", "category_path": [], "policy_name": "p",
+                    "raw_body": raw, "remark": None, "source_file": None, "source_sheet": None, "source_row": None, "content_hash": "h",
+                    "logical_id": 10, "version": 1, "parse_status": "parsed", "unresolved_segments": None,
+                    "pipeline_version": svc.PIPELINE_WHOLE, "source_key": "pol_x"}
+        params = [{"id": 100, "name": "대상", "condition": None, "value": "전체", "unit": None, "external_source": None}]
+        chunks = [{"id": 200, "chunk_text": raw, "chunk_idx": 0}]
+        conn.fetchrow = AsyncMock(return_value=old_item)
+        conn.fetchval = AsyncMock(side_effect=[2, 11])
+        conn.fetch = AsyncMock(side_effect=[chunks, params])
+        conn.execute = AsyncMock()
+        item = {"target_id": 10, "target_type": "policy_narrative", "target_sub_id": 200}
+        proposed = {"chunk_text": raw, "raw_body": raw, "remark": "비고만"}
+        rewrites = svc._policy_chunk_rewrites(old_item, chunks, item, proposed)
+        await svc._apply_policy(conn, 1, item, proposed, {"id": 1}, {c: (t, [0.1]) for c, t in rewrites.items()})
+        kept = [c.args for c in conn.execute.await_args_list if "INSERT INTO policy_param" in c.args[0]]
+        assert [c[4] for c in kept] == ["전체"]
 
     @pytest.mark.asyncio
     async def test_original_changed_after_prepare_is_rejected(self):

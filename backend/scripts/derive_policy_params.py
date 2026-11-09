@@ -5,7 +5,7 @@
 
 extract: 숫자가 있는 현행 정책마다 로컬 LLM이 파라미터를 뽑고(원문은 로컬 LLM에만), 값이 원문에 글자로 없는 건 버린다(param_derive.validate_params).
          결과는 파일(eval_out, git 제외) — 이어서 실행 가능(이미 한 정책은 건너뜀). 출력은 개수만.
-load:    파일을 DB에 넣는다 — 그 정책에 파라미터가 이미 있으면 건너뜀(사람이 고친 값 보호), 현행이 아닌 정책도 건너뜀. 운영 반영 전에는
+load:    파일을 DB에 넣는다 — 그 정책에 파라미터가 이미 있으면 건너뜀(사람이 고친 값 보호 · 다른 실행 결과와 섞지 않음 — 단 정정 승인이 옛 값을 빼 이전 버전보다 적으면 빠진 개수까지만 없는 값을 더함), 현행이 아닌 정책도 건너뜀. 운영 반영 전에는
          사본 DB(opsdb_exp)에서만 — 측정·게이트를 통과한 뒤에만 실제 DB에(사람 승인).
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ sys.path.insert(0, "/app")
 import logging  # noqa: E402
 logging.disable(logging.INFO)
 
-from service.policy.param_derive import DERIVE_SYSTEM, parse_params, validate_params  # noqa: E402
+from service.policy.param_derive import DERIVE_SYSTEM, missing_params, parse_params, validate_params  # noqa: E402
 
 
 async def extract(out: Path, limit: int, concurrency: int) -> None:
@@ -79,21 +79,28 @@ async def load(inp: Path, target: str | None) -> None:
     print(f"적재 대상 DB: {db}")
     rows = [json.loads(l) for l in inp.read_text(encoding="utf-8").splitlines() if l.strip()]
     await init_pool()
-    n_ins = n_skip_has = n_skip_inactive = n_bad = 0
+    n_ins = n_skip_has = n_skip_inactive = n_bad = n_refill = 0
     try:
         async with get_conn() as conn:
             async with conn.transaction():
                 for r in rows:
-                    cur = await conn.fetchrow("SELECT status, raw_body, (SELECT count(*) FROM policy_param p WHERE p.policy_item_id = $1) AS n "
-                                              "FROM policy_item WHERE id = $1", r["policy_id"])
+                    cur = await conn.fetchrow("SELECT status, raw_body, (SELECT count(*) FROM policy_param p WHERE p.policy_item_id = $1) AS n, "
+                                              "(SELECT count(*) FROM policy_param p WHERE p.policy_item_id = i.supersedes_id) AS n_prev "
+                                              "FROM policy_item i WHERE id = $1", r["policy_id"])
                     if not cur or cur["status"] != "active":
                         n_skip_inactive += 1
                         continue
-                    if cur["n"]:
-                        n_skip_has += 1   # 이미 파라미터가 있음(사람이 고친 값일 수 있음) — 덮지 않는다
+                    if cur["n"] and cur["n"] >= cur["n_prev"]:
+                        n_skip_has += 1   # 이미 파라미터가 있음(사람이 고친 값일 수 있음 · 다른 실행 결과와 섞지 않음) — 덮지 않는다
                         continue
-                    keep, drop = validate_params(r["params"], cur["raw_body"])   # 넣을 때 다시 대조 — 그 사이 원문이 바뀌었으면 버린다
-                    n_bad += len(drop)
+                    if cur["n"]:
+                        # 정정 승인이 원문에서 사라진 옛 값만 뺀 새 버전(이전 버전보다 적음, 11/09) — 있는 건 두고 빠진 개수까지만 없는 값을 더한다
+                        have = [v["value"] for v in await conn.fetch("SELECT value FROM policy_param WHERE policy_item_id = $1", r["policy_id"])]
+                        keep = missing_params(r["params"], have, cur["raw_body"])[: cur["n_prev"] - cur["n"]]
+                        n_refill += 1
+                    else:
+                        keep, drop = validate_params(r["params"], cur["raw_body"])   # 넣을 때 다시 대조 — 그 사이 원문이 바뀌었으면 버린다
+                        n_bad += len(drop)
                     for p in keep:
                         await conn.execute("INSERT INTO policy_param (policy_item_id, name, condition, value, unit) VALUES ($1, $2, $3, $4, $5)",
                                            r["policy_id"], p["name"], p.get("condition"), p["value"], p.get("unit"))
@@ -112,7 +119,7 @@ async def load(inp: Path, target: str | None) -> None:
                     print("파생 실행 표시 남김 — 대상 정책 전부 처리됨")
     finally:
         await close_pool()
-    print(f"적재(DB {db}): 넣은 값 {n_ins} · 이미 파라미터 있어 건너뜀 {n_skip_has}개 정책 · 현행 아님 {n_skip_inactive} · 원문이 바뀌어 버림 {n_bad}")
+    print(f"적재(DB {db}): 넣은 값 {n_ins} · 이미 파라미터 있어 건너뜀 {n_skip_has}개 정책 · 정정으로 빠진 값 채움 {n_refill}개 정책 · 현행 아님 {n_skip_inactive} · 원문이 바뀌어 버림 {n_bad}")
 
 
 def main() -> int:

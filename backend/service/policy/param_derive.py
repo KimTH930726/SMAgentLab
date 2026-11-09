@@ -109,6 +109,16 @@ def parse_params(text: str) -> list[dict[str, Any]]:
     return out
 
 
+def missing_params(candidates: list[dict[str, Any]], existing_values: list[str], raw_body: str) -> list[dict[str, Any]]:
+    """이미 파라미터가 있는 정책에 새로 뽑은 것 중 넣을 것 — 있는 값(사람이 고친 것일 수 있음)은 건드리지 않고, 같은 값(공백·쉼표 무시)은
+    다시 넣지 않고, 합쳐 최대 12개. 정정 승인으로 원문이 바뀌어 옛 값 몇 개만 빠진 정책도 다시 load하면 새 값이 채워진다(11/09 리뷰).
+    성질: 넣을 값은 모두 원문에 있다 · 있는 값과 겹치지 않는다 · 있는 것 + 넣을 것 ≤ 12."""
+    have = {_norm(v) for v in existing_values if v}
+    keep, _ = validate_params(candidates, raw_body)
+    out = [p for p in keep if _norm(p["value"]) not in have]
+    return out[: max(0, MAX_PARAMS - len(existing_values))]
+
+
 def validate_params(params: list[dict[str, Any]], raw_body: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(남길 것, 버린 것) — 값이 원문에 글자로 있는 것만(공백·쉼표는 무시: "30,000" = "30000"), 같은 (이름·조건·값)은 하나, 최대 12개.
     성질: 남긴 값은 모두 원문에 있다 · 남긴 것 + 버린 것 = 입력 · 남긴 것끼리 중복 없음."""

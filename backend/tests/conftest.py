@@ -129,7 +129,7 @@ sys.modules["service.chat.memory"] = MagicMock()
 # 정책 검색 대상 조건·정책 캐시 비우기(2026-10-21) — 여러 모듈(search·keyword_index·category_list·scope·catalog·admin·improvement)이
 # import하는 잎 모듈이라 실제 파일을 등록한다. 테스트 파일들이 service.policy를 MagicMock으로 갈아 끼워도 전체 이름
 # ("service.policy.visibility")으로 sys.modules에서 바로 찾으므로 영향 없다.
-for _leaf in ("visibility", "caches"):
+for _leaf in ("visibility", "caches", "param_derive"):   # param_derive = 정정 승인이 옛 파라미터 대조에 씀(11/09)
     _leaf_name = f"service.policy.{_leaf}"
     if _leaf_name not in sys.modules:
         _leaf_spec = _ilu.spec_from_file_location(_leaf_name, str(Path(backend_dir) / "service" / "policy" / f"{_leaf}.py"))

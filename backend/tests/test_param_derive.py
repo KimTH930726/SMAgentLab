@@ -114,3 +114,20 @@ def test_value_in_text_never_accepts_value_absent_from_text():
         if pd.value_in_text(v, body):
             assert re.sub(r"\D", "", v) == digits, (v, body)
 
+
+
+def test_missing_params_adds_only_new_values_within_cap():
+    """이미 파라미터가 있는 정책(정정 승인이 옛 값만 뺀 정책) — 있는 값은 그대로, 없는 값만, 합쳐 12개까지(11/09 리뷰)."""
+    raw = "50,000원 이상 무료, 도서 2개 이상"
+    cand = [{"name": "기준 금액", "condition": None, "value": "50000", "unit": "원"},
+            {"name": "도서 수", "condition": "도서", "value": "2", "unit": "개"},
+            {"name": "지어낸 값", "condition": None, "value": "70,000", "unit": "원"}]
+    assert [p["value"] for p in pd.missing_params(cand, ["2"], raw)] == ["50000"]   # "2"는 이미 있음 · 70,000은 원문에 없음
+    assert pd.missing_params(cand, ["x"] * pd.MAX_PARAMS, raw) == []
+    rng = random.Random(7)
+    for _ in range(200):
+        have = rng.sample(["50,000", "2", "1", None], rng.randint(0, 3))
+        out = pd.missing_params(cand, have, raw)
+        assert all(pd.value_in_text(p["value"], raw) for p in out)
+        assert not {pd._norm(p["value"]) for p in out} & {pd._norm(v) for v in have if v}
+        assert len(have) + len(out) <= pd.MAX_PARAMS
