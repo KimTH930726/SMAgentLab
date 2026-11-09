@@ -17,8 +17,20 @@ class _Conn:
         self.active, self.calls = active, []
 
     async def fetch(self, sql, ids):
+        if "content_norm_md5" in sql:   # 정답과 글자까지 같은 활성 조각(11/09) — 이 시험엔 없음(아래 시험에서 따로)
+            return self.same if hasattr(self, "same") else []
         self.calls.append(ids)
         return [{"id": i, "name": n} for i, n in self.active.items() if i in ids]
+
+
+def test_identical_copy_of_gold_also_counts_as_gold(tmp_path):
+    """다른 페이지에 똑같이 실린 글(검색이 하나로 접어 어느 id가 남을지 모름)은 정답에 더한다 — 묻는 영역은 원래 정답 기준 그대로."""
+    f = tmp_path / "set.jsonl"
+    f.write_text(json.dumps({"qid": "k1-0", "ns": "A", "gold_ids": [1], "question": "q"}, ensure_ascii=False), encoding="utf-8")
+    conn = _Conn({1: "A", 7: "Z"})
+    conn.same = [{"gid": 1, "id": 7}]
+    out = asyncio.run(kes.load_items(conn, str(f)))
+    assert out[0]["gold_ids"] == [1, 7] and out[0]["ns"] == "A"
 
 
 def test_items_follow_gold_knowledge_to_current_area(tmp_path, capsys):

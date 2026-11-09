@@ -74,11 +74,12 @@ CHECKS: list[tuple[str, str, str, str, str, str]] = [
      "SELECT id, source_key FROM ref_table WHERE status = 'active' AND embedding IS NULL",
      "SELECT count(*) FROM ref_table WHERE status = 'active'"),
     # 공백·줄바꿈만 다른 것도 같은 내용(11/04 중복 판정 2단 ② — 등록 때 거부하는 기준과 같게, trustkit.ingest.dedupe.norm_text)
-    ("knowledge_dup", "지식", "같은 내용 조각이 한 컬렉션에 두 번(공백만 다른 것 포함)", "개발 규율 — 적재는 중복 0(10/07 실사고: 도입부가 두 조각에 15일)",
-     r"""SELECT k.id, NULL FROM rag_knowledge k JOIN (
-          SELECT namespace_id, md5(btrim(regexp_replace(content, '[\s ]+', ' ', 'g'))) h FROM rag_knowledge WHERE coalesce(status, 'active') = 'active'
-          GROUP BY 1, 2 HAVING count(*) > 1) d ON d.namespace_id = k.namespace_id AND d.h = md5(btrim(regexp_replace(k.content, '[\s ]+', ' ', 'g')))
-        WHERE coalesce(k.status, 'active') = 'active'""",
+    # 같은 원본(페이지·원문·등록 작업) 안에서만 센다(11/09) — 다른 페이지에 똑같이 실린 글은 페이지마다 두는 게 맞고(한쪽이 지워져도 남게)
+    # 검색이 같은 글을 하나로 접는다(retrieval.search_knowledge). 10/07 실사고(도입부가 두 조각에)도 같은 원본 안 중복이었다
+    ("knowledge_dup", "지식", "같은 원본 안에 같은 내용 조각이 두 번(공백만 다른 것 포함)", "개발 규율 — 적재는 중복 0(10/07 실사고: 도입부가 두 조각에 15일)",
+     r"""WITH a AS (SELECT id, namespace_id, coalesce('p' || confluence_page_id, 'd' || source_document_id, 'j' || ingestion_job_id, 'x') src,
+                       content_norm_md5 h FROM rag_knowledge WHERE coalesce(status, 'active') = 'active')   -- 같은 글 칸(main.py KNOWLEDGE_WS_CLASS)
+        SELECT a.id, NULL FROM a JOIN (SELECT namespace_id, src, h FROM a GROUP BY 1, 2, 3 HAVING count(*) > 1) d USING (namespace_id, src, h)""",
      "SELECT count(*) FROM rag_knowledge WHERE coalesce(status, 'active') = 'active'"),
     ("knowledge_current", "지식", "문서 조각마다 현행 하나", "원문 원장(source ledger) — 원문 = 기준, 조각 = 파생",
      """SELECT k.id, NULL FROM rag_knowledge k WHERE coalesce(k.status, 'active') = 'active' AND k.logical_document_id IS NOT NULL

@@ -728,7 +728,7 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
     setRows(chunks.map(c => ({ ...c, selected: true })));
     setExpandedIdx(new Set());
   }, [chunks]);
-  // 같은 글 조각은 배지만 — 체크를 풀지 않는다. 서버가 같은 원본 안 반복은 건너뛰고 다른 원본의 같은 글은 승인 대기로 보낸다
+  // 같은 글 조각은 배지만 — 체크를 풀지 않는다. 서버가 같은 원본 안 반복은 건너뛰고 다른 원본의 같은 글은 그대로 등록한다(검색은 한 건으로 접음, 11/09)
   // (그 원본이 지워지면 내용이 사라지므로, 독립 리뷰 H1·11/04 재리뷰). 화면이 기본으로 빼면 그 규칙을 뒤집는다
   const decide = (idx: number, patch: Partial<ReviewChunk>) => setRows(prev => prev.map(r => r.idx === idx ? { ...r, ...patch } : r));
   const cmp = comparing === null ? null : simOf(comparing);
@@ -890,7 +890,7 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
                         );
                         if (s?.same != null) return (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300" data-testid={`chunk-same-${chunk.idx}`}
-                            title="공백만 다른 같은 글이 이미 있어요 — 필요 없으면 체크를 풀어 주세요. 그대로 등록하면 같은 원본 안 반복은 건너뛰고, 다른 원본이면 승인 대기로 가요">같은 글 #{s.same}</span>
+                            title="공백만 다른 같은 글이 이미 있어요 — 필요 없으면 체크를 풀어 주세요. 그대로 등록하면 같은 원본 안 반복은 건너뛰고, 다른 원본이면 등록되지만 검색에선 한 건으로 보여요">같은 글 #{s.same}</span>
                         );
                         if (checking) return <span className="text-[10px] text-slate-500">확인 중…</span>;
                         if (!s?.matches.length) return null;

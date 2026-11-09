@@ -436,6 +436,11 @@ async def _migrate_knowledge_ingestion(conn) -> None:
     """)
 
 
+# Python str.isspace() 전체와 같은 공백 묶음(PG 정규식 대괄호) — trustkit.ingest.dedupe.norm_text와 같은 "같은 글" 판정(11/09, tests/test_realdb_retrieval_collapse)
+# 바꾸면 이미 만든 content_norm_md5 칸은 옛 식 그대로다(ADD COLUMN IF NOT EXISTS) — 칸을 DROP하고 다시 만드는 마이그레이션을 같이 넣을 것(재리뷰 참고)
+KNOWLEDGE_WS_CLASS = r"[\t\n\v\f\r\u001c-\u001f \u0085   -     　]"
+
+
 async def _migrate_duplicate_review(conn) -> None:
     """지식 중복 등록 방지 — 청크 단위 유사도 검사 + 승인 대기(pending_review) 리뷰."""
     await conn.execute("ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'")
@@ -443,6 +448,14 @@ async def _migrate_duplicate_review(conn) -> None:
     # 완전 일치 건너뜀(11/04 중복 판정 2단 ②) — 같은 글이 이미 있어 저장하지 않은 조각 수와 그 기존 지식 id(최대 50)
     await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS skipped_exact_chunks INT NOT NULL DEFAULT 0")
     await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS skipped_exact_ids INT[] NOT NULL DEFAULT '{}'")
+    # 다른 원본에 똑같은 글이라 승인 대기 없이 등록한 조각 수(11/09 ②') — 검색은 같은 글을 하나로 접는다
+    await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS cross_source_copies INT NOT NULL DEFAULT 0")
+    # 같은 글 판정 칸(11/09 리뷰 M1·L2) — 검색이 같은 글을 하나로 접을 때 행마다 정규화하면 검색이 4~5배 느려져 저장해 둔다.
+    # 공백 집합은 Python str.split()과 같게 명시(trustkit norm_text) — [[:space:]]는 로케일 따라 U+202F·U+3000 등을 빼먹는다
+    await conn.execute(
+        "ALTER TABLE rag_knowledge ADD COLUMN IF NOT EXISTS content_norm_md5 TEXT GENERATED ALWAYS AS "
+        f"(md5(btrim(regexp_replace(content, '{KNOWLEDGE_WS_CLASS}+', ' ', 'g')))) STORED")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_norm_md5 ON rag_knowledge (content_norm_md5)")
     # 원래 init/05-ingestion-job-progress.sql(수동 적용)에만 있던 컬럼 — 폐쇄망 배포 문서의
     # 전송 목록엔 init/01·02만 있어 누락될 수 있었다. 벌크 수집의 스테이징→일괄 전환이 이
     # 두 컬럼에 의존하므로(2026-09-28) 여기서도 멱등하게 보장한다.

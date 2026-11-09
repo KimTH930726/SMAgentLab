@@ -104,7 +104,7 @@ test('대량 텍스트 미리보기 — 비슷한 조각 배지 [비교]→새�
     await expect(page.getByTestId('chunk-similar-3')).toContainText(`#${c}`);
     await expect(page.getByTestId('chunk-same-2')).toContainText(`같은 글 #${b}`);
     for (const t of ['chunk-similar-1', 'chunk-same-1', 'chunk-decided-1', 'chunk-similar-2']) await expect(page.getByTestId(t)).toHaveCount(0);
-    // 같은 글은 배지만 — 체크는 그대로(서버가 같은 원본 안 반복은 건너뛰고 다른 원본은 승인 대기, 11/04 리뷰 H1) · 사람이 뺀다
+    // 같은 글은 배지만 — 체크는 그대로(서버가 같은 원본 안 반복은 건너뛰고 다른 원본은 등록·검색에서 접음, 11/04 리뷰 H1·11/09) · 사람이 뺀다
     await expect(rowOf(page, 'chunk-same-2').locator('input[type=checkbox]')).toBeChecked();
     await rowOf(page, 'chunk-same-2').locator('input[type=checkbox]').uncheck();
     // 요약 = [비교]로 정할 조각만(같은 글 제외) — 2개

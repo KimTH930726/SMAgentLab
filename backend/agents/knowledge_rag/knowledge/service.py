@@ -1105,8 +1105,8 @@ async def _run_bulk_ingestion(
             source_doc_ids = valid
             replacing_docs = await _ledger.replacing_documents(conn, ns_id, source_doc_ids, replacing_pages)
     # 중복 판정 2단(11/04, 설계 chunk-structure-dedupe-design ②·③): ② 같은 원본(같은 페이지·원문) 안에서 공백만 다른 같은 글이 또 나오면
-    # 저장하지 않는다(건너뜀 수·기존 id를 작업에 남김 — 조용히 버리지 않음). **다른 원본**의 같은 글은 건너뛰지 않고 ③으로 승인 대기 —
-    # 건너뛰면 그 원본이 나중에 지워지거나(롤백·페이지 수정·삭제) 바뀔 때 내용이 영영 사라진다(독립 리뷰 H1, 11/04).
+    # 저장하지 않는다(건너뜀 수·기존 id를 작업에 남김 — 조용히 버리지 않음). **다른 원본**의 같은 글은 건너뛰지 않고 저장한다 —
+    # 건너뛰면 그 원본이 나중에 지워지거나(롤백·페이지 수정·삭제) 바뀔 때 내용이 영영 사라진다(독립 리뷰 H1, 11/04). 11/09부터 승인 대기 없이(②').
     # ③ 의미 유사도가 높아도 양식 줄을 뺀 글자 유사도가 낮으면 같은 양식의 다른 페이지라 정상 등록.
     from trustkit.ingest.dedupe import norm_text, similar_at_least
     text_threshold = settings.duplicate_min_text_similarity
@@ -1128,6 +1128,7 @@ async def _run_bulk_ingestion(
     skipped_exact: list[int] = []        # 건너뛴 조각과 같은 저장 조각 id(최대 50) — 같은 배치 안 앞 조각과 같으면 아직 id가 없어 수만 셈
     skipped_total = 0
     meaning_only = 0
+    cross_copies = 0                     # 다른 원본에 똑같은 글 — 승인 대기 없이 등록(검색이 같은 글을 하나로 접는다, 11/09)
     try:
         for start in range(0, len(items), _INGEST_BATCH_SIZE):
             batch = items[start:start + _INGEST_BATCH_SIZE]
@@ -1152,6 +1153,17 @@ async def _run_bulk_ingestion(
                         skipped_exact.append(same)
                 else:
                     seen_norm[(_source(item), n)] = start + offset
+            # ②' 다른 원본의 완전 일치 = 같은 글이 두 페이지에 실린 것 — 사람이 판단할 게 없어 승인 대기로 보내지 않고 그대로 등록한다.
+            # 건너뛰지 않는 이유는 위 H1(그 원본이 지워지면 내용 유실), 검색엔 search_knowledge가 같은 글을 한 건으로 접어 두 번 안 나온다(11/09:
+            # 승인 대기 815건 중 323건이 이것 — 사람 공수만 들고 판단할 게 없었다). 상대가 사용 중이거나 이번 작업 조각일 때만 —
+            # 다른 보류 작업의 조각이면 그 작업이 롤백될 수 있어 예전처럼 비교로 둔다(리뷰 L5: 같이 걸린 비슷한 글이 검토 없이 남지 않게)
+            norms = [norm_text(it["content"]) for it in batch]
+            copy: set[int] = set()
+            for offset, matches in enumerate(match_results):
+                if offset not in skip and any(norm_text(m["content"]) == norms[offset]
+                                              and (m.get("status") == "active" or m.get("ingestion_job_id") == job_id) for m in matches):
+                    copy.add(offset)
+                    cross_copies += 1
             # ③ 의미 유사도 ≥ 하한인 후보 중 글자도 비슷한 것만 중복 의심 — 의미만 비슷하면(형제 페이지) 후보에서 뺀다
             for offset, item in enumerate(batch):
                 close = [m for m in match_results[offset] if m["similarity"] >= dup_threshold]
@@ -1161,7 +1173,7 @@ async def _run_bulk_ingestion(
                 if close:
                     match_results[offset] = kept + [m for m in match_results[offset] if m["similarity"] < dup_threshold]
             db_is_duplicate = [
-                offset not in skip and bool(m) and m[0]["similarity"] >= dup_threshold and not batch[offset].get("keep_new")
+                offset not in skip and offset not in copy and bool(m) and m[0]["similarity"] >= dup_threshold and not batch[offset].get("keep_new")
                 for offset, m in enumerate(match_results)
             ]   # keep_new = 사람이 미리보기 비교 창에서 "다른 내용"이라 정한 조각(11/04)
 
@@ -1175,12 +1187,17 @@ async def _run_bulk_ingestion(
                 emb_matrix = np.array(embeddings, dtype=np.float32)
                 sims = emb_matrix @ emb_matrix.T
                 for i in range(len(batch)):
-                    if db_is_duplicate[i] or i in skip or batch[i].get("keep_new"):
+                    if db_is_duplicate[i] or i in skip or i in copy or batch[i].get("keep_new"):
                         continue
                     best_j, best_sim = None, 0.0
                     for j in range(i):
                         if db_is_duplicate[j] or j in local_match or j in skip:
                             continue  # j 자신도 결국 pending으로 빠지거나 건너뛸 항목이면 기준으로 안 삼음
+                        if norms[j] == norms[i]:   # ②' 같은 배치 안 다른 원본의 같은 글(같은 원본이면 ②에서 건너뜀)
+                            copy.add(i)
+                            cross_copies += 1
+                            best_j = None
+                            break
                         sim = float(sims[i, j])
                         # ③ 같은 배치 안도 같은 규칙 — 의미가 높아도 글자가 다르면(형제 페이지) 중복 의심 아님
                         if sim > best_sim and sim >= dup_threshold and similar_at_least(batch[i]["content"], batch[j]["content"], text_threshold, tmpl):
@@ -1284,12 +1301,13 @@ async def _run_bulk_ingestion(
             logger.exception("실패한 인제스천 작업 정리 실패 (job_id=%s)", job_id)
         return {"created": 0, "job_id": job_id, "status": "failed"}
 
-    if skipped_total or meaning_only:
-        # 대체 처리는 보이게 — 건너뜀은 등록 이력에 수·기존 id로, 의미만 비슷해 정상 등록한 수는 로그로(11/04)
-        logger.info("등록 중복 판정 (job_id=%s): 같은 글이 있어 건너뜀 %d건, 의미만 비슷해 정상 등록 %d건", job_id, skipped_total, meaning_only)
+    if skipped_total or meaning_only or cross_copies:
+        # 대체 처리는 보이게 — 건너뜀·다른 원본 같은 글은 등록 이력에 수로, 의미만 비슷해 정상 등록한 수는 로그로(11/04·11/09)
+        logger.info("등록 중복 판정 (job_id=%s): 같은 글이 있어 건너뜀 %d건, 다른 원본의 같은 글이라 바로 등록 %d건, 의미만 비슷해 정상 등록 %d건",
+                    job_id, skipped_total, cross_copies, meaning_only)
         async with get_conn() as conn:
-            await conn.execute("UPDATE rag_ingestion_job SET skipped_exact_chunks = $2, skipped_exact_ids = $3::int[] WHERE id = $1",
-                               job_id, skipped_total, skipped_exact)
+            await conn.execute("UPDATE rag_ingestion_job SET skipped_exact_chunks = $2, skipped_exact_ids = $3::int[], cross_source_copies = $4 "
+                               "WHERE id = $1", job_id, skipped_total, skipped_exact, cross_copies)
 
     # 후속 작업(자동 용어 추출)은 실제로 active가 된 행이 있을 때만 — 전부 승인 대기로 빠졌으면
     # 검토에서 반려될 수 있는 내용이라 용어를 미리 만들지 않는다(/code-review 지적, 2026-09-28).
@@ -1545,7 +1563,7 @@ async def list_ingestion_jobs(namespace: str) -> list[dict]:
         rows = await conn.fetch("""
             SELECT j.id, j.namespace_id, j.source_file, j.source_type, j.status,
                    j.total_chunks, j.created_chunks, j.pending_chunks, j.auto_glossary,
-                   j.skipped_exact_chunks, j.skipped_exact_ids,
+                   j.skipped_exact_chunks, j.skipped_exact_ids, j.cross_source_copies,
                    j.chunk_strategy, j.error_message,
                    j.created_by_user_id, u.username AS created_by_username,
                    j.created_at::text, j.completed_at::text

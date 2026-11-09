@@ -306,3 +306,5 @@
 - (낮음) 채팅 연결이 끊기면(Starlette/anyio 취소 범위) 에이전트 정리 await와 event_generator 안전장치(generating → completed)가 둘 다 취소로 끊긴다 — v2.219 전과 같음, 남은 generating은 다음 요청 `_cleanup_ghost_messages`가 정리. 다시 볼 조건: 끊긴 답이 화면에 생성 중으로 남는 신고가 오면 — 안전장치를 `anyio.CancelScope(shield=True)`로.
 - (낮음, v2.220 리뷰) 원문 원장 `superseded_by` — 팀 적재가 읽기 제한 기록을 내릴 때(`team_import.py` 제한 포함 켬)와 롤백 두 곳(`team_import` 묶음 롤백·`confluence_sync` 배치 롤백)은 새 판이 아직 없어 비워 두고, 기동 때 #125가 같은 위치의 다음 판으로 채운다 — 롤백된 판은 "교체"가 아니라 "그 뒤에 다시 넣은 판"을 가리킴. 지금 읽는 곳 0. 다시 볼 조건: superseded_by로 판 이력 화면을 만들 때 — 롤백은 따로 표시.
 - (낮음, v2.220 리뷰) #125 채우기는 매 기동 남은 빈 줄(지금 98)마다 `(source_type, source_ref)`로 찾는데 인덱스가 `namespace_id`로 시작 — 지금 3천 줄이라 무시할 만함. 다시 볼 조건: 원장이 수만 줄이 되면 `(source_type, source_ref, id)` 인덱스.
+- (낮음, 11/09 리뷰 L3) 등록 이력에 "다른 원본 같은 글 N건" 배지 — API·로그엔 있음(`cross_source_copies`). 미리보기 복사 페이지 알림(B) 시안과 함께 보여 드리고 만들 것
+- (낮음, 11/09 리뷰 L6) 키워드 구제(BM25, 기본 꺼짐) 후보 풀에서도 같은 글 접기 — 구제를 켤 때 같이

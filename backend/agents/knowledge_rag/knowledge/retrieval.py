@@ -230,7 +230,7 @@ async def find_similar_active_knowledge(
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""
-            SELECT id, content, confluence_page_id, source_document_id, ingestion_job_id, 1 - (embedding <=> $2::vector) AS similarity
+            SELECT id, content, status, confluence_page_id, source_document_id, ingestion_job_id, 1 - (embedding <=> $2::vector) AS similarity
             FROM rag_knowledge
             WHERE namespace_id = $1 AND (status = 'active' OR {held_clause}{staging_clause}) {replace_clause}
               AND embedding IS NOT NULL
@@ -240,7 +240,7 @@ async def find_similar_active_knowledge(
             *args,
         )
     # 원본 칸(페이지·원문·작업)은 완전 일치 건너뜀이 "같은 원본 안"인지 가리는 데 쓴다(11/04)
-    return [{"id": r["id"], "content": r["content"], "similarity": float(r["similarity"]), "confluence_page_id": r["confluence_page_id"],
+    return [{"id": r["id"], "content": r["content"], "status": r["status"], "similarity": float(r["similarity"]), "confluence_page_id": r["confluence_page_id"],
              "source_document_id": r["source_document_id"], "ingestion_job_id": r["ingestion_job_id"]} for r in rows]
 
 
@@ -378,23 +378,32 @@ async def search_knowledge(
                 WHERE k.namespace_id = ANY($2::int[])
                   AND (k.status IS NULL OR k.status = 'active')
                   AND k.content_tsv @@ q.tsq
+            ),
+            scored AS (
+                SELECT k.id, n.name AS namespace, k.content_norm_md5,
+                       k.content, k.base_weight, k.heading_path,
+                       k.source_type, k.source_file, k.created_at,
+                       COALESCE(vs.v_score, 0.0) AS v_score,
+                       COALESCE(ks.k_score, 0.0) AS k_score,
+                       -- 업무구분 키워드 전용 분기는 10/22 삭제(해당 활성 행 0건 — 모든 행이 원래 쓰던 가중합 그대로)
+                       ($4 * COALESCE(vs.v_score, 0.0) + $5 * COALESCE(ks.k_score, 0.0)) * (1.0 + k.base_weight) AS final_score,
+                       k.updated_at
+                FROM rag_knowledge k
+                JOIN ops_namespace n ON k.namespace_id = n.id
+                LEFT JOIN vector_scores vs ON k.id = vs.id
+                LEFT JOIN keyword_scores ks ON k.id = ks.id
+                WHERE k.namespace_id = ANY($2::int[])
+                  AND (k.status IS NULL OR k.status = 'active')
+                  AND (vs.v_score IS NOT NULL OR ks.k_score IS NOT NULL)
+            ),
+            -- 같은 글 한 건만(11/09) — 다른 페이지에 똑같이 실린 글은 페이지마다 조각을 두고(한쪽 페이지가 지워져도 내용이 남게)
+            -- 검색에서만 하나로 합친다(업계: 내용 해시로 접기). 공백만 다른 것도 같은 글 — content_norm_md5(저장 칸, main.py KNOWLEDGE_WS_CLASS)
+            ranked AS (
+                SELECT *, row_number() OVER (PARTITION BY content_norm_md5 ORDER BY final_score DESC, id) AS copy_rank
+                FROM scored
             )
-            SELECT k.id, n.name AS namespace,
-                   k.content, k.base_weight, k.heading_path,
-                   k.source_type, k.source_file, k.created_at,
-                   COALESCE(vs.v_score, 0.0) AS v_score,
-                   COALESCE(ks.k_score, 0.0) AS k_score,
-                   -- 업무구분 키워드 전용 분기는 10/22 삭제(해당 활성 행 0건 — 모든 행이 원래 쓰던 가중합 그대로)
-                   ($4 * COALESCE(vs.v_score, 0.0) + $5 * COALESCE(ks.k_score, 0.0)) * (1.0 + k.base_weight) AS final_score,
-                   k.updated_at
-            FROM rag_knowledge k
-            JOIN ops_namespace n ON k.namespace_id = n.id
-            LEFT JOIN vector_scores vs ON k.id = vs.id
-            LEFT JOIN keyword_scores ks ON k.id = ks.id
-            WHERE k.namespace_id = ANY($2::int[])
-              AND (k.status IS NULL OR k.status = 'active')
-              AND (vs.v_score IS NOT NULL OR ks.k_score IS NOT NULL)
-            ORDER BY final_score DESC, k.id LIMIT $6   -- 동점 순서 고정(완전 동일 조각 쌍이 있으면 실행마다 순위가 바뀌었다)
+            SELECT * FROM ranked WHERE copy_rank = 1
+            ORDER BY final_score DESC, id LIMIT $6   -- 동점 순서 고정(완전 동일 조각 쌍이 있으면 실행마다 순위가 바뀌었다)
             """,
             *params,
         )

@@ -127,7 +127,8 @@ class TestKnowledgeKeywordRescue:
         patch_db.fetch = AsyncMock(return_value=[_row(1, .9), _row(2, .8), _row(3, .7)])
         res = await retrieval.search_knowledge("ns", [0.1], "질문", top_k=3)
         sql, *params = patch_db.fetch.call_args.args
-        assert params[5] == 3 and "ORDER BY final_score DESC, k.id" in sql   # 동점 순서 고정
+        assert params[5] == 3 and "ORDER BY final_score DESC, id LIMIT $6" in sql   # 동점 순서 고정
+        assert "WHERE copy_rank = 1" in sql   # 같은 글은 한 건만(11/09 — 실 DB 성질은 test_realdb_retrieval_collapse)
         assert [r.id for r in res] == [1, 2, 3]
 
     @pytest.mark.asyncio

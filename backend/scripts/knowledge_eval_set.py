@@ -25,6 +25,16 @@ async def load_items(conn, path: str) -> list[dict]:
         if none:
             print(f"⚠ 정답 페이지에 활성 조각이 없는 문항 {none}개(승인 대기·미적재) — 검색 놓침으로 센다")
     gold = sorted({i for it in items for i in it["gold_ids"]})
+    # 정답과 글자까지 같은 활성 조각(다른 페이지에 똑같이 실린 글)도 정답 — 검색이 같은 글을 하나로 접어 어느 id가 남을지는 점수·id 순(11/09).
+    # 접기는 검색 범위 전체(하위·연결 컬렉션 포함)라 여기도 컬렉션을 가리지 않는다(리뷰 L4). 묻는 영역은 원래 정답 id로만(아래 now)
+    same = {}
+    for r in await conn.fetch(
+            """SELECT g.id gid, k.id FROM rag_knowledge g JOIN rag_knowledge k
+                  ON k.content_norm_md5 = g.content_norm_md5 AND k.id <> g.id AND k.status = 'active'
+                WHERE g.id = ANY($1::int[])""", gold):
+        same.setdefault(r["gid"], []).append(r["id"])
+    for it in items:
+        it["gold_ids"] = list(it["gold_ids"]) + [j for i in it["gold_ids"] for j in same.get(i, []) if j not in it["gold_ids"]]
     now = {r["id"]: r["name"] for r in await conn.fetch(
         "SELECT k.id, n.name FROM rag_knowledge k JOIN ops_namespace n ON n.id = k.namespace_id "
         "WHERE k.id = ANY($1::int[]) AND k.status = 'active'", gold)}
