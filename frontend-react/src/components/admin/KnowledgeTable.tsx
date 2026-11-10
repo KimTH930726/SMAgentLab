@@ -833,10 +833,10 @@ function ChunkReviewModal({ isOpen, onClose, chunks, onConfirm, loading, sourceN
         {!similarCount && (
           <p className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-400" data-testid="chunk-similar-status">
             {checking && <span className="h-3 w-3 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" aria-hidden />}
-            {similar.isError ? <span className="text-amber-700 dark:text-amber-400">비슷한 지식 확인을 못 했어요 — 그대로 등록하면 비슷한 조각은 승인 대기로 가요.</span>
+            {similar.isError ? <span className="text-amber-700 dark:text-amber-400">비슷한 지식 확인을 못 했어요 — 그대로 등록하면 판단이 필요한 비슷한 조각은 승인 대기로 가요.</span>
               : !target ? '비슷한 기존 지식 — 넣을 곳이 정해지면 바로 확인해요'
                 : checking ? `비슷한 기존 지식 확인 중… (조각 ${chunks.length}개)`
-                  : chunks.length > 500 ? '조각이 500개가 넘어 미리 확인하지 않아요 — 비슷한 조각은 등록 뒤 승인 대기로 가요'
+                  : chunks.length > 500 ? '조각이 500개가 넘어 미리 확인하지 않아요 — 판단이 필요한 비슷한 조각은 등록 뒤 승인 대기로 가요'
                     : '비슷한 기존 지식 없음 ✓'}
           </p>
         )}

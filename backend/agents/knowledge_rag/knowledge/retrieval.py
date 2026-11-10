@@ -13,7 +13,7 @@ from core.database import get_conn, namespace_scope_ids
 from core.config import settings
 from shared.embedding import embedding_service
 from trustkit.retrieval.bm25 import BM25Index
-from trustkit.retrieval.fusion import default_rescue_slots, rescue_order
+from trustkit.retrieval.fusion import collapse_contained, default_rescue_slots, rescue_order
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +153,13 @@ def is_adopted(r: RetrievalResult, thresholds: dict[str, float]) -> bool:
     업무구분 "DB/공통코드" 키워드 전용 분기(매칭만 되면 채택)는 10/22 업무구분 폐지로 삭제 —
     해당 활성 지식 0건, 구조화 데이터는 ref_common_code(refdata 채널)로 검색된다."""
     return relevance_score(r) >= thresholds["knowledge_min_score"]
+
+
+def collapse_adopted(results: list[RetrievalResult], th: dict[str, float]) -> list[RetrievalResult]:
+    """포함 조각 접기를 문맥에 쓰는(채택) 조각끼리만 — 안 쓰는 조각이 쓰는 조각을 지우면 그 내용이 문맥에서 사라진다(독립 리뷰 11/10).
+    채택 안 된 조각은 제자리 그대로, 채택 자리엔 접힌 순서대로 채우고 남는 채택 자리는 비운다(빈자리 안 채움)."""
+    it = iter(collapse_contained([r for r in results if is_adopted(r, th)], lambda r: r.content))
+    return [x for x in ((next(it, None) if is_adopted(r, th) else r) for r in results) if x is not None]
 
 
 async def map_glossary_term(
@@ -330,8 +337,10 @@ async def _keyword_ids(conn, ns_ids: list[int], query: str, k: int) -> list[int]
 async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
     w_vector: float = 0.7, w_keyword: float = 0.3, top_k: int = 5,
-    keyword_rescue: bool = False, extra_ns_ids: Sequence[int] = (),
+    keyword_rescue: bool = False, extra_ns_ids: Sequence[int] = (), collapse: Optional[bool] = None,
 ) -> list[RetrievalResult]:
+    """collapse = 포함 조각 접기(None = 설정 knowledge_collapse_contained). 지식 검색 화면은 끈다 — 고치려고 찾는 화면이라 접힌 조각도 보여야 한다
+    (긴 쪽만 고치면 짧은 쪽에 옛 내용이 남아 긴 쪽이 순위에 못 들 때 다시 나온다)."""
     async with get_conn() as conn:
         # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6). 하위가 없으면 [자신] — 예전과 같은 행 집합.
         # extra_ns_ids = 지식 검색 범위(knowledge_scope — 채팅 기본 linked, agent.CHAT_KNOWLEDGE_SCOPE)로 더하는 컬렉션
@@ -442,6 +451,10 @@ async def search_knowledge(
         by_id = {r.id: r for r in results}
         order = rescue_order([r.id for r in results], kw_ids, top_k, default_rescue_slots(top_k), available=set(by_id))
         results = [by_id[i] for i in order][:top_k]
+    if settings.knowledge_collapse_contained if collapse is None else collapse:
+        # 문장이 다른 조각에 통째로 들어 있는 조각은 한 자리로(11/09, 승인 대기 460 정리 — 다른 페이지 비슷한 글은 둘 다 등록하고 여기서만 접는다).
+        # 최종 top_k 안에서만 접고 빈자리는 안 채운다 — 채우면 무관한 조각이 들어와 답이 흔들림(1문항 5회 4→2). 실측: 답 84.0→84.9%, 문맥 중복 11→0.
+        results = collapse_adopted(results, get_thresholds())
     return results
 
 

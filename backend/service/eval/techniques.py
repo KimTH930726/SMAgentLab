@@ -56,6 +56,13 @@ TECHNIQUES: list[dict] = [
      "rules": ["답한 뒤 다른 업무 컬렉션에서 같은 질문으로 한 번 더 찾는다",
                "점수 {하한} 이상인 지식이 있으면 버튼으로만 제안 — 답에는 안 섞는다",
                "2초 넘게 걸리면 제안을 건너뛴다"]},
+    {"key": "contained_collapse", "name": "포함 조각 접기", "stage": "검색",
+     "does": "지식 검색 top_k의 채택 조각끼리, 문장이 다른 조각 안에 같은 순서로 통째로 들어 있는 조각은 빼고 긴 쪽 한 자리 — 빈자리는 안 채운다"
+             "(적재 때 다른 원본의 비슷한 글을 바로 등록하는 규칙이 이걸 전제로 함)",
+     "values": {"켜기": ("KNOWLEDGE_COLLAPSE_CONTAINED", "1")},
+     "evidence": [("2026-11-09", "승인 대기 460 등록 사본, 106문항 ×2: 답 84.0→84.9%(단정 오답 14.6→14.6%) · 문맥 중복 자리 11→0 · 글자 −2%. "
+                                 "빈자리 채움은 무관한 조각이 들어와 1문항 5회 4→2(기각) · 임베딩 0.95 접기(LangChain 기본)는 검색 100→94(기각)")],
+     "where": "agents/knowledge_rag/knowledge/retrieval.py:def collapse_adopted"},
     {"key": "knowledge_location", "name": "지식 등록 위치 판정", "stage": "적재",
      "does": "새 지식이 어느 컬렉션인지 — LLM \"바꿔 넣기 시험\" + 가장 가까운 지식 5건의 컬렉션 다수결, 둘이 맞으면 확신(자동 후보), 아니면 사람에게 물음",
      "values": {"이웃": (None, "5건 중 4건")},
@@ -223,6 +230,7 @@ FLOW_OF: dict[str, tuple[str, str, str, Optional[str]]] = {
     "linked_scope": ("chat", "검색", "switch", None),
     "policy_rrf": ("chat", "검색", "required", None),
     "keyword_rescue": ("chat", "검색", "on", None),
+    "contained_collapse": ("chat", "검색", "setting", "KNOWLEDGE_COLLAPSE_CONTAINED=0으로 꺼 둠"),   # 상태 = 설정값(11/09 기본 켬)
     "ref_table_chat": ("chat", "검색", "switch", None),
     "abstain_prefilter": ("chat", "근거 판정", "setting", "서술 하한(POLICY_ABSTAIN_MIN_SCORE)이 비어 있어 안 씀"),   # 상태 = 설정값(11/09 기본 켬)
     "context_budget": ("chat", "문맥 구성", "switch", None),
@@ -301,7 +309,8 @@ def as_rows() -> list[dict]:
 
 def _setting_on(key: str) -> bool:
     from core.config import settings
-    return {"abstain_prefilter": lambda: settings.policy_abstain_min_score is not None}.get(key, lambda: True)()
+    return {"abstain_prefilter": lambda: settings.policy_abstain_min_score is not None,
+            "contained_collapse": lambda: settings.knowledge_collapse_contained}.get(key, lambda: True)()
 
 
 def flow_view(key: str) -> dict:

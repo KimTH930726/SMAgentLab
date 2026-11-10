@@ -110,6 +110,9 @@ class Settings(BaseSettings):
     duplicate_min_similarity: float = 0.88
     # 중복 판정 2단(11/04): 의미 유사도 ≥ 위 하한인 후보 중 양식 줄을 뺀 글자 유사도도 이 값 이상일 때만 승인 대기
     duplicate_min_text_similarity: float = 0.8
+    # 검색 결과(top_k) 안에서 문장이 다른 조각에 통째로 들어 있는 조각은 빼기(11/09 게이트 통과, 빈자리 안 채움) — 끄려면 KNOWLEDGE_COLLAPSE_CONTAINED=0.
+    # 리랭커를 켜면 후보(reranker_candidates) 단계에서 접혀 리랭커가 빈자리를 채운다 — 잰 적 없는 조합이라 그때 게이트를 다시 돌린다(리뷰 11/10)
+    knowledge_collapse_contained: bool = True
 
     # 리랭커 (CrossEncoder)
     reranker_enabled: bool = False  # 폐쇄망: 모델 번들링 후 True로 전환

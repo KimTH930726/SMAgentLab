@@ -14,7 +14,8 @@ from trustkit.ingest.quality import assess  # noqa: E402
 from trustkit.query.intent import looks_like_condition_query, looks_like_navigation_query  # noqa: E402
 from trustkit.retrieval.bm25 import BM25Index  # noqa: E402
 from trustkit.retrieval.chunk_header import contextual_header  # noqa: E402
-from trustkit.retrieval.fusion import best_per_doc, rescue_order, rrf_order  # noqa: E402
+from trustkit.retrieval.fusion import best_per_doc, collapse_contained, rescue_order, rrf_order, sentences  # noqa: E402
+from trustkit.retrieval.fusion import _within  # noqa: E402
 from trustkit.text.ko import normalize_numbers, tokenize  # noqa: E402
 
 
@@ -256,3 +257,40 @@ def test_grounding_apply_verdict():
         assert apply_verdict(bad, "초안", nf) == ("unparsed", "초안")
     p = verify_question("질문", "답")
     assert p.index("[질문]") < p.index("[초안 답변]") and "[참고 문서]" not in p   # 문서는 문맥 자리로
+
+
+def test_collapse_contained_examples():
+    a = (1, "취소는 1시간 이내. 이후엔 고객센터.")
+    b = (2, "취소는 1시간 이내. 이후엔 고객센터. 예약 상품은 불가.")   # a ⊂ b
+    c = (3, "골드 등급 적립 3%. 이후엔 고객센터.")                       # 틀 비슷, 내용 다름 — 안 접음
+    d = (4, "취소는  1시간 이내.\n이후엔 고객센터.")                      # a와 같은 글(공백·줄바꿈만 다름)
+    txt = lambda h: h[1]
+    assert [h[0] for h in collapse_contained([a, b, c, d], txt)] == [2, 3]        # b가 a 자리로, d는 접힘
+    # 순서·이어짐까지 같아야 접는다(리뷰 L1) — 집합으로는 들어가도 "[실버] 적립 3%"의 연결이 긴 쪽엔 없다
+    silver = (7, "[실버]\n적립 3%")
+    tiers = (8, "[실버]\n적립 1%\n[골드]\n적립 3%")
+    assert [h[0] for h in collapse_contained([tiers, silver], txt)] == [8, 7]
+    assert [h[0] for h in collapse_contained([(9, "이후엔 고객센터. 취소는 1시간 이내."), a], txt)] == [9, 1]   # 순서가 다르면 다른 글
+    assert [h[0] for h in collapse_contained([b, a], txt)] == [2]
+    assert [h[0] for h in collapse_contained([(5, ""), (6, "")], txt)] == [5, 6]   # 빈 글은 접지 않음
+
+
+def test_collapse_contained_invariants_random():
+    """성질: 남은 것끼리 서로 안에 없음 · 빠진 것은 남은 어떤 것 안에 이어서 그대로 있음 · 입력에 없던 것 없음."""
+    rng = random.Random(5)
+    words = [f"문장{i}." for i in range(6)]
+    for _ in range(500):
+        base = [rng.choice(words) for _ in range(6)]   # 한 글의 연속 구간끼리 — 포함이 자주 생기게
+        hits = []
+        for i in range(rng.randint(1, 8)):
+            lo = rng.randrange(6)
+            hits.append((i, " ".join(base[lo:lo + rng.randint(1, 4)] if rng.random() < 0.7 else rng.sample(words, rng.randint(1, 4)))))
+        out = collapse_contained(hits, lambda h: h[1])
+        seq = {h[0]: sentences(h[1]) for h in hits}
+        ids = [h[0] for h in out]
+        assert set(ids) <= set(seq) and len(ids) == len(set(ids))
+        for x in ids:
+            for y in ids:
+                assert x == y or not _within(seq[x], seq[y])
+        for h in hits:
+            assert h[0] in ids or any(_within(seq[h[0]], seq[k]) for k in ids)

@@ -633,6 +633,15 @@ class TestBulkIngestionStagedActivation:
 
     # ── 중복 판정 2단(11/04): ② 완전 일치는 저장 안 함(수·기존 id 기록) ③ 의미만 비슷하면 정상 등록 ──────────────
     @staticmethod
+    def _first_lookup(*answers):
+        """첫 조회(이번 작업 포함, 배치 순서대로 answers)만 답하고, 이번 작업 후보가 낀 조각의 재조회(M1, staging_job_id 없음)는 빈 목록."""
+        it = iter(answers)
+
+        async def similar(_ns, _emb, *, staging_job_id=None, **_kw):
+            return next(it) if staging_job_id is not None else []
+        return AsyncMock(side_effect=similar)
+
+    @staticmethod
     def _inserted(calls):
         return [r for q, rows in calls["executemany"] if "INSERT INTO rag_knowledge" in q and "duplicate_match" not in q for r in rows]
 
@@ -641,7 +650,7 @@ class TestBulkIngestionStagedActivation:
         """같은 원본(원본 표시 없는 등록 = 이번 작업) 안 앞 배치에 공백만 다른 같은 글이 있으면 건너뜀 + 기록."""
         conn, emb, calls = self._make_conn()
         conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
-        similar = AsyncMock(side_effect=[[{"id": 99, "content": " 지식1 \n", "similarity": 0.9999, "ingestion_job_id": 7}], []])
+        similar = self._first_lookup([{"id": 99, "content": " 지식1 \n", "similarity": 0.9999, "ingestion_job_id": 7}], [])
         result = await self._run(conn, emb, similar=similar)
         assert [r[1] for r in self._inserted(calls)] == ["지식2"]
         assert result["created"] == 1 and result["pending"] == 0
@@ -662,14 +671,61 @@ class TestBulkIngestionStagedActivation:
         assert next(a for q, a in calls["execute"] if "cross_source_copies" in q) == (7, 0, [], 1)
 
     @pytest.mark.asyncio
-    async def test_near_match_from_other_source_still_pending(self):
-        """②'는 글자까지 같을 때만 — 한 글자라도 다르면(값만 다른 양식 등) 예전처럼 승인 대기."""
+    async def test_near_match_from_other_source_registers_without_review(self):
+        """11/09: 다른 원본의 사용 중 글과 비슷하면(값만 다른 양식 등) 둘 다 바로 등록 — 판단할 게 없다(대기 460 중 391), 검색이 포함 조각을 접는다."""
         conn, emb, calls = self._make_conn()
         conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
-        similar = AsyncMock(side_effect=[[{"id": 99, "content": "지식1 값 10", "similarity": 0.999, "confluence_page_id": "P1"}], []])
+        similar = AsyncMock(side_effect=[[{"id": 99, "content": "지식1 값 10", "status": "active", "similarity": 0.999, "confluence_page_id": "P1"}], []])
+        self.ITEMS = [{"content": "지식1 값 20", "confluence_page_id": "P2"}, {"content": "지식2", "confluence_page_id": "P2"}]
+        result = await self._run(conn, emb, similar=similar)
+        assert all(r[9] == "staging" for r in self._inserted(calls)) and result["pending"] == 0
+        assert not any("duplicate_match" in q for q, _ in calls["executemany"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("match", [
+        {"confluence_page_id": "P2", "status": "active", "ingestion_job_id": 3},   # 같은 페이지의 다른 작업 글(교체 안 하는 옛 적재본)
+        {"status": "active", "ingestion_job_id": 3},                               # 원본 표시 없는 글(수기·옛 일괄)
+        {"confluence_page_id": "P1", "status": "staging", "ingestion_job_id": 55}, # 다른 보류 작업 조각
+    ])
+    async def test_near_match_needing_judgment_still_pending(self, match):
+        conn, emb, calls = self._make_conn()
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+        similar = AsyncMock(side_effect=[[{"id": 99, "content": "지식1 값 10", "similarity": 0.999, **match}], []])
         self.ITEMS = [{"content": "지식1 값 20", "confluence_page_id": "P2"}, {"content": "지식2", "confluence_page_id": "P2"}]
         result = await self._run(conn, emb, similar=similar)
         assert self._inserted(calls)[0][9] == "staging_review" and result["pending"] == 1
+        assert [a for q, rows in calls["executemany"] if "duplicate_match" in q for a in rows][0][1] == 99
+
+    @pytest.mark.asyncio
+    async def test_own_job_candidates_do_not_hide_match_needing_judgment(self):
+        """독립 리뷰 M1(11/10): 가까운 후보 3건을 이번 작업 조각이 차지해도, 그 뒤의 판단할 상대(원본 없는 수기 글)를 다시 찾아 대기로 —
+        미리보기(이번 작업 없음)와 판정이 같게. 이번 작업을 뺀 두 번째 조회는 이번 작업 후보가 낀 조각만."""
+        conn, emb, calls = self._make_conn()
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+        own = [{"id": 90 + k, "content": "지식1 값 10", "status": "staging", "ingestion_job_id": 7, "similarity": 0.99, "confluence_page_id": "P2"}
+               for k in range(3)]
+        manual = {"id": 55, "content": "지식1 값 30", "status": "active", "ingestion_job_id": 3, "similarity": 0.95}
+
+        async def similar(_ns, _emb, *, staging_job_id=None, **_kw):
+            return own if staging_job_id == 7 else [manual]
+        self.ITEMS = [{"content": "지식1 값 20", "confluence_page_id": "P2"}]
+        result = await self._run(conn, emb, similar=AsyncMock(side_effect=similar))
+        assert self._inserted(calls)[0][9] == "staging_review" and result["pending"] == 1
+        assert [a[1] for q, rows in calls["executemany"] if "duplicate_match" in q for a in rows] == [55]   # 근거엔 판단할 상대만
+
+    @pytest.mark.asyncio
+    async def test_near_duplicates_inside_one_job_both_registered(self):
+        """같은 작업(같은 원본) 안 비슷한 두 조각은 둘 다 그 원본 내용 — 앞 배치(이번 작업 staging)와 비슷해도, 같은 배치 안이어도 대기 없음(대기 460 중 68)."""
+        conn, emb, calls = self._make_conn()
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+        similar = self._first_lookup([], [{"id": 98, "content": "지식1 값 10", "status": "staging", "ingestion_job_id": 7,
+                                           "similarity": 0.999, "confluence_page_id": "P2"}])
+        self.ITEMS = [{"content": "지식1 값 10", "confluence_page_id": "P2"}, {"content": "지식1 값 20", "confluence_page_id": "P2"}]
+        result = await self._run(conn, emb, similar=similar)
+        assert all(r[9] == "staging" for r in self._inserted(calls)) and result["pending"] == 0
+        conn, emb, calls = self._make_conn()
+        result = await self._run(conn, emb, batch_size=10)   # 한 배치 — 예전엔 임베딩 내적으로 뒤 조각을 대기로 보냈다
+        assert all(r[9] == "staging" for r in self._inserted(calls)) and result["pending"] == 0
 
     @pytest.mark.asyncio
     async def test_same_text_only_in_other_held_job_still_pending(self):
@@ -911,3 +967,43 @@ class TestSchemas:
         )
         assert job.status == "completed"
         assert job.total_chunks == 10
+
+
+@pytest.mark.asyncio
+async def test_preview_uses_same_rule_and_drops_non_live_document_ids():
+    """미리보기(check_similar_batch)도 등록과 같은 needs_review(리뷰 L2) — 다른 원본 사용 중 상대는 안 묻고, 원본 없는 상대는 묻는다.
+    초안·사용 중이 아닌 원문 id는 등록처럼 떼고 판정(원본 없음 → 묻는다)."""
+    from agents.knowledge_rag.knowledge import service as svc
+    other = {"id": 1, "content": "지식1 값 10", "status": "active", "similarity": 0.99, "confluence_page_id": "P9"}
+    manual = {"id": 2, "content": "지식1 값 30", "status": "active", "similarity": 0.98}
+    emb = MagicMock()
+    emb.embed_batch = AsyncMock(side_effect=lambda texts: [[0.1] * 4 for _ in texts])
+    conn = MagicMock()
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=False)
+    conn.fetch = AsyncMock(return_value=[])   # 사용 중 원문 없음 — 원문 id 5는 떼어진다
+    with (patch.object(svc, "get_conn", return_value=conn),
+          patch.object(svc, "resolve_knowledge_namespace_id", AsyncMock(return_value=1)),
+          patch.object(svc, "embedding_service", emb),
+          patch.object(svc, "find_similar_active_knowledge", AsyncMock(return_value=[other, manual])),
+          patch.object(svc, "_collection_template_lines", AsyncMock(return_value=set())),
+          patch("agents.knowledge_rag.ingestion.source_ledger.replacing_documents", AsyncMock(return_value=[]))):
+        out = await svc.check_similar_batch("ns", [{"content": "지식1 값 20", "confluence_page_id": "P1"},
+                                                   {"content": "지식1 값 20", "source_document_id": 5}])
+    assert [m["id"] for m in out[0]["matches"]] == [2]       # 다른 원본(P9) 사용 중 상대는 바로 등록될 상대라 안 물음
+    assert [m["id"] for m in out[1]["matches"]] == [1, 2]    # 원문 id가 사용 중이 아니라 원본 없음 → 둘 다 판단 대상
+
+
+def test_needs_review_rule_table():
+    """승인 대기 판정 표(11/09) — 적재·미리보기 공용. 같은 작업 → 등록 · 다른 원본 사용 중 → 등록 · 같은 원본 다른 작업/원본 없음/다른 보류 작업 → 대기."""
+    from agents.knowledge_rag.knowledge.service import needs_review
+    page = {"confluence_page_id": "P1"}
+    assert not needs_review(page, {"confluence_page_id": "P1", "status": "staging", "ingestion_job_id": 7}, 7)
+    assert not needs_review(page, {"confluence_page_id": "P2", "status": "active", "ingestion_job_id": 3}, 7)
+    assert not needs_review({"source_document_id": 5}, {"source_document_id": 6, "status": "active"}, 7)
+    assert not needs_review(page, {"source_document_id": 6, "status": "active"})              # 미리보기(작업 없음)
+    assert needs_review(page, {"confluence_page_id": "P1", "status": "active", "ingestion_job_id": 3}, 7)
+    assert needs_review({"source_document_id": 5}, {"source_document_id": 5, "status": "active"}, 7)
+    assert needs_review(page, {"status": "active", "ingestion_job_id": 3}, 7)                 # 상대 원본 없음(수기)
+    assert needs_review({}, {"confluence_page_id": "P2", "status": "active"}, 7)              # 새 조각 원본 없음(붙여넣기)
+    assert needs_review(page, {"confluence_page_id": "P2", "status": "staging", "ingestion_job_id": 55}, 7)

@@ -6,8 +6,6 @@ import json
 import logging
 from typing import Awaitable, Callable, Optional
 
-import numpy as np
-
 from core.config import settings
 from core.database import get_conn, resolve_knowledge_namespace_id, resolve_namespace_id
 from shared.embedding import embedding_service
@@ -237,7 +235,7 @@ async def explore_knowledge(namespace: str, query: str, top_k: int = 30) -> dict
     _matches, mapped_term, enriched = await _gt.resolve_query_terms(namespace, query, vec, extra_ns_ids=policy_ns_ids)
     d = get_search_defaults()
     hits = await search_knowledge(namespace, vec, enriched, d["default_w_vector"], d["default_w_keyword"], top_k,
-                                  keyword_rescue=KEYWORD_RESCUE, **({"extra_ns_ids": extra_ns} if extra_ns else {}))
+                                  keyword_rescue=KEYWORD_RESCUE, collapse=False, **({"extra_ns_ids": extra_ns} if extra_ns else {}))
     ids = [h.id for h in hits]
     async with get_conn() as conn:
         rows = {r["id"]: r for r in await conn.fetch(
@@ -499,6 +497,23 @@ async def check_similar(namespace: str, content: str, *, limit: int = 3) -> dict
             "n": len(matches)}
 
 
+_DUP_CANDIDATES = 3   # 등록 중복 판정에서 보는 가까운 기존 조각 수(미리보기 check_similar_batch도 같은 기본값)
+
+
+def needs_review(it: dict, m: dict, job_id: Optional[int] = None) -> bool:
+    """비슷한 글(의미·글자 하한 통과)이 승인 대기로 갈지 — 사람이 판단할 게 있는 경우만(11/09, 대기 460건 규칙 정리: 다른 원본 391·
+    같은 작업 68 → 판단할 것 0, 답 84.0→84.9% 게이트 통과). it = 새 조각, m = 비슷한 기존 조각(find_similar_active_knowledge 행).
+    같은 작업 조각 = 같은 원본의 두 조각(둘 다 그 내용) → 등록. 원본이 다른 사용 중 글 → 둘 다 등록(원본마다 현행화, 검색이 포함 조각을 접는다).
+    대기로: 같은 원본의 다른 작업 글(교체 안 하는 옛 적재본) · 어느 한쪽이 원본 표시 없음(수기·옛 일괄) · 다른 보류 작업 조각(롤백될 수 있음)."""
+    if job_id is not None and m.get("ingestion_job_id") == job_id:
+        return False
+    page, doc = it.get("confluence_page_id"), it.get("source_document_id")
+    if not (page or doc) or not (m.get("confluence_page_id") or m.get("source_document_id")):
+        return True
+    same = (str(m.get("confluence_page_id") or "") == str(page)) if page else (m.get("source_document_id") == int(doc))
+    return same or m.get("status") != "active"
+
+
 async def check_similar_batch(namespace: str, items: list[dict], *, limit: int = 3) -> list[dict]:
     """조각 미리보기 확인(11/04) — 조각마다 check_similar와 같은 판정. 같은 원본(컨플 페이지·원문 원장)의 기존 조각은 빼고 비교한다
     (다시 등록하면 옛 버전이라 교체 대상 — 등록 때도 비교에서 뺀다, bulk_create replacing_*). items = {content, confluence_page_id?, source_document_id?}."""
@@ -528,11 +543,15 @@ async def check_similar_batch(namespace: str, items: list[dict], *, limit: int =
     match_lists: list[list[dict]] = []
     for start in range(0, len(embeddings), _INGEST_BATCH_SIZE):
         match_lists += await asyncio.gather(*(find_similar_active_knowledge(
-            ns_id, emb, replacing_confluence_pages=pages or None, replacing_documents=replacing_docs or None)
+            ns_id, emb, limit=_DUP_CANDIDATES, replacing_confluence_pages=pages or None, replacing_documents=replacing_docs or None)
             for emb in embeddings[start:start + _INGEST_BATCH_SIZE]))
+    live_docs = set(live) if docs else set()
     for it, ms in zip(items, match_lists):
+        # 등록(bulk_create)은 초안·사용 중이 아닌 원문 id를 떼고 판정한다 — 미리보기도 같게(리뷰 L4)
+        src = {**it, "source_document_id": it["source_document_id"] if it.get("source_document_id") and int(it["source_document_id"]) in live_docs else None}
         same = next((m["id"] for m in ms if norm_text(m["content"]) == norm_text(it["content"])), None)
-        close = [m for m in ms if m["similarity"] >= dup and similar_at_least(it["content"], m["content"], settings.duplicate_min_text_similarity, tmpl)]
+        close = [m for m in ms if m["similarity"] >= dup and similar_at_least(it["content"], m["content"], settings.duplicate_min_text_similarity, tmpl)
+                 and needs_review(src, m)]   # 등록과 같은 판정 — 다른 원본의 비슷한 글은 바로 등록되니 비교로 안 묻는다(11/09)
         top = sorted(close, key=lambda m: -m["similarity"])[:limit]
         out.append({"same": same, "n": len(close),
                     "matches": [{"id": m["id"], "content": m["content"], "similarity": round(float(m["similarity"]), 4)} for m in top]})
@@ -1129,6 +1148,7 @@ async def _run_bulk_ingestion(
     skipped_total = 0
     meaning_only = 0
     cross_copies = 0                     # 다른 원본에 똑같은 글 — 승인 대기 없이 등록(검색이 같은 글을 하나로 접는다, 11/09)
+    near_registered = 0                  # 비슷한 글인데 판단할 게 없어 바로 등록(needs_review 거짓)
     try:
         for start in range(0, len(items), _INGEST_BATCH_SIZE):
             batch = items[start:start + _INGEST_BATCH_SIZE]
@@ -1137,10 +1157,23 @@ async def _run_bulk_ingestion(
 
             match_results = await asyncio.gather(
                 *(find_similar_active_knowledge(
-                    ns_id, emb, staging_job_id=job_id, replacing_confluence_pages=replacing_pages or None,
+                    ns_id, emb, limit=_DUP_CANDIDATES, staging_job_id=job_id, replacing_confluence_pages=replacing_pages or None,
                     replacing_documents=replacing_docs or None,
                 ) for emb in embeddings)
             )
+            # 후보(가까운 3건)에 이번 작업 조각이 끼면 그 뒤의 판단할 상대(수기 글 등)가 밀려 안 보인다 — 이번 작업을 뺀 후보를 한 번 더 보고
+            # 합친다(미리보기 check_similar_batch는 이번 작업이 없어 처음부터 이 후보를 본다 — 미리보기와 등록 판정을 같게, 독립 리뷰 M1 11/10)
+            # 후보가 꽉 차고 마지막도 하한 이상일 때만 — 마지막이 하한 미만이면 그 뒤도 다 미만이라 밀린 상대가 없다(조회 줄이기, 재리뷰 11/10)
+            own = [o for o, ms in enumerate(match_results) if any(m.get("ingestion_job_id") == job_id for m in ms)
+                   and len(ms) >= _DUP_CANDIDATES and ms[-1]["similarity"] >= dup_threshold]
+            if own:
+                others = await asyncio.gather(*(find_similar_active_knowledge(
+                    ns_id, embeddings[o], limit=_DUP_CANDIDATES, replacing_confluence_pages=replacing_pages or None,
+                    replacing_documents=replacing_docs or None,
+                ) for o in own))
+                for o, extra in zip(own, others):
+                    ids = {m["id"] for m in match_results[o]}
+                    match_results[o] = sorted([*match_results[o], *(m for m in extra if m["id"] not in ids)], key=lambda m: -m["similarity"])
             # ② 같은 원본 안 완전 일치 — 같은 원본의 저장 조각(이번 작업 앞 배치)이나 앞 조각과 같으면 건너뜀
             skip: set[int] = set()
             for offset, (item, matches) in enumerate(zip(batch, match_results)):
@@ -1172,54 +1205,42 @@ async def _run_bulk_ingestion(
                     meaning_only += 1
                 if close:
                     match_results[offset] = kept + [m for m in match_results[offset] if m["similarity"] < dup_threshold]
-            db_is_duplicate = [
-                offset not in skip and offset not in copy and bool(m) and m[0]["similarity"] >= dup_threshold and not batch[offset].get("keep_new")
-                for offset, m in enumerate(match_results)
-            ]   # keep_new = 사람이 미리보기 비교 창에서 "다른 내용"이라 정한 조각(11/04)
+            db_is_duplicate = []
+            near: set[int] = set()
+            for offset, (item, m) in enumerate(zip(batch, match_results)):
+                close = [x for x in m if x["similarity"] >= dup_threshold]
+                # keep_new = 사람이 미리보기 비교 창에서 "다른 내용"이라 정한 조각(11/04)
+                flagged = offset not in skip and offset not in copy and bool(close) and not item.get("keep_new")
+                review = flagged and any(needs_review(item, x, job_id) for x in close)
+                if flagged and not review:
+                    near.add(offset)
+                if review:   # 대기 근거엔 판단할 게 있는 상대만(같은 작업·다른 원본 상대는 빼서 비교 화면이 헷갈리지 않게)
+                    match_results[offset] = [x for x in close if needs_review(item, x, job_id)]
+                db_is_duplicate.append(review)
 
-            # 배치 내 상호 중복 검사 — 같은 배치 안의 항목끼리는 아직 INSERT 전이라
-            # find_similar_active_knowledge(DB 조회)가 서로를 못 본다(둘 다 'active'로
-            # 조회되지 않으므로). 정규화된 임베딩이라 내적=코사인 유사도. DB 중복이
-            # 아닌(=active로 남을 예정인) 더 앞쪽 항목을 기준으로만 비교해서, 먼저
-            # 등장한 항목이 대표로 남고 이후 유사 항목들이 그걸 가리키게 한다.
-            local_match: dict[int, tuple[int, float]] = {}  # offset -> (matched offset, similarity)
-            if len(batch) > 1:
-                emb_matrix = np.array(embeddings, dtype=np.float32)
-                sims = emb_matrix @ emb_matrix.T
-                for i in range(len(batch)):
-                    if db_is_duplicate[i] or i in skip or i in copy or batch[i].get("keep_new"):
-                        continue
-                    best_j, best_sim = None, 0.0
-                    for j in range(i):
-                        if db_is_duplicate[j] or j in local_match or j in skip:
-                            continue  # j 자신도 결국 pending으로 빠지거나 건너뛸 항목이면 기준으로 안 삼음
-                        if norms[j] == norms[i]:   # ②' 같은 배치 안 다른 원본의 같은 글(같은 원본이면 ②에서 건너뜀)
-                            copy.add(i)
-                            cross_copies += 1
-                            best_j = None
-                            break
-                        sim = float(sims[i, j])
-                        # ③ 같은 배치 안도 같은 규칙 — 의미가 높아도 글자가 다르면(형제 페이지) 중복 의심 아님
-                        if sim > best_sim and sim >= dup_threshold and similar_at_least(batch[i]["content"], batch[j]["content"], text_threshold, tmpl):
-                            best_j, best_sim = j, sim
-                    if best_j is not None:
-                        local_match[i] = (best_j, best_sim)
+            # 같은 배치 안 조각끼리는 같은 작업이라 비슷해도 승인 대기로 안 보낸다(needs_review, 11/09) — 예전엔 임베딩 내적으로 서로를 비교해
+            # 뒤 조각을 대기로 보냈다(전제: 같은 배치 = 서로를 DB에서 못 봄). 다른 원본의 똑같은 글만 등록 이력 수로 센다.
+            seen_batch: set[str] = set()
+            for i in range(len(batch)):
+                if i in skip:
+                    continue
+                if norms[i] in seen_batch and i not in copy and not db_is_duplicate[i]:   # 승인 대기로 가는 조각은 "대기 없이 등록" 수에 안 셈(리뷰 L3)
+                    copy.add(i)
+                    cross_copies += 1
+                seen_batch.add(norms[i])
+            near_registered += len(near - copy)   # 같은 배치의 같은 글(cross_copies)로 이미 센 조각은 빼고(로그 이중 집계 방지, 리뷰 L6)
 
             rows = []
             pending_chunk_indices: dict[int, list[dict]] = {}  # source_chunk_idx → DB matches
-            local_pending: dict[int, tuple[int, float]] = {}   # chunk_idx → (matched chunk_idx, similarity), 같은 배치 내 매칭
             for offset, (item, emb, matches) in enumerate(zip(batch, embeddings, match_results)):
                 if offset in skip:
                     continue   # ② 완전 일치 — 저장 안 함(작업에 수·기존 id)
                 # PDF/XLSX 추출 텍스트에 null byte(\x00)가 포함되면 PostgreSQL이 거부함 → 제거
                 content = item["content"].replace("\x00", "")
                 chunk_idx = start + offset
-                is_duplicate = db_is_duplicate[offset] or offset in local_match
-                if db_is_duplicate[offset]:
+                is_duplicate = db_is_duplicate[offset]
+                if is_duplicate:
                     pending_chunk_indices[chunk_idx] = matches
-                elif offset in local_match:
-                    matched_offset, sim = local_match[offset]
-                    local_pending[chunk_idx] = (start + matched_offset, sim)
                 rows.append((
                     ns_id,
                     content,
@@ -1249,19 +1270,14 @@ async def _run_bulk_ingestion(
                     VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 """, rows)
                 created += len(rows)
-                pending_total += len(pending_chunk_indices) + len(local_pending)
+                pending_total += len(pending_chunk_indices)
 
-                if pending_chunk_indices or local_pending:
-                    # executemany는 RETURNING을 안 주므로, 방금 넣은 행을 source_chunk_idx로
-                    # 역매칭 — local_pending의 매칭 대상(같은 배치 내 다른 청크)의 id도
-                    # 같은 방식으로 필요하므로 함께 조회한다
-                    needed_idxs = set(pending_chunk_indices.keys()) | set(local_pending.keys()) | {
-                        matched_idx for matched_idx, _ in local_pending.values()
-                    }
+                if pending_chunk_indices:
+                    # executemany는 RETURNING을 안 주므로, 방금 넣은 행을 source_chunk_idx로 역매칭
                     new_rows = await conn.fetch(
                         "SELECT id, source_chunk_idx FROM rag_knowledge "
                         "WHERE ingestion_job_id = $1 AND source_chunk_idx = ANY($2::int[])",
-                        job_id, list(needed_idxs),
+                        job_id, list(pending_chunk_indices),
                     )
                     id_by_chunk_idx = {r["source_chunk_idx"]: r["id"] for r in new_rows}
                     match_rows = [
@@ -1269,9 +1285,6 @@ async def _run_bulk_ingestion(
                         for chunk_idx, matches in pending_chunk_indices.items()
                         for m in matches
                     ]
-                    for chunk_idx, (matched_idx, sim) in local_pending.items():
-                        if chunk_idx in id_by_chunk_idx and matched_idx in id_by_chunk_idx:
-                            match_rows.append((id_by_chunk_idx[chunk_idx], id_by_chunk_idx[matched_idx], sim))
                     if match_rows:
                         await conn.executemany(
                             "INSERT INTO rag_knowledge_duplicate_match "
@@ -1301,10 +1314,10 @@ async def _run_bulk_ingestion(
             logger.exception("실패한 인제스천 작업 정리 실패 (job_id=%s)", job_id)
         return {"created": 0, "job_id": job_id, "status": "failed"}
 
-    if skipped_total or meaning_only or cross_copies:
-        # 대체 처리는 보이게 — 건너뜀·다른 원본 같은 글은 등록 이력에 수로, 의미만 비슷해 정상 등록한 수는 로그로(11/04·11/09)
-        logger.info("등록 중복 판정 (job_id=%s): 같은 글이 있어 건너뜀 %d건, 다른 원본의 같은 글이라 바로 등록 %d건, 의미만 비슷해 정상 등록 %d건",
-                    job_id, skipped_total, cross_copies, meaning_only)
+    if skipped_total or meaning_only or cross_copies or near_registered:
+        # 대체 처리는 보이게 — 건너뜀·다른 원본 같은 글은 등록 이력에 수로, 의미만 비슷해·판단할 게 없어 정상 등록한 수는 로그로(11/04·11/09)
+        logger.info("등록 중복 판정 (job_id=%s): 같은 글이 있어 건너뜀 %d건, 다른 원본의 같은 글이라 바로 등록 %d건, 의미만 비슷해 정상 등록 %d건, "
+                    "비슷하지만 다른 원본·같은 작업이라 바로 등록 %d건", job_id, skipped_total, cross_copies, meaning_only, near_registered)
         async with get_conn() as conn:
             await conn.execute("UPDATE rag_ingestion_job SET skipped_exact_chunks = $2, skipped_exact_ids = $3::int[], cross_source_copies = $4 "
                                "WHERE id = $1", job_id, skipped_total, skipped_exact, cross_copies)

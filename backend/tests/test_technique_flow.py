@@ -40,6 +40,14 @@ def test_abstain_state_follows_setting(monkeypatch, value, state):
     assert v["state"] == state and (v["off_reason"] is None) == (state == "on")
 
 
+@pytest.mark.parametrize("value,state", [(True, "on"), (False, "off")])
+def test_contained_collapse_state_follows_setting(monkeypatch, value, state):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "core.config", SimpleNamespace(settings=SimpleNamespace(knowledge_collapse_contained=value)))
+    assert tech.flow_view("contained_collapse")["state"] == state
+
+
 def test_switch_mode_matches_flag_registry():
     switch = {k for k, v in tech.FLOW_OF.items() if v[2] == "switch"}
     assert switch == set(flags.SWITCHES)

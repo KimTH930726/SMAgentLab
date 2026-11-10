@@ -50,7 +50,8 @@ async def main() -> None:
             from core.database import get_conn as _gc, knowledge_scope_extra_ids
             async with _gc() as c2:
                 extra = {"extra_ns_ids": await knowledge_scope_extra_ids(c2, it["ns"], scope, vec)}
-        res = await retrieval.search_knowledge(it["ns"], vec, enriched, d["default_w_vector"], d["default_w_keyword"], DEEP, **extra)
+        res = await retrieval.search_knowledge(it["ns"], vec, enriched, d["default_w_vector"], d["default_w_keyword"], DEEP,
+                                               collapse=False, **extra)   # 순위 진단은 접기 전 원순위(접기는 아래 채팅 문맥에서)
         ids = [r.id for r in res]
         gold = set(it["gold_ids"])
         rank = next((i + 1 for i, x in enumerate(ids) if x in gold), None)   # 순위 진단은 하이브리드 원순위(구제 전)

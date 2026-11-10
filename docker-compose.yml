@@ -87,6 +87,7 @@ services:
       POLICY_ABSTAIN_MIN_PARAM_RANK: ${POLICY_ABSTAIN_MIN_PARAM_RANK:-0.0}
       # 지식 검색 BM25 구제(v2.139, 기본 꺼짐 — 재적재 후 게이트로 다시 판단). 여기 나열해야 .env 값이 컨테이너로 들어간다
       KNOWLEDGE_KEYWORD_RESCUE: ${KNOWLEDGE_KEYWORD_RESCUE:-0}
+      KNOWLEDGE_COLLAPSE_CONTAINED: ${KNOWLEDGE_COLLAPSE_CONTAINED:-1}   # 검색 top_k 안 포함 조각 빼기(11/09) — 0이면 끔
       INHOUSE_LLM_TIMEOUT: ${INHOUSE_LLM_TIMEOUT:-180}
       # URL·컨플 가져오기 허용 호스트(쉼표, 11/03 보안 리뷰 #3) — 목록 밖 주소는 막는다
       URL_IMPORT_ALLOWED_HOSTS: ${URL_IMPORT_ALLOWED_HOSTS:-confl.sinc.co.kr}
