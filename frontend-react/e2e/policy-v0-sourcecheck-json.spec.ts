@@ -186,6 +186,7 @@ test('원문 확인 카드 ↔ 정정 제안 — 반려면 처리 전, 승인이
 });
 
 test('참고표 오류 카드 — 정책마다 [이 정책 정정 요청] · [참고표 보기] 창(결정·결과 열, 표 안 검색) · 정정 카드 머리 = 대상 정책·원문 확인 번호', async ({ page, request }) => {
+  test.setTimeout(90_000);   // 픽스처 SQL 여러 번 + 로그인 + 정정 올리기·반려 — 기본 30초를 넘겨 로그인 단계에서 끊겼다(11/10, 120초로 4/4 통과)
   const lid = psql(`SELECT logical_id FROM policy_item WHERE namespace_id = ${nsId()} AND policy_name = '${P1.name}' AND status = 'active'`);
   const cols = JSON.stringify([{ name: '지역', decisive: true }, { name: '무게' }, { name: '요금', role: 'result' }]);
   const tid = Number(psql(`INSERT INTO ref_table (namespace_id, title, category_path, columns, content_hash) VALUES (${nsId()}, 'E2E 배송비 표', '{테스트,배송}', '${cols}'::jsonb, 'e2e-rt') RETURNING id`).split('\n')[0]);

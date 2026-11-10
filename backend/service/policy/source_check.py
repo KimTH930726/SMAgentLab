@@ -6,7 +6,10 @@
 
 저장: 새 테이블 없이 정정 원장(ops_improvement_item)을 kind='source_check'로 재사용(대상 (종류, id) 패턴 그대로).
   target_type 'policy'(target_id = 정책 logical_id, 버전 불변) 또는 'ref_table'(참고표 logical_id)
-  original {type: question|conflict|ref_error, policies: [logical_id…], ref_tables: [logical_id…], source_keys: {...}, hash}
+  original {type: question|conflict|ref_error, policies: [logical_id…], ref_tables: [logical_id…], source_keys: {...}, hash,
+            focus?: [{table: 참고표 logical_id, table_id: 그때 버전 id, rows: [원표 행 번호…], columns: [열 이름…]}]}
+  focus = 문제 행·칸(11/10 태훈 "참고표 보기가 1번부터 나와 어디를 고치라는지 찾기 어렵다") — 카드를 만드는 쪽이 적는다(설명 문장에서 뽑지 않음).
+  그 버전 id로 적어 두고, 표가 새 버전이 되면 행 번호가 맞는지 모르니 화면에 강조하지 않는다(current=false).
   user_input = 문제 설명(원문을 인용하지 않고 우리 말로), source = v0_load_check | golden_set
   처리: 해결 = status approved, 닫기 = rejected — 메모는 ai_verdict {resolution, note}(이 원장의 "판정" 칸).
 제안 연결(ops_link status='suggested', 적재기가 규칙으로 추정한 정책→절 참조)도 같은 화면에서 [확정](active)/[거절](rejected).
@@ -60,7 +63,37 @@ def validate_seed(rec: dict) -> list[str]:
         errs.append("policies·ref_tables 중 하나는 있어야 함")
     if rec.get("type") == "conflict" and len(pols) < 2:
         errs.append("conflict는 정책 둘 이상")
+    focus = rec.get("focus")
+    if focus is not None:
+        if not isinstance(focus, list):
+            errs.append("focus는 목록")
+        else:
+            seen_tab: list = []
+            for f in focus:
+                if not isinstance(f, dict):   # .get 전에 — 문자열·목록이면 형식 오류로(예외로 죽지 않게, 리뷰 11/10)
+                    errs.append("focus 항목은 {ref_table, rows, columns?}")
+                    continue
+                rows, cols = f.get("rows"), f.get("columns", [])
+                if f.get("ref_table") not in (tabs if isinstance(tabs, list) else []):
+                    errs.append("focus.ref_table은 ref_tables 중 하나")
+                elif f["ref_table"] in seen_tab:   # 화면은 표마다 한 항목만 읽는다 — 둘째가 조용히 버려지지 않게
+                    errs.append("focus는 참고표마다 한 항목(행을 한 목록에)")
+                elif not isinstance(rows, list) or not rows or not all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in rows):
+                    errs.append("focus.rows는 원표 행 번호(양의 정수) 목록")
+                elif not isinstance(cols, list) or not all(isinstance(x, str) and x for x in cols):
+                    errs.append("focus.columns는 열 이름 목록")
+                if isinstance(f.get("ref_table"), str):
+                    seen_tab.append(f["ref_table"])
     return errs
+
+
+def focus_view(original: dict, logical_id: int, current_id: Optional[int]) -> Optional[dict]:
+    """카드의 참고표 하나에 대한 문제 행·칸 — 적어 둔 버전이 지금 버전일 때만 current(아니면 행 번호가 맞는지 모름)."""
+    f = next((x for x in (original.get("focus") or []) if int(x.get("table", -1)) == logical_id), None)
+    if not f:
+        return None
+    return {"rows": [int(n) for n in f.get("rows") or []], "columns": list(f.get("columns") or []),
+            "current": current_id is not None and f.get("table_id") == current_id}
 
 
 # ── 조회 ─────────────────────────────────────────────────────────────────────
@@ -130,7 +163,8 @@ async def list_checks(namespace: str, status: Optional[str] = None) -> dict:
                           "category_path": list(pols[lid]["category_path"] or []) if lid in pols else []}
                          for lid in (int(x) for x in (o.get("policies") or []))],
             "ref_tables": [{"logical_id": lid, "id": tabs[lid]["id"] if lid in tabs else None,
-                            "title": tabs[lid]["title"] if lid in tabs else None}
+                            "title": tabs[lid]["title"] if lid in tabs else None,
+                            "focus": focus_view(o, lid, tabs[lid]["id"] if lid in tabs else None)}
                            for lid in (int(x) for x in (o.get("ref_tables") or []))],
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "decided_at": r["decided_at"].isoformat() if r["decided_at"] else None,

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight } from 'lucide-react';
-import { decideLink, decideSourceCheck, listSourceChecks, NO_ISSUE_REASONS, type NoIssueReason, type SourceCheck, type SuggestedLink } from '../../../api/policy';
+import { decideLink, decideSourceCheck, listSourceChecks, NO_ISSUE_REASONS, type NoIssueReason, type RefTableFocus, type SourceCheck, type SuggestedLink } from '../../../api/policy';
 import { useNamespaceAccess } from '../../../utils/useNamespaceAccess';
 import { showConfirm, showError } from '../../../store/useDialogStore';
 import { Badge } from '../../ui/Badge';
@@ -39,7 +39,8 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
   const [policyOpen, setPolicyOpen] = useState<number | null>(null);
   const [fromCheck, setFromCheck] = useState<number | null>(null);   // 카드에서 연 정책이면 그 카드 — 여기서 올린 제안이 승인되면 카드도 해결
   const [editFirst, setEditFirst] = useState(false);   // [정정 요청] — 상세 대신 수정 제안 창부터(11/04)
-  const [refTable, setRefTable] = useState<number | null>(null);   // [참고표 보기] — 참고표 id(11/05 A안)
+  // [참고표 보기] — 참고표 id(11/05 A안) + 그 카드가 짚은 문제 행·칸과 설명(11/10 — 창이 문제 행부터 열린다)
+  const [refTable, setRefTable] = useState<{ id: number; focus: RefTableFocus | null; note: string } | null>(null);
   useEffect(() => { setPolicyOpen(null); setRefTable(null); }, [selectedNs]);
 
   const key = ['source-checks', selectedNs, view];
@@ -141,9 +142,9 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
                         <li key={t.logical_id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
                           <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300">참고표</span>
                           <span className="min-w-0 break-words font-medium text-slate-200">{t.title ?? `폐기된 참고표 #${t.logical_id}`}</span>
-                          <Button size="sm" variant="secondary" className="ml-auto" disabled={t.id == null} onClick={() => t.id != null && setRefTable(t.id)}
+                          <Button size="sm" variant="secondary" className="ml-auto" disabled={t.id == null} onClick={() => t.id != null && setRefTable({ id: t.id, focus: t.focus, note: c.description })}
                             data-testid={`source-check-table-${c.id}-${t.logical_id}`}
-                            title={t.id == null ? '지금 쓰는 버전이 없어요' : '원표를 창으로 열어요 — 표 자체 정정은 아직 없어요(관련 정책을 고치세요)'}>참고표 보기</Button>
+                            title={t.id == null ? '지금 쓰는 버전이 없어요' : '원표를 창으로 열어요 — 표 자체 정정은 아직 없어요(관련 정책을 고치세요)'}>참고표 보기{t.focus?.current ? ` · 문제 ${t.focus.rows.length}행` : ''}</Button>
                         </li>
                       ))}
                     </ul>
@@ -238,7 +239,7 @@ export function SourceCheckTab({ onOpenCorrection }: { onOpenCorrection: (id: nu
           initialEditing={editFirst ? 'direct' : null}
         />
       )}
-      {refTable !== null && <RefTableModal namespace={selectedNs} id={refTable} onClose={() => setRefTable(null)} />}
+      {refTable !== null && <RefTableModal namespace={selectedNs} id={refTable.id} focus={refTable.focus} note={refTable.note} onClose={() => setRefTable(null)} />}
     </div>
   );
 }

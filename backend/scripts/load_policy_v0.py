@@ -246,7 +246,7 @@ async def add_source_checks(path: Path, dry_run: bool) -> None:
     rows, problems, dup, seen = [], [], 0, set()
     async with get_conn() as conn:
         for i, r in enumerate(recs, 1):
-            pols, tabs, ns = [], [], set()
+            pols, tabs, ns, tab_of = [], [], set(), {}
             n_before = len(problems)
             for k in r.get("policies") or []:
                 found = await conn.fetch("SELECT logical_id, namespace_id FROM policy_item WHERE source_key = $1 AND status = 'active'", k)
@@ -256,12 +256,25 @@ async def add_source_checks(path: Path, dry_run: bool) -> None:
                 row = found[0]
                 pols.append(row["logical_id"]); ns.add(row["namespace_id"])
             for k in r.get("ref_tables") or []:
-                found = await conn.fetch("SELECT logical_id, namespace_id FROM ref_table WHERE source_key = $1 AND status = 'active'", k)
+                found = await conn.fetch("SELECT id, logical_id, namespace_id FROM ref_table WHERE source_key = $1 AND status = 'active'", k)
                 if len(found) != 1:   # 원천 키는 영역을 가로질러 유일하다는 전제 — 깨지면 조용히 하나를 고르지 않고 멈춘다(리뷰 L7)
                     problems.append(f"{i}번째 줄: 현행 참고표 {len(found)}건 {k}")
                     continue
                 row = found[0]
-                tabs.append(row["logical_id"]); ns.add(row["namespace_id"])
+                tabs.append(row["logical_id"]); ns.add(row["namespace_id"]); tab_of[k] = row
+            focus = []
+            for f in r.get("focus") or []:   # 문제 행·칸(11/10) — 그 버전에 그 행·열이 실제로 있어야 한다(틀린 위치를 강조하지 않게)
+                t = tab_of.get(f["ref_table"])
+                if t is None:
+                    continue   # 위에서 참고표 문제로 이미 걸림
+                have = {x["row_no"] for x in await conn.fetch(
+                    "SELECT row_no FROM ref_table_row WHERE ref_table_id = $1 AND row_no = ANY($2::int[])", t["id"], f["rows"])}
+                raw_cols = await conn.fetchval("SELECT columns FROM ref_table WHERE id = $1", t["id"])
+                cols = {c.get("name") for c in (json.loads(raw_cols) if isinstance(raw_cols, str) else raw_cols or [])}
+                if set(f["rows"]) - have or set(f.get("columns") or []) - cols:
+                    problems.append(f"{i}번째 줄: focus 행·열이 참고표에 없음 {sorted(set(f['rows']) - have)} {sorted(set(f.get('columns') or []) - cols)}")
+                    continue
+                focus.append({"table": t["logical_id"], "table_id": t["id"], "rows": sorted(set(f["rows"])), "columns": f.get("columns") or []})
             if len(ns) > 1:
                 problems.append(f"{i}번째 줄: 대상이 여러 업무 영역에 걸침")
             if len(problems) > n_before:
@@ -271,12 +284,16 @@ async def add_source_checks(path: Path, dry_run: bool) -> None:
                 problems.append(f"{i}번째 줄: 파일 안에서 같은 항목(출처·종류·대상·id)이 두 번 — id로 구분하세요")
                 continue
             seen.add(h)
-            if await conn.fetchval("SELECT id FROM ops_improvement_item WHERE kind = $1 AND source = $2 AND original->>'hash' = $3",
-                                   KIND, r["source"], h):
+            if existing := await conn.fetchval("SELECT id FROM ops_improvement_item WHERE kind = $1 AND source = $2 AND original->>'hash' = $3",
+                                               KIND, r["source"], h):
                 dup += 1
+                if focus:   # 문제 행은 카드를 만들 때만 적는다 — 이미 있는 카드엔 안 들어가니 조용히 버리지 않고 알린다(리뷰 11/10)
+                    print(f"  ! {i}번째 줄: 이미 있는 카드 #{existing}이라 focus(문제 행)는 반영하지 않음")
                 continue
             original = {"type": r["type"], "policies": pols, "ref_tables": tabs, "hash": h, "seed_id": r.get("id"),
                         "source_keys": {"policies": r.get("policies") or [], "ref_tables": r.get("ref_tables") or []}}
+            if focus:
+                original["focus"] = focus
             rows.append((KIND, r["source"], ns.pop(), "policy" if pols else "ref_table", (pols or tabs)[0],
                          r["description"].strip(), json.dumps(original, ensure_ascii=False)))
         print(f"씨앗 {len(recs)}줄 · 출처별 {dict(Counter(r['source'] for r in recs))} · 종류별 {dict(Counter(r['type'] for r in recs))}")

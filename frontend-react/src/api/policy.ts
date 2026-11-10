@@ -109,7 +109,12 @@ export interface RefTableDetail {
   category_path: string[];
   columns: RefTableColumn[];
   rows: Record<string, string | number | null>[];
+  /** 행마다 원표 행 번호(rows와 같은 순서) — 원문 확인 카드의 "원표 n행"과 같은 번호 */
+  row_nos: number[];
 }
+
+/** 원문 확인 카드가 짚은 문제 행·칸 — current=false면 표가 새 버전이라 행 번호가 맞는지 모름(강조 안 함) */
+export interface RefTableFocus { rows: number[]; columns: string[]; current: boolean }
 
 export async function listRefTables(namespace: string): Promise<RefTableRow[]> {
   return apiFetch<RefTableRow[]>(`/policy/ref-tables?namespace=${encodeURIComponent(namespace)}`);
@@ -140,7 +145,7 @@ export interface SourceCheck {
   note: string | null;
   /** policy_name이 null이면 지금 쓰이는 버전이 없음 */
   policies: { logical_id: number; policy_name: string | null; category_path: string[] }[];
-  ref_tables: { logical_id: number; id: number | null; title: string | null }[];
+  ref_tables: { logical_id: number; id: number | null; title: string | null; focus: RefTableFocus | null }[];
   created_at: string | null;
   decided_at: string | null;
   decided_by: string | null;

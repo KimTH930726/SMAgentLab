@@ -86,6 +86,22 @@ class TestSeed:
         ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": " "}, False),    # 설명 필수
         ({"source": "chat", "type": "question", "policies": ["a"], "description": "d"}, False),             # 모르는 출처
         ({"source": "v0_load_check", "type": "question", "description": "d"}, False),                       # 대상 없음
+        # 문제 행·칸(11/10) — 대상 참고표의 원표 행 번호(양의 정수)·열 이름
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d",
+          "focus": [{"ref_table": "t", "rows": [323, 324], "columns": ["챌린지 유형"]}]}, True),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d", "focus": [{"ref_table": "t", "rows": [3]}]}, True),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d", "focus": [{"ref_table": "u", "rows": [3]}]}, False),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d", "focus": [{"ref_table": "t", "rows": []}]}, False),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d", "focus": [{"ref_table": "t", "rows": [0]}]}, False),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d", "focus": [{"ref_table": "t", "rows": [True]}]}, False),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d",
+          "focus": [{"ref_table": "t", "rows": [3], "columns": [""]}]}, False),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d", "focus": {"ref_table": "t"}}, False),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d", "focus": ["t"]}, False),      # 항목이 dict 아님
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d", "focus": [None]}, False),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d", "focus": [["t"]]}, False),
+        ({"source": "golden_set", "type": "ref_error", "ref_tables": ["t"], "description": "d",                            # 같은 표 두 항목
+          "focus": [{"ref_table": "t", "rows": [3]}, {"ref_table": "t", "rows": [4]}]}, False),
     ])
     def test_validate(self, rec, ok):
         assert (source_check.validate_seed(rec) == []) is ok
@@ -131,7 +147,7 @@ class TestListChecks:
         assert a["status"] == "open" and a["type"] == "conflict" and a["description"] == "두 정책이 다르게 말함"
         assert a["policies"] == [{"logical_id": 11, "policy_name": "가", "category_path": ["1. 가"]},
                                  {"logical_id": 12, "policy_name": None, "category_path": []}]
-        assert b["status"] == "resolved" and b["note"] == "원본 고침" and b["ref_tables"] == [{"logical_id": 3, "id": 30, "title": "표"}]
+        assert b["status"] == "resolved" and b["note"] == "원본 고침" and b["ref_tables"] == [{"logical_id": 3, "id": 30, "title": "표", "focus": None}]
         assert a["correction"] == {"id": 80, "status": "pending"} and b["correction"] is None
         assert out["links"] == [{"id": 5, "status": "suggested", "relation": "refers",
                                  "policy": {"logical_id": 11, "policy_name": "가", "category_path": ["1. 가"]},
@@ -716,3 +732,35 @@ def teardown_module(module):
         if v is not None:
             setattr(_pkg, k, v)
 
+
+
+def test_focus_view_only_current_version_is_highlighted():
+    """문제 행은 적어 둔 버전이 지금 버전일 때만 current — 표가 새 버전이면 행 번호가 맞는지 모른다."""
+    o = {"focus": [{"table": 7, "table_id": 70, "rows": [323, 324], "columns": ["챌린지 유형"]}]}
+    assert source_check.focus_view(o, 7, 70) == {"rows": [323, 324], "columns": ["챌린지 유형"], "current": True}
+    assert source_check.focus_view(o, 7, 71)["current"] is False
+    assert source_check.focus_view(o, 7, None)["current"] is False
+    assert source_check.focus_view(o, 6, 60) is None
+    assert source_check.focus_view({}, 7, 70) is None
+
+
+@pytest.mark.asyncio
+async def test_list_checks_returns_focus_by_version():
+    """목록 API가 참고표마다 문제 행을 — 적어 둔 버전이 지금 버전(30)이면 current, 옛 버전(29)이면 current=false(리뷰 11/10 공백)."""
+    def card(id_, table_id):
+        return _check_row(id=id_, target_type="ref_table", target_id=3, original=json.dumps(
+            {"type": "ref_error", "policies": [], "ref_tables": [3], "focus": [{"table": 3, "table_id": table_id, "rows": [41, 40], "columns": ["수량"]}]}))
+
+    async def fetch(sql, *args):
+        if "FROM ops_improvement_item i" in sql:
+            return [card(70, 30), card(71, 29)]
+        if "FROM ref_table" in sql:
+            return [{"id": 30, "logical_id": 3, "title": "표"}]
+        return []
+    c = _conn(fetch=fetch)
+    with patch.object(source_check, "get_conn", return_value=c), \
+         patch.object(source_check, "resolve_namespace_id", AsyncMock(return_value=2)):
+        out = await source_check.list_checks("ns", "open")
+    now, old = (ch["ref_tables"][0]["focus"] for ch in out["checks"])
+    assert now == {"rows": [41, 40], "columns": ["수량"], "current": True}
+    assert old["current"] is False

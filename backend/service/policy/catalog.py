@@ -105,7 +105,7 @@ def _jsonb(v):
 
 
 async def get_ref_table(namespace: str, table_id: int) -> Optional[dict]:
-    """원표 그대로 — 열(이름·역할·결정 열 여부) + 행({열 이름: 값}, 행 번호 순)."""
+    """원표 그대로 — 열(이름·역할·결정 열 여부) + 행({열 이름: 값}, 행 번호 순) + 행마다 원표 행 번호(row_nos — 원문 확인 카드의 "원표 n행"과 같은 번호)."""
     async with get_conn() as conn:
         ns_id = await _ns_id(conn, namespace)
         t = await conn.fetchrow(
@@ -116,7 +116,7 @@ async def get_ref_table(namespace: str, table_id: int) -> Optional[dict]:
         rows = await conn.fetch("SELECT row_no, cells FROM ref_table_row WHERE ref_table_id = $1 ORDER BY row_no, id", table_id)
     return {"id": t["id"], "logical_id": t["logical_id"], "version": t["version"], "title": t["title"],
             "category_path": list(t["category_path"] or []), "columns": _jsonb(t["columns"]) or [],
-            "rows": [_jsonb(r["cells"]) or {} for r in rows]}
+            "rows": [_jsonb(r["cells"]) or {} for r in rows], "row_nos": [r["row_no"] for r in rows]}
 
 
 async def list_overviews(namespace: str) -> list[dict]:

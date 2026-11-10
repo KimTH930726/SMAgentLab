@@ -127,12 +127,13 @@ class TestRefTablesAndOverviews:
     async def test_ref_table_rows_are_dicts_in_row_order(self):
         cols = [{"name": "유형", "role": "condition", "decisive": True}, {"name": "수량", "role": "result", "decisive": False}]
         t = {"id": 4, "logical_id": 4, "version": 1, "title": "표", "category_path": [], "columns": json.dumps(cols)}
-        conn = _conn(fetch=[{"row_no": 1, "cells": json.dumps({"유형": "A", "수량": "1"})},
-                            {"row_no": 2, "cells": {"유형": "B", "수량": "3"}}], fetchrow=t)
+        conn = _conn(fetch=[{"row_no": 3, "cells": json.dumps({"유형": "A", "수량": "1"})},
+                            {"row_no": 4, "cells": {"유형": "B", "수량": "3"}}], fetchrow=t)
         a, b = _patch(conn)
         with a, b:
             out = await catalog.get_ref_table("ns", 4)
         assert out["columns"] == cols and out["rows"] == [{"유형": "A", "수량": "1"}, {"유형": "B", "수량": "3"}]
+        assert out["row_nos"] == [3, 4]   # 원표 행 번호(3행부터 시작하는 표) — 화면 #칸·원문 확인 "원표 n행"과 같은 번호(11/10)
         assert "ORDER BY row_no" in conn.fetch.await_args.args[0]
         assert "namespace_id = $2" in conn.fetchrow.await_args.args[0] and conn.fetchrow.await_args.args[1:] == (4, 5)
 

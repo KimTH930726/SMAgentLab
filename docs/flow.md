@@ -804,11 +804,13 @@ VOC 반복 묶기(`service/email_voc/pattern_detection.py`, 11/03): 요약 임�
    목록 맨 위 [+ 정책 추가 제안](새 분류도) · 절 줄 [+ 추가](그 절이 채워짐) → POST …/policy-change {change: add}
    승인 = 추가: 새 정책 v1(원천 키 sys:<logical_id>, 조각 1개 = 원문 + 임베딩) / 옮기기: 새 버전(분류만 다름, logical_id·원천 키 그대로,
          조각 다시 임베딩 — 머리에 분류 경로) / 폐기: 상태만 deprecated(지우지 않음). 같은 분류에 같은 이름이면 제안·승인 모두 막음. 끝나면 정책 색인·답변 캐시 비움
-[참고표] GET /api/policy/ref-tables → GET /ref-tables/{id}: 열(결정 열 표시) + 행 {열: 값}, 머리 고정·가로 스크롤
+[참고표] GET /api/policy/ref-tables → GET /ref-tables/{id}: 열(결정 열 표시) + 행 {열: 값} + row_nos(원표 행 번호, # 칸), 머리 고정·가로 스크롤
 [문서 개요] GET /api/policy/overviews: 문서 서문(목적·적용 대상)
 [원문 확인] GET /api/policy/source-checks?namespace=&status=open|done   (v2.151 — 정정이 아니라 원문에 대한 질문·문제)
    ├─ 항목 = 정정 원장 kind='source_check'(새 테이블 없음): 담당자 질문(적재 점검) · 정책끼리 어긋남 · 참고표 오류(골든셋 작성)
    │     대상 = 정책 logical_id들 / 참고표 logical_id들(original), 설명 = user_input(원문 인용 없이)
+   │     문제 행(v2.226) original.focus [{table, table_id, rows, columns}] — 카드 만드는 쪽이 적음(씨앗 focus, 적재기가 그 버전 행·열 확인)
+   │       → 목록 ref_tables[].focus{rows, columns, current(적은 버전 = 지금)} → [참고표 보기 · 문제 n행]: 첫 문제 행 스크롤·강조·◀ ▶·[문제 행만]
    │     [해결](메모) POST …/source-checks/{id}/resolve → approved · [문제 없음](사유 4개 — 원문이 맞음·이미 고쳐짐·중복·기타, v2.175) …/dismiss → rejected
    │     — 결론은 ai_verdict + AI 판단 원장(kind source_check, 오탐률). 카드에서 연 정책으로 올린 제안 = 카드 "정정 요청 중 #n" → 승인되면 카드 자동 해결
    │     고칠 게 정해지면 정책 상세의 수정 제안 → §6-1 정정 요청(여기선 정책이 안 바뀜)
