@@ -125,6 +125,7 @@ test('같은 글 다시 등록 — 등록 전에 앱 안 안내로 막고(브라
   // 11/04: 등록 순간 비슷한 지식 확인 — 같은 글은 [등록] 전에 막힌다(비슷한 글의 세 갈래는 knowledge-similar-review.spec.ts)
   // 2026-10-07: 이 안내가 브라우저 기본 alert으로 떠서 디자인이 깨졌다 — 앱 모달(DialogHost)로 바꾼 회귀 방지.
   page.on('dialog', (d) => { throw new Error(`브라우저 기본 대화상자가 떴습니다(앱 모달이어야 함): ${d.message()}`); });
+  test.setTimeout(120_000);   // 넣을 곳 판정(로컬 LLM)을 chooseLocation이 최대 60초 기다린다 — 기본 30초면 그 사이에 끊겼다(11/10)
   const runId = `${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
   const marker = `E2E유사등록_${runId}`;
   const content = `${marker} — 유사 지식 판정 확인용으로 같은 문장을 두 번 등록하는 Playwright 회귀 테스트 문장입니다.`;
@@ -157,6 +158,8 @@ test('같은 글 다시 등록 — 등록 전에 앱 안 안내로 막고(브라
     expect(psql(`SELECT count(*) FROM rag_knowledge WHERE content LIKE '${marker}%'`)).toBe('1');
   } finally {
     for (const id of ids) await page.request.delete(`/api/knowledge/${id}`, { headers: authHeader }).catch(() => {});
+    // 브라우저가 먼저 닫히면(제한 시간 초과 등) 위 삭제 요청이 조용히 실패해 시험 문장이 사용 중으로 남았다(11/05 #27254) — DB에서 한 번 더
+    psql(`UPDATE rag_knowledge SET status = 'deleted' WHERE content LIKE '${marker}%' AND status <> 'deleted'`);
     const g = await page.request.get(`/api/knowledge/glossary?namespace=${encodeURIComponent(NAMESPACE)}`, { headers: authHeader }).catch(() => null);
     if (g?.ok()) {
       const items: Array<{ id: number; term: string; description: string }> = await g.json();
