@@ -1,4 +1,4 @@
-# OpsLens 시스템 아키텍처 (v2.211)
+# OpsLens 시스템 아키텍처 (v2.227)
 
 ## 개요
 
@@ -20,99 +20,7 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 - v2.222 (2026-11-09, dev_0): **토큰 낭비 점검 — 고칠 수 있는 것만, 정확도는 그대로**(태훈 "토큰 감당 가능한가" · "고칠 수 있는 낭비는 고쳐야" · "정확도가 내려가면 그건 써야 하는 토큰"; 발표 기준 = Bedrock). 독립 에이전트가 LLM 호출 16곳 전수 조사 → 낭비 5건 중 3건 수정·1건 유지·1건 운영 LLM 몫: ① 근거 없음 즉시 거절 다시 켬(기본 0.50) — v0 전환(10/20)으로 꺼 뒀던 것을 LLM 없이 재보정: 골든 거짓 거절 정책 0/485 · 업무지식 0/106, 답 없는 첫 질문 25/60을 LLM 호출 없이 거절(0.52부터 정책 1건 거짓 거절). compose는 안 주면 0.50·빈 값이면 끔 ② 로컬 LLM(openai_compat)도 사용량 기록(provider 구분, 스트림은 마지막 조각 usage) — 운영 LLM 기준 기능별 사용량을 개발 중에도 잰다 ③ 채팅·요약 출력 상한 4,096토큰(기록된 최대 답 2,294 · p90 384 — 폭주 방지만, 정상 답 안 잘림) ④ 옛 단일 응답 `POST /api/chat` 삭제(화면 미사용, 캐시·문맥 예산·되묻기·즉시 거절 없이 LLM 호출) · 유지: 문맥 예산을 넘는 입력(정책 v0 통째 조각 19/485문항 최대 1만 4천 자 · 대화 이력 최근 2교환) — 답에 필요한 토큰이고 여러 턴 정확도는 잴 수단이 없어 손대지 않음 · 운영 LLM 몫: 게이트웨이(Dify 에이전트)가 서버 쪽에서 붙이는 입력(보낸 3천 자 → 1만 7천 토큰 기록)·요청에 출력 상한 칸 없음 — Bedrock으로 가면 사라짐. 검증: 실 서버 — 답 없는 질문 8개 중 6개 LLM 호출 0으로 거절 · 정상 질문은 호출 + 사용량 기록(입력 5,943·출력 933토큰) · `/api/chat` 404, 백엔드 전체 통과. 독립 리뷰: 중간 2 — 후속 질문(이전 턴 있음)도 검색 신호만으로 거절될 수 있었다(측정은 한 턴뿐) → 후속 질문은 즉시 거절 안 함(예전대로 이력으로 답) · 사용량 화면에 로컬 LLM 기록이 섞임 → 화면은 지금 시스템 LLM 종류만(`current_provider_type`) · 낮음 2 — 서버가 출력 상한(문맥 한도)·usage 요청을 400으로 거부하면 그 칸 없이 한 번 더 · 옛 설명 주석·문서 정리, 기본값·중단·오류·재요청 테스트 추가. 여유가 좁다(0.50 vs 0.52) — 대량 적재 뒤 같은 측정(eval_out/exp/abstain_ctx_1109.py)으로 다시 본다.
 - v2.221 (2026-11-09, dev_0): **승인 대기 재발 방지 — 다른 페이지의 똑같은 글은 바로 등록 + 검색에서 한 건으로**(태훈 "시스템적으로 막을 수 있게", "사람 공수 최대한 줄여야"). 막힌 일: 컨플 적재 뒤 승인 대기 815건 중 323건(40%)이 다른 페이지와 글자까지 같은 조각 — 판단할 게 없는데 사람 몫. 건너뛰면 그 페이지가 지워질 때 내용 유실(11/04 H1). 바꾼 것: ②' 적재 — 같은 글 상대가 사용 중(또는 이번 작업)이면 승인 대기 없이 등록, 작업 `cross_source_copies`에 수(다른 보류 작업 조각이면 롤백될 수 있어 예전대로) · 검색 — 저장 칸 `content_norm_md5`(공백 집합 = Python str.isspace 전체, 로케일 무관)로 같은 글은 점수 높은 하나만(업계 "내용 해시 접기") · `check_ingest` 중복 0 규칙을 같은 원본 안으로(10/07 사고도 같은 원본 안) · 골든셋 정답에 같은 글 id 포함. 데이터: 11/06 반려한 같은 글 269건 사용 중으로(감사 원장 269줄, 642 묶음 58건은 반려 유지). 검증: 검색 게이트 100/106 → 100/106(나빠짐 0) · 실 서버 20질의 같은 글 두 번 0 · 같은 원본 중복 0/5,494 · 검색 지연 중앙 4→5ms · 실 DB 시험(대표 지워지면 사본이 이어받음 · 점수 높은 사본 · DB=Python 정규화 무작위 300) · 백엔드 전체 통과. 독립 리뷰: 중간 1(행마다 정규화로 검색 4~5배 느림 → 저장 칸) · 낮음 반영(공백 집합 차이 · 보류 작업 상대 · 골든셋 범위 · 화면 툴팁·문서 옛 설명) · 백로그(등록 이력 배지 — 시안과 함께, 키워드 구제 후보 접기).
 - v2.220 (2026-11-06, dev_0): **반입 전 검사 C 결정 6건**(권장안대로, 태훈 승인). ① AI 감사 — 표본 감사에서 고른 번복 사유가 저장(`spot_reason`)만 되고 리포트 집계가 안 읽었다 → 종류별 `spot.reasons`, 카드에 "번복 사유 AI 오류 n · …" ② 평가 게이트 — 운영 이미지엔 골든셋·결과 파일(eval_out/)이 없다(.dockerignore). 환경 이름이 아니라 그 서버에 파일이 있나로: 골든셋이 없으면 후보 `auto.golden=false`(사유 "개발 환경에서 실험") → [실험해 보기]·[다시 실행] 숨김, 결과 파일 폴더가 없으면 빨간 "파일 없음" 경고 대신 회색 안내 한 줄(`result_files`) ③ VOC [분석·알림 테스트] — API를 관리자만(전엔 로그인 사용자 누구나 LLM 호출), 탭도 관리자만(메뉴가 이미 관리자 전용이라 이중 방어) · 로그인 문구의 "임시" 정리 ④ 리랭커 모델(2.3GB)을 이미지에서 뺌 — `--build-arg BUNDLE_RERANKER=true`일 때만, 백엔드 이미지 11.4GB → 7.23GB(임베딩 모델 그대로) ⑤ 원문 원장(#125) — 교체될 때 `superseded_by`에 새 원문(같은 위치 > 같은 내용 > 원문 하나), 옛 줄은 같은 위치의 다음 판(같은 컬렉션 먼저, 없으면 옮긴 컬렉션) 994/1,092 채움(나머지 98 = 다음 판 없음) · 7일 지난 미리보기 초안 중 지식·팀 적재 페이지가 안 쓰는 것만 기동 때 정리(33건, 승인 대기 지식이 문 초안 112건은 유지) ⑥ `seed_demo_admin.py` 삭제(예시 60+12줄은 남아 있음 — 지우는 SQL은 운영 반입 정리 목록). 검증: DB 복사본(지운 것 = 대상 33 정확히 · 사용 중·교체됨 건수 그대로 · 잘못 이은 연결 0 · 두 번째 실행 변화 0 · 새 확정 경로 채움) → 실 DB 재기동 같은 숫자, 표본 감사 1건 매김 → 리포트·화면 "AI 오류 1" → 되돌림, 일반 사용자 테스트 API 403, 새 이미지 빌드·모델 확인, 백엔드 전체 2,324 통과. 독립 리뷰: 중간 1 — 같은 내용으로 다시 미리본 초안은 재사용돼 날짜가 옛것이라 [등록] 전 재기동에 지워질 수 있었다 → 재사용 때 `created_at` 갱신(복사본 시나리오 확인) · 낮음 3 반영(본문 없는 판을 다음 판으로 안 침, 다른 페이지를 가리키는 대체 2곳 제거) · 낮음 2 백로그(롤백 경로 연결 뜻, 채우기 인덱스).
-- v2.219 (2026-11-06, dev_0): **폐쇄망(AWS) 반입 전 전수 검사 반영 — 지울 것 A · 반입 전 필수 B**(독립 에이전트 4개 검수, 태훈 승인). 막힌 일: 빈 DB 새 설치가 init/02에서 실패, 쓰는 곳 없는 API·표·칸이 운영으로 갈 참, ALB 뒤 IP·스트리밍 끊김, 백업 실패해도 진행. 바꾼 것: ① 새 설치 — init은 01만(02~07 삭제, 하던 일은 앱 마이그레이션에 있음), `encrypted_llm_credentials` 칸을 앱 마이그레이션이 보장(없으면 로그인 깨짐) ② 삭제(#124) — 옛 백업 표 8·`policy_review_log`·정책 칸 4·`analyzer_result`·인덱스 3, 만들던 옛 단계도 뺌 ③ API 6종 제거(`/api/chat/debug`(원문 1,200자 응답)·`/api/knowledge/search`·`/api/agents*`·PAT 상태·`/api/refdata/search`·`/eval/ingest-checks/latest`) + Text2SQL 의존성 5·루트 옛 tests/·프론트 죽은 파일 7·안 쓰는 export 9·버리는 요청 2 ④ compose가 운영 스위치 6개(`LOCATOR_LLM` 등)를 컨테이너로 넘김(전엔 .env에 적어도 무시) ⑤ 백업 필수·실패 시 중단·덤프 끝 표시 검사, 복원은 오류 시 멈추고 전부 되돌림 ⑥ 채팅 SSE 15초 연결 유지 신호(ALB 60초 끊김) — 스트림은 태스크 하나가 읽고 화면이 끊으면 바로 취소 ⑦ nginx `REAL_IP_FROM`(ALB 서브넷만 X-Forwarded-For 신뢰, 기본 꺼짐) ⑧ 운영 가이드 §3-9(v2.119→ 되돌릴 수 없는 변경·`restructure_domains.py` 순서·AWS .env). 검증: 새 설치·복사본 두 번 기동, 백업 실패/성공·깨진 덤프 복원 되돌림 실측, nginx 실제 IP 3경우, 연결 유지 단위 5, 백엔드 전체 2,321 통과, 라우트·API 점검 0. 사고: 다른 세션 재시작(15:22)이 미커밋 #124를 백업 전에 실행 — 승인된 삭제이고 11/04 덤프로 복구 가능, 교훈은 메모리(삭제 마이그레이션은 백업 먼저).
-- v2.218 (2026-11-06, dev_0): **VOC 카드 "관련 지식 · 참고" 가시성·이름**(옛 "해결 방안(반복 유형 기등록 지식)"). 이름: 가장 가까운 등록 지식이 해결책이라는 보장이 없다 — 같은 기능의 테스트 케이스 표가 "해결 방안"으로 나감(태훈) → 업계 Related articles처럼 "관련 지식 · 참고", 관리 화면 반복 유형도 같은 이름(배지 "관련 지식 없음 n건" · 칸 "관련 지식" 있음/없음 — [지식 등록] 버튼·등록 창은 실제 해결책을 쓰는 기능이라 그대로). 판정 질문을 "조치·안내가 있나"로 좁히는 후보는 **안 넣음**: 로컬 LLM 반복 유형 64개(옛 true 22 · 새 8, 둘 다 2회 같음) → 갈린 16건 사람 블라인드 옛 맞음 12 · 새 4(새는 관련 지식 11건을 놓침, 옛은 관련 없는데 4건 붙임) — D:\MD자료\AIOps\VOC관련지식골든셋_1106. 막힌 일: 반복 유형에 맞는 등록 지식 앞 200자를 그대로 넣어 한 덩어리로 보였다 — HTML이라 원문 줄바꿈이 사라지고, 잘림 표시·출처가 없음(태훈 지적). 바꾼 것: 코어 API `nearest`가 문서 이름·절 경로도 돌려줌 → 카드에 "📄 문서 › 절" 한 줄, 원문 줄바꿈은 `<br>`, 잘렸으면 "…". 관리 화면(VOC 통계 › 반복 유형)도 같은 이름 — 배지 "관련 지식 없음 n건" · 칸 "관련 지식" 있음/없음(후속 커밋). 안 함: 화살표·괄호 기준 줄 나누기(지금 문서 모양 맞춤), LLM 요약(비용·지어냄). 한계: 원문이 줄바꿈 없이 적재된 조각(실측 5개 중 3개)은 출처 줄만 나아짐 — 적재 쪽 과제. 검증: 실 클러스터 5개 모양(출처 5/5 · 잘림 3 · 줄바꿈 유지 2), 반복 유형 목록 HTTP 200(69건, 지식 23), 백엔드 전체 2,316 통과, 독립 리뷰 낮음 2 반영(주석 · 출처 순서 뒤집힘 방지).
-- v2.217 (2026-11-06, dev_0): **VOC [지금 실행] 진행 표시**(backlog "오래 걸리는데 진행 표시 없는 동작" ①, 채팅 세션이 VOC 세션 몫으로 넘김). 막힌 일: 요청 하나 안에서 수집 → 메일마다 LLM → 발송을 다 끝내고 응답해 버튼만 몇 분 돌았다(실측 130건 190초), 새로고침하면 진행을 못 봄. 바꾼 것: 잡기(같은 시스템 중복 409) → 뒤에서 실행 → 상태 조회(`GET /email-voc/collect/run/status`) 2초 폴링 → 공용 ProgressBar(가져오는 중 / 분석 끝남·전체 · 메일함 i/n) → 결과 표. 진행은 서버 메모리에만 — 재시작되면 작업도 같이 끊겨 DB 기록이 쓸모없다(안 함, 다시 볼 조건: 여러 백엔드 프로세스로 늘릴 때). 실패한 메일도 끝난 것으로 세 막대가 끝까지 찬다. 검증: 단위(잡기 한 번·결과·오류 표시·메일함 합산·예외 메일), E2E(라우팅 없는 임시 시스템 — 발송 없음, 새로고침 뒤 결과 유지), 백엔드 전체 2,311 통과.
-- v2.216 (2026-11-05, dev_0): **VOC 감사 넘김분 — 초안 분류 가드 · 시드 중복 정리 · 업종 예시 교체는 막음**. 초안은 자기 분류가 system_error일 때만 코드가 남긴다(관계 규칙 — 프롬프트는 관리자 수정 가능). 새 DB 시드는 service.py 기본값을 그대로 쓴다(main.py에 베낀 문구 제거, 테스트가 재발 막음). 분류 예시 4개·정의 안 업종 단어(음료·배달·맛·신선도)를 원칙 문장으로 바꾼 후보는 **안 넣음**: 로컬 LLM 메일 98건 옛 두 번 98/98 같음 · 옛 vs 새 89/98 → 갈린 9건 사람 A/B 블라인드(태훈) 옛 맞음 5 · 새 4, 틀린 시스템 오류 옛 1 · 새 3(새 원칙 "결과끼리 어긋나면 → 시스템 오류"가 느슨, 판단 보류 → IT 무관 3건은 새가 맞음). 다시 시도하면 시스템 오류 원칙을 좁히고 이 9건으로 재채점(D:\MD자료\AIOps\VOC분류골든셋_1105). 반복 묶기 요약 지침의 예시는 출력 모양 예시이고 사람 40쌍으로 검증된 줄이라 그대로.
-- v2.215 (2026-11-05, dev_0): **VOC 초안 근거 확인 · 카드 제목 구분**. 막힌 일: 반복 감지 카드(프리퀀시 적립 누락, 팀장 확인)의 "해결 방안"이 참고 지식(API 목록·개발 기록·이미지 경로 가이드)에 없는 "유관부서 협조·소급 적립"이었다 — 지식 근거처럼 읽힘. 바꾼 것: 초안이 있으면 로컬 LLM이 참고 문맥과 대조해 근거 여부 판정(초안 안 지시 문구 무시, 실패 = None) → 카드 제목 "해결 방안 · 근거 확인됨"(True만) / "AI 제안 · 참고 지식에 없음 — 확인 필요" / "AI 제안 · 근거 미확인 — 확인 필요"(판정 실패·옛 캐시), 화면도 같은 이름(이력은 저장 안 해 미확인) · 재처리 캐시 6. 실제 카드(분석 4520) 3회 판정 모두 근거 없음. 판정 LLM이 같은 계열이라 사람 확인 전엔 참고 표시. 리뷰 낮음 4 반영(미확인 분리·가드·캐시·연결 테스트). VOC 문맥 예산은 **안 줄임**(로컬 LLM, 메일 80건 — 12000 재실행 분류 일치 74/79 · 6000 73/79 · 4000·2500 70/79, 4000은 시스템 오류 1→3, 근거 지식·정책은 전부 같음, 응답 95% 8.0→5.2초): 정답 없는 일치율로 하락 여부를 못 가르고 로컬이라 비용 부담 없음 — 다시 볼 조건: 사용량 한도 있는 LLM으로 돌아갈 때 6000을 정답 있는 메일로 재측정.
-- v2.214 (2026-11-05, dev_0): **검토 필요 사건 기반 · 읽기 제한 페이지 포함 적재 · 정책 원문 확인·참고표 · AI 감사 옮김 표 · 피드백 대상**(태훈 오후 검수, 커밋 454774e~7971e32 + 이 커밋).
-  ① 검토 필요 = 원문 바뀜 · '내용이 낡음' 신고(신고 뒤 검토·수정하면 빠짐) · 많이 쓰임(기한 지남 + 30일 채팅 3회↑, 위 10개)만 — 기간만으로는 안 올림(로컬: 기한 지남 18 → 목록 5). 카드 누르면 상세에서 조각 바로 고침. 제목 = 적재 원장 페이지 제목 › 제목 경로 › 원본 이름 › 내용 첫 줄.
-  ② 읽기 제한 포함 적재(관리자): 컨플 공간 적재 시작에 [읽기 제한 페이지도 넣기] → 묶음에 켠 사람·시각(마이그레이션 121, 감사 로그 한 줄), 페이지 signals·원장 media에 restricted_included(나중에 권한 연동 시 골라내기), 옛 "제한이라 안 넣음" 원장 기록은 superseded, 동기화는 같은 주소의 적재 끝난(loaded) 제한 포함 묶음만 따름. 계기: 앱 공간 맨 위 페이지 보기 제한 → 500페이지 전부 건너뜀, 목적(타 시스템 담당도 검색)상 넣음. 실측 #343: 앱 시스템 자동 395 · 검토 18 · 빈 페이지 87 · 제한으로 빠짐 0.
-  ⑦ 소스 연결 › 연결된 공간 [바뀐 페이지 ▸](ingestion/sync_changes.py, GET /team-import/connections/{id}/changes[/{new_id}]): 원장 옛 판(superseded) ↔ 새 판(active)을 같은 컬렉션·페이지로 짝(superseded_by는 원장이 안 채움 — 547건 모두 빈 칸, 11/05 실측), 범위 = 이 연결이 넣은 (페이지, 컬렉션), 바뀐 줄 수 큰 순 · 채팅 근거 횟수(옛 판 조각 포함) · 충돌 맨 위 · 최근 300개 · 비교는 스레드에서. [차이 보기] = 승인 대기와 같은 좌우 차이(ReviewDiff 공용).
-  ⑧ 검토 필요 동작(업계 Guru·Confluence 검토 앱): 카드 [검토 완료]·[수정](상세 바로 고치기)·[미루기 30·90일](rag_knowledge.review_snoozed_until, 마이그레이션 122)·[수정 요청](조각별, 규격 사유 칩 → 정정 요청)·[보관](status archived, 되살리기) · 사유 칩 거르기·제목 검색·정렬. 정책 정정 AI 초안: 원문 확인 카드 문맥(설명·종류·상대 정책 이름·참고표 제목만) + 경로는 코드가(표시만 달기 기본 = 글자 그대로 보장 / 사람이 고칠 내용을 적을 때만 정정 + 원문·요청에 없는 값이면 표시 초안으로 대체·화면 표시), 고칠 곳·고친 내용 표시(인용은 원문에 있을 때만). 하드코딩 감사 후속: 원문 확인 사유 문구 한 곳, 신뢰도 판정 confidence_label 한 곳(근거 카드도 같은 판정·관련성 점수), 조사 목록 Python↔SQL 동등성 시험.
-  ③ 정책 원문 확인: 관련 정책마다 [이 정책 정정 요청], 참고표 오류 [참고표 보기] 창(RefTableView 공용), 참고표 화면(목록·머리 고정·결정/결과 열·표 안 검색), 정정 카드 대상 정책·버전·원문 확인 번호. ④ AI 감사: 주요 발견 카드 · 옮김 표(AI 추천 × 사람 결정, 삭제된 컬렉션 분리) · 로그 '?'·내부 코드 한글. ⑤ 피드백 대상 선택(시스템 전반 / 시스템·정책, 기본값 = 답 근거 시스템 › 보던 컬렉션 › 파트 담당 하나). ⑥ 승인 대기 중복 기준 미만 후보는 '참고 후보'로, 조각 미리보기 비슷한 지식 확인 줄 자리 미리.
-  ⑨ 품질 검사 원문 대조(trustkit ingest.quality.assess source_text): 이웃 조각에 같은 줄 = **조각 전체에 원문보다 많이 나온 줄만 결함**, 원문이 원래 반복하는 줄(체크리스트 표 머리·같은 항목)은 "원문 반복"(앱 공간 77곳 전부 원문 반복 · 결함 0 — 예전엔 77곳 전부 경고). 원문 = 원장 → 적재와 같은 파서(rebuild_parsed), 없거나 실패면 예전 기준 + source_checked=false 표시. 기록은 줄 해시만(본문 비기록), GET /team-import/{id}/overlap/{job_id}가 조각에서 다시 찾아 보여 줌. 품질·검색 확인 리포트 창: 큰 숫자 칸 + 분포 막대 + 문제 먼저(펴면 근거) · 검색 확인은 못 찾은 질문에 "대신 나온 것"(상위 3 제목·유사도, publish_check items.got)
-  ⑩ 오래 걸리는 동작 진행 표시(11/05 태훈 "멈춘 것처럼 보인다"): 게시·검색 확인을 뒤에서 실행(claim_publish로 잡고 _spawn) + 서버 기록(게시 = 작업 끝남/전체·단계[작업→용어 추출], 검색 확인 = publish_check.running·asked/total) → 화면 공용 ProgressBar(ui/ProgressBar.tsx: 끝남/전체·경과·남은 예상, 2초 다시 읽기, 끝나면 결과 안내). 재시작으로 끊긴 검색 확인은 기동 때 interrupted로. 자동 용어 추출 실패는 배치 오류 칸에(조각은 게시됨).
-  ⑪ 적재 결함 2건(C3 경고 원인 확인 중 발견): (가) 제목만 조각 합치기가 "다음 조각이 이미 같은 제목으로 시작"(max보다 긴 한 줄을 고정 길이로 나눌 때 조각마다 제목을 다시 붙임)인 경우 제목을 앞 조각 끝에 매달거나 두 번 붙였다 → 그 경우 제목만 조각은 버림(유실 없음, 앱 공간 job 1954). (나) 중복 비교가 active + 자기 작업 staging만 봐서, 페이지마다 작업이 따로이고 게시 전까지 staging인 팀 적재(게시 전 검수 11/03)에선 같은 배치의 다른 페이지끼리 못 봤다 → 보류(held) 작업의 staging 조각도 비교(앱 공간 다른 페이지의 같은 글 84조각이 승인 대기 없이 게시됨 — 이미 게시된 것은 그대로, 다음 적재부터).
-  ⑫ 롤백 때 중복 상대가 지워진 게시 전 승인 대기(staging_review) 자동 해제(11/06 D4, `team_import._release_orphan_duplicates`): 지운 조각만 상대로 가리키던 것만 staging으로·비교 삭제, 롤백 결과에 "승인 대기 해제 N". 게시 후 승인 대기(pending_review)는 담당 승인 대기(force_pending)와 행으로 구분이 안 돼 안 푼다(독립 리뷰 중간 — 담당 승인 우회) · 살아 있는 상대·읽기 제한은 그대로 · 상태 조건으로 동시 처리 보호.
-  ⑬ 근거 카드 그림 배지(11/06 태훈 "그림 앞뒤 문맥 → 링크", 시안 승인 = 머리 배지 + 펼침 링크): 11/05 실험(자리 표시를 본문에 넣으면 검색 차이 0·자리 표시만 조각 11)과 달리 본문·임베딩은 그대로, `rag_knowledge.image_count`(마이그레이션 123)에 조각 앞뒤 문맥 그림 수만. 원문 활성화(`source_ledger.activate`) 때 자리 표시 켠 사본에서 조각 첫 긴 줄 자리로 구간을 나눠 그림을 바로 앞 본문 조각에 셈(합 = 원문 그림 수, 무작위 성질 테스트). 페이지 단위로 세면 안 되는 이유: 그림 페이지 162 중 91이 조각 2개↑(제목 경로가 페이지 하나뿐인 원문 93%). 실측(홈페이지·앱 262원문): 자리 찾음 261, 합 어긋남 0, 그림 든 조각 370/1,103. 채우기: 사용 중 컨플 435원문 · 그림 든 조각 198. 원장 없는 옛 일괄 조각 56(외부서비스 49·딜리버스 7)은 못 셈. 화면: `page-urls` 응답에 image_count → 카드 머리 "그림 N"·펼치면 "원문 페이지에서 그림 보기 ↗"(e2e/evidence-images).
-- v2.213 (2026-11-05, dev_0): **VOC 정책 근거 하한 0.60 · 분류 무관 초안은 안 함 · 분석 실패 표시**. 막힌 일: v2.212 정책 하한(서술 0.50, 채팅 근거 없음 판정 값)이 긴 메일엔 느슨했고, 초안은 시스템 오류만이라 오늘 실수집 33건 중 1건. 측정(로컬 LLM, 메일 100건 × 리워드 정책 상위 3): 서술 하한 0.50 통과 114 중 관련 28% · 0.55 50% · **0.60 61%**(관련 조각 중 28%만 남음) → VOC 경로(`knowledge.api.chat_context`, 지금 VOC만 씀)만 0.60, 채팅은 그대로. 분류 무관 초안(지식에 처리 방법 있으면) 시험: 초안 4 → 54건이지만 문맥 전체로 다시 판정해 19건 중 12건이 지식에 없는 안내를 지어냄 → **안 함**(틀린 안내 단정이 더 위험 — 다시 볼 조건: 지식 문장 인용형 초안 등 근거성 ≥ 80% 측정). 독립 리뷰 지적 반영: LLM 호출 실패가 분류 "판단 보류"로 깔려 카드·화면에 "판단 보류로 판단되어 생성하지 않음"으로 나가던 것 → 판단 근거 맨 앞 `LLM_FAILED_PREFIX`로 가려 "분석 불완전"(백엔드·카드·화면 세 곳 문구 일치는 테스트). 재처리 캐시 5.
-- v2.212 (2026-11-05, dev_0): **VOC 검색 = 채팅과 같은 경로 + 가까운 시스템 자동 판단 · VOC를 시스템 컬렉션으로**. 막힌 일: 11/02 개편으로 지식이 시스템 컬렉션으로 옮겨져, 라우팅 영역("딜리버스", 정책 컬렉션 · 지식 0)만 찾던 VOC는 11/03부터 근거 지식 0건(201건 중 0, 그 전 약 33%) — 메일함 문의도 300건 중 284건이 홈페이지 시스템 쪽. 바꾼 것: `knowledge.api.chat_context`(→ `agent.build_chat_context` 그대로, 나중에 API로 제공) · 지식 범위 `nearest_system`(받침 연결 + 메일과 가장 가까운 시스템, 1·2위 차이 < 0.03이면 2개) · 정책 범위 설정 `email_voc_policy_collections`(비면 채팅 규칙, 임시 "리워드") · 근거 있음 = 지식 관련도 ≥ 기준 또는 정책(서술 ≥ 0.50 · 파라미터 > 0.05, 하한 넘은 정책만 카드에) · 카드 관련 시스템 · 시스템별 참고 지식 · 참고 정책 · 묶음 해결 방안·이력 근거 조회도 시스템 컬렉션까지 · VOC 메뉴 = 시스템 컬렉션 + 이력 이동 `scripts/move_voc_to_system.py`(라우팅·분석·묶음 한 트랜잭션, 건수 점검, 되돌리기). 재생 300건: 근거 0 → 299(지식 290). 사람 확인 전 임시 오픈 — 채팅 규칙 정책 하한이 긴 메일엔 느슨함(딜리버스 정책 293/300 통과) 확인 필요.
-- v2.211 (2026-11-05, dev_0): **검토 필요 사유 · 비교 창 차이·병합 방향 · 피드백 컬렉션 필터 · 근거 최신성 가시성**(태훈 오전 검수 반영).
-  ① 검토 필요 줄마다 사유 reason(source_changed 원문 바뀜 · used 쓰이는 중 = 기한 지남 + 최근 30일 채팅 근거 · unused 미사용 = 기한만 지남) —
-  기본 목록·홈 카드 수 = 미사용 제외, [미사용] 칩으로 따로(컨플 400페이지 적재 뒤 90일에 한꺼번에 뜨던 구조, 로컬: 컬렉션 A 기한 지남 18 = 쓰임 9 · 미사용 9).
-  ② 비교 창: 뜻 유사도 소수 한 자리 내림 · 글이 다르면 100% 안 보임(한 줄 지웠는데 100%) · 줄 차이 수(− 기존에만 · + 새 글에만) · GitHub식 −/+ 줄 ·
-  [#id에 병합] → 교체 / 이어 붙이기 고름(등록 = 교체, 지식 공백·업로드 조각 = 이어 붙이기 기본, 고친 뒤 방식 바꾸면 확인) · 저장되는 곳 표시.
-  ③ 사용자 피드백 컬렉션(마이그레이션 120 ops_user_feedback.namespace_id, 보던 컬렉션 · 옛 줄은 대화의 컬렉션) — 보드 [컬렉션] 필터('-' = 미지정).
-  ④ 채팅 근거 최신성: 펼치기 전 [근거 ▸] 줄에 '기한 지난 근거 N', 배지 ✓ 검토 / ⚠ 기한 지남. ⑤ [답변 틀림] 칩마다 예시 문구.
-  ⑥ 지식 조회 검색↔목록 오가도 검색어·결과·카드 필터 유지(글자 거르기는 목록에서만). ⑦ 승인 대기 원문 링크에 페이지 제목(POST /page-urls → {url, title}).
-  ⑧ AI 감사 잦은 번복이 '? → ?'(추천 없음·지운 컬렉션) → '추천 없음 / 삭제된 컬렉션'.
-- v2.210 (2026-11-04, dev_0): **등록 순간 비슷한 지식 · 검토 기한 · 근거 번호 프롬프트 · 화면 정리**.
-  ① 근거 번호 프롬프트(chat_system_knowledge, 스위치 cite_prompt) = 답 문맥에 운영 지식이 채택될 때만(agent.chat_prompt_for, 측정 스크립트도 같은 함수) —
-  로컬 LLM 11/04: 업무지식 106 정답 75.5→84.0%·단정 오답 19.8→15.1%, 정책서 485 85.4→86.8%·11.8→10.3%(둘 다 게이트 통과). 어디서나 쓰면 정책서 −1.9%p·오답 증가라 안 씀.
-  ② 직접 입력 등록 순간 "비슷한 지식이 이미 있어요"(POST /api/knowledge/similar — 등록과 같은 판정 함수) → 등록 안 함·합치기·새로 등록(keep_new), 판단은 AI 감사 '중복 의심'(stage register).
-  ③ 검토 기한(ops_namespace.review_interval_days, 운영 지식 › 검토 필요 · 홈 카드, [검토 완료]). ④ 데이터 고치기 후보(ingest_*) 운영 반영 = 게이트 통과 + 승인 뒤 적재 검사 어긋남 0(improve.ingest_fix_error).
-  ⑤ 화면: 사용자 피드백 칸반(신규·선정·진행 중·완료 + 종료 접힘) · 지식 검색 카드 전체 클릭 = 수정·관련도 색 구간(35% 미만 = 근거 약함) · 원문 확인 카드 [이슈 아님으로 닫기]·[처리 완료로 닫기]·[정정 요청 ▶] ·
-  정책 상세 [수정 제안] 하나 + ⋯(분류 옮기기·폐기) · AI 감사 메뉴 이름·[기록 보기 ›]·날짜별 다섯 갈래 막대·걸린 거르기 칩. ⑥ main.py 이름 누락 검사 테스트(test_main_names, 사고 INC-2026-11-04-01).
-  ⑦ 업계 방법론 묶음(조사 → 우리 규모로 덜어냄): 조각 미리보기 비슷한 지식 배지·[비교](POST /similar/batch, 조각 keep_new) · 지식 공백 등록 창도 같은 비교 ·
-  승인 대기 비교 창 [원문 ↗](POST /page-urls) · 채팅 근거 최신성 배지(POST /freshness — 검토 필요와 같은 규칙) · 검토 필요 "원문 바뀜"(동기화 충돌 페이지 맨 위) ·
-  [답변 틀림] 사유 칩 4개(ops_improvement_item.user_reason, 정정 카드에 표시 — 사람 피드백은 규격 선택지로).
-  ⑧ 결함 수정(10/08~): 중복 비교의 "같은 원문 옛 버전 빼기" 조건에 NULL 가드가 없어 원문 연결 없는 조각(직접 입력 등, 사용 중 1,756 중 80)이 일괄 등록·미리보기 중복 비교에서 통째로 빠졌다
-  (retrieval.find_similar_active_knowledge — E2E 에이전트 발견). ⑨ 업무지식 조각 맥락 머리 재판정 = 안 씀(검색 106문항, 임베딩 머리 좋아짐 2·나빠짐 3 — 기법 대장 chunk_header).
-- v2.209 (2026-11-04, dev_0): **AI 감사 리포트 — 사람 검토(HITL) 결과 다섯 갈래 + 표본 감사**. 판단마다 수용·번복·자동 적용·규칙 적용·검토 대기(override.REVIEW_SQL = review_status), 번복률 = 번복 ÷ 사람 검토(수용+번복) — 팀 적재 묶음 규칙 413건이 "수용"으로 섞여 1.1%로 보이던 것을 바로잡음(사람이 본 등록 위치 21건 중 번복 5, 24%). 표본 감사(spot check): 자동 적용·수용된 관리자 검토 종류에서 무작위 n건 → 수용/번복+사유(ops_ai_decision.spot_*), `GET·POST /api/eval/decisions/spot-check`. 화면: 요약 4칸 · 주요 발견 · 판단 ↔ 검토 표 · 번복 패턴 → 조치 · 미검토·표본 감사 · 감사 로그(검토 결과 거르기). 용어는 업계 HITL(수용·번복·번복 사유 = AI 오류/선호 차이/맥락 변화).
-- v2.208 (2026-11-04, dev_0): **적재 데이터 품질 — 중복 판정 2단 · 같은 원본 안 완전 중복 건너뜀 · 제목만 조각 합치기 + 지식 검색 화면 + VOC 같은 문제 확인 로컬 LLM + 피드백 단계 이동**. 등록: 의미 ≥ 0.88 후보 중 양식 줄(컬렉션 데이터에서 3쪽·1% 이상)을 뺀 글자 유사도 ≥ 0.8만 승인 대기(trustkit `ingest/dedupe.py`), 같은 원본 안 공백만 다른 반복은 한 번만 저장(작업 `skipped_exact_*`) — 다른 원본의 같은 글은 승인 대기(건너뛰면 원본 삭제·롤백 때 영구 유실, 리뷰 H1). 분할: 섹션 분리 모드에서 본문 줄 없는 제목만 조각을 같은 부모 아래 다음 조각 앞(아니면 앞 조각 뒤)에. check_ingest `knowledge_dup`(공백만 다른 것 포함)·`knowledge_heading_only`. 홈페이지 승인 대기 457 → 226(재판정 259 사용 중, 다른 원본 완전 일치 19는 다시 대기). 지식 조회 기본 [검색] = 채팅과 같은 검색(정책 파트 용어·연결 컬렉션)을 카드로(관련도·위치·채널·채팅 노출 횟수, 패싯 건수) — `POST /api/knowledge/explore`. VOC 같은 문제 확인: 원문이 들어가 게이트웨이 민감 정보 필터에 거의 전부 거부(3일 26번) → `get_local_llm()` + 분석 단계와 같은 PII 가림(사람 40쌍 일치 31 → 35). 사용자 피드백 상태는 다음 단계·한 단계 되돌리기만(서버 409).
-- v2.207 (2026-11-04, dev_0): **승인 대기 좌우 차이 병합 · VOC 확인 실패 칸 · 팀 적재 미리보기 취소**. 승인 대기 = 가장 비슷한 기존 지식 유사도 높은 순 + 좌우 차이(기존 ↔ 신규, 고친 줄은 바뀐 낱말만 강조, utils/textDiff.ts) · 비교할 기존 지식이 없으면 [원문] · 매칭 조회 실패는 오류로("매칭 없음"과 구분). VOC 수집 사이클 표 `total_skipped_confirm_failed`(같은 문제 확인 실패 — 반복 묶음·Teams 발송에서 빠짐) + 실시간 상태 경고. 팀 적재 배치 상태 `cancelled`(#3 GIFT 미리보기 — 청크 규칙 개선 뒤 다시), 취소한 미리보기의 제외·보류 결정은 동기화에 안 씀. 측정 스크립트 `--cite-keep`(인용 규칙 프롬프트만, 11/03 측정: 정답 75.5→84.0% · 단정 오답 19.8→16.0%, 채팅 반영은 승인 뒤).
-- v2.206 (2026-11-03 밤, dev_0): **관리 화면 가시성 — 감사 로그 카드 · 피드백 상세 창 · 정책 컬렉션 메뉴 정리 + 중복 의심 판단 기록**.
-  정책 컬렉션은 운영 지식 메뉴·승인 대기 카드 없음([보기 →] = 정책서), 컬렉션 종류 확인 전엔 주소를 바로잡지 않음. 기법 대장 상세 = 모달.
-  AI 감사 로그: 종류별 카드(판단 · 번복 · 비율, 누르면 거르기) + 개선 후보 추천 카드 + 날짜별 카드(KST, `GET /api/eval/overrides` daily ·
-  `decisions/log?day=`) + 종류 드롭다운. 새 판단 종류 `duplicate_check` — 승인 대기 처리(그대로 저장 = 번복 · 덮어쓰기 · 반려)를
-  `ops_ai_decision`에 한 줄(매칭 없는 대기·이미 처리한 건은 안 남김, 실패는 저장점으로 처리 안 막음) · 기법 `duplicate_review`.
-  승인 대기 목록 API에 `max_similarity`(높은 순). 사용자 피드백: 목록은 상태만, 누르면 상세 창에서 상태 고르기. 정책서 메뉴·원문 확인 탭에 처리 전 수.
-  trustkit `answer/citation.py`(인용 강제 — 번호 없는 본문 줄 기계적 제거, LLM 0) + 측정 옵션 `eval_knowledge_answers --cite`·`--rejudge`.
-  설계: 청크 구조화 + 중복 판정 2단 + 완전 일치 거부(docs/domains/knowledge/chunk-structure-dedupe-design.md, 구현은 승인 뒤).
-  승인 대기 좌우 차이 화면은 별도 브랜치 `review-diff-ui`(모양 검수 대기). DB 칸 변경 없음.
-- v2.205 (2026-11-03, dev_0): **관리자 화면을 보는 사람별로 — 컬렉션 관리(시니어) / 플랫폼 관리(관리자)** (설계 docs/platform/admin-audience-split-design.md 2·3단계).
-  메뉴 왼쪽 위 범위 전환(플랫폼 관리는 관리자만). 컬렉션 관리: 홈 · 운영 지식 · 정책서 · 정정 요청 · 용어집 · 통계 · 소스 연결 · 컬렉션 정보(보는 컬렉션 한 줄, 읽기).
-  플랫폼 관리: 홈 · 평가 게이트 · AI 감사 로그 · 사용자 피드백 · 컬렉션 · 조직·권한 · VOC 이메일 · 설정(캐시는 설정 탭). 화면 내용은 그대로 자리만, 옛 주소 `/admin/<id>` 유지,
-  비관리자가 플랫폼 주소로 오면 안내 뒤 컬렉션 관리 홈. 두 홈 = 카드(큰 숫자 + [자세히], 기존 API만 — 읽는 중 "…", 실패 "불러오지 못함"). 시스템 정보(준비 중) 메뉴 내림,
-  "중복 의심" 카드는 컬렉션별 집계 API가 없어 뺌. 실 DB 통합 시험 표준(`tests/realdb.py` — 트랜잭션 → 되돌림)으로 쓰기 경로 9개 추가.
-  팀 적재 공간 목록 읽기 대기 180초·실패 사유 남김(앱 공간 미리보기가 30초 시간 초과·빈 사유로 실패).
-- v2.204 (2026-11-03, dev_0 — voc-cluster-fix 병합): **VOC 반복 묶음 — 대표 고정 + LLM 같은 문제 확인 · 확인 필요 표시.**
-  ① 묶음 대표(`ops_voc_cluster.representative_embedding`)는 만들 때 고정 — 합류마다 옮기던 점증 갱신이 대표를 끌어 사슬 묶음(최대 130건)을 만들었다.
-  ② 임베딩은 후보 찾기만, 합류는 LLM이 기준 건(첫 멤버)과 같은 문제라고 할 때만(`email_pattern_llm_confirm`, 기본 켬, 건당 최대 2회·실패 = 합류 안 함).
-  ③ `email_pattern_review_size`(기본 20, 0 = 끔): 묶음이 N건 넘으면 팀즈 카드에 "확인 필요". ④ 같은 영역 묶기는 한 번에 하나씩(프로세스 안 잠금).
-  재생 비교(DB 쓰기 없음): 최대 묶음 133→28 · 발송 135→36. 정확도는 사람 블라인드 20쌍에서 묶음 안 같은 문제 5/12(42%) — 로컬 Qwen 자기 채점(76.3%)은
-  크게 부풀었다. 확인 프롬프트에 "다른 문제"의 예(분야만 같음·문의 종류만 같음·증상 다름·발생 조건 다름·내용 없는 참조 메일)를 명시해
-  1차 20쌍 일치 12→16/20, 새로 뽑은 2차 20쌍은 묶음 안 12/12 같은 문제·갈린 후보 8쌍 중 3쌍 놓침. 검증 데이터 92%가 한 주제라 다른 주제는
-  미확인 — 숫자는 사람 검수로만 판단한다. 칸 변경 없음.
-- v2.203 (2026-11-03, dev_0): **기법 대장 = 흐름도 + 켜고 끄기**(태훈 "흐름도상 어떤 단계에서 쓰이는 기법인지 · 필수는 필수 · 끄고 켤 수 있는 건 끄고 켜게").
-  품질 › 평가 게이트 ③ 기법 대장: 흐름(채팅 7단계·적재 5단계·평가) → 단계 칸마다 기법(필수 🔒 / 적용 중 / 미적용 + 사유) → 누르면 하는 일·기준값·근거
-  (`TechniqueFlow.tsx`, 대장 `service/eval/techniques.py` FLOW_OF). 실행 중 스위치 4개(`core/technique_flags.py`, ops_system_config `technique.<key>`, 관리자만,
-  바꾸면 답변 캐시 비움): 관련 정책 연결 검색 · 문맥 예산 · 참고표 연결 · 다른 컬렉션 제안(옛 설정 줄 chat.collection_suggest 그대로). 기본값 = 지금 동작.
-  채팅 인자 기본 = `agent.CHAT_DEFAULT`(스위치 반영), 측정 스크립트가 직접 준 --scope/--context-budget는 스위치와 무관. 대장에 빠졌던 4개 추가
-  (관련 정책 연결 검색 · 문맥 예산 · 허용 호스트 검사 · 검수 후 게시).
-  검증된 최적(`technique_flags.BASELINE` + 근거 게이트 #71·#75): 흐름도 맨 위 "최적 상태" 표시, 벗어나면 주황 띠 + [최적으로 되돌리기], 최적에서 벗어나는 스위치는
-  기법별 손실 경고(예: 관련 정책 연결 검색 끄면 정책 질문 운영 지식 0%). 필수 기법은 서버가 403으로 막음. 측정 스크립트도 스위치를 읽는다(`init_pool`).
-- v2.202 (2026-11-03, dev_0): **팀 적재 = 검수 후 게시**(11/03 결정 가). 적재하면 조각은 staging·작업 'held'(채팅에 안 나옴, 같은 페이지 옛 버전은 그대로 답에),
-  소스 연결 › 배치 화면 "검수 대기" 카드(게시할 조각·중복 의심·품질 경고·검색 확인) → [게시] = 옛 버전 내림·원문 확정·활성화(`_switch_staged` — 등록 끝과 같은 코드를
-  게시 시점 기준으로 다시)·캐시 비움·자동 용어 추출(게시자 기준, 롤백이 지움). 검색 확인 = 보류 조각 10개로 **로컬 LLM**이 질문 → 벡터 상위 3에 그 페이지
-  (사내 LLM이면 건너뜀). 게시 중 표시로 두 번 누름·게시 중 롤백 막음, 검수 대기 배치가 있으면 그 공간 동기화 멈춤, 다른 배치의 검수 대기 페이지는 "이미 있음".
-  단건 등록·이미 게시된 공간 동기화는 그대로 바로 반영.
-- v2.201 (2026-11-03, dev_0): **정책 컬렉션의 공백·빠진 내용 = 정책 추가 제안**(태훈 "정책은 운영 지식과 성향이 달라 정책 등록·정정으로").
-  통계 › 지식 공백(정책 컬렉션): [지식 등록] 대신 [정책 추가 제안](질문이 정책 이름에, 올리면 그 공백은 메움 — `ops_query_log.resolved_correction_id` #111, 반려되면 다시 공백).
-  정정 요청 › 빠진 내용(정책 컬렉션): [승인] 대신 [정책 추가 제안으로] — `POST /api/corrections/{id}/to-policy-add`(`policy_change.forward_missing`, 한 트랜잭션:
-  추가 제안 1건 + 원래 신고 처리됨·`ai_verdict.forwarded_to`, 원래 질문 이어받음). 일괄 승인에서 빠짐, 신고자 배너·카드 "정책 추가 제안 #N으로 넘김".
-  시스템 컬렉션은 그대로(운영 지식 등록·승인).
-- v2.200 (2026-11-03, dev_0): **운영 전 필수(외부 컨설팅 관점 리뷰) — 보안 4 · 성능 3 · 설계 2 · 시스템 먼저.**
-  보안: 운영 프로필(`APP_ENV=production`)에서 기본·짧은 JWT 시크릿·관리자/DB 비밀번호면 기동 중단, /docs 닫음, prod `IMAGE_TAG` 필수 ·
-  마크다운 rehype-raw 뒤 rehype-sanitize(`utils/markdown.ts`) + nginx CSP·nosniff·referrer · 수집 클라이언트는 전부 `web_crawler.guarded_client`
-  (요청·리다이렉트마다 허용 호스트 `URL_IMPORT_ALLOWED_HOSTS`, 응답 20MB 상한 — SSRF·PAT 유출) · 5432·8000은 127.0.0.1에만.
-  성능: 키워드 검색 저장 칸 `content_tsv` + GIN(#109, 2.5초 → 1.7ms, 검색 101/106 그대로) · 답변 캐시 비우기가 관련 정책 연결(+하위)까지,
-  단건 등록·수정·삭제·중복 처리·묶음 삭제도 비움 · /health = DB 확인(안 되면 503) + LLM 1분 캐시·토큰 재사용(토큰 발급 5,299회 → 기동 1회) ·
-  compose 헬스체크·로그 회전 · gzip(번들 2MB → 0.7MB) · 검색 top_k ≤ 50.
-  설계: 살아 있는 내용(운영 지식·원문·정책·참고표·용어·검토 중 정정)이 있으면 컬렉션 삭제 409(이력은 막지 않음, 관리자 `?purge=true`는 시험 정리용) ·
-  마이그레이션 목록 `_MIGRATIONS` + advisory lock + 기동 원장 `schema_migration_run`(#110). 백업→복원 한 바퀴 확인(지식 3,262 그대로).
-  화면: 컬렉션 고르는 창 [시스템 | 정책], 기본 시스템 탭, 처음 기본 컬렉션 = 내 담당 시스템. 반입 조건: `docs/operations/deployment-closed-network.md` §3-8.
+- v2.200 ~ v2.219(11/03~11/06: 운영 전 필수 리뷰·팀 적재 검수 후 게시·VOC 채팅 경로·등록 순간 비슷한 지식·반입 전 전수 검사) 이력은 `docs/archive/architecture-history-v2.200-v2.219.md`.
 - v2.180 ~ v2.199(10/27~11/03: 자가 개선 루프·게이트 두 축·VOC 분리·정책/시스템 컬렉션·운영 전 필수 리뷰) 이력은 `docs/archive/architecture-history-v2.180-v2.199.md`.
 - v2.171 ~ v2.179(10/26~27: 틀린 문항 리포트·적재 검수·C2/C3·품질 화면 가시성) 이력은 `docs/archive/architecture-history-v2.171-v2.179.md`.
 - v2.161 ~ v2.170(10/23) 이력은 `docs/archive/architecture-history-v2.161-v2.170.md`, v2.136 ~ v2.160(10/13 ~ 10/22)은 `docs/archive/architecture-history-v2.136-v2.160.md`, 그 이전은 `docs/archive/`의 다른 이력 파일.
@@ -132,20 +40,20 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 │   │  │  :8501      │    │   :8000     │                 │  │
 │   │  └─────────────┘    └──────┬──────┘                 │  │
 │   │                            │                         │  │
-│   │                    ┌───────┴────────┐                │  │
-│   │                    │   PostgreSQL   │                │  │
-│   │                    │  + pgvector    │                │  │
-│   │                    │   :5432        │                │  │
-│   │                    └───────────────┘                 │  │
+│   │                 ┌──────────┴─────────┐               │  │
+│   │          ┌──────┴───────┐     ┌──────┴──────┐        │  │
+│   │          │  PostgreSQL  │     │    Redis    │        │  │
+│   │          │  + pgvector  │     │ 답변 캐시   │        │  │
+│   │          │   :5432      │     │  :6379      │        │  │
+│   │          └──────────────┘     └─────────────┘        │  │
 │   └──────────────────────────────────────────────────────┘  │
-│                                                             │
-│   ┌──────────────────────┐                                  │
-│   │  Ollama (호스트 직접)  │  ◀── Backend이 host.docker.      │
-│   │  exaone3.5:2.4b      │       internal:11434 으로 호출   │
-│   │  :11434              │                                  │
-│   └──────────────────────┘                                  │
-└─────────────────────────────────────────────────────────────┘
+└──────────────────────────────┬──────────────────────────────┘
+                               │ LLM (설정 화면에서 전환, .env LLM_PROVIDER)
+        ┌──────────────────────┼───────────────────────┐
+  사내 LLM 게이트웨이     로컬 LLM(OpenAI 호환,     Ollama(호스트,
+  (inhouse, DevX)        openai_compat · Qwen)     비상용)
 ```
+임베딩(KURE-v1)은 Backend 컨테이너 안(CPU). 운영(폐쇄망) 반입은 `docs/operations/deployment-closed-network.md`.
 
 ---
 
@@ -156,81 +64,53 @@ OpsLens(구 Ops-Navigator, 2026-10-06 이름 변경)는 정책서·매뉴얼·�
 | 페이지 | 역할 |
 |--------|------|
 | **Login** (`/login`) | JWT 로그인 — Access Token + Refresh Token 발급 |
-| **Register** (`/register`) | 회원가입 — 부서 선택 + 선택적 LLM API Key 등록 |
-| **AgentSelect** (로그인 직후) | 에이전트 선택 화면 — 지식베이스 AI 카드 선택. `selectedAgent=null`이면 이 화면 표시 (사이드바 없음) |
-| **Chat** (`/`) | 에이전트별 채팅 — SSE 스트리밍, 근거 카드, "답변 틀림" 신고(정정 검토로), 대화 메모리(요약+리콜), Markdown 답변 |
-| **Admin** (`/admin`) | 에이전트별 관리 화면 — `agentScope` 필드로 탭 필터링. knowledge_rag: 기준정보·지식 베이스(정정 검토 포함)·VOC·용어집·평가 게이트·정책·캐시현황·통계. 공통: 시스템설정·사용자관리. (에이전트현황 탭 제거 — AgentSelect 화면에 헬스배지로 대체) |
+| **Register** (`/register`) | 회원가입 — 조회 전용(viewer)으로 시작, 관리자가 승인 |
+| **Chat** (`/`) | 채팅 — SSE 스트리밍, 근거 카드(지식·정책), "답변 틀림" 신고(정정 요청으로), 대화 메모리(요약+리콜), Markdown 답변 |
+| **Admin** (`/admin`) | 관리 범위 두 개(관리자만 전환 — v2.205): **컬렉션 관리**(홈·운영 지식·정책서·정정 요청·용어집·통계·소스 연결·컬렉션 정보) / **플랫폼 관리**(홈·평가 게이트·AI 감사·사용자 피드백·컬렉션(정책·시스템)·조직·권한·VOC 이메일·설정). 메뉴 정의 `pages/adminMenu.ts` |
 
-- **Agent-centric 라우팅**: `useAppStore.selectedAgent: 'knowledge_rag' | null`. null이면 AgentSelect 표시, 설정 시 에이전트별 UI로 전환. 로그아웃 시 null로 리셋
-- **ProtectedRoute**: 로그인되지 않은 사용자는 `/login`으로 리다이렉트
-- **useAuthStore** (Zustand): localStorage에 토큰 저장, 자동 Bearer 토큰 주입
-- **401 Auto-refresh**: Access Token 만료 시 Refresh Token으로 자동 갱신, 실패 시 로그아웃
-- **부서 기반 UI**: 지식/용어집/Q&A 테이블에 부서 배지 표시, 같은 부서만 수정/삭제 버튼 노출
-- **어드민 테이블 검색**: 지식베이스·용어집·Q&A 세 테이블 모두 텍스트 검색(즉시 필터) + 벡터 유사도 검색([문자열|벡터] 토글) 지원. 벡터 검색은 Enter 또는 검색 버튼으로 실행하고 유사도 % 배지 표시
-- **어드민 테이블 다건 삭제**: 전체 선택 체크박스 + 행별 체크박스, N개 선택 시 액션 바 표시 → 일괄 삭제
-- Sidebar: 에이전트 배지 + 에이전트 변경 버튼, 사용자 정보 + 로그아웃, 네임스페이스 선택, 대화 목록, 검색 설정 슬라이더, 헬스 표시기
-- Backend REST API만 호출 (직접 DB 접근 없음)
-- 검색 비중(벡터/키워드 비율), Top-K를 사이드바 슬라이더로 실시간 조정 (개인 설정은 localStorage에 저장, DB 저장 없음)
-- nginx 정적 빌드 서빙 + `/api/*` 요청을 Backend(`:8000`)로 프록시
+- 로그인 직후 바로 채팅(에이전트 선택 화면은 10/30 삭제). **ProtectedRoute**: 로그인 안 했으면 `/login`
+- **useAuthStore** (Zustand): localStorage 토큰, 자동 Bearer · **401 자동 갱신**(Refresh Token, 실패 시 로그아웃)
+- 보는 컬렉션 = 사이드바 칩 + 고르는 창(시스템·정책), 수정 버튼은 그 컬렉션 수정 권한일 때만(`utils/domainAccess.ts` — 서버와 같은 규칙)
+- 운영 지식 [검색 | 목록]: 검색 = 채팅과 같은 검색을 카드로(관련도·채널·채팅 노출·같은 글 N곳, v2.210/2.227), 목록 = 글자 거르기·일괄 선택
+- 브라우저 기본 alert/confirm 대신 앱 모달(`store/useDialogStore`), 쓰기 실패는 화면에 표시(`useMutation` onError)
+- Backend REST API만 호출 · nginx 정적 빌드 서빙 + `/api/*`를 Backend(`:8000`)로 프록시(dev에서도 프론트는 다시 빌드해야 반영)
 
 ### 2. Backend — FastAPI (`:8000`)
 
 ```
 backend/
-├── main.py              # 앱 진입점, 라이프사이클 (DB풀·임베딩·LLM·에이전트 초기화)
-├── agents/              # 에이전트 레이어 (AgentBase + AgentRegistry 패턴)
-│   ├── base.py          #   AgentBase 추상 클래스 + AgentRegistry 싱글톤
-│   ├── knowledge_rag/
-│   │   ├── agent.py     #   KnowledgeRagAgent — 하이브리드 검색 + LLM 스트리밍
-│   │   ├── knowledge/   #   지식/용어집 CRUD + 하이브리드 검색 (retrieval.py, DB/공통코드 카테고리는 벡터 점수 0 처리 v2.49)
-│   │   ├── ingestion/   #   지식 인제스천 파이프라인 (Tier 1~3)
-│   │   │   ├── adapters.py      #   파일 파싱 (.txt/.md/.pdf → ParsedDocument)
-│   │   │   ├── chunker.py       #   청킹 엔진 (section/paragraph/fixed/auto)
-│   │   │   ├── analyzer.py      #   LLM Analyzer Agent (doc_type, chunk_strategy 자동 결정)
-│   │   │   ├── tagger.py        #   LLM 자동 태깅 + 용어 추출
-│   │   │   └── web_crawler.py   #   URL/Confluence 수집 (httpx + BeautifulSoup + Confluence REST API)
-├── service/             # 플랫폼 공통 레이어 (was domain/, platform/ 명칭 stdlib 충돌로 service/ 확정)
-│   ├── auth/            #   인증/계정 (JWT, bcrypt, Fernet API Key 암호화)
-│   ├── chat/            #   채팅 라우터·헬퍼·메모리 (AgentRegistry 위임)
-│   ├── feedback/        #   "답변 틀림" 신고 접수 → 개선 원장 (v2.121부터 가중치·질의 상태 안 바꿈)
-│   ├── improvement/     #   개선 원장(정정 검토) — 신고·AI 판정/수정안(draft.py)·승인 시 버전 교체 (v2.118/120)
-│   ├── refdata/         #   공통코드·DB 컬럼 참조 데이터 검색
-│   ├── admin/           #   네임스페이스·통계·LLM 설정
-│   ├── prompt/          #   프롬프트 관리 (get_prompt: DB 우선, fallback)
-│   ├── llm/             #   LLM Provider 추상화 (ollama / inhouse)
-│   ├── email_voc/       #   VOC 이메일 분석 채널 (v2.40 신규)
-│   │   ├── graph_client.py    #   Microsoft Graph API 클라이언트 (msal 토큰 발급, 메일 조회, 페이지네이션/재시도)
-│   │   ├── service.py         #   check_relevance()(관련지식 사전 필터, v2.41) + analyze_email() — 기존 RAG 파이프라인 재사용 분류/심각도/오배치 판정 + issue_signature(정규화 이슈요약) 출력 (v2.49)
-│   │   ├── pattern_detection.py #   반복 VOC 클러스터링(issue_signature 임베딩으로 후보 → 대표 고정 · LLM 같은 문제 확인 후 합류, 11/03) + 커버리지 LLM 검증 게이트(DB/공통코드 카테고리 제외, v2.49) (v2.47 신규)
-│   │   ├── pipeline.py        #   수집→관련지식필터→분석→반복패턴탐지→중복제거→알림 오케스트레이션, 이력 조회
-│   │   ├── routing_service.py #   파트별 메일함 라우팅 CRUD, 폴링 설정(관련지식 임계치 포함), Graph 자격증명(Fernet 암호화) CRUD
-│   │   ├── delegated_auth.py  #   Delegated Permission 로그인 상태 관리 (Authorization Code Flow/PKCE, v2.41 신규·v2.42 인증방식 교체)
-│   │   ├── teams_notify.py    #   Teams Workflows 웹훅 발송
-│   │   ├── scheduler.py       #   백그라운드 폴링 루프 (asyncio.create_task, lifespan 등록)
-│   │   ├── retention.py       #   30일 고정 보관정책 자동 정리
-│   │   ├── schemas.py         #   Pydantic 스키마
-│   │   └── router.py          #   /api/email-voc/* 엔드포인트
-│   └── policy/           #   정책서(v0 원문 통째, docs/domains/policy/policy-v0-design.md) — 옛 엑셀 분해 파이프라인은 v2.150에서 삭제(docs/archive/policy-doc-pipeline-plan.md)
-│       ├── v0_convert.py      #   팀원 구조화 데이터 → 저장 단위 변환(LLM 없음·결정적, 적재는 scripts/load_policy_v0.py)
-│       ├── service.py         #   서술 조각 머리 붙인 임베딩(chunk_embed_text) + 기동 때 재임베딩
-│       ├── visibility.py      #   검색 대상 조건(searchable_sql) + 정책을 겨눈 대기 중 정정 조회(open_correction_sql) — 잎 모듈
-│       ├── catalog.py         #   정책서 화면 조회(목록·상세·버전·참고표·개요, 읽기 전용 — 내용 변경은 정정 원장 제안으로만)
-│       ├── caches.py          #   정책이 바뀐 뒤 비울 캐시 한 곳(답변 캐시 전 영역 + 키워드·분류 색인)
-│       ├── search.py          #   파라미터(RDB tsquery)+서술(벡터·BM25 RRF) 검색 — 채팅(agent.py)과 /api/policy/search가 같이 사용
-│       ├── keyword_index.py · category_list.py · scope.py  #   키워드 색인(BM25) · 탐색형 분류 목록 · 채팅의 정책 범위(영역 넘어 찾기)
-│       ├── query_type.py · korean_text.py  #   navigation형 질문 판별 · 한국어 조사/어미 제거
-│       ├── track2.py · answer_eval.py  #   검색 비교 실행 · 답변 정확도 이력
-│       ├── schemas.py         #   Pydantic 스키마
-│       └── router.py          #   GET /api/policy/policies(/{logical_id}), /ref-tables(/{id}), /overviews, /search, /track2/*, /answer-eval/history, /pipeline-stats
-├── core/
-│   ├── config.py        # pydantic-settings, JWT·Fernet 키
-│   ├── database.py      # asyncpg 풀 + resolve_namespace_id() 헬퍼
-│   ├── security.py      # JWT, bcrypt, Fernet
-│   └── dependencies.py  # get_current_user, get_current_admin, check_namespace_ownership
-└── shared/
-    ├── embedding.py     # Sentence-Transformers 싱글톤
-    ├── cache.py         # Semantic Cache (Redis, 유사도 0.88, TTL 30분, graceful degradation)
-    └── http_client.py   # 아웃바운드 HTTP 호출 공용 레이어 (call_http, v2.67 — VOC Teams 발송이 사용)
+├── main.py              # 앱 진입점·라이프사이클(DB 풀·임베딩·LLM·에이전트) + 마이그레이션 목록(_MIGRATIONS, advisory lock)
+├── agents/knowledge_rag/
+│   ├── agent.py         #   채팅 문맥 만들기(지식·정책·참고표·분류 목록) + 근거 없음 즉시 거절 + LLM 스트리밍
+│   ├── knowledge/       #   지식·용어집
+│   │   ├── retrieval.py #     하이브리드 검색(벡터+키워드, 같은 글 합치기·포함 접기 v2.225/227, 키워드 구제) · 중복 후보 조회
+│   │   ├── service.py   #     등록·일괄 적재(중복 판정 needs_review)·미리보기 비교·지식 검색 화면·다시 분할
+│   │   ├── api.py       #     지식 코어 API — VOC 등 바깥 창구는 이것만(tests/test_voc_boundary.py)
+│   │   ├── glossary_terms.py · glossary_mining.py  # 질문 용어 글자 매칭 · 지식 공백에서 동의어 후보
+│   │   ├── locate.py · review.py · team_import_router.py · router.py
+│   └── ingestion/       #   적재
+│       ├── web_crawler.py · adapters.py  # HTML(컨플·웹)·파일 → 섹션(제목은 h1~h6만), md/txt/pdf
+│       ├── chunker.py   #     섹션·단락·고정 길이 분할(제목만 조각 병합)
+│       ├── source_ledger.py  # 원문 원장(원문 = 기준, 조각 = 파생, PARSER_VERSION)
+│       ├── confluence_sync.py · sync_changes.py · confluence_media.py  # 컨플 연결 동기화·바뀐 페이지·그림
+│       ├── team_import.py # 컨플 공간 일괄(팀 적재, 검수 후 게시)
+│       ├── locator.py   #     넣을 곳(컬렉션) 판정
+│       └── quality.py · analyzer.py · tagger.py
+├── service/             # 플랫폼 공통
+│   ├── auth/            #   JWT·bcrypt·Fernet, 팀·파트·사용자·로그인 실패 제한
+│   ├── chat/            #   채팅 라우터(SSE)·메모리(요약+리콜)·다른 컬렉션 제안
+│   ├── policy/          #   정책서 v0(통째 + 파라미터 파생)·검색·참고표·원문 확인·JSON 가져오기(3-way)
+│   ├── improvement/     #   정정 요청 원장(신고·AI 수정안·승인 시 버전 교체)
+│   ├── eval/            #   평가 게이트·골든셋·자가 개선 루프·기법 대장(techniques.py)
+│   ├── decision/        #   AI 판단 원장(ops_ai_decision) — AI 감사 리포트
+│   ├── email_voc/       #   VOC 메일 분석(Graph API 수집 → 채팅 경로 검색 → 분석·반복 묶음 → Teams 알림)
+│   ├── user_feedback/ · feedback/  # 사용자 피드백(화면 의견) · "답변 틀림" 신고
+│   ├── refdata/         #   공통코드·DB 컬럼 참조 데이터
+│   ├── admin/ · prompt/ · llm/  # 컬렉션·통계·설정 · 프롬프트(DB 우선) · LLM 프로바이더(inhouse/openai_compat/ollama)
+│   └── validation.py · retention.py
+├── libs/trustkit/       # 신뢰도 레이어(이식 가능한 팀 자산, 표준 라이브러리만 — 앱 import 금지): ingest·retrieval·query·answer·decision·eval·text
+├── core/                # config(pydantic-settings) · database(asyncpg 풀, 범위 SQL) · security · dependencies(권한) · technique_flags(기법 스위치)
+└── shared/              # embedding(KURE-v1 싱글톤) · cache(Redis 답변 캐시) · reranker · rate_limit · http_client · rrf
 ```
 
 **주요 설계 원칙:**
@@ -238,14 +118,14 @@ backend/
 - **DDD 구조**: 도메인별 디렉토리로 schemas/service/router를 응집 — 플랫 구조 대비 코드 탐색·확장 용이
 - **비동기 전용**: asyncpg + httpx async — 블로킹 없는 I/O
 - **임베딩 싱글톤**: 앱 시작 시 모델 1회 로드, 이후 thread executor로 재사용
-- **LLM Provider 패턴**: `ollama` / `inhouse` 환경변수 하나로 교체 가능
-- **LLM별 프롬프트 형식**: Ollama는 `build_messages()` messages 배열, InHouse(DevX MCP API)는 `_build_query()`로 단일 query 문자열 생성
+- **LLM Provider 패턴**: `inhouse`(사내 게이트웨이) / `openai_compat`(로컬 LLM) / `ollama`(비상용) — `.env LLM_PROVIDER` 또는 설정 화면에서 전환
+- **LLM별 프롬프트 형식**: messages 배열(`build_messages()` — openai_compat·ollama), InHouse(DevX MCP API)는 `_build_query()`로 단일 query 문자열
+- **신뢰도 레이어 분리**: 검색·적재 품질·평가 기법 본체는 `libs/trustkit`(앱 import 금지), 앱 쪽은 DB 어댑터만 — 설계 `docs/domains/quality/trustkit-design.md`
 - **대화 맥락**: ConversationSummaryBuffer + Semantic Recall — 오래된 교환을 LLM으로 요약·벡터 저장, 현재 질문과 유사한 과거 요약 + 최근 2회 raw 교환을 history로 LLM에 전달
 - **멀티턴 검색 보강**: 직전 Q+A(각 80자)를 현재 질문에 결합하여 임베딩/검색 — 짧은 후속 질문에서도 이전 대화 맥락이 반영되어 유사도 향상 (추가 LLM 호출 없음)
 - **마크다운 답변**: 시스템 프롬프트에 Markdown 형식 지시 포함, 프론트엔드에서 `react-markdown` + `remark-gfm` + `rehype-raw`로 테이블/코드/리스트/HTML 태그 렌더링
 - **JWT 인증/인가**: Access Token(30분) + Refresh Token(7일), FastAPI Depends로 라우터 수준 보호
-- **네임스페이스 소유 파트 기반 권한**: 네임스페이스의 `owner_part`와 동일한 부서 구성원만 해당 네임스페이스의 데이터 CRUD 가능, 타 부서는 읽기 전용. `owner_part` NULL(담당 미지정)이면 **관리자만** 수정(v2.142 — 예전엔 누구나). 업무 영역 만들기·이름·삭제는 관리자만, 새 영역은 담당 미지정으로 생김. Admin은 모든 권한 보유
-- **수정 시 작성자 갱신**: 지식/용어 수정 시 `created_by_part`/`created_by_user_id`가 최종 수정자로 갱신됨
+- **컬렉션 담당 파트 기반 권한**: 컬렉션(ops_namespace)의 담당 파트(ops_namespace_owner) 구성원만 그 컬렉션 데이터를 수정, 다른 파트는 조회만. 담당 미지정이면 **관리자만** 수정(v2.142). 컬렉션 만들기·이름·삭제는 관리자만. 운영 지식은 시스템 컬렉션에만(정책 컬렉션엔 정책서만)
 - **Graceful Degradation**: LLM 연결 실패 시 검색 결과는 정상 반환, 안내 메시지 출력
 
 ### 3. 인증/인가 시스템 (v2.0.0 신규)
@@ -315,53 +195,29 @@ backend/
 
 ### 4. PostgreSQL + pgvector (`:5432`)
 
-```sql
--- 플랫폼 공통 (ops_* prefix)
-ops_part              -- 부서 레지스트리
-ops_user              -- 사용자 (role, part_id FK, encrypted_llm_api_key, encrypted_confluence_pat)
-ops_namespace         -- 네임스페이스 (owner_part_id FK, created_by_user_id)
-ops_conversation      -- 대화방 (namespace_id FK, user_id FK, agent_type)
-ops_message           -- 대화 메시지 (role, content, results JSONB, metadata JSONB)
-ops_improvement_item  -- 개선 원장(정정 검토): 답변 틀림·근거 정정·빠진 내용·검색 노이즈 + AI 수정안, 승인 전 검색 미노출 (v2.118/120)
-ops_query_log         -- 질의 로그 (status: pending=답변 / no_knowledge=지식 공백 / system_error=LLM 연결 실패(통계 밖),
-                      --   공백을 메우면 resolved_knowledge_id — v2.121)
-ops_prompt            -- 프롬프트 관리 (agent_type별 에이전트 스코핑, Admin 시스템설정 탭에서 편집)
-ops_system_config     -- 시스템 설정 key-value (캐시 임계값/TTL 등 영속화, VOC 폴링 정책/Graph 자격증명도 여기 저장)
+테이블은 묶음별로만 적는다 — 칸 정의는 실 DB가 항상 정확하고, 바뀐 이력은 `docs/table-definition.md`(마이그레이션 이력).
 
--- VOC 이메일 분석 채널 전용 (v2.40 신규)
-ops_voc_routing       -- 파트별 담당 메일함 ↔ Teams 웹훅 ↔ 온콜 연락처 매핑
-ops_email_analysis    -- 이메일 건별 분석 결과 (source_message_id UNIQUE로 중복 수집 방지, 30일 보관, v2.47: embedding/voc_cluster_id FK 추가 — 벡터는 1024차원)
-ops_email_poll_cycle  -- 폴링 사이클(스케줄러 실행 회차)별 성공/실패 이력 (30일 보관)
-ops_voc_cluster       -- 반복 VOC 클러스터 (representative_embedding=대표(만들 때 고정, 11/03), member_count, coverage_knowledge_id/coverage_verified — 해결방안 LLM 검증 캐시) (v2.47 신규)
+| 묶음 | 테이블 |
+|---|---|
+| 조직·사용자 | `ops_team` · `ops_part` · `ops_user` · `ops_namespace`(컬렉션: 시스템·정책, parent_id 트리) · `ops_namespace_owner`(담당 파트) |
+| 채팅 | `ops_conversation` · `ops_message`(results JSONB = 근거) · `rag_conv_summary`(대화 요약 벡터) · `ops_query_log`(질의·지식 공백) · `ops_llm_usage`(토큰 사용량) |
+| 운영 지식 | `rag_knowledge`(조각: status active · pending_review · staging · staging_review · deprecated · rejected · deleted, content_norm_md5 = 같은 글, heading_path = 소속) · `rag_source_document`(원문 원장 — 원문이 기준, PARSER_VERSION) · `rag_ingestion_job`(적재 작업·품질) · `rag_knowledge_duplicate_match`(승인 대기 근거) · `rag_knowledge_history` · `rag_source_connection`(컨플 연결 동기화) · `rag_import_batch` · `rag_import_page` · `rag_import_rule`(팀 적재) |
+| 용어 | `rag_glossary` · `rag_glossary_synonym` |
+| 정책서 | `policy_item`(정책 = v0 원문 통째, 버전) · `policy_param`(원문에서 파생한 값) · `policy_chunk`(서술 검색 조각) · `ref_table` · `ref_table_row`(참고표) · `policy_doc_overview`(문서 개요) |
+| 참조 데이터 | `ref_common_code` · `ref_db_column` |
+| 정정·판단·피드백 | `ops_improvement_item`(정정 요청·원문 확인 kind=source_check) · `ops_ai_decision`(AI 판단 원장 — AI 감사) · `ops_user_feedback` · `ops_user_feedback_file` · `ops_link`(정책·용어·절·참고표·컬렉션 사이 연결 — 대부분 정책→용어 uses) |
+| 평가 | `eval_gate_run` · `eval_candidate` · `eval_question_candidate` · `eval_experiment_job` · `eval_improvement_run` · `ingest_check_run`(적재 점검 기록) |
+| VOC | `ops_voc_routing` · `ops_email_analysis` · `ops_email_poll_cycle` · `ops_voc_cluster` |
+| 설정·운영 | `ops_prompt` · `ops_system_config` · `ops_data_marker` · `schema_migration_run`(마이그레이션 실행 기록) |
 
--- KnowledgeRAG 전용 (rag_* prefix, v2.8에서 ops_*→rag_* 변경)
-rag_knowledge         -- 지식 베이스 (HNSW + GIN FTS, base_weight(v2.121부터 입력 없음·전부 1.0), source_file/chunk_idx 추적,
-                      --   status: active/pending_review/rejected/deleted(v2.68 소프트삭제),
-                      --   logical_document_id/version/supersedes_id: 근거 정정 승인 시 버전 교체에 사용(v2.118))
-rag_knowledge_duplicate_match -- 중복탐지 매칭 후보 (v2.34)
-rag_knowledge_history -- 병합(merge) 시 덮어써지기 전 content/embedding 보존 (v2.68)
-rag_knowledge_category -- 카테고리 목록
-rag_glossary          -- 용어집 (질문에 글자로 나온 용어만 매칭 — v2.128, 동의어는 rag_glossary_synonym)
-rag_conv_summary      -- 대화 요약 (embedding VECTOR(1024), Semantic Recall용)
-rag_ingestion_job     -- 인제스천 작업 이력 (source_type, status, auto_glossary/fewshot 수, analyzer_result JSONB)
+- **HNSW**(`vector_cosine_ops`) 벡터 근사 검색 · **GIN** 전문 검색(`content_tsv` 저장 칸 — 조사 제거 `policy_strip_ko`) · pg_trgm
+- 모든 데이터는 `namespace_id` FK로 컬렉션에 소속 · `ops_conversation.user_id` CASCADE(사용자 삭제 시 대화도)
 
--- Text-to-SQL 전용 (sql_* prefix) — v2.51에서 에이전트 제거, 마이그레이션 호출도 제거됨
--- (기존 설치엔 테이블이 남아있지만 더 이상 갱신되지 않음. 스키마 상세는 archive/with-text2sql 브랜치 참고)
-```
+### 5. LLM
 
-- **HNSW 인덱스** (`vector_cosine_ops`): 벡터 근사 최근접 이웃 검색
-- **GIN 인덱스** (`to_tsvector('simple', content)`): 전문 검색(FTS)
-- **pg_trgm**: 트리그램 유사도 지원 (활성화됨)
-- **namespace_id integer FK**: 모든 테이블에서 도메인 격리. namespace 이름 변경 시 cascade 업데이트 불필요
-- **CASCADE 삭제**: `ops_conversation.user_id` → 사용자 삭제 시 대화 자동 삭제
-
-### 5. Ollama — LLM 추론 (`:11434`)
-
-- **비상용**(v2.143): `.env LLM_PROVIDER=ollama` 또는 API로만 — 관리자 설정 화면 선택지는 사내 LLM / 로컬 LLM(OpenAI 호환)
-- 호스트 머신에서 직접 실행 (컨테이너 외부)
-- 모델: `exaone3.5:2.4b`
-- Backend에서 `host.docker.internal:11434`로 접근
-- **`/api/chat` 엔드포인트** 사용 (GPT 방식 messages 배열, multi-turn 지원)
+- **사내 LLM 게이트웨이**(`inhouse`, DevX MCP API) — 운영에서 쓰는 것(운영 `.env`에 `LLM_PROVIDER=inhouse` — compose 기본값은 ollama). 발표·토큰·비용은 Bedrock 기준으로 설명
+- **로컬 LLM**(`openai_compat`, vLLM 등 `/v1/chat/completions`) — 개발·측정 기본(측정 스크립트 `--llm local`), 사용량도 기록(v2.222)
+- **Ollama**(`ollama`, 호스트 `host.docker.internal:11434`) — 비상용, `.env`나 API로만(설정 화면 선택지 아님)
 
 ---
 
@@ -445,9 +301,9 @@ messages = [
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `DATABASE_URL` | `postgresql://ops:ops1234@postgres:5432/opsdb` | DB 연결 문자열 |
-| `LLM_PROVIDER` | `inhouse` | `ollama` 또는 `inhouse` |
+| `LLM_PROVIDER` | compose `ollama` · 코드 `inhouse` | `inhouse`(사내 게이트웨이) · `openai_compat`(로컬 LLM) · `ollama`(비상용). compose가 안 주면 `ollama`로 뜬다 — 운영 `.env`에 반드시 적을 것. dev `.env`는 지금 `openai_compat`(11/05) |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama 서버 주소 |
-| `OLLAMA_MODEL` | `exaone3.5:7.8b` | 사용할 Ollama 모델명 |
+| `OLLAMA_MODEL` | `exaone3.5:7.8b` | Ollama 모델명(비상용, 코드 기본값 — compose가 안 넘김) |
 | `OLLAMA_TIMEOUT` | `900` | CPU 추론 최대 대기 시간(초), httpx read timeout에 적용 |
 | `OPENAI_COMPAT_BASE_URL` | (없음) | 로컬 LLM(OpenAI 호환) 주소 — 비면 화면에서 고를 수 없음(운영 .env엔 없음) |
 | `OPENAI_COMPAT_MODEL` | (없음) | 비우면 서버의 첫 모델 자동 사용 |
@@ -459,9 +315,15 @@ messages = [
 | `INHOUSE_LLM_RESPONSE_MODE` | `streaming` | 응답 방식 (`streaming` \| `blocking`) |
 | `EMBEDDING_MODEL` | `nlpai-lab/KURE-v1` (v2.72부터) | 임베딩 모델명 |
 | `VECTOR_DIM` | `1024` | 벡터 차원 수 |
-| `DEFAULT_TOP_K` | `5` | 기본 검색 결과 수 |
+| `DEFAULT_TOP_K` | `3` | 채팅 지식 검색 결과 수(top_k) — compose가 안 넘김, 설정 화면(검색 기본값)에서 바꿈 |
 | `DEFAULT_W_VECTOR` | `0.7` | 기본 벡터 검색 비중 |
 | `DEFAULT_W_KEYWORD` | `0.3` | 기본 키워드 검색 비중 |
+| `REDIS_URL` | (비면 캐시 끔) | 답변 캐시(compose: `redis://ops-redis:6379/0`) |
+| `POLICY_ABSTAIN_MIN_SCORE` | `0.50` | 근거 없음 즉시 거절 하한(빈 값 = 끔, v2.222) |
+| `KNOWLEDGE_COLLAPSE_CONTAINED` | `1` | 검색 top_k 안 포함 조각 접기(v2.225, 0 = 끔) |
+| `KNOWLEDGE_KEYWORD_RESCUE` | `0` | 지식 키워드 구제(검색 게이트 미통과로 꺼 둠) |
+| (`duplicate_min_similarity` · `duplicate_min_text_similarity`) | `0.88` · `0.8` | 적재 비슷한 글 하한(의미·글자) — 코드 기본값, compose가 안 넘겨 `.env`로는 못 바꿈(의미 하한은 설정 화면 임계값) · 승인 대기는 그중 판단할 상대만(v2.225) |
+| `POLICY_REF_CHAT` · `POLICY_REF_OVERVIEW` | `true` · `false` | 참고표·문서 개요를 채팅 문맥에 |
 | `BACKEND_URL` | `http://backend:8000` | Frontend → Backend 주소 |
 | `JWT_SECRET_KEY` | (필수) | JWT 서명 비밀 키 (HS256) |
 | `FERNET_SECRET_KEY` | (필수) | Fernet 대칭 암호화 키 (사용자 API Key 암호화용) |
@@ -478,7 +340,7 @@ messages = [
 | `rag_knowledge` | `embedding VECTOR(1024)` | 문서 내용 임베딩 → 질문과 코사인 유사도로 관련 문서 검색 |
 | `rag_glossary` | `embedding VECTOR(1024)` | 용어집 화면의 벡터 검색·동의어 품질 게이트용(v2.128부터 채팅 용어 매칭은 글자 매칭, `GLOSSARY_MATCH_MODE=embedding`이면 예전 방식) |
 | `rag_conv_summary` | `embedding VECTOR(1024)` | 과거 대화 요약 임베딩 → 현재 질문과 유사한 과거 맥락 Semantic Recall (유사도 0.45 이상) |
-| `policy_chunk` · `ops_email_analysis` · `ops_voc_cluster` | `VECTOR(1024)` | 정책 서술 검색 · VOC 메일 유사도/클러스터 |
+| `policy_chunk` · `ref_table` · `policy_doc_overview` · `ops_email_analysis` · `ops_voc_cluster` | `VECTOR(1024)` | 정책 서술 · 참고표 요약 · 문서 개요 검색 · VOC 메일 유사도/클러스터 (`rag_knowledge_history`는 병합 전 보존) |
 
 ### 검색 점수 공식
 
@@ -491,9 +353,6 @@ final_score = (w_vec × v_score + w_kw × k_score) × (1 + base_weight)
 - **k_score**: `ts_rank` BM25 점수 — GIN 인덱스로 전문 검색
 - **base_weight**: 문서별 가중치 — v2.121부터 입력 경로가 없고 전부 1.0(상수). 채팅 채택 게이트는 이 값을 걷어낸 원점수로 판단.
   식에서 빼려면 메일 VOC 인용 임계값 재측정이 먼저(컬럼 삭제 때 같이)
+- 그 뒤: 같은 글(content_norm_md5)은 한 자리 + 사본 소속 모두 · 채택 조각끼리 포함 접기 · (켜면) 키워드 구제 — 단계별 상세는 `docs/flow.md` 지식 검색
 
-### 비벡터 주요 테이블
-
-`ops_part`, `ops_user`, `ops_namespace`, `rag_knowledge_category`, `ops_improvement_item`, `ops_query_log`, `ops_conversation`, `ops_message`, `ops_prompt`, `ops_system_config`
-
-전체 스키마 정의는 `docs/table-definition.md` 참조.
+테이블 묶음은 위 §4, 칸 정의는 실 DB(이력은 `docs/table-definition.md`).

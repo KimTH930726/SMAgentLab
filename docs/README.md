@@ -70,3 +70,4 @@
 ## archive — 끝난 것(이력)
 옛 변경 이력, 끝난 계획(업무구분 폐지 · v1 정책 파이프라인), 일회성 보고서(10/19 정확도 구조). 안의 옛 링크는 그 당시 기록이라 고치지 않는다.
 11/05 경량화로 옮김: `architecture-history-v2.180-v2.199.md` · `collection-key-plan.md`(6단계 결정 끝) · `golden-set-lifecycle-plan.md`(골든 v0·후보 원장으로 대체) · `admin-ia-design.md`(admin-audience-split로 대체).
+11/10 경량화로 옮김: `architecture-history-v2.200-v2.219.md` · `backlog-done-2026-11.md`(끝난·취소한 백로그 항목 — 결정 근거 보관).

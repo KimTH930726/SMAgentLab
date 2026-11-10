@@ -184,8 +184,8 @@
 │  │    중화 — 문서가 턴을 흉내 못 내게. 끝 표시는 "지식    │   │
 │  │    없음" 응답 급증 원인으로 실측돼 두지 않음          │   │
 │  │                                                     │   │
-│  │  LLMProvider.generate(context, question, history)   │   │
-│  │  POST /api/chat (messages 배열, multi-turn)          │   │
+│  │  LLMProvider.generate_stream(context, question, ...) │   │
+│  │  프로바이더별 호출(inhouse·openai_compat·ollama)     │   │
 │  │  → LLM 답변 텍스트                                  │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
@@ -938,23 +938,24 @@ provider.health_check()         (연결 확인)
 
 ```
 .env 또는 환경변수
-  LLM_PROVIDER=ollama   →  OllamaProvider
+  LLM_PROVIDER=ollama   →  OllamaProvider(비상용)
                              POST :11434/api/chat (messages 배열, multi-turn)
+
+  LLM_PROVIDER=openai_compat → OpenAICompatProvider(로컬 LLM — 개발·측정 기본)
+                             POST {OPENAI_COMPAT_BASE_URL}/chat/completions — 주소에 /v1 포함(생각 과정 걸러냄, 사용량 기록)
 
   LLM_PROVIDER=inhouse  →  InHouseLLMProvider
                              POST {INHOUSE_LLM_URL}/v1/chat/completions
                              Authorization: Bearer {INHOUSE_LLM_API_KEY}
 
 신규 LLM 추가 시:
-  1. services/llm/new_llm.py 생성
+  1. service/llm/new_llm.py 생성
      class NewLLMProvider(LLMProvider):
          async def generate(...): ...
          async def generate_stream(...): ...
          async def health_check(...): ...
 
-  2. services/llm/__init__.py 팩토리에 등록
-     elif settings.llm_provider == "new_llm":
-         _provider = NewLLMProvider()
+  2. service/llm/factory.py 에 등록(provider_type 분기 — inhouse·openai_compat 옆에)
 
   3. 환경변수 LLM_PROVIDER=new_llm 설정
 ```

@@ -31,7 +31,7 @@
 - `backend/libs/trustkit/` — **신뢰도 레이어**(이식 가능한 팀 자산: 적재 품질·검색 기법·문맥/답 다듬기·평가). 표준 라이브러리만,
   앱 코드(core/service/shared/agents) import 금지. 기법 본체는 여기, 앱 쪽은 DB 어댑터만. 설계: docs/domains/quality/trustkit-design.md
 - `frontend-react/src/components/` — React UI 컴포넌트
-- `docs/` — **문서 지도 `docs/README.md`**(도메인별 폴더: domains/knowledge·policy·quality·org, platform, operations, archive — 새 문서는 해당 도메인 폴더 + 지도에 한 줄). architecture.md(버전별 변경이력 — v2.160 이전은 `docs/archive/`로 분리, 옛 발표 자료·일회성 계획·배포 기록도 archive/), flow.md(처리 흐름), table-definition.md(마이그레이션
+- `docs/` — **문서 지도 `docs/README.md`**(도메인별 폴더: domains/knowledge·policy·quality·org, platform, operations, archive — 새 문서는 해당 도메인 폴더 + 지도에 한 줄). architecture.md(버전별 변경이력 — v2.219 이전은 `docs/archive/architecture-history-*`로 분리, 끝난 백로그는 `archive/backlog-done-*`, 옛 발표 자료·일회성 계획·배포 기록도 archive/), flow.md(처리 흐름), table-definition.md(마이그레이션
   이력만 — 전체 컬럼 스펙은 실 DB가 항상 정확, 2026-09-16 경량화) — 변경 시 동기화. API
   스펙은 FastAPI 자동 문서(`/docs`)로 대체(손 유지보수 안 함)
 
