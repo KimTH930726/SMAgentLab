@@ -124,14 +124,75 @@ def test_collapse_only_among_adopted_keeps_adopted_content_and_positions():
     a = R(id=1, namespace="n", content="가. 나. 다.", base_weight=2.0, final_score=0.9)   # 관련도 0.3 — 채택 미달인데 앞
     c = R(id=2, namespace="n", content="가. 나.", base_weight=1.0, final_score=0.8)       # 관련도 0.4 — 채택, a에 포함
     assert [r.id for r in retrieval.collapse_adopted([a, c], th)] == [1, 2]
+    # 소속(상위 맥락)이 다르면 문장이 같아도 안 접는다 — AI가 보는 글(맥락 줄 + 본문)로 비교(11/10 외부 검수)
+    silver = R(id=3, namespace="n", content="적립 3%. 무료배송.", base_weight=0.0, final_score=0.6, heading_path=["혜택", "실버"])
+    gold = R(id=4, namespace="n", content="적립 3%. 무료배송. 라운지.", base_weight=0.0, final_score=0.6, heading_path=["혜택", "골드"])
+    gold2 = R(id=5, namespace="n", content="적립 3%. 무료배송. 라운지.", base_weight=0.0, final_score=0.6, heading_path=["혜택", "실버"])
+    bare = R(id=6, namespace="n", content="적립 3%. 무료배송.", base_weight=0.0, final_score=0.6)
+    assert [r.id for r in retrieval.collapse_adopted([silver, gold], th)] == [3, 4]
+    assert [r.id for r in retrieval.collapse_adopted([silver, gold2], th)] == [5]     # 같은 소속이면 긴 쪽
+    assert [r.id for r in retrieval.collapse_adopted([bare, gold], th)] == [4]        # 맥락 없는 짧은 쪽은 긴 쪽에 다 있음
+    assert [r.id for r in retrieval.collapse_adopted([silver, bare], th)] == [3]      # 맥락 있는 쪽이 더 담음
     rng = random.Random(1110)
     words = [f"문장{i}." for i in range(5)]
+    heads = [[], ["가"], ["나"], ["가", "다"]]
     for _ in range(300):
         rs = [R(id=i, namespace="n", content=" ".join(rng.sample(words, rng.randint(1, 3))), base_weight=0.0,
-                final_score=rng.choice([0.2, 0.5])) for i in range(rng.randint(1, 7))]
+                final_score=rng.choice([0.2, 0.5]), heading_path=list(rng.choice(heads))) for i in range(rng.randint(1, 7))]
         out = retrieval.collapse_adopted(rs, th)
         kept_adopted = [r for r in out if r.final_score >= 0.35]
-        for r in rs:
+        for r in rs:   # AI가 보던 글(맥락 + 본문)이 남은 채택 조각 어딘가에 그대로 — 소속까지 사라지지 않음
             if r.final_score >= 0.35:
-                assert any(_within(sentences(r.content), sentences(k.content)) for k in kept_adopted)
+                assert any(_within(sentences(retrieval.seen_text(r)), sentences(retrieval.seen_text(k))) for k in kept_adopted)
         assert [r.id for r in out if r.final_score < 0.35] == [r.id for r in rs if r.final_score < 0.35]
+
+
+def test_same_text_copies_merge_into_one_slot_keeping_every_heading():
+    """같은 글 접기(content_norm_md5) — 한 자리로 합치되 버리는 사본의 소속은 남는 조각 문맥 줄에 같이(11/10 외부 검수 중간 1 + 재리뷰 높음:
+    소속까지 같아야 접게 하면 컨플은 첫 칸이 페이지 제목이라 다른 페이지끼리 하나도 안 접혔다). 같은 소속은 한 번만."""
+    async def scenario(conn):
+        s = await ns(conn, "시험_소속접기 시스템")
+        silver = await knowledge(conn, s, "- 구매액 3% 적립.", confluence_page_id="P1", heading_path=["실버 혜택", "적립"])
+        gold = await knowledge(conn, s, "- 구매액 3% 적립.", confluence_page_id="P2", heading_path=["골드 혜택", "적립"])
+        copy = await knowledge(conn, s, "- 구매액  3% 적립.\n", confluence_page_id="P3", heading_path=["실버 혜택", "적립"])
+        await conn.execute("UPDATE rag_knowledge SET embedding = $2::vector WHERE id = ANY($1::int[])", [silver, gold, copy], UNIT)
+        await conn.execute("SET LOCAL enable_indexscan = off")
+        name = await conn.fetchval("SELECT name FROM ops_namespace WHERE id = $1", s)
+        return silver, gold, copy, await retrieval.search_knowledge(name, QUERY, "적립", top_k=10)
+    silver, gold, copy, got = run(scenario, [retrieval])
+    assert [r.id for r in got] == [silver]                         # 세 벌이 한 자리(동점 → id 작은 쪽)
+    assert retrieval.heading_line(got[0]) == "상위 맥락: 실버 혜택 > 적립 | 골드 혜택 > 적립"   # 골드 소속도 문맥에, 실버는 한 번
+
+
+def test_review_only_filter_keeps_only_candidates_needing_judgment():
+    """판단할 상대만 다시 보기(review_only_for, 11/10) — 실 SQL: 다른 원본 사용 중 글은 빼고, 원본 없는 글·같은 원본 글은 남긴다(needs_review와 같은 기준)."""
+    async def scenario(conn):
+        s = await ns(conn, "시험_판단후보 시스템")
+        other = await knowledge(conn, s, "다른 페이지 글", confluence_page_id="Q1")
+        manual = await knowledge(conn, s, "수기 글")
+        same = await knowledge(conn, s, "같은 페이지 옛 글", confluence_page_id="P1")
+        doc_other = await knowledge(conn, s, "다른 원문 글", source_document_id=None)
+        await conn.execute("UPDATE rag_knowledge SET embedding = $2::vector WHERE id = ANY($1::int[])", [other, manual, same, doc_other], UNIT)
+        await conn.execute("SET LOCAL enable_indexscan = off")
+        allc = {r["id"] for r in await retrieval.find_similar_active_knowledge(s, QUERY, limit=10)}
+        only = {r["id"] for r in await retrieval.find_similar_active_knowledge(s, QUERY, limit=10, review_only_for={"confluence_page_id": "P1"})}
+        return other, manual, same, doc_other, allc, only
+    other, manual, same, doc_other, allc, only = run(scenario, [retrieval])
+    assert {other, manual, same, doc_other} <= allc
+    assert only == {manual, same, doc_other}   # doc_other는 원본 표시 없음(원문 id 없음) → 판단할 상대
+
+
+def test_copy_headings_are_score_ordered_and_capped_to_top_k():
+    """사본 소속은 점수 순(실행마다 같은 문맥 줄) · top_k − 1개까지(합치지 않았어도 문맥엔 사본이 top_k개까지만 — 재리뷰 L1 11/10)."""
+    async def scenario(conn):
+        s = await ns(conn, "시험_사본상한 시스템")
+        ids = [await knowledge(conn, s, "같은 안내 문장.", confluence_page_id=f"P{i}", heading_path=[f"페이지{i}"]) for i in range(5)]
+        await conn.execute("UPDATE rag_knowledge SET embedding = $2::vector WHERE id = ANY($1::int[])", ids, UNIT)
+        for i, k in enumerate(ids):   # 점수 = 가중치 순서(페이지4가 가장 높음)
+            await conn.execute("UPDATE rag_knowledge SET base_weight = $2 WHERE id = $1", k, float(i))
+        await conn.execute("SET LOCAL enable_indexscan = off")
+        name = await conn.fetchval("SELECT name FROM ops_namespace WHERE id = $1", s)
+        return ids, await retrieval.search_knowledge(name, QUERY, "안내", top_k=3)
+    ids, got = run(scenario, [retrieval])
+    assert [r.id for r in got] == [ids[4]]
+    assert got[0].other_headings == [["페이지3"], ["페이지2"]]   # 점수 순 · top_k − 1 = 2개

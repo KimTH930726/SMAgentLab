@@ -325,6 +325,17 @@ def _wrap_div_text(tag) -> None:
                 child.replace_with(p)
 
 
+# 줄마다 — 한 문단 안 줄바꿈 뒤의 '#'(hosts 설정 줄 등)도 제목으로 읽혔다(리뷰 11/10). 이미 이스케이프된 줄은 그대로
+_LINE_HASH = re.compile(r"(?m)^([ \t]*)#")
+
+
+def _literal(text: str) -> str:
+    """본문 글의 줄이 '#'으로 시작하면 마크다운 이스케이프(백슬래시 + #) — 원문 작성자가 쓴 '#'(제목 태그 아님)이 변환 뒤 제목 줄로 읽혀
+    청커·적재 점검이 "제목만 있는 조각"으로 셌다(11/10 C3: job 3567·3991, 508~1,999자 본문 4조각). 제목은 h1~h6 태그로만 낸다.
+    이미 이스케이프된 줄(백슬래시로 시작)은 '#'으로 시작하지 않아 다시 안 붙는다."""
+    return _LINE_HASH.sub(lambda m: m.group(1) + "\\#", text)
+
+
 def _walk_blocks(tag):
     """문서 순서대로 ("heading", level, text) / ("text", 0, text) 를 낸다."""
     _wrap_div_text(tag)
@@ -348,7 +359,7 @@ def _walk_blocks(tag):
             # 다른 태그로 감싸지 않은 div 직속 글자만(나머지는 안쪽 태그가 낸다)
             own = " ".join(str(x).strip() for x in el.find_all(string=True, recursive=False) if str(x).strip())
             if own and not _inside(el, _CONTENT_TAGS, tag):
-                yield ("text", 0, own)
+                yield ("text", 0, _literal(own))
             continue
         if _inside(el, _CONTENT_TAGS, tag):
             continue   # 같은 계열 부모가 이미 포함
@@ -359,7 +370,7 @@ def _walk_blocks(tag):
             continue
         t = el.get_text(" ", strip=True)
         if t:
-            yield ("text", 0, t)
+            yield ("text", 0, _literal(t))
 
 
 def _extract_heading_sections(tag) -> list[dict]:

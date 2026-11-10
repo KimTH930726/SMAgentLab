@@ -217,11 +217,13 @@ async def bulk_update_knowledge(
 async def explore_knowledge(namespace: str, query: str, top_k: int = 30) -> dict:
     """지식 검색 화면(11/04 태훈 "검색해서 무슨 지식이 있나 보고 고치게") — **채팅과 같은 검색**: 용어 범위(정책 파트 용어 포함)와 지식 검색
     범위(채팅 기본 linked — 연결된 컬렉션까지)를 채팅(agent.build_chat_context)과 같게 정한다(독립 리뷰: 디버그 검색에서 고쳤던 차이 재발 방지).
-    카드 칸: 관련도(가중치 뺀 점수)·문서 위치·채널·수정일·채팅 노출 횟수(최근 90일 채팅 검색 결과에 든 횟수 — 답 근거 채택 여부와 별개)."""
+    카드 칸: 관련도(가중치 뺀 점수)·문서 위치·채널·수정일·채팅 노출 횟수(최근 90일 채팅 검색 결과에 든 횟수 — 답 근거 채택 여부와 별개).
+    copies = 본문이 똑같은 다른 사용 중 지식(같은 검색 범위, id·소속) — 검색은 같은 글을 한 건으로 합쳐 사본이 안 보여, 고치면 나머지에
+    옛 내용이 남았다(11/10 재리뷰 L2, 시안 승인)."""
     from agents.knowledge_rag.agent import chat_defaults
     from agents.knowledge_rag.knowledge import glossary_terms as _gt
     from agents.knowledge_rag.knowledge.retrieval import get_search_defaults, relevance_score, search_knowledge, KEYWORD_RESCUE
-    from core.database import knowledge_scope_extra_ids
+    from core.database import knowledge_scope_extra_ids, namespace_scope_ids
     from service.policy import scope as policy_scope
     vec = await embedding_service.embed(query)
     scope = chat_defaults()["knowledge_scope"]
@@ -246,6 +248,18 @@ async def explore_knowledge(namespace: str, query: str, top_k: int = 30) -> dict
             "SELECT (e->>'id')::int AS kid, count(DISTINCT m.id) AS n FROM ops_message m CROSS JOIN LATERAL jsonb_array_elements(m.results) e "
             "WHERE m.role = 'assistant' AND m.created_at > NOW() - interval '90 days' AND jsonb_typeof(m.results) = 'array' "
             "AND (e->>'id') ~ '^[0-9]+$' AND (e->>'id')::int = ANY($1::int[]) GROUP BY 1", ids)} if ids else {}
+        copies: dict[int, list[dict]] = {}
+        if ids:
+            scope_ids = list(dict.fromkeys([*await namespace_scope_ids(conn, namespace), *extra_ns]))
+            for c in await conn.fetch(
+                    "SELECT h.id AS hit, k.id, k.heading_path, k.content, n.name AS namespace FROM rag_knowledge h "
+                    "JOIN rag_knowledge k ON k.content_norm_md5 = h.content_norm_md5 JOIN ops_namespace n ON n.id = k.namespace_id "
+                    "AND k.id <> h.id AND k.status = 'active' AND k.namespace_id = ANY($2::int[]) WHERE h.id = ANY($1::int[]) ORDER BY h.id, k.id",
+                    ids, scope_ids):
+                # 본문은 사본 자기 것 — 같은 글 판정은 공백을 무시해서, 검색된 조각 글로 열면 손대지 않고 저장해도 사본이 바뀌고
+                # "사람이 고침"으로 찍혔다(리뷰 11/10: 사본 쌍 1,801 중 21쌍 글자 다름). namespace = [열기]를 그 컬렉션 권한일 때만
+                copies.setdefault(c["hit"], []).append({"id": c["id"], "heading_path": list(c["heading_path"] or []),
+                                                        "content": c["content"], "namespace": c["namespace"]})
     items = []
     for h in hits:
         r = rows.get(h.id)
@@ -253,7 +267,7 @@ async def explore_knowledge(namespace: str, query: str, top_k: int = 30) -> dict
                       "source_type": h.source_type, "source_file": h.source_file, "score": round(relevance_score(h), 4),
                       "v_score": round(h.v_score, 4), "k_score": round(h.k_score, 4), "used_count": used.get(h.id, 0),
                       "updated_at": r["updated_at"] if r else None, "created_at": r["created_at"] if r else None,
-                      "created_by_username": r["created_by_username"] if r else None})
+                      "created_by_username": r["created_by_username"] if r else None, "copies": copies.get(h.id, [])})
     return {"query": query, "mapped_term": mapped_term, "items": items}
 
 
@@ -498,6 +512,20 @@ async def check_similar(namespace: str, content: str, *, limit: int = 3) -> dict
 
 
 _DUP_CANDIDATES = 3   # 등록 중복 판정에서 보는 가까운 기존 조각 수(미리보기 check_similar_batch도 같은 기본값)
+_REVIEW_RECHECK = 10  # 가려진 상대를 다시 볼 때(판단할 상대만) 후보 수 — 같은 양식 형제 글이 다시 3자리를 차지해도 그 뒤를 보게(재리뷰 L3 11/10)
+
+
+def _crowded(ms: list[dict], threshold: float, review: Callable[[dict], bool]) -> bool:
+    """가까운 후보가 꽉 찼는데(마지막도 하한 이상) 승인 대기로 보낼 상대(review = 판단할 상대 + 글자 하한)가 하나도 없음 —
+    그 뒤에 가려진 상대가 있을 수 있다. 글자 검사를 빼고 보면 글자 미달 후보 하나 때문에 다시 안 봤다(리뷰 11/10)."""
+    return (len(ms) >= _DUP_CANDIDATES and ms[-1]["similarity"] >= threshold
+            and not any(review(m) for m in ms if m["similarity"] >= threshold))
+
+
+def _review_filter(it: dict) -> Optional[dict]:
+    """다시 볼 때의 후보 거름 — 원본 있는 조각은 판단할 상대만(review_only_for), 원본 없는 조각은 이번 작업 밖 전부(다 판단할 상대)."""
+    page, doc = it.get("confluence_page_id"), it.get("source_document_id")
+    return {"confluence_page_id": page, "source_document_id": doc} if (page or doc) else None
 
 
 def needs_review(it: dict, m: dict, job_id: Optional[int] = None) -> bool:
@@ -546,10 +574,23 @@ async def check_similar_batch(namespace: str, items: list[dict], *, limit: int =
             ns_id, emb, limit=_DUP_CANDIDATES, replacing_confluence_pages=pages or None, replacing_documents=replacing_docs or None)
             for emb in embeddings[start:start + _INGEST_BATCH_SIZE]))
     live_docs = set(live) if docs else set()
-    for it, ms in zip(items, match_lists):
-        # 등록(bulk_create)은 초안·사용 중이 아닌 원문 id를 떼고 판정한다 — 미리보기도 같게(리뷰 L4)
-        src = {**it, "source_document_id": it["source_document_id"] if it.get("source_document_id") and int(it["source_document_id"]) in live_docs else None}
-        same = next((m["id"] for m in ms if norm_text(m["content"]) == norm_text(it["content"])), None)
+    # 등록(bulk_create)은 초안·사용 중이 아닌 원문 id를 떼고 판정한다 — 미리보기도 같게(리뷰 L4)
+    srcs = [{**it, "source_document_id": it["source_document_id"] if it.get("source_document_id") and int(it["source_document_id"]) in live_docs else None}
+            for it in items]
+    text_th = settings.duplicate_min_text_similarity
+    crowded = [i for i, ms in enumerate(match_lists)   # 등록과 같이 가려진 판단할 상대를 다시 봄
+               if _crowded(ms, dup, lambda m, i=i: needs_review(srcs[i], m) and similar_at_least(items[i]["content"], m["content"], text_th, tmpl))]
+    if crowded:
+        extra = await asyncio.gather(*(find_similar_active_knowledge(
+            ns_id, embeddings[i], limit=_REVIEW_RECHECK, replacing_confluence_pages=pages or None, replacing_documents=replacing_docs or None,
+            review_only_for=_review_filter(srcs[i])) for i in crowded))
+        for i, more in zip(crowded, extra):
+            ids = {m["id"] for m in match_lists[i]}
+            match_lists[i] = sorted([*match_lists[i], *(m for m in more if m["id"] not in ids)], key=lambda m: -m["similarity"])
+    for it, src, ms in zip(items, srcs, match_lists):
+        # "같은 글" 표시는 상대가 사용 중일 때만 — 등록은 사용 중 상대와 같은 글만 건너뜀(같은 원본)·바로 등록(다른 원본)하고, 다른 보류 작업
+        # 조각과 같으면 승인 대기로 보낸다(그건 아래 비교로 보여 줌, 외부 검수 낮음 1 11/10)
+        same = next((m["id"] for m in ms if m.get("status") == "active" and norm_text(m["content"]) == norm_text(it["content"])), None)
         close = [m for m in ms if m["similarity"] >= dup and similar_at_least(it["content"], m["content"], settings.duplicate_min_text_similarity, tmpl)
                  and needs_review(src, m)]   # 등록과 같은 판정 — 다른 원본의 비슷한 글은 바로 등록되니 비교로 안 묻는다(11/09)
         top = sorted(close, key=lambda m: -m["similarity"])[:limit]
@@ -1161,17 +1202,18 @@ async def _run_bulk_ingestion(
                     replacing_documents=replacing_docs or None,
                 ) for emb in embeddings)
             )
-            # 후보(가까운 3건)에 이번 작업 조각이 끼면 그 뒤의 판단할 상대(수기 글 등)가 밀려 안 보인다 — 이번 작업을 뺀 후보를 한 번 더 보고
-            # 합친다(미리보기 check_similar_batch는 이번 작업이 없어 처음부터 이 후보를 본다 — 미리보기와 등록 판정을 같게, 독립 리뷰 M1 11/10)
-            # 후보가 꽉 차고 마지막도 하한 이상일 때만 — 마지막이 하한 미만이면 그 뒤도 다 미만이라 밀린 상대가 없다(조회 줄이기, 재리뷰 11/10)
-            own = [o for o, ms in enumerate(match_results) if any(m.get("ingestion_job_id") == job_id for m in ms)
-                   and len(ms) >= _DUP_CANDIDATES and ms[-1]["similarity"] >= dup_threshold]
-            if own:
+            # 가까운 후보(3건)가 판단할 것 없는 상대(이번 작업 조각·다른 원본 사용 중 글)로 꽉 차면 그 뒤의 판단할 상대(수기 글 등)가
+            # 가려진다 — 판단할 상대만 한 번 더 보고 합친다(독립 리뷰 M1 · 외부 검수 낮음 2, 11/10). 미리보기도 같은 규칙(check_similar_batch).
+            # 꽉 차고 마지막도 하한 이상일 때만 — 마지막이 하한 미만이면 그 뒤도 다 미만이라 가려진 상대가 없다
+            crowded = [o for o, ms in enumerate(match_results)
+                       if _crowded(ms, dup_threshold, lambda m, o=o: needs_review(batch[o], m, job_id)
+                                   and similar_at_least(batch[o]["content"], m["content"], text_threshold, tmpl))]
+            if crowded:
                 others = await asyncio.gather(*(find_similar_active_knowledge(
-                    ns_id, embeddings[o], limit=_DUP_CANDIDATES, replacing_confluence_pages=replacing_pages or None,
-                    replacing_documents=replacing_docs or None,
-                ) for o in own))
-                for o, extra in zip(own, others):
+                    ns_id, embeddings[o], limit=_REVIEW_RECHECK, replacing_confluence_pages=replacing_pages or None,
+                    replacing_documents=replacing_docs or None, review_only_for=_review_filter(batch[o]),
+                ) for o in crowded))
+                for o, extra in zip(crowded, others):
                     ids = {m["id"] for m in match_results[o]}
                     match_results[o] = sorted([*match_results[o], *(m for m in extra if m["id"] not in ids)], key=lambda m: -m["similarity"])
             # ② 같은 원본 안 완전 일치 — 같은 원본의 저장 조각(이번 작업 앞 배치)이나 앞 조각과 같으면 건너뜀

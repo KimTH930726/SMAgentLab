@@ -3,6 +3,7 @@ import type { KnowledgeResult } from '../../types';
 import type { Freshness, SourcePage } from '../../api/knowledge';
 import { clsx } from 'clsx';
 import { EvidenceReportControls } from './EvidenceReportControls';
+import { plainHashes } from '../../utils/markdown';
 
 interface SearchResultCardProps {
   result: KnowledgeResult;
@@ -79,7 +80,7 @@ export function SearchResultCard({ result, defaultOpen = false, index, underRevi
       <div className="px-4 pb-4 space-y-3">
         {/* Content */}
         <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-          {result.content}
+          {plainHashes(result.content)}
         </p>
         {images > 0 && sourcePage && (
           <p className="border-t border-dashed border-slate-700 pt-2 text-xs text-slate-400">

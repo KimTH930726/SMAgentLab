@@ -214,6 +214,8 @@ export interface ExploreItem {
   updated_at: string | null;
   created_at: string | null;
   created_by_username: string | null;
+  /** 본문이 똑같은 다른 사용 중 지식(검색은 한 건으로 합침) — 고칠 땐 같이 고치게(11/10) */
+  copies: { id: number; heading_path: string[]; content: string; namespace: string }[];
 }
 
 export async function exploreKnowledge(namespace: string, query: string, topK = 30): Promise<{ query: string; mapped_term: string | null; items: ExploreItem[] }> {

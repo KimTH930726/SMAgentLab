@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import json
 import math
 import os
 import time
@@ -120,6 +121,8 @@ class RetrievalResult:
     v_score: float = field(default=0.0)
     k_score: float = field(default=0.0)
     heading_path: list[str] = field(default_factory=list)
+    # 본문이 같은 다른 조각(다른 페이지 사본)의 상위 맥락 — 검색은 같은 글을 한 건으로 합치되 소속은 모두 문맥에 남긴다(11/10)
+    other_headings: list[list[str]] = field(default_factory=list)
     source_type: Optional[str] = field(default=None)
     source_file: Optional[str] = field(default=None)
     created_at: Optional[datetime.datetime] = field(default=None)
@@ -155,10 +158,39 @@ def is_adopted(r: RetrievalResult, thresholds: dict[str, float]) -> bool:
     return relevance_score(r) >= thresholds["knowledge_min_score"]
 
 
+def _other_headings(own, copies, limit: int) -> list[list[str]]:
+    """같은 글 사본들의 소속 중 자기와 다른 것(점수 순·중복 없음·빈 것 제외) 최대 limit개 — 합치지 않았어도 문맥엔 사본이 top_k개까지만
+    들어갔으니 top_k − 1개면 그때 보였을 소속과 같다(32벌 묶음이 소속 줄 770자로 문맥 예산을 먹던 것 방지, 재리뷰 11/10)."""
+    seen, out = {tuple(own or [])}, []
+    for h in (json.loads(copies) if isinstance(copies, str) else copies or []):
+        if len(out) >= limit:
+            break
+        if h and tuple(h) not in seen:
+            seen.add(tuple(h))
+            out.append(list(h))
+    return out
+
+
+def heading_line(r: RetrievalResult) -> str:
+    """채팅 문맥의 상위 맥락 줄 — 자기 소속 + 합쳐진 같은 글 사본들의 소속(" | "로). 없으면 빈 글. 문맥 만드는 곳은 모두 이것만 쓴다."""
+    heads = [h for h in [r.heading_path, *r.other_headings] if h]
+    return f"상위 맥락: {' | '.join(' > '.join(h) for h in heads)}" if heads else ""
+
+
+def seen_text(r: RetrievalResult) -> str:
+    """조각이 채팅 문맥에 들어가는 모양 중 내용 부분 — 상위 맥락 줄(있으면) + 본문."""
+    line = heading_line(r)
+    return (line + "\n" if line else "") + r.content
+
+
 def collapse_adopted(results: list[RetrievalResult], th: dict[str, float]) -> list[RetrievalResult]:
     """포함 조각 접기를 문맥에 쓰는(채택) 조각끼리만 — 안 쓰는 조각이 쓰는 조각을 지우면 그 내용이 문맥에서 사라진다(독립 리뷰 11/10).
-    채택 안 된 조각은 제자리 그대로, 채택 자리엔 접힌 순서대로 채우고 남는 채택 자리는 비운다(빈자리 안 채움)."""
-    it = iter(collapse_contained([r for r in results if is_adopted(r, th)], lambda r: r.content))
+    채택 안 된 조각은 제자리 그대로, 채택 자리엔 접힌 순서대로 채우고 남는 채택 자리는 비운다(빈자리 안 채움).
+    비교는 AI가 보는 글 그대로(상위 맥락 줄 + 본문, agent._build_rrf_context와 같은 줄) — 본문만 보면 "실버 혜택"·"골드 혜택"처럼
+    소속이 다른데 문장이 같은 조각이 접혀 소속이 사라졌다(11/10 외부 검수). 상위 맥락이 같을 때만 접히고, 짧은 쪽에 맥락이 없으면 긴 쪽이 더 담아 접힌다.
+    본문이 완전히 같은 다른 페이지 사본은 여기 오기 전 SQL이 한 건으로 합치며 소속을 other_headings로 남긴다 — 더 긴 조각에 소속을 합치지
+    않는 이유: 긴 쪽에만 있는 문장(골드 "생일 쿠폰")이 짧은 쪽 소속(실버)에도 붙어 틀린 연결이 생긴다."""
+    it = iter(collapse_contained([r for r in results if is_adopted(r, th)], seen_text))
     return [x for x in ((next(it, None) if is_adopted(r, th) else r) for r in results) if x is not None]
 
 
@@ -193,8 +225,12 @@ async def map_glossary_term(
 async def find_similar_active_knowledge(
     ns_id: int, embedding: list[float], *, limit: int = 3, staging_job_id: Optional[int] = None,
     replacing_confluence_pages: Optional[list[str]] = None, replacing_documents: Optional[list[int]] = None,
+    review_only_for: Optional[dict] = None,
 ) -> list[dict]:
     """같은 네임스페이스의 활성(active) 지식 중 embedding과 가장 유사한 상위 N건 조회.
+
+    `review_only_for`: {confluence_page_id?, source_document_id?} — 사람이 판단할 상대만(needs_review가 참일 수 있는 후보: 사용 중이 아님 ·
+    원본 표시 없음 · 같은 원본). 가까운 후보가 판단할 것 없는 상대(다른 원본 사용 중 글)로 꽉 차 그 뒤의 판단할 상대가 가려질 때 다시 본다(11/10).
 
     지식 등록 시 중복 의심 판정(승인 대기)에 사용 — 이미 pending_review/rejected인
     행은 후보에서 제외해 "대기 중인 것끼리" 비교되는 것을 막는다.
@@ -234,6 +270,16 @@ async def find_similar_active_knowledge(
         # (10/08~ 결함, 11/04 E2E 에이전트 발견: 사용 중 1,756 중 80이 일괄 등록·미리보기 중복 비교에서 안 보임 — 위 컨플 페이지 조건엔 가드가 있었다)
         replace_clause += (f" AND NOT ((status = 'active' OR {held_clause}) AND source_document_id IS NOT NULL "
                            f"AND source_document_id = ANY(${len(args)}::int[]))")
+    if review_only_for is not None:
+        page, doc = review_only_for.get("confluence_page_id"), review_only_for.get("source_document_id")
+        same = ""
+        if page:
+            args.append(str(page))
+            same = f" OR confluence_page_id = ${len(args)}"
+        elif doc:
+            args.append(int(doc))
+            same = f" OR source_document_id = ${len(args)}"
+        replace_clause += f" AND (status <> 'active' OR (confluence_page_id IS NULL AND source_document_id IS NULL){same})"
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""
@@ -407,8 +453,13 @@ async def search_knowledge(
             ),
             -- 같은 글 한 건만(11/09) — 다른 페이지에 똑같이 실린 글은 페이지마다 조각을 두고(한쪽 페이지가 지워져도 내용이 남게)
             -- 검색에서만 하나로 합친다(업계: 내용 해시로 접기). 공백만 다른 것도 같은 글 — content_norm_md5(저장 칸, main.py KNOWLEDGE_WS_CLASS)
+            -- 문맥엔 조각마다 소속(상위 맥락)이 붙는다 — 버리는 사본의 소속은 copy_headings로 남는 조각에 같이 싣는다(11/10 외부 검수:
+            -- 본문만 보고 버리면 "실버 혜택"이 사라졌다. 소속까지 같아야 접게 하면 컨플은 첫 칸이 페이지 제목이라 다른 페이지끼리 하나도 안 접혔다)
             ranked AS (
-                SELECT *, row_number() OVER (PARTITION BY content_norm_md5 ORDER BY final_score DESC, id) AS copy_rank
+                SELECT *, row_number() OVER (PARTITION BY content_norm_md5 ORDER BY final_score DESC, id) AS copy_rank,
+                       -- 순서 고정(점수 순 — 문맥 글자·포함 비교가 실행마다 같게) + 묶음 전체 구간(ORDER BY만 주면 기본 구간이라 1위 행이 자기만 모음)
+                       jsonb_agg(to_jsonb(coalesce(heading_path, '{}'))) OVER (PARTITION BY content_norm_md5 ORDER BY final_score DESC, id
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS copy_headings
                 FROM scored
             )
             SELECT * FROM ranked WHERE copy_rank = 1
@@ -444,6 +495,7 @@ async def search_knowledge(
             v_score=float(r["v_score"]), k_score=float(r["k_score"]),
             final_score=score,
             heading_path=list(r["heading_path"] or []),
+            other_headings=_other_headings(r["heading_path"], r["copy_headings"], max(top_k - 1, 0)),
             source_type=r["source_type"], source_file=r["source_file"],
             created_at=r["created_at"],
         ))
@@ -486,8 +538,9 @@ def build_context(results: list[RetrievalResult]) -> str:
         rel = relevance_score(r)
         confidence = confidence_label(rel, th)
         part = [f"--- 문서 {i} (점수: {rel:.4f}, 신뢰도: {confidence}) ---"]
-        if r.heading_path:
-            part.append(f"상위 맥락: {' > '.join(r.heading_path)}")
+        line = heading_line(r)   # 같은 글 사본의 소속까지(11/10)
+        if line:
+            part.append(line)
         part.append(f"내용:\n{r.content}")
         parts.append("\n".join(part))
 

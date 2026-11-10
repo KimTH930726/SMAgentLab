@@ -552,7 +552,7 @@ def test_context_budget_keeps_top_ranked_blocks_within_budget():
     """문맥 예산(11/02 측정 옵션) — 한 줄 순위 위에서부터 예산 안만, 첫 블록은 늘, 보충은 남은 예산 안에서만. 예산 없으면 지금처럼 전부."""
     from types import SimpleNamespace
     from unittest.mock import patch
-    r = [SimpleNamespace(id=i, content="가" * 400, heading_path=None) for i in (1, 2, 3)]
+    r = [SimpleNamespace(id=i, content="가" * 400, heading_path=None, other_headings=[]) for i in (1, 2, 3)]
     pol = SimpleNamespace(params=[], narratives=[])
     exp = [{"id": 9, "content": "나" * 400}]
     th = {"knowledge_high_score": 0.7, "knowledge_mid_score": 0.5}

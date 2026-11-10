@@ -109,7 +109,7 @@ class TestSearchKnowledgeNoCategory:
 def _row(i, score):
     return {"id": i, "namespace": "ns", "content": f"c{i}", "base_weight": 0.0, "heading_path": [],
             "source_type": None, "source_file": None, "created_at": None, "v_score": score, "k_score": 0.0,
-            "final_score": score, "updated_at": None}
+            "final_score": score, "updated_at": None, "copy_headings": [[]]}
 
 
 class TestKnowledgeKeywordRescue:

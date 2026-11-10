@@ -137,7 +137,8 @@ def _build_rrf_context(
     for i, r in enumerate(relevant):
         rel = retrieval.relevance_score(r)
         confidence = retrieval.confidence_label(rel, th)
-        heading_str = f"\n상위 맥락: {' > '.join(r.heading_path)}" if r.heading_path else ""
+        line = retrieval.heading_line(r)   # 같은 글 사본의 소속까지(11/10)
+        heading_str = f"\n{line}" if line else ""
         # 문서 식별자를 반드시 포함 — 없으면 시스템 프롬프트의 "📎 문서 N 참고" 지시를
         # 따를 근거가 컨텍스트에 없어, LLM이 옆에 보이는 점수(float)를 N으로 오인해
         # "문서 0.3925 참고"처럼 잘못 인용하는 실사고가 있었다(2026-09-22). #{id} 포맷은

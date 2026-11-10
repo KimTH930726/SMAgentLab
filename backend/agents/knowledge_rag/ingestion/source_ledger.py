@@ -21,7 +21,7 @@ from agents.knowledge_rag.ingestion.adapters import ParsedDocument, extract_head
 
 logger = logging.getLogger(__name__)
 
-PARSER_VERSION = "v2.190"   # 파싱·분할 코드 판 — 결함 난 판으로 만든 원문·청크를 찾을 때(분할 코드를 고치면 올린다)
+PARSER_VERSION = "v2.227"   # 파싱·분할 코드 판 — 결함 난 판으로 만든 원문·청크를 찾을 때(분할 코드를 고치면 올린다). v2.227: 문단 첫 # 이스케이프
 STABLE_REF_TYPES = ("confluence", "web")   # 위치만으로 같은 원본이라 볼 수 있는 종류
 
 

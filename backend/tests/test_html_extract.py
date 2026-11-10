@@ -57,3 +57,61 @@ class TestReviewEdgeCases:
     def test_cell_newline_and_pipe_do_not_break_row(self):
         secs = self._secs("<h2>T</h2><table><tr><td><pre>a\nb</pre></td><td>x|y</td></tr></table>")
         assert secs[0]["content"] == "| a b | x\\|y |"
+
+
+def test_literal_hash_paragraph_is_not_a_heading():
+    """원문 문단 첫 글자 '#'(제목 태그 아님)은 이스케이프 — 변환 뒤 제목 줄로 읽혀 "제목만 조각" 오탐이었다(11/10 C3, job 3567·3991).
+    성질: 제목 줄('#'으로 시작)은 h1~h6에서만 나오고, 글자는 그대로 남는다(백슬래시만 붙음)."""
+    from agents.knowledge_rag.ingestion.chunker import _is_heading_line
+    from trustkit.ingest.quality import assess
+    html = ("<h2>안내</h2><p># 주의 사항입니다. 결제 후 취소는 30분 안에 한다.</p><div>#태그처럼 쓴 문단</div><p>보통 문단</p>"
+            "<p>#VOC1\n  # 10.0.0.1 www.example\n본문</p>")   # 한 문단 안 줄바꿈 뒤의 '#'도(리뷰 11/10 — hosts 설정 문단)
+    soup = BeautifulSoup(w.prepare_storage_html(html), "lxml")
+    raw = w._extract_text(soup)
+    heads = [ln for ln in raw.split("\n") if _is_heading_line(ln)]
+    assert heads == ["## 안내"]
+    assert r"\# 주의 사항입니다." in raw and r"\#태그처럼 쓴 문단" in raw and r"\#VOC1" in raw and r"  \# 10.0.0.1" in raw
+    assert w._literal(r"\# 이미") == r"\# 이미"   # 두 번 붙지 않음
+    sec = w._extract_heading_sections(BeautifulSoup(w.prepare_storage_html(html), "lxml"))
+    body = next(s["content"] for s in sec if s["title"] == "안내")
+    assert assess([(body, ["안내"])])["heading_only"] == 0
+
+
+def test_realdb_active_html_sources_produce_headings_only_from_tags():
+    """성질(실데이터): 사용 중 HTML 원문 전체를 지금 파서로 다시 읽으면 섹션 본문에 '#'으로 시작하는 줄(코드 블록 밖)이 0 —
+    제목은 h1~h6 태그로만(11/10 리뷰: 사례 한 줄로는 문단 안 줄바꿈 뒤 '#'을 못 잡았다). DB가 없으면 건너뜀. 내용은 출력하지 않고 원문 id만.
+    원문 수천 건을 다 파싱해 5분 남짓 — 파서를 바꿀 때만 REALDB_FULL=1로 돌린다(11/10 통과)."""
+    import asyncio
+    import os
+    import pytest
+    if os.environ.get("REALDB_FULL") != "1":
+        pytest.skip("파서 바꿀 때만 — REALDB_FULL=1")
+    try:
+        import asyncpg
+    except ImportError:
+        pytest.skip("asyncpg 없음")
+    url = os.environ.get("DATABASE_URL", "").replace("+asyncpg", "")
+    if not url:
+        pytest.skip("DB 없음")
+
+    async def load():
+        try:
+            c = await asyncpg.connect(url, timeout=5)
+        except Exception:
+            pytest.skip("DB 연결 안 됨")
+        try:
+            return await c.fetch("SELECT id, raw_content FROM rag_source_document WHERE status = 'active' AND raw_format = 'html'")
+        finally:
+            await c.close()
+    bad = []
+    for r in asyncio.run(load()):
+        sec = w._extract_heading_sections(BeautifulSoup(w.prepare_storage_html(r["raw_content"] or ""), "lxml"))
+        for s in sec:
+            fence = False
+            for ln in s["content"].split("\n"):
+                if ln.strip().startswith("```"):
+                    fence = not fence
+                elif not fence and ln.lstrip().startswith("#"):
+                    bad.append(r["id"])
+                    break
+    assert not bad, f"제목 태그가 아닌 '#' 줄이 남은 원문 {sorted(set(bad))[:20]}"

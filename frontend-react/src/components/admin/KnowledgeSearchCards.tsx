@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronRight, MessageSquare } from 'lucide-react';
 import type { ExploreItem } from '../../api/knowledge';
+import { plainHashes } from '../../utils/markdown';
 
 // 지식 검색 결과 카드(11/04 태훈 "검색해서 무슨 지식이 있나 보고 고치게, 카드형 + 필터·유사도") — 업계 패싯 검색 모양:
 // 필터 옆에 건수, 카드엔 관련도·문서 위치·채널·수정일·채팅 근거 횟수·검색어 둘레 본문. 순서는 채팅 검색과 같다(서버 /knowledge/explore).
@@ -68,6 +69,9 @@ function Facet<T extends string>({ label, values: counted, value, onPick, testid
   );
 }
 
+/** 카드 안 버튼·목록 — Enter·스페이스만 카드(수정 창 열기)로 안 올라가게. 다른 키(Esc 등)는 막지 않는다 — 다 막으면 [열기]로 연 창이 Esc로 안 닫혔다(11/10 E2E) */
+const stopActivate = (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
+
 function count<T extends string>(items: ExploreItem[], f: (it: ExploreItem) => T, limit = 8): [T, number][] {
   const m = new Map<T, number>();
   items.forEach((it) => m.set(f(it), (m.get(f(it)) ?? 0) + 1));
@@ -80,6 +84,7 @@ export function KnowledgeSearchCards({ query, mappedTerm, items, onEdit, canEdit
   const [channel, setChannel] = useState<string | null>(null);
   const [doc, setDoc] = useState<string | null>(null);
   const [age, setAge] = useState<Age | null>(null);
+  const [openCopies, setOpenCopies] = useState<number | null>(null);   // [같은 글 N곳]을 펼친 카드
   const ts = useMemo(() => terms(query), [query]);
   const docOf = (it: ExploreItem) => it.source_file || '(문서 없음)';
   // 패싯 건수는 다른 필터를 적용한 뒤의 수 — 누르면 몇 건이 남는지 미리 보이게
@@ -103,7 +108,7 @@ export function KnowledgeSearchCards({ query, mappedTerm, items, onEdit, canEdit
       <div className="grid gap-2 md:grid-cols-2">
         {shown.map((it) => {
           const band = bandOf(it.score);
-          const title = (it.content.split('\n').find((l) => l.trim()) ?? '').replace(/^#+\s*/, '');
+          const title = (it.content.split('\n').find((l) => l.trim()) ?? '').replace(/^\\?#+\s*/, '');   // 원문 글자 '#' 이스케이프(v2.227)도
           return (
             // 카드 전체를 누르면 수정 창(11/04 태훈 — [수정]만 누를 수 있어 불편). 수정 권한이 없으면 누를 수 없는 카드
             <article key={it.id} data-testid={`explore-card-${it.id}`}
@@ -122,6 +127,16 @@ export function KnowledgeSearchCards({ query, mappedTerm, items, onEdit, canEdit
                 <span className="min-w-0 flex-1 truncate text-slate-400" title={it.heading_path.join(' › ')}>
                   {it.heading_path.length ? it.heading_path.join(' › ') : (it.source_file ?? '')}
                 </span>
+                {it.copies.length > 0 && (
+                  // 같은 글 사본(11/10 시안 승인) — 채팅은 한 건으로 합쳐 보여 주니 여기서도 한 장, 고칠 땐 사본도 같이
+                  <button type="button" aria-expanded={openCopies === it.id} data-testid={`explore-card-${it.id}-copies`}
+                    onClick={(e) => { e.stopPropagation(); setOpenCopies(openCopies === it.id ? null : it.id); }}
+                    onKeyDown={stopActivate}
+                    title="본문이 똑같은 지식이 다른 곳에도 있어요 — 채팅은 한 건으로 합쳐 보여 주고 소속은 모두 붙여요. 고칠 땐 같이 고쳐 주세요"
+                    className="flex-shrink-0 rounded px-1.5 py-0.5 bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:hover:bg-amber-500/25">
+                    같은 글 {it.copies.length}곳 {openCopies === it.id ? '▴' : '▾'}
+                  </button>
+                )}
                 {it.namespace !== currentNs && (
                   <span className="flex-shrink-0 rounded px-1.5 py-0.5 bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300" title="연결된 컬렉션의 지식 — 채팅도 함께 찾아요">{it.namespace}</span>
                 )}
@@ -131,8 +146,28 @@ export function KnowledgeSearchCards({ query, mappedTerm, items, onEdit, canEdit
               {/* 본문: 제목(굵게) · 검색어 둘레(왼쪽 선으로 구분) */}
               <div className="space-y-2 px-4 py-3">
                 <p className="truncate text-[15px] font-semibold text-slate-100">{title}</p>
-                <p className="border-l-2 border-slate-600 pl-3 text-[13px] leading-6 text-slate-300 break-all"><Highlight text={snippet(it.content, ts)} ts={ts} /></p>
+                <p className="border-l-2 border-slate-600 pl-3 text-[13px] leading-6 text-slate-300 break-all"><Highlight text={plainHashes(snippet(it.content, ts))} ts={ts} /></p>
               </div>
+              {openCopies === it.id && (
+                <div className="mx-4 mb-3 space-y-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] dark:border-amber-500/40 dark:bg-amber-500/10"
+                  data-testid={`explore-card-${it.id}-copy-list`} onClick={(e) => e.stopPropagation()} onKeyDown={stopActivate}>
+                  <p className="text-amber-900 dark:text-amber-200">같은 글이 다른 곳에도 있어요 — 고칠 땐 같이 고쳐 주세요</p>
+                  {it.copies.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 text-slate-300">
+                      <span className="font-mono text-slate-500">#{c.id}</span>
+                      <span className="min-w-0 flex-1 truncate" title={c.heading_path.join(' › ')}>{c.heading_path.join(' › ') || '(위치 없음)'}</span>
+                      {/* 수정 권한은 고른 컬렉션 기준 — 연결된 다른 컬렉션의 사본은 누르면 실패라 [열기]를 안 보임 · 본문은 사본 자기 것(공백까지) */}
+                      {canEdit && c.namespace === currentNs && (
+                        <button type="button" onClick={() => onEdit({ ...it, id: c.id, content: c.content, heading_path: c.heading_path, copies: [] })}
+                          data-testid={`explore-copy-open-${c.id}`}
+                          className="flex-shrink-0 inline-flex items-center gap-0.5 text-indigo-600 hover:underline dark:text-indigo-400">
+                          열기<ChevronRight className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               {/* 발: 번호 · 채팅 노출 · 등록자 · (수정 권한) 수정 안내 */}
               <div className="flex items-center gap-3 px-4 pb-2.5 text-[11px] text-slate-500">
                 <span className="font-mono">#{it.id}</span>

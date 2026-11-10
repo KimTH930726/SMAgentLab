@@ -697,6 +697,40 @@ class TestBulkIngestionStagedActivation:
         assert [a for q, rows in calls["executemany"] if "duplicate_match" in q for a in rows][0][1] == 99
 
     @pytest.mark.asyncio
+    async def test_other_source_candidates_do_not_hide_match_needing_judgment(self):
+        """외부 검수 낮음 2(11/10): 가까운 3건이 다른 원본 사용 중 글이면 4번째 수기 글(판단할 상대)을 다시 찾아 대기로."""
+        conn, emb, calls = self._make_conn()
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+        others = [{"id": 10 + k, "content": "지식1 값 10", "status": "active", "ingestion_job_id": 3, "similarity": 0.95,
+                   "confluence_page_id": f"Q{k}"} for k in range(3)]
+        manual = {"id": 55, "content": "지식1 값 30", "status": "active", "ingestion_job_id": 3, "similarity": 0.93}
+
+        async def similar(_ns, _emb, *, review_only_for=None, **_kw):
+            return [manual] if review_only_for is not None else others
+        self.ITEMS = [{"content": "지식1 값 20", "confluence_page_id": "P2"}]
+        result = await self._run(conn, emb, similar=AsyncMock(side_effect=similar))
+        assert self._inserted(calls)[0][9] == "staging_review" and result["pending"] == 1
+        assert [a[1] for q, rows in calls["executemany"] if "duplicate_match" in q for a in rows] == [55]
+
+    @pytest.mark.asyncio
+    async def test_text_dissimilar_candidate_does_not_block_requery(self):
+        """재리뷰(11/10): 가까운 3건 안의 판단할 상대가 글자 하한 미달이면 승인 대기 근거가 아니다 — 그걸 "판단할 상대 있음"으로 보고
+        다시 안 보면 4번째의 글자도 비슷한 수기 글이 가려졌다. 가려짐 판정도 실제 대기 조건(판단할 상대 + 글자 하한)으로."""
+        conn, emb, calls = self._make_conn()
+        conn.fetch = AsyncMock(side_effect=_fetch_dup_rows)
+        first = [{"id": 11, "content": "지식1 값 10", "status": "active", "ingestion_job_id": 3, "similarity": 0.95, "confluence_page_id": "Q1"},
+                 {"id": 12, "content": "전혀 다른 형제 페이지의 긴 본문 문장", "status": "active", "ingestion_job_id": 3, "similarity": 0.93},
+                 {"id": 13, "content": "지식1 값 10", "status": "active", "ingestion_job_id": 3, "similarity": 0.90, "confluence_page_id": "Q2"}]
+        hidden = {"id": 55, "content": "지식1 값 30", "status": "active", "ingestion_job_id": 3, "similarity": 0.89}
+
+        async def similar(_ns, _emb, *, review_only_for=None, **_kw):
+            return [first[1], hidden] if review_only_for is not None else first
+        self.ITEMS = [{"content": "지식1 값 20", "confluence_page_id": "P2"}]
+        result = await self._run(conn, emb, similar=AsyncMock(side_effect=similar))
+        assert self._inserted(calls)[0][9] == "staging_review" and result["pending"] == 1
+        assert [a[1] for q, rows in calls["executemany"] if "duplicate_match" in q for a in rows] == [55]
+
+    @pytest.mark.asyncio
     async def test_own_job_candidates_do_not_hide_match_needing_judgment(self):
         """독립 리뷰 M1(11/10): 가까운 후보 3건을 이번 작업 조각이 차지해도, 그 뒤의 판단할 상대(원본 없는 수기 글)를 다시 찾아 대기로 —
         미리보기(이번 작업 없음)와 판정이 같게. 이번 작업을 뺀 두 번째 조회는 이번 작업 후보가 낀 조각만."""
@@ -992,6 +1026,52 @@ async def test_preview_uses_same_rule_and_drops_non_live_document_ids():
                                                    {"content": "지식1 값 20", "source_document_id": 5}])
     assert [m["id"] for m in out[0]["matches"]] == [2]       # 다른 원본(P9) 사용 중 상대는 바로 등록될 상대라 안 물음
     assert [m["id"] for m in out[1]["matches"]] == [1, 2]    # 원문 id가 사용 중이 아니라 원본 없음 → 둘 다 판단 대상
+
+
+def _preview(similar):
+    from agents.knowledge_rag.knowledge import service as svc
+    emb = MagicMock()
+    emb.embed_batch = AsyncMock(side_effect=lambda texts: [[0.1] * 4 for _ in texts])
+    conn = MagicMock()
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=False)
+    conn.fetch = AsyncMock(return_value=[])
+    return svc, (patch.object(svc, "get_conn", return_value=conn),
+                 patch.object(svc, "resolve_knowledge_namespace_id", AsyncMock(return_value=1)),
+                 patch.object(svc, "embedding_service", emb),
+                 patch.object(svc, "find_similar_active_knowledge", similar),
+                 patch.object(svc, "_collection_template_lines", AsyncMock(return_value=set())),
+                 patch("agents.knowledge_rag.ingestion.source_ledger.replacing_documents", AsyncMock(return_value=[])))
+
+
+@pytest.mark.asyncio
+async def test_preview_and_ingest_see_match_hidden_behind_other_source_candidates():
+    """외부 검수 낮음 2(11/10): 가까운 3건이 다른 원본 사용 중 글(판단할 것 없음)로 꽉 차면 4번째의 수기 글이 안 보였다 —
+    판단할 상대만 다시 봐서(review_only_for) 미리보기도 묻고 등록도 대기로."""
+    others = [{"id": 10 + k, "content": "지식1 값 10", "status": "active", "similarity": 0.95, "confluence_page_id": f"Q{k}"} for k in range(3)]
+    manual = {"id": 55, "content": "지식1 값 30", "status": "active", "similarity": 0.93}
+
+    async def similar(_ns, _emb, *, review_only_for=None, **_kw):
+        return [manual] if review_only_for is not None else others
+    svc, ps = _preview(AsyncMock(side_effect=similar))
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5]:
+        out = await svc.check_similar_batch("ns", [{"content": "지식1 값 20", "confluence_page_id": "P1"}])
+    assert [m["id"] for m in out[0]["matches"]] == [55]
+
+
+@pytest.mark.asyncio
+async def test_preview_same_badge_only_for_active_match():
+    """외부 검수 낮음 1(11/10): 다른 보류 작업 조각과 같은 글이면 등록은 승인 대기 — 미리보기도 "같은 글(등록됨)"이 아니라 비교로."""
+    held = {"id": 77, "content": "지식1 값 20", "status": "staging", "ingestion_job_id": 55, "similarity": 0.9999, "confluence_page_id": "Q1"}
+    svc, ps = _preview(AsyncMock(return_value=[held]))
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5]:
+        out = await svc.check_similar_batch("ns", [{"content": "지식1 값 20", "confluence_page_id": "P1"}])
+    assert out[0]["same"] is None and [m["id"] for m in out[0]["matches"]] == [77]
+    active = {**held, "status": "active"}
+    svc, ps = _preview(AsyncMock(return_value=[active]))
+    with ps[0], ps[1], ps[2], ps[3], ps[4], ps[5]:
+        out = await svc.check_similar_batch("ns", [{"content": "지식1 값 20", "confluence_page_id": "P1"}])
+    assert out[0]["same"] == 77
 
 
 def test_needs_review_rule_table():
