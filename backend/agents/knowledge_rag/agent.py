@@ -297,7 +297,7 @@ async def build_chat_context(
     # 리랭커 활성화 시 더 많은 후보를 가져온 뒤 CrossEncoder로 재정렬
     candidate_k = settings.reranker_candidates if settings.reranker_enabled else top_k
     results_raw, refdata_available = await asyncio.gather(
-        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k,
+        retrieval.search_knowledge(namespace, query_vec, enriched_query, w_vector, w_keyword, candidate_k, context_k=top_k,
                                    keyword_rescue=retrieval.KEYWORD_RESCUE, **({"extra_ns_ids": extra_ns} if extra_ns else {})),
         refdata_search.has_refdata(namespace),
     )

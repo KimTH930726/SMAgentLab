@@ -496,8 +496,8 @@ class TestCloseSuperseded:
         n = await svc._close_superseded(conn, {"id": 7, "target_type": "knowledge", "target_id": 5}, {"id": 9})
         assert n == 2
         sql, *args = conn.execute.await_args.args
-        assert "status = 'pending'" in sql and "id <> $1" in sql and "reject_reason" in sql
-        assert args == [7, 5, ["knowledge"], 9, "7"]
+        assert "status = 'pending'" in sql and "id <> $1" in sql and "reject_reason" in sql and "SKIP LOCKED" in sql
+        assert args == [7, [5], ["knowledge"], 9, "7"]   # 대상(+ 같이 정정한 사본, v2.228)
 
     @pytest.mark.asyncio
     async def test_policy_closes_all_sub_targets_of_item(self):
@@ -1025,6 +1025,10 @@ class TestApproveShownProposal:
         c.fetchrow = AsyncMock(side_effect=[item, locked])   # 첫 읽기 → 잠근 뒤 다시 읽기
         c.fetchval = AsyncMock(return_value="ns")
         c.execute = AsyncMock()
+
+        async def fetch(sql, *a):   # 같은 글 사본 조회는 없음, 대상·사본 함께 잠그기(v2.228)는 대상 행 — 그 밖(연결 컬렉션 이름 등)은 없음
+            return [{"id": 11, "status": "active", "content_norm_md5": "m"}] if "FOR UPDATE" in sql and "rag_knowledge" in sql else []
+        c.fetch = AsyncMock(side_effect=fetch)
         return item
 
     @pytest.mark.asyncio

@@ -162,12 +162,15 @@ function DiffPane({ ops, side }: { ops: DiffOp[]; side: 'before' | 'after' }) {
   );
 }
 
-function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
+function CorrectionCard({ item, onDone, selected, onSelect, focused, unchecked = [], onUncheck }: {
   item: CorrectionItem;
   onDone: (effect?: DoneEffect) => void;
   selected: boolean;
   onSelect: (on: boolean) => void;
   focused: boolean;
+  /** 체크를 푼 같은 글 사본(v2.228) — 일괄 승인도 같은 값을 보내게 목록 쪽이 들고 있다(리뷰: 카드 안에만 있으면 일괄 승인이 무시했다) */
+  unchecked?: number[];
+  onUncheck?: (ids: number[]) => void;
 }) {
   const label = useCollectionLabel();   // 컬렉션 화면 이름(display_name)
   const fields = shownFields(item);
@@ -185,8 +188,13 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
     setModal('edit');
   };
 
+  // 같이 고칠 같은 글 사본(v2.228 시안 A) — 고칠 수 있는 사본은 기본 체크, 풀면 옛 글로 남는다
+  const copies = item.copies ?? [];
+  // 상태는 "체크를 푼 사본"만 — 고른 것을 들고 있으면 대상을 바꾸거나 목록을 다시 받아도 옛 선택이 남아 승인이 막혔다(리뷰 M1)
+  const copyPick = new Set(copies.filter((c) => c.editable && !unchecked.includes(c.id)).map((c) => c.id));
   const approve = useMutation({
-    mutationFn: (shown: Record<string, string | null>) => approveCorrection(item.id, shown),   // 화면에 보인 안(서버가 저장된 안과 같은지 확인)
+    mutationFn: (shown: Record<string, string | null>) =>   // 화면에 보인 안(서버가 저장된 안과 같은지 확인) + 고른 사본
+      approveCorrection(item.id, shown, item.target_type === 'knowledge' ? copies.filter((c) => unchecked.includes(c.id)).map((c) => c.id) : undefined),
     onSuccess: () => { setError(''); onDone('applied'); },
     onError: (e: Error) => setError(e.message || '반영에 실패했습니다.'),
   });
@@ -317,11 +325,32 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused }: {
             <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy}
               title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
               onClick={() => item.proposed && approve.mutate(item.proposed)}>
-              승인
+              {copyPick.size > 0 ? `승인 · 사본 ${copyPick.size}곳 포함` : '승인'}
             </Button>
           )}
         </div>}
       </div>
+      {pending && canFix && item.target_type === 'knowledge' && copies.length > 0 && (
+        <div className="w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs space-y-1 dark:border-amber-500/40 dark:bg-amber-500/10"
+          data-testid={`correction-copies-${item.id}`}>
+          <p className="text-amber-900 dark:text-amber-200"
+            title="본문이 똑같은 지식이 다른 페이지에도 있어요 — 검색은 한 자리로 합쳐 보여 줘서, 이것만 고치면 사본이 옛 글로 남아 따로 근거에 섞여요. 컨플 원문은 그대로라 근본 해결은 원문 수정이에요">
+            ⚠ 같은 글이 다른 곳에도 {copies.length}곳 있어요 — 같이 정정할까요?
+          </p>
+          {copies.map((c) => (
+            <label key={c.id} className={`flex items-center gap-2 ${c.editable ? 'text-slate-300' : 'text-slate-500'}`}>
+              <input type="checkbox" disabled={!c.editable} checked={copyPick.has(c.id)} data-testid={`correction-copy-${c.id}`}
+                onChange={(e) => onUncheck?.(e.target.checked ? unchecked.filter((x) => x !== c.id) : [...unchecked, c.id])} />
+              <span className="font-mono text-slate-500">#{c.id}</span>
+              <span className="min-w-0 flex-1 truncate" title={c.heading_path.join(' › ')}>{c.heading_path.join(' › ') || c.namespace}</span>
+              {!c.editable && <span className="flex-shrink-0 text-slate-500" title="이 컬렉션은 내가 고칠 수 없어요 — 그 컬렉션 담당이 따로 고쳐야 해요">{c.namespace} 담당 몫</span>}
+            </label>
+          ))}
+          {copies.some((c) => c.editable && !copyPick.has(c.id)) && (
+            <p className="text-slate-400">체크를 푼 곳은 옛 글로 남아 검색에 따로 나와요</p>
+          )}
+        </div>
+      )}
 
       {forwardOpen && (
         <PolicyAddModal isOpen={forwardOpen} namespace={item.namespace} initialPath={[]} forwardFrom={item.id}
@@ -623,6 +652,7 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
   const approvableItems = items.filter(approvable);
   const allChecked = approvableItems.length > 0 && approvableItems.every((i) => selected.has(i.id));
 
+  const [uncheckedCopies, setUncheckedCopies] = useState<Record<number, number[]>>({});   // 카드마다 체크를 푼 같은 글 사본(v2.228)
   // 일괄 승인 = 건마다 같은 승인 요청을 차례로(새 API 없음) — 화면에 보인 안을 보내 그 사이 바뀐 건은 409로 빠지고 나머지는 승인된다
   const bulk = useMutation({
     mutationFn: async (ids: number[]) => {
@@ -636,7 +666,8 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
           continue;
         }
         try {
-          await approveCorrection(id, item.proposed);
+          // 카드에서 체크를 푼 사본은 일괄 승인에서도 옛 글로 남긴다(리뷰 — 안 보내면 서버가 고칠 수 있는 사본 전부를 정정했다)
+          await approveCorrection(id, item.proposed, (item.copies ?? []).filter((c) => (uncheckedCopies[id] ?? []).includes(c.id)).map((c) => c.id));
           out.push({ id, ok: true });
         } catch (e) {
           out.push({ id, ok: false, message: e instanceof Error ? e.message : String(e) });
@@ -735,6 +766,7 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
       ) : view === 'one' ? (
         <div className="space-y-3" data-testid="correction-pager">
           <AnyCard key={items[cur].id} item={items[cur]} onDone={onDone} focused={items[cur].id === focusId}
+            unchecked={uncheckedCopies[items[cur].id]} onUncheck={(ids) => setUncheckedCopies((m) => ({ ...m, [items[cur].id]: ids }))}
             selected={selected.has(items[cur].id)}
             onSelect={(on) => setSelected((s) => { const n = new Set(s); if (on) n.add(items[cur].id); else n.delete(items[cur].id); return n; })} />
           <div className="flex items-center justify-center gap-4 text-sm text-slate-300">
@@ -750,6 +782,7 @@ export function CorrectionReviewTab({ namespace, focusId = null }: { namespace: 
       ) : (
         items.map((item) => (
           <AnyCard key={item.id} item={item} onDone={onDone} focused={item.id === focusId}
+            unchecked={uncheckedCopies[item.id]} onUncheck={(ids) => setUncheckedCopies((m) => ({ ...m, [item.id]: ids }))}
             selected={selected.has(item.id)}
             onSelect={(on) => setSelected((s) => { const n = new Set(s); if (on) n.add(item.id); else n.delete(item.id); return n; })} />
         ))

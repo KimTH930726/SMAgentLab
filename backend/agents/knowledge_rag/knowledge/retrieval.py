@@ -384,9 +384,11 @@ async def search_knowledge(
     namespace: str, query_vec: list[float], enriched_query: str,
     w_vector: float = 0.7, w_keyword: float = 0.3, top_k: int = 5,
     keyword_rescue: bool = False, extra_ns_ids: Sequence[int] = (), collapse: Optional[bool] = None,
+    context_k: Optional[int] = None,
 ) -> list[RetrievalResult]:
     """collapse = 포함 조각 접기(None = 설정 knowledge_collapse_contained). 지식 검색 화면은 끈다 — 고치려고 찾는 화면이라 접힌 조각도 보여야 한다
-    (긴 쪽만 고치면 짧은 쪽에 옛 내용이 남아 긴 쪽이 순위에 못 들 때 다시 나온다)."""
+    (긴 쪽만 고치면 짧은 쪽에 옛 내용이 남아 긴 쪽이 순위에 못 들 때 다시 나온다).
+    context_k = 문맥에 실을 수(사본 소속 상한 = context_k − 1). 리랭커처럼 후보를 더 뽑아 나중에 자르는 쪽이 넘긴다 — 안 주면 top_k(외부 검수 11/10)."""
     async with get_conn() as conn:
         # 검색 범위 = 고른 영역 + 직계 하위(트리, category-removal-design §2-6). 하위가 없으면 [자신] — 예전과 같은 행 집합.
         # extra_ns_ids = 지식 검색 범위(knowledge_scope — 채팅 기본 linked, agent.CHAT_KNOWLEDGE_SCOPE)로 더하는 컬렉션
@@ -495,7 +497,7 @@ async def search_knowledge(
             v_score=float(r["v_score"]), k_score=float(r["k_score"]),
             final_score=score,
             heading_path=list(r["heading_path"] or []),
-            other_headings=_other_headings(r["heading_path"], r["copy_headings"], max(top_k - 1, 0)),
+            other_headings=_other_headings(r["heading_path"], r["copy_headings"], max((context_k or top_k) - 1, 0)),
             source_type=r["source_type"], source_file=r["source_file"],
             created_at=r["created_at"],
         ))

@@ -27,11 +27,17 @@ async def load_items(conn, path: str) -> list[dict]:
     gold = sorted({i for it in items for i in it["gold_ids"]})
     # 정답과 글자까지 같은 활성 조각(다른 페이지에 똑같이 실린 글)도 정답 — 검색이 같은 글을 하나로 접어 어느 id가 남을지는 점수·id 순(11/09).
     # 접기는 검색 범위 전체(하위·연결 컬렉션 포함)라 여기도 컬렉션을 가리지 않는다(리뷰 L4). 묻는 영역은 원래 정답 id로만(아래 now)
+    # 정정으로 정답이 새 버전이 됐으면 그 현행 버전(같은 논리 문서)과 그 사본도 정답(v2.228 — 같은 글 사본까지 같이 정정하니, md5만 보면
+    # 정답이 0개가 돼 맞는 정정이 "검색 놓침"으로 잡혔다. 독립 점검 M6 11/10)
     same = {}
     for r in await conn.fetch(
-            """SELECT g.id gid, k.id FROM rag_knowledge g JOIN rag_knowledge k
-                  ON k.content_norm_md5 = g.content_norm_md5 AND k.id <> g.id AND k.status = 'active'
-                WHERE g.id = ANY($1::int[])""", gold):
+            """WITH g AS (SELECT id, content_norm_md5, coalesce(logical_document_id, id) AS lid FROM rag_knowledge WHERE id = ANY($1::int[])),
+                    cur AS (SELECT g.id gid, k.id, k.content_norm_md5 FROM g JOIN rag_knowledge k ON k.status = 'active'
+                              AND (k.content_norm_md5 = g.content_norm_md5 OR coalesce(k.logical_document_id, k.id) = g.lid))
+               SELECT gid, id FROM cur WHERE id <> gid
+               UNION SELECT c.gid, k.id FROM cur c JOIN rag_knowledge k
+                  ON k.status = 'active' AND k.content_norm_md5 = c.content_norm_md5 AND k.id <> c.gid
+               ORDER BY 1, 2""", gold):
         same.setdefault(r["gid"], []).append(r["id"])
     for it in items:
         it["gold_ids"] = list(it["gold_ids"]) + [j for i in it["gold_ids"] for j in same.get(i, []) if j not in it["gold_ids"]]

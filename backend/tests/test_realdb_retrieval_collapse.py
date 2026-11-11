@@ -196,3 +196,18 @@ def test_copy_headings_are_score_ordered_and_capped_to_top_k():
     ids, got = run(scenario, [retrieval])
     assert [r.id for r in got] == [ids[4]]
     assert got[0].other_headings == [["페이지3"], ["페이지2"]]   # 점수 순 · top_k − 1 = 2개
+
+
+def test_copy_heading_cap_follows_context_size_not_candidate_size():
+    """리랭커처럼 후보를 더 뽑아(top_k 크게) 나중에 자르는 쪽은 context_k를 넘긴다 — 사본 소속은 context_k − 1개까지(work-os 검수 11/10)."""
+    async def scenario(conn):
+        s = await ns(conn, "시험_사본상한후보 시스템")
+        ids = [await knowledge(conn, s, "같은 안내 문장.", confluence_page_id=f"P{i}", heading_path=[f"페이지{i}"]) for i in range(6)]
+        await conn.execute("UPDATE rag_knowledge SET embedding = $2::vector WHERE id = ANY($1::int[])", ids, UNIT)
+        await conn.execute("SET LOCAL enable_indexscan = off")
+        name = await conn.fetchval("SELECT name FROM ops_namespace WHERE id = $1", s)
+        wide = await retrieval.search_knowledge(name, QUERY, "안내", top_k=20, context_k=3)
+        plain = await retrieval.search_knowledge(name, QUERY, "안내", top_k=20)
+        return wide, plain
+    wide, plain = run(scenario, [retrieval])
+    assert len(wide[0].other_headings) == 2 and len(plain[0].other_headings) == 5

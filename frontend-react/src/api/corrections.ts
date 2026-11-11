@@ -82,6 +82,8 @@ export interface CorrectionItem {
   user_reason?: UserReason | null;
   /** 원문 확인 카드에서 올린 정책 정정이면 그 카드 번호 · 정책 정정의 대상 버전(11/05 카드 머리) */
   source_check_id?: number | null;
+  /** 대기 중 지식 정정 — 대상과 본문이 같은 사용 중 사본(검색이 한 자리로 합침, v2.228). editable = 내가 그 컬렉션을 고칠 수 있나 */
+  copies?: { id: number; namespace: string; heading_path: string[]; editable: boolean }[];
   /** 그 원문 확인 카드의 문제 설명 */
   source_check_reason?: string | null;
   policy_version?: number | null;
@@ -207,8 +209,12 @@ export async function listCorrections(namespace: string | null, status: string |
 }
 
 /** proposed = 화면에 보인 수정안(필수, 10/21 리뷰 5c) — 서버가 저장된 안과 다르면 409(보지 못한 안이 반영되지 않게) */
-export async function approveCorrection(id: number, proposed: Record<string, string | null>): Promise<unknown> {
-  return apiFetch(`/corrections/${id}/approve`, { method: 'POST', body: JSON.stringify({ proposed }) });
+/** excludeCopyIds = 옛 글로 남길 같은 글 사본(체크를 푼 것) — 나머지 고칠 수 있는 사본은 서버가 전부 같이 정정(v2.228).
+ *  "고른 것"이 아니라 "뺀 것"을 보낸다 — 목록을 본 뒤 대상이 바뀌거나 사본이 새로 생겨도 기본(전부 함께)이 유지되게 */
+export async function approveCorrection(id: number, proposed: Record<string, string | null>, excludeCopyIds?: number[]): Promise<unknown> {
+  return apiFetch(`/corrections/${id}/approve`, {
+    method: 'POST', body: JSON.stringify({ proposed, ...(excludeCopyIds?.length ? { exclude_copy_ids: excludeCopyIds } : {}) }),
+  });
 }
 
 export async function rejectCorrection(id: number, reason: string): Promise<unknown> {

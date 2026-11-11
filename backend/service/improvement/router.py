@@ -156,14 +156,14 @@ async def list_corrections(namespace: Optional[str] = Query(default=None),
             raise HTTPException(status_code=403, detail="파트를 지정하세요.")
     else:
         await _require_reviewer(namespace, user)
-    return await service.list_items(namespace, status)
+    return await service.list_items(namespace, status, user=user)
 
 
 @router.post("/{item_id}/approve")
 async def approve_correction(item_id: int, body: ApproveBody, user: dict = Depends(get_current_user)):
     await _require_item_owner(item_id, user)
     try:
-        return await service.approve(item_id, user, body.proposed)
+        return await service.approve(item_id, user, body.proposed, exclude_copy_ids=body.exclude_copy_ids)
     except service.ConflictError as e:
         raise _conflict(e)
 

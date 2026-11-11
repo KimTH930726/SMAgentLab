@@ -18,7 +18,7 @@ from typing import Optional
 import asyncpg
 
 from core.config import settings
-from core.database import get_conn, resolve_namespace_id, scope_ids_same_owner_subquery
+from core.database import OWNER_ROWS_SQL, effective_owner_ns_sql, get_conn, resolve_namespace_id, scope_ids_same_owner_subquery
 from shared.embedding import embedding_service
 from service.improvement import draft as draft_mod
 from service.policy.param_derive import value_in_text
@@ -1004,7 +1004,7 @@ async def set_user_reason(item_id: int, reason: str) -> None:
         await conn.execute("UPDATE ops_improvement_item SET user_reason = $2 WHERE id = $1", item_id, reason)
 
 
-async def list_items(namespace: Optional[str], status: Optional[str], limit: int = 200) -> list[dict]:
+async def list_items(namespace: Optional[str], status: Optional[str], limit: int = 200, *, user: Optional[dict] = None) -> list[dict]:
     conds, args = [f"i.kind <> '{KIND_SOURCE_CHECK}'"], []
     if namespace:
         args.append(namespace)
@@ -1016,7 +1016,19 @@ async def list_items(namespace: Optional[str], status: Optional[str], limit: int
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
     async with get_conn() as conn:
         rows = await conn.fetch(f"{_LIST_SQL} {where} ORDER BY i.created_at DESC LIMIT ${len(args)}", *args)
-    return [_row(r) for r in rows]
+        items = [_row(r) for r in rows]
+        # 대기 중 지식 정정 — 같이 고칠 같은 글 사본(v2.228). 한 번에 묻는다(카드마다 왕복하지 않게)
+        targets = [d["target_id"] for d in items if d["status"] == "pending" and d["target_type"] == "knowledge" and d.get("target_id")]
+        by_target: dict[int, list[dict]] = {}
+        if targets and user is not None:
+            from core.dependencies import edit_denied_reason
+            for r in await conn.fetch(_COPIES_SQL.replace("SELECT k.id,", "SELECT t.id AS target, k.id,", 1), targets):
+                by_target.setdefault(r["target"], []).append(
+                    {"id": r["id"], "namespace": r["namespace"], "heading_path": list(r["heading_path"] or []),
+                     "editable": edit_denied_reason(r["owners"] or [], user) is None})
+    for d in items:
+        d["copies"] = by_target.get(d.get("target_id"), []) if d["target_type"] == "knowledge" and d["status"] == "pending" else []
+    return items
 
 
 async def pending_count() -> dict:
@@ -1092,6 +1104,25 @@ async def _apply_knowledge(conn, ns_id: int, target_id: int, content: str, embed
     await conn.execute("UPDATE ops_query_log SET resolved_knowledge_id = $2 WHERE resolved_knowledge_id = $1",
                        old["id"], new_id)
     return new_id
+
+
+_COPIES_SQL = f"""
+    SELECT k.id, k.namespace_id, k.heading_path, n.name AS namespace,
+           ARRAY(SELECT o.part_id FROM {OWNER_ROWS_SQL} o WHERE o.namespace_id = {effective_owner_ns_sql('n')}) AS owners
+    FROM rag_knowledge t
+    JOIN rag_knowledge k ON k.content_norm_md5 = t.content_norm_md5 AND k.id <> t.id AND k.status = 'active'
+    JOIN ops_namespace n ON n.id = k.namespace_id
+    WHERE t.id = ANY($1::int[]) ORDER BY k.id"""
+
+
+async def knowledge_copies(conn, knowledge_id: int, user: dict) -> list[dict]:
+    """정정 대상 지식과 본문이 같은 사용 중 사본(content_norm_md5 — 검색이 한 자리로 합치는 기준, v2.227). editable = 이 사람이 그 컬렉션을
+    고칠 수 있나(수정 규칙 edit_denied_reason 그대로). 정정하면 사본까지 같이 — 안 그러면 사본이 옛 글로 남아 다음 검색에 따로 한 자리를
+    받고 정정본과 함께 문맥에 실렸다(work-os 검수 11/10)."""
+    from core.dependencies import edit_denied_reason
+    return [{"id": r["id"], "namespace_id": r["namespace_id"], "namespace": r["namespace"], "heading_path": list(r["heading_path"] or []),
+             "editable": edit_denied_reason(r["owners"] or [], user) is None}
+            for r in await conn.fetch(_COPIES_SQL, [knowledge_id])]
 
 
 async def _apply_missing(conn, ns_id: int, content: str, embedding: list[float], approver: dict) -> int:
@@ -1225,7 +1256,7 @@ async def _apply_policy(conn, ns_id: int, item: dict, proposed: dict, approver: 
     return new_id
 
 
-async def _close_superseded(conn, item: dict, approver: dict) -> int:
+async def _close_superseded(conn, item: dict, approver: dict, also_targets: tuple[int, ...] = ()) -> int:
     """승인으로 원본이 deprecated가 되면, 같은 원본을 겨눈 다른 대기 신고는 더 이상 승인할 수 없다(대상이 현행 아님).
     관리자가 하나씩 반려하지 않아도 되게 같은 트랜잭션에서 자동 종료 — 신고자에겐 사유와 함께 결과 알림이 간다.
     정책은 항목 버전이 통째로 바뀌므로 같은 항목의 다른 파라미터/서술 신고도 함께 종료(새 버전에서 다시 신고 가능)."""
@@ -1236,15 +1267,23 @@ async def _close_superseded(conn, item: dict, approver: dict) -> int:
         UPDATE ops_improvement_item
         SET status = 'rejected', decided_by = $4, decided_at = NOW(),
             reject_reason = '같은 근거에 대한 다른 정정(#' || $5 || ')이 먼저 반영되어 자동 종료 — 반영된 내용에도 문제가 있으면 다시 신고해 주세요.'
-        WHERE status = 'pending' AND id <> $1 AND target_id = $2 AND target_type = ANY($3::text[])
-    """, item["id"], item["target_id"], types, approver.get("id"), str(item["id"]))
+        WHERE id IN (SELECT id FROM ops_improvement_item
+                     WHERE status = 'pending' AND id <> $1 AND target_id = ANY($2::int[]) AND target_type = ANY($3::text[])
+                     FOR UPDATE SKIP LOCKED)
+    """, item["id"], [item["target_id"], *also_targets], types, approver.get("id"), str(item["id"]))
+    # SKIP LOCKED — 그 순간 잠긴 신고(승인·대상 변경·직접 수정·AI 추정 중 등 무엇이든)는 기다리지 않고 건너뛴다. 기다리면 동시 승인끼리 서로
+    # 상대 지식 행을 기다려 교착(500)이 났다(리뷰 11/10). 건너뛴 건은 대기로 남고, 승인하려 하면 "현행 아님"으로 막혀 사람이 반려한다(데이터 손상 없음)
+    # also_targets = 같이 정정한 같은 글 사본(v2.228) — 그 사본을 겨눈 대기 신고도 대상이 현행이 아니게 됐다(리뷰 L2)
     return int(res.split()[-1]) if res else 0
 
 
-async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dict:
+async def approve(item_id: int, approver: dict, expected: Optional[dict], exclude_copy_ids: Optional[list[int]] = None) -> dict:
     """저장된 수정안(AI 초안 또는 [직접 수정]으로 고친 안)을 반영한다. expected = 승인한 사람이 화면에서 본 수정안 — 그 사이 다른 사람이
     다시 쓰기·직접 수정·대상 변경을 했으면 보지 못한 안이 반영되지 않게 409. 고친 안은 먼저 update_proposed로 저장한 뒤 승인한다
-    (승인 요청이 안을 덮어쓰는 길은 없다 — 일괄 승인도 건마다 이 검사를 그대로 탄다)."""
+    (승인 요청이 안을 덮어쓰는 길은 없다 — 일괄 승인도 건마다 이 검사를 그대로 탄다).
+    지식 정정은 같은 글 사본(knowledge_copies) 중 이 사람이 고칠 수 있는 것을 전부 같이 정정한다(v2.228, 시안 승인 11/10) —
+    exclude_copy_ids = 화면에서 체크를 푼 사본만 옛 글로 남김. "고른 것"이 아니라 "뺀 것"을 받는 이유: 목록을 본 뒤 대상이 바뀌거나 사본이
+    새로 생겨도 기본(전부 함께)이 유지된다(리뷰 M1·L1 — 고른 목록을 받으면 그 사이 생긴 사본이 조용히 옛 글로 남았다)."""
     async with get_conn() as conn:
         item = await conn.fetchrow("SELECT * FROM ops_improvement_item WHERE id = $1", item_id)
     if not item or item["status"] != "pending":
@@ -1286,18 +1325,47 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
                     != (item["target_type"], item["target_id"], item["target_sub_id"])):
                 raise ConflictError("그 사이 수정안이 바뀌었어요 — 새로고침해서 바뀐 안을 확인한 뒤 승인하세요.")
             ns_id = item["namespace_id"]
+            copies_applied: list[dict] = []
+            copies_left: list[int] = []
             if item["target_type"] == "knowledge":
+                # 사본은 대상을 바꾸기 전에(옛 글 기준으로) 찾는다 — 대상이 새 글이 되면 같은 글이 아니게 된다
+                copies = await knowledge_copies(conn, item["target_id"], approver)
+                chosen = {c["id"] for c in copies if c["editable"]} - set(exclude_copy_ids or [])
+                # 대상·고친 사본을 id 순서로 한 번에 잠그고 같은 글·현행인지 다시 본다 — 따로 잠그면 서로를 겨눈 두 승인이 교착했고,
+                # 찾은 뒤 잠그기 전에 사본 본문이 바뀌면(병합) 바뀐 글을 덮어썼다(리뷰 L3)
+                locked_rows = {r["id"]: r for r in await conn.fetch(
+                    "SELECT id, status, content_norm_md5 FROM rag_knowledge WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE",
+                    [item["target_id"], *sorted(chosen)])}
+                tgt = locked_rows.get(item["target_id"])
+                if tgt is None or tgt["status"] != "active":
+                    raise ValueError("원본 지식이 이미 바뀌었거나 현행이 아닙니다 — 이 신고는 반려하세요.")
+                if any(locked_rows.get(i) is None or locked_rows[i]["status"] != "active"
+                       or locked_rows[i]["content_norm_md5"] != tgt["content_norm_md5"] for i in chosen):
+                    raise ConflictError("같이 고칠 사본이 그 사이 바뀌었어요 — 새로고침해서 다시 확인하세요.")
                 new_id = await _apply_knowledge(conn, ns_id, item["target_id"], proposed["content"], embedding)
+                for c in copies:
+                    if c["id"] in chosen:   # 같은 새 글로 새 버전(같은 글이라 임베딩도 같다) — 사본 자기 컬렉션 범위로
+                        copies_applied.append({"id": c["id"], "new_id": await _apply_knowledge(
+                            conn, c["namespace_id"], c["id"], proposed["content"], embedding), "namespace": c["namespace"]})
+                    else:
+                        copies_left.append(c["id"])
+                if copies_applied or copies_left:
+                    logger.info("[정정 승인] 지식 #%s 같은 글 사본: 같이 정정 %s · 옛 글로 남김 %s",
+                                item["target_id"], [c["id"] for c in copies_applied], copies_left)
             elif item["target_type"] == "missing":
                 new_id = await _apply_missing(conn, ns_id, proposed["content"], embedding, approver)
             else:
                 new_id = await _apply_policy(conn, ns_id, item, proposed, approver, prepared)
             await conn.execute("""
                 UPDATE ops_improvement_item
-                SET status = 'approved', proposed = $2::jsonb, applied_target_id = $3, decided_by = $4, decided_at = NOW()
+                SET status = 'approved', proposed = $2::jsonb, applied_target_id = $3, decided_by = $4, decided_at = NOW(),
+                    ai_verdict = CASE WHEN $5::jsonb IS NULL THEN ai_verdict ELSE coalesce(ai_verdict, '{}'::jsonb) || $5::jsonb END
                 WHERE id = $1
-            """, item_id, json.dumps(proposed, ensure_ascii=False), new_id, approver.get("id"))
-            superseded = await _close_superseded(conn, item, approver)
+            """, item_id, json.dumps(proposed, ensure_ascii=False), new_id, approver.get("id"),
+                # 같은 글 사본에 한 일을 원장에(리뷰 L4 — 로그 한 줄뿐이라 "이 정정이 어느 행을 바꿨나·일부러 남긴 사본"을 DB로 못 봤다)
+                json.dumps({"copies": {"applied": copies_applied, "left": copies_left}}, ensure_ascii=False)
+                if (copies_applied or copies_left) else None)
+            superseded = await _close_superseded(conn, item, approver, tuple(c["id"] for c in copies_applied))
             if item.get("source_check_id"):   # 원문 확인 카드에서 올린 제안 — 승인되면 그 카드도 해결(같은 트랜잭션, C3). 이미 처리된 카드는 그대로
                 card = await conn.fetchrow(
                     "UPDATE ops_improvement_item SET status = 'approved', decided_by = $2, decided_at = NOW(), ai_verdict = $3::jsonb "
@@ -1334,7 +1402,7 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
     else:
         try:
             from shared.cache import invalidate_namespace_family   # 자신 + 상위 이름(트리 — 상위 검색 범위에 하위 지식이 든다)
-            await invalidate_namespace_family(ns_name, row_ns_name, *linked_names)
+            await invalidate_namespace_family(ns_name, row_ns_name, *linked_names, *{c["namespace"] for c in copies_applied})
         except Exception:
             logger.warning("정정 승인 후 시맨틱 캐시 무효화 실패 (item=%s)", item_id, exc_info=True)
     # 채팅 신고가 승인되면 그 질문 = 실사용 시험지 후보(정답 = 고친 대상). 실패해도 승인은 그대로(로그만) — service/eval/questions.py
@@ -1343,7 +1411,8 @@ async def approve(item_id: int, approver: dict, expected: Optional[dict]) -> dic
         await eval_questions.from_correction(item, new_id)
     except Exception:
         logger.warning("정정 승인 후 실사용 문항 후보 만들기 실패 (item=%s)", item_id, exc_info=True)
-    return {"id": item_id, "status": "approved", "applied_target_id": new_id, "superseded": superseded}
+    return {"id": item_id, "status": "approved", "applied_target_id": new_id, "superseded": superseded,
+            "copies_applied": copies_applied, "copies_left": copies_left}
 
 
 async def reject(item_id: int, approver: dict, reason: str) -> dict:
