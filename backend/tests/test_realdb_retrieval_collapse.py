@@ -182,6 +182,29 @@ def test_review_only_filter_keeps_only_candidates_needing_judgment():
     assert only == {manual, same, doc_other}   # doc_other는 원본 표시 없음(원문 id 없음) → 판단할 상대
 
 
+def test_review_only_filter_drops_same_batch_peer_staging():
+    """같은 팀 적재 배치의 다른 페이지 작업(peer_jobs) 보류 조각은 다시 볼 후보에서 빠진다 — 판단할 상대가 아닌데 자리를 채워 그 뒤의
+    수기 글을 가렸다(v2.230 리뷰 중간). 배치 밖 보류 작업 조각·수기 글은 남는다."""
+    async def scenario(conn):
+        s = await ns(conn, "시험_형제후보 시스템")
+        peer, outside = [await conn.fetchval("INSERT INTO rag_ingestion_job (namespace_id, status) VALUES ($1, 'held') RETURNING id", s)
+                         for _ in range(2)]
+        sib = [await knowledge(conn, s, f"형제 페이지 양식 {i}", status="staging", confluence_page_id=f"S{i}", ingestion_job_id=peer)
+               for i in range(12)]
+        held_out = await knowledge(conn, s, "배치 밖 보류 글", status="staging", confluence_page_id="X1", ingestion_job_id=outside)
+        manual = await knowledge(conn, s, "수기 글")
+        await conn.execute("UPDATE rag_knowledge SET embedding = $2::vector WHERE id = ANY($1::int[])", [*sib, held_out, manual], UNIT)
+        await conn.execute("SET LOCAL enable_indexscan = off")
+        base = {"confluence_page_id": "P1"}
+        before = {r["id"] for r in await retrieval.find_similar_active_knowledge(s, QUERY, limit=10, review_only_for=base)}
+        after = {r["id"] for r in await retrieval.find_similar_active_knowledge(
+            s, QUERY, limit=10, review_only_for={**base, "peer_jobs": [peer]})}
+        return set(sib), held_out, manual, before, after
+    sib, held_out, manual, before, after = run(scenario, [retrieval])
+    assert len(before) == 10 and len(before & sib) >= 8             # 빼지 않으면 형제가 다시 볼 자리를 채운다(동점이라 순서는 정해지지 않음)
+    assert after == {held_out, manual}
+
+
 def test_copy_headings_are_score_ordered_and_capped_to_top_k():
     """사본 소속은 점수 순(실행마다 같은 문맥 줄) · top_k − 1개까지(합치지 않았어도 문맥엔 사본이 top_k개까지만 — 재리뷰 L1 11/10)."""
     async def scenario(conn):

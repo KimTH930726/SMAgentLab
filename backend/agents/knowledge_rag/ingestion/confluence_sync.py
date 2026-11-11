@@ -299,6 +299,14 @@ async def _reingest(src, c, ch: dict, rules: dict, owner: dict, out: dict) -> Op
              for it in rechunk_items(row)] if row is not None else []
     if not items:
         out["empty"] += 1
+        # 본문이 비게 된 페이지 — 옛 조각이 계속 현행으로 검색되던 것(11/11 밤샘 점검). 사라진 페이지와 같게 승인 대기로 내려 담당이 확인
+        # (지우지 않음 — 파싱 실패·일시적으로 빈 판일 수 있다)
+        async with get_conn() as conn:
+            held, _ = await hold_restricted_chunks(conn, ns_id, pid)
+        if held:
+            out["held"] += held
+            out["_touched"].add(ns_id)
+            logger.warning("컨플 동기화: 본문이 빈 페이지(page %s)의 사용 중 조각 %d개를 승인 대기로 내림(파트 %s)", pid, held, ns_id)
         return None
     try:
         res = await service.bulk_create_knowledge(namespace=ns_name, items=items, source_file=doc.source_name, source_type="confluence",

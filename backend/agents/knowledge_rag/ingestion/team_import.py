@@ -577,11 +577,14 @@ async def _load_batch(batch_id: int, user: dict) -> None:
                 await _set_page(conn, p["id"], status="failed", signals={**sig, "error": "원문 초안이 없음(다른 등록이 썼거나 지워짐)"})
                 await conn.execute("UPDATE rag_import_batch SET load_done = load_done + 1 WHERE id = $1", batch_id)
                 continue
+            # 이 배치에서 먼저 넣은 페이지 작업 — 함께 게시·롤백되니 그 조각과 비슷해도 대기로 안 보낸다(11/11 밤샘 점검 — 형제 페이지 601건이 대기였다)
+            peers = await conn.fetchval("SELECT job_ids FROM rag_import_batch WHERE id = $1", batch_id) or []
         items = [{**it, "source_document_id": doc["id"], "confluence_page_id": str(p["page_id"]),
                   "confluence_version": doc["source_version"]} for it in rechunk_items(doc)]
         try:
             res = await service.bulk_create_knowledge(namespace=p["ns_name"], items=items, source_file=p["title"], source_type="confluence",
-                                                      created_by_user_id=user["id"], background=False, hold=True)   # 검수 후 게시(11/03)
+                                                      created_by_user_id=user["id"], background=False, hold=True,   # 검수 후 게시(11/03)
+                                                      peer_job_ids=peers)
         except Exception as e:   # noqa: BLE001 — 한 페이지 실패는 그 페이지만(화면에 실패로)
             logger.warning("팀 적재: 등록 실패 batch=%s page=%s: %s", batch_id, p["page_id"], e)
             async with get_conn() as conn:

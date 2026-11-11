@@ -1087,3 +1087,9 @@ def test_needs_review_rule_table():
     assert needs_review(page, {"status": "active", "ingestion_job_id": 3}, 7)                 # 상대 원본 없음(수기)
     assert needs_review({}, {"confluence_page_id": "P2", "status": "active"}, 7)              # 새 조각 원본 없음(붙여넣기)
     assert needs_review(page, {"confluence_page_id": "P2", "status": "staging", "ingestion_job_id": 55}, 7)
+    # 같은 팀 적재 배치의 다른 페이지 작업(peer, 함께 게시·롤백) — 다른 원본 사용 중 글과 같게 등록(11/11). 같은 원본·원본 없음은 그대로 대기
+    peers = frozenset({55})
+    assert not needs_review(page, {"confluence_page_id": "P2", "status": "staging", "ingestion_job_id": 55}, 7, peers)
+    assert needs_review(page, {"confluence_page_id": "P2", "status": "staging", "ingestion_job_id": 56}, 7, peers)   # 배치 밖 보류 작업
+    assert needs_review(page, {"confluence_page_id": "P1", "status": "staging", "ingestion_job_id": 55}, 7, peers)   # 같은 원본
+    assert needs_review(page, {"status": "staging", "ingestion_job_id": 55}, 7, peers)                              # 상대 원본 없음

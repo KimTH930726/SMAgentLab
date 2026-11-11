@@ -229,7 +229,7 @@ async def find_similar_active_knowledge(
 ) -> list[dict]:
     """같은 네임스페이스의 활성(active) 지식 중 embedding과 가장 유사한 상위 N건 조회.
 
-    `review_only_for`: {confluence_page_id?, source_document_id?} — 사람이 판단할 상대만(needs_review가 참일 수 있는 후보: 사용 중이 아님 ·
+    `review_only_for`: {confluence_page_id?, source_document_id?, peer_jobs?} — 사람이 판단할 상대만(needs_review가 참일 수 있는 후보: 사용 중이 아님 ·
     원본 표시 없음 · 같은 원본). 가까운 후보가 판단할 것 없는 상대(다른 원본 사용 중 글)로 꽉 차 그 뒤의 판단할 상대가 가려질 때 다시 본다(11/10).
 
     지식 등록 시 중복 의심 판정(승인 대기)에 사용 — 이미 pending_review/rejected인
@@ -280,6 +280,11 @@ async def find_similar_active_knowledge(
             args.append(int(doc))
             same = f" OR source_document_id = ${len(args)}"
         replace_clause += f" AND (status <> 'active' OR (confluence_page_id IS NULL AND source_document_id IS NULL){same})"
+        # 같은 팀 적재 배치의 다른 페이지 작업(peer_jobs) — 판단할 상대가 아니다(needs_review 거짓). 빼지 않으면 양식이 같은 형제 페이지가
+        # 다시 볼 자리를 채워 그 뒤의 판단할 상대(수기 글 등)가 또 가려졌다(v2.230 리뷰 중간)
+        if review_only_for.get("peer_jobs"):
+            args.append([int(j) for j in review_only_for["peer_jobs"]])
+            replace_clause += f" AND NOT (status = 'staging' AND ingestion_job_id = ANY(${len(args)}::int[]))"
     async with get_conn() as conn:
         rows = await conn.fetch(
             f"""

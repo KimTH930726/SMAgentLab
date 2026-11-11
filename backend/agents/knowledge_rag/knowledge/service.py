@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional, Sequence
 
 from core.config import settings
 from core.database import get_conn, resolve_knowledge_namespace_id, resolve_namespace_id
@@ -522,24 +522,27 @@ def _crowded(ms: list[dict], threshold: float, review: Callable[[dict], bool]) -
             and not any(review(m) for m in ms if m["similarity"] >= threshold))
 
 
-def _review_filter(it: dict) -> Optional[dict]:
-    """다시 볼 때의 후보 거름 — 원본 있는 조각은 판단할 상대만(review_only_for), 원본 없는 조각은 이번 작업 밖 전부(다 판단할 상대)."""
+def _review_filter(it: dict, peer_jobs: frozenset = frozenset()) -> Optional[dict]:
+    """다시 볼 때의 후보 거름 — 원본 있는 조각은 판단할 상대만(review_only_for, 같은 팀 적재 배치의 다른 페이지 작업은 빼고),
+    원본 없는 조각은 이번 작업 밖 전부(다 판단할 상대)."""
     page, doc = it.get("confluence_page_id"), it.get("source_document_id")
-    return {"confluence_page_id": page, "source_document_id": doc} if (page or doc) else None
+    return {"confluence_page_id": page, "source_document_id": doc, "peer_jobs": sorted(peer_jobs)} if (page or doc) else None
 
 
-def needs_review(it: dict, m: dict, job_id: Optional[int] = None) -> bool:
+def needs_review(it: dict, m: dict, job_id: Optional[int] = None, peer_jobs: frozenset = frozenset()) -> bool:
     """비슷한 글(의미·글자 하한 통과)이 승인 대기로 갈지 — 사람이 판단할 게 있는 경우만(11/09, 대기 460건 규칙 정리: 다른 원본 391·
     같은 작업 68 → 판단할 것 0, 답 84.0→84.9% 게이트 통과). it = 새 조각, m = 비슷한 기존 조각(find_similar_active_knowledge 행).
     같은 작업 조각 = 같은 원본의 두 조각(둘 다 그 내용) → 등록. 원본이 다른 사용 중 글 → 둘 다 등록(원본마다 현행화, 검색이 포함 조각을 접는다).
-    대기로: 같은 원본의 다른 작업 글(교체 안 하는 옛 적재본) · 어느 한쪽이 원본 표시 없음(수기·옛 일괄) · 다른 보류 작업 조각(롤백될 수 있음)."""
+    대기로: 같은 원본의 다른 작업 글(교체 안 하는 옛 적재본) · 어느 한쪽이 원본 표시 없음(수기·옛 일괄) · 다른 보류 작업 조각(롤백될 수 있음).
+    peer_jobs = 같은 팀 적재 배치의 다른 페이지 작업(함께 게시·롤백) — 다른 원본 사용 중 글과 같게 둘 다 등록(11/11 밤샘 점검: 형제 페이지끼리
+    비슷한 글이 대기로 갔다 — 기록상 601건 전부 사람이 승인, 반려 0)."""
     if job_id is not None and m.get("ingestion_job_id") == job_id:
         return False
     page, doc = it.get("confluence_page_id"), it.get("source_document_id")
     if not (page or doc) or not (m.get("confluence_page_id") or m.get("source_document_id")):
         return True
     same = (str(m.get("confluence_page_id") or "") == str(page)) if page else (m.get("source_document_id") == int(doc))
-    return same or m.get("status") != "active"
+    return same or (m.get("status") != "active" and m.get("ingestion_job_id") not in peer_jobs)
 
 
 async def check_similar_batch(namespace: str, items: list[dict], *, limit: int = 3) -> list[dict]:
@@ -1029,6 +1032,7 @@ async def bulk_create_knowledge(
     strict_source: bool = False,
     force_pending: bool = False,
     hold: bool = False,
+    peer_job_ids: Sequence[int] = (),
 ) -> dict:
     """여러 지식을 배치 단위로 등록 — 기본적으로 백그라운드에서 실행.
 
@@ -1096,6 +1100,7 @@ async def bulk_create_knowledge(
         source_file=source_file, source_type=source_type,
         created_by_user_id=created_by_user_id,
         strict_source=strict_source, confirm_replace=confirm_replace, force_pending=force_pending, hold=hold,
+        peer_jobs=frozenset(int(j) for j in peer_job_ids),
     )
     if background:
         task = asyncio.create_task(coro)
@@ -1119,6 +1124,7 @@ async def _run_bulk_ingestion(
     confirm_replace: bool = False,
     force_pending: bool = False,
     hold: bool = False,
+    peer_jobs: frozenset = frozenset(),
 ) -> dict:
     """배치 단위 임베딩+INSERT. 배치마다 진행률 갱신 + 취소 요청 확인.
 
@@ -1206,12 +1212,12 @@ async def _run_bulk_ingestion(
             # 가려진다 — 판단할 상대만 한 번 더 보고 합친다(독립 리뷰 M1 · 외부 검수 낮음 2, 11/10). 미리보기도 같은 규칙(check_similar_batch).
             # 꽉 차고 마지막도 하한 이상일 때만 — 마지막이 하한 미만이면 그 뒤도 다 미만이라 가려진 상대가 없다
             crowded = [o for o, ms in enumerate(match_results)
-                       if _crowded(ms, dup_threshold, lambda m, o=o: needs_review(batch[o], m, job_id)
+                       if _crowded(ms, dup_threshold, lambda m, o=o: needs_review(batch[o], m, job_id, peer_jobs)
                                    and similar_at_least(batch[o]["content"], m["content"], text_threshold, tmpl))]
             if crowded:
                 others = await asyncio.gather(*(find_similar_active_knowledge(
                     ns_id, embeddings[o], limit=_REVIEW_RECHECK, replacing_confluence_pages=replacing_pages or None,
-                    replacing_documents=replacing_docs or None, review_only_for=_review_filter(batch[o]),
+                    replacing_documents=replacing_docs or None, review_only_for=_review_filter(batch[o], peer_jobs),
                 ) for o in crowded))
                 for o, extra in zip(crowded, others):
                     ids = {m["id"] for m in match_results[o]}
@@ -1236,7 +1242,7 @@ async def _run_bulk_ingestion(
             copy: set[int] = set()
             for offset, matches in enumerate(match_results):
                 if offset not in skip and any(norm_text(m["content"]) == norms[offset]
-                                              and (m.get("status") == "active" or m.get("ingestion_job_id") == job_id) for m in matches):
+                                              and (m.get("status") == "active" or m.get("ingestion_job_id") in (job_id, *peer_jobs)) for m in matches):
                     copy.add(offset)
                     cross_copies += 1
             # ③ 의미 유사도 ≥ 하한인 후보 중 글자도 비슷한 것만 중복 의심 — 의미만 비슷하면(형제 페이지) 후보에서 뺀다
@@ -1253,11 +1259,11 @@ async def _run_bulk_ingestion(
                 close = [x for x in m if x["similarity"] >= dup_threshold]
                 # keep_new = 사람이 미리보기 비교 창에서 "다른 내용"이라 정한 조각(11/04)
                 flagged = offset not in skip and offset not in copy and bool(close) and not item.get("keep_new")
-                review = flagged and any(needs_review(item, x, job_id) for x in close)
+                review = flagged and any(needs_review(item, x, job_id, peer_jobs) for x in close)
                 if flagged and not review:
                     near.add(offset)
                 if review:   # 대기 근거엔 판단할 게 있는 상대만(같은 작업·다른 원본 상대는 빼서 비교 화면이 헷갈리지 않게)
-                    match_results[offset] = [x for x in close if needs_review(item, x, job_id)]
+                    match_results[offset] = [x for x in close if needs_review(item, x, job_id, peer_jobs)]
                 db_is_duplicate.append(review)
 
             # 같은 배치 안 조각끼리는 같은 작업이라 비슷해도 승인 대기로 안 보낸다(needs_review, 11/09) — 예전엔 임베딩 내적으로 서로를 비교해

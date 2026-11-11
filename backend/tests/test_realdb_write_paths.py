@@ -830,3 +830,36 @@ def test_publish_check_clears_running_when_it_dies_midway():
         pc = json.loads(await conn.fetchval("SELECT publish_check::text FROM rag_import_batch WHERE id = $1", b))
         return ("running" in pc, "RuntimeError" in (pc.get("error") or ""), pc.get("asked"), out.get("asked"))
     assert run(scenario) == (False, True, 0, 0)
+
+
+# ── 동기화 때 본문이 빈 페이지(11/11 밤샘 점검) ─────────────────────────────────────────────
+
+def test_sync_empty_page_holds_old_chunks():
+    """본문이 비게 된 페이지 — 예전엔 '빈 페이지'로 세기만 하고 옛 조각이 계속 현행으로 검색됐다. 불변식: 그 페이지·그 컬렉션의 사용 중 조각 0
+    (승인 대기로 내림, 지우지 않음) · 다른 페이지 조각은 그대로."""
+    from types import SimpleNamespace
+    sync = load("_rdb_real_confluence_sync_empty", "agents/knowledge_rag/ingestion/confluence_sync.py")
+
+    async def scenario(conn):
+        s = await ns(conn, "시험_빈페이지 시스템")
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        url = "https://confl.sinc.co.kr/display/시험빈페이지"
+        b = await conn.fetchval("INSERT INTO rag_import_batch (team_id, root_url, status, sampling_required, total_pages, done_pages) "
+                                "VALUES ($1, $2, 'loaded', FALSE, 1, 1) RETURNING id", team, url)
+        await conn.execute("INSERT INTO rag_import_page (batch_id, page_id, title, bundle, depth, status, final_namespace_id) "
+                           "VALUES ($1, '시험E1', '시험', 'b', 1, 'loaded', $2)", b, s)
+        emptied = [await knowledge(conn, s, f"시험 빈 페이지 옛 조각 {i}", confluence_page_id="시험E1") for i in range(2)]
+        other = await knowledge(conn, s, "시험 다른 페이지 조각", confluence_page_id="시험E2")
+        doc = SimpleNamespace(metadata={"raw_html": ""}, raw_text="", source_type="confluence", source_name="시험", )
+        src = SimpleNamespace(root_id=None, page=AsyncMock(return_value=doc))
+        out = {k: 0 for k in ("empty", "held", "unchanged", "denied", "restricted")}
+        out["_touched"] = set()
+        c = {"team_id": team, "root_url": url}
+        with patch.object(sync, "_write_denied", AsyncMock(return_value=None)):
+            res = await sync._reingest(src, c, {"page_id": "시험E1", "ancestors": []}, {}, {"id": None, "role": "admin"}, out)
+        st = {r["id"]: r["status"] for r in await conn.fetch("SELECT id, status FROM rag_knowledge WHERE id = ANY($1::int[])", [*emptied, other])}
+        return res, out, st, emptied, other, s
+
+    res, out, st, emptied, other, s = run(scenario, modules=[sync])
+    assert res is None and out["empty"] == 1 and out["held"] == 2 and out["_touched"] == {s}
+    assert [st[i] for i in emptied] == ["pending_review", "pending_review"] and st[other] == "active"
