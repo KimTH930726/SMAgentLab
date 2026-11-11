@@ -84,6 +84,8 @@ export interface CorrectionItem {
   source_check_id?: number | null;
   /** 대기 중 지식 정정 — 대상과 본문이 같은 사용 중 사본(검색이 한 자리로 합침, v2.228). editable = 내가 그 컬렉션을 고칠 수 있나 */
   copies?: { id: number; namespace: string; heading_path: string[]; editable: boolean }[];
+  /** 대기 중인데 대상(지식·정책)이 현행이 아님 — 승인 불가, [대상 폐기] 표시(11/11) */
+  target_stale?: boolean;
   /** 그 원문 확인 카드의 문제 설명 */
   source_check_reason?: string | null;
   policy_version?: number | null;

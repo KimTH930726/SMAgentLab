@@ -145,7 +145,7 @@ const canFixItem = (item: CorrectionItem) => item.target_type !== 'answer' && it
 /** 일괄 승인 대상 — 카드의 [승인]이 보이는 건과 같은 조건 */
 // 정책 컬렉션의 "빠진 내용"은 승인 대상이 아니다 — [정책 추가 제안으로] 넘긴다(일괄 승인에서도 빠짐, 11/03)
 const approvable = (item: CorrectionItem) => item.status === 'pending' && canFixItem(item) && !!item.proposed && !isMarked(item)
-  && !(item.target_type === 'missing' && item.namespace_area === 'policy');
+  && !(item.target_type === 'missing' && item.namespace_area === 'policy') && !item.target_stale;
 
 function DiffPane({ ops, side }: { ops: DiffOp[]; side: 'before' | 'after' }) {
   const shown = ops.filter((o) => o.kind === 'same' || o.kind === (side === 'before' ? 'del' : 'add'));
@@ -275,13 +275,20 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused, unchecked =
         {pending && (
           <input type="checkbox" checked={selected} disabled={!approvable(item)} onChange={(e) => onSelect(e.target.checked)}
             aria-label={`정정 #${item.id} 선택`}
-            title={approvable(item) ? '골라서 한꺼번에 승인' : proposedMarked ? '【확인 필요】 표시가 남아 있어 승인할 수 없어요' : '승인할 수정안이 없어요'}
+            title={approvable(item) ? '골라서 한꺼번에 승인' : item.target_stale ? '대상이 폐기돼 승인할 수 없어요'
+              : proposedMarked ? '【확인 필요】 표시가 남아 있어 승인할 수 없어요' : '승인할 수정안이 없어요'}
             className="accent-indigo-600" />
         )}
         <span className="text-slate-500">#{item.id}</span>
         <Badge color={isAnswer ? 'cyan' : noTarget || item.kind === 'search_noise' ? 'amber' : item.target_type === 'missing' ? 'amber' : 'rose'}>
           {typeLabel(item)}
         </Badge>
+        {item.target_stale && (
+          <span data-testid={`correction-stale-${item.id}`}
+            title="신고한 지식·정책이 그 뒤 바뀌거나 폐기돼 승인할 수 없어요 — 반려하고 필요하면 새 답변에서 다시 신고하세요. 이어받을 현행 버전이 없으면 시스템이 자동 반려합니다">
+            <Badge color="amber">대상 폐기 ⓘ</Badge>
+          </span>
+        )}
         {item.status === 'approved' && <Badge color="emerald">{item.ai_verdict?.forwarded_to ? `정책 추가 제안 #${item.ai_verdict.forwarded_to}으로 넘김` : '반영됨'}</Badge>}
         {item.status === 'rejected' && <Badge color="slate">반려</Badge>}
         <span className="text-slate-500">{label(item.namespace)}</span>
@@ -322,8 +329,9 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused, unchecked =
             </Button>
           )}
           {canFix && item.proposed && !proposedMarked && !forwardToPolicy && (
-            <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy}
-              title={item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
+            <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy || !!item.target_stale}
+              title={item.target_stale ? '대상이 폐기돼 승인할 수 없어요 — 반려하세요'
+                : item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
               onClick={() => item.proposed && approve.mutate(item.proposed)}>
               {copyPick.size > 0 ? `승인 · 사본 ${copyPick.size}곳 포함` : '승인'}
             </Button>

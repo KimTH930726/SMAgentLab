@@ -19,6 +19,9 @@ import { getCorrectionStatus } from '../../api/corrections';
 import type { ChatMessage, ClarifyOption, CollectionSuggest, TermNote } from '../../types';
 import { getFreshness, getPageUrls } from '../../api/knowledge';
 
+/** 백엔드 service/chat/helpers.NO_KNOWLEDGE_MARKER와 같은 문구 */
+const NO_KNOWLEDGE_ANSWER = '관련 지식을 찾지 못했습니다';
+
 interface MessageItemProps {
   message: ChatMessage;
   namespace: string;
@@ -361,9 +364,12 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
   const isUser = message.role === 'user';
   const knowledgeIds = (message.results ?? []).map((r) => r.id);
   const showDegraded = !!message.degraded && !message.isStreaming;   // AI가 답을 못 낸 답 — 경고 모양(근거만 보여 주기)
-  const nEvidence = (message.results?.length ?? 0) + (message.policyCitations?.length ?? 0);
+  // "관련 지식을 찾지 못했습니다"만 한 답 — 근거 줄을 안 보여 준다(11/11 점검: 4/4건이 "근거 3건"을 달아 '없다'는 답과 모순).
+  // 저장 기록(results)은 그대로 — 정정 후보·AI 분석이 쓴다. 답 일부에만 나온 문구는 진짜 근거가 있으니 그대로 둔다
+  const noKnowledge = !isUser && message.content.trim().replace(/[.\s]+$/, '') === NO_KNOWLEDGE_ANSWER;
+  const nEvidence = noKnowledge ? 0 : (message.results?.length ?? 0) + (message.policyCitations?.length ?? 0);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
-  const showEvidence = evidenceOpen || showDegraded;
+  const showEvidence = !noKnowledge && (evidenceOpen || showDegraded);
   const policyItemIds = [...new Set((message.policyCitations ?? []).map((c) => c.item_id).filter((v): v is number => v != null))];
   // "정정 검토 중" 배지 — 같은 근거가 다른 답변에 나와도 표시되도록 근거 id 기준으로 조회
   const { data: underReview } = useQuery({

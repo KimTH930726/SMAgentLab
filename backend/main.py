@@ -2362,6 +2362,82 @@ async def _migrate_drop_unused_2026_11_06(conn) -> None:
         await conn.execute(f"DROP INDEX IF EXISTS {i}")
 
 
+async def _migrate_close_orphaned_items(conn) -> None:
+    """#127 대상이 사라진 대기 정정 자동 반려(11/11, 밤샘 점검 M4 — 폐기된 정책을 겨눈 정정 #122·#189가 승인도 못 하고 대기로 남았다).
+    지식·정책이 현행에서 빠지는 길은 가져오기·삭제·동기화·다시 분할·보류·스크립트로 여럿이라 코드마다 넣지 않고 표에 건다.
+    - 커밋 때 판정(DEFERRABLE INITIALLY DEFERRED) — 새 판을 넣기 전에 옛 판을 먼저 내리는 순서여도 오판하지 않는다
+    - 트랜잭션마다 한 번 **대기 정정 전체**를 다시 본다(바뀐 행만 보면, 이어받을 현행이 있어 대기로 둔 옛 대상의 정정을 그 현행이
+      나중에 사라질 때 아무도 다시 안 봤다 — 리뷰 중간 1). 대기 정정은 수십 건이라 한 번 훑기가 싸다
+    - 현행 = 사용 중·검토 대기(보류·재적재 대기는 되돌아올 수 있다 — 리뷰 중간 2). 이어받을 현행 = 지식: 같은 논리 문서·같은 글·같은 페이지·
+      같은 원문(교체 판 superseded_by 연쇄 포함, 리뷰 낮음 5) / 정책: 같은 logical_id → 있으면 대기로 두고 카드에 [대상 폐기]
+    - 원문 확인 카드(kind source_check, target_id = 정책 logical_id)는 자기 처리 흐름이 있어 뺀다(리뷰 중간 3)
+    - 승인이 잡고 있는 정정은 건너뛴다(SKIP LOCKED — 승인 쪽이 현행 아님으로 막거나 승인, 교착 없음, 리뷰 낮음 4)
+    - 트랜잭션 안 첫 판정만 돈다(set_config 지역값) — 같은 트랜잭션에서 SET CONSTRAINTS IMMEDIATE 뒤 또 바꾸면 그 뒤 것은 다음 트랜잭션 몫(앱 코드엔 없음)
+    - 커밋 순간의 스냅샷으로 본다 — 동시에 진행 중인(아직 커밋 전) 다른 트랜잭션이 넣는 후속본은 못 본다(같은 페이지를 지우면서 동시에
+      재적재할 때만, 결과는 반려라 데이터는 안전 — 재리뷰 낮음 2, 감수)
+    기존 대기 건도 다음 판정 때 같은 규칙(이어받을 현행이 없으면 반려). 멱등 — 트리거는 판(주석 값)이 다를 때만 다시 만든다."""
+    reason = "대상 폐기 — 이어받을 현행 버전이 없어 자동 반려"
+    await conn.execute(f"""
+        CREATE OR REPLACE FUNCTION improvement_close_orphaned() RETURNS TRIGGER AS $$
+        BEGIN
+            IF current_setting('opslens.orphan_sweep', true) = txid_current()::text THEN RETURN NULL; END IF;
+            PERFORM set_config('opslens.orphan_sweep', txid_current()::text, true);
+            UPDATE ops_improvement_item SET status = 'rejected', reject_reason = '{reason}', decided_at = NOW(),
+                   ai_verdict = coalesce(ai_verdict, '{{}}'::jsonb) || '{{"auto_closed": "target_gone"}}'::jsonb
+             WHERE id IN (SELECT id FROM ops_improvement_item WHERE status = 'pending' AND id IN (
+                SELECT i.id FROM ops_improvement_item i LEFT JOIN rag_knowledge k ON k.id = i.target_id
+                 WHERE i.status = 'pending' AND i.kind <> 'source_check' AND i.target_type = 'knowledge' AND i.target_id IS NOT NULL
+                   AND (k.id IS NULL OR (k.status NOT IN ('active', 'pending_review')
+                     -- 갈래마다 따로 EXISTS — OR 한 덩어리면 색인을 못 타 표 전체를 훑는다(재리뷰 낮음 3)
+                     AND NOT EXISTS (SELECT 1 FROM rag_knowledge s WHERE s.status IN ('active', 'pending_review') AND s.id <> k.id
+                                       AND s.content_norm_md5 = k.content_norm_md5)
+                     AND NOT EXISTS (SELECT 1 FROM rag_knowledge s WHERE s.status IN ('active', 'pending_review') AND s.id <> k.id
+                                       AND coalesce(s.logical_document_id, s.id) = coalesce(k.logical_document_id, k.id))
+                     AND NOT (k.confluence_page_id IS NOT NULL AND EXISTS (
+                         SELECT 1 FROM rag_knowledge s WHERE s.status IN ('active', 'pending_review') AND s.id <> k.id
+                            AND s.namespace_id = k.namespace_id AND s.confluence_page_id = k.confluence_page_id))
+                     AND NOT (k.source_document_id IS NOT NULL AND EXISTS (
+                         SELECT 1 FROM rag_knowledge s WHERE s.status IN ('active', 'pending_review') AND s.id <> k.id
+                            AND s.source_document_id IN (
+                                WITH RECURSIVE chain(id, n) AS (
+                                    SELECT k.source_document_id, 0
+                                    UNION ALL SELECT d.superseded_by, c.n + 1 FROM rag_source_document d JOIN chain c ON d.id = c.id
+                                     WHERE d.superseded_by IS NOT NULL AND c.n < 50)
+                                SELECT id FROM chain)))))
+                UNION ALL
+                SELECT i.id FROM ops_improvement_item i LEFT JOIN policy_item p ON p.id = i.target_id
+                 WHERE i.status = 'pending' AND i.kind <> 'source_check' AND i.target_type IN ('policy_param', 'policy_narrative')
+                   AND i.target_id IS NOT NULL
+                   AND (p.id IS NULL OR (p.status NOT IN ('active', 'pending_review') AND NOT EXISTS (
+                        SELECT 1 FROM policy_item s WHERE s.logical_id = p.logical_id AND s.id <> p.id
+                           AND s.status IN ('active', 'pending_review')))))
+             FOR UPDATE SKIP LOCKED);   -- 고아 후보만 잠근다(대기 전체를 잠그면 그 순간 승인이 기다림, 재리뷰 낮음 3)
+            RETURN NULL;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
+    await conn.execute("DROP FUNCTION IF EXISTS improvement_close_orphaned_knowledge() CASCADE")   # 첫 판(행만 보던 함수·트리거)
+    await conn.execute("DROP FUNCTION IF EXISTS improvement_close_orphaned_policy() CASCADE")
+    # 트리거는 판이 다를 때만 한 트랜잭션으로 다시 만든다 — 기동마다 지우면 그 사이 판정이 비고 표 전체 잠금을 기다린다(재리뷰 낮음 1).
+    # 트리거 정의(사건·WHEN)를 바꾸면 이 판 값을 올린다
+    version = "v2"
+    for table in ("rag_knowledge", "policy_item"):
+        for event, name, cond in (
+                ("UPDATE OF status", f"trg_{table}_close_orphaned",
+                 "OLD.status IN ('active', 'pending_review') AND NEW.status NOT IN ('active', 'pending_review')"),
+                ("DELETE", f"trg_{table}_close_orphaned_del", None)):
+            have = await conn.fetchval("SELECT obj_description(t.oid, 'pg_trigger') FROM pg_trigger t "
+                                       "WHERE t.tgname = $1 AND t.tgrelid = $2::regclass", name, table)
+            if have == version:
+                continue
+            when = f" WHEN ({cond})" if cond else ""
+            async with conn.transaction():
+                await conn.execute(f"DROP TRIGGER IF EXISTS {name} ON {table}")
+                await conn.execute(f"CREATE CONSTRAINT TRIGGER {name} AFTER {event} ON {table} DEFERRABLE INITIALLY DEFERRED "
+                                   f"FOR EACH ROW{when} EXECUTE FUNCTION improvement_close_orphaned()")
+                await conn.execute(f"COMMENT ON TRIGGER {name} ON {table} IS '{version}'")
+
+
 # 기동 마이그레이션 — 이 목록 순서대로 돈다(번호가 아니라 목록 순서, 의존은 주석). 단계마다 멱등.
 _MIGRATIONS = (
     _migrate_core_tables,
@@ -2418,6 +2494,7 @@ _MIGRATIONS = (
     _migrate_loose_namespace_orphans,        # #107 — 지운 컬렉션을 가리키는 FK 없는 id 칸 NULL(#106 뒤)
     _migrate_drop_unused_2026_11_06,         # #124 — 반입 전 전수 검사, 표·칸을 만드는 단계들보다 뒤
     _migrate_backfill_superseded_by,         # #125 — 원문 원장 교체 연결 채우기(옛 줄)
+    _migrate_close_orphaned_items,           # #127 — 대상이 사라진 대기 신고 자동 반려(지식·정책·개선 원장 표 뒤)
     _cleanup_stale_generating_messages,
     _cleanup_orphaned_ingestion_jobs,
     _cleanup_stale_source_drafts,

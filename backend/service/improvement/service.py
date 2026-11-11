@@ -1026,8 +1026,18 @@ async def list_items(namespace: Optional[str], status: Optional[str], limit: int
                 by_target.setdefault(r["target"], []).append(
                     {"id": r["id"], "namespace": r["namespace"], "heading_path": list(r["heading_path"] or []),
                      "editable": edit_denied_reason(r["owners"] or [], user) is None})
+        # 대상이 현행이 아닌 대기 신고 — 승인하면 막힌다. 카드에 [대상 폐기] 표시(11/11 M4). 이어받을 현행도 없으면 #127이 자동 반려
+        k_ids = [d["target_id"] for d in items if d["status"] == "pending" and d["target_type"] == "knowledge" and d.get("target_id")]
+        p_ids = [d["target_id"] for d in items if d["status"] == "pending" and d["target_type"] in _POLICY_TARGETS and d.get("target_id")]
+        live_k = {r["id"] for r in await conn.fetch(
+            "SELECT id FROM rag_knowledge WHERE id = ANY($1::int[]) AND status = 'active'", k_ids)} if k_ids else set()
+        live_p = {r["id"] for r in await conn.fetch(
+            f"SELECT id FROM policy_item WHERE id = ANY($1::int[]) AND {searchable_sql('policy_item')}", p_ids)} if p_ids else set()
     for d in items:
         d["copies"] = by_target.get(d.get("target_id"), []) if d["target_type"] == "knowledge" and d["status"] == "pending" else []
+        d["target_stale"] = d["status"] == "pending" and bool(d.get("target_id")) and (
+            (d["target_type"] == "knowledge" and d["target_id"] not in live_k)
+            or (d["target_type"] in _POLICY_TARGETS and d["target_id"] not in live_p))
     return items
 
 
