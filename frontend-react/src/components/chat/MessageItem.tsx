@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { Bot, User, ChevronDown, ChevronUp, CheckCircle, Database, BarChart2, Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { safeRehypePlugins } from '../../utils/markdown';
+import { plainHashes, safeRehypePlugins } from '../../utils/markdown';
+import { JUMP_HIGHLIGHT, makeCiteSpan, rehypeCiteChips } from './citeChips';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Badge } from '../ui/Badge';
@@ -387,6 +388,31 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
       ? c.item_id != null && underReview.policy_item.includes(c.item_id)
       : c.kind === 'param' ? c.param_id != null && !!underReview?.policy_param.includes(c.param_id)
         : c.chunk_id != null && !!underReview?.policy_narrative.includes(c.chunk_id))).length;
+  // 답 본문 근거 칩(A안, 11/12) — 누르면 근거를 펼치고 그 카드로 이동 + 1.5초 강조
+  const rootRef = useRef<HTMLDivElement>(null);
+  const answerComponents = useMemo(() => {
+    const results = message.results ?? [];
+    // 칩 툴팁은 근거마다 한 번만 — 스트리밍 중 토큰마다 다시 그려져도 원문을 다시 훑지 않게(리뷰 L4)
+    const labels = new Map(results.map((r) => {
+      const first = plainHashes(r.content ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+      return [r.id, `문서 #${r.id}${first ? ` · ${first.length > 40 ? `${first.slice(0, 40)}…` : first}` : ''} — 누르면 근거 카드로 이동`];
+    }));
+    const label = (id: number) => labels.get(id) ?? `문서 #${id}`;
+    const timers = new WeakMap<HTMLElement, number>();
+    const onJump = (target: string) => {
+      setEvidenceOpen(true);
+      // 펼친 뒤 그려진 카드를 찾는다(같은 답 안에서만)
+      window.setTimeout(() => {
+        const el = rootRef.current?.querySelector<HTMLElement>(`[data-ev="${target}"]`);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add(...JUMP_HIGHLIGHT);
+        window.clearTimeout(timers.get(el));   // 1.5초 안에 다시 누르면 앞 타이머가 새 강조를 일찍 지우지 않게(리뷰 L1)
+        timers.set(el, window.setTimeout(() => el.classList.remove(...JUMP_HIGHLIGHT), 1500));
+      }, 60);
+    };
+    return { span: makeCiteSpan({ docIds: results.map((r) => r.id), docLabel: label, hasPolicy: (message.policyCitations?.length ?? 0) > 0, onJump }) };
+  }, [message.results, message.policyCitations]);
   // 근거 카드의 "이 근거 틀림"은 2026-10-06 제거 — 신고는 "답변 틀림" 하나로(틀린 근거는 AI가 찾고 담당자가 바꿀 수 있음).
   // 실사용 0건이었고 버튼이 둘이라 차이를 헷갈렸다. 카드엔 "정정 검토 중" 배지만 남긴다.
 
@@ -409,7 +435,7 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
 
   // Assistant message
   return (
-    <div className="flex justify-start">
+    <div className="flex justify-start" ref={rootRef}>
       <div className="flex items-start gap-2 max-w-[90%]">
         <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0 mt-0.5">
           <Bot className="w-4 h-4 text-white" />
@@ -447,7 +473,7 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
             </p>
           )}
           {showEvidence && message.policyCitations && message.policyCitations.length > 0 && (
-            <div className="space-y-1.5">
+            <div className="space-y-1.5" data-ev="p">
               <p className="text-xs text-violet-600 dark:text-violet-400 font-medium">
                 📋 정책 근거 {message.policyCitations.length}건{message.listAnswer ? ' · 답에 가장 가까운 것' : ''}
               </p>
@@ -518,7 +544,7 @@ export function MessageItem({ message, namespace, onClarify, onClarifyOther, onS
                     message.isStreaming && 'typing-cursor',
                   )}
                 >
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={safeRehypePlugins}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={ANSWER_REHYPE} components={answerComponents}>
                     {message.content}
                   </ReactMarkdown>
                   {message.clarify && !message.isStreaming && (
@@ -600,6 +626,9 @@ function useSourcePages(results: NonNullable<ChatMessage['results']>) {
   return pages;
 }
 
+/** 답 본문: 걸러낸(sanitize) 뒤 근거 표식을 칩으로 — 순서 중요(칩 span이 sanitize에 지워지지 않게) */
+const ANSWER_REHYPE = [...safeRehypePlugins, rehypeCiteChips];
+
 /** 근거 카드 목록 */
 function EvidenceList({ results, underReview }: { results: NonNullable<ChatMessage['results']>; underReview?: number[] }) {
   const fresh = useFreshness(results);
@@ -608,9 +637,11 @@ function EvidenceList({ results, underReview }: { results: NonNullable<ChatMessa
     <div className="space-y-1.5">
       <p className="text-xs text-slate-500 font-medium">검색된 문서 {results.length}건</p>
       {results.map((result, idx) => (
-        <SearchResultCard key={result.id} result={result} defaultOpen={false} index={idx}
-          underReview={underReview?.includes(result.id)} freshness={fresh.data?.[String(result.id)]}
-          sourcePage={pages.data?.[String(result.id)]} />
+        <div key={result.id} data-ev={`k-${result.id}`} className="transition-shadow">
+          <SearchResultCard result={result} defaultOpen={false} index={idx}
+            underReview={underReview?.includes(result.id)} freshness={fresh.data?.[String(result.id)]}
+            sourcePage={pages.data?.[String(result.id)]} />
+        </div>
       ))}
     </div>
   );
