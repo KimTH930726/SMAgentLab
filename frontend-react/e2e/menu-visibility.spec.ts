@@ -29,7 +29,8 @@ test('메뉴 노출 — 시스템 컬렉션에서 통계 끄기 → 시스템을
   const box = page.getByTestId('menu-visibility');
   await expect(box.locator('#mv-domain-k\\.policy')).toBeChecked();
   await expect(box.locator('#mv-system-k\\.policy')).toHaveCount(0);          // 시스템엔 정책서 칸 없음("—")
-  await expect(box.locator('#mv-system-voc')).toHaveCount(0);                   // VOC도
+  await expect(box.locator('#mv-domain-voc')).toHaveCount(0);                   // VOC는 시스템 컬렉션에만(v2.212 — VOC를 시스템 컬렉션으로)
+  await expect(box.locator('#mv-system-voc')).toBeChecked();
   await expect(box.locator('#mv-system-k\\.glossary')).toBeChecked();         // 용어집은 둘 다
   await expect(box.locator('#mv-domain-home')).toHaveCount(0);                  // 홈은 늘 보임 — 설정 목록에 없음
   await box.locator('#mv-system-q\\.stats').uncheck();

@@ -77,9 +77,12 @@ test('대량 텍스트 미리보기 — 비슷한 조각 배지 [비교]→새�
     const A = '## 정산 배치 재기동\n정산 배치가 멈추면 배치 상태를 확인한 뒤 재기동한다. 재기동 후 정산 파일 건수를 원장과 대조한다.';
     const B = '## 주문 취소 환불 처리\n주문 취소 시 결제 수단별로 환불 처리한다. 카드 결제는 승인 취소, 계좌이체는 환불 계좌로 송금한다.';
     const C = '## 회원 등급 산정\n회원 등급은 최근 6개월 구매 금액으로 매월 1일에 산정한다. 등급별 혜택은 쿠폰과 적립률로 나뉜다.';
-    // 기존 지식은 "지난번 붙여넣기"로(원문 원장 연결) — 직접 입력 지식(원문 없음)과의 비교는
-    // 아래 별도 테스트(직접 입력 지식도 조각 미리보기 비교 대상)가 본다(11/04 NULL 가드 결함 회귀 방지).
-    const [a, b, c] = await addViaPaste(NS, [A, B.replace('처리한다. ', '처리한다.  '), C]);   // B 저장본은 공백 두 칸 — 붙여넣기는 한 칸(공백만 다른 같은 글)
+    // 비교로 묻는 상대(A·C)는 직접 입력(원문 표시 없음) — v2.225(11/09)부터 원본이 다른 사용 중 글끼리는 묻지 않고 바로 등록하므로
+    // 붙여넣기로 넣으면 배지가 안 뜨는 게 맞다(11/12 E2E 전체에서 이 테스트가 그 규칙 전 기대로 남아 있던 것을 고침).
+    // "같은 글"(B)은 원본과 상관없이 표시 — 지난번 붙여넣기(원문 원장 연결)로 둔다
+    const a = (await addKnowledge(NS, A)).id;
+    const c = (await addKnowledge(NS, C)).id;
+    const [b] = await addViaPaste(NS, [B.replace('처리한다. ', '처리한다.  ')]);   // B 저장본은 공백 두 칸 — 붙여넣기는 한 칸(공백만 다른 같은 글)
     const countRows = () => psql(`SELECT count(*) FROM rag_knowledge WHERE namespace_id = ${nsId(NS)} AND status IN ('active','pending_review')`);
     expect(countRows()).toBe('3');
 

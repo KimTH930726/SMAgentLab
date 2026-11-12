@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { goAdmin } from './admin-nav';
 import { execFileSync } from 'node:child_process';
-import { loginAdmin } from './auth';
+import { API, adminToken, apiFetch, loginAdmin } from './auth';
 
 // 사내 LLM 사용량(2026-10-12) — "토큰이 너무 많이 나간다"는데 기능별 숫자가 없던 것. 시스템 설정 화면의 사용량 표가 실제 기록(DB)과
 // 같은 호출 수를 보여주는지 확인한다(읽기 전용 — LLM을 부르지 않는다).
@@ -9,7 +9,9 @@ const psql = (sql: string) => execFileSync('docker', ['exec', 'ops-postgres', 'p
   { encoding: 'utf-8' }).trim();
 
 test('시스템 설정 — 사내 LLM 사용량이 기록과 같은 호출 수로 보인다', async ({ page }) => {
-  const calls = psql("SELECT count(*) FROM ops_llm_usage WHERE created_at > NOW() - interval '7 days'");
+  // 화면은 지금 시스템 LLM 종류의 기록만 센다(v2.222 — 적재·측정용 로컬 호출이 섞이지 않게) — 같은 종류로 센다
+  const provider = (await (await apiFetch(`${API}/api/admin/llm-usage`, { headers: { Authorization: `Bearer ${await adminToken()}` } })).json()).provider as string;
+  const calls = psql(`SELECT count(*) FROM ops_llm_usage WHERE created_at > NOW() - interval '7 days' AND provider = '${provider.replace(/'/g, "''")}'`);
   await loginAdmin(page);
   await goAdmin(page, '설정');
   await page.getByRole('button', { name: 'LLM 프로바이더' }).click();   // 사용량은 LLM 프로바이더 영역 안
