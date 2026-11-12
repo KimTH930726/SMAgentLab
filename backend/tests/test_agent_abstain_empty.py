@@ -100,6 +100,9 @@ def _wire(monkeypatch, *, abstain: bool, tokens: list[str], contextual: bool = F
     monkeypatch.setattr(agent.sem_cache, "get_cached", get_cached)
     set_cached = AsyncMock()
     monkeypatch.setattr(agent.sem_cache, "set_cached", set_cached)
+    evidence_alive = AsyncMock(return_value=True)   # 캐시 근거 확인(0-0h B) — 기본은 살아 있음
+    monkeypatch.setattr(agent, "cached_evidence_alive", evidence_alive)
+    _wire.evidence_alive = evidence_alive
     cc = agent.ChatContext(results=[], policy_result=PolicySearchResult(), common_codes=[], db_columns=[],
                            llm_context="" if abstain else "ctx", enriched_query="q", mapped_term=None, abstain=abstain,
                            clarify=clarify)
@@ -480,6 +483,36 @@ async def test_cache_hit_then_log_error_does_not_relabel(monkeypatch):
     events = await _run()
     assert [c.args[2] for c in upd.await_args_list if len(c.args) > 2] == ["completed"]   # 재리뷰 D2
     assert events[-1] == {"type": "done", "message_id": 5, "status": "completed"}
+
+
+# ── 캐시 근거가 지금 DB에 없으면 버리고 새로 답한다(backlog 0-0h B, 11/11 시연: DB에 없는 #65251을 근거로 답함) ──
+
+@pytest.mark.asyncio
+async def test_cache_hit_with_dead_evidence_is_dropped_and_answered_fresh(monkeypatch):
+    upd, log, set_cached, calls = _wire(monkeypatch, abstain=False, tokens=["새 답"])
+    _wire.get_cached.return_value = {"answer": "옛 캐시 답", "results": [{"id": 65251}], "policy_citations": [], "message_id": 1,
+                                     "_cache_key": "semcache:ns:knowledge_rag:abc"}
+    _wire.evidence_alive.return_value = False
+    delete_entry = AsyncMock(return_value=True)
+    monkeypatch.setattr(agent.sem_cache, "delete_entry", delete_entry)
+    events = await _run()
+    delete_entry.assert_awaited_once_with("semcache:ns:knowledge_rag:abc")   # 버린 캐시 키도 지운다(리뷰 L5)
+    tokens = "".join(e["data"] for e in events if e["type"] == "token")
+    assert "옛 캐시 답" not in tokens and "새 답" in tokens       # 캐시 답이 나가지 않고 새로 답함
+    assert calls == [1]                                          # LLM 1회
+    md = upd.await_args.kwargs.get("metadata") or upd.await_args.args[3]
+    assert md["trace"].get("cache_stale") is True                # 버린 사실이 운영 질의 기록에(대체 처리는 보이게)
+    set_cached.assert_awaited_once()                             # 새 답으로 캐시를 다시 채움(같은 키 덮어씀)
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_with_live_evidence_is_served(monkeypatch):
+    upd, log, set_cached, calls = _wire(monkeypatch, abstain=False, tokens=["새 답"])
+    _wire.get_cached.return_value = {"answer": "캐시 답", "results": [{"id": 1}], "policy_citations": [], "message_id": 1}
+    events = await _run()
+    assert "캐시 답" in "".join(e["data"] for e in events if e["type"] == "token")
+    assert calls == [] and not set_cached.await_count            # LLM·캐시 저장 없음
+    _wire.evidence_alive.assert_awaited_once()
 
 
 # ── C2 다른 컬렉션에서 찾아보기(v2.174, 리뷰 보강) — 꺼짐이면 그대로, 켜지면 답 뒤 제안 1건, 제안 버튼으로 온 질문엔 다시 제안 안 함 ──

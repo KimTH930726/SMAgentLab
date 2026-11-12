@@ -160,7 +160,10 @@ async def get_cached(namespace: str, agent_type: str, query_vec: list[float]) ->
             if payload_raw:
                 await r.hincrby(best_key, "hits", 1)
                 logger.info("[Cache HIT] namespace=%s cosine=%.4f", namespace, best_score)
-                return json.loads(payload_raw)
+                out = json.loads(payload_raw)
+                # 어느 키에서 왔는지(근거가 죽은 캐시를 버릴 때 그 키도 지우게 — 안 지우면 바꿔 쓴 질문마다 TTL 동안 확인·버림 반복, 리뷰 L5)
+                out["_cache_key"] = best_key.decode() if isinstance(best_key, bytes) else best_key
+                return out
     except Exception as e:
         logger.warning("[Cache] 조회 실패 (무시): %s", e)
     return None

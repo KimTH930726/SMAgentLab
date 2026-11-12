@@ -11,7 +11,7 @@ from core.config import settings
 from service.chat import memory
 from service.chat.helpers import (
     LLM_UNAVAILABLE_MSG, LLM_EMPTY_MSG, NO_KNOWLEDGE_MARKER, SYSTEM_ERROR_MSG, is_llm_failure,
-    results_to_json, results_to_payload,
+    results_to_json, results_to_payload, cached_evidence_alive,
     update_assistant_message, update_inhouse_conv_id,
     create_query_log, post_save_tasks,
 )
@@ -552,6 +552,14 @@ class KnowledgeRagAgent(AgentBase):
             # 여부로만 가르면 보강 기준(유사도 0.35)에 못 미친 짧은 후속 질문이 새어 나갔다(리뷰).
             contextual = search_question != query or await memory.has_previous_turns(conversation_id, exclude_message_id=user_msg_id)
             cached = None if (clarify_scope or contextual) else await sem_cache.get_cached(namespace, "knowledge_rag", cache_vec)
+            # 캐시 근거가 지금 DB에 없으면(백업 복원·사본 교체·SQL 직접 변경 — 쓰기 경로는 이미 캐시를 비움) 버리고 새로 답한다(backlog 0-0h B,
+            # 11/11 시연: DB에 없는 #65251을 근거로 답함). 버린 사실은 운영 질의 기록(trace.cache_stale)과 로그에 남긴다
+            cache_stale = False
+            if cached and not await cached_evidence_alive(cached):
+                logger.info("[Cache] 근거가 지금 DB에 없어 캐시 답을 버림 namespace=%s src_msg=%s", namespace, cached.get("message_id"))
+                if cached.get("_cache_key"):
+                    await sem_cache.delete_entry(cached["_cache_key"])
+                cached, cache_stale = None, True
             if cached:
                 cached_citations = cached.get("policy_citations", [])
                 # 캐시 응답도 근거(results)를 메시지에 남긴다 — 안 남기면 다시 열었을 때 근거 카드가 사라지고,
@@ -610,6 +618,8 @@ class KnowledgeRagAgent(AgentBase):
                 trace = {"v": TRACE_VERSION, "error": True}
             if cc.abstain and contextual:   # 후속 질문은 즉시 거절 안 함(아래) — 기록도 "거절"로 세지 않게 따로 표시(11/09 재리뷰)
                 trace = {**trace, "abstain": False, "abstain_followup": True}
+            if cache_stale:
+                trace = {**trace, "cache_stale": True}
             if cc.signals.get("scope_missed"):
                 yield {"type": "status", "step": "context", "message": "고른 범위를 찾지 못해 질문 내용으로 다시 찾았습니다"}
             policy_citations: list[dict] = []

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -230,8 +231,44 @@ async def _nearest_candidate(candidates: list[dict], user_input: str) -> Optiona
     return max((i for i, s in enumerate(scores) if s is not None), key=lambda i: scores[i], default=None)
 
 
-async def _identify(candidates: list[dict], context: dict, user_input: str) -> tuple:
-    """"답변 틀림" 자동 판정 → (target_type, target_id, target_sub_id, original, proposed, ai_verdict)."""
+_ANSWER_CITE = re.compile(r"#(\d+)")
+
+
+async def _stale_chip_target(candidates: list[dict], user_input: str,
+                             answer: Optional[str] = None) -> tuple[Optional[int], Optional[str]]:
+    """사유 칩 "내용이 낡음"인데 AI가 "근거에 없는 내용"으로 본 경우의 정정 대상 → (후보 순번 | None, 고른 방법 answer_line|content|embedding).
+    운영 지식 근거 중에서만. 좁히는 순서: ① 답에서 신고 숫자가 나온 줄에 붙은 근거 번호(사용자가 틀렸다는 건 그 문장 — 그 근거가 고칠 곳)
+    → ② 신고 숫자가 본문에 있는 근거 → ③ 신고와 임베딩이 가장 가까운 근거(추정). 실례(11/11 사본): "2023년 작업은 끝났어요"에 2023이 든 근거가 둘
+    (#20511 일정·#20606 2024 계획) — 임베딩은 #20606. 임베딩이 실패하면 (None, None) — 칩 규칙을 안 쓰고 LLM 판정 그대로(신고는 남는다, 리뷰 M2)."""
+    knowledge = [i for i, c in enumerate(candidates) if c["target_type"] == "knowledge"]
+    if not knowledge:
+        return None, None
+    # 숫자 = 연도·시각·값(두 자리 이상) — 임베딩만으론 비슷한 형제 조각을 골랐다(골든 낡음 지적 2/6 대상 어긋남)
+    tokens = set(re.findall(r"\d{2,}(?::\d{2})?", user_input or ""))
+    if tokens:
+        cited = {int(x) for ln in (answer or "").split("\n") if any(t in ln for t in tokens)
+                 for x in _ANSWER_CITE.findall(ln)}
+        for how, narrow in (("answer_line", [i for i in knowledge if candidates[i]["target_id"] in cited]),
+                            ("content", [i for i in knowledge
+                                         if any(t in str((candidates[i].get("original") or {}).get("content", "")) for t in tokens)])):
+            if len(narrow) == 1:
+                return narrow[0], how
+            if narrow:
+                knowledge = narrow
+                break
+    if len(knowledge) == 1:   # 여기까지 왔으면 숫자 좁히기는 맞은 적이 없다 — 하나 남은 후보도 추정(재리뷰 L-a)
+        return knowledge[0], "embedding"
+    try:
+        best = await _nearest_candidate([candidates[i] for i in knowledge], user_input)
+    except Exception:
+        logger.warning("낡음 칩 정정 대상 추정(임베딩) 실패 — 칩 규칙 없이 AI 판정 그대로", exc_info=True)
+        return None, None
+    return (knowledge[best], "embedding") if best is not None else (None, None)
+
+
+async def _identify(candidates: list[dict], context: dict, user_input: str, *, user_reason: Optional[str] = None) -> tuple:
+    """"답변 틀림" 자동 판정 → (target_type, target_id, target_sub_id, original, proposed, ai_verdict).
+    user_reason = 신고자가 고른 사유 칩(stale·other_system·missing_step·not_found) — "내용이 낡음"(stale)은 아래 규칙에만 쓴다."""
     if not candidates:
         return "missing", None, None, context, None, {
             "verdict": "missing", "method": "no_evidence", "reason": "답변에 근거가 없어 빠진 내용으로 접수"}
@@ -240,6 +277,24 @@ async def _identify(candidates: list[dict], context: dict, user_input: str) -> t
         verdict, idx, proposed = ident["verdict"], ident["index"], ident["proposed"]
         meta = {"verdict": verdict, "method": "llm", "user_claim": ident["user_claim"], "reason": ident["reason"],
                 "wrong_part": ident["wrong_part"], "fix_summary": ident["fix_summary"]}
+        # 칩 규칙(backlog 0-0h B-1, 11/11): "내용이 낡음" = 신고자가 "근거가 옛 내용"이라고 직접 고른 것. 그런데 LLM은 "옛 날짜라 지금과 달라요"처럼
+        # 새 값을 안 주는 신고에서 근거와 충돌하는 값을 못 찾아 "근거에 없는 내용(새 지식)"으로 본다 — 승인하면 옛 조각은 그대로 쓰이고 새 조각만
+        # 하나 더 생겼다(시연 녹화 실례, 골든 20건 중 낡음 지적 6건 0/6). 운영 지식 근거가 있으면 가장 가까운 근거 정정으로 바꾸고 초안은 그 근거로
+        # 다시 쓴다(아래 create_item). LLM 판정·이유는 llm_verdict로 남긴다(AI 감사 — 번복 기록과 같은 값). 정책은 버전 흐름이 따로라 안 건드린다
+        to, how = (await _stale_chip_target(candidates, user_input, context.get("answer"))
+                   if verdict == "missing" and user_reason == "stale" else (None, None))
+        if to is not None:
+            c = candidates[to]
+            why = {"answer_line": "신고한 숫자가 나온 답 문장의 근거", "content": "신고한 숫자가 든 근거",
+                   "embedding": "신고와 가장 비슷한 근거(추정)"}[how]
+            # LLM의 "빠진 내용" 설명(틀린 부분·반영 결과)은 새 대상과 안 맞아 화면에서 빼고 감사 기록(llm_verdict)에만(리뷰 L3)
+            meta = meta | {"verdict": "evidence", "method": "chip_rule", "chip_pick": how, "guessed": how == "embedding",
+                           "wrong_part": None, "fix_summary": None,
+                           "llm_verdict": {"verdict": "missing", "reason": ident["reason"], "wrong_part": ident["wrong_part"],
+                                           "fix_summary": ident["fix_summary"]},
+                           "reason": f"사유 '내용이 낡음' — AI는 근거에 없는 내용으로 봤지만, 낡은 근거를 고치는 쪽으로 {c['label']}을 골랐어요"
+                                     f"({why}). 다르면 정정 대상을 바꾸세요"}
+            idx, verdict, proposed = to, "evidence", None   # 초안은 그 근거 기준으로 새로(빠진 내용용 초안을 그대로 쓰지 않는다)
     else:
         # 대체 경로도 임베딩 서비스를 부른다 — 여기까지 실패하면 신고 자체가 500으로 사라지므로(원칙: AI가 실패해도
         # 신고는 남는다) "빠진 내용"으로 접수하고 담당자가 대상을 지정하게 한다(/code-review).
@@ -293,7 +348,8 @@ OWNED_MESSAGE_SQL = (
 
 
 async def create_item(namespace: str, user: dict, *, target_type: str, target_id: Optional[int],
-                      target_sub_id: Optional[int], message_id: Optional[int], user_input: str) -> dict:
+                      target_sub_id: Optional[int], message_id: Optional[int], user_input: str,
+                      user_reason: Optional[str] = None) -> dict:
     """신고 접수. 직접 지정(근거 카드)이면 원장 저장 → AI 초안. 자동(auto, "답변 틀림")이면 판정+초안을 한 번에
     받은 뒤 저장. 어느 쪽이든 초안이 실패해도 신고는 남고(담당자가 직접 작성), 승인 전엔 아무 데도 반영되지 않는다."""
     auto = target_type == "auto"
@@ -321,7 +377,8 @@ async def create_item(namespace: str, user: dict, *, target_type: str, target_id
 
     proposed, verdict = None, None
     if auto:
-        target_type, target_id, target_sub_id, original, proposed, verdict = await _identify(candidates, context, user_input)
+        target_type, target_id, target_sub_id, original, proposed, verdict = await _identify(
+            candidates, context, user_input, user_reason=user_reason)
     stored_candidates = _stored_candidates(candidates)
 
     def _values(home: int) -> tuple:   # home = 처리할 곳(_home_ns) — 물은 곳은 _write_item(asked=)

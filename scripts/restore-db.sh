@@ -58,6 +58,27 @@ gunzip -c "${BACKUP_FILE}" | docker exec -i "${CONTAINER}" psql \
   -v ON_ERROR_STOP=1 --single-transaction \
   --quiet
 
+# 답 캐시(Redis semcache:*)는 DB 밖에 있어 복원으로 안 돌아간다 — 남기면 복원된 DB에 없는 문서를 근거로 한 옛 답이 TTL 동안 나간다
+# (11/11 시연 녹화 실례: 사본 DB로 바꿨는데 캐시 답이 DB에 없는 #65251을 근거로 냄). 답 캐시 키만 지운다(로그인 제한 등 다른 키는 그대로).
+REDIS_CONTAINER=${REDIS_CONTAINER:-ops-redis}
+REDIS_DB=${REDIS_DB:-}
+if [ -z "${REDIS_DB}" ] && [ -f ".env" ]; then
+  REDIS_DB=$(grep -E "^REDIS_URL=" .env | sed -E 's#.*/([0-9]+)[[:space:]]*$#\1#' | grep -E '^[0-9]+$' || true)
+fi
+REDIS_DB=${REDIS_DB:-0}
+if docker ps --format '{{.Names}}' | grep -q "^${REDIS_CONTAINER}$"; then
+  n=$(docker exec "${REDIS_CONTAINER}" sh -c "redis-cli -n ${REDIS_DB} --scan --pattern 'semcache:*' | wc -l")
+  # 키 하나씩(줄 단위) — 컬렉션 이름에 띄어쓰기("앱 시스템")가 있어 xargs로 넘기면 키가 쪼개져 안 지워졌다(리뷰 11/11)
+  docker exec "${REDIS_CONTAINER}" sh -c "redis-cli -n ${REDIS_DB} --scan --pattern 'semcache:*' | while IFS= read -r k; do redis-cli -n ${REDIS_DB} UNLINK \"\$k\" >/dev/null; done"
+  left=$(docker exec "${REDIS_CONTAINER}" sh -c "redis-cli -n ${REDIS_DB} --scan --pattern 'semcache:*' | wc -l")
+  echo "답 캐시 비움: ${n}개 → 남은 ${left}개 (Redis db ${REDIS_DB})"
+  if [ "${left}" != "0" ]; then
+    echo "경고: 답 캐시 ${left}개가 남았습니다 — 관리자 › 설정 › 캐시에서 비우거나 백엔드 재시작 전 다시 실행하세요"
+  fi
+else
+  echo "경고: ${REDIS_CONTAINER} 컨테이너가 없어 답 캐시를 못 비웠습니다 — 기동 후 관리자 › 설정 › 캐시에서 비우거나 redis-cli로 semcache:* 삭제"
+fi
+
 echo ""
 echo "복원 완료. 백엔드 재시작 권장:"
 echo "  docker compose -f docker-compose.yml -f docker-compose.prod.yml restart backend"

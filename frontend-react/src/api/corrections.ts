@@ -13,7 +13,11 @@ export type CorrectionRequestTarget = Exclude<CorrectionTargetType, 'answer' | P
 export interface AiVerdict {
   verdict: 'evidence' | 'missing' | 'answer_error' | null;
   /** llm_no_opinion = 사용자 의견 없이 질문·답변·근거의 어긋남만 보고 한 추정 */
-  method: 'llm' | 'similarity' | 'no_evidence' | 'llm_no_opinion';
+  /** chip_rule = 사유 칩 "내용이 낡음"으로 AI의 "빠진 내용"을 근거 정정으로 바꿈(11/11) — llm_verdict에 AI 원래 판정 */
+  method: 'llm' | 'similarity' | 'no_evidence' | 'llm_no_opinion' | 'chip_rule';
+  /** 칩 규칙이 대상을 임베딩으로만 고른 추정이면 true(화면 "추정") */
+  guessed?: boolean;
+  llm_verdict?: { verdict: string; reason?: string | null; wrong_part?: string | null; fix_summary?: string | null };
   user_claim?: string | null;
   reason?: string | null;
   wrong_part?: string | null;

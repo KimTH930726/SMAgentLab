@@ -173,16 +173,25 @@ def neighbor_scope(cands: list[Candidate]) -> list[int]:
 
 def decide(cands: list[Candidate], ai_id: Optional[int], neighbors: list[tuple[int, float]], *,
            preset_id: Optional[int], llm_fail: str = "", preset_missing: bool = False,
-           ai_named: bool = False) -> dict:
-    """두 신호 → 확신·제안 위치·묻기·선택지. 순수 함수(테스트 대상). llm_fail = "" | refusal | error | shape."""
+           ai_named: bool = False, dup_sim: Optional[float] = None) -> dict:
+    """두 신호 → 확신·제안 위치·묻기·선택지. 순수 함수(테스트 대상). llm_fail = "" | refusal | error | shape.
+    dup_sim = 등록 중복 기준 유사도 — AI 판단이 없을 때(실패) 1위 이웃이 이 이상(거의 같은 글)이면 그 컬렉션을 먼저(아래)."""
     nb_ids = [n for n, _ in neighbors]
     top, n, _ = vote(nb_ids)
     confident = is_confident(ai_id, nb_ids, k=NEIGHBOR_K, need=NEIGHBOR_NEED)
+    # AI 판단이 없으면 이웃 다수결만 남는데, 다수결은 유사도를 안 본다 — 11/11 사본 실례: 딜리버스 #8과 거의 같은 글(0.95)이 있는데
+    # 이웃 [딜리버스 0.95, 외부 0.70, 앱 0.69×3]에서 앱 3표로 "앱 시스템"이 골라짐(가중 합으로도 앱 2.07 > 0.95라 가중 투표로는 못 고침).
+    # 거의 같은 글이 있는 곳 = 같은 지식이 이미 사는 곳. AI가 고른 경우는 그대로 둔다(같은 글 사본이 여러 컬렉션에 있을 수 있다)
+    near_dup = (neighbors[0][0] if ai_id is None and preset_id is None and neighbors and dup_sim is not None
+                and neighbors[0][1] >= dup_sim else None)
     notes = []
     if preset_missing:
         notes.append("넘어온 컬렉션을 찾지 못해 AI가 골랐어요")
     if llm_fail:
-        notes.append(f"{_FAIL_TEXT.get(llm_fail, 'AI 판단 실패')} — 비슷한 지식으로만 골랐어요")
+        notes.append(f"{_FAIL_TEXT.get(llm_fail, 'AI 판단 실패')} — "
+                     + ("거의 같은 지식이 있는 곳으로 골랐어요" if near_dup is not None else "비슷한 지식으로만 골랐어요"))
+    elif near_dup is not None:   # AI가 "애매"라고 답함(실패 아님) — 대체 처리는 보이게(리뷰 L6)
+        notes.append("AI가 한 곳을 고르지 못해 거의 같은 지식이 있는 곳으로 골랐어요")
     if not neighbors:
         notes.append("비교할 지식이 없어요")
     fallback = " · ".join(notes)
@@ -196,6 +205,8 @@ def decide(cands: list[Candidate], ai_id: Optional[int], neighbors: list[tuple[i
     # 제휴서비스가 미리 골라짐). 측정 데이터에선 해 없음(로컬 11=11·게이트웨이 10=10, 기법 결정 기록 §17)
     if ai_named and ai_id is not None:
         proposed = ai_id
+    elif near_dup is not None:
+        proposed = near_dup
     else:
         proposed = top if (top is not None and n >= NEIGHBOR_NEED) else (ai_id if ai_id is not None else top)
     options = list(dict.fromkeys(x for x in (proposed, ai_id, top) if x is not None))[:3]
@@ -245,7 +256,9 @@ async def finish(conn, cands: list[Candidate], llm_out: tuple, embedding: list[f
     """신호 ②(이웃) + 결정. 임베딩은 부르는 쪽이 연결 밖에서 만든다. 원장 기록도 부르는 쪽 — 측정 스크립트는 기록 없이 부른다."""
     ai_id, doc_type, reason, llm_fail = llm_out
     neighbors = await nearest_collections(conn, embedding, neighbor_scope(cands), exclude_ids=exclude_ids)
+    from agents.knowledge_rag.knowledge.retrieval import get_thresholds   # 지연 import — 등록 중복 기준과 같은 값(설정 화면에서 바뀜)
     d = decide(cands, ai_id, neighbors, preset_id=preset_id, llm_fail=llm_fail,
-               preset_missing=preset_missing, ai_named=names_ai_collection(cands, ai_id, text))
+               preset_missing=preset_missing, ai_named=names_ai_collection(cands, ai_id, text),
+               dup_sim=get_thresholds()["duplicate_min_similarity"])
     return LocateResult(doc_type=doc_type, ai_id=ai_id, reason=reason, neighbors=neighbors, preset_id=preset_id,
                         llm_fail=llm_fail, **d)

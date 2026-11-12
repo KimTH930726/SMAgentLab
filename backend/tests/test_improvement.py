@@ -151,6 +151,91 @@ class TestIdentify:
         assert out[0] == "answer" and out[3] == ctx and out[4] is None
 
 
+class TestStaleChipRule:
+    """사유 칩 "내용이 낡음" + AI "근거에 없는 내용" → 운영 지식 근거 정정(backlog 0-0h B-1, 골든 20건 낡음 지적 0/6)."""
+    _MISSING = {"verdict": "missing", "index": None, "user_claim": "c", "reason": "근거와 충돌하는 값 없음", "wrong_part": None,
+                "fix_summary": "새 지식", "proposed": {"content": "새 지식 초안"}}
+
+    @pytest.mark.asyncio
+    async def test_stale_chip_turns_missing_into_nearest_knowledge_and_drops_missing_draft(self):
+        two = _CANDS + [{**_CANDS[0], "key": "k-3", "target_id": 3, "label": "문서 #3", "original": {"content": "다른 절차"}}]
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)), \
+             patch.object(svc, "_nearest_candidate", AsyncMock(return_value=0)) as near:
+            tt, tid, sub, original, proposed, meta = await svc._identify(two, {}, "내용이 옛날 거예요", user_reason="stale")
+        assert (tt, tid, proposed) == ("knowledge", 1, None)          # 새 지식 초안은 버리고 그 근거 기준으로 다시(create_item)
+        assert meta["verdict"] == "evidence" and meta["method"] == "chip_rule"
+        assert meta["llm_verdict"]["verdict"] == "missing" and meta["llm_verdict"]["fix_summary"] == "새 지식"   # AI 판정은 감사용으로
+        assert meta["fix_summary"] is None and meta["wrong_part"] is None   # 새 대상과 안 맞는 "빠진 내용" 설명은 화면에서 뺌(리뷰 L3)
+        assert meta["chip_pick"] == "embedding" and meta["guessed"] is True  # 숫자 없이 임베딩으로만 = 추정
+        assert "내용이 낡음" in meta["reason"] and meta["key"] == "k-1"
+        # 가장 가까운 근거는 운영 지식 후보 안에서만 고른다(정책 후보는 넘기지 않음)
+        assert all(c["target_type"] == "knowledge" for c in near.await_args.args[0])
+
+    @pytest.mark.asyncio
+    async def test_single_candidate_without_number_match_is_guessed(self):
+        """근거 1건인데 신고 숫자(2023)가 본문·답 어디에도 없음 → 대상은 그 1건, 표시는 추정(재리뷰 L-a)."""
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify(_CANDS, {"answer": "비밀번호 변경 [#1]"}, "2023년 기준이라 달라요", user_reason="stale")
+        assert out[1] == 1 and out[5]["chip_pick"] == "embedding" and out[5]["guessed"] is True
+
+    @pytest.mark.asyncio
+    async def test_stale_chip_embedding_failure_keeps_report_as_llm_missing(self):
+        """임베딩이 죽어도 신고는 남는다 — 칩 규칙 없이 LLM 판정(빠진 내용) 그대로(리뷰 M2)."""
+        two = _CANDS + [{**_CANDS[0], "key": "k-3", "target_id": 3, "label": "문서 #3", "original": {"content": "다른 절차"}}]
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)), \
+             patch.object(svc, "_nearest_candidate", AsyncMock(side_effect=RuntimeError("embed down"))):
+            out = await svc._identify(two, {}, "내용이 옛날 거예요", user_reason="stale")
+        assert out[0] == "missing" and out[5]["method"] == "llm"
+
+    @pytest.mark.asyncio
+    async def test_stale_chip_prefers_candidate_containing_the_reported_number(self):
+        """신고 속 숫자(2023)가 든 근거를 임베딩보다 먼저 — 비슷한 형제 조각을 고르던 것(골든 2/6)."""
+        cands = [{"key": "k-1", "target_type": "knowledge", "target_id": 1, "target_sub_id": None, "label": "문서 #1",
+                  "original": {"content": "작업 일시 2024년 4월"}},
+                 {"key": "k-2", "target_type": "knowledge", "target_id": 2, "target_sub_id": None, "label": "문서 #2",
+                  "original": {"content": "작업 일시 2023년 10월 6일"}}]
+        near = AsyncMock(return_value=0)   # 임베딩은 #1을 가장 가깝다고 본다
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)), \
+             patch.object(svc, "_nearest_candidate", near):
+            out = await svc._identify(cands, {}, "2023년 기준이라 달라요", user_reason="stale")
+        assert out[1] == 2 and not near.await_count                  # 숫자가 든 근거 하나 → 임베딩 안 부름
+
+    @pytest.mark.asyncio
+    async def test_stale_chip_prefers_doc_cited_on_the_answer_line_with_the_number(self):
+        """둘 다 2023을 담으면 — 답에서 2023이 나온 줄에 붙은 근거(#2)가 정정 대상(11/11 사본 실례: 임베딩은 2024 계획 문서를 골랐다)."""
+        cands = [{"key": "k-1", "target_type": "knowledge", "target_id": 1, "target_sub_id": None, "label": "문서 #1",
+                  "original": {"content": "2023년 결과 정리 · 2024년 4월 계획"}},
+                 {"key": "k-2", "target_type": "knowledge", "target_id": 2, "target_sub_id": None, "label": "문서 #2",
+                  "original": {"content": "작업 일시 2023년 10월 6일"}}]
+        ctx = {"answer": "작업 일시: 2023년 10월 6일 [#2]\n참고: 2024년 4월 계획 [#1]"}
+        near = AsyncMock(return_value=0)
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)), \
+             patch.object(svc, "_nearest_candidate", near):
+            out = await svc._identify(cands, ctx, "2023년 작업은 이미 끝났어요", user_reason="stale")
+        assert out[1] == 2 and not near.await_count
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reason", [None, "missing_step", "not_found", "other_system"])
+    async def test_other_or_no_chip_keeps_llm_missing(self, reason):
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify(_CANDS, {}, "x", user_reason=reason)
+        assert out[0] == "missing" and out[4] == {"content": "새 지식 초안"} and out[5]["method"] == "llm"
+
+    @pytest.mark.asyncio
+    async def test_stale_chip_without_knowledge_candidates_keeps_missing(self):
+        policy_only = [c for c in _CANDS if c["target_type"] != "knowledge"]
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify(policy_only, {}, "x", user_reason="stale")
+        assert out[0] == "missing" and out[5]["method"] == "llm"
+
+    @pytest.mark.asyncio
+    async def test_stale_chip_does_not_override_llm_evidence(self):
+        ident = {**self._MISSING, "verdict": "evidence", "index": 1}
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=ident)):
+            out = await svc._identify(_CANDS, {}, "x", user_reason="stale")
+        assert out[5]["method"] == "llm" and out[1] == 5
+
+
 class TestIdentifyFallbackFailure:
     @pytest.mark.asyncio
     async def test_both_ai_paths_fail_still_accepts_as_missing(self):

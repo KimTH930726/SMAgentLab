@@ -105,6 +105,23 @@ function joinFields(fields: Field[], get: (key: string) => string): string {
   return fields.map((f) => (fields.length > 1 ? `[${f.label}]\n${get(f.key)}` : get(f.key))).join('\n\n');
 }
 
+/** 기존 vs 수정안 줄 비교 — 고칠 원문이 있는 대상만(빠진 내용·답변 오류는 질문·답변이 왼쪽이라 비교 없음 = null). 카드와 일괄 승인이 같은 값을 쓴다 */
+function diffOps(item: CorrectionItem): DiffOp[] | null {
+  const hasOriginal = item.target_type === 'knowledge' || item.target_type === 'policy_param' || item.target_type === 'policy_narrative';
+  if (!hasOriginal || !item.proposed) return null;
+  const fields = shownFields(item);
+  return lineDiff(joinFields(fields, (k) => originalValue(item, k)), joinFields(fields, (k) => proposedValue(item, k)));
+}
+
+/** 바뀐 줄 0 = 서버가 "수정안이 기존 내용과 같아요"로 막는 안 — 누른 뒤 오류 대신 미리 막는다(backlog 0-0h B, 11/11 시연 녹화).
+ *  줄 비교 대신 합친 글끼리 비교 — 같은 뜻이고, 큰 본문에서 lineDiff가 상한(MAX_CELLS)을 넘어 전부 바뀜으로 돌려주는 경우도 맞게 · 목록마다 diff를 안 돌림(재리뷰 L-b·c) */
+function isNoChange(item: CorrectionItem): boolean {
+  const hasOriginal = item.target_type === 'knowledge' || item.target_type === 'policy_param' || item.target_type === 'policy_narrative';
+  if (!hasOriginal || !item.proposed) return false;
+  const fields = shownFields(item);
+  return joinFields(fields, (k) => originalValue(item, k)) === joinFields(fields, (k) => proposedValue(item, k));
+}
+
 function contextText(item: CorrectionItem): string {
   const o = orig(item);
   return `질문: ${o.question ?? ''}\n\n당시 답변:\n${o.answer ?? ''}`;
@@ -145,7 +162,7 @@ const canFixItem = (item: CorrectionItem) => item.target_type !== 'answer' && it
 /** 일괄 승인 대상 — 카드의 [승인]이 보이는 건과 같은 조건 */
 // 정책 컬렉션의 "빠진 내용"은 승인 대상이 아니다 — [정책 추가 제안으로] 넘긴다(일괄 승인에서도 빠짐, 11/03)
 const approvable = (item: CorrectionItem) => item.status === 'pending' && canFixItem(item) && !!item.proposed && !isMarked(item)
-  && !(item.target_type === 'missing' && item.namespace_area === 'policy') && !item.target_stale;
+  && !(item.target_type === 'missing' && item.namespace_area === 'policy') && !item.target_stale && !isNoChange(item);
 
 function DiffPane({ ops, side }: { ops: DiffOp[]; side: 'before' | 'after' }) {
   const shown = ops.filter((o) => o.kind === 'same' || o.kind === (side === 'before' ? 'del' : 'add'));
@@ -254,12 +271,10 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused, unchecked =
   const forwardToPolicy = item.target_type === 'missing' && item.namespace_area === 'policy';
   // 기존 vs 수정안 줄 비교 — 고칠 원문이 있는 대상만(빠진 내용·답변 오류는 질문·답변이 왼쪽)
   const hasOriginal = item.target_type === 'knowledge' || item.target_type === 'policy_param' || item.target_type === 'policy_narrative';
-  const ops = useMemo(
-    () => (hasOriginal && item.proposed ? lineDiff(joinFields(fields, (k) => originalValue(item, k)), joinFields(fields, (k) => proposedValue(item, k))) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [item.id, item.proposed, item.original, item.target_type],
-  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const ops = useMemo(() => diffOps(item), [item.id, item.proposed, item.original, item.target_type]);
   const changedLines = ops ? ops.filter((o) => o.kind !== 'same').length : 0;
+  const noChange = isNoChange(item);   // 일괄 승인(approvable)과 같은 판단
 
   const proposalLabel = proposedMarked ? 'AI 검토 초안 — 의견이 없어 값은 그대로, 의심 부분에 【확인 필요】 표시'
     : lastEdit ? `직접 수정한 안${lastEdit.by_name ? ` (${lastEdit.by_name})` : ''}`
@@ -276,6 +291,7 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused, unchecked =
           <input type="checkbox" checked={selected} disabled={!approvable(item)} onChange={(e) => onSelect(e.target.checked)}
             aria-label={`정정 #${item.id} 선택`}
             title={approvable(item) ? '골라서 한꺼번에 승인' : item.target_stale ? '대상이 폐기돼 승인할 수 없어요'
+              : isNoChange(item) ? '수정안이 기존 내용과 같아요 — 승인할 변경이 없어요'
               : proposedMarked ? '【확인 필요】 표시가 남아 있어 승인할 수 없어요' : '승인할 수정안이 없어요'}
             className="accent-indigo-600" />
         )}
@@ -329,8 +345,9 @@ function CorrectionCard({ item, onDone, selected, onSelect, focused, unchecked =
             </Button>
           )}
           {canFix && item.proposed && !proposedMarked && !forwardToPolicy && (
-            <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy || !!item.target_stale}
+            <Button variant="primary" size="sm" loading={approve.isPending} disabled={busy || !!item.target_stale || noChange}
               title={item.target_stale ? '대상이 폐기돼 승인할 수 없어요 — 반려하세요'
+                : noChange ? '수정안이 기존 내용과 같아요 — [AI 다시 쓰기]로 고치거나, 고칠 게 없으면 반려하세요'
                 : item.target_type === 'missing' ? '이 내용으로 새 지식을 등록합니다.' : '새 버전으로 교체되고, 기존 내용은 이력으로 남습니다.'}
               onClick={() => item.proposed && approve.mutate(item.proposed)}>
               {copyPick.size > 0 ? `승인 · 사본 ${copyPick.size}곳 포함` : '승인'}

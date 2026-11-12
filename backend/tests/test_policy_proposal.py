@@ -575,7 +575,7 @@ def _orig(_c, _ns, tt, tid, sub, _m, **_kw):
 
 
 def _ident_for(pid):
-    async def ident(cands, ctx, user_input):
+    async def ident(cands, ctx, user_input, **_kw):   # user_reason(사유 칩) 등 추가 인자
         c = next(c for c in cands if c["target_id"] == pid and c["target_type"] == "policy_narrative")
         return (c["target_type"], c["target_id"], c["target_sub_id"], c["original"], {"chunk_text": "y", "raw_body": "y"},
                 {"verdict": "evidence", "method": "llm", "reason": "r", "key": c["key"], "label": c["label"]})
@@ -779,7 +779,7 @@ class TestLockOrder:
         with _Patched(led, pid=10):
             await _direct()
 
-            async def ident(cands, ctx, ui):
+            async def ident(cands, ctx, ui, **_kw):
                 return ("policy_narrative", 10, 101, cands[0]["original"], {"chunk_text": "y", "raw_body": "y"},
                         {"verdict": "evidence", "method": "llm", "reason": "r", "fix_summary": "14일로", "key": "pn-101"})
             with patch.object(svc, "_identify", AsyncMock(side_effect=ident)):

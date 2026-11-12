@@ -65,6 +65,38 @@ def results_to_payload(results: list[RetrievalResult]) -> list[dict]:
     return [_result_dict(r) for r in results]
 
 
+# 캐시 답의 근거가 지금도 쓰이는가(backlog 0-0h B, 11/11 시연 녹화) — 쓰기 경로는 캐시를 비우지만(invalidate_namespace_family),
+# DB를 백업본·사본으로 바꾸거나(폐쇄망 반입·복원) 스크립트가 SQL로 바꾸면 Redis 캐시만 남아 DB에 없는 문서(#65251)를 근거로 답했다.
+_EVIDENCE_ALIVE_SQL = """
+SELECT (SELECT count(*) FROM rag_knowledge WHERE id = ANY($1::int[]) AND status = 'active') AS k,
+       (SELECT count(*) FROM policy_item WHERE id = ANY($2::int[]) AND status = 'active') AS p"""
+
+
+def _int_ids(items: list | None, key: str) -> set[int]:
+    out = set()
+    for x in items or []:
+        v = x.get(key) if isinstance(x, dict) else None
+        if isinstance(v, int) or (isinstance(v, str) and v.isdigit()):
+            out.add(int(v))
+    return out
+
+
+async def cached_evidence_alive(cached: dict) -> bool:
+    """캐시 답의 근거(지식 results[].id · 정책 policy_citations[].item_id)가 전부 지금 사용 중이면 True.
+    하나라도 없거나 사용 중이 아니면 False — 호출부는 캐시를 버리고 새로 답한다. 근거가 없는 답(근거 없음)은 확인할 게 없어 True.
+    확인 쿼리가 실패하면 False(새로 답하는 쪽이 안전 — LLM 한 번 더 부르는 비용) + 경고 로그."""
+    k_ids, p_ids = _int_ids(cached.get("results"), "id"), _int_ids(cached.get("policy_citations"), "item_id")
+    if not k_ids and not p_ids:
+        return True
+    try:
+        async with get_conn() as conn:
+            row = await conn.fetchrow(_EVIDENCE_ALIVE_SQL, list(k_ids), list(p_ids))
+    except Exception:
+        logger.warning("[Cache] 캐시 근거 확인 실패 — 캐시를 버리고 새로 답함", exc_info=True)
+        return False
+    return row["k"] == len(k_ids) and row["p"] == len(p_ids)
+
+
 async def update_assistant_message(msg_id: int, content: str, status: str = "generating", metadata: dict | None = None) -> None:
     async with get_conn() as conn:
         if metadata is not None:

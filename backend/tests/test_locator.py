@@ -56,6 +56,28 @@ def test_preset_keeps_location_and_suggests_only_when_confident_elsewhere():
     assert not d["suggest_move"]
 
 
+def test_llm_fail_near_duplicate_neighbor_wins_over_majority():
+    """11/11 사본 실례 — AI 형식 깨짐 + 이웃 [딜리버스 0.95, POS 0.70, 홈페이지 0.69×3] → 다수결이면 홈페이지, 거의 같은 글이 있는 딜리버스여야."""
+    neigh = [(1, 0.95), (2, 0.70), (3, 0.69), (3, 0.68), (3, 0.68)]
+    d = decide(C, None, neigh, preset_id=None, llm_fail="shape", dup_sim=0.88)
+    assert d["proposed_id"] == 1 and d["options"][0] == 1
+    assert "거의 같은 지식" in d["fallback"]                       # 대체 처리는 보이게
+    assert d["ask"] is True                                         # 확신은 아님(사람 확인)
+    # 기준 아래(0.85)면 예전대로 다수결 — 거의 같은 글이 아니면 끼어들지 않는다
+    d = decide(C, None, [(1, 0.85), *neigh[1:]], preset_id=None, llm_fail="shape", dup_sim=0.88)
+    assert d["proposed_id"] == 3 and "비슷한 지식으로만" in d["fallback"]
+    # AI가 고른 경우는 그대로(사본이 여러 컬렉션에 있을 수 있다)
+    d = decide(C, 2, neigh, preset_id=None, llm_fail="", dup_sim=0.88)
+    assert d["proposed_id"] != 1 or d["confident"] is False
+    assert decide(C, 2, neigh, preset_id=None, llm_fail="", dup_sim=0.88)["proposed_id"] == \
+        decide(C, 2, neigh, preset_id=None, llm_fail="")["proposed_id"]
+    # AI가 "애매"(실패 아님, ai_id None) — 같은 규칙 + 안내 문구(리뷰 L6)
+    d = decide(C, None, neigh, preset_id=None, llm_fail="", dup_sim=0.88)
+    assert d["proposed_id"] == 1 and "거의 같은 지식" in d["fallback"]
+    # preset(컬렉션 화면에서 넘어옴)은 위치 고정 — 바뀌지 않음
+    assert decide(C, None, neigh, preset_id=2, llm_fail="shape", dup_sim=0.88)["proposed_id"] == 2
+
+
 def test_decide_properties_random():
     rnd = random.Random(3)
     ids = [c.id for c in C]

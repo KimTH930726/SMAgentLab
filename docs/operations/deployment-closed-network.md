@@ -557,6 +557,12 @@ bash scripts/restore-db.sh backups/opsdb-20260422-153012.sql.gz
 docker compose -f docker-compose.yml -f docker-compose.prod.yml restart backend
 ```
 
+> **답 캐시(Redis)도 같이 비운다** — 캐시는 DB 밖에 있어 복원으로 안 돌아간다. 남기면 복원된 DB에 없는(또는 옛 내용인) 문서를 근거로 한 답이
+> 캐시 TTL(기본 30분) 동안 나간다(v2.231 전 실례 11/11). `restore-db.sh`가 복원 뒤 `semcache:*`만 지우고 개수를 찍는다("답 캐시 비움: N개 → 남은 0개").
+> 스크립트를 안 쓰고 다른 방법(덤프 반입·사본 교체)으로 DB를 바꿨으면 직접(키 이름에 띄어쓰기가 있어 줄 단위로):
+> `docker exec ops-redis sh -c 'redis-cli --scan --pattern "semcache:*" | while IFS= read -r k; do redis-cli UNLINK "$k" >/dev/null; done'` → 확인 `docker exec ops-redis sh -c 'redis-cli --scan --pattern "semcache:*" | wc -l'` = 0.
+> v2.231부터는 캐시 답을 내보내기 전 근거 지식·정책이 지금 사용 중인지 확인해 아니면 버리지만, **같은 id에 옛 내용**(백업 시점 내용)은 못 가린다 — 비우기는 그대로 필수.
+
 ### 4-3. 로그 확인
 
 ```bash

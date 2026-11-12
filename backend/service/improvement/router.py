@@ -55,6 +55,7 @@ async def create_correction(body: CorrectionCreate, user: dict = Depends(get_cur
         created = await service.create_item(
             body.namespace, user, target_type=body.target_type, target_id=body.target_id,
             target_sub_id=body.target_sub_id, message_id=body.message_id, user_input=user_input,
+            user_reason=body.user_reason,   # "내용이 낡음" 칩은 자동 판정 규칙에도 쓴다(backlog 0-0h B-1)
         )
     except service.ConflictError as e:
         raise _conflict(e)

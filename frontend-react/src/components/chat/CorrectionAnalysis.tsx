@@ -34,7 +34,8 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function CorrectionAnalysis({ verdict, audience }: { verdict: AiVerdict; audience: 'reporter' | 'admin' }) {
   if (!verdict.verdict) return null;
   const v = VERDICT_TEXT[verdict.verdict];
-  const guessed = verdict.method === 'similarity' || verdict.method === 'llm_no_opinion';
+  // 낡음 칩 규칙이 임베딩으로 고른 대상도 추정(guessed, 리뷰 L3 11/11)
+  const guessed = verdict.method === 'similarity' || verdict.method === 'llm_no_opinion' || verdict.guessed === true;
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -46,7 +47,9 @@ export function CorrectionAnalysis({ verdict, audience }: { verdict: AiVerdict; 
             className="text-[11px] text-amber-600 dark:text-amber-400"
             title={verdict.method === 'llm_no_opinion'
               ? '사용자가 맞는 내용을 알려주지 않아, 질문·답변·근거의 어긋남만 보고 추정했습니다. 담당자가 확인합니다.'
-              : 'AI 판정이 원활하지 않아 의견과 가장 비슷한 근거로 추정했습니다. 담당자가 대상을 확인합니다.'}
+              : verdict.method === 'chip_rule'
+                ? '사유 "내용이 낡음"으로 근거 정정으로 바꿨는데, 고칠 근거는 신고와 가장 비슷한 것으로 추정했습니다. 담당자가 대상을 확인합니다.'
+                : 'AI 판정이 원활하지 않아 의견과 가장 비슷한 근거로 추정했습니다. 담당자가 대상을 확인합니다.'}
           >
             추정
           </span>
