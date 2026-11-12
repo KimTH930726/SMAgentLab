@@ -58,3 +58,6 @@ backend/eval_out/
 
 # DB 백업 덤프(scripts/backup-db.sh) — 운영 데이터, 저장소에 올리지 않는다
 backups/
+
+# 리허설 결과·실패 스크린샷(답 화면이 찍힘)
+scripts/rehearsal/out/

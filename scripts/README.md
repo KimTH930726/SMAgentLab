@@ -9,5 +9,6 @@
 | `update-images.sh` | 폐쇄망 버전 업데이트 |
 | `backup-db.sh` | DB 백업 |
 | `restore-db.sh` | DB 복원 |
+| `rehearsal/` | 시나리오 리허설 — 반입·PoC·큰 머지 전 사본에서 시연 흐름 통과/실패(README 참고) |
 
 자세한 배포 절차는 `docs/operations/deployment-closed-network.md` 참고.
