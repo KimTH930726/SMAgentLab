@@ -880,7 +880,7 @@ export function VocEmailPanel() {
                           <tr className="border-b border-slate-700 bg-slate-800/50">
                             <th className="text-left px-3 py-2 text-slate-400">메일함</th>
                             <th className="text-left px-3 py-2 text-slate-400">결과</th>
-                            <th className="text-left px-3 py-2 text-slate-400">수집/분석/중복/관련지식부족/IT무관/발송/발송실패</th>
+                            <th className="text-left px-3 py-2 text-slate-400" title="IT무관 = 묶음에 든 메일이 전부 IT 무관이라 Teams를 안 보낸 알림 수(11/12부터, 반복 기준 건수의 배수 자리에서만 셈)">수집/분석/중복/관련지식부족/IT무관/발송/발송실패</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -921,7 +921,7 @@ export function VocEmailPanel() {
                       <th className="text-left px-3 py-2 text-slate-400">실행 시각</th>
                       <th className="text-left px-3 py-2 text-slate-400">namespace 수</th>
                       <th className="text-left px-3 py-2 text-slate-400">성공/실패 메일함</th>
-                      <th className="text-left px-3 py-2 text-slate-400">분석/발송/관련지식부족/IT무관</th>
+                      <th className="text-left px-3 py-2 text-slate-400" title="IT무관 = 묶음에 든 메일이 전부 IT 무관이라 Teams를 안 보낸 알림 수(11/12부터, 반복 기준 건수의 배수 자리에서만 셈)">분석/발송/관련지식부족/IT무관</th>
                       <th className="text-left px-3 py-2 text-slate-400" title="같은 문제인지 LLM 확인이 실패해 반복 VOC로 묶지 못한 건수 — 0이 아니면 LLM 연결을 확인하세요">확인 실패</th>
                     </tr>
                   </thead>

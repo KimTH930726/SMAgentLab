@@ -88,15 +88,15 @@ class TestBuildTeamsMessage:
         assert "<p><b>SSGPAY DB 전환 오픈 협조 요청 메일입니다.</b></p>" in msg["text"]
 
     def test_metadata_shown_at_top_before_subject_and_content(self):
-        # 담당파트/분류/심각도/발신자를 다 읽어야 알 수 있으면 스캔하기 불편하다는
-        # 실사용 피드백 — 헤더 바로 아래, 제목·내용보다 먼저 보여준다.
+        # 분류·심각도를 다 읽어야 알 수 있으면 스캔하기 불편하다는 실사용 피드백 — 헤더 바로 아래, 제목·내용보다 먼저.
+        # 담당 파트(= 카드가 가는 채널)·발신자(전부 CS 전달 주소)는 판단에 안 써서 뺐다(11/12).
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="p",
             analysis=_base_analysis(reasoning="판단 근거 요약"),
         )
         text = msg["text"]
-        assert text.index("담당 파트") < text.index(">제목</h3>")
-        assert text.index("담당 파트") < text.index("판단 근거 요약")
+        assert text.index("분류: 시스템 오류 · 심각도:") < text.index(">제목</h3>") < text.index("판단 근거 요약")
+        assert "담당 파트" not in text and "발신자" not in text and "s@example.com" not in text
 
     def test_divider_separates_top_level_sections(self):
         msg = teams_notify.build_teams_message(
@@ -198,49 +198,27 @@ class TestBuildTeamsMessage:
         assert "&lt;script&gt;" in msg["text"]
         assert "&amp;" in msg["text"]
 
-    def test_knowledge_refs_shown_with_score(self):
+    def test_systems_in_header_refs_as_count_only(self):
+        """관련 시스템은 헤더 한 줄(11/05). 근거 내용은 카드에 안 싣고 건수만(11/12 — 앞부분 조각은 읽히지도, 오탐 확인에 쓰이지도 않았다)."""
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="p",
-            analysis=_base_analysis(knowledge_refs=[
-                {"id": 1, "snippet": "배달 중단 해제 처리 절차", "score": 0.42},
-            ]),
-        )
-        text = msg["text"]
-        assert "참고 지식(근거)" in text
-        assert "유사도 0.42" in text
-        assert "배달 중단 해제 처리 절차" in text
-
-    def test_systems_shown_in_header_and_refs(self):
-        """메일함 라우팅과 실제 문의 시스템이 달라서(11/05) — 근거 지식을 찾은 시스템을 헤더 한 줄 + 근거마다."""
-        msg = teams_notify.build_teams_message(
-            subject="s", sender="s@example.com", part="p",
-            analysis=_base_analysis(systems=["홈페이지 시스템", "딜리버스 시스템"], knowledge_refs=[
+            analysis=_base_analysis(systems=["홈페이지 시스템", "딜리버스 시스템"], knowledge_ref_ids=[1, 2, 3, 4, 5], knowledge_refs=[
                 {"id": 1, "snippet": "프리퀀시 적립 기준", "score": 0.51, "system": "홈페이지 시스템"},
-                {"id": 2, "snippet": "옛 근거(시스템 칸 없음)", "score": 0.40},
-            ]),
+                {"id": 2, "snippet": "옛 근거", "score": 0.40},
+            ], policy_refs=[{"name": "별 적립 <기준>", "snippet": "결제 금액 기준 적립", "score": 0.6, "collection": "리워드"},
+                            {"name": "별 적립 <기준>", "snippet": "같은 정책 다른 조각", "score": 0.5}]),
         )
         text = msg["text"]
         assert "관련 시스템: 홈페이지 시스템 · 딜리버스 시스템" in text
-        assert "(홈페이지 시스템 · 유사도 0.51)" in text
-        assert "(유사도 0.40)" in text   # 옛 분석(시스템 칸 없음)도 그대로 그린다
-
-    def test_policy_refs_section(self):
-        msg = teams_notify.build_teams_message(
-            subject="s", sender="s@example.com", part="p",
-            analysis=_base_analysis(policy_refs=[{"name": "별 적립 기준", "snippet": "결제 금액 기준 적립", "score": 0.6, "collection": "리워드"}]),
-        )
-        assert "참고 정책(근거)" in msg["text"] and "(리워드 · 별 적립 기준)" in msg["text"] and "결제 금액 기준 적립" in msg["text"]
-        assert "참고 정책(근거)" not in teams_notify.build_teams_message(subject="s", sender="s", part="p", analysis=_base_analysis())["text"]
+        # 지식 건수는 이력 탭 "참조 지식"과 같은 knowledge_ref_ids(카드용 조각은 상위 3개로 잘림, 리뷰 M1) · 정책은 이력에 없어 이름만(같은 정책 한 번)
+        assert "근거 지식 5건 — OpsLens VOC 이력 탭에서 확인" in text
+        assert "근거 정책: 별 적립 &lt;기준&gt;</li>" in text
+        assert "참고 지식" not in text and "참고 정책" not in text and "프리퀀시 적립 기준" not in text and "결제 금액 기준" not in text
+        assert "OpsLens VOC 이력 탭에서 확인" not in teams_notify.build_teams_message(subject="s", sender="s", part="p", analysis=_base_analysis())["text"]   # 근거 0건이면 줄 없음
 
     def test_no_systems_line_without_knowledge(self):
         msg = teams_notify.build_teams_message(subject="s", sender="s@example.com", part="p", analysis=_base_analysis(systems=[]))
         assert "관련 시스템" not in msg["text"]
-
-    def test_no_knowledge_refs_omits_section(self):
-        msg = teams_notify.build_teams_message(
-            subject="s", sender="s@example.com", part="p", analysis=_base_analysis(),
-        )
-        assert "참고 지식(근거)" not in msg["text"]
 
     def test_empty_subject_shows_placeholder(self):
         msg = teams_notify.build_teams_message(
@@ -257,57 +235,34 @@ class TestPatternInfoInTeamsMessage:
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="테스트",
             analysis=_base_analysis(category="uncertain", resolution_draft=None),
-            pattern_info={
-                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
-                "coverage": {"covered": False, "snippet": None},
-            },
+            pattern_info={"member_count": 3, "window_days": 7},
         )
         text = msg["text"]
-        assert "🔁 반복 패턴" in text
-        assert "7일간" in text
-        assert "3건째" in text
-        assert "3건마다 감지" in text
-        assert "1번째 감지" in text
+        assert "🔁 반복</b></span> — 최근 7일 유사 VOC 3건" in text
+        assert "감지" not in text   # "n건마다 · n번째 감지"는 설정 이야기라 뺐다(11/12)
 
-    def test_no_knowledge_line_only_when_not_found_and_not_covered(self):
-        """10/22: 반복인데 업무 지식에 관련 내용이 없으면 "관련 지식 없음 — 지식 공백 후보"를 카드에 — 등록된 반복 유형 지식(coverage)이
-        있으면 그게 답이므로 안 띄운다, 관련 지식이 있으면(knowledge_found True) 안 띄운다, 옛 호출(칸 없음)도 안 띄운다."""
-        def card(knowledge_found, covered):
-            pi = {"member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
-                  "coverage": {"covered": covered, "snippet": "기등록 답" if covered else None}}
+    def test_no_knowledge_line_only_when_not_found(self):
+        """10/22: 반복인데 업무 지식에 관련 내용이 없으면 "관련 지식 없음 — 지식 공백 후보" — 관련 지식이 있거나 옛 호출(칸 없음)이면 안 띄운다.
+        해결 방안 칸: 시스템 오류면 "관련 지식 없음"(분석 실패로 설명하지 않음, 리뷰 L2), 다른 분류면 분류 이유가 먼저(초안은 시스템 오류만, 11/12)."""
+        def card(knowledge_found, category="system_error"):
+            pi = {"member_count": 3, "window_days": 7}
             if knowledge_found is not None:
                 pi["knowledge_found"] = knowledge_found
             return teams_notify.build_teams_message(subject="s", sender="s@example.com", part="테스트",
-                                                    analysis=_base_analysis(category="uncertain", resolution_draft=None),
+                                                    analysis=_base_analysis(category=category, resolution_draft=None),
                                                     pattern_info=pi)["text"]
-        assert "관련 지식 없음" in card(False, False)
-        assert "관련 지식 없음" not in card(False, True)
-        assert "관련 지식 없음" not in card(True, False)
-        assert "관련 지식 없음" not in card(None, False)
-        # 해결 방안 칸도 "관련 지식 없음"으로 — 분류 탓·분석 실패로 설명하지 않는다(리뷰 L2)
-        no_kn = card(False, False)
+        assert "📭 관련 지식 없음" in card(False)
+        assert "관련 지식 없음" not in card(True)
+        assert "관련 지식 없음" not in card(None)
+        no_kn = card(False)
         assert "이 유형의 답을 지식으로 등록하면" in no_kn and "해당 없음" not in no_kn and "생성되지 않음" not in no_kn
-
-    def test_nth_detection_reflects_multiple(self):
-        # 6건째(min_count=3의 배수) — "3건마다 감지 · 2번째 감지"로 몇 번째 배수
-        # 지점인지 명확히 보여야 한다(2026-08-27, 원본 건수만으론 기준이 안 보임).
-        msg = teams_notify.build_teams_message(
-            subject="s", sender="s@example.com", part="테스트",
-            analysis=_base_analysis(category="uncertain", resolution_draft=None),
-            pattern_info={
-                "member_count": 6, "window_days": 7, "min_count": 3, "nth_detection": 2,
-                "coverage": {"covered": False, "snippet": None},
-            },
-        )
-        text = msg["text"]
-        assert "6건째" in text
-        assert "3건마다 감지 · 2번째 감지" in text
+        other = card(False, "not_it_related")
+        assert '해당 없음 — "IT 무관"' in other and "이 유형의 답을 지식으로 등록하면" not in other
 
     def test_needs_review_line_only_when_flagged(self):
         """11/03: 묶음이 기준 건수를 넘으면 "확인 필요" — 발송은 그대로, 다른 문제가 섞였을 수 있다는 표시만."""
         def card(flag):
-            pi = {"member_count": 30, "window_days": 3, "min_count": 3, "nth_detection": 10,
-                  "coverage": {"covered": False, "snippet": None}}
+            pi = {"member_count": 30, "window_days": 3}
             if flag is not None:
                 pi["needs_review"] = flag
             return teams_notify.build_teams_message(subject="s", sender="s@example.com", part="p",
@@ -320,56 +275,5 @@ class TestPatternInfoInTeamsMessage:
         msg = teams_notify.build_teams_message(
             subject="s", sender="s@example.com", part="p", analysis=_base_analysis(),
         )
-        assert "🔁 반복 패턴" not in msg["text"]
+        assert "🔁 반복" not in msg["text"]
 
-    def test_registered_resolution_used_when_llm_has_no_draft(self):
-        msg = teams_notify.build_teams_message(
-            subject="s", sender="s@example.com", part="p",
-            analysis=_base_analysis(category="uncertain", resolution_draft=None),
-            pattern_info={
-                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
-                "coverage": {"covered": True, "snippet": "재배송 또는 환불 처리를 진행합니다."},
-            },
-        )
-        text = msg["text"]
-        assert "관련 지식 · 참고" in text and "해결 방안" not in text   # 가장 가까운 지식이 해결책이라는 보장은 없다(11/06 테스트 케이스 표가 걸림)
-        assert "재배송 또는 환불 처리를 진행합니다." in text
-        assert "해당 없음" not in text
-        assert "📄" not in text   # 출처가 없으면 출처 줄도 없다
-
-    def test_registered_resolution_keeps_lines_and_source(self):
-        """11/06 가시성 — 원문 줄바꿈은 <br>로(빈 줄 빼고), 어느 문서·절인지 먼저. 글자는 줄 단위로도 이스케이프."""
-        msg = teams_notify.build_teams_message(
-            subject="s", sender="s@example.com", part="p",
-            analysis=_base_analysis(category="uncertain", resolution_draft=None),
-            pattern_info={
-                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
-                "coverage": {"covered": True, "snippet": "첫 줄\n\n  둘째 <줄>\r\n셋째…", "source": "가이드 › 예외"},
-            },
-        )
-        text = msg["text"]
-        assert "<p>📄 <b>가이드 › 예외</b></p><blockquote>첫 줄<br>둘째 &lt;줄&gt;<br>셋째…</blockquote>" in text
-
-    def test_llm_resolution_draft_takes_priority_over_pattern_coverage(self):
-        msg = teams_notify.build_teams_message(
-            subject="s", sender="s@example.com", part="p",
-            analysis=_base_analysis(category="system_error", resolution_draft="LLM이 만든 해결방안"),
-            pattern_info={
-                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
-                "coverage": {"covered": True, "snippet": "반복 유형용 등록 지식"},
-            },
-        )
-        text = msg["text"]
-        assert "LLM이 만든 해결방안" in text
-        assert "반복 유형용 등록 지식" not in text
-
-    def test_no_coverage_falls_back_to_existing_no_resolution_message(self):
-        msg = teams_notify.build_teams_message(
-            subject="s", sender="s@example.com", part="p",
-            analysis=_base_analysis(category="uncertain", resolution_draft=None),
-            pattern_info={
-                "member_count": 3, "window_days": 7, "min_count": 3, "nth_detection": 1,
-                "coverage": {"covered": False, "snippet": None},
-            },
-        )
-        assert "해당 없음" in msg["text"]

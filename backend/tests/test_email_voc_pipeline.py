@@ -150,8 +150,7 @@ class TestRunManualCollectionCategoryGate:
             AsyncMock(return_value={"cluster_id": 55, "member_count": 3}),
         )
         monkeypatch.setattr(
-            pipeline.pattern_detection, "get_cluster_coverage",
-            AsyncMock(return_value={"covered": False, "snippet": None}),
+            pipeline.pattern_detection, "cluster_all_not_it_related", AsyncMock(return_value=False),
         )
         monkeypatch.setattr(
             pipeline, "analyze_email",
@@ -170,7 +169,7 @@ class TestRunManualCollectionCategoryGate:
 
     @pytest.mark.asyncio
     async def test_not_it_related_repeated_still_notifies(self, patch_db, monkeypatch):
-        """10/22 사용자: "메일끼리 반복되면 일단 팀즈" — IT 무관 판정은 더는 발송을 막지 않고 카드 분류 표시로만 남는다.
+        """10/22 사용자: "메일끼리 반복되면 일단 팀즈" — 이번 한 건이 IT 무관이어도 묶음에 다른 분류가 섞였으면 보낸다(11/12 거름은 묶음 전부일 때만).
         (예전 테스트는 IT 무관이면 안 보냄을 확인했다 — 그 결과 이벤트 문의 반복이 한 번도 안 나갔다.)"""
         conn, _ = patch_db
         conn.fetchrow.return_value = {"id": 1}
@@ -185,6 +184,24 @@ class TestRunManualCollectionCategoryGate:
         assert mailbox_result["notified"] == 1
         pipeline.teams_notify.send_teams_notification.assert_awaited_once()
         conn.fetchrow.assert_awaited()   # 이력에도 남는다
+
+    @pytest.mark.asyncio
+    async def test_cluster_all_not_it_related_is_not_sent(self, patch_db, monkeypatch):
+        """11/12 태훈: IT 무관이 확실하면 팀즈 필요 없다 — 묶음 전부가 IT 무관이면 안 보내고 "IT무관"으로 센다(분석·묶기는 그대로)."""
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"id": 1}
+        self._patch_common(monkeypatch, category="not_it_related")
+        pipeline.pattern_detection.cluster_all_not_it_related.return_value = True
+
+        result = await pipeline.run_manual_collection(
+            "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
+        )
+
+        m = result["mailboxes"][0]
+        assert (m["analyzed"], m["skipped_not_it"], m["notified"]) == (1, 1, 0)
+        pipeline.teams_notify.send_teams_notification.assert_not_called()
+        pipeline.pattern_detection.detect_and_update_cluster.assert_awaited_once()   # 화면 집계용 묶기는 계속
+        pipeline.pattern_detection.cluster_all_not_it_related.assert_awaited_once_with(55)
 
     @pytest.mark.asyncio
     async def test_low_relevance_is_not_dropped_but_marked_no_knowledge(self, patch_db, monkeypatch):
@@ -300,8 +317,7 @@ class TestRunManualCollectionCategoryGate:
             AsyncMock(return_value={"cluster_id": 55, "member_count": 3}),
         )
         monkeypatch.setattr(
-            pipeline.pattern_detection, "get_cluster_coverage",
-            AsyncMock(return_value={"covered": False, "snippet": None}),
+            pipeline.pattern_detection, "cluster_all_not_it_related", AsyncMock(return_value=False),
         )
 
         result = await pipeline.run_manual_collection(
@@ -312,16 +328,13 @@ class TestRunManualCollectionCategoryGate:
         pipeline.teams_notify.send_teams_notification.assert_awaited_once()
         build_kwargs = pipeline.teams_notify.build_teams_message.call_args.kwargs
         assert build_kwargs["pattern_info"]["member_count"] == 3
-        assert build_kwargs["pattern_info"]["min_count"] == 3
-        assert build_kwargs["pattern_info"]["nth_detection"] == 1
 
     @pytest.mark.asyncio
     async def test_below_min_count_suppresses_teams_send(self, patch_db, monkeypatch):
         """클러스터가 있지만 min_count 미만(예: 2건, min_count=3)이면 Teams 발송
         자체를 하지 않는다 — "그 건수를 채워야 발송"이라는 실사용 피드백
         (2026-08-27): 매 건 알림이 노이즈였고, 확정 전 소량은 우연일 수 있어
-        굳이 보고할 정보가 아니다. get_cluster_coverage()도 호출하지 않는다
-        (어차피 안 보낼 메시지라 LLM 비용을 쓸 이유가 없음)."""
+        굳이 보고할 정보가 아니다. 묶음 분류 조회도 하지 않는다."""
         conn, _ = patch_db
         conn.fetchrow.return_value = {"id": 1}
         self._patch_common(monkeypatch, category="system_error")
@@ -329,7 +342,7 @@ class TestRunManualCollectionCategoryGate:
             pipeline.pattern_detection, "detect_and_update_cluster",
             AsyncMock(return_value={"cluster_id": 55, "member_count": 2}),
         )
-        monkeypatch.setattr(pipeline.pattern_detection, "get_cluster_coverage", AsyncMock())
+        monkeypatch.setattr(pipeline.pattern_detection, "cluster_all_not_it_related", AsyncMock(return_value=False))
 
         result = await pipeline.run_manual_collection(
             "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
@@ -338,7 +351,7 @@ class TestRunManualCollectionCategoryGate:
         assert result["mailboxes"][0]["notified"] == 0
         assert result["mailboxes"][0]["skipped_pattern_building"] == 1
         pipeline.teams_notify.send_teams_notification.assert_not_called()
-        pipeline.pattern_detection.get_cluster_coverage.assert_not_awaited()
+        pipeline.pattern_detection.cluster_all_not_it_related.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_confirmed_but_not_a_multiple_suppresses_teams_send(self, patch_db, monkeypatch):
@@ -352,7 +365,7 @@ class TestRunManualCollectionCategoryGate:
             pipeline.pattern_detection, "detect_and_update_cluster",
             AsyncMock(return_value={"cluster_id": 55, "member_count": 4}),
         )
-        monkeypatch.setattr(pipeline.pattern_detection, "get_cluster_coverage", AsyncMock())
+        monkeypatch.setattr(pipeline.pattern_detection, "cluster_all_not_it_related", AsyncMock(return_value=False))
 
         result = await pipeline.run_manual_collection(
             "ns", date(2026, 8, 1), date(2026, 8, 21), access_token="tok", skip_credential_resolution=True,
@@ -361,12 +374,11 @@ class TestRunManualCollectionCategoryGate:
         assert result["mailboxes"][0]["notified"] == 0
         assert result["mailboxes"][0]["skipped_pattern_repeat"] == 1
         pipeline.teams_notify.send_teams_notification.assert_not_called()
-        pipeline.pattern_detection.get_cluster_coverage.assert_not_awaited()
+        pipeline.pattern_detection.cluster_all_not_it_related.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_multiple_of_min_count_sends_with_coverage(self, patch_db, monkeypatch):
-        """6건째(min_count=3의 배수)는 실제로 발송하고, 이 시점에만 커버리지를
-        조회한다."""
+    async def test_multiple_of_min_count_sends(self, patch_db, monkeypatch):
+        """6건째(min_count=3의 배수)는 실제로 발송하고, 이 시점에만 묶음 분류(전부 IT 무관인가)를 본다."""
         conn, _ = patch_db
         conn.fetchrow.return_value = {"id": 1}
         self._patch_common(monkeypatch, category="system_error")
@@ -375,8 +387,7 @@ class TestRunManualCollectionCategoryGate:
             AsyncMock(return_value={"cluster_id": 55, "member_count": 6}),
         )
         monkeypatch.setattr(
-            pipeline.pattern_detection, "get_cluster_coverage",
-            AsyncMock(return_value={"covered": False, "snippet": None}),
+            pipeline.pattern_detection, "cluster_all_not_it_related", AsyncMock(return_value=False),
         )
 
         result = await pipeline.run_manual_collection(
@@ -386,15 +397,13 @@ class TestRunManualCollectionCategoryGate:
         assert result["mailboxes"][0]["notified"] == 1
         build_kwargs = pipeline.teams_notify.build_teams_message.call_args.kwargs
         assert build_kwargs["pattern_info"]["member_count"] == 6
-        assert build_kwargs["pattern_info"]["min_count"] == 3
-        assert build_kwargs["pattern_info"]["nth_detection"] == 2
         assert build_kwargs["pattern_info"]["needs_review"] is False   # 6건은 기준(기본 20) 이하
-        pipeline.pattern_detection.get_cluster_coverage.assert_awaited_once()
+        pipeline.pattern_detection.cluster_all_not_it_related.assert_awaited_once_with(55)
 
     @pytest.mark.asyncio
     async def test_needs_review_when_cluster_exceeds_review_size(self, monkeypatch):
         """11/03: 묶음 건수가 기준(email_pattern_review_size)을 넘을 때만 카드에 확인 필요 — 같으면 아직 아님, 0이면 끔."""
-        monkeypatch.setattr(pipeline.pattern_detection, "get_cluster_coverage", AsyncMock(return_value={"covered": False, "snippet": None}))
+        monkeypatch.setattr(pipeline.pattern_detection, "cluster_all_not_it_related", AsyncMock(return_value=False))
         monkeypatch.setattr(pipeline.teams_notify, "build_teams_message", MagicMock(return_value={"text": "x"}))
         monkeypatch.setattr(pipeline.teams_notify, "send_teams_notification", AsyncMock(return_value=(True, None)))
         monkeypatch.setattr(pipeline, "mark_notify_result", AsyncMock())
@@ -427,7 +436,7 @@ class TestRunManualCollectionCategoryGate:
         assert result["mailboxes"][0]["notified"] == 0
         assert result["mailboxes"][0]["skipped_no_pattern"] == 1
         pipeline.teams_notify.send_teams_notification.assert_not_called()
-        pipeline.pattern_detection.get_cluster_coverage.assert_not_awaited()
+        pipeline.pattern_detection.cluster_all_not_it_related.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_confirm_failure_counted_separately(self, patch_db, monkeypatch):

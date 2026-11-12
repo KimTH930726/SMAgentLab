@@ -143,7 +143,7 @@ LLM_FAILED_PREFIX = "⚠️ LLM 호출 실패"
 _VALID_CATEGORIES = {"system_error", "user_mistake", "uncertain", "not_it_related"}
 _VALID_SEVERITIES = {"low", "medium", "high", "urgent"}
 _KNOWLEDGE_SNIPPET_LEN = 60
-_MAX_KNOWLEDGE_REFS_SHOWN = 3  # Teams 카드에 다 보여주면 너무 길어져서 상위 N개만
+_MAX_KNOWLEDGE_REFS_SHOWN = 3  # 근거 조각은 상위 N개만(재처리 비교·정책 이름용 — 카드엔 11/12부터 조각을 안 싣는다)
 
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
@@ -392,7 +392,7 @@ async def analyze_email(
         "knowledge_refs": knowledge_refs,
         # 근거로 쓴 지식이 있는 시스템(근거 순, 중복 없음) — 메일함 라우팅과 실제 문의 시스템이 달라 카드에 표시(11/05)
         "systems": list(dict.fromkeys(r.namespace for r in matched)),
-        "policy_refs": policy_refs,   # 정책 근거(채팅과 같은 경로, 11/05) — 카드 "참고 정책(근거)"
+        "policy_refs": policy_refs,   # 정책 근거(채팅과 같은 경로, 11/05) — 카드 "근거 정책: 이름"(11/12)
         "resolution_draft": resolution_draft,
         "draft_grounded": draft_grounded,   # 초안이 참고 지식 근거인가(True/False, None = 초안 없음·확인 실패) — 카드 제목이 갈린다
         "reasoning": reasoning,

@@ -445,7 +445,10 @@ async def _resolve_coverage(conn, cluster_id: int, row) -> dict:
 
 
 async def get_cluster_coverage(ns_id: int, cluster_id: int) -> dict:
-    """반복 패턴 Teams 알림 발송 시점에 그 클러스터의 해결방안 등록 여부를 확인.
+    """클러스터 하나의 커버리지(가장 가까운 등록 지식 + LLM 확인). 11/12부터 Teams 카드는 안 쓴다 — 남은 호출부는
+    eval_out/voc_boundary_snapshot.py(VOC↔지식 경계 스냅샷). 화면 목록은 list_clusters가 같은 _resolve_coverage를 쓴다.
+
+    (옛 설명) 반복 패턴 Teams 알림 발송 시점에 그 클러스터의 해결방안 등록 여부를 확인.
 
     "반복 발생했다"는 사실만 알리고 끝내면 받는 사람이 "그래서 뭘 어떻게 해야 하냐"를
     또 물어보게 된다는 게 실사용 피드백이라, 이미 등록된 해결방안이 있으면 카드에
@@ -479,6 +482,16 @@ def _source_label(heading_path: Optional[list], source_file: Optional[str]) -> O
     if not parts and source_file and source_file.strip():
         parts = [source_file.strip()]
     return " › ".join(parts) or None
+
+
+async def cluster_all_not_it_related(cluster_id: int) -> bool:
+    """묶음에 든 메일이 하나 이상이고 전부 IT 무관(not_it_related)인가 — 반복 알림을 거를 때(11/12, pipeline.notify_cluster)."""
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            "SELECT count(*) AS n, count(*) FILTER (WHERE category = 'not_it_related') AS nit FROM ops_email_analysis WHERE voc_cluster_id = $1",
+            cluster_id,
+        )
+    return bool(row) and row["n"] > 0 and row["n"] == row["nit"]
 
 
 async def list_clusters(namespace: str) -> list[dict]:

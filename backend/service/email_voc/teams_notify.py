@@ -66,11 +66,6 @@ def _esc(value: Optional[str]) -> str:
     return html.escape(value or "", quote=False)
 
 
-def _multiline(value: str) -> str:
-    """원문 줄바꿈을 카드에서도 줄바꿈으로 — HTML이라 줄바꿈 글자는 공백 하나로 붙는다. 빈 줄은 뺀다."""
-    return "<br>".join(_esc(line.strip()) for line in value.splitlines() if line.strip())
-
-
 def _section_title(text: str) -> str:
     return f'<h3 style="font-size:17px">{text}</h3>'
 
@@ -87,9 +82,8 @@ def build_teams_message(
     style=color)로 최대한 시각적 구분을 준다.
 
     pattern_info: 호출부(pipeline.py)가 "이번 건에서 실제로 반복 패턴 알림을 실을지"
-    이미 판단을 끝낸 뒤에만 채워서 넘긴다({"member_count", "window_days", "min_count",
-    "nth_detection", "coverage"}). min_count 미만(확정 전)이거나 min_count의 배수가
-    아닌 건은 pipeline.py가 애초에
+    이미 판단을 끝낸 뒤에만 채워서 넘긴다({"member_count", "window_days", "knowledge_found", "needs_review"}).
+    반복 확정 전·배수 지점이 아닌 건·묶음 전부 IT 무관인 건은 pipeline.py가 애초에
     Teams 발송 자체를 하지 않으므로(2026-08-27 — 매 건 알림이 노이즈였다는 실사용
     피드백) 이 함수는 "표시할지 말지"가 아니라 "이미 표시하기로 정해진 걸 어떻게
     그릴지"만 담당한다. 처음엔 "🔁 반복 패턴 감지"를 완전히 별도의 Teams 메시지로
@@ -116,14 +110,10 @@ def build_teams_message(
     summary = analysis.get("reasoning")
     summary_html = f"<p><b>{_esc(summary)}</b></p>" if summary else ""
 
-    # 담당파트/분류/심각도/발신자 같은 핵심 정보는 내용을 다 읽어야 알 수 있으면
-    # 스캔하기 불편하다는 실사용 피드백 — 헤더 바로 아래, 제목보다도 먼저 보여준다.
-    detail_items = [
-        f"담당 파트: {_esc(part) or '-'}",
-        f"분류: {_esc(_CATEGORY_LABEL.get(category, category))}",
-        f'심각도: <span style="color:{color}"><b>{_esc(_SEVERITY_LABEL.get(severity, severity))}</b></span>',
-        f"발신자: {_esc(sender) or '-'}",
-    ]
+    # 카드 위 요약 줄은 판단에 쓰는 것만(11/12 태훈 "쓸모있는 데이터만") — 담당 파트(= 이 카드가 가는 채널)·발신자(14일 194건 전부 CS 전달 주소 하나)는
+    # 뺐다. 둘 다 이력 탭엔 그대로. sender·part 인자는 호출부 호환으로 받기만 한다.
+    severity_html = f'<span style="color:{color}"><b>{_esc(_SEVERITY_LABEL.get(severity, severity))}</b></span>'
+    detail_items = [f"분류: {_esc(_CATEGORY_LABEL.get(category, category))} · 심각도: {severity_html}"]
     if analysis.get("systems"):
         # 메일함 라우팅과 실제 문의 시스템이 다를 수 있어(11/05 실측 대부분 다름) — 근거 지식을 찾은 시스템을 보여준다
         detail_items.append(f"관련 시스템: {_esc(' · '.join(analysis['systems']))}")
@@ -132,22 +122,24 @@ def build_teams_message(
             '<span style="color:#DC2626"><b>⚠️ 오배치 의심</b></span> — 이 메일함 담당 업무와 내용이 다를 수 있습니다'
         )
     if pattern_info:
-        # #D97706(high 심각도)이나 #DC2626(urgent/오배치)과 겹치면 "심각도 신호"로
-        # 오인될 수 있어 — 반복 여부는 심각도와 무관한 별개 정보라 앱 강조색(indigo,
-        # CLAUDE.md 팔레트)을 대신 쓴다. min_count의 배수마다만 이 알림이 뜨므로
-        # (pipeline.py 참고), "몇 건마다 몇 번째로 감지된 알림인지"를 같이 보여줘야
-        # 관리자가 설정한 배수 조건이 실제로 몇 번 발동했는지 카드만 보고 알 수 있다
-        # (2026-08-27, 실사용 피드백 — 원본 건수만으론 "3건마다"라는 기준이 안 보임).
+        # 반복은 심각도와 별개 정보라 심각도 색(#D97706·#DC2626) 대신 앱 강조색(indigo). "n건마다 · n번째 감지"는 설정 이야기라 뺐다(11/12)
         detail_items.append(
-            f'<span style="color:#6366F1"><b>🔁 반복 패턴</b></span> — 최근 {pattern_info["window_days"]}일간 '
-            f'유사한 VOC {pattern_info["member_count"]}건째 발생 '
-            f'({pattern_info["min_count"]}건마다 감지 · {pattern_info["nth_detection"]}번째 감지)'
+            f'<span style="color:#6366F1"><b>🔁 반복</b></span> — 최근 {pattern_info["window_days"]}일 유사 VOC {pattern_info["member_count"]}건'
         )
         if pattern_info.get("needs_review"):
             detail_items.append("⚠️ 확인 필요 — 묶음 건수가 많아 다른 문제가 섞였을 수 있습니다")
-        if pattern_info.get("knowledge_found") is False and not pattern_info.get("coverage", {}).get("covered"):
+        if pattern_info.get("knowledge_found") is False:
             # 반복되는데 업무 지식에 관련 내용이 없음 = 지식 공백 후보(10/22) — 담당자가 지식을 만들 차례라는 신호
             detail_items.append("📭 관련 지식 없음 — 지식 공백 후보(이 유형의 답을 지식으로 등록해 주세요)")
+    # 근거 내용은 카드에 싣지 않는다(11/12) — 앞부분 몇십 자로는 오탐을 알아챌 수 없고 읽히지도 않았다.
+    # 지식은 건수만(이력 탭 "참조 지식"과 같은 knowledge_ref_ids — 카드용 knowledge_refs는 상위 3개로 잘려 숫자가 어긋남, 리뷰 M1).
+    # 정책 근거는 DB에 안 남아 이력 탭에 없다 — 짧은 정책 이름만 싣는다.
+    n_knowledge = len(analysis.get("knowledge_ref_ids") or [])
+    if n_knowledge:
+        detail_items.append(f"근거 지식 {n_knowledge}건 — OpsLens VOC 이력 탭에서 확인")
+    policy_names = list(dict.fromkeys(r["name"] for r in analysis.get("policy_refs") or [] if r.get("name")))
+    if policy_names:
+        detail_items.append(f"근거 정책: {_esc(' · '.join(policy_names))}")
     if urgent and oncall_contact_name:
         detail_items.append(f"온콜 담당자: {_esc(oncall_contact_name)} — 필요 시 직접 전화 부탁드립니다")
     detail_list = "<ul>" + "".join(f"<li>{item}</li>" for item in detail_items) + "</ul>"
@@ -164,65 +156,28 @@ def build_teams_message(
         f"{_section_title('내용')}{body_html}{summary_html}",
     ]
 
-    # resolution_draft는 category가 system_error일 때만 LLM에게 생성을 지시한다
-    # (사용자 실수/판단 보류는 "고칠 버그"가 없으니 해결 방안 자체가 성립하지 않음 — 11/05 분류 무관 초안을
-    # 로컬 측정해 보니 19건 중 12건이 지식에 없는 안내를 지어내 안 함).
-    # 이 이유를 안 적으면 알림 받은 사람이 "왜 해결방안이 없지?"를 매번 헷갈려해서
-    # (실사용 중 실제로 질문 받음) 없는 이유를 한 줄로 명시한다.
-    # pattern_info로 이미 등록된 지식이 있으면(get_cluster_coverage) LLM이 이번 건
-    # 자체에 대해 resolution_draft를 못 만든 경우(uncertain/user_mistake 등)에도
-    # "이 반복 유형에 대한 답은 이미 있다"를 보여줄 수 있다 — resolution_draft보다는
-    # 후순위(개별 LLM 판단이 이 VOC에 더 특화된 답이므로 우선), 없을 때만 대체한다.
-    coverage = (pattern_info or {}).get("coverage") or {}
-    pattern_snippet = coverage.get("snippet") if coverage.get("covered") else None
+    # 해결 방안 칸은 항상 — 없으면 이유를 한 줄로(실사용 중 "왜 없지?" 질문, 11/12 반복 유형 지식이 이유 줄 자리를 차지해 IT 무관인데 이유가 안 보였음).
+    # 초안은 system_error일 때만 만든다(11/05 분류 무관 초안 19건 중 12건 지어냄).
     resolution_draft = analysis.get("resolution_draft")
+    llm_failed = (analysis.get("reasoning") or "").startswith(LLM_FAILED_PREFIX)
     if resolution_draft:
-        # 참고 지식 근거로 확인된 초안만 "해결 방안" — 아니면(근거 없음·확인 실패) AI 제안으로 구분해 단정하지 않는다(11/05, 팀장 확인 카드에서
-        # 참고 지식에 없는 "유관부서 협조·소급 적립"이 해결 방안으로 나감)
+        # 참고 지식 근거로 확인된 초안만 "해결 방안" — 아니면 AI 제안으로 구분해 단정하지 않는다(11/05)
         title = DRAFT_TITLES.get(analysis.get("draft_grounded"), DRAFT_TITLES[None])
         sections.append(f"{_section_title(title)}<blockquote>{_esc(resolution_draft)}</blockquote>")
-    elif pattern_snippet:
-        # 제목은 "관련 지식 · 참고"(11/06) — 가장 가까운 지식이 해결책이라는 보장은 없다(같은 기능의 테스트 케이스 표가 "해결 방안"으로 나감).
-        # 원문 앞부분을 한 덩어리로 붙이면 읽기 어려웠다 — 어느 문서·절인지 먼저, 원문 줄바꿈은 살린다
-        source_html = f'<p>📄 <b>{_esc(coverage["source"])}</b></p>' if coverage.get("source") else ""
-        sections.append(f"{_section_title('관련 지식 · 참고')}{source_html}<blockquote>{_multiline(pattern_snippet)}</blockquote>")
-    elif pattern_info and pattern_info.get("knowledge_found") is False:
-        # 관련 지식이 없어 초안을 비운 경우 — 분류 탓("해당 없음")이나 분석 실패("생성되지 않음")로 설명하지 않는다(리뷰 L2)
-        sections.append(f'{_section_title("해결 방안")}<blockquote>관련 지식 없음 — 이 유형의 답을 지식으로 등록하면 다음부터 함께 나갑니다.</blockquote>')
-    elif category != "system_error" and not (analysis.get("reasoning") or "").startswith(LLM_FAILED_PREFIX):
-        # 심각도 팔레트(low/medium/high/urgent) 색상과 겹치지 않도록 별도 색상
-        # 없이 순수 텍스트로만 표시 — 색상을 넣으면 무관한 심각도 신호로 오인될 수 있다.
+    elif category != "system_error" and not llm_failed:
+        # 심각도 색과 겹치지 않게 순수 텍스트로
         category_label = _esc(_CATEGORY_LABEL.get(category, category))
         sections.append(
             f'{_section_title("해결 방안")}<blockquote>해당 없음 — "{category_label}"(으)로 판단되어 해결 방안을 생성하지 않았습니다.</blockquote>'
         )
+    elif pattern_info and pattern_info.get("knowledge_found") is False:
+        # 시스템 오류인데 관련 지식이 없어 초안을 비운 경우 — 분석 실패로 설명하지 않는다(리뷰 L2)
+        sections.append(f'{_section_title("해결 방안")}<blockquote>관련 지식 없음 — 이 유형의 답을 지식으로 등록하면 다음부터 함께 나갑니다.</blockquote>')
     else:
-        # category=system_error인데도 resolution_draft가 없거나, LLM 호출 자체가 실패한 경우(분류가 uncertain으로 깔려
-        # "판단 보류로 판단되어"로 나가던 것 — 리뷰 11/05) — 분석이 불완전했을 가능성이 높으므로 수동 확인을 유도한다.
+        # system_error인데 초안이 없거나 LLM 호출 자체가 실패한 경우 — 수동 확인을 유도한다
         sections.append(
             f'{_section_title("해결 방안")}<blockquote>⚠️ 생성되지 않음 — 분석이 불완전했을 수 있습니다. 이력 탭에서 판단 근거를 확인해 주세요.</blockquote>'
         )
-
-    # 참고 지식(근거) — 맨 아래 배치: 판단 결과(내용/해결방안)를 먼저 보여주고,
-    # 그 근거는 필요할 때 스크롤해서 확인하는 부가 정보로 취급한다. 관련지식 필터를
-    # 통과했어도 실제로는 무관한 지식이 우연히 매칭되는 오탐이 실사용 중 발견돼(예:
-    # 완전히 다른 도메인인데 "실패/오류" 같은 일반 단어만 겹침), 근거를 노출해두면
-    # 그런 오탐을 사람이 바로 알아챌 수 있다.
-    knowledge_refs = analysis.get("knowledge_refs") or []
-    if knowledge_refs:
-        ref_items = "".join(
-            f'<li><span style="color:#6B7280">({_esc(r["system"]) + " · " if r.get("system") else ""}유사도 {r["score"]:.2f})</span> {_esc(r["snippet"])}</li>'
-            for r in knowledge_refs
-        )
-        sections.append(f"{_section_title('참고 지식(근거)')}<ul>{ref_items}</ul>")
-    # 정책 근거(채팅과 같은 검색 경로, 11/05) — 지식 근거와 같은 이유로 노출
-    policy_refs = analysis.get("policy_refs") or []
-    if policy_refs:
-        ref_items = "".join(
-            f'<li><span style="color:#6B7280">({_esc(r["collection"]) + " · " if r.get("collection") else ""}{_esc(r["name"])})</span> {_esc(r["snippet"])}</li>'
-            for r in policy_refs
-        )
-        sections.append(f"{_section_title('참고 정책(근거)')}<ul>{ref_items}</ul>")
 
     return {"text": f"<br>{_DIVIDER}<br>".join(sections)}
 

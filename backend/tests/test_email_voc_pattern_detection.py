@@ -670,3 +670,16 @@ class TestSignatureBoundary:
         await pattern_detection.detect_and_update_cluster(1, 4000, "배달 지연", [0.1, 0.2], _NOW, _SETTINGS)
         assert conn.fetchrow.call_args_list[0].args[5] == 0
         assert conn.fetch.call_args_list[0].args[6] == ""
+
+
+class TestClusterAllNotItRelated:
+    """11/12 반복 알림 거름 — 묶음에 든 메일이 하나 이상이고 전부 IT 무관일 때만 True(하나라도 다른 분류면 보낸다)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("n,nit,expected", [(3, 3, True), (3, 2, False), (0, 0, False)])
+    async def test_all_members(self, patch_db, n, nit, expected):
+        conn, _ = patch_db
+        conn.fetchrow.return_value = {"n": n, "nit": nit}
+        assert await pattern_detection.cluster_all_not_it_related(55) is expected
+        sql, cid = conn.fetchrow.await_args.args
+        assert cid == 55 and "voc_cluster_id = $1" in sql and "category = 'not_it_related'" in sql

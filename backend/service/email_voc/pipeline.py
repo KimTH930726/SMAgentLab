@@ -130,14 +130,14 @@ async def analyze_message(namespace: str, part: Optional[str], msg: dict, releva
     # 지식 관련도가 기준 이상이거나 정책 근거가 하한을 넘으면 "관련 지식 있음"(11/05 — 채팅처럼 정책도 근거)
     knowledge_found = relevance.top_score >= relevance_min_score or relevance.policy_found
     if not knowledge_found:
-        # 관련 지식이 없으면 LLM에도 빈 근거로 — 무관한 지식이 문맥·카드 "참고 지식"에 끼지 않게(리뷰 M1: 근거 고르는 점수는 부풀려져
+        # 관련 지식이 없으면 LLM에도 빈 근거로 — 무관한 지식이 문맥·근거(이력 탭·카드 근거 건수)에 끼지 않게(리뷰 M1: 근거 고르는 점수는 부풀려져
         # 관련도 미달 메일도 근거 목록이 거의 늘 찼다) + 토큰 절약. 반복 묶기용 원문 벡터(query_vec)는 그대로 쓴다.
         relevance = dataclasses.replace(relevance, results=[], context="")
     analysis = await analyze_email(namespace, msg["subject"], msg["body"], part=part, precomputed=relevance)
     if not knowledge_found:
         analysis = {**analysis, "knowledge_ref_ids": [], "knowledge_refs": [], "systems": [], "policy_refs": [], "resolution_draft": None, "draft_grounded": None}
     elif relevance.top_score < relevance_min_score:
-        # 정책 근거로만 "있음" — 기준 미달 지식은 카드 "참고 지식"·관련 시스템에 안 싣는다(위 M1과 같은 이유). 문맥은 채팅과 같이 그대로
+        # 정책 근거로만 "있음" — 기준 미달 지식은 근거·관련 시스템에 안 싣는다(위 M1과 같은 이유). 문맥은 채팅과 같이 그대로
         analysis = {**analysis, "knowledge_ref_ids": [], "knowledge_refs": [], "systems": []}
     # 반복 묶기는 원문 임베딩 대신 LLM이 뽑은 정규화 요약(issue_signature)을 임베딩해 쓴다(2026-08-27) — 같은 유형이어도 발신자마다
     # 표현이 달라 원문끼리는 기준을 못 넘는 게 실측 확인됐다("로그인이 안돼요" vs "앱 접속이 안됩니다"). 요약이 없으면(LLM 실패 등) 원문으로 폴백.
@@ -161,7 +161,7 @@ async def cluster_and_notify(ns_id: int, routing: dict, msg: dict, analysis_id: 
         ns_id, analysis_id, msg["subject"], pattern_embedding, occurred_at, settings, body=msg.get("body") or "",
     )
 
-    # "IT 무관" 판정은 더 이상 발송을 막지 않는다(10/22 사용자: 반복되면 일단 팀즈) — 카드의 분류 표시로만 남는다.
+    # "IT 무관" 한 건 판정은 발송을 막지 않는다(10/22 사용자: 반복되면 일단 팀즈) — 묶음 전부가 IT 무관일 때만 notify_cluster가 거른다(11/12).
     # 단독 메일은 아래 반복 조건 때문에 여전히 안 나간다(8/27 "반복일 때만" 원칙 유지).
 
     # 발송 여부 자체를 "반복 패턴 확정 여부" 하나로 완전히 통합했다
@@ -193,13 +193,13 @@ async def notify_cluster(ns_id: int, routing: dict, msg: dict, analysis_id: int,
                          member_count: int, knowledge_found: bool, settings: dict) -> str:
     """반복 묶음 하나를 팀즈 카드 1건으로 — 카드 포맷은 기존 개별 VOC 알림(build_teams_message) 그대로, 그 안에 반복 정보를 얹는다.
     파이프라인(배수 지점마다)과 재처리(밀린 메일은 묶음당 최종 건수로 1건)가 같이 쓴다."""
-    min_count = settings["email_pattern_min_count"]
+    # 묶음에 든 메일이 전부 IT 무관이면 보내지 않는다(11/12 태훈 "IT 무관이 확실하면 팀즈 필요 없다") — 한 건 판정은 LLM이 틀릴 수 있어
+    # 같은 유형이 쌓여도 매번 IT 무관일 때만 확실로 본다. 하나라도 다른 분류면 보낸다. 묶음 집계(화면)는 그대로. 14일 실측 194건 중 72건 해당.
+    if await pattern_detection.cluster_all_not_it_related(cluster_id):
+        return "skipped_not_it"
     pattern_info = {
         "member_count": member_count,
         "window_days": settings["email_pattern_window_days"],
-        "min_count": min_count,
-        "nth_detection": member_count // min_count,
-        "coverage": await pattern_detection.get_cluster_coverage(ns_id, cluster_id),
         "knowledge_found": knowledge_found,
         # 묶음이 기준보다 크면 다른 문제가 섞였을 가능성이 크다(11/03 실측: 20건 이상 묶음은 같은 문제 쌍 15.6%) — 발송은 그대로, 카드에 표시
         "needs_review": 0 < settings.get("email_pattern_review_size", 20) < member_count,
@@ -276,7 +276,7 @@ async def run_manual_collection(
         result = {
             "mailbox_upn": routing["mailbox_upn"], "part": routing["part"],
             "ok": False, "error": None, "fetched": 0, "analyzed": 0,
-            # 관련도·IT 무관으로 건너뛰는 일은 10/22부터 없다 — 두 칸은 수집 이력 표·DB 칸(옛 기록)과 모양을 맞추려 0으로 남긴다
+            # 관련도로 건너뛰는 일은 10/22부터 없다(0, 옛 기록과 모양 맞춤) · skipped_not_it = 묶음 전부 IT 무관이라 안 보냄(11/12)
             "skipped_duplicate": 0, "skipped_low_relevance": 0, "skipped_not_it": 0,
             "skipped_no_pattern": 0, "skipped_pattern_building": 0, "skipped_pattern_repeat": 0,
             "skipped_confirm_failed": 0,
@@ -358,6 +358,9 @@ async def run_manual_collection(
             elif outcome == "skipped_pattern_repeat":
                 result["analyzed"] += 1
                 result["skipped_pattern_repeat"] += 1
+            elif outcome == "skipped_not_it":
+                result["analyzed"] += 1
+                result["skipped_not_it"] += 1
             elif outcome == "skipped_confirm_failed":
                 result["analyzed"] += 1
                 result["skipped_confirm_failed"] += 1
