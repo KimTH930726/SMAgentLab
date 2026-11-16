@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 
 API = "http://localhost:8000"
-NS = "zz원장동시" + time.strftime("%H%M%S")
+NS = "zz원장동시" + time.strftime("%H%M%S")   # 시스템 컬렉션으로 — 정책 컬렉션(area 기본값)엔 운영 지식을 못 넣는다(11/02 개편, 11/16 시나리오 실패로 발견)
 
 
 def call(method, path, body=None, tok=None):
@@ -45,7 +45,7 @@ def wait(job_id):
 
 
 tok = call("POST", "/api/auth/login", {"username": "admin", "password": "1111"})[1]["access_token"]
-assert call("POST", "/api/namespaces", {"name": NS, "description": "원장 동시 확정 시나리오(자동 삭제)"}, tok)[0] == 200
+assert call("POST", "/api/namespaces", {"name": NS, "description": "원장 동시 확정 시나리오(자동 삭제)", "area": "system"}, tok)[0] == 200
 ok = 0
 try:
     ns_id = sql(f"SELECT id FROM ops_namespace WHERE name = '{NS}'")

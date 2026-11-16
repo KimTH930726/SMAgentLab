@@ -13,10 +13,10 @@ helpers = load("_rdb_real_chat_helpers", "service/chat/helpers.py")
 NS = "시험_캐시근거 시스템"
 
 
-async def _policy(conn, ns_id, status="active"):
+async def _policy(conn, ns_id, status="active", pipeline_version=None):
     return await conn.fetchval(
-        "INSERT INTO policy_item (namespace_id, policy_name, raw_body, content_hash, status, logical_id, version) "
-        "VALUES ($1, '시험_정책', '본문', md5(random()::text), $2, NULL, 1) RETURNING id", ns_id, status)
+        "INSERT INTO policy_item (namespace_id, policy_name, raw_body, content_hash, status, logical_id, version, pipeline_version) "
+        "VALUES ($1, '시험_정책', '본문', md5(random()::text), $2, NULL, 1, $3) RETURNING id", ns_id, status, pipeline_version)
 
 
 def _payload(k_ids, p_ids):
@@ -58,6 +58,19 @@ def test_pending_review_evidence_is_not_alive():
         return await helpers.cached_evidence_alive(_payload([k], []))
 
     assert run(scenario, modules=[helpers]) is False
+
+
+def test_policy_alive_follows_search_visibility():
+    """정책 근거는 검색과 같은 기준(visibility.searchable_sql) — 옛 엑셀 경로의 검토 대기는 검색에 나오므로 살아 있음,
+    v0(통째) 검토 대기는 승인 전이라 검색에 안 나오므로 버림. 'active'만 보던 때는 앞의 것도 버려 적중마다 새로 답했다(리뷰 B3 11/16)."""
+    async def scenario(conn):
+        n = await ns(conn, NS)
+        old_path = await _policy(conn, n, "pending_review", None)
+        v0 = await _policy(conn, n, "pending_review", "v0_whole")
+        return {"old_path_pending": await helpers.cached_evidence_alive(_payload([], [old_path])),
+                "v0_pending": await helpers.cached_evidence_alive(_payload([], [v0]))}
+
+    assert run(scenario, modules=[helpers]) == {"old_path_pending": True, "v0_pending": False}
 
 
 def test_check_failure_drops_cache():

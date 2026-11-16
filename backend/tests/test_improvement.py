@@ -214,6 +214,140 @@ class TestStaleChipRule:
             out = await svc._identify(cands, ctx, "2023년 작업은 이미 끝났어요", user_reason="stale")
         assert out[1] == 2 and not near.await_count
 
+    @pytest.mark.parametrize("token,text,hit", [
+        ("30", "보관 30일", True), ("30", "30%", True), ("30", "끝은 30.", True), ("2023", "2023년 10월", True),
+        ("03:30", "03:30 이전", True),
+        ("30", "2030년 계획", False), ("30", "03:30 이전", False), ("30", "버전 1.30", False), ("30", "30.5일", False),
+        ("30", "근거 [#20130]", False), ("30", "[문서 #1, #130]", False), ("30", "맨 번호 #20130", False),
+        ("300", "수수료 1,300원", False), ("1,300", "수수료 1,300원", True), ("300", "수수료 300원", True), ("1,300", "수수료 300원", False),
+        ("2,000", "한도 2000원", True),
+        # 점 날짜·소수·버전은 덩어리째(재리뷰 2회 — 쪼개 뽑던 때는 똑같은 글끼리도 안 맞았다)
+        ("2023.10.01", "시행일 2023.10.01", True), ("30.5", "보관 30.5일", True), ("2.10", "버전 v2.10 기준", True),
+        ("2023", "시행일 2023.10.06", True), ("10", "시행일 2023.10.06", False), ("2023.10.01", "시행일 2023.10.02", False),
+    ])
+    def test_number_match_is_bounded_and_ignores_citation_marks(self, token, text, hit):
+        """숫자 대조는 숫자 경계로 — "30"이 2030·03:30·근거 번호 [#20130]에 걸리지 않게(리뷰 B1 11/16)."""
+        assert svc._has_number({token}, text) is hit
+
+    @pytest.mark.parametrize("report,tokens", [
+        ("2023.10.01 기준이에요", {"2023.10.01"}), ("30.5일이 아니에요", {"30.5"}), ("1,300원은 옛날", {"1,300"}),
+        ("03:30 이전으로", {"03:30"}), ("3일 아니고 14일", {"14"}), ("v2.10 낡음", {"2.10"}),
+    ])
+    def test_report_numbers_are_whole_runs(self, report, tokens):
+        assert svc._report_numbers(report) == tokens
+
+    @pytest.mark.asyncio
+    async def test_dotted_date_only_in_policy_targets_that_policy(self):
+        """재리뷰 2회 재현: 낡은 값 2023.10.01이 정책 서술에만 — 쪼개 뽑던 때는 아무 데도 안 맞아 운영 지식 추정으로 갔다."""
+        pn = {**self._PN, "original": {"policy_name": "시행", "chunk_text": "시행일 2023.10.01", "raw_body": "시행일 2023.10.01"}}
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify([self._KN, pn], {}, "2023.10.01 기준은 옛날이에요", user_reason="stale")
+        assert out[0] == "policy_narrative" and out[5]["chip_pick"] == "content"
+
+    @pytest.mark.asyncio
+    async def test_number_inside_citation_or_longer_number_does_not_pick_that_doc(self):
+        """리뷰 B1 재현: 신고 "30일" · 답 줄엔 [#20130]만(본문 2030년) → 예전엔 #20130을 "답 줄 근거"로(추정 표시 없이) 골랐다.
+        이제 그 줄은 숫자가 안 맞고, 30일이 실제로 든 #2가 대상."""
+        cands = [{"key": "k-20130", "target_type": "knowledge", "target_id": 20130, "target_sub_id": None, "label": "문서 #20130",
+                  "original": {"content": "보관 정책은 2030년까지 유지"}},
+                 {"key": "k-2", "target_type": "knowledge", "target_id": 2, "target_sub_id": None, "label": "문서 #2",
+                  "original": {"content": "로그 보관 30일"}}]
+        ctx = {"answer": "보관은 2030년까지예요 [#20130]"}
+        near = AsyncMock(return_value=0)
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)), \
+             patch.object(svc, "_nearest_candidate", near):
+            out = await svc._identify(cands, ctx, "30일로 바뀌었어요", user_reason="stale")
+        assert out[1] == 2 and out[5]["chip_pick"] == "content" and not near.await_count
+
+    @pytest.mark.asyncio
+    async def test_no_bounded_match_is_marked_guessed_not_answer_line(self):
+        """숫자가 표식 안에만 걸리던 1건 — 예전엔 answer_line(확정처럼 보임), 이제 추정."""
+        cands = [{"key": "k-20130", "target_type": "knowledge", "target_id": 20130, "target_sub_id": None, "label": "문서 #20130",
+                  "original": {"content": "보관 정책은 2030년까지 유지"}}]
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify(cands, {"answer": "보관은 2030년까지 [#20130]"}, "30일이에요", user_reason="stale")
+        assert out[1] == 20130 and out[5]["chip_pick"] == "embedding" and out[5]["guessed"] is True
+
+    _KN = {"key": "k-1", "target_type": "knowledge", "target_id": 1, "target_sub_id": None, "label": "문서 #1",
+           "original": {"content": "비밀번호는 90일마다 변경"}}
+    _PN = {"key": "pn-9", "target_type": "policy_narrative", "target_id": 5, "target_sub_id": 9, "label": "정책 · 기한",
+           "original": {"policy_name": "기한", "chunk_text": "반품은 14일 이내 신청", "raw_body": "반품은 14일 이내 신청"}}
+    _PP = {"key": "pp-5-7", "target_type": "policy_param", "target_id": 6, "target_sub_id": 7, "label": "정책 · 환불",
+           "original": {"policy_name": "환불", "raw_body": "환불은 영업일 기준", "param": {"name": "환불 기한", "condition": None,
+                                                                                    "value": "14", "unit": "일"}}}
+
+    @pytest.mark.asyncio
+    async def test_stale_value_only_in_policy_targets_that_policy_not_the_lone_knowledge(self):
+        """리뷰 B2 재현: 낡은 값(14일)이 정책 근거에만 있고 운영 지식 후보는 하나 → 예전엔 그 운영 지식(임베딩 추정)이 대상.
+        이제 값이 든 정책이 대상(숫자로 고름 — 추정 아님). 승인은 정책 정정과 같은 길(정책당 1건 잠금·새 버전)."""
+        near = AsyncMock(return_value=0)
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)), \
+             patch.object(svc, "_nearest_candidate", near):
+            tt, tid, sub, _, proposed, meta = await svc._identify([self._KN, self._PN], {"answer": "반품은 14일 이내예요 [정책]"},
+                                                                  "14일이 아니라 바뀌었어요", user_reason="stale")
+        assert (tt, tid, sub, proposed) == ("policy_narrative", 5, 9, None)
+        assert meta["chip_pick"] == "content" and meta["guessed"] is False and meta["key"] == "pn-9" and not near.await_count
+
+    @pytest.mark.asyncio
+    async def test_stale_value_in_policy_param_value_is_found(self):
+        """파라미터는 원문에 숫자가 없어도 값 칸으로 찾는다."""
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify([self._KN, self._PP], {}, "14일은 옛날 기준이에요", user_reason="stale")
+        assert (out[0], out[1], out[2]) == ("policy_param", 6, 7)
+
+    @pytest.mark.asyncio
+    async def test_param_is_matched_by_its_own_value_not_whole_policy_text(self):
+        """재리뷰 중간(11/16) 재현: 파라미터 후보의 raw_body는 정책 원문 전체 — 같은 정책의 다른 값(반품 14일)으로 환불 파라미터(7일)가
+        "숫자로 고름"(확정)이 됐다. 이제 파라미터는 자기 조건·값으로만 대조 → 14일은 아무 데도 안 맞아 운영 지식 추정."""
+        pp7 = {**self._PP, "original": {"policy_name": "환불", "raw_body": "반품은 14일 이내, 환불은 7일 이내",
+                                        "param": {"name": "환불 기한", "condition": None, "value": "7", "unit": "일"}}}
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify([self._KN, pp7], {}, "14일은 옛 기준이에요", user_reason="stale")
+        assert out[0] == "knowledge" and out[5]["guessed"] is True
+
+    @pytest.mark.asyncio
+    async def test_number_given_but_matching_nothing_never_embeds_into_policy(self):
+        """숫자 단서는 있는데 아무 근거에도 안 맞음 → 임베딩 후보는 운영 지식만(정책은 숫자로만 고른다)."""
+        kn2 = {**self._KN, "key": "k-2", "target_id": 2, "label": "문서 #2", "original": {"content": "다른 절차"}}
+        near = AsyncMock(return_value=0)
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)), \
+             patch.object(svc, "_nearest_candidate", near):
+            await svc._identify([self._KN, self._PN, kn2], {}, "2019년 기준이에요", user_reason="stale")
+        assert all(c["target_type"] == "knowledge" for c in near.await_args.args[0])
+
+    @pytest.mark.asyncio
+    async def test_policy_only_candidates_without_number_match_keep_llm_missing(self):
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify([self._PN], {}, "2019년 기준이에요", user_reason="stale")
+        assert out[0] == "missing" and out[5]["method"] == "llm"
+
+    @pytest.mark.asyncio
+    async def test_answer_line_reads_every_number_in_a_citation_group(self):
+        """[#12, 13]의 13도 그 줄의 근거(trustkit CITE_IDS 형식) — 예전 #(\\d+)는 12만 뽑았다."""
+        cands = [{**self._KN, "key": "k-12", "target_id": 12, "label": "문서 #12", "original": {"content": "2023년 결과"}},
+                 {**self._KN, "key": "k-13", "target_id": 13, "label": "문서 #13", "original": {"content": "2023년 일정"}},
+                 {**self._KN, "key": "k-14", "target_id": 14, "label": "문서 #14", "original": {"content": "2023년 계획"}}]
+        assert svc._cited_ids("일정은 2023년 [#13, 99] 참고 #7") == {13, 99, 7}
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify(cands, {"answer": "일정은 2023년 10월 [#99, 13]"}, "2023년은 끝났어요", user_reason="stale")
+        assert out[1] == 13 and out[5]["chip_pick"] == "answer_line"
+
+    @pytest.mark.asyncio
+    async def test_value_in_both_knowledge_and_policy_picks_by_embedding_among_those(self):
+        kn14 = {**self._KN, "original": {"content": "교환은 14일 이내"}}
+        near = AsyncMock(return_value=1)
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)), \
+             patch.object(svc, "_nearest_candidate", near):
+            out = await svc._identify([kn14, self._PN], {}, "14일 기준이 바뀌었어요", user_reason="stale")
+        assert [c["key"] for c in near.await_args.args[0]] == ["k-1", "pn-9"]   # 숫자가 맞은 둘 안에서만
+        assert out[1] == 5 and out[5]["guessed"] is True
+
+    @pytest.mark.asyncio
+    async def test_policy_only_candidates_with_number_match_become_policy_correction(self):
+        with patch.object(svc.draft_mod, "identify_and_draft", AsyncMock(return_value=self._MISSING)):
+            out = await svc._identify([self._PN], {}, "14일이 아니에요", user_reason="stale")
+        assert out[0] == "policy_narrative" and out[5]["method"] == "chip_rule"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("reason", [None, "missing_step", "not_found", "other_system"])
     async def test_other_or_no_chip_keeps_llm_missing(self, reason):

@@ -231,39 +231,82 @@ async def _nearest_candidate(candidates: list[dict], user_input: str) -> Optiona
     return max((i for i, s in enumerate(scores) if s is not None), key=lambda i: scores[i], default=None)
 
 
-_ANSWER_CITE = re.compile(r"#(\d+)")
+# 근거 번호 표식([#20130]·[문서 #1, #2]·[#12, 13]·맨 #123) — 숫자 대조 전에 지운다. 안 지우면 신고의 "30"이 [#20130]에 걸렸다(리뷰 B1 11/16)
+_CITE_MARKS = re.compile(r"\[(?:문서\s*)?#[^\]]*\]|#\d+")
+_BARE_CITE = re.compile(r"#(\d+)")
+# 숫자 덩어리 = 쉼표·점·콜론으로 이어진 숫자 전체(1,300 · 2023.10.01 · 30.5 · 03:30). 신고 숫자도, 근거 글 숫자도 덩어리째 비교한다 —
+# 조각으로 뽑으면 "1,300"이 "300"이 되고(300원 근거와 못 가름), 점 날짜·소수는 똑같은 글끼리도 안 맞았다(재리뷰 2회 11/16)
+_NUMBER_RUN = re.compile(r"\d+(?:[.,:]\d+)*")
+
+
+def _report_numbers(text: str) -> set[str]:
+    """신고 숫자 = 숫자가 두 자리 이상인 덩어리(연도·시각·값) — 한 자리("3일")는 잘못 걸리기 쉬워 안 본다."""
+    return {r for r in _NUMBER_RUN.findall(text or "") if sum(ch.isdigit() for ch in r) >= 2}
+
+
+def _cited_ids(line: str) -> set[int]:
+    """답 한 줄에 붙은 근거 번호 — 괄호 안 번호 전부([#12, 13]의 13도, trustkit CITE_IDS와 같은 형식) + 맨 #123."""
+    out = {int(x) for m in re.finditer(r"\[(?:문서\s*)?#([^\]]*)\]", line) for x in re.findall(r"\d+", m.group(1))}
+    return out | {int(x) for x in _BARE_CITE.findall(re.sub(r"\[[^\]]*\]", " ", line))}
+
+
+def _has_number(tokens: set[str], text: str) -> bool:
+    """신고 숫자가 글에 "그 숫자로" 있나 — 글의 숫자 덩어리 하나와 통째로 같아야 한다("30"은 30일·30% O, 2030·03:30·1.30·1,300·#20130 X).
+    쉼표는 빼고 비교(2,000 = 2000). 네 자리 연도만 점 날짜의 앞에도 맞는다("2023" ↔ 2023.10.06). 근거 번호 표식은 빼고 본다."""
+    runs = {r.replace(",", "") for r in _NUMBER_RUN.findall(_CITE_MARKS.sub(" ", text or ""))}
+    for t in tokens:
+        t = t.replace(",", "")
+        if t in runs or (len(t) == 4 and t.isdigit() and any(r.startswith(t + ".") for r in runs)):
+            return True
+    return False
+
+
+def _candidate_text(c: dict) -> str:
+    """숫자 대조에 쓸 근거 글 — 운영 지식 본문 · 정책 서술 조각 · 정책 파라미터(조건+값만).
+    파라미터의 raw_body는 정책 원문 전체라 같은 정책의 다른 값까지 걸려, 엉뚱한 파라미터가 "숫자로 고름"(확정)이 됐다(재리뷰 중간 11/16)."""
+    o = c.get("original") or {}
+    if c["target_type"] == "knowledge":
+        return str(o.get("content") or "")
+    if c["target_type"] == "policy_param":
+        p = o.get("param") or {}
+        return " ".join(str(x) for x in (p.get("condition"), p.get("value")) if x)
+    return str(o.get("chunk_text") or "")
 
 
 async def _stale_chip_target(candidates: list[dict], user_input: str,
                              answer: Optional[str] = None) -> tuple[Optional[int], Optional[str]]:
     """사유 칩 "내용이 낡음"인데 AI가 "근거에 없는 내용"으로 본 경우의 정정 대상 → (후보 순번 | None, 고른 방법 answer_line|content|embedding).
-    운영 지식 근거 중에서만. 좁히는 순서: ① 답에서 신고 숫자가 나온 줄에 붙은 근거 번호(사용자가 틀렸다는 건 그 문장 — 그 근거가 고칠 곳)
-    → ② 신고 숫자가 본문에 있는 근거 → ③ 신고와 임베딩이 가장 가까운 근거(추정). 실례(11/11 사본): "2023년 작업은 끝났어요"에 2023이 든 근거가 둘
-    (#20511 일정·#20606 2024 계획) — 임베딩은 #20606. 임베딩이 실패하면 (None, None) — 칩 규칙을 안 쓰고 LLM 판정 그대로(신고는 남는다, 리뷰 M2)."""
+    좁히는 순서: ① 답에서 신고 숫자가 나온 줄에 붙은 운영 지식 근거 번호(사용자가 틀렸다는 건 그 문장 — 그 근거가 고칠 곳)
+    → ② 신고 숫자가 글에 있는 근거(운영 지식·정책 모두) → ③ 신고와 임베딩이 가장 가까운 운영 지식 근거(추정). 실례(11/11 사본): "2023년 작업은
+    끝났어요"에 2023이 든 근거가 둘(#20511 일정·#20606 2024 계획) — 임베딩은 #20606. 임베딩이 실패하면 (None, None) — 칩 규칙을 안 쓰고 LLM 판정
+    그대로(신고는 남는다, 리뷰 M2).
+    정책은 ②에서 숫자가 맞을 때만 고른다(리뷰 B2 11/16) — 낡은 값이 정책 근거에만 있는데 운영 지식만 보면 엉뚱한 운영 지식(후보가 하나면
+    그것)이 대상이 됐다. 정책 정정은 다른 정정과 같은 길(정책당 대기 1건 잠금·승인하면 새 버전)이라 따로 막을 게 없다. 숫자 단서가 없으면
+    ③은 예전처럼 운영 지식 안에서만 — 임베딩 추정만으로 정책 새 버전 안을 세우지 않는다."""
     knowledge = [i for i, c in enumerate(candidates) if c["target_type"] == "knowledge"]
-    if not knowledge:
-        return None, None
+    everything = [i for i, c in enumerate(candidates) if c["target_type"] in ("knowledge", "policy_param", "policy_narrative")]
+    pool = knowledge   # 임베딩으로 고를 후보 — 숫자 단서가 없으면 운영 지식만, 숫자가 여럿에 맞으면 맞은 것들(정책 포함)
     # 숫자 = 연도·시각·값(두 자리 이상) — 임베딩만으론 비슷한 형제 조각을 골랐다(골든 낡음 지적 2/6 대상 어긋남)
-    tokens = set(re.findall(r"\d{2,}(?::\d{2})?", user_input or ""))
+    tokens = _report_numbers(user_input)
     if tokens:
-        cited = {int(x) for ln in (answer or "").split("\n") if any(t in ln for t in tokens)
-                 for x in _ANSWER_CITE.findall(ln)}
+        cited = {x for ln in (answer or "").split("\n") if _has_number(tokens, ln) for x in _cited_ids(ln)}
         for how, narrow in (("answer_line", [i for i in knowledge if candidates[i]["target_id"] in cited]),
-                            ("content", [i for i in knowledge
-                                         if any(t in str((candidates[i].get("original") or {}).get("content", "")) for t in tokens)])):
+                            ("content", [i for i in everything if _has_number(tokens, _candidate_text(candidates[i]))])):
             if len(narrow) == 1:
                 return narrow[0], how
             if narrow:
-                knowledge = narrow
+                pool = narrow
                 break
-    if len(knowledge) == 1:   # 여기까지 왔으면 숫자 좁히기는 맞은 적이 없다 — 하나 남은 후보도 추정(재리뷰 L-a)
-        return knowledge[0], "embedding"
+    if not pool:
+        return None, None
+    if len(pool) == 1:   # 여기까지 왔으면 숫자 좁히기는 맞은 적이 없다 — 하나 남은 후보도 추정(재리뷰 L-a)
+        return pool[0], "embedding"
     try:
-        best = await _nearest_candidate([candidates[i] for i in knowledge], user_input)
+        best = await _nearest_candidate([candidates[i] for i in pool], user_input)
     except Exception:
         logger.warning("낡음 칩 정정 대상 추정(임베딩) 실패 — 칩 규칙 없이 AI 판정 그대로", exc_info=True)
         return None, None
-    return (knowledge[best], "embedding") if best is not None else (None, None)
+    return (pool[best], "embedding") if best is not None else (None, None)
 
 
 async def _identify(candidates: list[dict], context: dict, user_input: str, *, user_reason: Optional[str] = None) -> tuple:
@@ -280,7 +323,7 @@ async def _identify(candidates: list[dict], context: dict, user_input: str, *, u
         # 칩 규칙(backlog 0-0h B-1, 11/11): "내용이 낡음" = 신고자가 "근거가 옛 내용"이라고 직접 고른 것. 그런데 LLM은 "옛 날짜라 지금과 달라요"처럼
         # 새 값을 안 주는 신고에서 근거와 충돌하는 값을 못 찾아 "근거에 없는 내용(새 지식)"으로 본다 — 승인하면 옛 조각은 그대로 쓰이고 새 조각만
         # 하나 더 생겼다(시연 녹화 실례, 골든 20건 중 낡음 지적 6건 0/6). 운영 지식 근거가 있으면 가장 가까운 근거 정정으로 바꾸고 초안은 그 근거로
-        # 다시 쓴다(아래 create_item). LLM 판정·이유는 llm_verdict로 남긴다(AI 감사 — 번복 기록과 같은 값). 정책은 버전 흐름이 따로라 안 건드린다
+        # 다시 쓴다(아래 create_item). LLM 판정·이유는 llm_verdict로 남긴다(AI 감사 — 번복 기록과 같은 값). 정책 근거는 신고 숫자가 그 글에 있을 때만(B2)
         to, how = (await _stale_chip_target(candidates, user_input, context.get("answer"))
                    if verdict == "missing" and user_reason == "stale" else (None, None))
         if to is not None:

@@ -8,6 +8,7 @@ from typing import Optional
 from core.database import get_conn, resolve_namespace_id
 from service.chat import memory
 from agents.knowledge_rag.knowledge.retrieval import RetrievalResult
+from service.policy.visibility import searchable_sql
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +68,11 @@ def results_to_payload(results: list[RetrievalResult]) -> list[dict]:
 
 # 캐시 답의 근거가 지금도 쓰이는가(backlog 0-0h B, 11/11 시연 녹화) — 쓰기 경로는 캐시를 비우지만(invalidate_namespace_family),
 # DB를 백업본·사본으로 바꾸거나(폐쇄망 반입·복원) 스크립트가 SQL로 바꾸면 Redis 캐시만 남아 DB에 없는 문서(#65251)를 근거로 답했다.
-_EVIDENCE_ALIVE_SQL = """
+# "지금 쓰이는가" = 검색이 보는 것과 같은 기준 — 지식은 active만, 정책은 검색 조건(searchable_sql: v0는 active, 옛 엑셀 경로는 검토 대기도)을
+# 그대로 가져다 쓴다. 따로 'active'로 적었더니 검색엔 나오는 검토 대기 정책이 근거인 캐시 답이 적중마다 버려졌다(리뷰 B3 11/16).
+_EVIDENCE_ALIVE_SQL = f"""
 SELECT (SELECT count(*) FROM rag_knowledge WHERE id = ANY($1::int[]) AND status = 'active') AS k,
-       (SELECT count(*) FROM policy_item WHERE id = ANY($2::int[]) AND status = 'active') AS p"""
+       (SELECT count(*) FROM policy_item WHERE id = ANY($2::int[]) AND {searchable_sql('policy_item')}) AS p"""
 
 
 def _int_ids(items: list | None, key: str) -> set[int]:
