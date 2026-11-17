@@ -356,6 +356,33 @@ async def decide_question_candidate(cand_id: int, body: QuestionDecision, admin:
     return r
 
 
+class GoldenDecision(BaseModel):
+    source: str               # answer_error(답변 오류 판정) / no_knowledge(지식 없음 거절)
+    ref_id: int               # 정정 원장 id / 질의 기록 id
+    action: str               # knowledge · policy(정답 고름) / abstain(모른다가 정답) / dismiss(제외)
+    target_id: Optional[int] = None   # 정답 지식 조각 id · 정책 항목 id
+
+
+@router.get("/golden-candidates")
+async def list_golden_candidates(admin: dict = Depends(get_current_admin)):
+    """골든셋 후보(관리자) — 답변 오류 판정·지식 없음 거절 중 아직 정답을 안 고른 것. 질문은 사용자가 쓴 글 그대로라 관리자만."""
+    from service.eval import questions
+    return await questions.pending_golden_candidates()
+
+
+@router.post("/golden-candidates/decide")
+async def decide_golden_candidate(body: GoldenDecision, admin: dict = Depends(get_current_admin)):
+    """정답을 골라 골든셋에 넣기 · 모른다가 정답 · 제외. 같은 질문은 한 줄 — 이미 정해졌으면 created=False."""
+    from service.eval import questions
+    try:
+        return await questions.decide_golden_candidate(source=body.source, ref_id=body.ref_id, action=body.action,
+                                                       target_id=body.target_id, user_id=admin["id"])
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/report")
 async def get_report(axis: str = Query(default="policy", pattern=AXIS_PATTERN), admin: dict = Depends(get_current_admin)):
     """틀린 문항 리포트(관리자) — 지금 점수 · 틀린 문항(질문·왜·저장 구조·적용해 볼 기법) · 기법별 실제 효과(잠근 시험지).

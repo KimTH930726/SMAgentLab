@@ -128,6 +128,7 @@ async def main() -> int:
     ap.add_argument("--set", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--real", action="store_true", help="골든셋에 든 실사용 지식 문항도(평가 게이트 골든셋 후보에서 정답을 고른 것)")
     ap.add_argument("--llm", choices=["system", "local"], default="local", help="기본 local = 로컬 LLM(11/02 — 토큰 절약). system = 사내 게이트웨이, 사람 허락 뒤에만")
     ap.add_argument("--prompt-file", default="", help="후보 시스템 프롬프트 파일(운영 DB 프롬프트 대신 — eval_answers와 같은 옵션)")
     # 문맥 좁히기 실험(10/30) — 업무지식 문맥이 지식 3조각 + 상위 섹션 보충 평균 30 + 정책 서술 10(평균 1.8만 자)이라 섞임·지어냄 의심
@@ -179,7 +180,7 @@ async def main() -> int:
         await retrieval.load_runtime_overrides_from_db(conn)
     from knowledge_eval_set import load_items   # scripts/가 실행 경로
     async with get_conn() as conn:
-        items = await load_items(conn, a.set)
+        items = await load_items(conn, a.set, real=a.real)
         refs = {r["id"]: r["content"] for r in await conn.fetch(
             "SELECT id, content FROM rag_knowledge WHERE id = ANY($1::int[]) AND status = 'active'",
             sorted({i for it in items for i in it["gold_ids"]}))}

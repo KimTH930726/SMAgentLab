@@ -275,6 +275,28 @@ export async function getGateReport(axis: GateAxis = 'policy'): Promise<GateRepo
   return apiFetch<GateReport | null>(`/eval/report?axis=${axis}`);
 }
 
+/** 골든셋 후보(11/16) — 채팅 신호 중 아직 정답을 안 고른 것. 사람이 정답을 골라야 골든셋에 들어간다(자동 추가 없음) */
+export type GoldenSource = 'answer_error' | 'no_knowledge';
+export interface GoldenCandidate {
+  source: GoldenSource;
+  ref_id: number;
+  created_at: string;
+  namespace: string;
+  question: string;
+  ai_reason: string | null;     // 답변 오류: AI가 본 이유(근거는 맞는데 답이 잘못 읽음)
+  report: string | null;        // 신고자가 쓴 한 줄
+  evidence: { target_type: 'knowledge' | 'policy_param' | 'policy_narrative'; target_id: number; label: string | null }[];
+}
+export async function getGoldenCandidates(): Promise<{ items: GoldenCandidate[]; counts: Record<GoldenSource, number> }> {
+  return apiFetch('/eval/golden-candidates');
+}
+export type GoldenAction = 'knowledge' | 'policy' | 'abstain' | 'dismiss';
+export async function decideGoldenCandidate(body: { source: GoldenSource; ref_id: number; action: GoldenAction; target_id?: number }) {
+  return apiFetch<{ id: number; qid: string; status: string; created: boolean }>('/eval/golden-candidates/decide', {
+    method: 'POST', body: JSON.stringify(body),
+  });
+}
+
 /** 실사용 문항을 시험지에서 빼기·다시 넣기(관리자) — 다음 측정부터 반영. 정정 승인 때 자동으로 들어간다(10/26) */
 export async function setRealQuestion(id: number, status: 'added' | 'dismissed') {
   return apiFetch(`/eval/question-candidates/${id}`, { method: 'POST', body: JSON.stringify({ status }) });

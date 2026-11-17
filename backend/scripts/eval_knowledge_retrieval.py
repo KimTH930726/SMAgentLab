@@ -28,6 +28,7 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", required=True)
     ap.add_argument("--details")
+    ap.add_argument("--real", action="store_true", help="골든셋에 든 실사용 지식 문항도(평가 게이트 골든셋 후보에서 정답을 고른 것)")
     ap.add_argument("--scope", choices=["linked", "similar", "none"], default=None, help="지식 검색 범위 — 안 주면 채팅 기본(agent.CHAT_KNOWLEDGE_SCOPE), none: 고른 컬렉션만")
     a = ap.parse_args()
     from agents.knowledge_rag.agent import chat_defaults
@@ -40,7 +41,7 @@ async def main() -> None:
     top_k = int(d["default_top_k"])
     from knowledge_eval_set import load_items   # scripts/가 실행 경로
     async with get_conn() as conn:
-        items = await load_items(conn, a.set)
+        items = await load_items(conn, a.set, real=a.real)
     rows = []
     for it in items:
         vec = await embedding_service.embed(it["question"])

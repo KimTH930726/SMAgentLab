@@ -10,6 +10,7 @@ import { GateHistory } from './GateHistory';
 import { TechniqueFlow } from './TechniqueFlow';
 import { ImproveAreas, InProgress, isOpen } from './GateReport';
 import { AnswerTab, RetrievalTab } from './GateRuns';
+import { GoldenCandidatesModal, useGoldenCandidates } from './GoldenCandidates';
 
 /**
  * 품질 › 평가 게이트 — 한 템플릿(10/29 사용자 "정책이든 업무지식이든 유형은 구분값으로만", "전체 정확도를 메인으로 보고 개선점 → 도출할 수 있는 것").
@@ -23,6 +24,9 @@ const AXES: { axis: GateAxis; label: string; hint: string }[] = [
   { axis: 'policy', label: '정책서', hint: '정책서 골든셋 — 팀원 문항·실사용 문항 포함' },
   { axis: 'knowledge', label: '업무지식', hint: '업무지식 골든셋(컨플루언스 등) — 조각마다 로컬 LLM이 만든 질문' },
 ];
+
+// 카드 수 → 넓은 화면 칸 수(Tailwind는 클래스 이름이 코드에 통째로 있어야 만든다)
+const XL_COLS: Record<number, string> = { 3: 'xl:grid-cols-3', 4: 'xl:grid-cols-4', 5: 'xl:grid-cols-5' };
 
 const pct = (x: number | null | undefined) => (x == null ? '-' : `${(x * 100).toFixed(1)}%`);
 
@@ -63,6 +67,10 @@ function AxisGate({ axis }: { axis: GateAxis }) {
   const [stage, setStage] = useState<Stage | null>(null);
   const [detail, setDetail] = useState<null | 'answers' | 'retrieval'>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [goldenOpen, setGoldenOpen] = useState(false);
+  // 골든셋 후보(11/16) — 채팅 신호 중 정답을 안 고른 것. 축 구분 없이 같은 목록(정답을 고르면 정책은 정책서 축, 지식은 업무지식 축으로 들어감)
+  const golden = useGoldenCandidates(isAdmin);
+  const goldenN = golden.data ? golden.data.counts.answer_error + golden.data.counts.no_knowledge : null;
 
   const a = base.data?.summary.answers;
   const r = base.data?.summary.retrieval;
@@ -80,13 +88,26 @@ function AxisGate({ axis }: { axis: GateAxis }) {
     window.setTimeout(() => { delete el.dataset.flash; }, 1800);
   };
 
+  // 기준선이 없어도(새 설치) 보인다 — 첫 골든셋을 채팅 신호로 쌓는 길이 막히지 않게
+  const goldenCard = isAdmin ? (
+    <Card testid="card-golden" label="골든셋 후보" value={goldenN == null ? '-' : String(goldenN)} tone={goldenN ? 'warn' : undefined}
+      sub={golden.data ? `답변 오류 ${golden.data.counts.answer_error} · 지식 없음 ${golden.data.counts.no_knowledge}` : golden.error ? '불러오지 못함' : ''}
+      hint="채팅에서 온 질문 중 아직 정답을 안 고른 것 — 정답을 고르면 다음 측정부터 골든셋으로 채점(사람이 골라야만 들어감)"
+      cta="보기 →" onClick={() => setGoldenOpen(true)} />
+  ) : null;
+
   return (
     <div className="space-y-5" data-testid={`gate-axis-${axis}`}>
       {base.error ? <p className="text-sm text-rose-600 dark:text-rose-400">지금 점수를 불러오지 못했습니다: {(base.error as Error).message}</p>
         : base.isLoading ? <p className="text-sm text-slate-500">불러오는 중…</p>
-          : !base.data ? <p className="text-sm text-slate-500" title="통과한 측정을 eval_gate.py --save로 기록하거나 [운영에 반영했어요]를 누르면 그 측정이 지금 점수가 됩니다">지금 점수 없음 — 측정 전 ⓘ</p>
+          : !base.data ? (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-500" title="통과한 측정을 eval_gate.py --save로 기록하거나 [운영에 반영했어요]를 누르면 그 측정이 지금 점수가 됩니다">지금 점수 없음 — 측정 전 ⓘ</p>
+              {goldenCard && <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">{goldenCard}</div>}
+            </div>
+          )
             : (
-              <div className={clsx('grid grid-cols-1 sm:grid-cols-2 gap-3', lk ? 'xl:grid-cols-4' : 'xl:grid-cols-3')} data-testid="gate-summary">
+              <div className={clsx('grid grid-cols-1 sm:grid-cols-2 gap-3', XL_COLS[3 + (lk ? 1 : 0) + (isAdmin ? 1 : 0)])} data-testid="gate-summary">
                 <Card testid="card-total" label="전체 정답률" value={pct(a?.accuracy)}
                   sub={a ? `[${pct(a.lo)} – ${pct(a.hi)}] · ${a.n}문항${failedN ? ` · 답 못 냄 ${failedN}(뺌)` : ''}` : '답 측정 없음'}
                   hint={`지금 점수(기준선 #${base.data.id} "${base.data.label}") — 실제 채팅 경로로 답하고 원문과 대조해 채점. 대괄호 = 95% 신뢰구간. 답을 못 낸 문항(게이트웨이 거부 등)은 정답률에서 빼고 따로 셈`}
@@ -101,6 +122,7 @@ function AxisGate({ axis }: { axis: GateAxis }) {
                 <Card testid="card-open" label="결정할 후보" value={imp.data ? String(openN) : '-'} tone={openN > 0 ? 'warn' : undefined}
                   sub={imp.data ? '제안 · 검토 대기 · 실험 중' : '진단 전'} hint="② 개선 후보 — 제안(AI가 해 볼 만·재 봐야 앎) + 실험 중·실험 오류 + 검토 대기(게이트 통과, 반영할지 정함)"
                   cta={openN > 0 ? '보기 ↓' : undefined} onClick={openN > 0 ? toProgress : undefined} />
+                {goldenCard}
               </div>
             )}
 
@@ -125,6 +147,7 @@ function AxisGate({ axis }: { axis: GateAxis }) {
         {historyOpen && <><TechniqueFlow /><GateHistory recent={5} initial="log" /></>}
       </section>
 
+      <GoldenCandidatesModal isOpen={goldenOpen} onClose={() => setGoldenOpen(false)} />
       <Modal isOpen={detail !== null} onClose={() => setDetail(null)} title={detail === 'retrieval' ? '검색 성적' : '답 성적'} maxWidth="max-w-5xl">
         <div data-testid="gate-scores" data-which={detail ?? ''}>
           {detail === 'retrieval' ? <RetrievalTab axis={axis} /> : detail === 'answers' ? <AnswerTab axis={axis} /> : null}

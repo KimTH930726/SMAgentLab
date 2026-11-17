@@ -1751,6 +1751,12 @@ async def _migrate_eval_improvement(conn) -> None:
     # UNIQUE는 그대로(NULL은 여럿 허용). 칸을 지우거나 이름을 바꾸지 않음 — 두 번 돌려도 같다(DROP NOT NULL·ADD IF NOT EXISTS)
     await conn.execute("ALTER TABLE eval_question_candidate ALTER COLUMN improvement_item_id DROP NOT NULL")
     await conn.execute("ALTER TABLE eval_question_candidate ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'correction'")
+    # #128(11/16) 골든셋 후보 — 지식 없음으로 거절된 질의(ops_query_log)에서 사람이 정답을 골라 넣은 문항. 같은 질의는 한 번만(고유, NULL은 여럿).
+    # 질의 기록이 보존 기한(365일)으로 지워져도 문항은 남는다(SET NULL). 추가만 — 두 번 돌려도 같다
+    await conn.execute("ALTER TABLE eval_question_candidate ADD COLUMN IF NOT EXISTS query_log_id INT "
+                       "REFERENCES ops_query_log(id) ON DELETE SET NULL")
+    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_question_candidate_query_log "
+                       "ON eval_question_candidate(query_log_id) WHERE query_log_id IS NOT NULL")
 
 
 async def _migrate_policy_v0_revisions(conn) -> None:

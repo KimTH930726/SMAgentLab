@@ -33,7 +33,7 @@ backend/libs/trustkit/            ← 표준 라이브러리만. core·service·
 │  ├ retrieval/ bm25.py · fusion.py · chunk_header.py
 │  ├ query/    intent.py
 │  ├ answer/   shaping.py
-│  └ eval/     stats.py · gate.py · summary.py(판정 기록용 헤드라인·골든셋 버전, 10/23) · diagnose.py(틀린 문항 첫 실패 진단·리플레이, 10/23)
+│  └ eval/     stats.py · gate.py · summary.py(판정 기록용 헤드라인·골든셋 버전, 10/23) · diagnose.py(틀린 문항 첫 실패 진단·리플레이, 10/23) · anchors.py(정답 닻 — 골든셋 정답을 조각 id 대신 정답 조각에만 있던 줄 해시로, 다시 적재해도 찾음, 11/16)
 └ tests/                          ← 패키지만으로 실행(도커·DB 불필요) + 독립성 검사
 ```
 - 이 프로젝트는 `PYTHONPATH`에 `/app/libs/trustkit`을 더해 import(설치 단계 없음 — 폐쇄망·dev 마운트 그대로).
