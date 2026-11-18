@@ -33,6 +33,7 @@ export interface ImportBatch extends ImportBatchRow {
   /** 게시 중(11/05) — 뒤에서 도는 동안 세워져 있다 */
   publishing_at?: string | null;
   publish_check?: PublishCheck | null;
+  golden_check?: GoldenCheck | null;
   /** 읽기 제한 페이지도 넣기(관리자, 11/05) — 켠 시각·사람 */
   include_restricted_at?: string | null;
   include_restricted_name?: string | null;
@@ -56,6 +57,27 @@ export interface PublishCheck {
   items?: { question: string; title: string | null; page_id: string | null; found: boolean; rank: number | null;
     /** 벡터 상위 3에 실제로 나온 것(못 찾았을 때 "대신 나온 것") — 11/05 뒤 결과만 */
     got?: { title: string | null; page_id: string | null; sim: number; same: boolean }[] }[];
+}
+
+/** 게시 전 골든셋 확인(11/17) — 이 컬렉션 골든셋 문항을 지금 게시본 vs 게시했다면 같은 벡터 검색으로. before/after = 순위(상위 10 밖이면 null) */
+export interface GoldenCheck {
+  checked_at: string;
+  running?: boolean;
+  done?: number;
+  total?: number;
+  interrupted?: boolean;
+  error?: string;
+  skipped?: string;
+  files?: string[];
+  real?: number;
+  items?: number;
+  worse?: number;
+  better?: number;
+  down?: number;
+  gold_lost?: number;
+  both_miss?: number;
+  details?: { question: string; ns: string; qid: string | null; kind: 'worse' | 'better' | 'down' | 'same'; gold_lost: boolean;
+    before: number | null; after: number | null; got: { title: string | null; new: boolean }[] }[];
 }
 
 /** 검수 대기 카드 — 보류 작업 · 조각 · 중복 의심 · 품질 경고(종류별 작업 수) */
@@ -148,6 +170,7 @@ export const connectImport = (id: number, bundles: { bundle: string; namespace_i
 export const getOverlapDetail = (id: number, jobId: number) => apiFetch<OverlapDetail>(`${BASE}/${id}/overlap/${jobId}`);
 /** 둘 다 뒤에서 돈다(11/05) — 바로 돌아오고, 진행은 배치 상세(publish_check.running · publish_progress)로 */
 export const publishCheckImport = (id: number) => apiFetch<{ status: 'running' }>(`${BASE}/${id}/publish-check`, { method: 'POST' });
+export const goldenCheckImport = (id: number) => apiFetch<{ status: 'running' }>(`${BASE}/${id}/golden-check`, { method: 'POST' });
 export const publishImport = (id: number) => apiFetch<{ status: 'publishing' }>(`${BASE}/${id}/publish`, { method: 'POST' });
 export const rollbackImport = (id: number) => apiFetch<{ chunks: number; documents: number; terms: number; released: number }>(`${BASE}/${id}/rollback`, { method: 'POST' });
 

@@ -534,6 +534,8 @@ async def close_interrupted(conn) -> int:
     # 검색 확인 중 재시작 — 도는 중 표시를 내리고 끊겼다고 남긴다(화면이 "질문 3/10"에서 영영 멈춰 보이지 않게)
     await conn.execute("UPDATE rag_import_batch SET publish_check = (publish_check - 'running') || '{\"interrupted\": true}'::jsonb "
                        "WHERE publish_check->>'running' = 'true'")
+    await conn.execute("UPDATE rag_import_batch SET golden_check = (golden_check - 'running') || '{\"interrupted\": true}'::jsonb "
+                       "WHERE golden_check->>'running' = 'true'")
     for r in await conn.fetch("SELECT id FROM rag_import_batch WHERE status = 'loading'"):
         await close_load(conn, r["id"], "서버 재시작으로 적재가 중단됨 — 일부만 들어갔으면 롤백 뒤 다시")
         n += 1

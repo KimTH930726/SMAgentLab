@@ -1622,6 +1622,8 @@ async def _migrate_team_import(conn) -> None:
     await conn.execute("ALTER TABLE rag_ingestion_job ADD COLUMN IF NOT EXISTS held_plan JSONB")
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ")
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS publish_check JSONB")
+    # #129(11/17) 게시 전 골든셋 확인 결과(ingestion/golden_check) — 지금 게시본 vs 게시했다면, 골든셋 문항 검색 순위 비교. close_interrupted가 쓰므로 그보다 먼저
+    await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS golden_check JSONB")
     # 미리보기 취소(cancelled, 11/04 태훈 — #3 GIFT를 청크 규칙 개선 뒤 다시): 적재 안 한 미리보기를 "실패"로 적지 않게 상태를 따로.
     # 이미 바뀌었으면 건너뜀(기동마다 표 잠금·검사 안 하게) · 지우고 붙이기를 한 트랜잭션으로(중간 실패 시 제약 없는 채로 안 남게, 리뷰)
     cdef = await conn.fetchval("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'rag_import_batch_status_check'")

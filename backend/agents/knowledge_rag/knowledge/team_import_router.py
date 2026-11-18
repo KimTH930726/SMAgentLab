@@ -197,8 +197,9 @@ async def get_batch(batch_id: int, user: dict = Depends(get_current_user)):
                         "restricted": s.get("restricted"), "doc_type": s.get("doc_type"),
                         "restricted_included": s.get("restricted_included")}
     batch = {k: (str(v) if k.endswith("_at") and v is not None else v) for k, v in b.items()}
-    if isinstance(batch.get("publish_check"), str):
-        batch["publish_check"] = json.loads(batch["publish_check"])
+    for k in ("publish_check", "golden_check"):
+        if isinstance(batch.get(k), str):
+            batch[k] = json.loads(batch[k])
     return {"batch": batch, "held": held, "publish_progress": progress,   # held = 게시 전 검수 카드(게시 전 배치만)
             "pages": pages, "collections": collections, "blockers": blockers,
             "sample_targets": ti.sample_targets(counts, wrong),
@@ -519,6 +520,22 @@ async def publish_check(batch_id: int, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=409, detail="검색 확인이 이미 도는 중입니다 — 끝난 뒤 다시 눌러 주세요.")
     # 뒤에서 — 질문 10개(로컬 LLM)라 1분 가까이 걸린다. 화면은 배치 publish_check.running·asked/total로 진행을 그린다(11/05 "멈춘 것처럼")
     _spawn(ti.publish_check(batch_id))
+    return {"status": "running"}
+
+
+@router.post("/{batch_id}/golden-check")
+async def golden_check(batch_id: int, user: dict = Depends(get_current_user)):
+    """게시 전 골든셋 확인(11/17) — 이 배치를 게시하면 이 컬렉션 골든셋 문항의 검색이 나빠지나(지금 게시본 vs 게시했다면, LLM 0). 적재 끝·게시 전만."""
+    from agents.knowledge_rag.ingestion import golden_check as gc
+    async with get_conn() as conn:
+        b = await _batch_for(conn, batch_id, user, write=True)
+        if b["status"] != "loaded" or b.get("published_at") is not None or b.get("publishing_at") is not None:
+            raise HTTPException(status_code=409, detail="게시 전 배치만 확인할 수 있습니다(게시 중이면 끝난 뒤).")
+        # 도는 중 표시를 응답 전에 잡는다(조건부 UPDATE) — 두 번 눌러도 하나만 돌고, 응답 직후 화면이 읽으면 "도는 중"을 본다
+        # (11/17 독립 리뷰 높음: 이 줄이 raise 아래 들여써져 실행되지 않았다 → 화면이 도는 중을 못 보고 멈춤)
+        if not await gc.claim(conn, batch_id):
+            raise HTTPException(status_code=409, detail="골든셋 확인이 이미 도는 중입니다 — 끝난 뒤 다시 눌러 주세요.")
+    _spawn(gc.golden_check(batch_id))
     return {"status": "running"}
 
 

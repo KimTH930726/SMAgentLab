@@ -2,9 +2,9 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getTeams } from '../../api/auth';
 import {
-  confirmImport, confluencePageUrl, connectImport, getImportBatch, listConnections, syncConnection, getImportCollections, listImportBatches, reviewImportSample, rollbackImport, publishCheckImport, publishImport, sampleKey,
+  confirmImport, confluencePageUrl, connectImport, getImportBatch, listConnections, syncConnection, getImportCollections, listImportBatches, reviewImportSample, rollbackImport, publishCheckImport, publishImport, goldenCheckImport, sampleKey,
   setImportDefault, startImport, updateImportPages, listSyncChanges, getSyncChange, getOverlapDetail, type SyncChange,
-  type HeldSummary, type OverlapDetail, type PublishCheck, type ImportBatchDetail, type ImportCollection, type ImportPage, type SourceConnection,
+  type HeldSummary, type OverlapDetail, type PublishCheck, type GoldenCheck, type ImportBatchDetail, type ImportCollection, type ImportPage, type SourceConnection,
 } from '../../api/teamImport';
 import { useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -351,7 +351,7 @@ function BatchView({ id }: { id: number }) {
     // 뒤에서 도는 일이 있으면 다시 읽는다 — 미리보기·적재 3초, 게시·검색 확인 2초(11/05 진행 막대)
     refetchInterval: (q) => {
       const b = q.state.data?.batch;
-      if (b?.publishing_at || b?.publish_check?.running) return 2000;
+      if (b?.publishing_at || b?.publish_check?.running || b?.golden_check?.running) return 2000;
       return ['previewing', 'loading'].includes(b?.status ?? '') ? 3000 : false;
     },
   });
@@ -414,10 +414,10 @@ function CollectionSelect({ cols, value, onChange, placeholder = '분류할 곳'
   );
 }
 
-function Stat({ k, v, sub, hot, onOpen }: { k: string; v: number | string; sub?: string; hot?: boolean; onOpen?: () => void }) {
+function Stat({ k, v, sub, hot, onOpen, testId }: { k: string; v: number | string; sub?: string; hot?: boolean; onOpen?: () => void; testId?: string }) {
   const Tag = onOpen ? 'button' : 'div';
   return (
-    <Tag type={onOpen ? 'button' : undefined} onClick={onOpen} title={onOpen ? '눌러서 자세히' : undefined}
+    <Tag type={onOpen ? 'button' : undefined} onClick={onOpen} title={onOpen ? '눌러서 자세히' : undefined} data-testid={testId}
       className={`rounded-xl bg-slate-800 border p-4 text-left ${onOpen ? 'hover:border-indigo-400 cursor-pointer' : ''} ${hot ? 'border-amber-400 dark:border-amber-500/60' : 'border-slate-700'}`}>
       <div className="text-xs text-slate-400">{k}</div>
       <div className={`text-2xl font-bold tabular-nums ${hot ? 'text-amber-600 dark:text-amber-300' : 'text-slate-100'}`}>{v}</div>
@@ -457,6 +457,58 @@ function SplitBar({ parts }: { parts: { label: string; n: number; cls: string }[
 function SrcLink({ rootUrl, pageId }: { rootUrl: string; pageId: string | null }) {
   const url = pageId ? confluencePageUrl(rootUrl, pageId) : null;
   return url ? <a href={url} target="_blank" rel="noreferrer" className="shrink-0 text-indigo-600 hover:underline dark:text-indigo-400">원문 ↗</a> : null;
+}
+
+const rankText = (r: number | null) => (r == null ? '10위 밖' : `${r}위`);
+
+/** 골든셋 확인 리포트(11/17) — 위: 나빠짐·정답 사라짐·좋아짐 수 / 아래: 문항마다 지금 → 게시하면 순위, 게시하면 대신 나오는 것 */
+function GoldenCheckReport({ check, onClose }: { check: GoldenCheck; onClose: () => void }) {
+  const rows = check.details ?? [];
+  const worse = rows.filter((d) => d.kind === 'worse' || d.gold_lost);
+  const better = rows.filter((d) => d.kind === 'better' && !d.gold_lost);
+  const Row = ({ d }: { d: (typeof rows)[number] }) => (
+    <div className={`space-y-1.5 rounded-lg border p-3 text-xs ${d.kind === 'better' && !d.gold_lost ? 'border-slate-700' : 'border-rose-300 bg-rose-50 dark:border-rose-500/40 dark:bg-rose-500/10'}`}>
+      <div className="text-sm text-slate-100">{d.question}</div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-400">
+        <span>{d.ns}</span>
+        <span className="tabular-nums" title="정답 조각의 검색 순위 — 지금 게시본 → 이 배치를 게시했을 때">{rankText(d.before)} → <b className="text-slate-200">{rankText(d.after)}</b></span>
+        {d.gold_lost && <span className="text-rose-600 dark:text-rose-400" title="게시하면 정답 닻에 맞는 조각이 없어요 — 내용이 바뀐 것. 골든셋 정답을 다시 봐야 해요">정답 사라짐</span>}
+      </div>
+      {d.got.length > 0 && (
+        <ol className="space-y-0.5 text-slate-400">
+          {d.got.map((g, j) => (
+            <li key={j} className="flex items-center gap-2"><span className="w-4 shrink-0 tabular-nums text-slate-500">{j + 1}</span>
+              <span className="min-w-0 flex-1 truncate text-slate-200">{g.title ?? '—'}</span>{g.new && <span className="shrink-0 text-indigo-600 dark:text-indigo-300">이번 배치</span>}</li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+  return (
+    <Modal isOpen onClose={onClose} title="골든셋 확인 리포트" maxWidth="max-w-4xl">
+      <div className="space-y-4 text-sm" data-testid="golden-check-report">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Tile k="나빠짐" v={check.worse ?? 0} tone={(check.worse ?? 0) > 0 ? 'bad' : 'good'} sub="상위 3 → 밖" />
+          <Tile k="정답 사라짐" v={check.gold_lost ?? 0} tone={(check.gold_lost ?? 0) > 0 ? 'bad' : 'plain'} sub="닻이 안 맞음" />
+          <Tile k="좋아짐" v={check.better ?? 0} tone={(check.better ?? 0) > 0 ? 'good' : 'plain'} sub="밖 → 상위 3" />
+          <Tile k="확인한 문항" v={check.items ?? 0} sub={`지금도 못 찾음 ${check.both_miss ?? 0}`} />
+        </div>
+        <p className="text-xs text-slate-500" title={`골든셋: ${(check.files ?? []).join(', ') || '파일 없음'} + 실사용 골든셋(전 컬렉션 ${check.real ?? 0}문항 중 이 배치 컬렉션 것만) · 문항이 물은 컬렉션 안에서만 찾아요`}>
+          {new Date(check.checked_at).toLocaleString()} 확인 · 벡터 검색만(키워드·다시 정렬 없음) — 실제 채팅보다 엄격해요. 그 뒤 같은 컬렉션에 다른 게시가 있었으면 다시 확인 ⓘ</p>
+        <section className="space-y-2">
+          <h4 className="font-semibold text-slate-100">나빠짐 · 정답 사라짐 <span className="text-xs font-normal text-slate-400">{worse.length}</span></h4>
+          {worse.length === 0 && <p className="text-xs text-emerald-700 dark:text-emerald-300">게시해도 나빠지는 골든셋 문항이 없어요 ✓</p>}
+          {worse.map((d, i) => <Row key={i} d={d} />)}
+        </section>
+        {better.length > 0 && (
+          <details className="rounded-lg border border-slate-700">
+            <summary className="cursor-pointer px-3 py-2 font-semibold text-slate-100">좋아짐 <span className="text-xs font-normal text-slate-400">{better.length}</span></summary>
+            <div className="space-y-2 border-t border-slate-700 p-3">{better.map((d, i) => <Row key={i} d={d} />)}</div>
+          </details>
+        )}
+      </div>
+    </Modal>
+  );
 }
 
 /** 검색 확인 리포트(11/05) — 위: 찾음 수 + 순위 분포 / 아래: 못 찾은 질문 먼저(대신 나온 것) · 찾은 질문은 접힘 */
@@ -1321,6 +1373,13 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
   const publish = useMutation({ mutationFn: () => publishImport(b.id), onSuccess: () => { wasPublishing.current = true; onChange(); },
     onError: (e) => showError(e) });
   const checking = !!check?.running;
+  const golden = b.golden_check ?? null;
+  const goldenRunning = !!golden?.running;
+  // 서버가 응답 전에 "도는 중"을 잡아 두므로(claim) 응답 뒤 다시 읽으면 도는 중 → 2초마다 다시 읽기(BatchView)
+  const runGolden = useMutation({ mutationFn: () => goldenCheckImport(b.id), onSuccess: onChange, onError: (e) => showError(e) });
+  const [goldenOpen, setGoldenOpen] = useState(false);     // 골든셋 확인 리포트 창(11/17)
+  const goldenWorse = golden && !goldenRunning && !golden.error ? (golden.worse ?? 0) + (golden.gold_lost ?? 0) : 0;
+  const busy = runCheck.isPending || publish.isPending || publishing || checking || runGolden.isPending || goldenRunning;
   // 게시가 끝나는 순간(게시 중 → 아님) 결과 안내 — 성공이면 게시 시각, 실패면 배치 오류 칸
   useEffect(() => {
     if (wasPublishing.current && !publishing) {
@@ -1344,6 +1403,10 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
             detail="페이지마다 옛 버전 내림 · 원문 확정 · 활성화 — 끝나면 자동 용어 추출. 화면을 닫아도 계속돼요" />)}
       {checking && <ProgressBar label="검색 확인 중" done={(check?.asked ?? 0) + (check?.failed ?? 0)} total={check?.total ?? 0} unit="표본" startedAt={check?.checked_at}
         detail="질문은 로컬 LLM이 조각에서 만들어요 — 화면을 닫아도 계속돼요" />}
+      {goldenRunning && <ProgressBar label="골든셋 확인 중" done={golden?.done ?? 0} total={golden?.total ?? 0} unit="문항" startedAt={golden?.checked_at}
+        detail="지금 게시본과 게시했을 때를 같은 검색으로 비교해요(LLM 없음) — 화면을 닫아도 계속돼요" />}
+      {golden?.interrupted && !goldenRunning && <p className="text-xs text-amber-700 dark:text-amber-300">골든셋 확인이 서버 재시작으로 끊겼어요 — 다시 눌러 주세요.</p>}
+      {golden?.error && !goldenRunning && <p className="text-xs text-amber-700 dark:text-amber-300">{golden.error}</p>}
       {check?.interrupted && !checking && <p className="text-xs text-amber-700 dark:text-amber-300">검색 확인이 서버 재시작으로 끊겼어요 — 다시 눌러 주세요.</p>}
       {check?.error && !checking && <p className="text-xs text-amber-700 dark:text-amber-300">{check.error}</p>}
       {!checking && !!check?.failed && <p className="text-xs text-amber-700 dark:text-amber-300" title="로컬 LLM이 조각에서 질문을 못 만든 표본 — 찾음 수에서 빠져요(로그)">
@@ -1356,12 +1419,13 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
       </div>
       {held && qualityOpen && <QualityReport held={held} batchId={b.id} rootUrl={b.root_url} onClose={() => setQualityOpen(false)} />}
       {held && checkOpen && check?.items && <SearchCheckReport check={check} rootUrl={b.root_url} onClose={() => setCheckOpen(false)} />}
+      {held && goldenOpen && golden && <GoldenCheckReport check={golden} onClose={() => setGoldenOpen(false)} />}
       {held && (
         <div className="space-y-3" data-testid="publish-review">
           <p className="text-sm text-slate-300" title="게시하면 같은 페이지 옛 버전을 내리고 새 조각을 채팅에 내놓아요. 그 전까지는 옛 버전이 그대로 답에 쓰여요">
             검수 대기 — 아직 채팅에 안 나와요. 확인하고 [게시]하면 반영돼요.
           </p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <Stat k="게시할 조각" v={held.chunks} sub={`작업 ${held.jobs}`} />
             <Stat k="중복 의심" v={held.dup} hot={held.dup > 0} sub="게시하면 승인 대기로" />
             <Stat k="품질 경고" v={warnCount} hot={warnCount > 0} onOpen={warnCount > 0 || (held.overlap_items?.length ?? 0) > 0 ? () => setQualityOpen(true) : undefined}
@@ -1369,6 +1433,10 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
             <Stat k="검색 확인" v={checking ? '확인 중' : check?.asked ? `${check.found}/${check.asked}` : check?.skipped ? '건너뜀' : '—'} onOpen={!checking && check?.items?.length ? () => setCheckOpen(true) : undefined}
               hot={!!check?.asked && (check.found ?? 0) < (check.asked ?? 0)}
               sub={check?.skipped ?? (check?.asked ? '찾은 질문 / 만든 질문' : '아직 안 함')} />
+            <Stat k="골든셋 회귀" testId="golden-check-card"
+              v={goldenRunning ? '확인 중' : golden?.error ? '오류' : golden?.items ? goldenWorse : golden?.skipped ? '건너뜀' : '—'}
+              hot={goldenWorse > 0} onOpen={!goldenRunning && golden?.items ? () => setGoldenOpen(true) : undefined}
+              sub={golden?.error ? '다시 눌러 주세요' : golden?.skipped ?? (golden?.items ? `나빠짐 ${golden.worse ?? 0} · 정답 사라짐 ${golden.gold_lost ?? 0} / ${golden.items}문항` : '아직 안 함')} />
           </div>
           {check?.misses && check.misses.length > 0 && (
             <details className="text-xs text-slate-400">
@@ -1377,14 +1445,26 @@ function GateTab({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
             </details>
           )}
           <div className="flex flex-wrap justify-end gap-2">
-            <button disabled={runCheck.isPending || publish.isPending || publishing || checking} onClick={() => runCheck.mutate()}
+            <button disabled={busy} onClick={() => runCheck.mutate()}
               title="이 배치 조각 10개로 로컬 LLM이 질문을 만들고, 그 질문으로 이 페이지가 검색 상위 3에 드는지 봐요(벡터만 — 실제 채팅보다 보수적)"
               className="text-sm px-4 py-2 rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800 disabled:opacity-40">
               {checking || runCheck.isPending ? '검색 확인 중…' : check ? '검색 확인 다시' : '검색 확인'}
             </button>
-            <button disabled={publish.isPending || runCheck.isPending || publishing || checking}
-              onClick={async () => { if (await showConfirm(`조각 ${held.chunks}개를 채팅에 내놓아요. 같은 페이지 옛 버전은 내려가요.`, { title: '게시', confirmLabel: '게시' })) publish.mutate(); }}
-              className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40">{publishing ? '게시 중…' : '게시'}</button>
+            <button disabled={busy} onClick={() => runGolden.mutate()} data-testid="golden-check-run"
+              title="이 컬렉션 골든셋 문항을 지금 게시본과 게시했을 때 같은 검색(벡터)으로 찾아 정답 순위를 비교해요 — LLM 없음"
+              className="text-sm px-4 py-2 rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800 disabled:opacity-40">
+              {goldenRunning || runGolden.isPending ? '골든셋 확인 중…' : golden?.items || golden?.skipped ? '골든셋 확인 다시' : '골든셋 확인'}
+            </button>
+            <button disabled={busy} data-testid="publish-submit"
+              onClick={async () => {
+                const msg = `조각 ${held.chunks}개를 채팅에 내놓아요. 같은 페이지 옛 버전은 내려가요.`;
+                const warn = goldenWorse > 0 ? `
+
+골든셋 ${golden?.items}문항 중 나빠짐 ${golden?.worse ?? 0} · 정답 사라짐 ${golden?.gold_lost ?? 0} — 그래도 게시할까요?` : '';
+                if (await showConfirm(msg + warn, { title: goldenWorse > 0 ? '그래도 게시' : '게시', confirmLabel: goldenWorse > 0 ? '그래도 게시' : '게시', tone: goldenWorse > 0 ? 'danger' : undefined })) publish.mutate();
+              }}
+              className={`text-sm font-semibold px-4 py-2 rounded-lg text-white disabled:opacity-40 ${goldenWorse > 0 ? 'bg-amber-600 hover:bg-amber-500 dark:bg-amber-600 dark:hover:bg-amber-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>
+              {publishing ? '게시 중…' : goldenWorse > 0 ? '그래도 게시' : '게시'}</button>
           </div>
         </div>
       )}
