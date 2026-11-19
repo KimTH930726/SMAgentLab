@@ -106,7 +106,7 @@ export default function App() {
       <SearchConfigSync />
       <UserSync />
       <DialogHost />
-      <BrowserRouter>
+      <BrowserRouter basename={new URL(document.baseURI).pathname.replace(/\/$/, '') || '/'}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />

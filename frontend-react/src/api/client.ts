@@ -2,7 +2,7 @@ import { useAppStore } from '../store/useAppStore';
 import type { SSEEvent } from '../types';
 import { useAuthStore } from '../store/useAuthStore';
 
-const BASE_URL = '/api';
+const BASE_URL = new URL('api', document.baseURI).pathname;
 
 export class ApiError extends Error {
   constructor(
@@ -236,7 +236,7 @@ export async function* streamSSE(
 
 export async function healthCheck(): Promise<boolean> {
   try {
-    const resp = await fetch('/health', { signal: AbortSignal.timeout(3000) });
+    const resp = await fetch(new URL('health', document.baseURI), { signal: AbortSignal.timeout(3000) });
     return resp.ok;
   } catch {
     return false;

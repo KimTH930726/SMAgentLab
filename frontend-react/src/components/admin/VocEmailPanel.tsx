@@ -330,7 +330,7 @@ export function VocEmailPanel() {
   // Authorization Code Flow(PKCE) — 로그인 링크를 열면 Microsoft가 이 서버의
   // 콜백으로 리다이렉트시키고, 그 콜백이 로그인을 완료시킨다. 관리자 화면은
   // 진행 중(pending)일 때만 짧은 주기로 상태를 폴링해 완료 여부를 감지한다.
-  const delegatedRedirectUri = `${window.location.origin}/api/email-voc/delegated-auth/callback`;
+  const delegatedRedirectUri = new URL('api/email-voc/delegated-auth/callback', document.baseURI).href;
   const { data: delegatedStatus } = useQuery({
     queryKey: ['delegated-auth-status'],
     queryFn: getDelegatedAuthStatus,

@@ -4,7 +4,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-RUN npm run build
+RUN npm run build \
+    && mkdir -p dist/ops-navi \
+    && sed 's|<base href="/"|<base href="/ops-navi/"|' dist/index.html > dist/ops-navi/index.html
 
 # Serve stage
 FROM nginx:alpine
