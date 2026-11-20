@@ -578,11 +578,20 @@ def page_meta(page: dict, page_url: str) -> dict:
             "labels": [x.get("name") for x in ((page.get("metadata") or {}).get("labels") or {}).get("results", []) if x.get("name")]}
 
 
+# 컨플 파서 판(11/19) — 원문이 같아도 파서가 달라지면(참조 자리 표시·첨부 글) 다시 처리한다. 원장 media.parser(없으면 1).
+# 올릴 때: 동기화 [다시 파싱](sync mode=reparse)이 옛 판 페이지만 다시 받아 같은 페이지 교체로(교체 확인·권한·제한 가드 그대로).
+PARSER_VERSION = 3   # 2: 참조 자리 표시·첨부 글(11/19) · 3: 첨부 글은 문서형만(엑셀·CSV 뺌, 11/19)
+
+
 async def fetch_confluence_by_id(base_url: str, page_id: str, token: str, *, diagram_text: bool = True, include_restricted: bool = False,
-                                 image_marks: bool = False) -> ParsedDocument:
+                                 image_marks: bool = False, ref_marks: bool = True,
+                                 attach_text: bool = True) -> ParsedDocument:
     """page_id 기반 단일 페이지 fetch — 트리 선택 후 bulk 인제스천에서 호출.
-    그림(10/29): draw.io는 첨부 원본에서 글로(diagram_text), 일반 그림은 자리 표시(image_marks) — confluence_media. 둘 다 끄면 예전처럼 버림."""
+    그림(10/29): draw.io는 첨부 원본에서 글로(diagram_text), 일반 그림은 자리 표시(image_marks) — confluence_media. 둘 다 끄면 예전처럼 버림.
+    참조(11/19): Jira 이슈 키·첨부 파일 이름 자리 표시(ref_marks, 기본 켬) — 원장 media에 남아 다시 분할도 같다.
+    첨부 글(11/19): 본문이 가리키는 문서 첨부(PDF·엑셀·워드·PPT 등)를 읽어 페이지 끝 섹션으로(attach_text) — confluence_attach."""
     from bs4 import BeautifulSoup
+    from agents.knowledge_rag.ingestion import confluence_attach as ca
     from agents.knowledge_rag.ingestion import confluence_media as cm
 
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -604,6 +613,8 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str, *, dia
             # 제한 페이지는 첨부도 안 받는다 — 관리자가 제한 포함을 켠 적재(include_restricted, 11/05)만 받는다
             names = cm.find_diagrams(storage_html) if diagram_text and (not restricted or include_restricted) else []
             diagrams = await cm.fetch_diagrams(client, base, page_id, names, headers)
+            att_names = ca.find_doc_attachments(storage_html) if attach_text and (not restricted or include_restricted) else []
+            attachments = await ca.fetch_attachments(client, base, page_id, att_names, headers)
     except (httpx.HTTPStatusError, httpx.RequestError) as e:
         raise _translate_httpx_error(e) from e
 
@@ -617,12 +628,13 @@ async def fetch_confluence_by_id(base_url: str, page_id: str, token: str, *, dia
     ancestors = page.get("ancestors") or []
     parent_title = ancestors[-1].get("title") if ancestors else None
 
-    media = {"diagram_text": diagram_text, "image_marks": image_marks, "diagrams": diagrams,
+    media = {"parser": PARSER_VERSION, "diagram_text": diagram_text, "image_marks": image_marks, "ref_marks": ref_marks, "attach_text": attach_text, "attachments": attachments, "diagrams": diagrams,
              "diagram_names": names, "page": page_meta(page, page_url)}
     if restricted and include_restricted:   # 원래 제한 — 원장에 남긴다(나중에 권한 연동하면 이걸로 골라낸다)
         media["restricted_included"] = restricted
-    soup = BeautifulSoup(prepare_storage_html(cm.apply_media(storage_html, diagrams, diagram_text_on=diagram_text,
-                                                             image_marks=image_marks)), "lxml")
+    soup = BeautifulSoup(prepare_storage_html(ca.append_attachments(cm.apply_media(storage_html, diagrams, diagram_text_on=diagram_text,
+                                                                                   image_marks=image_marks, ref_marks=ref_marks),
+                                                                    attachments)), "lxml")
     raw_text = _extract_text(soup)
     sections = _extract_heading_sections(soup)
 

@@ -6,7 +6,8 @@
 - 운영(폐쇄망): `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build`
   - 사전 `docker load` 로 이미지 반입 필요. 자세한 절차는 `docs/operations/deployment-closed-network.md`
 - 특정 서비스만 빌드: `docker compose build backend frontend`
-- 이미지 버전 태그: `.env`의 `IMAGE_TAG` (현재 운영 반입 `v2.119`, 2026-10-02) — compose가 자동 참조. 반입·업그레이드 절차는 `docs/operations/deployment-closed-network.md`
+- 이미지 버전 태그: `.env`의 `IMAGE_TAG` — compose가 자동 참조(옛 폐쇄망 반입 절차는 `docs/operations/deployment-closed-network.md`)
+- 운영(AWS, 11/19~): main 병합·커밋 → Bitbucket 태그 → CI/CD 배포(승인 필수). 스키마 변경은 Aurora에도 반영되니 커밋 요청에 적용 SQL을 같이
 - Backend: FastAPI (port 8000), Frontend: React+nginx (port 8501)
 - DB: PostgreSQL + pgvector (ops-postgres 컨테이너)
 - Ollama: 호스트에서 별도 실행 (`ollama serve`)

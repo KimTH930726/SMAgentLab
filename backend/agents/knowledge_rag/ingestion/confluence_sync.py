@@ -211,6 +211,40 @@ async def include_restricted_for(conn, team_id: int, root_url: str) -> bool:
                                     "AND include_restricted_at IS NOT NULL LIMIT 1", team_id, root_url))
 
 
+async def restricted_decision(conn, team_id: int, space_key: str) -> Optional[dict]:
+    """같은 팀이 이 공간에서 적재까지 끝낸 가장 최근 배치의 결정 — 그 배치가 '읽기 제한 페이지도 넣기'를 켰으면 이어받는다(11/19 ④).
+    켬·끔과 상관없이 가장 최근 것 — 나중에 관리자가 일부러 끈 결정을 옛 켬이 뒤집지 않게(리뷰 M1).
+    공간은 그 배치 페이지 원문의 공간 키(원장 media.page.space_key)로 — 배치 주소는 페이지 주소라 공간을 모른다.
+    적재까지 간(loaded) 결정만 — 확정 안 한 미리보기가 결정을 바꾸지 않게(include_restricted_for와 같은 규칙)."""
+    if not space_key:
+        return None
+    r = await conn.fetchrow("""SELECT b.id, b.include_restricted_at::text AS at, u.username AS by FROM rag_import_batch b
+                               LEFT JOIN ops_user u ON u.id = b.include_restricted_by
+                               WHERE b.team_id = $1 AND b.status = 'loaded'
+                                 AND EXISTS (SELECT 1 FROM rag_import_page p JOIN rag_source_document d ON d.id = p.source_document_id
+                                             WHERE p.batch_id = b.id AND d.media->'page'->>'space_key' = $2)
+                               ORDER BY b.id DESC LIMIT 1""", team_id, space_key)
+    return dict(r) if r and r["at"] else None
+
+
+async def space_key_of(base_url: str, page_id: Optional[str], space_key: Optional[str], token: str) -> Optional[str]:
+    """주소의 공간 키 — 공간 주소면 그대로, 페이지 주소면 컨플에 한 번 묻는다. 못 알아내면 None(이어받지 않음 — 로그)."""
+    if space_key:
+        return space_key
+    if not page_id:
+        return None
+    from agents.knowledge_rag.ingestion.web_crawler import guarded_client
+    try:
+        async with guarded_client(verify=False, timeout=30) as cl:
+            r = await cl.get(f"{base_url.rstrip('/')}/rest/api/content/{page_id}", params={"expand": "space"},
+                             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+            r.raise_for_status()
+            return (r.json().get("space") or {}).get("key")
+    except Exception:   # noqa: BLE001
+        logger.warning("공간 키 확인 실패(page %s) — 읽기 제한 설정 이어받지 않음", page_id, exc_info=True)
+        return None
+
+
 async def _write_denied(conn, ns_id: int, owner: dict) -> Optional[str]:
     """담당자가 그 컬렉션에 쓸 수 있나 — 화면 등록·적재 확정과 같은 규칙(edit_denied_reason)."""
     from core.dependencies import EFFECTIVE_OWNERS_SQL, edit_denied_reason
@@ -287,8 +321,11 @@ async def _reingest(src, c, ch: dict, rules: dict, owner: dict, out: dict) -> Op
         return None
     raw = (doc.metadata.get("raw_html") or doc.raw_text or "").replace("\x00", "")   # 원장 저장과 같게 해시
     async with get_conn() as conn:
+        # 원문이 같아도 옛 파서 판이면 다시(11/19 — 참조 자리 표시·첨부 글이 원문 밖이라 해시가 같다)
+        from agents.knowledge_rag.ingestion.web_crawler import PARSER_VERSION
         same = await conn.fetchval("SELECT 1 FROM rag_source_document WHERE namespace_id = $1 AND source_ref = $2 AND status = 'active' "
-                                   "AND content_hash = $3", ns_id, pid, content_hash(raw))
+                                   "AND content_hash = $3 AND coalesce((media->>'parser')::int, 1) >= $4", ns_id, pid, content_hash(raw),
+                                   PARSER_VERSION)
         if same:
             out["unchanged"] += 1
             return None
@@ -393,11 +430,12 @@ async def sync_connection(conn_id: int, mode: str = "incremental") -> dict:
             src, why = await _source_for(conn, c)
             owner = await conn.fetchrow("SELECT id, role, part_id FROM ops_user WHERE id = $1", c["owner_user_id"])
             rules: dict = {}
-            for r in await conn.fetch("SELECT bundle, grp, namespace_id FROM rag_import_rule WHERE team_id = $1 AND root_url = $2",
+            for r in await conn.fetch("SELECT bundle, grp, namespace_id, no_rule FROM rag_import_rule WHERE team_id = $1 AND root_url = $2",
                                       c["team_id"], c["root_url"]):
                 rb = rules.setdefault(r["bundle"], {"ns": None, "groups": {}})
                 if r["grp"] is None:
                     rb["ns"] = r["namespace_id"]
+                    rb["no_rule"] = bool(r["no_rule"])
                 else:
                     rb["groups"][r["grp"]] = r["namespace_id"]
         if src is None or owner is None:
@@ -430,8 +468,25 @@ async def sync_connection(conn_id: int, mode: str = "incremental") -> dict:
                             out["_touched"].add(ns_of[pid])
                         out["missing"] += 1
         else:
-            since = c["last_incremental_at"] or c["created_at"]
-            changes = merge_retry(await src.changed_since(since), retry)
+            if mode == "reparse":   # 파서 판이 오른 뒤 — 이 연결로 들어온 사용 중 페이지 중 옛 판만(11/19). 증분 시작점은 안 옮긴다
+                from agents.knowledge_rag.ingestion.web_crawler import PARSER_VERSION
+                async with get_conn() as conn:
+                    known = await _known_pages(conn, c)
+                    docs = await conn.fetch(   # (컬렉션, 페이지) 쌍으로 — 다른 컬렉션에 같은 페이지 원장이 있어도 섞이지 않게(리뷰 L2)
+                        "SELECT d.id, d.source_ref, coalesce((d.media->>'parser')::int, 1) AS parser FROM rag_source_document d "
+                        "JOIN unnest($1::int[], $2::text[]) AS k(ns, pid) ON d.namespace_id = k.ns AND d.source_ref = k.pid "
+                        "WHERE d.status = 'active' AND d.source_type = 'confluence'",
+                        [k["ns"] for k in known], [k["page_id"] for k in known])
+                    stale_ids = [d["id"] for d in docs if d["parser"] < PARSER_VERSION]
+                    bumped = await bump_unchanged_parser(conn, stale_ids)   # 같은 연결 안에서(밖이면 돌려준 연결 — 11/19 전량 InterfaceError)
+                todo = set(stale_ids) - bumped
+                stale = {d["source_ref"] for d in docs if d["id"] in todo}
+                out["unchanged"] += len(docs) - len(todo)
+                out["no_ledger"] = len({k["page_id"] for k in known} - {d["source_ref"] for d in docs})   # 원장 없는 옛 페이지(리뷰 L3)
+                changes = [{"page_id": pid, "ancestors": []} for pid in sorted({k["page_id"] for k in known if k["page_id"] in stale})]   # 한 페이지 두 컬렉션이어도 한 번(재리뷰 낮음 4)
+            else:
+                since = c["last_incremental_at"] or c["created_at"]
+                changes = merge_retry(await src.changed_since(since), retry)
             out["changed"] = len(changes)
             results = []
             for ch in changes:
@@ -441,7 +496,9 @@ async def sync_connection(conn_id: int, mode: str = "incremental") -> dict:
                     logger.warning("컨플 동기화: 페이지 실패 conn=%s page=%s: %s", conn_id, ch.get("page_id"), type(e).__name__)
                     out["failed"] += 1
                     results.append((ch, "failed"))
-            retry = next_retry(retry, results)
+            done_ids = {str(ch["page_id"]) for ch, _ in results}
+            # 다시 파싱은 옛 판 페이지만 본다 — 처리 안 한 증분 재시도(실패·충돌)는 그대로 둔다(덮으면 영영 재시도 안 됨 — 리뷰 M1)
+            retry = next_retry(retry, results) + ([r for r in retry if str(r["page_id"]) not in done_ids] if mode == "reparse" else [])
         await _finish(conn_id, "ok", None, out, mode, retry)
     except Exception as e:  # noqa: BLE001 — 연결 전체 실패(토큰 만료·서버 오류)는 상태로 보인다(조용히 멈추지 않게)
         logger.warning("컨플 동기화 실패 conn=%s: %s", conn_id, type(e).__name__)
@@ -452,6 +509,35 @@ async def sync_connection(conn_id: int, mode: str = "incremental") -> dict:
     finally:
         await _invalidate(out["_touched"])
     return _public(out)
+
+
+async def bump_unchanged_parser(conn, doc_ids: list[int]) -> set[int]:
+    """새 파서로 해도 글이 같은 옛 판 페이지는 다시 받지 않고 판만 올린다(11/19 — 7천여 페이지 중 바뀌는 건 Jira·첨부가 있는 1천여뿐).
+    같다 = 저장 원문으로 옛·새 파서 글이 같고, 본문이 가리키는 문서 첨부가 없다(첨부는 받아 봐야 안다). 올린 페이지 id."""
+    from agents.knowledge_rag.ingestion.confluence_attach import find_doc_attachments
+    from agents.knowledge_rag.ingestion.confluence_media import has_ref_marks
+    from agents.knowledge_rag.ingestion.web_crawler import PARSER_VERSION
+    rows = await conn.fetch("SELECT * FROM rag_source_document WHERE id = ANY($1::int[]) AND coalesce((media->>'parser')::int, 1) < $2",
+                            doc_ids, PARSER_VERSION)
+
+    def same(d) -> bool:
+        # 새 파서가 바꾸는 건 참조 자리 표시(Jira·첨부 보기·첨부 링크 — confluence_media.has_ref_marks)와 첨부 글뿐 — 둘 다 없고,
+        # 원장에 남은 옛 첨부 글(판 2의 엑셀 등)도 없으면 글이 똑같다. (처음엔 옛·새로 두 번 파싱해 비교 — 7천여 페이지에 한 시간 넘게, 11/19)
+        m = d["media"] if isinstance(d["media"], dict) else json.loads(d["media"] or "{}")
+        raw = d["raw_content"] or ""
+        if int(m.get("parser") or 1) >= 2:   # 판 2는 참조 표시·문서 첨부가 이미 반영 — 판 3에서 바뀌는 건 엑셀·CSV 첨부 글뿐(리뷰 L5)
+            return not any(str(a[0] if isinstance(a, list) else a).rsplit(".", 1)[-1].lower() in ("xlsx", "xlsm", "csv")
+                           for a in (m.get("attachments") or []))
+        return not has_ref_marks(raw) and not find_doc_attachments(raw) and not m.get("attachments")
+
+    bumped = [r["id"] for r in rows if same(r)]
+    if bumped:   # 판·설정만 — 글·조각·임베딩은 그대로(같은 결과라서)
+        # 판 1은 참조 표시·첨부 설정까지 켠 상태로(첨부 없음이 확인됨), 판 2는 판 번호만 — 이미 읽은 문서 첨부 글을 지우지 않게
+        await conn.execute("""UPDATE rag_source_document SET media = coalesce(media, '{}'::jsonb) || CASE
+                                  WHEN coalesce((media->>'parser')::int, 1) >= 2 THEN jsonb_build_object('parser', $2::int)
+                                  ELSE jsonb_build_object('parser', $2::int, 'ref_marks', true, 'attach_text', true, 'attachments', '[]'::jsonb) END
+                              WHERE id = ANY($1::int[])""", bumped, PARSER_VERSION)
+    return set(bumped)
 
 
 def _auth_error(e: BaseException) -> bool:
@@ -485,10 +571,11 @@ async def _invalidate(ns_ids: set) -> None:
 
 async def _finish(conn_id: int, status: str, error: Optional[str], out: dict, mode: str, retry: Optional[list]) -> None:
     """결과 기록 — 성공일 때만 그 방식의 마지막 시각을 옮긴다. retry None = 다시 시도 목록 그대로."""
-    col = "last_full_at" if mode == "full" else "last_incremental_at"
+    col = {"full": "last_full_at", "incremental": "last_incremental_at"}.get(mode)   # 다시 파싱은 시작점을 안 옮긴다(그사이 바뀐 페이지를 놓치지 않게)
+    mark = f"{col} = CASE WHEN $2 = 'ok' THEN NOW() ELSE {col} END, " if col else ""
     async with get_conn() as conn:
         await conn.execute(f"UPDATE rag_source_connection SET status = $2, error = $3, last_result = $4::jsonb, "
-                           f"{col} = CASE WHEN $2 = 'ok' THEN NOW() ELSE {col} END, last_run_at = NOW(), "
+                           f"{mark}last_run_at = NOW(), "
                            f"retry_pages = COALESCE($5::jsonb, retry_pages) WHERE id = $1",
                            conn_id, status, error, json.dumps(_public(out), ensure_ascii=False),
                            None if retry is None else json.dumps(retry, ensure_ascii=False))

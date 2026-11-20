@@ -38,12 +38,16 @@ class _StartBody(BaseModel):
     team_id: Optional[int] = None       # 관리자(파트 없음)만 — 다른 사람은 자기 파트의 팀
     default_namespace_id: Optional[int] = None   # 공간 기본 위치(업무 컬렉션) — 공간 전체가 한 업무일 때
     include_restricted: bool = False   # 읽기 제한 페이지도 적재(관리자만, 11/05) — OpsLens 사용자 누구나 검색하게 된다
+    # 화면이 이전 결정을 이어받아 켰으면 그 배치(11/19 ④) — 서버가 지금 결정과 같은지 다시 보고 같을 때만 출처로 남긴다.
+    # 켬·끔은 화면이 보인 값 그대로(서버가 따로 정하면 화면엔 꺼짐인데 켜져 시작할 수 있었다 — 리뷰 M2)
+    inherit_from: Optional[int] = None
     confluence_token: Optional[str] = None
 
 
 # 켠 사람·시각은 include_restricted일 때만(감사). $3를 두 번 써서 타입을 적어야 한다(text/integer 추론 충돌 — 11/05 실사용에서 500)
-INSERT_BATCH_SQL = ("INSERT INTO rag_import_batch (team_id, root_url, created_by_user_id, default_namespace_id, include_restricted_at, include_restricted_by) "
-                    "VALUES ($1, $2, $3::int, $4, CASE WHEN $5::boolean THEN NOW() END, CASE WHEN $5::boolean THEN $3::int END) RETURNING id")
+INSERT_BATCH_SQL = ("INSERT INTO rag_import_batch (team_id, root_url, created_by_user_id, default_namespace_id, include_restricted_at, include_restricted_by, "
+                    "include_restricted_from) VALUES ($1, $2, $3::int, $4, CASE WHEN $5::boolean THEN NOW() END, CASE WHEN $5::boolean THEN $3::int END, "
+                    "CASE WHEN $5::boolean THEN $6::int END) RETURNING id")
 
 
 async def _my_team(conn, user: dict) -> Optional[int]:
@@ -87,10 +91,20 @@ async def start(body: _StartBody, user: dict = Depends(get_current_user)):
         team_id = await _user_team(conn, user, body.team_id)
         if body.default_namespace_id is not None:
             await _allowed(conn, {"team_id": team_id}, user, body.default_namespace_id, domain_only=True)
+    include, inherited = body.include_restricted, None
+    if include and body.inherit_from is not None:   # 출처 확인 — 화면이 본 결정이 지금도 그 공간의 결정인가
+        from agents.knowledge_rag.ingestion.confluence_sync import restricted_decision, space_key_of
+        key = await space_key_of(base_url, page_id, space_key, token)
+        async with get_conn() as conn:
+            d = await restricted_decision(conn, team_id, key)
+        inherited = d if d and d["id"] == body.inherit_from else None
+    async with get_conn() as conn:
         try:   # 팀마다 진행 중 배치 하나 — 부분 유니크 인덱스가 동시 시작도 막는다
-            bid = await conn.fetchval(INSERT_BATCH_SQL, team_id, body.url.strip(), user["id"], body.default_namespace_id, body.include_restricted)
-            if body.include_restricted:   # 감사 — 원래 제한된 내용을 사용자 전체에 여는 결정
-                logger.warning("팀 적재 #%s: 읽기 제한 페이지 포함 — 켠 사람 %s, 주소 %s", bid, user.get("username"), body.url.strip())
+            bid = await conn.fetchval(INSERT_BATCH_SQL, team_id, body.url.strip(), user["id"], body.default_namespace_id, include,
+                                      (inherited or {}).get("id"))
+            if include:   # 감사 — 원래 제한된 내용을 사용자 전체에 여는 결정
+                logger.warning("팀 적재 #%s: 읽기 제한 페이지 포함 — 켠 사람 %s, 주소 %s%s", bid, user.get("username"), body.url.strip(),
+                               f", #{inherited['id']} 결정 이어받음" if inherited else "")
         except asyncpg.UniqueViolationError:
             busy = await conn.fetchval("SELECT id FROM rag_import_batch WHERE team_id = $1 AND status IN ('previewing', 'loading')", team_id)
             raise HTTPException(status_code=409, detail=f"이 팀의 적재 배치 #{busy}가 진행 중입니다 — 끝난 뒤 다시.")
@@ -144,6 +158,26 @@ _PAGE_COLS = ("id, page_id, title, bundle, path, depth, status, prev_status, rea
 
 
 # "/{batch_id}"보다 먼저 — 순서가 바뀌면 "collections"가 배치 id로 해석돼 422
+@router.get("/restricted-default")
+async def restricted_default(url: str, team_id: int, user: dict = Depends(get_current_user)):
+    """새 적재 폼 — 이 주소의 공간에 같은 팀의 '읽기 제한 포함' 적재 결정이 있나(관리자만, 11/19 ④). 화면이 미리 켜 두고 출처를 보여 준다."""
+    if user["role"] != "admin":
+        return {"space_key": None, "inherit": None}
+    from agents.knowledge_rag.ingestion.confluence_sync import restricted_decision, space_key_of
+    from agents.knowledge_rag.ingestion.web_crawler import _is_confluence, _parse_confluence_url
+    from core.security import get_user_confluence_pat
+    token = get_user_confluence_pat(user)
+    if not _is_confluence(url) or not token:
+        return {"space_key": None, "inherit": None}
+    try:
+        base_url, page_id, space_key, _t = _parse_confluence_url(url)
+    except ValueError:
+        return {"space_key": None, "inherit": None}
+    key = await space_key_of(base_url, page_id, space_key, token)
+    async with get_conn() as conn:
+        return {"space_key": key, "inherit": await restricted_decision(conn, team_id, key)}
+
+
 @router.get("/collections")
 async def list_collections(team_id: Optional[int] = None, user: dict = Depends(get_current_user)):
     """등록 화면의 "이 공간 기본 위치" 고르기용 — 배치를 만들기 전에. 관리자는 팀을 넘긴다."""
@@ -184,7 +218,8 @@ async def get_batch(batch_id: int, user: dict = Depends(get_current_user)):
         collections = await _collections(conn, b["team_id"], user)
         held = await ti.held_summary(conn, batch_id) if b["status"] == "loaded" and b.get("published_at") is None else None
         progress = await ti.publish_progress(conn, b)   # 게시 중일 때만 — 화면 진행 막대(11/05)
-    blockers = ti.blockers(pages, b["sampling_required"])
+        touches = await ti.replace_touches(conn, batch_id) if b["status"] == "preview" else {}
+    blockers = ti.blockers(pages, b["sampling_required"], ti.replace_unconfirmed(touches))
     counts, wrong, _ = ti._sample_view(pages)
     for p in pages:
         s = p["signals"]
@@ -195,7 +230,8 @@ async def get_batch(batch_id: int, user: dict = Depends(get_current_user)):
             nb[ns] = nb.get(ns, 0) + 1
         p["signals"] = {"neighbors": nb, "reason": s.get("reason"), "fallback": s.get("fallback"), "error": s.get("error"),
                         "restricted": s.get("restricted"), "doc_type": s.get("doc_type"),
-                        "restricted_included": s.get("restricted_included")}
+                        "restricted_included": s.get("restricted_included"),
+                        "replace_touch": touches.get(p["id"])}   # 교체 확인(11/19) — 고친·지운 수·일부 등록·확인 여부
     batch = {k: (str(v) if k.endswith("_at") and v is not None else v) for k, v in b.items()}
     for k in ("publish_check", "golden_check"):
         if isinstance(batch.get(k), str):
@@ -236,7 +272,7 @@ async def set_default(batch_id: int, body: _DefaultBody, user: dict = Depends(ge
 
 class _PagesBody(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=ti.MAX_PAGES)
-    action: Literal["classify", "hold", "exclude", "include"]
+    action: Literal["classify", "hold", "exclude", "include", "allow_replace"]   # allow_replace = 교체 확인(11/19)
     namespace_id: Optional[int] = None
 
 
@@ -266,9 +302,18 @@ async def update_pages(batch_id: int, body: _PagesBody, user: dict = Depends(get
             await _lock_preview(conn, batch_id)
             if body.action == "classify":
                 await _allowed(conn, b, user, body.namespace_id)
-                r = await conn.execute(f"UPDATE rag_import_page SET final_namespace_id = $3, decided_by_user_id = $4 "
+                # 넣을 곳이 바뀌면 교체 확인도 지운다 — 다른 컬렉션의 사람 손질을 확인 없이 덮지 않게(리뷰 M4)
+                r = await conn.execute(f"UPDATE rag_import_page SET final_namespace_id = $3, decided_by_user_id = $4, "
+                                       f"signals = signals - 'replace_ok' - 'replace_ok_at' - 'replace_ok_ns' "
                                        f"WHERE batch_id = $1 AND id = ANY($2::bigint[]) AND status = ANY($5::text[]) AND {_IN_PREVIEW}",
                                        batch_id, body.ids, body.namespace_id, user["id"], list(ti.DECIDABLE))
+            elif body.action == "allow_replace":   # 교체 확인 — 사람 손이 닿은 기존 조각을 이 적재로 바꿔도 된다(누가·언제, 11/19)
+                # 그때 넣을 곳과 함께 — 넣을 곳이 어떤 경로로든 바뀌면 이 확인은 무효(리뷰 M4)
+                r = await conn.execute(f"UPDATE rag_import_page SET signals = signals || jsonb_build_object('replace_ok', $3::int, "
+                                       f"'replace_ok_at', NOW()::text, 'replace_ok_ns', final_namespace_id) "
+                                       f"WHERE batch_id = $1 AND id = ANY($2::bigint[]) AND status = ANY($4::text[]) AND {_IN_PREVIEW}",
+                                       batch_id, body.ids, user["id"], list(ti.LOADABLE))
+                logger.warning("팀 적재 #%s: 교체 확인 %s페이지 — %s", batch_id, r.split()[-1], user.get("username"))
             elif body.action in ("hold", "exclude"):
                 # 아직 안 본 표본이 빠지면 표본에서 내리고 그 컬렉션에서 다시 뽑는다(표본을 빼서 검토를 건너뛰지 못하게)
                 r = await conn.execute(f"UPDATE rag_import_page SET prev_status = status, status = $3, decided_by_user_id = $4, "
@@ -293,7 +338,7 @@ async def update_pages(batch_id: int, body: _PagesBody, user: dict = Depends(get
                                                     ELSE p.final_namespace_id END,
                           assigned_by = CASE WHEN {_U} AND b.default_namespace_id IS NULL THEN NULL ELSE p.assigned_by END,
                           sample_ns = CASE WHEN {_U} THEN b.default_namespace_id ELSE p.sample_ns END,
-                          prev_status = NULL, decided_by_user_id = $3
+                          prev_status = NULL, decided_by_user_id = $3, signals = p.signals - 'replace_ok' - 'replace_ok_at' - 'replace_ok_ns'
                         FROM rag_import_batch b WHERE b.id = p.batch_id AND
                           p.batch_id = $1 AND p.id = ANY($2::bigint[]) AND p.status IN ('held', 'excluded') AND p.prev_status IS NOT NULL
                           AND {_IN_PREVIEW}""", batch_id, body.ids, user["id"])
@@ -390,17 +435,8 @@ async def connect(batch_id: int, body: _ConnectBody, user: dict = Depends(get_cu
             # 묶음 연결은 사람이 전부 정한 것 — 표본(AI 자동 분류 검증)은 쓰지 않는다
             await conn.execute("UPDATE rag_import_batch SET sampling_required = FALSE WHERE id = $1", batch_id)
             await conn.execute("UPDATE rag_import_page SET sample_state = NULL WHERE batch_id = $1 AND sample_state = 'pending'", batch_id)
-            for x in body.bundles:
-                # 이번에 안 보낸 하위 예외는 지운다 — 묶음 값을 바꿔 예외가 사라졌는데 옛 규칙이 남던 것(리뷰 L2)
-                await conn.execute("DELETE FROM rag_import_rule WHERE team_id = $1 AND root_url = $2 AND bundle = $3 AND grp IS NOT NULL "
-                                   "AND NOT (grp = ANY($4::text[]))", b["team_id"], b["root_url"], x.bundle, [gg.name for gg in x.groups])
-                for g, ns in [(None, x.namespace_id)] + [(gg.name, gg.namespace_id) for gg in x.groups]:
-                    await conn.execute(
-                        """INSERT INTO rag_import_rule (team_id, root_url, bundle, grp, namespace_id, created_by_user_id)
-                           VALUES ($1, $2, $3, $4, $5, $6)
-                           ON CONFLICT (team_id, root_url, bundle, (coalesce(grp, ''))) DO UPDATE
-                           SET namespace_id = EXCLUDED.namespace_id, created_by_user_id = EXCLUDED.created_by_user_id, updated_at = NOW()""",
-                        b["team_id"], b["root_url"], x.bundle, g, ns, user["id"])
+            await ti.save_human_rules(conn, b["team_id"], b["root_url"], user["id"],
+                                      [(x.bundle, x.namespace_id, [(g.name, g.namespace_id) for g in x.groups]) for x in body.bundles])
         # 연결 기록(동기화 대상) — 담당 = 연결한 사람(그 사람 토큰으로 읽음), 증분 시작점 = 미리보기 때
         from agents.knowledge_rag.ingestion.confluence_sync import ensure_connection
         await ensure_connection(conn, b["team_id"], b["root_url"], b.get("root_title"), user["id"], b.get("created_at"))
@@ -409,7 +445,7 @@ async def connect(batch_id: int, body: _ConnectBody, user: dict = Depends(get_cu
 
 
 class _SyncBody(BaseModel):
-    mode: Literal["incremental", "full"] = "incremental"
+    mode: Literal["incremental", "full", "reparse"] = "incremental"   # reparse = 파서 판이 오른 뒤 옛 판 페이지만 다시(11/19)
 
 
 async def _visible_connection(conn, conn_id: int, user: dict):
@@ -488,7 +524,7 @@ async def confirm(batch_id: int, user: dict = Depends(get_current_user)):
             pages = [dict(r) for r in await conn.fetch(
                 "SELECT status, final_namespace_id, sample_state, ai_namespace_id, sample_ns, assigned_by FROM rag_import_page "
                 "WHERE batch_id = $1", batch_id)]
-            block = ti.blockers(pages, required)
+            block = ti.blockers(pages, required, ti.replace_unconfirmed(await ti.replace_touches(conn, batch_id)))
             if block:
                 raise HTTPException(status_code=409, detail=" · ".join(block))
             names = [r["name"] for r in await conn.fetch(

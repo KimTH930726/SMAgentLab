@@ -339,8 +339,10 @@ def rebuild_parsed(doc_row) -> ParsedDocument:
         media = doc_row.get("media") if hasattr(doc_row, "get") else None
         media = json.loads(media) if isinstance(media, str) else (media or {})
         # 미리보기 때와 같은 그림 글로(원장 media) — 옛 원장(media 없음)은 예전처럼 그림 버림(다시 분할이 바뀌지 않게)
-        parsed_raw = cm.apply_media(raw, media.get("diagrams"), diagram_text_on=bool(media.get("diagram_text")),
-                                    image_marks=bool(media.get("image_marks")))
+        from agents.knowledge_rag.ingestion.confluence_attach import append_attachments
+        parsed_raw = append_attachments(cm.apply_media(raw, media.get("diagrams"), diagram_text_on=bool(media.get("diagram_text")),
+                                                       image_marks=bool(media.get("image_marks")), ref_marks=bool(media.get("ref_marks"))),
+                                        media.get("attachments"))   # 첨부 글(11/19) — 원장에 남은 그대로(옛 원장은 없음 → 예전 그대로)
         soup = BeautifulSoup(w.prepare_storage_html(parsed_raw), "lxml")
         return ParsedDocument(source_type=st, source_name=title, raw_text=w._extract_text(soup),
                               sections=w._extract_heading_sections(soup),

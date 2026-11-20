@@ -118,10 +118,83 @@ def _p(text: str) -> str:
     return "".join(f"<p>{_html.escape(line)}</p>" for line in text.split("\n") if line.strip())
 
 
-def apply_media(storage: str, diagrams: Optional[dict], *, diagram_text_on: bool, image_marks: bool) -> str:
-    """파싱 전 storage HTML에 그림 자리 글을 넣는다(원장 원문은 그대로 — 파싱용 사본만). 둘 다 끄면 원래 동작(그림 버림)."""
-    if not storage or not (diagram_text_on or image_marks):
+# 참조 자리 표시(11/19 최종 적재 진단): Jira 매크로·첨부 보기 매크로·첨부 링크는 파서가 글 없이 버렸다 — Jira가 SP 403·앱 81페이지,
+# 첨부 보기가 SP 50·ERP 40페이지. "정산 매뉴얼.xlsx 참고"·"ABC-123" 같은 단서가 통째로 사라져 답이 원문 첨부·이슈로 안내하지 못했다.
+# 내용은 읽지 않고(첨부 내용은 별도 단계) 이름·키만 자리에 남긴다. 다른 매크로를 품지 않는 매크로만 — 바깥 매크로 닫는 태그를 삼키지 않게.
+FILE_MACROS = ("view-file", "viewpdf", "viewxls", "viewppt", "viewdoc", "viewfile")
+_JIRA_RE = re.compile(r'<ac:structured-macro\b[^>]*ac:name="jira"[^>]*?(?:/>|>.*?</ac:structured-macro>)', re.S | re.I)
+_FILE_RE = re.compile(r'<ac:structured-macro\b[^>]*ac:name="(?:' + "|".join(FILE_MACROS) + r')"[^>]*?(?:/>|>.*?</ac:structured-macro>)',
+                      re.S | re.I)
+_ATTACH_LINK_RE = re.compile(r"<ac:link\b[^>]*(?<!/)>(?:(?!</ac:link>).)*?<ri:attachment\b.*?</ac:link>", re.S)   # 스스로 닫힌 링크(/>) 제외(리뷰 L1)
+_FILENAME_RE = re.compile(r'ri:filename="([^"]+)"')
+_LINK_BODY_RE = re.compile(r"<ac:(?:plain-text-)?link-body>(.*?)</ac:(?:plain-text-)?link-body>", re.S)
+# 글을 담는 칸 — 이 안이면 인라인(<span>), 밖이면 문단(<p>). 문단 안에 <p>를 넣으면 lxml이 바깥 문단을 먼저 닫아 뒷글이 블록 밖으로 떨어져
+# 파서가 버렸다(리뷰 H1: "관련 이슈 {jira}{jira} 진행 중입니다" → "진행 중입니다" 유실). 앞 몇 글자로 짐작하지 않고 실제로 열린 칸을 센다.
+_MASK_RE = re.compile(r"<!\[CDATA\[.*?\]\]>|<!--.*?-->", re.S)
+_INLINE_HOST_RE = re.compile(r"<(/?)(p|li|h[1-6]|td|th|dt|dd)\b[^>]*?(/?)>", re.I)
+
+
+def _sub_marks(src: str, pattern: re.Pattern, render) -> str:
+    """pattern 자리를 render(match) 글로 — 열린 글 칸(p·li·제목·표 칸) 안이면 인라인, 아니면 문단."""
+    opens: list[tuple[int, int]] = []   # (위치, 깊이 변화)
+    # 코드 블록(CDATA)·주석 안 "<p>" 같은 글자는 태그가 아니다 — 같은 길이 공백으로 가린 사본에서 센다(위치 그대로, 리뷰 L-a)
+    masked = _MASK_RE.sub(lambda m: " " * len(m.group(0)), src)
+    for t in _INLINE_HOST_RE.finditer(masked):
+        if t.group(3):   # <p/> 같은 빈 태그
+            continue
+        opens.append((t.start(), -1 if t.group(1) else 1))
+    out, last, i, depth = [], 0, 0, 0
+    for m in pattern.finditer(src):
+        while i < len(opens) and opens[i][0] < m.start():
+            depth = max(0, depth + opens[i][1])
+            i += 1
+        text = render(m)
+        out.append(src[last:m.start()])
+        out.append(f"<span>{_html.escape(text)}</span>" if depth > 0 else _p(text))
+        last = m.end()
+    out.append(src[last:])
+    return "".join(out)
+
+
+def has_ref_marks(storage: str) -> bool:
+    """참조 자리 표시가 바꿀 곳이 있나 — 없으면 ref_marks를 켜도 결과가 똑같다(다시 파싱이 판만 올리는 근거)."""
+    s = storage or ""
+    return bool(_JIRA_RE.search(s) or _FILE_RE.search(s) or _ATTACH_LINK_RE.search(s))
+
+
+def _ref_marks(storage: str) -> str:
+    def jira(m: re.Match) -> str:
+        p = _params(m.group(0))
+        if p.get("key"):
+            return "[Jira: " + p["key"] + "]"
+        q = p.get("jqlQuery") or p.get("jql")
+        return f"[Jira 목록: {q} — 원문 페이지에서 확인]" if q else "[Jira — 원문 페이지에서 확인]"
+
+    def file(m: re.Match) -> str:
+        f = _FILENAME_RE.search(m.group(0))
+        return f"[첨부: {_html.unescape(f.group(1)) if f else '파일'} — 원문 페이지에서 확인]"
+
+    def link(m: re.Match) -> str:
+        tag = m.group(0)
+        f = _FILENAME_RE.search(tag)
+        name = _html.unescape(f.group(1)) if f else "파일"
+        b = _LINK_BODY_RE.search(tag)
+        body = _html.unescape(_TAG_RE.sub("", re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", b.group(1), flags=re.S))).strip() if b else ""
+        return f"{body} [첨부: {name}]" if body and body != name else f"[첨부: {name}]"
+
+    out = _sub_marks(storage, _JIRA_RE, jira)
+    out = _sub_marks(out, _FILE_RE, file)
+    return _sub_marks(out, _ATTACH_LINK_RE, link)
+
+
+def apply_media(storage: str, diagrams: Optional[dict], *, diagram_text_on: bool, image_marks: bool, ref_marks: bool = False) -> str:
+    """파싱 전 storage HTML에 그림·참조 자리 글을 넣는다(원장 원문은 그대로 — 파싱용 사본만). 다 끄면 원래 동작(버림)."""
+    if not storage or not (diagram_text_on or image_marks or ref_marks):
         return storage
+    if ref_marks:
+        storage = _ref_marks(storage)
+        if not (diagram_text_on or image_marks):
+            return storage
 
     def macro(m: re.Match) -> str:
         name = _params(m.group(0)).get("diagramName") or "이름 없음"

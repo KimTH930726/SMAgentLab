@@ -11,7 +11,7 @@ export async function loginAdmin(page: Page, { openAdmin = true }: { openAdmin?:
   await page.goto('/login');
   await page.getByPlaceholder('사용자 아이디').fill(ADMIN_USER);
   await page.getByPlaceholder('비밀번호').fill(ADMIN_PASS);
-  await page.getByRole('button', { name: '로그인' }).click();
+  await page.getByRole('button', { name: '로그인', exact: true }).click();   // [SSO 로그인] 버튼과 구분(11/19)
   await expect(page.getByRole('heading', { name: '로그인' })).toBeHidden({ timeout: 10_000 });
   if (openAdmin) await page.getByRole('link', { name: 'Admin' }).click();
 }

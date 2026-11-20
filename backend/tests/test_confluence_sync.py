@@ -140,3 +140,23 @@ def test_auth_error_sees_wrapped_cause():
     except ValueError as e:
         assert cs._auth_error(e)
     assert cs._auth_error(err(403)) and not cs._auth_error(err(500)) and not cs._auth_error(RuntimeError("401"))
+
+
+def test_reparse_does_not_move_sync_markers(monkeypatch):
+    # 다시 파싱(11/19)은 증분·전체 대조 시작점을 안 옮긴다 — 옮기면 그사이 컨플에서 바뀐 페이지를 다음 증분이 놓친다
+    import asyncio
+    from contextlib import asynccontextmanager
+    seen = []
+
+    class C:
+        async def execute(self, sql, *a):
+            seen.append(sql)
+
+    @asynccontextmanager
+    async def fake():
+        yield C()
+    monkeypatch.setattr(cs, "get_conn", fake)
+    for mode in ("reparse", "incremental", "full"):
+        asyncio.run(cs._finish(1, "ok", None, {}, mode, None))
+    assert "last_incremental_at" not in seen[0] and "last_full_at" not in seen[0]
+    assert "last_incremental_at" in seen[1] and "last_full_at" in seen[2]

@@ -500,6 +500,17 @@ async def _migrate_knowledge_lifecycle(conn) -> None:
     # logical_document_id 기본값 = 자기 id. DEFAULT절에서 자기참조가 안 되므로 백필로 대신한다 —
     # 멱등이라 매 기동마다 돌아도 안전(새로 생긴 미설정 행만 채움).
     await conn.execute("UPDATE rag_knowledge SET logical_document_id = id WHERE logical_document_id IS NULL")
+    # 새 행은 넣을 때 채운다(11/19 최종 적재: 하루 2.7만 조각이 빈칸으로 쌓여 위 백필이 130초 → 기동 60초 제한 초과로 백엔드가 안 떴다).
+    # BEFORE INSERT에선 id 기본값(시퀀스)이 이미 정해져 있다. 위 백필은 옛 빈칸만 — 이제 매 기동 0건이라 바로 끝난다.
+    await conn.execute("""
+        CREATE OR REPLACE FUNCTION rag_knowledge_logical_id() RETURNS trigger AS $$
+        BEGIN
+            IF NEW.logical_document_id IS NULL THEN NEW.logical_document_id := NEW.id; END IF;
+            RETURN NEW;
+        END $$ LANGUAGE plpgsql""")
+    # 한 문장으로 바꿔 끼운다(지웠다 다시 만들면 그 사이 INSERT가 빈칸 — 리뷰 L7, PG14+)
+    await conn.execute("CREATE OR REPLACE TRIGGER trg_rag_knowledge_logical_id BEFORE INSERT ON rag_knowledge "
+                       "FOR EACH ROW EXECUTE FUNCTION rag_knowledge_logical_id()")
 
     # ── Phase 1: 병합 이력 보존 — resolve_duplicate()의 merge 분기가 덮어쓰기 전에 여기 적재 ──
     await conn.execute("""
@@ -1467,6 +1478,10 @@ async def _migrate_experiment_runner(conn) -> None:
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""")
     await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_import_rule ON rag_import_rule (team_id, root_url, bundle, (coalesce(grp, '')))")
+    # 공간 기본 위치 배치가 적재 끝에 만든 자동 규칙(11/19) — 출처 배치(롤백이면 지움·다음 배치가 갱신, 사람 규칙은 NULL)와
+    # "규칙 없음"(페이지가 여러 곳으로 나뉜 묶음 — 새 페이지를 '*' 기본 위치로 보내지 않고 사람이 연결하게) 표시
+    await conn.execute("ALTER TABLE rag_import_rule ADD COLUMN IF NOT EXISTS auto_from_batch INT")
+    await conn.execute("ALTER TABLE rag_import_rule ADD COLUMN IF NOT EXISTS no_rule BOOLEAN NOT NULL DEFAULT FALSE")
     # #101(10/30 컨플 동기화) — 연결한 공간 하나 = 한 줄: 담당(토큰 주인) · 마지막 증분/전체 대조 · 상태 · 결과(화면이 읽음)
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS rag_source_connection (
@@ -1639,6 +1654,8 @@ async def _migrate_team_import(conn) -> None:
     # 누가·언제 켰는지가 기록(감사). 같은 주소의 소스 연결 동기화도 이 묶음 결정을 따른다(제한이라고 다시 내리지 않음)
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS include_restricted_at TIMESTAMPTZ")
     await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS include_restricted_by INT REFERENCES ops_user(id) ON DELETE SET NULL")
+    # 같은 공간 이전 결정을 이어받았으면 그 배치(11/19 ④) — 감사: 누가 연 결정을 따랐나
+    await conn.execute("ALTER TABLE rag_import_batch ADD COLUMN IF NOT EXISTS include_restricted_from INT REFERENCES rag_import_batch(id) ON DELETE SET NULL")
     # 옛 흐름(적재 때 용어 추출 → glossary_to_id가 적재 때 채워짐)만 — 새 흐름에서 게시 도중(용어 추출 중) 재시작된 배치는 게시 전으로 남겨
     # 다시 [게시]하면 용어까지 마무리된다(조용히 "게시됨"으로 바꾸지 않는다, 재리뷰 L2)
     await conn.execute("UPDATE rag_import_batch b SET published_at = b.loaded_at WHERE b.status = 'loaded' AND b.published_at IS NULL "
@@ -2527,6 +2544,20 @@ async def _run_migrations() -> None:
             run_id = await conn.fetchval("INSERT INTO schema_migration_run (app_version) VALUES ($1) RETURNING id",
                                          os.environ.get("IMAGE_TAG") or None)
             t_all, steps = _t.monotonic(), {}
+            # 빈 DB(RDS 등 init 스크립트가 안 도는 곳)면 기본 표부터(11/19 AWS 첫 기동: ops_query_log 없음 → 첫 ALTER에서 기동 실패).
+            # init/01-init.sql과 같은 파일(backend/db/base_schema.sql — tests/test_base_schema.py가 같은지 본다). 표가 있으면 안 돈다.
+            if await conn.fetchval("SELECT to_regclass('ops_namespace') IS NULL"):   # search_path 기준(RDS 앱 계정 스키마 — 리뷰 L7)
+                t0 = _t.monotonic()
+                try:
+                    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "base_schema.sql"), encoding="utf-8") as f:
+                        await conn.execute(f.read())
+                except Exception as e:   # 확장 기능 권한(RDS) 등 — 원장에 남기고 기동 중단(리뷰 L7)
+                    await conn.execute("UPDATE schema_migration_run SET ok = false, failed_step = '_base_schema', error = $2 WHERE id = $1",
+                                       run_id, str(e)[:2000])
+                    logger.error("[migrate] 기본 표(base_schema.sql) 실패 — 기동 중단(원장 #%s)", run_id)
+                    raise
+                steps["_base_schema"] = int((_t.monotonic() - t0) * 1000)
+                logger.warning("[migrate] 빈 DB — 기본 표(base_schema.sql)를 먼저 만듦")
             for fn in _MIGRATIONS:
                 t0 = _t.monotonic()
                 try:

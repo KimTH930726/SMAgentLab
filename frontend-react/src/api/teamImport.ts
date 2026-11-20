@@ -37,6 +37,8 @@ export interface ImportBatch extends ImportBatchRow {
   /** 읽기 제한 페이지도 넣기(관리자, 11/05) — 켠 시각·사람 */
   include_restricted_at?: string | null;
   include_restricted_name?: string | null;
+  /** 같은 공간 이전 결정을 이어받은 배치(11/19) */
+  include_restricted_from?: number | null;
 }
 
 /** 게시 전 검색 확인 결과(로컬 LLM 질문 → 벡터 상위 3에 그 페이지가 드나) */
@@ -114,7 +116,9 @@ export interface ImportPage {
   job_id: number | null;
   signals: { neighbors: Record<string, number>; reason?: string; fallback?: string; error?: string; restricted?: string; doc_type?: string;
     /** 원래 읽기 제한(page/ancestor) — 관리자가 포함해 넣은 페이지 */
-    restricted_included?: string };
+    restricted_included?: string;
+    /** 교체 확인(11/19) — 같은 페이지 기존 조각에 사람 손(고친·지운 수·일부만 등록). ok = 사람이 교체를 허용함 */
+    replace_touch?: { edited: number; removed: number; partial: boolean; ok: boolean } | null };
 }
 
 export interface ImportCollection {
@@ -146,10 +150,15 @@ const BASE = '/knowledge/team-import';
 
 export const listImportBatches = () => apiFetch<ImportBatchRow[]>(BASE);
 export const getImportBatch = (id: number) => apiFetch<ImportBatchDetail>(`${BASE}/${id}`);
-/** includeRestricted — 읽기 제한 페이지도 적재(관리자만, 11/05). 누가·언제 켰는지 묶음에 남는다 */
-export const startImport = (url: string, teamId?: number | null, defaultNs?: number | null, includeRestricted = false) =>
+/** includeRestricted — 읽기 제한 페이지도 적재(관리자만, 11/05). 누가·언제 켰는지 묶음에 남는다.
+ * inheritFrom — 화면이 같은 공간 이전 결정을 이어받아 켰으면 그 배치(11/19, 서버가 지금 결정과 같을 때만 출처로 남김) */
+export const startImport = (url: string, teamId?: number | null, defaultNs?: number | null, includeRestricted = false, inheritFrom: number | null = null) =>
   apiFetch<{ id: number }>(BASE, { method: 'POST', body: JSON.stringify({ url, team_id: teamId ?? null, default_namespace_id: defaultNs ?? null,
-    include_restricted: includeRestricted }) });
+    include_restricted: includeRestricted, inherit_from: inheritFrom }) });
+/** 새 적재 폼 — 이 주소 공간에 같은 팀의 '읽기 제한 포함' 적재 결정이 있나(관리자, 11/19) */
+export interface RestrictedDefault { space_key: string | null; inherit: { id: number; at: string | null; by: string | null } | null }
+export const getRestrictedDefault = (url: string, teamId: number) =>
+  apiFetch<RestrictedDefault>(`${BASE}/restricted-default?url=${encodeURIComponent(url)}&team_id=${teamId}`);
 export const getImportCollections = (teamId?: number | null) =>
   apiFetch<ImportCollection[]>(`${BASE}/collections${teamId ? `?team_id=${teamId}` : ''}`);
 export const setImportDefault = (id: number, namespaceId: number | null) =>
@@ -159,7 +168,7 @@ export const sampleKey = (p: ImportPage) => {
   const ns = p.sample_ns ?? p.ai_namespace_id;
   return ns == null ? null : `${p.assigned_by ?? 'ai'}:${ns}`;
 };
-export const updateImportPages = (id: number, ids: number[], action: 'classify' | 'hold' | 'exclude' | 'include', namespaceId?: number) =>
+export const updateImportPages = (id: number, ids: number[], action: 'classify' | 'hold' | 'exclude' | 'include' | 'allow_replace', namespaceId?: number) =>
   apiFetch<{ updated: number }>(`${BASE}/${id}/pages`, { method: 'POST', body: JSON.stringify({ ids, action, namespace_id: namespaceId ?? null }) });
 export const reviewImportSample = (id: number, pageRowId: number, ok: boolean, namespaceId?: number | null) =>
   apiFetch<{ added: number }>(`${BASE}/${id}/samples`, { method: 'POST', body: JSON.stringify({ id: pageRowId, ok, namespace_id: namespaceId ?? null }) });

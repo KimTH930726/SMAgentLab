@@ -140,6 +140,8 @@ def connect_target(page: dict, rules: dict[str, dict]) -> tuple[bool, Optional[i
     돌려줌 (규칙이 있나, 넣을 곳 — None이면 제외). 갈래 예외가 묶음 값보다 우선. 묶음 규칙이 없으면 (False, None) = 건드리지 않음."""
     r = rules.get(page.get("bundle") or "")
     if r is None:
+        r = rules.get(DEFAULT_RULE)   # 공간 기본 위치로 연결한 공간의 새 묶음(11/19)
+    if r is None or r.get("no_rule"):   # 여러 곳으로 나뉜 묶음 — 사람이 연결(리뷰 M3)
         return False, None
     g = group_of(page)
     groups = r.get("groups") or {}
@@ -219,10 +221,12 @@ def _sample_view(pages: list[dict]) -> tuple[dict[str, int], set[str], dict[str,
     return counts, wrong, states
 
 
-def blockers(pages: list[dict], sampling_required: bool) -> list[str]:
-    """분류 확정을 막는 것 — 검토 필요 미분류, (필수일 때) 컬렉션마다 표본 목표만큼 검토 안 됨. 빈 목록이면 확정 가능.
+def blockers(pages: list[dict], sampling_required: bool, replace_unconfirmed: int = 0) -> list[str]:
+    """분류 확정을 막는 것 — 검토 필요 미분류, (필수일 때) 컬렉션마다 표본 목표만큼 검토 안 됨, 교체 확인 안 한 페이지. 빈 목록이면 확정 가능.
     표본은 자동 분류로 남은 페이지에서만 센다 — 표본을 보류·제외로 빼서 검토를 건너뛸 수 없다(리뷰 10/29)."""
     out = []
+    if replace_unconfirmed:
+        out.append(f"교체 확인 {replace_unconfirmed}건 — 사람이 고친·지운 조각이 있는 페이지")
     undecided = sum(1 for p in pages if p["status"] == "review" and p["final_namespace_id"] is None)
     if undecided:
         out.append(f"검토 필요 {undecided}건 — 분류하거나 보류")
@@ -586,7 +590,7 @@ async def _load_batch(batch_id: int, user: dict) -> None:
         try:
             res = await service.bulk_create_knowledge(namespace=p["ns_name"], items=items, source_file=p["title"], source_type="confluence",
                                                       created_by_user_id=user["id"], background=False, hold=True,   # 검수 후 게시(11/03)
-                                                      peer_job_ids=peers)
+                                                      peer_job_ids=peers, confirm_replace=replace_confirmed(sig, p["ns"]))   # 사람이 교체 확인(11/19)
         except Exception as e:   # noqa: BLE001 — 한 페이지 실패는 그 페이지만(화면에 실패로)
             logger.warning("팀 적재: 등록 실패 batch=%s page=%s: %s", batch_id, p["page_id"], e)
             async with get_conn() as conn:
@@ -621,8 +625,126 @@ async def _load_batch(batch_id: int, user: dict) -> None:
             logger.warning("팀 적재: 위치 판단 원장 기록 실패 batch=%s page=%s", batch_id, p["page_id"], exc_info=True)
     # 자동 용어 추출은 게시 때(publish_batch) — 게시 전 내용으로 용어를 만들면 검수 전에 용어집(채팅 문맥)에 들어간다
     async with get_conn() as conn:
-        await conn.execute("UPDATE rag_import_batch SET status = 'loaded', loaded_at = NOW(), loaded_by_user_id = $2 "
-                           "WHERE id = $1 AND status = 'loading'", batch_id, user["id"])
+        done = await conn.execute("UPDATE rag_import_batch SET status = 'loaded', loaded_at = NOW(), loaded_by_user_id = $2 "
+                                  "WHERE id = $1 AND status = 'loading'", batch_id, user["id"])
+    if done.split()[-1] != "0":
+        try:   # 공간 기본 위치로 넣은 배치도 증분 동기화에 연결(11/19) — 연결 실패는 적재를 되돌리지 않는다(로그)
+            async with get_conn() as conn:
+                async with conn.transaction():
+                    await connect_default_space(conn, batch_id, user["id"])
+        except Exception:   # noqa: BLE001
+            logger.warning("팀 적재 #%s: 증분 동기화 연결 실패 — 화면 [동기화]·묶음 연결로 다시", batch_id, exc_info=True)
+
+
+# 교체 확인(11/19 최종 적재 ③) — 넣을 페이지마다 그 컬렉션의 같은 페이지 기존 조각에 사람 손(고침·지움·일부만 등록)이 있나. 예전엔 적재 단계
+# 등록이 ReplaceConfirmRequired로 조용히 "실패"가 되고 다시 할 길이 없었다(홈페이지 451 중 403). 원장 replace_check(source_ledger.touched_reasons)와
+# 같은 기준을 배치 하나 SQL로 — 확정 전에 보여 주고 사람이 [교체하고 적재]·[빼기]를 고른다. 적재 때 등록이 같은 가드로 다시 본다(경합 대비).
+# 배치 전체를 한 번에(리뷰 M3: 페이지마다 컬렉션 조각 1.6만을 훑어 412페이지에 10초 — 화면이 고칠 때마다 다시 불러 매번 수 초).
+# 대상 페이지 원문을 먼저 모으고, 조각은 원문 인덱스·페이지 인덱스로 센다. 판단 기준은 그대로(실 DB 1,100쌍 가드와 일치 — eval_out 비교).
+REPLACE_TOUCH_SQL = """
+WITH pg AS MATERIALIZED (SELECT id, page_id, final_namespace_id AS ns, signals FROM rag_import_page
+            WHERE batch_id = $1 AND status = ANY($2::text[]) AND final_namespace_id IS NOT NULL),
+docs AS MATERIALIZED (SELECT pg.id AS pid, pg.ns, d.id AS did, d.status, d.activated_at, d.registered_partial
+         FROM pg JOIN rag_source_document d ON d.namespace_id = pg.ns AND d.source_type = 'confluence' AND d.source_ref = pg.page_id),
+ed AS (SELECT docs.pid, count(*) AS n FROM docs JOIN rag_knowledge k ON k.source_document_id = docs.did
+         WHERE k.namespace_id = docs.ns AND k.status IN ('active', 'pending_review')
+           AND (k.content_edited_at IS NOT NULL OR k.supersedes_id IS NOT NULL) GROUP BY 1
+       UNION ALL
+       SELECT pg.id, count(*) FROM pg JOIN rag_knowledge k ON k.namespace_id = pg.ns AND k.confluence_page_id = pg.page_id
+         WHERE k.source_document_id IS NULL AND k.status IN ('active', 'pending_review')
+           AND (k.content_edited_at IS NOT NULL OR k.supersedes_id IS NOT NULL) GROUP BY 1),
+rm AS (SELECT docs.pid, count(*) AS n FROM docs JOIN rag_knowledge k ON k.source_document_id = docs.did
+         WHERE docs.status = 'active' AND k.namespace_id = docs.ns AND k.status IN ('deleted', 'rejected')
+           AND k.updated_at > docs.activated_at GROUP BY 1),
+pa AS (SELECT pid, bool_or(registered_partial) AS v FROM docs WHERE status = 'active' GROUP BY 1),
+es AS (SELECT pid, sum(n) AS n FROM ed GROUP BY 1),   -- 페이지별 합계를 먼저(상관 서브쿼리면 페이지마다 다시 센다)
+t AS (SELECT pg.id, coalesce(es.n, 0)::int AS edited, coalesce(rm.n, 0)::int AS removed,
+             coalesce(pa.v, false) AS partial,
+             coalesce((pg.signals->>'replace_ok_ns')::int = pg.ns, false) AS ok   -- 확인한 그 넣을 곳일 때만
+      FROM pg LEFT JOIN es ON es.pid = pg.id LEFT JOIN rm ON rm.pid = pg.id LEFT JOIN pa ON pa.pid = pg.id)
+SELECT * FROM t WHERE edited > 0 OR removed > 0 OR partial"""
+
+
+async def replace_touches(conn, batch_id: int) -> dict[int, dict]:
+    """페이지 행 id → {edited, removed, partial, ok}(사람 손이 있는 넣을 페이지만). ok = 사람이 교체를 확인함."""
+    return {r["id"]: {"edited": r["edited"], "removed": r["removed"], "partial": r["partial"], "ok": r["ok"]}
+            for r in await conn.fetch(REPLACE_TOUCH_SQL, batch_id, list(LOADABLE))}
+
+
+def replace_confirmed(sig: dict, ns: int) -> bool:
+    """이 페이지를 이 넣을 곳으로 교체해도 된다고 사람이 확인했나 — 확인 뒤 넣을 곳이 바뀌었으면 아님(리뷰 M4)."""
+    try:
+        return sig.get("replace_ok") is not None and int(sig.get("replace_ok_ns")) == int(ns)
+    except (TypeError, ValueError):
+        return False
+
+
+def replace_unconfirmed(touches: dict[int, dict]) -> int:
+    return sum(1 for t in touches.values() if not t["ok"])
+
+
+DEFAULT_RULE = "*"   # 규칙 없는 새 묶음 = 공간 기본 위치(11/19) — connect_target이 묶음 규칙 다음으로 본다
+
+
+async def save_human_rules(conn, team_id: int, root_url: str, user_id: int,
+                           bundles: list[tuple[str, Optional[int], list[tuple[str, Optional[int]]]]]) -> None:
+    """[묶음 연결] 규칙 저장 — 묶음마다 (묶음, 컬렉션, [(하위 갈래, 컬렉션)]), None = 제외. 사람 규칙이 된다: 자동 표시(auto_from_batch·no_rule)를
+    지우고, 그 공간의 남은 자동 규칙('*' 포함)도 지운다 — 남으면 처음 보는 묶음이 사람에게 안 가고, 옛 배치 롤백이 사람 규칙을 지우고,
+    다음 기본 위치 배치가 사람 규칙을 덮었다(11/19 재리뷰 중간 1). 보내지 않은 묶음의 새 페이지 = 규칙 없음 → 사람에게."""
+    for bundle, ns, groups in bundles:
+        # 이번에 안 보낸 하위 예외는 지운다 — 묶음 값을 바꿔 예외가 사라졌는데 옛 규칙이 남던 것(리뷰 L2)
+        await conn.execute("DELETE FROM rag_import_rule WHERE team_id = $1 AND root_url = $2 AND bundle = $3 AND grp IS NOT NULL "
+                           "AND NOT (grp = ANY($4::text[]))", team_id, root_url, bundle, [g for g, _ in groups])
+        for g, gns in [(None, ns)] + list(groups):
+            await conn.execute(
+                """INSERT INTO rag_import_rule (team_id, root_url, bundle, grp, namespace_id, created_by_user_id)
+                   VALUES ($1, $2, $3, $4, $5, $6)
+                   ON CONFLICT (team_id, root_url, bundle, (coalesce(grp, ''))) DO UPDATE
+                   SET namespace_id = EXCLUDED.namespace_id, created_by_user_id = EXCLUDED.created_by_user_id, updated_at = NOW(),
+                       auto_from_batch = NULL, no_rule = FALSE""",
+                team_id, root_url, bundle, g, gns, user_id)
+    await conn.execute("DELETE FROM rag_import_rule WHERE team_id = $1 AND root_url = $2 AND auto_from_batch IS NOT NULL", team_id, root_url)
+
+
+async def connect_default_space(conn, batch_id: int, user_id: int) -> Optional[int]:
+    """공간 기본 위치로 적재한 배치 → 증분 동기화 연결(11/19 최종 적재 발견: 연결은 [묶음 연결]로만 생겨, 기본 위치로 넣은 공간은
+    컨플이 바뀌어도 반영되지 않았다 — SP·ERP·POS·CDP 등 전부). 규칙: 묶음마다 이번에 실제로 넣은 곳이 하나면 그곳, 처음 보는 묶음은 기본 위치.
+    사람이 묶음 연결로 정한 규칙은 덮지 않는다(ON CONFLICT DO NOTHING). 기본 위치가 없는 배치(AI가 페이지마다)는 연결하지 않는다 — 묶음 연결로."""
+    from agents.knowledge_rag.ingestion.confluence_sync import ensure_connection
+    b = await conn.fetchrow("SELECT team_id, root_url, root_title, default_namespace_id, created_at FROM rag_import_batch "
+                            "WHERE id = $1 AND status = 'loaded' FOR NO KEY UPDATE", batch_id)   # 사이에 롤백됐으면 연결 안 함(재리뷰 낮음 3)
+    if b is None or b["default_namespace_id"] is None:
+        return None
+    cid = await ensure_connection(conn, b["team_id"], b["root_url"], b["root_title"], user_id, b["created_at"])
+    # 사람이 [묶음 연결]로 규칙을 정한 공간이면 자동 규칙(특히 '*')을 더하지 않는다 — 새 묶음은 예전처럼 사람이 연결(리뷰 L1)
+    if await conn.fetchval("SELECT 1 FROM rag_import_rule WHERE team_id = $1 AND root_url = $2 AND auto_from_batch IS NULL LIMIT 1",
+                           b["team_id"], b["root_url"]):
+        return cid
+    # 묶음마다: 넣은 곳이 하나면 그곳 · 여러 곳이면 "규칙 없음"(사람이) · 넣은 것 없이 제외·보류만이면 제외(NULL) — 사람이 통째로 뺀 묶음의
+    # 새 페이지가 '*'로 기본 위치에 바로 들어가지 않게(리뷰 M3). '*' = 처음 보는 묶음만.
+    rows = await conn.fetch("""SELECT coalesce(bundle, '') AS bundle,
+                                      count(DISTINCT final_namespace_id) FILTER (WHERE status = 'loaded') AS n_ns,
+                                      min(final_namespace_id) FILTER (WHERE status = 'loaded') AS ns,
+                                      count(*) FILTER (WHERE status IN ('excluded', 'held')) AS n_out
+                               FROM rag_import_page WHERE batch_id = $1 GROUP BY 1""", batch_id)
+    plan: list[tuple[str, Optional[int], bool]] = []
+    for r in rows:
+        if r["n_ns"] == 1:
+            plan.append((r["bundle"], r["ns"], False))
+        elif r["n_ns"] > 1:
+            plan.append((r["bundle"], None, True))
+        elif r["n_out"]:
+            plan.append((r["bundle"], None, False))
+    plan.append((DEFAULT_RULE, b["default_namespace_id"], False))
+    for bundle, ns, no_rule in plan:   # 자동 규칙은 최신 배치 결정으로 갱신(롤백·기본 위치 변경이 되살아나지 않게 — 리뷰 M2), 사람 규칙은 그대로
+        await conn.execute("""INSERT INTO rag_import_rule (team_id, root_url, bundle, grp, namespace_id, created_by_user_id, auto_from_batch, no_rule)
+                              VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
+                              ON CONFLICT (team_id, root_url, bundle, (coalesce(grp, ''))) DO UPDATE
+                                SET namespace_id = EXCLUDED.namespace_id, auto_from_batch = EXCLUDED.auto_from_batch,
+                                    no_rule = EXCLUDED.no_rule, updated_at = NOW()
+                                WHERE rag_import_rule.auto_from_batch IS NOT NULL""",
+                           b["team_id"], b["root_url"], bundle, ns, user_id, batch_id, no_rule)
+    return cid
 
 
 def _sig(p) -> dict:
@@ -878,6 +1000,8 @@ async def rollback_batch(conn, batch_id: int) -> Optional[dict]:
                                 "COALESCE(published_by_user_id, loaded_by_user_id) AS glossary_by", batch_id)   # 자동 용어는 게시한 사람이 만든다
         if b is None:
             return None
+        # 이 배치가 만든 자동 연결 규칙(11/19) — 되돌린 결정이 다음 증분에 되살아나지 않게(리뷰 M2). 사람 규칙은 그대로
+        await conn.execute("DELETE FROM rag_import_rule WHERE auto_from_batch = $1", batch_id)
         jobs = list(b["job_ids"] or [])
         ids = [r["id"] for r in await conn.fetch(
             "UPDATE rag_knowledge SET status = 'deleted', updated_at = NOW() WHERE ingestion_job_id = ANY($1::int[]) "
