@@ -28,6 +28,8 @@ pgdata/
 *.dump
 # DB 초기화 SQL은 반입 대상이라 추적(위 *.sql에 걸려 init/08이 빠져 있었음, 2026-10-02)
 !init/*.sql
+# 빈 DB 기동용 기본 표(init/01-init.sql 사본, 이미지에 들어가야 함 — 11/19 *.sql에 걸려 커밋에서 빠질 뻔)
+!backend/db/*.sql
 
 # macOS
 .DS_Store

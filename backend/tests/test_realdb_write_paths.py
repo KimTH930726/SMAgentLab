@@ -442,6 +442,8 @@ def test_spot_check_only_auto_and_accepted(monkeypatch):
         clarify = await conn.fetchval("INSERT INTO ops_ai_decision (kind, ai_value, signals, final_value) VALUES ('chat_clarify', '{}'::jsonb, '{}'::jsonb, "
                                       "'{\"picked\": \"a\"}'::jsonb) RETURNING id")   # 사용자 선택(수용) — 관리자 표본 감사 대상 아님
         mine = set(ids.values())
+        # 실데이터의 다른 판단은 감사한 것으로(트랜잭션 안 — 되돌림) — 오늘 같은 대량 적재(11/19 판단 8천 줄)면 무작위 30건에 시험 줄이 안 뽑혔다
+        await conn.execute("UPDATE ops_ai_decision SET spot_result = 'accepted' WHERE spot_result IS NULL AND id <> ALL($1::int[])", list(mine))
         all_sample = {it["id"] for it in (await dl.spot_sample(days=1, kind=None, n=30))["items"]}
         clarify_mark = await dl.spot_mark(clarify, result="accepted", reason=None, user_id=admin)
         sample = await dl.spot_sample(days=1, kind="knowledge_location", n=30)
@@ -583,11 +585,11 @@ def test_include_restricted_batch_records_who_and_sync_follows_only_loaded():
         admin = await conn.fetchval("SELECT id FROM ops_user ORDER BY id LIMIT 1")
         url = "https://confl.sinc.co.kr/display/시험제한"
         await conn.execute("UPDATE rag_import_batch SET status = 'cancelled' WHERE team_id = $1 AND status IN ('previewing', 'loading')", team)
-        on = await conn.fetchval(router.INSERT_BATCH_SQL, team, url, admin, None, True)
+        on = await conn.fetchval(router.INSERT_BATCH_SQL, team, url, admin, None, True, None)
         row_on = await conn.fetchrow("SELECT include_restricted_at IS NOT NULL a, include_restricted_by b FROM rag_import_batch WHERE id = $1", on)
         before_load = await sync.include_restricted_for(conn, team, url)          # 미리보기(previewing)는 아직 안 따름
         await conn.execute("UPDATE rag_import_batch SET status = 'loaded' WHERE id = $1", on)
-        off = await conn.fetchval(router.INSERT_BATCH_SQL, team, url, admin, None, False)   # 다른 사람이 끄고 새 미리보기
+        off = await conn.fetchval(router.INSERT_BATCH_SQL, team, url, admin, None, False, None)   # 다른 사람이 끄고 새 미리보기
         row_off = await conn.fetchrow("SELECT include_restricted_at IS NOT NULL a, include_restricted_by b FROM rag_import_batch WHERE id = $1", off)
         after = await sync.include_restricted_for(conn, team, url)
         return (row_on["a"], row_on["b"] == admin), (row_off["a"], row_off["b"]), before_load, after
@@ -595,6 +597,163 @@ def test_include_restricted_batch_records_who_and_sync_follows_only_loaded():
     (on_a, on_by), (off_a, off_by), before_load, after = run(scenario)
     assert (on_a, on_by) == (True, True) and (off_a, off_by) == (False, None)
     assert before_load is False and after is True
+
+
+def test_default_space_batch_gets_sync_connection_and_rules():
+    """기본 위치 배치 → 증분 연결(11/19, 리뷰 M2·M3·L1 반영) — 묶음 규칙: 넣은 곳 하나면 그곳 · 여러 곳이면 '규칙 없음' · 통째로 뺀 묶음은 제외 ·
+    새 묶음 '*' = 기본 위치. 다음 배치가 자동 규칙을 갱신하고, 롤백은 그 배치 자동 규칙을 지운다. 사람이 연결한 공간엔 자동 규칙을 안 더한다."""
+    ti = load("_rdb_real_team_import3", "agents/knowledge_rag/ingestion/team_import.py")
+    router = load("_rdb_real_team_import_router3", "agents/knowledge_rag/knowledge/team_import_router.py")
+
+    async def scenario(conn):
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        admin = await conn.fetchval("SELECT id FROM ops_user ORDER BY id LIMIT 1")
+        a, b2 = [r["id"] for r in await conn.fetch("SELECT id FROM ops_namespace ORDER BY id LIMIT 2")]
+        await conn.execute("UPDATE rag_import_batch SET status = 'cancelled' WHERE team_id = $1 AND status IN ('previewing', 'loading')", team)
+        url = "https://c/x/conn-probe"
+
+        async def batch(default_ns, pages, root=url):
+            bid = await conn.fetchval(router.INSERT_BATCH_SQL, team, root, admin, default_ns, False, None)
+            await conn.execute("UPDATE rag_import_batch SET status = 'loaded' WHERE id = $1", bid)
+            for i, (bundle, st, ns) in enumerate(pages):
+                await conn.execute("INSERT INTO rag_import_page (batch_id, page_id, status, bundle, final_namespace_id) VALUES ($1, $2, $3, $4, $5)",
+                                   bid, f"cp{bid}-{i}", st, bundle, ns)
+            return bid
+
+        async def rules_of(root=url):
+            return {r["bundle"]: (r["namespace_id"], r["no_rule"]) for r in await conn.fetch(
+                "SELECT bundle, namespace_id, no_rule FROM rag_import_rule WHERE team_id = $1 AND root_url = $2", team, root)}
+
+        b1 = await batch(a, [("한곳", "loaded", a), ("한곳", "loaded", a), ("섞임", "loaded", a), ("섞임", "loaded", b2),
+                             ("뺀묶음", "excluded", None), ("뺀묶음", "held", None)])
+        cid = await ti.connect_default_space(conn, b1, admin)
+        r1 = await rules_of()
+        conn_row = await conn.fetchrow("SELECT status, last_incremental_at IS NOT NULL s FROM rag_source_connection WHERE id = $1", cid)
+        b2id = await batch(b2, [("한곳", "loaded", b2)])          # 같은 공간을 기본 위치 B로 다시 — 자동 규칙이 따라간다(M2)
+        await ti.connect_default_space(conn, b2id, admin)
+        r2 = await rules_of()
+        await conn.execute("UPDATE rag_import_batch SET status = 'loaded', publishing_at = NULL WHERE id = $1", b2id)
+        await ti.rollback_batch(conn, b2id)                         # 롤백 — 그 배치가 만든 자동 규칙 지움(M2)
+        r3 = await rules_of()
+        h = url + "/human"                                           # 사람이 묶음 연결한 공간 — 자동 규칙 안 더함(L1)
+        await conn.execute("INSERT INTO rag_import_rule (team_id, root_url, bundle, grp, namespace_id, created_by_user_id) "
+                           "VALUES ($1, $2, '사람묶음', NULL, $3, $4)", team, h, b2, admin)
+        hb = await batch(a, [("사람묶음", "loaded", a), ("다른묶음", "loaded", a)], root=h)
+        await ti.connect_default_space(conn, hb, admin)
+        rh = await rules_of(h)
+        nodef = await batch(None, [("x", "loaded", a)], root=url + "2")
+        none = await ti.connect_default_space(conn, nodef, admin)
+        return a, b2, r1, r2, r3, rh, dict(conn_row), none
+
+    a, b2, r1, r2, r3, rh, conn_row, none = run(scenario)
+    assert r1 == {"한곳": (a, False), "섞임": (None, True), "뺀묶음": (None, False), "*": (a, False)}
+    assert r2["*"] == (b2, False) and r2["한곳"] == (b2, False)
+    assert "*" not in r3 and "한곳" not in r3          # b2 자동 규칙이 지워짐(b1 것은 b2가 덮어썼으므로 함께 사라진다 — 증분은 no_rule로 사람에게)
+    assert rh == {"사람묶음": (b2, False)}
+    assert conn_row["status"] == "ok" and conn_row["s"]
+    assert none is None
+    assert ti_connect_target_default_ok()
+
+
+def test_human_connect_after_auto_rules_takes_over_space():
+    """자동 규칙 뒤 사람이 [묶음 연결](11/19 재리뷰 중간 1) — 사람 규칙이 되고(자동 표시 지움) 남은 자동 규칙('*'·규칙 없음)은 지워진다.
+    옛 배치 롤백이 사람 규칙을 안 지우고, 다음 기본 위치 배치도 덮지 않는다. 롤백된(적재 상태 아닌) 배치는 연결 안 함(낮음 3)."""
+    ti = load("_rdb_real_team_import4", "agents/knowledge_rag/ingestion/team_import.py")
+    router = load("_rdb_real_team_import_router4", "agents/knowledge_rag/knowledge/team_import_router.py")
+
+    async def scenario(conn):
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        admin = await conn.fetchval("SELECT id FROM ops_user ORDER BY id LIMIT 1")
+        a, b2 = [r["id"] for r in await conn.fetch("SELECT id FROM ops_namespace ORDER BY id LIMIT 2")]
+        await conn.execute("UPDATE rag_import_batch SET status = 'cancelled' WHERE team_id = $1 AND status IN ('previewing', 'loading')", team)
+        url = "https://c/x/human-takeover"
+
+        async def batch(pages):
+            bid = await conn.fetchval(router.INSERT_BATCH_SQL, team, url, admin, a, False, None)
+            await conn.execute("UPDATE rag_import_batch SET status = 'loaded' WHERE id = $1", bid)
+            for i, (bundle, st, ns) in enumerate(pages):
+                await conn.execute("INSERT INTO rag_import_page (batch_id, page_id, status, bundle, final_namespace_id) VALUES ($1, $2, $3, $4, $5)",
+                                   bid, f"ht{bid}-{i}", st, bundle, ns)
+            return bid
+
+        async def rules():
+            return {r["bundle"]: (r["namespace_id"], r["no_rule"], r["auto_from_batch"] is not None) for r in await conn.fetch(
+                "SELECT bundle, namespace_id, no_rule, auto_from_batch FROM rag_import_rule WHERE team_id = $1 AND root_url = $2", team, url)}
+
+        b1 = await batch([("한곳", "loaded", a), ("섞임", "loaded", a), ("섞임", "loaded", b2)])
+        await ti.connect_default_space(conn, b1, admin)
+        before = await rules()
+        await ti.save_human_rules(conn, team, url, admin, [("섞임", b2, [])])        # 사람이 '섞임'만 연결
+        after = await rules()
+        await conn.execute("UPDATE rag_import_batch SET publishing_at = NULL WHERE id = $1", b1)
+        await ti.rollback_batch(conn, b1)
+        after_rb = await rules()
+        b3 = await batch([("새묶음", "loaded", a)])
+        await ti.connect_default_space(conn, b3, admin)
+        after_next = await rules()
+        b4 = await batch([("x", "loaded", a)])
+        await conn.execute("UPDATE rag_import_batch SET status = 'rolled_back' WHERE id = $1", b4)
+        none = await ti.connect_default_space(conn, b4, admin)
+        return a, b2, before, after, after_rb, after_next, none
+
+    a, b2, before, after, after_rb, after_next, none = run(scenario)
+    assert before == {"한곳": (a, False, True), "섞임": (None, True, True), "*": (a, False, True)}
+    assert after == {"섞임": (b2, False, False)}          # 사람 규칙 · 자동 '*'·'한곳' 지움(한곳 새 페이지 → 규칙 없음 → 사람)
+    assert after_rb == after and after_next == after      # 옛 배치 롤백·다음 기본 위치 배치가 사람 규칙을 안 건드림
+    assert none is None
+
+
+def ti_connect_target_default_ok() -> bool:
+    from agents.knowledge_rag.ingestion import team_import as t
+    rules = {"한곳": {"ns": 1, "groups": {}}, "섞임": {"ns": None, "groups": {}, "no_rule": True}, "*": {"ns": 9, "groups": {}}}
+    return (t.connect_target({"bundle": "한곳"}, rules) == (True, 1) and t.connect_target({"bundle": "새것"}, rules) == (True, 9)
+            and t.connect_target({"bundle": "섞임"}, rules) == (False, None)
+            and t.connect_target({"bundle": "새것"}, {"한곳": {"ns": 1, "groups": {}}}) == (False, None))
+
+
+def test_restricted_decision_inherits_same_space_loaded_only():
+    """④ 이어받기(11/19) — 같은 팀·같은 공간(원문 공간 키)·적재 끝난 제한 포함 배치만. 다른 공간·미리보기·끈 배치는 아님. 이어받은 배치 기록."""
+    router = load("_rdb_real_team_import_router2", "agents/knowledge_rag/knowledge/team_import_router.py")
+    sync = load("_rdb_real_confluence_sync2", "agents/knowledge_rag/ingestion/confluence_sync.py")
+
+    async def scenario(conn):
+        team = await conn.fetchval("SELECT id FROM ops_team ORDER BY id LIMIT 1")
+        admin = await conn.fetchval("SELECT id FROM ops_user ORDER BY id LIMIT 1")
+        ns = await conn.fetchval("SELECT id FROM ops_namespace ORDER BY id LIMIT 1")
+        await conn.execute("UPDATE rag_import_batch SET status = 'cancelled' WHERE team_id = $1 AND status IN ('previewing', 'loading')", team)
+
+        async def batch(on: bool, status: str, key: str, from_id=None):
+            b = await conn.fetchval(router.INSERT_BATCH_SQL, team, f"https://c/x/{key}", admin, None, on, from_id)
+            await conn.execute("UPDATE rag_import_batch SET status = $2 WHERE id = $1", b, status)
+            d = await conn.fetchval("INSERT INTO rag_source_document (namespace_id, source_type, source_ref, title, raw_content, raw_format, "
+                                    "content_hash, status, media) VALUES ($1, 'confluence', $2, 't', '<p>x</p>', 'html', md5(random()::text), "
+                                    "'superseded', $3::jsonb) RETURNING id", ns, f"p{b}", '{"page": {"space_key": "%s"}}' % key)
+            await conn.execute("INSERT INTO rag_import_page (batch_id, page_id, status, source_document_id) VALUES ($1, $2, 'loaded', $3)",
+                               b, f"p{b}", d)
+            return b
+
+        old = await batch(True, "loaded", "SPX")
+        await batch(True, "preview", "SPX")        # 확정 안 한 켬 — 결정 아님
+        other = await batch(True, "loaded", "SPY")
+        got = await sync.restricted_decision(conn, team, "SPX")
+        none = await sync.restricted_decision(conn, team, "SPZ")
+        await batch(False, "loaded", "SPX")        # 나중에 일부러 끄고 적재 — 옛 켬이 뒤집지 않는다(리뷰 M1)
+        after_off = await sync.restricted_decision(conn, team, "SPX")
+        await batch(False, "preview", "SPX")       # 확정 안 한 끔은 결정 아님
+        reon = await batch(True, "loaded", "SPX")
+        after_reon = await sync.restricted_decision(conn, team, "SPX")
+        child = await conn.fetchval(router.INSERT_BATCH_SQL, team, "https://c/x/new", admin, None, True, old)
+        rec = await conn.fetchrow("SELECT include_restricted_from f FROM rag_import_batch WHERE id = $1", child)
+        await conn.execute("UPDATE rag_import_batch SET status = 'cancelled' WHERE id = $1", child)   # 팀마다 진행 중 하나
+        off_child = await conn.fetchval(router.INSERT_BATCH_SQL, team, "https://c/x/new2", admin, None, False, old)
+        rec_off = await conn.fetchrow("SELECT include_restricted_from f, include_restricted_at a FROM rag_import_batch WHERE id = $1", off_child)
+        return old, other, got, none, rec["f"], rec_off["f"], rec_off["a"], after_off, reon, after_reon
+
+    old, other, got, none, f, f_off, a_off, after_off, reon, after_reon = run(scenario)
+    assert got and got["id"] == old and got["id"] != other
+    assert none is None
+    assert after_off is None and after_reon and after_reon["id"] == reon
+    assert f == old and f_off is None and a_off is None   # 끄면 출처도 안 남긴다
 
 
 # ── 동기화로 바뀐 페이지(11/05) ─────────────────────────────────────────────

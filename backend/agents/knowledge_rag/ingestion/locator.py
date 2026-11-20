@@ -77,32 +77,38 @@ async def load_candidates(conn) -> list[Candidate]:
 
 PROFILE_TERMS = 10
 PROFILE_TTL = 600.0
-_profile_cache: dict = {"at": 0.0, "data": {}}
+# 빈도는 컬렉션마다 최근 조각 이만큼에서만 센다(11/19 최종 적재: SP 용어 375 × 조각 1.3만 전수 = 104초 > DB 60초 제한 → 미리보기 시작 실패).
+# 실측 상위 10 겹침: 2000개 SP 10/10 · ERP 9/10(1000개 8/10 · 7/10), 시간 104→13초 · 26→10초(적재 동시 진행 중), 한가할 때 SP 0.9초.
+# 컬렉션이 커져도 시간이 일정하다. 활성 조각이 옛 id에 몰리면 역순 스캔이 길어질 수 있음 — 그때 (namespace_id, id DESC) WHERE active 부분 인덱스.
+PROFILE_SAMPLE = 2000
+_profile_cache: dict[int, tuple[float, list[str]]] = {}   # 컬렉션 id → (계산 시각, 대표 용어) — 팀마다 후보가 달라도 서로 안 덮는다
 
 # 컬렉션마다 대표 용어 — 그 컬렉션 지식에 가장 많이 나오는 그 컬렉션 용어(지식이 없으면 용어 등록 순). 이름만 주면 LLM이 무엇을 다루는
 # 컬렉션인지 몰라 틀렸다(10/23 실측: 제휴서비스 49건 중 0건 — 배민·쿠팡 문서를 '딜리버스'·'제휴 주문 서비스'로). 손으로 쓴 설명이 아니라
 # 데이터에서 만든다(사람 입력 최악 가정 · 범용). 10/22 시험의 "정책 묶음 이름을 설명으로" 붙이기는 하위로 착각해 나빠졌다(17/20) — 용어만.
 PROFILE_SQL = """
-SELECT g.namespace_id, g.term, COUNT(k.id) AS hits, MIN(g.id) AS first_id
+WITH k AS (SELECT lower(content) AS c FROM rag_knowledge WHERE namespace_id = $1 AND status = 'active' ORDER BY id DESC LIMIT $2)
+SELECT g.term, COUNT(k.c) AS hits, MIN(g.id) AS first_id
 FROM rag_glossary g
-LEFT JOIN rag_knowledge k ON k.namespace_id = g.namespace_id AND k.status = 'active' AND length(g.term) >= 2
-     AND strpos(lower(k.content), lower(g.term)) > 0
-WHERE g.namespace_id = ANY($1::int[])
-GROUP BY g.namespace_id, g.term"""
+LEFT JOIN k ON length(g.term) >= 2 AND strpos(k.c, lower(g.term)) > 0
+WHERE g.namespace_id = $1
+GROUP BY g.term"""
 
 
 async def load_profiles(conn, cand_ids: list[int]) -> dict[int, list[str]]:
-    """컬렉션 id → 대표 용어(최대 PROFILE_TERMS). 10분 캐시 — 용어·지식이 바뀌어도 판정 하나가 조금 늦게 따라갈 뿐."""
+    """컬렉션 id → 대표 용어(최대 PROFILE_TERMS). 컬렉션별 10분 캐시 — 용어·지식이 바뀌어도 판정 하나가 조금 늦게 따라갈 뿐.
+    컬렉션 하나씩 센다(한 쿼리가 DB 제한 시간을 넘지 않게)."""
     import time
     now = time.monotonic()
-    if now - _profile_cache["at"] < PROFILE_TTL and set(cand_ids) <= set(_profile_cache["data"]):
-        return _profile_cache["data"]
-    by_ns: dict[int, list[tuple]] = {i: [] for i in cand_ids}
-    for r in await conn.fetch(PROFILE_SQL, cand_ids):
-        by_ns[r["namespace_id"]].append((-r["hits"], r["first_id"], r["term"]))
-    data = {ns: [t for _, _, t in sorted(rows)[:PROFILE_TERMS]] for ns, rows in by_ns.items()}
-    _profile_cache.update(at=now, data=data)
-    return data
+    out: dict[int, list[str]] = {}
+    for ns in dict.fromkeys(cand_ids):
+        hit = _profile_cache.get(ns)
+        if hit is None or now - hit[0] >= PROFILE_TTL:
+            rows = sorted((-r["hits"], r["first_id"], r["term"]) for r in await conn.fetch(PROFILE_SQL, ns, PROFILE_SAMPLE))
+            hit = (time.monotonic(), [t for _, _, t in rows[:PROFILE_TERMS]])   # 센 시각 — 뒤 컬렉션이 일찍 만료되지 않게(리뷰 L1)
+            _profile_cache[ns] = hit
+        out[ns] = hit[1]
+    return out
 
 
 def _user_msg(cands: list[Candidate], text: str, profiles: Optional[dict[int, list[str]]] = None) -> str:

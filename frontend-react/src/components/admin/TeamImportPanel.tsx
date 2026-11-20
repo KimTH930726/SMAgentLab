@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getTeams } from '../../api/auth';
 import {
   confirmImport, confluencePageUrl, connectImport, getImportBatch, listConnections, syncConnection, getImportCollections, listImportBatches, reviewImportSample, rollbackImport, publishCheckImport, publishImport, goldenCheckImport, sampleKey,
-  setImportDefault, startImport, updateImportPages, listSyncChanges, getSyncChange, getOverlapDetail, type SyncChange,
+  setImportDefault, startImport, updateImportPages, getRestrictedDefault, listSyncChanges, getSyncChange, getOverlapDetail, type SyncChange,
   type HeldSummary, type OverlapDetail, type PublishCheck, type GoldenCheck, type ImportBatchDetail, type ImportCollection, type ImportPage, type SourceConnection,
 } from '../../api/teamImport';
 import { useSearchParams } from 'react-router-dom';
@@ -252,13 +252,22 @@ export function SpaceImportStart({ url, onStarted, onCancel }: { url: string; on
   const [teamId, setTeamId] = useState<number | null>(null);
   const [defaultNs, setDefaultNs] = useState<number | null>(null);
   const [withRestricted, setWithRestricted] = useState(false);   // 읽기 제한 페이지 포함(관리자만, 11/05)
+  const [restrictedTouched, setRestrictedTouched] = useState(false);   // 사람이 직접 바꿨나 — 안 바꿨으면 이전 결정을 이어받는다(11/19)
+  const { data: rdef, isFetching: rdefLoading } = useQuery({
+    queryKey: ['team-import-restricted-default', url.trim(), teamId], queryFn: () => getRestrictedDefault(url.trim(), teamId!),
+    enabled: isAdmin && teamId != null && !!url.trim(), staleTime: 60_000,
+  });
+  const inherit = rdef?.inherit ?? null;
+  const restrictedOn = restrictedTouched ? withRestricted : inherit != null;
   const { data: cols = [] } = useQuery({
     queryKey: ['team-import-collections', teamId], queryFn: () => getImportCollections(teamId),
     enabled: !isAdmin || teamId != null, staleTime: 60_000,
   });
   const qc = useQueryClient();
   const start = useMutation({
-    mutationFn: () => startImport(url.trim(), isAdmin ? teamId : null, defaultNs, isAdmin && withRestricted),
+    // 화면에 보이는 값 그대로 보낸다(서버가 따로 정하면 화면과 어긋날 수 있다 — 리뷰 M2). 이어받았으면 출처 배치도
+    mutationFn: () => startImport(url.trim(), isAdmin ? teamId : null, defaultNs, isAdmin && restrictedOn,
+      isAdmin && !restrictedTouched && inherit ? inherit.id : null),
     onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['team-import'] }); onStarted(r.id); },
     onError: (e) => showError(e),
   });
@@ -288,18 +297,24 @@ export function SpaceImportStart({ url, onStarted, onCancel }: { url: string; on
       {isAdmin && (
         <label className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200"
           title="컨플에서 읽기 제한(특정 사람·그룹만)이 걸린 페이지와 그 하위도 넣어요. OpsLens 로그인 사용자 누구나 검색하게 되고, 누가 켰는지 남아요">
-          <input type="checkbox" checked={withRestricted} data-testid="import-include-restricted" className="mt-0.5 accent-amber-600"
+          <input type="checkbox" checked={restrictedOn} data-testid="import-include-restricted" className="mt-0.5 accent-amber-600"
             onChange={async (e) => {
               const on = e.target.checked;
               if (on && !(await showConfirm('컨플에서 읽기 제한이 걸린 페이지도 넣어요.\nOpsLens 사용자 누구나 검색하게 되고, 켠 사람이 기록에 남아요. 계속할까요?'))) return;
               setWithRestricted(on);
+              setRestrictedTouched(true);
             }} />
-          <span><b>읽기 제한 페이지도 넣기</b> (관리자) — 제한 페이지·그 하위까지</span>
+          <span><b>읽기 제한 페이지도 넣기</b> (관리자) — 제한 페이지·그 하위까지
+            {!restrictedTouched && inherit && (
+              <span className="block mt-0.5" data-testid="import-restricted-inherit">
+                ↳ 이 공간({rdef?.space_key})은 {inherit.at ? new Date(inherit.at).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' }) : ''} {inherit.by ?? '관리자'}가 켜고 적재했어요 — 이어받음 (#{inherit.id})
+              </span>)}
+          </span>
         </label>
       )}
       <div className="flex justify-end gap-2">
         <button onClick={onCancel} className="text-sm px-3 py-2 rounded-lg text-slate-400 hover:text-slate-200">취소</button>
-        <button disabled={!url.trim() || (isAdmin && !teamId) || start.isPending} onClick={() => start.mutate()}
+        <button disabled={!url.trim() || (isAdmin && !teamId) || start.isPending || (isAdmin && rdefLoading)} onClick={() => start.mutate()}
           className="text-sm font-semibold px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40"
           title="페이지를 받아 AI가 분류만 한다 — 확정 전엔 아무것도 적재되지 않음">
           분류 미리보기 만들기
@@ -698,6 +713,36 @@ function QualityReport({ held, batchId, rootUrl, onClose }: { held: HeldSummary;
   );
 }
 
+/** 교체 확인(11/19) — 같은 페이지 기존 조각에 사람 손(고침·지움·일부만 등록)이 있는 넣을 페이지. 확정 전에 [교체 허용]·[빼기]를 고른다.
+ * 예전엔 적재 단계에서 조용히 실패가 되고 다시 할 길이 없었다(홈페이지 451 중 403). */
+function ReplaceConfirm({ data, onChange }: { data: ImportBatchDetail; onChange: () => void }) {
+  const todo = data.pages.filter((p) => p.signals.replace_touch && !p.signals.replace_touch.ok);
+  const act = useMutation({
+    mutationFn: (action: 'allow_replace' | 'exclude') => updateImportPages(data.batch.id, todo.map((p) => p.id), action),
+    onSuccess: onChange, onError: (e) => showError(e),
+  });
+  if (todo.length === 0) return null;
+  const why = todo.slice(0, 20).map((p) => {
+    const t = p.signals.replace_touch!;
+    return `${p.title ?? p.page_id} — ${[t.edited ? `고친 ${t.edited}` : '', t.removed ? `지운 ${t.removed}` : '', t.partial ? '일부만 등록' : ''].filter(Boolean).join(' · ')}`;
+  }).join('\n') + (todo.length > 20 ? `\n… 외 ${todo.length - 20}개` : '');
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200 space-y-2"
+      data-testid="replace-confirm">
+      <div title={why}>⚠ <b>사람이 고친·지운 조각이 있는 페이지 {todo.length}개</b> — 교체하면 그 손질이 사라져요 (ⓘ 페이지별 사유)</div>
+      <div className="flex gap-2">
+        <button disabled={act.isPending} className="px-3 py-1 rounded-md bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-40"
+          title="이 적재로 기존 조각을 바꿔요 — 누른 사람이 기록에 남아요. 적재는 [분류 확정 · 적재]에서"
+          onClick={async () => { if (await showConfirm(`사람이 손댄 기존 조각이 있는 ${todo.length}개 페이지를 이 적재로 교체할까요?\n누른 사람이 기록에 남아요.`)) act.mutate('allow_replace'); }}>
+          교체 허용</button>
+        <button disabled={act.isPending} className="px-3 py-1 rounded-md border border-amber-400 dark:border-amber-500/50 text-amber-800 hover:bg-amber-100 dark:text-amber-200 dark:hover:bg-amber-500/20 disabled:opacity-40"
+          title="이 페이지들은 넣지 않아요 — 기존 조각 그대로. [포함으로 변경]으로 되돌릴 수 있음" onClick={() => act.mutate('exclude')}>
+          이 페이지들 빼기</button>
+      </div>
+    </div>
+  );
+}
+
 function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => void }) {
   const { batch: b, pages, collections } = data;
   const names = useNames(collections);
@@ -718,6 +763,7 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
   return (
     <div className="space-y-6">
       {editable && b.default_namespace_id == null && <DefaultControl key="none" data={data} onChange={onChange} />}
+      {editable && <ReplaceConfirm data={data} onChange={onChange} />}
       {editable && <BundleConnect data={data} onChange={onChange} />}
       {b.status === 'loading' && <p className="text-sm text-slate-300">적재 중 {b.load_done ?? 0} / {b.load_total ?? 0}</p>}
       <button className="text-xs text-slate-400 hover:text-slate-200" onClick={() => setMore(!more)} aria-expanded={more} data-testid="preview-more">
@@ -728,7 +774,8 @@ function Preview({ data, onChange }: { data: ImportBatchDetail; onChange: () => 
       {b.include_restricted_at && (
         <div className="inline-flex rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300" data-testid="batch-include-restricted"
           title="이 묶음은 읽기 제한 페이지도 넣어요 — OpsLens 사용자 누구나 검색하게 됩니다">
-          읽기 제한 포함 · {b.include_restricted_name ?? '관리자'} · {new Date(b.include_restricted_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</div>
+          읽기 제한 포함 · {b.include_restricted_name ?? '관리자'} · {new Date(b.include_restricted_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}
+          {b.include_restricted_from != null && <span title="같은 공간에서 관리자가 켜고 적재까지 끝낸 결정을 이어받음"> · #{b.include_restricted_from} 결정 이어받음</span>}</div>
       )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat k={b.default_namespace_id != null ? '기본 위치 · AI 확신' : '자동 분류'} v={auto.length}

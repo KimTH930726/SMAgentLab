@@ -188,6 +188,15 @@ class TestBlockers:
     def test_nothing_to_load_blocks(self):
         assert ti.blockers([_p("existing", 1), _p("excluded")], False) == ["적재할 페이지가 없음"]
 
+    def test_unconfirmed_replace_blocks(self):
+        # 교체 확인(11/19 ③) — 사람이 고친·지운 조각이 있는 넣을 페이지를 확인 전엔 확정 못 한다
+        assert any("교체 확인 2건" in b for b in ti.blockers([_p("auto", 1)], False, 2))
+        assert ti.blockers([_p("auto", 1)], False, 0) == []
+
+    def test_replace_unconfirmed_counts_only_not_ok(self):
+        t = {1: {"edited": 1, "removed": 0, "partial": False, "ok": False}, 2: {"edited": 0, "removed": 3, "partial": False, "ok": True}}
+        assert ti.replace_unconfirmed(t) == 1
+
 
 class TestSpaceTree:
     def test_multi_root_space_each_root_is_bundle(self):

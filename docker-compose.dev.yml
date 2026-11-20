@@ -17,3 +17,4 @@ services:
       CONFLUENCE_SYNC: "true"
     volumes:
       - ./backend:/app
+      - ./init:/init:ro   # 기본 표 SQL이 백엔드 사본(db/base_schema.sql)과 같은지 테스트가 본다(11/19)
